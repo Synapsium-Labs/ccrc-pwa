@@ -53,7 +53,11 @@ const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
   // `_spawn` LAST, so a kill at 90 s landed AFTER the workspace existed and
   // BEFORE `_reg_set started 1` — leaving a fully-registered workspace with no
   // session, bound to no run, while dispatch answered `fleetFailed` with an
-  // EMPTY stderr (a killed child writes nothing) and the run stayed `planned`.
+  // EMPTY stderr — not because a killed child writes nothing (execFile
+  // delivers whatever was already buffered) but because NO STDERR-WRITING
+  // STATEMENT WAS REACHED: ccd was still blocked inside the settle. Corrected
+  // here rather than left standing; §1.4 now carries the distinction on the
+  // wire. The run stayed `planned`.
   // An orphan is the expensive failure: it costs a worktree, a branch and a
   // registry identity that only a human may clear (`ws-rm`/`ws-reap` are
   // human-only by contract), so this budget is set to the ceiling deliberately
@@ -80,12 +84,20 @@ function timeoutMsFor(cmd: string, args: string[]): number {
   return CCD_VERB_TIMEOUT_MS[args[0] ?? ''] ?? CCD_TIMEOUT_MS;
 }
 
+/** THE L3 RULE, applied here rather than described: this function rebuilds the
+ *  object field by field, so anything it does not name is DISCARDED — which is
+ *  exactly how the agent's `killed` was being narrowed away one hop before §1.5
+ *  needed it. Spread-conditional, not `killed: Boolean(...)`: a non-boolean from
+ *  a peer this build cannot trust must read as ABSENT, not as `false`. */
 function asExecResult(res: unknown): ExecResult {
   const r = res as { code?: unknown; stdout?: unknown; stderr?: unknown };
   return {
     code: typeof r.code === 'number' ? r.code : 1,
     stdout: typeof r.stdout === 'string' ? r.stdout : '',
     stderr: typeof r.stderr === 'string' ? r.stderr : '',
+    ...(typeof (res as { killed?: unknown }).killed === 'boolean'
+      ? { killed: (res as { killed: boolean }).killed }
+      : {}),
   };
 }
 
@@ -108,6 +120,11 @@ export function createRunner(client: FleetClient): Runner {
       );
       return asExecResult(res);
     } catch (e) {
+      // NO `killed` HERE, DELIBERATELY, and a test pins the absence. Three facts
+      // sit on `code: 1`, not two: ccd refused, we killed ccd, and we do not know
+      // because the LINK failed (a dropped socket, a client-side wait expiry).
+      // Not-adopting is the safe outcome for all three, and adding `killed: false`
+      // would be as wrong as `killed: true` — absence is the honest answer.
       return { code: 1, stdout: '', stderr: e instanceof Error ? e.message : String(e) };
     }
   };

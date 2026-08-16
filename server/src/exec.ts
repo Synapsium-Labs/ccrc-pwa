@@ -1,6 +1,12 @@
 import { execFile } from 'node:child_process';
 
-export interface ExecResult { code: number; stdout: string; stderr: string }
+/** `killed` is OPTIONAL and that is not a style choice: 249 bare
+ *  `{code, stdout, stderr}` literals across 32 test files make a required field
+ *  a suite-wide break. Absence reads as `false` — what an older agent sends, and
+ *  the safe direction (§1.5 never adopts on it). NOTE `realRunner` below passes
+ *  NO `timeout`, so `killed` is structurally false in `local` mode and every
+ *  §1.5 test must inject a runner. */
+export interface ExecResult { code: number; stdout: string; stderr: string; killed?: boolean }
 export type Runner = (cmd: string, args: string[]) => Promise<ExecResult>;
 
 export const realRunner: Runner = (cmd, args) =>

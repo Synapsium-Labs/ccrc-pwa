@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { Tmux, type Runner, type ExecResult } from '../src/exec.js';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { Tmux, realRunner, type Runner, type ExecResult } from '../src/exec.js';
 
 const fake = (responses: Record<string, ExecResult>): { run: Runner; calls: string[][] } => {
   const calls: string[][] = [];
@@ -25,5 +28,27 @@ describe('Tmux', () => {
     const f = fake({});
     await new Tmux(f.run).sendLiteral('myid', 'hello');
     expect(f.calls[0]).toEqual(['tmux', 'send-keys', '-t', 'cc-myid', '-l', 'hello']);
+  });
+});
+
+describe('§1.4 — ExecResult.killed is OPTIONAL, and structurally false in local mode', () => {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const ccrcRoot = path.resolve(here, '..', '..');
+
+  it('accepts a bare {code,stdout,stderr} literal — 249 of them exist across 32 files', () => {
+    const r: ExecResult = { code: 0, stdout: '', stderr: '' };
+    expect(r.killed).toBeUndefined();
+  });
+
+  it('realRunner can never report a kill — it passes NO timeout', async () => {
+    // Which is why every §1.5 test MUST inject a runner: the adoption path is
+    // structurally unreachable in `local` mode, and a test that exercised it
+    // through `realRunner` would be asserting nothing.
+    const src = readFileSync(path.join(ccrcRoot, 'server/src/exec.ts'), 'utf8');
+    const real = /export const realRunner[\s\S]*?\n  \}\);/.exec(src)?.[0] ?? '';
+    expect(real).not.toContain('timeout');
+    const r = await realRunner('/bin/sh', ['-c', 'exit 3']);
+    expect(r.code).toBe(3);
+    expect(r.killed).toBeUndefined();
   });
 });

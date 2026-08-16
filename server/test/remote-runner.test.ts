@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { rmSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { RunningAgent } from '../../agent/src/server.js';
 import type { ConnectedFleet, FleetClient } from '../src/remote/client.js';
 import { createRunner } from '../src/remote/runner.js';
@@ -112,5 +114,50 @@ describe('per-verb timeouts', () => {
     seen.length = 0;
     await createRunner(client)('/home/u/.local/bin/ccd', []);
     expect(seen[0]).toBe(90_000);
+  });
+});
+
+describe('§1.4 — asExecResult stops narrowing a distinction it received', () => {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const ccrcRoot = path.resolve(here, '..', '..');
+  const clientAnswering = (res: unknown) =>
+    ({ request: async () => res }) as unknown as FleetClient;
+
+  it('carries `killed` through the adapter', async () => {
+    // THE L3 RULE ("an adapter may not narrow a distinction it received") failing
+    // in exactly the place §1.5 depends on: `asExecResult` rebuilds the object
+    // field by field, so anything the agent sends beyond code/stdout/stderr is
+    // DISCARDED. The three hops are `ExecResult` (server/src/exec.ts), this
+    // function, and `ccd()` (server/src/lifecycle.ts). There is no type called
+    // `ExecRes` in either `src` tree.
+    const r = await createRunner(clientAnswering(
+      { code: 1, stdout: '', stderr: '', killed: true, signal: 'SIGTERM' },
+    ))('/home/u/.local/bin/ccd', ['ws-add', 'demo']);
+    expect(r.killed).toBe(true);
+  });
+
+  it('reads an older agent\'s omission as absent, never as true', async () => {
+    const r = await createRunner(clientAnswering({ code: 1, stdout: '', stderr: 'boom' }))(
+      '/home/u/.local/bin/ccd', ['ws-add', 'demo']);
+    expect(r.killed).toBeUndefined();
+  });
+
+  it('refuses a non-boolean `killed` rather than coercing it', async () => {
+    const r = await createRunner(clientAnswering({ code: 1, stdout: '', stderr: '', killed: 'yes' }))(
+      '/home/u/.local/bin/ccd', ['ws-add', 'demo']);
+    expect(r.killed).toBeUndefined();
+  });
+
+  it('THE CATCH PATH NEVER CLAIMS A KILL — three facts sit on code 1, not two', () => {
+    // ccd refused, we killed ccd, and WE DO NOT KNOW BECAUSE THE LINK FAILED.
+    // `createRunner`'s catch returns `{code:1, stderr: e.message}` for any
+    // transport failure — a dropped socket, a client-side wait expiry — and §1.5
+    // must not adopt on it. Pinned as SOURCE because the arm is unreachable
+    // through a client stub that resolves.
+    const src = readFileSync(
+      path.join(ccrcRoot, 'server/src/remote/runner.ts'), 'utf8');
+    expect(src).toContain(
+      "return { code: 1, stdout: '', stderr: e instanceof Error ? e.message : String(e) };");
+    expect(src).not.toMatch(/catch[\s\S]{0,200}killed:\s*true/);
   });
 });

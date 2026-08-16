@@ -5,14 +5,21 @@ import type { Runner } from './exec.js';
 import type { FleetIO } from './io.js';
 import { readRegistry } from './registry.js';
 
-export interface CcdResult { ok: boolean; stdout: string; stderr: string }
+/** `killed` is REQUIRED here, unlike `ExecResult.killed`: no test anywhere builds
+ *  a `CcdResult` literal, and only two whole-object `toEqual`s in
+ *  `lifecycle.test.ts` observe it — so requiring it costs nothing and forces
+ *  every producer to answer. */
+export interface CcdResult { ok: boolean; stdout: string; stderr: string; killed: boolean }
 
 /** Run `ccd <args...>` through the injected Runner; ok = exit code 0. The argv
  *  is a `CcdArgv`, so it can only have been built by `ccdargv.ts` — there is no
  *  other way to obtain a value of that type (task 13S). */
 export async function ccd(run: Runner, cfg: CcrcConfig, args: CcdArgv): Promise<CcdResult> {
   const r = await run(cfg.ccdBin, [...args]);
-  return { ok: r.code === 0, stdout: r.stdout, stderr: r.stderr };
+  // `=== true`, not `Boolean(...)`: an ABSENT `killed` (an older agent, the
+  // transport catch path, `local` mode) must read as false, and this is the one
+  // hop that collapses the optional into the required.
+  return { ok: r.code === 0, stdout: r.stdout, stderr: r.stderr, killed: r.killed === true };
 }
 
 /** The single ccd capability `Deps` carries in place of a raw `Runner`. */

@@ -6,7 +6,7 @@ import { buildServer } from '../src/server.js';
 import { loadConfig, type CcrcConfig } from '../src/config.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
-import { ccdRunner, listProjects } from '../src/lifecycle.js';
+import { ccd, ccdRunner, listProjects } from '../src/lifecycle.js';
 import { CCD_ARGV } from '../src/ccdargv.js';
 import { readLocalCcdCaps } from '../src/localcaps.js';
 import { KeyedQueue } from '../src/inject/queue.js';
@@ -559,12 +559,32 @@ describe('ccdRunner — the one ccd capability Deps carries', () => {
   it('passes stdout and stderr through untouched on success', async () => {
     const { run } = spy({ code: 0, stdout: 'out\n', stderr: 'warn\n' });
     expect(await ccdRunner(run, cfg)(CCD_ARGV.wsAudit(ID)))
-      .toEqual({ ok: true, stdout: 'out\n', stderr: 'warn\n' });
+      // `killed: false` is not decoration: `CcdResult.killed` is REQUIRED (§1.4),
+      // and a runner that reported no kill must answer false rather than omit it.
+      .toEqual({ ok: true, stdout: 'out\n', stderr: 'warn\n', killed: false });
   });
 
   it('a FAILURE still carries stdout and stderr — the 502 body quotes stderr', async () => {
     const { run } = spy({ code: 1, stdout: 'partial\n', stderr: 'boom\n' });
     expect(await ccdRunner(run, cfg)(CCD_ARGV.wsArchive(ID)))
-      .toEqual({ ok: false, stdout: 'partial\n', stderr: 'boom\n' });
+      .toEqual({ ok: false, stdout: 'partial\n', stderr: 'boom\n', killed: false });
+  });
+});
+
+describe('§1.4 — CcdResult stops dropping the kill one hop later', () => {
+  it('threads `killed` off the runner', async () => {
+    const cfg = { ccdBin: '/home/u/.local/bin/ccd' } as unknown as CcrcConfig;
+    const killedRun: Runner = async () => ({ code: 1, stdout: '', stderr: '', killed: true });
+    expect(await ccd(killedRun, cfg, CCD_ARGV.wsAdd('demo'))).toEqual({
+      ok: false, stdout: '', stderr: '', killed: true,
+    });
+  });
+
+  it('reads an absent `killed` as false — REQUIRED here is safe because nothing builds this literal', async () => {
+    const cfg = { ccdBin: '/home/u/.local/bin/ccd' } as unknown as CcrcConfig;
+    const plainRun: Runner = async () => ({ code: 1, stdout: '', stderr: 'refused' });
+    expect(await ccd(plainRun, cfg, CCD_ARGV.wsAdd('demo'))).toEqual({
+      ok: false, stdout: '', stderr: 'refused', killed: false,
+    });
   });
 });
