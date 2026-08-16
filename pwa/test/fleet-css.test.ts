@@ -313,9 +313,21 @@ describe('selection is polarity, status is hue', () => {
                         // serves selects the dead row precisely to read
                         // "stopped by agent, 2d ago".
                         '.sess-held', '.sess-lifecycle', '.sess-swapblocked',
-                        '.sess-unmeasured']) {
+                        '.sess-unmeasured',
+                        // §1.6b's chip: it sets its own `--status-dead-text`
+                        // (and `--ink-tertiary` on two variants), so it is a
+                        // coloured cell exactly like `.sess-warn` above and
+                        // strands the same way if it is left out of here.
+                        '.sess-spawn']) {
       expect(group).toContain(`.sess-line--active ${cell}`);
     }
+  });
+
+  it('gives the spawn chip a flex: none cell so it cannot steal the hold reason\'s room', () => {
+    // `.sess-held` is the ONE shrinkable cell in `.sess-meta` (overflow:hidden +
+    // text-overflow:ellipsis, no `flex: none`), and §2.4 lengthens what it holds
+    // in the same build. A chip without `flex: none` truncates it first.
+    expect(ruleFor('.sess-spawn')).toContain('flex: none');
   });
 
   // The list above names cells; this names the RULE that keeps producing them.

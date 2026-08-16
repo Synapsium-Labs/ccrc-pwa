@@ -637,3 +637,85 @@ describe('the row\'s state vocabulary', () => {
       .not.toMatch(/from '\.\.\/fleet\/SessionLine'/);
   });
 });
+
+describe('the spawn chip (§1.6b)', () => {
+  const chip = () => document.querySelector('.sess-spawn');
+
+  it('renders NOTHING for the overwhelmingly common shape: no stamp, claimed', () => {
+    // THE FALSE-POSITIVE DIRECTION, and the reason the rule is not "chip on
+    // anything not ready": `null` satisfies "not ready", and all 18 live sessions
+    // carry `null` because they have not spawned since PR #50 shipped the field.
+    render(<SessionLine session={s({ spawnState: null, started: true })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(chip()).toBeNull();
+  });
+
+  it('renders `unstarted` for swift-harbor\'s exact shape — no stamp, no claim', () => {
+    render(<SessionLine session={s({ spawnState: null, started: false })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(chip()?.textContent).toBe('unstarted');
+    expect(chip()?.getAttribute('data-spawn')).toBe('unstarted');
+  });
+
+  it('says nothing for a clean spawn', () => {
+    render(<SessionLine session={s({ spawnState: 'ready', started: true })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(chip()).toBeNull();
+  });
+
+  it.each([
+    ['blocked', 'blocked'], ['login', 'login'], ['vanished', 'vanished'],
+    ['expired', 'unconfirmed'], ['unrecognised', 'unknown'],
+  ] as const)('renders %s as %s', (state, word) => {
+    render(<SessionLine session={s({ spawnState: state, started: true })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(chip()?.textContent).toBe(word);
+    expect(chip()?.getAttribute('data-spawn')).toBe(state);
+  });
+
+  it('never renders a chip on a dead row — the exemption critical/subagentList already take', () => {
+    render(<SessionLine session={s({ status: 'dead', bucket: 'dead', spawnState: 'blocked', started: false })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(chip()).toBeNull();
+  });
+
+  it('renders ONE chip, never two — a failed spawn and an absent claim are one cell', () => {
+    render(<SessionLine session={s({ spawnState: 'expired', started: false })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(document.querySelectorAll('.sess-spawn')).toHaveLength(1);
+    expect(chip()?.textContent).toBe('unconfirmed');
+  });
+
+  it('sits at position 2, immediately after .sess-state', () => {
+    // `.sess-meta` has NO flex-wrap and NO `order`: DOM order IS visual order.
+    render(<SessionLine session={s({ spawnState: 'blocked', started: true, held: 'program:x wave:2/4' })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    const cells = [...(document.querySelector('.sess-meta')?.children ?? [])];
+    expect(cells[0]?.className).toContain('sess-state');
+    expect(cells[1]?.className).toContain('sess-spawn');
+  });
+
+  it('does not clip the hold reason away — .sess-held is the one shrinkable cell', () => {
+    // §2.4 LENGTHENS the hold reason (` run:<id>`) in the same build, and
+    // `.sess-held` is the only cell with `overflow: hidden`/`text-overflow:
+    // ellipsis` and no `flex: none`. The two changes compound: a new cell that
+    // is not `flex: none` steals room from it first.
+    render(<SessionLine session={s({ spawnState: 'blocked', started: true, held: 'program:build8 wave:2/4 run:17' })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(document.querySelector('.sess-held')?.textContent).toBe('program:build8 wave:2/4 run:17');
+  });
+
+  it('reads both fields DEFENSIVELY — a live `fleet` frame is CAST, never revived', () => {
+    // `stores/fleet.ts`'s `asFleetMsg` validates frames, not MEMBERS, so a row
+    // from a server that predates these fields lacks the keys at RUNTIME even
+    // though `FleetSession` types them as present. Same reason `unmeasuredFields`
+    // exists — the last time this was skipped a TypeError took the renderer down.
+    const legacy = { ...s() } as Record<string, unknown>;
+    delete legacy['spawnState'];
+    delete legacy['started'];
+    expect(() =>
+      render(<SessionLine session={legacy as unknown as FleetSession}
+                          onOpen={() => {}} onActions={() => {}} />)).not.toThrow();
+    expect(chip()).toBeNull();
+  });
+});

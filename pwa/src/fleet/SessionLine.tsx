@@ -19,7 +19,10 @@
 // the conditional that made SessionCard mean two different things is gone.
 import { useId, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
-import { unmeasuredFields, type FleetSession, type RosterWire, type SessionBucket } from '../../../shared/api';
+import {
+  unmeasuredFields,
+  type FleetSession, type RosterWire, type SessionBucket, type SpawnVerdict,
+} from '../../../shared/api';
 import { accountColorVar, accountLabel } from '../lib/accounts';
 import { StatusDot } from '../components/StatusDot';
 import { humanBytes } from '../screens/ArchiveScreen';
@@ -41,6 +44,25 @@ const CRITICAL = 75;
 const WORD: Record<SessionBucket, string> = {
   attention: 'waiting', working: 'working', done: 'done', idle: 'idle',
   cleanup: 'merged', archived: 'archived', dead: 'exited',
+};
+
+/** The spawn verdict's DISPLAYED word — a third presentational table over one
+ *  field, which is this file's existing convention (`WORD`, `StatusDot`'s own
+ *  glyph/label pair). PRIVATE on purpose: an exported table invites a caller to
+ *  retitle a surface it does not feed, and the L0 vocabulary
+ *  (`SPAWN_VERDICTS`) is not this list.
+ *
+ *  `expired -> 'unconfirmed'` and its quiet ink are deliberate: a systemd
+ *  restart of a large session legitimately settles unconfirmed, and painting a
+ *  healthy row dead-red trains the operator to ignore the chip. `ready -> null`
+ *  because a healthy row has nothing to qualify. */
+const SPAWN_WORD: Record<SpawnVerdict, string | null> = {
+  ready: null,
+  login: 'login',
+  vanished: 'vanished',
+  expired: 'unconfirmed',
+  blocked: 'blocked',
+  unrecognised: 'unknown',
 };
 
 // Only ONE element may carry a given view-transition-name — a second aborts
@@ -103,6 +125,31 @@ export function SessionLine({
   // marker (§2.4). Neither touches `state` above: the bucket ladder is
   // untouched, a dead row stays `exited`, and these are cells beside it.
   const qualifier = lifecycleQualifier(session);
+
+  // §1.6b. ONE chip, never two, and never on a dead row (the exemption
+  // `critical`/`subagentList` already take — nothing is running, so how the last
+  // spawn ended describes work that no longer exists).
+  //
+  // THE RULE IS NOT "chip on anything not ready": `null` satisfies "not ready",
+  // and `null` is what all 18 live sessions carry, so that rule would light a
+  // warning on every healthy row. `swift-harbor` has NO spawn stamp at all — its
+  // `spawnState` is correctly `null` and `started === false` is the ONLY signal
+  // that shape emits, which is why the second arm is not optional.
+  //
+  // Both fields read DEFENSIVELY (`?? null`, `!== false`): the live `fleet` frame
+  // is CAST, not revived (`stores/fleet.ts`'s `asFleetMsg` validates frames, not
+  // members), so an older server's row lacks the keys at runtime. The table
+  // lookup takes `?? null` for the same reason one level deeper: a NEWER server
+  // can send a verdict this build's `SPAWN_WORD` has no row for, and an
+  // `undefined` word would render an empty chip rather than no chip.
+  const spawnState = session.spawnState ?? null;
+  const spawnChip: string | null =
+    dead ? null
+    : spawnState !== null && spawnState !== 'ready' ? SPAWN_WORD[spawnState] ?? null
+    : session.started === false ? 'unstarted'
+    : null;
+  const spawnData = spawnChip === null ? undefined : (spawnState ?? 'unstarted');
+
   const swapBlocked = session.swapBlocked ?? null;
   // `?? null` on the object, and a type check on the KEY — the same one-level-
   // deeper guard `lifecycleQualifier` carries, for the same reason (the fleet
@@ -239,6 +286,17 @@ export function SessionLine({
             requirement, and this is no longer a grid). */}
         <span className="sess-meta">
           <span className={`sess-state sess-state--${state}`}>{state}</span>
+
+          {/* Position 2, immediately after `.sess-state`. `.sess-meta` has no
+              flex-wrap and no `order`, so DOM order IS visual order, and only
+              `.sess-held`/`.sess-acct` shrink — which is why this cell is
+              `flex: none` in fleet.css: §2.4 lengthens the hold reason in the
+              same build and the two changes compound. */}
+          {spawnChip !== null && (
+            <span className="sess-spawn" data-spawn={spawnData} title={`last spawn: ${spawnData}`}>
+              {spawnChip}
+            </span>
+          )}
 
           {/* Registry ladder (architecture doc, increment 1's second half —
               Task 2): this row's identity triple could not be fully measured
