@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=79518c52230700c7e17ce234a4f17d9e9a7b733d881342c81790502596806109
+# ccrc:generated 1 sha256=e4f121f7395f7e877fd12a01bd6bea47ae61c1cbbedaa06704f24d01d515c7c5
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
 set -uo pipefail
@@ -411,7 +411,7 @@ _ws_unsupervise() {   # id [surface] — disable the unit AND RECORD THAT SOMEBO
     || echo "ccd: warn: could not disable unit claude-session@$id (it may resurrect if it was enabled)" >&2
 }
 
-_session_state() {   # id -> running|unsupervised|stopped|restarting|orphan|never-started
+_session_state() {   # id -> running|unsupervised|unclaimed|stopped|restarting|orphan|never-started
   # The bash twin of shared/'s `sessionLifecycle` (spec §4.3). A pure function
   # of four inputs — pane alive, heartbeat freshness, stop stamp, `started` —
   # evaluated in this exact order; both implementations are driven from one
@@ -434,6 +434,13 @@ _session_state() {   # id -> running|unsupervised|stopped|restarting|orphan|neve
   # unconditionally and never ages out.
   [[ "$sup" =~ ^[0-9]+$ ]] && (( now - sup >= 0 && now - sup < 120 )) && fresh=1
   if _alive "$id"; then
+    # §1.6, and the FIRST rung inside this branch on purpose — the same position
+    # the TS ladder puts it in, because both are driven from one fixture. A live
+    # pane with no `started` stamp is a session nobody wrote a claim for: the
+    # repair is a CLAIM (`ccd ensure`), not a process, which is the exact
+    # opposite of `orphan`'s. Checked before the freshness split because the
+    # specimen that motivated it was alive AND supervised AND unclaimed.
+    [[ "$(_reg_get "$id" started)" == "1" ]] || { echo unclaimed; return 0; }
     (( fresh )) && { echo running; return 0; }
     # A pane with no supervisor: no auto-swap, no auto-compact, no uuid-sync,
     # and nothing to record its death. What a pre-fix `ccd start` minted.

@@ -19,6 +19,11 @@ import type { FleetSession, SessionLifecycle } from '../../../shared/api';
 const QUALIFIER: Record<Exclude<SessionLifecycle, 'stopped'>, string | null> = {
   running: null,
   unsupervised: 'running unsupervised',
+  /** The OPPOSITE repair from `orphan` below, and the sentence has to say so:
+   *  `orphan` means nothing is bringing this back (fix: a process); `unclaimed`
+   *  means a process IS running and no registry row claims it (fix: a claim —
+   *  `ccd ensure`, which is what "Restart session" posts). */
+  unclaimed: 'unclaimed — a live pane with no claim',
   restarting: 'restarting',
   orphan: 'orphan — nothing is watching it',
   'never-started': 'never started',

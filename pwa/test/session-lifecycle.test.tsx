@@ -200,6 +200,23 @@ describe('the row says which kind of dead it is', () => {
     expect(screen.getByText('orphan — nothing is watching it')).toBeInTheDocument();
   });
 
+  it('an unclaimed row names the OPPOSITE repair from an orphan', () => {
+    // orphan: nothing is bringing this back — the repair is a PROCESS.
+    // unclaimed: a process is running that no registry row claims — the repair is
+    // a CLAIM. A single sentence for both would send the operator to the wrong verb.
+    line(s({ lifecycle: 'unclaimed' }));
+    const cell = document.querySelector('.sess-lifecycle');
+    expect(cell).not.toBeNull();
+    expect(cell?.getAttribute('data-lifecycle')).toBe('unclaimed');
+    expect(cell?.textContent).toBe('unclaimed — a live pane with no claim');
+    expect(cell?.textContent).not.toContain('nothing is watching');
+  });
+
+  it('does NOT inherit running\'s deliberate null — the chip renders for unclaimed', () => {
+    expect(lifecycleQualifier({ lifecycle: 'unclaimed' })).not.toBeNull();
+    expect(lifecycleQualifier({ lifecycle: 'running' })).toBeNull();
+  });
+
   // Kills `dead && qualifier !== null` — 'running unsupervised' describes a
   // LIVE pane with no supervisor (what a pre-fix `ccd start` minted), and a
   // dead-only gate would make the one state D2 exists for invisible.

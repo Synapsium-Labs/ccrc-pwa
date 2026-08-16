@@ -54,7 +54,8 @@ describe('the fixture is complete, and its one exemption is the only one', () =>
     // PR_REASONS technique), so a member added to the type without a key here
     // is TS2739 rather than a list one short. This pins the runtime half.
     expect([...SESSION_LIFECYCLES].sort()).toEqual([
-      'never-started', 'orphan', 'restarting', 'running', 'stopped', 'unmeasurable', 'unsupervised',
+      'never-started', 'orphan', 'restarting', 'running', 'stopped', 'unclaimed',
+      'unmeasurable', 'unsupervised',
     ]);
   });
 
@@ -168,7 +169,43 @@ describe('the new vocabulary is a FIELD, not a status or a bucket (M10)', () => 
 // `SessionLifecycle` without a row here is TS2739 in the tests project
 // (typecheck-tests.test.ts runs it), not a silently-short runtime list.
 const _EXHAUSTIVE: Record<SessionLifecycle, true> = {
-  running: true, unsupervised: true, stopped: true, restarting: true,
+  running: true, unsupervised: true, unclaimed: true, stopped: true, restarting: true,
   orphan: true, 'never-started': true, unmeasurable: true,
 };
 void _EXHAUSTIVE;
+
+describe('§1.6 — the unclaimed rung, and where it sits', () => {
+  const base = {
+    supervisedAt: null as number | null, stoppedAt: null as number | null,
+    stopSurface: null, unmeasured: [] as readonly string[], nowMs: FIXTURE_NOW_MS,
+  };
+
+  it('THE ORDERING CONTRACT: alive + FRESH heartbeat + no claim is unclaimed, never running', () => {
+    // The mutation this exists for: move the rung below the supervised split and
+    // this row answers `running` — which is precisely what the live fleet reported
+    // about swift-harbor while it was orphaned.
+    expect(sessionLifecycle({
+      ...base, alive: true, started: false, supervisedAt: FIXTURE_NOW_MS - 5_000,
+    })).toBe('unclaimed');
+  });
+
+  it('an unreadable `started` is still unmeasurable, never unclaimed', () => {
+    // `started` is a LIFECYCLE_FIELD, so the unmeasurable rung still precedes
+    // everything. "We could not look" must never be reported as "nobody claimed it".
+    expect(sessionLifecycle({
+      ...base, alive: true, started: false, supervisedAt: FIXTURE_NOW_MS - 5_000,
+      unmeasured: ['started'],
+    })).toBe('unmeasurable');
+  });
+
+  it('a claimed live pane is untouched — the rung adds a state, it does not steal one', () => {
+    expect(sessionLifecycle({
+      ...base, alive: true, started: true, supervisedAt: FIXTURE_NOW_MS - 5_000,
+    })).toBe('running');
+    expect(sessionLifecycle({ ...base, alive: true, started: true })).toBe('unsupervised');
+  });
+
+  it('a DEAD pane with no claim is still never-started — unclaimed is an ALIVE-branch word', () => {
+    expect(sessionLifecycle({ ...base, alive: false, started: false })).toBe('never-started');
+  });
+});

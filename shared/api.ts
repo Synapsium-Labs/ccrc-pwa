@@ -855,7 +855,7 @@ export function sessionBucket(
  * ------------------------------------------------------------------------- */
 
 export type SessionLifecycle =
-  | 'running' | 'unsupervised' | 'stopped' | 'restarting'
+  | 'running' | 'unsupervised' | 'unclaimed' | 'stopped' | 'restarting'
   | 'orphan' | 'never-started' | 'unmeasurable';
 
 /** Derived from the type, not restated beside it — `Record<SessionLifecycle,
@@ -864,7 +864,7 @@ export type SessionLifecycle =
  *  on a key the union does not have. Same technique, same reasoning, as
  *  `PR_REASONS` above. */
 const SESSION_LIFECYCLE_MAP: Record<SessionLifecycle, true> = {
-  running: true, unsupervised: true, stopped: true, restarting: true,
+  running: true, unsupervised: true, unclaimed: true, stopped: true, restarting: true,
   orphan: true, 'never-started': true, unmeasurable: true,
 };
 export const SESSION_LIFECYCLES: readonly SessionLifecycle[] =
@@ -997,6 +997,10 @@ export interface LifecycleInput {
 /**
  * §4.3's table, in order. The order is the specification:
  *
+ *   alive + no `started` claim         -> unclaimed      (§1.6, FIRST in the
+ *                                                        alive branch — the F8
+ *                                                        specimen was alive AND
+ *                                                        supervised AND unclaimed)
  *   alive + fresh heartbeat            -> running
  *   alive + stale/absent heartbeat     -> unsupervised
  *   dead  + stop stamp                 -> stopped
@@ -1050,7 +1054,20 @@ export function sessionLifecycle(input: LifecycleInput): SessionLifecycle {
   const supervised = input.supervisedAt !== null
     && input.nowMs - input.supervisedAt >= 0
     && input.nowMs - input.supervisedAt < SUPERVISED_FRESH_MS;
-  if (input.alive) return supervised ? 'running' : 'unsupervised';
+  // §1.6. THE ORDERING IS THE CONTRACT, and both implementations must agree on
+  // it: `unclaimed` goes BEFORE the supervised split, because F8's specimen was
+  // alive AND supervised AND unclaimed — an `unclaimed` checked after `running`
+  // could never have fired on the row that motivated it. `unmeasurable` still
+  // precedes everything above, so an UNREADABLE `started` (a LIFECYCLE_FIELD)
+  // cannot be mistaken for an absent one.
+  //
+  // AND THE REPAIR IS THE OPPOSITE OF `orphan`'s: `orphan` says nothing is
+  // bringing this back (the repair is a PROCESS); `unclaimed` says a process is
+  // running that no registry row claims (the repair is a CLAIM — `ccd ensure`).
+  if (input.alive) {
+    if (!input.started) return 'unclaimed';
+    return supervised ? 'running' : 'unsupervised';
+  }
   if (input.stoppedAt !== null) return 'stopped';
   if (supervised) return 'restarting';
   return input.started ? 'orphan' : 'never-started';
