@@ -294,3 +294,42 @@ describe('_auto_swap_check (wiring): lost auth on a session sitting on its HOME 
     expect(dispatchCalls()).toEqual([]);
   });
 });
+
+describe('_accept_first_run_prompts: rc 5, the hard block', () => {
+  it('returns 5 on a genuine limit banner, and sends no keystrokes', () => {
+    expect(acceptRc('5-hour limit reached · resets 3pm')).toBe(5);
+    expect(h.calls().some((c) => c.includes('send-keys'))).toBe(false);
+  });
+
+  it('returns 5 on a 429, not 4 — "we know exactly what is wrong" is not "we do not know"', () => {
+    expect(acceptRc('API Error: 429 Too Many Requests')).toBe(5);
+  });
+
+  // THE ORDERING REGRESSION. _pane_hard_blocked's shipped regex matches
+  // "Invalid API key" and "Please run /login" too, and _pane_login_screen is
+  // CALLED LAST. Put the hard-block branch anywhere ahead of the gate branches
+  // and this file's own Bypass-Permissions fixture — a live gate whose pane
+  // ALSO quotes "Please run /login" in restored scrollback — returns 5, sends
+  // no keys, and parks the session one stray Enter from "1. No, exit".
+  it('still returns 2, not 5, on a bare login screen (hard-block is checked AFTER)', () => {
+    expect(acceptRc('Please run /login')).toBe(2);
+  });
+
+  it('still returns 0 on a healthy pane that quotes a limit banner in scrollback', () => {
+    const pane = '● Read swap.log\n  "5-hour limit reached"\n? for shortcuts';
+    expect(acceptRc(pane)).toBe(0);
+    expect(h.calls().some((c) => c.includes('send-keys'))).toBe(false);
+  });
+
+  it('does not inject /effort after a hard block', () => {
+    h.sh(
+      `${SPAWN_STUB}
+       _reg_set myid wrapper claude
+       _reg_set myid workdir '${h.home}'
+       _reg_set myid uuid deadbeef
+       _spawn myid new; :`,
+      { PANE_TEXT: 'monthly spend limit reached' },
+    );
+    expect(h.calls().some((c) => c.includes('/effort'))).toBe(false);
+  });
+});

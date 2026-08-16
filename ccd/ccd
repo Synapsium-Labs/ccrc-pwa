@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=e6c927159412916f9ad31f7bbf053b7075bca4bd5c9bbcafaf9a7ac39b340a91
+# ccrc:generated 1 sha256=cf4a8ff9e9c1cde17a4bf5827e7c3d537e1d3fb7dcbbb4b473b9532a04b6a3db
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
 set -uo pipefail
@@ -1429,7 +1429,7 @@ cmd_ws_add() {   # project [slug] — new worktree + session for an existing pro
   local rc; _spawn "$id" new; rc=$?
   _reg_claim "$id"
   _ws_supervise "$id"
-  if [[ "$rc" -eq 3 || "$rc" -eq 4 ]]; then
+  if [[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 ]]; then
     echo "ccd: ws-add spawn failed for $id (spawn rc $rc) — see $REG/$id.spawn" >&2
     return "$rc"
   fi
@@ -2559,7 +2559,7 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   # `die` exits, and the kernel closes what exits. Given back regardless of the
   # spawn's fate — the undo (archive stamps gone) is real either way.
   exec {lfd}>&-
-  if [[ "$rc" -eq 3 || "$rc" -eq 4 ]]; then
+  if [[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 ]]; then
     echo "ccd: ws-restore spawn failed for $id (spawn rc $rc) — see $REG/$id.spawn" >&2
     return "$rc"
   fi
@@ -7309,7 +7309,8 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] [bound_s] — clear startu
   # Window is ~15 min because 700k+-token resumes take minutes between gates; healthy sessions
   # return the moment the live marker shows, so the common path stays fast.
   # rc 0 = a live marker appeared (the TUI is up); 2 = an auth screen (below); 3 = the tmux session
-  # vanished mid-poll; 4 = the window expired with no marker. 3 and 4 both used to be "0 after ~15
+  # vanished mid-poll; 4 = the window expired with no marker; 5 = a hard block (limit/spend banner,
+  # or lost auth): waiting longer cannot fix it. 3 and 4 both used to be "0 after ~15
   # minutes" (M6): the caller printed `started`/`ensured` over a session that was never there.
   local t="$1" fromswap="${2:-0}" bound="${3:-$SPAWN_SETTLE_S}" i pane t0
   # A WALL-CLOCK bound as well as the iteration cap. The cap alone is not a
@@ -7376,6 +7377,23 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] [bound_s] — clear startu
       # returns 2. Keep this function's own job pure: a verdict, not a report.
       return 2
     fi
+    # A HARD BLOCK: a real limit/spend banner, or lost auth. This earns its own
+    # code rather than joining 4, because the two say opposite things — an
+    # expired window means *we do not know*, a hard block means *we know
+    # exactly what is wrong and waiting longer cannot fix it*. Collapsing them
+    # would be an adapter narrowing a distinction it received.
+    #
+    # CHECKED AFTER `_pane_login_screen`, AND THAT ORDER IS THE CONTRACT, not a
+    # preference: `_pane_hard_blocked`'s regex also matches "Invalid API key"
+    # and "Please run /login", and the whole reason the login check sits LAST
+    # is that its banners appear in restored scrollback beside live gates.
+    # Ahead of the gate branches this returns 5 on a pane holding an unanswered
+    # Bypass-Permissions prompt, sends no keys, and parks the session one stray
+    # Enter from "1. No, exit". 5, NOT 4: renumbering 3 or 4 would silently
+    # retarget four call sites plus _supervised_start.
+    if _pane_hard_blocked "$pane"; then
+      return 5
+    fi
     sleep 2
   done
   # The window expired. An explicit verdict, because falling out of a `for` loop under `set -uo
@@ -7414,7 +7432,8 @@ _tmux_server_ensure() {   # place the SERVER in a known scope, not the caller's 
 #   inside a command substitution kills ONLY the subshell, so the fatal
 #   "incomplete registry for '<id>'" arrived at the caller as rc 1. And rc 1 is
 #   in NO caller's failure set: `cmd_ws_add`, `cmd_start` and `cmd_ensure` all
-#   ask `[[ "$rc" -eq 3 || "$rc" -eq 4 ]]`. Every one of them printed its
+#   ask `[[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 ]]` (`3 || 4` at the time
+#   this was measured; rc 1 is outside the set either way). Every one of them printed its
 #   SUCCESS line and returned 0 over a spawn that never happened — M6's silent
 #   success, one layer below where the wave had just finished closing it.
 #
@@ -7511,6 +7530,7 @@ _spawn_settle() {   # id fromswap [bound_s] — the BLOCKING half: gate loop, fa
     # nothing else ever clears $REG/$id.started. Named here so the operator has the escape hatch.
     3) echo "ccd: $id: the tmux session vanished during startup — nothing is running. A retry will --resume this uuid; if the session never came up, clear $REG/$id.started first." >&2 ;;
     4) echo "ccd: $id: startup window expired with no live TUI marker. A retry will --resume this uuid; if the session never came up, clear $REG/$id.started first." >&2 ;;
+    5) echo "ccd: $id: hard-blocked at startup (limit/spend banner, or lost auth) on $wrapper — waiting will not fix it; swap the account or attach and run /login." >&2 ;;
   esac
   # /effort ultracode is a Claude-model effort tier; skip it on any lane that is not home-able
   # (those are the opt-in external backends — gpt/Codex today — which don't take it, so the
@@ -7788,7 +7808,7 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   # never-started rung reads. A spawn that failed is still a row that was started — it classifies
   # `orphan`, which is the honest answer, not `never-started`.
   _reg_claim "$id"
-  if [[ "$rc" -eq 3 || "$rc" -eq 4 ]]; then
+  if [[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 ]]; then
     echo "ccd: start failed for $id (spawn rc $rc) — see $REG/$id.spawn" >&2
     return "$rc"
   fi
@@ -7854,7 +7874,7 @@ cmd_ensure() {   # id [bound_s] — idempotent; used by systemd. arg is the id d
   local mode=new; [[ "$(_reg_get "$id" started)" == "1" ]] && mode=resume
   local rc; _spawn "$id" "$mode" "$bound"; rc=$?
   _reg_claim "$id"
-  if [[ "$rc" -eq 3 || "$rc" -eq 4 ]]; then
+  if [[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 ]]; then
     echo "ccd: ensure failed for $id (spawn rc $rc) — see $REG/$id.spawn" >&2
     return "$rc"
   fi

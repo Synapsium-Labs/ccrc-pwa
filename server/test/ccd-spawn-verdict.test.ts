@@ -212,3 +212,17 @@ describe('the callers M6 actually lied through', () => {
     expect(bad.stderr).toContain('start failed for claude2-demo4 (spawn rc 4)');
   });
 });
+
+describe('the spawn fact records rc 5, and the encoding is unchanged', () => {
+  it('writes `<epoch-seconds> 5` — the timestamp is load-bearing', () => {
+    seed('myid');
+    h.sh(`${TMUX} _spawn myid new; :`, { PANE_TEXT: 'You have reached your usage limit' });
+    // _supervised_start compares `at >= since` to tell THIS attempt's failure
+    // from the previous one's; a bare word field would destroy that.
+    expect(h.reg('myid', 'spawn')).toMatch(/^\d+ 5$/);
+  });
+
+  it('3 and 4 keep their numbers — four call sites plus _supervised_start branch on them', () => {
+    expect(rcOf('_accept_first_run_prompts cc-test 0')).toBe(3);
+  });
+});
