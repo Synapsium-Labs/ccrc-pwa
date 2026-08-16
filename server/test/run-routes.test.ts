@@ -322,6 +322,22 @@ describe('POST /api/runs/:id/dispatch', () => {
       resumed: false, clearedAt: null, state: 'dispatched' });
   });
 
+  it('the 200 body CARRIES adopted and spawnState — the coordinator sees nothing but this JSON', async () => {
+    // §1.5's verdict is computed in `dispatchRun` and would be dead if the
+    // delivery edge dropped it: the coordinator reads HTTP and nothing else, and
+    // `ccd/coordinator-skill/references/wave-lifecycle.md` already documents both
+    // fields verbatim. An L4 adapter may not narrow a distinction it received.
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home, { wsAddCreates: ['demo-fresh1'] });
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    const res = await postDispatch(app, opened.id);
+    expect(res.statusCode).toBe(200);
+    // A CLEAN ws-add: not adopted, and no spawn fact of its own to report.
+    // `null` here means "nothing was recorded", NOT `unrecognised`.
+    expect(res.json()).toMatchObject({ ok: true, adopted: false, spawnState: null });
+  });
+
   // Registry ladder (architecture doc, increment 1's second half): the AFTER
   // read never tolerates degradation, unlike BEFORE — see the comment at the
   // call site in coord/routes.ts, written there on purpose because the

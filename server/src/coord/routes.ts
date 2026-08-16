@@ -96,6 +96,12 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
     return reply.code(200).send({
       ok: true, id: r.id, sessionId: r.sessionId, resumed: r.resumed, clearedAt: r.clearedAt,
       briefQueued: r.briefQueued, ...(r.clearError !== null ? { clearError: r.clearError } : {}),
+      // §1.5. UNCONDITIONAL, not spread-when-interesting: the coordinator sees
+      // nothing but this JSON, and `adopted:false`/`spawnState:null` is itself the
+      // answer to "did that pane come up clean?". Dropping either here would be an
+      // L4 adapter narrowing a distinction it received — and
+      // `coordinator-skill/references/wave-lifecycle.md` documents both by name.
+      adopted: r.adopted, spawnState: r.spawnState,
     });
   }
   switch (r.kind) {
