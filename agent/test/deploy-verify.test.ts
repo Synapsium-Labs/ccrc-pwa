@@ -177,8 +177,14 @@ const unitSection = (unit: string, name: string): string => {
 };
 
 /** Plants `~/.config/systemd/user/claude-session@.service` in a fixture HOME,
- *  with or without the one line the sweep's pre-flight refuses without. */
-const plantUnit = (home: string, killModeProcess: boolean): void => {
+ *  with or without the one line the sweep's pre-flight refuses without — and
+ *  the DROP-IN beside it, because that is the half a base-file grep cannot
+ *  see. `deploy.sh` copies `claude-session@.service.d/limits.conf` in the same
+ *  run that sweeps, and it already carries a `[Service]` section, so one
+ *  `KillMode=` line added there overrides the base unit on the live box while
+ *  leaving the base unit's own line untouched. `dropInKillMode` plants exactly
+ *  that. */
+const plantUnit = (home: string, killModeProcess: boolean, dropInKillMode?: string): void => {
   const dir = path.join(home, '.config', 'systemd', 'user');
   mkdirSync(dir, { recursive: true });
   writeFileSync(path.join(dir, 'claude-session@.service'),
@@ -186,7 +192,33 @@ const plantUnit = (home: string, killModeProcess: boolean): void => {
     + 'ExecStart=%h/.local/bin/ccd supervise %i\n'
     + (killModeProcess ? 'KillMode=process\n' : '')
     + '\n[Install]\nWantedBy=default.target\n');
+  const dropInDir = path.join(dir, 'claude-session@.service.d');
+  mkdirSync(dropInDir, { recursive: true });
+  writeFileSync(path.join(dropInDir, 'limits.conf'),
+    '[Service]\nMemoryMax=10G\nTasksMax=4096\n'
+    + (dropInKillMode === undefined ? '' : `KillMode=${dropInKillMode}\n`));
 };
+
+/** The `show -p KillMode` branch every stub `systemctl` in this file answers
+ *  with. It stands in for SYSTEMD, so it resolves the property the way systemd
+ *  documents: the base unit first, then `<unit>.d/*.conf` in lexical order,
+ *  last assignment wins, and a unit it cannot load reports systemd's own
+ *  default — `control-group`. Modelling the merge is the point: a stub that
+ *  echoed the base file back could not tell a pre-flight that asks systemd for
+ *  the EFFECTIVE value from one that greps the base unit, which is the
+ *  distinction these tests exist to hold. */
+const SHOW_KILLMODE = [
+  'case "$*" in',
+  '  *"show -p KillMode"*)',
+  '    d="$HOME/.config/systemd/user"; v=control-group;',
+  '    for f in "$d/claude-session@.service" "$d/claude-session@.service.d/"*.conf; do',
+  '      [ -f "$f" ] || continue;',
+  '      while IFS= read -r l; do case "$l" in KillMode=*) v="${l#KillMode=}" ;; esac; done < "$f";',
+  '    done;',
+  '    echo "KillMode=$v"; exit 0 ;;',
+  'esac',
+  '',
+].join('\n');
 
 describe('the verification is actually wired into the deploy, and can observe a restart', () => {
   const deploySh = readFileSync(path.join(deployDir, 'deploy.sh'), 'utf8');
@@ -348,6 +380,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
     // unit again and this test goes red.
     writeFileSync(path.join(bin, 'systemctl'),
       '#!/bin/sh\necho "systemctl $*" >> "$HOME/calls"\n'
+      + SHOW_KILLMODE
       + 'case "$*" in\n'
       + '  *list-units*)\n'
       + '    case "$*" in\n'
@@ -613,19 +646,24 @@ describe('the verification is actually wired into the deploy, and can observe a 
     expect(body).toContain('/proc/$(pgrep -x -f "tmux: server")/cgroup');
   });
 
-  it('and RUNNING the sweep against a KillMode-less unit aborts it before one systemctl call', () => {
+  it('and RUNNING the sweep against a KillMode-less unit aborts it before one try-restart', () => {
     // The structural case above would pass on a guard that checks the right
     // text in the wrong place or never runs; this one EXECUTES SWEEP_CMD with
-    // the same stubs the FAILED-unit case uses, against a box whose unit file
-    // lost the line. Zero try-restarts is the assertion that matters — the
-    // whole point is that no supervisor is touched.
+    // the same stubs the FAILED-unit case uses, against a box whose unit
+    // resolves to something other than KillMode=process. Zero try-restarts is
+    // the assertion that matters — the whole point is that no supervisor is
+    // touched. (It used to assert zero systemctl calls of ANY kind. It cannot:
+    // the pre-flight now ASKS systemd for the effective value, which is itself
+    // a systemctl call — a read, and the reason the guard sees drop-ins at all.
+    // `try-restart` is the mutation, and the mutation is what must not happen.)
     const home = mkTmp('ccrc-agent-sweepguard-');
     const bin = path.join(home, 'stubbin');
     mkdirSync(path.join(home, 'ccrc', 'deploy'), { recursive: true });
     mkdirSync(bin, { recursive: true });
     plantUnit(home, false);
     writeFileSync(path.join(bin, 'systemctl'),
-      '#!/bin/sh\necho "systemctl $*" >> "$HOME/calls"\nexit 0\n', { mode: 0o755 });
+      '#!/bin/sh\necho "systemctl $*" >> "$HOME/calls"\n' + SHOW_KILLMODE + 'exit 0\n',
+      { mode: 0o755 });
 
     const body = /SWEEP_CMD='([\s\S]*?)'\n/.exec(deploySh)![1]!;
     const r = spawnSync('bash', ['-c', body], {
@@ -634,8 +672,8 @@ describe('the verification is actually wired into the deploy, and can observe a 
     });
     expect(r.status, 'the sweep ran against a unit without KillMode=process').toBe(1);
     expect(r.stderr).toContain('REFUSING to sweep');
-    expect(existsSync(path.join(home, 'calls')),
-      'the sweep reached systemctl despite the refusal').toBe(false);
+    expect(readFileSync(path.join(home, 'calls'), 'utf8'),
+      'the sweep restarted a supervisor despite the refusal').not.toContain('try-restart');
 
     // …and the same box with the line restored sweeps normally, so the guard is
     // a gate and not a wall.
@@ -646,6 +684,60 @@ describe('the verification is actually wired into the deploy, and can observe a 
     });
     expect(ok.status).toBe(0);
     // The stub echoes `$*` unquoted, so the recorded line has no quotes.
+    expect(readFileSync(path.join(home, 'calls'), 'utf8')).toContain('try-restart claude-session@*');
+  });
+
+  it('a DROP-IN that overrides KillMode refuses too — the pre-flight reads the EFFECTIVE value', () => {
+    // THE CASE A BASE-FILE GREP CANNOT SEE, and it is not hypothetical: this
+    // same deploy copies `claude-session@.service.d/limits.conf` into place a
+    // few lines above the sweep, and that file already has a `[Service]`
+    // section. systemd merges drop-ins ON TOP of the base unit, so one
+    // `KillMode=control-group` line added to limits.conf leaves
+    // `ccd/claude-session@.service` reading `KillMode=process` — the base unit
+    // the old pre-flight grepped — while the units about to be restarted all
+    // resolve to control-group. The sweep would have passed its own guard and
+    // killed the tmux server anyway.
+    //
+    // The fixture models the merge, not the file: the stub `systemctl` answers
+    // `show -p KillMode` with base-then-drop-ins, last-wins (see SHOW_KILLMODE),
+    // which is what systemd does and what the live box would report.
+    const home = mkTmp('ccrc-agent-sweepdropin-');
+    const bin = path.join(home, 'stubbin');
+    mkdirSync(path.join(home, 'ccrc', 'deploy'), { recursive: true });
+    mkdirSync(bin, { recursive: true });
+    plantUnit(home, true, 'control-group');
+    writeFileSync(path.join(bin, 'systemctl'),
+      '#!/bin/sh\necho "systemctl $*" >> "$HOME/calls"\n' + SHOW_KILLMODE
+      + 'case "$*" in *list-units*) echo "claude-session@good.service loaded active running x" ;; esac\n'
+      + 'exit 0\n', { mode: 0o755 });
+    // A verify stub that SUCCEEDS, deliberately: without the fix the sweep runs
+    // to completion and exits 0, so the failure this test reports is the
+    // missing refusal and nothing else. (Measured against the base-file grep:
+    // status 0, no "REFUSING", `try-restart claude-session@*` in the call log.)
+    writeFileSync(path.join(home, 'ccrc', 'deploy', 'verify-service.sh'),
+      '#!/bin/sh\necho "verify $1" >> "$HOME/calls"\necho "verified: $1"\n', { mode: 0o755 });
+
+    const body = /SWEEP_CMD='([\s\S]*?)'\n/.exec(deploySh)![1]!;
+    const r = spawnSync('bash', ['-c', body], {
+      encoding: 'utf8',
+      env: { ...process.env, HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}` },
+    });
+    expect(r.status, 'a drop-in overriding KillMode swept anyway').toBe(1);
+    expect(r.stderr).toContain('REFUSING to sweep');
+    const calls = readFileSync(path.join(home, 'calls'), 'utf8');
+    expect(calls, 'the sweep restarted a supervisor despite the override').not.toContain('try-restart');
+    expect(calls, 'the pre-flight never asked systemd for the effective KillMode')
+      .toContain('show -p KillMode');
+
+    // And the same box with the override removed sweeps normally — the guard
+    // reads the merged value in BOTH directions, so a correct drop-in is not a
+    // deploy-stopper.
+    plantUnit(home, true);
+    const ok = spawnSync('bash', ['-c', body], {
+      encoding: 'utf8',
+      env: { ...process.env, HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}` },
+    });
+    expect(ok.status).toBe(0);
     expect(readFileSync(path.join(home, 'calls'), 'utf8')).toContain('try-restart claude-session@*');
   });
 

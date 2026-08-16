@@ -433,6 +433,31 @@ if [ "$TARGET" = "agent" ]; then
   # touched") — one step earlier. `set -e` at the top of this file turns the
   # non-zero exit into an aborted deploy.
   #
+  # IT ASKS SYSTEMD, IT DOES NOT GREP THE UNIT FILE (review finding). The first
+  # cut of this guard ran `grep -qE "^KillMode=process$"` over
+  # ~/.config/systemd/user/claude-session@.service — the BASE unit, which is a
+  # PROXY for the effective value and not the value. systemd merges
+  # `claude-session@.service.d/*.conf` on top of the base unit, THIS DEPLOY
+  # copies such a drop-in (`limits.conf`, twenty lines up), and that drop-in
+  # already carries a `[Service]` section: one `KillMode=control-group` line
+  # added there passes a base-file grep untouched and still turns the sweep into
+  # a fleet kill. `systemctl show` resolves the whole override chain — base,
+  # drop-ins, lexical order, last wins — so it answers the question the guard is
+  # actually asking. Comparing the full `KillMode=process` line (not `--value`,
+  # which is systemd >=230 and needless here) makes an empty answer from a
+  # failed call a refusal rather than a pass.
+  #
+  # EVERY UNIT THE SWEEP WOULD TOUCH, plus an uninstantiated instance of the
+  # template. Drop-ins can be per-instance (`claude-session@<id>.service.d/`),
+  # so the effective value is a property of each unit, not of the template; and
+  # on a fresh box with no active session the loop would otherwise be empty and
+  # check nothing at all, which is when a broken unit file is most likely.
+  # `claude-session@ccrc-deploy-preflight.service` is a CONFIG probe, not a
+  # liveness probe — `systemctl show` reporting `LoadState=loaded` for an id
+  # with no unit is exactly the trap the build4 ledger's F8 correction records,
+  # and the reason this reads a property value and never infers existence from
+  # it. Showing a template instance loads the unit read-only; it starts nothing.
+  #
   # The cgroup print is INFORMATIONAL and non-fatal (`2>/dev/null`, and the echo
   # succeeds even when `pgrep` finds nothing): a box with no tmux server yet is
   # an ordinary fresh box, and refusing there would break the first deploy to a
@@ -444,8 +469,11 @@ if [ "$TARGET" = "agent" ]; then
   # single quote inside one, so either would end SWEEP_CMD early and ship the
   # remainder as shell code in the deploy script itself.
   SWEEP_CMD='export XDG_RUNTIME_DIR=/run/user/$(id -u) \
-    && { grep -qE "^KillMode=process$" ~/.config/systemd/user/claude-session@.service \
-         || { echo "deploy: FAILED — the claude-session@ unit about to be swept lacks KillMode=process. systemds default is control-group, so try-restart would kill the tmux server and every session under it. REFUSING to sweep." >&2; exit 1; }; } \
+    && for u in $(systemctl --user list-units "claude-session@*" --state=active --plain --no-legend | awk "{print \$1}") claude-session@ccrc-deploy-preflight.service; do \
+         km=$(systemctl --user show -p KillMode "$u" 2>/dev/null); \
+         [ "$km" = "KillMode=process" ] \
+           || { echo "deploy: FAILED — $u resolves to ${km:-no answer from systemd}, and the sweep needs KillMode=process. systemds default is control-group, every session on this box is a child of ONE tmux server, and that server sits in a claude-session@ cgroup — so try-restart would kill the lot. A drop-in under ~/.config/systemd/user/claude-session@.service.d/ can set this without the base unit changing a byte. REFUSING to sweep." >&2; exit 1; }; \
+       done \
     && echo "deploy: the tmux server currently lives in: $(cat /proc/$(pgrep -x -f "tmux: server")/cgroup 2>/dev/null | tr "\n" " ")" >&2 \
     && systemctl --user try-restart "claude-session@*" \
     && for u in $(systemctl --user list-units "claude-session@*" --state=failed --plain --no-legend | awk "{print \$1}"); do \
