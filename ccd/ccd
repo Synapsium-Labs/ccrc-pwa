@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=44426ce80b369a477653c96fee708bd9256cc1c2b20459083990ced06077c68a
+# ccrc:generated 1 sha256=ce0e7bc9580b57bcb7a46dcfa4a7c01fa818720fc66694ef463a8bfc89cb63bd
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
 set -uo pipefail
@@ -7355,6 +7355,28 @@ _accept_first_run_prompts() {   # tmuxname — clear startup gates, then CONFIRM
   return 4
 }
 
+_tmux_server_ensure() {   # place the SERVER in a known scope, not the caller's cgroup
+  # Every session on this box is a child of ONE tmux server, and that server
+  # currently lives in whichever `claude-session@<id>.service` cgroup happened
+  # to create it — so the unit file's KillMode=process is the only thing
+  # standing between the deploy's `try-restart claude-session@*` sweep and a
+  # fleet kill (systemd's default KillMode is control-group).
+  #
+  # NO NEW UNIT FILE: nothing extra to deploy or keep in sync, and it self-heals
+  # — whenever the server is next created it lands in ccrc-tmux-server.scope.
+  # The `||` fallback keeps ccd working where systemd-run is absent, which the
+  # single-box story requires; it is the same pattern tmux already uses for its
+  # own per-pane `tmux-spawn-<uuid>.scope`.
+  #
+  # IT ONLY TAKES EFFECT WHEN THE SERVER IS NEXT CREATED, i.e. at a reboot:
+  # cgroup membership cannot be changed for a live process without a D-Bus
+  # StartTransientUnit adoption, and that is not something to attempt against a
+  # process holding 21 live sessions.
+  tmux list-sessions >/dev/null 2>&1 && return 0
+  systemd-run --user --scope --quiet --collect --unit=ccrc-tmux-server tmux start-server 2>/dev/null \
+    || tmux start-server
+}
+
 # `_spawn_start`'s ANSWER, and it is a global rather than stdout for a
 # correctness reason, not a taste one — so do not "clean this up" back into an
 # `echo` read through `fs=$(_spawn_start …)`. That is exactly what this file
@@ -7409,6 +7431,9 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   lastswap=$(_reg_get "$id" lastswap)
   [[ -n "$lastswap" && $(( $(date +%s) - lastswap )) -lt 300 ]] && fromswap=1
   if [[ "$mode" == "resume" ]]; then sidflag="--resume '$uuid'"; else sidflag="--session-id '$uuid'"; fi
+  # Ahead of the only line that can create the tmux server, and AFTER everything
+  # that can `die`: a spawn that is going to abort must not leave a scope behind.
+  _tmux_server_ensure
   # COLORTERM=truecolor so Claude Code emits 24-bit colour (it otherwise quantises
   # to 256, collapsing its palette). tmux passes it through to the terminal-drawer
   # xterm once the server has the RGB terminal-feature (see hardening/tmux.conf).
