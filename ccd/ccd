@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=1c5ed4444fd93ebce9734aaae926c71a905f0e55c229fd4dbc1f1bb07d056ddb
+# ccrc:generated 1 sha256=3c107524660c6fff7f7050292561f14e833ff9133c12b3f48cc65b0168177198
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
 set -uo pipefail
@@ -216,6 +216,21 @@ _tmux()  { echo "cc-$1"; }                                  # id -> tmux name
 _alive() { tmux has-session -t "$(_tmux "$1")" 2>/dev/null; }
 _reg_set() { printf '%s' "$3" > "$REG/$1.$2"; }             # id field value
 _reg_get() { cat "$REG/$1.$2" 2>/dev/null; }                # id field
+# THE ONE WRITER OF `started`, and the reason it is a function rather than eight
+# `_reg_set` lines: the field is what `_session_state` and shared/'s
+# `sessionLifecycle` read to tell `orphan` from `never-started`, and (Wave 1)
+# `unclaimed` from `running`. Eight writers across two processes is a fact
+# nobody owns. The FIELD gets one writer; the CALLERS stay authoritative about
+# WHEN — which is why this is not folded into `_spawn_start`: the two
+# supervised-branch writes in cmd_start/cmd_ensure are load-bearing exactly
+# when the unit never comes up and `_spawn` never runs in this process, and a
+# failed revival must classify `orphan`, not `never-started`.
+#
+# MONOTONE WITHIN A ROW: nothing in this file clears `started` on its own. The
+# one eraser is `_reg_purge`, which unlinks EVERY field for an id (forget, reap,
+# dead-reg) — that destroys the identity, it does not un-claim it. Deliberate,
+# and what `_spawn_start`'s --resume -> --session-id fallback exists to pay for.
+_reg_claim() { _reg_set "$1" started 1; }                   # id
 _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # final-review-destructive finding F3. The THREE call sites that used to spell
   # this `rm -f "$REG/$id".*` directly were an unanchored glob: `$id.*`
@@ -1393,7 +1408,7 @@ cmd_ws_add() {   # project [slug] — new worktree + session for an existing pro
   # is untouched — `_ws_supervise` still runs on a failed spawn, since a
   # unit that can retry is strictly better than one that never gets enabled.
   local rc; _spawn "$id" new; rc=$?
-  _reg_set "$id" started 1
+  _reg_claim "$id"
   _ws_supervise "$id"
   if [[ "$rc" -eq 3 || "$rc" -eq 4 ]]; then
     echo "ccd: ws-add spawn failed for $id (spawn rc $rc) — see $REG/$id.spawn" >&2
@@ -2515,7 +2530,7 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   # task because it owns the start paths and the spawn-rc plumbing. Supervision
   # wiring stays untouched: `_ws_supervise` still runs on a failed spawn.
   local rc; _spawn "$id" resume; rc=$?
-  _reg_set "$id" started 1
+  _reg_claim "$id"
   _ws_supervise "$id"
   # GIVEN BACK BEFORE THE VERB ANSWERS, for the reason `cmd_ws_reap` states at
   # its own close: `flock` treats two `open()`s of one path in one process as
@@ -7442,7 +7457,7 @@ _supervised_start() {   # id — ask the UNIT to spawn, then WAIT for an observa
     echo "ccd: warn: systemctl not found — starting $id UNSUPERVISED (no auto-swap, no uuid-sync, nothing to restart it)" >&2
     local mode=new; [[ "$(_reg_get "$id" started)" == "1" ]] && mode=resume
     _spawn "$id" "$mode"; rc=$?
-    _reg_set "$id" started 1
+    _reg_claim "$id"
     return "$rc"
   fi
   # §3.3 deliberately creates failed units — that is the point of the start limit — and a unit
@@ -7453,7 +7468,7 @@ _supervised_start() {   # id — ask the UNIT to spawn, then WAIT for an observa
     echo "ccd: warn: could not enable unit $unit — starting $id UNSUPERVISED (unit installed? lingering?)" >&2
     local mode=new; [[ "$(_reg_get "$id" started)" == "1" ]] && mode=resume
     _spawn "$id" "$mode"; rc=$?
-    _reg_set "$id" started 1
+    _reg_claim "$id"
     return "$rc"
   fi
   # `enable --now` returns when systemd has STARTED THE UNIT, not when a pane exists — but
@@ -7640,7 +7655,7 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
     # this field, not `never-started`. `($mode)` now appears here too (Task 6): the id form exists
     # precisely so an operator can tell whether they resumed the row they named or minted a fresh
     # one, and the supervised path is the one a human at a keyboard actually takes.
-    _reg_set "$id" started 1
+    _reg_claim "$id"
     [[ "$rc" -eq 0 ]] || return "$rc"
     echo "started $id ($mode) — discover on claude.ai by name: $id"
     return 0
@@ -7649,7 +7664,7 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   # `started` stays unconditional: it records that this row has HAD a session, which is what §4.3's
   # never-started rung reads. A spawn that failed is still a row that was started — it classifies
   # `orphan`, which is the honest answer, not `never-started`.
-  _reg_set "$id" started 1
+  _reg_claim "$id"
   if [[ "$rc" -eq 3 || "$rc" -eq 4 ]]; then
     echo "ccd: start failed for $id (spawn rc $rc) — see $REG/$id.spawn" >&2
     return "$rc"
@@ -7708,14 +7723,14 @@ cmd_ensure() {   # idempotent; used by systemd. arg is the id directly.
     local rc; _supervised_start "$id"; rc=$?
     # `started` stays unconditional (Task 4's invariant, ccd:7118) on this path too — see cmd_start's
     # matching comment for why the in-unit cmd_ensure setting it is not enough on its own.
-    _reg_set "$id" started 1
+    _reg_claim "$id"
     [[ "$rc" -eq 0 ]] || return "$rc"
     echo "ensured $id"
     return 0
   fi
   local mode=new; [[ "$(_reg_get "$id" started)" == "1" ]] && mode=resume
   local rc; _spawn "$id" "$mode"; rc=$?
-  _reg_set "$id" started 1
+  _reg_claim "$id"
   if [[ "$rc" -eq 3 || "$rc" -eq 4 ]]; then
     echo "ccd: ensure failed for $id (spawn rc $rc) — see $REG/$id.spawn" >&2
     return "$rc"
