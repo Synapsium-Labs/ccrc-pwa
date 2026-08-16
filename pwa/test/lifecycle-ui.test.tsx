@@ -209,6 +209,80 @@ describe('NewSessionSheet', () => {
   });
 });
 
+describe('NewSessionSheet — a five-minute wait says so', () => {
+  /** The sheet, open, with `api.createSession` HANGING — the state the operator is
+   *  in for up to five minutes after Task 108 raises the `start`/`enable` budgets.
+   *  The promise never settles ON PURPOSE: a resolved stub would unmount the
+   *  waiting state before the timer under test could reach it.
+   *
+   *  Everything is driven with `act(async () => {})` flushes rather than
+   *  `findBy*`: this describe runs under fake timers in one of its two tests, and
+   *  testing-library's `waitFor` polls on a timer, so a `findBy*` here would be
+   *  waiting for a clock nobody is advancing. Both stubbed fetches resolve as
+   *  microtasks, which a bare async `act` drains. */
+  const renderNewSessionSheetMidStart = (): {
+    start: () => Promise<void>;
+    rerender: (open: boolean) => void;
+  } => {
+    stubAccounts([]);                       // the 20 s /api/accounts poll, contained
+    vi.spyOn(api, 'projects').mockResolvedValue(PROJECTS);
+    vi.spyOn(api, 'createSession').mockImplementation(() => new Promise<never>(() => {}));
+    const fleet = makeFleet();
+    const view = render(<NewSessionSheet open onClose={() => {}} fleet={fleet} />);
+    return {
+      start: async () => {
+        await act(async () => {});          // the project list lands
+        fireEvent.click(screen.getByRole('button', { name: /alt·max/ }));
+        await act(async () => {});
+        fireEvent.click(screen.getByRole('button', { name: /OpenClawHetzner/ }));
+        await act(async () => {
+          fireEvent.click(
+            screen.getByRole('button', { name: 'Start OpenClawHetzner on alt·max' }),
+          );
+        });
+      },
+      // `open` is the ONE prop the close-reset effect keys on
+      // (`if (open) return; … setStarting(false);`), so the helper varies exactly
+      // that and nothing else.
+      rerender: (open: boolean) =>
+        view.rerender(<NewSessionSheet open={open} onClose={() => {}} fleet={fleet} />),
+    };
+  };
+
+  it('after ~20s the button stops claiming a quick start', async () => {
+    // §1.4's budgets raise `start`/`enable` from a flat 90 s to 300 s, so this
+    // sheet can now sit for FIVE MINUTES where it used to fail at ninety seconds.
+    // `api.createSession` is awaited behind a disabled button with no progress and
+    // no cancel; the MINIMUM is that the label says what is happening.
+    vi.useFakeTimers();
+    try {
+      const { start } = renderNewSessionSheetMidStart();   // never-resolving createSession
+      await start();
+      expect(screen.getByRole('button', { name: /Starting…/ })).toBeInTheDocument();
+      await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+      expect(screen.getByRole('button', { name: /Still starting/ })).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('forgets the slow label when the sheet closes', async () => {
+    // Same rule the sheet already applies to `starting` itself: a closed sheet
+    // forgets its choices, and a reopened one must not open mid-sentence.
+    vi.useFakeTimers();
+    try {
+      const { start, rerender } = renderNewSessionSheetMidStart();
+      await start();
+      await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+      expect(screen.getByRole('button', { name: /Still starting/ })).toBeInTheDocument();
+      act(() => { rerender(false); });
+      expect(screen.queryByText(/Still starting/)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 // — SwapSheet —
 
 describe('SwapSheet', () => {

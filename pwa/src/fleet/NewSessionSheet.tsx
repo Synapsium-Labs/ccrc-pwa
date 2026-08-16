@@ -45,6 +45,14 @@ export function NewSessionSheet({
   const [list, setList] = useState<Project[] | null>(null); // null = loading
   const [listError, setListError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
+  /** `starting` has been true for long enough that "Starting…" is no longer an
+   *  honest description of the wait. The server's `start`/`enable` budget is
+   *  300 s (the unsupervised fallback settles for up to `SPAWN_SETTLE_S` — a COLD
+   *  Claude Code boot against a freshly seeded workspace HOME), so the old
+   *  ninety-second failure is gone and the sheet can legitimately sit for
+   *  minutes. There is still no cancel — this is the minimum: say what is
+   *  happening rather than imply it is nearly done. */
+  const [slow, setSlow] = useState(false);
 
   // Fetch the project list the moment the sheet opens so step 2 is instant.
   useEffect(() => {
@@ -65,6 +73,15 @@ export function NewSessionSheet({
     };
   }, [open]);
 
+  // The slow-label clock. Keyed on `starting` alone, so it is armed by the same
+  // transition that disables the button and disarmed by every exit from it —
+  // including the close-reset below, which sets `starting` back to false.
+  useEffect(() => {
+    if (!starting) { setSlow(false); return undefined; }
+    const t = setTimeout(() => setSlow(true), 20_000);
+    return () => clearTimeout(t);
+  }, [starting]);
+
   // A closed sheet forgets its choices — reopening starts fresh at step 1.
   useEffect(() => {
     if (open) return;
@@ -72,6 +89,7 @@ export function NewSessionSheet({
     setProject(null);
     setQuery('');
     setStarting(false);
+    setSlow(false);
   }, [open]);
 
   // Registry projects first, most recently active on top; the rest keep the
@@ -185,7 +203,7 @@ export function NewSessionSheet({
             onClick={() => void start()}
           >
             {starting
-              ? 'Starting…'
+              ? (slow ? 'Still starting — a cold session can take minutes' : 'Starting…')
               : project === null
                 ? 'Choose a project'
                 : `Start ${project.name} on ${accountLabel(roster, wrapper)}`}

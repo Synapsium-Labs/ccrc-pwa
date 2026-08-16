@@ -98,6 +98,15 @@ describe('per-verb timeouts', () => {
     // what stop that budget quietly reverting to the flat default.
     [['ws-add', 'ccrc-pwa'], 300_000],
     [['ensure', 'x'], 300_000],
+    // The table is a SUBSET check, so a new row reds nothing on its own — which is
+    // the discipline this table already states about `ws-rename` ("Without this
+    // row, deleting or changing the entry cannot fail a single test"). These two
+    // inherited the flat 90 s. Both outcomes of `_supervised_start` are BOUNDED,
+    // so this is a correctness fix rather than a latent F8 — but the unsupervised
+    // fallback's bound is `SPAWN_SETTLE_S` (240 s), which the old 90 s did not
+    // cover. A verb whose worst case exceeds its budget should say so here.
+    [['start', 'demo-quiet-basin'], 300_000],
+    [['enable', 'demo-quiet-basin'], 300_000],
   ])('sends %j with a %i ms budget', async (args, ms) => {
     seen.length = 0;
     await createRunner(client)('/home/u/.local/bin/ccd', args as string[]);

@@ -71,6 +71,22 @@ const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
   // rather than orphaning when it is hit, is tracked as the ccd-side half.
   'ws-add': 300_000,
   ensure: 300_000,
+  // The two SUPERVISION verbs, which used to inherit the flat 90 s silently.
+  // `cmd_start` goes through `_supervised_start`, and BOTH of its outcomes are
+  // bounded — which is why this is a correctness fix rather than a latent F8 —
+  // but they are bounded at very different numbers, and it is the SECOND one that
+  // sets this budget:
+  //   • systemd happy path: `reset-failed` + `enable --now`, then a poll bounded
+  //     at `SUPERVISED_START_WAIT` (30 s, ccd/ccd:79). Comfortably inside 90 s.
+  //   • the two UNSUPERVISED fallbacks (no `systemctl`, or the unit refuses to
+  //     enable): `_spawn_start` + `_spawn_settle`, whose wall-clock bound on this
+  //     agent-reachable path is `SPAWN_SETTLE_S` (240 s, ccd/ccd:82) — a COLD
+  //     Claude Code start against a freshly seeded workspace HOME. That is what
+  //     exceeds 90 s, and 300 s is the agent's own `MAX_EXEC_TIMEOUT_MS` ceiling.
+  // `cmd_enable` is an arity check plus `cmd_start`, so it inherits the same worst
+  // case exactly — hence the same number rather than a guess.
+  start: 300_000,
+  enable: 300_000,
 };
 
 function timeoutMsFor(cmd: string, args: string[]): number {
