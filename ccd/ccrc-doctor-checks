@@ -98,6 +98,22 @@ _dr_pass() { _dr_line PASS "$1" "$2"; return 0; }
 _dr_warn() { _dr_line WARN "$1" "$2"; printf '  remedy: %s\n' "${3//$'\n'/ }"; return 2; }
 _dr_fail() { _dr_line FAIL "$1" "$2"; printf '  remedy: %s\n' "${3//$'\n'/ }"; return 1; }
 
+# Leading/trailing whitespace off a captured value, in pure parameter
+# expansion (no `sed`, no subshell — see `_dr_pkg_candidates` for why this file
+# avoids PATH lookups it does not need). Two callers, and BOTH were defects the
+# review found: a floor of `" >=22.13.0 "` was rejected by doctor while
+# node-floor.test.ts:38-39 accepts it (it does `.exec(range.trim())` and this
+# claimed to copy that rule EXACTLY), and a `user.email` of `"   "` was
+# non-empty enough to PASS — printing `PASS git_email:    `, a line this
+# suite's own shape test declares illegal, for a box whose commits carry an
+# empty author address.
+_dr_trim() {
+  local s="$1"
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s' "$s"
+}
+
 # First non-empty line of a captured output, for details that quote a tool's
 # own diagnosis without pasting a screenful of it.
 _dr_first_line() {
@@ -173,17 +189,36 @@ _check_node() {
   # the jq check), and node is by definition available here — its absence is
   # the branch above. The path travels in the environment rather than argv so
   # there is no argv[1]-vs-argv[2] ambiguity to get wrong.
-  #   exit 3 = the file does not parse; exit 4 = it declares no engines.node.
+  # READING the file and PARSING it are separated on purpose (Task 4 review,
+  # Minor 6): `chmod 000` and "somebody wrote garbage here" are two conditions
+  # an operator acts on completely differently — one is a mode/ownership fix,
+  # the other a redeploy — and collapsing them into one signal is the
+  # overloaded-seam mistake this codebase bans by name. It is the same defect
+  # Task 1 fixed when a missing `jq` was being reported as a corrupt build
+  # stamp. The read failure carries node's own errno out on stdout so the
+  # verdict can name it.
+  #   exit 5 = cannot be read (prints "READERR:<code>")
+  #   exit 3 = does not parse; exit 4 = declares no engines.node.
   local range rc
   range="$(CCRC_DOCTOR_PKG="$pkg" node -e '
     const fs = require("fs");
+    let text;
+    try { text = fs.readFileSync(process.env.CCRC_DOCTOR_PKG, "utf8"); }
+    catch (e) { process.stdout.write("READERR:" + (e && e.code ? e.code : "unknown")); process.exit(5); }
     let j;
-    try { j = JSON.parse(fs.readFileSync(process.env.CCRC_DOCTOR_PKG, "utf8")); }
+    try { j = JSON.parse(text); }
     catch (e) { process.exit(3); }
     const r = j && j.engines && j.engines.node;
     if (typeof r !== "string" || r.length === 0) process.exit(4);
     process.stdout.write(r);
   ' 2>/dev/null)"; rc=$?
+  if [ "$rc" -eq 5 ]; then
+    local why="${range#READERR:}"
+    [ -n "$why" ] && [ "$why" != "$range" ] || why="unreadable"
+    _dr_fail node "$pkg exists but cannot be read ($why), so the floor cannot be read" \
+      "fix its mode/ownership — check with: ls -l $pkg (a deploy leaves it world-readable)"
+    return 1
+  fi
   if [ "$rc" -eq 3 ]; then
     _dr_fail node "$pkg does not parse as JSON, so the floor cannot be read" \
       "restore or redeploy $pkg — something wrote garbage where a package manifest belongs"
@@ -199,8 +234,16 @@ _check_node() {
   # moment someone writes `^22 || >=24`, this must fail loudly rather than
   # silently accept a floor it did not understand. No version number is spelled
   # in this file — that is what reading the manifest is for.
-  local floor_re='^>=([0-9]+)\.([0-9]+)\.([0-9]+)$'
-  if [[ ! "$range" =~ $floor_re ]]; then
+  #
+  # `_dr_trim` is part of that rule, not a nicety: node-floor matches against
+  # `range.trim()`, so `" >=22.13.0 "` keeps all three declarations identical
+  # and that suite green — a doctor that rejected it would be STRICTER than the
+  # rule it claims to copy, and would fail a box whose manifests are fine. The
+  # verdict below still quotes the value as written, so an otherwise invisible
+  # stray space is still visible when the form really is wrong.
+  local floor_re='^>=([0-9]+)\.([0-9]+)\.([0-9]+)$' declared
+  declared="$(_dr_trim "$range")"
+  if [[ ! "$declared" =~ $floor_re ]]; then
     _dr_fail node "unrecognised engines range \"$range\" in $pkg — this check understands only a single '>=x.y.z'" \
       "declare engines.node as one '>=x.y.z' range (node-floor.test.ts:38-42 pins the same rule), or teach ccrc-doctor-checks the new form deliberately"
     return 1
@@ -217,9 +260,9 @@ _check_node() {
   local rmaj="${BASH_REMATCH[1]}" rmin="${BASH_REMATCH[2]}" rpat="${BASH_REMATCH[3]}"
 
   if (( rmaj > maj || (rmaj == maj && (rmin > min || (rmin == min && rpat >= pat))) )); then
-    _dr_pass node "$running satisfies $range (declared in $pkg), at $p"
+    _dr_pass node "$running satisfies $declared (declared in $pkg), at $p"
   else
-    _dr_fail node "$running is below the floor $range declared in $pkg" \
+    _dr_fail node "$running is below the floor $declared declared in $pkg" \
       "upgrade Node to at least ${maj}.${min}.${pat} — below it the server does not degrade, it fails to boot (node:sqlite is imported unconditionally)"
     return 1
   fi
@@ -315,9 +358,16 @@ _check_gh_auth() {
 }
 
 # ── git's identity ────────────────────────────────────────────────────────
-# Read from $HOME rather than from $PWD: doctor's subject is the BOX, and a
-# repository-local user.email in whatever directory the operator happened to be
-# standing in would answer a different question.
+# `--global`, then `--system` as a fallback: those two files ARE the box's
+# identity, and nothing else counts. Deliberately NOT `git -C "$HOME" config
+# user.email`, which is what this shipped first and which the review caught
+# (Task 4 review, Important 1): that form reads system + global PLUS
+# $HOME's own repo-local config, so the widespread dotfiles-in-$HOME pattern
+# (`git init ~`) made the check PASS on a value that applies to exactly one
+# repository — a false PASS on precisely the box this check exists to catch,
+# and a verdict that contradicted its own FAIL text ("nothing in ~/.gitconfig
+# or /etc/gitconfig"). Reproduced, then pinned by the dotfiles test in
+# ccrc-doctor.test.ts.
 #
 # MEASURED on this project's own fleet box, and it is why the distinction
 # matters rather than being pedantry: `~/.gitconfig` exists there and declares
@@ -331,14 +381,18 @@ _check_git_email() {
       "install git first — see the 'git' check above"
     return 1
   fi
-  local email
-  email="$(git -C "$HOME" config user.email 2>/dev/null)"
+  local email scope=--global
+  email="$(_dr_trim "$(git config --global user.email 2>/dev/null)")"
+  if [ -z "$email" ]; then
+    scope=--system
+    email="$(_dr_trim "$(git config --system user.email 2>/dev/null)")"
+  fi
   if [ -z "$email" ]; then
     _dr_fail git_email "not set for this box (nothing in ~/.gitconfig or /etc/gitconfig) — a commit in any repository that does not set its own would be refused" \
       "run: git config --global user.email \"you@example.com\" (and user.name alongside it)"
     return 1
   fi
-  _dr_pass git_email "$email"
+  _dr_pass git_email "$email (git config $scope user.email)"
 }
 
 # ── systemd linger ────────────────────────────────────────────────────────

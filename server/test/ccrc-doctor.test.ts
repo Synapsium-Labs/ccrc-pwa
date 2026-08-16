@@ -34,8 +34,8 @@
 // path), the real `node` behind the version stub, and `timeout` (symlinked in
 // where a test wants the timeout path exercised).
 import { describe, it, expect } from 'vitest';
-import { spawnSync } from 'node:child_process';
-import { writeFileSync, mkdirSync, symlinkSync, rmSync } from 'node:fs';
+import { spawnSync, execFileSync } from 'node:child_process';
+import { writeFileSync, mkdirSync, symlinkSync, rmSync, chmodSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
@@ -127,18 +127,24 @@ function stubNode(home: string, version: string): void {
     + `exec '${process.execPath}' "$@"`);
 }
 
-/** `git config user.email` answers from `<home>/fixture-git-email`; with the
- *  file absent it exits 1 and prints nothing, exactly as real git does for an
- *  unset key. Every other argv is a silent success — doctor asks git nothing
- *  else, and the `case` below is what would notice if that changed. */
+/** `git config --global user.email` answers from `<home>/fixture-git-email` and
+ *  `--system` from `<home>/fixture-git-email-system`; with the file absent it
+ *  exits 1 and prints nothing, exactly as real git does for an unset key.
+ *
+ *  The two SCOPES are separate files because the check reads them separately,
+ *  and any other argv is a loud failure (exit 90): a check that quietly went
+ *  back to the repo-scope-inclusive `git -C "$HOME" config user.email` — the
+ *  defect the review caught — would no longer be answered at all. `IFS=` on the
+ *  read so a whitespace-only value survives intact into the check. */
 function stubGit(home: string): void {
   stub(home, 'git',
     'case "$*" in\n'
-    + "  *'config user.email'*)\n"
-    + '    if [ -f "$HOME/fixture-git-email" ]; then IFS= read -r v < "$HOME/fixture-git-email"; echo "$v"; exit 0; fi\n'
-    + '    exit 1 ;;\n'
+    + "  *'config --global user.email'*) f=\"$HOME/fixture-git-email\" ;;\n"
+    + "  *'config --system user.email'*) f=\"$HOME/fixture-git-email-system\" ;;\n"
+    + '  *) echo "fixture git: unexpected argv: $*" >&2; exit 90 ;;\n'
     + 'esac\n'
-    + 'exit 0');
+    + 'if [ -f "$f" ]; then IFS= read -r v < "$f"; echo "$v"; exit 0; fi\n'
+    + 'exit 1');
 }
 
 /** `loginctl show-user <uid> --property=Linger` answers from
@@ -209,8 +215,9 @@ function doctorEnv(home: string): NodeJS.ProcessEnv {
   };
 }
 
-function runDoctor(home: string, args: string[] = ['doctor']): Result {
-  const r = spawnSync(BASH, [ccrcIn(home), ...args], { env: doctorEnv(home), encoding: 'utf8' });
+function runDoctor(home: string, args: string[] = ['doctor'], extraEnv: NodeJS.ProcessEnv = {}): Result {
+  const r = spawnSync(BASH, [ccrcIn(home), ...args],
+    { env: { ...doctorEnv(home), ...extraEnv }, encoding: 'utf8' });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
@@ -344,6 +351,32 @@ describe('ccrc doctor: node', () => {
     expect(r.stdout).not.toMatch(/unrecognised engines range/);
   });
 
+  it.skipIf(process.getuid?.() === 0)(
+    'a package.json it cannot READ is its own answer, not "does not parse"', () => {
+      // Two conditions an operator acts on completely differently — a mode fix
+      // vs. a redeploy — must not share one signal. Before this split, `chmod
+      // 000` produced "does not parse as JSON" and a remedy telling the
+      // operator to redeploy a file that was never corrupt. Skipped as root,
+      // where 000 is not a permission at all.
+      const home = healthy('ccrc-doctor-node-unreadable-');
+      chmodSync(join(home, 'ccrc', 'server', 'package.json'), 0o000);
+      const r = runDoctor(home);
+      expect(r.stdout).toMatch(/^FAIL node: .*cannot be read \(EACCES\)/m);
+      expect(r.stdout).not.toMatch(/does not parse/);
+      expect(r.stdout).toMatch(/^ {2}remedy: .*ls -l/m);
+    });
+
+  it('accepts a floor with surrounding whitespace, exactly as node-floor.test.ts does', () => {
+    // node-floor.test.ts:38-39 matches against `range.trim()`, so " >=1.0.0 "
+    // leaves all three declarations identical and that suite green. A doctor
+    // stricter than the rule it copies would fail a box whose manifests are
+    // fine — the check must be as strict as node-floor, not stricter.
+    const home = healthy('ccrc-doctor-node-ws-floor-');
+    writePkg(home, ' >=1.0.0 ');
+    const line = lineFor(runDoctor(home).stdout, 'node');
+    expect(line).toMatch(/^PASS node: v22\.20\.0 satisfies >=1\.0\.0 /);
+  });
+
   it('a package.json with no engines.node is its own answer too', () => {
     const home = healthy('ccrc-doctor-node-no-engines-');
     writePkg(home, null);
@@ -457,9 +490,64 @@ describe('ccrc doctor: git_email', () => {
     expect(r.code).toBe(1);
   });
 
-  it('names the address when it is set', () => {
+  it('names the address, and the scope it came from, when it is set', () => {
     const home = healthy('ccrc-doctor-gitemail-ok-');
-    expect(lineFor(runDoctor(home).stdout, 'git_email')).toContain('ops@example.invalid');
+    const line = lineFor(runDoctor(home).stdout, 'git_email');
+    expect(line).toContain('ops@example.invalid');
+    expect(line).toContain('--global');
+  });
+
+  it('falls back to the system config when there is no global one', () => {
+    const home = healthy('ccrc-doctor-gitemail-system-');
+    rmSync(join(home, 'fixture-git-email'), { force: true });
+    writeFileSync(join(home, 'fixture-git-email-system'), 'box@example.invalid\n');
+    const line = lineFor(runDoctor(home).stdout, 'git_email');
+    expect(line).toMatch(/^PASS git_email: box@example\.invalid /);
+    expect(line).toContain('--system');
+  });
+
+  it('a whitespace-only address is NOT set — and must not print an illegal line', () => {
+    // "   " is non-empty after `$( )`, so it used to PASS, emitting
+    // `PASS git_email:    ` — a line the shape test in this file declares
+    // illegal, for a box whose commits carry an empty author address. Both
+    // halves are asserted here: the verdict AND the line shape.
+    const home = healthy('ccrc-doctor-gitemail-blank-');
+    writeFileSync(join(home, 'fixture-git-email'), '   \n');
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^FAIL git_email: not set/m);
+    expect(lineFor(r.stdout, 'git_email')).toMatch(/^(PASS|WARN|FAIL) [a-z0-9_]+: \S/);
+    expect(r.code).toBe(1);
+  });
+
+  it('a dotfiles repo in $HOME is not this box\'s identity — the review\'s repro, pinned', () => {
+    // THE REGRESSION THIS EXISTS FOR: the check first shipped as
+    // `git -C "$HOME" config user.email`, which reads system + global PLUS
+    // $HOME's own repo-local config. Under the widespread `git init ~`
+    // dotfiles pattern that is a PASS on a value applying to exactly one
+    // repository — a false PASS on the very box the check exists to catch.
+    //
+    // Uses the REAL git, deliberately: a stub cannot reproduce the config
+    // precedence that IS the bug. Everything it reads is inside the fixture,
+    // and GIT_CONFIG_NOSYSTEM keeps a box's /etc/gitconfig out of the answer so
+    // the test means the same thing on every machine (this one has no
+    // /etc/gitconfig at all; another might).
+    const home = healthy('ccrc-doctor-gitemail-dotfiles-');
+    unstub(home, 'git');
+    linkReal(home, 'git');
+    writeFileSync(join(home, '.gitconfig'), '[user]\n\tname = only-a-name\n');
+    const genv = { ...process.env, HOME: home, GIT_CONFIG_NOSYSTEM: '1' };
+    execFileSync('git', ['-C', home, 'init', '-q', '.'], { env: genv });
+    execFileSync('git', ['-C', home, 'config', 'user.email', 'dotfiles-local@example.invalid'], { env: genv });
+    // Sanity: the fixture really is the shape the bug needs — repo-local set,
+    // global unset. Without this the test could go green on a fixture that
+    // never reproduced anything.
+    expect(execFileSync('git', ['-C', home, 'config', 'user.email'], { env: genv, encoding: 'utf8' }).trim())
+      .toBe('dotfiles-local@example.invalid');
+
+    const r = runDoctor(home, ['doctor'], { GIT_CONFIG_NOSYSTEM: '1' });
+    expect(r.stdout).toMatch(/^FAIL git_email: not set/m);
+    expect(r.stdout).not.toMatch(/dotfiles-local/);
+    expect(r.code).toBe(1);
   });
 });
 
@@ -582,9 +670,42 @@ describe('ccrc doctor: the output contract', () => {
     expect(r.code).toBe(1);
   });
 
+  it('one check that DIES mid-run does not take the rest of the table with it', () => {
+    // `set -u` (which ccrc runs under, and must) makes an unbound variable
+    // FATAL to the shell it happens in — not a `return 1`. Called directly,
+    // one such check ended the whole run: no summary, and every later check
+    // silently unmeasured, which is exactly what doctor exists not to do. Each
+    // check therefore runs in a subshell.
+    const home = healthy('ccrc-doctor-fatal-check-');
+    writeChecks(home, [
+      'CCRC_DOCTOR_CHECKS=(alpha boom omega)',
+      '_check_alpha() { printf "PASS alpha: measured\\n"; }',
+      '_check_boom()  { printf "%s\\n" "$CCRC_NOT_SET_ANYWHERE"; }',
+      '_check_omega() { printf "PASS omega: measured\\n"; }',
+      '',
+    ].join('\n'));
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    expect(r.stdout).toMatch(/^PASS alpha: measured$/m);
+    // The explosion is reported as a bug in ccrc, with a remedy, in the dead
+    // check's own name — not as a missing line.
+    const i = lines.findIndex((l) => l.startsWith('FAIL boom: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toMatch(/printed no verdict line of its own/);
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: .*bug in ccrc/);
+    // The run CONTINUED past it, and still added up.
+    expect(r.stdout).toMatch(/^PASS omega: measured$/m);
+    expect(r.stdout).toMatch(/^summary: 3 checks — 2 passed, 0 warned, 1 failed$/m);
+    expect(r.code).toBe(1);
+    // bash's own diagnosis is not swallowed — stderr is deliberately not captured.
+    expect(r.stderr).toMatch(/unbound variable/);
+  });
+
   it('a check that answers with an illegal status is a bug, not a fourth verdict', () => {
     const home = healthy('ccrc-doctor-bad-status-');
-    writeChecks(home, 'CCRC_DOCTOR_CHECKS=(weird)\n_check_weird() { return 3; }\n');
+    writeChecks(home,
+      'CCRC_DOCTOR_CHECKS=(weird)\n'
+      + '_check_weird() { printf "PASS weird: printed a verdict, then lied\\n"; return 3; }\n');
     const r = runDoctor(home);
     const lines = r.stdout.split('\n');
     const i = lines.findIndex((l) => l.startsWith('FAIL weird: '));

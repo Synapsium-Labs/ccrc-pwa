@@ -36,9 +36,18 @@
 # ── DIAGNOSTIC REGISTERS (adopt's own convention, reused here) ─────────────
 # Every line this script prints to stderr is prefixed "$PROG: ", then one of:
 #   - a bare refusal — "$PROG: <what went wrong>" (`_ccrc_die`, exits 1).
-#   - "note: …" — informational, does not change the exit code (`_ccrc_say`).
+#   - a usage error — "$PROG: unknown argument: …" (`_ccrc_usage_die`, exits 2).
 # The RESULT of a verb (what the operator actually asked for) goes to
 # stdout, same split as ccrc-adopt's JSON-on-stdout / diagnostics-on-stderr.
+#
+# Adopt's THIRD register, "note: …" (informational, does not change the exit
+# code), has no caller in `ccrc` and its `_ccrc_say` helper has been REMOVED
+# (Task 4 review, Minor 4). It was carried from Task 1 on the prediction that
+# doctor's `remedy:` lines would ride it; they do not (see the next paragraph),
+# so it stood as untested, uncalled code whose only documentation was a
+# statement of what it was for that had become false. Re-add it in one line
+# together with its first real caller — `ccrc status` is the likely one — and
+# not before.
 #
 # DOCTOR'S "remedy: …" LINES ARE NOT IN THAT STDERR TABLE, and this paragraph
 # is the correction of a guess Task 1 made before doctor existed: it predicted
@@ -49,7 +58,7 @@
 # streams would break it for every caller that redirects one of them, which is
 # every caller that pipes doctor into a report. Both halves are the RESULT and
 # both go to stdout; see `ccd/ccrc-doctor-checks`'s own header for the full
-# shape. `_ccrc_say` keeps its job: stderr notes that are not a verdict.
+# shape.
 #
 # Do NOT add a `# ccrc:generated …` marker line to this file by imitation of
 # `ccd`'s line 2: that marker is `shared/mark.mjs`'s format for files a
@@ -67,7 +76,7 @@ PROG=ccrc
 #   - `${BASH_SOURCE[0]}`, not `$0`: THIS script is meant to be source-able
 #     (the guard at the bottom exists for that), and under `source` `$0` is the
 #     calling shell's argv[0], so it would answer for the caller's directory.
-#   - `${_here%/*}`, not `$(dirname …)`: `dirname` is coreutils, i.e. a PATH
+#   - `${CCRC_HERE%/*}`, not `$(dirname …)`: `dirname` is coreutils, i.e. a PATH
 #     lookup, and the one box `ccrc doctor` most needs to work on is the box
 #     whose environment is broken. Measured in ccrc-doctor.test.ts, whose
 #     fixture PATH contains no system directory at all: with `dirname` here,
@@ -101,9 +110,6 @@ EOF
 }
 
 # ── diagnostic helpers (stderr; the RESULT of a verb goes to stdout) ───────
-# `_ccrc_say` — a note, does not stop the run or change the exit code. Also
-# how a future doctor check prints its "remedy: …" line (see header above).
-_ccrc_say() { echo "$PROG: $*" >&2; }
 # `_ccrc_die` — a bare refusal: this run cannot continue. Always exits 1 —
 # never 2, which is reserved for a USAGE error (see `_ccrc_usage_die` below).
 _ccrc_die() { echo "$PROG: $*" >&2; exit 1; }
@@ -196,13 +202,31 @@ cmd_version() {
 # check's job, and keeping the decision inside the check is what makes "one
 # table entry plus one test" the true cost of adding one.
 #
-# Three ways this refuses rather than reporting a healthy box it never
-# measured — a doctor that runs zero checks and exits 0 is the worst failure
-# mode this verb has:
+# Ways this refuses rather than reporting a healthy box it never measured — a
+# doctor that runs zero checks and exits 0 is the worst failure mode this verb
+# has:
 #   - the checks file is missing or unreadable   -> refuse (exit 1)
 #   - it defined no table at all                 -> refuse (exit 1)
 #   - a table entry has no `_check_<name>`       -> that entry FAILS loudly
-# The third is a bug in ccrc rather than a fact about the box, and says so.
+#   - a check dies without printing a verdict    -> that entry FAILS loudly
+# The last two are bugs in ccrc rather than facts about the box, and say so.
+#
+# EVERY CHECK RUNS IN A SUBSHELL — the `out="$( … )"` below — and that is the
+# whole point of the capture, not a stylistic choice about output (Task 4
+# review, Minor 5). A check that trips `set -u` (an unbound variable) is FATAL
+# to the shell it runs in, not a `return 1`: called directly, one such check
+# would take the entire run down mid-table, printing no summary and leaving
+# every later check unmeasured — precisely the failure this file's own header
+# rails against when it explains why `-e` is off. A subshell bounds the blast
+# radius to that one check; the parent tallies it and carries on. (A stray
+# `return 3` was already survivable; only the fatal class was not.)
+#
+# The captured output is then CHECKED for a verdict line rather than echoed
+# blindly. A check that dies mid-run prints nothing, and without this the run
+# would emit 9 verdict lines under a summary claiming 10 checks — internally
+# consistent and silently missing the one that matters. stderr is deliberately
+# NOT captured: bash's own "unbound variable" message is the best diagnosis of
+# that state and belongs in front of the operator.
 cmd_doctor() {
   [[ $# -eq 0 ]] || _ccrc_usage_die "$1"
   local checks="$CCRC_HERE/ccrc-doctor-checks"
@@ -216,7 +240,7 @@ cmd_doctor() {
   [[ "${#CCRC_DOCTOR_CHECKS[@]}" -gt 0 ]] \
     || _ccrc_die "doctor's check table is empty: $checks — refusing to report a box nobody measured"
 
-  local name rc pass=0 warn=0 fail=0
+  local name rc out pass=0 warn=0 fail=0
   for name in "${CCRC_DOCTOR_CHECKS[@]}"; do
     if ! declare -F "_check_$name" >/dev/null 2>&1; then
       printf 'FAIL %s: the check table names it but no _check_%s function exists\n' "$name" "$name"
@@ -224,15 +248,25 @@ cmd_doctor() {
       fail=$((fail + 1))
       continue
     fi
-    "_check_$name"; rc=$?
+    out="$( "_check_$name" )"; rc=$?
+    [[ -z "$out" ]] || printf '%s\n' "$out"
+    if [[ "$out" != PASS\ "$name":\ * && "$out" != WARN\ "$name":\ * && "$out" != FAIL\ "$name":\ * ]]; then
+      # No verdict line, whatever the exit code said. The usual cause is a
+      # check that died before it could print one (see the subshell note
+      # above); the other is a check that printed a verdict for the wrong name.
+      printf 'FAIL %s: the check printed no verdict line of its own (it exited %s)\n' "$name" "$rc"
+      printf '  remedy: this is a bug in ccrc, not a fact about your box — see _check_%s in %s, and any error above this line\n' "$name" "$checks"
+      fail=$((fail + 1))
+      continue
+    fi
     case "$rc" in
       0) pass=$((pass + 1)) ;;
       2) warn=$((warn + 1)) ;;
       1) fail=$((fail + 1)) ;;
       *)
-        # A check may only answer 0/1/2. Anything else (a `set -u` blowup at
-        # 127, a stray `return 3`) is counted as a failure and named as the bug
-        # it is, rather than being read as one of the three legal verdicts.
+        # A check may only answer 0/1/2. A stray `return 3` lands here and is
+        # counted as a failure, named as the bug it is, rather than being read
+        # as one of the three legal verdicts.
         printf 'FAIL %s: the check exited %s, which is not one of 0 (pass), 1 (fail) or 2 (warn)\n' "$name" "$rc"
         printf '  remedy: this is a bug in ccrc, not a fact about your box — see _check_%s in %s\n' "$name" "$checks"
         fail=$((fail + 1))
