@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=ce0e7bc9580b57bcb7a46dcfa4a7c01fa818720fc66694ef463a8bfc89cb63bd
+# ccrc:generated 1 sha256=e6c927159412916f9ad31f7bbf053b7075bca4bd5c9bbcafaf9a7ac39b340a91
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
 set -uo pipefail
@@ -79,6 +79,25 @@ SPAWN_GATE_TRIES=450            # capture-pane polls before the startup-gate win
 SUPERVISED_START_WAIT=30        # seconds `ccd start`/`ccd ensure` wait for the unit's pane to appear.
                                 # A bound on FAILURE REPORTING, not a cost anybody normally pays: a
                                 # pane shows up about a second after the unit starts.
+SPAWN_SETTLE_S=240              # WALL-CLOCK bound on the startup-gate wait, on the AGENT-REACHABLE
+                                # path. The gate window used to be purely iterative
+                                # (SPAWN_GATE_TRIES x ~2s = ~900s, ~1350s once gate branches fire),
+                                # i.e. 3-4.5x the agent's hard 300s ceiling — so a session slower
+                                # than 300s could not be spawned through the dispatch path at all,
+                                # only killed. 240 leaves room for the rest of `ws-add` under that
+                                # ceiling, and it is safe ONLY because the claim and the
+                                # supervision now precede the wait: exceeding it is a REPORT, not
+                                # an orphan.
+                                # A plain shell variable with the production default, deliberately
+                                # NOT an env override — same discipline, and the same reason, as
+                                # SPAWN_GATE_TRIES above. A test that sources ccd assigns it after.
+SPAWN_SETTLE_SUPERVISE_S=1350   # what `cmd_supervise` (systemd ExecStart, no ceiling) RAISES it to.
+                                # A global 240 would make every systemd restart of a large session
+                                # settle unconfirmed — the "700k+-token resumes take minutes between
+                                # gates" case — which suppresses _inject_spawn_effort and lights a
+                                # warning on a healthy row. Above SPAWN_GATE_TRIES x 2s, so on this
+                                # path the ITERATION cap still fires first and the window is exactly
+                                # today's.
 SPAWN_EFFORT="ultracode"        # /effort sent to every freshly spawned session ("" disables).
                                 # ultracode is session-only by design (no settings.json key),
                                 # so injecting it at spawn is the only way to default it.
@@ -7274,7 +7293,7 @@ _pane_login_screen() {
   grep -Eq 'Select login method|Invalid API key|Please run /login' <<<"$1"
 }
 
-_accept_first_run_prompts() {   # tmuxname — clear startup gates, then CONFIRM the main TUI is up.
+_accept_first_run_prompts() {   # tmuxname [fromswap] [bound_s] — clear startup gates, then CONFIRM the main TUI is up.
   # Returns as soon as "/rc active" (or another live marker) appears. Gates, order-agnostic,
   # each needing a DIFFERENT keystroke:
   #   • trust-folder prompt  — default is "1. Yes, I trust this folder"  → just Enter
@@ -7292,8 +7311,17 @@ _accept_first_run_prompts() {   # tmuxname — clear startup gates, then CONFIRM
   # rc 0 = a live marker appeared (the TUI is up); 2 = an auth screen (below); 3 = the tmux session
   # vanished mid-poll; 4 = the window expired with no marker. 3 and 4 both used to be "0 after ~15
   # minutes" (M6): the caller printed `started`/`ensured` over a session that was never there.
-  local t="$1" fromswap="${2:-0}" i pane
+  local t="$1" fromswap="${2:-0}" bound="${3:-$SPAWN_SETTLE_S}" i pane t0
+  # A WALL-CLOCK bound as well as the iteration cap. The cap alone is not a
+  # bound anyone can reason about: gate branches sleep 2 EXTRA seconds each, so
+  # the same 450 iterations are ~900s plain and ~1350s when gates fire. The
+  # bound is NOT keyed off `fromswap` — measured, the discriminator runs
+  # backwards from the obvious reading: `cmd_swap` writes `lastswap` two lines
+  # before the restart, so a SWAP is fromswap=1 (the fast branch) and a fresh
+  # `ws-add` is fromswap=0. Keyed off it, ws-add would get the LONG window.
+  t0=$(date +%s)
   for i in $(seq 1 "$SPAWN_GATE_TRIES"); do
+    (( $(date +%s) - t0 >= bound )) && return 4
     # BEFORE the capture, and this order is the fix: `capture-pane` against a dead session fails into
     # an EMPTY $pane, which matches no branch below, so the loop used to poll a corpse for the full
     # window and then answer success. `has-session` is the one probe that distinguishes "not ready
@@ -7456,10 +7484,10 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
 }
 
 _spawn_settle() {   # id fromswap [bound_s] — the BLOCKING half: gate loop, fact, warnings, /effort
-  local id="$1" fromswap="$2" wrapper tname prompt_rc
+  local id="$1" fromswap="$2" bound="${3:-$SPAWN_SETTLE_S}" wrapper tname prompt_rc
   wrapper=$(_reg_get "$id" wrapper)
   tname=$(_tmux "$id")
-  _accept_first_run_prompts "$tname" "$fromswap"; prompt_rc=$?
+  _accept_first_run_prompts "$tname" "$fromswap" "$bound"; prompt_rc=$?
   # The verdict becomes a FACT before it becomes a return code (§3.1). This costs nothing — this
   # already runs inside the supervisor — and it is the ONLY channel from a spawn that happened
   # inside the unit to a `ccd start` running in another process, which is what _supervised_start
@@ -7513,7 +7541,7 @@ _spawn() {   # id mode(new|resume) [bound_s] — the composition, so cmd_swap an
   # here turned its `die` into rc 1 and every caller reported success over a
   # spawn that never happened.
   _spawn_start "$1" "$2" || return $?
-  _spawn_settle "$1" "$SPAWN_FROMSWAP"
+  _spawn_settle "$1" "$SPAWN_FROMSWAP" "${3:-$SPAWN_SETTLE_S}"
 }
 
 _inject_spawn_effort() {   # tmuxname — apply SPAWN_EFFORT once the TUI is up.
@@ -7767,8 +7795,8 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   echo "started $id ($mode) — discover on claude.ai by name: $id"
 }
 
-cmd_ensure() {   # idempotent; used by systemd. arg is the id directly.
-  local id="${1:?usage: ccd ensure <id>}"
+cmd_ensure() {   # id [bound_s] — idempotent; used by systemd. arg is the id directly.
+  local id="${1:?usage: ccd ensure <id>}" bound="${2:-$SPAWN_SETTLE_S}"
   [[ -f "$REG/$id.uuid" ]] || die "no registry for '$id' (run ccd start first)"
   if _alive "$id"; then
     # A LIVE PANE IS NOT NECESSARILY A SUPERVISED ONE, and this early return used
@@ -7824,7 +7852,7 @@ cmd_ensure() {   # idempotent; used by systemd. arg is the id directly.
     return 0
   fi
   local mode=new; [[ "$(_reg_get "$id" started)" == "1" ]] && mode=resume
-  local rc; _spawn "$id" "$mode"; rc=$?
+  local rc; _spawn "$id" "$mode" "$bound"; rc=$?
   _reg_claim "$id"
   if [[ "$rc" -eq 3 || "$rc" -eq 4 ]]; then
     echo "ccd: ensure failed for $id (spawn rc $rc) — see $REG/$id.spawn" >&2
@@ -7860,7 +7888,13 @@ cmd_supervise() {   # systemd ExecStart: ensure then block until the session die
   # argv word, which the agent's prefix-matching exec whitelist would permit — it is not
   # addressable from the wire at all.
   local CCD_IN_UNIT=1
-  cmd_ensure "$id"
+  # THE NO-CEILING CALLER, and the only one that raises the settle bound: this
+  # runs as the unit's ExecStart with nothing timing it out, and a 700k-token
+  # resume legitimately takes minutes between gates. A global SPAWN_SETTLE_S
+  # here would make every systemd restart of a large session settle
+  # unconfirmed — suppressing _inject_spawn_effort and lighting a warning on a
+  # healthy row.
+  cmd_ensure "$id" "$SPAWN_SETTLE_SUPERVISE_S"
   # Re-stamped every 30s from the 5-second tick this loop already runs, so the
   # 120-second freshness window never expires under a live supervisor.
   local beat=0

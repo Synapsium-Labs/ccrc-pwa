@@ -116,8 +116,13 @@ describe('_spawn_start / _spawn_settle', () => {
   });
 
   it('_spawn threads the settle bound through as its third positional', () => {
-    expect(h.sh('type _spawn')).toContain('_spawn_settle');
-    expect(h.sh('type _spawn')).toContain('_spawn_start');
+    const body = h.sh('type _spawn');
+    expect(body).toContain('_spawn_settle');
+    expect(body).toContain('_spawn_start');
+    // The name USED to be a lie: the body only ever greped for the two function
+    // names, while `_spawn` passed no `$3` at all. Task 5 threads it for real,
+    // so the assertion now measures what the name claims.
+    expect(body).toContain('${3:-$SPAWN_SETTLE_S}');
   });
 
   it('_spawn_start still dies on an incomplete registry — the guard did not move, and it is still FATAL', () => {
@@ -155,5 +160,73 @@ describe('_spawn_start / _spawn_settle', () => {
     const body = h.sh('type _spawn');
     expect(body).not.toMatch(/\$\(\s*_spawn_start/);
     expect(body).toContain('SPAWN_FROMSWAP');
+  });
+});
+
+/** A FAKE CLOCK the gate loop's own `sleep` drives. Without this the bound is
+ *  untestable: every existing spawn fixture stubs `sleep` to a no-op, so 450
+ *  iterations run in milliseconds and no wall-clock bound could ever fire —
+ *  neither `date +%s` nor `SECONDS`. `_faketime` is a TOP-LEVEL variable and
+ *  `date` echoes it by name deliberately: unlike `_session_state`'s `now`,
+ *  nothing declares `local _faketime`, so no callee can shadow it. */
+const FAKE_CLOCK = `_faketime=0
+  sleep() { _faketime=$((_faketime + \${1:-1})); }
+  date() { if [[ "\${1:-}" == "+%s" ]]; then echo "$_faketime"; else command date "$@"; fi; }`;
+
+describe('the settle bound is wall-clock, and it is per caller', () => {
+  it('SPAWN_SETTLE_S is 240 and SPAWN_SETTLE_SUPERVISE_S is 1350', () => {
+    expect(h.sh('echo "$SPAWN_SETTLE_S $SPAWN_SETTLE_SUPERVISE_S"')).toBe('240 1350');
+  });
+
+  it('neither is an env override — HOME is ccd\'s only isolation boundary', () => {
+    expect(h.sh('echo "$SPAWN_SETTLE_S"', { SPAWN_SETTLE_S: '7' })).toBe('240');
+    expect(h.sh('echo "$SPAWN_SETTLE_SUPERVISE_S"', { SPAWN_SETTLE_SUPERVISE_S: '7' })).toBe('1350');
+  });
+
+  it('_accept_first_run_prompts returns 4 once the WALL CLOCK passes the bound', () => {
+    const out = h.sh(
+      `${FAKE_CLOCK}
+       tmux() { case "$1" in has-session) return 0 ;; capture-pane) printf '' ;; esac; }
+       _accept_first_run_prompts cc-test 0 10; echo "rc=$? t=$_faketime"`);
+    expect(out).toMatch(/rc=4/);
+    // ~5 iterations of `sleep 2`, not 450: the bound fired, not the counter.
+    expect(Number(/t=(\d+)/.exec(out)![1])).toBeLessThan(20);
+  });
+
+  it('keeps the iteration cap as the second bound — the supervise bound never reaches it', () => {
+    // 450 polls x 2s = 900s < SPAWN_SETTLE_SUPERVISE_S, so cmd_supervise's
+    // window is exactly today's. Only the agent-reachable path is shortened.
+    expect(h.sh('echo $((SPAWN_GATE_TRIES * 2 < SPAWN_SETTLE_SUPERVISE_S))')).toBe('1');
+  });
+
+  it('the bound is NOT keyed off fromswap — a swap is the FAST branch, ws-add is not', () => {
+    // The discriminator runs backwards from the obvious reading: cmd_swap
+    // writes lastswap two lines before the restart, so fromswap=1 IS the swap.
+    // Keyed off fromswap, a fresh ws-add would get the long window.
+    //
+    // MEASURED, not grepped. The plan proposed
+    // `expect(type _accept_first_run_prompts).not.toMatch(/fromswap.*bound=/)`,
+    // which bash's own deparse makes unsatisfiable: `local … fromswap="${2:-0}"
+    // bound="${3:-$SPAWN_SETTLE_S}" …` renders on ONE line, so the regex fires
+    // on the correct implementation. What the claim actually is — the DEFAULT
+    // window is the same for both discriminator values — is a behavioural fact,
+    // so measure it. SPAWN_SETTLE_S is reassigned after sourcing, which is the
+    // documented way to shrink a production constant under test.
+    const expiredAt = (fromswap: string): string => h.sh(
+      `SPAWN_SETTLE_S=10
+       ${FAKE_CLOCK}
+       tmux() { case "$1" in has-session) return 0 ;; capture-pane) printf '' ;; esac; }
+       _accept_first_run_prompts cc-test ${fromswap}; echo "rc=$? t=$_faketime"`);
+    expect(expiredAt('1')).toBe('rc=4 t=10');
+    expect(expiredAt('0')).toBe(expiredAt('1'));
+  });
+
+  it('_spawn_settle takes the bound as its third positional and defaults to SPAWN_SETTLE_S', () => {
+    expect(h.sh('type _spawn_settle')).toContain('${3:-$SPAWN_SETTLE_S}');
+  });
+
+  it('cmd_ensure takes it as a second positional, and cmd_supervise RAISES it', () => {
+    expect(h.sh('type cmd_ensure')).toContain('${2:-$SPAWN_SETTLE_S}');
+    expect(h.sh('type cmd_supervise')).toContain('cmd_ensure "$id" "$SPAWN_SETTLE_SUPERVISE_S"');
   });
 });
