@@ -150,3 +150,92 @@ describe('ccd enable', () => {
     expect(r.stderr).toContain('usage: ccd enable <id> | ccd enable <wrapper> <project> [workdir]');
   });
 });
+
+// §1.1 — the two IN-UNIT branches. `cmd_start`'s out-of-unit path is already
+// fixed (#50: `_supervised_start` runs reset-failed + `enable --now` BEFORE any
+// spawn and polls a bounded SUPERVISED_START_WAIT), so the spec's claim that it
+// carries the identical F8 ordering is struck and this describe does not touch
+// it.
+describe('cmd_start / cmd_ensure: the in-unit branch takes the split form', () => {
+  /** RECORDING halves, and the settle records the CLAIM AS IT STOOD WHEN IT
+   *  RAN. That `started=` field is the discriminator: stubbing both halves
+   *  proves nothing on its own, since `_spawn` is their composition and calls
+   *  both either way. Only "what was written before the blocking half began"
+   *  separates the split form from the old spawn-then-claim.
+   *
+   *  `_spawn_start` sets the GLOBAL and prints nothing — an `echo 0` stub would
+   *  model exactly the shape D-B8-1 exists to keep out. `_spawn_settle` records
+   *  its fromswap argument; it takes no third one, because the settle bound
+   *  rides `CCD_SETTLE_BOUND` and `$3` under `set -u` would be fatal. */
+  const HALVES = `_spawn_start() { echo "spawn_start $1 $2" >> "$HOME/ccd-calls"; SPAWN_FROMSWAP=0; };
+    _spawn_settle() { echo "spawn_settle $1 $2 started=[$(_reg_get "$1" started)]" >> "$HOME/ccd-calls"; return 0; };
+    _alive() { return 1; }; _resupervise_live() { return 1; };
+    tmux() { :; }; systemctl() { :; }; sleep() { :; };`;
+
+  const seedMinimal = (id: string): void => {
+    h.sh(`_reg_set ${id} wrapper claude
+          _reg_set ${id} workdir "$HOME"
+          _reg_set ${id} uuid deadbeef-0000-4000-8000-000000000000`);
+  };
+
+  it('cmd_start claims BETWEEN the halves in-unit', () => {
+    seedMinimal('claude-demo');
+    h.sh(`CCD_IN_UNIT=1; ${HALVES} cmd_start claude-demo; :`);
+    expect(h.calls()).toEqual([
+      'spawn_start claude-demo new',
+      'spawn_settle claude-demo 0 started=[1]',
+    ]);
+    expect(h.reg('claude-demo', 'started')).toBe('1');
+  });
+
+  it('cmd_start\'s SUPERVISED branch keeps its claim exactly where it was', () => {
+    // Load-bearing when the unit never comes up: a failed revival must
+    // classify `orphan`, not `never-started`.
+    // `\s*` between the statements, not a literal space: bash deparses a
+    // function from its parse tree and puts each command on its own line, so
+    // the plan's `"$id"; rc=$?` could never match anything this tree emits.
+    const t = h.sh('type cmd_start');
+    expect(t).toMatch(/_supervised_start "\$id";\s*rc=\$\?;[\s\S]{0,2000}?_reg_claim "\$id"/);
+  });
+
+  it('cmd_ensure claims BETWEEN the halves in-unit, and does NOT supervise', () => {
+    seedMinimal('claude-demo');
+    h.sh(`CCD_IN_UNIT=1; ${HALVES} cmd_ensure claude-demo; :`);
+    expect(h.calls()).toEqual([
+      'spawn_start claude-demo new',
+      'spawn_settle claude-demo 0 started=[1]',
+    ]);
+    // cmd_supervise IS the unit's ExecStart and reaches here with
+    // CCD_IN_UNIT=1; supervising would have the unit enable --now itself on
+    // every restart.
+    expect(h.sh('type cmd_ensure')).not.toContain('_ws_supervise');
+  });
+
+  it('cmd_ensure picks resume once the row is claimed — the wrong-mode resurrection, fixed by the MOVE', () => {
+    // Not by a new check: `ensure` picks mode=new when `started` is empty,
+    // handing `--session-id '<uuid>'` to a wrapper for a uuid whose session-env
+    // directory already exists (measured on the live orphan). With `started`
+    // written at session-creation time it picks `resume`.
+    seedMinimal('claude-demo');
+    h.sh(`_reg_claim claude-demo; CCD_IN_UNIT=1; ${HALVES} cmd_ensure claude-demo; :`);
+    expect(h.calls()[0]).toBe('spawn_start claude-demo resume');
+  });
+
+  it('the settle bound is still not an argv word — cmd_ensure passes _spawn_settle two positionals', () => {
+    // Task 5's bound rides `CCD_SETTLE_BOUND`, a dynamically-scoped `local`.
+    // A third positional here would be `cmd_ensure`'s second, and `cmd_ensure`
+    // is whitelisted by prefix — an argv word that reaches `(( ))` is arbitrary
+    // code as the fleet user (D-B8-3, 73bc0fe).
+    const t = h.sh('type cmd_ensure');
+    expect(t).toContain('_spawn_settle "$id" "$SPAWN_FROMSWAP"');
+    expect(t).not.toMatch(/_spawn_settle "\$id" "\$SPAWN_FROMSWAP" /);
+  });
+
+  it('neither in-unit branch wraps _spawn_start in a command substitution (D-B8-1)', () => {
+    for (const fn of ['cmd_start', 'cmd_ensure']) {
+      const body = h.sh(`type ${fn}`);
+      expect(body, fn).not.toMatch(/\$\(\s*_spawn_start/);
+      expect(body, fn).toContain('SPAWN_FROMSWAP');
+    }
+  });
+});

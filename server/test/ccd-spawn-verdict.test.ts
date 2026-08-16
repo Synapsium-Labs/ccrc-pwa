@@ -261,11 +261,14 @@ describe('rc 5 survives the caller, not just the classifier', () => {
   });
 
   it('ws-add propagates it too — the workspace path is where a silent success costs a wave', () => {
-    // `_spawn` stubbed to the verdict rather than driven through a pane: the
+    // The SETTLE stubbed to the verdict rather than driven through a pane: the
     // pane -> rc mapping is pinned above, and what is unpinned is the CALLER's
-    // `-eq 5` arm. WS_ADD's own `_spawn` no-op is redefined here, later wins.
+    // `-eq 5` arm. WS_ADD's own `_spawn_settle` no-op is redefined here, later
+    // wins. `_spawn_settle` and not `_spawn`, because `cmd_ws_add` calls the
+    // two halves directly now (F8) and never reaches the composition — a
+    // `_spawn` stub here would intercept nothing and the verb would exit 0.
     h.makeRepo('demo');
-    const bad = shFail(`${WS_ADD} _spawn() { return 5; }; CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
+    const bad = shFail(`${WS_ADD} _spawn_settle() { return 5; }; CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
     expect(bad.code).toBe(5);
     expect(bad.stdout).not.toContain('workspace claude-demo-quiet-mesa');
     expect(bad.stderr).toContain('ws-add spawn failed for');

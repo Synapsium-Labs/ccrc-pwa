@@ -450,3 +450,75 @@ describe('when systemd is not there, the start still happens and says so', () =>
     expect(h.calls().some((c) => c.startsWith('tmux new-session'))).toBe(true);
   });
 });
+
+// §1.1 — THE ORDERING, ON THE TWO PATHS THAT HAVE NO UNIT TO FALL BACK ON.
+// New scope the spec did not originally cover: a fallback that still
+// spawns-first re-opens F8's hole on exactly the boxes least able to recover —
+// no systemd at all, or a unit that will not enable. There is no
+// `_ws_supervise` on either path by construction; that is what "UNSUPERVISED"
+// in the warnings above means, so the claim is the only write there is to
+// order.
+describe('_supervised_start\'s fallbacks take the split form', () => {
+  /** The two halves, RECORDING — and the settle records the CLAIM AS IT STOOD
+   *  WHEN IT RAN. That `started=` field is the whole discriminator: stubbing
+   *  the two halves alone proves nothing, because `_spawn` is their composition
+   *  and calls both either way. Only "what was written before the blocking half
+   *  began" separates the split form from the old spawn-then-claim.
+   *
+   *  `_spawn_start` answers in the GLOBAL and prints nothing (D-B8-1): an
+   *  `echo 0` stub would model the shape this build exists to keep out, and
+   *  would leak `0` onto the caller's stdout. */
+  const HALVES = `_spawn_start() { echo "spawn_start $1 $2" >> "$HOME/ccd-calls"; SPAWN_FROMSWAP=0; };
+    _spawn_settle() { echo "spawn_settle $1 $2 started=[$(_reg_get "$1" started)]" >> "$HOME/ccd-calls"; return 0; };`;
+
+  it('the no-systemctl fallback claims BETWEEN the halves', () => {
+    seed('claude-demo');
+    h.sh(`_have_systemctl() { return 1; }
+          ${HALVES}
+          _supervised_start claude-demo 2>/dev/null; :`);
+    expect(h.calls()).toEqual([
+      'spawn_start claude-demo new',
+      'spawn_settle claude-demo 0 started=[1]',
+    ]);
+    expect(h.reg('claude-demo', 'started')).toBe('1');
+  });
+
+  it('the enable-failed fallback does the same — the boxes least able to recover', () => {
+    seed('claude-demo');
+    h.sh(`systemctl() { case "$*" in *"enable --now"*) return 1 ;; esac; return 0; }
+          ${HALVES}
+          _supervised_start claude-demo 2>/dev/null; :`);
+    expect(h.calls()).toEqual([
+      'spawn_start claude-demo new',
+      'spawn_settle claude-demo 0 started=[1]',
+    ]);
+    expect(h.reg('claude-demo', 'started')).toBe('1');
+  });
+
+  it('picks resume when the row is already claimed', () => {
+    seed('claude-demo');
+    h.sh(`_reg_claim claude-demo
+          _have_systemctl() { return 1; }
+          ${HALVES}
+          _supervised_start claude-demo 2>/dev/null; :`);
+    expect(h.calls()).toContain('spawn_start claude-demo resume');
+  });
+
+  it('the claim still lands when the settle FAILS — an orphan, not a never-started row', () => {
+    // The whole reason the claim is written on attempt rather than on success.
+    seed('claude-demo');
+    h.sh(`_have_systemctl() { return 1; }
+          _spawn_start() { SPAWN_FROMSWAP=0; };
+          _spawn_settle() { return 4; };
+          _supervised_start claude-demo 2>/dev/null; :`);
+    expect(h.reg('claude-demo', 'started')).toBe('1');
+  });
+
+  it('neither fallback wraps _spawn_start in a command substitution (D-B8-1)', () => {
+    // `$(_spawn_start …)` demotes its `die` to rc 1, which is in no caller's
+    // failure set. Structural, because the behavioural pin lives one file over.
+    const body = h.sh('type _supervised_start');
+    expect(body).not.toMatch(/\$\(\s*_spawn_start/);
+    expect(body).toContain('SPAWN_FROMSWAP');
+  });
+});

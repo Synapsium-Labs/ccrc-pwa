@@ -34,9 +34,9 @@ const SWAP_STUBS = `
 
 /** SWAP_STUBS with the REAL `cmd_ensure`, because stubbing it is what hid the
  *  critical defect below: the damage a refusal's restart used to do lived
- *  entirely INSIDE that function. `_spawn` is stubbed in its place — it is the
- *  real `cmd_ensure`'s own last resort when the unit will not come up, so its
- *  appearance in the call log is proof the whole real path ran. */
+ *  entirely INSIDE that function. The spawn halves are stubbed in its place —
+ *  they are the real `cmd_ensure`'s own last resort when the unit will not come
+ *  up, so their appearance in the call log is proof the whole real path ran. */
 const REAL_ENSURE_STUBS = `
   systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; return 0; };
   tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; case "\${1:-}" in has-session) return 1;; esac; return 0; };
@@ -201,15 +201,18 @@ describe('a swap that cannot carry the conversation', () => {
     // `swapblocked` erased) the next 5s supervise tick re-dispatched the swap;
     // the storm that follows is the test below this one.
     //
-    // So: `cmd_ensure` is NOT stubbed here. `_spawn` is instead, which is the
-    // real function's own last resort when the unit will not come up — its
-    // appearance in the call log is the proof that the whole real path ran.
+    // So: `cmd_ensure` is NOT stubbed here. The SPAWN HALVES are instead, which
+    // are the real function's own last resort when the unit will not come up —
+    // their appearance in the call log is the proof that the whole real path
+    // ran. `_spawn_start`, not `_spawn`: `_supervised_start`'s fallback now
+    // calls the two halves directly, so the claim lands before anything blocks
+    // (F8) on exactly the box that has no unit to recover with.
     const id = seed(UUID_A);
     plantTranscript('.claude', '-x-projects-demo', UUID_A);
     const noUnit = `systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; return 1; };`;
     shFail(`${REAL_ENSURE_STUBS} ${noUnit} ${deadRotate(id)} cmd_swap ${id} claude2`);
     expect(h.calls().join('\n'), 'the real cmd_ensure did not run — this test is stubbed hollow')
-      .toContain(`_spawn ${id}`);
+      .toContain(`_spawn_start ${id}`);
     expect(h.reg(id, 'swapblocked'),
       'the refusal erased the durable record it had just written')
       .toContain(`no transcript found for ${UUID_B} under claude after flush`);

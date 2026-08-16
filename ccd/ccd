@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=52a6b2b7a9afdb85b4e6ac92aaaf6eb7aed77025fe9c2502aca91bd301eff2e8
+# ccrc:generated 1 sha256=2bdc9b3383124f9f96f35382456e8f0f1f55ba679cff99137711d0c4690b5dbe
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
 set -uo pipefail
@@ -7655,9 +7655,16 @@ _supervised_start() {   # id — ask the UNIT to spawn, then WAIT for an observa
   since=$(date +%s)
   if ! _have_systemctl; then
     echo "ccd: warn: systemctl not found — starting $id UNSUPERVISED (no auto-swap, no uuid-sync, nothing to restart it)" >&2
+    # THE SPLIT FORM HERE TOO. A fallback that still spawns-first re-opens F8's
+    # hole on exactly the boxes least able to recover: no systemd at all, or a
+    # unit that will not enable. There is no `_ws_supervise` on this path by
+    # construction — that is what "UNSUPERVISED" in the warning above means —
+    # so the claim is the only write there is to get in front of the block.
+    # No `$( )` around `_spawn_start`: its `die` must stay process-fatal.
     local mode=new; [[ "$(_reg_get "$id" started)" == "1" ]] && mode=resume
-    _spawn "$id" "$mode"; rc=$?
+    _spawn_start "$id" "$mode" || return $?
     _reg_claim "$id"
+    _spawn_settle "$id" "$SPAWN_FROMSWAP"; rc=$?
     return "$rc"
   fi
   # §3.3 deliberately creates failed units — that is the point of the start limit — and a unit
@@ -7666,9 +7673,13 @@ _supervised_start() {   # id — ask the UNIT to spawn, then WAIT for an observa
   systemctl --user reset-failed "$unit" 2>/dev/null
   if ! systemctl --user enable --now "$unit" 2>/dev/null; then
     echo "ccd: warn: could not enable unit $unit — starting $id UNSUPERVISED (unit installed? lingering?)" >&2
+    # The same split, for the same reason as the no-systemctl fallback above:
+    # this is the OTHER box that cannot recover on its own, so leaving a live
+    # pane no row claims is worse here than anywhere else.
     local mode=new; [[ "$(_reg_get "$id" started)" == "1" ]] && mode=resume
-    _spawn "$id" "$mode"; rc=$?
+    _spawn_start "$id" "$mode" || return $?
     _reg_claim "$id"
+    _spawn_settle "$id" "$SPAWN_FROMSWAP"; rc=$?
     return "$rc"
   fi
   # `enable --now` returns when systemd has STARTED THE UNIT, not when a pane exists — but
@@ -7860,11 +7871,19 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
     echo "started $id ($mode) — discover on claude.ai by name: $id"
     return 0
   fi
-  local rc; _spawn "$id" "$mode"; rc=$?
+  # SPLIT, so the claim precedes the blocking wait. IT MUST NOT SUPERVISE, and
+  # that must stay: `cmd_supervise` IS the unit's ExecStart and reaches this
+  # branch (and `cmd_ensure`'s) with CCD_IN_UNIT=1, so supervising here would
+  # have the unit `enable --now` itself on every restart — ccd records that as
+  # an explicit decision ("ccd ensure does NOT re-supervise … boot persistence
+  # would be silently lost") and this build does not overturn it.
+  local rc
+  _spawn_start "$id" "$mode" || return $?
   # `started` stays unconditional: it records that this row has HAD a session, which is what §4.3's
   # never-started rung reads. A spawn that failed is still a row that was started — it classifies
   # `orphan`, which is the honest answer, not `never-started`.
   _reg_claim "$id"
+  _spawn_settle "$id" "$SPAWN_FROMSWAP"; rc=$?
   if [[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 ]]; then
     echo "ccd: start failed for $id (spawn rc $rc) — see $REG/$id.spawn" >&2
     return "$rc"
@@ -7938,9 +7957,20 @@ cmd_ensure() {   # id — idempotent; used by systemd. arg is the id directly.
     echo "ensured $id"
     return 0
   fi
+  # WRONG-MODE RESURRECTION IS FIXED BY THE MOVE, not by a new check: `ensure`
+  # picks mode=new when `started` is empty, handing `--session-id '<uuid>'` to a
+  # wrapper for a uuid whose session-env directory already exists (measured on
+  # the live orphan). With `started` written at session-creation time — which is
+  # what the split below finally makes true on every path — it picks `resume`.
   local mode=new; [[ "$(_reg_get "$id" started)" == "1" ]] && mode=resume
-  local rc; _spawn "$id" "$mode"; rc=$?
+  # SPLIT, and NO `_ws_supervise` on this branch: see cmd_start's matching
+  # comment. The settle takes two positionals and no more — the bound rides
+  # `CCD_SETTLE_BOUND`, because a third one here would be `cmd_ensure`'s second
+  # argv word and this verb is whitelisted by prefix.
+  local rc
+  _spawn_start "$id" "$mode" || return $?
   _reg_claim "$id"
+  _spawn_settle "$id" "$SPAWN_FROMSWAP"; rc=$?
   if [[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 ]]; then
     echo "ccd: ensure failed for $id (spawn rc $rc) — see $REG/$id.spawn" >&2
     return "$rc"

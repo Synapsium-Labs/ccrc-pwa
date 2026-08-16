@@ -166,7 +166,9 @@ describe('_spawn_start / _spawn_settle', () => {
   // Tasks 7/8 add five. A NEW CALLER MUST BE ADDED TO THIS LIST in the same
   // commit that adds the call: the list is what makes the rule mechanical
   // rather than a comment somebody has to read.
-  const SPAWN_START_CALLERS = ['_spawn', 'cmd_ws_add', 'cmd_ws_restore'];
+  const SPAWN_START_CALLERS = [
+    '_spawn', 'cmd_ws_add', 'cmd_ws_restore', '_supervised_start', 'cmd_start', 'cmd_ensure',
+  ];
 
   it.each(SPAWN_START_CALLERS)(
     '%s reads fromswap out of the GLOBAL — no command substitution around _spawn_start',
