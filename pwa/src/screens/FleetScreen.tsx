@@ -117,12 +117,20 @@ export function FleetScreen({
   // session appears on the next snapshot, so a refusal (e.g. no origin/HEAD)
   // never briefly shows a workspace that ccd declined to create.
   //
-  // In-flight per PROJECT, because ccd does not dedupe: ws-add draws a fresh
-  // random slug on every call and only checks it against the registry, so two
-  // concurrent calls both succeed — two worktrees, two branches, two systemd
-  // units, two of three account lanes consumed. And the window is not a
-  // moment: _spawn runs synchronously and _accept_first_run_prompts waits up to
-  // ~15 minutes for a big resume, with nothing on screen to say so.
+  // In-flight per PROJECT — a COURTESY now, no longer the gate. ccd's own
+  // `cmd_ws_add` takes a per-project `flock -n` spanning slug selection through
+  // the last registry write and refuses a second concurrent add with
+  // `busy: another ws-add for <project> is in flight`, so the two-worktrees
+  // outcome this comment used to describe as unfixed is closed on the box —
+  // which matters, because React state does not survive a reload and never
+  // covered a second tab, a second device, or the coordinator's own HTTP call.
+  // This state is kept because it spares the operator a round trip and a
+  // refusal toast, not because it prevents anything.
+  //
+  // The window is bounded too: the settle is capped at SPAWN_SETTLE_S (240s) on
+  // this path, not the ~15 minutes an unbounded `_accept_first_run_prompts`
+  // used to allow — and a settle that runs out is now a REPORT against a
+  // workspace that exists, is claimed and is supervised, not an orphan.
   const [adding, setAdding] = useState<ReadonlySet<string>>(() => new Set());
   const addWorkspace = async (project: string): Promise<void> => {
     if (adding.has(project)) return;

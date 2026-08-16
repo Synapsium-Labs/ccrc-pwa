@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=593231900b5cb05ae1f770931f40ab1c8ea703341cfc06e540b4e2cd6eb8ab35
+# ccrc:generated 1 sha256=d07591ea2bf2668daf1350b57d59b358c9052770b90155eb8722395a4d50e20c
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
 set -uo pipefail
@@ -1374,6 +1374,26 @@ cmd_ws_add() {   # project [slug] — new worktree + session for an existing pro
     die "no account available for placement —${why}; enable one (rm $REG/<w>-disabled) and retry — nothing was touched"
   fi
 
+  # PER PROJECT, and it spans slug selection through the last registry write —
+  # `_reg_set "$id" branch "$branch"` and `_ws_seed_home "$id" "$hw"`, the two
+  # fields a racing second ws-add would most visibly corrupt. Two concurrent
+  # adds are not hypothetical: an operator double-tap, a second tab, a second
+  # device and the coordinator's own HTTP call all reach here, and the PWA's
+  # only guard is React state that does not survive a reload.
+  #
+  # `-n`, matching ccd's two existing flock sites: a loser REFUSES rather than
+  # queueing behind a worktree checkout. It deliberately does NOT cover
+  # `$main/.ccrc/workspace.sh` (an arbitrary user script with no bound) nor the
+  # settle — so it does NOT close retry-after-502; §1.5's dispatch adoption does.
+  command -v flock >/dev/null 2>&1 \
+    || die "flock (util-linux) is unavailable — refusing to create a workspace unserialised"
+  local addlock="$REG/.ws-add-$project.lock" lfd
+  exec {lfd}>>"$addlock" || die "cannot open the ws-add lock at $addlock"
+  flock -n "$lfd" || {
+    exec {lfd}>&-
+    die "busy: another ws-add for $project is in flight"
+  }
+
   # The refusal NAMES WHAT IT FOUND. `_ws_slug_free` is an any-field check
   # (round-3 P1), so it also refuses a slug whose only trace is the residue of
   # an interrupted purge — and "slug in use" on its own would send the operator
@@ -1425,6 +1445,16 @@ cmd_ws_add() {   # project [slug] — new worktree + session for an existing pro
   _reg_set "$id" workspace "$slug"; _reg_set "$id" base "$base"
   _reg_set "$id" branch "$branch"
   _ws_seed_home "$id" "$hw"
+
+  # GIVEN BACK HERE, before the setup hook and long before the settle, for the
+  # reason cmd_ws_reap states at its own close: `flock` treats two `open()`s of
+  # one path in one process as two strangers, and ccd is SOURCED — by `ccd`
+  # itself and by its tests — so a descriptor left open would refuse the next
+  # ws-add for this project in the same shell for ever. The `die`s above need no
+  # close of their own: `die` exits, and the kernel closes what exits. Anything
+  # BELOW this line that leaves by `return` (the spawn's rc 3/4/5 path does)
+  # needs none either, because the descriptor is already gone by then.
+  exec {lfd}>&-
 
   # A failed setup hook leaves a usable-but-unscaffolded workspace. Say so;
   # never remove work on the strength of a hook's exit code.

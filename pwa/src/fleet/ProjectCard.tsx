@@ -45,8 +45,11 @@ export function ProjectCard({
    *  (every home-able lane disabled) — collapsing the two would let "I don't
    *  know yet" and "the fleet says no" render the identical claim. */
   projected?: ProjectedHome | null;
-  /** This project's own ws-add is in flight. ccd does not dedupe concurrent
-   *  ws-adds, and the spawn window runs to minutes. */
+  /** This project's own ws-add is in flight. ccd DOES serialise concurrent
+   *  ws-adds per project now (a `flock -n` in `cmd_ws_add`, refusing with
+   *  `busy: …`), so this is a courtesy that saves a round trip — see
+   *  `FleetScreen`'s own note for the full argument. The spawn window is
+   *  bounded at SPAWN_SETTLE_S. */
   adding?: boolean;
   collapsed?: boolean;
   onToggle?: (project: string) => void;

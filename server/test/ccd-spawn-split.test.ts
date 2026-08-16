@@ -512,3 +512,70 @@ describe('_spawn_start: the --resume fallback a monotone `started` owes', () => 
     expect(h.sh('echo "$SPAWN_RESUME_SETTLE_S"', { SPAWN_RESUME_SETTLE_S: '7' })).toBe('2');
   });
 });
+
+// ---------------------------------------------------------------------------
+// §1.4 — TWO CONCURRENT ws-adds FOR ONE PROJECT.
+// ---------------------------------------------------------------------------
+
+describe('ws-add serialises per project', () => {
+  it('refuses a second ws-add for the same project while one is in flight', () => {
+    h.makeRepo('demo');
+    // A REAL concurrent flock holder: `flock` attaches to an OPEN FILE
+    // DESCRIPTION, and ccd is SOURCED here, so the fixture's own `open()` of
+    // the lock path is a stranger to `cmd_ws_add`'s — the same property the
+    // release below exists to pay for, used here as the contest.
+    //
+    // BOTH STREAMS ARE READ BACK, not `.stderr` alone: the snippet merges them
+    // with `2>&1`, so `die`'s line arrives on the child's STDOUT.
+    let out = '';
+    try {
+      out = h.sh(
+        `${WS_ADD_REAL_SPAWN}
+         exec {hold}>>"$REG/.ws-add-demo.lock"; flock -n "$hold" || exit 90
+         CCD_WS_SLUG=quiet-mesa cmd_ws_add demo 2>&1`);
+    } catch (e) {
+      const err = e as { stdout?: string; stderr?: string };
+      out = `${err.stdout ?? ''}${err.stderr ?? ''}`;
+    }
+    expect(out).toContain('busy: another ws-add for demo is in flight');
+    // AND NOTHING WAS CREATED — the refusal leaves the box as it found it.
+    expect(h.reg('demo-quiet-mesa', 'uuid')).toBeNull();
+  });
+
+  it('does NOT serialise across projects — the lock is per project', () => {
+    h.makeRepo('demo'); h.makeRepo('other');
+    const out = h.sh(
+      `${WS_ADD_REAL_SPAWN}
+       exec {hold}>>"$REG/.ws-add-demo.lock"; flock -n "$hold" || exit 90
+       CCD_WS_SLUG=quiet-mesa cmd_ws_add other 2>&1`);
+    expect(out).not.toContain('busy:');
+    expect(h.reg('other-quiet-mesa', 'uuid')).not.toBeNull();
+  });
+
+  it('gives the descriptor back — a second ws-add in the SAME process is not refused', () => {
+    // ccd is SOURCED by its own tests, and flock treats two open()s of one path
+    // in one process as strangers. Without `exec {lfd}>&-` the second add here
+    // would refuse itself.
+    h.makeRepo('demo');
+    h.sh(`${WS_ADD_REAL_SPAWN} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo
+          ${WS_ADD_REAL_SPAWN} CCD_WS_SLUG=quiet-lake cmd_ws_add demo; :`);
+    expect(h.reg('demo-quiet-lake', 'uuid')).not.toBeNull();
+  });
+
+  it('releases BEFORE the settle — the lock does not span the blocking wait', () => {
+    // NOT `indexOf('exec {lfd}>&-')`: this task ADDS an earlier occurrence
+    // inside the flock-refusal block, exactly as `cmd_ws_restore` already has
+    // one, so a first-match anchor resolves to the refusal path and passes no
+    // matter where the real release lands. `lastIndexOf` is the RELEASE site,
+    // and the count is pinned at 2 so neither a third close nor a deleted
+    // release slips past.
+    //
+    // `type`, and therefore NOT a comment anchor: bash deparses a function
+    // from its parse tree and comments do not survive it — the plan's
+    // `indexOf('GIVEN BACK HERE')` can never be > -1. Ordering is asserted on
+    // the CODE, exactly as the `cmd_ws_restore` case above does it.
+    const t = h.sh('type cmd_ws_add');
+    expect(t.split('exec {lfd}>&-').length - 1).toBe(2);
+    expect(t.lastIndexOf('exec {lfd}>&-')).toBeLessThan(t.indexOf('_spawn_settle'));
+  });
+});
