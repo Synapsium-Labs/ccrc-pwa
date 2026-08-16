@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # ccrc-doctor-checks — the check TABLE `ccrc doctor` iterates, and each check's
 # implementation. Stage 2b of the 2026-08-15-stage2b-ccrc-cli-and-doctor plan:
-# the PREREQUISITE checks (Task 4) and roster/wrapper coherence (Task 5, the
-# `wrappers` entry at the bottom of this file). The cross-box fleet agreement
-# check (Task 7) is a later task and adds an entry to the same table.
+# the PREREQUISITE checks (Task 4), roster/wrapper coherence (Task 5, the
+# `wrappers` entry) and the cross-box matched set (Task 7, `fleet`, the last
+# entry in the table and the last function in this file).
 #
 # SOURCED, never executed — `ccrc`'s `cmd_doctor` does `. "$CCRC_HERE/ccrc-doctor-checks"`.
 # It in turn sources `ccrc-wrapper-shape` (see below), so a complete install is
@@ -26,6 +26,25 @@
 # physically cannot emit a non-pass verdict without one. A check that only
 # complains sends an operator to a search engine; the remedy is the half that
 # makes doctor an instrument instead of an alarm.
+#
+# ── THE FOURTH OUTCOME: A CHECK WITH NOTHING TO MEASURE ───────────────────
+# A check whose SUBJECT does not exist on this box prints, instead,
+#
+#     SKIP <name>: <why there was nothing to measure>
+#
+# with no remedy, and returns 3 (`_dr_skip`). `fleet` is the case that forced
+# it: it compares TWO boxes, and a box with no server to ask has no second box.
+# PASS would claim an agreement nobody measured — the overloaded-null defect
+# this codebase bans by name — and WARN would report a problem where there is
+# none. `ccrc`'s `cmd_doctor` counts a skip against CHECKS and never against
+# verdicts, and prints the count, so "N checks, M verdicts" says how much of
+# the box was really measured.
+#
+# NO REMEDY UNDER A SKIP, deliberately: a `remedy:` line reads as "there is
+# something here to fix", and on the fleet host — which has no `ccrc.env` and
+# no reason to know where the server is — there is not. Where an operator COULD
+# make the check answer, that goes in the detail, as a fact about what is
+# missing rather than as an instruction.
 #
 # ── ONE CHECK MAY ANSWER IN TWO CLASSES ───────────────────────────────────
 # Almost every check prints exactly ONE verdict line. A check that has found
@@ -102,10 +121,12 @@ if [ -r "$CCRC_WRAPPER_LIB" ]; then
   . "$CCRC_WRAPPER_LIB"
 fi
 
-# How long `gh auth status` (the one check that touches the network) may take.
-# Overridable for the same reason `deploy/verify-service.sh:56-62` makes its
-# settle/window knobs overridable: so a test need not wait out a production
-# timeout. The DEFAULT is what an operator gets.
+# How long `gh auth status` may take. Overridable for the same reason
+# `deploy/verify-service.sh:56-62` makes its settle/window knobs overridable: so
+# a test need not wait out a production timeout. The DEFAULT is what an operator
+# gets. (The OTHER check that touches the network, `fleet`, is bounded by
+# `CCRC_HEALTH_TIMEOUT`, declared in `ccrc` beside the reader that uses it —
+# `ccrc status` makes the same call and must be bounded by the same knob.)
 : "${CCRC_DOCTOR_GH_TIMEOUT:=15}"
 
 # ── the check table ───────────────────────────────────────────────────────
@@ -125,6 +146,7 @@ CCRC_DOCTOR_CHECKS=(
   git_email
   linger
   wrappers
+  fleet
 )
 
 # ── verdict helpers ───────────────────────────────────────────────────────
@@ -136,6 +158,20 @@ _dr_line() { printf '%s %s: %s\n' "$1" "$2" "${3//$'\n'/ }"; }
 _dr_pass() { _dr_line PASS "$1" "$2"; return 0; }
 _dr_warn() { _dr_line WARN "$1" "$2"; printf '  remedy: %s\n' "${3//$'\n'/ }"; return 2; }
 _dr_fail() { _dr_line FAIL "$1" "$2"; printf '  remedy: %s\n' "${3//$'\n'/ }"; return 1; }
+# No remedy, by contract — see "THE FOURTH OUTCOME" in this file's header.
+_dr_skip() { _dr_line SKIP "$1" "$2"; return 3; }
+
+# Findings joined onto one verdict line with "; ". Built here rather than with
+# `printf '%s; '` so the last one carries no trailing separator. SHARED between
+# `_check_wrappers` and `_check_fleet` (it was `_dr_wr_join`, wrappers-owned,
+# until the second caller arrived): a private second copy of four lines of
+# string-joining is exactly the drift this file's own header objects to in the
+# large, and there is nothing account-specific about it.
+_dr_join() {
+  local out="" x
+  for x in "$@"; do [ -z "$out" ] || out+="; "; out+="$x"; done
+  printf '%s' "$out"
+}
 
 # Leading/trailing whitespace off a captured value, in pure parameter
 # expansion (no `sed`, no subshell — see `_dr_pkg_candidates` for why this file
@@ -545,14 +581,6 @@ _check_linger() {
 # but $HOME/.local/bin/ext-bin is not a script`. It passed on the reference box
 # only because `gpt` happens to match.
 
-# Findings are joined onto the one verdict line with "; ". Built here rather
-# than with `printf '%s; '` so the last one carries no trailing separator.
-_dr_wr_join() {
-  local out="" x
-  for x in "$@"; do [ -z "$out" ] || out+="; "; out+="$x"; done
-  printf '%s' "$out"
-}
-
 # Membership, without a subprocess or an associative array — the caller has the
 # candidate list as a plain array and needs one question answered about it.
 _dr_wr_has() {
@@ -951,13 +979,13 @@ _check_wrappers() {
   local rc=0
   if [ "${#wr_hard[@]}" -gt 0 ]; then
     _dr_fail wrappers \
-      "$(_dr_wr_join ${wr_hard[@]+"${wr_hard[@]}"})" \
+      "$(_dr_join ${wr_hard[@]+"${wr_hard[@]}"})" \
       "the roster is the source of truth and nothing here edits it for you — make \$HOME/.ccrc/accounts.json and the wrapper agree; 'bash ccd/ccrc-adopt --out /tmp/accounts.json' prints what a rediscovery from disk would say and writes nothing else"
     rc=1
   fi
   if [ "${#wr_soft[@]}" -gt 0 ]; then
     _dr_warn wrappers \
-      "$(_dr_wr_join ${wr_soft[@]+"${wr_soft[@]}"})" \
+      "$(_dr_join ${wr_soft[@]+"${wr_soft[@]}"})" \
       "either describe it in \$HOME/.ccrc/accounts.json (adopt would call a bespoke launcher \"external\") or leave it be — ccrc never drives an account the roster does not name"
     [ "$rc" -eq 1 ] || rc=2
   fi
@@ -965,4 +993,178 @@ _check_wrappers() {
     return "$rc"
   fi
   _dr_pass wrappers "${#wr_ids[@]} accounts in \$HOME/.ccrc/accounts.json match \$HOME/.local/bin ($n_up upstream, $n_gen generated, $n_ext external)"
+}
+
+# ── the two boxes' matched set ────────────────────────────────────────────
+# THE ONE CHECK THAT IS NOT ABOUT THIS BOX. Every check above measures the box
+# it runs on; this one asks whether this box and the OTHER one are a matched
+# set — same build, same generated roster projection — because until the fleet
+# host's stamp crossed the wire (Stage 2b, tasks 2-3) a deploy that landed on
+# one box and not the other was invisible. Every symptom of that skew shows up
+# as a behaviour and never as a version: a `ccd` verb the server believes
+# exists, a hook writing a field the server does not read, a frame field one
+# side sends and the other drops.
+#
+# ── IT ASKS, IT DOES NOT DECIDE ──────────────────────────────────────────
+# The SERVER is the only party holding both halves (its own stamp and the fleet
+# host's, its own roster digest and the fleet host's), so the comparison lives
+# there — `rosterAgreement`/`buildAgreement`, server/src/fleetstate.ts — and
+# this check reports what it answers. Re-deriving the comparison here would be
+# a second implementation of a decision that already has one, and the two would
+# disagree the first time either changed.
+#
+# ── THREE ANSWERS PER QUESTION, KEPT APART ───────────────────────────────
+# Both server-side functions are deliberately THREE-valued and both docstrings
+# say why, at length: `'unknown'` means NO EVIDENCE — local mode, an agent older
+# than the field, a fleet host that was never stamped — and an operator does
+# something about `'skewed'`/`'divergent'` and nothing about `'unknown'`.
+# Collapsing unknown into either neighbour is the overloaded-null-at-a-seam
+# defect this codebase bans, so:
+#     agreed              -> PASS
+#     skewed / divergent  -> FAIL, one line per disagreement, own remedy each
+#     unknown / not one
+#       of the three      -> WARN
+#     no server to ask    -> SKIP (see the header's FOURTH OUTCOME)
+#     a server that could
+#       not be reached    -> WARN. "the server is down" is a different problem
+#                            from "the two boxes disagree", and reporting the
+#                            first as the second sends an operator to redeploy
+#                            a box that is fine.
+#
+# ── WHY TWO FAIL LINES AND NOT ONE ───────────────────────────────────────
+# A skewed build and a divergent roster get a line each because their REMEDIES
+# differ: one is "deploy the lagging box", the other is "redeploy both, then
+# reconcile two hand-owned JSON files". Joining them hands one finding the
+# other's instruction, which is precisely the collapse `_check_wrappers` was
+# split for (Task 5 review, Important 1).
+#
+# ── D-72, AND WHY THE PASS IS WORDED THE WAY IT IS ───────────────────────
+# `roster: 'agreed'` means the two boxes would run BYTE-IDENTICAL
+# `~/.ccrc/accounts.sh` — the projection `ccd` actually obeys. It does NOT mean
+# the two `accounts.json` files agree: `shared/generate.mjs` emits no
+# `exec.kind` and no `secretsFile`, so two rosters differing only in a secrets
+# file produce the same digest and report `'agreed'` (measured on this plan's
+# own Task 6 fix). The PASS therefore claims exactly what was measured, and the
+# thing that catches the rest is the `wrappers` check above, run on each box.
+_check_fleet() {
+  # THE READERS LIVE IN `ccrc`, NOT HERE, and that is not an accident of where
+  # the code was typed: `ccrc status` makes the same call, and a copy of an
+  # HTTP request and a JSON classifier in two files is two answers to one
+  # question. This file is only ever sourced BY `ccrc` (its own header, first
+  # paragraph), so they are in scope — but a check that assumed so silently
+  # would report a healthy fleet on a box where the reader had gone missing.
+  if ! declare -F _box_server_addr >/dev/null 2>&1 || ! declare -F _box_health >/dev/null 2>&1; then
+    _dr_fail fleet "ccrc's own fleet readers are not loaded, so the two boxes were never compared" \
+      "this is a bug in ccrc, not a fact about your box — _check_fleet calls _box_server_addr/_box_health from ccrc itself, and this check table was sourced by something that is not ccrc"
+    return 1
+  fi
+
+  local addr_out addr_rc=0
+  addr_out="$(_box_server_addr)" || addr_rc=$?
+  local -a af=()
+  [ -z "$addr_out" ] || mapfile -t af <<< "$addr_out"
+  if [ "$addr_rc" -eq 1 ]; then
+    # THE MEASURED STATE OF THE FLEET HOST: it has ~/.ccrc/agent.env (which
+    # configures the agent) and no ccrc.env, so nothing on it knows where the
+    # server is. Not a fault, and emphatically not an agreement.
+    _dr_skip fleet "this box has no server address (no CCRC_ADDR, and no CCRC_HOST/CCRC_PORT in $BOX_ENV_FILE), so there is no server to ask whether the two boxes are a matched set"
+    return 3
+  fi
+  if [ "$addr_rc" -ne 0 ]; then
+    # Configured and unusable is its own condition — but still a check that did
+    # not run, not a finding about the fleet. The SOURCE is named and the value
+    # is not: it comes off a config file and lands on a terminal.
+    _dr_skip fleet "this box's server address cannot be used (${af[0]:-$BOX_ENV_FILE}), so nothing was asked — set CCRC_ADDR=host:port, or declare both CCRC_HOST and CCRC_PORT"
+    return 3
+  fi
+  local addr="${af[0]}"
+
+  local h_rc=0
+  _box_health "$addr" || h_rc=$?
+  case "$h_rc" in
+    4)
+      _dr_warn fleet "curl is not on PATH, so the server at $addr could not be asked whether the two boxes agree" \
+        "install it: sudo apt install curl — the fleet host's own swap hook already needs it (deploy/notify.sh)"
+      return 2 ;;
+    5)
+      _dr_warn fleet "the server at $addr did not answer (curl exited $BOX_HEALTH_WHY) — a server this box cannot reach is a different problem from two boxes that disagree" \
+        "check the server is up and listening there: on the server box, systemctl --user is-active ccrc.service and journalctl --user -u ccrc.service -n 50"
+      return 2 ;;
+    6)
+      _dr_warn fleet "the server at $addr answered HTTP $BOX_HEALTH_WHY for /api/fleet/health, so it never said whether the two boxes agree" \
+        "read the server's own log: on the server box, journalctl --user -u ccrc.service -n 50"
+      return 2 ;;
+    7)
+      _dr_warn fleet "whatever is listening at $addr answered /api/fleet/health with something that is not the health JSON, so it is probably not a ccrc server" \
+        "check what that address really is (a reverse proxy or a captive portal answers exactly this way), and that CCRC_HOST/CCRC_PORT name this box's own server"
+      return 2 ;;
+    8)
+      _dr_warn fleet "node is not on PATH, so the server's answer could not be parsed" \
+        "install Node first — see the 'node' check above"
+      return 2 ;;
+  esac
+
+  local mode="${BOX_HEALTH[0]}" connected="${BOX_HEALTH[1]}"
+  local build="${BOX_HEALTH[2]}" roster="${BOX_HEALTH[3]}"
+
+  if [ "$mode" = local ]; then
+    _dr_skip fleet "the server at $addr runs in local mode — it drives the fleet on its own box, so there is no second box to disagree with and nothing to compare"
+    return 3
+  fi
+  if [ "$mode" != remote ]; then
+    # Absent and unrecognised collapse HERE and only here, because an operator
+    # does the same thing about both: look at what is answering.
+    _dr_warn fleet "the server at $addr did not say which mode it is in, so this check cannot tell whether there are two boxes to compare" \
+      "check the build running there — 'curl -s http://$addr/api/fleet/health' should answer with a mode of local or remote"
+    return 2
+  fi
+
+  local rc=0
+  if [ "$build" = skewed ]; then
+    _dr_fail fleet "the two boxes are running different builds (the server at $addr answers build: skewed — the shas differ, or one of them is dirty and is therefore not the commit it names)" \
+      "deploy the lagging box, agent first, then server: 'bash deploy/deploy.sh agent <fleet-host>' and only then 'bash deploy/deploy.sh'. The server reads what the fleet host's hook writes and the agent caches 'ccd caps' at boot, so the other order ships a server that reads fields the fleet host does not yet write. 'ccrc version' on each box names the sha it is running"
+    rc=1
+  fi
+  if [ "$roster" = divergent ]; then
+    _dr_fail fleet "the two boxes would run different ~/.ccrc/accounts.sh (the server at $addr answers roster: divergent), so ccd on the fleet host can behave differently from what the server assumes" \
+      "REDEPLOY BOTH boxes first, agent first — the projection is a function of shared/generate.mjs as well as of the roster, so an emitter change that landed on one box only lands here with both accounts.json identical — and reconcile the two hand-owned ~/.ccrc/accounts.json second, which is the order the PWA's own banner states"
+    rc=1
+  fi
+
+  # The WARN class. The unknowns share one line because they share one remedy:
+  # the fleet host has not told the server what it is running.
+  local -a soft=()
+  case "$build" in
+    agreed|skewed) ;;
+    unknown) soft+=("the server cannot tell whether the builds match (build: unknown) — no build stamp has reached it from the fleet host") ;;
+    *)       soft+=("the server answered something this check does not recognise where a build answer belongs") ;;
+  esac
+  case "$roster" in
+    agreed|divergent) ;;
+    unknown) soft+=("the server cannot tell whether the rosters match (roster: unknown) — no roster digest has reached it from the fleet host") ;;
+    *)       soft+=("the server answered something this check does not recognise where a roster answer belongs") ;;
+  esac
+  if [ "${#soft[@]}" -gt 0 ]; then
+    _dr_warn fleet "$(_dr_join ${soft[@]+"${soft[@]}"})" \
+      "no evidence is not disagreement — deploy the fleet host so its agent reports both ('bash deploy/deploy.sh agent <fleet-host>'), and check 'ccrc version' there: an unstamped box has nothing to report"
+    [ "$rc" -eq 1 ] || rc=2
+  fi
+
+  # A DISCONNECTED LINK IS ITS OWN FINDING, with its own remedy, and it is why
+  # `agreed` alone is not enough for a PASS: the server's answers are computed
+  # from what the fleet host last reported, so over a dead link they describe
+  # the last contact rather than now, and a PASS would claim a measurement
+  # nobody is currently making. Only an explicit `false` counts — an older
+  # server that omits the field is not reporting a disconnection
+  # (absence-permits, shared/api.ts).
+  if [ "$connected" = false ]; then
+    _dr_warn fleet "the server at $addr is not currently connected to the fleet host, so its build and roster answers describe the last contact rather than now" \
+      "bring the link back up: on the fleet host, systemctl --user is-active ccrc-agent.service, then re-run this check"
+    [ "$rc" -eq 1 ] || rc=2
+  fi
+
+  if [ "$rc" -ne 0 ]; then
+    return "$rc"
+  fi
+  _dr_pass fleet "the two boxes agree — same build, and the same generated ~/.ccrc/accounts.sh (measured by the server at $addr, in remote mode, connected)"
 }

@@ -20,7 +20,7 @@
 // below carries the correction and the reason.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
@@ -58,11 +58,30 @@ function runCcrcRaw(home: string, args: string[] = []): Result {
 }
 
 /** Named, and separated from the spawn above, for one reason: it is the thing
- *  the containment test at the bottom of this file asserts on. A guard nothing
- *  can go red for is a comment. */
+ *  the containment tests at the bottom of this file assert on. A guard nothing
+ *  can go red for is a comment.
+ *
+ *  TWO poisons now, planted in the same directory and for the same reason.
+ *  `ghContainedEnv` supplies `gh`; `curl` is planted here because Task 7's
+ *  `status` verb ASKS A SERVER over HTTP (`GET /api/fleet/health`), and the
+ *  server this box is configured to talk to is a live production one. Neither
+ *  poison is per-test: `status` and `adopt` arrive through this one runner, and
+ *  a containment that each test has to remember is the containment that was
+ *  already missing for `gh` when `doctor` landed. */
 function ccrcEnv(home: string): NodeJS.ProcessEnv {
-  return ghContainedEnv(home, { ...process.env, HOME: home });
+  const env = ghContainedEnv(home, { ...process.env, HOME: home });
+  writeFileSync(join(home, '.local', 'bin', 'curl'),
+    '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/curl-poison"\n'
+    + 'echo "ccrc tests must never reach a real server" >&2\nexit 97\n', { mode: 0o755 });
+  return env;
 }
+
+/** Every argv the poisoned `curl` saw. Empty means nothing tried to leave the
+ *  box — which is what every test in this file except the one below expects. */
+const curlPoison = (home: string): string[] => {
+  const p = join(home, 'curl-poison');
+  return existsSync(p) ? readFileSync(p, 'utf8').split('\n').filter(Boolean) : [];
+};
 
 /** The brief's own shape: returns stdout, throwing (with stderr attached) on
  *  a nonzero exit — for the tests that only care about the happy path. */
@@ -122,16 +141,17 @@ describe('ccrc: dispatch and usage', () => {
 });
 
 describe('ccrc: reserved verbs not implemented yet', () => {
-  // status and adopt are dispatchable names, but deliberately non-functional —
-  // Task 7 and Task 8 fill these in. This is NOT the same refusal as an
-  // unrecognised verb: exit 1 here (the verb is real, just not built yet),
-  // never 2 (that would claim the operator mistyped something).
+  // adopt is a dispatchable name, but deliberately non-functional — Task 8
+  // fills it in. This is NOT the same refusal as an unrecognised verb: exit 1
+  // here (the verb is real, just not built yet), never 2 (that would claim the
+  // operator mistyped something).
   //
-  // `doctor` LEFT this list in Task 4, which implemented it — a verb graduates
-  // out of here exactly once, when it starts doing its job. Its behaviour is
-  // pinned by server/test/ccrc-doctor.test.ts from that point on; nothing in
-  // this file asserts anything about doctor any more.
-  it.each(['status', 'adopt'] as const)('%s prints "not implemented yet" on stderr and exits 1', (verb) => {
+  // `doctor` LEFT this list in Task 4 and `status` in Task 7, each in the task
+  // that implemented it — a verb graduates out of here exactly once, when it
+  // starts doing its job. Their behaviour is pinned by
+  // server/test/ccrc-doctor.test.ts from that point on; nothing in this file
+  // asserts anything about either of them any more.
+  it.each(['adopt'] as const)('%s prints "not implemented yet" on stderr and exits 1', (verb) => {
     const home = mkTmp(`ccrc-cli-notimpl-${verb}-`);
     const r = runCcrcRaw(home, [verb]);
     expect(r.code).toBe(1);
@@ -195,6 +215,36 @@ describe('ccrc: version', () => {
       JSON.stringify({ sha: 'abc123', ref: 'main' })); // no builtAt, no dirty
     const r = runCcrcRaw(home, ['version']);
     expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: build stamp unreadable/m);
+  });
+
+  it('refuses a stamp whose ref carries a NEWLINE rather than printing half a version', () => {
+    // The reader hands its caller four fields as four lines plus an `END`
+    // sentinel, so a newline inside a field silently shifts every field after
+    // it — `ref` would arrive as the builtAt, and `dirty` as nothing at all.
+    // The sentinel is what makes that loud instead of quietly wrong.
+    const home = mkTmp('ccrc-cli-version-nl-');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'build.json'),
+      JSON.stringify({ sha: 'abc123', ref: 'ma\nin', builtAt: '2026-08-15T00:00:00Z', dirty: false }));
+    const r = runCcrcRaw(home, ['version']);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe('');
+    expect(r.stderr).toMatch(/^ccrc: build stamp unreadable/m);
+  });
+
+  it('refuses a stamp carrying any other control byte too — a printed sha must not be able to lie', () => {
+    // `abc\b123` renders as `ab123` on a terminal that acts on the backspace,
+    // so a stamp could print a sha that is not the one in the file. Same rule
+    // `_check_wrappers` applies to roster ids, for the same reason.
+    const home = mkTmp('ccrc-cli-version-cntrl-');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'build.json'),
+      JSON.stringify({ sha: 'abc\b123', ref: 'main', builtAt: '2026-08-15T00:00:00Z', dirty: false }));
+    const r = runCcrcRaw(home, ['version']);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe('');
+    expect(r.stdout).not.toContain('\b');
     expect(r.stderr).toMatch(/^ccrc: build stamp unreadable/m);
   });
 
@@ -295,6 +345,39 @@ describe('ccrc: the BASH_SOURCE guard actually guards', () => {
     // Nothing dispatched: cmd_version's own stdout ("ccrc unstamped (...)"
     // for this fresh, stampless HOME) must never appear from a plain source.
     expect(r.stdout).not.toMatch(/unstamped/);
+  });
+});
+
+describe('ccrc: the runner cannot reach the real server', () => {
+  it('resolves curl inside the fixture, not on the system PATH', () => {
+    const home = mkTmp('ccrc-cli-curl-contained-');
+    const r = spawnSync('bash', ['-c', 'command -v curl'], { env: ccrcEnv(home), encoding: 'utf8' });
+    expect(r.stdout.trim()).toBe(join(home, '.local', 'bin', 'curl'));
+  });
+
+  it('status reaches the POISON, not the box\'s real server — measured, not asserted on env', () => {
+    // The behavioural half, which the `gh` containment above cannot have: no
+    // verb shells out to gh, but `status` really does shell out to curl. With
+    // an address configured it asks exactly one URL, the poison answers 97, and
+    // status reports a fleet it could not measure rather than one it agreed
+    // with. If the poison were ever displaced, this box's LIVE server would be
+    // the thing answering.
+    const home = mkTmp('ccrc-cli-status-curl-');
+    const r = spawnSync('bash', [CCRC, 'status'],
+      { env: { ...ccrcEnv(home), CCRC_ADDR: 'ccrc-fixture.invalid:7788' }, encoding: 'utf8' });
+    expect(r.status).toBe(0);
+    expect(curlPoison(home).join('\n')).toContain('http://ccrc-fixture.invalid:7788/api/fleet/health');
+    expect(r.stdout).toMatch(/fleet: +not measured/);
+    expect(r.stdout).toMatch(/97/);
+  });
+
+  it('every other verb leaves the box alone — the poison saw nothing', () => {
+    const home = mkTmp('ccrc-cli-no-curl-');
+    for (const argv of [['version'], ['-h'], ['adopt'], ['status']]) runCcrcRaw(home, argv);
+    // `status` is in that list deliberately: with no CCRC_ADDR and no
+    // ~/.ccrc/ccrc.env, there is no server to ask, and a status that invented
+    // one would show up right here.
+    expect(curlPoison(home)).toEqual([]);
   });
 });
 

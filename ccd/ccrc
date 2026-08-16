@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 # ccrc — the lifecycle CLI for a Claude Code fleet box: installs, updates and
 # diagnoses a box, as a sibling to `ccd`, which drives sessions once one is
-# already running. Stage 2b, Task 1 of the
-# 2026-08-15-stage2b-ccrc-cli-and-doctor plan: this ships only the dispatch
-# skeleton, the `version` verb, and usage/argument handling. `doctor`,
-# `status` and `adopt` are reserved verb NAMES so the usage line and every
-# later task's `case` arm are already stable — dispatching to one of them
-# today prints "not implemented yet: <verb>" and exits 1, distinct from an
-# unrecognised verb (exit 2, see below).
+# already running. Stage 2b of the 2026-08-15-stage2b-ccrc-cli-and-doctor plan:
+# `version` (Task 1), `doctor` (Tasks 4-5) and `status` (Task 7) are
+# implemented; `adopt` is still a reserved verb NAME, so the usage line and
+# Task 8's `case` arm are already stable — dispatching to it today prints
+# "not implemented yet: adopt" and exits 1, distinct from an unrecognised verb
+# (exit 2, see below).
 #
 # ── WHY `set -uo pipefail`, NOT `-euo` ─────────────────────────────────────
 # `ccrc-adopt` (this file's own model for argument handling) uses `-e`
@@ -45,9 +44,11 @@
 # (Task 4 review, Minor 4). It was carried from Task 1 on the prediction that
 # doctor's `remedy:` lines would ride it; they do not (see the next paragraph),
 # so it stood as untested, uncalled code whose only documentation was a
-# statement of what it was for that had become false. Re-add it in one line
-# together with its first real caller — `ccrc status` is the likely one — and
-# not before.
+# statement of what it was for that had become false. Task 1 guessed `ccrc
+# status` would be its first caller; Task 7 measured that to be wrong too —
+# status prints FACTS, and a fact is the RESULT of the verb, so every line it
+# writes goes to stdout. Re-add `_ccrc_say` in one line together with a real
+# caller, and not before.
 #
 # DOCTOR'S "remedy: …" LINES ARE NOT IN THAT STDERR TABLE, and this paragraph
 # is the correction of a guess Task 1 made before doctor existed: it predicted
@@ -88,6 +89,36 @@ CCRC_HERE="${BASH_SOURCE[0]}"
 [[ "$CCRC_HERE" == */* ]] || CCRC_HERE="./$CCRC_HERE"
 CCRC_HERE="$(cd "${CCRC_HERE%/*}" && pwd)"
 
+# ── THE TWO FILES THIS BOX KEEPS ITS OWN FACTS IN ─────────────────────────
+# Spelled once each, because `version`, `status` and `doctor` all read them and
+# three copies of a path is how two of them end up reading a file the third
+# does not write. Both are read-only to every verb in this file.
+#   build.json — what a deploy stamped (deploy.sh's `stamp_build`).
+#   ccrc.env   — the box's machine config (deploy/ccrc.env.example). It ALSO
+#                carries tokens (CCRC_AGENT_TOKEN, CCRC_VAPID_PRIVATE, a
+#                Hetzner token), which is why it is never sourced and never
+#                read whole — see `_box_env_value`.
+BOX_STAMP_FILE="$HOME/.ccrc/build.json"
+BOX_ENV_FILE="$HOME/.ccrc/ccrc.env"
+
+# How long the ONE network call in this file (`GET /api/fleet/health`) may take.
+# Overridable for the reason `deploy/verify-service.sh:56-62` makes its
+# settle/window knobs overridable, and `ccrc-doctor-checks` makes
+# `CCRC_DOCTOR_GH_TIMEOUT` overridable: a route that hangs must not hang the
+# tool, and a test must not wait out a production timeout. The DEFAULT is what
+# an operator gets.
+: "${CCRC_HEALTH_TIMEOUT:=5}"
+
+# Out-parameters for the two readers below. `set -u` makes an unset array fatal
+# on read, so they are declared here rather than at first assignment. `BOX_*`
+# and `_box_*` are a THIRD namespace, deliberately kept clear of the two already
+# in play in any shell that sources this tree: `_ccrc_*` (this file's own
+# refusal helpers AND the five functions `shared/generate.mjs` emits into
+# ~/.ccrc/accounts.sh) and `_wrap_*`/`WRAPPER_*` (ccrc-wrapper-shape).
+BOX_BUILD=()
+BOX_HEALTH=()
+BOX_HEALTH_WHY=""
+
 usage() {
   cat <<EOF
 usage: $PROG {doctor|status|adopt|version}
@@ -99,7 +130,9 @@ already running).
   version   print the build this box is running, from ~/.ccrc/build.json
   doctor    check this box's prerequisites — one PASS/WARN/FAIL line per
             check, each non-pass followed by its remedy; exit 1 if any failed
-  status    (not implemented yet) show this box's fleet role and state
+  status    print what this box IS: its build stamp, its services, how many
+            ccd sessions it holds, and — when it knows where its server is —
+            whether the two boxes agree. Read-only; always exit 0
   adopt     (not implemented yet) rediscover accounts.json from disk
 
   -h, --help   print this message and exit 0
@@ -122,8 +155,9 @@ _ccrc_usage_die() { echo "$PROG: unknown argument: $1" >&2; usage >&2; exit 2; }
 # eventually drift between them.
 _ccrc_not_implemented() { _ccrc_die "not implemented yet: $1"; }
 
-# cmd_version — what THIS box is running, per its own build stamp, never a
-# guess. Same three-way discipline as `ccd version` (ccd/ccd:1946-1969):
+# cmd_version / _box_build_fields — what THIS box is running, per its own build
+# stamp, never a guess. Same three-way discipline as `ccd version`
+# (ccd/ccd:1946-1969):
 #   - no ~/.ccrc/build.json  -> a dev checkout, or a box `ccrc install` never
 #     touched. "unstamped" at exit 0 is the honest ANSWER here, not an error.
 #   - a stamp that parses    -> print the facts.
@@ -160,33 +194,400 @@ _ccrc_not_implemented() { _ccrc_die "not implemented yet: $1"; }
 # conditions ("this box lacks a dependency" vs. "this box's stamp is
 # corrupt") that an operator would act on completely differently must not
 # share one signal.
-cmd_version() {
-  [[ $# -eq 0 ]] || _ccrc_usage_die "$1"
-  local stamp="$HOME/.ccrc/build.json"
-  if [[ ! -e "$stamp" ]]; then
-    echo "$PROG unstamped (no $stamp — this box has no build stamp yet)"
-    return 0
-  fi
+#
+# ── ONE READER, TWO RENDERINGS ────────────────────────────────────────────
+# `_box_build_fields` is the ONLY reader of ~/.ccrc/build.json in this file, and
+# `version` and `status` both call it and each writes its own sentence from the
+# SAME four fields — a second parser here is how the two verbs would come to
+# disagree about what "dirty" means. (`ccd version` still has a reader of its
+# own, in python3, in the other tool; Task 8 of this plan is where
+# `single-definition` is pointed at that pair.) It answers with a return code
+# per CONDITION, because the callers do different things about each:
+#
+#   0  the stamp parsed  -> BOX_BUILD=(sha ref builtAt true|false)
+#   3  no stamp at all   -> a dev checkout, or a box no deploy has touched
+#   4  the path is there but is not a regular file (a directory, say)
+#   5  jq is not on PATH — a MISSING DEPENDENCY, never a corrupt stamp
+#   6  it exists and does not parse as a build stamp
+#
+# 5 is separate from 6 for the reason the whole file is built on: two conditions
+# an operator acts on completely differently (`apt install jq` vs. redeploy)
+# must not share one signal.
+#
+# The output is FIVE lines — the four fields and an `END` sentinel — and both
+# are checked. `$( )` strips trailing newlines, so a four-line form would lose
+# an empty last field silently; the sentinel makes any truncation loud. A field
+# carrying a control byte (a newline in `ref` would break the line format; a
+# backspace would let the printed sha lie on a terminal) is rejected as
+# unreadable rather than printed — the same rule `_check_wrappers` applies to
+# roster ids, for the same reason.
+_box_build_fields() {
+  BOX_BUILD=()
+  [[ -e "$BOX_STAMP_FILE" ]] || return 3
   # Exists but is not a plain file (e.g. a directory) — a shape problem, not
   # an absence; must not be read as "unstamped" (round-1 review, Minor 8).
-  [[ -f "$stamp" ]] || _ccrc_die "build stamp unreadable: $stamp (not a regular file)"
-  command -v jq >/dev/null 2>&1 \
-    || _ccrc_die "jq is required by 'ccrc version' but is not on PATH"
-  local line
-  line="$(jq -r '
+  [[ -f "$BOX_STAMP_FILE" ]] || return 4
+  command -v jq >/dev/null 2>&1 || return 5
+  local out
+  out="$(jq -r '
     try (
       if (type == "object")
          and (.sha | type == "string") and (.sha | length > 0)
          and (.ref | type == "string") and (.ref | length > 0)
          and (.builtAt | type == "string") and (.builtAt | length > 0)
          and (.dirty | type == "boolean")
-      then "\(.sha) (\(.ref), built \(.builtAt)\(if .dirty then ", dirty" else "" end))"
+      then "\(.sha)\n\(.ref)\n\(.builtAt)\n\(.dirty)\nEND"
       else empty
       end
     ) catch empty
-  ' -- "$stamp" 2>/dev/null)"
-  [[ -n "$line" ]] || _ccrc_die "build stamp unreadable: $stamp"
-  echo "$PROG $line"
+  ' -- "$BOX_STAMP_FILE" 2>/dev/null)"
+  [[ -n "$out" ]] || return 6
+  mapfile -t BOX_BUILD <<< "$out"
+  [[ "${#BOX_BUILD[@]}" -eq 5 && "${BOX_BUILD[4]}" == END ]] || { BOX_BUILD=(); return 6; }
+  unset 'BOX_BUILD[4]'
+  local f
+  for f in "${BOX_BUILD[@]}"; do
+    [[ "$f" =~ [[:cntrl:]] ]] && { BOX_BUILD=(); return 6; }
+  done
+  return 0
+}
+
+cmd_version() {
+  [[ $# -eq 0 ]] || _ccrc_usage_die "$1"
+  local rc=0
+  _box_build_fields || rc=$?
+  case "$rc" in
+    0) ;;
+    3) echo "$PROG unstamped (no $BOX_STAMP_FILE — this box has no build stamp yet)"
+       return 0 ;;
+    4) _ccrc_die "build stamp unreadable: $BOX_STAMP_FILE (not a regular file)" ;;
+    5) _ccrc_die "jq is required by 'ccrc version' but is not on PATH" ;;
+    *) _ccrc_die "build stamp unreadable: $BOX_STAMP_FILE" ;;
+  esac
+  local dirty=""
+  [[ "${BOX_BUILD[3]}" == true ]] && dirty=", dirty"
+  echo "$PROG ${BOX_BUILD[0]} (${BOX_BUILD[1]}, built ${BOX_BUILD[2]}$dirty)"
+}
+
+# ── WHERE IS THIS BOX'S SERVER? ───────────────────────────────────────────
+# `status` and doctor's `fleet` check both need one thing before they can ask
+# anything: an address. There are exactly two places one can come from, and
+# NEITHER of them is a literal in this file.
+#
+#   1. `$CCRC_ADDR` — `deploy/notify.sh:35`'s own seam, which every fleet-host
+#      hook already honours. Its `${CCRC_ADDR:-203.0.113.7:7788}` DEFAULT is
+#      deliberately not copied here: that IP is one operator's tailnet address,
+#      baked into a tool this workstream exists to make shippable to other
+#      people, and a doctor that silently probed it on somebody else's box
+#      would be reporting on a machine they have never heard of.
+#   2. `~/.ccrc/ccrc.env`'s `CCRC_HOST` + `CCRC_PORT` — the box's own machine
+#      config, and the same two values `ccrc.service` reads through
+#      `EnvironmentFile=` (deploy/ccrc.env.example).
+#
+# BOTH keys are required, and a lone `CCRC_HOST` is answered "I cannot tell"
+# rather than completed from `server/src/config.ts`'s `?? 7788`. That default is
+# real, but it lives in TypeScript, on the other side of a language boundary
+# this bash cannot import across — copying it here would be one value declared
+# twice, which is the drift `single-definition.test.ts` exists to stop, and
+# guessing it wrong produces a confident answer about a box nobody asked.
+#
+# MEASURED, and worth knowing before reading the SKIP: the FLEET host has no
+# `~/.ccrc/ccrc.env` at all (it has `agent.env`, which configures the agent and
+# holds a token). So on that box the answer today is "no address" and the fleet
+# check SKIPS — correctly: nothing there knows where the server is. Export
+# `CCRC_ADDR` for a run, or give the box a `ccrc.env`, and it answers.
+#
+#   0 -> two lines: the address, then WHERE it came from (for the detail line)
+#   1 -> nothing configured at all
+#   2 -> one line: a sentence naming the source and what is wrong with it.
+#        NEVER the offending value: it comes off a config file and lands on a
+#        terminal that acts on control bytes.
+_box_server_addr() {
+  local addr="" src=""
+  if [ -n "${CCRC_ADDR:-}" ]; then
+    addr="$CCRC_ADDR"; src="CCRC_ADDR"
+  elif [ -e "$BOX_ENV_FILE" ]; then
+    # "there is no config file" (return 1) and "there is one and I could not
+    # read it" (return 2) are two different things to tell an operator, and
+    # without these two guards the second arrives as the first — the read below
+    # would fail, bash would put its own diagnosis on stderr, and every key
+    # would come back empty, which is indistinguishable from a file that
+    # declares nothing.
+    [ -f "$BOX_ENV_FILE" ] \
+      || { printf '%s\n' "$BOX_ENV_FILE is not a regular file"; return 2; }
+    [ -r "$BOX_ENV_FILE" ] \
+      || { printf '%s\n' "$BOX_ENV_FILE cannot be read (check its mode: ls -l $BOX_ENV_FILE)"; return 2; }
+    local host port
+    host="$(_box_env_value "$BOX_ENV_FILE" CCRC_HOST)"
+    port="$(_box_env_value "$BOX_ENV_FILE" CCRC_PORT)"
+    if [ -n "$host" ] && [ -n "$port" ]; then
+      addr="$host:$port"; src="$BOX_ENV_FILE"
+    elif [ -n "$host" ]; then
+      printf '%s\n' "$BOX_ENV_FILE declares CCRC_HOST but no CCRC_PORT"
+      return 2
+    elif [ -n "$port" ]; then
+      printf '%s\n' "$BOX_ENV_FILE declares CCRC_PORT but no CCRC_HOST"
+      return 2
+    else
+      return 1
+    fi
+  else
+    return 1
+  fi
+  # A host:port and nothing else — an IPv6 literal in its URL brackets counts.
+  # This is a sanity gate on a value that goes into a URL and into printed
+  # output, not a resolver: a name that does not resolve is curl's answer to
+  # give, not this function's.
+  local addr_re='^([A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?|\[[0-9A-Fa-f:]+\]):[0-9]{1,5}$'
+  if [[ ! "$addr" =~ $addr_re ]]; then
+    printf '%s\n' "$src does not spell a host:port address"
+    return 2
+  fi
+  printf '%s\n%s\n' "$addr" "$src"
+}
+
+# ONE KEY OUT OF AN ENV FILE, BY NAME, AND NOTHING ELSE.
+#
+# `~/.ccrc/ccrc.env` holds this box's secrets as well as its addresses —
+# `CCRC_AGENT_TOKEN`, `CCRC_VAPID_PRIVATE`, `CCRC_HETZNER_TOKEN`. Three rules
+# follow, and all three are load-bearing:
+#   - it is NEVER sourced. Sourcing executes it and exports every one of those
+#     into this process and into every child it spawns (curl, node, jq).
+#   - only the requested key's value is ever returned; every other line is read
+#     and dropped. Nothing here prints, logs or exports another line of it.
+#   - the shape read is `KEY=value` at the start of a line, which is what
+#     systemd's own `EnvironmentFile=` parser accepts — this file's actual
+#     consumer — with one layer of surrounding quotes stripped. No `export`
+#     prefix, no continuations: a form systemd would not read is a form this
+#     box is not configured by either.
+# The LAST assignment wins, as it does in systemd and in a shell.
+_box_env_value() {
+  local file="$1" key="$2" line v=""
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      "$key="*) v="${line#"$key="}" ;;
+      *) continue ;;
+    esac
+  done < "$file"
+  # Trailing CR (a file edited on Windows) and surrounding quotes.
+  v="${v%$'\r'}"
+  case "$v" in
+    \"*\") v="${v#\"}"; v="${v%\"}" ;;
+    \'*\') v="${v#\'}"; v="${v%\'}" ;;
+  esac
+  printf '%s' "$v"
+}
+
+# ── THE ONE NETWORK CALL: GET /api/fleet/health ───────────────────────────
+# The server is the only party that can compare the two boxes — it holds this
+# box's stamp and the fleet host's, and both rosters' digests — so this asks it
+# and reports what it says. It DECIDES nothing about the comparison:
+# `rosterAgreement`/`buildAgreement` (server/src/fleetstate.ts) own that.
+#
+#   0 -> BOX_HEALTH=(mode connected build roster)
+#   4 -> curl is not on PATH (nothing was asked)
+#   5 -> the server did not answer;      BOX_HEALTH_WHY = curl's exit code
+#   6 -> it answered an HTTP error;      BOX_HEALTH_WHY = the status code
+#   7 -> what came back is not the health JSON
+#   8 -> node is not on PATH, so nothing could parse the answer
+#
+# NOTHING FROM THE BODY IS EVER PRINTED. The four fields are CLASSIFIED against
+# the vocabulary `shared/api.ts` declares and only ever surface as one of those
+# tokens, or as `?` for "present and not one of them". A body off a network,
+# echoed into a verdict line an operator pastes into a ticket, is the same
+# hazard `_check_wrappers` escapes roster ids for — except that here nothing has
+# to be escaped, because nothing is quoted back.
+#
+# Parsed with node rather than jq for D-70's reason, restated: `jq` is stubbed
+# as `exit 0` throughout the doctor suite (it is a PRESENCE check there), so a
+# jq-based reader would have seen an empty answer in every fixture and passed
+# everything. `_check_wrappers` reads the roster with node for the same reason.
+_box_health() {
+  local addr="$1"
+  BOX_HEALTH=(); BOX_HEALTH_WHY=""
+  command -v curl >/dev/null 2>&1 || return 4
+  # `-w '\n%{http_code}'` rather than `-f`: `-f` collapses "no answer" and "an
+  # HTTP error" into one nonzero exit, and those are two different problems
+  # (the box is down / the box is broken). The body and the code come back in
+  # one stream, split on the LAST newline.
+  local out rc=0
+  # `-w` carries curl's OWN `\n` escape (two characters in argv, one newline in
+  # the output) rather than `$'\n'`: a real newline inside an argument shows up
+  # in `ps`, in a log line and in this suite's own stub log as a second record,
+  # and an argv that cannot be printed on one line is an argv nobody can read.
+  out="$(curl -sS --max-time "$CCRC_HEALTH_TIMEOUT" -H 'accept: application/json' \
+    -w '\n%{http_code}' "http://$addr/api/fleet/health" 2>/dev/null)" || rc=$?
+  if [ "$rc" -ne 0 ]; then BOX_HEALTH_WHY="$rc"; return 5; fi
+  case "$out" in
+    *$'\n'*) ;;
+    *) BOX_HEALTH_WHY=""; return 7 ;;
+  esac
+  local code="${out##*$'\n'}" body="${out%$'\n'*}"
+  if [ "$code" != 200 ]; then
+    case "$code" in
+      [0-9][0-9][0-9]) BOX_HEALTH_WHY="$code" ;;
+      *) BOX_HEALTH_WHY="an unreadable status" ;;
+    esac
+    return 6
+  fi
+  command -v node >/dev/null 2>&1 || return 8
+  local fields
+  fields="$(CCRC_HEALTH_BODY="$body" node -e '
+    let j;
+    try { j = JSON.parse(process.env.CCRC_HEALTH_BODY); } catch (e) { process.exit(3); }
+    if (!j || typeof j !== "object" || Array.isArray(j)) process.exit(4);
+    // ABSENT READS AS "unknown" for build and roster, and that is the wire
+    // contract itself (shared/api.ts: both fields are optional, "absent reads
+    // as unknown", the absence-permits rule). ONE reader per field, so an older
+    // server omitting one cannot arrive here as a fourth state. `mode` is NOT
+    // optional on the wire, so its absence is a malformed answer and lands in
+    // the same "?" as an unrecognised one — the caller does the same thing
+    // about both, which is the only licence to collapse two conditions.
+    const one = (v, allowed, whenAbsent) =>
+      (v === undefined || v === null) ? whenAbsent : (allowed.indexOf(v) >= 0 ? String(v) : "?");
+    process.stdout.write([
+      one(j.mode, ["local", "remote"], "?"),
+      one(j.connected, [true, false], "?"),
+      one(j.build, ["agreed", "skewed", "unknown"], "unknown"),
+      one(j.roster, ["agreed", "divergent", "unknown"], "unknown"),
+      "END",
+    ].join("\n"));
+  ' 2>/dev/null)" || return 7
+  mapfile -t BOX_HEALTH <<< "$fields"
+  [[ "${#BOX_HEALTH[@]}" -eq 5 && "${BOX_HEALTH[4]}" == END ]] || { BOX_HEALTH=(); return 7; }
+  unset 'BOX_HEALTH[4]'
+  return 0
+}
+
+# The two units ccrc itself installs (deploy/ccrc.service, ccrc-agent.service).
+# Which of them is active IS this box's role, measured rather than declared: a
+# server host runs the first, a fleet host the second, and a single-box install
+# runs both. `is-active` only — status never touches a unit, and `ccd supervise`
+# units are long-lived by design (CLAUDE.md).
+#
+# XDG_RUNTIME_DIR is defaulted exactly as `ccd:93-95` defaults it, and for the
+# same reason: without it `systemctl --user` cannot find the bus from a
+# non-interactive SSH context, and status would report "unknown" on a perfectly
+# healthy box. `$UID` is a bash builtin — no `id` subprocess to fail on the
+# broken box this tool exists for.
+_box_services() {
+  if ! command -v systemctl >/dev/null 2>&1; then
+    printf '%s' "unknown (systemctl is not on PATH — this box has no systemd --user to ask)"
+    return 0
+  fi
+  : "${XDG_RUNTIME_DIR:=/run/user/$UID}"; export XDG_RUNTIME_DIR
+  : "${DBUS_SESSION_BUS_ADDRESS:=unix:path=${XDG_RUNTIME_DIR}/bus}"; export DBUS_SESSION_BUS_ADDRESS
+  local out="" u state
+  for u in ccrc.service ccrc-agent.service; do
+    state="$(systemctl --user is-active "$u" 2>/dev/null)"
+    [ -n "$state" ] || state="unknown"
+    [ -z "$out" ] || out+=", "
+    out+="$u $state"
+  done
+  printf '%s' "$out"
+}
+
+# How many ccd sessions this box holds, counted the way ccd itself counts them:
+# one `<id>.uuid` file per session in the flat-file registry (ccd:8499). No
+# `ls`, no `find` — a glob and an array length, so this answers on a box with no
+# coreutils on PATH.
+_box_sessions() {
+  local reg="$HOME/.cc-sessions"
+  if [ ! -d "$reg" ]; then
+    printf '%s' "0 (no $reg on this box — it runs no ccd sessions)"
+    return 0
+  fi
+  local -a f=()
+  local had_nullglob=0
+  shopt -q nullglob && had_nullglob=1
+  shopt -s nullglob
+  f=("$reg"/*.uuid)
+  [ "$had_nullglob" -eq 1 ] || shopt -u nullglob
+  printf '%s' "${#f[@]} in $reg (one registered ccd session each)"
+}
+
+# cmd_status — WHAT THIS BOX IS, as facts, one per line. The question doctor
+# cannot answer: doctor judges a box's fitness, status describes it, and the
+# two are different jobs on purpose. A skewed fleet is a FAIL from doctor and a
+# plain line of fact here.
+#
+# READ-ONLY, and exit 0 whatever it finds — including a fleet that disagrees.
+# An operator scripting `ccrc status` gets a report; the thing that returns a
+# judgement is `ccrc doctor`, whose exit code means exactly one thing. A status
+# that exited 1 on a skewed fleet would give the fleet check a second, quieter
+# home, and two answers to one question is how they come to disagree.
+#
+# EVERY LINE GOES TO STDOUT: it is the RESULT of the verb, in this file's own
+# stdout/stderr split. And every line names what was measured — the same "never
+# the bare word ok" rule the doctor checks keep — because a status that prints
+# `fleet: ok` is indistinguishable from a status that never asked.
+cmd_status() {
+  [[ $# -eq 0 ]] || _ccrc_usage_die "$1"
+
+  local rc=0
+  _box_build_fields || rc=$?
+  case "$rc" in
+    0) local dirty="clean"
+       [[ "${BOX_BUILD[3]}" == true ]] && dirty="DIRTY — what runs here is not the commit it names"
+       printf 'build:     %s (%s) built %s, %s\n' \
+         "${BOX_BUILD[0]}" "${BOX_BUILD[1]}" "${BOX_BUILD[2]}" "$dirty" ;;
+    3) printf 'build:     unstamped (no %s — no deploy has ever stamped this box)\n' "$BOX_STAMP_FILE" ;;
+    4) printf 'build:     unreadable (%s is not a regular file)\n' "$BOX_STAMP_FILE" ;;
+    5) printf 'build:     unreadable (jq is not on PATH, so %s cannot be parsed)\n' "$BOX_STAMP_FILE" ;;
+    *) printf 'build:     unreadable (%s does not parse as a build stamp)\n' "$BOX_STAMP_FILE" ;;
+  esac
+
+  printf 'services:  %s\n' "$(_box_services)"
+  printf 'sessions:  %s\n' "$(_box_sessions)"
+
+  local addr_out addr_rc=0
+  addr_out="$(_box_server_addr)" || addr_rc=$?
+  local -a af=()
+  [ -z "$addr_out" ] || mapfile -t af <<< "$addr_out"
+  if [ "$addr_rc" -eq 1 ]; then
+    printf 'server:    none configured (no CCRC_ADDR, and no CCRC_HOST/CCRC_PORT in %s)\n' "$BOX_ENV_FILE"
+    printf 'fleet:     not measured (this box has no server address to ask)\n'
+    return 0
+  fi
+  if [ "$addr_rc" -ne 0 ]; then
+    printf 'server:    misconfigured (%s)\n' "${af[0]:-$BOX_ENV_FILE}"
+    printf 'fleet:     not measured (this box has no usable server address)\n'
+    return 0
+  fi
+  local addr="${af[0]}" src="${af[1]}"
+  printf 'server:    %s (from %s)\n' "$addr" "$src"
+
+  local h_rc=0
+  _box_health "$addr" || h_rc=$?
+  case "$h_rc" in
+    4) printf 'fleet:     not measured (curl is not on PATH, so the server could not be asked)\n'; return 0 ;;
+    5) printf 'fleet:     not measured (the server did not answer — curl exited %s)\n' "$BOX_HEALTH_WHY"; return 0 ;;
+    6) printf 'fleet:     not measured (the server answered HTTP %s for /api/fleet/health)\n' "$BOX_HEALTH_WHY"; return 0 ;;
+    7) printf 'fleet:     not measured (the server answered something that is not the health JSON)\n'; return 0 ;;
+    8) printf 'fleet:     not measured (node is not on PATH, so the answer could not be parsed)\n'; return 0 ;;
+  esac
+
+  local mode="${BOX_HEALTH[0]}" connected="${BOX_HEALTH[1]}"
+  local build="${BOX_HEALTH[2]}" roster="${BOX_HEALTH[3]}"
+  if [ "$mode" != remote ]; then
+    if [ "$mode" = local ]; then
+      printf 'mode:      local — that server drives its own box directly\n'
+      printf 'fleet:     not measured (the server is in local mode; there is no second box to disagree with)\n'
+    else
+      printf 'mode:      unreadable — the server did not say which mode it is in\n'
+      printf 'fleet:     not measured (the server did not say which mode it is in)\n'
+    fi
+    return 0
+  fi
+  printf 'mode:      remote (fleet host connected: %s)\n' "$connected"
+  # ONE WORD FOR THE PAIR, then both answers behind it. `agreed` only when both
+  # are, `disagreed` when either is a real disagreement, and `unknown` for
+  # everything else — never `agreed` for something nobody measured.
+  local overall=unknown
+  if [ "$build" = agreed ] && [ "$roster" = agreed ]; then overall=agreed
+  elif [ "$build" = skewed ] || [ "$roster" = divergent ]; then overall=disagreed
+  fi
+  printf 'fleet:     %s — build %s, roster %s\n' "$overall" "$build" "$roster"
 }
 
 # cmd_doctor — run every check in `ccd/ccrc-doctor-checks`'s table and report
@@ -196,9 +597,9 @@ cmd_version() {
 #
 # The loop never stops early, and that is the same reason this file does not
 # use `set -e`: an operator running doctor wants the whole list, not the first
-# problem. A check SIGNALS with its return code (0 pass / 1 fail / 2 warn) and
-# prints its own verdict line(s); this function only counts and tallies. It
-# deliberately does NOT decide anything about a check's subject — that is the
+# problem. A check SIGNALS with its return code (0 pass / 1 fail / 2 warn /
+# 3 SKIPPED) and prints its own line(s); this function only counts and tallies.
+# It deliberately does NOT decide anything about a check's subject — that is the
 # check's job, and keeping the decision inside the check is what makes "one
 # table entry plus one test" the true cost of adding one.
 #
@@ -209,6 +610,27 @@ cmd_version() {
 # printed is reported as a bug in ccrc rather than silently believed. The
 # summary's "N checks" stays a count of table entries, so a run in which one
 # check answered twice really does show more verdicts than checks.
+#
+# ── THE FOURTH OUTCOME: A CHECK THAT DID NOT RUN (Task 7) ────────────────
+# Some checks have a subject that may not exist on this box at all — `fleet`
+# compares TWO boxes, and a box with no server to ask has nothing to compare.
+# That check must not PASS (it would claim an agreement nobody measured, the
+# overloaded-null defect this codebase bans by name) and must not WARN (nothing
+# is wrong). It prints exactly one
+#
+#     SKIP <name>: <why there was nothing to measure>
+#
+# line, NO verdict line and no remedy, and exits 3. This function counts it
+# against CHECKS and never against verdicts, and the summary prints the number
+# of skips — so "N checks, M verdicts" stays a true statement about how much of
+# the box was actually measured, and an operator can see the difference between
+# a check that answered and one that could not.
+#
+# The two halves are CROSS-CHECKED against each other exactly as the return code
+# and the verdict lines already are: exit 3 with a verdict line, a SKIP line
+# with any other exit code, or exit 3 with nothing printed at all are each
+# reported as a bug in ccrc. "I did not run" and "here is my answer" cannot both
+# be true, and a silent skip is a check that vanished from the run.
 #
 # A COMPLETE INSTALL IS THREE FILES IN ONE DIRECTORY, not two: this script,
 # `ccrc-doctor-checks`, and `ccrc-wrapper-shape` (which the checks file sources
@@ -257,10 +679,11 @@ cmd_doctor() {
   [[ "${#CCRC_DOCTOR_CHECKS[@]}" -gt 0 ]] \
     || _ccrc_die "doctor's check table is empty: $checks — refusing to report a box nobody measured"
 
-  # `ran` counts CHECKS; pass/warn/fail count VERDICT LINES. They were one
-  # number until a check needed to answer in two classes at once; keeping the
-  # summary's "N checks" honest means counting the table entries themselves.
-  local name rc out ran=0 pass=0 warn=0 fail=0
+  # `ran` counts CHECKS and `skipped` counts the ones with nothing to measure;
+  # pass/warn/fail count VERDICT LINES. They were one number until a check
+  # needed to answer in two classes at once; keeping the summary's "N checks"
+  # honest means counting the table entries themselves.
+  local name rc out ran=0 skipped=0 pass=0 warn=0 fail=0
   for name in "${CCRC_DOCTOR_CHECKS[@]}"; do
     ran=$((ran + 1))
     if ! declare -F "_check_$name" >/dev/null 2>&1; then
@@ -281,14 +704,32 @@ cmd_doctor() {
     # skims (Task 5 review, Important 1). The summary's leading number stays
     # the number of CHECKS, so a run where one check answered twice shows more
     # verdicts than checks — deliberately: that is what happened.
-    local vp=0 vw=0 vf=0 line
+    local vp=0 vw=0 vf=0 vs=0 line
     while IFS= read -r line; do
       case "$line" in
         "PASS $name: "*) vp=$((vp + 1)) ;;
         "WARN $name: "*) vw=$((vw + 1)) ;;
         "FAIL $name: "*) vf=$((vf + 1)) ;;
+        "SKIP $name: "*) vs=$((vs + 1)) ;;
       esac
     done <<< "$out"
+
+    # A SKIPPED CHECK, and the three ways of getting it wrong. Both halves have
+    # to agree — exactly one SKIP line, no verdict line, exit 3 — because each
+    # half alone is a statement the other can contradict, and a run that
+    # believed either one on its own would either count a measurement nobody
+    # made or drop a check off the tally without saying so.
+    if [[ "$rc" -eq 3 || "$vs" -gt 0 ]]; then
+      if [[ "$rc" -eq 3 && "$vs" -eq 1 && $((vp + vw + vf)) -eq 0 ]]; then
+        skipped=$((skipped + 1))
+        continue
+      fi
+      printf 'FAIL %s: the check exited %s having printed %s SKIP and %s verdict line(s) — a skipped check prints exactly one SKIP line, no verdict line, and exits 3\n' \
+        "$name" "$rc" "$vs" "$((vp + vw + vf))"
+      printf '  remedy: this is a bug in ccrc, not a fact about your box — see _check_%s in %s\n' "$name" "$checks"
+      fail=$((fail + 1))
+      continue
+    fi
 
     if [[ $((vp + vw + vf)) -eq 0 ]]; then
       # No verdict line, whatever the exit code said. The usual cause is a
@@ -303,10 +744,10 @@ cmd_doctor() {
     case "$rc" in
       0|1|2) ;;
       *)
-        # A check may only answer 0/1/2. A stray `return 3` lands here and is
-        # counted as a failure, named as the bug it is, rather than being read
-        # as one of the three legal verdicts.
-        printf 'FAIL %s: the check exited %s, which is not one of 0 (pass), 1 (fail) or 2 (warn)\n' "$name" "$rc"
+        # A check may only answer 0/1/2/3 (3 is handled above). A stray
+        # `return 4` lands here and is counted as a failure, named as the bug it
+        # is, rather than being read as one of the legal outcomes.
+        printf 'FAIL %s: the check exited %s, which is not one of 0 (pass), 1 (fail), 2 (warn) or 3 (skipped)\n' "$name" "$rc"
         printf '  remedy: this is a bug in ccrc, not a fact about your box — see _check_%s in %s\n' "$name" "$checks"
         fail=$((fail + 1))
         continue ;;
@@ -338,11 +779,14 @@ cmd_doctor() {
   # repair a later reader would reach for — count each check once, by its worst
   # class — is exactly the `0 warned`-with-warnings-on-screen lie this round
   # removed, so the line says what each number is instead of inviting the fix.
-  printf 'summary: %s checks, %s verdicts — %s passed, %s warned, %s failed\n' \
-    "$ran" "$((pass + warn + fail))" "$pass" "$warn" "$fail"
+  # The skip count rides the CHECKS half for the same reason: it is a number of
+  # checks that did not answer, not a fourth kind of answer, and printing it
+  # always (including as `(0 skipped)`) keeps the line one shape for whatever
+  # reads it next.
+  printf 'summary: %s checks (%s skipped), %s verdicts — %s passed, %s warned, %s failed\n' \
+    "$ran" "$skipped" "$((pass + warn + fail))" "$pass" "$warn" "$fail"
   [[ "$fail" -eq 0 ]] || return 1
 }
-cmd_status() { _ccrc_not_implemented status; }
 cmd_adopt()  { _ccrc_not_implemented adopt; }
 
 # Guard so the script can be `source`d (the way server/test/ccd-clip.test.ts:32
