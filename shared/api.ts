@@ -944,6 +944,58 @@ export function spawnVerdict(rc: number | null): SpawnVerdict | null {
   }
 }
 
+/**
+ * A disagreement BETWEEN SOURCES — which is precisely what a per-row ladder
+ * structurally cannot express, and the only reason this vocabulary exists beside
+ * `SessionLifecycle` rather than inside it.
+ *
+ * THREE KINDS, and the four that were proposed and rejected are named here so
+ * nobody re-adds them: `dead-row` IS `lifecycle === 'orphan'` and strictly
+ * broader (the shipped ladder splits that population three ways);
+ * `unclaimed-session` was promoted to a `SessionLifecycle` member.
+ *
+ * `unsupervised` and `not-boot-persistent` die on COST, and the distinction is
+ * worth stating precisely: `ccd ws-audit --session <id>` DOES report a `unit`
+ * state (read from `systemctl --user list-units`) and IS already whitelisted, so
+ * the server can see systemd for one row on demand. What it will not do is pay
+ * one exec per session per sweep on a whole-fleet lane. Separately, the shipped
+ * `unsupervised` token is a HEARTBEAT verdict, chosen deliberately over unit
+ * introspection — reusing the word for a unit fact would be a second name for a
+ * different thing. `EXEC_COMMANDS` stays the closed set `['tmux','ccd']`.
+ *
+ * `unregistered-worktree` KEEPS ITS NAME even though ccd's `_ws_gc_row` calls the
+ * same thing `orphan`. That overload already exists and in the worst possible
+ * form — `orphan` means "a registry row with no pane" in one half of this repo
+ * and "a worktree with no registry row", the exact opposite, in the other.
+ * Naming this kind explicitly defuses it.
+ */
+export type DivergenceKind =
+  | 'unregistered-worktree'   // git records a worktree no registry row claims
+  | 'branch-drift'            // registry `.branch` != the worktree's own HEAD
+  | 'claim-divergence';       // a hold with no open run, or an open run with no hold
+const DIVERGENCE_KIND_MAP: Record<DivergenceKind, true> = {
+  'unregistered-worktree': true, 'branch-drift': true, 'claim-divergence': true,
+};
+export const DIVERGENCE_KINDS: readonly DivergenceKind[] =
+  Object.keys(DIVERGENCE_KIND_MAP) as DivergenceKind[];
+
+/** The only way to narrow an untrusted string to a `DivergenceKind` — same rule,
+ *  same reason, as `isSpawnVerdict` above: the CONSTANT is cast, never the
+ *  input. */
+export function isDivergenceKind(v: unknown): v is DivergenceKind {
+  return typeof v === 'string' && (DIVERGENCE_KINDS as readonly string[]).includes(v);
+}
+
+export interface Divergence {
+  readonly kind: DivergenceKind;
+  /** Registry id when the kind is about a row; null for `unregistered-worktree`. */
+  readonly id: string | null;
+  /** Absolute worktree path when the kind is about a directory; null otherwise. */
+  readonly path: string | null;
+  /** One actionable line. DISPLAY-ONLY — nothing parses it back. */
+  readonly detail: string;
+}
+
 /** Who asked for the stop — a DECLARATION, not an authentication (spec §4.1).
  *  `--surface pwa` means the caller said it was the PWA; a session that shells
  *  `ccd stop` from its own Bash tool passes no flag and records `cli`, which is
