@@ -1,6 +1,6 @@
 import { buildServer, type Deps } from './server.js';
 import { loadConfig } from './config.js';
-import { readBuildInfo } from './buildinfo.js';
+import { readBuildInfo, type BuildInfo } from './buildinfo.js';
 import { realRunner, Tmux } from './exec.js';
 import { ccdRunner } from './lifecycle.js';
 import { localIO } from './io.js';
@@ -110,6 +110,12 @@ if (cfg.fleetMode === 'remote') {
     // `'divergent'`. Reporting a digest here would be reporting agreement
     // with ourselves, which is the one answer the banner must not show.
     rosterFp: null as string | null,
+    // Null for the same reason, one comparison down: `build` on this object
+    // means "what the OTHER box reported", and in local mode there is no other
+    // box. Putting this process's own stamp here would make `buildAgreement`
+    // compare it with itself and answer `'agreed'` — a green tick for a check
+    // that never ran, and the one answer worse than saying nothing.
+    build: null as BuildInfo | null,
   };
   void readLocalCcdCaps(cfg.ccdBin).then((verbs) => {
     if (verbs !== null) fleetState.ccdVerbs = verbs;
