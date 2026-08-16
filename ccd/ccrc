@@ -202,6 +202,15 @@ cmd_version() {
 # check's job, and keeping the decision inside the check is what makes "one
 # table entry plus one test" the true cost of adding one.
 #
+# A COMPLETE INSTALL IS THREE FILES IN ONE DIRECTORY, not two: this script,
+# `ccrc-doctor-checks`, and `ccrc-wrapper-shape` (which the checks file sources
+# for the account-wrapper contract it shares with `ccrc-adopt`). All three
+# resolve each other through `${BASH_SOURCE[0]}`, which bash does NOT follow
+# through a symlink, so linking `ccrc` onto PATH does not drag its siblings
+# along — whatever installs one has to install all three. A missing library is
+# not fatal here: `_check_wrappers` reports its own absence as a FAIL with a
+# remedy, so the other ten checks still answer.
+#
 # Ways this refuses rather than reporting a healthy box it never measured — a
 # doctor that runs zero checks and exits 0 is the worst failure mode this verb
 # has:

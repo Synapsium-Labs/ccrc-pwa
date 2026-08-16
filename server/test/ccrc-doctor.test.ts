@@ -35,7 +35,7 @@
 // where a test wants the timeout path exercised).
 import { describe, it, expect } from 'vitest';
 import { spawnSync, execFileSync } from 'node:child_process';
-import { writeFileSync, mkdirSync, symlinkSync, rmSync, chmodSync } from 'node:fs';
+import { writeFileSync, readFileSync, mkdirSync, symlinkSync, rmSync, chmodSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
@@ -45,6 +45,12 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
 const CCRC_SRC = join(REPO, 'ccd', 'ccrc');
 const CHECKS_SRC = join(REPO, 'ccd', 'ccrc-doctor-checks');
+/** The THIRD file that ships beside `ccrc` — the wrapper-shape contract both
+ *  `ccrc-adopt` and `_check_wrappers` source. It is a separate install artifact,
+ *  not a detail: `ccrc` reaches its siblings through `${BASH_SOURCE[0]}`, which
+ *  bash does not resolve through a symlink, so all three must land in the same
+ *  directory. The "library missing" test below is the mechanism that says so. */
+const LIB_SRC = join(REPO, 'ccd', 'ccrc-wrapper-shape');
 
 /** bash's absolute path, resolved ONCE under this process's real PATH. Every
  *  spawn below hands the child a PATH built only from fixture directories, and
@@ -70,6 +76,7 @@ function installCcrc(home: string): void {
   mkdirSync(ccd, { recursive: true });
   symlinkSync(CCRC_SRC, join(ccd, 'ccrc'));
   symlinkSync(CHECKS_SRC, join(ccd, 'ccrc-doctor-checks'));
+  symlinkSync(LIB_SRC, join(ccd, 'ccrc-wrapper-shape'));
 }
 
 const ccrcIn = (home: string): string => join(home, 'ccrc', 'ccd', 'ccrc');
@@ -159,6 +166,83 @@ function stubLoginctl(home: string): void {
     + 'echo "fixture loginctl: unexpected argv: $*" >&2; exit 90');
 }
 
+// ── the roster, and the wrappers it describes ─────────────────────────────
+// `_check_wrappers` compares two things this box really has: the roster
+// (`~/.ccrc/accounts.json`) and the account wrappers in `~/.local/bin`. Both
+// halves are fixtures here, and both are written in the shape MEASURED on the
+// fleet host (adopt.test.ts:62-111 is the same measurement, from the other
+// side).
+
+interface RosterEntry {
+  id: string;
+  configDirSuffix?: string;
+  exec: { kind: 'upstream' | 'generated' | 'external'; secretsFile?: string };
+}
+
+/** The upstream account every real roster has exactly one of — `parseRoster`
+ *  refuses one without it, and `healthy()` plants its binary. */
+const UPSTREAM: RosterEntry = { id: 'claude', configDirSuffix: '.claude', exec: { kind: 'upstream' } };
+
+/** Writes `~/.ccrc/accounts.json`. Two fixture conveniences, both deliberate:
+ *  an entry with no `configDirSuffix` gets `.<id>` (the wrapper writer below
+ *  uses the same default, so a test that says nothing about config dirs is not
+ *  secretly a test about a mismatched one), and a list naming no upstream
+ *  account gets `claude` prepended — a test about a generated wrapper must not
+ *  also be a test about a roster that could never load. */
+function writeRoster(home: string, accounts: RosterEntry[]): void {
+  const full = accounts.some((a) => a.exec.kind === 'upstream') ? accounts : [UPSTREAM, ...accounts];
+  mkdirSync(join(home, '.ccrc'), { recursive: true });
+  writeFileSync(join(home, '.ccrc', 'accounts.json'), JSON.stringify(
+    { version: 1, accounts: full.map((a) => ({ configDirSuffix: `.${a.id}`, ...a })) }, null, 2));
+}
+
+const binDir = (home: string): string => {
+  const d = join(home, '.local', 'bin');
+  mkdirSync(d, { recursive: true });
+  return d;
+};
+
+/** A generated wrapper, byte-for-byte the shape on the fleet host: the shebang,
+ *  the export, an optional comment-then-guard secrets pair, the exec. */
+function writeWrapper(home: string, id: string,
+  o: { cfgDir?: string; secrets?: string; target?: string } = {}): void {
+  const lines = ['#!/usr/bin/env bash', `export CLAUDE_CONFIG_DIR="$HOME/${o.cfgDir ?? `.${id}`}"`];
+  if (o.secrets !== undefined) {
+    // The comment is not decoration: the two real generated wrappers on the
+    // fleet host both carry one ahead of their secrets line, and a shape test
+    // that could not tolerate it would reject every real wrapper there is.
+    lines.push("# Long-lived setup token (see the file's own header for why). Sourced, not",
+      '# inlined, so the token never sits in this world-readable wrapper.',
+      `[ -r "$HOME/${o.secrets}" ] && . "$HOME/${o.secrets}"`);
+  }
+  lines.push(`exec "$HOME/.local/bin/${o.target ?? 'claude'}" "$@"`, '');
+  writeFileSync(join(binDir(home), id), lines.join('\n'), { mode: 0o755 });
+}
+
+/** The upstream account's own shape: a non-script binary. The real one is a
+ *  ~300 MB ELF; a few bytes prove "not a script" without the wait. */
+function writeBinary(home: string, id: string): void {
+  writeFileSync(join(binDir(home), id),
+    '\x7fELF\x02\x01\x01\x00not-a-real-binary-just-a-fixture-marker', { mode: 0o755 });
+}
+
+/** An EXTERNAL account, in the shape the reference box has it: `gpt` is a
+ *  symlink to `ccgpt`, a bespoke launcher that sets CLAUDE_CONFIG_DIR and is
+ *  nothing like the generated template. Both names are planted, because the
+ *  alias is half of what makes this case real. */
+function writeSymlinkWrapper(home: string, id: string, target: string): void {
+  writeFileSync(join(binDir(home), target), [
+    '#!/usr/bin/env bash',
+    '# bespoke: drives its own proxy; nothing like the generated template.',
+    `export CLAUDE_CONFIG_DIR="$HOME/.${id}"`,
+    'echo "starting proxy..." >&2',
+    'ensure_proxy_running',
+    'exec "$HOME/.local/bin/some-other-thing" "$@"',
+    '',
+  ].join('\n'), { mode: 0o755 });
+  symlinkSync(target, join(binDir(home), id));
+}
+
 const shq = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
 
 /** Overwrites the POISONED `gh` in `<home>/.local/bin` with one that answers
@@ -236,6 +320,11 @@ function healthy(prefix: string): string {
   writeFileSync(join(home, 'fixture-linger'), 'yes\n');
   ghStub(home, GH_OK, 0);
   linkReal(home, 'timeout');
+  // A healthy box HAS a roster, and what the roster says is on disk. The
+  // smallest true one: the upstream account and its binary. Every wrappers test
+  // below starts here and adds (or replaces) exactly what it is about.
+  writeBinary(home, 'claude');
+  writeRoster(home, [UPSTREAM]);
   return home;
 }
 
@@ -582,6 +671,268 @@ describe('ccrc doctor: linger', () => {
   it('passes when linger is enabled', () => {
     const home = healthy('ccrc-doctor-linger-ok-');
     expect(lineFor(runDoctor(home).stdout, 'linger')).toMatch(/^PASS linger: enabled/);
+  });
+});
+
+// ── the roster against the wrappers on disk ───────────────────────────────
+// Task 5. Deliberately stronger than the spec's "wrappers present and
+// executable", because presence was never the failure mode: D-69 is a wrapper
+// that is present, executable, and sourcing a secrets file its roster entry
+// does not mention — which is invisible to every check that only stats a file.
+
+describe('ccrc doctor: wrappers', () => {
+  it('fails when a generated account declares no secretsFile but its wrapper sources one', () => {
+    // D-69, reproduced as a fixture: the exact live shape on the fleet host,
+    // where `claude-corp` is `{"kind":"generated"}` and its wrapper really does
+    // source .cc-secrets/claude-corp-oauth.env.
+    const home = healthy('ccrc-doctor-wrappers-d69-');
+    writeWrapper(home, 'acct-a', { cfgDir: '.acct-a', secrets: '.cc-secrets/acct-a.env' });
+    writeRoster(home, [{ id: 'acct-a', configDirSuffix: '.acct-a', exec: { kind: 'generated' } }]);
+    const r = runDoctor(home);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toMatch(/FAIL wrappers: acct-a/);
+    expect(r.stdout).toMatch(/sources \.cc-secrets\/acct-a\.env.*roster declares none/);
+  });
+
+  it('fails the other direction too — the roster declares a secretsFile the wrapper does not source', () => {
+    const home = healthy('ccrc-doctor-wrappers-reverse-');
+    writeWrapper(home, 'acct-a', { cfgDir: '.acct-a' });                    // no secrets line
+    writeRoster(home, [{
+      id: 'acct-a', configDirSuffix: '.acct-a',
+      exec: { kind: 'generated', secretsFile: '.cc-secrets/acct-a.env' },
+    }]);
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/FAIL wrappers: acct-a/);
+    // The SENTENCE, not just the path: "acct-a sources  but the roster declares
+    // …" is what a single catch-all comparison produces, and a verdict with a
+    // hole in it is a verdict an operator has to guess at. Measured — deleting
+    // this direction's own branch left every looser assertion green.
+    expect(r.stdout).toMatch(/acct-a sources no secrets file but the roster declares \.cc-secrets\/acct-a\.env/);
+    expect(r.code).toBe(1);
+  });
+
+  it('fails when a roster account has no wrapper at all', () => {
+    const home = healthy('ccrc-doctor-wrappers-ghost-');
+    writeRoster(home, [{ id: 'ghost', exec: { kind: 'generated' } }]);
+    const r = runDoctor(home);
+    expect(r.code).toBe(1);
+    // `$HOME` as written, not as resolved: it is how the wrapper spells its own
+    // paths, so the operator can grep for the same string.
+    expect(r.stdout).toMatch(/FAIL wrappers: ghost .*no executable at \$HOME\/\.local\/bin\/ghost/);
+  });
+
+  it('describes the account it is talking about, not whichever one came last in the roster', () => {
+    // The finding names an id AND describes a file; both have to be the same
+    // account. A `local dir="$1" id="$2" p="…/$id"` builds `p` from the
+    // CALLER's `id` — bash expands the whole `local` before any name becomes
+    // local — so the missing account got measured against the LAST roster
+    // entry's wrapper and was reported with the wrong sentence. Invisible
+    // whenever the missing account happens to be last, which is why this
+    // fixture puts a real, present wrapper after it.
+    const home = healthy('ccrc-doctor-wrappers-wrong-account-');
+    writeSymlinkWrapper(home, 'zz-last', 'zz-bespoke');
+    writeRoster(home, [
+      { id: 'ghost', exec: { kind: 'generated' } },
+      { id: 'zz-last', exec: { kind: 'external' } },
+    ]);
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/ghost has no executable at \$HOME\/\.local\/bin\/ghost/);
+    expect(r.stdout).not.toMatch(/ghost is declared generated but/);
+  });
+
+  it('fails when the wrapper points at a config dir the roster does not declare', () => {
+    const home = healthy('ccrc-doctor-wrappers-cfgdir-');
+    writeWrapper(home, 'acct-a', { cfgDir: '.somewhere-else' });
+    writeRoster(home, [{ id: 'acct-a', configDirSuffix: '.acct-a', exec: { kind: 'generated' } }]);
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/FAIL wrappers: acct-a/);
+    expect(r.stdout).toMatch(/\.somewhere-else.*\.acct-a/);
+    expect(r.code).toBe(1);
+  });
+
+  it('fails when a generated wrapper execs something other than the roster\'s upstream account', () => {
+    const home = healthy('ccrc-doctor-wrappers-target-');
+    writeWrapper(home, 'acct-a', { target: 'some-other-binary' });
+    writeRoster(home, [{ id: 'acct-a', exec: { kind: 'generated' } }]);
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/FAIL wrappers: acct-a/);
+    expect(r.stdout).toMatch(/some-other-binary/);
+    expect(r.code).toBe(1);
+  });
+
+  it('leaves an external account alone — ccrc records it and never touches it', () => {
+    // `gpt` on the reference box is a symlink to a bespoke script. It has no
+    // generated shape and must not be reported as broken for lacking one — nor
+    // may its symlink TARGET be reported as an account of its own.
+    const home = healthy('ccrc-doctor-wrappers-external-');
+    writeSymlinkWrapper(home, 'ext-a', 'bespoke-tool');
+    writeRoster(home, [{ id: 'ext-a', exec: { kind: 'external' } }]);
+    const r = runDoctor(home);
+    expect(r.stdout).not.toMatch(/ext-a/);
+    expect(r.stdout).not.toMatch(/bespoke-tool/);
+    expect(lineFor(r.stdout, 'wrappers')).toMatch(/^PASS wrappers: /);
+  });
+
+  it('passes when the upstream account is a non-script binary, which is its normal shape', () => {
+    const home = healthy('ccrc-doctor-wrappers-upstream-');
+    writeBinary(home, 'up');                       // the real claude is a 300MB ELF
+    writeRoster(home, [{ id: 'up', exec: { kind: 'upstream' } }]);
+    const r = runDoctor(home);
+    expect(r.stdout).not.toMatch(/FAIL wrappers/);
+    expect(r.code).toBe(0);
+  });
+
+  it('names what it measured when everything agrees, never the bare word "ok"', () => {
+    const home = healthy('ccrc-doctor-wrappers-ok-');
+    writeWrapper(home, 'acct-a', { secrets: '.cc-secrets/acct-a.env' });
+    writeRoster(home, [{
+      id: 'acct-a', exec: { kind: 'generated', secretsFile: '.cc-secrets/acct-a.env' },
+    }]);
+    const line = lineFor(runDoctor(home).stdout, 'wrappers');
+    expect(line).toMatch(/^PASS wrappers: /);
+    expect(line).toMatch(/2 accounts/);
+    expect(line).toContain('accounts.json');
+  });
+
+  it('WARNS about a wrapper on disk the roster describes nowhere — reported, never resolved', () => {
+    // adopt's bias rule (ccrc-adopt:32-39), carried over: the ambiguous case is
+    // REPORTED. It is not a FAIL — keeping a launcher the fleet does not drive
+    // is a legitimate thing to do — but a silent pass would hide the account
+    // that was added to disk and never written down.
+    const home = healthy('ccrc-doctor-wrappers-undeclared-');
+    writeWrapper(home, 'stray', { cfgDir: '.stray' });
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^WARN wrappers: .*stray/m);
+    expect(r.code).toBe(0);
+  });
+
+  it('does not count a symlink alias of a declared wrapper as a second account', () => {
+    // The measured shape: `gpt -> ccgpt`, both in ~/.local/bin, one file. The
+    // alias is not an undeclared account, and saying it is would make the WARN
+    // above fire on every box that has one.
+    const home = healthy('ccrc-doctor-wrappers-alias-');
+    writeSymlinkWrapper(home, 'ext-a', 'ccgpt-like');
+    writeRoster(home, [{ id: 'ext-a', exec: { kind: 'external' } }]);
+    expect(runDoctor(home).stdout).not.toMatch(/ccgpt-like/);
+  });
+
+  it('fails when this box has no roster at all, rather than reporting agreement nobody measured', () => {
+    const home = healthy('ccrc-doctor-wrappers-noroster-');
+    rmSync(join(home, '.ccrc', 'accounts.json'), { force: true });
+    const r = runDoctor(home);
+    // "absent" and "there is something there but it is not a file" are two
+    // conditions an operator acts on differently, so the message is asserted,
+    // not just the FAIL: measured, deleting the absent branch left the file's
+    // NEXT guard answering for it with the wrong sentence, and every looser
+    // assertion stayed green.
+    expect(r.stdout).toMatch(/^FAIL wrappers: no account roster at \$HOME\/\.ccrc\/accounts\.json/m);
+    expect(r.code).toBe(1);
+  });
+
+  it('refuses a roster with zero accounts rather than reporting agreement nobody measured', () => {
+    // A scan over an empty list passes everything — this suite's own recurring
+    // failure mode, and the reason `runs every check in the table` exists.
+    const home = healthy('ccrc-doctor-wrappers-empty-');
+    writeFileSync(join(home, '.ccrc', 'accounts.json'), JSON.stringify({ version: 1, accounts: [] }));
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^FAIL wrappers: .*zero accounts/m);
+    expect(r.code).toBe(1);
+  });
+
+  it('a secrets guard that TESTS one path and SOURCES another is not the generated shape', () => {
+    // The bug class `_wrap_parse_shape` reconstructs-and-compares to avoid
+    // (ccrc-wrapper-shape, "EACH SIGNIFICANT LINE IS CHECKED BY STRIPPING"): a
+    // regex capturing two occurrences of the same path in one line silently
+    // accepts a MISMATCHED pair, and a wrapper that guards on a file it does
+    // not load is a wrapper that starts unauthenticated with no error at all.
+    const home = healthy('ccrc-doctor-wrappers-mismatched-pair-');
+    writeFileSync(join(binDir(home), 'acct-a'), [
+      '#!/usr/bin/env bash',
+      'export CLAUDE_CONFIG_DIR="$HOME/.acct-a"',
+      '[ -r "$HOME/.cc-secrets/acct-a.env" ] && . "$HOME/.cc-secrets/OTHER.env"',
+      'exec "$HOME/.local/bin/claude" "$@"',
+      '',
+    ].join('\n'), { mode: 0o755 });
+    writeRoster(home, [{
+      id: 'acct-a', configDirSuffix: '.acct-a',
+      exec: { kind: 'generated', secretsFile: '.cc-secrets/acct-a.env' },
+    }]);
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/FAIL wrappers: acct-a .*not the generated shape/);
+    expect(r.code).toBe(1);
+  });
+
+  it('a roster that does not parse is its own answer, not "no roster"', () => {
+    const home = healthy('ccrc-doctor-wrappers-badjson-');
+    writeFileSync(join(home, '.ccrc', 'accounts.json'), 'not json at all');
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^FAIL wrappers: .*does not parse/m);
+    expect(r.stdout).not.toMatch(/no account roster/);
+  });
+
+  it('fails loudly, and names the file, when the wrapper-shape library did not ship', () => {
+    // THE THIRD FILE. `ccrc` reaches its siblings through `${BASH_SOURCE[0]}`,
+    // which bash does not resolve through a symlink, so `ccrc`,
+    // `ccrc-doctor-checks` and `ccrc-wrapper-shape` must be installed into one
+    // directory together. This is that requirement as a mechanism rather than a
+    // sentence in a report.
+    const home = healthy('ccrc-doctor-wrappers-nolib-');
+    rmSync(join(home, 'ccrc', 'ccd', 'ccrc-wrapper-shape'), { force: true });
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^FAIL wrappers: .*ccrc-wrapper-shape/m);
+    expect(r.code).toBe(1);
+  });
+
+  // ── the security boundary ───────────────────────────────────────────────
+  it('does not read, print, or hash the contents of any secrets file', () => {
+    // The check compares PATHS. Reading the token would put it in a log — and
+    // doctor's output is exactly the thing an operator pastes into a ticket.
+    // Scanned across all three shipped files, not just the check's own: the
+    // wrapper-shape library is where the secrets PATH is parsed out.
+    for (const f of [CHECKS_SRC, LIB_SRC, CCRC_SRC]) {
+      const src = readFileSync(f, 'utf8');
+      expect(src, f).not.toMatch(/cat\s+[^\n]*cc-secrets|\$\(<[^\n]*cc-secrets/);
+      // The generic forms, not just the literal directory name: `$secrets` is
+      // what the parsed path is called, and every way of opening it is banned.
+      expect(src, f).not.toMatch(/(?:cat|source|md5sum|sha\d+sum|head|tail|mapfile|readarray)\s+[^\n|]*\$\{?(?:w?secrets|SECRETS)\b/);
+      expect(src, f).not.toMatch(/<\s*"?\$\{?(?:w?secrets|SECRETS)\b/);
+    }
+  });
+
+  it('never emits the contents of a secrets file it names — measured with a canary', () => {
+    // The source scan above catches the copy someone would write; this catches
+    // it however it was written. The file exists, it is readable, it is named
+    // in the verdict, and its content must not appear anywhere in the output.
+    const home = healthy('ccrc-doctor-wrappers-canary-');
+    const canary = 'sk-ccrc-canary-do-not-print-e4f19b';
+    mkdirSync(join(home, '.cc-secrets'), { recursive: true });
+    writeFileSync(join(home, '.cc-secrets', 'acct-a.env'), `CLAUDE_CODE_OAUTH_TOKEN=${canary}\n`);
+    writeWrapper(home, 'acct-a', { cfgDir: '.acct-a', secrets: '.cc-secrets/acct-a.env' });
+    writeRoster(home, [{ id: 'acct-a', configDirSuffix: '.acct-a', exec: { kind: 'generated' } }]);
+    const r = runDoctor(home);
+    expect(r.stdout).toContain('.cc-secrets/acct-a.env');   // the PATH is named
+    expect(r.stdout).not.toContain(canary);                 // the CONTENT is not
+    expect(r.stderr).not.toContain(canary);
+  });
+
+  it('answers the same whether the secrets file exists or not — it is a path, not a fact about a file', () => {
+    // Two boxes, one roster, one wrapper: with the secrets file present and
+    // absent. A check that stat'ed the path would answer differently, and would
+    // then be reporting on the token's existence rather than on the roster.
+    const withFile = healthy('ccrc-doctor-wrappers-sec-present-');
+    const without = healthy('ccrc-doctor-wrappers-sec-absent-');
+    for (const home of [withFile, without]) {
+      writeWrapper(home, 'acct-a', { cfgDir: '.acct-a', secrets: '.cc-secrets/acct-a.env' });
+      writeRoster(home, [{ id: 'acct-a', configDirSuffix: '.acct-a', exec: { kind: 'generated' } }]);
+    }
+    mkdirSync(join(withFile, '.cc-secrets'), { recursive: true });
+    writeFileSync(join(withFile, '.cc-secrets', 'acct-a.env'), 'TOKEN=x\n');
+    const line = lineFor(runDoctor(withFile).stdout, 'wrappers');
+    // Not two undefineds: this fixture is the D-69 shape, so there IS a verdict
+    // and it is a FAIL. Without this the comparison below passes on a box where
+    // the check never ran at all.
+    expect(line).toMatch(/^FAIL wrappers: acct-a /);
+    expect(line).toBe(lineFor(runDoctor(without).stdout, 'wrappers'));
   });
 });
 

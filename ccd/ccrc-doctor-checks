@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # ccrc-doctor-checks — the check TABLE `ccrc doctor` iterates, and each check's
-# implementation. Stage 2b, Task 4 of the 2026-08-15-stage2b-ccrc-cli-and-doctor
-# plan: the PREREQUISITE checks only. Roster/wrapper coherence (Task 5) and the
-# cross-box fleet agreement check (Task 7) are later tasks and add entries to
-# the same table.
+# implementation. Stage 2b of the 2026-08-15-stage2b-ccrc-cli-and-doctor plan:
+# the PREREQUISITE checks (Task 4) and roster/wrapper coherence (Task 5, the
+# `wrappers` entry at the bottom of this file). The cross-box fleet agreement
+# check (Task 7) is a later task and adds an entry to the same table.
 #
 # SOURCED, never executed — `ccrc`'s `cmd_doctor` does `. "$CCRC_HERE/ccrc-doctor-checks"`.
+# It in turn sources `ccrc-wrapper-shape` (see below), so a complete install is
+# THREE files in one directory, not two.
 # Split out of `ccrc` itself (plan, "Files") so a check is testable without the
 # CLI's whole argument surface, and so the table stays visible as data rather
 # than buried in a dispatch.
@@ -64,6 +66,25 @@ if [ -z "${CCRC_HERE:-}" ]; then
   CCRC_HERE="$(cd "${CCRC_HERE%/*}" && pwd)"
 fi
 
+# ── the wrapper contract, sourced rather than restated ────────────────────
+# `ccrc-wrapper-shape` is the THIRD file that ships beside `ccrc`, and it is
+# load-bearing rather than incidental: it holds the shape of a generated
+# account wrapper, which `ccrc-adopt` writes rosters FROM and `_check_wrappers`
+# checks rosters AGAINST. A second copy of that shape is how the two would
+# drift into agreeing with each other about a shape neither tool produces —
+# which would make the check worse than useless.
+#
+# Sourced BEST-EFFORT, not with `||` refusal, on purpose: a missing library
+# must not take the other ten checks down with it. `_check_wrappers` notices
+# its absence itself and says so in a verdict line with a remedy — see the top
+# of that function, and `ccrc-doctor.test.ts`'s "did not ship" case, which is
+# the mechanism that keeps the install honest.
+CCRC_WRAPPER_LIB="$CCRC_HERE/ccrc-wrapper-shape"
+if [ -r "$CCRC_WRAPPER_LIB" ]; then
+  # shellcheck source=ccrc-wrapper-shape
+  . "$CCRC_WRAPPER_LIB"
+fi
+
 # How long `gh auth status` (the one check that touches the network) may take.
 # Overridable for the same reason `deploy/verify-service.sh:56-62` makes its
 # settle/window knobs overridable: so a test need not wait out a production
@@ -86,6 +107,7 @@ CCRC_DOCTOR_CHECKS=(
   gh_auth
   git_email
   linger
+  wrappers
 )
 
 # ── verdict helpers ───────────────────────────────────────────────────────
@@ -437,4 +459,355 @@ _check_linger() {
         "check by hand: loginctl show-user $UID --property=Linger"
       return 1 ;;
   esac
+}
+
+# ── the roster against the wrappers on disk ───────────────────────────────
+# THE CHECK THAT FOUND D-69. It is deliberately stronger than "the wrappers
+# are present and executable", because presence was never the failure mode:
+# the fleet host's `claude-corp` is present, executable, and sources
+# `.cc-secrets/claude-corp-oauth.env` while its roster entry says
+# `{"kind":"generated"}` with no secretsFile at all. Every check that only
+# stats a file passes that box.
+#
+# ── WHAT IT COMPARES, AND WHAT IT REFUSES TO DO ──────────────────────────
+# `~/.ccrc/accounts.json` (the roster — the source of truth, hand-owned) vs.
+# `~/.local/bin/<id>` (the wrappers — hand-made on each box; nothing in this
+# repository generates one yet). It REPORTS disagreement and resolves none of
+# it, which is `ccrc-adopt`'s own bias rule (that file's header, "the direction
+# of every uncertain call") applied to a tool that cannot write either side.
+#
+# ── PATHS ONLY. THE SECRETS FILE IS NEVER OPENED ─────────────────────────
+# The wrapper's secrets line names a path; this check compares that path with
+# the path the roster names, and stops there. It never opens, reads, stats,
+# sources or hashes the file — not even to say whether it exists — because
+# doctor's output is precisely what an operator pastes into a ticket, and a
+# token that is never read cannot be printed. `ccrc-doctor.test.ts` pins both
+# halves: a source scan for every reading construct, and a canary token planted
+# in a real secrets file that must not appear in the output.
+#
+# ── HOW THE TWO KINDS OF FINDING DIFFER ──────────────────────────────────
+# A check answers with ONE verdict, so the findings are sorted into two
+# classes and the worse one wins:
+#   FAIL — the roster DESCRIBES an account and disk contradicts the
+#          description. Somebody is going to act on a fact that is false.
+#   WARN — disk holds a launcher the roster describes nowhere. Ambiguous, and
+#          possibly deliberate (a box may keep a launcher the fleet does not
+#          drive), so it is reported and not silently passed — the same
+#          treatment `ccrc-adopt` gives its own cross-check findings, which
+#          print but never change its exit code.
+#
+# ── AN `external` ACCOUNT IS LEFT ALONE ──────────────────────────────────
+# `gpt` on the reference box is a symlink to a bespoke 142-line launcher. ccrc
+# RECORDS external accounts and never writes them, so lacking the generated
+# shape is not a defect for one — reporting it as broken would be reporting on
+# a contract nobody ever made. Its wrapper's existence is still checked; its
+# CONTENT is not read.
+
+# Findings are joined onto the one verdict line with "; ". Built here rather
+# than with `printf '%s; '` so the last one carries no trailing separator.
+_dr_wr_join() {
+  local out="" x
+  for x in "$@"; do [ -z "$out" ] || out+="; "; out+="$x"; done
+  printf '%s' "$out"
+}
+
+# Membership, without a subprocess or an associative array — the caller has the
+# candidate list as a plain array and needs one question answered about it.
+_dr_wr_has() {
+  local x="$1" y
+  shift
+  for y in "$@"; do [ "$y" = "$x" ] && return 0; done
+  return 1
+}
+
+# `_wrap_set_diff`'s callback. It appends to `wr_hard`/`wr_soft`, which are
+# `_check_wrappers`'s locals — bash's dynamic scope makes them visible here,
+# which is what lets the set difference stay generic while its two callers say
+# entirely different things about the same arithmetic.
+#
+# The a-only branch MEASURES before it words its finding: "the roster expects a
+# wrapper here and there is no CLAUDE_CONFIG_DIR-setting script of that name"
+# is four distinguishable states on disk (nothing, a dangling symlink, a file
+# that is not executable, a file that is not a wrapper), and an operator does
+# something different about each. Collapsing them into one message is the
+# overloaded-seam mistake this codebase bans by name.
+_dr_wr_note() {
+  local dir="$1" id="$2"
+  # TWO `local` statements, and it must stay that way: bash expands every
+  # word of a single `local a=… b="$a"` BEFORE any of the names becomes local,
+  # so `p` would be built from the CALLER's `id` — which `_check_wrappers` has,
+  # left over from its own loops. Measured: `local id="$2" p="pre/$id"` with an
+  # outer id set prints `p=pre/<outer>`. That is a silent wrong answer (the
+  # finding names the right account and describes a different file), which is
+  # why the pinning test below uses an account that is not the last one in the
+  # roster.
+  local p="$WRAPPER_BIN_DIR/$id"
+  case "$dir" in
+    a-only)
+      if [ -L "$p" ] && [ ! -e "$p" ]; then
+        wr_hard+=("$id's \$HOME/.local/bin/$id is a symlink to a path that does not exist")
+      elif [ ! -e "$p" ]; then
+        wr_hard+=("$id has no executable at \$HOME/.local/bin/$id")
+      elif [ ! -x "$p" ]; then
+        wr_hard+=("$id's \$HOME/.local/bin/$id is not executable")
+      elif ! _wrap_is_script "$p"; then
+        wr_hard+=("$id is declared ${wr_kind[$id]} but \$HOME/.local/bin/$id is not a script")
+      else
+        wr_hard+=("$id is declared ${wr_kind[$id]} but \$HOME/.local/bin/$id sets no CLAUDE_CONFIG_DIR")
+      fi
+      ;;
+    b-only)
+      case "${wr_kind[$id]:-}" in
+        upstream)
+          # The upstream account is BY DEFINITION invoked with
+          # CLAUDE_CONFIG_DIR unset (ccrc-adopt's header) — a wrapper here
+          # means every other account's exec lands in someone else's config dir.
+          wr_hard+=("$id is the roster's upstream account, but \$HOME/.local/bin/$id is a script that sets CLAUDE_CONFIG_DIR") ;;
+        "")
+          wr_soft+=("$id sets CLAUDE_CONFIG_DIR in \$HOME/.local/bin but no roster account describes it") ;;
+      esac
+      ;;
+  esac
+}
+
+_check_wrappers() {
+  # THE LIBRARY IS A SEPARATE INSTALL ARTIFACT. `ccrc` finds its siblings
+  # through `${BASH_SOURCE[0]}`, which bash does not resolve through a symlink,
+  # so a link to `ccrc` on PATH does not rescue a missing one: all three files
+  # have to land in the same directory. Said as a verdict rather than a comment
+  # because an install that ships two of the three is otherwise a check that
+  # silently stops checking.
+  if ! declare -F _wrap_parse_shape >/dev/null 2>&1; then
+    _dr_fail wrappers "the wrapper-shape library did not load, so the roster and \$HOME/.local/bin were never compared — expected it at $CCRC_WRAPPER_LIB" \
+      "install ccrc-wrapper-shape into the same directory as ccrc and ccrc-doctor-checks (all three resolve each other through \${BASH_SOURCE[0]}, and bash does not follow that through a symlink)"
+    return 1
+  fi
+
+  local bin="$WRAPPER_BIN_DIR" roster="$HOME/.ccrc/accounts.json"
+  local -a wr_hard=() wr_soft=()
+
+  if [ ! -e "$roster" ]; then
+    _dr_fail wrappers "no account roster at \$HOME/.ccrc/accounts.json, so nothing on this box says what \$HOME/.local/bin is supposed to hold" \
+      "bootstrap one from what is already on disk: bash ccd/ccrc-adopt --out /tmp/accounts.json, read it, then move it to \$HOME/.ccrc/accounts.json"
+    return 1
+  fi
+  if [ ! -f "$roster" ]; then
+    _dr_fail wrappers "\$HOME/.ccrc/accounts.json is not a regular file, so the roster cannot be read" \
+      "look at what is there — check with: ls -ld \$HOME/.ccrc/accounts.json"
+    return 1
+  fi
+  if ! command -v node >/dev/null 2>&1; then
+    # Read by node rather than jq for the reason `_check_node` gives at its own
+    # parse: this check must not fail for a reason that belongs to another one.
+    # A box with no jq gets exactly one FAIL, from the jq check.
+    _dr_fail wrappers "node is not on PATH, so \$HOME/.ccrc/accounts.json cannot be read" \
+      "install Node first — see the 'node' check above"
+    return 1
+  fi
+
+  # READING the file and PARSING it are separated for the same reason
+  # `_check_node` separates them: a mode/ownership problem and a corrupt file
+  # are two conditions an operator acts on completely differently.
+  #   exit 5 = cannot be read (prints "READERR:<code>")
+  #   exit 3 = does not parse; exit 4 = no accounts array; exit 6 = it is empty.
+  local tsv rc
+  tsv="$(CCRC_DOCTOR_ROSTER="$roster" node -e '
+    const fs = require("fs");
+    let text;
+    try { text = fs.readFileSync(process.env.CCRC_DOCTOR_ROSTER, "utf8"); }
+    catch (e) { process.stdout.write("READERR:" + (e && e.code ? e.code : "unknown")); process.exit(5); }
+    let j;
+    try { j = JSON.parse(text); } catch (e) { process.exit(3); }
+    if (!j || typeof j !== "object" || !Array.isArray(j.accounts)) process.exit(4);
+    if (j.accounts.length === 0) process.exit(6);
+    const s = (v) => (typeof v === "string" ? v.replace(/[\t\r\n]/g, " ") : "");
+    process.stdout.write(j.accounts.map((a) => {
+      const o = (a && typeof a === "object") ? a : {};
+      const e = (o.exec && typeof o.exec === "object") ? o.exec : {};
+      return [s(o.id), s(o.configDirSuffix), s(e.kind), s(e.secretsFile)].join("\t");
+    }).join("\n"));
+  ' 2>/dev/null)"; rc=$?
+
+  if [ "$rc" -eq 5 ]; then
+    local why="${tsv#READERR:}"
+    [ -n "$why" ] && [ "$why" != "$tsv" ] || why="unreadable"
+    _dr_fail wrappers "\$HOME/.ccrc/accounts.json exists but cannot be read ($why), so the roster cannot be compared with anything" \
+      "fix its mode/ownership — check with: ls -l \$HOME/.ccrc/accounts.json"
+    return 1
+  fi
+  if [ "$rc" -eq 3 ]; then
+    _dr_fail wrappers "\$HOME/.ccrc/accounts.json does not parse as JSON, so this box's roster cannot be read" \
+      "restore it from a backup, or rebuild it from disk: bash ccd/ccrc-adopt --out /tmp/accounts.json"
+    return 1
+  fi
+  if [ "$rc" -eq 4 ]; then
+    _dr_fail wrappers "\$HOME/.ccrc/accounts.json parses but declares no accounts array" \
+      "it must be {\"version\":1,\"accounts\":[…]} — rebuild it from disk: bash ccd/ccrc-adopt --out /tmp/accounts.json"
+    return 1
+  fi
+  if [ "$rc" -eq 6 ]; then
+    # A scan over an empty list passes everything, and a doctor that reports a
+    # healthy box by measuring nothing is the worst failure this verb has.
+    _dr_fail wrappers "\$HOME/.ccrc/accounts.json declares zero accounts — refusing to report agreement nobody measured" \
+      "rebuild it from disk: bash ccd/ccrc-adopt --out /tmp/accounts.json"
+    return 1
+  fi
+  if [ "$rc" -ne 0 ]; then
+    _dr_fail wrappers "reading \$HOME/.ccrc/accounts.json exited $rc — this check does not know what that means" \
+      "this is a bug in ccrc, not a fact about your box — see _check_wrappers in $CCRC_HERE/ccrc-doctor-checks"
+    return 1
+  fi
+
+  # ── the roster side ────────────────────────────────────────────────────
+  local -A wr_kind=() wr_suffix=() wr_secrets=()
+  local -a wr_ids=()
+  local id suffix kind secrets
+  local n_up=0 n_gen=0 n_ext=0 upstream_id=""
+  while IFS=$'\t' read -r id suffix kind secrets; do
+    if [ -z "$id" ]; then
+      wr_hard+=("the roster holds an account with no id")
+      continue
+    fi
+    if [[ -v wr_kind[$id] ]]; then
+      wr_hard+=("$id is declared twice in the roster")
+      continue
+    fi
+    wr_ids+=("$id"); wr_kind["$id"]="$kind"; wr_suffix["$id"]="$suffix"; wr_secrets["$id"]="$secrets"
+    case "$kind" in
+      upstream)  n_up=$((n_up + 1)); [ -n "$upstream_id" ] || upstream_id="$id" ;;
+      generated) n_gen=$((n_gen + 1)) ;;
+      external)  n_ext=$((n_ext + 1)) ;;
+    esac
+  done <<< "$tsv"
+
+  if [ ! -d "$bin" ]; then
+    _dr_fail wrappers "no \$HOME/.local/bin at all, so the roster's ${#wr_ids[@]} accounts have nowhere to live" \
+      "create it and install the wrappers the roster describes — an account is an executable at \$HOME/.local/bin/<id>"
+    return 1
+  fi
+
+  # ── the disk side ──────────────────────────────────────────────────────
+  # `ccrc-adopt`'s own candidate rule, run through the same functions: an
+  # id-shaped executable that is a script and sets CLAUDE_CONFIG_DIR. Anything
+  # looser would report every tool in ~/.local/bin as an undeclared account;
+  # anything narrower would miss the account somebody added and never wrote
+  # down. The upstream account is deliberately NOT in this set — it is a binary,
+  # not a wrapper, and it is checked on its own below.
+  local -a wr_cands=()
+  local f name had_nullglob=0
+  shopt -q nullglob && had_nullglob=1
+  shopt -s nullglob
+  for f in "$bin"/*; do
+    [ -f "$f" ] || continue
+    [ -x "$f" ] || continue
+    name="${f##*/}"
+    [[ "$name" =~ $WRAPPER_ID_RE ]] || continue
+    _wrap_is_script "$f" || continue
+    _wrap_declares_config_dir "$f" || continue
+    wr_cands+=("$name")
+  done
+  [ "$had_nullglob" -eq 1 ] || shopt -u nullglob
+
+  # Drop a candidate that IS a declared account's wrapper under a second name.
+  # The measured case is `gpt -> ccgpt`, both in ~/.local/bin, one file: adopt
+  # drops the alias too (its pass 0.5) or it would propose two accounts fighting
+  # over one CLAUDE_CONFIG_DIR. `-ef` is a bash builtin comparing device+inode
+  # THROUGH the symlink, so this needs no `readlink` — and it catches a hard
+  # link, which `readlink` would not.
+  local -a wr_seen=()
+  local other alias_of
+  for name in ${wr_cands[@]+"${wr_cands[@]}"}; do
+    if [[ -v wr_kind[$name] ]]; then wr_seen+=("$name"); continue; fi
+    alias_of=""
+    for other in ${wr_ids[@]+"${wr_ids[@]}"}; do
+      [ -e "$bin/$other" ] || continue
+      if [ "$bin/$name" -ef "$bin/$other" ]; then alias_of="$other"; break; fi
+    done
+    [ -n "$alias_of" ] || wr_seen+=("$name")
+  done
+
+  # ── both directions, reported ──────────────────────────────────────────
+  # The roster ids that MUST be a CLAUDE_CONFIG_DIR-setting script on disk:
+  # generated (ccrc's own shape) and external (somebody else's shape, but still
+  # a wrapper). Upstream is excluded on purpose — a 300 MB ELF is its normal
+  # shape, and demanding a config-dir line of it would fail every healthy box.
+  local -a wr_expect=()
+  for id in ${wr_ids[@]+"${wr_ids[@]}"}; do
+    case "${wr_kind[$id]}" in generated|external) wr_expect+=("$id") ;; esac
+  done
+  _wrap_set_diff _dr_wr_note wr_expect wr_seen
+
+  # ── shape, for the accounts ccrc claims to own ─────────────────────────
+  local ok target wsuffix wsecrets
+  for id in ${wr_ids[@]+"${wr_ids[@]}"}; do
+    case "${wr_kind[$id]}" in
+      external)
+        # Recorded, never touched. Its wrapper's presence was checked above;
+        # its content is not this tool's business.
+        ;;
+      upstream)
+        if [ -L "$bin/$id" ] && [ ! -e "$bin/$id" ]; then
+          wr_hard+=("$id's \$HOME/.local/bin/$id is a symlink to a path that does not exist")
+        elif [ ! -e "$bin/$id" ]; then
+          wr_hard+=("$id has no executable at \$HOME/.local/bin/$id")
+        elif [ ! -x "$bin/$id" ]; then
+          wr_hard+=("$id's \$HOME/.local/bin/$id is not executable")
+        fi
+        ;;
+      generated)
+        # Absent from disk, or not a wrapper at all: already reported, in the
+        # words the measurement earned, by the set difference above.
+        _dr_wr_has "$id" ${wr_seen[@]+"${wr_seen[@]}"} || continue
+        IFS=$'\t' read -r ok target wsuffix wsecrets < <(_wrap_parse_shape "$bin/$id")
+        if [ "$ok" != ok ]; then
+          wr_hard+=("$id is declared generated but \$HOME/.local/bin/$id is not the generated shape (a shebang, an export, an optional secrets guard, an exec — and nothing else)")
+          continue
+        fi
+        if [ -z "${wr_suffix[$id]}" ]; then
+          wr_hard+=("$id's roster entry declares no configDirSuffix, so its wrapper's $wsuffix answers to nothing")
+        elif [ "$wsuffix" != "${wr_suffix[$id]}" ]; then
+          wr_hard+=("$id's wrapper sets CLAUDE_CONFIG_DIR to $wsuffix but the roster declares ${wr_suffix[$id]}")
+        fi
+        # THE D-69 SHAPE. Three ways to disagree, and all three are the same
+        # class of defect: a wrapper that loads (or fails to load) credentials
+        # nobody wrote down.
+        if [ -n "$wsecrets" ] && [ -z "${wr_secrets[$id]}" ]; then
+          wr_hard+=("$id sources $wsecrets but the roster declares none")
+        elif [ -z "$wsecrets" ] && [ -n "${wr_secrets[$id]}" ]; then
+          wr_hard+=("$id sources no secrets file but the roster declares ${wr_secrets[$id]}")
+        elif [ "$wsecrets" != "${wr_secrets[$id]}" ]; then
+          wr_hard+=("$id sources $wsecrets but the roster declares ${wr_secrets[$id]}")
+        fi
+        if [ -n "$upstream_id" ] && [ "$target" != "$upstream_id" ]; then
+          wr_hard+=("$id's wrapper execs \$HOME/.local/bin/$target, not the roster's upstream account $upstream_id")
+        fi
+        ;;
+      *)
+        wr_hard+=("$id's roster entry declares no exec.kind this check understands (\"${wr_kind[$id]}\")")
+        ;;
+    esac
+  done
+
+  if [ "$n_gen" -gt 0 ]; then
+    if [ "$n_up" -eq 0 ]; then
+      wr_soft+=("the roster declares no upstream account, so no generated wrapper's exec target could be checked")
+    elif [ "$n_up" -gt 1 ]; then
+      wr_soft+=("the roster declares $n_up upstream accounts; every exec target was checked against the first, $upstream_id")
+    fi
+  fi
+
+  # ── one verdict ────────────────────────────────────────────────────────
+  if [ "${#wr_hard[@]}" -gt 0 ]; then
+    _dr_fail wrappers \
+      "$(_dr_wr_join ${wr_hard[@]+"${wr_hard[@]}"} ${wr_soft[@]+"${wr_soft[@]}"})" \
+      "the roster is the source of truth and nothing here edits it for you — make \$HOME/.ccrc/accounts.json and the wrapper agree; 'bash ccd/ccrc-adopt --out /tmp/accounts.json' prints what a rediscovery from disk would say and writes nothing else"
+    return 1
+  fi
+  if [ "${#wr_soft[@]}" -gt 0 ]; then
+    _dr_warn wrappers \
+      "$(_dr_wr_join ${wr_soft[@]+"${wr_soft[@]}"})" \
+      "either describe it in \$HOME/.ccrc/accounts.json (adopt would call a bespoke launcher \"external\") or leave it be — ccrc never drives an account the roster does not name"
+    return 2
+  fi
+  _dr_pass wrappers "${#wr_ids[@]} accounts in \$HOME/.ccrc/accounts.json match \$HOME/.local/bin ($n_up upstream, $n_gen generated, $n_ext external)"
 }
