@@ -879,6 +879,60 @@ export function isSessionLifecycle(v: unknown): v is SessionLifecycle {
   return typeof v === 'string' && (SESSION_LIFECYCLES as readonly string[]).includes(v);
 }
 
+/** ccd's `_spawn` verdict as a word — a projection of the rc table ALREADY
+ *  written to `$REG/<id>.spawn` (`<epoch-seconds> <rc>`) and already parsed into
+ *  `SessionRecord.spawn: { at, rc } | null`. Derived ONCE, here, in L0.
+ *
+ *  There is no `spawnstate` registry field and there must never be one: the
+ *  timestamp in `spawn` is load-bearing (`_supervised_start` compares
+ *  `at >= since` to tell THIS attempt's failure from the previous one's), and a
+ *  word-only field would destroy it.
+ *
+ *  `unrecognised` is the designated-ignorance member: an rc this build never
+ *  heard of — rc 1, a ccd `die`, included — revives as that, never a throw and
+ *  never `ready`. Orthogonal to `SessionLifecycle`: this says how the LAST
+ *  SPAWN ATTEMPT ended, not what the row IS. A row can be `running` today after
+ *  a failed spawn yesterday, and collapsing one into the other would be an
+ *  adapter narrowing a distinction it received. */
+export type SpawnVerdict =
+  | 'ready' | 'login' | 'vanished' | 'expired' | 'blocked' | 'unrecognised';
+
+/** Same derived-enumeration discipline as `SESSION_LIFECYCLE_MAP` above:
+ *  `Record<SpawnVerdict, true>` fails LOUDLY (TS2739) on a member added to the
+ *  union with no key here, and the other way (TS2353) on a key the union does
+ *  not have. */
+const SPAWN_VERDICT_MAP: Record<SpawnVerdict, true> = {
+  ready: true, login: true, vanished: true, expired: true,
+  blocked: true, unrecognised: true,
+};
+export const SPAWN_VERDICTS: readonly SpawnVerdict[] =
+  Object.keys(SPAWN_VERDICT_MAP) as SpawnVerdict[];
+
+/** The only way to narrow an untrusted string to a `SpawnVerdict`. `unknown`
+ *  parameter, and the CONSTANT is cast rather than the input — `isPrPhase`'s
+ *  own rule, for its own reason. */
+export function isSpawnVerdict(v: unknown): v is SpawnVerdict {
+  return typeof v === 'string' && (SPAWN_VERDICTS as readonly string[]).includes(v);
+}
+
+/** ccd's rc table, in one place. `null` in -> `null` out, and `null` means NOT
+ *  RECORDED (`$REG/<id>.spawn` absent, or its rc unparseable — `registry.ts`
+ *  collapses both to `spawn: null` deliberately). rc 5 is `_spawn_settle`'s
+ *  hard-block verdict (`_pane_hard_blocked`); 3 and 4 are NOT renumbered,
+ *  because four ccd call sites plus `_supervised_start` branch on
+ *  `[[ "$rc" -eq 3 || "$rc" -eq 4 ]]`. */
+export function spawnVerdict(rc: number | null): SpawnVerdict | null {
+  if (rc === null) return null;
+  switch (rc) {
+    case 0: return 'ready';
+    case 2: return 'login';
+    case 3: return 'vanished';
+    case 4: return 'expired';
+    case 5: return 'blocked';
+    default: return 'unrecognised';
+  }
+}
+
 /** Who asked for the stop — a DECLARATION, not an authentication (spec §4.1).
  *  `--surface pwa` means the caller said it was the PWA; a session that shells
  *  `ccd stop` from its own Bash tool passes no flag and records `cli`, which is
