@@ -233,23 +233,32 @@ _wrap_parse_shape() {
 # original signature took `<label> <all of A...>` and worked only because it
 # closed over B. A caller must therefore not name its arrays `_wrap_diff_a` or
 # `_wrap_diff_b`, which bash would reject as a circular reference.
+#
+# EVERY LOCAL HERE IS `_wrap_*`-PREFIXED, and that is a correctness rule rather
+# than tidiness (Task 5 review, Minor 4): the callback runs INSIDE this
+# function's scope, so a bare `local x` here would shadow the caller's own `x`
+# for the duration of every callback — the same dynamic scope this design
+# relies on to hand the callback its caller's arrays would also hand it the
+# wrong `x`. The reserved names are therefore all of `_wrap_cb`,
+# `_wrap_diff_a`, `_wrap_diff_b`, `_wrap_x`, `_wrap_y`, `_wrap_found`, and a
+# callback must not read a variable of any of those names expecting its own.
 _wrap_set_diff() {
   local _wrap_cb="$1"
   local -n _wrap_diff_a="$2"
   local -n _wrap_diff_b="$3"
-  local x y found
-  for x in ${_wrap_diff_a[@]+"${_wrap_diff_a[@]}"}; do
-    found=0
-    for y in ${_wrap_diff_b[@]+"${_wrap_diff_b[@]}"}; do
-      [ "$y" = "$x" ] && { found=1; break; }
+  local _wrap_x _wrap_y _wrap_found
+  for _wrap_x in ${_wrap_diff_a[@]+"${_wrap_diff_a[@]}"}; do
+    _wrap_found=0
+    for _wrap_y in ${_wrap_diff_b[@]+"${_wrap_diff_b[@]}"}; do
+      [ "$_wrap_y" = "$_wrap_x" ] && { _wrap_found=1; break; }
     done
-    [ "$found" -eq 1 ] || "$_wrap_cb" a-only "$x"
+    [ "$_wrap_found" -eq 1 ] || "$_wrap_cb" a-only "$_wrap_x"
   done
-  for x in ${_wrap_diff_b[@]+"${_wrap_diff_b[@]}"}; do
-    found=0
-    for y in ${_wrap_diff_a[@]+"${_wrap_diff_a[@]}"}; do
-      [ "$y" = "$x" ] && { found=1; break; }
+  for _wrap_x in ${_wrap_diff_b[@]+"${_wrap_diff_b[@]}"}; do
+    _wrap_found=0
+    for _wrap_y in ${_wrap_diff_a[@]+"${_wrap_diff_a[@]}"}; do
+      [ "$_wrap_y" = "$_wrap_x" ] && { _wrap_found=1; break; }
     done
-    [ "$found" -eq 1 ] || "$_wrap_cb" b-only "$x"
+    [ "$_wrap_found" -eq 1 ] || "$_wrap_cb" b-only "$_wrap_x"
   done
 }

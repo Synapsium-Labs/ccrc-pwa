@@ -13,7 +13,7 @@
 # than buried in a dispatch.
 #
 # ── THE CONTRACT EVERY CHECK KEEPS ────────────────────────────────────────
-# `_check_<name>` prints exactly one verdict line to STDOUT
+# `_check_<name>` prints a verdict line to STDOUT
 #
 #     PASS|WARN|FAIL <name>: <detail>
 #
@@ -26,6 +26,23 @@
 # physically cannot emit a non-pass verdict without one. A check that only
 # complains sends an operator to a search engine; the remedy is the half that
 # makes doctor an instrument instead of an alarm.
+#
+# ── ONE CHECK MAY ANSWER IN TWO CLASSES ───────────────────────────────────
+# Almost every check prints exactly ONE verdict line. A check that has found
+# findings of two different classes may print a FAIL line and then a WARN line
+# — each with its own remedy — and returns the WORSE class (1). It is not a
+# licence to be chatty; it is the rule that stops the overloaded seam this
+# codebase bans by name. `_check_wrappers` is the case that forced it (Task 5
+# review, Important 1): "your roster and this wrapper disagree, fix one of
+# them" and "here is a launcher nobody wrote down, which may well be
+# deliberate" are two findings an operator acts on DIFFERENTLY, and joining
+# them into one FAIL sentence both laundered the second into a defect and
+# discarded the remedy that belonged to it.
+#
+# `ccrc`'s `cmd_doctor` counts VERDICT LINES, not return codes, so a check that
+# answers in two classes is counted in both — and it cross-checks the two
+# statements against each other: a return code that is not the worst class the
+# check printed is reported as a bug in ccrc.
 #
 # The verdict lines are the RESULT of the verb, so they go to stdout — NOT to
 # stderr through `_ccrc_say`, which `ccrc`'s own header (Task 1) had guessed
@@ -485,23 +502,48 @@ _check_linger() {
 # halves: a source scan for every reading construct, and a canary token planted
 # in a real secrets file that must not appear in the output.
 #
-# ── HOW THE TWO KINDS OF FINDING DIFFER ──────────────────────────────────
-# A check answers with ONE verdict, so the findings are sorted into two
-# classes and the worse one wins:
+# ── HOW THE TWO KINDS OF FINDING DIFFER, AND WHY THEY GET TWO LINES ──────
+# The findings are sorted into two classes, and each class gets its OWN
+# verdict line with its OWN remedy:
 #   FAIL — the roster DESCRIBES an account and disk contradicts the
 #          description. Somebody is going to act on a fact that is false.
+#          Remedy: make the roster and the wrapper agree.
 #   WARN — disk holds a launcher the roster describes nowhere. Ambiguous, and
 #          possibly deliberate (a box may keep a launcher the fleet does not
 #          drive), so it is reported and not silently passed — the same
 #          treatment `ccrc-adopt` gives its own cross-check findings, which
-#          print but never change its exit code.
+#          print but never change its exit code. Remedy: describe it, or leave
+#          it be.
+# Both lines when there is something of each class, and the check returns 1.
 #
-# ── AN `external` ACCOUNT IS LEFT ALONE ──────────────────────────────────
+# THEY USED TO BE JOINED INTO THE ONE FAIL LINE, and that was three collapses
+# at one seam (Task 5 review, Important 1), measured on the reference box where
+# the true reading is "one real defect (D-69) plus two deliberate launchers"
+# and the joined line said "three defects": the operator was told to make the
+# roster and the wrapper agree — the WRONG action for a launcher somebody keeps
+# on purpose — the WARN branch's own remedy was discarded unprinted, and the
+# summary counted `0 warned` while warn-class findings were on the screen.
+# `ccrc-doctor.test.ts` pins it BOTH ways: one test reddens if a soft finding
+# is folded back into the FAIL line, another if soft findings are dropped when
+# a hard one is present.
+#
+# ── AN `external` ACCOUNT IS CHECKED FOR EXISTENCE, AND NOTHING ELSE ─────
 # `gpt` on the reference box is a symlink to a bespoke 142-line launcher. ccrc
 # RECORDS external accounts and never writes them, so lacking the generated
 # shape is not a defect for one — reporting it as broken would be reporting on
-# a contract nobody ever made. Its wrapper's existence is still checked; its
-# CONTENT is not read.
+# a contract nobody ever made. It is checked for exactly what ccd needs of it:
+# there is an executable file at $HOME/.local/bin/<id>. Its CONTENT is never
+# read, and specifically: it may be a COMPILED launcher, and it may spell its
+# config dir any way it likes (`CLAUDE_CONFIG_DIR=… exec claude "$@"` on one
+# line, or not set it at all).
+#
+# That is not a relaxation, it is a bug fix (Task 5 review, Important 3): an
+# external id used to be required to be a script carrying a literal
+# `export CLAUDE_CONFIG_DIR=` line, because it was fed to the set difference
+# below against a candidate list built from exactly that test. Measured, a
+# legitimate external account FAILED the box — `ext-bin is declared external
+# but $HOME/.local/bin/ext-bin is not a script`. It passed on the reference box
+# only because `gpt` happens to match.
 
 # Findings are joined onto the one verdict line with "; ". Built here rather
 # than with `printf '%s; '` so the last one carries no trailing separator.
@@ -520,6 +562,33 @@ _dr_wr_has() {
   return 1
 }
 
+# IS THERE AN EXECUTABLE AT $HOME/.local/bin/<id> AT ALL — the one question
+# every roster account of every kind must answer yes to, because that path is
+# literally what ccd runs (ccd:7361). Three distinguishable ways to answer no,
+# because an operator does something different about each: a link whose target
+# was deleted is a broken install, an absent file is an install that never
+# happened, and a present non-executable file is a `chmod`. Appends to
+# `wr_hard` (its caller's local, by the same dynamic scope `_dr_wr_note` uses)
+# and returns 1 when it found something to say, so a caller can stop there
+# rather than go on to ask a question about a file that is not there.
+_dr_wr_present() {
+  local id="$1"
+  local p="$WRAPPER_BIN_DIR/$id"
+  if [ -L "$p" ] && [ ! -e "$p" ]; then
+    wr_hard+=("$id's \$HOME/.local/bin/$id is a symlink to a path that does not exist")
+    return 1
+  fi
+  if [ ! -e "$p" ]; then
+    wr_hard+=("$id has no executable at \$HOME/.local/bin/$id")
+    return 1
+  fi
+  if [ ! -x "$p" ]; then
+    wr_hard+=("$id's \$HOME/.local/bin/$id is not executable")
+    return 1
+  fi
+  return 0
+}
+
 # `_wrap_set_diff`'s callback. It appends to `wr_hard`/`wr_soft`, which are
 # `_check_wrappers`'s locals — bash's dynamic scope makes them visible here,
 # which is what lets the set difference stay generic while its two callers say
@@ -530,7 +599,9 @@ _dr_wr_has() {
 # is four distinguishable states on disk (nothing, a dangling symlink, a file
 # that is not executable, a file that is not a wrapper), and an operator does
 # something different about each. Collapsing them into one message is the
-# overloaded-seam mistake this codebase bans by name.
+# overloaded-seam mistake this codebase bans by name — and the two states that
+# are easiest to collapse, a DANGLING SYMLINK and a present-but-NOT-EXECUTABLE
+# file, have a test each that reddens when they are merged.
 _dr_wr_note() {
   local dir="$1" id="$2"
   # TWO `local` statements, and it must stay that way: bash expands every
@@ -544,16 +615,12 @@ _dr_wr_note() {
   local p="$WRAPPER_BIN_DIR/$id"
   case "$dir" in
     a-only)
-      if [ -L "$p" ] && [ ! -e "$p" ]; then
-        wr_hard+=("$id's \$HOME/.local/bin/$id is a symlink to a path that does not exist")
-      elif [ ! -e "$p" ]; then
-        wr_hard+=("$id has no executable at \$HOME/.local/bin/$id")
-      elif [ ! -x "$p" ]; then
-        wr_hard+=("$id's \$HOME/.local/bin/$id is not executable")
-      elif ! _wrap_is_script "$p"; then
-        wr_hard+=("$id is declared ${wr_kind[$id]} but \$HOME/.local/bin/$id is not a script")
-      else
-        wr_hard+=("$id is declared ${wr_kind[$id]} but \$HOME/.local/bin/$id sets no CLAUDE_CONFIG_DIR")
+      if _dr_wr_present "$id"; then
+        if ! _wrap_is_script "$p"; then
+          wr_hard+=("$id is declared ${wr_kind[$id]} but \$HOME/.local/bin/$id is not a script")
+        else
+          wr_hard+=("$id is declared ${wr_kind[$id]} but \$HOME/.local/bin/$id sets no CLAUDE_CONFIG_DIR")
+        fi
       fi
       ;;
     b-only)
@@ -620,7 +687,17 @@ _check_wrappers() {
     try { j = JSON.parse(text); } catch (e) { process.exit(3); }
     if (!j || typeof j !== "object" || !Array.isArray(j.accounts)) process.exit(4);
     if (j.accounts.length === 0) process.exit(6);
-    const s = (v) => (typeof v === "string" ? v.replace(/[\t\r\n]/g, " ") : "");
+    // A tab or a newline inside a value would break the TSV this prints, so
+    // they are ESCAPED rather than replaced by a space (Task 5 review, Minor
+    // 5). A space is a legal character in plenty of strings, so squashing
+    // "acct<TAB>b" down to "acct b" INVENTED an id that looks real, and the
+    // bash side then reported a finding about an account of that name. A
+    // backslash escape is not in the safe set WRAPPER_ID_RE allows, so the
+    // reader below rejects such an id outright instead, and prints it back
+    // the way it was actually spelled.
+    const s = (v) => (typeof v === "string"
+      ? v.replace(/\\/g, "\\\\").replace(/\t/g, "\\t").replace(/\r/g, "\\r").replace(/\n/g, "\\n")
+      : "");
     process.stdout.write(j.accounts.map((a) => {
       const o = (a && typeof a === "object") ? a : {};
       const e = (o.exec && typeof o.exec === "object") ? o.exec : {};
@@ -659,13 +736,43 @@ _check_wrappers() {
   fi
 
   # ── the roster side ────────────────────────────────────────────────────
+  # THE FOUR FIELDS ARE SPLIT BY HAND, and `IFS=$'\t' read -r id suffix kind
+  # secrets` — which is what this was — must not come back. A tab is IFS
+  # *whitespace*, so bash collapses a run of them into one delimiter and strips
+  # leading ones: an entry with no `id` arrived as `<TAB>.acct-a<TAB>generated`
+  # and was read as id=".acct-a", suffix="generated", which is how a roster
+  # entry with no id at all got reported as an account named after its own
+  # config dir. Measured on both of the entries that expose it (no id, no
+  # configDirSuffix); each has its own test below. Parameter expansion has no
+  # such rule — an empty field stays an empty field, and its position holds.
   local -A wr_kind=() wr_suffix=() wr_secrets=()
   local -a wr_ids=()
-  local id suffix kind secrets
+  local id suffix kind secrets _wr_rest _wr_line _wr_i
+  local -a _wr_f=()
   local n_up=0 n_gen=0 n_ext=0 upstream_id=""
-  while IFS=$'\t' read -r id suffix kind secrets; do
+  while IFS= read -r _wr_line; do
+    _wr_f=(); _wr_rest="$_wr_line"
+    for _wr_i in 1 2 3; do
+      _wr_f+=("${_wr_rest%%$'\t'*}")
+      if [[ "$_wr_rest" == *$'\t'* ]]; then _wr_rest="${_wr_rest#*$'\t'}"; else _wr_rest=""; fi
+    done
+    _wr_f+=("$_wr_rest")
+    id="${_wr_f[0]}" suffix="${_wr_f[1]}" kind="${_wr_f[2]}" secrets="${_wr_f[3]}"
     if [ -z "$id" ]; then
       wr_hard+=("the roster holds an account with no id")
+      continue
+    fi
+    # An id is not decoration: it is the FILENAME ccd executes
+    # ($HOME/.local/bin/<id>, ccd:7361), so the roster's ids are held to the
+    # same rule as the disk's, `WRAPPER_ID_RE` — the one `shared/roster.ts`
+    # states. Nothing else in this check can be trusted about an entry whose id
+    # is not an id, so it is reported and skipped rather than looked up on disk
+    # under a name no file could have. (Task 5 review, Minor 5: the reader used
+    # to make an illegal id LOOK legal — `"acct<TAB>b"` arrived as `acct b` and
+    # was reported as "acct b has no executable at …", a plausible sentence
+    # about an account that does not exist.)
+    if [[ ! "$id" =~ $WRAPPER_ID_RE ]]; then
+      wr_hard+=("the roster holds an account whose id \"$id\" is not a legal account id (${WRAPPER_ID_RE}), so no file could be named after it")
       continue
     fi
     if [[ -v wr_kind[$id] ]]; then
@@ -728,12 +835,20 @@ _check_wrappers() {
 
   # ── both directions, reported ──────────────────────────────────────────
   # The roster ids that MUST be a CLAUDE_CONFIG_DIR-setting script on disk:
-  # generated (ccrc's own shape) and external (somebody else's shape, but still
-  # a wrapper). Upstream is excluded on purpose — a 300 MB ELF is its normal
-  # shape, and demanding a config-dir line of it would fail every healthy box.
+  # `generated`, and ONLY generated — it is ccrc's own shape, the one thing
+  # here that is written against a contract this repository states.
+  #
+  # `upstream` is excluded because a 300 MB ELF is its normal shape, and
+  # `external` because its shape is nobody's business: it may be compiled, and
+  # it may spell its config dir in a way no `export` line matches (Task 5
+  # review, Important 3 — as written, `wr_seen` membership demanded both
+  # `_wrap_is_script` AND a literal `export CLAUDE_CONFIG_DIR=` line, so a
+  # perfectly good external launcher landed in the a-only side of this
+  # difference and FAILED the box). Both kinds are still checked for the one
+  # thing ccd needs — an executable of that name — in the loop below.
   local -a wr_expect=()
   for id in ${wr_ids[@]+"${wr_ids[@]}"}; do
-    case "${wr_kind[$id]}" in generated|external) wr_expect+=("$id") ;; esac
+    case "${wr_kind[$id]}" in generated) wr_expect+=("$id") ;; esac
   done
   _wrap_set_diff _dr_wr_note wr_expect wr_seen
 
@@ -741,18 +856,14 @@ _check_wrappers() {
   local ok target wsuffix wsecrets
   for id in ${wr_ids[@]+"${wr_ids[@]}"}; do
     case "${wr_kind[$id]}" in
-      external)
-        # Recorded, never touched. Its wrapper's presence was checked above;
-        # its content is not this tool's business.
-        ;;
-      upstream)
-        if [ -L "$bin/$id" ] && [ ! -e "$bin/$id" ]; then
-          wr_hard+=("$id's \$HOME/.local/bin/$id is a symlink to a path that does not exist")
-        elif [ ! -e "$bin/$id" ]; then
-          wr_hard+=("$id has no executable at \$HOME/.local/bin/$id")
-        elif [ ! -x "$bin/$id" ]; then
-          wr_hard+=("$id's \$HOME/.local/bin/$id is not executable")
-        fi
+      external|upstream)
+        # RECORDED, NEVER READ. Exactly one question is asked of either kind:
+        # is there an executable at the path ccd will run? An external
+        # account's content is not this tool's business (it is somebody else's
+        # launcher, possibly compiled), and the upstream account's normal shape
+        # is a binary. Anything more than existence would be inventing a
+        # contract nobody made.
+        _dr_wr_present "$id" || true
         ;;
       generated)
         # Absent from disk, or not a wrapper at all: already reported, in the
@@ -796,18 +907,29 @@ _check_wrappers() {
     fi
   fi
 
-  # ── one verdict ────────────────────────────────────────────────────────
+  # ── the verdict, one line PER CLASS OF FINDING ─────────────────────────
+  # A hard finding and a soft one are two different requests to the operator,
+  # each with its own remedy, so they get one line each and the check returns
+  # the worse of the two (see this file's header, "ONE CHECK MAY ANSWER IN TWO
+  # CLASSES"). The soft findings are NOT joined onto the FAIL line: that
+  # laundered "somebody keeps a launcher the fleet does not drive" into
+  # "somebody broke an account", handed it the wrong remedy, and left the
+  # summary counting zero warnings while warnings were on the screen.
+  local rc=0
   if [ "${#wr_hard[@]}" -gt 0 ]; then
     _dr_fail wrappers \
-      "$(_dr_wr_join ${wr_hard[@]+"${wr_hard[@]}"} ${wr_soft[@]+"${wr_soft[@]}"})" \
+      "$(_dr_wr_join ${wr_hard[@]+"${wr_hard[@]}"})" \
       "the roster is the source of truth and nothing here edits it for you — make \$HOME/.ccrc/accounts.json and the wrapper agree; 'bash ccd/ccrc-adopt --out /tmp/accounts.json' prints what a rediscovery from disk would say and writes nothing else"
-    return 1
+    rc=1
   fi
   if [ "${#wr_soft[@]}" -gt 0 ]; then
     _dr_warn wrappers \
       "$(_dr_wr_join ${wr_soft[@]+"${wr_soft[@]}"})" \
       "either describe it in \$HOME/.ccrc/accounts.json (adopt would call a bespoke launcher \"external\") or leave it be — ccrc never drives an account the roster does not name"
-    return 2
+    [ "$rc" -eq 1 ] || rc=2
+  fi
+  if [ "$rc" -ne 0 ]; then
+    return "$rc"
   fi
   _dr_pass wrappers "${#wr_ids[@]} accounts in \$HOME/.ccrc/accounts.json match \$HOME/.local/bin ($n_up upstream, $n_gen generated, $n_ext external)"
 }

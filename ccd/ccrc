@@ -197,10 +197,18 @@ cmd_version() {
 # The loop never stops early, and that is the same reason this file does not
 # use `set -e`: an operator running doctor wants the whole list, not the first
 # problem. A check SIGNALS with its return code (0 pass / 1 fail / 2 warn) and
-# prints its own verdict line; this function only counts and tallies. It
+# prints its own verdict line(s); this function only counts and tallies. It
 # deliberately does NOT decide anything about a check's subject — that is the
 # check's job, and keeping the decision inside the check is what makes "one
 # table entry plus one test" the true cost of adding one.
+#
+# The tally is over VERDICT LINES, and a check may print two of them when it
+# has findings of two classes (a FAIL and a WARN, each with its own remedy —
+# see `ccrc-doctor-checks`'s header). Its return code is then the worse class,
+# and this function CROSS-CHECKS the two: a code that is not the worst class
+# printed is reported as a bug in ccrc rather than silently believed. The
+# summary's "N checks" stays a count of table entries, so a run in which one
+# check answered twice really does show more verdicts than checks.
 #
 # A COMPLETE INSTALL IS THREE FILES IN ONE DIRECTORY, not two: this script,
 # `ccrc-doctor-checks`, and `ccrc-wrapper-shape` (which the checks file sources
@@ -249,8 +257,12 @@ cmd_doctor() {
   [[ "${#CCRC_DOCTOR_CHECKS[@]}" -gt 0 ]] \
     || _ccrc_die "doctor's check table is empty: $checks — refusing to report a box nobody measured"
 
-  local name rc out pass=0 warn=0 fail=0
+  # `ran` counts CHECKS; pass/warn/fail count VERDICT LINES. They were one
+  # number until a check needed to answer in two classes at once; keeping the
+  # summary's "N checks" honest means counting the table entries themselves.
+  local name rc out ran=0 pass=0 warn=0 fail=0
   for name in "${CCRC_DOCTOR_CHECKS[@]}"; do
+    ran=$((ran + 1))
     if ! declare -F "_check_$name" >/dev/null 2>&1; then
       printf 'FAIL %s: the check table names it but no _check_%s function exists\n' "$name" "$name"
       printf '  remedy: this is a bug in ccrc, not a fact about your box — the table and the checks in %s have drifted\n' "$checks"
@@ -259,7 +271,26 @@ cmd_doctor() {
     fi
     out="$( "_check_$name" )"; rc=$?
     [[ -z "$out" ]] || printf '%s\n' "$out"
-    if [[ "$out" != PASS\ "$name":\ * && "$out" != WARN\ "$name":\ * && "$out" != FAIL\ "$name":\ * ]]; then
+
+    # THE VERDICT LINES ARE COUNTED, NOT THE RETURN CODE, because a check may
+    # answer in two classes at once — a FAIL for the findings that are defects
+    # and a WARN for the ones that may well be deliberate, each with its own
+    # remedy (ccrc-doctor-checks, "ONE CHECK MAY ANSWER IN TWO CLASSES").
+    # Counting the return code alone printed `0 warned` under a run with warn
+    # lines on the screen, which is a false count of the thing an operator
+    # skims (Task 5 review, Important 1). The summary's leading number stays
+    # the number of CHECKS, so a run where one check answered twice shows more
+    # verdicts than checks — deliberately: that is what happened.
+    local vp=0 vw=0 vf=0 line
+    while IFS= read -r line; do
+      case "$line" in
+        "PASS $name: "*) vp=$((vp + 1)) ;;
+        "WARN $name: "*) vw=$((vw + 1)) ;;
+        "FAIL $name: "*) vf=$((vf + 1)) ;;
+      esac
+    done <<< "$out"
+
+    if [[ $((vp + vw + vf)) -eq 0 ]]; then
       # No verdict line, whatever the exit code said. The usual cause is a
       # check that died before it could print one (see the subshell note
       # above); the other is a check that printed a verdict for the wrong name.
@@ -268,10 +299,9 @@ cmd_doctor() {
       fail=$((fail + 1))
       continue
     fi
+
     case "$rc" in
-      0) pass=$((pass + 1)) ;;
-      2) warn=$((warn + 1)) ;;
-      1) fail=$((fail + 1)) ;;
+      0|1|2) ;;
       *)
         # A check may only answer 0/1/2. A stray `return 3` lands here and is
         # counted as a failure, named as the bug it is, rather than being read
@@ -279,12 +309,31 @@ cmd_doctor() {
         printf 'FAIL %s: the check exited %s, which is not one of 0 (pass), 1 (fail) or 2 (warn)\n' "$name" "$rc"
         printf '  remedy: this is a bug in ccrc, not a fact about your box — see _check_%s in %s\n' "$name" "$checks"
         fail=$((fail + 1))
-        ;;
+        continue ;;
     esac
+
+    # The return code and the verdict lines are two statements of ONE answer,
+    # so they are cross-checked rather than one being quietly preferred: the
+    # code must be the WORST class the check printed. Without this, moving the
+    # tally onto the lines would have moved the exit code with it — a check
+    # that returned 1 while printing only a WARN would have made doctor exit 0.
+    local worst=PASS want=0
+    if [[ "$vf" -gt 0 ]]; then worst=FAIL; want=1
+    elif [[ "$vw" -gt 0 ]]; then worst=WARN; want=2
+    fi
+    if [[ "$rc" -ne "$want" ]]; then
+      printf 'FAIL %s: the check exited %s, but the worst verdict line it printed is a %s, which is %s\n' \
+        "$name" "$rc" "$worst" "$want"
+      printf '  remedy: this is a bug in ccrc, not a fact about your box — see _check_%s in %s\n' "$name" "$checks"
+      fail=$((fail + 1))
+      continue
+    fi
+
+    pass=$((pass + vp)); warn=$((warn + vw)); fail=$((fail + vf))
   done
 
   printf 'summary: %s checks — %s passed, %s warned, %s failed\n' \
-    "$((pass + warn + fail))" "$pass" "$warn" "$fail"
+    "$ran" "$pass" "$warn" "$fail"
   [[ "$fail" -eq 0 ]] || return 1
 }
 cmd_status() { _ccrc_not_implemented status; }
