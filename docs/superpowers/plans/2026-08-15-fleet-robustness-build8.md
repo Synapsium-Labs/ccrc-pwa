@@ -32,6 +32,7 @@ Every task's requirements implicitly include this section.
 - **Mutation-table discipline.** Every guard ships with a test that goes RED when the guard is deleted or mutated, measured before and after — not asserted in a comment. For a guard whose only failure mode is *firing wrongly*, the mutant makes it fire.
 - **Ring discipline** (`docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`): ring membership is a property of a file's IMPORTS, not its path. L0 `shared/` imports nothing; L1 policy is pure; L3 adapters **may not narrow a distinction they received**; L4 owns fastify/sockets/timers but does not DECIDE. **No overloaded null at a seam** — two conditions a caller handles differently must not collapse to one value.
 - **AGENT-FIRST.** Any task touching `ccd/`, `session-hook.sh`, or `ccd/coordinator-skill/` ships to the fleet host before the server.
+- **No new argv positional on any verb the agent whitelists, and no arithmetic on a value that arrived from outside.** `agent/src/whitelist.ts` matches a PREFIX — its own docstring: *"tokens after the prefix are unconstrained"* — so every extra token a granted verb (`start`, `enable`, `ensure`, `stop`, `swap`, `ws-add`, `forget`, …) accepts is attacker-supplied by construction, whether or not a call site emits one today. Bash evaluates a variable's *contents* as an arithmetic expression, and a command substitution inside an array subscript **executes**: `bound='REG[$(cmd)]'` in `(( … >= bound ))` runs `cmd` as the fleet user before the arithmetic errors. **This shipped once, in Task 5 — see D-B8-3 and `73bc0fe`.** Therefore: (1) per-caller tuning travels in a dynamically-scoped `local`, never argv — the `CCD_IN_UNIT` / `CCD_SETTLE_BOUND` idiom; a `local` is neither exported nor an argv token, so it is not addressable from the wire. (2) **One reader** per such variable, validated at the read (`[[ "$x" =~ ^[0-9]{1,5}$ ]] || x=$DEFAULT`), degrading to the production default — never to zero, never to "no bound". (3) Arithmetic contexts include **`[[ x -eq|-ne|-lt|-le|-gt|-ge y ]]` and array subscripts**, not just `(( ))`/`$(( ))`; a `-n` test is NOT a guard, only a `=~ ^[0-9]+$` placed first *inside the same `[[ ]]`* is. (4) Any new positional on a whitelisted verb ships with a fixture-HOME test passing a `REG[$(touch "$HOME/PWNED")]`-shaped payload and asserting the file does not appear, plus a structural assertion that the function consumes no such positional.
 - **No `git push` and no `gh` in any task step.** Branch, commit, and stop.
 
 ---
@@ -13379,4 +13380,144 @@ plainly can never see it. The pin has to measure the composition.
 population and lands a text-scan guard so a new demotion is a red suite rather than a future
 incident. Recorded as a deviation because the plan as written closed an instance and left the class
 open — which is the exact failure this build's own goal statement names.
+
+### Task 17: the arithmetic-injection class gets swept and guarded (D-B8-3)
+
+**D-B8-1 and D-B8-3 are the same lesson twice: an instance was fixed and the class was left open.** This
+task closes the arithmetic one. It is deliberately scoped to *normalise a known population and pin it*,
+not to audit the file.
+
+**The class, stated once so nobody re-derives it:** bash evaluates a variable's **contents** as an
+arithmetic expression, and a command substitution inside an array subscript **executes**. So
+`x='REG[$(cmd)]'` runs `cmd` in every arithmetic context. Verified in a temp dir:
+
+```
+[[ -z "$last"         && $((now-last)) -lt 5 ]]   -> no execution   (&& short-circuits)
+[[ -n "$last"         && $((now-last)) -lt 5 ]]   -> EXECUTED
+[[ "$pct" -ge 5 ]]                                -> EXECUTED
+[[ "$bts" =~ ^[0-9]+$ && $((now-bts))  -lt 5 ]]   -> no execution   (the guard works)
+```
+
+**Two consequences that are easy to get wrong.** Arithmetic contexts are not only `(( ))` and `$(( ))`
+— **`[[ x -eq|-ne|-lt|-le|-gt|-ge y ]]` and array subscripts are too.** And a `-n` test is **not** a
+guard; only a `=~ ^[0-9]+$` placed **first inside the same `[[ ]]`** is, because that is what makes
+`&&` short-circuit before the arithmetic operand is evaluated.
+
+**Files:**
+- Modify: `ccd/ccd` — the five sites listed below, and nothing else
+- Create: `server/test/ccd-arith-containment.test.ts`
+
+**Interfaces:**
+- Consumes: `makeCcdHarness`. Produces: nothing other tasks consume.
+
+**The population, already swept — do not re-derive it, verify it.** ~150 `(( ))` hits exist; almost all
+take loop counters, `$?`, `${#array[@]}` or `$(date +%s)` and are trusted by construction. These are the
+ones whose operands come from outside the expression:
+
+| site | operand | source | status |
+|---|---|---|---|
+| `_auto_swap_check` (`~7181`) | `lastswap` | registry file | **unguarded — hottest loop in the file, runs every 5 s per supervised session** |
+| `_auto_compact_check` (`~7262`) | `lastcompact` | registry file | **unguarded** |
+| `_auto_compact_check` (`~7264`) | `lastswap` | registry file | **unguarded** |
+| `_spawn_start` (`~7499`) | `lastswap` | registry file | **unguarded** |
+| `_dispatch_swap` (`~6963`) | `SWAP_JITTER` | environment | **unguarded** (env is agent-set, not wire-set) |
+
+**None of these is wire-reachable** — those fields are written only by ccd's own `_reg_set` from
+`$(date +%s)`, and no whitelisted verb puts caller-supplied text into them. Exploiting one already
+requires being the fleet UNIX user with write access to `~/.cc-sessions`. **Say that plainly in the
+commit message**: this task is defence in depth and torn-file robustness, not a live-vulnerability fix.
+The one live wire-reachable instance was `cmd_ensure`'s positional, closed in `73bc0fe`.
+
+**Copy the shape that already exists in this file** — `ccd:7660` (`spawn`) is the best example, with
+`ccd:419` (`supervised`) and `ccd:7189` (`swapblocked`) close behind. Do not invent a new idiom.
+
+- [ ] **Step 1: Write the failing test**
+
+For each of the five sites, a case in a fixture HOME that plants a payload in the source the site
+reads (registry field, or the env var) and asserts **no side effect occurred**. Example shape:
+
+```ts
+it('_auto_swap_check does not evaluate a payload planted in lastswap', () => {
+  const h = makeCcdHarness('arith-swap');
+  // A torn or hand-edited registry field is the threat model — not a wire caller.
+  h.sh(`printf '%s' 'REG[$(touch "$HOME/PWNED")]' > "$HOME/.cc-sessions/myid.lastswap"`);
+  h.sh(`${TMUX} _auto_swap_check myid || :`);
+  expect(existsSync(path.join(h.home, 'PWNED'))).toBe(false);
+  h.cleanup();
+});
+```
+
+Plus one structural case asserting every site in the table carries a `=~ ^[0-9]` guard **before** its
+arithmetic, so a future edit that drops the guard is red even if no payload test covers that path.
+
+- [ ] **Step 2: Run and confirm each fails**
+
+```bash
+cd <worktree>/server && ./node_modules/.bin/vitest run test/ccd-arith-containment.test.ts
+```
+
+Expected: the payload cases FAIL (the file appears). **Report the exact failures.** If a case passes,
+that site was already guarded — remove it from the table rather than "fixing" it, and say so.
+
+- [ ] **Step 3: Normalise all five sites**
+
+Guard first, inside the same `[[ ]]`, degrading to the safe default — never to zero, never to "no
+bound". For `SWAP_JITTER`, degrade to `0` (no jitter), which is the documented pre-jitter behaviour.
+
+- [ ] **Step 4: Run the containment suite plus the loops these sites live on**
+
+```bash
+cd <worktree>/server && ./node_modules/.bin/vitest run test/ccd-arith-containment.test.ts test/ccd-swap.test.ts test/ccd-swap-refuse.test.ts test/ccd-swap-carry.test.ts test/ccd-spawn-split.test.ts test/ccd-supervised-start.test.ts test/ownership.test.ts
+```
+
+- [ ] **Step 5: Mutation-prove**
+
+Remove one guard, confirm its payload case goes RED, restore. Then remove a *different* guard and
+confirm the structural case goes red. Report before/after counts; verify `git status` is clean.
+
+- [ ] **Step 6: Re-stamp and commit**
+
+```bash
+cd <worktree> && node <scratchpad>/restamp.mjs   # must print -> ccrc-unmodified
+git add ccd/ccd server/test/ccd-arith-containment.test.ts
+git -c user.name="Mykyta Fastovets" -c user.email="m.fastovets@example.com" commit
+```
+
+- [ ] **Step 7: Record the one site this task does NOT change, and why**
+
+`_auto_compact_check` compares `pct` — derived from **pane text** — with `-ge`. Pane text is genuinely
+attacker-influenced (a session can print anything). It is safe **only** because `_pane_ctx_pct` ends in
+`grep -oE '[0-9]+'`. That is a single point of failure with no test naming it. Add a test asserting
+`_pane_ctx_pct` returns digits-only for a pane containing a payload, with a comment saying the
+arithmetic downstream depends on it. **Do not** add a second guard at the arithmetic site — one
+authoritative sanitiser is the right shape; an unnamed dependency on it is not.
+
+---
+
+**D-B8-3 — Task 5 turned a whitelisted verb's argv into arbitrary code execution.** Threading the
+settle bound as a second positional on `cmd_ensure` put an unvalidated caller string into
+`(( $(date +%s) - t0 >= bound ))`. `agent/src/whitelist.ts` grants `['ensure']` and its own docstring
+states that *"tokens after the prefix are unconstrained"*, so `ccd ensure <id> 'REG[$(cmd)]'` executed
+`cmd` as the fleet user across the agent's exec boundary. Proven in a fixture HOME: the payload's
+`touch` ran, then the arithmetic errored — the error is a red herring, the code had already run.
+
+Not exploitable from the PWA at the time (no server call site emitted a second token), so this was a
+latent primitive plus a defence-in-depth regression rather than a live incident. But the exec whitelist
+is the **single** boundary the PWA→agent path rests on, and its contract is that any granted argv is
+safe to hand a shell. This quietly made that false.
+
+*Fixed in `73bc0fe`* by deleting the argv surface rather than validating it: the bound travels in a
+dynamically-scoped `local CCD_SETTLE_BOUND`, mirroring `CCD_IN_UNIT`, which `cmd_supervise` already
+uses to signal `cmd_ensure`. `cmd_ensure` is back to one positional and carries a comment naming the
+whitelist as the reason. One reader, validated at the read, degrading to the production default.
+
+**Three things worth keeping from how this was found.** The implementer *disclosed* the widened argv
+surface in its own hand-off notes and asked that a later task decide about it — it judged the risk as
+"grants no new capability", which was wrong, but the disclosure is what made a one-pass review
+sufficient. Second: rc 5's propagation was simultaneously unpinned, so deleting `|| "$rc" -eq 5` left
+the suite green while `cmd_start` printed its success line over a session sitting behind a limit
+banner — a guard and its test must land together, which is this repo's own doctrine. Third: the plan's
+own regex for "the bound is not keyed off `fromswap`" was **unsatisfiable** against correct code, because
+bash's `type` deparse renders the whole `local` list on one line. A test that cannot pass for the right
+reason is as bad as one that cannot fail for the wrong one.
 
