@@ -125,14 +125,20 @@ describe('ArchiveConflictSheet', () => {
       expect(screen.getByText(/does not have this verb yet/)).toBeTruthy());
   });
 
-  it('Open the run hands the id up; Cancel closes without archiving', () => {
-    const onOpenRun = vi.fn();
+  // WAS "Open the run hands the id up; Cancel closes without archiving".
+  // The first half went with the affordance (Wave 2 review, Finding 3): the
+  // `onOpenRun` button had no call site — neither door passed the prop — so
+  // this test was the only thing that ever rendered it. A control reachable
+  // solely from its own unit test is coverage of something no operator can
+  // reach; see the note on `ArchiveConflictSheetProps` for what a future door
+  // would have to bring to add it back. Cancel's half is untouched, and the
+  // button count is now pinned so the drop cannot silently regrow.
+  it('Cancel closes without archiving, and the sheet offers exactly two buttons', () => {
     const onClose = vi.fn();
     const archive = vi.fn();
-    render(<ArchiveConflictSheet sessionId="demo-x" runs={RUNS} onClose={onClose} onOpenRun={onOpenRun}
-                                 archive={archive} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Open the run' }));
-    expect(onOpenRun).toHaveBeenCalledWith(17);
+    render(<ArchiveConflictSheet sessionId="demo-x" runs={RUNS} onClose={onClose} archive={archive} />);
+    expect(screen.getAllByRole('button').map((b) => b.textContent))
+      .toEqual(['Archive anyway', 'Cancel']);
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(onClose).toHaveBeenCalled();
     expect(archive).not.toHaveBeenCalled();

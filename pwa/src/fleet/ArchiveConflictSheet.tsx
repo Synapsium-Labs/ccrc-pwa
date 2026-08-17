@@ -36,12 +36,30 @@ export interface ArchiveConflictRun {
   id: number; program: string; wave: number; waveOf: number | null;
 }
 
+/** THERE IS NO `onOpenRun` HERE, and the omission is a decision, not an
+ *  oversight (Build 8 Wave 2 review, Finding 3). This sheet shipped with an
+ *  optional `onOpenRun` and an "Open the run" button gated on it — and NEITHER
+ *  door passed it. `PrSheet` and `SessionActionsSheet` both mount this sheet
+ *  with `sessionId`/`runs`/`onClose`/`onDone` only, so the control never
+ *  rendered anywhere in the app; its only caller was its own unit test, which
+ *  is coverage of something no operator can reach.
+ *
+ *  It was DROPPED rather than wired because neither door has run-board
+ *  navigation to hand it: `SessionActionsSheet` lives on FleetScreen and
+ *  `PrSheet` under SessionHeader, and neither takes a navigate/route prop —
+ *  inventing one is a surface the plan never designed, decided from a review
+ *  finding.
+ *
+ *  TO ADD IT BACK, a future door needs three things it does not have today:
+ *  a way to reach `/runs` focused on ONE run id (RunsScreen has no per-run
+ *  route), a rule for what happens to the sheet and to the door underneath it
+ *  when navigation leaves the screen, and a caller that actually passes the
+ *  prop. Until all three exist, the button would be dead weight again. */
 export interface ArchiveConflictSheetProps {
   sessionId: string | null;
   runs: readonly ArchiveConflictRun[] | null;
   onClose: () => void;
   onDone?: () => void;
-  onOpenRun?: (runId: number) => void;
 }
 
 /** `409 { error:'run-open', runs }` -> the runs, or `null` for any other
@@ -104,7 +122,7 @@ const runPhrase = (r: ArchiveConflictRun): string =>
   `run ${r.id} — ${r.program} wave ${r.wave}${r.waveOf === null ? '' : `/${r.waveOf}`}`;
 
 export function ArchiveConflictSheet({
-  sessionId, runs, onClose, onDone, onOpenRun,
+  sessionId, runs, onClose, onDone,
   archive = api.archive,
 }: ArchiveConflictSheetProps & {
   /** Injectable for tests, `AbandonSheet`'s own idiom — the real
@@ -166,12 +184,9 @@ export function ArchiveConflictSheet({
           <button type="button" className="btn-primary" disabled={busy} onClick={force}>
             {busy ? 'Archiving…' : 'Archive anyway'}
           </button>
-          {named !== null && onOpenRun !== undefined && (
-            <button type="button" className="btn-ghost" disabled={busy}
-                    onClick={() => onOpenRun(named[0]!.id)}>
-              Open the run
-            </button>
-          )}
+          {/* Two buttons, not three — see the `onOpenRun` note on
+              `ArchiveConflictSheetProps` for the affordance that was here and
+              why it went. */}
           <button type="button" className="btn-ghost" disabled={busy} onClick={onClose}>
             Cancel
           </button>
