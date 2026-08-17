@@ -1457,6 +1457,20 @@ describe('ccrc doctor: wrappers', () => {
     expect(r.code).toBe(1);
   });
 
+  it('never tells a deployed box to run a script from a checkout it does not have', () => {
+    const text = readFileSync(CHECKS_SRC, 'utf8');
+    // `ccrc adopt` execs ccrc-adopt where it ships; a remedy naming a repo-
+    // relative path is an instruction only a developer can follow, and doctor's
+    // whole job is the box that is not a developer's.
+    expect(text).not.toMatch(/bash ccd\/ccrc-adopt/);
+  });
+
+  it('tells an operator with a missing wrapper which verb writes one', () => {
+    // The a-only side of the roster/disk difference used to end in a paragraph
+    // about what an account is. It is now a command.
+    expect(readFileSync(CHECKS_SRC, 'utf8')).toMatch(/ccrc wrappers/);
+  });
+
   // ── the security boundary ───────────────────────────────────────────────
   it('does not read, print, or hash the contents of any secrets file', () => {
     // The check compares PATHS. Reading the token would put it in a log — and

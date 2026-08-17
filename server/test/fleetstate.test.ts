@@ -157,8 +157,14 @@ describe('loadSnapshot revives a cache written by an older build', () => {
       return (await loadSnapshot(cachePath))?.sessions[0];
     };
 
+    // `status: 'dead'` on both archived cases is not fixture noise, it is the
+    // shape (D-74): `ws-archive` kills the pane before it stamps, so an
+    // archived row IS dead, and the archived rungs now require that conjunct.
+    // `v1Session`'s own `status` is `'busy'`, which on an archived record is
+    // the very contradiction D-74 exists to resolve — pinned as its own case
+    // below rather than left riding on these two.
     it('a merged, archived snapshot revives as cleanup — the row ArchiveScreen already shows', async () => {
-      const s = await revive({ archivedAt: 1700, pr: { phase: 'merged', ahead: 0 } });
+      const s = await revive({ status: 'dead', archivedAt: 1700, pr: { phase: 'merged', ahead: 0 } });
       // bucketSince stays null even though the archived rung HAS a datable
       // timestamp: this record was never recorded as entering the bucket, and
       // the branch that derives is the branch that refuses to date it.
@@ -167,7 +173,18 @@ describe('loadSnapshot revives a cache written by an older build', () => {
     });
 
     it('an archived snapshot with no merged PR revives as archived', async () => {
-      expect((await revive({ archivedAt: 1700 }))?.bucket).toBe('archived');
+      expect((await revive({ status: 'dead', archivedAt: 1700 }))?.bucket).toBe('archived');
+    });
+
+    // D-74, and the reason this ladder lives in `shared/` at all: the LIVE
+    // producer (`fleet.ts`) and this revival are two callers of one function,
+    // and they must not be able to disagree about a revived-from-archive
+    // workspace. `bucket.test.ts`'s own D-74 cases pin the live half; this is
+    // the cached half, on the identical record.
+    it('a BUSY archived snapshot revives as working — a live pane outranks a stale marker here too', async () => {
+      const s = await revive({ status: 'busy', archivedAt: 1700, pr: { phase: 'merged', ahead: 0 } });
+      expect(s?.bucket).toBe('working');
+      expect(s?.archivedAt).toBe(1700);   // the disk fact is kept, only the bucket moved
     });
 
     it('a waiting snapshot revives as attention — the section that must not read empty', async () => {
