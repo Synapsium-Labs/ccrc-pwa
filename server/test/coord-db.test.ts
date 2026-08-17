@@ -2,8 +2,9 @@
 // transaction that throws leaves nothing behind.
 import { describe, it, expect, vi } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
-import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   COORD_SCHEMA_VERSION, CoordDbUnmigratable, defaultCoordDbPath, describeMigrationProgress,
   openCoordDb, shouldRemoveMigrationFailureArtifact, tx,
@@ -12,6 +13,7 @@ import { MIGRATIONS } from '../src/coord/schema.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const dbPathIn = (home: string): string => path.join(home, '.ccrc', 'coord.db');
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
 describe('defaultCoordDbPath', () => {
   it('joins .ccrc/coord.db under the given home', () => {
@@ -307,5 +309,54 @@ describe('shouldRemoveMigrationFailureArtifact', () => {
   it('never removes a file with real bytes in it, fresh install or not — only an EMPTY artifact is this call\'s own to discard', () => {
     expect(shouldRemoveMigrationFailureArtifact(false, 4096)).toBe(false);
     expect(shouldRemoveMigrationFailureArtifact(true, 4096)).toBe(false);
+  });
+});
+
+describe('coord.db: migration 1 — runs_by_session', () => {
+  it('reaches a database ALREADY at user_version 1 — it cannot be an amendment to MIGRATIONS[0]', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    // Build the file exactly as the SHIPPED v1 server left it: migration 0
+    // only, user_version 1. `db.ts`'s loop starts at `current`, so anything
+    // amended INTO MIGRATIONS[0] can never run against this file again.
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => { raw.exec(MIGRATIONS[0]!); raw.exec('PRAGMA user_version = 1'); });
+    raw.close();
+
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(2);
+    expect(COORD_SCHEMA_VERSION).toBe(2);
+    const names = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as
+      { name: string }[]).map((r) => r.name);
+    expect(names).toContain('runs_by_session');
+    db.close();
+  });
+
+  it('turns the sibling query from SCAN into SEARCH — the reason the index exists', () => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const plan = (db.prepare(
+      'EXPLAIN QUERY PLAN SELECT id, program, wave, waveOf FROM runs ' +
+      "WHERE sessionId = ? AND state NOT IN ('done','failed') AND id != ?",
+    ).all('demo-alpha', -1) as { detail: string }[]).map((r) => r.detail).join(' | ');
+    expect(plan).toContain('runs_by_session');
+    expect(plan).not.toContain('SCAN runs');
+    db.close();
+  });
+
+  it('does not justify amending v1 in place any more — that premise expired when coord.db shipped', () => {
+    const src = readFileSync(path.join(root, 'server', 'src', 'coord', 'schema.ts'), 'utf8');
+    // LINE-WRAP TOLERANT, and this is not fussiness — it is the difference
+    // between a red step and a vacuous pass. BOTH phrases are split across SQL
+    // comment lines in the shipped file: `-- 10's feed_events both give: coord.db has shipped`
+    // / `-- to no box yet, so amending v1 before it has ever`, and
+    // `-- same reason D-1's runs.clearedAt amendment gives: coord.db exists on no`
+    // / `-- box yet, so amending v1 before it has ever been observed costs nothing.`
+    // A single-line regex matches NEITHER and the assertion passes before the fix.
+    const flat = src.replace(/\s*--\s*/g, ' ').replace(/\s+/g, ' ');
+    expect(flat).not.toMatch(/coord\.db has shipped to no box yet/);
+    expect(flat).not.toMatch(/coord\.db exists on no box yet/);
+    // And the replacement says what is true now, so a future author is not
+    // left to rediscover it.
+    expect(src).toMatch(/already at `user_version 1`|already at user_version 1/);
   });
 });

@@ -145,12 +145,14 @@ export const MIGRATIONS: readonly string[] = [
                                                 -- only) -- the ceiling sweepMail uses to park a
                                                 -- delivery that keeps succeeding but is never
                                                 -- acked, since MAIL_MAX_ATTEMPTS structurally
-                                                -- cannot apply to a send that never fails. Landed
-                                                -- in v1 rather than a migration 2 for the same
-                                                -- reason D-1's runs.clearedAt amendment and Task
-                                                -- 10's feed_events both give: coord.db has shipped
-                                                -- to no box yet, so amending v1 before it has ever
-                                                -- been observed costs nothing.
+                                                -- cannot apply to a send that never fails.
+                                                -- Landed in v1 rather than a migration 2 because,
+                                                -- at the time, coord.db existed on no box. THAT
+                                                -- PREMISE HAS EXPIRED: the server's copy is live
+                                                -- and already at user_version 1, so v1 is now
+                                                -- FROZEN — a change to MIGRATIONS[0] would never
+                                                -- run against it. Every later column or index is
+                                                -- its own migration (runs_by_session is the first).
   );
   -- dueDeliveries (deviation D-10, found in Task 3 review) reads BOTH arms
   -- through this one index, not two. D-10 as first landed added a SECOND
@@ -196,9 +198,10 @@ export const MIGRATIONS: readonly string[] = [
   -- not a second counter -- so a row can be correlated back to the catch-up
   -- watermark that was live when it was written; ordering for GET /api/feed is
   -- this table's own id (monotonic across an epoch rotation, unlike seq,
-  -- which resets to 0 on one). Landed in v1 rather than a migration 2 for the
-  -- same reason D-1's runs.clearedAt amendment gives: coord.db exists on no
-  -- box yet, so amending v1 before it has ever been observed costs nothing.
+  -- which resets to 0 on one).
+  -- Landed in v1 while coord.db still existed on no box. That premise has
+  -- expired — the live database is already at user_version 1, so v1 is
+  -- frozen and every later change is its own migration.
   CREATE TABLE feed_events (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
     epoch     TEXT NOT NULL,
@@ -209,6 +212,24 @@ export const MIGRATIONS: readonly string[] = [
     title     TEXT NOT NULL,
     body      TEXT NOT NULL
   );
+  `,
+
+  // ── 2: user_version 1 -> 2 ────────────────────────────────────────────────
+  // `CoordStore.openRunsForSession` — "which OPEN runs name this session?" —
+  // is asked at three destructive decision points (close's fleet act,
+  // `archiveMerged`, the by-hand archive route). `runs` had no index on
+  // `sessionId`, and `state NOT IN (…)` is negated set membership, not
+  // seekable, so the query planned as `SCAN runs`. Measured against the v1
+  // DDL in an in-memory `node:sqlite`: `SCAN runs` before,
+  // `SEARCH runs USING INDEX runs_by_session (sessionId=?)` after.
+  //
+  // A SEPARATE MIGRATION, not an amendment to migration 1, and that is
+  // load-bearing: `db.ts` runs `for (let v = current; v < COORD_SCHEMA_VERSION; v++)`,
+  // so an edit to `MIGRATIONS[0]` never executes against a database already
+  // at `user_version 1` — and the server's copy IS one, having driven five
+  // runs through build4.
+  `
+  CREATE INDEX runs_by_session ON runs(sessionId);
   `,
 ];
 
