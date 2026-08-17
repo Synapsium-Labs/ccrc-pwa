@@ -16,7 +16,7 @@
 // equality is asserting agreement, not restating a golden literal.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { generateWrapperBody } from '../../shared/wrapper.mjs';
@@ -146,6 +146,20 @@ describe('gen-wrappers.mjs', () => {
     expect(line).toBe('wrapper\tclaude2\tunreadable\tno');
   });
 
+  // A directory is not a missing file — `classify` must not collapse the two.
+  // `readFileSync` on a directory throws EISDIR, not ENOENT, so this exercises
+  // the same absent-vs-unreadable branch as the chmod-0o000 case above, from a
+  // different real-world shape (a stale directory left at a wrapper's path,
+  // rather than a permission problem on a file).
+  it('a directory at bin/<id> reads back unreadable/no, not absent — a directory is not a missing file', () => {
+    const { rosterFile, binDir, stagingDir } = fixture(migrationJson);
+    mkdirSync(path.join(binDir, 'claude2'));
+    const r = run([rosterFile, binDir, stagingDir]);
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
+    const line = r.stdout.split('\n').find((l) => l.startsWith('wrapper\tclaude2\t'));
+    expect(line).toBe('wrapper\tclaude2\tunreadable\tno');
+  });
+
   // `equal` is a byte-for-byte comparison, not a trimmed one — a mutation
   // that computes `text.trim() === staged.trim()` passed every OTHER case in
   // this file (none of them differ from the staged text by whitespace alone)
@@ -177,6 +191,37 @@ describe('gen-wrappers.mjs', () => {
     const r = run([rosterFile, binDir, stagingDir]);
     expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
     expect(r.stdout).not.toMatch(/^orphan\t/m);
+  });
+
+  // The reference box has exactly this shape (`gpt -> ccgpt`), so it is not
+  // hypothetical. `readdirSync`'s `Dirent.isFile()` answers about the DIRENT
+  // ITSELF — it is false for a symlink no matter what the symlink points to —
+  // so the orphan scan's `entry.isFile()` gate never even looks at a
+  // symlink's target. This pins the MEASURED behaviour: a marked file is
+  // invisible to orphan detection when it is only reachable by following a
+  // symlink, while a marked file living at its own name is still caught.
+  // Whether that is the behaviour a future author WANTS is a separate
+  // question from whether it is the behaviour today — this test is about the
+  // second one.
+  it('a symlink in the bin dir is invisible to orphan detection, even when it targets marked text', () => {
+    const { rosterFile, binDir, stagingDir } = fixture(migrationJson);
+    // Not `ID_RE`-shaped (leading underscore), so its own name could never be
+    // an orphan candidate either — isolating this case to the symlink
+    // question alone.
+    const markedTarget = path.join(binDir, '_marked-target-not-an-id');
+    writeFileSync(markedTarget, markGenerated(generateWrapperBody(
+      { id: 'linkacct', configDirSuffix: '.linkacct', execKind: 'generated' }, UPSTREAM_ID,
+    )));
+    symlinkSync(markedTarget, path.join(binDir, 'linkacct'));
+    // A genuine, separately-named marked regular file — confirms ordinary
+    // orphan detection still works with the symlink merely present.
+    writeFileSync(path.join(binDir, 'stillorphan'), markGenerated(generateWrapperBody(
+      { id: 'stillorphan', configDirSuffix: '.stillorphan', execKind: 'generated' }, UPSTREAM_ID,
+    )));
+    const r = run([rosterFile, binDir, stagingDir]);
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
+    expect(r.stdout).not.toMatch(/^orphan\tlinkacct$/m);
+    expect(r.stdout).toMatch(/^orphan\tstillorphan$/m);
   });
 
   it('upstream and external accounts are never staged', () => {

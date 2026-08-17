@@ -71,6 +71,23 @@
 // it names, exactly as `shared/wrapper.mjs` (the emitter it calls) does not.
 // Same rule, same reason: what an operator pastes into a ticket must never
 // be the contents of an OAuth token file.
+//
+// ── TASK 6 DRIVES OFF THE MANIFEST, NEVER OFF A STAGING-DIR LISTING ───────
+// This file makes NO PROMISE that the staging directory contains nothing but
+// what this run staged. It only ever WRITES the `generated` ids it just
+// computed; it never reads the staging directory back, and a stray file
+// dropped there before the run — a leftover from a previous invocation
+// against a different roster, or anything else a caller put there — is left
+// exactly where it was, unreported and unremoved. The `wrapper` lines in the
+// manifest are the complete and authoritative list of what THIS run staged
+// and for which ids; a directory listing of the staging dir is not a
+// substitute for it and can disagree with it. So Task 6 (or any future
+// consumer) MUST iterate the manifest's `wrapper` records to decide what to
+// install, and must never install "everything found in the staging
+// directory" instead. The risk a directory-driven consumer takes on is
+// concrete, not hypothetical: it would install a stale entry left over from
+// an earlier run, under an account id the CURRENT roster no longer even
+// declares — exactly the kind of drift this whole stage exists to prevent.
 
 import { readFileSync, writeFileSync, chmodSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
