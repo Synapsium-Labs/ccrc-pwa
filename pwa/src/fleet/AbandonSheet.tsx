@@ -27,6 +27,7 @@ import { isRunState, type RunSummary } from '../../../shared/api';
 import { RUN_WORD } from './runWords';
 import { Sheet } from '../components/Sheet';
 import { ApiError, COORD_UNSUPPORTED_TEXT, api } from '../lib/api';
+import { toast } from '../components/Toast';
 import './fleet.css';
 
 /** The refusal vocabulary this sheet renders its OWN sentence for. A total
@@ -123,7 +124,7 @@ export function AbandonSheet({
    *  uses — defaults to the real `api.abandonRun`, whose own URL/method are
    *  pinned separately in `api.test.ts` so this injection is never the ONLY
    *  coverage of the write path. */
-  abandonRun?: (id: number) => Promise<void>;
+  abandonRun?: (id: number) => Promise<{ released: boolean }>;
 }): ReactNode {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -170,9 +171,25 @@ export function AbandonSheet({
     setBusy(true);
     setError(null);
     void abandonRun(run.id).then(
-      () => {
+      (res) => {
         if (gen.current !== mine) return; // superseded — a different run's sheet is open now
         setBusy(false);
+        // NOT silent: a close that could not release is the case Wave 2's
+        // whole sibling check exists for, and before this line the sheet
+        // discarded it entirely.
+        //
+        // GATED ON `run.sessionId`, because `released:false` is the negation
+        // of one fact, not one fact (`CloseOutcome.released`'s own docstring
+        // enumerates all four producers). On this route it has TWO: a sibling
+        // re-hold — the sentence below — and an abandon of a `planned` run
+        // with no session, where `closeRun` performs no fleet act at all
+        // because there is no workspace. The wedged, never-dispatched run is
+        // exactly what this sheet exists for, so that second producer is not
+        // a corner case here; ungated, the toast would tell the operator that
+        // another run claims a workspace that was never allocated.
+        if (!res.released && run.sessionId !== null) {
+          toast(`Run ${run.id} abandoned — ${ws} is still claimed by another open run.`, 'info');
+        }
         onDone?.();
         onClose();
       },

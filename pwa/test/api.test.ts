@@ -297,6 +297,20 @@ describe('abandonRun (Task 12, spec §4.3)', () => {
     expect(init.body).toBeUndefined();
   });
 
+  it('abandonRun reads `released` off the 200 body, and absence degrades to true', async () => {
+    const a = createApi(async () =>
+      new Response(JSON.stringify({ ok: true, id: 3, state: 'failed', released: false }),
+        { status: 200, headers: { 'content-type': 'application/json' } }));
+    expect(await a.abandonRun(3)).toEqual({ released: false });
+
+    const older = createApi(async () =>
+      new Response(JSON.stringify({ ok: true, id: 3, state: 'failed' }),
+        { status: 200, headers: { 'content-type': 'application/json' } }));
+    // An older server never sends the field: absence reads TRUE — today's
+    // behaviour, no toast, the safe direction.
+    expect(await older.abandonRun(3)).toEqual({ released: true });
+  });
+
   it('throws ApiError on a non-2xx response — e.g. the 409 bad-transition for an already-closed run', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
       jsonResponse(409, { ok: false, error: 'bad-transition', from: 'done', to: 'failed' }),
