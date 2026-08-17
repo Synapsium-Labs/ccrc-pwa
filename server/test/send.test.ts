@@ -537,6 +537,31 @@ describe('sendPrompt', () => {
     expect(cuPresses(calls)).toBe(0);   // REFUSE-ONLY: nothing clears operator text
   });
 
+  // A DEAD PANE IS NOT A REFUSAL WITH A DRAFT. When every echo poll's capture
+  // fails there is no `lastAnsi` at all, and the arm below it used to answer
+  // `verify-failed` with `draft: ''` — byte-identical to a live pane that
+  // simply never rendered, and (before the narrowing above) carrying a
+  // rescue flag over a session that no longer exists. The attachment path a
+  // few lines up has always said `not-alive` here, with a comment saying why
+  // the collapse is wrong; the two paths now answer the same question the
+  // same way.
+  it('a pane that dies during the echo poll is not-alive, not a refusal', async () => {
+    const { tmux, calls } = fakeTmux(['❯ \n', null]);   // guard read ok, every poll dead
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'my message');
+    expect(res).toEqual({ ok: false, error: 'not-alive' });
+    expect(cuPresses(calls)).toBe(0);
+  });
+
+  // The parity claim, asserted rather than assumed: identical input, identical
+  // answer, so a future edit to either path has the other one pinned to it.
+  it('the ATTACHMENT path answers not-alive on the same input — the shape being matched', async () => {
+    const { tmux } = fakeTmux(['❯ \n', null]);
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', '', { attachments: ['/c/clip-1.png'] },
+    );
+    expect(res).toEqual({ ok: false, error: 'not-alive' });
+  });
+
   it('enter-ignored carries submittable too — the case the rescue was built for', async () => {
     const { tmux } = fakeTmux(['❯ \n', '❯ stuck text\n']);
     const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'stuck text');

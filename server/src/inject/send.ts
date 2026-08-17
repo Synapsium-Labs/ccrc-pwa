@@ -597,14 +597,26 @@ export function sendPrompt(
       // rather than joining it, so the success path's budget is unchanged.
       let echoed = needle === '';
       let lastAnsi = '';
+      // Did ANY poll come back with a pane? `lastAnsi` cannot answer that: it
+      // is '' both for "twelve dead captures" and for "a live pane whose box
+      // read empty", and those need opposite answers. See the refusal below.
+      let sawPane = false;
       for (let i = 0; i < ECHO_TRIES && !echoed; i++) {
         await sleep(ECHO_POLL_MS);
         const ansi = await d.tmux.captureAnsi(id);
         if (ansi === null) continue;
         lastAnsi = ansi;
+        sawPane = true;
         if (draftOf(ansi).startsWith(needle)) echoed = true;
       }
       if (!echoed) {
+        // EVERY capture failed: the session is gone, and none of what the arm
+        // below says is true of it — there is no box holding the text, and no
+        // draft to hand back. Answering `verify-failed` with an empty draft
+        // made a dead pane byte-identical to a live one that never rendered.
+        // The attachment path's own clear reports `dead` for exactly this and
+        // returns `not-alive`; this is the same question and the same answer.
+        if (!sawPane) return { ok: false, error: 'not-alive' };
         // THE TEXT STAYS IN THE BOX — no clearBox, no C-u (operator ruling:
         // refuse, never destroy). That was already true; what was missing was
         // saying so. Hand back the box row so the PWA's rescue has something
