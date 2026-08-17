@@ -27,14 +27,14 @@
 // operator pastes into a ticket.
 
 /** `shared/roster.ts`'s `ID_RE`. The FOURTH copy — the other three are
- *  `shared/roster.ts`, `deploy/gen-accounts.mjs` and `ccrc-wrapper-shape`'s
+ *  `shared/roster.ts`, `shared/roster-json.mjs` and `ccrc-wrapper-shape`'s
  *  `WRAPPER_ID_RE` — and a deliberate one, because this function
  *  consumes its argument STRUCTURALLY, exactly as `generateAccountsSh` does,
  *  with no runtime proof it ever passed through `parseRoster`. This is the
  *  writer's own lock on its own door. */
 const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
 
-/** The FOURTH copy of this gate — the other three are `deploy/gen-accounts.mjs`'s
+/** The FOURTH copy of this gate — the other three are `shared/roster-json.mjs`'s
  *  own `SUFFIX_SAFE_RE`, `ccrc-wrapper-shape`'s `WRAPPER_SUFFIX_SAFE_RE`, and
  *  `shared/roster.ts`'s equivalent check, which is an UNNAMED inline literal
  *  there (`parseAccount`, around line 403) rather than a constant of this
@@ -46,7 +46,7 @@ const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
 const SUFFIX_SAFE_RE = /^\.[A-Za-z0-9._-]+$/;
 
 /** The THIRD copy of this gate — the other two are `shared/roster.ts`'s own
- *  `SECRETS_SAFE_RE` (Task 1) and `deploy/gen-accounts.mjs`'s own
+ *  `SECRETS_SAFE_RE` (Task 1) and `shared/roster-json.mjs`'s own
  *  `SECRETS_SAFE_RE`, both genuinely named constants (unlike `SUFFIX_SAFE_RE`'s
  *  roster.ts copy above). `ccrc-wrapper-shape` carries no charset copy of its
  *  own to name here: it never validates the secrets path's character set at
@@ -108,7 +108,7 @@ export function generateWrapperBody(account, upstreamId) {
   // merely CONTAINS ".." as a substring — "...", "..foo", ".foo..bar" — is an
   // ordinary, if odd-looking, one-segment directory name with no such
   // meaning, so this checks the exact segment rather than `.includes('..')`
-  // the way `shared/roster.ts` and `deploy/gen-accounts.mjs` do for this same
+  // the way `shared/roster.ts` and `shared/roster-json.mjs` do for this same
   // field. That broader check earns its keep on `secretsFile` below, which
   // CAN contain "/" and therefore CAN have an embedded ".." segment partway
   // through a longer path — `configDirSuffix` cannot, so a substring check

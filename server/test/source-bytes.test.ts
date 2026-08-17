@@ -44,8 +44,19 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
 
 /** The roots that hold hand-written source. `pwa/src` is included for the same
- *  reason the rest are: it is typed by hand and shipped. */
-const ROOTS = ['shared', 'server/src', 'server/test', 'agent/src', 'pwa/src', 'deploy', 'ccd'];
+ *  reason the rest are: it is typed by hand and shipped.
+ *
+ *  `scripts/` was MISSING from the first version of this list and was added by
+ *  the Task 4 review, which went looking for a way to defeat the guard and
+ *  found one: `scripts/extraction-manifest.sh` is tracked, hand-written bash
+ *  that no root here reached. The lesson generalises — this list is the guard's
+ *  real coverage, and a new top-level directory of hand-written source is
+ *  invisible to it until someone adds the name. Deliberately still excluded:
+ *  `scratch/` (throwaway by its own charter) and `.github/` (CI YAML, whose
+ *  `run:` lines are one-liners nobody moves regex literals through). */
+const ROOTS = [
+  'shared', 'server/src', 'server/test', 'agent/src', 'pwa/src', 'deploy', 'ccd', 'scripts',
+];
 
 /** Files whose bytes are not text and must not be read as such. Kept as an
  *  extension list rather than a content sniff so that adding a binary asset is

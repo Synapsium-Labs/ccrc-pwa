@@ -98,7 +98,7 @@ describe('generateWrapperBody', () => {
     // never contain "/", so a suffix is always exactly one segment, and only
     // the literal segment ".." means "go up" to the OS). Neither may be
     // refused: a broader `.includes('..')` guard — the one `shared/roster.ts`
-    // and `deploy/gen-accounts.mjs` carry on this same field — would wrongly
+    // and `shared/roster-json.mjs` carry on this same field — would wrongly
     // reject both, taking away a legitimate dotfile-style name for no safety
     // gain.
     for (const legal of ['...', '..foo']) {

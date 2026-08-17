@@ -205,7 +205,7 @@ const LABEL_UNSAFE_RE = /[\u0000-\u001f\u007f]/;
  *  inside a double-quoted bash string in the wrapper `shared/wrapper.mjs`
  *  writes (`[ -r "$HOME/<path>" ] && . "$HOME/<path>"`), where `$`, `` ` ``,
  *  `"` and `\` are all still live to the shell. Letters, digits, `.`, `-`,
- *  `_` and `/` only. Copies of this rule live in `deploy/gen-accounts.mjs`
+ *  `_` and `/` only. Copies of this rule live in `shared/roster-json.mjs`
  *  (which may be stricter than this file, never laxer — see its header) and
  *  in `shared/wrapper.mjs` (the writer's own lock, which protects it against
  *  a caller that never went through this parser). */
