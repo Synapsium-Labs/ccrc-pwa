@@ -2,7 +2,7 @@
 // INDIVIDUALLY PINNED: one test per kind, each red when its kind is deleted.
 import { describe, it, expect } from 'vitest';
 import { DIVERGENCE_KINDS, SESSION_LIFECYCLES, isDivergenceKind } from '../../shared/api.js';
-import { divergences, type DivergenceInput } from '../src/divergence.js';
+import { divergences, unclaimedWorktrees, type DivergenceInput } from '../src/divergence.js';
 
 const rec = (over: Partial<DivergenceInput['records'][number]> = {}) => ({
   id: 'demo-quiet-basin', project: 'demo', workspace: 'quiet-basin',
@@ -10,11 +10,22 @@ const rec = (over: Partial<DivergenceInput['records'][number]> = {}) => ({
   held: null as string | null, archivedAt: null as number | null, ...over,
 });
 
+/** The registry directory listing for one healthy `demo-quiet-basin`, in
+ *  `cmd_ws_add`'s own write order — the second half of the claim evidence. */
+const REG_NAMES = ['wrapper', 'project', 'workdir', 'uuid', 'workspace', 'base', 'branch']
+  .map((f) => `demo-quiet-basin.${f}`);
+
+/** `unclaimedLastSweep` defaults to EMPTY, so a test that wants an
+ *  `unregistered-worktree` reported has to say that the previous sweep saw it
+ *  too. That is the debounce, and making every such test spell it is the point:
+ *  a single observation is not a finding. */
 const input = (over: Partial<DivergenceInput> = {}): DivergenceInput => ({
   records: [rec()],
   worktrees: [{ project: 'demo', name: 'quiet-basin', path: '/home/u/worktrees/demo/quiet-basin' }],
   headBranch: new Map([['demo/quiet-basin', 'ws/quiet-basin']]),
   openRunSessionIds: new Set<string>(),
+  registryNames: REG_NAMES,
+  unclaimedLastSweep: new Set<string>(),
   ...over,
 });
 
@@ -31,9 +42,79 @@ describe('divergences — the three kinds, individually', () => {
         { project: 'demo', name: 'quiet-basin', path: '/home/u/worktrees/demo/quiet-basin' },
         { project: 'demo', name: 'alertwire', path: '/home/u/worktrees/alertwire' },
       ],
+      unclaimedLastSweep: new Set(['demo/alertwire']),
     }));
     expect(out).toEqual([{ kind: 'unregistered-worktree', id: null,
       path: '/home/u/worktrees/alertwire', detail: expect.any(String) }]);
+  });
+
+  it('THE FIRST SIGHTING IS NOT A FINDING — one interval of evidence, then the name', () => {
+    // The debounce, in the shape the sweep actually runs it: the same input as
+    // the test above with an EMPTY memory says nothing, and the second pass —
+    // which is handed the first pass's own measurement — names it. What this
+    // buys is the instant no signal can cover: `git worktree add` writes
+    // `.git/worktrees/<slug>/` before it starts the checkout, and on a large
+    // repo the checkout is not milliseconds, so a sweep can land with git's
+    // record present and ccd's first `_reg_set` not yet run.
+    const worktrees = [
+      { project: 'demo', name: 'quiet-basin', path: '/home/u/worktrees/demo/quiet-basin' },
+      { project: 'demo', name: 'alertwire', path: '/home/u/worktrees/alertwire' },
+    ];
+    expect(divergences(input({ worktrees })), 'a first sighting was reported as a finding').toEqual([]);
+    const seen = unclaimedWorktrees(input({ worktrees }));
+    expect(seen).toEqual(['demo/alertwire']);
+    expect(divergences(input({ worktrees, unclaimedLastSweep: new Set(seen) })))
+      .toEqual([{ kind: 'unregistered-worktree', id: null,
+                  path: '/home/u/worktrees/alertwire', detail: expect.any(String) }]);
+  });
+
+  describe('a workspace mid-ws-add is CLAIMED, though no parsed row says so', () => {
+    // The false positive this rule exists for, and it would have fired on every
+    // single `ws-add`: git writes `.git/worktrees/<slug>/` first, then ccd
+    // writes the registry field by field — `.wrapper`, `.project`, `.workdir`,
+    // `.uuid`, `.workspace`. `readRegistry` derives its ids from `*.uuid`, so
+    // there is no row at all until the fourth write, and the row that appears
+    // then still has a null `workspace` until the fifth. Both states are
+    // seeded below EXACTLY as ccd leaves them, and neither may be reported —
+    // the repair this kind points at (`ws-gc`) deletes worktrees.
+    const mid = (names: string[], records: DivergenceInput['records']) => divergences(input({
+      records,
+      worktrees: [{ project: 'demo', name: 'newborn', path: '/home/u/worktrees/demo/newborn' }],
+      headBranch: new Map(),
+      registryNames: [...REG_NAMES, ...names],
+      // The worst case for the fix: the PREVIOUS sweep saw it unclaimed, so the
+      // debounce is spent and only the claim rule can be doing the work here.
+      unclaimedLastSweep: new Set(['demo/newborn']),
+    }));
+
+    it('after `.wrapper`, before `.uuid` — no row exists yet, and the listing is the only evidence', () => {
+      expect(mid(['demo-newborn.wrapper', 'demo-newborn.project', 'demo-newborn.workdir'], [rec()]))
+        .toEqual([]);
+    });
+
+    it('after `.uuid`, before `.workspace` — the row exists and claims no workspace', () => {
+      expect(mid(
+        ['demo-newborn.wrapper', 'demo-newborn.project', 'demo-newborn.workdir', 'demo-newborn.uuid'],
+        [rec(), rec({ id: 'demo-newborn', workspace: null, branch: null,
+                      workdir: '/home/u/worktrees/demo/newborn' })],
+      )).toEqual([]);
+    });
+
+    it('residue alone claims it too — the same any-field rule `_ws_slug_free` refuses a slug on', () => {
+      // Verification round 3, P1: an interrupted purge leaves `.archived` and
+      // `.reaping` behind, and ccd will not hand that slug out again. Calling
+      // its worktree unclaimed would contradict the writer.
+      expect(mid(['demo-newborn.reaping'], [rec()])).toEqual([]);
+    });
+
+    it('a NESTED id\'s field is not evidence for this one — ccd\'s own dot rule', () => {
+      // `_ws_slug_free` skips a suffix that holds a further dot: `x.hookstate.json`
+      // is a field of `x.hookstate`, not of `x`. So a listing that only holds
+      // those is no claim at all, and the worktree is named.
+      expect(mid(['demo-newborn.hookstate.json'], [rec()]))
+        .toEqual([{ kind: 'unregistered-worktree', id: null,
+                    path: '/home/u/worktrees/demo/newborn', detail: expect.any(String) }]);
+    });
   });
 
   it('finds a FLAT worktree, not only a nested one', () => {
@@ -42,8 +123,10 @@ describe('divergences — the three kinds, individually', () => {
     // git's OWN admin records rather than the directory layout.
     const out = divergences(input({
       records: [],
+      registryNames: [],
       worktrees: [{ project: 'custom-tools', name: 'alertwire',
                     path: '/home/u/worktrees/custom-tools-alertwire' }],
+      unclaimedLastSweep: new Set(['custom-tools/alertwire']),
     }));
     expect(out.map((d) => d.kind)).toEqual(['unregistered-worktree']);
   });
@@ -118,6 +201,9 @@ describe('divergences — the three kinds, individually', () => {
         ['demo/warm-ridge', 'ws/warm-ridge'],
       ]),
       openRunSessionIds: new Set<string>(),
+      registryNames: ['demo-quiet-basin', 'demo-still-cove', 'demo-warm-ridge']
+        .flatMap((id) => [`${id}.uuid`, `${id}.workspace`]),
+      unclaimedLastSweep: new Set(['demo/nobody']),
     });
     expect(out.map((d) => d.kind).sort()).toEqual(
       ['branch-drift', 'claim-divergence', 'unregistered-worktree']);

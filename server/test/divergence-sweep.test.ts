@@ -90,7 +90,25 @@ const watcherFixture = async (cfg: FixtureCfg = {}) => {
       writeFileSync(path.join(admin, 'HEAD'), `ref: refs/heads/${branch}\n`);
     },
     records: () => readRegistry(io, cfgObj),
+    /** The registry's own DIRECTORY LISTING, which the sweep now takes as
+     *  evidence a workspace is claimed before its row parses. `tick()` passes
+     *  the listing `readRegistryMeasured` already took; here it is read the
+     *  same way, from the same directory. */
+    names: async (): Promise<string[]> => (await io.readdir(cfgObj.registryDir)) ?? [],
   };
+};
+
+/** One sweep, with both of its inputs — `records` and the listing they came
+ *  from. A helper because every test below needs both and neither is
+ *  interesting on its own. */
+const sweep = async (h: Awaited<ReturnType<typeof watcherFixture>>): Promise<void> =>
+  h.watcher.sweepDivergences(await h.records(), await h.names());
+
+/** The clock, moved past the lane's own 60s interval. Every test that sweeps
+ *  more than once needs this or the second call returns at the clock gate
+ *  having looked at nothing. */
+const jump = (minutes: number): void => {
+  vi.spyOn(Date, 'now').mockReturnValue(Date.now() + minutes * 60_000);
 };
 
 describe('sweepDivergences', () => {
@@ -105,18 +123,50 @@ describe('sweepDivergences', () => {
     expect(body).not.toMatch(/worktrees['"`]\s*\)|WORKTREES_ROOT|home,\s*'worktrees'/);
   });
 
-  it('emits ONE divergence frame naming the unregistered worktree', async () => {
+  it('emits ONE divergence frame naming the unregistered worktree — on the SECOND sighting', async () => {
     const h = await watcherFixture();
     h.plantRecord('demo-quiet-basin');
     h.plantWorktreeRecord('demo', 'nobody', '/data/worktrees/demo/nobody', 'ws/nobody');
     const frames: unknown[] = [];
     h.bus.on('divergence', (d) => frames.push(d));
-    await h.watcher.sweepDivergences(await h.records());
-    expect(frames).toHaveLength(1);
-    expect(frames[0]).toEqual([
+    await sweep(h);
+    // The debounce, from the wiring's side: the first sighting publishes the
+    // healthy census, not the finding. The memory that carries it to the next
+    // sweep lives on the watcher, so this pair also proves the field is
+    // actually written — with it left unassigned, the second sweep would be a
+    // first sighting again and this test would never see the frame below.
+    expect(frames).toEqual([[]]);
+    jump(10);
+    await sweep(h);
+    expect(frames).toHaveLength(2);
+    expect(frames[1]).toEqual([
       { kind: 'unregistered-worktree', id: null, path: '/data/worktrees/demo/nobody',
         detail: expect.any(String) },
     ]);
+  });
+
+  it('a workspace mid-ws-add is not named — the registry LISTING claims it before the row does', async () => {
+    // The false positive, seeded exactly as `cmd_ws_add` leaves the box between
+    // `git worktree add` and the fourth `_reg_set`: git's admin record is
+    // written, `.wrapper`/`.project`/`.workdir` exist, `.uuid` does not — so
+    // `readRegistry` (which derives ids from `*.uuid`) hands the sweep no row
+    // for it at all. Swept TWICE, past the debounce, so the claim rule is the
+    // only thing that can be keeping this census empty.
+    const h = await watcherFixture();
+    h.plantRecord('demo-quiet-basin');
+    h.plantWorktreeRecord('demo', 'newborn', '/data/worktrees/demo/newborn', 'ws/newborn');
+    for (const [f, v] of [['wrapper', 'claude'], ['project', 'demo'],
+                          ['workdir', '/data/worktrees/demo/newborn']]) {
+      writeFileSync(path.join(h.home, '.cc-sessions', `demo-newborn.${f}`), v!);
+    }
+    expect((await h.records()).map((r) => r.id), 'the partial row is not the state under test')
+      .toEqual(['demo-quiet-basin']);
+    const frames: unknown[] = [];
+    h.bus.on('divergence', (d) => frames.push(d));
+    await sweep(h);
+    jump(10);
+    await sweep(h);
+    expect(frames).toEqual([[]]);
   });
 
   it('does not re-emit an unchanged census — byte-equality guarded like emitRuns', async () => {
@@ -125,22 +175,27 @@ describe('sweepDivergences', () => {
     h.plantWorktreeRecord('demo', 'nobody', '/data/worktrees/demo/nobody', 'ws/nobody');
     const frames: unknown[] = [];
     h.bus.on('divergence', (d) => frames.push(d));
-    await h.watcher.sweepDivergences(await h.records());
+    await sweep(h);
     // THE CLOCK IS MOVED PAST THE INTERVAL ON PURPOSE, so this proves the BYTE
-    // guard and not the clock gate: without the jump the second call would
+    // guard and not the clock gate: without the jump the later calls would
     // return at the lane clock and this test would pass with no byte guard at
     // all. The clock gate has its own test below, which needs the opposite.
-    const real = Date.now();
-    vi.spyOn(Date, 'now').mockReturnValue(real + 10 * 60_000);
-    await h.watcher.sweepDivergences(await h.records());
-    expect(frames).toHaveLength(1);
+    jump(10);
+    await sweep(h);
+    // Two frames so far and they are DIFFERENT: the empty first sighting, then
+    // the finding the debounce released. The third sweep re-measures the same
+    // state and must publish nothing.
+    expect(frames).toHaveLength(2);
+    jump(20);
+    await sweep(h);
+    expect(frames).toHaveLength(2);
   });
 
   it('does not re-READ inside the interval — the clock gate, not just the byte guard', async () => {
     const h = await watcherFixture();
     h.plantRecord('demo-quiet-basin');
     h.plantWorktreeRecord('demo', 'nobody', '/data/worktrees/demo/nobody', 'ws/nobody');
-    await h.watcher.sweepDivergences(await h.records());
+    await sweep(h);
     // Delete the record: a second sweep INSIDE the interval must not notice,
     // because it must not have looked. A byte-equality guard alone would still
     // have read the directory and would report the census as CHANGED.
@@ -148,7 +203,7 @@ describe('sweepDivergences', () => {
       { recursive: true, force: true });
     const frames: unknown[] = [];
     h.bus.on('divergence', (d) => frames.push(d));
-    await h.watcher.sweepDivergences(await h.records());
+    await sweep(h);
     expect(frames).toHaveLength(0);
   });
 
@@ -157,7 +212,7 @@ describe('sweepDivergences', () => {
     // every watcher built from `testDeps`.
     const h = await watcherFixture({ coord: undefined });
     h.plantRecord('demo-quiet-basin');
-    await expect(h.watcher.sweepDivergences(await h.records())).resolves.toBeUndefined();
+    await expect(sweep(h)).resolves.toBeUndefined();
   });
 
   it('a project whose .git/worktrees cannot be listed contributes NOTHING, never a false census', async () => {
@@ -169,7 +224,9 @@ describe('sweepDivergences', () => {
     h.plantWorktreeRecord('demo', 'nobody', '/data/worktrees/demo/nobody', 'ws/nobody');
     const frames: unknown[] = [];
     h.bus.on('divergence', (d) => frames.push(d));
-    await h.watcher.sweepDivergences(await h.records());
+    await sweep(h);
+    jump(10);
+    await sweep(h);
     expect(frames[0] ?? []).toEqual([]);
   });
 
@@ -177,7 +234,9 @@ describe('sweepDivergences', () => {
     const h = await watcherFixture();
     h.plantRecord('demo-quiet-basin');
     h.plantWorktreeRecord('demo', 'nobody', '/data/worktrees/demo/nobody', 'ws/nobody');
-    await h.watcher.sweepDivergences(await h.records());
+    await sweep(h);
+    jump(10);
+    await sweep(h);
     expect(h.ccdCalls()).toEqual([]);
   });
 

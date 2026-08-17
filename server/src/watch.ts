@@ -24,7 +24,7 @@ import { UNCHECKED_PR } from '../../shared/api.js';
 // literals exist. `single-definition.test.ts` pins both halves of that split.
 import { COORDINATOR_PAUSE_MARKER } from './coord/rundefs.js';
 import { readWorktreeRecords } from './coord/gitref.js';
-import { divergences, type DivergenceInput } from './divergence.js';
+import { divergences, unclaimedWorktrees, type DivergenceInput } from './divergence.js';
 import type { PushPayload } from './push.js';
 import { deriveBranch } from './naming.js';
 import { TranscriptResolver } from './transcript/resolve.js';
@@ -278,6 +278,12 @@ export class FleetWatcher {
    *  a HEALTHY fleet is a frame rather than a silence. */
   private lastDivergenceSweep = 0;
   private lastDivergenceJson: string | null = null;
+  /** `<project>/<name>` for the worktrees the PREVIOUS sweep found unclaimed —
+   *  the census's one-interval debounce on `unregistered-worktree`, and the
+   *  only cross-sweep memory this lane keeps. Empty at boot, so the first sweep
+   *  after a restart reports no worktree of that kind; see `divergences`'s own
+   *  note for why one interval of quiet is the right price. */
+  private lastUnclaimedWorktrees: ReadonlySet<string> = new Set<string>();
   /** `<id>#<uuid>:<derived-branch>` for every pair already tried. THE DERIVED
    *  NAME, not the born slug: a title that changes while the branch is still
    *  at its born name earns exactly one fresh attempt, and a server restart
@@ -617,7 +623,8 @@ export class FleetWatcher {
       void this.sweepNames().catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as `sweepNames` above. Own clock: this reads
       // git's admin directory per project, which is not a per-tick cost.
-      void this.sweepDivergences(records).catch(() => { /* one bad sweep must not kill the poll */ });
+      void this.sweepDivergences(records, registryRead.names)
+        .catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as sweepNames immediately above: this one
       // joins the per-session KeyedQueue AND calls sendPrompt, whose worst case
       // is ~4.3 s of sleeps per message plus one round trip per line
@@ -1416,7 +1423,7 @@ export class FleetWatcher {
    * `this.deps.coord` is `?.`-chained because `testDeps` supplies none — a
    * non-optional call TypeErrors fourteen `hold-gate` tests plus `pr-sweep`'s.
    */
-  async sweepDivergences(records: SessionRecord[]): Promise<void> {
+  async sweepDivergences(records: SessionRecord[], registryNames: readonly string[]): Promise<void> {
     // `Date.now()`, not an injected clock: this class has none, and `sweepNames`
     // just above reads the same way. `!== 0` is not a style tic — it is what
     // makes the FIRST sweep run immediately after a restart instead of waiting a
@@ -1477,19 +1484,34 @@ export class FleetWatcher {
     // done-fingerprint trusts, and the field a rename moves, is this one — which
     // is exactly why this method takes `records`, the same reason `sweepNames`
     // reads the registry itself.
-    const found = divergences({
+    const classifierInput = {
       records: records.map((r) => ({
         id: r.id, project: r.project, workspace: r.workspace, workdir: r.workdir,
         branch: r.branch, held: r.held, archivedAt: r.archivedAt,
       })),
       worktrees, headBranch, openRunSessionIds,
+      // THE REGISTRY'S OWN DIRECTORY LISTING, passed through from the read this
+      // tick already took (D-B4-10's "one listing, shared") — never a second
+      // `readdir` here. It is the evidence that a workspace mid-`ws-add` is
+      // claimed before its row parses; see `unclaimedWorktrees`.
+      registryNames,
+    };
+    const found = divergences({
+      ...classifierInput, unclaimedLastSweep: this.lastUnclaimedWorktrees,
     });
+    // The memory the debounce runs on, replaced only on a sweep that got this
+    // far. An early return above (`coord.runs()` failed) leaves the PREVIOUS
+    // observation standing rather than clearing it: a failed read is not
+    // evidence that a worktree became claimed, and dropping the memory there
+    // would silently re-arm the debounce and delay every finding another
+    // interval. The classifier re-derives the same set internally rather than
+    // being handed it, so this stays ONE definition of the claim rule.
+    this.lastUnclaimedWorktrees = new Set(unclaimedWorktrees(classifierInput));
     const json = JSON.stringify(found);
     if (json === this.lastDivergenceJson) return;
     this.lastDivergenceJson = json;
     this.bus.emit('divergence', found);
   }
-
 
   /**
    * Deliver queued mail, one message per eligible session per sweep.
