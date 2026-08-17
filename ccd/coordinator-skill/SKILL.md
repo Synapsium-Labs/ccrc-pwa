@@ -213,8 +213,12 @@ not after.
    every `toId:'coordinator'` mail from that point on. Opening first never
    lets the count reach zero. Then dispatch wave N+1 (step 2) **fresh into
    the same workspace**.
-6. **Final merge:** `POST /api/runs/:id/close` with `final:true` releases the
-   hold and lets the ordinary sweep archive the workspace. Do not archive it
+6. **Final merge:** `POST /api/runs/:id/close` with `final:true` closes the run
+   and, *if no other open run names this workspace*, releases the hold so the
+   ordinary sweep can archive it. Read `released` in the response: `false`
+   means the run closed but the workspace is **still claimed** — another open
+   run owns it, which is exactly the state step 5's open-before-close creates.
+   The program is not done; close the other run. Do not archive the workspace
    yourself unless the operator asks.
 
 ## What stays discipline

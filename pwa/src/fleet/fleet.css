@@ -1770,7 +1770,14 @@
    `.btn-ghost` (primitives.css) are reused as-is for the consequence line
    and the two buttons — not reinvented, and already carry their own
    `var(--tap-min)` floor. */
-.abandon-sheet {
+/* `.archive-conflict-sheet` (Build 8 Wave 2) is GROUPED with it rather than
+   given a second rule that re-derives the same six declarations: it is the
+   same object — a refusal the operator reads and answers, not a living pane —
+   and it renders the identical `.abandon-error` descendant. Grouping is what
+   keeps that descendant a MEASURED pair under both ancestors instead of one
+   grounded rule and one copy that drifts. */
+.abandon-sheet,
+.archive-conflict-sheet {
   display: grid;
   gap: var(--sp-3);
   color: var(--ink-primary);
@@ -1782,7 +1789,8 @@
    `.coord-banner .coord-error` already uses (6.80:1 DARK / 5.73:1 LIGHT,
    tokens.css's own comment), reused rather than a third rule re-deriving
    the same ratio. */
-.abandon-sheet .abandon-error {
+.abandon-sheet .abandon-error,
+.archive-conflict-sheet .abandon-error {
   margin: 0;
   font-size: var(--text-sm);
   color: var(--status-dead-text);

@@ -37,6 +37,15 @@ const ROOTS = [
 function sources(dir: string): string[] {
   const out: string[] = [];
   for (const e of readdirSync(dir)) {
+    // `__`-prefixed entries are TRANSIENT mutants written by a parallel suite
+    // (`boot.test.ts` writes `server/src/__boot_control_mutant__.ts` for ~15s).
+    // Two failure modes, not one: `statSync`/`readFileSync` ENOENT on a file
+    // that vanished mid-walk, and — while it exists — it is a verbatim copy of
+    // `index.ts`, so a value this suite pins as appearing ONCE momentarily
+    // appears twice, i.e. a false "second copy" in the very test whose job is
+    // to fail the build on a second copy. Same guard, same reason, as
+    // `run-routes.test.ts`'s `sourcesUnder`.
+    if (e.startsWith('__')) continue;
     const p = path.join(dir, e);
     if (statSync(p).isDirectory()) { out.push(...sources(p)); continue; }
     if (/\.tsx?$/.test(p)) out.push(p);

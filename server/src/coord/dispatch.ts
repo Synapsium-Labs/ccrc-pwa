@@ -382,7 +382,7 @@ export async function dispatchRun(
 
   // 5: hold, behind `verbSupported` — the standing convention reason string,
   // DISPLAY-ONLY and never parsed back.
-  const holdArgv = CCD_ARGV.wsHold(sessionId, holdReason(run.program, run.wave, run.waveOf));
+  const holdArgv = CCD_ARGV.wsHold(sessionId, holdReason(run.program, run.wave, run.waveOf, run.id));
   if (!verbSupported(deps.fleetState, holdArgv)) {
     return { ok: false, kind: 'unsupported' };
   }

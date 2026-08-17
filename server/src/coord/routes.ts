@@ -143,7 +143,7 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
  *  used to build inline, and the same totality guard (fix round 1,
  *  finding 1/3) — see that function's own docstring for the measurement. */
 function sendCloseOutcome(reply: FastifyReply, r: CloseOutcome) {
-  if (r.ok) return reply.code(200).send({ ok: true, id: r.id, state: r.state });
+  if (r.ok) return reply.code(200).send({ ok: true, id: r.id, state: r.state, released: r.released });
   switch (r.kind) {
     case 'unknown-run': return reply.code(404).send({ ok: false, error: 'unknown-run' });
     case 'bad-transition':
@@ -771,7 +771,7 @@ export function registerCoordRoutes(
     // rather than `ws-add` (deviation D-1).
     if (typeof sessionId === 'string') {
       coord.setSession(opened.id, sessionId);
-      const argv = CCD_ARGV.wsHold(sessionId, holdReason(program, wave, waveOfVal));
+      const argv = CCD_ARGV.wsHold(sessionId, holdReason(program, wave, waveOfVal, opened.id));
       if (!verbSupported(deps.fleetState, argv)) {
         return reply.code(501).send({ ok: false, error: 'unsupported' });
       }

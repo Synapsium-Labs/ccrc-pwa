@@ -240,7 +240,14 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     swap: (id: string, wrapper: string) => post(`${sid(id)}/swap`, { wrapper }),
     pr: (id: string) => getJson<PrView>(`${sid(id)}/pr`),
     prOpen: (id: string, b: { title: string; body: string; draft: boolean }) => post(`${sid(id)}/pr`, b),
-    archive: (id: string) => post(`${sid(id)}/archive`),
+    /** `{force:true}` ONLY when it is true — `opts?.force === false` and an
+     *  absent `opts` both send the byte-identical unforced request the route
+     *  has always taken (no `content-type`, no body). The force flag is not a
+     *  checkbox anywhere in the UI: it is a SECOND tap, made after the
+     *  operator has read the `409 run-open` refusal, because the refusal is
+     *  the whole information. See `ArchiveConflictSheet`. */
+    archive: (id: string, opts?: { force?: boolean }) =>
+      post(`${sid(id)}/archive`, opts?.force === true ? { force: true } : undefined),
     restore: (id: string) => post(`${sid(id)}/restore`),
     /** `POST /forget` — registry-only removal of a dead non-workspace session.
      *  Every gate (not a workspace, not held, not alive) is ccd's, re-proven
@@ -304,8 +311,26 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  offer ("the phone can abandon; the phone can never archive" is
      *  structural on the server, and this client sends nothing that could
      *  smuggle it past that). Deliberately UNGATED, same reasoning as
-     *  `coordPause` just above: no box token on this call. */
-    abandonRun: (id: number) => post(`/api/runs/${id}/abandon`),
+     *  `coordPause` just above: no box token on this call.
+     *
+     *  It now RETURNS the resolution. `released:false` means the run closed
+     *  but the WORKSPACE stayed claimed, because a sibling open run still
+     *  names the session — the state the coordinator protocol deliberately
+     *  creates by opening wave N+1 before closing wave N. An older server
+     *  sends no such field, and absence reads TRUE: today's behaviour, no
+     *  toast, the safe direction.
+     *
+     *  READ THE FIELD WITH ITS PRODUCER IN MIND (`CloseOutcome.released`,
+     *  server/src/coord/close.ts): `false` is the negation of one fact, not
+     *  one fact. On the ABANDON route it has two producers — a sibling
+     *  re-hold, and a `planned` run with no session, which does no fleet act
+     *  at all — and only the first is worth a sentence about another run.
+     *  `AbandonSheet` separates them on the run's own `sessionId`. */
+    abandonRun: async (id: number): Promise<{ released: boolean }> => {
+      const res = await request(`/api/runs/${id}/abandon`, { method: 'POST' });
+      const body = (await res.json().catch(() => ({}))) as { released?: unknown };
+      return { released: body.released !== false };
+    },
     /** The DURABLE feed. `catchUp` is the live tail and is volatile by
      *  construction (notifymark.ts advances the mark at receipt); this is the
      *  read that still has bodies after a deploy. */

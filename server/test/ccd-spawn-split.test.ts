@@ -187,12 +187,31 @@ describe('_spawn_start / _spawn_settle', () => {
     // The list above only means something if it is exhaustive. Ask the SHELL
     // which functions mention `_spawn_start`, rather than trusting the list to
     // have been updated: a new caller that forgets to enrol turns up here.
-    const callers = h.sh(
-      'while read -r f; do [[ "$f" == _spawn_start ]] && continue;'
+    //
+    // THE COUNT LINE IS LOAD-BEARING, and it is here because this assertion
+    // ALREADY under-reported once. `type "$f"` forks per function; on a loaded
+    // box one can come back empty, which does not fail anything — it silently
+    // drops that caller from the answer, and a SHORTER list then reads as
+    // "nothing new calls it". Measured on 2026-08-17: a full-suite run reported
+    // `cmd_start` missing while the same file alone was 44/44.
+    //
+    // So the shell reports how many functions it actually walked. A walk that
+    // shrinks is a FAILED MEASUREMENT, not a shorter list — the same rule this
+    // build applies everywhere else: never answer a partial measurement as
+    // though it were a complete one. The floor is well under ccd's real count
+    // (137 definitions at the time of writing) so it tracks catastrophic
+    // truncation, not the file's growth.
+    const out = h.sh(
+      'fns=$(declare -F | sed "s/^declare -f //");'
+      + ' printf "COUNT=%s\\n" "$(printf %s "$fns" | grep -c .)";'
+      + ' while read -r f; do [[ "$f" == _spawn_start ]] && continue;'
       + ' type "$f" 2>/dev/null | grep -q "_spawn_start" && echo "$f"; done'
-      + ' < <(declare -F | sed "s/^declare -f //") | sort; :');
-    expect(callers.split('\n').filter(Boolean).sort())
-      .toEqual([...SPAWN_START_CALLERS].sort());
+      + ' <<< "$fns" | sort; :');
+    const lines = out.split('\n').filter(Boolean);
+    const count = Number((lines.shift() ?? '').replace('COUNT=', ''));
+    expect(count, 'the function walk was truncated — this is a failed measurement, not a short list')
+      .toBeGreaterThan(100);
+    expect(lines.sort()).toEqual([...SPAWN_START_CALLERS].sort());
   });
 });
 

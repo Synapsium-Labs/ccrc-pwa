@@ -6,6 +6,7 @@ import type { FleetSession } from '../../shared/api';
 import { ToastHost } from '../src/components/Toast';
 import { SessionActionsSheet } from '../src/fleet/SessionActionsSheet';
 import { createFleetStore } from '../src/stores/fleet';
+import { ApiError, type api } from '../src/lib/api';
 import { TEST_ROSTER } from './rosterFixture';
 
 const s = (over: Partial<FleetSession> = {}): FleetSession => ({
@@ -40,6 +41,25 @@ const accountsRoute = (): Response =>
   new Response(JSON.stringify({ accounts: [], projected: null, roster: TEST_ROSTER }), {
     status: 200, headers: { 'content-type': 'application/json' },
   });
+
+/** The render helper this file never had — every mount above is spelled
+ *  inline, with `open`, `onClose` and `onReap` all required. Task 213 needs an
+ *  INJECTED `archive` (the AbandonSheet idiom: never module-mock what a prop
+ *  can carry), and `ToastHost` alongside, because the point of two of its
+ *  tests is WHICH of the two surfaces the refusal lands on. */
+const renderSheet = (
+  session: FleetSession, over: { archive?: typeof api.archive } = {},
+): void => {
+  render(
+    <>
+      <SessionActionsSheet session={session} open onClose={() => {}} onReap={() => {}} {...over} />
+      <ToastHost />
+    </>,
+  );
+};
+/** The two shapes the archive door needs, named once. */
+const workspaceSession = (): FleetSession => s({ workspace: 'quiet-basin', archivedAt: null });
+const heldSession = (): FleetSession => s({ held: 'program:build4 wave:2/4 run:17' });
 
 // vitest runs without globals, so RTL's auto-cleanup never registers itself
 // (see test/message-links.test.tsx et al.) — without this, rerender/multi-render
@@ -205,6 +225,78 @@ describe('archive and restore (D5 rider 1)', () => {
     fireEvent.click(screen.getByRole('button', { name: /archive workspace/i }));
     expect(await screen.findByText(/Couldn't archive — not merged/)).toBeInTheDocument();
   });
+
+  // Build 8 Wave 2, Task 213. `archive` is INJECTED, not module-mocked — the
+  // AbandonSheet idiom, and the reason this component gained the prop. The
+  // helper is new: this file had no render helper at all, every mount was
+  // spelled inline with `open`/`onClose`/`onReap` each time.
+  it('Archive workspace routes a 409 run-open into the sheet, never a toast', async () => {
+    const archive = vi.fn().mockRejectedValue(
+      new ApiError(409, { ok: false, error: 'run-open', runs: [{ id: 17, program: 'build4', wave: 2, waveOf: 3 }] }));
+    renderSheet(workspaceSession(), { archive });
+    fireEvent.click(screen.getByRole('button', { name: 'Archive workspace' }));
+    await waitFor(() => expect(screen.getByText(/This workspace is claimed/)).toBeTruthy());
+    expect(screen.getByText(/run 17/)).toBeTruthy();
+    // The defect this replaces: a bare slug in a toast.
+    expect(screen.queryByText(/Couldn't archive — run-open/)).toBeNull();
+  });
+
+  it('any OTHER archive failure still toasts — the sheet is for run-open, not for everything', async () => {
+    const archive = vi.fn().mockRejectedValue(new ApiError(502, { ok: false, stderr: 'ws-archive: busy' }));
+    renderSheet(workspaceSession(), { archive });
+    fireEvent.click(screen.getByRole('button', { name: 'Archive workspace' }));
+    expect(await screen.findByText(/Couldn't archive — ws-archive: busy/)).toBeInTheDocument();
+    expect(screen.queryByText(/This workspace is claimed/)).toBeNull();
+  });
+
+  // The SAME class as this file's `swapOpen`/`holdOpen`/`releaseConfirmOpen`
+  // resets, one state later: `conflict` is a claim measured for ONE session,
+  // and FleetScreen's `openActionsFor` retargets `actionsSession` while
+  // `actionsOpen` stays true (tap another row's ··· with this sheet up). The
+  // sheet is mounted at screen level and never unmounts on close, so nothing
+  // else clears it — session B's operator would be shown session A's run.
+  it('a run-open captured for session A does NOT follow a retarget to session B', async () => {
+    const archive = vi.fn().mockRejectedValue(
+      new ApiError(409, { ok: false, error: 'run-open', runs: [{ id: 17, program: 'build4', wave: 2, waveOf: 3 }] }));
+    const b = s({ id: 'demo-still-ridge', workspace: 'still-ridge', archivedAt: null });
+    const props = { open: true, onClose: () => {}, onReap: () => {}, archive };
+    const { rerender } = render(
+      <>
+        <SessionActionsSheet session={workspaceSession()} {...props} />
+        <ToastHost />
+      </>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Archive workspace' }));
+    await waitFor(() => expect(screen.getByText(/This workspace is claimed/)).toBeTruthy());
+
+    rerender(
+      <>
+        <SessionActionsSheet session={b} {...props} />
+        <ToastHost />
+      </>,
+    );
+    expect(screen.queryByText(/This workspace is claimed/)).toBeNull();
+    expect(screen.queryByText(/run 17/)).toBeNull();
+  });
+
+  // The OTHER half of "unconditional": `ArchiveConflictSheet` is mounted as a
+  // SIBLING of `<Sheet open={open}>`, not inside it, so a claim left set while
+  // the actions sheet closes stays on screen with nothing behind it. A reset
+  // living in the close-only effect above (`if (open) return`) would pass the
+  // retarget test and still leave this one red.
+  it('closing the door drops the claim — the conflict sheet is not gated on `open`', async () => {
+    const archive = vi.fn().mockRejectedValue(
+      new ApiError(409, { ok: false, error: 'run-open', runs: [{ id: 17, program: 'build4', wave: 2, waveOf: 3 }] }));
+    const session = workspaceSession();
+    const props = { session, onClose: () => {}, onReap: () => {}, archive };
+    const { rerender } = render(
+      <><SessionActionsSheet {...props} open /><ToastHost /></>);
+    fireEvent.click(screen.getByRole('button', { name: 'Archive workspace' }));
+    await waitFor(() => expect(screen.getByText(/This workspace is claimed/)).toBeTruthy());
+
+    rerender(<><SessionActionsSheet {...props} open={false} /><ToastHost /></>);
+    expect(screen.queryByText(/This workspace is claimed/)).toBeNull();
+  });
 });
 
 describe('hold and release', () => {
@@ -287,6 +379,19 @@ describe('hold and release', () => {
     expect(screen.queryByText(/will archive on the next sweep/)).not.toBeInTheDocument();
     // And the deferral itself is named, not merely hedged away.
     expect(screen.getByText(/busy or attached session defers/)).toBeInTheDocument();
+  });
+
+  it('the release consequence no longer promises a sweep the run can veto', () => {
+    // Build 8 Wave 2: `archiveMerged` now asks coord.db as well, so an absent
+    // hold is not sufficient — releasing does NOT re-arm the sweep while a run
+    // is open. This is the PWA half of ccd's own corrected `cmd_ws_release`
+    // comment; left uncorrected, the phone tells the operator the opposite of
+    // what the box will do.
+    renderSheet(heldSession());
+    fireEvent.click(screen.getByRole('button', { name: /release/i }));
+    const text = screen.getByText(/released —/).textContent ?? '';
+    expect(text).toMatch(/open run/i);
+    expect(text).toMatch(/may/);              // still a MAY, never a WILL
   });
 
   it('confirming Release posts /release and closes the sheet', async () => {

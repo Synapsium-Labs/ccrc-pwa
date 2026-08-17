@@ -2159,6 +2159,39 @@ export class FleetWatcher {
         this.notifyHeldMerged(r, pr.number, safety.held);
         continue;
       }
+      // THE THIRD RUNG (Wave 2), and it is what makes this surface SAFE
+      // rather than merely safer: an ABSENT hold is no longer sufficient to
+      // archive. `coord.db` is the authority on "whose claim is this?" — the
+      // hold file is one path keyed on a session id whose reason string is
+      // display-only and parsed back nowhere. Release-then-crash (hold gone,
+      // run still open) and the archive-vs-hold race both stop mattering
+      // here, because the sweep now asks the authoritative question.
+      //
+      // `?.` IS LOAD-BEARING: `test/helpers.ts`'s `testDeps` supplies no
+      // `coord`, and every archive test in `hold-gate.test.ts` and
+      // `pr-sweep.test.ts` builds its watcher from it. A non-optional call
+      // TypeErrors every test that reaches this archive path and has nothing
+      // to do with runs — MEASURED by deleting the `?.`: 7 red, 3 in
+      // `hold-gate.test.ts` and 4 in `pr-sweep.test.ts`. (The earlier
+      // "fourteen" was never measured; this branch's own doctrine is that a
+      // stated measurement holds.) The
+      // `?? []` is NOT an overloaded null: a server with coordination
+      // switched off has no runs to be claimed BY, so "no coord" and "no
+      // open run" are the same fact here, not two a caller would handle
+      // differently — the same stance every other coord-gated surface in
+      // this file takes ("absent means none of this exists").
+      //
+      // NO CACHE, for the reason the rung two above already states in its own
+      // words: a snapshot consulted at a destructive decision point is the
+      // shape this function had to fix once. Measured N reaching this query
+      // on the live fleet: 0 rows per sweep.
+      const openRuns = this.deps.coord?.openRunsForSession(r.id) ?? [];
+      if (openRuns.length > 0) {
+        const s = openRuns[openRuns.length - 1]!;
+        this.notifyHeldMerged(r, pr.number,
+          `run ${s.id} is still open — ${s.program} wave ${s.wave}${s.waveOf === null ? '' : `/${s.waveOf}`}`);
+        continue;
+      }
       if (safety.verdict !== 'ok') continue;   // defers; the next sweep retries
       const argv = CCD_ARGV.wsArchive(r.id);
       // The same gate the `pr-state` sweep above and the `/archive` route

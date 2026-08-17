@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { FleetSession, PrState, PrView } from '../../shared/api';
+import type { FleetSession, PrState, PrView, RunSummary } from '../../shared/api';
+import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { ToastHost } from '../src/components/Toast';
 import { PrSheet } from '../src/session/PrSheet';
 import { checkPhrase, prSentence, tooltipSentence } from '../src/session/PrKeycap';
-import { UNSUPPORTED_VERB_TEXT } from '../src/lib/api';
+import { ApiError, UNSUPPORTED_VERB_TEXT, type api } from '../src/lib/api';
 
 const pr = (over: Partial<PrState> = {}): PrState => ({
   phase: 'none', number: null, url: null, title: null, checks: null, checkNames: null,
@@ -40,8 +41,49 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
-const open = (s: FleetSession = sess(), onReap = (): void => {}) =>
-  render(<><ToastHost /><PrSheet session={s} open onClose={() => {}} onReap={onReap} /></>);
+// `archive` and `fleet` are injectable so the tests neither mock the module nor
+// mutate the app-wide store singleton — the `AbandonSheet`/`SessionActionsSheet`
+// idiom, and the reason PrSheet gained both props (Tasks 213 and 215). The
+// override keys are the PROP names, so `{...over}` is the whole wiring.
+const open = (s: FleetSession = sess(), onReap = (): void => {},
+              over: { archive?: typeof api.archive; fleet?: FleetStore } = {}) =>
+  render(<><ToastHost /><PrSheet session={s} open onClose={() => {}} onReap={onReap} {...over} /></>);
+
+/** A fleet store carrying exactly the one slice the post-merge note reads.
+ *  A FRESH store per call, never `useFleetStore`: the singleton outlives the
+ *  test that wrote to it. */
+const storeWith = (over: { runs?: RunSummary[]; runsFrameSeen?: boolean }): FleetStore => {
+  const store = createFleetStore({
+    makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null,
+      close(): void {} }) as unknown as WebSocket,
+  });
+  store.setState({ runs: over.runs ?? [], runsFrameSeen: over.runsFrameSeen ?? false });
+  return store;
+};
+
+/** A `RunSummary`. Nothing in this file supplies one, so it is spelled in
+ *  full — every field is required on the interface and the compiler names any
+ *  omission. */
+const runFor = (sessionId: string, id: number, program: string,
+                wave: number, waveOf: number | null): RunSummary => ({
+  id, program, programTitle: 'Fleet controls', wave, waveOf, project: 'demo',
+  sessionId, workspace: sessionId, branch: `ws/${sessionId}`,
+  state: 'working', resumed: false, clearedAt: null,
+  openedAt: 1785300000000, dispatchedAt: 1785300000000, closedAt: null,
+  handoffCommit: null, items: { done: 0, total: 0 }, unreadMail: 0,
+});
+
+/** A session whose PR is MERGED and whose workspace is NOT archived — the one
+ *  shape that renders `Archive now`. It also points this file's `fetched` view
+ *  at the same phase (the side effect is the point, and every hand-written
+ *  case above does it inline): the sheet fires a one-shot GET on open, and a
+ *  view landing mid-test with `phase: 'none'` would swap the whole branch out
+ *  from under the assertion. */
+const mergedUnarchived = (): FleetSession => {
+  const merged = pr({ phase: 'merged', number: 42, url: 'u', mergedAt: Date.now() - 12 * 60_000 });
+  fetched = view({ pr: merged, draft: null });
+  return sess({ pr: merged, archivedAt: null });
+};
 
 describe('opening the sheet refreshes', () => {
   it('fires one GET and shows the cached value meanwhile', async () => {
@@ -447,6 +489,121 @@ describe('mutation-sweep closures', () => {
     fireEvent.click(await screen.findByRole('button', { name: /archive now/i }));
     await waitFor(() => expect((globalThis.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls
       .some((c) => String(c[0]).endsWith('/archive'))).toBe(true));
+  });
+
+  // Build 8 Wave 2, Task 213 — the door, not the sheet: `ArchiveConflictSheet`
+  // has its own file, and a component that only exists in its own isolated
+  // test ships missing the moment someone drops the line from the screen that
+  // mounts it (Task 11's review lesson, applied again).
+  it('Archive now routes a 409 run-open into the sheet, never a toast', async () => {
+    const archive = vi.fn().mockRejectedValue(
+      new ApiError(409, { ok: false, error: 'run-open', runs: [{ id: 17, program: 'build4', wave: 2, waveOf: 3 }] }));
+    open(mergedUnarchived(), () => {}, { archive });
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive now' }));
+    await waitFor(() => expect(screen.getByText(/This workspace is claimed/)).toBeTruthy());
+    expect(screen.getByText(/run 17/)).toBeTruthy();
+    // The defect this replaces: a bare slug in a toast.
+    expect(screen.queryByText(/Archiving failed — run-open/)).toBeNull();
+  });
+
+  it('any OTHER archive failure still toasts — the sheet is for run-open, not for everything', async () => {
+    const archive = vi.fn().mockRejectedValue(new ApiError(502, { ok: false, stderr: 'ws-archive: busy' }));
+    open(mergedUnarchived(), () => {}, { archive });
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive now' }));
+    await waitFor(() => expect(screen.getByText(/ws-archive: busy/)).toBeTruthy());
+    expect(screen.queryByText(/This workspace is claimed/)).toBeNull();
+  });
+
+  // `conflict` is a claim measured for ONE session. This sheet takes `session`
+  // and `open` as INDEPENDENT props and its own one-shot effect already keys on
+  // `[open, id]` — i.e. it is written for a target that can change under it —
+  // so the reset belongs on the same effect. (SessionHeader's only mount today
+  // sits under an `app.tsx`-keyed SessionScreen, which remounts on a session
+  // change; this pins the component's contract, not that one wiring.)
+  it('a run-open captured for session A does NOT follow a retarget to session B', async () => {
+    const archive = vi.fn().mockRejectedValue(
+      new ApiError(409, { ok: false, error: 'run-open', runs: [{ id: 17, program: 'build4', wave: 2, waveOf: 3 }] }));
+    const a = mergedUnarchived();
+    const b = { ...a, id: 'demo-still-basin', workspace: 'still-basin' };
+    const { rerender } = render(
+      <><ToastHost /><PrSheet session={a} open onClose={() => {}} onReap={() => {}} archive={archive} /></>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive now' }));
+    await waitFor(() => expect(screen.getByText(/This workspace is claimed/)).toBeTruthy());
+
+    rerender(
+      <><ToastHost /><PrSheet session={b} open onClose={() => {}} onReap={() => {}} archive={archive} /></>);
+    await waitFor(() => expect(screen.queryByText(/This workspace is claimed/)).toBeNull());
+    expect(screen.queryByText(/run 17/)).toBeNull();
+  });
+
+  // The OTHER half of "unconditional": `ArchiveConflictSheet` is a SIBLING of
+  // `<Sheet open={open}>`, not a child, so a claim left set while this sheet
+  // closes stays on screen with nothing behind it. A reset tucked inside the
+  // effect's `if (open)` branch would pass the retarget test above (the
+  // retarget happens with `open` still true) and leave this one red.
+  it('closing the door drops the claim — the conflict sheet is not gated on `open`', async () => {
+    const archive = vi.fn().mockRejectedValue(
+      new ApiError(409, { ok: false, error: 'run-open', runs: [{ id: 17, program: 'build4', wave: 2, waveOf: 3 }] }));
+    const session = mergedUnarchived();
+    const { rerender } = render(
+      <><ToastHost /><PrSheet session={session} open onClose={() => {}} onReap={() => {}} archive={archive} /></>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive now' }));
+    await waitFor(() => expect(screen.getByText(/This workspace is claimed/)).toBeTruthy());
+
+    rerender(
+      <><ToastHost /><PrSheet session={session} open={false} onClose={() => {}} onReap={() => {}} archive={archive} /></>);
+    await waitFor(() => expect(screen.queryByText(/This workspace is claimed/)).toBeNull());
+  });
+
+  // Task 215 — the note enumerated TWO reasons a merged workspace sits
+  // unarchived (a hold, a busy session) and Wave 2's `archiveMerged` rung
+  // created a third: an OPEN RUN. Zero wire change; the fleet store already
+  // carries the active run list.
+  it('names an OPEN RUN as the third reason a merged workspace is unarchived', () => {
+    open(mergedUnarchived(), () => {},                       // held === null
+         { fleet: storeWith({ runsFrameSeen: true, runs: [runFor('demo-quiet-basin', 17, 'build4', 2, 3)] }) });
+    const note = screen.getByText(/Not archived/).textContent ?? '';
+    expect(note).toMatch(/run 17/);
+    expect(note).toMatch(/build4/);
+    expect(note).not.toMatch(/session busy/);
+  });
+
+  it('degrades to the shipped two-reason sentence before the first runs frame', () => {
+    // A run list that has not been confirmed by a frame is not evidence of
+    // anything — the store's own idiom, and the reason this reads
+    // `runsFrameSeen` rather than asserting from whatever is in the array.
+    //
+    // The fixture carries a MATCHING run with `runsFrameSeen: false` on
+    // purpose. The shipped store cannot currently produce that pair (its one
+    // writer sets both together, `stores/fleet.ts`), so a `runs: []` fixture
+    // would leave this test unable to fail when the gate is deleted — the
+    // exact "coverage that is not a mechanism" this branch keeps finding.
+    // Setting the state directly is what makes the guard falsifiable, and it
+    // is the state the guard exists for the moment a cold read ever fills
+    // `runs` the way `RunsScreen` already fills its own `cold` slice.
+    open(mergedUnarchived(), () => {}, { fleet: storeWith({ runsFrameSeen: false,
+      runs: [runFor('demo-quiet-basin', 17, 'build4', 2, 3)] }) });
+    expect(screen.getByText('Not archived yet (session busy)')).toBeTruthy();
+  });
+
+  it('a CLOSED run is not a reason', () => {
+    open(mergedUnarchived(), () => {}, { fleet: storeWith({ runsFrameSeen: true,
+      runs: [{ ...runFor('demo-quiet-basin', 17, 'build4', 2, 3), state: 'done' }] }) });
+    expect(screen.getByText('Not archived yet (session busy)')).toBeTruthy();
+  });
+
+  it('a run on ANOTHER session is not a reason either', () => {
+    open(mergedUnarchived(), () => {}, { fleet: storeWith({ runsFrameSeen: true,
+      runs: [runFor('demo-far-mesa', 17, 'build4', 2, 3)] }) });
+    expect(screen.getByText('Not archived yet (session busy)')).toBeTruthy();
+  });
+
+  it('the HOLD still wins when both are present — one sentence, never two', () => {
+    open({ ...mergedUnarchived(), held: 'program:build4 wave:2/3 run:17' }, () => {},
+         { fleet: storeWith({ runsFrameSeen: true, runs: [runFor('demo-quiet-basin', 17, 'build4', 2, 3)] }) });
+    const note = screen.getByText(/Not archived/).textContent ?? '';
+    expect(note).toMatch(/held: program:build4 wave:2\/3 run:17/);
+    expect(screen.queryAllByText(/Not archived/)).toHaveLength(1);
   });
 
   // svc's round-4 residual. `/archive` and `/restore` grew a `verbSupported`

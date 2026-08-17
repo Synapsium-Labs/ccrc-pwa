@@ -7,7 +7,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, WS_ADD, CCD, type CcdHarness } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-hold-'); });
@@ -315,4 +315,30 @@ describe('held is a refusal rung on the destructive verbs', () => {
     expect(h.ghPoison()).toEqual([]);
     expect(fs.existsSync(h.sh(`_reg_get ${id} workdir`))).toBe(true);
   }, 30000);
+});
+
+describe('cmd_ws_release: what the comment promises', () => {
+  const src = fs.readFileSync(CCD, 'utf8');
+  // The WHOLE function, bounded by the next top-level definition rather than
+  // by a character count: the plan's 1200-char window stopped short of the
+  // `die` message the third test below pins, so a guard meant to prove the
+  // verb's BEHAVIOUR is unchanged would have failed on a slice length.
+  const start = src.indexOf('cmd_ws_release() {');
+  const fn = src.slice(start, src.indexOf('\ncmd_', start + 1));
+
+  it('no longer promises the sweep re-arms itself with no edge to miss', () => {
+    // TRUE until Wave 2's `archiveMerged` rung: an ABSENT hold is no longer
+    // sufficient to archive, so a by-hand release does NOT re-arm the sweep
+    // while a run is open. A false comment on the box is worse than none.
+    expect(fn).not.toMatch(/the level re-arms itself, no edge to miss/);
+  });
+
+  it('names the OTHER gate a release does not clear', () => {
+    expect(fn).toMatch(/open run/i);
+  });
+
+  it('changes nothing about the verb: still idempotent, still fail-shut on rm', () => {
+    expect(fn).toMatch(/Idempotent/);
+    expect(fn).toMatch(/it is STILL held/);
+  });
 });
