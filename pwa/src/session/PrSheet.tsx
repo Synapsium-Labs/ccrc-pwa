@@ -15,13 +15,21 @@ import { QuickConfirm } from '../components/QuickConfirm';
 import { toast } from '../components/Toast';
 import { api, apiErrorText } from '../lib/api';
 import { ArchiveConflictSheet, runOpenRuns, type ArchiveConflictRun } from '../fleet/ArchiveConflictSheet';
+import { isRunClosed } from '../fleet/runWords';
+import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { checkPhrase, prSentence, tooltipSentence, UNCHECKED_PR } from './PrKeycap';
 import './chat.css';
 
 export function PrSheet({
   session, open, onClose, onReap,
   archive = api.archive,
+  fleet = useFleetStore,
 }: {
+  /** The fleet store, injectable exactly as `SessionActionsSheet` takes it —
+   *  this sheet reads ONE slice of it (the active runs), and a test that had
+   *  to mutate the app-wide singleton to set that slice would leak into every
+   *  test after it. */
+  fleet?: FleetStore;
   session: FleetSession | null;
   open: boolean;
   onClose: () => void;
@@ -52,6 +60,19 @@ export function PrSheet({
   // One-shot on open: the cached value from the fleet sweep is on screen
   // meanwhile, so the sheet is never blank.
   useEffect(() => { if (open) load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [open, id]);
+
+  // THE THIRD REASON a merged workspace sits unarchived, and it needs ZERO
+  // wire change: the fleet store already carries the active run list. Both
+  // reads are HOOKS, so they run above the `session === null` guard like every
+  // other hook here.
+  //
+  // Gated on `runsFrameSeen` — an empty `runs` before the first frame is not
+  // evidence of no runs, the store's own idiom — and DEGRADING to the shipped
+  // two-reason sentence rather than asserting from a list that has not
+  // arrived.
+  const runsFrameSeen = fleet((s) => s.runsFrameSeen);
+  const openRun = fleet((s) => s.runs).find((r) => r.sessionId === id && !isRunClosed(r)) ?? null;
+  const claimingRun = runsFrameSeen ? openRun : null;
 
   if (!session) return null;
   // The fresh one-shot GET wins over the cached fleet-sweep value once it
@@ -266,10 +287,16 @@ export function PrSheet({
                       `cmd_ws_archive` down past it, so the citation came to
                       point into `cmd_caps` — a line number is a fact about a
                       revision, a function name is a fact about the program. */}
+                  {/* THREE reasons now, in the order of what the operator can
+                      do about them. The hold still wins when both are present:
+                      one sentence, never two — a note that stacks its reasons
+                      is a note nobody reads. */}
                   <p className="pr-note">
                     {session.held !== null
                       ? `Not archived — held: ${session.held}. A held workspace is skipped by every sweep; release it (Release, in the session’s actions sheet) or archive it by hand below.`
-                      : 'Not archived yet (session busy)'}
+                      : claimingRun !== null
+                        ? `Not archived — run ${claimingRun.id} (${claimingRun.program} wave ${claimingRun.wave}${claimingRun.waveOf === null ? '' : `/${claimingRun.waveOf}`}) is still open on this workspace. Since Build 8 the sweep asks coord.db, not only the hold file, so releasing the hold will not archive it while that run is open. Close the run, or archive it by hand below.`
+                        : 'Not archived yet (session busy)'}
                   </p>
                   <button type="button" className="btn-ghost" disabled={busy}
                           onClick={() => void archiveNow()}>
