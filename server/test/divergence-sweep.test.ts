@@ -305,13 +305,46 @@ describe('readWorktreeRecords', () => {
       .toEqual({ ok: false, reason: 'unreachable' });
   });
 
-  it('a project directory that is not a checkout at all is unreachable too, not a zero', async () => {
-    // Four non-git project directories exist on the fleet. There is no git
-    // record to census in one, and saying "zero linked worktrees" about it is
-    // a claim about a repository that is not there.
+  it('a project directory that is not a checkout at all is NOT-A-CHECKOUT — standing, and a different word from silence', async () => {
+    // Four non-git project directories exist on the fleet, and this is the arm
+    // they take every sweep, forever. It is not the arm a dropped socket takes,
+    // and until this split both wore the same word — a STANDING condition and a
+    // TRANSIENT one answering the same value at the same seam, which is the
+    // overloaded-null defect the whole `WorktreeRead` union exists to undo.
+    //
+    // The evidence is the same positive-answer technique the measured zero
+    // already runs on, one level up: `<projectsRoot>/<project>` ANSWERED, so the
+    // link was up, and `<project>/.git` still did not — that is a measurement,
+    // not a failure to measure.
     const root = mkTmp('ccrc-gitref-');
     mkdirSync(path.join(root, 'demo'), { recursive: true });
     expect(await readWorktreeRecords(localIO, root, 'demo'))
+      .toEqual({ ok: false, reason: 'not-a-checkout' });
+  });
+
+  it('a project the registry names that has NO directory at all is not-a-checkout too — projectsRoot answered', async () => {
+    // The third rung, and the reason `unreachable` is now ONE fact rather than
+    // two. Without it, "the registry names a project whose directory is gone"
+    // (standing — it will read the same way every sweep until a human fixes the
+    // registry) would land back on `unreachable` beside the dropped socket, and
+    // the split would have moved the overload rather than removed it.
+    const root = mkTmp('ccrc-gitref-');
+    expect(await readWorktreeRecords(localIO, root, 'demo'))
+      .toEqual({ ok: false, reason: 'not-a-checkout' });
+  });
+
+  it('`unreachable` now means exactly one thing: NOTHING on the path answered', async () => {
+    // The complement of the two tests above, and the assertion that keeps the
+    // split honest. `projectsRoot` itself is unstatable here, so there is no
+    // positive answer anywhere on the chain and no standing condition can be
+    // claimed — the honest word is silence. A future edit that makes the last
+    // rung answer `not-a-checkout` on a failed `projectsRoot` stat turns this
+    // red, which is the only thing stopping the standing word from creeping
+    // back over the transient one.
+    const root = mkTmp('ccrc-gitref-');
+    mkdirSync(path.join(root, 'demo'), { recursive: true });
+    const blind: FleetIO = { ...localIO, readdir: async () => null, stat: async () => null };
+    expect(await readWorktreeRecords(blind, root, 'demo'))
       .toEqual({ ok: false, reason: 'unreachable' });
   });
 

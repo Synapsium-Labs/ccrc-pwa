@@ -138,9 +138,36 @@ export type WorktreeRead =
    *  permission on the parent chain) and could not be listed. Unmeasured; the
    *  next sweep may do better. */
   | { ok: false; reason: 'unlistable' }
-  /** Neither the admin directory NOR the project's own `.git` could be reached,
-   *  so absence was never proved and NOTHING was measured — the answer is not
-   *  zero, it is silence.
+  /** There is NO GIT CHECKOUT at `<projectsRoot>/<project>` to census, and that
+   *  was MEASURED rather than assumed: something further up the path answered,
+   *  so the link was up when the absence below it was read. Four such project
+   *  directories exist on the fleet, and this is the arm they take every sweep,
+   *  for ever.
+   *
+   *  STANDING, like `refused-project` and unlike `unlistable`: retrying changes
+   *  nothing until a human adds a checkout or stops the registry naming this
+   *  project. It carries no log of its own anyway — four projects logging a
+   *  normal, expected fact once a minute is a line nobody reads, which is the
+   *  same argument that keeps `unlistable` quiet; `refused-project` logs because
+   *  it means a project is PERMANENTLY uncensusable through a name this server
+   *  refuses, which is a configuration defect rather than a shape of the box.
+   *
+   *  IT USED TO BE `unreachable`, and that was an overloaded value at a seam:
+   *  a standing condition and a dropped socket answered the same word, and the
+   *  docstring described them as different things in the same breath. Split by
+   *  the technique this file already runs on — a POSITIVE answer somewhere on
+   *  the chain is proof the link was up, so an absence read beside it is a
+   *  measurement. Its residual is the one `readWorktreeRecords` already names
+   *  and accepts below: a single dropped round trip landing on one stat and not
+   *  its neighbour is read as the standing fact. Today that costs nothing (both
+   *  refusals contribute nothing to the census), and the direction is the safe
+   *  one — it can only ever suppress a finding, never manufacture one. */
+  | { ok: false; reason: 'not-a-checkout' }
+  /** NOTHING on the path answered — not the admin directory, not the project's
+   *  own `.git`, not the project directory, not even `projectsRoot`. Absence was
+   *  never proved and nothing was measured: the answer is not zero, and it is
+   *  not "there is no checkout here" either. It is silence, and the next sweep
+   *  may do better.
    *
    *  This exists because `FleetIO.stat` answers `null` for two different facts
    *  and only one of them is absence. In REMOTE mode — `CCRC_FLEET=remote`, the
@@ -149,10 +176,13 @@ export type WorktreeRead =
    *  answers for a file that is not there. Without this arm a link blip turned
    *  every project into a fabricated MEASURED ZERO ("this project has no linked
    *  worktrees"), which is the strongest positive claim this function can make,
-   *  minted out of two failed reads. Standing conditions land here too (a
-   *  project directory that is not a git checkout at all — four exist on the
-   *  fleet), which is why it carries no log of its own: one word cannot say
-   *  which, and `refused-project` is the reason that CAN. */
+   *  minted out of two failed reads.
+   *
+   *  ONE FACT, NOT TWO. The standing half — a project directory that is not a
+   *  git checkout — moved out to `not-a-checkout` above, so nothing here is a
+   *  condition a human could fix by looking at the box: every rung came back
+   *  silent, and the only honest reading of that is that this process could not
+   *  see. */
   | { ok: false; reason: 'unreachable' };
 
 /**
@@ -188,11 +218,24 @@ export type WorktreeRead =
  * that includes a dropped socket, a timeout and a whitelist refusal. So absence
  * of the admin directory only counts as zero once something else on that path
  * has been seen: `<project>/.git`, one level up, which every project the census
- * asks about has. Both unreachable is `reason: 'unreachable'` — silence, not
- * zero. The one case this still cannot see through is a chain that `stat`s fine
- * but cannot be TRAVERSED (EACCES on `<project>/.git` itself), which reads as
- * the absent case — the same fail-direction `readBranchTip` names and accepts,
- * and the suppressing one.
+ * asks about has.
+ *
+ * THAT SAME TECHNIQUE RUNS ONE MORE RUNG, and it is what splits a STANDING
+ * condition from a TRANSIENT one instead of answering both with one word. When
+ * `<project>/.git` does not answer either, the walk keeps going up until
+ * something DOES: `<projectsRoot>/<project>`, then `projectsRoot` itself. A
+ * positive answer at either rung proves the link was up, so the absence read
+ * below it is a measurement — `reason: 'not-a-checkout'`, standing, retrying is
+ * pointless. Only when EVERY rung is silent, `projectsRoot` included, is the
+ * answer `reason: 'unreachable'` — nothing was measured, and the next sweep may
+ * do better. Cost is at most two extra `stat`s, on the rare arm only, and they
+ * are the arm four fleet projects take every sweep.
+ *
+ * The one case this still cannot see through is a chain that `stat`s fine but
+ * cannot be TRAVERSED (EACCES on `<project>/.git` itself), which reads as the
+ * absent case — the same fail-direction `readBranchTip` names and accepts, and
+ * the suppressing one. The rung walk inherits it exactly: a single dropped round
+ * trip landing on one stat and not its neighbour reads as the standing fact.
  *
  * A DETACHED HEAD gives `headBranch: null`, never a fabricated name.
  */
@@ -213,9 +256,20 @@ export async function readWorktreeRecords(
     // …and a failed `stat` is not proof of absence either (see the docstring
     // above): claim the zero only when SOMETHING on this path answered. One
     // extra round trip, on the rare arm only.
-    return (await io.stat(path.join(projectsRoot, project, '.git'))) !== null
-      ? { ok: true, records: [] }
-      : { ok: false, reason: 'unreachable' };
+    if ((await io.stat(path.join(projectsRoot, project, '.git'))) !== null) {
+      return { ok: true, records: [] };
+    }
+    // Keep walking UP for a positive answer, because "there is no checkout
+    // here" and "I could not see" are different facts and only a rung that
+    // ANSWERS can tell them apart. Either of these two proves the link was up,
+    // which makes the missing `.git` below a measurement rather than a
+    // silence — `projectsRoot` is the last rung because it is config, not
+    // fleet state: if that does not answer, nothing on this path did.
+    if ((await io.stat(path.join(projectsRoot, project))) !== null
+      || (await io.stat(projectsRoot)) !== null) {
+      return { ok: false, reason: 'not-a-checkout' };
+    }
+    return { ok: false, reason: 'unreachable' };
   }
   const out: WorktreeRecord[] = [];
   for (const name of names) {

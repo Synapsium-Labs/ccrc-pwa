@@ -406,6 +406,13 @@ describe('the rejection table is total, in both directions', () => {
                              // `unlistable` is one word and never reaches this scan
                              // at all, which is the only reason it is not listed
                              // beside this one.
+      'not-a-checkout',      // coord/gitref.ts — the same, and it arrives here for
+                             // the same reason `refused-project` does: two words.
+                             // It is the STANDING half that used to hide inside
+                             // `unreachable` (one word, invisible to this scan),
+                             // so splitting it made a fact this file already knew
+                             // how to allowlist. Also not a wire code: one
+                             // in-process caller, no route, nothing switches on it.
       // Task 9 (`coord/routes.ts`'s run routes) — a SEPARATE `refused`/
       // `reject.code` vocabulary for `POST /api/runs*`, now typed as
       // `RunRefuseCode` above and so no longer hand-allowlisted here.

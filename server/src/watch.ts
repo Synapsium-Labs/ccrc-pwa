@@ -1447,12 +1447,21 @@ export class FleetWatcher {
       // may succeed next minute — no log, or a broken permission would print
       // hourly for as long as it lasts.
       //
-      // `unreachable` is quiet for the opposite reason to `refused-project`: it
-      // is the one reason that can be EITHER standing (a project directory that
-      // is not a checkout) or transient (a dropped agent socket, which
-      // `FleetIO.stat` reports as `null` exactly like a missing path), and a log
-      // line cannot say which. What it buys is that neither of those is reported
-      // as a measured zero any more.
+      // `not-a-checkout` and `unreachable` are the two that used to be ONE word,
+      // and the reason they are two is that a log line could not say which — a
+      // standing condition (a project directory that is not a checkout) and a
+      // transient one (a dropped agent socket, which `FleetIO.stat` reports as
+      // `null` exactly like a missing path) sharing a value at a seam. They are
+      // told apart now by a rung walk up the path, not by a guess: see
+      // `WorktreeRead`'s own docstring. BOTH stay quiet, for opposite reasons.
+      // `not-a-checkout` is STANDING like `refused-project` but is a normal
+      // shape of the box rather than a defect — four fleet projects answer it
+      // every sweep, for ever, and four lines a minute is a log nobody reads.
+      // `unreachable` is a read that failed and may succeed next minute, the
+      // same argument that keeps `unlistable` quiet. What the split buys the
+      // census is unchanged and is the point: neither is reported as a measured
+      // zero, and the next consumer inherits the distinction instead of a value
+      // that already threw it away.
       //
       // `ok: true` with an EMPTY array is the last case and is NOT a refusal:
       // git creates `.git/worktrees` with the first linked worktree, so its
