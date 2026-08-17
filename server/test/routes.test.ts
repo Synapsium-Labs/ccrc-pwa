@@ -15,6 +15,8 @@ import { mkTmp } from './tmpHelpers.js';
 import { guardRunner, seedRoster, testDeps } from './helpers.js';
 import { askKey } from '../src/askkey.js';
 import { KeyedQueue } from '../src/inject/queue.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { CoordStore } from '../src/coord/store.js';
 
 const ID = 'claude2-MekWarLive';
 
@@ -867,5 +869,71 @@ describe('one queue for the process', () => {
       deps.queue.run('demo-quiet-mesa', async () => { seen.push('b'); }),
     ]);
     expect(seen).toEqual(['a', 'b']);
+  });
+});
+
+describe('POST /api/sessions/:id/archive — and an open run', () => {
+  const withCoord = async (home: string, run: Runner, sessionId: string) => {
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const opened = coord.openRun({ program: 'build4', title: 'T', project: 'demo', wave: 2, waveOf: 3,
+      claimedBy: 'ccrc-pwa-coordinator' });
+    if (!('id' in opened)) throw new Error('fixture openRun refused');
+    coord.setSession(opened.id, sessionId);
+    const app = await buildServer({ ...testDeps(home, run), coord });
+    return { app, coord, runId: opened.id };
+  };
+
+  /** `seedSession` in this file takes (home, id, wrapper) and returns NOTHING —
+   *  it seeds into a home the caller already made. And there is no `recording`
+   *  helper: the file's runner doubles are built inline. Both are written out
+   *  here rather than assumed. */
+  const seededHome = (id: string): string => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, id, 'claude2');
+    return home;
+  };
+  const recording = (calls: string[][]): Runner => async (_cmd, args) => {
+    calls.push(args);
+    return { code: 0, stdout: '', stderr: '' };
+  };
+
+  it('refuses 409 run-open, NAMING the run ids — never a bare slug', async () => {
+    const home = seededHome('demo-claimed');
+    const calls: string[][] = [];
+    const { app, runId } = await withCoord(home, recording(calls), 'demo-claimed');
+    const res = await app.inject({ method: 'POST', url: '/api/sessions/demo-claimed/archive' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({
+      ok: false, error: 'run-open',
+      runs: [{ id: runId, program: 'build4', wave: 2, waveOf: 3 }],
+    });
+    expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
+    await app.close();
+  });
+
+  it("proceeds on {force:true} — the operator's own hands stay able to do it", async () => {
+    const home = seededHome('demo-claimed');
+    const calls: string[][] = [];
+    const { app } = await withCoord(home, recording(calls), 'demo-claimed');
+    const res = await app.inject({
+      method: 'POST', url: '/api/sessions/demo-claimed/archive', payload: { force: true },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(calls).toContainEqual(['ws-archive', '--session', 'demo-claimed']);
+    await app.close();
+  });
+
+  it('is unchanged when no run names the session, and when the server has no coord at all', async () => {
+    // The `?.` path: `testDeps` supplies no `coord`, which is every other
+    // test in this file. An archive must not become impossible on a server
+    // with coordination switched off.
+    const home = seededHome('demo-free');
+    const calls: string[][] = [];
+    const app = await buildServer(testDeps(home, recording(calls)));
+    const res = await app.inject({ method: 'POST', url: '/api/sessions/demo-free/archive' });
+    expect(res.statusCode).toBe(200);
+    expect(calls).toContainEqual(['ws-archive', '--session', 'demo-free']);
+    await app.close();
   });
 });
