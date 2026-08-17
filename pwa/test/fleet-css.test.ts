@@ -592,6 +592,30 @@ describe('the abandon sheet is not a living pane, and its own control is a real 
     expect(declValue(rule, 'color')).not.toBeNull();
     expect(declValue(rule, 'background')).not.toBeNull();
   });
+
+  // Build 8 Wave 2, Task 212: the archive-conflict sheet is the same object as
+  // the abandon sheet — a refusal the operator reads and answers — and shares
+  // its rule by GROUPING rather than by a second copy of six declarations.
+  // Pinned here, not assumed: a component shipped with a class no rule names
+  // renders unstyled on a phone and green in every test in this suite, and its
+  // `.abandon-error` descendant would drop back into `design/audit.mjs`'s
+  // `uncovered` bucket the moment the grouping is dropped.
+  it('.archive-conflict-sheet is grounded too, and shares the abandon sheet rule', () => {
+    const rule = ruleFor('.archive-conflict-sheet');
+    expect(declValue(rule, 'color')).not.toBeNull();
+    expect(declValue(rule, 'background')).not.toBeNull();
+    expect(selectorsOf(css, '.archive-conflict-sheet')).toContain('.abandon-sheet');
+    // Its error line is a named-ancestor descendant under BOTH ancestors.
+    expect(selectorsOf(css, '.archive-conflict-sheet .abandon-error'))
+      .toContain('.abandon-sheet .abandon-error');
+    // …and it is not a living pane either.
+    for (const sel of ['.archive-conflict-sheet', '.archive-conflict-sheet .abandon-error']) {
+      const r = norm(stripComments(ruleIn(css, sel)));
+      expect(r, sel).not.toContain('--glow');
+      expect(r, sel).not.toContain('animation');
+      expect(r, sel).not.toContain('box-shadow');
+    }
+  });
 });
 
 // Task 13, spec §4.4: the run board's own door onto a new program, and the
