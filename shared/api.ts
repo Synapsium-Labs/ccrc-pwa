@@ -932,6 +932,19 @@ export function isSpawnVerdict(v: unknown): v is SpawnVerdict {
  *  hard-block verdict (`_pane_hard_blocked`); 3 and 4 are NOT renumbered,
  *  because four ccd call sites plus `_supervised_start` branch on
  *  `[[ "$rc" -eq 3 || "$rc" -eq 4 ]]`. */
+/** The word for `spawnVerdict(...) === null` wherever a verdict has to be
+ *  RENDERED as text rather than carried as a value — today, `dispatch.ts`'s
+ *  `spawn-adopted:<verdict>` run event.
+ *
+ *  DELIBERATELY NOT A `SpawnVerdict` MEMBER, and `isSpawnVerdict` answering
+ *  `false` for it is pinned by a test. "No spawn fact was recorded" is a fact
+ *  about the REGISTRY; every member of the union is a fact about an rc ccd
+ *  actually wrote. `unrecognised` is the member that gets reached for by mistake
+ *  here, and it is the narrower, opposite claim — ccd DID record an rc, and this
+ *  build's table has no name for it. Reusing it for absence makes "ccd said
+ *  something strange" and "ccd said nothing" the same sentence. */
+export const SPAWN_NOT_RECORDED = 'not-recorded';
+
 export function spawnVerdict(rc: number | null): SpawnVerdict | null {
   if (rc === null) return null;
   switch (rc) {

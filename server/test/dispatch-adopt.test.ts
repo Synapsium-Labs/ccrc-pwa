@@ -31,6 +31,7 @@ import type { CcdArgv } from '../src/ccdargv.js';
 import type { CcrcConfig } from '../src/config.js';
 import { readRegistry } from '../src/registry.js';
 import { localIO } from '../src/io.js';
+import { SPAWN_NOT_RECORDED, isSpawnVerdict } from '../../shared/api.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -147,6 +148,44 @@ describe('§1.5 — adoption, and everything that must NOT adopt', () => {
     expect(h.ccdCalls()).toContainEqual(
       expect.arrayContaining(['ws-hold', '--session', 'demo-quiet-basin']));
     expect(h.coord.runEvents(h.runId).map((e) => e.detail)).toContain('spawn-adopted:expired');
+  });
+
+  it('names the ABSENT spawn fact with its own word — never `unrecognised`, which is a real verdict', async () => {
+    // THE LIKELY CASE ON THIS PATH, not an edge one. `ws-add` writes the worktree
+    // and every registry row FIRST and stamps `$REG/<id>.spawn` LAST, from
+    // `_spawn_settle` — so a kill that lands mid-settle, which is the only reason
+    // this workspace is being adopted at all, leaves NO spawn fact. `null` here
+    // means "nobody recorded how that spawn ended".
+    //
+    // `unrecognised` is a MEMBER of `SpawnVerdict` and means something else and
+    // narrower: ccd recorded an rc, and it is one this build's table has no name
+    // for. Rendering the absent case with that word tells the operator ccd
+    // reported something strange when in truth ccd reported nothing — and it is
+    // unfalsifiable from the event trail, because the two read identically.
+    const h = await harness({ ccd: { ok: false, killed: true, stderr: '' },
+                              after: [{ id: 'demo-quiet-basin', held: null, spawnRc: null }] });
+    expect(await h.dispatch()).toMatchObject({ ok: true, adopted: true, spawnState: null });
+    const details = h.coord.runEvents(h.runId).map((e) => e.detail);
+    expect(details).toContain('spawn-adopted:not-recorded');
+    expect(details).not.toContain('spawn-adopted:unrecognised');
+  });
+
+  it('and that word is NOT a SpawnVerdict — the whole point is that it names what no verdict does', () => {
+    // The guard that survives a future edit: promote `not-recorded` into the
+    // union (or rename the absent case onto an existing member) and this is red.
+    expect(SPAWN_NOT_RECORDED).toBe('not-recorded');   // the word the event above spells
+    expect(isSpawnVerdict(SPAWN_NOT_RECORDED)).toBe(false);
+    expect(isSpawnVerdict('unrecognised')).toBe(true);
+  });
+
+  it('still says `unrecognised` for an rc ccd DID record and this build cannot name', async () => {
+    // The other side of the same distinction, so the two words are pinned as a
+    // pair rather than one of them drifting onto the other's meaning. rc 9 is not
+    // in `spawnVerdict`'s table.
+    const h = await harness({ ccd: { ok: false, killed: true, stderr: '' },
+                              after: [{ id: 'demo-quiet-basin', held: null, spawnRc: 9 }] });
+    expect(await h.dispatch()).toMatchObject({ adopted: true, spawnState: 'unrecognised' });
+    expect(h.coord.runEvents(h.runId).map((e) => e.detail)).toContain('spawn-adopted:unrecognised');
   });
 
   it('returns the spawn verdict so the coordinator knows the pane may not be ready', async () => {

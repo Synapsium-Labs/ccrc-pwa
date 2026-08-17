@@ -12,7 +12,7 @@ import { sendPrompt } from '../inject/send.js';
 import { type AdvanceResult, type CoordStore } from './store.js';
 import { COORDINATOR_PAUSE_MARKER, MAIL_DISABLED_MARKER, holdReason, queueSystemMail } from './rundefs.js';
 import {
-  MAIL_BODY_MAX_BYTES, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, spawnVerdict,
+  MAIL_BODY_MAX_BYTES, SPAWN_NOT_RECORDED, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, spawnVerdict,
   type RunRefuseCode, type RunState, type SpawnVerdict,
 } from '../../../shared/api.js';
 
@@ -406,8 +406,19 @@ export async function dispatchRun(
     // The SUFFIX is a `SpawnVerdict`, never a raw rc — and never the word
     // `spawnstate`, which is not a field and must never become one. Recorded only
     // on the adoption path, so its PRESENCE is the record that this workspace came
-    // from a killed `ws-add` rather than a clean one.
-    detail: adopted ? `spawn-adopted:${adoptedSpawn ?? 'unrecognised'}`
+    // from a cut-short `ws-add` rather than a clean one.
+    //
+    // `SPAWN_NOT_RECORDED` for the `null` case, and NOT `unrecognised`. `null`
+    // means no `.spawn` fact was written at all — which on THIS path is the
+    // LIKELY outcome, not an edge one: `cmd_ws_add` writes the worktree and every
+    // registry row first and stamps `$REG/<id>.spawn` LAST, from `_spawn_settle`,
+    // so a kill that lands mid-settle — the only reason this workspace is being
+    // adopted — leaves nothing behind to read. `unrecognised` is a MEMBER of
+    // `SpawnVerdict` and says something else and narrower: ccd DID record an rc,
+    // and it is one this build's table cannot name. Spending that member on the
+    // absent case tells the operator ccd reported something strange when ccd
+    // reported nothing, and the two become indistinguishable in the event trail.
+    detail: adopted ? `spawn-adopted:${adoptedSpawn ?? SPAWN_NOT_RECORDED}`
       : clearError !== null ? `clear-refused:${clearError}` : undefined });
   if (!adv.ok) return { ok: false, kind: 'advanceFailed', adv };
 
