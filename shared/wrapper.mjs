@@ -26,8 +26,9 @@
 // states in its own header, for the same reason: doctor's output is what an
 // operator pastes into a ticket.
 
-/** `shared/roster.ts`'s `ID_RE`. A third copy (roster.ts, gen-accounts.mjs,
- *  ccrc-wrapper-shape's WRAPPER_ID_RE) and a deliberate one — this function
+/** `shared/roster.ts`'s `ID_RE`. The FOURTH copy — the other three are
+ *  `shared/roster.ts`, `deploy/gen-accounts.mjs` and `ccrc-wrapper-shape`'s
+ *  `WRAPPER_ID_RE` — and a deliberate one, because this function
  *  consumes its argument STRUCTURALLY, exactly as `generateAccountsSh` does,
  *  with no runtime proof it ever passed through `parseRoster`. This is the
  *  writer's own lock on its own door. */
