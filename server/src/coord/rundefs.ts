@@ -1,6 +1,6 @@
 import { tx } from './db.js';
 import { renderEnvelope } from './envelope.js';
-import type { CoordStore, RunRow } from './store.js';
+import type { CoordStore, OpenSibling, RunRow } from './store.js';
 import type { MailKind } from '../../../shared/api.js';
 
 /**
@@ -59,6 +59,17 @@ export const COORDINATOR_PAUSE_MARKER = 'coordinator-paused';
  *  places this string is built can never drift apart from one another. */
 export const holdReason = (program: string, wave: number, waveOf: number | null): string =>
   `program:${program} wave:${wave}${waveOf === null ? '' : `/${waveOf}`}`;
+
+/** May this close END the claim on the workspace, or must it hand the claim
+ *  to whoever else still owns it?
+ *
+ *  L1, pure: no `fs`, no `reply`, no clock, no database handle. Trivial today
+ *  — `length === 0` — and that is the point: `closeRun` asks this question at
+ *  FOUR distinct fleet acts (abandon, final, non-final, failed-with-archive),
+ *  and before this constant existed each of them would have spelled it
+ *  itself. One home, one test, one mutant. */
+export const releaseIsSafe = (openSiblings: readonly OpenSibling[]): boolean =>
+  openSiblings.length === 0;
 
 /**
  * The coordinator's OWN mail — the wave brief (dispatch) and a done-claim

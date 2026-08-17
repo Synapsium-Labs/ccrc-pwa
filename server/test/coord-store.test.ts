@@ -9,6 +9,7 @@ import { describe, it, expect } from 'vitest';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
+import { releaseIsSafe } from '../src/coord/rundefs.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const store = (): CoordStore =>
@@ -1224,5 +1225,19 @@ describe('CoordStore.openRunsForSession', () => {
     s.setSession(a.id, 'demo-alpha');
     expect(s.run(a.id)!.dispatchedAt).toBeNull();
     expect(s.openRunsForSession('demo-alpha').map((r) => r.id)).toEqual([a.id]);
+  });
+});
+
+describe('releaseIsSafe', () => {
+  it('is true only when NOTHING else names the session', () => {
+    expect(releaseIsSafe([])).toBe(true);
+  });
+
+  it('is false for one sibling and for many — a claim is not a majority vote', () => {
+    expect(releaseIsSafe([{ id: 7, program: 'build4', wave: 2, waveOf: 3 }])).toBe(false);
+    expect(releaseIsSafe([
+      { id: 7, program: 'build4', wave: 2, waveOf: 3 },
+      { id: 8, program: 'build4', wave: 3, waveOf: null },
+    ])).toBe(false);
   });
 });
