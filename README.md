@@ -168,17 +168,51 @@ cleanup confirmation all still name the directory on disk.
 ### The attention bucket
 
 Every session on the fleet wire carries `bucket` and `bucketSince`, computed
-once, server-side, in `server/src/bucket.ts`. The fleet screen's sections, its
-counts and each row's own state word all read that one field, so they cannot
-disagree — before this there were three independent re-derivations that drifted.
+once by `sessionBucket` in **`shared/api.ts`** — not `server/src/bucket.ts`,
+which has never existed. It lives in `shared/` because it has TWO producers
+that must not be able to disagree: `assembleFleet` (`server/src/fleet.ts`,
+which passes all three arguments) and `reviveFleetSession` (same file as the
+ladder, which has no `hookEvent` to give and passes two). The fleet screen's
+sections, its counts and each row's own state word all read that one field, so
+they cannot disagree — before this there were three independent re-derivations
+that drifted.
 
-The ladder tests, in order: `archivedAt` (→ `cleanup` when the PR is merged,
-else `archived`), then `dead`, then `attention` (a pending dialog or a waiting
-hook), then `working`, then `done` (which requires hook evidence — a hookless
-busy→idle transition never proves a turn *finished*), then `idle`. **The
-archived rows come first deliberately**: `ws-archive` stops the session, so
-every cleanup candidate is also `dead`, and a dead-first ladder would leave the
-cleanup bucket permanently empty.
+The ladder tests, in order: `archivedAt` **on a row that is also `dead`**
+(→ `cleanup` when the PR is merged, else `archived`), then `dead`, then
+`attention` (a pending dialog, a waiting hook, or Claude Code's own
+`status: 'waiting'`), then `working`, then `done` (which requires hook
+evidence — a hookless busy→idle transition never proves a turn *finished*),
+then `idle`. **The archived rows come first deliberately**: `ws-archive` stops
+the session, so every cleanup candidate is also `dead`, and a dead-first
+ladder would leave the cleanup bucket permanently empty.
+
+**That last sentence is the archived rungs' precondition, not just their
+excuse** (D-74). `ws-archive` kills the pane before it stamps, but `ccd start`
+/ `ccd ensure` clear `.stopped` and `.swapblocked` on a revival and leave
+`$REG/<id>.archived` standing — only `ws-restore` removes it. So a workspace
+archived on merge and revived for more work carried a marker that outranked
+every live rung below it, permanently. Measured on the live fleet 2026-08-17:
+5 of the box's 7 archive markers sat on sessions with a live tmux pane, 4
+mid-turn — a quarter of the fleet rendering the word `merged` while working,
+ranked below idle, counted out of its project's busy total, and with any
+pending question unreachable through the attention section. The bucket now
+answers *what this session is doing*; `archivedAt` still rides the wire
+untouched and still answers *what is staged on disk*, so `/archive`,
+`ws-attic` and the reap flow all find the workspace exactly as before.
+
+**Two observers decide `working`, and the fresher one wins** (D-75). `status`
+comes from Claude Code's `sessions/<pid>.json`; `hookState` comes from
+`session-hook.sh`. Both fail, in opposite directions. The live file *wedges* —
+a turn whose last tool call was a Bash ends without Claude Code writing the
+transition back, leaving `"status":"shell"` forever (measured twice on one
+day; one session held it 1h55m while its hook had written `done` 5.7s after
+the file's last write). The live file is also blind to a session waiting on
+subagents, and reads `idle` when it is missing, unreadable, or behind an
+unknown wrapper. So `sessionBucket` compares `hookUpdatedAt` against
+`statusUpdatedAt`: a newer hook `done` unseats a stale `busy` (except
+`SessionStart`'s synthetic write, which proves "never started", not
+"finished"), and a newer hook `working` raises a stale or absent `idle`.
+`status` itself is untouched by this — it stays frozen and hook-blind.
 
 `bucketSince` is *derived* from evidence already on the record — never
 remembered by the watcher, which would reset on every deploy and paint the whole
@@ -1168,6 +1202,18 @@ Known real-format subtleties already encoded:
   and the empty box uses `❯` + a **U+00A0 non-breaking space**, not a plain one.
 - A `--remote-control` pane **never renders `esc to interrupt`**, so busy-ness is
   taken from the live status file (`sessions/<pid>.json`), not the pane.
+- **The live status file's vocabulary drifts too, and silently.** It is at least
+  four words now, not the three ccrc was written against: `idle`, `busy`,
+  `shell`, and — measured in the 2.1.229–2.1.233 bundles — `waiting`, which
+  Claude Code writes with `working: false` and a `waitingFor` reason beside it
+  (`'sandbox request'`, `'input needed'`, `'dialog open'`, or the top dialog's
+  own label). `liveSessionStatus` still collapses everything but `idle` to
+  `busy` on purpose — the mail gate, the archive-safety verdict and the session
+  socket all need a human-blocked session to read hands-off — and `waiting`
+  reaches the attention bucket through `dialogPending` instead. After an
+  upgrade, re-grep the bundle for `status:"` and check that no fifth word has
+  appeared: a new one costs nothing to read as `busy`, but a new *rest*-like
+  word read as work would wedge every affected row in `working`.
 - Real **AskUserQuestion** menus put a description line under each option and can
   split the list across a `───` rule — options are not adjacent.
 

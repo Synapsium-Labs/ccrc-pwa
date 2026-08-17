@@ -37,18 +37,27 @@ const ASK_SUMMARY_MAX_LEN = 80;
  * off chance every fallback above is itself empty — this line renders
  * unconditionally on a waiting card, so "no line" must never become a blank
  * one.
+ *
+ * `liveWaitingFor` (D-76) is the SECOND source, and it is a fallback, not a
+ * peer: the hook envelope carries the actual questions and options and is
+ * what the answer sheet acts on, while this is one word from Claude Code
+ * about why it stopped (`'sandbox request'`, `'input needed'`, …). It is read
+ * only when the hook produced no line at all — which for three of the four
+ * `waitingFor` causes is always, since no hook event fires for them.
  */
-export function hookAskSummary(hs: HookState | null): string | null {
+export function hookAskSummary(hs: HookState | null, liveWaitingFor: string | null = null): string | null {
+  const text = hookAskText(hs) ?? (liveWaitingFor?.trim() || null);
+  return text === null || text === '' ? null : text.slice(0, ASK_SUMMARY_MAX_LEN);
+}
+
+function hookAskText(hs: HookState | null): string | null {
   if (hs === null || hs.state !== 'waiting' || hs.ask === null) return null;
-  let text: string | null;
   if ('questions' in hs.ask) {
     const q = hs.ask.questions[0];
-    text = q ? (q.header?.trim() || q.question) : null;
-  } else {
-    const { tool, summary } = hs.ask.approval;
-    text = tool === '' && summary === '' ? null : `${tool}: ${summary}`;
+    return q ? (q.header?.trim() || q.question) : null;
   }
-  return text === null || text === '' ? null : text.slice(0, ASK_SUMMARY_MAX_LEN);
+  const { tool, summary } = hs.ask.approval;
+  return tool === '' && summary === '' ? null : `${tool}: ${summary}`;
 }
 
 /**
@@ -186,6 +195,12 @@ export async function assembleFleet(
     const alive = await tmux.hasSession(r.id);
     let status: SessionStatus = 'dead';
     let name: string | null = null, statusUpdatedAt: number | null = null, version: string | null = null;
+    // D-76. Claude Code's own "I am blocked on the human" verdict, hoisted out
+    // of the block below because `dialogPending` is assembled far past it.
+    // Null means "not waiting, or nothing measured"; a STRING is the reason,
+    // and an empty-but-waiting file is `''` — which is why the flag beside it
+    // is separate, rather than this field doing double duty as both.
+    let liveWaiting = false, liveWaitingFor: string | null = null;
     if (alive) {
       status = 'idle';
       const pid = await tmux.panePid(r.id);
@@ -203,6 +218,12 @@ export async function assembleFleet(
           // an absent nameSource is an older file whose name a human chose.
           name = live.nameSource === 'derived' ? null : live.name;
           statusUpdatedAt = live.statusUpdatedAt; version = live.version;
+          // Read off the RAW status word, not off `status` — `liveSessionStatus`
+          // has already collapsed `waiting` into `busy` by this line, and that
+          // collapse is deliberate and frozen (see its docstring). This is the
+          // distinction surviving the collapse rather than dying in it.
+          liveWaiting = live.status === 'waiting';
+          liveWaitingFor = live.waitingFor;
         }
       }
     }
@@ -278,7 +299,12 @@ export async function assembleFleet(
       // (older Claude Code, a hook that failed to install), and the hook sees
       // a waiting state before any menu ever paints (headless, or between the
       // hook write and the next pane capture).
-      dialogPending: (pendingDialogs?.has(r.id) ?? false) || hs?.state === 'waiting', version,
+      // …and a THIRD source since D-76: Claude Code's own `status: 'waiting'`,
+      // which it writes with `working: false` beside it. Three of its four
+      // causes (a sandbox request, an elicitation prompt, a managed-settings
+      // security prompt) paint no numbered menu for the scraper and fire no
+      // hook event, so without this arm they reached the wire as `working`.
+      dialogPending: (pendingDialogs?.has(r.id) ?? false) || hs?.state === 'waiting' || liveWaiting, version,
       model: sl?.model ?? null, effort: sl?.effort ?? null,
       // The statusline wins: it is a live pane capture and knows about a manual
       // checkout. The registry fills the gap before the first capture lands.
@@ -289,7 +315,7 @@ export async function assembleFleet(
       archivedBytes: r.archivedBytes,
       held: r.held,
       hookState: hs?.state ?? null,
-      askSummary: hookAskSummary(hs),
+      askSummary: hookAskSummary(hs, liveWaitingFor),
       subagents: hs?.subagents ?? null,
       // Carried straight off the record — this IS the evidence `tick()`'s own
       // `unmeasuredIds` (watch.ts) now derives its Set from directly, one
