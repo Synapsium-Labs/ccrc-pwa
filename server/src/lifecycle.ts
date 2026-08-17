@@ -55,6 +55,19 @@ export async function ccd(run: Runner, cfg: CcrcConfig, args: CcdArgv): Promise<
  *  construction), so a caller cannot mistake ignorance for a clean refusal. Only
  *  a literal `true` may adopt.
  *
+ *  THE SIGNAL HALF IS THE DECIDING ONE, and `killed` only ever fast-paths a
+ *  `true`. `killed: false` proves one thing — node did not kill this child at
+ *  its own deadline — and says nothing about the external kill (operator, OOM
+ *  reaper, systemd stopping the unit) that the paragraph above exists to catch;
+ *  answering `false` off it alone would claim a measurement nobody made, for
+ *  exactly the half this function was widened to read. So `killed: false,
+ *  signal: UNMEASURED` is UNMEASURED. The mirror shape is sound and stays
+ *  `false`: a deadline kill would have shown SIGTERM, so a MEASURED `signal:
+ *  null` rules out both kinds of kill on its own, whatever `killed` says.
+ *  Latent rather than live — every producer in this tree sends both halves or
+ *  neither — but `asExecResult` spreads the two fields independently, so a peer
+ *  frame carrying one and not the other reaches here.
+ *
  *  THE ONE TRAP THIS FUNCTION HAS TO STEP AROUND, written down because it cost a
  *  green suite once: `UNMEASURED` is itself a STRING, so `typeof r.signal ===
  *  'string'` is TRUE for it. A signal name has to be checked as "measured AND not
@@ -63,11 +76,10 @@ export async function ccd(run: Runner, cfg: CcrcConfig, args: CcdArgv): Promise<
  *  and adopts a workspace on a dropped socket. That is the exact class of bug the
  *  token was introduced to close, arriving through the token itself. */
 export function cutShort(r: CcdResult): boolean | Unmeasured {
-  const killedMeasured = r.killed !== UNMEASURED;
   const signalMeasured = r.signal !== UNMEASURED;
   if (r.killed === true) return true;
   if (signalMeasured && r.signal !== null) return true;
-  if (!killedMeasured && !signalMeasured) return UNMEASURED;
+  if (!signalMeasured) return UNMEASURED;
   return false;
 }
 

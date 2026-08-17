@@ -926,12 +926,6 @@ export function isSpawnVerdict(v: unknown): v is SpawnVerdict {
   return typeof v === 'string' && (SPAWN_VERDICTS as readonly string[]).includes(v);
 }
 
-/** ccd's rc table, in one place. `null` in -> `null` out, and `null` means NOT
- *  RECORDED (`$REG/<id>.spawn` absent, or its rc unparseable — `registry.ts`
- *  collapses both to `spawn: null` deliberately). rc 5 is `_spawn_settle`'s
- *  hard-block verdict (`_pane_hard_blocked`); 3 and 4 are NOT renumbered,
- *  because four ccd call sites plus `_supervised_start` branch on
- *  `[[ "$rc" -eq 3 || "$rc" -eq 4 ]]`. */
 /** The word for `spawnVerdict(...) === null` wherever a verdict has to be
  *  RENDERED as text rather than carried as a value — today, `dispatch.ts`'s
  *  `spawn-adopted:<verdict>` run event.
@@ -945,6 +939,12 @@ export function isSpawnVerdict(v: unknown): v is SpawnVerdict {
  *  something strange" and "ccd said nothing" the same sentence. */
 export const SPAWN_NOT_RECORDED = 'not-recorded';
 
+/** ccd's rc table, in one place. `null` in -> `null` out, and `null` means NOT
+ *  RECORDED (`$REG/<id>.spawn` absent, or its rc unparseable — `registry.ts`
+ *  collapses both to `spawn: null` deliberately). rc 5 is `_spawn_settle`'s
+ *  hard-block verdict (`_pane_hard_blocked`); 3 and 4 are NOT renumbered,
+ *  because four ccd call sites plus `_supervised_start` branch on
+ *  `[[ "$rc" -eq 3 || "$rc" -eq 4 ]]`. */
 export function spawnVerdict(rc: number | null): SpawnVerdict | null {
   if (rc === null) return null;
   switch (rc) {

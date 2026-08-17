@@ -161,8 +161,11 @@ export function resolveSpawnCmd(cmd: string, home: string): string {
  * exactly this distinction).
  *
  * `killed` and `signal` are ADDITIVE and absence-permits: an older server ignores
- * both, and a newer server reads their absence as `killed: false`, which is the
- * safe direction (it never adopts). NO `FLEET_PROTO` bump.
+ * both, and a newer server reads their absence as UNMEASURED (`server/src/exec.ts`),
+ * which is the safe direction — only a MEASURED cut-short adopts, and ignorance
+ * is not a measurement. (This sentence used to say absence reads as
+ * `killed: false`. That collapse was §1.7's defect, not its contract: `false`
+ * is a claim about a kill nobody looked for.) NO `FLEET_PROTO` bump.
  *
  * WHY STDERR IS EMPTY ON A KILL, correctly stated: not because "a killed child
  * writes nothing" — `execFile` delivers whatever was already buffered — but

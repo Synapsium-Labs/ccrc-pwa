@@ -620,14 +620,24 @@ describe('§1.7 — cutShort: one reader for both halves, three answers, one ado
     expect(cutShort(r(false, 'SIGKILL'))).toBe(true);
   });
 
-  it('false only when something was actually measured and said no', () => {
+  it('false only when the half that can see an EXTERNAL kill was measured and said no', () => {
     expect(cutShort(r(false, null))).toBe(false);
-    expect(cutShort(r(false, UNMEASURED))).toBe(false);
+    // The mirror shape, and it is sound on its own: the runner's own deadline
+    // kill sends SIGTERM, so a MEASURED `signal: null` rules out both kinds of
+    // kill whatever `killed` says.
     expect(cutShort(r(UNMEASURED, null))).toBe(false);
   });
 
-  it('UNMEASURED when NEITHER half was measured — an older agent, or the transport catch', () => {
+  it('UNMEASURED when the SIGNAL half was not measured — `killed: false` cannot answer for it', () => {
     expect(cutShort(r(UNMEASURED, UNMEASURED))).toBe(UNMEASURED);
+    // `killed: false` proves only that node did not kill this child at its own
+    // deadline. The external kill — operator, OOM reaper, systemd stopping the
+    // unit mid-`ws-add` — is visible ONLY in `signal`, which is the half §1.7
+    // exists to add, so answering `false` here claimed a measurement nobody
+    // made for precisely that half. Latent, not live: every producer in the
+    // tree sends both halves or neither, but `asExecResult` spreads them
+    // independently, so a peer frame carrying one alone lands right here.
+    expect(cutShort(r(false, UNMEASURED))).toBe(UNMEASURED);
   });
 
   it('never mistakes the TOKEN for a signal name — it is a string, and that is the trap', () => {
@@ -636,5 +646,6 @@ describe('§1.7 — cutShort: one reader for both halves, three answers, one ado
     // strongest evidence there is and adopted a workspace on a dropped socket.
     expect(cutShort(r(UNMEASURED, UNMEASURED))).not.toBe(true);
     expect(cutShort(r(false, UNMEASURED))).not.toBe(true);
+    expect(cutShort(r(true, UNMEASURED))).not.toBe(UNMEASURED);
   });
 });
