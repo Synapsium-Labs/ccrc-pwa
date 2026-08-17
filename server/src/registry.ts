@@ -15,17 +15,48 @@ import {
 // `shared/` instead.
 export type { IdentityField };
 
+/** Why `SessionRecord.branch` reads the way it does — see the field's own
+ *  docstring for what each member means and what a consumer owes it. */
+export type BranchEvidence = 'named' | 'absent' | 'unreadable' | 'empty';
+
 export interface SessionRecord {
   id: string; wrapper: string; project: string; workdir: string; uuid: string;
   started: boolean; home: string | null; pool: string[] | null; lastswap: number | null;
   workspace: string | null; branch: string | null;
-  /** `.branch` was LISTED in the registry directory this read opened with,
-   *  and its bytes did not come back — i.e. `branch` above is null because a
-   *  READ FAILED, not because the field is absent. `field()` cannot tell the
-   *  two apart (`io.readFile` maps both to null), and `verifyDone`'s
-   *  `branch-unmeasurable` refusal (Wave 3 §3.2) is a claim about this one
-   *  specifically, so the record has to be able to make the distinction the
-   *  code asserts. Same evidence rule as the identity triple and `held`.
+  /** WHY `branch` above reads the way it does — one field, four conditions,
+   *  and `branch === null` exactly when this is not `'named'`.
+   *
+   *  It was `branchUnmeasured: boolean` for three commits of Wave 3 and that
+   *  was one condition short (review finding): `field()` returns
+   *  `content.trim()`, so a zero-byte or torn `.branch` comes back as `''`,
+   *  which is neither of a boolean's two answers. It read as `branch: ''` with
+   *  the flag false — a MEASURED BRANCH NAMED NOTHING — and `''` then went on
+   *  to be used as a branch name by three consumers (see `buildRecord`).
+   *
+   *    `'named'`      — `branch` is a string. Nothing to say.
+   *    `'absent'`     — no `<id>.branch` file at all. The ORDINARY state of a
+   *                     project's main checkout, not an error.
+   *    `'unreadable'` — the file is LISTED in the registry directory this read
+   *                     opened with, and its bytes did not come back.
+   *                     TRANSIENT — one dropped agent-WS round trip among the
+   *                     ~21 a session's read fires — so it asks to be retried.
+   *                     `field()` cannot see this on its own (`io.readFile`
+   *                     maps a failed read and a missing file to the same
+   *                     null); the directory listing is the evidence, the same
+   *                     rule the identity triple and `held` already use.
+   *    `'empty'`      — the file is there, its bytes came back, and there are
+   *                     none (or only whitespace). NOT transient: re-reading
+   *                     returns the same nothing. NOT absent either: something
+   *                     wrote, or half-wrote, this field. `ccd`'s `_reg_set` is
+   *                     `printf '%s' "$3" > "$REG/$1.$2"` — a truncating
+   *                     redirect with no tmp+rename — so a process killed
+   *                     between the truncate and the write leaves exactly this,
+   *                     and `touch $REG/<id>.branch` is the other way in.
+   *                     Its own value, not folded into a neighbour, for the
+   *                     reason `HOLD_NO_REASON` above exists: the refusal
+   *                     sentence a coordinator reads has to be true, and one
+   *                     sentence covering a crashed write and a main checkout
+   *                     would be a lie about one of them.
    *
    *  Deliberately NOT a `LifecycleField` and deliberately NOT a member of
    *  `unmeasured`. `LifecycleField` feeds `sessionLifecycle`'s `unmeasurable`
@@ -33,8 +64,8 @@ export interface SessionRecord {
    *  session is running; `unmeasured` is `IdentityField[]`, rides the wire
    *  verbatim, and is validated against the identity triple by
    *  `reviveFleetSession` — widening it would reject every persisted
-   *  snapshot. This flag is server-side only and reaches no wire field. */
-  branchUnmeasured: boolean;
+   *  snapshot. This field is server-side only and reaches no wire field. */
+  branchEvidence: BranchEvidence;
   /** `origin/main` — what ws-add recorded as this branch's base (ccd:221).
    *  Never re-derived: a proof against a base the workspace was not cut from
    *  is a proof about a different question. */
@@ -435,17 +466,42 @@ async function buildRecord(
   }
 
   // `names` is the listing this function opened with — PRESENCE, independently
-  // of whether the bytes came back. See `SessionRecord.branchUnmeasured` for
-  // why this is its own flag rather than a member of either existing array.
-  const branchUnmeasured = branch === null && names.includes(`${id}.branch`);
+  // of whether the bytes came back. See `SessionRecord.branchEvidence` for why
+  // this is its own field rather than a member of either array above, and for
+  // what each rung means.
+  //
+  // THE `'empty'` RUNG WAS THE ONE MISSING (review finding, Wave 3), and it is
+  // also where `branch` gets normalised. `field()` returns `content.trim()`, so
+  // a zero-byte or torn `.branch` arrives here as `''` — not null — and the
+  // boolean this replaced could not see it: the record carried a MEASURED
+  // branch that named nothing, and `''` was then used AS A BRANCH NAME by
+  // three consumers.
+  //   - `verifyDone` (coord/fingerprint.ts) asked `readBranchTip` for a ref
+  //     path ending in a slash and refused `tip-unmeasurable` naming no branch
+  //     at all ("no readable ref for  under demo").
+  //   - `divergence.ts`'s rule 2 skips on `r.branch === null`, so `''` went
+  //     through and reported drift as "the registry says , the worktree's own
+  //     HEAD says ws/quiet-basin" — a divergence against nothing.
+  //   - `assembleFleet`'s `sl?.branch ?? r.branch` put `''` on the wire, where
+  //     it renders as an empty branch chip.
+  // Normalised at THIS one place — the only place that reads the file — rather
+  // than defended against three times downstream. `.stopped` above already
+  // refuses to trust the same shape, for the same reason.
+  const branchEvidence: BranchEvidence =
+    branch === null ? (names.includes(`${id}.branch`) ? 'unreadable' : 'absent')
+      : branch === '' ? 'empty'
+        : 'named';
+  // The invariant every consumer may rely on, stated once: `branch` is a
+  // string exactly when the evidence is `'named'`.
+  const branchName = branchEvidence === 'named' ? branch : null;
 
   return {
     id, wrapper: measured.wrapper, project: project ?? id, workdir: measured.workdir, uuid: measured.uuid,
     started: started === '1',
     home, pool: pool ? pool.split(/\s+/).filter(Boolean) : null,
     lastswap: lastswap ? parseInt(lastswap, 10) : null,
-    workspace, branch,
-    branchUnmeasured,
+    workspace, branch: branchName,
+    branchEvidence,
     base,
     // A phase this build does not know degrades to null (= unchecked), never
     // to a raw string the PWA would switch on and render as nothing.

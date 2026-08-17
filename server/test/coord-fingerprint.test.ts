@@ -539,6 +539,59 @@ describe('verifyDone — the branch to re-measure comes from the live registry (
     expect(res).toMatchObject({ ok: false, code: 'branch-unmeasurable' });
     expect((res as { detail: string }).detail).toContain('bytes did not come back');
   });
+
+  // REVIEW FINDING, WAVE 3. The split above tested `null` against `null` and
+  // missed the value that is NEITHER: `field()` returns `content.trim()`, so a
+  // zero-byte or torn `.branch` reads back as `''`. `record.branch === null`
+  // was false for it, so it slipped past the refusal entirely and `''` was used
+  // AS THE BRANCH NAME — `readBranchTip` was asked for a ref path ending in a
+  // slash, found nothing, and answered `tip-unmeasurable` naming no branch at
+  // all ("no readable ref for  under demo"). A coordinator reading that has
+  // been told the tip could not be measured, when the truth is that the
+  // registry never named a branch to measure.
+  describe('and when the registry row names an EMPTY branch', () => {
+    it('refuses branch-unmeasurable — it does not use `` as a branch name', async () => {
+      const home = mkTmp('ccrc-fp-');
+      seedRegistry(home, '');                   // the file exists; it is zero bytes
+      const root = project(TIP, null);          // the ref DOES exist at RUN.branch
+      const deps = fingerprintDeps(runnerFor('open'), root, home);
+      const res = await verifyDone(deps, RUN, FIXED_CLAIM);
+      expect(res).toMatchObject({ ok: false, code: 'branch-unmeasurable' });
+    });
+
+    it('says EMPTY in the detail — not "unreadable", and not "no branch at all"', async () => {
+      // The whole point of a typed refusal is that the sentence is true. An
+      // empty file is not a failed read (its bytes came back) and it is not an
+      // absent field (a main checkout's ordinary state) — it is evidence that
+      // something wrote, or half-wrote, this field. `_reg_set` is a truncating
+      // redirect with no tmp+rename (ccd:252), so a kill between truncate and
+      // write produces exactly this.
+      const home = mkTmp('ccrc-fp-');
+      seedRegistry(home, '');
+      const root = project(TIP, null);
+      const deps = fingerprintDeps(runnerFor('open'), root, home);
+      const res = await verifyDone(deps, RUN, FIXED_CLAIM);
+      const { detail } = res as { detail: string };
+      expect(detail).toContain('is empty');
+      expect(detail).not.toContain('bytes did not come back');
+      expect(detail).not.toContain('names no branch at all');
+    });
+
+    it('the ABSENT detail stays absent-shaped — the two are not merged back', async () => {
+      // The other direction: fixing the empty case by widening the absent
+      // sentence to cover both would trade one collapsed value for one vague
+      // sentence, which is the same defect wearing prose.
+      const home = mkTmp('ccrc-fp-');
+      seedRegistry(home, null);                 // row present, no .branch file at all
+      const root = project(TIP, null);
+      const deps = fingerprintDeps(runnerFor('open'), root, home);
+      const res = await verifyDone(deps, RUN, FIXED_CLAIM);
+      expect(res).toMatchObject({ ok: false, code: 'branch-unmeasurable' });
+      const { detail } = res as { detail: string };
+      expect(detail).toContain('names no branch at all');
+      expect(detail).not.toContain('is empty');
+    });
+  });
 });
 
 describe('verifyDone — a present-but-unreadable loose ref never settles a stale claim (findings 1 & 2)', () => {

@@ -169,22 +169,38 @@ export async function verifyDone(deps: VerifyDoneDeps, run: DoneRun, claim: Done
   //     `tip-unmeasurable` on a ref that will never exist. Refuse instead,
   //     and let the ordinary replay re-measure (spec:174-177, D-10).
   //
-  // `branchUnmeasured` (registry.ts) is what lets case 2's detail be TRUE
-  // rather than merely typed: a listed-but-unreadable `.branch` is transient
-  // and a genuinely absent one is not, and one sentence covering both would
-  // be a lie about one of them.
+  // `branchEvidence` (registry.ts) is what lets case 2's detail be TRUE rather
+  // than merely typed: a listed-but-unreadable `.branch` is transient, a
+  // genuinely absent one is not, an EMPTY one is a half-written field, and one
+  // sentence covering all three would be a lie about two of them.
+  //
+  // The empty rung arrived a wave later than the other two (review finding).
+  // `field()` trims, so a zero-byte `.branch` used to read as `branch: ''`,
+  // sail past the null check below, and be handed to `readBranchTip` as a
+  // branch NAME — the refusal a coordinator then read was `tip-unmeasurable`
+  // with an empty name in it ("no readable ref for  under demo"), which points
+  // at the wrong half of the system. `registry.ts` now normalises it to null
+  // at the read, so it arrives here as case 2 and refuses with its own reason.
   let branch: string;
   let branchFromRunRow = false;
   if (record === undefined) {
     branch = run.branch;
     branchFromRunRow = true;
   } else if (record.branch === null) {
+    // Frozen-column caveat repeated in the two PERMANENT sentences and not in
+    // the transient one: for `unreadable` the answer is "come back and ask
+    // again", and telling a coordinator about the run row there would invite a
+    // repair it does not need.
+    const frozen = 'there is nothing to re-measure, and the run row\'s own branch column was ' +
+      'frozen at dispatch time';
     return { ok: false, code: 'branch-unmeasurable',
-      detail: record.branchUnmeasured
+      detail: record.branchEvidence === 'unreadable'
         ? `the registry lists ${run.sessionId}.branch but its bytes did not come back — ` +
           'transient, not a fact about this run'
-        : `the registry row for ${run.sessionId} names no branch at all — there is nothing to ` +
-          're-measure, and the run row\'s own branch column was frozen at dispatch time' };
+        : record.branchEvidence === 'empty'
+          ? `the registry's ${run.sessionId}.branch file is empty — a truncated or zero-byte ` +
+            `write, not a branch name, so re-reading it will not help: ${frozen}`
+          : `the registry row for ${run.sessionId} names no branch at all — ${frozen}` };
   } else {
     branch = record.branch;
   }
