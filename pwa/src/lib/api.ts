@@ -240,7 +240,14 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     swap: (id: string, wrapper: string) => post(`${sid(id)}/swap`, { wrapper }),
     pr: (id: string) => getJson<PrView>(`${sid(id)}/pr`),
     prOpen: (id: string, b: { title: string; body: string; draft: boolean }) => post(`${sid(id)}/pr`, b),
-    archive: (id: string) => post(`${sid(id)}/archive`),
+    /** `{force:true}` ONLY when it is true — `opts?.force === false` and an
+     *  absent `opts` both send the byte-identical unforced request the route
+     *  has always taken (no `content-type`, no body). The force flag is not a
+     *  checkbox anywhere in the UI: it is a SECOND tap, made after the
+     *  operator has read the `409 run-open` refusal, because the refusal is
+     *  the whole information. See `ArchiveConflictSheet`. */
+    archive: (id: string, opts?: { force?: boolean }) =>
+      post(`${sid(id)}/archive`, opts?.force === true ? { force: true } : undefined),
     restore: (id: string) => post(`${sid(id)}/restore`),
     /** `POST /forget` — registry-only removal of a dead non-workspace session.
      *  Every gate (not a workspace, not held, not alive) is ccd's, re-proven
