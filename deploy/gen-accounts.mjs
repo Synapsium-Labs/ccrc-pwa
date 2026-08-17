@@ -76,6 +76,12 @@ const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
  *  the parser keeps its copy. */
 const SUFFIX_SAFE_RE = /^\.[A-Za-z0-9._-]+$/;
 
+/** Mirrors `shared/roster.ts`'s `SECRETS_SAFE_RE`. Kept here rather than
+ *  imported for the reason this file's header gives for every other copy: a
+ *  bare `node` cannot import the TypeScript. This file may be STRICTER than
+ *  `parseRoster`, never laxer. */
+const SECRETS_SAFE_RE = /^[A-Za-z0-9._/-]+$/;
+
 /** Mirrors `shared/roster.ts`'s `LABEL_UNSAFE_RE` — C0 controls plus DEL.
  *  A label reaches a one-line terminal status bar and the tmux-capture
  *  parser that reads it back; a control byte breaks both. */
@@ -158,6 +164,18 @@ function checkAccount(raw, index) {
       && typeof exec['secretsFile'] !== 'string') {
     bad(`account "${id}" has a non-string exec.secretsFile.`,
       `Set exec.secretsFile for account "${id}" to a string path relative to $HOME, or remove it.`);
+  }
+  // Mirrors `parseRoster`'s conservative gate: a path, not merely a string.
+  // `""` and a trailing "/" both resolve to a directory rather than a file;
+  // ".." escapes $HOME; a leading "/" ignores it entirely.
+  if (
+    exec['kind'] === 'generated' && exec['secretsFile'] !== undefined
+    && (exec['secretsFile'] === '' || exec['secretsFile'].startsWith('/') || exec['secretsFile'].endsWith('/')
+      || exec['secretsFile'].includes('..') || !SECRETS_SAFE_RE.test(exec['secretsFile']))
+  ) {
+    bad(`account "${id}" has an invalid exec.secretsFile ${JSON.stringify(exec['secretsFile'])}.`,
+      `Set exec.secretsFile for account "${id}" to a path relative to $HOME (e.g. ".cc-secrets/${id}-oauth.env") `
+      + 'using only letters, digits, ".", "-", "_" and "/" — never absolute, never containing "..", never ending in "/".');
   }
 
   const homeAble = raw['homeAble'];

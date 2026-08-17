@@ -10,6 +10,24 @@ const one = (over: Record<string, unknown> = {}) => ({
   }],
 });
 
+/** A minimal valid two-account roster — one `upstream` `claude`, one
+ *  `generated` `claude2` whose `exec` carries `secretsFile` when it is not
+ *  `undefined`. Used by the `exec.secretsFile` gate cases below. */
+const rosterWithSecrets = (secretsFile: string | undefined) => ({
+  version: 1,
+  accounts: [
+    {
+      id: 'claude', label: 'claude', configDirSuffix: '.claude',
+      exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic',
+    },
+    {
+      id: 'claude2', label: 'claude2', configDirSuffix: '.claude2',
+      exec: secretsFile !== undefined ? { kind: 'generated', secretsFile } : { kind: 'generated' },
+      homeAble: true, hue: 'violet', telemetry: 'anthropic',
+    },
+  ],
+});
+
 describe('parseRoster', () => {
   it('parses the shipped single-account default', () => {
     const r = parseRoster(one());
@@ -123,5 +141,41 @@ describe('parseRoster', () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe('exec.secretsFile is a path, not merely a string', () => {
+  // The value is embedded inside a double-quoted bash string in the generated
+  // wrapper (`[ -r "$HOME/<path>" ] && . "$HOME/<path>"`), so the same
+  // conservative gate configDirSuffix carries applies here. parseRoster used
+  // to require only `typeof === "string"`.
+  const cases: ReadonlyArray<readonly [string, string]> = [
+    ['a double quote', '.cc-secrets/a"b.env'],
+    ['a dollar sign', '.cc-secrets/$USER.env'],
+    ['a backtick', '.cc-secrets/`id`.env'],
+    ['a backslash', '.cc-secrets/a\\b.env'],
+    ['a newline', '.cc-secrets/a\nb.env'],
+    ['a parent-directory hop', '../.ssh/id_ed25519'],
+    ['an absolute path', '/etc/shadow'],
+    ['the empty string', ''],
+    ['a trailing slash', '.cc-secrets/'],
+    ['a space', '.cc-secrets/a b.env'],
+  ];
+  for (const [what, secretsFile] of cases) {
+    it(`rejects ${what}`, () => {
+      expect(() => parseRoster(rosterWithSecrets(secretsFile)))
+        .toThrow(/exec\.secretsFile/);
+    });
+  }
+
+  it('accepts the shape every real account uses', () => {
+    const r = parseRoster(rosterWithSecrets('.cc-secrets/claude2-oauth.env'));
+    const acct = r.accounts.find((a) => a.id === 'claude2');
+    expect(acct?.exec).toEqual({ kind: 'generated', secretsFile: '.cc-secrets/claude2-oauth.env' });
+  });
+
+  it('still accepts a generated account with no secretsFile at all', () => {
+    const r = parseRoster(rosterWithSecrets(undefined));
+    expect(r.accounts.find((a) => a.id === 'claude2')?.exec).toEqual({ kind: 'generated' });
   });
 });

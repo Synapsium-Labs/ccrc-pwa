@@ -224,6 +224,23 @@ describe('gen-accounts.mjs rejects everything parseRoster rejects', () => {
     ['no exec at all', roster(acct({ exec: undefined }))],
     ['an unknown exec.kind', roster(acct({ exec: { kind: 'wrapper' } }))],
     ['a non-string exec.secretsFile', roster(acct({ exec: { kind: 'generated', secretsFile: 7 } }), acct({ id: 'up' }))],
+    // exec.secretsFile is embedded inside a double-quoted bash string in the
+    // generated wrapper (`[ -r "$HOME/<path>" ] && . "$HOME/<path>"`), so it
+    // gets the same conservative path gate configDirSuffix carries. Paired
+    // with a distinct, valid upstream account so the roster is rejected ONLY
+    // for its secretsFile — not incidentally via "no upstream account" (a
+    // single-account `generated` roster would trip that check regardless of
+    // this guard, which would make the case pass for the wrong reason).
+    ['a secretsFile with a double quote', roster(acct({ exec: { kind: 'generated', secretsFile: '.cc-secrets/a"b.env' } }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['a secretsFile with a dollar sign', roster(acct({ exec: { kind: 'generated', secretsFile: '.cc-secrets/$USER.env' } }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['a secretsFile with a backtick', roster(acct({ exec: { kind: 'generated', secretsFile: '.cc-secrets/`id`.env' } }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['a secretsFile with a backslash', roster(acct({ exec: { kind: 'generated', secretsFile: '.cc-secrets/a\\b.env' } }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['a secretsFile with a newline', roster(acct({ exec: { kind: 'generated', secretsFile: '.cc-secrets/a\nb.env' } }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['a secretsFile with a parent-directory hop', roster(acct({ exec: { kind: 'generated', secretsFile: '../.ssh/id_ed25519' } }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['an absolute secretsFile', roster(acct({ exec: { kind: 'generated', secretsFile: '/etc/shadow' } }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['an empty secretsFile', roster(acct({ exec: { kind: 'generated', secretsFile: '' } }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['a secretsFile with a trailing slash', roster(acct({ exec: { kind: 'generated', secretsFile: '.cc-secrets/' } }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['a secretsFile with a space', roster(acct({ exec: { kind: 'generated', secretsFile: '.cc-secrets/a b.env' } }), acct({ id: 'up', configDirSuffix: '.up' }))],
     ['a non-boolean homeAble', roster(acct({ homeAble: 'yes' }))],
     ['an unknown telemetry', roster(acct({ telemetry: 'openai' }))],
     ['an unknown hue', roster(acct({ hue: 'chartreuse' }))],
