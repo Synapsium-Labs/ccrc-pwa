@@ -475,10 +475,15 @@ describe('sendPrompt', () => {
   // ok:true and the message was simply lost.
   it('re-presses Enter when the box did not empty, and succeeds if the retry lands', async () => {
     const { tmux, calls } = fakeTmux([
-      '❯ \n',            // initial — empty
-      '❯ /model opus\n', // verify (ansi read) — echoed
-      '❯ /model opus\n', // verify (plain read, taken unconditionally alongside the ansi one)
-      '❯ /model opus\n', // after 1st Enter — STILL in the box (overlay ate it)
+      // RE-DERIVED against the run, not assumed: the echo loop takes ONE
+      // capture per poll and breaks on the first that echoes, so index 2 is
+      // already the first SUBMIT poll. Its old label ("verify (plain read),
+      // taken unconditionally alongside the ansi one") described a second
+      // verify read that this path has never taken.
+      '❯ \n',            // 0: initial guard read — empty
+      '❯ /model opus\n', // 1: echo poll 1 — the box echoed it
+      '❯ /model opus\n', // 2: after 1st Enter, submit poll 1 — STILL in the box (overlay ate it)
+      '❯ /model opus\n', // 3: submit poll 2
       '❯ /model opus\n',
       '❯ /model opus\n',
       '❯ /model opus\n',
@@ -543,6 +548,50 @@ describe('sendPrompt', () => {
     );
     expect(res).toMatchObject({ ok: false, error: 'verify-failed', draft: 'stubborn leftover' });
     expect((res as { submittable?: boolean }).submittable).toBeUndefined();
+  });
+
+  // The false-echo pass. `after.includes(needle)` matched the WHOLE PANE, so a
+  // session whose scrollback already held our exact words passed the echo
+  // check with an EMPTY box, pressed Enter into nothing, and returned ok:true.
+  // Nothing downstream could tell that from a real send.
+  it('an echo that exists ONLY in the scrollback does not pass', async () => {
+    const scrollbackOnly = 'earlier turn\n❯ run the tests\n● a reply\n────\n❯ \n────\n status\n';
+    const { tmux, calls } = fakeTmux([scrollbackOnly]);
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'run the tests',
+    );
+    expect(res).toMatchObject({ ok: false, error: 'verify-failed', submittable: true });
+    expect(sendKeysCalls(calls).some((c) => c[c.length - 1] === 'Enter')).toBe(false);
+  });
+
+  it('an echo IN THE BOX still passes, on the very poll it renders', async () => {
+    const { tmux, calls } = fakeTmux([
+      'scrollback\n❯ \n',
+      'scrollback\n❯ run the tests\n',   // the box itself now holds it
+      'scrollback\n❯ \n',                 // after Enter — emptied
+    ]);
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'run the tests',
+    );
+    expect(res).toEqual({ ok: true });
+    expect(sendKeysCalls(calls).filter((c) => c[c.length - 1] === 'Enter')).toHaveLength(1);
+  });
+
+  // The capture BUDGET is what makes the box-scoped check adoptable: it reads
+  // an ansi capture per poll where it used to read a plain one, not both. A
+  // mutant that takes two per poll would slip past every assertion above.
+  it('costs exactly one capture-pane per echo poll, as the whole-pane check did', async () => {
+    const { tmux, calls } = fakeTmux([
+      'scrollback\n❯ \n',
+      'scrollback\n❯ \n',                 // poll 1 — not yet rendered
+      'scrollback\n❯ run the tests\n',    // poll 2 — rendered
+      'scrollback\n❯ \n',                 // after Enter — emptied
+    ]);
+    expect(await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'run the tests',
+    )).toEqual({ ok: true });
+    // 1 initial guard read + 2 echo polls + 1 submit poll = 4.
+    expect(calls.filter((c) => c[1] === 'capture-pane')).toHaveLength(4);
   });
 });
 

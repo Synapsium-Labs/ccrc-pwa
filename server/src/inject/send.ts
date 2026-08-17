@@ -547,22 +547,44 @@ export function sendPrompt(
         };
       }
     } else {
-      for (let i = 0; i < ECHO_TRIES; i++) {
+      // BOX-SCOPED, not whole-pane. `after.includes(needle)` proved only that
+      // the characters appear SOMEWHERE on screen — and a session's scrollback
+      // routinely holds the operator's own earlier phrasing of the same
+      // request, so a send into a box that never rendered passed the check,
+      // pressed Enter into nothing, and returned ok:true. The attachment path
+      // above has read the box for exactly this reason since it shipped; the
+      // difference was never a real distinction between the two payload shapes.
+      //
+      // This converts some silent false-successes into `verify-failed`
+      // refusals. That is the point, and it is safe only because such a refusal
+      // now leaves the text in the box and hands it back (`submittable`), so
+      // the operator's remedy is one tap rather than a terminal.
+      //
+      // ONE capture per poll, as before: the ansi read REPLACES the plain one
+      // rather than joining it, so the success path's budget is unchanged.
+      let echoed = needle === '';
+      let lastAnsi = '';
+      for (let i = 0; i < ECHO_TRIES && !echoed; i++) {
         await sleep(ECHO_POLL_MS);
+        const ansi = await d.tmux.captureAnsi(id);
+        if (ansi === null) continue;
+        lastAnsi = ansi;
+        if (draftOf(ansi).startsWith(needle)) echoed = true;
+      }
+      if (!echoed) {
+        // THE TEXT STAYS IN THE BOX — no clearBox, no C-u (operator ruling:
+        // refuse, never destroy). That was already true; what was missing was
+        // saying so. Hand back the box row so the PWA's rescue has something
+        // to correspond against, and the flag that says the box row is the
+        // WHOLE message rather than a failed clear's fragment.
+        //
+        // The pane tail is a PLAIN capture, taken once, here — it is display
+        // for a human, and the escape codes would only make it unreadable.
         after = await d.tmux.capture(id);
-        if (after !== null && (needle === '' || after.includes(needle))) break;
-        if (i === ECHO_TRIES - 1) {
-          // THE TEXT STAYS IN THE BOX — no clearBox, no C-u (operator ruling:
-          // refuse, never destroy). That was already true; what was missing was
-          // saying so. Hand back the box row so the PWA's rescue has something
-          // to correspond against, and the flag that says the box row is the
-          // WHOLE message rather than a failed clear's fragment.
-          const box = draftOf(await d.tmux.captureAnsi(id) ?? '');
-          return {
-            ok: false, error: 'verify-failed', pane: (after ?? '').slice(-PANE_TAIL),
-            draft: box, submittable: true,
-          };
-        }
+        return {
+          ok: false, error: 'verify-failed', pane: (after ?? '').slice(-PANE_TAIL),
+          draft: draftOf(lastAnsi), submittable: true,
+        };
       }
     }
 
