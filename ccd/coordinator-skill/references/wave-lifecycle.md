@@ -358,8 +358,20 @@ whole time, which is the only prevention this ordering rule buys.
 ## 6 — Final merge
 
 `POST /api/runs/:id/close` `{"fingerprint":{…},"final":true}` on the last
-wave's run — re-measures, closes this run `done`, and **releases** the hold
-(`ws-release`) instead of re-holding for a next wave. The ordinary sweep
-archives the workspace on its own clock and its manifest carries the whole PR
-lineage. You do not reap, ever (clause 3); cleanup is the operator's ceremony
+wave's run — re-measures, closes this run `done`, and releases the hold
+(`ws-release`) **only when no other open run names this session**. The response
+carries `released`. `released: true` means the claim is gone and the ordinary
+sweep will archive the workspace once its PR merges. `released: false` means the
+claim was **handed over**, not dropped: another run still owns this workspace,
+so the hold was rewritten with that run's own reason and nothing was archived.
+That is not an error — it is the ordinary consequence of opening wave N+1
+before closing wave N — but the program is not finished until that run closes
+too. The same field rides the abandon response.
+
+Since Build 8 the archive sweep asks the same question the close does: a
+workspace whose hold is absent but whose run is still open is **not** archived.
+Releasing a hold by hand no longer re-arms the sweep on its own.
+
+When the claim really is released, the ordinary sweep archives the workspace on
+its own clock and its manifest carries the whole PR lineage. You do not reap, ever (clause 3); cleanup is the operator's ceremony
 in the PWA.
