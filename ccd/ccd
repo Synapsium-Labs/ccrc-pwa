@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=d9ffba3514e8acd64cee4a71b73c6cd5163e00dd93482449a241bd7446546ab6
+# ccrc:generated 1 sha256=1392df6f2d9e4bb7c9685706f68bfdecc57f9bff5b40713088c4ab8051fd24e2
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
 set -uo pipefail
@@ -6535,6 +6535,25 @@ _ws_gc_row() {   # project mainreal wsroot wt prunable
     printf 'foreign\t%s\t%s\t%s\t%s\t%s\n' "$project" "$slug" "$bytes" "$age" "$wt"; return 0
   fi
 
+  # THE SERVER'S CENSUS USES A DIFFERENT PREDICATE, DELIBERATELY, and this is
+  # the ccd-side half of that note (the full set relation is in
+  # `server/src/divergence.ts`, `unclaimedWorktrees`). ccrc's
+  # `unregistered-worktree` finding names ws-gc as its repair, but it decides
+  # "unclaimed" with `_ws_slug_free`'s ANY-FIELD rule rather than the `.uuid`
+  # test below. So the two differ, in a known direction:
+  #   - Everything the census names has no `.uuid` either, so it is a SUBSET of
+  #     `orphan` here on the registry evidence — it never names a slug this
+  #     function would call `tracked`.
+  #   - This function calls a slug `orphan` in cases the census stays quiet
+  #     about: a workspace mid-`ws-add` before `.uuid` lands, and `.archived`/
+  #     `.reaping` residue from an interrupted purge — the `orphan` rung is
+  #     tested FIRST, so residue with no `.uuid` never reaches the two rungs
+  #     below that would name it. The census must not report those: it fires at
+  #     a repair that DELETES worktrees, and `_ws_slug_free` will not re-hand
+  #     the slug out anyway.
+  # The census has no `ours` gate either, so it also names the `foreign` and
+  # `stale-meta` worktrees above. Those are still ws-gc's to report — they are
+  # simply not `--prune`'s to remove.
   local state
   if   [[ ! -f "$REG/$project-$slug.uuid" ]];    then state=orphan
   elif [[ -f "$REG/$project-$slug.reaping" ]];   then state=reaping

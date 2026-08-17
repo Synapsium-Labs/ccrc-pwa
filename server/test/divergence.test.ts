@@ -115,6 +115,36 @@ describe('divergences — the three kinds, individually', () => {
         .toEqual([{ kind: 'unregistered-worktree', id: null,
                     path: '/home/u/worktrees/demo/newborn', detail: expect.any(String) }]);
     });
+
+    describe('and the relation to `ws-gc`, the repair this kind names, holds in BOTH directions', () => {
+      // The two predicates are deliberately different (see `unclaimedWorktrees`'s
+      // own docstring for the full set relation). What has to stay true is the
+      // DIRECTION of the difference, and neither half was pinned before: the
+      // tests above all prove the census is wider on claim than `.uuid`, and none
+      // proved it never goes NARROWER than it.
+
+      it('`.uuid` ALONE claims it — the census never names what ws-gc would call tracked', () => {
+        // `[[ ! -f "$REG/$project-$slug.uuid" ]]` is ws-gc's whole orphan test.
+        // So everything this census names must have no `.uuid`, or it would be
+        // naming a divergence whose repair reads the slug as a live workspace
+        // and refuses to touch it. `.uuid` is a suffix with no further dot, so
+        // the any-field rule already covers it — this asserts that it does,
+        // because every other test here proves the claim through some OTHER
+        // field and a narrowing that dropped `.uuid` specifically would pass
+        // all of them.
+        expect(mid(['demo-newborn.uuid'], [rec()])).toEqual([]);
+      });
+
+      it('`.archived` alone claims it, though ws-gc would call that same slug an ORPHAN', () => {
+        // The deliberate direction, and it is not symmetric with the one above.
+        // `_ws_gc_row` tests orphan FIRST — before `.reaping` and before
+        // `.archived` — so a residue with no `.uuid` reads as `orphan` there
+        // while it reads as CLAIMED here. That silence is the point: this kind's
+        // repair deletes worktrees, `_ws_slug_free` will not re-hand this slug
+        // out, and naming it would contradict the writer.
+        expect(mid(['demo-newborn.archived'], [rec()])).toEqual([]);
+      });
+    });
   });
 
   it('finds a FLAT worktree, not only a nested one', () => {

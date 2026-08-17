@@ -94,6 +94,41 @@ const key = (project: string, name: string): string => `${project}/${name}`;
  * (`local id="$project-$slug"`) and `<name>` is git's own admin name for the
  * worktree, which is the slug. A worktree nobody made through ccd — the actual
  * `unregistered-worktree` case — has no registry file under that id at all.
+ *
+ * HOW THIS LINES UP WITH `ws-gc`, THE REPAIR THIS KIND NAMES. Not the same
+ * predicate, deliberately, and the difference is a stated set relation rather
+ * than a drift nobody noticed. `_ws_gc_row` classifies a worktree `orphan` on
+ * `[[ ! -f "$REG/$project-$slug.uuid" ]]` ALONE, with `.reaping` and `.archived`
+ * as their own states on the next two rungs and `--prune`'s orphan arm gated
+ * further still (dirty tree, merged-PR proof). Against that, this function is
+ * WIDER ON CLAIM and therefore NARROWER ON NAMING, both ways round:
+ *
+ *  - Everything it names has NO `.uuid` file. `uuid` is a suffix holding no
+ *    further dot, so any `.uuid` present already claims the slug through the
+ *    any-field rule. What it names is therefore a SUBSET of ws-gc's own orphan
+ *    test on the registry evidence: it can never name a worktree ws-gc would
+ *    read as a live workspace and refuse to touch.
+ *  - It stays SILENT for slugs ws-gc would call `orphan`: a workspace mid-
+ *    `ws-add` before `.uuid` lands, and the `.archived`/`.reaping` residue an
+ *    interrupted purge leaves behind — `orphan` is tested FIRST in that chain,
+ *    so residue with no `.uuid` reads as `orphan` there and as CLAIMED here.
+ *    That asymmetry is the point, not an oversight: this kind's repair deletes
+ *    worktrees, and adopting `.uuid`-alone would re-open the false alarm on
+ *    every single `ws-add`.
+ *
+ * WHERE THEY GENUINELY DIVERGE is ws-gc's OWNERSHIP gate, which has no
+ * counterpart here — and it is a difference in the report, not a repair that
+ * cannot run. `_ws_gc_row` only reaches the orphan rung for a worktree at
+ * exactly `$WORKTREES_ROOT/<project>/<slug>`; anything else is `foreign`
+ * (listed, NEVER pruned, because guessing at another tool's lifecycle is how a
+ * reclaimer destroys work it does not understand), and one whose checkout
+ * directory is gone is `stale-meta`, repaired by `git worktree prune` instead.
+ * This function reads git's admin records and names all of them. `ws-gc` with
+ * no flag is a REPORT and lists every one of those states, so "go look at
+ * ws-gc" holds for every finding this kind emits — it is only `--prune`'s
+ * orphan arm that is narrower, and that arm is human-only by contract anyway.
+ * Both directions are pinned in `divergence.test.ts`; the ccd side of this
+ * relation is written down beside `_ws_gc_row`'s own orphan test.
  */
 export function unclaimedWorktrees(
   input: Pick<DivergenceInput, 'records' | 'worktrees' | 'registryNames'>,
