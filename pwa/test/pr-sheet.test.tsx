@@ -514,6 +514,47 @@ describe('mutation-sweep closures', () => {
     expect(screen.queryByText(/This workspace is claimed/)).toBeNull();
   });
 
+  // `conflict` is a claim measured for ONE session. This sheet takes `session`
+  // and `open` as INDEPENDENT props and its own one-shot effect already keys on
+  // `[open, id]` — i.e. it is written for a target that can change under it —
+  // so the reset belongs on the same effect. (SessionHeader's only mount today
+  // sits under an `app.tsx`-keyed SessionScreen, which remounts on a session
+  // change; this pins the component's contract, not that one wiring.)
+  it('a run-open captured for session A does NOT follow a retarget to session B', async () => {
+    const archive = vi.fn().mockRejectedValue(
+      new ApiError(409, { ok: false, error: 'run-open', runs: [{ id: 17, program: 'build4', wave: 2, waveOf: 3 }] }));
+    const a = mergedUnarchived();
+    const b = { ...a, id: 'demo-still-basin', workspace: 'still-basin' };
+    const { rerender } = render(
+      <><ToastHost /><PrSheet session={a} open onClose={() => {}} onReap={() => {}} archive={archive} /></>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive now' }));
+    await waitFor(() => expect(screen.getByText(/This workspace is claimed/)).toBeTruthy());
+
+    rerender(
+      <><ToastHost /><PrSheet session={b} open onClose={() => {}} onReap={() => {}} archive={archive} /></>);
+    await waitFor(() => expect(screen.queryByText(/This workspace is claimed/)).toBeNull());
+    expect(screen.queryByText(/run 17/)).toBeNull();
+  });
+
+  // The OTHER half of "unconditional": `ArchiveConflictSheet` is a SIBLING of
+  // `<Sheet open={open}>`, not a child, so a claim left set while this sheet
+  // closes stays on screen with nothing behind it. A reset tucked inside the
+  // effect's `if (open)` branch would pass the retarget test above (the
+  // retarget happens with `open` still true) and leave this one red.
+  it('closing the door drops the claim — the conflict sheet is not gated on `open`', async () => {
+    const archive = vi.fn().mockRejectedValue(
+      new ApiError(409, { ok: false, error: 'run-open', runs: [{ id: 17, program: 'build4', wave: 2, waveOf: 3 }] }));
+    const session = mergedUnarchived();
+    const { rerender } = render(
+      <><ToastHost /><PrSheet session={session} open onClose={() => {}} onReap={() => {}} archive={archive} /></>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive now' }));
+    await waitFor(() => expect(screen.getByText(/This workspace is claimed/)).toBeTruthy());
+
+    rerender(
+      <><ToastHost /><PrSheet session={session} open={false} onClose={() => {}} onReap={() => {}} archive={archive} /></>);
+    await waitFor(() => expect(screen.queryByText(/This workspace is claimed/)).toBeNull());
+  });
+
   // Task 215 — the note enumerated TWO reasons a merged workspace sits
   // unarchived (a hold, a busy session) and Wave 2's `archiveMerged` rung
   // created a third: an OPEN RUN. Zero wire change; the fleet store already

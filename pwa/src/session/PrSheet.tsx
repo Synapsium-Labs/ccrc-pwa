@@ -59,7 +59,19 @@ export function PrSheet({
   };
   // One-shot on open: the cached value from the fleet sweep is on screen
   // meanwhile, so the sheet is never blank.
-  useEffect(() => { if (open) load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [open, id]);
+  //
+  // The `conflict` reset is UNCONDITIONAL, deliberately outside the `if (open)`
+  // — `SessionActionsSheet`'s own idiom for the same state. A `409 run-open` is
+  // a measurement the server made about ONE session; this component takes
+  // `session` and `open` as independent props, so `id` can change with `open`
+  // staying true, and a reset gated on open/close would never fire on that
+  // path. Session B's operator must never be shown session A's claim with an
+  // "Archive anyway" button under it.
+  useEffect(() => {
+    setConflict(undefined);
+    if (open) load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, id]);
 
   // THE THIRD REASON a merged workspace sits unarchived, and it needs ZERO
   // wire change: the fleet store already carries the active run list. Both

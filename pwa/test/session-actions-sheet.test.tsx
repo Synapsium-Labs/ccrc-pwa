@@ -248,6 +248,55 @@ describe('archive and restore (D5 rider 1)', () => {
     expect(await screen.findByText(/Couldn't archive — ws-archive: busy/)).toBeInTheDocument();
     expect(screen.queryByText(/This workspace is claimed/)).toBeNull();
   });
+
+  // The SAME class as this file's `swapOpen`/`holdOpen`/`releaseConfirmOpen`
+  // resets, one state later: `conflict` is a claim measured for ONE session,
+  // and FleetScreen's `openActionsFor` retargets `actionsSession` while
+  // `actionsOpen` stays true (tap another row's ··· with this sheet up). The
+  // sheet is mounted at screen level and never unmounts on close, so nothing
+  // else clears it — session B's operator would be shown session A's run.
+  it('a run-open captured for session A does NOT follow a retarget to session B', async () => {
+    const archive = vi.fn().mockRejectedValue(
+      new ApiError(409, { ok: false, error: 'run-open', runs: [{ id: 17, program: 'build4', wave: 2, waveOf: 3 }] }));
+    const b = s({ id: 'demo-still-ridge', workspace: 'still-ridge', archivedAt: null });
+    const props = { open: true, onClose: () => {}, onReap: () => {}, archive };
+    const { rerender } = render(
+      <>
+        <SessionActionsSheet session={workspaceSession()} {...props} />
+        <ToastHost />
+      </>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Archive workspace' }));
+    await waitFor(() => expect(screen.getByText(/This workspace is claimed/)).toBeTruthy());
+
+    rerender(
+      <>
+        <SessionActionsSheet session={b} {...props} />
+        <ToastHost />
+      </>,
+    );
+    expect(screen.queryByText(/This workspace is claimed/)).toBeNull();
+    expect(screen.queryByText(/run 17/)).toBeNull();
+  });
+
+  // The OTHER half of "unconditional": `ArchiveConflictSheet` is mounted as a
+  // SIBLING of `<Sheet open={open}>`, not inside it, so a claim left set while
+  // the actions sheet closes stays on screen with nothing behind it. A reset
+  // living in the close-only effect above (`if (open) return`) would pass the
+  // retarget test and still leave this one red.
+  it('closing the door drops the claim — the conflict sheet is not gated on `open`', async () => {
+    const archive = vi.fn().mockRejectedValue(
+      new ApiError(409, { ok: false, error: 'run-open', runs: [{ id: 17, program: 'build4', wave: 2, waveOf: 3 }] }));
+    const session = workspaceSession();
+    const props = { session, onClose: () => {}, onReap: () => {}, archive };
+    const { rerender } = render(
+      <><SessionActionsSheet {...props} open /><ToastHost /></>);
+    fireEvent.click(screen.getByRole('button', { name: 'Archive workspace' }));
+    await waitFor(() => expect(screen.getByText(/This workspace is claimed/)).toBeTruthy());
+
+    rerender(<><SessionActionsSheet {...props} open={false} /><ToastHost /></>);
+    expect(screen.queryByText(/This workspace is claimed/)).toBeNull();
+  });
 });
 
 describe('hold and release', () => {

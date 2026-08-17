@@ -122,12 +122,22 @@ export function SessionActionsSheet({
   // while this sheet is already open) — without this, a reason half-typed
   // for session A, or session A's still-open "released…" confirm, would be
   // sitting there when session B's sheet renders.
+  //
+  // `conflict` JOINED THIS LIST in the wave-2 review, and it is the worst
+  // member of it: the other four are the operator's own half-finished input,
+  // but a `409 run-open` is a MEASUREMENT the server made about session A —
+  // a named run, a named program, a named wave. Left behind across a
+  // retarget it does not merely look stale, it tells session B's operator
+  // that THEIR workspace is claimed by a run that never named it, and offers
+  // "Archive anyway" over it. Unconditional, like the rest: the retarget
+  // happens with `open` staying true, so a reset gated on close never fires.
   useEffect(() => {
     setHoldOpen(false);
     setHoldReason('');
     setHoldError(null);
     setReleaseConfirmOpen(false);
     setForgetConfirmOpen(false);
+    setConflict(undefined);
   }, [open, session?.id]);
 
   if (!session) return null;
