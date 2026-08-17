@@ -245,6 +245,32 @@ describe('§1.5 — adoption, and everything that must NOT adopt', () => {
     // on the adoption path least of all, because a false-new makes the count 1 and
     // WOULD BE ADOPTED.
     const h = await harness({ ccd: { ok: false, killed: true, stderr: '' }, afterListed: false });
+    expect(await h.dispatch()).toEqual(
+      { ok: false, kind: 'registry-unmeasurable', stderr: '' });
+  });
+
+  it('and it CARRIES ccd\'s own words — the AFTER read is not the only thing that failed', async () => {
+    // §1.5 moved the `!res.ok` early return PAST this read, and this arm is where
+    // ccd's stderr got dropped on the way: two things failed in the same call —
+    // the `ws-add` AND the listing that would have told us what it left behind —
+    // and the operator got told about only one of them. Every OTHER refusal on
+    // this path (`fleetFailed`, both of them) quotes ccd, and the 502 body's whole
+    // job is to say what the fleet said.
+    const h = await harness({
+      ccd: { ok: false, killed: true, stderr: 'ccd: no wrapper has capacity' },
+      afterListed: false,
+    });
+    expect(await h.dispatch()).toEqual({
+      ok: false, kind: 'registry-unmeasurable', stderr: 'ccd: no wrapper has capacity',
+    });
+  });
+
+  it('carries NO stderr when the ws-add itself SUCCEEDED — ccd is not the failing party', async () => {
+    // Presence is the distinction: a `stderr` here means "ccd also failed, and
+    // this is what it said". A clean `ws-add` followed by an unlistable registry
+    // is a one-failure story, and inventing an empty string for it would make the
+    // two read alike.
+    const h = await harness({ ccd: { ok: true, stderr: '' }, afterListed: false });
     expect(await h.dispatch()).toEqual({ ok: false, kind: 'registry-unmeasurable' });
   });
 });

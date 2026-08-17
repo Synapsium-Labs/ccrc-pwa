@@ -58,7 +58,18 @@ export type DispatchOutcome =
       code: Extract<RunRefuseCode, 'paused' | 'mail-disabled' | 'cap-concurrency' | 'cap-daily' |
         'ambiguous-dispatch' | 'worker-busy'>;
       limit?: number; running?: number; used?: number; candidates?: number }
-  | { ok: false; kind: 'registry-unmeasurable' }
+  /** `stderr` is PRESENT exactly when the ccd call in the same dispatch ALSO
+   *  failed, and it is then ccd's own words. Two things went wrong on the
+   *  fresh-spawn path once §1.5 moved the `!res.ok` return PAST the AFTER read —
+   *  the `ws-add` and the listing that would have said what it left behind — and
+   *  dropping ccd's half told the operator about one of them. Every other refusal
+   *  on this path quotes ccd; this one does too.
+   *
+   *  ABSENT is not "ccd said nothing": it is "ccd is not the failing party" (the
+   *  `ws-add` or `ensure` succeeded, and only the registry read failed). An empty
+   *  string would collapse those two, which is the defect class this whole
+   *  increment is about — so the distinction is PRESENCE, never `''`. */
+  | { ok: false; kind: 'registry-unmeasurable'; stderr?: string }
   | { ok: false; kind: 'unsupported' }
   | { ok: false; kind: 'fleetFailed'; stderr: string }
   | { ok: false; kind: 'advanceFailed'; adv: Extract<AdvanceResult, { ok: false }> };
@@ -218,7 +229,12 @@ export async function dispatchRun(
     const afterRead = await readRegistryMeasured(deps.io, deps.cfg);
     if (!afterRead.listed ||
         afterRead.records.some((r) => r.project === run.project && measuredIdentity(r) === null)) {
-      return { ok: false, kind: 'registry-unmeasurable' };
+      // ccd's own words ride along when ccd ALSO failed. Before §1.5 this arm was
+      // unreachable on a failed `ws-add` — the early return fired first and the
+      // 502 quoted ccd — so moving that return DOWN silently deleted the fleet's
+      // half of the story for the one case where two things broke at once.
+      // Present-or-absent, never `''`: see the union member's own docstring.
+      return { ok: false, kind: 'registry-unmeasurable', ...(res.ok ? {} : { stderr: res.stderr }) };
     }
     const after = afterRead.records;
     const candidates = after.filter((r) =>

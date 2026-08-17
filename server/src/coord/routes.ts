@@ -118,7 +118,16 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
       if (r.candidates !== undefined) extra.candidates = r.candidates;
       return reply.code(409).send({ ok: false, refused: r.code, ...extra });
     }
-    case 'registry-unmeasurable': return reply.code(502).send({ ok: false, error: 'registry-unmeasurable' });
+    // The `stderr` spread, not `stderr: r.stderr`: an L4 adapter may not narrow a
+    // distinction it received, and this member's `stderr` distinguishes by
+    // PRESENCE — "ccd also failed, and this is what it said" from "ccd is not the
+    // failing party". Naming it unconditionally would put `undefined` on the wire
+    // for the second case, which JSON drops anyway; spreading says so on purpose.
+    case 'registry-unmeasurable':
+      return reply.code(502).send({
+        ok: false, error: 'registry-unmeasurable',
+        ...(r.stderr === undefined ? {} : { stderr: r.stderr }),
+      });
     case 'unsupported': return reply.code(501).send({ ok: false, error: 'unsupported' });
     case 'fleetFailed': return reply.code(502).send({ ok: false, stderr: r.stderr });
     case 'advanceFailed': return reply.code(409).send(r.adv);

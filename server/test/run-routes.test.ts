@@ -389,6 +389,42 @@ describe('POST /api/runs/:id/dispatch', () => {
       const row = w.coord.run(opened.id);
       expect(row?.state).toBe('planned');
       expect(row?.sessionId).toBeNull();
+      // ccd is NOT the failing party here, so the body says nothing on its
+      // behalf. The presence of `stderr` is the distinction — see the next test.
+      expect(res.json()).not.toHaveProperty('stderr');
+    });
+
+    it('the 502 QUOTES ccd when the ws-add failed too — two failures, and the operator hears both', async () => {
+      // §1.5 moved the `!res.ok` early return past the AFTER read, and the
+      // operator-facing cost was here: on the one path where BOTH the spawn and
+      // the listing fail, the 502 used to name only the listing. `fleetFailed`
+      // quotes ccd on every other refusal in this route; this one lost it purely
+      // as a side effect of the return moving.
+      const home = mkTmp('ccrc-runs-');
+      let spawned = false;
+      const calls: string[][] = [];
+      const run: Runner = async (_cmd, args) => {
+        calls.push(args);
+        if (args[0] === 'ws-add') {
+          // The workspace IS created and the call STILL fails — the real
+          // cut-short shape, which is why this arm is reachable at all.
+          seed(home, 'demo-fresh1');
+          spawned = true;
+          return { code: 1, stdout: '', stderr: 'ccd: no wrapper has capacity', killed: true };
+        }
+        return { code: 0, stdout: '', stderr: '' };
+      };
+      const io: FleetIO = { ...localIO, readdir: async (p) => (spawned ? null : localIO.readdir(p)) };
+      const w = await openApp(home, run, { io }); app = w.app;
+      const opened = (await postOpen(app)).json() as { id: number };
+      const res = await postDispatch(app, opened.id);
+      expect(res.statusCode).toBe(502);
+      expect(res.json()).toEqual({
+        ok: false, error: 'registry-unmeasurable', stderr: 'ccd: no wrapper has capacity',
+      });
+      // Still binds and holds NOTHING — carrying ccd's words is not adoption.
+      expect(calls.some((c) => c[0] === 'ws-hold')).toBe(false);
+      expect(w.coord.run(opened.id)?.sessionId).toBeNull();
     });
   });
 
