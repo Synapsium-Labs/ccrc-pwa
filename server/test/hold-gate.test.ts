@@ -17,6 +17,8 @@ import { localIO, type FleetIO } from '../src/io.js';
 import { loadConfig } from '../src/config.js';
 import type { PushPayload } from '../src/push.js';
 import type { PrState } from '../../shared/api.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { CoordStore } from '../src/coord/store.js';
 
 function seed(ids: string[]): string {
   const home = mkTmp('ccrc-');
@@ -407,5 +409,76 @@ describe('SessionRecord.held', () => {
     const records = await readRegistry(localIO, cfg);
     expect(records.find((r) => r.id === 'demo-quiet-basin')?.held).toBe('program:agent-evals wave:1/4');
     expect(records.find((r) => r.id === 'demo-still-cove')?.held).toBeNull();
+  });
+});
+
+/** A coord store with one OPEN run naming `id`, and NO hold on disk — the
+ *  release-then-crash shape, and the hand-created-workspace-adopted-into-a-run
+ *  shape, in one fixture. */
+const coordWithOpenRun = (home: string, id: string): CoordStore => {
+  const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+  const opened = coord.openRun({ program: 'build4', title: 'T', project: 'demo', wave: 2, waveOf: 3,
+    claimedBy: 'ccrc-pwa-coordinator' });
+  if (!('id' in opened)) throw new Error('fixture openRun refused');
+  coord.setSession(opened.id, id);
+  return coord;
+};
+
+describe('archiveMerged — and an OPEN RUN, even with no hold', () => {
+  it('does not archive a merged workspace an open run names, though the hold is ABSENT', async () => {
+    const home = seed(['demo-quiet-basin']);
+    liveIdle(home);
+    // NO `hold(...)` call: this is release-then-crash, and the whole point of
+    // the rung is that an absent hold is no longer sufficient.
+    const calls: string[][] = [];
+    const notify = vi.fn(async (_p: PushPayload) => {});
+    const deps = {
+      ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)),
+      push: { notify } as never,
+      coord: coordWithOpenRun(home, 'demo-quiet-basin'),
+    };
+    const w = new FleetWatcher(deps, new Bus(), 10_000);
+    for (let i = 0; i < 3; i++) { forceDue(w); await w.tick(); await sweepSettled(w); }
+    expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
+    // Same shape of notification `notifyHeldMerged` already sends, and it
+    // NAMES the run — a silent skip would be the defect one door over.
+    await vi.waitFor(() => expect(notify).toHaveBeenCalled());
+    expect(notify.mock.calls[0]![0].body).toContain('nothing archived');
+    expect(notify.mock.calls[0]![0].body).toMatch(/run \d+/);
+    w.stop();
+  });
+
+  it('archives again once that run closes — the level re-arms on the RUN now, not on the hold', async () => {
+    const home = seed(['demo-quiet-basin']);
+    liveIdle(home);
+    const calls: string[][] = [];
+    const coord = coordWithOpenRun(home, 'demo-quiet-basin');
+    const deps = { ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), coord };
+    const w = new FleetWatcher(deps, new Bus(), 10_000);
+    await w.tick(); await sweepSettled(w);
+    expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
+
+    const openId = coord.runs()[0]!.id;
+    coord.advance(openId, 'dispatched', 'coordinator');
+    coord.advance(openId, 'closing', 'coordinator');
+    coord.advance(openId, 'done', 'coordinator');
+    forceDue(w); await w.tick();
+    await vi.waitFor(() => expect(calls.filter((c) => c[0] === 'ws-archive')).toHaveLength(1));
+    w.stop();
+  });
+
+  it('a watcher with NO coord still archives — `deps.coord` is optional and that is load-bearing', async () => {
+    // `testDeps` supplies no `coord`; fourteen tests in this file and every
+    // archive test in `pr-sweep.test.ts` build their watchers from it. This
+    // test exists so a future NON-optional `this.deps.coord.openRunsForSession`
+    // reds ONE named test instead of fourteen unrelated ones.
+    const home = seed(['demo-quiet-basin']);
+    liveIdle(home);
+    const calls: string[][] = [];
+    const w = new FleetWatcher(testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)),
+      new Bus(), 10_000);
+    await w.tick();
+    await vi.waitFor(() => expect(calls.filter((c) => c[0] === 'ws-archive')).toHaveLength(1));
+    w.stop();
   });
 });

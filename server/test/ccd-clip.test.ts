@@ -32,7 +32,8 @@ const dest = (src: string): string =>
   execFileSync('bash', ['-c', `source "${CCD}"; _clip_dest /tmp/clips "${src}"`],
     // See ccd-limits.test.ts: the gh boundary belongs to every file that
     // sources ccd, not only to the ones using `makeCcdHarness`.
-    { encoding: 'utf8', env: ghContainedEnv(isolatedHome, { ...process.env, HOME: isolatedHome }) }).trim();
+    { encoding: 'utf8', env: ghContainedEnv(isolatedHome, { ...process.env, HOME: isolatedHome }, { systemd: true }) })
+    .trim();
 
 describe('_clip_dest', () => {
   it('keeps the source extension instead of calling everything .png', () => {

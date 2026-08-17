@@ -50,6 +50,29 @@ with the run now `dispatched`, or a refusal:
 | `ambiguous-dispatch` | wave 1's spawn found 0 or >1 candidate workspaces | stop and report; the operator resolves it |
 | `worker-busy` | wave ≥ 2's session is observably mid-turn | wait and retry; do not force it |
 
+#### An `ok:true` dispatch is no longer proof that the pane is ready
+
+`POST /api/runs/:id/dispatch` answers with two fields beyond the ones above:
+
+| field | meaning |
+|---|---|
+| `adopted` | `true` when the workspace was **adopted from a killed `ws-add`**, not created by a clean one. The HTTP call that made it timed out and the server killed `ccd`; the workspace, the claim and the supervisor all exist, but nothing confirmed the session's TUI came up. |
+| `spawnState` | how the last spawn attempt ended: `ready`, `login`, `vanished`, `expired`, `blocked`, `unrecognised`, or `null` for *not recorded*. `null` is not `ready` and is not a warning — it means no spawn fact was written. |
+
+**What to do with them.** On `adopted: true`, or on any `spawnState` other than `ready` or `null`,
+**do not treat the brief as delivered**. Wait for the worker's first mail as usual, but if none
+arrives within the wave's ordinary window, read the session's own screen before re-dispatching:
+
+- `spawnState: 'expired'` — the settle ran out. Large resumes legitimately settle unconfirmed; the
+  session is very often fine. Give it the ordinary window before acting.
+- `spawnState: 'login'` or `'blocked'` — the account behind that lane needs a human. Waiting longer
+  cannot fix it. Say so to the operator; do not re-dispatch onto the same lane.
+- `spawnState: 'vanished'` — the tmux session went away mid-poll. The row will classify itself on
+  the next sweep.
+
+`adopted: true` is also written to the run's event trail as `spawn-adopted:<spawnState>`, so the
+provenance of the workspace survives the conversation.
+
 **`items` — the wave's declared ledger.** `"items"` is the machine-readable
 half of the wave plan whose other half is the brief: one title per unit of
 work, at most **32** of them, each at most **200 UTF-8 bytes** (bytes, not
@@ -335,8 +358,20 @@ whole time, which is the only prevention this ordering rule buys.
 ## 6 — Final merge
 
 `POST /api/runs/:id/close` `{"fingerprint":{…},"final":true}` on the last
-wave's run — re-measures, closes this run `done`, and **releases** the hold
-(`ws-release`) instead of re-holding for a next wave. The ordinary sweep
-archives the workspace on its own clock and its manifest carries the whole PR
-lineage. You do not reap, ever (clause 3); cleanup is the operator's ceremony
+wave's run — re-measures, closes this run `done`, and releases the hold
+(`ws-release`) **only when no other open run names this session**. The response
+carries `released`. `released: true` means the claim is gone and the ordinary
+sweep will archive the workspace once its PR merges. `released: false` means the
+claim was **handed over**, not dropped: another run still owns this workspace,
+so the hold was rewritten with that run's own reason and nothing was archived.
+That is not an error — it is the ordinary consequence of opening wave N+1
+before closing wave N — but the program is not finished until that run closes
+too. The same field rides the abandon response.
+
+Since Build 8 the archive sweep asks the same question the close does: a
+workspace whose hold is absent but whose run is still open is **not** archived.
+Releasing a hold by hand no longer re-arms the sweep on its own.
+
+When the claim really is released, the ordinary sweep archives the workspace on
+its own clock and its manifest carries the whole PR lineage. You do not reap, ever (clause 3); cleanup is the operator's ceremony
 in the PWA.

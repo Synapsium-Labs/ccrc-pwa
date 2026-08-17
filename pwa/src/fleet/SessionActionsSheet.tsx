@@ -22,6 +22,7 @@ import { api, apiErrorText, HOLD_EMPTY_REASON_TEXT } from '../lib/api';
 import { accountLabel } from '../lib/accounts';
 import { sessionLabel } from './sessionLabel';
 import { SwapSheet } from './SwapSheet';
+import { ArchiveConflictSheet, runOpenRuns, type ArchiveConflictRun } from './ArchiveConflictSheet';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import './fleet.css';
 
@@ -35,9 +36,18 @@ import './fleet.css';
  *  `archiveSafety` still answers busy/attached for a session someone is
  *  watching or that is mid-turn. The PrSheet two taps away is careful to name
  *  that as its own separate reason; promising "will archive" here converted a
- *  may into a will and then claimed ccd said so. */
+ *  may into a will and then claimed ccd said so.
+ *
+ *  CORRECTED in Build 8 Wave 2. It used to end at "(a busy or attached session
+ *  defers)", which is now a promise the sweep can no longer keep: since
+ *  `archiveMerged` also asks coord.db whether an OPEN RUN names the session,
+ *  releasing the hold is not sufficient on its own. This is the PWA half of
+ *  ccd's own corrected `cmd_ws_release` comment — uncorrected, the phone tells
+ *  the operator the opposite of what the box will do. Still a MAY, never a
+ *  WILL: the original correction that produced this constant stands. */
 const RELEASE_CONSEQUENCE =
-  "released — the next sweep may archive it once its PR merges (a busy or attached session defers).";
+  'released — the next sweep may archive it once its PR merges (a busy or attached session defers, '
+  + 'and an open run on this workspace defers it too).';
 
 const CRITICAL = 75;
 
@@ -47,7 +57,11 @@ export function SessionActionsSheet({
   onClose,
   onReap,
   fleet = useFleetStore,
+  archive = api.archive,
 }: {
+  /** Injectable for tests, the same default-to-`api.archive` shape `PrSheet`
+   *  and `ArchiveConflictSheet` use — three components, one idiom. */
+  archive?: typeof api.archive;
   session: FleetSession | null;
   open: boolean;
   onClose: () => void;
@@ -64,6 +78,11 @@ export function SessionActionsSheet({
   const [swapOpen, setSwapOpen] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const [archBusy, setArchBusy] = useState(false);
+  /** `undefined` = no refusal to show; otherwise the runs the server named
+   *  (possibly `[]` — a run-open whose runs we could not read, which the sheet
+   *  renders without inventing an id). Three states, because collapsing the
+   *  empty case into "no conflict" is the defect the sheet exists to close. */
+  const [conflict, setConflict] = useState<readonly ArchiveConflictRun[] | undefined>(undefined);
   // Hold's reason composer — open/closed, the typed text, and a refusal the
   // empty-reason check leaves behind. `holdBusy` is separate from `archBusy`:
   // the two actions are mutually exclusive on screen (never-both, see the
@@ -103,12 +122,22 @@ export function SessionActionsSheet({
   // while this sheet is already open) — without this, a reason half-typed
   // for session A, or session A's still-open "released…" confirm, would be
   // sitting there when session B's sheet renders.
+  //
+  // `conflict` JOINED THIS LIST in the wave-2 review, and it is the worst
+  // member of it: the other four are the operator's own half-finished input,
+  // but a `409 run-open` is a MEASUREMENT the server made about session A —
+  // a named run, a named program, a named wave. Left behind across a
+  // retarget it does not merely look stale, it tells session B's operator
+  // that THEIR workspace is claimed by a run that never named it, and offers
+  // "Archive anyway" over it. Unconditional, like the rest: the retarget
+  // happens with `open` staying true, so a reset gated on close never fires.
   useEffect(() => {
     setHoldOpen(false);
     setHoldReason('');
     setHoldError(null);
     setReleaseConfirmOpen(false);
     setForgetConfirmOpen(false);
+    setConflict(undefined);
   }, [open, session?.id]);
 
   if (!session) return null;
@@ -133,10 +162,15 @@ export function SessionActionsSheet({
     if (archBusy) return;
     setArchBusy(true);
     try {
-      await api.archive(session.id);
+      await archive(session.id);
       onClose();
     } catch (err) {
-      toast(`Couldn't archive — ${apiErrorText(err)}`, 'error');
+      // `409 run-open` is not a failure the operator can act on from a toast:
+      // the refusal names WHICH run, and naming it is the whole information.
+      // Everything else keeps the toast it always had.
+      const runs = runOpenRuns(err);
+      if (runs !== null) setConflict(runs);
+      else toast(`Couldn't archive — ${apiErrorText(err)}`, 'error');
     } finally {
       setArchBusy(false);
     }
@@ -269,6 +303,46 @@ export function SessionActionsSheet({
           {session.lifecycle === 'unsupervised' && (
             <p className="sess-sheet-note">
               {`This pane is running, but nothing is supervising it — no auto-swap, no auto-compact and no record when it dies. Restart session adopts the running pane: nothing is restarted and nothing in the conversation is lost. The same thing ccd start ${session.id} does at a terminal.`}
+            </p>
+          )}
+
+          {/* §1.6b. A SECOND, orthogonal qualifier: the two notes above say what
+              the row IS; this says how its LAST SPAWN ATTEMPT ended. A row can be
+              `running` today after a failed spawn yesterday, so these are
+              deliberately separate paragraphs and not a widened gate.
+
+              `ready` and `null` say nothing at all — `null` is NOT RECORDED, which
+              is what every session that has not spawned since PR #50 carries. */}
+          {(session.spawnState === 'blocked' || session.spawnState === 'login') && (
+            <p className="sess-sheet-note">
+              {`The last spawn stopped at ${session.spawnState === 'login' ? 'a login screen' : 'a limit or spend banner'} — Restart session will hit it again. Swap account moves this session to a usable lane; the terminal is where you fix the lane itself.`}
+            </p>
+          )}
+          {session.spawnState === 'expired' && (
+            <p className="sess-sheet-note">
+              The last spawn never confirmed its TUI inside the settle window. That
+              is not a fault on its own — a large resume legitimately takes minutes
+              between gates — but if the pane is empty, Restart session re-runs it.
+            </p>
+          )}
+          {session.spawnState === 'vanished' && (
+            <p className="sess-sheet-note">
+              The tmux session disappeared while the last spawn was still waiting on
+              it. Restart session builds a new pane; the conversation is resumed
+              from the transcript, not from that pane.
+            </p>
+          )}
+
+          {/* `unclaimed` and `orphan` have OPPOSITE repairs and must not share a
+              sentence: `orphan` means nothing is bringing this back (fix: a
+              process); this means a process IS running that no registry row claims
+              (fix: a CLAIM). `Restart session` posts `/ensure`, whose live branch
+              runs `_resupervise_live`, and that is where the claim is written —
+              so the sentence below is a measurement, not a hope. No new control
+              is needed. */}
+          {session.lifecycle === 'unclaimed' && (
+            <p className="sess-sheet-note">
+              {`This pane is running, but no registry row claims it — so nothing will resume it, swap it or record its death. Restart session writes the claim and adopts the pane: the same thing ccd ensure ${session.id} does at a terminal. Nothing is restarted and nothing in the conversation is lost.`}
             </p>
           )}
 
@@ -426,6 +500,18 @@ export function SessionActionsSheet({
         consequence="Its registry entry is removed and the row leaves the fleet. The transcript and any pasted images stay on disk; nothing in git is touched. Starting the session again recreates it."
         confirmLabel="Forget"
         onConfirm={forgetNow}
+      />
+
+      {/* The refusal, as a surface the operator can answer — the SAME sheet
+          and the SAME reader (`runOpenRuns`) PrSheet's archive door uses, so
+          the two doors cannot drift onto two sentences. `onDone` closes this
+          sheet too: the archive succeeded, so there is nothing left here to
+          act on. */}
+      <ArchiveConflictSheet
+        sessionId={conflict === undefined ? null : session.id}
+        runs={conflict !== undefined && conflict.length > 0 ? conflict : null}
+        onClose={() => setConflict(undefined)}
+        onDone={() => { setConflict(undefined); onClose(); }}
       />
     </>
   );

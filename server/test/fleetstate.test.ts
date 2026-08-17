@@ -17,6 +17,7 @@ const session = (id: string): FleetSession => ({
   branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, held: null, bucket: 'idle', bucketSince: null,
   unmeasured: [], lifecycle: null, stoppedBy: null, swapBlocked: null,
+  started: true, spawnState: null,
 });
 
 describe('fleetstate', () => {
@@ -156,8 +157,14 @@ describe('loadSnapshot revives a cache written by an older build', () => {
       return (await loadSnapshot(cachePath))?.sessions[0];
     };
 
+    // `status: 'dead'` on both archived cases is not fixture noise, it is the
+    // shape (D-74): `ws-archive` kills the pane before it stamps, so an
+    // archived row IS dead, and the archived rungs now require that conjunct.
+    // `v1Session`'s own `status` is `'busy'`, which on an archived record is
+    // the very contradiction D-74 exists to resolve — pinned as its own case
+    // below rather than left riding on these two.
     it('a merged, archived snapshot revives as cleanup — the row ArchiveScreen already shows', async () => {
-      const s = await revive({ archivedAt: 1700, pr: { phase: 'merged', ahead: 0 } });
+      const s = await revive({ status: 'dead', archivedAt: 1700, pr: { phase: 'merged', ahead: 0 } });
       // bucketSince stays null even though the archived rung HAS a datable
       // timestamp: this record was never recorded as entering the bucket, and
       // the branch that derives is the branch that refuses to date it.
@@ -166,7 +173,18 @@ describe('loadSnapshot revives a cache written by an older build', () => {
     });
 
     it('an archived snapshot with no merged PR revives as archived', async () => {
-      expect((await revive({ archivedAt: 1700 }))?.bucket).toBe('archived');
+      expect((await revive({ status: 'dead', archivedAt: 1700 }))?.bucket).toBe('archived');
+    });
+
+    // D-74, and the reason this ladder lives in `shared/` at all: the LIVE
+    // producer (`fleet.ts`) and this revival are two callers of one function,
+    // and they must not be able to disagree about a revived-from-archive
+    // workspace. `bucket.test.ts`'s own D-74 cases pin the live half; this is
+    // the cached half, on the identical record.
+    it('a BUSY archived snapshot revives as working — a live pane outranks a stale marker here too', async () => {
+      const s = await revive({ status: 'busy', archivedAt: 1700, pr: { phase: 'merged', ahead: 0 } });
+      expect(s?.bucket).toBe('working');
+      expect(s?.archivedAt).toBe(1700);   // the disk fact is kept, only the bucket moved
     });
 
     it('a waiting snapshot revives as attention — the section that must not read empty', async () => {
@@ -244,6 +262,43 @@ describe('loadSnapshot revives a cache written by an older build', () => {
     writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), held: true }]);
     expect(await loadSnapshot(cachePath)).toBeNull();
     writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), held: { reason: 'x' } }]);
+    expect(await loadSnapshot(cachePath)).toBeNull();
+  });
+
+  it('revives `started` — ABSENT DEGRADES TO TRUE, which is the documented direction', async () => {
+    // Every session a pre-Wave-1 build persisted HAD a claim; `false` would light
+    // `unstarted` on every restored row, and a surface that cries wolf on restore
+    // is a surface the operator learns to ignore.
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    writeRaw(cachePath, [v1Session('claude-quiet-basin')]);
+    const absent = (await loadSnapshot(cachePath))?.sessions[0];
+    expect(absent?.started).toBe(true);
+    expect(Object.keys(absent ?? {})).toContain('started');
+
+    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), started: false }]);
+    expect((await loadSnapshot(cachePath))?.sessions[0]?.started).toBe(false);
+
+    // Not laundered into either boolean: the WHOLE snapshot goes.
+    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), started: 'yes' }]);
+    expect(await loadSnapshot(cachePath)).toBeNull();
+  });
+
+  it('revives `spawnState` — absent is null, and an unknown token rejects rather than launders', async () => {
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    writeRaw(cachePath, [v1Session('claude-quiet-basin')]);
+    const absent = (await loadSnapshot(cachePath))?.sessions[0];
+    expect(absent?.spawnState).toBeNull();
+    expect(Object.keys(absent ?? {})).toContain('spawnState');
+
+    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), spawnState: 'blocked' }]);
+    expect((await loadSnapshot(cachePath))?.sessions[0]?.spawnState).toBe('blocked');
+
+    // Unlike an unrecognised RC (which becomes `unrecognised` in L0), an
+    // unrecognised STRING off a cache an older-or-newer build wrote rejects the
+    // whole session — the same rule `lifecycle`/`bucket`/`hookState` already follow.
+    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), spawnState: 'spawnstate' }]);
+    expect(await loadSnapshot(cachePath)).toBeNull();
+    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), spawnState: 3 }]);
     expect(await loadSnapshot(cachePath)).toBeNull();
   });
 

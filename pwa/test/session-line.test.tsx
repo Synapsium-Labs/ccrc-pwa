@@ -21,7 +21,7 @@ const s = (over: Partial<FleetSession> = {}): FleetSession => ({
   tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
   hookState: null, askSummary: null, subagents: null,
   bucket: 'idle', bucketSince: null, unmeasured: [],
-  lifecycle: null, stoppedBy: null, swapBlocked: null, ...over,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, started: true, spawnState: null, ...over,
 });
 
 describe('label', () => {
@@ -635,5 +635,134 @@ describe('the row\'s state vocabulary', () => {
     expect(doc).not.toMatch(/bucket-section headers/i);
     expect(readFileSync(path.join(srcDir, 'screens', 'FleetScreen.tsx'), 'utf8'))
       .not.toMatch(/from '\.\.\/fleet\/SessionLine'/);
+  });
+});
+
+describe('the spawn chip (§1.6b)', () => {
+  const chip = () => document.querySelector('.sess-spawn');
+
+  it('renders NOTHING for the overwhelmingly common shape: no stamp, claimed', () => {
+    // THE FALSE-POSITIVE DIRECTION, and the reason the rule is not "chip on
+    // anything not ready": `null` satisfies "not ready", and all 18 live sessions
+    // carry `null` because they have not spawned since PR #50 shipped the field.
+    render(<SessionLine session={s({ spawnState: null, started: true })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(chip()).toBeNull();
+  });
+
+  it('renders `unstarted` for swift-harbor\'s exact shape — no stamp, no claim', () => {
+    render(<SessionLine session={s({ spawnState: null, started: false })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(chip()?.textContent).toBe('unstarted');
+    expect(chip()?.getAttribute('data-spawn')).toBe('unstarted');
+  });
+
+  it('says nothing for a clean spawn — a member whose WORD is null, not a missing member', () => {
+    // The two are different facts and the lookup has to ask which. `SPAWN_WORD`
+    // is typed `string | null` so a member can be deliberately silent (`ready`
+    // is today's only one, and its docstring says why); a `?? unnameableVerdict`
+    // fallback fires on BOTH that and a member this bundle has no row for, so
+    // the next silent member would render `? <token>` — the very collapse §1.7
+    // undid one level up. `ready` reaching the table at all is the pin: with
+    // the presence check gone it renders `? ready`.
+    render(<SessionLine session={s({ spawnState: 'ready', started: true })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(chip()).toBeNull();
+  });
+
+  it.each([
+    ['blocked', 'blocked'], ['login', 'login'], ['vanished', 'vanished'],
+    ['expired', 'unconfirmed'], ['unrecognised', 'unknown'],
+  ] as const)('renders %s as %s', (state, word) => {
+    render(<SessionLine session={s({ spawnState: state, started: true })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(chip()?.textContent).toBe(word);
+    expect(chip()?.getAttribute('data-spawn')).toBe(state);
+  });
+
+  // §1.7. THE VERDICT THIS BUILD HAS NO ROW FOR. `stores/fleet.ts`'s `asFleetMsg`
+  // validates FRAMES, not members, so the live path CASTS `FleetSession` — a
+  // server one deploy ahead can put a `SpawnVerdict` member in this field that
+  // this bundle's `SPAWN_WORD` was compiled without. The server/PWA deploy lanes
+  // are separate scripts with no version handshake between them, so the window is
+  // real, not theoretical.
+  //
+  // The old `SPAWN_WORD[spawnState] ?? null` turned that into NO CHIP — byte for
+  // byte the healthy row. A verdict the operator was meant to see disappeared
+  // BECAUSE it was new, which is the failure mode the whole increment is about:
+  // a value this build cannot NAME must be shown as itself, never as a member it
+  // is not, and least of all as silence.
+  it('shows an UNNAMEABLE verdict as itself — a newer server must not render as healthy', () => {
+    render(<SessionLine session={s({ spawnState: 'proxy-refused' as never, started: true })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(chip()).not.toBeNull();
+    expect(chip()?.textContent).toBe('? proxy-refused');
+    // And NOT filed under `unrecognised`, which is a real member meaning
+    // something else — ccd recorded an rc THE SERVER could not name. This is one
+    // layer further out: the server named it fine and the CLIENT cannot.
+    expect(chip()?.getAttribute('data-spawn')).toBe('proxy-refused');
+  });
+
+  it('truncates an unnameable verdict rather than let the wire size a cell', () => {
+    // The token is untrusted text off the socket. React escapes it, so this is
+    // about LAYOUT, not injection: `.sess-spawn` is `flex: none` and would take
+    // whatever length it is given, squeezing `.sess-held` — the one shrinkable
+    // cell — out of the row.
+    render(<SessionLine session={s({ spawnState: 'z'.repeat(200) as never, started: true })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(chip()?.textContent?.length).toBeLessThanOrEqual(20);
+  });
+
+  it('a non-string verdict is still a visible chip, never a crash and never silence', () => {
+    // Cast, not revived: the field's runtime type is whatever arrived.
+    render(<SessionLine session={s({ spawnState: 42 as never, started: true })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(chip()?.textContent).toBe('? unnameable');
+  });
+
+  it('never renders a chip on a dead row — the exemption critical/subagentList already take', () => {
+    render(<SessionLine session={s({ status: 'dead', bucket: 'dead', spawnState: 'blocked', started: false })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(chip()).toBeNull();
+  });
+
+  it('renders ONE chip, never two — a failed spawn and an absent claim are one cell', () => {
+    render(<SessionLine session={s({ spawnState: 'expired', started: false })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(document.querySelectorAll('.sess-spawn')).toHaveLength(1);
+    expect(chip()?.textContent).toBe('unconfirmed');
+  });
+
+  it('sits at position 2, immediately after .sess-state', () => {
+    // `.sess-meta` has NO flex-wrap and NO `order`: DOM order IS visual order.
+    render(<SessionLine session={s({ spawnState: 'blocked', started: true, held: 'program:x wave:2/4' })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    const cells = [...(document.querySelector('.sess-meta')?.children ?? [])];
+    expect(cells[0]?.className).toContain('sess-state');
+    expect(cells[1]?.className).toContain('sess-spawn');
+  });
+
+  it('does not clip the hold reason away — .sess-held is the one shrinkable cell', () => {
+    // §2.4 LENGTHENS the hold reason (` run:<id>`) in the same build, and
+    // `.sess-held` is the only cell with `overflow: hidden`/`text-overflow:
+    // ellipsis` and no `flex: none`. The two changes compound: a new cell that
+    // is not `flex: none` steals room from it first.
+    render(<SessionLine session={s({ spawnState: 'blocked', started: true, held: 'program:build8 wave:2/4 run:17' })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(document.querySelector('.sess-held')?.textContent).toBe('program:build8 wave:2/4 run:17');
+  });
+
+  it('reads both fields DEFENSIVELY — a live `fleet` frame is CAST, never revived', () => {
+    // `stores/fleet.ts`'s `asFleetMsg` validates frames, not MEMBERS, so a row
+    // from a server that predates these fields lacks the keys at RUNTIME even
+    // though `FleetSession` types them as present. Same reason `unmeasuredFields`
+    // exists — the last time this was skipped a TypeError took the renderer down.
+    const legacy = { ...s() } as Record<string, unknown>;
+    delete legacy['spawnState'];
+    delete legacy['started'];
+    expect(() =>
+      render(<SessionLine session={legacy as unknown as FleetSession}
+                          onOpen={() => {}} onActions={() => {}} />)).not.toThrow();
+    expect(chip()).toBeNull();
   });
 });

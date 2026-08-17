@@ -18,7 +18,7 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
   model: null, effort: null, ultracode: false, branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, held: null,
   bucket: 'idle', bucketSince: null, unmeasured: [],
-  lifecycle: null, stoppedBy: null, swapBlocked: null, ...over,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, started: true, spawnState: null, ...over,
 });
 
 const grp = (over: Partial<FleetGroup> = {}): FleetGroup => ({
@@ -91,8 +91,10 @@ describe('the + button', () => {
   });
 
   it('disables itself while that project has an add in flight', () => {
-    // ccd does not dedupe concurrent ws-adds: two calls draw two slugs and
-    // create two worktrees, two branches and two systemd units.
+    // ccd refuses the second concurrent ws-add for a project now (a per-project
+    // `flock -n` in `cmd_ws_add`), so disabling the button is a courtesy that
+    // saves a round trip and a refusal toast, not the thing that prevents two
+    // worktrees.
     render(<ProjectCard group={grp()} adding onAddWorkspace={() => {}}
                         onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByRole('button', { name: /new workspace on demo/i })).toBeDisabled();

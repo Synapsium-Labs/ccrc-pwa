@@ -45,7 +45,8 @@ import { registerCoordRoutes } from './coord/routes.js';
 import { toRunSummary, type CoordStore } from './coord/store.js';
 import {
   FLEET_PROTO, FLEET_PROTO_MIN,
-  type AccountsResponse, type AccountUsage, type CoordStatus, type FleetMsg, type FleetSession,
+  type AccountsResponse, type AccountUsage, type CoordStatus, type Divergence, type FleetMsg,
+  type FleetSession,
   type RunSummary,
   type SessionClientMsg, type SessionStreamMsg, type TaskItem,
 } from '../../shared/api.js';
@@ -349,6 +350,14 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       socket.send(JSON.stringify({ type: 'runs', runs } satisfies FleetMsg));
     const onCoord = (coord: CoordStatus) =>
       socket.send(JSON.stringify({ type: 'coord', coord } satisfies FleetMsg));
+    // §1.6's census. NO COLD START, deliberately: the sweep's own byte-equality
+    // guard re-broadcasts to every connected client the next time the census
+    // changes, and there is no `currentDivergences()` to serve — a fabricated
+    // empty census on connect would claim a measurement this process may not
+    // have taken yet, which is exactly the rule `onCoord`'s own `null` follows
+    // two lines below.
+    const onDivergence = (divergences: Divergence[]) =>
+      socket.send(JSON.stringify({ type: 'divergence', divergences } satisfies FleetMsg));
     // The `runs` cold start is chained AFTER `fleet`'s own, not fired
     // alongside it: `fleet` is itself async (`assembleFleet` awaits tmux/IO),
     // while a `coord.runs()` read is synchronous, so firing both
@@ -395,11 +404,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     bus.on('notice', onNotice);
     bus.on('runs', onRuns);
     bus.on('coord', onCoord);
+    bus.on('divergence', onDivergence);
     socket.on('close', () => {
       bus.off('fleet', onFleet);
       bus.off('notice', onNotice);
       bus.off('runs', onRuns);
       bus.off('coord', onCoord);
+      bus.off('divergence', onDivergence);
     });
   });
 
@@ -847,10 +858,50 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return r.ok ? { ok: true } : reply.code(502).send({ ok: false, stderr: r.stderr });
   });
 
+  /**
+   * The by-hand archive — one tap in the PWA's PR sheet and one in the
+   * session actions sheet.
+   *
+   * WAVE 2: it now knows about coordination, because `ws-archive` has no hold
+   * rung in ccd (deliberately: this route is the reason) and `archiveMerged`'s
+   * own gate cannot help a request that never goes through it. An open run
+   * naming this session is refused `409 run-open`, NAMING the runs so the
+   * client can render a sentence rather than a slug.
+   *
+   * NOT a hard refusal — that would reverse a stated policy: README's holds
+   * section blesses archiving a held workspace by hand, and this sheet is
+   * where it says to do it. `{force:true}` proceeds. The operator's own hands
+   * stay able to do it; they just have to mean it.
+   *
+   * NO `coordMutex`, decided rather than defaulted: the mutex is instantiated
+   * INSIDE `registerCoordRoutes` (one per server, deliberately not a module
+   * singleton) and this file holds no handle on it. The refusal path is a
+   * SYNCHRONOUS read and a reply in the same tick, so no lock could make it
+   * more current. The FORCED path CAN race an in-flight dispatch or close,
+   * and this build does not close that race — a forced archive is an operator
+   * overriding a refusal they have just read. If that is ever judged too
+   * loose, the change is to have `registerCoordRoutes` return its mutex.
+   *
+   * NO box token, also decided: this route carries none today, and adding a
+   * coordination REFUSAL is not the same as making it a coordination WRITE.
+   * Its tokenless reachability from the phone is exactly what README blesses.
+   */
   app.post('/api/sessions/:id/archive', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
+    const body = (req.body ?? {}) as { force?: unknown };
+    if (body.force !== true) {
+      // ABOVE the `verbSupported` gate on purpose: a claimed workspace is
+      // refused as CLAIMED even on a host whose ccd predates the verb — the
+      // claim is the more specific fact, and 501 would send the operator
+      // chasing a fleet upgrade that was never the obstacle.
+      //
+      // `?.` — a server with coordination switched off archives exactly as it
+      // did before this wave.
+      const runs = deps.coord?.openRunsForSession(id) ?? [];
+      if (runs.length > 0) return reply.code(409).send({ ok: false, error: 'run-open', runs });
+    }
     const argv = CCD_ARGV.wsArchive(id);
     // `ws-archive` is the SAME verb generation as `ws-audit` and `ws-reap` —
     // all four were added by this branch and all four sit consecutively in

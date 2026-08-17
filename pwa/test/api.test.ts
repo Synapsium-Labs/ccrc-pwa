@@ -150,6 +150,37 @@ describe('PR lifecycle (Task 13)', () => {
     expect(init.body).toBeUndefined();
   });
 
+  // Task 211 — `{force:true}` is a SECOND tap made after reading the `409
+  // run-open` refusal, never a flag the first call carries. These three pin
+  // that the unforced call is byte-identical to what shipped (the route has
+  // always taken a bodyless POST, and every caller but the conflict sheet
+  // still sends one) and that only a literal `true` changes the wire.
+  it('archive(id) posts NO body — byte-identical to what shipped', async () => {
+    const calls: [string, RequestInit | undefined][] = [];
+    const a = createApi(async (u, init) => { calls.push([String(u), init]); return new Response('', { status: 200 }); });
+    await a.archive('demo-x');
+    expect(calls[0]![0]).toBe('/api/sessions/demo-x/archive');
+    expect(calls[0]![1]).toEqual({ method: 'POST' });
+  });
+
+  it('archive(id, {force:true}) posts {force:true} as JSON', async () => {
+    const calls: [string, RequestInit | undefined][] = [];
+    const a = createApi(async (u, init) => { calls.push([String(u), init]); return new Response('', { status: 200 }); });
+    await a.archive('demo-x', { force: true });
+    expect(calls[0]![1]).toMatchObject({
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ force: true }),
+    });
+  });
+
+  it('archive(id, {force:false}) is the UNFORCED call — never a body that says no', async () => {
+    const calls: [string, RequestInit | undefined][] = [];
+    const a = createApi(async (u, init) => { calls.push([String(u), init]); return new Response('', { status: 200 }); });
+    await a.archive('demo-x', { force: false });
+    expect(calls[0]![1]).toEqual({ method: 'POST' });
+  });
+
   it('restore POSTs to /api/sessions/:id/restore with no body', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
     const api = createApi(fetchImpl as unknown as typeof fetch);
@@ -264,6 +295,20 @@ describe('abandonRun (Task 12, spec §4.3)', () => {
     expect(url).toBe('/api/runs/3/abandon');
     expect(init.method).toBe('POST');
     expect(init.body).toBeUndefined();
+  });
+
+  it('abandonRun reads `released` off the 200 body, and absence degrades to true', async () => {
+    const a = createApi(async () =>
+      new Response(JSON.stringify({ ok: true, id: 3, state: 'failed', released: false }),
+        { status: 200, headers: { 'content-type': 'application/json' } }));
+    expect(await a.abandonRun(3)).toEqual({ released: false });
+
+    const older = createApi(async () =>
+      new Response(JSON.stringify({ ok: true, id: 3, state: 'failed' }),
+        { status: 200, headers: { 'content-type': 'application/json' } }));
+    // An older server never sends the field: absence reads TRUE — today's
+    // behaviour, no toast, the safe direction.
+    expect(await older.abandonRun(3)).toEqual({ released: true });
   });
 
   it('throws ApiError on a non-2xx response — e.g. the 409 bad-transition for an already-closed run', async () => {

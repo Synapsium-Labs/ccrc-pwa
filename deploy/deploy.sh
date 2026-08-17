@@ -500,7 +500,80 @@ if [ "$TARGET" = "agent" ]; then
   # until somebody cleared the unit by hand. A pre-existing failed session is
   # not this deploy's doing and must not fail it — but it must not be silent
   # either, so it is named first, with the remedy, on stderr.
+  #
+  # PRE-FLIGHT, AND IT IS THE POINT OF THE WHOLE BLOCK. This script copied the
+  # unit file and daemon-reloaded a few lines up, in THIS run — so a bad edit is
+  # already live and the next line would exercise it against every supervisor on
+  # the box. systemd's DEFAULT KillMode is control-group, all 21 sessions are
+  # children of ONE tmux server, and that server sits inside whichever
+  # claude-session@ unit happened to create it: without KillMode=process the
+  # sweep below is a fleet kill, not a restart.
+  #
+  # Same ordering principle the sweep's own placement already encodes ("after
+  # the agent chain, so a broken agent fails the deploy before any supervisor is
+  # touched") — one step earlier. `set -e` at the top of this file turns the
+  # non-zero exit into an aborted deploy.
+  #
+  # IT ASKS SYSTEMD, IT DOES NOT GREP THE UNIT FILE (review finding). The first
+  # cut of this guard ran `grep -qE "^KillMode=process$"` over
+  # ~/.config/systemd/user/claude-session@.service — the BASE unit, which is a
+  # PROXY for the effective value and not the value. systemd merges
+  # `claude-session@.service.d/*.conf` on top of the base unit, THIS DEPLOY
+  # copies such a drop-in (`limits.conf`, twenty lines up), and that drop-in
+  # already carries a `[Service]` section: one `KillMode=control-group` line
+  # added there passes a base-file grep untouched and still turns the sweep into
+  # a fleet kill. `systemctl show` resolves the whole override chain — base,
+  # drop-ins, lexical order, last wins — so it answers the question the guard is
+  # actually asking. Comparing the full `KillMode=process` line (not `--value`,
+  # which is systemd >=230 and needless here) makes an empty answer from a
+  # failed call a refusal rather than a pass.
+  #
+  # EVERY UNIT THE SWEEP WOULD TOUCH, plus an uninstantiated instance of the
+  # template. Drop-ins can be per-instance (`claude-session@<id>.service.d/`),
+  # so the effective value is a property of each unit, not of the template; and
+  # on a fresh box with no active session the loop would otherwise be empty and
+  # check nothing at all, which is when a broken unit file is most likely.
+  #
+  # THE PRE-FLIGHT'S LISTING IS UNFILTERED, and that is the opposite decision
+  # from the VERIFY loop's `--state=active` two lines below — deliberately, and
+  # for the reason each loop exists. `--state=active` matches the ActiveState
+  # `active` EXACTLY: `activating` and `deactivating` are their own values and
+  # are absent from that listing. `try-restart` is not filtered that way — it
+  # acts on any unit that is not inactive/failed, a unit still starting up
+  # included. So a filtered pre-flight left a gap that neither half covered: the
+  # loop could not see a unit in that state, and the trailing template probe
+  # resolves the TEMPLATE and so cannot see a PER-INSTANCE drop-in on it. One
+  # unit in that gap is enough — the tmux server every session on this box is a
+  # child of sits in whichever claude-session@ cgroup created it.
+  # This loop is a CONFIG gate, not a liveness check, so over-listing is the
+  # cheap direction: the worst a `failed` unit (which try-restart skips) can do
+  # here is refuse a deploy on a box whose unit config is already wrong, while
+  # under-listing costs the fleet. The verify loop cannot be widened the same
+  # way — handing verify-service.sh a unit that was never restarted is exactly
+  # final review finding 6, above.
+  # `claude-session@ccrc-deploy-preflight.service` is a CONFIG probe, not a
+  # liveness probe — `systemctl show` reporting `LoadState=loaded` for an id
+  # with no unit is exactly the trap the build4 ledger's F8 correction records,
+  # and the reason this reads a property value and never infers existence from
+  # it. Showing a template instance loads the unit read-only; it starts nothing.
+  #
+  # The cgroup print is INFORMATIONAL and non-fatal (`2>/dev/null`, and the echo
+  # succeeds even when `pgrep` finds nothing): a box with no tmux server yet is
+  # an ordinary fresh box, and refusing there would break the first deploy to a
+  # new fleet host. What it buys is that the operator reading an abort — or a
+  # successful sweep — sees the blast radius instead of inferring it.
+  #
+  # DOUBLE quotes around the pgrep pattern and no apostrophes in the refusal
+  # message: this is a single-quoted assignment and bash has no escape for a
+  # single quote inside one, so either would end SWEEP_CMD early and ship the
+  # remainder as shell code in the deploy script itself.
   SWEEP_CMD='export XDG_RUNTIME_DIR=/run/user/$(id -u) \
+    && for u in $(systemctl --user list-units "claude-session@*" --plain --no-legend | awk "{print \$1}") claude-session@ccrc-deploy-preflight.service; do \
+         km=$(systemctl --user show -p KillMode "$u" 2>/dev/null); \
+         [ "$km" = "KillMode=process" ] \
+           || { echo "deploy: FAILED — $u resolves to ${km:-no answer from systemd}, and the sweep needs KillMode=process. systemds default is control-group, every session on this box is a child of ONE tmux server, and that server sits in a claude-session@ cgroup — so try-restart would kill the lot. A drop-in under ~/.config/systemd/user/claude-session@.service.d/ can set this without the base unit changing a byte. REFUSING to sweep." >&2; exit 1; }; \
+       done \
+    && echo "deploy: the tmux server currently lives in: $(cat /proc/$(pgrep -x -f "tmux: server")/cgroup 2>/dev/null | tr "\n" " ")" >&2 \
     && systemctl --user try-restart "claude-session@*" \
     && for u in $(systemctl --user list-units "claude-session@*" --state=failed --plain --no-legend | awk "{print \$1}"); do \
          echo "deploy: warning: $u is FAILED — try-restart skipped it and this sweep did not verify it. On the box: systemctl --user reset-failed $u, then ccd start the session" >&2; done \

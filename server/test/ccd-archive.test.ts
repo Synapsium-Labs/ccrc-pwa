@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { makeCcdHarness, ghContainedEnv, CCD, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, ghContainedEnv, harnessBin, CCD, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
 import { mungePath } from '../src/munge.js';
 
 /** sha256 of the empty string — what a failed read used to be indistinguishable
@@ -23,6 +23,8 @@ afterEach(() => { h.cleanup(); });
 const ARCH = `_ws_unsupervise() { echo "unsupervise $1" >> "$HOME/ccd-calls"; };
   _ws_supervise() { echo "supervise $1" >> "$HOME/ccd-calls"; };
   _spawn() { echo "spawn $1 $2" >> "$HOME/ccd-calls"; };
+  _spawn_start() { echo "spawn_start $1 $2" >> "$HOME/ccd-calls"; SPAWN_FROMSWAP=0; };
+  _spawn_settle() { echo "spawn_settle $1" >> "$HOME/ccd-calls"; };
   tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; return 1; };
   _alive() { return 1; };`;
 
@@ -48,8 +50,12 @@ const workspace = (project: string, slug: string): string => {
  *  subprocess: `_alive`'s `tmux has-session` then fails, so _ws_status answers
  *  idle with no status file to write. */
 const runCcd = (...args: string[]): { code: number; stdout: string; stderr: string } => {
-  const stub = path.join(h.home, 'stubbin');
-  fs.mkdirSync(stub, { recursive: true });
+  // harnessBin(), not a private dir: ghContainedEnv PREPENDS the harness bin,
+  // so a stub anywhere else can never win. Writing here REPLACES the contained
+  // systemctl/tmux for this test, which is what these two files need — and the
+  // replacement STICKS, because the systemd poison is create-if-absent while
+  // this write is unconditional.
+  const stub = harnessBin(h.home);
   fs.writeFileSync(path.join(stub, 'tmux'),
     '#!/bin/sh\necho "tmux $*" >> "$HOME/ccd-calls"\nexit 1\n', { mode: 0o755 });
   fs.writeFileSync(path.join(stub, 'systemctl'),
@@ -59,7 +65,8 @@ const runCcd = (...args: string[]): { code: number; stdout: string; stderr: stri
     // Through `ghContainedEnv`, so this caller-supplied PATH cannot displace
     // the poisoned `gh`: it is prepended, and the tmux/systemctl stubs below
     // it are still found.
-    env: ghContainedEnv(h.home, { ...process.env, HOME: h.home, PATH: `${stub}:${process.env.PATH ?? ''}` }),
+    env: ghContainedEnv(h.home,
+      { ...process.env, HOME: h.home, PATH: `${stub}:${process.env.PATH ?? ''}` }, { systemd: true }),
   };
   try { return { code: 0, stdout: execFileSync('bash', [CCD, ...args], opts).trim(), stderr: '' }; }
   catch (e) {
@@ -1248,7 +1255,9 @@ describe('ws-restore', () => {
     expect(h.reg('demo-quiet-basin', 'started')).toBe('1');
     // `ccd ensure` does NOT re-supervise, so restore must do it explicitly or
     // boot persistence is silently lost.
-    expect(h.calls()).toContain('spawn demo-quiet-basin resume');
+    // `spawn_start`, not `spawn`: restore now calls the two halves so the claim
+    // and the supervision land BEFORE the blocking settle (F8).
+    expect(h.calls()).toContain('spawn_start demo-quiet-basin resume');
     expect(h.calls()).toContain('supervise demo-quiet-basin');
   });
 
@@ -1303,6 +1312,8 @@ describe('ws-restore propagates a failed spawn', () => {
     `_ws_unsupervise() { echo "unsupervise $1" >> "$HOME/ccd-calls"; };
      _ws_supervise() { echo "supervise $1" >> "$HOME/ccd-calls"; };
      _spawn() { echo "spawn $1 $2" >> "$HOME/ccd-calls"; return ${rc}; };
+     _spawn_start() { echo "spawn_start $1 $2" >> "$HOME/ccd-calls"; SPAWN_FROMSWAP=0; };
+     _spawn_settle() { echo "spawn_settle $1" >> "$HOME/ccd-calls"; return ${rc}; };
      tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; return 1; };
      _alive() { return 1; };`;
 

@@ -10,7 +10,7 @@
 // $HOME/ccd-calls and `capture-pane` answers from $PANE_TEXT. Nothing here
 // reaches a real tmux server, a real unit, or the live HOME.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-spawn-'); });
@@ -210,5 +210,68 @@ describe('the callers M6 actually lied through', () => {
     expect(bad.code).toBe(4);
     expect(bad.stdout).not.toContain('started claude2-demo4');
     expect(bad.stderr).toContain('start failed for claude2-demo4 (spawn rc 4)');
+  });
+});
+
+describe('the spawn fact records rc 5, and the encoding is unchanged', () => {
+  it('writes `<epoch-seconds> 5` — the timestamp is load-bearing', () => {
+    seed('myid');
+    h.sh(`${TMUX} _spawn myid new; :`, { PANE_TEXT: 'You have reached your usage limit' });
+    // _supervised_start compares `at >= since` to tell THIS attempt's failure
+    // from the previous one's; a bare word field would destroy that.
+    expect(h.reg('myid', 'spawn')).toMatch(/^\d+ 5$/);
+  });
+
+  it('3 and 4 keep their numbers — four call sites plus _supervised_start branch on them', () => {
+    expect(rcOf('_accept_first_run_prompts cc-test 0')).toBe(3);
+  });
+});
+
+/** THE CALLERS' HALF OF rc 5, which the code shipped without.
+ *
+ *  Task 6 minted rc 5 and widened four `[[ "$rc" -eq 3 || "$rc" -eq 4 ]]` sites
+ *  to admit it — and pinned only `_accept_first_run_prompts` RETURNING it. With
+ *  every `|| "$rc" -eq 5` deleted the suite stayed green, and each verb would
+ *  have printed its SUCCESS line and exited 0 over a session sitting behind a
+ *  limit banner: M6 again, one code later. A verdict nobody propagates is not a
+ *  verdict. */
+describe('rc 5 survives the caller, not just the classifier', () => {
+  const HARD_BLOCK = 'You have reached your usage limit';
+
+  it('ccd start exits 5, prints no success line, and names the rc on stderr', () => {
+    h.sh(`mkdir -p "$HOME/projects/demo5"`);
+    const bad = shFail(`${TMUX} rm -f "$HOME/pane-up"; CCD_IN_UNIT=1; cmd_start claude2 demo5`,
+      { PANE_TEXT: HARD_BLOCK });
+    expect(bad.code).toBe(5);
+    expect(bad.stdout).not.toContain('started claude2-demo5');
+    expect(bad.stderr).toContain('start failed for claude2-demo5 (spawn rc 5)');
+    // The operator-facing half: rc 5 says waiting cannot fix it, so the message
+    // must not read like rc 4's "try again".
+    expect(bad.stderr).toContain('hard-blocked at startup');
+    expect(h.reg('claude2-demo5', 'spawn')).toMatch(/^\d{10} 5$/);
+  });
+
+  it('ccd ensure does the same — the second of the four sites', () => {
+    seed('blocked');
+    const r = shFail(`${TMUX} rm -f "$HOME/pane-up"; CCD_IN_UNIT=1; cmd_ensure blocked`,
+      { PANE_TEXT: HARD_BLOCK });
+    expect(r.code).toBe(5);
+    expect(r.stdout).not.toContain('ensured');
+    expect(r.stderr).toContain('ensure failed for blocked (spawn rc 5)');
+  });
+
+  it('ws-add propagates it too — the workspace path is where a silent success costs a wave', () => {
+    // The SETTLE stubbed to the verdict rather than driven through a pane: the
+    // pane -> rc mapping is pinned above, and what is unpinned is the CALLER's
+    // `-eq 5` arm. WS_ADD's own `_spawn_settle` no-op is redefined here, later
+    // wins. `_spawn_settle` and not `_spawn`, because `cmd_ws_add` calls the
+    // two halves directly now (F8) and never reaches the composition — a
+    // `_spawn` stub here would intercept nothing and the verb would exit 0.
+    h.makeRepo('demo');
+    const bad = shFail(`${WS_ADD} _spawn_settle() { return 5; }; CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
+    expect(bad.code).toBe(5);
+    expect(bad.stdout).not.toContain('workspace claude-demo-quiet-mesa');
+    expect(bad.stderr).toContain('ws-add spawn failed for');
+    expect(bad.stderr).toContain('(spawn rc 5)');
   });
 });

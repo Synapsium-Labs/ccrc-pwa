@@ -25,6 +25,15 @@ export interface PrLineageEntry { pr: number; branch: string; phase: string; rec
  */
 export interface RunRow extends RunSummary { prLineage: PrLineageEntry[] }
 
+/** One open run naming a session. NOT a `RunRow`: these four columns are all
+ *  the three consumers (`closeRun`, `FleetWatcher.archiveMerged`, the by-hand
+ *  archive route) need, and hydrating a whole run to answer "is this
+ *  workspace still claimed?" would drag `prLineage` JSON and a `programs`
+ *  join through a decision that turns on four integers and a slug. */
+export interface OpenSibling {
+  id: number; program: string; wave: number; waveOf: number | null;
+}
+
 /** `RunRow` -> `RunSummary`: strips `prLineage`, server-internal review
  *  material `RunSummary`'s own docstring says is "deliberately absent" from
  *  the wire shape — "neither small nor something that changes on every
@@ -278,9 +287,11 @@ export class CoordStore {
   }
 
   /**
-   * The ONLY way a run's state changes, and the only place `run_events` is
-   * written — one call, so "every transition records who caused it"
-   * (spec:126) is a property of the code rather than of everyone remembering.
+   * The ONLY way a run's state changes, and the only place a `run_events` row
+   * naming a TRANSITION is written — one call, so "every transition records
+   * who caused it" (spec:126) is a property of the code rather than of
+   * everyone remembering. (Amended for §1.5: `recordRunEvent` below writes the
+   * same table for facts that are NOT transitions, and cannot reach `state`.)
    *
    * `causedBy` is `'coordinator' | 'operator' | <session id>` and is NOT
    * validated against the registry: it is attribution, not authentication
@@ -315,6 +326,36 @@ export class CoordStore {
       'INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) VALUES (?, ?, ?, ?, ?, ?)',
     ).run(runId, now, from, to, causedBy, detail ?? null);
     return { ok: true as const, from, to };
+  }
+
+  /**
+   * A `run_events` row for something that HAPPENED TO a run without changing
+   * its state — §1.5's `dispatch-refused:…`, the first such fact this build
+   * has. `advance` above stays "the only place a run's state changes"; it is
+   * no longer the only place `run_events` is WRITTEN, and that sentence in its
+   * docstring has been amended rather than quietly left wrong.
+   *
+   * `fromState` and `toState` are both the run's CURRENT state, which is the
+   * honest encoding of "no transition occurred" — not a sentinel, and not a
+   * fabricated hop the `RUN_TRANSITIONS` table would refuse. Unknown run: a
+   * silent no-op, because the column is `REFERENCES runs(id)` and the caller
+   * (a refusal path) has nothing better to do with the failure than the row
+   * itself was going to record.
+   *
+   * ON THE NOTIFY LANE: `FleetWatcher.pushNewRuns` skips any `run_events` row
+   * whose run carries no `sessionId`, and §1.5's only caller records BEFORE
+   * `coord.setSession` on a wave-1 run — so today this writes to the feed and
+   * pushes nothing. A future caller on a BOUND run would push `▸ <state>`,
+   * naming a state the run is already resting in; that is a reason to think
+   * before adding one, stated here rather than discovered on a phone.
+   */
+  recordRunEvent(runId: number, causedBy: string, detail: string): void {
+    const row = this.db.prepare('SELECT state FROM runs WHERE id = ?').get(runId) as
+      { state: string } | undefined;
+    if (!row) return;
+    this.db.prepare(
+      'INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run(runId, Date.now(), row.state, row.state, causedBy, detail);
   }
 
   /**
@@ -559,6 +600,40 @@ export class CoordStore {
       'ORDER BY r.id',
     ).all(n) as unknown as RunRowDb[];
     return rows.map((row) => this.hydrateRun(row));
+  }
+
+  /**
+   * "Which OPEN runs name this session?" — the question the hold file
+   * structurally cannot answer, asked at three destructive decision points.
+   *
+   * SYNCHRONOUS, like the rest of `CoordStore`. DO NOT WRAP IT ASYNC: the
+   * store's synchrony is a stated concurrency invariant, and this read sits
+   * OUTSIDE any transaction, so it neither lengthens one nor introduces an
+   * `await` inside one — wrapping it is the only move that would threaten
+   * the invariant.
+   *
+   * NO `AND dispatchedAt IS NOT NULL`. It looks like D-13's predicate on
+   * `capsUsage`, but D-13 guards a GLOBAL, SESSION-LESS count whose problem
+   * class is `planned` rows with no session — already excluded here by
+   * `WHERE sessionId = ?`. Importing it would REINTRODUCE F9, because
+   * `POST /api/runs` places the wave-N+1 hold at OPEN time, before any
+   * dispatch, so a live claim legitimately belongs to a run with
+   * `dispatchedAt IS NULL`. This sentence exists so a later reviewer does
+   * not "fix" it.
+   *
+   * Nothing at this layer prevents two open runs naming one session
+   * (`setSession`/`markDispatched` are bare UPDATEs with no uniqueness
+   * constraint) and that is CORRECT — the coordinator protocol deliberately
+   * creates that state by opening wave N+1 before closing wave N.
+   *
+   * `excludeRunId` defaults to `-1`, an id AUTOINCREMENT never mints, so the
+   * "no exclusion" call and the excluding call are ONE query, not two.
+   */
+  openRunsForSession(sessionId: string, excludeRunId?: number): OpenSibling[] {
+    return this.db.prepare(
+      'SELECT id, program, wave, waveOf FROM runs ' +
+      "WHERE sessionId = ? AND state NOT IN ('done','failed') AND id != ? ORDER BY id",
+    ).all(sessionId, excludeRunId ?? -1) as unknown as OpenSibling[];
   }
 
   /** `detail` joins the SELECT (fix, found in Task 9 review — D-47): `advance`

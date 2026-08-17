@@ -344,3 +344,52 @@ describe('the coordinator skill: linkage', () => {
       readFileSync(path.join(root, 'docs/superpowers/programs/TEMPLATE.md'), 'utf8'));
   });
 });
+
+describe('the dispatch response documents that ok is not proof of a ready pane', () => {
+  it('names adopted and spawnState, and says what adopted:true costs the coordinator', () => {
+    const ref = refs('wave-lifecycle.md');
+    expect(ref).toContain('adopted');
+    expect(ref).toContain('spawnState');
+    // The sentence that makes the fields actionable rather than decorative.
+    expect(ref).toMatch(/ok.*(is not|no longer).*proof/i);
+  });
+
+  // The new passage introduces no mention of the destructive verbs, and that is
+  // NOT re-asserted here. `names the three destructive verbs ONLY inside the
+  // clause that forbids them` (above) pins hits === CONTRACT[2]'s own count
+  // across SKILL.md and both references — strictly stronger than any check
+  // written here, since a weaker duplicate would stay green on an extra
+  // mention. It is the mechanism; it must stay green.
+});
+
+describe('the skill on `final:true` — a release is now conditional', () => {
+  // Build 8 Wave 2. Both sentences became CONDITIONALLY FALSE the moment
+  // `closeRun` started handing a claim over to a still-open sibling instead of
+  // releasing it, and neither string was asserted anywhere — which is exactly
+  // why they would have rotted silently. Neither is one of the NINE pinned
+  // contract clauses, so this is additive text, not an edit to a clause.
+  it('does not promise `final:true` releases the hold, full stop', () => {
+    const lifecycle = refs('wave-lifecycle.md');
+    expect(skill).not.toMatch(/`final:true` releases the\s+hold/);
+    expect(lifecycle).not.toMatch(/and \*\*releases\*\* the hold\s*\n\(`ws-release`\) instead of re-holding/);
+  });
+
+  it('names `released` and says what `released:false` means', () => {
+    const lifecycle = refs('wave-lifecycle.md');
+    for (const text of [skill, lifecycle]) {
+      expect(text).toMatch(/released/);
+    }
+    expect(lifecycle).toMatch(/released.*false|`released: false`/);
+    // The consequence, in the coordinator's own terms: the program is NOT
+    // done, and another run still owns the workspace.
+    expect(lifecycle).toMatch(/another run still (owns|claims)/i);
+  });
+
+  // NO SECOND CENSUS ASSERTION HERE. `the coordinator skill: its contract`
+  // above already pins it EXACTLY — `hits === CONTRACT[2].split(verb).length -
+  // 1`, over SKILL.md plus both references — and a copy in this describe would
+  // be a weaker duplicate of a guard that already exists, which is precisely
+  // the mutation-table discipline this branch enforces everywhere else. The
+  // constraint is real and binding on the prose above; the MECHANISM that
+  // enforces it is the shipped test, and this file runs whole.
+});

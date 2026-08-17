@@ -19,7 +19,10 @@
 // the conditional that made SessionCard mean two different things is gone.
 import { useId, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
-import { unmeasuredFields, type FleetSession, type RosterWire, type SessionBucket } from '../../../shared/api';
+import {
+  unmeasuredFields,
+  type FleetSession, type RosterWire, type SessionBucket, type SpawnVerdict,
+} from '../../../shared/api';
 import { accountColorVar, accountLabel } from '../lib/accounts';
 import { StatusDot } from '../components/StatusDot';
 import { humanBytes } from '../screens/ArchiveScreen';
@@ -42,6 +45,44 @@ const WORD: Record<SessionBucket, string> = {
   attention: 'waiting', working: 'working', done: 'done', idle: 'idle',
   cleanup: 'merged', archived: 'archived', dead: 'exited',
 };
+
+/** The spawn verdict's DISPLAYED word — a third presentational table over one
+ *  field, which is this file's existing convention (`WORD`, `StatusDot`'s own
+ *  glyph/label pair). PRIVATE on purpose: an exported table invites a caller to
+ *  retitle a surface it does not feed, and the L0 vocabulary
+ *  (`SPAWN_VERDICTS`) is not this list.
+ *
+ *  `expired -> 'unconfirmed'` and its quiet ink are deliberate: a systemd
+ *  restart of a large session legitimately settles unconfirmed, and painting a
+ *  healthy row dead-red trains the operator to ignore the chip. `ready -> null`
+ *  because a healthy row has nothing to qualify. */
+const SPAWN_WORD: Record<SpawnVerdict, string | null> = {
+  ready: null,
+  login: 'login',
+  vanished: 'vanished',
+  expired: 'unconfirmed',
+  blocked: 'blocked',
+  unrecognised: 'unknown',
+};
+
+/** How many characters of an unnameable verdict the chip will show. `.sess-spawn`
+ *  is `flex: none`, so it takes whatever length it is handed and squeezes
+ *  `.sess-held` — the one shrinkable cell in the row — out of the way. The token
+ *  is untrusted text off the socket; React escapes it, so this is a LAYOUT bound,
+ *  not an injection one. Every real member is under 12. */
+const UNNAMEABLE_MAX = 18;
+
+/** §1.7's render-seam rule, in one place: a value this build cannot NAME is shown
+ *  as ITSELF, prefixed so the operator can tell "the fleet said something this
+ *  app is too old to translate" from any word the app chose. Never a member of
+ *  `SpawnVerdict`, and never nothing.
+ *
+ *  The parameter is `unknown` because that is the truth: the field is CAST off
+ *  the wire, so a newer server's value need not even be a string. */
+function unnameableVerdict(v: unknown): string {
+  const s = typeof v === 'string' ? v.trim() : '';
+  return s === '' ? '? unnameable' : `? ${s.slice(0, UNNAMEABLE_MAX)}`;
+}
 
 // Only ONE element may carry a given view-transition-name — a second aborts
 // the transition entirely. The stamp is never cleared on navigation and these
@@ -103,6 +144,62 @@ export function SessionLine({
   // marker (§2.4). Neither touches `state` above: the bucket ladder is
   // untouched, a dead row stays `exited`, and these are cells beside it.
   const qualifier = lifecycleQualifier(session);
+
+  // §1.6b. ONE chip, never two, and never on a dead row (the exemption
+  // `critical`/`subagentList` already take — nothing is running, so how the last
+  // spawn ended describes work that no longer exists).
+  //
+  // THE RULE IS NOT "chip on anything not ready": `null` satisfies "not ready",
+  // and `null` is what all 18 live sessions carry, so that rule would light a
+  // warning on every healthy row. `swift-harbor` has NO spawn stamp at all — its
+  // `spawnState` is correctly `null` and `started === false` is the ONLY signal
+  // that shape emits, which is why the second arm is not optional.
+  //
+  // Both fields read DEFENSIVELY (`?? null`, `!== false`): the live `fleet` frame
+  // is CAST, not revived (`stores/fleet.ts`'s `asFleetMsg` validates frames, not
+  // members), so an older server's row lacks the keys at runtime.
+  //
+  // §1.7 — THE TABLE LOOKUP, WHICH USED TO READ `SPAWN_WORD[spawnState] ?? null`.
+  // The `?? null` was reached by exactly one input — a verdict a NEWER server
+  // sent that this bundle's `SPAWN_WORD` was compiled without — and it rendered
+  // NO CHIP: byte for byte the healthy row. A verdict the operator was meant to
+  // see vanished BECAUSE it was new, and the two deploy lanes (`deploy.sh` server
+  // vs agent, no version handshake between them) make that window real rather
+  // than theoretical. Hiding an unknown verdict is strictly worse than showing an
+  // ugly one, so the unknown DEGRADES VISIBLY: shown as ITSELF, prefixed, never
+  // as a member it is not and never as silence. `unrecognised` would be the
+  // wrong member to borrow — it means the SERVER could not name ccd's rc, one
+  // layer in from "this CLIENT cannot name the server's word".
+  //
+  // ABSENCE IS ASKED FOR BY NAME, and `?? unnameableVerdict(...)` could not ask:
+  // it fires on `undefined` (no row — the case above) AND on a row whose word is
+  // deliberately `null`. `SPAWN_WORD` is typed `string | null` precisely so a
+  // member can be SILENT, and its own docstring justifies `ready -> null` on
+  // those grounds — so the next member added with a `null` word would have
+  // rendered `? <token>` instead of nothing, which is this same collapse one
+  // level down. `Object.hasOwn` separates the two, and it is also what lets the
+  // `ready` case go through the table rather than being special-cased in this
+  // condition — one definition of "a healthy spawn says nothing", in the table
+  // that holds every other verdict's word.
+  const spawnState = session.spawnState ?? null;
+  const spawnWord: string | null =
+    spawnState === null
+      ? null
+      // The cast is the honest one: TS believes this lookup is total, and the
+      // whole point is that at runtime it is not.
+      : Object.hasOwn(SPAWN_WORD, spawnState as string)
+        ? (SPAWN_WORD as Record<string, string | null>)[spawnState as string] ?? null
+        : unnameableVerdict(spawnState);
+  const spawnChip: string | null =
+    dead ? null
+    : spawnWord !== null ? spawnWord
+    : session.started === false ? 'unstarted'
+    : null;
+  // `data-spawn` keeps the RAW value so the CSS hook and the tooltip name what
+  // actually arrived; an unknown token simply matches no rule and takes
+  // `.sess-spawn`'s loud default ink, which is the correct degrade direction.
+  const spawnData = spawnChip === null ? undefined : (spawnState ?? 'unstarted');
+
   const swapBlocked = session.swapBlocked ?? null;
   // `?? null` on the object, and a type check on the KEY — the same one-level-
   // deeper guard `lifecycleQualifier` carries, for the same reason (the fleet
@@ -239,6 +336,17 @@ export function SessionLine({
             requirement, and this is no longer a grid). */}
         <span className="sess-meta">
           <span className={`sess-state sess-state--${state}`}>{state}</span>
+
+          {/* Position 2, immediately after `.sess-state`. `.sess-meta` has no
+              flex-wrap and no `order`, so DOM order IS visual order, and only
+              `.sess-held`/`.sess-acct` shrink — which is why this cell is
+              `flex: none` in fleet.css: §2.4 lengthens the hold reason in the
+              same build and the two changes compound. */}
+          {spawnChip !== null && (
+            <span className="sess-spawn" data-spawn={spawnData} title={`last spawn: ${spawnData}`}>
+              {spawnChip}
+            </span>
+          )}
 
           {/* Registry ladder (architecture doc, increment 1's second half —
               Task 2): this row's identity triple could not be fully measured

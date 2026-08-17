@@ -17,6 +17,7 @@ import type { ReactNode } from 'react';
 import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import type { RunSummary } from '../../shared/api';
 import { AbandonSheet } from '../src/fleet/AbandonSheet';
+import { ToastHost } from '../src/components/Toast';
 import { CoordBanner } from '../src/fleet/CoordBanner';
 import { RunsScreen } from '../src/screens/RunsScreen';
 import { ApiError, COORD_UNSUPPORTED_TEXT, UNSUPPORTED_VERB_TEXT } from '../src/lib/api';
@@ -49,7 +50,9 @@ const makeStore = (): FleetStore => createFleetStore({
 function Harness({
   abandonRun, onDone,
 }: {
-  abandonRun: (id: number) => Promise<void>;
+  // Task 214: the resolution is READ now — `{released}` — so the harness's
+  // injected shape widens with it.
+  abandonRun: (id: number) => Promise<{ released: boolean }>;
   onDone?: () => void;
 }): ReactNode {
   const [target, setTarget] = useState<RunSummary | null>(run());
@@ -177,6 +180,52 @@ describe('AbandonSheet — the copy and the refusals', () => {
   });
 });
 
+// Build 8 Wave 2, Task 214. Until now the sheet DISCARDED the resolution: an
+// abandon that closed the run but could not release the workspace — because a
+// sibling wave is still open — closed saying nothing at all. That silence is
+// exactly what Wave 2's sibling check exists to remove.
+describe('the resolution the sheet used to throw away', () => {
+  it('says so when the abandon did NOT release — a sibling wave still owns the workspace', async () => {
+    const abandonRun = vi.fn(async () => ({ released: false }));
+    const onClose = vi.fn();
+    render(<><ToastHost /><AbandonSheet run={run()} onClose={onClose} abandonRun={abandonRun} /></>);
+    fireEvent.click(screen.getByRole('button', { name: /^abandon$/i }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    // The sheet closes (the abandon SUCCEEDED); the toast carries the part
+    // that would otherwise be silent.
+    await waitFor(() => expect(screen.getByText(/still claimed/i)).toBeTruthy());
+  });
+
+  it('says nothing extra when it DID release', async () => {
+    const abandonRun = vi.fn(async () => ({ released: true }));
+    render(<><ToastHost /><AbandonSheet run={run()} onClose={() => {}} abandonRun={abandonRun} /></>);
+    fireEvent.click(screen.getByRole('button', { name: /^abandon$/i }));
+    await waitFor(() => expect(abandonRun).toHaveBeenCalled());
+    expect(screen.queryByText(/still claimed/i)).toBeNull();
+  });
+
+  it('never claims another run owns a workspace that never existed', async () => {
+    // DEVIATION from the plan, from the W2b review's own first finding:
+    // `released:false` is the NEGATION of one fact, not one fact. On THIS
+    // route it has two producers — a sibling re-hold, and an abandon of a
+    // `planned` run with `sessionId === null`, which does no fleet act at all
+    // (`closeRun`'s abandon arm skips the whole block; green server-side at
+    // `coord-abandon.test.ts`'s 'planned with NO session'). The wedged,
+    // never-dispatched run is precisely what this sheet exists for, so that
+    // second producer is not a corner case here — and the plan's sentence
+    // would tell the operator that another run claims a workspace that was
+    // never allocated. The run's own `sessionId` is the measurement that
+    // separates them, and the sheet already has it.
+    const abandonRun = vi.fn(async () => ({ released: false }));
+    render(<><ToastHost />
+      <AbandonSheet run={run({ sessionId: null, workspace: null, state: 'planned' })}
+                    onClose={() => {}} abandonRun={abandonRun} /></>);
+    fireEvent.click(screen.getByRole('button', { name: /^abandon$/i }));
+    await waitFor(() => expect(abandonRun).toHaveBeenCalled());
+    expect(screen.queryByText(/still claimed/i)).toBeNull();
+  });
+});
+
 describe('the run board’s abandon control (Task 12, spec §4.3)', () => {
   it('needs two taps: the row control opens the sheet, the sheet’s button abandons', async () => {
     const store = makeStore();
@@ -279,8 +328,8 @@ describe('per-target state (review fix round 1, Important 1)', () => {
   it("a superseded in-flight abandon cannot close or write into a different run's now-open sheet", async () => {
     let resolveRun3: (() => void) | null = null;
     const abandonRun = vi.fn((id: number) => {
-      if (id === 3) return new Promise<void>((resolve) => { resolveRun3 = resolve; });
-      return Promise.resolve();
+      if (id === 3) return new Promise<{ released: boolean }>((resolve) => { resolveRun3 = () => resolve({ released: true }); });
+      return Promise.resolve({ released: true });
     });
     const onDone = vi.fn();
     render(<Harness abandonRun={abandonRun} onDone={onDone} />);

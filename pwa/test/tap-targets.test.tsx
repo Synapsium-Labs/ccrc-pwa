@@ -61,7 +61,7 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
   branch: 'ws/quiet-basin', tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, held: null,
   bucket: 'idle', bucketSince: null, unmeasured: [],
-  lifecycle: null, stoppedBy: null, swapBlocked: null, ...over,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, started: true, spawnState: null, ...over,
 });
 
 const prState = (over: Partial<PrState> = {}): PrState => ({
@@ -72,6 +72,7 @@ const prState = (over: Partial<PrState> = {}): PrState => ({
 const wsAudit: WsAudit = {
   id: 'demo-quiet-basin', branch: 'ws/quiet-basin', base: 'origin/main', workdir: '/w/quiet-basin',
   project: 'custom-tools', repo: 'o/r', exists: true, headMatchesRegistry: true, reaping: null,
+  alive: true, started: true, unit: 'enabled',
   dirty: [], ignored: [], ignoredCount: 0, ignoredBytes: 0, sensitive: [], sensitiveFiltered: 0,
   clips: [], stashes: 0, worktreeBytes: 500_000_000, commitsAheadOfBase: 1,
   pr: { number: 7, url: 'u', mergeCommit: 'x', headRefOid: 'y' },

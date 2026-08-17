@@ -78,10 +78,18 @@ export interface FleetSession {
    *  a hookless session, a stale file the freshness gate rejected, or a
    *  restarted session whose uuid moved on — never a fourth state. */
   hookState: 'working' | 'waiting' | 'done' | null;
-  /** One line for the fleet card, derived from a `waiting` hook state's `ask`
-   *  envelope (`fleet.ts`'s `hookAskSummary`). Null unless `hookState` is
-   *  `'waiting'` AND an ask envelope actually landed — a hook can report
-   *  waiting before the ask write completes. */
+  /** One line for the fleet card explaining what this session is blocked on
+   *  (`fleet.ts`'s `hookAskSummary`). TWO sources, in order: a `waiting` hook
+   *  state's `ask` envelope, and — when that produced nothing — Claude Code's
+   *  own `waitingFor` reason off the live status file (D-76).
+   *
+   *  So this is NOT gated on `hookState === 'waiting'`: three of the four
+   *  things Claude Code reports `waiting` for fire no hook event at all, and
+   *  those rows carry a summary with `hookState` null. Still null whenever
+   *  neither source said anything — a hook can report waiting before its ask
+   *  write completes, and a `waiting` live file need not carry a reason —
+   *  and never `''`, since this line renders unconditionally on a waiting
+   *  card. */
   askSummary: string | null;
   /** Subagents the hook last reported running. Null mirrors `hookState`: no
    *  fresh hook data at all. `[]` is a MEASUREMENT — fresh hook data, zero
@@ -139,6 +147,17 @@ export interface FleetSession {
    *  leaves the refusal banner standing on the row it just revived teaches the
    *  operator to ignore banners. */
   readonly swapBlocked: { readonly at: number; readonly reason: string } | null;
+  /** `$REG/<id>.started` reads `1`. MEASURED every snapshot as
+   *  `SessionRecord.started` and, before Wave 1, discarded one branch later
+   *  inside `sessionLifecycle`. It reaches the wire because the spawn chip needs
+   *  it: `swift-harbor` has NO `spawn` stamp, so `started === false` is the only
+   *  signal that shape ever emits. */
+  readonly started: boolean;
+  /** How the LAST spawn attempt ended (§1.6b). `null` = NOT RECORDED — never
+   *  `ready`, never a warning. ORTHOGONAL to `lifecycle`: a row can be `running`
+   *  today after a failed spawn yesterday, and showing one as the other would be
+   *  an adapter narrowing a distinction it received. */
+  readonly spawnState: SpawnVerdict | null;
 }
 
 /**
@@ -439,12 +458,37 @@ export interface WsAuditChild {
   stray: boolean;
 }
 
+/** `enabled` = a `default.target.wants` symlink exists; `loaded` = the manager
+ *  knows the unit but it is not boot-persistent; `absent` = `list-units` does
+ *  not name it. NB `systemctl show` on an uninstantiated template reports
+ *  `LoadState=loaded`, which is why ccd's probe must be `list-units`. */
+export type WsAuditUnit = 'enabled' | 'loaded' | 'absent';
+const WS_AUDIT_UNIT_MAP: Record<WsAuditUnit, true> = { enabled: true, loaded: true, absent: true };
+export const WS_AUDIT_UNITS: readonly WsAuditUnit[] =
+  Object.keys(WS_AUDIT_UNIT_MAP) as WsAuditUnit[];
+export function isWsAuditUnit(v: unknown): v is WsAuditUnit {
+  return typeof v === 'string' && (WS_AUDIT_UNITS as readonly string[]).includes(v);
+}
+
 /** `ccd ws-audit --session <id>`, with a server-added `sentence`. `token` is
  *  present ONLY when `verdict === 'reapable'`; the client sends it back as
  *  `expect`, and ccd re-proves the world state matches it. */
 export interface WsAudit {
   id: string; branch: string; base: string; workdir: string; project: string; repo: string;
   exists: boolean; headMatchesRegistry: boolean; reaping: string | null;
+  /* ── THE SESSION BEHIND THE WORKSPACE ──────────────────────────────────────
+   * Computed by ccd BEFORE `_ws_reap_eval`'s early refusal, unlike everything
+   * in the `null MEANS NOBODY LOOKED` block below — a `not-archived` verdict
+   * nulls those and that is exactly the shape that made F8's orphan invisible
+   * to the one artifact whose job is answering "what is the state of this
+   * workspace". These three are answerable on every verdict, so they are
+   * answered on every verdict. */
+  alive: boolean;
+  started: boolean;
+  /** `null` when the fleet host has no `systemctl` at all — and, by the same
+   *  degrade, when the ccd that answered predates these fields. Never a fourth
+   *  state; "we could not see a unit" is one fact, not two. */
+  unit: WsAuditUnit | null;
   /* ── `null` MEANS NOBODY LOOKED ────────────────────────────────────────────
    *
    * The six fields below, plus `stashes` and `merge.fetchedAt`, are `null`
@@ -725,6 +769,30 @@ export type BucketInput = Pick<
  * stops the session: every cleanup candidate is ALSO `status: 'dead'`, so a
  * dead-first ladder would leave the cleanup bucket permanently empty.
  *
+ * …and that sentence is also the archived rungs' PRECONDITION, not merely
+ * their justification (D-74). They are entered on `archivedAt !== null` AND
+ * `status === 'dead'`, because a live pane is proof the marker has outlived
+ * what it describes: `cmd_ws_archive` kills the session before it stamps
+ * (`ccd:2178-2185`), but `ccd start`/`ccd ensure` clear `.stopped` and
+ * `.swapblocked` on a deliberate revival and leave `$REG/<id>.archived`
+ * standing — only `ws-restore` removes it (`ccd:2513`). So a workspace
+ * archived on merge and later revived for more work carried a marker that
+ * outranked every live rung below, for ever. MEASURED on the live fleet
+ * 2026-08-17: 5 of the 7 archive markers on the box sat on sessions with a
+ * live tmux pane, 4 of them mid-turn — a quarter of the fleet reading
+ * `merged` while working, ranked below idle and counted out of its project's
+ * busy total, and a revived workspace's QUESTION unreachable through the
+ * attention section it belongs in.
+ *
+ * The conjunct costs the cleanup bucket nothing: an ordinary archive is dead,
+ * which is what every archived case in `bucket.test.ts` already fixtures. And
+ * it hides nothing on the disk side — `archivedAt` is untouched on the wire,
+ * so the fleet footer's `/archive` route (which reads that field, not this
+ * bucket), `ws-attic` and the reap flow all still find the workspace. The
+ * bucket answers "what is this session doing"; `archivedAt` answers "what is
+ * staged on disk". A revived workspace is honestly both, and only the second
+ * question has an archive in its answer.
+ *
  * `hookUpdatedAt` is read ONLY by `bucketSince`; no branch's BUCKET depends on
  * it. That is what lets `reviveFleetSession` call this with `null` and keep the
  * bucket while discarding the timestamp.
@@ -758,7 +826,13 @@ export function sessionBucket(
 ): { bucket: SessionBucket; bucketSince: number | null } {
   // `archivedAt` is epoch SECONDS (ccd writes `$REG/<id>.archived` as an epoch);
   // every other timestamp on this record is epoch ms.
-  if (s.archivedAt !== null) {
+  //
+  // `&& s.status === 'dead'` is D-74's conjunct — see this function's own
+  // docstring for the measurement. `status === 'dead'` IS "no tmux pane" as
+  // this ladder's callers compute it (`fleet.ts`'s `assembleFleet` starts every
+  // row at `'dead'` and only leaves it when `tmux.hasSession` says otherwise),
+  // so no new field, no wire change and no second liveness derivation.
+  if (s.archivedAt !== null && s.status === 'dead') {
     const archivedMs = s.archivedAt * 1000;
     if (s.pr?.phase === 'merged') {
       // `cleanup` needs BOTH conjuncts, so it is entered at the LATER of the
@@ -786,10 +860,42 @@ export function sessionBucket(
     const since = s.hookState === 'waiting' ? hookUpdatedAt ?? s.statusUpdatedAt : s.statusUpdatedAt;
     return { bucket: 'attention', bucketSince: since };
   }
+  // D-75. "Is a turn in flight" has TWO independent observers — Claude Code's
+  // own `sessions/<pid>.json` (which becomes `status`) and `session-hook.sh`
+  // (which becomes `hookState`) — and until now only the first could reach
+  // this rung. Both of them fail, in opposite directions, and neither failure
+  // is rare (see the D-75 block in `bucket.test.ts` for the measurements).
+  // So: whichever observation carries the LATER timestamp is the one this
+  // ladder believes. One comparison, computed once, read by both rungs below.
+  //
+  // A null `hookUpdatedAt` means there is no rival observation to compare
+  // against — `reviveFleetSession` passes null for every cached snapshot —
+  // and it reads as "the hook is not newer", which leaves that whole path on
+  // exactly the pre-D-75 answers. A null `statusUpdatedAt` is the opposite:
+  // the live file is absent or unreadable, so a hook write of ANY age is the
+  // only observation there is, and it wins outright rather than losing to a
+  // `status` that was never measured (`fleet.ts` leaves it at the `'idle'`
+  // fallback).
+  const hookNewer = hookUpdatedAt !== null &&
+    (s.statusUpdatedAt === null || hookUpdatedAt > s.statusUpdatedAt);
+  // `SessionStart` is excluded for the same reason the `done` rung below
+  // excludes it: F1's synthetic write proves "never started", not "just
+  // finished", so it is not evidence that a turn ENDED and must not unseat a
+  // live `busy` — a resuming session is legitimately working while that write
+  // is the newest hook fact on disk.
+  const finishedAfterStatus =
+    hookNewer && s.hookState === 'done' && hookEvent !== 'SessionStart';
   // NOT the hook's timestamp: the hook rewrites `updatedAt` on every
   // PostToolUse, so a busy session would report a continuously-refreshed
-  // "since" — permanently new, and permanently badged.
-  if (s.status === 'busy') return { bucket: 'working', bucketSince: s.statusUpdatedAt };
+  // "since" — permanently new, and permanently badged. That holds for the
+  // hook-raised arm too: `statusUpdatedAt` is the only stamp here that means
+  // "when this episode began" rather than "when we last heard anything".
+  if (s.status === 'busy' && !finishedAfterStatus) {
+    return { bucket: 'working', bucketSince: s.statusUpdatedAt };
+  }
+  if (s.hookState === 'working' && hookNewer) {
+    return { bucket: 'working', bucketSince: s.statusUpdatedAt };
+  }
   // `done` requires hook EVIDENCE: a hookless busy→idle transition never proves
   // a turn finished rather than never starting. It also decays for free —
   // hookstate.ts's 30-minute freshness gate nulls `hookState`, so an
@@ -830,7 +936,7 @@ export function sessionBucket(
  * ------------------------------------------------------------------------- */
 
 export type SessionLifecycle =
-  | 'running' | 'unsupervised' | 'stopped' | 'restarting'
+  | 'running' | 'unsupervised' | 'unclaimed' | 'stopped' | 'restarting'
   | 'orphan' | 'never-started' | 'unmeasurable';
 
 /** Derived from the type, not restated beside it — `Record<SessionLifecycle,
@@ -839,7 +945,7 @@ export type SessionLifecycle =
  *  on a key the union does not have. Same technique, same reasoning, as
  *  `PR_REASONS` above. */
 const SESSION_LIFECYCLE_MAP: Record<SessionLifecycle, true> = {
-  running: true, unsupervised: true, stopped: true, restarting: true,
+  running: true, unsupervised: true, unclaimed: true, stopped: true, restarting: true,
   orphan: true, 'never-started': true, unmeasurable: true,
 };
 export const SESSION_LIFECYCLES: readonly SessionLifecycle[] =
@@ -852,6 +958,125 @@ export const SESSION_LIFECYCLES: readonly SessionLifecycle[] =
  *  as `isPrPhase`'s own docstring insists. */
 export function isSessionLifecycle(v: unknown): v is SessionLifecycle {
   return typeof v === 'string' && (SESSION_LIFECYCLES as readonly string[]).includes(v);
+}
+
+/** ccd's `_spawn` verdict as a word — a projection of the rc table ALREADY
+ *  written to `$REG/<id>.spawn` (`<epoch-seconds> <rc>`) and already parsed into
+ *  `SessionRecord.spawn: { at, rc } | null`. Derived ONCE, here, in L0.
+ *
+ *  There is no `spawnstate` registry field and there must never be one: the
+ *  timestamp in `spawn` is load-bearing (`_supervised_start` compares
+ *  `at >= since` to tell THIS attempt's failure from the previous one's), and a
+ *  word-only field would destroy it.
+ *
+ *  `unrecognised` is the designated-ignorance member: an rc this build never
+ *  heard of — rc 1, a ccd `die`, included — revives as that, never a throw and
+ *  never `ready`. Orthogonal to `SessionLifecycle`: this says how the LAST
+ *  SPAWN ATTEMPT ended, not what the row IS. A row can be `running` today after
+ *  a failed spawn yesterday, and collapsing one into the other would be an
+ *  adapter narrowing a distinction it received. */
+export type SpawnVerdict =
+  | 'ready' | 'login' | 'vanished' | 'expired' | 'blocked' | 'unrecognised';
+
+/** Same derived-enumeration discipline as `SESSION_LIFECYCLE_MAP` above:
+ *  `Record<SpawnVerdict, true>` fails LOUDLY (TS2739) on a member added to the
+ *  union with no key here, and the other way (TS2353) on a key the union does
+ *  not have. */
+const SPAWN_VERDICT_MAP: Record<SpawnVerdict, true> = {
+  ready: true, login: true, vanished: true, expired: true,
+  blocked: true, unrecognised: true,
+};
+export const SPAWN_VERDICTS: readonly SpawnVerdict[] =
+  Object.keys(SPAWN_VERDICT_MAP) as SpawnVerdict[];
+
+/** The only way to narrow an untrusted string to a `SpawnVerdict`. `unknown`
+ *  parameter, and the CONSTANT is cast rather than the input — `isPrPhase`'s
+ *  own rule, for its own reason. */
+export function isSpawnVerdict(v: unknown): v is SpawnVerdict {
+  return typeof v === 'string' && (SPAWN_VERDICTS as readonly string[]).includes(v);
+}
+
+/** The word for `spawnVerdict(...) === null` wherever a verdict has to be
+ *  RENDERED as text rather than carried as a value — today, `dispatch.ts`'s
+ *  `spawn-adopted:<verdict>` run event.
+ *
+ *  DELIBERATELY NOT A `SpawnVerdict` MEMBER, and `isSpawnVerdict` answering
+ *  `false` for it is pinned by a test. "No spawn fact was recorded" is a fact
+ *  about the REGISTRY; every member of the union is a fact about an rc ccd
+ *  actually wrote. `unrecognised` is the member that gets reached for by mistake
+ *  here, and it is the narrower, opposite claim — ccd DID record an rc, and this
+ *  build's table has no name for it. Reusing it for absence makes "ccd said
+ *  something strange" and "ccd said nothing" the same sentence. */
+export const SPAWN_NOT_RECORDED = 'not-recorded';
+
+/** ccd's rc table, in one place. `null` in -> `null` out, and `null` means NOT
+ *  RECORDED (`$REG/<id>.spawn` absent, or its rc unparseable — `registry.ts`
+ *  collapses both to `spawn: null` deliberately). rc 5 is `_spawn_settle`'s
+ *  hard-block verdict (`_pane_hard_blocked`); 3 and 4 are NOT renumbered,
+ *  because four ccd call sites plus `_supervised_start` branch on
+ *  `[[ "$rc" -eq 3 || "$rc" -eq 4 ]]`. */
+export function spawnVerdict(rc: number | null): SpawnVerdict | null {
+  if (rc === null) return null;
+  switch (rc) {
+    case 0: return 'ready';
+    case 2: return 'login';
+    case 3: return 'vanished';
+    case 4: return 'expired';
+    case 5: return 'blocked';
+    default: return 'unrecognised';
+  }
+}
+
+/**
+ * A disagreement BETWEEN SOURCES — which is precisely what a per-row ladder
+ * structurally cannot express, and the only reason this vocabulary exists beside
+ * `SessionLifecycle` rather than inside it.
+ *
+ * THREE KINDS, and the four that were proposed and rejected are named here so
+ * nobody re-adds them: `dead-row` IS `lifecycle === 'orphan'` and strictly
+ * broader (the shipped ladder splits that population three ways);
+ * `unclaimed-session` was promoted to a `SessionLifecycle` member.
+ *
+ * `unsupervised` and `not-boot-persistent` die on COST, and the distinction is
+ * worth stating precisely: `ccd ws-audit --session <id>` DOES report a `unit`
+ * state (read from `systemctl --user list-units`) and IS already whitelisted, so
+ * the server can see systemd for one row on demand. What it will not do is pay
+ * one exec per session per sweep on a whole-fleet lane. Separately, the shipped
+ * `unsupervised` token is a HEARTBEAT verdict, chosen deliberately over unit
+ * introspection — reusing the word for a unit fact would be a second name for a
+ * different thing. `EXEC_COMMANDS` stays the closed set `['tmux','ccd']`.
+ *
+ * `unregistered-worktree` KEEPS ITS NAME even though ccd's `_ws_gc_row` calls the
+ * same thing `orphan`. That overload already exists and in the worst possible
+ * form — `orphan` means "a registry row with no pane" in one half of this repo
+ * and "a worktree with no registry row", the exact opposite, in the other.
+ * Naming this kind explicitly defuses it.
+ */
+export type DivergenceKind =
+  | 'unregistered-worktree'   // git records a worktree no registry row claims
+  | 'branch-drift'            // registry `.branch` != the worktree's own HEAD
+  | 'claim-divergence';       // a hold with no open run, or an open run with no hold
+const DIVERGENCE_KIND_MAP: Record<DivergenceKind, true> = {
+  'unregistered-worktree': true, 'branch-drift': true, 'claim-divergence': true,
+};
+export const DIVERGENCE_KINDS: readonly DivergenceKind[] =
+  Object.keys(DIVERGENCE_KIND_MAP) as DivergenceKind[];
+
+/** The only way to narrow an untrusted string to a `DivergenceKind` — same rule,
+ *  same reason, as `isSpawnVerdict` above: the CONSTANT is cast, never the
+ *  input. */
+export function isDivergenceKind(v: unknown): v is DivergenceKind {
+  return typeof v === 'string' && (DIVERGENCE_KINDS as readonly string[]).includes(v);
+}
+
+export interface Divergence {
+  readonly kind: DivergenceKind;
+  /** Registry id when the kind is about a row; null for `unregistered-worktree`. */
+  readonly id: string | null;
+  /** Absolute worktree path when the kind is about a directory; null otherwise. */
+  readonly path: string | null;
+  /** One actionable line. DISPLAY-ONLY — nothing parses it back. */
+  readonly detail: string;
 }
 
 /** Who asked for the stop — a DECLARATION, not an authentication (spec §4.1).
@@ -918,6 +1143,10 @@ export interface LifecycleInput {
 /**
  * §4.3's table, in order. The order is the specification:
  *
+ *   alive + no `started` claim         -> unclaimed      (§1.6, FIRST in the
+ *                                                        alive branch — the F8
+ *                                                        specimen was alive AND
+ *                                                        supervised AND unclaimed)
  *   alive + fresh heartbeat            -> running
  *   alive + stale/absent heartbeat     -> unsupervised
  *   dead  + stop stamp                 -> stopped
@@ -971,7 +1200,20 @@ export function sessionLifecycle(input: LifecycleInput): SessionLifecycle {
   const supervised = input.supervisedAt !== null
     && input.nowMs - input.supervisedAt >= 0
     && input.nowMs - input.supervisedAt < SUPERVISED_FRESH_MS;
-  if (input.alive) return supervised ? 'running' : 'unsupervised';
+  // §1.6. THE ORDERING IS THE CONTRACT, and both implementations must agree on
+  // it: `unclaimed` goes BEFORE the supervised split, because F8's specimen was
+  // alive AND supervised AND unclaimed — an `unclaimed` checked after `running`
+  // could never have fired on the row that motivated it. `unmeasurable` still
+  // precedes everything above, so an UNREADABLE `started` (a LIFECYCLE_FIELD)
+  // cannot be mistaken for an absent one.
+  //
+  // AND THE REPAIR IS THE OPPOSITE OF `orphan`'s: `orphan` says nothing is
+  // bringing this back (the repair is a PROCESS); `unclaimed` says a process is
+  // running that no registry row claims (the repair is a CLAIM — `ccd ensure`).
+  if (input.alive) {
+    if (!input.started) return 'unclaimed';
+    return supervised ? 'running' : 'unsupervised';
+  }
   if (input.stoppedAt !== null) return 'stopped';
   if (supervised) return 'restarting';
   return input.started ? 'orphan' : 'never-started';
@@ -1001,6 +1243,17 @@ const optNum = (o: RawObj, k: string): number | null => {
   // NaN/Infinity cannot survive JSON.stringify, but a hand-edited cache can
   // carry anything, and `NaN` typed as `number` is registry.ts's silent lie.
   if (typeof v !== 'number' || !Number.isFinite(v)) throw new MalformedSnapshot(k);
+  return v;
+};
+/** Absent or explicitly null → the caller's `dflt`. Present → must be a
+ *  boolean. The default is a PARAMETER rather than `null`, because the fields
+ *  that need this ("we could not see a session") have a meaningful degraded
+ *  answer and inventing a third state for "an older peer did not say" would
+ *  make every reader carry it. */
+const optBool = (o: RawObj, k: string, dflt: boolean): boolean => {
+  const v = o[k];
+  if (v === undefined || v === null) return dflt;
+  if (typeof v !== 'boolean') throw new MalformedSnapshot(k);
   return v;
 };
 const reqStr = (o: RawObj, k: string): string => {
@@ -1248,6 +1501,16 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       throw new MalformedSnapshot('lifecycle');
     }
 
+    // Absent → null ("not recorded"). An unrecognised STRING rejects the whole
+    // session rather than being laundered — the same rule `lifecycle` above
+    // follows. Note the asymmetry with L0: an unrecognised RC becomes
+    // `'unrecognised'` inside `spawnVerdict`, because an rc is ccd's own output
+    // and a word off a cache is not.
+    const spawnRaw = optStr(o, 'spawnState');
+    if (spawnRaw !== null && !isSpawnVerdict(spawnRaw)) {
+      throw new MalformedSnapshot('spawnState');
+    }
+
     // Everything except `bucket`/`bucketSince`, so the ladder can read the
     // fields it needs off the SAME literal that ships — never off a second
     // reading of `o`, which is how the two could drift apart.
@@ -1288,6 +1551,12 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       lifecycle: lifecycleRaw,
       stoppedBy: reviveStoppedBy(o, 'stoppedBy'),
       swapBlocked: reviveSwapBlocked(o, 'swapBlocked'),
+      // THE DEGRADE, DOCUMENTED: absent reads TRUE, not false. Every session a
+      // pre-Wave-1 build persisted had a claim, and `false` would light
+      // `unstarted` on every restored row — the false-positive direction that
+      // makes a surface ignorable.
+      started: optBool(o, 'started', true),
+      spawnState: spawnRaw,
     };
 
     // A recorded bucket is taken as recorded, timestamp and all — the server
@@ -1444,6 +1713,8 @@ const reviveMerge = (raw: unknown): AuditMerge => {
 export function reviveWsAudit(v: unknown, sentence: string): WsAudit {
   const o = asObj(v, 'audit');
   const token = optStr(o, 'token');
+  const unitRaw = optStr(o, 'unit');
+  if (unitRaw !== null && !isWsAuditUnit(unitRaw)) throw new MalformedSnapshot('unit');
 
   return {
     id: reqStr(o, 'id'),
@@ -1455,6 +1726,14 @@ export function reviveWsAudit(v: unknown, sentence: string): WsAudit {
     exists: reqBool(o, 'exists'),
     headMatchesRegistry: reqBool(o, 'headMatchesRegistry'),
     reaping: optStr(o, 'reaping'),
+    // optBool/optStr, NOT reqBool — DELIBERATE, and decided beside the writer.
+    // An older ccd on the fleet host omits all three; reqBool would throw and
+    // the whole sheet would render nothing, against a rolled-back ccd or a
+    // second fleet host. `false`/`null` say "we could not see a session",
+    // which is what a build that cannot answer means.
+    alive: optBool(o, 'alive', false),
+    started: optBool(o, 'started', false),
+    unit: unitRaw,
     dirty: optStrArray(o, 'dirty'),
     ignored: optIgnoredArray(o, 'ignored'),
     ignoredCount: optNum(o, 'ignoredCount'),
@@ -1698,7 +1977,14 @@ export type FleetMsg =
    *  the one-way new-writer/old-reader rule this file states at :560-566. */
   | { type: 'runs'; runs: RunSummary[] }
   /** Build 4, spec §4.2. Additive on the same terms as `runs` above. */
-  | { type: 'coord'; coord: CoordStatus };
+  | { type: 'coord'; coord: CoordStatus }
+  /** §1.6's census. Additive on the same terms as `runs`/`coord` above — an
+   *  already-deployed PWA drops an unknown frame type silently, so NO
+   *  `FLEET_PROTO` bump. FLEET-LEVEL, not row-level: a divergence names a
+   *  disagreement BETWEEN sources, so it cannot ride on a `FleetSession` — and
+   *  keeping it off `FleetSession` is what keeps `reviveFleetSession` from
+   *  becoming a second producer. */
+  | { type: 'divergence'; divergences: Divergence[] };
 
 /**
  * What a registry MARKER file was measured to be. One type covers both markers

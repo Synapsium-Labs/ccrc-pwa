@@ -9,6 +9,7 @@ import { describe, it, expect } from 'vitest';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
+import { releaseIsSafe } from '../src/coord/rundefs.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const store = (): CoordStore =>
@@ -1174,4 +1175,69 @@ describe('CoordStore: outstanding mail (fix round 1, findings 2/4)', () => {
     expect(ceiling[0]!.id).toBe(ids[ids.length - 1]);
     expect(ceiling[ceiling.length - 1]!.id).toBe(ids[ids.length - 500]);
   }, 20_000);
+});
+
+describe('CoordStore.openRunsForSession', () => {
+  it('names every OPEN run on a session, in id order, and is SYNCHRONOUS', () => {
+    const s = store();
+    const a = openRun(s) as { id: number };
+    const b = openRun(s, { wave: 2 }) as { id: number };
+    s.setSession(a.id, 'demo-alpha');
+    s.setSession(b.id, 'demo-alpha');
+    const got = s.openRunsForSession('demo-alpha');
+    // Not a promise: the whole point. `await`ing this would be the one move
+    // that threatens coord.db's stated synchrony invariant.
+    expect(got).toBeInstanceOf(Array);
+    expect(got).toEqual([
+      { id: a.id, program: 'build4', wave: 1, waveOf: 5 },
+      { id: b.id, program: 'build4', wave: 2, waveOf: 5 },
+    ]);
+  });
+
+  it('honours excludeRunId — the closing run is never its own sibling', () => {
+    const s = store();
+    const a = openRun(s) as { id: number };
+    const b = openRun(s, { wave: 2 }) as { id: number };
+    s.setSession(a.id, 'demo-alpha');
+    s.setSession(b.id, 'demo-alpha');
+    expect(s.openRunsForSession('demo-alpha', a.id).map((r) => r.id)).toEqual([b.id]);
+    expect(s.openRunsForSession('demo-alpha', b.id).map((r) => r.id)).toEqual([a.id]);
+  });
+
+  it('excludes done and failed, and answers [] for a session no run names', () => {
+    const s = store();
+    const a = openRun(s) as { id: number };
+    s.setSession(a.id, 'demo-alpha');
+    expect(s.advance(a.id, 'dispatched', 'coordinator')).toMatchObject({ ok: true });
+    expect(s.advance(a.id, 'closing', 'coordinator')).toMatchObject({ ok: true });
+    expect(s.advance(a.id, 'done', 'coordinator')).toMatchObject({ ok: true });
+    expect(s.openRunsForSession('demo-alpha')).toEqual([]);
+    expect(s.openRunsForSession('demo-nobody')).toEqual([]);
+  });
+
+  it('does NOT filter on dispatchedAt — the open-time hold belongs to an undispatched run (F9)', () => {
+    // `POST /api/runs` places the wave-N+1 hold at OPEN time, before any
+    // dispatch. A `dispatchedAt IS NOT NULL` predicate here — D-13's shape,
+    // which guards a DIFFERENT problem class (a global, session-less count) —
+    // would make that live claim invisible and reintroduce F9.
+    const s = store();
+    const a = openRun(s, { wave: 2 }) as { id: number };
+    s.setSession(a.id, 'demo-alpha');
+    expect(s.run(a.id)!.dispatchedAt).toBeNull();
+    expect(s.openRunsForSession('demo-alpha').map((r) => r.id)).toEqual([a.id]);
+  });
+});
+
+describe('releaseIsSafe', () => {
+  it('is true only when NOTHING else names the session', () => {
+    expect(releaseIsSafe([])).toBe(true);
+  });
+
+  it('is false for one sibling and for many — a claim is not a majority vote', () => {
+    expect(releaseIsSafe([{ id: 7, program: 'build4', wave: 2, waveOf: 3 }])).toBe(false);
+    expect(releaseIsSafe([
+      { id: 7, program: 'build4', wave: 2, waveOf: 3 },
+      { id: 8, program: 'build4', wave: 3, waveOf: null },
+    ])).toBe(false);
+  });
 });

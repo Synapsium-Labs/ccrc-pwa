@@ -80,6 +80,30 @@ describe('README: workspace holds', () => {
     expect(section).toMatch(/whitespace-only/i);
     expect(ccd).toMatch(/\$\{reason\/\/\[\[:space:\]\]\/\}/);
   });
+
+  it('does not undercount the consumers — ccd alone has four rungs', () => {
+    const section = holdsSection();
+    expect(section).not.toMatch(/exactly two consumers/);
+    // All four ccd rungs are real, right now, and each is `-e` (an unreadable
+    // hold refuses too).
+    expect((ccd.match(/\[\[ -e "\$REG\/\$id\.hold" \]\]/g) ?? []).length).toBeGreaterThanOrEqual(4);
+    expect(section).toMatch(/forget/);
+  });
+
+  it('states the archive gate as it now is: an absent hold is NOT sufficient', () => {
+    const section = holdsSection();
+    // Wave 2 — `archiveMerged` also asks coord.db, and the by-hand route
+    // refuses `run-open`. A section that still says a release re-arms the
+    // sweep is describing a build that no longer exists.
+    expect(section).toMatch(/open run/i);
+    expect(section).toMatch(/run-open/);
+    expect(section).toMatch(/force/i);
+    // Grounded in the code, not merely asserted in prose.
+    const watchTs = readFileSync(path.join(root, 'server', 'src', 'watch.ts'), 'utf8');
+    expect(watchTs).toMatch(/openRunsForSession/);
+    const serverTs = readFileSync(path.join(root, 'server', 'src', 'server.ts'), 'utf8');
+    expect(serverTs).toMatch(/'run-open'/);
+  });
 });
 
 /**

@@ -4,8 +4,9 @@
 // already enumerates; that suite (run unchanged, Step 4) is the proof this
 // task added none.
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
 import type { Deps } from '../src/server.js';
@@ -15,7 +16,25 @@ import type { Runner } from '../src/exec.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { holdReason } from '../src/coord/rundefs.js';
 import { WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX } from '../../shared/api.js';
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+
+/** Every `.ts`/`.tsx` under `dir`, recursively. */
+const sourcesUnder = (dir: string): string[] =>
+  readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+    // `__`-prefixed names are TRANSIENT, not sources: `boot.test.ts` writes
+    // `server/src/__boot_control_mutant__.ts` and removes it in a `finally`
+    // up to ~15s later, and vitest runs test FILES in parallel — so such a
+    // name can exist at `readdirSync` time and be gone by `readFileSync`,
+    // ENOENT-ing a scan that has nothing to do with it. Skipping the prefix
+    // costs no coverage: no shipped source is named that way.
+    if (e.name.startsWith('__')) return [];
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) return sourcesUnder(full);
+    return /\.tsx?$/.test(e.name) ? [full] : [];
+  });
 
 const PROJECT = 'demo';
 const CLAIMED_BY = 'ccrc-pwa-coordinator';
@@ -187,7 +206,7 @@ describe('POST /api/runs', () => {
     const id = (res.json() as { id: number }).id;
     expect(w.coord.run(id)?.sessionId).toBe('demo-existing');
     expect(calls).toContainEqual(
-      ['ws-hold', '--session', 'demo-existing', '--reason', 'program:build4 wave:2/3']);
+      ['ws-hold', '--session', 'demo-existing', '--reason', `program:build4 wave:2/3 run:${id}`]);
   });
 
   it('refuses a malformed body', async () => {
@@ -322,6 +341,22 @@ describe('POST /api/runs/:id/dispatch', () => {
       resumed: false, clearedAt: null, state: 'dispatched' });
   });
 
+  it('the 200 body CARRIES adopted and spawnState — the coordinator sees nothing but this JSON', async () => {
+    // §1.5's verdict is computed in `dispatchRun` and would be dead if the
+    // delivery edge dropped it: the coordinator reads HTTP and nothing else, and
+    // `ccd/coordinator-skill/references/wave-lifecycle.md` already documents both
+    // fields verbatim. An L4 adapter may not narrow a distinction it received.
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home, { wsAddCreates: ['demo-fresh1'] });
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    const res = await postDispatch(app, opened.id);
+    expect(res.statusCode).toBe(200);
+    // A CLEAN ws-add: not adopted, and no spawn fact of its own to report.
+    // `null` here means "nothing was recorded", NOT `unrecognised`.
+    expect(res.json()).toMatchObject({ ok: true, adopted: false, spawnState: null });
+  });
+
   // Registry ladder (architecture doc, increment 1's second half): the AFTER
   // read never tolerates degradation, unlike BEFORE — see the comment at the
   // call site in coord/routes.ts, written there on purpose because the
@@ -373,6 +408,42 @@ describe('POST /api/runs/:id/dispatch', () => {
       const row = w.coord.run(opened.id);
       expect(row?.state).toBe('planned');
       expect(row?.sessionId).toBeNull();
+      // ccd is NOT the failing party here, so the body says nothing on its
+      // behalf. The presence of `stderr` is the distinction — see the next test.
+      expect(res.json()).not.toHaveProperty('stderr');
+    });
+
+    it('the 502 QUOTES ccd when the ws-add failed too — two failures, and the operator hears both', async () => {
+      // §1.5 moved the `!res.ok` early return past the AFTER read, and the
+      // operator-facing cost was here: on the one path where BOTH the spawn and
+      // the listing fail, the 502 used to name only the listing. `fleetFailed`
+      // quotes ccd on every other refusal in this route; this one lost it purely
+      // as a side effect of the return moving.
+      const home = mkTmp('ccrc-runs-');
+      let spawned = false;
+      const calls: string[][] = [];
+      const run: Runner = async (_cmd, args) => {
+        calls.push(args);
+        if (args[0] === 'ws-add') {
+          // The workspace IS created and the call STILL fails — the real
+          // cut-short shape, which is why this arm is reachable at all.
+          seed(home, 'demo-fresh1');
+          spawned = true;
+          return { code: 1, stdout: '', stderr: 'ccd: no wrapper has capacity', killed: true };
+        }
+        return { code: 0, stdout: '', stderr: '' };
+      };
+      const io: FleetIO = { ...localIO, readdir: async (p) => (spawned ? null : localIO.readdir(p)) };
+      const w = await openApp(home, run, { io }); app = w.app;
+      const opened = (await postOpen(app)).json() as { id: number };
+      const res = await postDispatch(app, opened.id);
+      expect(res.statusCode).toBe(502);
+      expect(res.json()).toEqual({
+        ok: false, error: 'registry-unmeasurable', stderr: 'ccd: no wrapper has capacity',
+      });
+      // Still binds and holds NOTHING — carrying ccd's words is not adoption.
+      expect(calls.some((c) => c[0] === 'ws-hold')).toBe(false);
+      expect(w.coord.run(opened.id)?.sessionId).toBeNull();
     });
   });
 
@@ -520,7 +591,7 @@ describe('POST /api/runs/:id/dispatch', () => {
     const opened = (await postOpen(app)).json() as { id: number };
     await postDispatch(app, opened.id);
     expect(calls).toContainEqual(
-      ['ws-hold', '--session', 'demo-fresh2', '--reason', 'program:build4 wave:1/3']);
+      ['ws-hold', '--session', 'demo-fresh2', '--reason', `program:build4 wave:1/3 run:${opened.id}`]);
     // The run's own program/wave columns carry this — nothing reads it back
     // out of the reason string.
     expect(w.coord.run(opened.id)).toMatchObject({ program: 'build4', wave: 1, waveOf: 3 });
@@ -715,6 +786,7 @@ describe('POST /api/runs/:id/close', () => {
       { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' });
     const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: true });
     expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ released: true });
     expect(coord.run(id)!.state).toBe('done');
     expect(coord.run(id)!.handoffCommit).toBe(TIP);
     expect(calls.some((c) => c[0] === 'ws-release' && c.includes(sessionId))).toBe(true);
@@ -728,10 +800,55 @@ describe('POST /api/runs/:id/close', () => {
       { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
     const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: false });
     expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ released: false });
     expect(coord.run(id)!.state).toBe('done');
+    // NO ` run:` suffix, deliberately: this reason claims the workspace for
+    // wave 2, whose run has not been opened yet. Stamping the CLOSING run's
+    // id onto the successor's claim would name the wrong run.
     expect(calls).toContainEqual(
       ['ws-hold', '--session', sessionId, '--reason', 'program:build4 wave:2/3']);
     expect(calls.some((c) => c[0] === 'ws-release')).toBe(false);
+  });
+
+  it('final:true with a sibling open re-holds with the SIBLING reason and answers released:false', async () => {
+    const sessionId = `${PROJECT}-close-sib`;
+    const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
+    const { id, coord, calls } = await dispatchedRun(sessionId, root,
+      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' });
+    const next = coord.openRun({ program: 'build4', title: 'T', project: PROJECT, wave: 2, waveOf: 3,
+      claimedBy: CLAIMED_BY });
+    if (!('id' in next)) throw new Error('fixture openRun refused');
+    coord.setSession(next.id, sessionId);
+
+    const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: true });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, state: 'done', released: false });
+    expect(coord.run(id)!.state).toBe('done');
+    expect(calls.some((c) => c[0] === 'ws-release')).toBe(false);
+    expect(calls).toContainEqual(
+      ['ws-hold', '--session', sessionId, '--reason', `program:build4 wave:2/3 run:${next.id}`]);
+  });
+
+  it('the non-final arm re-holds with the SURVIVING run, never with its own next wave', async () => {
+    // Before Wave 2 it re-held `holdReason(program, wave+1, waveOf)` from its
+    // OWN row, silently rewriting the live run's claim whenever the two rows
+    // disagree. With a sibling open, the surviving run's reason wins.
+    const sessionId = `${PROJECT}-close-nonfinal-sib`;
+    const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
+    const { id, coord, calls } = await dispatchedRun(sessionId, root,
+      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
+    const next = coord.openRun({ program: 'build4', title: 'T', project: PROJECT, wave: 4, waveOf: 3,
+      claimedBy: CLAIMED_BY });
+    if (!('id' in next)) throw new Error('fixture openRun refused');
+    coord.setSession(next.id, sessionId);
+
+    const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: false });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, released: false });
+    expect(calls).toContainEqual(
+      ['ws-hold', '--session', sessionId, '--reason', `program:build4 wave:4/3 run:${next.id}`]);
+    expect(calls).not.toContainEqual(
+      ['ws-hold', '--session', sessionId, '--reason', 'program:build4 wave:2/3']);
   });
 
   it('archives on explicit abandon (state:failed, archive:true) — the only wsArchive call in the lane', async () => {
@@ -744,6 +861,43 @@ describe('POST /api/runs/:id/close', () => {
     expect(coord.run(id)!.state).toBe('failed');
     expect(calls.some((c) => c[0] === 'ws-archive' && c.includes(sessionId))).toBe(true);
     expect(calls.some((c) => c[0] === 'ws-release')).toBe(false);
+  });
+
+  it('failed+archive with a SIBLING open archives NOTHING and re-holds — the fourth fleet act, gated', async () => {
+    // `ws-archive` has no hold rung in ccd (by design: a by-hand archive of a
+    // held workspace must still work), so an ungated arm here archives the
+    // SIBLING's workspace and leaves the sibling's `.hold` standing over it —
+    // F9's harm through a different door, in the function Wave 2 rewrites.
+    const sessionId = `${PROJECT}-close-arch-sib`;
+    const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
+    const { id, coord, calls } = await dispatchedRun(sessionId, root,
+      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
+    const next = coord.openRun({ program: 'build4', title: 'T', project: PROJECT, wave: 2, waveOf: 3,
+      claimedBy: CLAIMED_BY });
+    if (!('id' in next)) throw new Error('fixture openRun refused');
+    coord.setSession(next.id, sessionId);
+
+    const res = await postClose(app!, id,
+      { fingerprint: GOOD_CLAIM, final: true, state: 'failed', archive: true });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, state: 'failed', released: false });
+    // The run still transitions — the WORKSPACE is what is protected.
+    expect(coord.run(id)!.state).toBe('failed');
+    expect(calls.some((c) => c[0] === 'ws-archive')).toBe(false);
+    expect(calls.some((c) => c[0] === 'ws-release')).toBe(false);
+    expect(calls).toContainEqual(
+      ['ws-hold', '--session', sessionId, '--reason', `program:build4 wave:2/3 run:${next.id}`]);
+  });
+
+  it('failed+archive with NO sibling still archives — the arm is gated, not deleted', async () => {
+    const sessionId = `${PROJECT}-close-arch-lone`;
+    const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
+    const { id, calls } = await dispatchedRun(sessionId, root,
+      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
+    const res = await postClose(app!, id,
+      { fingerprint: GOOD_CLAIM, final: true, state: 'failed', archive: true });
+    expect(res.statusCode).toBe(200);
+    expect(calls).toContainEqual(['ws-archive', '--session', sessionId]);
   });
 
   it('answers 501 when the fleet ccd does not support ws-release, and the run stays RETRYABLE — ' +
@@ -1616,5 +1770,35 @@ describe('POST /api/runs/:id/dispatch — the declared ledger (spec §3.1)', () 
     expect(second.json()).toMatchObject({ ok: false, error: 'bad-transition' });
     // The ledger is fixed at dispatch: still two rows, not four.
     expect(itemRows(w.coord, opened.id).map((r) => r.title)).toEqual(['one', 'two']);
+  });
+});
+
+describe('the hold reason', () => {
+  it('the reason names its run, and NOTHING in the tree parses one back', () => {
+    // DISPLAY-ONLY. `run:` exists so a human reading ~/.cc-sessions can answer
+    // "whose claim is this?" from the box alone — which they could not during
+    // the F9 incident. Run-awareness itself comes from coord.db
+    // (`openRunsForSession`), never from this string.
+    expect(holdReason('build4', 2, 3, 17)).toBe('program:build4 wave:2/3 run:17');
+    expect(holdReason('build4', 2, null, 17)).toBe('program:build4 wave:2 run:17');
+    // A HAND hold has no run: no suffix, so the PWA composer's placeholder
+    // `program:name wave:2/4` is still a truthful example.
+    expect(holdReason('build4', 2, 3, null)).toBe('program:build4 wave:2/3');
+
+    // The negative half, scanned over the two rings that could plausibly
+    // acquire a parser. A `.split('run:')`, a `/run:(\d+)/`, a
+    // `new RegExp('run:(\\d+)')`, a `startsWith('program:')` — any of them
+    // turns a display string into a protocol. The capture alternative does
+    // NOT require a leading `/`, so a RegExp built from a STRING is caught
+    // too; and `'program:'` as a whole quoted token is caught, while
+    // `"program:name wave:2/4"` (the composer's placeholder, a prose example)
+    // is not, because the quote must close immediately after the colon.
+    for (const dir of [path.join(repoRoot, 'server', 'src'), path.join(repoRoot, 'pwa', 'src')]) {
+      for (const f of sourcesUnder(dir)) {
+        const src = readFileSync(f, 'utf8');
+        expect(/['"`](?:run|program):['"`]|run:\\?\(/.test(src.replace(/^\s*\/\/.*$/gm, '')),
+          `${f} looks like it parses a hold reason`).toBe(false);
+      }
+    }
   });
 });

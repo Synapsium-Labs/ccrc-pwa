@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=1c5ed4444fd93ebce9734aaae926c71a905f0e55c229fd4dbc1f1bb07d056ddb
+# ccrc:generated 1 sha256=f9a0a827f0f034c348a6cbc45bdc9ba60e8ec22b5bd5e23094bda3a4419a6f32
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
 set -uo pipefail
@@ -79,6 +79,41 @@ SPAWN_GATE_TRIES=450            # capture-pane polls before the startup-gate win
 SUPERVISED_START_WAIT=30        # seconds `ccd start`/`ccd ensure` wait for the unit's pane to appear.
                                 # A bound on FAILURE REPORTING, not a cost anybody normally pays: a
                                 # pane shows up about a second after the unit starts.
+SPAWN_SETTLE_S=240              # WALL-CLOCK bound on the startup-gate wait, on the AGENT-REACHABLE
+                                # path. The gate window used to be purely iterative
+                                # (SPAWN_GATE_TRIES x ~2s = ~900s, ~1350s once gate branches fire),
+                                # i.e. 3-4.5x the agent's hard 300s ceiling — so a session slower
+                                # than 300s could not be spawned through the dispatch path at all,
+                                # only killed. 240 leaves room for the rest of `ws-add` under that
+                                # ceiling, and it is safe ONLY because the claim and the
+                                # supervision now precede the wait: exceeding it is a REPORT, not
+                                # an orphan.
+                                # A plain shell variable with the production default, deliberately
+                                # NOT an env override — same discipline, and the same reason, as
+                                # SPAWN_GATE_TRIES above. A test that sources ccd assigns it after.
+SPAWN_SETTLE_SUPERVISE_S=1350   # what `cmd_supervise` (systemd ExecStart, no ceiling) RAISES it to.
+                                # A global 240 would make every systemd restart of a large session
+                                # settle unconfirmed — the "700k+-token resumes take minutes between
+                                # gates" case — which suppresses _inject_spawn_effort and lights a
+                                # warning on a healthy row. Above SPAWN_GATE_TRIES x 2s, so on this
+                                # path the ITERATION cap still fires first and the window is exactly
+                                # today's.
+SPAWN_RESUME_SETTLE_S=2         # seconds `_spawn_start` waits, on the `resume` path ONLY, between
+                                # `tmux new-session … --resume` and the `has-session` probe that
+                                # decides whether to retry once with `--session-id`. It is waiting
+                                # for the WRAPPER'S EXIT to become observable: `tmux new-session -d`
+                                # returns 0 whether or not the command it launched survived, so
+                                # without this pause `has-session` answers about a pane that has not
+                                # had time to die yet and the fallback never fires.
+                                # THE COST IS PAID IN THE UNCLAIMED WINDOW: this sits between the
+                                # pane's creation and the caller's `_reg_claim`, i.e. inside exactly
+                                # the F8 gap the split exists to shrink, so it widens that gap by
+                                # this many seconds on every resume. Keep it the smallest number
+                                # that makes the probe mean anything.
+                                # A plain shell variable with the production default, deliberately
+                                # NOT an env override — same discipline, and the same reason, as
+                                # SPAWN_GATE_TRIES above: HOME is ccd's only isolation boundary and
+                                # nothing on the wire can set a shell variable.
 SPAWN_EFFORT="ultracode"        # /effort sent to every freshly spawned session ("" disables).
                                 # ultracode is session-only by design (no settings.json key),
                                 # so injecting it at spawn is the only way to default it.
@@ -216,6 +251,21 @@ _tmux()  { echo "cc-$1"; }                                  # id -> tmux name
 _alive() { tmux has-session -t "$(_tmux "$1")" 2>/dev/null; }
 _reg_set() { printf '%s' "$3" > "$REG/$1.$2"; }             # id field value
 _reg_get() { cat "$REG/$1.$2" 2>/dev/null; }                # id field
+# THE ONE WRITER OF `started`, and the reason it is a function rather than eight
+# `_reg_set` lines: the field is what `_session_state` and shared/'s
+# `sessionLifecycle` read to tell `orphan` from `never-started`, and (Wave 1)
+# `unclaimed` from `running`. Eight writers across two processes is a fact
+# nobody owns. The FIELD gets one writer; the CALLERS stay authoritative about
+# WHEN — which is why this is not folded into `_spawn_start`: the two
+# supervised-branch writes in cmd_start/cmd_ensure are load-bearing exactly
+# when the unit never comes up and `_spawn` never runs in this process, and a
+# failed revival must classify `orphan`, not `never-started`.
+#
+# MONOTONE WITHIN A ROW: nothing in this file clears `started` on its own. The
+# one eraser is `_reg_purge`, which unlinks EVERY field for an id (forget, reap,
+# dead-reg) — that destroys the identity, it does not un-claim it. Deliberate,
+# and what `_spawn_start`'s --resume -> --session-id fallback exists to pay for.
+_reg_claim() { _reg_set "$1" started 1; }                   # id
 _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # final-review-destructive finding F3. The THREE call sites that used to spell
   # this `rm -f "$REG/$id".*` directly were an unanchored glob: `$id.*`
@@ -361,7 +411,7 @@ _ws_unsupervise() {   # id [surface] — disable the unit AND RECORD THAT SOMEBO
     || echo "ccd: warn: could not disable unit claude-session@$id (it may resurrect if it was enabled)" >&2
 }
 
-_session_state() {   # id -> running|unsupervised|stopped|restarting|orphan|never-started
+_session_state() {   # id -> running|unsupervised|unclaimed|stopped|restarting|orphan|never-started
   # The bash twin of shared/'s `sessionLifecycle` (spec §4.3). A pure function
   # of four inputs — pane alive, heartbeat freshness, stop stamp, `started` —
   # evaluated in this exact order; both implementations are driven from one
@@ -384,6 +434,13 @@ _session_state() {   # id -> running|unsupervised|stopped|restarting|orphan|neve
   # unconditionally and never ages out.
   [[ "$sup" =~ ^[0-9]+$ ]] && (( now - sup >= 0 && now - sup < 120 )) && fresh=1
   if _alive "$id"; then
+    # §1.6, and the FIRST rung inside this branch on purpose — the same position
+    # the TS ladder puts it in, because both are driven from one fixture. A live
+    # pane with no `started` stamp is a session nobody wrote a claim for: the
+    # repair is a CLAIM (`ccd ensure`), not a process, which is the exact
+    # opposite of `orphan`'s. Checked before the freshness split because the
+    # specimen that motivated it was alive AND supervised AND unclaimed.
+    [[ "$(_reg_get "$id" started)" == "1" ]] || { echo unclaimed; return 0; }
     (( fresh )) && { echo running; return 0; }
     # A pane with no supervisor: no auto-swap, no auto-compact, no uuid-sync,
     # and nothing to record its death. What a pre-fix `ccd start` minted.
@@ -1324,6 +1381,26 @@ cmd_ws_add() {   # project [slug] — new worktree + session for an existing pro
     die "no account available for placement —${why}; enable one (rm $REG/<w>-disabled) and retry — nothing was touched"
   fi
 
+  # PER PROJECT, and it spans slug selection through the last registry write —
+  # `_reg_set "$id" branch "$branch"` and `_ws_seed_home "$id" "$hw"`, the two
+  # fields a racing second ws-add would most visibly corrupt. Two concurrent
+  # adds are not hypothetical: an operator double-tap, a second tab, a second
+  # device and the coordinator's own HTTP call all reach here, and the PWA's
+  # only guard is React state that does not survive a reload.
+  #
+  # `-n`, matching ccd's two existing flock sites: a loser REFUSES rather than
+  # queueing behind a worktree checkout. It deliberately does NOT cover
+  # `$main/.ccrc/workspace.sh` (an arbitrary user script with no bound) nor the
+  # settle — so it does NOT close retry-after-502; §1.5's dispatch adoption does.
+  command -v flock >/dev/null 2>&1 \
+    || die "flock (util-linux) is unavailable — refusing to create a workspace unserialised"
+  local addlock="$REG/.ws-add-$project.lock" lfd
+  exec {lfd}>>"$addlock" || die "cannot open the ws-add lock at $addlock"
+  flock -n "$lfd" || {
+    exec {lfd}>&-
+    die "busy: another ws-add for $project is in flight"
+  }
+
   # The refusal NAMES WHAT IT FOUND. `_ws_slug_free` is an any-field check
   # (round-3 P1), so it also refuses a slug whose only trace is the residue of
   # an interrupted purge — and "slug in use" on its own would send the operator
@@ -1376,6 +1453,16 @@ cmd_ws_add() {   # project [slug] — new worktree + session for an existing pro
   _reg_set "$id" branch "$branch"
   _ws_seed_home "$id" "$hw"
 
+  # GIVEN BACK HERE, before the setup hook and long before the settle, for the
+  # reason cmd_ws_reap states at its own close: `flock` treats two `open()`s of
+  # one path in one process as two strangers, and ccd is SOURCED — by `ccd`
+  # itself and by its tests — so a descriptor left open would refuse the next
+  # ws-add for this project in the same shell for ever. The `die`s above need no
+  # close of their own: `die` exits, and the kernel closes what exits. Anything
+  # BELOW this line that leaves by `return` (the spawn's rc 3/4/5 path does)
+  # needs none either, because the descriptor is already gone by then.
+  exec {lfd}>&-
+
   # A failed setup hook leaves a usable-but-unscaffolded workspace. Say so;
   # never remove work on the strength of a hook's exit code.
   if [[ -x "$main/.ccrc/workspace.sh" ]]; then
@@ -1387,15 +1474,36 @@ cmd_ws_add() {   # project [slug] — new worktree + session for an existing pro
     fi
   fi
 
-  # Captured, not discarded: a silent M6-shaped success on the workspace path
-  # was found by Task 4's reviewer (cmd_ws_add rc=0 with the success line
-  # printed over a spawn whose tmux session had vanished). Supervision wiring
-  # is untouched — `_ws_supervise` still runs on a failed spawn, since a
-  # unit that can retry is strictly better than one that never gets enabled.
-  local rc; _spawn "$id" new; rc=$?
-  _reg_set "$id" started 1
+  # THE ORDERING IS THE FIX (F8). The pane is created, THEN the claim, THEN the
+  # supervision, and only THEN the blocking wait. Killed anywhere after the
+  # first line — the agent's 300s ws-add ceiling, a deploy sweep, a SIGTERM —
+  # what is left is an ordinary session: claimed, supervised, restartable. What
+  # F8 left was a live pane no registry row claimed and no unit was watching,
+  # invisible to `ccd ls`, to the PWA and to ws-gc alike.
+  #
+  # This is also what makes #50's LOUD non-zero exit on rc 3/4/5 safe. It was
+  # not safe before: a non-zero ws-add used to mean "an orphan was created". It
+  # now means "the session exists, is claimed, is supervised, and did not
+  # confirm its TUI".
+  #
+  # THE CALL SHAPE IS NOT NEGOTIABLE — plain call, `|| return $?`, then read
+  # `$SPAWN_FROMSWAP`. No `$( )`: see the block above `_spawn_start` for the
+  # commit where a command substitution there turned its `die` into rc 1, a
+  # code this very `if` does not test, and this function printed its success
+  # line over a spawn that never happened.
+  #
+  # Supervision wiring is untouched otherwise — `_ws_supervise` still runs on a
+  # failed spawn, since a unit that can retry is strictly better than one that
+  # never gets enabled. The rc is captured, not discarded: a silent M6-shaped
+  # success on the workspace path was found by Task 4's reviewer (cmd_ws_add
+  # rc=0 with the success line printed over a spawn whose tmux session had
+  # vanished).
+  local rc
+  _spawn_start "$id" new || return $?
+  _reg_claim "$id"
   _ws_supervise "$id"
-  if [[ "$rc" -eq 3 || "$rc" -eq 4 ]]; then
+  _spawn_settle "$id" "$SPAWN_FROMSWAP"; rc=$?
+  if [[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 ]]; then
     echo "ccd: ws-add spawn failed for $id (spawn rc $rc) — see $REG/$id.spawn" >&2
     return "$rc"
   fi
@@ -2014,8 +2122,10 @@ cmd_ws_hold() {   # ccd ws-hold --session <id> --reason <text> — claim a
 }
 
 cmd_ws_release() {   # ccd ws-release --session <id> — end the program's claim.
-  # After this, the very next archiveMerged sweep may archive a merged
-  # workspace — the level re-arms itself, no edge to miss. Idempotent.
+  # A release ends THIS file's claim and nothing else. It does NOT necessarily
+  # re-arm the auto-archive sweep: since Build 8 Wave 2, `archiveMerged` also
+  # asks the server's coord.db whether an OPEN RUN still names this session,
+  # and skips if one does — an absent hold is no longer sufficient. Idempotent.
   [[ $# -eq 2 && $1 == --session ]] || die "usage: ccd ws-release --session <id>"
   local id=$2
   [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
@@ -2511,21 +2621,54 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   local workdir; workdir=$(_reg_get "$id" workdir)
   [[ -d "$workdir" ]] || die "worktree is gone: $workdir — see: ccd ws-attic --session $id"
   rm -f "$REG/$id.archived" "$REG/$id.archivedreason" "$REG/$id.archivemanifest"
+  # THE SAME F8 SHAPE, converted the same way — and this verb's agent budget is
+  # CCD_VERB_TIMEOUT_MS['ws-restore'] = 60s, FIVE TIMES TIGHTER than the ws-add
+  # budget whose expiry caused F8. The kill is likelier here, not less.
+  # Same call shape, same reason: no `$( )` around `_spawn_start`, or its `die`
+  # comes back as an rc 1 the `if` below does not test.
+  #
   # Captured, not discarded — same M6-shaped gap as ws-add, folded into this
   # task because it owns the start paths and the spawn-rc plumbing. Supervision
   # wiring stays untouched: `_ws_supervise` still runs on a failed spawn.
-  local rc; _spawn "$id" resume; rc=$?
-  _reg_set "$id" started 1
-  _ws_supervise "$id"
-  # GIVEN BACK BEFORE THE VERB ANSWERS, for the reason `cmd_ws_reap` states at
-  # its own close: `flock` treats two `open()`s of one path in one process as
-  # two strangers, and ccd is SOURCED — by `ccd` itself and by its tests — so a
-  # descriptor left open here would refuse the next `ws-reap` in the same shell
-  # with `in-progress` for ever. The `die`s above need no close of their own:
-  # `die` exits, and the kernel closes what exits. Given back regardless of the
-  # spawn's fate — the undo (archive stamps gone) is real either way.
+  #
+  # A BRANCH RATHER THAN `_spawn_start … || return $?`, WHICH IS THE SHAPE
+  # EVERY OTHER CALL SITE USES — and the difference is the descriptor, not
+  # taste. This is the only caller holding one, and the close is eleven lines
+  # below; an early `return` between the two leaves it open. (Shipped that way
+  # for one commit: the split's `|| return $?` landed here unchanged from the
+  # lockless call sites, and a failed resume left the reap lock held in the
+  # sourcing shell for ever.) The spawn's verdict travels in `$rc` instead, so
+  # SUCCESS AND FAILURE LEAVE THE LOCKED REGION THROUGH THE SAME CLOSE and the
+  # next editor has nothing to remember.
+  local rc=0
+  if _spawn_start "$id" resume; then
+    _reg_claim "$id"
+    _ws_supervise "$id"
+  else
+    rc=$?
+  fi
+  # GIVEN BACK BEFORE THE SETTLE, not merely before the verb answers. The reason
+  # `cmd_ws_reap` gives at its own close applies unchanged (`flock` treats two
+  # `open()`s of one path in one process as two strangers, and ccd is SOURCED —
+  # by `ccd` itself and by its tests — so a descriptor left open here would
+  # refuse the next `ws-reap` in the same shell with `in-progress` for ever),
+  # and the settle can now block for SPAWN_SETTLE_S: holding the reap lock
+  # across it would answer `in-progress` to every ws-reap on this id for four
+  # minutes.
+  #
+  # THE `die`s ABOVE NEED NO CLOSE OF THEIR OWN — and that is a statement about
+  # `die`, not about early exits in general. `die` is `echo …; exit`, and the
+  # kernel closes what exits; a `return` does not exit, so any path that leaves
+  # this function by returning must close the descriptor EXPLICITLY. That is
+  # why the spawn's failure is a captured rc above and a `return` below THIS
+  # LINE rather than one above it.
+  #
+  # Given back regardless of the spawn's fate — the undo (archive stamps gone)
+  # is real either way, which is what made the old placement unconditional too.
   exec {lfd}>&-
-  if [[ "$rc" -eq 3 || "$rc" -eq 4 ]]; then
+  [[ "$rc" -eq 0 ]] || return "$rc"
+  _spawn_settle "$id" "$SPAWN_FROMSWAP"; rc=$?
+  if [[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 ]]; then
     echo "ccd: ws-restore spawn failed for $id (spawn rc $rc) — see $REG/$id.spawn" >&2
     return "$rc"
   fi
@@ -4363,6 +4506,17 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only; the token's sour
   _json_str probe >/dev/null 2>&1 \
     || die "python3 unavailable — cannot quote the audit record safely"
 
+  # BEFORE `_ws_reap_eval`, AND THAT IS THE WHOLE POINT. Its Phase-A refusals —
+  # `not-archived` first among them — return with every downstream field null,
+  # which is exactly the shape that made F8's orphan invisible to the one
+  # artifact whose job is answering "what is the state of this workspace".
+  # These three are answerable on EVERY verdict, so they are answered on every
+  # verdict. (`_alive` appeared nowhere in this verb before.)
+  local aliveflag=false startedflag=false unitstate
+  _alive "$id" && aliveflag=true
+  [[ "$(_reg_get "$id" started)" == "1" ]] && startedflag=true
+  unitstate=$(_ws_unit_state "$id")
+
   _ws_reap_eval "$id" || true      # a refusal is an ANSWER, not an error
   local project workdir branch base repo transcript reaping
   project=$(_reg_get "$id" project); workdir=$(_reg_get "$id" workdir)
@@ -4571,6 +4725,10 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only; the token's sour
     "$(_json_str "$workdir")" "$(_json_str "$project")" "$(_json_str "$repo")"
   printf '"exists":%s,"headMatchesRegistry":%s,"reaping":%s,' \
     "$exists" "$headmatch" "$( [[ -n "$reaping" ]] && _json_str "$reaping" || echo null)"
+  # The session behind the workspace, not just the tree. `unit` is null — never
+  # a fourth word — when this box has no systemctl, or the manager did not answer.
+  printf '"alive":%s,"started":%s,"unit":%s,' \
+    "$aliveflag" "$startedflag" "$( [[ -n "$unitstate" ]] && _json_str "$unitstate" || echo null)"
   # Six fields, one source of truth for whether each is a measurement: `null`
   # from the builders above whenever the read did not happen. See the two
   # blocks for the reason; the printf is deliberately dumb so no third rule can
@@ -6379,6 +6537,25 @@ _ws_gc_row() {   # project mainreal wsroot wt prunable
     printf 'foreign\t%s\t%s\t%s\t%s\t%s\n' "$project" "$slug" "$bytes" "$age" "$wt"; return 0
   fi
 
+  # THE SERVER'S CENSUS USES A DIFFERENT PREDICATE, DELIBERATELY, and this is
+  # the ccd-side half of that note (the full set relation is in
+  # `server/src/divergence.ts`, `unclaimedWorktrees`). ccrc's
+  # `unregistered-worktree` finding names ws-gc as its repair, but it decides
+  # "unclaimed" with `_ws_slug_free`'s ANY-FIELD rule rather than the `.uuid`
+  # test below. So the two differ, in a known direction:
+  #   - Everything the census names has no `.uuid` either, so it is a SUBSET of
+  #     `orphan` here on the registry evidence — it never names a slug this
+  #     function would call `tracked`.
+  #   - This function calls a slug `orphan` in cases the census stays quiet
+  #     about: a workspace mid-`ws-add` before `.uuid` lands, and `.archived`/
+  #     `.reaping` residue from an interrupted purge — the `orphan` rung is
+  #     tested FIRST, so residue with no `.uuid` never reaches the two rungs
+  #     below that would name it. The census must not report those: it fires at
+  #     a repair that DELETES worktrees, and `_ws_slug_free` will not re-hand
+  #     the slug out anyway.
+  # The census has no `ours` gate either, so it also names the `foreign` and
+  # `stale-meta` worktrees above. Those are still ws-gc's to report — they are
+  # simply not `--prune`'s to remove.
   local state
   if   [[ ! -f "$REG/$project-$slug.uuid" ]];    then state=orphan
   elif [[ -f "$REG/$project-$slug.reaping" ]];   then state=reaping
@@ -7259,7 +7436,7 @@ _pane_login_screen() {
   grep -Eq 'Select login method|Invalid API key|Please run /login' <<<"$1"
 }
 
-_accept_first_run_prompts() {   # tmuxname — clear startup gates, then CONFIRM the main TUI is up.
+_accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, then CONFIRM the main TUI is up.
   # Returns as soon as "/rc active" (or another live marker) appears. Gates, order-agnostic,
   # each needing a DIFFERENT keystroke:
   #   • trust-folder prompt  — default is "1. Yes, I trust this folder"  → just Enter
@@ -7275,10 +7452,40 @@ _accept_first_run_prompts() {   # tmuxname — clear startup gates, then CONFIRM
   # Window is ~15 min because 700k+-token resumes take minutes between gates; healthy sessions
   # return the moment the live marker shows, so the common path stays fast.
   # rc 0 = a live marker appeared (the TUI is up); 2 = an auth screen (below); 3 = the tmux session
-  # vanished mid-poll; 4 = the window expired with no marker. 3 and 4 both used to be "0 after ~15
+  # vanished mid-poll; 4 = the window expired with no marker; 5 = a hard block (limit/spend banner,
+  # or lost auth): waiting longer cannot fix it. 3 and 4 both used to be "0 after ~15
   # minutes" (M6): the caller printed `started`/`ensured` over a session that was never there.
-  local t="$1" fromswap="${2:-0}" i pane
+  local t="$1" fromswap="${2:-0}" bound i pane t0
+  # A WALL-CLOCK bound as well as the iteration cap. The cap alone is not a
+  # bound anyone can reason about: gate branches sleep 2 EXTRA seconds each, so
+  # the same 450 iterations are ~900s plain and ~1350s when gates fire. The
+  # bound is NOT keyed off `fromswap` — measured, the discriminator runs
+  # backwards from the obvious reading: `cmd_swap` writes `lastswap` two lines
+  # before the restart, so a SWAP is fromswap=1 (the fast branch) and a fresh
+  # `ws-add` is fromswap=0. Keyed off it, ws-add would get the LONG window.
+  #
+  # THE BOUND ARRIVES IN A VARIABLE, NEVER IN ARGV, and that is a SECURITY
+  # property, not a style choice. It reached this function as a positional for
+  # one commit (Task 5), threaded down from a second positional on `cmd_ensure`
+  # — and `ccd ensure` is granted by the agent's exec whitelist, whose own
+  # docstring says "tokens after the prefix are unconstrained". `(( ))` below
+  # evaluates its operand's CONTENTS as an arithmetic expression, and a command
+  # substitution inside an ARRAY SUBSCRIPT runs before the arithmetic even
+  # errors: `bound='REG[$(rm -rf ~)]'` executes. That made a wire-reachable
+  # argv word into arbitrary code as the fleet user. `CCD_SETTLE_BOUND` is the
+  # CCD_IN_UNIT idiom instead — a caller's dynamically-scoped `local`, never
+  # exported, never an argv token, so nothing on the wire can reach it.
+  #
+  # VALIDATED ANYWAY, because a comment is a request and a red suite is a
+  # mechanism: `(( ))` on any non-literal is a footgun, and the next editor
+  # deserves a guard rather than a paragraph. Anything that is not 1-5 digits
+  # degrades to the production default — never to zero (an instant rc 4 on
+  # every spawn) and never to "no bound".
+  bound="${CCD_SETTLE_BOUND:-$SPAWN_SETTLE_S}"
+  [[ "$bound" =~ ^[0-9]{1,5}$ ]] || bound=$SPAWN_SETTLE_S
+  t0=$(date +%s)
   for i in $(seq 1 "$SPAWN_GATE_TRIES"); do
+    (( $(date +%s) - t0 >= bound )) && return 4
     # BEFORE the capture, and this order is the fix: `capture-pane` against a dead session fails into
     # an EMPTY $pane, which matches no branch below, so the loop used to poll a corpse for the full
     # window and then answer success. `has-session` is the one probe that distinguishes "not ready
@@ -7333,6 +7540,23 @@ _accept_first_run_prompts() {   # tmuxname — clear startup gates, then CONFIRM
       # returns 2. Keep this function's own job pure: a verdict, not a report.
       return 2
     fi
+    # A HARD BLOCK: a real limit/spend banner, or lost auth. This earns its own
+    # code rather than joining 4, because the two say opposite things — an
+    # expired window means *we do not know*, a hard block means *we know
+    # exactly what is wrong and waiting longer cannot fix it*. Collapsing them
+    # would be an adapter narrowing a distinction it received.
+    #
+    # CHECKED AFTER `_pane_login_screen`, AND THAT ORDER IS THE CONTRACT, not a
+    # preference: `_pane_hard_blocked`'s regex also matches "Invalid API key"
+    # and "Please run /login", and the whole reason the login check sits LAST
+    # is that its banners appear in restored scrollback beside live gates.
+    # Ahead of the gate branches this returns 5 on a pane holding an unanswered
+    # Bypass-Permissions prompt, sends no keys, and parks the session one stray
+    # Enter from "1. No, exit". 5, NOT 4: renumbering 3 or 4 would silently
+    # retarget four call sites plus _supervised_start.
+    if _pane_hard_blocked "$pane"; then
+      return 5
+    fi
     sleep 2
   done
   # The window expired. An explicit verdict, because falling out of a `for` loop under `set -uo
@@ -7340,11 +7564,76 @@ _accept_first_run_prompts() {   # tmuxname — clear startup gates, then CONFIRM
   return 4
 }
 
-_spawn() {   # id mode(new|resume) — (re)create the tmux session under the right account
-  # NOTE: v2.1.177 does not print the claude.ai URL to the pane or debug log, so there is no
-  # URL to capture. The session is discovered on claude.ai by its name, which == the id
-  # (we pass `--remote-control '$id'`). _spawn just (re)creates the session and accepts trust.
+_tmux_server_ensure() {   # place the SERVER in a known scope, not the caller's cgroup
+  # Every session on this box is a child of ONE tmux server, and that server
+  # currently lives in whichever `claude-session@<id>.service` cgroup happened
+  # to create it — so the unit file's KillMode=process is the only thing
+  # standing between the deploy's `try-restart claude-session@*` sweep and a
+  # fleet kill (systemd's default KillMode is control-group).
+  #
+  # NO NEW UNIT FILE: nothing extra to deploy or keep in sync, and it self-heals
+  # — whenever the server is next created it lands in ccrc-tmux-server.scope.
+  # The `||` fallback keeps ccd working where systemd-run is absent, which the
+  # single-box story requires; it is the same pattern tmux already uses for its
+  # own per-pane `tmux-spawn-<uuid>.scope`.
+  #
+  # IT ONLY TAKES EFFECT WHEN THE SERVER IS NEXT CREATED, i.e. at a reboot:
+  # cgroup membership cannot be changed for a live process without a D-Bus
+  # StartTransientUnit adoption, and that is not something to attempt against a
+  # process holding 21 live sessions.
+  tmux list-sessions >/dev/null 2>&1 && return 0
+  systemd-run --user --scope --quiet --collect --unit=ccrc-tmux-server tmux start-server 2>/dev/null \
+    || tmux start-server
+}
+
+# `_spawn_start`'s ANSWER, and it is a global rather than stdout for a
+# correctness reason, not a taste one — so do not "clean this up" back into an
+# `echo` read through `fs=$(_spawn_start …)`. That is exactly what this file
+# shipped for one commit, and here is what it cost:
+#
+#   `_spawn_start` ends its validation in `die` — `echo …; exit 1`. `exit`
+#   inside a command substitution kills ONLY the subshell, so the fatal
+#   "incomplete registry for '<id>'" arrived at the caller as rc 1. And rc 1 is
+#   in NO caller's failure set: `cmd_ws_add`, `cmd_start` and `cmd_ensure` all
+#   ask `[[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 ]]` (`3 || 4` at the time
+#   this was measured; rc 1 is outside the set either way). Every one of them printed its
+#   SUCCESS line and returned 0 over a spawn that never happened — M6's silent
+#   success, one layer below where the wave had just finished closing it.
+#
+# Returning through a global makes the hazard UNREPRESENTABLE instead of merely
+# tested-for: with no `$( )` at any call site, `die` stays process-fatal by
+# construction, and the rule Tasks 7/8's new call sites have to remember shrinks
+# to `_spawn_start … || return $?` — which is the ordinary shape anyway.
+# `server/test/ccd-spawn-split.test.ts` pins both halves (status of the whole
+# shell; no `$(` before `_spawn_start` in `type _spawn`).
+#
+# Declared at file scope, and initialised, for the same reason `GC_DIRTY_STATE`
+# is: `set -u` would otherwise kill the shell outright at the first read by a
+# caller whose `_spawn_start` never ran (a test stub, an early return). 0 is the
+# safe value — full fidelity, per the failure direction below.
+SPAWN_FROMSWAP=0
+
+_spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN_FROMSWAP. NEVER WAITS ON THE TUI.
+                   # (One bounded exception, `resume` only: SPAWN_RESUME_SETTLE_S before
+                   #  the --session-id retry below. The 15-minute wait stays in _spawn_settle.)
+  # THE NON-BLOCKING HALF. Split out so that every caller can write the claim
+  # (`_reg_claim`) and, where it has one, wire the supervision BEFORE anything
+  # that can block — which is F8's whole shape: a `ws-add` killed at the
+  # agent's 300 s ceiling after the pane existed and before either write,
+  # leaving a live pane no registry row claimed and no unit was watching.
+  #
+  # Hands `$fromswap` to the caller in `SPAWN_FROMSWAP` (see the block above for
+  # why that is a global and must stay one) so `_spawn_settle` need not
+  # recompute it: the window is 300 seconds wide and recomputing it after a
+  # settle would race it. WRITES NOTHING TO `started` — that is `_reg_claim`'s
+  # single job, and the callers decide when. Writes nothing to STDOUT either:
+  # callers read the variable, and a stray line here would land in whatever
+  # `ws-add`/`start` was printing.
   local id="$1" mode="$2" wrapper workdir uuid tname sidflag
+  # Set before anything that can fail, so no path out of this function leaves a
+  # PREVIOUS spawn's answer standing. The failure direction is stated at the
+  # bottom of this function and is the same one: unknown degrades to 0.
+  SPAWN_FROMSWAP=0
   wrapper=$(_reg_get "$id" wrapper); workdir=$(_reg_get "$id" workdir); uuid=$(_reg_get "$id" uuid)
   [[ -n "$wrapper" && -n "$workdir" && -n "$uuid" ]] || die "incomplete registry for '$id'"
   tname=$(_tmux "$id")
@@ -7354,11 +7643,52 @@ _spawn() {   # id mode(new|resume) — (re)create the tmux session under the rig
   lastswap=$(_reg_get "$id" lastswap)
   [[ -n "$lastswap" && $(( $(date +%s) - lastswap )) -lt 300 ]] && fromswap=1
   if [[ "$mode" == "resume" ]]; then sidflag="--resume '$uuid'"; else sidflag="--session-id '$uuid'"; fi
+  # Ahead of the only line that can create the tmux server, and AFTER everything
+  # that can `die`: a spawn that is going to abort must not leave a scope behind.
+  _tmux_server_ensure
   # COLORTERM=truecolor so Claude Code emits 24-bit colour (it otherwise quantises
   # to 256, collapsing its palette). tmux passes it through to the terminal-drawer
   # xterm once the server has the RGB terminal-feature (see hardening/tmux.conf).
   tmux new-session -d -s "$tname" -x 220 -y 50 \
     "cd '$workdir' && exec env COLORTERM=truecolor '$WRAPPER_DIR/$wrapper' --remote-control '$id' $sidflag --dangerously-skip-permissions"
+  # THE PRICE OF A MONOTONE `started`, PAID AUTOMATICALLY INSTEAD OF BY HAND.
+  # Nothing in ccd ever clears the field: there is no registry delete/unset
+  # helper at all — `ccd-reg-claim.test.ts` greps this file for one and pins
+  # zero hits, so naming the two candidate spellings HERE would red that suite —
+  # and `_reg_purge` unlinks every field for an id, which destroys the identity
+  # rather than un-claiming it. So once a row is claimed every later
+  # revival picks mode=resume. If the session never really came up, `--resume
+  # '<uuid>'` names a uuid with no transcript behind it and the wrapper exits
+  # immediately — forever, on every retry AND every Restart=always cycle.
+  # `_spawn_settle`'s own rc 3/4 warnings name this trap from the other side
+  # ("if the session never came up, clear $REG/$id.started first"); this is that
+  # escape hatch, taken once, automatically.
+  #
+  # ONCE, never a loop, and only on `resume`: a `new` spawn has nothing to fall
+  # back to. The short settle is what makes `has-session` mean anything — the
+  # wrapper's exit is not instantaneous, and `tmux new-session -d` returns 0
+  # whether or not the command it launched survives.
+  #
+  # AND THIS IS THE ONE PLACE THIS FUNCTION WAITS. The header's "NEVER BLOCKS"
+  # is about the TUI — the gate loop, up to fifteen minutes, which is F8's whole
+  # window and stays in `_spawn_settle`. SPAWN_RESUME_SETTLE_S on the resume path
+  # widens the unclaimed window by exactly that much and buys back a row that
+  # would otherwise never start again; it cannot be moved into the settle, which
+  # knows only the tmux name and neither the mode nor the uuid.
+  #
+  # NAMED, not a literal, and it is the only timing bound in this area that was
+  # ever spelled as one — its neighbours (SPAWN_GATE_TRIES, SPAWN_SETTLE_S,
+  # SPAWN_SETTLE_SUPERVISE_S, SUPERVISED_START_WAIT, CCD_SETTLE_BOUND) are all
+  # greppable constants, and this one sits INSIDE the window Tasks 7/8 exist to
+  # shrink, so it is precisely the number a later measurement will want to find.
+  if [[ "$mode" == "resume" ]]; then
+    sleep "$SPAWN_RESUME_SETTLE_S"
+    if ! tmux has-session -t "$tname" 2>/dev/null; then
+      echo "ccd: $id: --resume '$uuid' left no session; retrying once with --session-id" >&2
+      tmux new-session -d -s "$tname" -x 220 -y 50 \
+        "cd '$workdir' && exec env COLORTERM=truecolor '$WRAPPER_DIR/$wrapper' --remote-control '$id' --session-id '$uuid' --dangerously-skip-permissions"
+    fi
+  fi
   # Make this window's terminal title = the tmux session name ("cc-<id>"), so a frontmost-window-
   # aware hotkey (ccclip) can target exactly the session you're looking at, even with many open.
   tmux set-option -t "$tname" set-titles on 2>/dev/null
@@ -7366,13 +7696,30 @@ _spawn() {   # id mode(new|resume) — (re)create the tmux session under the rig
   # Follow the most-recent client's size (defensive; with attach -d there's only ever one client,
   # so the window always fits the device you're on — no smaller-client "dotted filler" clash).
   tmux set-option -t "$tname" window-size latest 2>/dev/null
-  local prompt_rc
+  # VALIDATED TO THE TWO LEGAL WORDS, and the FAILURE DIRECTION is why the check
+  # survived the move off stdout: fromswap=1 picks the cheap auto-compact
+  # landing, fromswap=0 keeps full fidelity, so anything unrecognised must
+  # degrade to 0. It sits here, once, instead of at every call site — which is
+  # the other half of what the global buys.
+  [[ "$fromswap" == 1 ]] || fromswap=0
+  SPAWN_FROMSWAP="$fromswap"
+}
+
+_spawn_settle() {   # id fromswap — the BLOCKING half: gate loop, fact, warnings, /effort
+  # NO BOUND POSITIONAL, and none is threaded onward: the settle window is
+  # `CCD_SETTLE_BOUND`, read once by `_accept_first_run_prompts` out of the
+  # calling frame (see the block at its `bound=` line for the arbitrary-code
+  # execution an argv-threaded bound bought). One reader, one place to validate.
+  local id="$1" fromswap="$2" wrapper tname prompt_rc
+  wrapper=$(_reg_get "$id" wrapper)
+  tname=$(_tmux "$id")
   _accept_first_run_prompts "$tname" "$fromswap"; prompt_rc=$?
-  # The verdict becomes a FACT before it becomes a return code (§3.1). This costs nothing — _spawn
+  # The verdict becomes a FACT before it becomes a return code (§3.1). This costs nothing — this
   # already runs inside the supervisor — and it is the ONLY channel from a spawn that happened
-  # inside the unit to a `ccd start` running in another process, which is what Task 5's
-  # _supervised_start polls. $REG is on the fleet wire within one 2s watcher tick (M9); an exit code
-  # is on nothing's wire at all.
+  # inside the unit to a `ccd start` running in another process, which is what _supervised_start
+  # polls. KEEP THE FIELD AND ITS `<epoch-seconds> <rc>` ENCODING: the timestamp is load-bearing,
+  # because _supervised_start compares `at >= since` to tell THIS attempt's failure from the
+  # previous one's, and a bare word field would destroy that.
   _reg_set "$id" spawn "$(date +%s) $prompt_rc"
   case "$prompt_rc" in
     # A revival supersedes an earlier deliberate stop (§4.1). `rm -f` on an absent file is a no-op,
@@ -7390,6 +7737,7 @@ _spawn() {   # id mode(new|resume) — (re)create the tmux session under the rig
     # nothing else ever clears $REG/$id.started. Named here so the operator has the escape hatch.
     3) echo "ccd: $id: the tmux session vanished during startup — nothing is running. A retry will --resume this uuid; if the session never came up, clear $REG/$id.started first." >&2 ;;
     4) echo "ccd: $id: startup window expired with no live TUI marker. A retry will --resume this uuid; if the session never came up, clear $REG/$id.started first." >&2 ;;
+    5) echo "ccd: $id: hard-blocked at startup (limit/spend banner, or lost auth) on $wrapper — waiting will not fix it; swap the account or attach and run /login." >&2 ;;
   esac
   # /effort ultracode is a Claude-model effort tier; skip it on any lane that is not home-able
   # (those are the opt-in external backends — gpt/Codex today — which don't take it, so the
@@ -7404,6 +7752,23 @@ _spawn() {   # id mode(new|resume) — (re)create the tmux session under the rig
   # (rc 2 fails `== 0` too) rather than dropping it.
   _is_home_able "$wrapper" && [[ "$prompt_rc" == 0 ]] && _inject_spawn_effort "$tname"
   return "$prompt_rc"
+}
+
+_spawn() {   # id mode(new|resume) — the composition, so cmd_swap and friends are unchanged
+  # NOTE: v2.1.177 does not print the claude.ai URL to the pane or debug log, so there is no
+  # URL to capture. The session is discovered on claude.ai by its name, which == the id
+  # (we pass `--remote-control '$id'`).
+  #
+  # A CALLER THAT WANTS THE F8-SAFE ORDERING DOES NOT USE THIS: it calls the two halves and puts
+  # `_reg_claim` (and its `_ws_supervise`, where it has one) between them.
+  #
+  # THE CALL SHAPE EVERY CALL SITE MUST COPY, and there is exactly one of it:
+  # a plain call, `|| return $?`, then read `$SPAWN_FROMSWAP`. No `$( )` — see
+  # the block above `_spawn_start` for the commit where a command substitution
+  # here turned its `die` into rc 1 and every caller reported success over a
+  # spawn that never happened.
+  _spawn_start "$1" "$2" || return $?
+  _spawn_settle "$1" "$SPAWN_FROMSWAP"
 }
 
 _inject_spawn_effort() {   # tmuxname — apply SPAWN_EFFORT once the TUI is up.
@@ -7427,6 +7792,47 @@ _inject_spawn_effort() {   # tmuxname — apply SPAWN_EFFORT once the TUI is up.
 # else could.
 _have_systemctl() { command -v systemctl >/dev/null 2>&1; }
 
+_ws_unit_state() {   # id -> enabled|loaded|absent, or EMPTY where there is no systemctl OR the probe refused
+  # Three states, and the empty fourth answer is deliberately not one of them:
+  # "this box has no systemd" is not "this unit is absent", and the JSON writer
+  # renders the empty string as `null` rather than inventing a word.
+  #
+  #   enabled — a default.target.wants symlink exists: it will come back at boot.
+  #   loaded  — the manager knows the unit, but nothing promises a next boot.
+  #   absent  — list-units ANSWERED and does not name it at all.
+  #
+  # `absent` is a MEASUREMENT, not a fallthrough, and the empty answer covers a
+  # probe that refused as well as a box with no systemctl. Piping list-units
+  # straight into `grep -qF` collapsed the two: a down or unreachable `--user`
+  # manager produces no rows, grep fails, and every workspace on the box would
+  # report `absent` — "nothing is watching this session", which is the precise
+  # F8 orphan signature this field exists to make visible. So the rc is read.
+  #
+  # THE PROBE IS `list-units`, NEVER `systemctl show`: `show` on an
+  # UNINSTANTIATED TEMPLATE reports LoadState=loaded, so a naive check calls
+  # every id in the roster "loaded". Measured live — list-units returned
+  # exactly 18 rows, and the six ids absent from it had no unit loaded at all.
+  _have_systemctl || return 0
+  # THREE STATEMENTS, not one `local id=… unit="…$id…" link`: bash expands
+  # every assignment word of a `local` BEFORE it performs any of them, so the
+  # second word reads `$id` while it is still the freshly-declared, unset local
+  # — and under `set -uo pipefail` that is `id: unbound variable`, which exits
+  # the shell rather than answering. (Measured; it only LOOKED green from
+  # `cmd_ws_audit`, whose own `local id` had already dynamically scoped one.)
+  local id="$1" unit link
+  unit="claude-session@$id.service"
+  link="$HOME/.config/systemd/user/default.target.wants/$unit"
+  # -L as well as -e: a wants symlink whose target is gone is still an enable.
+  [[ -L "$link" || -e "$link" ]] && { echo enabled; return 0; }
+  local rows
+  # CAPTURED, not piped: `$(…)`'s status is systemctl's own, so a refusal
+  # degrades to the documented empty answer instead of to the FACT `absent`.
+  rows=$(systemctl --user list-units 'claude-session@*' --all --plain --no-legend 2>/dev/null) \
+    || return 0
+  grep -qF "$unit" <<<"$rows" && { echo loaded; return 0; }
+  echo absent
+}
+
 _supervised_start() {   # id — ask the UNIT to spawn, then WAIT for an observable verdict.
   # `ccd start`/`ccd ensure` outside a unit become `systemctl --user enable --now`, and the unit's
   # ExecStart (`ccd supervise %i`) does the spawning it already does. That is what makes a restarted
@@ -7440,9 +7846,16 @@ _supervised_start() {   # id — ask the UNIT to spawn, then WAIT for an observa
   since=$(date +%s)
   if ! _have_systemctl; then
     echo "ccd: warn: systemctl not found — starting $id UNSUPERVISED (no auto-swap, no uuid-sync, nothing to restart it)" >&2
+    # THE SPLIT FORM HERE TOO. A fallback that still spawns-first re-opens F8's
+    # hole on exactly the boxes least able to recover: no systemd at all, or a
+    # unit that will not enable. There is no `_ws_supervise` on this path by
+    # construction — that is what "UNSUPERVISED" in the warning above means —
+    # so the claim is the only write there is to get in front of the block.
+    # No `$( )` around `_spawn_start`: its `die` must stay process-fatal.
     local mode=new; [[ "$(_reg_get "$id" started)" == "1" ]] && mode=resume
-    _spawn "$id" "$mode"; rc=$?
-    _reg_set "$id" started 1
+    _spawn_start "$id" "$mode" || return $?
+    _reg_claim "$id"
+    _spawn_settle "$id" "$SPAWN_FROMSWAP"; rc=$?
     return "$rc"
   fi
   # §3.3 deliberately creates failed units — that is the point of the start limit — and a unit
@@ -7451,9 +7864,13 @@ _supervised_start() {   # id — ask the UNIT to spawn, then WAIT for an observa
   systemctl --user reset-failed "$unit" 2>/dev/null
   if ! systemctl --user enable --now "$unit" 2>/dev/null; then
     echo "ccd: warn: could not enable unit $unit — starting $id UNSUPERVISED (unit installed? lingering?)" >&2
+    # The same split, for the same reason as the no-systemctl fallback above:
+    # this is the OTHER box that cannot recover on its own, so leaving a live
+    # pane no row claims is worse here than anywhere else.
     local mode=new; [[ "$(_reg_get "$id" started)" == "1" ]] && mode=resume
-    _spawn "$id" "$mode"; rc=$?
-    _reg_set "$id" started 1
+    _spawn_start "$id" "$mode" || return $?
+    _reg_claim "$id"
+    _spawn_settle "$id" "$SPAWN_FROMSWAP"; rc=$?
     return "$rc"
   fi
   # `enable --now` returns when systemd has STARTED THE UNIT, not when a pane exists — but
@@ -7507,10 +7924,29 @@ _resupervise_live() {   # id -> rc 0 it adopted (or tried), rc 1 there was nothi
   # is reachable on any row, and a `systemctl --user enable --now` per click on
   # a healthy fleet is a round-trip nobody asked for. And a DEAD pane is not this
   # function's business at all: `_supervised_start` already owns that path.
+  #
+  # TWO ROW SHAPES REACH THE SAME ADOPTION, and on the `unclaimed` one the
+  # repair is a CLAIM as well as a process — see the two blocks below.
   local id="$1"
   [[ "${CCD_IN_UNIT:-}" == 1 ]] && return 1   # the supervisor is the thing being asked for
   _have_systemctl || return 1
-  [[ "$(_session_state "$id")" == unsupervised ]] || return 1
+  # TWO SHAPES, ONE ADOPTION — and `unclaimed` is why this line is not a
+  # single-word comparison any more. Wave 1 made `unclaimed` the FIRST rung
+  # inside `_session_state`'s alive branch, so F8's residue (a live pane with a
+  # fresh heartbeat and no claim) stopped answering `unsupervised` — which is
+  # the population this function was written for in the first place. Narrowing
+  # it back would silently delete PR #50's repair path for the exact rows this
+  # build exists to name.
+  local state; state=$(_session_state "$id")
+  case "$state" in unsupervised|unclaimed) : ;; *) return 1 ;; esac
+  # THE CLAIM IS HALF THE REPAIR, and only on this branch. `unclaimed`'s repair
+  # is a CLAIM (a process is running that no row claims); `orphan`'s is a
+  # PROCESS. Both `cmd_ensure` and `cmd_start` early-return on `_alive` and so
+  # never reach `_spawn_start`'s `_reg_claim` — without this write, `ccd ensure`
+  # on a live unclaimed pane would enable a unit and leave the row unclaimed for
+  # ever, and the PWA's "Restart session" would keep promising a repair it does
+  # not perform. A `running` row must NOT be claimed here: it already is.
+  [[ "$state" == unclaimed ]] && _reg_claim "$id"
   # §3.3 deliberately creates failed units and a failed one refuses to start
   # until cleared — the same reset-failed `_supervised_start` carries, for the
   # same reason, on the path that reaches systemd without going through it.
@@ -7640,24 +8076,42 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
     # this field, not `never-started`. `($mode)` now appears here too (Task 6): the id form exists
     # precisely so an operator can tell whether they resumed the row they named or minted a fresh
     # one, and the supervised path is the one a human at a keyboard actually takes.
-    _reg_set "$id" started 1
+    _reg_claim "$id"
     [[ "$rc" -eq 0 ]] || return "$rc"
     echo "started $id ($mode) — discover on claude.ai by name: $id"
     return 0
   fi
-  local rc; _spawn "$id" "$mode"; rc=$?
+  # SPLIT, so the claim precedes the blocking wait. IT MUST NOT SUPERVISE, and
+  # that must stay: `cmd_supervise` IS the unit's ExecStart and reaches this
+  # branch (and `cmd_ensure`'s) with CCD_IN_UNIT=1, so supervising here would
+  # have the unit `enable --now` itself on every restart — ccd records that as
+  # an explicit decision ("ccd ensure does NOT re-supervise … boot persistence
+  # would be silently lost") and this build does not overturn it.
+  local rc
+  _spawn_start "$id" "$mode" || return $?
   # `started` stays unconditional: it records that this row has HAD a session, which is what §4.3's
   # never-started rung reads. A spawn that failed is still a row that was started — it classifies
   # `orphan`, which is the honest answer, not `never-started`.
-  _reg_set "$id" started 1
-  if [[ "$rc" -eq 3 || "$rc" -eq 4 ]]; then
+  _reg_claim "$id"
+  _spawn_settle "$id" "$SPAWN_FROMSWAP"; rc=$?
+  if [[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 ]]; then
     echo "ccd: start failed for $id (spawn rc $rc) — see $REG/$id.spawn" >&2
     return "$rc"
   fi
   echo "started $id ($mode) — discover on claude.ai by name: $id"
 }
 
-cmd_ensure() {   # idempotent; used by systemd. arg is the id directly.
+cmd_ensure() {   # id — idempotent; used by systemd. arg is the id directly.
+  # ONE POSITIONAL, AND THAT IS A SECURITY BOUNDARY. `ccd ensure` is granted by
+  # the agent's exec whitelist (agent/src/whitelist.ts), which matches a PREFIX:
+  # "tokens after the prefix are unconstrained". A second positional here was
+  # threaded down to `(( … >= bound ))` in `_accept_first_run_prompts`, where
+  # bash evaluates a variable's CONTENTS as arithmetic and a command
+  # substitution inside an array subscript EXECUTES — i.e. any extra argv word
+  # this verb accepts is a candidate for arbitrary code as the fleet user. The
+  # settle bound travels in `CCD_SETTLE_BOUND` instead (cmd_supervise sets it as
+  # a `local`, exactly like CCD_IN_UNIT below). Do not give this verb another
+  # argument without asking what a hostile string does once it lands.
   local id="${1:?usage: ccd ensure <id>}"
   [[ -f "$REG/$id.uuid" ]] || die "no registry for '$id' (run ccd start first)"
   if _alive "$id"; then
@@ -7708,15 +8162,26 @@ cmd_ensure() {   # idempotent; used by systemd. arg is the id directly.
     local rc; _supervised_start "$id"; rc=$?
     # `started` stays unconditional (Task 4's invariant, ccd:7118) on this path too — see cmd_start's
     # matching comment for why the in-unit cmd_ensure setting it is not enough on its own.
-    _reg_set "$id" started 1
+    _reg_claim "$id"
     [[ "$rc" -eq 0 ]] || return "$rc"
     echo "ensured $id"
     return 0
   fi
+  # WRONG-MODE RESURRECTION IS FIXED BY THE MOVE, not by a new check: `ensure`
+  # picks mode=new when `started` is empty, handing `--session-id '<uuid>'` to a
+  # wrapper for a uuid whose session-env directory already exists (measured on
+  # the live orphan). With `started` written at session-creation time — which is
+  # what the split below finally makes true on every path — it picks `resume`.
   local mode=new; [[ "$(_reg_get "$id" started)" == "1" ]] && mode=resume
-  local rc; _spawn "$id" "$mode"; rc=$?
-  _reg_set "$id" started 1
-  if [[ "$rc" -eq 3 || "$rc" -eq 4 ]]; then
+  # SPLIT, and NO `_ws_supervise` on this branch: see cmd_start's matching
+  # comment. The settle takes two positionals and no more — the bound rides
+  # `CCD_SETTLE_BOUND`, because a third one here would be `cmd_ensure`'s second
+  # argv word and this verb is whitelisted by prefix.
+  local rc
+  _spawn_start "$id" "$mode" || return $?
+  _reg_claim "$id"
+  _spawn_settle "$id" "$SPAWN_FROMSWAP"; rc=$?
+  if [[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 ]]; then
     echo "ccd: ensure failed for $id (spawn rc $rc) — see $REG/$id.spawn" >&2
     return "$rc"
   fi
@@ -7750,6 +8215,22 @@ cmd_supervise() {   # systemd ExecStart: ensure then block until the session die
   # argv word, which the agent's prefix-matching exec whitelist would permit — it is not
   # addressable from the wire at all.
   local CCD_IN_UNIT=1
+  # THE NO-CEILING CALLER, and the only one that raises the settle bound: this
+  # runs as the unit's ExecStart with nothing timing it out, and a 700k-token
+  # resume legitimately takes minutes between gates. A global SPAWN_SETTLE_S
+  # here would make every systemd restart of a large session settle
+  # unconfirmed — suppressing _inject_spawn_effort and lighting a warning on a
+  # healthy row.
+  #
+  # SIGNALLED THE SAME WAY CCD_IN_UNIT IS, one line up, and for the same reason
+  # that comment gives: dynamically scoped, so `_accept_first_run_prompts` sees
+  # it several frames down without any function in between naming it; never
+  # exported and never an argv token, so — unlike an added argv word, which the
+  # agent's prefix-matching exec whitelist would permit — it is not addressable
+  # from the wire. It reached `cmd_ensure` as a POSITIONAL for one commit, and
+  # the value lands in `(( ))`, which executes a command substitution written
+  # into an array subscript. That is why this is a variable.
+  local CCD_SETTLE_BOUND=$SPAWN_SETTLE_SUPERVISE_S
   cmd_ensure "$id"
   # Re-stamped every 30s from the 5-second tick this loop already runs, so the
   # 120-second freshness window never expires under a live supervisor.

@@ -48,7 +48,7 @@ const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => ({
   limits: { five: 62, seven: 71 },
   dialogPending: false, model: null, effort: null, ultracode: false, branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, held: null, bucket: 'idle', bucketSince: null, unmeasured: [],
-  lifecycle: null, stoppedBy: null, swapBlocked: null,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, started: true, spawnState: null,
   version: null,
   ...patch,
 });
@@ -206,6 +206,124 @@ describe('NewSessionSheet', () => {
 
     expect(await screen.findByRole('button', { name: /alt·max/ })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /gpt/i })).not.toBeInTheDocument();
+  });
+});
+
+describe('NewSessionSheet — a five-minute wait says so', () => {
+  /** The sheet, open, with `api.createSession` HANGING — the state the operator is
+   *  in for up to five minutes after Task 108 raises the `start`/`enable` budgets.
+   *  The promise never settles ON PURPOSE: a resolved stub would unmount the
+   *  waiting state before the timer under test could reach it.
+   *
+   *  Everything is driven with `act(async () => {})` flushes rather than
+   *  `findBy*`: this describe runs under fake timers in one of its two tests, and
+   *  testing-library's `waitFor` polls on a timer, so a `findBy*` here would be
+   *  waiting for a clock nobody is advancing. Both stubbed fetches resolve as
+   *  microtasks, which a bare async `act` drains. */
+  const renderNewSessionSheetMidStart = (
+    createSession: () => Promise<never> = () => new Promise<never>(() => {}),
+  ): {
+    start: () => Promise<void>;
+    clickStart: () => Promise<void>;
+    rerender: (open: boolean) => void;
+  } => {
+    stubAccounts([]);                       // the 20 s /api/accounts poll, contained
+    vi.spyOn(api, 'projects').mockResolvedValue(PROJECTS);
+    vi.spyOn(api, 'createSession').mockImplementation(createSession);
+    const fleet = makeFleet();
+    const view = render(<NewSessionSheet open onClose={() => {}} fleet={fleet} />);
+    // The confirm button ONLY — the account and project are already chosen, so
+    // this is what a RETRY looks like after a failed start left the sheet open.
+    const clickStart = async () => {
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole('button', { name: 'Start OpenClawHetzner on alt·max' }),
+        );
+      });
+    };
+    return {
+      clickStart,
+      start: async () => {
+        await act(async () => {});          // the project list lands
+        fireEvent.click(screen.getByRole('button', { name: /alt·max/ }));
+        await act(async () => {});
+        fireEvent.click(screen.getByRole('button', { name: /OpenClawHetzner/ }));
+        await clickStart();
+      },
+      // `open` is the ONE prop the close-reset effect keys on
+      // (`if (open) return; … setStarting(false);`), so the helper varies exactly
+      // that and nothing else.
+      rerender: (open: boolean) =>
+        view.rerender(<NewSessionSheet open={open} onClose={() => {}} fleet={fleet} />),
+    };
+  };
+
+  it('after ~20s the button stops claiming a quick start', async () => {
+    // §1.4's budgets raise `start`/`enable` from a flat 90 s to 300 s, so this
+    // sheet can now sit for FIVE MINUTES where it used to fail at ninety seconds.
+    // `api.createSession` is awaited behind a disabled button with no progress and
+    // no cancel; the MINIMUM is that the label says what is happening.
+    vi.useFakeTimers();
+    try {
+      const { start } = renderNewSessionSheetMidStart();   // never-resolving createSession
+      await start();
+      expect(screen.getByRole('button', { name: /Starting…/ })).toBeInTheDocument();
+      await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+      expect(screen.getByRole('button', { name: /Still starting/ })).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a RETRY after a failed start opens on the quick label again, not mid-sentence', async () => {
+    // THE ONE PATH ON WHICH THE SLOW-LABEL RESET IS OBSERVABLE AT ALL, and the
+    // reason the closing test below cannot stand in for it: `Sheet` renders
+    // through vaul's `Drawer.Portal`, which UNMOUNTS its content at
+    // `open={false}` — so a query for the label after a close is null whatever
+    // `slow` holds, and deleting BOTH `setSlow(false)` calls leaves that test
+    // green (measured). A FAILED start leaves the sheet OPEN with `starting`
+    // back to false, which is the transition the clock effect's own
+    // `if (!starting) { setSlow(false); … }` arm exists for: without it the
+    // very next Start inherits the first attempt's expired clock and greets the
+    // operator with "Still starting" before the request has left the browser.
+    vi.useFakeTimers();
+    try {
+      let reject!: (e: unknown) => void;
+      const { start, clickStart } = renderNewSessionSheetMidStart(
+        () => new Promise<never>((_resolve, rej) => { reject = rej; }),
+      );
+      await start();
+      await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+      expect(screen.getByRole('button', { name: /Still starting/ })).toBeInTheDocument();
+
+      // ccd refuses; the sheet stays open, the button becomes pressable again.
+      await act(async () => {
+        reject(new ApiError(502, { ok: false, stderr: 'ccd: no such wrapper' }));
+      });
+      await clickStart();
+      expect(screen.getByRole('button', { name: /Starting…/ })).toBeInTheDocument();
+      expect(screen.queryByText(/Still starting/)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('renders nothing at all once the sheet is closed', async () => {
+    // Deliberately NOT titled as a reset test: this pins the PORTAL, not
+    // `setSlow(false)`. It is kept because "a closed sheet leaves no slow label
+    // on screen" is the property the operator actually sees, but the reset
+    // itself is pinned by the retry test above — see its comment.
+    vi.useFakeTimers();
+    try {
+      const { start, rerender } = renderNewSessionSheetMidStart();
+      await start();
+      await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+      expect(screen.getByRole('button', { name: /Still starting/ })).toBeInTheDocument();
+      act(() => { rerender(false); });
+      expect(screen.queryByText(/Still starting/)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

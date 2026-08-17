@@ -96,6 +96,12 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
     return reply.code(200).send({
       ok: true, id: r.id, sessionId: r.sessionId, resumed: r.resumed, clearedAt: r.clearedAt,
       briefQueued: r.briefQueued, ...(r.clearError !== null ? { clearError: r.clearError } : {}),
+      // §1.5. UNCONDITIONAL, not spread-when-interesting: the coordinator sees
+      // nothing but this JSON, and `adopted:false`/`spawnState:null` is itself the
+      // answer to "did that pane come up clean?". Dropping either here would be an
+      // L4 adapter narrowing a distinction it received — and
+      // `coordinator-skill/references/wave-lifecycle.md` documents both by name.
+      adopted: r.adopted, spawnState: r.spawnState,
     });
   }
   switch (r.kind) {
@@ -112,7 +118,16 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
       if (r.candidates !== undefined) extra.candidates = r.candidates;
       return reply.code(409).send({ ok: false, refused: r.code, ...extra });
     }
-    case 'registry-unmeasurable': return reply.code(502).send({ ok: false, error: 'registry-unmeasurable' });
+    // The `stderr` spread, not `stderr: r.stderr`: an L4 adapter may not narrow a
+    // distinction it received, and this member's `stderr` distinguishes by
+    // PRESENCE — "ccd also failed, and this is what it said" from "ccd is not the
+    // failing party". Naming it unconditionally would put `undefined` on the wire
+    // for the second case, which JSON drops anyway; spreading says so on purpose.
+    case 'registry-unmeasurable':
+      return reply.code(502).send({
+        ok: false, error: 'registry-unmeasurable',
+        ...(r.stderr === undefined ? {} : { stderr: r.stderr }),
+      });
     case 'unsupported': return reply.code(501).send({ ok: false, error: 'unsupported' });
     case 'fleetFailed': return reply.code(502).send({ ok: false, stderr: r.stderr });
     case 'advanceFailed': return reply.code(409).send(r.adv);
@@ -128,7 +143,7 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
  *  used to build inline, and the same totality guard (fix round 1,
  *  finding 1/3) — see that function's own docstring for the measurement. */
 function sendCloseOutcome(reply: FastifyReply, r: CloseOutcome) {
-  if (r.ok) return reply.code(200).send({ ok: true, id: r.id, state: r.state });
+  if (r.ok) return reply.code(200).send({ ok: true, id: r.id, state: r.state, released: r.released });
   switch (r.kind) {
     case 'unknown-run': return reply.code(404).send({ ok: false, error: 'unknown-run' });
     case 'bad-transition':
@@ -756,7 +771,7 @@ export function registerCoordRoutes(
     // rather than `ws-add` (deviation D-1).
     if (typeof sessionId === 'string') {
       coord.setSession(opened.id, sessionId);
-      const argv = CCD_ARGV.wsHold(sessionId, holdReason(program, wave, waveOfVal));
+      const argv = CCD_ARGV.wsHold(sessionId, holdReason(program, wave, waveOfVal, opened.id));
       if (!verbSupported(deps.fleetState, argv)) {
         return reply.code(501).send({ ok: false, error: 'unsupported' });
       }

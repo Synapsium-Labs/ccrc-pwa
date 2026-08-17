@@ -12,7 +12,7 @@ const s = (over: Partial<FleetSession> = {}): FleetSession => ({
   branch: 'ws/quiet-basin', tasks: null, pr: null, archivedAt: 1785300123,
   archivedBytes: 1_200_000_000, hookState: null, askSummary: null, subagents: null, held: null,
   bucket: 'idle', bucketSince: null, unmeasured: [],
-  lifecycle: null, stoppedBy: null, swapBlocked: null, ...over,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, started: true, spawnState: null, ...over,
 });
 
 describe('archivedSummary', () => {

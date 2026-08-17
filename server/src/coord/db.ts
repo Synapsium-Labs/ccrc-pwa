@@ -14,12 +14,15 @@ export class CoordDbUnmigratable extends Error {}
 
 /**
  * The "how much of the file changed" clause of `CoordDbUnmigratable`'s
- * message, isolated as a pure function so it is testable on its own: with
- * `MIGRATIONS.length === 1` today, `openCoordDb`'s loop can only ever fail on
- * its FIRST iteration end-to-end, so a test that only drives `openCoordDb`
- * itself can never exercise the "earlier migrations in this boot already
- * committed" branch below — and a mutant that deletes that branch, or the
- * `tx()` around each migration it describes, would pass every such test.
+ * message, isolated as a pure function so it is testable on its own. With
+ * `MIGRATIONS.length === 2` (Wave 2 added `runs_by_session`), a fresh v0 file
+ * migrating 0→2 CAN now fail on iteration 1 with iteration 0 already
+ * committed, so the "earlier migrations in this boot already committed"
+ * branch below is reachable through `openCoordDb` in principle — but pinning
+ * BOTH arms of this function directly is still the only way to kill a mutant
+ * that guts either one, or the `tx()` around each migration it describes,
+ * without depending on which migration happens to be the brittle one this
+ * build ships.
  *
  * `current` is the schema the file was at when `openCoordDb` started this
  * boot; `v` is the schema the failing migration was attempting to leave

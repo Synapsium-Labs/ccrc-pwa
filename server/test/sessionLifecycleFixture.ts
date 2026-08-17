@@ -71,6 +71,26 @@ export const LIFECYCLE_FIXTURE: readonly LifecycleFixtureRow[] = [
     alive: true, supervisedAgoSec: null, stoppedAgoSec: null, stopSurface: null,
     started: true, unmeasured: [], expect: 'unsupervised', serverOnly: null },
 
+  // §1.6, and the reason the shipped 24-combination sweep yields only SIX tokens:
+  // NO existing row combines `alive: true` with `started: false`. That omission is
+  // exactly why F8's shape — a live pane, a fresh heartbeat, no claim — classified
+  // as `running` for two days on the live fleet.
+  //
+  // SUPERVISED, deliberately. `swift-harbor` was alive AND supervised AND
+  // unclaimed, so this row is what proves `unclaimed` wins over `running`; an
+  // `unclaimed` rung checked after the supervised split could never fire on the
+  // specimen that motivated it.
+  { name: 'a live pane nobody wrote a claim for is unclaimed, even freshly supervised',
+    alive: true, supervisedAgoSec: 5, stoppedAgoSec: null, stopSurface: null,
+    started: false, unmeasured: [], expect: 'unclaimed', serverOnly: null },
+
+  // The other half of the same rung: it wins over `unsupervised` too. Without
+  // this row a mutant that puts `unclaimed` between the two halves of the
+  // supervised split still passes.
+  { name: 'a live, unsupervised pane with no claim is unclaimed, not unsupervised',
+    alive: true, supervisedAgoSec: null, stoppedAgoSec: null, stopSurface: null,
+    started: false, unmeasured: [], expect: 'unclaimed', serverOnly: null },
+
   // Fix round 1 (task-8-report.md): this row and the "dead" one below are
   // what closes the reviewer's Important finding. A NEGATIVE age is a
   // future-dated stamp — clock skew, or a hand-edited registry — and the

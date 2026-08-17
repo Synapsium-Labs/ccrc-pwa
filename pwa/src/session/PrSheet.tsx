@@ -14,23 +14,43 @@ import { Sheet } from '../components/Sheet';
 import { QuickConfirm } from '../components/QuickConfirm';
 import { toast } from '../components/Toast';
 import { api, apiErrorText } from '../lib/api';
+import { ArchiveConflictSheet, runOpenRuns, type ArchiveConflictRun } from '../fleet/ArchiveConflictSheet';
+import { isRunClosed } from '../fleet/runWords';
+import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { checkPhrase, prSentence, tooltipSentence, UNCHECKED_PR } from './PrKeycap';
 import './chat.css';
 
 export function PrSheet({
   session, open, onClose, onReap,
+  archive = api.archive,
+  fleet = useFleetStore,
 }: {
+  /** The fleet store, injectable exactly as `SessionActionsSheet` takes it —
+   *  this sheet reads ONE slice of it (the active runs), and a test that had
+   *  to mutate the app-wide singleton to set that slice would leak into every
+   *  test after it. */
+  fleet?: FleetStore;
   session: FleetSession | null;
   open: boolean;
   onClose: () => void;
   /** Cleanup is handed UP, never done here: the reap flow owns the audit, the
    *  manifest and the fingerprint, and this sheet must not be able to delete. */
   onReap: () => void;
+  /** Injectable for tests, the same default-to-`api.archive` shape
+   *  `SessionActionsSheet` and `ArchiveConflictSheet` use — three components,
+   *  one idiom. */
+  archive?: typeof api.archive;
 }): ReactNode {
   const [view, setView] = useState<PrView | null>(null);
   const [title, setTitle] = useState('');
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState<null | 'open' | 'draft'>(null);
+  /** `undefined` = no refusal to show; otherwise the runs the server named
+   *  (possibly `[]` — a run-open we could not read the runs of, which the
+   *  sheet renders WITHOUT inventing an id). Three states, because collapsing
+   *  the empty case into "no conflict" is the defect the sheet exists to
+   *  close. */
+  const [conflict, setConflict] = useState<readonly ArchiveConflictRun[] | undefined>(undefined);
 
   const id = session?.id ?? null;
   const load = (): void => {
@@ -39,7 +59,32 @@ export function PrSheet({
   };
   // One-shot on open: the cached value from the fleet sweep is on screen
   // meanwhile, so the sheet is never blank.
-  useEffect(() => { if (open) load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [open, id]);
+  //
+  // The `conflict` reset is UNCONDITIONAL, deliberately outside the `if (open)`
+  // — `SessionActionsSheet`'s own idiom for the same state. A `409 run-open` is
+  // a measurement the server made about ONE session; this component takes
+  // `session` and `open` as independent props, so `id` can change with `open`
+  // staying true, and a reset gated on open/close would never fire on that
+  // path. Session B's operator must never be shown session A's claim with an
+  // "Archive anyway" button under it.
+  useEffect(() => {
+    setConflict(undefined);
+    if (open) load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, id]);
+
+  // THE THIRD REASON a merged workspace sits unarchived, and it needs ZERO
+  // wire change: the fleet store already carries the active run list. Both
+  // reads are HOOKS, so they run above the `session === null` guard like every
+  // other hook here.
+  //
+  // Gated on `runsFrameSeen` — an empty `runs` before the first frame is not
+  // evidence of no runs, the store's own idiom — and DEGRADING to the shipped
+  // two-reason sentence rather than asserting from a list that has not
+  // arrived.
+  const runsFrameSeen = fleet((s) => s.runsFrameSeen);
+  const openRun = fleet((s) => s.runs).find((r) => r.sessionId === id && !isRunClosed(r)) ?? null;
+  const claimingRun = runsFrameSeen ? openRun : null;
 
   if (!session) return null;
   // The fresh one-shot GET wins over the cached fleet-sweep value once it
@@ -60,6 +105,22 @@ export function PrSheet({
   const facts = view?.facts ?? null;
   const draft = view?.draft ?? null;
   const archived = session.archivedAt !== null;
+
+  /** The archive door. It is NOT `act('Archiving', …)`: a `409 run-open` is not
+   *  a failure the operator can act on from a toast — the refusal names WHICH
+   *  run, and naming it is the whole information. Every other failure keeps
+   *  the toast (and the sentence) it always had. */
+  const archiveNow = async (): Promise<void> => {
+    if (busy) return;
+    setBusy(true);
+    try { await archive(session.id); load(); }
+    catch (err) {
+      const runs = runOpenRuns(err);
+      if (runs !== null) setConflict(runs);
+      else toast(`Archiving failed — ${apiErrorText(err)}`, 'error');
+    }
+    finally { setBusy(false); }
+  };
 
   const act = async (label: string, fn: () => Promise<unknown>): Promise<void> => {
     if (busy) return;
@@ -238,13 +299,19 @@ export function PrSheet({
                       `cmd_ws_archive` down past it, so the citation came to
                       point into `cmd_caps` — a line number is a fact about a
                       revision, a function name is a fact about the program. */}
+                  {/* THREE reasons now, in the order of what the operator can
+                      do about them. The hold still wins when both are present:
+                      one sentence, never two — a note that stacks its reasons
+                      is a note nobody reads. */}
                   <p className="pr-note">
                     {session.held !== null
                       ? `Not archived — held: ${session.held}. A held workspace is skipped by every sweep; release it (Release, in the session’s actions sheet) or archive it by hand below.`
-                      : 'Not archived yet (session busy)'}
+                      : claimingRun !== null
+                        ? `Not archived — run ${claimingRun.id} (${claimingRun.program} wave ${claimingRun.wave}${claimingRun.waveOf === null ? '' : `/${claimingRun.waveOf}`}) is still open on this workspace. Since Build 8 the sweep asks coord.db, not only the hold file, so releasing the hold will not archive it while that run is open. Close the run, or archive it by hand below.`
+                        : 'Not archived yet (session busy)'}
                   </p>
                   <button type="button" className="btn-ghost" disabled={busy}
-                          onClick={() => void act('Archiving', () => api.archive(session.id))}>
+                          onClick={() => void archiveNow()}>
                     Archive now
                   </button>
                 </>
@@ -286,6 +353,17 @@ export function PrSheet({
           void act('Opening the pull request', () =>
             api.prOpen(session.id, { title, body: draft?.body ?? '', draft: isDraft }));
         }}
+      />
+      {/* The refusal, as a surface the operator can answer. `sessionId` is
+          what opens it, so `undefined` (no refusal) renders nothing; an empty
+          `runs` array reaches the sheet as `null`, which is its "name no id"
+          case — the one distinction that must not collapse back into
+          "no conflict". */}
+      <ArchiveConflictSheet
+        sessionId={conflict === undefined ? null : session.id}
+        runs={conflict !== undefined && conflict.length > 0 ? conflict : null}
+        onClose={() => setConflict(undefined)}
+        onDone={() => { setConflict(undefined); load(); }}
       />
     </>
   );

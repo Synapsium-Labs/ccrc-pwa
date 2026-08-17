@@ -8,6 +8,7 @@ import { ReapSheet } from '../src/session/ReapSheet';
 const audit = (over: Partial<WsAudit> = {}): WsAudit => ({
   id: 'demo-quiet-basin', branch: 'ws/quiet-basin', base: 'origin/main', workdir: '/home/u/worktrees/custom-tools/quiet-basin',
   project: 'custom-tools', repo: 'o/r', exists: true, headMatchesRegistry: true, reaping: null,
+  alive: true, started: true, unit: 'enabled',
   dirty: [], ignored: [
     { path: 'node_modules/', bytes: 412_000_000, sensitive: false },
     { path: 'dist/', bytes: 8_000_000, sensitive: false },
@@ -29,7 +30,7 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
   branch: 'ws/quiet-basin', tasks: null, pr: null, archivedAt: 1, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, held: null,
   bucket: 'idle', bucketSince: null, unmeasured: [],
-  lifecycle: null, stoppedBy: null, swapBlocked: null, ...over,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, started: true, spawnState: null, ...over,
 });
 
 let auditBody: unknown;
