@@ -452,6 +452,24 @@ if [ "$TARGET" = "agent" ]; then
   # so the effective value is a property of each unit, not of the template; and
   # on a fresh box with no active session the loop would otherwise be empty and
   # check nothing at all, which is when a broken unit file is most likely.
+  #
+  # THE PRE-FLIGHT'S LISTING IS UNFILTERED, and that is the opposite decision
+  # from the VERIFY loop's `--state=active` two lines below — deliberately, and
+  # for the reason each loop exists. `--state=active` matches the ActiveState
+  # `active` EXACTLY: `activating` and `deactivating` are their own values and
+  # are absent from that listing. `try-restart` is not filtered that way — it
+  # acts on any unit that is not inactive/failed, a unit still starting up
+  # included. So a filtered pre-flight left a gap that neither half covered: the
+  # loop could not see a unit in that state, and the trailing template probe
+  # resolves the TEMPLATE and so cannot see a PER-INSTANCE drop-in on it. One
+  # unit in that gap is enough — the tmux server every session on this box is a
+  # child of sits in whichever claude-session@ cgroup created it.
+  # This loop is a CONFIG gate, not a liveness check, so over-listing is the
+  # cheap direction: the worst a `failed` unit (which try-restart skips) can do
+  # here is refuse a deploy on a box whose unit config is already wrong, while
+  # under-listing costs the fleet. The verify loop cannot be widened the same
+  # way — handing verify-service.sh a unit that was never restarted is exactly
+  # final review finding 6, above.
   # `claude-session@ccrc-deploy-preflight.service` is a CONFIG probe, not a
   # liveness probe — `systemctl show` reporting `LoadState=loaded` for an id
   # with no unit is exactly the trap the build4 ledger's F8 correction records,
@@ -469,7 +487,7 @@ if [ "$TARGET" = "agent" ]; then
   # single quote inside one, so either would end SWEEP_CMD early and ship the
   # remainder as shell code in the deploy script itself.
   SWEEP_CMD='export XDG_RUNTIME_DIR=/run/user/$(id -u) \
-    && for u in $(systemctl --user list-units "claude-session@*" --state=active --plain --no-legend | awk "{print \$1}") claude-session@ccrc-deploy-preflight.service; do \
+    && for u in $(systemctl --user list-units "claude-session@*" --plain --no-legend | awk "{print \$1}") claude-session@ccrc-deploy-preflight.service; do \
          km=$(systemctl --user show -p KillMode "$u" 2>/dev/null); \
          [ "$km" = "KillMode=process" ] \
            || { echo "deploy: FAILED — $u resolves to ${km:-no answer from systemd}, and the sweep needs KillMode=process. systemds default is control-group, every session on this box is a child of ONE tmux server, and that server sits in a claude-session@ cgroup — so try-restart would kill the lot. A drop-in under ~/.config/systemd/user/claude-session@.service.d/ can set this without the base unit changing a byte. REFUSING to sweep." >&2; exit 1; }; \
