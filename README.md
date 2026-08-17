@@ -262,21 +262,37 @@ reason refuses in all three layers — the composer and `ccd ws-hold` share one
 sentence (`empty reason — say which program holds this`), while the route
 answers a bare 400 `bad-request`, which is what a non-PWA client sees.
 
-A hold has exactly two consumers. `archiveMerged`'s auto-archive gate becomes
-*merged **and unheld*** — `held === null` is the new conjunct — so a workspace
-idle between two waves of the same program reads as claimed, not finished, and
-survives a sweep even after its PR merges. The hold is re-read from the
-registry at the archive decision point, not taken from the snapshot the sweep
-opened with, so a hold placed *during* a sweep still lands. And `ws-rm` /
-`ws-reap` grow one refusal rung apiece:
-destroying a workspace a program declared mid-flight takes two deliberate acts,
+A hold has more consumers than any one paragraph used to admit: **four rungs in
+ccd** — `ws-rm` and `ws-reap` refuse, `ws-release` removes, and `forget` refuses
+— plus the archive sweep, plus every place the PWA renders the reason. All four
+ccd rungs test `-e`, so an *unreadable* hold refuses too.
+
+`archiveMerged`'s auto-archive gate is *merged **and unheld*** — `held === null`
+is the conjunct — so a workspace idle between two waves of the same program
+reads as claimed, not finished, and survives a sweep even after its PR merges.
+The hold is re-read from the registry at the archive decision point, not taken
+from the snapshot the sweep opened with, so a hold placed *during* a sweep still
+lands. **Since Build 8, an absent hold is no longer sufficient**: the sweep also
+asks the server's `coord.db` whether an OPEN RUN still names the session, and
+skips if one does. That is what makes release-then-crash and the
+archive-vs-hold race stop mattering — the sweep asks the authoritative
+question, not a file that cannot answer it. The reason string is still
+display-only and parsed back nowhere; it merely gained a `run:<id>` so a human
+reading `~/.cc-sessions` can tell whose claim it is.
+
+Destroying a workspace a program declared mid-flight takes two deliberate acts,
 never one — `ws-rm` dies with `held: <reason> — release first`, `ws-reap`
 answers `{"refused":"held"}`, and the cleanup sheet renders that as "A program
 has this workspace held — it is mid-flight, so nothing was removed." Release
-first, then clean up. Unchanged: the bucket ladder, `ws-archive` itself, and
-manual archive/restore — a merged-but-held workspace can still be archived by
+first, then clean up.
+
+Unchanged: the bucket ladder and `ws-archive` itself. **Manual archive still
+works, and still means yes** — a merged-but-held workspace can be archived by
 hand from the PR sheet, which is why that sheet names the hold instead of
-promising a sweep that will never come. See
+promising a sweep that will never come. What changed is that the route now
+answers `409 run-open`, naming the runs, when a run still claims the workspace;
+the sheet renders that and offers **Archive anyway**, which sends `force`. The
+operator's own hands stay able to do it; they just have to mean it. See
 [`docs/superpowers/programs/TEMPLATE.md`](docs/superpowers/programs/TEMPLATE.md)
 for the wave-handoff ledger a program keeps beside its hold.
 
