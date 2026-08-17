@@ -206,7 +206,7 @@ describe('rosterFromJson is importable, and carries the fields the wrapper write
   it('returns execKind and secretsFile per account', async () => {
     const { rosterFromJson } = await import('../../shared/roster-json.mjs');
     const r = rosterFromJson(JSON.parse(readFileSync(MIGRATION_ROSTER, 'utf8')));
-    const byId = new Map(r.accounts.map((a: { id: string }) => [a.id, a]));
+    const byId = new Map(r.accounts.map((a) => [a.id, a]));
     expect(byId.get('claude')?.execKind).toBe('upstream');
     expect(byId.get('claude')?.secretsFile).toBeUndefined();
     expect(byId.get('claude2')?.execKind).toBe('generated');
