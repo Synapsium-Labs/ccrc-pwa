@@ -2879,10 +2879,36 @@ export interface StagedClip { path: string; name: string; bytes: number }
 export const CLIP_PATH_RE =
   /\/[^\s]*\/\.cc-clips\/[^/\s]+\/clip-[A-Za-z0-9._-]+\.(?:png|jpe?g|webp)/;
 
-/** Attachment paths first, each on its own line, then the user's text. Paths
- *  lead so the transcript reads image-above-caption. */
+/**
+ * Attachment paths first, each on its own line, then the user's text. Paths
+ * lead so the transcript reads image-above-caption.
+ *
+ * LEADING BLANK LINES ARE STRIPPED FROM `text`. This filter used to drop empty
+ * ARRAY MEMBERS only, so a prompt beginning with a newline typed an empty
+ * literal, then M-Enter, then the real text — leaving the input box's MARKER
+ * ROW blank. That is not cosmetic: `submitted()` proves a send with
+ * `!draftOf(pane).startsWith(needle)` and `needle` is the first NON-blank
+ * line, so on a blank marker row the proof is vacuous — measured, a pane
+ * byte-identical before and after Enter returns ok:true and the message is
+ * silently lost. The box cannot hold a leading blank line; typing one only
+ * breaks the proof.
+ *
+ * INTERIOR and TRAILING blank lines are untouched: only the marker row is at
+ * stake, and an interior blank line is the message.
+ *
+ * PRICE, stated rather than discovered: stripping on this side makes the
+ * `splitClipPaths` round-trip LOSSY. `splitClipPaths(composePrompt(t, a))`
+ * cannot return a `rest` that begins with the blank lines `t` began with. That
+ * is accepted — `splitClipPaths` already trims leading blank lines off its own
+ * result, so the round trip was never byte-exact at that edge anyway.
+ */
 export function composePrompt(text: string, attachments: readonly string[]): string {
-  return [...attachments, text].filter((part) => part !== '').join('\n');
+  // `[^\S\n]` (horizontal whitespace) rather than `\s`, so a run of blank-ish
+  // lines is eaten one WHOLE LINE at a time and the first content line keeps
+  // its own indentation — a `\s*` strip would reflow an opening code fence or
+  // a bullet's hanging indent.
+  const body = text.replace(/^(?:[^\S\n]*\n)+/, '');
+  return [...attachments, body].filter((part) => part !== '').join('\n');
 }
 
 /**
