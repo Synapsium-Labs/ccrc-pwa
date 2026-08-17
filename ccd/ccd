@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=e76731df78d70fe10e063b5b4b8bf8e2a136a73f61dc8f594d0d9a2601d0cd4b
+# ccrc:generated 1 sha256=7ffd0d9a992960f8ea125ea78e07b725d08b40dde0ba712f63809c317e4f7426
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
 set -uo pipefail
@@ -7471,11 +7471,54 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   [[ -n "$sua" && $(( now * 1000 - sua )) -ge $(( COMPACT_QUIET * 1000 )) ]] || return 0
   # Don't clobber a half-typed message in the input box.
   t=$(_tmux "$id")
-  cur=$(tmux capture-pane -t "$t" -p 2>/dev/null | grep -m1 "^❯ " | sed "s/^❯ //; s/[[:space:]]*$//")
+  cur=$(_pane_box_draft "$(tmux capture-pane -t "$t" -p 2>/dev/null)")
   [[ -n "$cur" ]] && return 0
   _reg_set "$id" lastcompact "$now"
   echo "$(date '+%F %T') auto-compact $id: ctx ${pct}% >= ${COMPACT_THRESHOLD}% [wrapper=$wrapper]" >> "$REG/swap.log"
   tmux send-keys -t "$t" -l "/compact"; sleep 1; tmux send-keys -t "$t" Enter
+}
+
+# The input box's own row, from a pane capture — `draftOf`'s rule
+# (server/src/inject/send.ts), in one place, so ccd's two injectors cannot
+# drift from each other or from the server's reader.
+#
+# TWO corrections to the inline first-match, plain-space-anchored grep this
+# replaces, both measured live on 2026-08-14. (The old pattern is DESCRIBED
+# and not quoted: `ccd-pane-box-draft.test.ts`'s mutation guard scans this
+# whole file for it, so a verbatim copy in a comment would keep that guard
+# red for ever and teach the next reader that the guard is noise.)
+#   • the LAST marker line, not the first. Past user turns render with the same
+#     `❯` prefix in the scrollback ABOVE the box, so `-m1` returned a stale turn
+#     (`❯ /compact`) while the real box was empty — failing shut.
+#   • either separator. A real TYPED draft's box row is `❯` + U+00A0, not a
+#     plain space (verbatim `capture-pane -e` bytes, LIVE_CU_FRAMES in
+#     server/test/send.test.ts), so the plain-space pattern matched nothing on
+#     a genuinely occupied box — failing OPEN, i.e. typing over a human draft.
+#
+# LC_ALL=C on both filters, deliberately: the marker and the separator are
+# matched as BYTES (`❯` = e2 9d af, NBSP = c2 a0). A multibyte locale makes a
+# pattern over raw bytes implementation-defined, and this guard is the only
+# thing standing between an injector and somebody's unsent message.
+#
+# The separator alternation is `\(\xc2\xa0\| \)*` and NOT a bracket expression
+# `[ \xc2\xa0]*`: a bracket expression matches those three bytes INDIVIDUALLY,
+# so a draft beginning with any Latin-1-supplement character (`£` = c2 a3,
+# `¡` = c2 a1) would have its 0xc2 LEAD BYTE eaten and the caller would be
+# handed a mojibake fragment of the operator's own text. The alternation
+# consumes the NBSP only as a whole.
+#
+# The trailing trim stays `[[:space:]]` under the same C locale — byte-for-byte
+# what the two guards did before, so a pane that behaved yesterday behaves today.
+_pane_box_draft() {   # pane-text -> the box's own row, or empty
+  printf '%s\n' "$1" \
+    | LC_ALL=C grep $'^\xe2\x9d\xaf' \
+    | tail -1 \
+    | LC_ALL=C sed $'s/^\xe2\x9d\xaf\\(\xc2\xa0\\| \\)*//; s/[[:space:]]*$//'
+  # A pane with no box at all is an EMPTY BOX, not an error: `grep` exits 1 on
+  # no match and this file runs under `set -o pipefail`, so without this the
+  # status of the pipeline would leak out as a failure the callers (which read
+  # the STDOUT, `[[ -n "$cur" ]]`) never asked about.
+  return 0
 }
 
 # Auth screens must never receive synthesized keystrokes: on a numbered login
@@ -7823,7 +7866,7 @@ _inject_spawn_effort() {   # tmuxname — apply SPAWN_EFFORT once the TUI is up.
   [[ -n "$SPAWN_EFFORT" ]] || return 0
   local t="$1" cur
   # Only type into an EMPTY input box — a restored draft would swallow the slash command.
-  cur=$(tmux capture-pane -t "$t" -p 2>/dev/null | grep -m1 "^❯ " | sed "s/^❯ //; s/[[:space:]]*$//")
+  cur=$(_pane_box_draft "$(tmux capture-pane -t "$t" -p 2>/dev/null)")
   if [[ -n "$cur" ]]; then echo "ccd: input box not empty, skipped /effort $SPAWN_EFFORT" >&2; return 0; fi
   sleep 1
   tmux send-keys -t "$t" -l "/effort $SPAWN_EFFORT"; sleep 1; tmux send-keys -t "$t" Enter
