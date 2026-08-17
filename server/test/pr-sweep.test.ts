@@ -11,6 +11,8 @@ import { mkTmp } from './tmpHelpers.js';
 import type { PrState } from '../../shared/api.js';
 import type { PushPayload } from '../src/push.js';
 import { localIO, type FleetIO } from '../src/io.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { CoordStore } from '../src/coord/store.js';
 
 function seed(ids: string[]): string {
   const home = mkTmp('ccrc-');
@@ -184,6 +186,33 @@ describe('level-triggered archiving', () => {
     const w = new FleetWatcher(testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), new Bus(), 10_000);
     await w.tick();
     await vi.waitFor(() => expect(calls).toContainEqual(['ws-archive', '--session', 'demo-quiet-basin']));
+    w.stop();
+  });
+
+  it('does not archive a merged workspace an OPEN RUN names, even with no hold at all', async () => {
+    // THE WHOLE POINT OF THE RUNG, and the reason an absent hold stopped being
+    // sufficient: release-then-crash and the archive-vs-hold race both leave a
+    // live wave's workspace unheld for a window, and this sweep is destructive.
+    // Asserted from THIS harness as well as `hold-gate.test.ts`'s because this
+    // is the file whose archive path the rung actually changes in production.
+    const home = seed(['demo-quiet-basin']);
+    liveIdle(home);
+    // NO hold is planted, deliberately.
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const opened = coord.openRun({ program: 'build4', title: 't', project: 'demo',
+      wave: 2, waveOf: 3, claimedBy: 'ccrc-pwa-coordinator' });
+    if (!('id' in opened)) throw new Error('fixture openRun refused');
+    coord.setSession(opened.id, 'demo-quiet-basin');
+
+    const calls: string[][] = [];
+    const w = new FleetWatcher(
+      { ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), coord },
+      new Bus(), 10_000);
+    await w.tick();
+    // `prSweepStartedAt` returns to 0 in `sweepPr`'s own `finally` — the one
+    // signal a whole sweep (archiveMerged included) has actually finished.
+    await vi.waitFor(() => expect((w as unknown as { prSweepStartedAt: number }).prSweepStartedAt).toBe(0));
+    expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
     w.stop();
   });
 
