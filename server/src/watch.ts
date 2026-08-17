@@ -1428,11 +1428,30 @@ export class FleetWatcher {
     const worktrees: DivergenceInput['worktrees'][number][] = [];
     const headBranch = new Map<string, string | null>();
     for (const project of projects) {
-      const found = await readWorktreeRecords(this.deps.io, this.deps.cfg.projectsRoot, project);
-      // `null` contributes nothing for this project — it can only suppress a
-      // finding, never manufacture one.
-      if (found === null) continue;
-      for (const w of found) {
+      const read = await readWorktreeRecords(this.deps.io, this.deps.cfg.projectsRoot, project);
+      // §1.7. Both refusals contribute nothing for this project — a census can
+      // only ever suppress a finding here, never manufacture one — but they are
+      // NAMED separately rather than collapsed, because they are different facts
+      // and only one of them is transient. `refused-project` is STANDING: the
+      // registry keeps naming a project whose census this server will never read,
+      // every sweep, forever, and silence is how that stays invisible. It gets one
+      // line per sweep interval (60 s), which is the same cadence the `runs()`
+      // guard just below already logs at. `unlistable` is a read that failed and
+      // may succeed next minute — no log, or a broken permission would print
+      // hourly for as long as it lasts.
+      //
+      // `ok: true` with an EMPTY array is the third case and is NOT a refusal:
+      // git creates `.git/worktrees` with the first linked worktree, so its
+      // absence is a measured zero. It falls through the loop below contributing
+      // nothing, which is the correct handling of a real answer that happens to
+      // be empty — not the same code path as not knowing.
+      if (!read.ok) {
+        if (read.reason === 'refused-project') {
+          console.warn(`ccrc-server: sweepDivergences cannot census project ${JSON.stringify(project)} — the name is refused by the path guard, so this project is permanently absent from the census`);
+        }
+        continue;
+      }
+      for (const w of read.records) {
         worktrees.push({ project, name: w.name, path: w.path });
         headBranch.set(`${project}/${w.name}`, w.headBranch);
       }

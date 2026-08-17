@@ -3,7 +3,7 @@
 // what is only provable here is that the watcher gathers the right evidence, from
 // paths the agent will actually serve, and DECIDES nothing with it.
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { chmodSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
@@ -197,9 +197,12 @@ describe('readWorktreeRecords', () => {
     mkdirSync(admin, { recursive: true });
     writeFileSync(path.join(admin, 'gitdir'), '/data/worktrees/demo/quiet-basin/.git\n');
     writeFileSync(path.join(admin, 'HEAD'), 'ref: refs/heads/ws/quiet-basin\n');
-    expect(await readWorktreeRecords(localIO, root, 'demo')).toEqual([
-      { name: 'quiet-basin', path: '/data/worktrees/demo/quiet-basin', headBranch: 'ws/quiet-basin' },
-    ]);
+    expect(await readWorktreeRecords(localIO, root, 'demo')).toEqual({
+      ok: true,
+      records: [
+        { name: 'quiet-basin', path: '/data/worktrees/demo/quiet-basin', headBranch: 'ws/quiet-basin' },
+      ],
+    });
   });
 
   it('a DETACHED HEAD is a null branch, never a fabricated one', async () => {
@@ -208,13 +211,41 @@ describe('readWorktreeRecords', () => {
     mkdirSync(admin, { recursive: true });
     writeFileSync(path.join(admin, 'gitdir'), '/data/worktrees/demo/quiet-basin/.git\n');
     writeFileSync(path.join(admin, 'HEAD'), `${'a'.repeat(40)}\n`);
-    expect((await readWorktreeRecords(localIO, root, 'demo'))?.[0]?.headBranch).toBeNull();
+    const r = await readWorktreeRecords(localIO, root, 'demo');
+    expect(r.ok && r.records[0]?.headBranch).toBeNull();
   });
 
-  it('answers null for a project with no linked worktrees or an unlistable admin dir', async () => {
+  // §1.7. The three facts the old `null` carried at once, now told apart. Two of
+  // them are opposites — "this server will never read a census for that project"
+  // and "the answer is zero" — and the consumer suppressing all three is a
+  // property of TODAY'S consumer, not a licence to throw the answer away before
+  // it reaches tomorrow's.
+  it('NO LINKED WORKTREES is a measured zero, not a failure — git creates the dir with the first one', async () => {
     const root = mkTmp('ccrc-gitref-');
     mkdirSync(path.join(root, 'demo'), { recursive: true });
-    expect(await readWorktreeRecords(localIO, root, 'demo')).toBeNull();
+    expect(await readWorktreeRecords(localIO, root, 'demo')).toEqual({ ok: true, records: [] });
+  });
+
+  it('an EXISTING admin dir that will not list is unlistable — the opposite fact, and it says so', async () => {
+    // `stat` is what separates the two: it needs only search permission on the
+    // parent chain, so a directory whose own listing is refused is still proved
+    // PRESENT. Same technique `readBranchTip` uses on a loose ref.
+    const root = mkTmp('ccrc-gitref-');
+    const admin = path.join(root, 'demo', '.git', 'worktrees');
+    mkdirSync(admin, { recursive: true });
+    chmodSync(admin, 0o000);
+    try {
+      expect(await readWorktreeRecords(localIO, root, 'demo'))
+        .toEqual({ ok: false, reason: 'unlistable' });
+    } finally {
+      chmodSync(admin, 0o755);   // or the tmp cleanup cannot remove it
+    }
+  });
+
+  it('an EMPTY admin dir is also a measured zero — listable, and it lists nothing', async () => {
+    const root = mkTmp('ccrc-gitref-');
+    mkdirSync(path.join(root, 'demo', '.git', 'worktrees'), { recursive: true });
+    expect(await readWorktreeRecords(localIO, root, 'demo')).toEqual({ ok: true, records: [] });
   });
 
   // THE ESCAPE TARGETS ARE PLANTED AND LISTABLE, and that is the whole test.
@@ -237,9 +268,15 @@ describe('readWorktreeRecords', () => {
       writeFileSync(path.join(admin, 'gitdir'), '/data/worktrees/escaped/.git\n');
       writeFileSync(path.join(admin, 'HEAD'), 'ref: refs/heads/ws/escaped\n');
     };
-    const escapedRecord = [
-      { name: 'escaped', path: '/data/worktrees/escaped', headBranch: 'ws/escaped' },
-    ];
+    const escapedRecord = {
+      ok: true,
+      records: [{ name: 'escaped', path: '/data/worktrees/escaped', headBranch: 'ws/escaped' }],
+    };
+    // §1.7: a refused NAME is its own answer now, and — the point of the change —
+    // it is no longer the same value as "this project has no linked worktrees".
+    // These assertions would pass against a measured-zero too if both still read
+    // `null`, which is exactly the collapse being undone.
+    const REFUSED = { ok: false, reason: 'refused-project' };
     /** `<tmp>/<base>/projects` is the projects root, so `..` and `../<name>`
      *  both have somewhere real to land, one level above it. */
     const fixture = () => {
@@ -257,19 +294,19 @@ describe('readWorktreeRecords', () => {
       // POSITIVE CONTROL: the same directory, through a legitimate name.
       expect(await readWorktreeRecords(localIO, path.dirname(base), path.basename(base)))
         .toEqual(escapedRecord);
-      expect(await readWorktreeRecords(localIO, root, '..')).toBeNull();
+      expect(await readWorktreeRecords(localIO, root, '..')).toEqual(REFUSED);
     });
 
     it('`../outside` — a sibling of the projects root, whose admin dir IS readable', async () => {
       const { base, root } = fixture();
       expect(await readWorktreeRecords(localIO, base, 'outside')).toEqual(escapedRecord);
-      expect(await readWorktreeRecords(localIO, root, '../outside')).toBeNull();
+      expect(await readWorktreeRecords(localIO, root, '../outside')).toEqual(REFUSED);
     });
 
     it('`.` — the projects root ITSELF, whose admin dir IS readable', async () => {
       const { base, root } = fixture();
       expect(await readWorktreeRecords(localIO, base, 'projects')).toEqual(escapedRecord);
-      expect(await readWorktreeRecords(localIO, root, '.')).toBeNull();
+      expect(await readWorktreeRecords(localIO, root, '.')).toEqual(REFUSED);
     });
 
     it('the shapes that are not escapes here but are refused anyway, and why', async () => {
@@ -286,11 +323,16 @@ describe('readWorktreeRecords', () => {
       // three escapes above impossible to spell in the first place. Pinned so a
       // future "the regex is stricter than it needs to be" edit has to argue
       // with a test.
-      expect(await readWorktreeRecords(localIO, root, '/etc')).toBeNull();
-      expect(await readWorktreeRecords(localIO, root, 'x/../y')).toBeNull();
+      expect(await readWorktreeRecords(localIO, root, '/etc')).toEqual(REFUSED);
+      expect(await readWorktreeRecords(localIO, root, 'x/../y')).toEqual(REFUSED);
       // `a..b` is a legal directory name, refused by the belt-and-braces
       // `includes('..')` clause. Recorded as deliberate over-refusal, not a bug.
-      expect(await readWorktreeRecords(localIO, root, 'a..b')).toBeNull();
+      expect(await readWorktreeRecords(localIO, root, 'a..b')).toEqual(REFUSED);
+      // POSITIVE CONTROL for the pair above: `y` is planted and LISTABLE and its
+      // name passes the guard, so it answers a measured record. Under the old
+      // `null` these three assertions were indistinguishable from each other —
+      // guard, empty, and unreadable all read the same. They no longer are.
+      expect(await readWorktreeRecords(localIO, root, 'y')).toEqual(escapedRecord);
     });
   });
 });

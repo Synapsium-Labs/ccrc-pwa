@@ -107,6 +107,39 @@ export interface WorktreeRecord {
 }
 
 /**
+ * What `readWorktreeRecords` answers, and the reason it is a union rather than
+ * `WorktreeRecord[] | null` (§1.7).
+ *
+ * The old `null` carried THREE facts at once, and two of them are opposites:
+ * the project name was REFUSED by the path guard (this server will never read a
+ * census for that project — a standing condition, not a transient one), the
+ * admin directory could not be listed (a read that failed; try again next
+ * sweep), and the project simply has NO LINKED WORKTREES (a complete, correct
+ * measurement — the answer is zero). "Refused" and "none exist" are not
+ * degrees of the same thing.
+ *
+ * Today's ONE consumer (`watch.ts`'s census) contributes nothing for all three,
+ * so the union changes no behaviour on its own. That is exactly why the
+ * distinction has to live in the TYPE rather than in a comment saying the
+ * consumer does not need it: the next consumer is the one that does, and it
+ * must not inherit a value that has already thrown the answer away. `ok: true`
+ * with an EMPTY array is now a measurement a caller may act on — the previous
+ * shape could not spell it, because `[]` and "we could not look" were the same
+ * `null`.
+ */
+export type WorktreeRead =
+  | { ok: true; records: WorktreeRecord[] }
+  /** The project name never named a path this server would read: the
+   *  single-segment guard rejected it. STANDING, not transient — retrying is
+   *  pointless, and a registry that keeps naming this project keeps being
+   *  uncensusable. */
+  | { ok: false; reason: 'refused-project' }
+  /** The admin directory EXISTS (proved by `stat`, which needs only search
+   *  permission on the parent chain) and could not be listed. Unmeasured; the
+   *  next sweep may do better. */
+  | { ok: false; reason: 'unlistable' };
+
+/**
  * Every linked worktree of `<projectsRoot>/<project>`, read out of git's own
  * admin directory `<project>/.git/worktrees/<name>/` — `gitdir` names the
  * worktree's path, `HEAD` names its branch.
@@ -122,22 +155,39 @@ export interface WorktreeRecord {
  * answers null unconditionally in remote mode — so absolute-path comparison
  * would report the whole fleet as unregistered).
  *
- * `null` = there is no readable admin directory here: no linked worktrees, or a
- * listing that failed. It has exactly ONE consumer behaviour — contribute no
- * worktrees for this project — so it can only ever suppress a finding, never
- * manufacture one, which is why it is not an overloaded null at a decision seam.
+ * THE ANSWER IS A `WorktreeRead`, NOT `WorktreeRecord[] | null` (§1.7) — see that
+ * type's own docstring for the three facts the old `null` was carrying at once.
+ * The absent admin directory is a MEASUREMENT here, not a failure: git creates
+ * `.git/worktrees` when it creates the first linked worktree and not before, so
+ * "not there" is git's own way of saying zero, and it answers `ok: true` with an
+ * empty array. `stat` is what separates that from a directory that IS there and
+ * would not list — the identical technique, for the identical reason, that
+ * `readBranchTip` above uses on a loose ref: `stat` needs only search permission
+ * on the parent chain, so it still proves presence when the listing itself is
+ * refused. The one case it cannot see through is a chain this process cannot
+ * TRAVERSE at all (EACCES on `<project>/.git`), which reads as the absent case —
+ * the same fail-direction `readBranchTip` names and accepts, and the suppressing
+ * one.
  *
  * A DETACHED HEAD gives `headBranch: null`, never a fabricated name.
  */
 export async function readWorktreeRecords(
   io: FleetIO, projectsRoot: string, project: string,
-): Promise<WorktreeRecord[] | null> {
+): Promise<WorktreeRead> {
   // Same single-segment guard `readBranchTip` applies to `project`: the only two
   // values that mean anything but a literal directory name are `.` and `..`.
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(project) || project.includes('..')) return null;
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(project) || project.includes('..')) {
+    return { ok: false, reason: 'refused-project' };
+  }
   const adminRoot = path.join(projectsRoot, project, '.git', 'worktrees');
   const names = await io.readdir(adminRoot);
-  if (names === null) return null;
+  if (names === null) {
+    // Present-but-unlistable, or genuinely absent? `readdir` collapses both to
+    // `null` (`io.ts`), so ask the question `readdir` cannot answer.
+    return (await io.stat(adminRoot)) !== null
+      ? { ok: false, reason: 'unlistable' }
+      : { ok: true, records: [] };
+  }
   const out: WorktreeRecord[] = [];
   for (const name of names) {
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) continue;
@@ -151,5 +201,5 @@ export async function readWorktreeRecords(
     const branch = m?.[1] ?? null;
     out.push({ name, path: wt, headBranch: branch !== null && BRANCH_OK.test(branch) ? branch : null });
   }
-  return out;
+  return { ok: true, records: out };
 }
