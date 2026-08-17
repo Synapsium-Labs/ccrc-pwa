@@ -78,10 +78,18 @@ export interface FleetSession {
    *  a hookless session, a stale file the freshness gate rejected, or a
    *  restarted session whose uuid moved on — never a fourth state. */
   hookState: 'working' | 'waiting' | 'done' | null;
-  /** One line for the fleet card, derived from a `waiting` hook state's `ask`
-   *  envelope (`fleet.ts`'s `hookAskSummary`). Null unless `hookState` is
-   *  `'waiting'` AND an ask envelope actually landed — a hook can report
-   *  waiting before the ask write completes. */
+  /** One line for the fleet card explaining what this session is blocked on
+   *  (`fleet.ts`'s `hookAskSummary`). TWO sources, in order: a `waiting` hook
+   *  state's `ask` envelope, and — when that produced nothing — Claude Code's
+   *  own `waitingFor` reason off the live status file (D-76).
+   *
+   *  So this is NOT gated on `hookState === 'waiting'`: three of the four
+   *  things Claude Code reports `waiting` for fire no hook event at all, and
+   *  those rows carry a summary with `hookState` null. Still null whenever
+   *  neither source said anything — a hook can report waiting before its ask
+   *  write completes, and a `waiting` live file need not carry a reason —
+   *  and never `''`, since this line renders unconditionally on a waiting
+   *  card. */
   askSummary: string | null;
   /** Subagents the hook last reported running. Null mirrors `hookState`: no
    *  fresh hook data at all. `[]` is a MEASUREMENT — fresh hook data, zero
@@ -761,6 +769,30 @@ export type BucketInput = Pick<
  * stops the session: every cleanup candidate is ALSO `status: 'dead'`, so a
  * dead-first ladder would leave the cleanup bucket permanently empty.
  *
+ * …and that sentence is also the archived rungs' PRECONDITION, not merely
+ * their justification (D-74). They are entered on `archivedAt !== null` AND
+ * `status === 'dead'`, because a live pane is proof the marker has outlived
+ * what it describes: `cmd_ws_archive` kills the session before it stamps
+ * (`ccd:2178-2185`), but `ccd start`/`ccd ensure` clear `.stopped` and
+ * `.swapblocked` on a deliberate revival and leave `$REG/<id>.archived`
+ * standing — only `ws-restore` removes it (`ccd:2513`). So a workspace
+ * archived on merge and later revived for more work carried a marker that
+ * outranked every live rung below, for ever. MEASURED on the live fleet
+ * 2026-08-17: 5 of the 7 archive markers on the box sat on sessions with a
+ * live tmux pane, 4 of them mid-turn — a quarter of the fleet reading
+ * `merged` while working, ranked below idle and counted out of its project's
+ * busy total, and a revived workspace's QUESTION unreachable through the
+ * attention section it belongs in.
+ *
+ * The conjunct costs the cleanup bucket nothing: an ordinary archive is dead,
+ * which is what every archived case in `bucket.test.ts` already fixtures. And
+ * it hides nothing on the disk side — `archivedAt` is untouched on the wire,
+ * so the fleet footer's `/archive` route (which reads that field, not this
+ * bucket), `ws-attic` and the reap flow all still find the workspace. The
+ * bucket answers "what is this session doing"; `archivedAt` answers "what is
+ * staged on disk". A revived workspace is honestly both, and only the second
+ * question has an archive in its answer.
+ *
  * `hookUpdatedAt` is read ONLY by `bucketSince`; no branch's BUCKET depends on
  * it. That is what lets `reviveFleetSession` call this with `null` and keep the
  * bucket while discarding the timestamp.
@@ -794,7 +826,13 @@ export function sessionBucket(
 ): { bucket: SessionBucket; bucketSince: number | null } {
   // `archivedAt` is epoch SECONDS (ccd writes `$REG/<id>.archived` as an epoch);
   // every other timestamp on this record is epoch ms.
-  if (s.archivedAt !== null) {
+  //
+  // `&& s.status === 'dead'` is D-74's conjunct — see this function's own
+  // docstring for the measurement. `status === 'dead'` IS "no tmux pane" as
+  // this ladder's callers compute it (`fleet.ts`'s `assembleFleet` starts every
+  // row at `'dead'` and only leaves it when `tmux.hasSession` says otherwise),
+  // so no new field, no wire change and no second liveness derivation.
+  if (s.archivedAt !== null && s.status === 'dead') {
     const archivedMs = s.archivedAt * 1000;
     if (s.pr?.phase === 'merged') {
       // `cleanup` needs BOTH conjuncts, so it is entered at the LATER of the
@@ -822,10 +860,42 @@ export function sessionBucket(
     const since = s.hookState === 'waiting' ? hookUpdatedAt ?? s.statusUpdatedAt : s.statusUpdatedAt;
     return { bucket: 'attention', bucketSince: since };
   }
+  // D-75. "Is a turn in flight" has TWO independent observers — Claude Code's
+  // own `sessions/<pid>.json` (which becomes `status`) and `session-hook.sh`
+  // (which becomes `hookState`) — and until now only the first could reach
+  // this rung. Both of them fail, in opposite directions, and neither failure
+  // is rare (see the D-75 block in `bucket.test.ts` for the measurements).
+  // So: whichever observation carries the LATER timestamp is the one this
+  // ladder believes. One comparison, computed once, read by both rungs below.
+  //
+  // A null `hookUpdatedAt` means there is no rival observation to compare
+  // against — `reviveFleetSession` passes null for every cached snapshot —
+  // and it reads as "the hook is not newer", which leaves that whole path on
+  // exactly the pre-D-75 answers. A null `statusUpdatedAt` is the opposite:
+  // the live file is absent or unreadable, so a hook write of ANY age is the
+  // only observation there is, and it wins outright rather than losing to a
+  // `status` that was never measured (`fleet.ts` leaves it at the `'idle'`
+  // fallback).
+  const hookNewer = hookUpdatedAt !== null &&
+    (s.statusUpdatedAt === null || hookUpdatedAt > s.statusUpdatedAt);
+  // `SessionStart` is excluded for the same reason the `done` rung below
+  // excludes it: F1's synthetic write proves "never started", not "just
+  // finished", so it is not evidence that a turn ENDED and must not unseat a
+  // live `busy` — a resuming session is legitimately working while that write
+  // is the newest hook fact on disk.
+  const finishedAfterStatus =
+    hookNewer && s.hookState === 'done' && hookEvent !== 'SessionStart';
   // NOT the hook's timestamp: the hook rewrites `updatedAt` on every
   // PostToolUse, so a busy session would report a continuously-refreshed
-  // "since" — permanently new, and permanently badged.
-  if (s.status === 'busy') return { bucket: 'working', bucketSince: s.statusUpdatedAt };
+  // "since" — permanently new, and permanently badged. That holds for the
+  // hook-raised arm too: `statusUpdatedAt` is the only stamp here that means
+  // "when this episode began" rather than "when we last heard anything".
+  if (s.status === 'busy' && !finishedAfterStatus) {
+    return { bucket: 'working', bucketSince: s.statusUpdatedAt };
+  }
+  if (s.hookState === 'working' && hookNewer) {
+    return { bucket: 'working', bucketSince: s.statusUpdatedAt };
+  }
   // `done` requires hook EVIDENCE: a hookless busy→idle transition never proves
   // a turn finished rather than never starting. It also decays for free —
   // hookstate.ts's 30-minute freshness gate nulls `hookState`, so an
