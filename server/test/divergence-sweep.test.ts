@@ -325,9 +325,17 @@ describe('sweepDivergences', () => {
     expect(h.ccdCalls()).toEqual([]);
   });
 
-  it('the frame reaches /ws/fleet, and an older PWA drops it silently', async () => {
-    // Additive on the shipped `runs`/`coord` terms — NO FLEET_PROTO bump. Pinned
-    // as the wire order this socket already guarantees: hello, fleet, runs, coord.
+  it('/ws/fleet SUBSCRIBES to the census and unsubscribes on close — the listener, not the frame', async () => {
+    // NAMED FOR WHAT IT MEASURES. This used to be called "the frame reaches
+    // /ws/fleet", which is a wire fact, and it is a source-text grep: it proves
+    // a listener is registered and symmetrically removed, and could not have
+    // told you whether a single byte ever left the socket. The frame ARRIVING
+    // is now pinned where a socket actually exists — `fleetws.test.ts`, "the
+    // `divergence` frame" — and this keeps the half that is genuinely a
+    // source property: `off` matching `on`, so a closed socket does not leak a
+    // listener onto the bus for the life of the process.
+    //
+    // Additive on the shipped `runs`/`coord` terms — NO FLEET_PROTO bump.
     const src = readFileSync(path.join(ccrcRoot, 'server/src/server.ts'), 'utf8');
     expect(src).toContain("bus.on('divergence', onDivergence);");
     expect(src).toContain("bus.off('divergence', onDivergence);");
