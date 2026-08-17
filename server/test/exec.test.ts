@@ -31,24 +31,41 @@ describe('Tmux', () => {
   });
 });
 
-describe('§1.4 — ExecResult.killed is OPTIONAL, and structurally false in local mode', () => {
+describe('§1.4/§1.7 — ExecResult.killed is OPTIONAL, and realRunner MEASURES both halves', () => {
   const here = path.dirname(fileURLToPath(import.meta.url));
   const ccrcRoot = path.resolve(here, '..', '..');
 
   it('accepts a bare {code,stdout,stderr} literal — 249 of them exist across 32 files', () => {
     const r: ExecResult = { code: 0, stdout: '', stderr: '' };
     expect(r.killed).toBeUndefined();
+    expect(r.signal).toBeUndefined();
   });
 
-  it('realRunner can never report a kill — it passes NO timeout', async () => {
-    // Which is why every §1.5 test MUST inject a runner: the adoption path is
-    // structurally unreachable in `local` mode, and a test that exercised it
-    // through `realRunner` would be asserting nothing.
+  it('realRunner passes NO deadline, so `killed` is a measured, permanently-false fact', async () => {
+    // The source assertion is the load-bearing half: `killed: false` below is only
+    // an invariant for as long as nothing hands `execFile` a deadline of its own.
+    // (`localcaps.ts` wraps its own ceiling at ITS call site, never on `realRunner`.)
     const src = readFileSync(path.join(ccrcRoot, 'server/src/exec.ts'), 'utf8');
     const real = /export const realRunner[\s\S]*?\n  \}\);/.exec(src)?.[0] ?? '';
     expect(real).not.toContain('timeout');
     const r = await realRunner('/bin/sh', ['-c', 'exit 3']);
     expect(r.code).toBe(3);
-    expect(r.killed).toBeUndefined();
+    // MEASURED false, not absent (§1.7). It used to be absent, which told
+    // `cutShort` "nobody looked" — about the one function holding the error
+    // object that knows.
+    expect(r.killed).toBe(false);
+    expect(r.signal).toBeNull();
+  });
+
+  it('realRunner reports the SIGNAL of an externally-killed child — killed stays false', async () => {
+    // §1.7's whole point, and the case a `local`-mode fleet can genuinely hit: an
+    // operator `kill`, an OOM reaper, or systemd stopping the unit mid-`ws-add`.
+    // node sets `killed` only for a kill IT issued, so `signal` is the ONLY
+    // evidence this child was cut short rather than refusing cleanly. Killing the
+    // shell from inside itself is the same fact as an outside killer, and needs no
+    // second process to race.
+    const r = await realRunner('/bin/sh', ['-c', 'kill -TERM $$; sleep 5']);
+    expect(r.signal).toBe('SIGTERM');
+    expect(r.killed).toBe(false);
   });
 });

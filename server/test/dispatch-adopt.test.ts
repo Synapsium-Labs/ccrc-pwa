@@ -6,14 +6,19 @@
 //
 // EVERY ARM OF THE GATE IS PINNED HERE OR THE GATE IS NOT PINNED. Adoption
 // requires POSITIVE EVIDENCE that the candidate is the one THIS call created, and
-// the two gates are what supply it: `killed` separates "we SIGTERM'd a spawn in
-// flight" from "ccd refused" (a `die` is exit 1, byte-identical without it), and
-// `held` is fail-shut by construction (`registry.ts`: a listed-but-unreadable
-// `.hold` reads as HELD) — a workspace a killed `ws-add` just created never
-// carries one, while a live coordinated worker always does.
+// the two gates are what supply it: `cutShort` separates "this call's child was
+// cut short in flight" from "ccd refused" (a `die` is exit 1, byte-identical
+// without it), and `held` is fail-shut by construction (`registry.ts`: a
+// listed-but-unreadable `.hold` reads as HELD) — a workspace a cut-short `ws-add`
+// just created never carries one, while a live coordinated worker always does.
 //
-// THE RUNNER MUST BE INJECTED. `realRunner` passes no `timeout`, so `killed` is
-// structurally false in `local` mode and this whole path is unreachable there.
+// §1.7 SPLIT THE FIRST GATE INTO THE TWO HALVES IT ALWAYS WAS. node sets `killed`
+// only for a kill IT issued, so an EXTERNAL kill (operator, OOM reaper, systemd
+// stopping the unit mid-`ws-add`) arrives `killed:false` with a `signal` — the
+// same orphan, previously read as a clean refusal. And "the peer measured
+// neither" (an older agent, the transport catch path) became `UNMEASURED` rather
+// than collapsing into `false`: three answers, one of which — and only one —
+// adopts. Every one of the three is pinned below.
 import { describe, it, expect } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
@@ -21,6 +26,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { dispatchRun, type DispatchRunDeps } from '../src/coord/dispatch.js';
 import type { CcdResult } from '../src/lifecycle.js';
+import { UNMEASURED } from '../src/exec.js';
 import type { CcdArgv } from '../src/ccdargv.js';
 import type { CcrcConfig } from '../src/config.js';
 import { readRegistry } from '../src/registry.js';
@@ -51,10 +57,13 @@ const seedRow = (
 };
 
 interface HarnessCfg {
-  /** What the `ws-add` call answers. `killed` is the WHOLE POINT — `realRunner`
-   *  passes no `timeout`, so it is structurally false in `local` mode and this
-   *  path is unreachable without an injected runner. */
-  ccd: Pick<CcdResult, 'ok' | 'stderr'> & { killed: boolean };
+  /** What the `ws-add` call answers. The cut-short measurement is the WHOLE
+   *  POINT, and §1.7 made it TWO fields with THREE values each: `killed`
+   *  `true`/`false`/`UNMEASURED`, `signal` a name/`null`/`UNMEASURED`. `signal`
+   *  defaults to `UNMEASURED` so the pre-§1.7 cases in this file keep meaning
+   *  exactly what they meant — "the peer told us about `killed` and nothing
+   *  else". */
+  ccd: Pick<CcdResult, 'ok' | 'stderr'> & Partial<Pick<CcdResult, 'killed' | 'signal'>>;
   /** Rows that appear in the registry AFTER the `ws-add` call — i.e. what the
    *  killed spawn left behind. Seeded lazily by the `runCcd` double, so the
    *  BEFORE read genuinely does not see them. */
@@ -91,9 +100,13 @@ const harness = async (cfg: HarnessCfg) => {
       for (const r of cfg.after ?? []) {
         seedRow(home, r.id, { held: r.held ?? null, spawnRc: r.spawnRc ?? null });
       }
-      return { ok: cfg.ccd.ok, stdout: '', stderr: cfg.ccd.stderr, killed: cfg.ccd.killed };
+      return {
+        ok: cfg.ccd.ok, stdout: '', stderr: cfg.ccd.stderr,
+        killed: cfg.ccd.killed ?? UNMEASURED,
+        signal: cfg.ccd.signal === undefined ? UNMEASURED : cfg.ccd.signal,
+      };
     }
-    return { ok: true, stdout: '', stderr: '', killed: false };
+    return { ok: true, stdout: '', stderr: '', killed: false, signal: null };
   };
 
   const base = testDeps(home, async () => ({ code: 0, stdout: '', stderr: '' }));
@@ -145,20 +158,58 @@ describe('§1.5 — adoption, and everything that must NOT adopt', () => {
   });
 
   it('a CLEAN non-zero exit NEVER adopts, whatever the candidate count', async () => {
-    // ccd REFUSED. There is nothing here this call created.
-    const h = await harness({ ccd: { ok: false, killed: false, stderr: 'disk floor' },
+    // ccd REFUSED. There is nothing here this call created. BOTH halves measured,
+    // both negative — the only shape that means "it really did just refuse".
+    const h = await harness({ ccd: { ok: false, killed: false, signal: null, stderr: 'disk floor' },
                               after: [{ id: 'demo-quiet-basin', held: null }] });
     expect(await h.dispatch()).toEqual({ ok: false, kind: 'fleetFailed', stderr: 'disk floor' });
     expect(h.ccdCalls().some((a) => a[0] === 'ws-hold')).toBe(false);
   });
 
-  it('a killed:false from the TRANSPORT catch path never adopts', async () => {
-    // `createRunner`'s catch returns `{code:1, stderr: e.message}` with NO
-    // `killed` for a dropped socket or a client-side wait expiry. Three facts sit
-    // on code 1, not two, and not-adopting is the safe outcome for all three.
-    const h = await harness({ ccd: { ok: false, killed: false, stderr: 'socket closed' },
+  it('an UNMEASURED result from the TRANSPORT catch path never adopts', async () => {
+    // `createRunner`'s catch returns `{code:1, stderr: e.message}` with NEITHER
+    // half for a dropped socket or a client-side wait expiry. Three facts sit on
+    // code 1, not two, and not-adopting is the safe outcome for all three.
+    //
+    // §1.7: this case reaches the gate as `UNMEASURED`, NOT as `false`. The
+    // outcome is deliberately identical — only a literal `true` adopts — but the
+    // REASON is now sayable, which is the whole point: "we did not measure" and
+    // "we measured, and it was not cut short" are not the same sentence.
+    const h = await harness({ ccd: { ok: false, stderr: 'socket closed' },
                               after: [{ id: 'demo-quiet-basin', held: null }] });
     expect(await h.dispatch()).toEqual({ ok: false, kind: 'fleetFailed', stderr: 'socket closed' });
+    expect(h.ccdCalls().some((a) => a[0] === 'ws-hold')).toBe(false);
+  });
+
+  it('ADOPTS on an EXTERNAL kill — killed:false with a SIGNAL is still cut short', async () => {
+    // §1.7's reason to exist. An operator `kill`, an OOM reaper or systemd
+    // stopping the unit mid-`ws-add` leaves node's `killed` FALSE (node did not
+    // do it) and the signal name as the only evidence. The orphan is identical to
+    // a deadline kill's: worktree, branch and every registry row written before
+    // `_spawn` blocked. Reading only `killed` filed this under "ccd refused" and
+    // left the workspace unclaimed.
+    const h = await harness({ ccd: { ok: false, killed: false, signal: 'SIGKILL', stderr: '' },
+                              after: [{ id: 'demo-quiet-basin', held: null, spawnRc: 4 }] });
+    expect(await h.dispatch()).toMatchObject({ ok: true, adopted: true, sessionId: 'demo-quiet-basin' });
+    expect(h.ccdCalls()).toContainEqual(
+      expect.arrayContaining(['ws-hold', '--session', 'demo-quiet-basin']));
+  });
+
+  it('an external kill still needs an UNHELD candidate — the second gate is unchanged', async () => {
+    const h = await harness({ ccd: { ok: false, killed: false, signal: 'SIGKILL', stderr: '' },
+                              after: [{ id: 'demo-quiet-basin', held: 'program:x wave:1/3' }] });
+    expect(await h.dispatch()).toEqual({ ok: false, kind: 'fleetFailed', stderr: '' });
+    expect(h.ccdCalls().some((a) => a[0] === 'ws-hold')).toBe(false);
+  });
+
+  it('a MEASURED signal:null with an UNMEASURED killed never adopts', async () => {
+    // The mixed shape `local` mode produces for a plain non-zero exit once
+    // `realRunner` reports what it holds. Half-measured is not measured-cut-short,
+    // and the gate must not treat "one half says no, the other said nothing" as
+    // evidence of anything.
+    const h = await harness({ ccd: { ok: false, signal: null, stderr: 'disk floor' },
+                              after: [{ id: 'demo-quiet-basin', held: null }] });
+    expect(await h.dispatch()).toEqual({ ok: false, kind: 'fleetFailed', stderr: 'disk floor' });
   });
 
   it('ZERO candidates still fails — a kill proves nothing was left behind', async () => {
@@ -202,16 +253,20 @@ describe('§1.2 — the OTHER polarity: a ws-add that FAILED CLEANLY inside its 
   // THE CASE THE SPEC ORDERS VERIFIED END TO END, and it is not the adoption
   // case. Task 6 gives the settle rc 3/4/5, Task 7 keeps #50's non-zero
   // `ws-add` exit on all three — so a settle that expires INSIDE the agent's
-  // 300 s ceiling produces `res.ok === false` with `killed === false`, and the
-  // gate above refuses. That refusal is CORRECT and stays: a clean non-zero is
-  // ccd telling us something, and adopting on it would bind a run to a
-  // workspace no evidence ties to this call.
+  // 300 s ceiling produces `res.ok === false` with the child exiting NORMALLY:
+  // `killed === false` AND `signal === null`, both measured. The gate above
+  // refuses. That refusal is CORRECT and stays: a clean non-zero is ccd telling
+  // us something, and adopting on it would bind a run to a workspace no evidence
+  // ties to this call.
   //
   // THE RULING, so nobody "fixes" this later: DO NOT widen the gate to read
   // `$REG/<id>.spawn` as positive evidence. The spawn fact is written by the
   // settle for ANY spawn on that id, including one from a previous attempt or
   // another process — it says how a spawn ended, never which caller owns it.
-  // `killed` is the only fact that means "this call's child was cut short".
+  // `cutShort` — abnormal termination of THIS call's child, by either half of
+  // the measurement — is the only fact that means "this call's child was cut
+  // short", and §1.7 widened it to `signal` precisely because that is the SAME
+  // fact, not a second one.
   //
   // What the refusal must NOT be is INVISIBLE, and these tests pin that it is
   // not: the workspace ccd created is claimed, supervised, and carries a spawn
@@ -219,7 +274,7 @@ describe('§1.2 — the OTHER polarity: a ws-add that FAILED CLEANLY inside its 
   // §1.6b spawn chip lit, and the run's own event trail names it.
 
   it('refuses, and the workspace it leaves behind is an ORDINARY session, not residue', async () => {
-    const h = await harness({ ccd: { ok: false, killed: false, stderr: 'ccd: start failed for demo-quiet-basin (spawn rc 4)' },
+    const h = await harness({ ccd: { ok: false, killed: false, signal: null, stderr: 'ccd: start failed for demo-quiet-basin (spawn rc 4)' },
                               after: [{ id: 'demo-quiet-basin', held: null, spawnRc: 4 }] });
     const out = await h.dispatch();
     expect(out).toMatchObject({ ok: false, kind: 'fleetFailed' });
@@ -235,7 +290,7 @@ describe('§1.2 — the OTHER polarity: a ws-add that FAILED CLEANLY inside its 
     // workspace on the fleet screen with no stated relationship between them.
     // The event does not CLAIM the workspace (that would be adoption by
     // another name) — it records what ccd reported and which ids appeared.
-    const h = await harness({ ccd: { ok: false, killed: false, stderr: 'spawn rc 4' },
+    const h = await harness({ ccd: { ok: false, killed: false, signal: null, stderr: 'spawn rc 4' },
                               after: [{ id: 'demo-quiet-basin', held: null, spawnRc: 4 }] });
     await h.dispatch();
     const details = h.coord.runEvents(h.runId).map((e) => e.detail);
@@ -249,7 +304,7 @@ describe('§1.2 — the OTHER polarity: a ws-add that FAILED CLEANLY inside its 
     // normal session carrying a quiet warning, not a shape no verb can name.
     // Asserted here on the REGISTRY, because that is what this suite can see;
     // the wire half is pinned in fleet-lifecycle.test.ts and session-line.test.tsx.
-    const h = await harness({ ccd: { ok: false, killed: false, stderr: 'spawn rc 4' },
+    const h = await harness({ ccd: { ok: false, killed: false, signal: null, stderr: 'spawn rc 4' },
                               after: [{ id: 'demo-quiet-basin', held: null, spawnRc: 4 }] });
     await h.dispatch();
     const rows = await readRegistry(localIO, h.cfg);

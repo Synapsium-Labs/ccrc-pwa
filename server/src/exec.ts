@@ -1,19 +1,72 @@
 import { execFile } from 'node:child_process';
 
+/**
+ * THE VOCABULARY FOR "WE DID NOT MEASURE THIS", stated once here and used
+ * unchanged at every seam that needed it (§1.7). Two shapes, and which one a
+ * field gets is decided by whether the field can be absent at all:
+ *
+ *   • OPTIONAL field on a record that crosses a version boundary — ABSENCE is
+ *     the unmeasured answer, presence is a measurement. `ExecResult.killed` and
+ *     `ExecResult.signal` below: an older agent omits them, and absence-permits
+ *     is the wire rule (`shared/api.ts`, additive-only). A present `null` on
+ *     `signal` is a MEASUREMENT — "it died of no signal" — and is not the same
+ *     fact as the key being missing.
+ *   • REQUIRED field, where absence is not spellable — unmeasured gets its OWN
+ *     TOKEN, `UNMEASURED`, which is never a member of the measured domain.
+ *     `CcdResult.killed`/`.signal` (`lifecycle.ts`) take this shape.
+ *
+ * The rule both shapes serve: a caller that handles "false" differently from "we
+ * do not know" must never receive the same value for both. The third face of the
+ * same rule lives at the render seam — a value this build cannot NAME is shown
+ * as itself, never as a member it is not (`SessionLine.tsx`'s spawn chip).
+ */
+export const UNMEASURED = 'unmeasured';
+export type Unmeasured = typeof UNMEASURED;
+
 /** `killed` is OPTIONAL and that is not a style choice: 249 bare
  *  `{code, stdout, stderr}` literals across 32 test files make a required field
- *  a suite-wide break. Absence reads as `false` — what an older agent sends, and
- *  the safe direction (§1.5 never adopts on it). NOTE `realRunner` below passes
- *  NO `timeout`, so `killed` is structurally false in `local` mode and every
- *  §1.5 test must inject a runner. */
-export interface ExecResult { code: number; stdout: string; stderr: string; killed?: boolean }
+ *  a suite-wide break. Absence means UNMEASURED — what an older agent sends, and
+ *  the safe direction (§1.5 never adopts on it).
+ *
+ *  `signal` is the SECOND half of the same measurement and is not derivable from
+ *  the first: node sets `error.killed` true only when IT killed the child, so a
+ *  child killed by an EXTERNAL signal (an operator `kill`, an OOM reaper,
+ *  systemd stopping the unit mid-`ws-add`) arrives with `killed === false` and a
+ *  `signal` that is the only evidence it was cut short at all. Same optional
+ *  discipline: absent = the peer did not tell us; `null` = it did, and there was
+ *  no signal. */
+export interface ExecResult {
+  code: number; stdout: string; stderr: string;
+  killed?: boolean;
+  signal?: string | null;
+}
 export type Runner = (cmd: string, args: string[]) => Promise<ExecResult>;
 
+/** §1.7: `local` mode is a PRODUCER of the cut-short measurement too, and it used
+ *  to answer neither half — so every `local` ccd call reached `cutShort` as
+ *  UNMEASURED, i.e. "nobody looked", when in fact this function holds the very
+ *  error object that knows.
+ *
+ *  BOTH halves are reported, and they say different things here. No deadline is
+ *  passed to `execFile` (deliberately — see `localcaps.ts`, which wraps its own
+ *  ceiling at the ONE call site that needs one), so node never kills this child
+ *  itself and `killed` is a measured, permanently-`false` fact. `signal` is the
+ *  half that can be non-null: an operator `kill`, an OOM reaper or systemd
+ *  stopping the unit mid-`ws-add` terminates the child by signal, node reports it
+ *  in `error.signal`, and `error.killed` stays FALSE because node did not do it.
+ *  Dropping `signal` here is what made that case indistinguishable from a clean
+ *  `ccd` refusal. */
 export const realRunner: Runner = (cmd, args) =>
   new Promise((resolve) => {
     execFile(cmd, args, { maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
-      const code = err ? ((err as NodeJS.ErrnoException & { code?: number }).code as number | undefined ?? 1) : 0;
-      resolve({ code: typeof code === 'number' ? code : 1, stdout: String(stdout), stderr: String(stderr) });
+      const e = err as (NodeJS.ErrnoException & { code?: number; killed?: boolean; signal?: string }) | null;
+      const code = err ? (e?.code as number | undefined ?? 1) : 0;
+      resolve({
+        code: typeof code === 'number' ? code : 1,
+        stdout: String(stdout), stderr: String(stderr),
+        killed: e?.killed === true,
+        signal: e?.signal ?? null,
+      });
     });
   });
 

@@ -4,9 +4,9 @@ import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
 import { loadConfig, type CcrcConfig } from '../src/config.js';
-import { Tmux, type Runner } from '../src/exec.js';
+import { Tmux, UNMEASURED, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
-import { ccd, ccdRunner, listProjects } from '../src/lifecycle.js';
+import { ccd, ccdRunner, cutShort, listProjects, type CcdResult } from '../src/lifecycle.js';
 import { CCD_ARGV } from '../src/ccdargv.js';
 import { readLocalCcdCaps } from '../src/localcaps.js';
 import { KeyedQueue } from '../src/inject/queue.js';
@@ -559,32 +559,82 @@ describe('ccdRunner — the one ccd capability Deps carries', () => {
   it('passes stdout and stderr through untouched on success', async () => {
     const { run } = spy({ code: 0, stdout: 'out\n', stderr: 'warn\n' });
     expect(await ccdRunner(run, cfg)(CCD_ARGV.wsAudit(ID)))
-      // `killed: false` is not decoration: `CcdResult.killed` is REQUIRED (§1.4),
-      // and a runner that reported no kill must answer false rather than omit it.
-      .toEqual({ ok: true, stdout: 'out\n', stderr: 'warn\n', killed: false });
+      // The kill fields are not decoration: both are REQUIRED on `CcdResult`
+      // (§1.4/§1.7), and this runner reported NEITHER — so both read as the
+      // token, never as `false`/`null`, which would claim a measurement.
+      .toEqual({ ok: true, stdout: 'out\n', stderr: 'warn\n',
+                 killed: UNMEASURED, signal: UNMEASURED });
   });
 
   it('a FAILURE still carries stdout and stderr — the 502 body quotes stderr', async () => {
     const { run } = spy({ code: 1, stdout: 'partial\n', stderr: 'boom\n' });
     expect(await ccdRunner(run, cfg)(CCD_ARGV.wsArchive(ID)))
-      .toEqual({ ok: false, stdout: 'partial\n', stderr: 'boom\n', killed: false });
+      .toEqual({ ok: false, stdout: 'partial\n', stderr: 'boom\n',
+                 killed: UNMEASURED, signal: UNMEASURED });
   });
 });
 
-describe('§1.4 — CcdResult stops dropping the kill one hop later', () => {
+describe('§1.4/§1.7 — CcdResult stops dropping the kill one hop later', () => {
+  const cfg = { ccdBin: '/home/u/.local/bin/ccd' } as unknown as CcrcConfig;
+
   it('threads `killed` off the runner', async () => {
-    const cfg = { ccdBin: '/home/u/.local/bin/ccd' } as unknown as CcrcConfig;
-    const killedRun: Runner = async () => ({ code: 1, stdout: '', stderr: '', killed: true });
+    const killedRun: Runner = async () => ({ code: 1, stdout: '', stderr: '', killed: true, signal: 'SIGTERM' });
     expect(await ccd(killedRun, cfg, CCD_ARGV.wsAdd('demo'))).toEqual({
-      ok: false, stdout: '', stderr: '', killed: true,
+      ok: false, stdout: '', stderr: '', killed: true, signal: 'SIGTERM',
     });
   });
 
-  it('reads an absent `killed` as false — REQUIRED here is safe because nothing builds this literal', async () => {
-    const cfg = { ccdBin: '/home/u/.local/bin/ccd' } as unknown as CcrcConfig;
+  it('reads an absent half as UNMEASURED — NOT as false, which is a different fact', async () => {
+    // §1.7 corrected the direction this hop used to be wrong in. It collapsed an
+    // absent optional to `false`, telling every downstream caller "this child was
+    // not killed" when the truth was "nobody measured whether it was". The
+    // adoption gate treats those two differently on purpose.
     const plainRun: Runner = async () => ({ code: 1, stdout: '', stderr: 'refused' });
     expect(await ccd(plainRun, cfg, CCD_ARGV.wsAdd('demo'))).toEqual({
-      ok: false, stdout: '', stderr: 'refused', killed: false,
+      ok: false, stdout: '', stderr: 'refused', killed: UNMEASURED, signal: UNMEASURED,
     });
+  });
+
+  it('keeps a MEASURED false and a MEASURED null — only absence becomes the token', async () => {
+    const measured: Runner = async () => ({ code: 1, stdout: '', stderr: 'die', killed: false, signal: null });
+    expect(await ccd(measured, cfg, CCD_ARGV.wsAdd('demo'))).toEqual({
+      ok: false, stdout: '', stderr: 'die', killed: false, signal: null,
+    });
+  });
+});
+
+describe('§1.7 — cutShort: one reader for both halves, three answers, one adopts', () => {
+  const r = (killed: CcdResult['killed'], signal: CcdResult['signal']): CcdResult =>
+    ({ ok: false, stdout: '', stderr: '', killed, signal });
+
+  it('true when the runner killed the child at its own deadline', () => {
+    expect(cutShort(r(true, 'SIGTERM'))).toBe(true);
+    // Even with the signal half missing — one half saying yes is enough.
+    expect(cutShort(r(true, UNMEASURED))).toBe(true);
+  });
+
+  it('true on an EXTERNAL kill, where `killed` is false and the SIGNAL is the only evidence', () => {
+    // node sets `killed` only for a kill IT issued. An operator `kill`, an OOM
+    // reaper or systemd stopping the unit mid-`ws-add` lands exactly here, and
+    // reading `killed` alone filed it under "ccd refused".
+    expect(cutShort(r(false, 'SIGKILL'))).toBe(true);
+  });
+
+  it('false only when something was actually measured and said no', () => {
+    expect(cutShort(r(false, null))).toBe(false);
+    expect(cutShort(r(false, UNMEASURED))).toBe(false);
+    expect(cutShort(r(UNMEASURED, null))).toBe(false);
+  });
+
+  it('UNMEASURED when NEITHER half was measured — an older agent, or the transport catch', () => {
+    expect(cutShort(r(UNMEASURED, UNMEASURED))).toBe(UNMEASURED);
+  });
+
+  it('never mistakes the TOKEN for a signal name — it is a string, and that is the trap', () => {
+    // The regression this pins: `typeof signal === 'string'` is TRUE for
+    // `UNMEASURED`, so the value that exists to mean "nobody looked" read as the
+    // strongest evidence there is and adopted a workspace on a dropped socket.
+    expect(cutShort(r(UNMEASURED, UNMEASURED))).not.toBe(true);
+    expect(cutShort(r(false, UNMEASURED))).not.toBe(true);
   });
 });

@@ -104,15 +104,28 @@ function timeoutMsFor(cmd: string, args: string[]): number {
  *  object field by field, so anything it does not name is DISCARDED — which is
  *  exactly how the agent's `killed` was being narrowed away one hop before §1.5
  *  needed it. Spread-conditional, not `killed: Boolean(...)`: a non-boolean from
- *  a peer this build cannot trust must read as ABSENT, not as `false`. */
+ *  a peer this build cannot trust must read as ABSENT, not as `false`.
+ *
+ *  `signal` (§1.7) is the same rule one class narrower, and it was the half
+ *  still being dropped: the agent has sent BOTH since §1.4 (`agent/src/server.ts`
+ *  `runExec`), and naming only `killed` here re-narrows exactly the distinction
+ *  §1.4 widened. A child node did not kill itself arrives `killed: false` with a
+ *  `signal` naming what did — the only evidence that a `ws-add` was cut short by
+ *  an operator `kill`, an OOM reaper, or systemd stopping the unit mid-spawn.
+ *  BOTH `string` AND an explicit `null` are carried, because a present `null`
+ *  ("measured: no signal") is a different fact from the key being missing ("an
+ *  older agent, which measured nothing"), and only the spread keeps them apart. */
 function asExecResult(res: unknown): ExecResult {
-  const r = res as { code?: unknown; stdout?: unknown; stderr?: unknown };
+  const r = res as { code?: unknown; stdout?: unknown; stderr?: unknown; signal?: unknown };
   return {
     code: typeof r.code === 'number' ? r.code : 1,
     stdout: typeof r.stdout === 'string' ? r.stdout : '',
     stderr: typeof r.stderr === 'string' ? r.stderr : '',
     ...(typeof (res as { killed?: unknown }).killed === 'boolean'
       ? { killed: (res as { killed: boolean }).killed }
+      : {}),
+    ...(typeof r.signal === 'string' || r.signal === null
+      ? { signal: r.signal as string | null }
       : {}),
   };
 }
@@ -136,11 +149,14 @@ export function createRunner(client: FleetClient): Runner {
       );
       return asExecResult(res);
     } catch (e) {
-      // NO `killed` HERE, DELIBERATELY, and a test pins the absence. Three facts
-      // sit on `code: 1`, not two: ccd refused, we killed ccd, and we do not know
-      // because the LINK failed (a dropped socket, a client-side wait expiry).
-      // Not-adopting is the safe outcome for all three, and adding `killed: false`
-      // would be as wrong as `killed: true` — absence is the honest answer.
+      // NEITHER HALF HERE, DELIBERATELY, and a test pins the absence. Three facts
+      // sit on `code: 1`, not two: ccd refused, ccd was cut short, and we do not
+      // know because the LINK failed (a dropped socket, a client-side wait
+      // expiry). Not-adopting is the safe outcome for all three, and `killed:
+      // false`/`signal: null` would be as wrong as their positives — absence is
+      // the honest answer, and it is the ONE shape `cutShort` answers `UNMEASURED`
+      // for (`lifecycle.ts`). Adding either field here would demote this from
+      // "unknown" to "measured, and it refused cleanly".
       return { code: 1, stdout: '', stderr: e instanceof Error ? e.message : String(e) };
     }
   };

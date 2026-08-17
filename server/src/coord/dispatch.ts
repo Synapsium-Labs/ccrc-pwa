@@ -3,6 +3,7 @@ import type { FleetIO } from '../io.js';
 import type { CcrcConfig } from '../config.js';
 import type { FleetState } from '../fleetstate.js';
 import type { Deps } from '../server.js';
+import { cutShort } from '../lifecycle.js';
 import type { KeyedQueue } from '../inject/queue.js';
 import { measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
 import { readHookState } from '../hookstate.js';
@@ -245,15 +246,18 @@ export async function dispatchRun(
     // budget landed after the workspace existed and before anything claimed it.
     //
     // ADOPTION NEEDS POSITIVE EVIDENCE THAT THIS CANDIDATE IS THE ONE THIS CALL
-    // CREATED, and two gates supply it. `killed` (§1.4) separates "we SIGTERM'd a
-    // spawn in flight" from "ccd refused" — a ccd `die` is exit 1, byte-identical
-    // without it, and the transport catch path carries no `killed` at all, so a
-    // dropped socket lands here too and does not adopt. `held` is fail-shut by
-    // construction (`registry.ts`: a listed-but-unreadable `.hold` reads as HELD):
-    // a workspace a killed `ws-add` just created never carries one, while a live
-    // coordinated worker always does.
+    // CREATED, and two gates supply it. `cutShort` (§1.4, widened by §1.7)
+    // separates "this call's child was cut short in flight" from "ccd refused" —
+    // a ccd `die` is exit 1, byte-identical without it — and it reads BOTH halves
+    // of that measurement, because node reports `killed` only for a kill IT
+    // issued and an external `kill`/OOM/systemd-stop shows up as a `signal`
+    // alone. The transport catch path measures neither, so a dropped socket
+    // answers `UNMEASURED` and does not adopt; only a literal `true` does.
+    // `held` is fail-shut by construction (`registry.ts`: a listed-but-unreadable
+    // `.hold` reads as HELD): a workspace a cut-short `ws-add` just created never
+    // carries one, while a live coordinated worker always does.
     if (!res.ok) {
-      if (!(res.killed === true && winner.held === null)) {
+      if (!(cutShort(res) === true && winner.held === null)) {
         // §1.2's OTHER polarity, and the reason the refusal is no longer silent.
         // A settle that expires INSIDE the agent's 300 s ceiling is a clean
         // non-zero exit — so ccd created, claimed and supervised a workspace,

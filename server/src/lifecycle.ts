@@ -1,25 +1,74 @@
 import path from 'node:path';
 import type { CcdArgv } from './ccdargv.js';
 import type { CcrcConfig } from './config.js';
-import type { Runner } from './exec.js';
+import { UNMEASURED, type Runner, type Unmeasured } from './exec.js';
 import type { FleetIO } from './io.js';
 import { readRegistry } from './registry.js';
 
-/** `killed` is REQUIRED here, unlike `ExecResult.killed`: no test anywhere builds
- *  a `CcdResult` literal, and only two whole-object `toEqual`s in
- *  `lifecycle.test.ts` observe it — so requiring it costs nothing and forces
- *  every producer to answer. */
-export interface CcdResult { ok: boolean; stdout: string; stderr: string; killed: boolean }
+/** `killed` and `signal` are REQUIRED here, unlike their `ExecResult`
+ *  counterparts: no test anywhere builds a `CcdResult` literal, and only a
+ *  handful of whole-object `toEqual`s in `lifecycle.test.ts` observe them — so
+ *  requiring them costs nothing and forces every producer to answer.
+ *
+ *  REQUIRED, so they carry the TOKEN rather than an absence (`exec.ts`'s
+ *  vocabulary paragraph). §1.7: `killed: boolean` USED to be the answer and was
+ *  wrong in one direction only — `r.killed === true` collapsed an ABSENT
+ *  optional into `false`, telling every caller "this child was not killed" when
+ *  the truth was "nobody measured whether it was". The adoption gate handles
+ *  those two differently on purpose, and an older agent, the transport catch
+ *  path and `local` mode all land in the second. */
+export interface CcdResult {
+  ok: boolean; stdout: string; stderr: string;
+  killed: boolean | Unmeasured;
+  signal: string | null | Unmeasured;
+}
 
 /** Run `ccd <args...>` through the injected Runner; ok = exit code 0. The argv
  *  is a `CcdArgv`, so it can only have been built by `ccdargv.ts` — there is no
  *  other way to obtain a value of that type (task 13S). */
 export async function ccd(run: Runner, cfg: CcrcConfig, args: CcdArgv): Promise<CcdResult> {
   const r = await run(cfg.ccdBin, [...args]);
-  // `=== true`, not `Boolean(...)`: an ABSENT `killed` (an older agent, the
-  // transport catch path, `local` mode) must read as false, and this is the one
-  // hop that collapses the optional into the required.
-  return { ok: r.code === 0, stdout: r.stdout, stderr: r.stderr, killed: r.killed === true };
+  // The one hop that turns the optional shape into the token shape. `=== undefined`
+  // is the whole test: absence — and ONLY absence — becomes `UNMEASURED`. A
+  // measured `false` stays `false`, and a measured `null` signal stays `null`.
+  return {
+    ok: r.code === 0, stdout: r.stdout, stderr: r.stderr,
+    killed: r.killed === undefined ? UNMEASURED : r.killed,
+    signal: r.signal === undefined ? UNMEASURED : r.signal,
+  };
+}
+
+/** "THIS CALL'S CHILD WAS CUT SHORT" — the single fact §1.5's adoption gate
+ *  rests on, and (wire discipline) the SINGLE READER of `killed` and `signal`,
+ *  so the two halves of one measurement are never interpreted twice in two
+ *  places that could drift apart.
+ *
+ *  Neither half implies the other. `killed` is true only when the runner's own
+ *  deadline fired; an EXTERNAL kill (operator, OOM reaper, systemd stopping the
+ *  unit mid-`ws-add`) arrives `killed: false` with `signal: 'SIGKILL'`, and it
+ *  leaves behind exactly the same orphan a deadline kill does — a worktree, a
+ *  branch and every registry row, written before `_spawn` blocked. That is what
+ *  makes it the same fact rather than a near neighbour.
+ *
+ *  Tri-state on purpose: `UNMEASURED` when NOTHING was measured (an older agent
+ *  sent neither field; the transport catch path measured nothing by
+ *  construction), so a caller cannot mistake ignorance for a clean refusal. Only
+ *  a literal `true` may adopt.
+ *
+ *  THE ONE TRAP THIS FUNCTION HAS TO STEP AROUND, written down because it cost a
+ *  green suite once: `UNMEASURED` is itself a STRING, so `typeof r.signal ===
+ *  'string'` is TRUE for it. A signal name has to be checked as "measured AND not
+ *  null", never by its javascript type, or the token — the value that exists
+ *  precisely to mean "nobody looked" — reads as the strongest possible evidence
+ *  and adopts a workspace on a dropped socket. That is the exact class of bug the
+ *  token was introduced to close, arriving through the token itself. */
+export function cutShort(r: CcdResult): boolean | Unmeasured {
+  const killedMeasured = r.killed !== UNMEASURED;
+  const signalMeasured = r.signal !== UNMEASURED;
+  if (r.killed === true) return true;
+  if (signalMeasured && r.signal !== null) return true;
+  if (!killedMeasured && !signalMeasured) return UNMEASURED;
+  return false;
 }
 
 /** The single ccd capability `Deps` carries in place of a raw `Runner`. */
