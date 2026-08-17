@@ -92,7 +92,16 @@ const DIVERGENCE_SWEEP_MS = 60_000;
  *  correct guard for a name-dependent refusal. Today the arm is dead code:
  *  `deriveBranch` only ever emits `ws/[a-z0-9]+(-[a-z0-9]+)*`, a subset
  *  `_ws_branch_valid` (`ccd/ccd:1337-1347`) always accepts, so `bad-branch`
- *  never actually reaches this lane — see `naming.ts:26-30`. */
+ *  never actually reaches this lane — see `naming.ts:26-30`.
+ *
+ *  `held` (Wave 3 §3.1's `ws-rename` rung) is DELIBERATELY ABSENT and must
+ *  stay absent. Every member here is permanent BY CONSTRUCTION — nothing about
+ *  a later title makes a pushed branch un-pushed. A hold is the opposite: it
+ *  exists to be released, and it is the ONE refusal this lane can meet that a
+ *  later sweep should retry. Adding it would stop naming that workspace for
+ *  the life of the process with no log line saying why. Pinned by
+ *  `name-sweep.test.ts`'s "does not retire an incarnation on a `held`
+ *  refusal", which goes red the moment the token joins this set. */
 const PERMANENT_REFUSALS: ReadonlySet<string> = new Set([
   'has-upstream', 'not-a-workspace', 'worktree-unregistered', 'worktree-foreign',
   'registry-branch-drift',
@@ -1305,6 +1314,28 @@ export class FleetWatcher {
       if (r.workspace === null || r.archivedAt !== null) continue;
       const born = `ws/${r.workspace}`;
       if (r.branch !== born) continue;
+      // TWELFTH CONDITION (Wave 3 §3.1). A claimed workspace is not renamed —
+      // `sessionLabel` reads `branch` before `workspace`, so a rename mid-wave
+      // changes what every surface calls a worker the coordinator's ledger
+      // already names. BOTH halves are needed and they are in cost order:
+      // `held` is a field on the row this loop already read, and it covers the
+      // ordinary dispatch (the hold lands before the brief, and the sweep needs
+      // an ai-title that only exists once the worker answers the brief);
+      // `openRunsForSession` is a query, short-circuited away for every claimed
+      // row, and it covers the workspace created by hand and adopted into a run
+      // via `POST /api/runs` with a `sessionId`, which reaches `dispatched`
+      // with no `.hold` on disk.
+      //
+      // `?.`-CHAINED, and not by taste: `testDeps` supplies no `coord` and this
+      // class already treats the store as optional on eight other lines. A
+      // non-optional call here TypeErrors every watcher test in the tree that
+      // does not wire a store.
+      //
+      // Doubt reads as HELD, matching ccd's four `-e` hold readers:
+      // `readRegistry` maps an unreadable-but-listed `.hold` to HOLD_UNREADABLE
+      // and an empty one to HOLD_NO_REASON, both NON-null, so `!== null` is the
+      // whole test and must not grow an emptiness clause.
+      if (r.held !== null || (this.deps.coord?.openRunsForSession(r.id).length ?? 0) > 0) continue;
       // Keyed by id AND uuid, not id alone: `<project>-<slug>` is a SLUG,
       // recycled by ws-reap (`ccd:950-951`'s "144 per project, recycled") —
       // `_ws_slug_free` only ever checks live registry rows, which `_reg_purge`

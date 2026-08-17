@@ -11,6 +11,8 @@ import type { FleetState } from '../src/fleetstate.js';
 import type { FleetIO } from '../src/io.js';
 import { localIO } from '../src/io.js';
 import { FleetWatcher } from '../src/watch.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { CoordStore } from '../src/coord/store.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -548,23 +550,120 @@ describe('the naming sweep', () => {
     expect(h.calls).toHaveLength(1);
   });
 
-  // Build 2.5 interaction, asserted rather than assumed (rider delta 7). The
-  // ccd side is pinned in ccd-ws-rename.test.ts; this is the server side: the
-  // sweep itself neither reads nor writes hold or prhistory state, so a held
-  // workspace is renamed exactly like an unheld one and nothing in the registry
-  // moves except `branch` (which ccd writes, not the sweep).
-  it('is indifferent to a hold, and touches no PR lineage', async () => {
+  // ── the claim (Wave 3 §3.1) ──
+  // POLICY REVERSAL, recorded rather than silently swapped. Build 2.5's ruling
+  // was that the sweep is indifferent to a hold: a rename is not destructive,
+  // so a held workspace was renamed exactly like an unheld one. Measured on the
+  // live fleet 2026-08-14: three ccrc-pwa workspaces renamed 82 s, 31 s and 28 s
+  // after creation, i.e. inside their own wave, changing what the whole fleet
+  // calls a claimed worker (`sessionLabel` reads `branch` before `workspace`)
+  // while a coordinator held a ledger naming the old one. The claim now wins.
+  it('will not rename a HELD workspace — the claim outranks the title', async () => {
     const h = harness();
     seed(h.home, { hold: 'program:agent-evals wave:1/4' });
     transcript(h.home, [TITLE('Fix the PR sheet')]);
     const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
 
     await w.sweepNames();
-    expect(renames(h.calls)).toEqual(['ws/fix-the-pr-sheet']);
+    expect(renames(h.calls), 'a claimed workspace is not renamed').toEqual([]);
     expect(readFileSync(path.join(h.home, '.cc-sessions', `${ID}.hold`), 'utf8'))
       .toBe('program:agent-evals wave:1/4');
-    expect(h.calls.every((a) => a[0] === 'ws-rename'),
-      'the naming lane emits exactly one verb and it is not pr-state').toBe(true);
+    expect(h.calls, 'a skipped row emits no verb at all — not even a probe').toEqual([]);
+  });
+
+  // `-e`-equivalent polarity on the server side: `readRegistry` maps an empty
+  // `.hold` to HOLD_NO_REASON and a listed-but-unreadable one to
+  // HOLD_UNREADABLE, both NON-null, so doubt reads as HELD here exactly as it
+  // does in ccd's four hold readers. A guard written `r.held !== null &&
+  // r.held !== ''` would rename under a truncated hold file.
+  it('skips on an EMPTY hold file too — doubt reads as held', async () => {
+    const h = harness();
+    seed(h.home, { hold: '' });
+    transcript(h.home, [TITLE('Fix the PR sheet')]);
+    const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
+
+    await w.sweepNames();
+    expect(renames(h.calls)).toEqual([]);
+  });
+
+  // The half `held` alone does NOT cover: a workspace created by hand and
+  // adopted into a run through `POST /api/runs` with a `sessionId`. The open
+  // route places its hold at open time on the ordinary path, but an adopted
+  // row can reach `dispatched` with no `.hold` on disk at all, and the run row
+  // is then the only evidence the workspace is spoken for.
+  it('skips a row an OPEN RUN names, with no hold on disk at all', async () => {
+    const h = harness();
+    seed(h.home);                                   // deliberately no `hold` field
+    transcript(h.home, [TITLE('Fix the PR sheet')]);
+    const coord = new CoordStore(openCoordDb(path.join(h.home, '.ccrc', 'coord.db')));
+    const opened = coord.openRun({
+      program: 'build8', title: 'Fleet robustness', project: 'demo',
+      wave: 1, waveOf: 4, claimedBy: 'demo-coordinator',
+    }) as { id: number };
+    coord.setSession(opened.id, ID);
+    const w = new FleetWatcher({ ...testDeps(h.home, h.run), coord }, new Bus(), 2000);
+
+    await w.sweepNames();
+    expect(renames(h.calls)).toEqual([]);
+  });
+
+  // The direction that decides whether the rung is a skip or an outage: a run
+  // that has CLOSED releases the name again, and an unclaimed row is renamed
+  // exactly as it was before this wave.
+  it('still renames an unclaimed row, and one whose only run is closed', async () => {
+    const h = harness();
+    seed(h.home);
+    transcript(h.home, [TITLE('Fix the PR sheet')]);
+    const coord = new CoordStore(openCoordDb(path.join(h.home, '.ccrc', 'coord.db')));
+    const opened = coord.openRun({
+      program: 'build8', title: 'Fleet robustness', project: 'demo',
+      wave: 1, waveOf: 4, claimedBy: 'demo-coordinator',
+    }) as { id: number };
+    coord.setSession(opened.id, ID);
+    coord.advance(opened.id, 'failed', 'coordinator');   // terminal: no longer an open sibling
+    const w = new FleetWatcher({ ...testDeps(h.home, h.run), coord }, new Bus(), 2000);
+
+    await w.sweepNames();
+    expect(renames(h.calls)).toEqual(['ws/fix-the-pr-sheet']);
+  });
+
+  // `deps.coord` IS OPTIONAL and that is load-bearing: `testDeps` supplies no
+  // store, and every other test in this file builds its watcher from it. A
+  // non-optional `this.deps.coord.openRunsForSession(...)` TypeErrors all of
+  // them plus fourteen in `hold-gate.test.ts`. Named on its own so that
+  // regression reds ONE test with a sentence, not fifteen with a stack trace.
+  it('renames normally with NO coord store wired at all (deps.coord is optional)', async () => {
+    const h = harness();
+    seed(h.home);
+    transcript(h.home, [TITLE('Fix the PR sheet')]);
+    const deps = testDeps(h.home, h.run);
+    expect(deps.coord, 'testDeps must keep supplying no store, or this test proves nothing')
+      .toBeUndefined();
+    const w = new FleetWatcher(deps, new Bus(), 2000);
+
+    await w.sweepNames();
+    expect(renames(h.calls)).toEqual(['ws/fix-the-pr-sheet']);
+  });
+
+  // A `held` refusal coming BACK from ccd (Task 302's rung, reachable when a
+  // hold lands between this loop's registry read and the queued call) is
+  // TRANSIENT: the hold will be released. Retiring the incarnation on it would
+  // stop naming that workspace for the life of the server process, with no log
+  // line saying why.
+  it('does not retire an incarnation on a `held` refusal — a hold is not permanent', async () => {
+    const h = harness('{"refused":"held","detail":"program:agent-evals wave:1/4","paths":[]}');
+    seed(h.home);                                   // unheld at read time; ccd refuses at call time
+    transcript(h.home, [TITLE('Fix the PR sheet')]);
+    const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
+
+    await w.sweepNames();
+    expect(renames(h.calls)).toEqual(['ws/fix-the-pr-sheet']);
+
+    // A NEW title (a new retry key) must still be attempted — which it is only
+    // if the incarnation was not retired.
+    transcript(h.home, [TITLE('Fix the PR sheet properly')]);
+    await again(w);
+    expect(renames(h.calls)).toEqual(['ws/fix-the-pr-sheet', 'ws/fix-the-pr-sheet-properly']);
   });
 
   // ── the stat gate ──
