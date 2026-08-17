@@ -19,6 +19,22 @@ export interface SessionRecord {
   id: string; wrapper: string; project: string; workdir: string; uuid: string;
   started: boolean; home: string | null; pool: string[] | null; lastswap: number | null;
   workspace: string | null; branch: string | null;
+  /** `.branch` was LISTED in the registry directory this read opened with,
+   *  and its bytes did not come back — i.e. `branch` above is null because a
+   *  READ FAILED, not because the field is absent. `field()` cannot tell the
+   *  two apart (`io.readFile` maps both to null), and `verifyDone`'s
+   *  `branch-unmeasurable` refusal (Wave 3 §3.2) is a claim about this one
+   *  specifically, so the record has to be able to make the distinction the
+   *  code asserts. Same evidence rule as the identity triple and `held`.
+   *
+   *  Deliberately NOT a `LifecycleField` and deliberately NOT a member of
+   *  `unmeasured`. `LifecycleField` feeds `sessionLifecycle`'s `unmeasurable`
+   *  rung, and a branch nobody could read says nothing about whether a
+   *  session is running; `unmeasured` is `IdentityField[]`, rides the wire
+   *  verbatim, and is validated against the identity triple by
+   *  `reviveFleetSession` — widening it would reject every persisted
+   *  snapshot. This flag is server-side only and reaches no wire field. */
+  branchUnmeasured: boolean;
   /** `origin/main` — what ws-add recorded as this branch's base (ccd:221).
    *  Never re-derived: a proof against a base the workspace was not cut from
    *  is a proof about a different question. */
@@ -418,12 +434,18 @@ async function buildRecord(
     lifecycleUnmeasured.push('stopped');
   }
 
+  // `names` is the listing this function opened with — PRESENCE, independently
+  // of whether the bytes came back. See `SessionRecord.branchUnmeasured` for
+  // why this is its own flag rather than a member of either existing array.
+  const branchUnmeasured = branch === null && names.includes(`${id}.branch`);
+
   return {
     id, wrapper: measured.wrapper, project: project ?? id, workdir: measured.workdir, uuid: measured.uuid,
     started: started === '1',
     home, pool: pool ? pool.split(/\s+/).filter(Boolean) : null,
     lastswap: lastswap ? parseInt(lastswap, 10) : null,
     workspace, branch,
+    branchUnmeasured,
     base,
     // A phase this build does not know degrades to null (= unchecked), never
     // to a raw string the PWA would switch on and render as nothing.

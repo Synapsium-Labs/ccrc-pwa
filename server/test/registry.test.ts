@@ -84,6 +84,62 @@ describe('readRegistry', () => {
     const out = await readRegistry(localIO, loadConfig({ CCRC_HOME: home }));
     expect(out[0].branch).toBeNull();
   });
+
+  // Wave 3 §3.2's prerequisite. `field()` collapses "the file is not there" and
+  // "the file is there and its bytes did not come back" into the same null, and
+  // `verifyDone`'s `branch-unmeasurable` refusal is a claim about the SECOND
+  // one specifically. `names` is the listing `buildRecord` opened with, so it
+  // proves PRESENCE independently of whether the read succeeded — the same
+  // evidence the identity triple and `held` already use.
+  it('marks a LISTED but unreadable .branch as unmeasured — never as absent', async () => {
+    const reg = path.join(home, '.cc-sessions');
+    seed(reg, 'demo-quiet-basin', {
+      wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'e'.repeat(36),
+      workspace: 'quiet-basin', branch: 'ws/quiet-basin',
+    });
+    const io = unreadableField('demo-quiet-basin', 'branch');
+    const rec = (await readRegistry(io, loadConfig({ CCRC_HOME: home })))[0]!;
+    expect(rec.branch, 'an unreadable field still reads null on its own value').toBeNull();
+    expect(rec.branchUnmeasured).toBe(true);
+  });
+
+  it('a genuinely absent .branch is absent, not unmeasured', async () => {
+    // A project's MAIN checkout has no branch field at all. Calling that
+    // "unmeasurable" would be the overclaim this distinction exists to stop.
+    const reg = path.join(home, '.cc-sessions');
+    seed(reg, 'claude-demo', { wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'f'.repeat(36) });
+    const rec = (await readRegistry(localIO, loadConfig({ CCRC_HOME: home })))
+      .find((r) => r.id === 'claude-demo')!;
+    expect(rec.branch).toBeNull();
+    expect(rec.branchUnmeasured).toBe(false);
+  });
+
+  it('a readable branch is measured and its flag is false', async () => {
+    const reg = path.join(home, '.cc-sessions');
+    seed(reg, 'demo-quiet-basin', {
+      wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'e'.repeat(36),
+      workspace: 'quiet-basin', branch: 'ws/quiet-basin',
+    });
+    const rec = (await readRegistry(localIO, loadConfig({ CCRC_HOME: home })))[0]!;
+    expect(rec.branch).toBe('ws/quiet-basin');
+    expect(rec.branchUnmeasured).toBe(false);
+  });
+
+  // The two shapes it must NOT be conflated with, pinned so a later "tidy-up"
+  // cannot fold it into either array.
+  it('an unreadable branch degrades neither the identity triple nor the lifecycle read', async () => {
+    const reg = path.join(home, '.cc-sessions');
+    seed(reg, 'demo-quiet-basin', {
+      wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'e'.repeat(36),
+      workspace: 'quiet-basin', branch: 'ws/quiet-basin', started: '1',
+    });
+    const io = unreadableField('demo-quiet-basin', 'branch');
+    const rec = (await readRegistry(io, loadConfig({ CCRC_HOME: home })))[0]!;
+    expect(rec.unmeasured, '`unmeasured` is IdentityField[] and rides the wire — do not widen it')
+      .toEqual([]);
+    expect(rec.lifecycleUnmeasured,
+      'a branch nobody could read says nothing about whether the session is running').toEqual([]);
+  });
 });
 
 describe('workspace on the wire', () => {
