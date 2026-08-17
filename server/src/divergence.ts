@@ -28,10 +28,18 @@ export interface DivergenceInput {
    * while git's own record resolves it, and `FleetIO.realpath` answers null
    * unconditionally in remote mode. Comparing absolute paths would report every
    * worktree on the fleet as unregistered.
+   *
+   * `path` IS NOT DECORATION. It is what the layouts are told apart by, and the
+   * ccd id the claim rule looks up is measured off it (`ccdIdForWorktree`);
+   * `name` alone cannot say which layout produced it. That is a reading of the
+   * last two segments, which no root symlink can move — not the whole-path
+   * comparison the paragraph above rules out.
    */
   readonly worktrees: readonly {
     readonly project: string;
     readonly name: string;
+    /** git's `gitdir` record with its `/.git` removed, i.e. the checkout itself
+     *  (`coord/gitref.ts`). Never `''`. */
     readonly path: string;
   }[];
   /** `<project>/<name>` -> the branch that worktree's own HEAD names, or null
@@ -57,6 +65,70 @@ export interface DivergenceInput {
 }
 
 const key = (project: string, name: string): string => `${project}/${name}`;
+
+/**
+ * The ccd id — `$project-$slug`, the name every registry field file is keyed by
+ * — for the worktree GIT records at `wtPath`, or `null` when this path names no
+ * ccd id at all.
+ *
+ * READ OFF THE CHECKOUT PATH, NEVER OFF GIT'S ADMIN NAME, and that is a
+ * measurement replacing a composition that was right for only one of the two
+ * layouts on the box. `<project>/.git/worktrees/<name>/` takes its `<name>` from
+ * the LAST SEGMENT OF THE CHECKOUT PATH, so:
+ *
+ *   ~/worktrees/custom-tools/brisk-ridge   admin name `brisk-ridge`
+ *   ~/worktrees/custom-tools-alertwire     admin name `custom-tools-alertwire`
+ *
+ * — both measured live, in one project, on 2026-08-17. Composing
+ * `${project}-${name}` is ccd's own `cmd_ws_add` rule (`local id="$project-$slug"`,
+ * `local wt="$WORKTREES_ROOT/$project/$slug"`) and holds for the first; for the
+ * second it yields `custom-tools-custom-tools-alertwire`, an id no registry row
+ * can hold, so the any-field claim below could never match and the census named
+ * that worktree on every sweep for ever — on the one kind whose repair deletes
+ * worktrees.
+ *
+ * THE LAYOUT IS SETTLED BY THE PARENT DIRECTORY, and the ORDER of the two arms
+ * is the whole reason this is not the string heuristic it might be mistaken for
+ * (`name.startsWith(project + '-') ? name : …`). That heuristic is ambiguous
+ * exactly where it matters: `~/worktrees/demo/demo-fix` (ccd's `demo-demo-fix`)
+ * and `~/worktrees/demo-fix` (`demo-fix`) are DIFFERENT workspaces that git
+ * records under the SAME admin name, and it reads both as `demo-fix` — handing
+ * one workspace's registry row the power to claim the other's worktree. Asking
+ * the parent directory first removes the ambiguity instead of guessing through
+ * it: a checkout whose parent directory IS the project is ccd's nested layout,
+ * full stop, whatever its slug happens to begin with. Only once that reading is
+ * ruled out is the last segment read as an id in its own right.
+ *
+ * NO ROOT IS COMPARED, deliberately. `~/worktrees` is a symlink to
+ * `/data/worktrees` on the fleet box, ccd writes the registry's `workdir`
+ * unresolved while git resolves it, and `FleetIO.realpath` answers null
+ * unconditionally in remote mode — the same reasoning that keeps
+ * `DivergenceInput.worktrees` keyed by admin name rather than by absolute path.
+ * The last two segments are enough to tell the layouts apart and are unaffected
+ * by whatever the prefix resolves to.
+ *
+ * `null` CARRIES ONE CONDITION: this path names no ccd id, because it is
+ * neither `<root>/<project>/<slug>` nor `<root>/<project>-<slug>` — a worktree
+ * ccd did not create (`ws-gc` calls these `foreign`, lists them, and never
+ * prunes them). It is NOT "we could not measure": the path was read, and ccd
+ * builds ids only in the two shapes above, so the honest answer is that no
+ * registry id can name this checkout. The one caller therefore skips the
+ * id half of the claim rule rather than testing an invented id — a worktree
+ * with no ccd id cannot have a ccd registry claim, which is a reason to keep
+ * looking at the row half, never a reason to fall silent.
+ */
+function ccdIdForWorktree(project: string, wtPath: string): string | null {
+  // Empty segments dropped so a trailing or doubled `/` cannot shift which
+  // segment is read as which. git writes an absolute POSIX path here.
+  const seg = wtPath.split('/').filter((s) => s !== '');
+  const base = seg[seg.length - 1];
+  if (base === undefined) return null;
+  // NESTED — `$WORKTREES_ROOT/$project/$slug`, the only layout `ws-add` builds.
+  if (seg[seg.length - 2] === project) return `${project}-${base}`;
+  // FLAT — the directory IS the id. Read only after the nested reading is out.
+  if (base.length > project.length + 1 && base.startsWith(`${project}-`)) return base;
+  return null;
+}
 
 /**
  * `<project>/<name>` for every worktree NOBODY claims — the raw measurement
@@ -90,10 +162,12 @@ const key = (project: string, name: string): string => `${project}/${name}`;
  *    an interrupted purge leaves `.archived`/`.reaping` behind, ccd treats the
  *    slug as in use, and so does this.
  *
- * The id is `<project>-<name>` because that is what `cmd_ws_add` builds
- * (`local id="$project-$slug"`) and `<name>` is git's own admin name for the
- * worktree, which is the slug. A worktree nobody made through ccd — the actual
- * `unregistered-worktree` case — has no registry file under that id at all.
+ * THE ID THE SECOND RULE LOOKS UP IS MEASURED OFF `w.path`, not composed from
+ * git's admin name — see `ccdIdForWorktree` for what the two live layouts do to
+ * a composition, and for why the parent directory rather than a prefix test is
+ * what tells them apart. A worktree nobody made through ccd — the actual
+ * `unregistered-worktree` case — has no registry file under that id at all, and
+ * one whose path names no ccd id at all cannot have a registry claim to find.
  *
  * HOW THIS LINES UP WITH `ws-gc`, THE REPAIR THIS KIND NAMES. Not the same
  * predicate, deliberately, and the difference is a stated set relation rather
@@ -148,8 +222,13 @@ export function unclaimedWorktrees(
     if (dot > 0) claimedById.add(n.slice(0, dot));
   }
   return input.worktrees
-    .filter((w) => !claimedByRow.has(key(w.project, w.name))
-      && !claimedById.has(`${w.project}-${w.name}`))
+    .filter((w) => {
+      if (claimedByRow.has(key(w.project, w.name))) return false;
+      const id = ccdIdForWorktree(w.project, w.path);
+      // A path that names no ccd id has no registry claim to look for, so the
+      // row rule above is the only one that could have spoken for it.
+      return id === null || !claimedById.has(id);
+    })
     .map((w) => key(w.project, w.name));
 }
 

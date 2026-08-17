@@ -147,18 +147,77 @@ describe('divergences — the three kinds, individually', () => {
     });
   });
 
-  it('finds a FLAT worktree, not only a nested one', () => {
-    // Measured live: `custom-tools-alertwire` sits directly under `~/worktrees/`.
-    // A detector globbing `~/worktrees/*/*/` misses it — which is why this reads
-    // git's OWN admin records rather than the directory layout.
-    const out = divergences(input({
+  describe('the FLAT layout, with GIT\'S OWN admin name — not the one a fixture wishes for', () => {
+    // MEASURED, 2026-08-17, `/…/projects/custom-tools/.git/worktrees/`:
+    //
+    //   brisk-ridge             gitdir -> /home/u/worktrees/custom-tools/brisk-ridge/.git
+    //   calm-river              gitdir -> /home/u/worktrees/custom-tools/calm-river/.git
+    //   dat30-consumer          gitdir -> /home/u/worktrees/custom-tools/dat30-consumer/.git
+    //   custom-tools-alertwire  gitdir -> /home/u/worktrees/custom-tools-alertwire/.git
+    //
+    // The admin directory's name is the LAST SEGMENT OF THE CHECKOUT PATH, whatever
+    // that path is — `<slug>` under the nested layout ccd builds, and the WHOLE
+    // `<project>-<slug>` directory under the flat one. These tests used to pass
+    // `name: 'alertwire'` for the flat row, which is not a name git has ever
+    // written; that fixture is what let the id derivation below stay wrong.
+    const flat = (over: Partial<DivergenceInput> = {}) => input({
       records: [],
+      headBranch: new Map(),
       registryNames: [],
-      worktrees: [{ project: 'custom-tools', name: 'alertwire',
+      worktrees: [{ project: 'custom-tools', name: 'custom-tools-alertwire',
                     path: '/home/u/worktrees/custom-tools-alertwire' }],
-      unclaimedLastSweep: new Set(['custom-tools/alertwire']),
+      unclaimedLastSweep: new Set(['custom-tools/custom-tools-alertwire']),
+      ...over,
+    });
+
+    it('finds a FLAT worktree, not only a nested one', () => {
+      // A detector globbing `~/worktrees/*/*/` misses it — which is why this reads
+      // git's OWN admin records rather than the directory layout.
+      expect(divergences(flat()).map((d) => d.kind)).toEqual(['unregistered-worktree']);
+    });
+
+    it('a registry row DOES claim it, and the claim is seen — the id comes from the PATH', () => {
+      // The defect this pins. Composing `${project}-${name}` out of git's admin
+      // name reads the flat worktree as `custom-tools-custom-tools-alertwire`,
+      // an id no registry row can ever hold — so the claim below could never
+      // match and the census named this worktree on EVERY sweep, for ever, on
+      // the one kind whose repair deletes worktrees.
+      expect(divergences(flat({ registryNames: ['custom-tools-alertwire.uuid'] }))).toEqual([]);
+    });
+
+    it('and a stranger\'s id is still not a claim', () => {
+      // The other direction, so the fix cannot be "match anything that looks
+      // close": `custom-tools-alertwire` is the id, and `custom-tools-alert` is
+      // a different workspace's.
+      expect(divergences(flat({ registryNames: ['custom-tools-alert.uuid'] }))
+        .map((d) => d.kind)).toEqual(['unregistered-worktree']);
+    });
+  });
+
+  describe('a NESTED slug that itself begins with the project name', () => {
+    // Why the layout is settled by the PARENT DIRECTORY and never by a prefix
+    // test on the name. `~/worktrees/demo/demo-fix` is ccd's `demo-demo-fix`,
+    // while `~/worktrees/demo-fix` is `demo-fix` — the two are different
+    // workspaces whose admin names are the same string, and only the path tells
+    // them apart. A heuristic (`name.startsWith(project + '-') ? name : …`)
+    // reads the nested one as `demo-fix` and hands a stranger's registry row
+    // the power to claim it.
+    const nested = (registryNames: string[]) => divergences(input({
+      records: [],
+      headBranch: new Map(),
+      registryNames,
+      worktrees: [{ project: 'demo', name: 'demo-fix',
+                    path: '/home/u/worktrees/demo/demo-fix' }],
+      unclaimedLastSweep: new Set(['demo/demo-fix']),
     }));
-    expect(out.map((d) => d.kind)).toEqual(['unregistered-worktree']);
+
+    it('is claimed by `demo-demo-fix`, its real id', () => {
+      expect(nested(['demo-demo-fix.uuid'])).toEqual([]);
+    });
+
+    it('is NOT claimed by `demo-fix`, which names the flat worktree beside it', () => {
+      expect(nested(['demo-fix.uuid']).map((d) => d.kind)).toEqual(['unregistered-worktree']);
+    });
   });
 
   it('branch-drift: the registry and the worktree HEAD name different branches', () => {

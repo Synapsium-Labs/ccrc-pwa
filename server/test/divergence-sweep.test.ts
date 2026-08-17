@@ -108,6 +108,18 @@ const watcherFixture = async (cfg: FixtureCfg = {}) => {
      *  because `~/worktrees` is not on the agent's read whitelist and
      *  `<projectsRoot>/<project>/.git/worktrees/<name>/` is. */
     plantWorktreeRecord: (project: string, name: string, at: string, branch: string): void => {
+      // GIT'S OWN INVARIANT, ASSERTED ON THE FIXTURE ITSELF: the admin
+      // directory's name is the LAST SEGMENT OF THE CHECKOUT PATH — measured
+      // 2026-08-17 on `custom-tools`, where the nested `~/worktrees/custom-tools/
+      // brisk-ridge` is filed under `brisk-ridge` and the flat
+      // `~/worktrees/custom-tools-alertwire` under `custom-tools-alertwire`.
+      // A fixture free to disagree is how the id derivation stayed wrong for the
+      // flat layout while a test called "finds a FLAT worktree" passed: it named
+      // the record `alertwire`, which git has never written for that path. This
+      // planter refuses to write a record git could not have written.
+      if (name !== path.basename(at)) {
+        throw new Error(`fixture is not git: an admin record named ${name} cannot exist for a worktree at ${at} — git files it under ${path.basename(at)}`);
+      }
       const admin = path.join(projectsRoot, project, '.git', 'worktrees', name);
       mkdirSync(admin, { recursive: true });
       writeFileSync(path.join(admin, 'gitdir'), `${at}/.git\n`);
@@ -163,6 +175,54 @@ describe('sweepDivergences', () => {
       { kind: 'unregistered-worktree', id: null, path: '/data/worktrees/demo/nobody',
         detail: expect.any(String) },
     ]);
+  });
+
+  describe('THE FLAT LAYOUT, end to end — the id the claim rule looks up comes off git\'s gitdir', () => {
+    /** `custom-tools` as the box actually holds it (measured 2026-08-17): one
+     *  NESTED workspace ccd made, and one FLAT worktree filed under its whole
+     *  directory name. The nested row is also what makes the project active —
+     *  the sweep asks git only about projects the registry names. */
+    const flatFixture = async (claim: boolean) => {
+      const h = await watcherFixture();
+      h.plantRecord('custom-tools-brisk-ridge',
+        { project: 'custom-tools', workspace: 'brisk-ridge', branch: 'ws/brisk-ridge' });
+      h.plantWorktreeRecord('custom-tools', 'brisk-ridge',
+        '/data/worktrees/custom-tools/brisk-ridge', 'ws/brisk-ridge');
+      h.plantWorktreeRecord('custom-tools', 'custom-tools-alertwire',
+        '/data/worktrees/custom-tools-alertwire', 'ws/alertwire');
+      // ONE registry field and no `.uuid` — `_ws_slug_free`'s any-field rule, so
+      // `readRegistry` derives no row for it and the LISTING is the only evidence
+      // of the claim. Its id is `custom-tools-alertwire`: the flat directory IS
+      // the id. Composing `${project}-${name}` off git's admin name asks the
+      // listing for `custom-tools-custom-tools-alertwire` and never finds it.
+      if (claim) {
+        writeFileSync(path.join(h.home, '.cc-sessions', 'custom-tools-alertwire.workdir'),
+          '/data/worktrees/custom-tools-alertwire');
+      }
+      const frames: unknown[][] = [];
+      h.bus.on('divergence', (d) => frames.push(d as unknown[]));
+      // Twice, past the debounce, so only the claim rule can be doing the work.
+      await sweep(h);
+      jump(10);
+      await sweep(h);
+      return frames;
+    };
+
+    it('claimed: the census stays empty', async () => {
+      // ONE frame, not two: `sweepDivergences` publishes only when the census
+      // CHANGES (`json === this.lastDivergenceJson` returns), so a second empty
+      // census is silence. Both sweeps ran — the control below shares this
+      // fixture and gets its finding on the second one.
+      expect(await flatFixture(true)).toEqual([[]]);
+    });
+
+    it('unclaimed: it is named, at its real path — the control that proves the fixture reaches the census', async () => {
+      const frames = await flatFixture(false);
+      expect(frames[1]).toEqual([
+        { kind: 'unregistered-worktree', id: null,
+          path: '/data/worktrees/custom-tools-alertwire', detail: expect.any(String) },
+      ]);
+    });
   });
 
   it('a workspace mid-ws-add is not named — the registry LISTING claims it before the row does', async () => {
