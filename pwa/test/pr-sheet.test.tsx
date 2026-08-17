@@ -4,7 +4,7 @@ import type { FleetSession, PrState, PrView } from '../../shared/api';
 import { ToastHost } from '../src/components/Toast';
 import { PrSheet } from '../src/session/PrSheet';
 import { checkPhrase, prSentence, tooltipSentence } from '../src/session/PrKeycap';
-import { UNSUPPORTED_VERB_TEXT } from '../src/lib/api';
+import { ApiError, UNSUPPORTED_VERB_TEXT, type api } from '../src/lib/api';
 
 const pr = (over: Partial<PrState> = {}): PrState => ({
   phase: 'none', number: null, url: null, title: null, checks: null, checkNames: null,
@@ -40,8 +40,23 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
-const open = (s: FleetSession = sess(), onReap = (): void => {}) =>
-  render(<><ToastHost /><PrSheet session={s} open onClose={() => {}} onReap={onReap} /></>);
+// `archive` is injectable so the tests do not mock the module — the AbandonSheet
+// idiom, and the reason PrSheet gained an `archive` prop in Task 213.
+const open = (s: FleetSession = sess(), onReap = (): void => {},
+              over: { archive?: typeof api.archive } = {}) =>
+  render(<><ToastHost /><PrSheet session={s} open onClose={() => {}} onReap={onReap} {...over} /></>);
+
+/** A session whose PR is MERGED and whose workspace is NOT archived — the one
+ *  shape that renders `Archive now`. It also points this file's `fetched` view
+ *  at the same phase (the side effect is the point, and every hand-written
+ *  case above does it inline): the sheet fires a one-shot GET on open, and a
+ *  view landing mid-test with `phase: 'none'` would swap the whole branch out
+ *  from under the assertion. */
+const mergedUnarchived = (): FleetSession => {
+  const merged = pr({ phase: 'merged', number: 42, url: 'u', mergedAt: Date.now() - 12 * 60_000 });
+  fetched = view({ pr: merged, draft: null });
+  return sess({ pr: merged, archivedAt: null });
+};
 
 describe('opening the sheet refreshes', () => {
   it('fires one GET and shows the cached value meanwhile', async () => {
@@ -447,6 +462,29 @@ describe('mutation-sweep closures', () => {
     fireEvent.click(await screen.findByRole('button', { name: /archive now/i }));
     await waitFor(() => expect((globalThis.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls
       .some((c) => String(c[0]).endsWith('/archive'))).toBe(true));
+  });
+
+  // Build 8 Wave 2, Task 213 — the door, not the sheet: `ArchiveConflictSheet`
+  // has its own file, and a component that only exists in its own isolated
+  // test ships missing the moment someone drops the line from the screen that
+  // mounts it (Task 11's review lesson, applied again).
+  it('Archive now routes a 409 run-open into the sheet, never a toast', async () => {
+    const archive = vi.fn().mockRejectedValue(
+      new ApiError(409, { ok: false, error: 'run-open', runs: [{ id: 17, program: 'build4', wave: 2, waveOf: 3 }] }));
+    open(mergedUnarchived(), () => {}, { archive });
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive now' }));
+    await waitFor(() => expect(screen.getByText(/This workspace is claimed/)).toBeTruthy());
+    expect(screen.getByText(/run 17/)).toBeTruthy();
+    // The defect this replaces: a bare slug in a toast.
+    expect(screen.queryByText(/Archiving failed — run-open/)).toBeNull();
+  });
+
+  it('any OTHER archive failure still toasts — the sheet is for run-open, not for everything', async () => {
+    const archive = vi.fn().mockRejectedValue(new ApiError(502, { ok: false, stderr: 'ws-archive: busy' }));
+    open(mergedUnarchived(), () => {}, { archive });
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive now' }));
+    await waitFor(() => expect(screen.getByText(/ws-archive: busy/)).toBeTruthy());
+    expect(screen.queryByText(/This workspace is claimed/)).toBeNull();
   });
 
   // svc's round-4 residual. `/archive` and `/restore` grew a `verbSupported`

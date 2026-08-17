@@ -14,11 +14,13 @@ import { Sheet } from '../components/Sheet';
 import { QuickConfirm } from '../components/QuickConfirm';
 import { toast } from '../components/Toast';
 import { api, apiErrorText } from '../lib/api';
+import { ArchiveConflictSheet, runOpenRuns, type ArchiveConflictRun } from '../fleet/ArchiveConflictSheet';
 import { checkPhrase, prSentence, tooltipSentence, UNCHECKED_PR } from './PrKeycap';
 import './chat.css';
 
 export function PrSheet({
   session, open, onClose, onReap,
+  archive = api.archive,
 }: {
   session: FleetSession | null;
   open: boolean;
@@ -26,11 +28,21 @@ export function PrSheet({
   /** Cleanup is handed UP, never done here: the reap flow owns the audit, the
    *  manifest and the fingerprint, and this sheet must not be able to delete. */
   onReap: () => void;
+  /** Injectable for tests, the same default-to-`api.archive` shape
+   *  `SessionActionsSheet` and `ArchiveConflictSheet` use — three components,
+   *  one idiom. */
+  archive?: typeof api.archive;
 }): ReactNode {
   const [view, setView] = useState<PrView | null>(null);
   const [title, setTitle] = useState('');
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState<null | 'open' | 'draft'>(null);
+  /** `undefined` = no refusal to show; otherwise the runs the server named
+   *  (possibly `[]` — a run-open we could not read the runs of, which the
+   *  sheet renders WITHOUT inventing an id). Three states, because collapsing
+   *  the empty case into "no conflict" is the defect the sheet exists to
+   *  close. */
+  const [conflict, setConflict] = useState<readonly ArchiveConflictRun[] | undefined>(undefined);
 
   const id = session?.id ?? null;
   const load = (): void => {
@@ -60,6 +72,22 @@ export function PrSheet({
   const facts = view?.facts ?? null;
   const draft = view?.draft ?? null;
   const archived = session.archivedAt !== null;
+
+  /** The archive door. It is NOT `act('Archiving', …)`: a `409 run-open` is not
+   *  a failure the operator can act on from a toast — the refusal names WHICH
+   *  run, and naming it is the whole information. Every other failure keeps
+   *  the toast (and the sentence) it always had. */
+  const archiveNow = async (): Promise<void> => {
+    if (busy) return;
+    setBusy(true);
+    try { await archive(session.id); load(); }
+    catch (err) {
+      const runs = runOpenRuns(err);
+      if (runs !== null) setConflict(runs);
+      else toast(`Archiving failed — ${apiErrorText(err)}`, 'error');
+    }
+    finally { setBusy(false); }
+  };
 
   const act = async (label: string, fn: () => Promise<unknown>): Promise<void> => {
     if (busy) return;
@@ -244,7 +272,7 @@ export function PrSheet({
                       : 'Not archived yet (session busy)'}
                   </p>
                   <button type="button" className="btn-ghost" disabled={busy}
-                          onClick={() => void act('Archiving', () => api.archive(session.id))}>
+                          onClick={() => void archiveNow()}>
                     Archive now
                   </button>
                 </>
@@ -286,6 +314,17 @@ export function PrSheet({
           void act('Opening the pull request', () =>
             api.prOpen(session.id, { title, body: draft?.body ?? '', draft: isDraft }));
         }}
+      />
+      {/* The refusal, as a surface the operator can answer. `sessionId` is
+          what opens it, so `undefined` (no refusal) renders nothing; an empty
+          `runs` array reaches the sheet as `null`, which is its "name no id"
+          case — the one distinction that must not collapse back into
+          "no conflict". */}
+      <ArchiveConflictSheet
+        sessionId={conflict === undefined ? null : session.id}
+        runs={conflict !== undefined && conflict.length > 0 ? conflict : null}
+        onClose={() => setConflict(undefined)}
+        onDone={() => { setConflict(undefined); load(); }}
       />
     </>
   );
