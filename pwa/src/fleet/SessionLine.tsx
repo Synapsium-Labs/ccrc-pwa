@@ -65,6 +65,25 @@ const SPAWN_WORD: Record<SpawnVerdict, string | null> = {
   unrecognised: 'unknown',
 };
 
+/** How many characters of an unnameable verdict the chip will show. `.sess-spawn`
+ *  is `flex: none`, so it takes whatever length it is handed and squeezes
+ *  `.sess-held` — the one shrinkable cell in the row — out of the way. The token
+ *  is untrusted text off the socket; React escapes it, so this is a LAYOUT bound,
+ *  not an injection one. Every real member is under 12. */
+const UNNAMEABLE_MAX = 18;
+
+/** §1.7's render-seam rule, in one place: a value this build cannot NAME is shown
+ *  as ITSELF, prefixed so the operator can tell "the fleet said something this
+ *  app is too old to translate" from any word the app chose. Never a member of
+ *  `SpawnVerdict`, and never nothing.
+ *
+ *  The parameter is `unknown` because that is the truth: the field is CAST off
+ *  the wire, so a newer server's value need not even be a string. */
+function unnameableVerdict(v: unknown): string {
+  const s = typeof v === 'string' ? v.trim() : '';
+  return s === '' ? '? unnameable' : `? ${s.slice(0, UNNAMEABLE_MAX)}`;
+}
+
 // Only ONE element may carry a given view-transition-name — a second aborts
 // the transition entirely. The stamp is never cleared on navigation and these
 // nodes are key-stable, so the previous holder has to be released here.
@@ -138,16 +157,35 @@ export function SessionLine({
   //
   // Both fields read DEFENSIVELY (`?? null`, `!== false`): the live `fleet` frame
   // is CAST, not revived (`stores/fleet.ts`'s `asFleetMsg` validates frames, not
-  // members), so an older server's row lacks the keys at runtime. The table
-  // lookup takes `?? null` for the same reason one level deeper: a NEWER server
-  // can send a verdict this build's `SPAWN_WORD` has no row for, and an
-  // `undefined` word would render an empty chip rather than no chip.
+  // members), so an older server's row lacks the keys at runtime.
+  //
+  // §1.7 — THE TABLE LOOKUP, WHICH USED TO READ `SPAWN_WORD[spawnState] ?? null`.
+  // The `?? null` was reached by exactly one input — a verdict a NEWER server
+  // sent that this bundle's `SPAWN_WORD` was compiled without — and it rendered
+  // NO CHIP: byte for byte the healthy row. A verdict the operator was meant to
+  // see vanished BECAUSE it was new, and the two deploy lanes (`deploy.sh` server
+  // vs agent, no version handshake between them) make that window real rather
+  // than theoretical. Hiding an unknown verdict is strictly worse than showing an
+  // ugly one, so the unknown DEGRADES VISIBLY: shown as ITSELF, prefixed, never
+  // as a member it is not and never as silence. `unrecognised` would be the
+  // wrong member to borrow — it means the SERVER could not name ccd's rc, one
+  // layer in from "this CLIENT cannot name the server's word".
   const spawnState = session.spawnState ?? null;
+  const spawnWord: string | null =
+    spawnState !== null && spawnState !== 'ready'
+      // The cast is the honest one: TS believes this lookup is total, and the
+      // whole point is that at runtime it is not.
+      ? (SPAWN_WORD as Record<string, string | null | undefined>)[spawnState as string]
+        ?? unnameableVerdict(spawnState)
+      : null;
   const spawnChip: string | null =
     dead ? null
-    : spawnState !== null && spawnState !== 'ready' ? SPAWN_WORD[spawnState] ?? null
+    : spawnWord !== null ? spawnWord
     : session.started === false ? 'unstarted'
     : null;
+  // `data-spawn` keeps the RAW value so the CSS hook and the tooltip name what
+  // actually arrived; an unknown token simply matches no rule and takes
+  // `.sess-spawn`'s loud default ink, which is the correct degrade direction.
   const spawnData = spawnChip === null ? undefined : (spawnState ?? 'unstarted');
 
   const swapBlocked = session.swapBlocked ?? null;

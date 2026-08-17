@@ -673,6 +673,46 @@ describe('the spawn chip (§1.6b)', () => {
     expect(chip()?.getAttribute('data-spawn')).toBe(state);
   });
 
+  // §1.7. THE VERDICT THIS BUILD HAS NO ROW FOR. `stores/fleet.ts`'s `asFleetMsg`
+  // validates FRAMES, not members, so the live path CASTS `FleetSession` — a
+  // server one deploy ahead can put a `SpawnVerdict` member in this field that
+  // this bundle's `SPAWN_WORD` was compiled without. The server/PWA deploy lanes
+  // are separate scripts with no version handshake between them, so the window is
+  // real, not theoretical.
+  //
+  // The old `SPAWN_WORD[spawnState] ?? null` turned that into NO CHIP — byte for
+  // byte the healthy row. A verdict the operator was meant to see disappeared
+  // BECAUSE it was new, which is the failure mode the whole increment is about:
+  // a value this build cannot NAME must be shown as itself, never as a member it
+  // is not, and least of all as silence.
+  it('shows an UNNAMEABLE verdict as itself — a newer server must not render as healthy', () => {
+    render(<SessionLine session={s({ spawnState: 'proxy-refused' as never, started: true })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(chip()).not.toBeNull();
+    expect(chip()?.textContent).toBe('? proxy-refused');
+    // And NOT filed under `unrecognised`, which is a real member meaning
+    // something else — ccd recorded an rc THE SERVER could not name. This is one
+    // layer further out: the server named it fine and the CLIENT cannot.
+    expect(chip()?.getAttribute('data-spawn')).toBe('proxy-refused');
+  });
+
+  it('truncates an unnameable verdict rather than let the wire size a cell', () => {
+    // The token is untrusted text off the socket. React escapes it, so this is
+    // about LAYOUT, not injection: `.sess-spawn` is `flex: none` and would take
+    // whatever length it is given, squeezing `.sess-held` — the one shrinkable
+    // cell — out of the row.
+    render(<SessionLine session={s({ spawnState: 'z'.repeat(200) as never, started: true })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(chip()?.textContent?.length).toBeLessThanOrEqual(20);
+  });
+
+  it('a non-string verdict is still a visible chip, never a crash and never silence', () => {
+    // Cast, not revived: the field's runtime type is whatever arrived.
+    render(<SessionLine session={s({ spawnState: 42 as never, started: true })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(chip()?.textContent).toBe('? unnameable');
+  });
+
   it('never renders a chip on a dead row — the exemption critical/subagentList already take', () => {
     render(<SessionLine session={s({ status: 'dead', bucket: 'dead', spawnState: 'blocked', started: false })}
                         onOpen={() => {}} onActions={() => {}} />);
