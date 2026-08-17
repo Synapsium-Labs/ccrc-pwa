@@ -24,12 +24,13 @@
  * the entire reason the fixture exists. If it goes red on a ROW, fix ccd. Never
  * the fixture.
  */
+import fs from 'node:fs';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { SESSION_LIFECYCLES } from '../../shared/api.js';
 import {
   FIXTURE_NOW_SEC, LIFECYCLE_FIXTURE, type LifecycleFixtureRow,
 } from './sessionLifecycleFixture.js';
-import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-lifecycle-'); });
@@ -148,5 +149,58 @@ describe("ccd -> shared: _session_state's answer space is exactly SESSION_LIFECY
     const got = [...new Set(answers)].sort();
     const want = SESSION_LIFECYCLES.filter((s) => s !== 'unmeasurable').slice().sort();
     expect(got).toEqual(want);
+  });
+});
+
+// §1.6 — the new rung, in the implementation that ships on the fleet box. The
+// derived set-equality tail above moves 6 -> 7 on its own, because the sweep
+// already plants `alive` x `started: none`; what it CANNOT state is where the
+// rung sits, so that gets its own assertions here.
+describe('the unclaimed rung in bash, and its POSITION', () => {
+  const ask = (lines: string[]): string => h.sh([
+    CLOCK, `rm -f "$REG/${ID}".*`, '_alive() { return 0; }', ...lines, `_session_state ${ID}`,
+  ].join('\n'));
+
+  it('a live pane with a FRESH heartbeat and no claim reads unclaimed, never running', () => {
+    // THE ORDERING CONTRACT, in the implementation that ships on the fleet box.
+    // The specimen was alive AND supervised AND unclaimed; an `unclaimed`
+    // checked after `running` could never fire on it.
+    expect(ask([`printf '%s' "$((now - 5))" > "$REG/${ID}.supervised"`])).toBe('unclaimed');
+  });
+
+  it('and it wins over unsupervised too', () => {
+    expect(ask([])).toBe('unclaimed');
+  });
+
+  it('a claimed live pane is unaffected — running and unsupervised still answer', () => {
+    expect(ask([`printf '%s' "$((now - 5))" > "$REG/${ID}.supervised"`, `printf 1 > "$REG/${ID}.started"`]))
+      .toBe('running');
+    expect(ask([`printf 1 > "$REG/${ID}.started"`])).toBe('unsupervised');
+  });
+
+  it('a DEAD pane with no claim is still never-started, not unclaimed', () => {
+    // The rung is inside the alive branch. `unclaimed` says a process is
+    // running that no registry row claims — the repair is a CLAIM. `orphan`
+    // says nothing is bringing this back — the repair is a PROCESS.
+    const out = h.sh([CLOCK, `rm -f "$REG/${ID}".*`, '_alive() { return 1; }', `_session_state ${ID}`].join('\n'));
+    expect(out).toBe('never-started');
+  });
+
+  it('the word is in the function BODY, and the header comment names it too', () => {
+    // NOT a comment assertion, though the plan's title said so: `type`
+    // deparses from the parse tree and comments do not survive it (measured in
+    // batch B4 against `cmd_ws_add`). So this hit is the `echo unclaimed`
+    // itself — which is still worth pinning: it reds if the rung is deleted
+    // wholesale, one rung earlier than a behavioural case would notice a
+    // partial edit. The HEADER comment's own enumeration is pinned by reading
+    // the shipped file, because that is the only place it exists.
+    expect(h.sh('type _session_state')).toContain('unclaimed');
+    // Through `CCD`, never a second spelling of the script's path: that is one
+    // of `single-definition.test.ts`'s pins, and a `new URL(…)` relative to
+    // this file turned it red (measured). Which is also why this comment does
+    // not write that relative path out — the guard scans comments too.
+    const src = fs.readFileSync(CCD, 'utf8');
+    expect(src).toContain(
+      '_session_state() {   # id -> running|unsupervised|unclaimed|stopped|restarting|orphan|never-started');
   });
 });

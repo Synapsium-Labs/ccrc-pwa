@@ -25,7 +25,10 @@ function makeStubBinary(name: string, body: string): string {
   return file;
 }
 
-interface ExecRes { ok: boolean; code?: number; stdout?: string; stderr?: string; err?: string }
+interface ExecRes {
+  ok: boolean; code?: number; stdout?: string; stderr?: string; err?: string;
+  killed?: boolean; signal?: string | null;
+}
 
 describe('ccrc-agent exec whitelist', () => {
   let agent: RunningAgent | undefined;
@@ -214,6 +217,60 @@ describe('ccrc-agent exec whitelist', () => {
     const src = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
     expect(src).toContain('const MAX_EXEC_TIMEOUT_MS = 300_000;');
   });
+
+  it('tells a SIGTERM at the deadline apart from a plain non-zero exit (§1.4)', async () => {
+    fixture = makeFixture();
+    agent = await boot(fixture);
+    client = new TestClient(agent.port);
+    await client.hello();
+    // Two children that both answer `code: 1` today and are byte-identical on the
+    // wire: one that REFUSED, one we KILLED. That collapse is why the dispatch
+    // layer cannot tell a real failure from a timeout, and §1.5's adoption gate
+    // rests entirely on telling them apart.
+    //
+    // Both argv are WHITELISTED subcommands (`has-session`, `capture-pane`): the
+    // exec op checks `isExecAllowed` BEFORE it ever spawns, so a made-up token
+    // like `hang` would be answered `forbidden` and never reach `runExec`. The
+    // stub keys its sleep off the subcommand instead.
+    const bin = makeStubBinary('tmux', 'if [ "$1" = capture-pane ]; then sleep 30; fi; exit 1');
+    const origPath = process.env.PATH;
+    process.env.PATH = `${path.dirname(bin)}${path.delimiter}${origPath ?? ''}`;
+    try {
+      const refused = await client.req<ExecRes>(1, { op: 'exec', cmd: 'tmux', args: ['has-session'] });
+      expect(refused).toMatchObject({ ok: true, code: 1, killed: false, signal: null });
+
+      const killed = await client.req<ExecRes>(2, {
+        op: 'exec', cmd: 'tmux', args: ['capture-pane'], timeoutMs: 200,
+      });
+      expect(killed).toMatchObject({ ok: true, code: 1, killed: true });
+      expect((killed as { signal?: unknown }).signal).toBe('SIGTERM');
+    } finally {
+      process.env.PATH = origPath;
+    }
+  }, 20_000);
+
+  it('leaves stderr empty on a kill, and the reason is NOT "a killed child writes nothing"', async () => {
+    fixture = makeFixture();
+    agent = await boot(fixture);
+    client = new TestClient(agent.port);
+    await client.hello();
+    // C2's correction, worth pinning because the false version is written down in
+    // this repo: `execFile` DELIVERS whatever the child had already buffered. The
+    // stderr is empty because NO STDERR-WRITING STATEMENT WAS REACHED — the child
+    // was still asleep. This stub proves it by writing to stderr BEFORE it sleeps.
+    const bin = makeStubBinary('tmux', 'echo "partial" 1>&2; sleep 30');
+    const origPath = process.env.PATH;
+    process.env.PATH = `${path.dirname(bin)}${path.delimiter}${origPath ?? ''}`;
+    try {
+      const res = await client.req<ExecRes>(1, {
+        op: 'exec', cmd: 'tmux', args: ['capture-pane'], timeoutMs: 300,
+      });
+      expect(res).toMatchObject({ ok: true, killed: true });
+      expect((res as { stderr?: string }).stderr).toContain('partial');
+    } finally {
+      process.env.PATH = origPath;
+    }
+  }, 20_000);
 });
 
 describe('resolveSpawnCmd — ccd resolved against the agent home (systemd PATH lacks ~/.local/bin)', () => {

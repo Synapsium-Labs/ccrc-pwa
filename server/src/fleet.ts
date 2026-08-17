@@ -10,7 +10,7 @@ import type { HookState } from './hookstate.js';
 import type { FleetSession, LifecycleInput, PrState, SessionStatus, TaskProgress } from '../../shared/api.js';
 // The ladder lives in `shared/` because `reviveFleetSession` is its second
 // producer and the two must not be able to disagree — see its own docstring.
-import { sessionBucket, sessionLifecycle } from '../../shared/api.js';
+import { sessionBucket, sessionLifecycle, spawnVerdict } from '../../shared/api.js';
 import type { Roster } from '../../shared/roster.js';
 
 /** `FleetSession.askSummary`'s ceiling — a fleet card row, not a transcript. */
@@ -330,6 +330,13 @@ export async function assembleFleet(
       swapBlocked: r.swapBlocked === null
         ? null
         : { at: r.swapBlocked.at * 1000, reason: r.swapBlocked.reason },
+      // Carried straight off the record. `SessionRecord.spawn: { at; rc } | null`
+      // ALREADY EXISTS and is already parsed from `$REG/<id>.spawn` — nothing new
+      // is read off disk here, and the `<epoch-seconds> <rc>` encoding is
+      // untouched (its timestamp is what `_supervised_start` compares `at >= since`
+      // against). This is a PROJECTION onto the wire, not a second field.
+      started: r.started,
+      spawnState: spawnVerdict(r.spawn === null ? null : r.spawn.rc),
       bucket: 'idle', bucketSince: null,   // replaced immediately below
     };
     // Computed FROM the assembled session, never from a second copy of the

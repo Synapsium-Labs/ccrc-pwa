@@ -1336,3 +1336,30 @@ describe('the three well-trap rules the blocker was found in', () => {
       .toBeCloseTo(13.978, 2);
   });
 });
+
+// ── §1.6b's new coloured meta cell ──────────────────────────────────────────
+describe('the spawn chip is measured, not left in the blind spot', () => {
+  it('measures the spawn chip rather than leaving it in the uncovered census', () => {
+    // `.sess-held`/`.sess-lifecycle`/`.sess-swapblocked` all sit in the auditor's
+    // UNCOVERED census — their ground is DOM knowledge a parser cannot recover —
+    // so a new coloured cell beside them would silently join them there. The
+    // INHERITED_GROUNDS entry is what makes it MEASURED.
+    expect(INHERITED_GROUNDS['fleet.css .sess-spawn']?.under).toEqual(['var(--bg-surface)']);
+    const rows = report.measured.filter((m) => m.label.endsWith('fleet.css .sess-spawn'));
+    expect(rows).toHaveLength(2);           // dark and light
+    for (const row of rows) expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it('measures the ink-tertiary VARIANTS too — half a grounded cell is a blind spot', () => {
+    // The chip has two inks, not one: `unconfirmed`/`unknown` drop to
+    // --ink-tertiary. An attribute variant recovers no ground from its selector
+    // either, so without its own entry that half stays in the census while the
+    // base half is measured — the worst of both, because the report then LOOKS
+    // like the cell is covered.
+    const key = "fleet.css .sess-spawn[data-spawn='expired'], .sess-spawn[data-spawn='unrecognised']";
+    expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-surface)']);
+    const rows = report.measured.filter((m) => m.label.endsWith(key));
+    expect(rows).toHaveLength(2);
+    for (const row of rows) expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+  });
+});

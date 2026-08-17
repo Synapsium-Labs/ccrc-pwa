@@ -171,17 +171,41 @@ export function resolveSpawnCmd(cmd: string, home: string): string {
   return cmd === 'ccd' ? path.join(home, '.local', 'bin', 'ccd') : cmd;
 }
 
+/**
+ * §1.4. `error.code ?? 1` used to be the WHOLE answer, which made `{code:1}` from
+ * "ccd exited 1" byte-identical to `{code:1}` from "we SIGTERM'd ccd at the
+ * deadline" — an overloaded value at a seam, and the reason the dispatch layer
+ * could not tell a real refusal from a timeout (§1.5's adoption gate rests on
+ * exactly this distinction).
+ *
+ * `killed` and `signal` are ADDITIVE and absence-permits: an older server ignores
+ * both, and a newer server reads their absence as UNMEASURED (`server/src/exec.ts`),
+ * which is the safe direction — only a MEASURED cut-short adopts, and ignorance
+ * is not a measurement. (This sentence used to say absence reads as
+ * `killed: false`. That collapse was §1.7's defect, not its contract: `false`
+ * is a claim about a kill nobody looked for.) NO `FLEET_PROTO` bump.
+ *
+ * WHY STDERR IS EMPTY ON A KILL, correctly stated: not because "a killed child
+ * writes nothing" — `execFile` delivers whatever was already buffered — but
+ * because NO STDERR-WRITING STATEMENT WAS REACHED. The child was still blocked.
+ */
 function runExec(
   cmd: string,
   args: string[],
   timeoutMs: number,
-): Promise<{ code: number; stdout: string; stderr: string }> {
+): Promise<{ code: number; stdout: string; stderr: string; killed: boolean; signal: string | null }> {
   return new Promise((resolve) => {
     execFile(cmd, args, { maxBuffer: EXEC_MAX_BUFFER, timeout: timeoutMs }, (error, stdout, stderr) => {
       const code = error
         ? (((error as NodeJS.ErrnoException & { code?: number }).code as number | undefined) ?? 1)
         : 0;
-      resolve({ code: typeof code === 'number' ? code : 1, stdout: String(stdout), stderr: String(stderr) });
+      resolve({
+        code: typeof code === 'number' ? code : 1,
+        stdout: String(stdout),
+        stderr: String(stderr),
+        killed: (error as (NodeJS.ErrnoException & { killed?: boolean }) | null)?.killed === true,
+        signal: (error as (NodeJS.ErrnoException & { signal?: string }) | null)?.signal ?? null,
+      });
     });
   });
 }

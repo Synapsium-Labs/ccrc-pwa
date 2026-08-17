@@ -871,3 +871,112 @@ describe('Build 4 — one ccrc-mail fence', () => {
     ]);
   });
 });
+
+// §1.6b. Neither new vocabulary gets this protection for free, and neither did
+// the one PR #50 shipped. "A new fleet mutation is not done until its interrupted
+// state is either impossible or named" is only a doctrine if a SECOND copy of the
+// naming is a red suite.
+describe('Build 8 vocabularies — one definition each, all derived from their map', () => {
+  const oneDefinition = (decl: RegExp, name: string) => {
+    const hits = ALL.filter((f) => decl.test(readFileSync(f, 'utf8')));
+    expect(hits.map(rel), name).toEqual(['shared/api.ts']);
+  };
+
+  it('defines SpawnVerdict and SPAWN_VERDICTS exactly once, in shared/', () => {
+    oneDefinition(/^\s*export type SpawnVerdict\b/m, 'SpawnVerdict');
+    oneDefinition(/^\s*export const SPAWN_VERDICTS\b/m, 'SPAWN_VERDICTS');
+  });
+
+  it('DERIVES SPAWN_VERDICTS from its map — never a hand-written array beside the type', () => {
+    // The technique `PR_REASONS` and `SESSION_LIFECYCLES` already use: a member
+    // added to the union with no key in the map is TS2739 here, and a key the
+    // union does not have is TS2353. A literal array is a list that nothing forces
+    // to agree with the type it claims to enumerate.
+    const api = readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8');
+    expect(api).toMatch(
+      /export const SPAWN_VERDICTS: readonly SpawnVerdict\[\] =\s*\n?\s*Object\.keys\(SPAWN_VERDICT_MAP\)/);
+    expect(api).not.toMatch(/SPAWN_VERDICTS[^=]*=\s*\[/);
+  });
+
+  it('spells the spawn members nowhere else — no second table of the same six words', () => {
+    // `SessionLine.tsx`'s `SPAWN_WORD` is a PRESENTATIONAL map keyed BY the type
+    // (`Record<SpawnVerdict, string | null>`, which the compiler keeps total), not
+    // a second enumeration — so it holds the member names as KEYS and is exempt by
+    // being typed. What this forbids is a free-standing list.
+    const LIST = /\[\s*'ready',\s*'login',\s*'vanished',\s*'expired',\s*'blocked',\s*'unrecognised'\s*\]/;
+    expect(ALL.filter((f) => LIST.test(readFileSync(f, 'utf8'))).map(rel)).toEqual([]);
+  });
+
+  it('defines DivergenceKind and DIVERGENCE_KINDS exactly once, in shared/', () => {
+    oneDefinition(/^\s*export type DivergenceKind\b/m, 'DivergenceKind');
+    oneDefinition(/^\s*export const DIVERGENCE_KINDS\b/m, 'DIVERGENCE_KINDS');
+  });
+
+  it('DERIVES DIVERGENCE_KINDS from its map', () => {
+    const api = readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8');
+    expect(api).toMatch(
+      /export const DIVERGENCE_KINDS: readonly DivergenceKind\[\] =\s*\n?\s*Object\.keys\(DIVERGENCE_KIND_MAP\)/);
+    expect(api).not.toMatch(/DIVERGENCE_KINDS[^=]*=\s*\[/);
+  });
+
+  it('has exactly ONE census producer — the frame is emitted from one file', () => {
+    // Splitting `DIVERGENCE_KINDS` (L0) from `divergences()` (L1) is defensible
+    // ONLY if the census has one producer. `reviveFleetSession` must never become
+    // a second, which is why the census rides a FRAME and not a `FleetSession`
+    // field.
+    const emitters = ALL.filter((f) => /bus\.emit\(\s*'divergence'/.test(readFileSync(f, 'utf8')));
+    expect(emitters.map(rel)).toEqual(['server/src/watch.ts']);
+    const callers = ALL.filter((f) => /\bdivergences\s*\(/.test(readFileSync(f, 'utf8')));
+    expect(callers.map(rel).sort()).toEqual(['server/src/divergence.ts', 'server/src/watch.ts']);
+  });
+
+  it('defines SESSION_LIFECYCLES exactly once — THE GAP PR #50 SHIPPED WITH', () => {
+    // Not a new rule: the same rule, applied to the vocabulary this build is
+    // extending. It had no describe at all, which is how a second copy would have
+    // arrived unnoticed in exactly the wave that adds a member to it.
+    oneDefinition(/^\s*export type SessionLifecycle\b/m, 'SessionLifecycle');
+    oneDefinition(/^\s*export const SESSION_LIFECYCLES\b/m, 'SESSION_LIFECYCLES');
+    const api = readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8');
+    expect(api).toMatch(
+      /export const SESSION_LIFECYCLES: readonly SessionLifecycle\[\] =\s*\n?\s*Object\.keys\(SESSION_LIFECYCLE_MAP\)/);
+    expect(api).not.toMatch(/SESSION_LIFECYCLES[^=]*=\s*\[/);
+  });
+
+  it('mints NO `spawnstate` FIELD anywhere — the shipped registry field is `spawn`', () => {
+    // Every occurrence of the word in the spec is a stale draft artifact. A
+    // word-only field would destroy the timestamp `_supervised_start` compares
+    // `at >= since` against.
+    //
+    // THE REGEX MATCHES A FIELD, NOT THE WORD, AND THAT IS NOT A WEAKENING — it
+    // is the difference between this scan and a spell-checker. Task 101's
+    // `SpawnVerdict` docstring and Task 109's `run_events` comment both FORBID
+    // the field in prose, inside `shared/api.ts` and `server/src/coord/dispatch.ts`
+    // — two files inside ROOTS. A bare `\bspawnstate\b` would red on the very
+    // sentences that exist to prevent it, which is a guard eating its own
+    // documentation. So: a property access, a quoted key, or a
+    // declaration/assignment — every shape an actual field can take.
+    //
+    // THE BACKTICK IS NOT IN THE QUOTE CLASS, and that correction was forced by
+    // measurement rather than taste: both forbidding comments spell the word
+    // `spawnstate` in MARKDOWN backticks, so a class of ['"`] red on
+    // `shared/api.ts` the moment this describe was written — the guard eating its
+    // own documentation, exactly the failure the paragraph above names. A
+    // backtick cannot quote an object key in TypeScript anyway (only a computed
+    // one), so nothing a real field could look like is lost; a template-string
+    // access is still caught by the `\.spawnstate` alternative.
+    const FIELD = /\.spawnstate\b|['"]spawnstate['"]|\bspawnstate\s*[:=]/;
+    for (const f of ALL) {
+      expect(FIELD.test(readFileSync(f, 'utf8')),
+        `${rel(f)} names a spawnstate field`).toBe(false);
+    }
+  });
+
+  it('and the two prose FORBIDDINGS still pass — the guard does not eat its own docs', () => {
+    // The positive case, so nobody "fixes" the regex above back into \b…\b and
+    // discovers the breakage only when Task 101 lands.
+    const api = readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8');
+    const dispatch = readFileSync(path.join(ccrcRoot, 'server/src/coord/dispatch.ts'), 'utf8');
+    expect(api).toContain('spawnstate');       // in the SpawnVerdict docstring
+    expect(dispatch).toContain('spawnstate');  // in the run_events detail comment
+  });
+});

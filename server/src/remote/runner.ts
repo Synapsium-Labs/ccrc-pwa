@@ -53,7 +53,11 @@ const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
   // `_spawn` LAST, so a kill at 90 s landed AFTER the workspace existed and
   // BEFORE `_reg_set started 1` — leaving a fully-registered workspace with no
   // session, bound to no run, while dispatch answered `fleetFailed` with an
-  // EMPTY stderr (a killed child writes nothing) and the run stayed `planned`.
+  // EMPTY stderr — not because a killed child writes nothing (execFile
+  // delivers whatever was already buffered) but because NO STDERR-WRITING
+  // STATEMENT WAS REACHED: ccd was still blocked inside the settle. Corrected
+  // here rather than left standing; §1.4 now carries the distinction on the
+  // wire. The run stayed `planned`.
   // An orphan is the expensive failure: it costs a worktree, a branch and a
   // registry identity that only a human may clear (`ws-rm`/`ws-reap` are
   // human-only by contract), so this budget is set to the ceiling deliberately
@@ -67,6 +71,22 @@ const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
   // rather than orphaning when it is hit, is tracked as the ccd-side half.
   'ws-add': 300_000,
   ensure: 300_000,
+  // The two SUPERVISION verbs, which used to inherit the flat 90 s silently.
+  // `cmd_start` goes through `_supervised_start`, and BOTH of its outcomes are
+  // bounded — which is why this is a correctness fix rather than a latent F8 —
+  // but they are bounded at very different numbers, and it is the SECOND one that
+  // sets this budget:
+  //   • systemd happy path: `reset-failed` + `enable --now`, then a poll bounded
+  //     at `SUPERVISED_START_WAIT` (30 s, ccd/ccd:79). Comfortably inside 90 s.
+  //   • the two UNSUPERVISED fallbacks (no `systemctl`, or the unit refuses to
+  //     enable): `_spawn_start` + `_spawn_settle`, whose wall-clock bound on this
+  //     agent-reachable path is `SPAWN_SETTLE_S` (240 s, ccd/ccd:82) — a COLD
+  //     Claude Code start against a freshly seeded workspace HOME. That is what
+  //     exceeds 90 s, and 300 s is the agent's own `MAX_EXEC_TIMEOUT_MS` ceiling.
+  // `cmd_enable` is an arity check plus `cmd_start`, so it inherits the same worst
+  // case exactly — hence the same number rather than a guess.
+  start: 300_000,
+  enable: 300_000,
 };
 
 function timeoutMsFor(cmd: string, args: string[]): number {
@@ -80,12 +100,33 @@ function timeoutMsFor(cmd: string, args: string[]): number {
   return CCD_VERB_TIMEOUT_MS[args[0] ?? ''] ?? CCD_TIMEOUT_MS;
 }
 
+/** THE L3 RULE, applied here rather than described: this function rebuilds the
+ *  object field by field, so anything it does not name is DISCARDED — which is
+ *  exactly how the agent's `killed` was being narrowed away one hop before §1.5
+ *  needed it. Spread-conditional, not `killed: Boolean(...)`: a non-boolean from
+ *  a peer this build cannot trust must read as ABSENT, not as `false`.
+ *
+ *  `signal` (§1.7) is the same rule one class narrower, and it was the half
+ *  still being dropped: the agent has sent BOTH since §1.4 (`agent/src/server.ts`
+ *  `runExec`), and naming only `killed` here re-narrows exactly the distinction
+ *  §1.4 widened. A child node did not kill itself arrives `killed: false` with a
+ *  `signal` naming what did — the only evidence that a `ws-add` was cut short by
+ *  an operator `kill`, an OOM reaper, or systemd stopping the unit mid-spawn.
+ *  BOTH `string` AND an explicit `null` are carried, because a present `null`
+ *  ("measured: no signal") is a different fact from the key being missing ("an
+ *  older agent, which measured nothing"), and only the spread keeps them apart. */
 function asExecResult(res: unknown): ExecResult {
-  const r = res as { code?: unknown; stdout?: unknown; stderr?: unknown };
+  const r = res as { code?: unknown; stdout?: unknown; stderr?: unknown; signal?: unknown };
   return {
     code: typeof r.code === 'number' ? r.code : 1,
     stdout: typeof r.stdout === 'string' ? r.stdout : '',
     stderr: typeof r.stderr === 'string' ? r.stderr : '',
+    ...(typeof (res as { killed?: unknown }).killed === 'boolean'
+      ? { killed: (res as { killed: boolean }).killed }
+      : {}),
+    ...(typeof r.signal === 'string' || r.signal === null
+      ? { signal: r.signal as string | null }
+      : {}),
   };
 }
 
@@ -108,6 +149,24 @@ export function createRunner(client: FleetClient): Runner {
       );
       return asExecResult(res);
     } catch (e) {
+      // NEITHER HALF HERE, DELIBERATELY, and a test pins the absence. Three facts
+      // sit on `code: 1`, not two: ccd refused, ccd was cut short, and we do not
+      // know because the LINK failed (a dropped socket, a client-side wait
+      // expiry). Not-adopting is the safe outcome for all three, and `killed:
+      // false`/`signal: null` would be as wrong as their positives — absence is
+      // the honest answer, and `cutShort` (`lifecycle.ts`) reads it as
+      // `UNMEASURED`.
+      //
+      // NOT "the ONE shape `cutShort` answers `UNMEASURED` for", which is what
+      // this comment claimed until 00fd376 widened that function. The SIGNAL
+      // half decides there now and `killed` only fast-paths an adopt, so every
+      // shape with an unmeasured `signal` that `killed` does not fast-path
+      // answers `UNMEASURED`: this one, which sends neither half, and the half-measured
+      // `killed: false, signal` absent that `asExecResult`'s independent
+      // spreads let a peer frame carry. The property this arm actually depends
+      // on was never uniqueness — it is that omitting BOTH lands on
+      // `UNMEASURED`, and it still does. Adding either field here would demote
+      // this from "unknown" to "measured, and it refused cleanly".
       return { code: 1, stdout: '', stderr: e instanceof Error ? e.message : String(e) };
     }
   };

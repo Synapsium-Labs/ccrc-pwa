@@ -313,9 +313,63 @@ describe('selection is polarity, status is hue', () => {
                         // serves selects the dead row precisely to read
                         // "stopped by agent, 2d ago".
                         '.sess-held', '.sess-lifecycle', '.sess-swapblocked',
-                        '.sess-unmeasured']) {
+                        '.sess-unmeasured',
+                        // §1.6b's chip: it sets its own `--status-dead-text`
+                        // (and `--ink-tertiary` on two variants), so it is a
+                        // coloured cell exactly like `.sess-warn` above and
+                        // strands the same way if it is left out of here.
+                        '.sess-spawn']) {
       expect(group).toContain(`.sess-line--active ${cell}`);
     }
+  });
+
+  it('beats the spawn chip\'s own [data-spawn] variants by SPECIFICITY, not by source order', () => {
+    // Membership in the achromatic group (asserted just above) is necessary and
+    // NOT sufficient for this one cell. `.sess-line--active .sess-spawn` is
+    // (0,2,0) — and so is `.sess-spawn[data-spawn='expired']`, which is declared
+    // LATER in this file. On a selected row carrying one of those variants the
+    // tie therefore goes to source order, the variant wins, and the chip paints
+    // --ink-tertiary on the --ink-primary slab: 2.72:1 dark / 2.91:1 light,
+    // against this file's 4.5:1 body floor. The group's
+    // `.sess-line--active .sess-spawn[data-spawn]` member (0,3,0) is what
+    // settles it by specificity instead — which is also what makes moving
+    // either rule free. Nothing tested that member: deleting it left the whole
+    // pwa suite green (measured 2026-08-17), so the one line standing between
+    // the selected row and a sub-floor contrast was a comment, not a mechanism.
+    //
+    // Counting classes + attributes + pseudo-classes is enough for a (0,x,0)
+    // comparison: there is no id and no element name anywhere near .sess-spawn,
+    // and both sides of this tie are pure class/attribute selectors.
+    const spec = (sel: string): number =>
+      (sel.match(/\.[A-Za-z0-9_-]+|\[[^\]]*\]|:[a-z-]+/g) ?? []).length;
+    const group = selectorsOf(css, '.sess-line--active .sess-meta > *:not(:first-child)::before')
+      .filter((s) => s.startsWith('.sess-line--active .sess-spawn'));
+    expect(group, 'the spawn chip left the achromatic group entirely').not.toEqual([]);
+    const scrubbed = stripComments(css);
+    const groupAt = scrubbed.indexOf('.sess-line--active .sess-spawn');
+    for (const variant of ['expired', 'unrecognised']) {
+      const sel = `.sess-spawn[data-spawn=${variant}]`;
+      // The variant really does paint a colour of its own — without that there
+      // is nothing to beat and everything below would be vacuous.
+      expect(declValue(ruleFor(sel), 'color'), `${sel} no longer sets its own colour`)
+        .toBe('var(--ink-tertiary)');
+      // …and it is declared AFTER the achromatic rule, which is precisely why
+      // an equal-specificity member cannot settle this.
+      const variantAt = scrubbed.search(new RegExp(`\\.sess-spawn\\[data-spawn=['"]?${variant}['"]?\\]`));
+      expect(variantAt, `${sel} is not in the stylesheet any more`).toBeGreaterThan(-1);
+      expect(variantAt, `${sel} now precedes the achromatic rule — this test no longer proves anything`)
+        .toBeGreaterThan(groupAt);
+      expect(Math.max(...group.map(spec)),
+        `no member of the achromatic group out-specifies ${sel}, so the selected row loses the tie to it`)
+        .toBeGreaterThan(spec(sel));
+    }
+  });
+
+  it('gives the spawn chip a flex: none cell so it cannot steal the hold reason\'s room', () => {
+    // `.sess-held` is the ONE shrinkable cell in `.sess-meta` (overflow:hidden +
+    // text-overflow:ellipsis, no `flex: none`), and §2.4 lengthens what it holds
+    // in the same build. A chip without `flex: none` truncates it first.
+    expect(ruleFor('.sess-spawn')).toContain('flex: none');
   });
 
   // The list above names cells; this names the RULE that keeps producing them.

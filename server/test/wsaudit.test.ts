@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { parseAudit, parseReap, refusalSentence, SENTENCES } from '../src/wsaudit.js';
+import { reviveWsAudit } from '../../shared/api.js';
 import { CCD } from './ccdWsHelpers.js';
 
 /**
@@ -255,5 +256,40 @@ describe('parseReap', () => {
     // No stderr text to fall back to, so the generic frame — pinned exactly,
     // since nothing else in this suite renders it verbatim.
     expect(r.sentence).toBe('ccrc could not clean up this workspace.');
+  });
+});
+
+describe('the session fields an older ccd does not send', () => {
+  // `pr` and `merge` are in the fixture because `reviveAuditPr`/`reviveMerge`
+  // `asObj` them unconditionally — omit either and every case below throws
+  // `MalformedSnapshot('pr')` before `unit` is ever read, which makes the
+  // rejects-an-unknown-word case pass for the wrong reason. (The plan's
+  // literal fixture omitted both; measured.)
+  const doc = (extra: Record<string, unknown>): unknown => ({
+    id: 'demo-quiet-basin', branch: 'ws/quiet-basin', base: 'main',
+    workdir: '/w', project: 'demo', repo: '/r',
+    exists: true, headMatchesRegistry: true,
+    pr: { number: null, url: '', mergeCommit: '', headRefOid: '' },
+    merge: { proof: null, fetchedAt: null },
+    transcript: 't', verdict: 'not-archived', detail: 'd', ...extra,
+  });
+
+  it('revives alive/started/unit when ccd sends them', () => {
+    const a = reviveWsAudit(doc({ alive: true, started: true, unit: 'enabled' }), 's');
+    expect([a.alive, a.started, a.unit]).toEqual([true, true, 'enabled']);
+  });
+
+  it('DEGRADES rather than throwing when an older ccd omits all three', () => {
+    // reqBool would throw here, and the whole sheet would render nothing —
+    // against a rolled-back ccd, or a second fleet host, or a bad deploy
+    // order. `false`/`null` say "we could not see one", which is what a build
+    // that cannot answer means. This is why the widening ships beside the
+    // WRITER and not in the server section.
+    const a = reviveWsAudit(doc({}), 's');
+    expect([a.alive, a.started, a.unit]).toEqual([false, false, null]);
+  });
+
+  it('rejects a `unit` word this build does not know, rather than laundering it', () => {
+    expect(() => reviveWsAudit(doc({ unit: 'masked' }), 's')).toThrow();
   });
 });

@@ -42,6 +42,7 @@ const session = (id: string): FleetSession => ({
   branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, held: null, bucket: 'idle', bucketSince: null,
   unmeasured: [], lifecycle: null, stoppedBy: null, swapBlocked: null,
+  started: true, spawnState: null,
 });
 
 /** The digest the SERVER computes for its own roster — derived through the

@@ -3,7 +3,7 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import WebSocket from 'ws';
 import type { FastifyInstance } from 'fastify';
-import { FLEET_PROTO, FLEET_PROTO_MIN } from '../../shared/api.js';
+import { FLEET_PROTO, FLEET_PROTO_MIN, type Divergence } from '../../shared/api.js';
 import { buildServer, type Deps } from '../src/server.js';
 import type { Runner } from '../src/exec.js';
 import { Bus } from '../src/bus.js';
@@ -25,11 +25,36 @@ const seedSession = (home: string, id: string, wrapper: string) => {
 };
 
 // Queue-based collector so no message is dropped between sequential awaits.
-const collect = (ws: WebSocket) => {
+//
+// `dropDivergence` IS OPT-IN, AND ONLY THE TICKING TESTS OPT IN. `tick()`
+// VOID-dispatches `sweepDivergences` (its own slower clock, its own lane), so
+// `await watcher.tick()` does NOT await it — the census sweep is still in flight
+// when the socket opens, and its frame lands wherever it lands, including
+// between a test's `hello` and `fleet` assertions. Measured: 2 of 5 full-suite
+// runs, none in isolation, which is exactly the load-sensitivity that shape
+// produces. So the cases that tick a watcher on this socket's own bus pass the
+// flag, and nothing else does.
+//
+// IT USED TO BE UNCONDITIONAL, for the whole file, and that is the part worth
+// stating. The reasoning was sound as far as it went — the wire contract these
+// tests pin is the COLD-START BURST's order (hello, fleet, runs, coord, all four
+// chained inside one `.then` in `server.ts`), frames are additive, and
+// `FLEET_PROTO` discipline says a client must tolerate an unknown frame arriving
+// at any point, so asserting positional ADJACENCY over-specifies it. What it
+// missed is that a blanket drop makes the frame UNTESTABLE HERE BY
+// CONSTRUCTION: no case in this file, present or future, could see a
+// `divergence` regression even when it wanted to. A race in six tests was being
+// answered by blinding all of them. `divergence-sweep.test.ts` owns the
+// classifier and the sweep, but it holds no socket — so `onDivergence` reaching
+// a real client was pinned by a source-text grep and nothing else. The positive
+// case at the bottom of this file is what closes that, and it can only exist
+// because the drop is opt-in.
+const collect = (ws: WebSocket, opts: { dropDivergence?: boolean } = {}) => {
   const queue: unknown[] = [];
   const waiters: Array<(m: unknown) => void> = [];
   ws.on('message', (d) => {
     const m: unknown = JSON.parse(String(d));
+    if (opts.dropDivergence === true && (m as { type?: unknown }).type === 'divergence') return;
     const w = waiters.shift();
     if (w) w(m);
     else queue.push(m);
@@ -78,7 +103,7 @@ describe('fleet REST + WS', () => {
     const addr = app.server.address();
     const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
-    const next = collect(ws);
+    const next = collect(ws, { dropDivergence: true });   // ticks a watcher on this bus
     await new Promise<void>((resolve, reject) => {
       ws.on('open', () => resolve());
       ws.on('error', reject);
@@ -140,7 +165,7 @@ describe('fleet REST + WS', () => {
     const addr = app.server.address();
     const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
-    const next = collect(ws);
+    const next = collect(ws, { dropDivergence: true });   // ticks a watcher on this bus
     await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject); });
 
     const hello = await next(); // hello precedes every fleet frame — see the test above
@@ -554,7 +579,7 @@ describe('fleet REST + WS', () => {
       const addr = app.server.address();
       const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
       const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
-      const next = collect(ws);
+      const next = collect(ws, { dropDivergence: true });   // ticks a watcher on this bus
       await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject); });
 
       expect((await next()).type).toBe('hello');
@@ -591,7 +616,7 @@ describe('fleet REST + WS', () => {
       const addr = app.server.address();
       const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
       const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
-      const next = collect(ws);
+      const next = collect(ws, { dropDivergence: true });   // ticks a watcher on this bus
       await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject); });
       expect((await next()).type).toBe('hello');
       expect((await next()).type).toBe('fleet');
@@ -621,7 +646,7 @@ describe('fleet REST + WS', () => {
       const addr = app.server.address();
       const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
       const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
-      const next = collect(ws);
+      const next = collect(ws, { dropDivergence: true });   // ticks a watcher on this bus
       await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject); });
       expect((await next()).type).toBe('hello');
       expect((await next()).type).toBe('fleet');
@@ -698,7 +723,10 @@ describe('fleet REST + WS', () => {
       const addr = app.server.address();
       const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
       const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
-      const next = collect(ws);
+      // Exactly the cases that tick — an unticked watcher has dispatched no
+      // census sweep, so there is no in-flight `divergence` frame to race with
+      // and no reason to blind that socket.
+      const next = collect(ws, { dropDivergence: opts.tick !== false });
       await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject); });
       return { ws, next, watcher, bus };
     };
@@ -905,6 +933,76 @@ describe('fleet REST + WS', () => {
       const caughtUp = logB.catchUp(logB.epoch, 0);
       expect(caughtUp.resync).toBe(true);         // ...the RING did not
       expect(caughtUp.events).toEqual([]);
+    });
+  });
+
+  // — Review minor 5: the census frame, on the WIRE —
+  describe('the `divergence` frame', () => {
+    it('reaches a connected client, whole, when the census publishes one', async () => {
+      // THE ASSERTION THIS FILE COULD NOT MAKE while `collect` dropped every
+      // `divergence` frame unconditionally. `server.ts` maps the bus event to a
+      // socket send and the sweep emits it, but nothing anywhere opened a socket
+      // and watched one ARRIVE: `divergence-sweep.test.ts` owns the classifier
+      // and the sweep and holds no socket, so the wire half was pinned by a
+      // source-text grep for `bus.on('divergence', …)` — which proves a listener
+      // is registered, not that a client receives anything.
+      //
+      // NOT TICKED, deliberately, and that is what makes this stable rather than
+      // a re-run of the race the drop exists for: the frame is emitted on the
+      // bus by hand, AFTER the cold-start burst has been consumed, so its
+      // arrival is ordered by this test instead of by a lane's own clock.
+      const deps = testDeps(home);
+      const bus = new Bus();
+      app = await buildServer(deps, bus, new FleetWatcher(deps, bus));
+
+      await app.listen({ host: '127.0.0.1', port: 0 });
+      const addr = app.server.address();
+      const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
+      const next = collect(ws);
+      await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject); });
+      expect((await next()).type).toBe('hello');
+      expect((await next()).type).toBe('fleet');
+
+      // TYPED, not inferred: a bare literal widens `kind` to `string`, and the
+      // point of this frame is that it carries a `DivergenceKind` the PWA can
+      // switch on.
+      const found: Divergence[] = [{
+        kind: 'unregistered-worktree', id: null,
+        path: '/data/worktrees/demo/nobody',
+        detail: 'git records a worktree at /data/worktrees/demo/nobody that no registry row claims',
+      }];
+      bus.emit('divergence', found);
+      // The WHOLE frame, field for field — the census is a list of findings a
+      // human acts on, so a frame that arrived with the payload mangled would
+      // be worse than one that did not arrive at all.
+      expect(await next()).toEqual({ type: 'divergence', divergences: found });
+
+      ws.close();
+    });
+
+    it('an EMPTY census is still a frame — "we looked, and the fleet is healthy" is not silence', async () => {
+      // The direction `sweepDivergences`'s own byte guard depends on: the first
+      // sweep of a healthy fleet publishes `[]`, and a client that treated the
+      // absence of a frame as health would never learn the difference between a
+      // clean census and a server that has not looked.
+      const deps = testDeps(home);
+      const bus = new Bus();
+      app = await buildServer(deps, bus, new FleetWatcher(deps, bus));
+
+      await app.listen({ host: '127.0.0.1', port: 0 });
+      const addr = app.server.address();
+      const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
+      const next = collect(ws);
+      await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject); });
+      expect((await next()).type).toBe('hello');
+      expect((await next()).type).toBe('fleet');
+
+      bus.emit('divergence', []);
+      expect(await next()).toEqual({ type: 'divergence', divergences: [] });
+
+      ws.close();
     });
   });
 });

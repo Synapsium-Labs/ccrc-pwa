@@ -15,15 +15,22 @@ import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { chmodSync } from 'node:fs';
 import path from 'node:path';
-import { CCD, seedAccountsSh } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, seedAccountsSh } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
 /** Source ccd with nothing after it: the preamble is what runs, and its `die`
  *  is what we read. `spawnSync`, not `execFileSync`, because a nonzero exit IS
- *  the expected result in two of the three cases. */
+ *  the expected result in two of the three cases.
+ *
+ *  Through `ghContainedEnv` like every other ccd spawn. It was not, and nothing
+ *  noticed, because the containment scan in `ccd-workspaces.test.ts` matched
+ *  only `execFileSync('bash'` — so this file sourced ccd with the box's REAL
+ *  PATH, and the third case below sources it SUCCESSFULLY. Nothing in the
+ *  preamble reaches `gh` today; "nothing reaches it today" is the sentence that
+ *  argument always ends with, and the scan now covers this idiom too. */
 function sourceCcd(home: string): { code: number; stderr: string } {
   const r = spawnSync('bash', ['-c', `source "${CCD}"`], {
-    encoding: 'utf8', env: { ...process.env, HOME: home },
+    encoding: 'utf8', env: ghContainedEnv(home, { ...process.env, HOME: home }, { systemd: true }),
   });
   return { code: r.status ?? -1, stderr: r.stderr ?? '' };
 }

@@ -83,7 +83,7 @@ const session = (over: Partial<FleetSession> = {}): FleetSession => ({
   limits: { five: 10, seven: 40 },
   dialogPending: false, model: null, effort: null, ultracode: false, branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, held: null, bucket: 'idle', bucketSince: null, unmeasured: [],
-  lifecycle: null, stoppedBy: null, swapBlocked: null,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, started: true, spawnState: null,
   version: '2.1.0',
   ...over,
 });
@@ -367,11 +367,10 @@ describe('FleetScreen', () => {
   });
 
   it('disables a + while its own ws-add is in flight, per project', async () => {
-    // ccd does NOT dedupe: ws-add draws a fresh random slug each call and only
-    // checks it against the registry, so two concurrent calls both succeed —
-    // two worktrees, two branches, two systemd units, two of three account
-    // lanes gone. The window is _spawn plus _accept_first_run_prompts, up to
-    // ~15 minutes, with no feedback whatsoever.
+    // ccd now REFUSES a second concurrent ws-add per project
+    // (`busy: another ws-add for <project> is in flight`), so this in-flight state
+    // is a courtesy that saves a round trip — see FleetScreen's own note. It is no
+    // longer the only thing standing between a double-tap and two worktrees.
     let release!: () => void;
     const add = vi.spyOn(api, 'workspaceAdd').mockImplementation(
       () => new Promise<void>((resolve) => { release = resolve; }),

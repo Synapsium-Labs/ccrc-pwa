@@ -10,6 +10,7 @@ beforeEach(() => { h = makePrHarness('ccrc-ccd-audit-'); });
 afterEach(() => { h.cleanup(); });
 
 const ARCH = `_ws_unsupervise() { :; }; _ws_supervise() { :; }; _spawn() { :; };
+  _spawn_start() { SPAWN_FROMSWAP=0; }; _spawn_settle() { :; };
   tmux() { return 1; }; _alive() { return 1; };`;
 
 interface Built { main: string; wt: string; tip: string; merge: string }
@@ -1904,7 +1905,7 @@ describe('the dispatcher', () => {
   const runCcd = (...args: string[]): { code: number; stdout: string; stderr: string } => {
     const opts = {
       encoding: 'utf8' as const, cwd: h.home,
-      env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }),
+      env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true }),
     };
     try { return { code: 0, stdout: execFileSync('bash', [CCD, ...args], opts).trim(), stderr: '' }; }
     catch (e) {
@@ -2554,4 +2555,110 @@ describe('children on the audit wire (D4)', () => {
     expect(a.children, '[] means the walk ran and found nothing, not that nothing ran').toEqual([]);
     expect(fs.existsSync(wt)).toBe(true);
   }, 30000);
+});
+
+// ---------------------------------------------------------------------------
+// §1.6 — THE SESSION BEHIND THE WORKSPACE.
+// ---------------------------------------------------------------------------
+
+describe('ws-audit reports the session\'s own state, on EVERY verdict', () => {
+  it('reports alive/started/unit even when _ws_reap_eval refuses not-archived', () => {
+    // A `not-archived` refusal nulls every downstream field, and that is
+    // exactly the shape that made F8's orphan invisible to the one artifact
+    // whose job is answering "what is the state of this workspace". THE
+    // PLACEMENT ITSELF is pinned by the last case in this block, not by this
+    // one — see there for the measurement.
+    h.makeGhRepo('demo');
+    h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
+    const doc = JSON.parse(h.sh(`${ARCH} cmd_ws_audit --session demo-quiet-basin`));
+    expect(doc.verdict).toBe('not-archived');
+    expect(doc.alive).toBe(false);          // ARCH stubs `_alive() { return 1; }`
+    expect(doc.started).toBe(true);         // cmd_ws_add claimed it
+    // NOT `absent`: the harness's contained systemctl REFUSES (exit 97) rather
+    // than listing nothing, and a refusal is "we could not look", which already
+    // has a home — `null`. `absent` is the positive claim that the manager
+    // answered and does not know this unit, which is the F8 orphan signature;
+    // emitting it for a manager that never answered would be this codebase's
+    // named highest-yield defect, an adapter narrowing a distinction it received.
+    expect(doc.unit).toBeNull();
+  });
+
+  it('says started:false for a row nobody claimed — the F8 shape, nameable at last', () => {
+    h.makeGhRepo('demo');
+    h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
+    h.sh(`rm -f "$REG/demo-quiet-basin.started"`);
+    const doc = JSON.parse(h.sh(`${ARCH} cmd_ws_audit --session demo-quiet-basin`));
+    expect(doc.started).toBe(false);
+  });
+
+  it('unit is null — never a fourth state — where the box has no systemctl at all', () => {
+    h.makeGhRepo('demo');
+    h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
+    const doc = JSON.parse(h.sh(
+      `${ARCH} _have_systemctl() { return 1; }; cmd_ws_audit --session demo-quiet-basin`));
+    expect(doc.unit).toBeNull();
+  });
+
+  it('computes them BEFORE _ws_reap_eval — asserted on the CODE, because the JSON cannot tell', () => {
+    // MEASURED, and the plan was wrong about this: moving the three lines below
+    // `_ws_reap_eval` leaves the `not-archived` case above GREEN. The reason is
+    // in the tree — `_ws_reap_eval "$id" || true` does not return from
+    // `cmd_ws_audit`, so a Phase-A refusal nulls only the fields the EVAL
+    // fills, and these three stay reachable from either position. A document
+    // assertion therefore cannot be the guard.
+    //
+    // The placement still is one: it is what keeps the three answerable if any
+    // future rung of that ladder ever leaves early, and what keeps them off the
+    // far side of `_ws_reap_eval`'s mandatory `git fetch`. So it is pinned
+    // where it IS observable — the deparsed function, the `cmd_ws_restore`
+    // idiom from ccd-spawn-split.test.ts. `type` drops comments, so this
+    // anchors on code: `_alive` appears nowhere else in this verb.
+    const t = h.sh('type cmd_ws_audit');
+    expect(t.indexOf('_alive')).toBeGreaterThan(-1);
+    expect(t.indexOf('_alive')).toBeLessThan(t.indexOf('_ws_reap_eval'));
+    expect(t.indexOf('_ws_unit_state')).toBeLessThan(t.indexOf('_ws_reap_eval'));
+  });
+});
+
+describe('_ws_unit_state', () => {
+  it('is `enabled` when a default.target.wants symlink exists', () => {
+    h.sh(`mkdir -p "$HOME/.config/systemd/user/default.target.wants"
+          ln -sf /dev/null "$HOME/.config/systemd/user/default.target.wants/claude-session@x.service"`);
+    expect(h.sh('_ws_unit_state x')).toBe('enabled');
+  });
+
+  it('is `loaded` when the manager knows the unit but it is not boot-persistent', () => {
+    expect(h.sh(
+      `systemctl() { echo "claude-session@x.service loaded active running x"; return 0; }
+       _ws_unit_state x`)).toBe('loaded');
+  });
+
+  it('is `absent` when list-units SUCCEEDS and does not name it', () => {
+    // The stub exits 0 with no rows — the manager answered, and the answer is
+    // that no unit is watching this session. That is a measurement.
+    expect(h.sh('systemctl() { return 0; }; _ws_unit_state x')).toBe('absent');
+  });
+
+  it('prints NOTHING when the probe REFUSES — a manager that did not answer is not `absent`', () => {
+    // The distinction the third rung must not narrow. A down or unreachable
+    // `--user` manager makes `list-units` fail; piping it to `grep -qF` and
+    // reading only the grep would report EVERY workspace as `absent`, i.e.
+    // "nothing is watching this session" — a false positive on the exact
+    // signature this field exists to make visible. `null` already carries "we
+    // could not see a unit" (the `_have_systemctl` rung), so no fourth word.
+    expect(h.sh('systemctl() { return 97; }; _ws_unit_state x')).toBe('');
+  });
+
+  it('probes with list-units, NOT `systemctl show`', () => {
+    // `show` on an uninstantiated template reports LoadState=loaded, which is
+    // why a naive check misreads this. Measured live: list-units returned 18
+    // rows and the six ids absent from it had no unit loaded at all.
+    const t = h.sh('type _ws_unit_state');
+    expect(t).toContain('list-units');
+    expect(t).not.toContain('systemctl show');
+  });
+
+  it('prints NOTHING where there is no systemctl — the JSON writer renders null', () => {
+    expect(h.sh('_have_systemctl() { return 1; }; _ws_unit_state x')).toBe('');
+  });
 });

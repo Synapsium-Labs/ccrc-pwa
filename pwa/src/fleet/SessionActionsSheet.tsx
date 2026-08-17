@@ -272,6 +272,46 @@ export function SessionActionsSheet({
             </p>
           )}
 
+          {/* §1.6b. A SECOND, orthogonal qualifier: the two notes above say what
+              the row IS; this says how its LAST SPAWN ATTEMPT ended. A row can be
+              `running` today after a failed spawn yesterday, so these are
+              deliberately separate paragraphs and not a widened gate.
+
+              `ready` and `null` say nothing at all — `null` is NOT RECORDED, which
+              is what every session that has not spawned since PR #50 carries. */}
+          {(session.spawnState === 'blocked' || session.spawnState === 'login') && (
+            <p className="sess-sheet-note">
+              {`The last spawn stopped at ${session.spawnState === 'login' ? 'a login screen' : 'a limit or spend banner'} — Restart session will hit it again. Swap account moves this session to a usable lane; the terminal is where you fix the lane itself.`}
+            </p>
+          )}
+          {session.spawnState === 'expired' && (
+            <p className="sess-sheet-note">
+              The last spawn never confirmed its TUI inside the settle window. That
+              is not a fault on its own — a large resume legitimately takes minutes
+              between gates — but if the pane is empty, Restart session re-runs it.
+            </p>
+          )}
+          {session.spawnState === 'vanished' && (
+            <p className="sess-sheet-note">
+              The tmux session disappeared while the last spawn was still waiting on
+              it. Restart session builds a new pane; the conversation is resumed
+              from the transcript, not from that pane.
+            </p>
+          )}
+
+          {/* `unclaimed` and `orphan` have OPPOSITE repairs and must not share a
+              sentence: `orphan` means nothing is bringing this back (fix: a
+              process); this means a process IS running that no registry row claims
+              (fix: a CLAIM). `Restart session` posts `/ensure`, whose live branch
+              runs `_resupervise_live`, and that is where the claim is written —
+              so the sentence below is a measurement, not a hope. No new control
+              is needed. */}
+          {session.lifecycle === 'unclaimed' && (
+            <p className="sess-sheet-note">
+              {`This pane is running, but no registry row claims it — so nothing will resume it, swap it or record its death. Restart session writes the claim and adopts the pane: the same thing ccd ensure ${session.id} does at a terminal. Nothing is restarted and nothing in the conversation is lost.`}
+            </p>
+          )}
+
           <button type="button" className="btn-ghost" onClick={() => setSwapOpen(true)}>
             Swap account
           </button>

@@ -761,6 +761,16 @@
 .sess-line--active .sess-lifecycle,
 .sess-line--active .sess-swapblocked,
 .sess-line--active .sess-unmeasured,
+/* §1.6b's chip paints --status-dead-text (and --ink-tertiary on two variants)
+   of its own, so it strands on the selected slab exactly the way .sess-warn
+   would without this line. */
+.sess-line--active .sess-spawn,
+/* …and its two ink-tertiary VARIANTS, which are (0,2,0) exactly like the line
+   above and are declared LATER in this file, so the bare selector alone would
+   lose the tie to them on the selected row — the same stranding, one attribute
+   deeper. `[data-spawn]` (0,3,0) settles it by specificity rather than by
+   source order, so moving either rule stays free. */
+.sess-line--active .sess-spawn[data-spawn],
 .sess-line--active .sess-meta > *:not(:first-child)::before {
   color: var(--edge-strong);
 }
@@ -1093,6 +1103,23 @@
 }
 
 .sess-warn { color: var(--status-dead-text); flex: none; }
+
+/* The spawn chip (§1.6b) — how the LAST spawn attempt ended, beside the state
+   word rather than folded into it. Two inks, both already minted, so no new
+   contrast pair: --status-dead-text for the verdicts that mean "this will not
+   fix itself" (blocked / login / vanished / unstarted) and --ink-tertiary for
+   the two that mean "we do not know" (unconfirmed / unknown). `flex: none`
+   is load-bearing: .sess-held is the only shrinkable cell in .sess-meta and
+   §2.4 lengthens what it holds. */
+.sess-spawn {
+  font-family: var(--font-mono);
+  flex: none;
+  color: var(--status-dead-text);
+}
+.sess-spawn[data-spawn='expired'],
+.sess-spawn[data-spawn='unrecognised'] {
+  color: var(--ink-tertiary);
+}
 
 /* Registry ladder degrade note (Task 2) — same quiet ink-tertiary register as
    .sess-held next door, PrKeycap's own `unknown`-phase grey. No colour of its
