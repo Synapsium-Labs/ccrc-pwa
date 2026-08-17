@@ -623,7 +623,13 @@ export class FleetWatcher {
       void this.sweepNames().catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as `sweepNames` above. Own clock: this reads
       // git's admin directory per project, which is not a per-tick cost.
-      void this.sweepDivergences(records, registryRead.names)
+      //
+      // NOT HANDED `registryRead.names`, deliberately, though it is sitting
+      // right here and this lane needs exactly that listing. It takes its own,
+      // AFTER git's records — the census weighs the two against each other, and
+      // a listing snapshotted here would be three awaited lanes older than the
+      // records it is compared with. `sweepDivergences` states the race in full.
+      void this.sweepDivergences(records)
         .catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as sweepNames immediately above: this one
       // joins the per-session KeyedQueue AND calls sendPrompt, whose worst case
@@ -1423,7 +1429,7 @@ export class FleetWatcher {
    * `this.deps.coord` is `?.`-chained because `testDeps` supplies none — a
    * non-optional call TypeErrors fourteen `hold-gate` tests plus `pr-sweep`'s.
    */
-  async sweepDivergences(records: SessionRecord[], registryNames: readonly string[]): Promise<void> {
+  async sweepDivergences(records: SessionRecord[]): Promise<void> {
     // `Date.now()`, not an injected clock: this class has none, and `sweepNames`
     // just above reads the same way. `!== 0` is not a style tic — it is what
     // makes the FIRST sweep run immediately after a restart instead of waiting a
@@ -1480,6 +1486,39 @@ export class FleetWatcher {
         headBranch.set(`${project}/${w.name}`, w.headBranch);
       }
     }
+    // THE CLAIM EVIDENCE, READ AFTER THE WORKTREE EVIDENCE IT IS WEIGHED
+    // AGAINST — and that ordering is the whole reason this is a second listing
+    // rather than the one `tick()` already took (D-B4-10's "one listing,
+    // shared"). ccd writes in a fixed order: `git worktree add` first, then the
+    // registry field by field. So a listing taken BEFORE these git records —
+    // which is what being handed `registryRead.names` from the top of the tick
+    // meant, three awaited lanes earlier — can miss a `_reg_set` that had
+    // already landed by the time the records were read, and reassemble "a
+    // worktree no registry row claims" out of two reads neither of which ever
+    // saw that state. That is the mid-`ws-add` false positive 502e35a closed in
+    // the predicate, arriving through read order instead, and the debounce does
+    // not cover it: the skew repeats every sweep for as long as the write keeps
+    // landing in the window. Read late, the listing is never staler than the
+    // records, and the only unclaimed worktrees left are the ones that really
+    // were unclaimed when git was asked.
+    //
+    // Cost is ONE readdir per sweep interval (60 s), not per tick — the lane
+    // clock above has already returned on every other call by the time this
+    // line runs. D-B4-10 was about the per-tick whole-fleet read, ~21 field
+    // reads per session in remote mode; this is one round trip a minute.
+    const registryNames = await this.deps.io.readdir(this.deps.cfg.registryDir);
+    if (registryNames === null) {
+      // FAIL SHUT, and this is the one read in this method where the direction
+      // is dangerous. Everywhere else a failed read can only SUPPRESS a finding
+      // (an unlistable `.git/worktrees` contributes no worktrees). A failed
+      // registry listing read as `[]` claims nothing claims anything — every
+      // worktree on the box unclaimed at once, on the kind whose repair deletes
+      // worktrees. Same evidence-not-time bound `tick()`'s own
+      // `!registryRead.listed` return draws, and the memory below is left
+      // standing for the reason the `runs()` arm states.
+      console.warn('ccrc-server: sweepDivergences could not list the registry — no census this pass, because "nothing claims anything" is not what a failed read proves');
+      return;
+    }
     let openRunSessionIds = new Set<string>();
     try {
       openRunSessionIds = new Set(
@@ -1507,10 +1546,10 @@ export class FleetWatcher {
         branch: r.branch, held: r.held, archivedAt: r.archivedAt,
       })),
       worktrees, headBranch, openRunSessionIds,
-      // THE REGISTRY'S OWN DIRECTORY LISTING, passed through from the read this
-      // tick already took (D-B4-10's "one listing, shared") — never a second
-      // `readdir` here. It is the evidence that a workspace mid-`ws-add` is
-      // claimed before its row parses; see `unclaimedWorktrees`.
+      // THE REGISTRY'S OWN DIRECTORY LISTING — the evidence that a workspace
+      // mid-`ws-add` is claimed before its row parses (see
+      // `unclaimedWorktrees`), taken above AFTER git's records for the ordering
+      // reason stated there.
       registryNames,
     };
     const found = divergences({

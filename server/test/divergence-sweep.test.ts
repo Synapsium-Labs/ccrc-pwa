@@ -29,6 +29,10 @@ interface FixtureCfg {
   /** Make `<projectsRoot>/<project>/.git/worktrees` unlistable, through an `io`
    *  override — there is no portable chmod that works as root. */
   unreadableProject?: string;
+  /** Make the REGISTRY directory unlistable, the same way and for the same
+   *  reason. Its own failure mode is the opposite of the one above: a registry
+   *  that will not list is not "nothing claims anything". */
+  unreadableRegistry?: boolean;
 }
 
 /** A watcher over a tmp `projectsRoot`, plus the two things this suite plants:
@@ -52,10 +56,28 @@ const watcherFixture = async (cfg: FixtureCfg = {}) => {
     calls.push(args); return { code: 0, stdout: '', stderr: '' };
   };
 
-  const io: FleetIO = cfg.unreadableProject === undefined ? localIO : {
+  /** Every `readdir` this sweep takes, in order — the evidence for the ordering
+   *  test below, which is about WHICH READ IS STALER and so can only be checked
+   *  by watching the reads themselves. */
+  const readdirs: string[] = [];
+  /** Fired the moment git's admin directory is read, so a test can land a
+   *  registry write in the exact window between the census's two evidence
+   *  reads — `_ws_add`'s first `_reg_set` arriving mid-sweep. */
+  const hooks: { onAdminReaddir: null | (() => void) } = { onAdminReaddir: null };
+  const adminOf = (project: string) => path.join(project, '.git', 'worktrees');
+  const io: FleetIO = {
     ...localIO,
-    readdir: async (p: string) =>
-      p.includes(path.join(cfg.unreadableProject!, '.git', 'worktrees')) ? null : localIO.readdir(p),
+    readdir: async (p: string) => {
+      readdirs.push(p);
+      if (p.includes(adminOf('')) && hooks.onAdminReaddir !== null) {
+        const fire = hooks.onAdminReaddir;
+        hooks.onAdminReaddir = null;
+        fire();
+      }
+      if (cfg.unreadableProject !== undefined && p.includes(adminOf(cfg.unreadableProject))) return null;
+      if (cfg.unreadableRegistry === true && p === cfgObj.registryDir) return null;
+      return localIO.readdir(p);
+    },
   };
 
   const coord = 'coord' in cfg
@@ -66,8 +88,10 @@ const watcherFixture = async (cfg: FixtureCfg = {}) => {
   const watcher = new FleetWatcher(deps as never, bus, 10_000);
 
   return {
-    home, bus, watcher, coord, projectsRoot,
+    home, bus, watcher, coord, projectsRoot, hooks, cfgObj,
     ccdCalls: () => calls,
+    /** The `readdir` paths this sweep took, in order. */
+    reads: () => [...readdirs],
     /** A registry row, in `hold-gate.test.ts`'s exact idiom. A row is also what
      *  makes its PROJECT active: the sweep asks git about the projects the fleet
      *  actually has sessions in, never about every directory under the root. */
@@ -90,19 +114,15 @@ const watcherFixture = async (cfg: FixtureCfg = {}) => {
       writeFileSync(path.join(admin, 'HEAD'), `ref: refs/heads/${branch}\n`);
     },
     records: () => readRegistry(io, cfgObj),
-    /** The registry's own DIRECTORY LISTING, which the sweep now takes as
-     *  evidence a workspace is claimed before its row parses. `tick()` passes
-     *  the listing `readRegistryMeasured` already took; here it is read the
-     *  same way, from the same directory. */
-    names: async (): Promise<string[]> => (await io.readdir(cfgObj.registryDir)) ?? [],
   };
 };
 
-/** One sweep, with both of its inputs — `records` and the listing they came
- *  from. A helper because every test below needs both and neither is
- *  interesting on its own. */
+/** One sweep. `records` is the sweep's only argument: the registry LISTING —
+ *  its other piece of evidence — is read by the sweep itself, after git's
+ *  worktree records, and handing it in from out here would reintroduce the
+ *  staleness the ordering test below exists to pin. */
 const sweep = async (h: Awaited<ReturnType<typeof watcherFixture>>): Promise<void> =>
-  h.watcher.sweepDivergences(await h.records(), await h.names());
+  h.watcher.sweepDivergences(await h.records());
 
 /** The clock, moved past the lane's own 60s interval. Every test that sweeps
  *  more than once needs this or the second call returns at the clock gate
@@ -167,6 +187,71 @@ describe('sweepDivergences', () => {
     jump(10);
     await sweep(h);
     expect(frames).toEqual([[]]);
+  });
+
+  it('the CLAIM evidence is never staler than the WORKTREE evidence — the same race, through ordering', async () => {
+    // 502e35a closed the mid-`ws-add` false positive in the PREDICATE and left
+    // it open in the READ ORDER. The registry listing was snapshotted at the top
+    // of `tick()`; git's admin records were read a lane later, inside this
+    // sweep. A `_reg_set` landing between the two is a worktree record with no
+    // registry name — the exact state that fix exists to stop reporting —
+    // reassembled out of two reads taken at different times, neither of which
+    // ever saw it.
+    //
+    // The debounce does not cover this. It asks for the same observation twice,
+    // and this skew reproduces on every sweep for as long as the write keeps
+    // landing in the window: a `git worktree add` whose checkout outlives the
+    // 60s interval (the case `divergences` names, on a large repo) finishes
+    // right here, and BOTH sightings read unclaimed.
+    const h = await watcherFixture();
+    h.plantRecord('demo-quiet-basin');
+    h.plantWorktreeRecord('demo', 'newborn', '/data/worktrees/demo/newborn', 'ws/newborn');
+    const frames: unknown[] = [];
+    h.bus.on('divergence', (d) => frames.push(d));
+    await sweep(h);
+    // Sighting one is honest: nothing on the box claimed it yet.
+    expect(frames, 'the first sighting is not a finding').toEqual([[]]);
+
+    // `_reg_set` lands DURING the worktree read — after any listing taken
+    // earlier in the tick, before the census is assembled. By the time git's
+    // records were gathered, the registry held the claim.
+    h.hooks.onAdminReaddir = () => {
+      writeFileSync(path.join(h.home, '.cc-sessions', 'demo-newborn.wrapper'), 'claude');
+    };
+    jump(10);
+    await sweep(h);
+    expect(frames, 'a workspace whose registry write landed mid-sweep was named a leak')
+      .toEqual([[]]);
+
+    // And the mechanism, stated directly rather than inferred from the frame:
+    // the listing that decides "claimed" is read no EARLIER than the git
+    // records it is weighed against. Reversing the two is what the assertion
+    // above catches; this is what it catches it BY.
+    const reads = h.reads();
+    const lastAdmin = reads.map((p) => p.includes(path.join('.git', 'worktrees'))).lastIndexOf(true);
+    const lastReg = reads.lastIndexOf(h.cfgObj.registryDir);
+    expect(lastAdmin, 'the sweep never read git\'s admin directory').toBeGreaterThanOrEqual(0);
+    expect(lastReg, 'the sweep never read the registry listing itself').toBeGreaterThanOrEqual(0);
+    expect(lastReg).toBeGreaterThan(lastAdmin);
+  });
+
+  it('a registry that will not LIST skips the census — a failed read is not "nobody claims anything"', async () => {
+    // The failure this lane's own evidence has, and the direction matters more
+    // here than anywhere else in the sweep: an unlistable `<project>/.git/
+    // worktrees` can only ever SUPPRESS a finding, but an unlistable REGISTRY
+    // read as an empty listing makes every worktree on the box unclaimed at
+    // once — a fleet-wide false census aimed at the repair that deletes
+    // worktrees. Fail shut: no census, no frame, and the debounce memory is
+    // left standing exactly as `coord.runs()`'s own failure arm leaves it.
+    const h = await watcherFixture({ unreadableRegistry: true });
+    h.plantRecord('demo-quiet-basin');
+    h.plantWorktreeRecord('demo', 'quiet-basin', '/data/worktrees/demo/quiet-basin', 'ws/quiet-basin');
+    const frames: unknown[] = [];
+    h.bus.on('divergence', (d) => frames.push(d));
+    await sweep(h);
+    jump(10);
+    await sweep(h);
+    expect(frames).toEqual([]);
   });
 
   it('does not re-emit an unchanged census — byte-equality guarded like emitRuns', async () => {
