@@ -24,6 +24,13 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../
 /** Every `.ts`/`.tsx` under `dir`, recursively. */
 const sourcesUnder = (dir: string): string[] =>
   readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+    // `__`-prefixed names are TRANSIENT, not sources: `boot.test.ts` writes
+    // `server/src/__boot_control_mutant__.ts` and removes it in a `finally`
+    // up to ~15s later, and vitest runs test FILES in parallel — so such a
+    // name can exist at `readdirSync` time and be gone by `readFileSync`,
+    // ENOENT-ing a scan that has nothing to do with it. Skipping the prefix
+    // costs no coverage: no shipped source is named that way.
+    if (e.name.startsWith('__')) return [];
     const full = path.join(dir, e.name);
     if (e.isDirectory()) return sourcesUnder(full);
     return /\.tsx?$/.test(e.name) ? [full] : [];
@@ -1700,12 +1707,16 @@ describe('the hold reason', () => {
 
     // The negative half, scanned over the two rings that could plausibly
     // acquire a parser. A `.split('run:')`, a `/run:(\d+)/`, a
-    // `startsWith('program:')` — any of them turns a display string into a
-    // protocol.
+    // `new RegExp('run:(\\d+)')`, a `startsWith('program:')` — any of them
+    // turns a display string into a protocol. The capture alternative does
+    // NOT require a leading `/`, so a RegExp built from a STRING is caught
+    // too; and `'program:'` as a whole quoted token is caught, while
+    // `"program:name wave:2/4"` (the composer's placeholder, a prose example)
+    // is not, because the quote must close immediately after the colon.
     for (const dir of [path.join(repoRoot, 'server', 'src'), path.join(repoRoot, 'pwa', 'src')]) {
       for (const f of sourcesUnder(dir)) {
         const src = readFileSync(f, 'utf8');
-        expect(/['"`]run:['"`]|\/.*run:\\?\(/.test(src.replace(/^\s*\/\/.*$/gm, '')),
+        expect(/['"`](?:run|program):['"`]|run:\\?\(/.test(src.replace(/^\s*\/\/.*$/gm, '')),
           `${f} looks like it parses a hold reason`).toBe(false);
       }
     }

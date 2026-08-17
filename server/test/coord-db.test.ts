@@ -219,7 +219,7 @@ describe('openCoordDb', () => {
     // Force migration 1 to fail without a pre-existing file at `p` —
     // `MIGRATIONS` is typed `readonly` for callers, but the runtime object
     // is one plain array `db.ts` indexes into directly (`MIGRATIONS[v]`), so
-    // swapping its one entry for invalid SQL fails the exact statement
+    // swapping its FIRST entry for invalid SQL fails the exact statement
     // `openCoordDb`'s loop executes, inside the same `tx()` this build ships,
     // rather than a shape of it built out-of-band.
     const mutable = MIGRATIONS as unknown as string[];
@@ -266,12 +266,13 @@ describe('openCoordDb', () => {
 });
 
 describe('describeMigrationProgress', () => {
-  // Isolated from `openCoordDb` deliberately: `MIGRATIONS.length === 1` today,
-  // so the loop it drives can only ever fail on iteration 0 end-to-end, and
-  // the "earlier migrations already committed" branch is unreachable through
-  // `openCoordDb` alone. This pins BOTH branches directly, so a mutant that
-  // guts either one fails here even though `coord-db.test.ts`'s own
-  // `openCoordDb` tests could never distinguish it.
+  // Isolated from `openCoordDb` deliberately. `MIGRATIONS.length === 2` since
+  // Wave 2 added `runs_by_session`, so the "earlier migrations already
+  // committed" branch IS reachable through `openCoordDb` (a fresh v0 file
+  // migrating 0→2 can fail on iteration 1 with iteration 0 committed) — but
+  // pinning BOTH branches directly is still the only way to kill a mutant
+  // that guts either one, without the pin depending on which migration
+  // happens to be the brittle one in this build's list.
   it('says nothing changed when the failing migration was the first attempted this boot', () => {
     expect(describeMigrationProgress(0, 0)).toMatch(/^No table data changed/);
     expect(describeMigrationProgress(3, 3)).toMatch(/^No table data changed/);
