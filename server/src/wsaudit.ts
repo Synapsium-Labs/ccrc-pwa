@@ -148,14 +148,16 @@ export const SENTENCES: Record<string, string> = {
   // `wsaudit.test.ts` enumerates ccd's source and requires the two sets to be
   // EQUAL — the mechanism that caught `branch-drift` -> `registry-branch-drift`
   // — and because if a rename control is ever added the copy is already right
-  // rather than a bash identifier on a phone screen. Five more of ws-rename's
-  // fourteen tokens (`no-such-session`, `not-a-workspace`, `incomplete-registry`,
-  // `worktree-missing`, `registry-branch-drift`) are shared with ws-reap and
-  // are already above — `registry-branch-drift` for the exact reason its name
-  // says: `cmd_ws_rename` now refuses when git's worktree record disagrees
+  // rather than a bash identifier on a phone screen. Six more of ws-rename's
+  // fifteen tokens (`no-such-session`, `not-a-workspace`, `incomplete-registry`,
+  // `worktree-missing`, `registry-branch-drift`, `held`) are shared with ws-reap
+  // and are already above — `registry-branch-drift` for the exact reason its
+  // name says: `cmd_ws_rename` now refuses when git's worktree record disagrees
   // with the registry's `branch` field, the same corroboration `ws-reap`
   // already required, so it reuses `ws-reap`'s own token rather than minting a
-  // second name for one fact.
+  // second name for one fact. `held` joined that shared list in Wave 3 §3.1
+  // (`ws-rename` refuses a held workspace) on the same reasoning — one fact,
+  // one word, and `rename-held` would have split it in two.
   //
   // VOCABULARY DEFERRAL, recorded rather than fixed (spec:371-376): the reap
   // side says `detached-head`, `foreign-worktree` and `no-worktree-record`

@@ -288,22 +288,67 @@ describe('ws-rename', () => {
     expect(h.reg('demo-quiet-mesa', 'branch')).toBe('ws/quiet-mesa');
   });
 
-  // ── Build 2.5 interaction, ASSERTED rather than assumed (rider delta 7) ──
-  // A rename is not a destructive act and has no hold rung: `cmd_ws_rm` and
-  // `cmd_ws_reap` refuse a held workspace because they DELETE, and this moves a
-  // ref on a branch that by definition has never been pushed. A hold rung here
-  // would refuse the only moment automatic naming ever fires — a workspace an
-  // orchestrator claimed for wave 1 is exactly the one whose first turn is
-  // landing. And prhistory is appended at exactly one chokepoint, the
-  // `prnumber` replacement inside `_pr_py` (ccd:759, :852); a rename precedes
-  // any PR, so it must leave that file absent.
-  it('renames a HELD workspace, and leaves the hold and the prhistory alone', () => {
-    addOne();
+  // ── Wave 3 §3.1: POLICY REVERSAL, recorded rather than quietly swapped ──
+  // Build 2.5's ruling was that a rename is not destructive and therefore needs
+  // no hold rung, and that a rung here "would refuse the only moment automatic
+  // naming ever fires". That second half is now the POINT: the moment automatic
+  // naming fires on a claimed workspace is the moment a coordinator's ledger,
+  // its brief and every fleet surface stop agreeing on what the worker is
+  // called. `FleetWatcher.sweepNames` skips a claimed row before it ever calls
+  // this verb; this rung is defence in depth, because the sweep is not the only
+  // caller and a hold can land inside the sweep's read-then-call window.
+  // prhistory is unchanged by either outcome and is still asserted here.
+  it('refuses a HELD workspace, renames nothing, and leaves hold and prhistory alone', () => {
+    const wt = addOne();
     h.sh(`cmd_ws_hold --session demo-quiet-mesa --reason "program:agent-evals wave:1/4"`);
-    expect(rename('demo-quiet-mesa', 'feat/real-name').new).toBe('feat/real-name');
+    expect(refusal('demo-quiet-mesa', 'feat/real-name')).toBe('held');
+    // The refusal is an ANSWER, not a fault: exit 0 (h.sh would throw otherwise,
+    // which `refusal()` going through `rename()` already proves) and nothing moved.
+    expect(h.git(wt, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('ws/quiet-mesa');
+    expect(h.reg('demo-quiet-mesa', 'branch')).toBe('ws/quiet-mesa');
     expect(h.reg('demo-quiet-mesa', 'hold')).toBe('program:agent-evals wave:1/4');
     expect(h.reg('demo-quiet-mesa', 'prhistory')).toBeNull();
     expect(h.reg('demo-quiet-mesa', 'prnumber')).toBeNull();
+  });
+
+  // `-e` not `-f`, matching the four existing hold readers (`cmd_ws_rm`,
+  // `cmd_ws_reap`, `cmd_forget`, and `ws-release`'s own): doubt reads as HELD.
+  // A directory at `$REG/<id>.hold` is the cheapest present-but-unreadable
+  // shape a test can build, and `-f` would sail straight past it.
+  it('refuses on a present-but-unreadable hold — doubt reads as held', () => {
+    addOne();
+    h.sh(`mkdir "$HOME/.cc-sessions/demo-quiet-mesa.hold"`);
+    expect(refusal('demo-quiet-mesa', 'feat/real-name')).toBe('held');
+  });
+
+  // The other direction, so the rung is a refusal rather than an outage.
+  it('renames an UNHELD workspace exactly as before, and after a release', () => {
+    const wt = addOne();
+    h.sh(`cmd_ws_hold --session demo-quiet-mesa --reason "program:agent-evals wave:1/4"`);
+    h.sh(`cmd_ws_release --session demo-quiet-mesa`);
+    expect(rename('demo-quiet-mesa', 'feat/real-name').new).toBe('feat/real-name');
+    expect(h.git(wt, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('feat/real-name');
+  });
+
+  // PLACEMENT, pinned: before any git work. Learning a workspace is off-limits
+  // must not cost an `ls-remote` to origin — the same rule `cmd_ws_reap`'s copy
+  // of this rung states for itself ("before, because learning a workspace is
+  // off-limits must not cost a gh call, a fetch, or a lock left behind"). The
+  // poisoned `gh` and a refused rename share one property: neither should have
+  // run at all.
+  it('refuses before it touches git or the network', () => {
+    addOne();
+    h.sh(`cmd_ws_hold --session demo-quiet-mesa --reason "program:agent-evals wave:1/4"`);
+    // A `git` that records every call and then refuses: if the rung is placed
+    // after the worktree/upstream probes, one of them fires and this reds.
+    const NOGIT = `git() { echo "git $*" >> "$HOME/ccd-calls"; return 1; };`;
+    const o = JSON.parse(
+      h.sh(`${NOGIT} cmd_ws_rename --session demo-quiet-mesa --branch feat/real-name`),
+    ) as { refused?: string };
+    expect(o.refused).toBe('held');
+    expect(h.calls().filter((c) => c.startsWith('git ')), 'a refused rename runs no git')
+      .toEqual([]);
+    expect(h.ghPoison(), 'a refused rename reaches no gh').toEqual([]);
   });
 
   it('refuses a stale record whose directory came back as its own repository, and renames nothing', () => {
@@ -460,5 +505,20 @@ describe('ws-rename', () => {
     expect(branches('ws/quiet-mesa')).not.toBe('');
     expect(branches('feat/real-name')).toBe('');
     expect(h.reg('demo-quiet-mesa', 'branch')).toBe('ws/quiet-mesa');
+  });
+
+  // The token must be an INLINE literal in ccd, not a helper argument:
+  // `server/test/wsaudit.test.ts` harvests `/"refused":"([a-zA-Z0-9-]+)"/` out
+  // of this file's source and asserts set equality in BOTH directions against
+  // `wsaudit.ts`'s SENTENCES. `held` already HAS a sentence (cmd_ws_reap emits
+  // it), so nothing new is owed there — but a helper-ised emission would
+  // contribute no token at all and the reverse direction would go red for a
+  // reason whose author would never guess it.
+  it('emits the held token as an inline literal inside cmd_ws_rename', () => {
+    const src = fs.readFileSync(CCD, 'utf8');
+    const from = src.indexOf('cmd_ws_rename() {');
+    const to = src.indexOf('\ncmd_', from + 1);
+    const body = src.slice(from, to === -1 ? undefined : to);
+    expect(body).toContain('"refused":"held"');
   });
 });

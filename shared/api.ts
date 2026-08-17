@@ -2726,6 +2726,13 @@ export const WORK_ITEM_MAX = 32;
  * not list its directory, or that dropped a listed row for an unreadable
  * sibling field, is not evidence the sender or recipient does not exist — see
  * `coord/routes.ts`'s checks 5/6/7 for where this is measured.
+ *
+ * `branch-unmeasurable` is the third member of that family and it answers a
+ * question one rung earlier: not "what is this branch's tip" but "which
+ * branch". A registry row that is present and whose own `.branch` reads null
+ * has DECLINED to name one, and the run row's frozen `branch` column is not
+ * an answer — `markDispatched` writes it once and nothing updates it, so
+ * after a rename it names a ref `git branch -m` deleted.
  */
 export const MAIL_REJECT_CODES = [
   // ingress
@@ -2734,7 +2741,8 @@ export const MAIL_REJECT_CODES = [
   // delivery
   'undeliverable',
   // done-authority
-  'stale-tip', 'tip-unmeasurable', 'pr-regressed', 'pr-unmeasurable', 'no-handoff-commit',
+  'stale-tip', 'tip-unmeasurable', 'branch-unmeasurable', 'pr-regressed', 'pr-unmeasurable',
+  'no-handoff-commit',
 ] as const;
 export type MailRejectCode = (typeof MAIL_REJECT_CODES)[number];
 

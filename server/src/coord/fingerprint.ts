@@ -29,7 +29,8 @@ export interface DoneClaim {
 export type DoneVerdict =
   | { ok: true; measured: { branchTip: string; prNumber: number | null; prPhase: PrPhase } }
   | { ok: false; code: Extract<MailRejectCode,
-      'stale-tip' | 'tip-unmeasurable' | 'pr-regressed' | 'pr-unmeasurable' | 'no-handoff-commit'>;
+      'stale-tip' | 'tip-unmeasurable' | 'branch-unmeasurable' | 'pr-regressed' | 'pr-unmeasurable' |
+      'no-handoff-commit'>;
       detail: string };
 
 /** `verifyDone`'s two object parameters, named rather than inlined: the
@@ -42,22 +43,23 @@ export type DoneVerdict =
  *  the `verbSupported(` call two lines below it. Naming the types keeps the
  *  signature, params and return type on one line. */
 export interface VerifyDoneDeps { io: FleetIO; cfg: CcrcConfig; runCcd: Deps['runCcd']; fleetState?: FleetState }
-/** `branch` here is a FALLBACK, not the measurement: `verifyDone` resolves the
- *  branch to re-measure against from the LIVE registry, keyed on `sessionId`,
- *  and falls back to this field whenever that lookup does not hand back a
- *  branch — which is NOT only "the registry row is gone entirely". See the
- *  `record?.branch ?? run.branch` call site in `verifyDone` for the other
- *  reachable triggers (a failed registry directory listing, an incomplete row
- *  `readRegistry` itself drops, and a found row whose own `.branch` field is
- *  null) — this comment used to name only the first and call it exhaustive,
- *  which it never was. `DoneRun` reads field-for-field like the `runs` row it
- *  is usually built from (`RunRow`, `store.ts:40`) — but `runs.branch` is
- *  written exactly once, by `markDispatched` at dispatch time, and
- *  `FleetWatcher.sweepNames` (`watch.ts:543-610`) renames the registry's
- *  branch autonomously, on the ordinary path, strictly before the first push
- *  — i.e. before any `worker_done` this claim could be. Do not read this
- *  type as "the run's branch"; it is "the run's branch, if the live registry
- *  could not name a better one just now". */
+/** `branch` here is a FALLBACK, not the measurement, and after Wave 3 §3.2 it
+ *  is reached by EXACTLY ONE state: the live registry has no row for this
+ *  session at all (retired, purged, or a narrowed drop `readRegistry` itself
+ *  logs). The other three states this comment used to list are now refused
+ *  above it rather than silently falling through — a failed directory listing
+ *  and an unmeasurable identity were already refused `tip-unmeasurable`, and a
+ *  found row whose own `.branch` is null is refused `branch-unmeasurable`.
+ *  `DoneRun` reads field-for-field like the `runs` row it is usually built
+ *  from (`RunRow`, `store.ts:40`) — but `runs.branch` is written exactly once,
+ *  by `markDispatched` at dispatch time, and `FleetWatcher.sweepNames`
+ *  (`watch.ts`) renames the registry's branch autonomously on the ordinary
+ *  path (Wave 3 §3.1 stops it doing so DURING a claim, which is a narrowing,
+ *  not a guarantee this column is fresh). Do not read this type as "the run's
+ *  branch"; it is "the run's branch, if the live registry has nothing to say
+ *  about this session at all" — and because `markDispatched` writes the column
+ *  once and nothing updates it, every refusal produced from it says so in its
+ *  own detail. */
 export interface DoneRun { sessionId: string; project: string; branch: string }
 
 /**
@@ -127,27 +129,20 @@ export async function verifyDone(deps: VerifyDoneDeps, run: DoneRun, claim: Done
   }
 
   // The registry's branch, not `run.branch` — see `DoneRun`'s docstring for
-  // why the DB column cannot be trusted here. `record` is undefined — sending
-  // this to the `run.branch` fallback below — on (at least) TWO distinct
-  // states, only one of which is "this session retired":
-  //  1. TERMINAL — the registry genuinely no longer carries a row for this
-  //     session (retired, purged; also a NARROWED drop, `registry.ts`'s own
-  //     `buildRecord` docstring — a triple member neither readable nor
-  //     listed, or measured-empty; both permanent, both now logged there).
-  //  2. this session's row IS found, but its own `.branch` field reads null
-  //     (absent, or unreadable the same way `field()` collapses any read
-  //     failure — `registry.ts:77-80`) — the `??` below falls back on THAT
-  //     null, not on a missing record.
-  // The GAP an earlier version of this comment confessed to — the whole-
-  // registry listing failing outright (`io.readdir` -> null), and this
-  // session's row being LISTED but its identity unmeasurable — is CLOSED,
-  // not merely documented: both are now distinguishable (`registry.ts`'s
-  // `RegistryRead`/`SessionRecord.unmeasured`) and REFUSED below, before
-  // either can reach this fallback. What remains genuinely tolerable is only
-  // states 1/2 above — a stale `run.branch` there still degrades to a typed
-  // `tip-unmeasurable` refusal (never a false accept — see `readBranchTip`),
-  // and a `worker_done` this resolves wrong is replayed and re-verified on
-  // the next sweep the same as any other refusal (spec:174-177, D-10).
+  // why the DB column cannot be trusted here. `record` is undefined on ONE
+  // state after Wave 3 §3.2: the registry genuinely no longer carries a row
+  // for this session (retired, purged; also a NARROWED drop, `registry.ts`'s
+  // own `buildRecord` docstring — a triple member neither readable nor
+  // listed, or measured-empty; both permanent, both logged there). The state
+  // this comment used to list beside it — the row IS found and its own
+  // `.branch` reads null — no longer reaches the fallback at all; the `??`
+  // that let it through is now the explicit split below, and it REFUSES.
+  // The other two gaps an earlier version confessed to — the whole-registry
+  // listing failing outright (`io.readdir` -> null), and this session's row
+  // being LISTED but its identity unmeasurable — were closed before this wave
+  // and are refused `tip-unmeasurable` immediately below. A `worker_done`
+  // this refuses is replayed and re-verified on the next sweep the same as
+  // any other refusal (spec:174-177, D-10).
   const registryRead = await readRegistryMeasured(deps.io, deps.cfg);
   if (!registryRead.listed) {
     return { ok: false, code: 'tip-unmeasurable',
@@ -159,12 +154,65 @@ export async function verifyDone(deps: VerifyDoneDeps, run: DoneRun, claim: Done
       detail: `registry row for ${run.sessionId} is listed but its identity could not be measured — ` +
         'transient, not a fact about this run\'s branch' };
   }
-  const branch = record?.branch ?? run.branch;
+  // WAVE 3 §3.2. The `??` this replaces collapsed two states the caller and
+  // the coordinator handle differently — no overloaded null at a seam:
+  //
+  //  1. NO RECORD AT ALL (retired, purged, or a narrowed drop). `run.branch`
+  //     is the only name left and it is worth using — but it is a column
+  //     `markDispatched` wrote once at dispatch time and NOTHING ever
+  //     updates, so any refusal it produces must say where it came from.
+  //     Otherwise a coordinator reads "no readable ref for ws/quiet-mesa" and
+  //     goes looking for a branch that was renamed hours ago.
+  //  2. RECORD PRESENT, its own `.branch` null. The record DECLINED to name a
+  //     branch; guessing with the frozen column is exactly the move that
+  //     turns a transient registry read failure into a permanent
+  //     `tip-unmeasurable` on a ref that will never exist. Refuse instead,
+  //     and let the ordinary replay re-measure (spec:174-177, D-10).
+  //
+  // `branchEvidence` (registry.ts) is what lets case 2's detail be TRUE rather
+  // than merely typed: a listed-but-unreadable `.branch` is transient, a
+  // genuinely absent one is not, an EMPTY one is a half-written field, and one
+  // sentence covering all three would be a lie about two of them.
+  //
+  // The empty rung arrived a wave later than the other two (review finding).
+  // `field()` trims, so a zero-byte `.branch` used to read as `branch: ''`,
+  // sail past the null check below, and be handed to `readBranchTip` as a
+  // branch NAME — the refusal a coordinator then read was `tip-unmeasurable`
+  // with an empty name in it ("no readable ref for  under demo"), which points
+  // at the wrong half of the system. `registry.ts` now normalises it to null
+  // at the read, so it arrives here as case 2 and refuses with its own reason.
+  let branch: string;
+  let branchFromRunRow = false;
+  if (record === undefined) {
+    branch = run.branch;
+    branchFromRunRow = true;
+  } else if (record.branch === null) {
+    // Frozen-column caveat repeated in the two PERMANENT sentences and not in
+    // the transient one: for `unreadable` the answer is "come back and ask
+    // again", and telling a coordinator about the run row there would invite a
+    // repair it does not need.
+    const frozen = 'there is nothing to re-measure, and the run row\'s own branch column was ' +
+      'frozen at dispatch time';
+    return { ok: false, code: 'branch-unmeasurable',
+      detail: record.branchEvidence === 'unreadable'
+        ? `the registry lists ${run.sessionId}.branch but its bytes did not come back — ` +
+          'transient, not a fact about this run'
+        : record.branchEvidence === 'empty'
+          ? `the registry's ${run.sessionId}.branch file is empty — a truncated or zero-byte ` +
+            `write, not a branch name, so re-reading it will not help: ${frozen}`
+          : `the registry row for ${run.sessionId} names no branch at all — ${frozen}` };
+  } else {
+    branch = record.branch;
+  }
+  /** Appended to every refusal below that NAMES `branch`, and only when the
+   *  name came from the frozen run row. Empty on the ordinary path, so the
+   *  coordinator is never told its measurement is stale when it is not. */
+  const provenance = branchFromRunRow ? ' — from the run row, which predates any rename' : '';
 
   const tip = await readBranchTip(deps.io, deps.cfg.projectsRoot, run.project, branch);
   if (tip === null) {
     return { ok: false, code: 'tip-unmeasurable',
-      detail: `no readable ref for ${branch} under ${run.project}` };
+      detail: `no readable ref for ${branch} under ${run.project}${provenance}` };
   }
   if (tip !== claim.branchTip) {
     // F5 (build4 dogfood): a stale-tip that NEVER MOVES no matter how many
@@ -177,7 +225,7 @@ export async function verifyDone(deps: VerifyDoneDeps, run: DoneRun, claim: Done
     // the refusal are unchanged) is one line a future coordinator can read
     // without having lived through the dogfood that found it.
     return { ok: false, code: 'stale-tip',
-      detail: `${branch} is at ${tip}, the claim says ${claim.branchTip} — if the worker committed ` +
+      detail: `${branch}${provenance} is at ${tip}, the claim says ${claim.branchTip} — if the worker committed ` +
         'on a DIFFERENT branch than this workspace\'s own, that is the almost-certain cause: the brief ' +
         'must instruct the worker to commit on its workspace branch, never a separate feature branch' };
   }

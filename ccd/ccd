@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=f9a0a827f0f034c348a6cbc45bdc9ba60e8ec22b5bd5e23094bda3a4419a6f32
+# ccrc:generated 1 sha256=e76731df78d70fe10e063b5b4b8bf8e2a136a73f61dc8f594d0d9a2601d0cd4b
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
 set -uo pipefail
@@ -1793,6 +1793,39 @@ cmd_ws_rename() {   # ccd ws-rename --session <id> --branch <name> — rename a
   if [[ ! -f "$REG/$id.uuid" ]]; then
     printf '{"refused":"no-such-session","detail":%s,"paths":[]}\n' \
       "$(_json_str "ccrc has no registry entry for $id")"
+    return 0
+  fi
+
+  # A hold is a program's declaration that this workspace is mid-flight. WAVE 3
+  # §3.1 REVERSES this verb's Build 2.5 policy, and the reversal is the point
+  # rather than a side effect: `ws-rm`/`ws-reap`/`forget` refuse a held
+  # workspace because they DELETE, and this verb only moves a ref — but the ref
+  # it moves is the one every ccrc surface reads as the session's NAME
+  # (`sessionLabel` is `name ?? branch ?? workspace ?? id`), so renaming
+  # mid-wave leaves a coordinator's ledger, its brief and the fleet screen
+  # disagreeing about which worker is which. `FleetWatcher.sweepNames` skips a
+  # claimed row before it ever calls this; this rung is defence in depth,
+  # because the sweep is not the only caller and a hold can land inside its
+  # read-then-call window.
+  #
+  # PLACED HERE: after the argv/id guards (a caller whose argv this function
+  # would not accept must not receive a well-formed ANSWER) and before every
+  # git and network probe (learning a workspace is off-limits must not cost an
+  # `ls-remote`) — the same placement rule `cmd_ws_reap`'s copy of this rung
+  # states for itself.
+  #
+  # `-e` not `-f`, matching the four existing hold readers: an unreadable-but-
+  # present hold still refuses, because doubt reads as HELD.
+  #
+  # THE TOKENS ARE INLINE, per this function's own header: `wsaudit.test.ts`
+  # harvests them out of this file's bytes. `held` already has a SENTENCES
+  # entry (cmd_ws_reap emits it), so nothing is owed on the server side.
+  #
+  # The verb's deliberate absence of a BUSY guard is UNCHANGED and stays
+  # deliberate: the naming moment is by definition a busy moment.
+  if [[ -e "$REG/$id.hold" ]]; then
+    printf '{"refused":"held","detail":%s,"paths":[]}\n' \
+      "$(_json_str "$(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>') — release first: ccd ws-release --session $id")"
     return 0
   fi
 
@@ -7369,6 +7402,21 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
     _dispatch_swap "$id" "$target"
     return 0
   fi
+  # WAVE 3 §3.3, AND THE PLACEMENT IS THE WHOLE RULING. Everything from here
+  # down is the AFFINITY path: returning home, or leaving because home hit
+  # SWAP_CEILING. It relocates a session for reasons that are, from a running
+  # wave's point of view, cosmetic — and a relocation restarts the session and
+  # copies its transcript to another account. A mid-wave worker must not have
+  # that happen to it because telemetry drifted.
+  #
+  # AHEAD OF THE RESCUE BRANCH THIS WOULD STRAND A WEDGED WAVE: a held worker
+  # sitting on a rate-limited account would never be evacuated, and a hold is
+  # exactly what stops a human noticing quickly. Cosmetic relocation yes,
+  # rescue no. The rescue arm above is untouched and must stay untouched.
+  #
+  # `-e` not `-f`, matching the four existing hold readers: an unreadable hold
+  # defers too, because doubt reads as HELD.
+  [[ -e "$REG/$id.hold" ]] && return 0
   # Otherwise (returning home, or leaving at the rate ceiling): relocate only at a clean turn
   # boundary — never mid-turn or mid-subagent. The idle gate reads the live process status file;
   # pane heuristics alone miss running subagents (learned 2026-07-03).

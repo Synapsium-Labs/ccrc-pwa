@@ -227,7 +227,7 @@ describe('archiveMerged — merged AND unheld', () => {
     const degraded: SessionRecord = {
       id: 'demo-quiet-basin', wrapper: '', project: 'demo', workdir: '/w/demo-quiet-basin', uuid: 'u-demo-quiet-basin',
       started: true, home: null, pool: null, lastswap: null,
-      workspace: 'quiet-basin', branch: 'ws/quiet-basin', base: 'origin/main',
+      workspace: 'quiet-basin', branch: 'ws/quiet-basin', branchEvidence: 'named', base: 'origin/main',
       prPhase: null, prNumber: null, prCheckedAt: null, archivedAt: null, archivedBytes: null, held: null,
       stopped: null, supervisedAt: null, swapBlocked: null, spawn: null, lifecycleUnmeasured: [],
       unmeasured: ['wrapper'],

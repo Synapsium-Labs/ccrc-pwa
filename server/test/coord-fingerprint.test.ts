@@ -475,6 +475,123 @@ describe('verifyDone — the branch to re-measure comes from the live registry (
     const res = await verifyDone(deps, RUN, FIXED_CLAIM);
     expect(res).toMatchObject({ ok: true });
   });
+
+  // ── Wave 3 §3.2 ──
+  // `record?.branch ?? run.branch` collapsed two states a caller handles
+  // differently. NO OVERLOADED NULL AT A SEAM: "the registry has no row for this
+  // session" and "the row is right here and its own .branch is null" are
+  // different facts with different remedies, and only the first justifies
+  // falling back on a column `markDispatched` froze at dispatch time and
+  // nothing ever updates.
+  //
+  // NOT a vacuum — the plan for this wave said it was, and it was wrong. The
+  // record-present/branch-null case WAS pinned, in the "finding 3" describe
+  // below, and what it pinned was the old `ok: true` fallback. That test is
+  // rewritten there as an explicit policy reversal rather than deleted, so the
+  // ruling it recorded stays readable. This block is the positive statement of
+  // the new rule; that one is the old rule's headstone.
+  it('refuses branch-unmeasurable when the row is PRESENT and its own .branch could not be read', async () => {
+    const home = mkTmp('ccrc-fp-');
+    seedRegistry(home, null);                 // row present (uuid/wrapper/workdir written), no branch
+    const root = project(TIP, null);          // the ref DOES exist at RUN.branch — the guess would work
+    const deps = fingerprintDeps(runnerFor('open'), root, home);
+    const res = await verifyDone(deps, RUN, FIXED_CLAIM);
+    expect(res).toMatchObject({ ok: false, code: 'branch-unmeasurable' });
+    // The fixture is built so the OLD behaviour would have answered ok:true —
+    // that is what makes this a behaviour pin rather than a coincidence.
+  });
+
+  it('still falls back to the run row when the registry has NO row for this session — and says so', async () => {
+    const home = mkTmp('ccrc-fp-');           // no row seeded at all
+    const root = project(null, null);         // and no readable ref, so we can read the detail
+    const deps = fingerprintDeps(runnerFor('open'), root, home);
+    const res = await verifyDone(deps, RUN, FIXED_CLAIM);
+    expect(res).toMatchObject({ ok: false, code: 'tip-unmeasurable' });
+    expect((res as { detail: string }).detail)
+      .toContain('from the run row, which predates any rename');
+  });
+
+  it('does NOT add the run-row clause when the branch came from the live registry', async () => {
+    // The mutant this kills: appending the provenance sentence unconditionally,
+    // which would tell a coordinator its measurement was stale every time.
+    const home = mkTmp('ccrc-fp-');
+    seedRegistry(home, 'ws/fix-the-parser');
+    const root = project(null, null);         // no ref at the registry's name either
+    const deps = fingerprintDeps(runnerFor('open'), root, home);
+    const res = await verifyDone(deps, RUN, FIXED_CLAIM);
+    expect(res).toMatchObject({ ok: false, code: 'tip-unmeasurable' });
+    expect((res as { detail: string }).detail).not.toContain('predates any rename');
+  });
+
+  it('names WHICH kind of unmeasurable in the detail — a failed read, not a missing field', async () => {
+    // Task 304's flag is what lets the refusal say something true. Without it
+    // both shapes would have to share one sentence, and one of the two would be
+    // a lie.
+    const home = mkTmp('ccrc-fp-');
+    seedRegistry(home, 'ws/fix-the-parser');
+    const root = project(TIP, null);
+    const io: FleetIO = {
+      ...localIO,
+      readFile: async (p) => (p.endsWith(`${SESSION}.branch`) ? null : localIO.readFile(p)),
+    };
+    const deps = { ...fingerprintDeps(runnerFor('open'), root, home), io };
+    const res = await verifyDone(deps, RUN, FIXED_CLAIM);
+    expect(res).toMatchObject({ ok: false, code: 'branch-unmeasurable' });
+    expect((res as { detail: string }).detail).toContain('bytes did not come back');
+  });
+
+  // REVIEW FINDING, WAVE 3. The split above tested `null` against `null` and
+  // missed the value that is NEITHER: `field()` returns `content.trim()`, so a
+  // zero-byte or torn `.branch` reads back as `''`. `record.branch === null`
+  // was false for it, so it slipped past the refusal entirely and `''` was used
+  // AS THE BRANCH NAME — `readBranchTip` was asked for a ref path ending in a
+  // slash, found nothing, and answered `tip-unmeasurable` naming no branch at
+  // all ("no readable ref for  under demo"). A coordinator reading that has
+  // been told the tip could not be measured, when the truth is that the
+  // registry never named a branch to measure.
+  describe('and when the registry row names an EMPTY branch', () => {
+    it('refuses branch-unmeasurable — it does not use `` as a branch name', async () => {
+      const home = mkTmp('ccrc-fp-');
+      seedRegistry(home, '');                   // the file exists; it is zero bytes
+      const root = project(TIP, null);          // the ref DOES exist at RUN.branch
+      const deps = fingerprintDeps(runnerFor('open'), root, home);
+      const res = await verifyDone(deps, RUN, FIXED_CLAIM);
+      expect(res).toMatchObject({ ok: false, code: 'branch-unmeasurable' });
+    });
+
+    it('says EMPTY in the detail — not "unreadable", and not "no branch at all"', async () => {
+      // The whole point of a typed refusal is that the sentence is true. An
+      // empty file is not a failed read (its bytes came back) and it is not an
+      // absent field (a main checkout's ordinary state) — it is evidence that
+      // something wrote, or half-wrote, this field. `_reg_set` is a truncating
+      // redirect with no tmp+rename (ccd:252), so a kill between truncate and
+      // write produces exactly this.
+      const home = mkTmp('ccrc-fp-');
+      seedRegistry(home, '');
+      const root = project(TIP, null);
+      const deps = fingerprintDeps(runnerFor('open'), root, home);
+      const res = await verifyDone(deps, RUN, FIXED_CLAIM);
+      const { detail } = res as { detail: string };
+      expect(detail).toContain('is empty');
+      expect(detail).not.toContain('bytes did not come back');
+      expect(detail).not.toContain('names no branch at all');
+    });
+
+    it('the ABSENT detail stays absent-shaped — the two are not merged back', async () => {
+      // The other direction: fixing the empty case by widening the absent
+      // sentence to cover both would trade one collapsed value for one vague
+      // sentence, which is the same defect wearing prose.
+      const home = mkTmp('ccrc-fp-');
+      seedRegistry(home, null);                 // row present, no .branch file at all
+      const root = project(TIP, null);
+      const deps = fingerprintDeps(runnerFor('open'), root, home);
+      const res = await verifyDone(deps, RUN, FIXED_CLAIM);
+      expect(res).toMatchObject({ ok: false, code: 'branch-unmeasurable' });
+      const { detail } = res as { detail: string };
+      expect(detail).toContain('names no branch at all');
+      expect(detail).not.toContain('is empty');
+    });
+  });
 });
 
 describe('verifyDone — a present-but-unreadable loose ref never settles a stale claim (findings 1 & 2)', () => {
@@ -616,17 +733,32 @@ describe('verifyDone — the run.branch fallback is reached by more than "sessio
     expect(res).toMatchObject({ ok: true });
   });
 
-  it('a row that IS found, but whose OWN .branch field is absent, reaches the fallback WITHOUT `record` ever being undefined', async () => {
+  // POLICY REVERSAL (Wave 3 §3.2), recorded rather than silently swapped —
+  // and the plan for this wave asserted the opposite, that no test in the tree
+  // pinned this case in either direction. It did: THIS one, and what it pinned
+  // was that a found row whose own `.branch` is null "reaches the fallback
+  // WITHOUT `record` ever being undefined" and settles `ok: true` on it. That
+  // was a true description of the `??`, and the `??` is the defect: `record`
+  // being defined is exactly what makes the fallback wrong here. A row that is
+  // present and declines to name a branch is not a row that authorises
+  // guessing with a column `markDispatched` froze at dispatch time. The
+  // fixture is unchanged on purpose — same registry, same git tree, same
+  // `RUN.branch` ref that the old fallback would have measured — so the
+  // reversal is visible as a changed ANSWER rather than a changed setup.
+  it('a row that IS found, but whose OWN .branch field is absent, now REFUSES rather than reaching the fallback', async () => {
     const home = mkTmp('ccrc-fp-');
     seedField(home, SESSION, 'wrapper', 'claude');
     seedField(home, SESSION, 'workdir', '/w/demo/quiet-mesa');
     seedField(home, SESSION, 'uuid', 'a'.repeat(36));
     // no `.branch` file: readRegistry returns this row (wrapper/workdir/uuid
     // all present) with `branch: null` — `record` is DEFINED; it is
-    // `record.branch` that is null, and the `??` falls back on that.
-    const root = project(TIP, null); // ref lives at RUN.branch, the fallback value
+    // `record.branch` that is null.
+    const root = project(TIP, null); // ref lives at RUN.branch — the guess the old code settled on
     const deps = fingerprintDeps(runnerFor('open'), root, home);
     const res = await verifyDone(deps, RUN, FIXED_CLAIM);
-    expect(res).toMatchObject({ ok: true });
+    expect(res).toMatchObject({ ok: false, code: 'branch-unmeasurable' });
+    // ABSENT, not unreadable — and the detail must not claim otherwise.
+    expect((res as { detail: string }).detail).toContain('names no branch at all');
+    expect((res as { detail: string }).detail).not.toContain('bytes did not come back');
   });
 });

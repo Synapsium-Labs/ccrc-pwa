@@ -84,6 +84,124 @@ describe('readRegistry', () => {
     const out = await readRegistry(localIO, loadConfig({ CCRC_HOME: home }));
     expect(out[0].branch).toBeNull();
   });
+
+  // Wave 3 §3.2's prerequisite. `field()` collapses "the file is not there" and
+  // "the file is there and its bytes did not come back" into the same null, and
+  // `verifyDone`'s `branch-unmeasurable` refusal is a claim about the SECOND
+  // one specifically. `names` is the listing `buildRecord` opened with, so it
+  // proves PRESENCE independently of whether the read succeeded — the same
+  // evidence the identity triple and `held` already use.
+  it('marks a LISTED but unreadable .branch as unmeasured — never as absent', async () => {
+    const reg = path.join(home, '.cc-sessions');
+    seed(reg, 'demo-quiet-basin', {
+      wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'e'.repeat(36),
+      workspace: 'quiet-basin', branch: 'ws/quiet-basin',
+    });
+    const io = unreadableField('demo-quiet-basin', 'branch');
+    const rec = (await readRegistry(io, loadConfig({ CCRC_HOME: home })))[0]!;
+    expect(rec.branch, 'an unreadable field still reads null on its own value').toBeNull();
+    expect(rec.branchEvidence).toBe('unreadable');
+  });
+
+  it('a genuinely absent .branch is absent, not unmeasured', async () => {
+    // A project's MAIN checkout has no branch field at all. Calling that
+    // "unmeasurable" would be the overclaim this distinction exists to stop.
+    const reg = path.join(home, '.cc-sessions');
+    seed(reg, 'claude-demo', { wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'f'.repeat(36) });
+    const rec = (await readRegistry(localIO, loadConfig({ CCRC_HOME: home })))
+      .find((r) => r.id === 'claude-demo')!;
+    expect(rec.branch).toBeNull();
+    expect(rec.branchEvidence).toBe('absent');
+  });
+
+  it('a readable branch is measured and its flag is false', async () => {
+    const reg = path.join(home, '.cc-sessions');
+    seed(reg, 'demo-quiet-basin', {
+      wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'e'.repeat(36),
+      workspace: 'quiet-basin', branch: 'ws/quiet-basin',
+    });
+    const rec = (await readRegistry(localIO, loadConfig({ CCRC_HOME: home })))[0]!;
+    expect(rec.branch).toBe('ws/quiet-basin');
+    expect(rec.branchEvidence).toBe('named');
+  });
+
+  // REVIEW FINDING, WAVE 3: the split above left a THIRD state collapsed.
+  // `field()` returns `content.trim()`, so a zero-byte `.branch` comes back as
+  // `''` — not null — and rode straight past both branches: `branch === null`
+  // was false, so `branchUnmeasured` was false AND `verifyDone`'s null check
+  // missed it, and `''` went on to be used AS A BRANCH NAME.
+  //
+  // Producible, not theoretical. `_reg_set` is `printf '%s' "$3" > "$REG/$1.$2"`
+  // (ccd:252) — a plain truncating redirect with no tmp+rename, so a process
+  // killed between the truncate and the write leaves exactly this file; `touch
+  // $REG/<id>.branch` is the other way in.
+  describe('and a .branch that reads back EMPTY', () => {
+    const seedEmptyBranch = (reg: string) => seed(reg, 'demo-quiet-basin', {
+      wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'e'.repeat(36),
+      workspace: 'quiet-basin', branch: '',
+    });
+
+    it('names no branch — `` is not a branch name and must not survive as one', async () => {
+      const reg = path.join(home, '.cc-sessions');
+      seedEmptyBranch(reg);
+      const rec = (await readRegistry(localIO, loadConfig({ CCRC_HOME: home })))[0]!;
+      // The bug this pins: `branch: ''` reached `readBranchTip` (a ref path
+      // ending in a slash), `divergence`'s `head === r.branch` comparison
+      // (which reported "the registry says , the worktree's own HEAD says
+      // ws/quiet-basin" — a drift against nothing) and `fleet.ts`'s wire
+      // field (an empty branch chip). One normalisation at the source, three
+      // consumers fixed.
+      expect(rec.branch).toBeNull();
+    });
+
+    it('is EMPTY evidence — not absent, and not unreadable either', async () => {
+      // Empty is its own condition and it says something neither neighbour
+      // says. Absent is the ordinary state of a main checkout; unreadable is
+      // transient and asks to be retried. A zero-byte file is neither: its
+      // bytes DID come back, and re-reading returns the same nothing. Folding
+      // it into either one is the same defect this whole split exists to fix,
+      // one state further along.
+      const reg = path.join(home, '.cc-sessions');
+      seedEmptyBranch(reg);
+      const rec = (await readRegistry(localIO, loadConfig({ CCRC_HOME: home })))[0]!;
+      expect(rec.branchEvidence).toBe('empty');
+    });
+
+    it('whitespace-only counts as empty too — `field()` trims before anyone sees it', async () => {
+      const reg = path.join(home, '.cc-sessions');
+      seed(reg, 'demo-quiet-basin', {
+        wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'e'.repeat(36),
+        workspace: 'quiet-basin', branch: '  \n',
+      });
+      const rec = (await readRegistry(localIO, loadConfig({ CCRC_HOME: home })))[0]!;
+      expect(rec.branch).toBeNull();
+      expect(rec.branchEvidence).toBe('empty');
+    });
+
+    it('degrades neither the identity triple nor the lifecycle read', async () => {
+      const reg = path.join(home, '.cc-sessions');
+      seedEmptyBranch(reg);
+      const rec = (await readRegistry(localIO, loadConfig({ CCRC_HOME: home })))[0]!;
+      expect(rec.unmeasured).toEqual([]);
+      expect(rec.lifecycleUnmeasured).toEqual([]);
+    });
+  });
+
+  // The two shapes it must NOT be conflated with, pinned so a later "tidy-up"
+  // cannot fold it into either array.
+  it('an unreadable branch degrades neither the identity triple nor the lifecycle read', async () => {
+    const reg = path.join(home, '.cc-sessions');
+    seed(reg, 'demo-quiet-basin', {
+      wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'e'.repeat(36),
+      workspace: 'quiet-basin', branch: 'ws/quiet-basin', started: '1',
+    });
+    const io = unreadableField('demo-quiet-basin', 'branch');
+    const rec = (await readRegistry(io, loadConfig({ CCRC_HOME: home })))[0]!;
+    expect(rec.unmeasured, '`unmeasured` is IdentityField[] and rides the wire — do not widen it')
+      .toEqual([]);
+    expect(rec.lifecycleUnmeasured,
+      'a branch nobody could read says nothing about whether the session is running').toEqual([]);
+  });
 });
 
 describe('workspace on the wire', () => {

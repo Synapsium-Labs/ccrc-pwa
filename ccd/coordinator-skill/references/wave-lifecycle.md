@@ -135,6 +135,17 @@ branch."** This is not optional phrasing left to judgement (clause 5's "the
 content is this session's judgement" does not cover it) — it is the one
 sentence that keeps the wave closeable at all.
 
+**The workspace's name is frozen for the life of the claim.** This is a fact
+the fleet did not previously guarantee, not a correction to anything above:
+the automatic naming sweep used to rename a workspace to a slug of the
+worker's first ai-title, typically within a minute of dispatch, whether or not
+a program had claimed it. It no longer does — the sweep skips any row that is
+held or that an open run names, and `ccd ws-rename` refuses a held workspace
+outright. So the branch this run is dispatched on is the branch it still has
+when you re-measure it, and a brief, a ledger entry or a review note may cite
+the branch name and expect it to resolve. Releasing the hold (or closing every
+run naming the session) un-freezes it, and the next sweep may rename it then.
+
 Then **end your turn.** Do not sleep-poll. Do not "check in five minutes". The
 delivery lane will inject the worker's mail into your session when it is idle,
 and that injection is your next turn.
@@ -249,6 +260,7 @@ there is nothing yet to claim, send the empty-claim shape:
 |---|---|
 | `stale-tip` | the branch moved after the claim was written |
 | `tip-unmeasurable` | the branch tip could not be re-read (not evidence either way) |
+| `branch-unmeasurable` | the workspace's branch could not be resolved: the live registry has a row for this session and the row's own branch field is null — either listed with bytes that did not come back (transient) or absent (not). Not evidence either way; the run is unchanged. Re-submit once the registry reads clean. If it keeps answering this, the session's registry row needs a human — the run row's frozen branch column is deliberately not used as a guess |
 | `pr-regressed` | the PR is not in the phase the claim asserted |
 | `pr-unmeasurable` | the PR state could not be re-read (not evidence either way) — but see below: this is ALSO what a malformed submission of your own gets, before any I/O runs |
 | `no-handoff-commit` | `handoffCommit` and `branchTip`, IN THIS CLAIM, are not the identical 40-hex sha (or either fails the sha shape) — a correspondence check ONLY ("the worker's two facts agree, and the tip is real"), never a claim that the commit's *content* is a real handoff (that stays your ordinary review, §5 step 1). It fires on a perfectly good wave if you submit a freshly re-measured `branchTip` alongside the mail's ORIGINAL `handoffCommit`: any review fix, lint fix or merge commit pushed to the branch after `wave-done` moves the tip away from what the worker claimed, and mixing the two sources here reports that ordinary shape as this code instead of the accurate `stale-tip` |

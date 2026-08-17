@@ -165,7 +165,52 @@ export function AccountRow({
 }
 
 export interface SwapSheetProps {
-  session: Pick<FleetSession, 'id' | 'wrapper' | 'project'>;
+  /** `home` is required here because §3.4's honest label cannot be written
+   *  without it: a swap made from this sheet is TEMPORARY — `ccd swap` writes
+   *  `.wrapper` and never `.home`, and `_auto_swap_check` returns the session
+   *  to `home` the moment home has room (measured live, both directions,
+   *  ~15 minutes) — so the sheet has to be able to NAME the account it goes
+   *  back to.
+   *
+   *  `string | null`, deliberately WIDER than `FleetSession['home']`, and the
+   *  plan for this task was wrong about needing it: it said both callers pass
+   *  a whole `FleetSession`, but `SessionScreen` passes `live ?? { id,
+   *  wrapper, project }` — a synthetic row for a session that is not in the
+   *  live fleet snapshot at all. There, the home account is UNMEASURED. `null`
+   *  says exactly that and nothing else; defaulting it to `wrapper` would make
+   *  the sheet name the account the session is being moved AWAY from as the
+   *  one it returns to, in the one state where nobody checked. The field stays
+   *  REQUIRED so a new caller has to answer the question rather than omit it —
+   *  absence and "unknown" are not the same fact.
+   *
+   *  `held` is what decides whether the return above can be PROMISED at all,
+   *  and it is the same fact ccd itself keys off. Wave 3 §3.3 gave
+   *  `_auto_swap_check`'s AFFINITY arm — the return-home / rate-ceiling path —
+   *  an early `[[ -e "$REG/$id.hold" ]] && return 0`, so a held session is not
+   *  brought home by anything until the hold clears. `FleetSession.held` is
+   *  that file's reason string (null when unheld) measured FAIL-SHUT by
+   *  `server/src/registry.ts` — a present-but-unreadable `.hold` reads as held,
+   *  carrying `HOLD_UNREADABLE` — so `held !== null` here and `-e` there are
+   *  one measurement, not two sources of truth. (§3.3 left the RESCUE arm
+   *  alone: a hard-blocked held session is still evacuated. No copy below
+   *  claims otherwise — every sentence is about the RETURN.)
+   *
+   *  THREE states, in three distinct values, because a caller handles each
+   *  differently (no overloaded null at a seam):
+   *    - a reason string — HELD. The automatic return is deferred; do not
+   *      promise it, and show the reason, which is the display everywhere.
+   *    - `null`          — MEASURED AND UNHELD. The promise is true; make it.
+   *    - ABSENT          — nobody measured. `SessionScreen`'s synthetic row
+   *      (`live ?? { id, wrapper, project, home: null }`) has no live fleet
+   *      entry to read a hold off at all. Optional rather than required, and
+   *      that is the one place this file's "make the caller answer" rule bends
+   *      on purpose: absence is a real answer here, it is the HEDGED one, and
+   *      a caller who forgets fails toward saying less than it knows rather
+   *      than more. Read through the single `session.held === undefined` test
+   *      below and nowhere else. */
+  session: Pick<FleetSession, 'id' | 'wrapper' | 'project'>
+    & { home: string | null }
+    & Partial<Pick<FleetSession, 'held'>>;
   open: boolean;
   onClose: () => void;
   /** Injectable for tests; defaults to the app-wide fleet store. */
@@ -228,13 +273,50 @@ export function SwapSheet({
   };
 
   const targetLabel = target === null ? '' : accountLabel(roster, target);
+  // Read off `session.home`, never off `session.wrapper`: on a session that has
+  // already been relocated those differ, and that is exactly the case where the
+  // return sentence matters. `null` = nobody measured it (see the prop's
+  // docstring); the copy then states the SAME temporariness without naming an
+  // account it does not know.
+  const homeLabel = session.home === null ? null : accountLabel(roster, session.home);
+  // THE SINGLE READER of `held` (see the prop's docstring). `undefined` is
+  // "nobody measured", `null` is "measured, unheld", a string is the hold's
+  // reason — three conditions this component answers three different ways, so
+  // they are never compared with `??` or truthiness anywhere below.
+  const held = session.held;
+  // Where it goes back to, and what has to have room, in the two home states.
+  // Pulled out so the hold branches read as one sentence each instead of four.
+  const backTo = homeLabel ?? 'its home account';
+  const whenRoom = homeLabel ?? 'that account';
+  const homeClause = homeLabel === null
+    ? 'Its home account is not known from here'
+    : `Its home account is ${homeLabel}`;
+  // The promise §3.4 shipped, kept WORD FOR WORD for the state it is true in —
+  // an unheld session really is returned on the next affinity tick, and that
+  // is the whole value of the control admitting it is temporary.
+  const returnPromise = homeLabel === null
+    ? 'a move is temporary either way: ccrc returns the session to its home account as soon as ' +
+      'that account has room again'
+    : `a move from here is temporary: ccrc returns the session to ${homeLabel} as soon as ` +
+      `${homeLabel} has room again`;
+  const sheetCopy =
+    held === undefined
+      ? `${homeClause}, and a move from here is normally temporary — ccrc returns the session to ` +
+        `${backTo} as soon as ${whenRoom} has room again — but a program hold defers that ` +
+        'automatic return, and whether one stands was not measured from here.'
+      : held !== null
+        ? `${homeClause}, but this session is held — ${held} — and ccrc does not return a held ` +
+          'session on its own: it stays on the account you pick until the hold is released' +
+          `${homeLabel === null ? '' : `, and only then goes back to ${homeLabel}`}.`
+        : `${homeClause} — ${returnPromise}.`;
 
   return (
     <>
       <Sheet open={open} onClose={onClose} eyebrow="move session" title="Move to another account">
         <p className="sheet-copy">
-          {session.project} runs on {accountLabel(roster, session.wrapper)} now. Pick where it should
-          live.
+          {session.project} runs on {accountLabel(roster, session.wrapper)} now.{' '}
+          {sheetCopy}{' '}
+          Pick where it should live meanwhile.
         </p>
         <div className="acct-list">
           {wrappers.map((w) => (
@@ -253,7 +335,20 @@ export function SwapSheet({
         open={target !== null}
         onClose={() => setTarget(null)}
         title={`Move to ${targetLabel}?`}
-        consequence={`The session restarts under ${targetLabel}. Anyone attached is briefly disconnected.`}
+        consequence={`The session restarts under ${targetLabel}. Anyone attached is briefly ` +
+          'disconnected. ' +
+          // Same three-way split as the sheet copy, and it has to be here too:
+          // this is the sentence read at the moment of commitment, and it is
+          // where the old unconditional promise did the most damage — a
+          // coordinator moving a held worker was told it would come back.
+          (held === undefined
+            ? `This is normally temporary — ccrc moves it back to ${backTo} once ${whenRoom} ` +
+              'has room — but a program hold defers that, and whether one stands was not ' +
+              'measured from here.'
+            : held !== null
+              ? `This session is held — ${held} — and ccrc does not move a held session back on ` +
+                `its own: it stays under ${targetLabel} until the hold is released.`
+              : `This is temporary — ccrc moves it back to ${backTo} once ${whenRoom} has room.`)}
         confirmLabel="Move"
         onConfirm={() => {
           if (target !== null) move(target);

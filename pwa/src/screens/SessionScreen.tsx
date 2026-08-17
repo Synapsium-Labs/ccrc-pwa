@@ -378,7 +378,18 @@ export function SessionScreen({
         onPick={(c) => void pick(c)}
       />
       <SwapSheet
-        session={live ?? { id, wrapper, project }}
+        // `home: null` — not `wrapper`. With no live row there is no home
+        // account to read, and W3 §3.4's copy names the account a swap returns
+        // to; naming the one it is leaving would be a guess wearing a fact's
+        // clothes. `SwapSheet` renders the unnamed form for null.
+        //
+        // `held` is OMITTED from the synthetic row for the same reason, and
+        // the omission is the answer, not an oversight (see `SwapSheetProps`):
+        // a hold is read off the live fleet row, there is no live fleet row
+        // here, so nobody measured it. `held: null` would claim this session
+        // is unheld and earn it §3.4's unconditional return promise — which
+        // §3.3 made false for a held session. The sheet hedges instead.
+        session={live ?? { id, wrapper, project, home: null }}
         open={swapOpen}
         onClose={() => setSwapOpen(false)}
         fleet={useFleet}
