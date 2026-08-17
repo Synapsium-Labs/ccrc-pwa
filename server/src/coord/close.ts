@@ -235,12 +235,23 @@ export async function closeRun(
   // 3: the fleet act — AHEAD of the transition commit (deviation D-48). It
   // is a RELEASE (D-5), never an autonomous archive. `state:'failed'` with
   // `archive:true` is the ONE explicit `wsArchive` call in the whole
-  // coordination lane.
+  // coordination lane — and, Wave 2, IT IS GATED ON THE SAME SIBLING CHECK
+  // as the release. `ws-archive` has no hold rung in ccd (deliberately: a
+  // by-hand archive of a held workspace must still work), so an ungated arm
+  // here archives a SIBLING run's workspace and leaves that sibling's
+  // `.hold` standing over it — F9's harm through a different door. When a
+  // sibling is open the archive does not happen, the claim is handed to the
+  // survivor by the `else` arm below, the run still transitions to `failed`,
+  // and `released:false` is the signal. The cost is stated rather than
+  // hidden: the operator asked for an archive and did not get one. It is
+  // recoverable by the same hands — `POST /api/sessions/:id/archive` with
+  // `{force:true}` — and the corrective act is the one every other arm
+  // implies anyway: close the sibling first.
   const siblings = siblingsOf(run.sessionId);
   const survivor = survivorOf(siblings);
   const safe = releaseIsSafe(siblings);
   let released = false;
-  if (state === 'failed' && archive) {
+  if (state === 'failed' && archive && safe) {
     const argv = CCD_ARGV.wsArchive(run.sessionId);
     if (!verbSupported(deps.fleetState, argv)) return { ok: false, kind: 'unsupported' };
     const res = await deps.runCcd(argv);

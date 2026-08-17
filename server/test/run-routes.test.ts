@@ -863,6 +863,43 @@ describe('POST /api/runs/:id/close', () => {
     expect(calls.some((c) => c[0] === 'ws-release')).toBe(false);
   });
 
+  it('failed+archive with a SIBLING open archives NOTHING and re-holds — the fourth fleet act, gated', async () => {
+    // `ws-archive` has no hold rung in ccd (by design: a by-hand archive of a
+    // held workspace must still work), so an ungated arm here archives the
+    // SIBLING's workspace and leaves the sibling's `.hold` standing over it —
+    // F9's harm through a different door, in the function Wave 2 rewrites.
+    const sessionId = `${PROJECT}-close-arch-sib`;
+    const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
+    const { id, coord, calls } = await dispatchedRun(sessionId, root,
+      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
+    const next = coord.openRun({ program: 'build4', title: 'T', project: PROJECT, wave: 2, waveOf: 3,
+      claimedBy: CLAIMED_BY });
+    if (!('id' in next)) throw new Error('fixture openRun refused');
+    coord.setSession(next.id, sessionId);
+
+    const res = await postClose(app!, id,
+      { fingerprint: GOOD_CLAIM, final: true, state: 'failed', archive: true });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, state: 'failed', released: false });
+    // The run still transitions — the WORKSPACE is what is protected.
+    expect(coord.run(id)!.state).toBe('failed');
+    expect(calls.some((c) => c[0] === 'ws-archive')).toBe(false);
+    expect(calls.some((c) => c[0] === 'ws-release')).toBe(false);
+    expect(calls).toContainEqual(
+      ['ws-hold', '--session', sessionId, '--reason', `program:build4 wave:2/3 run:${next.id}`]);
+  });
+
+  it('failed+archive with NO sibling still archives — the arm is gated, not deleted', async () => {
+    const sessionId = `${PROJECT}-close-arch-lone`;
+    const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
+    const { id, calls } = await dispatchedRun(sessionId, root,
+      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
+    const res = await postClose(app!, id,
+      { fingerprint: GOOD_CLAIM, final: true, state: 'failed', archive: true });
+    expect(res.statusCode).toBe(200);
+    expect(calls).toContainEqual(['ws-archive', '--session', sessionId]);
+  });
+
   it('answers 501 when the fleet ccd does not support ws-release, and the run stays RETRYABLE — ' +
      'not wedged done with the hold silently un-released (D-48)', async () => {
     const sessionId = `${PROJECT}-close7`;
