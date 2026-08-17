@@ -32,7 +32,7 @@ const REGDIR = (): string => path.join(h.home, '.cc-sessions');
 const run = (snippet: string): { code: number; stdout: string; stderr: string } => {
   const r = spawnSync('bash', ['-c', `source "${CCD}"; ${snippet}`], {
     encoding: 'utf8', cwd: h.home, timeout: 15000,
-    env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }),
+    env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true }),
   });
   return { code: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 };

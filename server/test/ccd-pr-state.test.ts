@@ -61,7 +61,8 @@ describe('pr-state argv', () => {
     let stderr = '';
     try {
       execFileSync('bash', [CCD, 'no-such-verb'],
-        { encoding: 'utf8', cwd: h.home, env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }) });
+        { encoding: 'utf8', cwd: h.home,
+          env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true }) });
       throw new Error('a verb ccd does not have must exit non-zero');
     } catch (e) {
       stderr = String((e as { stderr?: string }).stderr ?? '');
