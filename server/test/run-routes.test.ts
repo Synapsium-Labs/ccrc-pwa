@@ -4,8 +4,9 @@
 // already enumerates; that suite (run unchanged, Step 4) is the proof this
 // task added none.
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
 import type { Deps } from '../src/server.js';
@@ -15,7 +16,18 @@ import type { Runner } from '../src/exec.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { holdReason } from '../src/coord/rundefs.js';
 import { WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX } from '../../shared/api.js';
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+
+/** Every `.ts`/`.tsx` under `dir`, recursively. */
+const sourcesUnder = (dir: string): string[] =>
+  readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) return sourcesUnder(full);
+    return /\.tsx?$/.test(e.name) ? [full] : [];
+  });
 
 const PROJECT = 'demo';
 const CLAIMED_BY = 'ccrc-pwa-coordinator';
@@ -187,7 +199,7 @@ describe('POST /api/runs', () => {
     const id = (res.json() as { id: number }).id;
     expect(w.coord.run(id)?.sessionId).toBe('demo-existing');
     expect(calls).toContainEqual(
-      ['ws-hold', '--session', 'demo-existing', '--reason', 'program:build4 wave:2/3']);
+      ['ws-hold', '--session', 'demo-existing', '--reason', `program:build4 wave:2/3 run:${id}`]);
   });
 
   it('refuses a malformed body', async () => {
@@ -572,7 +584,7 @@ describe('POST /api/runs/:id/dispatch', () => {
     const opened = (await postOpen(app)).json() as { id: number };
     await postDispatch(app, opened.id);
     expect(calls).toContainEqual(
-      ['ws-hold', '--session', 'demo-fresh2', '--reason', 'program:build4 wave:1/3']);
+      ['ws-hold', '--session', 'demo-fresh2', '--reason', `program:build4 wave:1/3 run:${opened.id}`]);
     // The run's own program/wave columns carry this — nothing reads it back
     // out of the reason string.
     expect(w.coord.run(opened.id)).toMatchObject({ program: 'build4', wave: 1, waveOf: 3 });
@@ -781,6 +793,9 @@ describe('POST /api/runs/:id/close', () => {
     const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: false });
     expect(res.statusCode).toBe(200);
     expect(coord.run(id)!.state).toBe('done');
+    // NO ` run:` suffix, deliberately: this reason claims the workspace for
+    // wave 2, whose run has not been opened yet. Stamping the CLOSING run's
+    // id onto the successor's claim would name the wrong run.
     expect(calls).toContainEqual(
       ['ws-hold', '--session', sessionId, '--reason', 'program:build4 wave:2/3']);
     expect(calls.some((c) => c[0] === 'ws-release')).toBe(false);
@@ -1668,5 +1683,31 @@ describe('POST /api/runs/:id/dispatch — the declared ledger (spec §3.1)', () 
     expect(second.json()).toMatchObject({ ok: false, error: 'bad-transition' });
     // The ledger is fixed at dispatch: still two rows, not four.
     expect(itemRows(w.coord, opened.id).map((r) => r.title)).toEqual(['one', 'two']);
+  });
+});
+
+describe('the hold reason', () => {
+  it('the reason names its run, and NOTHING in the tree parses one back', () => {
+    // DISPLAY-ONLY. `run:` exists so a human reading ~/.cc-sessions can answer
+    // "whose claim is this?" from the box alone — which they could not during
+    // the F9 incident. Run-awareness itself comes from coord.db
+    // (`openRunsForSession`), never from this string.
+    expect(holdReason('build4', 2, 3, 17)).toBe('program:build4 wave:2/3 run:17');
+    expect(holdReason('build4', 2, null, 17)).toBe('program:build4 wave:2 run:17');
+    // A HAND hold has no run: no suffix, so the PWA composer's placeholder
+    // `program:name wave:2/4` is still a truthful example.
+    expect(holdReason('build4', 2, 3, null)).toBe('program:build4 wave:2/3');
+
+    // The negative half, scanned over the two rings that could plausibly
+    // acquire a parser. A `.split('run:')`, a `/run:(\d+)/`, a
+    // `startsWith('program:')` — any of them turns a display string into a
+    // protocol.
+    for (const dir of [path.join(repoRoot, 'server', 'src'), path.join(repoRoot, 'pwa', 'src')]) {
+      for (const f of sourcesUnder(dir)) {
+        const src = readFileSync(f, 'utf8');
+        expect(/['"`]run:['"`]|\/.*run:\\?\(/.test(src.replace(/^\s*\/\/.*$/gm, '')),
+          `${f} looks like it parses a hold reason`).toBe(false);
+      }
+    }
   });
 });

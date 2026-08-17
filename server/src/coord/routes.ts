@@ -771,7 +771,7 @@ export function registerCoordRoutes(
     // rather than `ws-add` (deviation D-1).
     if (typeof sessionId === 'string') {
       coord.setSession(opened.id, sessionId);
-      const argv = CCD_ARGV.wsHold(sessionId, holdReason(program, wave, waveOfVal));
+      const argv = CCD_ARGV.wsHold(sessionId, holdReason(program, wave, waveOfVal, opened.id));
       if (!verbSupported(deps.fleetState, argv)) {
         return reply.code(501).send({ ok: false, error: 'unsupported' });
       }

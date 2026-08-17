@@ -56,9 +56,18 @@ export const COORDINATOR_PAUSE_MARKER = 'coordinator-paused';
  *  `program`/`wave`/`waveOf` columns are what every route and the store
  *  actually read. Shared by the open route's immediate hold, dispatch's own
  *  hold, and close's hold-reason update to the next wave, so the three
- *  places this string is built can never drift apart from one another. */
-export const holdReason = (program: string, wave: number, waveOf: number | null): string =>
-  `program:${program} wave:${wave}${waveOf === null ? '' : `/${waveOf}`}`;
+ *  places this string is built can never drift apart from one another.
+ *
+ *  `run:<id>` (Wave 2) is what lets a human reading `~/.cc-sessions` answer
+ *  "whose claim is this?" from the box alone — the question that had no
+ *  answer during the F9 incident. STILL DISPLAY-ONLY: run-awareness comes
+ *  from `coord.db` (`CoordStore.openRunsForSession`), never from parsing
+ *  this string, and `run-routes.test.ts` pins that nothing does. A HAND hold
+ *  has no run and passes `null`, so it gets no suffix. */
+export const holdReason = (program: string, wave: number, waveOf: number | null,
+                           runId: number | null): string =>
+  `program:${program} wave:${wave}${waveOf === null ? '' : `/${waveOf}`}` +
+  `${runId === null ? '' : ` run:${runId}`}`;
 
 /** May this close END the claim on the workspace, or must it hand the claim
  *  to whoever else still owns it?

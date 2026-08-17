@@ -218,7 +218,10 @@ export async function closeRun(
     const res = await deps.runCcd(argv);
     if (!res.ok) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
   } else {
-    const nextReason = holdReason(run.program, run.wave + 1, run.waveOf);
+    // `null`, explicitly: this reason claims the workspace for wave N+1,
+    // whose run has not been opened yet. Stamping the CLOSING run's id onto
+    // the successor's claim would name the wrong run.
+    const nextReason = holdReason(run.program, run.wave + 1, run.waveOf, null);
     const argv = CCD_ARGV.wsHold(run.sessionId, nextReason);
     if (!verbSupported(deps.fleetState, argv)) return { ok: false, kind: 'unsupported' };
     const res = await deps.runCcd(argv);
