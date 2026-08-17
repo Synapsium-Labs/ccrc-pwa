@@ -13560,3 +13560,40 @@ treats two `open()`s of one file in a process as strangers, that is a lock nothi
 routes both outcomes through a single close and the comment now states the real rule. The leak is
 observable only from the sourcing shell, which is also the production shape — a fresh-bash probe would
 have shown it free, so the test asks the same shell.
+
+**D-B8-5 — four guards were decorated, not pinned, and one hid a standing false positive.** Review
+mutation-proved each: deleting `readWorktreeRecords`'s path-escape guard left the suite green; the
+"`_spawn_start` still dies" test wrapped the call in `( )`, so it passed whether the guard was fatal or
+not; the achromatic CSS override was, verbatim, "a comment, not a mechanism"; and `divergence.test.ts`'s
+"finds a FLAT worktree" case passed `name: 'alertwire'` — **a fixture choice, not a measurement of git.**
+
+That last one hid a real defect. Measured on the live box, `custom-tools` runs BOTH worktree layouts,
+and git's admin name for the flat one is `custom-tools-alertwire`, so `${project}-${name}` derived
+`custom-tools-custom-tools-alertwire` — an id no registry row can ever match, reported every sweep,
+forever, on the divergence kind whose repair deletes worktrees.
+
+The fix is a measurement, not a heuristic: the ccd id comes from the checkout path read out of the
+admin record's `gitdir`, settling the layout on the parent segment first — because
+`~/worktrees/demo/demo-fix` and `~/worktrees/demo-fix` are different workspaces git records under the
+same admin name, and a `startsWith` test cannot tell them apart.
+
+**The preventive mechanism is the part to keep:** `plantWorktreeRecord` now throws unless
+`name === basename(at)` — git's own invariant, asserted on the fixture. The wrong fixture that hid this
+defect is no longer writable. That is the shape to copy the next time a test encodes an assumption
+instead of measuring one: make the bad fixture impossible rather than adding another case.
+
+**D-B8-6 — the census sweep re-opened the race it had just closed, through ordering.** `registryNames`
+was snapshotted at the top of the tick while `readWorktreeRecords` ran three awaited lanes later, so a
+workspace whose `_reg_set` landed between the two reads had a worktree record and no registry name —
+the mid-`ws-add` false positive fixed two commits earlier, arriving by ordering rather than by
+predicate. The 60-second debounce does not cover it: the skew repeats every sweep while the write keeps
+landing in the window, so both sightings agree and the finding publishes.
+
+`sweepDivergences` now takes its own listing after the worktree loop, and an unlistable registry fails
+shut — a listing read as `[]` would otherwise claim that nothing claims anything, fleet-wide, on the
+kind whose repair deletes worktrees.
+
+**Two related notes worth carrying.** ccd's `_ws_gc_row` tests `orphan` FIRST, so residue with no
+`.uuid` reads `orphan` there and *claimed* by the census — the census is the narrower of the two, which
+is the safe direction. And `.uuid` is the **fourth** field `cmd_ws_add` writes, which is why adopting
+ws-gc's `.uuid`-alone test would have re-opened the very false alarm this entry records.
