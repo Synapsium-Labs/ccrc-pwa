@@ -20,6 +20,11 @@ import { spawnSync } from 'node:child_process';
 // guard at the bottom of this file asserts nothing at all.
 import { readFileSync } from 'node:fs';
 import { CCD, ghContainedEnv, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+// The OTHER reader. "One reader for the box row" is this file's whole thesis,
+// and until now it was asserted only in prose: the parity table below makes it
+// an assertion, over the escape-carrying rows that are the entire reason the
+// two implementations can disagree.
+import { draftOf } from '../src/inject/send.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-box-draft-'); });
@@ -85,5 +90,62 @@ describe('_pane_box_draft', () => {
     const src = readFileSync(CCD, 'utf8');
     expect(src.match(/grep -m1 "\^❯ "/g), 'an inline box-row grep is back').toBeNull();
     expect((src.match(/_pane_box_draft\(\)/g) ?? []).length).toBe(1);
+  });
+});
+
+/**
+ * THE ESCAPE CODES ARE NOT DECORATION — they are what tells a REAL draft from
+ * Claude Code's dim ghost-suggestion, and this reader was blind to both halves
+ * of that at once (measured on this box, 2026-08-17):
+ *
+ *  - Handed a PLAIN `capture-pane -p`, which is what both call sites passed,
+ *    the dim ghost ("continue") arrives as ordinary characters: the reader
+ *    returned `continue` for an EMPTY box, where the rule it replaced returned
+ *    ''. Both callers refuse on a non-empty read and neither ever retries, so
+ *    an idle session showing a suggestion was refused FOREVER — a live
+ *    regression of the common shape, since the empty box's own separator is
+ *    `❯` + U+00A0 and the ghost sits right after it.
+ *  - Handed a `-e` capture with NO stripping, it is worse, not better: the box
+ *    row starts with a colour code (`\e[39m❯…`, verbatim in LIVE_CU_FRAMES),
+ *    so the marker grep misses it entirely and `tail -1` lands on a plain
+ *    SCROLLBACK turn — measured, `an older submitted turn`.
+ *
+ * So the fix is both halves together, and the pin is parity with `draftOf`,
+ * which has stripped `DIM_SPAN` and SGR since it shipped.
+ */
+describe('_pane_box_draft reads an ANSI capture, exactly as draftOf does', () => {
+  const ESC = '\x1b';
+  /** Verbatim box rows. The first two are `send.test.ts`'s own live captures
+   *  (`CAPTURED_QUEUE_HINT_ROW`, `LIVE_CU_FRAMES`); the combined-reset row is
+   *  the tmux-3.4 normalisation that broke `DIM_SPAN` round 2. */
+  const ROWS: readonly (readonly [string, string, string])[] = [
+    ['a dim ghost-suggestion is not a draft',
+      `${ESC}[39m❯${NBSP}${ESC}[2m${ESC}[39mcontinue${ESC}[0m`, ''],
+    ['the busy-session queue hint is not a draft',
+      `${ESC}[38;5;246m❯${NBSP}${ESC}[2m${ESC}[39mPress up to edit queued messages${ESC}[0m`, ''],
+    ['a real typed draft on a COLOURED marker row is a draft',
+      `${ESC}[39m❯${NBSP}AAA first line`, 'AAA first line'],
+    ['a combined reset (\\e[0;1m) ends the dim run, it does not swallow what follows',
+      `❯ ${ESC}[2mghost${ESC}[0;1mBOLD REAL${ESC}[0m`, 'BOLD REAL'],
+    ['an empty coloured box is empty',
+      `${ESC}[39m❯${NBSP}`, ''],
+  ];
+
+  for (const [name, row, expected] of ROWS) {
+    it(name, () => {
+      // ABSOLUTE, then parity: a mutant that made both readers answer '' for
+      // everything would keep parity green while destroying every draft.
+      expect(draft(pane([row]))).toBe(expected);
+      expect(draft(pane([row]))).toBe(draftOf(pane([row])));
+    });
+  }
+
+  // The reader can only strip what it is given. Both call sites must capture
+  // with `-e`; a plain `-p` read is the regression measured above.
+  it('every call site hands it an ANSI capture', () => {
+    const src = readFileSync(CCD, 'utf8');
+    const calls = src.match(/_pane_box_draft "\$\(tmux capture-pane[^)]*\)"/g) ?? [];
+    expect(calls, 'the two injector call sites').toHaveLength(2);
+    for (const c of calls) expect(c, c).toContain(' -e');
   });
 });

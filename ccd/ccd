@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=7ffd0d9a992960f8ea125ea78e07b725d08b40dde0ba712f63809c317e4f7426
+# ccrc:generated 1 sha256=b9b40e50c68e07cd14f350177a137474eca7541cd9b1111703e5852018cac064
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
 set -uo pipefail
@@ -7469,9 +7469,12 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   # touched from any surface (statusUpdatedAt ms ticks on every busy<->idle transition).
   sua=$(grep -oE '"statusUpdatedAt":[0-9]+' "$sf" 2>/dev/null | head -1 | cut -d: -f2)
   [[ -n "$sua" && $(( now * 1000 - sua )) -ge $(( COMPACT_QUIET * 1000 )) ]] || return 0
-  # Don't clobber a half-typed message in the input box.
+  # Don't clobber a half-typed message in the input box. `-e`: the reader needs
+  # the escape codes to tell a real draft from the dim ghost-suggestion — see
+  # `_pane_box_draft`, which refused every suggestion-showing session for ever
+  # when it was handed a plain capture.
   t=$(_tmux "$id")
-  cur=$(_pane_box_draft "$(tmux capture-pane -t "$t" -p 2>/dev/null)")
+  cur=$(_pane_box_draft "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)")
   [[ -n "$cur" ]] && return 0
   _reg_set "$id" lastcompact "$now"
   echo "$(date '+%F %T') auto-compact $id: ctx ${pct}% >= ${COMPACT_THRESHOLD}% [wrapper=$wrapper]" >> "$REG/swap.log"
@@ -7509,8 +7512,35 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
 #
 # The trailing trim stays `[[:space:]]` under the same C locale — byte-for-byte
 # what the two guards did before, so a pane that behaved yesterday behaves today.
-_pane_box_draft() {   # pane-text -> the box's own row, or empty
+#
+# THE INPUT IS AN `-e` CAPTURE, and the escape strip is the third correction
+# (measured on this box, 2026-08-17). Both halves are needed and either alone is
+# a defect:
+#   • plain `-p`, which both call sites used to pass: Claude Code's DIM
+#     ghost-suggestion in an EMPTY box arrives as ordinary characters, so this
+#     read `continue` off an idle session and both callers — which refuse on a
+#     non-empty read and never retry — refused for ever. `draftOf` was never
+#     exposed to this because it strips the dim run first.
+#   • `-e` with no strip is WORSE than plain: a live box row starts with a
+#     colour code (`\e[39m❯` + NBSP, verbatim in LIVE_CU_FRAMES), so the marker
+#     grep below misses it and `tail -1` lands on a plain SCROLLBACK turn.
+# So: dim runs first, then any remaining SGR, then the marker rules. That order
+# is `draftOf`'s and it is load-bearing — stripping SGR first would erase the
+# `\e[2m` that marks the ghost as a ghost and promote it to a real draft.
+#
+# The dim-run pattern mirrors `DIM_SPAN`'s two hard-won subtleties: OTHER SGR
+# codes are allowed INSIDE the run (the queue hint renders `\e[2m\e[39mPress up
+# …`), but a code whose first parameter is `0` is a reset and ENDS the run
+# rather than being absorbed by it — tmux 3.4 normalises a dim-off followed by
+# another attribute into a combined `\e[0;1m`, and a pattern that swallowed that
+# would eat the real text after it. `[1-9][0-9;]*` is the interleaved case and
+# `0[0-9;]*` the terminator, which is exactly that split. No non-greedy operator
+# is needed (and ERE has none): the interleaved alternative cannot match a reset
+# and `[^\e]` cannot match an ESC, so the match physically cannot run past the
+# first terminator.
+_pane_box_draft() {   # ANSI (`capture-pane -e`) pane-text -> the box's own row, or empty
   printf '%s\n' "$1" \
+    | LC_ALL=C sed -E $'s/\033\\[2m((\033\\[[1-9][0-9;]*m)|[^\033])*\033\\[0[0-9;]*m//g; s/\033\\[[0-9;]*m//g' \
     | LC_ALL=C grep $'^\xe2\x9d\xaf' \
     | tail -1 \
     | LC_ALL=C sed $'s/^\xe2\x9d\xaf\\(\xc2\xa0\\| \\)*//; s/[[:space:]]*$//'
@@ -7865,8 +7895,11 @@ _spawn() {   # id mode(new|resume) — the composition, so cmd_swap and friends 
 _inject_spawn_effort() {   # tmuxname — apply SPAWN_EFFORT once the TUI is up.
   [[ -n "$SPAWN_EFFORT" ]] || return 0
   local t="$1" cur
-  # Only type into an EMPTY input box — a restored draft would swallow the slash command.
-  cur=$(_pane_box_draft "$(tmux capture-pane -t "$t" -p 2>/dev/null)")
+  # Only type into an EMPTY input box — a restored draft would swallow the slash
+  # command. `-e` for the same reason the auto-compact guard passes it: without
+  # the escape codes a dim ghost-suggestion reads as a draft and /effort is
+  # skipped on every fresh session that shows one.
+  cur=$(_pane_box_draft "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)")
   if [[ -n "$cur" ]]; then echo "ccd: input box not empty, skipped /effort $SPAWN_EFFORT" >&2; return 0; fi
   sleep 1
   tmux send-keys -t "$t" -l "/effort $SPAWN_EFFORT"; sleep 1; tmux send-keys -t "$t" Enter
