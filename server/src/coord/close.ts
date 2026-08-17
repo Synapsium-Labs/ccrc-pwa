@@ -52,8 +52,8 @@ export type CloseOutcome =
   | { ok: false; kind: 'bad-request' }
   | { ok: false; kind: 'refused'; code: Extract<RunRefuseCode, 'not-dispatched' | 'prhistory-unreadable'> }
   | { ok: false; kind: 'doneVerdict';
-      code: Extract<MailRejectCode, 'stale-tip' | 'tip-unmeasurable' | 'pr-regressed' | 'pr-unmeasurable' |
-        'no-handoff-commit'>;
+      code: Extract<MailRejectCode, 'stale-tip' | 'tip-unmeasurable' | 'branch-unmeasurable' |
+        'pr-regressed' | 'pr-unmeasurable' | 'no-handoff-commit'>;
       detail: string }
   | { ok: false; kind: 'unsupported' }
   | { ok: false; kind: 'fleetFailed'; stderr: string }
