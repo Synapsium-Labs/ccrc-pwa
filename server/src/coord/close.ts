@@ -26,11 +26,26 @@ export interface CloseRunDeps {
 export type CloseOutcome =
   | { ok: true; id: number; state: 'done' | 'failed';
       /** Is the workspace's claim GONE as a result of this close? `true` only
-       *  after a `ws-release` that actually succeeded. `false` on every arm
-       *  that re-held — which, for an ABANDON or a `final:true` close, means
-       *  a SIBLING open run still names this session and the claim was
-       *  re-held with the surviving run's reason. A non-final close never
-       *  asks for a release, so its `false` is ordinary. */
+       *  after a `ws-release` that actually succeeded.
+       *
+       *  `false` IS NOT ONE FACT — it is the negation of one, and a reader
+       *  that renders a single sentence from it alone will be wrong. All four
+       *  ways to get it, so nobody has to rediscover them (review finding,
+       *  W2b):
+       *    1. a SIBLING open run still names this session, so the claim was
+       *       HANDED OVER — re-held with the survivor's own reason. This is
+       *       the case the field was added for, and the only one worth a
+       *       sentence about another run;
+       *    2. an ordinary NON-FINAL close: it never asks for a release at
+       *       all, it re-holds for wave N+1. Ordinary, not news;
+       *    3. `state:'failed' && archive` with no sibling: the workspace was
+       *       ARCHIVED, and `cmd_ws_archive` does no `rm` of the registry, so
+       *       the hold outlives it — literally not released, nothing like (1);
+       *    4. an ABANDON of a `planned` run with `sessionId === null`: NO
+       *       fleet act at all, and no workspace to claim. Nothing happened.
+       *  A client that wants a sentence must branch on `state`/`archive` and
+       *  on whether the run had a session — `pwa/src/fleet/AbandonSheet.tsx`
+       *  does exactly that, and only speaks for case (1). */
       released: boolean }
   | { ok: false; kind: 'unknown-run' }
   | { ok: false; kind: 'bad-transition'; from: RunState; to: RunState }
@@ -148,14 +163,28 @@ export async function closeRun(
     if (run.sessionId !== null) {
       const siblings = siblingsOf(run.sessionId);
       const survivor = survivorOf(siblings);
-      const argv = releaseIsSafe(siblings) || survivor === null
-        ? CCD_ARGV.wsRelease(run.sessionId)
-        : CCD_ARGV.wsHold(run.sessionId,
-            holdReason(survivor.program, survivor.wave, survivor.waveOf, survivor.id));
+      // DECIDED ONCE, USED TWICE (review finding, W2b). The act and the
+      // reported field used to come from two independent expressions —
+      // `releaseIsSafe(siblings) || survivor === null` chose the argv while
+      // `releaseIsSafe(siblings)` alone set the field. Today the disjunct is
+      // dead (`releaseIsSafe(s) === (s.length === 0) === (survivorOf(s) ===
+      // null)`), but the whole point of giving `releaseIsSafe` one home is
+      // that it may grow a condition — and the moment it does, the route
+      // would report `released:false` for a close that actually ran
+      // `ws-release`, the response contradicting the fleet act. The main
+      // path below already decides once, via `safe`.
+      const release = releaseIsSafe(siblings) || survivor === null;
+      // Spelled hand-over-first so the compiler narrows `survivor` on the arm
+      // that reads it; `survivor !== null && !release` is exactly `!release`
+      // (`release` already absorbs `survivor === null`).
+      const argv = survivor !== null && !release
+        ? CCD_ARGV.wsHold(run.sessionId,
+            holdReason(survivor.program, survivor.wave, survivor.waveOf, survivor.id))
+        : CCD_ARGV.wsRelease(run.sessionId);
       if (!verbSupported(deps.fleetState, argv)) return { ok: false, kind: 'unsupported' };
       const res = await deps.runCcd(argv);
       if (!res.ok) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
-      released = releaseIsSafe(siblings);
+      released = release;
     }
     const closed = coord.closeRun({
       runId: id, finalState: 'failed', causedBy, handoffCommit: null,

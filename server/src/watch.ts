@@ -2170,7 +2170,11 @@ export class FleetWatcher {
       // `?.` IS LOAD-BEARING: `test/helpers.ts`'s `testDeps` supplies no
       // `coord`, and every archive test in `hold-gate.test.ts` and
       // `pr-sweep.test.ts` builds its watcher from it. A non-optional call
-      // TypeErrors fourteen tests that have nothing to do with runs. The
+      // TypeErrors every test that reaches this archive path and has nothing
+      // to do with runs — MEASURED by deleting the `?.`: 7 red, 3 in
+      // `hold-gate.test.ts` and 4 in `pr-sweep.test.ts`. (The earlier
+      // "fourteen" was never measured; this branch's own doctrine is that a
+      // stated measurement holds.) The
       // `?? []` is NOT an overloaded null: a server with coordination
       // switched off has no runs to be claimed BY, so "no coord" and "no
       // open run" are the same fact here, not two a caller would handle
