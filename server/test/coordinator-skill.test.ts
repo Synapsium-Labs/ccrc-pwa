@@ -101,6 +101,22 @@ describe('the coordinator skill: its contract', () => {
     expect(skill).toContain('cc-');
   });
 
+  // Wave 3 §3.1. A coordinator writes a ledger and a brief that name the
+  // worker's branch; before this wave the naming sweep could rename it 30
+  // seconds later and every one of those references silently stopped resolving.
+  // The mechanism is two rungs (FleetWatcher.sweepNames, ccd ws-rename); this
+  // asserts the corpus a coordinator actually reads has been told about it,
+  // because a guarantee nobody documented is a guarantee nobody relies on.
+  it('tells the coordinator that a claimed workspace keeps its name for the life of the claim', () => {
+    const wl = refs('wave-lifecycle.md');
+    expect(wl).toContain('frozen for the life of the claim');
+    // The two mechanisms, named — so a reader can check the promise rather than
+    // trust it, and so deleting either rung leaves a documented claim visibly
+    // unbacked.
+    expect(wl).toContain('ws-rename');
+    expect(wl.toLowerCase()).toContain('naming sweep');
+  });
+
   it('has YAML frontmatter with a name and a description that says when NOT to use it', () => {
     expect(skill.startsWith('---\n')).toBe(true);
     const fm = skill.slice(4, skill.indexOf('\n---', 4));

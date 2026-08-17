@@ -212,3 +212,21 @@ describe('the session header crumb', () => {
     expect(document.querySelector('.typed-caret')).toBeNull();
   });
 });
+
+// Wave 3 §3.1's visual consequence, pinned rather than left in a docstring.
+// `sessionLabel` is `name ?? branch ?? workspace ?? id`, and the naming sweep
+// no longer renames a claimed workspace — so for the whole life of a claim a
+// worker row reads `ws/<slug>`, not the ai-title it would have grown before
+// this wave. This is the widest-reaching visual change in the build and it is
+// the intended trade: a stable name a ledger can cite beats a prettier one
+// that moves under it.
+describe('a claimed worker keeps its born name (W3 §3.1)', () => {
+  it('labels a held workspace by its born branch, not by any title', () => {
+    const held = s({
+      name: null, branch: 'ws/quiet-mesa', workspace: 'quiet-mesa',
+      held: 'program:build8 wave:2/4 run:17',
+    });
+    render(<SessionLine session={held} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('ws/quiet-mesa')).toBeInTheDocument();
+  });
+});

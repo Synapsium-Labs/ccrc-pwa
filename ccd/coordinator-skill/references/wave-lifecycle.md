@@ -135,6 +135,17 @@ branch."** This is not optional phrasing left to judgement (clause 5's "the
 content is this session's judgement" does not cover it) — it is the one
 sentence that keeps the wave closeable at all.
 
+**The workspace's name is frozen for the life of the claim.** This is a fact
+the fleet did not previously guarantee, not a correction to anything above:
+the automatic naming sweep used to rename a workspace to a slug of the
+worker's first ai-title, typically within a minute of dispatch, whether or not
+a program had claimed it. It no longer does — the sweep skips any row that is
+held or that an open run names, and `ccd ws-rename` refuses a held workspace
+outright. So the branch this run is dispatched on is the branch it still has
+when you re-measure it, and a brief, a ledger entry or a review note may cite
+the branch name and expect it to resolve. Releasing the hold (or closing every
+run naming the session) un-freezes it, and the next sweep may rename it then.
+
 Then **end your turn.** Do not sleep-poll. Do not "check in five minutes". The
 delivery lane will inject the worker's mail into your session when it is idle,
 and that injection is your next turn.
