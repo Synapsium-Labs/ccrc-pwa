@@ -937,20 +937,58 @@ cmd_doctor() {
 # ELF; `external` is somebody else's hand-written launcher (`gpt` on the
 # reference box is 142 lines of it). Both would be destroyed by one careless
 # write and neither can be regenerated from the roster. That rule is
-# STRUCTURAL here, not a test's opinion, and it is held by three things at once:
+# STRUCTURAL here, not a test's opinion, and it is held by four things at once:
 #
-#   1. This function iterates the MANIFEST's `wrapper` records and nothing else,
+#   1. `deploy/gen-wrappers.mjs` NAMES every non-generated account out loud, in
+#      a `protected <id>` manifest record (D-80), and this function refuses the
+#      WHOLE RUN — not merely that id — if an id appears in both that list and
+#      the `wrapper` list. An overlap is never a fact about a box; it is proof
+#      the generator is broken, and its other verdicts are then untrustworthy
+#      too, so there is nothing left worth converging.
+#   2. This function iterates the MANIFEST's `wrapper` records and nothing else,
 #      and `deploy/gen-wrappers.mjs` emits a `wrapper` record only for an
 #      account whose `exec.kind` is "generated" (plan D5: node stages, bash
 #      mutates). An upstream or external id therefore never reaches the loop.
-#   2. Every path this function writes to is built as `$WRAPPER_BIN_DIR/$id`
+#   3. Every path this function writes to is built as `$WRAPPER_BIN_DIR/$id`
 #      from an id that was first matched against `WRAPPER_ID_RE`. There is no
-#      other write, and no removal at all beyond this function's own temp file.
-#   3. Before installing, the STAGED text is read back through
+#      other write, and no removal at all beyond this function's own temp files.
+#   4. Before installing, the STAGED text is read back through
 #      `_wrap_parse_shape` and refused if its exec target is the id being
 #      installed. A wrapper at `~/.local/bin/claude` that ends
 #      `exec "$HOME/.local/bin/claude" "$@"` is a fork bomb, and it is exactly
 #      what a generator talked into staging the upstream account would produce.
+#
+# WHY FOUR AND NOT THREE — the measurements that bought lock 1, because a lock
+# added without its incident becomes a lock somebody removes as redundant:
+#   - Locks 2 and 4 are NOT independent of each other in the way they look.
+#     Both ultimately key on one predicate, `execKind === 'generated'`: lock 2
+#     directly, lock 4 because only a wrapper generated FOR the upstream account
+#     is self-referential. So a bug in that predicate defeats both together.
+#   - Lock 4 covers `upstream` ONLY. `external` has no self-referential
+#     property to derive a violation from — `gpt`'s staged text would exec
+#     `claude`, which is perfectly well-formed — so bash cannot tell, from the
+#     bytes in front of it, that `gpt` is somebody else's launcher. Node has to
+#     say so.
+#   - Measured, and worse than "needs a flag": with a manifest carrying
+#     `wrapper<TAB>gpt<TAB>ccrc-unmodified<TAB>no`, a PLAIN `ccrc wrappers` —
+#     no `--force`, no `--adopt` — rewrote the external account's launcher and
+#     exited 0, printing "(upstream and external are never written)" in its own
+#     summary line. Only the default `foreign` arm refused such a file, and that
+#     is generic foreign protection, not protection of an external ACCOUNT.
+#   - An earlier round reported `gpt` as saved by lock 4. It was not: it was
+#     saved by ROSTER ORDER. `deploy/accounts.migration.json` lists `claude`
+#     first, so the run aborted at record #1 before `gpt` was reached. A roster
+#     listing `gpt` first loses `gpt` and keeps `claude`. An accident of
+#     ordering is not a lock.
+#
+# TWO INDEPENDENT LOCKS ON ONE DOOR, and THIS side is the strict one. The
+# generator holds the same fact twice — the `execKind === 'generated'` filter
+# that produces the `wrapper` records, and the independent walk of
+# `roster.accounts` that produces the `protected` records. This reader trusts
+# NEITHER over the other: it refuses on overlap rather than preferring a list,
+# and it asserts the protected count against the summary's own
+# `<upstream>` + `<external>` so a manifest truncated exactly at those records
+# cannot drop the lock in silence.
 #
 # ── ITERATE THE MANIFEST, NEVER THE STAGING DIRECTORY ─────────────────────
 # `deploy/gen-wrappers.mjs` writes only the ids it staged and never reads the
@@ -1035,10 +1073,18 @@ cmd_wrappers() {
   # than a box that is broken. `-m 0755` applies to the FINAL directory only
   # (POSIX `mkdir -p`), which is the one whose mode matters because it goes on
   # PATH; an EXISTING directory is left exactly as the operator has it.
-  # shellcheck disable=SC2174  # -m applying to the deepest directory ONLY is
-  # the intent, not an oversight: it is the one that goes on PATH.
-  mkdir -p -m 0755 "$WRAPPER_BIN_DIR" \
-    || _ccrc_die "cannot create $WRAPPER_BIN_DIR — nothing was written"
+  #
+  # BEHIND `--dry-run`, because a dry run that creates directories is a dry run
+  # nobody can trust. Measured: it used to create BOTH `$HOME/.local` and
+  # `$HOME/.local/bin` on a fresh box and exit 0, while the README promised it
+  # reports without touching anything. The report was the thing that was wrong,
+  # not the promise.
+  if [ "$dry" -eq 0 ]; then
+    # shellcheck disable=SC2174  # -m applying to the deepest directory ONLY is
+    # the intent, not an oversight: it is the one that goes on PATH.
+    mkdir -p -m 0755 "$WRAPPER_BIN_DIR" \
+      || _ccrc_die "cannot create $WRAPPER_BIN_DIR — nothing was written"
+  fi
 
   local staging
   staging="$(mktemp -d)" \
@@ -1053,13 +1099,29 @@ cmd_wrappers() {
   # shellcheck disable=SC2064
   trap "rm -rf -- $(printf '%q' "$staging")" EXIT
 
+  # WHAT THE GENERATOR IS POINTED AT TO *READ*. Normally the bin dir itself.
+  # On a dry run against a box that has no `~/.local/bin` at all, there is
+  # nothing to point it at and creating one would be the very thing a dry run
+  # must not do — so it reads an empty directory INSIDE the staging tree (which
+  # the EXIT trap already owns) and answers, correctly, that every wrapper is
+  # `absent` and there are no orphans. That is the true answer for a box with no
+  # bin directory; nothing is invented and nothing outside the temp tree is
+  # created. Every path this verb PRINTS still comes from `$WRAPPER_BIN_DIR`,
+  # never from here, so the report names the box's own paths.
+  local scan_dir="$WRAPPER_BIN_DIR"
+  if [ ! -d "$WRAPPER_BIN_DIR" ]; then
+    scan_dir="$staging/.bin-scan"
+    mkdir -p "$scan_dir" \
+      || _ccrc_die "cannot create a scratch directory inside $staging — nothing was written"
+  fi
+
   # STDOUT is the manifest; STDERR is deliberately NOT captured, so node's own
   # diagnosis reaches the operator verbatim. For an invalid roster that
   # diagnosis includes a `gen-wrappers: remedy: …` line naming the fix, and that
   # line is the useful message — swallowing it to re-word the failure here would
   # replace a fix with a shrug.
   local manifest rc=0
-  manifest="$(node "$gen" "$HOME/.ccrc/accounts.json" "$WRAPPER_BIN_DIR" "$staging")" || rc=$?
+  manifest="$(node "$gen" "$HOME/.ccrc/accounts.json" "$scan_dir" "$staging")" || rc=$?
   [ "$rc" -eq 0 ] \
     || _ccrc_die "$gen exited $rc without a usable manifest, so nothing was written — its own message above says why"
 
@@ -1089,21 +1151,25 @@ cmd_wrappers() {
   # comparing against a string that is not a number.
   local kind a b c d
   local sum_total="" sum_gen="" sum_up="" sum_ext="" saw_summary=0
-  local -a w_id=() w_class=() w_equal=() orphans=()
+  local -a w_id=() w_class=() w_equal=() protected=() orphans=()
   while IFS=$'\t' read -r kind a b c d; do
     case "$kind" in
       '') continue ;;
-      summary) saw_summary=1; sum_total="$a"; sum_gen="$b"; sum_up="$c"; sum_ext="$d" ;;
-      wrapper) w_id+=("$a"); w_class+=("$b"); w_equal+=("$c") ;;
-      orphan)  orphans+=("$a") ;;
+      summary)   saw_summary=1; sum_total="$a"; sum_gen="$b"; sum_up="$c"; sum_ext="$d" ;;
+      wrapper)   w_id+=("$a"); w_class+=("$b"); w_equal+=("$c") ;;
+      protected) protected+=("$a") ;;
+      orphan)    orphans+=("$a") ;;
       *) _ccrc_die "the manifest from $gen carries a record type this verb does not know — this is a bug in ccrc, not a fact about your box, and nothing was written" ;;
     esac
   done <<< "$manifest"
 
   [ "$saw_summary" -eq 1 ] \
     || _ccrc_die "the manifest from $gen has no summary line, so there is nothing to check the wrapper records against — nothing was written"
-  [[ "$sum_gen" =~ ^[0-9]+$ ]] \
-    || _ccrc_die "the manifest from $gen has a summary whose generated count is not a number — nothing was written"
+  local f
+  for f in "$sum_gen" "$sum_up" "$sum_ext"; do
+    [[ "$f" =~ ^[0-9]+$ ]] \
+      || _ccrc_die "the manifest from $gen has a summary whose counts are not all numbers — nothing was written"
+  done
   # THE TRUNCATION GATE. bash cannot tell a complete manifest from a half-
   # delivered one by looking at what arrived (`deploy/gen-wrappers.mjs`'s header
   # says so from the writer's end, which is why it assembles the whole thing
@@ -1112,6 +1178,15 @@ cmd_wrappers() {
   # and report success.
   [ "${#w_id[@]}" -eq "$sum_gen" ] \
     || _ccrc_die "the manifest from $gen is truncated: its summary claims $sum_gen generated account(s) and it carries ${#w_id[@]} wrapper record(s). Nothing was written."
+  # THE SAME GATE FOR THE `protected` LIST (D-80), and it is not symmetry for
+  # its own sake: the protected records are the LAST thing before the orphans,
+  # so a manifest truncated a few bytes earlier would arrive with every wrapper
+  # record intact and the entire untouchable-account lock silently absent. A
+  # lock that a truncation can delete is not a lock. Counted against the
+  # summary's own upstream + external, because those two numbers come off a
+  # different walk of `roster.accounts` than the protected records do.
+  [ "${#protected[@]}" -eq "$((sum_up + sum_ext))" ] \
+    || _ccrc_die "the manifest from $gen is truncated: its summary claims $sum_up upstream + $sum_ext external account(s) and it carries ${#protected[@]} protected record(s), so the list of accounts ccrc must never write is incomplete. Nothing was written."
 
   # ONE timestamp for the whole run, so every backup a single run writes reads
   # as one event. (Two convergences inside the same second would reuse the name;
@@ -1122,11 +1197,26 @@ cmd_wrappers() {
   stamp="$(date -u +%Y%m%dT%H%M%SZ)" \
     || _ccrc_die "cannot read the clock (date -u failed), and a backup needs a name — nothing was written"
 
-  local i id klass eq action why remedy backup tmp equivalent
-  local sok starget ssuffix ssecrets dok dtarget dsuffix dsecrets
-  local n_written=0 n_converged=0 n_refused=0
+  # ── PRE-PASS: EVERY RECORD IS VALIDATED BEFORE THE FIRST BYTE IS WRITTEN ──
+  # Each refusal below ends "nothing was written", and this loop is what makes
+  # that sentence TRUE rather than merely reassuring. These checks used to live
+  # inside the action loop, where a manifest whose SECOND record was bad printed
+  # `WRITE claude2 …` and then, two lines later, `… and nothing was written` —
+  # two statements about one run, contradicting each other, with the first one
+  # right. (It was invisible to the tests because every stub manifest that
+  # reached these branches carried a single record.) These are all statements
+  # about the MANIFEST, not about the box, so none of them needs to see disk
+  # state that a write could change: hoisting them costs nothing and restores
+  # the all-or-nothing the messages promise.
+  #
+  # The staged parse is cached here for the action loop, which is the other half
+  # of the same argument — re-parsing per record in two places is how the
+  # pre-pass and the writer would come to disagree about the same file.
+  local i id
+  local sok starget ssuffix ssecrets p
+  local -a s_target=() s_suffix=() s_secrets=()
   for ((i = 0; i < ${#w_id[@]}; i++)); do
-    id="${w_id[$i]}"; klass="${w_class[$i]}"; eq="${w_equal[$i]}"
+    id="${w_id[$i]}"
 
     # The id off the manifest is about to become a FILENAME under
     # $HOME/.local/bin. The gate is on the ID, before any path is built from it,
@@ -1135,6 +1225,19 @@ cmd_wrappers() {
     # path would have to enumerate the ways a path can escape.
     [[ "$id" =~ $WRAPPER_ID_RE ]] \
       || _ccrc_die "the manifest from $gen names \"$id\", which is not a legal account id, and this verb will not build a path under $WRAPPER_BIN_DIR out of it — this is a bug in ccrc, not a fact about your box, and nothing was written"
+
+    # LOCK 1 (see the header): an id cannot be both a wrapper ccrc writes and an
+    # account ccrc must never touch. THE WHOLE RUN STOPS, not just this id: the
+    # two lists come off two independent walks of the same roster, so an overlap
+    # means the generator disagrees with itself, and once that is true its
+    # verdicts about every OTHER account are worth nothing either. Refusing one
+    # id and converging the rest would be trusting a source this very line has
+    # just caught contradicting itself.
+    for p in ${protected[@]+"${protected[@]}"}; do
+      [ "$p" != "$id" ] \
+        || _ccrc_die "the manifest from $gen lists \"$id\" as an account ccrc must never write (exec.kind upstream or external) AND asks for a wrapper to be installed at \$HOME/.local/bin/$id. Those cannot both be true; this is a bug in ccrc, not a fact about your box, and the whole run is refused — nothing was written."
+    done
+
     [ -f "$staging/$id" ] \
       || _ccrc_die "the manifest from $gen names \"$id\" but staged no text for it — this is a bug in ccrc, not a fact about your box, and nothing was written"
 
@@ -1146,11 +1249,25 @@ cmd_wrappers() {
     IFS=$'\t' read -r sok starget ssuffix ssecrets < <(_wrap_parse_shape "$staging/$id")
     [ "$sok" = ok ] \
       || _ccrc_die "the text staged for \"$id\" is not the generated wrapper shape, so this verb will not install it — this is a bug in ccrc, not a fact about your box, and nothing was written"
-    # Rule 1's third lock (see the header). A wrapper whose exec target is its
-    # own id would exec itself forever; it is also precisely the file a
-    # generator talked into writing the UPSTREAM account would stage.
+    # LOCK 4 (see the header). A wrapper whose exec target is its own id would
+    # exec itself forever; it is also precisely the file a generator talked into
+    # writing the UPSTREAM account would stage. It covers `upstream` only —
+    # `external` has no such self-referential property, which is why lock 1
+    # exists.
     [ "$starget" != "$id" ] \
       || _ccrc_die "refusing to install \"$id\": the wrapper the roster produced would exec \$HOME/.local/bin/$id — itself. That is an upstream account's own name, and ccrc never writes an upstream or external account. Nothing was written."
+
+    s_target+=("$starget"); s_suffix+=("$ssuffix"); s_secrets+=("$ssecrets")
+  done
+
+  # ── ACTION PASS: from here on, a refusal is about the BOX, not the manifest,
+  #    and is reported per account rather than aborting the run. ─────────────
+  local klass eq action why remedy backup tmp equivalent
+  local dok dtarget dsuffix dsecrets
+  local n_written=0 n_converged=0 n_refused=0
+  for ((i = 0; i < ${#w_id[@]}; i++)); do
+    id="${w_id[$i]}"; klass="${w_class[$i]}"; eq="${w_equal[$i]}"
+    starget="${s_target[$i]}"; ssuffix="${s_suffix[$i]}"; ssecrets="${s_secrets[$i]}"
 
     action=""; why=""; remedy=""; backup=""
     case "$klass" in
@@ -1276,6 +1393,41 @@ cmd_wrappers() {
     printf '%s %s: %s — %s%s\n' "${action^^}" "$id" "$WRAPPER_BIN_DIR/$id" "$why" \
       "${backup:+ (the file that was there is now $backup)}"
   done
+
+  # ── SWEEP THIS TOOL'S OWN STRAYS ────────────────────────────────────────
+  # `install_atomic` ENDS with `rm -f $dest.incoming-*`, and its comment records
+  # that as a reproduced review finding rather than tidiness: a run killed
+  # between the copy and the rename leaves a mode-0755 file in a directory that
+  # is ON PATH, and nothing else will ever remove it. The "." in the name keeps
+  # it out of the ACCOUNT namespace (adopt and doctor never see it), which is
+  # the other half of that finding and the half the comment above already
+  # answers — this is the half about a stray executable.
+  #
+  # It runs AFTER the loop, so this run's own temp files have already been
+  # renamed away and the glob can only match leftovers — `install_atomic`'s own
+  # reasoning, and the reason a concurrent run's in-flight temp is not something
+  # this can hit either (two convergences racing over one file is already lost,
+  # with or without this line). The glob is per manifest id and carries the
+  # full `.<id>.tmp.` shape, so it can only match names THIS function makes:
+  # nothing else in `~/.local/bin` is at risk from it. It runs for EVERY id,
+  # not just the ones written, because the common case — a stray for an account
+  # that is now converged — is never reached by a per-write sweep.
+  if [ "$dry" -eq 0 ]; then
+    local had_nullglob=0 stray
+    shopt -q nullglob && had_nullglob=1
+    shopt -s nullglob
+    for id in ${w_id[@]+"${w_id[@]}"}; do
+      for stray in "$WRAPPER_BIN_DIR/.$id.tmp."*; do
+        # Reported, not silent: this is ccrc removing a file from a directory
+        # the operator owns, and a removal nobody is told about is one nobody
+        # can audit.
+        rm -f -- "$stray" \
+          && printf 'SWEPT %s: removed %s, a stray temp file an interrupted ccrc run left behind\n' \
+               "$id" "$stray"
+      done
+    done
+    [ "$had_nullglob" -eq 1 ] || shopt -u nullglob
+  fi
 
   # ORPHANS ARE REPORTED AND NEVER REMOVED. A file carrying ccrc's marker whose
   # id no account claims is a fact about the box, not a refusal — nothing about

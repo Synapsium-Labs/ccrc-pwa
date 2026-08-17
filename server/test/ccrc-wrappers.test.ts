@@ -401,6 +401,56 @@ describe('ccrc wrappers: a file ccrc did NOT write', () => {
     expect(r.stderr).not.toMatch(/--force/);
   });
 
+  it.skipIf(process.getuid?.() === 0)(
+    'refuses a wrapper it could not read, plainly', () => {
+      // D3's last row. `unreadable` is NOT `foreign` and must never be folded
+      // into it, however alike the two feel to write: every other refusal here
+      // is a judgement about bytes this process actually read, and this one is
+      // the admission that there were none. Skipped as root, which reads
+      // anything — same reason as the sibling case in gen-wrappers.test.ts.
+      const home = makeHome('ccrc-wrappers-unreadable-');
+      const p = join(binOf(home), 'claude2');
+      writeFileSync(p, handWritten({ suffix: '.claude-personal', note: 'unreadable' }));
+      chmodSync(p, 0o000);
+
+      const r = runWrappers(home);
+      expect(r.code).toBe(1);
+      expect(r.stdout).toMatch(/^REFUSE claude2: /m);
+      const remedy = remedyAfter(r.stdout, /^REFUSE claude2: /);
+      expect(remedy).toMatch(/^ {2}remedy: /);
+      // Its OWN remedy, not the catch-all's: deleting the `unreadable` arm
+      // drops it into the "this verb does not know that classification" branch,
+      // which refuses too — so a test that only checked for a refusal would
+      // stay green through exactly that deletion.
+      expect(remedy).toMatch(/No flag overrides this one/);
+      expect(remedy).not.toMatch(/bug in ccrc/);
+      expect(backupsFor(home, 'claude2')).toEqual([]);
+      chmodSync(p, 0o600);
+      expect(readFileSync(p, 'utf8'))
+        .toBe(handWritten({ suffix: '.claude-personal', note: 'unreadable' }));
+    });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'refuses a wrapper it could not read under --force --adopt too — no flag overrides that one', () => {
+      // "I could not read it" is not "I know what it is", so there is nothing
+      // for a flag to override. This is the case that stops the `unreadable`
+      // arm being quietly folded into the non-equivalent `foreign` arm, which
+      // DOES honour --force: that fold would destroy a root-owned or mode-000
+      // file ccrc had promised never to judge.
+      const home = makeHome('ccrc-wrappers-unreadable-force-');
+      const p = join(binOf(home), 'claude2');
+      const text = handWritten({ suffix: '.claude-personal', note: 'unreadable' });
+      writeFileSync(p, text);
+      chmodSync(p, 0o000);
+
+      const r = runWrappers(home, ['--force', '--adopt']);
+      expect(r.code, `stdout:\n${r.stdout}`).toBe(1);
+      expect(r.stdout).toMatch(/^REFUSE claude2: /m);
+      expect(backupsFor(home, 'claude2')).toEqual([]);
+      chmodSync(p, 0o600);
+      expect(readFileSync(p, 'utf8')).toBe(text);
+    });
+
   it('never clobbers a bespoke launcher sitting under a generated account\'s id', () => {
     const home = makeHome('ccrc-wrappers-bespoke-');
     const p = join(binOf(home), 'claude2');
@@ -468,6 +518,35 @@ describe('ccrc wrappers: --dry-run', () => {
     expect(backupsFor(home, 'claude2')).toEqual([]);
   });
 
+  it('creates no directories on a box that has none — not even ~/.local', () => {
+    // Measured before this was fixed: a dry run against a fresh box created
+    // BOTH `$HOME/.local` and `$HOME/.local/bin` and exited 0, while the README
+    // promised it reports without touching anything. It was untested in both
+    // directions because every other dry-run case here starts from a `makeHome`
+    // that has already made the bin dir. A dry run that creates directories is
+    // a dry run an operator cannot use to find out what a real run would do.
+    const home = makeHome('ccrc-wrappers-dry-nobin-', { bin: false });
+    expect(existsSync(join(home, '.local'))).toBe(false);
+
+    const r = runWrappers(home, ['--dry-run']);
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
+    expect(existsSync(join(home, '.local'))).toBe(false);
+    expect(existsSync(binOf(home))).toBe(false);
+    // And it still answers the question: every account would be written,
+    // because on a box with no bin directory nothing is there.
+    for (const id of GENERATED_IDS) expect(r.stdout).toMatch(new RegExp(`^WOULD-WRITE ${id}: `, 'm'));
+  });
+
+  it('leaves a stray temp file alone — a dry run removes nothing either', () => {
+    const home = makeHome('ccrc-wrappers-dry-stray-');
+    const stray = join(binOf(home), '.claude2.tmp.999');
+    writeFileSync(stray, 'half a wrapper', { mode: 0o755 });
+    const r = runWrappers(home, ['--dry-run']);
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
+    expect(existsSync(stray)).toBe(true);
+    expect(r.stdout).not.toMatch(/^SWEPT /m);
+  });
+
   it('would not write a backup either', () => {
     const home = makeHome('ccrc-wrappers-dry-backup-');
     expect(runWrappers(home).code).toBe(0);
@@ -483,6 +562,46 @@ describe('ccrc wrappers: --dry-run', () => {
     expect(r.stdout).toMatch(/^WOULD-REWRITE claude2: /m);
     expect(readFileSync(join(binOf(home), 'claude2'), 'utf8')).toBe(before);
     expect(backupsFor(home, 'claude2')).toEqual([]);
+  });
+});
+
+describe('ccrc wrappers: its own litter', () => {
+  it('sweeps a stray temp file an interrupted run left on PATH, and says so', () => {
+    // `install_atomic` ENDS with `rm -f $dest.incoming-*`, and its comment
+    // records that as a reproduced review finding: a run killed between the
+    // copy and the rename leaves a mode-0755 file in a directory that is on
+    // PATH, and nothing else will ever remove it. The "." in the name keeps it
+    // out of the ACCOUNT namespace, which is a different half of the same
+    // finding — this is the stray-executable half.
+    const home = makeHome('ccrc-wrappers-sweep-');
+    expect(runWrappers(home).code).toBe(0);          // converge first
+    const stray = join(binOf(home), '.claude2.tmp.4242');
+    writeFileSync(stray, 'half a wrapper, from a run that was killed', { mode: 0o755 });
+
+    // The account is CONVERGED on this run, so a sweep that only ran after a
+    // write would never reach it — which is the common case, not the exotic one.
+    const r = runWrappers(home);
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
+    expect(existsSync(stray)).toBe(false);
+    expect(r.stdout).toMatch(/^SWEPT claude2: /m);
+    expect(binEntries(home)).toEqual([...GENERATED_IDS].sort());
+  });
+
+  it('sweeps only names it could have made itself', () => {
+    // The glob carries the whole `.<id>.tmp.` shape for an id off the manifest,
+    // so nothing else in ~/.local/bin is at risk from it — including a file
+    // whose name merely looks temp-ish.
+    const home = makeHome('ccrc-wrappers-sweep-scope-');
+    const notOurs = join(binOf(home), '.something-else.tmp.1');
+    const alsoNotOurs = join(binOf(home), '.claude2.tmp');   // no pid suffix
+    writeFileSync(notOurs, 'somebody else\'s file');
+    writeFileSync(alsoNotOurs, 'somebody else\'s file');
+
+    const r = runWrappers(home);
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
+    expect(existsSync(notOurs)).toBe(true);
+    expect(existsSync(alsoNotOurs)).toBe(true);
+    expect(r.stdout).not.toMatch(/^SWEPT /m);
   });
 });
 
@@ -574,6 +693,76 @@ describe('ccrc wrappers: a manifest it cannot trust', () => {
     expect(r.code).toBe(1);
     expect(binEntries(home)).toEqual([]);
     expect(r.stderr).toMatch(/claude/);
+  });
+
+  it('refuses the WHOLE RUN when an id is both a wrapper to write and an account to protect', () => {
+    // LOCK 1 (D-80), and the first case in this file that can go red from a
+    // change to `cmd_wrappers` ALONE. The four `never touched` cases above
+    // cannot: node never hands bash an upstream or external id, so no mutation
+    // of the bash can make them fail. This one hands it one on purpose.
+    //
+    // The measured leak it closes needed no flag at all: a manifest saying
+    // `wrapper<TAB>gpt<TAB>ccrc-unmodified<TAB>no` made a plain `ccrc wrappers`
+    // rewrite an external account's launcher and exit 0. Only the default
+    // `foreign` arm refused such a file — generic foreign protection, not
+    // protection of an external ACCOUNT — and here the classify says
+    // `ccrc-unmodified`, which walks straight past it.
+    const staged = markGenerated(generateWrapperBody(
+      { id: 'gpt', configDirSuffix: '.claude-gpt', execKind: 'generated' }, UPSTREAM_ID,
+    ));
+    const cli = kitWith(
+      'import { writeFileSync } from "node:fs";\nimport { join } from "node:path";\n'
+      + `writeFileSync(join(process.argv[4], "gpt"), ${JSON.stringify(staged)});\n`
+      + 'process.stdout.write("summary\\t2\\t1\\t1\\t0\\nwrapper\\tgpt\\tccrc-unmodified\\tno\\nprotected\\tgpt\\n");\n',
+    );
+    const home = makeHome('ccrc-wrappers-protected-overlap-');
+    const launcher = bespokeLauncher('.claude-gpt');
+    writeFileSync(join(binOf(home), EXTERNAL_ID), launcher, { mode: 0o755 });
+
+    const r = runWrappers(home, ['--force', '--adopt'], cli);
+    expect(r.code).toBe(1);
+    expect(readFileSync(join(binOf(home), EXTERNAL_ID), 'utf8')).toBe(launcher);
+    expect(backupsFor(home, EXTERNAL_ID)).toEqual([]);
+    expect(binEntries(home)).toEqual([EXTERNAL_ID]);
+    expect(r.stderr).toMatch(/gpt/);
+  });
+
+  it('refuses a manifest whose protected records are truncated away', () => {
+    // Without this count the whole of lock 1 is deletable by a truncation:
+    // the protected records are the last thing before the orphans, so a
+    // manifest cut a few bytes early arrives with every wrapper record intact
+    // and the untouchable list simply absent — and an absent list overlaps
+    // nothing. It is the same hole the wrapper-record count already closes,
+    // one record type further down.
+    const cli = kitWith(
+      'process.stdout.write("summary\\t5\\t0\\t1\\t1\\n");\n',
+    );
+    const home = makeHome('ccrc-wrappers-protected-truncated-');
+    const r = runWrappers(home, [], cli);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/protected record/);
+    expect(binEntries(home)).toEqual([]);
+  });
+
+  it('a bad record aborts before the FIRST write — "nothing was written" is true, not reassuring', () => {
+    // Two records: a perfectly good `claude2` and an illegal `claude2.bak`.
+    // The validation used to live inside the action loop, so this manifest
+    // printed `WRITE claude2 …` and then `… and nothing was written` two lines
+    // later. Every earlier stub carried one record, which is exactly why the
+    // falsity was invisible.
+    const good = bodyFor(MIGRATION, 'claude2');
+    const cli = kitWith(
+      'import { writeFileSync } from "node:fs";\nimport { join } from "node:path";\n'
+      + `writeFileSync(join(process.argv[4], "claude2"), ${JSON.stringify(good)});\n`
+      + `writeFileSync(join(process.argv[4], "claude2.bak"), ${JSON.stringify(good)});\n`
+      + 'process.stdout.write("summary\\t2\\t2\\t0\\t0\\nwrapper\\tclaude2\\tabsent\\tno\\nwrapper\\tclaude2.bak\\tabsent\\tno\\n");\n',
+    );
+    const home = makeHome('ccrc-wrappers-abort-before-write-');
+    const r = runWrappers(home, [], cli);
+    expect(r.code).toBe(1);
+    expect(r.stdout).not.toMatch(/^WRITE /m);
+    expect(r.stderr).toMatch(/nothing was written/);
+    expect(binEntries(home)).toEqual([]);
   });
 
   it('passes the generator\'s own refusal through instead of re-wording it', () => {

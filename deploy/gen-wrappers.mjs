@@ -42,6 +42,7 @@
 //
 //   summary\t<total>\t<generated>\t<upstream>\t<external>
 //   wrapper\t<id>\t<classify>\t<equal>      (one per `generated` account)
+//   protected\t<id>                         (one per NON-generated account)
 //   orphan\t<id>                            (zero or more)
 //
 // `<classify>` is one of `absent | unreadable | foreign | ccrc-edited |
@@ -49,6 +50,28 @@
 // bucket. `<equal>` is `yes` or `no`: whether the on-disk text is byte-for-
 // byte identical to what this run staged: always `no` when the file is
 // `absent` or `unreadable`, since there is no text to compare.
+//
+// ── `protected` — SAYING THE UNTOUCHABLE IDS OUT LOUD (D-80) ───────────────
+// One record for every account whose `exec.kind` is NOT "generated" — i.e.
+// every `upstream` and `external` account. It carries no state and asks for
+// nothing to be done; it exists so that "this id is an account ccrc must not
+// touch" and "this id is not in the roster at all" are DIFFERENT THINGS ON THE
+// WIRE. Until this record existed both arrived in Task 6's bash as the same
+// thing — nothing at all — which is the overloaded-null-at-a-seam defect this
+// repo bans by name, and it was not theoretical: a manifest emitting
+// `wrapper<TAB>gpt<TAB>ccrc-unmodified<TAB>no` made `ccrc wrappers` rewrite an
+// external account's hand-written launcher with NO FLAGS AT ALL and exit 0.
+//
+// TWO INDEPENDENT LOCKS ON ONE DOOR, and this is the LAXER one. This file's
+// other lock is the `execKind === 'generated'` filter below, which decides
+// which accounts get a `wrapper` record; `ccd/ccrc`'s reader is STRICTER than
+// both — it refuses the WHOLE RUN if any id appears in both lists, rather than
+// preferring either one, because an overlap is never a fact about the box, it
+// is proof this file is broken and its other verdicts cannot be trusted
+// either. Deliberately NOT derived from the `wrapper` list (`every account not
+// named there`): that would make the two lists one statement wearing two hats,
+// and a filter bug would corrupt both identically. Both are walked out of
+// `roster.accounts` independently, exactly as the summary counts are.
 //
 // EVERY FIELD IN THIS MANIFEST IS NON-EMPTY BY CONSTRUCTION. `id` matched
 // `ID_RE` (so it's at least one character of `[a-z][a-z0-9-]*`), and every
@@ -89,7 +112,9 @@
 // an earlier run, under an account id the CURRENT roster no longer even
 // declares — exactly the kind of drift this whole stage exists to prevent.
 
-import { readFileSync, writeFileSync, chmodSync, readdirSync } from 'node:fs';
+import {
+  readFileSync, writeFileSync, chmodSync, readdirSync, openSync, readSync, closeSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
 import { generateWrapperBody, WrapperInvalid } from '../shared/wrapper.mjs';
@@ -115,6 +140,49 @@ const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
  * @param {string} staged
  * @returns {{ classify: 'absent'|'unreadable'|'foreign'|'ccrc-edited'|'ccrc-unmodified', equal: 'yes'|'no' }}
  */
+/** The whole text of `path`, but ONLY if its first two bytes are `#!` —
+ *  otherwise `null`, with nothing past byte 2 ever read.
+ *
+ *  This is `_wrap_is_script`'s rule (`ccd/ccrc-wrapper-shape:75-89`) in the
+ *  other language, and it is here for the reason that file's header gives for
+ *  its own copy, measured: `~/.local/bin/claude` is the ~304 MB Claude Code
+ *  binary. On the reference box it happens to be a SYMLINK, so the orphan
+ *  scan's `isFile()` gate skipped it and nobody noticed; on a box where the
+ *  binary is a regular file, a bare `readFileSync(…, 'utf8')` pulls all 304 MB
+ *  into a JS string — on the box `ccrc wrappers` is most likely to be run on,
+ *  as an installer, with the fleet live. "Never read a candidate whole" is the
+ *  discipline; two bytes is the implementation.
+ *
+ *  Only files a `#!` opens can be ccrc's: `generateWrapperBody` always emits
+ *  `#!/usr/bin/env bash` as line 1, so `markGenerated` always puts the marker
+ *  on line 2 of a shebang file. A file that does not start `#!` therefore
+ *  cannot carry a marker this pipeline wrote.
+ *
+ * @param {string} path
+ * @returns {string | null}
+ */
+function readIfScript(path) {
+  let fd;
+  try {
+    fd = openSync(path, 'r');
+  } catch {
+    return null;
+  }
+  try {
+    const head = Buffer.alloc(2);
+    // An explicit `position` of 0 leaves the descriptor's own offset untouched
+    // (node:fs contract), so the `readFileSync(fd)` below still starts at byte
+    // 0 — no seek, and no second `open`.
+    if (readSync(fd, head, 0, 2, 0) < 2) return null;
+    if (head[0] !== 0x23 || head[1] !== 0x21) return null;   // '#', '!'
+    return readFileSync(fd, 'utf8');
+  } catch {
+    return null;
+  } finally {
+    closeSync(fd);
+  }
+}
+
 function classify(path, staged) {
   let text;
   try {
@@ -208,12 +276,14 @@ function main(argv) {
     if (!entry.isFile()) continue;
     const name = entry.name;
     if (!ID_RE.test(name) || generatedIds.has(name)) continue;
-    let text;
-    try {
-      text = readFileSync(join(binDir, name), 'utf8');
-    } catch {
-      continue; // unreadable: not an orphan, not anything — see header.
-    }
+    // `readIfScript` answers `null` for BOTH "this process could not read it"
+    // and "it is not a script at all", and that collapse is correct HERE and
+    // only here: the orphan scan does the same thing about each — nothing.
+    // Silence beats a claim about a file nobody read, and a non-script cannot
+    // carry a marker this pipeline wrote (see `readIfScript`). It is also what
+    // keeps the ~304 MB upstream binary from being read whole by an installer.
+    const text = readIfScript(join(binDir, name));
+    if (text === null) continue;
     if (verifyMarker(text) === 'foreign') continue;
     orphanLines.push(`orphan\t${name}`);
   }
@@ -223,8 +293,18 @@ function main(argv) {
   // and return 1 with an empty stdout; nothing below this point can fail.
   const upstreamCount = roster.accounts.filter((a) => a.execKind === 'upstream').length;
   const externalCount = roster.accounts.filter((a) => a.execKind === 'external').length;
+  // D-80. Walked out of `roster.accounts` on its own terms, exactly as the two
+  // counts above are, and deliberately NOT computed as "the accounts with no
+  // `wrapper` record" — see the header: two locks that share one derivation are
+  // one lock. The count assertion `ccd/ccrc` makes against `<upstream>` +
+  // `<external>` is what turns this from a list into a mechanism: a manifest
+  // truncated exactly at these records would otherwise drop the whole lock
+  // silently, which is the same hole the `wrapper` record count already closes.
+  const protectedLines = roster.accounts
+    .filter((a) => a.execKind !== 'generated')
+    .map((a) => `protected\t${a.id}`);
   const summaryLine = `summary\t${roster.accounts.length}\t${generated.length}\t${upstreamCount}\t${externalCount}`;
-  const manifest = [summaryLine, ...wrapperLines, ...orphanLines].join('\n') + '\n';
+  const manifest = [summaryLine, ...wrapperLines, ...protectedLines, ...orphanLines].join('\n') + '\n';
 
   process.stdout.write(manifest);
   return 0;

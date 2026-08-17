@@ -16,7 +16,10 @@
 // equality is asserting agreement, not restating a golden literal.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync, closeSync, mkdirSync, openSync, readdirSync, readFileSync, statSync, symlinkSync,
+  writeFileSync, writeSync,
+} from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { generateWrapperBody } from '../../shared/wrapper.mjs';
@@ -222,6 +225,78 @@ describe('gen-wrappers.mjs', () => {
     expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
     expect(r.stdout).not.toMatch(/^orphan\tlinkacct$/m);
     expect(r.stdout).toMatch(/^orphan\tstillorphan$/m);
+  });
+
+  it('never reads a non-script candidate whole — a 256 MiB blob in the bin dir costs two bytes', () => {
+    // `~/.local/bin/claude` is the ~304 MB Claude Code binary. On the reference
+    // box it happens to be a SYMLINK, so `isFile()` skipped it and nobody
+    // noticed; where it is a regular file, the orphan scan used to pull the
+    // whole thing into a JS string — on the box `ccrc wrappers` runs as an
+    // INSTALLER, with the fleet live. `ccd/ccrc-wrapper-shape:48-57` states the
+    // rule ("never read a candidate whole") and implements it in two bytes;
+    // this is the same rule on this side of the language boundary.
+    //
+    // The file is SPARSE — one byte written at a high offset — so making it
+    // costs nothing while reading it whole costs a quarter-gigabyte string.
+    //
+    // THIS CASE IS THE SCENARIO, NOT THE PIN, and saying which is which matters
+    // more than the case does. Measured with the gate removed: the same run
+    // finishes in 0.75 s (the page cache serves a sparse file's zeroes almost
+    // free) and still exits 0, and capping the child's heap at 128 MiB does not
+    // abort it either — V8 allocates the string anyway. So there is no cheap,
+    // deterministic, SIZE-based assertion available here; a time bound tight
+    // enough to discriminate would be a flake on a loaded box. The pin for this
+    // gate is the `no shebang` case below, which is behavioural and exact. What
+    // this case buys is the regression the reviewer asked for by name: the
+    // 304 MB upstream binary sitting in the bin dir as a regular file must not
+    // make `ccrc wrappers` fall over, and it must not become an orphan record.
+    const { rosterFile, binDir, stagingDir } = fixture(migrationJson);
+    const blob = path.join(binDir, 'bigblob');
+    const fd = openSync(blob, 'w');
+    try {
+      writeSync(fd, Buffer.from([0x7f]), 0, 1, 256 * 1024 * 1024);
+    } finally {
+      closeSync(fd);
+    }
+    const r = run([rosterFile, binDir, stagingDir]);
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
+    expect(r.stdout).not.toMatch(/^orphan\tbigblob$/m);
+    // The three real accounts are still classified: a blob in the directory
+    // does not cost the scan its answer.
+    expect(r.stdout.split('\n').filter((l) => l.startsWith('wrapper\t'))).toHaveLength(3);
+  }, 30_000);
+
+  it('a marked file with no shebang is not an orphan — the two-byte gate is the only reader', () => {
+    // The behavioural half of the gate, with no timing in it. `markGenerated`
+    // puts the marker on line 1 when there is no shebang, so this file's own
+    // `verifyMarker` says `ccrc-unmodified` — and it is STILL not an orphan,
+    // because nothing this pipeline writes into the bin dir lacks a shebang
+    // (`generateWrapperBody` always emits one), so a file that does was not
+    // ccrc's to claim. Remove the gate and this file becomes an orphan record.
+    const { rosterFile, binDir, stagingDir } = fixture(migrationJson);
+    writeFileSync(path.join(binDir, 'noshebang'), markGenerated('echo not a script\n'));
+    const r = run([rosterFile, binDir, stagingDir]);
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
+    expect(r.stdout).not.toMatch(/^orphan\tnoshebang$/m);
+  });
+
+  it('names every non-generated account in a `protected` record (D-80)', () => {
+    // The record exists so that "this id is an account ccrc must not touch" and
+    // "this id is not in the roster at all" stop being the same thing on the
+    // wire — see this file's header and `cmd_wrappers`'s. Walked out of
+    // `roster.accounts` independently of the `wrapper` filter, so a bug in one
+    // does not corrupt both identically.
+    const { rosterFile, binDir, stagingDir } = fixture(migrationJson);
+    const r = run([rosterFile, binDir, stagingDir]);
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
+    const protectedLines = r.stdout.trim().split('\n').filter((l) => l.startsWith('protected\t'));
+    expect(protectedLines).toEqual(['protected\tclaude', 'protected\tgpt']);
+    // And the count the bash reader asserts against holds: upstream + external.
+    const summary = (r.stdout.split('\n')[0] ?? '').split('\t');
+    expect(protectedLines).toHaveLength(Number(summary[3]) + Number(summary[4]));
+    // No generated account is ever in that list — the two are disjoint, and an
+    // overlap is what `ccrc wrappers` refuses the whole run over.
+    for (const id of GENERATED_IDS) expect(r.stdout).not.toContain(`protected\t${id}`);
   });
 
   it('upstream and external accounts are never staged', () => {
