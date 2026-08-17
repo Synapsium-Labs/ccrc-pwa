@@ -220,13 +220,77 @@ describe('the session header crumb', () => {
 // this wave. This is the widest-reaching visual change in the build and it is
 // the intended trade: a stable name a ledger can cite beats a prettier one
 // that moves under it.
+//
+// REVIEW FINDING, WAVE 3: WHAT THE PWA CAN AND CANNOT MEASURE HERE. The first
+// version of this block set `held` on its fixture, which read as though the
+// hold were what produced the born name. It is not — `sessionLabel` never
+// reads `held`, so the assertion was identical with `held: null` and a later
+// reader would have believed in a coupling that does not exist.
+//
+// The freeze lives on the OTHER BOX and on the server, in two places, and both
+// are pinned there, not here:
+//   - `server/src/watch.ts`'s naming sweep skips a row that is held or that an
+//     open run names — `server/test/name-sweep.test.ts` ("skips on an EMPTY
+//     hold file too", "skips a row an OPEN RUN names").
+//   - `ccd ws-rename` refuses a held workspace outright —
+//     `server/test/ccd-ws-rename.test.ts` ("refuses a HELD workspace…",
+//     "refuses on a present-but-unreadable hold").
+// The PWA MIRRORS that freeze; it does not enforce it, and the tests below now
+// say which of the two they are measuring.
+//
+// AND THE MIRROR IS NOT PERFECT, which is the part worth knowing: the label
+// follows `FleetSession.branch`, and `server/src/fleet.ts` assembles that as
+// `sl?.branch ?? r.branch` — THE STATUSLINE WINS. §3.1 froze the registry's
+// `.branch` and the verb that writes it; a human running `git checkout -b`
+// inside the worktree still moves this label mid-claim, because that is a live
+// pane capture and no hold is consulted. `watch.ts`'s sweep guards against
+// exactly that confusion by reading the registry's branch rather than the
+// assembled one (its own comment says so); a fleet row has no such option.
 describe('a claimed worker keeps its born name (W3 §3.1)', () => {
-  it('labels a held workspace by its born branch, not by any title', () => {
-    const held = s({
-      name: null, branch: 'ws/quiet-mesa', workspace: 'quiet-mesa',
-      held: 'program:build8 wave:2/4 run:17',
-    });
+  const HOLD = 'program:build8 wave:2/4 run:17';
+
+  it('labels a claimed workspace by its born branch, not by any title', () => {
+    // The consequence a reader sees, and a genuine regression pin on
+    // `sessionLabel`'s fallback chain: with no chosen `name`, `branch` wins,
+    // and §3.1 is what keeps `branch` at the born value for a whole wave.
+    const held = s({ name: null, branch: 'ws/quiet-mesa', workspace: 'quiet-mesa', held: HOLD });
     render(<SessionLine session={held} onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByText('ws/quiet-mesa')).toBeInTheDocument();
+  });
+
+  it('the hold is not the label — a held row reads exactly like the same row unheld', () => {
+    // This is what the old fixture only LOOKED like it measured. `held` is a
+    // real input to the row (the chip renders it), and the statement being
+    // pinned is that it is not an input to the NAME: the two renders differ in
+    // `held` and in nothing else, and the label is the same string.
+    //
+    // It also pins the answer to the open question `sessionLabel`'s docstring
+    // raises out loud — whether a claimed row should read its run's
+    // program/wave instead of the slug. Today it does not. That is a product
+    // decision, so if someone answers it, this test goes red and the answer
+    // gets recorded rather than slipped in.
+    const base = { name: null, branch: 'ws/quiet-mesa', workspace: 'quiet-mesa' } as const;
+    const { container } = render(
+      <SessionLine session={s({ ...base, held: HOLD })} onOpen={() => {}} onActions={() => {}} />);
+    const heldLabel = container.querySelector('.sess-label')?.textContent;
+    cleanup();
+    const { container: c2 } = render(
+      <SessionLine session={s({ ...base, held: null })} onOpen={() => {}} onActions={() => {}} />);
+    expect(heldLabel).toBe(c2.querySelector('.sess-label')?.textContent);
+    expect(heldLabel).toBe('ws/quiet-mesa');
+    expect(heldLabel).not.toContain('program:build8');
+  });
+
+  it('a chosen name still wins on a claimed row — the PWA mirrors the freeze, it does not enforce it', () => {
+    // The honest limit of this file. If the freeze upstream ever fails — a
+    // sweep gate deleted, a hand `ws-rename`, a manual checkout the statusline
+    // reports — the fleet row shows the drifted name, faithfully, because
+    // `name` outranks `branch` and nothing here consults the hold. A test that
+    // implied otherwise would send the next reader looking for a PWA-side
+    // backstop that has never existed; the backstop is `name-sweep.test.ts`.
+    const named = s({ name: 'fix-the-pr-sheet', branch: 'ws/quiet-mesa', workspace: 'quiet-mesa', held: HOLD });
+    render(<SessionLine session={named} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('fix-the-pr-sheet')).toBeInTheDocument();
+    expect(screen.queryByText('ws/quiet-mesa')).toBeNull();
   });
 });
