@@ -217,9 +217,80 @@ describe('readWorktreeRecords', () => {
     expect(await readWorktreeRecords(localIO, root, 'demo')).toBeNull();
   });
 
-  it('refuses a project name that could escape projectsRoot', async () => {
-    const root = mkTmp('ccrc-gitref-');
-    expect(await readWorktreeRecords(localIO, root, '..')).toBeNull();
-    expect(await readWorktreeRecords(localIO, root, '../etc')).toBeNull();
+  // THE ESCAPE TARGETS ARE PLANTED AND LISTABLE, and that is the whole test.
+  // The previous form planted NOTHING, so `path.join(root, '..', '.git',
+  // 'worktrees')` named a directory that does not exist, `io.readdir` answered
+  // null, and the function returned null WITH OR WITHOUT the guard: measured
+  // 2026-08-17 by deleting the guard line outright — 12/12 still green. A guard
+  // whose test cannot fail is not pinned, it is decorated.
+  //
+  // So each escaping name below has a REAL admin directory waiting at the path
+  // it would reach, and a POSITIVE CONTROL immediately proves that directory is
+  // readable by this very function through a legitimate name. With the fixture
+  // proven live, a `null` for the escaping name can only have come from the
+  // guard. Deleting the guard turns all three assertions red.
+  describe('refuses a project name that could escape projectsRoot', () => {
+    /** Git's own admin record for one linked worktree, at `dir`. */
+    const plantAdmin = (dir: string): void => {
+      const admin = path.join(dir, '.git', 'worktrees', 'escaped');
+      mkdirSync(admin, { recursive: true });
+      writeFileSync(path.join(admin, 'gitdir'), '/data/worktrees/escaped/.git\n');
+      writeFileSync(path.join(admin, 'HEAD'), 'ref: refs/heads/ws/escaped\n');
+    };
+    const escapedRecord = [
+      { name: 'escaped', path: '/data/worktrees/escaped', headBranch: 'ws/escaped' },
+    ];
+    /** `<tmp>/<base>/projects` is the projects root, so `..` and `../<name>`
+     *  both have somewhere real to land, one level above it. */
+    const fixture = () => {
+      const base = mkTmp('ccrc-gitref-');
+      const root = path.join(base, 'projects');
+      mkdirSync(root, { recursive: true });
+      plantAdmin(root);                            // reached by `.`
+      plantAdmin(base);                            // reached by `..`
+      plantAdmin(path.join(base, 'outside'));      // reached by `../outside`
+      return { base, root };
+    };
+
+    it('`..` — the parent of the projects root, whose admin dir IS readable', async () => {
+      const { base, root } = fixture();
+      // POSITIVE CONTROL: the same directory, through a legitimate name.
+      expect(await readWorktreeRecords(localIO, path.dirname(base), path.basename(base)))
+        .toEqual(escapedRecord);
+      expect(await readWorktreeRecords(localIO, root, '..')).toBeNull();
+    });
+
+    it('`../outside` — a sibling of the projects root, whose admin dir IS readable', async () => {
+      const { base, root } = fixture();
+      expect(await readWorktreeRecords(localIO, base, 'outside')).toEqual(escapedRecord);
+      expect(await readWorktreeRecords(localIO, root, '../outside')).toBeNull();
+    });
+
+    it('`.` — the projects root ITSELF, whose admin dir IS readable', async () => {
+      const { base, root } = fixture();
+      expect(await readWorktreeRecords(localIO, base, 'projects')).toEqual(escapedRecord);
+      expect(await readWorktreeRecords(localIO, root, '.')).toBeNull();
+    });
+
+    it('the shapes that are not escapes here but are refused anyway, and why', async () => {
+      const { root } = fixture();
+      // Same anti-vacuity move: each name below is planted where it would LAND,
+      // so removing the guard turns this red too rather than leaving it as the
+      // decoration the old test was.
+      for (const landing of ['etc', 'y', 'a..b']) plantAdmin(path.join(root, landing));
+      expect(await readWorktreeRecords(localIO, root, 'etc')).toEqual(escapedRecord);
+      // `path.join` normalises both of these back INSIDE the root — an absolute
+      // second argument is joined, not honoured, and `x/../y` collapses to `y`.
+      // Neither is an escape; both are refused because the single-segment
+      // character class has no `/` in it, which is the property that makes the
+      // three escapes above impossible to spell in the first place. Pinned so a
+      // future "the regex is stricter than it needs to be" edit has to argue
+      // with a test.
+      expect(await readWorktreeRecords(localIO, root, '/etc')).toBeNull();
+      expect(await readWorktreeRecords(localIO, root, 'x/../y')).toBeNull();
+      // `a..b` is a legal directory name, refused by the belt-and-braces
+      // `includes('..')` clause. Recorded as deliberate over-refusal, not a bug.
+      expect(await readWorktreeRecords(localIO, root, 'a..b')).toBeNull();
+    });
   });
 });
