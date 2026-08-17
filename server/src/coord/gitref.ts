@@ -137,7 +137,23 @@ export type WorktreeRead =
   /** The admin directory EXISTS (proved by `stat`, which needs only search
    *  permission on the parent chain) and could not be listed. Unmeasured; the
    *  next sweep may do better. */
-  | { ok: false; reason: 'unlistable' };
+  | { ok: false; reason: 'unlistable' }
+  /** Neither the admin directory NOR the project's own `.git` could be reached,
+   *  so absence was never proved and NOTHING was measured — the answer is not
+   *  zero, it is silence.
+   *
+   *  This exists because `FleetIO.stat` answers `null` for two different facts
+   *  and only one of them is absence. In REMOTE mode — `CCRC_FLEET=remote`, the
+   *  live standing config — `remote/io.ts` catches a dropped socket, a request
+   *  timeout and an agent-side `checkPath` refusal all to `null`, exactly as it
+   *  answers for a file that is not there. Without this arm a link blip turned
+   *  every project into a fabricated MEASURED ZERO ("this project has no linked
+   *  worktrees"), which is the strongest positive claim this function can make,
+   *  minted out of two failed reads. Standing conditions land here too (a
+   *  project directory that is not a git checkout at all — four exist on the
+   *  fleet), which is why it carries no log of its own: one word cannot say
+   *  which, and `refused-project` is the reason that CAN. */
+  | { ok: false; reason: 'unreachable' };
 
 /**
  * Every linked worktree of `<projectsRoot>/<project>`, read out of git's own
@@ -156,7 +172,7 @@ export type WorktreeRead =
  * would report the whole fleet as unregistered).
  *
  * THE ANSWER IS A `WorktreeRead`, NOT `WorktreeRecord[] | null` (§1.7) — see that
- * type's own docstring for the three facts the old `null` was carrying at once.
+ * type's own docstring for the facts the old `null` was carrying at once.
  * The absent admin directory is a MEASUREMENT here, not a failure: git creates
  * `.git/worktrees` when it creates the first linked worktree and not before, so
  * "not there" is git's own way of saying zero, and it answers `ok: true` with an
@@ -164,10 +180,19 @@ export type WorktreeRead =
  * would not list — the identical technique, for the identical reason, that
  * `readBranchTip` above uses on a loose ref: `stat` needs only search permission
  * on the parent chain, so it still proves presence when the listing itself is
- * refused. The one case it cannot see through is a chain this process cannot
- * TRAVERSE at all (EACCES on `<project>/.git`), which reads as the absent case —
- * the same fail-direction `readBranchTip` names and accepts, and the suppressing
- * one.
+ * refused.
+ *
+ * A FAILED `stat` IS NOT PROOF OF ABSENCE, and the second one is what makes the
+ * zero a measurement rather than a guess. `FleetIO.stat` answers `null` for a
+ * missing path AND for a read that failed — in remote mode, the live config,
+ * that includes a dropped socket, a timeout and a whitelist refusal. So absence
+ * of the admin directory only counts as zero once something else on that path
+ * has been seen: `<project>/.git`, one level up, which every project the census
+ * asks about has. Both unreachable is `reason: 'unreachable'` — silence, not
+ * zero. The one case this still cannot see through is a chain that `stat`s fine
+ * but cannot be TRAVERSED (EACCES on `<project>/.git` itself), which reads as
+ * the absent case — the same fail-direction `readBranchTip` names and accepts,
+ * and the suppressing one.
  *
  * A DETACHED HEAD gives `headBranch: null`, never a fabricated name.
  */
@@ -184,9 +209,13 @@ export async function readWorktreeRecords(
   if (names === null) {
     // Present-but-unlistable, or genuinely absent? `readdir` collapses both to
     // `null` (`io.ts`), so ask the question `readdir` cannot answer.
-    return (await io.stat(adminRoot)) !== null
-      ? { ok: false, reason: 'unlistable' }
-      : { ok: true, records: [] };
+    if ((await io.stat(adminRoot)) !== null) return { ok: false, reason: 'unlistable' };
+    // …and a failed `stat` is not proof of absence either (see the docstring
+    // above): claim the zero only when SOMETHING on this path answered. One
+    // extra round trip, on the rare arm only.
+    return (await io.stat(path.join(projectsRoot, project, '.git'))) !== null
+      ? { ok: true, records: [] }
+      : { ok: false, reason: 'unreachable' };
   }
   const out: WorktreeRecord[] = [];
   for (const name of names) {

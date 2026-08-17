@@ -25,11 +25,28 @@ const seedSession = (home: string, id: string, wrapper: string) => {
 };
 
 // Queue-based collector so no message is dropped between sequential awaits.
+//
+// `divergence` FRAMES ARE DROPPED HERE, and that is about a race this file
+// cannot otherwise win. `tick()` VOID-dispatches `sweepDivergences` (its own
+// slower clock, its own lane), so `await watcher.tick()` in `connect` below does
+// NOT await it — the census sweep is still in flight when the socket opens, and
+// its frame lands wherever it lands, including between this file's `hello` and
+// `fleet` assertions. Measured: 2 of 5 full-suite runs, none in isolation, which
+// is exactly the load-sensitivity that shape produces.
+//
+// Dropping it is not looking away from a defect. The wire contract these tests
+// pin is the COLD-START BURST's order — hello, fleet, runs, coord, all four
+// chained inside one `.then` in `server.ts` — and frames are additive:
+// `FLEET_PROTO` discipline says a client must tolerate an unknown frame arriving
+// at any point, so asserting positional ADJACENCY over-specifies it. The census
+// lane has its own suite (`divergence-sweep.test.ts`), which owns both the
+// classifier and the `bus.on('divergence', …)` wiring pin.
 const collect = (ws: WebSocket) => {
   const queue: unknown[] = [];
   const waiters: Array<(m: unknown) => void> = [];
   ws.on('message', (d) => {
     const m: unknown = JSON.parse(String(d));
+    if ((m as { type?: unknown }).type === 'divergence') return;
     const w = waiters.shift();
     if (w) w(m);
     else queue.push(m);

@@ -1447,11 +1447,19 @@ export class FleetWatcher {
       // may succeed next minute — no log, or a broken permission would print
       // hourly for as long as it lasts.
       //
-      // `ok: true` with an EMPTY array is the third case and is NOT a refusal:
+      // `unreachable` is quiet for the opposite reason to `refused-project`: it
+      // is the one reason that can be EITHER standing (a project directory that
+      // is not a checkout) or transient (a dropped agent socket, which
+      // `FleetIO.stat` reports as `null` exactly like a missing path), and a log
+      // line cannot say which. What it buys is that neither of those is reported
+      // as a measured zero any more.
+      //
+      // `ok: true` with an EMPTY array is the last case and is NOT a refusal:
       // git creates `.git/worktrees` with the first linked worktree, so its
-      // absence is a measured zero. It falls through the loop below contributing
-      // nothing, which is the correct handling of a real answer that happens to
-      // be empty — not the same code path as not knowing.
+      // absence — once `<project>/.git` has answered, which is what separates it
+      // from `unreachable` — is a measured zero. It falls through the loop below
+      // contributing nothing, which is the correct handling of a real answer that
+      // happens to be empty — not the same code path as not knowing.
       if (!read.ok) {
         if (read.reason === 'refused-project') {
           console.warn(`ccrc-server: sweepDivergences cannot census project ${JSON.stringify(project)} — the name is refused by the path guard, so this project is permanently absent from the census`);

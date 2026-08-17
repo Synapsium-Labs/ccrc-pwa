@@ -281,8 +281,38 @@ describe('readWorktreeRecords', () => {
   // it reaches tomorrow's.
   it('NO LINKED WORKTREES is a measured zero, not a failure — git creates the dir with the first one', async () => {
     const root = mkTmp('ccrc-gitref-');
-    mkdirSync(path.join(root, 'demo'), { recursive: true });
+    // `.git` IS PLANTED, and that is the fixture catching up with reality
+    // rather than a concession to the implementation: a project the census asks
+    // about is a checkout, and the zero is only a measurement once something on
+    // that path has answered. `readdir(.git/worktrees)` -> null and
+    // `stat(.git/worktrees)` -> null are both compatible with a dropped agent
+    // socket; `stat(.git)` answering is what rules that out.
+    mkdirSync(path.join(root, 'demo', '.git'), { recursive: true });
     expect(await readWorktreeRecords(localIO, root, 'demo')).toEqual({ ok: true, records: [] });
+  });
+
+  it('BOTH READS FAILING is silence, not zero — the remote link, which answers null for everything', async () => {
+    // The shape that made the measured zero a fabrication: in remote mode —
+    // `CCRC_FLEET=remote`, the live standing config — `remote/io.ts` catches a
+    // dropped socket, a request timeout and an agent-side `checkPath` refusal
+    // all to `null`, indistinguishable from a path that is not there. An io
+    // double that answers null for EVERYTHING is exactly that box, and the old
+    // code turned it into "this project has no linked worktrees" — the
+    // strongest positive claim this function can make, minted from two failed
+    // reads, for every project on the fleet at once.
+    const dropped: FleetIO = { ...localIO, readdir: async () => null, stat: async () => null };
+    expect(await readWorktreeRecords(dropped, mkTmp('ccrc-gitref-'), 'demo'))
+      .toEqual({ ok: false, reason: 'unreachable' });
+  });
+
+  it('a project directory that is not a checkout at all is unreachable too, not a zero', async () => {
+    // Four non-git project directories exist on the fleet. There is no git
+    // record to census in one, and saying "zero linked worktrees" about it is
+    // a claim about a repository that is not there.
+    const root = mkTmp('ccrc-gitref-');
+    mkdirSync(path.join(root, 'demo'), { recursive: true });
+    expect(await readWorktreeRecords(localIO, root, 'demo'))
+      .toEqual({ ok: false, reason: 'unreachable' });
   });
 
   it('an EXISTING admin dir that will not list is unlistable — the opposite fact, and it says so', async () => {
