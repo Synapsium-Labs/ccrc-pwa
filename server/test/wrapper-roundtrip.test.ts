@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
-import { markGenerated } from '../../shared/mark.mjs';
+import { markGenerated, verifyMarker } from '../../shared/mark.mjs';
 import { generateWrapperBody } from '../../shared/wrapper.mjs';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -61,8 +61,7 @@ describe('the wrapper the writer writes is the wrapper the reader reads', () => 
     });
   }
 
-  it('the marked text still verifies as ccrc-unmodified', async () => {
-    const { verifyMarker } = await import('../../shared/mark.mjs');
+  it('the marked text still verifies as ccrc-unmodified', () => {
     expect(verifyMarker(markGenerated(generateWrapperBody(ACCOUNTS[0], 'claude'))))
       .toBe('ccrc-unmodified');
   });

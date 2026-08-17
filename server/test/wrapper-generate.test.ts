@@ -37,10 +37,20 @@ describe('generateWrapperBody', () => {
   // round-trip through it can ever pin it.
   //
   // It still matters, and not only for tidiness: `shared/mark.mjs` splits on
-  // "\n" to hash a body, so a missing terminator changes the digest — which
-  // changes what `verifyMarker` calls the file, and changes the roster
-  // fingerprint the two boxes compare in `/api/fleet/health`. A writer that
-  // silently stopped emitting it would make a box disown its own wrappers.
+  // "\n" to hash a body, so a missing terminator changes the digest — and the
+  // digest is what `verifyMarker` compares a file against to decide whether
+  // ccrc wrote it. Once Task 5 runs this text through `markGenerated`, a
+  // writer that silently stopped emitting the terminator would make `ccrc
+  // wrappers` read its own output back as `ccrc-edited` and refuse to touch
+  // it: a box disowning the wrappers it just wrote.
+  //
+  // NOT the `/api/fleet/health` roster fingerprint, which an earlier draft of
+  // this comment claimed (Task 3 review). That fingerprint is
+  // `bodyDigest(generateAccountsSh(...))` on the server side and a digest of
+  // `~/.ccrc/accounts.sh` on the agent side — both about the `_ccrc_*`
+  // functions file, never about a wrapper. Nothing in this plan wires a
+  // wrapper's digest into that endpoint, and a reader sent to the wrong
+  // mechanism when this test goes red would be looking at the wrong box.
   it('ends in exactly one newline', () => {
     for (const a of [CLAUDE2, NOSECRETS]) {
       const text = generateWrapperBody(a, 'claude');
