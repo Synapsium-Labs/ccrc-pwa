@@ -597,6 +597,169 @@ describe('one parseCcdCaps — the ccd-caps-line filter', () => {
   });
 });
 
+// — Stage 2b, Task 2: one build stamp, validated one way —
+describe('one BuildInfo — the stamp shape and its field checks', () => {
+  // Two boxes read a `~/.ccrc/build.json` now: the server its own at boot
+  // (`/health`), the fleet host's agent its own on every `ready` frame
+  // (`AgentReady.build`), so the server can compare the two SHAS. That
+  // comparison is only meaningful if both sides agree on what a well-formed
+  // stamp IS — a second copy of the field checks that drifted by one field
+  // would have one box omitting a stamp the other happily forwards, and the
+  // skew report would then be reporting on its own validators.
+  //
+  // The validation was written in `server/src/buildinfo.ts` and moved to
+  // `shared/` when the agent needed it (the agent cannot import from
+  // `server/src`). The FILESYSTEM read stays per package — `shared/` imports
+  // nothing, not even `node:*`, because it bundles into the PWA — so what is
+  // shared is exactly the shape and the checks.
+  //
+  // The fingerprint is the check on `sha` — the load-bearing field — in every
+  // spelling this repo has actually used for it: the bare `typeof` form the
+  // validation was born as (and the form a re-copy would be written in, since
+  // it is what `git log` shows), the `nonEmptyString` form it is in today, and
+  // the hand-rolled length test someone would reach for instead. Narrow enough
+  // that the prose about it (this comment, the docstrings in both readers,
+  // which discuss a `sha: undefined` rather than a check) does not score a hit
+  // on itself.
+  const CHECKS_THE_SHA = /typeof\s+\w+\.sha\s*!==\s*'string'|nonEmptyString\(\s*\w+\.sha\s*\)|\w+\.sha\.length\s*(?:===|!==|>|<)/;
+
+  it('the field checks live in exactly one file, and that file is shared/buildinfo.ts', () => {
+    const holders = ALL.filter((f) => CHECKS_THE_SHA.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['shared/buildinfo.ts']);
+  });
+
+  it('the type is declared in exactly one file, and that file is shared/buildinfo.ts', () => {
+    // `server/src/buildinfo.ts` RE-EXPORTS the type (`export type
+    // { BuildInfo }`) so its own importers were untouched by the move — a
+    // re-export is one declaration reachable by two names, which is the
+    // opposite of a copy, and this regex matches a DECLARATION only.
+    //
+    // BOTH SPELLINGS. An `interface`-only fingerprint waves through
+    // `export type BuildInfo = { … }`, which is not an exotic way to write it
+    // here — the sibling block below fingerprints `MarkerState` as
+    // `/export type MarkerState\s*=/`, so a reader of this very file has just
+    // been shown the form that would slip past. The `=` is what keeps this off
+    // the re-export (`export type { BuildInfo };`), which has no `=` and is
+    // the one spelling that must stay legal.
+    const DECLARES = /^\s*export (interface BuildInfo\b|type BuildInfo\s*=)/m;
+    const holders = ALL.filter((f) => DECLARES.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['shared/buildinfo.ts']);
+  });
+
+  it('is what both real readers call, not re-derive', () => {
+    // Not merely "the copy is gone" — deleting either reader satisfies that.
+    // Each must still reach the shared parser, and each still owns its own
+    // `readFileSync`, which is the half that could not move.
+    for (const f of ['server/src/buildinfo.ts', 'agent/src/server.ts']) {
+      const src = readFileSync(path.join(ccrcRoot, f), 'utf8');
+      expect(src, f).toContain('parseBuildInfo');
+      expect(src, f).toMatch(/import\s*\{[^}]*\bparseBuildInfo\b[^}]*\}\s*from\s*'[^']*shared\/buildinfo(\.js)?'/);
+      expect(src, f).toContain('readFileSync');
+    }
+  });
+});
+
+// — Stage 2b, Task 8: the build stamp's BASH side —
+describe('one bash reader of ~/.ccrc/build.json', () => {
+  // The TypeScript half is the describe above. This is the other language the
+  // same file is read in: `ccd version` and `ccrc version`/`ccrc status` all
+  // answer "what does this box run?" off `~/.ccrc/build.json`, in bash, on the
+  // box itself — and a deployed box is exactly where two readers disagreeing
+  // is least visible, because nothing there runs a test suite.
+  //
+  // `ccd/ccrc`'s own header states the rule this pins ("`_box_build_fields` is
+  // the ONLY reader of ~/.ccrc/build.json in this file, and `version` and
+  // `status` both call it") and names this task as the place the rule stops
+  // being prose.
+  const bashRoots = [path.join(ccrcRoot, 'ccd'), path.join(ccrcRoot, 'deploy')];
+  const isBash = (p: string): boolean => {
+    if (/\.(sh|bash)$/.test(p)) return true;
+    if (/\.[A-Za-z0-9]+$/.test(p)) return false;   // .mjs/.service/.json/.conf …
+    return /^#!.*\b(ba)?sh\b/.test(readFileSync(p, 'utf8').split('\n')[0] ?? '');
+  };
+  const bashFiles = (dir: string): string[] => {
+    const out: string[] = [];
+    for (const e of readdirSync(dir)) {
+      const p = path.join(dir, e);
+      if (statSync(p).isDirectory()) { out.push(...bashFiles(p)); continue; }
+      if (isBash(p)) out.push(p);
+    }
+    return out;
+  };
+  const BASH = bashRoots.flatMap(bashFiles);
+  /** A bash line that is not a comment. The stamp's path is discussed in prose
+   *  all over both tools; only an actual line of shell is a reader. */
+  const codeLines = (f: string): string[] =>
+    readFileSync(f, 'utf8').split('\n').filter((l) => !l.trim().startsWith('#'));
+  const holdersOf = (needle: string): string[] =>
+    BASH.filter((f) => codeLines(f).some((l) => l.includes(needle))).map(rel).sort();
+
+  it('actually found the bash tools — a scan over an empty list passes everything', () => {
+    for (const f of ['ccd/ccd', 'ccd/ccrc', 'ccd/ccrc-adopt', 'ccd/ccrc-doctor-checks',
+      'ccd/session-hook.sh', 'deploy/deploy.sh', 'deploy/verify-service.sh']) {
+      expect(BASH.map(rel)).toContain(f);
+    }
+  });
+
+  it('is read from exactly two places, and the second is named here BY NAME', () => {
+    // THE EXCLUSION IS WRITTEN DOWN, not a scanner quietly narrowed — the
+    // `'mail-disabled'` idiom this file already uses.
+    //
+    // `ccd/ccd`'s `cmd_version` carries a reader of its own, in a python3
+    // heredoc, and it is a genuine second copy of one fact: two tools, two
+    // languages, one stamp. It stays for now because `ccd` is the tool this
+    // task must not edit (its own `|| die` runs on every invocation on a live
+    // fleet host, and a rewrite of its version verb belongs with the work that
+    // can prove it there). Whoever next has a reason to touch `cmd_version`
+    // should make it call `ccrc version` — or delete it in favour of it — and
+    // shorten this list to `ccd/ccrc` alone.
+    expect(holdersOf('$HOME/.ccrc/build.json')).toEqual([
+      'ccd/ccd',     // cmd_version's python3 heredoc — the named gap, see above
+      'ccd/ccrc',    // BOX_STAMP_FILE, read only by _box_build_fields
+    ]);
+  });
+
+  it('the ccrc CLI spells the path once and parses it once', () => {
+    // Two spellings is how `version` and `status` would come to read two
+    // different files; two parses is how they would come to disagree about
+    // what "dirty" means in the same one.
+    const src = readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc'), 'utf8');
+    const code = src.split('\n').filter((l) => !l.trim().startsWith('#'));
+    expect(code.filter((l) => l.includes('$HOME/.ccrc/build.json'))).toEqual([
+      'BOX_STAMP_FILE="$HOME/.ccrc/build.json"',
+    ]);
+    expect(code.filter((l) => l.includes('jq -r')).length,
+      'a second jq parse of the stamp has appeared in ccrc').toBe(1);
+  });
+
+  it('both verbs reach the stamp through that one reader, not around it', () => {
+    // Not merely "no second copy" — deleting a verb satisfies that. Each must
+    // still call `_box_build_fields`, and neither may name the file itself.
+    const src = readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc'), 'utf8');
+    for (const verb of ['cmd_version', 'cmd_status']) {
+      const body = new RegExp(`${verb}\\(\\) \\{([\\s\\S]*?)\\n\\}`).exec(src);
+      expect(body, `ccd/ccrc has no ${verb}`).toBeTruthy();
+      expect(body![1]!, `${verb} does not read the stamp through _box_build_fields`)
+        .toContain('_box_build_fields');
+      expect(body![1]!, `${verb} names the stamp file itself instead of using BOX_STAMP_FILE`)
+        .not.toContain('.ccrc/build.json"');
+    }
+  });
+
+  it('deploy.sh is the only WRITER, and it writes through install_atomic', () => {
+    // The other half of "one stamp": a second writer is how a box would carry
+    // a stamp no deploy stands behind. deploy.sh spells the destination
+    // HOME-relative (`install_atomic`'s own contract), which is why it does
+    // not appear in the reader list above.
+    expect(holdersOf('.ccrc/build.json')).toEqual([
+      'ccd/ccd', 'ccd/ccrc', 'deploy/deploy.sh',
+    ]);
+    const deploySh = readFileSync(path.join(ccrcRoot, 'deploy', 'deploy.sh'), 'utf8');
+    expect(deploySh.split('\n').filter((l) => !l.trim().startsWith('#') && l.includes('.ccrc/build.json')))
+      .toEqual(['  install_atomic "$stamp" .ccrc/build.json 644']);
+  });
+});
+
 // — Build 4, Task 10: the wave's own two definitions —
 describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
   // The type's fingerprint: the union as it is declared, not every mention.

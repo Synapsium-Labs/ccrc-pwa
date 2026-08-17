@@ -235,7 +235,7 @@ const fingerprintDeps = (
   const base = testDeps(home, run);
   return {
     ...base, cfg: { ...base.cfg, projectsRoot },
-    ...(verbs !== undefined ? { fleetState: { connected: true, downSince: null, ccdVerbs: verbs, rosterFp: null } } : {}),
+    ...(verbs !== undefined ? { fleetState: { connected: true, downSince: null, ccdVerbs: verbs, rosterFp: null, build: null } } : {}),
   };
 };
 

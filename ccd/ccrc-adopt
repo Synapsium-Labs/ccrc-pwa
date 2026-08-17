@@ -57,13 +57,26 @@ export LC_ALL=C
 
 PROG=ccrc-adopt
 HUES=(cyan violet blue magenta amber green)
-ID_RE='^[a-z][a-z0-9-]{0,31}$'
-# Mirrors shared/roster.ts's second, independent gate on configDirSuffix: the
-# safe set an id's config dir suffix is allowed to use once the leading "."
-# is stripped. Kept here, not derived from the TypeScript, for the same
-# reason deploy/gen-accounts.mjs keeps its own copy (see that file's header)
-# — a bare bash script cannot import shared/roster.ts either.
-SUFFIX_SAFE_RE='^\.[A-Za-z0-9._-]+$'
+
+# ── the wrapper contract, sourced rather than restated ────────────────────
+# `ccd/ccrc-wrapper-shape` holds what USED to be four things in this file:
+# `ID_RE`, `SUFFIX_SAFE_RE`, `is_script`/`first_two_bytes`, `parse_shape` and
+# the engine inside `cross_check`. They moved because `ccrc doctor`'s
+# `_check_wrappers` asks the same questions from the other end (roster vs disk,
+# rather than disk -> roster), and a second copy of the wrapper shape is exactly
+# how a checker and a generator drift into agreeing with each other about a
+# shape neither tool writes. Nothing was rewritten in the move.
+#
+# `${BASH_SOURCE[0]}` and not `$0`/`$HERE`: those are computed further down and
+# `dirname` is a PATH lookup, while this has to work before anything else does.
+# The `*/*` guard covers `bash ccrc-adopt` from inside ccd/, where BASH_SOURCE
+# carries no directory at all and `%/*` would strip nothing.
+_ADOPT_SELF="${BASH_SOURCE[0]}"
+[[ "$_ADOPT_SELF" == */* ]] || _ADOPT_SELF="./$_ADOPT_SELF"
+if ! . "${_ADOPT_SELF%/*}/ccrc-wrapper-shape"; then
+  echo "$PROG: cannot load ${_ADOPT_SELF%/*}/ccrc-wrapper-shape — it ships beside this script and holds the wrapper shape; is this a complete checkout?" >&2
+  exit 1
+fi
 
 usage() {
   cat <<EOF
@@ -90,7 +103,7 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$OUT" ] || OUT="$HOME/.ccrc/accounts.json"
 
-BIN_DIR="$HOME/.local/bin"
+BIN_DIR="$WRAPPER_BIN_DIR"
 [ -d "$BIN_DIR" ] || { echo "$PROG: $BIN_DIR does not exist — nothing to adopt" >&2; exit 1; }
 
 # Where deploy/gen-accounts.mjs lives relative to THIS script, not relative to
@@ -100,16 +113,16 @@ BIN_DIR="$HOME/.local/bin"
 # parseRoster's rules a third time (shared/roster.ts is #1, gen-accounts.mjs
 # is #2 — see that file's header for why a bare interpreter can't import the
 # TypeScript directly).
+#
+# A CHECKOUT IS NO LONGER THE ONLY PLACE THIS RESOLVES (Task 8). `ccrc adopt`
+# execs this script where it ships, `~/ccrc/ccd/ccrc-adopt`, so the sibling it
+# needs is `~/ccrc/deploy/gen-accounts.mjs` — and BOTH deploy lanes rsync
+# `deploy` into `~/ccrc/`, so that path exists on the server box as well as on
+# the fleet host. One relative path, correct in both worlds; no `$HOME`-rooted
+# fallback to disagree with it. The refusal below therefore names both places
+# rather than asking a box that was never a checkout whether it is one.
 HERE="$(cd "$(dirname "$0")" && pwd)"
 GEN_ACCOUNTS="$HERE/../deploy/gen-accounts.mjs"
-
-# ── first bytes, without ever reading a whole candidate ───────────────────
-# `head -c 2` opens the file and stops after two bytes — it never loads the
-# rest, script or (crucially) 300+ MB binary, into anything. Symlinks are
-# followed transparently (open(2) does that for a content read; only `stat`
-# without -L would report the link's own tiny size instead).
-first_two_bytes() { head -c 2 -- "$1" 2>/dev/null || true; }
-is_script() { [ "$(first_two_bytes "$1")" = '#!' ]; }
 
 # ── pass 0: candidate names — regular files (symlinks OK), executable, and
 #    shaped like a legal account id. This one filter is what drops every
@@ -121,7 +134,7 @@ for f in "$BIN_DIR"/*; do
   [ -f "$f" ] || continue
   [ -x "$f" ] || continue
   name="$(basename "$f")"
-  [[ "$name" =~ $ID_RE ]] || continue
+  [[ "$name" =~ $WRAPPER_ID_RE ]] || continue
   CAND+=("$name")
 done
 shopt -u nullglob
@@ -168,13 +181,15 @@ fi
 
 # ── pass 1: which candidates set CLAUDE_CONFIG_DIR at all? Only scripts can
 #    (a 300 MB ELF cannot contain a meaningful shell assignment we'd want to
-#    trust), so is_script gates the grep — the binary is_script rejects never
-#    gets read a second time. ──────────────────────────────────────────────
+#    trust), so `_wrap_is_script` gates the scan — the binary it rejects never
+#    gets read a second time. Both halves live in ccrc-wrapper-shape, so
+#    `ccrc doctor` decides what counts as an account wrapper by running THIS
+#    code rather than by carrying its own opinion of it. ───────────────────
 declare -a CFG_SCRIPTS=()
 for name in "${CAND[@]}"; do
   f="$BIN_DIR/$name"
-  is_script "$f" || continue
-  grep -qE '^[[:space:]]*export[[:space:]]+CLAUDE_CONFIG_DIR=' "$f" 2>/dev/null && CFG_SCRIPTS+=("$name")
+  _wrap_is_script "$f" || continue
+  _wrap_declares_config_dir "$f" && CFG_SCRIPTS+=("$name")
 done
 
 if [ "${#CFG_SCRIPTS[@]}" -eq 0 ]; then
@@ -182,107 +197,20 @@ if [ "${#CFG_SCRIPTS[@]}" -eq 0 ]; then
   exit 1
 fi
 
-# ── pass 2: parse the generated SHAPE of every CLAUDE_CONFIG_DIR script,
-#    target-agnostic — this is deliberately ONE function used for two
-#    different questions (which binary is upstream, and which scripts are
-#    "generated"), because both questions depend on the exact same shape
-#    test and a second, looser copy of it is how the two would drift.
+# ── pass 2: parse the generated SHAPE of every CLAUDE_CONFIG_DIR script.
+#    `_wrap_parse_shape` (ccd/ccrc-wrapper-shape) is the shape contract, and it
+#    lives there rather than here because `ccrc doctor`'s `_check_wrappers`
+#    tests the same shape from the other end — see that file's header for what
+#    the function guarantees and why it reconstructs each line instead of
+#    capturing it with a regex.
 #
-#    "Full shape match" means: the shebang line is EXACTLY
-#    `#!/usr/bin/env bash`; every remaining blank or comment-only line is
-#    stripped; what is left is EXACTLY two or three lines, in order — an
-#    export, an optional secrets-sourcing guard, and an exec of SOME local
-#    binary — with nothing else. Comments are the one thing this tolerates
-#    ANYWHERE in that gap: the two real generated wrappers measured on this
-#    box (claude2, claude-dev0) both carry an explanatory comment ahead of
-#    their secrets line, and a classifier that could not round-trip its own
-#    prior output would be useless for re-running adopt on a box it already
-#    touched.
-#
-#    The exec line's TARGET is captured but not yet judged — that happens
-#    once every script has been parsed and the votes are in (pass 3). A
-#    script with the right shape but the wrong target (a bespoke launcher
-#    that also happens to end `exec "$HOME/.local/bin/<something-else>"
-#    "$@"`) must never get a vote for the WRONG binary, which is what
-#    resolving the target here, before consensus exists, would risk.
-#
-#    Each significant line is checked by STRIPPING the known literal prefix
-#    and suffix (quoted, so no part of it is ever treated as a glob or
-#    regex) and then reconstructing the exact line adopt expects from what
-#    was captured, comparing the two strings whole. That is deliberate: a
-#    regex capturing two occurrences of the same path in one line is exactly
-#    the kind of pattern that is easy to write wrong in a way that silently
-#    accepts a mismatched pair; reconstruct-then-compare cannot make that
-#    mistake — it comes back with the reconstructed answer, or the line
-#    disagrees. Prints `ok\t<target>\t<suffix>\t<secrets>` or `no\t\t\t`. ──
-parse_shape() {
-  local f="$1"
-  local -a lines=()
-  mapfile -t lines < "$f"
-
-  if [ "${lines[0]:-}" != '#!/usr/bin/env bash' ]; then
-    printf 'no\t\t\t\n'; return
-  fi
-
-  local -a body=()
-  local i ln
-  for ((i = 1; i < ${#lines[@]}; i++)); do
-    ln="${lines[$i]}"
-    [[ "$ln" =~ ^[[:space:]]*$ ]] && continue
-    [[ "$ln" =~ ^[[:space:]]*# ]] && continue
-    body+=("$ln")
-  done
-
-  local n="${#body[@]}"
-  if [ "$n" -ne 2 ] && [ "$n" -ne 3 ]; then
-    printf 'no\t\t\t\n'; return
-  fi
-
-  # Line 1: export CLAUDE_CONFIG_DIR="$HOME/<suffix>"
-  local exp_prefix='export CLAUDE_CONFIG_DIR="$HOME/'
-  ln="${body[0]}"
-  if [[ "$ln" != "$exp_prefix"* || "$ln" != *'"' ]]; then
-    printf 'no\t\t\t\n'; return
-  fi
-  # exp_prefix ends in "/", one character short of the suffix's own leading
-  # "." (the file reads `$HOME/.claude-personal`) — so `suffix` already
-  # starts with "." here. Do not prepend a second one.
-  local suffix="${ln#"$exp_prefix"}"
-  suffix="${suffix%\"}"
-  if [ "$suffix" = "." ] || [[ ! "$suffix" =~ $SUFFIX_SAFE_RE ]]; then
-    printf 'no\t\t\t\n'; return
-  fi
-
-  local secrets=""
-  local idx=1
-  if [ "$n" -eq 3 ]; then
-    local sec_prefix='[ -r "$HOME/'
-    ln="${body[1]}"
-    if [[ "$ln" != "$sec_prefix"*'"'* ]]; then
-      printf 'no\t\t\t\n'; return
-    fi
-    local rest="${ln#"$sec_prefix"}"
-    local path1="${rest%%\"*}"
-    local expected="$sec_prefix$path1"'" ] && . "$HOME/'"$path1"'"'
-    if [ "$ln" != "$expected" ]; then
-      printf 'no\t\t\t\n'; return
-    fi
-    secrets="$path1"
-    idx=2
-  fi
-
-  # exec "$HOME/.local/bin/<target>" "$@" — target not yet judged.
-  local exec_prefix='exec "$HOME/.local/bin/'
-  ln="${body[$idx]}"
-  if [[ "$ln" != "$exec_prefix"*'" "$@"' ]]; then
-    printf 'no\t\t\t\n'; return
-  fi
-  local rest="${ln#"$exec_prefix"}"
-  local target="${rest%'" "$@"'}"
-  [[ "$target" =~ $ID_RE ]] || { printf 'no\t\t\t\n'; return; }
-
-  printf 'ok\t%s\t%s\t%s\n' "$target" "$suffix" "$secrets"
-}
+#    It is target-agnostic on purpose: the exec line's TARGET is captured but
+#    not yet judged, which happens once every script has been parsed and the
+#    votes are in (pass 3). A script with the right shape but the wrong target
+#    (a bespoke launcher that also happens to end
+#    `exec "$HOME/.local/bin/<something-else>" "$@"`) must never get a vote for
+#    the WRONG binary, which is what resolving the target before consensus
+#    exists would risk. ────────────────────────────────────────────────────
 
 # `export CLAUDE_CONFIG_DIR="$HOME/<suffix>"` value regardless of whether the
 # rest of the file matches the generated shape — every external account still
@@ -295,7 +223,7 @@ extract_suffix_loose() {
   while IFS= read -r ln; do
     if [[ "$ln" == "$exp_prefix"*'"'* ]]; then
       local rest="${ln#"$exp_prefix"}"
-      # Same "/" vs "." boundary as parse_shape: rest already starts with
+      # Same "/" vs "." boundary as _wrap_parse_shape: rest already starts with
       # the suffix's own leading ".".
       printf '%s' "${rest%%\"*}"
       return
@@ -309,7 +237,21 @@ extract_suffix_loose() {
 mapfile -t REST < <(printf '%s\n' "${CFG_SCRIPTS[@]}" | sort)
 declare -A SHAPE_OK=() SHAPE_TARGET=() SHAPE_SUFFIX=() SHAPE_SECRETS=()
 for name in "${REST[@]}"; do
-  IFS=$'\t' read -r ok target suffix secrets < <(parse_shape "$BIN_DIR/$name")
+  # D-71 (plan) bans `IFS=$'\t' read` for any tab-delimited record that can
+  # carry an empty field — a tab is IFS whitespace, so bash collapses runs of
+  # them and every later field shifts left. This call is SAFE, and the reason
+  # is in ccd/ccrc-wrapper-shape rather than here: `_wrap_parse_shape` answers
+  # `ok` only once `target` matched WRAPPER_ID_RE and `suffix` matched
+  # WRAPPER_SUFFIX_SAFE_RE, neither of which accepts empty, so `secrets` — the
+  # LAST field — is the only one that can be, and a trailing empty field is
+  # exactly the case `read` gets right. (A `no` answer is `no` plus three empty
+  # fields; the cache below stores them all, and every later read of
+  # SHAPE_TARGET/SUFFIX/SECRETS is gated on `SHAPE_OK = ok` first — :269, :317,
+  # :321.) RELAXING EITHER REGEX, OR ADDING A FIFTH FIELD BEFORE
+  # `secrets`, breaks this silently: adopt would cache a secrets path taken
+  # from the wrong column and write it into the roster. Split by hand if that
+  # day comes, the way `_check_wrappers`'s roster reader does.
+  IFS=$'\t' read -r ok target suffix secrets < <(_wrap_parse_shape "$BIN_DIR/$name")
   SHAPE_OK["$name"]="$ok"
   SHAPE_TARGET["$name"]="$target"
   SHAPE_SUFFIX["$name"]="$suffix"
@@ -354,7 +296,7 @@ if [ ! -e "$UPSTREAM_PATH" ]; then
   echo "$PROG: $UPSTREAM_ID is exec'd by${UPSTREAM_VOTERS[$UPSTREAM_ID]} but $UPSTREAM_PATH does not exist" >&2
   exit 1
 fi
-if is_script "$UPSTREAM_PATH"; then
+if _wrap_is_script "$UPSTREAM_PATH"; then
   echo "$PROG: $UPSTREAM_ID is exec'd by${UPSTREAM_VOTERS[$UPSTREAM_ID]} as the upstream binary, but it is itself a script — refusing to guess an upstream account" >&2
   exit 1
 fi
@@ -436,20 +378,28 @@ fi
 # ── cross-check: report, never filter (design brief §"CLASSIFICATION
 #    RULES"). Three independent sources a real account usually also shows up
 #    in; disagreement is surfaced, not resolved by silently trusting one. ──
+#
+# The ARITHMETIC — who is in one list and not the other, in both directions —
+# is `_wrap_set_diff` in ccd/ccrc-wrapper-shape, because `ccrc doctor`'s
+# `_check_wrappers` is the same shape (a roster and a disk that must agree) and
+# was going to be a second copy of it. The WORDING stayed here: adopt is
+# talking about three sources that usually agree with its own discovery, which
+# is not the sentence doctor needs, and a single message template parameterised
+# far enough to say both would say neither well.
+_adopt_cross_note() {
+  case "$1" in
+    a-only) echo "$PROG: cross-check: $ADOPT_CC_LABEL mentions \"$2\", which adopt did not discover in $BIN_DIR" >&2 ;;
+    b-only) echo "$PROG: cross-check: adopt discovered \"$2\", which $ADOPT_CC_LABEL never mentions" >&2 ;;
+  esac
+}
+ADOPT_CC_LABEL=""
 cross_check() {
-  local label="$1"; shift
-  local -a have=("$@")
-  local x found
-  for x in "${have[@]}"; do
-    found=0
-    for id in "${IDS[@]}"; do [ "$id" = "$x" ] && { found=1; break; }; done
-    [ "$found" -eq 1 ] || echo "$PROG: cross-check: $label mentions \"$x\", which adopt did not discover in $BIN_DIR" >&2
-  done
-  for id in "${IDS[@]}"; do
-    found=0
-    for x in "${have[@]}"; do [ "$x" = "$id" ] && { found=1; break; }; done
-    [ "$found" -eq 1 ] || echo "$PROG: cross-check: adopt discovered \"$id\", which $label never mentions" >&2
-  done
+  ADOPT_CC_LABEL="$1"; shift
+  # Named `_adopt_have`, not `have`: `_wrap_set_diff` takes its two arrays by
+  # nameref, and a local whose name collides with one of its own would be a
+  # circular reference bash refuses to resolve.
+  local -a _adopt_have=("$@")
+  _wrap_set_diff _adopt_cross_note _adopt_have IDS
 }
 
 declare -a LIMITS_IDS=()
@@ -501,7 +451,7 @@ done
 #    makes "gen-accounts.mjs is happy" a faithful proxy for "parseRoster is
 #    happy" without re-deriving that proof here. ───────────────────────────
 if [ ! -f "$GEN_ACCOUNTS" ]; then
-  echo "$PROG: cannot self-validate: $GEN_ACCOUNTS is missing — is this a full ccrc-pwa checkout?" >&2
+  echo "$PROG: cannot self-validate: $GEN_ACCOUNTS is missing — it ships one directory up from this script, in a checkout and at ~/ccrc/deploy on a deployed box. Nothing was written." >&2
   exit 1
 fi
 TMP_JSON="$(mktemp)"
