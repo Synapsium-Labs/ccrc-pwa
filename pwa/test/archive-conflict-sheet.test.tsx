@@ -48,6 +48,37 @@ describe('runOpenRuns — the ONE reader of the run-open body', () => {
       runs: [{ id: 17, program: 'build4', wave: 2, waveOf: 3 }, { id: 'nope' }] });
     expect(runOpenRuns(err)).toEqual(RUNS);
   });
+
+  // `waveOf` was the ONE field of four this parser ASSERTED and did not
+  // MEASURE, inside a function whose entire job is validating an untrusted
+  // body: `ArchiveConflictRun` declares `waveOf: number | null`, so a member
+  // that merely omits it satisfied the predicate as `undefined` and reached
+  // `runPhrase`, which prints `wave 2/undefined` (its `=== null` test is the
+  // only branch that suppresses the suffix). `null` is the LEGITIMATE value —
+  // a wave with no known total — so the check must admit it, not require a
+  // number.
+  it('drops a member whose `waveOf` is neither a number nor null, and KEEPS null', () => {
+    const absent = new ApiError(409, { ok: false, error: 'run-open',
+      runs: [{ id: 17, program: 'build4', wave: 2 }] });
+    expect(runOpenRuns(absent)).toEqual([]);           // degrades, never "wave 2/undefined"
+
+    const wrongType = new ApiError(409, { ok: false, error: 'run-open',
+      runs: [{ id: 17, program: 'build4', wave: 2, waveOf: '3' }] });
+    expect(runOpenRuns(wrongType)).toEqual([]);
+
+    const nul = new ApiError(409, { ok: false, error: 'run-open',
+      runs: [{ id: 17, program: 'build4', wave: 2, waveOf: null }] });
+    expect(runOpenRuns(nul)).toEqual([{ id: 17, program: 'build4', wave: 2, waveOf: null }]);
+  });
+
+  it('never renders `undefined` as a wave total — the parser is what makes that unreachable', () => {
+    const err = new ApiError(409, { ok: false, error: 'run-open',
+      runs: [{ id: 17, program: 'build4', wave: 2 }] });
+    render(<ArchiveConflictSheet sessionId="demo-x" runs={runOpenRuns(err)} onClose={() => {}}
+                                 archive={vi.fn()} />);
+    expect(screen.queryByText(/undefined/)).toBeNull();
+    expect(screen.getByText('A run is still open on this workspace')).toBeTruthy();
+  });
 });
 
 describe('ArchiveConflictSheet', () => {
