@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=1392df6f2d9e4bb7c9685706f68bfdecc57f9bff5b40713088c4ab8051fd24e2
+# ccrc:generated 1 sha256=f9a0a827f0f034c348a6cbc45bdc9ba60e8ec22b5bd5e23094bda3a4419a6f32
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
 set -uo pipefail
@@ -2122,8 +2122,10 @@ cmd_ws_hold() {   # ccd ws-hold --session <id> --reason <text> — claim a
 }
 
 cmd_ws_release() {   # ccd ws-release --session <id> — end the program's claim.
-  # After this, the very next archiveMerged sweep may archive a merged
-  # workspace — the level re-arms itself, no edge to miss. Idempotent.
+  # A release ends THIS file's claim and nothing else. It does NOT necessarily
+  # re-arm the auto-archive sweep: since Build 8 Wave 2, `archiveMerged` also
+  # asks the server's coord.db whether an OPEN RUN still names this session,
+  # and skips if one does — an absent hold is no longer sufficient. Idempotent.
   [[ $# -eq 2 && $1 == --session ]] || die "usage: ccd ws-release --session <id>"
   local id=$2
   [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
