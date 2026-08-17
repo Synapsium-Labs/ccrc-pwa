@@ -154,9 +154,19 @@ export function createRunner(client: FleetClient): Runner {
       // know because the LINK failed (a dropped socket, a client-side wait
       // expiry). Not-adopting is the safe outcome for all three, and `killed:
       // false`/`signal: null` would be as wrong as their positives — absence is
-      // the honest answer, and it is the ONE shape `cutShort` answers `UNMEASURED`
-      // for (`lifecycle.ts`). Adding either field here would demote this from
-      // "unknown" to "measured, and it refused cleanly".
+      // the honest answer, and `cutShort` (`lifecycle.ts`) reads it as
+      // `UNMEASURED`.
+      //
+      // NOT "the ONE shape `cutShort` answers `UNMEASURED` for", which is what
+      // this comment claimed until 00fd376 widened that function. The SIGNAL
+      // half decides there now and `killed` only fast-paths an adopt, so every
+      // shape with an unmeasured `signal` that `killed` does not fast-path
+      // answers `UNMEASURED`: this one, which sends neither half, and the half-measured
+      // `killed: false, signal` absent that `asExecResult`'s independent
+      // spreads let a peer frame carry. The property this arm actually depends
+      // on was never uniqueness — it is that omitting BOTH lands on
+      // `UNMEASURED`, and it still does. Adding either field here would demote
+      // this from "unknown" to "measured, and it refused cleanly".
       return { code: 1, stdout: '', stderr: e instanceof Error ? e.message : String(e) };
     }
   };
