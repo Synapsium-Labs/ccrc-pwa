@@ -34,13 +34,24 @@
  *  writer's own lock on its own door. */
 const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
 
-/** `shared/roster.ts`'s `SUFFIX_SAFE_RE`, and `ccrc-wrapper-shape`'s
- *  `WRAPPER_SUFFIX_SAFE_RE` — the reader's copy is the one that matters here,
- *  because a suffix this accepts and the reader does not is a wrapper ccrc
- *  writes and then disowns. They are the same expression on purpose. */
+/** The FOURTH copy of this gate — the other three are `deploy/gen-accounts.mjs`'s
+ *  own `SUFFIX_SAFE_RE`, `ccrc-wrapper-shape`'s `WRAPPER_SUFFIX_SAFE_RE`, and
+ *  `shared/roster.ts`'s equivalent check, which is an UNNAMED inline literal
+ *  there (`parseAccount`, around line 403) rather than a constant of this
+ *  name — naming it "roster.ts's `SUFFIX_SAFE_RE`" would claim a constant
+ *  that does not exist. The reader's copy (`ccrc-wrapper-shape`'s) is the one
+ *  that matters most here, because a suffix this accepts and the reader does
+ *  not is a wrapper ccrc writes and then disowns. All four are the same
+ *  expression on purpose. */
 const SUFFIX_SAFE_RE = /^\.[A-Za-z0-9._-]+$/;
 
-/** `shared/roster.ts`'s `SECRETS_SAFE_RE` (Task 1). */
+/** The THIRD copy of this gate — the other two are `shared/roster.ts`'s own
+ *  `SECRETS_SAFE_RE` (Task 1) and `deploy/gen-accounts.mjs`'s own
+ *  `SECRETS_SAFE_RE`, both genuinely named constants (unlike `SUFFIX_SAFE_RE`'s
+ *  roster.ts copy above). `ccrc-wrapper-shape` carries no charset copy of its
+ *  own to name here: it never validates the secrets path's character set at
+ *  all, only reconstructs the secrets line from a captured prefix/suffix and
+ *  compares strings whole (see its own header). */
 const SECRETS_SAFE_RE = /^[A-Za-z0-9._/-]+$/;
 
 export class WrapperInvalid extends Error {}
@@ -86,11 +97,31 @@ export function generateWrapperBody(account, upstreamId) {
       'Fix the id of the account whose exec.kind is "upstream" in ~/.ccrc/accounts.json.');
   }
   const suffix = account.configDirSuffix;
-  if (typeof suffix !== 'string' || suffix === '.' || !SUFFIX_SAFE_RE.test(suffix)) {
+  // `SUFFIX_SAFE_RE`'s character class allows ".", so it accepts ".." exactly
+  // as happily as it accepts ".claude" — a safe CHARACTER SET and a safe
+  // VALUE are different questions, and this field's own regex only answers
+  // the first one. `suffix` can never contain "/" (the class excludes it
+  // too), so it is always exactly ONE path segment, and the only segment
+  // value the OS treats specially when resolving `$HOME/<suffix>` is the
+  // literal string ".." (parent directory) — same exact-value shape as "."
+  // just above (current directory, i.e. $HOME itself). A LONGER string that
+  // merely CONTAINS ".." as a substring — "...", "..foo", ".foo..bar" — is an
+  // ordinary, if odd-looking, one-segment directory name with no such
+  // meaning, so this checks the exact segment rather than `.includes('..')`
+  // the way `shared/roster.ts` and `deploy/gen-accounts.mjs` do for this same
+  // field. That broader check earns its keep on `secretsFile` below, which
+  // CAN contain "/" and therefore CAN have an embedded ".." segment partway
+  // through a longer path — `configDirSuffix` cannot, so a substring check
+  // here would only reject legitimate dotfile-style names for no safety gain.
+  if (
+    typeof suffix !== 'string' || suffix === '.' || suffix === '..'
+    || !SUFFIX_SAFE_RE.test(suffix)
+  ) {
     bad(`account "${id}" has a configDirSuffix ${JSON.stringify(suffix)} that cannot be written `
       + 'into a double-quoted bash string.',
       `Set configDirSuffix for "${id}" to a dot-prefixed name under $HOME (e.g. ".${id}") using `
-      + 'only letters, digits, ".", "-" and "_".');
+      + 'only letters, digits, ".", "-" and "_", and never exactly "." or ".." (which resolve to '
+      + "$HOME itself or $HOME's parent directory).");
   }
   const secrets = account.secretsFile;
   if (secrets !== undefined) {

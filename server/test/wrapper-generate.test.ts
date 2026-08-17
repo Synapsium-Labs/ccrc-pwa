@@ -51,6 +51,32 @@ describe('generateWrapperBody', () => {
       .toThrow(/NOT-AN-ID/);
   });
 
+  it('refuses a configDirSuffix that resolves to $HOME or its parent, but not one that merely contains dots', () => {
+    // "." collapses to $HOME itself; ".." escapes to $HOME's PARENT — both
+    // are exact-SEGMENT collisions, not "contains a dot" collisions.
+    // `SUFFIX_SAFE_RE` alone does not catch ".." (its character class allows
+    // "."), which is exactly the gap a reviewer found: `configDirSuffix: '..'`
+    // used to pass straight through and land `CLAUDE_CONFIG_DIR` on $HOME's
+    // parent directory, and the real `_wrap_parse_shape` accepted that file
+    // too.
+    for (const hostile of ['.', '..']) {
+      expect(() => generateWrapperBody({ ...NOSECRETS, configDirSuffix: hostile }, 'claude'))
+        .toThrow(WrapperInvalid);
+    }
+    // "..." and "..foo" only CONTAIN ".." as a substring — they are ordinary,
+    // if odd-looking, one-segment directory names (`configDirSuffix` can
+    // never contain "/", so a suffix is always exactly one segment, and only
+    // the literal segment ".." means "go up" to the OS). Neither may be
+    // refused: a broader `.includes('..')` guard — the one `shared/roster.ts`
+    // and `deploy/gen-accounts.mjs` carry on this same field — would wrongly
+    // reject both, taking away a legitimate dotfile-style name for no safety
+    // gain.
+    for (const legal of ['...', '..foo']) {
+      const text = generateWrapperBody({ ...NOSECRETS, configDirSuffix: legal }, 'claude');
+      expect(text).toContain(`export CLAUDE_CONFIG_DIR="$HOME/${legal}"`);
+    }
+  });
+
   it('never escapes its way past the reader', () => {
     // The alternative to refusing is escaping, and escaping is the bug: a
     // backslash-escaped suffix produces a line `_wrap_parse_shape` rejects, so
