@@ -476,6 +476,7 @@ both targets:
 bash deploy/deploy.sh agent <host>   # seeds ~/.ccrc/accounts.json if absent, then generates + ships accounts.sh
 CCRC_ACCOUNTS_JSON=deploy/accounts.default.json bash deploy/deploy.sh   # seed a fresh, unrelated install instead
 bash ccd/ccrc-adopt                  # a HAND-BUILT box: rediscover its accounts from ~/.local/bin and write accounts.json
+ccrc wrappers                        # the other direction: roster → ~/.local/bin/<id>, writing only what ccrc marked as its own
 ```
 
 - `deploy/accounts.migration.json` (the default) is this fleet's five accounts
@@ -491,6 +492,18 @@ bash ccd/ccrc-adopt                  # a HAND-BUILT box: rediscover its accounts
   (`--force` to overwrite, `--out` to write elsewhere). It writes nothing else:
   no wrappers, no units, no hooks. There is no installed `ccrc` binary yet —
   run it from the checkout, as `bash ccd/ccrc-adopt`.
+- `ccrc wrappers` goes roster → disk, and is the reason `accounts.json` now
+  PRODUCES `~/.local/bin/<id>` rather than merely describing it. **It writes
+  only the wrappers ccrc marked as its own** (`shared/mark.mjs`'s provenance
+  marker) **and refuses everything else, with a remedy** — a hand-edited
+  wrapper, somebody's bespoke launcher, a file it could not read. It backs up
+  before every overwrite (`<id>.pre-ccrc-<UTC>`, a name no account id can
+  match) and writes atomically. `upstream` and `external` accounts are never
+  written, backed up, moved or removed, under any flag. `--dry-run` reports
+  without touching anything; `--adopt` takes over a hand-written wrapper that
+  already says exactly what the roster says; `--force` overwrites ccrc's own
+  edited files. Orphans — a marked wrapper the roster no longer names — are
+  reported and never removed.
 - `CCRC_ACCOUNTS` (in `~/.ccrc/ccrc.env`) overrides where the **server** reads
   the roster from. `ccd` has no such override on purpose: it derives the path
   from `HOME` alone, so a stray `Environment=` cannot run a live box against
@@ -540,10 +553,12 @@ bash ccd/ccrc-adopt                  # a HAND-BUILT box: rediscover its accounts
 
 #### Known limitations
 
-- **`ccrc install` does not exist yet.** Nothing turns a roster entry into a
-  wrapper script, a config dir or a systemd unit; the roster describes a box
-  that was provisioned by hand or by an earlier deploy. `ccrc-adopt` is the
-  reverse direction only.
+- **`ccrc install` does not exist yet.** `ccrc wrappers` turns a roster entry
+  into a **wrapper script**, and that is as far as it goes: nothing yet turns
+  one into a config dir or a systemd unit, and no deploy runs the converger
+  (shipping a server build must not mutate `~/.local/bin` on a live fleet host
+  as a side effect). For everything but the wrapper, the roster still describes
+  a box that was provisioned by hand or by an earlier deploy.
 
 **`/accounts`** (a fourth branch of the route ternary, reached by tapping the
 compact `AccountsStrip` mounted in the desktop top bar and the mobile fleet

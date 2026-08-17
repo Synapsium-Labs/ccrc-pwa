@@ -120,7 +120,7 @@ BOX_HEALTH_WHY=""
 
 usage() {
   cat <<EOF
-usage: $PROG {doctor|status|adopt|version}
+usage: $PROG {doctor|status|adopt|wrappers|version}
 
 The lifecycle CLI for a Claude Code fleet box — installs, updates and
 diagnoses a box, as a sibling to ccd (which drives sessions once one is
@@ -134,6 +134,10 @@ already running).
             whether the two boxes agree. Read-only; always exit 0
   adopt     rediscover this box's accounts from \$HOME/.local/bin and write
             ~/.ccrc/accounts.json (runs ccrc-adopt; pass --out/--force to it)
+  wrappers  write \$HOME/.local/bin/<id> for every account the roster marks
+            "generated", and REFUSE every file ccrc did not write itself.
+            Backs up before any overwrite; never touches an upstream or
+            external account. [--dry-run] [--adopt] [--force]
 
   -h, --help   print this message and exit 0
 
@@ -921,6 +925,381 @@ cmd_doctor() {
     "$ran" "$skipped" "$((pass + warn + fail))" "$pass" "$warn" "$fail"
   [[ "$fail" -eq 0 ]] || return 1
 }
+# ── cmd_wrappers — THE ROSTER WRITES THE WRAPPERS ─────────────────────────
+# Stage 2c. `~/.ccrc/accounts.json` stops being a DESCRIPTION of what is in
+# `$HOME/.local/bin` and becomes the thing that PRODUCES it. This verb converges
+# the two, one account at a time, and refuses — loudly, with a remedy — for
+# every file it did not write itself.
+#
+# ── THE ONE ABSOLUTE RULE ─────────────────────────────────────────────────
+# `upstream` and `external` accounts are NEVER written, backed up, moved or
+# removed, by this verb, under any flag. `upstream` is the ~304 MB Claude Code
+# ELF; `external` is somebody else's hand-written launcher (`gpt` on the
+# reference box is 142 lines of it). Both would be destroyed by one careless
+# write and neither can be regenerated from the roster. That rule is
+# STRUCTURAL here, not a test's opinion, and it is held by three things at once:
+#
+#   1. This function iterates the MANIFEST's `wrapper` records and nothing else,
+#      and `deploy/gen-wrappers.mjs` emits a `wrapper` record only for an
+#      account whose `exec.kind` is "generated" (plan D5: node stages, bash
+#      mutates). An upstream or external id therefore never reaches the loop.
+#   2. Every path this function writes to is built as `$WRAPPER_BIN_DIR/$id`
+#      from an id that was first matched against `WRAPPER_ID_RE`. There is no
+#      other write, and no removal at all beyond this function's own temp file.
+#   3. Before installing, the STAGED text is read back through
+#      `_wrap_parse_shape` and refused if its exec target is the id being
+#      installed. A wrapper at `~/.local/bin/claude` that ends
+#      `exec "$HOME/.local/bin/claude" "$@"` is a fork bomb, and it is exactly
+#      what a generator talked into staging the upstream account would produce.
+#
+# ── ITERATE THE MANIFEST, NEVER THE STAGING DIRECTORY ─────────────────────
+# `deploy/gen-wrappers.mjs` writes only the ids it staged and never reads the
+# directory back, so a stray file left in the staging dir by anything else
+# survives unreported (measured in the Task 5 review; its header states the
+# same rule from the other side). A converger driven by `readdir` of the
+# staging dir would install that stale entry under an account id the CURRENT
+# roster no longer declares. The manifest is the complete and authoritative
+# list of what this run staged and for which ids; a directory listing is not.
+#
+# ── THE DECISION TABLE (plan D3), one branch per state, no collapses ──────
+#   absent                          -> write
+#   ccrc-unmodified, text == staged -> converged, nothing touched
+#   ccrc-unmodified, text != staged -> rewrite (backup first)
+#   ccrc-edited                     -> REFUSE; --force rewrites (backup first)
+#   foreign, EQUIVALENT (D4)        -> REFUSE, reported as adoptable;
+#                                      --adopt or --force rewrites (backup)
+#   foreign, not equivalent         -> REFUSE; only --force rewrites (backup)
+#   unreadable                      -> REFUSE under every flag
+#
+# `unreadable` refuses even under `--force` because "I could not read it" is not
+# "I know what it is" — the one refusal no flag can talk out of.
+#
+# THE REMEDY FOR A NON-EQUIVALENT `foreign` FILE MUST NOT MENTION `--force`,
+# and that is a guard with a test of its own, not a matter of taste. Its remedy
+# is "move it aside, or set exec.kind to external in the roster". An operator
+# working down a list of refusals types the next thing the tool printed;
+# printing `--force` beside a file ccrc has just said it does not understand is
+# how a 142-line bespoke launcher gets destroyed by someone doing as they were
+# told. `--force` is real, it is documented in `--help`, and it is deliberately
+# absent from THAT remedy.
+#
+# Exit 0 = converged and nothing was refused. 1 = something was refused, or a
+# write failed. 2 = a usage error (this file's standing table).
+cmd_wrappers() {
+  local dry=0 adopt=0 force=0
+  # `ccrc-adopt:95-103`'s loop, minus the value-taking flags it needs and this
+  # verb does not. Unlike `version`, this verb HAS flags of its own — three, and
+  # each one changes what it is willing to overwrite — so `-h`/`--help` prints
+  # the usage that explains them rather than being the usage error it is for a
+  # verb with nothing to explain (see `cmd_version`'s header for that decision).
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --dry-run) dry=1; shift ;;
+      --adopt)   adopt=1; shift ;;
+      --force)   force=1; shift ;;
+      -h|--help) usage; exit 0 ;;
+      *) _ccrc_usage_die "$1" ;;
+    esac
+  done
+
+  # The shape contract, sourced rather than restated — `ccrc-adopt:61-79`'s
+  # reasoning applies unchanged, and this verb is the one that most needs it:
+  # it is the WRITER, and the writer judging "is this file mine" by a second,
+  # looser copy of the reader's rules is how a generator comes to disown its own
+  # output. Same "is this a complete ccrc install?" wording `cmd_adopt` uses.
+  local shape="$CCRC_HERE/ccrc-wrapper-shape"
+  [[ -f "$shape" ]] \
+    || _ccrc_die "the wrapper shape contract is missing: $shape — is this a complete ccrc install?"
+  # shellcheck source=ccrc-wrapper-shape
+  . "$shape" \
+    || _ccrc_die "the wrapper shape contract failed to load: $shape"
+
+  # One directory up from THIS FILE, exactly as `ccrc-adopt` resolves
+  # `gen-accounts.mjs` (:109-125): true in a checkout and at `~/ccrc/deploy` on
+  # a deployed box, because both deploy lanes rsync `deploy/` into `~/ccrc/`.
+  local gen="$CCRC_HERE/../deploy/gen-wrappers.mjs"
+  [[ -f "$gen" ]] \
+    || _ccrc_die "the wrapper generator is missing: $gen — it ships one directory up from this script (at ~/ccrc/deploy on a deployed box); is this a complete ccrc install?"
+
+  # BY NAME, and before anything is created or written. Without this, a box with
+  # no node fails somewhere inside a command substitution and reports a manifest
+  # it could not read — "a missing dependency" and "a corrupt manifest" are two
+  # conditions an operator acts on completely differently, which is the
+  # overloaded-seam mistake this file's own header bans (see `cmd_version`'s jq
+  # branch for the same refusal in the same shape).
+  command -v node >/dev/null 2>&1 \
+    || _ccrc_die "node is required by 'ccrc wrappers' — it runs $gen to read the roster and stage each wrapper — but is not on PATH. Install Node (this repo's floor is in server/package.json's \"engines\") or put it on PATH, then re-run."
+
+  # A FRESH BOX HAS NO ~/.local/bin, AND THAT IS NOT AN ERROR: this verb is the
+  # installer, so a missing bin dir is a box at the start of its life rather
+  # than a box that is broken. `-m 0755` applies to the FINAL directory only
+  # (POSIX `mkdir -p`), which is the one whose mode matters because it goes on
+  # PATH; an EXISTING directory is left exactly as the operator has it.
+  # shellcheck disable=SC2174  # -m applying to the deepest directory ONLY is
+  # the intent, not an oversight: it is the one that goes on PATH.
+  mkdir -p -m 0755 "$WRAPPER_BIN_DIR" \
+    || _ccrc_die "cannot create $WRAPPER_BIN_DIR — nothing was written"
+
+  local staging
+  staging="$(mktemp -d)" \
+    || _ccrc_die "cannot create a staging directory (mktemp -d failed) — nothing was written"
+  # ARMED BEFORE ANYTHING IS WRITTEN INTO IT, and with the path expanded HERE
+  # rather than at exit: `staging` is a function-local, so a `trap 'rm -rf
+  # "$staging"' EXIT` would fire under `set -u` against an unbound variable on
+  # every path that returns normally, leaving the directory behind. This suite's
+  # own fixture helper (server/test/tmpHelpers.ts) exists because 7,830 leaked
+  # temp directories were once measured on this box; a leak in the shipped tool
+  # is the same defect with no afterAll underneath it.
+  # shellcheck disable=SC2064
+  trap "rm -rf -- $(printf '%q' "$staging")" EXIT
+
+  # STDOUT is the manifest; STDERR is deliberately NOT captured, so node's own
+  # diagnosis reaches the operator verbatim. For an invalid roster that
+  # diagnosis includes a `gen-wrappers: remedy: …` line naming the fix, and that
+  # line is the useful message — swallowing it to re-word the failure here would
+  # replace a fix with a shrug.
+  local manifest rc=0
+  manifest="$(node "$gen" "$HOME/.ccrc/accounts.json" "$WRAPPER_BIN_DIR" "$staging")" || rc=$?
+  [ "$rc" -eq 0 ] \
+    || _ccrc_die "$gen exited $rc without a usable manifest, so nothing was written — its own message above says why"
+
+  # ── READING THE MANIFEST ────────────────────────────────────────────────
+  # D-71 bans `IFS=$'\t' read` for any tab-delimited record that can carry an
+  # EMPTY field: a tab is IFS whitespace, so bash collapses a run of them and
+  # every field after the empty one shifts left — silently, with no parse error
+  # to notice. This call is SAFE, and the reason lives in the producer rather
+  # than here (plan D6, restated in `deploy/gen-wrappers.mjs`'s header): every
+  # field of every record is NON-EMPTY BY CONSTRUCTION — `id` matched `ID_RE`,
+  # and the record type, `classify` and `equal` are literals drawn from small
+  # closed sets. The trailing vars are the only ones that come back empty, on
+  # the shorter record types, and a trailing empty field is exactly the case
+  # `read` gets right.
+  #
+  # IF A FUTURE FIELD CAN EVER BE EMPTY — an optional annotation, say — DO NOT
+  # keep this idiom. Split the line by hand on literal tabs, the way
+  # `_check_wrappers`'s roster reader does (`ccd/ccrc-doctor-checks`). Keeping
+  # `IFS=$'\t' read` with a possibly-empty field is how a reader starts reading
+  # the wrong column without ever producing an error — here that would mean
+  # taking a wrapper's `classify` out of the `equal` column and overwriting a
+  # file on the strength of it.
+  #
+  # FIVE variables, not four: the `summary` record carries four fields after its
+  # type. Reading it into three would hand the last variable "1<TAB>1" — the
+  # remainder, tabs and all — and the record-count assertion below would then be
+  # comparing against a string that is not a number.
+  local kind a b c d
+  local sum_total="" sum_gen="" sum_up="" sum_ext="" saw_summary=0
+  local -a w_id=() w_class=() w_equal=() orphans=()
+  while IFS=$'\t' read -r kind a b c d; do
+    case "$kind" in
+      '') continue ;;
+      summary) saw_summary=1; sum_total="$a"; sum_gen="$b"; sum_up="$c"; sum_ext="$d" ;;
+      wrapper) w_id+=("$a"); w_class+=("$b"); w_equal+=("$c") ;;
+      orphan)  orphans+=("$a") ;;
+      *) _ccrc_die "the manifest from $gen carries a record type this verb does not know — this is a bug in ccrc, not a fact about your box, and nothing was written" ;;
+    esac
+  done <<< "$manifest"
+
+  [ "$saw_summary" -eq 1 ] \
+    || _ccrc_die "the manifest from $gen has no summary line, so there is nothing to check the wrapper records against — nothing was written"
+  [[ "$sum_gen" =~ ^[0-9]+$ ]] \
+    || _ccrc_die "the manifest from $gen has a summary whose generated count is not a number — nothing was written"
+  # THE TRUNCATION GATE. bash cannot tell a complete manifest from a half-
+  # delivered one by looking at what arrived (`deploy/gen-wrappers.mjs`'s header
+  # says so from the writer's end, which is why it assembles the whole thing
+  # before writing a byte). This is the reader's half of that contract: a run
+  # that installed the records it happened to receive would converge half a box
+  # and report success.
+  [ "${#w_id[@]}" -eq "$sum_gen" ] \
+    || _ccrc_die "the manifest from $gen is truncated: its summary claims $sum_gen generated account(s) and it carries ${#w_id[@]} wrapper record(s). Nothing was written."
+
+  # ONE timestamp for the whole run, so every backup a single run writes reads
+  # as one event. (Two convergences inside the same second would reuse the name;
+  # that needs a file to be edited between two runs less than a second apart,
+  # and the alternative — refusing to converge because the clock has not
+  # ticked — is worse.)
+  local stamp
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)" \
+    || _ccrc_die "cannot read the clock (date -u failed), and a backup needs a name — nothing was written"
+
+  local i id klass eq action why remedy backup tmp equivalent
+  local sok starget ssuffix ssecrets dok dtarget dsuffix dsecrets
+  local n_written=0 n_converged=0 n_refused=0
+  for ((i = 0; i < ${#w_id[@]}; i++)); do
+    id="${w_id[$i]}"; klass="${w_class[$i]}"; eq="${w_equal[$i]}"
+
+    # The id off the manifest is about to become a FILENAME under
+    # $HOME/.local/bin. The gate is on the ID, before any path is built from it,
+    # which is what makes it hold for a traversing id (`../../.bashrc`) as well
+    # as for a merely illegal one (`claude2.bak`) — a check on the resulting
+    # path would have to enumerate the ways a path can escape.
+    [[ "$id" =~ $WRAPPER_ID_RE ]] \
+      || _ccrc_die "the manifest from $gen names \"$id\", which is not a legal account id, and this verb will not build a path under $WRAPPER_BIN_DIR out of it — this is a bug in ccrc, not a fact about your box, and nothing was written"
+    [ -f "$staging/$id" ] \
+      || _ccrc_die "the manifest from $gen names \"$id\" but staged no text for it — this is a bug in ccrc, not a fact about your box, and nothing was written"
+
+    # THE STAGED TEXT IS READ BACK THROUGH THE READER, on every box, on every
+    # run. `server/test/wrapper-roundtrip.test.ts` pins that the emitter and
+    # `_wrap_parse_shape` agree; this is the same check made on the actual bytes
+    # about to be installed, which is the only place it can catch a file that
+    # was staged, or truncated, by something other than this pipeline.
+    IFS=$'\t' read -r sok starget ssuffix ssecrets < <(_wrap_parse_shape "$staging/$id")
+    [ "$sok" = ok ] \
+      || _ccrc_die "the text staged for \"$id\" is not the generated wrapper shape, so this verb will not install it — this is a bug in ccrc, not a fact about your box, and nothing was written"
+    # Rule 1's third lock (see the header). A wrapper whose exec target is its
+    # own id would exec itself forever; it is also precisely the file a
+    # generator talked into writing the UPSTREAM account would stage.
+    [ "$starget" != "$id" ] \
+      || _ccrc_die "refusing to install \"$id\": the wrapper the roster produced would exec \$HOME/.local/bin/$id — itself. That is an upstream account's own name, and ccrc never writes an upstream or external account. Nothing was written."
+
+    action=""; why=""; remedy=""; backup=""
+    case "$klass" in
+      absent)
+        action="write"; why="nothing was at that path" ;;
+      ccrc-unmodified)
+        if [ "$eq" = yes ]; then
+          action="none"
+        else
+          action="rewrite"; why="ccrc wrote it, nothing has edited it since, and the roster has changed"
+        fi ;;
+      ccrc-edited)
+        if [ "$force" -eq 1 ]; then
+          action="rewrite"; why="ccrc wrote it and it has been edited since (--force)"
+        else
+          action="refuse"
+          why="ccrc wrote it and something has edited it since"
+          remedy="keep the edit by setting exec.kind to \"external\" for \"$id\" in $HOME/.ccrc/accounts.json, or discard it and take the roster's version with: ccrc wrappers --force"
+        fi ;;
+      foreign)
+        # D4: EQUIVALENCE IS JUDGED BY THE READER, ON BOTH SIDES. The on-disk
+        # file and the staged file both go through `_wrap_parse_shape`, and the
+        # two (target, suffix, secrets) triples are compared. It deliberately
+        # does NOT compare the on-disk parse against roster fields: one reader
+        # answering for both sides means there is no second opinion to drift,
+        # and the staged file is what would actually be installed, which is the
+        # thing the operator is being asked about. A `no` from either side —
+        # a file the reader cannot make sense of at all — is never equivalent.
+        equivalent=0
+        IFS=$'\t' read -r dok dtarget dsuffix dsecrets < <(_wrap_parse_shape "$WRAPPER_BIN_DIR/$id")
+        if [ "$dok" = ok ] && [ "$dtarget" = "$starget" ] \
+           && [ "$dsuffix" = "$ssuffix" ] && [ "$dsecrets" = "$ssecrets" ]; then
+          equivalent=1
+        fi
+        if [ "$equivalent" -eq 1 ]; then
+          if [ "$adopt" -eq 1 ] || [ "$force" -eq 1 ]; then
+            action="rewrite"; why="ccrc did not write it, but it says exactly what ccrc would say — adopted"
+          else
+            action="refuse"
+            why="ccrc did not write it, but it says exactly what ccrc would say (same target, same config dir, same secrets file)"
+            remedy="take it over with: ccrc wrappers --adopt — the file you have now is backed up first"
+          fi
+        else
+          if [ "$force" -eq 1 ]; then
+            action="rewrite"; why="ccrc did not write it and it says something else (--force)"
+          else
+            action="refuse"
+            why="ccrc did not write it, and it is not the wrapper this roster describes"
+            # NO `--force` IN THIS REMEDY, EVER — see the header. This is the
+            # branch that holds somebody's bespoke launcher.
+            remedy="move it aside (mv \"$WRAPPER_BIN_DIR/$id\" \"$WRAPPER_BIN_DIR/$id.saved-$stamp\") and re-run, or set exec.kind to \"external\" for \"$id\" in $HOME/.ccrc/accounts.json so ccrc stops claiming that name"
+          fi
+        fi ;;
+      unreadable)
+        # No flag reaches this branch. "I could not read it" is not "I know what
+        # it is", and every other refusal here is a judgement about a file this
+        # process has actually read.
+        action="refuse"
+        why="something is at that path and this process could not read it"
+        remedy="make it readable (ls -l \"$WRAPPER_BIN_DIR/$id\") and re-run, or move it aside. No flag overrides this one." ;;
+      *)
+        action="refuse"
+        why="$gen classified it as \"$klass\", which this verb does not know"
+        remedy="this is a bug in ccrc, not a fact about your box — $gen and cmd_wrappers in $CCRC_HERE/ccrc have drifted" ;;
+    esac
+
+    case "$action" in
+      none)
+        n_converged=$((n_converged + 1))
+        printf 'CONVERGED %s: %s is already exactly what the roster says\n' "$id" "$WRAPPER_BIN_DIR/$id"
+        continue ;;
+      refuse)
+        n_refused=$((n_refused + 1))
+        # The verdict line and its remedy are two halves of ONE result and both
+        # go to STDOUT, adjacent — doctor's contract (this file's header, and
+        # `server/test/ccrc-doctor.test.ts` pins the same adjacency there).
+        printf 'REFUSE %s: %s — %s\n' "$id" "$WRAPPER_BIN_DIR/$id" "$why"
+        printf '  remedy: %s\n' "$remedy"
+        continue ;;
+    esac
+
+    [ "$action" = rewrite ] && backup="$id.pre-ccrc-$stamp"
+    if [ "$dry" -eq 1 ]; then
+      n_written=$((n_written + 1))
+      printf 'WOULD-%s %s: %s — %s%s\n' "${action^^}" "$id" "$WRAPPER_BIN_DIR/$id" "$why" \
+        "${backup:+ (the file there now would be copied to $backup first)}"
+      continue
+    fi
+
+    if [ -n "$backup" ]; then
+      # BEFORE the overwrite, always, and named so it can NEVER be mistaken for
+      # an account. `WRAPPER_ID_RE` is `^[a-z][a-z0-9-]{0,31}$` — a "." can
+      # never appear in a legal id — so `<id>.pre-ccrc-<UTC>` is invisible to
+      # `ccrc adopt`'s candidate scan and to `ccrc doctor`'s `_check_wrappers`
+      # alike. That is LOAD-BEARING, not tidiness: a backup that looked like an
+      # id would be adopted as a second account fighting the first over one
+      # CLAUDE_CONFIG_DIR, and doctor would report a wrapper the roster never
+      # declared. (It is the same "." that drops the `ccd.bak-<date>` and
+      # `claude2.bak-<date>` files a real box accumulates — see
+      # `ccd/ccrc-wrapper-shape:63-67`.)
+      # `cp -p` so the backup keeps the mode and timestamps of what it replaced.
+      cp -p -- "$WRAPPER_BIN_DIR/$id" "$WRAPPER_BIN_DIR/$backup" \
+        || _ccrc_die "could not back up $WRAPPER_BIN_DIR/$id to $WRAPPER_BIN_DIR/$backup, so nothing was overwritten"
+    fi
+
+    # ATOMIC, in `deploy/deploy.sh`'s `install_atomic` shape (:50-58): the
+    # staged text lands beside the target under a temp name, gets its mode, and
+    # is RENAMED into place. Two things follow, and both matter on a live box:
+    # a reader never sees a half-written wrapper (a half-written wrapper is an
+    # account that cannot start a session), and the rename needs write
+    # permission on the DIRECTORY rather than on the file — so a wrapper an
+    # operator has chmod-ed read-only is still converged instead of failing
+    # halfway. The temp name begins with a "." for the same reason the backup
+    # name carries one: it can never match `WRAPPER_ID_RE`, so a leftover from
+    # an interrupted run is never read as an account.
+    tmp="$WRAPPER_BIN_DIR/.$id.tmp.$$"
+    if ! { cp -- "$staging/$id" "$tmp" && chmod 0755 "$tmp" \
+             && mv -f -- "$tmp" "$WRAPPER_BIN_DIR/$id"; }; then
+      rm -f -- "$tmp"
+      _ccrc_die "could not install $WRAPPER_BIN_DIR/$id — nothing at that path was replaced${backup:+ (the copy at $WRAPPER_BIN_DIR/$backup is the file you already had)}"
+    fi
+    n_written=$((n_written + 1))
+    printf '%s %s: %s — %s%s\n' "${action^^}" "$id" "$WRAPPER_BIN_DIR/$id" "$why" \
+      "${backup:+ (the file that was there is now $backup)}"
+  done
+
+  # ORPHANS ARE REPORTED AND NEVER REMOVED. A file carrying ccrc's marker whose
+  # id no account claims is a fact about the box, not a refusal — nothing about
+  # it stopped this run converging — so it does not touch the exit code.
+  # Removal belongs to `ccrc uninstall` (Stage 4), which does not exist; a
+  # converger that deleted files as a side effect of writing them would be a
+  # verb an operator could not run without reading its source first.
+  local o
+  for o in ${orphans[@]+"${orphans[@]}"}; do
+    printf 'ORPHAN %s: %s carries ccrc%s marker and no account in the roster claims it — reported, never removed\n' \
+      "$o" "$WRAPPER_BIN_DIR/$o" "'s"
+    printf '  remedy: add an account "%s" to %s if it should exist, or remove %s by hand once you are sure nothing runs it\n' \
+      "$o" "$HOME/.ccrc/accounts.json" "$WRAPPER_BIN_DIR/$o"
+  done
+
+  printf 'summary: %s account(s) in %s — %s generated, %s upstream, %s external (upstream and external are never written); %s %s, %s converged, %s refused, %s orphaned\n' \
+    "$sum_total" "$HOME/.ccrc/accounts.json" "$sum_gen" "$sum_up" "$sum_ext" \
+    "$n_written" "$([ "$dry" -eq 1 ] && printf 'would be written' || printf 'written')" \
+    "$n_converged" "$n_refused" "${#orphans[@]}"
+
+  [ "$n_refused" -eq 0 ] || return 1
+  return 0
+}
+
 # cmd_adopt — rediscover this box's accounts from disk. The work is entirely
 # `ccd/ccrc-adopt`'s, and this verb is how it becomes reachable: adopt is a
 # tool that until now was installed by nothing, reached the fleet host only
@@ -992,6 +1371,7 @@ case "$VERB" in
   doctor)  cmd_doctor "$@" ;;
   status)  cmd_status "$@" ;;
   adopt)   cmd_adopt "$@" ;;
+  wrappers) cmd_wrappers "$@" ;;
   *) _ccrc_usage_die "$VERB" ;;
 esac
 
