@@ -170,14 +170,26 @@ export function SessionLine({
   // as a member it is not and never as silence. `unrecognised` would be the
   // wrong member to borrow — it means the SERVER could not name ccd's rc, one
   // layer in from "this CLIENT cannot name the server's word".
+  //
+  // ABSENCE IS ASKED FOR BY NAME, and `?? unnameableVerdict(...)` could not ask:
+  // it fires on `undefined` (no row — the case above) AND on a row whose word is
+  // deliberately `null`. `SPAWN_WORD` is typed `string | null` precisely so a
+  // member can be SILENT, and its own docstring justifies `ready -> null` on
+  // those grounds — so the next member added with a `null` word would have
+  // rendered `? <token>` instead of nothing, which is this same collapse one
+  // level down. `Object.hasOwn` separates the two, and it is also what lets the
+  // `ready` case go through the table rather than being special-cased in this
+  // condition — one definition of "a healthy spawn says nothing", in the table
+  // that holds every other verdict's word.
   const spawnState = session.spawnState ?? null;
   const spawnWord: string | null =
-    spawnState !== null && spawnState !== 'ready'
+    spawnState === null
+      ? null
       // The cast is the honest one: TS believes this lookup is total, and the
       // whole point is that at runtime it is not.
-      ? (SPAWN_WORD as Record<string, string | null | undefined>)[spawnState as string]
-        ?? unnameableVerdict(spawnState)
-      : null;
+      : Object.hasOwn(SPAWN_WORD, spawnState as string)
+        ? (SPAWN_WORD as Record<string, string | null>)[spawnState as string] ?? null
+        : unnameableVerdict(spawnState);
   const spawnChip: string | null =
     dead ? null
     : spawnWord !== null ? spawnWord

@@ -657,7 +657,14 @@ describe('the spawn chip (§1.6b)', () => {
     expect(chip()?.getAttribute('data-spawn')).toBe('unstarted');
   });
 
-  it('says nothing for a clean spawn', () => {
+  it('says nothing for a clean spawn — a member whose WORD is null, not a missing member', () => {
+    // The two are different facts and the lookup has to ask which. `SPAWN_WORD`
+    // is typed `string | null` so a member can be deliberately silent (`ready`
+    // is today's only one, and its docstring says why); a `?? unnameableVerdict`
+    // fallback fires on BOTH that and a member this bundle has no row for, so
+    // the next silent member would render `? <token>` — the very collapse §1.7
+    // undid one level up. `ready` reaching the table at all is the pin: with
+    // the presence check gone it renders `? ready`.
     render(<SessionLine session={s({ spawnState: 'ready', started: true })}
                         onOpen={() => {}} onActions={() => {}} />);
     expect(chip()).toBeNull();
