@@ -120,3 +120,94 @@ describe('SwapSheet says the move is temporary and names the home account', () =
     }
   });
 });
+
+// REVIEW FINDING, WAVE 3: the two halves of this wave contradicted each other.
+// §3.4 (above) had the sheet promise, unconditionally, that ccrc returns the
+// session home "as soon as {home} has room again". §3.3 — EARLIER IN THE SAME
+// WAVE, `ccd`'s `_auto_swap_check` — made the AFFINITY arm return early on
+// `[[ -e "$REG/$id.hold" ]]`, so for a HELD session nothing brings it home
+// until the hold clears. §3.4's whole point was that the sheet should stop
+// lying about what a swap does; it started lying a new way instead.
+//
+// The deciding fact is HOLD-FILE PRESENCE, and the sheet can see exactly that:
+// `FleetSession.held` is the `.hold` file's reason string, null when unheld,
+// and the server's read is fail-shut (a present-but-unreadable file reads as
+// held, carrying `HOLD_UNREADABLE`). Same fact, one measurement, no second
+// source of truth.
+//
+// The RESCUE arm is untouched by §3.3 and deliberately so — a hard-blocked
+// held session is still evacuated. None of the copy below claims otherwise:
+// it is about the RETURN, which is the only thing the sheet ever promised.
+describe('SwapSheet does not promise a held session an automatic return', () => {
+  const HOLD = 'program:build8 wave:3/4 run:21';
+
+  it('a HELD session is told the return waits for the hold', () => {
+    const s = fleetSession({ wrapper: 'claude2', home: 'claude', held: HOLD });
+    render(<SwapSheet session={s} open onClose={vi.fn()} fleet={storeWith([s])} />);
+    const copy = screen.getByText(/Its home account is/i);
+    // The promise §3.3 falsified. Not a loose /temporary/ match: the sentence
+    // that is false for a held session is the TIMING one.
+    expect(copy.textContent).not.toMatch(/returns the session to team·max as soon as/i);
+    // And it names the hold, verbatim — the reason string IS the display
+    // everywhere else in this build (shared/api.ts on `held`), so a reader who
+    // wants to know why can read it here too.
+    expect(copy.textContent).toContain(HOLD);
+    expect(copy.textContent).toMatch(/until the hold is released/i);
+  });
+
+  it('an UNHELD session still gets the promise — the fix narrows, it does not blanket', () => {
+    // The other direction, pinned so "just hedge everything" cannot pass. A
+    // session with no hold IS returned home on the next affinity tick, and
+    // saying so is the whole value §3.4 shipped.
+    //
+    // BOTH negatives are load-bearing, and the second one was added after the
+    // mutation run: hedging every session (treating `held` as unmeasured
+    // always) leaves the promise sentence intact INSIDE the hedge, so the
+    // positive match below passed a mutant that had made the copy useless.
+    // The hedge's own words are what separate the two.
+    const s = fleetSession({ wrapper: 'claude2', home: 'claude', held: null });
+    render(<SwapSheet session={s} open onClose={vi.fn()} fleet={storeWith([s])} />);
+    const copy = screen.getByText(/Its home account is/i);
+    expect(copy.textContent).toMatch(/returns the session to team·max as soon as team·max has room/i);
+    expect(copy.textContent).not.toMatch(/until the hold is released/i);
+    expect(copy.textContent).not.toMatch(/a program hold defers/i);
+    expect(copy.textContent).not.toMatch(/was not measured from here/i);
+  });
+
+  it('says it in the CONSEQUENCE too, where the tap actually happens', async () => {
+    const s = fleetSession({ wrapper: 'claude2', home: 'claude', held: HOLD });
+    render(<SwapSheet session={s} open onClose={vi.fn()} fleet={storeWith([s])} />);
+    fireEvent.click(await screen.findByRole('button', { name: /team·shared/ }));
+    // A bare /held/i matches the sheet copy too — it is still mounted under
+    // the confirm — so query the phrase only the consequence uses.
+    const c = await screen.findByText(/does not move a held session back/i);
+    expect(c.textContent).toContain(HOLD);
+    // The unheld consequence's exact promise, which must NOT be here.
+    expect(c.textContent).not.toMatch(/moves it back to team·max once/i);
+  });
+
+  // The third state, and it is the one `SessionScreen` actually produces:
+  // `live ?? { id, wrapper, project, home: null }` — no live fleet row, so
+  // NOBODY MEASURED the hold. `held: null` would mean "measured, unheld" and
+  // would earn the promise; absence means nothing was measured and must not.
+  describe('and when nobody measured whether it is held', () => {
+    it('hedges rather than promising or refusing', () => {
+      const s = { id: 'demo', wrapper: 'claude', project: 'demo', home: 'claude' };
+      render(<SwapSheet session={s} open onClose={vi.fn()} fleet={storeWith([])} />);
+      const copy = screen.getByText(/Its home account is/i);
+      expect(copy.textContent).toMatch(/a program hold defers/i);
+      expect(copy.textContent).toMatch(/was not measured from here/i);
+      // Not laundered into either measured answer.
+      expect(copy.textContent).not.toMatch(/until the hold is released/i);
+    });
+
+    it('carries the same hedge into the consequence', async () => {
+      const s = { id: 'demo', wrapper: 'claude', project: 'demo', home: 'claude' };
+      render(<SwapSheet session={s} open onClose={vi.fn()} fleet={storeWith([])} />);
+      fireEvent.click(await screen.findByRole('button', { name: /team·shared/ }));
+      const c = await screen.findByText(/moves it back to team·max once/i);
+      expect(c.textContent).toMatch(/but a program hold defers that/i);
+      expect(c.textContent).toMatch(/was not measured from here/i);
+    });
+  });
+});
