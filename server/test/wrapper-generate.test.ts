@@ -29,6 +29,26 @@ describe('generateWrapperBody', () => {
     expect(text).not.toContain('[ -r');
   });
 
+  // PINNED HERE AND NOT IN THE ROUND-TRIP TEST, deliberately. Task 3 measured
+  // the round-trip pin against exactly this mutation — dropping the trailing
+  // newline — and it stayed GREEN, 12/12: `_wrap_parse_shape` reads with
+  // `mapfile -t`, which yields an unterminated final line identically to a
+  // terminated one, so the bash reader is blind to this property and no
+  // round-trip through it can ever pin it.
+  //
+  // It still matters, and not only for tidiness: `shared/mark.mjs` splits on
+  // "\n" to hash a body, so a missing terminator changes the digest — which
+  // changes what `verifyMarker` calls the file, and changes the roster
+  // fingerprint the two boxes compare in `/api/fleet/health`. A writer that
+  // silently stopped emitting it would make a box disown its own wrappers.
+  it('ends in exactly one newline', () => {
+    for (const a of [CLAUDE2, NOSECRETS]) {
+      const text = generateWrapperBody(a, 'claude');
+      expect(text.endsWith('\n')).toBe(true);
+      expect(text.endsWith('\n\n')).toBe(false);
+    }
+  });
+
   it('refuses to write anything for an account ccrc does not own', () => {
     for (const execKind of ['upstream', 'external']) {
       expect(() => generateWrapperBody({ ...NOSECRETS, execKind }, 'claude'))
