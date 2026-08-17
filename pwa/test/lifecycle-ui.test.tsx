@@ -38,7 +38,12 @@ const fakeSocket = (): WebSocket =>
 const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => ({
   id: 'claude:OpenClawHetzner',
   wrapper: 'claude',
-  home: '/home/rc',
+  // An ACCOUNT ID, not a path. `assembleFleet` writes `r.home ?? idHomeWrapper(...)`
+  // (server/src/fleet.ts) and every reader treats it as a wrapper id — SwapSheet
+  // now turns it into an account LABEL, which the old `/home/rc` here would have
+  // rendered verbatim into the sheet copy. A fixture that encodes the wrong
+  // assumption reads as coverage while measuring nothing.
+  home: 'claude',
   project: 'OpenClawHetzner',
   workdir: '/root/projects/OpenClawHetzner',
   workspace: null,
@@ -355,9 +360,12 @@ describe('SwapSheet', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: /alt·max/ }));
+    // W3 §3.4 extended this sentence: the restart is still the headline, and
+    // the move's TEMPORARINESS is now stated at the moment of commitment.
     expect(
       screen.getByText(
-        'The session restarts under alt·max. Anyone attached is briefly disconnected.',
+        'The session restarts under alt·max. Anyone attached is briefly disconnected. ' +
+        'This is temporary — ccrc moves it back to team·max once team·max has room.',
       ),
     ).toBeInTheDocument();
     // Nothing fires until the consequence sentence is confirmed.
@@ -557,7 +565,7 @@ describe('SwapSheet', () => {
 
   it('does not offer a disabled account in the rendered picker', async () => {
     stubAccounts([acct({ wrapper: 'claude' }), acct({ wrapper: 'gpt', disabled: true })]);
-    render(<SwapSheet session={{ id: 'demo', wrapper: 'claude', project: 'demo' }}
+    render(<SwapSheet session={{ id: 'demo', wrapper: 'claude', project: 'demo', home: 'claude' }}
                       open onClose={() => {}} fleet={storeWith([])} />);
     expect(await screen.findByText('alt·max')).toBeInTheDocument();  // picker rendered
     expect(screen.queryByText('gpt')).not.toBeInTheDocument();
@@ -568,7 +576,7 @@ describe('SwapSheet', () => {
     // toggles the inner vaul Sheet), so without gating useDisabledWrappers on
     // `open` this would poll forever in the background, visible or not.
     const accounts = vi.spyOn(api, 'accounts');
-    render(<SwapSheet session={{ id: 'demo', wrapper: 'claude', project: 'demo' }}
+    render(<SwapSheet session={{ id: 'demo', wrapper: 'claude', project: 'demo', home: 'claude' }}
                       open={false} onClose={() => {}} fleet={storeWith([])} />);
     expect(accounts).not.toHaveBeenCalled();
   });

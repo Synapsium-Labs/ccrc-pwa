@@ -165,7 +165,24 @@ export function AccountRow({
 }
 
 export interface SwapSheetProps {
-  session: Pick<FleetSession, 'id' | 'wrapper' | 'project'>;
+  /** `home` is required here because §3.4's honest label cannot be written
+   *  without it: a swap made from this sheet is TEMPORARY — `ccd swap` writes
+   *  `.wrapper` and never `.home`, and `_auto_swap_check` returns the session
+   *  to `home` the moment home has room (measured live, both directions,
+   *  ~15 minutes) — so the sheet has to be able to NAME the account it goes
+   *  back to.
+   *
+   *  `string | null`, deliberately WIDER than `FleetSession['home']`, and the
+   *  plan for this task was wrong about needing it: it said both callers pass
+   *  a whole `FleetSession`, but `SessionScreen` passes `live ?? { id,
+   *  wrapper, project }` — a synthetic row for a session that is not in the
+   *  live fleet snapshot at all. There, the home account is UNMEASURED. `null`
+   *  says exactly that and nothing else; defaulting it to `wrapper` would make
+   *  the sheet name the account the session is being moved AWAY from as the
+   *  one it returns to, in the one state where nobody checked. The field stays
+   *  REQUIRED so a new caller has to answer the question rather than omit it —
+   *  absence and "unknown" are not the same fact. */
+  session: Pick<FleetSession, 'id' | 'wrapper' | 'project'> & { home: string | null };
   open: boolean;
   onClose: () => void;
   /** Injectable for tests; defaults to the app-wide fleet store. */
@@ -228,13 +245,30 @@ export function SwapSheet({
   };
 
   const targetLabel = target === null ? '' : accountLabel(roster, target);
+  // Read off `session.home`, never off `session.wrapper`: on a session that has
+  // already been relocated those differ, and that is exactly the case where the
+  // return sentence matters. `null` = nobody measured it (see the prop's
+  // docstring); the copy then states the SAME temporariness without naming an
+  // account it does not know.
+  const homeLabel = session.home === null ? null : accountLabel(roster, session.home);
 
   return (
     <>
       <Sheet open={open} onClose={onClose} eyebrow="move session" title="Move to another account">
         <p className="sheet-copy">
-          {session.project} runs on {accountLabel(roster, session.wrapper)} now. Pick where it should
-          live.
+          {session.project} runs on {accountLabel(roster, session.wrapper)} now.{' '}
+          {homeLabel === null ? (
+            <>
+              Its home account is not known from here — a move is temporary either way: ccrc
+              returns the session to its home account as soon as that account has room again.
+            </>
+          ) : (
+            <>
+              Its home account is {homeLabel} — a move from here is temporary: ccrc returns the
+              session to {homeLabel} as soon as {homeLabel} has room again.
+            </>
+          )}{' '}
+          Pick where it should live meanwhile.
         </p>
         <div className="acct-list">
           {wrappers.map((w) => (
@@ -253,7 +287,11 @@ export function SwapSheet({
         open={target !== null}
         onClose={() => setTarget(null)}
         title={`Move to ${targetLabel}?`}
-        consequence={`The session restarts under ${targetLabel}. Anyone attached is briefly disconnected.`}
+        consequence={`The session restarts under ${targetLabel}. Anyone attached is briefly ` +
+          'disconnected. This is temporary — ' +
+          (homeLabel === null
+            ? 'ccrc moves it back to its home account once that account has room.'
+            : `ccrc moves it back to ${homeLabel} once ${homeLabel} has room.`)}
         confirmLabel="Move"
         onConfirm={() => {
           if (target !== null) move(target);

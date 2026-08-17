@@ -378,7 +378,11 @@ export function SessionScreen({
         onPick={(c) => void pick(c)}
       />
       <SwapSheet
-        session={live ?? { id, wrapper, project }}
+        // `home: null` — not `wrapper`. With no live row there is no home
+        // account to read, and W3 §3.4's copy names the account a swap returns
+        // to; naming the one it is leaving would be a guess wearing a fact's
+        // clothes. `SwapSheet` renders the unnamed form for null.
+        session={live ?? { id, wrapper, project, home: null }}
         open={swapOpen}
         onClose={() => setSwapOpen(false)}
         fleet={useFleet}
