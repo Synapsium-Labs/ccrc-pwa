@@ -67,8 +67,12 @@
 //     module a second caller merely imports must not inherit that exit
 //     status.
 //
-// Dependency-free on purpose, like every other file in `shared/`: no
-// imports, not even `node:*`.
+// Dependency-free on purpose: this file imports nothing, not even `node:*` —
+// bare-`node` runnable, no build step. That is NOT a blanket rule for every
+// file in `shared/`: `shared/mark.mjs` imports `node:crypto`, sanctioned
+// there (see that file's header) because `shared/*.mjs` is deploy-side
+// tooling the PWA never bundles, unlike `shared/*.ts`, where a `node:*`
+// import would break the client bundle. This file simply has no need for one.
 
 /** Mirrors `shared/roster.ts`'s `ID_RE`. An id becomes a filename under
  *  `~/.local/bin/`, a bash `case` pattern and a session-id prefix; ccd joins

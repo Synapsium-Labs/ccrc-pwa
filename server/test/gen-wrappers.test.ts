@@ -196,6 +196,30 @@ describe('gen-wrappers.mjs', () => {
     expect(r.stdout).not.toMatch(/^orphan\t/m);
   });
 
+  it('not an orphan: a marked file at a PROTECTED (non-generated) account\'s id (D-83)', () => {
+    // The exclusion set used to be `generatedIds` only, so a marked file
+    // sitting at a `protected` account's id — upstream OR external — was
+    // reported ORPHAN even though the roster claims that id. This is exactly
+    // the shape `ccrc wrappers`'s own `ccrc-edited` remedy produces: it tells
+    // an operator to "keep the edit by setting exec.kind to \"external\"",
+    // and the very next run must not turn around and call that same id an
+    // orphan with a remedy ("add an account ... to accounts.json") that is
+    // doubly false — the roster already claims it, and adding it again would
+    // be a duplicate-id error. `gpt` is the migration roster's `external`
+    // account; the file left there still carries ccrc's marker from before
+    // the operator's edit — the exact state `ccrc-edited` -> "set external"
+    // leaves on disk.
+    const { rosterFile, binDir, stagingDir } = fixture(migrationJson);
+    const externalText = markGenerated(generateWrapperBody(
+      { id: 'gpt', configDirSuffix: '.gpt', execKind: 'generated' }, UPSTREAM_ID,
+    ));
+    writeFileSync(path.join(binDir, 'gpt'), externalText);
+    const r = run([rosterFile, binDir, stagingDir]);
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
+    expect(r.stdout).not.toMatch(/^orphan\tgpt$/m);
+    expect(r.stdout).toContain('protected\tgpt');
+  });
+
   // The reference box has exactly this shape (`gpt -> ccgpt`), so it is not
   // hypothetical. `readdirSync`'s `Dirent.isFile()` answers about the DIRENT
   // ITSELF — it is false for a symlink no matter what the symlink points to —

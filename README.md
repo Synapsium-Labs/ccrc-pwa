@@ -502,8 +502,9 @@ ccrc wrappers                        # the other direction: roster → ~/.local/
   written, backed up, moved or removed, under any flag. `--dry-run` reports
   without touching anything; `--adopt` takes over a hand-written wrapper that
   already says exactly what the roster says; `--force` overwrites ccrc's own
-  edited files. Orphans — a marked wrapper the roster no longer names — are
-  reported and never removed.
+  edited files and, after a backup, any foreign file under a generated id —
+  the one thing no flag overrides is `unreadable`. Orphans — a marked wrapper
+  the roster no longer names — are reported and never removed.
 - `CCRC_ACCOUNTS` (in `~/.ccrc/ccrc.env`) overrides where the **server** reads
   the roster from. `ccd` has no such override on purpose: it derives the path
   from `HOME` alone, so a stray `Environment=` cannot run a live box against

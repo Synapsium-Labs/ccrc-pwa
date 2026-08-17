@@ -258,12 +258,33 @@ function main(argv) {
   });
 
   // Step 5: scan the bin dir for orphans — a file whose name is a legal id,
-  // is NOT one of the ids just staged above, and carries a ccrc marker this
-  // process can actually verify. A file this process cannot read is left
-  // alone entirely: it is not counted as an orphan, not counted as anything
-  // — silence beats a claim about a file nobody read. Read-only, same as
-  // classify() above.
-  const generatedIds = new Set(generated.map((a) => a.id));
+  // is claimed by NO account in the roster (of any exec.kind, not merely
+  // `generated`), and carries a ccrc marker this process can actually verify.
+  // A file this process cannot read is left alone entirely: it is not
+  // counted as an orphan, not counted as anything — silence beats a claim
+  // about a file nobody read. Read-only, same as classify() above.
+  //
+  // D-83: the exclusion set used to be `generatedIds` only, and that made an
+  // orphan mean "id is not a `generated` roster account" — narrower than what
+  // the printed remedy text (`ccd/ccrc`'s `ORPHAN` line: "no account in the
+  // roster claims it") actually says. The gap surfaced through `ccrc
+  // wrappers`'s own remedy path: its `ccrc-edited` refusal tells an operator
+  // to "keep the edit by setting exec.kind to \"external\"", and an operator
+  // who follows that got a STANDING FALSE orphan report on every subsequent
+  // run — the roster DOES claim the id (as `external` now), and the printed
+  // remedy ("add an account \"<id>\" to accounts.json") is doubly false: it
+  // would be a duplicate-id error. Walked out of `roster.accounts` directly
+  // — the same independent-walk discipline as the `protected` records above
+  // — rather than derived from the `wrapper` filter or `protectedLines`
+  // below, so a bug in one exclusion set cannot silently widen this one too.
+  //
+  // A ccrc marker surviving on a NON-generated account's file (e.g. the
+  // `external` file above, still carrying the marker from when it was
+  // `generated`) is deliberately NOT reported here: bash's `protected` lock
+  // already refuses to ever write over it, so nothing is at risk, and
+  // reporting a roster/disk marker mismatch is `ccrc doctor`'s surface, not
+  // this generator's.
+  const rosterIds = new Set(roster.accounts.map((a) => a.id));
   let entries;
   try {
     entries = readdirSync(binDir, { withFileTypes: true });
@@ -275,7 +296,7 @@ function main(argv) {
   for (const entry of entries) {
     if (!entry.isFile()) continue;
     const name = entry.name;
-    if (!ID_RE.test(name) || generatedIds.has(name)) continue;
+    if (!ID_RE.test(name) || rosterIds.has(name)) continue;
     // `readIfScript` answers `null` for BOTH "this process could not read it"
     // and "it is not a script at all", and that collapse is correct HERE and
     // only here: the orphan scan does the same thing about each — nothing.

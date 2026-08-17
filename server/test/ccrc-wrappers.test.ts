@@ -650,8 +650,13 @@ describe('ccrc wrappers: a manifest it cannot trust', () => {
     const r = runWrappers(home, [], cli);
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/^ccrc: /m);
-    expect(r.stderr).toMatch(/3/);
-    expect(r.stderr).toMatch(/1/);
+    // Loose `/3/` and `/1/` regexes used to pin this — but with the count
+    // assertion (`ccd/ccrc`'s `_ccrc_die "the manifest from $gen is
+    // truncated: …"`) deleted, the run still exits 1 via the next check down
+    // (staged text absent), whose message embeds `$gen` — a tmpdir path that
+    // can satisfy those digits by chance. `/truncated/` is the die message's
+    // own distinctive word, so it can only pass through THIS gate.
+    expect(r.stderr).toMatch(/truncated/);
     expect(binEntries(home)).toEqual([]);
   });
 
