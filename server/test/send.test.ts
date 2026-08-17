@@ -505,6 +505,45 @@ describe('sendPrompt', () => {
     const { tmux } = fakeTmux(['❯ \n', '❯ do the thing\n', busy]);
     expect(await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'do the thing')).toEqual({ ok: true });
   });
+
+  // §4.1, the operator's ruling. `verify-failed` on the ORDINARY path already
+  // left the text in the box (no clearBox, no C-u) — it simply never said so,
+  // so the PWA had a sentence and no button. It now returns the box row AND
+  // the flag that says the box row is the WHOLE message and Enter would send
+  // exactly it.
+  it('verify-failed hands the text back: draft + submittable, and no C-u', async () => {
+    const { tmux, calls } = fakeTmux(['❯ \n', '❯ text the pane never rendered\n']);
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'a different message',
+    );
+    expect(res).toMatchObject({ ok: false, error: 'verify-failed', submittable: true });
+    expect((res as { draft?: string }).draft).toBe('text the pane never rendered');
+    expect(cuPresses(calls)).toBe(0);   // REFUSE-ONLY: nothing clears operator text
+  });
+
+  it('enter-ignored carries submittable too — the case the rescue was built for', async () => {
+    const { tmux } = fakeTmux(['❯ \n', '❯ stuck text\n']);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'stuck text');
+    expect(res).toMatchObject({
+      ok: false, error: 'enter-ignored', draft: 'stuck text', submittable: true,
+    });
+  });
+
+  // THE DEFECT `submittable` EXISTS TO PREVENT. The attachment path's
+  // `verify-failed` draft is what a FAILED clearBox left behind — a fragment of
+  // the message. `submitEnter`'s correspondence gate cannot catch it (the
+  // residue IS what the box reads, so it matches, and Enter submits the
+  // fragment). Widening the PWA gate on `code` alone would ship exactly that.
+  it('the ATTACHMENT path keeps its residue draft for DISPLAY and never sets the flag', async () => {
+    const NONMATCH = '❯ \n';
+    const panes = [...Array(14).fill(NONMATCH), '❯ stubborn leftover\n'];
+    const { tmux } = fakeTmux(panes);
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', '', { attachments: ['/c/clip-1.png'] },
+    );
+    expect(res).toMatchObject({ ok: false, error: 'verify-failed', draft: 'stubborn leftover' });
+    expect((res as { submittable?: boolean }).submittable).toBeUndefined();
+  });
 });
 
 // F3 / bug #21 (build4 dogfood, docs/superpowers/programs/build4.md): the

@@ -14,7 +14,26 @@ export interface SendDeps {
 
 export type SendResult =
   | { ok: true }
-  | { ok: false; error: 'not-alive' | 'dialog-open' | 'draft-present' | 'draft-clear-failed' | 'verify-failed' | 'enter-ignored'; draft?: string; pane?: string };
+  | { ok: false;
+      error: 'not-alive' | 'dialog-open' | 'draft-present' | 'draft-clear-failed' | 'verify-failed' | 'enter-ignored';
+      draft?: string;
+      pane?: string;
+      /**
+       * The server proved `draft` is the WHOLE message currently in the box and
+       * that pressing Enter would send exactly it. ADDITIVE and absence-permits:
+       * an older server never sends it, so a client that gates on `=== true`
+       * degrades to no rescue — today's behaviour, the safe direction.
+       *
+       * IT IS NOT A SYNONYM FOR A `code`. `draft` carries THREE meanings across
+       * the failure arms: the OTHER text (`draft-present`), OUR OWN proven text
+       * (`enter-ignored`, and now the ordinary `verify-failed`), and a FAILED
+       * CLEAR'S RESIDUE — a fragment of the message — on the attachment path's
+       * `verify-failed`. `submitEnter`'s correspondence gate cannot tell the
+       * third apart from the second: the residue IS what the box reads, so it
+       * matches, Enter is pressed, and a truncated prompt is submitted. This
+       * flag is the discriminator, and the attachment path must never set it.
+       */
+      submittable?: boolean };
 
 const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -131,7 +150,14 @@ async function pressEnterAndConfirm(
   await d.tmux.sendKey(id, 'Enter');
   if (await submitted(d, id, sleep, needle)) return { ok: true };
   const stuck = await d.tmux.capture(id);
-  return { ok: false, error: 'enter-ignored', draft: draftOf(await d.tmux.captureAnsi(id) ?? ''), pane: (stuck ?? '').slice(-PANE_TAIL) };
+  return {
+    ok: false, error: 'enter-ignored',
+    draft: draftOf(await d.tmux.captureAnsi(id) ?? ''),
+    pane: (stuck ?? '').slice(-PANE_TAIL),
+    // We typed it, we watched it echo, and nothing has cleared it: the box row
+    // IS the message and Enter would send exactly it. See `SendResult`.
+    submittable: true,
+  };
 }
 
 /** How long to let the pane settle after a C-u before reading the box again. */
@@ -526,7 +552,16 @@ export function sendPrompt(
         after = await d.tmux.capture(id);
         if (after !== null && (needle === '' || after.includes(needle))) break;
         if (i === ECHO_TRIES - 1) {
-          return { ok: false, error: 'verify-failed', pane: (after ?? '').slice(-PANE_TAIL) };
+          // THE TEXT STAYS IN THE BOX — no clearBox, no C-u (operator ruling:
+          // refuse, never destroy). That was already true; what was missing was
+          // saying so. Hand back the box row so the PWA's rescue has something
+          // to correspond against, and the flag that says the box row is the
+          // WHOLE message rather than a failed clear's fragment.
+          const box = draftOf(await d.tmux.captureAnsi(id) ?? '');
+          return {
+            ok: false, error: 'verify-failed', pane: (after ?? '').slice(-PANE_TAIL),
+            draft: box, submittable: true,
+          };
         }
       }
     }
