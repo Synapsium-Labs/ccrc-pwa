@@ -715,7 +715,7 @@ _check_wrappers() {
 
   if [ ! -e "$roster" ]; then
     _dr_fail wrappers "no account roster at \$HOME/.ccrc/accounts.json, so nothing on this box says what \$HOME/.local/bin is supposed to hold" \
-      "bootstrap one from what is already on disk: bash ccd/ccrc-adopt --out /tmp/accounts.json, read it, then move it to \$HOME/.ccrc/accounts.json"
+      "bootstrap one from what is already on disk: ccrc adopt --out /tmp/accounts.json, read it, then move it to \$HOME/.ccrc/accounts.json"
     return 1
   fi
   if [ ! -f "$roster" ]; then
@@ -787,19 +787,19 @@ _check_wrappers() {
   fi
   if [ "$rc" -eq 3 ]; then
     _dr_fail wrappers "\$HOME/.ccrc/accounts.json does not parse as JSON, so this box's roster cannot be read" \
-      "restore it from a backup, or rebuild it from disk: bash ccd/ccrc-adopt --out /tmp/accounts.json"
+      "restore it from a backup, or rebuild it from disk: ccrc adopt --out /tmp/accounts.json"
     return 1
   fi
   if [ "$rc" -eq 4 ]; then
     _dr_fail wrappers "\$HOME/.ccrc/accounts.json parses but declares no accounts array" \
-      "it must be {\"version\":1,\"accounts\":[…]} — rebuild it from disk: bash ccd/ccrc-adopt --out /tmp/accounts.json"
+      "it must be {\"version\":1,\"accounts\":[…]} — rebuild it from disk: ccrc adopt --out /tmp/accounts.json"
     return 1
   fi
   if [ "$rc" -eq 6 ]; then
     # A scan over an empty list passes everything, and a doctor that reports a
     # healthy box by measuring nothing is the worst failure this verb has.
     _dr_fail wrappers "\$HOME/.ccrc/accounts.json declares zero accounts — refusing to report agreement nobody measured" \
-      "rebuild it from disk: bash ccd/ccrc-adopt --out /tmp/accounts.json"
+      "rebuild it from disk: ccrc adopt --out /tmp/accounts.json"
     return 1
   fi
   if [ "$rc" -ne 0 ]; then
@@ -862,7 +862,7 @@ _check_wrappers() {
 
   if [ ! -d "$bin" ]; then
     _dr_fail wrappers "no \$HOME/.local/bin at all, so the roster's ${#wr_ids[@]} accounts have nowhere to live" \
-      "create it and install the wrappers the roster describes — an account is an executable at \$HOME/.local/bin/<id>"
+      "run: ccrc wrappers — it creates \$HOME/.local/bin and writes every generated account's wrapper (an upstream or external account still needs installing by hand)"
     return 1
   fi
 
@@ -1008,7 +1008,7 @@ _check_wrappers() {
   if [ "${#wr_hard[@]}" -gt 0 ]; then
     _dr_fail wrappers \
       "$(_dr_join ${wr_hard[@]+"${wr_hard[@]}"})" \
-      "the roster is the source of truth and nothing here edits it for you — make \$HOME/.ccrc/accounts.json and the wrapper agree; 'bash ccd/ccrc-adopt --out /tmp/accounts.json' prints what a rediscovery from disk would say and writes nothing else"
+      "the roster is the source of truth and nothing here edits it for you — make \$HOME/.ccrc/accounts.json and the wrapper agree; 'ccrc adopt --out /tmp/accounts.json' prints what a rediscovery from disk would say and writes nothing else"
     rc=1
   fi
   if [ "${#wr_soft[@]}" -gt 0 ]; then

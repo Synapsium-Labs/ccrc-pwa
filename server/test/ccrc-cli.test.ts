@@ -138,9 +138,13 @@ describe('ccrc: dispatch and usage', () => {
   });
 
   it('the usage line names every verb this CLI will have', () => {
+    // `wrappers` joined the list in stage 2c Task 6 — the converger that writes
+    // ~/.local/bin/<id> from the roster. A verb that dispatches but is not in
+    // the usage line is a verb nobody can find; `server/test/ccrc-wrappers.test.ts`
+    // owns its behaviour, this line owns its discoverability.
     const home = mkTmp('ccrc-cli-usage-verbs-');
     const r = runCcrcRaw(home, ['-h']);
-    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|version\}/);
+    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|version\}/);
   });
 
   it('an unknown top-level flag is a usage error too, before any verb is read', () => {

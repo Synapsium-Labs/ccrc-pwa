@@ -44,6 +44,7 @@ import { mkTmp } from './tmpHelpers.js';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ccrcRoot = path.resolve(here, '..', '..');
 const CLI = path.join(ccrcRoot, 'deploy', 'gen-accounts.mjs');
+const MIGRATION_ROSTER = path.join(ccrcRoot, 'deploy', 'accounts.migration.json');
 
 /** Runs the CLI exactly as `deploy.sh` does: a bare `node`, one path argv,
  *  output on stdout. No tsx, no loader, no build — if this ever needs one,
@@ -195,9 +196,31 @@ describe('gen-accounts.mjs agrees with the TypeScript pipeline it cannot import'
   // the wrapper it inspected has no secrets line) — so a blanket assertion
   // would be a false requirement, not a stronger guard.
   it("claude-corp declares the secretsFile its wrapper has always sourced (D-69)", () => {
-    const roster = JSON.parse(readFileSync(path.join(ccrcRoot, 'deploy', 'accounts.migration.json'), 'utf8'));
+    const roster = JSON.parse(readFileSync(MIGRATION_ROSTER, 'utf8'));
     const corp = roster.accounts.find((a: any) => a.id === 'claude-corp');
     expect(corp.exec.secretsFile).toBe('.cc-secrets/claude-corp-oauth.env');
+  });
+});
+
+describe('rosterFromJson is importable, and carries the fields the wrapper writer needs', () => {
+  it('returns execKind and secretsFile per account', async () => {
+    const { rosterFromJson } = await import('../../shared/roster-json.mjs');
+    const r = rosterFromJson(JSON.parse(readFileSync(MIGRATION_ROSTER, 'utf8')));
+    const byId = new Map(r.accounts.map((a) => [a.id, a]));
+    expect(byId.get('claude')?.execKind).toBe('upstream');
+    expect(byId.get('claude')?.secretsFile).toBeUndefined();
+    expect(byId.get('claude2')?.execKind).toBe('generated');
+    expect(byId.get('claude2')?.secretsFile).toBe('.cc-secrets/claude2-oauth.env');
+    expect(byId.get('gpt')?.execKind).toBe('external');
+    expect(r.upstreamId).toBe('claude');
+  });
+
+  it('importing it does NOT run a CLI', async () => {
+    // deploy/gen-accounts.mjs sets process.exitCode on import by design. The
+    // extracted module must not, or every consumer inherits its exit status.
+    const before = process.exitCode;
+    await import('../../shared/roster-json.mjs');
+    expect(process.exitCode).toBe(before);
   });
 });
 
@@ -224,6 +247,23 @@ describe('gen-accounts.mjs rejects everything parseRoster rejects', () => {
     ['no exec at all', roster(acct({ exec: undefined }))],
     ['an unknown exec.kind', roster(acct({ exec: { kind: 'wrapper' } }))],
     ['a non-string exec.secretsFile', roster(acct({ exec: { kind: 'generated', secretsFile: 7 } }), acct({ id: 'up' }))],
+    // exec.secretsFile is embedded inside a double-quoted bash string in the
+    // generated wrapper (`[ -r "$HOME/<path>" ] && . "$HOME/<path>"`), so it
+    // gets the same conservative path gate configDirSuffix carries. Paired
+    // with a distinct, valid upstream account so the roster is rejected ONLY
+    // for its secretsFile — not incidentally via "no upstream account" (a
+    // single-account `generated` roster would trip that check regardless of
+    // this guard, which would make the case pass for the wrong reason).
+    ['a secretsFile with a double quote', roster(acct({ exec: { kind: 'generated', secretsFile: '.cc-secrets/a"b.env' } }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['a secretsFile with a dollar sign', roster(acct({ exec: { kind: 'generated', secretsFile: '.cc-secrets/$USER.env' } }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['a secretsFile with a backtick', roster(acct({ exec: { kind: 'generated', secretsFile: '.cc-secrets/`id`.env' } }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['a secretsFile with a backslash', roster(acct({ exec: { kind: 'generated', secretsFile: '.cc-secrets/a\\b.env' } }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['a secretsFile with a newline', roster(acct({ exec: { kind: 'generated', secretsFile: '.cc-secrets/a\nb.env' } }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['a secretsFile with a parent-directory hop', roster(acct({ exec: { kind: 'generated', secretsFile: '../.ssh/id_ed25519' } }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['an absolute secretsFile', roster(acct({ exec: { kind: 'generated', secretsFile: '/etc/shadow' } }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['an empty secretsFile', roster(acct({ exec: { kind: 'generated', secretsFile: '' } }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['a secretsFile with a trailing slash', roster(acct({ exec: { kind: 'generated', secretsFile: '.cc-secrets/' } }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['a secretsFile with a space', roster(acct({ exec: { kind: 'generated', secretsFile: '.cc-secrets/a b.env' } }), acct({ id: 'up', configDirSuffix: '.up' }))],
     ['a non-boolean homeAble', roster(acct({ homeAble: 'yes' }))],
     ['an unknown telemetry', roster(acct({ telemetry: 'openai' }))],
     ['an unknown hue', roster(acct({ hue: 'chartreuse' }))],

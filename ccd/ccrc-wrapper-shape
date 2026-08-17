@@ -67,7 +67,7 @@ WRAPPER_BIN_DIR="$HOME/.local/bin"
 WRAPPER_ID_RE='^[a-z][a-z0-9-]{0,31}$'
 # Mirrors `shared/roster.ts`'s second, independent gate on configDirSuffix: the
 # safe set a suffix may use once its leading "." is counted. Kept here, not
-# derived from the TypeScript, for the same reason `deploy/gen-accounts.mjs`
+# derived from the TypeScript, for the same reason `shared/roster-json.mjs`
 # keeps its own copy (see that file's header) — a bare bash script cannot
 # import shared/roster.ts either.
 WRAPPER_SUFFIX_SAFE_RE='^\.[A-Za-z0-9._-]+$'

@@ -200,6 +200,17 @@ const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
  *  would reject the roster this repo actually ships. */
 const LABEL_UNSAFE_RE = /[\u0000-\u001f\u007f]/;
 
+/** The conservative gate on `exec.secretsFile`, mirroring the one
+ *  `configDirSuffix` carries and for the same reason: the value is embedded
+ *  inside a double-quoted bash string in the wrapper `shared/wrapper.mjs`
+ *  writes (`[ -r "$HOME/<path>" ] && . "$HOME/<path>"`), where `$`, `` ` ``,
+ *  `"` and `\` are all still live to the shell. Letters, digits, `.`, `-`,
+ *  `_` and `/` only. Copies of this rule live in `shared/roster-json.mjs`
+ *  (which may be stricter than this file, never laxer — see its header) and
+ *  in `shared/wrapper.mjs` (the writer's own lock, which protects it against
+ *  a caller that never went through this parser). */
+const SECRETS_SAFE_RE = /^[A-Za-z0-9._/-]+$/;
+
 const EXEC_KINDS: ReadonlySet<string> = new Set(['upstream', 'generated', 'external']);
 const ROOT_KEYS: ReadonlySet<string> = new Set(['version', 'accounts']);
 const ACCOUNT_KEYS: ReadonlySet<string> = new Set(
@@ -265,7 +276,22 @@ function parseExec(raw: unknown, id: string): ExecSpec {
       throw new RosterError(
         `account "${id}" has a non-string exec.secretsFile.`,
         `Set exec.secretsFile for account "${id}" in ${ROSTER_PATH} to a string path relative to ` +
-          '$HOME, or remove the field.',
+          '$HOME, or remove it.',
+      );
+    }
+    // A path, not merely a string. `""` and a trailing "/" both resolve to a
+    // directory rather than a file; ".." escapes $HOME; a leading "/" ignores
+    // it. Each is rejected by name so the remedy can say which one happened.
+    if (
+      secretsFile !== undefined
+      && (secretsFile === '' || secretsFile.startsWith('/') || secretsFile.endsWith('/')
+        || secretsFile.includes('..') || !SECRETS_SAFE_RE.test(secretsFile))
+    ) {
+      throw new RosterError(
+        `account "${id}" has an invalid exec.secretsFile ${JSON.stringify(secretsFile)}.`,
+        `Set exec.secretsFile for account "${id}" in ${ROSTER_PATH} to a path relative to $HOME ` +
+          '(e.g. ".cc-secrets/' + id + '-oauth.env") using only letters, digits, ".", "-", "_" and ' +
+          '"/" — never absolute, never containing "..", never ending in "/".',
       );
     }
     return secretsFile !== undefined ? { kind: 'generated', secretsFile } : { kind: 'generated' };
