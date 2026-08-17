@@ -43,20 +43,19 @@ import { describe, expect, it } from 'vitest';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
 
-/** The roots that hold hand-written source. `pwa/src` is included for the same
- *  reason the rest are: it is typed by hand and shipped.
- *
- *  `scripts/` was MISSING from the first version of this list and was added by
- *  the Task 4 review, which went looking for a way to defeat the guard and
- *  found one: `scripts/extraction-manifest.sh` is tracked, hand-written bash
- *  that no root here reached. The lesson generalises — this list is the guard's
- *  real coverage, and a new top-level directory of hand-written source is
- *  invisible to it until someone adds the name. Deliberately still excluded:
- *  `scratch/` (throwaway by its own charter) and `.github/` (CI YAML, whose
- *  `run:` lines are one-liners nobody moves regex literals through). */
-const ROOTS = [
-  'shared', 'server/src', 'server/test', 'agent/src', 'pwa/src', 'deploy', 'ccd', 'scripts',
-];
+/** No root list — EVERY tracked file is walked. The first version named eight
+ *  source roots, and the Task 4 review had already found the flaw's shape when
+ *  it caught `scripts/` missing: "a new top-level directory of hand-written
+ *  source is invisible to it until someone adds the name". Then the flaw bit
+ *  for real: the plan's own D-78 ledger entry shipped CARRYING the raw
+ *  NUL/0x1f/0x7f bytes between its backticks — the fourth occurrence of the
+ *  incident this file is named after, sitting in `docs/`, which no root
+ *  covered, while this guard was green. A curated list of "directories that
+ *  hold hand-written text" is itself the hazard: every tracked file is
+ *  hand-written text until the BINARY list below says otherwise, so the walk
+ *  now takes `git ls-files` whole. (`scratch/` is git-ignored, so the old
+ *  list's "deliberate exclusion" of it was an illusion — git never offered
+ *  it.) */
 
 /** Files whose bytes are not text and must not be read as such. Kept as an
  *  extension list rather than a content sniff so that adding a binary asset is
@@ -70,7 +69,7 @@ const BINARY = /\.(png|jpg|jpeg|gif|ico|webp|woff2?|ttf|otf|pdf|zip|gz|db|sqlite
 const FORBIDDEN = /[\u0000-\u0008\u000b\u000c\u000e-\u001a\u001c-\u001f\u007f]/;
 
 function trackedSourceFiles(): string[] {
-  const out = execFileSync('git', ['ls-files', '-z', '--', ...ROOTS], {
+  const out = execFileSync('git', ['ls-files', '-z'], {
     cwd: REPO, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024,
   });
   return out.split('\0').filter((p) => p !== '' && !BINARY.test(p));
