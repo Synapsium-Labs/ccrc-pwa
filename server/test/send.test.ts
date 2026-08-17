@@ -451,8 +451,19 @@ describe('sendPrompt', () => {
   it('detects a real draft in the input box even with history ❯ lines above', async () => {
     // The clip-path case: ccd clip types a path into the input box (no Enter),
     // and there is conversation history above. draftOf must return the box text.
+    //
+    // THE RULE ROWS ARE FULL WIDTH, and that is now load-bearing rather than
+    // decorative. This fixture used to draw them as four `─`, which was fine
+    // while only `draftOf` read it (draftOf ignores everything below the
+    // marker). The clobber guard reads the WHOLE box, and `isRuleRow` requires
+    // eight glyphs before it will call a row a rule — deliberately, so a short
+    // dash run in prose is not mistaken for the box boundary. A four-dash rule
+    // is therefore a pane Claude Code cannot draw (its box rule spans the
+    // terminal), and against it the scan ran past the closing rule and reported
+    // the status line as box content.
+    const rule = '─'.repeat(24);
     const pane =
-      'earlier turn\n❯ old submitted prompt\n● a reply\n────\n❯ /home/u/.cc-clips/cctest/clip-1.png \n────\n status';
+      `earlier turn\n❯ old submitted prompt\n● a reply\n${rule}\n❯ /home/u/.cc-clips/cctest/clip-1.png \n${rule}\n status`;
     const { tmux, calls } = fakeTmux([pane]);
     const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hi');
     expect(res).toEqual({ ok: false, error: 'draft-present', draft: '/home/u/.cc-clips/cctest/clip-1.png' });
@@ -555,7 +566,10 @@ describe('sendPrompt', () => {
   // check with an EMPTY box, pressed Enter into nothing, and returned ok:true.
   // Nothing downstream could tell that from a real send.
   it('an echo that exists ONLY in the scrollback does not pass', async () => {
-    const scrollbackOnly = 'earlier turn\n❯ run the tests\n● a reply\n────\n❯ \n────\n status\n';
+    // Full-width rules: see the clip-path fixture above for why four dashes is
+    // a pane that cannot exist, and what the clobber guard does with one.
+    const rule = '─'.repeat(24);
+    const scrollbackOnly = `earlier turn\n❯ run the tests\n● a reply\n${rule}\n❯ \n${rule}\n status\n`;
     const { tmux, calls } = fakeTmux([scrollbackOnly]);
     const res = await sendPrompt(
       { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'run the tests',
@@ -1301,5 +1315,145 @@ describe('sendPrompt echo verification', () => {
     );
     expect(res).toMatchObject({ ok: false, error: 'verify-failed' });
     expect(sendKeysCalls(calls).some((c) => c[c.length - 1] === 'Enter')).toBe(false);
+  });
+});
+
+describe('clearBox reports on the whole box, not on one row', () => {
+  // VACUUM: no fixture in this file starts with a blank first row, so the
+  // terminator's blank-marker case has never been exercised at all.
+  //
+  // The docstring's soundness argument ("kills run bottom-up, so the marker row
+  // is the LAST to empty") holds only when the marker row started NON-blank. On
+  // a box whose first line is itself blank, the very first look round reads ''
+  // and reports `cleared` with rows 2..N untouched — after which the caller's
+  // type loop concatenates its message onto somebody else's text.
+  it('does not report cleared while rows below the marker still hold text', async () => {
+    const blankMarkerWithContent = [
+      'earlier turn', '─'.repeat(24),
+      '❯ ',                     // blank marker row
+      '  the human’s real second line',
+      '  and a third',
+      '─'.repeat(24), '  👤 team·max',
+    ].join('\n') + '\n';
+    const { tmux } = fakeTmux([blankMarkerWithContent]);
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'mine', { replaceDraft: true },
+    );
+    // It must NOT sail through to the type loop. Whatever it reports, it does
+    // not report success on a box it never emptied.
+    expect(res).toMatchObject({ ok: false });
+    expect((res as { error: string }).error).not.toBe('verify-failed');
+  });
+
+  it('still reports cleared on a genuinely empty box', async () => {
+    const empty = ['earlier turn', '─'.repeat(24), '❯ ', '─'.repeat(24), '  👤 team·max']
+      .join('\n') + '\n';
+    const { tmux } = fakeTmux([
+      '❯ a real draft\n',   // the guard fires
+      empty,                 // the first look round: genuinely empty
+      empty,                 // echo poll
+      empty,                 // after Enter
+    ]);
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'mine', { replaceDraft: true },
+    );
+    // The clear succeeded, so the send proceeded past it — whatever the echo
+    // then did, `draft-clear-failed` is what must NOT appear.
+    expect((res as { error?: string }).error).not.toBe('draft-clear-failed');
+  });
+});
+
+describe('the clobber guard sees the whole box', () => {
+  const blankMarkerWithContent = [
+    'earlier turn', '─'.repeat(24),
+    '❯ ',
+    '  the human’s real second line',
+    '  and a third',
+    '─'.repeat(24), '  👤 team·max',
+  ].join('\n') + '\n';
+
+  // VACUUM: every fakeTmux fixture in this file puts the marker LAST with
+  // nothing after it, so `continuationRows` returns [] and the widened guard
+  // changes no existing outcome. This shape had no fixture at all.
+  it('refuses draft-present on a BLANK marker row with content below it', async () => {
+    const { tmux, calls } = fakeTmux([blankMarkerWithContent]);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'mine');
+    expect(res).toMatchObject({ ok: false, error: 'draft-present' });
+    // REFUSE-ONLY (operator ruling): not one keystroke goes near it.
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+
+  // The refusal must never carry '': the Composer's draft-conflict sheet renders
+  // `draft` in a well and builds "Append anyway" out of it, so '' would render
+  // an empty well and silently drop the rows it claims to be appending to.
+  it('the refusal carries rows 2..N, never an empty string', async () => {
+    const { tmux } = fakeTmux([blankMarkerWithContent]);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'mine');
+    expect((res as { draft?: string }).draft)
+      .toBe('the human’s real second line\nand a third');
+  });
+
+  it('an ORDINARY multi-row draft is reported in full, not just its first row', async () => {
+    const multi = [
+      'earlier turn', '─'.repeat(24),
+      '❯ a human mid-sentence',
+      '  with a second line',
+      '─'.repeat(24), '  👤 team·max',
+    ].join('\n') + '\n';
+    const { tmux } = fakeTmux([multi]);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'mine');
+    expect(res).toMatchObject({
+      ok: false, error: 'draft-present', draft: 'a human mid-sentence\nwith a second line',
+    });
+  });
+
+  // `enter-ignored`'s draft is a CORRESPONDENCE CLAIM handed back to
+  // `submitEnter`, whose gate compares `draftOf`'s single-row reading. Widening
+  // it would make every rescue refuse `box-mismatch`.
+  it('enter-ignored still reports the MARKER ROW only', async () => {
+    const stuck = [
+      'earlier turn', '─'.repeat(24),
+      '❯ stuck text', '  and its second line',
+      '─'.repeat(24), '  👤 team·max',
+    ].join('\n') + '\n';
+    const { tmux } = fakeTmux(['❯ \n', stuck]);
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'stuck text\nand its second line',
+    );
+    expect(res).toMatchObject({ ok: false, error: 'enter-ignored', draft: 'stuck text' });
+  });
+
+  // THE BOUNDARY, pinned because widening the guard is what made it matter.
+  // The refusal reports the box, and the box ENDS AT THE CLOSING RULE — the
+  // status line and the account chrome below it are not somebody's draft, and
+  // reporting them would both refuse a legitimate send and render chrome into
+  // the conflict sheet as though it were the operator's own words.
+  it('stops at the closing rule — chrome below the box is not box content', async () => {
+    const withChrome = [
+      'earlier turn', '─'.repeat(24),
+      '❯ a human mid-sentence',
+      '  with a second line',
+      '─'.repeat(24),
+      '  ⏵⏵ accept edits on', '  👤 team·max  ~/projects/ccrc-pwa',
+    ].join('\n') + '\n';
+    const { tmux } = fakeTmux([withChrome]);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'mine');
+    expect(res).toMatchObject({
+      ok: false, error: 'draft-present', draft: 'a human mid-sentence\nwith a second line',
+    });
+  });
+
+  // An EMPTY box must still be an empty box: the widened guard asks a second
+  // question, it does not answer the first one differently. Without this, a
+  // guard mutated to `if (true)` would refuse every send and no test above
+  // would notice — they all supply an occupied box.
+  it('an empty box is still not a draft — the ordinary send is untouched', async () => {
+    const empty = ['earlier turn', '─'.repeat(24), '❯ ', '─'.repeat(24), '  👤 team·max']
+      .join('\n') + '\n';
+    const { tmux, calls } = fakeTmux([empty, 'scrollback\n❯ mine\n', 'scrollback\n❯ \n']);
+    expect(await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'mine',
+    )).toEqual({ ok: true });
+    expect(cuPresses(calls)).toBe(0);
   });
 });

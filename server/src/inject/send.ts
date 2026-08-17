@@ -254,11 +254,18 @@ type ClearOutcome =
  *  - the look rounds: press, settle, re-read. Slack for a widget whose cost is
  *    not what we measured, and the only way to learn what is actually left.
  *
- * Terminating a look round on `draftOf() === ''` is sound because kills run
- * bottom-up while `draftOf` reads the box's FIRST row (the `❯` marker sits
- * there; continuation rows are indented two spaces and carry no marker — both
- * confirmed against real `capture-pane -e` bytes, see LIVE_CU_FRAMES in the
- * tests), so that row is the LAST to empty. Detecting PROGRESS from draftOf is
+ * Terminating a look round on the box's FIRST row alone was sound only while
+ * that row had started NON-blank: kills run bottom-up and `draftOf` reads row
+ * one (the `❯` marker sits there; continuation rows are indented two spaces
+ * and carry no marker — both confirmed against real `capture-pane -e` bytes,
+ * see LIVE_CU_FRAMES in the tests), so row one is the LAST to empty. On a box
+ * whose marker row was ALREADY blank the argument inverts: the first look
+ * round reads '' with every row below it untouched, and reporting `cleared`
+ * there hands the caller a box it is about to concatenate onto. Since the
+ * clobber guard sees the whole box (`hasContentBelowMarker`), that shape is
+ * reachable on both clear arms — and `replaceDraft` is operator-reachable from
+ * the PWA — so the terminator asks the same question the guard does.
+ * Detecting PROGRESS from draftOf is
  * impossible for the same reason — its value is unchanged for every press but
  * the last — which is why the bound below is wall-clock and not "presses that
  * changed nothing".
@@ -292,8 +299,14 @@ async function clearBox(
     // hammering C-u into a live menu and then report the user their own
     // "1. Yes" as leftover text. Bail and let the caller say so.
     if (hasMenu(ansi.replace(SGR, ''))) return { state: 'menu' };
+    // THE WHOLE BOX, not the marker row. `draftOf` reads row one only, and this
+    // used to terminate on that alone.
+    if (draftOf(ansi) === '' && !hasContentBelowMarker(ansi)) return { state: 'cleared' };
+    // `residue.draft` still reports the MARKER ROW — that field is display, and
+    // on a blank marker row it correctly reports '' meaning "row one is empty".
+    // The caller's own refusal is what carries the full text (`draft-present`,
+    // which reports `boxText`).
     const left = draftOf(ansi);
-    if (left === '') return { state: 'cleared' };
     if (i >= opts.look || now() >= deadline) return { state: 'residue', draft: left };
     await d.tmux.sendKey(id, 'C-u');
   }
@@ -410,7 +423,21 @@ export function sendPrompt(
     if (hasMenu(pane.replace(SGR, ''))) return { ok: false, error: 'dialog-open' };
 
     const draft = draftOf(pane);
-    if (draft) {
+    // THE BOX HOLDS ANYTHING — not "the marker row is non-blank". A wedge whose
+    // FIRST row is blank was invisible here: measured, a send into such a box
+    // issued zero C-u and typed onto the end of the existing content, so the
+    // session received the concatenation as ONE turn — including dispatch's
+    // `/clear`, which would submit `…brief text/clear` on a single line.
+    // `hasContentBelowMarker` already existed for `submitEnter`, which named
+    // this exact pane `blank-first-row`; the guard simply never asked.
+    //
+    // WHERE THE SHAPE STILL COMES FROM, after Task 402. That task makes
+    // `composePrompt` strip leading blank lines, so neither the app's Composer
+    // nor the coordinator nor a curl caller can MANUFACTURE a blank marker row
+    // any more. The two producers that remain are a HUMAN typing Enter first
+    // into the box, and any pre-402 client still on the wire. Both are enough:
+    // this guard is what stands between them and a silent concatenation.
+    if (draft || hasContentBelowMarker(pane)) {
       // `resumeIfOwn`'s discrimination: `needle` is derived from THIS call's
       // OWN `text`, and `submitEnter`'s own correspondence gate already
       // established the doctrine this reuses — "the box's MARKER ROW... is
@@ -460,7 +487,13 @@ export function sendPrompt(
         if (cleared.state === 'residue') return { ok: false, error: 'draft-clear-failed', draft: cleared.draft };
         // cleared.state === 'cleared' → fall through to the type loop below.
       } else if (!opts.replaceDraft) {
-        return { ok: false, error: 'draft-present', draft };
+        // `boxText`, not `draft`: the operator is being shown what this refusal
+        // is protecting, and every row of it is at stake — the conflict sheet
+        // renders this and builds "Append anyway" out of it. On a blank marker
+        // row `draft` is '' and this is rows 2..N, which is exactly the case
+        // that must never send '' (an empty well, and an append that drops what
+        // it claims to be appending to).
+        return { ok: false, error: 'draft-present', draft: boxText(pane) };
       } else {
         // A single C-u could never clear a draft of two or more lines (see
         // clearBox), so "replace" failed with draft-clear-failed on any user
@@ -661,6 +694,25 @@ function continuationRows(ansiPane: string): string[] {
 function hasContentBelowMarker(ansiPane: string): boolean {
   return continuationRows(ansiPane).length > 0;
 }
+
+/**
+ * Everything the box holds, marker row first, blank rows dropped — the text a
+ * clobber refusal is REFUSING TO DESTROY, and therefore the text the operator
+ * has to be shown before deciding to replace or append to it.
+ *
+ * `draftOf` alone is the marker row, which is the wrong unit for that question
+ * twice over: a wedge whose marker row is blank reads as an empty box, and an
+ * ordinary two-line human draft reads as its first line, so the PWA's conflict
+ * sheet showed one row and "Append anyway" retyped that row plus the new text —
+ * silently destroying rows 2..N.
+ *
+ * NOT used for `enter-ignored`. That refusal's `draft` is a CORRESPONDENCE
+ * CLAIM handed back to `submitEnter`, whose gate compares `draftOf`'s
+ * single-row reading against it; a multi-row claim would refuse `box-mismatch`
+ * on every rescue. Two questions, two readings, deliberately.
+ */
+const boxText = (ansiPane: string): string =>
+  [draftOf(ansiPane), ...continuationRows(ansiPane)].filter((r) => r !== '').join('\n');
 
 /**
  * Press Enter once on a box that already holds `expect`.
