@@ -398,6 +398,14 @@ describe('the rejection table is total, in both directions', () => {
       'not-configured',      // the generic "no store wired" answer, shared with push/notifyLog
       'no-commits',          // coord/fingerprint.ts — a DoneRun verdict, not a mail code
       'packed-refs',         // coord/gitref.ts — a git filename
+      'refused-project',     // coord/gitref.ts — a `WorktreeRead.reason` (§1.7).
+                             // NOT a refusal a client ever sees: `readWorktreeRecords`
+                             // answers it to ONE in-process caller (`watch.ts`'s
+                             // census), no route maps it to a status, and nothing
+                             // switches on it over the wire. The sibling reason
+                             // `unlistable` is one word and never reaches this scan
+                             // at all, which is the only reason it is not listed
+                             // beside this one.
       // Task 9 (`coord/routes.ts`'s run routes) — a SEPARATE `refused`/
       // `reject.code` vocabulary for `POST /api/runs*`, now typed as
       // `RunRefuseCode` above and so no longer hand-allowlisted here.
