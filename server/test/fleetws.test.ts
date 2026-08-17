@@ -184,7 +184,7 @@ describe('fleet REST + WS', () => {
     const cacheDir = mkTmp('ccrc-cache-');
     const cachePath = path.join(cacheDir, 'state-cache.json');
     const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
-    const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null }, stateCachePath: cachePath };
+    const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
     const watcher = new FleetWatcher(deps, new Bus());
 
     await watcher.tick();
@@ -199,7 +199,7 @@ describe('fleet REST + WS', () => {
     const cachePath = path.join(cacheDir, 'state-cache.json');
     const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
     const deps: Deps = {
-      ...testDeps(home), cfg, fleetState: { connected: false, downSince: Date.now(), ccdVerbs: null, rosterFp: null }, stateCachePath: cachePath,
+      ...testDeps(home), cfg, fleetState: { connected: false, downSince: Date.now(), ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath,
     };
     const watcher = new FleetWatcher(deps, new Bus());
 
@@ -221,7 +221,7 @@ describe('fleet REST + WS', () => {
     const cachePath = path.join(cacheDir, 'state-cache.json');
     seedSession(home, 'claude-corp-orchard-api', 'claude-corp');
     const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
-    const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null }, stateCachePath: cachePath };
+    const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
     const watcher = new FleetWatcher(deps, new Bus());
 
     await watcher.tick(); // both sessions readable — writes a 2-row cache
@@ -250,7 +250,7 @@ describe('fleet REST + WS', () => {
     const cacheDir = mkTmp('ccrc-cache-');
     const cachePath = path.join(cacheDir, 'state-cache.json');
     const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
-    const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null }, stateCachePath: cachePath };
+    const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
     const watcher = new FleetWatcher(deps, new Bus());
 
     await watcher.tick(); // 1 row
@@ -280,7 +280,7 @@ describe('fleet REST + WS', () => {
     seedRoster(emptyHome);
     mkdirSync(path.join(emptyHome, '.cc-sessions'), { recursive: true });
     const cfg = loadConfig({ CCRC_HOME: emptyHome, CCRC_FLEET: 'remote' });
-    const deps: Deps = { ...testDeps(emptyHome), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null }, stateCachePath: cachePath };
+    const deps: Deps = { ...testDeps(emptyHome), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
     const watcher = new FleetWatcher(deps, new Bus());
 
     await watcher.tick();
@@ -314,7 +314,7 @@ describe('fleet REST + WS', () => {
       const cachePath = path.join(cacheDir, 'state-cache.json');
       seedSession(home, 'claude-corp-orchard-api', 'claude-corp');
       const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
-      const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null }, stateCachePath: cachePath };
+      const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
       const watcher = new FleetWatcher(deps, new Bus());
 
       await watcher.tick(); // both sessions readable — writes a 2-row cache
@@ -349,7 +349,7 @@ describe('fleet REST + WS', () => {
       const cachePath = path.join(cacheDir, 'state-cache.json');
       seedSession(home, 'claude-corp-orchard-api', 'claude-corp');
       const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
-      const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null }, stateCachePath: cachePath };
+      const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
       const watcher = new FleetWatcher(deps, new Bus());
 
       await watcher.tick();
@@ -377,7 +377,7 @@ describe('fleet REST + WS', () => {
       const cachePath = path.join(cacheDir, 'state-cache.json');
       seedSession(home, 'claude-corp-orchard-api', 'claude-corp');
       const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
-      const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null }, stateCachePath: cachePath };
+      const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
       const watcher = new FleetWatcher(deps, new Bus());
 
       await watcher.tick();
@@ -435,7 +435,7 @@ describe('fleet REST + WS', () => {
       const cachePath = path.join(cacheDir, 'state-cache.json');
       const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
       const { io, setDegraded } = degradableIO('claude2-MekWarLive', 'workdir');
-      const deps: Deps = { ...testDeps(home), cfg, io, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null }, stateCachePath: cachePath };
+      const deps: Deps = { ...testDeps(home), cfg, io, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
       const watcher = new FleetWatcher(deps, new Bus());
 
       await watcher.tick(); // clean read — writes a 1-row cache
@@ -470,7 +470,7 @@ describe('fleet REST + WS', () => {
       const cachePath = path.join(cacheDir, 'state-cache.json');
       const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
       const { io, setDegraded } = degradableIO('claude2-MekWarLive', 'workdir');
-      const deps: Deps = { ...testDeps(home), cfg, io, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null }, stateCachePath: cachePath };
+      const deps: Deps = { ...testDeps(home), cfg, io, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
       const watcher = new FleetWatcher(deps, new Bus());
 
       await watcher.tick();
@@ -507,7 +507,7 @@ describe('fleet REST + WS', () => {
       const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
       const { io, setDegraded } = degradableIO('claude2-MekWarLive', 'workdir');
       setDegraded(true);
-      const deps: Deps = { ...testDeps(home), cfg, io, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null }, stateCachePath: cachePath };
+      const deps: Deps = { ...testDeps(home), cfg, io, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
       const watcher = new FleetWatcher(deps, new Bus());
 
       await watcher.tick();

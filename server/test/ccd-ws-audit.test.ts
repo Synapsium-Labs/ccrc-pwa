@@ -1905,7 +1905,7 @@ describe('the dispatcher', () => {
   const runCcd = (...args: string[]): { code: number; stdout: string; stderr: string } => {
     const opts = {
       encoding: 'utf8' as const, cwd: h.home,
-      env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }),
+      env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true }),
     };
     try { return { code: 0, stdout: execFileSync('bash', [CCD, ...args], opts).trim(), stderr: '' }; }
     catch (e) {

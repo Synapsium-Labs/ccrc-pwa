@@ -18,7 +18,7 @@ const runCcd = (...args: string[]): { code: number; stdout: string; stderr: stri
       code: 0, stderr: '',
       stdout: execFileSync('bash', [CCD, ...args], {
         encoding: 'utf8', cwd: h.home,
-        env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }),
+        env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true }),
       }),
     };
   } catch (e) {

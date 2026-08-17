@@ -1,0 +1,268 @@
+#!/usr/bin/env bash
+# ccrc-wrapper-shape — THE ACCOUNT WRAPPER CONTRACT, in one file: what a
+# generated wrapper looks like on disk, how to read one without ever reading a
+# 300 MB binary whole, and the both-directions set difference its callers use to
+# report a roster and a disk that disagree.
+#
+# SOURCED, never executed. Two callers today, asking the same question from
+# opposite ends:
+#   - `ccd/ccrc-adopt` — disk -> roster. It classifies what it finds in
+#     $HOME/.local/bin and writes ~/.ccrc/accounts.json for a box nobody
+#     generated one for yet.
+#   - `ccd/ccrc-doctor-checks`'s `_check_wrappers` — roster vs disk. It reports
+#     where the two disagree, and resolves nothing.
+#
+# ── WHY THIS FILE EXISTS AT ALL ───────────────────────────────────────────
+# Both callers need the SAME answer to "what does a generated wrapper look
+# like", and a second, looser copy of that answer is precisely how a checker
+# and a generator drift apart — which would make the checker worse than
+# useless: it would go green on the shape it had learned to accept rather than
+# on the shape the tools actually write. This is the same rule
+# `server/test/single-definition.test.ts` enforces for TypeScript, applied to
+# the two bash tools that share one contract. `parse_shape` and the set
+# difference below were MOVED here out of `ccrc-adopt`; neither was rewritten.
+#
+# ── THE THIRD SHIPPED FILE (read this before installing anything) ─────────
+# `ccrc` finds `ccrc-doctor-checks` through `${BASH_SOURCE[0]}`, and this file
+# the same way. Bash does NOT resolve `BASH_SOURCE` through a symlink, so a
+# symlink to `ccrc` on PATH does not rescue a missing sibling: DOCTOR's three
+# files — `ccrc`, `ccrc-doctor-checks` and this one — have to be installed into
+# one directory together. (The CLI's own set is FOUR: `ccrc-adopt` as well,
+# which `cmd_adopt` execs. Doctor does not need it, which is why this paragraph
+# counts three and `ccrc`'s header counts four; they are counting different
+# sets, not disagreeing.) `_check_wrappers` says so by name when this file is
+# not beside it, and `ccrc-doctor.test.ts` pins that message — a red suite
+# rather than a comment.
+#
+# ── NAMESPACE ─────────────────────────────────────────────────────────────
+# Everything here is `_wrap_*` / `WRAPPER_*`, which is neither of the two
+# namespaces already in play in a process that sources this file:
+#   - `_ccrc_*`  — the CLI's helpers (`_ccrc_die`) AND, more importantly, the
+#     five functions `shared/generate.mjs` emits into ~/.ccrc/accounts.sh
+#     (`_ccrc_cfg_dir`, `_ccrc_id_wrapper`, `_ccrc_dir_id`, `_ccrc_label`,
+#     `_ccrc_hue`) plus `CCRC_ACCOUNTS`/`CCRC_HOME_ABLE`/`CCRC_MEASURED`/
+#     `CCRC_UPSTREAM`. Nothing here may shadow one of those: a doctor run that
+#     redefined `_ccrc_cfg_dir` would be lying to whatever sourced it next.
+#   - `_dr_*`    — `ccrc-doctor-checks`'s own verdict helpers.
+#
+# ── NO PATH LOOKUPS, DELIBERATELY ─────────────────────────────────────────
+# Not one function here calls an external binary — no `head`, no `grep`, no
+# `readlink`, no `basename`. Two reasons, both measured:
+#   - doctor's whole job is to answer on a box whose environment is broken, and
+#     `ccrc-doctor.test.ts` runs it under a PATH containing nothing but fixture
+#     directories (no /bin, no /usr/bin). A check that needs coreutils to
+#     classify a file goes silent on exactly the box it exists for.
+#   - `adopt`'s "never read a candidate whole" rule (its own header) is kept
+#     here by `_wrap_is_script` reading exactly two bytes. Measured on the real
+#     324 MB `claude` binary: instant, and nothing but those two bytes is read.
+
+# Where account wrappers live. One spelling, because two files comparing
+# "$HOME/.local/bin" against each other is the same drift in miniature.
+WRAPPER_BIN_DIR="$HOME/.local/bin"
+
+# `shared/roster.ts`'s ID_RE. A wrapper's FILENAME is its account id — ccd
+# executes `$HOME/.local/bin/<id>` directly (ccd:7361) — so this doubles as the
+# filter that drops the `ccd.bak-<date>` / `claude2.bak-<date>` backups a real
+# box accumulates: a "." never appears in a legal id.
+WRAPPER_ID_RE='^[a-z][a-z0-9-]{0,31}$'
+# Mirrors `shared/roster.ts`'s second, independent gate on configDirSuffix: the
+# safe set a suffix may use once its leading "." is counted. Kept here, not
+# derived from the TypeScript, for the same reason `deploy/gen-accounts.mjs`
+# keeps its own copy (see that file's header) — a bare bash script cannot
+# import shared/roster.ts either.
+WRAPPER_SUFFIX_SAFE_RE='^\.[A-Za-z0-9._-]+$'
+
+# ── is this file a script? ────────────────────────────────────────────────
+# The first two bytes, and never a third. `read -N 2` reads EXACTLY two
+# characters and stops, delimiters and all — the file's remaining 324 MB are
+# never touched. (`-n` would stop early at a newline; `-N` does not, which is
+# what makes this a byte test rather than a line test.) Symlinks are followed
+# transparently, because this opens the file for reading rather than `stat`ing
+# the link — the measured shape on the reference box is `claude` ->
+# ~/.local/share/claude/versions/<ver>, whose own `stat` size is the length of
+# that path string.
+_wrap_is_script() {
+  local first=""
+  [ -f "$1" ] && [ -r "$1" ] || return 1
+  IFS= read -r -N 2 first 2>/dev/null < "$1" || true
+  [ "$first" = '#!' ]
+}
+
+# ── does this script declare a config dir at all? ─────────────────────────
+# The one question that separates "an account wrapper" from "some other script
+# in ~/.local/bin". Call it only on something `_wrap_is_script` accepted: on a
+# non-script this would read the whole file.
+_wrap_declares_config_dir() {
+  local f="$1" ln
+  [ -r "$f" ] || return 1
+  while IFS= read -r ln; do
+    [[ "$ln" =~ ^[[:space:]]*export[[:space:]]+CLAUDE_CONFIG_DIR= ]] && return 0
+  done < "$f"
+  return 1
+}
+
+# ── the generated shape ───────────────────────────────────────────────────
+# Target-agnostic, and deliberately ONE function used for several different
+# questions (which binary is upstream; which scripts are "generated"; whether a
+# roster entry still describes what is on disk), because every one of them
+# depends on the exact same shape test and a second, looser copy of it is how
+# they would drift.
+#
+# "Full shape match" means: the shebang line is EXACTLY `#!/usr/bin/env bash`;
+# every remaining blank or comment-only line is stripped; what is left is
+# EXACTLY two or three lines, in order — an export, an optional
+# secrets-sourcing guard, and an exec of SOME local binary — with nothing else.
+# Comments are the one thing this tolerates ANYWHERE in that gap: the two real
+# generated wrappers measured on the reference box (claude2, claude-dev0) both
+# carry an explanatory comment ahead of their secrets line, and a classifier
+# that could not round-trip its own prior output would be useless.
+#
+# The exec line's TARGET is captured but not judged here — that is the caller's
+# question, and it differs per caller (adopt holds a vote; doctor compares the
+# target against the roster's upstream account). A script with the right shape
+# but the wrong target must never be judged by this function, which is what
+# resolving the target here would risk.
+#
+# EACH SIGNIFICANT LINE IS CHECKED BY STRIPPING the known literal prefix and
+# suffix (quoted, so no part of it is ever treated as a glob or regex) and then
+# RECONSTRUCTING the exact line this file expects from what was captured,
+# comparing the two strings whole. That is deliberate, and it is the reason
+# `_check_wrappers` can exist at all: a regex capturing two occurrences of the
+# same path in one line is exactly the kind of pattern that is easy to write
+# wrong in a way that silently accepts a MISMATCHED pair — which is the very
+# defect class the doctor check hunts. Reconstruct-then-compare cannot make
+# that mistake: it comes back with the reconstructed answer, or the line
+# disagrees.
+#
+# Prints `ok\t<target>\t<suffix>\t<secrets>` or `no\t\t\t`. Both the suffix and
+# the secrets path are HOME-RELATIVE, exactly as the roster spells them.
+#
+# THE SECRETS FILE IS A PATH AND NOTHING ELSE. This reads the WRAPPER; it never
+# opens, stats, sources or hashes the file the wrapper names. A token that is
+# never read cannot be printed, and doctor's output is the thing an operator
+# pastes into a ticket.
+_wrap_parse_shape() {
+  local f="$1"
+  local -a lines=()
+  [ -r "$f" ] || { printf 'no\t\t\t\n'; return; }
+  mapfile -t lines < "$f"
+
+  if [ "${lines[0]:-}" != '#!/usr/bin/env bash' ]; then
+    printf 'no\t\t\t\n'; return
+  fi
+
+  local -a body=()
+  local i ln
+  for ((i = 1; i < ${#lines[@]}; i++)); do
+    ln="${lines[$i]}"
+    [[ "$ln" =~ ^[[:space:]]*$ ]] && continue
+    [[ "$ln" =~ ^[[:space:]]*# ]] && continue
+    body+=("$ln")
+  done
+
+  local n="${#body[@]}"
+  if [ "$n" -ne 2 ] && [ "$n" -ne 3 ]; then
+    printf 'no\t\t\t\n'; return
+  fi
+
+  # Line 1: export CLAUDE_CONFIG_DIR="$HOME/<suffix>"
+  local exp_prefix='export CLAUDE_CONFIG_DIR="$HOME/'
+  ln="${body[0]}"
+  if [[ "$ln" != "$exp_prefix"* || "$ln" != *'"' ]]; then
+    printf 'no\t\t\t\n'; return
+  fi
+  # exp_prefix ends in "/", one character short of the suffix's own leading
+  # "." (the file reads `$HOME/.claude-personal`) — so `suffix` already
+  # starts with "." here. Do not prepend a second one.
+  local suffix="${ln#"$exp_prefix"}"
+  suffix="${suffix%\"}"
+  if [ "$suffix" = "." ] || [[ ! "$suffix" =~ $WRAPPER_SUFFIX_SAFE_RE ]]; then
+    printf 'no\t\t\t\n'; return
+  fi
+
+  local secrets=""
+  local idx=1
+  if [ "$n" -eq 3 ]; then
+    local sec_prefix='[ -r "$HOME/'
+    ln="${body[1]}"
+    if [[ "$ln" != "$sec_prefix"*'"'* ]]; then
+      printf 'no\t\t\t\n'; return
+    fi
+    local rest="${ln#"$sec_prefix"}"
+    local path1="${rest%%\"*}"
+    local expected="$sec_prefix$path1"'" ] && . "$HOME/'"$path1"'"'
+    if [ "$ln" != "$expected" ]; then
+      printf 'no\t\t\t\n'; return
+    fi
+    secrets="$path1"
+    idx=2
+  fi
+
+  # exec "$HOME/.local/bin/<target>" "$@" — target not judged here.
+  local exec_prefix='exec "$HOME/.local/bin/'
+  ln="${body[$idx]}"
+  if [[ "$ln" != "$exec_prefix"*'" "$@"' ]]; then
+    printf 'no\t\t\t\n'; return
+  fi
+  local rest="${ln#"$exec_prefix"}"
+  local target="${rest%'" "$@"'}"
+  [[ "$target" =~ $WRAPPER_ID_RE ]] || { printf 'no\t\t\t\n'; return; }
+
+  printf 'ok\t%s\t%s\t%s\n' "$target" "$suffix" "$secrets"
+}
+
+# ── both directions of a set difference, reported ─────────────────────────
+# `cross_check`, lifted out of `ccrc-adopt` and generalised by one step: the
+# ENGINE (who is in A and not in B, and who is in B and not in A) lives here
+# once; the WORDING stays with each caller, because the two callers are saying
+# genuinely different things about the same arithmetic. Adopt reports three
+# independent sources that usually agree with its discovery; doctor reports a
+# roster and a disk that must agree. Both obey the same rule, which is the
+# whole point of the shape: REPORT the disagreement, never resolve it by
+# silently trusting one side (ccrc-adopt:32-39, "the direction of every
+# uncertain call is to report it").
+#
+#   _wrap_set_diff <callback> <name of array A> <name of array B>
+#
+# calls `<callback> a-only <item>` for each member of A missing from B, in A's
+# order, and THEN `<callback> b-only <item>` for each member of B missing from
+# A. That order is adopt's original output order and is part of the contract.
+#
+# The callback sees the CALLER's locals (bash's dynamic scope), which is how
+# doctor's callback appends to the finding list `_check_wrappers` declared —
+# no globals, no output parsing.
+#
+# The two arrays travel BY NAME (`local -n`) rather than as one flattened
+# argument list, because a flattened list cannot express "A is empty": adopt's
+# original signature took `<label> <all of A...>` and worked only because it
+# closed over B. A caller must therefore not name its arrays `_wrap_diff_a` or
+# `_wrap_diff_b`, which bash would reject as a circular reference.
+#
+# EVERY LOCAL HERE IS `_wrap_*`-PREFIXED, and that is a correctness rule rather
+# than tidiness (Task 5 review, Minor 4): the callback runs INSIDE this
+# function's scope, so a bare `local x` here would shadow the caller's own `x`
+# for the duration of every callback — the same dynamic scope this design
+# relies on to hand the callback its caller's arrays would also hand it the
+# wrong `x`. The reserved names are therefore all of `_wrap_cb`,
+# `_wrap_diff_a`, `_wrap_diff_b`, `_wrap_x`, `_wrap_y`, `_wrap_found`, and a
+# callback must not read a variable of any of those names expecting its own.
+_wrap_set_diff() {
+  local _wrap_cb="$1"
+  local -n _wrap_diff_a="$2"
+  local -n _wrap_diff_b="$3"
+  local _wrap_x _wrap_y _wrap_found
+  for _wrap_x in ${_wrap_diff_a[@]+"${_wrap_diff_a[@]}"}; do
+    _wrap_found=0
+    for _wrap_y in ${_wrap_diff_b[@]+"${_wrap_diff_b[@]}"}; do
+      [ "$_wrap_y" = "$_wrap_x" ] && { _wrap_found=1; break; }
+    done
+    [ "$_wrap_found" -eq 1 ] || "$_wrap_cb" a-only "$_wrap_x"
+  done
+  for _wrap_x in ${_wrap_diff_b[@]+"${_wrap_diff_b[@]}"}; do
+    _wrap_found=0
+    for _wrap_y in ${_wrap_diff_a[@]+"${_wrap_diff_a[@]}"}; do
+      [ "$_wrap_y" = "$_wrap_x" ] && { _wrap_found=1; break; }
+    done
+    [ "$_wrap_found" -eq 1 ] || "$_wrap_cb" b-only "$_wrap_x"
+  done
+}

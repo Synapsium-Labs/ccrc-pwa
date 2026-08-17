@@ -486,10 +486,14 @@ describe('the verification is actually wired into the deploy, and can observe a 
     // on the box, which is the same hazard wearing a different hat: a torn
     // half-written roster is a `source` that fails, and ccd's own `|| die`
     // then turns every live supervisor into a failed unit at once.
+    // `.local/bin/ccrc` joins the set in stage 2b's Task 8. It is a two-line
+    // launcher, not a script anyone edits, but it lands ON PATH next to `ccd`
+    // and is exec'd by an operator at a terminal — the same in-place-overwrite
+    // hazard, and the same one-line fix.
     for (const dest of [
       '.local/bin/ccd', '.cc-sessions/notify.sh',
       '.cc-sessions/session-hook.sh', '.cc-sessions/install-session-hooks.sh',
-      '.ccrc/accounts.sh',
+      '.ccrc/accounts.sh', '.local/bin/ccrc',
     ]) {
       const escaped = dest.replace(/[./]/g, '\\$&');
       const direct = new RegExp(
@@ -503,6 +507,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
       'install_atomic ccd/session-hook.sh .cc-sessions/session-hook.sh',
       'install_atomic ccd/install-session-hooks.sh .cc-sessions/install-session-hooks.sh',
       'install_atomic "$ACCOUNTS_SH" .ccrc/accounts.sh',
+      'install_atomic "$shim" .local/bin/ccrc 755',
     ]) {
       expect(deploySh, `missing atomic install call: ${call}`).toContain(call);
     }
@@ -1437,5 +1442,151 @@ describe('the verification is actually wired into the deploy, and can observe a 
       .toContain('health_out="$(curl -fsS "$HEALTH_URL")"');
     expect(serverBranch, 'the capture must be tested via printf | grep -qF, not re-piped from curl')
       .toContain('printf \'%s\' "$health_out" | grep -qF "\\"sha\\":\\"$BUILD_SHA\\""');
+  });
+
+  // ── Stage 2b, Task 8: the lifecycle CLI finally reaches a box ────────────
+  // `ccd/ccrc` (version/doctor/status/adopt) existed in the repo and on NO
+  // box: no deploy installed it. Shipping it is not one `install_atomic` line
+  // by imitation of `ccd`, and why not is the whole design decision:
+  //
+  //   - `ccrc` sources `ccrc-doctor-checks` (which sources
+  //     `ccrc-wrapper-shape`) through `${BASH_SOURCE[0]}`, which bash does NOT
+  //     resolve through a symlink. A lone `~/.local/bin/ccrc` — or a symlink
+  //     to the shipped tree — leaves `ccrc doctor` dead on every box:
+  //     "doctor's check table is missing".
+  //   - `_dr_pkg_candidates` (ccd/ccrc-doctor-checks) reads the shipped node
+  //     floor at `$CCRC_HERE/../{server,agent}/package.json`. So installing
+  //     all four files into `~/.local/bin` — which fixes the sourcing — BREAKS
+  //     the node check instead: its candidates become
+  //     `~/.local/{server,agent}/package.json`, neither of which exists.
+  //
+  // Both constraints point at the same place: `ccrc` has to RUN from inside
+  // the shipped tree, `~/ccrc/ccd/ccrc`, which is what its own siblings and
+  // the node check already assume (that path is the remedy string
+  // `_check_node` prints). So PATH gets a SHIM that execs it. The four files
+  // then arrive from ONE rsync of ONE tree and can never be from two different
+  // deploys — where four independent `install_atomic` calls plus one aborted
+  // run would leave a new `ccrc` beside a stale `ccrc-doctor-checks` for good.
+  const shimBody = (): string => {
+    const fn = /install_ccrc_shim\(\) \{([\s\S]*?)\n\}/.exec(deploySh);
+    expect(fn, 'deploy.sh has no install_ccrc_shim() helper — nothing puts ccrc on PATH').toBeTruthy();
+    const heredoc = /<<'CCRC_SHIM'\n([\s\S]*?)\nCCRC_SHIM\n/.exec(fn![1]!);
+    expect(heredoc, 'install_ccrc_shim does not generate the shim from a quoted heredoc').toBeTruthy();
+    return heredoc![1]!;
+  };
+
+  it('`ccrc` reaches PATH as a shim that EXECS the shipped tree — argv and exit code pass straight through', () => {
+    // The shim is EXTRACTED AND RUN, not read: a structural assertion that the
+    // text contains `exec` would pass on a shim that drops "$@", swallows the
+    // exit code, or points at a path that is spelled `~/…` inside double
+    // quotes (where bash does not expand a tilde) — all three of which are how
+    // a two-line launcher actually goes wrong.
+    const home = mkTmp('ccrc-shim-exec-');
+    mkdirSync(path.join(home, 'ccrc', 'ccd'), { recursive: true });
+    writeFileSync(path.join(home, 'ccrc', 'ccd', 'ccrc'),
+      '#!/bin/sh\necho "shipped ccrc got: $*"\nexit 7\n', { mode: 0o755 });
+    const shim = path.join(mkTmp('ccrc-shim-file-'), 'ccrc');
+    writeFileSync(shim, `${shimBody()}\n`, { mode: 0o755 });
+
+    const r = spawnSync('bash', [shim, 'doctor', '--nope'], {
+      encoding: 'utf8', env: { ...process.env, HOME: home },
+    });
+    expect(r.stdout, 'the shim did not forward argv to the shipped ccrc').toContain('shipped ccrc got: doctor --nope');
+    expect(r.status, "the shipped ccrc's exit code must be the shim's exit code").toBe(7);
+  });
+
+  it('the shim refuses BY NAME when the shipped tree is gone, rather than "command not found"', () => {
+    // A box whose `~/ccrc` was deleted (or never rsynced) must be told which
+    // file is missing and what to do — the operator's mistake here is
+    // indistinguishable from "ccrc was never installed" otherwise.
+    const home = mkTmp('ccrc-shim-notree-');
+    const shim = path.join(mkTmp('ccrc-shim-file2-'), 'ccrc');
+    writeFileSync(shim, `${shimBody()}\n`, { mode: 0o755 });
+    const r = spawnSync('bash', [shim, 'version'], {
+      encoding: 'utf8', env: { ...process.env, HOME: home },
+    });
+    expect(r.status, 'a missing shipped tree is exit 1 — the tool ran and the answer was bad').toBe(1);
+    expect(r.stderr).toContain(path.join(home, 'ccrc', 'ccd', 'ccrc'));
+    expect(r.stderr, 'the refusal names no remedy').toMatch(/deploy/);
+  });
+
+  it('BOTH lanes install the shim, in the same ordering class as ccd — after the roster, before the restart', () => {
+    // `ccrc doctor` has to work on BOTH boxes (it is how a box reports its own
+    // fitness), and the two lanes are not symmetric: only the agent lane
+    // installs `ccd`, so a shim added by imitation would land on the fleet
+    // host alone and the server would have no `ccrc` at all.
+    //
+    // ORDERING: the same class as `ccd` — after the roster lands, before the
+    // restart. Ahead of it because `ccrc status`/`doctor` read the roster the
+    // deploy is placing; behind the restart because a shim installed after the
+    // chain that can abort is a shim a failed deploy never lands.
+    const agentBranch = deploySh.slice(
+      deploySh.indexOf('if [ "$TARGET" = "agent" ]'), deploySh.indexOf('\nelse'));
+    const serverBranch = deploySh.slice(deploySh.indexOf('\nelse'));
+
+    const agentAt = agentBranch.indexOf('install_ccrc_shim');
+    expect(agentAt, 'the agent lane never installs ccrc').toBeGreaterThan(-1);
+    expect(agentAt, 'the shim must land after the roster it lets ccrc read')
+      .toBeGreaterThan(agentBranch.indexOf('install_atomic "$ACCOUNTS_SH" .ccrc/accounts.sh 644'));
+    expect(agentAt, 'the shim must land after the rsync that places the tree it points into')
+      .toBeGreaterThan(agentBranch.indexOf('rsync -az'));
+    expect(agentAt, 'the shim must land before the restart chain that can abort the deploy')
+      .toBeLessThan(agentBranch.indexOf('"${SSH[@]}" "$BOX" "$AGENT_CMD"'));
+
+    const serverAt = serverBranch.indexOf('install_ccrc_shim');
+    expect(serverAt, 'the server lane never installs ccrc — doctor must run on BOTH boxes')
+      .toBeGreaterThan(-1);
+    expect(serverAt, 'the shim must land after the roster it lets ccrc read')
+      .toBeGreaterThan(serverBranch.indexOf('ship_roster'));
+    expect(serverAt, 'the shim must land after the rsync that places the tree it points into')
+      .toBeGreaterThan(serverBranch.indexOf('rsync -az'));
+    expect(serverAt, 'the shim must land before the restart chain that can abort the deploy')
+      .toBeLessThan(serverBranch.indexOf('"${SSH[@]}" "$BOX" "$REMOTE_CMD"'));
+
+    // `install_atomic` does NOT create its destination directory, and the
+    // SERVER lane never creates `~/.local/bin` at all (the agent lane happens
+    // to, in its backup step) — so the very first server deploy would scp into
+    // a directory that does not exist. The mkdir lives INSIDE the helper, the
+    // way `stamp_build` carries its own `mkdir -p ~/.ccrc`, so neither lane
+    // has to remember it.
+    const fn = /install_ccrc_shim\(\) \{([\s\S]*?)\n\}/.exec(deploySh)![1]!;
+    expect(fn, 'install_ccrc_shim must create ~/.local/bin itself — install_atomic does not')
+      .toContain('mkdir -p ~/.local/bin');
+    const mkdirAt = fn.indexOf('mkdir -p ~/.local/bin');
+    expect(fn.indexOf('install_atomic "$shim" .local/bin/ccrc 755'),
+      'the mkdir must precede the install it exists for').toBeGreaterThan(mkdirAt);
+  });
+
+  it('BOTH lanes rsync the `ccd` tree the shim points into — the four ccrc files ship and version together', () => {
+    // The shim is inert without `~/ccrc/ccd/`, and `ccrc` is inert without the
+    // three files beside it. The server lane shipped `server shared deploy`
+    // and no `ccd` at all, so `ccrc doctor` on the server box would have been
+    // a shim pointing at nothing.
+    //
+    // This is also the answer to "ship and version together": all four files
+    // ride ONE rsync of ONE tree, so a box cannot end up holding a new `ccrc`
+    // beside a stale `ccrc-doctor-checks` — the failure four independent
+    // `install_atomic` calls would make permanent on any aborted run.
+    for (const f of ['ccrc', 'ccrc-doctor-checks', 'ccrc-wrapper-shape', 'ccrc-adopt']) {
+      expect(existsSync(path.join(deployDir, '..', 'ccd', f)), `ccd/${f} is not in the repo`).toBe(true);
+    }
+    // The generic "~/ccrc/<dir>/ is shipped by this branch's rsync" test next
+    // door cannot see this one: the shim's path lives inside a heredoc in a
+    // top-level helper, not in either branch's text, and it is spelled with
+    // `$HOME` rather than `~` (a tilde inside the double quotes the shim needs
+    // does not expand). So the dependency is asserted here, per lane.
+    for (const [label, branch] of [
+      ['agent', deploySh.slice(deploySh.indexOf('if [ "$TARGET" = "agent" ]'), deploySh.indexOf('\nelse'))],
+      ['server', deploySh.slice(deploySh.indexOf('\nelse'))],
+    ] as const) {
+      const m = /rsync -az --delete -e "\$\{SSH\[\*\]\}" --exclude node_modules[\s\S]*?"\$BOX":ccrc\//.exec(branch);
+      expect(m, `${label} branch has no rsync shipping a tree into ~/ccrc/`).toBeTruthy();
+      const sources = m![0].trim().split('\n').pop()!.replace(/"\$BOX":ccrc\/\s*$/, '').trim().split(/\s+/);
+      expect(sources,
+        `the ${label} lane does not ship ccd/ — its ccrc shim would point at a directory that does not exist`)
+        .toContain('ccd');
+    }
+    // And the shim points at that tree, not at a copy of its own.
+    expect(shimBody()).toContain('$HOME/ccrc/ccd/ccrc');
   });
 });

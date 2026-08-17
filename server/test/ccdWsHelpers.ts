@@ -88,11 +88,20 @@ export const WS_ADD_REAL_SPAWN = `
     esac
   };`;
 
-/** THE ONE PATH-STUB DIRECTORY. `ghContainedEnv` PREPENDS this dir, so a test
- *  that plants its own binary anywhere else loses to the poison on ordering
- *  alone. A test that needs a FUNCTIONAL `tmux`/`systemctl` on PATH (the two
+/** THE HARNESS'S PATH-STUB DIRECTORY, and the FIRST entry of every PATH
+ *  `ghContainedEnv` returns. Whatever this directory holds cannot be displaced
+ *  by a caller-supplied PATH, which is what makes the `gh` poison structural.
+ *
+ *  So a CCD test that needs a FUNCTIONAL `tmux`/`systemctl` on PATH (the two
  *  `runCcd` idioms, which must survive `exec`) writes it HERE, where it
- *  REPLACES the poison file instead of racing it. */
+ *  REPLACES the poison file instead of racing it.
+ *
+ *  It is NOT "the one stub directory in the suite", and reading it that way is
+ *  what broke five `ccrc status` tests: a consumer that never runs ccd
+ *  (`ccrc-doctor.test.ts`) keeps its own `<home>/stub-bin`, and only the
+ *  poisons this file actually plants can shadow what is in it. That set is `gh`
+ *  for every caller, plus systemd for a caller that ASKS — see
+ *  `ghContainedEnv`. */
 export function harnessBin(home: string): string {
   const bin = path.join(home, '.local', 'bin');
   fs.mkdirSync(bin, { recursive: true });
@@ -117,16 +126,43 @@ export function harnessBin(home: string): string {
  * in one harness while a second one exists beside it. A shell-function stub
  * (`GH_STUB`) still wins over this — bash resolves functions before PATH — so
  * this is what answers when a snippet has no stub.
+ *
+ * `gh` IS THE WHOLE UNCONDITIONAL PART, and the function's name is the whole
+ * promise. `opts.systemd` adds the SECOND poison (below) for callers that run
+ * ccd, and it defaults OFF: this function is imported by files that run no ccd
+ * at all, and anything planted here lands in a directory it PREPENDS — so an
+ * unconditional systemd poison displaces the `systemctl` such a file planted on
+ * its own PATH, in a directory the create-if-absent guard below can never see.
+ * Measured: planting it unconditionally took `ccrc-doctor.test.ts` from 170/170
+ * to 165/170, and every failure named `ccrc status`, three files from the edit.
  */
-export function ghContainedEnv(home: string, env: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+export interface ContainOpts {
+  /** Plant the `systemctl`/`systemd-run` poisons too. ASK FOR THIS IF THE SPAWN
+   *  RUNS ccd: every path that can reach `_have_systemctl` or
+   *  `_supervised_start` needs it, `makeCcdHarness` asks on behalf of every test
+   *  that goes through the harness, and `ccd-workspaces.test.ts`'s source scan
+   *  is what says so for the call sites that build their own env. */
+  systemd?: boolean;
+}
+
+export function ghContainedEnv(
+  home: string, env: NodeJS.ProcessEnv = {}, opts: ContainOpts = {},
+): NodeJS.ProcessEnv {
   const bin = harnessBin(home);
   fs.writeFileSync(path.join(bin, 'gh'),
     '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/gh-poison"\n'
     + 'echo "ccd tests must never reach the real gh" >&2\nexit 97\n', { mode: 0o755 });
-  // THE SECOND STRUCTURAL BOUNDARY, and the reason it is a poison rather than an
-  // absence: `_have_systemctl` is `command -v systemctl`, so REMOVING systemctl
-  // would send every ccd test down `_supervised_start`'s no-systemd fallback —
-  // a different code path, silently. This one exists, records, and refuses.
+  // Everything below is the SYSTEMD boundary, and it happens only for a caller
+  // that asked. OPT-IN, not opt-out: a default-on poison is invisible to the
+  // consumer it hurts, because the damage shows up as a wrong ANSWER in a file
+  // that never mentioned systemd (see the header). Opt-in makes the widening
+  // land at the call site, where the reviewer of that call site can see it.
+  if (!opts.systemd) return { ...env, PATH: `${bin}:${env['PATH'] ?? ''}` };
+  // THE SECOND STRUCTURAL BOUNDARY for the ccd runners, and the reason it is a
+  // poison rather than an absence: `_have_systemctl` is `command -v systemctl`,
+  // so REMOVING systemctl would send every ccd test down `_supervised_start`'s
+  // no-systemd fallback — a different code path, silently. This one exists,
+  // records, and refuses.
   //
   // CREATE-IF-ABSENT, unlike the `gh` poison above, AND THE ASYMMETRY IS THE
   // POINT. This function runs on EVERY `sh()` (see `makeCcdHarness`'s `sh:`),
@@ -137,6 +173,12 @@ export function ghContainedEnv(home: string, env: NodeJS.ProcessEnv = {}): NodeJ
   // `systemctl --user enable --now` that touches `$HOME/pane-up`, and their
   // `runCcd` writes that stub BEFORE this function is evaluated in its `opts`
   // literal. Re-planting would break both suites and read as a mystery.
+  //
+  // That guard only answers WITHIN this directory, which is why it did not
+  // save `ccrc-doctor.test.ts`: its `systemctl` lives in `<home>/stub-bin`, so
+  // there was nothing here to be absent, and the poison won on ordering alone.
+  // Displaceability inside `harnessBin` and remit outside it are two different
+  // questions, and only the second one has an answer that helps a stranger.
   //
   // `systemd-run`'s exit code is the ONE thing a test may steer, through
   // $SYSTEMD_RUN_RC, and it DEFAULTS TO 97 so every existing case is unchanged.
@@ -217,8 +259,12 @@ export function makeCcdHarness(prefix: string): CcdHarness {
     fs.writeFileSync(path.join(bin, w), '#!/bin/sh\n', { mode: 0o755 });
   }
 
-  // Beside HOME, and for the same reason — see `ghContainedEnv` above.
-  ghContainedEnv(home);
+  // Beside HOME, and for the same reason — see `ghContainedEnv` above. THIS
+  // harness runs ccd, so it asks for the systemd boundary too, here and on
+  // every `sh()` below: that is what makes "every test that can reach
+  // `_supervised_start` is contained" a property of the harness rather than a
+  // rule each ccd test file remembers.
+  ghContainedEnv(home, {}, { systemd: true });
 
   const gitEnv = (): NodeJS.ProcessEnv => ({
     ...process.env, HOME: home,
@@ -259,7 +305,8 @@ export function makeCcdHarness(prefix: string): CcdHarness {
     // claims if the process starts inside it.
     sh: (snippet, env = {}) =>
       execFileSync('bash', ['-c', `source "${CCD}"; ${snippet}`],
-        { encoding: 'utf8', cwd: home, env: ghContainedEnv(home, { ...process.env, HOME: home, ...env }) }).trim(),
+        { encoding: 'utf8', cwd: home,
+          env: ghContainedEnv(home, { ...process.env, HOME: home, ...env }, { systemd: true }) }).trim(),
     reg: (id, field) => {
       const p = path.join(home, '.cc-sessions', `${id}.${field}`);
       return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').trim() : null;

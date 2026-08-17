@@ -1,7 +1,16 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { reviveFleetSessions, type FleetSession } from '../../shared/api.js';
+import { reviveFleetSessions, type BuildAgreement, type FleetSession } from '../../shared/api.js';
+import type { BuildInfo } from '../../shared/buildinfo.js';
+
+// One vocabulary for "the two boxes' builds", declared in `shared/api.ts`
+// because `FleetHealth` (the wire shape) needs it and L0 may not import from
+// `server/src`. Re-exported — not restated — so this module, where the decision
+// is made, still answers in a type it names. Same shape as
+// `server/src/buildinfo.ts`'s `export type { BuildInfo }`: one declaration
+// reachable by two names, which is the opposite of a copy.
+export type { BuildAgreement };
 
 /**
  * Degraded-mode snapshot cache, and the ONE declaration of fleet reachability.
@@ -33,6 +42,24 @@ export interface FleetState {
    *  host with no readable `~/.ccrc/accounts.sh`). Null is NOT "divergent" —
    *  see `rosterAgreement` for the three-way answer that keeps those apart. */
   rosterFp: string | null;
+  /** The build stamp the fleet host reported for ITSELF (`AgentReady.build`,
+   *  read from its `~/.ccrc/build.json` on every `ready` frame), or null when
+   *  we have no evidence — local mode, an older agent, a box that was never
+   *  stamped, or a stamp that failed validation. Null is NOT "a different
+   *  build": `buildAgreement` is where the three-way answer that keeps those
+   *  apart is made.
+   *
+   *  REQUIRED, not optional, and that is the whole mechanism. `Deps.fleetState`
+   *  is itself optional, so an omitted field here would be invisible at every
+   *  construction site and the one site that matters — `FleetClient.state`,
+   *  the object `onReady` mutates — would compile while never carrying a
+   *  stamp. Requiring it turns "who has evidence about the fleet host's build?"
+   *  into a compile error at every site, each of which then has to answer
+   *  honestly; the sites with nothing to say answer `null`, by measurement
+   *  rather than by omission. This is what `rosterFp` did before it, and it is
+   *  why `server/test/` (typechecked by `typecheck-tests.test.ts`, not by the
+   *  build) is part of the enumeration rather than collateral damage. */
+  build: BuildInfo | null;
 }
 
 export interface FleetSnapshot { sessions: FleetSession[]; savedAt: number }
@@ -84,6 +111,53 @@ export function rosterAgreement(
 ): RosterAgreement {
   if (fleetFp === null || fleetFp === undefined) return 'unknown';
   return fleetFp === ownFp ? 'agreed' : 'divergent';
+}
+
+/**
+ * Are the two boxes running the same BUILD?
+ *
+ * The sibling question to `rosterAgreement`, over the same link and with the
+ * same three-answer shape, and it exists because until the stamp crossed the
+ * wire a deploy that landed on one box and not the other was INVISIBLE: this
+ * server's `/health` reports this server's sha, and the fleet host's sha was
+ * legible only by ssh'ing there and reading `~/.ccrc/build.json` by hand. Every
+ * symptom of that skew shows up as a behaviour and never as a version — a `ccd`
+ * verb the server believes exists, a hook writing a field the server does not
+ * read, a frame field one side sends and the other drops.
+ *
+ * WHAT IS COMPARED, and what deliberately is not. The `sha` AND the `dirty`
+ * flag, from both stamps; `ref` and `builtAt` are ignored. The two boxes are
+ * deployed by two runs of `deploy.sh`, minutes apart and agent-first by
+ * contract, so `builtAt` ALWAYS differs and `ref` differs whenever one box was
+ * deployed from a branch and the other from the same commit on `main`. An
+ * object comparison would therefore report skew on every healthy deploy, which
+ * is the same false alarm that stops a banner being read.
+ *
+ * `'skewed'` INCLUDES THE DIRTY CASE, on either side, and this is the part the
+ * obvious reading misses. `dirty` says "what this box runs is not the commit it
+ * names" — so two boxes reporting one identical sha, one of them dirty, are not
+ * running the same code, and the sha they both print is a lie about at least
+ * one of them. The remedy is the same either way: DEPLOY THE LAGGING BOX,
+ * AGENT-FIRST (the fleet host before the server — the server reads what the
+ * hook writes, and the agent caches `ccd caps` at boot), from a clean tree.
+ *
+ * Three answers, not two, and the third is why this is a function and not an
+ * `===`. `'unknown'` means no evidence, from EITHER side: local mode has no
+ * second box, an older agent omits the field, a fleet host that was never
+ * stamped (or whose stamp failed `parseBuildInfo`) reports nothing — and this
+ * box can equally be the unstamped one, on a dev checkout, which is why `own`
+ * is nullable too. None of those is disagreement. Collapsing `'unknown'` into
+ * `'skewed'` is the overloaded-null-at-a-seam defect this codebase bans at a
+ * seam: an operator deploys a box on `'skewed'` and does nothing on
+ * `'unknown'`, so the two must not arrive as one value.
+ */
+export function buildAgreement(
+  fleet: BuildInfo | null | undefined,
+  own: BuildInfo | null | undefined,
+): BuildAgreement {
+  if (!fleet || !own) return 'unknown';
+  if (fleet.dirty || own.dirty) return 'skewed';
+  return fleet.sha === own.sha ? 'agreed' : 'skewed';
 }
 
 /**

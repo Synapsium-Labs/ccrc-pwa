@@ -180,6 +180,25 @@ describe('gen-accounts.mjs agrees with the TypeScript pipeline it cannot import'
     expect(lines[0]).toBe('#!/usr/bin/env bash');
     expect(lines[1]).toMatch(/^# ccrc:generated 1 sha256=[0-9a-f]{64}$/);
   });
+
+  // D-69: the fleet host's `claude-corp` wrapper sources
+  // `.cc-secrets/claude-corp-oauth.env`, but the shipped roster declared its
+  // `exec` as `{"kind":"generated"}` with no `secretsFile` at all — its two
+  // siblings (`claude2`, `claude-dev0`) both declare theirs correctly.
+  // `exec.secretsFile` has no runtime consumer today, which is why nothing
+  // noticed; the risk is the NEXT one — a wrapper generator reading this
+  // roster would write a `claude-corp` launcher with no auth line. Named to
+  // `claude-corp` specifically, not a blanket "every generated account must
+  // have one": `shared/roster.ts`'s `ExecSpec` docstring and `ccd/ccrc-adopt`
+  // both treat `secretsFile` as legitimately optional on a `generated`
+  // account (adopt emits `{"kind":"generated"}` with no `secretsFile` when
+  // the wrapper it inspected has no secrets line) — so a blanket assertion
+  // would be a false requirement, not a stronger guard.
+  it("claude-corp declares the secretsFile its wrapper has always sourced (D-69)", () => {
+    const roster = JSON.parse(readFileSync(path.join(ccrcRoot, 'deploy', 'accounts.migration.json'), 'utf8'));
+    const corp = roster.accounts.find((a: any) => a.id === 'claude-corp');
+    expect(corp.exec.secretsFile).toBe('.cc-secrets/claude-corp-oauth.env');
+  });
 });
 
 describe('gen-accounts.mjs rejects everything parseRoster rejects', () => {

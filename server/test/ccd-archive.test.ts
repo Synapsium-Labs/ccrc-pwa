@@ -65,7 +65,8 @@ const runCcd = (...args: string[]): { code: number; stdout: string; stderr: stri
     // Through `ghContainedEnv`, so this caller-supplied PATH cannot displace
     // the poisoned `gh`: it is prepended, and the tmux/systemctl stubs below
     // it are still found.
-    env: ghContainedEnv(h.home, { ...process.env, HOME: h.home, PATH: `${stub}:${process.env.PATH ?? ''}` }),
+    env: ghContainedEnv(h.home,
+      { ...process.env, HOME: h.home, PATH: `${stub}:${process.env.PATH ?? ''}` }, { systemd: true }),
   };
   try { return { code: 0, stdout: execFileSync('bash', [CCD, ...args], opts).trim(), stderr: '' }; }
   catch (e) {

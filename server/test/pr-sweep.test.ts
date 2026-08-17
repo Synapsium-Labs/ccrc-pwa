@@ -168,7 +168,7 @@ describe('the third lane', () => {
     const home = seed(['demo-quiet-basin']);
     liveIdle(home);
     const calls: string[][] = [];
-    const deps = { ...testDeps(home, runnerFor('', calls)), fleetState: { connected: false, downSince: 1, ccdVerbs: null, rosterFp: null } };
+    const deps = { ...testDeps(home, runnerFor('', calls)), fleetState: { connected: false, downSince: 1, ccdVerbs: null, rosterFp: null, build: null } };
     deps.cfg = { ...deps.cfg, fleetMode: 'remote' };
     const w = new FleetWatcher(deps, new Bus(), 10_000);
     await w.tick();
@@ -671,7 +671,7 @@ describe('the unsupported-verb branch — a fleet that never advertised pr-state
     const home = seed(['demo-quiet-basin', 'demo-still-cove']);
     liveIdle(home);
     const calls: string[][] = [];
-    const deps = { ...testDeps(home, runnerFor('', calls)), fleetState: { connected: true, downSince: null, ccdVerbs: ['start'], rosterFp: null } };
+    const deps = { ...testDeps(home, runnerFor('', calls)), fleetState: { connected: true, downSince: null, ccdVerbs: ['start'], rosterFp: null, build: null } };
     const w = new FleetWatcher(deps, new Bus(), 10_000);
     await w.tick();
     await vi.waitFor(() => expect(w.currentPrStates().get('demo-quiet-basin')?.reason).toBe('unsupported'));
@@ -699,7 +699,7 @@ describe('the unsupported-verb branch — a fleet that never advertised pr-state
     // watch.ts's own gate and this would pass for the wrong reason, proving
     // nothing about archiveMerged.
     const deps = { ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)),
-      fleetState: { connected: true, downSince: null, ccdVerbs: ['pr-state'], rosterFp: null } };
+      fleetState: { connected: true, downSince: null, ccdVerbs: ['pr-state'], rosterFp: null, build: null } };
     const w = new FleetWatcher(deps, new Bus(), 10_000);
     await w.tick();
     // Waiting on the merged PHASE is not enough and would make this pass both

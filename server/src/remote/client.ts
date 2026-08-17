@@ -10,6 +10,7 @@ import type {
   TailData,
   TailReset,
 } from '../../../shared/agent-protocol.js';
+import { parseBuildInfo } from '../../../shared/buildinfo.js';
 import type { Runner } from '../exec.js';
 import type { FleetState } from '../fleetstate.js';
 import type { FleetIO } from '../io.js';
@@ -82,7 +83,9 @@ function isRecord(v: unknown): v is Record<string, unknown> {
  * `remote/io.ts` (and, from T4, `remote/pty.ts`) build on.
  */
 export class FleetClient {
-  readonly state: FleetState = { connected: false, downSince: null, ccdVerbs: null, rosterFp: null };
+  readonly state: FleetState = {
+    connected: false, downSince: null, ccdVerbs: null, rosterFp: null, build: null,
+  };
 
   private readonly cfg: ResolvedConfig;
   private socket: WebSocket | null = null;
@@ -305,6 +308,25 @@ export class FleetClient {
     // digest of the roster it used to have.
     this.state.rosterFp = typeof frame.rosterFp === 'string' && frame.rosterFp.length > 0
       ? frame.rosterFp : null;
+    // THE SINGLE READER of `frame.build` — the fleet host's own stamp, which
+    // `buildAgreement` compares against this box's. Reset on every ready for
+    // the same reason as `rosterFp`: a stamp kept from the previous connection
+    // would keep reporting skew after the lagging box was deployed, so the
+    // operator does the remedy and the banner stays lit.
+    //
+    // Validated HERE and not trusted because it came from an agent: this is a
+    // wire boundary like any other, and the peer may be older, newer, or
+    // broken. Validated by re-serialising through `parseBuildInfo` — the ONE
+    // definition of a well-formed stamp, which both boxes' disk readers already
+    // use — rather than by a field check written a third time here. Two
+    // validators that drifted by one field would have this comparison reporting
+    // on its own validators (`shared/buildinfo.ts` says why, and
+    // `single-definition.test.ts` fails the build over a second copy). The
+    // round-trip is exact and cannot throw: `frame` came out of `JSON.parse`,
+    // so every value in it is JSON-representable — no cycles, no BigInt, no
+    // undefined members.
+    this.state.build = frame.build === undefined || frame.build === null
+      ? null : parseBuildInfo(JSON.stringify(frame.build));
     // Only the SECOND+ successful handshake is a "reconnect" — `everConnected`
     // (unlike `state.connected`, which starts false) distinguishes "first
     // connect ever" from "came back after a drop".
@@ -342,10 +364,11 @@ export class FleetClient {
     }
   }
 
-  /** Connectivity only, by design: `ccdVerbs` arrives on the ready frame and is
-   *  assigned in `onReady`, not patched through here — this function's change
-   *  detection compares connected/downSince and would suppress a verb-only
-   *  update. */
+  /** Connectivity only, by design: the handshake fields (`ccdVerbs`,
+   *  `rosterFp`, `build`) arrive on the ready frame and are assigned in
+   *  `onReady`, not patched through here — this function's change detection
+   *  compares connected/downSince and would suppress an update that touched
+   *  only one of them. */
   private setState(patch: Pick<FleetState, 'connected' | 'downSince'>): void {
     if (patch.connected === this.state.connected && patch.downSince === this.state.downSince) return;
     this.state.connected = patch.connected;

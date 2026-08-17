@@ -392,7 +392,9 @@ describe('disk floor', () => {
     let stderr = '';
     try {
       execFileSync('bash', ['-c', `source "${CCD}"; ${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`],
-        { encoding: 'utf8', env: ghContainedEnv(home, { ...process.env, HOME: home, CCD_DISK_FLOOR_GB: '999999' }) });
+        { encoding: 'utf8',
+          env: ghContainedEnv(home, { ...process.env, HOME: home, CCD_DISK_FLOOR_GB: '999999' },
+            { systemd: true }) });
     } catch (e) {
       stderr = String((e as { stderr?: string }).stderr ?? '');
     }
@@ -971,7 +973,7 @@ describe('gh containment is the harness\'s, not the caller\'s', () => {
     expect(h.ghPoison()[0]).toContain('pr list --repo o/r');
   });
 
-  it('routes EVERY bash call site in every ccd test file through it', () => {
+  it('routes EVERY bash call site in every ccd test file through BOTH poisons', () => {
     // A behavioural test can only pin the call sites that exist today, and the
     // failure mode this whole boundary exists for is the one written tomorrow:
     // four sites already built their own env (`ccd-limits` and `ccd-clip`
@@ -979,19 +981,45 @@ describe('gh containment is the harness\'s, not the caller\'s', () => {
     // PATH of its own, which would have DISPLACED the poison). So the invariant
     // is checked in the source: a bash spawn in a ccd test file goes through
     // `ghContainedEnv`, which prepends and therefore cannot be displaced.
+    //
+    // THE SECOND CLAUSE IS THE SYSTEMD ONE, and it is here because that poison
+    // became OPT-IN: a ccd runner now has to ask for it, and "every test that
+    // can reach `_supervised_start` is contained" would otherwise be a claim
+    // about the fifteen call sites that happened to be edited on the day. This
+    // is where a sixteenth one is caught. The behavioural half lives in
+    // `ccd-harness-containment.test.ts`; this half is the coverage.
     const dir = __dirname;
     const files = fs.readdirSync(dir).filter((f) => /^ccd.*\.ts$/.test(f));
     expect(files.length).toBeGreaterThanOrEqual(7);
+    let asked = 0;
     for (const f of files) {
       const src = fs.readFileSync(path.join(dir, f), 'utf8').split('\n');
       src.forEach((ln, i) => {
-        if (!ln.includes("execFileSync('bash'")) return;
+        // All four spawn idioms this suite uses, not just the one this scan was
+        // born matching. `spawnSync` is how a file that EXPECTS a nonzero exit
+        // spawns (`ccd-start-id`, `ccd-roster-preamble`), and a pre-resolved
+        // `BASH` is how a file whose child PATH holds no system directory has to
+        // spawn at all — both were invisible here, so two real ccd runners sat
+        // outside a guard whose whole claim is "every bash call site".
+        if (!/(?:execFileSync|spawnSync)\((?:'bash'|BASH)[,)]/.test(ln)) return;
         // Either side of the call: `ccd-archive`'s `runCcd` builds its `opts`
         // object several lines above the spawn.
         const window = src.slice(Math.max(0, i - 12), i + 8).join('\n');
         expect(window, `${f}:${i + 1} spawns bash without ghContainedEnv`).toContain('ghContainedEnv(');
+        // ONE deliberate exception, and it has to say so in the source it is
+        // read from: the negative control that proves the opt-in is real must
+        // spawn bash with the systemd poison ABSENT. `gh` is asserted above for
+        // it like everything else — opting out of one boundary is not a way out
+        // of the other.
+        if (window.includes('SYSTEMD-OPT-OUT IS THE ASSERTION')) return;
+        expect(window, `${f}:${i + 1} runs ccd without asking for systemd containment`)
+          .toContain('{ systemd: true }');
+        asked++;
       });
     }
+    // The scan is only worth anything if it is scanning something: a refactor
+    // that renamed the spawn helper would otherwise pass by matching nothing.
+    expect(asked, 'the scan matched no ccd bash spawn at all').toBeGreaterThanOrEqual(12);
   });
 
   it('puts the harness bin FIRST on PATH, whatever the caller passes', () => {

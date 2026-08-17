@@ -1,0 +1,1216 @@
+#!/usr/bin/env bash
+# ccrc-doctor-checks — the check TABLE `ccrc doctor` iterates, and each check's
+# implementation. Stage 2b of the 2026-08-15-stage2b-ccrc-cli-and-doctor plan:
+# the PREREQUISITE checks (Task 4), roster/wrapper coherence (Task 5, the
+# `wrappers` entry) and the cross-box matched set (Task 7, `fleet`, the last
+# entry in the table and the last function in this file).
+#
+# SOURCED, never executed — `ccrc`'s `cmd_doctor` does `. "$CCRC_HERE/ccrc-doctor-checks"`.
+# It in turn sources `ccrc-wrapper-shape` (see below), so **DOCTOR's set is
+# THREE files in one directory** — `ccrc`, this file, `ccrc-wrapper-shape` —
+# not two. THE CLI'S SET IS FOUR: `ccrc-adopt` joins them, because `cmd_adopt`
+# execs it (Task 8). Both counts are correct and they are counting different
+# things; `ccrc`'s own header counts the CLI's four, and whatever installs the
+# CLI must ship all four. The two paragraphs used to share one wording, which
+# read as a contradiction.
+# Split out of `ccrc` itself (plan, "Files") so a check is testable without the
+# CLI's whole argument surface, and so the table stays visible as data rather
+# than buried in a dispatch.
+#
+# ── THE CONTRACT EVERY CHECK KEEPS ────────────────────────────────────────
+# `_check_<name>` prints a verdict line to STDOUT
+#
+#     PASS|WARN|FAIL <name>: <detail>
+#
+# and, when the verdict is not PASS, exactly one further line
+#
+#     "  remedy: <what to do about it>"
+#
+# and returns 0 (pass), 2 (warn) or 1 (fail). The remedy is not optional and
+# not advisory: `_dr_fail`/`_dr_warn` print BOTH lines themselves, so a check
+# physically cannot emit a non-pass verdict without one. A check that only
+# complains sends an operator to a search engine; the remedy is the half that
+# makes doctor an instrument instead of an alarm.
+#
+# ── THE FOURTH OUTCOME: A CHECK WITH NOTHING TO MEASURE ───────────────────
+# A check whose SUBJECT does not exist on this box prints, instead,
+#
+#     SKIP <name>: <why there was nothing to measure>
+#
+# with no remedy, and returns 3 (`_dr_skip`). `fleet` is the case that forced
+# it: it compares TWO boxes, and a box with no server to ask has no second box.
+# PASS would claim an agreement nobody measured — the overloaded-null defect
+# this codebase bans by name — and WARN would report a problem where there is
+# none. `ccrc`'s `cmd_doctor` counts a skip against CHECKS and never against
+# verdicts, and prints the count, so "N checks, M verdicts" says how much of
+# the box was really measured.
+#
+# NO REMEDY UNDER A SKIP, deliberately: a `remedy:` line reads as "there is
+# something here to fix", and on the fleet host — which has no `ccrc.env` and
+# no reason to know where the server is — there is not. Where an operator COULD
+# make the check answer, that goes in the detail, as a fact about what is
+# missing rather than as an instruction.
+#
+# ── ONE CHECK MAY ANSWER IN TWO CLASSES ───────────────────────────────────
+# Almost every check prints exactly ONE verdict line. A check that has found
+# findings of two different classes may print a FAIL line and then a WARN line
+# — each with its own remedy — and returns the WORSE class (1). It is not a
+# licence to be chatty; it is the rule that stops the overloaded seam this
+# codebase bans by name. `_check_wrappers` is the case that forced it (Task 5
+# review, Important 1): "your roster and this wrapper disagree, fix one of
+# them" and "here is a launcher nobody wrote down, which may well be
+# deliberate" are two findings an operator acts on DIFFERENTLY, and joining
+# them into one FAIL sentence both laundered the second into a defect and
+# discarded the remedy that belonged to it.
+#
+# `ccrc`'s `cmd_doctor` counts VERDICT LINES, not return codes, so a check that
+# answers in two classes is counted in both — and it cross-checks the two
+# statements against each other: a return code that is not the worst class the
+# check printed is reported as a bug in ccrc.
+#
+# The verdict lines are the RESULT of the verb, so they go to stdout — NOT to
+# stderr through `_ccrc_say`, which `ccrc`'s own header (Task 1) had guessed
+# they would. The pairing "a FAIL line, then ITS remedy on the next line" is
+# the machine-readable part of this contract (`server/test/ccrc-doctor.test.ts`
+# asserts it per FAIL line), and splitting the pair across two streams would
+# break it for anyone who redirects one of them — which is every caller that
+# pipes doctor into a report. `_ccrc_say` keeps its job: stderr notes that are
+# not a verdict.
+#
+# The printed <name> IS the function suffix (`_check_gh_auth` prints `gh_auth`),
+# so a reader who sees a line can grep straight to the code that wrote it.
+# That is why the names are underscored rather than hyphenated.
+#
+# ── WHY THE DETAIL IS ALWAYS A MEASUREMENT ────────────────────────────────
+# Every PASS names what was actually found (the resolved path, the version, the
+# address), never the bare word "ok". A check that prints "PASS tmux: ok" is
+# indistinguishable from a check that was never wired up, and this project has
+# already been bitten by exactly that shape (`single-definition.test.ts`'s "a
+# scan over an empty list passes everything").
+#
+# ── set -e ────────────────────────────────────────────────────────────────
+# This file is sourced into `ccrc`, which runs `set -uo pipefail` and NOT `-e`,
+# deliberately — see that file's header. Checks SIGNAL by returning non-zero;
+# under `-e` the first failing check would abort the run, which is precisely
+# the run an operator needs to see whole. Nothing here may turn `-e` back on.
+
+# Where the shipped tree is, relative to THIS file rather than to $PWD —
+# `ccrc-adopt:124-125`'s idiom, in the same PATH-free spelling `ccrc` uses (see
+# that file for why `dirname` is not called here: doctor has to work on a box
+# whose PATH is the broken thing). `${BASH_SOURCE[0]}` and not `$0`, because
+# this file is only ever reached by `source`, where `$0` is the CALLER's
+# argv[0]. `:=` so the value `ccrc` already computed wins when there is one,
+# and so this file still resolves itself when a test sources it on its own.
+if [ -z "${CCRC_HERE:-}" ]; then
+  CCRC_HERE="${BASH_SOURCE[0]}"
+  [[ "$CCRC_HERE" == */* ]] || CCRC_HERE="./$CCRC_HERE"
+  CCRC_HERE="$(cd "${CCRC_HERE%/*}" && pwd)"
+fi
+
+# ── the wrapper contract, sourced rather than restated ────────────────────
+# `ccrc-wrapper-shape` is the THIRD file that ships beside `ccrc`, and it is
+# load-bearing rather than incidental: it holds the shape of a generated
+# account wrapper, which `ccrc-adopt` writes rosters FROM and `_check_wrappers`
+# checks rosters AGAINST. A second copy of that shape is how the two would
+# drift into agreeing with each other about a shape neither tool produces —
+# which would make the check worse than useless.
+#
+# Sourced BEST-EFFORT, not with `||` refusal, on purpose: a missing library
+# must not take the other ten checks down with it. `_check_wrappers` notices
+# its absence itself and says so in a verdict line with a remedy — see the top
+# of that function, and `ccrc-doctor.test.ts`'s "did not ship" case, which is
+# the mechanism that keeps the install honest.
+CCRC_WRAPPER_LIB="$CCRC_HERE/ccrc-wrapper-shape"
+if [ -r "$CCRC_WRAPPER_LIB" ]; then
+  # shellcheck source=ccrc-wrapper-shape
+  . "$CCRC_WRAPPER_LIB"
+fi
+
+# How long `gh auth status` may take. Overridable for the same reason
+# `deploy/verify-service.sh:56-62` makes its settle/window knobs overridable: so
+# a test need not wait out a production timeout. The DEFAULT is what an operator
+# gets. (The OTHER check that touches the network, `fleet`, is bounded by
+# `CCRC_HEALTH_TIMEOUT`, declared in `ccrc` beside the reader that uses it —
+# `ccrc status` makes the same call and must be bounded by the same knob.)
+: "${CCRC_DOCTOR_GH_TIMEOUT:=15}"
+
+# ── the check table ───────────────────────────────────────────────────────
+# DATA. `cmd_doctor` iterates this array and calls `_check_<name>` for each
+# entry, so adding a check is one entry here, one function below, and one test
+# — and `ccrc-doctor.test.ts`'s first case fails the build if the table and the
+# functions ever disagree in either direction.
+CCRC_DOCTOR_CHECKS=(
+  node
+  tmux
+  git
+  gh
+  jq
+  python3
+  flock
+  gh_auth
+  git_email
+  linger
+  wrappers
+  fleet
+)
+
+# ── verdict helpers ───────────────────────────────────────────────────────
+# Newlines are squashed out of both halves: the contract is "the line
+# immediately after a non-PASS verdict is its remedy", and a detail carrying an
+# embedded newline (a subprocess's multi-line stderr, say) would silently break
+# that pairing for every reader.
+_dr_line() { printf '%s %s: %s\n' "$1" "$2" "${3//$'\n'/ }"; }
+_dr_pass() { _dr_line PASS "$1" "$2"; return 0; }
+_dr_warn() { _dr_line WARN "$1" "$2"; printf '  remedy: %s\n' "${3//$'\n'/ }"; return 2; }
+_dr_fail() { _dr_line FAIL "$1" "$2"; printf '  remedy: %s\n' "${3//$'\n'/ }"; return 1; }
+# No remedy, by contract — see "THE FOURTH OUTCOME" in this file's header.
+_dr_skip() { _dr_line SKIP "$1" "$2"; return 3; }
+
+# Findings joined onto one verdict line with "; ". Built here rather than with
+# `printf '%s; '` so the last one carries no trailing separator. SHARED between
+# `_check_wrappers` and `_check_fleet` (it was `_dr_wr_join`, wrappers-owned,
+# until the second caller arrived): a private second copy of four lines of
+# string-joining is exactly the drift this file's own header objects to in the
+# large, and there is nothing account-specific about it.
+_dr_join() {
+  local out="" x
+  for x in "$@"; do [ -z "$out" ] || out+="; "; out+="$x"; done
+  printf '%s' "$out"
+}
+
+# Leading/trailing whitespace off a captured value, in pure parameter
+# expansion (no `sed`, no subshell — see `_dr_pkg_candidates` for why this file
+# avoids PATH lookups it does not need). Two callers, and BOTH were defects the
+# review found: a floor of `" >=22.13.0 "` was rejected by doctor while
+# node-floor.test.ts:38-39 accepts it (it does `.exec(range.trim())` and this
+# claimed to copy that rule EXACTLY), and a `user.email` of `"   "` was
+# non-empty enough to PASS — printing `PASS git_email:    `, a line this
+# suite's own shape test declares illegal, for a box whose commits carry an
+# empty author address.
+_dr_trim() {
+  local s="$1"
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s' "$s"
+}
+
+# First non-empty line of a captured output, for details that quote a tool's
+# own diagnosis without pasting a screenful of it.
+_dr_first_line() {
+  local l
+  while IFS= read -r l; do
+    [ -n "$l" ] || continue
+    printf '%s' "$l"
+    return 0
+  done <<< "$1"
+  printf '%s' ""
+}
+
+# The one shape shared by the six "is this binary installed" checks.
+_dr_need_bin() {
+  local name="$1" why="$2" remedy="$3" p
+  p="$(command -v "$name" 2>/dev/null)"
+  if [ -z "$p" ]; then
+    _dr_fail "$name" "not on PATH — $why" "$remedy"
+    return 1
+  fi
+  _dr_pass "$name" "$p"
+}
+
+# ── node: the floor is READ, never re-typed ───────────────────────────────
+# WHICH package.json IS CANONICAL DEPENDS ON THE BOX, and that is why this
+# looks in two places rather than one:
+#   - a fleet host has `~/ccrc/{agent,shared,deploy,ccd}` (deploy.sh:343), so
+#     the shipped declaration there is `~/ccrc/agent/package.json`;
+#   - a server host has `~/ccrc/{server,shared,deploy,ccd}` (deploy.sh:613), so
+#     it is `~/ccrc/server/package.json`. `ccd` is in BOTH lanes as of Task 8 —
+#     the server box gets the directory so `ccrc` and its three siblings have a
+#     home there, and it installs nothing else out of it (no ccd binary, no
+#     session hooks; those are the agent lane's). This paragraph said
+#     `{server,shared,deploy}` until the whole-branch review caught it: the
+#     LOGIC never depended on the difference (both candidates are tried, and
+#     the right one exists on each box), but a comment that is wrong about
+#     what ships is exactly how the next reader mis-predicts a deploy.
+#   - `pwa/package.json` never ships at all and is deliberately not consulted.
+# Either answer is the SAME answer: `server/test/node-floor.test.ts:45-50`
+# asserts all three declarations are byte-identical and fails the build the
+# moment they are not. That test is the reason this may take the first one it
+# finds instead of cross-checking them.
+#
+# Resolved relative to THIS SCRIPT, not to $PWD, so doctor works on a bare
+# installed box with no checkout anywhere near it — which is the entire point
+# of doctor (plan, "Open questions": "`ccrc doctor` must not depend on a
+# checkout").
+_dr_pkg_candidates() {
+  local root
+  root="$(cd "$CCRC_HERE/.." 2>/dev/null && pwd)" || root="$CCRC_HERE/.."
+  printf '%s\n' "$root/server/package.json" "$root/agent/package.json"
+}
+
+_check_node() {
+  local p
+  p="$(command -v node 2>/dev/null)"
+  if [ -z "$p" ]; then
+    _dr_fail node "not on PATH — the server, the agent and every deploy step run on it" \
+      "install Node (nodesource or nvm), then re-run: ccrc doctor"
+    return 1
+  fi
+
+  local pkg="" cand
+  while IFS= read -r cand; do
+    [ -f "$cand" ] && { pkg="$cand"; break; }
+  done < <(_dr_pkg_candidates)
+  if [ -z "$pkg" ]; then
+    # Joined in bash rather than through `tr`: a check that needs a coreutils
+    # binary to print its own failure message is a check that goes silent on
+    # exactly the broken box it exists for.
+    local looked
+    looked="$(_dr_pkg_candidates)"
+    _dr_fail node "no shipped package.json to read engines.node from — looked at ${looked//$'\n'/ and }" \
+      "run ccrc from inside the shipped tree (~/ccrc/ccd/ccrc) or from a checkout; a lone copy of this script cannot know the floor"
+    return 1
+  fi
+
+  # Parsed by node itself, not by jq: the node check must not fail for a reason
+  # that belongs to another check (a box with no jq gets exactly one FAIL, from
+  # the jq check), and node is by definition available here — its absence is
+  # the branch above. The path travels in the environment rather than argv so
+  # there is no argv[1]-vs-argv[2] ambiguity to get wrong.
+  # READING the file and PARSING it are separated on purpose (Task 4 review,
+  # Minor 6): `chmod 000` and "somebody wrote garbage here" are two conditions
+  # an operator acts on completely differently — one is a mode/ownership fix,
+  # the other a redeploy — and collapsing them into one signal is the
+  # overloaded-seam mistake this codebase bans by name. It is the same defect
+  # Task 1 fixed when a missing `jq` was being reported as a corrupt build
+  # stamp. The read failure carries node's own errno out on stdout so the
+  # verdict can name it.
+  #   exit 5 = cannot be read (prints "READERR:<code>")
+  #   exit 3 = does not parse; exit 4 = declares no engines.node.
+  local range rc
+  range="$(CCRC_DOCTOR_PKG="$pkg" node -e '
+    const fs = require("fs");
+    let text;
+    try { text = fs.readFileSync(process.env.CCRC_DOCTOR_PKG, "utf8"); }
+    catch (e) { process.stdout.write("READERR:" + (e && e.code ? e.code : "unknown")); process.exit(5); }
+    let j;
+    try { j = JSON.parse(text); }
+    catch (e) { process.exit(3); }
+    const r = j && j.engines && j.engines.node;
+    if (typeof r !== "string" || r.length === 0) process.exit(4);
+    process.stdout.write(r);
+  ' 2>/dev/null)"; rc=$?
+  if [ "$rc" -eq 5 ]; then
+    local why="${range#READERR:}"
+    [ -n "$why" ] && [ "$why" != "$range" ] || why="unreadable"
+    _dr_fail node "$pkg exists but cannot be read ($why), so the floor cannot be read" \
+      "fix its mode/ownership — check with: ls -l $pkg (a deploy leaves it world-readable)"
+    return 1
+  fi
+  if [ "$rc" -eq 3 ]; then
+    _dr_fail node "$pkg does not parse as JSON, so the floor cannot be read" \
+      "restore or redeploy $pkg — something wrote garbage where a package manifest belongs"
+    return 1
+  fi
+  if [ "$rc" -ne 0 ] || [ -z "$range" ]; then
+    _dr_fail node "$pkg declares no engines.node, so this box has no floor to check against" \
+      "declare it — engines.node is the single place the Node floor is written down (server/test/node-floor.test.ts)"
+    return 1
+  fi
+
+  # EXACTLY node-floor.test.ts:38-42's rule, and for its stated reason: the
+  # moment someone writes `^22 || >=24`, this must fail loudly rather than
+  # silently accept a floor it did not understand. No version number is spelled
+  # in this file — that is what reading the manifest is for.
+  #
+  # `_dr_trim` is part of that rule, not a nicety: node-floor matches against
+  # `range.trim()`, so `" >=22.13.0 "` keeps all three declarations identical
+  # and that suite green — a doctor that rejected it would be STRICTER than the
+  # rule it claims to copy, and would fail a box whose manifests are fine. The
+  # verdict below still quotes the value as written, so an otherwise invisible
+  # stray space is still visible when the form really is wrong.
+  local floor_re='^>=([0-9]+)\.([0-9]+)\.([0-9]+)$' declared
+  declared="$(_dr_trim "$range")"
+  if [[ ! "$declared" =~ $floor_re ]]; then
+    _dr_fail node "unrecognised engines range \"$range\" in $pkg — this check understands only a single '>=x.y.z'" \
+      "declare engines.node as one '>=x.y.z' range (node-floor.test.ts:38-42 pins the same rule), or teach ccrc-doctor-checks the new form deliberately"
+    return 1
+  fi
+  local maj="${BASH_REMATCH[1]}" min="${BASH_REMATCH[2]}" pat="${BASH_REMATCH[3]}"
+
+  local running ver_re='^v?([0-9]+)\.([0-9]+)\.([0-9]+)'
+  running="$(node --version 2>/dev/null)"
+  if [[ ! "$running" =~ $ver_re ]]; then
+    _dr_fail node "'node --version' printed \"$running\", which is not a version" \
+      "check what $p actually is — a wrapper script on PATH shadowing the real interpreter is the usual cause"
+    return 1
+  fi
+  local rmaj="${BASH_REMATCH[1]}" rmin="${BASH_REMATCH[2]}" rpat="${BASH_REMATCH[3]}"
+
+  if (( rmaj > maj || (rmaj == maj && (rmin > min || (rmin == min && rpat >= pat))) )); then
+    _dr_pass node "$running satisfies $declared (declared in $pkg), at $p"
+  else
+    _dr_fail node "$running is below the floor $declared declared in $pkg" \
+      "upgrade Node to at least ${maj}.${min}.${pat} — below it the server does not degrade, it fails to boot (node:sqlite is imported unconditionally)"
+    return 1
+  fi
+}
+
+# ── the binaries a fleet box cannot work without ──────────────────────────
+_check_tmux() {
+  _dr_need_bin tmux "every ccd session lives in a tmux window, and that is how one is attached, read and driven" \
+    "install it: sudo apt install tmux"
+}
+_check_git() {
+  _dr_need_bin git "ccd builds every workspace as a git worktree" \
+    "install it: sudo apt install git"
+}
+_check_gh() {
+  _dr_need_bin gh "PR state, review and merge all go through the GitHub CLI (ccd:700-720)" \
+    "install it: see https://cli.github.com (Debian/Ubuntu: sudo apt install gh)"
+}
+_check_jq() {
+  _dr_need_bin jq "ccrc and ccrc-adopt read this box's small JSON files with it (ccrc version, accounts.json)" \
+    "install it: sudo apt install jq"
+}
+_check_python3() {
+  _dr_need_bin python3 "ccd's session hook and its registry locking are python3 (ccd:1043-1110)" \
+    "install it: sudo apt install python3"
+}
+_check_flock() {
+  _dr_need_bin flock "ccd serialises registry writes with it, and refuses to run ws-restore without it (ccd:2501-2502)" \
+    "install it: sudo apt install util-linux"
+}
+
+# ── gh's authentication ───────────────────────────────────────────────────
+# DELIBERATE DIVERGENCE FROM ccd, do not "harmonise" the two: `ccd` never
+# probes `gh auth status` — it classifies gh's own stderr instead (ccd:707-715,
+# "`gh auth status` is NOT probed first: it is another network call on the
+# unhappy path"), because ccd runs that path in a poll loop over every open PR.
+# Doctor is the COLD path: it runs when a human asks "is this box fit to
+# work?", once, and the whole point of it is to answer questions the hot path
+# cannot afford to ask. Moving this call into ccd would put a network round
+# trip back into that loop.
+#
+# `--show-token` is NEVER passed, and only the FIRST line of gh's output is
+# ever quoted back: gh redacts the token itself (`Token: gho_****`), and this
+# file must not be the thing that un-redacts it.
+_check_gh_auth() {
+  if ! command -v gh >/dev/null 2>&1; then
+    _dr_fail gh_auth "gh is not on PATH, so this box's GitHub credentials cannot be checked" \
+      "install gh first — see the 'gh' check above; then: gh auth login --scopes repo"
+    return 1
+  fi
+
+  local out rc
+  if command -v timeout >/dev/null 2>&1; then
+    out="$(timeout "$CCRC_DOCTOR_GH_TIMEOUT" gh auth status 2>&1)"; rc=$?
+  else
+    # A box without coreutils' `timeout` still gets an answer; it just gets it
+    # without a deadline. Silently skipping the check would be the worse trade.
+    out="$(gh auth status 2>&1)"; rc=$?
+  fi
+
+  if [ "$rc" -eq 124 ]; then
+    _dr_fail gh_auth "gh auth status did not answer within ${CCRC_DOCTOR_GH_TIMEOUT}s" \
+      "check this box's network/proxy — an authenticated gh answers in well under a second"
+    return 1
+  fi
+  if [ "$rc" -ne 0 ]; then
+    _dr_fail gh_auth "gh auth status exited $rc: $(_dr_first_line "$out")" \
+      "run: gh auth login --scopes repo (and re-run ccrc doctor)"
+    return 1
+  fi
+
+  case "$out" in
+    *"Token scopes:"*)
+      # Matched WITH its quotes, exactly as gh prints a scope list, so
+      # 'repo:status' — a read-only scope — cannot be mistaken for 'repo'.
+      case "$out" in
+        *"'repo'"*)
+          _dr_pass gh_auth "authenticated, and the token carries the 'repo' scope" ;;
+        *)
+          _dr_fail gh_auth "authenticated, but the token has no 'repo' scope — this box could not open or merge a PR" \
+            "run: gh auth refresh -h github.com -s repo"
+          return 1 ;;
+      esac
+      ;;
+    *)
+      # A third state, and it must not collapse into either neighbour: PASS
+      # would claim a fact nobody measured, FAIL would block a box that may be
+      # entirely fine (a GH_TOKEN from the environment reports no scope list).
+      _dr_warn gh_auth "authenticated, but gh printed no 'Token scopes:' line, so the 'repo' scope could not be verified" \
+        "check by hand: gh auth status — a token from GH_TOKEN or a fine-grained token must still grant contents+pull-requests write"
+      return 2 ;;
+  esac
+}
+
+# ── git's identity ────────────────────────────────────────────────────────
+# `--global`, then `--system` as a fallback: those two files ARE the box's
+# identity, and nothing else counts. Deliberately NOT `git -C "$HOME" config
+# user.email`, which is what this shipped first and which the review caught
+# (Task 4 review, Important 1): that form reads system + global PLUS
+# $HOME's own repo-local config, so the widespread dotfiles-in-$HOME pattern
+# (`git init ~`) made the check PASS on a value that applies to exactly one
+# repository — a false PASS on precisely the box this check exists to catch,
+# and a verdict that contradicted its own FAIL text ("nothing in ~/.gitconfig
+# or /etc/gitconfig"). Reproduced, then pinned by the dotfiles test in
+# ccrc-doctor.test.ts.
+#
+# MEASURED on this project's own fleet box, and it is why the distinction
+# matters rather than being pedantry: `~/.gitconfig` exists there and declares
+# no user.email at all — every repository sets its own in `.git/config`. That
+# box commits happily today and would refuse the FIRST commit in the next
+# project ccd clones. FAIL, not WARN, for exactly that reason: the gap is
+# invisible until it stops a worker mid-wave.
+_check_git_email() {
+  if ! command -v git >/dev/null 2>&1; then
+    _dr_fail git_email "git is not on PATH, so this box's commit identity cannot be read" \
+      "install git first — see the 'git' check above"
+    return 1
+  fi
+  local email scope=--global
+  email="$(_dr_trim "$(git config --global user.email 2>/dev/null)")"
+  if [ -z "$email" ]; then
+    scope=--system
+    email="$(_dr_trim "$(git config --system user.email 2>/dev/null)")"
+  fi
+  if [ -z "$email" ]; then
+    _dr_fail git_email "not set for this box (nothing in ~/.gitconfig or /etc/gitconfig) — a commit in any repository that does not set its own would be refused" \
+      "run: git config --global user.email \"you@example.com\" (and user.name alongside it)"
+    return 1
+  fi
+  _dr_pass git_email "$email (git config $scope user.email)"
+}
+
+# ── systemd linger ────────────────────────────────────────────────────────
+# Net-new: nothing in this repository has ever checked linger — it is prose in
+# the planning documents and nothing more. It belongs in doctor because every
+# ccd session is a `systemctl --user` unit (`ccd/claude-session@.service`), and
+# without linger /run/user/$UID is torn down when the last login session ends,
+# taking the whole fleet with it. `ccd:93-95` defaults XDG_RUNTIME_DIR and
+# DBUS_SESSION_BUS_ADDRESS so `systemctl --user` works from a non-interactive
+# SSH context; this check runs in that same world and asks the question those
+# defaults assume the answer to.
+#
+# Queried by $UID (a bash builtin variable — no `id` subprocess, and no NSS
+# name lookup to fail) and remedied by UID too, so the remedy is a command an
+# operator can paste verbatim.
+_check_linger() {
+  if ! command -v loginctl >/dev/null 2>&1; then
+    _dr_fail linger "loginctl is not on PATH — this box has no logind, but every ccd session is a systemd --user unit" \
+      "install/enable systemd-logind, or do not run a fleet on this box"
+    return 1
+  fi
+  local out rc
+  out="$(loginctl show-user "$UID" --property=Linger 2>/dev/null)"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    # The measured shape of a box that never had it: logind knows nothing about
+    # a user with neither a live session nor linger, so "not enabled" arrives
+    # as an error rather than as `Linger=no`. Same verdict, different detail —
+    # collapsing the two would hide which one an operator is looking at.
+    _dr_fail linger "logind does not know uid $UID (loginctl show-user exited $rc) — a user with neither a live session nor linger answers exactly this way" \
+      "run: sudo loginctl enable-linger $UID"
+    return 1
+  fi
+  case "${out#Linger=}" in
+    yes)
+      _dr_pass linger "enabled for uid $UID — /run/user/$UID survives logout, so the session units keep running" ;;
+    no)
+      _dr_fail linger "not enabled for uid $UID — the fleet's systemd --user units die with the last login session" \
+        "run: sudo loginctl enable-linger $UID"
+      return 1 ;;
+    *)
+      _dr_fail linger "could not read Linger from loginctl (it printed \"$out\")" \
+        "check by hand: loginctl show-user $UID --property=Linger"
+      return 1 ;;
+  esac
+}
+
+# ── the roster against the wrappers on disk ───────────────────────────────
+# THE CHECK THAT FOUND D-69. It is deliberately stronger than "the wrappers
+# are present and executable", because presence was never the failure mode:
+# the fleet host's `claude-corp` is present, executable, and sources
+# `.cc-secrets/claude-corp-oauth.env` while its roster entry says
+# `{"kind":"generated"}` with no secretsFile at all. Every check that only
+# stats a file passes that box.
+#
+# ── WHAT IT COMPARES, AND WHAT IT REFUSES TO DO ──────────────────────────
+# `~/.ccrc/accounts.json` (the roster — the source of truth, hand-owned) vs.
+# `~/.local/bin/<id>` (the wrappers — hand-made on each box; nothing in this
+# repository generates one yet). It REPORTS disagreement and resolves none of
+# it, which is `ccrc-adopt`'s own bias rule (that file's header, "the direction
+# of every uncertain call") applied to a tool that cannot write either side.
+#
+# ── PATHS ONLY. THE SECRETS FILE IS NEVER OPENED ─────────────────────────
+# The wrapper's secrets line names a path; this check compares that path with
+# the path the roster names, and stops there. It never opens, reads, stats,
+# sources or hashes the file — not even to say whether it exists — because
+# doctor's output is precisely what an operator pastes into a ticket, and a
+# token that is never read cannot be printed. `ccrc-doctor.test.ts` pins both
+# halves: a source scan for every reading construct, and a canary token planted
+# in a real secrets file that must not appear in the output.
+#
+# ── HOW THE TWO KINDS OF FINDING DIFFER, AND WHY THEY GET TWO LINES ──────
+# The findings are sorted into two classes, and each class gets its OWN
+# verdict line with its OWN remedy:
+#   FAIL — the roster DESCRIBES an account and disk contradicts the
+#          description. Somebody is going to act on a fact that is false.
+#          Remedy: make the roster and the wrapper agree.
+#   WARN — disk holds a launcher the roster describes nowhere. Ambiguous, and
+#          possibly deliberate (a box may keep a launcher the fleet does not
+#          drive), so it is reported and not silently passed — the same
+#          treatment `ccrc-adopt` gives its own cross-check findings, which
+#          print but never change its exit code. Remedy: describe it, or leave
+#          it be.
+# Both lines when there is something of each class, and the check returns 1.
+#
+# THEY USED TO BE JOINED INTO THE ONE FAIL LINE, and that was three collapses
+# at one seam (Task 5 review, Important 1), measured on the reference box where
+# the true reading is "one real defect (D-69) plus two deliberate launchers"
+# and the joined line said "three defects": the operator was told to make the
+# roster and the wrapper agree — the WRONG action for a launcher somebody keeps
+# on purpose — the WARN branch's own remedy was discarded unprinted, and the
+# summary counted `0 warned` while warn-class findings were on the screen.
+# `ccrc-doctor.test.ts` pins it BOTH ways: one test reddens if a soft finding
+# is folded back into the FAIL line, another if soft findings are dropped when
+# a hard one is present.
+#
+# ── AN `external` ACCOUNT IS CHECKED FOR EXISTENCE, AND NOTHING ELSE ─────
+# `gpt` on the reference box is a symlink to a bespoke 142-line launcher. ccrc
+# RECORDS external accounts and never writes them, so lacking the generated
+# shape is not a defect for one — reporting it as broken would be reporting on
+# a contract nobody ever made. It is checked for exactly what ccd needs of it:
+# there is an executable file at $HOME/.local/bin/<id>. Its CONTENT is never
+# read, and specifically: it may be a COMPILED launcher, and it may spell its
+# config dir any way it likes (`CLAUDE_CONFIG_DIR=… exec claude "$@"` on one
+# line, or not set it at all).
+#
+# That is not a relaxation, it is a bug fix (Task 5 review, Important 3): an
+# external id used to be required to be a script carrying a literal
+# `export CLAUDE_CONFIG_DIR=` line, because it was fed to the set difference
+# below against a candidate list built from exactly that test. Measured, a
+# legitimate external account FAILED the box — `ext-bin is declared external
+# but $HOME/.local/bin/ext-bin is not a script`. It passed on the reference box
+# only because `gpt` happens to match.
+
+# Membership, without a subprocess or an associative array — the caller has the
+# candidate list as a plain array and needs one question answered about it.
+_dr_wr_has() {
+  local x="$1" y
+  shift
+  for y in "$@"; do [ "$y" = "$x" ] && return 0; done
+  return 1
+}
+
+# IS THERE AN EXECUTABLE AT $HOME/.local/bin/<id> AT ALL — the one question
+# every roster account of every kind must answer yes to, because that path is
+# literally what ccd runs (ccd:7361). Three distinguishable ways to answer no,
+# because an operator does something different about each: a link whose target
+# was deleted is a broken install, an absent file is an install that never
+# happened, and a present non-executable file is a `chmod`. Appends to
+# `wr_hard` (its caller's local, by the same dynamic scope `_dr_wr_note` uses)
+# and returns 1 when it found something to say, so a caller can stop there
+# rather than go on to ask a question about a file that is not there.
+_dr_wr_present() {
+  local id="$1"
+  local p="$WRAPPER_BIN_DIR/$id"
+  if [ -L "$p" ] && [ ! -e "$p" ]; then
+    wr_hard+=("$id's \$HOME/.local/bin/$id is a symlink to a path that does not exist")
+    return 1
+  fi
+  if [ ! -e "$p" ]; then
+    wr_hard+=("$id has no executable at \$HOME/.local/bin/$id")
+    return 1
+  fi
+  # `-f` BEFORE `-x`, and it is not redundant: a DIRECTORY is both `-e` and
+  # `-x` (that is what the execute bit means on a directory), so without this a
+  # `mkdir $HOME/.local/bin/<id>` passed the whole triad and doctor reported
+  # `PASS wrappers: N accounts … match`. Found by the round-2 review, and it is
+  # a narrowing THIS ROUND INTRODUCED: before external/upstream were routed
+  # through here, a directory fell into the a-only arm and was caught by
+  # `_wrap_is_script`'s own `-f`.
+  if [ ! -f "$p" ]; then
+    wr_hard+=("$id's \$HOME/.local/bin/$id is not a regular file")
+    return 1
+  fi
+  if [ ! -x "$p" ]; then
+    wr_hard+=("$id's \$HOME/.local/bin/$id is not executable")
+    return 1
+  fi
+  return 0
+}
+
+# `_wrap_set_diff`'s callback. It appends to `wr_hard`/`wr_soft`, which are
+# `_check_wrappers`'s locals — bash's dynamic scope makes them visible here,
+# which is what lets the set difference stay generic while its two callers say
+# entirely different things about the same arithmetic.
+#
+# The a-only branch MEASURES before it words its finding: "the roster expects a
+# wrapper here and there is no CLAUDE_CONFIG_DIR-setting script of that name"
+# is five distinguishable states on disk (nothing, a dangling symlink, a
+# directory or other non-file, a file that is not executable, a file that is
+# not a wrapper — and that last one splits again into "not a script at all" and
+# "a script that sets no CLAUDE_CONFIG_DIR"), and an operator does something
+# different about each. Collapsing any two into one message is the
+# overloaded-seam mistake this codebase bans by name.
+#
+# EVERY ONE OF THEM HAS ITS OWN TEST, and that sentence was not true until the
+# round-2 review measured it: the presence triad was pinned but the two SHAPE
+# sentences below were not, so replacing this whole inner `if/else` with `:`
+# left the suite 95/95 green while a real defect went unreported. They now have
+# a test each, plus a third that puts both defects in ONE run and asserts the
+# two sentences stay distinct — the merge into a single "is not a wrapper" is
+# precisely the collapse this comment claims to forbid, and a comment is a
+# request where a red suite is a mechanism.
+_dr_wr_note() {
+  local dir="$1" id="$2"
+  # TWO `local` statements, and it must stay that way: bash expands every
+  # word of a single `local a=… b="$a"` BEFORE any of the names becomes local,
+  # so `p` would be built from the CALLER's `id` — which `_check_wrappers` has,
+  # left over from its own loops. Measured: `local id="$2" p="pre/$id"` with an
+  # outer id set prints `p=pre/<outer>`. That is a silent wrong answer (the
+  # finding names the right account and describes a different file), which is
+  # why the pinning test below uses an account that is not the last one in the
+  # roster.
+  local p="$WRAPPER_BIN_DIR/$id"
+  case "$dir" in
+    a-only)
+      if _dr_wr_present "$id"; then
+        if ! _wrap_is_script "$p"; then
+          wr_hard+=("$id is declared ${wr_kind[$id]} but \$HOME/.local/bin/$id is not a script")
+        else
+          wr_hard+=("$id is declared ${wr_kind[$id]} but \$HOME/.local/bin/$id sets no CLAUDE_CONFIG_DIR")
+        fi
+      fi
+      ;;
+    b-only)
+      case "${wr_kind[$id]:-}" in
+        upstream)
+          # The upstream account is BY DEFINITION invoked with
+          # CLAUDE_CONFIG_DIR unset (ccrc-adopt's header) — a wrapper here
+          # means every other account's exec lands in someone else's config dir.
+          wr_hard+=("$id is the roster's upstream account, but \$HOME/.local/bin/$id is a script that sets CLAUDE_CONFIG_DIR") ;;
+        "")
+          wr_soft+=("$id sets CLAUDE_CONFIG_DIR in \$HOME/.local/bin but no roster account describes it") ;;
+      esac
+      ;;
+  esac
+}
+
+_check_wrappers() {
+  # THE LIBRARY IS A SEPARATE INSTALL ARTIFACT. `ccrc` finds its siblings
+  # through `${BASH_SOURCE[0]}`, which bash does not resolve through a symlink,
+  # so a link to `ccrc` on PATH does not rescue a missing one: all three files
+  # have to land in the same directory. Said as a verdict rather than a comment
+  # because an install that ships two of the three is otherwise a check that
+  # silently stops checking.
+  if ! declare -F _wrap_parse_shape >/dev/null 2>&1; then
+    _dr_fail wrappers "the wrapper-shape library did not load, so the roster and \$HOME/.local/bin were never compared — expected it at $CCRC_WRAPPER_LIB" \
+      "install ccrc-wrapper-shape into the same directory as ccrc and ccrc-doctor-checks (all three resolve each other through \${BASH_SOURCE[0]}, and bash does not follow that through a symlink)"
+    return 1
+  fi
+
+  local bin="$WRAPPER_BIN_DIR" roster="$HOME/.ccrc/accounts.json"
+  local -a wr_hard=() wr_soft=()
+
+  if [ ! -e "$roster" ]; then
+    _dr_fail wrappers "no account roster at \$HOME/.ccrc/accounts.json, so nothing on this box says what \$HOME/.local/bin is supposed to hold" \
+      "bootstrap one from what is already on disk: bash ccd/ccrc-adopt --out /tmp/accounts.json, read it, then move it to \$HOME/.ccrc/accounts.json"
+    return 1
+  fi
+  if [ ! -f "$roster" ]; then
+    _dr_fail wrappers "\$HOME/.ccrc/accounts.json is not a regular file, so the roster cannot be read" \
+      "look at what is there — check with: ls -ld \$HOME/.ccrc/accounts.json"
+    return 1
+  fi
+  if ! command -v node >/dev/null 2>&1; then
+    # Read by node rather than jq for the reason `_check_node` gives at its own
+    # parse: this check must not fail for a reason that belongs to another one.
+    # A box with no jq gets exactly one FAIL, from the jq check.
+    _dr_fail wrappers "node is not on PATH, so \$HOME/.ccrc/accounts.json cannot be read" \
+      "install Node first — see the 'node' check above"
+    return 1
+  fi
+
+  # READING the file and PARSING it are separated for the same reason
+  # `_check_node` separates them: a mode/ownership problem and a corrupt file
+  # are two conditions an operator acts on completely differently.
+  #   exit 5 = cannot be read (prints "READERR:<code>")
+  #   exit 3 = does not parse; exit 4 = no accounts array; exit 6 = it is empty.
+  local tsv rc
+  tsv="$(CCRC_DOCTOR_ROSTER="$roster" node -e '
+    const fs = require("fs");
+    let text;
+    try { text = fs.readFileSync(process.env.CCRC_DOCTOR_ROSTER, "utf8"); }
+    catch (e) { process.stdout.write("READERR:" + (e && e.code ? e.code : "unknown")); process.exit(5); }
+    let j;
+    try { j = JSON.parse(text); } catch (e) { process.exit(3); }
+    if (!j || typeof j !== "object" || !Array.isArray(j.accounts)) process.exit(4);
+    if (j.accounts.length === 0) process.exit(6);
+    // EVERY CONTROL BYTE IS ESCAPED — all of C0 (0x00-0x1f) and DEL (0x7f) —
+    // not just the three that would break this TSV (Task 5 review, Minor 5;
+    // widened by the round-2 review, which pointed out that the narrow version
+    // left the very failure it was closing reachable through a different
+    // byte). Two separate jobs, and both are load-bearing:
+    //   - TSV integrity: a tab or a newline inside a value would silently
+    //     become a field or a record boundary.
+    //   - THE VERDICT LINE IS READ BY A HUMAN, on a terminal that ACTS on
+    //     control bytes. `"claude\bcorp"` renders as `claude-corp` if the
+    //     terminal is allowed to see the backspace, so an id that is not an
+    //     account can be made to look exactly like one that is. The reader
+    //     used to squash the three it knew about down to a space, which
+    //     INVENTED a plausible id (`acct b`) all by itself.
+    // The backslash escape is the half that makes this INJECTIVE: without it,
+    // an id spelled with a literal backslash-t and an id carrying a real tab
+    // arrive as the same string, and an escaped rendering that can be forged
+    // is no better than the raw byte. Nothing escaped this way can match
+    // WRAPPER_ID_RE, so the reader below refuses such an id by name rather
+    // than looking on disk for it.
+    const esc = (c) => "\\x" + c.charCodeAt(0).toString(16).padStart(2, "0");
+    const s = (v) => (typeof v === "string"
+      ? v.replace(/\\/g, "\\\\").replace(/\t/g, "\\t").replace(/\r/g, "\\r")
+         .replace(/\n/g, "\\n").replace(/[\x00-\x1f\x7f]/g, esc)
+      : "");
+    process.stdout.write(j.accounts.map((a) => {
+      const o = (a && typeof a === "object") ? a : {};
+      const e = (o.exec && typeof o.exec === "object") ? o.exec : {};
+      return [s(o.id), s(o.configDirSuffix), s(e.kind), s(e.secretsFile)].join("\t");
+    }).join("\n"));
+  ' 2>/dev/null)"; rc=$?
+
+  if [ "$rc" -eq 5 ]; then
+    local why="${tsv#READERR:}"
+    [ -n "$why" ] && [ "$why" != "$tsv" ] || why="unreadable"
+    _dr_fail wrappers "\$HOME/.ccrc/accounts.json exists but cannot be read ($why), so the roster cannot be compared with anything" \
+      "fix its mode/ownership — check with: ls -l \$HOME/.ccrc/accounts.json"
+    return 1
+  fi
+  if [ "$rc" -eq 3 ]; then
+    _dr_fail wrappers "\$HOME/.ccrc/accounts.json does not parse as JSON, so this box's roster cannot be read" \
+      "restore it from a backup, or rebuild it from disk: bash ccd/ccrc-adopt --out /tmp/accounts.json"
+    return 1
+  fi
+  if [ "$rc" -eq 4 ]; then
+    _dr_fail wrappers "\$HOME/.ccrc/accounts.json parses but declares no accounts array" \
+      "it must be {\"version\":1,\"accounts\":[…]} — rebuild it from disk: bash ccd/ccrc-adopt --out /tmp/accounts.json"
+    return 1
+  fi
+  if [ "$rc" -eq 6 ]; then
+    # A scan over an empty list passes everything, and a doctor that reports a
+    # healthy box by measuring nothing is the worst failure this verb has.
+    _dr_fail wrappers "\$HOME/.ccrc/accounts.json declares zero accounts — refusing to report agreement nobody measured" \
+      "rebuild it from disk: bash ccd/ccrc-adopt --out /tmp/accounts.json"
+    return 1
+  fi
+  if [ "$rc" -ne 0 ]; then
+    _dr_fail wrappers "reading \$HOME/.ccrc/accounts.json exited $rc — this check does not know what that means" \
+      "this is a bug in ccrc, not a fact about your box — see _check_wrappers in $CCRC_HERE/ccrc-doctor-checks"
+    return 1
+  fi
+
+  # ── the roster side ────────────────────────────────────────────────────
+  # THE FOUR FIELDS ARE SPLIT BY HAND (D-71), and `IFS=$'\t' read -r id suffix
+  # kind secrets` — which is what this was — must not come back. A tab is IFS
+  # *whitespace*, so bash collapses a run of them into one delimiter and strips
+  # leading ones: an entry with no `id` arrived as `<TAB>.acct-a<TAB>generated`
+  # and was read as id=".acct-a", suffix="generated", which is how a roster
+  # entry with no id at all got reported as an account named after its own
+  # config dir. Measured on both of the entries that expose it (no id, no
+  # configDirSuffix); each has its own test below. Parameter expansion has no
+  # such rule — an empty field stays an empty field, and its position holds.
+  local -A wr_kind=() wr_suffix=() wr_secrets=()
+  local -a wr_ids=()
+  local id suffix kind secrets _wr_rest _wr_line _wr_i
+  local -a _wr_f=()
+  local n_up=0 n_gen=0 n_ext=0 upstream_id=""
+  while IFS= read -r _wr_line; do
+    _wr_f=(); _wr_rest="$_wr_line"
+    for _wr_i in 1 2 3; do
+      _wr_f+=("${_wr_rest%%$'\t'*}")
+      if [[ "$_wr_rest" == *$'\t'* ]]; then _wr_rest="${_wr_rest#*$'\t'}"; else _wr_rest=""; fi
+    done
+    _wr_f+=("$_wr_rest")
+    id="${_wr_f[0]}" suffix="${_wr_f[1]}" kind="${_wr_f[2]}" secrets="${_wr_f[3]}"
+    if [ -z "$id" ]; then
+      wr_hard+=("the roster holds an account with no id")
+      continue
+    fi
+    # An id is not decoration: it is the FILENAME ccd executes
+    # ($HOME/.local/bin/<id>, ccd:7361), so the roster's ids are held to the
+    # same rule as the disk's, `WRAPPER_ID_RE` — the one `shared/roster.ts`
+    # states. Nothing else in this check can be trusted about an entry whose id
+    # is not an id, so it is reported and skipped rather than looked up on disk
+    # under a name no file could have. (Task 5 review, Minor 5: the reader used
+    # to make an illegal id LOOK legal — `"acct<TAB>b"` arrived as `acct b` and
+    # was reported as "acct b has no executable at …", a plausible sentence
+    # about an account that does not exist.)
+    if [[ ! "$id" =~ $WRAPPER_ID_RE ]]; then
+      wr_hard+=("the roster holds an account whose id \"$id\" is not a legal account id (${WRAPPER_ID_RE}), so no file could be named after it")
+      continue
+    fi
+    if [[ -v wr_kind[$id] ]]; then
+      wr_hard+=("$id is declared twice in the roster")
+      continue
+    fi
+    wr_ids+=("$id"); wr_kind["$id"]="$kind"; wr_suffix["$id"]="$suffix"; wr_secrets["$id"]="$secrets"
+    case "$kind" in
+      upstream)  n_up=$((n_up + 1)); [ -n "$upstream_id" ] || upstream_id="$id" ;;
+      generated) n_gen=$((n_gen + 1)) ;;
+      external)  n_ext=$((n_ext + 1)) ;;
+    esac
+  done <<< "$tsv"
+
+  if [ ! -d "$bin" ]; then
+    _dr_fail wrappers "no \$HOME/.local/bin at all, so the roster's ${#wr_ids[@]} accounts have nowhere to live" \
+      "create it and install the wrappers the roster describes — an account is an executable at \$HOME/.local/bin/<id>"
+    return 1
+  fi
+
+  # ── the disk side ──────────────────────────────────────────────────────
+  # `ccrc-adopt`'s own candidate rule, run through the same functions: an
+  # id-shaped executable that is a script and sets CLAUDE_CONFIG_DIR. Anything
+  # looser would report every tool in ~/.local/bin as an undeclared account;
+  # anything narrower would miss the account somebody added and never wrote
+  # down. The upstream account is deliberately NOT in this set — it is a binary,
+  # not a wrapper, and it is checked on its own below.
+  local -a wr_cands=()
+  local f name had_nullglob=0
+  shopt -q nullglob && had_nullglob=1
+  shopt -s nullglob
+  for f in "$bin"/*; do
+    [ -f "$f" ] || continue
+    [ -x "$f" ] || continue
+    name="${f##*/}"
+    [[ "$name" =~ $WRAPPER_ID_RE ]] || continue
+    _wrap_is_script "$f" || continue
+    _wrap_declares_config_dir "$f" || continue
+    wr_cands+=("$name")
+  done
+  [ "$had_nullglob" -eq 1 ] || shopt -u nullglob
+
+  # Drop a candidate that IS a declared account's wrapper under a second name.
+  # The measured case is `gpt -> ccgpt`, both in ~/.local/bin, one file: adopt
+  # drops the alias too (its pass 0.5) or it would propose two accounts fighting
+  # over one CLAUDE_CONFIG_DIR. `-ef` is a bash builtin comparing device+inode
+  # THROUGH the symlink, so this needs no `readlink` — and it catches a hard
+  # link, which `readlink` would not.
+  local -a wr_seen=()
+  local other alias_of
+  for name in ${wr_cands[@]+"${wr_cands[@]}"}; do
+    if [[ -v wr_kind[$name] ]]; then wr_seen+=("$name"); continue; fi
+    alias_of=""
+    for other in ${wr_ids[@]+"${wr_ids[@]}"}; do
+      [ -e "$bin/$other" ] || continue
+      if [ "$bin/$name" -ef "$bin/$other" ]; then alias_of="$other"; break; fi
+    done
+    [ -n "$alias_of" ] || wr_seen+=("$name")
+  done
+
+  # ── both directions, reported ──────────────────────────────────────────
+  # The roster ids that MUST be a CLAUDE_CONFIG_DIR-setting script on disk:
+  # `generated`, and ONLY generated — it is ccrc's own shape, the one thing
+  # here that is written against a contract this repository states.
+  #
+  # `upstream` is excluded because a 300 MB ELF is its normal shape, and
+  # `external` because its shape is nobody's business: it may be compiled, and
+  # it may spell its config dir in a way no `export` line matches (Task 5
+  # review, Important 3 — as written, `wr_seen` membership demanded both
+  # `_wrap_is_script` AND a literal `export CLAUDE_CONFIG_DIR=` line, so a
+  # perfectly good external launcher landed in the a-only side of this
+  # difference and FAILED the box). Both kinds are still checked for the one
+  # thing ccd needs — an executable of that name — in the loop below.
+  local -a wr_expect=()
+  for id in ${wr_ids[@]+"${wr_ids[@]}"}; do
+    case "${wr_kind[$id]}" in generated) wr_expect+=("$id") ;; esac
+  done
+  _wrap_set_diff _dr_wr_note wr_expect wr_seen
+
+  # ── shape, for the accounts ccrc claims to own ─────────────────────────
+  local ok target wsuffix wsecrets
+  for id in ${wr_ids[@]+"${wr_ids[@]}"}; do
+    case "${wr_kind[$id]}" in
+      external|upstream)
+        # RECORDED, NEVER READ. Exactly one question is asked of either kind:
+        # is there an executable at the path ccd will run? An external
+        # account's content is not this tool's business (it is somebody else's
+        # launcher, possibly compiled), and the upstream account's normal shape
+        # is a binary. Anything more than existence would be inventing a
+        # contract nobody made.
+        _dr_wr_present "$id" || true
+        ;;
+      generated)
+        # Absent from disk, or not a wrapper at all: already reported, in the
+        # words the measurement earned, by the set difference above.
+        _dr_wr_has "$id" ${wr_seen[@]+"${wr_seen[@]}"} || continue
+        # D-71 SAYS THIS IDIOM IS BANNED FOR RECORDS WITH POSSIBLY-EMPTY
+        # FIELDS, and this one is the exception — for a reason that lives in
+        # ANOTHER FILE, which is why it is written down here:
+        # `_wrap_parse_shape` (ccd/ccrc-wrapper-shape) only prints `ok` after
+        # matching `target` against WRAPPER_ID_RE and `suffix` against
+        # WRAPPER_SUFFIX_SAFE_RE, both of which reject the empty string, and
+        # `ok` is a literal. So the ONLY field that can be empty is `secrets`,
+        # the LAST one — and a trailing empty field is the one case
+        # `IFS=$'\t' read` handles correctly. Its `no` answer is four empty
+        # fields, but the `[ "$ok" != ok ]` line below is the only thing read
+        # in that case.
+        # RE-CHECK THIS IF EITHER REGEX IS RELAXED TO ACCEPT EMPTY, OR IF A
+        # FIFTH FIELD IS ADDED AHEAD OF `secrets`: the failure would be a
+        # silently WRONG D-69 verdict (a secrets path read out of the suffix
+        # column), not a parse error. Split by hand then, as the roster reader
+        # above does.
+        IFS=$'\t' read -r ok target wsuffix wsecrets < <(_wrap_parse_shape "$bin/$id")
+        if [ "$ok" != ok ]; then
+          wr_hard+=("$id is declared generated but \$HOME/.local/bin/$id is not the generated shape (a shebang, an export, an optional secrets guard, an exec — and nothing else)")
+          continue
+        fi
+        if [ -z "${wr_suffix[$id]}" ]; then
+          wr_hard+=("$id's roster entry declares no configDirSuffix, so its wrapper's $wsuffix answers to nothing")
+        elif [ "$wsuffix" != "${wr_suffix[$id]}" ]; then
+          wr_hard+=("$id's wrapper sets CLAUDE_CONFIG_DIR to $wsuffix but the roster declares ${wr_suffix[$id]}")
+        fi
+        # THE D-69 SHAPE. Three ways to disagree, and all three are the same
+        # class of defect: a wrapper that loads (or fails to load) credentials
+        # nobody wrote down.
+        if [ -n "$wsecrets" ] && [ -z "${wr_secrets[$id]}" ]; then
+          wr_hard+=("$id sources $wsecrets but the roster declares none")
+        elif [ -z "$wsecrets" ] && [ -n "${wr_secrets[$id]}" ]; then
+          wr_hard+=("$id sources no secrets file but the roster declares ${wr_secrets[$id]}")
+        elif [ "$wsecrets" != "${wr_secrets[$id]}" ]; then
+          wr_hard+=("$id sources $wsecrets but the roster declares ${wr_secrets[$id]}")
+        fi
+        if [ -n "$upstream_id" ] && [ "$target" != "$upstream_id" ]; then
+          wr_hard+=("$id's wrapper execs \$HOME/.local/bin/$target, not the roster's upstream account $upstream_id")
+        fi
+        ;;
+      *)
+        wr_hard+=("$id's roster entry declares no exec.kind this check understands (\"${wr_kind[$id]}\")")
+        ;;
+    esac
+  done
+
+  if [ "$n_gen" -gt 0 ]; then
+    if [ "$n_up" -eq 0 ]; then
+      wr_soft+=("the roster declares no upstream account, so no generated wrapper's exec target could be checked")
+    elif [ "$n_up" -gt 1 ]; then
+      wr_soft+=("the roster declares $n_up upstream accounts; every exec target was checked against the first, $upstream_id")
+    fi
+  fi
+
+  # ── the verdict, one line PER CLASS OF FINDING ─────────────────────────
+  # A hard finding and a soft one are two different requests to the operator,
+  # each with its own remedy, so they get one line each and the check returns
+  # the worse of the two (see this file's header, "ONE CHECK MAY ANSWER IN TWO
+  # CLASSES"). The soft findings are NOT joined onto the FAIL line: that
+  # laundered "somebody keeps a launcher the fleet does not drive" into
+  # "somebody broke an account", handed it the wrong remedy, and left the
+  # summary counting zero warnings while warnings were on the screen.
+  local rc=0
+  if [ "${#wr_hard[@]}" -gt 0 ]; then
+    _dr_fail wrappers \
+      "$(_dr_join ${wr_hard[@]+"${wr_hard[@]}"})" \
+      "the roster is the source of truth and nothing here edits it for you — make \$HOME/.ccrc/accounts.json and the wrapper agree; 'bash ccd/ccrc-adopt --out /tmp/accounts.json' prints what a rediscovery from disk would say and writes nothing else"
+    rc=1
+  fi
+  if [ "${#wr_soft[@]}" -gt 0 ]; then
+    _dr_warn wrappers \
+      "$(_dr_join ${wr_soft[@]+"${wr_soft[@]}"})" \
+      "either describe it in \$HOME/.ccrc/accounts.json (adopt would call a bespoke launcher \"external\") or leave it be — ccrc never drives an account the roster does not name"
+    [ "$rc" -eq 1 ] || rc=2
+  fi
+  if [ "$rc" -ne 0 ]; then
+    return "$rc"
+  fi
+  _dr_pass wrappers "${#wr_ids[@]} accounts in \$HOME/.ccrc/accounts.json match \$HOME/.local/bin ($n_up upstream, $n_gen generated, $n_ext external)"
+}
+
+# ── the two boxes' matched set ────────────────────────────────────────────
+# THE ONE CHECK THAT IS NOT ABOUT THIS BOX. Every check above measures the box
+# it runs on; this one asks whether this box and the OTHER one are a matched
+# set — same build, same generated roster projection — because until the fleet
+# host's stamp crossed the wire (Stage 2b, tasks 2-3) a deploy that landed on
+# one box and not the other was invisible. Every symptom of that skew shows up
+# as a behaviour and never as a version: a `ccd` verb the server believes
+# exists, a hook writing a field the server does not read, a frame field one
+# side sends and the other drops.
+#
+# ── IT ASKS, IT DOES NOT DECIDE ──────────────────────────────────────────
+# The SERVER is the only party holding both halves (its own stamp and the fleet
+# host's, its own roster digest and the fleet host's), so the comparison lives
+# there — `rosterAgreement`/`buildAgreement`, server/src/fleetstate.ts — and
+# this check reports what it answers. Re-deriving the comparison here would be
+# a second implementation of a decision that already has one, and the two would
+# disagree the first time either changed.
+#
+# ── THREE ANSWERS PER QUESTION, KEPT APART ───────────────────────────────
+# Both server-side functions are deliberately THREE-valued and both docstrings
+# say why, at length: `'unknown'` means NO EVIDENCE — local mode, an agent older
+# than the field, a fleet host that was never stamped — and an operator does
+# something about `'skewed'`/`'divergent'` and nothing about `'unknown'`.
+# Collapsing unknown into either neighbour is the overloaded-null-at-a-seam
+# defect this codebase bans, so:
+#     agreed              -> PASS
+#     skewed / divergent  -> FAIL, one line per disagreement, own remedy each
+#     unknown / not one
+#       of the three      -> WARN
+#     no server to ask    -> SKIP (see the header's FOURTH OUTCOME)
+#     a server that could
+#       not be reached    -> WARN. "the server is down" is a different problem
+#                            from "the two boxes disagree", and reporting the
+#                            first as the second sends an operator to redeploy
+#                            a box that is fine.
+#
+# ── WHY TWO FAIL LINES AND NOT ONE ───────────────────────────────────────
+# A skewed build and a divergent roster get a line each because their REMEDIES
+# differ: one is "deploy the lagging box", the other is "redeploy both, then
+# reconcile two hand-owned JSON files". Joining them hands one finding the
+# other's instruction, which is precisely the collapse `_check_wrappers` was
+# split for (Task 5 review, Important 1).
+#
+# ── D-72, AND WHY THE PASS IS WORDED THE WAY IT IS ───────────────────────
+# `roster: 'agreed'` means the two boxes would run BYTE-IDENTICAL
+# `~/.ccrc/accounts.sh` — the projection `ccd` actually obeys. It does NOT mean
+# the two `accounts.json` files agree: `shared/generate.mjs` emits no
+# `exec.kind` and no `secretsFile`, so two rosters differing only in a secrets
+# file produce the same digest and report `'agreed'` (measured on this plan's
+# own Task 6 fix). The PASS therefore claims exactly what was measured, and the
+# thing that catches the rest is the `wrappers` check above, run on each box.
+_check_fleet() {
+  # THE READERS LIVE IN `ccrc`, NOT HERE, and that is not an accident of where
+  # the code was typed: `ccrc status` makes the same call, and a copy of an
+  # HTTP request and a JSON classifier in two files is two answers to one
+  # question. This file is only ever sourced BY `ccrc` (its own header, first
+  # paragraph), so they are in scope — but a check that assumed so silently
+  # would report a healthy fleet on a box where the reader had gone missing.
+  if ! declare -F _box_server_addr >/dev/null 2>&1 || ! declare -F _box_health >/dev/null 2>&1; then
+    _dr_fail fleet "ccrc's own fleet readers are not loaded, so the two boxes were never compared" \
+      "this is a bug in ccrc, not a fact about your box — _check_fleet calls _box_server_addr/_box_health from ccrc itself, and this check table was sourced by something that is not ccrc"
+    return 1
+  fi
+
+  local addr_out addr_rc=0
+  addr_out="$(_box_server_addr)" || addr_rc=$?
+  local -a af=()
+  [ -z "$addr_out" ] || mapfile -t af <<< "$addr_out"
+  if [ "$addr_rc" -eq 1 ]; then
+    # THE MEASURED STATE OF THE FLEET HOST: it has ~/.ccrc/agent.env (which
+    # configures the agent) and no ccrc.env, so nothing on it knows where the
+    # server is. Not a fault, and emphatically not an agreement.
+    _dr_skip fleet "this box has no server address (no CCRC_ADDR, and no CCRC_HOST/CCRC_PORT in $BOX_ENV_FILE), so there is no server to ask whether the two boxes are a matched set"
+    return 3
+  fi
+  if [ "$addr_rc" -ne 0 ]; then
+    # Configured and unusable is its own condition — but still a check that did
+    # not run, not a finding about the fleet. The SOURCE is named and the value
+    # is not: it comes off a config file and lands on a terminal.
+    _dr_skip fleet "this box's server address cannot be used (${af[0]:-$BOX_ENV_FILE}), so nothing was asked — set CCRC_ADDR=host:port, or declare both CCRC_HOST and CCRC_PORT"
+    return 3
+  fi
+  local addr="${af[0]}"
+
+  local h_rc=0
+  _box_health "$addr" || h_rc=$?
+  case "$h_rc" in
+    4)
+      _dr_warn fleet "curl is not on PATH, so the server at $addr could not be asked whether the two boxes agree" \
+        "install it: sudo apt install curl — the fleet host's own swap hook already needs it (deploy/notify.sh)"
+      return 2 ;;
+    5)
+      _dr_warn fleet "the server at $addr did not answer (curl exited $BOX_HEALTH_WHY) — a server this box cannot reach is a different problem from two boxes that disagree" \
+        "check the server is up and listening there: on the server box, systemctl --user is-active ccrc.service and journalctl --user -u ccrc.service -n 50"
+      return 2 ;;
+    6)
+      _dr_warn fleet "the server at $addr answered $BOX_HEALTH_WHY when asked for /api/fleet/health, so it never said whether the two boxes agree" \
+        "read the server's own log: on the server box, journalctl --user -u ccrc.service -n 50"
+      return 2 ;;
+    7)
+      _dr_warn fleet "whatever is listening at $addr answered /api/fleet/health with something that is not the health JSON, so it is probably not a ccrc server" \
+        "check what that address really is (a reverse proxy or a captive portal answers exactly this way), and that CCRC_HOST/CCRC_PORT name this box's own server"
+      return 2 ;;
+    8)
+      _dr_warn fleet "node is not on PATH, so the server's answer could not be parsed" \
+        "install Node first — see the 'node' check above"
+      return 2 ;;
+  esac
+
+  local mode="${BOX_HEALTH[0]}" connected="${BOX_HEALTH[1]}"
+  local build="${BOX_HEALTH[2]}" roster="${BOX_HEALTH[3]}"
+
+  if [ "$mode" = local ]; then
+    _dr_skip fleet "the server at $addr runs in local mode — it drives the fleet on its own box, so there is no second box to disagree with and nothing to compare"
+    return 3
+  fi
+  if [ "$mode" != remote ]; then
+    # Absent and unrecognised collapse HERE and only here, because an operator
+    # does the same thing about both: look at what is answering.
+    _dr_warn fleet "the server at $addr did not say which mode it is in, so this check cannot tell whether there are two boxes to compare" \
+      "check the build running there — 'curl -s http://$addr/api/fleet/health' should answer with a mode of local or remote"
+    return 2
+  fi
+
+  local rc=0
+  if [ "$build" = skewed ]; then
+    _dr_fail fleet "the two boxes are running different builds (the server at $addr answers build: skewed — the shas differ, or one of them is dirty and is therefore not the commit it names)" \
+      "deploy the lagging box, agent first, then server: 'bash deploy/deploy.sh agent <fleet-host>' and only then 'bash deploy/deploy.sh'. The server reads what the fleet host's hook writes and the agent caches 'ccd caps' at boot, so the other order ships a server that reads fields the fleet host does not yet write. 'ccrc version' on each box names the sha it is running"
+    rc=1
+  fi
+  if [ "$roster" = divergent ]; then
+    _dr_fail fleet "the two boxes would run different ~/.ccrc/accounts.sh (the server at $addr answers roster: divergent), so ccd on the fleet host can behave differently from what the server assumes" \
+      "REDEPLOY BOTH boxes first, agent first — the projection is a function of shared/generate.mjs as well as of the roster, so an emitter change that landed on one box only lands here with both accounts.json identical — and reconcile the two hand-owned ~/.ccrc/accounts.json second, which is the order the PWA's own banner states"
+    rc=1
+  fi
+
+  # The WARN class. The unknowns share one line because they share one remedy:
+  # the fleet host has not told the server what it is running.
+  local -a soft=()
+  case "$build" in
+    agreed|skewed) ;;
+    unknown) soft+=("the server cannot tell whether the builds match (build: unknown) — no build stamp has reached it from the fleet host") ;;
+    *)       soft+=("the server answered something this check does not recognise where a build answer belongs") ;;
+  esac
+  case "$roster" in
+    agreed|divergent) ;;
+    unknown) soft+=("the server cannot tell whether the rosters match (roster: unknown) — no roster digest has reached it from the fleet host") ;;
+    *)       soft+=("the server answered something this check does not recognise where a roster answer belongs") ;;
+  esac
+  if [ "${#soft[@]}" -gt 0 ]; then
+    _dr_warn fleet "$(_dr_join ${soft[@]+"${soft[@]}"})" \
+      "no evidence is not disagreement — deploy the fleet host so its agent reports both ('bash deploy/deploy.sh agent <fleet-host>'), and check 'ccrc version' there: an unstamped box has nothing to report"
+    [ "$rc" -eq 1 ] || rc=2
+  fi
+
+  # THE LINK IS ITS OWN FINDING, and it is why `agreed` alone is not enough for a
+  # PASS: the server's answers are computed from what the fleet host last
+  # reported, so over a dead link they describe the last contact rather than
+  # now, and a PASS would claim a measurement nobody is currently making.
+  #
+  # THREE ARMS, NOT TWO (round-2 review, Important). This was
+  # `if [ "$connected" = false ]`, which sent `?` — the classifier's token for
+  # absent-or-unrecognised — down the same path as a healthy `true`, so four
+  # different bodies (no `connected` at all; `"yes"`; `null`; the STRING
+  # `"false"`) each produced `PASS fleet: … in remote mode, connected` — a
+  # verdict asserting the opposite of what the last one says. The justification
+  # written here was wrong as well as the code: `shared/api.ts:1484` declares
+  # `connected` REQUIRED, so absence is a malformed answer, and the
+  # absence-permits rule belongs to the optional pair `roster?`/`build?` and
+  # licenses nothing here. `mode` and `build`/`roster` already WARN on a value
+  # they do not recognise; this was the one field where an unrecognised answer
+  # became a claim, and `_box_health` had carried the distinction all along —
+  # narrowing it here is exactly the adapter rule CLAUDE.md calls its
+  # highest-yield one.
+  case "$connected" in
+    true) ;;
+    false)
+      _dr_warn fleet "the server at $addr is not currently connected to the fleet host, so its build and roster answers describe the last contact rather than now" \
+        "bring the link back up: on the fleet host, systemctl --user is-active ccrc-agent.service, then re-run this check"
+      [ "$rc" -eq 1 ] || rc=2 ;;
+    *)
+      _dr_warn fleet "the server at $addr did not say whether it is in contact with the fleet host, so its build and roster answers cannot be trusted to describe now" \
+        "check what is answering at $addr — /api/fleet/health states 'connected' as a JSON boolean (shared/api.ts declares it required), so a missing or non-boolean one means a proxy, an older build, or something that is not a ccrc server"
+      [ "$rc" -eq 1 ] || rc=2 ;;
+  esac
+
+  if [ "$rc" -ne 0 ]; then
+    return "$rc"
+  fi
+  _dr_pass fleet "the two boxes agree — same build, and the same generated ~/.ccrc/accounts.sh (measured by the server at $addr, in remote mode, connected)"
+}
