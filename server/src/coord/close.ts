@@ -5,8 +5,8 @@ import type { Deps } from '../server.js';
 import { CCD_ARGV, verbSupported } from '../ccdargv.js';
 import { readPrHistory } from './prhistory.js';
 import { verifyDone, type DoneClaim } from './fingerprint.js';
-import { type AdvanceResult, type CoordStore } from './store.js';
-import { HANDOFF_SHA, holdReason, queueSystemMail } from './rundefs.js';
+import { type AdvanceResult, type CoordStore, type OpenSibling } from './store.js';
+import { HANDOFF_SHA, holdReason, queueSystemMail, releaseIsSafe } from './rundefs.js';
 import { RUN_TRANSITIONS, type MailRejectCode, type RunRefuseCode, type RunState } from '../../../shared/api.js';
 
 /**
@@ -24,7 +24,14 @@ export interface CloseRunDeps {
 }
 
 export type CloseOutcome =
-  | { ok: true; id: number; state: 'done' | 'failed' }
+  | { ok: true; id: number; state: 'done' | 'failed';
+      /** Is the workspace's claim GONE as a result of this close? `true` only
+       *  after a `ws-release` that actually succeeded. `false` on every arm
+       *  that re-held — which, for an ABANDON or a `final:true` close, means
+       *  a SIBLING open run still names this session and the claim was
+       *  re-held with the surviving run's reason. A non-final close never
+       *  asks for a release, so its `false` is ordinary. */
+      released: boolean }
   | { ok: false; kind: 'unknown-run' }
   | { ok: false; kind: 'bad-transition'; from: RunState; to: RunState }
   | { ok: false; kind: 'bad-request' }
@@ -74,6 +81,18 @@ export async function closeRun(
   const run = coord.run(id);
   if (!run) return { ok: false, kind: 'unknown-run' };
 
+  /** The OTHER open runs on this workspace. Read fresh at the decision point,
+   *  never cached: a snapshot consulted at a destructive decision point is
+   *  the shape `watch.ts` already had to fix once. The closing run excludes
+   *  itself — it has not transitioned yet (D-48 puts the fleet act first). */
+  const siblingsOf = (sessionId: string): OpenSibling[] => coord.openRunsForSession(sessionId, id);
+  /** The claim that survives this close: the MOST RECENTLY opened run, because
+   *  the coordinator protocol opens wave N+1 before closing wave N. With the
+   *  ordinary one-sibling case this is a distinction without a difference; it
+   *  is written down so two siblings produce a DETERMINISTIC reason rather
+   *  than a coin toss (`openRunsForSession` is `ORDER BY id`). */
+  const survivorOf = (s: readonly OpenSibling[]): OpenSibling | null => s[s.length - 1] ?? null;
+
   // The body is read HERE, above every precondition, because the abandon arm
   // below branches on it — and the ordinary path's own validation is left
   // exactly where it was, one `const b` shorter.
@@ -120,20 +139,30 @@ export async function closeRun(
       return { ok: false, kind: 'bad-transition', from: run.state, to: target };
     }
     // The fleet act, AHEAD of the commit (D-48), and only when there is
-    // something to release: a `planned` run that never dispatched holds no
-    // workspace. Always `wsRelease`, never `wsArchive`.
+    // something to act on: a `planned` run that never dispatched holds no
+    // workspace. RELEASE ONLY WHEN NOTHING ELSE CLAIMS IT — otherwise HAND
+    // THE CLAIM OVER by re-holding with the surviving run's own reason. The
+    // abandoned run still transitions either way; the workspace stays
+    // claimed. Never `wsArchive` on this arm (D-B4-7).
+    let released = false;
     if (run.sessionId !== null) {
-      const argv = CCD_ARGV.wsRelease(run.sessionId);
+      const siblings = siblingsOf(run.sessionId);
+      const survivor = survivorOf(siblings);
+      const argv = releaseIsSafe(siblings) || survivor === null
+        ? CCD_ARGV.wsRelease(run.sessionId)
+        : CCD_ARGV.wsHold(run.sessionId,
+            holdReason(survivor.program, survivor.wave, survivor.waveOf, survivor.id));
       if (!verbSupported(deps.fleetState, argv)) return { ok: false, kind: 'unsupported' };
       const res = await deps.runCcd(argv);
       if (!res.ok) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
+      released = releaseIsSafe(siblings);
     }
     const closed = coord.closeRun({
       runId: id, finalState: 'failed', causedBy, handoffCommit: null,
       program: run.program, viaClosing: target === 'closing',
     });
     if (!closed.ok) return { ok: false, kind: 'advanceFailed', adv: closed };
-    return { ok: true, id, state: 'failed' };
+    return { ok: true, id, state: 'failed', released };
   }
 
   if (run.sessionId === null) {
@@ -207,21 +236,34 @@ export async function closeRun(
   // is a RELEASE (D-5), never an autonomous archive. `state:'failed'` with
   // `archive:true` is the ONE explicit `wsArchive` call in the whole
   // coordination lane.
+  const siblings = siblingsOf(run.sessionId);
+  const survivor = survivorOf(siblings);
+  const safe = releaseIsSafe(siblings);
+  let released = false;
   if (state === 'failed' && archive) {
     const argv = CCD_ARGV.wsArchive(run.sessionId);
     if (!verbSupported(deps.fleetState, argv)) return { ok: false, kind: 'unsupported' };
     const res = await deps.runCcd(argv);
     if (!res.ok) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
-  } else if (final) {
+  } else if (final && safe) {
     const argv = CCD_ARGV.wsRelease(run.sessionId);
     if (!verbSupported(deps.fleetState, argv)) return { ok: false, kind: 'unsupported' };
     const res = await deps.runCcd(argv);
     if (!res.ok) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
+    released = true;
   } else {
-    // `null`, explicitly: this reason claims the workspace for wave N+1,
-    // whose run has not been opened yet. Stamping the CLOSING run's id onto
-    // the successor's claim would name the wrong run.
-    const nextReason = holdReason(run.program, run.wave + 1, run.waveOf, null);
+    // TWO cases land here, and the reason they share an arm is that they need
+    // the same act with a different reason string:
+    //   - the ordinary NON-FINAL close, no sibling: claim the workspace for
+    //     wave N+1, whose run does not exist yet — hence `null` for the run
+    //     id, and the string is byte-identical to what shipped;
+    //   - ANY close, final or not, with a SIBLING still open: the surviving
+    //     run's own reason wins. Before Wave 2 the non-final arm wrote its
+    //     OWN row's `wave + 1` unconditionally, silently rewriting the live
+    //     run's claim whenever the two rows disagree.
+    const nextReason = survivor === null
+      ? holdReason(run.program, run.wave + 1, run.waveOf, null)
+      : holdReason(survivor.program, survivor.wave, survivor.waveOf, survivor.id);
     const argv = CCD_ARGV.wsHold(run.sessionId, nextReason);
     if (!verbSupported(deps.fleetState, argv)) return { ok: false, kind: 'unsupported' };
     const res = await deps.runCcd(argv);
@@ -252,5 +294,5 @@ export async function closeRun(
   });
   if (!closed.ok) return { ok: false, kind: 'advanceFailed', adv: closed };
 
-  return { ok: true, id, state };
+  return { ok: true, id, state, released };
 }

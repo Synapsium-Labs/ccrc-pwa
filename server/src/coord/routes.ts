@@ -143,7 +143,7 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
  *  used to build inline, and the same totality guard (fix round 1,
  *  finding 1/3) — see that function's own docstring for the measurement. */
 function sendCloseOutcome(reply: FastifyReply, r: CloseOutcome) {
-  if (r.ok) return reply.code(200).send({ ok: true, id: r.id, state: r.state });
+  if (r.ok) return reply.code(200).send({ ok: true, id: r.id, state: r.state, released: r.released });
   switch (r.kind) {
     case 'unknown-run': return reply.code(404).send({ ok: false, error: 'unknown-run' });
     case 'bad-transition':

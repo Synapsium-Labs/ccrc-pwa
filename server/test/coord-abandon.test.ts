@@ -89,6 +89,18 @@ const wedged = (
   return id;
 };
 
+/** A SECOND open run naming the same session — the state the coordinator
+ *  protocol deliberately creates (open wave N+1 BEFORE closing wave N) and
+ *  which no fixture in this tree had before Wave 2. */
+const sibling = (coord: CoordStore, sessionId: string, wave: number, program = 'build4'): number => {
+  const opened = coord.openRun({
+    program, title: 'Fleet controls', project: PROJECT, wave, waveOf: 3, claimedBy: CLAIMED_BY,
+  });
+  if (!('id' in opened)) throw new Error(`fixture openRun refused: ${JSON.stringify(opened)}`);
+  coord.setSession(opened.id, sessionId);
+  return opened.id;
+};
+
 const postAbandon = (app: FastifyInstance, id: number, payload?: unknown) =>
   app.inject({
     method: 'POST', url: `/api/runs/${id}/abandon`,
@@ -343,6 +355,62 @@ describe('POST /api/runs/:id/abandon', () => {
     const res = await postAbandon(app, id);
     expect(res.statusCode).toBe(200);
   });
+
+  it('abandoning ONE of two open runs re-holds with the SIBLING reason — it does not release', async () => {
+    const home = mkTmp('ccrc-abandon-');
+    const { run, calls } = makeRunner();
+    const w = await openApp(home, run); app = w.app;
+    const sessionId = `${PROJECT}-two`;
+    const id = wedged(w.coord, home, 'dispatched', sessionId);
+    const other = sibling(w.coord, sessionId, 2);
+
+    const res = await postAbandon(app, id);
+    expect(res.statusCode).toBe(200);
+    // The abandoned run still transitions — the workspace just stays claimed.
+    expect(res.json()).toMatchObject({ ok: true, state: 'failed', released: false });
+    expect(w.coord.run(id)!.state).toBe('failed');
+    expect(calls.filter((c) => c[0] === 'ws-release')).toEqual([]);
+    expect(calls).toContainEqual(
+      ['ws-hold', '--session', sessionId, '--reason', `program:build4 wave:2/3 run:${other}`]);
+  });
+
+  it('with no sibling it still releases, and says so', async () => {
+    const home = mkTmp('ccrc-abandon-');
+    const { run, calls } = makeRunner();
+    const w = await openApp(home, run); app = w.app;
+    const sessionId = `${PROJECT}-lone`;
+    const id = wedged(w.coord, home, 'dispatched', sessionId);
+    const res = await postAbandon(app, id);
+    expect(res.json()).toMatchObject({ ok: true, released: true });
+    expect(calls).toContainEqual(['ws-release', '--session', sessionId]);
+  });
+
+  it('a CLOSED sibling is not a sibling — a done run cannot keep a workspace claimed forever', async () => {
+    const home = mkTmp('ccrc-abandon-');
+    const { run, calls } = makeRunner();
+    const w = await openApp(home, run); app = w.app;
+    const sessionId = `${PROJECT}-closedsib`;
+    const id = wedged(w.coord, home, 'dispatched', sessionId);
+    const other = sibling(w.coord, sessionId, 2);
+    w.coord.advance(other, 'dispatched', 'coordinator');
+    w.coord.advance(other, 'closing', 'coordinator');
+    w.coord.advance(other, 'done', 'coordinator');
+    const res = await postAbandon(app, id);
+    expect(res.json()).toMatchObject({ ok: true, released: true });
+    expect(calls).toContainEqual(['ws-release', '--session', sessionId]);
+  });
+
+  it('a FAILED re-hold leaves the run RETRYABLE — the fleet act stays ahead of the commit (D-48)', async () => {
+    const home = mkTmp('ccrc-abandon-');
+    const { run } = makeRunner({ fail: new Set(['ws-hold']) });
+    const w = await openApp(home, run); app = w.app;
+    const sessionId = `${PROJECT}-rehold-fail`;
+    const id = wedged(w.coord, home, 'dispatched', sessionId);
+    sibling(w.coord, sessionId, 2);
+    const res = await postAbandon(app, id);
+    expect(res.statusCode).toBe(502);
+    expect(w.coord.run(id)!.state).toBe('dispatched');   // UNCHANGED
+  });
 });
 
 describe("closeRun's abandon arm, called directly", () => {
@@ -359,8 +427,13 @@ describe("closeRun's abandon arm, called directly", () => {
   it('accepts the bare {intent:"abandon"} body and answers ok — no fingerprint, no final', async () => {
     const { home, coord, deps } = await build();
     const id = wedged(coord, home, 'dispatched', `${PROJECT}-unit1`);
+    // `released: true` — this fixture opens exactly one run, so nothing else
+    // claims the workspace and the abandon genuinely ends the claim. The
+    // assertion stays `toEqual` (not `toMatchObject`) deliberately: it is the
+    // one place the WHOLE ok-arm shape is pinned, so a silently-added field
+    // reds here rather than reaching a client that never learns to read it.
     expect(await closeRun(deps, id, { intent: 'abandon' }, 'operator'))
-      .toEqual({ ok: true, id, state: 'failed' });
+      .toEqual({ ok: true, id, state: 'failed', released: true });
   });
 
   it('refuses bad-request for {intent:"abandon", archive:true} — a mixed shape is not a shape', async () => {

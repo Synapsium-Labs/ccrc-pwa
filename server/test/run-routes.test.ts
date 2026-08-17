@@ -786,6 +786,7 @@ describe('POST /api/runs/:id/close', () => {
       { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' });
     const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: true });
     expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ released: true });
     expect(coord.run(id)!.state).toBe('done');
     expect(coord.run(id)!.handoffCommit).toBe(TIP);
     expect(calls.some((c) => c[0] === 'ws-release' && c.includes(sessionId))).toBe(true);
@@ -799,6 +800,7 @@ describe('POST /api/runs/:id/close', () => {
       { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
     const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: false });
     expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ released: false });
     expect(coord.run(id)!.state).toBe('done');
     // NO ` run:` suffix, deliberately: this reason claims the workspace for
     // wave 2, whose run has not been opened yet. Stamping the CLOSING run's
@@ -806,6 +808,47 @@ describe('POST /api/runs/:id/close', () => {
     expect(calls).toContainEqual(
       ['ws-hold', '--session', sessionId, '--reason', 'program:build4 wave:2/3']);
     expect(calls.some((c) => c[0] === 'ws-release')).toBe(false);
+  });
+
+  it('final:true with a sibling open re-holds with the SIBLING reason and answers released:false', async () => {
+    const sessionId = `${PROJECT}-close-sib`;
+    const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
+    const { id, coord, calls } = await dispatchedRun(sessionId, root,
+      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' });
+    const next = coord.openRun({ program: 'build4', title: 'T', project: PROJECT, wave: 2, waveOf: 3,
+      claimedBy: CLAIMED_BY });
+    if (!('id' in next)) throw new Error('fixture openRun refused');
+    coord.setSession(next.id, sessionId);
+
+    const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: true });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, state: 'done', released: false });
+    expect(coord.run(id)!.state).toBe('done');
+    expect(calls.some((c) => c[0] === 'ws-release')).toBe(false);
+    expect(calls).toContainEqual(
+      ['ws-hold', '--session', sessionId, '--reason', `program:build4 wave:2/3 run:${next.id}`]);
+  });
+
+  it('the non-final arm re-holds with the SURVIVING run, never with its own next wave', async () => {
+    // Before Wave 2 it re-held `holdReason(program, wave+1, waveOf)` from its
+    // OWN row, silently rewriting the live run's claim whenever the two rows
+    // disagree. With a sibling open, the surviving run's reason wins.
+    const sessionId = `${PROJECT}-close-nonfinal-sib`;
+    const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
+    const { id, coord, calls } = await dispatchedRun(sessionId, root,
+      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
+    const next = coord.openRun({ program: 'build4', title: 'T', project: PROJECT, wave: 4, waveOf: 3,
+      claimedBy: CLAIMED_BY });
+    if (!('id' in next)) throw new Error('fixture openRun refused');
+    coord.setSession(next.id, sessionId);
+
+    const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: false });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, released: false });
+    expect(calls).toContainEqual(
+      ['ws-hold', '--session', sessionId, '--reason', `program:build4 wave:4/3 run:${next.id}`]);
+    expect(calls).not.toContainEqual(
+      ['ws-hold', '--session', sessionId, '--reason', 'program:build4 wave:2/3']);
   });
 
   it('archives on explicit abandon (state:failed, archive:true) — the only wsArchive call in the lane', async () => {
