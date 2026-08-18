@@ -950,6 +950,76 @@ describe('ccrc doctor: wrappers', () => {
     expect(r.stdout).toMatch(/FAIL wrappers: ghost .*no executable at \$HOME\/\.local\/bin\/ghost/);
   });
 
+  // ── D-82: absent is not disagreement ────────────────────────────────────
+  // "nothing exists on disk for `ccrc wrappers` to refuse" and "the roster and
+  // the wrapper on disk describe two different things" are two findings an
+  // operator fixes with two different commands — `ccrc wrappers` writes the
+  // first kind from nothing, but does not touch a file `ccrc wrappers` would
+  // itself refuse to overwrite, so pointing an absent-wrapper operator at "make
+  // the roster and the wrapper agree" sends them looking for a wrapper that was
+  // never written in the first place.
+  it('fails an absent generated wrapper with the ccrc-wrappers remedy, not the roster-sync one (D-82)', () => {
+    // MEASURED RED (before the split): `_dr_wr_present` appended the absent
+    // finding to `wr_hard` same as every disagreement, so the FAIL's remedy
+    // was the generic "the roster is the source of truth … 'ccrc adopt
+    // --out /tmp/accounts.json' prints what a rediscovery from disk would
+    // say" sentence — the wrong instruction for an account nothing on disk
+    // has ever tried to be.
+    const home = healthy('ccrc-doctor-wrappers-absent-remedy-');
+    writeRoster(home, [{ id: 'ghost', exec: { kind: 'generated' } }]);
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL wrappers: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toMatch(/ghost has no executable at \$HOME\/\.local\/bin\/ghost/);
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: run: ccrc wrappers/);
+    expect(lines[i + 1]).not.toMatch(/ccrc adopt/);
+    expect(r.code).toBe(1);
+  });
+
+  it('reports an absent wrapper and a disagreeing one as two separate FAIL lines, each its own remedy (D-82)', () => {
+    // MEASURED RED (before the split): one bucket, one `_dr_join`, one FAIL
+    // line carrying both sentences ("ghost has no executable …; acct-a's
+    // wrapper sets CLAUDE_CONFIG_DIR to .somewhere-else but the roster
+    // declares .acct-a") and one remedy — the roster-sync sentence, wrong for
+    // the absent half. `failIdx.length` was 1, not 2.
+    //
+    // MUTATION MEASURED (Step 5): re-merging `wr_absent` into `wr_hard` in the
+    // working tree (both `_dr_wr_present` call sites passing `wr_hard`, and
+    // dropping the `wr_absent` verdict block) turned this test and the one
+    // above RED again, byte-identical to the pre-fix failures above — same
+    // combined FAIL sentence, same wrong remedy, `failIdx.length` back to 1.
+    // Reverted after the measurement; both tests are green against the
+    // restored split.
+    const home = healthy('ccrc-doctor-wrappers-absent-and-hard-');
+    // ghost: generated, declared, nothing on disk at all — the ABSENT class.
+    writeWrapper(home, 'acct-a', { cfgDir: '.somewhere-else' });
+    writeRoster(home, [
+      { id: 'ghost', exec: { kind: 'generated' } },
+      // acct-a: generated, present, but its wrapper's CLAUDE_CONFIG_DIR
+      // disagrees with the roster's configDirSuffix — the DISAGREEMENT class.
+      { id: 'acct-a', configDirSuffix: '.acct-a', exec: { kind: 'generated' } },
+    ]);
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const failIdx = lines.reduce<number[]>((acc, l, idx) => {
+      if (l.startsWith('FAIL wrappers: ')) acc.push(idx);
+      return acc;
+    }, []);
+    expect(failIdx.length, r.stdout).toBe(2);
+    const [absentIdx, hardIdx] = failIdx;
+    // The absent line comes FIRST — the verdict assembly's own ordering.
+    expect(lines[absentIdx]).toMatch(/ghost has no executable at \$HOME\/\.local\/bin\/ghost/);
+    expect(lines[absentIdx + 1]).toMatch(/^ {2}remedy: run: ccrc wrappers/);
+    expect(lines[hardIdx]).toContain('acct-a');
+    expect(lines[hardIdx]).toMatch(/\.somewhere-else.*\.acct-a/);
+    // The DISAGREEMENT remedy stays the verbatim roster sentence (the pin at
+    // ccrc-doctor-checks:1011 / the "keeps a soft finding OFF the FAIL line"
+    // test above) — the split must not have touched wr_hard's own wording.
+    expect(lines[hardIdx + 1]).toMatch(/^ {2}remedy: the roster is the source of truth/);
+    expect(r.code).toBe(1);
+  });
+
   it('describes the account it is talking about, not whichever one came last in the roster', () => {
     // The finding names an id AND describes a file; both have to be the same
     // account. A `local dir="$1" id="$2" p="…/$id"` builds `p` from the

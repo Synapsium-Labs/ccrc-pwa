@@ -51,7 +51,7 @@
 # make the check answer, that goes in the detail, as a fact about what is
 # missing rather than as an instruction.
 #
-# ── ONE CHECK MAY ANSWER IN TWO CLASSES ───────────────────────────────────
+# ── ONE CHECK MAY ANSWER IN TWO (OR THREE) CLASSES ────────────────────────
 # Almost every check prints exactly ONE verdict line. A check that has found
 # findings of two different classes may print a FAIL line and then a WARN line
 # — each with its own remedy — and returns the WORSE class (1). It is not a
@@ -63,10 +63,20 @@
 # them into one FAIL sentence both laundered the second into a defect and
 # discarded the remedy that belonged to it.
 #
+# TWO FAIL LINES from one check is the same rule, not an exception to it:
+# `_check_wrappers` again (D-82, Task 1 of stage2d) — "nothing exists on disk
+# for `ccrc wrappers` to refuse" and "the roster and the wrapper on disk
+# disagree" are BOTH hard findings (both FAIL, both return 1), but they are
+# still two DIFFERENT operator actions (`ccrc wrappers` vs hand-reconciling
+# the roster), so they get two FAIL lines, each with its own remedy, rather
+# than one bucket whose remedy is right for only one of the two sentences it
+# joined. The worst-class rule does not change: two FAILs still return 1, the
+# same as one would.
+#
 # `ccrc`'s `cmd_doctor` counts VERDICT LINES, not return codes, so a check that
-# answers in two classes is counted in both — and it cross-checks the two
-# statements against each other: a return code that is not the worst class the
-# check printed is reported as a bug in ccrc.
+# answers in two (or three) classes is counted in all of them — and it
+# cross-checks the loudest statement against the return code: a return code
+# that is not the worst class the check printed is reported as a bug in ccrc.
 #
 # The verdict lines are the RESULT of the verb, so they go to stdout — NOT to
 # stderr through `_ccrc_say`, which `ccrc`'s own header (Task 1) had guessed
@@ -615,21 +625,35 @@ _dr_wr_has() {
 # literally what ccd runs (ccd:7361). Three distinguishable ways to answer no,
 # because an operator does something different about each: a link whose target
 # was deleted is a broken install, an absent file is an install that never
-# happened, and a present non-executable file is a `chmod`. Appends to
-# `wr_hard` (its caller's local, by the same dynamic scope `_dr_wr_note` uses)
-# and returns 1 when it found something to say, so a caller can stop there
-# rather than go on to ask a question about a file that is not there.
-_dr_wr_present() {
+# happened, and a present non-executable file is a `chmod`.
+#
+# D-82: the first two are ABSENT — nothing `ccrc wrappers` would refuse to
+# write, because it never sees a file there at all (its `absent` decision-table
+# arm writes; a dangling symlink is replaced by its `mv -f`) — and go to the
+# CALLER-NAMED bucket, a nameref, so the caller decides which class they are.
+# The last one is a file that exists and is WRONG, which `ccrc wrappers` would
+# refuse to touch (D-82's point: a file on disk that disagrees is a different
+# operator action than a file that was never written), so it stays hard-wired
+# to `wr_hard` regardless of what the caller passed — the asymmetry is
+# deliberate, not an oversight to "fix" into three namerefs.
+#
+# Returns 1 when it found something to say, so a caller can stop there rather
+# than go on to ask a question about a file that is not there.
+_dr_wr_present() {   # id bucketname — presence probe; absent-class findings go to the NAMED bucket
   local id="$1"
+  local -n _wrp_bucket="$2"
   local p="$WRAPPER_BIN_DIR/$id"
   if [ -L "$p" ] && [ ! -e "$p" ]; then
-    wr_hard+=("$id's \$HOME/.local/bin/$id is a symlink to a path that does not exist")
+    _wrp_bucket+=("$id's \$HOME/.local/bin/$id is a symlink to a path that does not exist")
     return 1
   fi
   if [ ! -e "$p" ]; then
-    wr_hard+=("$id has no executable at \$HOME/.local/bin/$id")
+    _wrp_bucket+=("$id has no executable at \$HOME/.local/bin/$id")
     return 1
   fi
+  # present-but-wrong stays DISAGREEMENT class regardless of caller: a file
+  # ccrc wrappers would refuse is not fixed by running ccrc wrappers.
+  #
   # `-f` BEFORE `-x`, and it is not redundant: a DIRECTORY is both `-e` and
   # `-x` (that is what the execute bit means on a directory), so without this a
   # `mkdir $HOME/.local/bin/<id>` passed the whole triad and doctor reported
@@ -683,7 +707,12 @@ _dr_wr_note() {
   local p="$WRAPPER_BIN_DIR/$id"
   case "$dir" in
     a-only)
-      if _dr_wr_present "$id"; then
+      # This is the generated-account path (`wr_expect` is built from
+      # `generated` ids only, above): absent and a dangling symlink are
+      # exactly what `ccrc wrappers` writes — its `absent` decision-table arm
+      # writes, and `mv -f` over a dangling symlink replaces it — so those
+      # findings go to `wr_absent`, not `wr_hard`.
+      if _dr_wr_present "$id" wr_absent; then
         if ! _wrap_is_script "$p"; then
           wr_hard+=("$id is declared ${wr_kind[$id]} but \$HOME/.local/bin/$id is not a script")
         else
@@ -719,7 +748,9 @@ _check_wrappers() {
   fi
 
   local bin="$WRAPPER_BIN_DIR" roster="$HOME/.ccrc/accounts.json"
-  local -a wr_hard=() wr_soft=()
+  # D-82: `wr_absent` is its own bucket, not a third name for `wr_hard` — see
+  # `_dr_wr_present`'s own header for the class it holds and why.
+  local -a wr_hard=() wr_soft=() wr_absent=()
 
   if [ ! -e "$roster" ]; then
     _dr_fail wrappers "no account roster at \$HOME/.ccrc/accounts.json, so nothing on this box says what \$HOME/.local/bin is supposed to hold" \
@@ -944,7 +975,13 @@ _check_wrappers() {
         # launcher, possibly compiled), and the upstream account's normal shape
         # is a binary. Anything more than existence would be inventing a
         # contract nobody made.
-        _dr_wr_present "$id" || true
+        #
+        # `wr_hard`, not `wr_absent`: `ccrc wrappers` never creates an external
+        # or upstream account (D-71's own wording — it writes GENERATED
+        # wrappers only), so the roster-sync remedy is the correct one for an
+        # absent external/upstream wrapper too. Only the generated path above
+        # gets the ccrc-wrappers remedy.
+        _dr_wr_present "$id" wr_hard || true
         ;;
       generated)
         # Absent from disk, or not a wrapper at all: already reported, in the
@@ -1012,7 +1049,19 @@ _check_wrappers() {
   # laundered "somebody keeps a launcher the fleet does not drive" into
   # "somebody broke an account", handed it the wrong remedy, and left the
   # summary counting zero warnings while warnings were on the screen.
+  # D-82: `wr_absent` gets its OWN FAIL line, BEFORE `wr_hard`'s — a check may
+  # answer in two classes (this file's header), and absent-vs-disagreement is
+  # exactly that split: "nothing exists for `ccrc wrappers` to refuse" is not
+  # the same instruction as "the roster and the wrapper disagree", and joining
+  # them would either launder the absent case into a defect it is not, or hand
+  # the disagreement case a remedy that fixes nothing it names.
   local rc=0
+  if [ "${#wr_absent[@]}" -gt 0 ]; then
+    _dr_fail wrappers \
+      "$(_dr_join ${wr_absent[@]+"${wr_absent[@]}"})" \
+      "run: ccrc wrappers — nothing exists on disk for it to refuse; it creates \$HOME/.local/bin and writes every generated account's wrapper"
+    rc=1
+  fi
   if [ "${#wr_hard[@]}" -gt 0 ]; then
     _dr_fail wrappers \
       "$(_dr_join ${wr_hard[@]+"${wr_hard[@]}"})" \
