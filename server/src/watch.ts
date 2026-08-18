@@ -1654,7 +1654,10 @@ export class FleetWatcher {
    * durable `clear-refused:enter-ignored` run event saying this system typed
    * a `/clear` into that very box and never had it taken. No such row, no
    * permission — the text `/clear` alone never opens anything, because a
-   * human types it too.
+   * human types it too. The proof is SPENT by the first delivery that lands
+   * (review, W4c finding 1 — see `strandedClear`'s own docstring): a landed
+   * delivery is this store's evidence that the box was emptied, so the row
+   * licenses the ONE delivery that inherits the wedge, not every later one.
    *
    * WHAT THIS CANNOT SEE, stated because it bounds the guarantee: Claude Code
    * silently QUEUES a prompt sent mid-turn and renders the hint in a dim span
@@ -1949,7 +1952,10 @@ export class FleetWatcher {
         // its wave brief and, on `enter-ignored`, records that refusal on the
         // run — the only durable evidence anywhere that this system typed
         // those four characters into that box and never had them taken. Read
-        // here, at the send site, for exactly the row about to be typed.
+        // here, at the send site, for exactly the row about to be typed —
+        // and spent by it: `markDelivered` below is what retires the proof,
+        // so the licence covers the delivery that inherits the wedge and
+        // nothing after it (review, W4c finding 1).
         //
         // NOT an `isMailResidue` rung, and the difference is the whole gate:
         // `/clear` is four characters an operator plausibly types and leaves

@@ -1415,6 +1415,43 @@ describe('sweepMail: the /clear a dispatch stranded', () => {
     expect(literalSends(h.calls)).toEqual([]);
     expect(deliveryRow(coord, id).lastError).toBe('draft-present');
   });
+
+  // THE PROOF IS SPENT BY THE DELIVERY THAT INHERITS THE WEDGE (review, W4c
+  // finding 1). `run_events` rows are durable forever; scoped only by the
+  // run's state, the proof licensed a C-u at this box on every later delivery
+  // for the whole life of the run. So: strand, let the lane clear it and
+  // deliver, then let an operator type `/clear` into the now-empty box
+  // themselves. The second box is byte-identical to the first and the run is
+  // still live — only the landed delivery tells them apart, and it must be
+  // enough. Not one keystroke.
+  it('refuses the NEXT byte-identical /clear once a delivery has landed — the proof is spent', async () => {
+    const h = harness({ panes: [...STRANDED_PANES, CLEAR_BOX] });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home);
+    dispatchRefusedClear(coord, 'enter-ignored');
+    const first = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(deliveryRow(coord, first.id).state).toBe('delivered');
+
+    // Off cooldown, still idle and quiet, still nowhere near the replay clock
+    // — every gate but the proof is open again.
+    const t = NOW + MAIL_COOLDOWN_MS + 1_000;
+    vi.setSystemTime(t);
+    seedHookState(h.home, ID, { updatedAt: t - 1_000 });
+    seedLiveState(h.home, { statusUpdatedAt: t - MAIL_QUIET_MS - 1_000 });
+    const second = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(deliveryRow(coord, second.id).state).toBe('queued');
+    expect(deliveryRow(coord, second.id).lastError).toBe('draft-present');
+    // The FIRST send's keystrokes, and only those: one C-u, one nudge.
+    expect(keyPresses(h.calls).filter((k) => k === 'C-u')).toHaveLength(1);
+    expect(literalSends(h.calls)).toEqual([NUDGE]);
+  });
 });
 
 // TASK 409 — the SENDER is who is told nothing.

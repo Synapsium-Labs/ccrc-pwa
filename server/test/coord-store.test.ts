@@ -1293,16 +1293,68 @@ describe('CoordStore: the /clear a dispatch stranded', () => {
     expect(s.strandedClear('demo-three')).toBe(false);
   });
 
-  // The permission EXPIRES, and this is the only thing that expires it: a run
-  // that has reached a terminal state is no longer waiting on a brief, and a
-  // durable row that grants a C-u forever is a standing licence to clear a box
-  // nobody is looking at any more.
+  // ONE of the two things that expire the permission (the other is below): a
+  // run that has reached a terminal state is no longer waiting on a brief, and
+  // a durable row that grants a C-u forever is a standing licence to clear a
+  // box nobody is looking at any more.
   it('reads FALSE once the run reaches a terminal state', () => {
     const s = store();
     const id = dispatchedWith(s, 'demo-quiet-mesa', 'clear-refused:enter-ignored');
     expect(s.strandedClear('demo-quiet-mesa')).toBe(true);
     expect(s.advance(id, 'failed', 'operator')).toMatchObject({ ok: true });
     expect(s.strandedClear('demo-quiet-mesa')).toBe(false);
+  });
+
+  // THE PROOF IS ABOUT A BOX, AND THE BOX MOVES ON (review, W4c finding 1).
+  //
+  // `run_events` rows are durable forever, so a proof scoped only by the run's
+  // state kept answering TRUE for the run's whole life — licensing a C-u at
+  // that box on EVERY later delivery, long after the strand it was about had
+  // been resolved and an operator had typed something new. The ruling is
+  // refuse-only except where the lane can prove it typed THAT text, and a
+  // permanent proof is not a proof of that.
+  //
+  // What retires it is a MEASUREMENT, not a clock: a delivery that LANDED in
+  // this session at or after the strand. `sweepMail` calls `markDelivered`
+  // only on `sendPrompt`'s ok — which means the box echoed our text and was
+  // empty after Enter — so a landed delivery is durable evidence that the
+  // stranded `/clear` is no longer in there. The first delivery to inherit the
+  // wedge therefore spends the proof, and everything after it is back to the
+  // ordinary `draft-present` refusal.
+  const delivered = (s: CoordStore, toId: string, at: number | null): void => {
+    const mail = s.insertMail({ fromId: 'coordinator', fromUuid: 'coordinator', toId,
+      runId: null, kind: 'status', subject: 'wave-brief', body: 'go', artifacts: [] });
+    const d = s.queueDelivery(mail.id, toId, 'env');
+    if (at !== null) s.markDelivered(d.id, at);
+  };
+
+  it('reads FALSE once a delivery has LANDED in that box since the strand', () => {
+    const s = store();
+    dispatchedWith(s, 'demo-quiet-mesa', 'clear-refused:enter-ignored');
+    expect(s.strandedClear('demo-quiet-mesa')).toBe(true);
+    delivered(s, 'demo-quiet-mesa', Date.now() + 1_000);
+    // The operator may have typed a fresh `/clear` in the meantime; this lane
+    // cannot see that and never could. What it CAN see is that the box it had
+    // proof about was emptied — so it stops claiming proof.
+    expect(s.strandedClear('demo-quiet-mesa')).toBe(false);
+  });
+
+  // The positive half, against the mutant that retires on ANY delivery row:
+  // mail that landed BEFORE the strand says nothing about the box the strand
+  // left behind, and must not spend a proof it predates.
+  it('is NOT retired by a delivery that landed before the strand', () => {
+    const s = store();
+    dispatchedWith(s, 'demo-quiet-mesa', 'clear-refused:enter-ignored');
+    delivered(s, 'demo-quiet-mesa', 1);   // epoch ms 1 — older than any strand
+    expect(s.strandedClear('demo-quiet-mesa')).toBe(true);
+  });
+
+  it('is NOT retired by a queued delivery, nor by one that landed in ANOTHER box', () => {
+    const s = store();
+    dispatchedWith(s, 'demo-quiet-mesa', 'clear-refused:enter-ignored');
+    delivered(s, 'demo-quiet-mesa', null);              // queued, never landed
+    delivered(s, 'demo-other-mesa', Date.now() + 1_000); // landed, wrong box
+    expect(s.strandedClear('demo-quiet-mesa')).toBe(true);
   });
 });
 

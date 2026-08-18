@@ -537,24 +537,56 @@ export class CoordStore {
    * permission: `sendPrompt` refuses `draft-present` exactly as it does today,
    * which is the default rather than a fallback (operator ruling).
    *
-   * TWO NARROWINGS, both deliberate:
+   * THREE NARROWINGS, all deliberate:
    *  - `CLEAR_REFUSED_STRANDS_TEXT` only — see its own docstring for why
    *    `verify-failed`, which since Build 8 also leaves text in the box, is
    *    NOT proof of what is in it.
-   *  - a run in a TERMINAL state grants nothing. This is the only thing that
-   *    expires the permission, and it needs to exist: `run_events` rows are
-   *    durable forever, and a permanent licence to fire C-u at a box would
-   *    eventually meet an operator who typed `/clear` into a session whose
-   *    program ended weeks ago.
+   *  - a run in a TERMINAL state grants nothing: a run nobody is waiting on
+   *    is not a run whose box anyone is about to read.
+   *  - AND THE PROOF IS SPENT BY THE FIRST DELIVERY THAT LANDS (review, W4c
+   *    finding 1). Without this the row licensed a C-u at that box on EVERY
+   *    later delivery for the whole life of the run — `run_events` rows are
+   *    durable forever — so one strand, once, permanently defeated the
+   *    operator ruling for that session: refuse-only EXCEPT where the lane
+   *    can prove it typed THAT text. A proof that outlives the text it is
+   *    about is not a proof of it.
+   *
+   * WHAT SPENDS IT, and why that fact and not a clock. `sweepMail` calls
+   * `markDelivered` only on `sendPrompt`'s `ok`, which means the box echoed
+   * our text and was EMPTY after Enter — so a delivery landed in this session
+   * at or after the strand is durable, server-MEASURED evidence that the
+   * stranded `/clear` is no longer in that box. Anything typed there since is
+   * somebody else's, and gets the ordinary `draft-present` refusal. A time or
+   * attempt bound was the alternative and is strictly worse here: the wedge
+   * survives untouched for as long as no mail is due, so a clock would revoke
+   * a proof that is still exactly true, and grant one that is not, purely on
+   * how busy the program happened to be. `>=`, not `>`: a same-millisecond
+   * tie retires the proof, biasing the ambiguous case toward the refusal. A
+   * row still QUEUED carries a null `deliveredAt` and fails that comparison
+   * on its own (SQLite's three-valued logic), so there is deliberately no
+   * separate null check — it would be a conjunct no mutation could turn red.
+   *
+   * WHAT IT DOES NOT COVER, stated rather than discovered: a box emptied by
+   * something this store cannot see — a later dispatch's own `/clear`, or an
+   * operator (or the PWA composer) sending a turn by hand — leaves the proof
+   * standing, because none of those write a durable row here. The terminal-
+   * state narrowing above is the only backstop for that case. Closing it
+   * properly means a fact about the BOX, which nothing in this system records
+   * today.
    *
    * SYNCHRONOUS, like everything here, and a dedicated one-row read: it runs
    * only for a delivery that has already cleared every gate and is about to
-   * be typed, never over every due row on every sweep.
+   * be typed, never over every due row on every sweep. The `mail_deliveries`
+   * arm has no index to use (`toId` carries none — `mailForRecipient` scans
+   * it too), which is affordable at exactly that call rate and would not be
+   * on a per-row one.
    */
   strandedClear(sessionId: string): boolean {
     const row = this.db.prepare(
       'SELECT 1 AS x FROM run_events e JOIN runs r ON r.id = e.runId ' +
       `WHERE r.sessionId = ? AND e.detail = ? AND r.state NOT IN (${TERMINAL_RUN_STATES.map(() => '?').join(', ')}) ` +
+      'AND NOT EXISTS (SELECT 1 FROM mail_deliveries d ' +
+      'WHERE d.toId = r.sessionId AND d.deliveredAt >= e.at) ' +
       'LIMIT 1',
     ).get(sessionId, CLEAR_REFUSED_STRANDS_TEXT, ...TERMINAL_RUN_STATES);
     return row !== undefined;
