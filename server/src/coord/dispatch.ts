@@ -10,7 +10,7 @@ import { readHookState } from '../hookstate.js';
 import { CCD_ARGV, verbSupported } from '../ccdargv.js';
 import { sendPrompt } from '../inject/send.js';
 import { type AdvanceResult, type CoordStore } from './store.js';
-import { COORDINATOR_PAUSE_MARKER, MAIL_DISABLED_MARKER, holdReason, queueSystemMail } from './rundefs.js';
+import { COORDINATOR_PAUSE_MARKER, MAIL_DISABLED_MARKER, clearRefusedDetail, holdReason, queueSystemMail } from './rundefs.js';
 import {
   MAIL_BODY_MAX_BYTES, SPAWN_NOT_RECORDED, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, spawnVerdict,
   type RunRefuseCode, type RunState, type SpawnVerdict,
@@ -418,8 +418,12 @@ export async function dispatchRun(
     // and it is one this build's table cannot name. Spending that member on the
     // absent case tells the operator ccd reported something strange when ccd
     // reported nothing, and the two become indistinguishable in the event trail.
+    // `clearRefusedDetail`, not a literal: Task 407 gave this token a READER
+    // (`CoordStore.strandedClear` — the proof that lets the mail lane clear a
+    // `/clear` this dispatch stranded), and a writer and a matcher spelling
+    // the same string by hand is how that permission silently stops opening.
     detail: adopted ? `spawn-adopted:${adoptedSpawn ?? SPAWN_NOT_RECORDED}`
-      : clearError !== null ? `clear-refused:${clearError}` : undefined });
+      : clearError !== null ? clearRefusedDetail(clearError) : undefined });
   if (!adv.ok) return { ok: false, kind: 'advanceFailed', adv };
 
   // 7: the brief, as MAIL (kind `status`, subject `wave-brief`) — never
@@ -431,11 +435,20 @@ export async function dispatchRun(
   // hazard D-1's "genuinely fresh context" sentence exists to make
   // mechanical rather than hopeful. Concretely, on `enter-ignored` the
   // literal text `/clear` is left sitting in the worker's own input box
-  // (`send.ts`'s own `draft` return); the delivery lane's very next sweep
-  // calls `sendPrompt` with no `replaceDraft`, so it would hit
-  // `draft-present` immediately and keep hitting it — parking the brief
-  // `rejected('undeliverable')` after `MAIL_MAX_ATTEMPTS`, with nothing
-  // surfacing WHY. `clearError` (this outcome's own field) is the signal a
+  // (`send.ts`'s own `draft` return).
+  //
+  // WHAT THAT COSTS CHANGED UNDER THIS BUILD, and the new cost is the worse
+  // of the two (wave-check). It used to be a park: the delivery lane's next
+  // sweep hit `draft-present`, kept hitting it, and parked the brief
+  // `rejected('undeliverable')` after `MAIL_MAX_ATTEMPTS` with nothing
+  // surfacing why. Both halves of that are now false — Task 407 lets the
+  // lane CLEAR exactly this box, on the record THIS CALL writes
+  // (`clearRefusedDetail` below, read back by `CoordStore.strandedClear`),
+  // and Task 409 tells the sender on the first block and on the park. So a
+  // brief queued here would no longer sit and park where somebody eventually
+  // notices; it would most likely LAND, in the un-cleared context D-1
+  // forbids. The gate is what keeps it out, and it matters more than it did.
+  // `clearError` (this outcome's own field) is the signal a
   // coordinator needs to decide what to do next; `POST /api/mail` stays
   // open to send the brief directly once the context is actually fresh.
   const briefQueued = !resumed || clearedAt !== null;

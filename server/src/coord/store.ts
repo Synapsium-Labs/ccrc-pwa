@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { tx } from './db.js';
+import { CLEAR_REFUSED_STRANDS_TEXT } from './rundefs.js';
 import {
   isMailDeliveryState, isMailKind, isNotifyKind, isProgramState, isRunState, isWorkItemState,
   RUN_TRANSITIONS,
@@ -11,6 +12,12 @@ import {
 /** One entry in `$REG/<id>.prhistory` (ccd/ccd:855-858). Re-declared as a TYPE
  *  here rather than parsed twice: `coord/prhistory.ts` owns the reader. */
 export interface PrLineageEntry { pr: number; branch: string; phase: string; recordedAt: number }
+
+/** The run states nothing can leave — DERIVED from `RUN_TRANSITIONS` (a state
+ *  with no outgoing edge IS terminal), never a second hand-written list of the
+ *  same two words. Adding a terminal state to the table is enough. */
+const TERMINAL_RUN_STATES: readonly RunState[] =
+  (Object.keys(RUN_TRANSITIONS) as RunState[]).filter((s) => RUN_TRANSITIONS[s].length === 0);
 
 /**
  * A run row as the STORE reads it: `RunSummary` (the wire shape) plus
@@ -199,11 +206,16 @@ const OUTSTANDING_OR_ABANDONED_SQL =
  *  the moment one mail fans out to more than one recipient. */
 const MAIL_ROW_COLUMNS =
   'm.id AS id, d.id AS deliveryId, m.at AS at, m.fromId AS fromId, d.toId AS toId, m.runId AS runId, ' +
-  'm.kind AS kind, m.subject AS subject, m.artifacts AS artifacts, d.state AS state';
+  'm.kind AS kind, m.subject AS subject, m.artifacts AS artifacts, d.state AS state, ' +
+  // Task 408: the two columns the lane has always WRITTEN and nothing ever
+  // read. `state` alone cannot tell a delivery blocked against a dirty input
+  // box from one merely waiting for its next attempt window.
+  'd.attempts AS attempts, d.lastError AS lastError';
 
 interface MailRowDb {
   id: number; deliveryId: number; at: number; fromId: string; toId: string; runId: number | null;
   kind: string; subject: string; artifacts: string; state: string;
+  attempts: number; lastError: string | null;
 }
 
 /** A route argument can never ask either mail read to walk more history (or
@@ -509,6 +521,75 @@ export class CoordStore {
    * column honestly null, never called with a guess. */
   setClearedAt(runId: number, at: number): void {
     this.db.prepare('UPDATE runs SET clearedAt = ? WHERE id = ?').run(at, runId);
+  }
+
+  /**
+   * Did a LIVE run's dispatch record that it typed `/clear` into this
+   * session's box and never had it taken? (Task 407.)
+   *
+   * The provenance half of `sendPrompt`'s `ownStrandedClear` gate, and the
+   * only thing in this system that can answer it. `dispatch.ts` types the
+   * literal `/clear` into a resumed worker before its wave brief; when the
+   * Enter is swallowed it writes `clear-refused:enter-ignored` onto the run
+   * (D-47). That row is the record — the text in the box is not, because
+   * `/clear` is four characters a human plausibly types and leaves sitting,
+   * and nothing about the STRING distinguishes ours from theirs. No row, no
+   * permission: `sendPrompt` refuses `draft-present` exactly as it does today,
+   * which is the default rather than a fallback (operator ruling).
+   *
+   * THREE NARROWINGS, all deliberate:
+   *  - `CLEAR_REFUSED_STRANDS_TEXT` only — see its own docstring for why
+   *    `verify-failed`, which since Build 8 also leaves text in the box, is
+   *    NOT proof of what is in it.
+   *  - a run in a TERMINAL state grants nothing: a run nobody is waiting on
+   *    is not a run whose box anyone is about to read.
+   *  - AND THE PROOF IS SPENT BY THE FIRST DELIVERY THAT LANDS (review, W4c
+   *    finding 1). Without this the row licensed a C-u at that box on EVERY
+   *    later delivery for the whole life of the run — `run_events` rows are
+   *    durable forever — so one strand, once, permanently defeated the
+   *    operator ruling for that session: refuse-only EXCEPT where the lane
+   *    can prove it typed THAT text. A proof that outlives the text it is
+   *    about is not a proof of it.
+   *
+   * WHAT SPENDS IT, and why that fact and not a clock. `sweepMail` calls
+   * `markDelivered` only on `sendPrompt`'s `ok`, which means the box echoed
+   * our text and was EMPTY after Enter — so a delivery landed in this session
+   * at or after the strand is durable, server-MEASURED evidence that the
+   * stranded `/clear` is no longer in that box. Anything typed there since is
+   * somebody else's, and gets the ordinary `draft-present` refusal. A time or
+   * attempt bound was the alternative and is strictly worse here: the wedge
+   * survives untouched for as long as no mail is due, so a clock would revoke
+   * a proof that is still exactly true, and grant one that is not, purely on
+   * how busy the program happened to be. `>=`, not `>`: a same-millisecond
+   * tie retires the proof, biasing the ambiguous case toward the refusal. A
+   * row still QUEUED carries a null `deliveredAt` and fails that comparison
+   * on its own (SQLite's three-valued logic), so there is deliberately no
+   * separate null check — it would be a conjunct no mutation could turn red.
+   *
+   * WHAT IT DOES NOT COVER, stated rather than discovered: a box emptied by
+   * something this store cannot see — a later dispatch's own `/clear`, or an
+   * operator (or the PWA composer) sending a turn by hand — leaves the proof
+   * standing, because none of those write a durable row here. The terminal-
+   * state narrowing above is the only backstop for that case. Closing it
+   * properly means a fact about the BOX, which nothing in this system records
+   * today.
+   *
+   * SYNCHRONOUS, like everything here, and a dedicated one-row read: it runs
+   * only for a delivery that has already cleared every gate and is about to
+   * be typed, never over every due row on every sweep. The `mail_deliveries`
+   * arm has no index to use (`toId` carries none — `mailForRecipient` scans
+   * it too), which is affordable at exactly that call rate and would not be
+   * on a per-row one.
+   */
+  strandedClear(sessionId: string): boolean {
+    const row = this.db.prepare(
+      'SELECT 1 AS x FROM run_events e JOIN runs r ON r.id = e.runId ' +
+      `WHERE r.sessionId = ? AND e.detail = ? AND r.state NOT IN (${TERMINAL_RUN_STATES.map(() => '?').join(', ')}) ` +
+      'AND NOT EXISTS (SELECT 1 FROM mail_deliveries d ' +
+      'WHERE d.toId = r.sessionId AND d.deliveredAt >= e.at) ' +
+      'LIMIT 1',
+    ).get(sessionId, CLEAR_REFUSED_STRANDS_TEXT, ...TERMINAL_RUN_STATES);
+    return row !== undefined;
   }
 
   /** Dispatch's write: the workspace a run landed in, and whether it was a
@@ -1028,6 +1109,24 @@ export class CoordStore {
     return this.hydrateMail(rows);
   }
 
+  /** Who sent a mail, under which run, and about what — the three fields a
+   *  SENDER-SIDE notification needs and `dueDeliveries` deliberately does not
+   *  select. A dedicated one-row read rather than a JOIN widening
+   *  `dueDeliveries`: that query runs over every due row on every sweep, and
+   *  this runs only when a notification is actually about to be raised.
+   *  SYNCHRONOUS, like everything here.
+   *
+   *  `fromId` is returned RAW, including the literal `'coordinator'`, which is
+   *  a ROLE rather than a session id. Resolving it is the caller's job
+   *  (`resolveCoordinator`) because only the caller knows whether it is about
+   *  to push, and resolving here would hide the unresolvable case behind a
+   *  value that looks like an id. */
+  mailOrigin(mailId: number): { fromId: string; runId: number | null; subject: string } | null {
+    const row = this.db.prepare('SELECT fromId, runId, subject FROM mail WHERE id = ?')
+      .get(mailId) as { fromId: string; runId: number | null; subject: string } | undefined;
+    return row ?? null;
+  }
+
   /** `MailRowDb` -> `MailSummary`: the one place a raw joined mail/delivery
    *  row becomes the typed shape, shared by `mailForRecipient` and
    *  `outstandingMailFor` — they differ only in their WHERE clause, never in
@@ -1038,6 +1137,12 @@ export class CoordStore {
       kind: isMailKind(r.kind) ? r.kind : 'unknown', subject: r.subject,
       artifacts: JSON.parse(r.artifacts) as string[],
       state: isMailDeliveryState(r.state) ? r.state : 'unknown',
+      // RAW, both of them. `lastError` is free text (four writers, four kinds
+      // of thing — see `MailSummary.lastError`'s own docstring for the rule
+      // every client owes it); narrowing it HERE would be this store deciding
+      // a display question on the reader's behalf, and would drop exactly the
+      // detail a maintainer greps the column for.
+      attempts: r.attempts, lastError: r.lastError,
     }));
   }
 
@@ -1128,16 +1233,21 @@ export class CoordStore {
    * until the first edge is ever observed.
    */
   dueDeliveries(now: number, replayMs: number): { id: number; mailId: number; toId: string;
-                                attempts: number; envelope: string; deliveredAt: number | null;
-                                ingestedAt: number | null }[] {
+                                attempts: number; lastError: string | null; envelope: string;
+                                deliveredAt: number | null; ingestedAt: number | null }[] {
     return this.db.prepare(
-      'SELECT id, mailId, toId, attempts, envelope, deliveredAt, ingestedAt FROM mail_deliveries ' +
+      // `lastError` (Task 409) is the row's INCOMING failure — what it already
+      // carried before this sweep touched it — which is how `sweepMail` tells
+      // a NEW block from a repeat of the same one without re-reading the row
+      // it is about to write and racing itself.
+      'SELECT id, mailId, toId, attempts, lastError, envelope, deliveredAt, ingestedAt FROM mail_deliveries ' +
       "WHERE (state = 'queued' AND nextAttemptAt <= ?) " +
       "OR (state = 'delivered' AND MAX(COALESCE(ingestedAt, 0), COALESCE(deliveredAt, 0)) + ? <= ? " +
       'AND nextAttemptAt <= ?) ' +
       'ORDER BY id',
     ).all(now, replayMs, now, now) as { id: number; mailId: number; toId: string; attempts: number;
-                    envelope: string; deliveredAt: number | null; ingestedAt: number | null }[];
+                    lastError: string | null; envelope: string;
+                    deliveredAt: number | null; ingestedAt: number | null }[];
   }
 
   /**

@@ -11,11 +11,14 @@ import { api, ApiError } from '../src/lib/api';
 import type { PendingSend } from '../src/stores/session';
 
 /** `draft` is the box row the server READ when it gave up — the correspondence
- *  claim `Send it` hands back, without which the button does not render. */
+ *  claim `Send it` hands back, without which the button does not render.
+ *  `submittable` is the server's PROOF that the row is the whole message and
+ *  Enter would send exactly it; without that the button does not render
+ *  either, whatever the code says. */
 const failed = (patch: Partial<PendingSend> = {}): PendingSend => ({
   key: 'p1', text: 'run the tests', state: 'failed',
   error: "Typed it, but the session didn't take it.", code: 'enter-ignored',
-  draft: 'run the tests',
+  draft: 'run the tests', submittable: true,
   ...patch,
 });
 
@@ -23,20 +26,58 @@ beforeEach(() => vi.restoreAllMocks());
 afterEach(cleanup);
 
 describe('Send it', () => {
-  it('appears only for enter-ignored', () => {
+  it('appears for an enter-ignored the server marked submittable', () => {
     render(<ChatListInner id="s" events={[]} pending={[failed()]} />);
     expect(screen.getByRole('button', { name: 'Send it' })).toBeInTheDocument();
   });
 
-  // Paired guards, not proof: both of these also pass against the pre-branch
-  // code, where the button did not exist at all. They are kept because they
-  // are what fails if the `code` branch is ever widened.
-  it('is absent for every other failure, where there is nothing to submit', () => {
-    for (const code of ['dialog-open', 'verify-failed', 'not-alive', 'draft-clear-failed']) {
+  // AN INTENTIONAL TRIPWIRE FIRING AS DESIGNED. This case used to iterate
+  // `verify-failed` among the button-less codes, and its comment said those
+  // cases "are kept because they are what fails if the `code` branch is ever
+  // widened". The branch WAS widened — but not on `code`, which is the whole
+  // design: a refusal earns the button only where the server also PROVED the
+  // box holds the whole message.
+  it('is absent for every failure with nothing to submit', () => {
+    for (const code of ['dialog-open', 'not-alive', 'draft-clear-failed']) {
       cleanup();
       render(<ChatListInner id="s" events={[]} pending={[failed({ code, error: 'nope' })]} />);
       expect(screen.queryByRole('button', { name: 'Send it' }), code).toBeNull();
     }
+  });
+
+  // THE `verify-failed` LIMB, and it is DORMANT on today's server — see
+  // `SendResult.submittable` in `server/src/inject/send.ts`, which sets the
+  // flag on `enter-ignored` alone and states why neither `verify-failed` arm
+  // can honestly claim it. The client is written against the PROOF rather than
+  // against the code, so a server that ever does prove it needs no client
+  // change; and until then no button appears, which is exactly what the two
+  // cases below assert. That is the safe direction, not dead code.
+  it('appears for a verify-failed the server marked submittable', () => {
+    render(<ChatListInner id="s" events={[]} pending={[
+      failed({ code: 'verify-failed', error: 'Typed it, but the session never echoed it back.' }),
+    ]} />);
+    expect(screen.getByRole('button', { name: 'Send it' })).toBeInTheDocument();
+  });
+
+  // THE DEFECT THE FLAG EXISTS TO PREVENT, and the shape today's server
+  // actually sends. The attachment path's `verify-failed` carries a `draft`
+  // that is a FAILED CLEAR'S RESIDUE — a fragment of the message — and
+  // `submitEnter`'s correspondence gate cannot catch it: the residue IS what
+  // the box reads, so it matches, Enter is pressed, and a truncated prompt is
+  // submitted. Widening the gate on `code` alone would ship exactly that.
+  it('is absent for a verify-failed WITHOUT the flag — the attachment residue, and any older server', () => {
+    for (const p of [{ submittable: undefined }, { submittable: false }]) {
+      cleanup();
+      render(<ChatListInner id="s" events={[]} pending={[
+        failed({ code: 'verify-failed', draft: 'a truncated frag', ...p }),
+      ]} />);
+      expect(screen.queryByRole('button', { name: 'Send it' }), String(p.submittable)).toBeNull();
+    }
+  });
+
+  it('is absent for an enter-ignored an older server sent without the flag', () => {
+    render(<ChatListInner id="s" events={[]} pending={[failed({ submittable: undefined })]} />);
+    expect(screen.queryByRole('button', { name: 'Send it' })).toBeNull();
   });
 
   it('is absent when the failure carries no code at all (an offline throw)', () => {
@@ -47,9 +88,14 @@ describe('Send it', () => {
   // PR F whole-branch review, Critical. With nothing to correspond against
   // there is no way to know the box still holds THIS message rather than a
   // later one, and a tap would press Enter on whatever is there. The refusal
-  // is to render the button, not to press hopefully. (The row is blank exactly
-  // when the message's own first line was blank — `blank-first-row` on the
-  // server.)
+  // is to render the button, not to press hopefully. (The row is blank when the
+  // BOX's marker row is empty — which, after Task 402, can no longer come from
+  // OUR OWN message: `composePrompt` strips leading blank lines before anything
+  // is typed, so a human pressing Enter in the box first, or a pre-402 client,
+  // is what produces it. `blank-first-row` is the server's name for that pane.
+  // This parenthesis said "exactly when the message's own first line was blank"
+  // until this wave-check; that is the same sentence `e877e93` had to delete
+  // from `ChatList.tsx` after it was reinstated once.)
   it('is absent when the refusal carried no box row to correspond against', () => {
     for (const draft of [undefined, '', '   ']) {
       cleanup();

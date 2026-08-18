@@ -131,3 +131,45 @@ describe('splitClipPaths', () => {
     });
   });
 });
+
+describe('a leading blank line never reaches the box', () => {
+  // VACUUM, not a red: nothing composes text with a leading newline today.
+  //
+  // The box cannot hold a leading blank line usefully and typing one destroys
+  // the send proof: `sendPrompt` writes it with M-Enter, the marker row ends up
+  // blank, and `submitted()`'s needle is the first NON-blank line — so it
+  // returns true on its first poll whether or not Enter did anything. Measured:
+  // a pane byte-identical before and after Enter returns {ok:true}, the route
+  // answers 200, and the PWA deletes the optimistic bubble after 5 s with no
+  // message anywhere.
+  it('strips leading blank lines from the text', () => {
+    expect(composePrompt('\n\nrun the tests', [])).toBe('run the tests');
+  });
+
+  it('strips a leading blank line that is only whitespace', () => {
+    expect(composePrompt('   \n\t\nrun the tests', [])).toBe('run the tests');
+  });
+
+  it('leaves INTERIOR blank lines alone — they are the message', () => {
+    expect(composePrompt('first\n\nsecond', [])).toBe('first\n\nsecond');
+  });
+
+  it('leaves TRAILING blank lines alone — only the marker row is at stake', () => {
+    expect(composePrompt('first\n\n', [])).toBe('first\n\n');
+  });
+
+  it('strips before the attachment join, so the paths still lead', () => {
+    expect(composePrompt('\ncaption', ['/c/clip-1.png'])).toBe('/c/clip-1.png\ncaption');
+  });
+
+  it('a text that is nothing but blank lines composes to nothing', () => {
+    expect(composePrompt('\n\n  \n', [])).toBe('');
+  });
+
+  // The strip is LINE-WISE (`[^\S\n]*\n`), not `\s*`: a `\s*` strip would eat
+  // the INDENTATION of the first content line too, so a prompt that opens with
+  // a fenced code block or a bullet's hanging indent would arrive reflowed.
+  it('keeps the indentation of the first CONTENT line', () => {
+    expect(composePrompt('\n    indented first line', [])).toBe('    indented first line');
+  });
+});

@@ -185,6 +185,50 @@ describe('the mail feed', () => {
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     expect(feedSpy).toHaveBeenCalledTimes(1);
   });
+
+  // TASK 412's other half. The SENDER-side block and park signals land in the
+  // FEED, not in the session's mail strip, because the strip is recipient-side
+  // — the sender is a different session on a different screen. They reuse the
+  // existing `mail` kind ON PURPOSE: `KIND_WORD` and `KIND_GLYPH` are TOTAL
+  // maps over `NotifyEvent['kind']`, so a seventh kind means editing both plus
+  // `NOTIFY_KINDS`, and every older client renders `undefined`.
+  //
+  // THE FIXTURE IS A HAND COPY, and nothing links it to the producer (review,
+  // W4c finding 2). This comment used to claim the strings were "copied
+  // verbatim... so this fixture stays a measurement of the shipped producer";
+  // they are copied verbatim, but a copied string is not a measurement —
+  // `✉ blocked › ` exists in `watch.ts` and in this file and nowhere else, with
+  // nothing holding the two together. What each side really measures:
+  //  - THE PRODUCER is measured server-side, where it lives: `mail-sweep`'s
+  //    Task 409 tests drive the real `tellSender` calls and assert a blocked
+  //    body `toContain('input box')` and a park matching /gave up|undeliverable/.
+  //  - THIS TEST measures the RENDERER, and only that — that whatever `title`
+  //    and `body` ride a `mail`-kind feed row are rendered WHOLE, under the
+  //    total kind maps' own glyph and word.
+  // So the assertions below match the fixture's OWN bytes exactly rather than
+  // a paraphrase of them, which is a real guard and not bookkeeping: with a
+  // loose regex, a row that rendered most of a body passed — measured, by
+  // dropping `${subject}: ` in `MailScreen`, which left this whole suite
+  // green. If `watch.ts` rewords, this fixture goes stale as PROSE and nothing
+  // here reds, correctly: none of these assertions are claims about what the
+  // producer says. The bytes are `watch.ts`'s own as of this commit
+  // (`✉ blocked › ${d.toId}` and `${origin.subject}: ${why}`), kept faithful so
+  // the fixture reads like the thing it stands in for.
+  const BLOCKED_TITLE = '✉ blocked › w1';
+  const BLOCKED_BODY = "wave-brief: the recipient's input box has unsent text in it";
+
+  it('renders a blocked-mail record with the ordinary mail glyph and word', async () => {
+    const store = makeStore();
+    const blocked = e({ seq: 4, sessionId: 'boss', title: BLOCKED_TITLE, body: BLOCKED_BODY });
+    act(() => { store.setState({ feed: [blocked] }); });
+    render(<MailScreen store={store} loadFeed={vi.fn().mockResolvedValue({ events: [] })} />);
+    expect(await screen.findByText(BLOCKED_TITLE)).toBeInTheDocument();
+    // The kind word an unknown kind would NOT produce — the map stayed total.
+    expect(screen.getByText(/^mail$/)).toBeInTheDocument();
+    // WHOLE, not "contains the interesting part": the `${subject}: ` half is
+    // how the sender knows WHICH of its messages is the blocked one.
+    expect(screen.getByText(BLOCKED_BODY)).toBeInTheDocument();
+  });
 });
 
 describe('the door', () => {

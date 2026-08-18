@@ -51,6 +51,29 @@ export const MAIL_DISABLED_MARKER = 'mail-disabled';
  *  a lane kill-switch — it must not read as one there. */
 export const COORDINATOR_PAUSE_MARKER = 'coordinator-paused';
 
+/**
+ * `run_events.detail` for a dispatch whose post-resume `/clear` was refused
+ * (D-47) — built here rather than spelled at the two ends, because for the
+ * first time both ends exist: `dispatch.ts` WRITES it, and (Task 407)
+ * `CoordStore.strandedClear` READS it back as the proof that this system
+ * typed those four characters into a worker's box. Two hand-spelled copies of
+ * a token one side writes and the other matches is how a permission gate
+ * silently stops opening — or, worse, opens on a prefix nobody meant.
+ */
+export const clearRefusedDetail = (code: string): string => `clear-refused:${code}`;
+
+/**
+ * The ONE refusal that strands the literal `/clear` in the box with the server
+ * having WATCHED it get there: the echo loop proved the box held it and both
+ * Enters were swallowed (`sendPrompt`'s `enter-ignored`).
+ *
+ * Deliberately not a set. `verify-failed` also leaves the text in the box
+ * since Build 8, but it means the opposite about the EVIDENCE — the box never
+ * showed our text on any poll, so what sits there now is exactly what this
+ * gate must not guess at. Operator ruling, Task 407: no proof, refuse.
+ */
+export const CLEAR_REFUSED_STRANDS_TEXT = clearRefusedDetail('enter-ignored');
+
 /** The standing hold-reason convention (`registry.ts:26-46`, spec:120-123):
  *  DISPLAY-ONLY, never parsed back anywhere in this tree — the run row's own
  *  `program`/`wave`/`waveOf` columns are what every route and the store

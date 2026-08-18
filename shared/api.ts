@@ -2432,6 +2432,15 @@ export function isMailDeliveryState(v: unknown): v is MailDeliveryState {
  *  char-vs-byte care `hookstate.ts:128-135` already takes with its own cap. */
 export const MAIL_BODY_MAX_BYTES = 8 * 1024;
 
+/** The PRE-DELIVERY attempt budget for one mail delivery — the `6` in
+ *  "attempt 3 of 6". L0 because BOTH sides name it now: `watch.ts`'s
+ *  `sweepMail` ENFORCES it, and (Task 408) `MailSummary.attempts` puts the
+ *  running count on the wire, so a client that wants to show how much room is
+ *  left before a park would otherwise carry a second copy of a policy number.
+ *  The reasoning for the VALUE — and for everything this counter deliberately
+ *  does NOT count — lives beside its enforcement, on `watch.ts`'s import. */
+export const MAIL_MAX_ATTEMPTS = 6;
+
 /**
  * The two envelope fields `MAIL_BODY_MAX_BYTES` does NOT bound (fix-round
  * finding 8 / D-44): `subject` renders as one envelope line and `artifacts`
@@ -2859,6 +2868,37 @@ export interface MailSummary {
   subject: string;
   artifacts: string[];
   state: MailDeliveryState;
+  /** Send attempts this DELIVERY has made (`mail_deliveries.attempts`), as the
+   *  lane counts them toward `MAIL_MAX_ATTEMPTS`. On the wire so a back-off is
+   *  visible BEFORE the park: without it, a delivery blocked against a dirty
+   *  input box for fifteen minutes is byte-identical to one merely waiting its
+   *  turn, and the first thing anyone hears is `undeliverable`.
+   *
+   *  It counts SEND FAILURES only, matching the ceiling exactly — a gate the
+   *  lane declines to charge for (`backOff(..., countsAsAttempt: false)`, an
+   *  unmeasurable registry row) does not advance it here either, or the number
+   *  would be a second, disagreeing story about the same row. */
+  attempts: number;
+  /**
+   * The delivery lane's last failure, RAW (`mail_deliveries.lastError`).
+   *
+   * FREE TEXT, and it has to be treated as such: four writers put four
+   * different kinds of thing here — a typed `sendPrompt` error code,
+   * `'recipient not in registry'`, `'run closed'`, and a whole English
+   * sentence (`MAIL_REPLAY_CEILING_ERROR`). The column is a maintainer's grep
+   * target, not a vocabulary, and it has never been validated on the way in.
+   *
+   * SO THE RULE FOR EVERY CLIENT, and it is not negotiable: branch on the ONE
+   * literal token you have a surface for (`=== 'draft-present'`), never key a
+   * total `Record<string, …>` off it — a value a newer server writes would
+   * render as `undefined` on an older client — and never display it raw to an
+   * operator. `pwa/test/mail-strip.test.tsx` scans `pwa/src` for both shapes,
+   * so this paragraph is a mechanism rather than a request.
+   *
+   * `null` means no failure is on record, which is not the same as an empty
+   * one: it is the shape of a delivery that has never been attempted.
+   */
+  lastError: string | null;
 }
 
 /** The two enforced caps (spec:199-201). The two COUNTS are queries over
@@ -2879,10 +2919,45 @@ export interface StagedClip { path: string; name: string; bytes: number }
 export const CLIP_PATH_RE =
   /\/[^\s]*\/\.cc-clips\/[^/\s]+\/clip-[A-Za-z0-9._-]+\.(?:png|jpe?g|webp)/;
 
-/** Attachment paths first, each on its own line, then the user's text. Paths
- *  lead so the transcript reads image-above-caption. */
+/**
+ * Attachment paths first, each on its own line, then the user's text. Paths
+ * lead so the transcript reads image-above-caption.
+ *
+ * LEADING BLANK LINES ARE STRIPPED FROM `text`. This filter used to drop empty
+ * ARRAY MEMBERS only, so a prompt beginning with a newline typed an empty
+ * literal, then M-Enter, then the real text — leaving the input box's MARKER
+ * ROW blank. That is not cosmetic: `submitted()` proves a send with
+ * `!draftOf(pane).startsWith(needle)` and `needle` is the first NON-blank
+ * line, so on a blank marker row the proof is vacuous — measured, a pane
+ * byte-identical before and after Enter returns ok:true and the message is
+ * silently lost. Typing one is never worth what it costs: the blank row DOES
+ * land in the box — that is the bug above, not a hypothetical — it carries
+ * nothing the message needed, and it takes the send proof with it.
+ *
+ * NOT "the box cannot hold a blank marker row", which is what this passage
+ * said when it landed and which the rest of this wave then falsified: it can,
+ * and two shipped guards exist because it can — `submitEnter`'s
+ * `blank-first-row` and the clobber guard's `hasContentBelowMarker`
+ * (`server/src/inject/send.ts`, which states the same position). What is
+ * removed here is US as a producer of that shape; a human pressing Enter in
+ * the box before typing still is one.
+ *
+ * INTERIOR and TRAILING blank lines are untouched: only the marker row is at
+ * stake, and an interior blank line is the message.
+ *
+ * PRICE, stated rather than discovered: stripping on this side makes the
+ * `splitClipPaths` round-trip LOSSY. `splitClipPaths(composePrompt(t, a))`
+ * cannot return a `rest` that begins with the blank lines `t` began with. That
+ * is accepted — `splitClipPaths` already trims leading blank lines off its own
+ * result, so the round trip was never byte-exact at that edge anyway.
+ */
 export function composePrompt(text: string, attachments: readonly string[]): string {
-  return [...attachments, text].filter((part) => part !== '').join('\n');
+  // `[^\S\n]` (horizontal whitespace) rather than `\s`, so a run of blank-ish
+  // lines is eaten one WHOLE LINE at a time and the first content line keeps
+  // its own indentation — a `\s*` strip would reflow an opening code fence or
+  // a bullet's hanging indent.
+  const body = text.replace(/^(?:[^\S\n]*\n)+/, '');
+  return [...attachments, body].filter((part) => part !== '').join('\n');
 }
 
 /**

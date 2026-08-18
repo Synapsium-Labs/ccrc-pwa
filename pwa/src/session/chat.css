@@ -683,6 +683,30 @@ button.metachip:active {
   letter-spacing: 0.04em;
   color: var(--status-attention-text);
 }
+/* Build 8 §4.5: a delivery the lane is still retrying but cannot hand over,
+   because THIS session's own input box holds unsent text. Same shape as
+   `.mail-strip-abandoned` above — a `flex-basis: 100%` span inside the same
+   `<li>`, never a second row — and the same already-measured token, so the
+   contrast gate needs nothing new. Scoped `.mail-strip .foo` like every other
+   descendant here, so `design/audit.mjs` measures it through route 2b rather
+   than stranding it in the uncovered census. */
+.mail-strip .mail-strip-blocked {
+  flex-basis: 100%;
+  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--status-attention-text);
+}
+/* The collapsed head's copy of the same signal: `flex: none` rather than a
+   full-width break, because the head is one line and this sits beside the
+   count. */
+.mail-strip .mail-strip-blocked-mark {
+  flex: none;
+  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--status-attention-text);
+}
 .mail-strip .mail-strip-artifacts {
   flex-basis: 100%;
   margin: 0;
@@ -1772,8 +1796,14 @@ button.metachip:active {
   color: var(--ink-secondary);
   margin-bottom: var(--sp-3);
 }
+/* Build 8: this used to hold ONE row (`draftOf`'s marker row); the 409 now
+   carries every row the box holds, and a pasted stack trace is a realistic
+   draft. Bounded and scrollable rather than pushing the sheet's own actions
+   off the bottom of a phone. */
 .draft-well {
   margin-bottom: var(--sp-4);
+  max-height: 40vh;
+  overflow-y: auto;
 }
 .draft-actions {
   display: grid;

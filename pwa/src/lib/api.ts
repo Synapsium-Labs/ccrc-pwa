@@ -32,7 +32,16 @@ const SEND_ERROR_TEXT: Record<string, string> = {
   // somewhere else to do something the UI can do is the dead end this build set
   // out to close.
   'enter-ignored': "Typed it, but the session didn't take it.",
-  'verify-failed': "The session never showed the text — open the terminal to check.",
+  // Replaced, not reworded. The old sentence ("The session never showed the
+  // text — open the terminal to check.") went false twice in Build 8: the
+  // ordinary path now REFUSES rather than clearing, so the text is still in
+  // the box, and the box-scoped echo check makes this refusal fire more often.
+  // A message that tells the operator to go somewhere else and do something
+  // the UI can do is the dead end `enter-ignored`'s own copy was rewritten to
+  // close; this is its neighbour, in the same register, and deliberately not
+  // the same string — the two failures are different (nothing came back at
+  // all, versus it came back and then would not go).
+  'verify-failed': 'Typed it, but the session never echoed it back.',
   'draft-clear-failed': "Couldn't clear the existing draft — open the terminal.",
   'not-alive': 'That session is not running.',
 };

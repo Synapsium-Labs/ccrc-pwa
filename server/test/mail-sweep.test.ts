@@ -21,6 +21,8 @@ import { CoordStore } from '../src/coord/store.js';
 import { renderEnvelope, renderMailNudge } from '../src/coord/envelope.js';
 import { HOOKSTATE_FRESH_MS } from '../src/hookstate.js';
 import { localIO, type FleetIO } from '../src/io.js';
+import { NotifyLog } from '../src/notifylog.js';
+import type { PushPayload } from '../src/push.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -1336,5 +1338,287 @@ describe('sweepMail: successful replays eventually park too (review finding 20)'
       .get(id) as { state: string; replayCount: number };
     expect(row.state).toBe('acked');
     expect(row.replayCount).toBe(0);
+  });
+});
+
+// TASK 407 — the wedge `dispatch.ts` documents creating, end to end through
+// the lane that has to live with it. A resumed worker's `/clear` came back
+// `enter-ignored`, so the literal sits in its box; every sweep after that
+// refuses `draft-present`, and the wave brief parks `undeliverable` with
+// nothing anywhere saying why.
+//
+// The fix is PROVENANCE-GATED, and these two tests are the same box with two
+// different answers: the delivery lane clears a `/clear` the ledger proves
+// this system typed, and refuses a byte-identical one it cannot.
+describe('sweepMail: the /clear a dispatch stranded', () => {
+  const CLEAR_BOX = '❯ /clear\n';
+  /** The pane script for a box holding `/clear`: the guard's read, then the
+   *  post-C-u read, then the echo, then the box after Enter. */
+  const STRANDED_PANES = [CLEAR_BOX, emptyBox, echoedBox(NUDGE), emptyBox];
+
+  /** A run dispatched onto `ID` whose post-resume `/clear` was refused with
+   *  `code` — the durable record `CoordStore.strandedClear` reads. */
+  const dispatchRefusedClear = (coord: CoordStore, code: string): void => {
+    const opened = coord.openRun({ program: 'build8', title: 'T', project: 'demo',
+      wave: 2, waveOf: 3, claimedBy: 'demo-boss' });
+    if (!('id' in opened)) throw new Error(`fixture openRun refused: ${JSON.stringify(opened)}`);
+    coord.dispatchRun({ runId: opened.id, sessionId: ID, workspace: '/w/demo', branch: 'ws/demo',
+      resumed: true, clearedAt: null, items: [], detail: `clear-refused:${code}` });
+  };
+
+  it('clears the /clear and delivers, when the ledger proves the Enter was ignored', async () => {
+    const h = harness({ panes: STRANDED_PANES });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home);
+    dispatchRefusedClear(coord, 'enter-ignored');
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(keyPresses(h.calls)).toContain('C-u');
+    expect(literalSends(h.calls)).toEqual([NUDGE]);
+    expect(deliveryRow(coord, id).state).toBe('delivered');
+  });
+
+  // THE SAME BOX, NO RECORD. `/clear` is four characters an operator types
+  // too, and nothing about the text tells them apart — so the default is the
+  // refusal, not the clear.
+  it('refuses a byte-identical /clear with no such record — not one keystroke', async () => {
+    const h = harness({ panes: STRANDED_PANES });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(keyPresses(h.calls)).not.toContain('C-u');
+    expect(literalSends(h.calls)).toEqual([]);
+    expect(deliveryRow(coord, id).state).toBe('queued');
+    expect(deliveryRow(coord, id).lastError).toBe('draft-present');
+  });
+
+  it('refuses when the recorded refusal is a code that proves nothing about the box', async () => {
+    const h = harness({ panes: STRANDED_PANES });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home);
+    dispatchRefusedClear(coord, 'verify-failed');
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([]);
+    expect(deliveryRow(coord, id).lastError).toBe('draft-present');
+  });
+
+  // THE PROOF IS SPENT BY THE DELIVERY THAT INHERITS THE WEDGE (review, W4c
+  // finding 1). `run_events` rows are durable forever; scoped only by the
+  // run's state, the proof licensed a C-u at this box on every later delivery
+  // for the whole life of the run. So: strand, let the lane clear it and
+  // deliver, then let an operator type `/clear` into the now-empty box
+  // themselves. The second box is byte-identical to the first and the run is
+  // still live — only the landed delivery tells them apart, and it must be
+  // enough. Not one keystroke.
+  it('refuses the NEXT byte-identical /clear once a delivery has landed — the proof is spent', async () => {
+    const h = harness({ panes: [...STRANDED_PANES, CLEAR_BOX] });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home);
+    dispatchRefusedClear(coord, 'enter-ignored');
+    const first = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(deliveryRow(coord, first.id).state).toBe('delivered');
+
+    // Off cooldown, still idle and quiet, still nowhere near the replay clock
+    // — every gate but the proof is open again.
+    const t = NOW + MAIL_COOLDOWN_MS + 1_000;
+    vi.setSystemTime(t);
+    seedHookState(h.home, ID, { updatedAt: t - 1_000 });
+    seedLiveState(h.home, { statusUpdatedAt: t - MAIL_QUIET_MS - 1_000 });
+    const second = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(deliveryRow(coord, second.id).state).toBe('queued');
+    expect(deliveryRow(coord, second.id).lastError).toBe('draft-present');
+    // The FIRST send's keystrokes, and only those: one C-u, one nudge.
+    expect(keyPresses(h.calls).filter((k) => k === 'C-u')).toHaveLength(1);
+    expect(literalSends(h.calls)).toEqual([NUDGE]);
+  });
+});
+
+// TASK 409 — the SENDER is who is told nothing.
+//
+// Every operator-visible signal this lane had was recipient-side and arrived
+// only AFTER the park: `undeliverable` in the recipient's own strip, and the
+// coordinator skill's reference corpus mentions `undeliverable` three times
+// and `rejected` four, all on the receiving end. But coordinator<->worker mail
+// is the only channel Build 7 has, so one dirty input box silences a whole
+// wave — and the session that needed to know is the one that sent it.
+//
+// A DURABLE FEED ROW AND A PUSH, NOT A `run_events` ROW (operator-accepted
+// deviation from §4.5). `advanceInner` is the only writer of `run_events` and
+// its own docstring says so; every insert there is paired with a state
+// transition validated against `RUN_TRANSITIONS`, which has no self-transition
+// for any state. A park is not a run transition. `pushOne` already records
+// into the durable feed archive at exactly the right point, which is the
+// durability the spec was asking for.
+describe('sweepMail: a blocked delivery reaches its SENDER', () => {
+  // This suite builds every watcher from `testDeps`, which supplies NO `push`
+  // and NO `notifyLog` and asserts nothing about either — so the notification
+  // is purely additive here and a test that wants to observe it wires its own,
+  // the way push-copy.test.ts does.
+  const pushSpy = (): { sent: PushPayload[]; push: { notify: (p: PushPayload) => Promise<void> } } => {
+    const sent: PushPayload[] = [];
+    return { sent, push: { notify: async (p: PushPayload) => { sent.push(p); } } };
+  };
+
+  /** A recipient the sweep's gate will accept: a registry row, a hookstate and
+   *  a livestate that read idle and quiet. Composed from this file's three
+   *  seeders rather than reinventing them, and run AFTER `primedWatcher` per
+   *  its own docstring. */
+  const seedRecipient = (h: Harness, id: string): void => {
+    seedRegistry(h.home, id);
+    seedHookState(h.home, id);
+    seedLiveState(h.home);
+  };
+
+  /** An open run whose claim names `claimedBy` — the session the 'coordinator'
+   *  ROLE resolves to. `openRun` returns a union with a refusal arm. */
+  const openRunClaimedBy = (coord: CoordStore, claimedBy: string): number => {
+    const opened = coord.openRun({ program: 'build8', title: 'T', project: 'demo',
+      wave: 1, waveOf: 3, claimedBy });
+    if (!('id' in opened)) throw new Error(`fixture openRun refused: ${JSON.stringify(opened)}`);
+    return opened.id;
+  };
+
+  const queueFrom = (coord: CoordStore, fromId: string, runId: number | null): { id: number } => {
+    const mail = coord.insertMail({ fromId, fromUuid: `u-${fromId}`, toId: ID, runId,
+      kind: 'status', subject: 'wave-brief', body: 'go', artifacts: [] });
+    return coord.queueDelivery(mail.id, ID, ENVELOPE);
+  };
+
+  const BLOCKED_PANES = ['❯ half-typed human draft\n'];
+
+  it('emits ONE notification to the sender on the FIRST draft-present back-off', async () => {
+    const h = harness({ panes: BLOCKED_PANES });
+    const coord = store(h.home);
+    const { sent, push } = pushSpy();
+    const { w } = await primedWatcher(h, coord, { push: push as never });
+    seedRecipient(h, ID);
+    queueFrom(coord, 'demo-boss', null);
+
+    await w.sweepMail();
+    const toBoss = sent.filter((p) => p.sessionId === 'demo-boss');
+    expect(toBoss).toHaveLength(1);
+    expect(toBoss[0]!.body).toContain('input box');
+
+    // SECOND back-off: the row is already known-blocked, so it does not
+    // re-notify. The strip is what stays live across every back-off tick
+    // (`attempts` is on the wire since Task 408); the tray is not a ticker.
+    advance(MAIL_SWEEP_MS + 60_000);
+    await w.sweepMail();
+    expect(sent.filter((p) => p.sessionId === 'demo-boss')).toHaveLength(1);
+  });
+
+  it('says nothing to the sender when the send SUCCEEDS', async () => {
+    // The mutant this catches is the one that makes the lane a ticker: a
+    // notification raised on every failure arm regardless of what happened.
+    const h = harness({ panes: HAPPY_PANES });
+    const coord = store(h.home);
+    const { sent, push } = pushSpy();
+    const { w } = await primedWatcher(h, coord, { push: push as never });
+    seedRecipient(h, ID);
+    queueFrom(coord, 'demo-boss', null);
+
+    await w.sweepMail();
+    expect(sent.filter((p) => p.sessionId === 'demo-boss')).toEqual([]);
+  });
+
+  it('records and pushes the PARK — the wave brief that can never land', async () => {
+    const h = harness({ panes: BLOCKED_PANES });
+    const coord = store(h.home);
+    const { sent, push } = pushSpy();
+    const { w } = await primedWatcher(h, coord, { push: push as never });
+    seedRecipient(h, ID);
+    const d = queueFrom(coord, 'demo-boss', null);
+
+    for (let i = 0; i < MAIL_MAX_ATTEMPTS; i++) {
+      await w.sweepMail();
+      advance(MAIL_SWEEP_MS + 16 * 60_000);   // past the largest back-off step
+    }
+    expect(deliveryRow(coord, d.id).state).toBe('rejected');
+    // Parking is KEPT — a message that can never land should not retry
+    // forever. What was wrong was parking SILENTLY.
+    const parks = sent.filter((p) => p.sessionId === 'demo-boss' && /gave up|undeliverable/.test(p.body));
+    expect(parks).toHaveLength(1);
+  });
+
+  it("resolves the 'coordinator' ROLE rather than pushing to a session that does not exist", async () => {
+    // System mail (`queueSystemMail`) writes the literal fromId 'coordinator',
+    // which is a ROLE, not a session. Pushing to it would tag and
+    // presence-gate against an id no registry row carries.
+    const h = harness({ panes: BLOCKED_PANES });
+    const coord = store(h.home);
+    const { sent, push } = pushSpy();
+    const { w } = await primedWatcher(h, coord, { push: push as never });
+    seedRecipient(h, ID);
+    const runId = openRunClaimedBy(coord, 'demo-the-coordinator');
+    queueFrom(coord, 'coordinator', runId);
+
+    await w.sweepMail();
+    expect(sent.map((p) => p.sessionId)).not.toContain('coordinator');
+    expect(sent.map((p) => p.sessionId)).toContain('demo-the-coordinator');
+  });
+
+  it('says NOTHING rather than guessing when the coordinator role cannot be resolved', async () => {
+    // No run, so `resolveCoordinator(null)` has no single active program to
+    // read and answers null. Degrade, never guess: inventing a session id
+    // would tag and presence-gate against a row nothing carries.
+    const h = harness({ panes: BLOCKED_PANES });
+    const coord = store(h.home);
+    const { sent, push } = pushSpy();
+    const { w } = await primedWatcher(h, coord, { push: push as never });
+    seedRecipient(h, ID);
+    queueFrom(coord, 'coordinator', null);
+
+    await w.sweepMail();
+    expect(sent).toEqual([]);
+  });
+
+  // THE DEVIATION, pinned in both directions: the park lands in the DURABLE
+  // FEED and leaves `run_events` alone.
+  it('the park writes a durable feed row and NOT a run_events row', async () => {
+    const h = harness({ panes: BLOCKED_PANES });
+    const coord = store(h.home);
+    const { push } = pushSpy();
+    const log = new NotifyLog(path.join(h.home, 'notify.json'));
+    await log.load();
+    const { w } = await primedWatcher(h, coord, { push: push as never, notifyLog: log });
+    seedRecipient(h, ID);
+    const runId = openRunClaimedBy(coord, 'demo-boss');
+    const d = queueFrom(coord, 'demo-boss', runId);
+    const eventsBefore = coord.db.prepare('SELECT COUNT(*) AS n FROM run_events').get() as { n: number };
+
+    for (let i = 0; i < MAIL_MAX_ATTEMPTS; i++) {
+      await w.sweepMail();
+      advance(MAIL_SWEEP_MS + 16 * 60_000);
+    }
+    expect(deliveryRow(coord, d.id).state).toBe('rejected');
+
+    const feed = coord.feedEvents(50);
+    expect(feed.filter((e) => e.sessionId === 'demo-boss' && /gave up|undeliverable/.test(e.body)))
+      .toHaveLength(1);
+    // A park is not a state transition, and `advanceInner` stays the only
+    // writer of `run_events`.
+    const eventsAfter = coord.db.prepare('SELECT COUNT(*) AS n FROM run_events').get() as { n: number };
+    expect(eventsAfter.n).toBe(eventsBefore.n);
   });
 });

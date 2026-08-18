@@ -1241,3 +1241,179 @@ describe('releaseIsSafe', () => {
     ])).toBe(false);
   });
 });
+
+// TASK 407 — the provenance behind a stranded `/clear`.
+//
+// `dispatch.ts` types a literal `/clear` into a resumed worker's box and, on
+// `enter-ignored`, records `clear-refused:enter-ignored` on the run. That row
+// is the ONLY durable proof this system typed those four characters into that
+// box and never had them taken. `sendPrompt` will not clear a `/clear`
+// without it, because the text alone cannot tell ours from an operator's.
+describe('CoordStore: the /clear a dispatch stranded', () => {
+  const dispatchedWith = (s: CoordStore, sessionId: string, detail: string | undefined,
+                          clearedAt: number | null = null): number => {
+    const r = openRun(s, { wave: 2 }) as { id: number };
+    const adv = s.dispatchRun({ runId: r.id, sessionId, workspace: '/w/x', branch: 'ws/x',
+      resumed: true, clearedAt, items: [], ...(detail !== undefined ? { detail } : {}) });
+    expect(adv).toMatchObject({ ok: true });
+    return r.id;
+  };
+
+  it('reads TRUE for a session whose dispatch recorded an ignored Enter on its /clear', () => {
+    const s = store();
+    dispatchedWith(s, 'demo-quiet-mesa', 'clear-refused:enter-ignored');
+    expect(s.strandedClear('demo-quiet-mesa')).toBe(true);
+  });
+
+  it('reads FALSE for a session with no such record — the default, not a fallback', () => {
+    const s = store();
+    dispatchedWith(s, 'demo-quiet-mesa', undefined, 1_800_000_000_000);
+    expect(s.strandedClear('demo-quiet-mesa')).toBe(false);
+  });
+
+  it('is scoped to the SESSION the /clear was typed into', () => {
+    const s = store();
+    dispatchedWith(s, 'demo-quiet-mesa', 'clear-refused:enter-ignored');
+    expect(s.strandedClear('demo-other-mesa')).toBe(false);
+  });
+
+  // THE RULING, pinned. Only `enter-ignored` proves the text is SITTING there:
+  // the server watched it echo into the box and watched two Enters fail to
+  // move it. `verify-failed` — which since Build 8 also leaves the text in the
+  // box — proves the opposite about the evidence: the box never showed our
+  // text on any poll, so what is in it now is exactly the thing this gate must
+  // not guess at. Refuse.
+  it('reads FALSE for any other refusal code, verify-failed included', () => {
+    const s = store();
+    dispatchedWith(s, 'demo-quiet-mesa', 'clear-refused:verify-failed');
+    dispatchedWith(s, 'demo-two', 'clear-refused:draft-present');
+    dispatchedWith(s, 'demo-three', 'clear-refused:dialog-open');
+    expect(s.strandedClear('demo-quiet-mesa')).toBe(false);
+    expect(s.strandedClear('demo-two')).toBe(false);
+    expect(s.strandedClear('demo-three')).toBe(false);
+  });
+
+  // ONE of the two things that expire the permission (the other is below): a
+  // run that has reached a terminal state is no longer waiting on a brief, and
+  // a durable row that grants a C-u forever is a standing licence to clear a
+  // box nobody is looking at any more.
+  it('reads FALSE once the run reaches a terminal state', () => {
+    const s = store();
+    const id = dispatchedWith(s, 'demo-quiet-mesa', 'clear-refused:enter-ignored');
+    expect(s.strandedClear('demo-quiet-mesa')).toBe(true);
+    expect(s.advance(id, 'failed', 'operator')).toMatchObject({ ok: true });
+    expect(s.strandedClear('demo-quiet-mesa')).toBe(false);
+  });
+
+  // THE PROOF IS ABOUT A BOX, AND THE BOX MOVES ON (review, W4c finding 1).
+  //
+  // `run_events` rows are durable forever, so a proof scoped only by the run's
+  // state kept answering TRUE for the run's whole life — licensing a C-u at
+  // that box on EVERY later delivery, long after the strand it was about had
+  // been resolved and an operator had typed something new. The ruling is
+  // refuse-only except where the lane can prove it typed THAT text, and a
+  // permanent proof is not a proof of that.
+  //
+  // What retires it is a MEASUREMENT, not a clock: a delivery that LANDED in
+  // this session at or after the strand. `sweepMail` calls `markDelivered`
+  // only on `sendPrompt`'s ok — which means the box echoed our text and was
+  // empty after Enter — so a landed delivery is durable evidence that the
+  // stranded `/clear` is no longer in there. The first delivery to inherit the
+  // wedge therefore spends the proof, and everything after it is back to the
+  // ordinary `draft-present` refusal.
+  const delivered = (s: CoordStore, toId: string, at: number | null): void => {
+    const mail = s.insertMail({ fromId: 'coordinator', fromUuid: 'coordinator', toId,
+      runId: null, kind: 'status', subject: 'wave-brief', body: 'go', artifacts: [] });
+    const d = s.queueDelivery(mail.id, toId, 'env');
+    if (at !== null) s.markDelivered(d.id, at);
+  };
+
+  it('reads FALSE once a delivery has LANDED in that box since the strand', () => {
+    const s = store();
+    dispatchedWith(s, 'demo-quiet-mesa', 'clear-refused:enter-ignored');
+    expect(s.strandedClear('demo-quiet-mesa')).toBe(true);
+    delivered(s, 'demo-quiet-mesa', Date.now() + 1_000);
+    // The operator may have typed a fresh `/clear` in the meantime; this lane
+    // cannot see that and never could. What it CAN see is that the box it had
+    // proof about was emptied — so it stops claiming proof.
+    expect(s.strandedClear('demo-quiet-mesa')).toBe(false);
+  });
+
+  // The positive half, against the mutant that retires on ANY delivery row:
+  // mail that landed BEFORE the strand says nothing about the box the strand
+  // left behind, and must not spend a proof it predates.
+  it('is NOT retired by a delivery that landed before the strand', () => {
+    const s = store();
+    dispatchedWith(s, 'demo-quiet-mesa', 'clear-refused:enter-ignored');
+    delivered(s, 'demo-quiet-mesa', 1);   // epoch ms 1 — older than any strand
+    expect(s.strandedClear('demo-quiet-mesa')).toBe(true);
+  });
+
+  it('is NOT retired by a queued delivery, nor by one that landed in ANOTHER box', () => {
+    const s = store();
+    dispatchedWith(s, 'demo-quiet-mesa', 'clear-refused:enter-ignored');
+    delivered(s, 'demo-quiet-mesa', null);              // queued, never landed
+    delivered(s, 'demo-other-mesa', Date.now() + 1_000); // landed, wrong box
+    expect(s.strandedClear('demo-quiet-mesa')).toBe(true);
+  });
+});
+
+// TASK 408 — a blocked delivery is visible on the wire BEFORE it is lost.
+// `mail_deliveries.attempts` and `.lastError` are written on every back-off
+// and read by nothing: `MailSummary` carried `state` alone, so a delivery
+// blocked against a dirty input box for fifteen minutes was byte-identical to
+// one merely waiting its turn.
+describe('CoordStore: a blocked delivery is visible on the wire', () => {
+  it('hydrateMail carries attempts and lastError straight off mail_deliveries', () => {
+    const s = store();
+    const mail = s.insertMail({ fromId: 'coordinator', fromUuid: 'coordinator', toId: 'w1',
+      runId: null, kind: 'status', subject: 'wave-brief', body: 'go', artifacts: [] });
+    const d = s.queueDelivery(mail.id, 'w1', 'env');
+    s.backOff(d.id, 'draft-present', Date.now() + 30_000);
+    s.backOff(d.id, 'draft-present', Date.now() + 60_000);
+
+    const [row] = s.outstandingMailFor('w1');
+    expect(row!.attempts).toBe(2);
+    expect(row!.lastError).toBe('draft-present');
+    // The back-off leaves the row QUEUED — which is why `outstandingMailFor`'s
+    // predicate needs no change, and why a strip can render a live count
+    // rather than waiting for a park.
+    expect(row!.state).toBe('queued');
+  });
+
+  it('a delivery that has never failed reports 0 and null, not a guess', () => {
+    const s = store();
+    const mail = s.insertMail({ fromId: 'w1', fromUuid: 'u1', toId: 'coordinator',
+      runId: null, kind: 'status', subject: 'done', body: 'ok', artifacts: [] });
+    s.queueDelivery(mail.id, 'coordinator', 'env');
+    const [row] = s.outstandingMailFor('coordinator');
+    expect(row!.attempts).toBe(0);
+    expect(row!.lastError).toBeNull();
+  });
+
+  it('mailForRecipient reads the same two columns — one hydrator, not two', () => {
+    const s = store();
+    const mail = s.insertMail({ fromId: 'coordinator', fromUuid: 'coordinator', toId: 'w1',
+      runId: null, kind: 'status', subject: 's', body: 'b', artifacts: [] });
+    const d = s.queueDelivery(mail.id, 'w1', 'env');
+    s.backOff(d.id, 'dialog-open', Date.now() + 1000);
+    expect(s.mailForRecipient('w1')[0]!.lastError).toBe('dialog-open');
+    expect(s.mailForRecipient('w1')[0]!.attempts).toBe(1);
+  });
+
+  // The counter on the wire is the SEND-FAILURE budget, and `backOff`'s
+  // `countsAsAttempt: false` arm exists precisely because one gate (a registry
+  // row that could not be measured) must never ratchet toward the park. What
+  // the wire shows has to agree with what the ceiling counts, or the number
+  // becomes a second, disagreeing story about the same row.
+  it('an attempt the lane deliberately did not count is not counted here either', () => {
+    const s = store();
+    const mail = s.insertMail({ fromId: 'coordinator', fromUuid: 'coordinator', toId: 'w1',
+      runId: null, kind: 'status', subject: 's', body: 'b', artifacts: [] });
+    const d = s.queueDelivery(mail.id, 'w1', 'env');
+    s.backOff(d.id, 'registry row listed but unreadable (registry-unmeasurable)', Date.now() + 1000, false);
+    const [row] = s.outstandingMailFor('w1');
+    expect(row!.attempts).toBe(0);
+    expect(row!.lastError).toBe('registry row listed but unreadable (registry-unmeasurable)');
+  });
+});

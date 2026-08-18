@@ -21,6 +21,7 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import type { MailSummary } from '../../../shared/api';
+import { MAIL_MAX_ATTEMPTS } from '../../../shared/api';
 import './chat.css';
 
 const PLURAL: Record<MailSummary['kind'], [string, string]> = {
@@ -40,6 +41,36 @@ export function summarizeMail(mail: readonly MailSummary[]): string {
   return parts.join(' · ');
 }
 
+/**
+ * A delivery the lane is actively failing to hand over because the box already
+ * holds something. RAW `lastError`, branched on the ONE literal token the
+ * server writes for this case — never a total `Record` lookup, which is a fresh
+ * way for a new server value to break an old client, and never a display of the
+ * raw string, which is free text (four writers, one of them an English
+ * sentence). Both halves of that rule are scanned for in mail-strip.test.tsx.
+ *
+ * `state === 'queued'` is load-bearing and not belt-and-braces: a `rejected`
+ * row keeps its last `lastError`, so without it a parked delivery would answer
+ * to both this and the abandoned line.
+ */
+const isBlocked = (item: MailSummary): boolean =>
+  item.state === 'queued' && item.lastError === 'draft-present';
+
+/** "attempt 3 of 6" — the ceiling comes from L0, not from a `6` typed here.
+ *  Naming the ceiling is what makes "visible BEFORE it is lost" true: without
+ *  it the operator cannot tell a first hiccup from the last attempt.
+ *
+ *  "this session's input box", not the spec's sender-side "the recipient's":
+ *  this strip renders mail addressed TO the session whose screen this is, so
+ *  the recipient IS this session. It names the box by WHOSE it is and points
+ *  at nothing, and both hover titles say the same (review, W4c finding 3 —
+ *  they used to say "the input box below"). The box holding the unsent text is
+ *  the one `sendPrompt` types into and reads `draft-present` back from; the
+ *  control below this strip is the PWA composer, a different box, and an empty
+ *  one. Pointing down sends the operator to look at the wrong thing. */
+const blockedLine = (item: MailSummary): string =>
+  `blocked · attempt ${item.attempts} of ${MAIL_MAX_ATTEMPTS} — this session's input box has unsent text`;
+
 export function MailStrip({ mail }: { mail: MailSummary[] }): ReactNode {
   const [open, setOpen] = useState(false);
   if (mail.length === 0) return null;
@@ -52,6 +83,13 @@ export function MailStrip({ mail }: { mail: MailSummary[] }): ReactNode {
         <span className="mail-strip-mark" aria-hidden="true">✉</span>
         <span className="mail-strip-headline">{newest.subject}</span>
         <span className="mail-strip-count">{mail.length}</span>
+        {/* THE STRIP OPENS CLOSED, so a flag that only exists in the expanded
+            rows is invisible in the state the operator is actually in. */}
+        {mail.some(isBlocked) && (
+          <span className="mail-strip-blocked-mark" title="A message can't be delivered — this session's input box has unsent text.">
+            blocked
+          </span>
+        )}
         <span className="mail-strip-chevron" aria-hidden="true">{open ? '⌃' : '⌄'}</span>
       </button>
 
@@ -69,12 +107,22 @@ export function MailStrip({ mail }: { mail: MailSummary[] }): ReactNode {
                   ceiling, never acked, never acted on — a distinct
                   `state:'rejected'` row that must not read as an ordinary
                   pending message, or a coordinator would keep waiting for a
-                  reply the lane has already stopped attempting to deliver. */}
-              {item.state === 'rejected' && (
+                  reply the lane has already stopped attempting to deliver.
+
+                  ONE status line per row, written as a ternary rather than two
+                  independent guards: a rejected delivery is terminal and says
+                  so, a queued-but-blocked one is still being retried and says
+                  how much room is left. Rendering both would state two
+                  different fates for one message. */}
+              {item.state === 'rejected' ? (
                 <span className="mail-strip-abandoned" title="The delivery lane gave up retrying this before it was acked.">
                   undeliverable — act on it directly
                 </span>
-              )}
+              ) : isBlocked(item) ? (
+                <span className="mail-strip-blocked" title="The lane is still retrying. Clear this session's input box and it will land.">
+                  {blockedLine(item)}
+                </span>
+              ) : null}
               {/* Artifacts are PATHS, never payloads (spec §1) — so they render
                   as paths, in the machine's voice, and nothing here fetches
                   one. */}

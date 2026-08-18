@@ -426,6 +426,14 @@ describe('the rejection table is total, in both directions', () => {
       'wave-done-rejected',   // mail SUBJECT text (close's own rejection)
       'wave-advance-rejected', // mail SUBJECT text (advance's own rejection, review findings 1/15)
       'awaiting-review',      // a RunState value (advance's own target list), not a mail code
+      'enter-ignored',        // a `SendResult` error (`inject/send.ts`), reached here as
+                              // half of `rundefs.ts`'s `CLEAR_REFUSED_STRANDS_TEXT` — the
+                              // `run_events.detail` token `CoordStore.strandedClear` matches
+                              // (Task 407). A THIRD vocabulary passing through this
+                              // scanner, not a mail refusal and not a run refusal: nothing
+                              // maps it to a status and no client switches on it. Listed
+                              // rather than merged, for the reason stated above — three
+                              // vocabularies sharing one scanner stay three.
     ]);
     for (const m of sources().matchAll(/'([a-z]+(?:-[a-z]+)+)'/g)) {
       const tok = m[1]!;

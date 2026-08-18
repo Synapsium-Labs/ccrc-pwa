@@ -1,7 +1,7 @@
 import type { Tmux } from '../exec.js';
 import { hasMenu, parseDialog } from '../pane/dialog.js';
 import type { KeyedQueue } from './queue.js';
-import { composePrompt } from '../../../shared/api.js';
+import { composePrompt, MAIL_ENVELOPE_FENCE } from '../../../shared/api.js';
 
 export interface SendDeps {
   tmux: Tmux;
@@ -14,7 +14,45 @@ export interface SendDeps {
 
 export type SendResult =
   | { ok: true }
-  | { ok: false; error: 'not-alive' | 'dialog-open' | 'draft-present' | 'draft-clear-failed' | 'verify-failed' | 'enter-ignored'; draft?: string; pane?: string };
+  | { ok: false;
+      error: 'not-alive' | 'dialog-open' | 'draft-present' | 'draft-clear-failed' | 'verify-failed' | 'enter-ignored';
+      draft?: string;
+      pane?: string;
+      /**
+       * The server WATCHED `draft` echo into the box as this call's own text and
+       * then failed to make it leave. So: `draft` is our whole message, the box
+       * still holds it, and one more Enter would send exactly it. ADDITIVE and
+       * absence-permits: an older server never sends it, so a client that gates
+       * on `=== true` degrades to no rescue — today's behaviour, the safe
+       * direction.
+       *
+       * IT IS NOT A SYNONYM FOR A `code`, and `verify-failed` earns it on
+       * NEITHER path. `draft` carries three different meanings across the
+       * failure arms and only one of them supports the claim above:
+       *  - OUR OWN ECHOED TEXT — `enter-ignored`. The echo loop proved the box
+       *    holds it; both Enters were swallowed. The one arm that sets this flag.
+       *  - THE OTHER TEXT — `draft-present`, and the ordinary `verify-failed`,
+       *    which reports whatever the box last read.
+       *  - A FAILED CLEAR'S RESIDUE, a fragment of the message — the attachment
+       *    path's `verify-failed`. `submitEnter`'s correspondence gate cannot
+       *    tell this from the first: the residue IS what the box reads, so it
+       *    matches, Enter is pressed, and a truncated prompt is submitted. This
+       *    flag is the discriminator.
+       *
+       * WHY THE ORDINARY `verify-failed` ARM DOES NOT SET IT, even though it is
+       * the arm that deliberately leaves the text in the box. That arm is
+       * reached precisely when `draftOf(pane).startsWith(needle)` was false on
+       * every poll — the server has just proved the box does NOT hold our text.
+       * Three shapes reach it and the claim is false on all three: an EMPTY box
+       * (nothing to send; `submitEnter` answers `nothing-to-submit`), SOMEBODY
+       * ELSE'S words (a rescue would submit a human's half-typed sentence), and
+       * a PARTIAL RENDER of our own message — which is a fragment, i.e. exactly
+       * the residue shape above. The one case that would deserve the flag, the
+       * box holding our whole message, is unreachable here by construction: it
+       * would have set `echoed` and never reached the refusal. A gate downstream
+       * cannot repair this; the distinction has to be true where it is made.
+       */
+      submittable?: boolean };
 
 const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -131,7 +169,14 @@ async function pressEnterAndConfirm(
   await d.tmux.sendKey(id, 'Enter');
   if (await submitted(d, id, sleep, needle)) return { ok: true };
   const stuck = await d.tmux.capture(id);
-  return { ok: false, error: 'enter-ignored', draft: draftOf(await d.tmux.captureAnsi(id) ?? ''), pane: (stuck ?? '').slice(-PANE_TAIL) };
+  return {
+    ok: false, error: 'enter-ignored',
+    draft: draftOf(await d.tmux.captureAnsi(id) ?? ''),
+    pane: (stuck ?? '').slice(-PANE_TAIL),
+    // We typed it, we watched it echo, and nothing has cleared it: the box row
+    // IS the message and Enter would send exactly it. See `SendResult`.
+    submittable: true,
+  };
 }
 
 /** How long to let the pane settle after a C-u before reading the box again. */
@@ -228,11 +273,18 @@ type ClearOutcome =
  *  - the look rounds: press, settle, re-read. Slack for a widget whose cost is
  *    not what we measured, and the only way to learn what is actually left.
  *
- * Terminating a look round on `draftOf() === ''` is sound because kills run
- * bottom-up while `draftOf` reads the box's FIRST row (the `❯` marker sits
- * there; continuation rows are indented two spaces and carry no marker — both
- * confirmed against real `capture-pane -e` bytes, see LIVE_CU_FRAMES in the
- * tests), so that row is the LAST to empty. Detecting PROGRESS from draftOf is
+ * Terminating a look round on the box's FIRST row alone was sound only while
+ * that row had started NON-blank: kills run bottom-up and `draftOf` reads row
+ * one (the `❯` marker sits there; continuation rows are indented two spaces
+ * and carry no marker — both confirmed against real `capture-pane -e` bytes,
+ * see LIVE_CU_FRAMES in the tests), so row one is the LAST to empty. On a box
+ * whose marker row was ALREADY blank the argument inverts: the first look
+ * round reads '' with every row below it untouched, and reporting `cleared`
+ * there hands the caller a box it is about to concatenate onto. Since the
+ * clobber guard sees the whole box (`hasContentBelowMarker`), that shape is
+ * reachable on both clear arms — and `replaceDraft` is operator-reachable from
+ * the PWA — so the terminator asks the same question the guard does.
+ * Detecting PROGRESS from draftOf is
  * impossible for the same reason — its value is unchanged for every press but
  * the last — which is why the bound below is wall-clock and not "presses that
  * changed nothing".
@@ -266,8 +318,14 @@ async function clearBox(
     // hammering C-u into a live menu and then report the user their own
     // "1. Yes" as leftover text. Bail and let the caller say so.
     if (hasMenu(ansi.replace(SGR, ''))) return { state: 'menu' };
+    // THE WHOLE BOX, not the marker row. `draftOf` reads row one only, and this
+    // used to terminate on that alone.
+    if (draftOf(ansi) === '' && !hasContentBelowMarker(ansi)) return { state: 'cleared' };
+    // `residue.draft` still reports the MARKER ROW — that field is display, and
+    // on a blank marker row it correctly reports '' meaning "row one is empty".
+    // The caller's own refusal is what carries the full text (`draft-present`,
+    // which reports `boxText`).
     const left = draftOf(ansi);
-    if (left === '') return { state: 'cleared' };
     if (i >= opts.look || now() >= deadline) return { state: 'residue', draft: left };
     await d.tmux.sendKey(id, 'C-u');
   }
@@ -319,14 +377,51 @@ function matchesOwnDraft(ansiPane: string, parts: readonly string[]): boolean {
  * human mid-sentence thought starts with a literal `[Pasted text #` chip or
  * opens a ```ccrc-mail fence — so `clearMailResidue`'s gate on this function
  * can never clear a human's own text (F2).
+ *
+ * AND IT STAYS A PURE TEXT PREDICATE. Task 407 wanted the stranded `/clear`
+ * `dispatch.ts` leaves behind cleared too, and the obvious place looked like a
+ * third rung here. It is not: `/clear` is four characters a human plausibly
+ * types and leaves sitting, so no property of the STRING distinguishes ours
+ * from theirs, and this function's whole guarantee above — "matches nothing a
+ * human would write" — would have become false. The distinction that actually
+ * exists is PROVENANCE, and provenance is not in this function's arguments.
+ * See `isStrandedClear` and `sendPrompt`'s `ownStrandedClear` below.
+ *
+ * The fence comes from `MAIL_ENVELOPE_FENCE` (`shared/api.ts`) rather than a
+ * hand-spelled literal — `single-definition.test.ts`'s own recorded gap,
+ * taking the invitation its comment left by name.
  */
 const MAIL_RESIDUE_CHIP = /^\[Pasted text #\d+/;
 export function isMailResidue(draft: string): boolean {
   if (draft === '') return false;
   if (MAIL_RESIDUE_CHIP.test(draft)) return true;
-  if (draft.startsWith('```') && draft.includes('ccrc-mail')) return true;
+  if (draft.startsWith('```') && draft.includes(MAIL_ENVELOPE_FENCE)) return true;
   return false;
 }
+
+/** The exact text `dispatch.ts` types into a resumed worker's box before a
+ *  wave brief (`sendPrompt(..., '/clear')`) — the one draft `ownStrandedClear`
+ *  can ever be about. */
+const STRANDED_CLEAR = '/clear';
+
+/**
+ * Does this box hold EXACTLY the `/clear` a caller is claiming it stranded —
+ * that one line, and nothing else?
+ *
+ * The text half of a two-part gate, and by itself it proves NOTHING: a
+ * `/clear` sitting in a box is equally consistent with an operator having
+ * typed one and walked away. `sendPrompt` only consults this when the caller
+ * has separately PROVEN the send was its own (`ownStrandedClear`), and a
+ * caller with no proof gets the ordinary `draft-present` refusal — the
+ * default, not a fallback.
+ *
+ * THE WHOLE BOX, not the marker row: the stranded send was one line, so a box
+ * with rows below the marker is not the box we left, and a C-u fired at it
+ * would land on whatever is underneath. Same unit the clobber guard and
+ * `clearBox`'s terminator read, for the same reason (§4.2).
+ */
+const isStrandedClear = (ansiPane: string): boolean =>
+  draftOf(ansiPane) === STRANDED_CLEAR && !hasContentBelowMarker(ansiPane);
 
 /**
  * Inject a prompt into the session's Claude Code input box, serialized per
@@ -350,12 +445,28 @@ export function isMailResidue(draft: string): boolean {
  * BEFORE the ordinary `replaceDraft`/`draft-present` fork, so a caller that
  * sets both gets: resume own draft > clear+type over recognized residue >
  * replace (if asked) > refuse.
+ *
+ * `ownStrandedClear` (Task 407, operator ruling): a caller that sets this is
+ * stating "I HAVE PROOF this system typed a `/clear` into this box and the
+ * session never took it" — not "this box looks like it holds one". The
+ * difference is the entire feature. `dispatch.ts` types that literal before a
+ * wave brief and documents the wedge a swallowed Enter creates: the mail
+ * lane's next sweep refuses `draft-present`, keeps refusing, and parks the
+ * brief `undeliverable` with nothing surfacing why — one dirty box silences a
+ * wave. But `/clear` is also four characters an operator plausibly types and
+ * leaves sitting, and no property of the text tells the two apart, so THIS
+ * FLAG, not the string, is what opens the clear. `watch.ts` sets it from
+ * `CoordStore.strandedClear` — a durable `clear-refused:enter-ignored` run
+ * event — and a caller with nothing to read passes nothing and gets the
+ * ordinary refusal. Same rung as `clearMailResidue`, and both still lose to
+ * `resumeIfOwn`.
  */
 export function sendPrompt(
   d: SendDeps,
   id: string,
   text: string,
-  opts: { replaceDraft?: boolean; attachments?: readonly string[]; resumeIfOwn?: boolean; clearMailResidue?: boolean } = {},
+  opts: { replaceDraft?: boolean; attachments?: readonly string[]; resumeIfOwn?: boolean;
+          clearMailResidue?: boolean; ownStrandedClear?: boolean } = {},
 ): Promise<SendResult> {
   const sleep = d.sleep ?? defaultSleep;
   // Computed up front, from `text`/`attachments` alone — independent of the
@@ -384,7 +495,21 @@ export function sendPrompt(
     if (hasMenu(pane.replace(SGR, ''))) return { ok: false, error: 'dialog-open' };
 
     const draft = draftOf(pane);
-    if (draft) {
+    // THE BOX HOLDS ANYTHING — not "the marker row is non-blank". A wedge whose
+    // FIRST row is blank was invisible here: measured, a send into such a box
+    // issued zero C-u and typed onto the end of the existing content, so the
+    // session received the concatenation as ONE turn — including dispatch's
+    // `/clear`, which would submit `…brief text/clear` on a single line.
+    // `hasContentBelowMarker` already existed for `submitEnter`, which named
+    // this exact pane `blank-first-row`; the guard simply never asked.
+    //
+    // WHERE THE SHAPE STILL COMES FROM, after Task 402. That task makes
+    // `composePrompt` strip leading blank lines, so neither the app's Composer
+    // nor the coordinator nor a curl caller can MANUFACTURE a blank marker row
+    // any more. The two producers that remain are a HUMAN typing Enter first
+    // into the box, and any pre-402 client still on the wire. Both are enough:
+    // this guard is what stands between them and a silent concatenation.
+    if (draft || hasContentBelowMarker(pane)) {
       // `resumeIfOwn`'s discrimination: `needle` is derived from THIS call's
       // OWN `text`, and `submitEnter`'s own correspondence gate already
       // established the doctrine this reuses — "the box's MARKER ROW... is
@@ -427,14 +552,29 @@ export function sendPrompt(
       // `replaceDraft`/`draft-present` fork so a residue-aware caller need not
       // also pass `replaceDraft` — clearing recognized machine debris is not
       // the same permission as clearing whatever a human is mid-typing.
-      if (opts.clearMailResidue && isMailResidue(draft)) {
+      //
+      // `ownStrandedClear` rides the SAME clear, deliberately: the act is
+      // identical (C-u the box, then type), and only the permission differs.
+      // `isMailResidue` answers "no human writes this"; `ownStrandedClear`
+      // answers "this system PROVED it wrote this one" — a `/clear` with no
+      // proof behind it falls through to the refusal below, untouched, which
+      // is what keeps the refuse-only ruling true for an operator who typed
+      // the same four characters.
+      if ((opts.clearMailResidue === true && isMailResidue(draft))
+          || (opts.ownStrandedClear === true && isStrandedClear(pane))) {
         const cleared = await clearBox(d, id, sleep, { blind: 1, look: REPLACE_MAX_PRESSES - 1 });
         if (cleared.state === 'dead') return { ok: false, error: 'not-alive' };
         if (cleared.state === 'menu') return { ok: false, error: 'dialog-open' };
         if (cleared.state === 'residue') return { ok: false, error: 'draft-clear-failed', draft: cleared.draft };
         // cleared.state === 'cleared' → fall through to the type loop below.
       } else if (!opts.replaceDraft) {
-        return { ok: false, error: 'draft-present', draft };
+        // `boxText`, not `draft`: the operator is being shown what this refusal
+        // is protecting, and every row of it is at stake — the conflict sheet
+        // renders this and builds "Append anyway" out of it. On a blank marker
+        // row `draft` is '' and this is rows 2..N, which is exactly the case
+        // that must never send '' (an empty well, and an append that drops what
+        // it claims to be appending to).
+        return { ok: false, error: 'draft-present', draft: boxText(pane) };
       } else {
         // A single C-u could never clear a draft of two or more lines (see
         // clearBox), so "replace" failed with draft-clear-failed on any user
@@ -521,13 +661,63 @@ export function sendPrompt(
         };
       }
     } else {
-      for (let i = 0; i < ECHO_TRIES; i++) {
+      // BOX-SCOPED, not whole-pane. `after.includes(needle)` proved only that
+      // the characters appear SOMEWHERE on screen — and a session's scrollback
+      // routinely holds the operator's own earlier phrasing of the same
+      // request, so a send into a box that never rendered passed the check,
+      // pressed Enter into nothing, and returned ok:true. The attachment path
+      // above has read the box for exactly this reason since it shipped; the
+      // difference was never a real distinction between the two payload shapes.
+      //
+      // This converts some silent false-successes into `verify-failed`
+      // refusals. That is the point, and it is safe because such a refusal
+      // leaves the text in the box and REPORTS the box, so the operator can see
+      // what is actually there instead of being sent to a terminal blind.
+      //
+      // ONE capture per poll, as before: the ansi read REPLACES the plain one
+      // rather than joining it, so the success path's budget is unchanged.
+      let echoed = needle === '';
+      let lastAnsi = '';
+      // Did ANY poll come back with a pane? `lastAnsi` cannot answer that: it
+      // is '' both for "twelve dead captures" and for "a live pane whose box
+      // read empty", and those need opposite answers. See the refusal below.
+      let sawPane = false;
+      for (let i = 0; i < ECHO_TRIES && !echoed; i++) {
         await sleep(ECHO_POLL_MS);
+        const ansi = await d.tmux.captureAnsi(id);
+        if (ansi === null) continue;
+        lastAnsi = ansi;
+        sawPane = true;
+        if (draftOf(ansi).startsWith(needle)) echoed = true;
+      }
+      if (!echoed) {
+        // EVERY capture failed: the session is gone, and none of what the arm
+        // below says is true of it — there is no box holding the text, and no
+        // draft to hand back. Answering `verify-failed` with an empty draft
+        // made a dead pane byte-identical to a live one that never rendered.
+        // The attachment path's own clear reports `dead` for exactly this and
+        // returns `not-alive`; this is the same question and the same answer.
+        if (!sawPane) return { ok: false, error: 'not-alive' };
+        // THE TEXT STAYS IN THE BOX — no clearBox, no C-u (operator ruling:
+        // refuse, never destroy). That was already true; what was missing was
+        // saying so. Hand back the box row, FOR DISPLAY, exactly as the
+        // attachment arm hands back its residue.
+        //
+        // AND NO `submittable`. Reaching here means the box never started with
+        // our needle on any poll, so what the row holds is an empty box, or
+        // somebody else's words, or a partial render of our own message — a
+        // fragment, which is the one shape this flag was invented to keep a
+        // rescue away from. The case that would deserve it cannot arrive here:
+        // a box holding our whole message sets `echoed`. See
+        // `SendResult.submittable`.
+        //
+        // The pane tail is a PLAIN capture, taken once, here — it is display
+        // for a human, and the escape codes would only make it unreadable.
         after = await d.tmux.capture(id);
-        if (after !== null && (needle === '' || after.includes(needle))) break;
-        if (i === ECHO_TRIES - 1) {
-          return { ok: false, error: 'verify-failed', pane: (after ?? '').slice(-PANE_TAIL) };
-        }
+        return {
+          ok: false, error: 'verify-failed', pane: (after ?? '').slice(-PANE_TAIL),
+          draft: draftOf(lastAnsi),
+        };
       }
     }
 
@@ -565,11 +755,16 @@ const isRuleRow = (line: string): boolean => {
  * `resumeIfOwn`'s per-delivery discrimination below (the first row's
  * CONTENT, not just whether one exists).
  *
- * Reachable end-to-end: `sendPrompt` writes a leading blank line with
- * `M-Enter` whenever the composed prompt's first `\n`-split part is `''`
- * (its own `parts` loop above), so an `enter-ignored` on a message that
- * *starts* with a blank line leaves exactly this shape — a blank marker row
- * with the real text one row down, invisible to `draftOf`.
+ * Reachable end-to-end, but NO LONGER FROM US. `sendPrompt` used to write a
+ * leading blank line with `M-Enter` whenever the composed prompt's first
+ * `\n`-split part was `''` (its own `parts` loop above); Task 402 made
+ * `composePrompt` strip leading blank lines, and `sendPrompt` calls it itself,
+ * so no caller — the app's Composer, the coordinator, a curl — can manufacture
+ * that shape any more. The two producers that remain are a HUMAN pressing Enter
+ * in the box before typing, and any pre-402 client still on the wire; the
+ * clobber guard's own comment above states the same position, which is the one
+ * to trust. Either way the shape is a blank marker row with real text one row
+ * down, invisible to `draftOf` — which is why this function exists.
  *
  * The real captures back exactly one claim, and this function is scoped to
  * only that claim: a rule row closes the box immediately, so any non-blank
@@ -604,6 +799,25 @@ function continuationRows(ansiPane: string): string[] {
 function hasContentBelowMarker(ansiPane: string): boolean {
   return continuationRows(ansiPane).length > 0;
 }
+
+/**
+ * Everything the box holds, marker row first, blank rows dropped — the text a
+ * clobber refusal is REFUSING TO DESTROY, and therefore the text the operator
+ * has to be shown before deciding to replace or append to it.
+ *
+ * `draftOf` alone is the marker row, which is the wrong unit for that question
+ * twice over: a wedge whose marker row is blank reads as an empty box, and an
+ * ordinary two-line human draft reads as its first line, so the PWA's conflict
+ * sheet showed one row and "Append anyway" retyped that row plus the new text —
+ * silently destroying rows 2..N.
+ *
+ * NOT used for `enter-ignored`. That refusal's `draft` is a CORRESPONDENCE
+ * CLAIM handed back to `submitEnter`, whose gate compares `draftOf`'s
+ * single-row reading against it; a multi-row claim would refuse `box-mismatch`
+ * on every rescue. Two questions, two readings, deliberately.
+ */
+const boxText = (ansiPane: string): string =>
+  [draftOf(ansiPane), ...continuationRows(ansiPane)].filter((r) => r !== '').join('\n');
 
 /**
  * Press Enter once on a box that already holds `expect`.
@@ -652,9 +866,15 @@ export function submitEnter(
     const draft = draftOf(pane);
     if (draft === '') {
       // Blank marker row: usually a genuinely empty box, but see
-      // `hasContentBelowMarker` — a message whose first line is itself blank
-      // renders identically on THIS row. Naming that case honestly beats
-      // claiming there is nothing to send when there might be.
+      // `hasContentBelowMarker` — a box whose FIRST row is blank with real text
+      // one row down renders identically on THIS row. Naming that case honestly
+      // beats claiming there is nothing to send when there might be.
+      //
+      // NOT "a message whose first line is itself blank", which is what this
+      // said before the wave-check: Task 402 made `composePrompt` strip leading
+      // blank lines, so our own message cannot carry one. `continuationRows`
+      // and the clobber guard both state the producers that remain — a human
+      // pressing Enter in the box first, and any pre-402 client.
       //
       // NEITHER token says anything about the caller's message. An empty box
       // is not proof that it went through: `clearBox` empties one too.

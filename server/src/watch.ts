@@ -16,7 +16,7 @@ import type { SessionRecord } from './registry.js';
 import type {
   CoordStatus, NotifyEvent, PrState, RunSummary, SessionStatus, TaskProgress,
 } from '../../shared/api.js';
-import { UNCHECKED_PR } from '../../shared/api.js';
+import { MAIL_MAX_ATTEMPTS, UNCHECKED_PR } from '../../shared/api.js';
 // The pause marker's ONE definition in the tree. `MAIL_DISABLED_MARKER` is
 // NOT imported beside it: this file holds its own module-local literal
 // (`sweepMail` already uses it), a second `const` of that name in one scope is
@@ -155,7 +155,13 @@ const MAIL_COOLDOWN_MS = 120_000;
  *  ignoring. */
 const MAIL_REPLAY_MS = 600_000;
 
-/** The PRE-DELIVERY attempt budget, and the spacing between attempts —
+/** WHAT `MAIL_MAX_ATTEMPTS` MEANS, kept beside the code that enforces it. The
+ *  VALUE moved to `shared/api.ts` in Task 408 — `MailSummary.attempts` puts
+ *  the running count on the wire, so the PWA now names the same budget and a
+ *  second `6` in the client would be a second copy of a policy number. The
+ *  reasoning stays here, where the ceiling is actually applied.
+ *
+ *  The PRE-DELIVERY attempt budget, and the spacing between attempts —
  *  applies ONLY while a delivery's own `deliveredAt` is still null (review
  *  finding 4). A row that has NEVER been delivered parks as
  *  `rejected('undeliverable')` at the cap, and THE MAIL ROW IS UNTOUCHED
@@ -184,7 +190,6 @@ const MAIL_REPLAY_MS = 600_000;
  *  doubling from 30 s to the same 15-minute ceiling `PR_BACKOFF_MAX_MS`
  *  already uses, one ceiling for "this keeps not working" across the whole
  *  watcher. */
-const MAIL_MAX_ATTEMPTS = 6;
 const MAIL_BACKOFF_BASE_MS = 30_000;
 const MAIL_BACKOFF_MAX_MS = PR_BACKOFF_MAX_MS;
 
@@ -1644,6 +1649,15 @@ export class FleetWatcher {
    * only once this delivery has provably been attempted before (spec §2.2) —
    * see the send site's own comment — and it can never clear a human draft
    * either (`isMailResidue`'s own docstring, `inject/send.ts`).
+   * `ownStrandedClear` IS passed too (Task 407), and it is the one clear this
+   * lane makes on PROOF rather than on shape: `CoordStore.strandedClear` is a
+   * durable `clear-refused:enter-ignored` run event saying this system typed
+   * a `/clear` into that very box and never had it taken. No such row, no
+   * permission — the text `/clear` alone never opens anything, because a
+   * human types it too. The proof is SPENT by the first delivery that lands
+   * (review, W4c finding 1 — see `strandedClear`'s own docstring): a landed
+   * delivery is this store's evidence that the box was emptied, so the row
+   * licenses the ONE delivery that inherits the wedge, not every later one.
    *
    * WHAT THIS CANNOT SEE, stated because it bounds the guarantee: Claude Code
    * silently QUEUES a prompt sent mid-turn and renders the hint in a dim span
@@ -1724,6 +1738,12 @@ export class FleetWatcher {
     if (!registryRead.listed) return;
     const records = registryRead.records;
     const uuidByToId = new Map(records.map((r) => [r.id, r.uuid] as const));
+    // For `pushOne`'s project decoration (Task 409's sender-side notice), from
+    // the registry read this method already has. A sender the registry does
+    // not list decorates to '' — and `pushOne` degrades an empty project to no
+    // decoration at all, never to a dangling separator.
+    const projects = new Set(records.map((r) => r.project));
+    const sessionProjects = new Map(records.map((r) => [r.id, r.project] as const));
     // One hookstate read per SESSION this sweep, shared between the edge
     // sample below and the gate's own read further down — both use this same
     // `now`, so a cached answer is exactly as fresh as a second read would
@@ -1926,8 +1946,26 @@ export class FleetWatcher {
         // text (send.ts's own docstring) — this is belt AND suspenders, not
         // either alone.
         const prior = d.attempts > 0 || d.deliveredAt !== null;
+        // `ownStrandedClear` (Task 407, operator ruling): the ONE dirty-box
+        // case this lane may clear on PROOF rather than on shape.
+        // `dispatch.ts` types a literal `/clear` into a resumed worker before
+        // its wave brief and, on `enter-ignored`, records that refusal on the
+        // run — the only durable evidence anywhere that this system typed
+        // those four characters into that box and never had them taken. Read
+        // here, at the send site, for exactly the row about to be typed —
+        // and spent by it: `markDelivered` below is what retires the proof,
+        // so the licence covers the delivery that inherits the wedge and
+        // nothing after it (review, W4c finding 1).
+        //
+        // NOT an `isMailResidue` rung, and the difference is the whole gate:
+        // `/clear` is four characters an operator plausibly types and leaves
+        // sitting, so the TEXT proves nothing and a text-only recogniser
+        // would have put this lane's C-u onto a human's own slash command.
+        // With no run event to read, nothing is passed and `sendPrompt`
+        // refuses `draft-present` exactly as it does today.
+        const ownStrandedClear = store.strandedClear(d.toId);
         const res = await sendPrompt({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId, renderMailNudge(d.toId),
-          { resumeIfOwn: true, clearMailResidue: prior });
+          { resumeIfOwn: true, clearMailResidue: prior, ownStrandedClear });
         if (res.ok) {
           this.mailCooldown.set(d.toId, now);
           store.markDelivered(d.id, now);
@@ -1945,6 +1983,52 @@ export class FleetWatcher {
           continue;
         }
         const attempts = d.attempts + 1;
+        /**
+         * TELL THE SENDER, ONCE (Task 409). Every operator-visible signal this
+         * lane had was recipient-side and arrived only AFTER the park — and
+         * coordinator<->worker mail is the only channel Build 7 has, so one
+         * dirty input box silences a whole wave with nothing anywhere saying
+         * why, on the screen of the session that actually needed to know.
+         *
+         * `recordAlways: true` for the same reason `pushNewMail` sets it: an
+         * undeliverable message is a fact that happened whether or not the
+         * operator is looking at the sender's pane. The PUSH stays
+         * presence-gated, exactly as it is for every kind.
+         *
+         * THE EXISTING `'mail'` KIND, deliberately. `KIND_WORD`/`KIND_GLYPH`
+         * in `MailScreen` are TOTAL maps, so a seventh kind means editing both
+         * plus `NOTIFY_KINDS`, and every older client renders `undefined`.
+         *
+         * AND A DURABLE FEED ROW, NOT A `run_events` ROW (operator-accepted
+         * deviation from §4.5). `advanceInner` is the only writer of
+         * `run_events` and its own docstring says so; every insert there is
+         * paired with a transition validated against `RUN_TRANSITIONS`, which
+         * has no self-transition for any state. A park is not a run
+         * transition, so writing one would either invent a second writer or
+         * lie about the run's state. `pushOne` mirrors into
+         * `CoordStore.recordFeedEvent` — the durable archive behind the feed —
+         * at exactly this point, which is the durability that was wanted.
+         */
+        const tellSender = (why: string, tag: string): void => {
+          const origin = store.mailOrigin(d.mailId);
+          if (!origin) return;
+          const senderId = origin.fromId === 'coordinator'
+            ? store.resolveCoordinator(origin.runId)
+            : origin.fromId;
+          // Degrade, never guess: an unresolvable 'coordinator' ROLE has no
+          // session to notify, and inventing one would tag and presence-gate
+          // against an id no registry row carries.
+          if (senderId === null) return;
+          this.pushOne({
+            kind: 'mail', sessionId: senderId,
+            project: sessionProjects.get(senderId) ?? '',
+            title: `✉ blocked › ${d.toId}`,
+            body: `${origin.subject}: ${why}`,
+            tag,
+            recordAlways: true,
+          }, projects);
+        };
+
         // The park below applies ONLY to a row that has NEVER been delivered
         // (review finding 4): `d.deliveredAt === null` is the row's own,
         // durable proof of that. Rejecting a row that HAS been delivered
@@ -1960,13 +2044,27 @@ export class FleetWatcher {
           // and the rescue is a human looking at the pane. Re-injecting would
           // type the whole envelope a second time UNDER the first one.
           if (res.error === 'enter-ignored') {
+            tellSender('the recipient never took the message — it is sitting in their input box',
+              `mail-parked-${d.id}`);
             store.rejectDelivery(d.id, 'undeliverable', res.error);
             continue;
           }
           if (attempts >= MAIL_MAX_ATTEMPTS) {
+            // PARKING IS KEPT: a message that can never land should not retry
+            // forever. What was wrong was parking SILENTLY.
+            tellSender(`the lane gave up after ${attempts} attempts (${res.error})`,
+              `mail-parked-${d.id}`);
             store.rejectDelivery(d.id, 'undeliverable', res.error);
             continue;
           }
+        }
+        // THE FIRST failure of this kind, and only the first. `d.lastError` is
+        // what the row already carried coming IN (`dueDeliveries` selects it),
+        // so a repeat of the same refusal does not re-raise — the tray is not
+        // a ticker. What stays live across every back-off tick is the strip,
+        // via `attempts` on the wire (Task 408).
+        if (res.error === 'draft-present' && d.lastError !== 'draft-present') {
+          tellSender("the recipient's input box has unsent text in it", `mail-blocked-${d.id}`);
         }
         const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
         store.backOff(d.id, res.error, now + step);
