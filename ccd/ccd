@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=b9b40e50c68e07cd14f350177a137474eca7541cd9b1111703e5852018cac064
+# ccrc:generated 1 sha256=e702e1e301ae39af2140b90c8bd5bd73cb621dcab6c7f01f8ff565d1b14bb612
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
 set -uo pipefail
@@ -7136,7 +7136,7 @@ _dispatch_swap() {   # id target — run `ccd swap` in ITS OWN transient systemd
   # SWAP_COOLDOWN (900s) dwarfs the jitter window, so nothing re-dispatches while
   # a delayed swap is still pending.
   local jitter=0
-  [[ "${SWAP_JITTER:-0}" -gt 0 ]] && jitter=$(( RANDOM % (SWAP_JITTER + 1) ))
+  [[ "${SWAP_JITTER:-0}" =~ ^[0-9]+$ && "${SWAP_JITTER:-0}" -gt 0 ]] && jitter=$(( RANDOM % (SWAP_JITTER + 1) ))
   echo "$(date '+%F %T') dispatch $1 -> $2 (in ${jitter}s)" >> "$REG/swap.log"
   systemd-run --user --collect --quiet \
     bash -c "sleep $jitter; exec '$HOME/.local/bin/ccd' swap '$1' '$2' >>'$REG/swap.log' 2>&1" \
@@ -7354,7 +7354,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   local id="$1" wrapper home now last pane target hard_blocked="" blocked bts
   wrapper=$(_reg_get "$id" wrapper); home=$(_home_for "$id")
   now=$(date +%s); last=$(_reg_get "$id" lastswap)
-  [[ -n "$last" && $((now - last)) -lt "$SWAP_COOLDOWN" ]] && return 0
+  [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$SWAP_COOLDOWN" ]] && return 0
   # A refused swap is not retried on the 5-second supervise tick. cmd_swap writes
   # $REG/<id>.swapblocked as "<epoch> <reason>" when it cannot carry the conversation
   # (spec §2.4); without this gate one refusal would produce 720 banners an hour, each
@@ -7450,9 +7450,9 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   local id="$1" now last lastswap pane pct wrapper spid sf st sua t cur
   now=$(date +%s)
   last=$(_reg_get "$id" lastcompact)
-  [[ -n "$last" && $((now - last)) -lt "$COMPACT_COOLDOWN" ]] && return 0
+  [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$COMPACT_COOLDOWN" ]] && return 0
   lastswap=$(_reg_get "$id" lastswap)   # a swap landing already compacted from summary — don't double up
-  [[ -n "$lastswap" && $((now - lastswap)) -lt "$COMPACT_COOLDOWN" ]] && return 0
+  [[ "$lastswap" =~ ^[0-9]+$ && $((now - lastswap)) -lt "$COMPACT_COOLDOWN" ]] && return 0
   pane=$(tmux capture-pane -t "$(_tmux "$id")" -p 2>/dev/null | tail -8)
   [[ -n "$pane" ]] || return 0
   pct=$(_pane_ctx_pct "$pane"); [[ -n "$pct" ]] || return 0
@@ -7685,26 +7685,55 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, t
   return 4
 }
 
-_tmux_server_ensure() {   # place the SERVER in a known scope, not the caller's cgroup
+_tmux_new_session() {   # argv for `tmux new-session` -> runs it, PLACING the server if this call creates it
   # Every session on this box is a child of ONE tmux server, and that server
-  # currently lives in whichever `claude-session@<id>.service` cgroup happened
-  # to create it — so the unit file's KillMode=process is the only thing
-  # standing between the deploy's `try-restart claude-session@*` sweep and a
-  # fleet kill (systemd's default KillMode is control-group).
+  # lives in whichever cgroup happened to create it — so the unit file's
+  # KillMode=process is the only thing standing between the deploy's
+  # `try-restart claude-session@*` sweep and a fleet kill (systemd's default
+  # KillMode is control-group). This places the server deliberately instead.
+  #
+  # THIS REPLACES `_tmux_server_ensure`, WHICH WAS A NO-OP IN PRODUCTION, and
+  # the correction is worth stating because the old shape looked right and its
+  # suite was green. It ran `systemd-run --scope … tmux start-server` as its
+  # own step. But A TMUX SERVER WITH NO SESSIONS EXITS IMMEDIATELY: the
+  # `start-server` died, the scope collected, and the very next
+  # `tmux new-session` created a FRESH server in the caller's cgroup — the flaw
+  # the design existed to remove. Measured on the fleet host 2026-08-18 after
+  # the planned reboot: the server sat in
+  # `claude-session@ccrc-pwa-calm-mesa.service`, one unit over from where it
+  # started, with `ccrc-tmux-server.scope` nowhere in `systemctl --user`.
+  #
+  # THE FIRST SESSION IS THE SERVER'S LIFELINE, so the scope must wrap the call
+  # that creates it. Verified on an isolated socket, same box, same day:
+  #   systemd-run --user --scope --collect --unit=X tmux -L probe new-session -d …
+  # leaves the server in `X.scope`; the identical command with `start-server`
+  # leaves no server at all. The scope outlives the `new-session` process
+  # because a scope is released when its cgroup EMPTIES, and the forked server
+  # stays in it.
   #
   # NO NEW UNIT FILE: nothing extra to deploy or keep in sync, and it self-heals
   # — whenever the server is next created it lands in ccrc-tmux-server.scope.
-  # The `||` fallback keeps ccd working where systemd-run is absent, which the
-  # single-box story requires; it is the same pattern tmux already uses for its
-  # own per-pane `tmux-spawn-<uuid>.scope`.
-  #
-  # IT ONLY TAKES EFFECT WHEN THE SERVER IS NEXT CREATED, i.e. at a reboot:
+  # It only takes effect when the server is next created, i.e. at a reboot:
   # cgroup membership cannot be changed for a live process without a D-Bus
   # StartTransientUnit adoption, and that is not something to attempt against a
-  # process holding 21 live sessions.
-  tmux list-sessions >/dev/null 2>&1 && return 0
-  systemd-run --user --scope --quiet --collect --unit=ccrc-tmux-server tmux start-server 2>/dev/null \
-    || tmux start-server
+  # process holding 17 live sessions.
+  local -a scope=()
+  # `command -v` and not `_have_systemctl`: this asks about systemd-run
+  # specifically, and the single-box OSS story is a box with neither.
+  if ! tmux list-sessions >/dev/null 2>&1 && command -v systemd-run >/dev/null 2>&1; then
+    scope=(systemd-run --user --scope --quiet --collect --unit=ccrc-tmux-server)
+  fi
+  if [[ ${#scope[@]} -gt 0 ]]; then
+    "${scope[@]}" tmux new-session "$@" && return 0
+    # systemd-run refused (no D-Bus, no user manager, unit name taken by a
+    # scope that has not collected yet). A session that does not exist is a
+    # worse outcome than one in the wrong cgroup, so fall through and create it
+    # bare — the same trade the old `||` made. ONLY reachable when a scope was
+    # actually attempted: without one, the bare call below runs exactly once,
+    # because retrying a `new-session` that failed on its own merits would hit
+    # a duplicate-name error and turn one failure into a confusing two.
+  fi
+  tmux new-session "$@"
 }
 
 # `_spawn_start`'s ANSWER, and it is a global rather than stdout for a
@@ -7762,15 +7791,15 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # summary there (cheap) instead of full-as-is (700k re-read on the fresh limit pool).
   local fromswap=0 lastswap
   lastswap=$(_reg_get "$id" lastswap)
-  [[ -n "$lastswap" && $(( $(date +%s) - lastswap )) -lt 300 ]] && fromswap=1
+  [[ "$lastswap" =~ ^[0-9]+$ && $(( $(date +%s) - lastswap )) -lt 300 ]] && fromswap=1
   if [[ "$mode" == "resume" ]]; then sidflag="--resume '$uuid'"; else sidflag="--session-id '$uuid'"; fi
-  # Ahead of the only line that can create the tmux server, and AFTER everything
-  # that can `die`: a spawn that is going to abort must not leave a scope behind.
-  _tmux_server_ensure
   # COLORTERM=truecolor so Claude Code emits 24-bit colour (it otherwise quantises
   # to 256, collapsing its palette). tmux passes it through to the terminal-drawer
   # xterm once the server has the RGB terminal-feature (see hardening/tmux.conf).
-  tmux new-session -d -s "$tname" -x 220 -y 50 \
+  # `_tmux_new_session`, not a bare `tmux new-session`: this is the call that
+  # can create the server, and it is AFTER everything that can `die`, so a spawn
+  # that is going to abort never leaves a scope behind.
+  _tmux_new_session -d -s "$tname" -x 220 -y 50 \
     "cd '$workdir' && exec env COLORTERM=truecolor '$WRAPPER_DIR/$wrapper' --remote-control '$id' $sidflag --dangerously-skip-permissions"
   # THE PRICE OF A MONOTONE `started`, PAID AUTOMATICALLY INSTEAD OF BY HAND.
   # Nothing in ccd ever clears the field: there is no registry delete/unset
@@ -7806,7 +7835,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
     sleep "$SPAWN_RESUME_SETTLE_S"
     if ! tmux has-session -t "$tname" 2>/dev/null; then
       echo "ccd: $id: --resume '$uuid' left no session; retrying once with --session-id" >&2
-      tmux new-session -d -s "$tname" -x 220 -y 50 \
+      _tmux_new_session -d -s "$tname" -x 220 -y 50 \
         "cd '$workdir' && exec env COLORTERM=truecolor '$WRAPPER_DIR/$wrapper' --remote-control '$id' --session-id '$uuid' --dangerously-skip-permissions"
     fi
   fi

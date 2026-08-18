@@ -13597,3 +13597,65 @@ kind whose repair deletes worktrees.
 `.uuid` reads `orphan` there and *claimed* by the census — the census is the narrower of the two, which
 is the safe direction. And `.uuid` is the **fourth** field `cmd_ws_add` writes, which is why adopting
 ws-gc's `.uuid`-alone test would have re-opened the very false alarm this entry records.
+
+**D-B8-7 — §1.7's substrate placement was a no-op, and the reboot is what proved it.** The design ran
+`systemd-run --user --scope --collect --unit=ccrc-tmux-server tmux start-server` as its own step ahead
+of `_spawn_start`'s `new-session`. **A tmux server with no sessions exits immediately**, so the server
+that scope started died at once, the scope collected, and the very next `tmux new-session` created a
+fresh server in the caller's cgroup — the exact flaw the section existed to remove.
+
+Measured on the fleet host 2026-08-18 after the planned reboot: the server (pid 2047, 21:38:58, all 17
+sessions) sat in `claude-session@ccrc-pwa-calm-mesa.service`, one session unit over from the
+`claude-session@claude-ccrc-pwa.service` it began in, with `ccrc-tmux-server.scope` absent from
+`systemctl --user list-units --all`. The journal line `Started ccrc-tmux-server.scope` at 21:38:59 is
+genuine, and is the reason this read as a success on first inspection.
+
+Settled by experiment on an isolated socket (`-L probe`), zero contact with the live fleet: a scope
+around `start-server` leaves no server; a scope around `new-session -d` leaves the server **in the
+scope**. The first session is the server's lifeline, so the scope must wrap the call that creates it —
+the scope outlives the short-lived `new-session` process because a scope is released when its cgroup
+*empties*, and the forked server stays in it.
+
+*Fixed* by replacing `_tmux_server_ensure` with `_tmux_new_session`, an argv wrapper around
+`tmux new-session` that prepends the scope only when no server is running and `systemd-run` exists;
+both `_spawn_start` call sites route through it. A failed scoped attempt falls through to a bare call
+(a missing session is worse than a misplaced one — the trade the old `||` made); with no scope
+attempted the bare call runs exactly **once**, because retrying a `new-session` that failed on its own
+merits hits a duplicate name and turns one failure into a confusing two.
+
+**Three things worth keeping.** First, the old suite was green throughout, and deserved to be: its
+assertions were true, well-argued and mutation-proof, and it even carried a purpose-built negative
+control (`$SYSTEMD_RUN_RC`, added so the `||` could be shown load-bearing). It could not observe that
+the real `tmux` exits, because `tmux` was stubbed. **A test can pin the exact SHAPE of a mechanism
+whose EFFECT is nil** — this is a distinct failure mode from the "test that cannot fail" class, and the
+only thing that caught it was measuring the box. Second, the spec cited tmux's per-pane
+`tmux-spawn-<uuid>.scope` as *precedent* for scoping the server; that pattern is applied by an
+already-running tmux to its panes and is no precedent at all for placing the server — reasoning from it
+is what made the separate `start-server` step look sufficient. Third, the verification command written
+into both the deploy pre-flight and the post-reboot check, `pgrep -x -f 'tmux: server'`, **returns
+empty**: `-f` matches the full command line (`tmux start-server`) while `-x` demands an exact match. The
+check that was supposed to prove the exercise worked could not have run. Corrected to
+`pgrep -x 'tmux: server'`.
+
+**Still outstanding:** the placement is unverified in production and stays so until the next reboot. The
+criterion is also tightened — the cgroup leaf must **be** `ccrc-tmux-server.scope`, not merely "not a
+`claude-session@*` unit", because the server moved *between* session units and the weaker test would
+have scored that as progress.
+
+**D-B8-8 — the SWAP_JITTER row of Task 17's own table named the wrong source.** The table listed
+`_dispatch_swap`'s `SWAP_JITTER` operand as arriving from the **environment**. It does not: `ccd:54` is
+a bare `SWAP_JITTER=120`, not `${SWAP_JITTER:-120}`, so sourcing ccd overwrites whatever a caller
+exported and the operand is always ccd's own literal. The payload test written per the plan — pass the
+hostile value as env — therefore **passed on the first run, before any guard existed**, and would have
+been recorded as "already guarded" had the plan's Step 2 instruction been followed literally.
+
+The site is still guarded (the `-gt` is itself an arithmetic context, and the `${SWAP_JITTER:-0}`
+spelling advertises an externality that is not real today, which is exactly how a future reader gets
+misled). The payload case now assigns the hostile value **after** the source — the way it could
+actually arrive — and a second test pins line 54's unconditional form, so the day someone makes the
+knob tunable is a red suite pointing at the guard that then starts carrying real weight.
+
+**The general rule this earns:** when a payload test passes before the fix, the answer is not always
+"already guarded". It can also be "the test never reached the site", and those two have opposite
+consequences — one removes a row from the table, the other means the row was never measured at all.
+Distinguish them by probing the site in isolation before believing either.
