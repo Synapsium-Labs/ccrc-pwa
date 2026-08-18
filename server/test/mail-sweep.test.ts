@@ -21,6 +21,8 @@ import { CoordStore } from '../src/coord/store.js';
 import { renderEnvelope, renderMailNudge } from '../src/coord/envelope.js';
 import { HOOKSTATE_FRESH_MS } from '../src/hookstate.js';
 import { localIO, type FleetIO } from '../src/io.js';
+import { NotifyLog } from '../src/notifylog.js';
+import type { PushPayload } from '../src/push.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -1412,5 +1414,174 @@ describe('sweepMail: the /clear a dispatch stranded', () => {
     await w.sweepMail();
     expect(literalSends(h.calls)).toEqual([]);
     expect(deliveryRow(coord, id).lastError).toBe('draft-present');
+  });
+});
+
+// TASK 409 — the SENDER is who is told nothing.
+//
+// Every operator-visible signal this lane had was recipient-side and arrived
+// only AFTER the park: `undeliverable` in the recipient's own strip, and the
+// coordinator skill's reference corpus mentions `undeliverable` three times
+// and `rejected` four, all on the receiving end. But coordinator<->worker mail
+// is the only channel Build 7 has, so one dirty input box silences a whole
+// wave — and the session that needed to know is the one that sent it.
+//
+// A DURABLE FEED ROW AND A PUSH, NOT A `run_events` ROW (operator-accepted
+// deviation from §4.5). `advanceInner` is the only writer of `run_events` and
+// its own docstring says so; every insert there is paired with a state
+// transition validated against `RUN_TRANSITIONS`, which has no self-transition
+// for any state. A park is not a run transition. `pushOne` already records
+// into the durable feed archive at exactly the right point, which is the
+// durability the spec was asking for.
+describe('sweepMail: a blocked delivery reaches its SENDER', () => {
+  // This suite builds every watcher from `testDeps`, which supplies NO `push`
+  // and NO `notifyLog` and asserts nothing about either — so the notification
+  // is purely additive here and a test that wants to observe it wires its own,
+  // the way push-copy.test.ts does.
+  const pushSpy = (): { sent: PushPayload[]; push: { notify: (p: PushPayload) => Promise<void> } } => {
+    const sent: PushPayload[] = [];
+    return { sent, push: { notify: async (p: PushPayload) => { sent.push(p); } } };
+  };
+
+  /** A recipient the sweep's gate will accept: a registry row, a hookstate and
+   *  a livestate that read idle and quiet. Composed from this file's three
+   *  seeders rather than reinventing them, and run AFTER `primedWatcher` per
+   *  its own docstring. */
+  const seedRecipient = (h: Harness, id: string): void => {
+    seedRegistry(h.home, id);
+    seedHookState(h.home, id);
+    seedLiveState(h.home);
+  };
+
+  /** An open run whose claim names `claimedBy` — the session the 'coordinator'
+   *  ROLE resolves to. `openRun` returns a union with a refusal arm. */
+  const openRunClaimedBy = (coord: CoordStore, claimedBy: string): number => {
+    const opened = coord.openRun({ program: 'build8', title: 'T', project: 'demo',
+      wave: 1, waveOf: 3, claimedBy });
+    if (!('id' in opened)) throw new Error(`fixture openRun refused: ${JSON.stringify(opened)}`);
+    return opened.id;
+  };
+
+  const queueFrom = (coord: CoordStore, fromId: string, runId: number | null): { id: number } => {
+    const mail = coord.insertMail({ fromId, fromUuid: `u-${fromId}`, toId: ID, runId,
+      kind: 'status', subject: 'wave-brief', body: 'go', artifacts: [] });
+    return coord.queueDelivery(mail.id, ID, ENVELOPE);
+  };
+
+  const BLOCKED_PANES = ['❯ half-typed human draft\n'];
+
+  it('emits ONE notification to the sender on the FIRST draft-present back-off', async () => {
+    const h = harness({ panes: BLOCKED_PANES });
+    const coord = store(h.home);
+    const { sent, push } = pushSpy();
+    const { w } = await primedWatcher(h, coord, { push: push as never });
+    seedRecipient(h, ID);
+    queueFrom(coord, 'demo-boss', null);
+
+    await w.sweepMail();
+    const toBoss = sent.filter((p) => p.sessionId === 'demo-boss');
+    expect(toBoss).toHaveLength(1);
+    expect(toBoss[0]!.body).toContain('input box');
+
+    // SECOND back-off: the row is already known-blocked, so it does not
+    // re-notify. The strip is what stays live across every back-off tick
+    // (`attempts` is on the wire since Task 408); the tray is not a ticker.
+    advance(MAIL_SWEEP_MS + 60_000);
+    await w.sweepMail();
+    expect(sent.filter((p) => p.sessionId === 'demo-boss')).toHaveLength(1);
+  });
+
+  it('says nothing to the sender when the send SUCCEEDS', async () => {
+    // The mutant this catches is the one that makes the lane a ticker: a
+    // notification raised on every failure arm regardless of what happened.
+    const h = harness({ panes: HAPPY_PANES });
+    const coord = store(h.home);
+    const { sent, push } = pushSpy();
+    const { w } = await primedWatcher(h, coord, { push: push as never });
+    seedRecipient(h, ID);
+    queueFrom(coord, 'demo-boss', null);
+
+    await w.sweepMail();
+    expect(sent.filter((p) => p.sessionId === 'demo-boss')).toEqual([]);
+  });
+
+  it('records and pushes the PARK — the wave brief that can never land', async () => {
+    const h = harness({ panes: BLOCKED_PANES });
+    const coord = store(h.home);
+    const { sent, push } = pushSpy();
+    const { w } = await primedWatcher(h, coord, { push: push as never });
+    seedRecipient(h, ID);
+    const d = queueFrom(coord, 'demo-boss', null);
+
+    for (let i = 0; i < MAIL_MAX_ATTEMPTS; i++) {
+      await w.sweepMail();
+      advance(MAIL_SWEEP_MS + 16 * 60_000);   // past the largest back-off step
+    }
+    expect(deliveryRow(coord, d.id).state).toBe('rejected');
+    // Parking is KEPT — a message that can never land should not retry
+    // forever. What was wrong was parking SILENTLY.
+    const parks = sent.filter((p) => p.sessionId === 'demo-boss' && /gave up|undeliverable/.test(p.body));
+    expect(parks).toHaveLength(1);
+  });
+
+  it("resolves the 'coordinator' ROLE rather than pushing to a session that does not exist", async () => {
+    // System mail (`queueSystemMail`) writes the literal fromId 'coordinator',
+    // which is a ROLE, not a session. Pushing to it would tag and
+    // presence-gate against an id no registry row carries.
+    const h = harness({ panes: BLOCKED_PANES });
+    const coord = store(h.home);
+    const { sent, push } = pushSpy();
+    const { w } = await primedWatcher(h, coord, { push: push as never });
+    seedRecipient(h, ID);
+    const runId = openRunClaimedBy(coord, 'demo-the-coordinator');
+    queueFrom(coord, 'coordinator', runId);
+
+    await w.sweepMail();
+    expect(sent.map((p) => p.sessionId)).not.toContain('coordinator');
+    expect(sent.map((p) => p.sessionId)).toContain('demo-the-coordinator');
+  });
+
+  it('says NOTHING rather than guessing when the coordinator role cannot be resolved', async () => {
+    // No run, so `resolveCoordinator(null)` has no single active program to
+    // read and answers null. Degrade, never guess: inventing a session id
+    // would tag and presence-gate against a row nothing carries.
+    const h = harness({ panes: BLOCKED_PANES });
+    const coord = store(h.home);
+    const { sent, push } = pushSpy();
+    const { w } = await primedWatcher(h, coord, { push: push as never });
+    seedRecipient(h, ID);
+    queueFrom(coord, 'coordinator', null);
+
+    await w.sweepMail();
+    expect(sent).toEqual([]);
+  });
+
+  // THE DEVIATION, pinned in both directions: the park lands in the DURABLE
+  // FEED and leaves `run_events` alone.
+  it('the park writes a durable feed row and NOT a run_events row', async () => {
+    const h = harness({ panes: BLOCKED_PANES });
+    const coord = store(h.home);
+    const { push } = pushSpy();
+    const log = new NotifyLog(path.join(h.home, 'notify.json'));
+    await log.load();
+    const { w } = await primedWatcher(h, coord, { push: push as never, notifyLog: log });
+    seedRecipient(h, ID);
+    const runId = openRunClaimedBy(coord, 'demo-boss');
+    const d = queueFrom(coord, 'demo-boss', runId);
+    const eventsBefore = coord.db.prepare('SELECT COUNT(*) AS n FROM run_events').get() as { n: number };
+
+    for (let i = 0; i < MAIL_MAX_ATTEMPTS; i++) {
+      await w.sweepMail();
+      advance(MAIL_SWEEP_MS + 16 * 60_000);
+    }
+    expect(deliveryRow(coord, d.id).state).toBe('rejected');
+
+    const feed = coord.feedEvents(50);
+    expect(feed.filter((e) => e.sessionId === 'demo-boss' && /gave up|undeliverable/.test(e.body)))
+      .toHaveLength(1);
+    // A park is not a state transition, and `advanceInner` stays the only
+    // writer of `run_events`.
+    const eventsAfter = coord.db.prepare('SELECT COUNT(*) AS n FROM run_events').get() as { n: number };
+    expect(eventsAfter.n).toBe(eventsBefore.n);
   });
 });

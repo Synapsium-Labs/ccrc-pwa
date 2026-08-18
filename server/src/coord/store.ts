@@ -1077,6 +1077,24 @@ export class CoordStore {
     return this.hydrateMail(rows);
   }
 
+  /** Who sent a mail, under which run, and about what — the three fields a
+   *  SENDER-SIDE notification needs and `dueDeliveries` deliberately does not
+   *  select. A dedicated one-row read rather than a JOIN widening
+   *  `dueDeliveries`: that query runs over every due row on every sweep, and
+   *  this runs only when a notification is actually about to be raised.
+   *  SYNCHRONOUS, like everything here.
+   *
+   *  `fromId` is returned RAW, including the literal `'coordinator'`, which is
+   *  a ROLE rather than a session id. Resolving it is the caller's job
+   *  (`resolveCoordinator`) because only the caller knows whether it is about
+   *  to push, and resolving here would hide the unresolvable case behind a
+   *  value that looks like an id. */
+  mailOrigin(mailId: number): { fromId: string; runId: number | null; subject: string } | null {
+    const row = this.db.prepare('SELECT fromId, runId, subject FROM mail WHERE id = ?')
+      .get(mailId) as { fromId: string; runId: number | null; subject: string } | undefined;
+    return row ?? null;
+  }
+
   /** `MailRowDb` -> `MailSummary`: the one place a raw joined mail/delivery
    *  row becomes the typed shape, shared by `mailForRecipient` and
    *  `outstandingMailFor` — they differ only in their WHERE clause, never in
@@ -1183,16 +1201,21 @@ export class CoordStore {
    * until the first edge is ever observed.
    */
   dueDeliveries(now: number, replayMs: number): { id: number; mailId: number; toId: string;
-                                attempts: number; envelope: string; deliveredAt: number | null;
-                                ingestedAt: number | null }[] {
+                                attempts: number; lastError: string | null; envelope: string;
+                                deliveredAt: number | null; ingestedAt: number | null }[] {
     return this.db.prepare(
-      'SELECT id, mailId, toId, attempts, envelope, deliveredAt, ingestedAt FROM mail_deliveries ' +
+      // `lastError` (Task 409) is the row's INCOMING failure — what it already
+      // carried before this sweep touched it — which is how `sweepMail` tells
+      // a NEW block from a repeat of the same one without re-reading the row
+      // it is about to write and racing itself.
+      'SELECT id, mailId, toId, attempts, lastError, envelope, deliveredAt, ingestedAt FROM mail_deliveries ' +
       "WHERE (state = 'queued' AND nextAttemptAt <= ?) " +
       "OR (state = 'delivered' AND MAX(COALESCE(ingestedAt, 0), COALESCE(deliveredAt, 0)) + ? <= ? " +
       'AND nextAttemptAt <= ?) ' +
       'ORDER BY id',
     ).all(now, replayMs, now, now) as { id: number; mailId: number; toId: string; attempts: number;
-                    envelope: string; deliveredAt: number | null; ingestedAt: number | null }[];
+                    lastError: string | null; envelope: string;
+                    deliveredAt: number | null; ingestedAt: number | null }[];
   }
 
   /**

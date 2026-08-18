@@ -1735,6 +1735,12 @@ export class FleetWatcher {
     if (!registryRead.listed) return;
     const records = registryRead.records;
     const uuidByToId = new Map(records.map((r) => [r.id, r.uuid] as const));
+    // For `pushOne`'s project decoration (Task 409's sender-side notice), from
+    // the registry read this method already has. A sender the registry does
+    // not list decorates to '' — and `pushOne` degrades an empty project to no
+    // decoration at all, never to a dangling separator.
+    const projects = new Set(records.map((r) => r.project));
+    const sessionProjects = new Map(records.map((r) => [r.id, r.project] as const));
     // One hookstate read per SESSION this sweep, shared between the edge
     // sample below and the gate's own read further down — both use this same
     // `now`, so a cached answer is exactly as fresh as a second read would
@@ -1971,6 +1977,52 @@ export class FleetWatcher {
           continue;
         }
         const attempts = d.attempts + 1;
+        /**
+         * TELL THE SENDER, ONCE (Task 409). Every operator-visible signal this
+         * lane had was recipient-side and arrived only AFTER the park — and
+         * coordinator<->worker mail is the only channel Build 7 has, so one
+         * dirty input box silences a whole wave with nothing anywhere saying
+         * why, on the screen of the session that actually needed to know.
+         *
+         * `recordAlways: true` for the same reason `pushNewMail` sets it: an
+         * undeliverable message is a fact that happened whether or not the
+         * operator is looking at the sender's pane. The PUSH stays
+         * presence-gated, exactly as it is for every kind.
+         *
+         * THE EXISTING `'mail'` KIND, deliberately. `KIND_WORD`/`KIND_GLYPH`
+         * in `MailScreen` are TOTAL maps, so a seventh kind means editing both
+         * plus `NOTIFY_KINDS`, and every older client renders `undefined`.
+         *
+         * AND A DURABLE FEED ROW, NOT A `run_events` ROW (operator-accepted
+         * deviation from §4.5). `advanceInner` is the only writer of
+         * `run_events` and its own docstring says so; every insert there is
+         * paired with a transition validated against `RUN_TRANSITIONS`, which
+         * has no self-transition for any state. A park is not a run
+         * transition, so writing one would either invent a second writer or
+         * lie about the run's state. `pushOne` mirrors into
+         * `CoordStore.recordFeedEvent` — the durable archive behind the feed —
+         * at exactly this point, which is the durability that was wanted.
+         */
+        const tellSender = (why: string, tag: string): void => {
+          const origin = store.mailOrigin(d.mailId);
+          if (!origin) return;
+          const senderId = origin.fromId === 'coordinator'
+            ? store.resolveCoordinator(origin.runId)
+            : origin.fromId;
+          // Degrade, never guess: an unresolvable 'coordinator' ROLE has no
+          // session to notify, and inventing one would tag and presence-gate
+          // against an id no registry row carries.
+          if (senderId === null) return;
+          this.pushOne({
+            kind: 'mail', sessionId: senderId,
+            project: sessionProjects.get(senderId) ?? '',
+            title: `✉ blocked › ${d.toId}`,
+            body: `${origin.subject}: ${why}`,
+            tag,
+            recordAlways: true,
+          }, projects);
+        };
+
         // The park below applies ONLY to a row that has NEVER been delivered
         // (review finding 4): `d.deliveredAt === null` is the row's own,
         // durable proof of that. Rejecting a row that HAS been delivered
@@ -1986,13 +2038,27 @@ export class FleetWatcher {
           // and the rescue is a human looking at the pane. Re-injecting would
           // type the whole envelope a second time UNDER the first one.
           if (res.error === 'enter-ignored') {
+            tellSender('the recipient never took the message — it is sitting in their input box',
+              `mail-parked-${d.id}`);
             store.rejectDelivery(d.id, 'undeliverable', res.error);
             continue;
           }
           if (attempts >= MAIL_MAX_ATTEMPTS) {
+            // PARKING IS KEPT: a message that can never land should not retry
+            // forever. What was wrong was parking SILENTLY.
+            tellSender(`the lane gave up after ${attempts} attempts (${res.error})`,
+              `mail-parked-${d.id}`);
             store.rejectDelivery(d.id, 'undeliverable', res.error);
             continue;
           }
+        }
+        // THE FIRST failure of this kind, and only the first. `d.lastError` is
+        // what the row already carried coming IN (`dueDeliveries` selects it),
+        // so a repeat of the same refusal does not re-raise — the tray is not
+        // a ticker. What stays live across every back-off tick is the strip,
+        // via `attempts` on the wire (Task 408).
+        if (res.error === 'draft-present' && d.lastError !== 'draft-present') {
+          tellSender("the recipient's input box has unsent text in it", `mail-blocked-${d.id}`);
         }
         const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
         store.backOff(d.id, res.error, now + step);
