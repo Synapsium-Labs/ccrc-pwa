@@ -140,6 +140,13 @@ describe('SessionScreen shows outstanding mail', () => {
 // moment either forbidden shape is typed. Verified by mutation: pasting
 // `MAP[m.lastError]` or `<p>{m.lastError}</p>` into `MailStrip.tsx` reds it.
 //
+// The Record-key half tolerates an intervening cast — `MAP[m.lastError as string]`
+// reds exactly as `MAP[m.lastError]` does — and that is not a nicety: `lastError`
+// is `string | null`, so it CANNOT index a `Record<string, …>` without a cast or
+// a narrowing, which means the cast is the shape the type actively pushes a
+// developer toward. A tripwire blind to the likeliest spelling of the mistake
+// would be one of this build's "tests that cannot fail" (review finding, W4b).
+//
 // Its LIMIT, stated rather than left to be found: it matches on `X.lastError`,
 // so a value destructured into a bare local first (`const { lastError } = m`)
 // is invisible to it. That is a scan, not a type system; what it buys is that
@@ -161,7 +168,7 @@ describe('lastError is consumed as free text, or not at all', () => {
       .map((f) => path.relative(path.join(import.meta.dirname, '..'), f));
 
   it('is never used as a Record key — a new server value must not render undefined', () => {
-    expect(scan(/\[\s*[\w$]+(?:\.[\w$]+)*\.lastError\s*\]/)).toEqual([]);
+    expect(scan(/\[\s*[\w$]+(?:\.[\w$]+)*\.lastError(?:\s+as\s+[^\]]+)?\s*\]/)).toEqual([]);
   });
 
   it('is never rendered raw — it is a maintainer’s grep target, not operator copy', () => {

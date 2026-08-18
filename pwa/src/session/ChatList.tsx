@@ -348,11 +348,12 @@ function PendingBubble({
             patching an upstream lie is the shape this build removes.
 
             `draft` is still required and still non-blank: it is the
-            correspondence claim, and the row is blank exactly when the
-            message's own first line was blank (`blank-first-row`). After
-            Task 402 that no longer comes from `composePrompt` — a human
-            pressing Enter in the box first, or a pre-402 client, is what
-            produces it now. */}
+            correspondence claim, and the row is blank when the BOX's marker
+            row is empty. After Task 402 that can no longer come from our own
+            message — `composePrompt` strips leading blank lines before
+            anything is typed — so a human pressing Enter in the box first, or
+            a pre-402 client, is what produces it now. `blank-first-row` is the
+            server's name for that pane. */}
         {(send.code === 'enter-ignored' || send.code === 'verify-failed')
           && send.submittable === true
           && send.draft !== undefined && send.draft.trim() !== '' && (
