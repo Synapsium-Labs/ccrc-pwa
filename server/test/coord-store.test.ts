@@ -1241,3 +1241,67 @@ describe('releaseIsSafe', () => {
     ])).toBe(false);
   });
 });
+
+// TASK 407 — the provenance behind a stranded `/clear`.
+//
+// `dispatch.ts` types a literal `/clear` into a resumed worker's box and, on
+// `enter-ignored`, records `clear-refused:enter-ignored` on the run. That row
+// is the ONLY durable proof this system typed those four characters into that
+// box and never had them taken. `sendPrompt` will not clear a `/clear`
+// without it, because the text alone cannot tell ours from an operator's.
+describe('CoordStore: the /clear a dispatch stranded', () => {
+  const dispatchedWith = (s: CoordStore, sessionId: string, detail: string | undefined,
+                          clearedAt: number | null = null): number => {
+    const r = openRun(s, { wave: 2 }) as { id: number };
+    const adv = s.dispatchRun({ runId: r.id, sessionId, workspace: '/w/x', branch: 'ws/x',
+      resumed: true, clearedAt, items: [], ...(detail !== undefined ? { detail } : {}) });
+    expect(adv).toMatchObject({ ok: true });
+    return r.id;
+  };
+
+  it('reads TRUE for a session whose dispatch recorded an ignored Enter on its /clear', () => {
+    const s = store();
+    dispatchedWith(s, 'demo-quiet-mesa', 'clear-refused:enter-ignored');
+    expect(s.strandedClear('demo-quiet-mesa')).toBe(true);
+  });
+
+  it('reads FALSE for a session with no such record — the default, not a fallback', () => {
+    const s = store();
+    dispatchedWith(s, 'demo-quiet-mesa', undefined, 1_800_000_000_000);
+    expect(s.strandedClear('demo-quiet-mesa')).toBe(false);
+  });
+
+  it('is scoped to the SESSION the /clear was typed into', () => {
+    const s = store();
+    dispatchedWith(s, 'demo-quiet-mesa', 'clear-refused:enter-ignored');
+    expect(s.strandedClear('demo-other-mesa')).toBe(false);
+  });
+
+  // THE RULING, pinned. Only `enter-ignored` proves the text is SITTING there:
+  // the server watched it echo into the box and watched two Enters fail to
+  // move it. `verify-failed` — which since Build 8 also leaves the text in the
+  // box — proves the opposite about the evidence: the box never showed our
+  // text on any poll, so what is in it now is exactly the thing this gate must
+  // not guess at. Refuse.
+  it('reads FALSE for any other refusal code, verify-failed included', () => {
+    const s = store();
+    dispatchedWith(s, 'demo-quiet-mesa', 'clear-refused:verify-failed');
+    dispatchedWith(s, 'demo-two', 'clear-refused:draft-present');
+    dispatchedWith(s, 'demo-three', 'clear-refused:dialog-open');
+    expect(s.strandedClear('demo-quiet-mesa')).toBe(false);
+    expect(s.strandedClear('demo-two')).toBe(false);
+    expect(s.strandedClear('demo-three')).toBe(false);
+  });
+
+  // The permission EXPIRES, and this is the only thing that expires it: a run
+  // that has reached a terminal state is no longer waiting on a brief, and a
+  // durable row that grants a C-u forever is a standing licence to clear a box
+  // nobody is looking at any more.
+  it('reads FALSE once the run reaches a terminal state', () => {
+    const s = store();
+    const id = dispatchedWith(s, 'demo-quiet-mesa', 'clear-refused:enter-ignored');
+    expect(s.strandedClear('demo-quiet-mesa')).toBe(true);
+    expect(s.advance(id, 'failed', 'operator')).toMatchObject({ ok: true });
+    expect(s.strandedClear('demo-quiet-mesa')).toBe(false);
+  });
+});

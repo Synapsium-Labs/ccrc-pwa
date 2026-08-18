@@ -1644,6 +1644,12 @@ export class FleetWatcher {
    * only once this delivery has provably been attempted before (spec §2.2) —
    * see the send site's own comment — and it can never clear a human draft
    * either (`isMailResidue`'s own docstring, `inject/send.ts`).
+   * `ownStrandedClear` IS passed too (Task 407), and it is the one clear this
+   * lane makes on PROOF rather than on shape: `CoordStore.strandedClear` is a
+   * durable `clear-refused:enter-ignored` run event saying this system typed
+   * a `/clear` into that very box and never had it taken. No such row, no
+   * permission — the text `/clear` alone never opens anything, because a
+   * human types it too.
    *
    * WHAT THIS CANNOT SEE, stated because it bounds the guarantee: Claude Code
    * silently QUEUES a prompt sent mid-turn and renders the hint in a dim span
@@ -1926,8 +1932,23 @@ export class FleetWatcher {
         // text (send.ts's own docstring) — this is belt AND suspenders, not
         // either alone.
         const prior = d.attempts > 0 || d.deliveredAt !== null;
+        // `ownStrandedClear` (Task 407, operator ruling): the ONE dirty-box
+        // case this lane may clear on PROOF rather than on shape.
+        // `dispatch.ts` types a literal `/clear` into a resumed worker before
+        // its wave brief and, on `enter-ignored`, records that refusal on the
+        // run — the only durable evidence anywhere that this system typed
+        // those four characters into that box and never had them taken. Read
+        // here, at the send site, for exactly the row about to be typed.
+        //
+        // NOT an `isMailResidue` rung, and the difference is the whole gate:
+        // `/clear` is four characters an operator plausibly types and leaves
+        // sitting, so the TEXT proves nothing and a text-only recogniser
+        // would have put this lane's C-u onto a human's own slash command.
+        // With no run event to read, nothing is passed and `sendPrompt`
+        // refuses `draft-present` exactly as it does today.
+        const ownStrandedClear = store.strandedClear(d.toId);
         const res = await sendPrompt({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId, renderMailNudge(d.toId),
-          { resumeIfOwn: true, clearMailResidue: prior });
+          { resumeIfOwn: true, clearMailResidue: prior, ownStrandedClear });
         if (res.ok) {
           this.mailCooldown.set(d.toId, now);
           store.markDelivered(d.id, now);

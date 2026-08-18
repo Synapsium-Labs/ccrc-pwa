@@ -842,18 +842,18 @@ describe('Build 4 — one ccrc-mail fence', () => {
     expect(src).toContain('${fence}${MAIL_ENVELOPE_FENCE}');
   });
 
-  it('the fence spelling survives in ONE other file, named here BY NAME', () => {
+  it('the fence spelling survives NOWHERE else — the named gap is closed', () => {
     // THE EXCLUSION IS WRITTEN DOWN, not a scanner quietly narrowed — the
     // `MAIL_REJECT_CODES`-excludes-`undeliverable` idiom this file already
     // uses for `'mail-disabled'` one describe up.
     //
-    // `inject/send.ts` (`isMailResidue`) tests a DRAFT for a stranded envelope
-    // opener and spells the info string itself. It is a genuine second copy of
-    // one fact and it is recorded as a gap rather than fixed here: Build 4's
-    // wave-4 brief forbids touching `inject/send.ts` by name (it is the
-    // hardened send path, and this wave has no business inside it). Whoever
-    // next has a reason to edit that file should import `MAIL_ENVELOPE_FENCE`
-    // and shorten this list to `shared/api.ts` alone.
+    // `inject/send.ts` (`isMailResidue`) used to test a DRAFT for a stranded
+    // envelope opener with a hand-spelled copy of the info string, recorded
+    // here as a named gap with an instruction attached: whoever next had a
+    // reason to edit that file should import `MAIL_ENVELOPE_FENCE` and shorten
+    // this list to `shared/api.ts` alone. Build 8's wave 4 had five reasons
+    // and took the invitation, so the list is one entry again and the
+    // exclusion it documented is gone rather than merely smaller.
     //
     // ANY QUOTING, NOT JUST `'…'` (Task 19 mutation sweep, and the reason this
     // test was rewritten): the first draft scanned for the single-quoted
@@ -875,7 +875,6 @@ describe('Build 4 — one ccrc-mail fence', () => {
     const holders = ALL.filter((f) => FENCE_SPELLING.test(noComments(readFileSync(f, 'utf8'))))
       .map(rel).sort();
     expect(holders).toEqual([
-      'server/src/inject/send.ts',   // isMailResidue's draft probe — named gap, see above
       'shared/api.ts',               // MAIL_ENVELOPE_FENCE (the definition)
     ]);
   });

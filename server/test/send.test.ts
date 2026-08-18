@@ -972,6 +972,120 @@ describe('sendPrompt clearMailResidue', () => {
   });
 });
 
+// THE STRANDED `/clear` (Task 407, operator ruling). `dispatch.ts` types a
+// literal `/clear` into a resumed worker's box and documents, verbatim, the
+// wedge it creates when the Enter is swallowed: the text sits there, the mail
+// lane's next sweep refuses `draft-present`, keeps refusing, and parks the
+// wave brief. One dirty box silences a wave.
+//
+// AND THE RULING THAT SHAPES THE FIX: the clear is PROVENANCE-GATED, never
+// text-gated. `/clear` is four characters a human plausibly types and leaves
+// sitting, so an EXACT MATCH ON THE TEXT establishes nothing — it cannot tell
+// the one this system typed from the one an operator left. The caller must be
+// able to PROVE it typed this one (`ownStrandedClear`); with no proof the box
+// is refused, and that is the default rather than a fallback.
+//
+// Which is why this decision is NOT in `isMailResidue`. That function is a
+// pure text predicate: its inputs are one string, and provenance is not in
+// them. Putting `/clear` there would have made it answer a question its
+// arguments cannot see — and would have opened the mail lane's own C-u onto
+// an operator's `/clear` on every delivery with a prior attempt on record.
+describe('sendPrompt ownStrandedClear', () => {
+  const CLEAR_BOX = '❯ /clear\n';
+  const NUDGE = 'ccrc-mail: you have new mail. List it.';
+
+  it('clears a /clear the caller can PROVE it typed, then types and sends', async () => {
+    const { tmux, calls } = fakeTmux([
+      CLEAR_BOX,                 // initial — our own stranded /clear
+      '❯ \n',                    // after C-u — cleared
+      `❯ ${NUDGE}\n`,            // verify — the nudge echoed
+      '❯ \n',                    // after Enter — box emptied
+    ]);
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', NUDGE,
+      { resumeIfOwn: true, clearMailResidue: true, ownStrandedClear: true },
+    );
+    expect(res).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([
+      ['tmux', 'send-keys', '-t', 'cc-x', 'C-u'],
+      ['tmux', 'send-keys', '-t', 'cc-x', '-l', NUDGE],
+      ['tmux', 'send-keys', '-t', 'cc-x', 'Enter'],
+    ]);
+  });
+
+  // THE PAIR THAT IS THE WHOLE POINT: byte-identical box, opposite answers,
+  // and the only difference is whether the caller could prove provenance. An
+  // implementation that decides this from the text alone cannot pass both.
+  it('refuses a byte-identical /clear it CANNOT prove is its own — even with clearMailResidue set', async () => {
+    const { tmux, calls } = fakeTmux([CLEAR_BOX]);
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', NUDGE,
+      { resumeIfOwn: true, clearMailResidue: true },
+    );
+    expect(res).toEqual({ ok: false, error: 'draft-present', draft: '/clear' });
+    // REFUSE-ONLY: not one keystroke goes near an operator's four characters.
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+
+  // The text predicate stays a text predicate. If `/clear` ever migrates into
+  // it, the refusal above stops being reachable through the mail lane — which
+  // passes `clearMailResidue` on every delivery with a prior attempt.
+  it('isMailResidue does not know about /clear — provenance is not in its inputs', () => {
+    expect(isMailResidue('/clear')).toBe(false);
+    expect(isMailResidue(' /clear ')).toBe(false);
+  });
+
+  it('the permission is scoped to that ONE draft — any other text is still refused', async () => {
+    const { tmux, calls } = fakeTmux(['❯ can you also check the staging deploy\n']);
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', NUDGE,
+      { resumeIfOwn: true, ownStrandedClear: true },
+    );
+    expect(res).toEqual({ ok: false, error: 'draft-present', draft: 'can you also check the staging deploy' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+
+  it('a /clear that is only a PREFIX is not the draft we typed', async () => {
+    const { tmux, calls } = fakeTmux(['❯ /clear the cache before you start\n']);
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', NUDGE,
+      { resumeIfOwn: true, ownStrandedClear: true },
+    );
+    expect(res).toMatchObject({ ok: false, error: 'draft-present' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+
+  // THE WHOLE BOX, the same unit §4.2 taught the clobber guard and clearBox's
+  // terminator to read. `dispatch.ts` typed ONE line; a box whose marker row
+  // reads `/clear` with rows below it is not the box we left, and clearing it
+  // would fire C-u at whatever is underneath.
+  it('refuses when rows below the marker hold anything — that box is not the one we left', async () => {
+    const withRowsBelow = [
+      'earlier turn', '─'.repeat(24),
+      '❯ /clear',
+      '  the human’s real second line',
+      '─'.repeat(24), '  👤 team·max',
+    ].join('\n') + '\n';
+    const { tmux, calls } = fakeTmux([withRowsBelow]);
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', NUDGE,
+      { resumeIfOwn: true, ownStrandedClear: true },
+    );
+    expect(res).toMatchObject({ ok: false, error: 'draft-present' });
+    expect((res as { draft?: string }).draft).toBe('/clear\nthe human’s real second line');
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+
+  it('reports draft-clear-failed, not a false success, when the /clear will not clear', async () => {
+    const { tmux } = fakeTmux([CLEAR_BOX, CLEAR_BOX]);
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', NUDGE,
+      { resumeIfOwn: true, ownStrandedClear: true },
+    );
+    expect(res).toEqual({ ok: false, error: 'draft-clear-failed', draft: '/clear' });
+  });
+});
+
 // Claude Code 2.1.220 does NOT empty the box on Enter when the session is
 // busy — it queues the turn and swaps the box row for a hint ("Press up to
 // edit queued messages"), captured live against a real busy session. The old

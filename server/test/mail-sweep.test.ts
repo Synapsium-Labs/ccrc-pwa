@@ -1338,3 +1338,79 @@ describe('sweepMail: successful replays eventually park too (review finding 20)'
     expect(row.replayCount).toBe(0);
   });
 });
+
+// TASK 407 — the wedge `dispatch.ts` documents creating, end to end through
+// the lane that has to live with it. A resumed worker's `/clear` came back
+// `enter-ignored`, so the literal sits in its box; every sweep after that
+// refuses `draft-present`, and the wave brief parks `undeliverable` with
+// nothing anywhere saying why.
+//
+// The fix is PROVENANCE-GATED, and these two tests are the same box with two
+// different answers: the delivery lane clears a `/clear` the ledger proves
+// this system typed, and refuses a byte-identical one it cannot.
+describe('sweepMail: the /clear a dispatch stranded', () => {
+  const CLEAR_BOX = '❯ /clear\n';
+  /** The pane script for a box holding `/clear`: the guard's read, then the
+   *  post-C-u read, then the echo, then the box after Enter. */
+  const STRANDED_PANES = [CLEAR_BOX, emptyBox, echoedBox(NUDGE), emptyBox];
+
+  /** A run dispatched onto `ID` whose post-resume `/clear` was refused with
+   *  `code` — the durable record `CoordStore.strandedClear` reads. */
+  const dispatchRefusedClear = (coord: CoordStore, code: string): void => {
+    const opened = coord.openRun({ program: 'build8', title: 'T', project: 'demo',
+      wave: 2, waveOf: 3, claimedBy: 'demo-boss' });
+    if (!('id' in opened)) throw new Error(`fixture openRun refused: ${JSON.stringify(opened)}`);
+    coord.dispatchRun({ runId: opened.id, sessionId: ID, workspace: '/w/demo', branch: 'ws/demo',
+      resumed: true, clearedAt: null, items: [], detail: `clear-refused:${code}` });
+  };
+
+  it('clears the /clear and delivers, when the ledger proves the Enter was ignored', async () => {
+    const h = harness({ panes: STRANDED_PANES });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home);
+    dispatchRefusedClear(coord, 'enter-ignored');
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(keyPresses(h.calls)).toContain('C-u');
+    expect(literalSends(h.calls)).toEqual([NUDGE]);
+    expect(deliveryRow(coord, id).state).toBe('delivered');
+  });
+
+  // THE SAME BOX, NO RECORD. `/clear` is four characters an operator types
+  // too, and nothing about the text tells them apart — so the default is the
+  // refusal, not the clear.
+  it('refuses a byte-identical /clear with no such record — not one keystroke', async () => {
+    const h = harness({ panes: STRANDED_PANES });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(keyPresses(h.calls)).not.toContain('C-u');
+    expect(literalSends(h.calls)).toEqual([]);
+    expect(deliveryRow(coord, id).state).toBe('queued');
+    expect(deliveryRow(coord, id).lastError).toBe('draft-present');
+  });
+
+  it('refuses when the recorded refusal is a code that proves nothing about the box', async () => {
+    const h = harness({ panes: STRANDED_PANES });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home);
+    dispatchRefusedClear(coord, 'verify-failed');
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([]);
+    expect(deliveryRow(coord, id).lastError).toBe('draft-present');
+  });
+});

@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { tx } from './db.js';
+import { CLEAR_REFUSED_STRANDS_TEXT } from './rundefs.js';
 import {
   isMailDeliveryState, isMailKind, isNotifyKind, isProgramState, isRunState, isWorkItemState,
   RUN_TRANSITIONS,
@@ -11,6 +12,12 @@ import {
 /** One entry in `$REG/<id>.prhistory` (ccd/ccd:855-858). Re-declared as a TYPE
  *  here rather than parsed twice: `coord/prhistory.ts` owns the reader. */
 export interface PrLineageEntry { pr: number; branch: string; phase: string; recordedAt: number }
+
+/** The run states nothing can leave — DERIVED from `RUN_TRANSITIONS` (a state
+ *  with no outgoing edge IS terminal), never a second hand-written list of the
+ *  same two words. Adding a terminal state to the table is enough. */
+const TERMINAL_RUN_STATES: readonly RunState[] =
+  (Object.keys(RUN_TRANSITIONS) as RunState[]).filter((s) => RUN_TRANSITIONS[s].length === 0);
 
 /**
  * A run row as the STORE reads it: `RunSummary` (the wire shape) plus
@@ -509,6 +516,43 @@ export class CoordStore {
    * column honestly null, never called with a guess. */
   setClearedAt(runId: number, at: number): void {
     this.db.prepare('UPDATE runs SET clearedAt = ? WHERE id = ?').run(at, runId);
+  }
+
+  /**
+   * Did a LIVE run's dispatch record that it typed `/clear` into this
+   * session's box and never had it taken? (Task 407.)
+   *
+   * The provenance half of `sendPrompt`'s `ownStrandedClear` gate, and the
+   * only thing in this system that can answer it. `dispatch.ts` types the
+   * literal `/clear` into a resumed worker before its wave brief; when the
+   * Enter is swallowed it writes `clear-refused:enter-ignored` onto the run
+   * (D-47). That row is the record — the text in the box is not, because
+   * `/clear` is four characters a human plausibly types and leaves sitting,
+   * and nothing about the STRING distinguishes ours from theirs. No row, no
+   * permission: `sendPrompt` refuses `draft-present` exactly as it does today,
+   * which is the default rather than a fallback (operator ruling).
+   *
+   * TWO NARROWINGS, both deliberate:
+   *  - `CLEAR_REFUSED_STRANDS_TEXT` only — see its own docstring for why
+   *    `verify-failed`, which since Build 8 also leaves text in the box, is
+   *    NOT proof of what is in it.
+   *  - a run in a TERMINAL state grants nothing. This is the only thing that
+   *    expires the permission, and it needs to exist: `run_events` rows are
+   *    durable forever, and a permanent licence to fire C-u at a box would
+   *    eventually meet an operator who typed `/clear` into a session whose
+   *    program ended weeks ago.
+   *
+   * SYNCHRONOUS, like everything here, and a dedicated one-row read: it runs
+   * only for a delivery that has already cleared every gate and is about to
+   * be typed, never over every due row on every sweep.
+   */
+  strandedClear(sessionId: string): boolean {
+    const row = this.db.prepare(
+      'SELECT 1 AS x FROM run_events e JOIN runs r ON r.id = e.runId ' +
+      `WHERE r.sessionId = ? AND e.detail = ? AND r.state NOT IN (${TERMINAL_RUN_STATES.map(() => '?').join(', ')}) ` +
+      'LIMIT 1',
+    ).get(sessionId, CLEAR_REFUSED_STRANDS_TEXT, ...TERMINAL_RUN_STATES);
+    return row !== undefined;
   }
 
   /** Dispatch's write: the workspace a run landed in, and whether it was a

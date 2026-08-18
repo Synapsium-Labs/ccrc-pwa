@@ -10,7 +10,7 @@ import { readHookState } from '../hookstate.js';
 import { CCD_ARGV, verbSupported } from '../ccdargv.js';
 import { sendPrompt } from '../inject/send.js';
 import { type AdvanceResult, type CoordStore } from './store.js';
-import { COORDINATOR_PAUSE_MARKER, MAIL_DISABLED_MARKER, holdReason, queueSystemMail } from './rundefs.js';
+import { COORDINATOR_PAUSE_MARKER, MAIL_DISABLED_MARKER, clearRefusedDetail, holdReason, queueSystemMail } from './rundefs.js';
 import {
   MAIL_BODY_MAX_BYTES, SPAWN_NOT_RECORDED, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, spawnVerdict,
   type RunRefuseCode, type RunState, type SpawnVerdict,
@@ -418,8 +418,12 @@ export async function dispatchRun(
     // and it is one this build's table cannot name. Spending that member on the
     // absent case tells the operator ccd reported something strange when ccd
     // reported nothing, and the two become indistinguishable in the event trail.
+    // `clearRefusedDetail`, not a literal: Task 407 gave this token a READER
+    // (`CoordStore.strandedClear` — the proof that lets the mail lane clear a
+    // `/clear` this dispatch stranded), and a writer and a matcher spelling
+    // the same string by hand is how that permission silently stops opening.
     detail: adopted ? `spawn-adopted:${adoptedSpawn ?? SPAWN_NOT_RECORDED}`
-      : clearError !== null ? `clear-refused:${clearError}` : undefined });
+      : clearError !== null ? clearRefusedDetail(clearError) : undefined });
   if (!adv.ok) return { ok: false, kind: 'advanceFailed', adv };
 
   // 7: the brief, as MAIL (kind `status`, subject `wave-brief`) — never

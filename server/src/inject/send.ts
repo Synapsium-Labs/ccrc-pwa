@@ -1,7 +1,7 @@
 import type { Tmux } from '../exec.js';
 import { hasMenu, parseDialog } from '../pane/dialog.js';
 import type { KeyedQueue } from './queue.js';
-import { composePrompt } from '../../../shared/api.js';
+import { composePrompt, MAIL_ENVELOPE_FENCE } from '../../../shared/api.js';
 
 export interface SendDeps {
   tmux: Tmux;
@@ -377,14 +377,51 @@ function matchesOwnDraft(ansiPane: string, parts: readonly string[]): boolean {
  * human mid-sentence thought starts with a literal `[Pasted text #` chip or
  * opens a ```ccrc-mail fence — so `clearMailResidue`'s gate on this function
  * can never clear a human's own text (F2).
+ *
+ * AND IT STAYS A PURE TEXT PREDICATE. Task 407 wanted the stranded `/clear`
+ * `dispatch.ts` leaves behind cleared too, and the obvious place looked like a
+ * third rung here. It is not: `/clear` is four characters a human plausibly
+ * types and leaves sitting, so no property of the STRING distinguishes ours
+ * from theirs, and this function's whole guarantee above — "matches nothing a
+ * human would write" — would have become false. The distinction that actually
+ * exists is PROVENANCE, and provenance is not in this function's arguments.
+ * See `isStrandedClear` and `sendPrompt`'s `ownStrandedClear` below.
+ *
+ * The fence comes from `MAIL_ENVELOPE_FENCE` (`shared/api.ts`) rather than a
+ * hand-spelled literal — `single-definition.test.ts`'s own recorded gap,
+ * taking the invitation its comment left by name.
  */
 const MAIL_RESIDUE_CHIP = /^\[Pasted text #\d+/;
 export function isMailResidue(draft: string): boolean {
   if (draft === '') return false;
   if (MAIL_RESIDUE_CHIP.test(draft)) return true;
-  if (draft.startsWith('```') && draft.includes('ccrc-mail')) return true;
+  if (draft.startsWith('```') && draft.includes(MAIL_ENVELOPE_FENCE)) return true;
   return false;
 }
+
+/** The exact text `dispatch.ts` types into a resumed worker's box before a
+ *  wave brief (`sendPrompt(..., '/clear')`) — the one draft `ownStrandedClear`
+ *  can ever be about. */
+const STRANDED_CLEAR = '/clear';
+
+/**
+ * Does this box hold EXACTLY the `/clear` a caller is claiming it stranded —
+ * that one line, and nothing else?
+ *
+ * The text half of a two-part gate, and by itself it proves NOTHING: a
+ * `/clear` sitting in a box is equally consistent with an operator having
+ * typed one and walked away. `sendPrompt` only consults this when the caller
+ * has separately PROVEN the send was its own (`ownStrandedClear`), and a
+ * caller with no proof gets the ordinary `draft-present` refusal — the
+ * default, not a fallback.
+ *
+ * THE WHOLE BOX, not the marker row: the stranded send was one line, so a box
+ * with rows below the marker is not the box we left, and a C-u fired at it
+ * would land on whatever is underneath. Same unit the clobber guard and
+ * `clearBox`'s terminator read, for the same reason (§4.2).
+ */
+const isStrandedClear = (ansiPane: string): boolean =>
+  draftOf(ansiPane) === STRANDED_CLEAR && !hasContentBelowMarker(ansiPane);
 
 /**
  * Inject a prompt into the session's Claude Code input box, serialized per
@@ -408,12 +445,28 @@ export function isMailResidue(draft: string): boolean {
  * BEFORE the ordinary `replaceDraft`/`draft-present` fork, so a caller that
  * sets both gets: resume own draft > clear+type over recognized residue >
  * replace (if asked) > refuse.
+ *
+ * `ownStrandedClear` (Task 407, operator ruling): a caller that sets this is
+ * stating "I HAVE PROOF this system typed a `/clear` into this box and the
+ * session never took it" — not "this box looks like it holds one". The
+ * difference is the entire feature. `dispatch.ts` types that literal before a
+ * wave brief and documents the wedge a swallowed Enter creates: the mail
+ * lane's next sweep refuses `draft-present`, keeps refusing, and parks the
+ * brief `undeliverable` with nothing surfacing why — one dirty box silences a
+ * wave. But `/clear` is also four characters an operator plausibly types and
+ * leaves sitting, and no property of the text tells the two apart, so THIS
+ * FLAG, not the string, is what opens the clear. `watch.ts` sets it from
+ * `CoordStore.strandedClear` — a durable `clear-refused:enter-ignored` run
+ * event — and a caller with nothing to read passes nothing and gets the
+ * ordinary refusal. Same rung as `clearMailResidue`, and both still lose to
+ * `resumeIfOwn`.
  */
 export function sendPrompt(
   d: SendDeps,
   id: string,
   text: string,
-  opts: { replaceDraft?: boolean; attachments?: readonly string[]; resumeIfOwn?: boolean; clearMailResidue?: boolean } = {},
+  opts: { replaceDraft?: boolean; attachments?: readonly string[]; resumeIfOwn?: boolean;
+          clearMailResidue?: boolean; ownStrandedClear?: boolean } = {},
 ): Promise<SendResult> {
   const sleep = d.sleep ?? defaultSleep;
   // Computed up front, from `text`/`attachments` alone — independent of the
@@ -499,7 +552,16 @@ export function sendPrompt(
       // `replaceDraft`/`draft-present` fork so a residue-aware caller need not
       // also pass `replaceDraft` — clearing recognized machine debris is not
       // the same permission as clearing whatever a human is mid-typing.
-      if (opts.clearMailResidue && isMailResidue(draft)) {
+      //
+      // `ownStrandedClear` rides the SAME clear, deliberately: the act is
+      // identical (C-u the box, then type), and only the permission differs.
+      // `isMailResidue` answers "no human writes this"; `ownStrandedClear`
+      // answers "this system PROVED it wrote this one" — a `/clear` with no
+      // proof behind it falls through to the refusal below, untouched, which
+      // is what keeps the refuse-only ruling true for an operator who typed
+      // the same four characters.
+      if ((opts.clearMailResidue === true && isMailResidue(draft))
+          || (opts.ownStrandedClear === true && isStrandedClear(pane))) {
         const cleared = await clearBox(d, id, sleep, { blind: 1, look: REPLACE_MAX_PRESSES - 1 });
         if (cleared.state === 'dead') return { ok: false, error: 'not-alive' };
         if (cleared.state === 'menu') return { ok: false, error: 'dialog-open' };
