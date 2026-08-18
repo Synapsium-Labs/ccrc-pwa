@@ -488,6 +488,8 @@ exec bash "$ROOT/ccd/ccrc" install
 
 (D-N numbering continues the project-global sequence; next free number at plan time: **D-84**. Add entries as execution finds them.)
 
+- **D-84** — Task 1's brief predicted the adopt-HERE fix could be pinned by invoking `ccrc-adopt` through a symlink: measured impossible. For a directly-invoked script, `$0` and `${BASH_SOURCE[0]}` are byte-identical through a symlink in all three invocation shapes (direct exec, `bash <path>`, PATH lookup) — verified independently by implementer and reviewer. The shipped test pins the property the fix's own comment names instead: `dirname` is a PATH lookup, measured with a lying-`dirname` planted on the fixture PATH. The `$0`-vs-`BASH_SOURCE` half of the idiom remains guarded only under `source` (ccrc-cli's source-guard pattern), which is the one shape where they genuinely differ.
+
 ## Deferred out of this plan, recorded so nothing is inherited as a surprise
 
 - **`ccd version`'s python3 stamp reader** (F-survey item 3): the fix edits `ccd/ccd:2087-2109`, which a parallel session owns. Queued behind that session's merge; the seam and fix shape are documented in the survey report.
