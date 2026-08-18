@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=b9b40e50c68e07cd14f350177a137474eca7541cd9b1111703e5852018cac064
+# ccrc:generated 1 sha256=0d60352e811afb84dee3c3eec483abba39b487080b999203dcd28bb741b67593
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
 set -uo pipefail
@@ -7136,7 +7136,7 @@ _dispatch_swap() {   # id target — run `ccd swap` in ITS OWN transient systemd
   # SWAP_COOLDOWN (900s) dwarfs the jitter window, so nothing re-dispatches while
   # a delayed swap is still pending.
   local jitter=0
-  [[ "${SWAP_JITTER:-0}" -gt 0 ]] && jitter=$(( RANDOM % (SWAP_JITTER + 1) ))
+  [[ "${SWAP_JITTER:-0}" =~ ^[0-9]+$ && "${SWAP_JITTER:-0}" -gt 0 ]] && jitter=$(( RANDOM % (SWAP_JITTER + 1) ))
   echo "$(date '+%F %T') dispatch $1 -> $2 (in ${jitter}s)" >> "$REG/swap.log"
   systemd-run --user --collect --quiet \
     bash -c "sleep $jitter; exec '$HOME/.local/bin/ccd' swap '$1' '$2' >>'$REG/swap.log' 2>&1" \
@@ -7354,7 +7354,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   local id="$1" wrapper home now last pane target hard_blocked="" blocked bts
   wrapper=$(_reg_get "$id" wrapper); home=$(_home_for "$id")
   now=$(date +%s); last=$(_reg_get "$id" lastswap)
-  [[ -n "$last" && $((now - last)) -lt "$SWAP_COOLDOWN" ]] && return 0
+  [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$SWAP_COOLDOWN" ]] && return 0
   # A refused swap is not retried on the 5-second supervise tick. cmd_swap writes
   # $REG/<id>.swapblocked as "<epoch> <reason>" when it cannot carry the conversation
   # (spec §2.4); without this gate one refusal would produce 720 banners an hour, each
@@ -7450,9 +7450,9 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   local id="$1" now last lastswap pane pct wrapper spid sf st sua t cur
   now=$(date +%s)
   last=$(_reg_get "$id" lastcompact)
-  [[ -n "$last" && $((now - last)) -lt "$COMPACT_COOLDOWN" ]] && return 0
+  [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$COMPACT_COOLDOWN" ]] && return 0
   lastswap=$(_reg_get "$id" lastswap)   # a swap landing already compacted from summary — don't double up
-  [[ -n "$lastswap" && $((now - lastswap)) -lt "$COMPACT_COOLDOWN" ]] && return 0
+  [[ "$lastswap" =~ ^[0-9]+$ && $((now - lastswap)) -lt "$COMPACT_COOLDOWN" ]] && return 0
   pane=$(tmux capture-pane -t "$(_tmux "$id")" -p 2>/dev/null | tail -8)
   [[ -n "$pane" ]] || return 0
   pct=$(_pane_ctx_pct "$pane"); [[ -n "$pct" ]] || return 0
@@ -7762,7 +7762,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # summary there (cheap) instead of full-as-is (700k re-read on the fresh limit pool).
   local fromswap=0 lastswap
   lastswap=$(_reg_get "$id" lastswap)
-  [[ -n "$lastswap" && $(( $(date +%s) - lastswap )) -lt 300 ]] && fromswap=1
+  [[ "$lastswap" =~ ^[0-9]+$ && $(( $(date +%s) - lastswap )) -lt 300 ]] && fromswap=1
   if [[ "$mode" == "resume" ]]; then sidflag="--resume '$uuid'"; else sidflag="--session-id '$uuid'"; fi
   # Ahead of the only line that can create the tmux server, and AFTER everything
   # that can `die`: a spawn that is going to abort must not leave a scope behind.
