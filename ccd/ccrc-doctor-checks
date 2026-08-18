@@ -401,13 +401,21 @@ _check_gh_auth() {
     return 1
   fi
 
+  # `--hostname github.com`: this check's job is one host's credential, and
+  # `gh auth status` with no host filter prints EVERY host this box is logged
+  # into concatenated together. Task 1 of stage2d (D-82's neighbour) measured
+  # the consequence — a second host's `Token scopes: 'repo'` satisfied the
+  # `case` match below even when github.com's own section had no 'repo' at
+  # all, which is a false PASS on exactly the credential the remedy already
+  # names (`gh auth refresh -h github.com -s repo` is scoped to github.com;
+  # the check that approved it should be too).
   local out rc
   if command -v timeout >/dev/null 2>&1; then
-    out="$(timeout "$CCRC_DOCTOR_GH_TIMEOUT" gh auth status 2>&1)"; rc=$?
+    out="$(timeout "$CCRC_DOCTOR_GH_TIMEOUT" gh auth status --hostname github.com 2>&1)"; rc=$?
   else
     # A box without coreutils' `timeout` still gets an answer; it just gets it
     # without a deadline. Silently skipping the check would be the worse trade.
-    out="$(gh auth status 2>&1)"; rc=$?
+    out="$(gh auth status --hostname github.com 2>&1)"; rc=$?
   fi
 
   if [ "$rc" -eq 124 ]; then

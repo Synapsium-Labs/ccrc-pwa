@@ -274,20 +274,54 @@ function writeSymlinkWrapper(home: string, id: string, target: string): void {
 
 const shq = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
 
+/** Slices `lines` down to the block belonging to `host`: the line spelling the
+ *  host itself (unindented, exactly as `gh auth status` prints a section
+ *  header) through the last following line that starts with a space. Absent
+ *  host header (a fixture that is not host-sectioned at all — the "logged
+ *  out" message, say) falls back to the WHOLE of `lines`, unchanged: there is
+ *  no per-host structure to narrow, and the check must still see the message. */
+function hostSection(lines: string[], host: string): string[] {
+  const i = lines.indexOf(host);
+  if (i === -1) return lines;
+  const out = [lines[i]];
+  for (let j = i + 1; j < lines.length && lines[j].startsWith(' '); j++) out.push(lines[j]);
+  return out;
+}
+
 /** Overwrites the POISONED `gh` in `<home>/.local/bin` with one that answers
  *  `auth status` from canned lines. Same directory on purpose: the poison's
  *  position at the head of PATH is what makes the real `gh` unreachable, and
  *  that ordering must not be displaced by a second stub directory in front of
- *  it. Any argv other than `auth status` is a loud failure, so a check that
- *  started calling `gh` for something else could not pass unnoticed. */
+ *  it.
+ *
+ *  TWO argv shapes are answered, because Task 1 of stage2d moved the check
+ *  from bare `gh auth status` to `gh auth status --hostname github.com`
+ *  (D-82's neighbour: a second host's `'repo'` scope must not mask github.com
+ *  lacking it) and old single-host fixtures must keep meaning what they said.
+ *  Plain `auth status` still answers with the whole of `lines`; the
+ *  `--hostname github.com` form answers with ONLY that host's section
+ *  (`hostSection`, above) — the same content for every fixture in this file
+ *  that names `github.com` first and nothing else, so no existing fixture had
+ *  to change. Any other argv is a loud failure (exit 90), and EVERY argv —
+ *  matched or not — is appended to `$HOME/gh-poison`, the same log
+ *  `ghContainedEnv`'s poison writes to and `ghPoisonAt` reads: once this stub
+ *  overwrites the poison there is no other reader left for that file, and
+ *  reusing it (rather than inventing a second log) is what lets a test assert
+ *  on the argv the check really sent without a new helper. */
 function ghStub(home: string, lines: string[], code: number): void {
   const bin = join(home, '.local', 'bin');
   mkdirSync(bin, { recursive: true });
-  const emit = lines.length ? `  printf '%s\\n' ${lines.map(shq).join(' ')} >&2\n` : '';
+  const scoped = hostSection(lines, 'github.com');
+  const emit = (ls: string[]): string => ls.length ? `  printf '%s\\n' ${ls.map(shq).join(' ')} >&2\n` : '';
   writeFileSync(join(bin, 'gh'),
     '#!/bin/sh\n'
-    + 'if [ "$1" = "auth" ] && [ "$2" = "status" ]; then\n'
-    + emit
+    + 'printf \'%s\\n\' "$*" >> "$HOME/gh-poison"\n'
+    + 'if [ "$#" = 4 ] && [ "$1" = "auth" ] && [ "$2" = "status" ] && [ "$3" = "--hostname" ] && [ "$4" = "github.com" ]; then\n'
+    + emit(scoped)
+    + `  exit ${code}\n`
+    + 'fi\n'
+    + 'if [ "$#" = 2 ] && [ "$1" = "auth" ] && [ "$2" = "status" ]; then\n'
+    + emit(lines)
     + `  exit ${code}\n`
     + 'fi\n'
     + 'echo "fixture gh: unexpected argv: $*" >&2\nexit 90\n', { mode: 0o755 });
@@ -668,6 +702,32 @@ describe('ccrc doctor: gh_auth', () => {
     expect(runDoctor(home).stdout).toMatch(/^FAIL gh_auth: /m);
   });
 
+  it("does not let a SECOND host's 'repo' scope mask github.com lacking it (D-82's neighbour)", () => {
+    // MEASURED RED (before Task 1 of stage2d): with `_check_gh_auth` still
+    // calling bare `gh auth status`, this fixture's `ghe.example.com` section
+    // carries `Token scopes: 'repo'`, and the check's `case` match is a plain
+    // substring test over the WHOLE combined output — so it matched, and the
+    // check printed exactly `PASS gh_auth: authenticated, and the token
+    // carries the 'repo' scope` (code 0, summary "0 failed") even though
+    // github.com's own section, three lines above, has no 'repo' at all.
+    const home = healthy('ccrc-doctor-ghauth-multihost-');
+    ghStub(home, [
+      'github.com',
+      '  - Logged in to github.com account fixture-bot (keyring)',
+      '  - Active account: true',
+      '  - Git operations protocol: https',
+      '  - Token: gho_************************************',
+      "  - Token scopes: 'gist', 'read:org'",
+      'ghe.example.com',
+      '  - Logged in to ghe.example.com account fixture-bot (keyring)',
+      '  - Active account: false',
+      "  - Token scopes: 'repo'",
+    ], 0);
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^FAIL gh_auth: .*repo/m);
+    expect(r.code).toBe(1);
+  });
+
   it('WARNS, not passes, when gh reports no scopes line at all — unknown is not fine', () => {
     // An unreadable scope list is a third state: authenticated, but this check
     // cannot say whether the token can write. Collapsing it into PASS would
@@ -694,9 +754,17 @@ describe('ccrc doctor: gh_auth', () => {
   it('really executes the contained gh — the poison logs the argv it saw', () => {
     // Proof the check is not vacuous AND proof of containment in one
     // assertion: the only `gh` this suite can reach is the fixture's own.
+    // MEASURED: Task 1 of stage2d changed the check's own argv from
+    // `auth status` to `auth status --hostname github.com` (gh_auth's
+    // github.com-scoping fix, above) — this exact-match `toContain` went red
+    // on the unmodified logged line ("expected [ 'auth status --hostname
+    // github.com' ] to include 'auth status'"), which is the correct
+    // reaction: the poison is doing its job of recording precisely what was
+    // asked. Loosened to a substring match so the containment proof survives
+    // the argv the check legitimately sends now.
     const home = broken('ccrc-doctor-ghauth-poison-');
     const r = runDoctor(home);
-    expect(ghPoisonAt(home)).toContain('auth status');
+    expect(ghPoisonAt(home).some((l) => l.includes('auth status'))).toBe(true);
     expect(r.stdout).toMatch(/^FAIL gh_auth: /m);
   });
 });
