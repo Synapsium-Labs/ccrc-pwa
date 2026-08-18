@@ -219,10 +219,12 @@ function PendingClipThumbs({ id, attachments }: { id: string; attachments: Pendi
 }
 
 /**
- * The rescue for `enter-ignored`: the server proved our text reached the input
- * box and then watched two Enters get swallowed, so it left the text there
- * rather than risk a misplaced keystroke. One more Enter is the whole fix, and
- * before this button the only way to press it was to open a terminal.
+ * The rescue for a refusal the server marked `submittable`: it proved our text
+ * reached the input box and then watched two Enters get swallowed, so it left
+ * the text there rather than risk a misplaced keystroke. One more Enter is the
+ * whole fix, and before this button the only way to press it was to open a
+ * terminal. (`enter-ignored` is the only arm that earns the flag today; the
+ * caller gates on the flag rather than the code — see the gate's own comment.)
  *
  * `expect` is what makes the outcome attributable to THIS bubble. `POST
  * /submit` presses Enter on whatever the box holds, and the box is shared
@@ -315,24 +317,45 @@ function PendingBubble({
         <p className="pending-error">{send.error}</p>
       )}
       <div className="pending-actions">
-        {/* Only for `enter-ignored`, and that narrowness is the point: it is
-            the one refusal where the server has PROVEN the text is sitting in
-            the box and both of `sendPrompt`'s Enters were swallowed. Retry
-            would re-type a message that is already there; Send it presses one
-            more Enter. Every other failure leaves nothing to submit.
+        {/* Gated on the server's PROOF, not on the code — and that distinction
+            is the whole design.
 
-            AND only when that refusal carried the box row it read. Without it
-            there is nothing to prove the box still holds this message rather
-            than a later one, and a button that submits an unproven box is the
-            hazard this whole route is gated against — so the operator gets the
-            sentence and the terminal, not a tap that might send someone else's
-            text. (The row is blank when the BOX's marker row is empty — no
-            longer something our own message can cause, since `composePrompt`
-            strips leading blank lines before anything is typed; it means a
-            human pressed Enter in the box first, or an older send left the
-            shape behind. `blank-first-row` is the server's name for that
-            pane.) */}
-        {send.code === 'enter-ignored' && send.draft !== undefined && send.draft.trim() !== '' && (
+            The rule this comment used to state was "only `enter-ignored`,
+            because it is the one refusal where the server has PROVEN the text
+            is in the box", and it warned that a button submitting an unproven
+            box is the hazard this route exists to be gated against. That
+            warning is still exactly right, and it is why the condition below
+            is NOT widened on `code`: the attachment path's `verify-failed`
+            also carries a `draft`, but that draft is what a FAILED clear left
+            behind — a FRAGMENT of the message. `POST /submit`'s correspondence
+            gate cannot catch it, because the fragment IS what the box reads,
+            so it matches and Enter submits the fragment.
+
+            `submittable` is the server's answer to that objection: it is set
+            only where the server watched the text echo into the box and then
+            fail to leave, so the row is the whole message and one Enter would
+            send exactly it. An older server never sends it — no button,
+            today's behaviour, the safe direction.
+
+            THE `verify-failed` LIMB IS DORMANT ON TODAY'S SERVER, deliberately
+            and not by oversight: `SendResult.submittable` sets the flag on
+            `enter-ignored` alone, and states why neither `verify-failed` arm
+            can honestly claim it (an empty box, somebody else's words, or a
+            partial render of our own text — all three fragments or foreign).
+            It is written here anyway because the gate belongs on the proof: a
+            server arm that ever earns the flag needs no client change, and
+            until one does, this limb renders nothing. A downstream gate
+            patching an upstream lie is the shape this build removes.
+
+            `draft` is still required and still non-blank: it is the
+            correspondence claim, and the row is blank exactly when the
+            message's own first line was blank (`blank-first-row`). After
+            Task 402 that no longer comes from `composePrompt` — a human
+            pressing Enter in the box first, or a pre-402 client, is what
+            produces it now. */}
+        {(send.code === 'enter-ignored' || send.code === 'verify-failed')
+          && send.submittable === true
+          && send.draft !== undefined && send.draft.trim() !== '' && (
           <SendItButton id={id} sendKey={send.key} expect={send.draft} onSent={onDiscard} />
         )}
         <button type="button" className="pending-retry" onClick={() => onRetry?.(send.key)}>

@@ -423,3 +423,27 @@ describe('apiErrorText and the code translators that compose with it', () => {
     }
   });
 });
+
+// TASK 410 — `verify-failed`'s sentence was false twice after this build.
+describe('send-failure copy', () => {
+  it("verify-failed's sentence stops sending the operator to a terminal", () => {
+    // The old copy was "The session never showed the text — open the terminal
+    // to check." Both halves stopped being right: the ordinary path now
+    // REFUSES rather than clearing, so the text is still in the box, and the
+    // box-scoped echo check makes this refusal fire more often. A message that
+    // tells the operator to go elsewhere and do something the UI can do is the
+    // dead end `enter-ignored`'s own copy was rewritten to close.
+    //
+    // A NEW sentence, minted here — not a reuse of its neighbour, which is
+    // left exactly as it was so the two read as one register.
+    expect(sendErrorText('verify-failed')).toBe('Typed it, but the session never echoed it back.');
+    expect(sendErrorText('enter-ignored')).toBe("Typed it, but the session didn't take it.");
+    // The NEGATIVE half, which is the whole point of the change and survives
+    // no mutant that quietly restores the old dead end.
+    expect(sendErrorText('verify-failed')).not.toMatch(/terminal/);
+    // And the two stay DISTINCT: they describe different failures (nothing
+    // echoed back, versus echoed and then not taken), and collapsing them
+    // would tell the operator the wrong story about which one happened.
+    expect(sendErrorText('verify-failed')).not.toBe(sendErrorText('enter-ignored'));
+  });
+});

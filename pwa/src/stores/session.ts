@@ -42,6 +42,19 @@ export interface PendingSend {
    *  it` sends back as its correspondence claim, so the rescue can only ever
    *  submit the message this bubble is showing. */
   draft?: string;
+  /** The server PROVED `draft` is the whole message currently in the box and
+   *  that one Enter would send exactly it. Read off the 409 body by
+   *  `failureOf`, and cleared by `retry`/`resolve` alongside `code`/`draft`,
+   *  because a stale flag would offer a button for a box the server has not
+   *  re-measured.
+   *
+   *  ABSENT = no `Send it` button, and that is the safe direction rather than
+   *  a gap: it is what an older server sends, and it is what today's server
+   *  sends on the arms whose `draft` is somebody else's words or a failed
+   *  clear's FRAGMENT. `draft` alone cannot carry this — it means three
+   *  different things across the failure arms — which is why the flag is a
+   *  separate field and not a synonym for a `code`. */
+  submittable?: boolean;
   /** Remembered so retry() repeats the original call. */
   replaceDraft?: boolean;
   /** Staged images sent alongside text. Object-URL ownership lives here from
@@ -293,11 +306,11 @@ function clearConfirmed(pending: PendingSend[], msg: SessionStreamMsg): PendingS
   return next;
 }
 
-const failureOf = (e: unknown): { error: string; code?: string; draft?: string } => {
+const failureOf = (e: unknown): { error: string; code?: string; draft?: string; submittable?: boolean } => {
   if (e instanceof ApiError) {
     const body = e.body;
     const b = typeof body === 'object' && body !== null
-      ? (body as { error?: unknown; draft?: unknown })
+      ? (body as { error?: unknown; draft?: unknown; submittable?: unknown })
       : {};
     if (b.error === 'draft-present') {
       return { error: 'draft-present', code: 'draft-present', draft: typeof b.draft === 'string' ? b.draft : '' };
@@ -312,9 +325,17 @@ const failureOf = (e: unknown): { error: string; code?: string; draft?: string }
     // does, and it is not decoration: it is the box row `Send it` must hand
     // back for the server's correspondence gate, and a bubble without it gets
     // no button at all rather than a button that submits an unproven box.
+    //
+    // `submittable` rides alongside `draft` with the SAME `typeof` discipline
+    // — absence-permits, so an older server (and today's server on the arms
+    // that withhold it) simply yields no flag, never a default of true. It is
+    // NOT a synonym for the code: `draft` carries three meanings across the
+    // failure arms and this is the only thing that tells the one the rescue
+    // may act on from the one it must not.
     return {
       error: sendErrorText(e.message), code: e.message,
       ...(typeof b.draft === 'string' ? { draft: b.draft } : {}),
+      ...(typeof b.submittable === 'boolean' ? { submittable: b.submittable } : {}),
     };
   }
   return { error: e instanceof Error ? e.message : 'send failed' };
@@ -363,10 +384,10 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
         await apiImpl.prompt(id, text, opts);
         timers.set(key, setTimeout(() => expireConfirmed(key), confirmTimeoutMs));
       } catch (e) {
-        const { error, code, draft } = failureOf(e);
+        const { error, code, draft, submittable } = failureOf(e);
         set((s) => ({
           pending: s.pending.map((p) =>
-            p.key === key ? { ...p, state: 'failed' as const, error, code, draft } : p,
+            p.key === key ? { ...p, state: 'failed' as const, error, code, draft, submittable } : p,
           ),
         }));
       }
@@ -537,7 +558,8 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
         // field added after it too.
         set((s) => ({
           pending: s.pending.map((x) =>
-            x.key === key ? { ...x, state: 'sending' as const, error: undefined, code: undefined, draft: undefined } : x),
+            x.key === key ? { ...x, state: 'sending' as const, error: undefined, code: undefined, draft: undefined,
+                              submittable: undefined } : x),
         }));
         void dispatch(key, p.text, { replaceDraft: p.replaceDraft, attachments: pathsOf(p) });
       },
@@ -552,7 +574,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
           pending: s.pending.map((x) =>
             x.key === key
               ? { ...x, text, state: 'sending' as const, error: undefined, code: undefined, draft: undefined,
-                  replaceDraft: opts.replaceDraft }
+                  submittable: undefined, replaceDraft: opts.replaceDraft }
               : x),
         }));
         void dispatch(key, text, { replaceDraft: opts.replaceDraft, attachments: pathsOf(p) });

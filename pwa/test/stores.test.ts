@@ -393,6 +393,64 @@ describe('session store optimistic send', () => {
     ]);
   });
 
+  // TASK 410 — the rescue's gate rides on the server's PROOF, so the store has
+  // to carry it. `draft` alone cannot serve: it means three different things
+  // across the failure arms, and one of them (a failed clear's residue, a
+  // FRAGMENT of the message) is the exact shape the rescue must never submit.
+  it('a 409 with submittable carries the flag onto the pending, and retry clears it', async () => {
+    const prompt = vi.fn().mockRejectedValue(new ApiError(409, {
+      ok: false, error: 'enter-ignored', draft: 'run the tests', submittable: true,
+    }));
+    const store = createSessionStore('s1', { api: { prompt } });
+
+    await store.getState().send('run the tests');
+    const p = store.getState().pending[0]!;
+    expect(p.code).toBe('enter-ignored');
+    expect(p.submittable).toBe(true);
+    expect(p.draft).toBe('run the tests');
+
+    // Cleared alongside code/draft: a stale flag would offer a button for a
+    // box the server has not re-measured.
+    store.getState().retry(p.key);
+    expect(store.getState().pending[0]!.submittable).toBeUndefined();
+  });
+
+  it('resolve() clears the flag too — the same box, re-measured or not', async () => {
+    const prompt = vi.fn().mockRejectedValueOnce(new ApiError(409, {
+      ok: false, error: 'enter-ignored', draft: 'x', submittable: true,
+    })).mockResolvedValueOnce(undefined);
+    const store = createSessionStore('s1', { api: { prompt } });
+    await store.getState().send('x');
+    const key = store.getState().pending[0]!.key;
+
+    store.getState().resolve(key, 'x again', { replaceDraft: true });
+    expect(store.getState().pending[0]!.submittable).toBeUndefined();
+  });
+
+  // ABSENCE-PERMITS, in both of the shapes it actually arrives in: an older
+  // server that never sends the field, and today's server on the arm that
+  // deliberately withholds it.
+  it('a 409 without the flag leaves it undefined — never a default of true', async () => {
+    const prompt = vi.fn().mockRejectedValue(new ApiError(409, {
+      ok: false, error: 'verify-failed', draft: 'a truncated frag',
+    }));
+    const store = createSessionStore('s1', { api: { prompt } });
+    await store.getState().send('a truncated fragment and more');
+    const p = store.getState().pending[0]!;
+    expect(p.code).toBe('verify-failed');
+    expect(p.draft).toBe('a truncated frag');
+    expect(p.submittable).toBeUndefined();
+  });
+
+  it('a non-boolean submittable is ignored, not coerced', async () => {
+    const prompt = vi.fn().mockRejectedValue(new ApiError(409, {
+      ok: false, error: 'enter-ignored', draft: 'x', submittable: 'yes',
+    }));
+    const store = createSessionStore('s1', { api: { prompt } });
+    await store.getState().send('x');
+    expect(store.getState().pending[0]!.submittable).toBeUndefined();
+  });
+
   it('retry() re-sends a failed pending; discard() drops it', async () => {
     const prompt = vi.fn().mockRejectedValueOnce(new ApiError(500, { ok: false, error: 'tmux-error' }));
     prompt.mockResolvedValue(undefined);
