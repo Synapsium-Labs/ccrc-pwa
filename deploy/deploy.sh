@@ -567,13 +567,23 @@ if [ "$TARGET" = "agent" ]; then
   # message: this is a single-quoted assignment and bash has no escape for a
   # single quote inside one, so either would end SWEEP_CMD early and ship the
   # remainder as shell code in the deploy script itself.
+  #
+  # `pgrep -x`, NOT `pgrep -x -f`, and the difference is the whole line working
+  # or silently printing nothing. `-f` matches the FULL COMMAND LINE, which for
+  # the tmux server is `tmux start-server`; `-x` demands an exact match. Together
+  # they ask for a command line exactly equal to `tmux: server`, which nothing
+  # has. `-x` alone matches `comm`, which IS `tmux: server`. Measured both ways
+  # on the fleet host 2026-08-18: `-x -f` returns empty, `-x` returns the server.
+  # It shipped broken because the print is deliberately non-fatal, so an empty
+  # answer looks the same as a fresh box with no server — the one case this
+  # was written to tolerate hid the bug for the case it was written to serve.
   SWEEP_CMD='export XDG_RUNTIME_DIR=/run/user/$(id -u) \
     && for u in $(systemctl --user list-units "claude-session@*" --plain --no-legend | awk "{print \$1}") claude-session@ccrc-deploy-preflight.service; do \
          km=$(systemctl --user show -p KillMode "$u" 2>/dev/null); \
          [ "$km" = "KillMode=process" ] \
            || { echo "deploy: FAILED — $u resolves to ${km:-no answer from systemd}, and the sweep needs KillMode=process. systemds default is control-group, every session on this box is a child of ONE tmux server, and that server sits in a claude-session@ cgroup — so try-restart would kill the lot. A drop-in under ~/.config/systemd/user/claude-session@.service.d/ can set this without the base unit changing a byte. REFUSING to sweep." >&2; exit 1; }; \
        done \
-    && echo "deploy: the tmux server currently lives in: $(cat /proc/$(pgrep -x -f "tmux: server")/cgroup 2>/dev/null | tr "\n" " ")" >&2 \
+    && echo "deploy: the tmux server currently lives in: $(cat /proc/$(pgrep -x "tmux: server")/cgroup 2>/dev/null | tr "\n" " ")" >&2 \
     && systemctl --user try-restart "claude-session@*" \
     && for u in $(systemctl --user list-units "claude-session@*" --state=failed --plain --no-legend | awk "{print \$1}"); do \
          echo "deploy: warning: $u is FAILED — try-restart skipped it and this sweep did not verify it. On the box: systemctl --user reset-failed $u, then ccd start the session" >&2; done \
