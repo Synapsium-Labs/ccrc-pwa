@@ -2930,8 +2930,17 @@ export const CLIP_PATH_RE =
  * `!draftOf(pane).startsWith(needle)` and `needle` is the first NON-blank
  * line, so on a blank marker row the proof is vacuous — measured, a pane
  * byte-identical before and after Enter returns ok:true and the message is
- * silently lost. The box cannot hold a leading blank line; typing one only
- * breaks the proof.
+ * silently lost. Typing one is never worth what it costs: the blank row DOES
+ * land in the box — that is the bug above, not a hypothetical — it carries
+ * nothing the message needed, and it takes the send proof with it.
+ *
+ * NOT "the box cannot hold a blank marker row", which is what this passage
+ * said when it landed and which the rest of this wave then falsified: it can,
+ * and two shipped guards exist because it can — `submitEnter`'s
+ * `blank-first-row` and the clobber guard's `hasContentBelowMarker`
+ * (`server/src/inject/send.ts`, which states the same position). What is
+ * removed here is US as a producer of that shape; a human pressing Enter in
+ * the box before typing still is one.
  *
  * INTERIOR and TRAILING blank lines are untouched: only the marker row is at
  * stake, and an interior blank line is the message.
