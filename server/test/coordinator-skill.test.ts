@@ -409,3 +409,60 @@ describe('the skill on `final:true` — a release is now conditional', () => {
   // constraint is real and binding on the prose above; the MECHANISM that
   // enforces it is the shipped test, and this file runs whole.
 });
+
+describe('the skill tells a SENDER what a blocked delivery obliges them to do', () => {
+  // MEASURED at the frozen ref, not assumed: the corpus is NOT silent about
+  // undeliverable mail — `undeliverable` ×3 and `rejected` ×4 across
+  // mail-envelope.md and wave-lifecycle.md. Every one of those passages is
+  // RECIPIENT-side, though: what becomes of mail addressed to YOU. The sender,
+  // whose wave brief is the thing that cannot land, was told nothing at all.
+  // Build 8 makes the block visible on the wire (`attempts`/`lastError`) and in
+  // the tray (the sender notification); this is the procedure that goes with
+  // it, so an earlier draft's "the corpus says nothing about blocked mail" is
+  // the false premise this describe is written NOT to repeat.
+  const envelope = (): string => refs('mail-envelope.md');
+
+  it('names what lastError === draft-present means for the sender', () => {
+    expect(allSkillText).toContain('draft-present');
+    expect(allSkillText).toMatch(/input box/i);
+  });
+
+  it('names the attempt ceiling, so a first block reads differently from the last', () => {
+    expect(envelope()).toMatch(/attempts?[^.]*\b6\b|\b6\b[^.]*attempts?/);
+  });
+
+  // DEVIATION FROM THE PLAN, and the reason is the rule this branch enforces
+  // everywhere: the plan's assertion was `allSkillText.toContain('briefQueued')`,
+  // and `briefQueued` ALREADY appears once in wave-lifecycle.md — in the
+  // response line of §2, unexplained. That assertion passes at the frozen ref,
+  // so it could never have gone red for the thing it claims to guard. It is
+  // scoped to the file this task writes, and paired with the SEMANTIC claim
+  // (queued is not delivered) that is the whole point of the passage.
+  it('says a briefQueued dispatch is NOT a delivered brief', () => {
+    expect(envelope()).toContain('briefQueued');
+    expect(envelope()).toContain('clearError');
+    expect(envelope()).toMatch(/`?briefQueued`?[^.]*\btrue\b[\s\S]{0,240}?(not|never)[\s\S]{0,80}?(delivered|has it)/i);
+  });
+
+  // The lane's auto-clear is PROVENANCE-GATED (Task 407, operator ruling): it
+  // clears only a `/clear` this system can prove it typed and had swallowed.
+  // A sentence promising an unconditional rescue would send a coordinator off
+  // to wait for something that will never happen on an operator's own text —
+  // and this repo's own worked example of a doc lie is a sentence with its
+  // qualifier filed off, so the qualifier is what is pinned.
+  it('does not promise an unconditional auto-clear of a stranded `/clear`', () => {
+    const para = envelope().split('\n\n').find((p) => p.includes('stranded `/clear`'));
+    expect(para, 'no paragraph in mail-envelope.md discusses a stranded `/clear`').toBeDefined();
+    expect(para).toMatch(/prove|provenance|its own/i);
+  });
+
+  // NO CENSUS ASSERTION HERE, and the reason is worth recording so it is not
+  // re-added: this file ALREADY pins it exactly —
+  //   `expect(hits).toBe(CONTRACT[2].split(verb).length - 1)`
+  // — and `CONTRACT[2]` names each of ws-reap/ws-rm/ws-gc exactly ONCE. A
+  // `toBeLessThanOrEqual(2)` beside it would PASS with an extra mention, i.e. a
+  // guard that cannot red for the thing it claims to guard, which is the
+  // mutation-table discipline this branch enforces everywhere else. The
+  // constraint binds the prose; the MECHANISM is the shipped test, and this
+  // file runs whole.
+});
