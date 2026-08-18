@@ -425,6 +425,42 @@ function stubSystemctl(home: string): void {
     + 'echo "fixture systemctl: unexpected argv: $*" >&2; exit 90');
 }
 
+/** A systemd --user unit FILE, in the directory `deploy.sh:416` really copies
+ *  them to. `_check_services` asks `systemctl` only about units whose file is
+ *  HERE, so this is what makes a fixture a server box, a fleet host, or a dev
+ *  checkout with no units at all. The CONTENT is irrelevant — nothing reads it;
+ *  a real one is the `[Unit]`/`[Service]` text in `deploy/`. */
+function writeUnitFile(home: string, unit: string): void {
+  const d = join(home, '.config', 'systemd', 'user');
+  mkdirSync(d, { recursive: true });
+  writeFileSync(join(d, unit), `# fixture unit file for ${unit}\n`);
+}
+
+/** `df -Pk <dir>` answering a POSIX table whose Available column (field 4, in
+ *  KiB) comes from `<home>/fixture-df-avail`. `<home>/fixture-df-exit` makes it
+ *  exit that code printing nothing — the shape a df that cannot stat a stale
+ *  mount really has, and the only way to reach the "answered nothing I can
+ *  read" arm. Any other argv is a loud failure (exit 90), so a check that
+ *  started shelling out to `df -h` (whose numbers are NOT KiB) could not pass
+ *  unnoticed. Shell builtins only: this fixture's PATH holds no system
+ *  directory, so a stub reaching for `cat` or `awk` would not run. */
+function stubDf(home: string, availKiB = 42_991_616): void {
+  stub(home, 'df', [
+    'printf \'%s\\n\' "$*" >> "$HOME/df-calls"',
+    'if [ -f "$HOME/fixture-df-exit" ]; then read -r c < "$HOME/fixture-df-exit"; exit "$c"; fi',
+    'if [ "$1" = "-Pk" ] && [ -n "$2" ]; then',
+    '  avail=0',
+    '  [ -f "$HOME/fixture-df-avail" ] && read -r avail < "$HOME/fixture-df-avail"',
+    '  echo "Filesystem     1024-blocks      Used Available Capacity Mounted on"',
+    '  echo "/dev/fixture0    104857600  20971520 $avail      21% /"',
+    '  exit 0',
+    'fi',
+    'echo "fixture df: unexpected argv: $*" >&2; exit 90',
+  ].join('\n'));
+  writeFileSync(join(home, 'fixture-df-avail'), `${availKiB}\n`);
+  rmSync(join(home, 'fixture-df-exit'), { force: true });
+}
+
 /** `n` ccd sessions in the registry, as ccd itself counts them: one `<id>.uuid`
  *  file each (ccd:8499). */
 function writeSessions(home: string, n: number): void {
@@ -490,8 +526,29 @@ function healthy(prefix: string): string {
   // has to have something to measure here — a fixture whose fleet check SKIPPED
   // would make "runs every check in the table" and every summary count below
   // assert a weaker thing.
-  writeCcrcEnv(home, `# a real one carries tokens too; the reader must ignore them\nCCRC_HOST=ccrc-fixture.invalid\nCCRC_PORT=7788\n`);
+  writeCcrcEnv(home, [
+    '# a real one carries tokens too; the reader must ignore them',
+    // …and it says which mode this box runs in, coherently — `config` measures
+    // exactly that. `local` needs no agent URL or token, which is what makes
+    // this file a PASS rather than the boot-refusal FAIL a half-configured
+    // `remote` gets (server/src/index.ts:75-79).
+    'CCRC_FLEET=local',
+    'CCRC_HOST=ccrc-fixture.invalid',
+    'CCRC_PORT=7788',
+    '',
+  ].join('\n'));
   stubHealth(home, { mode: 'remote', connected: true, downSince: null, build: 'agreed', roster: 'agreed' });
+  // …and it is a SERVER BOX that has been installed: the two unit files
+  // `ccrc install` leaves in `~/.config/systemd/user`, both running, and a
+  // filesystem with room on it. `path` needs no fixture at all — `<home>/.local/bin`
+  // is already the head of every contained PATH (`ghContainedEnv`), which is
+  // what the `path` check measures.
+  stubSystemctl(home);
+  for (const u of ['ccrc.service', 'ccd-cap-scopes.timer']) {
+    writeUnitFile(home, u);
+    writeFileSync(join(home, `fixture-unit-${u}`), 'active\n');
+  }
+  stubDf(home);
   return home;
 }
 
@@ -872,6 +929,433 @@ describe('ccrc doctor: linger', () => {
   it('passes when linger is enabled', () => {
     const home = healthy('ccrc-doctor-linger-ok-');
     expect(lineFor(runDoctor(home).stdout, 'linger')).toMatch(/^PASS linger: enabled/);
+  });
+});
+
+// ── $HOME/.local/bin on PATH ──────────────────────────────────────────────
+// Stage 2d, Task 2. The check that makes every OTHER remedy in this file
+// executable: `ccrc`, `ccd` and every generated account wrapper are installed
+// into `$HOME/.local/bin` (deploy.sh's `install_atomic … .local/bin/…`), so a
+// box whose login shell never put that directory on PATH answers "command not
+// found" to every instruction doctor prints.
+//
+// MUTATIONS MEASURED (a guard ships with a test that reds when it is deleted —
+// each was applied to the shipped check, run, and reverted):
+//   - the WARN arm deleted, so the check can only pass -> RED, "warns when
+//     $HOME/.local/bin is not on PATH…", `expected -1 to be greater than -1`
+//     (no WARN line to find).
+//   - `local want=` drifted to `$HOME/bin` -> RED, "names the same directory the
+//     wrapper library does…", `expected '$HOME/bin' to be '$HOME/.local/bin'`.
+//   - the `path` entry deleted from the table -> RED, the bijection test,
+//     `ORPHAN _check_path` (measured in the same shape for all four checks).
+
+describe('ccrc doctor: path', () => {
+  /** The one fixture mutation this check has: a PATH with the stub directory on
+   *  it and `<home>/.local/bin` gone. Still no system directory anywhere on it,
+   *  so the real `gh` stays unreachable — the other checks that resolve out of
+   *  `.local/bin` go red beside this one, which is true and deliberate. */
+  const pathWithoutLocalBin = (home: string): NodeJS.ProcessEnv =>
+    ({ PATH: join(home, 'stub-bin') });
+
+  it('warns when $HOME/.local/bin is not on PATH, and the remedy is paste-able', () => {
+    const home = healthy('ccrc-doctor-path-missing-');
+    const lines = runDoctor(home, ['doctor'], pathWithoutLocalBin(home)).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN path: '));
+    expect(i, lines.join('\n')).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('$HOME/.local/bin is not in $PATH');
+    // The remedy is asserted VERBATIM, not by regex: it is a line an operator
+    // pastes into ~/.profile, and a quoting slip in it is a line that either
+    // does nothing or truncates their PATH.
+    expect(lines[i + 1]).toBe(
+      '  remedy: add \'export PATH="$HOME/.local/bin:$PATH"\' to ~/.profile (or ~/.bashrc), then log in again');
+  });
+
+  it('passes naming the position it was found at — not the bare word "ok"', () => {
+    // "the detail is always a measurement" (the check file's own header): the
+    // position is what distinguishes "it is on PATH" from "it is on PATH ahead
+    // of /usr/bin", which is the difference between running the wrapper and
+    // running whatever a distro package left in /usr/bin.
+    const home = healthy('ccrc-doctor-path-ok-');
+    expect(lineFor(runDoctor(home).stdout, 'path'))
+      .toMatch(/^PASS path: \$HOME\/\.local\/bin is in \$PATH \(position 1\)$/);
+  });
+
+  it('finds it at a LATER position too, and says which', () => {
+    const home = healthy('ccrc-doctor-path-late-');
+    const r = runDoctor(home, ['doctor'],
+      { PATH: `${join(home, 'stub-bin')}:${join(home, '.local', 'bin')}` });
+    expect(lineFor(r.stdout, 'path')).toContain('(position 2)');
+  });
+
+  it('names the same directory the wrapper library does — one spelling, two files', () => {
+    // `ccrc-wrapper-shape`'s own comment: "One spelling, because two files
+    // comparing "$HOME/.local/bin" against each other is the same drift in
+    // miniature." The `path` check deliberately does NOT source that value (it
+    // must answer on a box where the best-effort library did not ship — see its
+    // own comment), so the guarantee is a mechanism here instead of a promise
+    // there: the two literals are compared, and a drift is red.
+    const lib = readFileSync(LIB_SRC, 'utf8');
+    const checks = readFileSync(CHECKS_SRC, 'utf8');
+    const wrapperDir = /WRAPPER_BIN_DIR="([^"]+)"/.exec(lib)?.[1];
+    const pathDir = /_check_path\(\) \{\n\s*local want="([^"]+)"/.exec(checks)?.[1];
+    expect(wrapperDir, 'ccrc-wrapper-shape no longer declares WRAPPER_BIN_DIR').toBeTruthy();
+    expect(pathDir, '_check_path no longer opens with `local want="…"`').toBeTruthy();
+    expect(pathDir).toBe(wrapperDir);
+  });
+});
+
+// ── the units this box is supposed to be running ──────────────────────────
+// Stage 2d, Task 2. A unit FILE with no process behind it is the failure the
+// spec's §5 "services active" names, and it is invisible to every other check
+// here: the box is configured, the binaries are installed, and nothing answers.
+// Which units a box has is what its ROLE is (`_box_role`'s D-73 inference), so
+// the check measures the ones whose file is present and skips the box that has
+// none rather than demanding units a dev checkout was never meant to have.
+//
+// MUTATIONS MEASURED (applied to the shipped check, run, reverted):
+//   - the SKIP arm deleted -> RED, "SKIPS a box with no ccrc units at all…",
+//     `expected 'PASS node: …' to match /^SKIP services: no ccrc units instal…/`.
+//   - the timer's WARN collapsed into the FAIL bucket (`_dr_warn` -> `_dr_fail`)
+//     -> RED ×2, "warns — not fails — when only the cap-scopes timer is
+//     stopped" and "reports a dead service and a dead timer as TWO lines…".
+//   - `known=` losing `ccrc-agent.service` -> RED, "measures the fleet host's
+//     own unit by the same rule", `to match /^FAIL services: ccrc-agent\.service …/`.
+//   - the PASS detail replaced by the bare word "ok" (the header's "detail is
+//     always a measurement" rule) -> RED, "passes naming every unit it
+//     measured", `expected 'PASS services: ok' to contain 'ccrc.service is active'`.
+
+describe('ccrc doctor: services', () => {
+  it('SKIPS a box with no ccrc units at all — a dev checkout has nothing to measure', () => {
+    const home = healthy('ccrc-doctor-services-none-');
+    rmSync(join(home, '.config', 'systemd', 'user'), { recursive: true, force: true });
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^SKIP services: no ccrc units installed/m);
+    expect(r.stdout).toMatch(/a dev checkout, or a box .*ccrc install.* never touched/);
+    // A skip is not a verdict: no remedy line, and the run still exits 0.
+    expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) services: /m);
+    expect(r.code).toBe(0);
+  });
+
+  it('fails when ccrc.service is installed and not running, and the remedy starts it', () => {
+    const home = healthy('ccrc-doctor-services-dead-');
+    writeFileSync(join(home, 'fixture-unit-ccrc.service'), 'inactive\n');
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL services: '));
+    expect(i, lines.join('\n')).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('ccrc.service is installed but inactive');
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: systemctl --user enable --now ccrc\.service/);
+  });
+
+  it('measures the fleet host\'s own unit by the same rule', () => {
+    // A fleet host has `ccrc-agent.service` and no `ccrc.service`
+    // (deploy.sh's two lanes). A check that knew only the server's unit would
+    // report a perfectly healthy PASS on a box whose agent is dead — the link
+    // the whole fleet runs over.
+    const home = healthy('ccrc-doctor-services-agent-');
+    rmSync(join(home, '.config', 'systemd', 'user', 'ccrc.service'), { force: true });
+    writeUnitFile(home, 'ccrc-agent.service');
+    writeFileSync(join(home, 'fixture-unit-ccrc-agent.service'), 'inactive\n');
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^FAIL services: ccrc-agent\.service is installed but inactive/m);
+    expect(r.code).toBe(1);
+  });
+
+  it('warns — not fails — when only the cap-scopes timer is stopped', () => {
+    // Two different operator actions, so two different classes: a stopped
+    // server answers nothing at all, while a stopped cap-scopes timer means
+    // panes spawn without their memory cap (deploy.sh:463's OOM guardrail) —
+    // degraded, not down.
+    const home = healthy('ccrc-doctor-services-timer-');
+    writeFileSync(join(home, 'fixture-unit-ccd-cap-scopes.timer'), 'inactive\n');
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN services: '));
+    expect(i, lines.join('\n')).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('ccd-cap-scopes.timer is installed but inactive');
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: systemctl --user enable --now ccd-cap-scopes\.timer$/);
+    expect(runDoctor(home).code).toBe(0);
+  });
+
+  it('reports a dead service and a dead timer as TWO lines, each with its own remedy', () => {
+    // The "ONE CHECK MAY ANSWER IN TWO CLASSES" rule, which the runner already
+    // counts (`counts a check that answers in TWO classes in both`): joining
+    // these would hand the timer finding the service's remedy.
+    const home = healthy('ccrc-doctor-services-both-');
+    writeFileSync(join(home, 'fixture-unit-ccrc.service'), 'inactive\n');
+    writeFileSync(join(home, 'fixture-unit-ccd-cap-scopes.timer'), 'failed\n');
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const f = lines.findIndex((l) => l.startsWith('FAIL services: '));
+    const w = lines.findIndex((l) => l.startsWith('WARN services: '));
+    expect(f, r.stdout).toBeGreaterThan(-1);
+    expect(w, r.stdout).toBeGreaterThan(-1);
+    expect(lines[f + 1]).toContain('enable --now ccrc.service');
+    expect(lines[w + 1]).toContain('enable --now ccd-cap-scopes.timer');
+    expect(lines[w]).toContain('failed');            // systemd's word, not "inactive"
+    // The worse class is what the check returns, and the summary counts both.
+    expect(r.stdout).toMatch(/^summary: \d+ checks \(0 skipped\), \d+ verdicts — \d+ passed, 1 warned, 1 failed$/m);
+    expect(r.code).toBe(1);
+  });
+
+  it('passes naming every unit it measured', () => {
+    const home = healthy('ccrc-doctor-services-ok-');
+    const line = lineFor(runDoctor(home).stdout, 'services') ?? '';
+    expect(line).toMatch(/^PASS services: /);
+    expect(line).toContain('ccrc.service is active');
+    expect(line).toContain('ccd-cap-scopes.timer is active');
+  });
+
+  it('fails, rather than passing, when there are units and no systemctl to ask', () => {
+    const home = healthy('ccrc-doctor-services-nosystemctl-');
+    unstub(home, 'systemctl');
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^FAIL services: systemctl is not on PATH/m);
+    expect(r.code).toBe(1);
+  });
+});
+
+// ── the box's own config file ─────────────────────────────────────────────
+// Stage 2d, Task 2, and the one check whose FAIL is a REPRODUCTION: a
+// `CCRC_FLEET=remote` with no agent URL or token makes the server print one
+// line and exit 1 at boot (server/src/index.ts:75-79). Before this check, that
+// state was visible only as a service that would not come up.
+//
+// MUTATIONS MEASURED (applied to the shipped check, run, reverted):
+//   - the `[ -r ]` guard deleted -> RED, "a ccrc.env it cannot READ is its own
+//     answer…", `to match /^WARN config: .*cannot be read/`.
+//   - the CCRC_AGENT_URL/TOKEN gap check deleted -> RED ×4, every "fails a
+//     remote box where …" case (`expected -1 to be greater than -1` — no FAIL
+//     line at all, i.e. the boot-refusal state passing).
+//   - the mode classification made stricter than `config.ts` (`!= remote` ->
+//     `-z "$mode"`, so any non-empty value reads as remote) -> RED ×2, "passes
+//     a local box…" and "never quotes a value out of the file…".
+//   - the absent-file WARN downgraded to a PASS -> RED, "warns, and names ccrc
+//     install, when the box has no ccrc.env at all".
+
+describe('ccrc doctor: config', () => {
+  it('warns, and names ccrc install, when the box has no ccrc.env at all', () => {
+    const home = healthy('ccrc-doctor-config-none-');
+    rmSync(join(home, '.ccrc', 'ccrc.env'), { force: true });
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN config: '));
+    expect(i, lines.join('\n')).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('defaults apply: local mode on 127.0.0.1:7788');
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: .*ccrc install/);
+    expect(runDoctor(home).code).toBe(0);
+  });
+
+  it.each([
+    ['neither key is there', 'CCRC_FLEET=remote\n'],
+    ['the URL is empty', 'CCRC_FLEET=remote\nCCRC_AGENT_URL=\nCCRC_AGENT_TOKEN=t0ken\n'],
+    ['the token is empty', 'CCRC_FLEET=remote\nCCRC_AGENT_URL=ws://fleet.invalid:7789\nCCRC_AGENT_TOKEN=\n'],
+    ['only the URL is set', 'CCRC_FLEET=remote\nCCRC_AGENT_URL=ws://fleet.invalid:7789\n'],
+  ] as const)('fails a remote box where %s — the server exits at boot in exactly this state', (_what, text) => {
+    // server/src/index.ts:75-79: `if (!cfg.agentUrl || !cfg.agentToken) … exit(1)`.
+    // Both halves of that condition are reachable here, because "empty" and
+    // "absent" are the same thing to `config.ts:155-156` and must be the same
+    // thing here.
+    const home = healthy(`ccrc-doctor-config-remote-${_what.replace(/\W+/g, '-')}-`);
+    writeCcrcEnv(home, text);
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL config: '));
+    expect(i, lines.join('\n')).toBeGreaterThan(-1);
+    expect(lines[i]).toMatch(/CCRC_FLEET=remote/);
+    expect(lines[i + 1]).toBe(
+      '  remedy: set both CCRC_AGENT_URL and CCRC_AGENT_TOKEN in ~/.ccrc/ccrc.env, or set CCRC_FLEET=local');
+    expect(runDoctor(home).code).toBe(1);
+  });
+
+  it('passes a coherent remote box — doctor judges the file, not the agent', () => {
+    // Reachability is the `fleet` check's question and it has its own three
+    // answers for it. This one asserts only what the file says, which is the
+    // thing the server reads at boot.
+    const home = healthy('ccrc-doctor-config-remote-ok-');
+    writeCcrcEnv(home, [
+      'CCRC_FLEET=remote',
+      'CCRC_AGENT_URL=ws://fleet.invalid:7789',
+      'CCRC_AGENT_TOKEN=ccrc-canary-agent-1f4d9',
+      'CCRC_HOST=ccrc-fixture.invalid',
+      'CCRC_PORT=7788',
+      '',
+    ].join('\n'));
+    const r = runDoctor(home);
+    const line = lineFor(r.stdout, 'config') ?? '';
+    expect(line).toMatch(/^PASS config: /);
+    expect(line).toContain('fleet mode remote');
+    // …and the token it had to READ to say so never reaches the terminal.
+    expect(r.stdout).not.toContain('ccrc-canary-agent-1f4d9');
+    expect(r.stderr).not.toContain('ccrc-canary-agent-1f4d9');
+  });
+
+  it('passes a local box, naming the mode it measured', () => {
+    const home = healthy('ccrc-doctor-config-local-');
+    expect(lineFor(runDoctor(home).stdout, 'config')).toMatch(/^PASS config: .*fleet mode local/);
+  });
+
+  it('reads an ABSENT CCRC_FLEET as local — the same default config.ts applies', () => {
+    // `server/src/config.ts:154`: `env.CCRC_FLEET === 'remote' ? 'remote' : 'local'`.
+    // A check stricter than the config reader would report a box that runs
+    // perfectly well as misconfigured.
+    const home = healthy('ccrc-doctor-config-nofleet-');
+    writeCcrcEnv(home, 'CCRC_HOST=ccrc-fixture.invalid\nCCRC_PORT=7788\n');
+    const line = lineFor(runDoctor(home).stdout, 'config') ?? '';
+    expect(line).toMatch(/^PASS config: .*fleet mode local/);
+    expect(line).toMatch(/CCRC_FLEET/);              // it says WHY local, rather than asserting a key that is not there
+  });
+
+  it('reads a value systemd would NOT set as absent, not as a mode', () => {
+    // The same one-directional subset rule `_box_env_value`'s header states and
+    // the fleet check pins for CCRC_HOST: `\vCCRC_FLEET=remote` is a line
+    // systemd's EnvironmentFile parser does not turn into an environment
+    // variable, so the server boots in LOCAL mode — and a reader that skipped
+    // the \v anyway would demand agent credentials for a mode this box is not
+    // in.
+    const home = healthy('ccrc-doctor-config-vtab-');
+    writeCcrcEnv(home, '\vCCRC_FLEET=remote\n');
+    const line = lineFor(runDoctor(home).stdout, 'config') ?? '';
+    expect(line).toMatch(/^PASS config: .*fleet mode local/);
+  });
+
+  it('never quotes a value out of the file — it holds the agent token', () => {
+    const home = healthy('ccrc-doctor-config-secrets-');
+    writeCcrcEnv(home, [
+      'CCRC_FLEET=local',
+      'CCRC_AGENT_TOKEN=ccrc-canary-token-77c1a',
+      'CCRC_VAPID_PRIVATE=ccrc-canary-vapid-2e8b0',
+      '',
+    ].join('\n'));
+    const r = runDoctor(home);
+    expect(lineFor(r.stdout, 'config')).toMatch(/^PASS config: /);
+    for (const canary of ['ccrc-canary-token-77c1a', 'ccrc-canary-vapid-2e8b0']) {
+      expect(r.stdout).not.toContain(canary);
+      expect(r.stderr).not.toContain(canary);
+    }
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'a ccrc.env it cannot READ is its own answer, and bash does not diagnose it on stderr', () => {
+      // Without the `-r` guard the read fails, bash puts its own message on
+      // stderr (which doctor deliberately does not capture) and every key comes
+      // back empty — which is indistinguishable from a file that declares
+      // nothing, i.e. a confident PASS on a box nobody measured.
+      const home = healthy('ccrc-doctor-config-unreadable-');
+      chmodSync(join(home, '.ccrc', 'ccrc.env'), 0o000);
+      const r = runDoctor(home);
+      expect(r.stdout).toMatch(/^WARN config: .*cannot be read/m);
+      expect(r.stdout).not.toMatch(/^PASS config: /m);
+      expect(r.stderr).toBe('');
+    });
+
+  it('a ccrc.env that is not a regular file is its own answer too', () => {
+    const home = healthy('ccrc-doctor-config-dir-');
+    rmSync(join(home, '.ccrc', 'ccrc.env'), { force: true });
+    mkdirSync(join(home, '.ccrc', 'ccrc.env'), { recursive: true });
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^WARN config: .*is not a regular file/m);
+    expect(r.stdout).not.toMatch(/defaults apply/);   // that is the OTHER answer
+    expect(r.stderr).toBe('');
+  });
+
+  it('says so, rather than guessing, when ccrc\'s own config reader is not loaded', () => {
+    // D-85: the check reads `BOX_ENV_FILE` and `_box_env_value`, both declared
+    // once in `ccrc` (ccrc:91-101 says outright that doctor is one of the three
+    // readers that must not re-spell the path). Sourced by anything that is not
+    // `ccrc`, it says that in a verdict line — the shape `_check_fleet` already
+    // uses for the same absence — rather than re-implementing either.
+    const nowhere = join(REPO, 'no-such-home-for-check-config');
+    const r = spawnSync(BASH, ['-c', `set -uo pipefail; . ${shq(CHECKS_SRC)}; _check_config`],
+      { encoding: 'utf8', env: { HOME: nowhere, PATH: nowhere, LC_ALL: 'C' } });
+    expect(r.stdout).toMatch(/^FAIL config: ccrc's own config reader is not loaded/m);
+    expect(r.stdout).toMatch(/^ {2}remedy: this is a bug in ccrc/m);
+    expect(r.status).toBe(1);
+  });
+});
+
+// ── room on the filesystem $HOME is on ────────────────────────────────────
+// Stage 2d, Task 2. Spec §5 asks for "disk headroom (including the backup
+// dir)": a ccd workspace is a full clone, `~/.ccrc/coord.db` is a WAL database
+// with no backup to fall back on (server/src/coord/db.ts:144-145), and every
+// deploy copies the shipped tree under `~/ccrc-backups/<ts>/` (deploy.sh:33-34).
+// All three land on one filesystem, and all three fail in unhelpful ways when
+// it is full.
+//
+// MUTATIONS MEASURED (applied to the shipped check, run, reverted):
+//   - the ''/non-digit guard deleted -> RED, "warns when df answers something
+//     it cannot read…", `to match /^WARN disk: /` (the empty Available field
+//     goes into `$(( ))` instead).
+//   - the 2 GiB FAIL floor deleted -> RED, "fails under the 2 GiB floor".
+//   - the 10 GiB WARN floor deleted -> RED, "warns between the floor and 10
+//     GiB…" (a tight box reporting a clean PASS).
+
+describe('ccrc doctor: disk', () => {
+  const GIB = 1024 * 1024;                          // in the KiB `df -Pk` reports
+
+  it('fails under the 2 GiB floor', () => {
+    const home = healthy('ccrc-doctor-disk-full-');
+    stubDf(home, GIB);                              // 1 GiB
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL disk: '));
+    expect(i, lines.join('\n')).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('1024 MiB free');     // MiB, because "1 GiB" and "0 GiB" are the whole range below the floor
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: free space on \$HOME's filesystem/);
+    expect(runDoctor(home).code).toBe(1);
+  });
+
+  it('warns between the floor and 10 GiB, and names the backup directory to clear', () => {
+    const home = healthy('ccrc-doctor-disk-tight-');
+    stubDf(home, 5 * GIB);
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN disk: '));
+    expect(i, lines.join('\n')).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('5 GiB free');
+    expect(lines[i]).toContain('getting tight');
+    expect(lines[i + 1]).toContain('~/ccrc-backups');
+    expect(runDoctor(home).code).toBe(0);
+  });
+
+  it('passes naming the room it measured', () => {
+    const home = healthy('ccrc-doctor-disk-ok-');
+    expect(lineFor(runDoctor(home).stdout, 'disk'))
+      .toMatch(/^PASS disk: 41 GiB free on \$HOME's filesystem$/);
+  });
+
+  it('asks df for KiB and about $HOME, and asks once', () => {
+    // `-P` because the default output wraps a long device name onto its own
+    // line (and the parse takes the LAST line); `-k` because every threshold
+    // here is in KiB. `df -h` would answer "41G" and the arithmetic below would
+    // be nonsense.
+    const home = healthy('ccrc-doctor-disk-argv-');
+    runDoctor(home);
+    const calls = readFileSync(join(home, 'df-calls'), 'utf8').split('\n').filter(Boolean);
+    expect(calls).toEqual([`-Pk ${home}`]);
+  });
+
+  it('warns, rather than measuring nothing silently, when df is not installed', () => {
+    const home = healthy('ccrc-doctor-disk-nodf-');
+    unstub(home, 'df');
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN disk: '));
+    expect(i, lines.join('\n')).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('cannot measure free space');
+    expect(lines[i + 1]).toMatch(/coreutils|util-linux/);
+    expect(runDoctor(home).code).toBe(0);
+  });
+
+  it('warns when df answers something it cannot read, rather than reporting a number nobody measured', () => {
+    // A df that exits nonzero printing nothing (a stale mount) used to arrive
+    // as an empty Available field — and `$(( / 1048576 ))` over an empty string
+    // is a bash arithmetic error, on stderr, in a check that then claims 0 GiB.
+    const home = healthy('ccrc-doctor-disk-unreadable-');
+    stubDf(home);
+    writeFileSync(join(home, 'fixture-df-exit'), '1\n');
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^WARN disk: /m);
+    // The load-bearing half: the line says the measurement did NOT happen,
+    // rather than reporting the 0 an empty field arithmetics into.
+    expect(r.stdout).toMatch(/free space was never measured/);
+    expect(r.stdout).not.toMatch(/^(PASS|FAIL) disk: /m);
+    expect(r.stdout).not.toMatch(/0 GiB|0 MiB/);
+    expect(r.stderr).toBe('');
+    expect(r.code).toBe(0);
   });
 });
 
@@ -2100,6 +2584,12 @@ describe('ccrc status', () => {
     unstub(home, 'jq');                 // healthy()'s jq is a presence stub
     linkReal(home, 'jq');               // …and the stamp reader needs a real one
     stubSystemctl(home);
+    // BOTH unit states are stated here, and neither is inherited: `healthy()`
+    // plants an ACTIVE ccrc.service for the `services` check, and status's own
+    // fixture is a FLEET HOST (the agent running, the server not). Leaving
+    // ccrc.service to the inherited value would silently turn every assertion
+    // below into one about a different box.
+    writeFileSync(join(home, 'fixture-unit-ccrc.service'), 'inactive\n');
     writeFileSync(join(home, 'fixture-unit-ccrc-agent.service'), 'active\n');
     writeSessions(home, 3);
     writeFileSync(join(home, '.ccrc', 'build.json'),
