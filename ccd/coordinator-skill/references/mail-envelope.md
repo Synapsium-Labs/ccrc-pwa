@@ -94,15 +94,20 @@ for a count to climb on that one.
 What to do, in order:
 
 1. **Look at the worker's own screen** in the PWA. Its mail strip names the
-   block, with the attempt and the ceiling, and its composer is right below the
-   strip. The box is what has to change; nothing you can do to the mail row
-   fixes it.
+   block, with the attempt and the ceiling. What has to change is the box —
+   the worker's own input box, the one the delivery lane types into, which is
+   **not** the composer you type into on that screen. Nothing you can do to the
+   mail row fixes it.
 2. **If the text in the box is the worker's own half-typed message**, it is
    theirs. Ask them to send or discard it. Do not replace it.
 3. **If the box holds a stranded `/clear`**, the lane may clear that one itself
    on the next attempt — but only where it can **prove** the `/clear` is its
-   own: a dispatch of this run typed it and had it swallowed, and the box still
-   holds nothing but that single line. The characters alone prove nothing,
+   own: a dispatch of this run typed it and had it swallowed, the box still
+   holds nothing but that single line, and **no message has landed in that box
+   since**. That last one is what spends the proof: a delivery that lands is
+   how the lane knows the box it had proof about was emptied, so the first
+   message through clears the wedge and every one after it is refused like any
+   other draft. The characters alone prove nothing,
    because they are four an operator plausibly types and leaves sitting, so a
    `/clear` with no such record behind it is treated as the operator's and
    refused. Assume nothing will be cleared for you; check the screen.
