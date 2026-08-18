@@ -71,12 +71,19 @@ describe('submitEnter', () => {
   });
 
   // Review Important 2: `draftOf` reads only the box's ❯-marked FIRST row (its
-  // own docstring says so); a message whose first line is itself blank — the
-  // shape `sendPrompt` leaves via M-Enter when the composed prompt's first
-  // `\n`-split part is '' (send.ts's own `parts` loop) — renders an
+  // own docstring says so); a box whose first row is blank renders an
   // indistinguishable blank marker row while the real text sits one row down,
   // unmarked. Reporting `nothing-to-submit` there is a false claim; refuse
   // with the honest, distinct token instead, and still press nothing.
+  //
+  // WHERE THAT PANE COMES FROM (wave-check): this comment used to name it as
+  // "the shape `sendPrompt` leaves via M-Enter when the composed prompt's
+  // first \n-split part is ''". Task 402 deleted that producer —
+  // `composePrompt` strips leading blank lines, and `send.test.ts` pins that
+  // the M-Enter loop can no longer manufacture the shape. What reaches this
+  // refusal now is a human who pressed Enter in the box first, or a pre-402
+  // client still on the wire; the case is as real as it ever was, and this
+  // test is unchanged.
   it('refuses a blank first row that hides real content one row down — honestly, not as "nothing to submit"', async () => {
     const { keys, d } = deps(['❯ \n  actual text\n']);
     expect(await submitEnter(d as never, 'cc-x', 'actual text')).toEqual({ ok: false, error: 'blank-first-row' });

@@ -866,9 +866,15 @@ export function submitEnter(
     const draft = draftOf(pane);
     if (draft === '') {
       // Blank marker row: usually a genuinely empty box, but see
-      // `hasContentBelowMarker` — a message whose first line is itself blank
-      // renders identically on THIS row. Naming that case honestly beats
-      // claiming there is nothing to send when there might be.
+      // `hasContentBelowMarker` — a box whose FIRST row is blank with real text
+      // one row down renders identically on THIS row. Naming that case honestly
+      // beats claiming there is nothing to send when there might be.
+      //
+      // NOT "a message whose first line is itself blank", which is what this
+      // said before the wave-check: Task 402 made `composePrompt` strip leading
+      // blank lines, so our own message cannot carry one. `continuationRows`
+      // and the clobber guard both state the producers that remain — a human
+      // pressing Enter in the box first, and any pre-402 client.
       //
       // NEITHER token says anything about the caller's message. An empty box
       // is not proof that it went through: `clearBox` empties one too.

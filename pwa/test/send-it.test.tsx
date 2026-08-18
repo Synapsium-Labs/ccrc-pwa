@@ -88,9 +88,14 @@ describe('Send it', () => {
   // PR F whole-branch review, Critical. With nothing to correspond against
   // there is no way to know the box still holds THIS message rather than a
   // later one, and a tap would press Enter on whatever is there. The refusal
-  // is to render the button, not to press hopefully. (The row is blank exactly
-  // when the message's own first line was blank — `blank-first-row` on the
-  // server.)
+  // is to render the button, not to press hopefully. (The row is blank when the
+  // BOX's marker row is empty — which, after Task 402, can no longer come from
+  // OUR OWN message: `composePrompt` strips leading blank lines before anything
+  // is typed, so a human pressing Enter in the box first, or a pre-402 client,
+  // is what produces it. `blank-first-row` is the server's name for that pane.
+  // This parenthesis said "exactly when the message's own first line was blank"
+  // until this wave-check; that is the same sentence `e877e93` had to delete
+  // from `ChatList.tsx` after it was reinstated once.)
   it('is absent when the refusal carried no box row to correspond against', () => {
     for (const draft of [undefined, '', '   ']) {
       cleanup();
