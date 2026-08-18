@@ -1772,8 +1772,14 @@ button.metachip:active {
   color: var(--ink-secondary);
   margin-bottom: var(--sp-3);
 }
+/* Build 8: this used to hold ONE row (`draftOf`'s marker row); the 409 now
+   carries every row the box holds, and a pasted stack trace is a realistic
+   draft. Bounded and scrollable rather than pushing the sheet's own actions
+   off the bottom of a phone. */
 .draft-well {
   margin-bottom: var(--sp-4);
+  max-height: 40vh;
+  overflow-y: auto;
 }
 .draft-actions {
   display: grid;

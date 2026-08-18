@@ -291,34 +291,55 @@ export function Composer({
         onClose={closeConflict}
         title="There's already a draft in this session"
       >
-        {conflict && (
-          <>
-            <p className="draft-copy">
-              Someone left unsent text in the session's input box. Send both together, or replace
-              it with your message.
-            </p>
-            <pre className="well draft-well">{conflict.draft}</pre>
-            <div className="draft-actions">
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={() => resolveConflict(conflict.text)}
-              >
-                Replace draft
-              </button>
-              <button
-                type="button"
-                className="btn-ghost"
-                onClick={() => resolveConflict(`${conflict.draft}\n${conflict.text}`)}
-              >
-                Append anyway
-              </button>
-              <button type="button" className="draft-cancel" onClick={closeConflict}>
-                Cancel
-              </button>
-            </div>
-          </>
-        )}
+        {conflict && (() => {
+          // Every row the server said it is holding — Task 405 made the 409's
+          // `draft` the WHOLE box rather than `draftOf`'s single marker row.
+          // The count is not decoration: BOTH buttons act on all of them, and
+          // the sheet used to show one row while "Append anyway" C-u'd the box
+          // and retyped that row plus the new text, destroying rows 2..N under
+          // a label that says it is keeping them.
+          //
+          // Zero rows is a real state, not a hypothetical: `failureOf` coerces
+          // a 409 that carried no `draft` to `''` (an older server, or one that
+          // refused without saying what it read). A count is then the one thing
+          // this copy must not print — "0 lines of unsent text" contradicts the
+          // refusal that opened the sheet — so it says it does not know.
+          const rows = conflict.draft === '' ? [] : conflict.draft.split('\n');
+          return (
+            <>
+              <p className="draft-copy">
+                {rows.length === 0
+                  ? "The session's input box already holds unsent text, and the server didn’t say"
+                    + ' what. Send yours after it, or replace it.'
+                  : `Someone left ${rows.length} ${rows.length === 1 ? 'line' : 'lines'} of unsent`
+                    + " text in the session's input box. Send both together, or replace it with"
+                    + ' your message.'}
+              </p>
+              <pre className="well draft-well" data-testid="draft-well">{conflict.draft}</pre>
+              <div className="draft-actions">
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={() => resolveConflict(conflict.text)}
+                >
+                  Replace draft
+                </button>
+                {/* Byte-identical to what it always was, and correct ONLY
+                    because `conflict.draft` is now the whole box. */}
+                <button
+                  type="button"
+                  className="btn-ghost"
+                  onClick={() => resolveConflict(`${conflict.draft}\n${conflict.text}`)}
+                >
+                  Append anyway
+                </button>
+                <button type="button" className="draft-cancel" onClick={closeConflict}>
+                  Cancel
+                </button>
+              </div>
+            </>
+          );
+        })()}
       </Sheet>
     </div>
   );
