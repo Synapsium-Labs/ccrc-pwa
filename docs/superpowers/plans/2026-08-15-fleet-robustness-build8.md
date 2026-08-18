@@ -13659,3 +13659,35 @@ knob tunable is a red suite pointing at the guard that then starts carrying real
 "already guarded". It can also be "the test never reached the site", and those two have opposite
 consequences — one removes a row from the table, the other means the row was never measured at all.
 Distinguish them by probing the site in isolation before believing either.
+
+**D-B8-9 — the substrate fix was necessary and not sufficient: it lost a race at boot.** The reboot
+that was to verify `_tmux_new_session` (D-B8-7) instead disproved it a second time. The server came
+back in `claude-session@claude-synapsium-platform.service`; `ccrc-tmux-server.scope` was absent.
+
+The journal is unambiguous. At 22:41:46 **fifteen** supervisors logged `Failed to start transient scope
+unit: Unit ccrc-tmux-server.scope was already loaded or has a fragment file`, and **one** logged
+`Started ccrc-tmux-server.scope - /usr/bin/tmux new-session -d -s cc-claude-corp-data-internal`. The
+scope was created and never held anything: the fifteen losers **did not wait**. Each fell through to a
+bare `tmux new-session`, one of those created the server in its own cgroup, and the scope winner's
+`new-session` then merely CONNECTED to that server, leaving its scope holding a client that exited at
+once — which `--collect` reaped.
+
+**The assumption that failed, recorded because it was written down as reasoning:** D-B8-7's fix argued
+that a loser's bare fallback "simply attaches to the server the first one already placed". Losing the
+unit-name race says nothing about who reaches `new-session` first. **systemd serialises the NAME, not
+the WORK.** An ordering was inferred from a mechanism that does not provide one, and no test could
+contradict it because no test ran two callers.
+
+*Fixed* by a double-checked lock on `$REG/.tmux-server.lock`: fast path (server up) takes no lock at
+all; slow path acquires, **re-asks** whether a server exists, then places or attaches. Blocking with a
+bounded wait (`TMUX_SERVER_LOCK_WAIT`, 15s) — and the blocking is the mechanism, so ccd's usual `-n`
+idiom is deliberately not used here; `-n` reproduces the bug. Timeout or missing `flock` degrades to
+the pre-lock behaviour: a possibly misplaced server, never a missing session.
+
+**The transferable lesson is about test SHAPE, not test rigour.** Every test of this mechanism, across
+both failures, drove exactly one caller. The defect only exists when there are seventeen. The race test
+now runs eight concurrent callers through a tmux stub with real shared state — `list-sessions` answers
+from a file `new-session` creates — and counts creates: **1** with the lock, **8** with the acquire
+removed. *A concurrency defect cannot be caught by a suite whose every case is sequential, however
+carefully each case is argued.* Both D-B8-7 failures share that root: the suite could not express the
+condition under which the mechanism actually runs.
