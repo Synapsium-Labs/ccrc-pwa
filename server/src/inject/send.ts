@@ -19,19 +19,38 @@ export type SendResult =
       draft?: string;
       pane?: string;
       /**
-       * The server proved `draft` is the WHOLE message currently in the box and
-       * that pressing Enter would send exactly it. ADDITIVE and absence-permits:
-       * an older server never sends it, so a client that gates on `=== true`
-       * degrades to no rescue — today's behaviour, the safe direction.
+       * The server WATCHED `draft` echo into the box as this call's own text and
+       * then failed to make it leave. So: `draft` is our whole message, the box
+       * still holds it, and one more Enter would send exactly it. ADDITIVE and
+       * absence-permits: an older server never sends it, so a client that gates
+       * on `=== true` degrades to no rescue — today's behaviour, the safe
+       * direction.
        *
-       * IT IS NOT A SYNONYM FOR A `code`. `draft` carries THREE meanings across
-       * the failure arms: the OTHER text (`draft-present`), OUR OWN proven text
-       * (`enter-ignored`, and now the ordinary `verify-failed`), and a FAILED
-       * CLEAR'S RESIDUE — a fragment of the message — on the attachment path's
-       * `verify-failed`. `submitEnter`'s correspondence gate cannot tell the
-       * third apart from the second: the residue IS what the box reads, so it
-       * matches, Enter is pressed, and a truncated prompt is submitted. This
-       * flag is the discriminator, and the attachment path must never set it.
+       * IT IS NOT A SYNONYM FOR A `code`, and `verify-failed` earns it on
+       * NEITHER path. `draft` carries three different meanings across the
+       * failure arms and only one of them supports the claim above:
+       *  - OUR OWN ECHOED TEXT — `enter-ignored`. The echo loop proved the box
+       *    holds it; both Enters were swallowed. The one arm that sets this flag.
+       *  - THE OTHER TEXT — `draft-present`, and the ordinary `verify-failed`,
+       *    which reports whatever the box last read.
+       *  - A FAILED CLEAR'S RESIDUE, a fragment of the message — the attachment
+       *    path's `verify-failed`. `submitEnter`'s correspondence gate cannot
+       *    tell this from the first: the residue IS what the box reads, so it
+       *    matches, Enter is pressed, and a truncated prompt is submitted. This
+       *    flag is the discriminator.
+       *
+       * WHY THE ORDINARY `verify-failed` ARM DOES NOT SET IT, even though it is
+       * the arm that deliberately leaves the text in the box. That arm is
+       * reached precisely when `draftOf(pane).startsWith(needle)` was false on
+       * every poll — the server has just proved the box does NOT hold our text.
+       * Three shapes reach it and the claim is false on all three: an EMPTY box
+       * (nothing to send; `submitEnter` answers `nothing-to-submit`), SOMEBODY
+       * ELSE'S words (a rescue would submit a human's half-typed sentence), and
+       * a PARTIAL RENDER of our own message — which is a fragment, i.e. exactly
+       * the residue shape above. The one case that would deserve the flag, the
+       * box holding our whole message, is unreachable here by construction: it
+       * would have set `echoed` and never reached the refusal. A gate downstream
+       * cannot repair this; the distinction has to be true where it is made.
        */
       submittable?: boolean };
 
@@ -589,9 +608,9 @@ export function sendPrompt(
       // difference was never a real distinction between the two payload shapes.
       //
       // This converts some silent false-successes into `verify-failed`
-      // refusals. That is the point, and it is safe only because such a refusal
-      // now leaves the text in the box and hands it back (`submittable`), so
-      // the operator's remedy is one tap rather than a terminal.
+      // refusals. That is the point, and it is safe because such a refusal
+      // leaves the text in the box and REPORTS the box, so the operator can see
+      // what is actually there instead of being sent to a terminal blind.
       //
       // ONE capture per poll, as before: the ansi read REPLACES the plain one
       // rather than joining it, so the success path's budget is unchanged.
@@ -619,16 +638,23 @@ export function sendPrompt(
         if (!sawPane) return { ok: false, error: 'not-alive' };
         // THE TEXT STAYS IN THE BOX — no clearBox, no C-u (operator ruling:
         // refuse, never destroy). That was already true; what was missing was
-        // saying so. Hand back the box row so the PWA's rescue has something
-        // to correspond against, and the flag that says the box row is the
-        // WHOLE message rather than a failed clear's fragment.
+        // saying so. Hand back the box row, FOR DISPLAY, exactly as the
+        // attachment arm hands back its residue.
+        //
+        // AND NO `submittable`. Reaching here means the box never started with
+        // our needle on any poll, so what the row holds is an empty box, or
+        // somebody else's words, or a partial render of our own message — a
+        // fragment, which is the one shape this flag was invented to keep a
+        // rescue away from. The case that would deserve it cannot arrive here:
+        // a box holding our whole message sets `echoed`. See
+        // `SendResult.submittable`.
         //
         // The pane tail is a PLAIN capture, taken once, here — it is display
         // for a human, and the escape codes would only make it unreadable.
         after = await d.tmux.capture(id);
         return {
           ok: false, error: 'verify-failed', pane: (after ?? '').slice(-PANE_TAIL),
-          draft: draftOf(lastAnsi), submittable: true,
+          draft: draftOf(lastAnsi),
         };
       }
     }

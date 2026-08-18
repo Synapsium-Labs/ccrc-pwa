@@ -522,19 +522,57 @@ describe('sendPrompt', () => {
     expect(await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'do the thing')).toEqual({ ok: true });
   });
 
-  // §4.1, the operator's ruling. `verify-failed` on the ORDINARY path already
-  // left the text in the box (no clearBox, no C-u) — it simply never said so,
-  // so the PWA had a sentence and no button. It now returns the box row AND
-  // the flag that says the box row is the WHOLE message and Enter would send
-  // exactly it.
-  it('verify-failed hands the text back: draft + submittable, and no C-u', async () => {
+  // §4.1, the operator's ruling, as narrowed by review. `verify-failed` on the
+  // ORDINARY path already left the text in the box (no clearBox, no C-u) — it
+  // simply never said so, so the PWA had a sentence and no button. It now
+  // reports the box row. It does NOT claim the row is submittable: see the
+  // three tests below, and `SendResult.submittable`'s own docstring.
+  it('verify-failed hands the box back for display — draft, no C-u', async () => {
     const { tmux, calls } = fakeTmux(['❯ \n', '❯ text the pane never rendered\n']);
     const res = await sendPrompt(
       { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'a different message',
     );
-    expect(res).toMatchObject({ ok: false, error: 'verify-failed', submittable: true });
+    expect(res).toMatchObject({ ok: false, error: 'verify-failed' });
     expect((res as { draft?: string }).draft).toBe('text the pane never rendered');
     expect(cuPresses(calls)).toBe(0);   // REFUSE-ONLY: nothing clears operator text
+  });
+
+  // THE ORDINARY `verify-failed` ARM CANNOT PROVE WHAT THE FLAG CLAIMS, and
+  // these three are the whole of what reaches it. The arm is entered exactly
+  // when the box never started with our needle on any poll — the server has
+  // just proved the box does not hold our text — so a rescue offered here
+  // presses Enter on something else. One test per shape:
+  //
+  //  1. SOMEBODY ELSE'S WORDS. A human typing between the clobber guard's read
+  //     and the echo poll. A "Send it" button here submits their half-typed
+  //     sentence as a turn, under our message's receipt.
+  it('does not offer a rescue over a human draft that appeared mid-send', async () => {
+    const { tmux } = fakeTmux(['❯ \n', '❯ a human started typing here\n']);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'my message');
+    expect(res).toMatchObject({ ok: false, error: 'verify-failed', draft: 'a human started typing here' });
+    expect((res as { submittable?: boolean }).submittable).toBeUndefined();
+  });
+
+  //  2. A PARTIAL RENDER OF OUR OWN MESSAGE — a fragment, which is the
+  //     attachment residue's shape exactly: `submitEnter`'s correspondence gate
+  //     matches it (the fragment IS what the box reads), presses Enter, and
+  //     submits a truncated prompt. This is the defect the flag exists to
+  //     exclude, so the flag must not be set on the arm that produces it.
+  it('does not offer a rescue over a PARTIAL render of our own text — that is a fragment', async () => {
+    const { tmux } = fakeTmux(['❯ \n', '❯ my mes\n']);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'my message');
+    expect(res).toMatchObject({ ok: false, error: 'verify-failed', draft: 'my mes' });
+    expect((res as { submittable?: boolean }).submittable).toBeUndefined();
+  });
+
+  //  3. AN EMPTY BOX. Nothing to send at all: `submitEnter` answers
+  //     `nothing-to-submit`. The flag with an empty draft was incoherent on its
+  //     face — a rescue whose subject is ''.
+  it('does not offer a rescue over an empty box', async () => {
+    const { tmux } = fakeTmux(['❯ \n', '❯ \n']);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'my message');
+    expect(res).toMatchObject({ ok: false, error: 'verify-failed', draft: '' });
+    expect((res as { submittable?: boolean }).submittable).toBeUndefined();
   });
 
   // A DEAD PANE IS NOT A REFUSAL WITH A DRAFT. When every echo poll's capture
@@ -599,7 +637,12 @@ describe('sendPrompt', () => {
     const res = await sendPrompt(
       { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'run the tests',
     );
-    expect(res).toMatchObject({ ok: false, error: 'verify-failed', submittable: true });
+    expect(res).toMatchObject({ ok: false, error: 'verify-failed' });
+    // NO RESCUE. This test asserted `submittable: true` when it shipped, and
+    // that assertion was encoding the defect: the box in this very fixture is
+    // EMPTY — the words are only in the scrollback — so the flag was promising
+    // a rescue whose subject does not exist.
+    expect((res as { submittable?: boolean }).submittable).toBeUndefined();
     expect(sendKeysCalls(calls).some((c) => c[c.length - 1] === 'Enter')).toBe(false);
   });
 
