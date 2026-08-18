@@ -91,7 +91,9 @@ describe('the session mail strip', () => {
 // The copy is written for the reader actually looking at it. The spec's
 // sender-side wording ("the recipient's input box") is wrong here: this strip
 // renders mail addressed TO the session whose screen you are on, so the
-// recipient IS this session and its composer is twenty pixels below.
+// recipient IS this session. It names the box by WHOSE it is and points at
+// nothing — the box with the unsent text in it is the session's own, not the
+// PWA composer under this strip (see the tooltip test below).
 describe('a blocked delivery is named before it is lost', () => {
   const blocked = (over: Partial<MailSummary> = {}) =>
     m({ state: 'queued', attempts: 3, lastError: 'draft-present', ...over });
@@ -119,6 +121,30 @@ describe('a blocked delivery is named before it is lost', () => {
   // what keeps the exclusion true if anyone ever widens `isBlocked` past
   // `queued`, and this test is what catches it if the `queued` limb goes. Both
   // are worth having; only one of them is a mechanism, and this is which.
+  // THE TOOLTIPS SAY WHAT THE LINE SAYS (review, W4c finding 3). Both hover
+  // titles read "the input box below" while the copy they hover over was
+  // deliberately written NOT to point anywhere: the box holding the unsent
+  // text is the SESSION's own input box — the one `sendPrompt` types into and
+  // reads back `draft-present` from — and the control below this strip is the
+  // PWA's composer, which is a different box and is empty. An operator who
+  // followed the tooltip would look at the wrong thing and find nothing wrong
+  // with it.
+  //
+  // Asserted as "names the same box", not as byte-equality with the visible
+  // line: a tooltip is allowed to be its own sentence, it is not allowed to
+  // name a different box.
+  it('names the same box in both tooltips as in the visible line', () => {
+    const { container } = render(<MailStrip mail={[blocked()]} />);
+    const mark = container.querySelector('.mail-strip-blocked-mark')!;
+    fireEvent.click(screen.getByRole('button', { expanded: false }));
+    const line = container.querySelector('.mail-strip-blocked')!;
+    expect(line.textContent).toContain("this session's input box");
+    for (const el of [mark, line]) {
+      expect(el.getAttribute('title')).toContain("this session's input box");
+      expect(el.getAttribute('title')).not.toMatch(/below/);
+    }
+  });
+
   it('never renders alongside the abandoned line — one status line per row', () => {
     const { container } = render(<MailStrip mail={[blocked({ state: 'rejected' })]} />);
     fireEvent.click(screen.getByRole('button', { expanded: false }));

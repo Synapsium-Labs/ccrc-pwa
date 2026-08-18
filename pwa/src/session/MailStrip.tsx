@@ -62,7 +62,12 @@ const isBlocked = (item: MailSummary): boolean =>
  *
  *  "this session's input box", not the spec's sender-side "the recipient's":
  *  this strip renders mail addressed TO the session whose screen this is, so
- *  the box in question is the composer twenty pixels below. */
+ *  the recipient IS this session. It names the box by WHOSE it is and points
+ *  at nothing, and both hover titles say the same (review, W4c finding 3 —
+ *  they used to say "the input box below"). The box holding the unsent text is
+ *  the one `sendPrompt` types into and reads `draft-present` back from; the
+ *  control below this strip is the PWA composer, a different box, and an empty
+ *  one. Pointing down sends the operator to look at the wrong thing. */
 const blockedLine = (item: MailSummary): string =>
   `blocked · attempt ${item.attempts} of ${MAIL_MAX_ATTEMPTS} — this session's input box has unsent text`;
 
@@ -81,7 +86,7 @@ export function MailStrip({ mail }: { mail: MailSummary[] }): ReactNode {
         {/* THE STRIP OPENS CLOSED, so a flag that only exists in the expanded
             rows is invisible in the state the operator is actually in. */}
         {mail.some(isBlocked) && (
-          <span className="mail-strip-blocked-mark" title="A message can't be delivered — the input box below has unsent text.">
+          <span className="mail-strip-blocked-mark" title="A message can't be delivered — this session's input box has unsent text.">
             blocked
           </span>
         )}
@@ -114,7 +119,7 @@ export function MailStrip({ mail }: { mail: MailSummary[] }): ReactNode {
                   undeliverable — act on it directly
                 </span>
               ) : isBlocked(item) ? (
-                <span className="mail-strip-blocked" title="The lane is still retrying. Clear the input box below and it will land.">
+                <span className="mail-strip-blocked" title="The lane is still retrying. Clear this session's input box and it will land.">
                   {blockedLine(item)}
                 </span>
               ) : null}
