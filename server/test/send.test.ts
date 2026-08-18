@@ -51,6 +51,23 @@ function fakeTmux(panes: (string | null)[]) {
   return { tmux: new Tmux(run), calls };
 }
 
+/**
+ * A box whose MARKER ROW IS BLANK while rows 2..N hold a human's text — the
+ * shape `draftOf` reads as '' and `hasContentBelowMarker` reads as occupied.
+ *
+ * Module-level because three describes need it and a fourth copy of the same
+ * seven rows is how fixtures drift: `clearBox`'s terminator, the clobber
+ * guard, and `clearMailResidue`'s refusal are all arguments about THIS pane,
+ * and they have to be arguments about the same one.
+ */
+const BLANK_MARKER_WITH_CONTENT = [
+  'earlier turn', '─'.repeat(24),
+  '❯ ',                     // blank marker row
+  '  the human’s real second line',
+  '  and a third',
+  '─'.repeat(24), '  👤 team·max',
+].join('\n') + '\n';
+
 const sendKeysCalls = (calls: string[][]) => calls.filter((c) => c[1] === 'send-keys');
 const cuPresses = (calls: string[][]) => sendKeysCalls(calls).filter((c) => c[c.length - 1] === 'C-u').length;
 
@@ -890,6 +907,27 @@ describe('sendPrompt clearMailResidue', () => {
     expect(sendKeysCalls(calls)).toEqual([]);
   });
 
+  // THE SHAPE WITH NO FIXTURE, and the one Task 407 is about to make
+  // dangerous. Widening the clobber guard (§4.2) made this arm reachable for a
+  // box whose MARKER ROW IS BLANK: `draft` is '' while rows 2..N hold a human's
+  // text. It falls through to `draft-present` today only because
+  // `isMailResidue('')` is false — a recogniser that answered TRUE on a blank
+  // marker row would put the mail lane's C-u onto somebody's rows 2..N, under a
+  // refuse-only ruling, and nothing in this file would have gone red. Task 407
+  // extends that recogniser; this is the test that watches it.
+  it('a BLANK marker row with a human’s rows below it is refused, never cleared', async () => {
+    const { tmux, calls } = fakeTmux([BLANK_MARKER_WITH_CONTENT]);
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'ccrc-mail: you have new mail. List it.',
+      { resumeIfOwn: true, clearMailResidue: true },
+    );
+    expect(res).toMatchObject({ ok: false, error: 'draft-present' });
+    // Not one keystroke — no C-u at the human's rows, nothing typed over them.
+    expect(sendKeysCalls(calls)).toEqual([]);
+    // And the refusal carries the rows it is protecting, not the blank row.
+    expect((res as { draft?: string }).draft).toBe('the human’s real second line\nand a third');
+  });
+
   it('without clearMailResidue, an identical chip is STILL refused as draft-present — opt-in only', async () => {
     const { tmux, calls } = fakeTmux(['❯ [Pasted text #1 +54 lines]\n']);
     const res = await sendPrompt(
@@ -1416,14 +1454,7 @@ describe('clearBox reports on the whole box, not on one row', () => {
   // and reports `cleared` with rows 2..N untouched — after which the caller's
   // type loop concatenates its message onto somebody else's text.
   it('does not report cleared while rows below the marker still hold text', async () => {
-    const blankMarkerWithContent = [
-      'earlier turn', '─'.repeat(24),
-      '❯ ',                     // blank marker row
-      '  the human’s real second line',
-      '  and a third',
-      '─'.repeat(24), '  👤 team·max',
-    ].join('\n') + '\n';
-    const { tmux } = fakeTmux([blankMarkerWithContent]);
+    const { tmux } = fakeTmux([BLANK_MARKER_WITH_CONTENT]);
     const res = await sendPrompt(
       { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'mine', { replaceDraft: true },
     );
@@ -1452,13 +1483,7 @@ describe('clearBox reports on the whole box, not on one row', () => {
 });
 
 describe('the clobber guard sees the whole box', () => {
-  const blankMarkerWithContent = [
-    'earlier turn', '─'.repeat(24),
-    '❯ ',
-    '  the human’s real second line',
-    '  and a third',
-    '─'.repeat(24), '  👤 team·max',
-  ].join('\n') + '\n';
+  const blankMarkerWithContent = BLANK_MARKER_WITH_CONTENT;
 
   // VACUUM: every fakeTmux fixture in this file puts the marker LAST with
   // nothing after it, so `continuationRows` returns [] and the widened guard
