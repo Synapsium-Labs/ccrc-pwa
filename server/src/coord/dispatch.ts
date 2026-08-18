@@ -435,11 +435,20 @@ export async function dispatchRun(
   // hazard D-1's "genuinely fresh context" sentence exists to make
   // mechanical rather than hopeful. Concretely, on `enter-ignored` the
   // literal text `/clear` is left sitting in the worker's own input box
-  // (`send.ts`'s own `draft` return); the delivery lane's very next sweep
-  // calls `sendPrompt` with no `replaceDraft`, so it would hit
-  // `draft-present` immediately and keep hitting it — parking the brief
-  // `rejected('undeliverable')` after `MAIL_MAX_ATTEMPTS`, with nothing
-  // surfacing WHY. `clearError` (this outcome's own field) is the signal a
+  // (`send.ts`'s own `draft` return).
+  //
+  // WHAT THAT COSTS CHANGED UNDER THIS BUILD, and the new cost is the worse
+  // of the two (wave-check). It used to be a park: the delivery lane's next
+  // sweep hit `draft-present`, kept hitting it, and parked the brief
+  // `rejected('undeliverable')` after `MAIL_MAX_ATTEMPTS` with nothing
+  // surfacing why. Both halves of that are now false — Task 407 lets the
+  // lane CLEAR exactly this box, on the record THIS CALL writes
+  // (`clearRefusedDetail` below, read back by `CoordStore.strandedClear`),
+  // and Task 409 tells the sender on the first block and on the park. So a
+  // brief queued here would no longer sit and park where somebody eventually
+  // notices; it would most likely LAND, in the un-cleared context D-1
+  // forbids. The gate is what keeps it out, and it matters more than it did.
+  // `clearError` (this outcome's own field) is the signal a
   // coordinator needs to decide what to do next; `POST /api/mail` stays
   // open to send the brief directly once the context is actually fresh.
   const briefQueued = !resumed || clearedAt !== null;
