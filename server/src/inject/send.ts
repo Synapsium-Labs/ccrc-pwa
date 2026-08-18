@@ -693,11 +693,16 @@ const isRuleRow = (line: string): boolean => {
  * `resumeIfOwn`'s per-delivery discrimination below (the first row's
  * CONTENT, not just whether one exists).
  *
- * Reachable end-to-end: `sendPrompt` writes a leading blank line with
- * `M-Enter` whenever the composed prompt's first `\n`-split part is `''`
- * (its own `parts` loop above), so an `enter-ignored` on a message that
- * *starts* with a blank line leaves exactly this shape — a blank marker row
- * with the real text one row down, invisible to `draftOf`.
+ * Reachable end-to-end, but NO LONGER FROM US. `sendPrompt` used to write a
+ * leading blank line with `M-Enter` whenever the composed prompt's first
+ * `\n`-split part was `''` (its own `parts` loop above); Task 402 made
+ * `composePrompt` strip leading blank lines, and `sendPrompt` calls it itself,
+ * so no caller — the app's Composer, the coordinator, a curl — can manufacture
+ * that shape any more. The two producers that remain are a HUMAN pressing Enter
+ * in the box before typing, and any pre-402 client still on the wire; the
+ * clobber guard's own comment above states the same position, which is the one
+ * to trust. Either way the shape is a blank marker row with real text one row
+ * down, invisible to `draftOf` — which is why this function exists.
  *
  * The real captures back exactly one claim, and this function is scoped to
  * only that claim: a rule row closes the box immediately, so any non-blank

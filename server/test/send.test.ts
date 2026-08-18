@@ -390,6 +390,26 @@ describe('sendPrompt', () => {
     ]);
   });
 
+  // `continuationRows`' docstring used to claim `sendPrompt` writes a leading
+  // blank row whenever the composed prompt's first part is `''`. Task 402
+  // killed that: `composePrompt` strips leading blank lines and `sendPrompt`
+  // calls it ITSELF, so the strip is server-side and a caller still sending the
+  // old shape gets it stripped here too. This is the claim the corrected
+  // docstring rests on, so it is asserted rather than described.
+  it('never types a leading blank row — the M-Enter loop cannot manufacture one', async () => {
+    const { tmux, calls } = fakeTmux(['❯ \n', '❯ real first line\n  second line\n', '❯ \n']);
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', '\n   \nreal first line\nsecond line',
+    );
+    expect(res).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([
+      ['tmux', 'send-keys', '-t', 'cc-x', '-l', 'real first line'],
+      ['tmux', 'send-keys', '-t', 'cc-x', 'M-Enter'],
+      ['tmux', 'send-keys', '-t', 'cc-x', '-l', 'second line'],
+      ['tmux', 'send-keys', '-t', 'cc-x', 'Enter'],
+    ]);
+  });
+
   it('ignores ❯ history lines; input box is the LAST ❯ line and uses a non-breaking space', async () => {
     // Real Claude Code panes render past user turns with `❯ ` (regular space)
     // ABOVE the live input box — and the empty input box renders as `❯` + U+00A0

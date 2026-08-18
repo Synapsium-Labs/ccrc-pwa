@@ -326,8 +326,12 @@ function PendingBubble({
             than a later one, and a button that submits an unproven box is the
             hazard this whole route is gated against — so the operator gets the
             sentence and the terminal, not a tap that might send someone else's
-            text. (The row is blank exactly when the message's own first line
-            was blank; `blank-first-row` is the server's name for that pane.) */}
+            text. (The row is blank when the BOX's marker row is empty — no
+            longer something our own message can cause, since `composePrompt`
+            strips leading blank lines before anything is typed; it means a
+            human pressed Enter in the box first, or an older send left the
+            shape behind. `blank-first-row` is the server's name for that
+            pane.) */}
         {send.code === 'enter-ignored' && send.draft !== undefined && send.draft.trim() !== '' && (
           <SendItButton id={id} sendKey={send.key} expect={send.draft} onSent={onDiscard} />
         )}
