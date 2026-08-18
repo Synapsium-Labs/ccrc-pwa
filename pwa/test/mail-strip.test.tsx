@@ -81,6 +81,112 @@ describe('the session mail strip', () => {
   });
 });
 
+// TASK 412 — a delivery the lane is still retrying but cannot hand over.
+//
+// This is an EXTENSION of a shipped shape, not a new variant: the strip already
+// renders exactly one distinct status line (`.mail-strip-abandoned`, keyed on
+// `state === 'rejected'`), and this is a third `flex-basis: 100%` span of the
+// same kind inside the SAME `<li>`.
+//
+// The copy is written for the reader actually looking at it. The spec's
+// sender-side wording ("the recipient's input box") is wrong here: this strip
+// renders mail addressed TO the session whose screen you are on, so the
+// recipient IS this session and its composer is twenty pixels below.
+describe('a blocked delivery is named before it is lost', () => {
+  const blocked = (over: Partial<MailSummary> = {}) =>
+    m({ state: 'queued', attempts: 3, lastError: 'draft-present', ...over });
+
+  it('names the block, the attempt and the CEILING', () => {
+    render(<MailStrip mail={[blocked()]} />);
+    fireEvent.click(screen.getByRole('button', { expanded: false }));
+    expect(screen.getByText(
+      "blocked · attempt 3 of 6 — this session's input box has unsent text",
+    )).toBeInTheDocument();
+  });
+
+  it('is a span inside the EXISTING row, not a second row', () => {
+    const { container } = render(<MailStrip mail={[blocked()]} />);
+    fireEvent.click(screen.getByRole('button', { expanded: false }));
+    expect(container.querySelectorAll('li.mail-strip-row')).toHaveLength(1);
+    expect(container.querySelector('li.mail-strip-row .mail-strip-blocked')).not.toBeNull();
+  });
+
+  // MEASURED, AND DISCLOSED: the exclusion has TWO defences and this test can
+  // only red one of them. `isBlocked`'s `state === 'queued'` limb already makes
+  // "rejected AND blocked" unconstructible, so restoring the two independent
+  // guards the ternary replaced leaves the whole file green — verified by
+  // mutation, not assumed. The ternary is therefore belt to that braces: it is
+  // what keeps the exclusion true if anyone ever widens `isBlocked` past
+  // `queued`, and this test is what catches it if the `queued` limb goes. Both
+  // are worth having; only one of them is a mechanism, and this is which.
+  it('never renders alongside the abandoned line — one status line per row', () => {
+    const { container } = render(<MailStrip mail={[blocked({ state: 'rejected' })]} />);
+    fireEvent.click(screen.getByRole('button', { expanded: false }));
+    expect(container.querySelector('.mail-strip-abandoned')).not.toBeNull();
+    expect(container.querySelector('.mail-strip-blocked')).toBeNull();
+  });
+
+  // THE MAINLINE PATH, and the reason `state === 'queued'` is a guard rather
+  // than belt-and-braces: `markDelivered` writes `state='delivered'` and does
+  // NOT clear `lastError` (server/src/coord/store.ts) — so a delivery that was
+  // blocked once and landed on the next tick keeps the word 'draft-present' in
+  // that column forever. Reading `lastError` alone would leave a permanent
+  // "blocked" line on a message that demonstrably arrived.
+  it('says nothing about a delivery that WAS blocked and then landed', () => {
+    const { container } = render(
+      <MailStrip mail={[blocked({ state: 'delivered' })]} />,
+    );
+    fireEvent.click(screen.getByRole('button', { expanded: false }));
+    expect(container.querySelector('.mail-strip-blocked')).toBeNull();
+    expect(container.querySelector('.mail-strip-blocked-mark')).toBeNull();
+  });
+
+  it('renders nothing for a queued delivery that is merely waiting', () => {
+    const { container } = render(<MailStrip mail={[m({ state: 'queued', attempts: 0, lastError: null })]} />);
+    fireEvent.click(screen.getByRole('button', { expanded: false }));
+    expect(container.querySelector('.mail-strip-blocked')).toBeNull();
+  });
+
+  it('reads lastError as a RAW string — an unrecognised value renders nothing, never a crash', () => {
+    const { container } = render(<MailStrip mail={[blocked({ lastError: 'some-future-server-word' })]} />);
+    fireEvent.click(screen.getByRole('button', { expanded: false }));
+    expect(container.querySelector('.mail-strip-blocked')).toBeNull();
+  });
+
+  // …and it is not shown to the operator either. The two halves of the wire
+  // rule (never a Record key, never rendered raw) are scanned for structurally
+  // further down this file; this is the same rule measured through the DOM, on
+  // the one component that now reads the field.
+  it('never puts the raw server word on screen', () => {
+    render(<MailStrip mail={[blocked()]} />);
+    fireEvent.click(screen.getByRole('button', { expanded: false }));
+    expect(screen.queryByText(/draft-present/)).toBeNull();
+  });
+
+  // ONLY the blocked row is flagged. Without this the feature could be a
+  // per-STRIP flag painted on every row, which would name the wrong message.
+  it('flags the blocked delivery and not its neighbour', () => {
+    const { container } = render(
+      <MailStrip mail={[blocked(), m({ id: 2, state: 'delivered', attempts: 1, lastError: null })]} />,
+    );
+    fireEvent.click(screen.getByRole('button', { expanded: false }));
+    expect(container.querySelectorAll('.mail-strip-blocked')).toHaveLength(1);
+  });
+
+  // THE STRIP OPENS CLOSED. Without this the whole feature is invisible in its
+  // default state, which is the state it is in whenever the operator has not
+  // already gone looking.
+  it('the COLLAPSED head carries the flag', () => {
+    const { container } = render(<MailStrip mail={[blocked()]} />);
+    expect(container.querySelector('.mail-strip-head .mail-strip-blocked-mark')).not.toBeNull();
+  });
+
+  it('the head carries NO flag when nothing is blocked', () => {
+    const { container } = render(<MailStrip mail={[m()]} />);
+    expect(container.querySelector('.mail-strip-blocked-mark')).toBeNull();
+  });
+});
+
 describe('the session store takes the mail frame', () => {
   const snap = (): SessionSnapshot => ({
     events: [], offset: 0, uuid: null, status: null, statusUpdatedAt: null,

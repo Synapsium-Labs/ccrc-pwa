@@ -185,6 +185,30 @@ describe('the mail feed', () => {
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     expect(feedSpy).toHaveBeenCalledTimes(1);
   });
+
+  // TASK 412's other half. The SENDER-side block and park signals land in the
+  // FEED, not in the session's mail strip, because the strip is recipient-side
+  // — the sender is a different session on a different screen. They reuse the
+  // existing `mail` kind ON PURPOSE: `KIND_WORD` and `KIND_GLYPH` are TOTAL
+  // maps over `NotifyEvent['kind']`, so a seventh kind means editing both plus
+  // `NOTIFY_KINDS`, and every older client renders `undefined`.
+  //
+  // The title and body are `watch.ts`'s own (`✉ blocked › ${d.toId}` and
+  // `${subject}: ${why}`), copied verbatim rather than paraphrased, so this
+  // fixture stays a measurement of the shipped producer.
+  it('renders a blocked-mail record with the ordinary mail glyph and word', async () => {
+    const store = makeStore();
+    const blocked = e({
+      seq: 4, sessionId: 'boss', title: '✉ blocked › w1',
+      body: "wave-brief: the recipient's input box has unsent text in it",
+    });
+    act(() => { store.setState({ feed: [blocked] }); });
+    render(<MailScreen store={store} loadFeed={vi.fn().mockResolvedValue({ events: [] })} />);
+    expect(await screen.findByText(/blocked › w1/)).toBeInTheDocument();
+    // The kind word an unknown kind would NOT produce — the map stayed total.
+    expect(screen.getByText(/^mail$/)).toBeInTheDocument();
+    expect(screen.getByText(/input box has unsent text/)).toBeInTheDocument();
+  });
 });
 
 describe('the door', () => {
