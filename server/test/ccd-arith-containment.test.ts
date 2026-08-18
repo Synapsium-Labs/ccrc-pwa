@@ -69,12 +69,12 @@ describe('arithmetic-injection containment (D-B8-3): no swept site evaluates a t
   it('_spawn_start does not evaluate a payload planted in lastswap', () => {
     const h = makeCcdHarness('arith-spawn');
     // wrapper/workdir/uuid non-empty so the `incomplete registry` die does not
-    // fire first; _tmux_server_ensure and tmux stubbed so the fromswap line is
+    // fire first; tmux stubbed so the fromswap line is
     // reached and nothing real spawns. mode=new avoids the resume settle.
     h.sh(
       '_reg_set myid wrapper claude; _reg_set myid workdir "$HOME"; _reg_set myid uuid u1;'
       + " _reg_set myid lastswap 'REG[$(touch \"$HOME/PWNED-spawn\")]';"
-      + ' _tmux_server_ensure(){ :; }; tmux(){ :; };'
+      + ' tmux(){ :; };'
       + ' _spawn_start myid new || :');
     expect(existsSync(path.join(h.home, 'PWNED-spawn'))).toBe(false);
     h.cleanup();
