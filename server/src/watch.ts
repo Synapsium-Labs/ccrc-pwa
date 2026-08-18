@@ -16,7 +16,7 @@ import type { SessionRecord } from './registry.js';
 import type {
   CoordStatus, NotifyEvent, PrState, RunSummary, SessionStatus, TaskProgress,
 } from '../../shared/api.js';
-import { UNCHECKED_PR } from '../../shared/api.js';
+import { MAIL_MAX_ATTEMPTS, UNCHECKED_PR } from '../../shared/api.js';
 // The pause marker's ONE definition in the tree. `MAIL_DISABLED_MARKER` is
 // NOT imported beside it: this file holds its own module-local literal
 // (`sweepMail` already uses it), a second `const` of that name in one scope is
@@ -155,7 +155,13 @@ const MAIL_COOLDOWN_MS = 120_000;
  *  ignoring. */
 const MAIL_REPLAY_MS = 600_000;
 
-/** The PRE-DELIVERY attempt budget, and the spacing between attempts —
+/** WHAT `MAIL_MAX_ATTEMPTS` MEANS, kept beside the code that enforces it. The
+ *  VALUE moved to `shared/api.ts` in Task 408 — `MailSummary.attempts` puts
+ *  the running count on the wire, so the PWA now names the same budget and a
+ *  second `6` in the client would be a second copy of a policy number. The
+ *  reasoning stays here, where the ceiling is actually applied.
+ *
+ *  The PRE-DELIVERY attempt budget, and the spacing between attempts —
  *  applies ONLY while a delivery's own `deliveredAt` is still null (review
  *  finding 4). A row that has NEVER been delivered parks as
  *  `rejected('undeliverable')` at the cap, and THE MAIL ROW IS UNTOUCHED
@@ -184,7 +190,6 @@ const MAIL_REPLAY_MS = 600_000;
  *  doubling from 30 s to the same 15-minute ceiling `PR_BACKOFF_MAX_MS`
  *  already uses, one ceiling for "this keeps not working" across the whole
  *  watcher. */
-const MAIL_MAX_ATTEMPTS = 6;
 const MAIL_BACKOFF_BASE_MS = 30_000;
 const MAIL_BACKOFF_MAX_MS = PR_BACKOFF_MAX_MS;
 

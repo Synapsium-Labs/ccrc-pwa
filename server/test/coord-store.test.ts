@@ -1305,3 +1305,63 @@ describe('CoordStore: the /clear a dispatch stranded', () => {
     expect(s.strandedClear('demo-quiet-mesa')).toBe(false);
   });
 });
+
+// TASK 408 — a blocked delivery is visible on the wire BEFORE it is lost.
+// `mail_deliveries.attempts` and `.lastError` are written on every back-off
+// and read by nothing: `MailSummary` carried `state` alone, so a delivery
+// blocked against a dirty input box for fifteen minutes was byte-identical to
+// one merely waiting its turn.
+describe('CoordStore: a blocked delivery is visible on the wire', () => {
+  it('hydrateMail carries attempts and lastError straight off mail_deliveries', () => {
+    const s = store();
+    const mail = s.insertMail({ fromId: 'coordinator', fromUuid: 'coordinator', toId: 'w1',
+      runId: null, kind: 'status', subject: 'wave-brief', body: 'go', artifacts: [] });
+    const d = s.queueDelivery(mail.id, 'w1', 'env');
+    s.backOff(d.id, 'draft-present', Date.now() + 30_000);
+    s.backOff(d.id, 'draft-present', Date.now() + 60_000);
+
+    const [row] = s.outstandingMailFor('w1');
+    expect(row!.attempts).toBe(2);
+    expect(row!.lastError).toBe('draft-present');
+    // The back-off leaves the row QUEUED — which is why `outstandingMailFor`'s
+    // predicate needs no change, and why a strip can render a live count
+    // rather than waiting for a park.
+    expect(row!.state).toBe('queued');
+  });
+
+  it('a delivery that has never failed reports 0 and null, not a guess', () => {
+    const s = store();
+    const mail = s.insertMail({ fromId: 'w1', fromUuid: 'u1', toId: 'coordinator',
+      runId: null, kind: 'status', subject: 'done', body: 'ok', artifacts: [] });
+    s.queueDelivery(mail.id, 'coordinator', 'env');
+    const [row] = s.outstandingMailFor('coordinator');
+    expect(row!.attempts).toBe(0);
+    expect(row!.lastError).toBeNull();
+  });
+
+  it('mailForRecipient reads the same two columns — one hydrator, not two', () => {
+    const s = store();
+    const mail = s.insertMail({ fromId: 'coordinator', fromUuid: 'coordinator', toId: 'w1',
+      runId: null, kind: 'status', subject: 's', body: 'b', artifacts: [] });
+    const d = s.queueDelivery(mail.id, 'w1', 'env');
+    s.backOff(d.id, 'dialog-open', Date.now() + 1000);
+    expect(s.mailForRecipient('w1')[0]!.lastError).toBe('dialog-open');
+    expect(s.mailForRecipient('w1')[0]!.attempts).toBe(1);
+  });
+
+  // The counter on the wire is the SEND-FAILURE budget, and `backOff`'s
+  // `countsAsAttempt: false` arm exists precisely because one gate (a registry
+  // row that could not be measured) must never ratchet toward the park. What
+  // the wire shows has to agree with what the ceiling counts, or the number
+  // becomes a second, disagreeing story about the same row.
+  it('an attempt the lane deliberately did not count is not counted here either', () => {
+    const s = store();
+    const mail = s.insertMail({ fromId: 'coordinator', fromUuid: 'coordinator', toId: 'w1',
+      runId: null, kind: 'status', subject: 's', body: 'b', artifacts: [] });
+    const d = s.queueDelivery(mail.id, 'w1', 'env');
+    s.backOff(d.id, 'registry row listed but unreadable (registry-unmeasurable)', Date.now() + 1000, false);
+    const [row] = s.outstandingMailFor('w1');
+    expect(row!.attempts).toBe(0);
+    expect(row!.lastError).toBe('registry row listed but unreadable (registry-unmeasurable)');
+  });
+});

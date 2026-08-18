@@ -206,11 +206,16 @@ const OUTSTANDING_OR_ABANDONED_SQL =
  *  the moment one mail fans out to more than one recipient. */
 const MAIL_ROW_COLUMNS =
   'm.id AS id, d.id AS deliveryId, m.at AS at, m.fromId AS fromId, d.toId AS toId, m.runId AS runId, ' +
-  'm.kind AS kind, m.subject AS subject, m.artifacts AS artifacts, d.state AS state';
+  'm.kind AS kind, m.subject AS subject, m.artifacts AS artifacts, d.state AS state, ' +
+  // Task 408: the two columns the lane has always WRITTEN and nothing ever
+  // read. `state` alone cannot tell a delivery blocked against a dirty input
+  // box from one merely waiting for its next attempt window.
+  'd.attempts AS attempts, d.lastError AS lastError';
 
 interface MailRowDb {
   id: number; deliveryId: number; at: number; fromId: string; toId: string; runId: number | null;
   kind: string; subject: string; artifacts: string; state: string;
+  attempts: number; lastError: string | null;
 }
 
 /** A route argument can never ask either mail read to walk more history (or
@@ -1082,6 +1087,12 @@ export class CoordStore {
       kind: isMailKind(r.kind) ? r.kind : 'unknown', subject: r.subject,
       artifacts: JSON.parse(r.artifacts) as string[],
       state: isMailDeliveryState(r.state) ? r.state : 'unknown',
+      // RAW, both of them. `lastError` is free text (four writers, four kinds
+      // of thing — see `MailSummary.lastError`'s own docstring for the rule
+      // every client owes it); narrowing it HERE would be this store deciding
+      // a display question on the reader's behalf, and would drop exactly the
+      // detail a maintainer greps the column for.
+      attempts: r.attempts, lastError: r.lastError,
     }));
   }
 

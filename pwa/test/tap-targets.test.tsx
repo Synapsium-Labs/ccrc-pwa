@@ -102,7 +102,7 @@ const coordStatus = (over: Partial<CoordStatus> = {}): CoordStatus => ({ pause: 
 const mailItem = (over: Partial<MailSummary> = {}): MailSummary => ({
   id: 1, deliveryId: 1, at: Date.now() - 30_000, fromId: 'coordinator', toId: 'ccrc-pwa-clear-cove',
   runId: 3, kind: 'question', subject: 'rebase before you start?',
-  artifacts: [], state: 'delivered', ...over,
+  artifacts: [], state: 'delivered', attempts: 0, lastError: null, ...over,
 });
 
 // — the token itself —

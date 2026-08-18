@@ -1,4 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
+import { readFileSync, readdirSync } from 'node:fs';
+import path from 'node:path';
 import { act, cleanup, render, screen, fireEvent } from '@testing-library/react';
 import type { MailSummary } from '../../shared/api';
 import { MailStrip, summarizeMail } from '../src/session/MailStrip';
@@ -17,7 +19,7 @@ const T0 = 1_754_000_000_000;
 const m = (over: Partial<MailSummary> = {}): MailSummary => ({
   id: 1, deliveryId: 1, at: T0 - 30_000, fromId: 'coordinator', toId: 'ccrc-pwa-clear-cove',
   runId: 3, kind: 'question', subject: 'rebase before you start?',
-  artifacts: [], state: 'delivered', ...over,
+  artifacts: [], state: 'delivered', attempts: 0, lastError: null, ...over,
 });
 
 describe('the session mail strip', () => {
@@ -114,5 +116,67 @@ describe('SessionScreen shows outstanding mail', () => {
     });
     render(<SessionScreen id="claude:demo" store={store} />);
     expect(screen.getByText('rebase before you start?')).toBeInTheDocument();
+  });
+});
+
+// TASK 408 — the rule that comes attached to `MailSummary.lastError`.
+//
+// The field is the delivery lane's last failure, RAW. Four writers put four
+// different kinds of thing in that column: a typed `sendPrompt` error code,
+// `'recipient not in registry'`, `'run closed'`, and a whole English sentence
+// (`MAIL_REPLAY_CEILING_ERROR`). Putting it on the wire makes this client a
+// consumer of free text, and free text has exactly two ways of going wrong in
+// a UI — being keyed as if it were a vocabulary, and being shown to a human as
+// if it were a sentence written for them. So:
+//
+//   BRANCH on the one literal token there is a surface for (`=== 'draft-present'`);
+//   never key a `Record` off it — a value a newer server writes renders `undefined`;
+//   never display it raw.
+//
+// A TRIPWIRE, ARMED EARLY, and honestly labelled as such: `pwa/src` has no
+// `lastError` reader yet, so this scan passes today by finding nothing. It
+// exists so the FIRST reader has to be written in the permitted shape rather
+// than discovered in review — the paragraph above stops being a request the
+// moment either forbidden shape is typed. Verified by mutation: pasting
+// `MAP[m.lastError]` or `<p>{m.lastError}</p>` into `MailStrip.tsx` reds it.
+//
+// Its LIMIT, stated rather than left to be found: it matches on `X.lastError`,
+// so a value destructured into a bare local first (`const { lastError } = m`)
+// is invisible to it. That is a scan, not a type system; what it buys is that
+// the obvious way to write the wrong thing is a red suite.
+describe('lastError is consumed as free text, or not at all', () => {
+  const srcFiles = (dir: string): string[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) return srcFiles(p);
+      return /\.tsx?$/.test(e.name) ? [p] : [];
+    });
+
+  const noComments = (t: string): string =>
+    t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+
+  const scan = (re: RegExp): string[] =>
+    srcFiles(path.join(import.meta.dirname, '..', 'src'))
+      .filter((f) => re.test(noComments(readFileSync(f, 'utf8'))))
+      .map((f) => path.relative(path.join(import.meta.dirname, '..'), f));
+
+  it('is never used as a Record key — a new server value must not render undefined', () => {
+    expect(scan(/\[\s*[\w$]+(?:\.[\w$]+)*\.lastError\s*\]/)).toEqual([]);
+  });
+
+  it('is never rendered raw — it is a maintainer’s grep target, not operator copy', () => {
+    expect(scan(/\{\s*[\w$]+(?:\.[\w$]+)*\.lastError\s*\}/)).toEqual([]);
+  });
+
+  // The POSITIVE half, and the reason the type is `string | null` rather than a
+  // union of the codes anyone has seen so far: an arbitrary sentence is a legal
+  // value, and a client that assumed otherwise would be wrong about a column
+  // nothing validates on the way in. Type-checked by `npm run build`.
+  it('accepts an arbitrary sentence, because the column does', () => {
+    const row = m({ lastError: 'the recipient acknowledged nothing for three hours', attempts: 4 });
+    expect(row.lastError).toBe('the recipient acknowledged nothing for three hours');
+    expect(row.attempts).toBe(4);
+    // And absence is a distinct value: never attempted is not "failed with ''".
+    expect(m().lastError).toBeNull();
   });
 });

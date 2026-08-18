@@ -2432,6 +2432,15 @@ export function isMailDeliveryState(v: unknown): v is MailDeliveryState {
  *  char-vs-byte care `hookstate.ts:128-135` already takes with its own cap. */
 export const MAIL_BODY_MAX_BYTES = 8 * 1024;
 
+/** The PRE-DELIVERY attempt budget for one mail delivery — the `6` in
+ *  "attempt 3 of 6". L0 because BOTH sides name it now: `watch.ts`'s
+ *  `sweepMail` ENFORCES it, and (Task 408) `MailSummary.attempts` puts the
+ *  running count on the wire, so a client that wants to show how much room is
+ *  left before a park would otherwise carry a second copy of a policy number.
+ *  The reasoning for the VALUE — and for everything this counter deliberately
+ *  does NOT count — lives beside its enforcement, on `watch.ts`'s import. */
+export const MAIL_MAX_ATTEMPTS = 6;
+
 /**
  * The two envelope fields `MAIL_BODY_MAX_BYTES` does NOT bound (fix-round
  * finding 8 / D-44): `subject` renders as one envelope line and `artifacts`
@@ -2859,6 +2868,37 @@ export interface MailSummary {
   subject: string;
   artifacts: string[];
   state: MailDeliveryState;
+  /** Send attempts this DELIVERY has made (`mail_deliveries.attempts`), as the
+   *  lane counts them toward `MAIL_MAX_ATTEMPTS`. On the wire so a back-off is
+   *  visible BEFORE the park: without it, a delivery blocked against a dirty
+   *  input box for fifteen minutes is byte-identical to one merely waiting its
+   *  turn, and the first thing anyone hears is `undeliverable`.
+   *
+   *  It counts SEND FAILURES only, matching the ceiling exactly — a gate the
+   *  lane declines to charge for (`backOff(..., countsAsAttempt: false)`, an
+   *  unmeasurable registry row) does not advance it here either, or the number
+   *  would be a second, disagreeing story about the same row. */
+  attempts: number;
+  /**
+   * The delivery lane's last failure, RAW (`mail_deliveries.lastError`).
+   *
+   * FREE TEXT, and it has to be treated as such: four writers put four
+   * different kinds of thing here — a typed `sendPrompt` error code,
+   * `'recipient not in registry'`, `'run closed'`, and a whole English
+   * sentence (`MAIL_REPLAY_CEILING_ERROR`). The column is a maintainer's grep
+   * target, not a vocabulary, and it has never been validated on the way in.
+   *
+   * SO THE RULE FOR EVERY CLIENT, and it is not negotiable: branch on the ONE
+   * literal token you have a surface for (`=== 'draft-present'`), never key a
+   * total `Record<string, …>` off it — a value a newer server writes would
+   * render as `undefined` on an older client — and never display it raw to an
+   * operator. `pwa/test/mail-strip.test.tsx` scans `pwa/src` for both shapes,
+   * so this paragraph is a mechanism rather than a request.
+   *
+   * `null` means no failure is on record, which is not the same as an empty
+   * one: it is the shape of a delivery that has never been attempted.
+   */
+  lastError: string | null;
 }
 
 /** The two enforced caps (spec:199-201). The two COUNTS are queries over
