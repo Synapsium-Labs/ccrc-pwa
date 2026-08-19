@@ -43,6 +43,11 @@ const run = (...args: string[]): void => {
 };
 
 describe('install-session-hooks', () => {
+  // MUTATION RECORD (measured): dropping "SessionStart" from EVENTS_JSON
+  // turns this red on the SessionStart iteration alone ("expected false to
+  // be true // SessionStart") — session-hook.sh:62-73 handles the event
+  // (the F1 fix), but a fresh box's converger never registered it. Restored
+  // after confirming the red.
   it('registers the ten measured events and preserves existing entries byte-identically', () => {
     run();
     const s = JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
@@ -79,6 +84,11 @@ describe('install-session-hooks', () => {
       e.hooks?.some((h: any) => String(h.command).includes('session-hook.sh')));
     expect(stops).toHaveLength(1);
     expect(stops[0].hooks[0].command).not.toContain('/old/place/');
+    // The managed-entry sweep matches on filename inside .hooks[*].hooks[*].command
+    // only; statusLine is a different top-level key holding a different command
+    // string (no /session-hook.sh substring), so it cannot be caught by — or
+    // swept as — a stale managed entry.
+    expect(after.statusLine).toEqual(EXISTING.statusLine);
   });
   it('refuses a home whose settings.json is broken JSON, touching nothing — but still processes the other home in the same run', () => {
     fs.writeFileSync(cfg('.claude-personal'), '{broken');
@@ -88,16 +98,56 @@ describe('install-session-hooks', () => {
     expect(s.hooks.Stop.some((e: any) => e.hooks?.some((h: any) => String(h.command).includes('/session-hook.sh'))))
       .toBe(true);
   });
-  it('a home with NO settings.json gets one with only the managed hooks', () => {
+  it('a home with NO settings.json gets one with only the managed hooks and the seeded statusLine', () => {
     fs.rmSync(cfg('.claude-personal'));
     run();
     const s = JSON.parse(fs.readFileSync(cfg('.claude-personal'), 'utf8'));
-    expect(Object.keys(s)).toEqual(['hooks']);
+    expect(Object.keys(s).sort()).toEqual(['hooks', 'statusLine']);
+    expect(s.statusLine).toEqual({ type: 'command', command: 'bash "$HOME/.claude/statusline-command.sh"' });
   });
   it('backs up every settings.json it rewrites', () => {
     run();
     const backups = fs.readdirSync(path.join(home, 'ccrc-backups'));
     expect(backups.length).toBeGreaterThan(0);
+  });
+
+  // statusLine is load-bearing, not cosmetic: statusline-command.sh writes the
+  // ~/.cc-limits telemetry ccd's auto-swap and server placement consume, and
+  // ccd parses its ctx segment for auto-compact — but nothing in this repo has
+  // ever WRITTEN the settings.json key that wires the script in. The reference
+  // fleet's entries are hand-made history; a fresh box gets nothing without
+  // this seed.
+  it('seeds statusLine when absent, $HOME left literal-unexpanded like HOOK_CMD', () => {
+    const s = JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
+    delete s.statusLine;
+    fs.writeFileSync(cfg('.claude'), JSON.stringify(s));
+    run();
+    const after = JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
+    expect(after.statusLine).toEqual({ type: 'command', command: 'bash "$HOME/.claude/statusline-command.sh"' });
+  });
+  it('statusLine seeding is idempotent (second run is a byte no-op)', () => {
+    const s = JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
+    delete s.statusLine;
+    fs.writeFileSync(cfg('.claude'), JSON.stringify(s));
+    run();
+    const first = fs.readFileSync(cfg('.claude'), 'utf8');
+    run();
+    expect(fs.readFileSync(cfg('.claude'), 'utf8')).toBe(first);
+  });
+  it('never overwrites an operator-customized statusLine (set-if-absent: converge-not-damage)', () => {
+    run(); // converge hooks first, so a second run touches nothing but statusLine
+    const custom = { type: 'command', command: 'python3 /custom/statusline.py' };
+    const s = JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
+    s.statusLine = custom;
+    fs.writeFileSync(cfg('.claude'), JSON.stringify(s, null, 2));
+    const before = fs.readFileSync(cfg('.claude'), 'utf8');
+    run();
+    // MUTATION RECORD (measured): deleting the `if has("statusLine") then .`
+    // guard from JQ_PROGRAM (leaving only `.statusLine = {type:"command",
+    // command:$sl}`) turns this red — the custom command is clobbered with the
+    // default and the file is rewritten (no longer byte-identical). Restored
+    // after confirming the red.
+    expect(fs.readFileSync(cfg('.claude'), 'utf8')).toBe(before);
   });
 });
 
