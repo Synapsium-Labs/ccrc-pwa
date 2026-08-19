@@ -244,6 +244,22 @@ for whichever slice builds the worker-skill mechanism to pick up.
 
 ## Deferred out of this plan
 
+### Follow-ups from the whole-branch final review (2026-08-19, verdict CLEAN)
+
+Five items, none merge-blocking; destinations assigned:
+- **→ next deploy slice:** the fleet-lane RC seed writes via a bare `>` redirect, not the tmp+mv
+  `_inst_rc` uses — a torn first seed leaves an empty file a re-run's `[ -e ]` guard keeps (run 1
+  itself always aborts loudly; doctor's `unparseable` is the tell).
+- **→ next doctor slice:** a FAIL-path test with a non-`claude` upstream id (a hardcoded id in the
+  A2-NEW remedy would pass today's suite).
+- **→ next `cmd_version` touch:** the heredoc's field screening (non-empty + control-byte, per
+  `_box_build_fields`).
+- **→ hygiene batch:** the stale "step 10 of 14" comment at ccrc:1644; the four `const SGR` copies
+  (strip belongs inside `hasMenu`).
+
+Cosmetic, recorded only: `_dr_rc_state` reports a dangling symlink as `off (default)` (verdict
+still agrees with ccd); `o n` reads ON in both tools (global whitespace strip, consistent).
+
 - Per-worker RC (orchestrator task #37, the 2026-08-13 ruling) — **open; see "Task 7 — stage gate
   close-out" above for why a per-box flag does not subsume it.**
 - Deleting `/rc active` from the marker set — only after no pre-flip session survives on the reference fleet; operator-observable, not schedulable here.
