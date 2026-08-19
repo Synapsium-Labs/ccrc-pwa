@@ -13691,3 +13691,56 @@ from a file `new-session` creates — and counts creates: **1** with the lock, *
 removed. *A concurrency defect cannot be caught by a suite whose every case is sequential, however
 carefully each case is argued.* Both D-B8-7 failures share that root: the suite could not express the
 condition under which the mechanism actually runs.
+
+### D-B8-10 — the F1 fix was written, tested, and shipped, but never *wired*; `working` outlived its process
+
+**Found** 2026-08-19, verifying the D-B8-9 reboot. The reboot was a free natural experiment: every
+process on the box provably restarted at 08:58:25, so any hookstate written earlier belongs to a
+process that no longer exists. Twelve of seventeen live sessions carried hookstate older than the
+boot. Two of them read `state: "working"` — `claude2-OpenClawHetzner` (stamped 18 minutes before the
+boot) and `claude-corp-custom-tools` (10.3 hours before it). Both were marked as actively working by a
+process the reboot had destroyed.
+
+**Root cause, and it is not in the hook.** `session-hook.sh` dispatches on ten events. Its
+`SessionStart)` arm — carrying the long F1 comment from the build4 dogfood, and pinned green by
+`session-hook.test.ts` — writes `state: "done"`, exactly the re-stamp that clears a stale `working`
+and gives a virgin session its first hookstate. `install-session-hooks.sh` wired **nine**: eight in
+`EVENTS_JSON` plus `PreToolUse`, special-cased for its `"*"` matcher. `SessionStart` was the one arm
+never registered. Confirmed against the live fleet: every wrapper HOME binds `SessionStart` only to
+`restore.sh` and the code-usage guard, never to `session-hook.sh`.
+
+So the arm was dead code on the fleet from the day it was written. **F1 was never actually fixed in
+production** — a freshly spawned worker still has no hookstate, `sweepMail`'s `hs === null` conjunct
+still fails shut, and its first coordination brief still queues indefinitely (measured at ~40min when
+F1 was first diagnosed). The stale-`working` defect is the same gap seen from the other end: only
+`Stop` clears `working`, and a turn killed by a reboot, swap, OOM, or limit-lock never reaches its
+`Stop`.
+
+**The green suite was not wrong, it was aimed one seam short.** `session-hook.test.ts` proved the arm
+computes `done`. `install-session-hooks.test.ts` proved the installer writes what its own list says.
+Neither asked whether the two lists were the same list — and the installer test actively pinned the
+drift shut with `expect(s.hooks.SessionStart).toEqual(EXISTING.hooks.SessionStart)`, an assertion that
+read as "foreign entries survive" and also happened to assert "and we add nothing here". This is the
+CLAUDE.md single-source rule (`PR_REASONS = Object.keys(PR_REASON_MAP)`) violated in the one place
+`single-definition.test.ts` cannot see it: the two copies are in two languages, bash and bash-in-jq.
+
+*Fixed* in two parts. The installer wires `SessionStart`. The arm now reads `source`, because wiring it
+exposes a case the unconditional `done` gets wrong: the harness fires `SessionStart` with
+`source: "compact"` in the **middle** of a turn, to re-inject context after compaction. Stamping
+`done` there would tell the mail gate that an actively-thinking session is idle — the exact
+mid-thought injection the gate exists to prevent, and a defect strictly worse than the one being
+fixed. `compact` is therefore inert (write nothing; `PreCompact`/`PostCompact` already own that
+transition). `startup`, `resume`, `clear`, and an **absent** `source` all write `done` —
+absence-permits, since the pre-`source` payload is the F1 startup case.
+
+**The mechanism, not the convention.** `install-session-hooks.test.ts` now parses the `case "$event"`
+block out of `session-hook.sh`, runs the installer for real, and asserts the events actually wired are
+exactly the events handled. Measured: removing `SessionStart` from `EVENTS_JSON` → **2 red**; deleting
+the compact gate → **1 red**; restored → **32 passed**.
+
+**The transferable lesson is about where a seam hides.** D-B8-9's lesson was test *shape* — a
+concurrency defect needs concurrent callers. This one is adjacent and distinct: both sides of this
+seam were tested, thoroughly, in isolation, and the defect lived in the agreement between them that
+neither test could see. *A list enumerated twice is a seam, and a seam with a test on each side is
+still untested.* The one artifact that would have caught it is the one now added — a test that derives
+one copy from the other.

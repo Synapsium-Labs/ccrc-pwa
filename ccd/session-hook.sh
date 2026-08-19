@@ -70,6 +70,26 @@ case "$event" in
     # an idle boundary — sitting there waiting for input, exactly like a
     # session that just finished a `Stop` — so SessionStart writes `done`
     # too, the same idle the delivery gate already knows how to read.
+    #
+    # D-B8-10: this arm shipped UNWIRED — install-session-hooks.sh's event list
+    # omitted SessionStart — so F1 was never actually fixed on the fleet, and
+    # nothing re-stamped state when a supervisor resumed a session. Measured on
+    # the 2026-08-19 reboot: 12 of 17 live sessions still carried hookstate
+    # written before the boot that restarted them, two of them `working` —
+    # stamped by a process that no longer existed. Only `Stop` clears `working`,
+    # and a killed turn never reaches its `Stop`.
+    #
+    # Wiring it exposes the case the unconditional `done` above gets wrong:
+    # `source` is compact when the harness fires SessionStart in the MIDDLE of a
+    # turn to re-inject context after compaction. Stamping `done` there would
+    # tell the mail gate an actively-thinking session is idle — the precise
+    # mid-thought injection the gate exists to prevent. PreCompact/PostCompact
+    # already own that transition, so compact is inert here: write nothing at
+    # all and leave whatever PreCompact wrote standing. Every other source —
+    # startup, resume, clear, or ABSENT on an older harness — is a real idle
+    # boundary (absence-permits: the pre-`source` payload was the F1 startup).
+    src=$(jq -r '.source // empty' <<<"$payload" 2>/dev/null) || src=""
+    [[ "$src" == compact ]] && exit 0
     state="done" ;;
   Stop)
     state="done"
