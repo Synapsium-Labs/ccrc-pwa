@@ -1569,6 +1569,23 @@ cmd_install() {
     esac
   done
 
+  # BY NAME, ONCE, AND BEFORE THE FIRST STEP — `cmd_wrappers:1069-1076`'s guard,
+  # in the same shape and for a sharper version of the same reason. Every step
+  # that touches the roster runs `deploy/gen-accounts.mjs`, which IS node, and
+  # without this probe an absent interpreter arrives as that generator
+  # "failing": `_inst_roster` reports "the shipped roster seed does not
+  # validate" and `_inst_accounts_sh` reports "$HOME/.ccrc/accounts.json does
+  # not validate — fix it (or move it aside to reseed)". Both are false, and the
+  # second one instructs an operator to disturb the USER-OWNED file this verb
+  # exists to protect, for a cause that has nothing to do with it. That is the
+  # overloaded-seam mistake this file's header bans — "a missing dependency" and
+  # "a corrupt config file" are two conditions an operator acts on completely
+  # differently — and `install` is the ONE verb here that runs on a box which
+  # may legitimately not have node yet. (Round-1 review, Important 1; measured
+  # on a PATH holding every coreutil and no node.)
+  command -v node >/dev/null 2>&1 \
+    || _ccrc_die "node is required by 'ccrc install' — it runs ${CCRC_HERE%/*}/deploy/gen-accounts.mjs to write \$HOME/.ccrc/accounts.sh — but is not on PATH. Install Node (this repo's floor is in server/package.json's \"engines\") or put it on PATH, then re-run. Nothing on this box was written or changed."
+
   _inst_banner
   _inst_roster
   _inst_accounts_sh
@@ -1582,8 +1599,18 @@ cmd_install() {
 # box a deploy has already touched). Both are silent inputs otherwise, and a
 # wrong one produces a run that SUCCEEDS at the wrong thing; naming them in
 # line 1 turns that from a deduction into a reading.
+#
+# TWO MEASUREMENTS AND NOTHING ELSE. This line used to end "— single-box, local
+# fleet mode on localhost", which is a CLAIM ABOUT THE BOX made before anything
+# has been read, and it is false on the one box most likely to be running this:
+# an install onto a box whose `ccrc.env` says `CCRC_FLEET=remote` keeps that
+# file (it is user-owned) and then prints a banner asserting a mode the box does
+# not have and this run did not establish. `$HOME` and the tree are things this
+# process KNOWS; the mode belongs to `_inst_env`, which says it only in the case
+# where it wrote it, and the address belongs to Task 8's landing block, which
+# reads it back from the file. (Round-1 review, Minor 2.)
 _inst_banner() {
-  printf 'install: box: %s — single-box, local fleet mode on localhost\n' "$HOME"
+  printf 'install: box: %s\n' "$HOME"
   printf 'install: tree: %s\n' "${CCRC_HERE%/*}"
 }
 

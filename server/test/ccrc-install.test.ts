@@ -47,7 +47,7 @@ import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import {
   copyFileSync, mkdirSync, readFileSync, writeFileSync, existsSync, statSync,
-  chmodSync, readdirSync, rmSync,
+  chmodSync, readdirSync, rmSync, symlinkSync,
 } from 'node:fs';
 import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -56,6 +56,21 @@ import { ghContainedEnv } from './ccdWsHelpers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
+
+/** `command -v <name>` under THIS process's real PATH. */
+function realPath(name: string): string {
+  const p = spawnSync('bash', ['-c', `command -v ${name}`], { encoding: 'utf8' }).stdout.trim();
+  if (p === '') throw new Error(`this box has no ${name} — the fixture needs it`);
+  return p;
+}
+
+/** bash's absolute path, resolved ONCE, for the same reason
+ *  `ccrc-doctor.test.ts:62` resolves it: libuv looks the executable up in the
+ *  CHILD's environment, and one runner below hands the child a PATH with no
+ *  system directory on it at all — spawning bare `bash` there is ENOENT, which
+ *  surfaces as a spawn failure (`status === null`) rather than as anything the
+ *  test is about. */
+const BASH = realPath('bash');
 
 /** Every file the fixture tree is built from, repo-relative. Tasks 7-9 add
  *  lines here (units, `session-hook.sh`, `tmux.conf`, `deploy/notify.sh` …) as
@@ -154,11 +169,37 @@ function ccrcEnv(home: string): NodeJS.ProcessEnv {
   return env;
 }
 
+/** `opts.umask` runs the verb under an explicit file-creation mask instead of
+ *  the ambient one. It exists because a `chmod` this verb makes is invisible
+ *  under a permissive umask: `0644` is what a plain `>` redirect produces
+ *  anyway at `umask 022`, so a test asserting `0644` there passes with the
+ *  `chmod` DELETED (measured — round-1 review, Minor 1: the guard reddened only
+ *  on the reviewer's `umask 0002` box, i.e. by accident of whose shell ran it).
+ *  Under a hostile mask the mode can only come from the `chmod`. */
 function runInstall(home: string, args: string[] = ['install'],
-  extraEnv: NodeJS.ProcessEnv = {}): Result {
-  const r = spawnSync('bash', [ccrcIn(home), ...args],
-    { env: { ...ccrcEnv(home), ...extraEnv }, encoding: 'utf8' });
+  extraEnv: NodeJS.ProcessEnv = {}, opts: { umask?: string } = {}): Result {
+  const env = { ...ccrcEnv(home), ...extraEnv };
+  const r = opts.umask === undefined
+    ? spawnSync(BASH, [ccrcIn(home), ...args], { env, encoding: 'utf8' })
+    : spawnSync(BASH, ['-c', `umask ${opts.umask}; exec ${BASH} "$0" "$@"`,
+      ccrcIn(home), ...args], { env, encoding: 'utf8' });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+}
+
+/** A PATH with everything this verb shells out to EXCEPT `node`: the poison
+ *  directory at the head (so `gh`/`curl`/`systemctl`/`loginctl` stay contained)
+ *  then a directory of symlinks to the real coreutils the steps use. Removing
+ *  a system directory wholesale would not model this — on most boxes `node`
+ *  sits beside `cp` and `mkdir`, and a box missing THOSE is not the condition
+ *  under test. This is the doctor suite's `stub-bin` + `linkReal` idiom, used
+ *  here to model exactly one absence. */
+function nodelessPath(home: string): string {
+  const d = join(home, 'nodeless-bin');
+  mkdirSync(d, { recursive: true });
+  for (const b of ['mkdir', 'cp', 'mv', 'rm', 'cat', 'chmod']) {
+    if (!existsSync(join(d, b))) symlinkSync(realPath(b), join(d, b));
+  }
+  return `${join(home, '.local', 'bin')}:${d}`;
 }
 
 const read = (p: string): string => readFileSync(p, 'utf8');
@@ -220,9 +261,17 @@ describe('ccrc install: a fresh box', () => {
     expect(r.stdout).toMatch(/^install: roster: seeded single-account default$/m);
   });
 
-  it('generates accounts.sh from it — marked, parseable, and 644', () => {
+  it('generates accounts.sh from it — marked, parseable, and 644 under any umask', () => {
+    // RUN UNDER `umask 077`, deliberately (round-1 review, Minor 1). The mode
+    // assertion below is about `_inst_accounts_sh`'s explicit `chmod 644`, and
+    // under the ordinary `umask 022` a plain `>` redirect produces 0644 all by
+    // itself — so the assertion passed with the `chmod` DELETED, measured. The
+    // guard's redness was an accident of whose shell ran the suite (this box
+    // masks 0002 and did go red; CI at 022 did not). At 077 the redirect
+    // produces 0600 and 0644 can only come from the chmod: re-measured, the
+    // deletion is now 1 red here.
     const home = freshBox('ccrc-install-fresh-accounts-sh-');
-    const r = runInstall(home);
+    const r = runInstall(home, ['install'], {}, { umask: '077' });
     expect(r.code, r.stderr).toBe(0);
     const sh = dotCcrc(home, 'accounts.sh');
     // The provenance marker `shared/mark.mjs` writes. Its presence is what
@@ -257,16 +306,25 @@ describe('ccrc install: a fresh box', () => {
     expect(r.stdout).toMatch(/^install: ccrc\.env: written \(localhost, local fleet mode\)$/m);
   });
 
-  it('names the box and the tree before it changes anything', () => {
+  it('names the box and the tree — the two things it measured — before it changes anything', () => {
     // The two inputs every step is computed from. A run under the wrong HOME
     // (sudo) or out of the wrong tree (a stale `~/ccrc` rather than the
     // checkout just edited) SUCCEEDS at the wrong thing, so both are stated in
     // the transcript rather than deduced from the result.
+    //
+    // BOTH LINES ARE PINNED WHOLE, because the banner is the one thing here
+    // that prints without deciding anything, and a printer nothing can go red
+    // for is a comment. Measured: deleting the `tree` line, and garbling the
+    // `box` line's format string, each turn this test red on its own.
     const home = freshBox('ccrc-install-banner-');
     const r = runInstall(home);
     const lines = r.stdout.split('\n');
-    expect(lines[0]).toBe(`install: box: ${home} — single-box, local fleet mode on localhost`);
+    expect(lines[0]).toBe(`install: box: ${home}`);
     expect(lines[1]).toBe(`install: tree: ${treeRoot(home)}`);
+    // …and it CLAIMS nothing. The banner used to end "— single-box, local fleet
+    // mode on localhost", asserted before a byte had been read; the arm in
+    // `the files the operator owns` below is the box where that is false.
+    expect(lines[0]).not.toMatch(/fleet mode|localhost|127\.0\.0\.1/);
   });
 
   it('finishes clean: exit 0, nothing on stderr, no temp files left behind', () => {
@@ -315,6 +373,12 @@ describe('ccrc install: the files the operator owns', () => {
     expect(r.code, r.stderr).toBe(0);
     expect(read(dotCcrc(home, 'ccrc.env'))).toBe(mine);
     expect(r.stdout).toMatch(/^install: ccrc\.env: kept \(user-owned, never overwritten\)$/m);
+    // …and the transcript does not tell this operator their box is in local
+    // fleet mode on localhost, which is what the banner used to assert
+    // unconditionally (round-1 review, Minor 2). This box says `remote`, the
+    // run kept that file, and nothing in the run established otherwise: a
+    // transcript that claimed it would be describing a box nobody has.
+    expect(r.stdout).not.toMatch(/local fleet mode|localhost/);
   });
 });
 
@@ -376,6 +440,48 @@ describe('ccrc install: a roster that does not validate', () => {
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/^ccrc: no roster seed at .*deploy\/accounts\.default\.json — run install from inside the shipped tree$/m);
     expect(existsSync(dotCcrc(home, 'accounts.json'))).toBe(false);
+  });
+});
+
+describe('ccrc install: a box with no node', () => {
+  // Round-1 review, Important 1. `install` is the ONE verb an operator runs on
+  // a box that may genuinely not have node yet — and every roster step runs
+  // `deploy/gen-accounts.mjs`, which IS node. Without a by-name probe the
+  // interpreter's absence arrives as the generator "failing", i.e. as "your
+  // config does not validate": a missing DEPENDENCY and a corrupt FILE
+  // collapsed into one signal, which is the overloaded-seam mistake this
+  // file's own header bans and which `cmd_wrappers` (ccd/ccrc:1080-1086)
+  // already refuses in exactly this shape, ten lines up.
+  it('refuses by name, before touching anything, and does not blame the config', () => {
+    const home = freshBox('ccrc-install-no-node-');
+    const r = runInstall(home, ['install'], { PATH: nodelessPath(home) });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: node is required by 'ccrc install'/m);
+    // The half that matters: nothing in the refusal points at the operator's
+    // config. "does not validate" sends someone to debug a file that is fine.
+    expect(r.stderr).not.toMatch(/does not validate/);
+    expect(r.stderr).not.toMatch(/roster/);
+    // …and it fires BEFORE the first step, so the run has neither printed a
+    // transcript it is not going to finish nor created `~/.ccrc`.
+    expect(r.stdout).toBe('');
+    expect(existsSync(join(home, '.ccrc'))).toBe(false);
+  });
+
+  it('never tells the operator to move a roster they already have aside', () => {
+    // The sharper half of the same finding: on an already-seeded box the
+    // collapsed message read "$HOME/.ccrc/accounts.json does not validate — fix
+    // it (or move it aside to reseed) and re-run" — a confident instruction to
+    // disturb USER-OWNED config for a cause that has nothing to do with it.
+    // The roster here is the five-account one this fleet really runs, and it is
+    // perfectly valid.
+    const home = freshBox('ccrc-install-no-node-seeded-');
+    preexisting(home, 'accounts.json', MIGRATION_ROSTER);
+    const r = runInstall(home, ['install'], { PATH: nodelessPath(home) });
+    expect(r.code).toBe(1);
+    expect(r.stderr).not.toMatch(/move it aside/);
+    expect(read(dotCcrc(home, 'accounts.json'))).toBe(MIGRATION_ROSTER);
+    expect(existsSync(dotCcrc(home, 'accounts.sh'))).toBe(false);
+    expect(existsSync(dotCcrc(home, 'ccrc.env'))).toBe(false);
   });
 });
 
