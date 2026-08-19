@@ -45,7 +45,7 @@ import { registerCoordRoutes } from './coord/routes.js';
 import { toRunSummary, type CoordStore } from './coord/store.js';
 import {
   FLEET_PROTO, FLEET_PROTO_MIN,
-  type AccountsResponse, type AccountUsage, type CoordStatus, type Divergence, type FleetMsg,
+  type AccountsResponse, type AccountUsage, type CoordStatus, type Divergence, type FleetHealth, type FleetMsg,
   type FleetSession,
   type RunSummary,
   type SessionClientMsg, type SessionStreamMsg, type TaskItem,
@@ -198,7 +198,17 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // be a sha256 every 15 seconds for an answer that cannot have changed.
   const ownRosterFp = bodyDigest(generateAccountsSh(deps.cfg.roster));
 
-  app.get('/api/fleet/health', async () => {
+  // Typed at the producer (`FleetHealth`, shared/api.ts): before this
+  // annotation the two returns below were structurally checked against
+  // nothing, so a typo like `roster: 'unknowable'` compiled clean — measured
+  // directly (Stage 2d Task 4): mutating the local-mode arm's `'unknown'` to
+  // `'unknowable'` with NO annotation on this handler left `tsc --noEmit`
+  // green; the SAME mutation with the annotation below refuses
+  // (`TS2322: Type '"unknowable"' is not assignable to type '"agreed" |
+  // "divergent" | "unknown" | undefined'`). Both branches already conformed —
+  // this closes the gap between them and the wire contract PWA reads
+  // (`pwa/src/lib/api.ts`'s `fleetHealth()`), rather than changing behavior.
+  app.get('/api/fleet/health', async (): Promise<FleetHealth> => {
     if (deps.cfg.fleetMode === 'remote' && deps.fleetState) {
       return {
         mode: 'remote',

@@ -1,11 +1,20 @@
 #!/usr/bin/env bash
-# install-session-hooks.sh — register session-hook.sh in each wrapper home's
-# settings.json. Idempotent and provably non-destructive: existing entries
-# survive byte-identical, managed entries are recognized by their command
-# containing /session-hook.sh (so re-runs sweep stale paths and converge),
-# jq validates before every swap, and each rewritten file is backed up first.
-# A settings.json this script broke would break every future session of that
-# home — hence the paranoia.
+# install-session-hooks.sh — converges each wrapper home's settings.json on
+# two things: session-hook.sh registered under every handled event, and the
+# statusLine pointer seeded if absent. Idempotent and provably
+# non-destructive: existing entries survive byte-identical, managed hook
+# entries are recognized by their command containing /session-hook.sh (so
+# re-runs sweep stale paths and converge), jq validates before every swap,
+# and each rewritten file is backed up first. A settings.json this script
+# broke would break every future session of that home — hence the paranoia.
+#
+# statusLine is load-bearing, not cosmetic: statusline-command.sh writes the
+# ~/.cc-limits telemetry ccd's auto-swap and server placement decisions
+# consume, and ccd parses its ctx segment to drive auto-compact — but
+# nothing else in this repo has ever WRITTEN this settings.json key; the
+# reference fleet's entries are hand-made history. Seeding is set-if-absent
+# ONLY: an operator's customized statusLine is user-owned and must survive
+# every re-run untouched — converge, don't damage.
 #
 # Deploy-time only (not the hook hot path): no timing budget here.
 set -euo pipefail
@@ -14,14 +23,17 @@ set -euo pipefail
 # the fleet host; $HOME is left unexpanded (single-quoted) so it resolves
 # per-session at hook-run time, not to this installer's own $HOME.
 HOOK_CMD='bash "$HOME/.cc-sessions/session-hook.sh"'
+# Same discipline as HOOK_CMD: $HOME left unexpanded, resolved per-session.
+STATUSLINE_CMD='bash "$HOME/.claude/statusline-command.sh"'
 # Events that get a matcher-less managed entry. PreToolUse is handled
 # separately below because it alone carries matcher "*".
 #
 # This list and session-hook.sh's `case "$event"` arms are the same set written
 # twice, and they DRIFTED: the hook grew a SessionStart arm (F1) that was never
-# added here, so it was dead code on the fleet for months (D-B8-10). The pairing
-# is now a mechanism, not a convention — install-session-hooks.test.ts derives
-# the expected set from the hook's own case block and fails on any divergence.
+# added here, so it was dead code on the fleet for months (D-B8-10; found
+# independently as this branch's Task 5). The pairing is now a mechanism, not a
+# convention — install-session-hooks.test.ts derives the expected set from the
+# hook's own case block and fails on any divergence.
 EVENTS_JSON='["UserPromptSubmit","PostToolUse","PermissionRequest","Stop","SubagentStart","SubagentStop","PreCompact","PostCompact","SessionStart"]'
 TS=$(date +%Y%m%d-%H%M%S)
 BACKUPS="$HOME/ccrc-backups/$TS"
@@ -50,6 +62,12 @@ fi
 # by the sweep. Built with --argjson over a fixed events array rather than
 # shell string interpolation into the jq program: same behavior, no
 # quoting-through-quoting to get wrong.
+#
+# One write cycle, two convergers: after the .hooks assignment, seed
+# statusLine only when the key is entirely absent — has("statusLine") is
+# true for ANY existing value, custom or not, so an operator's own statusLine
+# is never inspected let alone replaced. This keeps the byte-level converge
+# check below intact (a single "next" computed per run, compared once).
 JQ_PROGRAM='
 def unmanaged: map(select((.hooks // []) | any(.command | tostring | contains("/session-hook.sh")) | not));
 .hooks = ((.hooks // {})
@@ -57,6 +75,7 @@ def unmanaged: map(select((.hooks // []) | any(.command | tostring | contains("/
   | reduce $events[] as $ev (.; .[$ev] = ((.[$ev] // []) + [{hooks:[{type:"command", command:$cmd}]}]))
   | .PreToolUse = ((.PreToolUse // []) + [{matcher:"*", hooks:[{type:"command", command:$cmd}]}])
   | with_entries(select(.value != [])))
+| if has("statusLine") then . else .statusLine = {type:"command", command:$sl} end
 '
 
 rc=0
@@ -70,7 +89,7 @@ for dir in "${homes[@]}"; do
     cur='{}'
   fi
 
-  next=$(jq --arg cmd "$HOOK_CMD" --argjson events "$EVENTS_JSON" "$JQ_PROGRAM" <<<"$cur") \
+  next=$(jq --arg cmd "$HOOK_CMD" --argjson events "$EVENTS_JSON" --arg sl "$STATUSLINE_CMD" "$JQ_PROGRAM" <<<"$cur") \
     || { echo "install-session-hooks: merge failed for $f" >&2; rc=1; continue; }
 
   # Converged already? Do not touch the file (idempotence is byte-level: the

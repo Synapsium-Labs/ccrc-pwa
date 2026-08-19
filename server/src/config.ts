@@ -148,7 +148,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
     clipsDir: path.join(home, '.cc-clips'),
     uploadsDir: path.join(home, '.cc-clips', 'uploads'),
     ccdBin: path.join(home, '.local', 'bin', 'ccd'),
-    projectsRoot: env.CCRC_PROJECTS_ROOT ?? '/data/projects',
+    // Spec §2's three-way reconciliation: the agent and ccd already default an
+    // unconfigured box to `$HOME/projects`; `/data/projects` was this server's
+    // lone holdout, a path specific to the reference fleet's own volume
+    // layout rather than a portable default. The reference fleet is
+    // unaffected — both its env files set `CCRC_PROJECTS_ROOT` explicitly.
+    projectsRoot: env.CCRC_PROJECTS_ROOT ?? path.join(home, 'projects'),
     roster,
     accountsPath,
     fleetMode: env.CCRC_FLEET === 'remote' ? 'remote' : 'local',

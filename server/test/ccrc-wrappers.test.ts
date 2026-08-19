@@ -41,7 +41,8 @@
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import {
-  chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync,
+  chmodSync, closeSync, existsSync, ftruncateSync, mkdirSync, openSync, readdirSync, readFileSync,
+  statSync, writeFileSync,
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -463,6 +464,90 @@ describe('ccrc wrappers: a file ccrc did NOT write', () => {
     expect(readFileSync(p, 'utf8')).toBe(text);
     expect(backupsFor(home, 'claude2')).toEqual([]);
     expect(r.stdout).not.toMatch(/--force/);
+  });
+});
+
+describe('ccrc wrappers: an oversize candidate (D-81)', () => {
+  // Same sparse-file technique `gen-wrappers.test.ts` uses for its own
+  // oversize fixture: `openSync` + `ftruncateSync`, so the test costs no
+  // real disk. This drives the REAL `deploy/gen-wrappers.mjs` (via the
+  // default `cli` in `runWrappers`), which — with the node side of D-81
+  // shipped — classifies this candidate `oversize`. What this suite pins is
+  // that bash REFUSES it by its own specific arm rather than falling to the
+  // decision table's catch-all ("… which this verb does not know", the
+  // generic manifest-distrust wording): today, before the `oversize` arm
+  // exists, that catch-all is exactly what fires, which is why this is red
+  // first.
+  function makeOversizeCandidate(home: string, id: string): void {
+    const fd = openSync(join(binOf(home), id), 'w');
+    try {
+      ftruncateSync(fd, 1024 * 1024 + 1); // OVERSIZE_BYTES + 1, sparse
+    } finally {
+      closeSync(fd);
+    }
+  }
+
+  for (const args of [[], ['--adopt'], ['--force'], ['--force', '--adopt']]) {
+    it(`refuses claude2 with ${args.length === 0 ? 'no flags' : args.join(' ')} — no flag overrides an oversize file`, () => {
+      const home = makeHome(`ccrc-wrappers-oversize-${args.join('') || 'none'}-`);
+      makeOversizeCandidate(home, 'claude2');
+
+      const r = runWrappers(home, args);
+      expect(r.code, `stdout:\n${r.stdout}\nstderr:\n${r.stderr}`).toBe(1);
+      expect(r.stdout).toMatch(/^REFUSE claude2: /m);
+      // ITS OWN sentence, not the catch-all's: deleting the `oversize` arm
+      // drops it into "$gen classified it as \"oversize\", which this verb
+      // does not know" — which refuses too, so a bare exit-1 assertion would
+      // stay green through exactly that deletion.
+      expect(r.stdout).toMatch(/over 1 MiB/);
+      expect(r.stdout).not.toMatch(/which this verb does not know/);
+      const remedy = remedyAfter(r.stdout, /^REFUSE claude2: /);
+      expect(remedy).toMatch(/^ {2}remedy: /);
+      expect(remedy).not.toMatch(/bug in ccrc/);
+      // Both escape hatches, named: move the big file aside (if claude2
+      // should be generated), or declare it upstream (if it IS the upstream
+      // binary this fixture is standing in for).
+      expect(remedy).toMatch(/move.*aside/);
+      expect(remedy).toMatch(/"upstream"/);
+      expect(backupsFor(home, 'claude2')).toEqual([]);
+      // Left byte for byte — still sparse, still over the threshold.
+      expect(statSync(join(binOf(home), 'claude2')).size).toBeGreaterThan(1024 * 1024);
+    });
+  }
+
+  it('THE GUARD: the remedy for an oversize file never mentions --force either', () => {
+    // The same guard `ccrc-wrappers.test.ts` already holds `foreign` to
+    // (D3: "Suggesting a clobber is how a mechanical operator destroys a
+    // 142-line hand-written launcher"), extended to this arm: an operator
+    // scanning refusals for the next thing to type must never find --force
+    // beside a file this verb has just said is categorically not a wrapper.
+    const home = makeHome('ccrc-wrappers-oversize-noforce-');
+    makeOversizeCandidate(home, 'claude2');
+
+    const r = runWrappers(home, ['--force']);
+    expect(r.code).toBe(1);
+    const remedy = remedyAfter(r.stdout, /^REFUSE claude2: /);
+    expect(remedy).toMatch(/^ {2}remedy: /);
+    expect(remedy).not.toMatch(/--force/);
+    expect(r.stdout).not.toMatch(/--force/);
+    expect(r.stderr).not.toMatch(/--force/);
+  });
+
+  it('does not stop the OTHER generated accounts converging', () => {
+    // A refusal is per-account, not per-run: the pre-pass validates the
+    // whole manifest before any write, but `oversize` is a fact about the
+    // BOX (a disk-state judgement, like `foreign`/`unreadable`), not about
+    // the manifest, so it belongs to the action pass and must not abort
+    // siblings that are perfectly fine to write.
+    const home = makeHome('ccrc-wrappers-oversize-siblings-');
+    makeOversizeCandidate(home, 'claude2');
+
+    const r = runWrappers(home);
+    expect(r.code).toBe(1);
+    expect(readFileSync(join(binOf(home), 'claude-corp'), 'utf8')).toBe(bodyFor(MIGRATION, 'claude-corp'));
+    expect(readFileSync(join(binOf(home), 'claude-dev0'), 'utf8')).toBe(bodyFor(MIGRATION, 'claude-dev0'));
+    expect(r.stdout).toMatch(/^WRITE claude-corp: /m);
+    expect(r.stdout).toMatch(/^WRITE claude-dev0: /m);
   });
 });
 

@@ -17,8 +17,8 @@
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import {
-  chmodSync, closeSync, mkdirSync, openSync, readdirSync, readFileSync, statSync, symlinkSync,
-  writeFileSync, writeSync,
+  chmodSync, closeSync, existsSync, ftruncateSync, mkdirSync, openSync, readdirSync, readFileSync,
+  statSync, symlinkSync, writeFileSync, writeSync,
 } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -163,6 +163,42 @@ describe('gen-wrappers.mjs', () => {
     expect(line).toBe('wrapper\tclaude2\tunreadable\tno');
   });
 
+  // D-81: a >512 MiB candidate used to reach `readFileSync` and THROW past
+  // V8's string cap, landing in `unreadable` — whose remedy ("make it
+  // readable") can never work on a file that is perfectly readable, just too
+  // big to be a wrapper. `oversize` is the sixth classification, gated by a
+  // cheap `statSync` before any read is attempted. The fixture is SPARSE
+  // (`ftruncateSync` on an empty file) so the test costs no real disk: this
+  // pins the classify() OUTCOME, not the "never read a candidate whole"
+  // property — `bigblob` above already pins that one, for the orphan scan.
+  it('an oversize file (over 1 MiB) reads back oversize/no, never unreadable (D-81)', () => {
+    const { rosterFile, binDir, stagingDir } = fixture(migrationJson);
+    const p = path.join(binDir, 'claude2');
+    const fd = openSync(p, 'w');
+    try {
+      ftruncateSync(fd, 1024 * 1024 + 1); // OVERSIZE_BYTES + 1, sparse
+    } finally {
+      closeSync(fd);
+    }
+    const r = run([rosterFile, binDir, stagingDir]);
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
+    const line = r.stdout.split('\n').find((l) => l.startsWith('wrapper\tclaude2\t'));
+    expect(line).toBe('wrapper\tclaude2\toversize\tno');
+  });
+
+  // Regression: nothing pinned this before D-81 touched the same catch
+  // blocks. A dangling symlink's `statSync` throws ENOENT — exactly like a
+  // missing file — so it must read back `absent`, not `unreadable` and not
+  // `oversize`.
+  it('a dangling symlink at bin/<id> reads back absent, not unreadable', () => {
+    const { rosterFile, binDir, stagingDir } = fixture(migrationJson);
+    symlinkSync(path.join(binDir, 'does-not-exist'), path.join(binDir, 'claude2'));
+    const r = run([rosterFile, binDir, stagingDir]);
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
+    const line = r.stdout.split('\n').find((l) => l.startsWith('wrapper\tclaude2\t'));
+    expect(line).toBe('wrapper\tclaude2\tabsent\tno');
+  });
+
   // `equal` is a byte-for-byte comparison, not a trimmed one — a mutation
   // that computes `text.trim() === staged.trim()` passed every OTHER case in
   // this file (none of them differ from the staged text by whitespace alone)
@@ -218,6 +254,46 @@ describe('gen-wrappers.mjs', () => {
     expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
     expect(r.stdout).not.toMatch(/^orphan\tgpt$/m);
     expect(r.stdout).toContain('protected\tgpt');
+  });
+
+  it('not an orphan: ccrc\'s OWN executables, which the installer puts in the same dir (D-93)', () => {
+    // MEASURED, on the fixture and on any installed box: `ccrc install` puts
+    // `ccd`, `ccd-cap-scopes` and the `ccrc` launcher into the very directory
+    // this scan walks, and `ccd` passes every clause of the orphan predicate —
+    // regular file, id-shaped, claimed by no account, `#!`-headed, and CARRYING
+    // A CCRC MARKER. The marker is deliberate provenance (41bdf60, gated by
+    // ownership.test.ts:139-153, so that ccrc's own shipped `ccd` reads
+    // `ccrc-unmodified` and the installer may replace it on a box), so the fix
+    // cannot be to remove it: the scan has to know these three are ccrc's own
+    // toolchain rather than candidate account wrappers.
+    //
+    // What the operator saw without this: `ORPHAN ccd: … remedy: … or remove
+    // $HOME/.local/bin/ccd by hand` — printed by every install, four lines
+    // above that same transcript's "next: add your first session with: ccd
+    // menu".
+    const { rosterFile, binDir, stagingDir } = fixture(migrationJson);
+    // Marked the way the real ones are. `ccd`'s marker is over its own bytes;
+    // any marked script is the same five-for-five shape as far as this scan is
+    // concerned, and using the real 570 KB `ccd` here would test file size.
+    for (const name of ['ccd', 'ccrc', 'ccd-cap-scopes']) {
+      writeFileSync(path.join(binDir, name),
+        markGenerated(`#!/usr/bin/env bash\n# ccrc's own ${name}, installed by ccrc install\nexit 0\n`));
+    }
+    const r = run([rosterFile, binDir, stagingDir]);
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
+    for (const name of ['ccd', 'ccrc', 'ccd-cap-scopes']) {
+      expect(r.stdout, `${name} was reported as an account wrapper nobody claims`)
+        .not.toMatch(new RegExp(`^orphan\\t${name}$`, 'm'));
+    }
+    // …and the exclusion did NOT widen into "nothing is an orphan any more":
+    // a real leftover beside them is still reported.
+    writeFileSync(path.join(binDir, 'leftover'), markGenerated(generateWrapperBody(
+      { id: 'leftover', configDirSuffix: '.leftover', execKind: 'generated' }, UPSTREAM_ID,
+    )));
+    const r2 = run([rosterFile, binDir, stagingDir]);
+    expect(r2.stdout).toMatch(/^orphan\tleftover$/m);
+    // Nor did it touch the files: this scan removes nothing, ever.
+    expect(existsSync(path.join(binDir, 'ccd'))).toBe(true);
   });
 
   // The reference box has exactly this shape (`gpt -> ccgpt`), so it is not

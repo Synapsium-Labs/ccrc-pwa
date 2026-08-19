@@ -755,11 +755,20 @@ describe('one bash reader of ~/.ccrc/build.json', () => {
     }
   });
 
-  it('deploy.sh is the only WRITER, and it writes through install_atomic', () => {
-    // The other half of "one stamp": a second writer is how a box would carry
-    // a stamp no deploy stands behind. deploy.sh spells the destination
-    // HOME-relative (`install_atomic`'s own contract), which is why it does
-    // not appear in the reader list above.
+  it('deploy.sh is the only writer that SPELLS the path, and it writes through install_atomic', () => {
+    // The other half of "one stamp": a second writer that named the file
+    // ITSELF is how a box would carry a stamp neither tool stands behind.
+    // deploy.sh spells the destination HOME-relative (`install_atomic`'s own
+    // contract), which is why it does not appear in the reader list above.
+    //
+    // THERE IS NOW A SECOND WRITER, AND IT IS DELIBERATE (stage 2d Task 7):
+    // `ccrc install`'s `_inst_stamp` stamps a box that installed itself, which
+    // until then reported "unstamped" for ever. It does not widen either list,
+    // because it writes through `BOX_STAMP_FILE` — the one line this file
+    // already pins — and that is exactly the property these assertions are
+    // for. `server/test/ccrc-install.test.ts` ("writes the stamp through
+    // BOX_STAMP_FILE") holds the other half: that the new writer really goes
+    // through that variable rather than merely not duplicating the literal.
     expect(holdersOf('.ccrc/build.json')).toEqual([
       'ccd/ccd', 'ccd/ccrc', 'deploy/deploy.sh',
     ]);

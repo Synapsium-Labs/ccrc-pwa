@@ -51,7 +51,7 @@
 # make the check answer, that goes in the detail, as a fact about what is
 # missing rather than as an instruction.
 #
-# ── ONE CHECK MAY ANSWER IN TWO CLASSES ───────────────────────────────────
+# ── ONE CHECK MAY ANSWER IN TWO (OR THREE) CLASSES ────────────────────────
 # Almost every check prints exactly ONE verdict line. A check that has found
 # findings of two different classes may print a FAIL line and then a WARN line
 # — each with its own remedy — and returns the WORSE class (1). It is not a
@@ -63,10 +63,20 @@
 # them into one FAIL sentence both laundered the second into a defect and
 # discarded the remedy that belonged to it.
 #
+# TWO FAIL LINES from one check is the same rule, not an exception to it:
+# `_check_wrappers` again (D-82, Task 1 of stage2d) — "nothing exists on disk
+# for `ccrc wrappers` to refuse" and "the roster and the wrapper on disk
+# disagree" are BOTH hard findings (both FAIL, both return 1), but they are
+# still two DIFFERENT operator actions (`ccrc wrappers` vs hand-reconciling
+# the roster), so they get two FAIL lines, each with its own remedy, rather
+# than one bucket whose remedy is right for only one of the two sentences it
+# joined. The worst-class rule does not change: two FAILs still return 1, the
+# same as one would.
+#
 # `ccrc`'s `cmd_doctor` counts VERDICT LINES, not return codes, so a check that
-# answers in two classes is counted in both — and it cross-checks the two
-# statements against each other: a return code that is not the worst class the
-# check printed is reported as a bug in ccrc.
+# answers in two (or three) classes is counted in all of them — and it
+# cross-checks the loudest statement against the return code: a return code
+# that is not the worst class the check printed is reported as a bug in ccrc.
 #
 # The verdict lines are the RESULT of the verb, so they go to stdout — NOT to
 # stderr through `_ccrc_say`, which `ccrc`'s own header (Task 1) had guessed
@@ -150,6 +160,10 @@ CCRC_DOCTOR_CHECKS=(
   gh_auth
   git_email
   linger
+  path
+  services
+  config
+  disk
   wrappers
   fleet
 )
@@ -401,13 +415,21 @@ _check_gh_auth() {
     return 1
   fi
 
+  # `--hostname github.com`: this check's job is one host's credential, and
+  # `gh auth status` with no host filter prints EVERY host this box is logged
+  # into concatenated together. Task 1 of stage2d (D-82's neighbour) measured
+  # the consequence — a second host's `Token scopes: 'repo'` satisfied the
+  # `case` match below even when github.com's own section had no 'repo' at
+  # all, which is a false PASS on exactly the credential the remedy already
+  # names (`gh auth refresh -h github.com -s repo` is scoped to github.com;
+  # the check that approved it should be too).
   local out rc
   if command -v timeout >/dev/null 2>&1; then
-    out="$(timeout "$CCRC_DOCTOR_GH_TIMEOUT" gh auth status 2>&1)"; rc=$?
+    out="$(timeout "$CCRC_DOCTOR_GH_TIMEOUT" gh auth status --hostname github.com 2>&1)"; rc=$?
   else
     # A box without coreutils' `timeout` still gets an answer; it just gets it
     # without a deadline. Silently skipping the check would be the worse trade.
-    out="$(gh auth status 2>&1)"; rc=$?
+    out="$(gh auth status --hostname github.com 2>&1)"; rc=$?
   fi
 
   if [ "$rc" -eq 124 ]; then
@@ -526,6 +548,319 @@ _check_linger() {
   esac
 }
 
+# ── $HOME/.local/bin on PATH ──────────────────────────────────────────────
+# THE CHECK THAT MAKES EVERY OTHER REMEDY IN THIS FILE EXECUTABLE. `ccrc`, `ccd`,
+# `ccd-cap-scopes` and every generated account wrapper are installed into
+# `$HOME/.local/bin` (`deploy.sh`'s `install_atomic … .local/bin/…`, and
+# `ccrc-adopt`/`ccrc wrappers` write there too), so a box whose login shell never
+# put that directory on PATH answers "command not found" to every instruction
+# this run just printed — and to `ccrc doctor` itself the next time.
+#
+# WARN AND NOT FAIL, deliberately: nothing about the box is broken, and a shell
+# that DOES have the directory on PATH works perfectly. What is wrong is the
+# environment the operator will type the next command into.
+#
+# THE POSITION IS PART OF THE MEASUREMENT (see "WHY THE DETAIL IS ALWAYS A
+# MEASUREMENT" above): "it is on PATH" and "it is on PATH ahead of /usr/bin" are
+# different facts, and only the second one means `claude` resolves to this box's
+# wrapper rather than to whatever a distro package left in /usr/bin.
+#
+# THE DIRECTORY IS SPELLED HERE rather than taken from `ccrc-wrapper-shape`'s
+# `WRAPPER_BIN_DIR`, and it is the one deliberate second spelling of it: that
+# library is sourced BEST-EFFORT (see the top of this file), so a box missing it
+# would get "the wrapper library did not ship" from a check whose subject is
+# PATH — a diagnosis about the wrong thing, on exactly the box that can resolve
+# nothing. The one-spelling rule keeps its mechanism instead of its promise:
+# `ccrc-doctor.test.ts`'s "names the same directory the wrapper library does"
+# compares the two literals and goes red on a drift.
+_check_path() {
+  local want="$HOME/.local/bin" p rest="${PATH:-}:" i=0
+  while [ -n "$rest" ]; do
+    p="${rest%%:*}"; rest="${rest#*:}"; i=$((i + 1))
+    if [ "$p" = "$want" ]; then
+      _dr_pass path "\$HOME/.local/bin is in \$PATH (position $i)"
+      return 0
+    fi
+  done
+  _dr_warn path "\$HOME/.local/bin is not in \$PATH — ccrc, ccd and every remedy this doctor prints resolve there" \
+    "add 'export PATH=\"\$HOME/.local/bin:\$PATH\"' to ~/.profile (or ~/.bashrc), then log in again"
+  return 2
+}
+
+# ── the units this box is supposed to be running ──────────────────────────
+# A unit FILE with no process behind it is the failure spec §5 calls "services
+# active", and no other check here can see it: the binaries are installed, the
+# config is coherent, the roster agrees with the wrappers — and nothing answers
+# on :7788.
+#
+# ── WHAT IS MEASURED IS WHAT WAS INSTALLED ───────────────────────────────
+# Which units a box has IS its role (`_box_role`'s inference, D-73: nothing on a
+# box records its role, and the unit files are the only evidence there is), so
+# this asks about the units whose FILE is present and skips a box that has none
+# rather than demanding units a dev checkout was never meant to have. A server
+# box has `ccrc.service`, a fleet host has `ccrc-agent.service` and the
+# cap-scopes timer, and `deploy.sh` (:416, :463) is what puts each there.
+#
+# ── TWO CLASSES, BECAUSE THEY ARE TWO DIFFERENT MORNINGS ─────────────────
+# A stopped `ccrc.service`/`ccrc-agent.service` is a FAIL: the box is configured
+# to run it and it is not running, so the PWA answers nothing or the fleet link
+# is down. A stopped `ccd-cap-scopes.timer` is a WARN: everything still works,
+# and panes spawned meanwhile run without their memory cap (deploy.sh's OOM
+# guardrail, added after a real outage). One remedy each, per this file's
+# two-classes rule — joining them would hand the timer the server's instruction.
+#
+# `ccd-cap-scopes.service` IS DELIBERATELY NOT ASKED ABOUT. It is `Type=oneshot`
+# (deploy/systemd/ccd-cap-scopes.service), so between runs a perfectly healthy
+# box answers `inactive` for it — a check that asked would report every fleet
+# host as broken. The TIMER is the thing that is supposed to be running, and it
+# is the thing that is asked.
+#
+# THE DIRECTORY IS FILE-SCOPE because TWO checks read it: this one, and
+# `_check_config`'s D-86 topology branch, which decides what an absent
+# `ccrc.env` MEANS from the same unit files. One spelling, for the reason
+# `ccrc-wrapper-shape` gives about `WRAPPER_BIN_DIR`: two checks comparing
+# their own copies of a path is the same drift in miniature, and here it would
+# be worse than a drift — the two would disagree about what role the box is.
+CCRC_UNIT_DIR="$HOME/.config/systemd/user"
+
+_check_services() {
+  local dir="$CCRC_UNIT_DIR" u st rc=0
+  local -a ok=() installed=()
+  # Not a glob over the directory: `claude-session@*.service` lives there too
+  # (every ccd session is one, CLAUDE.md) and those are long-lived by design and
+  # none of doctor's business.
+  local -a known=(ccrc.service ccrc-agent.service ccd-cap-scopes.timer)
+  for u in "${known[@]}"; do
+    [ -f "$dir/$u" ] && installed+=("$u")
+  done
+
+  if [ "${#installed[@]}" -eq 0 ]; then
+    # THE FOURTH OUTCOME, and the reason it is not a WARN: a checkout with no
+    # install is the normal state of a developer's box, and there is nothing
+    # here to fix. No remedy under a skip, by this file's own contract.
+    _dr_skip services "no ccrc units installed in $dir — a dev checkout, or a box \`ccrc install\` never touched"
+    return 3
+  fi
+
+  if ! command -v systemctl >/dev/null 2>&1; then
+    _dr_fail services "systemctl is not on PATH, but this box has unit files in $dir (${installed[*]}) — so nothing could be asked whether they are running" \
+      "install/enable systemd — every ccd session is a systemd --user unit too (see the 'linger' check above); or remove the unit files nothing on this box can start"
+    return 1
+  fi
+  # Defaulted exactly as `ccrc`'s `_box_units` and `ccd:93-95` default them, and
+  # for the same reason: without these two, `systemctl --user` cannot find the
+  # bus from a non-interactive SSH context, every unit answers empty, and this
+  # check reports a healthy box's units as stopped.
+  : "${XDG_RUNTIME_DIR:=/run/user/$UID}"; export XDG_RUNTIME_DIR
+  : "${DBUS_SESSION_BUS_ADDRESS:=unix:path=${XDG_RUNTIME_DIR}/bus}"; export DBUS_SESSION_BUS_ADDRESS
+
+  for u in "${installed[@]}"; do
+    # systemd's own word is quoted back (`failed`, `activating`, `inactive`),
+    # because "failed" and "inactive" send an operator to two different places.
+    # An EMPTY answer is a unit systemd would not talk about at all, which is
+    # neither — hence `${st:-not active}` rather than a default of "inactive".
+    st="$(systemctl --user is-active "$u" 2>/dev/null)"
+    if [ "$st" = active ]; then
+      ok+=("$u is active")
+      continue
+    fi
+    case "$u" in
+      *.timer)
+        _dr_warn services "$u is installed but ${st:-not active} — panes spawned while it is stopped run without their memory cap" \
+          "systemctl --user enable --now $u"
+        [ "$rc" -eq 1 ] || rc=2 ;;
+      *)
+        _dr_fail services "$u is installed but ${st:-not active} — this box is configured to run it and it is not running" \
+          "systemctl --user enable --now $u, then read what it says: systemctl --user status $u, journalctl --user -u $u -n 50"
+        rc=1 ;;
+    esac
+  done
+
+  # The PASS names every unit it asked about, so a box that answers "PASS
+  # services" cannot be a box where the check quietly measured one unit.
+  if [ "$rc" -eq 0 ]; then
+    _dr_pass services "$(_dr_join ${ok[@]+"${ok[@]}"})"
+  fi
+  return "$rc"
+}
+
+# ── the box's own config file ─────────────────────────────────────────────
+# THE ONE CHECK WHOSE FAIL IS A REPRODUCTION. `CCRC_FLEET=remote` with either
+# agent value missing makes the server print one line and exit 1 at boot
+# (`server/src/index.ts:75-79`), which reaches an operator as a unit that will
+# not come up and a journal they have to go and read. Measured here, it is a
+# sentence naming the two keys.
+#
+# ── COHERENCE, NOT REACHABILITY ──────────────────────────────────────────
+# This check reads the FILE and says whether it is one the server can boot on.
+# Whether the agent at that URL answers, and whether the two boxes agree, is the
+# `fleet` check's question and it has three answers of its own for it. Two
+# checks measuring one thing is how they come to disagree.
+#
+# ── THE FILE IS NEVER SOURCED, AND NO VALUE IS EVER PRINTED ──────────────
+# `~/.ccrc/ccrc.env` holds `CCRC_AGENT_TOKEN`, `CCRC_VAPID_PRIVATE` and a
+# Hetzner token beside its addresses (`ccd/ccrc:355-380` states the rule and why
+# the parse it uses is a deliberate SUBSET of systemd's `EnvironmentFile=`).
+# Sourcing it would export all three into this process and every child it
+# spawns. So the two credential keys are measured as SET or NOT SET, `CCRC_FLEET`
+# is CLASSIFIED rather than quoted, and nothing off that file reaches a terminal
+# an operator pastes into a ticket.
+#
+# D-85: the reader and the path both come from `ccrc` — `_box_env_value` and
+# `BOX_ENV_FILE`, whose own comment (ccrc:91-101) names doctor as one of the
+# three readers that must not re-spell the path. A private copy of either was
+# the brief's suggestion and is refused for the reason this file's header gives
+# about the wrapper shape: a second copy of a parser whose SUBSET property is
+# the load-bearing part is how the two come to disagree about a file neither
+# tool's consumer reads that way. Absence is reported the way `_check_fleet`
+# reports the same absence — as a bug in ccrc, in a verdict line.
+_check_config() {
+  if [ -z "${BOX_ENV_FILE:-}" ] || ! declare -F _box_env_value >/dev/null 2>&1; then
+    _dr_fail config "ccrc's own config reader is not loaded, so this box's ccrc.env was never read" \
+      "this is a bug in ccrc, not a fact about your box — _check_config reads BOX_ENV_FILE through _box_env_value, both declared once in ccrc itself, and this check table was sourced by something that is not ccrc"
+    return 1
+  fi
+
+  if [ ! -e "$BOX_ENV_FILE" ]; then
+    # ── D-86: WHAT AN ABSENT ccrc.env MEANS DEPENDS ON THE BOX ────────────
+    # THE FLEET HOST HAS NO ccrc.env AND IS NOT MISSING ONE. It carries
+    # `~/.ccrc/agent.env` (which configures the agent) and has no reason to know
+    # where the server is — `_check_fleet` states exactly this, and SKIPS for it.
+    # `ccrc` ships to that box too (deploy.sh:401), so until this branch existed
+    # every doctor run there printed "the server's defaults apply" about a server
+    # that does not run there, and told the operator to run `ccrc install` — the
+    # single-box SERVER-role installer. Wrong sentence and wrong instruction, on
+    # the one box in the topology that has neither.
+    #
+    # The evidence is the UNIT FILES, which is the only thing on a box that
+    # records its role at all (D-73, `_box_role`'s own reasoning) and exactly
+    # what `_check_services` above already reads. Both halves are required:
+    # "no ccrc.service" alone is also a dev checkout that has installed nothing,
+    # and for that box the defaults sentence below is correct.
+    if [ ! -f "$CCRC_UNIT_DIR/ccrc.service" ] && [ -f "$CCRC_UNIT_DIR/ccrc-agent.service" ]; then
+      _dr_skip config "no $BOX_ENV_FILE, and this box's units are the fleet role's ($CCRC_UNIT_DIR has ccrc-agent.service and no ccrc.service) — the server's config file does not live here, so there is nothing to measure"
+      return 3
+    fi
+    # NOT a FAIL: a box with no config file boots, in the mode the server's own
+    # defaults pick (`server/src/config.ts`). It is worth saying out loud
+    # because the defaults are a SINGLE-BOX localhost server, and an operator
+    # who believes they configured a fleet host has just been told otherwise.
+    _dr_warn config "no $BOX_ENV_FILE, so the server's defaults apply: local mode on 127.0.0.1:7788" \
+      "run: ccrc install (it writes one), or copy deploy/ccrc.env.example to $BOX_ENV_FILE and edit it"
+    return 2
+  fi
+  # "There is no file", "there is one and it is not a file" and "there is one
+  # and I cannot read it" are three different things to do something about, and
+  # without these two guards the second and third arrive as a file that declares
+  # nothing — a confident PASS on a box nobody measured, with bash's own
+  # diagnosis on stderr. `_box_server_addr` (ccrc:315-325) splits them the same
+  # way, and for the same reason.
+  if [ ! -f "$BOX_ENV_FILE" ]; then
+    _dr_warn config "$BOX_ENV_FILE is not a regular file, so nothing could be read out of it" \
+      "look at what is really there: ls -ld $BOX_ENV_FILE"
+    return 2
+  fi
+  if [ ! -r "$BOX_ENV_FILE" ]; then
+    _dr_warn config "$BOX_ENV_FILE cannot be read, so this box's mode was never measured" \
+      "check its mode and owner: ls -l $BOX_ENV_FILE (the server reads it as the user the unit runs as)"
+    return 2
+  fi
+
+  local mode url token
+  mode="$(_box_env_value "$BOX_ENV_FILE" CCRC_FLEET)"
+  url="$(_box_env_value "$BOX_ENV_FILE" CCRC_AGENT_URL)"
+  token="$(_box_env_value "$BOX_ENV_FILE" CCRC_AGENT_TOKEN)"
+
+  # `server/src/config.ts:154` reads anything that is not exactly `remote` as
+  # local — absent included. A check stricter than the reader it describes would
+  # report a box that boots perfectly well as misconfigured, which is the
+  # one-directional-failure rule `_box_env_value`'s own header states.
+  if [ "$mode" != remote ]; then
+    local why="CCRC_FLEET is not set"
+    [ -z "$mode" ] || why="CCRC_FLEET is set to something other than \"remote\""
+    _dr_pass config "$BOX_ENV_FILE present, fleet mode local ($why, which server/src/config.ts reads as local)"
+    return 0
+  fi
+
+  # BOTH halves of the server's own condition (`!cfg.agentUrl || !cfg.agentToken`),
+  # and empty is absent to `config.ts:155-156` as it is here.
+  local -a gaps=()
+  [ -n "$url" ] || gaps+=("CCRC_AGENT_URL is empty or absent")
+  [ -n "$token" ] || gaps+=("CCRC_AGENT_TOKEN is empty or absent")
+  if [ "${#gaps[@]}" -gt 0 ]; then
+    _dr_fail config "$BOX_ENV_FILE declares CCRC_FLEET=remote but $(_dr_join ${gaps[@]+"${gaps[@]}"}) — the server exits 1 at boot in exactly this state, before it listens on anything" \
+      "set both CCRC_AGENT_URL and CCRC_AGENT_TOKEN in ~/.ccrc/ccrc.env, or set CCRC_FLEET=local"
+    return 1
+  fi
+  _dr_pass config "$BOX_ENV_FILE present, fleet mode remote, and both CCRC_AGENT_URL and CCRC_AGENT_TOKEN are set (whether the agent ANSWERS is the 'fleet' check below)"
+}
+
+# ── room on the filesystem $HOME is on ────────────────────────────────────
+# Spec §5's "disk headroom (including the backup dir)". THREE things this
+# project writes land on one filesystem and all three fail unhelpfully when it
+# is full: a ccd workspace is a full clone per session, every deploy leaves
+# another `~/ccrc-backups/<ts>/` (deploy.sh:33-34), and `~/.ccrc/coord.db` is a
+# WAL database that `server/src/coord/db.ts:144-145` says outright has NO backup
+# to fall back on — a truncated write there is not recoverable from that
+# directory.
+#
+# TWO FLOORS BECAUSE THERE ARE TWO SITUATIONS: under 2 GiB the next spawn or
+# deploy fails, which is a defect to fix now; under 10 GiB it is a morning's
+# warning that it will. Above both, the PASS names the room it found, so
+# "PASS disk" cannot be a check that measured nothing.
+#
+# PARSED WITH `read`, NOT `awk`/`cut`: nothing in this file resolves an external
+# binary that is not the subject it is measuring (`_dr_pkg_candidates`'s reason,
+# and `ccrc-wrapper-shape:49-57`'s), because doctor has to answer on a box whose
+# PATH is the broken thing. `df` itself is the measured subject here, and its
+# absence is its own verdict.
+_check_disk() {
+  if ! command -v df >/dev/null 2>&1; then
+    _dr_warn disk "df is not on PATH, so this check cannot measure free space on \$HOME's filesystem" \
+      "install it (coreutils on a GNU box, util-linux on some minimal images) — until then nothing here can tell you a full disk from an empty one"
+    return 2
+  fi
+
+  # `-P` because POSIX output keeps every mount on ONE line: the default format
+  # wraps a long device name onto its own line, and this reads the LAST line.
+  # `-k` because both floors below are in KiB — `df -h` would answer "41G" and
+  # the arithmetic would be nonsense.
+  local out line last="" avail=""
+  out="$(df -Pk "$HOME" 2>/dev/null)"
+  while IFS= read -r line; do
+    [ -z "$line" ] || last="$line"
+  done <<< "$out"
+  # shellcheck disable=SC2034  # the three leading fields are read to be dropped
+  [ -z "$last" ] || read -r _dr_df_fs _dr_df_size _dr_df_used avail _dr_df_rest <<< "$last"
+
+  case "$avail" in
+    ''|*[!0-9]*)
+      # A df that could not stat the filesystem (a stale mount, a dead
+      # automount) exits nonzero having printed nothing, and an empty field in
+      # `$(( ))` is a bash arithmetic error rather than a number. Neither may
+      # become "0 GiB free", which is a FAIL about a measurement nobody made.
+      _dr_warn disk "df printed nothing this check could read where the available blocks belong, so free space was never measured" \
+        "check by hand: df -Pk \$HOME — a filesystem df cannot stat answers exactly this way"
+      return 2 ;;
+  esac
+
+  local floor=$((2 * 1024 * 1024)) tight=$((10 * 1024 * 1024))
+  local gib=$((avail / 1024 / 1024)) mib=$((avail / 1024))
+  if [ "$avail" -lt "$floor" ]; then
+    # MiB below the floor, because "1 GiB" and "0 GiB" are the whole range there
+    # and an operator deciding what to delete needs the real number.
+    _dr_fail disk "only $mib MiB free on \$HOME's filesystem — under the 2 GiB floor" \
+      "free space on \$HOME's filesystem before running sessions — under 2 GiB a ccd spawn (a full clone per workspace) and the next deploy's ~/ccrc-backups/<ts>/ copy start failing, and ~/.ccrc/coord.db has no backup to fall back on"
+    return 1
+  fi
+  if [ "$avail" -lt "$tight" ]; then
+    _dr_warn disk "$gib GiB free on \$HOME's filesystem — getting tight (a ccd workspace is a full clone, and every deploy leaves another ~/ccrc-backups/<ts>/)" \
+      "clear room while it is still cheap: the oldest ~/ccrc-backups/<timestamp>/ directories first, then workspaces whose PRs have merged"
+    return 2
+  fi
+  _dr_pass disk "$gib GiB free on \$HOME's filesystem"
+}
+
 # ── the roster against the wrappers on disk ───────────────────────────────
 # THE CHECK THAT FOUND D-69. It is deliberately stronger than "the wrappers
 # are present and executable", because presence was never the failure mode:
@@ -607,21 +942,35 @@ _dr_wr_has() {
 # literally what ccd runs (ccd:7361). Three distinguishable ways to answer no,
 # because an operator does something different about each: a link whose target
 # was deleted is a broken install, an absent file is an install that never
-# happened, and a present non-executable file is a `chmod`. Appends to
-# `wr_hard` (its caller's local, by the same dynamic scope `_dr_wr_note` uses)
-# and returns 1 when it found something to say, so a caller can stop there
-# rather than go on to ask a question about a file that is not there.
-_dr_wr_present() {
+# happened, and a present non-executable file is a `chmod`.
+#
+# D-82: the first two are ABSENT — nothing `ccrc wrappers` would refuse to
+# write, because it never sees a file there at all (its `absent` decision-table
+# arm writes; a dangling symlink is replaced by its `mv -f`) — and go to the
+# CALLER-NAMED bucket, a nameref, so the caller decides which class they are.
+# The last one is a file that exists and is WRONG, which `ccrc wrappers` would
+# refuse to touch (D-82's point: a file on disk that disagrees is a different
+# operator action than a file that was never written), so it stays hard-wired
+# to `wr_hard` regardless of what the caller passed — the asymmetry is
+# deliberate, not an oversight to "fix" into three namerefs.
+#
+# Returns 1 when it found something to say, so a caller can stop there rather
+# than go on to ask a question about a file that is not there.
+_dr_wr_present() {   # id bucketname — presence probe; absent-class findings go to the NAMED bucket
   local id="$1"
+  local -n _wrp_bucket="$2"
   local p="$WRAPPER_BIN_DIR/$id"
   if [ -L "$p" ] && [ ! -e "$p" ]; then
-    wr_hard+=("$id's \$HOME/.local/bin/$id is a symlink to a path that does not exist")
+    _wrp_bucket+=("$id's \$HOME/.local/bin/$id is a symlink to a path that does not exist")
     return 1
   fi
   if [ ! -e "$p" ]; then
-    wr_hard+=("$id has no executable at \$HOME/.local/bin/$id")
+    _wrp_bucket+=("$id has no executable at \$HOME/.local/bin/$id")
     return 1
   fi
+  # present-but-wrong stays DISAGREEMENT class regardless of caller: a file
+  # ccrc wrappers would refuse is not fixed by running ccrc wrappers.
+  #
   # `-f` BEFORE `-x`, and it is not redundant: a DIRECTORY is both `-e` and
   # `-x` (that is what the execute bit means on a directory), so without this a
   # `mkdir $HOME/.local/bin/<id>` passed the whole triad and doctor reported
@@ -675,7 +1024,12 @@ _dr_wr_note() {
   local p="$WRAPPER_BIN_DIR/$id"
   case "$dir" in
     a-only)
-      if _dr_wr_present "$id"; then
+      # This is the generated-account path (`wr_expect` is built from
+      # `generated` ids only, above): absent and a dangling symlink are
+      # exactly what `ccrc wrappers` writes — its `absent` decision-table arm
+      # writes, and `mv -f` over a dangling symlink replaces it — so those
+      # findings go to `wr_absent`, not `wr_hard`.
+      if _dr_wr_present "$id" wr_absent; then
         if ! _wrap_is_script "$p"; then
           wr_hard+=("$id is declared ${wr_kind[$id]} but \$HOME/.local/bin/$id is not a script")
         else
@@ -711,7 +1065,9 @@ _check_wrappers() {
   fi
 
   local bin="$WRAPPER_BIN_DIR" roster="$HOME/.ccrc/accounts.json"
-  local -a wr_hard=() wr_soft=()
+  # D-82: `wr_absent` is its own bucket, not a third name for `wr_hard` — see
+  # `_dr_wr_present`'s own header for the class it holds and why.
+  local -a wr_hard=() wr_soft=() wr_absent=()
 
   if [ ! -e "$roster" ]; then
     _dr_fail wrappers "no account roster at \$HOME/.ccrc/accounts.json, so nothing on this box says what \$HOME/.local/bin is supposed to hold" \
@@ -936,7 +1292,13 @@ _check_wrappers() {
         # launcher, possibly compiled), and the upstream account's normal shape
         # is a binary. Anything more than existence would be inventing a
         # contract nobody made.
-        _dr_wr_present "$id" || true
+        #
+        # `wr_hard`, not `wr_absent`: `ccrc wrappers` never creates an external
+        # or upstream account (D-71's own wording — it writes GENERATED
+        # wrappers only), so the roster-sync remedy is the correct one for an
+        # absent external/upstream wrapper too. Only the generated path above
+        # gets the ccrc-wrappers remedy.
+        _dr_wr_present "$id" wr_hard || true
         ;;
       generated)
         # Absent from disk, or not a wrapper at all: already reported, in the
@@ -958,6 +1320,37 @@ _check_wrappers() {
         # silently WRONG D-69 verdict (a secrets path read out of the suffix
         # column), not a parse error. Split by hand then, as the roster reader
         # above does.
+        #
+        # D-81, THE DOCTOR SIDE: `_wrap_parse_shape` reads its candidate WHOLE
+        # (`mapfile -t lines < "$f"`, `ccd/ccrc-wrapper-shape`) — unlike
+        # `_wrap_is_script`'s own two-byte gate, it has no bound at all.
+        # `ccrc wrappers` never hands it a genuinely oversize file post-D-81
+        # (`deploy/gen-wrappers.mjs` classifies one `oversize` before bash ever
+        # sees the disk path), but THIS check is a pure-bash roster-vs-disk
+        # comparison with no node-side gate ahead of it, so it needs its own.
+        # `stat` is guarded exactly like this file's existing `df`/`git`/`gh`
+        # calls (`command -v`, never assumed) — on a box with no `stat` this
+        # falls back to the old unbounded read rather than going blind, the
+        # same trade this file already makes for every other external tool it
+        # cannot do without. Skip-and-count, not a crash: a wrapper too big to
+        # check is a disagreement (`wr_hard`), exactly like one that fails the
+        # shape test outright, and the mirrored threshold is D-81's own
+        # `OVERSIZE_BYTES` (`deploy/gen-wrappers.mjs`).
+        #
+        # D-87: NOT `read -N` (the pure-bash reach `_wrap_is_script` uses for
+        # its own two-byte gate) — measured NOT bounded here. `read -N n`
+        # counts only NON-NUL characters toward `n`, so a NUL-heavy candidate
+        # (a sparse file; zero-padding in a real binary) makes it consume the
+        # WHOLE file hunting for `n` non-null bytes, reintroducing exactly the
+        # unboundedness this gate exists to close.
+        if command -v stat >/dev/null 2>&1; then
+          local wr_sz=""
+          wr_sz="$(stat -c%s -- "$bin/$id" 2>/dev/null)" || wr_sz=""
+          if [[ "$wr_sz" =~ ^[0-9]+$ ]] && [ "$wr_sz" -gt 1048576 ]; then
+            wr_hard+=("$id's \$HOME/.local/bin/$id is over 1 MiB — too big to be the generated shape, and never read")
+            continue
+          fi
+        fi
         IFS=$'\t' read -r ok target wsuffix wsecrets < <(_wrap_parse_shape "$bin/$id")
         if [ "$ok" != ok ]; then
           wr_hard+=("$id is declared generated but \$HOME/.local/bin/$id is not the generated shape (a shebang, an export, an optional secrets guard, an exec — and nothing else)")
@@ -1004,7 +1397,19 @@ _check_wrappers() {
   # laundered "somebody keeps a launcher the fleet does not drive" into
   # "somebody broke an account", handed it the wrong remedy, and left the
   # summary counting zero warnings while warnings were on the screen.
+  # D-82: `wr_absent` gets its OWN FAIL line, BEFORE `wr_hard`'s — a check may
+  # answer in two classes (this file's header), and absent-vs-disagreement is
+  # exactly that split: "nothing exists for `ccrc wrappers` to refuse" is not
+  # the same instruction as "the roster and the wrapper disagree", and joining
+  # them would either launder the absent case into a defect it is not, or hand
+  # the disagreement case a remedy that fixes nothing it names.
   local rc=0
+  if [ "${#wr_absent[@]}" -gt 0 ]; then
+    _dr_fail wrappers \
+      "$(_dr_join ${wr_absent[@]+"${wr_absent[@]}"})" \
+      "run: ccrc wrappers — nothing exists on disk for it to refuse; it creates \$HOME/.local/bin and writes every generated account's wrapper"
+    rc=1
+  fi
   if [ "${#wr_hard[@]}" -gt 0 ]; then
     _dr_fail wrappers \
       "$(_dr_join ${wr_hard[@]+"${wr_hard[@]}"})" \

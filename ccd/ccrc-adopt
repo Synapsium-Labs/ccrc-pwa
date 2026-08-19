@@ -121,7 +121,19 @@ BIN_DIR="$WRAPPER_BIN_DIR"
 # the fleet host. One relative path, correct in both worlds; no `$HOME`-rooted
 # fallback to disagree with it. The refusal below therefore names both places
 # rather than asking a box that was never a checkout whether it is one.
-HERE="$(cd "$(dirname "$0")" && pwd)"
+#
+# `_ADOPT_SELF`, not `$0`+`dirname`: it is already computed, at :74-75, with
+# the same defensive idiom the wrapper-shape load three lines above needs —
+# and for the same reason. `dirname` is an external command, a PATH lookup
+# this script has no business depending on twice (once early, via
+# `_ADOPT_SELF`'s pure parameter expansion, and once again here through a
+# subprocess) when one bash-only computation already answers it. A `dirname`
+# on PATH that lies (or is simply absent) used to send `cd` into whatever it
+# printed and die with a raw shell error before ever reaching this script's
+# own voice — measured, and the failure a maintainer would otherwise have to
+# reproduce by hand: `ccrc-adopt: line 124: cd: <whatever dirname said>: No
+# such file or directory`.
+HERE="$(cd "${_ADOPT_SELF%/*}" && pwd)"
 GEN_ACCOUNTS="$HERE/../deploy/gen-accounts.mjs"
 
 # ── pass 0: candidate names — regular files (symlinks OK), executable, and

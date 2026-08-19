@@ -22,7 +22,7 @@
 // below carries the correction and the reason.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
+import { writeFileSync, mkdirSync, readFileSync, existsSync, symlinkSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
@@ -142,9 +142,43 @@ describe('ccrc: dispatch and usage', () => {
     // ~/.local/bin/<id> from the roster. A verb that dispatches but is not in
     // the usage line is a verb nobody can find; `server/test/ccrc-wrappers.test.ts`
     // owns its behaviour, this line owns its discoverability.
+    //
+    // `install` joined it in stage 2d Task 6 — the verb the whole CLI is named
+    // for, and the one an operator reaches for FIRST, before there is anything
+    // on the box for the other five to measure. Same split: this line owns its
+    // discoverability, `server/test/ccrc-install.test.ts` owns what it does.
     const home = mkTmp('ccrc-cli-usage-verbs-');
     const r = runCcrcRaw(home, ['-h']);
-    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|version\}/);
+    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|install\|version\}/);
+  });
+
+  // ── install's ARGUMENT surface ──────────────────────────────────────────
+  // The two halves of the flag-ful-verb rule (`cmd_wrappers`' loop,
+  // ccd/ccrc:1040-1048), pinned here beside the other dispatch tests rather
+  // than in the install suite: neither of these reaches a step function, so
+  // neither needs — or may have — a shipped tree to converge from. What they
+  // are about is the DISPATCHER, which is this file's subject.
+  it('install -h prints usage on STDOUT at exit 0 — a verb with flags explains them', () => {
+    // `version` answers `--help` with a usage ERROR (exit 2) because it has no
+    // flags to explain; `install` follows `wrappers` instead, and for the same
+    // reason: it is the verb an operator asks about before running it, on a box
+    // where running it is the thing they are unsure of.
+    const home = mkTmp('ccrc-cli-install-help-');
+    const r = runCcrcRaw(home, ['install', '-h']);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/usage: ccrc \{/);
+    // …and it exits BEFORE the first step: `-h` on a fresh HOME must not seed
+    // that HOME. A help screen with a side effect is not a help screen.
+    expect(existsSync(join(home, '.ccrc'))).toBe(false);
+  });
+
+  it('install --bogus is a usage error, exit 2 — not a step that quietly ran', () => {
+    const home = mkTmp('ccrc-cli-install-badarg-');
+    const r = runCcrcRaw(home, ['install', '--bogus']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/^ccrc: unknown argument: --bogus/m);
+    expect(r.stderr).toMatch(/usage: ccrc/);
+    expect(existsSync(join(home, '.ccrc'))).toBe(false);
   });
 
   it('an unknown top-level flag is a usage error too, before any verb is read', () => {
@@ -260,6 +294,59 @@ describe('ccrc: adopt', () => {
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/^ccrc: adopt's script is missing/m);
     expect(r.stderr).toContain('ccrc-adopt');
+  });
+
+  it('resolves its own location via BASH_SOURCE, not $0+dirname — a lying dirname on PATH cannot derail a symlinked invocation', () => {
+    // Task 1 of stage2d's brief predicted that invoking ccrc-adopt through a
+    // bare symlink (`ln -s <checkout>/ccd/ccrc-adopt <home>/elsewhere/ccrc-adopt`)
+    // would move GEN_ACCOUNTS from "beside the symlink" to "beside the real
+    // file" once HERE stopped using `$0`. MEASURED, by hand, against both the
+    // shipped script and a copy with the fix applied: it does not. Bash never
+    // dereferences BASH_SOURCE[0] (or $0) through a symlink for a
+    // directly-invoked, non-sourced script — `dirname "$0"` and
+    // `${_ADOPT_SELF%/*}` compute the IDENTICAL string for a plain symlink
+    // invocation, before AND after this fix, and both refuse self-validation
+    // naming "<home>/elsewhere/../deploy/gen-accounts.mjs" (beside the
+    // symlink) either way. That prediction does not hold, so this test pins
+    // the property the fix ACTUALLY changes — the one its own comment names,
+    // "dirname is a PATH lookup": HERE no longer depends on an external
+    // `dirname` command being on PATH at all, only on bash's own
+    // BASH_SOURCE/parameter-expansion machinery, which the wrapper-shape load
+    // three lines above it already relies on.
+    //
+    // MEASURED RED (before the fix, by hand against the shipped script): with
+    // a `dirname` on PATH that lies (prints a nonexistent path) shadowing the
+    // real one, `HERE="$(cd "$(dirname "$0")" && pwd)"` sent `cd` into that
+    // nonexistent directory and the script died with a raw bash error —
+    // "ccrc-adopt: line 124: cd: /nonexistent-garbage-from-a-lying-dirname:
+    // No such file or directory" — never reaching ccrc-adopt's own refusal
+    // voice at all.
+    const elsewhere = join(mkTmp('ccrc-cli-adopt-here-kit-'), 'elsewhere');
+    mkdirSync(elsewhere, { recursive: true });
+    const ccdDir = path.dirname(CCRC);
+    symlinkSync(join(ccdDir, 'ccrc-adopt'), join(elsewhere, 'ccrc-adopt'));
+    symlinkSync(join(ccdDir, 'ccrc-wrapper-shape'), join(elsewhere, 'ccrc-wrapper-shape'));
+
+    const home = mkTmp('ccrc-cli-adopt-here-home-');
+    const env = ccrcEnv(home);                        // plants gh/curl/systemctl poisons in .local/bin
+    const bin = join(home, '.local', 'bin');
+    writeFileSync(join(bin, 'claude'), '\x7fELF not-a-script\n', { mode: 0o755 });
+    writeFileSync(join(bin, 'ccx'),
+      '#!/usr/bin/env bash\nexport CLAUDE_CONFIG_DIR="$HOME/.claude-x"\nexec "$HOME/.local/bin/claude" "$@"\n',
+      { mode: 0o755 });
+
+    // A `dirname` that lies, first on PATH — the property under test.
+    const lyingBin = join(home, 'lying-bin');
+    mkdirSync(lyingBin, { recursive: true });
+    writeFileSync(join(lyingBin, 'dirname'),
+      '#!/bin/sh\necho /nonexistent-garbage-from-a-lying-dirname\n', { mode: 0o755 });
+
+    const r = spawnSync(join(elsewhere, 'ccrc-adopt'), ['--out', join(home, 'accounts.json')],
+      { env: { ...env, PATH: `${lyingBin}:${env['PATH'] ?? ''}` }, encoding: 'utf8' });
+
+    expect(r.stderr).not.toMatch(/No such file or directory/);
+    expect(r.stderr).toMatch(/^ccrc-adopt: cannot self-validate: .*gen-accounts\.mjs is missing/m);
+    expect(r.status).toBe(1);
   });
 });
 
