@@ -24,7 +24,7 @@ afterEach(() => { h.cleanup(); });
  *  default and one test flips it. `_ws_unsupervise` logs so the resurrection
  *  guard is visible; tmux logs for the same reason. */
 const DEAD = `_ws_unsupervise() { echo "unsupervise $1" >> "$HOME/ccd-calls"; };
-  tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; return 1; }; _alive() { return 1; };`;
+  tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; return 1; }; _session_verdict() { echo gone; };`;
 
 const shFail = (snippet: string): { code: number; stderr: string; stdout: string } => {
   try { return { code: 0, stderr: '', stdout: h.sh(snippet) }; }
@@ -80,7 +80,7 @@ describe('ccd forget', () => {
 
   it('refuses a session that is still running', () => {
     const id = deadWrapperSession();
-    const r = shFail(`_alive() { return 0; }; cmd_forget ${id}`);
+    const r = shFail(`_session_verdict() { echo live; }; cmd_forget ${id}`);
     expect(r.code).not.toBe(0);
     expect(r.stderr).toContain('still running');
     expect(h.reg(id, 'uuid'), 'a refusal must not purge anything').not.toBeNull();

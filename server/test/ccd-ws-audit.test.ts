@@ -11,7 +11,7 @@ afterEach(() => { h.cleanup(); });
 
 const ARCH = `_ws_unsupervise() { :; }; _ws_supervise() { :; }; _spawn() { :; };
   _spawn_start() { SPAWN_FROMSWAP=0; }; _spawn_settle() { :; };
-  tmux() { return 1; }; _alive() { return 1; };`;
+  tmux() { return 1; }; _session_verdict() { echo gone; };`;
 
 interface Built { main: string; wt: string; tip: string; merge: string }
 
@@ -2572,7 +2572,7 @@ describe('ws-audit reports the session\'s own state, on EVERY verdict', () => {
     h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
     const doc = JSON.parse(h.sh(`${ARCH} cmd_ws_audit --session demo-quiet-basin`));
     expect(doc.verdict).toBe('not-archived');
-    expect(doc.alive).toBe(false);          // ARCH stubs `_alive() { return 1; }`
+    expect(doc.alive).toBe(false);          // ARCH stubs `_session_verdict() { echo gone; }`
     expect(doc.started).toBe(true);         // cmd_ws_add claimed it
     // NOT `absent`: the harness's contained systemctl REFUSES (exit 97) rather
     // than listing nothing, and a refusal is "we could not look", which already
