@@ -668,6 +668,34 @@ describe('one BuildInfo — the stamp shape and its field checks', () => {
   });
 });
 
+// ── the bash side of "one definition", shared by the scans below ─────────
+// Two describes read the same two trees now (the build stamp, and stage 2e's
+// remote-control flag), so the walk lives here rather than inside either — a
+// second copy of the scanner, in the file whose whole subject is second
+// copies, would be the joke this suite exists to prevent.
+const bashRoots = [path.join(ccrcRoot, 'ccd'), path.join(ccrcRoot, 'deploy')];
+const isBash = (p: string): boolean => {
+  if (/\.(sh|bash)$/.test(p)) return true;
+  if (/\.[A-Za-z0-9]+$/.test(p)) return false;   // .mjs/.service/.json/.conf …
+  return /^#!.*\b(ba)?sh\b/.test(readFileSync(p, 'utf8').split('\n')[0] ?? '');
+};
+const bashFiles = (dir: string): string[] => {
+  const out: string[] = [];
+  for (const e of readdirSync(dir)) {
+    const p = path.join(dir, e);
+    if (statSync(p).isDirectory()) { out.push(...bashFiles(p)); continue; }
+    if (isBash(p)) out.push(p);
+  }
+  return out;
+};
+const BASH = bashRoots.flatMap(bashFiles);
+/** A bash line that is not a comment. Either path is discussed in prose all
+ *  over these tools; only an actual line of shell is a reader or a writer. */
+const codeLines = (f: string): string[] =>
+  readFileSync(f, 'utf8').split('\n').filter((l) => !l.trim().startsWith('#'));
+const holdersOf = (needle: string): string[] =>
+  BASH.filter((f) => codeLines(f).some((l) => l.includes(needle))).map(rel).sort();
+
 // — Stage 2b, Task 8: the build stamp's BASH side —
 describe('one bash reader of ~/.ccrc/build.json', () => {
   // The TypeScript half is the describe above. This is the other language the
@@ -680,29 +708,6 @@ describe('one bash reader of ~/.ccrc/build.json', () => {
   // the ONLY reader of ~/.ccrc/build.json in this file, and `version` and
   // `status` both call it") and names this task as the place the rule stops
   // being prose.
-  const bashRoots = [path.join(ccrcRoot, 'ccd'), path.join(ccrcRoot, 'deploy')];
-  const isBash = (p: string): boolean => {
-    if (/\.(sh|bash)$/.test(p)) return true;
-    if (/\.[A-Za-z0-9]+$/.test(p)) return false;   // .mjs/.service/.json/.conf …
-    return /^#!.*\b(ba)?sh\b/.test(readFileSync(p, 'utf8').split('\n')[0] ?? '');
-  };
-  const bashFiles = (dir: string): string[] => {
-    const out: string[] = [];
-    for (const e of readdirSync(dir)) {
-      const p = path.join(dir, e);
-      if (statSync(p).isDirectory()) { out.push(...bashFiles(p)); continue; }
-      if (isBash(p)) out.push(p);
-    }
-    return out;
-  };
-  const BASH = bashRoots.flatMap(bashFiles);
-  /** A bash line that is not a comment. The stamp's path is discussed in prose
-   *  all over both tools; only an actual line of shell is a reader. */
-  const codeLines = (f: string): string[] =>
-    readFileSync(f, 'utf8').split('\n').filter((l) => !l.trim().startsWith('#'));
-  const holdersOf = (needle: string): string[] =>
-    BASH.filter((f) => codeLines(f).some((l) => l.includes(needle))).map(rel).sort();
-
   it('actually found the bash tools — a scan over an empty list passes everything', () => {
     for (const f of ['ccd/ccd', 'ccd/ccrc', 'ccd/ccrc-adopt', 'ccd/ccrc-doctor-checks',
       'ccd/session-hook.sh', 'deploy/deploy.sh', 'deploy/verify-service.sh']) {
@@ -775,6 +780,90 @@ describe('one bash reader of ~/.ccrc/build.json', () => {
     const deploySh = readFileSync(path.join(ccrcRoot, 'deploy', 'deploy.sh'), 'utf8');
     expect(deploySh.split('\n').filter((l) => !l.trim().startsWith('#') && l.includes('.ccrc/build.json')))
       .toEqual(['  install_atomic "$stamp" .ccrc/build.json 644']);
+  });
+});
+
+// — Stage 2e, Task 2: the per-box remote-control flag —
+describe('one ~/.ccrc/remote-control, spelled once per tool and equal across all four', () => {
+  // The flag `ccd`'s `_rc_enabled` reads on EVERY spawn to decide whether a
+  // session comes up with `--remote-control` (D-99). Four bash files touch it
+  // and none of them can share a variable with any other:
+  //
+  //   - `ccd` is the READER and the authority on what the bytes mean. It
+  //     sources only `~/.ccrc/accounts.sh` and nothing in this repository.
+  //   - `ccrc` (`_inst_rc`) is the single-box WRITER, seeding `off`.
+  //   - `ccrc-doctor-checks` (`_dr_rc_state`) re-measures it for the operator.
+  //     It is sourced under `set -u` by things that are not `ccrc`
+  //     (`ccrc-doctor.test.ts`'s `tableNames()` does exactly that), so a
+  //     top-level reference to another tool's variable would make sourcing it
+  //     FAIL, and a `${…:-…}` fallback is the second spelling with a branch in
+  //     front of it. That is D-92's trade for `CCRC_UNIT_DIR`, unchanged.
+  //   - `deploy.sh` writes it over ssh, in the BOX's shell, where no variable
+  //     of ours exists at all — hence `~` rather than `$HOME`.
+  //
+  // So the agreement cannot be structural, and this is the mechanism that
+  // holds it instead: a drift in any one of the four spellings would mean a
+  // box whose installer seeds one file, whose supervisor reads another, and
+  // whose doctor reports on a third.
+  const NEEDLE = '.ccrc/remote-control';
+  /** Every spelling normalised to the same box-relative form, so `$HOME/x` and
+   *  `~/x` — which are the same file and MUST be — compare equal. */
+  const boxPath = (s: string): string => s.replace(/^\$HOME\//, '~/');
+
+  it('is touched by exactly those four files, and each is named here BY NAME', () => {
+    expect(holdersOf(NEEDLE)).toEqual([
+      'ccd/ccd',                  // CCRC_RC_FILE + _rc_enabled — the reader, and the authority
+      'ccd/ccrc',                 // _inst_rc — the single-box seed (off)
+      'ccd/ccrc-doctor-checks',   // _dr_rc_state — the operator-facing re-measurement
+      'deploy/deploy.sh',         // the fleet lane's seed (on), before the ccd that reads it
+    ]);
+  });
+
+  it('every one of the four resolves to the same file', () => {
+    const src = (f: string): string => readFileSync(path.join(ccrcRoot, f), 'utf8');
+
+    const reader = /^CCRC_RC_FILE="([^"]+)"$/m.exec(src('ccd/ccd'));
+    expect(reader, 'ccd/ccd declares no CCRC_RC_FILE').toBeTruthy();
+
+    const doctor = /^CCRC_RC_FILE="([^"]+)"$/m.exec(src('ccd/ccrc-doctor-checks'));
+    expect(doctor, 'ccd/ccrc-doctor-checks declares no CCRC_RC_FILE').toBeTruthy();
+
+    // The installer's is a `local`, not a top-level constant, and deliberately:
+    // `ccrc`'s top-level block exists for files this tool both READS and
+    // writes, and it only writes this one. So it is located inside the step.
+    const instRc = /_inst_rc\(\)[\s\S]*?\n\}/.exec(src('ccd/ccrc'));
+    expect(instRc, 'ccd/ccrc has no _inst_rc').toBeTruthy();
+    const seedLocal = /local dest="([^"]+)"/.exec(instRc![0]);
+    expect(seedLocal, '_inst_rc does not name its destination').toBeTruthy();
+
+    // deploy's is inside the ssh payload, in the box's own shell.
+    const deploySeed = readFileSync(path.join(ccrcRoot, 'deploy', 'deploy.sh'), 'utf8')
+      .split('\n').find((l) => l.includes('"${SSH[@]}"') && l.includes(NEEDLE));
+    expect(deploySeed, 'deploy.sh never seeds the flag').toBeTruthy();
+    const deployPaths = [...deploySeed!.matchAll(/~\/\.ccrc\/remote-control/g)].map((m) => m[0]);
+    expect(deployPaths.length, 'the deploy seed names the flag file nowhere').toBeGreaterThan(0);
+
+    const spellings = new Set([
+      boxPath(reader![1]!), boxPath(doctor![1]!), boxPath(seedLocal![1]!), ...deployPaths,
+    ]);
+    expect([...spellings]).toEqual(['~/.ccrc/remote-control']);
+  });
+
+  it('each tool spells it once — no file holds two lines of shell naming it', () => {
+    // Prose may discuss the path anywhere (all four files do, at length);
+    // only a LINE OF SHELL is a toucher. `ccd/ccrc` is the one exception and
+    // it is named: `_inst_rc`'s transcript line quotes the path AT the
+    // operator, which is a message rather than a second access to the file.
+    for (const [f, want] of [
+      ['ccd/ccd', 1],
+      ['ccd/ccrc-doctor-checks', 1],
+      ['deploy/deploy.sh', 1],   // one ssh — its guard, its write and its transcript line are one line
+      ['ccd/ccrc', 2],           // `local dest=…`, and the line an operator is told to edit
+    ] as const) {
+      const lines = codeLines(path.join(ccrcRoot, f)).filter((l) => l.includes(NEEDLE));
+      expect(lines.length, `${f} names ${NEEDLE} on ${lines.length} lines of shell:\n${lines.join('\n')}`)
+        .toBe(want);
+    }
   });
 });
 

@@ -414,6 +414,17 @@ function writeCcrcEnv(home: string, text: string): void {
   writeFileSync(join(home, '.ccrc', 'ccrc.env'), text);
 }
 
+/** `~/.ccrc/remote-control` — the per-box switch `ccd`'s `_rc_enabled` reads to
+ *  decide whether a session spawns with `--remote-control` (D-99). Written as
+ *  TEXT, and with no newline added for you, because the trailing newline IS the
+ *  contract: `read` returns non-zero at EOF-before-delimiter, so `'on'` and
+ *  `'on\n'` are two different files and a helper that quietly normalised them
+ *  would make the case doctor's third state exists for untestable. */
+function writeRcFlag(home: string, text: string): void {
+  mkdirSync(join(home, '.ccrc'), { recursive: true });
+  writeFileSync(join(home, '.ccrc', 'remote-control'), text);
+}
+
 /** `systemctl --user is-active <unit>` answers from `<home>/fixture-unit-<unit>`;
  *  with the file absent it answers `inactive` and exits 3, exactly as systemd
  *  does for a unit that is not running. Any other argv is a loud failure — a
@@ -1324,6 +1335,121 @@ describe('ccrc doctor: config', () => {
     expect(r.stdout).toMatch(/^FAIL config: ccrc's own config reader is not loaded/m);
     expect(r.stdout).toMatch(/^ {2}remedy: this is a bug in ccrc/m);
     expect(r.status).toBe(1);
+  });
+});
+
+// ── what this box's sessions are spawned AS ───────────────────────────────
+// Stage 2e, Task 2. `~/.ccrc/remote-control` is the per-box switch `ccd`'s
+// `_rc_enabled` reads on every spawn (D-99), and `_check_config` appends the
+// measured state to its PASS detail. The state is REPORTED, never JUDGED: the
+// two values are both legitimate, and the check's verdict remains a statement
+// about `ccrc.env`.
+//
+// FIVE PRINTED FORMS OVER THREE SEMANTIC STATES, and the two extra forms are
+// the point of having a helper at all:
+//   on                        — this box publishes its sessions to claude.ai
+//   off                       — a deliberate off, written by somebody
+//   off (default)             — no file; ccd reads absent as off
+//   off (unparseable …)       — a file whose first line is neither, INCLUDING
+//                               the newline-less `on` that `read` rejects at
+//                               EOF-before-delimiter. Reporting that as a
+//                               deliberate `off` tells an operator they chose
+//                               a mode when their edit simply did not take.
+//   off (unreadable …)        — the file is there and nothing came out of it.
+//                               A mode problem and a bytes problem are two
+//                               different mornings; `_check_config` splits the
+//                               same pair for `ccrc.env` two screens up.
+//
+// MUTATIONS MEASURED (applied to the shipped helper, run, reverted): recorded
+// beside the implementation in this task's report.
+describe('ccrc doctor: the remote-control state config reports', () => {
+  const rcLine = (home: string): string => lineFor(runDoctor(home).stdout, 'config') ?? '';
+
+  it('says "off (default)" on a box with no flag file — absent is what ccd reads as off', () => {
+    const home = healthy('ccrc-doctor-rc-absent-');
+    expect(rcLine(home)).toMatch(/^PASS config: .*; remote-control off \(default\)$/);
+  });
+
+  it('says "on" for a box that drives its sessions over the RC socket', () => {
+    const home = healthy('ccrc-doctor-rc-on-');
+    writeRcFlag(home, 'on\n');
+    expect(rcLine(home)).toMatch(/; remote-control on$/);
+  });
+
+  it('says "off" for a deliberate off, and does not dress it as the default', () => {
+    // The two are different facts about the box — "nobody has decided" and
+    // "somebody decided no" — and an operator reading a transcript acts on
+    // them differently (one is a file to write, the other a file to edit).
+    const home = healthy('ccrc-doctor-rc-off-');
+    writeRcFlag(home, 'off\n');
+    expect(rcLine(home)).toMatch(/; remote-control off$/);
+    expect(rcLine(home)).not.toMatch(/default/);
+  });
+
+  it('says "unparseable" for a first line that is neither — never a deliberate off', () => {
+    const home = healthy('ccrc-doctor-rc-garbage-');
+    writeRcFlag(home, 'yes please\n');
+    expect(rcLine(home)).toMatch(
+      /; remote-control off \(unparseable — the file must hold one line reading 'on' or 'off'\)$/);
+  });
+
+  it('says "unparseable" for a newline-less `on` — the operator edit that did not take', () => {
+    // THE CASE THE THIRD FORM EXISTS FOR, and it is not hypothetical: `printf
+    // 'on' > ~/.ccrc/remote-control` is what a person types. `read` returns
+    // non-zero at EOF-before-delimiter, so ccd reads those bytes as OFF, and a
+    // doctor that printed a bare `off` would be telling the operator they had
+    // chosen the mode their edit failed to reach. Both writers in this repo
+    // end the line for exactly this reason.
+    const home = healthy('ccrc-doctor-rc-nonewline-');
+    writeRcFlag(home, 'on');
+    expect(rcLine(home)).toMatch(/; remote-control off \(unparseable — /);
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'says "unreadable" for a flag file it cannot open — a mode problem is not a bytes problem', () => {
+      const home = healthy('ccrc-doctor-rc-unreadable-');
+      writeRcFlag(home, 'on\n');
+      chmodSync(join(home, '.ccrc', 'remote-control'), 0o000);
+      const r = runDoctor(home);
+      expect(lineFor(r.stdout, 'config') ?? '').toMatch(/; remote-control off \(unreadable — /);
+      // …and bash does not diagnose it on stderr, for `_rc_enabled`'s own
+      // measured reason: the redirect is attempted with stderr already
+      // suppressed, not after.
+      expect(r.stderr).toBe('');
+    });
+
+  it('appends the state to the REMOTE-mode PASS too — one detail, both arms', () => {
+    // The arm an operator on the server box actually reads. Without this the
+    // fact would be reported on exactly the boxes that are least likely to
+    // have it set.
+    const home = healthy('ccrc-doctor-rc-remote-');
+    writeCcrcEnv(home, [
+      'CCRC_FLEET=remote',
+      'CCRC_AGENT_URL=ws://fleet.invalid:7789',
+      'CCRC_AGENT_TOKEN=ccrc-canary-agent-1f4d9',
+      '',
+    ].join('\n'));
+    writeRcFlag(home, 'on\n');
+    const line = rcLine(home);
+    expect(line).toMatch(/^PASS config: /);
+    expect(line).toContain('fleet mode remote');
+    expect(line).toMatch(/; remote-control on$/);
+  });
+
+  it('leaves the fleet-role SKIP alone — a box with no ccrc.env measured nothing', () => {
+    // The SKIP says there is nothing here to measure, and that is a statement
+    // about the SERVER's config file. Appending a second fact to it would make
+    // a skip into a half-verdict, which this file's contract forbids.
+    const home = healthy('ccrc-doctor-rc-fleetrole-');
+    rmSync(join(home, '.ccrc', 'ccrc.env'), { force: true });
+    rmSync(join(home, '.config', 'systemd', 'user', 'ccrc.service'), { force: true });
+    writeUnitFile(home, 'ccrc-agent.service');
+    writeFileSync(join(home, 'fixture-unit-ccrc-agent.service'), 'active\n');
+    writeRcFlag(home, 'on\n');
+    const lines = runDoctor(home).stdout.split('\n');
+    const skip = lines.find((l) => l.startsWith('SKIP config: ')) ?? '';
+    expect(skip, lines.join('\n')).not.toBe('');
+    expect(skip).not.toContain('remote-control');
   });
 });
 
