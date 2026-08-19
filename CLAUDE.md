@@ -1,7 +1,8 @@
 # ccrc
 
 The operating console for SDD (spec-driven development) at **fleet scale**: a mobile-first PWA that views and
-drives a fleet of `--remote-control` Claude Code sessions and **follows a session across account/wrapper swaps**
+drives a fleet of Claude Code sessions (`--remote-control` or not — per box, `~/.ccrc/remote-control`)
+and **follows a session across account/wrapper swaps**
 (the thing claude.ai's own app can't do). Weigh every feature by the loop it serves:
 spec → plan → subagent execution with per-PR review lenses + whole-branch pass → coordinated multi-wave programs.
 

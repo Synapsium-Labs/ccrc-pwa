@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=ed5372c64fc5175bfea953286be26fabcd39f45506ab8ad22dcc7888fcf74d36
+# ccrc:generated 1 sha256=6991f758d9edacadffc6f14377c86eb6feaed3754b0934a61ab136a334f41520
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
-# One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
+# One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
+# The RC flag is CONDITIONAL on the box, not on this file: `_rc_enabled` reads
+# `~/.ccrc/remote-control` and a box that does not say `on` spawns plain panes.
 set -uo pipefail
 
 REG="$HOME/.cc-sessions"
@@ -189,28 +191,38 @@ source "$CCRC_ACCOUNTS_SH" \
   || die "account roster unreadable: $CCRC_ACCOUNTS_SH — regenerate it from ~/.ccrc/accounts.json"
 
 # ── DOES THIS BOX DRIVE ITS SESSIONS OVER THE RC SOCKET? ──────────────────
-# The ONE spelling of the flag path in ccd. `_spawn_start` is its only reader,
-# and AS OF THIS COMMIT it is the only code of any kind that touches the file:
-# NOTHING WRITES IT YET. `ccrc install` (seeding `off`) and deploy's fleet lane
-# (seeding `on`, ordered BEFORE the ccd install) land later on this same branch,
-# Stage 2e Task 2; `grep -n remote-control ccd/ccrc deploy/deploy.sh` is zero
-# hits until they do. Their spelling of this path will be their own — `ccd/ccrc`
-# cannot source this file, and neither can `deploy.sh`.
+# The ONE spelling of the flag path in ccd. `_spawn_start` is its only reader
+# here, and THE WRITERS NOW EXIST — both of them seed-once, neither ever
+# overwrites, and each has its own reason for the value it picks:
+#   `ccrc install` (`_inst_rc`)  — seeds `off`. A fresh single-box install has
+#     made no claim on claude.ai and must not start publishing sessions there
+#     because an installer defaulted it.
+#   `deploy/deploy.sh`, agent lane — seeds `on`, in the agent branch, ORDERED
+#     BEFORE the ccd install below it. That box has run every session with
+#     `--remote-control` since before this flag existed, so the file describes
+#     it rather than deciding something new about it.
+# Their spelling of this path is their own — `ccd/ccrc` cannot source this file
+# and neither can `deploy.sh` — and `server/test/single-definition.test.ts`
+# holds all four literals (with `ccrc-doctor-checks`') equal.
 #
-# SO, UNTIL THOSE WRITERS EXIST: THIS ccd MUST NOT BE DEPLOYED TO THE REFERENCE
-# FLEET. Every box reads OFF today, so shipping it alone strips
-# `--remote-control` from every live session at its next respawn. The standing
-# AGENT-FIRST rule (a change under `ccd/` goes to the fleet host before the
-# server) does NOT make that safe — it is the procedure that would cause it.
-# The seed has to land first; D-99 in the stage-2e plan records this, and Task 2
-# Step 2 pins the ordering.
+# THE ORDERING IS THE LIVE FACT TO KEEP: the flag must be seeded BEFORE this
+# ccd lands on a box. Absent reads OFF, so the gap between a new ccd and an
+# unseeded box is a window in which a respawn strips `--remote-control` from a
+# live session. The standing AGENT-FIRST rule (a change under `ccd/` goes to
+# the fleet host before the server) is what would open that window, which is
+# why deploy seeds within the same run and before its own installs;
+# `agent/test/deploy-verify.test.ts` pins that order, and D-99 in the stage-2e
+# plan records what it is protecting.
 CCRC_RC_FILE="$HOME/.ccrc/remote-control"
 _rc_enabled() {   # first line 'on' => sessions spawn with --remote-control.
   # A FILE, not an env var (HOME is ccd's only isolation boundary — see
   # SPAWN_GATE_TRIES) and not ccrc.env (never read by ccd: it carries tokens,
   # and the fleet host does not have one). Absent or anything-but-'on' is OFF:
-  # a garbled file must not half-enable a mode. Once the writers above exist the
-  # file is operator-owned; today it does not exist on any box.
+  # a garbled file must not half-enable a mode. The file is OPERATOR-OWNED —
+  # seeded once by whichever lane installed the box and never rewritten after —
+  # so an edit here survives every later install and deploy. `ccrc doctor`'s
+  # `config` line reports what this function would decide, including the cases
+  # where the strictness above surprises somebody (a newline-less `on`).
   local first=""
   [[ -f "$CCRC_RC_FILE" ]] || return 1
   # `2>/dev/null` BEFORE the input redirect, and the order is the whole point:

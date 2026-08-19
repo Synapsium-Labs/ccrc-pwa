@@ -1,7 +1,10 @@
 # ccrc — self-hosted remote control for the Claude Code fleet
 
-A mobile-first, installable PWA to view and drive the `ccd` fleet of
-`--remote-control` Claude Code sessions on server-box, over Tailscale. It follows
+A mobile-first, installable PWA to view and drive the `ccd` fleet of Claude Code
+sessions on server-box, over Tailscale. Whether those sessions run as
+`--remote-control` panes is **per box**, from `~/.ccrc/remote-control` (one line,
+`on` or `off`; the reference fleet says `on`, a fresh `ccrc install` seeds
+`off`). It follows
 sessions across account swaps — the thing the official claude.ai app can't do —
 and the swap now carries the *conversation itself*: the transcript is located
 **by uuid**, globally unique, across every project directory under the source
@@ -602,6 +605,32 @@ ccrc wrappers                        # the other direction: roster → ~/.local/
   silently and permanently. `server/test/statusline-script.test.ts` runs the
   real script against a fixture `HOME` with a free-form account and goes red
   if the map ever comes back.
+
+### The box decides `--remote-control`: `~/.ccrc/remote-control`
+
+The other piece of per-box runtime config, and the same ownership rule as
+`accounts.json`: **one line**, `on` or `off`, created once by whichever lane
+installed the box and never rewritten after.
+
+| Lane | Seeds | Why that value |
+|---|---|---|
+| `ccrc install` (`_inst_rc`) | `off` | `--remote-control` publishes a session to claude.ai; a fresh single-box install has made no such claim and must not start because an installer defaulted it |
+| `deploy/deploy.sh agent` | `on` | the reference fleet host has run every session with the flag since before the flag existed — the file **describes** that box rather than deciding something new about it |
+
+`ccd`'s `_rc_enabled` is the only reader and the authority: first line,
+whitespace stripped, must be exactly `on`; **absent, unreadable, empty or
+anything else is off**, because a garbled file must not half-enable a mode. That
+strictness includes a missing trailing newline (bash's `read` returns non-zero
+at EOF-before-delimiter), so `printf 'on' > ~/.ccrc/remote-control` reads as
+**off** — both writers end the line, and `ccrc doctor`'s `config` verdict names
+that case as `remote-control off (unparseable …)` rather than reporting it as a
+deliberate `off`.
+
+**Ordering, on a fleet host:** the flag must be seeded *before* a new `ccd`
+lands, because absent reads off and the gap between the two is a window in which
+a respawn strips `--remote-control` from a live session. `deploy.sh` seeds it in
+the same run, above its own installs, and `agent/test/deploy-verify.test.ts`
+pins that order.
 
 **`/accounts`** (a fourth branch of the route ternary, reached by tapping the
 compact `AccountsStrip` mounted in the desktop top bar and the mobile fleet
@@ -1250,7 +1279,11 @@ Known real-format subtleties already encoded:
 - The **input box** is the LAST `❯` line (history turns render `❯ ` above it),
   and the empty box uses `❯` + a **U+00A0 non-breaking space**, not a plain one.
 - A `--remote-control` pane **never renders `esc to interrupt`**, so busy-ness is
-  taken from the live status file (`sessions/<pid>.json`), not the pane.
+  taken from the live status file (`sessions/<pid>.json`), not the pane. Whether
+  a box's panes are RC panes at all is per-box config (`~/.ccrc/remote-control`,
+  read by `ccd`'s `_rc_enabled`; `ccrc doctor`'s `config` line names the state it
+  measured), so an RC-off box DOES render that marker — the status file is the
+  reading that is correct either way, which is why it stays the source.
 - **The live status file's vocabulary drifts too, and silently.** It is at least
   four words now, not the three ccrc was written against: `idle`, `busy`,
   `shell`, and — measured in the 2.1.229–2.1.233 bundles — `waiting`, which
