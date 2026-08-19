@@ -614,8 +614,17 @@ _check_path() {
 # box answers `inactive` for it — a check that asked would report every fleet
 # host as broken. The TIMER is the thing that is supposed to be running, and it
 # is the thing that is asked.
+#
+# THE DIRECTORY IS FILE-SCOPE because TWO checks read it: this one, and
+# `_check_config`'s D-86 topology branch, which decides what an absent
+# `ccrc.env` MEANS from the same unit files. One spelling, for the reason
+# `ccrc-wrapper-shape` gives about `WRAPPER_BIN_DIR`: two checks comparing
+# their own copies of a path is the same drift in miniature, and here it would
+# be worse than a drift — the two would disagree about what role the box is.
+CCRC_UNIT_DIR="$HOME/.config/systemd/user"
+
 _check_services() {
-  local dir="$HOME/.config/systemd/user" u st rc=0
+  local dir="$CCRC_UNIT_DIR" u st rc=0
   local -a ok=() installed=()
   # Not a glob over the directory: `claude-session@*.service` lives there too
   # (every ccd session is one, CLAUDE.md) and those are long-lived by design and
@@ -713,6 +722,25 @@ _check_config() {
   fi
 
   if [ ! -e "$BOX_ENV_FILE" ]; then
+    # ── D-86: WHAT AN ABSENT ccrc.env MEANS DEPENDS ON THE BOX ────────────
+    # THE FLEET HOST HAS NO ccrc.env AND IS NOT MISSING ONE. It carries
+    # `~/.ccrc/agent.env` (which configures the agent) and has no reason to know
+    # where the server is — `_check_fleet` states exactly this, and SKIPS for it.
+    # `ccrc` ships to that box too (deploy.sh:401), so until this branch existed
+    # every doctor run there printed "the server's defaults apply" about a server
+    # that does not run there, and told the operator to run `ccrc install` — the
+    # single-box SERVER-role installer. Wrong sentence and wrong instruction, on
+    # the one box in the topology that has neither.
+    #
+    # The evidence is the UNIT FILES, which is the only thing on a box that
+    # records its role at all (D-73, `_box_role`'s own reasoning) and exactly
+    # what `_check_services` above already reads. Both halves are required:
+    # "no ccrc.service" alone is also a dev checkout that has installed nothing,
+    # and for that box the defaults sentence below is correct.
+    if [ ! -f "$CCRC_UNIT_DIR/ccrc.service" ] && [ -f "$CCRC_UNIT_DIR/ccrc-agent.service" ]; then
+      _dr_skip config "no $BOX_ENV_FILE, and this box's units are the fleet role's ($CCRC_UNIT_DIR has ccrc-agent.service and no ccrc.service) — the server's config file does not live here, so there is nothing to measure"
+      return 3
+    fi
     # NOT a FAIL: a box with no config file boots, in the mode the server's own
     # defaults pick (`server/src/config.ts`). It is worth saying out loud
     # because the defaults are a SINGLE-BOX localhost server, and an operator

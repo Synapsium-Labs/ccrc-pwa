@@ -1130,6 +1130,13 @@ describe('ccrc doctor: services', () => {
 //     a local box…" and "never quotes a value out of the file…".
 //   - the absent-file WARN downgraded to a PASS -> RED, "warns, and names ccrc
 //     install, when the box has no ccrc.env at all".
+//   - D-86, fix round 1: the topology branch reverted (`if false`) -> RED,
+//     "SKIPS an env-less FLEET-ROLE box…", `expected -1 to be greater than -1`
+//     (the box gets the server-role WARN again — the finding itself).
+//   - D-86: the `ccrc-agent.service` half of the conjunction dropped, so "no
+//     ccrc.service" alone reads as the fleet role -> RED, "still WARNS a dev
+//     checkout with no units at all…". BOTH halves are pinned, which is what
+//     the branch's own comment claims.
 
 describe('ccrc doctor: config', () => {
   it('warns, and names ccrc install, when the box has no ccrc.env at all', () => {
@@ -1141,6 +1148,53 @@ describe('ccrc doctor: config', () => {
     expect(lines[i]).toContain('defaults apply: local mode on 127.0.0.1:7788');
     expect(lines[i + 1]).toMatch(/^ {2}remedy: .*ccrc install/);
     expect(runDoctor(home).code).toBe(0);
+  });
+
+  it('SKIPS an env-less FLEET-ROLE box rather than advising it to install a server', () => {
+    // D-86, from the Task 2 review. THE LIVE FLEET HOST IS THIS FIXTURE: it has
+    // no `ccrc.env` (this suite and `_check_fleet` both say so — it carries
+    // `~/.ccrc/agent.env` instead), and `ccrc` ships there (deploy.sh:401), so
+    // before the fix every doctor run on it printed "the server's defaults
+    // apply: local mode on 127.0.0.1:7788" — about a server that does not run
+    // there — with the remedy `ccrc install`, which is the single-box
+    // SERVER-role installer. Wrong sentence and wrong instruction, on the one
+    // box in the topology that has neither.
+    //
+    // The evidence is the unit-file topology `_check_services` already reads,
+    // and nothing else: no new file, no new declaration, no guess.
+    const home = healthy('ccrc-doctor-config-fleetrole-');
+    rmSync(join(home, '.ccrc', 'ccrc.env'), { force: true });
+    rmSync(join(home, '.config', 'systemd', 'user', 'ccrc.service'), { force: true });
+    writeUnitFile(home, 'ccrc-agent.service');
+    writeFileSync(join(home, 'fixture-unit-ccrc-agent.service'), 'active\n');
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('SKIP config: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('ccrc-agent.service');
+    expect(lines[i]).toMatch(/no .*ccrc\.env/);
+    // The SKIP contract, all three halves: no verdict line, NO REMEDY under it
+    // (a remedy reads as "there is something here to fix", and there is not),
+    // and the runner counts it against checks rather than verdicts.
+    expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) config: /m);
+    expect(lines[i + 1] ?? '').not.toMatch(/^ {2}remedy: /);
+    expect(r.stdout).not.toMatch(/ccrc install/);
+    // `fleet` skips on the same box for its own reason (no server address), so
+    // the summary proves the runner accepted BOTH skips as skips.
+    expect(r.stdout).toMatch(/^summary: \d+ checks \(2 skipped\)/m);
+    expect(r.code).toBe(0);
+  });
+
+  it('still WARNS a dev checkout with no units at all — absence of units is not the fleet role', () => {
+    // The other side of the same branch: "no ccrc.service" alone must not mean
+    // "fleet host". A checkout that has never installed anything has no units
+    // either, and for it the defaults sentence is exactly right.
+    const home = healthy('ccrc-doctor-config-nounits-');
+    rmSync(join(home, '.ccrc', 'ccrc.env'), { force: true });
+    rmSync(join(home, '.config', 'systemd', 'user'), { recursive: true, force: true });
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^WARN config: .*defaults apply/m);
+    expect(r.stdout).not.toMatch(/^SKIP config: /m);
   });
 
   it.each([
