@@ -91,7 +91,13 @@ CCRC_HERE="$(cd "${CCRC_HERE%/*}" && pwd)"
 # ── THE TWO FILES THIS BOX KEEPS ITS OWN FACTS IN ─────────────────────────
 # Spelled once each, because `version`, `status` and `doctor` all read them and
 # three copies of a path is how two of them end up reading a file the third
-# does not write. Both are read-only to every verb in this file.
+# does not write. That last clause stopped being hypothetical in stage 2d: as
+# of Task 6 `install` WRITES ccrc.env (once, when the box has none), so this
+# file now holds both the reader and the writer of it, and `_inst_env` writes
+# through this variable rather than re-spelling the path — the sentence above
+# is the reason, and D-88 in the stage-2d plan records the choice. build.json
+# stays read-only here until Task 7 gives `install` a stamp of its own; when it
+# does, it writes `"$BOX_STAMP_FILE"` for the same reason.
 #   build.json — what a deploy stamped (deploy.sh's `stamp_build`).
 #   ccrc.env   — the box's machine config (deploy/ccrc.env.example). It ALSO
 #                carries tokens (CCRC_AGENT_TOKEN, CCRC_VAPID_PRIVATE, a
@@ -120,7 +126,7 @@ BOX_HEALTH_WHY=""
 
 usage() {
   cat <<EOF
-usage: $PROG {doctor|status|adopt|wrappers|version}
+usage: $PROG {doctor|status|adopt|wrappers|install|version}
 
 The lifecycle CLI for a Claude Code fleet box — installs, updates and
 diagnoses a box, as a sibling to ccd (which drives sessions once one is
@@ -138,6 +144,10 @@ already running).
             "generated", and REFUSE every file ccrc did not write itself.
             Backs up before any overwrite; never touches an upstream or
             external account. [--dry-run] [--adopt] [--force]
+  install   converge this box from the shipped tree: seed ~/.ccrc config
+            (never overwriting yours), install executables, units and hooks,
+            generate wrappers, then run doctor. Single-box, localhost.
+            Re-running converges; it never damages an existing install
 
   -h, --help   print this message and exit 0
 
@@ -1501,6 +1511,161 @@ cmd_adopt() {
   exec "$BASH" "$adopt" "$@"
 }
 
+# ── cmd_install — the verb this CLI is named for ──────────────────────────
+# `ccrc install` converges THIS box from the tree `ccrc` itself was run out of:
+# it seeds the config a box cannot boot without, installs the executables,
+# units and hooks, generates the account wrappers and finishes by running
+# doctor. It is the local, single-box translation of `deploy/deploy.sh` — same
+# doctrine, no ssh — and stage 2d builds it one step at a time (Task 6: the
+# spine and the three SEEDING steps; Task 7: the tree, executables and stamp;
+# Task 8: units, hooks, wrappers and the doctor tail).
+#
+# ── THE SHAPE: A SPINE OF `_inst_*` STEPS ────────────────────────────────
+# `cmd_install` is a fixed SEQUENCE and nothing else; each step is one small
+# function that does one thing and prints one line. Three properties this
+# arrangement is chosen for, all of which a single long function loses:
+#   - an operator reads the sequence itself, in `cmd_install`, without reading
+#     the work;
+#   - each step's output is one `install: <step>: <result>` line on STDOUT (the
+#     RESULT register — an install's transcript is what the operator asked
+#     for), so a re-run is a diff of two transcripts;
+#   - ORDER is stated in one place. It is load-bearing here in a way it is not
+#     in doctor: `accounts.sh` cannot be generated before the roster is placed,
+#     and `ccd` refuses to run at all without `accounts.sh` (deploy.sh:274's
+#     "roster before ccd" rule, which this file inherits).
+#
+# ── THE STEP CONTRACT: RETURN 0, OR DIE ──────────────────────────────────
+# Every `_inst_*` function either returns 0 or calls `_ccrc_die`, which exits
+# the whole run at 1 with the reason on stderr. That is why the sequence below
+# checks no return codes and why this file's lack of `set -e` (see the header)
+# costs nothing here: a step that FAILED has already stopped the process, and a
+# step that is merely a no-op on this box (nothing to do, already converged)
+# says so in its line and returns 0. A future step that wants to be survivable
+# — Task 8's linger, which needs sudo an operator may not have — PRINTS what it
+# could not do and returns 0 deliberately, rather than returning non-zero and
+# hoping a caller notices.
+#
+# ── SEED-ONCE vs REGENERATE, THE ONE DISTINCTION EVERY STEP TURNS ON ─────
+# `deploy/deploy.sh:196-206` states it for the remote lane and this verb obeys
+# it locally: `~/.ccrc/accounts.json` and `~/.ccrc/ccrc.env` are USER-OWNED —
+# created once, NEVER overwritten, because they hold the operator's own edits
+# (and, in ccrc.env's case, their tokens). `~/.ccrc/accounts.sh` is ccrc-OWNED
+# — a projection of the roster, rewritten from it on every run. Getting this
+# backwards in either direction is the worst thing this verb could do: one way
+# it destroys an operator's config, the other it leaves a stale bash roster
+# describing accounts the box no longer has.
+cmd_install() {
+  # `cmd_wrappers`' loop (:1040-1048), minus the three flags it has and this
+  # verb does not have yet. `-h`/`--help` prints usage at exit 0 rather than
+  # being the usage error it is for `cmd_version`: this is a verb that CHANGES
+  # THE BOX, so "what will this do to my box" must be answerable without
+  # running it. Anything else is a usage error at exit 2, refused BEFORE the
+  # first step — an install that half-ran because argument 2 was a typo is
+  # worse than one that did not start.
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -h|--help) usage; exit 0 ;;
+      *) _ccrc_usage_die "$1" ;;
+    esac
+  done
+
+  _inst_banner
+  _inst_roster
+  _inst_accounts_sh
+  _inst_env
+}
+
+# The two facts every later step is computed FROM, printed before any of them
+# runs: which box this is (`$HOME` — not "this machine", because a run under
+# `sudo` or as another user converges a different box entirely) and which tree
+# it is converging from (`$CCRC_HERE`'s parent — the checkout, or `~/ccrc` on a
+# box a deploy has already touched). Both are silent inputs otherwise, and a
+# wrong one produces a run that SUCCEEDS at the wrong thing; naming them in
+# line 1 turns that from a deduction into a reading.
+_inst_banner() {
+  printf 'install: box: %s — single-box, local fleet mode on localhost\n' "$HOME"
+  printf 'install: tree: %s\n' "${CCRC_HERE%/*}"
+}
+
+_inst_roster() {   # seed-once: validate the SEED before placing it (deploy F1);
+  # an existing roster is USER-OWNED and is never overwritten.
+  #
+  # The validation is `deploy.sh:229-246`'s `check_local_roster`, translated to
+  # one box: seeding an unusable roster onto a box that had none poisons that
+  # box PERMANENTLY, because the very rule that makes the file safe to own —
+  # never overwritten — is also what stops the next run from fixing it. A
+  # human would have to delete it by hand. So the seed is proven usable while
+  # the only cost of being wrong is an exit code.
+  local seed="$CCRC_HERE/../deploy/accounts.default.json" dest="$HOME/.ccrc/accounts.json"
+  mkdir -p "$HOME/.ccrc" || _ccrc_die "cannot create \$HOME/.ccrc"
+  if [ -e "$dest" ]; then
+    echo "install: roster: kept (user-owned, never overwritten)"
+    return 0
+  fi
+  [ -f "$seed" ] || _ccrc_die "no roster seed at $seed — run install from inside the shipped tree"
+  node "$CCRC_HERE/../deploy/gen-accounts.mjs" "$seed" >/dev/null \
+    || _ccrc_die "the shipped roster seed does not validate — refusing to seed a box with it"
+  local tmp="$dest.tmp.$$"
+  cp "$seed" "$tmp" && mv -f "$tmp" "$dest" || { rm -f "$tmp"; _ccrc_die "seeding $dest failed"; }
+  echo "install: roster: seeded single-account default"
+}
+
+_inst_accounts_sh() {   # ccrc-OWNED: regenerated every run FROM THE INSTALLED roster
+  # (the local translation of deploy's read-back-over-ssh rule), atomically,
+  # write-skipped when converged so idempotence is measurable on mtime.
+  #
+  # FROM THE INSTALLED ROSTER, never from the seed: `deploy.sh:290-299` reads
+  # the BOX's `accounts.json` back over ssh before generating, precisely so the
+  # generated file's own header line ("Generated from ~/.ccrc/accounts.json")
+  # is true on a box whose operator edited that file. Here the "read back" is a
+  # plain read of the file the previous step just guaranteed exists — and the
+  # generator's refusal is the whole error path for a roster an operator broke
+  # by hand: its `gen-accounts: remedy: …` line reaches stderr verbatim,
+  # because stderr is deliberately NOT captured (`cmd_wrappers:1125-1133` makes
+  # the same choice for the same reason — re-wording a fix into a shrug helps
+  # nobody).
+  local dest="$HOME/.ccrc/accounts.sh" out tmp
+  out="$(node "$CCRC_HERE/../deploy/gen-accounts.mjs" "$HOME/.ccrc/accounts.json")" \
+    || _ccrc_die "\$HOME/.ccrc/accounts.json does not validate — fix it (or move it aside to reseed) and re-run"
+  if [ -f "$dest" ] && [ "$out" = "$(cat "$dest")" ]; then
+    echo "install: accounts.sh: converged"
+    return 0
+  fi
+  tmp="$dest.tmp.$$"
+  printf '%s\n' "$out" > "$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$dest" \
+    || { rm -f "$tmp"; _ccrc_die "installing $dest failed"; }
+  echo "install: accounts.sh: generated from \$HOME/.ccrc/accounts.json"
+}
+
+_inst_env() {   # seed-once, exactly like the roster: the env file is the box's
+  # ONE machine-config file, holds operator secrets once configured, and is
+  # never sourced and never overwritten by tooling.
+  #
+  # THROUGH `$BOX_ENV_FILE`, never the literal path (D-88): this verb is the
+  # file's only WRITER and `status`/`doctor` are its readers, which is exactly
+  # the arrangement `BOX_ENV_FILE`'s own comment (:91-101) exists to protect —
+  # "three copies of a path is how two of them end up reading a file the third
+  # does not write". The template below is a LITERAL, not a copy of
+  # `deploy/ccrc.env.example`: the example file documents every key including
+  # the ones that carry tokens, and a fresh single-box install needs four
+  # values and a pointer to that file for the rest.
+  local dest="$BOX_ENV_FILE"
+  if [ -e "$dest" ]; then
+    echo "install: ccrc.env: kept (user-owned, never overwritten)"
+    return 0
+  fi
+  local tmp="$dest.tmp.$$"
+  {
+    printf '%s\n' "# ccrc box config — written once by ccrc install; edit freely, ccrc never rewrites it."
+    printf '%s\n' "# Keys and defaults: deploy/ccrc.env.example in the shipped tree."
+    printf '%s\n' "CCRC_HOST=127.0.0.1"
+    printf '%s\n' "CCRC_PORT=7788"
+    printf '%s\n' "CCRC_FLEET=local"
+    printf '%s\n' "CCRC_PROJECTS_ROOT=$HOME/projects"
+  } > "$tmp" && mv -f "$tmp" "$dest" || { rm -f "$tmp"; _ccrc_die "writing $dest failed"; }
+  echo "install: ccrc.env: written (localhost, local fleet mode)"
+}
+
 # Guard so the script can be `source`d (the way server/test/ccd-clip.test.ts:32
 # and server/test/ccd-workspaces.test.ts:394 source ccd itself, to call one
 # function directly without running the whole CLI) without running a command
@@ -1540,6 +1705,7 @@ case "$VERB" in
   status)  cmd_status "$@" ;;
   adopt)   cmd_adopt "$@" ;;
   wrappers) cmd_wrappers "$@" ;;
+  install) cmd_install "$@" ;;
   *) _ccrc_usage_die "$VERB" ;;
 esac
 

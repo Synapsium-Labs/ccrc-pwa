@@ -142,9 +142,43 @@ describe('ccrc: dispatch and usage', () => {
     // ~/.local/bin/<id> from the roster. A verb that dispatches but is not in
     // the usage line is a verb nobody can find; `server/test/ccrc-wrappers.test.ts`
     // owns its behaviour, this line owns its discoverability.
+    //
+    // `install` joined it in stage 2d Task 6 — the verb the whole CLI is named
+    // for, and the one an operator reaches for FIRST, before there is anything
+    // on the box for the other five to measure. Same split: this line owns its
+    // discoverability, `server/test/ccrc-install.test.ts` owns what it does.
     const home = mkTmp('ccrc-cli-usage-verbs-');
     const r = runCcrcRaw(home, ['-h']);
-    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|version\}/);
+    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|install\|version\}/);
+  });
+
+  // ── install's ARGUMENT surface ──────────────────────────────────────────
+  // The two halves of the flag-ful-verb rule (`cmd_wrappers`' loop,
+  // ccd/ccrc:1040-1048), pinned here beside the other dispatch tests rather
+  // than in the install suite: neither of these reaches a step function, so
+  // neither needs — or may have — a shipped tree to converge from. What they
+  // are about is the DISPATCHER, which is this file's subject.
+  it('install -h prints usage on STDOUT at exit 0 — a verb with flags explains them', () => {
+    // `version` answers `--help` with a usage ERROR (exit 2) because it has no
+    // flags to explain; `install` follows `wrappers` instead, and for the same
+    // reason: it is the verb an operator asks about before running it, on a box
+    // where running it is the thing they are unsure of.
+    const home = mkTmp('ccrc-cli-install-help-');
+    const r = runCcrcRaw(home, ['install', '-h']);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/usage: ccrc \{/);
+    // …and it exits BEFORE the first step: `-h` on a fresh HOME must not seed
+    // that HOME. A help screen with a side effect is not a help screen.
+    expect(existsSync(join(home, '.ccrc'))).toBe(false);
+  });
+
+  it('install --bogus is a usage error, exit 2 — not a step that quietly ran', () => {
+    const home = mkTmp('ccrc-cli-install-badarg-');
+    const r = runCcrcRaw(home, ['install', '--bogus']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/^ccrc: unknown argument: --bogus/m);
+    expect(r.stderr).toMatch(/usage: ccrc/);
+    expect(existsSync(join(home, '.ccrc'))).toBe(false);
   });
 
   it('an unknown top-level flag is a usage error too, before any verb is read', () => {
