@@ -1254,6 +1254,60 @@ describe('the verification is actually wired into the deploy, and can observe a 
     }
   });
 
+  it('the remote-control flag is seeded ON, once, BEFORE the ccd that reads it lands', () => {
+    // Stage 2e, Task 2, and the ordering here is the whole reason Task 1's ccd
+    // was deploy-blocked until this block existed. From the moment the new ccd
+    // is installed, every spawn asks `~/.ccrc/remote-control` whether this box
+    // drives its sessions over the RC socket, and an ABSENT file means off.
+    // The reference fleet host has been running every session WITH
+    // `--remote-control` since before the flag existed — so shipping the ccd
+    // onto an unseeded box strips the flag from all ~11 live sessions at their
+    // next respawn (D-99). The seed is not a nicety that could sit anywhere in
+    // this branch: it must precede the install, or the gap between them IS the
+    // outage.
+    //
+    // SEED-ONCE, never overwrite, for the roster's reason twice over: the file
+    // is the operator's switch, and here rewriting it changes what every live
+    // pane on the box becomes at its next respawn.
+    //
+    // ANCHORED ON THE `ssh` INVOCATION ITSELF — located as the one line in
+    // this branch that is BOTH an ssh and a mention of the flag file — for the
+    // measured reason the two siblings above record: a probe that matched a
+    // name, or matched the path alone, would resolve to the COMMENT above the
+    // code and "prove" an ordering the shell never runs.
+    const agentBranch = deploySh.slice(
+      deploySh.indexOf('if [ "$TARGET" = "agent" ]'), deploySh.indexOf('\nelse'));
+    const seed = agentBranch.split('\n')
+      .find((l) => l.includes('"${SSH[@]}"') && l.includes('.ccrc/remote-control'));
+    expect(seed, 'the agent branch never seeds ~/.ccrc/remote-control').toBeTruthy();
+
+    const seedIdx = agentBranch.indexOf(seed!);
+    const shIdx = agentBranch.indexOf('install_atomic "$ACCOUNTS_SH" .ccrc/accounts.sh 644');
+    const ccdIdx = agentBranch.indexOf('install_atomic ccd/ccd .local/bin/ccd 755');
+    expect(shIdx, 'deploy.sh never installs ~/.ccrc/accounts.sh').toBeGreaterThan(-1);
+    expect(ccdIdx, 'the agent branch no longer installs ccd').toBeGreaterThan(-1);
+    expect(seedIdx, 'the flag must be seeded before the accounts.sh install — and so before every install below it')
+      .toBeLessThan(shIdx);
+    expect(seedIdx, 'the flag must be seeded before the ccd that reads it, or a respawn in the gap sees new-ccd on an unseeded box')
+      .toBeLessThan(ccdIdx);
+
+    // It CREATES, and only creates.
+    expect(seed, 'the seed is not guarded — it would rewrite an operator\'s switch on every deploy')
+      .toContain('[ -e ~/.ccrc/remote-control ]');
+
+    // THE BYTES, extracted from the block rather than assumed: `ccd`'s
+    // `_rc_enabled` reads the first line with `IFS= read -r`, and bash's
+    // `read` returns NON-ZERO at EOF-before-delimiter — so `printf 'on'`
+    // WITHOUT the newline writes a file that reads as OFF, which on this box
+    // is the very strip the seed exists to prevent, dressed as a successful
+    // deploy. `server/test/ccd-rc-flag.test.ts` pins the reader's half of
+    // that measurement; this pins the writer's.
+    const printf = /printf\s+(["'])([^"']*)\1/.exec(seed!);
+    expect(printf, 'the seed does not write its line with printf').toBeTruthy();
+    expect(printf![2], 'the seeded flag must be a LINE — a newline-less "on" reads as OFF')
+      .toBe('on\\n');
+  });
+
   it('the server branch refuses a roster-less box BEFORE it touches anything — loadConfig will not boot without one', () => {
     // The server's half of the same task, and it has to be PRE-flight rather
     // than a post-restart health check. `loadConfig` (server/src/config.ts)

@@ -299,6 +299,44 @@ if [ "$TARGET" = "agent" ]; then
   node deploy/gen-accounts.mjs "$BOX_ROSTER" > "$ACCOUNTS_SH" \
     || { echo "deploy: FAILED — the roster at $BOX:~/.ccrc/accounts.json is not one ccrc can use (see above); refusing to ship a ccd that cannot read it" >&2; exit 1; }
   echo "roster fingerprint on $BOX: $(roster_fp "$ACCOUNTS_SH")"
+  # ── THE SECOND SEED-ONCE FACT, AND WHY IT HAS TO BE HERE ─────────────────
+  # `~/.ccrc/remote-control` is what the ccd installed further down asks, on
+  # EVERY spawn, to decide whether a session comes up with `--remote-control`
+  # (claude.ai discoverability) or as a plain pane. Absent means off. Same
+  # ownership rule as the roster above — created when the box has none, NEVER
+  # overwritten, because it is the operator's switch — and one ssh, guarded, in
+  # that helper's shape.
+  #
+  # `on`, WHICH IS THE OPPOSITE OF WHAT `ccrc install` SEEDS, deliberately.
+  # This lane ships to the reference fleet host, which has run every one of its
+  # ~11 live sessions with `--remote-control` since long before there was a
+  # flag: here the file DESCRIBES the box rather than deciding something new
+  # about it. Seeding `off` would silently strip the flag from every one of
+  # those sessions at its next respawn — an outage with a config-shaped
+  # trigger. A fresh single-box install has no such history and no claim on
+  # claude.ai, which is why the other lane defaults the other way.
+  #
+  # BEFORE EVERY INSTALL BELOW, and that is the whole reason it sits up here
+  # rather than beside the other file steps. The gap between a new ccd landing
+  # and the flag being written IS the strip: the supervisor sweep at the bottom
+  # of this branch restarts every live session, and a respawn inside that gap
+  # would see new-ccd on an unseeded box. deploy-verify pins the order.
+  #
+  # THE TRAILING NEWLINE IS THE CONTRACT, not formatting. ccd reads the first
+  # line with `IFS= read -r`, and bash's `read` returns NON-ZERO at
+  # EOF-before-delimiter, so a file holding `on` with no newline reads as OFF —
+  # the exact strip this block exists to prevent, dressed as a green deploy.
+  # deploy-verify extracts the format string below and asserts the newline.
+  #
+  # ONE LINE AND ONE ssh: the guard, the write and the transcript line all run
+  # on the box, so the deploy reports what it actually did rather than what it
+  # would have done — and a box that already had the file is silent, which is
+  # what "seed once" looks like from here. `mkdir -p` OF ITS OWN, inside the
+  # guard, rather than leaning on the roster helper's: the directory has to
+  # exist for the redirect, and the ordering note further down records what
+  # happens when a step depends on a mkdir that belongs to something that
+  # could move.
+  "${SSH[@]}" "$BOX" '[ -e ~/.ccrc/remote-control ] || { mkdir -p ~/.ccrc && printf "on\n" > ~/.ccrc/remote-control && echo "seeded ~/.ccrc/remote-control = on (first install only; never overwritten again)"; }'
   # Back up what the previous deploy left before rsync --delete rewrites it,
   # and before ccd/notify.sh/session-hook.sh are overwritten. cp -a keeps
   # modes and mtimes.
