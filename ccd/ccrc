@@ -124,6 +124,26 @@ BOX_ENV_FILE="$HOME/.ccrc/ccrc.env"
 # file resolves.
 BOX_TREE_DIR="$HOME/ccrc"
 
+# ── WHERE A BOX KEEPS ITS systemd --user UNITS ────────────────────────────
+# Not this file's choice either: it is `systemd --user`'s own search path, and
+# both deploy lanes already `cp` into it (`deploy.sh:409-416,697`). Spelled here
+# for the reason `BOX_ENV_FILE` is — as of Task 8 this file WRITES the directory
+# (`_inst_units`) and `_inst_enable` then asks systemd to read it, so a writer
+# and a reader that spelled it separately is the failure that comment names.
+#
+# ── THE ONE DELIBERATE SECOND SPELLING, AND HOW IT IS HELD ────────────────
+# `ccrc-doctor-checks` declares its own `CCRC_UNIT_DIR` with the same value.
+# That is not laziness and it is not fixed by pointing it here: the check table
+# is sourced under `set -u` by things that are not this file (its own test
+# suite reads `CCRC_DOCTOR_CHECKS` out of it that way), so a top-level
+# `CCRC_UNIT_DIR="$BOX_UNIT_DIR"` would make sourcing it fail outright, and a
+# `${BOX_UNIT_DIR:-…}` fallback IS the second spelling with an extra branch in
+# front of it. `_check_path` records the same trade for `WRAPPER_BIN_DIR` and
+# the same remedy: keep the mechanism instead of the promise —
+# `ccrc-install.test.ts` compares the two literals and goes red on a drift.
+# (D-92.)
+BOX_UNIT_DIR="$HOME/.config/systemd/user"
+
 # How long the ONE network call in this file (`GET /api/fleet/health`) may take.
 # Overridable for the reason `deploy/verify-service.sh:56-62` makes its
 # settle/window knobs overridable, and `ccrc-doctor-checks` makes
@@ -1612,6 +1632,43 @@ cmd_install() {
   _inst_bins
   _inst_files
   _inst_stamp
+  _inst_units
+  _inst_enable
+  _inst_linger
+  _inst_dirs
+  _inst_hooks
+  _inst_wrappers
+
+  # ── THE LANDING BLOCK, AND WHY DOCTOR IS THE LAST WORD ─────────────────
+  # Every step above either converged or died, so "done" is a statement about
+  # the steps and nothing else — which is exactly why it is not the last line.
+  # The spec's requirement is that `install` ENDS WITH `ccrc doctor`, and
+  # doctor's exit code becomes this verb's: a box whose doctor fails is not a
+  # finished install, and reporting exit 0 beside `FAIL linger` would be this
+  # file's own "asserting a state that was never measured" defect with the
+  # measurement printed directly above it. The house table needs no translation
+  # — doctor's 1 already means "the tool ran and the answer was bad" — and the
+  # install steps' own failures exited 1 through `_ccrc_die` long before here.
+  #
+  # THE ADDRESS IS READ BACK OUT OF THE FILE THIS RUN WROTE, through
+  # `_box_env_value`/`BOX_ENV_FILE` — the reader and the path this file already
+  # holds exactly one of (D-85, D-88). Hardcoding `127.0.0.1:7788` would be
+  # right on a fresh box and a lie on every re-run over an operator's edited
+  # `ccrc.env`, which is the one case where a person actually needs this line.
+  # The literals below are reached only when the file names neither key: a
+  # hand-edited env file that dropped them still boots, because
+  # `server/src/config.ts` carries the same two defaults.
+  echo "install: done — every step above converged"
+  local host="" port=""
+  if [ -f "$BOX_ENV_FILE" ]; then
+    host="$(_box_env_value "$BOX_ENV_FILE" CCRC_HOST)"
+    port="$(_box_env_value "$BOX_ENV_FILE" CCRC_PORT)"
+  fi
+  [ -n "$host" ] || host=127.0.0.1
+  [ -n "$port" ] || port=7788
+  echo "install: PWA: http://$host:$port/ (CCRC_HOST/CCRC_PORT in $BOX_ENV_FILE change this)"
+  echo "install: next: add your first session with: ccd menu   (and read $BOX_ENV_FILE)"
+  cmd_doctor
 }
 
 # The two facts every later step is computed FROM, printed before any of them
@@ -2058,6 +2115,209 @@ _inst_stamp() {   # what this box is RUNNING, stated by the box itself
   local said=""
   [ "$dirty" = true ] && said=", dirty"
   echo "install: stamp: $sha ($ref$said)"
+}
+
+# ── _inst_units — the unit files, and the one this box must NOT be given ──
+# `deploy.sh:402-417`'s copy set, minus one, plus the escape that set records.
+#
+# ── WHY `ccrc-agent.service` IS DELIBERATELY ABSENT ───────────────────────
+# It is the only unit in that set this verb refuses to install, and the reason
+# is one character: `deploy/ccrc-agent.service:6` is `EnvironmentFile=%h/.ccrc/agent.env`
+# with NO leading `-`, i.e. REQUIRED. `deploy.sh agent` ships it to a box whose
+# other steps write `agent.env`; `ccrc install` converges a SINGLE box in local
+# mode, which has no agent and no `agent.env` — so installing the unit here
+# manufactures a unit systemd refuses to start, on a box that needs no agent at
+# all. A failing unit is worse than an absent one: it is a red line in every
+# `systemctl --user` listing and in doctor's own `services` check, describing a
+# thing the operator never asked for. (Compare `deploy/ccrc.service:12`, whose
+# `EnvironmentFile=-%h/.ccrc/ccrc.env` carries the dash and therefore boots on a
+# box with no env file at all.)
+#
+# ── THE `\x2d` IN THE DESTINATION IS LOAD-BEARING ────────────────────────
+# `deploy.sh:404-407` states it and this is the same fact from the other side:
+# the repository directory is plainly named `app-claude-session.slice.d`, and
+# the DESTINATION must be `app-claude\x2dsession.slice.d` — systemd's own
+# escaping of `-` in the unit name `app-claude\x2dsession.slice` — or systemd
+# never reads the drop-in and every pane runs without its memory cap, silently.
+# Inside double quotes bash keeps the backslash (`\x` is not one of the four
+# sequences it consumes there), so the literal below IS the directory name.
+_inst_units() {
+  local tree="$BOX_TREE_DIR" dir="$BOX_UNIT_DIR"
+  local slice="$dir/app-claude\x2dsession.slice.d"
+  mkdir -p "$dir" "$dir/claude-session@.service.d" "$slice" \
+    || _ccrc_die "cannot create $dir and its drop-in directories"
+  # 644 and never 755: these are read by systemd, not executed. And they land by
+  # rename for a sharper version of `_inst_atomic`'s own reason — `daemon-reload`
+  # below reads whatever is at these paths the instant it runs, and half a unit
+  # file parses as a broken unit rather than as no unit at all.
+  _inst_atomic "$tree/deploy/ccrc.service" "$dir/ccrc.service" 644
+  _inst_atomic "$tree/ccd/claude-session@.service" "$dir/claude-session@.service" 644
+  _inst_atomic "$tree/deploy/systemd/ccd-cap-scopes.service" "$dir/ccd-cap-scopes.service" 644
+  _inst_atomic "$tree/deploy/systemd/ccd-cap-scopes.timer" "$dir/ccd-cap-scopes.timer" 644
+  _inst_atomic "$tree/deploy/systemd/claude-session@.service.d/limits.conf" \
+    "$dir/claude-session@.service.d/limits.conf" 644
+  _inst_atomic "$tree/deploy/systemd/app-claude-session.slice.d/limits.conf" \
+    "$slice/limits.conf" 644
+  echo "install: units: ccrc.service, claude-session@.service, ccd-cap-scopes.{service,timer} and both drop-ins in \$HOME/.config/systemd/user"
+}
+
+# ── _inst_enable — ask systemd to read them, then prove one stayed up ─────
+# `deploy.sh:461-466`'s chain, in the same order and for the same reasons, with
+# the agent's unit replaced by this box's own.
+#
+# EVERY ENABLE RUNS AFTER EVERY UNIT FILE HAS LANDED, which is why this is a
+# separate step from `_inst_units` rather than an enable beside each copy:
+# `daemon-reload` is systemd's one read of the directory, and a unit enabled
+# before its drop-in exists runs WITHOUT that drop-in until something reloads
+# again — for the slice cap, a box whose panes are uncapped while its transcript
+# says they are not. The test reads the recorded argv AND what was on disk when
+# each call arrived.
+#
+# XDG_RUNTIME_DIR AND DBUS_SESSION_BUS_ADDRESS defaulted exactly as `_box_units`
+# defaults them (see its own header) and `ccd:93-95` before it: without them
+# `systemctl --user` cannot find the bus from a non-interactive SSH context —
+# which is precisely how an install is most often run — and every call here
+# fails for a reason that has nothing to do with this box.
+#
+# ── AND THEN verify-service.sh, WHOSE FAILURE IS FATAL ───────────────────
+# `systemctl enable --now` returns success the moment systemd FORKS. A server
+# that throws during ESM evaluation crash-loops every `RestartSec=3` behind an
+# install that exited 0 — the gap `deploy/verify-service.sh` exists to close
+# (its own header, and deploy.sh:448-465). A box whose service will not stay up
+# is a FAILED install, not a warning: the verb's whole promise is a box that
+# runs, and doctor's `services` check at the end would otherwise report the same
+# thing only after every remaining step had run against it.
+#
+# GUARDED BY `[ -f ]` because the tree is the input this verb trusts least: a
+# partial tree that passed `_inst_tree`'s two preflights without carrying this
+# script must not turn into "verification failed", which is a claim about the
+# SERVICE. The `CCRC_VERIFY_*` knobs are the script's own (settle, window, log
+# lines) and are honoured here by not being touched.
+_inst_enable() {
+  : "${XDG_RUNTIME_DIR:=/run/user/$UID}"; export XDG_RUNTIME_DIR
+  : "${DBUS_SESSION_BUS_ADDRESS:=unix:path=${XDG_RUNTIME_DIR}/bus}"; export DBUS_SESSION_BUS_ADDRESS
+  systemctl --user daemon-reload \
+    || _ccrc_die "systemctl --user daemon-reload failed, so systemd never read the units this run installed — read what it says: systemctl --user status ccrc.service"
+  local u
+  for u in ccrc.service ccd-cap-scopes.timer; do
+    systemctl --user enable --now "$u" \
+      || _ccrc_die "systemctl --user enable --now $u failed — read what it says: systemctl --user status $u"
+  done
+  local verify="$CCRC_HERE/../deploy/verify-service.sh"
+  if [ -f "$verify" ]; then
+    bash "$verify" ccrc.service \
+      || _ccrc_die "ccrc.service was started and did not stay up, so this box has the unit and not the service — read what it says: systemctl --user status ccrc.service"
+  fi
+  echo "install: services: ccrc.service and ccd-cap-scopes.timer enabled and started"
+}
+
+# ── _inst_linger — the one step that reports a failure and CONTINUES ──────
+# Without linger, `/run/user/$UID` is torn down when the last login session
+# ends, taking every `systemd --user` unit with it — the whole fleet, plus the
+# service the step above just started (`_check_linger`'s header says the same
+# thing from the diagnosis side).
+#
+# ENABLING IT NEEDS PRIVILEGE THIS PROCESS MAY NOT HAVE, and that is the entire
+# reason this step is written differently from every other one. `_ccrc_die`
+# here would abort an install at its tenth step, on a box where everything
+# before it converged, over a thing one `sudo` command fixes and which nothing
+# else in this run depends on. So it prints the exact command and returns 0 —
+# the shape `cmd_install`'s own header reserved for it before it existed — and
+# doctor, four steps later, reports `FAIL linger` with the same remedy and
+# carries it into the exit code. The operator is told twice and stopped never.
+#
+# loginctl's own stderr is NOT redirected: "Interactive authentication
+# required" and "Failed to enable linger: Access denied" send an operator to two
+# different places, and this file's rule (`_inst_accounts_sh`, `_inst_tree`) is
+# that a tool's own diagnosis reaches them verbatim rather than re-worded into a
+# shrug.
+_inst_linger() {
+  if loginctl enable-linger "$UID"; then
+    echo "install: linger: enabled for uid $UID — this box's units survive logout"
+    return 0
+  fi
+  echo "install: linger: could not enable — run: sudo loginctl enable-linger $UID"
+  return 0
+}
+
+# ── _inst_dirs — the directories the hooks installer will not create ──────
+# `install-session-hooks.sh` iterates the roster's config dirs and `continue`s
+# past any that is not there ("a box that does not have some of the roster's
+# wrappers is ordinary", its own comment). That is right for a deploy onto a
+# fleet host whose accounts have been running for months, and exactly wrong on a
+# FRESH box, where none of them exists yet: the installer would walk the whole
+# roster, skip every entry, exit 0, and leave a box whose sessions start with no
+# hooks and no statusline — a silence with a successful exit code in front of
+# it. This step creates what the next one expects to find.
+#
+# SOURCED IN A SUBSHELL, and that is not caution about the file's contents. The
+# generated projection declares `_ccrc_cfg_dir`, `_ccrc_label`, `_ccrc_hue` and
+# friends — the `_ccrc_*` namespace THIS FILE's own refusal helpers live in
+# (`_ccrc_die`, `_ccrc_usage_die`; see the note about the three namespaces in
+# play near the top). Sourcing it into this shell would let a future emitter
+# change redefine one of them out from under the installer mid-run. A subshell
+# means the roster's code cannot outlive the step, and the only thing that
+# crosses back is a count.
+_inst_dirs() {
+  local sh="$HOME/.ccrc/accounts.sh" n
+  n="$(
+    # shellcheck source=/dev/null
+    . "$sh" || exit 1
+    made=0
+    for a in ${CCRC_ACCOUNTS[@]+"${CCRC_ACCOUNTS[@]}"}; do
+      d="$(_ccrc_cfg_dir "$a")"
+      [ -n "$d" ] || continue
+      mkdir -p "$d" || exit 1
+      made=$((made + 1))
+    done
+    printf '%s' "$made"
+  )" || _ccrc_die "could not create the account config directories named by $sh — the session hooks would have nowhere to be installed"
+  echo "install: dirs: config directory in place for $n account(s) named by \$HOME/.ccrc/accounts.sh"
+}
+
+# ── _inst_hooks — run the installer, from where the BOX keeps it ──────────
+# `deploy.sh` runs `bash ~/.cc-sessions/install-session-hooks.sh` — the
+# INSTALLED copy, never the one in the tree — and this runs the same path for
+# the same reason: `_inst_files` has just placed it there, and running the
+# tree's copy instead would leave the box's own copy untested by the very run
+# that installed it. It is also the copy every future run, and every operator,
+# will reach.
+#
+# ITS FAILURE IS FATAL. `settings.json` is what registers `session-hook.sh` for
+# every event; a box without it runs sessions that report nothing to the server,
+# which is indistinguishable from a fleet that is idle. The script is
+# deliberately paranoid about that file (jq-validated, backed up, converged
+# byte-level) and returns non-zero having touched nothing when it refuses, so
+# there is nothing to unwind here.
+_inst_hooks() {
+  bash "$HOME/.cc-sessions/install-session-hooks.sh" \
+    || _ccrc_die "install-session-hooks.sh refused — read its lines above; it never rewrites a settings.json it could not validate, so nothing was damaged"
+  echo "install: hooks: session-hook.sh and the statusline registered in each account's settings.json"
+}
+
+# ── _inst_wrappers — the converger, called as a function ──────────────────
+# NOT `ccrc wrappers` as a subprocess, and not a copy of its logic: it is in
+# this file, so it is one function call, and its output (per-account lines,
+# refusals with remedies, the `summary:` line) reaches the operator's terminal
+# exactly as it would from the standalone verb. NO FLAGS, deliberately —
+# `--force` and `--adopt` are the two that decide what may be overwritten, and
+# an install that passed either would be an install that can destroy a
+# hand-written launcher without anybody typing the flag that authorises it.
+#
+# A REFUSAL IS A FAILED INSTALL. `cmd_wrappers` returns 1 when it refused
+# something, having already printed the file, the reason and the remedy for each
+# one; this adds the one sentence that turns "some files were refused" into
+# "this install did not finish", and deliberately does not re-word the refusals
+# themselves (the rule `_inst_accounts_sh` states, again).
+#
+# On the default single-account roster this writes NOTHING: the one account is
+# `upstream`, which this verb never writes under any flag, so the summary reads
+# `1 account(s) … 0 written`. That is the converged answer, not a no-op to be
+# optimised away — the run still proves the roster and `$HOME/.local/bin` agree,
+# which is the state doctor's `wrappers` check judges two steps later.
+_inst_wrappers() {
+  cmd_wrappers || _ccrc_die "wrapper convergence refused — read the lines above"
+  echo "install: wrappers: converged (the summary line above is ccrc wrappers' own)"
 }
 
 # Guard so the script can be `source`d (the way server/test/ccd-clip.test.ts:32

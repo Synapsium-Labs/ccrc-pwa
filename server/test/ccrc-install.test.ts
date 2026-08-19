@@ -143,6 +143,15 @@ const TREE_FILES = [
   // drop-ins out of it. It is here now so the recursive branch above ships
   // with a user rather than as untested fixture machinery.
   'deploy/systemd',
+  // ── Task 8: the two unit files that do NOT live under `deploy/systemd/`,
+  // and the script `_inst_enable` runs after the service is started. The
+  // supervisor unit ships in `ccd/` beside the script that instantiates it;
+  // `ccrc.service` ships at the top of `deploy/`. `verify-service.sh` is
+  // reached as `$CCRC_HERE/../deploy/verify-service.sh`, so it has to be in
+  // the tree the verb is RUN from and not merely in the one it places.
+  'deploy/ccrc.service',
+  'ccd/claude-session@.service',
+  'deploy/verify-service.sh',
 ];
 
 /** The two BUILD ARTIFACTS `_inst_tree` refuses to place a tree without. They
@@ -191,11 +200,104 @@ export function installFixtureTree(home: string, sub = 'checkout'): string {
   return root;
 }
 
+/** ── THE DOCTOR HALF OF THE FIXTURE (Task 8) ────────────────────────────
+ *  `cmd_install` now ENDS with `cmd_doctor`, and its exit code is doctor's, so
+ *  every `expect(r.code).toBe(0)` in this file is now also an assertion about
+ *  16 checks measuring this fixture. That is the intended coupling — a box
+ *  whose doctor fails is not a finished install — but it means the fixture has
+ *  to be a box doctor can pass, which it was not: measured on the Task 7
+ *  fixture, doctor answered `FAIL gh_auth` (the poisoned gh exits 97),
+ *  `FAIL git_email` (a throwaway HOME has no ~/.gitconfig), `FAIL linger` and
+ *  `FAIL wrappers` (the roster's upstream account has no binary).
+ *
+ *  This is `ccrc-doctor.test.ts`'s `healthy()`, adapted: the same stub shapes,
+ *  minus everything the INSTALL itself now provides. It plants no roster (the
+ *  verb seeds one), no `ccrc.env` (the verb writes one), no unit files (the
+ *  verb installs them) and no `systemctl`/`loginctl` (the runner's recorders
+ *  answer for both halves) — so what is left is the four things a doctor run
+ *  measures that an install does not create.
+ *
+ *  `node`, `tmux`, `jq`, `python3`, `flock` and `timeout` are NOT stubbed out
+ *  of existence the way the doctor suite stubs them: this fixture's PATH keeps
+ *  the real system directories, because the verb runs `node`, `jq` and `rsync`
+ *  for real. `df` is the one exception — see below. */
+function healthyDoctorBox(home: string): void {
+  const d = join(home, 'doctor-stubs');
+  mkdirSync(d, { recursive: true });
+  const stub = (name: string, body: string): void =>
+    writeFileSync(join(d, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+
+  // `gh auth status --hostname github.com`, answered with the shape a box
+  // authenticated for the 'repo' scope really prints (ccrc-doctor.test.ts's
+  // GH_OK). It REPLACES `ghContainedEnv`'s poison, and the containment is not
+  // weakened by that: this stub never execs the real gh either, and unlike the
+  // poison it exits 90 — loudly — on any argv but the one ccrc asks.
+  stub('gh', [
+    'printf \'%s\\n\' "$*" >> "$HOME/gh-calls"',
+    'if [ "$1" = "auth" ] && [ "$2" = "status" ]; then',
+    '  echo "github.com" >&2',
+    '  echo "  - Logged in to github.com account fixture-bot (keyring)" >&2',
+    '  echo "  - Token: gho_************************************" >&2',
+    '  echo "  - Token scopes: \'gist\', \'read:org\', \'repo\', \'workflow\'" >&2',
+    '  exit 0',
+    'fi',
+    'echo "fixture gh: unexpected argv: $*" >&2; exit 90',
+  ].join('\n'));
+
+  // The ONE network call ccrc makes, answered locally. `mode: local` is the
+  // truthful answer for the box this verb builds — a single box whose server
+  // drives the fleet itself — and `_check_fleet` SKIPS on it ("there is no
+  // second box to disagree with"), which is a check that ran and had nothing
+  // to compare rather than a check that failed.
+  stub('curl', [
+    'printf \'%s\\n\' "$*" >> "$HOME/curl-calls"',
+    'body=\'{"mode":"local","connected":true,"downSince":null,"build":"agreed","roster":"agreed"}\'',
+    '[ -f "$HOME/fixture-health-body" ] && IFS= read -r body < "$HOME/fixture-health-body"',
+    'code=200',
+    '[ -f "$HOME/fixture-health-code" ] && IFS= read -r code < "$HOME/fixture-health-code"',
+    'printf \'%s\\n%s\' "$body" "$code"',
+  ].join('\n'));
+
+  // `df -Pk` is stubbed for DETERMINISM, not containment: real `df` answers for
+  // whatever filesystem the suite happens to run on, so `_check_disk`'s 2 GiB
+  // floor would make every test in this file depend on how full the developer's
+  // disk is that afternoon. Same table shape as the doctor suite's.
+  stub('df', [
+    'printf \'%s\\n\' "$*" >> "$HOME/df-calls"',
+    '[ "$1" = "-Pk" ] && [ -n "$2" ] || { echo "fixture df: unexpected argv: $*" >&2; exit 90; }',
+    'echo "Filesystem     1024-blocks      Used Available Capacity Mounted on"',
+    'echo "/dev/fixture0    104857600  20971520 42991616      21% /"',
+  ].join('\n'));
+
+  // `_check_git_email` reads `git config --global user.email`, i.e. THIS
+  // fixture's `~/.gitconfig` — so the fixture writes one rather than stubbing
+  // `git`, which `_inst_stamp` needs to be the real thing. Deliberately not a
+  // repo-local identity: the check refuses to read one (Task 4 review), and a
+  // fixture that supplied it that way would pass a check that measures nothing.
+  writeFileSync(join(home, '.gitconfig'),
+    '[user]\n\tname = ccrc fixture\n\temail = fixture@example.invalid\n');
+
+  // The upstream account's binary, which the roster this verb seeds declares
+  // and `_check_wrappers` looks for. A few bytes of ELF prove "not a script"
+  // without the real ~300 MB (ccrc-doctor.test.ts's `writeBinary`).
+  mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+  writeFileSync(join(home, '.local', 'bin', 'claude'),
+    '\x7fELF\x02\x01\x01\x00not-a-real-binary-just-a-fixture-marker', { mode: 0o755 });
+}
+
+/** The names `healthyDoctorBox` and the runner between them put in
+ *  `~/.local/bin`. Everything else there was written by the verb — which is
+ *  what the "the default roster generates no wrappers" assertion measures. */
+const FIXTURE_BINS = ['gh', 'curl', 'journalctl', 'systemctl', 'loginctl', 'npm', 'rsync',
+  'df', 'claude'];
+
 /** A box with a shipped tree on it and nothing else — no `~/.ccrc`, no
- *  `~/.local/bin` beyond the poisons the runner plants. */
+ *  `~/.local/bin` beyond the stubs the runner plants. Doctor-healthy, because
+ *  the verb ends by running doctor against it and hands back its exit code. */
 function freshBox(prefix: string): string {
   const home = mkTmp(prefix);
   installFixtureTree(home);
+  healthyDoctorBox(home);
   return home;
 }
 
@@ -217,12 +319,101 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
       `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/${name}-poison"\n`
       + `echo "${says}" >&2\nexit 97\n`);
   poison('curl', 'ccrc tests must never reach a real server');
-  poison('systemctl', 'ccrc tests must never drive this box\'s real systemd');
-  // `loginctl` joins the pair here (it is not in ccrc-cli's runner) because
-  // Task 8's `_inst_linger` runs `loginctl enable-linger` — a WRITE to this
-  // production box's logind, which the poison must be in front of before the
-  // step that calls it exists, not after.
-  poison('loginctl', 'ccrc tests must never touch this box\'s real logind');
+  // `journalctl` is a pure poison and always will be: nothing in this verb
+  // reads it, and the one path that reaches it (verify-service.sh's `fail`,
+  // which dumps the unit's last 60 journal lines) would otherwise read THIS
+  // box's real journal from inside a test.
+  poison('journalctl', 'ccrc tests must never read this box\'s real journal');
+  // ── systemctl and loginctl: RECORDERS, not poisons (Task 8) ─────────────
+  // Both were plain refusals until this task, and both had to change on the
+  // same day for the same reason: `ccrc install` now DRIVES them
+  // (`_inst_enable` reloads and enables two units, `_inst_linger` enables
+  // linger), so a stub that can only exit 97 makes every install fail at step
+  // 9 and no assertion below could ever measure the units.
+  //
+  // The containment is unchanged and is the point: neither stub ever execs the
+  // real binary, so this box's systemd and logind are as unreachable as they
+  // were behind the refusal. What changed is that they now ANSWER the shapes
+  // ccrc asks — and, per `ccrc-doctor.test.ts`'s stub discipline, exit 90 on
+  // any argv they do not recognise, so a step that started mutating a unit
+  // nobody authorised is a loud failure rather than a silent success.
+  //
+  // Every call is recorded with WHAT WAS ON DISK when it arrived: the argv,
+  // then a tab, then every file under `~/.config/systemd/user`. That second
+  // field is what makes "the enables run after every unit file landed" a
+  // measurement instead of a hope — the assertion reads the daemon-reload
+  // line's own snapshot rather than inferring order from a later `ls`.
+  plant('systemctl', [
+    '#!/bin/sh',
+    'have=',
+    'for f in "$HOME/.config/systemd/user"/* "$HOME/.config/systemd/user"/*/*; do',
+    '  [ -e "$f" ] || continue',
+    '  have="$have${have:+,}${f##*/.config/systemd/user/}"',
+    'done',
+    'printf \'%s\\t%s\\n\' "$*" "$have" >> "$HOME/systemctl-calls"',
+    '[ "$1" = "--user" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }',
+    'shift',
+    'case "$1" in',
+    '  daemon-reload) exit 0 ;;',
+    '  enable)',
+    '    [ "$2" = "--now" ] && [ -n "$3" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }',
+    // A named unit whose `enable --now` refuses — the shape of a unit file
+    // systemd will not accept, which must reach the operator as a refusal
+    // naming that unit.
+    '    if [ -f "$HOME/fixture-enable-fail" ]; then',
+    '      IFS= read -r bad < "$HOME/fixture-enable-fail"',
+    '      [ "$3" = "$bad" ] && { echo "Failed to enable unit $3: fixture" >&2; exit 1; }',
+    '    fi',
+    '    exit 0 ;;',
+    // `is-active` answers from `<home>/fixture-unit-<unit>` when a test has an
+    // opinion. The DEFAULT is `active`, unlike the doctor suite's stub, and the
+    // difference is the fixture's subject: there, a unit is whatever the test
+    // planted; here, `_inst_enable` has just started it, so "active" is what a
+    // working box answers and a test that wants otherwise says so.
+    '  is-active)',
+    '    f="$HOME/fixture-unit-$2"',
+    '    if [ -f "$f" ]; then IFS= read -r v < "$f"; echo "$v"; [ "$v" = active ] && exit 0; exit 3; fi',
+    '    echo active; exit 0 ;;',
+    // verify-service.sh's two MainPID samples. Stable by default (a service
+    // that stayed up); `fixture-mainpid-drift` makes the SECOND sample differ,
+    // which is exactly how a crash loop shows itself.
+    '  show)',
+    '    [ "$2" = "-p" ] && [ "$3" = "MainPID" ] && [ "$4" = "--value" ] \\',
+    '      || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }',
+    '    p=4242',
+    '    if [ -f "$HOME/fixture-mainpid-drift" ]; then',
+    '      n=0; [ -f "$HOME/fixture-mainpid-seen" ] && IFS= read -r n < "$HOME/fixture-mainpid-seen"',
+    '      n=$((n + 1)); printf \'%s\\n\' "$n" > "$HOME/fixture-mainpid-seen"; p="42$n"',
+    '    fi',
+    '    echo "$p"; exit 0 ;;',
+    // Read-only, and reached only from verify-service.sh's failure dump.
+    '  status) echo "fixture systemctl status: $*"; exit 0 ;;',
+    'esac',
+    'echo "fixture systemctl: unexpected argv: $*" >&2; exit 90',
+  ].join('\n'));
+  // `enable-linger` WRITES the fixture's linger state, so the doctor run at the
+  // end of the same install reads what the step in the middle of it did — the
+  // causal chain the real box has, rather than two unrelated fixtures that
+  // happen to agree. `fixture-linger-refuse` is the box whose operator has no
+  // sudo: logind refuses, and the state file is never written.
+  plant('loginctl', [
+    '#!/bin/sh',
+    'printf \'%s\\n\' "$*" >> "$HOME/loginctl-calls"',
+    'case "$1" in',
+    '  enable-linger)',
+    '    [ -n "$2" ] || { echo "fixture loginctl: enable-linger with no uid" >&2; exit 90; }',
+    '    if [ -f "$HOME/fixture-linger-refuse" ]; then',
+    '      echo "Failed to enable linger: Interactive authentication required." >&2; exit 1',
+    '    fi',
+    '    printf \'yes\\n\' > "$HOME/fixture-linger"; exit 0 ;;',
+    '  show-user)',
+    '    if [ -f "$HOME/fixture-linger" ]; then',
+    '      IFS= read -r v < "$HOME/fixture-linger"; echo "Linger=$v"; exit 0',
+    '    fi',
+    '    echo "Failed to get user: User ID is not logged in or lingering" >&2; exit 1 ;;',
+    'esac',
+    'echo "fixture loginctl: unexpected argv: $*" >&2; exit 90',
+  ].join('\n'));
   // ── the two tools `_inst_tree` shells out to, contained differently ──────
   // `npm` is a POISON in the strict sense: `npm ci` in a fixture would reach
   // the real registry, take minutes, and install a dependency tree into a
@@ -241,7 +432,35 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   plant('rsync',
     `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/rsync-argv"\nexec ${RSYNC} "$@"\n`);
   for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT']) delete env[k];
+  // `verify-service.sh`'s own knobs, at the values its header says a test uses:
+  // the production defaults sleep 3 + 5 seconds per call, and `_inst_enable`
+  // makes one call per install. Zeroed here rather than per test, for the
+  // reason `ccrc-doctor.test.ts` zeroes `CCRC_DOCTOR_GH_TIMEOUT` in its own
+  // runner — a knob whose only reason to exist is that a test must not wait out
+  // a production timeout, and one call site is where it cannot be forgotten.
+  env['CCRC_VERIFY_SETTLE'] = '0';
+  env['CCRC_VERIFY_WINDOW'] = '0';
   return env;
+}
+
+/** `<home>/doctor-stubs/` — executables re-planted into `.local/bin` on every
+ *  run, AFTER the runner's own and BEFORE `opts.stubs`.
+ *
+ *  It exists because of an ordering fact rather than a preference: `ccrcEnv`
+ *  re-plants its defaults (and `ghContainedEnv` re-plants the poisoned `gh`) on
+ *  every single call, so anything a fixture builder wrote into `.local/bin`
+ *  once, at construction time, is silently overwritten before the verb runs.
+ *  `healthyDoctorBox` needs three tools to ANSWER rather than refuse — and only
+ *  for the doctor half of the verb — so it leaves them here and this re-plants
+ *  them. A test that wants one of them to misbehave still wins: `opts.stubs`
+ *  lands after this. */
+function replantDoctorStubs(home: string): void {
+  const d = join(home, 'doctor-stubs');
+  if (!existsSync(d)) return;
+  for (const f of readdirSync(d)) {
+    copyFileSync(join(d, f), join(home, '.local', 'bin', f));
+    chmodSync(join(home, '.local', 'bin', f), 0o755);
+  }
 }
 
 /** `opts.umask` runs the verb under an explicit file-creation mask instead of
@@ -264,6 +483,7 @@ function runInstall(home: string, args: string[] = ['install'],
     umask?: string; omit?: string[]; from?: string; stubs?: Record<string, string>;
   } = {}): Result {
   const env = { ...ccrcEnv(home, opts.omit ?? []), ...extraEnv };
+  replantDoctorStubs(home);
   for (const [name, body] of Object.entries(opts.stubs ?? {})) {
     writeFileSync(join(home, '.local', 'bin', name), body, { mode: 0o755 });
   }
@@ -289,8 +509,15 @@ function runInstall(home: string, args: string[] = ['install'],
 function pathWithout(home: string, missing: string): string {
   const d = join(home, `no-${missing}-bin`);
   mkdirSync(d, { recursive: true });
+  // The list grew in Task 8 with everything the six new steps shell out to —
+  // `bash` and `sleep` (verify-service.sh), `jq`, `date` and `basename`
+  // (install-session-hooks.sh), `mktemp` (the wrapper converger) — and with the
+  // four tools doctor merely LOOKS FOR at the end of the same run. A PATH
+  // missing those is a fixture about six absences at once, and the point of
+  // this helper is to model exactly one.
   for (const b of ['mkdir', 'cp', 'mv', 'rm', 'cat', 'chmod', 'cmp', 'date',
-    'node', 'git', 'npm', 'rsync']) {
+    'node', 'git', 'npm', 'rsync', 'bash', 'sleep', 'jq', 'mktemp', 'basename',
+    'tmux', 'python3', 'flock', 'timeout']) {
     if (b === missing || existsSync(join(d, b))) continue;
     symlinkSync(realPath(b), join(d, b));
   }
@@ -313,7 +540,14 @@ function preexisting(home: string, name: string, text: string): void {
  *  step that installs into a directory absent from this list leaks strays no
  *  assertion here can see. `''` is `$HOME` itself, which `~/.tmux.conf` makes a
  *  destination directory. Task 8 adds `.config/systemd/user`. */
-const STRAY_DIRS = ['', '.ccrc', '.local/bin', '.cc-sessions', '.claude', 'ccrc'];
+const STRAY_DIRS = ['', '.ccrc', '.local/bin', '.cc-sessions', '.claude', 'ccrc',
+  // Task 8: `_inst_units` stages six temp siblings across three directories,
+  // and the third one's name carries systemd's `\x2d` escape — spelled here as
+  // it is on disk, because a sweep that looked in the unescaped directory would
+  // report "no strays" about a directory that does not exist.
+  '.config/systemd/user',
+  '.config/systemd/user/claude-session@.service.d',
+  '.config/systemd/user/app-claude\\x2dsession.slice.d'];
 
 /** Every `<file>.tmp.<pid>` left anywhere a step writes. Each one writes
  *  through a temp sibling and renames; a leftover means a step died between the
@@ -498,6 +732,10 @@ describe('ccrc install: the shipped tree lands at $HOME/ccrc', () => {
     // assertion is that rsync was never invoked at all.
     const home = mkTmp('ccrc-install-selfcopy-');
     const root = installFixtureTree(home, 'ccrc');
+    // The only fixture in this file that does not come from `freshBox` (its
+    // tree has to BE `~/ccrc`), so it asks for the doctor half by hand — the
+    // run below asserts exit 0, which is now doctor's verdict as well.
+    healthyDoctorBox(home);
     const r = runInstall(home, ['install'], {}, { from: ccrcIn(root) });
     expect(r.code, r.stderr).toBe(0);
     expect(existsSync(join(home, 'rsync-argv')), 'rsync was invoked on the tree itself').toBe(false);
@@ -660,6 +898,15 @@ describe('ccrc install: the files the operator owns', () => {
     // read-the-box's-copy-back rule.
     const home = freshBox('ccrc-install-kept-roster-');
     preexisting(home, 'accounts.json', MIGRATION_ROSTER);
+    // `gpt` is that roster's EXTERNAL account — somebody else's hand-written
+    // launcher, which no ccrc verb ever writes. On the reference box it is 142
+    // lines of bash; here it only has to exist, because doctor's `wrappers`
+    // check runs at the end of this same install and an external account with
+    // no executable is a genuine FAIL. (The three `generated` accounts need no
+    // fixture: `_inst_wrappers` writes those itself, which is the point.)
+    writeFileSync(join(home, '.local', 'bin', 'gpt'),
+      '#!/usr/bin/env bash\n# somebody else\'s launcher; ccrc never writes this\nexec /usr/bin/env gpt "$@"\n',
+      { mode: 0o755 });
     const r = runInstall(home);
     expect(r.code, r.stderr).toBe(0);
     expect(read(dotCcrc(home, 'accounts.json'))).toBe(MIGRATION_ROSTER);
@@ -677,6 +924,14 @@ describe('ccrc install: the files the operator owns', () => {
       'CCRC_FLEET=remote',
       'CCRC_HOST=203.0.113.7',
       'CCRC_PORT=9999',
+      // Both agent keys, because `CCRC_FLEET=remote` with either one missing is
+      // a config the server REFUSES TO BOOT on (server/src/index.ts:75-79), and
+      // doctor's `config` check reproduces that refusal at the end of this same
+      // run. A half-configured remote box is a real state and it has its own
+      // test in ccrc-doctor.test.ts; this test is about a file being kept, and
+      // a fixture that was also secretly a broken-config fixture would fail for
+      // the wrong reason.
+      'CCRC_AGENT_URL=ws://100.119.90.29:7789',
       'CCRC_AGENT_TOKEN=not-a-real-token-but-it-is-mine',
       '',
     ].join('\n');
@@ -832,6 +1087,12 @@ describe('ccrc install: re-running converges', () => {
     expect(runInstall(home).code).toBe(0);
     const before = mtime(dotCcrc(home, 'accounts.sh'));
     writeFileSync(dotCcrc(home, 'accounts.json'), MIGRATION_ROSTER);
+    // The external account that roster declares — see the kept-roster test
+    // above: doctor's `wrappers` check runs at the end of this install too, and
+    // an `external` account with no executable is a FAIL nobody here is asking
+    // about.
+    writeFileSync(join(home, '.local', 'bin', 'gpt'),
+      '#!/usr/bin/env bash\nexec /usr/bin/env gpt "$@"\n', { mode: 0o755 });
     const r = runInstall(home);
     expect(r.code, r.stderr).toBe(0);
     expect(read(dotCcrc(home, 'accounts.sh'))).toContain('claude-corp');
@@ -1088,7 +1349,31 @@ describe('ccrc install: the order is stated in one place', () => {
       '_inst_bins',
       '_inst_files',
       '_inst_stamp',
+      // Task 8. Three orderings in this half are load-bearing and each one is
+      // measured by a test of its own below: the units land before anything
+      // enables them, the account config dirs exist before the hooks installer
+      // walks them, and the wrapper converger runs before doctor judges what it
+      // wrote.
+      '_inst_units',
+      '_inst_enable',
+      '_inst_linger',
+      '_inst_dirs',
+      '_inst_hooks',
+      '_inst_wrappers',
     ]);
+  });
+
+  it('ends with cmd_doctor, and nothing runs after it', () => {
+    // THE VERB'S EXIT CODE IS DOCTOR'S, and that is only true while doctor is
+    // the LAST command in the function: a line added after it — a summary, a
+    // tidy-up, one more echo — silently replaces the verdict with that line's
+    // own exit status, and every "a broken box exits 1" assertion in this file
+    // would go green against an install that reported success on a failing box.
+    const src = read(join(REPO, 'ccd', 'ccrc'));
+    const body = /cmd_install\(\) \{([\s\S]*?)\n\}/.exec(src);
+    const lines = body![1]!.split('\n').map((l) => l.trim())
+      .filter((l) => l !== '' && !l.startsWith('#'));
+    expect(lines[lines.length - 1]).toBe('cmd_doctor');
   });
 });
 
@@ -1164,7 +1449,14 @@ describe('ccrc install: the build stamp', () => {
     gitInit(treeRoot(home));
     const r = runInstall(home, ['install'], {}, {
       stubs: {
+        // `config` is handed to the real git, and the rest refuses. The two are
+        // different questions — "is this directory a repository I will read"
+        // and "what is this box's commit identity" — and only the first is this
+        // test's subject; doctor's `git_email` check asks the second at the end
+        // of the same run, so a stub that refused both would make this a test
+        // about two things.
         git: '#!/bin/sh\n'
+          + `case "\${1:-}" in config) exec ${realPath('git')} "$@" ;; esac\n`
           + 'echo "fatal: detected dubious ownership in repository at \'/home/other/ccrc\'" >&2\n'
           + 'exit 128\n',
       },
@@ -1185,11 +1477,21 @@ describe('ccrc install: the build stamp', () => {
     const home = freshBox('ccrc-install-stamp-gitless-');
     gitInit(treeRoot(home));
     const r = runInstall(home, ['install'], { PATH: pathWithout(home, 'git') });
-    expect(r.code, r.stderr).toBe(0);
     expect(r.stdout).toMatch(
       /^install: stamp: skipped \(no git on PATH\) — ccrc version will say unstamped$/m);
     expect(r.stdout).not.toMatch(/not a git checkout/);
     expect(existsSync(dotCcrc(home, 'build.json'))).toBe(false);
+    // …AND THE VERB EXITS 1, which is doctor's verdict and not this step's:
+    // every install step converged (the transcript above says so, and the
+    // wrappers summary is the last of them), and then doctor said this box has
+    // no git. That is the coupling Task 8 introduced — `cmd_install` ends with
+    // `cmd_doctor` and hands back its exit code — and a box with no git really
+    // is not a finished fleet box: `ccd` clones a workspace per session. The
+    // two FAIL lines name the cause, so the 1 cannot be mistaken for the stamp
+    // step having failed (it did not; it SKIPPED, at exit 0).
+    expect(r.code).toBe(1);
+    expect(r.stdout).toMatch(/^FAIL git: /m);
+    expect(r.stdout).toMatch(/^install: wrappers: converged/m);
   });
 
   it('never echoes raw control bytes out of git', () => {
@@ -1203,7 +1505,10 @@ describe('ccrc install: the build stamp', () => {
     gitInit(treeRoot(home));
     const r = runInstall(home, ['install'], {}, {
       stubs: {
-        git: '#!/bin/sh\nprintf \'fatal: \\033[31mred\\010\\010\\010nope\\r and more\\n'
+        // `config` to the real git, for the reason the arm above states.
+        git: '#!/bin/sh\n'
+          + `case "\${1:-}" in config) exec ${realPath('git')} "$@" ;; esac\n`
+          + 'printf \'fatal: \\033[31mred\\010\\010\\010nope\\r and more\\n'
           + 'second line nobody asked for\\n\' >&2\nexit 128\n',
       },
     });
@@ -1245,5 +1550,438 @@ describe('ccrc install: the build stamp', () => {
     expect(body![0].split('\n').filter((l) => !l.trim().startsWith('#'))
       .filter((l) => l.includes('.ccrc/build.json')),
     'the stamp path is spelled out in a line of shell inside _inst_stamp').toEqual([]);
+  });
+});
+
+// ── Task 8: the units, the enablement, and the box's last word ────────────
+
+/** `~/.config/systemd/user/…` — the directory `systemd --user` searches and
+ *  both deploy lanes copy into. Spelled here in TypeScript exactly once; the
+ *  test at the end of the units describe is what keeps it, `ccrc`'s
+ *  `BOX_UNIT_DIR` and the check table's `CCRC_UNIT_DIR` from drifting apart. */
+const unitDir = (home: string, ...rel: string[]): string =>
+  join(home, '.config', 'systemd', 'user', ...rel);
+
+/** systemd's escape of the `-` in the unit name `app-claude-session.slice`.
+ *  The REPOSITORY directory is plainly named; the DESTINATION must be this or
+ *  systemd never reads the drop-in (deploy.sh:404-407). In TypeScript the
+ *  backslash is doubled; on disk the name carries the four literal characters
+ *  `\x2d`, which is what the assertions below are about. */
+const SLICE_DIR = 'app-claude\\x2dsession.slice.d';
+
+/** Every file `_inst_units` is supposed to leave in that directory, by the name
+ *  it must have there, beside the tree path it must be a copy of. */
+const UNIT_FILES: Array<[string, string]> = [
+  ['ccrc.service', 'deploy/ccrc.service'],
+  ['claude-session@.service', 'ccd/claude-session@.service'],
+  ['ccd-cap-scopes.service', 'deploy/systemd/ccd-cap-scopes.service'],
+  ['ccd-cap-scopes.timer', 'deploy/systemd/ccd-cap-scopes.timer'],
+  ['claude-session@.service.d/limits.conf', 'deploy/systemd/claude-session@.service.d/limits.conf'],
+  [`${SLICE_DIR}/limits.conf`, 'deploy/systemd/app-claude-session.slice.d/limits.conf'],
+];
+
+/** The runner's `systemctl` records one line per call: the argv, a tab, then
+ *  every file that was under `~/.config/systemd/user` at that moment. The
+ *  second field is what turns "the enables run after every unit file landed"
+ *  into a measurement — see the stub's own comment. */
+const systemctlCalls = (home: string): Array<{ argv: string; onDisk: string[] }> => {
+  const p = join(home, 'systemctl-calls');
+  if (!existsSync(p)) return [];
+  return read(p).split('\n').filter(Boolean).map((l) => {
+    const [argv, have] = l.split('\t');
+    return { argv: argv ?? '', onDisk: (have ?? '').split(',').filter(Boolean) };
+  });
+};
+
+const loginctlCalls = (home: string): string[] => {
+  const p = join(home, 'loginctl-calls');
+  return existsSync(p) ? read(p).split('\n').filter(Boolean) : [];
+};
+
+describe('ccrc install: the units, and the one this box must not be given', () => {
+  /** One install, shared by the read-only assertions. `umask 077` for the
+   *  reason the artifacts describe gives: at 022 a plain `cp` reproduces 0644
+   *  by itself and the `chmod` could be deleted unnoticed. */
+  const units = ((): { home: string; r: Result } => {
+    const home = freshBox('ccrc-install-units-');
+    return { home, r: runInstall(home, ['install'], {}, { umask: '077' }) };
+  })();
+
+  it('the run this describe measures succeeded', () => {
+    expect(units.r.code, units.r.stderr).toBe(0);
+    expect(units.r.stdout).toMatch(/^install: units: /m);
+    expect(units.r.stdout).toMatch(/^install: services: /m);
+  });
+
+  it('installs four unit files and two drop-ins, byte for byte, at 644', () => {
+    // `deploy.sh:402-417`'s copy set. Byte equality rather than existence,
+    // because the failure this catches is not an absent file: it is a unit
+    // installed from the wrong place (the checkout instead of the placed tree,
+    // or a stale copy), which exists, parses, and runs the wrong thing.
+    const { home } = units;
+    for (const [dest, src] of UNIT_FILES) {
+      const p = unitDir(home, ...dest.split('/'));
+      expect(existsSync(p), `${dest} never reached ~/.config/systemd/user`).toBe(true);
+      expect(readFileSync(p), `${dest} is not the shipped file`)
+        .toEqual(readFileSync(placed(home, ...src.split('/'))));
+      expect(statSync(p).mode & 0o777, `${dest} has the wrong mode`).toBe(0o644);
+    }
+  });
+
+  it('puts the slice drop-in in the ESCAPED directory name, and nowhere else', () => {
+    // THE MUTATION THIS TEST EXISTS FOR: drop the `\x2d` and the drop-in lands
+    // in `app-claude-session.slice.d`, where systemd — which escapes `-` in a
+    // unit name before it looks — never reads it. Nothing fails, nothing warns:
+    // every pane on the box just runs without its memory cap. So the assertion
+    // is on the literal bytes of the directory name, and on the absence of the
+    // plausible-looking one beside it.
+    const { home } = units;
+    expect(readdirSync(unitDir(home))).toContain(SLICE_DIR);
+    expect(readdirSync(unitDir(home)),
+      'the drop-in dir carries the repository spelling, which systemd never reads')
+      .not.toContain('app-claude-session.slice.d');
+    expect(existsSync(unitDir(home, SLICE_DIR, 'limits.conf'))).toBe(true);
+  });
+
+  it('does NOT install ccrc-agent.service — a required EnvironmentFile with no file', () => {
+    // The one unit in deploy's set this verb refuses to place. Its
+    // `EnvironmentFile=%h/.ccrc/agent.env` has no leading `-`, so systemd
+    // REQUIRES the file; a single box in local mode has no agent and no
+    // agent.env, and installing the unit would manufacture one that can only
+    // fail — visible for ever in `systemctl --user` and in doctor's own
+    // `services` check, describing something nobody asked for.
+    const { home } = units;
+    expect(existsSync(unitDir(home, 'ccrc-agent.service'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccrc-agent.service.d'))).toBe(false);
+    // …and no enable was attempted for it either, which is the half a mere
+    // file-absence assertion would miss.
+    expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccrc-agent');
+  });
+
+  it('reloads and enables in that order, and only after every unit file landed', () => {
+    // TWO ORDERINGS IN ONE ASSERTION, because they fail the same way. systemd
+    // reads the directory at `daemon-reload`; a unit enabled before its drop-in
+    // exists runs WITHOUT the drop-in until something reloads again, and for
+    // the slice cap that is a box whose panes are uncapped while its transcript
+    // says they are not. The recorded snapshot is what each call SAW.
+    const { home } = units;
+    const calls = systemctlCalls(home).filter((c) => !c.argv.includes('is-active')
+      && !c.argv.includes('show'));
+    expect(calls.map((c) => c.argv)).toEqual([
+      '--user daemon-reload',
+      '--user enable --now ccrc.service',
+      '--user enable --now ccd-cap-scopes.timer',
+    ]);
+    for (const c of calls) {
+      expect(c.onDisk, `${c.argv} ran before the unit files landed`)
+        .toEqual(expect.arrayContaining(UNIT_FILES.map(([dest]) => dest)));
+    }
+  });
+
+  it('refuses BY UNIT when systemd will not enable one', () => {
+    // The remedy names the unit and the command that says why. "install failed"
+    // would send an operator to read this script; `systemctl --user status
+    // ccd-cap-scopes.timer` sends them to systemd's own sentence about it.
+    const home = freshBox('ccrc-install-enable-fails-');
+    writeFileSync(join(home, 'fixture-enable-fail'), 'ccd-cap-scopes.timer\n');
+    const r = runInstall(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(
+      /^ccrc: systemctl --user enable --now ccd-cap-scopes\.timer failed — read what it says: systemctl --user status ccd-cap-scopes\.timer$/m);
+    // …and the run stopped there rather than carrying on to report a box it
+    // could not finish converging.
+    expect(r.stdout).not.toMatch(/^install: linger:/m);
+  });
+
+  it('fails the install when the started service does not stay up', () => {
+    // `systemctl enable --now` returns the moment systemd FORKS, which is the
+    // whole reason `deploy/verify-service.sh` exists: a server that throws
+    // during ESM evaluation crash-loops every RestartSec=3 behind an install
+    // that exited 0. Here the MainPID changes across the observation window —
+    // the shape of a crash loop, and the one thing a single `is-active` sample
+    // cannot see.
+    const home = freshBox('ccrc-install-crashloop-');
+    writeFileSync(join(home, 'fixture-mainpid-drift'), 'yes\n');
+    const r = runInstall(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/CRASH-LOOPING/);
+    expect(r.stderr).toMatch(
+      /^ccrc: ccrc\.service was started and did not stay up, so this box has the unit and not the service/m);
+    expect(r.stdout).not.toMatch(/^install: linger:/m);
+  });
+
+  it('honours the CCRC_VERIFY_* knobs rather than waiting out a production window', () => {
+    // The knobs are `verify-service.sh`'s own and this verb passes none of them
+    // — it just does not clobber them. Proof that the script really ran (and
+    // ran against the fixture's systemctl) is its verdict line in the
+    // transcript, naming the MainPID the stub answered with.
+    expect(units.r.stdout).toMatch(/^verified: ccrc\.service active, MainPID 4242 stable across 0s$/m);
+  });
+
+  it('names the same unit directory the doctor check table does', () => {
+    // THE DELIBERATE SECOND SPELLING, held by a mechanism instead of a promise
+    // (D-92, and `_check_path`'s own note about `WRAPPER_BIN_DIR` for the same
+    // trade). `ccrc-doctor-checks` cannot read `ccrc`'s variable: it is sourced
+    // under `set -u` by things that are not `ccrc` — ccrc-doctor.test.ts's
+    // `tableNames()` does exactly that — so a top-level
+    // `CCRC_UNIT_DIR="$BOX_UNIT_DIR"` would make sourcing it fail outright, and
+    // a `:-` fallback IS the second spelling with a branch in front. So: two
+    // literals, compared.
+    const ccrcSrc = read(join(REPO, 'ccd', 'ccrc'));
+    const checksSrc = read(join(REPO, 'ccd', 'ccrc-doctor-checks'));
+    const box = /^BOX_UNIT_DIR="([^"]+)"$/m.exec(ccrcSrc);
+    const table = /^CCRC_UNIT_DIR="([^"]+)"$/m.exec(checksSrc);
+    expect(box, 'ccd/ccrc declares no BOX_UNIT_DIR').toBeTruthy();
+    expect(table, 'ccd/ccrc-doctor-checks declares no CCRC_UNIT_DIR').toBeTruthy();
+    expect(box![1]).toBe(table![1]);
+    // …and it is the directory this fixture really found the units in, so the
+    // agreement is with the box rather than only with itself.
+    expect(box![1]).toBe('$HOME/.config/systemd/user');
+  });
+});
+
+describe('ccrc install: linger, the account dirs, the hooks and the wrappers', () => {
+  const converged = ((): { home: string; r: Result } => {
+    const home = freshBox('ccrc-install-converge-');
+    return { home, r: runInstall(home) };
+  })();
+
+  it('the run this describe measures succeeded', () => {
+    expect(converged.r.code, converged.r.stderr).toBe(0);
+  });
+
+  it('asks logind for linger, by uid, and says so', () => {
+    // Every ccd session is a `systemd --user` unit; without linger,
+    // /run/user/$UID is torn down with the last login session and the whole
+    // fleet goes with it. The remedy doctor prints uses the UID too, so the
+    // call and the advice are one command.
+    const { home, r } = converged;
+    expect(loginctlCalls(home).some((c) => /^enable-linger \d+$/.test(c)),
+      'nothing ever asked logind to enable linger').toBe(true);
+    expect(r.stdout).toMatch(/^install: linger: enabled for uid \d+ — this box's units survive logout$/m);
+  });
+
+  it('reports a linger it cannot enable and CONTINUES — doctor is what says so', () => {
+    // THE ONE STEP THAT SURVIVES ITS OWN FAILURE. Enabling linger needs a
+    // privilege the operator may not have (`sudo loginctl enable-linger` is the
+    // remedy, and this process is not root). Dying here would abort an install
+    // at its tenth step, on a box where everything before it converged, over a
+    // thing one command fixes — so the step prints that command and returns 0,
+    // and the four steps after it still run. The verdict comes from doctor,
+    // which is the last word by design: FAIL linger, exit 1.
+    const home = freshBox('ccrc-install-linger-refused-');
+    writeFileSync(join(home, 'fixture-linger-refuse'), 'yes\n');
+    const r = runInstall(home);
+    expect(r.stdout).toMatch(/^install: linger: could not enable — run: sudo loginctl enable-linger \d+$/m);
+    // …the steps AFTER it ran, which is the half that makes this a "continue"
+    // rather than a die with a friendlier sentence.
+    for (const step of ['dirs: ', 'hooks: ', 'wrappers: ', 'done — ']) {
+      expect(r.stdout, `the install stopped at linger: no "install: ${step}" line`)
+        .toMatch(new RegExp(`^install: ${step}`, 'm'));
+    }
+    // …and the box is still reported honestly: doctor's own linger check FAILs,
+    // with the same remedy, and its exit code is the verb's.
+    expect(r.stdout).toMatch(/^FAIL linger: /m);
+    expect(r.stdout).toMatch(/^ {2}remedy: run: sudo loginctl enable-linger \d+$/m);
+    expect(r.code).toBe(1);
+  });
+
+  it('creates every account config dir the roster names, so the hooks land in all of them', () => {
+    // THE GAP THIS STEP CLOSES: `install-session-hooks.sh` iterates the roster's
+    // config dirs and `continue`s past any that is not there — right for a
+    // deploy onto a months-old fleet host, and exactly wrong on a fresh box,
+    // where NONE of them exists. Without `_inst_dirs` the installer walks the
+    // whole roster, skips every entry and exits 0, leaving a box whose sessions
+    // report nothing. Measured with the five-account roster, because the
+    // default one's single dir is created by `_inst_files` anyway and would
+    // make this assertion pass with the step deleted.
+    const home = freshBox('ccrc-install-dirs-');
+    preexisting(home, 'accounts.json', MIGRATION_ROSTER);
+    writeFileSync(join(home, '.local', 'bin', 'gpt'),
+      '#!/usr/bin/env bash\nexec /usr/bin/env gpt "$@"\n', { mode: 0o755 });
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(
+      /^install: dirs: config directory in place for 5 account\(s\) named by \$HOME\/\.ccrc\/accounts\.sh$/m);
+    for (const d of ['.claude', '.claude-personal', '.claude-corp', '.claude-gpt', '.claude-dev0']) {
+      expect(existsSync(join(home, d)), `${d} was never created`).toBe(true);
+      // …and the hooks installer, run from the INSTALLED path right after,
+      // found each one and converged its settings.json.
+      const s = join(home, d, 'settings.json');
+      expect(existsSync(s), `${d}/settings.json — the hooks installer skipped this dir`).toBe(true);
+      const j = JSON.parse(read(s)) as {
+        hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>>;
+        statusLine: { command: string };
+      };
+      expect(j.hooks['SessionStart']![0]!.hooks[0]!.command).toContain('/session-hook.sh');
+      expect(j.statusLine.command).toContain('/statusline-command.sh');
+    }
+  });
+
+  it('runs the wrapper converger with no flags, and the default roster writes none', () => {
+    // `cmd_wrappers` is called as a FUNCTION (same file), so its own lines —
+    // per-account verdicts, refusals with remedies, the summary — reach the
+    // operator unaltered. The default roster holds one `upstream` account,
+    // which this verb never writes under any flag, so the converged answer is
+    // zero wrappers written: the run proves the roster and `$HOME/.local/bin`
+    // agree, which is what doctor judges two steps later.
+    const { home, r } = converged;
+    expect(r.stdout).toMatch(
+      /^summary: 1 account\(s\) in .*\/\.ccrc\/accounts\.json — 0 generated, 1 upstream, 0 external \(upstream and external are never written\); 0 written, /m);
+    expect(r.stdout).toMatch(/^install: wrappers: converged /m);
+    // Nothing but the three executables `_inst_bins` installs — no wrapper, no
+    // temp file, no staged leftover — beside what the fixture itself planted.
+    expect(readdirSync(join(home, '.local', 'bin'))
+      .filter((b) => !FIXTURE_BINS.includes(b)).sort())
+      .toEqual(['ccd', 'ccd-cap-scopes', 'ccrc']);
+  });
+
+  it('a refused wrapper is a failed install', () => {
+    // `--force`/`--adopt` are the flags that decide what may be overwritten and
+    // this step passes neither, so a file ccrc did not write is REFUSED — with
+    // the converger's own remedy — and the install stops. The alternative is an
+    // install that reports success over a box whose wrappers it could not
+    // converge, which is the state `ccrc wrappers` exists to make impossible.
+    const home = freshBox('ccrc-install-wrappers-refused-');
+    preexisting(home, 'accounts.json', MIGRATION_ROSTER);
+    writeFileSync(join(home, '.local', 'bin', 'gpt'),
+      '#!/usr/bin/env bash\nexec /usr/bin/env gpt "$@"\n', { mode: 0o755 });
+    // A file at a GENERATED account's path that ccrc did not write: neither
+    // ccrc-unmodified nor equivalent, so no flag this step passes can rewrite
+    // it.
+    writeFileSync(join(home, '.local', 'bin', 'claude-corp'),
+      '#!/bin/sh\n# mine, and not ccrc\'s\nexec /usr/bin/env claude "$@"\n', { mode: 0o755 });
+    const r = runInstall(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: wrapper convergence refused — read the lines above$/m);
+    // The converger's own account-level refusal is what "the lines above" means,
+    // and it is still on stdout rather than re-worded into the die.
+    expect(r.stdout).toMatch(/^REFUSE claude-corp: /m);
+    // …and it did not run doctor over a box it had just refused to finish.
+    expect(r.stdout).not.toMatch(/^summary: \d+ checks/m);
+  });
+});
+
+describe('ccrc install: the landing block, and doctor as the last word', () => {
+  it('ends with doctor, and a box that passes every check exits 0', () => {
+    const home = freshBox('ccrc-install-doctor-ok-');
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^install: done — every step above converged$/m);
+    // Doctor's summary is the LAST line, because doctor is the last command:
+    // the verb's exit code is its verdict.
+    const lines = r.stdout.split('\n').filter(Boolean);
+    expect(lines[lines.length - 1]).toMatch(/^summary: \d+ checks \(\d+ skipped\), /);
+    expect(r.stdout).toMatch(/^summary: \d+ checks \(\d+ skipped\), \d+ verdicts — \d+ passed, 0 warned, 0 failed$/m);
+  });
+
+  it('reads the PWA address back out of the env file it installed', () => {
+    // ONE SOURCE OF TRUTH, and the case that makes it matter: an operator whose
+    // `ccrc.env` says something other than the default. That file is
+    // user-owned, so a re-run keeps it — and a landing block that printed
+    // `127.0.0.1:7788` regardless would be telling that operator to open an
+    // address their box does not listen on.
+    const home = freshBox('ccrc-install-addr-');
+    preexisting(home, 'ccrc.env', 'CCRC_FLEET=local\nCCRC_HOST=box.example.invalid\nCCRC_PORT=8123\n');
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(
+      /^install: PWA: http:\/\/box\.example\.invalid:8123\/ \(CCRC_HOST\/CCRC_PORT in .*\/\.ccrc\/ccrc\.env change this\)$/m);
+    expect(r.stdout).toMatch(/^install: next: add your first session with: ccd menu {3}\(and read .*\/\.ccrc\/ccrc\.env\)$/m);
+  });
+
+  it('falls back to the documented default when the env file names neither key', () => {
+    // The fallback is not a guess either: `server/src/config.ts` boots on the
+    // same two values when the file is silent, so this line describes the box
+    // rather than merely being polite about it.
+    const home = freshBox('ccrc-install-addr-default-');
+    preexisting(home, 'ccrc.env', '# an operator who deleted everything but the comment\n');
+    const r = runInstall(home);
+    expect(r.stdout).toMatch(/^install: PWA: http:\/\/127\.0\.0\.1:7788\//m);
+  });
+
+  it('a box doctor fails on exits 1, with every install step still printed', () => {
+    // The two halves are one contract: the exit code is doctor's verdict, and
+    // the transcript above it is the install's. Losing either — a 0 beside a
+    // FAIL, or a 1 with no record of what converged — leaves an operator with a
+    // number and no way to tell which half of the run it is about.
+    const home = freshBox('ccrc-install-doctor-fails-');
+    writeFileSync(join(home, 'fixture-linger-refuse'), 'yes\n');
+    const r = runInstall(home);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toMatch(/^FAIL linger: /m);
+    for (const step of ['roster', 'accounts\\.sh', 'ccrc\\.env', 'tree', 'bins', 'files',
+      'stamp', 'units', 'services', 'linger', 'dirs', 'hooks', 'wrappers']) {
+      expect(r.stdout, `no "install: ${step}:" line survived the failing doctor`)
+        .toMatch(new RegExp(`^install: ${step}: `, 'm'));
+    }
+    expect(r.stdout).toMatch(/^install: done — every step above converged$/m);
+  });
+});
+
+describe('ccrc install: running the WHOLE verb twice', () => {
+  // Tasks 6-7 measured idempotence per step. This is the same property for the
+  // finished verb: the promise in `--help` ("re-running converges; it never
+  // damages an existing install") is about `ccrc install`, not about eight of
+  // its fourteen steps, and the steps that arrived in Task 8 are the ones with
+  // the most to damage — a settings.json an operator has customised, a wrapper
+  // they wrote, a unit systemd is running out of right now.
+  it('changes nothing but the build stamp, and leaves no temp file anywhere', () => {
+    const home = freshBox('ccrc-install-idem-whole-');
+    gitInit(treeRoot(home));   // so the stamp step really writes, and rewrites
+    const first = runInstall(home);
+    expect(first.code, first.stderr).toBe(0);
+
+    // Every `_inst_atomic` destination, plus the ccrc-owned file written by
+    // other means. `build.json` is DELIBERATELY ABSENT from this list: its
+    // `builtAt` measures the run that wrote it, so rewriting it is what that
+    // step is for — assertion 4 below is that it DID change, which is the other
+    // half of the same rule.
+    const targets = [
+      join(home, '.ccrc', 'accounts.sh'),
+      join(home, '.local', 'bin', 'ccd'),
+      join(home, '.local', 'bin', 'ccd-cap-scopes'),
+      join(home, '.local', 'bin', 'ccrc'),
+      join(home, '.cc-sessions', 'session-hook.sh'),
+      join(home, '.cc-sessions', 'install-session-hooks.sh'),
+      join(home, '.cc-sessions', 'notify.sh'),
+      join(home, '.tmux.conf'),
+      join(home, '.claude', 'statusline-command.sh'),
+      ...UNIT_FILES.map(([dest]) => unitDir(home, ...dest.split('/'))),
+    ];
+    const before = targets.map(mtime);
+    const jsonBefore = read(join(home, '.ccrc', 'accounts.json'));
+    const envBefore = read(join(home, '.ccrc', 'ccrc.env'));
+    const settingsBefore = read(join(home, '.claude', 'settings.json'));
+    const stampBefore = read(join(home, '.ccrc', 'build.json'));
+    const callsBefore = systemctlCalls(home).map((c) => c.argv);
+
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+
+    // 1. The two USER-OWNED files are byte-identical, which is the rule this
+    //    verb would do the most damage by breaking.
+    expect(read(join(home, '.ccrc', 'accounts.json'))).toBe(jsonBefore);
+    expect(read(join(home, '.ccrc', 'ccrc.env'))).toBe(envBefore);
+    // 2. …and so is the settings.json the hooks installer converged: it
+    //    re-derives the same JSON and skips the write, so an operator's own
+    //    statusLine (which it seeds only when absent) survives every re-run.
+    expect(read(join(home, '.claude', 'settings.json'))).toBe(settingsBefore);
+    // 3. Every converger target keeps its mtime — the measurement that
+    //    separates "the file still says the right thing" from "nothing was
+    //    rewritten", and the only one an operator can use to see what a run
+    //    actually did.
+    expect(targets.map(mtime)).toEqual(before);
+    // 4. …except the stamp, which measures THIS run and must not be stale.
+    expect(read(join(home, '.ccrc', 'build.json'))).not.toBe(stampBefore);
+    // 5. The systemd calls are the same three, in the same order. `enable
+    //    --now` on an enabled unit is a no-op by design; what would NOT be safe
+    //    is a second run that started restarting things, which is how an
+    //    install turns into an outage on a box with live sessions.
+    expect(systemctlCalls(home).map((c) => c.argv).slice(callsBefore.length))
+      .toEqual(callsBefore);
+    // 6. And no run left a temp sibling behind, in any directory a step writes
+    //    into — including the two drop-in dirs and the escaped one.
+    expect(strays(home)).toEqual([]);
   });
 });
