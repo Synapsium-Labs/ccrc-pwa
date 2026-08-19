@@ -3,6 +3,7 @@ import type { Dialog } from '../../../shared/api.js';
 
 const BUSY_RE = /esc to interrupt/;
 const MENU_RE = /Enter to (confirm|select)/;
+const SGR = /\x1b\[[0-9;]*m/g; // any ANSI colour/attr code — same idiom as inject/send.ts:76
 const MULTISELECT_RE = /Space to select/;
 /** A numbered menu option line, optionally carrying the ❯ selection marker. */
 const OPTION_RE = /^\s*(❯)?\s*(\d+)\.\s+(.+)$/;
@@ -139,7 +140,17 @@ export function paneOptionRows(pane: string): OptionRow[] {
  * back as `{ parsed: false, raw }` — terminal-drawer territory in v1.
  */
 export function parseDialog(pane: string): Dialog | null {
-  if (paneState(pane) !== 'menu') return null;
+  // hasMenu, not paneState(pane) !== 'menu': the busy check must not veto a
+  // menu parse (D-102). paneState tests BUSY_RE across the WHOLE pane, and an
+  // RC-off pane renders the busy marker WHILE a dialog is painted alongside
+  // it — a real, expected combined screen — so the old gate answered 'busy'
+  // and refused to parse a dialog that was genuinely on screen. hasMenu is
+  // deliberately independent of the busy check for exactly this reason
+  // (:23-28 above); it's the same idiom inject/send.ts:320 uses. SGR strip
+  // mirrors that idiom too — every current caller already captures pane text
+  // without escape codes (tmux.capture, never captureAnsi), so this is
+  // defensive idiom-consistency, not a behavior change today.
+  if (!hasMenu(pane.replace(SGR, ''))) return null;
   if (MULTISELECT_RE.test(pane)) return unparsed(pane);
 
   const lines = pane.split('\n');

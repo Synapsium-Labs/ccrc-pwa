@@ -1,9 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { Bus } from '../src/bus.js';
 import type { Runner } from '../src/exec.js';
 import { localIO, type FleetIO } from '../src/io.js';
@@ -559,36 +558,18 @@ describe('ask notifications carry actions only where the route would accept them
 
   // Stage 2e Task 3 (D-102). Same hazard as sessionws.test.ts's twin case: an
   // RC-off pane renders the busy spinner WHILE a dialog is painted below it —
-  // a real, expected combined screen. `detectDialogs`'s own gate now asks
-  // `hasMenu`, not `paneState() === 'menu'` (the send.ts:320 idiom), so this
-  // call site no longer suppresses the attempt on its own account. But
-  // `parseDialog` (pane/dialog.ts:142) re-tests `paneState(pane) !== 'menu'`
-  // as its own first line — the identical hazard, one layer deeper, inside a
-  // file this task's scope does not touch. Measured the same way as the
-  // sessionws case: reds on the desired assertion both before AND after the
-  // call-site fix, for two different reasons in sequence. Flagged for the
-  // reviewer per task-3-report.md (D-102), not fixed here.
-  it('KNOWN GAP (D-102): a live busy spinner painted alongside a menu still suppresses the ask push — blocked one layer deeper, inside parseDialog itself', async () => {
+  // a real, expected combined screen. `detectDialogs`'s own gate asks
+  // `hasMenu`, not `paneState() === 'menu'` (the send.ts:320 idiom). Fix
+  // round 1 closed the second half: `parseDialog` (pane/dialog.ts:142) also
+  // now gates on `hasMenu` instead of vetoing on the busy marker, so the
+  // pending set really does pick this session up and the ask push fires.
+  it('D-102: a live busy spinner painted alongside a menu still raises the ask push — RC-off panes render both at once', async () => {
     const f = askFixture();
     await f.tick();                                  // priming: no menu
     f.showMenu(`${BUSY_LINE}\n\n${MENU_PANE}`);
     await f.tick();                                   // RC-off: both on screen at once
-    expect(f.sent).toHaveLength(0);
-  });
-
-  // Same reasoning as sessionws.test.ts's twin pin: the behavioral test above
-  // cannot catch a regression here either — parseDialog's own gate dominates
-  // the outcome regardless of what this call site does, so reverting
-  // detectDialogs's gate leaves every test in this file green (measured).
-  // Straight source-text pin instead, the single-definition.test.ts idiom.
-  it('mutation-sensitive: detectDialogs\'s gate line reads hasMenu, not paneState() === \'menu\'', () => {
-    const src = readFileSync(
-      path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'watch.ts'), 'utf8',
-    );
-    const gate = src.split('\n').find((l) => l.includes('const dialog ='));
-    expect(gate).toBeDefined();
-    expect(gate).toContain('hasMenu(');
-    expect(gate).not.toContain("paneState(pane) === 'menu'");
+    expect(f.sent).toHaveLength(1);
+    expect(f.sent[0]!.title).toBe('❓ Question');
   });
 });
 
