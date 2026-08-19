@@ -16,7 +16,13 @@ set -euo pipefail
 HOOK_CMD='bash "$HOME/.cc-sessions/session-hook.sh"'
 # Events that get a matcher-less managed entry. PreToolUse is handled
 # separately below because it alone carries matcher "*".
-EVENTS_JSON='["UserPromptSubmit","PostToolUse","PermissionRequest","Stop","SubagentStart","SubagentStop","PreCompact","PostCompact"]'
+#
+# This list and session-hook.sh's `case "$event"` arms are the same set written
+# twice, and they DRIFTED: the hook grew a SessionStart arm (F1) that was never
+# added here, so it was dead code on the fleet for months (D-B8-10). The pairing
+# is now a mechanism, not a convention — install-session-hooks.test.ts derives
+# the expected set from the hook's own case block and fails on any divergence.
+EVENTS_JSON='["UserPromptSubmit","PostToolUse","PermissionRequest","Stop","SubagentStart","SubagentStop","PreCompact","PostCompact","SessionStart"]'
 TS=$(date +%Y%m%d-%H%M%S)
 BACKUPS="$HOME/ccrc-backups/$TS"
 
