@@ -106,6 +106,24 @@ CCRC_HERE="$(cd "${CCRC_HERE%/*}" && pwd)"
 BOX_STAMP_FILE="$HOME/.ccrc/build.json"
 BOX_ENV_FILE="$HOME/.ccrc/ccrc.env"
 
+# ── WHERE A BOX KEEPS THE SHIPPED TREE ────────────────────────────────────
+# `~/ccrc` is not this file's choice and is not a default: it is the layout
+# every sibling contract in this repository already assumes. Both deploy lanes
+# rsync into it (`deploy.sh:343,686`), the launcher on PATH execs
+# `$HOME/ccrc/ccd/ccrc`, `_dr_pkg_candidates` reads the shipped node floor at
+# `$CCRC_HERE/../{server,agent}/package.json`, and `_check_node`'s remedy prints
+# that path to operators. `install` converges TO that layout rather than
+# inventing one.
+#
+# Spelled once, for the reason the two files above are: `_inst_tree` PLACES the
+# tree here and `_inst_bins`/`_inst_files` install OUT of it, so a tree placed
+# at one path and read from another is an install that ships bytes nobody put
+# there. The single place the path is written out again is the launcher heredoc
+# in `_inst_shim`, and that is DATA — bytes destined for a file on the box,
+# pinned equal to `deploy.sh`'s copy of the same launcher — not a path this
+# file resolves.
+BOX_TREE_DIR="$HOME/ccrc"
+
 # How long the ONE network call in this file (`GET /api/fleet/health`) may take.
 # Overridable for the reason `deploy/verify-service.sh:56-62` makes its
 # settle/window knobs overridable, and `ccrc-doctor-checks` makes
@@ -1590,6 +1608,7 @@ cmd_install() {
   _inst_roster
   _inst_accounts_sh
   _inst_env
+  _inst_tree
 }
 
 # The two facts every later step is computed FROM, printed before any of them
@@ -1691,6 +1710,67 @@ _inst_env() {   # seed-once, exactly like the roster: the env file is the box's
     printf '%s\n' "CCRC_PROJECTS_ROOT=$HOME/projects"
   } > "$tmp" && mv -f "$tmp" "$dest" || { rm -f "$tmp"; _ccrc_die "writing $dest failed"; }
   echo "install: ccrc.env: written (localhost, local fleet mode)"
+}
+
+_inst_tree() {   # place the shipped tree at ~/ccrc — the layout every sibling
+  # contract assumes (shim target, _dr_pkg_candidates, BASH_SOURCE siblings; see
+  # BOX_TREE_DIR's own header). Runs BEFORE the executables so the launcher's
+  # target exists at the moment the launcher lands on PATH.
+  #
+  # ── THE DIVERGENCE FROM deploy.sh, STATED ONCE ─────────────────────────
+  # `deploy.sh` EXCLUDES `dist` from its rsync and runs `npm ci && npm run
+  # build` on the box, because it ships SOURCES across boxes and the box is the
+  # only place that can build them. `install` IS the box: the checkout it runs
+  # from already holds the build (that is what the two preflights below
+  # measure), so the tree ships WITH `dist`/`dist-pwa` and the only thing left
+  # to fetch is the runtime dependency set, which is not in git at all. Hence
+  # `npm ci --omit=dev` and no build step — and hence the preflights, because
+  # the artifact deploy would have built on the box is now something this run
+  # can only inherit or refuse.
+  #
+  # TWO PREFLIGHTS AND TWO SENTENCES. A missing server build and a missing PWA
+  # bundle are two different builds with two different remedies (`npm run build`
+  # in `server/` vs in `pwa/`); collapsing them into one "the tree is not built"
+  # is the overloaded seam this file's header bans.
+  local src dest="$BOX_TREE_DIR" at
+  src="$(cd "$CCRC_HERE/.." && pwd -P)" || _ccrc_die "cannot resolve the running tree"
+  [ -f "$src/server/dist/server/src/index.js" ] \
+    || _ccrc_die "no server build at $src/server/dist — build first: bash install.sh (or npm run build in server/ and pwa/)"
+  [ -f "$src/server/dist-pwa/index.html" ] \
+    || _ccrc_die "no PWA bundle at $src/server/dist-pwa — build first: bash install.sh (or npm run build in pwa/)"
+  # THE SELF-COPY GUARD, ON PHYSICAL PATHS. On a box a deploy has already
+  # touched — and on every re-run of this verb — `ccrc` IS `~/ccrc/ccd/ccrc`,
+  # so source and destination are one directory. `rsync -a --delete X X/` is not
+  # a no-op there: it copies the tree INTO ITSELF (`~/ccrc/ccrc/…`) and then
+  # runs a `--delete` pass across the live tree it is reading from. `pwd -P` on
+  # both sides because the two spellings arrive by different routes ($HOME, and
+  # `$CCRC_HERE`'s parent from `${BASH_SOURCE[0]}`): a symlinked component in
+  # either — /home -> /export/home is the classic — makes a textual comparison
+  # answer "different" for one directory, which is the exact case that must
+  # not reach rsync.
+  at="$dest"
+  [ -d "$dest" ] && at="$(cd "$dest" && pwd -P)"
+  if [ "$src" = "$at" ]; then
+    echo "install: tree: already running from \$HOME/ccrc"
+  else
+    command -v rsync >/dev/null 2>&1 || _ccrc_die "rsync is required to place the tree — sudo apt install rsync"
+    mkdir -p "$dest" || _ccrc_die "cannot create $dest"
+    # The excludes are deploy.sh's (`:319-326`) minus `dist`, and they are not
+    # tidiness: `*.env` and `ccrc-mail.token` are gitignored files holding LIVE
+    # TOKENS, which `-a` would carry into a second, unmanaged copy at whatever
+    # mode the checkout has. `node_modules` is excluded in both directions —
+    # rsync does not delete what it was told to ignore, so the runtime deps
+    # installed below survive every later `--delete` run instead of being
+    # destroyed and refetched.
+    rsync -a --delete \
+      --exclude node_modules --exclude .git --exclude '*.env' --exclude ccrc-mail.token \
+      "$src/server" "$src/agent" "$src/shared" "$src/deploy" "$src/ccd" "$dest/" \
+      || _ccrc_die "placing the tree at $dest failed"
+    echo "install: tree: placed at \$HOME/ccrc"
+  fi
+  ( cd "$dest/server" && npm ci --omit=dev --no-audit --no-fund >/dev/null 2>&1 ) \
+    || _ccrc_die "npm ci in \$HOME/ccrc/server failed — the service cannot start without runtime deps"
+  echo "install: tree: server runtime deps in place"
 }
 
 # Guard so the script can be `source`d (the way server/test/ccd-clip.test.ts:32

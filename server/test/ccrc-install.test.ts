@@ -46,7 +46,7 @@
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import {
-  copyFileSync, mkdirSync, readFileSync, writeFileSync, existsSync, statSync,
+  copyFileSync, cpSync, mkdirSync, readFileSync, writeFileSync, existsSync, statSync,
   chmodSync, readdirSync, rmSync, symlinkSync,
 } from 'node:fs';
 import path, { join, dirname } from 'node:path';
@@ -72,9 +72,19 @@ function realPath(name: string): string {
  *  test is about. */
 const BASH = realPath('bash');
 
-/** Every file the fixture tree is built from, repo-relative. Tasks 7-9 add
- *  lines here (units, `session-hook.sh`, `tmux.conf`, `deploy/notify.sh` …) as
- *  the steps that read them land. */
+/** The real `rsync`, resolved once. Module scope, and a hard throw when the
+ *  box has none, is the honest failure: `_inst_tree` REFUSES BY NAME without
+ *  rsync, so a box that cannot run rsync cannot run `ccrc install` at all and
+ *  there is no version of this suite that could still be measuring the verb. */
+const RSYNC = realPath('rsync');
+
+/** Every path the fixture tree is built from, repo-relative. Tasks 8-9 add
+ *  lines here (the unit files) as the steps that read them land.
+ *
+ *  A DIRECTORY entry is copied whole; every other entry is one file. The
+ *  recursive branch exists because `deploy/systemd/` is four drop-ins under
+ *  three directories and listing them one by one is a fixture that goes stale
+ *  the moment a fifth lands (Task 6 review, Minor 5). */
 const TREE_FILES = [
   // The four executables that ship in `ccd/` and resolve each other through
   // `CCRC_HERE`: `ccrc` itself, plus the check table, the wrapper-shape
@@ -114,27 +124,71 @@ const TREE_FILES = [
   // make that task's first run fail for a fixture reason.
   'server/package.json',
   'agent/package.json',
+  // ── Task 7: what `_inst_bins` and `_inst_files` place ──────────────────
+  // `ccd` itself is 570 KB and is copied whole rather than stubbed, because
+  // the assertion it serves ("`~/.local/bin/ccd` is a byte copy of the tree's
+  // ccd") is satisfied by any two identical stubs — while the things that
+  // actually go wrong are installing a symlink, a truncated copy, or the
+  // wrong file, all of which a real payload catches and a 12-byte one does
+  // not.
+  'ccd/ccd',
+  'ccd/ccd-cap-scopes',
+  'ccd/session-hook.sh',
+  'ccd/install-session-hooks.sh',
+  'ccd/tmux.conf',
+  'ccd/statusline-command.sh',
+  'deploy/notify.sh',
+  // The first DIRECTORY entry. Nothing in Task 7 reads it — `_inst_tree`
+  // copies it as part of `deploy/`, and Task 8's `_inst_units` installs the
+  // drop-ins out of it. It is here now so the recursive branch above ships
+  // with a user rather than as untested fixture machinery.
+  'deploy/systemd',
 ];
+
+/** The two BUILD ARTIFACTS `_inst_tree` refuses to place a tree without. They
+ *  are build output, not repository files, so the fixture WRITES them instead
+ *  of copying them — and it writes placeholders, because the step measures
+ *  that the path EXISTS (a box cannot run a server it never built) and a real
+ *  bundle would make every test in this file slower for nothing. The tests
+ *  that want the refusal delete one. */
+const TREE_STUBS: Record<string, string> = {
+  'server/dist/server/src/index.js': '// fixture: stands in for the built server\n',
+  'server/dist-pwa/index.html': '<!doctype html><title>fixture PWA</title>\n',
+};
 
 /** `<home>/checkout` — the shipped tree this box installs FROM. */
 const treeRoot = (home: string): string => join(home, 'checkout');
 /** The `ccrc` a test runs: the one INSIDE the fixture tree, so `CCRC_HERE`
  *  resolves to the fixture's `ccd/` and every sibling it reaches is a fixture
  *  file. */
-const ccrcIn = (home: string): string => join(treeRoot(home), 'ccd', 'ccrc');
+const ccrcIn = (root: string): string => join(root, 'ccd', 'ccrc');
 const treeFile = (home: string, rel: string): string => join(treeRoot(home), rel);
+/** `<home>/ccrc` — where `_inst_tree` PLACES the tree, and the layout the PATH
+ *  shim, `_dr_pkg_candidates` and both deploy lanes already assume. */
+const placed = (home: string, ...rel: string[]): string => join(home, 'ccrc', ...rel);
 
-/** Builds `<home>/checkout` out of `TREE_FILES`, preserving each file's mode
- *  (the four `ccd/` scripts are 0755 in the repository and one of them is
- *  `exec`d by `cmd_adopt`). Returns the tree root. */
-export function installFixtureTree(home: string): string {
+/** Builds a fixture tree out of `TREE_FILES` + `TREE_STUBS`, preserving each
+ *  file's mode (the `ccd/` scripts are 0755 in the repository and one of them
+ *  is `exec`d by `cmd_adopt`). `sub` is the directory under `$HOME` it lands
+ *  in: `checkout` for the ordinary case, `ccrc` for the one test that runs the
+ *  verb from the tree it would otherwise be copying onto itself. Returns the
+ *  tree root. */
+export function installFixtureTree(home: string, sub = 'checkout'): string {
+  const root = join(home, sub);
   for (const rel of TREE_FILES) {
-    const dest = treeFile(home, rel);
+    const src = join(REPO, rel);
+    const dest = join(root, rel);
     mkdirSync(dirname(dest), { recursive: true });
-    copyFileSync(join(REPO, rel), dest);
-    chmodSync(dest, statSync(join(REPO, rel)).mode & 0o777);
+    if (statSync(src).isDirectory()) { cpSync(src, dest, { recursive: true }); continue; }
+    copyFileSync(src, dest);
+    chmodSync(dest, statSync(src).mode & 0o777);
   }
-  return treeRoot(home);
+  for (const [rel, body] of Object.entries(TREE_STUBS)) {
+    const dest = join(root, rel);
+    mkdirSync(dirname(dest), { recursive: true });
+    writeFileSync(dest, body);
+  }
+  return root;
 }
 
 /** A box with a shipped tree on it and nothing else — no `~/.ccrc`, no
@@ -152,12 +206,16 @@ interface Result { code: number; stdout: string; stderr: string }
  *  `CCRC_*` variable this verb learns to read goes in the delete list below,
  *  or a maintainer with it exported in their shell gets a different install
  *  than the fixture asked for. */
-function ccrcEnv(home: string): NodeJS.ProcessEnv {
+function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   const env = ghContainedEnv(home, { ...process.env, HOME: home });
+  const plant = (name: string, body: string): void => {
+    if (omit.includes(name)) { rmSync(join(home, '.local', 'bin', name), { force: true }); return; }
+    writeFileSync(join(home, '.local', 'bin', name), body, { mode: 0o755 });
+  };
   const poison = (name: string, says: string): void =>
-    writeFileSync(join(home, '.local', 'bin', name),
+    plant(name,
       `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/${name}-poison"\n`
-      + `echo "${says}" >&2\nexit 97\n`, { mode: 0o755 });
+      + `echo "${says}" >&2\nexit 97\n`);
   poison('curl', 'ccrc tests must never reach a real server');
   poison('systemctl', 'ccrc tests must never drive this box\'s real systemd');
   // `loginctl` joins the pair here (it is not in ccrc-cli's runner) because
@@ -165,6 +223,23 @@ function ccrcEnv(home: string): NodeJS.ProcessEnv {
   // production box's logind, which the poison must be in front of before the
   // step that calls it exists, not after.
   poison('loginctl', 'ccrc tests must never touch this box\'s real logind');
+  // ── the two tools `_inst_tree` shells out to, contained differently ──────
+  // `npm` is a POISON in the strict sense: `npm ci` in a fixture would reach
+  // the real registry, take minutes, and install a dependency tree into a
+  // directory about to be deleted. The stub records its argv AND its cwd — the
+  // step's `cd "$dest/server"` is half of what it promises — and makes the
+  // `node_modules` a real run would, so the next run's `rsync --delete` has
+  // something to (not) destroy.
+  plant('npm',
+    '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/npm-argv"\n'
+    + 'printf \'%s\\n\' "$PWD" >> "$HOME/npm-cwd"\nmkdir -p node_modules\nexit 0\n');
+  // `rsync` is a RECORDER, not a poison: it logs its argv and then EXECS THE
+  // REAL BINARY. Both halves are load-bearing. Asserting on argv alone passes
+  // against a step that composes a perfect command line and copies nothing;
+  // asserting on the placed tree alone cannot tell "the excludes are spelled
+  // correctly" from "the fixture happened to hold nothing they match".
+  plant('rsync',
+    `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/rsync-argv"\nexec ${RSYNC} "$@"\n`);
   for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT']) delete env[k];
   return env;
 }
@@ -177,27 +252,35 @@ function ccrcEnv(home: string): NodeJS.ProcessEnv {
  *  on the reviewer's `umask 0002` box, i.e. by accident of whose shell ran it).
  *  Under a hostile mask the mode can only come from the `chmod`. */
 function runInstall(home: string, args: string[] = ['install'],
-  extraEnv: NodeJS.ProcessEnv = {}, opts: { umask?: string } = {}): Result {
-  const env = { ...ccrcEnv(home), ...extraEnv };
+  extraEnv: NodeJS.ProcessEnv = {},
+  opts: { umask?: string; omit?: string[]; from?: string } = {}): Result {
+  const env = { ...ccrcEnv(home, opts.omit ?? []), ...extraEnv };
+  const ccrc = opts.from ?? ccrcIn(treeRoot(home));
   const r = opts.umask === undefined
-    ? spawnSync(BASH, [ccrcIn(home), ...args], { env, encoding: 'utf8' })
+    ? spawnSync(BASH, [ccrc, ...args], { env, encoding: 'utf8' })
     : spawnSync(BASH, ['-c', `umask ${opts.umask}; exec ${BASH} "$0" "$@"`,
-      ccrcIn(home), ...args], { env, encoding: 'utf8' });
+      ccrc, ...args], { env, encoding: 'utf8' });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
-/** A PATH with everything this verb shells out to EXCEPT `node`: the poison
- *  directory at the head (so `gh`/`curl`/`systemctl`/`loginctl` stay contained)
- *  then a directory of symlinks to the real coreutils the steps use. Removing
- *  a system directory wholesale would not model this — on most boxes `node`
- *  sits beside `cp` and `mkdir`, and a box missing THOSE is not the condition
- *  under test. This is the doctor suite's `stub-bin` + `linkReal` idiom, used
- *  here to model exactly one absence. */
-function nodelessPath(home: string): string {
-  const d = join(home, 'nodeless-bin');
+/** A PATH with everything this verb shells out to EXCEPT one named tool: the
+ *  poison directory at the head (so `gh`/`curl`/`systemctl`/`loginctl` stay
+ *  contained) then a directory of symlinks to the real binaries the steps use.
+ *  Removing a system directory wholesale would not model this — on most boxes
+ *  `node` sits beside `cp` and `mkdir`, and a box missing THOSE is not the
+ *  condition under test. This is the doctor suite's `stub-bin` + `linkReal`
+ *  idiom, used here to model exactly one absence.
+ *
+ *  A tool the fixture itself plants into `.local/bin` (`npm`, `rsync`) must
+ *  ALSO be named in `runInstall`'s `omit`, or the runner re-plants it at the
+ *  head of this very PATH and the absence never happens. */
+function pathWithout(home: string, missing: string): string {
+  const d = join(home, `no-${missing}-bin`);
   mkdirSync(d, { recursive: true });
-  for (const b of ['mkdir', 'cp', 'mv', 'rm', 'cat', 'chmod']) {
-    if (!existsSync(join(d, b))) symlinkSync(realPath(b), join(d, b));
+  for (const b of ['mkdir', 'cp', 'mv', 'rm', 'cat', 'chmod', 'cmp', 'date',
+    'node', 'git', 'npm', 'rsync']) {
+    if (b === missing || existsSync(join(d, b))) continue;
+    symlinkSync(realPath(b), join(d, b));
   }
   return `${join(home, '.local', 'bin')}:${d}`;
 }
@@ -213,16 +296,202 @@ function preexisting(home: string, name: string, text: string): void {
   writeFileSync(dotCcrc(home, name), text);
 }
 
-/** Every `<file>.tmp.<pid>` left under `~/.ccrc`. Each step writes through a
- *  temp sibling and renames; a leftover means a step died between the two, and
- *  nothing on the box would ever clean it up. */
+/** Every directory an install step writes a temp sibling into. It is the list
+ *  of destinations, not a guess: `_inst_atomic` stages beside its TARGET, so a
+ *  step that installs into a directory absent from this list leaks strays no
+ *  assertion here can see. `''` is `$HOME` itself, which `~/.tmux.conf` makes a
+ *  destination directory. Task 8 adds `.config/systemd/user`. */
+const STRAY_DIRS = ['', '.ccrc', '.local/bin', '.cc-sessions', '.claude', 'ccrc'];
+
+/** Every `<file>.tmp.<pid>` left anywhere a step writes. Each one writes
+ *  through a temp sibling and renames; a leftover means a step died between the
+ *  two — and a stray under `~/.local/bin` is worse than untidy, because that
+ *  directory is ON PATH and `_inst_atomic` copies the source's mode onto the
+ *  temp before the rename. */
 const strays = (home: string): string[] => {
-  const d = join(home, '.ccrc');
-  return existsSync(d) ? readdirSync(d).filter((f) => /\.tmp\./.test(f)) : [];
+  const out: string[] = [];
+  for (const rel of STRAY_DIRS) {
+    const d = join(home, rel);
+    if (!existsSync(d)) continue;
+    for (const f of readdirSync(d)) if (/\.tmp\./.test(f)) out.push(join(rel, f));
+  }
+  return out;
 };
 
 const DEFAULT_SEED = read(join(REPO, 'deploy', 'accounts.default.json'));
 const MIGRATION_ROSTER = read(join(REPO, 'deploy', 'accounts.migration.json'));
+
+/** Turns a fixture tree into a REAL one-commit git repository, which is what
+ *  `_inst_stamp` measures. A fake `.git` directory would not do: the step runs
+ *  `git rev-parse HEAD` and `git diff --quiet`, so the fixture has to be
+ *  something git itself answers for. Identity comes from the environment
+ *  rather than `git config`, so a box whose user has no global identity (CI)
+ *  still commits. */
+function gitInit(root: string): string {
+  const env = {
+    ...process.env,
+    GIT_AUTHOR_NAME: 'ccrc fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
+    GIT_COMMITTER_NAME: 'ccrc fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid',
+    // A commit template or hooks path from the ambient config would make this
+    // fixture depend on whose box runs the suite.
+    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null',
+  };
+  const git = (...args: string[]): void => {
+    const r = spawnSync('git', ['-C', root, ...args], { env, encoding: 'utf8' });
+    if (r.status !== 0) throw new Error(`fixture git ${args.join(' ')} failed: ${r.stderr}`);
+  };
+  git('init', '-q', '-b', 'fixture-branch');
+  git('add', '-A');
+  git('commit', '-q', '-m', 'fixture tree');
+  return spawnSync('git', ['-C', root, 'rev-parse', 'HEAD'], { env, encoding: 'utf8' })
+    .stdout.trim();
+}
+
+describe('ccrc install: the shipped tree lands at $HOME/ccrc', () => {
+  // WHY THE TREE IS COPIED AT ALL, since the verb is already running out of
+  // one: `~/ccrc` is the layout every sibling contract assumes — the PATH shim
+  // execs `~/ccrc/ccd/ccrc`, `_dr_pkg_candidates` reads the node floor at
+  // `$CCRC_HERE/../{server,agent}/package.json`, and both deploy lanes rsync
+  // into exactly this directory. An install that left the tree in a checkout
+  // would leave a box that works only as long as nobody deletes the clone.
+  it('refuses BY ARTIFACT when the checkout carries no server build', () => {
+    // The refusal names the artifact and the command that makes it. "install
+    // failed" would send an operator to read this script; "no server build at
+    // <path>" sends them to `bash install.sh`, which is the whole distance
+    // between the two messages.
+    const home = freshBox('ccrc-install-nodist-');
+    rmSync(treeFile(home, 'server/dist/server/src/index.js'));
+    const r = runInstall(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(
+      /^ccrc: no server build at .*\/checkout\/server\/dist — build first: bash install\.sh \(or npm run build in server\/ and pwa\/\)$/m);
+    // BEFORE anything moved: the preflight is worth nothing if it fires after
+    // the copy it is meant to gate.
+    expect(existsSync(placed(home)), 'the tree was placed before it was checked').toBe(false);
+    expect(existsSync(join(home, 'rsync-argv')), 'rsync ran anyway').toBe(false);
+  });
+
+  it('refuses BY ARTIFACT when the PWA bundle is missing — a different sentence', () => {
+    // Two artifacts, two builds, two remedies (`npm run build` in server/ vs
+    // in pwa/). Collapsing them into one "the tree is not built" is the
+    // overloaded-seam mistake this file's own header bans.
+    const home = freshBox('ccrc-install-nopwa-');
+    rmSync(treeFile(home, 'server/dist-pwa/index.html'));
+    const r = runInstall(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(
+      /^ccrc: no PWA bundle at .*\/checkout\/server\/dist-pwa — build first: bash install\.sh \(or npm run build in pwa\/\)$/m);
+    expect(existsSync(placed(home))).toBe(false);
+  });
+
+  it('places the five directories a box runs out of, with the builds inside them', () => {
+    const home = freshBox('ccrc-install-tree-placed-');
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    for (const d of ['server', 'agent', 'shared', 'deploy', 'ccd']) {
+      expect(existsSync(placed(home, d)), `${d} did not reach $HOME/ccrc`).toBe(true);
+    }
+    // The shim's target, by the path the shim spells.
+    expect(existsSync(placed(home, 'ccd', 'ccrc'))).toBe(true);
+    // dist and dist-pwa are INCLUDED, and that is the deliberate divergence
+    // from `deploy.sh` (which excludes `dist` and builds on the box): install
+    // IS the box, so it ships the build the checkout already made.
+    expect(existsSync(placed(home, 'server', 'dist', 'server', 'src', 'index.js'))).toBe(true);
+    expect(read(placed(home, 'server', 'dist-pwa', 'index.html')))
+      .toBe(TREE_STUBS['server/dist-pwa/index.html']);
+    expect(r.stdout).toMatch(/^install: tree: placed at \$HOME\/ccrc$/m);
+  });
+
+  it('leaves node_modules, .git, env files and the mail token in the checkout', () => {
+    // Every one of these is a real thing a checkout holds at install time. The
+    // two secrets are the sharp ones: `deploy/ccrc.env` and
+    // `deploy/ccrc-mail.token` are gitignored files carrying live tokens, and
+    // rsync's `-a` would copy them at whatever mode the checkout has (0644
+    // under a plain umask) into a second, unmanaged location — deploy.sh's own
+    // excludes exist for exactly that (`:319-326`).
+    const home = freshBox('ccrc-install-excludes-');
+    mkdirSync(treeFile(home, 'server/node_modules/leftpad'), { recursive: true });
+    writeFileSync(treeFile(home, 'server/node_modules/leftpad/index.js'), 'module.exports = 1\n');
+    writeFileSync(treeFile(home, 'deploy/ccrc.env'), 'CCRC_AGENT_TOKEN=live-secret\n');
+    writeFileSync(treeFile(home, 'deploy/ccrc-mail.token'), 'live-shared-secret\n');
+    gitInit(treeRoot(home));
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(placed(home, 'server', 'node_modules', 'leftpad'))).toBe(false);
+    expect(existsSync(placed(home, '.git')), 'the placed tree is a git repository').toBe(false);
+    expect(existsSync(placed(home, 'deploy', 'ccrc.env'))).toBe(false);
+    expect(existsSync(placed(home, 'deploy', 'ccrc-mail.token'))).toBe(false);
+    // …and the excludes were spelled to rsync, not achieved by the fixture
+    // being empty of them: the recorder saw the flags on the real command line.
+    const argv = read(join(home, 'rsync-argv'));
+    for (const ex of ['--exclude node_modules', '--exclude .git',
+      "--exclude *.env", '--exclude ccrc-mail.token']) {
+      expect(argv).toContain(ex);
+    }
+  });
+
+  it('installs the server runtime deps INTO THE PLACED TREE, production only', () => {
+    // `npm ci --omit=dev` and not `npm run build`: the divergence from deploy
+    // recorded in the step's own comment. deploy builds on the box because it
+    // ships sources across boxes; install IS the box, so the build is already
+    // in the tree it just placed and only the runtime dependencies are missing.
+    const home = freshBox('ccrc-install-npm-');
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(read(join(home, 'npm-argv')).trim()).toBe('ci --omit=dev --no-audit --no-fund');
+    // In `$HOME/ccrc/server`, never in the checkout: a box whose service boots
+    // out of `~/ccrc` needs the deps THERE.
+    expect(read(join(home, 'npm-cwd')).trim()).toBe(placed(home, 'server'));
+    expect(existsSync(placed(home, 'server', 'node_modules'))).toBe(true);
+    expect(r.stdout).toMatch(/^install: tree: server runtime deps in place$/m);
+  });
+
+  it('does not copy the tree onto itself when it IS $HOME/ccrc', () => {
+    // The box a deploy already touched, and the box a second `ccrc install`
+    // runs on: `ccrc` is at `~/ccrc/ccd/ccrc`, so source and destination are
+    // one directory. `rsync -a --delete X X/` is not a no-op — it is a copy of
+    // the tree INTO ITSELF (`~/ccrc/ccrc/…`) whose `--delete` pass then runs
+    // over the live tree. The guard is compared on RESOLVED paths, and the
+    // assertion is that rsync was never invoked at all.
+    const home = mkTmp('ccrc-install-selfcopy-');
+    const root = installFixtureTree(home, 'ccrc');
+    const r = runInstall(home, ['install'], {}, { from: ccrcIn(root) });
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(home, 'rsync-argv')), 'rsync was invoked on the tree itself').toBe(false);
+    expect(r.stdout).toMatch(/^install: tree: already running from \$HOME\/ccrc$/m);
+    expect(existsSync(placed(home, 'ccrc')), 'the tree was copied inside itself').toBe(false);
+    // …and the step still finishes its other half: the deps are installed
+    // whether or not the tree had to move.
+    expect(read(join(home, 'npm-cwd')).trim()).toBe(placed(home, 'server'));
+  });
+
+  it('refuses BY NAME when rsync is not on this box', () => {
+    // The one tool this verb cannot substitute for. Without a by-name refusal
+    // the failure arrives as `rsync: command not found` on stderr plus
+    // "placing the tree at … failed", which names neither the missing package
+    // nor the fix.
+    const home = freshBox('ccrc-install-norsync-');
+    const r = runInstall(home, ['install'], { PATH: pathWithout(home, 'rsync') },
+      { omit: ['rsync'] });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: rsync is required to place the tree — sudo apt install rsync$/m);
+    expect(existsSync(placed(home)), 'a half-made $HOME/ccrc was left behind').toBe(false);
+  });
+
+  it('a second run keeps the runtime deps the first one installed', () => {
+    // `--delete` with `--exclude node_modules` protects the excluded path on
+    // the RECEIVER (rsync does not delete what it was told to ignore, absent
+    // `--delete-excluded`). Drop that exclude and every re-install wipes
+    // `~/ccrc/server/node_modules` — on the live box, that is a server with no
+    // runtime deps for however long the reinstall takes.
+    const home = freshBox('ccrc-install-deps-survive-');
+    expect(runInstall(home).code).toBe(0);
+    writeFileSync(placed(home, 'server', 'node_modules', 'marker'), 'installed by run 1\n');
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(placed(home, 'server', 'node_modules', 'marker'))).toBe(true);
+  });
+});
 
 describe('ccrc install: the fixture tree', () => {
   it('is the one the generator needs — proven by running it inside the fixture', () => {
@@ -454,7 +723,7 @@ describe('ccrc install: a box with no node', () => {
   // already refuses in exactly this shape, ten lines up.
   it('refuses by name, before touching anything, and does not blame the config', () => {
     const home = freshBox('ccrc-install-no-node-');
-    const r = runInstall(home, ['install'], { PATH: nodelessPath(home) });
+    const r = runInstall(home, ['install'], { PATH: pathWithout(home, 'node') });
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/^ccrc: node is required by 'ccrc install'/m);
     // The half that matters: nothing in the refusal points at the operator's
@@ -476,7 +745,7 @@ describe('ccrc install: a box with no node', () => {
     // perfectly valid.
     const home = freshBox('ccrc-install-no-node-seeded-');
     preexisting(home, 'accounts.json', MIGRATION_ROSTER);
-    const r = runInstall(home, ['install'], { PATH: nodelessPath(home) });
+    const r = runInstall(home, ['install'], { PATH: pathWithout(home, 'node') });
     expect(r.code).toBe(1);
     expect(r.stderr).not.toMatch(/move it aside/);
     expect(read(dotCcrc(home, 'accounts.json'))).toBe(MIGRATION_ROSTER);
