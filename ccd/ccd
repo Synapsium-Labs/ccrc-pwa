@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=5681b1e4b62822d46b050e354cd64aeb980fc9bd93d253315d9b353220d6e158
+# ccrc:generated 1 sha256=27c9aa2454354be24c72659e5a62292abf04bf8885848751c8b14feb92c4b883
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
 set -uo pipefail
@@ -7771,7 +7771,31 @@ _tmux_new_session() {   # argv for `tmux new-session` -> runs it, PLACING the se
   # `command -v` and not `_have_systemctl`: this asks about systemd-run
   # specifically, and the single-box OSS story is a box with neither.
   if ! tmux list-sessions >/dev/null 2>&1 && command -v systemd-run >/dev/null 2>&1; then
-    scope=(systemd-run --user --scope --quiet --collect --unit=ccrc-tmux-server)
+    # --slice IS NOT OPTIONAL, and it is the correction to this mechanism's
+    # own first version (D-B8-11). A user scope with no `--slice` defaults to
+    # `app.slice`; the fleet's aggregate memory ceiling
+    # (deploy/systemd/app-claude-session.slice.d/limits.conf, MemoryHigh=20G /
+    # MemoryMax=24G) hangs one level in, on `app-claude\x2dsession.slice`.
+    # Ubuntu's tmux is built with systemd support: it mints a transient
+    # `tmux-spawn-<uuid>.scope` per pane and DERIVES that scope's slice from
+    # its own, so placing the server placed all seventeen panes with it. This
+    # mechanism shipped to protect the deploy sweep's blast radius and, unseen,
+    # carried the whole fleet's memory out of its ceiling.
+    #
+    # Measured on the fleet host 2026-08-19, after the reboot that verified
+    # D-B8-9: `app-claude\x2dsession.slice` held 66 MB under a 24G cap — the
+    # supervise loops and nothing else — while `app.slice` held 17.6 GB
+    # uncapped. Proved causal the same day on an isolated socket: a server
+    # started inside the slice mints its pane scopes in that same slice.
+    #
+    # Named ABSOLUTELY, never derived from the caller: `_spawn_start` is
+    # reached from cmd_supervise's unit, from an interactive shell, and from a
+    # transient `systemd-run` — "wherever the creator happened to be" is the
+    # defect this whole function exists to remove. The slice needs no unit
+    # file (systemd instantiates one on demand); an install that skipped the
+    # drop-in gets an uncapped slice, which is exactly what it has today.
+    scope=(systemd-run --user --scope --quiet --collect --unit=ccrc-tmux-server
+           --slice='app-claude\x2dsession.slice')
   fi
   if [[ ${#scope[@]} -gt 0 ]]; then
     # systemd-run may still refuse (no D-Bus, no user manager, or a scope of

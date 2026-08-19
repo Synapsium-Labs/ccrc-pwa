@@ -13744,3 +13744,62 @@ seam were tested, thoroughly, in isolation, and the defect lived in the agreemen
 neither test could see. *A list enumerated twice is a seam, and a seam with a test on each side is
 still untested.* The one artifact that would have caught it is the one now added — a test that derives
 one copy from the other.
+
+### D-B8-11 — placing the tmux server moved the whole fleet out of its memory ceiling
+
+**Found by asking whether tmux is the right mechanism at all**, on 2026-08-19, ~6h after D-B8-9 was
+verified. The audit was a design question; the answer came from measuring the live box, and what the
+measurement actually found was a regression that D-B8-9's own verification could not have seen,
+because it asked only "is the server in `ccrc-tmux-server.scope`?" and the answer was yes.
+
+Ubuntu's tmux (3.4, linked against `libsystemd`) mints a transient `tmux-spawn-<uuid>.scope` for every
+pane and derives that scope's **slice** from its own placement. `systemd-run --user --scope` with no
+`--slice` defaults to `app.slice`. The fleet's aggregate memory ceiling —
+`deploy/systemd/app-claude-session.slice.d/limits.conf`, `MemoryHigh=20G` / `MemoryMax=24G`, added
+2026-07-28 after one pane peaked at 24G and stalled the fleet ~25 minutes — hangs one level in, on
+`app-claude\x2dsession.slice`. So placing the server placed all seventeen panes with it, out of the
+ceiling. Measured:
+
+```
+app-claude\x2dsession.slice      66 MB   cap 20G/24G   <- the supervise loops, and nothing else
+app.slice                      17.6 GB   cap infinity  <- all 17 panes
+17/17 tmux-spawn-*.scope       Slice=app.slice
+```
+
+Proved causal the same day on an isolated socket (the `-L probe` shape `_tmux_new_session`'s own
+comment records, run against a scope created inside the slice): the private server landed in
+`app-claude\x2dsession.slice/ccrc-slicetest-1.scope` and **its pane scope landed in that same slice**.
+The live fleet was untouched by the probe — default-socket server pid 2056 up, 17 pane scopes intact.
+
+**What survived and what did not.** `ccd-cap-scopes` kept applying its per-scope 12G caps throughout,
+because 2026-08-10 had already taught it to address scopes by unit name rather than by cgroup path —
+the one piece of the guardrail that did not have to change. Only the aggregate stopped covering
+anything. That distinction matters: 12G × 3 sessions overruns a 30G box, which is the precise failure
+an aggregate limit exists to stop, and the per-scope caps read green while it was unguarded.
+
+*Fixed* by naming the slice explicitly in the scope argv. Named **absolutely**, never derived from the
+caller: `_spawn_start` is reached from `cmd_supervise`'s unit, from an interactive shell, and from a
+transient `systemd-run`, and "wherever the creator happened to be" is the defect `_tmux_new_session`
+exists to remove. The slice needs no unit file (systemd instantiates one on demand), so a box that
+never installed the drop-in is no worse off than today.
+
+**Guard.** `ccd-tmux-server.test.ts` derives the expected slice name from the deploy tree's drop-in
+directory, applying systemd's `-` → `\x2d` escape, and asserts the argv names it — so the escape and
+the drop-in cannot drift apart, and the readable repo path stays the single source. Mutation-measured:
+deleting `--slice` → **1 red**; pointing it at `app.slice` (the bug's live state) → **1 red**; using
+the *unescaped* `app-claude-session.slice`, the realistic typo that makes systemd silently never read
+the drop-in → **1 red**; restored → **17 passed**.
+
+Two comments were corrected rather than deleted. `deploy.sh`'s sweep refusal asserted "that server
+sits in a claude-session@ cgroup", which stopped being true at D-B8-7 — it now says the guard is for
+the documented *fallback* placement, and says explicitly not to delete it because a healthy box makes
+it look unnecessary. `ccd-cap-scopes`' layout note gains the second relocation, since its own text had
+predicted exactly this ("this stays correct if ccd ever moves sessions into a different slice again").
+
+**The transferable lesson is about the shape of a fix's blast radius.** D-B8-9's lesson was test shape;
+D-B8-10's was that a list enumerated twice is an untested seam. This one: *a fix that relocates a
+process relocates everything the process's children inherit, and cgroup membership is inherited
+sideways through a dependency that documents none of it* — `man tmux` has no entry for systemd, scope,
+slice or cgroup. The verification criterion was correct and passed. It measured the thing the fix set
+out to change, and nothing about what else moved with it. **When a change moves something, ask what
+was standing downstream of where it used to be.**

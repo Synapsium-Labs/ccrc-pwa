@@ -577,11 +577,21 @@ if [ "$TARGET" = "agent" ]; then
   # It shipped broken because the print is deliberately non-fatal, so an empty
   # answer looks the same as a fresh box with no server — the one case this
   # was written to tolerate hid the bug for the case it was written to serve.
+  #
+  # THE KillMode GUARD SURVIVES THE PLACEMENT FIX, and a reader who checks the
+  # box will need this. Since D-B8-7 the server normally sits in
+  # `ccrc-tmux-server.scope`, not in any `claude-session@` cgroup, so the
+  # refusal above reads stale — but `_tmux_new_session` places the server only
+  # when `systemd-run` is available and accepts, and its documented degraded
+  # mode is a bare create in the caller's cgroup (a missing session is worse
+  # than a misplaced one). That fallback is exactly the state this guard is
+  # written for, and it is unobservable from here. Do not delete it because a
+  # healthy box makes it look unnecessary.
   SWEEP_CMD='export XDG_RUNTIME_DIR=/run/user/$(id -u) \
     && for u in $(systemctl --user list-units "claude-session@*" --plain --no-legend | awk "{print \$1}") claude-session@ccrc-deploy-preflight.service; do \
          km=$(systemctl --user show -p KillMode "$u" 2>/dev/null); \
          [ "$km" = "KillMode=process" ] \
-           || { echo "deploy: FAILED — $u resolves to ${km:-no answer from systemd}, and the sweep needs KillMode=process. systemds default is control-group, every session on this box is a child of ONE tmux server, and that server sits in a claude-session@ cgroup — so try-restart would kill the lot. A drop-in under ~/.config/systemd/user/claude-session@.service.d/ can set this without the base unit changing a byte. REFUSING to sweep." >&2; exit 1; }; \
+           || { echo "deploy: FAILED — $u resolves to ${km:-no answer from systemd}, and the sweep needs KillMode=process. systemds default is control-group, and whenever the tmux server placement falls back to a bare create — no systemd-run, no D-Bus, or a scope name not yet collected — every session on this box is a child of ONE tmux server sitting in a claude-session@ cgroup, so try-restart would kill the lot. A drop-in under ~/.config/systemd/user/claude-session@.service.d/ can set this without the base unit changing a byte. REFUSING to sweep." >&2; exit 1; }; \
        done \
     && echo "deploy: the tmux server currently lives in: $(cat /proc/$(pgrep -x "tmux: server")/cgroup 2>/dev/null | tr "\n" " ")" >&2 \
     && systemctl --user try-restart "claude-session@*" \
