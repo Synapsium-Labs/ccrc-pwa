@@ -700,7 +700,8 @@ Two mechanisms, both cheap, and deliberately at different layers:
   test reds.
 - **Make the deploy refuse to sweep into a bad configuration.** This matters more, because the sweep is
   the trigger. Before `try-restart`, assert the unit file about to be active carries `KillMode=process`,
-  and print which unit currently hosts the tmux server (`cat /proc/$(pgrep -x -f 'tmux: server')/cgroup`).
+  and print which unit currently hosts the tmux server (`cat /proc/$(pgrep -x 'tmux: server')/cgroup`
+  — **not** `pgrep -x -f`, which returns empty; see the correction callout below).
   Abort the deploy rather than restarting 18 units into it. The ordering precedent already exists in the
   same block — the sweep is deliberately placed after the agent chain "so a broken agent fails the deploy
   before any supervisor is touched"; this is the same principle one step earlier.
@@ -726,6 +727,101 @@ cannot be changed for a live process without a D-Bus `StartTransientUnit` adopti
 something to attempt against a process holding 21 live sessions. The reboot is therefore a **planned,
 ordered step of Wave 1's deploy, and it must come after the ccd install**, or it recreates the same
 problem.
+
+---
+
+> **CORRECTION, measured 2026-08-18 — the code block above does not work, and the reboot proved it.**
+> Everything from here to the end of this callout supersedes the design as written; the *goal* is
+> unchanged and the *mechanism* is now `_tmux_new_session` in shipped ccd. Read the shipped function's
+> own comment as authoritative.
+>
+> **What the reboot actually produced.** The tmux server came back as pid 2047 at 21:38:58 holding all
+> 17 sessions, and its cgroup is `…/app-claude\x2dsession.slice/claude-session@ccrc-pwa-calm-mesa.service`
+> — *inside a session unit*, one unit over from the `claude-session@claude-ccrc-pwa.service` it started
+> in. `ccrc-tmux-server.scope` does not appear in `systemctl --user list-units --all`. **The hazard this
+> section exists to close was not closed.** `KillMode=process` remained the only thing holding it shut,
+> exactly as before.
+>
+> **Root cause, in one sentence: a tmux server with no sessions exits immediately.** `tmux start-server`
+> inside the scope started a server with nothing to keep it alive; it exited, the scope collected, and
+> the next `tmux new-session` created a fresh server in the caller's cgroup. The journal line `Started
+> ccrc-tmux-server.scope - /usr/bin/tmux start-server` at 21:38:59 is real, and is precisely why this
+> read as having worked.
+>
+> **Verified by experiment** on an isolated socket (`-L probe`), same box, zero contact with the live
+> fleet:
+>
+> | invocation | result |
+> |---|---|
+> | `tmux -L probe start-server` | no server survives |
+> | `systemd-run --user --scope --collect --unit=X tmux -L probe start-server` | no server survives |
+> | `systemd-run --user --scope --collect --unit=X tmux -L probe new-session -d -s p 'sleep 300'` | **server in `X.scope`** |
+>
+> **The first session is the server's lifeline, so the scope must wrap the call that creates it** — not
+> a separate `start-server` step. The scope outlives the short-lived `new-session` process because a
+> scope is released when its cgroup empties, and the forked server stays in it.
+>
+> **Two claims in this section were wrong and are withdrawn.** First, *"it is the same pattern tmux
+> already uses for its own per-pane `tmux-spawn-<uuid>.scope`"* — that pattern was cited as precedent
+> for scoping the **server**, but tmux applies it to **panes**, whose scopes are created by a tmux that
+> is already running. It is not precedent for placing the server, and reasoning from it is what made the
+> `start-server` step look sufficient. Second, the deploy pre-flight and the post-reboot verification in
+> this document both spell the probe `pgrep -x -f 'tmux: server'`, which **returns empty** — `-f`
+> matches the full command line (`tmux start-server`) while `-x` demands an exact match, so the two
+> flags contradict each other. The working probe is `pgrep -x 'tmux: server'`, matching `comm`. Measured
+> both ways on the fleet host.
+>
+> **What the post-reboot check should have asked.** This document's stated criterion — *"verify that
+> `/proc/<server>/cgroup` no longer names a `claude-session@*` unit"* — is the right question, and it
+> would have failed loudly had the probe worked. Ask it as: the cgroup's leaf must be
+> `ccrc-tmux-server.scope`. "Not the unit it used to be in" is too weak; the server moved between
+> session units and that is not progress.
+>
+> **Status.** The fix ships as `_tmux_new_session` (`ccd/ccd`), with `ccd-tmux-server.test.ts` rewritten
+> around the session-wrapping property and mutation-proved against the original defect restored
+> verbatim. Like the original design it takes effect only when a server is next created, so the placement
+> is still unverified in production and stays that way **until the next reboot** — at which point run
+> `pgrep -x 'tmux: server'` and require `ccrc-tmux-server.scope` as the cgroup leaf.
+>
+> **The lesson worth carrying past this section.** The old suite was green throughout. Its assertions
+> were true, well-argued and mutation-proof — the scope was requested, the skip worked, the `||` fired
+> on refusal and not on success — and it even carried a purpose-built negative control. It could not
+> observe that the real `tmux` exits, because `tmux` was stubbed. **A test can pin the exact shape of a
+> mechanism whose effect is nil.** The only thing that caught this was going and measuring the box.
+
+---
+
+> **SECOND CORRECTION, measured 2026-08-18 22:41 — the fix above was necessary and not sufficient.**
+> The reboot that was supposed to verify `_tmux_new_session` verified instead that it loses a race.
+> The server came back in `claude-session@claude-synapsium-platform.service`; the scope was absent.
+>
+> **This time the journal names the mechanism exactly.** At 22:41:46 fifteen supervisors logged
+> `Failed to start transient scope unit: Unit ccrc-tmux-server.scope was already loaded or has a
+> fragment file`, and one logged `Started ccrc-tmux-server.scope - /usr/bin/tmux new-session -d -s
+> cc-claude-corp-data-internal`. **The scope was created. It never held anything.** The fifteen losers
+> did not wait: each fell through to a bare `tmux new-session`, one of those created the server in its
+> own cgroup, and the scope winner's `new-session` then merely CONNECTED to that server — leaving its
+> scope holding a client that exited at once, which `--collect` duly reaped.
+>
+> **The assumption that failed** was written into the previous fix as if it were reasoning: that a
+> loser's bare fallback "simply attaches to the server the first one already placed". Losing the
+> unit-name race says nothing about who reaches `new-session` first. **systemd serialises the NAME, not
+> the WORK**, and an ordering was inferred from a mechanism that does not provide one.
+>
+> **The fix is a double-checked lock** on `$REG/.tmux-server.lock` (`TMUX_SERVER_LOCK_WAIT`, 15s,
+> blocking — ccd's other three `flock` sites use `-n`, and `-n` here reproduces the bug exactly). The
+> fast path, where a server already exists, takes no lock, so nothing on the box serialises after the
+> first spawn.
+>
+> **What made the difference is the shape of the test, not its rigour.** Every earlier test drove ONE
+> caller. The defect only exists when there are seventeen. The race test now runs eight concurrent
+> callers through a tmux stub with real shared state and counts creates: 1 with the lock, **8** with the
+> acquire removed. Generalising: *a concurrency defect cannot be caught by a suite whose every case is
+> sequential, however thorough each case is.* Both failures of this section share one root — the test
+> could not express the condition under which the mechanism runs in production.
+>
+> **Status: still unverified.** Third reboot pending. Same criterion, unchanged: the cgroup leaf must
+> be `ccrc-tmux-server.scope`.
 
 **What a reboot actually costs, measured 2026-08-15 — this is the part to read before scheduling it.**
 The box currently runs **21 tmux sessions, 18 active units, and 15 enabled units.** A reboot kills the
@@ -1315,9 +1411,18 @@ change the plan's shape:
 3. **Wave 1 ends in a planned reboot** (operator ruling, 2026-08-15), ordered **after** the ccd install
    and its sweep, so the tmux server is recreated by a ccd that places it in `ccrc-tmux-server.scope`
    (§1.7). Rebooting first would recreate the flaw. Run §1.7's six-session pre-flight before it, and
-   verify afterwards that `/proc/$(pgrep -x -f 'tmux: server')/cgroup` no longer names a
-   `claude-session@*` unit — that check is the whole point of the exercise and is the one thing that
-   proves it worked.
+   verify afterwards that the server's cgroup leaf **is `ccrc-tmux-server.scope`** — that check is the
+   whole point of the exercise and is the one thing that proves it worked.
+
+   > **Corrected 2026-08-18, both halves.** The reboot happened and the placement did **not** occur —
+   > see §1.7's correction callout for the measurement and the root cause (a session-less tmux server
+   > exits, so the scope collected before it held anything). The verification command as written here
+   > could not have reported it either: `pgrep -x -f 'tmux: server'` returns **empty**, because `-f`
+   > matches the full command line while `-x` demands an exact match. Use `pgrep -x 'tmux: server'`,
+   > which matches `comm`. And require the cgroup leaf to *be* `ccrc-tmux-server.scope` rather than
+   > merely *not be* a `claude-session@*` unit: the server moved from one session unit to another, which
+   > the weaker test would have called progress. **This step is still outstanding** — it re-runs at the
+   > next reboot, against shipped `_tmux_new_session`.
 4. **The `fix/ccd-swap-jitter` merge gate is a hard blocker for Waves 1 and 3.** Deploying either from a
    main-based ref installs a ccd with no `SWAP_JITTER` — silently reverting the fix for the 2026-08-13
    nine-hour outage — and the sweep then **arms the reverted binary on all 18 supervisors at once**,

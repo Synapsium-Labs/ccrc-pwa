@@ -675,7 +675,38 @@ describe('the verification is actually wired into the deploy, and can observe a 
     // single-quoted assignment and bash has no escape for a single quote inside
     // one, so a `'tmux: server'` here would terminate the assignment early —
     // and this very regex would then capture a truncated body.
-    expect(body).toContain('/proc/$(pgrep -x -f "tmux: server")/cgroup');
+    //
+    // `-x` ALONE. This assertion used to read `pgrep -x -f`, and pinned a probe
+    // that always returned empty: `-f` matches the full command line
+    // (`tmux start-server`) while `-x` demands an exact match, so together they
+    // ask for something nothing has. `-x` alone matches `comm`, which is
+    // `tmux: server`. The test below measures that difference rather than
+    // trusting this string, because a string assertion is exactly what let the
+    // broken form ship.
+    expect(body).toContain('/proc/$(pgrep -x "tmux: server")/cgroup');
+    expect(body, 'the `-x -f` pairing returns empty — see the pgrep semantics test below')
+      .not.toContain('pgrep -x -f');
+  });
+
+  it('and the probe it uses actually resolves a process — `-x` matches comm, `-x -f` matches nothing', () => {
+    // THE MEASUREMENT THE ASSERTION ABOVE CANNOT MAKE. Pinning command text
+    // proves the text; it does not prove the command answers. That gap is how
+    // `-x -f` shipped and survived a review — the print is non-fatal, so an
+    // empty answer is indistinguishable from a box with no tmux server, which
+    // is the one case the line was written to tolerate.
+    //
+    // Demonstrated on `sleep`, whose comm is `sleep` and whose command line is
+    // `sleep 47` — the same shape as the tmux server's `tmux: server` /
+    // `tmux start-server`. No tmux server is needed, so this runs anywhere.
+    const out = spawnSync('bash', ['-c',
+      'sleep 47 & p=$!;'
+      + ' comm=$(pgrep -x sleep | grep -c "^$p$" || true);'
+      + ' full=$(pgrep -x -f sleep | grep -c "^$p$" || true);'
+      + ' kill $p 2>/dev/null;'
+      + ' echo "comm=$comm full=$full"'], { encoding: 'utf8' }).stdout.trim();
+    expect(out, '`pgrep -x <comm>` must find a running process by its comm').toContain('comm=1');
+    expect(out, '`pgrep -x -f <comm>` finds nothing, because -f compares the full command line')
+      .toContain('full=0');
   });
 
   it('and RUNNING the sweep against a KillMode-less unit aborts it before one try-restart', () => {

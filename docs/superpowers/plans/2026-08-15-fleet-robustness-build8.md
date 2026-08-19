@@ -13597,3 +13597,150 @@ kind whose repair deletes worktrees.
 `.uuid` reads `orphan` there and *claimed* by the census — the census is the narrower of the two, which
 is the safe direction. And `.uuid` is the **fourth** field `cmd_ws_add` writes, which is why adopting
 ws-gc's `.uuid`-alone test would have re-opened the very false alarm this entry records.
+
+**D-B8-7 — §1.7's substrate placement was a no-op, and the reboot is what proved it.** The design ran
+`systemd-run --user --scope --collect --unit=ccrc-tmux-server tmux start-server` as its own step ahead
+of `_spawn_start`'s `new-session`. **A tmux server with no sessions exits immediately**, so the server
+that scope started died at once, the scope collected, and the very next `tmux new-session` created a
+fresh server in the caller's cgroup — the exact flaw the section existed to remove.
+
+Measured on the fleet host 2026-08-18 after the planned reboot: the server (pid 2047, 21:38:58, all 17
+sessions) sat in `claude-session@ccrc-pwa-calm-mesa.service`, one session unit over from the
+`claude-session@claude-ccrc-pwa.service` it began in, with `ccrc-tmux-server.scope` absent from
+`systemctl --user list-units --all`. The journal line `Started ccrc-tmux-server.scope` at 21:38:59 is
+genuine, and is the reason this read as a success on first inspection.
+
+Settled by experiment on an isolated socket (`-L probe`), zero contact with the live fleet: a scope
+around `start-server` leaves no server; a scope around `new-session -d` leaves the server **in the
+scope**. The first session is the server's lifeline, so the scope must wrap the call that creates it —
+the scope outlives the short-lived `new-session` process because a scope is released when its cgroup
+*empties*, and the forked server stays in it.
+
+*Fixed* by replacing `_tmux_server_ensure` with `_tmux_new_session`, an argv wrapper around
+`tmux new-session` that prepends the scope only when no server is running and `systemd-run` exists;
+both `_spawn_start` call sites route through it. A failed scoped attempt falls through to a bare call
+(a missing session is worse than a misplaced one — the trade the old `||` made); with no scope
+attempted the bare call runs exactly **once**, because retrying a `new-session` that failed on its own
+merits hits a duplicate name and turns one failure into a confusing two.
+
+**Three things worth keeping.** First, the old suite was green throughout, and deserved to be: its
+assertions were true, well-argued and mutation-proof, and it even carried a purpose-built negative
+control (`$SYSTEMD_RUN_RC`, added so the `||` could be shown load-bearing). It could not observe that
+the real `tmux` exits, because `tmux` was stubbed. **A test can pin the exact SHAPE of a mechanism
+whose EFFECT is nil** — this is a distinct failure mode from the "test that cannot fail" class, and the
+only thing that caught it was measuring the box. Second, the spec cited tmux's per-pane
+`tmux-spawn-<uuid>.scope` as *precedent* for scoping the server; that pattern is applied by an
+already-running tmux to its panes and is no precedent at all for placing the server — reasoning from it
+is what made the separate `start-server` step look sufficient. Third, the verification command written
+into both the deploy pre-flight and the post-reboot check, `pgrep -x -f 'tmux: server'`, **returns
+empty**: `-f` matches the full command line (`tmux start-server`) while `-x` demands an exact match. The
+check that was supposed to prove the exercise worked could not have run. Corrected to
+`pgrep -x 'tmux: server'`.
+
+**Still outstanding:** the placement is unverified in production and stays so until the next reboot. The
+criterion is also tightened — the cgroup leaf must **be** `ccrc-tmux-server.scope`, not merely "not a
+`claude-session@*` unit", because the server moved *between* session units and the weaker test would
+have scored that as progress.
+
+**D-B8-8 — the SWAP_JITTER row of Task 17's own table named the wrong source.** The table listed
+`_dispatch_swap`'s `SWAP_JITTER` operand as arriving from the **environment**. It does not: `ccd:54` is
+a bare `SWAP_JITTER=120`, not `${SWAP_JITTER:-120}`, so sourcing ccd overwrites whatever a caller
+exported and the operand is always ccd's own literal. The payload test written per the plan — pass the
+hostile value as env — therefore **passed on the first run, before any guard existed**, and would have
+been recorded as "already guarded" had the plan's Step 2 instruction been followed literally.
+
+The site is still guarded (the `-gt` is itself an arithmetic context, and the `${SWAP_JITTER:-0}`
+spelling advertises an externality that is not real today, which is exactly how a future reader gets
+misled). The payload case now assigns the hostile value **after** the source — the way it could
+actually arrive — and a second test pins line 54's unconditional form, so the day someone makes the
+knob tunable is a red suite pointing at the guard that then starts carrying real weight.
+
+**The general rule this earns:** when a payload test passes before the fix, the answer is not always
+"already guarded". It can also be "the test never reached the site", and those two have opposite
+consequences — one removes a row from the table, the other means the row was never measured at all.
+Distinguish them by probing the site in isolation before believing either.
+
+**D-B8-9 — the substrate fix was necessary and not sufficient: it lost a race at boot.** The reboot
+that was to verify `_tmux_new_session` (D-B8-7) instead disproved it a second time. The server came
+back in `claude-session@claude-synapsium-platform.service`; `ccrc-tmux-server.scope` was absent.
+
+The journal is unambiguous. At 22:41:46 **fifteen** supervisors logged `Failed to start transient scope
+unit: Unit ccrc-tmux-server.scope was already loaded or has a fragment file`, and **one** logged
+`Started ccrc-tmux-server.scope - /usr/bin/tmux new-session -d -s cc-claude-corp-data-internal`. The
+scope was created and never held anything: the fifteen losers **did not wait**. Each fell through to a
+bare `tmux new-session`, one of those created the server in its own cgroup, and the scope winner's
+`new-session` then merely CONNECTED to that server, leaving its scope holding a client that exited at
+once — which `--collect` reaped.
+
+**The assumption that failed, recorded because it was written down as reasoning:** D-B8-7's fix argued
+that a loser's bare fallback "simply attaches to the server the first one already placed". Losing the
+unit-name race says nothing about who reaches `new-session` first. **systemd serialises the NAME, not
+the WORK.** An ordering was inferred from a mechanism that does not provide one, and no test could
+contradict it because no test ran two callers.
+
+*Fixed* by a double-checked lock on `$REG/.tmux-server.lock`: fast path (server up) takes no lock at
+all; slow path acquires, **re-asks** whether a server exists, then places or attaches. Blocking with a
+bounded wait (`TMUX_SERVER_LOCK_WAIT`, 15s) — and the blocking is the mechanism, so ccd's usual `-n`
+idiom is deliberately not used here; `-n` reproduces the bug. Timeout or missing `flock` degrades to
+the pre-lock behaviour: a possibly misplaced server, never a missing session.
+
+**The transferable lesson is about test SHAPE, not test rigour.** Every test of this mechanism, across
+both failures, drove exactly one caller. The defect only exists when there are seventeen. The race test
+now runs eight concurrent callers through a tmux stub with real shared state — `list-sessions` answers
+from a file `new-session` creates — and counts creates: **1** with the lock, **8** with the acquire
+removed. *A concurrency defect cannot be caught by a suite whose every case is sequential, however
+carefully each case is argued.* Both D-B8-7 failures share that root: the suite could not express the
+condition under which the mechanism actually runs.
+
+### D-B8-10 — the F1 fix was written, tested, and shipped, but never *wired*; `working` outlived its process
+
+**Found** 2026-08-19, verifying the D-B8-9 reboot. The reboot was a free natural experiment: every
+process on the box provably restarted at 08:58:25, so any hookstate written earlier belongs to a
+process that no longer exists. Twelve of seventeen live sessions carried hookstate older than the
+boot. Two of them read `state: "working"` — `claude2-OpenClawHetzner` (stamped 18 minutes before the
+boot) and `claude-corp-custom-tools` (10.3 hours before it). Both were marked as actively working by a
+process the reboot had destroyed.
+
+**Root cause, and it is not in the hook.** `session-hook.sh` dispatches on ten events. Its
+`SessionStart)` arm — carrying the long F1 comment from the build4 dogfood, and pinned green by
+`session-hook.test.ts` — writes `state: "done"`, exactly the re-stamp that clears a stale `working`
+and gives a virgin session its first hookstate. `install-session-hooks.sh` wired **nine**: eight in
+`EVENTS_JSON` plus `PreToolUse`, special-cased for its `"*"` matcher. `SessionStart` was the one arm
+never registered. Confirmed against the live fleet: every wrapper HOME binds `SessionStart` only to
+`restore.sh` and the code-usage guard, never to `session-hook.sh`.
+
+So the arm was dead code on the fleet from the day it was written. **F1 was never actually fixed in
+production** — a freshly spawned worker still has no hookstate, `sweepMail`'s `hs === null` conjunct
+still fails shut, and its first coordination brief still queues indefinitely (measured at ~40min when
+F1 was first diagnosed). The stale-`working` defect is the same gap seen from the other end: only
+`Stop` clears `working`, and a turn killed by a reboot, swap, OOM, or limit-lock never reaches its
+`Stop`.
+
+**The green suite was not wrong, it was aimed one seam short.** `session-hook.test.ts` proved the arm
+computes `done`. `install-session-hooks.test.ts` proved the installer writes what its own list says.
+Neither asked whether the two lists were the same list — and the installer test actively pinned the
+drift shut with `expect(s.hooks.SessionStart).toEqual(EXISTING.hooks.SessionStart)`, an assertion that
+read as "foreign entries survive" and also happened to assert "and we add nothing here". This is the
+CLAUDE.md single-source rule (`PR_REASONS = Object.keys(PR_REASON_MAP)`) violated in the one place
+`single-definition.test.ts` cannot see it: the two copies are in two languages, bash and bash-in-jq.
+
+*Fixed* in two parts. The installer wires `SessionStart`. The arm now reads `source`, because wiring it
+exposes a case the unconditional `done` gets wrong: the harness fires `SessionStart` with
+`source: "compact"` in the **middle** of a turn, to re-inject context after compaction. Stamping
+`done` there would tell the mail gate that an actively-thinking session is idle — the exact
+mid-thought injection the gate exists to prevent, and a defect strictly worse than the one being
+fixed. `compact` is therefore inert (write nothing; `PreCompact`/`PostCompact` already own that
+transition). `startup`, `resume`, `clear`, and an **absent** `source` all write `done` —
+absence-permits, since the pre-`source` payload is the F1 startup case.
+
+**The mechanism, not the convention.** `install-session-hooks.test.ts` now parses the `case "$event"`
+block out of `session-hook.sh`, runs the installer for real, and asserts the events actually wired are
+exactly the events handled. Measured: removing `SessionStart` from `EVENTS_JSON` → **2 red**; deleting
+the compact gate → **1 red**; restored → **32 passed**.
+
+**The transferable lesson is about where a seam hides.** D-B8-9's lesson was test *shape* — a
+concurrency defect needs concurrent callers. This one is adjacent and distinct: both sides of this
+seam were tested, thoroughly, in isolation, and the defect lived in the agreement between them that
+neither test could see. *A list enumerated twice is a seam, and a seam with a test on each side is
+still untested.* The one artifact that would have caught it is the one now added — a test that derives
+one copy from the other.
