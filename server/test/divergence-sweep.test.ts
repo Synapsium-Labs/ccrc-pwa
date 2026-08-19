@@ -40,10 +40,13 @@ interface FixtureCfg {
  *  `hold-gate.test.ts`'s `seed` + `new FleetWatcher(testDeps(home, run), new Bus(), 10_000)`.
  *
  *  `CCRC_PROJECTS_ROOT` IS OVERRIDDEN TO A TMP DIRECTORY, and that is not
- *  tidiness: `loadConfig` defaults `projectsRoot` to `/data/projects`, the live
- *  checkout root on this very box, so a fixture that planted
+ *  tidiness: `loadConfig` defaults `projectsRoot` to `$HOME/projects` (spec
+ *  §2's three-way reconciliation — server/src/config.ts:151, Stage 2d Task 4;
+ *  it was `/data/projects`, the reference fleet's own volume-specific path,
+ *  before that), so a fixture that planted
  *  `<projectsRoot>/demo/.git/worktrees/...` under the default would be writing
- *  git admin files into real repositories. */
+ *  git admin files into a real `projects` directory under whatever `$HOME`
+ *  the fixture (or the box running this suite) happens to have. */
 const watcherFixture = async (cfg: FixtureCfg = {}) => {
   const home = mkTmp('ccrc-divergence-');
   const projectsRoot = mkTmp('ccrc-projects-');

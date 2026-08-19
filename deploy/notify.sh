@@ -32,7 +32,19 @@ if [ -r "$TOKEN_FILE" ]; then
   tok="$(grep -v '^[[:space:]]*#' "$TOKEN_FILE" | grep -v '^[[:space:]]*$' | head -n1 | tr -d '[:space:]')"
 fi
 
-curl -fsS -m 5 -X POST "http://${CCRC_ADDR:-203.0.113.7:7788}/api/notify" \
+# Address resolution: CCRC_ADDR env > ~/.ccrc/ccrc.env's CCRC_HOST+CCRC_PORT >
+# the reference fleet's legacy IP (kept one generation so a hook shipped ahead
+# of the config file cannot go dark — same tolerance as the token above).
+# The env file is grepped, never sourced: it holds tokens (ccd/ccrc:355-380).
+ADDR="${CCRC_ADDR:-}"
+if [ -z "$ADDR" ] && [ -r "$HOME/.ccrc/ccrc.env" ]; then
+  _h="$(grep -E '^[[:space:]]*CCRC_HOST=' "$HOME/.ccrc/ccrc.env" | tail -n1 | cut -d= -f2- | tr -d '[:space:]')"
+  _p="$(grep -E '^[[:space:]]*CCRC_PORT=' "$HOME/.ccrc/ccrc.env" | tail -n1 | cut -d= -f2- | tr -d '[:space:]')"
+  [ -n "$_h" ] && [ -n "$_p" ] && ADDR="$_h:$_p"
+fi
+ADDR="${ADDR:-203.0.113.7:7788}"
+
+curl -fsS -m 5 -X POST "http://${ADDR}/api/notify" \
   -H 'content-type: application/json' \
   ${tok:+-H "x-ccrc-mail-token: $tok"} \
   -d "$(jq -cn --arg m "$1" '{message:$m}')" >/dev/null 2>&1 || true

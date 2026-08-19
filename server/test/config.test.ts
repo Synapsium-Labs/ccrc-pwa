@@ -178,6 +178,20 @@ describe('loadConfig', () => {
     expect(cfg.projectsRoot).toBe('/data/projects');
   });
 
+  // Spec §2 (docs/superpowers/specs/2026-08-11-ccrc-oss-single-dev-infra-design.md):
+  // "the three disagreeing projects-root definitions ($HOME/projects,
+  // /data/projects, /srv/projects) reconcile to one
+  // configured CCRC_PROJECTS_ROOT" — the agent and ccd already default to
+  // `$HOME/projects` (an unconfigured box, e.g. a fresh install); this server
+  // default was the lone holdout at `/data/projects`, a path specific to the
+  // reference fleet's own volume layout. The live production box is
+  // unaffected: its `~/.ccrc/ccrc.env` sets `CCRC_PROJECTS_ROOT` explicitly,
+  // so this default is never reached there.
+  it('defaults projectsRoot to $HOME/projects when CCRC_PROJECTS_ROOT is unset (spec §2)', () => {
+    const cfg = loadConfig({ CCRC_HOME: '/h', CCRC_ACCOUNTS: ROSTER_PATH });
+    expect(cfg.projectsRoot).toBe(path.join('/h', 'projects'));
+  });
+
   it('defaults fleetMode to local with no agent/hetzner config', () => {
     const cfg = loadConfig({ CCRC_HOME: '/h', CCRC_ACCOUNTS: ROSTER_PATH });
     expect(cfg.fleetMode).toBe('local');
