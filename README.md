@@ -843,6 +843,10 @@ This is the **single-box** shape only: local fleet mode, localhost, no TLS, no
 agent (`ccrc-agent.service` is deliberately not installed — local mode never
 touches it). The full multi-box remote-fleet guide is Stage 5.
 
+The steps above are proven hermetically (fixture `$HOME`s, every suite in "Develop" below); the
+real-VM proof — an actual fresh box, a stopwatch, RC verifiably off — is the operator's stage gate
+and remains pending. `docs/superpowers/specs/2026-08-19-stage2-vm-gate-runbook.md` is its runbook.
+
 ## Develop
 
 ```bash
@@ -1287,7 +1291,7 @@ Known real-format subtleties already encoded:
 - A `--remote-control` pane **never renders `esc to interrupt`**, so busy-ness is
   taken from the live status file (`sessions/<pid>.json`), not the pane. Whether
   a box's panes are RC panes at all is per-box config (`~/.ccrc/remote-control`,
-  read by `ccd`'s `_rc_enabled`; `ccrc doctor`'s `config` line names the state it
+  read by `ccd`'s `_rc_enabled`; `ccrc doctor`'s `rc` line names the state it
   measured), so an RC-off box DOES render that marker — the status file is the
   reading that is correct either way, which is why it stays the source.
 - **The live status file's vocabulary drifts too, and silently.** It is at least

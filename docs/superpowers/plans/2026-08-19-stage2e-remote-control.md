@@ -142,9 +142,9 @@ _rc_enabled() {   # first line 'on' => sessions spawn with --remote-control.
 - Create: `docs/superpowers/specs/2026-08-19-stage2-vm-gate-runbook.md`
 - Modify: this plan's ledger; `README.md` (one pointer line in the install section)
 
-- [ ] **Step 1: The runbook** — the operator's fresh-VM proof, honestly scoped: provision (Ubuntu ≥ node floor per server/package.json), clone, `bash install.sh`, expected first-run doctor state (RED on wrappers with the install-Claude-Code remedy until Claude Code is installed — Task 4's sentence is the UX), install Claude Code, `ccrc doctor` green, `ccd menu` → first session spawns RC-OFF (verify via `ps` argv: no `--remote-control`), PWA answers on 127.0.0.1:7788, under 15 minutes wall-clock. THE DELIVERABLE BEYOND PASS/FAIL: `tmux capture-pane` the RC-off ready pane and check it into `server/test/fixtures/panes/` — retroactively converting Task 1's invented fixture into a measured one (name the fixture file and the test to update). Also: what to do on failure (each doctor remedy is now followable — that was this workstream's point).
-- [ ] **Step 2: Ledger close-out.** In this plan: record that the per-worker-RC ruling (orchestrator task #37) remains OPEN and why a per-box flag does not subsume it; the stage gate stays PENDING-OPERATOR with the runbook as its instrument. README's install section gains one line pointing at the runbook.
-- [ ] **Step 3: Full suites** (server, agent, pwa — foreground) + commit: `docs(stage2): the VM gate has a runbook and an honest deliverable — a measured RC-off pane`
+- [x] **Step 1: The runbook** — the operator's fresh-VM proof, honestly scoped: provision (Ubuntu ≥ node floor per server/package.json), clone, `bash install.sh`, expected first-run doctor state (RED on wrappers with the install-Claude-Code remedy until Claude Code is installed — Task 4's sentence is the UX), install Claude Code, `ccrc doctor` green, `ccd menu` → first session spawns RC-OFF (verify via `ps` argv: no `--remote-control`), PWA answers on 127.0.0.1:7788, under 15 minutes wall-clock. THE DELIVERABLE BEYOND PASS/FAIL: `tmux capture-pane` the RC-off ready pane and check it into `server/test/fixtures/panes/` — retroactively converting Task 1's invented fixture into a measured one (name the fixture file and the test to update). Also: what to do on failure (each doctor remedy is now followable — that was this workstream's point).
+- [x] **Step 2: Ledger close-out.** In this plan: record that the per-worker-RC ruling (orchestrator task #37) remains OPEN and why a per-box flag does not subsume it; the stage gate stays PENDING-OPERATOR with the runbook as its instrument. README's install section gains one line pointing at the runbook.
+- [x] **Step 3: Full suites** (server, agent, pwa — foreground) + commit: `docs(stage2): the VM gate has a runbook and an honest deliverable — a measured RC-off pane`
 
 ---
 
@@ -211,10 +211,44 @@ Re-measured, corrected: reverting `parseDialog`'s own gate alone → both behavi
 
 **`paneState`/`PaneState` are now consumer-starved — ruling: keep, as the test-facing classifier contract.** This task removed the last three production callers (the two call sites in round 1, `parseDialog` itself in round 2); `git grep -rn 'paneState|PaneState'` across `server/`, `pwa/`, `agent/`, `shared/` now finds only: the definition (`pane/dialog.ts:18,44`), comments explaining why callers no longer use it, and `paneState`'s own contract suite (`dialog.test.ts`, 8 assertions; a comment each in `send.test.ts`, `push-copy.test.ts`). Ruling: **keep** `paneState` and `PaneState`, not delete — it remains the documented pane classifier named in two shipped specs, and its own test suite is a real contract worth pinning independent of who calls it. But the docstring above it (`pane/dialog.ts:20-23`, "Order matters: busy overrides everything…") asserted its ordering is "load-bearing for its other consumers" — that clause is now false and must not read as production-load-bearing when it is test-only. Updated to say so plainly.
 
+## Task 7 — stage gate close-out
+
+**The stage gate stays PENDING-OPERATOR.** Every commit in this slice (D-99 through D-102, plus
+Tasks 4–6's carried fixes) is a hermetic-suite measurement over a fixture `$HOME` — none of it has
+run against a real box. `docs/superpowers/specs/2026-08-19-stage2-vm-gate-runbook.md` is now the
+instrument for that run: it names the exact commands, the exact expected doctor output (byte-quoted
+where the transcript is pinned by `ccrc-install.test.ts`), the key open question (does a real RC-off
+pane render the permission-mode footer at all — the invented `RC_OFF_READY_PANE` fixture in
+`server/test/ccd-rc-flag.test.ts` cannot answer this, only assume it), and the exact deliverable a
+real run owes back to this repository: a `tmux capture-pane` of a genuine RC-off ready pane, checked
+into `server/test/fixtures/panes/`, with the named test updated to consume it in place of the
+invented constant. Writing the runbook does not perform the run — the gate remains open until an
+operator executes it against an actual machine and either the measured pane confirms the assumption
+or files the finding if it does not.
+
+**Per-worker RC (orchestrator task #37, the 2026-08-13 ruling) remains OPEN, and this slice does not
+close it.** The ruling is that dispatched program workers spawn without `--remote-control`
+regardless of what the box they run on is otherwise configured to do — a *per-session* decision keyed
+to "is this pane a dispatched worker," not to "is this box in RC mode." What this slice built is a
+*per-box* fact: one file, one box, every session that box spawns reads the same answer. A per-box flag
+cannot express a per-worker distinction — it has no notion of "this particular spawn is a dispatched
+worker" at all, only "this box says on or off." Subsuming the ruling would need either a second,
+narrower switch consulted alongside `_rc_enabled` in `_spawn_start` (e.g. a caller-supplied override
+for the dispatch path) or a per-session marker written at spawn time that the RC decision could read
+back — neither exists today, and inventing either was out of this slice's scope (Global Constraints,
+above, states this explicitly and the file structure never touched the dispatch/worker-skill path).
+The ruling's own destination — `ccd/worker-skill/SKILL.md`, per
+`docs/superpowers/specs/2026-08-18-ccrc-worker-skill-design.md` — has not shipped yet either, so there
+is no consumer today that would even use a per-worker switch if this slice built one. Left open,
+for whichever slice builds the worker-skill mechanism to pick up.
+
 ## Deferred out of this plan
 
-- Per-worker RC (orchestrator task #37, the 2026-08-13 ruling) — open, recorded by Task 7.
+- Per-worker RC (orchestrator task #37, the 2026-08-13 ruling) — **open; see "Task 7 — stage gate
+  close-out" above for why a per-box flag does not subsume it.**
 - Deleting `/rc active` from the marker set — only after no pre-flip session survives on the reference fleet; operator-observable, not schedulable here.
 - Option B for `ccd version` (delegating to `ccrc version` via sibling exec) — the consolidation path if the split reader ever needs a third edit.
 - The 2d follow-ups not carried here (the D-87 read-boundedness pair → next wrapper-shape slice; the small hygiene batch) — unchanged destinations.
 - ~~A fleet host's doctor never reports its RC state~~ — **FIXED in Task 2 fix round 1, see D-101.** (Was: `_dr_rc_state` hung off `_check_config`'s PASS arms, so the readout was silent on four arms and absent on exactly the box that runs `on`.)
+- **The real-VM stage gate itself — PENDING-OPERATOR.** See "Task 7 — stage gate close-out" above;
+  the runbook is shipped, the run is not.
