@@ -606,32 +606,6 @@ ccrc wrappers                        # the other direction: roster → ~/.local/
   real script against a fixture `HOME` with a free-form account and goes red
   if the map ever comes back.
 
-### The box decides `--remote-control`: `~/.ccrc/remote-control`
-
-The other piece of per-box runtime config, and the same ownership rule as
-`accounts.json`: **one line**, `on` or `off`, created once by whichever lane
-installed the box and never rewritten after.
-
-| Lane | Seeds | Why that value |
-|---|---|---|
-| `ccrc install` (`_inst_rc`) | `off` | `--remote-control` publishes a session to claude.ai; a fresh single-box install has made no such claim and must not start because an installer defaulted it |
-| `deploy/deploy.sh agent` | `on` | the reference fleet host has run every session with the flag since before the flag existed — the file **describes** that box rather than deciding something new about it |
-
-`ccd`'s `_rc_enabled` is the only reader and the authority: first line,
-whitespace stripped, must be exactly `on`; **absent, unreadable, empty or
-anything else is off**, because a garbled file must not half-enable a mode. That
-strictness includes a missing trailing newline (bash's `read` returns non-zero
-at EOF-before-delimiter), so `printf 'on' > ~/.ccrc/remote-control` reads as
-**off** — both writers end the line, and `ccrc doctor`'s `config` verdict names
-that case as `remote-control off (unparseable …)` rather than reporting it as a
-deliberate `off`.
-
-**Ordering, on a fleet host:** the flag must be seeded *before* a new `ccd`
-lands, because absent reads off and the gap between the two is a window in which
-a respawn strips `--remote-control` from a live session. `deploy.sh` seeds it in
-the same run, above its own installs, and `agent/test/deploy-verify.test.ts`
-pins that order.
-
 **`/accounts`** (a fourth branch of the route ternary, reached by tapping the
 compact `AccountsStrip` mounted in the desktop top bar and the mobile fleet
 list) shows every account ccd knows about, not just the ones with headroom.
@@ -811,6 +785,38 @@ open tab can hold pre-deploy JS against a post-deploy server. A synchronous
   *capability* (`ccdVerbs` + `verbSupported`), which is finer-grained than a
   bare generation number. `v` remains reserved for a future breaking
   frame-shape change and gets a consumer only then.
+
+## The box decides `--remote-control`: `~/.ccrc/remote-control`
+
+The other piece of per-box runtime config, and the same ownership rule as
+`accounts.json`: **one line**, `on` or `off`, created once by whichever lane
+installed the box and never rewritten after.
+
+| Lane | Seeds | Why that value |
+|---|---|---|
+| `ccrc install` (`_inst_rc`) | `off` | `--remote-control` publishes a session to claude.ai; a fresh single-box install has made no such claim and must not start because an installer defaulted it |
+| `deploy/deploy.sh agent` | `on` | the reference fleet host has run every session with the flag since before the flag existed — the file **describes** that box rather than deciding something new about it |
+
+`ccd`'s `_rc_enabled` is the only reader and the authority: first line,
+whitespace stripped, must be exactly `on`; **absent, unreadable, empty or
+anything else is off**, because a garbled file must not half-enable a mode. That
+strictness includes a missing trailing newline (bash's `read` returns non-zero
+at EOF-before-delimiter), so `printf 'on' > ~/.ccrc/remote-control` reads as
+**off** — both writers end the line, and `ccrc doctor`'s **`rc`** check names
+that case as `PASS rc: off (unparseable …)` rather than reporting it as a
+deliberate `off`.
+
+`rc` is a check of its own, deliberately: it reads the flag file and nothing
+else — no `ccrc.env`, no unit files, no box role — so it answers on a **fleet
+host**, which has no `ccrc.env` at all and is the one box in the topology that
+runs `on`. It is always a PASS: the state is a fact about how the box is
+configured, not a defect, and this doctor's rule is that a WARN owes a remedy.
+
+**Ordering, on a fleet host:** the flag must be seeded *before* a new `ccd`
+lands, because absent reads off and the gap between the two is a window in which
+a respawn strips `--remote-control` from a live session. `deploy.sh` seeds it in
+the same run, above its own installs, and `agent/test/deploy-verify.test.ts`
+pins that order.
 
 ## Install (single box)
 

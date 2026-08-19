@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=6991f758d9edacadffc6f14377c86eb6feaed3754b0934a61ab136a334f41520
+# ccrc:generated 1 sha256=0c12650bd756cfd6207d41cce05982c0b4fbe89b90967e54fa269735d5df53cd
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box, not on this file: `_rc_enabled` reads
@@ -221,8 +221,10 @@ _rc_enabled() {   # first line 'on' => sessions spawn with --remote-control.
   # a garbled file must not half-enable a mode. The file is OPERATOR-OWNED —
   # seeded once by whichever lane installed the box and never rewritten after —
   # so an edit here survives every later install and deploy. `ccrc doctor`'s
-  # `config` line reports what this function would decide, including the cases
-  # where the strictness above surprises somebody (a newline-less `on`).
+  # `rc` check reports what this function would decide — on EVERY box including
+  # this one, the fleet host, which has no `ccrc.env` for a check to hang off —
+  # including the cases where the strictness above surprises somebody (a
+  # newline-less `on` reads as OFF and doctor says `unparseable`, not `off`).
   local first=""
   [[ -f "$CCRC_RC_FILE" ]] || return 1
   # `2>/dev/null` BEFORE the input redirect, and the order is the whole point:

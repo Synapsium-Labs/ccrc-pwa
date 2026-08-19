@@ -163,6 +163,7 @@ CCRC_DOCTOR_CHECKS=(
   path
   services
   config
+  rc
   disk
   wrappers
   fleet
@@ -684,79 +685,6 @@ _check_services() {
   return "$rc"
 }
 
-# ── what this box's sessions are SPAWNED AS ───────────────────────────────
-# `~/.ccrc/remote-control` decides whether `ccd` spawns a session with
-# `--remote-control` — driven over the RC socket and discoverable on claude.ai
-# — or as a plain pane. It is per-box, operator-owned, and seeded once by
-# whichever lane installed the box (`ccrc install` writes `off`, `deploy.sh`'s
-# fleet lane writes `on`; each has its own reason, stated where it is written).
-#
-# THE AUTHORITY IS `ccd`'s `_rc_enabled`, not this function. There the rule is:
-# first line, ALL whitespace stripped, must equal `on`; absent, unreadable,
-# empty or anything else is OFF, because a garbled file must not half-enable a
-# mode. This prints what that reader would decide and why — it never decides
-# anything itself, and `_check_config` below REPORTS the answer rather than
-# judging it, because both values are legitimate states for a box to be in.
-#
-# THE SECOND SPELLING OF THE PATH IS DELIBERATE, and it is the trade D-92
-# already records for `CCRC_UNIT_DIR` (and `_check_path`'s note about
-# `WRAPPER_BIN_DIR` before it): this table is sourced under `set -u` by things
-# that are NOT `ccrc` — and `ccd`, which owns the authoritative copy, never
-# sources it at all — so it cannot reach either tool's variable, and a
-# `${…:-…}` fallback IS the second spelling with a branch in front of it.
-# `single-definition.test.ts` compares all four literals in this repository and
-# goes red on a drift, which is the mechanism the promise would otherwise be.
-#
-# FIVE PRINTED FORMS OVER THREE SEMANTIC STATES, and the last two are why this
-# is a function rather than an inline `[ -f ] && cat`:
-#   - `off (default)` and a bare `off` are different facts about the box —
-#     "nobody has decided" and "somebody decided no" — and an operator acts on
-#     them differently: one is a file to write, the other a file to edit.
-#   - `off (unparseable …)` covers the file whose first line is neither, and
-#     THAT INCLUDES A NEWLINE-LESS `on`: bash's `read` returns non-zero at
-#     EOF-before-delimiter, so `printf 'on' > …` reads as OFF. Printing a bare
-#     `off` for it would tell an operator they had chosen the mode their edit
-#     never reached. The reader stays strict (that direction is fail-safe);
-#     the surprise is paid for here, at the reporting layer, which is the right
-#     place for it.
-#   - `off (unreadable …)` is split off from unparseable for the reason
-#     `_check_config` splits the same pair for `ccrc.env` twenty lines down: a
-#     mode problem and a bytes problem are two different mornings, and telling
-#     somebody to fix bytes that were never the problem is this file's own
-#     overloaded-seam defect.
-CCRC_RC_FILE="$HOME/.ccrc/remote-control"
-
-_dr_rc_state() {
-  local first="" garbled="off (unparseable — the file must hold one line reading 'on' or 'off')"
-  [ -e "$CCRC_RC_FILE" ] || { printf '%s' "off (default)"; return 0; }
-  # THE TWO GUARDS COME BEFORE THE READ, not after it, and that is what keeps
-  # the two answers apart. A chmod-000 file and an EMPTY file both make `read`
-  # fail with nothing in the variable, so a post-hoc `[ -n "$first" ]` would
-  # report an empty file — which is a bytes problem with an obvious fix — as a
-  # permissions problem. Asking first means everything below this point is a
-  # file whose bytes really were the answer.
-  if [ ! -f "$CCRC_RC_FILE" ] || [ ! -r "$CCRC_RC_FILE" ]; then
-    printf '%s' "off (unreadable — it is there and nothing could be read out of it; look at what is really there)"
-    return 0
-  fi
-  # `2>/dev/null` BEFORE the input redirect, exactly as `_rc_enabled` writes it
-  # and for the reason measured there: bash applies redirections left to right,
-  # so with the suppression written last a file the guards above did not catch
-  # prints a raw `Permission denied` — with this file's line number,
-  # unattributed — onto doctor's stderr, which this suite asserts is empty.
-  #
-  # A FAILED READ HERE IS EOF-BEFORE-DELIMITER, i.e. an empty file or a last
-  # line with no newline. Both are unparseable in the same sense: no LINE was
-  # there to read. `printf 'on' > …` is that case and is the whole reason this
-  # form exists.
-  IFS= read -r first 2>/dev/null < "$CCRC_RC_FILE" || { printf '%s' "$garbled"; return 0; }
-  case "${first//[[:space:]]/}" in
-    on)  printf '%s' "on" ;;
-    off) printf '%s' "off" ;;
-    *)   printf '%s' "$garbled" ;;
-  esac
-}
-
 # ── the box's own config file ─────────────────────────────────────────────
 # THE ONE CHECK WHOSE FAIL IS A REPRODUCTION. `CCRC_FLEET=remote` with either
 # agent value missing makes the server print one line and exit 1 at boot
@@ -851,7 +779,7 @@ _check_config() {
   if [ "$mode" != remote ]; then
     local why="CCRC_FLEET is not set"
     [ -z "$mode" ] || why="CCRC_FLEET is set to something other than \"remote\""
-    _dr_pass config "$BOX_ENV_FILE present, fleet mode local ($why, which server/src/config.ts reads as local); remote-control $(_dr_rc_state)"
+    _dr_pass config "$BOX_ENV_FILE present, fleet mode local ($why, which server/src/config.ts reads as local)"
     return 0
   fi
 
@@ -865,12 +793,111 @@ _check_config() {
       "set both CCRC_AGENT_URL and CCRC_AGENT_TOKEN in ~/.ccrc/ccrc.env, or set CCRC_FLEET=local"
     return 1
   fi
-  # BOTH PASS ARMS CARRY THE SAME APPENDED FACT, and the FAIL/WARN/SKIP arms
-  # carry none. A verdict that is about `ccrc.env` being unusable should not
-  # also be reporting a second, unrelated switch — and the fleet-role SKIP says
-  # outright that there was nothing here to measure, which appending to would
-  # turn into a half-verdict this file's contract forbids.
-  _dr_pass config "$BOX_ENV_FILE present, fleet mode remote, and both CCRC_AGENT_URL and CCRC_AGENT_TOKEN are set (whether the agent ANSWERS is the 'fleet' check below); remote-control $(_dr_rc_state)"
+  _dr_pass config "$BOX_ENV_FILE present, fleet mode remote, and both CCRC_AGENT_URL and CCRC_AGENT_TOKEN are set (whether the agent ANSWERS is the 'fleet' check below)"
+}
+
+# ── what this box's sessions are SPAWNED AS ───────────────────────────────
+# `~/.ccrc/remote-control` decides whether `ccd` spawns a session with
+# `--remote-control` — driven over the RC socket and discoverable on claude.ai
+# — or as a plain pane. It is per-box, operator-owned, and seeded once by
+# whichever lane installed the box (`ccrc install` writes `off`, `deploy.sh`'s
+# fleet lane writes `on`; each has its own reason, stated where it is written).
+#
+# THE AUTHORITY IS `ccd`'s `_rc_enabled`, not this function. There the rule is:
+# first line, ALL whitespace stripped, must equal `on`; absent, unreadable,
+# empty or anything else is OFF, because a garbled file must not half-enable a
+# mode. `_dr_rc_state` prints what that reader would decide and why; it never
+# decides anything itself, and `_check_rc` REPORTS that answer rather than
+# judging it, because both values are legitimate states for a box to be in.
+#
+# ── A CHECK OF ITS OWN, NOT A RIDER ON `config` (fix round 1) ─────────────
+# This shipped first as an append to `_check_config`'s two PASS details, and
+# that made a fact about SPAWN SHAPE conditional on the health of an unrelated
+# file. The readout vanished on four of that check's arms — the fleet-role SKIP
+# and all three `ccrc.env` WARNs — which meant the reference FLEET HOST, the one
+# box in this topology that actually runs `on`, printed nothing about RC at all:
+# it has no `ccrc.env` and never will (D-86's topology branch, `_check_config`
+# above). A `chmod 000 ccrc.env` did the same on a server box whose flag file
+# was perfectly readable. Splitting it out is strictly SMALLER than the append —
+# one table entry, one function, no coupling — and it is what puts the answer on
+# the box the pointers in `ccd/ccd` and the README send operators to.
+#
+# THE SECOND SPELLING OF THE PATH IS DELIBERATE, and it is the trade D-92
+# already records for `CCRC_UNIT_DIR` (and `_check_path`'s note about
+# `WRAPPER_BIN_DIR` before it): this table is sourced under `set -u` by things
+# that are NOT `ccrc` — and `ccd`, which owns the authoritative copy, never
+# sources it at all — so it cannot reach either tool's variable, and a
+# `${…:-…}` fallback IS the second spelling with a branch in front of it.
+# `single-definition.test.ts` compares all four literals in this repository and
+# goes red on a drift, which is the mechanism the promise would otherwise be.
+#
+# FIVE PRINTED FORMS OVER THREE SEMANTIC STATES, and the last two are why this
+# is a function rather than an inline `[ -f ] && cat`:
+#   - `off (default)` and a bare `off` are different facts about the box —
+#     "nobody has decided" and "somebody decided no" — and an operator acts on
+#     them differently: one is a file to write, the other a file to edit.
+#   - `off (unparseable …)` covers the file whose first line is neither, and
+#     THAT INCLUDES A NEWLINE-LESS `on`: bash's `read` returns non-zero at
+#     EOF-before-delimiter, so `printf 'on' > …` reads as OFF. Printing a bare
+#     `off` for it would tell an operator they had chosen the mode their edit
+#     never reached. The reader stays strict (that direction is fail-safe);
+#     the surprise is paid for here, at the reporting layer, which is the right
+#     place for it.
+#   - `off (unreadable …)` is split off from unparseable because a mode problem
+#     and a bytes problem are two different mornings, and telling somebody to
+#     fix bytes that were never the problem is this file's own overloaded-seam
+#     defect. `_check_config` above draws the same line for `ccrc.env` (its
+#     `[ ! -f ]` and `[ ! -r ]` arms) — this is a coarser echo of that
+#     precedent, not a copy of it: there the two conditions get two WARN arms
+#     with two different remedies, here they share one always-PASS form,
+#     because nothing about the flag file is a defect to remedy.
+CCRC_RC_FILE="$HOME/.ccrc/remote-control"
+
+_dr_rc_state() {
+  local first="" garbled="off (unparseable — the file must hold one line reading 'on' or 'off')"
+  [ -e "$CCRC_RC_FILE" ] || { printf '%s' "off (default)"; return 0; }
+  # THE TWO GUARDS COME BEFORE THE READ, not after it, and that is what keeps
+  # the two answers apart. A chmod-000 file and an EMPTY file both make `read`
+  # fail with nothing in the variable, so a post-hoc `[ -n "$first" ]` would
+  # report an empty file — which is a bytes problem with an obvious fix — as a
+  # permissions problem. Asking first means everything below this point is a
+  # file whose bytes really were the answer.
+  if [ ! -f "$CCRC_RC_FILE" ] || [ ! -r "$CCRC_RC_FILE" ]; then
+    printf '%s' "off (unreadable — it is there and nothing could be read out of it; look at what is really there)"
+    return 0
+  fi
+  # `2>/dev/null` BEFORE the input redirect, exactly as `_rc_enabled` writes it
+  # and for the reason measured there: bash applies redirections left to right,
+  # so with the suppression written last a file the guards above did not catch
+  # prints a raw `Permission denied` — with this file's line number,
+  # unattributed — onto doctor's stderr, which this suite asserts is empty.
+  #
+  # A FAILED READ HERE IS EOF-BEFORE-DELIMITER, i.e. an empty file or a last
+  # line with no newline. Both are unparseable in the same sense: no LINE was
+  # there to read. `printf 'on' > …` is that case and is the whole reason this
+  # form exists.
+  IFS= read -r first 2>/dev/null < "$CCRC_RC_FILE" || { printf '%s' "$garbled"; return 0; }
+  case "${first//[[:space:]]/}" in
+    on)  printf '%s' "on" ;;
+    off) printf '%s' "off" ;;
+    *)   printf '%s' "$garbled" ;;
+  esac
+}
+
+# ALWAYS PASS — this check has no WARN and no FAIL, and that is a contract
+# rather than an omission. The state is a FACT about how the box is configured,
+# not a defect: `on` and `off` are both correct for the boxes that chose them,
+# and a doctor that WARNed on either would be asserting a preference it has no
+# standing for. The two degraded forms are PASSes for the same reason and one
+# more — this file's own rule is that a WARN OWES A REMEDY, and the honest
+# remedy for a garbled flag file ("write `on` or `off` into it") is already the
+# whole detail. Nothing here can make a healthy box exit 1.
+#
+# IT READS ONE FILE AND NOTHING ELSE: no `ccrc.env`, no unit files, no box role.
+# That independence is the finding this check exists for, and it is what lets
+# the answer appear on the fleet host.
+_check_rc() {
+  _dr_pass rc "$(_dr_rc_state)"
 }
 
 # ── room on the filesystem $HOME is on ────────────────────────────────────

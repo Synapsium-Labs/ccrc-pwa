@@ -1339,11 +1339,24 @@ describe('ccrc doctor: config', () => {
 });
 
 // ── what this box's sessions are spawned AS ───────────────────────────────
-// Stage 2e, Task 2. `~/.ccrc/remote-control` is the per-box switch `ccd`'s
-// `_rc_enabled` reads on every spawn (D-99), and `_check_config` appends the
-// measured state to its PASS detail. The state is REPORTED, never JUDGED: the
-// two values are both legitimate, and the check's verdict remains a statement
-// about `ccrc.env`.
+// Stage 2e, Task 2 (fix round 1). `~/.ccrc/remote-control` is the per-box
+// switch `ccd`'s `_rc_enabled` reads on every spawn (D-99), and `rc` is a check
+// OF ITS OWN in the table. It was first shipped as an append to
+// `_check_config`'s two PASS details, which coupled a fact about SPAWN SHAPE to
+// the health of an unrelated file: the readout vanished on four arms — the
+// fleet-role SKIP and all three `ccrc.env` WARNs — so the reference fleet host,
+// the one box in the topology that actually runs `on`, printed nothing about it
+// while three shipped pointers told operators to look there. A standalone check
+// is strictly smaller AND correct: it reads one file and answers about one
+// thing.
+//
+// ALWAYS PASS, never WARN or FAIL. The state is a FACT, not a defect — both
+// values are legitimate states for a box to be in, and a doctor that WARNed
+// about `on` (or about `off`) would be asserting a preference it has no
+// standing for. Even the two degraded forms are PASSes: they say what ccd will
+// do, which is the question. This file's remedy contract makes that concrete —
+// a WARN owes a remedy, and there is no remedy for "your box is configured the
+// way you configured it".
 //
 // FIVE PRINTED FORMS OVER THREE SEMANTIC STATES, and the two extra forms are
 // the point of having a helper at all:
@@ -1362,18 +1375,54 @@ describe('ccrc doctor: config', () => {
 //
 // MUTATIONS MEASURED (applied to the shipped helper, run, reverted): recorded
 // beside the implementation in this task's report.
-describe('ccrc doctor: the remote-control state config reports', () => {
-  const rcLine = (home: string): string => lineFor(runDoctor(home).stdout, 'config') ?? '';
+describe('ccrc doctor: rc — the state this box spawns its sessions in', () => {
+  const rcLine = (home: string): string => lineFor(runDoctor(home).stdout, 'rc') ?? '';
+
+  it('is a check of its own, and it answers on a FLEET-ROLE box — where config SKIPs', () => {
+    // THE FINDING THIS CHECK EXISTS FOR (fix round 1, Important). The state was
+    // first appended to `_check_config`'s two PASS details, which made a fact
+    // about SPAWN SHAPE conditional on the health of `ccrc.env` — a file the
+    // fleet host does not have at all (D-86's topology branch SKIPs it). So on
+    // the reference fleet, the ONE box that runs `on`, doctor said nothing
+    // about RC while `ccd`, `ccrc-doctor-checks` and the README all pointed
+    // operators at a line that was not printed there.
+    //
+    // The fixture is that box: agent unit, no `ccrc.env`, flag `on`.
+    const home = healthy('ccrc-doctor-rc-fleetrole-');
+    rmSync(join(home, '.ccrc', 'ccrc.env'), { force: true });
+    rmSync(join(home, '.config', 'systemd', 'user', 'ccrc.service'), { force: true });
+    writeUnitFile(home, 'ccrc-agent.service');
+    writeFileSync(join(home, 'fixture-unit-ccrc-agent.service'), 'active\n');
+    writeRcFlag(home, 'on\n');
+    const r = runDoctor(home);
+    expect(r.stdout, r.stdout).toMatch(/^PASS rc: on$/m);
+    // …and `config` still SKIPs on that box, unchanged: the two checks are
+    // independent now, which is the whole point.
+    expect(r.stdout).toMatch(/^SKIP config: /m);
+    expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) config: /m);
+  });
+
+  it('answers when ccrc.env is UNREADABLE too — the two files are unrelated', () => {
+    // The other three silent arms were the `ccrc.env` WARNs. A chmod-000
+    // `ccrc.env` says nothing whatsoever about how sessions spawn, and it used
+    // to take the RC readout down with it.
+    const home = healthy('ccrc-doctor-rc-envwarn-');
+    rmSync(join(home, '.ccrc', 'ccrc.env'), { force: true });
+    writeRcFlag(home, 'on\n');
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^WARN config: .*defaults apply/m);
+    expect(r.stdout).toMatch(/^PASS rc: on$/m);
+  });
 
   it('says "off (default)" on a box with no flag file — absent is what ccd reads as off', () => {
     const home = healthy('ccrc-doctor-rc-absent-');
-    expect(rcLine(home)).toMatch(/^PASS config: .*; remote-control off \(default\)$/);
+    expect(rcLine(home)).toBe('PASS rc: off (default)');
   });
 
   it('says "on" for a box that drives its sessions over the RC socket', () => {
     const home = healthy('ccrc-doctor-rc-on-');
     writeRcFlag(home, 'on\n');
-    expect(rcLine(home)).toMatch(/; remote-control on$/);
+    expect(rcLine(home)).toBe('PASS rc: on');
   });
 
   it('says "off" for a deliberate off, and does not dress it as the default', () => {
@@ -1382,15 +1431,14 @@ describe('ccrc doctor: the remote-control state config reports', () => {
     // them differently (one is a file to write, the other a file to edit).
     const home = healthy('ccrc-doctor-rc-off-');
     writeRcFlag(home, 'off\n');
-    expect(rcLine(home)).toMatch(/; remote-control off$/);
-    expect(rcLine(home)).not.toMatch(/default/);
+    expect(rcLine(home)).toBe('PASS rc: off');
   });
 
   it('says "unparseable" for a first line that is neither — never a deliberate off', () => {
     const home = healthy('ccrc-doctor-rc-garbage-');
     writeRcFlag(home, 'yes please\n');
-    expect(rcLine(home)).toMatch(
-      /; remote-control off \(unparseable — the file must hold one line reading 'on' or 'off'\)$/);
+    expect(rcLine(home)).toBe(
+      "PASS rc: off (unparseable — the file must hold one line reading 'on' or 'off')");
   });
 
   it('says "unparseable" for a newline-less `on` — the operator edit that did not take', () => {
@@ -1402,7 +1450,18 @@ describe('ccrc doctor: the remote-control state config reports', () => {
     // end the line for exactly this reason.
     const home = healthy('ccrc-doctor-rc-nonewline-');
     writeRcFlag(home, 'on');
-    expect(rcLine(home)).toMatch(/; remote-control off \(unparseable — /);
+    expect(rcLine(home)).toMatch(/^PASS rc: off \(unparseable — /);
+  });
+
+  it('says "unparseable" for an EMPTY file — the other side of the D-100 split', () => {
+    // The row D-100's whole argument turns on (review Minor 5): an empty file
+    // is READABLE, so it must not report as a permissions problem. Both sides
+    // of the split are asserted now — this one and the unreadable case below —
+    // because a deviation that exists to keep two conditions apart is only
+    // held by tests that pin BOTH of them.
+    const home = healthy('ccrc-doctor-rc-empty-');
+    writeRcFlag(home, '');
+    expect(rcLine(home)).toMatch(/^PASS rc: off \(unparseable — /);
   });
 
   it.skipIf(process.getuid?.() === 0)(
@@ -1411,45 +1470,39 @@ describe('ccrc doctor: the remote-control state config reports', () => {
       writeRcFlag(home, 'on\n');
       chmodSync(join(home, '.ccrc', 'remote-control'), 0o000);
       const r = runDoctor(home);
-      expect(lineFor(r.stdout, 'config') ?? '').toMatch(/; remote-control off \(unreadable — /);
+      expect(lineFor(r.stdout, 'rc') ?? '').toMatch(/^PASS rc: off \(unreadable — /);
       // …and bash does not diagnose it on stderr, for `_rc_enabled`'s own
       // measured reason: the redirect is attempted with stderr already
       // suppressed, not after.
       expect(r.stderr).toBe('');
     });
 
-  it('appends the state to the REMOTE-mode PASS too — one detail, both arms', () => {
-    // The arm an operator on the server box actually reads. Without this the
-    // fact would be reported on exactly the boxes that are least likely to
-    // have it set.
-    const home = healthy('ccrc-doctor-rc-remote-');
-    writeCcrcEnv(home, [
-      'CCRC_FLEET=remote',
-      'CCRC_AGENT_URL=ws://fleet.invalid:7789',
-      'CCRC_AGENT_TOKEN=ccrc-canary-agent-1f4d9',
-      '',
-    ].join('\n'));
-    writeRcFlag(home, 'on\n');
-    const line = rcLine(home);
-    expect(line).toMatch(/^PASS config: /);
-    expect(line).toContain('fleet mode remote');
-    expect(line).toMatch(/; remote-control on$/);
+  it('never WARNs and never FAILs — the state is a fact, and a WARN owes a remedy', () => {
+    // Every one of the five forms, including the two degraded ones, through the
+    // PASS class. A check that WARNed here would be asserting a preference
+    // about how somebody should run their box, and would owe a remedy line
+    // this file's contract has no sentence for.
+    for (const [what, bytes] of [
+      ['on', 'on\n'], ['off', 'off\n'], ['garbage', 'zzz\n'], ['empty', ''],
+    ] as const) {
+      const home = healthy(`ccrc-doctor-rc-alwayspass-${what}-`);
+      writeRcFlag(home, bytes);
+      const out = runDoctor(home).stdout;
+      expect(out, what).toMatch(/^PASS rc: /m);
+      expect(out, what).not.toMatch(/^(WARN|FAIL) rc: /m);
+    }
   });
 
-  it('leaves the fleet-role SKIP alone — a box with no ccrc.env measured nothing', () => {
-    // The SKIP says there is nothing here to measure, and that is a statement
-    // about the SERVER's config file. Appending a second fact to it would make
-    // a skip into a half-verdict, which this file's contract forbids.
-    const home = healthy('ccrc-doctor-rc-fleetrole-');
-    rmSync(join(home, '.ccrc', 'ccrc.env'), { force: true });
-    rmSync(join(home, '.config', 'systemd', 'user', 'ccrc.service'), { force: true });
-    writeUnitFile(home, 'ccrc-agent.service');
-    writeFileSync(join(home, 'fixture-unit-ccrc-agent.service'), 'active\n');
+  it('leaves `config` carrying nothing about it — the fact has one home', () => {
+    // The append is GONE, both arms. Two surfaces reporting one fact is how
+    // they come to disagree, and `_check_config`'s detail is a statement about
+    // `ccrc.env` again.
+    const home = healthy('ccrc-doctor-rc-config-clean-');
     writeRcFlag(home, 'on\n');
-    const lines = runDoctor(home).stdout.split('\n');
-    const skip = lines.find((l) => l.startsWith('SKIP config: ')) ?? '';
-    expect(skip, lines.join('\n')).not.toBe('');
-    expect(skip).not.toContain('remote-control');
+    const out = runDoctor(home).stdout;
+    const config = lineFor(out, 'config') ?? '';
+    expect(config).toMatch(/^PASS config: /);
+    expect(config).not.toContain('remote-control');
   });
 });
 
