@@ -33,12 +33,13 @@ import { MAIL_REPLAY_CEILING_ERROR, toRunSummary } from './coord/store.js';
 import { renderMailNudge } from './coord/envelope.js';
 import { configDirFor } from './config.js';
 
+const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:76 — see detectDialogs's own comment
+
 /** Task sweeps read every task file of every session, so they run on their own
  *  slower clock than the 2 s pane poll — a plan advances on the scale of
  *  minutes, and the fleet chip is a glance, not a readout. The open session's
  *  own stream reads its list every tick, so the screen you're looking at stays
  *  live regardless. */
-const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:76 — see detectDialogs's own comment
 const TASK_SWEEP_MS = 10_000;
 
 /** The sixth lane (the fifth is hook-state sweeping, which rides the 2 s tick).
@@ -2410,7 +2411,7 @@ export class FleetWatcher {
       // painted below it (fleet.ts's liveStatus doc) — so paneState would answer
       // 'busy' here and this sweep would suppress the parse forever. hasMenu is
       // deliberately independent of the busy check for exactly that reason
-      // (pane/dialog.ts:23-28); it's the same idiom send.ts:320 uses to decide
+      // (pane/dialog.ts:33-45); it's the same idiom send.ts:320 uses to decide
       // whether a menu owns the keyboard. SGR strip mirrors that idiom, though
       // tmux.capture() (-p, no -e) carries no escape codes to strip today, unlike
       // captureAnsi().

@@ -573,10 +573,10 @@ describe('dialog enrichment', () => {
   // RC-off pane DOES render the busy marker, unlike a --remote-control one).
   // `checkDialog`'s own gate asks `hasMenu`, not `paneState() === 'menu'` —
   // the send.ts:320 idiom, independent of the busy check for exactly this
-  // reason (pane/dialog.ts:23-28). Fix round 1 closed the second half: the
+  // reason (pane/dialog.ts:33-45). Fix round 1 closed the second half: the
   // plan's own "dialog.ts UNTOUCHED" fence had sat directly on the hazard's
   // real seat (`parseDialog`'s internal `paneState(pane) !== 'menu'` gate,
-  // pane/dialog.ts:142) — the fence lifted for that one line, so `parseDialog`
+  // pane/dialog.ts:169) — the fence lifted for that one line, so `parseDialog`
   // now gates on `hasMenu` too and stops vetoing a real menu parse on a busy
   // pane. This is the real behavioral pin the D-102 gap test could not be
   // until both halves were fixed.
