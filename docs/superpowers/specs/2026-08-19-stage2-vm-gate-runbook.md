@@ -59,8 +59,11 @@ bash install.sh
 **Expected result: exit 1.** This is not a failure of the run — it is the first measurement. A
 truly fresh VM has a roster (the seeded default, one `upstream` account named `claude`) but no
 Claude Code binary yet, so the closing `ccrc doctor` inside the install finds nothing at
-`$HOME/.local/bin/claude` and fails on it. Confirm the transcript reads (byte-for-byte, this is
-pinned by `server/test/ccrc-install.test.ts`'s A2-NEW case):
+`$HOME/.local/bin/claude` and fails on it. Confirm the transcript reads exactly this
+(the sentence is quoted verbatim from `ccd/ccrc-doctor-checks:1568`;
+`server/test/ccrc-install.test.ts`'s A2-NEW case pins the `FAIL wrappers: ` prefix, the
+`claude has no executable at $HOME/.local/bin/claude` substring, and that the remedy names
+`install Claude Code` and not `ccrc adopt` — not the full remedy sentence byte-for-byte):
 
 ```
 FAIL wrappers: claude has no executable at $HOME/.local/bin/claude
@@ -79,14 +82,18 @@ regression, not an expected state, and belongs in a bug report, not a checkbox.
 Also confirm, further up the same transcript, the RC line:
 
 ```
-PASS rc: off (default)
+PASS rc: off
 ```
 
 **PASS is correct here even though the run exits 1 overall** — `rc` is its own check (D-101) and it
 is *always* PASS: a fresh box that has never been told to run `--remote-control` is not a defect, it
-is the shipped default (D-99's whole point). "off (default)" specifically — not a bare "off" — is
-the tell that nobody has written the flag file yet; see the "editing the flag" step below for what
-distinguishes it from a bare `off`.
+is the shipped default (D-99's whole point). **Bare `off`, not `off (default)`** — by the time doctor
+runs, `_inst_rc` has already written `off\n` to the flag file (`cmd_install` runs `_inst_rc` before
+its closing `cmd_doctor`, in the same process), so `_dr_rc_state`'s absent-file guard is already
+false and it falls through to reporting the file's actual contents. `off (default)` is a different,
+narrower claim — "nobody has written this file at all" — and only appears on a box that has *not yet*
+run `ccrc install` (a bare `_dr_rc_state` probe on a dev checkout, say); it will never appear in this
+runbook's own transcript, because installing is what this step does.
 
 ### 3. Install Claude Code
 
@@ -148,9 +155,12 @@ ps -o args= -p "$pid"
 ```
 
 The command line ccd's `_spawn_start` handed to `exec` should be present in full — expect
-`--dangerously-skip-permissions` and (if you resumed) `--session-id`, and expect **no**
-`--remote-control` anywhere in it. This is the ground truth: it is what the OS actually launched,
-independent of what any doctor check or flag-file read claims.
+`--dangerously-skip-permissions` and `--session-id '<uuid>'` (this is a fresh spawn — step 6 is this
+id's first-ever `ccd start`, so `_spawn_start`'s mode is `new` and `sidflag` is unconditionally
+`--session-id`; a *later* `ccd start` on this same id, once it has already run once, would carry
+`--resume '<uuid>'` instead), and expect **no** `--remote-control` anywhere in it. This is the ground
+truth: it is what the OS actually launched, independent of what any doctor check or flag-file read
+claims.
 
 ### 8. PWA answers
 
