@@ -2097,3 +2097,76 @@ describe('ccrc install: running the WHOLE verb twice', () => {
     expect(strays(home)).toEqual([]);
   });
 });
+
+describe('install.sh: the bootstrap that hands off to ccrc install', () => {
+  // Task 9. `install-sh.test.ts` measures install.sh's OWN logic (the node
+  // floor, `-h`/`--help`) against a thin fixture that has none of `ccd/` or
+  // `pwa/` — those tests refuse before install.sh would ever look at either.
+  // This is the other half: the fixture tree Tasks 6-8 already built here has
+  // both, so this is where "install.sh really builds, in order, then really
+  // hands off to THIS TREE's own verb" is provable — without paying for the
+  // whole doctor-tail convergence a second time, which `ccrc-install` itself
+  // already measures end to end.
+  //
+  // Two substitutions make this fast and hermetic: `npm` is `ccrcEnv`'s
+  // existing recorder (records argv AND cwd, `mkdir -p node_modules`, exits
+  // 0 instantly — the same stub every other test in this file already trusts
+  // for "the npm argv sequence is X"), and `ccd/ccrc` — the verb install.sh
+  // hands off to — is REPLACED with a recorder of its own, because this test
+  // is about the HANDOFF, not a second run of the converger.
+  it('builds server, pwa, server dist — in that order — then execs its OWN ccd/ccrc install', () => {
+    const home = mkTmp('ccrc-installsh-e2e-');
+    const root = installFixtureTree(home);
+    copyFileSync(join(REPO, 'install.sh'), join(root, 'install.sh'));
+    chmodSync(join(root, 'install.sh'), 0o755);
+    // `TREE_FILES` carries nothing under `pwa/` — nothing `ccrc install`
+    // itself reads resolves there. install.sh's `cd "$ROOT/pwa"` does, so the
+    // directory has to exist for the (stubbed) `npm ci`/`npm run build` calls
+    // to run at all; its contents are never read, since npm is a recorder.
+    mkdirSync(join(root, 'pwa'), { recursive: true });
+    // The recorder REPLACES the copy `installFixtureTree` already placed at
+    // `<root>/ccd/ccrc` (from TREE_FILES) — proof that install.sh resolves
+    // `ccd/ccrc` relative to ITSELF (`$ROOT`, from its own `BASH_SOURCE`)
+    // rather than to the real repo this suite runs from: `$0` inside the
+    // recorder can only equal the FIXTURE's path if that resolution held.
+    writeFileSync(join(root, 'ccd', 'ccrc'), [
+      '#!/bin/sh',
+      'printf \'argv:%s\\n\' "$*" >> "$HOME/ccrc-exec-log"',
+      'printf \'path:%s\\n\' "$0" >> "$HOME/ccrc-exec-log"',
+      'exit 0',
+    ].join('\n'), { mode: 0o755 });
+
+    // `ccrcEnv` is `runInstall`'s environment builder, reused as-is: its `npm`
+    // recorder (argv AND cwd, one line per call) is exactly the fixture this
+    // test needs, and reusing it rather than re-declaring a second stub is
+    // the same rule `single-definition.test.ts` enforces for everything else
+    // in this tree. The rsync/systemctl/loginctl/gh/journalctl machinery it
+    // also plants is unused here (the recorder below never reaches any of
+    // them) and harmless.
+    const env = ccrcEnv(home);
+    const r = spawnSync(BASH, [join(root, 'install.sh')], { env, encoding: 'utf8' });
+    expect(r.status ?? -1, r.stderr ?? '').toBe(0);
+
+    // The build order install.sh's pinned code spells: ci in server, then
+    // ci+build in pwa, then build in server.
+    expect(read(join(home, 'npm-argv')).trim().split('\n')).toEqual([
+      'ci --no-audit --no-fund',
+      'ci --no-audit --no-fund',
+      'run build',
+      'run build',
+    ]);
+    expect(read(join(home, 'npm-cwd')).trim().split('\n')).toEqual([
+      join(root, 'server'),
+      join(root, 'pwa'),
+      join(root, 'pwa'),
+      join(root, 'server'),
+    ]);
+
+    // The handoff: `install install`'s argv, and — the hermetic proof — the
+    // path it ran FROM is the fixture's own tree, never the repo this test
+    // itself lives in.
+    const execLog = read(join(home, 'ccrc-exec-log')).trim().split('\n');
+    expect(execLog[0]).toBe('argv:install');
+    expect(execLog[1]).toBe(`path:${join(root, 'ccd', 'ccrc')}`);
+  });
+});
