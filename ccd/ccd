@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=e702e1e301ae39af2140b90c8bd5bd73cb621dcab6c7f01f8ff565d1b14bb612
+# ccrc:generated 1 sha256=5681b1e4b62822d46b050e354cd64aeb980fc9bd93d253315d9b353220d6e158
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
 set -uo pipefail
@@ -114,6 +114,15 @@ SPAWN_RESUME_SETTLE_S=2         # seconds `_spawn_start` waits, on the `resume` 
                                 # NOT an env override — same discipline, and the same reason, as
                                 # SPAWN_GATE_TRIES above: HOME is ccd's only isolation boundary and
                                 # nothing on the wire can set a shell variable.
+TMUX_SERVER_LOCK_WAIT=15        # seconds a spawn waits for the right to CREATE the tmux server.
+                                # Only the boot burst ever contends: 17 supervisors start in the
+                                # same second, all see no server, and without serialisation each
+                                # one races to make it (measured 2026-08-18 — see _tmux_new_session).
+                                # The critical section is one `list-sessions` plus one
+                                # non-blocking `new-session`, so a normal wait is milliseconds;
+                                # this bound only decides how long a WEDGED lock may stall a spawn
+                                # before it proceeds unserialised, which is the pre-lock behaviour
+                                # rather than a failure.
 SPAWN_EFFORT="ultracode"        # /effort sent to every freshly spawned session ("" disables).
                                 # ultracode is session-only by design (no settings.json key),
                                 # so injecting it at spawn is the only way to default it.
@@ -7717,6 +7726,47 @@ _tmux_new_session() {   # argv for `tmux new-session` -> runs it, PLACING the se
   # cgroup membership cannot be changed for a live process without a D-Bus
   # StartTransientUnit adoption, and that is not something to attempt against a
   # process holding 17 live sessions.
+  # FAST PATH — a server is already up, so this call cannot be the one that
+  # creates it. No lock, no scope, byte-for-byte the old behaviour. Every spawn
+  # after the first takes this path, which is why the lock below costs nothing
+  # on the hot path.
+  tmux list-sessions >/dev/null 2>&1 && { tmux new-session "$@"; return $?; }
+
+  # SLOW PATH — this call MAY create the server, and that is a race. Measured
+  # on the fleet host 2026-08-18, second attempt: 17 supervisors start within
+  # the same second, all seventeen see no server, and all seventeen call
+  # `systemd-run --scope --unit=ccrc-tmux-server`. Exactly one wins the unit
+  # name; the journal shows the other fifteen refused with "Unit
+  # ccrc-tmux-server.scope was already loaded or has a fragment file" — and
+  # THEY DID NOT WAIT. Each fell straight through to a bare `new-session`, one
+  # of THOSE created the server (in its own `claude-session@…` cgroup), and by
+  # the time the scope winner ran, its `tmux new-session` merely CONNECTED to
+  # that server. The scope was left holding a client that exited immediately,
+  # so `--collect` reaped it. End state: `Started ccrc-tmux-server.scope` in
+  # the journal, no scope on the box, and the server in the wrong cgroup again.
+  #
+  # The failed assumption was that a loser's fallback would attach to a server
+  # the winner had already placed. Losing the unit-name race says nothing about
+  # who reaches `new-session` first. So SERIALISE the decision instead of
+  # inferring an order from it.
+  local lock="$REG/.tmux-server.lock" lfd="" rc=0
+  if command -v flock >/dev/null 2>&1; then
+    exec {lfd}>>"$lock" 2>/dev/null || lfd=""
+    # BLOCKING, unlike ccd's three other flock sites. They pass `-n` because a
+    # loser queueing behind a worktree checkout or a destructive verb is worse
+    # than a refusal. Here waiting IS the mechanism: the loser must still be
+    # here when the winner returns, so that its re-check below sees the server
+    # and takes the attach path. A refusal would reproduce the exact bug.
+    [[ -n "$lfd" ]] && { flock -w "$TMUX_SERVER_LOCK_WAIT" "$lfd" 2>/dev/null || :; }
+    # A TIMED-OUT lock is NOT fatal and deliberately so: proceeding unserialised
+    # is precisely the behaviour that shipped before this lock existed, so the
+    # degraded mode is "possibly misplaced server", never "no session".
+  fi
+
+  # THE SECOND CHECK, and the reason this is a double-checked lock rather than
+  # one: between the fast-path check and acquiring the lock, the winner may have
+  # created the server. Asking again under the lock is what turns 16 racing
+  # creators into 1 creator and 16 attachers.
   local -a scope=()
   # `command -v` and not `_have_systemctl`: this asks about systemd-run
   # specifically, and the single-box OSS story is a box with neither.
@@ -7724,16 +7774,25 @@ _tmux_new_session() {   # argv for `tmux new-session` -> runs it, PLACING the se
     scope=(systemd-run --user --scope --quiet --collect --unit=ccrc-tmux-server)
   fi
   if [[ ${#scope[@]} -gt 0 ]]; then
-    "${scope[@]}" tmux new-session "$@" && return 0
-    # systemd-run refused (no D-Bus, no user manager, unit name taken by a
-    # scope that has not collected yet). A session that does not exist is a
+    # systemd-run may still refuse (no D-Bus, no user manager, or a scope of
+    # this name that has not collected yet). A session that does not exist is a
     # worse outcome than one in the wrong cgroup, so fall through and create it
-    # bare — the same trade the old `||` made. ONLY reachable when a scope was
-    # actually attempted: without one, the bare call below runs exactly once,
-    # because retrying a `new-session` that failed on its own merits would hit
+    # bare — the same trade the old `||` made.
+    "${scope[@]}" tmux new-session "$@" || tmux new-session "$@"
+    rc=$?
+  else
+    # No scope wanted (server appeared under the lock) or none available. ONE
+    # attempt: retrying a `new-session` that failed on its own merits would hit
     # a duplicate-name error and turn one failure into a confusing two.
+    tmux new-session "$@"
+    rc=$?
   fi
-  tmux new-session "$@"
+  # SINGLE EXIT for the fd, deliberately — D-B8-4 recorded the cost of an early
+  # `return` skipping a close: ccd is SOURCED, and `flock` treats two `open()`s
+  # of one file in a process as strangers, so a leaked fd is a lock nothing
+  # releases. `die` is exempt only because exiting closes it.
+  [[ -n "$lfd" ]] && exec {lfd}>&-
+  return $rc
 }
 
 # `_spawn_start`'s ANSWER, and it is a global rather than stdout for a

@@ -28,7 +28,8 @@
 // FIXTURE HOME ONLY — never the live box. The recording systemctl/systemd-run
 // from ccdWsHelpers.ts is what makes any of this assertable.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { readFileSync } from 'node:fs';
+import fs, { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { CCD, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
@@ -102,6 +103,92 @@ describe('_tmux_new_session', () => {
           command() { if [[ "$1 $2" == "-v systemd-run" ]]; then return 1; fi; builtin command "$@"; }
           _tmux_new_session -d -s cc-demo 'true'`);
     expect(h.calls().filter((c) => c.startsWith('tmux new-session'))).toHaveLength(1);
+  });
+});
+
+describe('the boot race — 17 supervisors, one server (D-B8-7, second attempt)', () => {
+  // WHAT ACTUALLY HAPPENED, measured on the fleet host after the second reboot.
+  // All 17 units start in the same second, all see no server, all call
+  // `systemd-run --scope --unit=ccrc-tmux-server`. One wins the unit name; the
+  // journal shows the other 15 refused with "Unit ccrc-tmux-server.scope was
+  // already loaded or has a fragment file" — AND THEY DID NOT WAIT. Each fell
+  // through to a bare `new-session`, one of THOSE created the server in its own
+  // `claude-session@…` cgroup, and the scope winner's `new-session` then merely
+  // connected to it, leaving the scope empty for `--collect` to reap.
+  //
+  // The first fix reasoned that a loser's fallback would attach to a server the
+  // winner had already placed. Losing a unit-name race says nothing about who
+  // reaches `new-session` first. These tests pin the serialisation that makes
+  // the ordering true instead of assumed.
+
+  it('runs the create path exactly ONCE across concurrent callers', () => {
+    const h = makeCcdHarness('ccrc-ccd-tmuxrace-');
+    // A tmux stub with REAL shared state: `list-sessions` answers from a file
+    // that `new-session` creates. That is what makes this a race test rather
+    // than a stub-ordering test — remove the lock and the count goes up.
+    // The `sleep 0.2` inside the create widens the window the lock closes; it
+    // is the difference between "usually passes" and "measures the thing".
+    h.sh(`cat > "$HOME/tmuxstub" <<'EOS'
+tmux() {
+  case "$1" in
+    list-sessions) [ -f "$HOME/server-up" ] ;;
+    new-session)   if [ ! -f "$HOME/server-up" ]; then
+                     sleep 0.2; echo create >> "$HOME/creates"; : > "$HOME/server-up"
+                   else echo attach >> "$HOME/attaches"; fi ;;
+    *) : ;;
+  esac
+}
+EOS
+      :`);
+    const script =
+      'source "$HOME/tmuxstub";'
+      + ' for i in $(seq 1 8); do ( _tmux_new_session -d -s cc-$i "true" ) & done; wait';
+    // NO SYSTEMD_RUN_RC=0 here: at rc 0 the contained `systemd-run` records its
+    // argv and returns WITHOUT exec'ing it, so no tmux would run and the test
+    // would measure nothing. Letting it refuse (the default 97) sends every
+    // caller down the bare-create path — which is the path that raced.
+    h.sh(script);
+    const creates = fs.existsSync(path.join(h.home, 'creates'))
+      ? fs.readFileSync(path.join(h.home, 'creates'), 'utf8').split('\n').filter(Boolean) : [];
+    expect(creates,
+      'more than one caller created the server — the losers raced ahead instead of waiting, which is'
+      + ' exactly the boot failure this lock exists to prevent')
+      .toHaveLength(1);
+    h.cleanup();
+  });
+
+  it('takes the lock only when no server is running — the hot path stays lock-free', () => {
+    const h = makeCcdHarness('ccrc-ccd-tmuxlock-');
+    // Every spawn after the first must not serialise on a box-wide lock. If the
+    // lock file is never created, nothing contended for it.
+    h.sh(`${TMUX_SERVER_UP} _tmux_new_session -d -s cc-demo 'true'`);
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', '.tmux-server.lock')),
+      'the fast path opened the box-wide lock; every spawn on the box would then serialise on it')
+      .toBe(false);
+    h.cleanup();
+  });
+
+  it('still creates the session when flock is unavailable — degraded, never absent', () => {
+    const h = makeCcdHarness('ccrc-ccd-tmuxnoflock-');
+    // The single-box OSS story again. Without flock the serialisation is
+    // ABSENT, not broken: the worst case is the pre-lock behaviour, a possibly
+    // misplaced server — never a session that does not exist.
+    h.sh(`${TMUX_NO_SERVER}
+          command() { if [[ "$1 $2" == "-v flock" ]]; then return 1; fi; builtin command "$@"; }
+          _tmux_new_session -d -s cc-demo 'true'`);
+    expect(h.calls().some((c) => c.startsWith('tmux new-session'))).toBe(true);
+    h.cleanup();
+  });
+
+  it('waits rather than refusing — the lock is blocking, and `-n` would reproduce the bug', () => {
+    // ccd's three other flock sites pass `-n` on purpose. This one must not:
+    // a refused loser proceeds immediately, which is precisely how 15 losers
+    // raced ahead of the scope winner at boot.
+    const src = readFileSync(CCD, 'utf8');
+    const line = src.split('\n').filter((l) => l.includes('flock -w') && l.includes('TMUX_SERVER_LOCK_WAIT'));
+    expect(line, 'the tmux-server lock must be a BOUNDED BLOCKING acquire').toHaveLength(1);
+    expect(line[0], 'a `-n` acquire here reproduces the boot race the lock exists to close')
+      .not.toMatch(/flock\s+-n/);
   });
 });
 

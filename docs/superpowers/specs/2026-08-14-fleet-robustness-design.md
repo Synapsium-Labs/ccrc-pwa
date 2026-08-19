@@ -789,6 +789,40 @@ problem.
 > observe that the real `tmux` exits, because `tmux` was stubbed. **A test can pin the exact shape of a
 > mechanism whose effect is nil.** The only thing that caught this was going and measuring the box.
 
+---
+
+> **SECOND CORRECTION, measured 2026-08-18 22:41 — the fix above was necessary and not sufficient.**
+> The reboot that was supposed to verify `_tmux_new_session` verified instead that it loses a race.
+> The server came back in `claude-session@claude-synapsium-platform.service`; the scope was absent.
+>
+> **This time the journal names the mechanism exactly.** At 22:41:46 fifteen supervisors logged
+> `Failed to start transient scope unit: Unit ccrc-tmux-server.scope was already loaded or has a
+> fragment file`, and one logged `Started ccrc-tmux-server.scope - /usr/bin/tmux new-session -d -s
+> cc-claude-corp-data-internal`. **The scope was created. It never held anything.** The fifteen losers
+> did not wait: each fell through to a bare `tmux new-session`, one of those created the server in its
+> own cgroup, and the scope winner's `new-session` then merely CONNECTED to that server — leaving its
+> scope holding a client that exited at once, which `--collect` duly reaped.
+>
+> **The assumption that failed** was written into the previous fix as if it were reasoning: that a
+> loser's bare fallback "simply attaches to the server the first one already placed". Losing the
+> unit-name race says nothing about who reaches `new-session` first. **systemd serialises the NAME, not
+> the WORK**, and an ordering was inferred from a mechanism that does not provide one.
+>
+> **The fix is a double-checked lock** on `$REG/.tmux-server.lock` (`TMUX_SERVER_LOCK_WAIT`, 15s,
+> blocking — ccd's other three `flock` sites use `-n`, and `-n` here reproduces the bug exactly). The
+> fast path, where a server already exists, takes no lock, so nothing on the box serialises after the
+> first spawn.
+>
+> **What made the difference is the shape of the test, not its rigour.** Every earlier test drove ONE
+> caller. The defect only exists when there are seventeen. The race test now runs eight concurrent
+> callers through a tmux stub with real shared state and counts creates: 1 with the lock, **8** with the
+> acquire removed. Generalising: *a concurrency defect cannot be caught by a suite whose every case is
+> sequential, however thorough each case is.* Both failures of this section share one root — the test
+> could not express the condition under which the mechanism runs in production.
+>
+> **Status: still unverified.** Third reboot pending. Same criterion, unchanged: the cgroup leaf must
+> be `ccrc-tmux-server.scope`.
+
 **What a reboot actually costs, measured 2026-08-15 — this is the part to read before scheduling it.**
 The box currently runs **21 tmux sessions, 18 active units, and 15 enabled units.** A reboot kills the
 tmux server, so *every* pane dies; what returns is whatever systemd starts, which is the **15 enabled
