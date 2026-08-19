@@ -365,6 +365,16 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
     '      [ "$3" = "$bad" ] && { echo "Failed to enable unit $3: fixture" >&2; exit 1; }',
     '    fi',
     '    exit 0 ;;',
+    // `restart` is the line `_inst_enable` gained in fix round 1 — deploy's
+    // own (deploy.sh:719-721), and the one that makes a re-run replace the
+    // RUNNING server rather than only the files it runs from. Contained the
+    // same way as `enable`: recorded, answered, never a real systemctl.
+    '  restart)',
+    '    [ -n "$2" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }',
+    '    if [ -f "$HOME/fixture-restart-fail" ]; then',
+    '      echo "Job for $2 failed: fixture" >&2; exit 1',
+    '    fi',
+    '    exit 0 ;;',
     // `is-active` answers from `<home>/fixture-unit-<unit>` when a test has an
     // opinion. The DEFAULT is `active`, unlike the doctor suite's stub, and the
     // difference is the fixture's subject: there, a unit is whatever the test
@@ -1052,6 +1062,34 @@ describe('ccrc install: a box with no node', () => {
   });
 });
 
+describe('ccrc install: a box with no systemd', () => {
+  // The sibling of the node probe above, added in fix round 1 (Minor 2). Every
+  // ccrc service and every ccd session is a `systemd --user` unit, so a box
+  // with no systemctl cannot run a fleet — but until the probe existed it
+  // found that out at STEP 10, having already written `~/.ccrc`,
+  // `~/.local/bin`, `~/ccrc` and the operator's `~/.tmux.conf`, and it said so
+  // in a sentence whose remedy named the command the box does not have
+  // (`systemctl --user status ccrc.service`).
+  it('refuses by name BEFORE the first write, and does not blame the units', () => {
+    const home = freshBox('ccrc-install-nosystemd-');
+    const r = runInstall(home, ['install'], { PATH: pathWithout(home, 'systemctl') },
+      { omit: ['systemctl'] });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(
+      /^ccrc: systemctl is required by 'ccrc install' — every ccrc service and every ccd session is a systemd --user unit, and this box has no systemctl on PATH\./m);
+    // The two conditions stay apart: this is not "systemd refused these units".
+    expect(r.stderr).not.toMatch(/daemon-reload failed/);
+    // NOTHING was written — the whole point of probing before the first step.
+    // (`.local/bin` exists because the runner plants its stubs there; what must
+    // not be in it is anything this verb installs.)
+    expect(existsSync(join(home, '.ccrc')), '$HOME/.ccrc was created anyway').toBe(false);
+    expect(existsSync(placed(home)), 'the tree was placed anyway').toBe(false);
+    expect(existsSync(join(home, '.local', 'bin', 'ccd'))).toBe(false);
+    expect(existsSync(join(home, '.tmux.conf'))).toBe(false);
+    expect(r.stdout).toBe('');
+  });
+});
+
 describe('ccrc install: re-running converges', () => {
   it('leaves the two seeded files alone and does not rewrite accounts.sh', () => {
     // Idempotence measured on MTIME, not on bytes: "the file still says the
@@ -1671,6 +1709,17 @@ describe('ccrc install: the units, and the one this box must not be given', () =
       '--user daemon-reload',
       '--user enable --now ccrc.service',
       '--user enable --now ccd-cap-scopes.timer',
+      // THE RESTART, in deploy's own position (deploy.sh:719-721): after both
+      // enables, before the verify. `enable --now` on an already-active unit is
+      // a no-op, and `ccrc.service` runs `node ~/ccrc/server/dist/…` — a process
+      // pinned to the dist it started with. Without this line the SECOND
+      // `ccrc install` rsyncs a new dist, stamps the new sha, prints "every step
+      // above converged", and leaves the box serving the old code, with nothing
+      // on a single box able to notice (`_check_fleet` SKIPs in local mode).
+      // It is also what makes `verify-service.sh` — "Post-restart verification"
+      // by its own header — measure this install's process rather than the
+      // previous one's.
+      '--user restart ccrc.service',
     ]);
     for (const c of calls) {
       expect(c.onDisk, `${c.argv} ran before the unit files landed`)
@@ -1706,8 +1755,33 @@ describe('ccrc install: the units, and the one this box must not be given', () =
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/CRASH-LOOPING/);
     expect(r.stderr).toMatch(
-      /^ccrc: ccrc\.service was started and did not stay up, so this box has the unit and not the service/m);
+      /^ccrc: ccrc\.service was restarted and did not stay up, so this box has the unit and not the service/m);
     expect(r.stdout).not.toMatch(/^install: linger:/m);
+  });
+
+  it('refuses when the restart itself fails — the old server is still the one running', () => {
+    // A restart systemd refuses (a unit that will not start at all) is a
+    // different condition from a service that starts and then dies, and the two
+    // remedies an operator reaches for are the same command with different
+    // output. What must not happen is either being silent: the box is then
+    // running the PREVIOUS install's server while every other artifact on it
+    // claims the new build.
+    const home = freshBox('ccrc-install-restart-fails-');
+    writeFileSync(join(home, 'fixture-restart-fail'), 'yes\n');
+    const r = runInstall(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(
+      /^ccrc: systemctl --user restart ccrc\.service failed, so this box is still running the server the previous install started — read what it says: systemctl --user status ccrc\.service$/m);
+    expect(r.stdout).not.toMatch(/^install: linger:/m);
+  });
+
+  it('says on the transcript that the service was restarted onto the new tree', () => {
+    // The step's own line is what an operator reads when they wonder whether a
+    // re-run actually replaced the running server. It names the thing the
+    // restart is FOR — the tree this run placed — rather than saying "enabled"
+    // and leaving the process question unanswered.
+    expect(units.r.stdout).toMatch(
+      /^install: services: ccrc\.service and ccd-cap-scopes\.timer enabled, and ccrc\.service restarted onto the tree this run placed$/m);
   });
 
   it('honours the CCRC_VERIFY_* knobs rather than waiting out a production window', () => {
@@ -1775,7 +1849,8 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
     expect(r.stdout).toMatch(/^install: linger: could not enable — run: sudo loginctl enable-linger \d+$/m);
     // …the steps AFTER it ran, which is the half that makes this a "continue"
     // rather than a die with a friendlier sentence.
-    for (const step of ['dirs: ', 'hooks: ', 'wrappers: ', 'done — ']) {
+    for (const step of ['dirs: ', 'hooks: ', 'wrappers: ',
+      'done — converged with 1 degraded step \\(linger\\)']) {
       expect(r.stdout, `the install stopped at linger: no "install: ${step}" line`)
         .toMatch(new RegExp(`^install: ${step}`, 'm'));
     }
@@ -1836,6 +1911,35 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
       .toEqual(['ccd', 'ccd-cap-scopes', 'ccrc']);
   });
 
+  it('never calls ccrc\'s own executables orphans (D-93)', () => {
+    // MEASURED BEFORE THE FIX: every install printed
+    //   ORPHAN ccd: …/.local/bin/ccd carries ccrc's marker and no account in
+    //   the roster claims it
+    //   remedy: add an account "ccd" … or remove …/.local/bin/ccd by hand
+    // four lines above this same transcript's own closing advice, "next: add
+    // your first session with: ccd menu". Self-destructive advice about the
+    // binary the next line tells the operator to run, on the first verb a new
+    // user types.
+    //
+    // The cause is not a mistake to be undone: `ccd/ccd:2` carries the
+    // provenance marker DELIBERATELY (41bdf60, gated by ownership.test.ts), so
+    // that ccrc's own shipped `ccd` reads `ccrc-unmodified` and the installer
+    // may replace it. The orphan walk simply must not treat ccrc's own
+    // toolchain as a candidate account wrapper — `TOOLCHAIN_EXECUTABLES` in
+    // deploy/gen-wrappers.mjs.
+    const { home, r } = converged;
+    expect(existsSync(join(home, '.local', 'bin', 'ccd')),
+      'the fixture never installed the ccd this is about').toBe(true);
+    expect(r.stdout, 'ccrc told the operator to delete its own ccd')
+      .not.toMatch(/^ORPHAN /m);
+    // …and the count in the converger's own summary agrees, which is the field
+    // the pre-existing assertion stopped one short of.
+    expect(r.stdout).toMatch(/^summary: 1 account\(s\) in .*; 0 written, 0 converged, 0 refused, 0 orphaned$/m);
+    // The general orphan REPORT is untouched — ccrc-wrappers.test.ts pins a
+    // synthetic leftover still being reported, and this must not have widened
+    // into "no orphans are ever named".
+  });
+
   it('a refused wrapper is a failed install', () => {
     // `--force`/`--adopt` are the flags that decide what may be overwritten and
     // this step passes neither, so a file ccrc did not write is REFUSED — with
@@ -1867,7 +1971,10 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     const home = freshBox('ccrc-install-doctor-ok-');
     const r = runInstall(home);
     expect(r.code, r.stderr).toBe(0);
+    // The CLEAN variant of the closing line — the degraded one is asserted on
+    // its own fixture in the doctor-fails test below.
     expect(r.stdout).toMatch(/^install: done — every step above converged$/m);
+    expect(r.stdout).not.toMatch(/degraded/);
     // Doctor's summary is the LAST line, because doctor is the last command:
     // the verb's exit code is its verdict.
     const lines = r.stdout.split('\n').filter(Boolean);
@@ -1915,7 +2022,12 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
       expect(r.stdout, `no "install: ${step}:" line survived the failing doctor`)
         .toMatch(new RegExp(`^install: ${step}: `, 'm'));
     }
-    expect(r.stdout).toMatch(/^install: done — every step above converged$/m);
+    // …and the closing line MEASURES rather than claims: this run had a step
+    // that neither converged nor died, and says so. "every step above
+    // converged" here would be a false sentence four lines under the step that
+    // reported it could not (fix round 1, Minor 1).
+    expect(r.stdout).toMatch(/^install: done — converged with 1 degraded step \(linger\)$/m);
+    expect(r.stdout).not.toMatch(/^install: done — every step above converged$/m);
   });
 });
 

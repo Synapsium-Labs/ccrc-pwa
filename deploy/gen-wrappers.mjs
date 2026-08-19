@@ -129,6 +129,30 @@ import { markGenerated, verifyMarker } from '../shared/mark.mjs';
  *  one either. */
 const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
 
+/** ccrc's OWN executables, installed into the same `$HOME/.local/bin` the
+ *  orphan scan below walks. They are not account wrappers and never can be —
+ *  and the scan cannot tell that from the bytes, because `ccd` carries the
+ *  provenance marker on line 2 DELIBERATELY (`41bdf60`: a computed digest,
+ *  gated by `server/test/ownership.test.ts:139-153`, so that ccrc's own shipped
+ *  `ccd` reports `ccrc-unmodified` and the installer may therefore replace it
+ *  on a box). Marked, id-shaped, in the bin dir, claimed by no account: five
+ *  for five against the orphan predicate.
+ *
+ *  MEASURED CONSEQUENCE, which is why this list exists (D-93): every `ccrc
+ *  install` printed `ORPHAN ccd: … remedy: … or remove $HOME/.local/bin/ccd by
+ *  hand once you are sure nothing runs it` — four lines above the same
+ *  transcript's own closing advice, "next: add your first session with: ccd
+ *  menu". Self-destructive advice about the binary the next line tells the
+ *  operator to run, on the first verb a new user types.
+ *
+ *  BEFORE the marker test, and after `rosterIds`: a roster that legitimately
+ *  declares an account named `ccd` is already skipped one line earlier, so this
+ *  can never mask a real account. It is the single source for these three
+ *  names as a SET — `_inst_bins` (ccd/ccrc) and `deploy.sh` each enumerate what
+ *  they install, which is a different question with a different answer the day
+ *  one of them installs a fourth thing. */
+const TOOLCHAIN_EXECUTABLES = new Set(['ccd', 'ccrc', 'ccd-cap-scopes']);
+
 /** Reads an existing wrapper at `path` and reports what is there against the
  *  text this run staged for it. SIX outcomes, never five: `absent` (nothing
  *  is there yet), `unreadable` (something is there and this process could
@@ -320,6 +344,11 @@ function main(argv) {
     if (!entry.isFile()) continue;
     const name = entry.name;
     if (!ID_RE.test(name) || rosterIds.has(name)) continue;
+    // ccrc's own toolchain — see `TOOLCHAIN_EXECUTABLES`. After `rosterIds`,
+    // so an account really named `ccd` is settled by the roster and not by
+    // this list; before the marker test, because the marker is exactly what
+    // made these three reachable here.
+    if (TOOLCHAIN_EXECUTABLES.has(name)) continue;
     // `readIfScript` answers `null` for BOTH "this process could not read it"
     // and "it is not a script at all", and that collapse is correct HERE and
     // only here: the orphan scan does the same thing about each — nothing.

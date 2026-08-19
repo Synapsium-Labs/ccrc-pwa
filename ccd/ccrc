@@ -162,6 +162,22 @@ BOX_BUILD=()
 BOX_HEALTH=()
 BOX_HEALTH_WHY=""
 
+# ── WHICH STEPS DEGRADED, so the closing line can say so ──────────────────
+# `cmd_install`'s steps either converge or die — with ONE exception by design,
+# `_inst_linger`, which cannot converge without a privilege the operator may
+# not have and must not abort a run over it. Until fix round 1 the tail said
+# "every step above converged" unconditionally, which is literally false in
+# exactly that case (and a test pinned the false line). A step that degrades
+# appends its NAME here and the tail reads the array, rather than the tail
+# re-deriving the condition from something it can only guess at.
+#
+# Declared at file scope for the reason the three arrays above it are: `set -u`
+# makes an unset array fatal on read, and the reader (`cmd_install`'s tail) runs
+# whether or not the one writer did. `cmd_install` clears it before the first
+# step, so a sourced-and-called-twice shell cannot carry one run's degradation
+# into the next.
+INST_DEGRADED=()
+
 usage() {
   cat <<EOF
 usage: $PROG {doctor|status|adopt|wrappers|install|version}
@@ -1624,6 +1640,28 @@ cmd_install() {
   command -v node >/dev/null 2>&1 \
     || _ccrc_die "node is required by 'ccrc install' — it runs ${CCRC_HERE%/*}/deploy/gen-accounts.mjs to write \$HOME/.ccrc/accounts.sh — but is not on PATH. Install Node (this repo's floor is in server/package.json's \"engines\") or put it on PATH, then re-run. Nothing on this box was written or changed."
 
+  # THE SECOND BY-NAME PROBE, for the same reason and at the same point (fix
+  # round 1, Minor 2). `_inst_enable` is step 10 of 14, and on a box with no
+  # systemd — macOS, WSL1, a bare container — it used to arrive as "systemctl
+  # --user daemon-reload failed … read what it says: systemctl --user status
+  # ccrc.service", a remedy naming the command the box does not have. Two
+  # conditions an operator acts on completely differently ("this box has no
+  # systemd" and "systemd refused these units") collapsed into one sentence,
+  # and by then eight steps had already written `~/.ccrc`, `~/.local/bin`,
+  # `~/ccrc` and the operator's `~/.tmux.conf`. `ccrc-doctor-checks` already
+  # keeps the same distinction as its own verdict ("systemctl is not on PATH,
+  # but this box has unit files"), so refusing here is the install-time half of
+  # a line doctor already draws.
+  #
+  # `loginctl` is deliberately NOT probed beside it: `_inst_linger` is the one
+  # step built to survive its own failure, so an absent loginctl degrades to
+  # "install: linger: could not enable" and doctor's own `linger` check reports
+  # "loginctl is not on PATH" with its own remedy. A box with no systemd cannot
+  # run a fleet at all; a box that cannot enable linger today still installs.
+  command -v systemctl >/dev/null 2>&1 \
+    || _ccrc_die "systemctl is required by 'ccrc install' — every ccrc service and every ccd session is a systemd --user unit, and this box has no systemctl on PATH. Install/enable systemd, or do not run a fleet on this box. Nothing on this box was written or changed."
+
+  INST_DEGRADED=()
   _inst_banner
   _inst_roster
   _inst_accounts_sh
@@ -1658,7 +1696,20 @@ cmd_install() {
   # The literals below are reached only when the file names neither key: a
   # hand-edited env file that dropped them still boots, because
   # `server/src/config.ts` carries the same two defaults.
-  echo "install: done — every step above converged"
+  # THE CLOSING LINE IS A MEASUREMENT TOO (fix round 1, Minor 1). "every step
+  # above converged" is false in exactly the case this verb added an exception
+  # for — a linger nobody could enable — and the transcript is the one thing an
+  # operator scrolls back to when the exit code is 1. So the clean run keeps the
+  # sentence it earned and the degraded one names what it is missing, in the
+  # same words the step above used.
+  if [ "${#INST_DEGRADED[@]}" -eq 0 ]; then
+    echo "install: done — every step above converged"
+  else
+    local word="steps" names
+    [ "${#INST_DEGRADED[@]}" -eq 1 ] && word="step"
+    names="$(IFS=', '; printf '%s' "${INST_DEGRADED[*]}")"
+    echo "install: done — converged with ${#INST_DEGRADED[@]} degraded $word ($names)"
+  fi
   local host="" port=""
   if [ -f "$BOX_ENV_FILE" ]; then
     host="$(_box_env_value "$BOX_ENV_FILE" CCRC_HOST)"
@@ -2203,12 +2254,41 @@ _inst_enable() {
     systemctl --user enable --now "$u" \
       || _ccrc_die "systemctl --user enable --now $u failed — read what it says: systemctl --user status $u"
   done
+  # ── THE RESTART, AND WHY `enable --now` IS NOT ENOUGH ─────────────────
+  # `deploy.sh:719-721` has this line between the enable and the verify, and
+  # Task 8 shipped without it. Measured consequence on the SECOND run — the
+  # path this verb's own promise ("re-running converges") points every operator
+  # at: `enable --now` on an already-active unit is a no-op, and
+  # `ccrc.service` is `ExecStart=… node %h/ccrc/server/dist/server/src/index.js`,
+  # so the running process is pinned to the `dist` it started with. `_inst_tree`
+  # rsyncs a new one, `_inst_stamp` writes the new sha, the transcript says
+  # every step converged and `ccrc version` reports the new build — while the
+  # box goes on serving the old code. Nothing catches it on a single box:
+  # `_check_fleet` SKIPs in local mode, and no check compares the running
+  # server's build to the stamp. That is this file's own named defect (a state
+  # asserted and never measured) with the measurement printed above it.
+  #
+  # It also restores `verify-service.sh`'s documented contract: its header
+  # calls it "Post-restart verification", and with nothing restarted MainPID is
+  # trivially stable and the script certifies the process the PREVIOUS install
+  # started. On a fresh box the restart is harmless — the unit has just been
+  # started by `enable --now`, and restarting it costs one process cycle before
+  # anything is serving.
+  #
+  # ONLY `ccrc.service`. The timer is `enable --now`-idempotent by construction
+  # (it fires `ccd-cap-scopes` on a schedule and holds no code in memory), and
+  # every `claude-session@` unit beside it is a long-lived `ccd supervise` this
+  # verb must never touch (CLAUDE.md). Deploy's supervisor sweep is a fleet-host
+  # operation with its own KillMode preflight; a single-box installer does not
+  # inherit it.
+  systemctl --user restart ccrc.service \
+    || _ccrc_die "systemctl --user restart ccrc.service failed, so this box is still running the server the previous install started — read what it says: systemctl --user status ccrc.service"
   local verify="$CCRC_HERE/../deploy/verify-service.sh"
   if [ -f "$verify" ]; then
     bash "$verify" ccrc.service \
-      || _ccrc_die "ccrc.service was started and did not stay up, so this box has the unit and not the service — read what it says: systemctl --user status ccrc.service"
+      || _ccrc_die "ccrc.service was restarted and did not stay up, so this box has the unit and not the service — read what it says: systemctl --user status ccrc.service"
   fi
-  echo "install: services: ccrc.service and ccd-cap-scopes.timer enabled and started"
+  echo "install: services: ccrc.service and ccd-cap-scopes.timer enabled, and ccrc.service restarted onto the tree this run placed"
 }
 
 # ── _inst_linger — the one step that reports a failure and CONTINUES ──────
@@ -2237,6 +2317,10 @@ _inst_linger() {
     return 0
   fi
   echo "install: linger: could not enable — run: sudo loginctl enable-linger $UID"
+  # NAMED, so the closing line can count it rather than claim it did not happen.
+  # This is the only writer of `INST_DEGRADED` today and the only step entitled
+  # to be one: every other step converges or dies.
+  INST_DEGRADED+=(linger)
   return 0
 }
 
