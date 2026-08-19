@@ -56,6 +56,29 @@ const TMUX = `sleep() { :; };
     esac
   };`;
 
+/** A tmux whose `--resume` new-session leaves no pane (the wrapper exits on a
+ *  uuid with no transcript) but whose `--session-id` one does — i.e. the
+ *  substrate that makes `_spawn_start` emit BOTH of its spawn lines.
+ *
+ *  AT MODULE SCOPE because it now has two consumers: the `--resume` fallback
+ *  describe below, which is where it was written, and Stage 2e's flag-file
+ *  describe, whose whole point is that the RETRY spawn line is pinned
+ *  independently of the primary one. A second copy in the second describe
+ *  would be the copy that stops tracking the first. */
+const RESUME_DIES = `sleep() { :; };
+    tmux() {
+      echo "tmux $*" >> "$HOME/ccd-calls"
+      case "$1" in
+        new-session)  case "$*" in *--session-id*) : > "$HOME/pane-up" ;; esac ;;
+        has-session)  [[ -e "$HOME/pane-up" ]] ;;
+        list-sessions) return 0 ;;
+      esac
+    };`;
+
+/** The `tmux new-session` argv lines this run produced, in order. Hoisted for
+ *  the same reason `RESUME_DIES` is: both describes below read it. */
+const newSessions = (): string[] => h.calls().filter((c) => c.startsWith('tmux new-session'));
+
 const seed = (id: string): void => {
   h.sh(`_reg_set ${id} wrapper claude
         _reg_set ${id} workdir '${h.home}'
@@ -449,20 +472,6 @@ describe('the settle bound is not addressable from argv', () => {
  *  own rc 3/4 warnings already name the trap and tell a human to clear the
  *  field; this is that escape hatch, taken once, automatically. */
 describe('_spawn_start: the --resume fallback a monotone `started` owes', () => {
-  /** A tmux whose `--resume` new-session leaves no pane (the wrapper exits on a
-   *  uuid with no transcript) but whose `--session-id` one does. */
-  const RESUME_DIES = `sleep() { :; };
-    tmux() {
-      echo "tmux $*" >> "$HOME/ccd-calls"
-      case "$1" in
-        new-session)  case "$*" in *--session-id*) : > "$HOME/pane-up" ;; esac ;;
-        has-session)  [[ -e "$HOME/pane-up" ]] ;;
-        list-sessions) return 0 ;;
-      esac
-    };`;
-
-  const newSessions = (): string[] => h.calls().filter((c) => c.startsWith('tmux new-session'));
-
   it('retries ONCE with --session-id when the resume produced no session', () => {
     seed('myid');
     h.sh(`${RESUME_DIES} rm -f "$HOME/pane-up"; _spawn_start myid resume 2>/dev/null`);
@@ -597,5 +606,96 @@ describe('ws-add serialises per project', () => {
     const t = h.sh('type cmd_ws_add');
     expect(t.split('exec {lfd}>&-').length - 1).toBe(2);
     expect(t.lastIndexOf('exec {lfd}>&-')).toBeLessThan(t.indexOf('_spawn_settle'));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Stage 2e — `--remote-control` is a PER-BOX FACT, not a constant (D-99).
+// ---------------------------------------------------------------------------
+
+/** ccd used to hardcode `--remote-control '$id'` into both of `_spawn_start`'s
+ *  spawn lines, which made "this box drives its sessions over the RC socket" a
+ *  property of the SOURCE — so a box that had no ccrc server in front of it
+ *  still got RC panes (no `esc to interrupt`, a `/rc` footer, and every
+ *  pane-based reader downstream reading a shape nobody was serving).
+ *
+ *  It is now a file: `$HOME/.ccrc/remote-control`, first line `on`. A FILE and
+ *  not an environment key because HOME is ccd's only isolation boundary
+ *  (`SPAWN_GATE_TRIES`' docstring states the discipline; `SPAWN_RESUME_SETTLE_S`
+ *  is pinned on it above), so a per-box fact has to arrive through HOME or not
+ *  at all.
+ *
+ *  BOTH SPAWN LINES ARE PINNED SEPARATELY, and that is the point of the four
+ *  cases rather than two: the `--session-id` RETRY is a second, hand-copied
+ *  composition of the same command string, three screens below the first, and
+ *  it is exactly the copy an editor updates the primary of and forgets.
+ *
+ *  MUTATIONS MEASURED (2026-08-19), both directions of the conditional:
+ *   (i) reverting ONLY the retry line to the hardcoded `--remote-control '$id'`
+ *       — the "I fixed the spawn" edit that misses the copy — reds exactly one
+ *       test, the retry-off case below:
+ *         1 failed | 80 passed  (`ccd-spawn-split` + `ccd-spawn-verdict`
+ *                                + `ccd-rc-flag`)
+ *       The primary-line cases stay green, which is why the pair below is two
+ *       tests and not one assertion over `news.join()`.
+ *  (ii) making `_rc_enabled` never say on (its last line -> `false`) reds the
+ *       two flag-`on` cases here plus three of `ccd-rc-flag`'s reader cases:
+ *         5 failed | 58 passed  (`ccd-spawn-split` + `ccd-rc-flag`)
+ *       That is where the `on` pair's red comes from. They do NOT go red
+ *       against the pre-task source — with the literal unconditional they were
+ *       green from the start (measured: 2 failed | 46 passed at RED, the two
+ *       flag-absent cases only), so their guard value is against the flag being
+ *       disconnected, not against it never existing. */
+describe('_spawn_start: --remote-control only when the box says on', () => {
+  /** Writes the box's flag file. `<home>/.ccrc` already exists — `makeCcdHarness`
+   *  seeds `accounts.sh` into it before anything else. */
+  const flag = (body: string): void => {
+    fs.writeFileSync(path.join(h.home, '.ccrc', 'remote-control'), body);
+  };
+
+  it('no flag file — the primary spawn argv carries no --remote-control', () => {
+    seed('myid');
+    h.sh(`${TMUX} rm -f "$HOME/pane-up"; _spawn_start myid new`);
+    const news = newSessions();
+    expect(news).toHaveLength(1);
+    expect(news[0]).not.toContain('--remote-control');
+    // The rest of the line is untouched: the flag's absence must not be a
+    // spawn that lost its uuid or its permission flag too.
+    expect(news[0]).toContain("--session-id 'deadbeef-0000-4000-8000-000000000000'");
+    expect(news[0]).toContain('--dangerously-skip-permissions');
+  });
+
+  it("flag file `on` — the primary spawn argv carries --remote-control '<id>'", () => {
+    seed('myid');
+    flag('on\n');
+    h.sh(`${TMUX} rm -f "$HOME/pane-up"; _spawn_start myid new`);
+    const news = newSessions();
+    expect(news).toHaveLength(1);
+    // The ID, not a bare flag: the RC socket is keyed by session id, and a
+    // `--remote-control` with the wrong operand is a session nobody can drive.
+    expect(news[0]).toContain("--remote-control 'myid'");
+  });
+
+  it('no flag file — the --session-id RETRY spawn carries no --remote-control either', () => {
+    seed('myid');
+    h.sh(`${RESUME_DIES} rm -f "$HOME/pane-up"; _spawn_start myid resume 2>/dev/null`);
+    const news = newSessions();
+    expect(news).toHaveLength(2);
+    // Asserted on the SECOND line specifically. The first is the `--resume`
+    // attempt that died; if only the primary line were conditional, this
+    // assertion is the only one in the suite that would notice.
+    expect(news[1]).toContain('--session-id');
+    expect(news[1]).not.toContain('--remote-control');
+    expect(news[0]).not.toContain('--remote-control');
+  });
+
+  it("flag file `on` — the --session-id RETRY spawn carries --remote-control '<id>' too", () => {
+    seed('myid');
+    flag('on\n');
+    h.sh(`${RESUME_DIES} rm -f "$HOME/pane-up"; _spawn_start myid resume 2>/dev/null`);
+    const news = newSessions();
+    expect(news).toHaveLength(2);
+    expect(news[0]).toContain("--remote-control 'myid'");
+    expect(news[1]).toContain("--remote-control 'myid'");
   });
 });

@@ -45,8 +45,8 @@
 - Produces: `CCRC_RC_FILE="$HOME/.ccrc/remote-control"` (the ONE spelling in ccd) and `_rc_enabled()` — returns 0 iff the file's first line, whitespace-trimmed, is exactly `on`. Absent, unreadable, empty, or any other value → 1 (default off; a garbled file must not half-enable). Bounded read (`read -r` of one line), no external binaries, set-u-safe.
 - Consumes: nothing.
 
-- [ ] **Step 1: RED — four argv cases.** In `ccd-spawn-split.test.ts`, using the existing `WS_ADD_REAL_SPAWN` + `seed()` + `_spawn_start myid new` pattern (:59-76) and the `RESUME_DIES` two-line pattern (:454-472): (a) no flag file → the `tmux new-session` argv does NOT contain `--remote-control`; (b) flag file `on` → it DOES contain `--remote-control 'myid'`; (c)+(d) the same pair for the resume-retry second spawn line (both lines of the RESUME_DIES sequence checked — the retry at ccd:7898 is the easily-missed copy). All four red today (the flag file changes nothing; `--remote-control` is unconditional).
-- [ ] **Step 2: GREEN — the reader and the conditional.**
+- [x] **Step 1: RED — four argv cases.** In `ccd-spawn-split.test.ts`, using the existing `WS_ADD_REAL_SPAWN` + `seed()` + `_spawn_start myid new` pattern (:59-76) and the `RESUME_DIES` two-line pattern (:454-472): (a) no flag file → the `tmux new-session` argv does NOT contain `--remote-control`; (b) flag file `on` → it DOES contain `--remote-control 'myid'`; (c)+(d) the same pair for the resume-retry second spawn line (both lines of the RESUME_DIES sequence checked — the retry at ccd:7898 is the easily-missed copy). All four red today (the flag file changes nothing; `--remote-control` is unconditional).
+- [x] **Step 2: GREEN — the reader and the conditional.**
 
 ```bash
 # beside CCRC_ACCOUNTS_SH (:178) —
@@ -65,9 +65,9 @@ _rc_enabled() {   # first line 'on' => sessions spawn with --remote-control.
 ```
 
   In `_spawn_start`, compute once before the spawn: `local rcflag=""; _rc_enabled && rcflag="--remote-control '$id'"` and replace the literal `--remote-control '$id'` with `$rcflag` in BOTH command strings (:7862 and :7898 — the resume-retry too; an empty `$rcflag` collapses to nothing in the composed string exactly as `$sidflag` already does). Update the `_spawn` comment at :7969 ("we pass `--remote-control '$id'`" → conditional wording). Re-stamp ccd's marker (ownership.test.ts:131-135). Run the four tests green + the whole `ccd-spawn-split` + `ccd-spawn-verdict` + `ownership` files.
-- [ ] **Step 3: RED+GREEN — the ready-marker guards nothing pinned before.** Two tests (in `ccd-login-screen.test.ts`'s PANE_TEXT idiom, :106-178): (a) an INVENTED RC-off ready pane — built from the real captured footer at `statusline.test.ts:9` (`⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents`) plus a busy-free prompt row, no `/rc` anywhere — drives the real `_accept_first_run_prompts` to rc 0 with zero keystrokes (comment: INVENTED fixture; the Stage-2 VM gate replaces it with a measured capture); (b) a source-scan guard pinning that the marker regex still contains ALL FIVE alternatives including `/rc active` (mixed-mode rule) — red measured by deleting one alternative. Both directions recorded.
-- [ ] **Step 4: Mutations.** (i) revert the conditional at :7898 only (retry hardcodes RC again) → test (d) red alone — proving the second site is independently pinned; (ii) `_rc_enabled` accepting any non-empty file → the garbled-file test red (add it: file containing `ON`/`yes`/`on extra` → off). Record both.
-- [ ] **Step 5: Commit.** `feat(ccd): sessions spawn with --remote-control only when the box says on (D-99)` — ledger D-99 in this plan: the spec said "CCRC_REMOTE_CONTROL config"; what shipped is a dedicated file, with the three constraint citations (C1/C2/C3) above.
+- [x] **Step 3: RED+GREEN — the ready-marker guards nothing pinned before.** Two tests (in `ccd-login-screen.test.ts`'s PANE_TEXT idiom, :106-178): (a) an INVENTED RC-off ready pane — built from the real captured footer at `statusline.test.ts:9` (`⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents`) plus a busy-free prompt row, no `/rc` anywhere — drives the real `_accept_first_run_prompts` to rc 0 with zero keystrokes (comment: INVENTED fixture; the Stage-2 VM gate replaces it with a measured capture); (b) a source-scan guard pinning that the marker regex still contains ALL FIVE alternatives including `/rc active` (mixed-mode rule) — red measured by deleting one alternative. Both directions recorded.
+- [x] **Step 4: Mutations.** (i) revert the conditional at :7898 only (retry hardcodes RC again) → test (d) red alone — proving the second site is independently pinned; (ii) `_rc_enabled` accepting any non-empty file → the garbled-file test red (add it: file containing `ON`/`yes`/`on extra` → off). Record both.
+- [x] **Step 5: Commit.** `feat(ccd): sessions spawn with --remote-control only when the box says on (D-99)` — ledger D-99 in this plan: the spec said "CCRC_REMOTE_CONTROL config"; what shipped is a dedicated file, with the three constraint citations (C1/C2/C3) above.
 
 ### Task 2: The writers, the doctor surface, and the docs
 
@@ -149,6 +149,21 @@ _rc_enabled() {   # first line 'on' => sessions spawn with --remote-control.
 ## Deviations found
 
 (Continues the global sequence; next free number at plan time: **D-99** — reserved by Task 1 for the flag-file-not-env-key deviation from the spec's literal `CCRC_REMOTE_CONTROL` wording, with the C1/C2/C3 citations.)
+
+**D-99 — the remote-control switch is a FILE (`~/.ccrc/remote-control`), not the spec's `CCRC_REMOTE_CONTROL` config key.** (Task 1, `ccd/ccd`: `CCRC_RC_FILE` + `_rc_enabled`, read once in `_spawn_start`.)
+
+The spec spelled the switch as a `CCRC_REMOTE_CONTROL` config value — an env-style key, which on this box means a line in `~/.ccrc/ccrc.env`. Three measured constraints make that spelling unimplementable in ccd, and the third makes it actively dangerous:
+
+- **C1 — ccd takes no env overrides, by contract.** `ccd:72-78` states it for `PROJECTS_ROOT`, and `SPAWN_GATE_TRIES`/`SPAWN_SETTLE_S` repeat it verbatim: *HOME is ccd's only isolation boundary, and nothing on the wire can set a shell variable.* `server/test/ccd-spawn-split.test.ts` already pins one of these ("is not an env override"). A per-box fact that an environment could flip would be a way to change what a spawn *is* from outside the box, and would break the one boundary every ccd test relies on. So the switch has to arrive through HOME — i.e. as a file.
+- **C2 — ccd never reads `ccrc.env`, deliberately.** That file carries `CCRC_AGENT_TOKEN`, `CCRC_VAPID_PRIVATE` and a Hetzner token; `ccd/ccrc:102-105` says so and is why even `ccrc` never sources it and never reads it whole (`_box_env_value` reads one key at a time). Teaching the fleet's *supervisor* to open the token file to answer a boolean is the wrong direction across a security seam, for zero gain.
+- **C3 — the fleet host has no `ccrc.env` at all.** Measured and recorded at `ccd/ccrc:364-370`: the fleet box has `agent.env`, not `ccrc.env`, because `deploy/deploy.sh` ships `ccrc.env` on the **server lane only**. An env-file read with a default-off would therefore have answered "off" on the one box that runs ~11 live RC sessions — silently stripping `--remote-control` from every session on the live fleet at the next spawn. That is not a config mechanism; it is an outage with a config-shaped trigger.
+
+**What shipped instead:** `CCRC_RC_FILE="$HOME/.ccrc/remote-control"`, one spelling in ccd, read by `_rc_enabled` — a bounded single-line `read -r`, no external binaries, set-u-safe; first line whitespace-trimmed must equal `on`, and **absent / unreadable / empty / anything else is OFF** (a garbled file must not half-enable a mode). `_spawn_start` evaluates it **once** into `$rcflag` and substitutes it into **both** spawn command strings — the primary and the `--session-id` retry — so a resume that dies and retries cannot come back a differently-shaped pane. Empty collapses out of the composed string exactly as `$sidflag`'s alternatives do.
+
+Two consequences worth carrying forward:
+
+- **The writers owe a trailing newline.** `read` returns non-zero at EOF-before-delimiter, so `printf 'on' > file` (no newline) reads as **off**. The direction is fail-safe and is left as-is; Task 2's writers (`ccrc install`, deploy's fleet lane) must write a line, and `server/test/ccd-rc-flag.test.ts` pins the measured behaviour so the contract is visible rather than folklore.
+- **`/rc active` stays in the ready-marker set** (`ccd`'s `_accept_first_run_prompts`). The flip is not atomic across a fleet: pre-flip sessions are still RC panes and still have to classify as "up" through a swap or a restart. Measured: deleting that one alternative reds exactly one test in the whole suite (the new source-scan guard) — nothing else notices, which is why the guard exists.
 
 ## Deferred out of this plan
 

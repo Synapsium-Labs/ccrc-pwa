@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=5681b1e4b62822d46b050e354cd64aeb980fc9bd93d253315d9b353220d6e158
+# ccrc:generated 1 sha256=8cf7a5ef4e4145e0192c1106aa5173160a356581d7b69882b3c4d45392b00c8f
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
 set -uo pipefail
@@ -187,6 +187,23 @@ CCRC_ACCOUNTS_SH="$HOME/.ccrc/accounts.sh"
 # shellcheck source=/dev/null
 source "$CCRC_ACCOUNTS_SH" \
   || die "account roster unreadable: $CCRC_ACCOUNTS_SH — regenerate it from ~/.ccrc/accounts.json"
+
+# ── DOES THIS BOX DRIVE ITS SESSIONS OVER THE RC SOCKET? ──────────────────
+# The ONE spelling of the flag path in ccd. `_spawn_start` is its only reader
+# today; `ccrc doctor`/`install` write it (their own spelling lives in
+# `ccd/ccrc`, which cannot source this file).
+CCRC_RC_FILE="$HOME/.ccrc/remote-control"
+_rc_enabled() {   # first line 'on' => sessions spawn with --remote-control.
+  # A FILE, not an env var (HOME is ccd's only isolation boundary — see
+  # SPAWN_GATE_TRIES) and not ccrc.env (never read by ccd: it carries tokens,
+  # and the fleet host does not have one). Absent or anything-but-'on' is OFF:
+  # a garbled file must not half-enable a mode. Seeded 'off' by ccrc install,
+  # 'on' by deploy's fleet lane; operator-owned after that.
+  local first=""
+  [[ -f "$CCRC_RC_FILE" ]] || return 1
+  IFS= read -r first < "$CCRC_RC_FILE" 2>/dev/null || return 1
+  [[ "${first//[[:space:]]/}" == "on" ]]
+}
 
 _lane_enabled() { [[ ! -f "$REG/$1-disabled" ]]; }   # operator kill-switch: touch/rm $REG/<w>-disabled
 # An account is a legal AUTOMATIC destination iff its wrapper exists and its
@@ -7838,7 +7855,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # single job, and the callers decide when. Writes nothing to STDOUT either:
   # callers read the variable, and a stray line here would land in whatever
   # `ws-add`/`start` was printing.
-  local id="$1" mode="$2" wrapper workdir uuid tname sidflag
+  local id="$1" mode="$2" wrapper workdir uuid tname sidflag rcflag
   # Set before anything that can fail, so no path out of this function leaves a
   # PREVIOUS spawn's answer standing. The failure direction is stated at the
   # bottom of this function and is the same one: unknown degrades to 0.
@@ -7852,6 +7869,15 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   lastswap=$(_reg_get "$id" lastswap)
   [[ "$lastswap" =~ ^[0-9]+$ && $(( $(date +%s) - lastswap )) -lt 300 ]] && fromswap=1
   if [[ "$mode" == "resume" ]]; then sidflag="--resume '$uuid'"; else sidflag="--session-id '$uuid'"; fi
+  # WHETHER THIS BOX DRIVES ITS SESSIONS OVER THE RC SOCKET — read ONCE, here,
+  # and used by BOTH spawn lines below (the primary and the --session-id retry).
+  # Once, not per line, so the two can never disagree: a resume that died and
+  # retried inside the same call must not come back a different KIND of pane
+  # than the one it was replacing. Empty collapses out of the composed command
+  # string exactly as `$sidflag`'s alternatives do — the flag is absent, not
+  # passed empty, and `--remote-control` with an empty operand is not a thing
+  # the wrapper accepts.
+  rcflag=""; _rc_enabled && rcflag="--remote-control '$id'"
   # COLORTERM=truecolor so Claude Code emits 24-bit colour (it otherwise quantises
   # to 256, collapsing its palette). tmux passes it through to the terminal-drawer
   # xterm once the server has the RGB terminal-feature (see hardening/tmux.conf).
@@ -7859,7 +7885,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # can create the server, and it is AFTER everything that can `die`, so a spawn
   # that is going to abort never leaves a scope behind.
   _tmux_new_session -d -s "$tname" -x 220 -y 50 \
-    "cd '$workdir' && exec env COLORTERM=truecolor '$WRAPPER_DIR/$wrapper' --remote-control '$id' $sidflag --dangerously-skip-permissions"
+    "cd '$workdir' && exec env COLORTERM=truecolor '$WRAPPER_DIR/$wrapper' $rcflag $sidflag --dangerously-skip-permissions"
   # THE PRICE OF A MONOTONE `started`, PAID AUTOMATICALLY INSTEAD OF BY HAND.
   # Nothing in ccd ever clears the field: there is no registry delete/unset
   # helper at all — `ccd-reg-claim.test.ts` greps this file for one and pins
@@ -7894,8 +7920,13 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
     sleep "$SPAWN_RESUME_SETTLE_S"
     if ! tmux has-session -t "$tname" 2>/dev/null; then
       echo "ccd: $id: --resume '$uuid' left no session; retrying once with --session-id" >&2
+      # `$rcflag`, the SAME value the primary line above used — computed once,
+      # before either spawn, so the retry cannot spawn a differently-shaped
+      # pane than the attempt it is replacing. (This is the copy that gets
+      # forgotten: `ccd-spawn-split.test.ts` pins this line's argv on its own,
+      # not merely the pair.)
       _tmux_new_session -d -s "$tname" -x 220 -y 50 \
-        "cd '$workdir' && exec env COLORTERM=truecolor '$WRAPPER_DIR/$wrapper' --remote-control '$id' --session-id '$uuid' --dangerously-skip-permissions"
+        "cd '$workdir' && exec env COLORTERM=truecolor '$WRAPPER_DIR/$wrapper' $rcflag --session-id '$uuid' --dangerously-skip-permissions"
     fi
   fi
   # Make this window's terminal title = the tmux session name ("cc-<id>"), so a frontmost-window-
@@ -7965,8 +7996,10 @@ _spawn_settle() {   # id fromswap — the BLOCKING half: gate loop, fact, warnin
 
 _spawn() {   # id mode(new|resume) — the composition, so cmd_swap and friends are unchanged
   # NOTE: v2.1.177 does not print the claude.ai URL to the pane or debug log, so there is no
-  # URL to capture. The session is discovered on claude.ai by its name, which == the id
-  # (we pass `--remote-control '$id'`).
+  # URL to capture. On a box whose `~/.ccrc/remote-control` says `on` we pass
+  # `--remote-control '$id'` (see `_rc_enabled`), and there the session is discovered on
+  # claude.ai by its name, which == the id. Where the flag is off there is no claude.ai
+  # session to discover at all — the pane is an ordinary local TUI.
   #
   # A CALLER THAT WANTS THE F8-SAFE ORDERING DOES NOT USE THIS: it calls the two halves and puts
   # `_reg_claim` (and its `_ws_supervise`, where it has one) between them.
