@@ -566,6 +566,43 @@ describe('dialog enrichment', () => {
     expect(d.ask).toBeUndefined();
     expect(d.options.map((o: { label: string }) => o.label)).toEqual(['Yes, switch to Fable 5', 'No, go back']);
   });
+
+  // Stage 2e Task 3 (D-102). With RC off, a genuinely busy pane renders "esc
+  // to interrupt" WHILE a permission/AskUserQuestion dialog is painted below
+  // it — a real, expected combined screen (fleet.ts's liveStatus doc: an
+  // RC-off pane DOES render the busy marker, unlike a --remote-control one).
+  // `checkDialog`'s own gate now asks `hasMenu`, not `paneState() === 'menu'`
+  // — the send.ts:320 idiom, independent of the busy check for exactly this
+  // reason (pane/dialog.ts:23-28) — so this call site no longer suppresses
+  // the attempt. But `parseDialog` (pane/dialog.ts:142) re-tests
+  // `paneState(pane) !== 'menu'` as its own FIRST line, before doing anything
+  // else — the identical hazard, one layer deeper, inside a file this task's
+  // scope does not touch. Measured: this fixture reds on `expect(...).
+  // toBeDefined()` both before AND after the call-site fix, for two different
+  // reasons in sequence (the old gate, then parseDialog's own). Flagged for
+  // the reviewer per task-3-report.md (D-102), not fixed here — pin today's
+  // real, honest behavior instead of a desired one this task cannot deliver.
+  it('KNOWN GAP (D-102): a dialog under a live busy spinner still does not reach the frame — blocked one layer deeper, inside parseDialog itself', async () => {
+    const combo = `${fixture('busy.txt')}\n${fixture('ask-user-question.txt')}`;
+    const { frames } = await streamWith({ pane: combo });
+    expect(frames.find((f) => f.type === 'dialog')).toBeUndefined();
+  });
+
+  // The behavioral test above CANNOT catch a regression at this call site:
+  // parseDialog's own gate (pane/dialog.ts:142) dominates the outcome either
+  // way, so reverting checkDialog's gate back to `paneState(pane) === 'menu'`
+  // leaves every frame-level test in this file green (measured). This is the
+  // one guard that actually reds on that mutation — a straight source-text
+  // pin, the same idiom single-definition.test.ts / ownership.test.ts use.
+  it('mutation-sensitive: checkDialog\'s gate line reads hasMenu, not paneState() === \'menu\'', () => {
+    const src = readFileSync(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'sessionws.ts'), 'utf8',
+    );
+    const gate = src.split('\n').find((l) => l.includes('let dialog ='));
+    expect(gate).toBeDefined();
+    expect(gate).toContain('hasMenu(');
+    expect(gate).not.toContain("paneState(pane) === 'menu'");
+  });
 });
 
 describe('session WS', () => {

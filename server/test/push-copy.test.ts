@@ -1,8 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Bus } from '../src/bus.js';
 import type { Runner } from '../src/exec.js';
 import { localIO, type FleetIO } from '../src/io.js';
@@ -78,6 +79,12 @@ function runnerFor(info: Map<string, Seeded>, pane = 'ready\n❯ \n'): Runner {
  *  push. The default above is a bare prompt precisely so the busy→idle tests
  *  can't have an ask fire underneath them. */
 const MENU_PANE = 'Which colour?\n❯ 1. Red\n  2. Blue\n  3. Green\nEnter to select\n';
+
+/** The real spinner row from `fixtures/panes/busy.txt`, inlined to match this
+ *  file's existing style (panes here are literals, not file reads). Used by
+ *  the Stage 2e Task 3 (D-102) case below: an RC-off pane renders this WHILE
+ *  a dialog is up, on the same screen. */
+const BUSY_LINE = '✳ Cerebrating… (12s · ↑ 1.2k tokens · esc to interrupt)';
 
 /**
  * Write one `<id>.hookstate.json` the way `session-hook.sh` does, with the
@@ -367,7 +374,7 @@ describe('ask notifications carry actions only where the route would accept them
   function askFixture(): {
     sent: PushPayload[];
     tick: () => Promise<void>;
-    showMenu: () => void;
+    showMenu: (text?: string) => void;
     clearMenu: () => void;
     writeAsk: (ask: unknown, state?: string) => void;
   } {
@@ -386,7 +393,7 @@ describe('ask notifications carry actions only where the route would accept them
     return {
       sent,
       tick: () => w.tick(),
-      showMenu: () => { pane = MENU_PANE; },
+      showMenu: (text: string = MENU_PANE) => { pane = text; },
       clearMenu: () => { pane = 'ready\n❯ \n'; },
       writeAsk: (ask: unknown, state?: string) => writeHookState(home, 'cc-a', ask, state),
     };
@@ -548,6 +555,40 @@ describe('ask notifications carry actions only where the route would accept them
     const ask = oneQuestion([{ label: 'Red' }, { label: 'Blue' }]);
     const sent = await raiseAsk(ask);
     expect(sent[0]!.actions).toHaveLength(2);
+  });
+
+  // Stage 2e Task 3 (D-102). Same hazard as sessionws.test.ts's twin case: an
+  // RC-off pane renders the busy spinner WHILE a dialog is painted below it —
+  // a real, expected combined screen. `detectDialogs`'s own gate now asks
+  // `hasMenu`, not `paneState() === 'menu'` (the send.ts:320 idiom), so this
+  // call site no longer suppresses the attempt on its own account. But
+  // `parseDialog` (pane/dialog.ts:142) re-tests `paneState(pane) !== 'menu'`
+  // as its own first line — the identical hazard, one layer deeper, inside a
+  // file this task's scope does not touch. Measured the same way as the
+  // sessionws case: reds on the desired assertion both before AND after the
+  // call-site fix, for two different reasons in sequence. Flagged for the
+  // reviewer per task-3-report.md (D-102), not fixed here.
+  it('KNOWN GAP (D-102): a live busy spinner painted alongside a menu still suppresses the ask push — blocked one layer deeper, inside parseDialog itself', async () => {
+    const f = askFixture();
+    await f.tick();                                  // priming: no menu
+    f.showMenu(`${BUSY_LINE}\n\n${MENU_PANE}`);
+    await f.tick();                                   // RC-off: both on screen at once
+    expect(f.sent).toHaveLength(0);
+  });
+
+  // Same reasoning as sessionws.test.ts's twin pin: the behavioral test above
+  // cannot catch a regression here either — parseDialog's own gate dominates
+  // the outcome regardless of what this call site does, so reverting
+  // detectDialogs's gate leaves every test in this file green (measured).
+  // Straight source-text pin instead, the single-definition.test.ts idiom.
+  it('mutation-sensitive: detectDialogs\'s gate line reads hasMenu, not paneState() === \'menu\'', () => {
+    const src = readFileSync(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'watch.ts'), 'utf8',
+    );
+    const gate = src.split('\n').find((l) => l.includes('const dialog ='));
+    expect(gate).toBeDefined();
+    expect(gate).toContain('hasMenu(');
+    expect(gate).not.toContain("paneState(pane) === 'menu'");
   });
 });
 

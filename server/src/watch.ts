@@ -2,7 +2,7 @@ import type { Deps } from './server.js';
 import type { Bus } from './bus.js';
 import { assembleFleet } from './fleet.js';
 import { measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from './registry.js';
-import { paneState, parseDialog } from './pane/dialog.js';
+import { hasMenu, parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
 import { defaultCachePath, loadSnapshot, saveSnapshot } from './fleetstate.js';
 import { readTasks, taskProgress } from './tasks/read.js';
@@ -38,6 +38,7 @@ import { configDirFor } from './config.js';
  *  minutes, and the fleet chip is a glance, not a readout. The open session's
  *  own stream reads its list every tick, so the screen you're looking at stays
  *  live regardless. */
+const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:76 — see detectDialogs's own comment
 const TASK_SWEEP_MS = 10_000;
 
 /** The sixth lane (the fifth is hook-state sweeping, which rides the 2 s tick).
@@ -2404,7 +2405,16 @@ export class FleetWatcher {
         const sl = parseStatusline(pane);
         if (sl.model || sl.branch || sl.effort) this.statuslines.set(r.id, sl);
       }
-      const dialog = pane !== null && paneState(pane) === 'menu' ? parseDialog(pane) : null;
+      // hasMenu, not paneState() === 'menu': paneState tests BUSY_RE across the
+      // WHOLE pane, and an RC-off pane renders the busy marker WHILE a dialog is
+      // painted below it (fleet.ts's liveStatus doc) — so paneState would answer
+      // 'busy' here and this sweep would suppress the parse forever. hasMenu is
+      // deliberately independent of the busy check for exactly that reason
+      // (pane/dialog.ts:23-28); it's the same idiom send.ts:320 uses to decide
+      // whether a menu owns the keyboard. SGR strip mirrors that idiom, though
+      // tmux.capture() (-p, no -e) carries no escape codes to strip today, unlike
+      // captureAnsi().
+      const dialog = pane !== null && hasMenu(pane.replace(SGR, '')) ? parseDialog(pane) : null;
       const last = this.dialogIds.get(r.id);
       if (dialog) {
         pending.add(r.id);

@@ -933,9 +933,12 @@ export function answerDialog(
 
 /**
  * Send Escape to a mid-turn session; refuses when it isn't busy. Busy-ness is
- * resolved by the injected `isBusy` (the authoritative live status file), NOT the
- * pane: a --remote-control pane never renders "esc to interrupt", so pane-based
- * busy detection would always (wrongly) report idle.
+ * resolved by the injected `isBusy` (the authoritative live status file), NOT
+ * the pane: a --remote-control pane never renders "esc to interrupt" at all,
+ * and an RC-off pane does render it, but the same marker can sit under (or
+ * beside) a dialog painted over it — either way pane-based busy detection
+ * would report the wrong thing, and the live status file is the one signal
+ * that also sees subagents.
  */
 export function interrupt(
   d: SendDeps,
