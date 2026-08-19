@@ -602,15 +602,6 @@ ccrc wrappers                        # the other direction: roster → ~/.local/
   real script against a fixture `HOME` with a free-form account and goes red
   if the map ever comes back.
 
-#### Known limitations
-
-- **`ccrc install` does not exist yet.** `ccrc wrappers` turns a roster entry
-  into a **wrapper script**, and that is as far as it goes: nothing yet turns
-  one into a config dir or a systemd unit, and no deploy runs the converger
-  (shipping a server build must not mutate `~/.local/bin` on a live fleet host
-  as a side effect). For everything but the wrapper, the roster still describes
-  a box that was provisioned by hand or by an earlier deploy.
-
 **`/accounts`** (a fourth branch of the route ternary, reached by tapping the
 compact `AccountsStrip` mounted in the desktop top bar and the mobile fleet
 list) shows every account ccd knows about, not just the ones with headroom.
@@ -790,6 +781,29 @@ open tab can hold pre-deploy JS against a post-deploy server. A synchronous
   *capability* (`ccdVerbs` + `verbSupported`), which is finer-grained than a
   bare generation number. `v` remains reserved for a future breaking
   frame-shape change and gets a consumer only then.
+
+## Install (single box)
+
+```bash
+git clone <this repo> ccrc && cd ccrc
+bash install.sh
+```
+
+`install.sh` refuses first — `node` missing, or below the floor
+`server/package.json`'s `engines.node` declares (naming both versions) —
+otherwise it builds the server and the PWA and hands off to `ccrc install`
+(`ccd/ccrc install`), which seeds the roster and `ccrc.env`, places the tree at
+`~/ccrc`, installs the systemd user units and wrappers, and ends by running
+`ccrc doctor` — the install's own exit code is doctor's. **Green means the box
+is ready**; the PWA answers at `http://127.0.0.1:7788/`. Re-running either
+script converges rather than damaging an existing install. `rsync` is a hard
+by-name dependency of `ccrc install` (it places the tree) with **no doctor
+check for it yet** — absent, the install refuses naming the package rather
+than failing opaquely mid-copy.
+
+This is the **single-box** shape only: local fleet mode, localhost, no TLS, no
+agent (`ccrc-agent.service` is deliberately not installed — local mode never
+touches it). The full multi-box remote-fleet guide is Stage 5.
 
 ## Develop
 
