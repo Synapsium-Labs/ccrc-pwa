@@ -29,7 +29,9 @@
 // measuring "current < floor" at all.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, writeFileSync, existsSync, chmodSync, readFileSync, copyFileSync } from 'node:fs';
+import {
+  mkdirSync, writeFileSync, existsSync, chmodSync, readFileSync, copyFileSync, symlinkSync,
+} from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
@@ -119,9 +121,21 @@ function plantLowNode(home: string, fakeVersion: string): void {
   ].join('\n'), { mode: 0o755 });
 }
 
-function runInstallSh(root: string, args: string[], home: string, pathDir: string): Result {
+/** `opts.bareFromRoot` invokes as `bash install.sh …` with `cwd: root` and a
+ *  BARE script name — no leading path at all — rather than the absolute path
+ *  every other call here uses. That is the one invocation shape install.sh's
+ *  own slash guard (the line right after `set -euo pipefail`, testing `$HERE`
+ *  against a glob of "any slash at all") exists for: with no slash in
+ *  `$HERE`, stripping everything from the last slash onward leaves it
+ *  UNCHANGED, and `cd "install.sh"` (a file, not a directory) dies
+ *  immediately — before the argument loop, before node, before anything. It
+ *  is also the README's own first command: `cd ccrc && bash install.sh`. */
+function runInstallSh(root: string, args: string[], home: string, pathDir: string,
+  opts: { bareFromRoot?: boolean } = {}): Result {
   const env = { HOME: home, PATH: pathDir };
-  const r = spawnSync(BASH, [join(root, 'install.sh'), ...args], { env, encoding: 'utf8' });
+  const r = opts.bareFromRoot
+    ? spawnSync(BASH, ['install.sh', ...args], { cwd: root, env, encoding: 'utf8' })
+    : spawnSync(BASH, [join(root, 'install.sh'), ...args], { env, encoding: 'utf8' });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
@@ -165,5 +179,58 @@ describe('install.sh: the node floor, before anything is built', () => {
         "usage: bash install.sh — build this checkout and run 'ccrc install' (single box, localhost)\n");
       expect(r.stderr, `${flag}: stderr`).toBe('');
     }
+  });
+
+  // D-98 (fix round 1, Important 1). The brief's own pinned snippet only
+  // recognised `-h`/`--help`; anything else fell straight through to the
+  // build and a full `ccrc install` ran — the exact defect `cmd_install`'s
+  // own comment names one layer down (`ccd/ccrc:1613-1618`): "an install
+  // that half-ran because argument 2 was a typo is worse than one that did
+  // not start". `install.sh` is now the OUTERMOST entry point.
+  it('refuses an argument it does not recognise, before anything runs', () => {
+    const home = mkTmp('install-sh-badarg-');
+    const root = fixtureRoot(home, REAL_FLOOR_RANGE);
+    plantNpmRecorder(home);
+    // Empty bin but for the npm recorder — no node either, so a run that got
+    // past the argument check would die at the node probe instead, which
+    // would still be wrong (exit 1, not 2) and is itself part of what this
+    // test rules out.
+    const r = runInstallSh(root, ['--dry-run'], home, fixtureBin(home));
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/^install\.sh: unknown argument: --dry-run$/m);
+    expect(r.stderr).toContain(
+      "usage: bash install.sh — build this checkout and run 'ccrc install' (single box, localhost)");
+    expect(existsSync(join(home, 'npm-argv')), 'npm ran before the refusal').toBe(false);
+  });
+
+  // Fix round 1, Important 2. Every other test in this file invokes by
+  // absolute path, which never exercises the `*/*` guard at all — deleting
+  // it left every existing test green while the README's own first command
+  // (`cd ccrc && bash install.sh`) died at `cd: install.sh: Not a directory`
+  // before the argument loop or the node probe ever ran.
+  it('resolves ROOT when invoked as a bare relative path from inside its own directory', () => {
+    const home = mkTmp('install-sh-barecwd-');
+    const root = fixtureRoot(home, REAL_FLOOR_RANGE);
+    const r = runInstallSh(root, ['--help'], home, fixtureBin(home), { bareFromRoot: true });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe(
+      "usage: bash install.sh — build this checkout and run 'ccrc install' (single box, localhost)\n");
+  });
+
+  // Fix round 1, Minor 1. Nothing above proves the floor came from THIS
+  // fixture's `server/package.json` rather than a copy — a hardcoded
+  // `'22.13.0'` would clear every real interpreter and pass silently. A
+  // floor no real node can ever satisfy, read from the fixture's own file,
+  // is the only way to pin "read", not "retyped".
+  it('refuses against an absurd floor from the FIXTURE package.json, with a REAL node', () => {
+    const home = mkTmp('install-sh-fakefloor-');
+    const root = fixtureRoot(home, '>=99.0.0');
+    plantNpmRecorder(home);
+    const bin = fixtureBin(home);
+    symlinkSync(REAL_NODE, join(bin, 'node'));
+    const r = runInstallSh(root, [], home, bin);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^install\.sh: node [0-9.]+ is below the required 99\.0\.0$/m);
+    expect(existsSync(join(home, 'npm-argv')), 'npm ran before the refusal').toBe(false);
   });
 });

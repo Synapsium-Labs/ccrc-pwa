@@ -540,8 +540,9 @@ ccrc wrappers                        # the other direction: roster → ~/.local/
   each wrapper (`upstream` / `generated` / `external`, every uncertain call
   landing on `external`), and writes `~/.ccrc/accounts.json` only if absent
   (`--force` to overwrite, `--out` to write elsewhere). It writes nothing else:
-  no wrappers, no units, no hooks. There is no installed `ccrc` binary yet —
-  run it from the checkout, as `bash ccd/ccrc-adopt`.
+  no wrappers, no units, no hooks. On a box that has never run `ccrc install`
+  there is no installed `ccrc` binary yet, so it runs from the checkout, as
+  `bash ccd/ccrc-adopt`; on an installed box it is reachable as `ccrc adopt`.
 - `ccrc wrappers` goes roster → disk, and is the reason `accounts.json` now
   PRODUCES `~/.local/bin/<id>` rather than merely describing it. **It writes
   only the wrappers ccrc marked as its own** (`shared/mark.mjs`'s provenance
@@ -793,8 +794,10 @@ bash install.sh
 `server/package.json`'s `engines.node` declares (naming both versions) —
 otherwise it builds the server and the PWA and hands off to `ccrc install`
 (`ccd/ccrc install`), which seeds the roster and `ccrc.env`, places the tree at
-`~/ccrc`, installs the systemd user units and wrappers, and ends by running
-`ccrc doctor` — the install's own exit code is doctor's. **Green means the box
+`~/ccrc`, installs the systemd user units, converges the wrappers your roster
+declares (the seeded default roster declares one `upstream` account, so a
+fresh install writes none), and ends by running `ccrc doctor` — the install's
+own exit code is doctor's. **Green means the box
 is ready**; the PWA answers at `http://127.0.0.1:7788/`. Re-running either
 script converges rather than damaging an existing install. `rsync` is a hard
 by-name dependency of `ccrc install` (it places the tree) with **no doctor

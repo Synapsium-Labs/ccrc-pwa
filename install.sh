@@ -8,10 +8,19 @@ set -euo pipefail
 HERE="${BASH_SOURCE[0]}"; [[ "$HERE" == */* ]] || HERE="./$HERE"
 ROOT="$(cd "${HERE%/*}" && pwd)"
 
-if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  echo "usage: bash install.sh — build this checkout and run 'ccrc install' (single box, localhost)"
-  exit 0
-fi
+usage() { echo "usage: bash install.sh — build this checkout and run 'ccrc install' (single box, localhost)"; }
+
+# `cmd_install`'s own loop (ccd/ccrc:1619-1624), one layer up: an install that
+# half-ran because argument 2 was a typo is worse than one that did not
+# start, and install.sh is now the OUTERMOST entry point a new operator
+# types — so it must refuse an argument it does not understand rather than
+# silently discard it and run a full install anyway.
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    *) echo "install.sh: unknown argument: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
 
 command -v node >/dev/null 2>&1 || { echo "install.sh: node is not installed — install Node (nodesource or nvm), then re-run" >&2; exit 1; }
 # The floor is READ from the shipped package.json — never a second copy
