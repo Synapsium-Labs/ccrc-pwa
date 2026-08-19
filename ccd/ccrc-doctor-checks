@@ -1320,6 +1320,37 @@ _check_wrappers() {
         # silently WRONG D-69 verdict (a secrets path read out of the suffix
         # column), not a parse error. Split by hand then, as the roster reader
         # above does.
+        #
+        # D-81, THE DOCTOR SIDE: `_wrap_parse_shape` reads its candidate WHOLE
+        # (`mapfile -t lines < "$f"`, `ccd/ccrc-wrapper-shape`) — unlike
+        # `_wrap_is_script`'s own two-byte gate, it has no bound at all.
+        # `ccrc wrappers` never hands it a genuinely oversize file post-D-81
+        # (`deploy/gen-wrappers.mjs` classifies one `oversize` before bash ever
+        # sees the disk path), but THIS check is a pure-bash roster-vs-disk
+        # comparison with no node-side gate ahead of it, so it needs its own.
+        # `stat` is guarded exactly like this file's existing `df`/`git`/`gh`
+        # calls (`command -v`, never assumed) — on a box with no `stat` this
+        # falls back to the old unbounded read rather than going blind, the
+        # same trade this file already makes for every other external tool it
+        # cannot do without. Skip-and-count, not a crash: a wrapper too big to
+        # check is a disagreement (`wr_hard`), exactly like one that fails the
+        # shape test outright, and the mirrored threshold is D-81's own
+        # `OVERSIZE_BYTES` (`deploy/gen-wrappers.mjs`).
+        #
+        # D-87: NOT `read -N` (the pure-bash reach `_wrap_is_script` uses for
+        # its own two-byte gate) — measured NOT bounded here. `read -N n`
+        # counts only NON-NUL characters toward `n`, so a NUL-heavy candidate
+        # (a sparse file; zero-padding in a real binary) makes it consume the
+        # WHOLE file hunting for `n` non-null bytes, reintroducing exactly the
+        # unboundedness this gate exists to close.
+        if command -v stat >/dev/null 2>&1; then
+          local wr_sz=""
+          wr_sz="$(stat -c%s -- "$bin/$id" 2>/dev/null)" || wr_sz=""
+          if [[ "$wr_sz" =~ ^[0-9]+$ ]] && [ "$wr_sz" -gt 1048576 ]; then
+            wr_hard+=("$id's \$HOME/.local/bin/$id is over 1 MiB — too big to be the generated shape, and never read")
+            continue
+          fi
+        fi
         IFS=$'\t' read -r ok target wsuffix wsecrets < <(_wrap_parse_shape "$bin/$id")
         if [ "$ok" != ok ]; then
           wr_hard+=("$id is declared generated but \$HOME/.local/bin/$id is not the generated shape (a shebang, an export, an optional secrets guard, an exec — and nothing else)")

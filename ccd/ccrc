@@ -1008,9 +1008,16 @@ cmd_doctor() {
 #                                      --adopt or --force rewrites (backup)
 #   foreign, not equivalent         -> REFUSE; only --force rewrites (backup)
 #   unreadable                      -> REFUSE under every flag
+#   oversize                        -> REFUSE under every flag (D-81)
 #
 # `unreadable` refuses even under `--force` because "I could not read it" is not
-# "I know what it is" — the one refusal no flag can talk out of.
+# "I know what it is" — the one refusal no flag can talk out of. `oversize`
+# refuses under the same absolute terms for a sibling reason: a file over
+# `deploy/gen-wrappers.mjs`'s `OVERSIZE_BYTES` is never even read (D-81's whole
+# point — past V8's string cap `readFileSync` used to THROW and land such a
+# file in `unreadable`, whose remedy could never work on something perfectly
+# readable), so bash never has bytes to judge, and there is nothing for
+# `--force` to override either.
 #
 # THE REMEDY FOR A NON-EQUIVALENT `foreign` FILE MUST NOT MENTION `--force`,
 # and that is a guard with a test of its own, not a matter of taste. Its remedy
@@ -1328,6 +1335,15 @@ cmd_wrappers() {
         action="refuse"
         why="something is at that path and this process could not read it"
         remedy="make it readable (ls -l \"$WRAPPER_BIN_DIR/$id\") and re-run, or move it aside. No flag overrides this one." ;;
+      oversize)
+        # D-81. No flag reaches this branch either, for the sibling reason to
+        # `unreadable`'s: `$gen` never even read this file (a cheap `statSync`
+        # gate ahead of `readFileSync`, so past-V8's-string-cap never THROWS
+        # and never misclassifies a huge-but-readable file as `unreadable`
+        # instead), so there are no bytes here for `--force` to judge either.
+        action="refuse"
+        why="it is over 1 MiB — categorically not a ccrc wrapper"
+        remedy="if \"$id\" should be generated, move the big file aside (mv \"$WRAPPER_BIN_DIR/$id\" \"$WRAPPER_BIN_DIR/$id.saved-$stamp\") and re-run; if that file is the upstream binary, set \"$id\"'s roster entry to exec.kind \"upstream\" in $HOME/.ccrc/accounts.json instead. No flag overrides this one." ;;
       *)
         action="refuse"
         why="$gen classified it as \"$klass\", which this verb does not know"

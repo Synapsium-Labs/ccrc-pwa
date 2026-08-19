@@ -17,8 +17,8 @@
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import {
-  chmodSync, closeSync, mkdirSync, openSync, readdirSync, readFileSync, statSync, symlinkSync,
-  writeFileSync, writeSync,
+  chmodSync, closeSync, ftruncateSync, mkdirSync, openSync, readdirSync, readFileSync, statSync,
+  symlinkSync, writeFileSync, writeSync,
 } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -161,6 +161,42 @@ describe('gen-wrappers.mjs', () => {
     expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
     const line = r.stdout.split('\n').find((l) => l.startsWith('wrapper\tclaude2\t'));
     expect(line).toBe('wrapper\tclaude2\tunreadable\tno');
+  });
+
+  // D-81: a >512 MiB candidate used to reach `readFileSync` and THROW past
+  // V8's string cap, landing in `unreadable` — whose remedy ("make it
+  // readable") can never work on a file that is perfectly readable, just too
+  // big to be a wrapper. `oversize` is the sixth classification, gated by a
+  // cheap `statSync` before any read is attempted. The fixture is SPARSE
+  // (`ftruncateSync` on an empty file) so the test costs no real disk: this
+  // pins the classify() OUTCOME, not the "never read a candidate whole"
+  // property — `bigblob` above already pins that one, for the orphan scan.
+  it('an oversize file (over 1 MiB) reads back oversize/no, never unreadable (D-81)', () => {
+    const { rosterFile, binDir, stagingDir } = fixture(migrationJson);
+    const p = path.join(binDir, 'claude2');
+    const fd = openSync(p, 'w');
+    try {
+      ftruncateSync(fd, 1024 * 1024 + 1); // OVERSIZE_BYTES + 1, sparse
+    } finally {
+      closeSync(fd);
+    }
+    const r = run([rosterFile, binDir, stagingDir]);
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
+    const line = r.stdout.split('\n').find((l) => l.startsWith('wrapper\tclaude2\t'));
+    expect(line).toBe('wrapper\tclaude2\toversize\tno');
+  });
+
+  // Regression: nothing pinned this before D-81 touched the same catch
+  // blocks. A dangling symlink's `statSync` throws ENOENT — exactly like a
+  // missing file — so it must read back `absent`, not `unreadable` and not
+  // `oversize`.
+  it('a dangling symlink at bin/<id> reads back absent, not unreadable', () => {
+    const { rosterFile, binDir, stagingDir } = fixture(migrationJson);
+    symlinkSync(path.join(binDir, 'does-not-exist'), path.join(binDir, 'claude2'));
+    const r = run([rosterFile, binDir, stagingDir]);
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
+    const line = r.stdout.split('\n').find((l) => l.startsWith('wrapper\tclaude2\t'));
+    expect(line).toBe('wrapper\tclaude2\tabsent\tno');
   });
 
   // `equal` is a byte-for-byte comparison, not a trimmed one — a mutation

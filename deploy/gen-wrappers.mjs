@@ -45,11 +45,12 @@
 //   protected\t<id>                         (one per NON-generated account)
 //   orphan\t<id>                            (zero or more)
 //
-// `<classify>` is one of `absent | unreadable | foreign | ccrc-edited |
-// ccrc-unmodified` — see `classify()` below for what puts a wrapper in each
-// bucket. `<equal>` is `yes` or `no`: whether the on-disk text is byte-for-
-// byte identical to what this run staged: always `no` when the file is
-// `absent` or `unreadable`, since there is no text to compare.
+// `<classify>` is one of `absent | unreadable | oversize | foreign |
+// ccrc-edited | ccrc-unmodified` — see `classify()` below for what puts a
+// wrapper in each bucket. `<equal>` is `yes` or `no`: whether the on-disk
+// text is byte-for-byte identical to what this run staged: always `no` when
+// the file is `absent`, `unreadable` or `oversize`, since there is no text
+// to compare (D-81: `oversize` is never even read).
 //
 // ── `protected` — SAYING THE UNTOUCHABLE IDS OUT LOUD (D-80) ───────────────
 // One record for every account whose `exec.kind` is NOT "generated" — i.e.
@@ -113,7 +114,7 @@
 // declares — exactly the kind of drift this whole stage exists to prevent.
 
 import {
-  readFileSync, writeFileSync, chmodSync, readdirSync, openSync, readSync, closeSync,
+  readFileSync, writeFileSync, chmodSync, readdirSync, openSync, readSync, closeSync, statSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
@@ -129,16 +130,27 @@ import { markGenerated, verifyMarker } from '../shared/mark.mjs';
 const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
 
 /** Reads an existing wrapper at `path` and reports what is there against the
- *  text this run staged for it. FIVE outcomes, never four: `absent` (nothing
- *  is there yet) and `unreadable` (something is there and this process could
- *  not read it) are different facts about the box, and an operator does a
+ *  text this run staged for it. SIX outcomes, never five: `absent` (nothing
+ *  is there yet), `unreadable` (something is there and this process could
+ *  not read it) and `oversize` (something is there, this process COULD read
+ *  it, and chose not to because it is categorically not a wrapper — D-81)
+ *  are three different facts about the box, and an operator does a
  *  different thing about each — installing over an absent path is routine;
- *  installing over one you could not even read is not — so they never share
- *  a value. The other three come straight from `verifyMarker`.
+ *  installing over one you could not even read is not; and no remedy can
+ *  ever make a >1 MiB file "readable" when it already was, which is exactly
+ *  the defect `oversize` exists to stop happening again. The other three
+ *  come straight from `verifyMarker`.
+ *
+ *  `oversize` is judged BEFORE any read is attempted — see `classify()`
+ *  below — so a file this big is never pulled into a JS string at all, not
+ *  even once. That is the fix: past V8's string cap, `readFileSync` used to
+ *  THROW, and the generic catch below turned a perfectly readable (just
+ *  huge) file into `unreadable`, whose remedy ("make it readable") could
+ *  never work.
  *
  * @param {string} path
  * @param {string} staged
- * @returns {{ classify: 'absent'|'unreadable'|'foreign'|'ccrc-edited'|'ccrc-unmodified', equal: 'yes'|'no' }}
+ * @returns {{ classify: 'absent'|'unreadable'|'oversize'|'foreign'|'ccrc-edited'|'ccrc-unmodified', equal: 'yes'|'no' }}
  */
 /** The whole text of `path`, but ONLY if its first two bytes are `#!` —
  *  otherwise `null`, with nothing past byte 2 ever read.
@@ -183,7 +195,18 @@ function readIfScript(path) {
   }
 }
 
+const OVERSIZE_BYTES = 1024 * 1024; // a generated wrapper is ~300 bytes; anything
+// past this is categorically not a wrapper, and past V8's string cap readFileSync
+// THROWS — which used to misclassify a perfectly readable big file as unreadable (D-81).
+
 function classify(path, staged) {
+  let st;
+  try {
+    st = statSync(path);
+  } catch (e) {
+    return { classify: e && e.code === 'ENOENT' ? 'absent' : 'unreadable', equal: 'no' };
+  }
+  if (st.size > OVERSIZE_BYTES) return { classify: 'oversize', equal: 'no' };
   let text;
   try {
     text = readFileSync(path, 'utf8');

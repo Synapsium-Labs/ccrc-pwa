@@ -35,7 +35,10 @@
 // where a test wants the timeout path exercised).
 import { describe, it, expect } from 'vitest';
 import { spawnSync, execFileSync } from 'node:child_process';
-import { writeFileSync, readFileSync, mkdirSync, symlinkSync, rmSync, chmodSync, existsSync } from 'node:fs';
+import {
+  writeFileSync, readFileSync, mkdirSync, symlinkSync, rmSync, chmodSync, existsSync,
+  openSync, writeSync, ftruncateSync, closeSync,
+} from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
@@ -1697,6 +1700,57 @@ describe('ccrc doctor: wrappers', () => {
     const r = runDoctor(home);
     expect(r.stdout).toMatch(/FAIL wrappers: acct-a .*not the generated shape/);
     expect(r.code).toBe(1);
+  });
+
+  // D-81, the doctor side. `_wrap_parse_shape` (ccd/ccrc-wrapper-shape) reads
+  // a candidate WHOLE (`mapfile -t lines < "$f"`) — unlike `_wrap_is_script`'s
+  // two-byte gate, it has no bound at all. `ccrc wrappers` never asks it about
+  // a genuinely oversize file post-D-81 (`deploy/gen-wrappers.mjs` classifies
+  // one `oversize` before bash ever sees the disk path), but `_check_wrappers`
+  // is a pure-bash roster-vs-disk comparison with no node-side gate ahead of
+  // it, so it needs its own.
+  //
+  // The fixture starts with a real shebang and a real, EARLY, correctly
+  // terminated `export CLAUDE_CONFIG_DIR=` line — so `_wrap_is_script` and
+  // `_wrap_declares_config_dir` (the `wr_cands` scan, both cheap: the match is
+  // found on line 2, before either reads a byte of the padding) admit it into
+  // `wr_seen`, and the shape loop reaches it — then a SPARSE tail
+  // (`ftruncateSync`, no real disk cost) pushes the file well past 1 MiB.
+  // Without the gate, `_wrap_parse_shape` answers `no` too (the padding makes
+  // `body` the wrong length), so a bare "REFUSE"-shaped assertion would not
+  // distinguish "fixed" from "unfixed" — the SENTENCE is the pin, because it
+  // is the one thing that changes: "over 1 MiB … never read" only appears once
+  // the size gate exists to say it, in place of the generic "not the generated
+  // shape" wording the unbounded read would otherwise reach.
+  //
+  // The gate is `command -v stat`-guarded (this file's own `df`/`git`/`gh`
+  // idiom), and `healthy()`'s fixture PATH has no real coreutils at all — so
+  // this test links the box's REAL `stat` in, the same way `linkReal(home,
+  // 'timeout')`/`linkReal(home, 'jq')` do elsewhere in this file for a check
+  // that genuinely needs the real tool. Every OTHER wrapper test in this file
+  // runs with no `stat` on PATH and is unaffected by this change: the guard's
+  // fallback (fall through to the pre-D-81 unbounded read) is exactly what
+  // every pre-existing green test already exercises, which is why none of
+  // them needed to change.
+  it('an oversize wrapper candidate fails with its own sentence, never read whole (D-81)', () => {
+    const home = healthy('ccrc-doctor-wrappers-oversize-');
+    linkReal(home, 'stat');
+    const p = join(binDir(home), 'acct-a');
+    const fd = openSync(p, 'w');
+    try {
+      const header = '#!/usr/bin/env bash\nexport CLAUDE_CONFIG_DIR="$HOME/.acct-a"\n';
+      writeSync(fd, header, 0, 'utf8');
+      ftruncateSync(fd, 1024 * 1024 + header.length + 1); // over 1 MiB, sparse
+    } finally {
+      closeSync(fd);
+    }
+    chmodSync(p, 0o755);
+    writeRoster(home, [{ id: 'acct-a', configDirSuffix: '.acct-a', exec: { kind: 'generated' } }]);
+    const r = runDoctor(home);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toMatch(/FAIL wrappers: acct-a's \$HOME\/\.local\/bin\/acct-a is over 1 MiB/);
+    expect(r.stdout).toMatch(/never read/);
+    expect(r.stdout).not.toMatch(/not the generated shape/);
   });
 
   it('a roster that does not parse is its own answer, not "no roster"', () => {
