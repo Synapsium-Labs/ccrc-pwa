@@ -250,11 +250,23 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
  *  anyway at `umask 022`, so a test asserting `0644` there passes with the
  *  `chmod` DELETED (measured — round-1 review, Minor 1: the guard reddened only
  *  on the reviewer's `umask 0002` box, i.e. by accident of whose shell ran it).
- *  Under a hostile mask the mode can only come from the `chmod`. */
+ *  Under a hostile mask the mode can only come from the `chmod`.
+ *
+ *  `opts.stubs` plants executables into the fixture's `.local/bin` AFTER the
+ *  runner's own, so a test can model one tool BEHAVING BADLY (an `npm` that
+ *  fails, a `git` that refuses) rather than merely being absent — the two
+ *  conditions a step must not collapse. It is applied last for a reason: the
+ *  runner re-plants its defaults on every call, so a stub written before this
+ *  point is silently overwritten. */
 function runInstall(home: string, args: string[] = ['install'],
   extraEnv: NodeJS.ProcessEnv = {},
-  opts: { umask?: string; omit?: string[]; from?: string } = {}): Result {
+  opts: {
+    umask?: string; omit?: string[]; from?: string; stubs?: Record<string, string>;
+  } = {}): Result {
   const env = { ...ccrcEnv(home, opts.omit ?? []), ...extraEnv };
+  for (const [name, body] of Object.entries(opts.stubs ?? {})) {
+    writeFileSync(join(home, '.local', 'bin', name), body, { mode: 0o755 });
+  }
   const ccrc = opts.from ?? ccrcIn(treeRoot(home));
   const r = opts.umask === undefined
     ? spawnSync(BASH, [ccrc, ...args], { env, encoding: 'utf8' })
@@ -444,6 +456,37 @@ describe('ccrc install: the shipped tree lands at $HOME/ccrc', () => {
     expect(read(join(home, 'npm-cwd')).trim()).toBe(placed(home, 'server'));
     expect(existsSync(placed(home, 'server', 'node_modules'))).toBe(true);
     expect(r.stdout).toMatch(/^install: tree: server runtime deps in place$/m);
+  });
+
+  it('lets npm SAY WHY when the dependency install fails', () => {
+    // FIX ROUND 1, IMPORTANT 2. This is the verb's most likely failure — a
+    // registry hiccup, no network, a lockfile out of step with package.json —
+    // and `>/dev/null 2>&1` left the operator with "npm ci … failed" and no
+    // way to see which. The rule is written down one step over
+    // (`_inst_accounts_sh`: "stderr is deliberately NOT captured … re-wording a
+    // fix into a shrug helps nobody") and deploy already obeys it, since its
+    // `npm ci` runs over ssh with both streams attached.
+    //
+    // npm's STDOUT is redirected to stderr rather than kept: an install
+    // transcript is one `install: <step>: <result>` line per step on stdout,
+    // and "added 41 packages in 3s" is not this run's result. Both halves are
+    // asserted — the diagnosis reaches stderr, and stdout stays a transcript.
+    const home = freshBox('ccrc-install-npm-fails-');
+    const r = runInstall(home, ['install'], {}, {
+      stubs: {
+        npm: '#!/bin/sh\necho "npm notice: reaching the registry" \n'
+          + 'echo "npm ERR! code ENOTFOUND registry.npmjs.org" >&2\nexit 1\n',
+      },
+    });
+    expect(r.code).toBe(1);
+    expect(r.stderr, 'npm\'s own diagnosis never reached the operator')
+      .toContain('npm ERR! code ENOTFOUND registry.npmjs.org');
+    // …and the step's refusal still stands beside it, naming the consequence.
+    expect(r.stderr).toMatch(
+      /^ccrc: npm ci in \$HOME\/ccrc\/server failed — the service cannot start without runtime deps$/m);
+    expect(r.stdout, 'npm\'s chatter landed in the install transcript')
+      .not.toContain('npm notice');
+    expect(r.stdout).not.toMatch(/^install: tree: server runtime deps in place$/m);
   });
 
   it('does not copy the tree onto itself when it IS $HOME/ccrc', () => {
@@ -1095,12 +1138,81 @@ describe('ccrc install: the build stamp', () => {
     // nothing to measure. Skipping is the honest answer; inventing a sha, or
     // carrying the previous one forward, is the forgery. The line names the
     // consequence so an operator who later reads "unstamped" knows why.
+    //
+    // THE CAUSE IS GIT'S OWN SENTENCE, not this file's guess about it (fix
+    // round 1, Important 1). In this arm the two agree — git says "not a git
+    // repository" and it is not one — but that agreement is a fact of THIS
+    // fixture, and the two arms below are where a single hand-written sentence
+    // starts lying.
     const home = freshBox('ccrc-install-stamp-nogit-');
     const r = runInstall(home);
     expect(r.code, r.stderr).toBe(0);
     expect(r.stdout).toMatch(
-      /^install: stamp: skipped \(not a git checkout — ccrc version will say unstamped\)$/m);
+      /^install: stamp: skipped \(git rev-parse HEAD exited 128: .*not a git repository.*\) — ccrc version will say unstamped$/m);
     expect(existsSync(dotCcrc(home, 'build.json'))).toBe(false);
+  });
+
+  it('does not call a real checkout "not a git checkout" when git REFUSES it', () => {
+    // FIX ROUND 1, IMPORTANT 1 — measured by the reviewer, reproduced here.
+    // `detected dubious ownership` is git exiting 128 on a repository that IS
+    // one: a clone owned by another user, or the same clone reached under
+    // sudo. The old arm answered "not a git checkout", which sends the
+    // operator to look for a repository that is right in front of them while
+    // the box goes on reporting `unstamped` for ever — the exact condition
+    // this step exists to end.
+    const home = freshBox('ccrc-install-stamp-refused-');
+    gitInit(treeRoot(home));
+    const r = runInstall(home, ['install'], {}, {
+      stubs: {
+        git: '#!/bin/sh\n'
+          + 'echo "fatal: detected dubious ownership in repository at \'/home/other/ccrc\'" >&2\n'
+          + 'exit 128\n',
+      },
+    });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout, 'the skip still claims a cause it did not measure')
+      .not.toMatch(/not a git checkout/);
+    expect(r.stdout).toMatch(/^install: stamp: skipped \(git rev-parse HEAD exited 128: fatal: detected dubious ownership in repository at '\/home\/other\/ccrc'\) — ccrc version will say unstamped$/m);
+    expect(existsSync(dotCcrc(home, 'build.json'))).toBe(false);
+  });
+
+  it('says GIT IS ABSENT when git is absent — a different sentence again', () => {
+    // The third cause the one sentence used to cover. "not a git checkout"
+    // sends an operator to inspect a directory; `apt install git` is the fix.
+    // Same rule as `cmd_install`'s own node probe (round-1 review, Important
+    // 1): a missing DEPENDENCY and a fact about the tree are two conditions an
+    // operator acts on completely differently.
+    const home = freshBox('ccrc-install-stamp-gitless-');
+    gitInit(treeRoot(home));
+    const r = runInstall(home, ['install'], { PATH: pathWithout(home, 'git') });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(
+      /^install: stamp: skipped \(no git on PATH\) — ccrc version will say unstamped$/m);
+    expect(r.stdout).not.toMatch(/not a git checkout/);
+    expect(existsSync(dotCcrc(home, 'build.json'))).toBe(false);
+  });
+
+  it('never echoes raw control bytes out of git', () => {
+    // Passing a foreign tool's stderr through is only safe if what reaches the
+    // terminal cannot MOVE THE CURSOR: `_box_build_fields:264-267` rejects a
+    // stamp field carrying a control byte for exactly this reason ("a
+    // backspace would let the printed sha lie on a terminal"). Same rule
+    // here, one register over — and the line is truncated, because a git that
+    // writes a megabyte of stderr must not become the install transcript.
+    const home = freshBox('ccrc-install-stamp-cntrl-');
+    gitInit(treeRoot(home));
+    const r = runInstall(home, ['install'], {}, {
+      stubs: {
+        git: '#!/bin/sh\nprintf \'fatal: \\033[31mred\\010\\010\\010nope\\r and more\\n'
+          + 'second line nobody asked for\\n\' >&2\nexit 128\n',
+      },
+    });
+    expect(r.code, r.stderr).toBe(0);
+    const line = r.stdout.split('\n').find((l) => l.startsWith('install: stamp:'))!;
+    expect(line, 'a control byte reached the transcript')
+      .not.toMatch(/[\u0000-\u001f\u007f]/);
+    expect(line, 'git\'s second line rode along').not.toContain('second line nobody asked for');
+    expect(line).toContain('fatal:');
   });
 
   it('and `ccrc version` on the installed box reads exactly what it wrote', () => {

@@ -1771,7 +1771,18 @@ _inst_tree() {   # place the shipped tree at ~/ccrc — the layout every sibling
       || _ccrc_die "placing the tree at $dest failed"
     echo "install: tree: placed at \$HOME/ccrc"
   fi
-  ( cd "$dest/server" && npm ci --omit=dev --no-audit --no-fund >/dev/null 2>&1 ) \
+  # `>&2` AND NOT `>/dev/null 2>&1` (fix round 1, Important 2). This is the
+  # verb's most likely failure — a registry hiccup, no network, a lockfile out
+  # of step with `package.json` — and swallowing npm's own error text left the
+  # operator with the die below and no way to see which. That contradicts the
+  # rule `_inst_accounts_sh` writes down 90 lines up ("stderr is deliberately
+  # NOT captured … re-wording a fix into a shrug helps nobody") and diverges
+  # from deploy, whose `npm ci` runs over ssh with both streams attached.
+  # npm's STDOUT is redirected INTO stderr rather than kept, because an install
+  # transcript is one `install: <step>: <result>` line per step on stdout and
+  # "added 41 packages in 3s" is not this run's result — the file's two-register
+  # split (results on stdout, everything else on stderr), applied to a child.
+  ( cd "$dest/server" && npm ci --omit=dev --no-audit --no-fund >&2 ) \
     || _ccrc_die "npm ci in \$HOME/ccrc/server failed — the service cannot start without runtime deps"
   echo "install: tree: server runtime deps in place"
 }
@@ -1980,16 +1991,55 @@ _inst_stamp() {   # what this box is RUNNING, stated by the box itself
   # writer. This file holds the stamp's only reader (`_box_build_fields`) and,
   # from here, its second writer; two spellings is how a reader and a writer
   # come to disagree about which file they mean.
-  local src sha ref dirty tmp dest="$BOX_STAMP_FILE"
+  # ── THE SKIP NAMES ITS OWN CAUSE (fix round 1, Important 1) ─────────────
+  # Not stamping is a legitimate outcome — `~/ccrc` on a box a deploy touched is
+  # an rsync of a tree and not a repository (deploy.sh says so where it explains
+  # why `stamp_build` runs on the deploying machine), and an install is not a
+  # failure for having been run from a directory rather than a clone. So this
+  # stays a SKIP in every arm below, at exit 0.
+  #
+  # What it may not do is claim a cause it did not measure. The one sentence
+  # this step shipped with — "not a git checkout" — covered THREE conditions,
+  # and was false in two of them: git absent from PATH (the fix is `apt install
+  # git`, not looking for a repository), and git PRESENT AND REFUSING a
+  # repository that really is one — `fatal: detected dubious ownership`, exit
+  # 128, which is what a clone owned by another user, or the same clone reached
+  # under sudo, produces. Both measured. The cost of guessing wrong is not
+  # cosmetic: the box goes on reporting `unstamped` for ever, which is the exact
+  # condition this step exists to end, while the transcript sends the operator
+  # to inspect a directory instead of at git.
+  #
+  # So: probe the dependency BY NAME first (`cmd_install`'s own node rule, one
+  # register down), then let GIT say why — its stderr, first line only,
+  # control bytes stripped, truncated. Never raw foreign bytes on a terminal:
+  # `_box_build_fields:264-267` rejects a stamp field carrying a control byte
+  # for the same reason ("a backspace would let the printed sha lie on a
+  # terminal"), and a git that writes a megabyte of stderr must not become the
+  # install transcript.
+  local src sha ref dirty tmp why rc=0 dest="$BOX_STAMP_FILE"
   src="$CCRC_HERE/.."
-  # The ORDINARY state of a box a deploy has touched: `~/ccrc` is an rsync of a
-  # tree and not a repository (deploy.sh says so where it explains why
-  # `stamp_build` runs on the deploying machine). There is nothing to measure
-  # there, so the run says what the skip costs and moves on — an install is not
-  # a failure for having been run from a directory rather than a clone.
-  sha="$(git -C "$src" rev-parse HEAD 2>/dev/null)" || sha=""
-  if [ -z "$sha" ]; then
-    echo "install: stamp: skipped (not a git checkout — ccrc version will say unstamped)"
+  if ! command -v git >/dev/null 2>&1; then
+    echo "install: stamp: skipped (no git on PATH) — ccrc version will say unstamped"
+    return 0
+  fi
+  sha="$(git -C "$src" rev-parse HEAD 2>/dev/null)" || rc=$?
+  if [ "$rc" -eq 0 ] && [ -z "$sha" ]; then
+    echo "install: stamp: skipped (git rev-parse HEAD exited 0 but printed no sha) — ccrc version will say unstamped"
+    return 0
+  fi
+  if [ "$rc" -ne 0 ]; then
+    # A SECOND invocation, reached only because the first one failed, and only
+    # to read the diagnosis the first one discarded. Capturing both streams from
+    # one call needs a temp file or fd juggling, for a saving of one process on
+    # a path that is already the failure path. If this call disagrees with the
+    # first — a repository that appeared in between — `why` is empty and the
+    # line says so rather than inventing a reason.
+    why="$(git -C "$src" rev-parse HEAD 2>&1 >/dev/null)"
+    why="${why%%$'\n'*}"
+    why="${why//[[:cntrl:]]/}"
+    why="${why:0:200}"
+    [ -n "$why" ] || why="it printed nothing on stderr"
+    echo "install: stamp: skipped (git rev-parse HEAD exited $rc: $why) — ccrc version will say unstamped"
     return 0
   fi
   ref="$(git -C "$src" rev-parse --abbrev-ref HEAD 2>/dev/null)" || ref=""
