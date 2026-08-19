@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=0c12650bd756cfd6207d41cce05982c0b4fbe89b90967e54fa269735d5df53cd
+# ccrc:generated 1 sha256=225cb26025bb2be472882720c6f4cec2d3a9ca327baab5bdfc6dd3244ec66283
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box, not on this file: `_rc_enabled` reads
@@ -2148,25 +2148,60 @@ EOF
 cmd_version() {   # what THIS box runs, per the deploy's own stamp — never a guess.
   # ~/.ccrc/build.json is written by deploy.sh's stamp_build (temp + rename,
   # so no torn reads). No stamp = a dev checkout or a box no deploy touched:
-  # "unstamped" at exit 0 is the honest ANSWER there, not an error. A stamp
-  # that exists but does not parse is different — something wrote garbage
-  # where the deploy writes facts — and that refuses loudly instead of
-  # printing a version nobody measured.
+  # "unstamped" at exit 0 is the honest ANSWER there, not an error. Everything
+  # else is a genuine fault, and each now gets ITS OWN sentence — the same
+  # condition split `ccd/ccrc`'s `_box_build_fields` makes (that function's
+  # own header gives the full rationale). A MISSING DEPENDENCY (python3 not
+  # on PATH), a WRONG SHAPE (a directory sitting where the stamp belongs), a
+  # PARSE FAILURE, a stamp UNREADABLE FOR PERMISSIONS, and a field that does
+  # not TYPE-CHECK (`dirty` as a string, say) are conditions an operator acts
+  # on completely differently — `apt install python3` vs. redeploy vs.
+  # chmod/chown vs. "something wrote garbage" — and used to collapse into one
+  # "build stamp unreadable", sending every one of them toward whichever
+  # remedy happened to be wrong.
   [[ $# -eq 0 ]] || die "usage: ccd version"
   local stamp="$HOME/.ccrc/build.json"
-  if [[ ! -f "$stamp" ]]; then
+  if [[ ! -e "$stamp" ]]; then
     echo "ccd unstamped (no ~/.ccrc/build.json — not deployed by deploy.sh)"
     return 0
   fi
-  python3 - "$stamp" <<'PY' || die "build stamp unreadable: $stamp"
+  # Exists but is not a plain file (e.g. a directory left by a half-finished
+  # rsync/mkdir race) — a SHAPE problem, not an absence, and must not be read
+  # as "unstamped" (the identical split `_box_build_fields` makes, ccd/ccrc).
+  [[ -f "$stamp" ]] || die "build stamp unreadable: $stamp (not a regular file)"
+  command -v python3 >/dev/null 2>&1 \
+    || die "python3 is required by 'ccd version' but is not on PATH"
+  local out rc=0
+  out="$(python3 - "$stamp" <<'PY'
 import json, sys
 try:
-    o = json.load(open(sys.argv[1]))
+    data = open(sys.argv[1]).read()
+except Exception:
+    sys.exit(2)   # exists, is a regular file, still unreadable -> permissions
+try:
+    o = json.loads(data)
+except Exception:
+    sys.exit(3)   # not valid JSON
+try:
     sha, ref, built, dirty = o["sha"], o["ref"], o["builtAt"], o["dirty"]
 except Exception:
-    sys.exit(1)
+    sys.exit(4)   # valid JSON, missing a required field
+if not isinstance(dirty, bool):
+    sys.exit(5)   # dirty present but not a boolean — a string like "false"
+                   # is truthy in Python, and would otherwise print "dirty"
+                   # for a stamp that says the opposite (ccrc:240-245).
 print(f"ccd {sha} ({ref}, built {built}{', dirty' if dirty else ''})")
 PY
+)" || rc=$?
+  case "$rc" in
+    0) ;;
+    2) die "build stamp unreadable: $stamp (permission denied)" ;;
+    3) die "build stamp unreadable: $stamp (not valid JSON)" ;;
+    4) die "build stamp unreadable: $stamp (missing a required field)" ;;
+    5) die "build stamp unreadable: $stamp (dirty is not a boolean)" ;;
+    *) die "build stamp unreadable: $stamp" ;;
+  esac
+  echo "$out"
 }
 
 cmd_ws_hold() {   # ccd ws-hold --session <id> --reason <text> — claim a

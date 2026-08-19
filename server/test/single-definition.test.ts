@@ -721,14 +721,18 @@ describe('one bash reader of ~/.ccrc/build.json', () => {
     //
     // `ccd/ccd`'s `cmd_version` carries a reader of its own, in a python3
     // heredoc, and it is a genuine second copy of one fact: two tools, two
-    // languages, one stamp. It stays for now because `ccd` is the tool this
-    // task must not edit (its own `|| die` runs on every invocation on a live
-    // fleet host, and a rewrite of its version verb belongs with the work that
-    // can prove it there). Whoever next has a reason to touch `cmd_version`
-    // should make it call `ccrc version` — or delete it in favour of it — and
-    // shorten this list to `ccd/ccrc` alone.
+    // languages, one stamp. Stage 2e Task 5 gave that reader the SAME
+    // condition split `_box_build_fields` makes below (missing dependency /
+    // wrong shape / parse failure / permission / a field that does not
+    // type-check, each its own sentence) — split IN PLACE (Option A), not
+    // delegated to `ccrc version` (Option B): a delegation was measured to
+    // break the vitest harness and a dev checkout, and it would print the
+    // wrong tool's name in every refusal. So the second copy of the fact
+    // stays, deliberately, now equally careful rather than equally collapsed
+    // — this is still the list to shorten if a later task ever proves
+    // delegation safe.
     expect(holdersOf('$HOME/.ccrc/build.json')).toEqual([
-      'ccd/ccd',     // cmd_version's python3 heredoc — the named gap, see above
+      'ccd/ccd',     // cmd_version's python3 heredoc — a deliberate second reader, see above
       'ccd/ccrc',    // BOX_STAMP_FILE, read only by _box_build_fields
     ]);
   });
