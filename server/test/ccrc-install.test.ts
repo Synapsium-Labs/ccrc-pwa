@@ -2066,6 +2066,7 @@ describe('ccrc install: running the WHOLE verb twice', () => {
     const envBefore = read(join(home, '.ccrc', 'ccrc.env'));
     const settingsBefore = read(join(home, '.claude', 'settings.json'));
     const stampBefore = read(join(home, '.ccrc', 'build.json'));
+    const stampMtimeBefore = mtime(join(home, '.ccrc', 'build.json'));
     const callsBefore = systemctlCalls(home).map((c) => c.argv);
 
     const r = runInstall(home);
@@ -2085,7 +2086,21 @@ describe('ccrc install: running the WHOLE verb twice', () => {
     //    actually did.
     expect(targets.map(mtime)).toEqual(before);
     // 4. …except the stamp, which measures THIS run and must not be stale.
-    expect(read(join(home, '.ccrc', 'build.json'))).not.toBe(stampBefore);
+    //    MEASURED BY MTIME, not by content, and the difference is a real flake
+    //    this assertion had: `builtAt` is `date -u +%Y-%m-%dT%H:%M:%SZ`
+    //    (ccrc:2163) — SECOND resolution — while `sha`, `ref` and `dirty` are
+    //    identical across two runs of one checkout. Two installs completing
+    //    inside the same wall-clock second therefore produce a byte-identical
+    //    stamp, and a content comparison calls that a failure to rewrite. It is
+    //    not: mtime is the measurement this test already trusts for every other
+    //    target three lines up, and "was rewritten" is what assertion 4 means.
+    //    The content check that survives is the one that is time-independent:
+    //    the stamp still describes THIS checkout, so a stale or absent rewrite
+    //    is still caught by the sha.
+    const stampAfter = read(join(home, '.ccrc', 'build.json'));
+    expect(mtime(join(home, '.ccrc', 'build.json'))).not.toBe(stampMtimeBefore);
+    expect(JSON.parse(stampAfter).sha).toBe(JSON.parse(stampBefore).sha);
+    expect(String(JSON.parse(stampAfter).sha)).toMatch(/^[0-9a-f]{40}$/);
     // 5. The systemd calls are the same three, in the same order. `enable
     //    --now` on an enabled unit is a no-op by design; what would NOT be safe
     //    is a second run that started restarting things, which is how an

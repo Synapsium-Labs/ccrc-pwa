@@ -65,7 +65,7 @@ const ghWorkspaceId = (): string => {
  *  tmux. */
 const ARCH = `_ws_unsupervise() { echo "unsupervise $1" >> "$HOME/ccd-calls"; };
   _ws_supervise() { :; }; _spawn() { :; }; _spawn_start() { SPAWN_FROMSWAP=0; }; _spawn_settle() { :; };
-  tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; return 1; }; _alive() { return 1; };`;
+  tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; return 1; }; _session_verdict() { echo gone; };`;
 
 describe('ccd ws-hold / ws-release', () => {
   it('holds a workspace: writes the reason verbatim', () => {
