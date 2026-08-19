@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=8cf7a5ef4e4145e0192c1106aa5173160a356581d7b69882b3c4d45392b00c8f
+# ccrc:generated 1 sha256=ed5372c64fc5175bfea953286be26fabcd39f45506ab8ad22dcc7888fcf74d36
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
 set -uo pipefail
@@ -189,19 +189,40 @@ source "$CCRC_ACCOUNTS_SH" \
   || die "account roster unreadable: $CCRC_ACCOUNTS_SH — regenerate it from ~/.ccrc/accounts.json"
 
 # ── DOES THIS BOX DRIVE ITS SESSIONS OVER THE RC SOCKET? ──────────────────
-# The ONE spelling of the flag path in ccd. `_spawn_start` is its only reader
-# today; `ccrc doctor`/`install` write it (their own spelling lives in
-# `ccd/ccrc`, which cannot source this file).
+# The ONE spelling of the flag path in ccd. `_spawn_start` is its only reader,
+# and AS OF THIS COMMIT it is the only code of any kind that touches the file:
+# NOTHING WRITES IT YET. `ccrc install` (seeding `off`) and deploy's fleet lane
+# (seeding `on`, ordered BEFORE the ccd install) land later on this same branch,
+# Stage 2e Task 2; `grep -n remote-control ccd/ccrc deploy/deploy.sh` is zero
+# hits until they do. Their spelling of this path will be their own — `ccd/ccrc`
+# cannot source this file, and neither can `deploy.sh`.
+#
+# SO, UNTIL THOSE WRITERS EXIST: THIS ccd MUST NOT BE DEPLOYED TO THE REFERENCE
+# FLEET. Every box reads OFF today, so shipping it alone strips
+# `--remote-control` from every live session at its next respawn. The standing
+# AGENT-FIRST rule (a change under `ccd/` goes to the fleet host before the
+# server) does NOT make that safe — it is the procedure that would cause it.
+# The seed has to land first; D-99 in the stage-2e plan records this, and Task 2
+# Step 2 pins the ordering.
 CCRC_RC_FILE="$HOME/.ccrc/remote-control"
 _rc_enabled() {   # first line 'on' => sessions spawn with --remote-control.
   # A FILE, not an env var (HOME is ccd's only isolation boundary — see
   # SPAWN_GATE_TRIES) and not ccrc.env (never read by ccd: it carries tokens,
   # and the fleet host does not have one). Absent or anything-but-'on' is OFF:
-  # a garbled file must not half-enable a mode. Seeded 'off' by ccrc install,
-  # 'on' by deploy's fleet lane; operator-owned after that.
+  # a garbled file must not half-enable a mode. Once the writers above exist the
+  # file is operator-owned; today it does not exist on any box.
   local first=""
   [[ -f "$CCRC_RC_FILE" ]] || return 1
-  IFS= read -r first < "$CCRC_RC_FILE" 2>/dev/null || return 1
+  # `2>/dev/null` BEFORE the input redirect, and the order is the whole point:
+  # bash applies redirections left to right, so with the suppression written
+  # last the `<` is attempted while stderr is still the caller's, and a
+  # chmod-000 flag file prints a raw `Permission denied` — with ccd's own line
+  # number, unattributed — onto `_spawn_start`'s stderr on EVERY spawn. That
+  # function's header takes stray output seriously ("a stray line here would
+  # land in whatever `ws-add`/`start` was printing"), and this is the fleet's
+  # supervisor. The return value was always right; the suppression was not
+  # suppressing. `ccd-rc-flag.test.ts` pins the silence, not just the verdict.
+  IFS= read -r first 2>/dev/null < "$CCRC_RC_FILE" || return 1
   [[ "${first//[[:space:]]/}" == "on" ]]
 }
 

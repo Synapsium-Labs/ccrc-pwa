@@ -645,13 +645,47 @@ describe('ws-add serialises per project', () => {
  *       against the pre-task source — with the literal unconditional they were
  *       green from the start (measured: 2 failed | 46 passed at RED, the two
  *       flag-absent cases only), so their guard value is against the flag being
- *       disconnected, not against it never existing. */
+ *       disconnected, not against it never existing.
+ * (iii) FIX ROUND 1 — moving `$rcflag` AFTER `$sidflag` on the primary line and
+ *       after `--session-id '$uuid'` on the retry reds all four:
+ *         4 failed | 60 passed  (`ccd-spawn-split` + `ccd-rc-flag`)
+ *       Against the substring assertions these four cases shipped with, the
+ *       SAME reorder left 81/81 green — argv order was unpinned, and the
+ *       task's highest-stakes property (the RC-on argv is byte-identical to
+ *       what `e645215` ran) was a reviewer's out-of-band measurement rather
+ *       than a suite mechanism. `expectedCommand` is that mechanism now. */
 describe('_spawn_start: --remote-control only when the box says on', () => {
   /** Writes the box's flag file. `<home>/.ccrc` already exists — `makeCcdHarness`
    *  seeds `accounts.sh` into it before anything else. */
   const flag = (body: string): void => {
     fs.writeFileSync(path.join(h.home, '.ccrc', 'remote-control'), body);
   };
+
+  /** The composed shell command tmux was asked to run — the recorded line minus
+   *  the `new-session` geometry, which is a separate contract owned elsewhere
+   *  (and would make a `-x`/`-y` change red THIS test for no reason). The
+   *  regex's own match is asserted, so a line that stops being a `new-session`
+   *  reds here instead of silently returning the whole string. */
+  const composedCommand = (line: string): string => {
+    const m = /^tmux new-session -d -s \S+ -x \d+ -y \d+ (.*)$/.exec(line);
+    expect(m, `not a recognisable new-session line: ${line}`).not.toBeNull();
+    return m![1];
+  };
+
+  /** WHAT THE REFERENCE FLEET RUNS TODAY, spelled out once. The RC-on argv must
+   *  be BYTE-IDENTICAL to what `e645215`'s unconditional literal produced — that
+   *  is the whole risk of this task, and `toBe` against this string is what
+   *  makes it a suite mechanism rather than a reviewer's one-off measurement.
+   *
+   *  ORDER IS PART OF IT. A `toContain("--remote-control 'myid'")` passes just
+   *  as happily with `$rcflag` moved after `$sidflag` (measured: 81/81 green),
+   *  so the substring form pinned the flag's PRESENCE and nothing about the
+   *  command it composes. */
+  const expectedCommand = (sidflag: string, rc: boolean): string =>
+    `cd '${h.home}' && exec env COLORTERM=truecolor '${h.home}/.local/bin/claude' `
+    + `${rc ? "--remote-control 'myid' " : ' '}${sidflag} --dangerously-skip-permissions`;
+
+  const UUID = 'deadbeef-0000-4000-8000-000000000000';
 
   it('no flag file — the primary spawn argv carries no --remote-control', () => {
     seed('myid');
@@ -660,9 +694,10 @@ describe('_spawn_start: --remote-control only when the box says on', () => {
     expect(news).toHaveLength(1);
     expect(news[0]).not.toContain('--remote-control');
     // The rest of the line is untouched: the flag's absence must not be a
-    // spawn that lost its uuid or its permission flag too.
-    expect(news[0]).toContain("--session-id 'deadbeef-0000-4000-8000-000000000000'");
-    expect(news[0]).toContain('--dangerously-skip-permissions');
+    // spawn that lost its uuid or its permission flag too. Asserted WHOLE, so
+    // "no RC" cannot pass as "no spawn" and the empty `$rcflag`'s collapse (a
+    // double space, no empty token) is pinned rather than assumed.
+    expect(composedCommand(news[0])).toBe(expectedCommand(`--session-id '${UUID}'`, false));
   });
 
   it("flag file `on` — the primary spawn argv carries --remote-control '<id>'", () => {
@@ -673,7 +708,8 @@ describe('_spawn_start: --remote-control only when the box says on', () => {
     expect(news).toHaveLength(1);
     // The ID, not a bare flag: the RC socket is keyed by session id, and a
     // `--remote-control` with the wrong operand is a session nobody can drive.
-    expect(news[0]).toContain("--remote-control 'myid'");
+    // And the WHOLE command, in order — see `expectedCommand`.
+    expect(composedCommand(news[0])).toBe(expectedCommand(`--session-id '${UUID}'`, true));
   });
 
   it('no flag file — the --session-id RETRY spawn carries no --remote-control either', () => {
@@ -684,9 +720,8 @@ describe('_spawn_start: --remote-control only when the box says on', () => {
     // Asserted on the SECOND line specifically. The first is the `--resume`
     // attempt that died; if only the primary line were conditional, this
     // assertion is the only one in the suite that would notice.
-    expect(news[1]).toContain('--session-id');
-    expect(news[1]).not.toContain('--remote-control');
-    expect(news[0]).not.toContain('--remote-control');
+    expect(composedCommand(news[1])).toBe(expectedCommand(`--session-id '${UUID}'`, false));
+    expect(composedCommand(news[0])).toBe(expectedCommand(`--resume '${UUID}'`, false));
   });
 
   it("flag file `on` — the --session-id RETRY spawn carries --remote-control '<id>' too", () => {
@@ -695,7 +730,11 @@ describe('_spawn_start: --remote-control only when the box says on', () => {
     h.sh(`${RESUME_DIES} rm -f "$HOME/pane-up"; _spawn_start myid resume 2>/dev/null`);
     const news = newSessions();
     expect(news).toHaveLength(2);
-    expect(news[0]).toContain("--remote-control 'myid'");
-    expect(news[1]).toContain("--remote-control 'myid'");
+    // BOTH lines whole and in order. The retry is a hand-copied second
+    // composition of the same string, so it is the one that drifts — an
+    // assertion that only checked for the flag's presence would not see a
+    // retry whose operand order diverged from the primary's.
+    expect(composedCommand(news[0])).toBe(expectedCommand(`--resume '${UUID}'`, true));
+    expect(composedCommand(news[1])).toBe(expectedCommand(`--session-id '${UUID}'`, true));
   });
 });

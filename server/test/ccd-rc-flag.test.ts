@@ -30,7 +30,7 @@
 // FIXTURE HOMES ONLY (`makeCcdHarness`): ccd is the live fleet's supervisor and
 // HOME is its single isolation boundary.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { CCD, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 
@@ -136,6 +136,39 @@ describe('_rc_enabled — the box flag reader', () => {
     flag('on');
     expect(rcEnabled()).toBe(false);
   });
+
+  // MUTATION MEASURED (2026-08-19, fix round 1): restoring the reader's old
+  // redirection order — `read -r first < "$F" 2>/dev/null`, which is what the
+  // brief specified and Task 1 shipped — reds the test below and nothing else:
+  //   1 failed | 15 passed  (`ccd-rc-flag`)
+  // The VERDICT half stays green under that mutation, which is exactly why the
+  // silence has to be asserted separately: the return value was never the bug.
+  it.skipIf(process.getuid?.() === 0)(
+    'is off AND SILENT when the flag file exists but cannot be read', () => {
+      // Bash applies redirections left to right, so with `2>/dev/null` written
+      // AFTER the `<` the input redirection is attempted while stderr is still
+      // the caller's — and a `chmod 000` flag file puts a raw
+      // `ccd: line NNN: …: Permission denied` on `_spawn_start`'s stderr on
+      // EVERY spawn, on the fleet's supervisor, in a function whose header
+      // takes stray output seriously. The suppression that was written did not
+      // suppress. Skipped as root, where `chmod 000` denies nobody — the
+      // `coord-token.test.ts` idiom.
+      flag('on\n');
+      const p = path.join(h.home, '.ccrc', 'remote-control');
+      chmodSync(p, 0o000);
+      try {
+        // stderr is captured INSIDE the snippet, into a file: `h.sh` hands back
+        // stdout only, and a bash diagnostic on the harness's own stderr is
+        // invisible to an assertion.
+        const out = h.sh(`_rc_enabled 2>"$HOME/rc-stderr" && echo yes || echo no`);
+        // OFF, not on: unreadable degrades the same direction as absent.
+        expect(out).toBe('no');
+        expect(readFileSync(path.join(h.home, 'rc-stderr'), 'utf8')).toBe('');
+      } finally {
+        // Restore — the tmpdir cleanup has to be able to unlink it.
+        chmodSync(p, 0o600);
+      }
+    });
 
   it('is not an env override — HOME is ccd\'s only isolation boundary', () => {
     // The discipline `SPAWN_GATE_TRIES`' docstring states and
