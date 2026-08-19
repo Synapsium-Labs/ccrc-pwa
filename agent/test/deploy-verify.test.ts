@@ -1592,7 +1592,10 @@ describe('the verification is actually wired into the deploy, and can observe a 
     });
     expect(r.status, 'a missing shipped tree is exit 1 — the tool ran and the answer was bad').toBe(1);
     expect(r.stderr).toContain(path.join(home, 'ccrc', 'ccd', 'ccrc'));
-    expect(r.stderr, 'the refusal names no remedy').toMatch(/deploy/);
+    expect(r.stderr, 'the refusal must name the self-install remedy, not deploy.sh alone')
+      .toMatch(/install\.sh/);
+    expect(r.stderr, 'the refusal must also name the fleet-deploy remedy, not install.sh alone')
+      .toMatch(/deploy/);
   });
 
   it('BOTH lanes install the shim, in the same ordering class as ccd — after the roster, before the restart', () => {
