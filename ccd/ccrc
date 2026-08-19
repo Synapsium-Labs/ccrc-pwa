@@ -1666,6 +1666,7 @@ cmd_install() {
   _inst_roster
   _inst_accounts_sh
   _inst_env
+  _inst_rc
   _inst_tree
   _inst_bins
   _inst_files
@@ -1821,6 +1822,53 @@ _inst_env() {   # seed-once, exactly like the roster: the env file is the box's
     printf '%s\n' "CCRC_PROJECTS_ROOT=$HOME/projects"
   } > "$tmp" && mv -f "$tmp" "$dest" || { rm -f "$tmp"; _ccrc_die "writing $dest failed"; }
   echo "install: ccrc.env: written (localhost, local fleet mode)"
+}
+
+_inst_rc() {   # seed-once, the third file on the user-owned side of the rule
+  # this verb's header states: `~/.ccrc/remote-control` decides whether `ccd`
+  # spawns this box's sessions with `--remote-control` (claude.ai
+  # discoverability) or without it. It is OPERATOR-OWNED — created once, never
+  # rewritten — and here the usual reason ("their edits, their file") is the
+  # weaker half. The strong one: this flag is what every session on the box is
+  # SPAWNED AS, so a step that overwrote it would change the shape of every
+  # live pane at its next respawn, on a box whose operator asked for an
+  # install and not for that. D-99 in the stage-2e plan records the outage
+  # shape; `ccd/ccd`'s `_rc_enabled` is the reader and the authority on what
+  # the bytes mean.
+  #
+  # OFF ON A FRESH BOX, and the asymmetry with `deploy.sh`'s fleet lane (which
+  # seeds `on`) is deliberate rather than an inconsistency. `--remote-control`
+  # PUBLISHES a session to claude.ai; a box nobody asked that of must not
+  # start doing it because an installer defaulted it. The fleet lane seeds
+  # `on` because that box was ALREADY running RC before the flag existed and
+  # off would be a silent change to what it does — the same question, asked
+  # about two boxes with two different existing answers.
+  #
+  # THE TRAILING NEWLINE IS THE CONTRACT, not formatting. `_rc_enabled` reads
+  # the file with `IFS= read -r`, and bash's `read` returns NON-ZERO at
+  # EOF-before-delimiter: `printf 'off'` with no newline reads as OFF for the
+  # wrong reason, and `printf 'on'` with no newline reads as OFF outright.
+  # `server/test/ccd-rc-flag.test.ts` pins that measurement and
+  # `ccrc-install.test.ts` asserts these bytes WHOLE, newline included.
+  #
+  # THE PATH IS A LOCAL, not a fourth entry in the top-level block at :91-107.
+  # That block exists because `version`, `status` and `doctor` all READ the
+  # files in it from this file; this one has exactly one toucher here — the
+  # function you are reading — and its readers live in other tools that cannot
+  # see a variable of ours anyway (`ccd`'s `CCRC_RC_FILE`, and
+  # `ccrc-doctor-checks`' own literal, which is the deliberate second spelling
+  # D-92 already records for `CCRC_UNIT_DIR`). `single-definition.test.ts`
+  # holds all four spellings equal, which is the mechanism the promise would
+  # otherwise be.
+  local dest="$HOME/.ccrc/remote-control"
+  if [ -e "$dest" ]; then
+    echo "install: remote-control: kept (operator-owned)"
+    return 0
+  fi
+  local tmp="$dest.tmp.$$"
+  printf '%s\n' "off" > "$tmp" && mv -f "$tmp" "$dest" \
+    || { rm -f "$tmp"; _ccrc_die "writing $dest failed"; }
+  echo "install: remote-control: off (fresh installs default off — edit ~/.ccrc/remote-control to 'on' for claude.ai discoverability)"
 }
 
 _inst_tree() {   # place the shipped tree at ~/ccrc — the layout every sibling

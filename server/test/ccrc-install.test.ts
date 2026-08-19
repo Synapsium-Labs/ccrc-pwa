@@ -866,6 +866,30 @@ describe('ccrc install: a fresh box', () => {
     expect(r.stdout).toMatch(/^install: ccrc\.env: written \(localhost, local fleet mode\)$/m);
   });
 
+  it("seeds the remote-control flag OFF — one line, and the trailing newline its reader requires", () => {
+    // Stage 2e, Task 2. THE ASSERTION IS ON THE BYTES, and that is the whole
+    // point of it: `ccd`'s `_rc_enabled` reads this file with
+    // `IFS= read -r first < "$CCRC_RC_FILE"`, and bash's `read` returns
+    // NON-ZERO at EOF-before-delimiter — so `printf 'on' > file` (no newline)
+    // reads as OFF. The direction is fail-safe and deliberately left that way
+    // (D-99), which makes the trailing newline this writer's obligation rather
+    // than the reader's problem. A `toContain('off')` would pass with the
+    // newline dropped, i.e. against a writer that produces a file whose only
+    // honest reading is "unparseable".
+    //
+    // OFF on a FRESH box, not on: `--remote-control` publishes a session to
+    // claude.ai, and a box nobody asked that of must not start doing it
+    // because an installer defaulted it. The reference fleet gets `on` from
+    // the other lane (deploy.sh), where the box's existing behaviour is the
+    // reason.
+    const home = freshBox('ccrc-install-fresh-rc-');
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(read(dotCcrc(home, 'remote-control'))).toBe('off\n');
+    expect(r.stdout).toMatch(
+      /^install: remote-control: off \(fresh installs default off — edit ~\/\.ccrc\/remote-control to 'on' for claude\.ai discoverability\)$/m);
+  });
+
   it('names the box and the tree — the two things it measured — before it changes anything', () => {
     // The two inputs every step is computed from. A run under the wrong HOME
     // (sudo) or out of the wrong tree (a stale `~/ccrc` rather than the
@@ -956,6 +980,30 @@ describe('ccrc install: the files the operator owns', () => {
     // run kept that file, and nothing in the run established otherwise: a
     // transcript that claimed it would be describing a box nobody has.
     expect(r.stdout).not.toMatch(/local fleet mode|localhost/);
+  });
+
+  it('keeps a remote-control flag the box already had, byte for byte, on every re-run', () => {
+    // The THIRD file on the user-owned side of `deploy.sh:196-206`'s rule, and
+    // the one whose overwrite is loudest: this flag decides what every session
+    // on the box is SPAWNED AS, so a step that rewrote it would change the
+    // shape of ~11 live panes at their next respawn — the exact outage D-99
+    // records and the reason Task 1's ccd was deploy-blocked until this step
+    // existed.
+    //
+    // TWO RUNS, because "seed once" and "never overwrite" are two claims and
+    // only the second one is about a box that has already been installed. The
+    // bytes are compared whole (not "contains on") for `_inst_env`'s reason:
+    // an operator's file is theirs, including the newline they ended it with.
+    const home = freshBox('ccrc-install-kept-rc-');
+    preexisting(home, 'remote-control', 'on\n');
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(read(dotCcrc(home, 'remote-control'))).toBe('on\n');
+    expect(r.stdout).toMatch(/^install: remote-control: kept \(operator-owned\)$/m);
+    const again = runInstall(home);
+    expect(again.code, again.stderr).toBe(0);
+    expect(read(dotCcrc(home, 'remote-control'))).toBe('on\n');
+    expect(again.stdout).toMatch(/^install: remote-control: kept \(operator-owned\)$/m);
   });
 });
 
@@ -1383,6 +1431,11 @@ describe('ccrc install: the order is stated in one place', () => {
       '_inst_roster',
       '_inst_accounts_sh',
       '_inst_env',
+      // Stage 2e, Task 2. Beside the other two seed-once steps and BEFORE the
+      // tree: nothing later in this sequence reads the flag, so its position
+      // is a grouping rather than a dependency — the three files an operator
+      // owns are seeded together, and the transcript reads that way too.
+      '_inst_rc',
       '_inst_tree',
       '_inst_bins',
       '_inst_files',
