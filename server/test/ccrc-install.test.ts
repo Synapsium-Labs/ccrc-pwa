@@ -220,8 +220,15 @@ export function installFixtureTree(home: string, sub = 'checkout'): string {
  *  `node`, `tmux`, `jq`, `python3`, `flock` and `timeout` are NOT stubbed out
  *  of existence the way the doctor suite stubs them: this fixture's PATH keeps
  *  the real system directories, because the verb runs `node`, `jq` and `rsync`
- *  for real. `df` is the one exception — see below. */
-function healthyDoctorBox(home: string): void {
+ *  for real. `df` is the one exception — see below.
+ *
+ *  `opts.upstream = false` (A2-NEW) builds the box WITHOUT planting the
+ *  upstream binary below — the state the 2d fixtures hid: a truly fresh VM,
+ *  where `bash install.sh` has seeded the default roster's one `upstream`
+ *  account but nothing has ever installed Claude Code. Every other stub still
+ *  lands, because the point is to isolate this ONE absence, not to also break
+ *  gh/curl/df/git and drown the assertion in unrelated FAILs. */
+function healthyDoctorBox(home: string, opts: { upstream?: boolean } = {}): void {
   const d = join(home, 'doctor-stubs');
   mkdirSync(d, { recursive: true });
   const stub = (name: string, body: string): void =>
@@ -280,9 +287,17 @@ function healthyDoctorBox(home: string): void {
   // The upstream account's binary, which the roster this verb seeds declares
   // and `_check_wrappers` looks for. A few bytes of ELF prove "not a script"
   // without the real ~300 MB (ccrc-doctor.test.ts's `writeBinary`).
+  //
+  // `mkdir` runs UNCONDITIONALLY (A2-NEW): `~/.local/bin` itself is not what
+  // `opts.upstream = false` is testing the absence of — it is the shipped
+  // stubs' own directory (gh/curl/df above already live there by the time
+  // this line runs), and the doctor-side "no $HOME/.local/bin at all" FAIL is
+  // a different check with its own test elsewhere in this suite.
   mkdirSync(join(home, '.local', 'bin'), { recursive: true });
-  writeFileSync(join(home, '.local', 'bin', 'claude'),
-    '\x7fELF\x02\x01\x01\x00not-a-real-binary-just-a-fixture-marker', { mode: 0o755 });
+  if (opts.upstream ?? true) {
+    writeFileSync(join(home, '.local', 'bin', 'claude'),
+      '\x7fELF\x02\x01\x01\x00not-a-real-binary-just-a-fixture-marker', { mode: 0o755 });
+  }
 }
 
 /** The names `healthyDoctorBox` and the runner between them put in
@@ -298,6 +313,18 @@ function freshBox(prefix: string): string {
   const home = mkTmp(prefix);
   installFixtureTree(home);
   healthyDoctorBox(home);
+  return home;
+}
+
+/** The e2e the 2d fixtures hid (A2-NEW): `freshBox` above always plants the
+ *  fake upstream binary, so no test in this file ever ran the FULL `ccrc
+ *  install` transcript against the box a real fresh VM actually starts as —
+ *  roster seeded, Claude Code never installed. Everything else is identical
+ *  to `freshBox`; only the one binary is missing. */
+function freshBoxNoUpstream(prefix: string): string {
+  const home = mkTmp(prefix);
+  installFixtureTree(home);
+  healthyDoctorBox(home, { upstream: false });
   return home;
 }
 
@@ -2081,6 +2108,37 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     // reported it could not (fix round 1, Minor 1).
     expect(r.stdout).toMatch(/^install: done — converged with 1 degraded step \(linger\)$/m);
     expect(r.stdout).not.toMatch(/^install: done — every step above converged$/m);
+  });
+
+  it('a fresh VM with no Claude Code installed is told to install it, not to edit its roster (A2-NEW)', () => {
+    // The e2e the 2d fixtures hid: `freshBox` always planted the fake upstream
+    // binary, so no test in this file ever ran the FULL `ccrc install`
+    // transcript against the box a real fresh VM actually is — `bash
+    // install.sh` seeded the default roster (one `upstream` account,
+    // `claude`), Claude Code was never installed, and the closing `ccrc
+    // doctor` is the FIRST thing that measures the gap. The first sentence a
+    // fresh operator reads has to be actionable.
+    const home = freshBoxNoUpstream('ccrc-install-no-claude-');
+    const r = runInstall(home);
+    expect(r.code).toBe(1);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL wrappers: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toMatch(/claude has no executable at \$HOME\/\.local\/bin\/claude/);
+    // MEASURED RED (before A2-NEW): this remedy read "the roster is the
+    // source of truth … 'ccrc adopt --out /tmp/accounts.json'" — the
+    // roster-sync remedy, which cannot fix an absent binary and sends a
+    // fresh-VM operator looking at the wrong file.
+    expect(lines[i + 1]).toMatch(/install Claude Code/);
+    expect(lines[i + 1]).not.toMatch(/ccrc adopt/);
+    // …and every install step above still converged clean — `_inst_wrappers`
+    // only writes GENERATED accounts, the default roster has none, so there
+    // is nothing for that step to degrade on. This is doctor's OWN verdict,
+    // run as the verb's last word, over an install that otherwise finished:
+    // the FIRST sentence a fresh operator reads is actionable precisely
+    // because it is not buried under an unrelated step failure.
+    expect(r.stdout).toMatch(/^install: done — every step above converged$/m);
+    expect(r.stdout).not.toMatch(/degraded/);
   });
 });
 

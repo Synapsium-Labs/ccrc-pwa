@@ -2058,31 +2058,92 @@ describe('ccrc doctor: wrappers', () => {
   });
 
   // ── the upstream account: the same presence triad ───────────────────────
-  it('fails when the upstream account has no executable at all', () => {
+  // A2-NEW: the absent-class arms of this triad (no file at all, a dangling
+  // symlink) route to `wr_upstream`, not `wr_hard` — a fresh box that has
+  // never had Claude Code installed is told to install it, not to reconcile a
+  // roster that is already correct. The DETAIL sentence is unchanged (same
+  // `_dr_wr_present` wording as the generated/external arms); only the
+  // REMEDY moves. Present-but-wrong (not executable) is the one arm that
+  // stays `wr_hard` — `_dr_wr_present` hard-wires that arm regardless of
+  // which bucket the caller names, so a file on disk that disagrees is still
+  // a roster/wrapper disagreement, not an absent binary.
+  it('fails when the upstream account has no executable at all — told to install it, not sync the roster (A2-NEW)', () => {
     const home = healthy('ccrc-doctor-wrappers-up-missing-');
     rmSync(join(binDir(home), 'claude'), { force: true });
     const r = runDoctor(home);
-    expect(r.stdout).toMatch(/FAIL wrappers: claude has no executable at \$HOME\/\.local\/bin\/claude/);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL wrappers: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toMatch(/claude has no executable at \$HOME\/\.local\/bin\/claude/);
+    // MEASURED RED (before A2-NEW's split): the remedy here was the generic
+    // "the roster is the source of truth … 'ccrc adopt --out /tmp/accounts.json'"
+    // sentence — the wrong instruction for a binary nothing on disk has ever
+    // tried to be, and one a fresh-VM operator cannot act on.
+    expect(lines[i + 1]).toMatch(/install Claude Code/);
+    expect(lines[i + 1]).not.toMatch(/ccrc adopt/);
     expect(r.code).toBe(1);
   });
 
-  it('fails when the upstream account is a symlink to a path that does not exist', () => {
+  it('fails when the upstream account is a symlink to a path that does not exist — same install remedy (A2-NEW)', () => {
     const home = healthy('ccrc-doctor-wrappers-up-dangling-');
     rmSync(join(binDir(home), 'claude'), { force: true });
     symlinkSync(join(home, '.local', 'share', 'claude', 'versions', 'gone'), join(binDir(home), 'claude'));
     const r = runDoctor(home);
     // The measured shape of a real upstream account is exactly this symlink,
     // pointing at a versions/ directory an update can remove.
-    expect(r.stdout).toMatch(/FAIL wrappers: claude's \$HOME\/\.local\/bin\/claude is a symlink to a path that does not exist/);
-    expect(r.stdout).not.toMatch(/claude has no executable/);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL wrappers: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toMatch(/claude's \$HOME\/\.local\/bin\/claude is a symlink to a path that does not exist/);
+    expect(lines[i]).not.toMatch(/claude has no executable/);
+    expect(lines[i + 1]).toMatch(/install Claude Code/);
+    expect(lines[i + 1]).not.toMatch(/ccrc adopt/);
     expect(r.code).toBe(1);
   });
 
-  it('fails when the upstream account is present but not executable', () => {
+  it('fails when the upstream account is present but not executable — stays the roster-sync remedy', () => {
+    // The DELIBERATE asymmetry, pinned from the other side: present-but-wrong
+    // is a file on disk that disagrees, which `_dr_wr_present` hard-wires to
+    // `wr_hard` no matter which bucket the caller names — a `chmod` is not an
+    // install, so this one keeps the OLD remedy.
     const home = healthy('ccrc-doctor-wrappers-up-noexec-');
     chmodSync(join(binDir(home), 'claude'), 0o644);
     const r = runDoctor(home);
-    expect(r.stdout).toMatch(/FAIL wrappers: claude's \$HOME\/\.local\/bin\/claude is not executable/);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL wrappers: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toMatch(/claude's \$HOME\/\.local\/bin\/claude is not executable/);
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: the roster is the source of truth/);
+    expect(lines[i + 1]).not.toMatch(/install Claude Code/);
+    expect(r.code).toBe(1);
+  });
+
+  it('both buckets in one run: an absent upstream binary and a disagreeing generated wrapper — two FAIL lines, distinct remedies, upstream first (A2-NEW)', () => {
+    const home = healthy('ccrc-doctor-wrappers-upstream-and-hard-');
+    // claude: upstream, declared, nothing on disk at all — the wr_upstream class.
+    rmSync(join(binDir(home), 'claude'), { force: true });
+    // acct-a: generated, present, but its wrapper's CLAUDE_CONFIG_DIR disagrees
+    // with the roster's configDirSuffix — the wr_hard (disagreement) class.
+    writeWrapper(home, 'acct-a', { cfgDir: '.somewhere-else' });
+    writeRoster(home, [
+      UPSTREAM,
+      { id: 'acct-a', configDirSuffix: '.acct-a', exec: { kind: 'generated' } },
+    ]);
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const failIdx = lines.reduce<number[]>((acc, l, idx) => {
+      if (l.startsWith('FAIL wrappers: ')) acc.push(idx);
+      return acc;
+    }, []);
+    expect(failIdx.length, r.stdout).toBe(2);
+    const [upstreamIdx, hardIdx] = failIdx;
+    // The upstream line comes FIRST — the verdict assembly's own ordering,
+    // most-actionable leads.
+    expect(lines[upstreamIdx]).toMatch(/claude has no executable at \$HOME\/\.local\/bin\/claude/);
+    expect(lines[upstreamIdx + 1]).toMatch(/install Claude Code/);
+    expect(lines[hardIdx]).toContain('acct-a');
+    expect(lines[hardIdx]).toMatch(/\.somewhere-else.*\.acct-a/);
+    expect(lines[hardIdx + 1]).toMatch(/^ {2}remedy: the roster is the source of truth/);
     expect(r.code).toBe(1);
   });
 
