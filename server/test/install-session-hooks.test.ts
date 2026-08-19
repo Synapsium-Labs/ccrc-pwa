@@ -43,11 +43,11 @@ const run = (...args: string[]): void => {
 };
 
 describe('install-session-hooks', () => {
-  it('registers the nine measured events and preserves existing entries byte-identically', () => {
+  it('registers the ten measured events and preserves existing entries byte-identically', () => {
     run();
     const s = JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
     for (const ev of ['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PermissionRequest',
-      'Stop', 'SubagentStart', 'SubagentStop', 'PreCompact', 'PostCompact']) {
+      'Stop', 'SubagentStart', 'SubagentStop', 'PreCompact', 'PostCompact', 'SessionStart']) {
       const entries = s.hooks[ev] as any[];
       expect(entries.some((e) => e.hooks?.some((h: any) => String(h.command).includes('/session-hook.sh'))),
         ev).toBe(true);
@@ -55,8 +55,11 @@ describe('install-session-hooks', () => {
     // PreToolUse carries matcher '*'; the managed entries and nothing else.
     const pre = (s.hooks.PreToolUse as any[]).find((e) => e.hooks?.[0]?.command?.includes('/session-hook.sh'));
     expect(pre.matcher).toBe('*');
-    // Every pre-existing entry survives exactly.
-    expect(s.hooks.SessionStart).toEqual(EXISTING.hooks.SessionStart);
+    // Every pre-existing entry survives exactly; SessionStart's two
+    // non-managed entries (compact-matcher restore.sh, cron-upload.sh) are
+    // untouched and the managed entry is appended after them, not spliced in.
+    expect(s.hooks.SessionStart.slice(0, 2)).toEqual(EXISTING.hooks.SessionStart);
+    expect(s.hooks.SessionStart).toHaveLength(3);
     expect(s.hooks.SessionEnd).toEqual(EXISTING.hooks.SessionEnd);
     expect(s.statusLine).toEqual(EXISTING.statusLine);
   });

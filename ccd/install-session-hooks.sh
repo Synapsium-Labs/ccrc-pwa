@@ -16,7 +16,7 @@ set -euo pipefail
 HOOK_CMD='bash "$HOME/.cc-sessions/session-hook.sh"'
 # Events that get a matcher-less managed entry. PreToolUse is handled
 # separately below because it alone carries matcher "*".
-EVENTS_JSON='["UserPromptSubmit","PostToolUse","PermissionRequest","Stop","SubagentStart","SubagentStop","PreCompact","PostCompact"]'
+EVENTS_JSON='["UserPromptSubmit","PostToolUse","PermissionRequest","Stop","SubagentStart","SubagentStop","PreCompact","PostCompact","SessionStart"]'
 TS=$(date +%Y%m%d-%H%M%S)
 BACKUPS="$HOME/ccrc-backups/$TS"
 
