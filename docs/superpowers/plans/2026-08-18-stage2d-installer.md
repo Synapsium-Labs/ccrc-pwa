@@ -524,6 +524,16 @@ exec bash "$ROOT/ccd/ccrc" install
 
 ## Deferred out of this plan, recorded so nothing is inherited as a surprise
 
+### Follow-ups from the whole-branch final review (2026-08-19, verdict CLEAN)
+
+Ten items, none merge-blocking; destinations assigned:
+- **First in line (one deploy.sh-touching commit):** the ccrc launcher's refusal line "Re-run deploy/deploy.sh against this box" is wrong on a self-installed box; the fix edits BOTH generators (deploy.sh heredoc + `_inst_shim`) and relaxes agent deploy-verify:1509 in the same change.
+- **→ Stage 2e plan (it owns the real-VM gate):** A2-NEW — `ccrc-doctor-checks:1301` routes an ABSENT upstream binary into the roster-sync remedy; on a fresh VM (seeded roster, no Claude Code) the first `bash install.sh` exits 1 with a remedy that cannot fix the state ("install Claude Code" is the fix; D-82's class). Fixtures never see it — `healthyDoctorBox` plants a fake `claude`.
+- **→ next wrapper-shape slice:** the D-87 pair (`_wrap_is_script` read -N NUL flaw; `_wrap_declares_config_dir` unbounded read), the doctor gate's position (last of three reads), and `readIfScript`'s `#!`-leading unboundedness.
+- **→ small hygiene batch:** bare `1048576` second copy of OVERSIZE_BYTES (wants a D-92-style agreement test); `ccrc.env` written without chmod 600; `_inst_atomic` silent success onto a directory dest (one-line `-d` guard); build.json's two generators lack an agreement pin; `install.sh` absent from `_inst_tree`'s rsync set (one remedy unreachable from a placed tree).
+
+Everything else in the progress ledger's deferred list: ACCEPT-AS-IS per the final review (final-review.md holds the per-item reasoning).
+
 - **`ccd version`'s python3 stamp reader** (F-survey item 3): the fix edits `ccd/ccd:2087-2109`, which a parallel session owns. Queued behind that session's merge; the seam and fix shape are documented in the survey report.
 - **D-72** (roster fingerprint blind to `secretsFile` semantics) and **D-76** (single-definition sees only `.tsx?` + bash-corpus caveats) — own blast radius, unchanged.
 - **D-73** (fleet-role box has no `ccrc.env`): the single-box installer writes one; deciding a fleet-role box's env content and shipping it in the agent lane stays open.
