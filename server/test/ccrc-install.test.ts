@@ -819,3 +819,319 @@ describe('ccrc install: the env file is named once in the whole CLI', () => {
     expect(body![0]).toContain('BOX_ENV_FILE');
   });
 });
+
+describe('ccrc install: the executables and files it installs', () => {
+  // Every one of these is an artifact the fleet host RUNS and that no
+  // installer placed before stage 1 (`deploy.sh:381-387`'s own note). They
+  // divide into two kinds and the division is what `_inst_atomic` is for:
+  //   - COPIES of a file in the tree (`ccd`, the cap-scopes enforcer, the two
+  //     session hooks, notify, tmux.conf, the statusline), and
+  //   - one GENERATED file, the launcher, whose bytes are pinned to the
+  //     generator in deploy.sh (see its own test below).
+  // `install_atomic`'s reasoning applies unchanged to all of them: bash
+  // executes a script lazily from a saved byte offset, so overwriting the
+  // inode of a script a process is running makes that process resume inside
+  // the new bytes at the old offset. Every one lands by rename.
+
+  /** One install onto a fresh box, shared by the read-only assertions below.
+   *  Run at `umask 077`, which is what makes a mode assertion mean anything:
+   *  at the ordinary 022 a plain `cp` reproduces the source's 0755 all by
+   *  itself and the `chmod` could be deleted unnoticed (round-1 review, Minor
+   *  1, measured on `_inst_accounts_sh`). At 077 the copy is 0700/0600 and any
+   *  other mode can only come from the chmod. */
+  const installed = ((): { home: string; r: Result } => {
+    const home = freshBox('ccrc-install-artifacts-');
+    return { home, r: runInstall(home, ['install'], {}, { umask: '077' }) };
+  })();
+  const mode = (p: string): number => statSync(p).mode & 0o777;
+
+  it('the run this describe measures succeeded', () => {
+    expect(installed.r.code, installed.r.stderr).toBe(0);
+    expect(installed.r.stdout).toMatch(/^install: bins: /m);
+    expect(installed.r.stdout).toMatch(/^install: files: /m);
+  });
+
+  it('ccd reaches PATH as an executable byte copy of the tree it was placed from', () => {
+    // FROM THE PLACED TREE, not from the checkout. After `_inst_tree` the two
+    // are identical, so the assertion cannot tell them apart — but the box's
+    // own invariant can: the `ccd` on PATH and the `ccd` inside the tree the
+    // launcher execs must be one version, and installing out of `~/ccrc` is
+    // what makes that true by construction rather than by both happening to
+    // come from the same run.
+    const { home } = installed;
+    const bin = join(home, '.local', 'bin', 'ccd');
+    expect(existsSync(bin), 'ccd never reached $HOME/.local/bin').toBe(true);
+    // `'ccd/ccd'` as ONE segment, deliberately. `single-definition.test.ts`'s
+    // extraction guard treats two adjacent quoted `ccd` arguments as a second
+    // path to the REPOSITORY's ccd script (which must be reached only through
+    // `ccdWsHelpers.ts`). This is a different file — the copy inside a fixture
+    // box's `~/ccrc` — so the answer is to not wear that shape, rather than to
+    // add this file to the guard's exclusion list and blind it to a real second
+    // spelling arriving here later.
+    expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd/ccd')));
+    expect(mode(bin)).toBe(0o755);
+  });
+
+  it('ccd-cap-scopes lands beside it — the OOM guardrail is an executable too', () => {
+    const { home } = installed;
+    const bin = join(home, '.local', 'bin', 'ccd-cap-scopes');
+    expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccd-cap-scopes')));
+    expect(mode(bin)).toBe(0o755);
+  });
+
+  it('the launcher is BYTE FOR BYTE what deploy.sh generates', () => {
+    // THE AGREEMENT PIN. The launcher now has two generators — `deploy.sh`'s
+    // `install_ccrc_shim` for a box reached over ssh, and `_inst_shim` for a
+    // box installing itself — and two generators of one artifact is a drift
+    // waiting to happen: a box whose launcher came from the older of them
+    // fails in a way neither generator's own tests can see. Extract deploy's
+    // heredoc (the mechanics `agent/test/deploy-verify.test.ts:1470-1496`
+    // uses) and compare it to the bytes THIS verb actually installed.
+    //
+    // It also means the behaviour tests deploy-verify already runs against
+    // those bytes — argv forwarded, exit code passed through, a by-name
+    // refusal when `~/ccrc/ccd/ccrc` is gone — hold for this copy without
+    // being written twice.
+    const deploySh = read(join(REPO, 'deploy', 'deploy.sh'));
+    const fn = /install_ccrc_shim\(\) \{([\s\S]*?)\n\}/.exec(deploySh);
+    expect(fn, 'deploy.sh has no install_ccrc_shim() helper').toBeTruthy();
+    const heredoc = /<<'CCRC_SHIM'\n([\s\S]*?)\nCCRC_SHIM\n/.exec(fn![1]!);
+    expect(heredoc, 'install_ccrc_shim does not generate the shim from a quoted heredoc')
+      .toBeTruthy();
+
+    const { home } = installed;
+    const shim = join(home, '.local', 'bin', 'ccrc');
+    expect(existsSync(shim), 'no ccrc launcher reached $HOME/.local/bin').toBe(true);
+    expect(read(shim)).toBe(`${heredoc![1]!}\n`);
+    expect(mode(shim)).toBe(0o755);
+  });
+
+  it('the installed launcher runs the shipped ccrc', () => {
+    // Extracted-and-compared is not the same as works: the bytes could agree
+    // and still be a launcher pointing at a tree this verb never placed. Run
+    // it against the fixture HOME and let it answer.
+    const { home } = installed;
+    const r = spawnSync(BASH, [join(home, '.local', 'bin', 'ccrc'), 'version'],
+      { env: { ...process.env, HOME: home }, encoding: 'utf8' });
+    expect(r.stderr).toBe('');
+    expect(r.status, 'the launcher did not reach the shipped ccrc').toBe(0);
+    expect(r.stdout).toMatch(/^ccrc /);
+  });
+
+  it('the session hooks, notify and the tmux/statusline config land at their modes', () => {
+    // The four artifacts stage 1 found the fleet host RUNNING with nothing
+    // installing them, plus the hooks installer that converges settings.json.
+    // `statusline-command.sh` is the sharp mode case: it is 0644 in the
+    // repository and must be 0755 on the box, so a copy that preserved the
+    // source mode (or a missing chmod) produces a statusline that never runs
+    // and a box that silently writes no `~/.cc-limits` telemetry.
+    const { home } = installed;
+    const cases: Array<[string, string, number]> = [
+      [join(home, '.cc-sessions', 'session-hook.sh'), placed(home, 'ccd', 'session-hook.sh'), 0o755],
+      [join(home, '.cc-sessions', 'install-session-hooks.sh'),
+        placed(home, 'ccd', 'install-session-hooks.sh'), 0o755],
+      [join(home, '.cc-sessions', 'notify.sh'), placed(home, 'deploy', 'notify.sh'), 0o755],
+      [join(home, '.tmux.conf'), placed(home, 'ccd', 'tmux.conf'), 0o644],
+      [join(home, '.claude', 'statusline-command.sh'),
+        placed(home, 'ccd', 'statusline-command.sh'), 0o755],
+    ];
+    for (const [dest, src, want] of cases) {
+      expect(existsSync(dest), `${dest} was never installed`).toBe(true);
+      expect(readFileSync(dest), `${dest} is not the shipped file`).toEqual(readFileSync(src));
+      expect(mode(dest), `${dest} has the wrong mode`).toBe(want);
+    }
+  });
+
+  it('a second run rewrites none of them, and leaves no temp file behind', () => {
+    // Idempotence measured on MTIME, for `_inst_accounts_sh`'s reason: "the
+    // file still says the right thing" is satisfied by a step that rewrites it
+    // every run, and a converger that rewrites what it did not change is one
+    // an operator cannot use to see what a run actually did. `_inst_atomic`
+    // compares bytes before it stages anything; this is the assertion that
+    // says so.
+    const home = freshBox('ccrc-install-artifacts-idem-');
+    expect(runInstall(home).code).toBe(0);
+    const targets = [
+      join(home, '.local', 'bin', 'ccd'),
+      join(home, '.local', 'bin', 'ccd-cap-scopes'),
+      join(home, '.local', 'bin', 'ccrc'),
+      join(home, '.cc-sessions', 'session-hook.sh'),
+      join(home, '.cc-sessions', 'install-session-hooks.sh'),
+      join(home, '.cc-sessions', 'notify.sh'),
+      join(home, '.tmux.conf'),
+      join(home, '.claude', 'statusline-command.sh'),
+    ];
+    const before = targets.map(mtime);
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(targets.map(mtime)).toEqual(before);
+    expect(strays(home)).toEqual([]);
+  });
+
+  it('repairs a mode someone changed — without rewriting the file', () => {
+    // The other half of the byte-compare skip, and the reason it is a `chmod`
+    // rather than an early `return`: a `ccd` an operator (or a bad copy) left
+    // at 0600 is a box where every session supervisor gets EACCES, and bytes
+    // that already match must not make the converger blind to it. `chmod`
+    // moves ctime, never mtime, so repairing costs nothing the assertion above
+    // measures.
+    const home = freshBox('ccrc-install-mode-repair-');
+    expect(runInstall(home).code).toBe(0);
+    const bin = join(home, '.local', 'bin', 'ccd');
+    chmodSync(bin, 0o600);
+    const was = mtime(bin);
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(mode(bin), 'a mode nobody repaired').toBe(0o755);
+    expect(mtime(bin), 'the file was rewritten to fix a mode').toBe(was);
+  });
+
+  it('keeps a personal ~/.tmux.conf aside before replacing it', () => {
+    // The two files this verb installs into the OPERATOR's namespace rather
+    // than into ccrc's own (`~/.tmux.conf`, `~/.claude/statusline-command.sh`)
+    // may already be somebody's, written years before ccrc arrived. deploy.sh
+    // overwrites both without asking because it runs against a box that is,
+    // by definition, a fleet host; `ccrc install` runs against whatever
+    // machine an operator typed it on. So the file that is about to be
+    // replaced is copied aside first — `cmd_wrappers`' rule, and the same
+    // naming shape, so the copy is never mistaken for something ccrc manages.
+    const home = freshBox('ccrc-install-personal-');
+    writeFileSync(join(home, '.tmux.conf'), '# mine, from 2019\nset -g mouse on\n');
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    writeFileSync(join(home, '.claude', 'statusline-command.sh'), '#!/bin/sh\necho mine\n');
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    const saved = readdirSync(home).filter((f) => f.startsWith('.tmux.conf.pre-ccrc-'));
+    expect(saved.length, 'the operator tmux.conf was replaced without a copy').toBe(1);
+    expect(read(join(home, saved[0]!))).toBe('# mine, from 2019\nset -g mouse on\n');
+    const savedStatus = readdirSync(join(home, '.claude'))
+      .filter((f) => f.startsWith('statusline-command.sh.pre-ccrc-'));
+    expect(savedStatus.length).toBe(1);
+    // …and the shipped ones did land: keeping a copy is not declining to converge.
+    expect(readFileSync(join(home, '.tmux.conf')))
+      .toEqual(readFileSync(placed(home, 'ccd', 'tmux.conf')));
+    expect(r.stdout).toMatch(/^install: files: kept .*\.tmux\.conf\.pre-ccrc-/m);
+  });
+
+  it('a second run makes no second copy — the file it would save is its own', () => {
+    const home = freshBox('ccrc-install-personal-idem-');
+    writeFileSync(join(home, '.tmux.conf'), '# mine\n');
+    expect(runInstall(home).code).toBe(0);
+    expect(runInstall(home).code).toBe(0);
+    expect(readdirSync(home).filter((f) => f.startsWith('.tmux.conf.pre-ccrc-')).length).toBe(1);
+  });
+});
+
+describe('ccrc install: the order is stated in one place', () => {
+  it('cmd_install is the sequence, and the roster precedes the ccd it installs', () => {
+    // `ccd` refuses to run AT ALL without `~/.ccrc/accounts.sh` — its own
+    // `|| die`, on every invocation — so an install that put `ccd` on PATH
+    // before the roster projection existed would leave a box whose every ccd
+    // command dies, for exactly as long as the gap. That is `deploy.sh:348-353`'s
+    // "THE ROSTER LANDS BEFORE ccd" rule, and it is the reason `cmd_install`
+    // is a fixed sequence rather than a set of steps.
+    const src = read(join(REPO, 'ccd', 'ccrc'));
+    const body = /cmd_install\(\) \{([\s\S]*?)\n\}/.exec(src);
+    expect(body, 'ccd/ccrc has no cmd_install').toBeTruthy();
+    const steps = body![1]!.split('\n')
+      .map((l) => l.trim())
+      .filter((l) => /^_inst_[a-z_]+$/.test(l));
+    expect(steps).toEqual([
+      '_inst_banner',
+      '_inst_roster',
+      '_inst_accounts_sh',
+      '_inst_env',
+      '_inst_tree',
+      '_inst_bins',
+      '_inst_files',
+      '_inst_stamp',
+    ]);
+  });
+});
+
+describe('ccrc install: the build stamp', () => {
+  // `~/.ccrc/build.json` is what a box SAYS it is running, and `ccrc version`
+  // and `ccrc status` both read it. Until this task the only writer was
+  // `deploy.sh`'s `stamp_build`, so a box installed by `ccrc install` reported
+  // "unstamped" for ever — honest, and useless: a self-installed box could not
+  // answer the one question every incident starts with.
+  //
+  // The same measurement-forgery rule deploy's own header states applies here:
+  // a dirty tree may install, but the stamp SAYS dirty. A clean sha nobody
+  // measured is the class this repo bans by name.
+  const stampOf = (home: string): Record<string, unknown> =>
+    JSON.parse(read(dotCcrc(home, 'build.json'))) as Record<string, unknown>;
+
+  it('stamps the box with the sha, ref and cleanliness of the checkout it installed from', () => {
+    const home = freshBox('ccrc-install-stamp-');
+    const sha = gitInit(treeRoot(home));
+    const r = runInstall(home, ['install'], {}, { umask: '077' });
+    expect(r.code, r.stderr).toBe(0);
+    const stamp = stampOf(home);
+    expect(stamp['sha']).toBe(sha);
+    expect(stamp['ref']).toBe('fixture-branch');
+    expect(stamp['dirty']).toBe(false);
+    expect(stamp['builtAt']).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+    // 0644 like deploy's, and asserted under a hostile umask so the mode can
+    // only have come from a chmod — at 077 a plain redirect makes it 0600.
+    expect(statSync(dotCcrc(home, 'build.json')).mode & 0o777).toBe(0o644);
+    expect(r.stdout).toMatch(new RegExp(`^install: stamp: ${sha}`, 'm'));
+  });
+
+  it('says dirty when the checkout has uncommitted work', () => {
+    const home = freshBox('ccrc-install-stamp-dirty-');
+    gitInit(treeRoot(home));
+    writeFileSync(treeFile(home, 'ccd/tmux.conf'),
+      `${read(treeFile(home, 'ccd/tmux.conf'))}# edited after the commit\n`);
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(stampOf(home)['dirty'], 'a dirty checkout stamped clean').toBe(true);
+    expect(r.stdout).toMatch(/^install: stamp: [0-9a-f]{40} \(fixture-branch, dirty\)$/m);
+  });
+
+  it('skips — and says what that costs — when the tree is not a git checkout', () => {
+    // The ordinary state of a DEPLOYED box: `~/ccrc` is an rsync of a tree,
+    // never a repository (`deploy.sh:75-81` says so), so a re-install there has
+    // nothing to measure. Skipping is the honest answer; inventing a sha, or
+    // carrying the previous one forward, is the forgery. The line names the
+    // consequence so an operator who later reads "unstamped" knows why.
+    const home = freshBox('ccrc-install-stamp-nogit-');
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(
+      /^install: stamp: skipped \(not a git checkout — ccrc version will say unstamped\)$/m);
+    expect(existsSync(dotCcrc(home, 'build.json'))).toBe(false);
+  });
+
+  it('and `ccrc version` on the installed box reads exactly what it wrote', () => {
+    // The cross-verb proof, run through the launcher this same install put on
+    // PATH: one writer, one reader, one box. A stamp only this suite can parse
+    // would be a file, not a fact.
+    const home = freshBox('ccrc-install-stamp-version-');
+    const sha = gitInit(treeRoot(home));
+    expect(runInstall(home).code).toBe(0);
+    const r = spawnSync(BASH, [join(home, '.local', 'bin', 'ccrc'), 'version'],
+      { env: { ...process.env, HOME: home }, encoding: 'utf8' });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toContain(sha);
+    expect(r.stdout).toContain('fixture-branch');
+  });
+
+  it('writes the stamp through BOX_STAMP_FILE — the path is spelled once', () => {
+    // D-88's rule, applied to the file this task turns into a written one.
+    // `single-definition.test.ts` already pins that `$HOME/.ccrc/build.json`
+    // appears in exactly one line of shell in this file; this is the other
+    // half — that the new WRITER goes through that line rather than merely not
+    // duplicating it (which deleting the step would also satisfy).
+    const src = read(join(REPO, 'ccd', 'ccrc'));
+    const body = /_inst_stamp\(\)[\s\S]*?\n\}/.exec(src);
+    expect(body, 'ccd/ccrc has no _inst_stamp').toBeTruthy();
+    expect(body![0]).toContain('BOX_STAMP_FILE');
+    // Comment lines dropped, `single-definition.test.ts`'s own rule: the step's
+    // prose is where the reasoning lives and may name the file freely; only a
+    // LINE OF SHELL that names it is a second spelling.
+    expect(body![0].split('\n').filter((l) => !l.trim().startsWith('#'))
+      .filter((l) => l.includes('.ccrc/build.json')),
+    'the stamp path is spelled out in a line of shell inside _inst_stamp').toEqual([]);
+  });
+});

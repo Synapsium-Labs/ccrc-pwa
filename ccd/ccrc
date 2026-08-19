@@ -1609,6 +1609,9 @@ cmd_install() {
   _inst_accounts_sh
   _inst_env
   _inst_tree
+  _inst_bins
+  _inst_files
+  _inst_stamp
 }
 
 # The two facts every later step is computed FROM, printed before any of them
@@ -1771,6 +1774,240 @@ _inst_tree() {   # place the shipped tree at ~/ccrc — the layout every sibling
   ( cd "$dest/server" && npm ci --omit=dev --no-audit --no-fund >/dev/null 2>&1 ) \
     || _ccrc_die "npm ci in \$HOME/ccrc/server failed — the service cannot start without runtime deps"
   echo "install: tree: server runtime deps in place"
+}
+
+# ── _inst_atomic — the local `install_atomic` ─────────────────────────────
+# `deploy/deploy.sh:37-58` states the reason and it is not tidiness: bash
+# executes a script LAZILY from a saved byte offset, so overwriting the inode of
+# a file some process is executing makes that process resume inside the new
+# bytes at the old offset. Measured on `ccd`, which is never idle on a fleet
+# host — every `claude-session@` supervisor IS a long-running invocation of it.
+# `mv -f` replaces the DIRECTORY ENTRY instead (rename(2), atomic): a running
+# reader keeps the old inode to EOF and the next invocation gets the new file.
+# `chmod` runs on the temp, BEFORE the rename, so the file is never live at its
+# final name without its final mode — a supervisor exec'ing it in that window
+# would get EACCES, and systemd's Restart=always would turn that into a crash
+# loop.
+#
+# ── THREE THINGS THIS ADDS TO DEPLOY'S VERSION, ALL LOCAL-ONLY ────────────
+#   1. IT COMPARES BYTES FIRST. deploy runs from another machine and cannot
+#      cheaply read the destination; this runs ON the box. A converger that
+#      rewrites what it did not change is one an operator cannot use to see
+#      what a run actually did (`_inst_accounts_sh`'s rule, applied to files).
+#   2. …but it still `chmod`s the converged file, rather than returning early.
+#      Bytes equal and mode wrong is a real state — a `ccd` left at 0600 is a
+#      box where every supervisor gets EACCES — and `chmod` moves ctime, never
+#      mtime, so repairing costs nothing the idempotence assertions measure.
+#   3. THE STRAY SWEEP RUNS AFTER THE RENAME, so the glob can only match
+#      leftovers from an ABORTED earlier run: this run's temp has already been
+#      renamed away. `cmd_wrappers:1423-1440` records the same finding — a run
+#      killed between the copy and the rename leaves a mode-0755 file in a
+#      directory that is ON PATH, and nothing else will ever remove it.
+#
+# `<dest>.tmp.$$` and not `cmd_wrappers`' leading-dot form: the destination
+# names here are FIXED (ccd, ccrc, notify.sh …), never roster-derived, so the
+# hazard that idiom exists for — a temp file whose name could be read as an
+# ACCOUNT id — cannot arise, and `.tmp.` already puts the name outside
+# `WRAPPER_ID_RE`. This spelling is the one the three seeding steps above
+# already use.
+#
+# A missing `cmp` makes every destination look different, so the file is
+# rewritten with identical bytes: the safe direction, and the reason the
+# comparison is not guarded by a `command -v`.
+_inst_atomic() {   # <src> <dest> <mode>
+  local src="$1" dest="$2" mode="$3" tmp
+  [ -f "$src" ] \
+    || _ccrc_die "the shipped tree has no $src — is this a complete ccrc tree? (re-run after: bash install.sh)"
+  if cmp -s "$src" "$dest" 2>/dev/null; then
+    chmod "$mode" "$dest" || _ccrc_die "could not set mode $mode on $dest"
+    return 0
+  fi
+  tmp="$dest.tmp.$$"
+  if ! { cp -- "$src" "$tmp" && chmod "$mode" "$tmp" && mv -f -- "$tmp" "$dest"; }; then
+    rm -f -- "$tmp"
+    _ccrc_die "could not install $dest — nothing at that path was replaced"
+  fi
+  rm -f -- "$dest.tmp."*
+}
+
+_inst_keep_aside() {   # <src> <dest> — copy a PERSONAL file aside before replacing it
+  # Two of the files this verb installs land in the OPERATOR's namespace rather
+  # than in ccrc's own: `~/.tmux.conf` and `~/.claude/statusline-command.sh`.
+  # `deploy.sh` overwrites both without asking, and is right to — it runs
+  # against a box that is by definition a fleet host. `ccrc install` runs
+  # against whatever machine somebody typed it on, where a `~/.tmux.conf`
+  # predating ccrc by years is an ordinary thing to find. Eating it is the
+  # damage the verb's own contract ("re-running converges; it never damages an
+  # existing install") promises not to do.
+  #
+  # ONLY WHEN THE BYTES DIFFER, which is what makes this run exactly once: after
+  # the first install the file at that path IS the shipped one, so the second
+  # run has nothing to save. `cmd_wrappers`' backup naming (`.pre-ccrc-<UTC>`)
+  # and `cp -p`, so the copy keeps the mode and timestamps of what it replaced.
+  local src="$1" dest="$2" stamp saved
+  [ -e "$dest" ] || return 0
+  cmp -s "$src" "$dest" 2>/dev/null && return 0
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  saved="$dest.pre-ccrc-$stamp"
+  cp -p -- "$dest" "$saved" \
+    || _ccrc_die "could not copy $dest aside to $saved, so nothing at that path was replaced"
+  echo "install: files: kept $saved (the file that was there)"
+}
+
+# ── _inst_shim — the launcher `ccrc` on PATH ─────────────────────────────
+# THE BYTES BELOW ARE `deploy/deploy.sh`'s `install_ccrc_shim` HEREDOC, EXACTLY,
+# and `server/test/ccrc-install.test.ts` extracts both and compares them. Two
+# generators of one artifact is a drift waiting to happen — a box whose
+# launcher came from the older of them fails in a way neither generator's own
+# tests can see — so the agreement is a pin rather than a convention. It also
+# means the BEHAVIOUR tests `agent/test/deploy-verify.test.ts:1478-1511` already
+# run against those bytes (argv forwarded, exit code passed through, a by-name
+# refusal when `~/ccrc/ccd/ccrc` is gone) hold for this copy without being
+# written twice.
+#
+# Why a launcher at all, rather than `_inst_atomic ccd/ccrc .local/bin/ccrc`:
+# `ccrc` is not self-contained (it sources `ccrc-doctor-checks`, which sources
+# `ccrc-wrapper-shape`, and `cmd_adopt` execs `ccrc-adopt`, all resolved through
+# `${BASH_SOURCE[0]}`, which bash does not resolve through a symlink), and
+# installing all four files into `~/.local/bin` instead breaks `_check_node`,
+# whose candidates would become `~/.local/{server,agent}/package.json`. Both
+# constraints point at the same place: `ccrc` has to RUN from inside the tree at
+# `~/ccrc/ccd/`, which `_inst_tree` has just placed. deploy.sh:95-128 is the
+# long form of this paragraph.
+#
+# ONE COST, STATED: the generated file's provenance line names `deploy.sh`,
+# because these are deploy.sh's bytes and the pin is byte equality. On a box
+# that installed itself, that line is the one inaccurate sentence in the
+# artifact. The fix is a single commit that edits the comment in BOTH copies —
+# the pin keeps them honest — and it was not made here because `deploy.sh` is
+# not this task's file to change.
+#
+# `if`, not `|| { … }`, inside the heredoc: a `}` in column 1 would end THIS
+# function as far as every `/name\(\) \{([\s\S]*?)\n\}/` probe in the suites is
+# concerned — the idiom this file's own tests read it with. deploy.sh:145-149
+# records the same constraint for the same lines.
+_inst_shim() {   # the launcher's bytes, to stdout
+  cat <<'CCRC_SHIM'
+#!/usr/bin/env bash
+# GENERATED by deploy/deploy.sh (install_ccrc_shim) — do not edit on the box.
+# Edit ccd/ccrc in the repo and re-deploy; this file is only a launcher.
+#
+# `ccrc` finds its check table, its wrapper-shape library, its adopt script and
+# the shipped package.json RELATIVE TO ITSELF, so it has to be run from inside
+# the tree the deploy rsyncs. That is why this is an exec into ~/ccrc/ccd and
+# not a copy of the script: bash does not resolve ${BASH_SOURCE[0]} through a
+# symlink, and a copy on PATH would resolve every one of those to ~/.local.
+#
+# `if`, not `|| { … }`: a `}` in column 1 would end the enclosing shell
+# function as far as every `/name\(\) \{([\s\S]*?)\n\}/` probe in
+# agent/test/deploy-verify.test.ts is concerned — that is the idiom this file's
+# helpers are all read with, and a heredoc that quietly truncates the body
+# those tests see is worse than a slightly longer refusal.
+CCRC_SHIPPED="$HOME/ccrc/ccd/ccrc"
+if [ ! -x "$CCRC_SHIPPED" ]; then
+  echo "ccrc: $CCRC_SHIPPED is missing or not executable — this box's shipped ccrc tree is gone, so there is nothing for this launcher to run. Re-run deploy/deploy.sh against this box." >&2
+  exit 1
+fi
+exec "$CCRC_SHIPPED" "$@"
+CCRC_SHIM
+}
+
+_inst_bins() {   # what has to be ON PATH: the two executables, and the launcher
+  # AFTER `_inst_tree`, always. The launcher execs `~/ccrc/ccd/ccrc` and refuses
+  # by name when that file is absent, so installing it first would put a
+  # `ccrc` on PATH that can only refuse — on the box of an operator who is at
+  # that moment watching an install run.
+  #
+  # OUT OF THE PLACED TREE (`$BOX_TREE_DIR`), never out of `$CCRC_HERE/..`.
+  # After `_inst_tree` the two are identical, so no assertion can tell them
+  # apart — but the invariant can: the `ccd` on PATH and the `ccd` inside the
+  # tree the launcher execs are then one version BY CONSTRUCTION, rather than
+  # by both happening to come from the same run. It is the local form of the
+  # "four files arrive in ONE rsync of ONE tree" property deploy.sh:114-118
+  # gives as the reason the launcher exists.
+  local bin="$HOME/.local/bin" tree="$BOX_TREE_DIR" gen
+  mkdir -p "$bin" || _ccrc_die "cannot create $bin"
+  _inst_atomic "$tree/ccd/ccd" "$bin/ccd" 755
+  _inst_atomic "$tree/ccd/ccd-cap-scopes" "$bin/ccd-cap-scopes" 755
+  # The generated launcher is staged under a name `_inst_atomic`'s own sweep
+  # matches (`<dest>.tmp.*`), so a run killed between these two lines leaves
+  # nothing the next run does not remove.
+  gen="$bin/ccrc.tmp.$$.new"
+  _inst_shim > "$gen" || { rm -f -- "$gen"; _ccrc_die "could not generate the ccrc launcher at $gen"; }
+  _inst_atomic "$gen" "$bin/ccrc" 755
+  rm -f -- "$gen"
+  echo "install: bins: ccd, ccd-cap-scopes and the ccrc launcher in \$HOME/.local/bin"
+}
+
+_inst_files() {   # the artifacts the box RUNS that are not on PATH
+  # Stage 1's list (`deploy.sh:374-387`): the session hook and its installer,
+  # the swap-notify hook, the tmux config that carries truecolor to an attaching
+  # client, and the statusline that writes `~/.cc-limits` telemetry. Every one
+  # of them was running on the live fleet host with nothing installing it.
+  local tree="$BOX_TREE_DIR"
+  mkdir -p "$HOME/.cc-sessions" || _ccrc_die "cannot create \$HOME/.cc-sessions"
+  _inst_atomic "$tree/ccd/session-hook.sh" "$HOME/.cc-sessions/session-hook.sh" 755
+  _inst_atomic "$tree/ccd/install-session-hooks.sh" "$HOME/.cc-sessions/install-session-hooks.sh" 755
+  _inst_atomic "$tree/deploy/notify.sh" "$HOME/.cc-sessions/notify.sh" 755
+  mkdir -p "$HOME/.claude" || _ccrc_die "cannot create \$HOME/.claude"
+  # The two files in the operator's own namespace — see `_inst_keep_aside`.
+  # `statusline-command.sh` is 0644 in the repository and 0755 on the box: a
+  # copy that preserved the source mode leaves a statusline that never runs,
+  # and a box that silently writes no rate-limit telemetry at all.
+  _inst_keep_aside "$tree/ccd/tmux.conf" "$HOME/.tmux.conf"
+  _inst_atomic "$tree/ccd/tmux.conf" "$HOME/.tmux.conf" 644
+  _inst_keep_aside "$tree/ccd/statusline-command.sh" "$HOME/.claude/statusline-command.sh"
+  _inst_atomic "$tree/ccd/statusline-command.sh" "$HOME/.claude/statusline-command.sh" 755
+  echo "install: files: session hooks, notify.sh, tmux.conf and the statusline in place"
+}
+
+_inst_stamp() {   # what this box is RUNNING, stated by the box itself
+  # `deploy.sh:75-93`'s `stamp_build`, translated to one machine. Until this
+  # step existed the ONLY writer of `~/.ccrc/build.json` was a deploy, so a box
+  # that installed itself reported "unstamped" for ever — honest, and useless:
+  # it is the answer `ccrc version` and `ccrc status` exist to give, and the
+  # first question any incident asks.
+  #
+  # MEASURED, NEVER ASSUMED. A dirty tree may install (stage 1 does not forbid
+  # it) but the stamp SAYS dirty — "a clean sha nobody measured is the forgery
+  # class this repo bans by name", in deploy's own words. Same reason the
+  # skipped case below writes NOTHING rather than carrying a previous stamp
+  # forward: a stamp that outlives the tree it described is a lie with a
+  # timestamp on it.
+  #
+  # THROUGH `"$BOX_STAMP_FILE"`, never the literal path — `ccrc:91-101`'s rule,
+  # which D-88 already applied to `ccrc.env` when `install` became that file's
+  # writer. This file holds the stamp's only reader (`_box_build_fields`) and,
+  # from here, its second writer; two spellings is how a reader and a writer
+  # come to disagree about which file they mean.
+  local src sha ref dirty tmp dest="$BOX_STAMP_FILE"
+  src="$CCRC_HERE/.."
+  # The ORDINARY state of a box a deploy has touched: `~/ccrc` is an rsync of a
+  # tree and not a repository (deploy.sh says so where it explains why
+  # `stamp_build` runs on the deploying machine). There is nothing to measure
+  # there, so the run says what the skip costs and moves on — an install is not
+  # a failure for having been run from a directory rather than a clone.
+  sha="$(git -C "$src" rev-parse HEAD 2>/dev/null)" || sha=""
+  if [ -z "$sha" ]; then
+    echo "install: stamp: skipped (not a git checkout — ccrc version will say unstamped)"
+    return 0
+  fi
+  ref="$(git -C "$src" rev-parse --abbrev-ref HEAD 2>/dev/null)" || ref=""
+  [ -n "$ref" ] || ref="HEAD"
+  if git -C "$src" diff --quiet 2>/dev/null && git -C "$src" diff --cached --quiet 2>/dev/null; then
+    dirty=false
+  else
+    dirty=true
+  fi
+  mkdir -p "${dest%/*}" || _ccrc_die "cannot create ${dest%/*}"
+  tmp="$dest.tmp.$$"
+  printf '{"sha":"%s","ref":"%s","builtAt":"%s","dirty":%s}\n' \
+    "$sha" "$ref" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$dirty" > "$tmp" \
+    && chmod 644 "$tmp" && mv -f "$tmp" "$dest" \
+    || { rm -f "$tmp"; _ccrc_die "writing $dest failed"; }
+  local said=""
+  [ "$dirty" = true ] && said=", dirty"
+  echo "install: stamp: $sha ($ref$said)"
 }
 
 # Guard so the script can be `source`d (the way server/test/ccd-clip.test.ts:32
