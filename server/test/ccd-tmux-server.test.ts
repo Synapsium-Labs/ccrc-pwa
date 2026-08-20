@@ -106,6 +106,72 @@ describe('_tmux_new_session', () => {
   });
 });
 
+describe('the placement must land in the fleet slice, or the ceiling stops applying (D-B8-11)', () => {
+  // D-B8-7 gave the tmux server a scope of its own and, in doing so, moved the
+  // whole fleet's workload out of the cgroup the memory ceiling is attached to.
+  // Ubuntu's tmux is built with systemd support: it mints a transient
+  // `tmux-spawn-<uuid>.scope` per pane and derives that scope's SLICE from its
+  // own placement, so the panes go wherever the server went. `systemd-run`
+  // defaults a user scope to `app.slice`; the ceiling lives one level in.
+  //
+  // Measured on the fleet host 2026-08-19, after the reboot that verified D-B8-9:
+  //
+  //   app-claude\x2dsession.slice     66 MB   cap 20G/24G   <- only the supervise loops
+  //   app.slice                     17.6 GB   cap infinity  <- all 17 panes
+  //
+  // and proved causal the same day on an isolated socket: a server started
+  // inside `app-claude\x2dsession.slice` mints its pane scope in that same
+  // slice. One `--slice=` restores it.
+  //
+  // The ceiling is not decoration. It was added 2026-07-28 after one pane
+  // peaked at 24G and stalled the fleet for ~25 minutes, and the per-scope cap
+  // `ccd-cap-scopes` applies is 12G — three sessions at their own cap overrun
+  // this 30G box, which is precisely what an AGGREGATE limit exists to stop.
+  //
+  // The slice is named ABSOLUTELY rather than inherited from the caller. Every
+  // caller's cgroup is a different answer — `cmd_supervise`'s unit, an
+  // interactive shell, a transient `systemd-run` from the auto-swap — and
+  // "wherever the creator happened to be" is the exact defect D-B8-7 removed.
+
+  /** The slice carrying the aggregate ceiling, DERIVED from the drop-in the
+   *  deploy installs rather than typed a second time here. systemd escapes a
+   *  literal `-` inside a unit name as `\x2d`; that escape is the only
+   *  difference between the readable repo directory and the unit name, and
+   *  getting it wrong means systemd silently never reads the drop-in. */
+  const fleetSlice = (): string => {
+    const dirs = fs.readdirSync(path.resolve(__dirname, '../../deploy/systemd'))
+      .filter((d) => d.endsWith('.slice.d'));
+    expect(dirs, 'deploy/systemd must carry exactly one slice drop-in for this to be derivable')
+      .toHaveLength(1);
+    const m = /^app-(.+)\.slice\.d$/.exec(dirs[0]!);
+    expect(m, `unexpected slice drop-in directory name: ${dirs[0]}`).toBeTruthy();
+    return `app-${m![1]!.replace(/-/g, '\\x2d')}.slice`;
+  };
+
+  it('names the slice the deploy attaches the ceiling to', () => {
+    h.sh(`${TMUX_NO_SERVER} _tmux_new_session -d -s cc-demo 'true'`, { SYSTEMD_RUN_RC: '0' });
+    const [argv] = h.systemdRunCalls();
+    expect(argv,
+      'without --slice the scope defaults to app.slice, and every pane scope tmux mints '
+      + 'follows it out of the fleet memory ceiling')
+      .toContain(`--slice=${fleetSlice()}`);
+  });
+
+  it('the derivation is real: it reads the escaped slice name off the deploy tree', () => {
+    expect(fleetSlice()).toBe('app-claude\\x2dsession.slice');
+  });
+
+  it('the slice it names carries a real ceiling — an uncapped one makes the placement pointless', () => {
+    const conf = readFileSync(
+      path.resolve(__dirname, '../../deploy/systemd/app-claude-session.slice.d/limits.conf'), 'utf8');
+    expect(conf).toMatch(/^\[Slice\]$/m);
+    expect(conf, 'a hard aggregate ceiling is the whole point of placing the server here')
+      .toMatch(/^MemoryMax=\d+[GM]$/m);
+    expect(conf, 'the soft ceiling is what throttles before the hard one kills')
+      .toMatch(/^MemoryHigh=\d+[GM]$/m);
+  });
+});
+
 describe('the boot race — 17 supervisors, one server (D-B8-7, second attempt)', () => {
   // WHAT ACTUALLY HAPPENED, measured on the fleet host after the second reboot.
   // All 17 units start in the same second, all see no server, all call

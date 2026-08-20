@@ -26,7 +26,7 @@ const ARCH = `_ws_unsupervise() { echo "unsupervise $1" >> "$HOME/ccd-calls"; };
   _spawn_start() { echo "spawn_start $1 $2" >> "$HOME/ccd-calls"; SPAWN_FROMSWAP=0; };
   _spawn_settle() { echo "spawn_settle $1" >> "$HOME/ccd-calls"; };
   tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; return 1; };
-  _alive() { return 1; };`;
+  _session_verdict() { echo gone; };`;
 
 const shFail = (snippet: string, env?: NodeJS.ProcessEnv): { code: number; stdout: string; stderr: string } => {
   try { return { code: 0, stdout: h.sh(snippet, env), stderr: '' }; }
@@ -56,8 +56,14 @@ const runCcd = (...args: string[]): { code: number; stdout: string; stderr: stri
   // replacement STICKS, because the systemd poison is create-if-absent while
   // this write is unconditional.
   const stub = harnessBin(h.home);
+  // `has-session` says WHY it failed, because ccd now reads that: only
+  // "can't find session" means the session is gone, and a bare exit 1 means
+  // "the tmux server did not answer" — under which `_ws_status` correctly
+  // refuses instead of reporting idle. This harness models a box with no
+  // session, not a box with no tmux server, so it says so (D-B8-12).
   fs.writeFileSync(path.join(stub, 'tmux'),
-    '#!/bin/sh\necho "tmux $*" >> "$HOME/ccd-calls"\nexit 1\n', { mode: 0o755 });
+    '#!/bin/sh\necho "tmux $*" >> "$HOME/ccd-calls"\n'
+    + '[ "$1" = has-session ] && echo "can\'t find session: $3" >&2\nexit 1\n', { mode: 0o755 });
   fs.writeFileSync(path.join(stub, 'systemctl'),
     '#!/bin/sh\necho "systemctl $*" >> "$HOME/ccd-calls"\nexit 0\n', { mode: 0o755 });
   const opts = {
@@ -178,7 +184,7 @@ describe('ccd caps', () => {
 /** `_alive` true plus a pane pid, so `_ws_status` reads a real status file
  *  instead of short-circuiting on "no pane at all". */
 const LIVE = ARCH
-  .replace('_alive() { return 1; };', '_alive() { return 0; };')
+  .replace('_session_verdict() { echo gone; };', '_session_verdict() { echo live; };')
   .replace('tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; return 1; };',
            'tmux() { case "$1" in list-panes) echo 4242 ;; *) echo "tmux $*" >> "$HOME/ccd-calls" ;; esac; };');
 
@@ -660,7 +666,7 @@ describe('ws-archive', () => {
 
   it('refuses when the wrapper status cannot be read while the pane IS alive', () => {
     workspace('demo', 'quiet-basin');
-    const BUSY = ARCH.replace('_alive() { return 1; };', '_alive() { return 0; };');
+    const BUSY = ARCH.replace('_session_verdict() { echo gone; };', '_session_verdict() { echo live; };');
     expect(shFail(`${BUSY} cmd_ws_archive --session demo-quiet-basin`).stderr)
       .toMatch(/status-unknown/);
   });
@@ -671,7 +677,7 @@ describe('ws-archive', () => {
     fs.mkdirSync(cfg, { recursive: true });
     fs.writeFileSync(path.join(cfg, '4242.json'), '{"status":"busy","statusUpdatedAt":1}');
     const BUSY = ARCH
-      .replace('_alive() { return 1; };', '_alive() { return 0; };')
+      .replace('_session_verdict() { echo gone; };', '_session_verdict() { echo live; };')
       .replace('tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; return 1; };',
                'tmux() { case "$1" in list-panes) echo 4242 ;; *) echo "tmux $*" >> "$HOME/ccd-calls" ;; esac; };');
     expect(shFail(`${BUSY} cmd_ws_archive --session demo-quiet-basin`).stderr).toMatch(/session-busy/);
@@ -1315,7 +1321,7 @@ describe('ws-restore propagates a failed spawn', () => {
      _spawn_start() { echo "spawn_start $1 $2" >> "$HOME/ccd-calls"; SPAWN_FROMSWAP=0; };
      _spawn_settle() { echo "spawn_settle $1" >> "$HOME/ccd-calls"; return ${rc}; };
      tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; return 1; };
-     _alive() { return 1; };`;
+     _session_verdict() { echo gone; };`;
 
   it('refuses the success line and returns the rc on a vanished-session spawn (rc 3)', () => {
     workspace('demo', 'quiet-basin');

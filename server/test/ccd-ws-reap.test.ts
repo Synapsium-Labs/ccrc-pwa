@@ -11,7 +11,7 @@ afterEach(() => { h.cleanup(); });
 
 const ARCH = `_ws_unsupervise() { echo "unsupervise $1" >> "$HOME/ccd-calls"; };
   _ws_supervise() { :; }; _spawn() { :; }; _spawn_start() { SPAWN_FROMSWAP=0; }; _spawn_settle() { :; };
-  tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; return 1; }; _alive() { return 1; };`;
+  tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; return 1; }; _session_verdict() { echo gone; };`;
 
 /** The same genuine squash-with-a-moved-base fixture the audit tests use, so
  *  the reap path is exercised against the case it exists for.
@@ -1638,11 +1638,11 @@ describe('partial failure and resume', () => {
         tip: h.git(main, 'rev-parse', 'refs/heads/ws/quiet-basin') }));
     // Alive, with a pane, whose pid does not read back — `_ws_status` returns 1.
     const NOPID = ARCH
-      .replace('_alive() { return 1; };', '_alive() { return 0; };')
+      .replace('_session_verdict() { echo gone; };', '_session_verdict() { echo live; };')
       .replace('tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; return 1; };',
                'tmux() { case "$1" in list-panes) : ;; *) echo "tmux $*" >> "$HOME/ccd-calls" ;; esac; };');
     expect(NOPID.includes('list-panes')).toBe(true);   // both replaces really matched
-    expect(NOPID.includes('_alive() { return 0; };')).toBe(true);
+    expect(NOPID.includes('_session_verdict() { echo live; };')).toBe(true);
     const r = h.run(`${GH_STUB} ${NOPID} cmd_ws_reap --expect ${tok} --session demo-quiet-basin`);
     expect(r.code, `stderr: ${r.stderr}`).toBe(0);
     expect(JSON.parse(r.stdout).refused).toBe('status-unknown');
@@ -1664,7 +1664,7 @@ describe('partial failure and resume', () => {
     fs.mkdirSync(cfg, { recursive: true });
     fs.writeFileSync(path.join(cfg, '4242.json'), '{"status":"busy","statusUpdatedAt":1}');
     const BUSY = ARCH
-      .replace('_alive() { return 1; };', '_alive() { return 0; };')
+      .replace('_session_verdict() { echo gone; };', '_session_verdict() { echo live; };')
       .replace('tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; return 1; };',
                'tmux() { case "$1" in list-panes) echo 4242 ;; *) echo "tmux $*" >> "$HOME/ccd-calls" ;; esac; };');
     const r = h.run(`${GH_STUB} ${BUSY} cmd_ws_reap --expect ${tok} --session demo-quiet-basin`);

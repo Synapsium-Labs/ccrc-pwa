@@ -13744,3 +13744,126 @@ seam were tested, thoroughly, in isolation, and the defect lived in the agreemen
 neither test could see. *A list enumerated twice is a seam, and a seam with a test on each side is
 still untested.* The one artifact that would have caught it is the one now added — a test that derives
 one copy from the other.
+
+### D-B8-11 — placing the tmux server moved the whole fleet out of its memory ceiling
+
+**Found by asking whether tmux is the right mechanism at all**, on 2026-08-19, ~6h after D-B8-9 was
+verified. The audit was a design question; the answer came from measuring the live box, and what the
+measurement actually found was a regression that D-B8-9's own verification could not have seen,
+because it asked only "is the server in `ccrc-tmux-server.scope`?" and the answer was yes.
+
+Ubuntu's tmux (3.4, linked against `libsystemd`) mints a transient `tmux-spawn-<uuid>.scope` for every
+pane and derives that scope's **slice** from its own placement. `systemd-run --user --scope` with no
+`--slice` defaults to `app.slice`. The fleet's aggregate memory ceiling —
+`deploy/systemd/app-claude-session.slice.d/limits.conf`, `MemoryHigh=20G` / `MemoryMax=24G`, added
+2026-07-28 after one pane peaked at 24G and stalled the fleet ~25 minutes — hangs one level in, on
+`app-claude\x2dsession.slice`. So placing the server placed all seventeen panes with it, out of the
+ceiling. Measured:
+
+```
+app-claude\x2dsession.slice      66 MB   cap 20G/24G   <- the supervise loops, and nothing else
+app.slice                      17.6 GB   cap infinity  <- all 17 panes
+17/17 tmux-spawn-*.scope       Slice=app.slice
+```
+
+Proved causal the same day on an isolated socket (the `-L probe` shape `_tmux_new_session`'s own
+comment records, run against a scope created inside the slice): the private server landed in
+`app-claude\x2dsession.slice/ccrc-slicetest-1.scope` and **its pane scope landed in that same slice**.
+The live fleet was untouched by the probe — default-socket server pid 2056 up, 17 pane scopes intact.
+
+**What survived and what did not.** `ccd-cap-scopes` kept applying its per-scope 12G caps throughout,
+because 2026-08-10 had already taught it to address scopes by unit name rather than by cgroup path —
+the one piece of the guardrail that did not have to change. Only the aggregate stopped covering
+anything. That distinction matters: 12G × 3 sessions overruns a 30G box, which is the precise failure
+an aggregate limit exists to stop, and the per-scope caps read green while it was unguarded.
+
+*Fixed* by naming the slice explicitly in the scope argv. Named **absolutely**, never derived from the
+caller: `_spawn_start` is reached from `cmd_supervise`'s unit, from an interactive shell, and from a
+transient `systemd-run`, and "wherever the creator happened to be" is the defect `_tmux_new_session`
+exists to remove. The slice needs no unit file (systemd instantiates one on demand), so a box that
+never installed the drop-in is no worse off than today.
+
+**Guard.** `ccd-tmux-server.test.ts` derives the expected slice name from the deploy tree's drop-in
+directory, applying systemd's `-` → `\x2d` escape, and asserts the argv names it — so the escape and
+the drop-in cannot drift apart, and the readable repo path stays the single source. Mutation-measured:
+deleting `--slice` → **1 red**; pointing it at `app.slice` (the bug's live state) → **1 red**; using
+the *unescaped* `app-claude-session.slice`, the realistic typo that makes systemd silently never read
+the drop-in → **1 red**; restored → **17 passed**.
+
+Two comments were corrected rather than deleted. `deploy.sh`'s sweep refusal asserted "that server
+sits in a claude-session@ cgroup", which stopped being true at D-B8-7 — it now says the guard is for
+the documented *fallback* placement, and says explicitly not to delete it because a healthy box makes
+it look unnecessary. `ccd-cap-scopes`' layout note gains the second relocation, since its own text had
+predicted exactly this ("this stays correct if ccd ever moves sessions into a different slice again").
+
+**The transferable lesson is about the shape of a fix's blast radius.** D-B8-9's lesson was test shape;
+D-B8-10's was that a list enumerated twice is an untested seam. This one: *a fix that relocates a
+process relocates everything the process's children inherit, and cgroup membership is inherited
+sideways through a dependency that documents none of it* — `man tmux` has no entry for systemd, scope,
+slice or cgroup. The verification criterion was correct and passed. It measured the thing the fix set
+out to change, and nothing about what else moved with it. **When a change moves something, ask what
+was standing downstream of where it used to be.**
+
+### D-B8-12 — `_alive` answered a question it had not managed to ask, and two destructive verbs believed it
+
+Surfaced by the adversarial pass over the "is tmux the right mechanism" audit (2026-08-19). The audit
+itself concluded *keep tmux, keep the shared server*; the operational lens then pointed at a line
+neither the audit nor D-B8-11 had looked at.
+
+`_alive() { tmux has-session -t … 2>/dev/null; }` collapsed three conditions into one boolean, and
+every failure among them is rc=1. Measured on an isolated socket, same box, same day:
+
+```
+session gone           can't find session: cc-demo
+no server / no socket  error connecting to <path> (No such file or directory)
+socket, but no server  no server running on <path>
+tmux absent            rc 127, message from the shell
+```
+
+Only the first is evidence a session died. The other two mean *I could not ask* — and two callers were
+destructive on that answer:
+
+- **`_ws_status` (`ccd:539`)** returned `idle` when it could not ask, and `idle` is exactly what
+  `ws-archive` (`ccd:2258`) and `ws-reap` (`ccd:4488`) gate on. An unreachable tmux server therefore
+  presented **every live session as reapable**. The function already had the right channel: its stated
+  contract is "NON-ZERO when it cannot be read", which routes to `status-unknown` and refuses. The
+  `_alive` branch was the one path that bypassed the function's own contract.
+- **`ccd forget` (`ccd:9196`)** proved deadness with `! _alive || die`, so an unreachable substrate let
+  it purge the registry row of a **running** session — the outcome the comment three lines above warns
+  about ("collapsing the two into one verb turns a cleanup into a kill"), reached by a route that
+  comment did not consider. Its neighbouring hold guard is deliberately fail-shut ("present-but-unreadable
+  refuses"); this one was not.
+
+*Fixed* with `_session_verdict` → `live|gone|unknown`, and **the polarity is the whole design**: it
+recognises the ONE message that means death and calls everything else unknown. It must never be
+rewritten as a list of failure messages. An unrecognised future tmux error then lands in `unknown`,
+which makes callers refuse; enumerating failures would land it in `gone`, which makes them destroy. A
+tmux upgrade that rewords its errors degrades this to "refuses too often", never to "reaps a live one".
+`_alive` is now derived from the verdict and keeps its exact old meaning (`live` only) for its eleven
+other callers, so this change reaches only the two seams that were destructive.
+
+**Mutation-measured:** collapse restored → **6 red**; `_ws_status` answering `idle` on unknown (the
+shipped bug) → **1 red**; `forget`'s unknown arm deleted → **1 red**; polarity inverted to enumerate
+failures → **2 red**; restored → **12 passed**.
+
+**The fallout was the finding.** 231 tests across 7 files went red, every one of them a stub that said
+`_alive() { return 1; }` — a world with no third answer. They now say `_session_verdict() { echo gone; }`,
+and the shared PATH stub in `ccd-archive.test.ts` emits the real `can't find session` message instead of
+a bare exit 1. That churn is the honest cost of introducing a distinction, and it is the loud kind:
+every affected test failed rather than silently asserting less. `cmd_supervise` and `_session_state`
+still call `_alive`, so their stubs were untouched — which is the measure of how contained the change is.
+
+**Not fixed here, and deliberately.** `cmd_supervise`'s `while _alive "$id"` (`ccd:8474`) has the same
+collapse and the worst consequence: on a tmux client/server protocol mismatch — which an unattended
+`apt upgrade` of an unpinned tmux can produce at any time — all seventeen supervisors read `unknown` as
+death within seconds, exit into `Restart=always`/`StartLimitBurst=5`, and the fleet reads *dead* while
+seventeen claude processes keep running unattached. That one is not a guard fix: "keep looping" replaces
+a false *dead* with a false *alive*, so it needs a distinct `substrate-unreachable` state carried
+through `shared/api.ts`, the server and the PWA. Specified separately; the operator has declined the
+host-side mitigation (tmux stays unpinned, unattended upgrades stay on), so the code must carry it.
+
+**The transferable lesson.** D-B8-10: a list enumerated twice is an untested seam. D-B8-11: a fix that
+moves a process moves what its children inherit. This one: *a predicate that cannot express "I don't
+know" will be believed by callers that needed to hear it* — and the tell is already in the codebase,
+because `_ws_status` had the three-valued contract and one of its own branches wasn't using it.
+**When a helper returns a boolean, ask what it does when it fails to measure.**

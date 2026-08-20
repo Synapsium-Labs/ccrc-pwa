@@ -59,7 +59,7 @@ const runPrStateWithGhAnswering = (
  *  a fresh workspace with nothing but this block, repeatedly. */
 const ARCH_STUBS = `_ws_unsupervise() { :; }; _ws_supervise() { :; }; _spawn() { :; };
   _spawn_start() { SPAWN_FROMSWAP=0; }; _spawn_settle() { :; };
-  tmux() { return 1; }; _alive() { return 1; };`;
+  tmux() { return 1; }; _session_verdict() { echo gone; };`;
 
 describe('prhistory — the one chokepoint', () => {
   it('appends the outgoing record when prnumber is REPLACED by a different number', () => {
