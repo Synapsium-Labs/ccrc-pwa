@@ -16,7 +16,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { CCD, ghContainedEnv, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 
@@ -58,6 +58,21 @@ describe('the substrate marker — one writer, epoch + verbatim reason (spec §2
     // "<epoch>  (client …)" — a double space `.` happily matches. Only the
     // synthesized text itself distinguishes guarded from unguarded.
     expect(marker).toContain('tmux gave no reason');
+  });
+  it('rides `_reg_set`, so the marker is written atomically like every other field', () => {
+    // Wave 2. `_substrate_mark` used to write `printf … > "$f"` directly,
+    // which is the torn-read window `_reg_set` no longer has. FIRST-WRITE-WINS
+    // is unaffected: the `[[ -e "$f" ]]` guard sits ABOVE the write and asks
+    // about the DESTINATION, which rename replaces without ever unlinking.
+    const src = readFileSync(CCD, 'utf8');
+    const body = /_substrate_mark\(\)\s*\{([\s\S]*?)\n\}/.exec(src)?.[1] ?? '';
+    expect(body, 'nothing may redirect into the marker path any more').not.toMatch(/>\s*"\$f"/);
+    expect(body).toMatch(/_reg_set "\$id" substrate/);
+    // And the guard is still there, still ahead of the write.
+    expect(body.indexOf('[[ -e "$f" ]] && return 0'))
+      .toBeGreaterThanOrEqual(0);
+    expect(body.indexOf('[[ -e "$f" ]] && return 0'))
+      .toBeLessThan(body.indexOf('_reg_set "$id" substrate'));
   });
 });
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=168eb0ae5698f90be221602a75181b253949011aae996c063f7411d8d9861ecc
+# ccrc:generated 1 sha256=7dec1294ac2ea41233697e7d1bcd1b3a37c880cf6cb341af053bde995de3ad5c
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box, not on this file: `_rc_enabled` reads
@@ -548,7 +548,12 @@ _substrate_mark() {   # id — record "this supervisor could not reach tmux" ($R
   else
     server=$(timeout "$SUBSTRATE_PROBE_DEADLINE_S" tmux display-message -p '#{version}' 2>/dev/null) || server="unreachable"
   fi
-  printf '%s %s' "$(date +%s)" "$why (client ${client:-unknown}; server ${server:-unreachable})" > "$f"
+  # Through `_reg_set` (wave 2), so the marker cannot be read half-written like
+  # any other field. FIRST-WRITE-WINS is untouched: the `[[ -e "$f" ]]` guard
+  # above asks about the DESTINATION name, which rename replaces atomically and
+  # never unlinks — there is no instant at which a second supervisor's guard
+  # could see the marker missing and re-record a later onset.
+  _reg_set "$id" substrate "$(date +%s) $why (client ${client:-unknown}; server ${server:-unreachable})"
 }
 _substrate_clear() { rm -f -- "$REG/$1.substrate"; }
 _ws_seed_home() {   # id wrapper — set home once; never clobber a deliberate choice
