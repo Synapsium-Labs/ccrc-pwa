@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=d1dbe7213c34e8d37c9495636913f112e97090e68dc6b9ce3a2cb00de3aaa8ac
+# ccrc:generated 1 sha256=4f5001078446b518c1bbe4ddd71e5522752b3803e95424cbc12edf6eaadec384
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box, not on this file: `_rc_enabled` reads
@@ -125,6 +125,9 @@ TMUX_SERVER_LOCK_WAIT=15        # seconds a spawn waits for the right to CREATE 
                                 # this bound only decides how long a WEDGED lock may stall a spawn
                                 # before it proceeds unserialised, which is the pre-lock behaviour
                                 # rather than a failure.
+SUBSTRATE_PROBE_DEADLINE_S=8    # bound on ONE has-session probe. Healthy answer: ~8ms (measured
+                                # 2026-08-19); a SIGSTOPped server blocks the client FOREVER, so
+                                # an unbounded probe turns a wedge into a silent supervisor hang.
 SPAWN_EFFORT="ultracode"        # /effort sent to every freshly spawned session ("" disables).
                                 # ultracode is session-only by design (no settings.json key),
                                 # so injecting it at spawn is the only way to default it.
@@ -325,13 +328,35 @@ _tmux()  { echo "cc-$1"; }                                  # id -> tmux name
 # refuse, rather than in `gone`, which makes them destroy. A tmux upgrade that
 # rewords its errors therefore degrades this to "refuses too often", never to
 # "reaps a live session".
-_session_verdict() {   # id -> live|gone|unknown on stdout; always rc 0
-  local out
-  out=$(tmux has-session -t "$(_tmux "$1")" 2>&1) && { echo live; return 0; }
+#
+# The probe form (D-B8-14) exists because the supervisor needs BOTH the verdict
+# and tmux's own words for the substrate marker, and a `$( )` caller would eat
+# the second fact with the subshell. Same classifier, same polarity — the probe
+# IS the one classifier now; `_session_verdict` merely re-derives from it.
+_session_probe() {   # id -> PROBE_VERDICT=live|gone|unknown, PROBE_DETAIL (unknown only); rc 0
+  # Direct call, never $( ) — the whole point is returning TWO facts without a subshell
+  # eating them. The deadline applies ONLY when tmux is a real executable: `timeout` execs
+  # its argv, so a test's `tmux() { … }` function stub would be invisible behind it — and a
+  # stubbed substrate needs no deadline, it cannot wedge.
+  local out rc
+  if [[ $(type -t tmux) == function ]]; then
+    out=$(tmux has-session -t "$(_tmux "$1")" 2>&1); rc=$?
+  else
+    out=$(timeout "$SUBSTRATE_PROBE_DEADLINE_S" tmux has-session -t "$(_tmux "$1")" 2>&1); rc=$?
+  fi
+  if (( rc == 0 )); then PROBE_VERDICT=live; PROBE_DETAIL=""; return 0; fi
+  # rc 124 is timeout's own kill: tmux printed nothing, so the reason is SYNTHESIZED —
+  # an empty marker reason is the one shape a maintainer can do nothing with (spec §1).
+  if (( rc == 124 )) && [[ -z "$out" ]]; then
+    PROBE_VERDICT=unknown; PROBE_DETAIL="tmux did not answer within ${SUBSTRATE_PROBE_DEADLINE_S}s"; return 0
+  fi
   case "$out" in
-    *"can't find session"*) echo gone ;;
-    *)                      echo unknown ;;
+    *"can't find session"*) PROBE_VERDICT=gone;    PROBE_DETAIL="" ;;
+    *)                      PROBE_VERDICT=unknown; PROBE_DETAIL="${out:-tmux exited $rc with no message}" ;;
   esac
+}
+_session_verdict() {   # id -> live|gone|unknown on stdout; always rc 0 (derived; one classifier)
+  _session_probe "$1"; echo "$PROBE_VERDICT"
 }
 # Unchanged in meaning for its eleven other callers: true for `live` only, so
 # `unknown` still reads as "not alive" everywhere that has not been taught the
