@@ -21,7 +21,7 @@ import { COSE_ES256 } from '../../shared/api';
 import { LoginScreen, VERDICT_TEXT } from '../src/components/LoginScreen';
 import { AccountsScreen } from '../src/screens/AccountsScreen';
 import { ApiError } from '../src/lib/api';
-import { clearAuthLost, isAuthLost, raiseAuthLost } from '../src/lib/auth';
+import { authLost, clearAuthLost, isAuthLost, raiseAuthLost } from '../src/lib/auth';
 import {
   PasskeyCeremonyError, assertPasskey, enrollPasskey, fromB64url, passkeyEnrollSupported,
   passkeyLoginSupported, toB64url,
@@ -452,12 +452,19 @@ describe('PasskeySection', () => {
     status?: unknown;
     list?: string;
     onDelete?: () => Response;
+    onLogout?: () => Response;
   } = {}) => vi.fn(async (url: unknown, init?: RequestInit) => {
     const u = String(url);
     if (u.startsWith('/api/auth/status')) {
       return json(200, opts.status ?? { authed: true, passkeysEnrolled: 1, mode: 'passphrase' });
     }
     if (u === '/api/auth/passkeys') return new Response(opts.list ?? listBody(), { status: 200 });
+    // BEFORE the `/api/auth/passkey/` DELETE arm would ever see it, and on its
+    // own method: `/api/auth/logout` shares no prefix with either, but ordering
+    // a route table by accident is how a fixture comes to answer the wrong call.
+    if (u === '/api/auth/logout' && init?.method === 'POST') {
+      return (opts.onLogout ?? (() => json(204)))();
+    }
     if (u.startsWith('/api/auth/passkey/') && init?.method === 'DELETE') {
       return (opts.onDelete ?? (() => json(204)))();
     }
@@ -527,5 +534,126 @@ describe('PasskeySection', () => {
     render(<AccountsScreen />);
     expect(await screen.findByText(/Pixel 8 \/ Chrome/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /add a passkey/i })).not.toBeInTheDocument();
+  });
+});
+
+// ── 7. the sign-out control (D-132) ─────────────────────────────────────────
+//
+// `POST /api/auth/logout` shipped with the server in Task 5 — gated, tested,
+// and with NO CALLER anywhere in `pwa/src` until now. So a box with the gate
+// armed had no way for its operator to end their own session: the only routes
+// back to a login screen were an empty cookie jar, a `ccrc passwd` rotation, or
+// waiting out the 30-day absolute TTL. Writing the runbook is what found it,
+// which is why these tests exist a task later than the route does.
+//
+// The property under test is NOT "a button exists". It is that the button does
+// BOTH halves — the server-side revocation AND the local signal — because
+// either one alone is a specific, plausible bug: without the POST the browser
+// keeps a live cookie the server would still honour (a "sign out" that signs
+// nobody out), and without the raise the operator sits on a console whose every
+// call is about to 401.
+
+describe('the sign-out control', () => {
+  const listBody = JSON.stringify({ credentials: [], storeUnreadable: false });
+
+  const screenFetch = (opts: { status?: unknown; list?: string; onLogout?: () => Response } = {}) =>
+    vi.fn(async (url: unknown, init?: RequestInit) => {
+      const u = String(url);
+      if (u.startsWith('/api/auth/status')) {
+        return json(200, opts.status ?? { authed: true, passkeysEnrolled: 0, mode: 'passphrase' });
+      }
+      if (u === '/api/auth/passkeys') return new Response(opts.list ?? listBody, { status: 200 });
+      if (u === '/api/auth/logout' && init?.method === 'POST') {
+        return (opts.onLogout ?? (() => json(204)))();
+      }
+      return json(404, { error: 'not-found' });
+    });
+
+  const SIGN_OUT = /^sign out$/i;
+
+  const logoutCallsIn = (f: ReturnType<typeof screenFetch>): unknown[][] =>
+    f.mock.calls.filter(([u, i]) =>
+      String(u) === '/api/auth/logout' && (i as RequestInit | undefined)?.method === 'POST');
+
+  it('POSTs the gated route AND raises the same signal a 401 does', async () => {
+    supportBrowser();
+    const fetchImpl = screenFetch();
+    vi.stubGlobal('fetch', fetchImpl);
+    render(<AccountsScreen />);
+    const btn = await screen.findByRole('button', { name: SIGN_OUT });
+    expect(isAuthLost(), 'the fixture starts signed in').toBe(false);
+
+    await act(async () => { fireEvent.click(btn); });
+
+    // HALF ONE — the server was actually told. Without this assertion the test
+    // would pass on a handler that only raised the local signal, i.e. a "sign
+    // out" that leaves a live session behind a cookie the browser still holds.
+    expect(logoutCallsIn(fetchImpl), 'no POST /api/auth/logout was sent').toHaveLength(1);
+    // HALF TWO — and the login screen is now reachable in this same session,
+    // through `raiseAuthLost` rather than a second path of its own, so both
+    // socket ladders park and the next login's `clearAuthLost` wakes them.
+    expect(authLost()).toEqual({ lost: true, verdict: 'no-session' });
+  });
+
+  it('raises `no-session`, so the screen reads as a cold sign-in, not "you were signed out"', async () => {
+    // `'expired'`'s sentence is a claim about something that HAPPENED to the
+    // operator. This is a deliberate act, and the two are different situations
+    // — the same distinction `AuthVerdict` carries two members for.
+    supportBrowser();
+    vi.stubGlobal('fetch', screenFetch());
+    render(<AccountsScreen />);
+    const btn = await screen.findByRole('button', { name: SIGN_OUT });
+    await act(async () => { fireEvent.click(btn); });
+    // NOT VACUOUS, and it was on the first draft: `LoginScreen` reads its
+    // sentence off `useAuthLost().verdict`, and with NO signal up that verdict
+    // is `'no-session'` anyway — the screen's own cold default — so the text
+    // assertion below passed identically on a handler that raised nothing at
+    // all. Measured (the "drop the raise, keep the POST" mutation left this
+    // test GREEN). Asserting the signal is UP first is what makes the sentence
+    // that follows a claim about the raise rather than about the default.
+    expect(isAuthLost(), 'the sentence below is the default when nothing is raised').toBe(true);
+    render(<LoginScreen />);
+    expect(await screen.findByText(VERDICT_TEXT['no-session'])).toBeInTheDocument();
+    expect(screen.queryByText(VERDICT_TEXT.expired)).not.toBeInTheDocument();
+  });
+
+  it('renders NOTHING on a dark box — there is no session to end', async () => {
+    supportBrowser();
+    vi.stubGlobal('fetch', screenFetch({ status: { authed: true, passkeysEnrolled: 0, mode: 'off' } }));
+    render(<AccountsScreen />);
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+    await act(async () => {});
+    expect(screen.queryByRole('button', { name: SIGN_OUT })).not.toBeInTheDocument();
+    expect(isAuthLost(), 'a dark box must never raise the signal').toBe(false);
+  });
+
+  it('is still offered when the PASSKEY store is unreadable (D-119\'s branch)', async () => {
+    // The unreadable-file branch returns early with its own sentence, and the
+    // sign-out block is rendered in BOTH arms deliberately: an operator whose
+    // credential store is broken has every right to end their own session, and
+    // trapping them on a console they cannot leave would be a second defect
+    // sitting on top of the first.
+    supportBrowser();
+    vi.stubGlobal('fetch', screenFetch({
+      list: JSON.stringify({ credentials: [], storeUnreadable: true }),
+    }));
+    render(<AccountsScreen />);
+    expect(await screen.findByText(/cannot be read/i)).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: SIGN_OUT })).toBeInTheDocument();
+  });
+
+  it('a 401 from the logout route still lands on the login screen', async () => {
+    // The session was already dead (another tab signed out, `ccrc passwd` ran).
+    // The route is GATED, so it answers 401 — and `api.ts`'s funnel raises off
+    // the body, which puts the operator exactly where they were trying to go.
+    // The handler needs no arm for this; it is what gating buys.
+    supportBrowser();
+    vi.stubGlobal('fetch', screenFetch({
+      onLogout: () => json(401, { ok: false, error: 'unauthenticated', verdict: 'expired' }),
+    }));
+    render(<AccountsScreen />);
+    const btn = await screen.findByRole('button', { name: SIGN_OUT });
+    await act(async () => { fireEvent.click(btn); });
+    expect(authLost()).toEqual({ lost: true, verdict: 'expired' });
   });
 });

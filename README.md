@@ -885,6 +885,10 @@ download before it can show a login screen. Enrolling a passkey is **not**
 exempt — it requires already being signed in, which is what makes
 `attestation: 'none'` safe.
 
+**Ending a session** is Accounts → **This session** → **Sign out**: it revokes
+this browser's session server-side and leaves other devices signed in. Enrolled
+passkeys survive it, which is why it is not the lost-device procedure.
+
 **`ccrc passwd` invalidates sessions, not passkeys.** A rotation bumps the
 file's generation and every logged-in browser is expired at once with no
 restart; every enrolled authenticator keeps working, deliberately. For a lost
@@ -892,6 +896,14 @@ device the order is therefore **revoke the passkey in the PWA (Accounts →
 Passkeys → Revoke) first, then rotate the passphrase**. `rm ~/.ccrc/passkeys.json`
 on a running server revokes nothing — the store is loaded once at boot and
 rewritten from memory on the next accepted assertion.
+
+**Two boot warnings worth knowing**, because each catches a misconfiguration
+that is otherwise silent: an `rpId`/`origin` pair that disagrees, is malformed,
+or is an IP literal (passkeys go 501, the passphrase door keeps working); and a
+cookie policy that contradicts the origin's scheme — an `http:` `CCRC_ORIGIN`
+with a `Secure` cookie, which produces a login that answers 204 and bounces
+straight back to the login screen with nothing failing anywhere, or an `https:`
+one with the dev opt-out left on.
 
 **`ccrc doctor`'s `auth` check** reports where a box actually stands: a PASS on
 an un-armed box (that is the shipped default, and a doctor that warned about it

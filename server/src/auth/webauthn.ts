@@ -250,6 +250,37 @@ export function rpIdProblem(rpId: string): string | null {
     return `CCRC_RP_ID ${JSON.stringify(rpId)} has uppercase letters — an rpId is compared as a ` +
       'lowercased domain, so this can only ever mismatch';
   }
+  // AN IP LITERAL IS NOT A DOMAIN, AND CAN NEVER BECOME ONE (D-134). WebAuthn
+  // requires `rpId` to be a valid domain string — an address literal is
+  // explicitly not one — so a browser refuses the ceremony outright.
+  //
+  // NOTHING ELSE HERE CATCHES IT, and that gap is the whole reason this exists:
+  // `127.0.0.1` has dots, so the single-label check below waves it through; it
+  // holds no character outside `[a-z0-9.-]`; it is on no suffix list. And
+  // `originProblem` then AGREES with it, because `http://127.0.0.1:7788`'s
+  // hostname is exactly `127.0.0.1` — so `relyingPartyProblem` returns `null`,
+  // the boot warning stays silent, the ceremony routes go live, and the operator
+  // meets an opaque `SecurityError` in the client with nothing in the journal.
+  // That is precisely the failure this whole function's docstring says it exists
+  // to convert into a log line and a 501. Found by writing the localhost
+  // runbook, where reaching the box by IP is the obvious thing to do.
+  //
+  // The test is deliberately SHAPE-based rather than a strict address parser:
+  // `[::1]`-style brackets, a run of hex-and-colons, and all-numeric labels are
+  // between them every literal an operator could type here, and a value that is
+  // merely LIKE an address is not a registrable domain either. Real domains
+  // cannot collide with it — a TLD is never all-digits (RFC 3696) and never
+  // contains a colon.
+  const bracketed = rpId.startsWith('[') && rpId.endsWith(']');
+  const ipv6ish = bracketed || (rpId.includes(':') && /^[0-9a-f:]+$/.test(rpId));
+  const ipv4ish = /^[0-9]+(\.[0-9]+)+$/.test(rpId);
+  if (ipv4ish || ipv6ish) {
+    return `CCRC_RP_ID ${JSON.stringify(rpId)} is an IP address, and WebAuthn requires a DOMAIN — ` +
+      'a browser refuses to scope a credential to an address literal, with an opaque SecurityError ' +
+      'and nothing on the server to explain it. Use the name this box is actually reached by ' +
+      '(e.g. "tailnet-example.ts.net" or "<name>.duckdns.org"), or "localhost" for local development — ' +
+      'and set CCRC_ORIGIN to a URL with that same host, not to the IP.';
+  }
   if (/[^a-z0-9.-]/.test(rpId)) {
     return `CCRC_RP_ID ${JSON.stringify(rpId)} is not a bare domain — it must be a hostname with ` +
       'no scheme, no port, no path and no slash (that is CCRC_ORIGIN\'s job)';

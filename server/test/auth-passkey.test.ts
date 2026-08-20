@@ -275,6 +275,52 @@ describe('rpId is the registrable domain — never a public suffix, never derive
     }
   });
 
+  it('REFUSES an IP literal — v4 and v6 — because a browser will never scope a credential to one', () => {
+    // D-134, found by writing the localhost runbook: reaching the box by its IP
+    // is the obvious thing to do, and `127.0.0.1` slipped through EVERY other
+    // check here — it has dots (so not a single label), holds no character
+    // outside `[a-z0-9.-]`, and is on no suffix list. Worse, `originProblem`
+    // then AGREES with it (`http://127.0.0.1:7788`'s hostname is exactly that),
+    // so `relyingPartyProblem` answered `null`: no boot warning, live ceremony
+    // routes, and an opaque SecurityError in the client with nothing in the
+    // journal. That is the precise failure this function's docstring says it
+    // exists to convert into a log line and a 501.
+    for (const ip of ['127.0.0.1', '192.168.1.5', '10.0.0.1', '203.0.113.7', '0.0.0.0']) {
+      expect(rpIdProblem(ip), ip).toContain('IP address');
+    }
+    for (const ip of ['[::1]', '[fe80::1]', 'fe80::1', '::1']) {
+      expect(rpIdProblem(ip), ip).toContain('IP address');
+    }
+    // …and the sentence sends them somewhere they can actually go.
+    expect(rpIdProblem('127.0.0.1')).toContain('localhost');
+    expect(rpIdProblem('127.0.0.1')).toContain('CCRC_ORIGIN');
+  });
+
+  it('the IP refusal does not eat a legitimate domain, or the better message for a bare label', () => {
+    // The shape test is deliberately not a strict address parser, so this is the
+    // boundary it must not cross. A TLD is never all-digits and never holds a
+    // colon, so no real registrable domain can collide with it.
+    for (const ok of ['tailnet-example.ts.net', 'mybox.duckdns.org', 'localhost', '1box.example',
+      'box1.example', '192-168-1-5.example.com']) {
+      const problem = rpIdProblem(ok);
+      expect(problem === null || !problem.includes('IP address'), ok).toBe(true);
+    }
+    // A bare all-numeric label is NOT routed to the IP message: it is a single
+    // label, and that is the more accurate diagnosis (the ipv4 shape requires a
+    // dot for exactly this reason).
+    expect(rpIdProblem('12345')).toContain('single label');
+  });
+
+  it('the whole PAIR is refused too — an IP rpId cannot be rescued by a matching origin', () => {
+    // The trap in full: this pair is internally CONSISTENT (the origin's host is
+    // the rpId), which is all `originProblem` asks, so before D-134 the pair
+    // sailed through `relyingPartyProblem` and every browser refused it.
+    expect(relyingPartyProblem('127.0.0.1', 'http://127.0.0.1:7788')).toContain('IP address');
+    // The documented localhost pair still passes, which is what the runbook's
+    // step 10 tells an operator to use.
+    expect(relyingPartyProblem('localhost', 'http://localhost:7788')).toBeNull();
+  });
+
   it('refuses uppercase, an empty value, and a malformed domain', () => {
     expect(rpIdProblem('Box.Example')).toContain('uppercase');
     expect(rpIdProblem('')).toContain('empty');

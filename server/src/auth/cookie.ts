@@ -137,3 +137,68 @@ export function serializeCookie(name: string, value: string, opts: CookieOptions
 export function expireCookie(name: string, opts: Omit<CookieOptions, 'maxAgeSeconds'>): string {
   return serializeCookie(name, '', { secure: opts.secure, maxAgeSeconds: 0 });
 }
+
+/**
+ * Do the box's cookie policy and its configured origin CONTRADICT each other?
+ * `null` when they agree. A sentence, not a boolean, for
+ * `relyingPartyProblem`'s reason: the caller LOGS it, and "your cookie config is
+ * wrong" is not a thing an operator can act on at 2am.
+ *
+ * WHY THIS ONE IS IMPLEMENTABLE WHEN THE ORIGIN SELF-CHECK IS NOT. The check
+ * everybody wants — "is `CCRC_ORIGIN` actually the name this box is reached
+ * under" — cannot be written: behind `tailscale serve` the server never learns
+ * that name, so every arm of such a check would have to fail shut on a correctly
+ * configured box. This one asks nothing about the outside world. It compares two
+ * values the server already holds, both stated by the same operator in the same
+ * file, and it fires only when they disagree with each other.
+ *
+ * ARM ONE — `http:` origin, `Secure` cookie. This is the failure that has no
+ * other signal anywhere. The login route answers `204` with a `Set-Cookie`, the
+ * session row is written, the server's job is done and correct — and a browser
+ * that declines to store a `Secure` cookie from a plain-http origin drops it on
+ * the floor, so the next request arrives with no cookie and the operator watches
+ * a login succeed and the login screen come straight back. Nothing is logged,
+ * because nothing failed. (Whether a given browser accepts the cookie from
+ * `http://localhost` is that browser's own policy — several treat loopback as a
+ * secure context and some do not — which is exactly why this warns rather than
+ * refuses: the box cannot know, and it must not take a working deployment off
+ * the air over a guess.)
+ *
+ * ARM TWO — `https:` origin, `Secure` dropped. The mirror, and a real downgrade
+ * rather than a puzzle: the dev opt-out left switched on for a box that is
+ * behind TLS means the session cookie is one plain-http request to the same host
+ * away from the wire. There is no legitimate reason for this combination, and
+ * the plausible way to arrive at it is copying a localhost env file onto a real
+ * box.
+ *
+ * Both CORRECT combinations are silent (`http:` + opted out, `https:` + `Secure`),
+ * which is `_check_auth`'s rule from D-126: a warning every operator sees on
+ * every boot is a warning they learn to skim past, and the ones that matter lose
+ * by it.
+ *
+ * An origin this cannot PARSE returns `null` — not because it is fine, but
+ * because `originProblem` (`webauthn.ts`) already reports exactly that, and one
+ * misconfiguration deserves one line.
+ */
+export function cookiePolicyProblem(origin: string, cookieSecure: boolean): string | null {
+  let scheme: string;
+  try {
+    scheme = new URL(origin).protocol;
+  } catch {
+    return null;
+  }
+  if (scheme === 'http:' && cookieSecure) {
+    return `CCRC_ORIGIN is plain http (${JSON.stringify(origin)}) and the session cookie is still ` +
+      'marked Secure, so a browser may refuse to store it — a login that answers 204 and then ' +
+      'bounces straight back to the login screen, with nothing failing anywhere to say why. ' +
+      'On a localhost development box set CCRC_COOKIE_INSECURE=on; on any box reached over TLS, ' +
+      'fix CCRC_ORIGIN to the https URL browsers actually use instead.';
+  }
+  if (scheme === 'https:' && !cookieSecure) {
+    return `CCRC_ORIGIN is https (${JSON.stringify(origin)}) and CCRC_COOKIE_INSECURE=on has ` +
+      'dropped Secure from the session cookie, so it will also be sent over any plain-http request ' +
+      'to this host. That opt-out exists for localhost development only — remove it from this ' +
+      "box's ccrc.env and restart.";
+  }
+  return null;
+}

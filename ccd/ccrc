@@ -123,6 +123,18 @@ BOX_ENV_FILE="$HOME/.ccrc/ccrc.env"
 # accounts' secrets files ("PATHS ONLY. THE SECRETS FILE IS NEVER OPENED").
 BOX_AUTH_FILE="$HOME/.ccrc/auth.scrypt"
 
+# ── THE SESSION FILE, WHICH THIS FILE NEVER READS EITHER ──────────────────
+# `~/.ccrc/sessions.json` — the flat file the gate's live sessions live in
+# (`server/src/auth/sessions.ts`). Spelled here for one reason only: doctor's
+# `auth` remedy for a broken secret has to NAME it, because a fresh secret
+# restarts at generation 1 and a session minted under this box's first
+# passphrase would otherwise revalidate against it.
+#
+# LOSING IT IS FREE, by design — it holds `sha256(token)` and nothing else, so
+# deleting it logs everyone out and costs nothing more. That is why a remedy
+# may safely print `rm -f` for it at all.
+BOX_SESSIONS_FILE="$HOME/.ccrc/sessions.json"
+
 # ── WHERE A BOX KEEPS THE SHIPPED TREE ────────────────────────────────────
 # `~/ccrc` is not this file's choice and is not a default: it is the layout
 # every sibling contract in this repository already assumes. Both deploy lanes
@@ -519,13 +531,28 @@ _box_env_value() {
 #      resolve it against the operator's `$PWD`. Two different files, and
 #      nothing on the box can say which one is the secret. The path is still
 #      printed, for the message.
-_box_auth_path() {
+#
+# ── AND THE SAME QUESTION FOR THE SESSION FILE (D-135) ───────────────────
+# `CCRC_SESSIONS_PATH` is the same kind of key with the same `||` reader in
+# `config.ts`, and doctor's `auth` remedy NAMES the session file — so it had
+# the same defect one key over: it resolved the SECRET through this function
+# and then printed a hard-coded `~/.ccrc/sessions.json`, which on a box that
+# overrides the key tells an operator to delete a file nothing reads, in the
+# same breath as a correctly-resolved secret path.
+#
+# ONE FUNCTION, PARAMETERISED, rather than a second near-identical copy: two
+# resolvers with two spellings of the same three-way rule is precisely the
+# drift this file's header bans, and the whole point of D-130 was that the
+# tools which touch a file must not each hold their own opinion about which
+# file it is. `_box_auth_path` and `_box_sessions_path` are now the same code
+# with a different key and a different default, so they cannot disagree.
+_box_path_for() {   # $1 = env key, $2 = the default when it is unset or empty
   local v=""
   if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ]; then
-    v="$(_box_env_value "$BOX_ENV_FILE" CCRC_AUTH_SECRET_PATH)"
+    v="$(_box_env_value "$BOX_ENV_FILE" "$1")"
   fi
   if [ -z "$v" ]; then
-    printf '%s' "$BOX_AUTH_FILE"
+    printf '%s' "$2"
     return 0
   fi
   printf '%s' "$v"
@@ -534,6 +561,9 @@ _box_auth_path() {
     *)  return 3 ;;
   esac
 }
+
+_box_auth_path()     { _box_path_for CCRC_AUTH_SECRET_PATH "$BOX_AUTH_FILE"; }
+_box_sessions_path() { _box_path_for CCRC_SESSIONS_PATH "$BOX_SESSIONS_FILE"; }
 
 # ── THE ONE NETWORK CALL: GET /api/fleet/health ───────────────────────────
 # The server is the only party that can compare the two boxes — it holds this

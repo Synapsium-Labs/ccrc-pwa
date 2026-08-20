@@ -123,7 +123,7 @@
 
 ## Deviations found
 
-(Next free number at plan time: **D-108**. Next free now: **D-132**. D-123 is
+(Next free number at plan time: **D-108**. Next free now: **D-136**. D-123 is
 claimed by `server/src/auth/credentials.ts` from Task 8 and has no ledger entry here.)
 
 - **D-115 — the Origin check stopped at the socket, leaving CSRF open.** Task 8 added a
@@ -267,6 +267,56 @@ claimed by `server/src/auth/credentials.ts` from Task 8 and has no ledger entry 
   for the wrong reason — the defect the Task 9 review caught in D-127's first fixture.
   `server.ts`, `auth-routes.test.ts`.
 
+- **D-132 — a shipped auth feature with no way to sign out.** `POST /api/auth/logout` landed in
+  Task 5 — gated, tested, and with ZERO callers in `pwa/src` (`api.ts` shipped no `logout` because
+  nothing used it). So an armed box had no control for ending a session: the only routes back to a
+  login screen were an empty cookie jar, a `ccrc passwd` rotation, or waiting out the 30-day
+  absolute TTL. Invisible from inside the code and obvious the moment the runbook had to tell an
+  operator how to do it. Fixed with `api.logout()` and a **This session** block on `AccountsScreen`,
+  beside the passkey controls for the reason both belong there: each requires an existing session.
+  THE LOCAL HALF GOES THROUGH `raiseAuthLost('no-session')` — the same seam a 401 uses — because
+  that seam already mounts the login screen, parks both socket ladders, and makes the next login's
+  `clearAuthLost` wake them; a second path would have reinvented three behaviours and matched none.
+  `'no-session'` and not `'expired'`, because `'expired'`'s sentence claims something happened TO
+  the operator. Rendered in BOTH passkey branches including D-119's unreadable-store one: an
+  operator whose credential file is broken must not also be trapped on a console they cannot leave.
+- **D-133 — the cookie-policy contradiction had no signal at all.** `cookieSecure` is config-driven
+  and defaults ON regardless of scheme, which is correct (a scheme-derived flag drops `Secure`
+  behind `tailscale serve`, the deployment that most needs it). The consequence nobody stated: an
+  `http:` `CCRC_ORIGIN` mints a `Secure` cookie that a browser may silently discard, so the login
+  answers **204**, the session row is written, the server does everything right, and the operator
+  watches the login screen come straight back with NOTHING logged — because nothing failed. The
+  mirror (`https:` origin + `CCRC_COOKIE_INSECURE=on`) is a plain downgrade. Fixed with
+  `cookiePolicyProblem` (`cookie.ts`) and one boot line. **This is the boot check that IS
+  implementable**, and the distinction matters: the origin self-check ruled out in Task 8 needs a
+  fact the server cannot obtain (the hostname it is reached under), while this compares two values
+  the same operator stated in the same file. Both CORRECT combinations are silent — D-126's rule.
+  An unparseable origin returns `null`, because `originProblem` already reports exactly that.
+- **D-134 — an IP-literal `rpId` was accepted by the server and refused by every browser.**
+  `rpIdProblem` refused single labels, a short trap list and a charset — and `127.0.0.1` passed all
+  three (it has dots, and holds nothing outside `[a-z0-9.-]`). `originProblem` then AGREED with it,
+  because `http://127.0.0.1:7788`'s hostname is exactly `127.0.0.1`, so `relyingPartyProblem`
+  answered `null`: no boot warning, live ceremony routes, and an opaque `SecurityError` in the
+  client with nothing in the journal — *precisely* the failure that function's own docstring says it
+  exists to convert into a log line and a 501. Found by writing the localhost runbook, where
+  reaching the box by IP is the obvious thing to do and `CCRC_RP_ID=127.0.0.1` is the obvious way to
+  make the pair agree. Refused now, v4 and v6, with a sentence naming the name to use instead. The
+  test is SHAPE-based rather than an address parser and is placed before the charset check so an
+  IPv6 literal gets the IP sentence rather than the generic "not a bare domain" one; the ipv4 shape
+  requires a dot so a bare numeric label still gets the more accurate single-label message.
+- **D-135 — D-130's defect class, one key over.** Doctor's `auth` remedy resolved the SECRET through
+  `_box_auth_path` and then printed a hard-coded `rm -f ~/.ccrc/sessions.json` in the same sentence.
+  On a box setting `CCRC_SESSIONS_PATH` that tells an operator to delete a file nothing reads —
+  leaving the sessions that the fresh generation-1 secret is about to REVALIDATE exactly where they
+  were, which is the same "green transcript, unchanged reality" shape D-130 was raised for. Fixed
+  with ONE parameterised resolver: `_box_path_for <key> <default>`, with `_box_auth_path` and
+  `_box_sessions_path` as its two callers, so the two cannot hold different opinions about the
+  three-way rule. A RELATIVE `CCRC_SESSIONS_PATH` prints no `rm` at all and says why, rather than
+  guessing a path that would delete something else. `gen-auth-hash.mjs`'s own copy of the sentence
+  still says `~/.ccrc/sessions.json` — it is never handed the sessions path, and it already hedges
+  with "CCRC_SESSIONS_PATH overrides where it lives"; widening the helper's CLI for a message was
+  judged the worse trade.
+
 **Recorded, deliberately unchanged:** the `signCount` both-zero carve-out. Most Apple/Android
 platform passkeys and every synced credential always send 0; accepting them forfeits nothing,
 because clone detection was never available for a key that lives in several places by design.
@@ -314,11 +364,14 @@ lost. None is a bypass or a fail-open; each is a real seam somebody will meet.
 - **Stale `auth.scrypt.tmp.*` files are never reaped, and the doctor does not report them** — the writer unlinks its own temp on every failure path it can see, but a crash between `writeFileSync` and `renameSync` leaves one behind. 0600 and randomly suffixed, so it is litter rather than a leak, and litter beside a credential is still litter nobody is looking for.
 - **The 12-character passphrase floor lives in bash only, deliberately** — `gen-auth-hash.mjs` validates FORMAT, `ccrc passwd` owns POLICY, and a second copy of the number is exactly the drift `single-definition.test.ts` fails builds over. Recorded so the asymmetry reads as a decision.
 
-*Found while writing the documentation (Task 10):*
+*Found while writing the documentation (Task 10) — all four FIXED, not deferred:*
 
-- **There is no sign-out control in the PWA.** `POST /api/auth/logout` exists, is gated, and is tested — and nothing in the client calls it (`api.ts` deliberately ships no `logout`, as unused). The only ways back to a login screen today are an empty cookie jar, a `ccrc passwd` rotation, or the TTL. The runbook says so out loud rather than inventing a button; it is a real gap in the operator surface and the cheapest possible follow-up.
-- **On a plain-http localhost box the cookie still carries `Secure` by default**, because `cookieSecure` is config-driven and never scheme-derived (which is the correct call — see the field's docstring). Whether a browser accepts a `Secure` cookie from `http://localhost` is per-browser policy this box cannot control, so the documented symptom is "the login POST succeeds and the screen comes straight back", and the documented switch is `CCRC_COOKIE_INSECURE=on`. Not changed: making the default scheme-aware is exactly the shape that fails silently behind `tailscale serve`.
-- **An IP-address origin cannot carry passkeys, and the server's own check does not say so.** `CCRC_ORIGIN=http://127.0.0.1:7788` with `CCRC_RP_ID=127.0.0.1` is a pair `relyingPartyProblem` ACCEPTS (`rpIdProblem` only refuses single labels, and `127.0.0.1` has dots) and every browser refuses, because an rpId must be a domain. Documented in the runbook as "keep both on `localhost`". A `rpId` that is a bare IPv4 literal would be a cheap, exact check to add later.
+Writing the operator-facing docs surfaced four real defects. They are recorded here as findings and
+in the ledger above as **D-132** (no sign-out control), **D-133** (the cookie-policy contradiction
+had no signal), **D-134** (an IP-literal `rpId` passed the server's own validator) and **D-135**
+(the doctor's remedy hard-coded the sessions path). The pattern is worth keeping: each one was
+invisible while reading the code and obvious the moment a sentence had to be written telling an
+operator what to do. Documenting a feature is the best review it gets.
 
 ## Close-out — stage 3a, 2026-08-20
 
@@ -330,15 +383,16 @@ lost. None is a bypass or a fail-open; each is a real seam somebody will meet.
 - **The brake** (`auth/ratelimit.ts`): a pure L1 policy plus one impure holder, counting failures rather than attempts, and RESERVING at admission so a concurrent flood cannot all pass while the count is still zero.
 - **The gate** (`auth/gate.ts`, `auth/cookie.ts`): one `onRequest` hook, an exempt table keyed by METHOD as well as path, an Origin check on every upgrade and every non-exempt write, and a decision that is pure and returns WHY it allowed.
 - **Passkeys** (`auth/webauthn.ts`, `auth/credentials.ts`): WebAuthn with `node:crypto` alone — no new dependency — two separate challenge stores, per-credential rpId/origin binding, enrolment behind the gate, and revocation wired end to end.
-- **The client** (`pwa/src/lib/auth.ts`, `LoginScreen.tsx`): a login screen that rises on POSITIVE evidence only, so no route on a dark box can raise it; both socket ladders park while lost and resume on regain.
-- **The operator surface** (`ccd/ccrc passwd`, `deploy/gen-auth-hash.mjs`, `ccrc doctor`'s `auth` check): one writer for the secret, one resolver for its path, a round trip through the server's own parser before any install, and a check that measures the file without printing a byte of it.
+- **The client** (`pwa/src/lib/auth.ts`, `LoginScreen.tsx`, `AccountsScreen.tsx`): a login screen that rises on POSITIVE evidence only, so no route on a dark box can raise it; both socket ladders park while lost and resume on regain; and a **Sign out** control that goes through the same signal (D-132).
+- **The operator surface** (`ccd/ccrc passwd`, `deploy/gen-auth-hash.mjs`, `ccrc doctor`'s `auth` check): one writer for the secret, ONE parameterised resolver for both the secret's path and the session store's (D-135), a round trip through the server's own parser before any install, and a check that measures the file without printing a byte of it.
+- **Two boot warnings that catch a silent misconfiguration** — the rpId/origin pair, now including IP literals (D-134), and the cookie policy against the origin's scheme (D-133).
 - **The documentation** (this task): `deploy/ccrc.env.example`, README's session-gate section, and step 10 of the VM-gate runbook.
 
-**Deliberately deferred** — the four scope decisions and the fourteen minors above, none of them load-bearing for arming the gate.
+**Deliberately deferred** — the four scope decisions and the eleven minors above, none of them load-bearing for arming the gate. The four defects the documentation pass found (D-132..D-135) were FIXED rather than deferred.
 
 **Pending operator proofs.** Everything above is a hermetic-suite measurement over fixture `$HOME`s. Three things only a real run can answer, and all three are step 10 of the runbook:
 
-1. **The arming sequence on a real box** — `ccrc passwd`, the three-key edit, the restart, the login. In particular whether the `Secure` cookie survives a plain-http localhost browser, which is the one step whose answer this repository genuinely does not know.
+1. **The arming sequence on a real box** — `ccrc passwd`, the three-key edit, the restart, the login, and now the sign-out. Whether the `Secure` cookie survives a plain-http localhost browser is still the one step whose answer this repository does not know — but D-133 means the box now WARNS that it might not, so the operator meets a predicted symptom rather than a mystery.
 2. **A passkey ceremony against a real authenticator.** Every passkey test in this stage signs with a real P-256 keypair, but no test has ever driven a browser, a platform prompt or a security key.
 3. **The emergency procedures, rehearsed once** — revoke-then-rotate, and the `mv … && rm -f … && ccrc passwd` recovery from a corrupt secret. The cheapest time to run them is on a VM that is about to be destroyed.
 

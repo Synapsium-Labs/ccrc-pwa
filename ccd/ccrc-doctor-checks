@@ -866,9 +866,10 @@ _check_auth() {
   # invented.
   if [ -z "${BOX_AUTH_FILE:-}" ] || [ -z "${BOX_ENV_FILE:-}" ] \
      || ! declare -F _box_env_value >/dev/null 2>&1 \
-     || ! declare -F _box_auth_path >/dev/null 2>&1; then
+     || ! declare -F _box_auth_path >/dev/null 2>&1 \
+     || ! declare -F _box_sessions_path >/dev/null 2>&1; then
     _dr_fail auth "ccrc's own config reader is not loaded, so neither this box's CCRC_AUTH flag nor its passphrase file was measured" \
-      "this is a bug in ccrc, not a fact about your box — _check_auth reads BOX_ENV_FILE through _box_env_value and resolves the secret's path through _box_auth_path, all declared once in ccrc itself, and this check table was sourced by something that is not ccrc"
+      "this is a bug in ccrc, not a fact about your box — _check_auth reads BOX_ENV_FILE through _box_env_value and resolves the secret's and the session store's paths through _box_auth_path and _box_sessions_path, all declared once in ccrc itself, and this check table was sourced by something that is not ccrc"
     return 1
   fi
 
@@ -1010,8 +1011,27 @@ _check_auth() {
       # to a command that is about to refuse.
       local when="the moment CCRC_AUTH=on is set, the server will refuse to boot on it"
       [ "$armed" -eq 0 ] || when="with $gate the server REFUSES TO BOOT on it — readAuthSecret is called uncaught at startup"
+      # ── AND THE SESSION FILE IS RESOLVED, NOT ASSUMED (D-135) ────────────
+      # This clause used to be a hard-coded `rm -f ~/.ccrc/sessions.json`,
+      # printed in the same breath as a `$secret` that WAS resolved through
+      # `_box_auth_path` — D-130's own defect class, one key over. On a box
+      # setting `CCRC_SESSIONS_PATH` it told the operator to delete a file
+      # nothing reads, leaving the sessions the fresh generation-1 secret is
+      # about to revalidate exactly where they were.
+      local sess sess_rc sessvia="" rmclause
+      sess="$(_box_sessions_path)"; sess_rc=$?
+      rmclause="rm -f $sess"
+      case "$sess_rc" in
+        2) sessvia=" — CCRC_SESSIONS_PATH in $BOX_ENV_FILE redirects the session file there, so that is the one to delete" ;;
+        3) # No `rm` at all rather than a wrong one: relative, the server resolves
+           # it against systemd's working directory and this tool against the
+           # operator's, so nothing on this box can name the file. Saying so beats
+           # printing a path that deletes something else.
+           rmclause="rm -f <this box's session file>"
+           sessvia=" — CCRC_SESSIONS_PATH in $BOX_ENV_FILE is RELATIVE, so nothing here can say which file the session store is; make it absolute (or remove the line) and re-run doctor" ;;
+      esac
       _dr_fail auth "$secret$via exists and this box cannot use it (it does not parse as a scrypt secret line, or it cannot be read at all) — $when" \
-        "move it aside and set a fresh one: mv $secret $secret.broken && rm -f ~/.ccrc/sessions.json && ccrc passwd (ccrc passwd refuses to overwrite a file it cannot read)"
+        "move it aside and set a fresh one: mv $secret $secret.broken && $rmclause && ccrc passwd (ccrc passwd refuses to overwrite a file it cannot read; the fresh file restarts at generation 1, which is why the session store goes with it)$sessvia"
       return 1 ;;
     5)
       _dr_warn auth "$secret$via exists but could not be measured: this box has no server build, and the passphrase file is read by the server's own parser" \

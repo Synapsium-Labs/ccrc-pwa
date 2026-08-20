@@ -282,6 +282,29 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     login: (req: LoginRequest): Promise<void> => post('/api/auth/login', req),
 
     /**
+     * `POST /api/auth/logout` — end THIS session (D-132).
+     *
+     * It shipped with the server in Task 5 and had NO CALLER until now, which
+     * made "sign out" a thing the box could do and the operator could not ask
+     * for: the only routes back to a login screen were an empty cookie jar, a
+     * `ccrc passwd` rotation, or waiting out a 30-day TTL. `api.ts` deliberately
+     * shipped no `logout` at the time because nothing used it, and the gap was
+     * only visible from the outside — writing the runbook is what found it.
+     *
+     * GATED, unlike `login`: only a logged-in caller may end a session, so an
+     * already-dead session answers 401 and the funnel above raises the login
+     * screen anyway. Both outcomes put the operator in the same place, which is
+     * why the caller does not have to distinguish them.
+     *
+     * Resolves on 204. The `Set-Cookie` that expires the jar is the response —
+     * there is no body, and this client could not clear an `HttpOnly` cookie by
+     * hand if it wanted to. The LOCAL half (raising the signal so the login
+     * screen mounts and both socket ladders park) belongs to the caller:
+     * `lib/auth.ts`'s signal is a UI concern and this module is a wire client.
+     */
+    logout: (): Promise<void> => post('/api/auth/logout'),
+
+    /**
      * THE FOUR PASSKEY CEREMONIES (Task 8). Wire shapes only — the WebAuthn
      * ceremony itself lives in `lib/passkey.ts`, which is the one module that
      * touches `navigator.credentials` and the one place base64url is spoken.

@@ -46,7 +46,9 @@ import { toRunSummary, type CoordStore } from './coord/store.js';
 import { AuthSecretUnusable, readAuthSecret, verifyPassphrase, type AuthSecret } from './auth/secret.js';
 import { ABSOLUTE_TTL_MS, SessionStore } from './auth/sessions.js';
 import { LoginRateLimiter, PASSKEY_MAX_FAILURES } from './auth/ratelimit.js';
-import { SESSION_COOKIE, expireCookie, parseCookies, serializeCookie } from './auth/cookie.js';
+import {
+  SESSION_COOKIE, cookiePolicyProblem, expireCookie, parseCookies, serializeCookie,
+} from './auth/cookie.js';
 import { SECRET_UNREAD, installGate, measureSecret, sessionVerdict } from './auth/gate.js';
 import { PasskeyStore } from './auth/credentials.js';
 import {
@@ -366,6 +368,15 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         'ALSO be refused for any browser that is not at it. The passphrase login itself still ' +
         'works. Fix CCRC_RP_ID / CCRC_ORIGIN and redeploy.');
     }
+    // THE OTHER BOOT CHECK THAT IS ACTUALLY IMPLEMENTABLE (D-133). The one an
+    // operator asks for first — "is CCRC_ORIGIN really this box's name?" — is
+    // not, and `cookiePolicyProblem`'s docstring says why. This one compares two
+    // values stated by the same operator in the same file and fires only when
+    // they disagree with each other; the misconfiguration it catches otherwise
+    // has NO signal at all, because nothing fails: the login answers 204, the
+    // session row is written, and the browser silently discards the cookie.
+    const cookieProblem = cookiePolicyProblem(deps.cfg.origin, deps.cfg.cookieSecure);
+    if (cookieProblem !== null) console.warn(`ccrc-server: ${cookieProblem}`);
     await authStore.load();
     await passkeys.load();
     authStore.startSweep();

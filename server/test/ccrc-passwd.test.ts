@@ -786,9 +786,33 @@ describe('ccrc passwd', () => {
     const body = /cmd_passwd\(\)[\s\S]*?\n\}/.exec(src);
     expect(body, 'ccd/ccrc has no cmd_passwd').toBeTruthy();
     expect(body![0]).toContain('_box_auth_path');
-    expect(/_box_auth_path\(\) \{[\s\S]*?\n\}/.exec(src)?.[0]).toContain('BOX_AUTH_FILE');
+    // ONE RESOLVER, TWO CALLERS (D-135). The three-way rule (default / absolute
+    // override / relative refusal) is written once in `_box_path_for`, and each
+    // caller is a one-liner naming only its key and its default — so the
+    // secret's path and the session store's cannot come to hold different
+    // opinions about the same rule, which is what happened when the remedy
+    // resolved one and hard-coded the other. Pinned by exact content, the way
+    // the two lines above are.
+    expect(src).toContain('_box_auth_path()     { _box_path_for CCRC_AUTH_SECRET_PATH "$BOX_AUTH_FILE"; }');
+    expect(src).toContain('_box_sessions_path() { _box_path_for CCRC_SESSIONS_PATH "$BOX_SESSIONS_FILE"; }');
     const checks = readFileSync(join(REPO, 'ccd', 'ccrc-doctor-checks'), 'utf8');
     expect(/_check_auth\(\) \{[\s\S]*?\n\}/.exec(checks)?.[0]).toContain('_box_auth_path');
+  });
+
+  it('names ~/.ccrc/sessions.json exactly once too — the D-135 half', () => {
+    // The same D-88 shape for the second path, and the reason it needs its own
+    // guard: doctor's `auth` remedy NAMES the session file, and it named it as a
+    // literal while resolving the secret beside it through `_box_auth_path`. A
+    // literal anywhere but the declaration is how that comes back.
+    const code = (f: string): string[] =>
+      readFileSync(f, 'utf8').split('\n').filter((l) => !l.trim().startsWith('#'));
+    expect(code(CCRC_SRC).filter((l) => l.includes('.ccrc/sessions.json'))).toEqual([
+      'BOX_SESSIONS_FILE="$HOME/.ccrc/sessions.json"',
+    ]);
+    expect(code(join(REPO, 'ccd', 'ccrc-doctor-checks')).filter((l) => l.includes('.ccrc/sessions.json')))
+      .toEqual([]);
+    const checks = readFileSync(join(REPO, 'ccd', 'ccrc-doctor-checks'), 'utf8');
+    expect(/_check_auth\(\) \{[\s\S]*?\n\}/.exec(checks)?.[0]).toContain('_box_sessions_path');
   });
 
   it('the hasher ships in the tree both deploy lanes rsync', () => {

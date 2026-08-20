@@ -1526,9 +1526,47 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
     // it cannot read (it cannot read the generation either, and inventing one
     // revalidates sessions instead of expiring them). A bare `ccrc passwd` here
     // would send an operator to a command that is about to refuse.
+    // The session file is NAMED, absolutely, and resolved rather than assumed —
+    // see the override case below.
     expect(remedyFor(r.stdout, 'auth'))
-      .toMatch(/mv .*auth\.scrypt .*auth\.scrypt\.broken && rm -f ~\/\.ccrc\/sessions\.json && ccrc passwd/);
+      .toMatch(/mv .*auth\.scrypt .*auth\.scrypt\.broken && rm -f .*sessions\.json && ccrc passwd/);
+    expect(remedyFor(r.stdout, 'auth')).toContain(join(home, '.ccrc', 'sessions.json'));
     expect(r.code).toBe(1);
+  });
+
+  it('the remedy RESOLVES the session file, it does not hard-code it (D-135)', () => {
+    // D-130's defect class, one key over. This remedy resolved the SECRET
+    // through `_box_auth_path` and then printed a literal
+    // `rm -f ~/.ccrc/sessions.json` beside it — so on a box that redirects
+    // `CCRC_SESSIONS_PATH` it told the operator to delete a file nothing reads,
+    // leaving the sessions that the fresh generation-1 secret is about to
+    // REVALIDATE exactly where they were. Both paths now come from one
+    // parameterised resolver, so they cannot disagree.
+    const home = healthy('ccrc-doctor-auth-sessover-');
+    writeAuthSecret(home, 'PLANTED-SECRET-4c1a$b$c$d$e\n');
+    writeCcrcEnv(home, `${readFileSync(join(home, '.ccrc', 'ccrc.env'), 'utf8')
+      }CCRC_SESSIONS_PATH=/srv/ccrc/sessions.json\n`);
+    const remedy = remedyFor(runDoctor(home).stdout, 'auth');
+    expect(remedy).toContain('rm -f /srv/ccrc/sessions.json');
+    expect(remedy).not.toContain('.ccrc/sessions.json');
+    expect(remedy).toContain('CCRC_SESSIONS_PATH');
+  });
+
+  it('names NO session file at all when CCRC_SESSIONS_PATH is relative', () => {
+    // The `_box_auth_path` rule for a relative override, reached by the same
+    // code: the server resolves it against systemd's working directory and this
+    // tool against the operator's, so nothing on the box can say which file it
+    // is. A remedy that guessed would delete something else.
+    const home = healthy('ccrc-doctor-auth-sessrel-');
+    writeAuthSecret(home, 'PLANTED-SECRET-4c1a$b$c$d$e\n');
+    writeCcrcEnv(home, `${readFileSync(join(home, '.ccrc', 'ccrc.env'), 'utf8')
+      }CCRC_SESSIONS_PATH=sessions.json\n`);
+    const remedy = remedyFor(runDoctor(home).stdout, 'auth');
+    expect(remedy).toContain("rm -f <this box's session file>");
+    expect(remedy).toContain('RELATIVE');
+    // …and it must not have fallen back to the default, which is the mistake
+    // this arm exists to refuse.
+    expect(remedy).not.toContain(join(home, '.ccrc', 'sessions.json'));
   });
 
   it('FAILS on the same file with the gate OFF too — a boot refusal waiting to happen', () => {

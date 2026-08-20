@@ -12,7 +12,9 @@ import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildServer, type Deps } from '../src/server.js';
 import { loadConfig } from '../src/config.js';
-import { SESSION_COOKIE, expireCookie, parseCookies, serializeCookie } from '../src/auth/cookie.js';
+import {
+  SESSION_COOKIE, cookiePolicyProblem, expireCookie, parseCookies, serializeCookie,
+} from '../src/auth/cookie.js';
 import { ABSOLUTE_TTL_MS, SessionStore } from '../src/auth/sessions.js';
 import { MAX_FAILURES } from '../src/auth/ratelimit.js';
 import { AuthSecretUnusable, hashLine, readAuthSecret, type ScryptParams } from '../src/auth/secret.js';
@@ -690,5 +692,70 @@ describe('buildServer — an unusable secret refuses the boot without quoting it
     // to happen; the server has no business refusing over a file it never reads.
     const w = await openApp({ enabled: false, secretText: `${LEAKY[0][1]}\n` });
     await w.app.close();
+  });
+});
+
+// ── the cookie-policy boot warning (D-133) ──────────────────────────────
+
+describe('cookiePolicyProblem — the boot check that IS implementable', () => {
+  it('is silent on both CORRECT combinations', () => {
+    // D-126's rule, applied here: a warning every operator sees on every boot is
+    // one they learn to skim, and the warnings that matter lose by it. These two
+    // are the shipped-correct deployments.
+    expect(cookiePolicyProblem('https://server-box.tailnet-example.ts.net:8443', true)).toBeNull();
+    expect(cookiePolicyProblem('http://localhost:7788', false)).toBeNull();
+  });
+
+  it('warns on http + Secure — the failure with NO other signal anywhere', () => {
+    // The login answers 204, the session row is written, the server did
+    // everything right — and a browser that declines a Secure cookie from a
+    // plain-http origin drops it, so the operator watches a login succeed and
+    // the login screen come straight back with nothing logged, because nothing
+    // failed.
+    const problem = cookiePolicyProblem('http://localhost:7788', true);
+    expect(problem).not.toBeNull();
+    expect(problem).toContain('CCRC_COOKIE_INSECURE=on');
+    expect(problem).toContain('CCRC_ORIGIN');
+    // …and it names the symptom, because that is the only way an operator
+    // already looking at it will connect the two.
+    expect(problem).toMatch(/204/);
+  });
+
+  it('warns on https + the dev opt-out — the mirror, and a real downgrade', () => {
+    const problem = cookiePolicyProblem('https://server-box.tailnet-example.ts.net:8443', false);
+    expect(problem).not.toBeNull();
+    expect(problem).toContain('CCRC_COOKIE_INSECURE');
+    expect(problem).toContain('plain-http');
+  });
+
+  it('says NOTHING about an origin it cannot parse — that is originProblem\'s line', () => {
+    // One misconfiguration, one line. `webauthn.ts`'s `originProblem` already
+    // reports an unparseable CCRC_ORIGIN, and a second opinion about the same
+    // value from a function that could not read it is noise.
+    for (const bad of ['', 'not a url', 'localhost:7788', '://x']) {
+      expect(cookiePolicyProblem(bad, true), bad).toBeNull();
+      expect(cookiePolicyProblem(bad, false), bad).toBeNull();
+    }
+  });
+
+  it('the SERVER emits it at boot, on the armed path only', async () => {
+    // The default test config is `http://localhost:<port>` with `cookieSecure`
+    // forced false by `openApp`, so the warning arm is reached by asking for the
+    // shipped default instead.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const armed = await openApp({ cookieSecure: true });
+      try {
+        expect(warn.mock.calls.flat().join(' ')).toContain('CCRC_COOKIE_INSECURE=on');
+      } finally { await armed.app.close(); }
+
+      // DARK: the whole auth block is inside the flag, so a box that has not
+      // armed the gate is not warned about a cookie it never mints.
+      warn.mockClear();
+      const dark = await openApp({ enabled: false, secret: false, cookieSecure: true });
+      try {
+        expect(warn.mock.calls.flat().join(' ')).not.toContain('CCRC_COOKIE_INSECURE');
+      } finally { await dark.app.close(); }
+    } finally { warn.mockRestore(); }
   });
 });

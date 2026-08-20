@@ -274,11 +274,12 @@ CCRC_ORIGIN=http://localhost:7788
 
 **`localhost`, not `127.0.0.1`, and it matters here.** Step 8's `curl` used the loopback IP, which
 is fine for `curl`; for the browser half of this step you must reach the box at
-`http://localhost:7788/`. WebAuthn will not scope a credential to an IP address, and the server
-refuses an `rpId`/`origin` pair whose hostnames disagree — so `CCRC_ORIGIN=http://127.0.0.1:7788`
-with `CCRC_RP_ID=localhost` is refused at boot (a warning, passkeys 501, passphrase still working),
-and setting `CCRC_RP_ID=127.0.0.1` to "fix" it gets you a pair this server accepts and every browser
-rejects. Keep both on `localhost`.
+`http://localhost:7788/`. WebAuthn will not scope a credential to an IP address. Both wrong turns
+are now caught at boot, with passkeys 501 and the passphrase login still working:
+`CCRC_ORIGIN=http://127.0.0.1:7788` with `CCRC_RP_ID=localhost` is a disagreeing pair, and
+"fixing" it by setting `CCRC_RP_ID=127.0.0.1` is refused as an IP literal (D-134 — until this task
+that second one was accepted by the server and rejected by every browser, with nothing in the
+journal). Keep both on `localhost`.
 
 If your `CCRC_PORT` is not 7788, `CCRC_ORIGIN` must carry the port you actually set — the default
 origin is built from `CCRC_PORT`, but an explicit one is taken literally. No trailing slash, no path.
@@ -299,6 +300,10 @@ The gate is read at boot, so nothing above takes effect until this runs. Confirm
 - `ccrc-server: CCRC_AUTH=on but no passphrase file at …` — you armed the flag without step 10a.
   Every route answers 401 and no login can succeed. `ccrc passwd` fixes it with no restart (the gate
   re-reads the file per request).
+- `ccrc-server: CCRC_ORIGIN is plain http (…) and the session cookie is still marked Secure` — the
+  cookie warning (D-133). **On this localhost VM you WILL see this one**, and it is the point of
+  step 10d: see there for what to do. It is the only signal that failure has, which is why the
+  server now emits it.
 
 And one that means the unit did not start at all: `REFUSING TO BOOT — … exists and this process
 cannot use it`. That is a present-but-unusable `auth.scrypt`; the remedy is in 10f. The message names
@@ -333,24 +338,18 @@ Load `http://localhost:7788/` in a browser. Expect a full-screen login asking fo
 with the sentence *"Sign in to reach this box."* Enter the passphrase from step 10a. You should land
 on the board from step 8.
 
-**If the login POST succeeds and the login screen comes straight back**, the browser did not store
-the cookie, and on this box the reason is almost certainly `Secure`. The session cookie carries
-`HttpOnly`, `SameSite=Lax`, `Path=/` and — by default, on every box — `Secure`, and that flag comes
-from CONFIG, never from the request scheme (`tailscale serve` speaks https to the browser and plain
-http to this process, so a scheme-derived flag would drop `Secure` on exactly the deployment that
-needs it most). This VM is being reached over plain `http://localhost`, and whether a browser accepts
-a `Secure` cookie from a plain-http localhost origin is a per-browser policy decision, not something
-this box controls. If yours refuses it:
+**If the login POST succeeds and the login screen comes straight back**, the browser declined to
+store the cookie because it is marked `Secure` and this VM is plain http — the boot warning in 10c
+predicted exactly this. Add:
 
 ```
 CCRC_COOKIE_INSECURE=on
 ```
 
-…in the same `~/.ccrc/ccrc.env`, then restart. **This is a localhost-development opt-out and belongs
-nowhere else** — leave it unset on any box reached over TLS. It has the inverse polarity to
-`CCRC_AUTH`: only the exact string `on` drops `Secure`, and anything else keeps it, because a
-mistyped opt-out costs a developer a confusing session while a mistyped opt-IN would ship a session
-cookie over plaintext.
+…to the same `~/.ccrc/ccrc.env`, restart, and the warning goes with the symptom. **This is a
+localhost-development opt-out and belongs nowhere else** — on any box reached over TLS, leaving it
+set earns the mirror-image warning, because a `Secure`-less cookie there travels over any plain-http
+request to the same host.
 
 Sessions last 30 days absolute, 4 days idle.
 
@@ -361,16 +360,16 @@ box — the passphrase is the only way in."* and offers **"Add a passkey on this
 browser can run the enrolment ceremony. Tap it, complete the platform prompt, and expect
 *"Passkey added. It can sign you in from now on."*
 
-Then open a **private/incognito window** at `http://localhost:7788/` and expect the login screen to
-now offer **"Sign in with a passkey"** above the passphrase field. Complete the ceremony and expect to
-land on the board without typing the passphrase. That round trip — enrol, come back with an empty
-cookie jar, sign in with the key — is the whole passkey proof.
+Then, on the same screen, tap **Sign out** (under **This session**) and expect the login screen —
+now offering **"Sign in with a passkey"** above the passphrase field. Complete the ceremony and
+expect to land on the board without typing the passphrase. That round trip — enrol, sign out, sign
+back in with the key — is the whole passkey proof.
 
-**A private window, and not a "sign out" button, because there is no sign-out control in the PWA.**
-`POST /api/auth/logout` exists on the server and is gated, but nothing in the client calls it, so the
-only ways back to the login screen today are an empty cookie jar (a private window, or clearing the
-cookie in devtools), a `ccrc passwd` rotation, or waiting out the TTL. Note that in your run notes —
-it is a real gap in the operator surface, not a quirk of this procedure.
+**Sign out ends this browser's session only.** Other devices stay signed in and enrolled passkeys
+are untouched; it is `revokeThis`, not `revokeAll`. To end every session at once, rotate the
+passphrase (10f). And note what it does NOT do: signing out does not un-enrol the key you just
+added, which is exactly why the lost-device procedure below starts with Revoke and not with this
+button.
 
 Enrolling requires being signed in already; that is the load-bearing exemption decision behind the
 whole design, not an inconvenience. Revocation is in the same place: each enrolled key gets a
@@ -380,6 +379,11 @@ whole design, not an inconvenience. Revocation is in the same place: each enroll
 
 These are the procedures a real incident needs, and the only cheap time to run them is on a box you
 are about to destroy.
+
+**Ending your own session.** Accounts → **This session** → **Sign out**. It revokes this session
+server-side and returns you to the login screen; other devices are unaffected. (An empty cookie jar
+— a private window, or clearing the cookie in devtools — gets you to the same screen without
+revoking anything, which is the difference worth knowing on a shared machine.)
 
 **Lost or stolen device.** `ccrc passwd` invalidates **sessions, not passkeys** — a rotation bumps the
 generation, every logged-in browser is expired at once with no restart, and every enrolled
