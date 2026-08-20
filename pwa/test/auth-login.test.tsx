@@ -173,11 +173,27 @@ describe('the AuthVerdict → sentence map', () => {
     });
   }
 
-  it('tells an unconfigured box to run `ccrc passwd`, never "try again"', () => {
-    // The plan's own words: nothing the operator types will EVER match, so a
-    // retry sentence is a lie that costs them the afternoon.
-    expect(VERDICT_TEXT.unconfigured).toContain('ccrc passwd');
+  it('tells an unconfigured box to run `ccrc doctor`, never "try again" and never `ccrc passwd`', () => {
+    // Half of this is the plan's own words: nothing the operator types will EVER
+    // match, so a retry sentence is a lie that costs them the afternoon.
     expect(VERDICT_TEXT.unconfigured).not.toMatch(/try again/i);
+
+    // The other half is D-138. `'unconfigured'` covers TWO box states — the
+    // secret file is ABSENT, or PRESENT AND UNUSABLE — collapsed on the wire on
+    // purpose (`AuthVerdict` has no member for the second, and publishing one
+    // would tell an anonymous caller which box is unenterable-but-open). The old
+    // sentence, `No passphrase is set on this box — run ccrc passwd`, was true
+    // of only the first: in the second a passphrase IS set, and `ccrc passwd`
+    // REFUSES to overwrite a file it cannot read (D-125). It ended correctly
+    // after two hops and was never a lockout — but Task 7's sentence and Task
+    // 9's refusal disagreed across the seam.
+    expect(VERDICT_TEXT.unconfigured).not.toContain('ccrc passwd');
+    expect(VERDICT_TEXT.unconfigured).toContain('ccrc doctor');
+    // …and it must not assert the thing that is false in one of the two states.
+    expect(VERDICT_TEXT.unconfigured).not.toMatch(/no passphrase is set/i);
+    // It must also not leak WHICH state this box is in — the whole reason the
+    // wire collapses them.
+    expect(VERDICT_TEXT.unconfigured).not.toMatch(/unreadable|corrupt|absent|missing/i);
   });
 
   it('answers `locked-out` with a clock and `wrong` with a keyboard', () => {

@@ -269,9 +269,22 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // built even when the gate is dark so the four routes can be REGISTERED
   // unconditionally — a route that exists only under a flag is a route the
   // gate sweep cannot measure in both flag positions, which is the property
-  // `auth-gate.test.ts` rests on. Nothing is READ off it while dark: the
-  // routes 501 before they touch it, and `load()` is only called when armed,
-  // so a dark box still touches no disk.
+  // `auth-gate.test.ts` rests on.
+  //
+  // WHAT IS TRUE WHILE DARK is "no disk", NOT "nothing is read" — this comment
+  // claimed the stronger thing and was wrong (whole-branch review). The four
+  // ceremony routes do 501 before they touch it, but `GET /api/auth/status` is
+  // EXEMPT and calls `passkeys.count()` on every request including a dark one.
+  // Harmless, and harmless for a structural reason worth stating rather than
+  // rediscovering: `load()` is only called when armed, so on a dark box that
+  // count reads an empty in-memory array and answers `0` without opening
+  // anything. The no-disk property the sweep pins genuinely holds; the sentence
+  // that used to describe it did not.
+  //
+  // `0` is also the RIGHT answer for that route to give while dark, not a
+  // convenient one — see the `passkeysEnrolled` docstring on the status handler:
+  // with the gate off there is no login screen to draw a passkey button on, and
+  // `mode: 'off'` has already told the PWA to do nothing.
   const passkeys = new PasskeyStore(deps.cfg.passkeysPath);
   // TWO challenge stores, not one. A challenge issued to enrol a key must never
   // satisfy a login — `webauthn.ts`'s `ChallengeStore` docstring has the

@@ -577,6 +577,33 @@ _box_sessions_path() { _box_path_for CCRC_SESSIONS_PATH "$BOX_SESSIONS_FILE"; }
 #   6 -> it answered an HTTP error;      BOX_HEALTH_WHY = "HTTP <code>"
 #   7 -> what came back is not the health JSON
 #   8 -> node is not on PATH, so nothing could parse the answer
+#   9 -> THE SESSION GATE REFUSED IT (D-137). Its own code, split out of 6.
+#
+# ── WHY 9 EXISTS (D-137) ─────────────────────────────────────────────────
+# `/api/fleet/health` is GATED, deliberately and after review: it publishes
+# roster digests, build stamps and divergence, and exempting a route that says
+# that much to widen a diagnostic's reach is a worse trade than losing the
+# diagnostic. So on a box with `CCRC_AUTH=on` this call answers 401 — which is
+# CORRECT BEHAVIOUR BY BOTH PARTIES and used to land in code 6, whose callers
+# say "it answered HTTP 401 … read the server's own log". That sends an
+# operator to a journal where nothing is wrong, on exactly the box the runbook
+# tells them to run doctor on right after arming the gate.
+#
+# The distinction is real and the callers act on it differently, which is the
+# whole test for a separate code here: 6 means something is wrong at the other
+# end, 9 means nothing is wrong and this measurement is simply not available
+# from outside the gate.
+#
+# CLASSIFIED FROM THE BODY, AND STILL NOTHING FROM THE BODY IS PRINTED (see
+# below). A bare 401 is not enough: a reverse proxy or a captive portal in
+# front of this address answers 401 too, and telling that operator "your
+# session gate refused it" would be the same class of wrong answer this code
+# exists to stop. The test is for THIS server's refusal envelope — the
+# `error: 'unauthenticated'` + `verdict` pair `server/src/auth/gate.ts` sends
+# and nothing else does. Matched with bash's own `=~`, not node: this arm has
+# to work on a degraded box, and the 200 path already reports code 8 when node
+# is missing precisely because it could not avoid it. Whitespace-tolerant so
+# it is a claim about the JSON rather than about one serializer's spacing.
 #
 # NOTHING FROM THE BODY IS EVER PRINTED. The four fields are CLASSIFIED against
 # the vocabulary `shared/api.ts` declares and only ever surface as one of those
@@ -625,6 +652,15 @@ _box_health() {
     # when asked for /api/fleet/health"). It used to carry either a number or
     # the words "an unreadable status", which produced "answered HTTP an
     # unreadable status" — dead text nobody had read aloud (round-2 review).
+    if [ "$code" = 401 ] \
+       && [[ "$body" =~ \"error\"[[:space:]]*:[[:space:]]*\"unauthenticated\" ]] \
+       && [[ "$body" =~ \"verdict\"[[:space:]]*:[[:space:]]*\" ]]; then
+      # WHY stays EMPTY: the callers' arm-9 sentences are self-contained, and a
+      # leftover "HTTP 401" sitting in this variable is one copy-paste away from
+      # reappearing in the very message this code exists to replace.
+      BOX_HEALTH_WHY=""
+      return 9
+    fi
     case "$code" in
       [0-9][0-9][0-9]) BOX_HEALTH_WHY="HTTP $code" ;;
       *) BOX_HEALTH_WHY="a status this check could not read" ;;
@@ -830,6 +866,11 @@ cmd_status() {
     6) printf 'fleet:     not measured (the server answered %s when asked for /api/fleet/health)\n' "$BOX_HEALTH_WHY"; return 0 ;;
     7) printf 'fleet:     not measured (the server answered something that is not the health JSON)\n'; return 0 ;;
     8) printf 'fleet:     not measured (node is not on PATH, so the answer could not be parsed)\n'; return 0 ;;
+    # D-137. Not a fault, and it must not read as one: the gate is armed and
+    # /api/fleet/health is behind it, so this measurement is unavailable from
+    # outside the gate BY DESIGN. `services:` and the doctor's `auth` check
+    # above still say everything else about this box.
+    9) printf 'fleet:     not measured (this box'"'"'s session gate is armed, and /api/fleet/health is behind it — expected on an armed box, not a fault)\n'; return 0 ;;
   esac
 
   local mode="${BOX_HEALTH[0]}" connected="${BOX_HEALTH[1]}"

@@ -325,7 +325,26 @@ the unit did not pick up the edit — check the file path (`~/.ccrc/ccrc.env`, w
 `ccrc.service` reads as `EnvironmentFile=-%h/.ccrc/ccrc.env`) and that the value is the exact string
 `on`; `1`, `true`, `yes` and `ON` are all OFF, deliberately.
 
-Re-run `ccrc doctor` and expect the `auth` line to have changed tense:
+Re-run `ccrc doctor`. **Expect the `fleet` line to become a SKIP**, and expect that rather than
+reading it as a fault:
+
+```
+SKIP fleet: the server at 127.0.0.1:7788 refused this check because its session gate is ARMED and
+/api/fleet/health is behind it (see the 'auth' check) — nothing is wrong at either end, but the two
+boxes cannot be compared from outside the gate, so build skew and roster divergence are NOT being
+measured on this box; compare by hand with 'ccrc version' on each
+```
+
+That route is gated on purpose — it publishes roster digests, build stamps and divergence — and
+`ccrc doctor` carries no session cookie, so an armed box refuses it and both parties are behaving
+correctly. **The cost is real and is not cosmetic:** doctor stops reporting build skew and roster
+divergence on an armed box, so its silence there is not evidence that the two boxes agree. On the
+reference two-box fleet, compare `ccrc version` on each box by hand after a deploy. On this
+single-box VM there is no second box, so nothing is lost. (This runs in local mode anyway; the SKIP
+above is what you would see on a remote-mode box, and on this one the check may skip for the
+local-mode reason instead.)
+
+Then expect the `auth` line to have changed tense:
 
 ```
 PASS auth: CCRC_AUTH=on in /home/<you>/.ccrc/ccrc.env, and /home/<you>/.ccrc/auth.scrypt holds a

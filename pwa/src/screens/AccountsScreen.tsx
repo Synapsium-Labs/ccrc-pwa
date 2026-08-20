@@ -423,10 +423,20 @@ function AuthSection(): ReactNode {
           <div className="accounts-row-head">
             <span className="account-gauge-label" id="passkeys-title">Passkeys</span>
           </div>
+          {/* THE PATH IS HEDGED, NOT ASSERTED (D-140). `CCRC_PASSKEYS_PATH` can
+              redirect this file, and a BROWSER is the one surface in this tree
+              that genuinely cannot resolve it — there is no route that
+              publishes it, and adding one would publish a filesystem path to an
+              anonymous-adjacent screen for the sake of a sentence. So it names
+              the default and says what overrides it, exactly as
+              `deploy/gen-auth-hash.mjs` hedges the session file it likewise
+              cannot resolve. The alternative — dropping the path — would leave
+              an operator with "fix the permissions" and no file to fix. */}
           <p className="accounts-fresh">
             This box&rsquo;s passkey file exists but cannot be read, so no passkey can sign in and
             enrolling is refused &mdash; adding one would overwrite the keys that are already there.
-            Fix the permissions on <code>~/.ccrc/passkeys.json</code> and restart the server.
+            Fix the permissions on <code>~/.ccrc/passkeys.json</code> (or wherever
+            <code> CCRC_PASSKEYS_PATH</code> points on this box) and restart the server.
           </p>
         </section>
         {sessionBlock}

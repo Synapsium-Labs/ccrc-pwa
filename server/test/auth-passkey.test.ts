@@ -2347,14 +2347,19 @@ describe('GET /api/runs takes EITHER credential, and never neither', () => {
       // to spare a diagnostic would widen the tailnet surface for convenience.
       //
       // ON AN ARMED BOX IT IS DEGRADED, NOT WEDGED, and that is the difference
-      // from D-136: doctor prints `fleet: not measured (the server answered
-      // HTTP 401 …)` NEXT TO its own `auth` check reporting the gate is armed,
-      // so a human reading two adjacent lines can connect them. The coordinator
-      // case had no human and no second line. Recommended follow-up for the
-      // `ccd/ccrc` owner: name the gate in that message rather than the bare
-      // code. NOT fixed here, because it is Task 9's file and an exemption is
-      // the wrong fix.
-      '/api/fleet/health': 'ccrc doctor — gated on purpose; degraded but self-describing (see above)',
+      // from D-136: doctor prints its line NEXT TO its own `auth` check
+      // reporting the gate is armed, so a human reading two adjacent lines can
+      // connect them. The coordinator case had no human and no second line.
+      //
+      // THE FOLLOW-UP THIS COMMENT ASKED FOR IS DONE (D-137). It used to read
+      // `fleet: not measured (the server answered HTTP 401 …)` with a remedy of
+      // "read the server's own log", which sent an operator to a journal where
+      // nothing was wrong. `_box_health` now classifies this server's own
+      // refusal envelope as its own code and both callers name the gate; doctor
+      // SKIPs rather than WARNs, and says out loud that build skew and roster
+      // divergence are consequently not being measured. Pinned in
+      // `ccrc-doctor.test.ts`. Still no exemption — that remains the wrong fix.
+      '/api/fleet/health': 'ccrc doctor — gated on purpose; degraded, and D-137 made it say so',
     };
     const unaccounted = [...called]
       .filter((p2) => !ACCOUNTED[p2])

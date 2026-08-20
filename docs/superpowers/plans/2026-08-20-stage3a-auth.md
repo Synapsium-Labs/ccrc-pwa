@@ -123,7 +123,7 @@
 
 ## Deviations found
 
-(Next free number at plan time: **D-108**. Next free now: **D-137**. D-123 is
+(Next free number at plan time: **D-108**. Next free now: **D-141**. D-123 is
 claimed by `server/src/auth/credentials.ts` from Task 8 and has no ledger entry here.)
 
 - **D-115 — the Origin check stopped at the socket, leaving CSRF open.** Task 8 added a
@@ -357,6 +357,55 @@ claimed by `server/src/auth/credentials.ts` from Task 8 and has no ledger entry 
   message naming the gate rather than the bare code; the sweep test carries that ruling so a new
   unexempt `curl` fails instead of joining a tolerated set.
 
+- **D-137 — the doctor's one network call read a CORRECT refusal as a fault.** `ccrc`'s only HTTP
+  request is `GET /api/fleet/health`, which is GATED — deliberately, and re-affirmed at whole-branch
+  review: that route publishes roster digests, build stamps and divergence, and exempting it to
+  spare a diagnostic would widen the tailnet surface for convenience. So an armed box answers 401,
+  which is both parties behaving correctly — and `_box_health` folded it into its generic HTTP-error
+  code, whose callers say *"answered HTTP 401 … read the server's own log"* and *"fleet: not measured
+  (the server answered HTTP 401 …)"*. That sends an operator to a journal where nothing is wrong, on
+  exactly the box the runbook tells them to run doctor on immediately after arming, and
+  `ccrc.env.example` ships `CCRC_HOST`/`CCRC_PORT` populated so every example-derived box reaches it.
+  Fixed as a MESSAGE change, never a routing one: a new `_box_health` code 9 for THIS server's own
+  refusal envelope (`error: 'unauthenticated'` plus a `verdict` — a bare 401 is not enough, since a
+  reverse proxy answers 401 too and telling that operator "your session gate refused it" is the same
+  class of wrong answer). Matched with bash's own `=~` rather than node, because this arm has to work
+  on a degraded box; nothing from the body is printed, as ever. Doctor SKIPs rather than WARNs — a
+  WARN owes a remedy and the only honest one would be "turn the gate off", and a yellow line every
+  armed box shows on every run is D-126's lesson exactly. **The cost is stated in the line rather
+  than glossed:** build skew and roster divergence are NOT measured on an armed box, so silence there
+  is not evidence of agreement, and the message says to compare with `ccrc version` by hand. What
+  makes that acceptable — and D-136 not — is that doctor is DEGRADED, not wedged, and prints this
+  line beside its own `auth` check reporting the gate is armed: a human reading two adjacent lines
+  can connect them. The coordinator had no human and no second line.
+- **D-138 — `'unconfigured'`'s sentence was false in one of the two states it covers.**
+  `LoginScreen` rendered *"No passphrase is set on this box — run `ccrc passwd`"*, and that verdict is
+  ALSO what a present-but-unusable secret produces at request time (the collapse is a stated wire
+  limit: `AuthVerdict` has no "present but unreadable" member, and publishing one would tell an
+  anonymous caller which boxes are unenterable-but-open). In that state the sentence is false twice
+  — a passphrase IS set, and `ccrc passwd` will REFUSE (D-125) and print the real
+  `mv … && rm … && ccrc passwd`. Never a lockout: it ends correctly after two hops. But Task 7's
+  sentence and Task 9's refusal disagreed across the seam. Now it points at `ccrc doctor`, the one
+  command that is correct in BOTH states, and asserts nothing that is false in either — and still
+  leaks neither, which is what kept the wire collapse worth having.
+- **D-139 — a config refusal rendered as a network failure.** With passkeys enrolled and `CCRC_RP_ID`
+  later broken, the login screen still offers the passkey button (it keys off `passkeysEnrolled > 0`,
+  and the credential store loads regardless of the RP check). `assert/start` then answers a BARE 501
+  carrying no `verdict`, `verdictOf` returns null, and the catch fell through to *"Couldn't reach the
+  box — check the connection"* — pointing at the one thing that is fine, while the server's journal
+  held the answer. A fourth failure kind now, caught by STATUS before the null-verdict arm claims it:
+  the box cannot run the ceremony, its WebAuthn config is refused, use the passphrase. The button's
+  own visibility is left alone deliberately — hiding it would need `AuthStatus` to publish passkey
+  AVAILABILITY as distinct from enrolment, a wire change for a case whose sentence is now correct.
+- **D-140 — the unreadable-store sentence hard-codes `~/.ccrc/passkeys.json`, and that is a decision.**
+  `CCRC_PASSKEYS_PATH` can redirect the file — the D-130/D-135 class one file over — but a BROWSER is
+  the one surface in this tree that genuinely cannot resolve it: no route publishes the path, and
+  adding one would put a filesystem path on a near-anonymous screen for the sake of a sentence. So it
+  is HEDGED rather than resolved or dropped, the same shape `gen-auth-hash.mjs` uses for the session
+  file it likewise cannot resolve: it names the default AND the key that overrides it. Dropping the
+  path instead would leave an operator with "fix the permissions" and no file to fix. Recorded here
+  so it reads as a decision rather than an oversight.
+
 **Recorded, deliberately unchanged:** the `signCount` both-zero carve-out. Most Apple/Android
 platform passkeys and every synced credential always send 0; accepting them forfeits nothing,
 because clone detection was never available for a key that lives in several places by design.
@@ -388,7 +437,7 @@ lost. None is a bypass or a fail-open; each is a real seam somebody will meet.
 
 - **`gate.ts:315` measures the secret BEFORE the exempt check** — so an exempt request on an armed box still pays one `readFileSync`. Fail-SAFE as-is (the ternary is a cost gate, not a decision gate: not measuring yields `'unread'`, which denies), so it is a cost, not a hole. Reordering would be an optimisation with a security-relevant ordering change in it.
 - **`gate.ts:127`'s `GET /*` exempts every UNMATCHED GET on a box with a built `dist-pwa/`** — so an unmatched `/api/...` GET answers 404 rather than 401 there, while on an API-only box (no static plugin, no `/*` route) the same url is gated. It leaks the existence of a route table that is public in this repo anyway; noted so nobody later reads the 404 as a gate failure.
-- **`server.ts:310`'s cookie `Max-Age` derives from `ABSOLUTE_TTL_MS` (30d) while `IDLE_TTL_MS` is 4d** — so an idle lapse is a cookie the browser still holds against a row the sweep has deleted, which answers `'no-session'` (a cold login screen) rather than `'expired'` ("you were signed out"). The PWA's side of that distinction is correct and unreachable in this case; the box is what conflates them. D-114 fixed the *unmatched-token* half of this; the idle half is the residue.
+- **`server.ts`'s cookie `Max-Age` derives from `ABSOLUTE_TTL_MS` (30d) while `IDLE_TTL_MS` is 4d** — so a browser can hold a cookie for up to ~26 days after the row behind it has been swept. **CORRECTED at close-out (whole-branch review).** This entry used to claim the idle lapse still answers `'no-session'`, and that D-114 fixed "only the unmatched-token half" — the shipped code disagrees, and a ledger that overstates what shipped is itself a finding. `sessionVerdict` maps EVERY presented-but-unmatched cookie to `'expired'` (`gate.ts`'s D-114 arm), sweep-deleted idle rows INCLUDED, because a swept row is exactly an unmatched hash; the expire-cookie guard therefore fires and sheds it (pinned in `auth-gate.test.ts`). The only `'no-session'` answers left are literally-no-cookie. **The true residue is cosmetic:** the jar outlives the idle TTL until the browser next presents the cookie, and that first presentation is what shreds it. Nobody is shown a wrong sentence, and there is no code change owed.
 - **`expireCookie` sweeping lives only in the gate** — an expired cookie presented to the EXEMPT status route is not swept.
 - **`GET /api/auth/status` does a second `readFileSync` per anonymous request on an armed box** — the gate already does one, so this doubles rather than introduces.
 
@@ -403,6 +452,14 @@ lost. None is a bypass or a fail-open; each is a real seam somebody will meet.
 
 - **Stale `auth.scrypt.tmp.*` files are never reaped, and the doctor does not report them** — the writer unlinks its own temp on every failure path it can see, but a crash between `writeFileSync` and `renameSync` leaves one behind. 0600 and randomly suffixed, so it is litter rather than a leak, and litter beside a credential is still litter nobody is looking for.
 - **The 12-character passphrase floor lives in bash only, deliberately** — `gen-auth-hash.mjs` validates FORMAT, `ccrc passwd` owns POLICY, and a second copy of the number is exactly the drift `single-definition.test.ts` fails builds over. Recorded so the asymmetry reads as a decision.
+
+*Found by the whole-branch review, all FIXED:* **D-137** (the doctor read a correct 401 as a fault),
+**D-138** and **D-139** (two login-screen sentences that are false in a reachable state), **D-140**
+(the hedged passkey path, recorded as a decision). The review also corrected two ledger claims: the
+Max-Age entry above, and `server.ts`'s "nothing is READ off it while dark" comment, which was the
+stronger claim — the exempt status route reads `passkeys.count()` on a dark box, harmlessly, off an
+unloaded in-memory array. **A ledger that overstates what shipped is itself a finding**, so both were
+fixed in place rather than left to be rediscovered.
 
 *Found while writing the documentation (Task 10) — all four FIXED, not deferred:*
 

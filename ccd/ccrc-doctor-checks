@@ -1934,6 +1934,31 @@ _check_fleet() {
       _dr_warn fleet "node is not on PATH, so the server's answer could not be parsed" \
         "install Node first — see the 'node' check above"
       return 2 ;;
+    9)
+      # ── A SKIP, NOT A WARN, AND NOT THE OLD "read the server's log" (D-137) ──
+      # This is the one non-200 that means NOTHING IS WRONG. `/api/fleet/health`
+      # is gated on purpose (it publishes roster digests, build stamps and
+      # divergence), so an armed box refusing an unauthenticated diagnostic is
+      # both parties behaving correctly. Under code 6 this printed
+      # "answered HTTP 401 … read the server's own log", which sends an operator
+      # to a journal where there is nothing to find — on exactly the box the
+      # runbook tells them to run doctor on immediately after arming the gate.
+      #
+      # WARN is wrong for it twice over: this doctor's rule is that a WARN owes a
+      # REMEDY, and the only honest remedy here would be "turn the gate off",
+      # which is not advice. And a yellow line every armed box shows on every run
+      # is D-126's lesson exactly — the warnings that matter lose to the one
+      # everybody learns to skim.
+      #
+      # THE COST IS REAL AND IS STATED, not glossed: on an armed box this check
+      # no longer reports build skew or roster divergence, so its silence is not
+      # evidence of agreement. What makes that affordable is that doctor is
+      # DEGRADED, not wedged — it prints this line beside its own `auth` check
+      # saying the gate is armed, and a human reading two adjacent lines can put
+      # them together. (`ccrc version` on each box still compares the shas by
+      # hand, which is why the sentence names it.)
+      _dr_skip fleet "the server at $addr refused this check because its session gate is ARMED and /api/fleet/health is behind it (see the 'auth' check) — nothing is wrong at either end, but the two boxes cannot be compared from outside the gate, so build skew and roster divergence are NOT being measured on this box; compare by hand with 'ccrc version' on each"
+      return 3 ;;
   esac
 
   local mode="${BOX_HEALTH[0]}" connected="${BOX_HEALTH[1]}"

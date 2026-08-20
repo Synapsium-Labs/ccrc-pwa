@@ -18,7 +18,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { COSE_ES256 } from '../../shared/api';
-import { LoginScreen, VERDICT_TEXT } from '../src/components/LoginScreen';
+import { LoginScreen, UNREACHABLE_TEXT, VERDICT_TEXT } from '../src/components/LoginScreen';
 import { AccountsScreen } from '../src/screens/AccountsScreen';
 import { ApiError } from '../src/lib/api';
 import { authLost, clearAuthLost, isAuthLost, raiseAuthLost } from '../src/lib/auth';
@@ -411,6 +411,46 @@ describe('the passkey button on the login screen', () => {
     expect(isAuthLost()).toBe(true);
   });
 
+  it('a 501 says the BOX cannot run the ceremony — never "couldn\'t reach the box" (D-139)', async () => {
+    // THE REACHABLE STATE: keys are enrolled, then `CCRC_RP_ID` is broken (a
+    // rename, a copied env file). The button is STILL offered — it keys off
+    // `passkeysEnrolled > 0`, and the credential store loads regardless of the
+    // RP check — so the operator taps it, `assert/start` answers a BARE 501
+    // carrying no `verdict`, `verdictOf` returns null, and the screen used to
+    // fall through to the NETWORK sentence. A config refusal rendered as a
+    // connection problem points at the one thing that is fine.
+    supportBrowser();
+    vi.stubGlobal('fetch', statusFetch({ authed: false, passkeysEnrolled: 1, mode: 'passphrase' },
+      () => json(501, { ok: false, error: 'not-configured' })));
+    raiseAuthLost('no-session');
+    render(<LoginScreen />);
+    const btn = await screen.findByRole('button', { name: PASSKEY_BUTTON });
+    await act(async () => { fireEvent.click(btn); });
+
+    expect(await screen.findByText(/cannot run a passkey sign-in/i)).toBeInTheDocument();
+    expect(screen.queryByText(UNREACHABLE_TEXT)).not.toBeInTheDocument();
+    // It names what an operator can act on, and sends them to the log that has
+    // the specifics rather than guessing which of the two keys is wrong.
+    expect(screen.getByText(/CCRC_RP_ID/)).toBeInTheDocument();
+    // The passphrase field is still the way in, and the sentence says so.
+    expect(screen.getByText(/cannot run a passkey sign-in/i).textContent)
+      .toMatch(/sign in with the passphrase/i);
+    expect(isAuthLost()).toBe(true);
+  });
+
+  it('a genuinely unreachable box still says SO — the 501 arm did not eat it', async () => {
+    // The boundary D-139's arm must not cross: no response at all is still a
+    // network problem, and it keeps the network sentence.
+    supportBrowser();
+    vi.stubGlobal('fetch', statusFetch({ authed: false, passkeysEnrolled: 1, mode: 'passphrase' },
+      () => { throw new TypeError('Failed to fetch'); }));
+    raiseAuthLost('no-session');
+    render(<LoginScreen />);
+    const btn = await screen.findByRole('button', { name: PASSKEY_BUTTON });
+    await act(async () => { fireEvent.click(btn); });
+    expect(await screen.findByText(UNREACHABLE_TEXT)).toBeInTheDocument();
+  });
+
   it('a REFUSED assertion reuses the `wrong` sentence — the server sends one answer for all', async () => {
     supportBrowser();
     const fetchImpl = vi.fn(async (url: unknown, _init?: RequestInit) => {
@@ -511,10 +551,20 @@ describe('PasskeySection', () => {
       list: listBody({ storeUnreadable: true }),
     }));
     render(<AccountsScreen />);
-    expect(await screen.findByText(/cannot be read/i)).toBeInTheDocument();
+    const said = await screen.findByText(/cannot be read/i);
+    expect(said).toBeInTheDocument();
     expect(screen.queryByText(/No passkey is enrolled/i)).not.toBeInTheDocument();
     // …and there is no way to enrol from here at all.
     expect(screen.queryByRole('button', { name: /add a passkey/i })).not.toBeInTheDocument();
+    // D-140: the path is HEDGED, not asserted. `CCRC_PASSKEYS_PATH` can redirect
+    // this file and a browser is the one surface here that genuinely cannot
+    // resolve it — no route publishes it, and adding one would put a filesystem
+    // path on a screen for the sake of a sentence. So it names the default AND
+    // the key that overrides it, the same hedge `gen-auth-hash.mjs` uses for the
+    // session file it likewise cannot resolve. Dropping the path instead would
+    // leave "fix the permissions" with no file to fix.
+    expect(said.textContent).toContain('~/.ccrc/passkeys.json');
+    expect(said.textContent).toContain('CCRC_PASSKEYS_PATH');
   });
 
   it('renders NOTHING on a dark box', async () => {

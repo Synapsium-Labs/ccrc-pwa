@@ -37,9 +37,18 @@ import { PasskeyCeremonyError, assertPasskey, passkeyLoginSupported } from '../l
  *
  * Each sentence names a DIFFERENT thing to do, because each verdict is a
  * different thing that happened:
- *   - `unconfigured` says `ccrc passwd` and never "try again": nothing the
- *     operator types can EVER match a box with no secret, and a retry sentence
- *     there is a lie that costs them the afternoon.
+ *   - `unconfigured` never says "try again": nothing the operator types can EVER
+ *     match, and a retry sentence there is a lie that costs them the afternoon.
+ *     It also does not say `ccrc passwd`, and that is D-138. This verdict covers
+ *     TWO box states — the secret file is ABSENT, or it is PRESENT AND UNUSABLE
+ *     — collapsed on the wire deliberately (`AuthVerdict` has no "present but
+ *     unreadable" member, and publishing one would tell an anonymous caller
+ *     which). The old sentence was true of only the first: on the second a
+ *     passphrase IS set, and `ccrc passwd` REFUSES to overwrite a file it cannot
+ *     read (D-125), printing the real `mv … && rm … && ccrc passwd` remedy. So
+ *     it points at the one command that is correct in BOTH states and leaks
+ *     neither: `ccrc doctor`, whose `auth` check measures the file and prints
+ *     the fix the box actually needs.
  *   - `locked-out` is a clock, not a keyboard.
  *   - `expired` says they WERE signed in — the distinction `no-session` exists
  *     to be separate from, so a phone that slept through its TTL is not shown a
@@ -51,7 +60,7 @@ import { PasskeyCeremonyError, assertPasskey, passkeyLoginSupported } from '../l
 export const VERDICT_TEXT: Record<AuthVerdict, string> = {
   ok: 'Signed in.',
   wrong: "That passphrase didn't match.",
-  unconfigured: 'No passphrase is set on this box — run `ccrc passwd` on it, then sign in.',
+  unconfigured: 'This box has no usable passphrase, so nothing typed here can match. Run `ccrc doctor` on the box — its `auth` check says which fix it needs.',
   'locked-out': 'Too many attempts. Wait a minute, then try again.',
   expired: 'You were signed out. Sign in to pick up where you were.',
   'no-session': 'Sign in to reach this box.',
@@ -61,7 +70,7 @@ export const VERDICT_TEXT: Record<AuthVerdict, string> = {
  *  distinct from `wrong` on purpose — telling someone their passphrase was
  *  refused when the request never arrived is how an evening gets spent retyping
  *  a correct secret. */
-const UNREACHABLE_TEXT = "Couldn't reach the box — check the connection and try again.";
+export const UNREACHABLE_TEXT = "Couldn't reach the box — check the connection and try again.";
 
 /** The ceremony itself failed or was dismissed — NOT a refusal from the box, and
  *  kept separate for `UNREACHABLE_TEXT`'s reason: "that passkey didn't match" in
@@ -70,6 +79,30 @@ const UNREACHABLE_TEXT = "Couldn't reach the box — check the connection and tr
  *  anything the SERVER refused arrives as an `ApiError` and gets a verdict
  *  sentence like any other refusal. */
 const PASSKEY_CANCELLED_TEXT = 'Passkey sign-in was cancelled. Try again, or use the passphrase.';
+
+/**
+ * THE BOX CANNOT RUN A PASSKEY CEREMONY AT ALL (D-139) — a `501` from either
+ * assert route, which `passkeyUnavailable` (`server.ts`) sends for exactly one
+ * reason a login screen can meet: this box's WebAuthn config is refused
+ * (`relyingPartyProblem` — a bad `CCRC_RP_ID`, or one that disagrees with
+ * `CCRC_ORIGIN`).
+ *
+ * IT USED TO RENDER {@link UNREACHABLE_TEXT}, and that was a network sentence
+ * for a config refusal. The path: a box with keys enrolled gets `CCRC_RP_ID`
+ * broken later, the button is still offered (`passkeysEnrolled > 0`, and the
+ * credential store loads regardless of the RP check), `assert/start` answers a
+ * BARE 501 carrying no `verdict`, so `verdictOf` returns null and the catch
+ * fell through to "couldn't reach the box" — pointing at the connection while
+ * the server's own journal held the real answer.
+ *
+ * It names the two keys because this is a single-operator console and the
+ * person reading it is the person who can fix them; it does not say WHICH is
+ * wrong, because the server does (once, at boot, and again per refused
+ * ceremony) and this screen is unauthenticated.
+ */
+const PASSKEY_UNAVAILABLE_TEXT =
+  'This box cannot run a passkey sign-in — its WebAuthn config (CCRC_RP_ID / CCRC_ORIGIN) is '
+  + "refused, and the server's log says why. Sign in with the passphrase.";
 
 export function LoginScreen(): ReactNode {
   // WHY the session went (first-wins, `lib/auth.ts`) — set by whichever refusal
@@ -80,6 +113,10 @@ export function LoginScreen(): ReactNode {
   // standing verdict below, because it is the newer fact.
   const [refusal, setRefusal] = useState<AuthVerdict | null>(null);
   const [unreachable, setUnreachable] = useState(false);
+  /** The box answered, and said it cannot run a passkey ceremony at all (D-139).
+   *  Its own state beside `unreachable`, because "the box refused this feature"
+   *  and "the box never answered" send an operator to two different places. */
+  const [unavailable, setUnavailable] = useState(false);
   /** The ceremony was dismissed or the browser could not run it — a third
    *  failure kind, beside "the box refused" and "the box never answered". */
   const [cancelled, setCancelled] = useState(false);
@@ -126,6 +163,7 @@ export function LoginScreen(): ReactNode {
     setBusy(true);
     setRefusal(null);
     setUnreachable(false);
+    setUnavailable(false);
     setCancelled(false);
     try {
       await api.login({ passphrase });
@@ -159,6 +197,9 @@ export function LoginScreen(): ReactNode {
    *     is `'wrong'` (the server sends one indistinguishable answer for every
    *     verification failure, deliberately — no oracle), and `VERDICT_TEXT` is
    *     already exhaustive, so it needs no new sentence.
+   *   - an `ApiError` with status 501 — the box cannot run the ceremony at all
+   *     ({@link PASSKEY_UNAVAILABLE_TEXT}). It carries no verdict, so it must be
+   *     caught by STATUS before the null-verdict arm below claims it.
    *   - anything else — the box never answered.
    */
   const signInWithPasskey = async (): Promise<void> => {
@@ -166,6 +207,7 @@ export function LoginScreen(): ReactNode {
     setBusy(true);
     setRefusal(null);
     setUnreachable(false);
+    setUnavailable(false);
     setCancelled(false);
     try {
       await assertPasskey();
@@ -174,7 +216,12 @@ export function LoginScreen(): ReactNode {
       if (err instanceof PasskeyCeremonyError) setCancelled(true);
       else {
         const v = err instanceof ApiError ? verdictOf(err.body) : null;
-        if (v === null) setUnreachable(true);
+        // FOUR failure kinds, not three (D-139). A `501` is the box saying it
+        // cannot run this ceremony at all — `passkeyUnavailable` sends it with
+        // no `verdict`, so without this arm it landed in the null branch below
+        // and rendered a NETWORK sentence for a CONFIG refusal.
+        if (err instanceof ApiError && err.status === 501) setUnavailable(true);
+        else if (v === null) setUnreachable(true);
         else setRefusal(v);
       }
     } finally {
@@ -201,15 +248,17 @@ export function LoginScreen(): ReactNode {
   // then why the session went in the first place.
   const message = cancelled
     ? PASSKEY_CANCELLED_TEXT
-    : unreachable
-      ? UNREACHABLE_TEXT
-      : refusal !== null
-        ? VERDICT_TEXT[refusal]
-        : status?.mode === 'locked-out'
-          ? VERDICT_TEXT['locked-out']
-          : verdict !== null
-            ? VERDICT_TEXT[verdict]
-            : VERDICT_TEXT['no-session'];
+    : unavailable
+      ? PASSKEY_UNAVAILABLE_TEXT
+      : unreachable
+        ? UNREACHABLE_TEXT
+        : refusal !== null
+          ? VERDICT_TEXT[refusal]
+          : status?.mode === 'locked-out'
+            ? VERDICT_TEXT['locked-out']
+            : verdict !== null
+              ? VERDICT_TEXT[verdict]
+              : VERDICT_TEXT['no-session'];
 
   return (
     <div className="login-screen" role="dialog" aria-modal="true" aria-labelledby="login-title">

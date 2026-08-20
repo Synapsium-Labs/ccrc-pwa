@@ -3068,6 +3068,61 @@ describe('ccrc doctor: fleet', () => {
     expect(r.code).toBe(0);
   });
 
+  it('SKIPS — never "read the server\'s log" — when the session gate refuses it (D-137)', () => {
+    // `/api/fleet/health` is GATED on purpose: it publishes roster digests,
+    // build stamps and divergence, and exempting it to spare a diagnostic would
+    // widen the tailnet surface for convenience. So on an armed box this call
+    // answers 401, which is BOTH PARTIES BEHAVING CORRECTLY — and it used to
+    // land in the generic HTTP-error arm, whose remedy is "read the server's own
+    // log", sending an operator to a journal where nothing is wrong. On exactly
+    // the box the runbook tells them to run doctor on right after arming.
+    const home = healthy('ccrc-doctor-fleet-gated-');
+    stubHealth(home, '{"ok":false,"error":"unauthenticated","verdict":"no-session"}', 401);
+    const r = runDoctor(home);
+    const line = r.stdout.split('\n').find((l) => l.startsWith('SKIP fleet: ')) ?? '';
+    expect(line, r.stdout).not.toBe('');
+    expect(line).toMatch(/session gate is ARMED/);
+    // The two sentences the old wording got wrong, pinned as absences — and the
+    // SKIP contract's own half: no remedy line under it, because the only
+    // honest "remedy" would be "turn the gate off", which is not advice.
+    expect(line).not.toMatch(/HTTP 401/);
+    expect(r.stdout).not.toMatch(/journalctl/);
+    expect(lineFor(r.stdout, 'fleet'), 'a SKIP is not a PASS/WARN/FAIL').toBeUndefined();
+    // THE COST IS STATED RATHER THAN GLOSSED: silence here is not evidence that
+    // the two boxes agree, and the line has to say so or it becomes the reason
+    // a skew goes unnoticed.
+    expect(line).toMatch(/NOT being measured/);
+    expect(line).toContain('ccrc version');
+    expect(r.code).toBe(0);
+  });
+
+  it('a 401 that is NOT this server\'s refusal stays the generic HTTP error', () => {
+    // A reverse proxy or a captive portal in front of the address answers 401
+    // too, and telling that operator "your session gate refused it" would be the
+    // same class of wrong answer D-137 exists to stop. The discriminator is this
+    // server's own refusal envelope, not the status code.
+    const home = healthy('ccrc-doctor-fleet-proxy401-');
+    stubHealth(home, '<html>Proxy Authentication Required</html>', 401);
+    const r = runDoctor(home);
+    const line = lineFor(r.stdout, 'fleet') ?? '';
+    expect(line).toMatch(/^WARN fleet: /);
+    expect(line).toContain('401');
+    expect(line).not.toMatch(/session gate/);
+    expect(r.code).toBe(0);
+  });
+
+  it('classifies the refusal WITHOUT quoting a byte of it', () => {
+    // `_box_health`'s standing rule — nothing from the body is ever printed —
+    // now applies to a body this code READS rather than merely classifies, so
+    // it is measured rather than assumed.
+    const home = healthy('ccrc-doctor-fleet-gated-quiet-');
+    stubHealth(home,
+      '{"ok":false,"error":"unauthenticated","verdict":"no-session","canary":"PLANTED-BODY-7f2a"}', 401);
+    const r = runDoctor(home);
+    expect(r.stdout).not.toContain('PLANTED-BODY-7f2a');
+    expect(r.stderr).not.toContain('PLANTED-BODY-7f2a');
+  });
+
   it('warns when the answer is not the health JSON at all', () => {
     // The measured shape of a reverse proxy or a captive portal answering 200
     // with an HTML page.
@@ -3529,6 +3584,22 @@ describe('ccrc status', () => {
     const r = runDoctor(home, ['status']);
     expect(r.stdout).toMatch(/fleet: +not measured/);
     expect(r.stdout).not.toMatch(/fleet: +agreed/);
+    expect(r.code).toBe(0);
+  });
+
+  it('says the GATE refused it, not "HTTP 401", when the gate is armed (D-137)', () => {
+    // The second caller of `_box_health`, and it had the same misleading
+    // sentence: `fleet: not measured (the server answered HTTP 401 …)`. Both
+    // callers now read arm 9, so neither can drift back on its own.
+    const home = statusBox('ccrc-status-gated-');
+    stubHealth(home, '{"ok":false,"error":"unauthenticated","verdict":"no-session"}', 401);
+    const r = runDoctor(home, ['status']);
+    expect(r.stdout).toMatch(/fleet: +not measured/);
+    expect(r.stdout).toMatch(/session gate is armed/);
+    // It must read as EXPECTED, not as a fault — this is the state every armed
+    // box is in, on every run.
+    expect(r.stdout).toMatch(/not a fault/);
+    expect(r.stdout).not.toMatch(/HTTP 401/);
     expect(r.code).toBe(0);
   });
 
