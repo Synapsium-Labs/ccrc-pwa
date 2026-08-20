@@ -88,7 +88,17 @@ export function LoginScreen(): ReactNode {
     let live = true;
     void readAuthStatus()
       .then((s) => {
-        if (live) setStatus(s);
+        if (!live) return;
+        setStatus(s);
+        // THE SCREEN IS NOT A DEAD END (review F3). This is the one read that
+        // can retire a signal nobody else will: once the ladders park, nothing
+        // re-probes, so a STALE auth-lost — another tab signed in, a spurious
+        // raise — would hold a full-screen login over a working console until
+        // the operator typed a passphrase or reloaded. Safe by construction: a
+        // box answering `authed: true` is letting everything through, so there
+        // is nothing here to protect. It costs no request — the fetch was
+        // already being made for `mode`.
+        if (s.authed === true) clearAuthLost();
       })
       .catch(() => {
         /* an older server, or an unreachable one: the field still works */

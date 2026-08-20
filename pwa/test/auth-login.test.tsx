@@ -31,7 +31,6 @@ import {
 import { navigate } from '../src/lib/router';
 import { ReconnectingSocket, type AuthGate } from '../src/lib/ws';
 import { TerminalDrawer, type DrawerTerm } from '../src/session/TerminalDrawer';
-import { useFleetStore } from '../src/stores/fleet';
 
 // — fixtures —
 
@@ -51,14 +50,11 @@ const statusFetch = (body: unknown, rest: () => Response = () => refusal('no-ses
 
 afterEach(() => {
   cleanup();
-  // MEASURED, not tidiness (mutation 5): `<App/>` connects the module-level
-  // fleet store, whose real `ReconnectingSocket` keeps failing against jsdom's
-  // absent server — and now asks the gate why on every one of those failures.
-  // Left running it raises auth-lost from a LATER test's stubbed fetch, which
-  // is how the TerminalDrawer probe test passed with the drawer's own
-  // `checkAuth()` deleted. One live socket, and the file stops testing what it
-  // says it tests.
-  useFleetStore.getState().disconnect();
+  // The module-level fleet socket `<App/>` connects is torn down by the GLOBAL
+  // hook in `test/setup.ts` (review F5), which carries the reasoning: left
+  // running, it answers a later test's stubbed `fetch` and this file stops
+  // testing what it says it tests — measured, that is exactly how the
+  // TerminalDrawer probe case once passed with the probe deleted.
   clearAuthLost();
   navigate('/');
   vi.unstubAllGlobals();
@@ -132,7 +128,11 @@ describe('the login screen mounts the way BlockScreen does', () => {
     expect(document.querySelector('.login-screen')).not.toBeInTheDocument();
   });
 
-  it('four failed calls raise exactly ONE login screen and no toast', async () => {
+  it('four failed calls raise exactly ONE login screen', async () => {
+    // No toast assertion here (review F4): four raw `api.*` calls never reach
+    // `toast()`, so the clause that used to sit at the end of this test passed
+    // with the guard deleted — coverage-shaped, and not coverage. The guard is
+    // pinned by the dedicated case below, which fires a real toast.
     vi.stubGlobal('fetch', vi.fn(async () => refusal('no-session')));
     render(<App />);
     const api = createApi();
@@ -141,7 +141,6 @@ describe('the login screen mounts the way BlockScreen does', () => {
     });
 
     expect(document.querySelectorAll('.login-screen')).toHaveLength(1);
-    expect(document.querySelector('.toast')).not.toBeInTheDocument();
   });
 
   it('drops any toast fired while the login screen is up', () => {
@@ -244,6 +243,17 @@ describe('logging back in', () => {
       fireEvent.click(screen.getByRole('button', { name: /sign in/i }));
     });
     expect(await screen.findByText(VERDICT_TEXT['locked-out'])).toBeInTheDocument();
+  });
+
+  it('retires a STALE signal off the status read it was already making', async () => {
+    // Review F3. Once the ladders park nothing re-probes, so a signal raised in
+    // error — or one another tab has already answered by signing in — would hold
+    // an unnecessary full-screen login over a working console until someone
+    // typed a passphrase or reloaded. The screen's own mount read knows better.
+    vi.stubGlobal('fetch', statusFetch({ authed: true, passkeysEnrolled: 0, mode: 'passphrase' }));
+    raiseAuthLost('no-session');
+    render(<LoginScreen />);
+    await waitFor(() => expect(isAuthLost()).toBe(false));
   });
 
   it('warns a browser that arrives mid-window before it offers a field that cannot succeed', async () => {
@@ -421,6 +431,23 @@ describe('TerminalDrawer against a closed gate', () => {
     await act(async () => { clearAuthLost(); });
     expect(drawerSockets).toHaveLength(2);
   });
+
+  it('but leaves a LIVE terminal alone — the gate runs at upgrade, not mid-stream', async () => {
+    // Review F2. An open pty survives an auth-lost episode raised somewhere else
+    // entirely (a REST 401, the fleet socket's probe). Re-attaching it on the
+    // regain would close a streaming terminal for nothing and make the server
+    // restore the canonical tmux size under the reader's cursor.
+    render(
+      <TerminalDrawer id="claude:demo" open onClose={() => {}} makeSocket={makeSocket}
+        makeTerm={fakeTerm().makeTerm} />,
+    );
+    act(() => { drawerSockets.at(-1)!.open(); });
+    expect(drawerSockets).toHaveLength(1);
+
+    act(() => raiseAuthLost('expired')); // raised by something that is not this socket
+    await act(async () => { clearAuthLost(); });
+    expect(drawerSockets).toHaveLength(1);
+  });
 });
 
 // ── 6. dark by default ──────────────────────────────────────────────────────
@@ -430,6 +457,25 @@ describe('with `CCRC_AUTH` off the PWA behaves exactly as it does today', () => 
     vi.stubGlobal('fetch', statusFetch({ authed: true, passkeysEnrolled: 0, mode: 'off' }));
     checkAuth();
     await waitFor(() => expect((globalThis.fetch as ReturnType<typeof vi.fn>)).toHaveBeenCalled());
+    await act(async () => {});
+    expect(isAuthLost()).toBe(false);
+  });
+
+  it('nor when the body carries NO `mode` at all — the arm `authed:true` was covering for', async () => {
+    // Review F1. Every other dark fixture in this file also says `authed: true`,
+    // so `checkAuth`'s `s.authed === true` arm caught them and the
+    // `s.mode === undefined` guard beside it could be deleted with all four
+    // staying green. THIS is the body that separates them, and it is reachable
+    // three ways: an older server, a proxy answering 200 JSON of its own, and —
+    // pointedly — the day someone flips `ANON_VISIBLE.mode` to `false`
+    // (`server/src/server.ts`), a `Record<keyof AuthStatus, boolean>` that exists
+    // precisely so each field can be narrowed one at a time.
+    //
+    // Without the guard this raises `'no-session'` and puts a full-screen,
+    // UNENTERABLE login in front of an operator whose box has no gate. That is
+    // the lockout this whole task is written against, so it gets its own case.
+    vi.stubGlobal('fetch', statusFetch({ authed: false, passkeysEnrolled: 0 }));
+    checkAuth();
     await act(async () => {});
     expect(isAuthLost()).toBe(false);
   });

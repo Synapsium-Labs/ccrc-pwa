@@ -1,5 +1,34 @@
 import '@testing-library/jest-dom/vitest';
-import { vi } from 'vitest';
+import { afterEach, vi } from 'vitest';
+import { useFleetStore } from '../src/stores/fleet';
+
+// THE MODULE-LEVEL FLEET SOCKET IS TORN DOWN AFTER EVERY TEST.
+//
+// `useFleetStore` is a singleton, and `<App/>`'s mount effect connects it. A
+// test that renders the shell and never disconnects therefore leaves a live
+// `ReconnectingSocket` climbing its backoff ladder against jsdom's absent
+// server for the rest of the file — and since Stage 3a that socket also asks
+// `GET /api/auth/status` on every failed attempt (`lib/ws.ts`'s AuthGate). A
+// later test in the same file that stubs `fetch` gets answered by a component
+// it is not testing.
+//
+// That is not hypothetical: it is how `auth-login.test.tsx`'s TerminalDrawer
+// probe test passed with the drawer's own `checkAuth()` DELETED — the leaked
+// fleet socket raised auth-lost instead. The fix lived in that file's own
+// `afterEach` for one round; it belongs here, because the hazard's real shape
+// is "a suite nobody has written yet renders `<App/>` and stubs `fetch`", which
+// no per-file fix can reach. (`app.test.tsx` renders the shell too and leaks
+// the same socket today; it stubs no `fetch`, so it has no symptom — but it is
+// one `vi.stubGlobal` away from one.)
+//
+// A no-op wherever nothing connected: `disconnect()` on an unconnected store
+// removes two listeners that were never added and returns. It is deliberately
+// the FIRST thing in this file's teardown and this file's only `src/` import —
+// a global hook that reached further into the app would be a fixture pretending
+// to be a harness.
+afterEach(() => {
+  useFleetStore.getState().disconnect();
+});
 
 // jsdom gaps touched by vaul/radix (the Sheet primitive). All guarded so a
 // future jsdom that implements them wins automatically.

@@ -189,7 +189,18 @@ export function TerminalDrawer({
     };
     ws.onclose = down;
     ws.onerror = down;
-    const unsubAuth = onAuthRegained(() => setAttempt((a) => a + 1));
+    // ONLY when this socket is not already carrying the session (review F2).
+    // The gate runs at UPGRADE time, so an open pty survives an auth-lost
+    // episode raised anywhere else — a REST 401, or the fleet socket's own
+    // probe. Unconditionally bumping `attempt` would close a live terminal and
+    // re-attach it for nothing the moment the operator signed back in, and the
+    // server restores the session's canonical tmux window size on the way past,
+    // so the reader would watch their pane resize for no reason. This is
+    // `ReconnectingSocket.nudge()`'s own early return (`ws.ts`: inert unless
+    // started AND down), which the two paths were asymmetric on.
+    const unsubAuth = onAuthRegained(() => {
+      if (connRef.current !== 'open') setAttempt((a) => a + 1);
+    });
 
     term.onData((data) => sendFrame({ type: 'input', data }));
 
