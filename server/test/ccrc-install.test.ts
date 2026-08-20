@@ -2276,15 +2276,16 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     // the verb's exit code is its verdict.
     const lines = r.stdout.split('\n').filter(Boolean);
     expect(lines[lines.length - 1]).toMatch(/^summary: \d+ checks \(\d+ skipped\), /);
-    // EXACTLY ONE WARNING, AND IT IS THE GATE (D-126). This line
-    // asserted `0 warned` until `auth` joined the table, and the change is a
-    // fact about what `install` does rather than a test being loosened: this
-    // verb writes NO passphrase, deliberately and permanently, so every box it
-    // finishes has a console with no credential on it and doctor says so. The
-    // warning is NAMED here so the assertion keeps its teeth — a second
-    // warning, or a different one, is still red.
-    expect(r.stdout).toMatch(/^summary: \d+ checks \(\d+ skipped\), \d+ verdicts — \d+ passed, 1 warned, 0 failed$/m);
-    expect(r.stdout).toMatch(/^WARN auth: no passphrase file at /m);
+    // A FRESH INSTALL ENDS GREEN — operator ruling, Task 9 review (D-126).
+    // `auth` joined the table in stage 3a and first shipped WARNing about the
+    // box this verb deliberately leaves without a passphrase, which turned
+    // every clean install yellow and taught operators to skim the colour that
+    // is supposed to mean something. It PASSes now, carrying the arming
+    // instructions as next-steps text, and this line is back to `0 warned`.
+    expect(r.stdout).toMatch(/^summary: \d+ checks \(\d+ skipped\), \d+ verdicts — \d+ passed, 0 warned, 0 failed$/m);
+    // …and the gate check really RAN and really found the box uncredentialed:
+    // `0 warned` must not be reachable by the check having vanished.
+    expect(r.stdout).toMatch(/^PASS auth: no passphrase file at .*nothing is gated/m);
   });
 
   it('says, in one line, that it wrote no passphrase and what arming the gate takes', () => {

@@ -136,6 +136,68 @@ function runPasswdTty(home: string, entries: string[], args: string[] = []): Pro
   });
 }
 
+/**
+ * A shell script in ONE pty, driven by a callback that sees the output so far.
+ *
+ * The `runPasswdTty` above spawns `ccrc` directly, which is right for the
+ * prompts and WRONG for anything that asks what state the run left the
+ * TERMINAL in: a question about the tty has to be asked on the same tty, by a
+ * command that runs after the verb and before the pty is closed. A second,
+ * fresh pty always answers "echo is on" no matter what the first one did — a
+ * test that cannot fail (this file shipped one, and it is why the Ctrl-C
+ * defect below survived a green suite).
+ */
+function drivePty(home: string, script: string,
+  drive: (out: string, write: (s: string) => void) => void): Promise<Result> {
+  return new Promise((resolve) => {
+    const p = pty.spawn(BASH, ['-c', script], {
+      name: 'xterm-color', cols: 200, rows: 40, cwd: home,
+      env: env(home) as Record<string, string>,
+    });
+    let out = '';
+    let done = false;
+    const finish = (code: number): void => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve({ code, stdout: out, stderr: '' });
+    };
+    const timer = setTimeout(() => { p.kill(); finish(-1); }, 20_000);
+    // Writing to a pty whose child has already exited throws; a driver that
+    // keeps typing after a clean abort is the normal case here, not an error.
+    const write = (s: string): void => { try { p.write(s); } catch { /* gone */ } };
+    p.onData((d) => { out += d; drive(out, write); });
+    p.onExit(({ exitCode }) => finish(exitCode));
+  });
+}
+
+/** The shell around a `ccrc passwd` run that asks the tty two questions after
+ *  it: what the verb exited, and whether echo came back. `grep -c` exits 1 on
+ *  zero matches, hence the `|| true`; `trap : INT` (a HANDLER, not `''`) keeps
+ *  the outer shell alive through the Ctrl-C without making the signal ignored
+ *  in the child — an IGNORED disposition is inherited and cannot be re-trapped,
+ *  which would disarm the very trap under test. */
+const passwdThenTty = (home: string): string =>
+  `trap : INT; ${JSON.stringify(ccrcIn(home))} passwd; echo "PASSWD-EXIT:$?"; `
+  + "stty -a | tr ' ' '\\n' | grep -c '^-echo$' || true; echo TTY-ASKED";
+
+/** Everything the VERB produced, i.e. up to the marker the shell prints after
+ *  it. Anything after that is the outer shell echoing keystrokes at a prompt
+ *  that no longer exists, which is not this verb's output. */
+function verbOutput(out: string): string {
+  const i = out.indexOf('PASSWD-EXIT:');
+  if (i === -1) throw new Error(`the run never reached the exit marker:\n${out}`);
+  return out.slice(0, i);
+}
+
+const passwdExit = (out: string): number =>
+  Number(/PASSWD-EXIT:(\d+)/.exec(out)?.[1] ?? NaN);
+
+/** How many `-echo` flags `stty -a` reported IN THAT SAME PTY: 0 means echo is
+ *  on. */
+const echoOffCount = (out: string): number =>
+  Number(/PASSWD-EXIT:\d+\r?\n(\d+)/.exec(out)?.[1] ?? NaN);
+
 /** The file's exact bytes, or `null` when there is none. */
 const bytesAt = (p: string): string | null => (existsSync(p) ? readFileSync(p, 'utf8') : null);
 
@@ -294,7 +356,13 @@ describe('gen-auth-hash: the write is validated BEFORE it is installed', () => {
     const r = runHelper(home, [secretPath(home)], PASS);
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/cannot read it as a secret line/);
-    expect(r.stderr).toMatch(/mv .*auth\.scrypt .*auth\.scrypt\.broken && ccrc passwd/);
+    // The remedy names the SESSION FILE too, and that is not thoroughness: the
+    // fresh file this produces restarts at INITIAL_GENERATION, which is exactly
+    // what a session minted on the box's first passphrase is stamped with — so
+    // the `mv` alone would leave those sessions verifying against the new
+    // secret, re-creating the very thing the refusal above exists to prevent.
+    expect(r.stderr).toMatch(/mv .*auth\.scrypt .*auth\.scrypt\.broken && rm -f ~\/\.ccrc\/sessions\.json && ccrc passwd/);
+    expect(r.stderr).toMatch(new RegExp(`restarts at generation ${INITIAL_GENERATION}`));
     expect(bytesAt(secretPath(home))).toBe('this is not a secret line\n');
   });
 
@@ -465,29 +533,92 @@ describe('ccrc passwd', () => {
     expect(r.stdout).toMatch(/generation 2 — was generation 1/);
   });
 
-  it('leaves the terminal echoing after a run', async () => {
-    // `read -s` restores echo itself on a normal return; the trap is for the
-    // Ctrl-C that does not. This measures the state the operator's terminal is
-    // left in, which is the thing the trap is about.
-    const home = box('ccrc-passwd-echo-');
-    await runPasswdTty(home, [PASS, PASS]);
-    const r = await new Promise<string>((resolve) => {
-      const p = pty.spawn(BASH, ['-c', 'stty -a | tr " " "\\n" | grep -c "^-echo$" || true'],
-        { name: 'xterm-color', cols: 80, rows: 24, cwd: home, env: env(home) as Record<string, string> });
-      let out = '';
-      p.onData((d) => { out += d; });
-      p.onExit(() => resolve(out));
+  it('a Ctrl-C at the prompt ABORTS — it does not turn echo back on and keep reading', async () => {
+    // ── THE DEFECT THIS PINS, MEASURED AGAINST THE SHIPPED VERB ──────────
+    // Bash RESTARTS an interrupted `read` after running a trapped handler. A
+    // handler that only re-enables echo therefore hands control back to the
+    // still-running prompt with echo ON, and the operator — who has just been
+    // told "Ctrl-C aborts" — types their passphrase in CLEARTEXT into the
+    // terminal and the scrollback. Captured, before the fix:
+    //
+    //   New passphrase (at least 12 characters): VISIBLE-PASSPHRASE
+    //   Repeat it:                                     <- accepted, exit 0
+    //
+    // …and the box was credentialed anyway. Without ANY trap the same Ctrl-C
+    // kills the script cleanly, so the trap added to protect the terminal was
+    // the thing that broke the abort. The fix is two traps: EXIT restores
+    // echo, INT/TERM restore it and LEAVE (130 = 128+SIGINT).
+    //
+    // ONE PTY, and that is the whole reason this test can fail at all. The
+    // three assertions below are made on the same terminal the verb ran on,
+    // and the decisive ones are the passphrase and the exit code: `stty` alone
+    // reports "echo on" in BOTH the fixed and the broken run (the broken one
+    // re-enabled it — that IS the bug), which is exactly how the earlier,
+    // separate-pty version of this test passed for the wrong reason.
+    const home = box('ccrc-passwd-sigint-');
+    const typed = 'VISIBLE-PASSPHRASE';
+    let interrupted = false;
+    const r = await drivePty(home, passwdThenTty(home), (out, write) => {
+      if (!interrupted && /New passphrase/.test(out)) {
+        interrupted = true;
+        write('\x03');
+        // Then keep typing, as an operator who believes the prompt is gone
+        // would. With the fix these land after the verb has exited and are
+        // sliced off by `verbOutput`; without it they are read and hashed.
+        setTimeout(() => write(`${typed}\r`), 400);
+        setTimeout(() => write(`${typed}\r`), 800);
+      }
     });
-    expect(r).toMatch(/^0/);
+    const verb = verbOutput(r.stdout);
+    expect(verb, 'the passphrase was echoed into the terminal').not.toContain(typed);
+    expect(passwdExit(r.stdout), verb).toBe(130);
+    expect(echoOffCount(r.stdout), 'echo was left off on the operator\'s terminal').toBe(0);
+    // …and an interrupted run is not a run: nothing was written.
+    expect(bytesAt(secretPath(home))).toBeNull();
+    expect(ccrcDirEntries(home)).toEqual([]);
   });
 
-  it('carries the trap that restores echo — the Ctrl-C case, in the source', () => {
-    // The signal path itself cannot be measured through node-pty without
-    // racing the prompt, so the mechanism is pinned where it can be: the trap
-    // must name all three of EXIT, INT and TERM. A trap on EXIT alone does not
-    // fire for the SIGINT that leaves a terminal without echo.
+  it('leaves the terminal echoing after a NORMAL run, asked on that same terminal', async () => {
+    // `read -s` restores echo itself on a normal return, so this is the weaker
+    // half of the pair — but it is no longer vacuous: it asks the tty the verb
+    // actually ran on, so a `read -s` whose restore stopped happening (or an
+    // EXIT trap deleted) is red here.
+    const home = box('ccrc-passwd-echo-');
+    let sent = 0;
+    const r = await drivePty(home, passwdThenTty(home), (out, write) => {
+      const prompts = (out.match(/(New passphrase|Repeat it)/g) ?? []).length;
+      while (sent < prompts && sent < 2) { sent++; write(`${PASS}\r`); }
+    });
+    expect(passwdExit(r.stdout), r.stdout).toBe(0);
+    expect(echoOffCount(r.stdout)).toBe(0);
+    expect(verbOutput(r.stdout)).not.toContain(PASS);
+  });
+
+  it('carries BOTH traps — the EXIT one restores echo, the INT one leaves', () => {
+    // The behavioural test above is the mechanism; this is the shape, pinned
+    // so the two-trap split cannot be "simplified" back into the one-liner
+    // that caused the disclosure. An INT handler without an `exit` is the
+    // defect, whatever else it does.
     const src = readFileSync(CCRC_SRC, 'utf8');
-    expect(src).toMatch(/trap 'stty echo 2>\/dev\/null' EXIT INT TERM/);
+    expect(src).toMatch(/trap 'stty echo 2>\/dev\/null' EXIT\n/);
+    expect(src).toMatch(/trap 'stty echo 2>\/dev\/null; printf "\\n" >&2; exit 130' INT TERM/);
+    expect(src).not.toMatch(/trap 'stty echo 2>\/dev\/null' EXIT INT TERM/);
+  });
+
+  it('reads with IFS= — a passphrase with leading or trailing spaces is not silently trimmed', async () => {
+    // MEASURED: `read -rs x` on "  spaced pass  " yields "spaced pass";
+    // `IFS= read -rs x` preserves it. Both entries are trimmed identically, so
+    // the confirmation still matches, the file written is perfectly valid and
+    // doctor PASSes — while the browser sends the raw string, which no longer
+    // verifies. A lockout with no red anywhere, which is why this is measured
+    // through the FILE rather than through the transcript.
+    const home = box('ccrc-passwd-ifs-');
+    const spaced = '  spaced pass phrase  ';
+    const r = await runPasswdTty(home, [spaced, spaced]);
+    expect(r.code, r.stdout).toBe(0);
+    const secret = readAuthSecret(secretPath(home))!;
+    expect(await verifyPassphrase(secret, spaced)).toBe(true);
+    expect(await verifyPassphrase(secret, spaced.trim())).toBe(false);
   });
 
   it('refuses BY NAME when the hasher did not ship beside it', async () => {
@@ -522,6 +653,84 @@ describe('ccrc passwd', () => {
     expect(r.stdout).not.toMatch(/New passphrase/);
   });
 
+  it('WRITES the overridden path when ccrc.env redirects the secret, and says so', async () => {
+    // ── THE SILENT SECURITY NO-OP THIS CLOSES ────────────────────────────
+    // `config.ts:339` is `env.CCRC_AUTH_SECRET_PATH || <default>`. With the
+    // override set and a valid file at it, a `passwd` that wrote the DEFAULT
+    // would leave the server reading the old secret, report success, and let
+    // doctor PASS on the file it had just written. An operator rotating after
+    // a compromise would get a green transcript over a live, unchanged
+    // credential. Both tools resolve through one function (`_box_auth_path`).
+    const home = box('ccrc-passwd-override-');
+    const elsewhere = join(home, 'secrets', 'gate.scrypt');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'ccrc.env'), `CCRC_AUTH_SECRET_PATH=${elsewhere}\n`);
+    const r = await runPasswdTty(home, [PASS, PASS]);
+    expect(r.code, r.stdout).toBe(0);
+    const secret = readAuthSecret(elsewhere);
+    expect(secret, r.stdout).not.toBeNull();
+    expect(await verifyPassphrase(secret!, PASS)).toBe(true);
+    // The default path was NOT written — nothing on this box should be able to
+    // hold two secrets and disagree about which is live.
+    expect(bytesAt(secretPath(home))).toBeNull();
+    // …and the redirect is NAMED. A tool writing a credential somewhere other
+    // than the documented path must never do it silently.
+    expect(r.stdout).toContain('CCRC_AUTH_SECRET_PATH');
+    expect(r.stdout).toContain(elsewhere);
+  });
+
+  it('REFUSES a relative override before prompting, rather than writing a file nobody can identify', async () => {
+    const home = box('ccrc-passwd-override-rel-');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_AUTH_SECRET_PATH=secrets/gate.scrypt\n');
+    const r = await runPasswdTty(home, [PASS, PASS]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toMatch(/RELATIVE path \(secrets\/gate\.scrypt\)/);
+    expect(r.stdout).not.toMatch(/New passphrase/);       // refused BEFORE the prompt
+    expect(bytesAt(secretPath(home))).toBeNull();
+  });
+
+  it('an EMPTY override is absent — the bare `KEY=` rule, on the path this time', async () => {
+    const home = box('ccrc-passwd-override-empty-');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_AUTH_SECRET_PATH=\n');
+    const r = await runPasswdTty(home, [PASS, PASS]);
+    expect(r.code, r.stdout).toBe(0);
+    expect(readAuthSecret(secretPath(home))).not.toBeNull();
+    expect(r.stdout).not.toContain('CCRC_AUTH_SECRET_PATH');
+  });
+
+  it('refuses a box with NO SERVER BUILD before prompting, not after two entries', async () => {
+    // This file's own rule, three probes deep: `node` and the hasher are both
+    // checked BY NAME before any prompt, because a refusal that arrives after
+    // an operator has typed a passphrase twice is a refusal about the wrong
+    // thing at the wrong time. The hasher imports the server's compiled
+    // reader, so "this box has no server build" — the FLEET HOST's case — is
+    // the same class and gets the same treatment, through `--probe` so the
+    // dist path keeps one home.
+    const home = mkTmp('ccrc-passwd-nobuild-');
+    const ccd = join(home, 'ccrc', 'ccd');
+    mkdirSync(ccd, { recursive: true });
+    symlinkSync(CCRC_SRC, join(ccd, 'ccrc'));
+    plantAuthHelper(join(home, 'ccrc'));                 // …and no plantAuthModule
+    const r = await runPasswdTty(home, [PASS, PASS]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toMatch(/no compiled reader at .*secret\.js/);
+    expect(r.stdout).toMatch(/cannot load the server's own secret reader/);
+    expect(r.stdout).not.toMatch(/New passphrase/);
+    expect(ccrcDirEntries(home)).toEqual([]);
+  });
+
+  it('--probe answers 0 with a build and 5 without, reading nothing', () => {
+    const built = box('ccrc-probe-ok-');
+    expect(runHelper(built, ['--probe'], 'must not be consumed').code).toBe(0);
+    const bare = mkTmp('ccrc-probe-nobuild-');
+    plantAuthHelper(join(bare, 'ccrc'));
+    const r = runHelper(bare, ['--probe']);
+    expect(r.code).toBe(5);
+    expect(r.stderr).toMatch(/no compiled reader at /);
+  });
+
   it('passwd --bogus is a usage error (exit 2); passwd -h prints usage at exit 0', () => {
     const home = box('ccrc-passwd-args-');
     const bad = runPiped(home, ['passwd', '--bogus']);
@@ -541,8 +750,8 @@ describe('ccrc passwd', () => {
     // Pinned in the source, because the alternative — sampling /proc during a
     // ~100ms window — is a race by construction.
     const src = readFileSync(CCRC_SRC, 'utf8');
-    expect(src).toMatch(/printf '%s' "\$p1" \| node "\$helper" "\$BOX_AUTH_FILE"/);
-    expect(src).not.toMatch(/node "\$helper" "\$BOX_AUTH_FILE" "\$p1"/);
+    expect(src).toMatch(/printf '%s' "\$p1" \| node "\$helper" "\$target"/);
+    expect(src).not.toMatch(/node "\$helper" "\$target" "\$p1"/);
     // …and a here-string is not the substitute: bash implements one with a
     // temp file on disk.
     expect(src).not.toMatch(/node "\$helper" .*<<</);
@@ -571,10 +780,15 @@ describe('ccrc passwd', () => {
     // …and both really go through the variable, which deleting the path
     // altogether would also satisfy.
     const src = readFileSync(CCRC_SRC, 'utf8');
+    // Both consumers reach the path through ONE resolver, which is what makes
+    // the CCRC_AUTH_SECRET_PATH override impossible to honour in one place and
+    // ignore in the other.
     const body = /cmd_passwd\(\)[\s\S]*?\n\}/.exec(src);
     expect(body, 'ccd/ccrc has no cmd_passwd').toBeTruthy();
-    expect(body![0]).toContain('BOX_AUTH_FILE');
-    expect(readFileSync(join(REPO, 'ccd', 'ccrc-doctor-checks'), 'utf8')).toContain('BOX_AUTH_FILE');
+    expect(body![0]).toContain('_box_auth_path');
+    expect(/_box_auth_path\(\) \{[\s\S]*?\n\}/.exec(src)?.[0]).toContain('BOX_AUTH_FILE');
+    const checks = readFileSync(join(REPO, 'ccd', 'ccrc-doctor-checks'), 'utf8');
+    expect(/_check_auth\(\) \{[\s\S]*?\n\}/.exec(checks)?.[0]).toContain('_box_auth_path');
   });
 
   it('the hasher ships in the tree both deploy lanes rsync', () => {

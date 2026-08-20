@@ -490,6 +490,51 @@ _box_env_value() {
   printf '%s' "$v"
 }
 
+# ── _box_auth_path — WHICH FILE IS THIS BOX'S PASSPHRASE SECRET (D-130) ───
+# `server/src/config.ts:339` is `env.CCRC_AUTH_SECRET_PATH || <default>`, so a
+# box CAN redirect the gate's secret, and the two things in this tree that
+# touch that file — `cmd_passwd`, which writes it, and doctor's `auth` check,
+# which measures it — must both follow the redirect or both refuse. Neither may
+# quietly use the default.
+#
+# WHY THIS IS NOT COSMETIC. With the override set and a valid file at the
+# override path, a `passwd` that wrote the default would leave: a server that
+# keeps working (it reads the override), a `passwd` that reports success, and a
+# doctor that then reports `PASS auth: … gen=1` about the file it just wrote.
+# An operator rotating after a compromise gets a green transcript and a LIVE
+# SECRET THAT NEVER CHANGED — a silent security no-op, which is the failure
+# class this codebase's "no overloaded seam" rule exists to make impossible.
+#
+# THE ANSWER IS THE PATH; THE RETURN CODE IS WHERE IT CAME FROM, because the
+# two callers say different things about each:
+#   0  the default ($BOX_AUTH_FILE) — no override, or an empty one, which is
+#      absent to `||` exactly as it is to config.ts's own reader.
+#   2  an ABSOLUTE override. Honoured, and both callers SAY SO — a file this
+#      tool writes somewhere other than the documented path must never be a
+#      silent choice.
+#   3  a RELATIVE override. REFUSED by both callers, and this is the one case
+#      where following the config would be worse than refusing: config.ts does
+#      not resolve it either, so the server resolves it against whatever
+#      working directory systemd gives `ccrc.service`, and this tool would
+#      resolve it against the operator's `$PWD`. Two different files, and
+#      nothing on the box can say which one is the secret. The path is still
+#      printed, for the message.
+_box_auth_path() {
+  local v=""
+  if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ]; then
+    v="$(_box_env_value "$BOX_ENV_FILE" CCRC_AUTH_SECRET_PATH)"
+  fi
+  if [ -z "$v" ]; then
+    printf '%s' "$BOX_AUTH_FILE"
+    return 0
+  fi
+  printf '%s' "$v"
+  case "$v" in
+    /*) return 2 ;;
+    *)  return 3 ;;
+  esac
+}
+
 # ── THE ONE NETWORK CALL: GET /api/fleet/health ───────────────────────────
 # The server is the only party that can compare the two boxes — it holds this
 # box's stamp and the fleet host's, and both rosters' digests — so this asks it
@@ -1611,12 +1656,41 @@ cmd_adopt() {
 #   - it is `unset` the moment the hasher has had it, and nothing in this
 #     function prints it, logs it, or puts it in a diagnostic.
 #
-# ── THE TRAP IS ABOUT THE OPERATOR'S TERMINAL ─────────────────────────────
+# ── THE TRAP IS ABOUT THE OPERATOR'S TERMINAL, AND IT MUST ABORT (D-128) ──
 # `read -s` turns echo off and restores it itself on a normal return — but not
 # when a Ctrl-C arrives mid-prompt, which leaves the shell alive with a
 # terminal that no longer shows what is typed into it. `stty echo` on
-# EXIT/INT/TERM is the whole fix; its failure is discarded because a terminal
+# EXIT/INT/TERM is half the fix; its failure is discarded because a terminal
 # that cannot be stty'd is not a reason to change this command's exit code.
+#
+# THE OTHER HALF IS `exit 130`, AND LEAVING IT OUT IS A DISCLOSURE BUG, not a
+# tidiness one. Bash RESTARTS an interrupted `read` after running a trapped
+# handler, so a handler that only re-enables echo hands control straight back
+# to the still-running prompt — with echo now ON. MEASURED against the shipped
+# verb, exactly as the review reported it:
+#
+#   New passphrase (at least 12 characters): VISIBLE-PASSPHRASE
+#   Repeat it:                                    <- typed, echoed, ACCEPTED
+#
+# The passphrase and its confirmation were echoed into the terminal and the
+# scrollback, and the run then exited 0 having written the file — under a
+# banner that says "Ctrl-C aborts". WITHOUT any trap the same Ctrl-C kills the
+# script cleanly, so the trap that was added to protect the terminal is the
+# thing that broke the abort. Two traps, therefore: EXIT restores echo, and
+# INT/TERM restore echo and LEAVE. 130 is 128+SIGINT, which is what the shell
+# reports for an interrupted foreground command anyway — deliberately outside
+# this file's 0/1/2 table, because "the operator interrupted it" is not a
+# refusal and not a usage error.
+#
+# ── WHICH FILE IT WRITES (`_box_auth_path`) ──────────────────────────────
+# The DEFAULT is `$BOX_AUTH_FILE`, but `~/.ccrc/ccrc.env` may redirect the
+# server with `CCRC_AUTH_SECRET_PATH`, and this verb has to follow it. Writing
+# the default on a box that redirected the server is not a cosmetic mismatch:
+# the server keeps reading the override, `passwd` reports success, and doctor
+# then PASSes on the file nobody reads — so an operator rotating after a
+# compromise gets a green transcript and a live secret that never changed.
+# `_box_auth_path` is the one resolver both this verb and doctor's `auth` check
+# go through.
 #
 # ── WHAT IT INVALIDATES, AND WHAT IT DOES NOT (D-125) ────────────────────
 # A rotation bumps the file's `generation`, and `SessionStore.verify` answers
@@ -1652,6 +1726,30 @@ cmd_passwd() {
   [ -f "$helper" ] \
     || _ccrc_die "the passphrase hasher is missing: $helper — is this a complete ccrc install? Nothing was written."
 
+  # THE THIRD BY-NAME PROBE, AND THE SAME RULE AS THE TWO ABOVE IT. The hasher
+  # imports the SERVER's own compiled reader, so a box with no server build
+  # cannot hash — and until this ran here, that refusal arrived AFTER the
+  # operator had typed a passphrase twice, which is precisely the sequencing
+  # the `node` probe eight lines up exists to prevent (and says so in its own
+  # comment). It is the fleet host's case: `~/ccrc` there has no `server/`.
+  #
+  # The helper probes ITSELF (`--probe` loads the module and exits), rather
+  # than this file testing for `../server/dist/server/src/auth/secret.js`:
+  # that path is the hasher's own business and a second spelling of it here is
+  # how the two would come to disagree about which build they need. The
+  # helper's own sentence is on stderr; this adds one line rather than
+  # re-wording it.
+  node "$helper" --probe \
+    || _ccrc_die "the hasher cannot load the server's own secret reader — read the line above. The passphrase file is only meaningful on the box that runs the server. Nothing was written."
+
+  local target apath_rc
+  target="$(_box_auth_path)"; apath_rc=$?
+  case "$apath_rc" in
+    0) ;;
+    2) printf '%s\n' "$PROG: note: $BOX_ENV_FILE redirects this box's secret with CCRC_AUTH_SECRET_PATH, so the passphrase goes to $target" >&2 ;;
+    *) _ccrc_die "$BOX_ENV_FILE sets CCRC_AUTH_SECRET_PATH to a RELATIVE path ($target), and nothing can say which file that is: the server resolves it against the working directory systemd gives ccrc.service, and this command would resolve it against yours. Make it absolute (or remove it, and the box uses $BOX_AUTH_FILE), then re-run. Nothing was written." ;;
+  esac
+
   # 12, and the number is a floor rather than a policy. Online guessing is
   # already bounded by the login brake (`server/src/auth/ratelimit.ts`'s
   # MAX_FAILURES = 8 failures per window, each holding a scrypt slot), so what
@@ -1660,16 +1758,30 @@ cmd_passwd() {
   # somebody types to "test it quickly" and then keeps.
   local min=12
 
-  trap 'stty echo 2>/dev/null' EXIT INT TERM
+  # TWO TRAPS, NOT ONE — see the header. A single EXIT/INT/TERM handler that
+  # only runs `stty echo` turns Ctrl-C into "echo back on, prompt still
+  # running", i.e. the passphrase typed in cleartext. The INT/TERM handler
+  # must LEAVE.
+  trap 'stty echo 2>/dev/null' EXIT
+  trap 'stty echo 2>/dev/null; printf "\n" >&2; exit 130' INT TERM
 
   local p1="" p2=""
-  printf '%s\n' "$PROG: setting the PWA passphrase in $BOX_AUTH_FILE (nothing is echoed; Ctrl-C aborts)" >&2
-  if ! read -rsp "New passphrase (at least $min characters): " p1; then
+  printf '%s\n' "$PROG: setting the PWA passphrase in $target (nothing is echoed; Ctrl-C aborts)" >&2
+  # `IFS=` ON BOTH READS (D-129), exactly as every other `read` in this file has it
+  # (:473, :932, :2008) — and here it is the difference between a working box
+  # and a silent lockout. Without it bash splits on $IFS and hands back the
+  # value with leading and trailing whitespace STRIPPED: measured,
+  # `"  spaced pass  "` arrives as `"spaced pass"`. Both entries are trimmed
+  # identically, so they still match, the file that gets written is perfectly
+  # valid, and doctor PASSes — while the browser sends the raw string the
+  # operator actually typed, which no longer verifies. A lockout with no red
+  # anywhere is the worst shape a defect in this verb can have.
+  if ! IFS= read -rsp "New passphrase (at least $min characters): " p1; then
     printf '\n' >&2
     _ccrc_die "no passphrase was entered — nothing was written"
   fi
   printf '\n' >&2
-  if ! read -rsp "Repeat it: " p2; then
+  if ! IFS= read -rsp "Repeat it: " p2; then
     printf '\n' >&2
     unset p1 p2
     _ccrc_die "no passphrase was entered — nothing was written"
@@ -1696,10 +1808,10 @@ cmd_passwd() {
   # own sentence on stderr and this adds one line rather than re-wording it
   # (`_inst_accounts_sh`'s rule).
   local rc=0
-  printf '%s' "$p1" | node "$helper" "$BOX_AUTH_FILE" || rc=$?
+  printf '%s' "$p1" | node "$helper" "$target" || rc=$?
   unset p1 p2
   [ "$rc" -eq 0 ] \
-    || _ccrc_die "the passphrase was NOT set — read the line above; $BOX_AUTH_FILE is exactly as it was"
+    || _ccrc_die "the passphrase was NOT set — read the line above; $target is exactly as it was"
 
   echo "$PROG: the gate is still OFF until CCRC_AUTH=on is set in $BOX_ENV_FILE and ccrc.service is restarted — a passphrase on its own changes nothing"
   echo "$PROG: set CCRC_RP_ID and CCRC_ORIGIN in the SAME edit that arms CCRC_AUTH — with the flag on and those two wrong, every /ws/* upgrade and every non-exempt write is refused from the real origin, and the server prints no warning about it at boot"

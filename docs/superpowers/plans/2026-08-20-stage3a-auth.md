@@ -121,7 +121,7 @@
 
 ## Deviations found
 
-(Next free number at plan time: **D-108**. Next free now: **D-128**. D-123 is
+(Next free number at plan time: **D-108**. Next free now: **D-131**. D-123 is
 claimed by `server/src/auth/credentials.ts` from Task 8 and has no ledger entry here.)
 
 - **D-115 — the Origin check stopped at the socket, leaving CSRF open.** Task 8 added a
@@ -196,13 +196,17 @@ claimed by `server/src/auth/credentials.ts` from Task 8 and has no ledger entry 
   `auth` remedy prints the same two-step rather than a bare `ccrc passwd`, which would send
   an operator to a command that is about to refuse. The round-trip guard is what makes this
   affordable: `passwd` can no longer CREATE the state it refuses to repair.
-- **D-126 — `ccrc install`'s doctor tail now ends with exactly one WARN, by design.**
-  `install` writes no passphrase (seed-once, plus the `curl … | bash` stdin hazard), and
-  the `auth` check WARNs about a console with no credential — so the transcript that used
-  to assert `0 warned` cannot. `ccrc-install.test.ts` asserts `1 warned, 0 failed` AND names
-  the warning (`WARN auth: no passphrase file at …`), so a second warning, or a different
-  one, is still red. `ccrc-doctor.test.ts`'s `healthy()` fixture grew a real passphrase file
-  instead, keeping "every check PASSES" true of the box that suite calls healthy.
+- **D-126 — the `auth` check PASSes an un-armed box; a fresh install ends GREEN.**
+  Shipped first as the plan's own text said (off + no `auth.scrypt` → WARN), which made
+  `ccrc install`'s doctor tail end `1 warned` on **every** box, since `install` writes no
+  passphrase by doctrine. **Operator ruling (Task 9 review), amending the plan:** auth-off
+  is the default and correct state for a fresh box, and a warning every operator sees every
+  time is one they learn to skim — which costs the warnings that matter (an ARMED gate
+  nobody can log into; a file the server will not boot on). The state is now a PASS whose
+  DETAIL carries the arming instructions as next-steps text, `CCRC_AUTH=on` + absent stays
+  FAIL, and `ccrc-install.test.ts` is back to `0 warned` while also asserting the check ran
+  and found the box uncredentialed (`PASS auth: … nothing is gated`), so `0 warned` cannot
+  be reached by the check having vanished.
 - **D-127 — doctor measures the secret with the SERVER's parser, and prints no byte of the
   file.** `_check_auth` shells to `deploy/gen-auth-hash.mjs --check`, which imports the
   compiled `secret.ts` — a bash approximation would inevitably pass a line the server
@@ -212,6 +216,35 @@ claimed by `server/src/auth/credentials.ts` from Task 8 and has no ledger entry 
   printed, because it quotes the field it choked on (measured: `unknown prefix "<field>"`,
   `N is not a plain decimal integer ("<field>")`) and the plausible way to get an unusable
   `auth.scrypt` is a misplaced copy of another secret. Both leak shapes are pinned by test.
+
+- **D-128 — the trap that protected the terminal broke the abort, and disclosed the
+  passphrase.** `trap 'stty echo' EXIT INT TERM` looks like the standard fix and is a
+  disclosure bug: **bash restarts an interrupted `read` after running a trapped handler**,
+  so Ctrl-C re-enabled echo and handed control back to the still-running prompt. Measured
+  against the shipped verb — `New passphrase (at least 12 characters): VISIBLE-PASSPHRASE`
+  echoed into the terminal and the scrollback, confirmation echoed too, run exited 0 having
+  written the file — under a banner reading "Ctrl-C aborts". Without ANY trap the same
+  Ctrl-C kills the script cleanly. Fixed with two traps: `EXIT` restores echo, `INT`/`TERM`
+  restore it and `exit 130`. The reason it survived a green suite is D-129's sibling: the
+  echo test spawned a SECOND pty, where echo is always on — a test that could not fail.
+  It now runs the verb and `stty` in ONE pty and goes red for this defect.
+- **D-129 — `read` without `IFS=` trims the passphrase, silently.** Measured:
+  `read -rs x` on `"  spaced pass  "` yields `"spaced pass"`; `IFS= read -rs x` preserves it.
+  Both entries trim identically, so the confirmation matches, the file written is valid, and
+  doctor PASSes — while the browser sends the raw string, which never verifies. A lockout
+  with no red anywhere. Every other `read` in `ccd/ccrc` already had `IFS=`; these two did
+  not. Pinned through the FILE (`verifyPassphrase` against the spaced and the trimmed form),
+  not through the transcript.
+- **D-130 — `CCRC_AUTH_SECRET_PATH` was a silent security no-op, not a documentation gap.**
+  `config.ts:339` lets a box redirect the gate's secret. Writing the DEFAULT on such a box
+  is not a cosmetic mismatch: the server keeps reading the override, `passwd` reports
+  success, and doctor then PASSes on the file it just wrote — so an operator rotating after
+  a compromise gets a green transcript over a live, unchanged credential. Both consumers now
+  resolve through one function (`ccrc`'s `_box_auth_path`): an empty override is absent (the
+  bare-`KEY=` rule), an ABSOLUTE override is honoured **and named in the output**, and a
+  RELATIVE one is refused by both — `config.ts` does not resolve it either, so the server
+  resolves it against systemd's working directory and every tool against its own, and no
+  verdict about "the secret" is available when nothing can say which file that is.
 
 **Recorded, deliberately unchanged:** the `signCount` both-zero carve-out. Most Apple/Android
 platform passkeys and every synced credential always send 0; accepting them forfeits nothing,

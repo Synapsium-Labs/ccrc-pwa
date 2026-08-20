@@ -12,6 +12,12 @@
 //   node deploy/gen-auth-hash.mjs --check <path>
 //     measure the file that is there and say which of four states it is in.
 //     `ccrc doctor`'s `auth` check is the caller.
+//   node deploy/gen-auth-hash.mjs --probe
+//     can this box hash at all? Loads the compiled reader and exits. `ccrc
+//     passwd` calls it BEFORE prompting, so "this box has no server build" —
+//     the fleet host's case — is a refusal the operator gets instead of a
+//     prompt, rather than one they get after typing a passphrase twice. It is
+//     here rather than as an `[ -f … ]` in bash so the dist path has one home.
 //
 // ── THE READER IS IMPORTED, NEVER RE-TYPED ────────────────────────────────
 // `server/src/auth/secret.ts` owns the format, the parameter bounds and the
@@ -84,7 +90,8 @@ const die = (msg) => { process.stderr.write(`${PROG}: ${msg}\n`); return 1; };
 function usage() {
   process.stderr.write(
     `usage: node ${PROG}.mjs <auth.scrypt path>      (the passphrase on stdin)\n`
-    + `       node ${PROG}.mjs --check <auth.scrypt path>\n`);
+    + `       node ${PROG}.mjs --check <auth.scrypt path>\n`
+    + `       node ${PROG}.mjs --probe\n`);
   return 2;
 }
 
@@ -201,8 +208,12 @@ async function write(file) {
     return die(
       `${file} exists and this box cannot read it as a secret line, so the generation it carries cannot be `
       + 'read either — and writing a fresh one under an INVENTED generation would revalidate sessions this '
-      + 'command exists to expire. Nothing was written. Move it aside and re-run:\n'
-      + `  mv ${file} ${file}.broken && ccrc passwd`);
+      + 'command exists to expire. Nothing was written. Move it aside and re-run — and take the session file '
+      + `with it, because a fresh secret restarts at generation ${mod.INITIAL_GENERATION}, which is what any `
+      + 'session minted on this box\'s FIRST passphrase is stamped with:\n'
+      + `  mv ${file} ${file}.broken && rm -f ~/.ccrc/sessions.json && ccrc passwd\n`
+      + 'Losing ~/.ccrc/sessions.json costs nothing but logging in again (it is a flat file precisely so it '
+      + 'can be thrown away); CCRC_SESSIONS_PATH overrides where it lives.');
   }
   const generation = existing === null ? mod.INITIAL_GENERATION : existing.generation + 1;
 
@@ -241,6 +252,13 @@ async function write(file) {
     writeFileSync(tmp, `${line}\n`, { mode: 0o600, flag: 'wx' });
     chmodSync(tmp, 0o600);
   } catch (e) {
+    // The temp is unlinked here too, and it is the one path where that was
+    // missing: a create that got as far as the bytes and then failed (ENOSPC
+    // mid-write, or a chmod that could not run) left a partial
+    // `auth.scrypt.tmp.<hex>` that nothing on the box ever reaps — 0600 and
+    // randomly suffixed, so no leak and nothing wedged, but litter beside a
+    // credential is still litter nobody is looking for.
+    try { unlinkSync(tmp); } catch { /* it may never have been created */ }
     return die(`could not write ${tmp} (${e && e.code ? e.code : 'unknown'}) — ${file} was not touched`);
   }
 
@@ -291,6 +309,16 @@ async function write(file) {
 
 async function main(argv) {
   const args = argv.slice(2);
+  if (args[0] === '--probe') {
+    if (args.length !== 1) return usage();
+    // Reads nothing, writes nothing, takes no path: the ONE question is
+    // whether this box can hash, which is the same module load `write` needs.
+    // 5 is `--check`'s "no server build" code, kept the same here so the two
+    // modes cannot come to mean different things by one number.
+    if (await loadSecretModule() !== null) return 0;
+    noBuild();
+    return 5;
+  }
   if (args[0] === '--check') {
     if (args.length !== 2 || args[1] === '') return usage();
     return check(args[1]);
