@@ -11,10 +11,13 @@ export type ReadFailure = 'absent' | 'unreadable';
 
 /** A read that distinguishes ITS OWN two failure modes instead of collapsing
  *  both to `null`, unlike `readFile`/`readFileB64` below. See THE GOVERNING
- *  RULE at `.superpowers/sdd/2026-08-20-fleetio-measured-read/task-E2-brief.md`:
- *  this is ADDITIONAL evidence a call site may use for `ok:true`/`absent`
- *  short-circuits — `unreadable` must fall back to exactly the evidence that
- *  site already used before this type existed, never replace it outright. */
+ *  RULE in `docs/superpowers/plans/2026-08-20-fleetio-measured-read.md`
+ *  (committed, not the session-scoped SDD scratch dir): the measured read is
+ *  ADDITIONAL evidence, never a replacement for existing evidence — at every
+ *  migrated call site, `ok:true`/`reason:'absent'` are POSITIVE answers that
+ *  short-circuit, while `reason:'unreadable'` must fall back to exactly the
+ *  evidence that site already used before this type existed, never replace
+ *  it outright. */
 export type MeasuredRead = { ok: true; content: string } | { ok: false; reason: ReadFailure };
 
 /**
