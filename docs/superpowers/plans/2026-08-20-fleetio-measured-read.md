@@ -378,6 +378,16 @@ that migrates to `readFileMeasured` makes those overrides **inert** — the spre
   inconsistency in the plan rather than departing from it: the seam section above already anticipates
   "a test double that overrides only `readFileMeasured` degrade[s] `readFile` too".
 
+- **D-120 (2026-08-20)** — `readBranchTip`'s migrated loose-ref read carries one residual, stated
+  here rather than left in a report nobody will open. Today a null read is followed by an `io.stat`
+  on the same path; after migration a measured `absent` skips that probe entirely. In the window
+  where a loose ref is CREATED between the read and where the `stat` would have fired, the old code
+  observed presence and refused (`tip-unmeasurable`), and the new code goes to `packed-refs`. The
+  plan's per-site ruling mandates the skip unconditionally and that stands — a `stat` cannot make an
+  ENOENT that already happened un-happen, and a tip measured a round trip earlier is the ordinary
+  condition every reader here lives with. The `unreadable` arm keeps the `stat` probe verbatim, so
+  the fail-shut cases (EACCES, EISDIR, and an older agent's collapse) are untouched.
+
 ## Open questions for the operator
 
 None blocking. Two judgment calls were made rather than asked, both recorded above with their
