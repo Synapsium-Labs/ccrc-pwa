@@ -371,11 +371,13 @@ export async function assembleFleet(
       swapBlocked: r.swapBlocked === null
         ? null
         : { at: r.swapBlocked.at * 1000, reason: r.swapBlocked.reason },
-      // NOT WIRED YET (plan Task 6): the field exists on the wire from Task 5
-      // so revival and the PWA helper have their contract, but this assembly
-      // does not read `r.substrate` until the projection task lands its own
-      // red test first. Until then every live row honestly ships "no fault".
-      substrate: null,
+      // Same seconds→MS conversion, at THIS seam only, like `stoppedBy` and
+      // `swapBlocked` above. An unreadable marker's fail-shut `{at: 0}` rides
+      // through as 0 (not a real 1970 stamp — the PWA renders text-only when
+      // `at === 0` rather than fabricate an epoch-dawn timestamp).
+      substrate: r.substrate === null
+        ? null
+        : { at: r.substrate.at * 1000, text: r.substrate.text },
       // Carried straight off the record. `SessionRecord.spawn: { at; rc } | null`
       // ALREADY EXISTS and is already parsed from `$REG/<id>.spawn` — nothing new
       // is read off disk here, and the `<epoch-seconds> <rc>` encoding is
