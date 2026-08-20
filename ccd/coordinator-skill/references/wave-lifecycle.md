@@ -139,9 +139,18 @@ AskUserQuestion rule, the ban on the destructive verbs and the shape of a
 done-claim's fingerprint already live, pinned by their own suite. Restating any
 of that in a brief buys nothing and spends the one budget a brief is short of
 (the `oversize` ceiling above). **A brief carries what only THIS wave knows:**
-the plan file's path, the tasks or task range this wave owns, the interfaces
-earlier waves settled, the deviations already ledgered, and whatever your
-review of the last handoff decided.
+the plan file's path, the tasks or task range this wave owns, **the execution
+skill the worker should invoke** (`superpowers:executing-plans` or
+`superpowers:subagent-driven-development`), the interfaces earlier waves
+settled, the deviations already ledgered, and whatever your review of the last
+handoff decided.
+
+**The execution skill is the one list item that is not merely useful.** The
+worker's own clause 6 reads "Invoke the execution skill the brief names rather
+than improvising one" — it keys on YOUR brief, so a brief that names none
+leaves that clause pointing at nothing and the worker improvising the very
+thing the clause exists to stop. Name it explicitly, every wave, the same way
+you name the plan file.
 
 **One sentence from the protocol goes in every brief anyway: "commit on this
 workspace's own branch; do not create or switch to a separate feature

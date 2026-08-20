@@ -849,10 +849,12 @@ are hard by-name dependencies of `ccrc install` — `rsync` places the tree, and
 `diff` is what both skill installers compare a config dir against — with **no
 doctor check for either yet**; absent, each refuses naming the package rather
 than failing opaquely mid-copy, and a refused skill install is fatal to the
-whole verb. `cmp` is the third of the class and the mildest: `_inst_atomic`
-and `_inst_tree_copy` leave their comparison unguarded on purpose, so a box
-without it rewrites identical bytes rather than refusing — the safe direction,
-and the reason it is not a refusal like the other two.
+whole verb. `cmp` is the third of the class and the mildest: its two call sites
+— `_inst_atomic` and `_inst_keep_aside` — leave the comparison unguarded on
+purpose, so a box without it rewrites identical bytes rather than refusing, the
+safe direction. (`_inst_tree_copy` compares with `diff -r -q`, not `cmp`, and
+degrades the same way; the refusal on a missing `diff` comes from the two skill
+installers it then runs.)
 
 This is the **single-box** shape only: local fleet mode, localhost, no TLS, no
 agent (`ccrc-agent.service` is deliberately not installed — local mode never

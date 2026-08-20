@@ -194,9 +194,13 @@ not after.
    NEXT wave's brief. **The standing protocol is not yours to re-type: dispatch
    prefixes every brief with the sentence that sends the worker to the
    `ccrc-worker` skill, and that skill IS the protocol** — so your brief carries
-   what only this wave knows (the plan file's path, the task range, the
-   interfaces earlier waves settled, the deviations already ledgered), not the
-   identity, ack, question and fingerprint rules the worker already has.
+   what only this wave knows (the plan file's path, the task range, **the
+   execution skill the worker should invoke**, the interfaces earlier waves
+   settled, the deviations already ledgered), not the
+   identity, ack, question and fingerprint rules the worker already has. The
+   execution skill is not optional: the worker's clause 6 invokes "the
+   execution skill the brief names", so an unnamed one is a clause pointing at
+   nothing (`references/wave-lifecycle.md` §2).
    **One sentence from that protocol still goes in every brief anyway: commit on
    this workspace's own branch, never a separate feature branch** — the
    done-fingerprint (step 4) re-measures the workspace branch, a feature branch

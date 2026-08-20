@@ -539,7 +539,20 @@ describe('the coordinator delegates the standing protocol to the worker skill', 
     expect(wl).toContain(
       "commit on this workspace's own branch; do not create or switch to a separate feature branch.");
     expect(wl).toContain('One sentence from the protocol goes in every brief anyway');
-    expect(wl).toContain('stale-tip');
+    // T5 review F-3: this used to read `expect(wl).toContain('stale-tip')` over
+    // the WHOLE file, which `stale-tip` satisfies three times over from the
+    // reject table and the `no-handoff-commit` row alone — deleting the entire
+    // branch-discipline block left it green, so it could not red for the thing
+    // its own describe claims to guard. SCOPED to the block, and asserting the
+    // whole causal claim rather than one token: the sentence is only load-
+    // bearing BECAUSE of what it prevents, and a block that kept the
+    // instruction while losing the reason is a rule a coordinator may talk
+    // itself out of.
+    const block = wl.slice(wl.indexOf('One sentence from the protocol goes in every brief anyway'),
+      wl.indexOf("The workspace's name is frozen"));
+    expect(block.length, 'the branch-discipline block never closes').toBeGreaterThan(0);
+    expect(block, 'the branch-discipline block no longer says what a feature branch costs')
+      .toMatch(/refuses\s+`stale-tip` forever, with no non-abandon path to close a run/);
     expect(flat(skill)).toContain(
       "One sentence from that protocol still goes in every brief anyway: commit on this " +
       "workspace's own branch, never a separate feature branch");
@@ -630,5 +643,34 @@ describe('the coordinator/worker handshake: shape in, detail out', () => {
     expect(flat(skill)).toContain('mail the worker the rejection code **and its `detail`, verbatim**');
     expect(workerSkill, 'the worker skill no longer reads the detail this forward exists for')
       .toMatch(/`rejected: pr-unmeasurable`, with a detail that mentions `prPhase`/);
+  });
+
+  it('names the EXECUTION SKILL in the brief-content list — worker clause 6 keys on it (T5 review F-2)', () => {
+    // The trim re-created, in one line, the very defect class the test above
+    // fixes. Worker clause 6 says "Invoke the execution skill THE BRIEF NAMES
+    // rather than improvising one" — and before this fix nothing in the whole
+    // coordinator corpus told a coordinator to name one (grep for `execution
+    // skill|executing-plans|subagent-driven` over `ccd/coordinator-skill/**`:
+    // zero hits). That was survivable while brief content was open judgement
+    // under clause 5; the trim turned this list into the AUTHORITATIVE
+    // enumeration of what a brief carries, so an item missing from it is an
+    // item a coordinator now has positive reason to omit.
+    //
+    // SCOPED TO THE LIST, not the file: the point is that the enumeration a
+    // coordinator reads as complete IS complete. A mention three sections away
+    // would satisfy a whole-file `toContain` and still leave the list wrong.
+    const wl = flat(refs('wave-lifecycle.md'));
+    const marker = 'A brief carries what only THIS wave knows:';
+    const start = wl.indexOf(marker);
+    expect(start, 'wave-lifecycle.md carries no positive brief-content list').toBeGreaterThan(-1);
+    const list = wl.slice(start, wl.indexOf('One sentence from the protocol', start));
+    expect(list.length, 'the brief-content list never closes').toBeGreaterThan(0);
+    expect(list, 'the brief-content list omits the execution skill the worker is told to invoke')
+      .toMatch(/execution skill/);
+    // BOTH halves, one test, the `reject.detail` pin's own idiom: a coordinator
+    // told to name a skill nobody invokes, or a worker told to invoke one
+    // nobody names, are the same half-protocol wearing different clothes.
+    expect(workerSkill, 'the worker clause this list item exists to satisfy is gone')
+      .toContain('Invoke the execution skill the brief names rather than improvising one.');
   });
 });
