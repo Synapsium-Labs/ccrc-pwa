@@ -1,13 +1,25 @@
 import type { TailData, TailReset } from '../../../shared/agent-protocol.js';
-import type { FleetIO } from '../io.js';
+import type { FleetIO, ReadFailure } from '../io.js';
 import type { FleetClient } from './client.js';
 
 /**
  * `FleetIO` over the agent's read/readFrom/readB64/readdir/stat/writeB64/tailOpen ops.
- * Read ops mirror `localIO`'s "never throws, null on any failure" contract —
- * a disconnected agent or a forbidden path both collapse to the same "no
- * data" result callers already handle. `writeFileB64` mirrors `localIO`'s
- * write, which does NOT swallow failures — it throws, same as here.
+ * Most read ops mirror `localIO`'s "never throws, null on any failure"
+ * contract — a disconnected agent or a forbidden path both collapse to the
+ * same "no data" result callers already handle. `writeFileB64` mirrors
+ * `localIO`'s write, which does NOT swallow failures — it throws, same as
+ * here.
+ *
+ * `readFileMeasured` is the one exception: it is the SINGLE READER of the
+ * `read` op's `absent?: true` wire field (`{data: string|null, absent?:
+ * true}`, `shared/agent-protocol.ts:105`). `absent` is set true ONLY on the
+ * agent's own proven ENOENT; anything else — including an OLDER agent whose
+ * response omits the field entirely — must fail SHUT to `unreadable`, never
+ * be assumed `absent`. A rejected request (disconnected/timeout/forbidden/
+ * bad-request) is `unreadable` too: `forbidden` in particular is never
+ * `absent` — `checkPath` refuses a path that very often also does not exist,
+ * and conflating the two would let a whitelist refusal masquerade as
+ * evidence the path is clear.
  */
 
 function isTailReset(msg: TailData | TailReset): msg is TailReset {
@@ -25,14 +37,25 @@ export function createIo(client: FleetClient): FleetIO {
       return null;
     },
 
-    async readFile(path) {
+    async readFileMeasured(path) {
       try {
         const res = await client.request({ t: 'req', op: 'read', path });
-        const data = (res as { data?: unknown }).data;
-        return typeof data === 'string' ? data : null;
+        const r = res as { data?: unknown; absent?: unknown };
+        if (typeof r.data === 'string') return { ok: true, content: r.data };
+        const reason: ReadFailure = r.absent === true ? 'absent' : 'unreadable';
+        return { ok: false, reason };
       } catch {
-        return null;
+        // Disconnected / timeout / forbidden / bad-request — none of these
+        // are proof the path is absent (a `forbidden` refusal in particular
+        // very often ALSO doesn't exist, but the whitelist told us nothing
+        // about that).
+        return { ok: false, reason: 'unreadable' };
       }
+    },
+
+    async readFile(path) {
+      const r = await this.readFileMeasured(path);
+      return r.ok ? r.content : null;
     },
 
     async readFileFrom(path, offset) {

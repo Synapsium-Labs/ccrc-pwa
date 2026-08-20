@@ -2,7 +2,8 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { RunningAgent } from '../../agent/src/server.js';
-import type { ConnectedFleet } from '../src/remote/client.js';
+import type { ConnectedFleet, FleetClient } from '../src/remote/client.js';
+import { createIo } from '../src/remote/io.js';
 import { bootAgent, connectToAgent, makeFixture, type RemoteFixture } from './remoteHelpers.js';
 
 describe('remote FleetIO — file ops over the agent WS', () => {
@@ -97,5 +98,82 @@ describe('remote FleetIO — file ops over the agent WS', () => {
     await agent!.close();
     agent = undefined; // already closed — afterEach shouldn't double-close
     await expect(f.io.readFile(file)).resolves.toBeNull();
+  });
+
+  describe('readFileMeasured', () => {
+    it('round-trips content as {ok:true, content}', async () => {
+      const f = await connected();
+      const file = path.join(fixture!.home, '.cc-sessions', 'x.json');
+      writeFileSync(file, '{"a":1}');
+      expect(await f.io.readFileMeasured(file)).toEqual({ ok: true, content: '{"a":1}' });
+    });
+
+    it('a missing file reads as {ok:false, reason:"absent"}', async () => {
+      const f = await connected();
+      const file = path.join(fixture!.home, '.cc-sessions', 'nope.json');
+      expect(await f.io.readFileMeasured(file)).toEqual({ ok: false, reason: 'absent' });
+    });
+
+    it('a directory reads as {ok:false, reason:"unreadable"} (EISDIR, not ENOENT)', async () => {
+      const f = await connected();
+      const dir = path.join(fixture!.home, '.cc-sessions', 'a-directory');
+      mkdirSync(dir, { recursive: true });
+      expect(await f.io.readFileMeasured(dir)).toEqual({ ok: false, reason: 'unreadable' });
+    });
+
+    it('a path outside every whitelist reads as {ok:false, reason:"unreadable"}, NEVER "absent"', async () => {
+      const f = await connected();
+      const outside = path.join(fixture!.projectsRoot, '..', 'definitely-outside.txt');
+      expect(await f.io.readFileMeasured(outside)).toEqual({ ok: false, reason: 'unreadable' });
+    });
+
+    it('a disconnected client reads as {ok:false, reason:"unreadable"}', async () => {
+      const f = await connected();
+      const file = path.join(fixture!.home, '.cc-sessions', 'z2.txt');
+      writeFileSync(file, 'hi');
+      await agent!.close();
+      agent = undefined; // already closed — afterEach shouldn't double-close
+      expect(await f.io.readFileMeasured(file)).toEqual({ ok: false, reason: 'unreadable' });
+    });
+  });
+});
+
+describe('remote FleetIO — readFileMeasured against a stub FleetClient (no real agent)', () => {
+  // Structural stub, same idiom as `remote-runner.test.ts:133` — `FleetClient`
+  // is a class with private fields, so a structural object needs the double
+  // cast through `unknown`.
+  const clientAnswering = (res: unknown): FleetClient =>
+    ({ request: async () => res }) as unknown as FleetClient;
+
+  const rejectingClient = (err: unknown): FleetClient =>
+    ({ request: async () => { throw err; } }) as unknown as FleetClient;
+
+  it('an OLDER AGENT — a response with no `absent` key — reads a genuinely-missing file as "unreadable", NEVER "absent"', async () => {
+    // The whole point of this task: an agent that predates the `absent` wire
+    // field answers plain `{data: null}` for a file that does not exist.
+    // Without a marker to trust, the reader must fail SHUT to "unreadable",
+    // not assume the omission means "absent".
+    const io = createIo(clientAnswering({ data: null }));
+    expect(await io.readFileMeasured('/whatever/missing.txt')).toEqual({ ok: false, reason: 'unreadable' });
+  });
+
+  it('a modern agent answering {data: null, absent: true} reads as "absent"', async () => {
+    const io = createIo(clientAnswering({ data: null, absent: true }));
+    expect(await io.readFileMeasured('/whatever/missing.txt')).toEqual({ ok: false, reason: 'absent' });
+  });
+
+  it('a modern agent answering {data: null} with no absent key (EACCES/EISDIR/etc) reads as "unreadable"', async () => {
+    const io = createIo(clientAnswering({ data: null }));
+    expect(await io.readFileMeasured('/whatever/unreadable.txt')).toEqual({ ok: false, reason: 'unreadable' });
+  });
+
+  it('a string data payload reads as {ok:true, content}', async () => {
+    const io = createIo(clientAnswering({ data: 'hello' }));
+    expect(await io.readFileMeasured('/whatever/file.txt')).toEqual({ ok: true, content: 'hello' });
+  });
+
+  it('a rejected request (forbidden/disconnected/timeout) reads as "unreadable"', async () => {
+    const io = createIo(rejectingClient(new Error('forbidden')));
+    expect(await io.readFileMeasured('/whatever/file.txt')).toEqual({ ok: false, reason: 'unreadable' });
   });
 });
