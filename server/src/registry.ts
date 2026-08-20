@@ -1,6 +1,6 @@
 import path from 'node:path';
 import type { CcrcConfig } from './config.js';
-import type { FleetIO } from './io.js';
+import type { FleetIO, MeasuredRead, ReadFailure } from './io.js';
 import {
   isPrPhase, isStopSurface, type IdentityField, type LifecycleField, type PrPhase, type StopSurface,
 } from '../../shared/api.js';
@@ -16,8 +16,11 @@ import {
 export type { IdentityField };
 
 /** Why `SessionRecord.branch` reads the way it does — see the field's own
- *  docstring for what each member means and what a consumer owes it. */
-export type BranchEvidence = 'named' | 'absent' | 'unreadable' | 'empty';
+ *  docstring for what each member means and what a consumer owes it.
+ *  Derives `'absent' | 'unreadable'` from `io.ts`'s `ReadFailure` rather
+ *  than restating the pair a second time — `single-definition.test.ts`'s
+ *  "one absent/unreadable read vocabulary" pins it. */
+export type BranchEvidence = 'named' | ReadFailure | 'empty';
 
 export interface SessionRecord {
   id: string; wrapper: string; project: string; workdir: string; uuid: string;
@@ -288,6 +291,32 @@ async function field(io: FleetIO, dir: string, id: string, name: string): Promis
   return content !== null ? content.trim() : null;
 }
 
+/**
+ * `field()`'s measured twin (Task 5): reads through `io.readFileMeasured`
+ * instead of `io.readFile`, so a caller gets `absent`/`unreadable` apart
+ * rather than collapsed to one `null`. `field()` itself is UNCHANGED and
+ * keeps calling `io.readFile` — it stays the reader for every registry field
+ * that has not migrated to the measured ladder (see the per-site ruling in
+ * the plan; `field()` still backs `project`/`home`/`pool`/`lastswap`/
+ * `workspace`/`base`/`prphase`/`prnumber`/`prcheckedat`/`archived`/
+ * `archivemanifest`/`swapblocked`/`spawn`).
+ *
+ * Trims INSIDE the `ok` arm, deliberately, so `r.content` on a hit is
+ * ALREADY what `field()`'s callers have always received: `field()`'s own
+ * `.trim()` is load-bearing for `branchEvidence`'s `'empty'` rung (a
+ * zero-byte or torn `.branch` must read as `''`, not as whitespace) and for
+ * `HOLD_NO_REASON`/`SUBSTRATE_NO_REASON` (an all-whitespace `.hold`/
+ * `.substrate` must collapse to the same empty-content branch a zero-byte
+ * one does). Trimming here, once, is also the one-parser reason `field()`
+ * itself trims rather than leaving it to each of the ladder's ~9 call
+ * sites to remember. A `reason` (`absent`/`unreadable`) carries no content
+ * to trim and passes through unchanged.
+ */
+async function fieldMeasured(io: FleetIO, dir: string, id: string, name: string): Promise<MeasuredRead> {
+  const r = await io.readFileMeasured(path.join(dir, `${id}.${name}`));
+  return r.ok ? { ok: true, content: r.content.trim() } : r;
+}
+
 /** A registry field as a finite number, or null. `parseInt` alone yields NaN
  *  for a truncated write, and NaN on the wire renders as `null` in JSON while
  *  typing as `number` — a silent lie. */
@@ -432,14 +461,14 @@ function noteWholeFleetListing(listable: boolean, now: number): void {
 async function buildRecord(
   io: FleetIO, cfg: CcrcConfig, names: string[], id: string, now: number,
 ): Promise<SessionRecord | null> {
-  const [wrapper, project, workdir, uuid, started, home, pool, lastswap, workspace, branch,
+  const [wrapper, project, workdir, uuid, started, home, pool, lastswap, workspace, branchRead,
     base, prPhaseRaw, prNumberRaw, prCheckedAtRaw, archivedRaw, manifestRaw, holdRaw,
     stoppedRaw, supervisedRaw, swapBlockedRaw, spawnRaw, substrateRaw] = await Promise.all([
     field(io, cfg.registryDir, id, 'wrapper'), field(io, cfg.registryDir, id, 'project'),
     field(io, cfg.registryDir, id, 'workdir'), field(io, cfg.registryDir, id, 'uuid'),
     field(io, cfg.registryDir, id, 'started'), field(io, cfg.registryDir, id, 'home'),
     field(io, cfg.registryDir, id, 'pool'), field(io, cfg.registryDir, id, 'lastswap'),
-    field(io, cfg.registryDir, id, 'workspace'), field(io, cfg.registryDir, id, 'branch'),
+    field(io, cfg.registryDir, id, 'workspace'), fieldMeasured(io, cfg.registryDir, id, 'branch'),
     field(io, cfg.registryDir, id, 'base'), field(io, cfg.registryDir, id, 'prphase'),
     field(io, cfg.registryDir, id, 'prnumber'), field(io, cfg.registryDir, id, 'prcheckedat'),
     field(io, cfg.registryDir, id, 'archived'), field(io, cfg.registryDir, id, 'archivemanifest'),
@@ -525,13 +554,21 @@ async function buildRecord(
   // Normalised at THIS one place — the only place that reads the file — rather
   // than defended against three times downstream. `.stopped` above already
   // refuses to trust the same shape, for the same reason.
+  //
+  // Task 5, THE GOVERNING RULE: `branchRead.ok` is today's content branch,
+  // unchanged. `reason === 'absent'` is a POSITIVE answer that short-circuits
+  // to `'absent'` directly — the case that was impossible to express before
+  // `readFileMeasured` existed (a LISTED `.branch` a race genuinely removed
+  // before its own bytes were read). `reason === 'unreadable'` falls back to
+  // EXACTLY today's `names.includes(...)` rung, so an older agent (every read
+  // `unreadable`) reproduces today's answer verbatim.
   const branchEvidence: BranchEvidence =
-    branch === null ? (names.includes(`${id}.branch`) ? 'unreadable' : 'absent')
-      : branch === '' ? 'empty'
-        : 'named';
+    branchRead.ok ? (branchRead.content === '' ? 'empty' : 'named')
+      : branchRead.reason === 'absent' ? 'absent'
+        : (names.includes(`${id}.branch`) ? 'unreadable' : 'absent');
   // The invariant every consumer may rely on, stated once: `branch` is a
   // string exactly when the evidence is `'named'`.
-  const branchName = branchEvidence === 'named' ? branch : null;
+  const branchName = branchEvidence === 'named' && branchRead.ok ? branchRead.content : null;
 
   return {
     id, wrapper: measured.wrapper, project: project ?? id, workdir: measured.workdir, uuid: measured.uuid,

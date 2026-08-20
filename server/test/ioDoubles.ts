@@ -22,8 +22,14 @@
 // ENOENT), so `unreadable` is the fixed, only reason these doubles produce.
 // Preserves every existing assertion written against the old `null` shape
 // (`HOLD_UNREADABLE`, `branchEvidence: 'unreadable'`, `unmeasured`,
-// `lifecycle: 'unmeasurable'`, …) exactly. An `absent` double belongs to the
-// next task's new tests, not here.
+// `lifecycle: 'unmeasurable'`, …) exactly.
+//
+// `absentReadIO`/`absentField` below are Task 5's addition: a PROVEN ENOENT,
+// for the case that was impossible to express before `readFileMeasured`
+// existed — a file this fixture SEEDS (so it is LISTED, present in the
+// directory the test's `readdir` sees) whose read nonetheless answers
+// `absent`, modelling the race `field()` alone could never prove: listed at
+// listing time, genuinely gone (unlinked) by the time its own bytes are read.
 import { localIO, type FleetIO } from '../src/io.js';
 
 /**
@@ -44,4 +50,24 @@ export function degradedReadIO(predicate: (path: string) => boolean): FleetIO {
 /** The common case: one session id's one field file, always degraded. */
 export function unreadableField(id: string, field: string): FleetIO {
   return degradedReadIO((p) => p.endsWith(`${id}.${field}`));
+}
+
+/**
+ * A `FleetIO` double that answers `{ ok: false, reason: 'absent' }` for every
+ * `readFileMeasured` call whose path matches `predicate` — a PROVEN ENOENT,
+ * regardless of what is actually on disk at that path (so it can model a
+ * file the fixture seeded, and therefore LISTS, but that a race unlinked
+ * before its own bytes were read). Delegates everything else to `localIO`,
+ * same shape as `degradedReadIO`.
+ */
+export function absentReadIO(predicate: (path: string) => boolean): FleetIO {
+  return {
+    ...localIO,
+    readFileMeasured: async (p) => (predicate(p) ? { ok: false, reason: 'absent' } : localIO.readFileMeasured(p)),
+  };
+}
+
+/** The common case: one session id's one field file, always measured absent. */
+export function absentField(id: string, field: string): FleetIO {
+  return absentReadIO((p) => p.endsWith(`${id}.${field}`));
 }
