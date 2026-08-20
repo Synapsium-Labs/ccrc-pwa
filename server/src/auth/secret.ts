@@ -236,6 +236,28 @@ function parseAuthSecretLine(line: string, path: string): AuthSecret {
   if (r < 1 || p < 1) {
     throw new AuthSecretUnusable(`${path}: r and p must be ≥ 1 (got r=${r}, p=${p})`);
   }
+  // scrypt's OTHER structural constraint on N, alongside power-of-two: RFC 7914
+  // requires `N < 2^(128 * r / 8)`, i.e. `N < 2^(16 * r)`, and OpenSSL enforces
+  // it. Nothing above models it — the working-set ceiling bounds `N * r` as a
+  // PRODUCT, so it happily admits a large N against a small r (Task 5 review,
+  // F1). Measured on node 24.14.1: `N=65536,r=1,p=1` passes every other check
+  // here and then makes `crypto.scrypt` throw `ERR_CRYPTO_INVALID_SCRYPT_PARAMS`
+  // SYNCHRONOUSLY inside `scryptDerive`'s promise executor — a rejected
+  // `verifyPassphrase`, an uncaught throw in the login route (which has a
+  // `finally` and no `catch`), and a 500 where a broken secret must always answer
+  // 401. The rate-limiter slot is still released, so this is the polarity
+  // residual R5 set out to remove rather than a second denial of service; it is
+  // closed here for the same reason, in the same place.
+  //
+  // `16 * r < 64` short-circuits the exponentiation: past r=3 the bound exceeds
+  // 2^64, which the working-set ceiling already puts far out of reach (it caps
+  // `n` at `MAXMEM_CEILING / (128 * r)`), so there is nothing left to check and
+  // no reason to compute `2 ** 1398096` for a line claiming r=87381.
+  if (16 * r < 64 && n >= 2 ** (16 * r)) {
+    throw new AuthSecretUnusable(
+      `${path}: N=${n} is not below scrypt's 2^(16*r) = ${2 ** (16 * r)} limit for r=${r} ` +
+      '(RFC 7914; OpenSSL refuses the pair) — a working set this shape parses but cannot be derived');
+  }
   if (128 * n * r > MAXMEM_CEILING) {
     throw new AuthSecretUnusable(
       `${path}: N=${n},r=${r} demands a ${128 * n * r} byte working set, past the ${MAXMEM_CEILING} ceiling`);

@@ -108,6 +108,14 @@ describe('readAuthSecret — a garbled line fails SHUT, never reads as "no passp
     // 500 from the login route where a broken secret must always answer 401.
     ['p past the maxmem headroom (scrypt itself would refuse it)',
       validishLine({ params: 'N=2,r=1,p=1048576' })],
+    // Task 5 review F1, measured against real `crypto.scrypt` on node 24.14.1:
+    // this exact triple passes every other check here and then throws
+    // ERR_CRYPTO_INVALID_SCRYPT_PARAMS synchronously, which the login route turns
+    // into a 500 where a broken secret must always answer 401. RFC 7914's
+    // `N < 2^(16*r)`; the working-set ceiling cannot see it because it bounds
+    // `N * r` as a product and so admits a big N against a small r.
+    ['N at scrypt\'s 2^(16*r) limit for r=1 (65536)', validishLine({ params: 'N=65536,r=1,p=1' })],
+    ['N far past 2^(16*r) for r=1', validishLine({ params: 'N=4194304,r=1,p=1' })],
     ['salt not base64 (bad char)', validishLine({ salt: 'ab!d' })],
     ['hash not base64 (bad length)', validishLine({ hash: 'zzz' })],
     ['hash wrong length (16 bytes, want 32)', validishLine({ hash: randomBytes(16).toString('base64') })],
@@ -128,15 +136,39 @@ describe('readAuthSecret — a garbled line fails SHUT, never reads as "no passp
     });
   }
 
-  it('still admits the p values a real deployment could legitimately carry', () => {
-    // The bound is a ceiling on garbage, not a ban on the parameter: `p=8` at the
-    // shipped N/r is the most the work ceiling allows (the same 8x headroom it
-    // already grants N and r), and it bounds one login to ~0.8 s.
+  it('still admits the parameter space a real deployment could legitimately carry', () => {
+    // The bounds are ceilings on garbage, not bans on the parameters: `p=8` at
+    // the shipped N/r is the most the work ceiling allows (the same 8x headroom
+    // it already grants N and r), `N=32768,r=1` is the largest N that clears
+    // scrypt's own `N < 2^(16*r)` at r=1, and `r=8` puts that limit out of reach
+    // entirely.
     const salt = randomBytes(16).toString('base64');
     const hash = randomBytes(KEYLEN).toString('base64');
-    for (const params of ['N=65536,r=8,p=1', 'N=65536,r=8,p=8', 'N=1024,r=8,p=512']) {
+    for (const params of [
+      'N=65536,r=8,p=1', 'N=65536,r=8,p=8', 'N=1024,r=8,p=512', 'N=32768,r=1,p=1', 'N=1048576,r=4,p=1',
+    ]) {
       const s = readAuthSecret(secretFile(`scrypt$${params}$${salt}$${hash}$gen=1`));
       expect(s, params).not.toBeNull();
+    }
+  });
+
+  it('ADMITTED means DERIVABLE — every accepted line round-trips through real scrypt', async () => {
+    // The polarity claim these three bounds exist to make, asserted end to end
+    // rather than argued: a line this parser accepts must be one
+    // `verifyPassphrase` can actually derive. A bound that were merely NECESSARY
+    // (refusing everything scrypt refuses) and not SUFFICIENT would still leave a
+    // 500 on the login route for some accepted shape, which is the whole defect
+    // F1 closed. Cheap parameter sets only — the property is about the parameter
+    // SHAPE, not the cost factor.
+    for (const params of [
+      { n: 32768, r: 1, p: 1, keylen: KEYLEN },   // the largest N at r=1 (F1's boundary)
+      { n: 1024, r: 8, p: 8, keylen: KEYLEN },    // p above 1
+      { n: 1024, r: 8, p: 512, keylen: KEYLEN },  // p at the work ceiling for this N
+    ]) {
+      const line = await hashLine('a passphrase', params, 1);
+      const secret = readAuthSecret(secretFile(line));
+      expect(secret, JSON.stringify(params)).not.toBeNull();
+      await expect(verifyPassphrase(secret!, 'a passphrase')).resolves.toBe(true);
     }
   });
 

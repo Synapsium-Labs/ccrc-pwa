@@ -481,6 +481,27 @@ describe('with CCRC_AUTH off — the shipped default', () => {
    */
   const FLAG_AWARE = new Set(['POST /api/auth/login', 'POST /api/auth/logout']);
 
+  it('FLAG_AWARE is exactly those two — joining it is how a route leaves the sweep', () => {
+    // Review F2. The set is self-checking in ONE direction (a member is held to an
+    // exact 501 dark) and nothing pinned its size, so a future route — Task 8's
+    // passkey endpoints plausibly 501 when the gate is dark — could join it and
+    // quietly stop being compared against its authenticated answer. Membership is
+    // the only way out of the strongest assertion in this file, so it is spelled
+    // out here and a reviewer has to look at the diff.
+    //
+    // DECLARED, NOT DERIVED, deliberately — the alternative ("everything that
+    // 501s dark") would swallow `GET /api/push/key`, `POST /api/push/subscribe`,
+    // `GET /api/runs`, `GET /api/feed` and every other route that answers
+    // `not-configured` for its own unrelated reason, dropping all of them from the
+    // authenticated comparison. That is precisely the failure this test exists to
+    // prevent, arrived at by automation.
+    expect([...FLAG_AWARE].sort()).toEqual(['POST /api/auth/login', 'POST /api/auth/logout']);
+    // …and both really are exempt-or-gated as the loop below assumes: login is
+    // EXEMPT (the door), logout is GATED (only a logged-in caller can log out).
+    expect(EXEMPT.has('POST /api/auth/login')).toBe(true);
+    expect(EXEMPT.has('POST /api/auth/logout')).toBe(false);
+  });
+
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
     // THE PROPERTY, in one loop over all 49 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark

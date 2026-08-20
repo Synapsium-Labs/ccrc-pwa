@@ -306,15 +306,23 @@ describe('POST /api/auth/login', () => {
       // window. That makes this test purely about the `finally` — the failure
       // counter cannot be what refuses, because nothing here is a failure.
       const w = await openApp(); app = w.app;
-      vi.spyOn(SessionStore.prototype, 'create').mockRejectedValue(new Error('disk on fire'));
-      for (let i = 0; i < MAX_FAILURES + 2; i++) {
-        expect((await postLogin(app, PASSPHRASE)).statusCode, `throw ${i + 1}`).toBe(500);
+      const spy = vi.spyOn(SessionStore.prototype, 'create').mockRejectedValue(new Error('disk on fire'));
+      try {
+        for (let i = 0; i < MAX_FAILURES + 2; i++) {
+          expect((await postLogin(app, PASSPHRASE)).statusCode, `throw ${i + 1}`).toBe(500);
+        }
+        // MAX_FAILURES + 2 throws and the budget is untouched: every slot came
+        // back through the `finally`. Without it the 9th call would have been a
+        // 429, and login would stay bricked until the process restarted.
+        expect((await postLogin(app, PASSPHRASE)).statusCode).toBe(500);
+      } finally {
+        // Review F3. A PROTOTYPE spy is global state, and `vitest.config` sets no
+        // `restoreMocks` — so an assertion failing above would have leaked a
+        // permanently-rejecting `SessionStore.create` into every later test in
+        // this file and cascaded one real failure into a dozen confusing ones.
+        // The same discipline the route under test uses, for the same reason.
+        spy.mockRestore();
       }
-      // MAX_FAILURES + 2 throws and the budget is untouched: every slot came back
-      // through the `finally`. Without it the 9th call would have been a 429, and
-      // login would stay bricked until the process restarted.
-      expect((await postLogin(app, PASSPHRASE)).statusCode).toBe(500);
-      vi.restoreAllMocks();
       // …and once the injected failure is gone, login works again — proving the
       // 500s left nothing behind.
       expect((await postLogin(app, PASSPHRASE)).statusCode).toBe(204);
