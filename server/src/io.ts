@@ -6,7 +6,19 @@ import path from 'node:path';
  *  does not exist (ENOENT); `unreadable` means everything else — EACCES,
  *  EISDIR, ENOTDIR, ELOOP, a non-errno failure — the path IS there (or the
  *  box can't even tell) and this box just can't read it. Fail-shut on
- *  purpose: only a proven ENOENT is allowed to answer `absent`. */
+ *  purpose: only a proven ENOENT is allowed to answer `absent`.
+ *
+ *  ONE RESIDUAL, stated rather than closed (wave-1 review minor m2): a
+ *  DANGLING SYMLINK answers `absent`. `readFile` follows the link, the
+ *  TARGET is missing, and the errno is ENOENT — so a name that IS in the
+ *  registry listing reads measured-absent, which is the one crack in
+ *  D-112's "a proven ENOENT can only come from a purge". No ccd verb
+ *  writes a symlink into `$REG`, so the state is reachable only by hand,
+ *  and the direction is the safe one for every current consumer (a hold
+ *  reads released, an identity field retires the row). An `lstat` ladder
+ *  would close it and is deliberately NOT built: it would put a second
+ *  syscall on every field read of every session on every tick to
+ *  distinguish a state nothing in this system produces. */
 export type ReadFailure = 'absent' | 'unreadable';
 
 /** A read that distinguishes ITS OWN two failure modes instead of collapsing
