@@ -109,7 +109,12 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
     case 'bad-transition':
       return reply.code(409).send({ ok: false, error: 'bad-transition', from: r.from, to: r.to });
     case 'bad-request': return reply.code(400).send({ ok: false, error: 'bad-request' });
-    case 'oversize': return reply.code(413).send({ ok: false, error: 'oversize', limit: r.limit });
+    // `detail` rides along unconditionally — it is a distinction this adapter
+    // RECEIVED (which of the two sizes, and by how much), and the sender cannot
+    // recompute it: the brief they hold is not the body the cap measured. The
+    // sentence itself is L1's, spelled beside the check that refuses.
+    case 'oversize':
+      return reply.code(413).send({ ok: false, error: 'oversize', limit: r.limit, detail: r.detail });
     case 'refused': {
       const extra: Record<string, number> = {};
       if (r.limit !== undefined) extra.limit = r.limit;

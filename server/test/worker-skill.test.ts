@@ -19,10 +19,17 @@ import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MAIL_MAX_ATTEMPTS, type PrPhase } from '../../shared/api.js';
+import { WORKER_KICKOFF_PREFIX } from '../src/coord/dispatch.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const skillDir = path.join(root, 'ccd/worker-skill');
 const skill = readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8');
+
+/** The frontmatter block. Hoisted because two tests read it now — the shape
+ *  check below and the dispatch-prefix pin at the foot of this file — and a
+ *  second slice expression is a second thing that has to stay in step with the
+ *  first. */
+const frontmatter = skill.slice(4, skill.indexOf('\n---', 4));
 
 // The ten clauses, verbatim. Every entry is DOUBLE-quoted on purpose: clause 1
 // quotes `tmux display-message -p '#S'` and clause 3 quotes `toId:'coordinator'`
@@ -109,7 +116,7 @@ describe('the worker skill: its contract', () => {
 
   it('has YAML frontmatter with exactly a name and a description that says when NOT to use it', () => {
     expect(skill.startsWith('---\n')).toBe(true);
-    const fm = skill.slice(4, skill.indexOf('\n---', 4));
+    const fm = frontmatter;
     expect(fm).toContain('name: ccrc-worker');
     expect(fm).toMatch(/description:.+/);
     // Two keys, exactly — the coordinator skill's shape. A third key here is
@@ -241,5 +248,38 @@ describe('the worker skill: the facts it states about the wire', () => {
     expect(skill, `the delivered-but-unacked lane must cite ${cited(REPLAY_CONST, replayCeiling)}`)
       .toMatch(new RegExp(
         `delivered[\\s\\S]{0,120}unacked[\\s\\S]{0,80}replays[\\s\\S]{0,80}${cited(REPLAY_CONST, replayCeiling)}`));
+  });
+});
+
+describe('the worker skill: the name dispatch invokes it by', () => {
+  /**
+   * The skill's OWN name, harvested from its frontmatter rather than typed
+   * here — the `replayCeiling` idiom above, for the same reason: a pin whose
+   * two sides are both hand-written can only ever go red for an edit its
+   * author already knows about.
+   *
+   * A skill is invoked BY NAME and by nothing else. Nothing in the harness
+   * resolves `ccrc-worker` to this directory: the installer copies the tree to
+   * `<config dir>/skills/ccrc-worker/` and the model reads the frontmatter,
+   * so the name in this file and the name in the sentence dispatch mails every
+   * worker are two independent strings that MUST agree. Renaming the skill and
+   * leaving the prefix behind does not fail anywhere a human would see it — the
+   * worker is simply told to run something that does not exist, on a box where
+   * no test runs, and gets on with the wave without its standing protocol.
+   */
+  const SKILL_NAME = ((): string => {
+    const m = /^name:\s*(\S+)\s*$/m.exec(frontmatter);
+    if (!m) throw new Error('the worker skill\'s frontmatter declares no `name:` — this pin is ' +
+      'looking at the wrong file, or the skill lost the one field it is invoked by');
+    return m[1]!;
+  })();
+
+  it('is the name the dispatch kickoff prefix tells every worker to run', () => {
+    // The whole point of the pin: this is a RENAME detector, not a spelling
+    // test. `WORKER_KICKOFF_PREFIX` is imported (never harvested as text) so
+    // the string under test is the one dispatch actually composes onto a brief.
+    expect(WORKER_KICKOFF_PREFIX,
+      `dispatch's kickoff prefix does not name the \`${SKILL_NAME}\` skill:\n${WORKER_KICKOFF_PREFIX}`)
+      .toContain(`the ${SKILL_NAME} skill`);
   });
 });
