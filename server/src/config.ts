@@ -246,7 +246,36 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
   // it: `http://localhost:7788` and `port: 7788` must be the same 7788, and a
   // second `Number(env.CCRC_PORT ?? 7788)` inside a template string is exactly
   // the "same value derived twice" shape `coordDbPath` warns about.
-  const port = Number(env.CCRC_PORT ?? 7788);
+  //
+  // VALIDATED, WHICH IS THE HOUSE `||` RULE AND MORE (D-117).
+  //
+  // THE BUG: `port` used to be `Number(env.CCRC_PORT ?? 7788)`, and it is the
+  // one auth-adjacent key that never got the empty-string treatment
+  // `accountsPath` documents at :185-191. `Number('') === 0`, so a bare
+  // `CCRC_PORT=` line in an EnvironmentFile — exactly how `deploy/ccrc.env.example`
+  // ships a key whose default lives here — yielded `port: 0` AND a default
+  // origin of `http://localhost:0`. That origin is not obviously broken to
+  // anything downstream: `new URL` parses it, and `originProblem` ACCEPTS it
+  // (loopback host, http scheme, serializes to itself), so the boot warning
+  // stayed SILENT while every `/ws/*` upgrade and every non-exempt write was
+  // refused for an origin no browser will ever send.
+  //
+  // ONE MECHANISM, NOT TWO. The obvious fix is `||` plus a range check, and that
+  // is what this first was — but the range check already refuses `0`, so the
+  // `||` became a guard whose deletion changed nothing and could not be tested
+  // (measured: mutating it back to `??` left the whole config suite green).
+  // A guard that cannot be measured is a defect here, not defence in depth, so
+  // there is one operator: everything that is not a plausible TCP port —
+  // `undefined`, `''`, `'abc'`, `'0'`, `'-1'`, `'80.5'`, `'70000'` — falls back
+  // to the default. That is a SUPERSET of the `||` rule, and `config.test.ts`
+  // enumerates the cases.
+  //
+  // Refusing `NaN` here rather than downstream is deliberate too: `new URL(
+  // 'http://localhost:NaN')` throws, which `originProblem`'s `try` would turn
+  // into a merely-loud "not a URL" — but a `NaN` handed to `listen()` is not
+  // something to carry that far.
+  const portNum = Number(env.CCRC_PORT);
+  const port = Number.isInteger(portNum) && portNum > 0 && portNum <= 65535 ? portNum : 7788;
   return {
     host: env.CCRC_HOST ?? '127.0.0.1',
     port,

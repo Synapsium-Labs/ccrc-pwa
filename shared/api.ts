@@ -3236,3 +3236,49 @@ export interface PasskeyAssertFinish {
   clientDataJsonB64url: string;
   signatureB64url: string;
 }
+
+/**
+ * One enrolled key, as the ENROLMENT SCREEN sees it — `GET /api/auth/passkeys`,
+ * which is BEHIND the session gate.
+ *
+ * NOT an anonymous shape, and the difference from {@link PasskeyAssertStart}'s
+ * bare id list is the point: `enrolledAt`/`lastUsedAt`/`label` are how an
+ * operator tells one key from another when deciding which to revoke ("the phone
+ * I lost, last used three weeks ago"), and they are exactly the fields that
+ * would be a fingerprinting gift to an anonymous caller. Two routes, two
+ * audiences, two shapes.
+ *
+ * `label` is the enrolling device's user-agent, truncated. It is attacker-
+ * controlled text that a browser will render, so the PWA must treat it as text
+ * and never as markup — React does that by default, which is why it is safe to
+ * carry here at all.
+ */
+export interface PasskeySummary {
+  /** base64url — the id `DELETE /api/auth/passkey/:id` takes. */
+  credentialIdB64url: string;
+  label: string;
+  enrolledAt: number;
+  lastUsedAt: number;
+  /** Whether user verification was performed at enrolment. Informational: the
+   *  policy is enforced on every assertion from the authenticator's own flags,
+   *  never from this. */
+  uvAtEnrollment: boolean;
+}
+
+/**
+ * `GET /api/auth/passkeys` — the enrolment screen's whole view. Gated.
+ *
+ * `storeUnreadable` IS NOT A NICETY (D-119). The credential file has three
+ * states, not two — absent, readable, and PRESENT-BUT-UNREADABLE — and the third
+ * one used to be reported as an empty list, i.e. as "no passkey is enrolled on
+ * this box". An operator who believes that enrols, and the enrolment REWRITES
+ * the file from an in-memory array that is empty only because the read failed,
+ * destroying the credentials that were there. So the screen is told the
+ * difference, and the server refuses the enrolment besides.
+ */
+export interface PasskeyListResponse {
+  credentials: PasskeySummary[];
+  /** True iff the file EXISTS and could not be read or parsed. `credentials` is
+   *  then empty for a reason that is not "there are none". */
+  storeUnreadable: boolean;
+}

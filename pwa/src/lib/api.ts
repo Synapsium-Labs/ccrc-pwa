@@ -2,7 +2,7 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
-import type { AccountsResponse, CatchUp, FleetHealth, FleetSession, LoginRequest, NotifyEvent, PasskeyAssertFinish, PasskeyAssertStart, PasskeyRegisterFinish, PasskeyRegisterStart, PrView, ReapResult, RunSummary, SlashCommand, StagedClip, WsAudit } from '../../../shared/api';
+import type { AccountsResponse, CatchUp, FleetHealth, FleetSession, LoginRequest, NotifyEvent, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, PrView, ReapResult, RunSummary, SlashCommand, StagedClip, WsAudit } from '../../../shared/api';
 import { raiseAuthLostFrom } from './auth';
 
 export class ApiError extends Error {
@@ -302,6 +302,26 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       postJson<PasskeyAssertStart>('/api/auth/passkey/assert/start'),
     passkeyAssertFinish: (b: PasskeyAssertFinish): Promise<void> =>
       post('/api/auth/passkey/assert/finish', b),
+
+    /**
+     * The enrolment screen's two gated calls (Task 8 review, MF-2).
+     *
+     * `revokePasskey` is the control that was missing entirely: without it a lost
+     * authenticator could not be un-enrolled, and the obvious workaround —
+     * deleting `~/.ccrc/passkeys.json` — does NOT work on a running server,
+     * because the store loads once at boot and the next accepted assertion
+     * rewrites the file from memory, resurrecting the row.
+     *
+     * The id goes in the PATH, so it is `encodeURIComponent`'d: it is base64url,
+     * whose alphabet (`A-Za-z0-9-_`) percent-encoding leaves untouched, so this
+     * is the identity today — and it is written anyway, because "today's values
+     * happen not to need escaping" is how a path-injection ships the day the id
+     * format changes.
+     */
+    passkeys: (): Promise<PasskeyListResponse> => getJson<PasskeyListResponse>('/api/auth/passkeys'),
+    revokePasskey: async (credentialIdB64url: string): Promise<void> => {
+      await request(`/api/auth/passkey/${encodeURIComponent(credentialIdB64url)}`, { method: 'DELETE' });
+    },
 
     fleet: () => getJson<{ sessions: FleetSession[]; stale?: boolean; downSince?: number | null }>('/api/fleet'),
     fleetHealth: () => getJson<FleetHealth>('/api/fleet/health'),

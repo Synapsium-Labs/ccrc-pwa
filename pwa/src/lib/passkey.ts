@@ -65,24 +65,50 @@ export function fromB64url(value: string): Uint8Array<ArrayBuffer> {
 }
 
 /**
- * Can this browser run the ceremony at all?
+ * TWO PREDICATES, BECAUSE THE TWO CEREMONIES NEED DIFFERENT THINGS — and the
+ * first version of this file had ONE, which probed the wrong level entirely
+ * (D-122).
  *
- * Checked rather than assumed, and checked for the SPECIFIC methods this design
- * depends on rather than for `PublicKeyCredential` in general: `getPublicKey`
- * and friends arrived later than WebAuthn itself, so a browser can have the API
- * and not have them — and on such a browser the ceremony would complete and then
- * produce a registration the server cannot use. Better to never draw the button.
+ * It tested `PublicKeyCredential.prototype.getClientExtensionResults`, which is
+ * **WebAuthn Level 1** and has been present since 2019 — so it answered "yes" on
+ * every browser that has WebAuthn at all, including one lacking the **Level 2**
+ * response methods (`getPublicKey`, `getPublicKeyAlgorithm`,
+ * `getAuthenticatorData`) that this entire no-CBOR design is built on. The
+ * docstring promised the strict check and the code performed a loose one; on
+ * such a browser the enrol button would open a dialog, the user would touch
+ * their key, and `getPublicKey` would be `undefined`.
  *
- * Also false on a NON-SECURE CONTEXT (plain http off localhost), where
- * `navigator.credentials` is simply absent — which is exactly the state a box
- * with a misconfigured `CCRC_ORIGIN` puts a browser in.
+ * The split is not pedantry: **ENROLMENT needs Level 2, ASSERTION does not.**
+ * `AuthenticatorAssertionResponse`'s `authenticatorData`/`signature` are plain
+ * Level 1 properties, so a browser that cannot enrol can still sign in with a
+ * key enrolled elsewhere (a phone, a hardware key moved between machines). One
+ * predicate for both would hide a working login button for no reason.
  */
-export function passkeySupported(): boolean {
+function credentialsAvailable(): boolean {
+  // Also false on a NON-SECURE CONTEXT (plain http off localhost), where
+  // `navigator.credentials` is simply absent — which is exactly the state a box
+  // with a misconfigured `CCRC_ORIGIN` puts a browser in.
   if (typeof navigator === 'undefined' || navigator.credentials === undefined) return false;
-  const ctor = (globalThis as { PublicKeyCredential?: unknown }).PublicKeyCredential;
+  return typeof (globalThis as { PublicKeyCredential?: unknown }).PublicKeyCredential === 'function';
+}
+
+/** Can this browser SIGN IN with an existing passkey? Level 1 is enough. */
+export function passkeyLoginSupported(): boolean {
+  return credentialsAvailable() && typeof navigator.credentials.get === 'function';
+}
+
+/**
+ * Can this browser ENROL one? Needs the Level 2 response methods, probed on
+ * `AuthenticatorAttestationResponse.prototype` — the interface that actually
+ * declares them — rather than on `PublicKeyCredential`, which does not.
+ */
+export function passkeyEnrollSupported(): boolean {
+  if (!credentialsAvailable() || typeof navigator.credentials.create !== 'function') return false;
+  const ctor = (globalThis as { AuthenticatorAttestationResponse?: unknown })
+    .AuthenticatorAttestationResponse;
   if (typeof ctor !== 'function') return false;
   const proto = (ctor as { prototype?: unknown }).prototype as Record<string, unknown> | undefined;
-  return proto !== undefined && typeof proto['getClientExtensionResults'] === 'function';
+  return proto !== undefined && typeof proto['getPublicKey'] === 'function';
 }
 
 /** What the ceremony needs from the browser, injectable so the tests can drive a

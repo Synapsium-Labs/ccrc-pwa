@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import type { PasskeySummary } from '../../../shared/api.js';
 import { MAX_CREDENTIAL_ID_BYTES, MAX_SPKI_BYTES, decodeB64url, type StoredCredential } from './webauthn.js';
 
 /**
@@ -10,21 +11,37 @@ import { MAX_CREDENTIAL_ID_BYTES, MAX_SPKI_BYTES, decodeB64url, type StoredCrede
  * `write`+`rename`, a serialized flush chain (`notifylog.ts`'s promise chain —
  * two writers interleaved on one tmp path is a dropped rename or stale bytes),
  * a single cached `load` so concurrent mutators cannot clobber each other, and a
- * corrupt file that degrades to EMPTY rather than throwing.
+ * read failure that never throws.
  *
- * DEGRADING TO EMPTY IS THE FAIL-SHUT DIRECTION HERE, and it is worth saying
- * why, because it is the opposite polarity to `secret.ts`. An unreadable
- * PASSPHRASE file must never read as "no passphrase" — that would be a box the
- * gate lets everyone into. An unreadable PASSKEY file reading as "no passkeys
- * are enrolled" refuses every passkey login and leaves the passphrase working:
- * it DENIES. So the same degradation that would be a catastrophe one file over
- * is the correct behaviour here, and the operator's recovery is to sign in with
- * the passphrase and re-enrol.
+ * READING NOTHING DENIES, and that is the fail-shut direction here — the
+ * opposite polarity to `secret.ts`. An unreadable PASSPHRASE file must never
+ * read as "no passphrase"; that would be a box the gate lets everyone into. An
+ * unreadable PASSKEY file yielding no usable credentials refuses every passkey
+ * login and leaves the passphrase working.
+ *
+ * BUT "DENIES" IS NOT THE WHOLE STORY, AND COLLAPSING THE TWO CAUSES COST THE
+ * OPERATOR THEIR CREDENTIALS (D-119). `doLoad` used to fold ENOENT, EACCES and a
+ * corrupt file into one `records = []`, and every reader downstream then said
+ * the same sentence — the enrol screen's "No passkey is enrolled on this box".
+ * An operator who believes it does the obvious thing and enrols, and the first
+ * successful enrolment REWRITES THE WHOLE FILE from an in-memory array that was
+ * empty because the file could not be READ. The other credentials are gone, and
+ * nothing anywhere said so. That is the "no overloaded null at a seam" rule
+ * (`CLAUDE.md`) broken in the direction that destroys data rather than the one
+ * that merely denies, and it is why {@link StoreState} is three states:
+ *
+ *  - `'absent'`   — the ordinary first run. Enrolling is correct and safe.
+ *  - `'ok'`       — the file was read; `records` is what it holds.
+ *  - `'unusable'` — the file EXISTS and could not be read or parsed. Assertions
+ *                   deny (there are no usable credentials), and **enrolment is
+ *                   REFUSED**, because the only way to enrol is to overwrite the
+ *                   file we could not read.
  *
  * DIFFERENT FROM `sessions.ts`, and each difference has a reason:
  *
  *  1. NO SWEEP TIMER. A credential does not expire; it is removed when the
- *     operator removes it. There is nothing to reclaim on a schedule.
+ *     operator revokes it (`DELETE /api/auth/passkey/:id`, wired in `server.ts`).
+ *     There is nothing to reclaim on a schedule.
  *
  *  2. `signCount` MAKES A FAILED WRITE MATTER — this is the one place this store
  *     is NOT "loss is free". The counter is WebAuthn's only defence against a
@@ -71,8 +88,35 @@ export function defaultPasskeysPath(home: string): string {
   return path.join(home, '.ccrc', 'passkeys.json');
 }
 
+/** What the last {@link PasskeyStore.load} found. See the module docstring
+ *  (D-119) for why `'absent'` and `'unusable'` must not be one value. */
+export type StoreState = 'unread' | 'absent' | 'ok' | 'unusable';
+
+/**
+ * Why an enrolment could not be stored. A discriminated result, never a bare
+ * `false` (D-120): `add` used to answer `boolean`, which meant "the store is
+ * full" and "the disk write failed" and "the file is unreadable" were the same
+ * value — and two of those three were not even reachable, because a failed
+ * `doFlush` is swallowed into a `console.warn`, so a full disk returned `true`
+ * and the route answered `204 Passkey added` for a credential that would vanish
+ * on restart. Each arm below is a different sentence the operator needs.
+ */
+export type AddResult =
+  | { ok: true }
+  /** `MAX_CREDENTIALS` reached. */
+  | { ok: false; reason: 'full' }
+  /** The file exists and could not be read — enrolling would overwrite it. */
+  | { ok: false; reason: 'unusable' }
+  /** The row is in memory but did not reach the disk. */
+  | { ok: false; reason: 'write-failed' };
+
 export class PasskeyStore {
   private records: StoredCredential[] = [];
+  private state: StoreState = 'unread';
+  /** Did the LAST write reach the disk? `doFlush` never throws (a rejection
+   *  inside a route handler is a 500 on a path that must answer a refusal), so
+   *  this is how its outcome is reported instead of being swallowed. */
+  private lastWriteOk = true;
   /** The in-flight or completed load, cached so concurrent mutators share ONE
    *  read — `sessions.ts:136`'s reasoning, verbatim: a second `add` fired before
    *  the first's load resolves would push its row and then have the first load's
@@ -96,32 +140,65 @@ export class PasskeyStore {
   }
 
   private async doLoad(): Promise<void> {
+    this.records = [];
     let raw: string;
     try {
       raw = await readFile(this.storePath, 'utf8');
     } catch (err) {
-      // ENOENT is the ordinary "no passkey has ever been enrolled" — silent.
-      // Anything else warns and still degrades to empty: see the module
-      // docstring on why empty is the DENYING answer here.
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-        console.warn(`ccrc-server: ${this.storePath} could not be read ` +
-          `(${(err as NodeJS.ErrnoException).code}); no passkey will be accepted until it can be. ` +
-          'Sign in with the passphrase.');
+      // ENOENT is the ordinary "no passkey has ever been enrolled" — silent, and
+      // `'absent'`, which PERMITS enrolment. Every other read error (EACCES
+      // after a bad chmod, EISDIR, EIO) is a file that EXISTS and cannot be
+      // read: `'unusable'`, which denies assertions AND refuses enrolment,
+      // because enrolling rewrites the file from an in-memory array that is
+      // empty only because the read failed (D-119).
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        this.state = 'absent';
+        return;
       }
-      this.records = [];
+      this.state = 'unusable';
+      console.warn(`ccrc-server: ${this.storePath} EXISTS but could not be read ` +
+        `(${(err as NodeJS.ErrnoException).code}). No passkey will be accepted, and enrolment is ` +
+        'REFUSED until this is fixed — enrolling would overwrite credentials this process cannot ' +
+        'see. Sign in with the passphrase and fix the file\'s permissions.');
       return;
     }
     try {
       this.records = parseCredentials(JSON.parse(raw) as unknown);
+      this.state = 'ok';
     } catch {
-      console.warn(`ccrc-server: ${this.storePath} is corrupt; no passkey will be accepted. ` +
-        'Sign in with the passphrase and re-enrol.');
+      // Present and unparseable. Same reasoning as the errno branch: the bytes
+      // on disk are somebody's credentials, and overwriting them is not this
+      // process's call to make.
+      this.state = 'unusable';
       this.records = [];
+      console.warn(`ccrc-server: ${this.storePath} is corrupt. No passkey will be accepted, and ` +
+        'enrolment is REFUSED until this is fixed — enrolling would overwrite the file. Sign in ' +
+        'with the passphrase; move the file aside deliberately if you mean to start over.');
     }
   }
 
-  /** How many credentials are enrolled — the number `GET /api/auth/status`
-   *  publishes so the login screen knows whether to draw the passkey button. */
+  /** What the last load found. `'unread'` before any load — which denies and
+   *  refuses enrolment, like `'unusable'`, because nobody looked. */
+  loadState(): StoreState {
+    return this.state;
+  }
+
+  /** Can a credential be enrolled right now? False on an unreadable file, so the
+   *  route can refuse rather than overwrite (D-119). */
+  canEnroll(): boolean {
+    return this.state === 'absent' || this.state === 'ok';
+  }
+
+  /**
+   * How many credentials are enrolled — the number `GET /api/auth/status`
+   * publishes so the login screen knows whether to draw the passkey button.
+   *
+   * `0` on an unusable file, which is the right answer for THIS caller and only
+   * this one: the anonymous status route is deciding whether to offer a button,
+   * and a button that cannot work should not be offered. The caller that must
+   * NOT read 0 as "none enrolled" is the authenticated enrol screen, and it
+   * reads {@link loadState} instead — that split is the whole of D-119.
+   */
   count(): number {
     return this.records.length;
   }
@@ -137,6 +214,28 @@ export class PasskeyStore {
    *  the same explicit ruling (`ANON_VISIBLE`, `server.ts`). */
   ids(): string[] {
     return this.records.map((r) => r.credentialId);
+  }
+
+  /**
+   * The enrolled keys as the ENROLMENT SCREEN sees them — `PasskeySummary`, the
+   * gated shape (`shared/api.ts`).
+   *
+   * A PROJECTION, NOT THE ROWS. The stored record carries `spkiB64url`,
+   * `algorithm`, `rpId`, `origin` and `signCount`; none of them belongs on a
+   * screen whose only question is "which of these do I revoke", and mapping
+   * field-by-field rather than spreading means a field ADDED to
+   * `StoredCredential` tomorrow does not silently join the response. (The
+   * `PasskeySummary` annotation is the other half: a field added to the WIRE
+   * shape is a compile error here.)
+   */
+  list(): PasskeySummary[] {
+    return this.records.map((r) => ({
+      credentialIdB64url: r.credentialId,
+      label: r.label,
+      enrolledAt: r.enrolledAt,
+      lastUsedAt: r.lastUsedAt,
+      uvAtEnrollment: r.uvAtEnrollment,
+    }));
   }
 
   /** The credential with this id, or `undefined`. A plain scan: the list is
@@ -158,14 +257,22 @@ export class PasskeyStore {
    * `false` when the store is full — the caller turns that into a refusal the
    * operator can read, never a silent drop.
    */
-  async add(cred: StoredCredential): Promise<boolean> {
+  async add(cred: StoredCredential): Promise<AddResult> {
     await this.ensureLoaded();
+    // REFUSED ON AN UNREADABLE FILE, before anything is pushed. The flush that
+    // would follow rewrites the whole file from `this.records`, which is empty
+    // because the READ failed — so this is the line between "you have no
+    // passkeys" and "you had passkeys and now you do not" (D-119).
+    if (!this.canEnroll()) return { ok: false, reason: 'unusable' };
     const existing = this.records.findIndex((r) => r.credentialId === cred.credentialId);
-    if (existing < 0 && this.records.length >= MAX_CREDENTIALS) return false;
+    if (existing < 0 && this.records.length >= MAX_CREDENTIALS) return { ok: false, reason: 'full' };
     if (existing >= 0) this.records[existing] = cred;
     else this.records.push(cred);
     await this.flush();
-    return true;
+    // The write's outcome is REPORTED, not swallowed (D-120). A full disk used
+    // to answer `204 Passkey added` for a row that vanished on the next restart.
+    if (!this.lastWriteOk) return { ok: false, reason: 'write-failed' };
+    return { ok: true };
   }
 
   /**
@@ -209,7 +316,14 @@ export class PasskeyStore {
       const tmp = `${this.storePath}.${process.pid}.tmp`;
       await writeFile(tmp, snapshot, { mode: FILE_MODE });
       await rename(tmp, this.storePath);
+      this.lastWriteOk = true;
+      // A successful write makes the file READABLE-AND-KNOWN by construction:
+      // these are the bytes we just put there. Without this a store that booted
+      // `'absent'` would stay `'absent'` forever and `canEnroll` would keep
+      // saying yes for the wrong reason.
+      this.state = 'ok';
     } catch (err) {
+      this.lastWriteOk = false;
       // LOUD, where `sessions.ts` is silent, and the difference is the counter.
       // A lost session costs a login. A lost `signCount` write means the value on
       // disk is behind the one in memory, so a RESTART would accept an assertion

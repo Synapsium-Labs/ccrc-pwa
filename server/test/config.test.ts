@@ -242,6 +242,29 @@ describe('loadConfig', () => {
     expect(cfg.origin).toBe('http://localhost:9001');
   });
 
+  it('a BARE `CCRC_PORT=` line reads as unset — it must not become port 0 (D-117)', () => {
+    // The `||` rule was applied to the three new auth keys and NOT to `port`,
+    // from which `origin`'s default derives. `Number('') === 0`, so a bare line
+    // used to give `http://localhost:0` — which `new URL` parses and
+    // `originProblem` ACCEPTS (loopback host, http scheme), so the boot warning
+    // stayed silent while every `/ws/*` upgrade and every non-exempt write was
+    // refused for an origin no browser will ever send. A misconfiguration with
+    // no red anywhere.
+    const cfg = loadConfig({ CCRC_HOME: '/h', CCRC_ACCOUNTS: ROSTER_PATH, CCRC_PORT: '' });
+    expect(cfg.port).toBe(7788);
+    expect(cfg.origin).toBe('http://localhost:7788');
+  });
+
+  it('a nonsense CCRC_PORT falls back rather than carrying NaN into listen()', () => {
+    for (const bad of ['abc', '0', '-1', '70000', '80.5', 'NaN']) {
+      const cfg = loadConfig({ CCRC_HOME: '/h', CCRC_ACCOUNTS: ROSTER_PATH, CCRC_PORT: bad });
+      expect(cfg.port, bad).toBe(7788);
+      expect(cfg.origin, bad).toBe('http://localhost:7788');
+    }
+    // …and a real one still works, so the guard is not refusing everything.
+    expect(loadConfig({ CCRC_HOME: '/h', CCRC_ACCOUNTS: ROSTER_PATH, CCRC_PORT: '443' }).port).toBe(443);
+  });
+
   it('takes CCRC_RP_ID / CCRC_ORIGIN / CCRC_PASSKEYS_PATH as written', () => {
     const cfg = loadConfig({
       CCRC_HOME: '/h', CCRC_ACCOUNTS: ROSTER_PATH,

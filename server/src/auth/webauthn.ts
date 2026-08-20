@@ -161,10 +161,22 @@ const FLAG_AT = 0x40;
  * misses a credential that exists — or, in the mirror, how two spellings of one
  * id become two rows.
  *
- * So: alphabet first, then a ROUND-TRIP check. `buf.toString('base64url')` emits
+ * So: a length bound, then a ROUND-TRIP check. `buf.toString('base64url')` emits
  * the one canonical spelling, and requiring the input to equal it rejects every
  * alias in one line — including the trailing-bit case (`'QQ'` and `'QR'` both
  * decode to `0x41`) that an alphabet test alone cannot see.
+ *
+ * THERE IS NO SEPARATE ALPHABET TEST, AND THAT IS A PROOF RATHER THAN A
+ * SHORTCUT (D-121). This function used to run `/^[A-Za-z0-9_-]+$/` before
+ * decoding, and the review found that deleting it reded nothing — a guard whose
+ * removal is invisible is a defect in this repo, not defence in depth. The
+ * reason it was invisible: `toString('base64url')` can only ever EMIT characters
+ * from `[A-Za-z0-9_-]`, so any input containing a character outside that set is
+ * necessarily different from its own re-encoding and is already refused by the
+ * round-trip. The subsumption is total, not probabilistic, and
+ * `auth-passkey.test.ts` enumerates the classes (`+`, `/`, `=`, whitespace,
+ * control bytes, non-ASCII) to say so out loud. Keeping both would have left one
+ * of them permanently unmeasurable.
  *
  * `null` on any failure, never a throw and never a short buffer.
  */
@@ -173,7 +185,6 @@ export function decodeB64url(field: unknown, maxBytes: number): Buffer | null {
   // Bound the STRING before decoding: 4 base64 chars per 3 bytes, so this caps
   // the allocation without doing it first.
   if (field.length > Math.ceil((maxBytes * 4) / 3) + 4) return null;
-  if (!/^[A-Za-z0-9_-]+$/.test(field)) return null;
   const buf = Buffer.from(field, 'base64url');
   if (buf.length === 0 || buf.length > maxBytes) return null;
   if (buf.toString('base64url') !== field) return null;
@@ -364,9 +375,18 @@ export const CHALLENGE_TTL_MS = 2 * 60 * 1000;
  * would let an attacker who fills the map lock the operator OUT of their own
  * passkey button — a denial of service that outlives the flood. Evicting means
  * the worst an attacker achieves is invalidating a ceremony that is already in
- * flight, which self-heals on the next tap. The rate limiter in front of the
- * route (`PASSKEY_MAX_FAILURES`) is what makes filling it expensive in the
- * first place; this is the backstop, not the brake.
+ * flight, which self-heals on the next tap.
+ *
+ * EVICTION IS ONLY TOLERABLE BECAUSE ISSUANCE IS METERED (D-118). The claim that
+ * this is "the backstop, not the brake" was FALSE as first shipped: the brake in
+ * front of it — `PASSKEY_MAX_FAILURES` — was spent only by a failed
+ * `assert/finish`, never by `assert/start`, so minting challenges was free and
+ * an unauthenticated flood could evict a live ceremony in milliseconds. The
+ * operator's Face ID prompt then resolved onto a challenge that no longer
+ * existed, producing `stale-challenge` → 401 → "That passphrase didn't match",
+ * for as long as the flood ran and with no self-healing. `assert/start` now
+ * calls `LoginRateLimiter.spend` on every issue, which is what makes this
+ * sentence true.
  */
 export const MAX_LIVE_CHALLENGES = 64;
 

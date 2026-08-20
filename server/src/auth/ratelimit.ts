@@ -71,6 +71,15 @@ export const MAX_FAILURES = 8;
  * challenge store (`webauthn.ts`'s `MAX_LIVE_CHALLENGES`, which evicts rather
  * than refuses precisely so this cannot lock the operator out).
  *
+ * THE SECOND OF THOSE IS ONLY TRUE BECAUSE ISSUANCE SPENDS THE BUDGET. Both
+ * halves of the ceremony charge against this window — `assert/finish` through
+ * {@link LoginRateLimiter.fail} on a refusal, and `assert/start` through
+ * {@link LoginRateLimiter.spend} on every challenge minted. Until D-118 only the
+ * first did, which made the sentence above false in the exact case it was
+ * written for: a start-only flood cost nothing and evicted the operator's live
+ * challenge for free. A brake that cannot fire on the path that spends the
+ * resource is not a brake.
+ *
  * 60 PER MINUTE IS ONE PER SECOND — two orders of magnitude above any human
  * tapping a passkey button (a ceremony takes seconds, and three retries is a bad
  * day), and low enough that neither the journal nor the challenge map can be
@@ -236,9 +245,34 @@ export class LoginRateLimiter {
     return this.inFlight;
   }
 
-  /** Records one failed login attempt against the window. */
-  fail(now = Date.now()): void {
+  /**
+   * SPEND ONE UNIT of this window's budget — the primitive, under the name that
+   * describes what it does rather than why a caller does it.
+   *
+   * It exists because the passkey lane spends budget on something that is not a
+   * failure (D-118): ISSUING A CHALLENGE. `assert/start` is unauthenticated,
+   * exempt, takes a bodyless POST, and consumes a bounded resource — a slot in
+   * the 64-entry challenge map, which evicts OLDEST-FIRST. Until this existed the
+   * route took a reservation and released it in the same tick (the handler is
+   * `async` but has no `await`: `issue` and `ids()` are synchronous), and it
+   * never called `fail()` — so `count + inFlight` was `0 + 0` on every request
+   * and the brake could not fire on the only path that spends the resource.
+   *
+   * A start-only flood could therefore evict the operator's live challenge in
+   * milliseconds, turning a Face ID prompt into `stale-challenge` → 401 →
+   * "That passphrase didn't match", for as long as the flood ran. It did not
+   * self-heal.
+   */
+  spend(now = Date.now()): void {
     this.state = recordFailure(this.state, now);
+  }
+
+  /** Records one FAILED login attempt against the window — the passphrase door's
+   *  name for {@link spend}, where the unit spent really is a failed guess. One
+   *  reducer, two names, because the two call sites mean different things and a
+   *  second copy of the window arithmetic is how they would come to disagree. */
+  fail(now = Date.now()): void {
+    this.spend(now);
   }
 
   /** Records a successful login — clears the counter. */

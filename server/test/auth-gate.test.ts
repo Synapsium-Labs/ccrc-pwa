@@ -167,12 +167,12 @@ describe('the scanner is looking at something', () => {
     // precisely the state this whole file exists to make impossible. Adding a
     // route is now a deliberate act that edits these three numbers, with a
     // reviewer looking at them.
-    expect(scanRoutes('server.ts').length).toBe(43);
+    expect(scanRoutes('server.ts').length).toBe(45);
     expect(scanRoutes('coord/routes.ts').length).toBe(13);
-    expect(ROUTES.length).toBe(56);
-    // …and the three partitions add up: 3 websockets + 53 HTTP.
+    expect(ROUTES.length).toBe(58);
+    // …and the three partitions add up: 3 websockets + 55 HTTP.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
-    expect(ROUTES.filter((r) => !isWs(r)).length).toBe(53);
+    expect(ROUTES.filter((r) => !isWs(r)).length).toBe(55);
   });
 
   it('found the specific registrations this file reasons about', () => {
@@ -188,6 +188,10 @@ describe('the scanner is looking at something', () => {
       // blind to exactly that distinction.
       'POST /api/auth/passkey/register/start', 'POST /api/auth/passkey/register/finish',
       'POST /api/auth/passkey/assert/start', 'POST /api/auth/passkey/assert/finish',
+      // Revocation (MF-2). `DELETE` is the first non-GET/POST verb on this
+      // server, which is exactly why `scanRoutes`' regex has always matched all
+      // five shorthands rather than the two in use.
+      'GET /api/auth/passkeys', 'DELETE /api/auth/passkey/:id',
     ]) expect(keys, `${k} was not found by the scanner`).toContain(k);
     // Both a GET and a POST on the same path, which is the case a path-only
     // exempt table would get wrong (the POST is a box-token machine lane, the
@@ -279,7 +283,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 56 scanned + the static wildcard when the bundle is built.
+    // 58 scanned + the static wildcard when the bundle is built.
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
     // And the reconstruction really joins the tree back up, rather than reading
     // leaf segments: these two only exist if the depth walk works.
@@ -391,9 +395,9 @@ describe('with the gate ARMED and no cookie', () => {
     // Guards the `it.each` below the same way the scanner meta-test guards the
     // scan: an EXEMPT table that had swallowed everything would leave nothing to
     // assert and report green. Exact rather than a floor, for the same reason —
-    // 56 scanned − 3 websockets − 15 exempt-and-scanned (16 EXEMPT entries less
-    // `GET /*`, which no `app.get('…')` registers) = 38.
-    expect(gated.length).toBe(38);
+    // 58 scanned − 3 websockets − 15 exempt-and-scanned (16 EXEMPT entries less
+    // `GET /*`, which no `app.get('…')` registers) = 40.
+    expect(gated.length).toBe(40);
     expect(ROUTES.length - ROUTES.filter(isWs).length - gated.length).toBe(EXEMPT.size - 1);
   });
 
@@ -503,9 +507,12 @@ describe('with CCRC_AUTH off — the shipped default', () => {
     // into and nothing to log into, so all four answer `501 not-configured`.
     'POST /api/auth/passkey/register/start', 'POST /api/auth/passkey/register/finish',
     'POST /api/auth/passkey/assert/start', 'POST /api/auth/passkey/assert/finish',
+    // The revocation pair, same reasoning: with no session gate there is nothing
+    // to enrol into, so there is nothing to list or revoke either.
+    'GET /api/auth/passkeys', 'DELETE /api/auth/passkey/:id',
   ]);
 
-  it('FLAG_AWARE is exactly those six — joining it is how a route leaves the sweep', () => {
+  it('FLAG_AWARE is exactly those eight — joining it is how a route leaves the sweep', () => {
     // Review F2. The set is self-checking in ONE direction (a member is held to an
     // exact 501 dark) and nothing pinned its size, so a future route — Task 8's
     // passkey endpoints plausibly 501 when the gate is dark — could join it and
@@ -520,6 +527,8 @@ describe('with CCRC_AUTH off — the shipped default', () => {
     // authenticated comparison. That is precisely the failure this test exists to
     // prevent, arrived at by automation.
     expect([...FLAG_AWARE].sort()).toEqual([
+      'DELETE /api/auth/passkey/:id',
+      'GET /api/auth/passkeys',
       'POST /api/auth/login',
       'POST /api/auth/logout',
       'POST /api/auth/passkey/assert/finish',
@@ -534,7 +543,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 53 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 55 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -581,7 +590,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware. This is the assertion that covers all 53
+          //    is not itself flag-aware. This is the assertion that covers all 55
           //    rather than the 15 exempt ones.
           if (auth === null) {
             if (dk.statusCode !== 501) drift.push(`${k}: dark → ${dk.statusCode}, want 501 not-configured`);
@@ -597,7 +606,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it.each(WS_ROUTES)('the %s socket still upgrades with the gate dark', async (route) => {
-    // All THREE (review R2), not just `/ws/fleet`: "53 routes and 3 websockets
+    // All THREE (review R2), not just `/ws/fleet`: "55 routes and 3 websockets
     // are unaffected when the flag is off" is the claim, and one socket did not
     // establish it. Safe to open here for the same reason the armed sweep is
     // safe to run: `spawnPty` is stubbed, so `/ws/pty` attaches nothing, and its

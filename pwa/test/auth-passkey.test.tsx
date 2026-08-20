@@ -19,10 +19,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { COSE_ES256 } from '../../shared/api';
 import { LoginScreen, VERDICT_TEXT } from '../src/components/LoginScreen';
+import { AccountsScreen } from '../src/screens/AccountsScreen';
 import { ApiError } from '../src/lib/api';
 import { clearAuthLost, isAuthLost, raiseAuthLost } from '../src/lib/auth';
 import {
-  PasskeyCeremonyError, assertPasskey, enrollPasskey, fromB64url, passkeySupported, toB64url,
+  PasskeyCeremonyError, assertPasskey, enrollPasskey, fromB64url, passkeyEnrollSupported,
+  passkeyLoginSupported, toB64url,
 } from '../src/lib/passkey';
 
 const json = (status: number, body?: unknown): Response =>
@@ -32,11 +34,32 @@ const json = (status: number, body?: unknown): Response =>
 
 const b64url = (bytes: number[]): string => toB64url(new Uint8Array(bytes).buffer);
 
-/** A browser that CAN run the ceremony, as `passkeySupported` measures one. */
+/**
+ * A browser that can do BOTH ceremonies — WebAuthn Level 2, i.e. with the
+ * response methods the no-CBOR design needs. `AuthenticatorAttestationResponse`
+ * is stubbed because that is the interface which actually declares
+ * `getPublicKey()`; stubbing `PublicKeyCredential` alone is the L1-vs-L2 mistake
+ * this fixture exists to make impossible to repeat.
+ */
 const supportBrowser = (): void => {
   vi.stubGlobal('PublicKeyCredential', class {
     getClientExtensionResults(): unknown { return {}; }
   });
+  vi.stubGlobal('AuthenticatorAttestationResponse', class {
+    getPublicKey(): unknown { return null; }
+  });
+  vi.stubGlobal('navigator', { ...navigator, credentials: { create: vi.fn(), get: vi.fn() } });
+};
+
+/** A browser with WebAuthn LEVEL 1 only: it has `PublicKeyCredential` and
+ *  `navigator.credentials`, and no `AuthenticatorAttestationResponse.prototype.
+ *  getPublicKey`. It can SIGN IN with a key enrolled elsewhere and cannot
+ *  CREATE one — the case a single predicate got wrong in both directions. */
+const level1Browser = (): void => {
+  vi.stubGlobal('PublicKeyCredential', class {
+    getClientExtensionResults(): unknown { return {}; }
+  });
+  vi.stubGlobal('AuthenticatorAttestationResponse', undefined);
   vi.stubGlobal('navigator', { ...navigator, credentials: { create: vi.fn(), get: vi.fn() } });
 };
 
@@ -239,23 +262,53 @@ describe('assertPasskey', () => {
   });
 });
 
-// ── 4. passkeySupported ─────────────────────────────────────────────────────
+// ── 4. the two support predicates ───────────────────────────────────────────
 
-describe('passkeySupported fails CLOSED', () => {
-  it('is false with no WebAuthn at all', () => {
+describe('the support predicates fail CLOSED, and are not the same question', () => {
+  it('both false with no WebAuthn at all', () => {
     vi.stubGlobal('PublicKeyCredential', undefined);
-    expect(passkeySupported()).toBe(false);
+    vi.stubGlobal('AuthenticatorAttestationResponse', undefined);
+    expect(passkeyLoginSupported()).toBe(false);
+    expect(passkeyEnrollSupported()).toBe(false);
   });
 
-  it('is false with no credentials container — a non-secure context', () => {
+  it('both false with no credentials container — a non-secure context', () => {
     vi.stubGlobal('PublicKeyCredential', class {});
     vi.stubGlobal('navigator', { ...navigator, credentials: undefined });
-    expect(passkeySupported()).toBe(false);
+    expect(passkeyLoginSupported()).toBe(false);
+    expect(passkeyEnrollSupported()).toBe(false);
   });
 
-  it('is true only when both halves are there', () => {
+  it('both true on a Level 2 browser', () => {
     supportBrowser();
-    expect(passkeySupported()).toBe(true);
+    expect(passkeyLoginSupported()).toBe(true);
+    expect(passkeyEnrollSupported()).toBe(true);
+  });
+
+  it('ENROL false and LOGIN TRUE on a Level 1 browser — the L1/L2 split', () => {
+    // THE BUG THIS PINS: the single predicate probed
+    // `PublicKeyCredential.prototype.getClientExtensionResults`, which is
+    // WebAuthn L1 and present since 2019 — so it answered "yes" on a browser
+    // with no `getPublicKey()`, and the enrol button would open a dialog it
+    // could not finish. Probing the L2 method on the interface that declares it
+    // fixes that; splitting the predicate keeps the LOGIN button, which needs
+    // only L1, from being hidden for no reason.
+    level1Browser();
+    expect(passkeyEnrollSupported()).toBe(false);
+    expect(passkeyLoginSupported()).toBe(true);
+  });
+
+  it('the enrol probe looks at AuthenticatorAttestationResponse, not PublicKeyCredential', () => {
+    // Directly: an L1 `PublicKeyCredential` that carries `getPublicKey` on ITS
+    // prototype must not satisfy the enrol probe — that is not where the method
+    // lives, and believing it does is the original defect.
+    vi.stubGlobal('PublicKeyCredential', class {
+      getPublicKey(): unknown { return null; }
+      getClientExtensionResults(): unknown { return {}; }
+    });
+    vi.stubGlobal('AuthenticatorAttestationResponse', undefined);
+    vi.stubGlobal('navigator', { ...navigator, credentials: { create: vi.fn(), get: vi.fn() } });
+    expect(passkeyEnrollSupported()).toBe(false);
   });
 });
 
@@ -384,5 +437,95 @@ describe('the passkey button on the login screen', () => {
     const btn = await screen.findByRole('button', { name: PASSKEY_BUTTON });
     await act(async () => { fireEvent.click(btn); });
     expect(await screen.findByText(VERDICT_TEXT.wrong)).toBeInTheDocument();
+  });
+});
+
+// ── 6. the enrolment screen: list, revoke, and the unreadable-file branch ────
+
+describe('PasskeySection', () => {
+  const listBody = (over: Partial<{ credentials: unknown[]; storeUnreadable: boolean }> = {}) =>
+    JSON.stringify({ credentials: [], storeUnreadable: false, ...over });
+
+  /** A fetch that answers the three routes this screen touches and 404s the
+   *  rest (the accounts poll, which the section does not depend on). */
+  const screenFetch = (opts: {
+    status?: unknown;
+    list?: string;
+    onDelete?: () => Response;
+  } = {}) => vi.fn(async (url: unknown, init?: RequestInit) => {
+    const u = String(url);
+    if (u.startsWith('/api/auth/status')) {
+      return json(200, opts.status ?? { authed: true, passkeysEnrolled: 1, mode: 'passphrase' });
+    }
+    if (u === '/api/auth/passkeys') return new Response(opts.list ?? listBody(), { status: 200 });
+    if (u.startsWith('/api/auth/passkey/') && init?.method === 'DELETE') {
+      return (opts.onDelete ?? (() => json(204)))();
+    }
+    return json(404, { error: 'not-found' });
+  });
+
+  const CRED = {
+    credentialIdB64url: 'AQEB',
+    label: 'Pixel 8 / Chrome',
+    enrolledAt: Date.now() - 86_400_000,
+    lastUsedAt: Date.now() - 3_600_000,
+    uvAtEnrollment: true,
+  };
+
+  it('lists each key with the label the revoke DECISION needs', async () => {
+    supportBrowser();
+    vi.stubGlobal('fetch', screenFetch({ list: listBody({ credentials: [CRED] }) }));
+    render(<AccountsScreen />);
+    expect(await screen.findByText(/Pixel 8 \/ Chrome/)).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /revoke passkey/i })).toBeInTheDocument();
+  });
+
+  it('REVOKES through DELETE and re-reads the list', async () => {
+    supportBrowser();
+    const fetchImpl = screenFetch({ list: listBody({ credentials: [CRED] }) });
+    vi.stubGlobal('fetch', fetchImpl);
+    render(<AccountsScreen />);
+    const btn = await screen.findByRole('button', { name: /revoke passkey/i });
+    await act(async () => { fireEvent.click(btn); });
+
+    const del = fetchImpl.mock.calls.find(([, i]) => (i as RequestInit | undefined)?.method === 'DELETE');
+    expect(del, 'no DELETE was sent').toBeTruthy();
+    expect(String(del![0])).toBe('/api/auth/passkey/AQEB');
+    expect(await screen.findByText(/revoked/i)).toBeInTheDocument();
+  });
+
+  it('an UNREADABLE store says DO NOT ENROL — never "no passkey is enrolled" (D-119)', async () => {
+    // The sentence that caused the data loss. An operator told "no passkey is
+    // enrolled" enrols, and the enrolment rewrites a file the server could not
+    // read, destroying the keys inside it.
+    supportBrowser();
+    vi.stubGlobal('fetch', screenFetch({
+      status: { authed: true, passkeysEnrolled: 0, mode: 'passphrase' },
+      list: listBody({ storeUnreadable: true }),
+    }));
+    render(<AccountsScreen />);
+    expect(await screen.findByText(/cannot be read/i)).toBeInTheDocument();
+    expect(screen.queryByText(/No passkey is enrolled/i)).not.toBeInTheDocument();
+    // …and there is no way to enrol from here at all.
+    expect(screen.queryByRole('button', { name: /add a passkey/i })).not.toBeInTheDocument();
+  });
+
+  it('renders NOTHING on a dark box', async () => {
+    supportBrowser();
+    vi.stubGlobal('fetch', screenFetch({ status: { authed: true, passkeysEnrolled: 0, mode: 'off' } }));
+    render(<AccountsScreen />);
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+    await act(async () => {});
+    expect(screen.queryByText(/^Passkeys$/)).not.toBeInTheDocument();
+  });
+
+  it('hides only the ADD button on a Level 1 browser, and keeps the list', async () => {
+    // The L1/L2 split at the surface: a browser that can sign in with a key
+    // enrolled on a phone still gets to SEE and REVOKE its keys.
+    level1Browser();
+    vi.stubGlobal('fetch', screenFetch({ list: listBody({ credentials: [CRED] }) }));
+    render(<AccountsScreen />);
+    expect(await screen.findByText(/Pixel 8 \/ Chrome/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /add a passkey/i })).not.toBeInTheDocument();
   });
 });

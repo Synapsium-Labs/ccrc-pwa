@@ -25,7 +25,7 @@ import type { FormEvent, ReactNode } from 'react';
 import type { AuthStatus, AuthVerdict } from '../../../shared/api';
 import { ApiError, api } from '../lib/api';
 import { clearAuthLost, readAuthStatus, useAuthLost, verdictOf } from '../lib/auth';
-import { PasskeyCeremonyError, assertPasskey, passkeySupported } from '../lib/passkey';
+import { PasskeyCeremonyError, assertPasskey, passkeyLoginSupported } from '../lib/passkey';
 
 /**
  * One sentence per verdict — the whole point of `AuthVerdict` being a six-member
@@ -188,11 +188,14 @@ export function LoginScreen(): ReactNode {
    *  - `passkeysEnrolled` is `0` on a box with none and on a DARK box (the
    *    server does not load the store when the gate is off), so a dark box never
    *    draws it. `?? 0` covers an older server and a minimized body.
-   *  - `passkeySupported()` checks the specific WebAuthn methods this design
-   *    needs, not merely that `PublicKeyCredential` exists — a button that opens
-   *    a dialog and then cannot complete is worse than no button.
+   *  - `passkeyLoginSupported()` — the LOGIN half of the support question, which
+   *    is deliberately the looser one: asserting needs only WebAuthn Level 1
+   *    (`authenticatorData`/`signature` are plain properties), where ENROLLING
+   *    needs the Level 2 response methods. Requiring the strict check here would
+   *    hide a working button on a browser that can sign in with a key enrolled
+   *    on a phone but could not have created one itself.
    */
-  const offerPasskey = (status?.passkeysEnrolled ?? 0) > 0 && passkeySupported();
+  const offerPasskey = (status?.passkeysEnrolled ?? 0) > 0 && passkeyLoginSupported();
 
   // Newest fact first: what just happened, then what the box says about itself,
   // then why the session went in the first place.

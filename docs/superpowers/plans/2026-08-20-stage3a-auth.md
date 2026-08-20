@@ -121,7 +121,71 @@
 
 ## Deviations found
 
-(Next free number at plan time: **D-108**.)
+(Next free number at plan time: **D-108**. Next free now: **D-123**.)
+
+- **D-115 — the Origin check stopped at the socket, leaving CSRF open.** Task 8 added a
+  `/ws/*` Origin check because `ts.net` is a public suffix, so every tailnet node is
+  *same-site* and `SameSite=Lax` sends `ccrc_session` between them — then justified
+  scoping it to upgrades with "ordinary requests are guarded by SameSite plus every write
+  being a POST", a sentence the same file refutes three paragraphs earlier. Measured: a
+  same-site sibling page can auto-submit a form POST to `/api/fleet/reboot` (reads no body,
+  no params, gates only on standing config) and reboot the fleet host. The comfortable
+  415 escape does not exist — Fastify seeds `text/plain` as a default parser, and
+  `@fastify/multipart` is registered, so two of the three form enctypes reach a handler.
+  Fixed: `needsOriginCheck` covers every upgrade and every non-exempt non-GET/HEAD/OPTIONS
+  request. `gate.ts`.
+- **D-116 — the cost of D-115, recorded rather than engineered around.** The Origin check
+  refuses a PWA loaded from any host alias that is not `CCRC_ORIGIN` (e.g. the tailnet IP).
+  Intended: the box has one origin and says so. The refusal names `CCRC_ORIGIN` and carries
+  **no `AuthVerdict`**, so it cannot raise a login screen no passphrase could clear.
+- **D-117 — `CCRC_PORT` never got the empty-string rule, and `origin` derives from it.**
+  `Number('') === 0`, so a bare `CCRC_PORT=` line gave `http://localhost:0` — which
+  `originProblem` *accepts* (loopback, http, canonical), so the boot warning stayed silent
+  while every socket and write was refused. Fixed with one validation operator rather than
+  `||` plus a range check: the range check already subsumed the `||`, which made the `||`
+  unmeasurable. `config.ts`.
+- **D-118 — `assert/start` was unmetered, so challenge eviction was a lockout lever.** The
+  handler is `async` with no `await`, so its reservation released in the same tick and
+  `inFlight` never exceeded 1; it never called `fail()`. `count + inFlight < 60` was
+  therefore `0 + 0` forever. An anonymous peer could evict the operator's in-flight
+  challenge (64 entries, oldest-first) faster than a Face ID prompt resolves, rendering as
+  "That passphrase didn't match" for the duration. Fixed: `LoginRateLimiter.spend` — the
+  primitive under the name that describes it, with `fail` delegating. `ratelimit.ts`,
+  `server.ts`.
+- **D-119 — absent and unreadable were one state, and the collapse destroyed credentials.**
+  `PasskeyStore.doLoad` folded ENOENT / EACCES / corrupt into `records = []`, and the enrol
+  screen then said "No passkey is enrolled on this box". An operator who believes it enrols,
+  and the enrolment rewrites the file from an in-memory array that is empty *because the read
+  failed*. Fixed: a three-state `StoreState`; `'unusable'` denies assertions **and refuses
+  enrolment**; `PasskeyListResponse.storeUnreadable` tells the screen to say so instead.
+  `credentials.ts`, `server.ts`, `AccountsScreen.tsx`.
+- **D-120 — `add()` returned an overloaded boolean.** `true` meant "stored" even when
+  `doFlush` had swallowed a write failure into a warn, so a full disk answered
+  `204 Passkey added` for a row that vanished on restart. Fixed: a discriminated `AddResult`
+  (`full` / `unusable` / `write-failed`). `credentials.ts`.
+- **D-121 — `decodeB64url`'s alphabet test was unmeasurable, and provably redundant.**
+  `toString('base64url')` can only emit `[A-Za-z0-9_-]`, so any input outside that set already
+  differs from its own re-encoding. Deleted rather than kept as unmeasurable defence in depth;
+  the subsumption is enumerated by test. `webauthn.ts`.
+- **D-122 — `passkeySupported()` probed WebAuthn Level 1 for a Level 2 requirement.** It
+  tested `PublicKeyCredential.prototype.getClientExtensionResults` (present since 2019) while
+  the no-CBOR design needs `AuthenticatorAttestationResponse.prototype.getPublicKey`. Split
+  into `passkeyLoginSupported` (L1 is enough to assert) and `passkeyEnrollSupported` (L2),
+  because a browser that cannot enrol can still sign in with a key enrolled on a phone.
+  `pwa/src/lib/passkey.ts`.
+
+**Recorded, deliberately unchanged:** the `signCount` both-zero carve-out. Most Apple/Android
+platform passkeys and every synced credential always send 0; accepting them forfeits nothing,
+because clone detection was never available for a key that lives in several places by design.
+The single-use challenge remains the replay defence for those credentials.
+
+**Operator ruling, wired:** revocation is `DELETE /api/auth/passkey/:id` + `GET
+/api/auth/passkeys` (both gated) and a per-credential list in the PWA. `ccrc passwd` keeps its
+current meaning — it invalidates **sessions**, not authenticators — and `StoredCredential`
+deliberately carries no generation stamp. The documented emergency procedure is "revoke the
+passkey, then rotate the passphrase". This matters because `rm ~/.ccrc/passkeys.json` does
+**not** work on a running server: the store loads once at boot and the next accepted assertion
+rewrites the file from memory, resurrecting the row.
 
 ## Deferred / seams recorded
 

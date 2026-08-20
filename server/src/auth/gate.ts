@@ -5,7 +5,7 @@ import { SESSION_COOKIE, expireCookie, parseCookies } from './cookie.js';
 import type { SessionStore } from './sessions.js';
 
 /**
- * THE GATE. One `onRequest` hook stands in front of all 53 routes, the static
+ * THE GATE. One `onRequest` hook stands in front of all 55 routes, the static
  * wildcard, the SPA fallback and all three websocket upgrades.
  *
  * ONE HOOK, NOT A PER-ROUTE CHECK, and that is the whole design: a route added
@@ -412,9 +412,9 @@ export function sessionVerdict(req: GateRequest, deps: GateDeps, now: number): G
 }
 
 /**
- * WHAT THE `Origin` HEADER ON A WEBSOCKET UPGRADE SAYS. Three states, never a
- * boolean — the two "allow" arms mean genuinely different things and a caller
- * that collapsed them would be unable to log the interesting one.
+ * WHAT THE `Origin` HEADER SAYS. Three states, never a boolean — the two "allow"
+ * arms mean genuinely different things and a caller that collapsed them would be
+ * unable to log the interesting one.
  *
  * ── THE ATTACK THIS CLOSES (deferred to Task 8 by the Task 5 review) ──
  *
@@ -424,6 +424,46 @@ export function sessionVerdict(req: GateRequest, deps: GateDeps, now: number): G
  * WebSocket upgrade and no same-origin policy on the socket that results, so a
  * successful hijack streams the whole fleet — every session, every statusline,
  * every transcript frame — to a page the operator did not write.
+ *
+ * …AND ITS TWIN, CROSS-SITE REQUEST FORGERY (D-115). The socket was only half
+ * the surface, and the half that was left open was the WRITE half. The same
+ * same-site page can auto-submit
+ * `<form method=POST action="https://server-box…/api/fleet/reboot">`, and the
+ * cookie rides that too. Three measured facts make it work, none of them
+ * obvious:
+ *
+ *   1. `POST /api/fleet/reboot` (`server.ts`) reads NO body and NO params — it
+ *      gates on `fleetMode === 'remote'` plus Hetzner credentials, which is the
+ *      live box's standing config. The attacker cannot read the response and
+ *      does not need to: the fleet host reboots. The same shape reaches
+ *      `/interrupt`, `/ensure`, `/stop`, `/archive`, `/restore`, `/forget` and
+ *      `/projects/:project/workspaces`.
+ *   2. **THE 415 ESCAPE DOES NOT EXIST.** The comfortable answer — "a form can
+ *      only send `application/x-www-form-urlencoded`, `multipart/form-data` or
+ *      `text/plain`, and Fastify 415s all three" — is FALSE, measured on this
+ *      build: Fastify seeds its content-type parsers with `application/json`
+ *      **and `text/plain`**, so `enctype="text/plain"` (CORS-safelisted, no
+ *      preflight) parses instead of 415ing. The two others do 415. Routes that
+ *      read a body were therefore safe only INCIDENTALLY — a defence nobody
+ *      chose and nothing tested.
+ *   3. There is no CSRF plugin and no other `preHandler` anywhere in the tree.
+ *
+ * WHY `SameSite=Lax` STOPS NEITHER, and it is one fact with two consequences.
+ * Lax withholds a cookie on CROSS-SITE requests, and "site" means registrable
+ * domain. **`ts.net` is on the Public Suffix List**, so the registrable domain
+ * of every node on this tailnet is `tailnet-example.ts.net` — which makes
+ * `other-box.tailnet-example.ts.net` and `server-box.tailnet-example.ts.net` SAME-SITE.
+ * Lax sends the cookie between them happily. Any page served by any other node
+ * on the tailnet — a colleague's dev server, a container someone ran, a
+ * compromised device — reaches this box with the operator's credential
+ * attached. (`tailscale serve` gives every node an https origin, and the fleet
+ * host runs ~11 sessions with their dev servers.) The same public suffix that
+ * makes `rpId` dangerous to derive makes `SameSite` insufficient to rely on.
+ *
+ * An earlier version of this file drew the line at the socket and justified it
+ * with "ordinary requests are guarded by `SameSite=Lax` plus every write being a
+ * POST" — a sentence contradicted by the paragraph above it, in the same file.
+ * That was D-115.
  *
  * `SameSite=Lax` DOES NOT STOP IT HERE, and that is the whole reason this exists
  * rather than being someone else's problem. Lax withholds a cookie on
@@ -439,10 +479,12 @@ export function sessionVerdict(req: GateRequest, deps: GateDeps, now: number): G
  *
  * ── THE POLICY, AND WHY `'absent'` ALLOWS ──
  *
- * A BROWSER ALWAYS SENDS `Origin` ON A WEBSOCKET HANDSHAKE — it is required of
- * them (RFC 6455 §4.1), and it is one of the few headers a page cannot forge.
- * So a MISMATCH is positive evidence of a browser on the wrong page, and it is
- * refused.
+ * A BROWSER ALWAYS SENDS `Origin` — required of it on a WebSocket handshake
+ * (RFC 6455 §4.1) and sent by every current browser on every POST regardless of
+ * content type — and it is one of the few headers a page cannot forge. So a
+ * MISMATCH is positive evidence of a browser on the wrong page, and it is
+ * refused. A sandboxed frame sends the literal string `"null"`, which is a
+ * mismatch, not an absence.
  *
  * ABSENCE MEANS NO BROWSER, and refusing it would buy nothing while breaking
  * real callers. A non-browser client (`curl`, a monitoring script, `injectWS` in
@@ -450,18 +492,18 @@ export function sessionVerdict(req: GateRequest, deps: GateDeps, now: number): G
  * required to — so a presence requirement stops nobody who is not already
  * stopped. More to the point, such a client has NO AMBIENT COOKIE JAR: it can
  * only present a session token someone gave it, and a caller who already holds
- * the cookie does not need a cross-site page to use it. The hijack shape needs a
- * browser; the check is aimed at browsers.
+ * the cookie does not need a cross-site page to use it. The forgery shape needs
+ * a browser; the check is aimed at browsers.
  *
  * This is the one place in this file where an ambiguous input does not deny, so
  * it is spelled as its own named state with this paragraph attached, rather than
  * disappearing into an `!== expected` that happens to be true for `undefined`.
  */
-export type WsOriginVerdict = 'ok' | 'absent' | 'mismatch';
+export type OriginVerdict = 'ok' | 'absent' | 'mismatch';
 
 /**
- * Compare an upgrade's `Origin` against the box's configured one
- * (`cfg.origin`) — pure, no request object, no clock.
+ * Compare a request's `Origin` against the box's configured one (`cfg.origin`) —
+ * pure, no request object, no clock.
  *
  * WHOLE-STRING EQUALITY: scheme, host AND port. Not `endsWith`, not a hostname
  * comparison, not a prefix — `https://box.example` and
@@ -471,14 +513,57 @@ export type WsOriginVerdict = 'ok' | 'absent' | 'mismatch';
  * (`webauthn.ts`'s `originProblem`), which is what makes equality the right
  * comparison rather than a fragile one.
  *
- * An array-valued header (a request carrying two `Origin` lines) arrives as an
- * array from node and is refused as a mismatch by the `typeof` test — two
- * origins is not one origin, and picking either would be guessing.
+ * DUPLICATE `Origin` HEADERS COMMA-JOIN; THEY DO NOT ARRIVE AS AN ARRAY. An
+ * earlier version of this docstring claimed node delivered them as an array and
+ * leaned on a `typeof` guard to refuse them — measured on node 24.14.1, both
+ * through `app.inject` and through a raw socket, two `Origin:` lines arrive as
+ * the single string `"https://a.example, https://b.example"`. That is not equal
+ * to any configured origin, so it is refused by the ordinary comparison and the
+ * `typeof` guard was dead code testing an input that cannot be constructed. The
+ * guard is KEPT — `headers.origin` is typed `string | undefined` but this
+ * function takes `unknown`, and a caller handing it something else must not fall
+ * through into `===` against a non-string — but it is no longer claimed to be
+ * the thing that stops duplicates.
  */
-export function wsOriginVerdict(origin: unknown, expected: string): WsOriginVerdict {
+export function originVerdict(origin: unknown, expected: string): OriginVerdict {
   if (origin === undefined || origin === '') return 'absent';
   if (typeof origin !== 'string') return 'mismatch';
   return origin === expected ? 'ok' : 'mismatch';
+}
+
+/**
+ * Does this request need an origin check? True for every WebSocket upgrade and
+ * every STATE-CHANGING request that is not exempt.
+ *
+ * THE METHOD TEST IS AN ALLOW-LIST OF SAFE VERBS, not a deny-list of unsafe
+ * ones: `GET`/`HEAD`/`OPTIONS` are the methods a browser will issue
+ * cross-origin without a preflight AND which this server treats as read-only, so
+ * they are named and everything else — `POST` today, a `DELETE` or a `PATCH`
+ * added next month — is checked by default. Written the other way round, a new
+ * verb would ship unguarded.
+ *
+ * READS ARE NOT CHECKED, and that is deliberate rather than an oversight. A
+ * cross-site `GET` cannot be READ by the attacking page (no CORS headers are
+ * sent, so the response is opaque), and the socket — which is how the fleet's
+ * live state actually leaves this box — is checked unconditionally by the first
+ * clause. Checking reads would additionally refuse `<img>`/`<link>` style
+ * same-site loads of the SPA shell for no gain.
+ *
+ * EXEMPT ROUTES ARE SKIPPED, and it costs nothing: the nine box-token machine
+ * lanes plus `/api/notify` are `curl` inside a Claude Code session (no `Origin`
+ * at all, hence `'absent'`, hence permitted even if they were checked), and
+ * their real guard is a header a cross-site page cannot add without triggering a
+ * preflight it will fail. `POST /api/auth/login` and the two passkey assert
+ * routes are the doors: a forged login is not a state change an attacker
+ * benefits from, and the assert pair verifies an origin of its own, from inside
+ * `clientDataJSON`, against the value RECORDED ON THE CREDENTIAL — a stronger
+ * check than this one.
+ */
+export function needsOriginCheck(method: string, routePath: string | undefined, isWs: boolean): boolean {
+  if (isWs) return true;
+  if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return false;
+  const key = exemptKey(method, routePath);
+  return key === null || !EXEMPT.has(key);
 }
 
 /** What {@link installGate} needs from the composition root. Deliberately NOT the
@@ -523,44 +608,70 @@ export interface InstallGateDeps {
 export function installGate(app: FastifyInstance, deps: InstallGateDeps): void {
   app.addHook('onRequest', async (req: FastifyRequest, reply: FastifyReply) => {
     /**
-     * THE ORIGIN CHECK, ON UPGRADES ONLY, AND BEFORE THE CREDENTIAL CHECK.
+     * THE ORIGIN CHECK — EVERY UPGRADE AND EVERY NON-EXEMPT WRITE, BEFORE THE
+     * CREDENTIAL CHECK.
      *
-     * BEFORE, not after, and the order is the whole defence: a cross-site socket
-     * arrives WITH a perfectly valid cookie (that is what makes it an attack),
-     * so a session check running first would ALLOW it and there would be nothing
-     * left to refuse. The question "is this page allowed to talk to us" has to be
-     * asked before "does this request carry a credential".
+     * BEFORE, not after, and the order is the whole defence: a cross-site
+     * request arrives WITH a perfectly valid cookie (that is what makes it an
+     * attack), so a session check running first would ALLOW it and there would
+     * be nothing left to refuse. The question "is this page allowed to talk to
+     * us" has to be asked before "does this request carry a credential".
      *
-     * UPGRADES ONLY. Ordinary requests are not left unguarded — they are guarded
-     * by `SameSite=Lax` plus the fact that every write on this server is a POST,
-     * which Lax withholds the cookie from cross-SITE. The gap this closes is the
-     * one Lax cannot: same-site-but-different-host, which on a public-suffix
-     * domain like `ts.net` is every other node on the tailnet, and which for a
-     * websocket means a full read-stream of the fleet. (Extending the check to
-     * every route would also refuse the box-token machine lanes, which are
-     * `curl` inside a session and have no origin at all.)
+     * SCOPE is {@link needsOriginCheck} — see it for why reads and exempt routes
+     * are skipped. It was UPGRADES ONLY until D-115, on a justification
+     * (`SameSite=Lax` covers the rest) that the module docstring above refutes
+     * three paragraphs earlier: on a public-suffix domain every tailnet node is
+     * same-site, so Lax sends the cookie to a form POST exactly as it sends it to
+     * a handshake.
      *
      * ONLY WHEN THE GATE IS ARMED. With `CCRC_AUTH` off there is no credential to
-     * hijack — every route and every socket is already open to anyone who can
-     * reach the port, so a cross-site socket obtains precisely what a one-line
-     * script would. Gating it on the flag keeps the promise the whole slice is
-     * built on ("arming the flag is the only thing that changes behaviour") and,
-     * concretely, stops the shipped default from breaking on the day a developer
-     * browses to `127.0.0.1:7788` while `CCRC_ORIGIN` still says `localhost`.
+     * forge with — every route and every socket is already open to anyone who
+     * can reach the port, so a cross-site request obtains precisely what a
+     * one-line script would. Gating it on the flag keeps the promise the whole
+     * slice is built on ("arming the flag is the only thing that changes
+     * behaviour").
+     *
+     * ── THE COST, STATED (D-116) ──
+     *
+     * THIS REFUSES A PWA LOADED FROM ANY HOST ALIAS THAT IS NOT `CCRC_ORIGIN`.
+     * An operator who has armed the flag with `CCRC_ORIGIN=https://server-box.…`
+     * and then opens `http://203.0.113.7:7788` (the tailnet IP, which serves
+     * the same bundle) gets a console whose reads work and whose every write and
+     * every socket is refused. That is a real cost and it is the intended one —
+     * the box has ONE origin and says so — but it is the shape an operator will
+     * meet before they meet an attacker, so the refusal names `CCRC_ORIGIN`
+     * explicitly and the journal line says which value was expected. The socket
+     * check already carried this cost on a narrower surface since Task 8.
      */
-    if (deps.enabled && req.ws === true) {
-      const origin = wsOriginVerdict(req.headers.origin, deps.origin);
+    if (deps.enabled && needsOriginCheck(req.method, req.routeOptions.url, req.ws === true)) {
+      const origin = originVerdict(req.headers.origin, deps.origin);
       if (origin === 'mismatch') {
         // The received origin is attacker-chosen text: bounded and quoted before
         // it reaches the journal, so it can neither flood the log nor forge a
         // line. Never logs the cookie or any part of it.
-        console.warn('ccrc-server: refused a websocket upgrade from a foreign origin ' +
+        const what = req.ws === true ? 'websocket upgrade' : `${req.method} request`;
+        console.warn(`ccrc-server: refused a ${what} from a foreign origin ` +
           `${JSON.stringify(String(req.headers.origin).slice(0, 120))} — this box accepts only ` +
           `${JSON.stringify(deps.origin)} (CCRC_ORIGIN). If that is wrong, fix the config; if it ` +
-          'is right, a page somewhere tried to open this box\'s sockets with your session.');
-        // A bare 401, like every other refused upgrade — the client is parsing a
-        // response it expected to be 101.
-        return reply.code(401).send();
+          'is right, a page somewhere tried to drive this box with your session.');
+        /**
+         * 403, NOT 401, AND IT CARRIES NO `verdict`.
+         *
+         * The credential was fine — this is not "who are you", it is "you may not
+         * do that from there", which is what 403 means and 401 does not. The
+         * absence of a `verdict` field is the load-bearing half: `lib/api.ts`'s
+         * funnel raises the login screen from a 401 body that names an
+         * `AuthVerdict` (`raiseAuthLostFrom`), so answering 401-with-a-verdict
+         * here would throw a full-screen login in front of an operator whose
+         * session is perfectly live — and no passphrase they typed could clear
+         * it, because the problem is the URL in the address bar.
+         *
+         * The upgrade path gets the same code with NO body, for the reason every
+         * refused upgrade does: its client is parsing a response it expected to
+         * be `101`, so the status line is the whole message.
+         */
+        if (req.ws === true) return reply.code(403).send();
+        return reply.code(403).send({ ok: false, error: 'foreign-origin' });
       }
     }
     // The ternary is a COST gate, not a decision gate, and it is fail-safe by

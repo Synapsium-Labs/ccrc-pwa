@@ -13,7 +13,7 @@
 // beats coupling component trees that must not depend on each other mounting.
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { AccountUsage, AuthStatus, ProjectedHome, RosterWire } from '../../../shared/api';
+import type { AccountUsage, AuthStatus, PasskeyListResponse, ProjectedHome, RosterWire } from '../../../shared/api';
 import { limitBand } from '../components/LimitBar';
 import { Skeleton } from '../components/Skeleton';
 import { formatAge, formatReset } from '../fleet/formatReset';
@@ -21,7 +21,7 @@ import { sessionLabel } from '../fleet/sessionLabel';
 import { accountColorVar, accountLabel, homeAbleLabelList, rosterWrapperIds } from '../lib/accounts';
 import { api, apiErrorText } from '../lib/api';
 import { readAuthStatus } from '../lib/auth';
-import { PasskeyCeremonyError, enrollPasskey, passkeySupported } from '../lib/passkey';
+import { PasskeyCeremonyError, enrollPasskey, passkeyEnrollSupported } from '../lib/passkey';
 import { navigate } from '../lib/router';
 import { useNow } from '../lib/useNow';
 import { useFleetStore } from '../stores/fleet';
@@ -276,15 +276,22 @@ export function AccountsScreen(): ReactNode {
  */
 function PasskeySection(): ReactNode {
   const [status, setStatus] = useState<Partial<AuthStatus> | null>(null);
+  const [list, setList] = useState<PasskeyListResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  const now = useNow(60_000);
 
   const refresh = (): void => {
     void readAuthStatus().then(setStatus).catch(() => { /* no gate, or unreachable — draw nothing */ });
+    // The gated list. It 401s before login and 501s on a dark box, and either
+    // way the catch leaves `list` null — the count from `status` still renders,
+    // so the section degrades to what it showed before revocation existed
+    // rather than disappearing.
+    void api.passkeys().then(setList).catch(() => setList(null));
   };
   useEffect(refresh, []);
 
-  if (status === null || status.mode === undefined || status.mode === 'off' || !passkeySupported()) return null;
+  if (status === null || status.mode === undefined || status.mode === 'off') return null;
 
   const enroll = async (): Promise<void> => {
     setBusy(true);
@@ -305,7 +312,46 @@ function PasskeySection(): ReactNode {
     }
   };
 
+  const revoke = async (id: string): Promise<void> => {
+    setBusy(true);
+    setNote(null);
+    try {
+      await api.revokePasskey(id);
+      setNote('Passkey revoked. It cannot sign in again.');
+      refresh();
+    } catch (err) {
+      setNote(apiErrorText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const count = status.passkeysEnrolled ?? 0;
+  /**
+   * THE UNREADABLE-FILE BRANCH, and it is not cosmetic (D-119). When the
+   * credential file exists and cannot be read, the server reports zero
+   * credentials — and the sentence this screen used to render for zero was "No
+   * passkey is enrolled on this box". An operator who believes it enrols, and
+   * the enrolment rewrites the file from an empty in-memory array, destroying
+   * the credentials that were there. The server refuses that enrolment now; this
+   * is the half that stops the operator trying in the first place, and tells
+   * them what to actually fix.
+   */
+  if (list?.storeUnreadable === true) {
+    return (
+      <section className="accounts-row" aria-labelledby="passkeys-title">
+        <div className="accounts-row-head">
+          <span className="account-gauge-label" id="passkeys-title">Passkeys</span>
+        </div>
+        <p className="accounts-fresh">
+          This box&rsquo;s passkey file exists but cannot be read, so no passkey can sign in and
+          enrolling is refused &mdash; adding one would overwrite the keys that are already there.
+          Fix the permissions on <code>~/.ccrc/passkeys.json</code> and restart the server.
+        </p>
+      </section>
+    );
+  }
+
   return (
     <section className="accounts-row" aria-labelledby="passkeys-title">
       <div className="accounts-row-head">
@@ -316,9 +362,47 @@ function PasskeySection(): ReactNode {
           ? 'No passkey is enrolled on this box — the passphrase is the only way in.'
           : `${count} passkey${count === 1 ? '' : 's'} enrolled on this box.`}
       </p>
-      <button type="button" className="btn-primary" disabled={busy} onClick={() => void enroll()}>
-        {busy ? 'Waiting for the authenticator…' : 'Add a passkey on this device'}
-      </button>
+
+      {/* One row per key, so REVOKING is a decision the operator can actually
+          make: "the phone I lost, last used three weeks ago" needs the label and
+          the dates, which is why `PasskeySummary` carries them and the anonymous
+          `assert/start` body does not. `label` is the enrolling device's
+          user-agent — attacker-controlled text — and is rendered as TEXT, which
+          React does by default. */}
+      {list !== null && list.credentials.length > 0 && (
+        <ul className="accounts-sessions">
+          {list.credentials.map((c) => (
+            <li key={c.credentialIdB64url}>
+              <span className="acct-win">{c.label}</span>
+              <span className="accounts-fresh">
+                {` added ${formatAge(Math.floor(now / 1000) - Math.floor(c.enrolledAt / 1000))} ago`}
+                {c.lastUsedAt > c.enrolledAt
+                  ? `, last used ${formatAge(Math.floor(now / 1000) - Math.floor(c.lastUsedAt / 1000))} ago`
+                  : ', never used'}
+              </span>
+              <button
+                type="button"
+                className="accounts-session"
+                disabled={busy}
+                aria-label={`Revoke passkey ${c.label}`}
+                onClick={() => void revoke(c.credentialIdB64url)}
+              >
+                Revoke
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {/* The ENROL button needs the STRICTER support check — `getPublicKey()` and
+          friends are WebAuthn Level 2 — while the login button on `LoginScreen`
+          needs only Level 1. A browser that can sign in with a key enrolled on a
+          phone but cannot create one gets the list and no Add button. */}
+      {passkeyEnrollSupported() && (
+        <button type="button" className="btn-primary" disabled={busy} onClick={() => void enroll()}>
+          {busy ? 'Waiting for the authenticator…' : 'Add a passkey on this device'}
+        </button>
+      )}
       {note !== null && <p className="accounts-fresh" role="status">{note}</p>}
     </section>
   );

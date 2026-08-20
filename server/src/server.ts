@@ -57,7 +57,7 @@ import {
   type AccountsResponse, type AccountUsage, type AuthStatus, type CoordStatus, type Divergence,
   type FleetHealth, type FleetMsg,
   type FleetSession,
-  type PasskeyAssertStart, type PasskeyRegisterStart,
+  type PasskeyAssertStart, type PasskeyListResponse, type PasskeyRegisterStart,
   type RunSummary,
   type SessionClientMsg, type SessionStreamMsg, type TaskItem,
 } from '../../shared/api.js';
@@ -118,6 +118,35 @@ function anonymousStatus(full: AuthStatus): Partial<AuthStatus> {
   return Object.fromEntries(
     Object.entries(full).filter(([k]) => ANON_VISIBLE[k as keyof AuthStatus]),
   ) as Partial<AuthStatus>;
+}
+
+/**
+ * Which `PasskeyAssertStart` fields an UNAUTHENTICATED caller may see —
+ * {@link ANON_VISIBLE}'s discipline applied to the other anonymous body on this
+ * server, which had none (Task 8 review).
+ *
+ * All three are visible, because the ceremony cannot run without any of them: a
+ * browser needs the challenge to sign, the `rpId` to scope the request, and the
+ * credential ids to ask the authenticator for a non-discoverable key. A
+ * credential id is an opaque handle, useless without the private key, and the
+ * COUNT is already published by `AuthStatus.passkeysEnrolled` under the same
+ * ruling.
+ *
+ * The point is not today's answer but tomorrow's: `PasskeySummary` exists now,
+ * carrying `label`, `enrolledAt` and `lastUsedAt`, and "just send the summaries
+ * here too" is a one-line change that would hand an anonymous tailnet caller a
+ * fingerprint of the operator's devices. As a `Record<keyof …, boolean>` that
+ * change is a TS2739 until somebody decides it deliberately.
+ */
+const ASSERT_START_VISIBLE: Record<keyof PasskeyAssertStart, boolean> = {
+  challengeB64url: true, rpId: true, allowCredentialIdsB64url: true,
+};
+
+/** `full`, reduced to {@link ASSERT_START_VISIBLE}'s fields. */
+function anonymousAssertStart(full: PasskeyAssertStart): Partial<PasskeyAssertStart> {
+  return Object.fromEntries(
+    Object.entries(full).filter(([k]) => ASSERT_START_VISIBLE[k as keyof PasskeyAssertStart]),
+  ) as Partial<PasskeyAssertStart>;
 }
 
 export interface Deps {
@@ -283,8 +312,19 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // is what tells the operator why at deploy time rather than at the first tap.
     const rp = relyingPartyProblem(deps.cfg.rpId, deps.cfg.origin);
     if (rp !== null) {
-      console.warn(`ccrc-server: passkeys are DISABLED on this box — ${rp}. ` +
-        'The passphrase still works; fix CCRC_RP_ID / CCRC_ORIGIN and redeploy.');
+      // WORDING MATTERS HERE and the first version got it wrong (Task 8 review):
+      // it said "passkeys are disabled, the passphrase still works", which is
+      // true of a bad `CCRC_RP_ID` and FALSE of a bad `CCRC_ORIGIN` — the same
+      // unvalidated `cfg.origin` also goes to `installGate`, where every
+      // websocket upgrade and every non-exempt write is compared against it. A
+      // refused origin does not merely disable passkeys; it leaves a console
+      // that can read and cannot act. The per-refusal warning in `gate.ts` is
+      // the better diagnostic when it happens; this is the one that fires at
+      // deploy time, before anyone has tried.
+      console.warn(`ccrc-server: WebAuthn config is refused — ${rp}. Passkeys are DISABLED. ` +
+        'If CCRC_ORIGIN is the bad value, every /ws/* upgrade and every non-exempt write will ' +
+        'ALSO be refused for any browser that is not at it. The passphrase login itself still ' +
+        'works. Fix CCRC_RP_ID / CCRC_ORIGIN and redeploy.');
     }
     await authStore.load();
     await passkeys.load();
@@ -471,6 +511,20 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    *  unauthenticated, and "your CCRC_RP_ID is a public suffix" published to the
    *  tailnet is a free map of the box's misconfiguration. One journal line, one
    *  bare 501. */
+  /**
+   * The RP problems already written to the journal, so an anonymous caller
+   * cannot make this box write log lines by looping a bodyless POST at a
+   * misconfigured route (found by the Task 8 review).
+   *
+   * A SET RATHER THAN A BOOLEAN because the value it guards is a string an
+   * operator may fix and re-break differently, and the second, different problem
+   * deserves its own line. It is bounded by construction: `relyingPartyProblem`
+   * returns one of a fixed handful of sentences derived from two config values
+   * that do not change while the process runs, so this cannot grow with traffic.
+   * Per-server, not module-level, for `loginLimiter`'s reason — independent test
+   * servers in one process must not silence each other's warnings.
+   */
+  const warnedRpProblems = new Set<string>();
   const passkeyUnavailable = (reply: FastifyReply): boolean => {
     if (!deps.cfg.authEnabled) {
       void reply.code(501).send({ ok: false, error: 'not-configured' });
@@ -478,7 +532,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     }
     const problem = rpProblem();
     if (problem !== null) {
-      console.warn(`ccrc-server: refusing a passkey ceremony — ${problem}`);
+      if (!warnedRpProblems.has(problem)) {
+        warnedRpProblems.add(problem);
+        console.warn(`ccrc-server: refusing a passkey ceremony — ${problem}`);
+      }
       void reply.code(501).send({ ok: false, error: 'not-configured' });
       return true;
     }
@@ -547,7 +604,72 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       lastUsedAt: now,
       label: deviceLabel(req),
     });
-    if (!stored) return reply.code(409).send({ ok: false, error: 'too-many-passkeys' });
+    // A DISCRIMINATED RESULT, not a boolean (D-120): three different things can
+    // stop an enrolment and the operator needs a different sentence for each.
+    // `write-failed` especially — that used to answer `204 Passkey added` for a
+    // credential that would vanish on the next restart.
+    if (!stored.ok) {
+      const status = stored.reason === 'full' ? 409 : stored.reason === 'unusable' ? 409 : 500;
+      console.warn(`ccrc-server: passkey enrolment could not be stored (${stored.reason})`);
+      return reply.code(status).send({ ok: false, error: `passkey-store-${stored.reason}` });
+    }
+    return reply.code(204).send();
+  });
+
+  /**
+   * `GET /api/auth/passkeys` — the enrolment screen's view. GATED, like the
+   * register pair and for the same reason: which keys exist, when they were
+   * enrolled and when each was last used is the operator's own inventory, and it
+   * is exactly the fingerprinting material that must not leave the box to an
+   * anonymous caller. `assert/start` publishes the bare ids because the ceremony
+   * cannot run without them; this publishes the rest because the REVOCATION
+   * decision cannot be made without them. Two audiences, two shapes.
+   */
+  app.get('/api/auth/passkeys', async (_req, reply): Promise<PasskeyListResponse | void> => {
+    if (passkeyUnavailable(reply)) return;
+    return {
+      credentials: passkeys.list(),
+      // NOT derivable from an empty list — see `PasskeyListResponse` (D-119).
+      storeUnreadable: !passkeys.canEnroll(),
+    };
+  });
+
+  /**
+   * `DELETE /api/auth/passkey/:id` — REVOCATION. GATED.
+   *
+   * WHY THIS EXISTS AT ALL (operator ruling, Task 8 review). Without it a lost or
+   * compromised authenticator could not be un-enrolled: `PasskeyStore.remove`
+   * had no caller, there was no list in the UI, and the obvious workaround —
+   * `rm ~/.ccrc/passkeys.json` — DOES NOT WORK on a running server. `load()`
+   * happens once at boot and `ensureLoaded()` caches the promise forever, while
+   * `add`/`recordUse` re-serialize the whole in-memory array, so the next
+   * accepted assertion RESURRECTS the deleted row. The correct recovery was
+   * "`rm` plus a service restart", documented nowhere, and the store's own
+   * docstring ("it is removed when the operator removes it") rested on a
+   * lifecycle step that had never been built.
+   *
+   * IT TAKES EFFECT IMMEDIATELY IN THE RUNNING PROCESS — in-memory removal first,
+   * then the flush — which is the whole point given the resurrection above. No
+   * restart, and a revoked credential's very next assertion is refused as
+   * `unknown-credential`.
+   *
+   * `ccrc passwd` KEEPS ITS CURRENT MEANING: it bumps the secret generation,
+   * which invalidates SESSIONS, not authenticators. There is deliberately no
+   * generation stamp on `StoredCredential` — a passkey is a credential in its own
+   * right, exactly as it is on any ordinary service, and the documented emergency
+   * procedure is "revoke the passkey, then rotate the passphrase". Conflating the
+   * two would mean a passphrase rotation silently un-enrolled every device, which
+   * is a surprise in the direction of a lockout.
+   *
+   * 404 for an id that is not enrolled — the caller is already authenticated, so
+   * there is no oracle to protect here, and "that key is already gone" is the
+   * true and useful answer.
+   */
+  app.delete('/api/auth/passkey/:id', async (req, reply) => {
+    if (passkeyUnavailable(reply)) return;
+    const { id } = req.params as { id: string };
+    const removed = await passkeys.remove(id);
+    if (!removed) return reply.code(404).send({ ok: false, error: 'no-such-passkey' });
     return reply.code(204).send();
   });
 
@@ -564,7 +686,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    * client falls back to the passphrase rather than prompting for a key that
    * cannot exist.
    */
-  app.post('/api/auth/passkey/assert/start', async (_req, reply): Promise<PasskeyAssertStart | void> => {
+  app.post('/api/auth/passkey/assert/start', async (_req, reply): Promise<Partial<PasskeyAssertStart> | void> => {
     if (passkeyUnavailable(reply)) return;
     const now = Date.now();
     const slot = passkeyLimiter.reserve(now);
@@ -574,11 +696,30 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return;
     }
     try {
-      return {
+      // ISSUANCE SPENDS THE BUDGET (D-118). Without this the route was
+      // effectively unmetered: the handler is `async` but has no `await` —
+      // `issue()` and `ids()` are synchronous — so the reservation was released
+      // in the same tick and `inFlight` never exceeded 1, and nothing here ever
+      // called `fail()`. `loginVerdict` therefore evaluated `0 + 0 < 60` on
+      // every request, forever. An anonymous peer looping this route evicted the
+      // operator's in-flight challenge (the map is 64 entries, oldest-first)
+      // faster than a Face ID prompt can resolve, turning a legitimate sign-in
+      // into "That passphrase didn't match" for the duration of the flood.
+      //
+      // `spend`, not `fail`: minting a challenge is not a failed guess. Same
+      // window, same reducer, honest name at the call site (`ratelimit.ts`).
+      passkeyLimiter.spend(now);
+      const full: PasskeyAssertStart = {
         challengeB64url: assertChallenges.issue(now),
         rpId: deps.cfg.rpId,
         allowCredentialIdsB64url: passkeys.ids(),
       };
+      // ENUMERATED, like `ANON_VISIBLE` on the status route, and for the same
+      // reason: this body goes to an UNAUTHENTICATED caller, so a field added to
+      // `PasskeyAssertStart` next month must be a compile error here — a
+      // deliberate decision — rather than a leak that ships with tsc clean and
+      // nothing red.
+      return anonymousAssertStart(full);
     } finally {
       slot.release();
     }

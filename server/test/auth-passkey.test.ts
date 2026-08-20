@@ -21,22 +21,24 @@
 //   2. Nothing here mocks a verifier. There is no seam at which a test could
 //      pass against a stub.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createHash, createSign, generateKeyPairSync, randomBytes } from 'node:crypto';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { COSE_ES256 } from '../../shared/api.js';
 import { buildServer, type Deps } from '../src/server.js';
-import { EXEMPT, wsOriginVerdict } from '../src/auth/gate.js';
+import { EXEMPT, needsOriginCheck, originVerdict } from '../src/auth/gate.js';
 import { SESSION_COOKIE } from '../src/auth/cookie.js';
 import { hashLine, type ScryptParams } from '../src/auth/secret.js';
 import { MAX_CREDENTIALS, PasskeyStore, defaultPasskeysPath } from '../src/auth/credentials.js';
+import { PASSKEY_MAX_FAILURES } from '../src/auth/ratelimit.js';
 import {
   CHALLENGE_TTL_MS, ChallengeStore, MAX_LIVE_CHALLENGES, PUBLIC_SUFFIX_TRAPS, SUPPORTED_ALGS,
   decodeB64url, originProblem, relyingPartyProblem, rpIdProblem, userHandleFor,
   verifyAssertion, verifyRegistration, type StoredCredential,
 } from '../src/auth/webauthn.js';
 import type { PtyLike } from '../src/pty.js';
+import { loadConfig } from '../src/config.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -194,6 +196,36 @@ describe('decodeB64url refuses everything Buffer.from would swallow', () => {
     expect(Buffer.from('QQ', 'base64url').equals(Buffer.from('QR', 'base64url'))).toBe(true);
     expect(decodeB64url('QQ', 8)).not.toBeNull();
     expect(decodeB64url('QR', 8)).toBeNull();
+  });
+
+  it('the ROUND-TRIP subsumes an alphabet test — every class, enumerated (D-121)', () => {
+    // `decodeB64url` used to run `/^[A-Za-z0-9_-]+$/` before decoding, and
+    // deleting it reded nothing — a guard whose removal is invisible is a defect
+    // here, not defence in depth. The reason it was invisible is a PROOF, not a
+    // coincidence: `toString('base64url')` can only EMIT `[A-Za-z0-9_-]`, so any
+    // input containing anything else differs from its own re-encoding and is
+    // already refused. This enumerates the classes so the claim is measured
+    // rather than asserted in a comment.
+    const canonical = b64(randomBytes(9));
+    for (const [name, bad] of Object.entries({
+      'standard base64 plus': '/+/+',
+      'standard base64 slash': 'ab/d',
+      'padding': `${canonical}==`,
+      'space': `${canonical.slice(0, 4)} ${canonical.slice(4)}`,
+      'tab': `${canonical}\t`,
+      'newline': `${canonical}\n`,
+      'a NUL byte': `${canonical}\u0000`,
+      'non-ASCII': `${canonical}é`,
+      'a control byte': `${canonical}\u0007`,
+      'a quote': `${canonical}"`,
+      'a percent-escape': `${canonical}%3D`,
+      'all-invalid': '!!!!',
+    })) {
+      expect(decodeB64url(bad, 64), name).toBeNull();
+    }
+    // …and the canonical spelling still decodes, so the loop is not refusing
+    // everything.
+    expect(decodeB64url(canonical, 64)).not.toBeNull();
   });
 
   it('refuses an empty field, a non-string, and anything past its bound', () => {
@@ -491,12 +523,32 @@ describe('verifyRegistration', () => {
     if (!r.ok) expect(r.reason).toBe('user-not-present');
   });
 
-  it('refuses authenticatorData with no attested credential data', () => {
+  it('refuses authenticatorData with no attested credential data — on the AT FLAG', () => {
     const { store, challenge } = withChallenge('register');
     const r = verifyRegistration(
       auth.register(challenge, { flags: UP | UV, attested: null }), rp, store, 10_000);
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toBe('bad-attested-data');
+    if (!r.ok) {
+      expect(r.reason).toBe('bad-attested-data');
+      // WHICH guard, pinned by its sentence. `attestedCredentialId` would refuse
+      // this too (a 37-byte buffer has no attested data to read), so without
+      // naming the flag check it could be deleted with nothing red — the same
+      // masked-guard pattern the algorithm checks had.
+      expect(r.detail).toContain('AT flag clear');
+    }
+  });
+
+  it('…and a set AT flag over a TRUNCATED body is the other guard, with its own sentence', () => {
+    const { store, challenge } = withChallenge('register');
+    // AT claimed, and only 4 bytes of attested data — past the flag check, into
+    // the layout read.
+    const r = verifyRegistration(
+      auth.register(challenge, { flags: UP | UV | AT, attested: Buffer.alloc(4) }), rp, store, 10_000);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toBe('bad-attested-data');
+      expect(r.detail).toContain('truncated');
+    }
   });
 
   it('CROSS-CHECKS the claimed credential id against the one inside authData', () => {
@@ -519,6 +571,29 @@ describe('verifyRegistration', () => {
     const cd = auth.clientData('webauthn.create', challenge);
     const r = verifyRegistration({
       ...reg, authenticatorDataB64url: b64(ad), clientDataJsonB64url: b64(cd),
+    }, rp, store, 10_000);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe('bad-attested-data');
+  });
+
+  it('refuses a declared id length past WebAuthn\'s own 1023 ceiling, even when it FITS', () => {
+    // THE UNMASKED CASE. `len > MAX_CREDENTIAL_ID_BYTES` looks redundant against
+    // the `authBuf.length < start + len` bound — but `authData` is allowed up to
+    // 2048 bytes, so a 1500-byte declared id inside a 1900-byte buffer FITS and
+    // is refused only by the ceiling. Without this test that guard could be
+    // deleted with nothing red.
+    const { store, challenge } = withChallenge('register');
+    const id = randomBytes(1500);
+    const len = Buffer.alloc(2);
+    len.writeUInt16BE(1500, 0);
+    const attested = Buffer.concat([randomBytes(16), len, id, randomBytes(20)]);
+    const ad = auth.authData({ flags: UP | UV | AT, attested });
+    expect(ad.length).toBeLessThan(2048);     // decodes fine; the buffer bound is not what refuses it
+    expect(ad.length).toBeGreaterThan(1555);  // …and the declared id genuinely fits inside it
+    const r = verifyRegistration({
+      ...auth.register(challenge),
+      authenticatorDataB64url: b64(ad),
+      clientDataJsonB64url: b64(auth.clientData('webauthn.create', challenge)),
     }, rp, store, 10_000);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toBe('bad-attested-data');
@@ -557,28 +632,49 @@ describe('verifyAssertion', () => {
     // The message is `authenticatorData ‖ sha256(clientDataJSON)`. Every
     // plausible near-miss below is a real bug someone has shipped, and each one
     // signs with the GENUINE key — so only the message check can refuse them.
+    // EACH NEAR-MISS SIGNS OVER THE SUBMITTED clientDataJSON, not over a
+    // placeholder. The first version of this test signed five of the six over
+    // `Buffer.from('x')` — a buffer bearing no relation to the request — so
+    // those five were refused for the trivial reason that the signature covered
+    // unrelated bytes, and could not discriminate the wrong-concatenation
+    // mutations they are named for. Only "authData alone" was a real
+    // discriminator. Built per-iteration from the ACTUAL `ad`/`cd` now, so each
+    // one is exactly the message a plausible implementation bug would sign.
     const { store } = withChallenge('assert');
     const ad = auth.authData({ signCount: 1 });
-    const wrongMessages: Record<string, Buffer> = {
-      'the client data raw, not hashed': Buffer.concat([ad, Buffer.from('x')]),
-      'the two hashes concatenated': Buffer.concat([sha256(ad), sha256(Buffer.from('x'))]),
-      'sha256 of the whole concatenation': sha256(Buffer.concat([ad, sha256(Buffer.from('x'))])),
-      'the order reversed': Buffer.concat([sha256(Buffer.from('x')), ad]),
-      'authData alone': ad,
-      'the client-data hash alone': sha256(Buffer.from('x')),
+    const wrongMessages: Record<string, (a: Buffer, c: Buffer) => Buffer> = {
+      'the client data RAW, not hashed': (a, c) => Buffer.concat([a, c]),
+      'the two hashes concatenated': (a, c) => Buffer.concat([sha256(a), sha256(c)]),
+      'sha256 of the whole concatenation': (a, c) => sha256(Buffer.concat([a, sha256(c)])),
+      'the order reversed': (a, c) => Buffer.concat([sha256(c), a]),
+      'authData alone': (a) => a,
+      'the client-data hash alone': (_a, c) => sha256(c),
+      'the client data hashed TWICE': (a, c) => Buffer.concat([a, sha256(sha256(c))]),
+      'authData hashed too': (a, c) => Buffer.concat([sha256(a), sha256(c)]),
     };
-    for (const [name, message] of Object.entries(wrongMessages)) {
+    for (const [name, build] of Object.entries(wrongMessages)) {
       const challenge = store.issue(10_000);
       const cd = auth.clientData('webauthn.get', challenge);
       const r = verifyAssertion({
         credentialIdB64url: b64(auth.credentialId),
         authenticatorDataB64url: b64(ad),
         clientDataJsonB64url: b64(cd),
-        signatureB64url: b64(auth.sign(message)),
+        signatureB64url: b64(auth.sign(build(ad, cd))),
       }, auth.stored(), store, 10_000);
       expect(r.ok, name).toBe(false);
       if (!r.ok) expect(r.reason, name).toBe('bad-signature');
     }
+    // …and the RIGHT message, built the same way, verifies — so the loop above
+    // is discriminating the concatenation and not refusing everything.
+    const challenge = store.issue(10_000);
+    const cd = auth.clientData('webauthn.get', challenge);
+    const right = verifyAssertion({
+      credentialIdB64url: b64(auth.credentialId),
+      authenticatorDataB64url: b64(ad),
+      clientDataJsonB64url: b64(cd),
+      signatureB64url: b64(auth.sign(Buffer.concat([ad, sha256(cd)]))),
+    }, auth.stored(), store, 10_000);
+    expect(right.ok, right.ok ? '' : right.detail).toBe(true);
   });
 
   it('refuses a signature from a DIFFERENT key', () => {
@@ -856,7 +952,7 @@ describe('PasskeyStore', () => {
   it('round-trips through disk, 0600, and counts what it holds', async () => {
     const { store, file } = freshStore();
     const id = b64(randomBytes(32));
-    expect(await store.add(row(id))).toBe(true);
+    expect(await store.add(row(id))).toEqual({ ok: true });
     expect(store.count()).toBe(1);
     expect(store.ids()).toEqual([id]);
 
@@ -888,8 +984,13 @@ describe('PasskeyStore', () => {
 
   it('caps the number of credentials and says so rather than dropping one', async () => {
     const { store } = freshStore();
-    for (let i = 0; i < MAX_CREDENTIALS; i++) expect(await store.add(row(b64(randomBytes(32))))).toBe(true);
-    expect(await store.add(row(b64(randomBytes(32))))).toBe(false);
+    for (let i = 0; i < MAX_CREDENTIALS; i++) {
+      expect(await store.add(row(b64(randomBytes(32))))).toEqual({ ok: true });
+    }
+    // A REASON, not a bare `false` (D-120): "full" and "the disk write failed"
+    // and "the file is unreadable" are three different sentences the operator
+    // needs, and two of them used to be indistinguishable from success.
+    expect(await store.add(row(b64(randomBytes(32))))).toEqual({ ok: false, reason: 'full' });
     expect(store.count()).toBe(MAX_CREDENTIALS);
   });
 
@@ -916,14 +1017,31 @@ describe('PasskeyStore', () => {
     const file = defaultPasskeysPath(home);
     mkdirSync(path.dirname(file), { recursive: true });
     const good = row(b64(randomBytes(32)));
+    // EVERY field check gets a row. Three of them (`algorithm` non-integer,
+    // `enrolledAt`/`lastUsedAt` non-numeric, `label` non-string) were absent
+    // from the first version of this fixture, so those guards could be deleted
+    // with nothing red — the masked-guard pattern, in the parser this time.
     writeFileSync(file, JSON.stringify([
       good,
       { ...row(b64(randomBytes(32))), origin: '' },            // an empty origin is a check that passes
+      { ...row(b64(randomBytes(32))), origin: 42 },
       { ...row(b64(randomBytes(32))), signCount: -1 },          // a negative replay floor
+      { ...row(b64(randomBytes(32))), signCount: 1.5 },
+      { ...row(b64(randomBytes(32))), signCount: 'lots' },
       { ...row(b64(randomBytes(32))), rpId: '' },               // an empty rpId hashes to something
+      { ...row(b64(randomBytes(32))), rpId: null },
       { ...row(b64(randomBytes(32))), credentialId: 'not b64!' },
+      { ...row(b64(randomBytes(32))), credentialId: 42 },
       { ...row(b64(randomBytes(32))), spkiB64url: 'not b64!' },
+      { ...row(b64(randomBytes(32))), spkiB64url: null },
       { ...row(b64(randomBytes(32))), algorithm: 'ES256' },
+      { ...row(b64(randomBytes(32))), algorithm: -7.5 },        // integer check, not merely numeric
+      { ...row(b64(randomBytes(32))), enrolledAt: 'yesterday' },
+      { ...row(b64(randomBytes(32))), enrolledAt: Number.NaN },
+      { ...row(b64(randomBytes(32))), lastUsedAt: 'never' },
+      { ...row(b64(randomBytes(32))), lastUsedAt: Number.POSITIVE_INFINITY },
+      { ...row(b64(randomBytes(32))), label: 42 },
+      { ...row(b64(randomBytes(32))), label: null },
       good,                                                     // a DUPLICATE id
       null, 'a string', 42,
     ]));
@@ -931,6 +1049,100 @@ describe('PasskeyStore', () => {
     await store.load();
     expect(store.count()).toBe(1);
     expect(store.ids()).toEqual([good.credentialId]);
+  });
+
+  it('ABSENT and UNREADABLE are different states, and only one permits enrolling (D-119)', async () => {
+    // THE DATA-LOSS CASE. Folding EACCES/corrupt into the same `records = []` as
+    // ENOENT made every reader downstream say "no passkey is enrolled" — and the
+    // operator who believes that enrols, which REWRITES the file from an
+    // in-memory array that is empty only because the READ failed. The other
+    // credentials are gone and nothing said so.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      // 1. absent → enrolling is correct and safe.
+      const fresh = freshStore();
+      await fresh.store.load();
+      expect(fresh.store.loadState()).toBe('absent');
+      expect(fresh.store.canEnroll()).toBe(true);
+
+      // 2. present-but-corrupt → REFUSE the enrolment rather than overwrite.
+      const home = mkTmp('ccrc-passkeys-unreadable-');
+      const file = defaultPasskeysPath(home);
+      mkdirSync(path.dirname(file), { recursive: true });
+      const realRows = JSON.stringify([row(b64(randomBytes(32))), row(b64(randomBytes(32)))]);
+      writeFileSync(file, '{ not json');
+      const broken = new PasskeyStore(file);
+      await broken.load();
+      expect(broken.loadState()).toBe('unusable');
+      expect(broken.canEnroll()).toBe(false);
+      expect(await broken.add(row(b64(randomBytes(32))))).toEqual({ ok: false, reason: 'unusable' });
+      // …and THE FILE IS UNTOUCHED, which is the whole point.
+      expect(readFileSync(file, 'utf8')).toBe('{ not json');
+
+      // 3. the same, with real credentials underneath a bad read — nothing is lost.
+      writeFileSync(file, realRows);
+      const readable = new PasskeyStore(file);
+      await readable.load();
+      expect(readable.loadState()).toBe('ok');
+      expect(readable.count()).toBe(2);
+    } finally { warn.mockRestore(); }
+  });
+
+  it('a PRESENT-but-unreadable file (EISDIR) is `unusable`, not `absent`', () => {
+    // The ERRNO branch, distinct from the corrupt-JSON one above — they are two
+    // different code paths to the same state and each needs its own case, or
+    // collapsing one of them back into `'absent'` reds nothing. A DIRECTORY at
+    // the store path is deterministic whatever uid the suite runs as, where
+    // `chmod 000` is a no-op for root.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    return (async () => {
+      try {
+        const home = mkTmp('ccrc-passkeys-eisdir-');
+        const file = defaultPasskeysPath(home);
+        mkdirSync(file, { recursive: true });   // the PATH is a directory
+        const store = new PasskeyStore(file);
+        await store.load();
+        expect(store.loadState()).toBe('unusable');
+        expect(store.canEnroll()).toBe(false);
+        expect(await store.add(row(b64(randomBytes(32))))).toEqual({ ok: false, reason: 'unusable' });
+        expect(warn).toHaveBeenCalled();
+      } finally { warn.mockRestore(); }
+    })();
+  });
+
+  it('a FAILED WRITE is reported, never reported as success (D-120)', async () => {
+    // `doFlush` swallows its error into a warn (a rejection inside a route
+    // handler is a 500 on a path that must answer a refusal), so the outcome has
+    // to come back some other way. Before this it did not, and a full disk
+    // answered `204 Passkey added` for a row that vanished on restart.
+    //
+    // A FILE where the parent DIRECTORY should be — `mkdir` then fails ENOTDIR
+    // for any uid, unlike a permissions trick.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const home = mkTmp('ccrc-passkeys-nowrite-');
+      mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+      const dir = path.join(home, '.ccrc', 'blocked');
+      const store = new PasskeyStore(path.join(dir, 'passkeys.json'));
+      // LOAD FIRST, while the path is merely absent — so this reaches the WRITE
+      // arm rather than being refused by the unreadable-store guard in front of
+      // it. The two are different failures and this one must be provable on its
+      // own.
+      await store.load();
+      expect(store.loadState()).toBe('absent');
+      expect(store.canEnroll()).toBe(true);
+      // …and NOW break the parent, so `mkdir` fails ENOTDIR for any uid.
+      writeFileSync(dir, 'i am a file, not a directory');
+      const added = await store.add(row(b64(randomBytes(32))));
+      expect(added).toEqual({ ok: false, reason: 'write-failed' });
+      expect(warn.mock.calls.flat().join(' ')).toContain('could not write');
+    } finally { warn.mockRestore(); }
+  });
+
+  it('an UNREAD store refuses to enrol too — nobody looked is not permission', () => {
+    const { store } = freshStore();
+    expect(store.loadState()).toBe('unread');
+    expect(store.canEnroll()).toBe(false);
   });
 
   it('an absent file is the ordinary first run — empty and silent', async () => {
@@ -950,7 +1162,12 @@ const stubPty = (): PtyLike => ({
   onData: () => ({ dispose: () => {} }), write: () => {}, resize: () => {}, kill: () => {},
 });
 
-interface AppOpts { enabled?: boolean; rpId?: string; origin?: string; secret?: boolean }
+interface AppOpts {
+  enabled?: boolean; rpId?: string; origin?: string; secret?: boolean;
+  /** Env for `loadConfig`, so a test can drive `CCRC_PASSKEYS_PATH` through the
+   *  REAL config path rather than poking `cfg` directly. */
+  env?: NodeJS.ProcessEnv;
+}
 
 const openApp = async (opts: AppOpts = {}): Promise<{ app: FastifyInstance; home: string }> => {
   const home = mkTmp('ccrc-passkey-route-');
@@ -960,10 +1177,13 @@ const openApp = async (opts: AppOpts = {}): Promise<{ app: FastifyInstance; home
     writeFileSync(path.join(home, '.ccrc', 'auth.scrypt'), `${await hashLine(PASSPHRASE, FAST_PARAMS, 1)}\n`,
       { mode: 0o600 });
   }
+  const cfg = opts.env === undefined
+    ? base.cfg
+    : loadConfig({ CCRC_HOME: home, ...opts.env });
   const deps: Deps = {
     ...base,
     cfg: {
-      ...base.cfg,
+      ...cfg,
       authEnabled: opts.enabled ?? true,
       cookieSecure: false,
       rpId: opts.rpId ?? RP_ID,
@@ -1190,6 +1410,62 @@ describe('the passkey routes, end to end', () => {
     if (!renamed.ok) expect(renamed.detail).toMatch(/re-enrol|stale|spent/);
   });
 
+  it('CCRC_PASSKEYS_PATH really relocates the store — the key has a consumer, end to end', async () => {
+    // The env key's justification, measured rather than asserted: config →
+    // `buildServer` → `PasskeyStore` → the file an enrolment actually lands in.
+    // It does NOT re-open D-110, whose mechanism is the REQUIRED constructor
+    // parameter — that is untouched; this only changes which path `loadConfig`
+    // produces, and a test that forgot to set it still gets a fixture HOME.
+    const home = mkTmp('ccrc-passkey-relocated-');
+    const elsewhere = path.join(home, 'somewhere-else', 'keys.json');
+    const w = await openApp({ env: { CCRC_PASSKEYS_PATH: elsewhere } });
+    app = w.app;
+    const auth = makeAuthenticator();
+    const cookie = await login(app);
+    await enrol(app, auth, cookie);
+    expect(existsSync(elsewhere), 'the enrolment did not land at CCRC_PASSKEYS_PATH').toBe(true);
+    expect(existsSync(defaultPasskeysPath(w.home))).toBe(false);
+  });
+
+  it('an UNREADABLE store REFUSES enrolment rather than overwriting it (D-119)', async () => {
+    // The server half of the data-loss fix: the operator is told, the file is
+    // untouched, and the enrol screen has a `storeUnreadable` flag to render
+    // instead of the "no passkey is enrolled" sentence that caused the loss.
+    const w = await openApp(); app = w.app;
+    const cookie = await login(app);
+    const file = defaultPasskeysPath(w.home);
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, '{ not json');
+    // A fresh server so the store loads the broken file at boot.
+    await app.close();
+    const base = testDeps(w.home);
+    app = await buildServer({
+      ...base,
+      cfg: { ...base.cfg, authEnabled: true, cookieSecure: false, rpId: RP_ID, origin: ORIGIN },
+      spawnPty: stubPty,
+    });
+    await app.ready();
+    const cookie2 = await login(app);
+    void cookie;
+
+    const list = await app.inject({ method: 'GET', url: '/api/auth/passkeys', headers: { cookie: cookie2 } });
+    expect(JSON.parse(list.body)).toEqual({ credentials: [], storeUnreadable: true });
+
+    const auth = makeAuthenticator();
+    const start = await app.inject({
+      method: 'POST', url: '/api/auth/passkey/register/start', headers: { cookie: cookie2 },
+    });
+    const { challengeB64url } = JSON.parse(start.body) as { challengeB64url: string };
+    const finish = await app.inject({
+      method: 'POST', url: '/api/auth/passkey/register/finish', headers: { cookie: cookie2 },
+      payload: auth.register(challengeB64url),
+    });
+    expect(finish.statusCode).toBe(409);
+    expect(JSON.parse(finish.body).error).toBe('passkey-store-unusable');
+    // THE FILE IS UNTOUCHED. This is the assertion the whole finding is about.
+    expect(readFileSync(file, 'utf8')).toBe('{ not json');
+  });
+
   it('a MISCONFIGURED relying party disables passkeys and never publishes why', async () => {
     // The public-suffix typo, end to end: 501 on every ceremony, the reason in
     // the journal only — an unauthenticated caller learns nothing about the box.
@@ -1301,12 +1577,12 @@ describe('the passkey routes, end to end', () => {
 
 // ── 8. the /ws/* Origin check ───────────────────────────────────────────────
 
-describe('wsOriginVerdict — the pure decision', () => {
+describe('originVerdict — the pure decision', () => {
   it('allows the configured origin, and only it', () => {
-    expect(wsOriginVerdict(ORIGIN, ORIGIN)).toBe('ok');
-    expect(wsOriginVerdict('http://localhost:7789', ORIGIN)).toBe('mismatch');
-    expect(wsOriginVerdict('https://localhost:7788', ORIGIN)).toBe('mismatch');
-    expect(wsOriginVerdict('http://localhost:7788.evil.example', ORIGIN)).toBe('mismatch');
+    expect(originVerdict(ORIGIN, ORIGIN)).toBe('ok');
+    expect(originVerdict('http://localhost:7789', ORIGIN)).toBe('mismatch');
+    expect(originVerdict('https://localhost:7788', ORIGIN)).toBe('mismatch');
+    expect(originVerdict('http://localhost:7788.evil.example', ORIGIN)).toBe('mismatch');
   });
 
   it('the SAME-SITE tailnet sibling is a mismatch — which is the whole point', () => {
@@ -1314,17 +1590,69 @@ describe('wsOriginVerdict — the pure decision', () => {
     // registrable domain and `SameSite=Lax` sends the cookie between them. Only
     // this check refuses the sibling.
     const box = 'https://server-box.tailnet-example.ts.net';
-    expect(wsOriginVerdict('https://other-box.tailnet-example.ts.net', box)).toBe('mismatch');
-    expect(wsOriginVerdict(box, box)).toBe('ok');
+    expect(originVerdict('https://other-box.tailnet-example.ts.net', box)).toBe('mismatch');
+    expect(originVerdict(box, box)).toBe('ok');
   });
 
   it('names ABSENT as its own state — a non-browser, not a refusal', () => {
-    expect(wsOriginVerdict(undefined, ORIGIN)).toBe('absent');
-    expect(wsOriginVerdict('', ORIGIN)).toBe('absent');
+    expect(originVerdict(undefined, ORIGIN)).toBe('absent');
+    expect(originVerdict('', ORIGIN)).toBe('absent');
   });
 
-  it('two Origin headers is not one origin', () => {
-    expect(wsOriginVerdict([ORIGIN, 'https://evil.example'], ORIGIN)).toBe('mismatch');
+  it('a sandboxed frame sends the literal string "null" — a mismatch, not an absence', () => {
+    expect(originVerdict('null', ORIGIN)).toBe('mismatch');
+  });
+
+  it('DUPLICATE Origin headers arrive comma-joined, and that string matches nothing', () => {
+    // MEASURED on node 24.14.1, through `app.inject` AND through a raw socket:
+    // two `Origin:` lines become ONE string, `"https://a, https://b"`. An earlier
+    // docstring here claimed node produced an ARRAY and credited the `typeof`
+    // guard with refusing it — so the guard was dead code and this test
+    // exercised an input that cannot be constructed. The real refusal is the
+    // ordinary string comparison, which is what this now asserts.
+    expect(originVerdict(`${ORIGIN}, https://evil.example`, ORIGIN)).toBe('mismatch');
+    expect(originVerdict(`${ORIGIN},${ORIGIN}`, ORIGIN)).toBe('mismatch');
+    // The `typeof` guard is KEPT because the parameter is `unknown` and a
+    // non-string must not reach `===`, but it is no longer claimed to be what
+    // stops duplicates.
+    expect(originVerdict([ORIGIN], ORIGIN)).toBe('mismatch');
+  });
+});
+
+describe('needsOriginCheck — the scope, which is no longer upgrades-only (D-115)', () => {
+  it('checks every websocket upgrade, whatever the method', () => {
+    expect(needsOriginCheck('GET', '/ws/fleet', true)).toBe(true);
+  });
+
+  it('checks a non-exempt WRITE — the CSRF surface the socket check left open', () => {
+    expect(needsOriginCheck('POST', '/api/fleet/reboot', false)).toBe(true);
+    expect(needsOriginCheck('POST', '/api/sessions/:id/stop', false)).toBe(true);
+    expect(needsOriginCheck('DELETE', '/api/auth/passkey/:id', false)).toBe(true);
+  });
+
+  it('SKIPS safe verbs — a cross-site GET is opaque to the page that made it', () => {
+    for (const m of ['GET', 'HEAD', 'OPTIONS']) {
+      expect(needsOriginCheck(m, '/api/accounts', false), m).toBe(false);
+    }
+  });
+
+  it('SKIPS exempt routes — the machine lanes and the two doors', () => {
+    expect(needsOriginCheck('POST', '/api/notify', false)).toBe(false);
+    expect(needsOriginCheck('POST', '/api/mail', false)).toBe(false);
+    expect(needsOriginCheck('POST', '/api/auth/login', false)).toBe(false);
+    expect(needsOriginCheck('POST', '/api/auth/passkey/assert/finish', false)).toBe(false);
+  });
+
+  it('an UNMATCHED route is checked, not skipped — `null` is not a key', () => {
+    expect(needsOriginCheck('POST', undefined, false)).toBe(true);
+  });
+
+  it('the verb test is an ALLOW-LIST, so a new verb is checked by default', () => {
+    // Written as `=== 'GET' || 'HEAD' || 'OPTIONS'` rather than as a deny-list,
+    // so a `PATCH` or a `PUT` added next month ships guarded.
+    for (const m of ['PATCH', 'PUT', 'TRACE', 'PROPFIND']) {
+      expect(needsOriginCheck(m, '/api/anything', false), m).toBe(true);
+    }
   });
 });
 
@@ -1342,11 +1670,16 @@ describe('the /ws/* upgrade is origin-bound', () => {
   it.each(WS)('%s: a FOREIGN origin is refused even WITH a valid session cookie', async (url) => {
     // The cookie is valid — that is what makes this an attack rather than a
     // mistake. A session check running first would have allowed it.
+    //
+    // 403, not 401: the credential was fine and this is "you may not do that
+    // from there". The distinction is load-bearing on the HTTP path (a 401 body
+    // naming a verdict raises a login screen the operator cannot clear by
+    // typing), and the socket path uses the same code for consistency.
     const w = await openApp(); app = w.app;
     const cookie = await login(app);
     await expect(app.injectWS(url, {
       headers: { cookie, origin: 'https://other-box.tailnet-example.ts.net' },
-    })).rejects.toThrow('Unexpected server response: 401');
+    })).rejects.toThrow('Unexpected server response: 403');
     expect(warn!.mock.calls.flat().join(' ')).toContain('foreign origin');
     // …and never logs the cookie it just refused.
     expect(warn!.mock.calls.flat().join(' ')).not.toContain(cookie);
@@ -1368,15 +1701,16 @@ describe('the /ws/* upgrade is origin-bound', () => {
     ws.close();
   });
 
-  it('the check is not a substitute for the gate: a foreign origin AND no cookie is still 401', async () => {
+  it('the check runs BEFORE the gate: a foreign origin with no cookie is refused as the origin', async () => {
     const w = await openApp(); app = w.app;
     await expect(app.injectWS('/ws/fleet', { headers: { origin: 'https://evil.example' } }))
-      .rejects.toThrow('Unexpected server response: 401');
+      .rejects.toThrow('Unexpected server response: 403');
   });
 
-  it('does NOT apply to ordinary routes — the box-token machine lanes have no origin', async () => {
-    // `curl` inside a Claude Code session sends no Origin and never will;
-    // extending the check to every route would break the fleet's own ingress.
+  it('a cross-site READ still passes — the response is opaque to the page that asked', async () => {
+    // Reads are deliberately not checked (`needsOriginCheck`): a cross-site GET
+    // cannot be read by the attacking page, and the socket — which IS how live
+    // fleet state leaves this box — is checked unconditionally.
     const w = await openApp(); app = w.app;
     const cookie = await login(app);
     const res = await app.inject({
@@ -1390,5 +1724,338 @@ describe('the /ws/* upgrade is origin-bound', () => {
     const ws = await app.injectWS('/ws/fleet', { headers: { origin: 'https://evil.example' } });
     expect(ws.readyState).toBe(ws.OPEN);
     ws.close();
+  });
+});
+
+// ── 9. CSRF: the Origin check reaches the WRITES, not just the socket (D-115) ──
+
+describe('a same-site sibling node cannot drive this box with the operator\'s cookie', () => {
+  let app: FastifyInstance | undefined;
+  let warn: ReturnType<typeof vi.spyOn> | undefined;
+  beforeEach(() => { warn = vi.spyOn(console, 'warn').mockImplementation(() => {}); });
+  afterEach(async () => {
+    if (app) await app.close(); app = undefined;
+    warn?.mockRestore(); warn = undefined;
+  });
+
+  /** The tailnet sibling. `ts.net` is a public suffix, so this origin is
+   *  SAME-SITE with the box and `SameSite=Lax` sends `ccrc_session` to it. */
+  const SIBLING = 'https://other-box.tailnet-example.ts.net';
+
+  /**
+   * The routes MF-1 named — every one of them a POST that reads NO body and no
+   * params, so a bare `<form>` submission is a complete attack. `/api/fleet/reboot`
+   * is the worst: it reboots the fleet host and gates only on standing config.
+   */
+  const BODYLESS_WRITES = [
+    '/api/fleet/reboot',
+    '/api/sessions/x/interrupt',
+    '/api/sessions/x/ensure',
+    '/api/sessions/x/stop',
+    '/api/sessions/x/archive',
+    '/api/sessions/x/restore',
+    '/api/sessions/x/forget',
+    '/api/projects/x/workspaces',
+  ];
+
+  it.each(BODYLESS_WRITES)('POST %s from a sibling origin is refused', async (url) => {
+    const w = await openApp(); app = w.app;
+    const cookie = await login(app);
+    const res = await app.inject({ method: 'POST', url, headers: { cookie, origin: SIBLING } });
+    expect(res.statusCode, `${url} answered ${res.statusCode}`).toBe(403);
+    expect(JSON.parse(res.body)).toEqual({ ok: false, error: 'foreign-origin' });
+  });
+
+  it('THE 415 ESCAPE DOES NOT EXIST — Fastify parses text/plain, which a form can send', async () => {
+    // The comfortable answer to CSRF here would be "a <form> can only send
+    // urlencoded / multipart / text-plain, and Fastify 415s all three". Measured
+    // on this build, that is FALSE: `text/plain` is one of the two parsers
+    // Fastify seeds by default. So routes that read a body were safe only
+    // INCIDENTALLY, and body-less routes were never safe at all.
+    const w = await openApp({ enabled: false, secret: false }); app = w.app;
+    const parsed = await app.inject({
+      method: 'POST', url: '/api/sessions/x/prompt',
+      headers: { 'content-type': 'text/plain' }, payload: 'anything',
+    });
+    expect(parsed.statusCode, 'text/plain 415d — if this ever becomes true the CSRF story changes')
+      .not.toBe(415);
+    // The one enctype that IS refused by a content-type parser. Named so the
+    // measurement is on the record rather than the reasoning being "forms are
+    // limited, therefore safe".
+    const urlencoded = await app.inject({
+      method: 'POST', url: '/api/sessions/x/prompt',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' }, payload: 'a=b',
+    });
+    expect(urlencoded.statusCode).toBe(415);
+    // `multipart/form-data` is not refused either — `@fastify/multipart` is
+    // registered on this server — so of the three enctypes a <form> can send,
+    // TWO reach a handler. That is the opposite of the comfortable answer.
+    const multipart = await app.inject({
+      method: 'POST', url: '/api/sessions/x/prompt',
+      headers: { 'content-type': 'multipart/form-data; boundary=x' }, payload: '--x--\r\n',
+    });
+    expect(multipart.statusCode, 'multipart was refused by a parser').not.toBe(415);
+  });
+
+  it('a form POST with a text/plain body is refused on the ORIGIN, before the body matters', async () => {
+    const w = await openApp(); app = w.app;
+    const cookie = await login(app);
+    const res = await app.inject({
+      method: 'POST', url: '/api/sessions/x/prompt',
+      headers: { cookie, origin: SIBLING, 'content-type': 'text/plain' },
+      payload: 'text=hello',
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('the SAME operator at the CONFIGURED origin is unaffected', async () => {
+    const w = await openApp(); app = w.app;
+    const cookie = await login(app);
+    const res = await app.inject({
+      method: 'POST', url: '/api/fleet/reboot', headers: { cookie, origin: ORIGIN },
+    });
+    // Not 403. Whatever the route answers for its own reasons (501 with no
+    // Hetzner config) is fine — the property is that the GATE did not refuse it.
+    expect(res.statusCode).not.toBe(403);
+  });
+
+  it('a curl machine lane with NO Origin is unaffected — absence permits', async () => {
+    const w = await openApp(); app = w.app;
+    const cookie = await login(app);
+    const res = await app.inject({ method: 'POST', url: '/api/fleet/reboot', headers: { cookie } });
+    expect(res.statusCode).not.toBe(403);
+    // …and the EXEMPT box-token lanes, which is the objection the upgrades-only
+    // justification raised: they are skipped by `needsOriginCheck` outright AND
+    // would pass on absence anyway.
+    const mail = await app.inject({ method: 'POST', url: '/api/mail', headers: { origin: SIBLING } });
+    expect(mail.statusCode).not.toBe(403);
+  });
+
+  it('the refusal carries NO `verdict` — it must not raise a login screen', async () => {
+    // `lib/api.ts`'s funnel raises the full-screen login from a 401 body naming
+    // an `AuthVerdict`. A foreign-origin refusal that did so would put an
+    // unenterable login in front of an operator whose session is perfectly live
+    // — no passphrase clears a wrong URL in the address bar.
+    const w = await openApp(); app = w.app;
+    const cookie = await login(app);
+    const res = await app.inject({
+      method: 'POST', url: '/api/fleet/reboot', headers: { cookie, origin: SIBLING },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(Object.keys(JSON.parse(res.body))).not.toContain('verdict');
+  });
+
+  it('names CCRC_ORIGIN in the journal, and never the cookie', async () => {
+    const w = await openApp(); app = w.app;
+    const cookie = await login(app);
+    await app.inject({ method: 'POST', url: '/api/fleet/reboot', headers: { cookie, origin: SIBLING } });
+    const logged = warn!.mock.calls.flat().join(' ');
+    expect(logged).toContain('CCRC_ORIGIN');
+    expect(logged).toContain('POST request');
+    expect(logged).not.toContain(cookie);
+  });
+
+  it('is DARK with CCRC_AUTH off', async () => {
+    const w = await openApp({ enabled: false, secret: false }); app = w.app;
+    const res = await app.inject({
+      method: 'POST', url: '/api/fleet/reboot', headers: { origin: SIBLING },
+    });
+    expect(res.statusCode).not.toBe(403);
+  });
+});
+
+// ── 10. revocation (MF-2) ────────────────────────────────────────────────────
+
+describe('revoking a passkey', () => {
+  let app: FastifyInstance | undefined;
+  let warn: ReturnType<typeof vi.spyOn> | undefined;
+  beforeEach(() => { warn = vi.spyOn(console, 'warn').mockImplementation(() => {}); });
+  afterEach(async () => {
+    if (app) await app.close(); app = undefined;
+    warn?.mockRestore(); warn = undefined;
+  });
+
+  it('lists what is enrolled, with the fields a revoke DECISION needs', async () => {
+    const w = await openApp(); app = w.app;
+    const auth = makeAuthenticator();
+    const cookie = await login(app);
+    await enrol(app, auth, cookie);
+
+    const res = await app.inject({ method: 'GET', url: '/api/auth/passkeys', headers: { cookie } });
+    expect(res.statusCode, res.body).toBe(200);
+    const body = JSON.parse(res.body) as { credentials: Record<string, unknown>[]; storeUnreadable: boolean };
+    expect(body.storeUnreadable).toBe(false);
+    expect(body.credentials).toHaveLength(1);
+    const [row] = body.credentials;
+    expect(row!.credentialIdB64url).toBe(b64(auth.credentialId));
+    expect(typeof row!.label).toBe('string');
+    expect(typeof row!.enrolledAt).toBe('number');
+    expect(row!.uvAtEnrollment).toBe(true);
+    // A PROJECTION, not the stored row: none of the verification material goes
+    // to a screen whose only question is "which of these do I revoke".
+    for (const secretish of ['spkiB64url', 'signCount', 'rpId', 'origin', 'algorithm']) {
+      expect(Object.keys(row!), secretish).not.toContain(secretish);
+    }
+  });
+
+  it('REVOKES, and the revoked key cannot sign in again — with NO restart', async () => {
+    // The whole point. `rm ~/.ccrc/passkeys.json` does NOT achieve this on a
+    // running server: the store loads once at boot, so the next accepted
+    // assertion rewrites the file from memory and resurrects the row.
+    const w = await openApp(); app = w.app;
+    const auth = makeAuthenticator();
+    const cookie = await login(app);
+    await enrol(app, auth, cookie);
+    expect((await passkeyLogin(app, auth, 1)).statusCode).toBe(204);
+
+    const del = await app.inject({
+      method: 'DELETE', url: `/api/auth/passkey/${b64(auth.credentialId)}`, headers: { cookie },
+    });
+    expect(del.statusCode, del.body).toBe(204);
+
+    const after = await passkeyLogin(app, auth, 9);
+    expect(after.statusCode).toBe(401);
+    expect(warn!.mock.calls.flat().join(' ')).toContain('no credential with that id is enrolled');
+    // …and the same process, same store, reports it gone.
+    const list = await app.inject({ method: 'GET', url: '/api/auth/passkeys', headers: { cookie } });
+    expect(JSON.parse(list.body).credentials).toEqual([]);
+    // …and it reached the DISK, so a restart does not bring it back.
+    const reread = new PasskeyStore(defaultPasskeysPath(w.home));
+    await reread.load();
+    expect(reread.count()).toBe(0);
+  });
+
+  it('is GATED — an anonymous caller cannot revoke the operator\'s keys', async () => {
+    const w = await openApp(); app = w.app;
+    const auth = makeAuthenticator();
+    const cookie = await login(app);
+    await enrol(app, auth, cookie);
+
+    for (const [method, url] of [
+      ['GET', '/api/auth/passkeys'],
+      ['DELETE', `/api/auth/passkey/${b64(auth.credentialId)}`],
+    ] as const) {
+      const res = await app.inject({ method, url });
+      expect(res.statusCode, url).toBe(401);
+      expect(JSON.parse(res.body).verdict, url).toBe('no-session');
+      expect(EXEMPT.has(`${method} ${url === '/api/auth/passkeys' ? url : '/api/auth/passkey/:id'}`))
+        .toBe(false);
+    }
+    // …and the key still works, i.e. the refusal really refused.
+    expect((await passkeyLogin(app, auth, 3)).statusCode).toBe(204);
+  });
+
+  it('404s an id that is not enrolled — the caller is authenticated, so there is no oracle to keep', async () => {
+    const w = await openApp(); app = w.app;
+    const cookie = await login(app);
+    const res = await app.inject({
+      method: 'DELETE', url: `/api/auth/passkey/${b64(randomBytes(32))}`, headers: { cookie },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('revokes ONE key, not all of them', async () => {
+    const w = await openApp(); app = w.app;
+    const a = makeAuthenticator();
+    const b = makeAuthenticator();
+    const cookie = await login(app);
+    await enrol(app, a, cookie);
+    await enrol(app, b, cookie);
+
+    await app.inject({
+      method: 'DELETE', url: `/api/auth/passkey/${b64(a.credentialId)}`, headers: { cookie },
+    });
+    const list = await app.inject({ method: 'GET', url: '/api/auth/passkeys', headers: { cookie } });
+    const ids = (JSON.parse(list.body).credentials as { credentialIdB64url: string }[])
+      .map((c) => c.credentialIdB64url);
+    expect(ids).toEqual([b64(b.credentialId)]);
+    expect((await passkeyLogin(app, b, 4)).statusCode).toBe(204);
+  });
+
+  it('`ccrc passwd` keeps its meaning: a generation bump cuts SESSIONS, not passkeys', async () => {
+    // The operator's ruling, pinned. A passkey is a credential in its own right;
+    // a passphrase rotation that silently un-enrolled every device would be a
+    // surprise in the direction of a lockout. The documented emergency procedure
+    // is "revoke the passkey, THEN rotate the passphrase".
+    const w = await openApp(); app = w.app;
+    const auth = makeAuthenticator();
+    const cookie = await login(app);
+    await enrol(app, auth, cookie);
+    const store = new PasskeyStore(defaultPasskeysPath(w.home));
+    await store.load();
+    const row = store.find(store.ids()[0]!)!;
+    expect(Object.keys(row)).not.toContain('generation');
+  });
+});
+
+// ── 11. issuance is metered (D-118) ──────────────────────────────────────────
+
+describe('assert/start spends the passkey budget', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  it('a start-ONLY flood locks out — the route was free before (D-118)', async () => {
+    // THE TEST THE OLD ONE WAS NOT. The previous lockout test drove BOTH halves
+    // of the ceremony, so `assert/finish`'s `fail()` was doing all the counting
+    // — deleting `reserve`/`release` AND the metering from `assert/start` left it
+    // green. This drives `assert/start` and NOTHING else.
+    const w = await openApp(); app = w.app;
+    let locked = false;
+    for (let i = 0; i < 200; i++) {
+      const res = await app.inject({ method: 'POST', url: '/api/auth/passkey/assert/start' });
+      if (res.statusCode === 429) {
+        locked = true;
+        expect(JSON.parse(res.body).verdict).toBe('locked-out');
+        expect(res.headers['retry-after']).toBeDefined();
+        break;
+      }
+      expect(res.statusCode, `attempt ${i}`).toBe(200);
+    }
+    expect(locked, 'issuing challenges is free — an anonymous peer can evict the operator\'s ceremony')
+      .toBe(true);
+  });
+
+  it('locks in about PASSKEY_MAX_FAILURES issues, not in one and not never', async () => {
+    const w = await openApp(); app = w.app;
+    let issued = 0;
+    for (let i = 0; i < 200; i++) {
+      const res = await app.inject({ method: 'POST', url: '/api/auth/passkey/assert/start' });
+      if (res.statusCode === 429) break;
+      issued++;
+    }
+    expect(issued).toBe(PASSKEY_MAX_FAILURES);
+  });
+
+  it('and it still does not touch the PASSPHRASE window', async () => {
+    const w = await openApp(); app = w.app;
+    for (let i = 0; i < 70; i++) {
+      await app.inject({ method: 'POST', url: '/api/auth/passkey/assert/start' });
+    }
+    const ok = await app.inject({
+      method: 'POST', url: '/api/auth/login', payload: { passphrase: PASSPHRASE },
+    });
+    expect(ok.statusCode, ok.body).toBe(204);
+  });
+
+  it('the anonymous body is ENUMERATED — exactly the three fields the ceremony needs', async () => {
+    const w = await openApp(); app = w.app;
+    const res = await app.inject({ method: 'POST', url: '/api/auth/passkey/assert/start' });
+    expect(Object.keys(JSON.parse(res.body)).sort())
+      .toEqual(['allowCredentialIdsB64url', 'challengeB64url', 'rpId']);
+  });
+
+  it('a misconfigured box writes ONE journal line however many times it is probed', async () => {
+    // Found by the review: the 501 warned before the reservation, so an
+    // anonymous caller could make a mis-set box write unbounded log lines.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const w = await openApp({ rpId: 'ts.net', origin: 'https://box.ts.net' }); app = w.app;
+      const before = warn.mock.calls.length;
+      for (let i = 0; i < 40; i++) {
+        const res = await app.inject({ method: 'POST', url: '/api/auth/passkey/assert/start' });
+        expect(res.statusCode).toBe(501);
+      }
+      expect(warn.mock.calls.length - before).toBe(1);
+    } finally { warn.mockRestore(); }
   });
 });
