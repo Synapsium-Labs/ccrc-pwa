@@ -32,10 +32,17 @@ const skill = readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8');
 // `coordinator-skill.test.ts`'s literals carry curly ones (`operator’s`,
 // `judgement`) because its prose does, and a straight/curly mismatch is a
 // paraphrase failure that reads like a mystery.
+//
+// D-104, the operative constraint both files live under: NO clause in this
+// skill may contain a `"` character, and a curly apostrophe pasted into
+// SKILL.md reds this pin without looking like a change. SKILL.md's contract
+// section states the same rule where an editor of the prose will see it.
 const CONTRACT = [
   "Learn who you are on EVERY call: `fromId` is your own `cc-<id>` from `tmux display-message -p '#S'`, and `fromUuid` is the current contents of `$REG/<id>.uuid`, re-read each time. `/clear` rotates that uuid and dispatch `/clear`s you on every wave >= 2, so a uuid you cached is guaranteed stale.",
   "Commit on THIS workspace's own branch (`ws/<slug>`), never a separate feature branch. The done-fingerprint re-measures the workspace branch's tip, so work parked on a feature branch leaves that tip unmoved and wedges every close `stale-tip` forever (F5 — the server's own `stale-tip` detail names this as the almost-certain cause).",
-  "Ack before you act, and key the ack on the row's DELIVERY id, never the mail row's own `id` — an unacked nudge replays, the budget is 6 attempts, and then your brief parks unread. Reply to the coordinator through mail (`toId:'coordinator'`), never by typing into your own pane.",
+  // D-105: this clause used to name the 6 for BOTH lanes. It is the
+  // PRE-DELIVERY budget only; a delivered-but-unacked nudge has its own.
+  "Ack before you act, and key the ack on the row's DELIVERY id, never the mail row's own `id` — a brief that never landed retries `MAIL_MAX_ATTEMPTS` (6) times and then parks unread, while a delivered nudge you leave unacked replays `MAIL_REPLAY_MAX_ATTEMPTS` (20) times and then parks read-but-unanswered. Reply to the coordinator through mail (`toId:'coordinator'`), never by typing into your own pane.",
   "Keep your input box empty. A half-typed draft makes the delivery lane refuse `draft-present`, only you can clear your own text, and a parked delivery means your brief was never read.",
   "Every question for the operator rides the AskUserQuestion tool — the structured ask the session hook captures and the PWA surfaces — never free text in your pane.",
   "Your requirements are the brief plus the plan file it names, including that plan's deviation ledger, and the plan's text governs over your recollection of the spec. Invoke the execution skill the brief names rather than improvising one.",
@@ -73,7 +80,7 @@ describe('the worker skill: its contract', () => {
     }
   });
 
-  it('carries no references of its own — the census corpus is the whole skill', () => {
+  it('carries no references of its own — the census corpus is the whole skill (D-103)', () => {
     // The plan's locked decision, made mechanical. Two things break the moment
     // a `references/` directory appears here: the duplicate-content ban (the
     // coordinator's references are pinned by their own suite; a copy would be
@@ -155,8 +162,49 @@ describe('the worker skill: the facts it states about the wire', () => {
     // `MAIL_MAX_ATTEMPTS` (shared/api.ts) is 6, and a worker whose input box is
     // occupied has that many ticks before its brief parks unread. DERIVED from
     // the constant rather than typed as a 6, so raising the ceiling turns this
-    // red — the clause-9-style literal pin above cannot see that change.
+    // red — the clause-9-style literal pin above cannot see that change. The
+    // `draft-present` bullet is what satisfies it: a refused draft is a row
+    // that was NEVER delivered, which is the one lane this ceiling governs.
     expect(skill, 'the skill states a delivery budget the lane does not enforce')
       .toContain(`${MAIL_MAX_ATTEMPTS} attempts`);
+  });
+
+  /**
+   * The OTHER ceiling, harvested from `watch.ts`'s source text rather than
+   * imported: `MAIL_REPLAY_MAX_ATTEMPTS` is module-private there, and
+   * re-exporting it so a test could read it conveniently is the hole
+   * `PR_PHASES`' own docstring warns about at length. Harvest-and-compare is
+   * this repo's established idiom for exactly that shape (`wsaudit.test.ts`,
+   * and the coordinator suite's route/refusal scans). A rename or a deletion
+   * throws HERE, at module scope, rather than passing vacuously.
+   */
+  const replayCeiling = ((): number => {
+    const src = readFileSync(path.join(root, 'server/src/watch.ts'), 'utf8');
+    const m = /^const MAIL_REPLAY_MAX_ATTEMPTS = (\d+);$/m.exec(src);
+    if (!m) throw new Error('watch.ts declares no MAIL_REPLAY_MAX_ATTEMPTS — this harvest is ' +
+      'looking at the wrong file, or the constant was renamed and the skill now cites a ghost');
+    return Number(m[1]);
+  })();
+
+  it('names BOTH delivery ceilings, each with the constant its own lane enforces (D-105)', () => {
+    // The two lanes are deliberately separate in the delivery code, and
+    // `MAIL_MAX_ATTEMPTS`'s own docstring is emphatic about it: that budget
+    // "applies ONLY while a delivery's own `deliveredAt` is still null"
+    // (`watch.ts:160-176`), the park is gated on `d.deliveredAt === null`
+    // (`:2042`), and a delivered row that is merely never acked parks on
+    // `MAIL_REPLAY_MAX_ATTEMPTS` instead (`:207`, park at `:1981-1983`).
+    //
+    // D-105: clause 3's plan-locked content named the 6 for both, which
+    // under-states a worker's real ack window by more than 3x AND calls a mail
+    // that was read "parked unread". Both numbers are now cited WITH the
+    // constant that owns them, and both are pinned to their source — a policy
+    // number restated in prose is only safe while something reds when it moves.
+    expect(skill).toContain(`\`MAIL_MAX_ATTEMPTS\` (${MAIL_MAX_ATTEMPTS})`);
+    expect(skill).toContain(`\`MAIL_REPLAY_MAX_ATTEMPTS\` (${replayCeiling})`);
+    // And the distinction itself, not just the two numbers: a clause that named
+    // one ceiling twice would satisfy neither of the two lines above, but a
+    // clause that named both and blurred which is which would satisfy both.
+    expect(skill).toMatch(/never landed[\s\S]{0,160}parks unread/);
+    expect(skill).toMatch(/delivered[\s\S]{0,120}unacked[\s\S]{0,160}replays/);
   });
 });
