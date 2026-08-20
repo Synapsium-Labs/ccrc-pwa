@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, WS_ADD, ghContainedEnv } from './ccdWsHelpers.js';
@@ -946,5 +947,43 @@ describe('ccd and prstate.ts agree about phase, always', () => {
     const out = h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`);
     expect(parsePrLines(out)).toEqual([{ phase: 'unknown', reason: 'error' }]);
     expect(isFullLine(parsePrLines(out)[0]!)).toBe(false);
+  });
+});
+
+describe('pr-state persists its fields atomically (registry-durability wave 2)', () => {
+  it('put() renames rather than truncating, with the same invisible tmp shape as _reg_set', () => {
+    const src = readFileSync(CCD, 'utf8');
+    const put = /def put\(field, value\):([\s\S]*?)\n\n/.exec(src)?.[1] ?? '';
+    expect(put, 'put() must no longer open the destination for writing').not.toMatch(/open\(os\.path\.join\(reg, id_ \+ '\.' \+ field\), 'w'\)/);
+    expect(put).toMatch(/os\.replace\(/);
+    expect(put, "the tmp must be hidden (leading dot) and not end in the field name").toMatch(/'\.' \+ id_ \+ '\.' \+ field \+/);
+    expect(put).toMatch(/\.tmp'/);
+  });
+
+  it('the compare-and-set lock is a DEDICATED file, never the .uuid that _reg_set now replaces', () => {
+    // `flock` attaches to an INODE. `_reg_set "$id" uuid` renames a new inode
+    // over `.uuid` (wave 2), so two `ccd pr-state` runs straddling a uuid
+    // rewrite would lock two different inodes and BOTH enter the
+    // compare-and-set — the duplicate prhistory append and the lost update
+    // this lock exists to prevent. A dedicated file is never replaced.
+    const src = readFileSync(CCD, 'utf8');
+    expect(src).not.toMatch(/lock_f = open\(os\.path\.join\(reg, id_ \+ '\.uuid'\)\)/);
+    expect(src).toMatch(/\.prstate-'/);
+  });
+
+  it('still persists phase and number, and creates the lock file on first use', () => {
+    // The exact idiom of `describe('binding')`'s "reports merged when every
+    // conjunct holds": `GH_STUB` is a shell-function STRING prefixed to the
+    // snippet, and the rows go in through `h.ghRows`.
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip })]);
+    h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`);
+    expect(h.reg('demo-quiet-basin', 'prphase')).toBe('merged');
+    expect(h.reg('demo-quiet-basin', 'prnumber')).toBe('42');
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', '.prstate-demo-quiet-basin.lock'))).toBe(true);
+    // And the tmp is gone, and nothing it left behind can mint a session id.
+    const names = fs.readdirSync(path.join(h.home, '.cc-sessions'));
+    expect(names.filter((n) => n.endsWith('.tmp'))).toEqual([]);
+    expect(names.filter((n) => n.endsWith('.uuid'))).toEqual(['demo-quiet-basin.uuid']);
   });
 });

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=53435e799da305141fd4a7b2a9817e1e2368d535fd98e326b96adbb475e4b3bf
+# ccrc:generated 1 sha256=7b23c71f70916726e2971937981354ae45d3d13ca48966e26df7bab70f21afec
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box, not on this file: `_rc_enabled` reads
@@ -1197,8 +1197,25 @@ if mode == 'state':
                 commits.append({'sha': parts[0], 'subject': parts[1], 'body': parts[2].strip()})
 
     def put(field, value):
-        with open(os.path.join(reg, id_ + '.' + field), 'w') as f:
-            f.write(str(value))
+        # ATOMIC, the python half of wave 2's `_reg_set` (ccd:410). `open(…,'w')`
+        # truncates in place, so a reader landing inside the window read an
+        # EMPTY `prphase`/`prnumber` — and `prphase` is read by `ws-archive`,
+        # which files `archivedreason merged:#N` off it. Same tmp shape and same
+        # invisibility argument as `_reg_set`: leading dot (out of every bash
+        # glob) and a `.tmp` suffix (out of `readRegistryMeasured`'s
+        # `endsWith('.uuid')` id minting, which DOES see dotfiles).
+        dst = os.path.join(reg, id_ + '.' + field)
+        tmp = os.path.join(reg, '.' + id_ + '.' + field + '.' + str(os.getpid()) + '.tmp')
+        try:
+            with open(tmp, 'w') as f:
+                f.write(str(value))
+            os.replace(tmp, dst)
+        except OSError:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise
 
     def get(field):
         # put/clear's own path arithmetic, read instead of written. Needed by
@@ -1301,16 +1318,26 @@ if mode == 'state':
     # T0+1.4s with a stamp that OUTRANKS the newer answer. #583 went into the
     # append-only ledger and `prnumber` went back to #577.
     #
-    # `flock` on this session's own `.uuid` — an existing file, opened
-    # read-only, never written here — rather than a new registry file: the
-    # contended pair is always same-id, the lock is advisory and every writer of
-    # these fields is this same block. If it cannot be taken at all (no `.uuid`,
-    # no fcntl, unreadable $REG) the write goes ahead unlocked, which is exactly
-    # today's behaviour: this guard may only remove races, never add a refusal
-    # that stops a phase from ever updating.
+    # A DEDICATED lock file, never a registry FIELD — wave 2. `flock` attaches
+    # to an open file description, i.e. to an INODE, and `_reg_set "$id" uuid`
+    # (ccd:1682, 7369, 8561 — the last on the ordinary supervise path) now
+    # RENAMES a new inode over `.uuid`. Two `ccd pr-state` runs straddling that
+    # rewrite would take LOCK_EX on two different inodes and both enter the
+    # compare-and-set below: the duplicate ledger append and the lost update
+    # this lock exists to prevent. `$REG/.prstate-<id>.lock` is never written,
+    # never renamed and NEVER UNLINKED — the identical idiom, for the identical
+    # reason, as `$REG/.reap-$id.lock` (ccd:5749), which also explains why
+    # unlinking a lock while holding it is how two processes come to hold "the
+    # lock" on two inodes. Hidden by its leading dot, so no registry glob or
+    # id-minting listing sees it; it leaks one 0-byte file per session that has
+    # ever run pr-state, which is the disclosed price.
+    #
+    # UNCHANGED: if the lock cannot be taken AT ALL (no fcntl, unwritable $REG)
+    # the write goes ahead unlocked. This guard may only remove races, never add
+    # a refusal that stops a phase from ever updating.
     lock_f = None
     try:
-        lock_f = open(os.path.join(reg, id_ + '.uuid'))
+        lock_f = open(os.path.join(reg, '.prstate-' + id_ + '.lock'), 'a')
         fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX)
     except OSError:
         if lock_f is not None:
