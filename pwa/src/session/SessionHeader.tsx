@@ -10,7 +10,10 @@
 // never fires while focus is in a text field.
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { FleetSession, RosterWire, SessionBucket, SessionStatus } from '../../../shared/api';
+import {
+  substrateFault,
+  type FleetSession, type RosterWire, type SessionBucket, type SessionStatus,
+} from '../../../shared/api';
 import { Sheet } from '../components/Sheet';
 import { StatusDot } from '../components/StatusDot';
 import { accountLabel } from '../lib/accounts';
@@ -191,6 +194,17 @@ export function SessionHeader({
   const variant =
     bucket === 'attention' ? 'attention' : working ? 'busy' : bucket === 'dead' ? 'dead' : 'idle';
 
+  // The substrate gate (spec §4): under a standing fault the console cannot
+  // SEE this session, so Stop — an offer to act on a pane nobody can measure
+  // — refuses, disabled with the reason on `title` (the PrSheet idiom; the
+  // string is SessionLine's chip's own `tmux unreachable — <reason>`, never a
+  // second copy). Read through `substrateFault`: the live frame is cast, not
+  // revived, so an older server's row lacks the key at runtime. Interrupt
+  // (esc) stays ungated — it targets the turn, not the substrate, and is not
+  // on the spec's destructive list.
+  const fault = session === null ? null : substrateFault(session);
+  const faultTitle = fault !== null ? `tmux unreachable — ${fault.text}` : undefined;
+
   // The project is the ground; the second crumb is this particular workspace.
   // Without it, two workspaces of one project produce two identical headers.
   const title = session ? session.project : (fallback?.title ?? '…');
@@ -331,6 +345,8 @@ export function SessionHeader({
           <button
             type="button"
             className="menu-item menu-item--danger"
+            disabled={fault !== null}
+            title={faultTitle}
             onClick={() => menuAct(onStopSession)}
           >
             <span className="menu-label">Stop session</span>

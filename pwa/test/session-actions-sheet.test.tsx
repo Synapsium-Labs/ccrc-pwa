@@ -512,6 +512,75 @@ describe('forget — the end-of-life a non-workspace session never had', () => {
   });
 });
 
+describe('the substrate gate — destructive affordances refuse a session nobody can see (spec §4)', () => {
+  // One derived fault per render (`substrateFault`), one string on every gated
+  // control: the chip's own `tmux unreachable — <reason>`, carried in `title`
+  // (the PrSheet disabled+title idiom). Disabled, NOT hidden — the control
+  // stays where muscle memory expects it and names why it refuses. Each case
+  // below also proves the click is inert, so a dropped `disabled` cannot hide
+  // behind a still-guarded handler (or vice versa).
+  const faulted = (over: Partial<FleetSession> = {}): FleetSession =>
+    s({ substrate: { at: 1, text: 'x' }, ...over });
+  const sheetProps = { open: true, onClose: () => {}, onReap: () => {} };
+
+  it('Restart is disabled, names the fault, and never posts /ensure', () => {
+    render(<SessionActionsSheet session={faulted({ status: 'dead' })} {...sheetProps} />);
+    const btn = screen.getByRole('button', { name: /restart session/i });
+    expect(btn).toBeDisabled();
+    expect(btn.getAttribute('title')).toContain('x');
+    expect(btn.getAttribute('title')).toMatch(/tmux unreachable/);
+    fireEvent.click(btn);
+    expect(vi.mocked(fetch).mock.calls.some((c) => String(c[0]).includes('/ensure'))).toBe(false);
+  });
+
+  it('Swap account is disabled and the swap sheet never opens', () => {
+    render(<SessionActionsSheet session={faulted()} {...sheetProps} />);
+    const btn = screen.getByRole('button', { name: /swap account/i });
+    expect(btn).toBeDisabled();
+    expect(btn.getAttribute('title')).toContain('x');
+    fireEvent.click(btn);
+    expect(screen.queryByText('Move to another account')).not.toBeInTheDocument();
+  });
+
+  it('Archive workspace is disabled and the injected archive spy never fires', () => {
+    const archive = vi.fn();
+    renderSheet(faulted(), { archive });
+    const btn = screen.getByRole('button', { name: /archive workspace/i });
+    expect(btn).toBeDisabled();
+    expect(btn.getAttribute('title')).toContain('x');
+    fireEvent.click(btn);
+    expect(archive).not.toHaveBeenCalled();
+  });
+
+  it('Clean up workspace… is disabled and never hands the session up', () => {
+    const onReap = vi.fn();
+    render(<SessionActionsSheet session={faulted({ archivedAt: 1785300000 })}
+                                open onClose={() => {}} onReap={onReap} />);
+    const btn = screen.getByRole('button', { name: /clean up workspace/i });
+    expect(btn).toBeDisabled();
+    expect(btn.getAttribute('title')).toContain('x');
+    fireEvent.click(btn);
+    expect(onReap).not.toHaveBeenCalled();
+  });
+
+  it('Forget session… is disabled and its consequence confirm never opens', () => {
+    render(<SessionActionsSheet session={faulted({ workspace: null, status: 'dead' })}
+                                {...sheetProps} />);
+    const btn = screen.getByRole('button', { name: /forget session/i });
+    expect(btn).toBeDisabled();
+    expect(btn.getAttribute('title')).toContain('x');
+    fireEvent.click(btn);
+    expect(screen.queryByText(/transcript and any pasted images stay/i)).not.toBeInTheDocument();
+  });
+
+  it('a null substrate leaves Restart enabled with no gate title', () => {
+    render(<SessionActionsSheet session={s({ status: 'dead' })} {...sheetProps} />);
+    const btn = screen.getByRole('button', { name: /restart session/i });
+    expect(btn).toBeEnabled();
+    expect(btn.getAttribute('title')).toBeNull();
+  });
+});
+
 describe('the spawn-state note (§1.6b)', () => {
   // THIS FILE HAS NO RENDER HELPER — every one of its mount sites spells the
   // render inline, and `open`, `onClose` and `onReap` are all required props.

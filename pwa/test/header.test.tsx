@@ -493,6 +493,86 @@ describe('SessionScreen reap wiring (Task 17)', () => {
   });
 });
 
+// — the substrate gate (spec §4) —
+
+describe('the substrate gate — stop and restart refuse a session nobody can see', () => {
+  // Same contract as the actions sheet's gates: one derived fault per render
+  // (`substrateFault`), the chip's own `tmux unreachable — <reason>` string in
+  // `title`, and the click proven inert — the keycap idiom at the top of this
+  // file, aimed at the two controls this screen owns.
+  it('disables the Stop menu item under a fault, naming it', async () => {
+    const p = renderHeader({ session: fleetSession({ substrate: { at: 1, text: 'x' } }) });
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    const stop = await screen.findByRole('button', { name: /Stop session/ });
+    expect(stop).toBeDisabled();
+    expect(stop.getAttribute('title')).toContain('x');
+    expect(stop.getAttribute('title')).toMatch(/tmux unreachable/);
+    fireEvent.click(stop);
+    expect(p.onStopSession).not.toHaveBeenCalled();
+  });
+
+  it('a null substrate leaves the Stop menu item live', async () => {
+    const p = renderHeader();
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    const stop = await screen.findByRole('button', { name: /Stop session/ });
+    expect(stop).toBeEnabled();
+    fireEvent.click(stop);
+    expect(p.onStopSession).toHaveBeenCalledOnce();
+  });
+
+  it("the dead banner's Restart is disabled and never posts /ensure", () => {
+    const spy = vi.spyOn(api, 'ensure').mockResolvedValue(undefined);
+    const store = createSessionStore('claude:OpenClawHetzner', { makeSocket: fakeSocket });
+    const fleet = createFleetStore({ makeSocket: fakeSocket });
+    act(() => {
+      fleet.setState({
+        sessions: [fleetSession({ status: 'dead', bucket: 'dead', substrate: { at: 1, text: 'x' } })],
+        conn: 'open',
+      });
+    });
+    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    const btn = screen.getByRole('button', { name: /Restart session/ });
+    expect(btn).toBeDisabled();
+    expect(btn.getAttribute('title')).toContain('x');
+    fireEvent.click(btn);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('a fault landing while the stop confirm is already open still blocks the stop', async () => {
+    // The menu item's `disabled` cannot cover this: the fleet frame updates
+    // LIVE under an open confirm, and QuickConfirm owns its own button — so
+    // the confirm path carries a handler guard, and the refusal is named on
+    // the toast rather than swallowed.
+    const spy = vi.spyOn(api, 'stop').mockResolvedValue(undefined);
+    const store = createSessionStore('claude:OpenClawHetzner', {
+      makeSocket: fakeSocket,
+      api: { prompt: vi.fn().mockResolvedValue(undefined) },
+    });
+    const fleet = createFleetStore({ makeSocket: fakeSocket });
+    act(() => {
+      fleet.setState({ sessions: [fleetSession()], conn: 'open' });
+    });
+    render(
+      <>
+        <SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />
+        <ToastHost />
+      </>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Stop session/ }));
+    // The confirm is on screen; NOW the snapshot flags the substrate.
+    act(() => {
+      fleet.setState({ sessions: [fleetSession({ substrate: { at: 1, text: 'x' } })] });
+    });
+    // QuickConfirm's own confirm button — by wrapper class, since the menu's
+    // same-named opener may still be unmounting behind it (the actions-sheet
+    // suite's Release idiom).
+    fireEvent.click(document.querySelector('.qc-actions .btn-primary')!);
+    expect(spy).not.toHaveBeenCalled();
+    expect(await screen.findByText(/tmux unreachable — x/)).toBeInTheDocument();
+  });
+});
+
 // — keyboard discipline —
 
 describe('breadcrumb', () => {

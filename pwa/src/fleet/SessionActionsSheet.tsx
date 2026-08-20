@@ -14,7 +14,7 @@
 // account picker, its limit gauges and its consequence confirm.
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { FleetSession } from '../../../shared/api';
+import { substrateFault, type FleetSession } from '../../../shared/api';
 import { QuickConfirm } from '../components/QuickConfirm';
 import { Sheet } from '../components/Sheet';
 import { toast } from '../components/Toast';
@@ -142,6 +142,18 @@ export function SessionActionsSheet({
 
   if (!session) return null;
 
+  // The substrate gate (spec §4): a non-null fault means the console cannot
+  // currently SEE this session — every destructive affordance on this sheet
+  // refuses rather than fire at a pane nobody can measure (the fail-shut
+  // polarity, carried to the surface the operator touches). Disabled, not
+  // hidden, with the reason on `title` — the PrSheet disabled+title idiom.
+  // Read through `substrateFault`, never `session.substrate`: the live frame
+  // is cast, not revived, so an older server's row lacks the key at runtime.
+  // `faultTitle` is THE chip's own string (`SessionLine`'s `.sess-substrate`),
+  // never a second copy of the reason.
+  const fault = substrateFault(session);
+  const faultTitle = fault !== null ? `tmux unreachable — ${fault.text}` : undefined;
+
   const restart = async (): Promise<void> => {
     if (restarting) return;
     setRestarting(true);
@@ -262,7 +274,8 @@ export function SessionActionsSheet({
     <>
       <Sheet open={open} onClose={onClose} title={label} eyebrow={session.project}>
         <div className="sess-sheet">
-          <button type="button" className="btn-ghost" onClick={() => void restart()} disabled={restarting}>
+          <button type="button" className="btn-ghost" onClick={() => void restart()}
+                  disabled={restarting || fault !== null} title={faultTitle}>
             {restarting ? 'Restarting…' : 'Restart session'}
           </button>
 
@@ -346,13 +359,14 @@ export function SessionActionsSheet({
             </p>
           )}
 
-          <button type="button" className="btn-ghost" onClick={() => setSwapOpen(true)}>
+          <button type="button" className="btn-ghost" onClick={() => setSwapOpen(true)}
+                  disabled={fault !== null} title={faultTitle}>
             Swap account
           </button>
 
           {session.workspace !== null && session.archivedAt === null && (
-            <button type="button" className="btn-ghost" disabled={archBusy}
-                    onClick={() => void archiveNow()}>
+            <button type="button" className="btn-ghost" disabled={archBusy || fault !== null}
+                    title={faultTitle} onClick={() => void archiveNow()}>
               {archBusy ? 'Archiving…' : 'Archive workspace'}
             </button>
           )}
@@ -433,6 +447,7 @@ export function SessionActionsSheet({
               would just be a button that always refuses. */}
           {session.workspace !== null && session.archivedAt !== null && (
             <button type="button" className="btn-ghost sess-sheet-remove"
+                    disabled={fault !== null} title={faultTitle}
                     onClick={() => onReap(session.id)}>
               Clean up workspace…
             </button>
@@ -447,6 +462,7 @@ export function SessionActionsSheet({
               both gates (and the hold) on the box. */}
           {session.workspace === null && session.status === 'dead' && (
             <button type="button" className="btn-ghost sess-sheet-remove"
+                    disabled={fault !== null} title={faultTitle}
                     onClick={() => setForgetConfirmOpen(true)}>
               Forget session…
             </button>
