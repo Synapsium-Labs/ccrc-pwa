@@ -9,6 +9,7 @@
 // keeps ccrc's write surface at exactly one additive verb.
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
+import { substrateFault } from '../../../shared/api';
 import type { FleetSession, PrView } from '../../../shared/api';
 import { Sheet } from '../components/Sheet';
 import { QuickConfirm } from '../components/QuickConfirm';
@@ -105,6 +106,15 @@ export function PrSheet({
   const facts = view?.facts ?? null;
   const draft = view?.draft ?? null;
   const archived = session.archivedAt !== null;
+
+  // The substrate gate (spec §4, branch review): the actions sheet disables
+  // Archive/Clean-up with the named reason, and this sheet offered the SAME
+  // verbs one door away — one surface refusing while its neighbour offers is
+  // the inconsistency the review confirmed. Same contract as every gate: one
+  // derived fault per render, the chip's own string on `title`, read through
+  // `substrateFault` (the live frame is cast, not revived).
+  const fault = substrateFault(session);
+  const faultTitle = fault !== null ? `tmux unreachable — ${fault.text}` : undefined;
 
   /** The archive door. It is NOT `act('Archiving', …)`: a `409 run-open` is not
    *  a failure the operator can act on from a toast — the refusal names WHICH
@@ -274,7 +284,8 @@ export function PrSheet({
                           onClick={() => void act('Restoring', () => api.restore(session.id))}>
                     Restore
                   </button>
-                  <button type="button" className="btn-ghost" onClick={onReap}>Clean up…</button>
+                  <button type="button" className="btn-ghost" disabled={fault !== null}
+                          title={faultTitle} onClick={onReap}>Clean up…</button>
                 </>
               ) : (
                 <>
@@ -310,8 +321,8 @@ export function PrSheet({
                         ? `Not archived — run ${claimingRun.id} (${claimingRun.program} wave ${claimingRun.wave}${claimingRun.waveOf === null ? '' : `/${claimingRun.waveOf}`}) is still open on this workspace. Since Build 8 the sweep asks coord.db, not only the hold file, so releasing the hold will not archive it while that run is open. Close the run, or archive it by hand below.`
                         : 'Not archived yet (session busy)'}
                   </p>
-                  <button type="button" className="btn-ghost" disabled={busy}
-                          onClick={() => void archiveNow()}>
+                  <button type="button" className="btn-ghost" disabled={busy || fault !== null}
+                          title={faultTitle} onClick={() => void archiveNow()}>
                     Archive now
                   </button>
                 </>

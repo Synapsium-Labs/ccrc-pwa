@@ -23,8 +23,10 @@
 //     needs `gh` to ANSWER something (authenticated, wrong scopes, logged
 //     out), it overwrites the poison IN THAT SAME DIRECTORY, so the ordering
 //     ghContainedEnv establishes is never displaced.
-//  3. Every binary a check probes is a stub: tmux/jq/python3/flock (presence
-//     only), git and loginctl (answers read from a fixture file), gh (canned
+//  3. Every binary a check probes is a stub: jq/python3/flock (presence
+//     only), tmux (presence, plus `-V` and the running server's `#{version}`
+//     answered from a fixture file — the tmux_skew check runs both), git and
+//     loginctl (answers read from a fixture file), gh (canned
 //     `auth status` output), and node — whose stub answers `--version` from a
 //     literal and forwards everything else to the real interpreter, because
 //     `--version` is the only dimension doctor measures and a hand-rolled JSON
@@ -148,6 +150,27 @@ function stubNodeRosterExit(home: string, code: number): void {
     `if [ "$1" = "--version" ]; then echo 'v22.20.0'; exit 0; fi\n`
     + `case "$*" in *CCRC_DOCTOR_ROSTER*) exit ${code} ;; esac\n`
     + `exec '${process.execPath}' "$@"`);
+}
+
+/** tmux, answering the ONLY two argv shapes doctor sends: `-V` names the
+ *  CLIENT (the binary on disk, in tmux's own `tmux 3.4` spelling), and
+ *  `display-message -p '#{version}'` asks the RUNNING SERVER for its own —
+ *  answered from `<home>/fixture-tmux-server`, which this helper seeds at the
+ *  client's version so a box that says nothing about skew has none. With the
+ *  file removed it fails the way a serverless box really does: an "error
+ *  connecting" line on stderr, exit 1, nothing on stdout. Any other argv is a
+ *  loud failure (exit 90) — a doctor that started DRIVING tmux rather than
+ *  asking its versions could not pass unnoticed. */
+function stubTmux(home: string): void {
+  stub(home, 'tmux', [
+    'if [ "$1" = "-V" ]; then echo "tmux 3.4"; exit 0; fi',
+    'if [ "$1" = "display-message" ] && [ "$2" = "-p" ] && [ "$3" = "#{version}" ]; then',
+    '  if [ -f "$HOME/fixture-tmux-server" ]; then IFS= read -r v < "$HOME/fixture-tmux-server"; echo "$v"; exit 0; fi',
+    '  echo "error connecting to /tmp/tmux-0/default (No such file or directory)" >&2; exit 1',
+    'fi',
+    'echo "fixture tmux: unexpected argv: $*" >&2; exit 90',
+  ].join('\n'));
+  writeFileSync(join(home, 'fixture-tmux-server'), '3.4\n');
 }
 
 /** `git config --global user.email` answers from `<home>/fixture-git-email` and
@@ -523,7 +546,11 @@ function healthy(prefix: string): string {
   containedPath(home);   // plant the poisoned gh FIRST; ghStub overwrites it below
   writePkg(home, '>=1.0.0');
   stubNode(home, 'v22.20.0');
-  for (const b of ['tmux', 'jq', 'python3', 'flock']) stub(home, b, 'exit 0');
+  for (const b of ['jq', 'python3', 'flock']) stub(home, b, 'exit 0');
+  // tmux answers its versions, client and server agreeing — a healthy box is
+  // one where every check PASSES (see the fleet note below), and tmux_skew
+  // measures a version pair, not a presence.
+  stubTmux(home);
   stubGit(home);
   writeFileSync(join(home, 'fixture-git-email'), 'ops@example.invalid\n');
   stubLoginctl(home);
@@ -745,6 +772,94 @@ describe('ccrc doctor: the binaries a fleet box needs', () => {
   it('names the binary it found when it is there', () => {
     const home = healthy('ccrc-doctor-bin-ok-');
     expect(lineFor(runDoctor(home).stdout, 'tmux')).toContain(join(home, 'stub-bin', 'tmux'));
+  });
+});
+
+// ── tmux client/server skew ───────────────────────────────────────────────
+// The loaded gun (substrate-unreachable spec §5): `tmux -V` is the CLIENT on
+// disk, `display-message -p '#{version}'` is the RUNNING SERVER's own answer,
+// and disagreement means an upgrade landed under a live server — the next new
+// client is refused ("protocol version mismatch") and the console loses every
+// session at once.
+
+describe('ccrc doctor: tmux_skew', () => {
+  it('passes when the client and the running server agree, naming both versions', () => {
+    // Both versions, not the bare word "ok" — a PASS names its measurement.
+    const home = healthy('ccrc-doctor-skew-ok-');
+    const line = lineFor(runDoctor(home).stdout, 'tmux_skew');
+    expect(line).toMatch(/^PASS tmux_skew: /);
+    expect(line).toMatch(/client 3\.4.*server.*3\.4/);
+  });
+
+  it('warns when an upgrade landed under the running server, naming both versions', () => {
+    const home = healthy('ccrc-doctor-skew-warn-');
+    writeFileSync(join(home, 'fixture-tmux-server'), '3.3a\n');
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN tmux_skew: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('3.4');    // the client on disk
+    expect(lines[i]).toContain('3.3a');   // the server that predates it
+    expect(lines[i + 1]).toMatch(
+      /^ {2}remedy: a tmux upgrade landed under the running server — restart the tmux server at the next quiet moment or the next new client will be refused$/);
+    // The gun is loaded, not fired: every session still runs, so the box's
+    // exit code stays 0 — a WARN is a thing to schedule, not a broken box.
+    expect(r.code).toBe(0);
+  });
+
+  it('SKIPS when no server is running — nothing to skew against', () => {
+    // Not a PASS: "no skew" was never measured, there was no pair to compare.
+    // And not a WARN: a box between servers is not a box with a problem.
+    const home = healthy('ccrc-doctor-skew-noserver-');
+    rmSync(join(home, 'fixture-tmux-server'), { force: true });
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^SKIP tmux_skew: no tmux server is running/m);
+    expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) tmux_skew: /m);
+    expect(r.stdout).toMatch(/^summary: \d+ checks \(1 skipped\)/m);
+    expect(r.code).toBe(0);
+  });
+
+  it("SKIPS when tmux itself is absent — its absence is the tmux check's FAIL, not a skew", () => {
+    const home = healthy('ccrc-doctor-skew-notmux-');
+    unstub(home, 'tmux');
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^FAIL tmux: not on PATH/m);   // the presence check owns the finding
+    expect(r.stdout).toMatch(/^SKIP tmux_skew: /m);
+    expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) tmux_skew: /m);
+  });
+
+  it('SKIPS when a server holds the socket but does not answer — a wedge is NOT "no server"', () => {
+    // The rc-124 arm. Delete it and the timed-out probe falls one branch down
+    // into the "no server is running" sentence — a server that holds the
+    // socket without answering and a socket nobody holds collapsed into one
+    // reading, the overloaded seam the check's own comment bans by name. The
+    // stub hangs (sleep 60) and is killed by the check's OWN deadline at
+    // CCRC_DOCTOR_GH_TIMEOUT=1 — the test is bounded by the very mechanism
+    // under test, and by nothing else, which is the point.
+    const home = healthy('ccrc-doctor-skew-wedge-');
+    linkReal(home, 'sleep');
+    stub(home, 'tmux', [
+      'if [ "$1" = "-V" ]; then echo "tmux 3.4"; exit 0; fi',
+      'if [ "$1" = "display-message" ]; then sleep 60; exit 0; fi',
+      'echo "fixture tmux: unexpected argv: $*" >&2; exit 90',
+    ].join('\n'));
+    const r = runDoctor(home, ['doctor'], { CCRC_DOCTOR_GH_TIMEOUT: '1' });
+    expect(r.stdout).toMatch(
+      /^SKIP tmux_skew: a tmux server holds the socket but did not answer within 1s/m);
+    expect(r.stdout).not.toMatch(/no tmux server is running/);   // the collapse, banned
+    expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) tmux_skew: /m);
+  });
+
+  it("SKIPS when 'tmux -V' names no client version — nothing to compare a server against", () => {
+    // The empty-client arm: a tmux that answers `-V` with nothing (a broken
+    // or truncated binary) has named no client, so there is no pair. Without
+    // this arm the check would compare a running server against `""` and WARN
+    // on every such box — a finding about the comparison, not the substrate.
+    const home = healthy('ccrc-doctor-skew-noclient-');
+    stub(home, 'tmux', 'exit 0');   // present (the tmux check still PASSes); `-V` prints nothing
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^SKIP tmux_skew: 'tmux -V' printed ""/m);
+    expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) tmux_skew: /m);
   });
 });
 

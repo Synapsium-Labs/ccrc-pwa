@@ -261,6 +261,37 @@
 }
 
 /* ------------------------------------------------------------------ *
+ *  Substrate banner — one fault, one banner (spec §4): every RUNNING  *
+ *  row reports a substrate fault, so it is said once up here and the  *
+ *  per-row .sess-substrate chips keep the partial case. Amber, not    *
+ *  the dead red: the sessions are still running, unattached. Same     *
+ *  token pair as .fleet-host-banner--warn above (attention-text on    *
+ *  attention-tint, both solid, already floored at 4.5 by              *
+ *  design/contrast-check.mjs), so no new colour pairing. Not sticky   *
+ *  and no button — recovery is a human at a terminal (spec §1), so    *
+ *  there is no action here to keep in reach while scrolling.          *
+ * ------------------------------------------------------------------ */
+.substrate-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  background: var(--status-attention-tint);
+  border: 1px solid var(--status-attention);
+  border-radius: var(--r-md);
+  padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-4);
+  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-ui);
+  color: var(--status-attention-text);
+}
+.substrate-banner-msg {
+  flex: 1;
+  min-width: 0;
+}
+.substrate-banner-reason {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+/* ------------------------------------------------------------------ *
  *  Notices — dismissible fleet-wide banners (account moves etc.).     *
  * ------------------------------------------------------------------ */
 .notice {
@@ -745,8 +776,9 @@
 .sess-line--active .sess-acct-away,
 .sess-line--active .sess-ask,
 .sess-line--active .sess-subagent-row,
-/* The four ink-tertiary meta cells (.sess-held / .sess-lifecycle /
-   .sess-swapblocked share one rule; .sess-unmeasured has its own). Being
+/* The five ink-tertiary meta cells (.sess-held / .sess-lifecycle /
+   .sess-swapblocked share one rule; .sess-unmeasured and .sess-substrate
+   each have their own). Being
    INSIDE .sess-meta is not enough for them: a child's own `color` beats the
    colour it would inherit from its parent, so on the selected row they went
    on painting --ink-tertiary on the --ink-primary slab — 2.72:1 dark /
@@ -761,6 +793,7 @@
 .sess-line--active .sess-lifecycle,
 .sess-line--active .sess-swapblocked,
 .sess-line--active .sess-unmeasured,
+.sess-line--active .sess-substrate,
 /* §1.6b's chip paints --status-dead-text (and --ink-tertiary on two variants)
    of its own, so it strands on the selected slab exactly the way .sess-warn
    would without this line. */
@@ -1127,6 +1160,20 @@
    never borrows .sess-warn's dead-red. The reason lives in `title`, never
    rendered here. */
 .sess-unmeasured {
+  color: var(--ink-tertiary);
+  flex: none;
+}
+
+/* The substrate fault chip (spec §4) — .sess-unmeasured's exact register,
+   for the same reason: "the console cannot see this" is a degrade note, not
+   a warning, so it never borrows .sess-warn's dead-red (the banner on the
+   fleet screen carries the amber; a red chip per row would say it N times).
+   Fixed words ("unreachable tmux"), so `flex: none` like its sibling — the
+   reason lives in `title`, never rendered here. Its own `color` takes it out
+   of .sess-meta's inheritance, so it is also named in .sess-line--active's
+   achromatic group above — see that rule's comment for the ratios this
+   costs while a cell is not. */
+.sess-substrate {
   color: var(--ink-tertiary);
   flex: none;
 }

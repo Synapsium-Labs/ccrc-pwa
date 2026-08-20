@@ -21,7 +21,7 @@ const s = (over: Partial<FleetSession> = {}): FleetSession => ({
   tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
   hookState: null, askSummary: null, subagents: null,
   bucket: 'idle', bucketSince: null, unmeasured: [],
-  lifecycle: null, stoppedBy: null, swapBlocked: null, started: true, spawnState: null, ...over,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null, started: true, spawnState: null, ...over,
 });
 
 describe('label', () => {
@@ -593,6 +593,56 @@ describe('degraded (unmeasured identity) note', () => {
     )).not.toThrow();
     expect(screen.queryByText('unreadable')).toBeNull();
     expect(document.querySelector('[data-unmeasured]')).toBeNull();
+  });
+});
+
+// The supervisor's standing substrate fault (spec §4) — the console cannot
+// see this session, and the row says so. Same `data-*`/`title` pattern as the
+// held chip and the unmeasured note above: generic words on the cell, the
+// verbatim reason in `title`, never parsed.
+describe('substrate chip — the console cannot see this session, and says so (spec §4)', () => {
+  it('shows no chip when substrate is null — the wire default, not a state to render', () => {
+    render(<SessionLine session={s({ substrate: null })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.queryByText('unreachable tmux')).toBeNull();
+    expect(document.querySelector('[data-substrate]')).toBeNull();
+  });
+
+  it('shows the chip with the verbatim reason in title, dated by the marker stamp', () => {
+    render(<SessionLine session={s({ substrate: { at: 1755620112000, text: 'protocol version mismatch' } })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    const chip = screen.getByText('unreachable tmux');
+    expect(chip).toHaveClass('sess-substrate');
+    expect(chip.getAttribute('title')).toContain('protocol version mismatch');
+    expect(chip.getAttribute('title')).toMatch(/tmux unreachable since/);
+  });
+
+  // The live `fleet` frame is cast, not revived (`stores/fleet.ts`'s
+  // `asFleetMsg`), so a row from a server that predates this field can lack
+  // the KEY entirely at runtime — `s({substrate: null})` above cannot catch
+  // this, it always sets the key. Simulated via `delete` on a plain object
+  // cast back to `FleetSession`, the `unmeasured` block's own idiom: the
+  // whole point is that this is not a shape `s()`'s literal can produce.
+  // This is also the test that pins the read going through `substrateFault`
+  // (shared/api.ts) rather than `session.substrate` directly.
+  it('does not throw, and shows no chip, on a row that omits `substrate` entirely (an older server)', () => {
+    const raw = s({ substrate: { at: 1, text: 'x' } }) as unknown as Record<string, unknown>;
+    delete raw['substrate'];
+    expect(() => render(
+      <SessionLine session={raw as unknown as FleetSession} onOpen={() => {}} onActions={() => {}} />,
+    )).not.toThrow();
+    expect(screen.queryByText('unreachable tmux')).toBeNull();
+    expect(document.querySelector('[data-substrate]')).toBeNull();
+  });
+
+  it('at === 0 (unreadable marker) renders the reason without a fabricated 1970 timestamp', () => {
+    // `at: 0` is the registry's "marker listed but unreadable" degrade — the
+    // fault is real, its date is not. A `since` clause built from epoch 0
+    // would claim tmux has been unreachable since 1970.
+    render(<SessionLine session={s({ substrate: { at: 0, text: 'the marker would not read' } })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    const chip = screen.getByText('unreachable tmux');
+    expect(chip.getAttribute('title')).toContain('the marker would not read');
+    expect(chip.getAttribute('title')).not.toContain('since');
   });
 });
 

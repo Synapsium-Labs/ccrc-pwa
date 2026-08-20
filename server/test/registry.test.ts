@@ -6,6 +6,7 @@ import { localIO, type FleetIO } from '../src/io.js';
 import {
   readRegistry, readRegistryMeasured, readSessionRecord, measuredIdentity,
   HOLD_UNREADABLE, REGISTRY_UNMEASURED_STUCK_MS, SWAP_BLOCKED_NO_REASON,
+  SUBSTRATE_UNREADABLE, SUBSTRATE_NO_REASON,
 } from '../src/registry.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
@@ -17,7 +18,7 @@ const seed = (dir: string, id: string, fields: Record<string, string>) => {
 /** `localIO` with every read of `<id>.<field>` failing — the file is still
  *  LISTED (a real, present file on disk), only its bytes never come back —
  *  the shape `remote/io.ts` produces on one dropped agent-WS round trip among
- *  the ~21 a session's read fires in parallel. Module scope (DISPATCH-CONTEXT
+ *  the ~22 a session's read fires in parallel. Module scope (DISPATCH-CONTEXT
  *  §6 / task-9 brief Step 1): shared by the identity ladder, the
  *  observability suite and the D3 stamp suite below — two nested copies of
  *  this were the drift a hoist exists to prevent. */
@@ -302,7 +303,7 @@ describe('PR and archive fields', () => {
 });
 
 // C0.3: readSessionRecord is the SAME parser (buildRecord) as readRegistry,
-// narrowed to one id — one readdir plus that id's 21 field reads instead of
+// narrowed to one id — one readdir plus that id's 22 field reads instead of
 // a whole-fleet sweep. These pin that it agrees with readRegistry's own
 // per-record answer, id-by-id, rather than re-testing every field this file
 // already covers above.
@@ -350,7 +351,7 @@ describe('readSessionRecord', () => {
 
     const rec = await readSessionRecord(countingIO, cfg, 'nope');
     expect(rec).toEqual({ found: false, reason: 'absent' });
-    // A miss must not fire the 17-field Promise.all `buildRecord` would — the
+    // A miss must not fire the 22-field Promise.all `buildRecord` would — the
     // whole point of checking the listing FIRST.
     expect(fieldReads).toBe(0);
   });
@@ -370,7 +371,7 @@ describe('readSessionRecord', () => {
     expect(await readSessionRecord(localIO, cfg, 'claude-demo')).toEqual({ found: false, reason: 'absent' });
   });
 
-  it('costs exactly one readdir plus the one id\'s 21 field reads — never a per-session Promise.all for a sibling', async () => {
+  it('costs exactly one readdir plus the one id\'s 22 field reads — never a per-session Promise.all for a sibling', async () => {
     const reg = path.join(home, '.cc-sessions');
     seed(reg, 'claude2-MekWarLive', {
       wrapper: 'claude2', project: 'MekWarLive', workdir: '/data/projects/MekWarLive', uuid: 'a'.repeat(36),
@@ -391,10 +392,11 @@ describe('readSessionRecord', () => {
     await readSessionRecord(countingIO, cfg, 'claude2-MekWarLive');
 
     expect(readdirCalls).toBe(1);
-    // 17 + D3's four stamps (stopped, supervised, swapblocked, spawn). The
+    // 17 + D3's four stamps (stopped, supervised, swapblocked, spawn) + the
+    // substrate marker (D-B8-14) — the substrate file joined the sweep. The
     // number is pinned rather than derived because it IS the remote-mode cost:
     // one round trip each, per session, per 2-second tick.
-    expect(fieldReads).toHaveLength(21);
+    expect(fieldReads).toHaveLength(22);
     expect(fieldReads.every((p) => p.includes('claude2-MekWarLive'))).toBe(true);
   });
 
@@ -887,5 +889,61 @@ describe('the lifecycle stamps (D3)', () => {
       expect(r.stopped, JSON.stringify(bad)).toBeNull();
       expect(r.lifecycleUnmeasured, JSON.stringify(bad)).toEqual(['stopped']);
     }
+  });
+});
+
+// D-B8-14, spec §2 (docs/superpowers/specs/2026-08-19-substrate-unreachable-design.md):
+// `$REG/<id>.substrate` is a supervisor's own "I could not reach tmux" record —
+// `<epoch-seconds> <verbatim reason>`, written by `_substrate_mark` on every
+// unknown tick, removed by `_substrate_clear` on the first live one. The
+// `.hold` listed-vs-readable ladder applies verbatim, and with the same
+// polarity stakes: "no fault recorded" (null) re-enables every destructive
+// affordance downstream, so it must never be the misreading of "the marker
+// would not read".
+describe('SessionRecord.substrate — presence from the LISTING, never from a non-null read (spec §2)', () => {
+  let home: string;
+  let reg: string;
+  beforeEach(() => {
+    home = mkTmp('ccrc-');
+    seedRoster(home);
+    reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    seed(reg, 'demo-quiet-basin', {
+      uuid: 'a'.repeat(36), wrapper: 'claude', workdir: '/w', project: 'demo',
+    });
+  });
+
+  const read = async (io = localIO) =>
+    (await readRegistry(io, loadConfig({ CCRC_HOME: home })))[0]!;
+
+  it('absent file -> null; well-formed "<epoch> <text>" -> {at, text}', async () => {
+    // The overwhelming majority of rows, and every row a pre-D-B8-14 ccd ever
+    // wrote: no marker at all. Absence is absence — the one shape that reads
+    // as "no fault recorded".
+    expect((await read()).substrate).toBeNull();
+    seed(reg, 'demo-quiet-basin', { substrate: '1755620112 protocol version mismatch' });
+    // Epoch SECONDS, registry-native — `fleet.ts` is the one place it becomes
+    // ms, like `stoppedBy` (the Global Constraints timebase rule).
+    expect((await read()).substrate).toEqual({ at: 1755620112, text: 'protocol version mismatch' });
+  });
+
+  it('LISTED but unreadable -> SUBSTRATE_UNREADABLE, never null — "no fault recorded" and "the marker ' +
+     'would not read" are opposite answers', async () => {
+    seed(reg, 'demo-quiet-basin', { substrate: '1755620112 protocol version mismatch' });
+    const r = await read(unreadableField('demo-quiet-basin', 'substrate'));
+    expect(r.substrate).toEqual({ at: 0, text: SUBSTRATE_UNREADABLE });
+  });
+
+  it('empty or unstamped content degrades loudly, not silently', async () => {
+    // `_substrate_mark` refuses to write an empty reason (a killed probe gets
+    // a synthesized one), so an empty marker is a torn write — it gets a
+    // sentence, the `HOLD_NO_REASON` ruling.
+    seed(reg, 'demo-quiet-basin', { substrate: '' });
+    expect((await read()).substrate).toEqual({ at: 0, text: SUBSTRATE_NO_REASON });
+    // A stampless text keeps its WHOLE content as the reason at `at: 0` —
+    // `packedStamp` refuses the epoch, but the one sentence a maintainer
+    // could act on must not be lost with it.
+    seed(reg, 'demo-quiet-basin', { substrate: 'no epoch here' });
+    expect((await read()).substrate).toEqual({ at: 0, text: 'no epoch here' });
   });
 });
