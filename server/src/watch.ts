@@ -2226,7 +2226,16 @@ export class FleetWatcher {
     const identity = measuredIdentity(rec);
     if (identity === null) return { verdict: 'unknown', held: null };
     const held = rec.held;
-    if (!(await this.deps.tmux.hasSession(id))) return { verdict: 'ok', held };   // no pane: nothing is running
+    // D-B8-13: three answers, not one boolean. `gone` — tmux itself said the
+    // session does not exist — is the only reading that may mean "no pane:
+    // nothing is running". `unknown` (unreachable server, cut-short client)
+    // REFUSES, like every other cannot-tell branch of this function already
+    // did; this arm was the one that answered 'ok' on a question it had not
+    // managed to ask, the same defect D-B8-12 fixed in ccd's `_ws_status`,
+    // on the same destructive caller class.
+    const sv = await this.deps.tmux.sessionVerdict(id);
+    if (sv.verdict === 'gone') return { verdict: 'ok', held };
+    if (sv.verdict === 'unknown') return { verdict: 'unknown', held };
     const pid = await this.deps.tmux.panePid(id);
     const cfgDir = configDirFor(this.deps.cfg, identity.wrapper);
     if (!pid || !cfgDir) return { verdict: 'unknown', held };
