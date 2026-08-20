@@ -102,6 +102,38 @@ const MAXMEM_HEADROOM = 32 * 1024 * 1024;
  *  the allocation. The default's 64 MiB is well under. */
 const MAXMEM_CEILING = 512 * 1024 * 1024;
 
+/**
+ * scrypt's WORK is proportional to `N * r * p`; its ALLOCATION is `128 * N * r`.
+ * `p` multiplies the cost and NOT the memory, so {@link MAXMEM_CEILING} — a
+ * ceiling on the allocation — says nothing whatever about it, and until this
+ * existed `p` was bounded only by `>= 1`.
+ *
+ * WHY THAT MATTERED (Task 5 review, R5). A hand-edited or corrupted `p=32768` at
+ * the shipped `N=65536,r=8` parses cleanly and RUNS — at roughly 32768x the
+ * intended ~100 ms, i.e. about an hour of threadpool per login attempt, holding a
+ * login rate-limiter slot for the whole of it (`server.ts`'s `reserve`/`finally`).
+ * Eight of those exhaust the budget and starve libuv: precisely the denial of
+ * service the login brake's reservation exists to prevent, arriving through the
+ * PARSER instead of through the route. A cost factor nobody chose is not a policy.
+ *
+ * The number is {@link MAXMEM_CEILING}'s own, divided by the 128 that turns a
+ * working set into bytes — so this is the SAME headroom already granted to N and
+ * r (8x the shipped default's `N * r`), now applied to the whole product rather
+ * than to two thirds of it. At the defaults it admits `p <= 8`, which bounds one
+ * login to ~0.8 s.
+ */
+const WORK_CEILING = MAXMEM_CEILING / 128;
+
+/**
+ * The maxmem {@link verifyPassphrase} hands scrypt. Sized to `128 * N * r` plus
+ * {@link MAXMEM_HEADROOM}, and NOT to `p` — which is safe only because
+ * `parseAuthSecretLine` refuses any line whose `p` would not fit in that
+ * headroom. OpenSSL's own accounting is `128 * r * (N + p + 2)`, so a `p` past
+ * the headroom makes scrypt throw `ERR_CRYPTO_INVALID_SCRYPT_PARAMS`
+ * SYNCHRONOUSLY inside the promise executor — a rejected `verifyPassphrase`, an
+ * uncaught throw in the login route, and a 500 where the only correct answer is a
+ * 401. The parser closes that instead, so this stays a two-parameter function.
+ */
 function maxmemFor(n: number, r: number): number {
   return 128 * n * r + MAXMEM_HEADROOM;
 }
@@ -207,6 +239,28 @@ function parseAuthSecretLine(line: string, path: string): AuthSecret {
   if (128 * n * r > MAXMEM_CEILING) {
     throw new AuthSecretUnusable(
       `${path}: N=${n},r=${r} demands a ${128 * n * r} byte working set, past the ${MAXMEM_CEILING} ceiling`);
+  }
+  // p, bounded twice — for two different failures, neither of which the
+  // allocation ceiling above can see (Task 5 review, R5).
+  //
+  // WORK: `p` multiplies scrypt's cost linearly at no memory cost, so a corrupt
+  // `p` is an arbitrarily slow login — hours per attempt, each one holding a
+  // rate-limiter slot. See {@link WORK_CEILING}.
+  if (n * r * p > WORK_CEILING) {
+    throw new AuthSecretUnusable(
+      `${path}: N=${n},r=${r},p=${p} demands ${n * r * p} units of scrypt work, past the ` +
+      `${WORK_CEILING} ceiling — p multiplies the cost and not the memory, so a p this large is a ` +
+      'garbled or hostile line, not a policy anyone chose (each login would take minutes to hours)');
+  }
+  // ALLOCATION: `maxmemFor` sizes maxmem from N and r alone, while OpenSSL's own
+  // accounting is `128 * r * (N + p + 2)` — so a `p` past the headroom makes
+  // scrypt throw synchronously and the login route answer 500 instead of the
+  // 401 a broken secret must always get. Refusing here turns it into
+  // `'unusable'`, which the gate already maps to `'unconfigured'`.
+  if (128 * r * (p + 2) > MAXMEM_HEADROOM) {
+    throw new AuthSecretUnusable(
+      `${path}: r=${r},p=${p} needs ${128 * r * (p + 2)} bytes of scrypt block memory, past the ` +
+      `${MAXMEM_HEADROOM} byte headroom this scheme sizes maxmem with — scrypt itself would refuse it`);
   }
 
   // Base64 fields: validate strictly, then pin the hash to KEYLEN. The salt has

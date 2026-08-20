@@ -196,6 +196,92 @@ describe('the scanner is looking at something', () => {
   });
 });
 
+// ── the scanner, measured against reality ────────────────────────────────
+
+/**
+ * Every route Fastify itself says it has, reconstructed from `printRoutes`.
+ *
+ * WHY THIS EXISTS (review R4): the exact counts above catch a scanner that
+ * NARROWS on the two files it reads, but they are blind to the opposite failure —
+ * a route registered in a syntax the regex at the top of this file never matches
+ * (`app.route({…})`, a template-literal path, a third source file, a plugin's own
+ * routes). Such a route never enters the count, every number stays green, and it
+ * is SILENTLY UNGATED. Counting is not measuring; the whole sweep's authority
+ * rests on the scanner being complete, and until now that was assumed.
+ *
+ * `printRoutes` prints a radix TREE, so a node carries only the segment its
+ * parent does not — `/api/sessions` → `/:id/pr` → `ompt` is
+ * `/api/sessions/:id/prompt`. Depth comes from the indent (four columns a level)
+ * and the full path is the stack joined, which is why this walks rather than
+ * greps. `HEAD` rows are dropped: Fastify auto-exposes one per GET route and
+ * `exemptKey` normalises them onto their GET.
+ */
+function realRouteTable(app: FastifyInstance): Set<string> {
+  const out = new Set<string>();
+  const stack: string[] = [];
+  let matched = 0;
+  for (const line of app.printRoutes({ commonPrefix: false }).split('\n')) {
+    const m = /^([│\s]*)[├└]──\s(\S*)\s\(([^)]+)\)\s*$/.exec(line);
+    if (line.trim() === '') continue;
+    // A line the parser cannot read is a BROKEN PARSER, not a route to skip —
+    // and a silently skipped line is how this guard would come to certify a table
+    // it never saw. It is recorded as a pseudo-route so the assertion names it.
+    if (!m) { out.add(`UNPARSED ${line}`); continue; }
+    matched++;
+    const depth = m[1]!.length / 4;
+    stack.length = depth;
+    stack[depth] = m[2]!;
+    // The root wildcard prints as `*`; it is registered as `/*`.
+    const full = stack.slice(0, depth + 1).join('') || '/';
+    for (const method of m[3]!.split(',')) {
+      const verb = method.trim();
+      if (verb === 'HEAD') continue;
+      out.add(`${verb} ${full === '*' ? '/*' : full}`);
+    }
+  }
+  if (matched === 0) out.add('UNPARSED the whole tree — printRoutes changed shape');
+  return out;
+}
+
+describe('the scanner is COMPLETE — measured against Fastify\'s own route table', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  it('every route the server really registers was found by the source scan', async () => {
+    const w = await openApp(); app = w.app;
+    const real = realRouteTable(app);
+    const scanned = new Set(ROUTES.map(key));
+    // The only registrations that legitimately do NOT appear in either source
+    // file, named with their origin. `@fastify/static`'s wildcard is the whole
+    // list — and it is already an EXEMPT entry with its own stated reason.
+    const FROM_A_PLUGIN = new Set(['GET /*']);
+    const unscanned = [...real].filter((r) => !scanned.has(r) && !FROM_A_PLUGIN.has(r)).sort();
+    expect(unscanned,
+      'routes the server serves that the sweep never sees — each one is silently UNGATED').toEqual([]);
+  });
+
+  it('…and in the other direction: nothing the scan found is a phantom', async () => {
+    const w = await openApp(); app = w.app;
+    const real = realRouteTable(app);
+    const missing = ROUTES.map(key).filter((k) => !real.has(k)).sort();
+    expect(missing, 'the scan invented routes this server does not register').toEqual([]);
+  });
+
+  it('the table parser is looking at something — guards the guard', async () => {
+    // If `printRoutes` ever changes shape, both assertions above would pass
+    // vacuously on an empty set. This fails first and specifically.
+    const w = await openApp(); app = w.app;
+    const real = realRouteTable(app);
+    expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
+    // 52 scanned + the static wildcard when the bundle is built.
+    expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
+    // And the reconstruction really joins the tree back up, rather than reading
+    // leaf segments: these two only exist if the depth walk works.
+    expect(real.has('GET /api/fleet/health')).toBe(true);
+    expect(real.has('POST /api/sessions/:id/prompt')).toBe(true);
+  });
+});
+
 // ── EXEMPT, in both directions ───────────────────────────────────────────
 
 describe('EXEMPT is complete in both directions', () => {
@@ -388,54 +474,85 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   const httpRoutes = ROUTES.filter((r) => !isWs(r));
 
   /**
-   * Routes whose OWN behaviour depends on the flag, so the armed and dark
-   * answers are legitimately different. Exactly one, and it is named rather than
-   * inferred: `POST /api/auth/login` answers `501 not-configured` on a box with
-   * no session gate, because there is nothing there to log into.
+   * Routes whose OWN behaviour depends on the flag, so the dark answer is
+   * legitimately different from either armed one. Both are named rather than
+   * inferred, and both answer `501 not-configured` on a box with no session gate
+   * — there is nothing there to log into or out of.
    */
-  const FLAG_AWARE = new Set(['POST /api/auth/login']);
+  const FLAG_AWARE = new Set(['POST /api/auth/login', 'POST /api/auth/logout']);
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // Stronger than `!gateRefused` on its own (review fold-in): that predicate is
-    // satisfied by a 503, a 500, or any other unrelated failure, so it proves the
-    // gate did not refuse without proving the route was reachable at all. This
-    // compares the SAME route's status with the gate dark and with it armed —
-    // a property that needs no hand-maintained expected-status table and cannot
-    // rot, and that says precisely what the gate is supposed to do: turn the
-    // gated routes into 401s and leave every other answer byte-identical.
+    // THE PROPERTY, in one loop over all 49 HTTP routes, with THREE probes each:
+    // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
+    // against AUTHENTICATED is what makes this a real status assertion for the
+    // gated routes too (review R1) — the earlier version asserted only
+    // `!gateRefused` on the dark side, which a 503, a 500 or a 404 satisfies just
+    // as well, so it proved the gate had not refused without proving the route
+    // was reachable at all. A logged-in caller must see EXACTLY what a box with
+    // the gate dark sees; that is the whole promise of "the gate is the only
+    // thing this slice changes", and it needs no expected-status table to rot.
     const dark = await openApp({ enabled: false, secret: false });
     const armed = await openApp();
     try {
+      const cookie = await login(armed.app);
       const drift: string[] = [];
       for (const r of httpRoutes) {
-        const url = concrete(r.routePath);
-        const a = await dark.app.inject({ method: r.method as 'GET', url });
-        const b = await armed.app.inject({ method: r.method as 'GET', url });
-        // The flag OFF is a passthrough for every route, gated or not.
-        if (gateRefused(a)) drift.push(`${key(r)}: DARK, and the gate refused it anyway`);
-        if (FLAG_AWARE.has(key(r))) {
-          if (a.statusCode !== 501) drift.push(`${key(r)}: dark → ${a.statusCode}, want 501 not-configured`);
-          continue;
-        }
-        if (EXEMPT.has(key(r))) {
-          if (a.statusCode !== b.statusCode) {
-            drift.push(`${key(r)}: EXEMPT but dark ${a.statusCode} ≠ armed ${b.statusCode}`);
+        const k = key(r);
+        // Defensively per route (review R1): a throw in here — a non-JSON armed
+        // body reaching `verdictOf`, a handler that 500s in a new way — used to
+        // abort the whole loop and leave every later route SILENTLY unmeasured,
+        // which is the one failure mode a sweep must not have.
+        try {
+          const url = concrete(r.routePath);
+          const dk = await dark.app.inject({ method: r.method as 'GET', url });
+          const anon = await armed.app.inject({ method: r.method as 'GET', url });
+          // NOT sent to a flag-aware route, and `POST /api/auth/logout` is why:
+          // probing it with the live cookie REVOKES the session, and every route
+          // after it in the loop then reads as 401. (Found by this very sweep on
+          // its first run — 35 routes drifted at once, which is what a shared
+          // credential quietly consumed mid-loop looks like.)
+          const auth = FLAG_AWARE.has(k)
+            ? null
+            : await armed.app.inject({ method: r.method as 'GET', url, headers: { cookie } });
+
+          // 1. The flag OFF is a passthrough for every route, gated or not.
+          if (gateRefused(dk)) drift.push(`${k}: DARK, and the gate refused it anyway`);
+
+          // 2. Armed and anonymous: exempt routes answer for themselves, gated
+          //    routes answer exactly `401 no-session`.
+          if (EXEMPT.has(k)) {
+            if (!FLAG_AWARE.has(k) && dk.statusCode !== anon.statusCode) {
+              drift.push(`${k}: EXEMPT but dark ${dk.statusCode} ≠ armed-anonymous ${anon.statusCode}`);
+            }
+          } else if (anon.statusCode !== 401 || verdictOf(anon) !== 'no-session') {
+            drift.push(`${k}: gated but armed-anonymous → ${anon.statusCode} ${anon.body.slice(0, 80)}`);
           }
-        } else if (b.statusCode !== 401 || verdictOf(b) !== 'no-session') {
-          drift.push(`${key(r)}: gated but armed → ${b.statusCode} ${b.body.slice(0, 80)}`);
+
+          // 3. Armed WITH a live session: identical to dark, for every route that
+          //    is not itself flag-aware. This is the assertion that covers all 49
+          //    rather than the 13 exempt ones.
+          if (auth === null) {
+            if (dk.statusCode !== 501) drift.push(`${k}: dark → ${dk.statusCode}, want 501 not-configured`);
+          } else if (dk.statusCode !== auth.statusCode) {
+            drift.push(`${k}: dark ${dk.statusCode} ≠ authenticated ${auth.statusCode}`);
+          }
+        } catch (err) {
+          drift.push(`${k}: threw while probing — ${err instanceof Error ? err.message : String(err)}`);
         }
       }
       expect(drift).toEqual([]);
     } finally { await dark.app.close(); await armed.app.close(); }
   });
 
-  it('the fleet socket still upgrades', async () => {
+  it.each(WS_ROUTES)('the %s socket still upgrades with the gate dark', async (route) => {
+    // All THREE (review R2), not just `/ws/fleet`: "49 routes and 3 websockets
+    // are unaffected when the flag is off" is the claim, and one socket did not
+    // establish it. Safe to open here for the same reason the armed sweep is
+    // safe to run: `spawnPty` is stubbed, so `/ws/pty` attaches nothing, and its
+    // close path's `tmux resize-window` goes through the whitelist-guarded
+    // runner like every other exec in this suite.
     const w = await openApp({ enabled: false, secret: false }); app = w.app;
-    // `/ws/fleet` only. The other two are not opened here on purpose: a live
-    // `/ws/pty` upgrade attaches a pty (stubbed here, real in production) and a
-    // live `/ws/session` starts a transcript tail — neither is what this test is
-    // about, and the ARMED case above already proves all three reach the hook.
-    const ws = await app.injectWS('/ws/fleet');
+    const ws = await app.injectWS(concrete(route));
     expect(ws.readyState).toBe(ws.OPEN);
     ws.close();
   });

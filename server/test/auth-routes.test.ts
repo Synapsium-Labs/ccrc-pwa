@@ -12,7 +12,7 @@ import type { FastifyInstance } from 'fastify';
 import { buildServer, type Deps } from '../src/server.js';
 import { loadConfig } from '../src/config.js';
 import { SESSION_COOKIE, expireCookie, parseCookies, serializeCookie } from '../src/auth/cookie.js';
-import { ABSOLUTE_TTL_MS } from '../src/auth/sessions.js';
+import { ABSOLUTE_TTL_MS, SessionStore } from '../src/auth/sessions.js';
 import { MAX_FAILURES } from '../src/auth/ratelimit.js';
 import { hashLine, type ScryptParams } from '../src/auth/secret.js';
 import type { PtyLike } from '../src/pty.js';
@@ -297,25 +297,27 @@ describe('POST /api/auth/login', () => {
     });
 
     it('gives the slot back when the handler THROWS, not only when it returns', async () => {
-      // The exception path, reached with a secret line that PARSES but that
-      // `crypto.scrypt` refuses: `p` is bounded by nothing in the parser, and
-      // `128 * r * p` past `maxmem` makes node throw `ERR_CRYPTO_INVALID_SCRYPT_PARAMS`
-      // out of `verifyPassphrase`. The route answers 500 — honest for a box whose
-      // secret file is corrupt — and the assertion is what happens NEXT.
-      const w = await openApp({
-        // The hash must decode to exactly KEYLEN=32 bytes or `verifyPassphrase`
-        // short-circuits `false` before it ever reaches scrypt — 43 chars plus
-        // one `=` is base64 for 32 bytes.
-        secretText: `scrypt$N=2,r=1,p=1048576$${'A'.repeat(24)}$${'B'.repeat(43)}=$gen=1\n`,
-      });
-      app = w.app;
+      // RE-ANCHORED (review R5): this used to reach the throw with a secret line
+      // that PARSED but that `crypto.scrypt` refused — a huge `p`. Bounding `p`
+      // in `secret.ts` closed that door on purpose (it was an hour-long login,
+      // not merely a 500), so the lever is now an injected failure at the LAST
+      // await inside the try: `SessionStore.create`, which the route reaches only
+      // after a correct passphrase and after `succeed()` has already reset the
+      // window. That makes this test purely about the `finally` — the failure
+      // counter cannot be what refuses, because nothing here is a failure.
+      const w = await openApp(); app = w.app;
+      vi.spyOn(SessionStore.prototype, 'create').mockRejectedValue(new Error('disk on fire'));
       for (let i = 0; i < MAX_FAILURES + 2; i++) {
         expect((await postLogin(app, PASSPHRASE)).statusCode, `throw ${i + 1}`).toBe(500);
       }
-      // MAX_FAILURES + 2 throws, and the budget is untouched: the window counts
-      // failures (none of these are), and every slot was released by the
-      // `finally`. Without it the 9th call here would have been a 429.
+      // MAX_FAILURES + 2 throws and the budget is untouched: every slot came back
+      // through the `finally`. Without it the 9th call would have been a 429, and
+      // login would stay bricked until the process restarted.
       expect((await postLogin(app, PASSPHRASE)).statusCode).toBe(500);
+      vi.restoreAllMocks();
+      // …and once the injected failure is gone, login works again — proving the
+      // 500s left nothing behind.
+      expect((await postLogin(app, PASSPHRASE)).statusCode).toBe(204);
     });
 
     it('counts failures, not attempts — a fat-finger then a correct login costs nothing', async () => {
@@ -326,6 +328,33 @@ describe('POST /api/auth/login', () => {
       for (let i = 0; i < MAX_FAILURES; i++) {
         expect((await postLogin(app, 'wrong')).statusCode, `post-reset attempt ${i + 1}`).toBe(401);
       }
+    });
+
+    it('the handler RESERVES — a structural kill for the read-do-not-admit mutation', () => {
+      // Review R3. The concurrent-burst test above reds when `reserve()` is
+      // swapped back for `check()`, but its assertion (`admitted <= MAX_FAILURES`)
+      // is ALSO satisfied by fully serialized execution, so its discriminating
+      // power rests on runtime interleaving — empirical on one box at one cost
+      // factor, not structural. This is the deterministic half: the login
+      // handler's own text, sliced from its registration to the next one, must
+      // take a slot and must not merely read one. (`/api/auth/status` calls
+      // `check()` legitimately, which is why the slice is scoped rather than the
+      // file.)
+      const src = readFileSync(path.resolve(__dirname, '../src/server.ts'), 'utf8');
+      const at = src.indexOf("app.post('/api/auth/login'");
+      expect(at, 'the login route is not registered').toBeGreaterThan(0);
+      const end = src.indexOf("\n  app.", at + 1);
+      expect(end, 'no following registration to bound the slice').toBeGreaterThan(at);
+      const handler = src.slice(at, end);
+      expect(handler, 'the brake must ADMIT').toContain('loginLimiter.reserve(');
+      expect(handler, 'a pure read cannot bound concurrency').not.toContain('loginLimiter.check(');
+      // …and the slot must come back on every path, which is what `finally` is.
+      expect(handler).toContain('} finally {');
+      expect(handler).toContain('slot.release();');
+      // Guard the guard: a slice that had gone empty (a rename, a moved route)
+      // would satisfy all four negatives above by having nothing in it.
+      expect(handler.length).toBeGreaterThan(1500);
+      expect(handler).toContain('verifyPassphrase(');
     });
 
     it('is per server, not per process — one test box\'s lockout is not another\'s', async () => {
@@ -462,6 +491,23 @@ describe('GET /api/auth/status', () => {
     // unenterable-but-open. `ccrc doctor` reports it; the login route says it to
     // someone who has actually tried.
     expect(res.json()).toMatchObject({ mode: 'passphrase' });
+  });
+
+  it('says `authed:false` for an EXPIRED cookie — a dead session is not a session', async () => {
+    // Review R6. Correct by construction (`sessionVerdict` returns
+    // `reason: 'refused'` for `'expired'` exactly as it does for `'no-session'`),
+    // and until now untested — the difference between the two matters everywhere
+    // else, so the one place they must agree is worth pinning too.
+    const w = await openApp(); app = w.app;
+    const cookie = cookieHeader(setCookieOf(await postLogin(app, PASSPHRASE)));
+    expect((await app.inject({ method: 'GET', url: '/api/auth/status', headers: { cookie } })).json())
+      .toMatchObject({ authed: true });
+    // A `ccrc passwd` generation bump, mid-flight: every live session is expired.
+    writeFileSync(path.join(w.home, '.ccrc', 'auth.scrypt'),
+      `${await hashLine(PASSPHRASE, FAST_PARAMS, 2)}\n`, { mode: 0o600 });
+    const after = await app.inject({ method: 'GET', url: '/api/auth/status', headers: { cookie } });
+    expect(after.statusCode).toBe(200);
+    expect(after.json()).toMatchObject({ authed: false, mode: 'passphrase' });
   });
 
   it('an anonymous body carries ONLY the enumerated fields — a later one cannot widen the leak', async () => {

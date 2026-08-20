@@ -92,6 +92,22 @@ describe('readAuthSecret — a garbled line fails SHUT, never reads as "no passp
     ['non-power-of-two N', validishLine({ params: 'N=1000,r=8,p=1' })],
     ['N past the working-set ceiling', validishLine({ params: 'N=8388608,r=8,p=1' })],
     ['r below 1', validishLine({ params: 'N=1024,r=0,p=1' })],
+    ['p below 1', validishLine({ params: 'N=1024,r=8,p=0' })],
+    // Task 5 review R5. `p` multiplies scrypt's WORK linearly at no memory cost,
+    // so the working-set ceiling one line up cannot see it. `p=32768` at the
+    // SHIPPED N=65536,r=8 parses and RUNS — at ~32768x the intended ~100 ms,
+    // about an hour of threadpool per login attempt, each one holding a
+    // rate-limiter slot. Eight of those brick login and starve libuv: the exact
+    // denial of service the login brake exists to prevent, arriving through the
+    // parser instead of through the route.
+    ['p that makes each login take an hour (32768 at the shipped N/r)',
+      validishLine({ params: 'N=65536,r=8,p=32768' })],
+    ['p past the work ceiling at a small N', validishLine({ params: 'N=1024,r=8,p=1024' })],
+    // The other `p` failure, and a different one: past the maxmem HEADROOM this
+    // scheme sizes with, scrypt throws synchronously — which used to surface as a
+    // 500 from the login route where a broken secret must always answer 401.
+    ['p past the maxmem headroom (scrypt itself would refuse it)',
+      validishLine({ params: 'N=2,r=1,p=1048576' })],
     ['salt not base64 (bad char)', validishLine({ salt: 'ab!d' })],
     ['hash not base64 (bad length)', validishLine({ hash: 'zzz' })],
     ['hash wrong length (16 bytes, want 32)', validishLine({ hash: randomBytes(16).toString('base64') })],
@@ -111,6 +127,18 @@ describe('readAuthSecret — a garbled line fails SHUT, never reads as "no passp
       expect(threw).toBe(true);
     });
   }
+
+  it('still admits the p values a real deployment could legitimately carry', () => {
+    // The bound is a ceiling on garbage, not a ban on the parameter: `p=8` at the
+    // shipped N/r is the most the work ceiling allows (the same 8x headroom it
+    // already grants N and r), and it bounds one login to ~0.8 s.
+    const salt = randomBytes(16).toString('base64');
+    const hash = randomBytes(KEYLEN).toString('base64');
+    for (const params of ['N=65536,r=8,p=1', 'N=65536,r=8,p=8', 'N=1024,r=8,p=512']) {
+      const s = readAuthSecret(secretFile(`scrypt$${params}$${salt}$${hash}$gen=1`));
+      expect(s, params).not.toBeNull();
+    }
+  });
 
   it('parses a well-formed line into the exact AuthSecret shape', () => {
     const salt = randomBytes(16).toString('base64');
