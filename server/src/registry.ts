@@ -119,7 +119,14 @@ export interface SessionRecord {
    *  ms. Null ONLY on absence: the `.hold` listed-vs-readable ladder above
    *  applies verbatim, because "no fault recorded" re-enables every
    *  destructive affordance downstream while "the marker would not read" must
-   *  not — opposite answers a caller handles differently, never collapsed. An
+   *  not — opposite answers a caller handles differently, never collapsed.
+   *  D-113: a MEASURED absent read (a proven ENOENT, `io.readFileMeasured`)
+   *  is null directly, with no second-listing reconfirm of its own — closing
+   *  a live false alarm `.hold`'s second listing exists to catch for that
+   *  field but `.substrate` never had one for: `_substrate_clear` removes
+   *  the marker on the first live probe, a routine event, so a marker listed
+   *  at the top of a read and cleared before its own field read used to
+   *  report `SUBSTRATE_UNREADABLE` on an ordinary recovery. An
    *  unreadable-but-listed marker carries `SUBSTRATE_UNREADABLE`; a readable
    *  but empty one (a torn write — ccd's writer synthesizes a reason rather
    *  than write nothing) carries `SUBSTRATE_NO_REASON`; a stampless text keeps
@@ -468,7 +475,7 @@ async function buildRecord(
 ): Promise<SessionRecord | null> {
   const [wrapper, project, workdir, uuid, started, home, pool, lastswap, workspace, branchRead,
     base, prPhaseRaw, prNumberRaw, prCheckedAtRaw, archivedRaw, manifestRaw, holdRead,
-    stoppedRaw, supervisedRaw, swapBlockedRaw, spawnRaw, substrateRaw] = await Promise.all([
+    stoppedRaw, supervisedRaw, swapBlockedRaw, spawnRaw, substrateRead] = await Promise.all([
     field(io, cfg.registryDir, id, 'wrapper'), field(io, cfg.registryDir, id, 'project'),
     field(io, cfg.registryDir, id, 'workdir'), field(io, cfg.registryDir, id, 'uuid'),
     field(io, cfg.registryDir, id, 'started'), field(io, cfg.registryDir, id, 'home'),
@@ -480,7 +487,7 @@ async function buildRecord(
     fieldMeasured(io, cfg.registryDir, id, 'hold'),
     field(io, cfg.registryDir, id, 'stopped'), field(io, cfg.registryDir, id, 'supervised'),
     field(io, cfg.registryDir, id, 'swapblocked'), field(io, cfg.registryDir, id, 'spawn'),
-    field(io, cfg.registryDir, id, 'substrate'),
+    fieldMeasured(io, cfg.registryDir, id, 'substrate'),
   ]);
 
   // The identity-triple ladder. `uuid` first: `names.includes(id + '.uuid')`
@@ -619,14 +626,24 @@ async function buildRecord(
     // produces one — `_substrate_mark` synthesizes a reason rather than write
     // nothing), and a stampless one keeps its whole text at `at: 0` rather
     // than losing the one sentence a maintainer could act on.
-    substrate: substrateRaw === null
-      ? (substrateListed ? { at: 0, text: SUBSTRATE_UNREADABLE } : null)
-      : substrateRaw === ''
-        ? { at: 0, text: SUBSTRATE_NO_REASON }
-        : (() => {
-            const p = packedStamp(substrateRaw);
-            return p === null ? { at: 0, text: substrateRaw } : { at: p.at, text: p.rest || substrateRaw };
-          })(),
+    //
+    // D-113: a measured `absent` reads null DIRECTLY, same reasoning as
+    // `held`/D-112 — and it closes a live false alarm here specifically,
+    // since `.substrate` has no second listing of its own to demote a
+    // false HOLD_UNREADABLE-shaped answer the way `held` does: `_substrate_
+    // clear` removes the marker on the first live probe (a routine event),
+    // so a marker listed at the top of a read and cleared before its own
+    // field read used to report `SUBSTRATE_UNREADABLE` — "the registry is
+    // broken" — on an ordinary recovery. A measured `unreadable` still falls
+    // back to exactly today's `substrateListed` rung.
+    substrate: substrateRead.ok
+      ? (substrateRead.content === ''
+          ? { at: 0, text: SUBSTRATE_NO_REASON }
+          : (() => {
+              const p = packedStamp(substrateRead.content);
+              return p === null ? { at: 0, text: substrateRead.content } : { at: p.at, text: p.rest || substrateRead.content };
+            })())
+      : (substrateRead.reason === 'absent' ? null : (substrateListed ? { at: 0, text: SUBSTRATE_UNREADABLE } : null)),
     // The surface is validated on READ as well as on write. The write-side
     // check is `_ws_unsupervise`'s own `case "$surface" in cli|pwa|agent|ccd)
     // ;; *) surface=unknown ;;` — NOT `cmd_stop`, which this comment used to
