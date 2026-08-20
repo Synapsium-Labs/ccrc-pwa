@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=80bea10755f513677da02c671274f0ea60dde4260dfea70f2004a741907e5e4f
+# ccrc:generated 1 sha256=168eb0ae5698f90be221602a75181b253949011aae996c063f7411d8d9861ecc
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box, not on this file: `_rc_enabled` reads
@@ -365,7 +365,55 @@ _session_verdict() {   # id -> live|gone|unknown on stdout; always rc 0 (derived
 # difference. The two callers where that collapse was destructive — `_ws_status`
 # and `cmd_forget` — ask `_session_verdict` directly (D-B8-12).
 _alive() { [[ "$(_session_verdict "$1")" == live ]]; }
-_reg_set() { printf '%s' "$3" > "$REG/$1.$2"; }             # id field value
+# ATOMIC BY RENAME (registry-durability wave 2). The old body was
+# `printf '%s' "$3" > "$REG/$1.$2"` — truncate-then-write IN PLACE, so any
+# reader that opened the file inside the window read ZERO BYTES or a prefix of
+# the new value. The registry's read side treats a field's bytes as a fact, and
+# a torn field is a fact that was never true. Write to a tmp in THE SAME
+# DIRECTORY (hence the same filesystem, hence a real rename(2) rather than a
+# copy) and rename it into place: every reader sees the whole old value or the
+# whole new one.
+#
+# D-112'S INVARIANT SURVIVES AND IS STRONGER HERE. `buildRecord` drops a row on
+# a single measured-`absent` identity field with no second listing, which is
+# only sound if the NAME never disappears. Truncation never unlinked; rename
+# never unlinks either — POSIX requires the destination path stay resolvable to
+# the old or the new inode throughout. There is NO ENOENT WINDOW at any point,
+# before or after this change. Nothing in this function may `rm` the
+# destination.
+#
+# `-T` (--no-target-directory) IS NOT OPTIONAL. Measured, GNU coreutils 9.4: a
+# plain `mv -f tmp "$REG/$id.hold"` where `$REG/$id.hold` is a DIRECTORY exits
+# 0 having moved the tmp INSIDE it — a false success on the one field whose
+# silent absence is destructive (`cmd_ws_hold` reads this exit status and dies
+# on it, and `ccd-hold.test.ts` uses exactly that directory as its any-uid
+# stand-in for a failed write). With `-T` it exits 1, as `printf > dir` did.
+#
+# THE TMP NAME: leading dot, trailing `.tmp`, field never last. The dot keeps
+# it out of every bash glob in the tree (`$REG/*.uuid`, `$REG/*.workspace`,
+# `$REG/$id.*` — none match a dotfile without `dotglob`, which nothing sets),
+# and the `.tmp` suffix keeps it out of node's `readdir`, which DOES return
+# dotfiles: `readRegistryMeasured` mints session ids from
+# `names.filter(n => n.endsWith('.uuid'))`, so a tmp ending in the field name
+# would mint a phantom session. `$BASHPID` separates concurrent supervisors
+# (and background subshells of one shell, where `$$` would not); the sequence
+# separates two writes by one shell. Same shape and same reason as
+# `session-hook.sh`'s own `$REG/.$id.$$.hookstate.tmp`.
+#
+# A SIGKILL between the write and the rename leaks one tmp file, forever:
+# `_reg_purge`'s glob cannot see a dotfile, and giving it a second glob that
+# could would let one session's purge delete another session's IN-FLIGHT tmp
+# (ids may nest — see `_reg_purge`'s own note) and turn that write into a false
+# refusal. Disclosed rather than swept: an inert few bytes, the same price
+# `$REG/.reap-$id.lock` already pays for a lock whose identity is an inode.
+_REG_SET_SEQ=0
+_reg_set() {   # id field value -> 0 iff the value is on disk under its own name
+  local tmp
+  _REG_SET_SEQ=$(( _REG_SET_SEQ + 1 ))
+  tmp="$REG/.$1.$2.$BASHPID.$_REG_SET_SEQ.tmp"
+  printf '%s' "$3" > "$tmp" 2>/dev/null || { rm -f -- "$tmp"; return 1; }
+  mv -fT -- "$tmp" "$REG/$1.$2" || { rm -f -- "$tmp"; return 1; }
+}
 _reg_get() { cat "$REG/$1.$2" 2>/dev/null; }                # id field
 # THE ONE WRITER OF `started`, and the reason it is a function rather than eight
 # `_reg_set` lines: the field is what `_session_state` and shared/'s
