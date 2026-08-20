@@ -152,6 +152,18 @@ const TREE_FILES = [
   'deploy/ccrc.service',
   'ccd/claude-session@.service',
   'deploy/verify-service.sh',
+  // ── The two SKILL TREES and their two installers (worker-skill Task 4).
+  // `_inst_skills` places each tree into `~/.cc-sessions/` and then RUNS the
+  // installer it just placed beside it, so all four are read out of the tree
+  // this fixture builds. They are DIRECTORY entries for the same reason
+  // `deploy/systemd` is: the coordinator skill is a SKILL.md plus a
+  // `references/` directory whose contents its own installer refuses to run
+  // without, and a hand-listed fixture would go stale the moment a fourth
+  // reference lands.
+  'ccd/coordinator-skill',
+  'ccd/worker-skill',
+  'ccd/install-coordinator-skill.sh',
+  'ccd/install-worker-skill.sh',
 ];
 
 /** The two BUILD ARTIFACTS `_inst_tree` refuses to place a tree without. They
@@ -552,9 +564,16 @@ function pathWithout(home: string, missing: string): string {
   // four tools doctor merely LOOKS FOR at the end of the same run. A PATH
   // missing those is a fixture about six absences at once, and the point of
   // this helper is to model exactly one.
+  //
+  // `diff` joins the list in worker-skill Task 4: BOTH skill installers refuse
+  // by name without it ("refusing rather than rewriting blind"), and
+  // `_inst_tree_copy`'s convergence check is a `diff -r -q` too. Without this
+  // link, `pathWithout(home, 'git')` — a fixture about ONE absence, which runs
+  // the whole verb through to the wrappers step — would instead die at the
+  // skills step for a reason the test is not about.
   for (const b of ['mkdir', 'cp', 'mv', 'rm', 'cat', 'chmod', 'cmp', 'date',
     'node', 'git', 'npm', 'rsync', 'bash', 'sleep', 'jq', 'mktemp', 'basename',
-    'tmux', 'python3', 'flock', 'timeout']) {
+    'diff', 'tmux', 'python3', 'flock', 'timeout']) {
     if (b === missing || existsSync(join(d, b))) continue;
     symlinkSync(realPath(b), join(d, b));
   }
@@ -584,7 +603,14 @@ const STRAY_DIRS = ['', '.ccrc', '.local/bin', '.cc-sessions', '.claude', 'ccrc'
   // report "no strays" about a directory that does not exist.
   '.config/systemd/user',
   '.config/systemd/user/claude-session@.service.d',
-  '.config/systemd/user/app-claude\\x2dsession.slice.d'];
+  '.config/systemd/user/app-claude\\x2dsession.slice.d',
+  // Worker-skill Task 4: `_inst_tree_copy` stages a whole DIRECTORY beside its
+  // target under `.cc-sessions` (already listed above), and each skill
+  // installer stages one beside ITS target, inside the account config dir's
+  // `skills/`. The default roster's single account is `claude`, so that is the
+  // one this sweep can reach on a `freshBox`; a temp left there is a
+  // half-copied skill tree sitting where a session resolves its skills.
+  '.claude/skills'];
 
 /** Every `<file>.tmp.<pid>` left anywhere a step writes. Each one writes
  *  through a temp sibling and renames; a leftover means a step died between the
@@ -1348,6 +1374,16 @@ describe('ccrc install: the executables and files it installs', () => {
       [join(home, '.cc-sessions', 'install-session-hooks.sh'),
         placed(home, 'ccd', 'install-session-hooks.sh'), 0o755],
       [join(home, '.cc-sessions', 'notify.sh'), placed(home, 'deploy', 'notify.sh'), 0o755],
+      // The two skill installers (worker-skill Task 4) are the same kind of
+      // artifact as the hooks installer beside them — a script the box EXECUTES
+      // — and land through the same `_inst_atomic`. 0755 is not decoration
+      // here: `_inst_skills` runs each one immediately afterwards, and a copy
+      // that arrived at the source's mode under this describe's hostile umask
+      // would be a step that installs a skill installer nobody can run.
+      [join(home, '.cc-sessions', 'install-coordinator-skill.sh'),
+        placed(home, 'ccd', 'install-coordinator-skill.sh'), 0o755],
+      [join(home, '.cc-sessions', 'install-worker-skill.sh'),
+        placed(home, 'ccd', 'install-worker-skill.sh'), 0o755],
       [join(home, '.tmux.conf'), placed(home, 'ccd', 'tmux.conf'), 0o644],
       [join(home, '.claude', 'statusline-command.sh'),
         placed(home, 'ccd', 'statusline-command.sh'), 0o755],
@@ -1375,6 +1411,10 @@ describe('ccrc install: the executables and files it installs', () => {
       join(home, '.cc-sessions', 'session-hook.sh'),
       join(home, '.cc-sessions', 'install-session-hooks.sh'),
       join(home, '.cc-sessions', 'notify.sh'),
+      // The two skill installers `_inst_skills` stages beside them, through
+      // the same `_inst_atomic` (worker-skill Task 4).
+      join(home, '.cc-sessions', 'install-coordinator-skill.sh'),
+      join(home, '.cc-sessions', 'install-worker-skill.sh'),
       join(home, '.tmux.conf'),
       join(home, '.claude', 'statusline-command.sh'),
     ];
@@ -1477,6 +1517,15 @@ describe('ccrc install: the order is stated in one place', () => {
       '_inst_linger',
       '_inst_dirs',
       '_inst_hooks',
+      // Worker-skill Task 4. Beside `_inst_hooks` and after it, in deploy.sh's
+      // own order (`install-session-hooks.sh`, then the two skill installers):
+      // both steps run an INSTALLED converge script over the config dirs
+      // `_inst_dirs` has just created, and neither reads what the other wrote.
+      // What IS load-bearing is that it follows `_inst_dirs` — the skill
+      // installers `continue` past a config dir that does not exist, so on a
+      // fresh box run before that step they would skip the whole roster and
+      // exit 0.
+      '_inst_skills',
       '_inst_wrappers',
     ]);
   });
@@ -1929,7 +1978,7 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
     expect(r.stdout).toMatch(/^install: linger: could not enable — run: sudo loginctl enable-linger \d+$/m);
     // …the steps AFTER it ran, which is the half that makes this a "continue"
     // rather than a die with a friendlier sentence.
-    for (const step of ['dirs: ', 'hooks: ', 'wrappers: ',
+    for (const step of ['dirs: ', 'hooks: ', 'skills: ', 'wrappers: ',
       'done — converged with 1 degraded step \\(linger\\)']) {
       expect(r.stdout, `the install stopped at linger: no "install: ${step}" line`)
         .toMatch(new RegExp(`^install: ${step}`, 'm'));
@@ -2046,6 +2095,167 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
   });
 });
 
+describe('ccrc install: both skills reach every rostered account', () => {
+  // ── THE ASYMMETRY THIS STEP CLOSES ──────────────────────────────────────
+  // `deploy/deploy.sh agent <host>` has shipped the coordinator skill to the
+  // fleet host since Build 7 and now ships the worker skill beside it — but a
+  // box that installs ITSELF got neither, because no step of this verb had ever
+  // heard of a skill. That is not a cosmetic gap: both installers exist because
+  // skills resolve per `CLAUDE_CONFIG_DIR` and a session's ACCOUNT drifts on
+  // swap while its id does not, so a coordinator (or a worker) placed with no
+  // pinned account must find its skill in EVERY rostered home. On a
+  // self-installed box it found one in none of them, and the failure is silent:
+  // the model simply does not have the protocol and improvises.
+  //
+  // Measured with the FIVE-account roster deliberately, exactly as `_inst_dirs`
+  // is: the default roster's single `.claude` is created by `_inst_files`
+  // anyway, so a one-dir fixture would go green against an installer that only
+  // ever touched the first home.
+  const skillBox = ((): { home: string; r: Result } => {
+    const home = freshBox('ccrc-install-skills-');
+    preexisting(home, 'accounts.json', MIGRATION_ROSTER);
+    writeFileSync(join(home, '.local', 'bin', 'gpt'),
+      '#!/usr/bin/env bash\nexec /usr/bin/env gpt "$@"\n', { mode: 0o755 });
+    return { home, r: runInstall(home) };
+  })();
+  const ROSTER_DIRS = ['.claude', '.claude-personal', '.claude-corp', '.claude-gpt', '.claude-dev0'];
+
+  it('the run this describe measures succeeded, and says what it did in one line', () => {
+    expect(skillBox.r.code, skillBox.r.stderr).toBe(0);
+    expect(skillBox.r.stdout).toMatch(/^install: skills: /m);
+  });
+
+  it('lands BOTH skills in every account config dir the roster names', () => {
+    const { home } = skillBox;
+    for (const d of ROSTER_DIRS) {
+      for (const [name, src] of [
+        ['ccrc-coordinator', 'coordinator-skill'], ['ccrc-worker', 'worker-skill'],
+      ] as const) {
+        const md = join(home, d, 'skills', name, 'SKILL.md');
+        expect(existsSync(md), `${d}: ${name} never reached this home`).toBe(true);
+        expect(readFileSync(md), `${d}: ${name} is not the shipped skill`)
+          .toEqual(readFileSync(placed(home, 'ccd', src, 'SKILL.md')));
+      }
+      // …and the coordinator's tree arrived WHOLE, not as its first file. Its
+      // own installer refuses a partial source by name, so this is the
+      // assertion that says the refusal never had to fire — and the worker
+      // skill points a live worker at exactly these paths, relative to its own
+      // installed directory.
+      const refs = join(home, d, 'skills', 'ccrc-coordinator', 'references');
+      expect(readdirSync(refs).sort(), `${d}: the coordinator's references/ is incomplete`)
+        .toEqual(readdirSync(join(REPO, 'ccd', 'coordinator-skill', 'references')).sort());
+    }
+  });
+
+  it('stages each skill tree under ~/.cc-sessions, where the fleet deploy puts it', () => {
+    // ONE PATH FOR BOTH LANES. `deploy.sh` rsyncs each tree to
+    // `~/.cc-sessions/<name>` and runs the installer against that copy; this
+    // verb places the same two directories at the same two paths from the tree
+    // it just put at `~/ccrc`. A box therefore looks the same afterwards
+    // whichever lane converged it — which is what makes the installers' own
+    // `CCRC_SKILL_SRC` default correct on a self-installed box.
+    const { home } = skillBox;
+    for (const name of ['coordinator-skill', 'worker-skill']) {
+      const staged = join(home, '.cc-sessions', name);
+      expect(existsSync(staged), `${name} was never staged in ~/.cc-sessions`).toBe(true);
+      expect(readFileSync(join(staged, 'SKILL.md')))
+        .toEqual(readFileSync(placed(home, 'ccd', name, 'SKILL.md')));
+    }
+    expect(readdirSync(join(home, '.cc-sessions', 'coordinator-skill', 'references')).sort())
+      .toEqual(readdirSync(join(REPO, 'ccd', 'coordinator-skill', 'references')).sort());
+  });
+
+  it('runs each installer against the copy it staged, never out of the tree', () => {
+    // `_inst_hooks`' doctrine, applied to the two installers that arrived with
+    // it: the box's OWN copy is the one that runs, because that is the copy
+    // every future run and every operator reaches, and running the tree's copy
+    // instead leaves the installed one untested by the very run that placed it.
+    //
+    // MEASURED AS TEXT, and the reason is a property of this step rather than a
+    // shortcut: `_inst_tree_copy` makes the staging copy FROM the placed tree
+    // in the same step, so at the moment the installer runs the two sources are
+    // byte-identical and no fixture can tell them apart by outcome. The same
+    // situation `_inst_stamp`'s path pin and `_inst_env`'s are in, and the same
+    // answer — scan the shell, in the function's own body.
+    const src = read(join(REPO, 'ccd', 'ccrc'));
+    const body = /_inst_skills\(\) \{([\s\S]*?)\n\}/.exec(src);
+    expect(body, 'ccd/ccrc has no _inst_skills').toBeTruthy();
+    const lines = body![1]!.split('\n').filter((l) => l.includes('CCRC_SKILL_SRC'));
+    expect(lines.length, 'no line in _inst_skills sets CCRC_SKILL_SRC at all')
+      .toBeGreaterThan(0);
+    for (const l of lines) {
+      expect(l, 'the installer must read the copy staged under $HOME/.cc-sessions')
+        .toContain('CCRC_SKILL_SRC="$HOME/.cc-sessions/');
+      expect(l, 'CCRC_SKILL_SRC points back into the placed tree').not.toContain('BOX_TREE_DIR');
+      expect(l, 'CCRC_SKILL_SRC points back into the placed tree').not.toContain('$tree');
+    }
+    // …and the SCRIPT that runs is the staged one too, by the same rule: every
+    // `bash` this step invokes reaches into `$HOME/.cc-sessions`, never into
+    // the tree it placed.
+    const runs = body![1]!.split('\n').filter((l) => /\bbash\b/.test(l));
+    expect(runs.length, '_inst_skills runs no installer at all').toBeGreaterThan(0);
+    for (const l of runs) {
+      expect(l, 'the installer that RUNS must be the box’s own copy')
+        .toContain('bash "$HOME/.cc-sessions/install-');
+    }
+  });
+
+  it('a second run rewrites neither skill — the installers converge, and so does the staging', () => {
+    // Idempotence measured on the INODE, which is what the installers' own
+    // `diff -r -q` check promises: a rewrite replaces the file rather than
+    // leaving it. `_inst_tree_copy` owes the same on the staging side, and for
+    // the same reason `_inst_atomic` does — a converger that rewrites what it
+    // did not change is one an operator cannot use to see what a run did.
+    const home = freshBox('ccrc-install-skills-idem-');
+    expect(runInstall(home).code).toBe(0);
+    const watched = [
+      join(home, '.claude', 'skills', 'ccrc-coordinator', 'SKILL.md'),
+      join(home, '.claude', 'skills', 'ccrc-coordinator', 'references', 'wave-lifecycle.md'),
+      join(home, '.claude', 'skills', 'ccrc-worker', 'SKILL.md'),
+      join(home, '.cc-sessions', 'coordinator-skill', 'SKILL.md'),
+      join(home, '.cc-sessions', 'worker-skill', 'SKILL.md'),
+    ];
+    const before = watched.map((p) => [statSync(p).ino, mtime(p)]);
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(watched.map((p) => [statSync(p).ino, mtime(p)])).toEqual(before);
+    // No backup directory either: the installers back a home up only when they
+    // are about to REPLACE it, so a second run that made one is a second run
+    // that rewrote a converged home.
+    expect(existsSync(join(home, 'ccrc-backups')), 'a converged re-run took a backup').toBe(false);
+    expect(strays(home)).toEqual([]);
+  });
+
+  it('an installer that refuses is a FAILED install, named, and doctor never runs', () => {
+    // The step contract, and `_inst_hooks`' reasoning applied to skills: a box
+    // whose sessions have no protocol is not a finished install, and the one
+    // thing worse than failing here is reporting success over it. The die names
+    // the installer, so "read its lines above" points at the refusal that
+    // actually happened rather than re-wording it.
+    const home = freshBox('ccrc-install-skills-refused-');
+    const blocked = join(home, '.claude', 'skills');
+    mkdirSync(blocked, { recursive: true });
+    chmodSync(blocked, 0o500);
+    try {
+      const r = runInstall(home);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toMatch(/^ccrc: install-coordinator-skill\.sh refused/m);
+      // The installer's OWN sentence is what "the lines above" means, and it is
+      // still there in its own words.
+      expect(r.stderr).toMatch(/install-coordinator-skill: could not stage into /);
+      // …and the run STOPPED: the steps after it never ran, and doctor — the
+      // verb's last word — never got to report on a box this install did not
+      // finish.
+      expect(r.stdout).toMatch(/^install: hooks: /m);
+      expect(r.stdout).not.toMatch(/^install: skills: /m);
+      expect(r.stdout).not.toMatch(/^install: wrappers: /m);
+      expect(r.stdout).not.toMatch(/^summary: \d+ checks/m);
+    } finally {
+      chmodSync(blocked, 0o700);
+    }
+  });
+});
+
 describe('ccrc install: the landing block, and doctor as the last word', () => {
   it('ends with doctor, and a box that passes every check exits 0', () => {
     const home = freshBox('ccrc-install-doctor-ok-');
@@ -2098,7 +2308,7 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     expect(r.code).toBe(1);
     expect(r.stdout).toMatch(/^FAIL linger: /m);
     for (const step of ['roster', 'accounts\\.sh', 'ccrc\\.env', 'tree', 'bins', 'files',
-      'stamp', 'units', 'services', 'linger', 'dirs', 'hooks', 'wrappers']) {
+      'stamp', 'units', 'services', 'linger', 'dirs', 'hooks', 'skills', 'wrappers']) {
       expect(r.stdout, `no "install: ${step}:" line survived the failing doctor`)
         .toMatch(new RegExp(`^install: ${step}: `, 'm'));
     }
@@ -2168,6 +2378,13 @@ describe('ccrc install: running the WHOLE verb twice', () => {
       join(home, '.cc-sessions', 'session-hook.sh'),
       join(home, '.cc-sessions', 'install-session-hooks.sh'),
       join(home, '.cc-sessions', 'notify.sh'),
+      join(home, '.cc-sessions', 'install-coordinator-skill.sh'),
+      join(home, '.cc-sessions', 'install-worker-skill.sh'),
+      // …and the two staged skill TREES, which are not `_inst_atomic`
+      // destinations at all: `_inst_tree_copy` converges a directory, and the
+      // file inside it is what a re-run must not rewrite (worker-skill Task 4).
+      join(home, '.cc-sessions', 'coordinator-skill', 'SKILL.md'),
+      join(home, '.cc-sessions', 'worker-skill', 'SKILL.md'),
       join(home, '.tmux.conf'),
       join(home, '.claude', 'statusline-command.sh'),
       ...UNIT_FILES.map(([dest]) => unitDir(home, ...dest.split('/'))),

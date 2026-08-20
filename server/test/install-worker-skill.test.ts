@@ -146,3 +146,56 @@ describe('install-worker-skill.sh default homes are the roster, behaviourally', 
     }
   });
 });
+
+describe('the deploy ships the worker skill too — the fleet lane, in order', () => {
+  // install-coordinator-skill.test.ts:207-233's idiom, with this skill's own
+  // tokens. Nothing else in this repository reads `deploy/deploy.sh`'s skill
+  // lanes, so without these two assertions the four lines that ship this skill
+  // to the fleet host can be deleted, reordered or stripped of `--delete` and
+  // every suite stays green — the deploy is the only thing that ever runs them,
+  // and it runs against a live box.
+  const deploy = fs.readFileSync(path.resolve(__dirname, '../..', 'deploy/deploy.sh'), 'utf8');
+  const agentArm = deploy.slice(deploy.indexOf('if [ "$TARGET" = "agent" ]'), deploy.indexOf('\nelse\n'));
+  const COORD_RUN = 'bash ~/.cc-sessions/install-coordinator-skill.sh';
+  const WORKER_RUN = 'bash ~/.cc-sessions/install-worker-skill.sh';
+
+  it('installs the skill in the agent arm, after the coordinator skill installer has run', () => {
+    // ANCHORED ON THE RUN LINES, and each anchor's EXISTENCE asserted before
+    // any ordering is asked of it — both rules the coordinator suite paid for
+    // by measurement (its Task 8 sweep: a bare `indexOf` matched a comment that
+    // merely NAMED the other installer, and `indexOf` returning -1 for a
+    // deleted invocation made `-1 < <any index>` a green ordering assertion
+    // over an arm that ran nothing at all).
+    //
+    // WHY THIS ORDER IS A RULE AND NOT A HABIT: this skill's SKILL.md carries
+    // no references/ of its own and sends a live worker to the coordinator's
+    // installed tree by relative path (`../ccrc-coordinator/references/…`).
+    // Shipping it first puts a skill on the box naming reference files nothing
+    // there provides yet.
+    expect(agentArm).toContain('install-worker-skill.sh');
+    expect(agentArm).toContain(COORD_RUN);
+    expect(agentArm).toContain(WORKER_RUN);
+    expect(agentArm.indexOf(COORD_RUN)).toBeLessThan(agentArm.indexOf(WORKER_RUN));
+  });
+
+  it('rsyncs the skill tree with --delete, and does it after the coordinator lane', () => {
+    // Located by the FIRST line in the arm that spells this skill's directory
+    // with a trailing slash — which is why neither the block's own comment nor
+    // any comment above it may carry that spelling (deploy.sh says so at both
+    // skill lanes). A comment that did would shadow the real invocation, and
+    // this assertion would then be measuring prose.
+    expect(agentArm).toContain(COORD_RUN);
+    const lines = agentArm.split('\n');
+    const idx = lines.findIndex((l) => l.includes('worker-skill/'));
+    expect(idx, 'no line in the agent arm ships the worker skill tree').toBeGreaterThan(-1);
+    const line = lines[idx]!;
+    expect(line).toContain('rsync');
+    // --delete, for the same reason the coordinator's tree carries it: a
+    // reference file deleted in git has to die on the box too, or the skill
+    // keeps pointing a model at prose the repository no longer stands behind.
+    expect(line).toContain('--delete');
+    expect(agentArm.indexOf(COORD_RUN),
+      "the worker skill's tree must land after the coordinator lane it points into")
+      .toBeLessThan(agentArm.indexOf(line));
+  });
+});

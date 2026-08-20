@@ -448,8 +448,11 @@ the transcript surface. Before starting it:
 1. The token is on both boxes: `ls -l ~/.cc-secrets/ccrc-mail.token` on the
    fleet host and `~/.ccrc/mail.token` on the server, each `-rw-------`. Do not
    `cat` either one.
-2. `ls ~/.claude*/skills/ccrc-coordinator/SKILL.md` lists one path per
-   rostered account config dir — five today.
+2. `ls ~/.claude*/skills/ccrc-{coordinator,worker}/SKILL.md` lists TWO paths per
+   rostered account config dir — ten today. Both skills are placed in every
+   home, by both lanes (`deploy.sh agent <host>` and `ccrc install`), for the
+   same reason: a session is placed with no pinned account, so a swap must
+   never land a coordinator — or a worker — on a home without its protocol.
 3. `~/.cc-sessions/coordinator-paused` does **not** exist, on the **fleet
    host** — a dispatch reads it there and refuses `409 {refused:'paused'}`
    with no PWA indicator, so checking on the wrong box is a silent no-op.

@@ -1676,6 +1676,7 @@ cmd_install() {
   _inst_linger
   _inst_dirs
   _inst_hooks
+  _inst_skills
   _inst_wrappers
 
   # ── THE LANDING BLOCK, AND WHY DOCTOR IS THE LAST WORD ─────────────────
@@ -1995,6 +1996,60 @@ _inst_atomic() {   # <src> <dest> <mode>
     _ccrc_die "could not install $dest — nothing at that path was replaced"
   fi
   rm -f -- "$dest.tmp."*
+}
+
+# ── _inst_tree_copy — `_inst_atomic` for a DIRECTORY ─────────────────────
+# `_inst_atomic` is single-file by construction (one `cmp`, one `cp`, one
+# `chmod`, one `mv`), and a skill is a DIRECTORY: a `SKILL.md` beside a
+# `references/` its own text sends a model to read by name. This is the same
+# contract for that shape, and it keeps the three properties the file-level
+# helper's callers already depend on:
+#
+#   1. IT COMPARES FIRST. `diff -r -q` is the identical check both skill
+#      installers make before they touch a converged home, so "nothing to do"
+#      costs one walk and rewrites nothing — the measurement an operator uses to
+#      see what a run actually did (`_inst_accounts_sh`'s rule, applied to a
+#      tree).
+#   2. THE SWAP IS A RENAME, and the tree it replaces is moved ASIDE rather than
+#      deleted, so a failed `mv` restores it. Deleting the destination first
+#      would open a window in which a session resolving its skills finds neither
+#      the old tree nor the new one — the half-installed state the installers'
+#      own headers call worse than none.
+#   3. IT DIES rather than degrades, like every step that calls it.
+#
+# A missing `diff` makes every destination look different, so the tree is
+# re-copied with identical bytes: the safe direction, and the reason the
+# comparison is not guarded by a `command -v` — exactly as `_inst_atomic`
+# leaves its `cmp` unguarded. The installers this step runs afterwards refuse BY
+# NAME without diff, so a box that has none is told so rather than left
+# guessing.
+_inst_tree_copy() {   # <src-dir> <dest-dir>
+  local src="$1" dest="$2" tmp old
+  [ -d "$src" ] \
+    || _ccrc_die "the shipped tree has no $src — is this a complete ccrc tree? (re-run after: bash install.sh)"
+  if [ -d "$dest" ] && diff -r -q "$src" "$dest" >/dev/null 2>&1; then
+    return 0
+  fi
+  # `.tmp.$$` and `.old.$$` are the two skill installers' own staging names, and
+  # `.tmp.` is the spelling `_inst_atomic`'s stray sweep and the test suite's
+  # both already look for.
+  tmp="$dest.tmp.$$"
+  old="$dest.old.$$"
+  rm -rf -- "$tmp" "$old"
+  if ! { mkdir -p -- "$tmp" && cp -a "$src/." "$tmp/"; }; then
+    rm -rf -- "$tmp"
+    _ccrc_die "could not stage $dest — nothing at that path was replaced"
+  fi
+  if [ -e "$dest" ] && ! mv -- "$dest" "$old"; then
+    rm -rf -- "$tmp"
+    _ccrc_die "could not move the existing $dest aside — nothing at that path was replaced"
+  fi
+  if ! mv -- "$tmp" "$dest"; then
+    rm -rf -- "$tmp"
+    [ -e "$old" ] && mv -- "$old" "$dest"
+    _ccrc_die "could not install $dest"
+  fi
+  rm -rf -- "$old"
 }
 
 _inst_keep_aside() {   # <src> <dest> — copy a PERSONAL file aside before replacing it
@@ -2428,6 +2483,50 @@ _inst_hooks() {
   bash "$HOME/.cc-sessions/install-session-hooks.sh" \
     || _ccrc_die "install-session-hooks.sh refused — read its lines above; it never rewrites a settings.json it could not validate, so nothing was damaged"
   echo "install: hooks: session-hook.sh and the statusline registered in each account's settings.json"
+}
+
+# ── _inst_skills — the two skills, placed and then INSTALLED ──────────────
+# THE ASYMMETRY THIS STEP CLOSES. `deploy/deploy.sh agent <host>` has shipped
+# the coordinator skill to the fleet host since Build 7, and now ships the
+# worker skill beside it — while a box that installed ITSELF got NEITHER,
+# because no step of this verb had ever heard of a skill. That gap is not
+# cosmetic. Both installers exist because skills resolve per
+# `CLAUDE_CONFIG_DIR`, and a session's ACCOUNT drifts on swap while its id does
+# not: a coordinator (or a worker) is placed with no pinned account, so it has
+# to find its skill in EVERY rostered home. On a self-installed box it found one
+# in none of them, and the failure is silent — the model does not announce that
+# it has no protocol, it improvises one.
+#
+# TWO HALVES PER SKILL, IN DEPLOY'S OWN ORDER. The TREE is placed under
+# `~/.cc-sessions/<name>` — the same path `deploy.sh` rsyncs it to, which is
+# what makes each installer's own `CCRC_SKILL_SRC` default correct on a box
+# converged by either lane — and then the INSTALLER is run from the copy this
+# step just placed beside it. That is `_inst_hooks`' doctrine and its reason
+# holds unchanged here: the box's own copy is the one every future run and every
+# operator reaches, and running the tree's copy would leave the installed one
+# untested by the very run that installed it. `CCRC_SKILL_SRC` is set
+# EXPLICITLY rather than left to that default, because a step that silently
+# depended on a default's current value would convey none of this.
+#
+# THE COORDINATOR GOES FIRST, for deploy.sh's reason: the worker skill carries
+# no `references/` of its own and points a live worker at the coordinator's
+# installed tree by relative path (`../ccrc-coordinator/references/…`, both
+# skills side by side under one config dir).
+#
+# ITS FAILURE IS FATAL, exactly as `_inst_hooks`' is. Each installer converges
+# per home, backs up what it is about to replace and rolls back a swap it could
+# not finish, so a refusal has damaged nothing and there is nothing to unwind —
+# and a box whose sessions cannot find their protocol is not a finished install.
+_inst_skills() {
+  local tree="$BOX_TREE_DIR" name
+  mkdir -p "$HOME/.cc-sessions" || _ccrc_die "cannot create \$HOME/.cc-sessions"
+  for name in coordinator-skill worker-skill; do
+    _inst_tree_copy "$tree/ccd/$name" "$HOME/.cc-sessions/$name"
+    _inst_atomic "$tree/ccd/install-$name.sh" "$HOME/.cc-sessions/install-$name.sh" 755
+    CCRC_SKILL_SRC="$HOME/.cc-sessions/$name" bash "$HOME/.cc-sessions/install-$name.sh" \
+      || _ccrc_die "install-$name.sh refused — read its lines above; it converges one account's skill directory at a time and rolls back a swap it could not finish, so no home was left without the skill it already had"
+  done
+  echo "install: skills: ccrc-coordinator and ccrc-worker in each account's skills directory"
 }
 
 # ── _inst_wrappers — the converger, called as a function ──────────────────
