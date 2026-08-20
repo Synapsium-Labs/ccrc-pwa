@@ -39,13 +39,23 @@ const UNIT = `sleep() { :; };
   };`;
 
 /** A substrate where no pane ever appears. `cmd_supervise`'s watch loop then
- *  exits on its first `_alive`, which is what makes the supervisor's own
- *  startup observable without leaving a `while` running under the test. */
+ *  exits on its first probe, which is what makes the supervisor's own
+ *  startup observable without leaving a `while` running under the test.
+ *
+ *  `has-session` SAYS tmux's own death sentence rather than failing silently:
+ *  since D-B8-14 the watch loop is verdict-driven, and a bare rc 1 with no
+ *  message classifies `unknown` — which refuses to exit by design, so the old
+ *  silent stub would hang this suite's `cmd_supervise` case under an
+ *  execFileSync with no timeout. Boolean callers (`_alive`) are unmoved:
+ *  `gone` and `unknown` are both "not alive". */
 const NO_PANE = `sleep() { :; };
   systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; return 0; };
   tmux() {
     echo "tmux $*" >> "$HOME/ccd-calls"
-    case "$1" in has-session) return 1 ;; capture-pane) printf '' ;; esac
+    case "$1" in
+      has-session)  echo "can't find session: $3" >&2; return 1 ;;
+      capture-pane) printf '' ;;
+    esac
   };`;
 
 const shFail = (snippet: string, env: NodeJS.ProcessEnv = {}): { code: number; stdout: string; stderr: string } => {

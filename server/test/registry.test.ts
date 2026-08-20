@@ -6,25 +6,15 @@ import { localIO, type FleetIO } from '../src/io.js';
 import {
   readRegistry, readRegistryMeasured, readSessionRecord, measuredIdentity,
   HOLD_UNREADABLE, REGISTRY_UNMEASURED_STUCK_MS, SWAP_BLOCKED_NO_REASON,
+  SUBSTRATE_UNREADABLE, SUBSTRATE_NO_REASON,
 } from '../src/registry.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
+import { unreadableField, absentField } from './ioDoubles.js';
 
 const seed = (dir: string, id: string, fields: Record<string, string>) => {
   for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(dir, `${id}.${k}`), v);
 };
-
-/** `localIO` with every read of `<id>.<field>` failing — the file is still
- *  LISTED (a real, present file on disk), only its bytes never come back —
- *  the shape `remote/io.ts` produces on one dropped agent-WS round trip among
- *  the ~21 a session's read fires in parallel. Module scope (DISPATCH-CONTEXT
- *  §6 / task-9 brief Step 1): shared by the identity ladder, the
- *  observability suite and the D3 stamp suite below — two nested copies of
- *  this were the drift a hoist exists to prevent. */
-const unreadableField = (id: string, field: string): FleetIO => ({
-  ...localIO,
-  readFile: async (p) => (p.endsWith(`${id}.${field}`) ? null : localIO.readFile(p)),
-});
 
 describe('readRegistry', () => {
   let home: string;
@@ -204,6 +194,235 @@ describe('readRegistry', () => {
   });
 });
 
+// Task 5 (docs/superpowers/plans/2026-08-20-fleetio-measured-read.md): the
+// registry ladder now reads through `fieldMeasured`/`io.readFileMeasured`
+// instead of `field`/`io.readFile`. THE GOVERNING RULE: `ok`/`absent` are
+// POSITIVE answers that short-circuit; `unreadable` falls back to EXACTLY
+// today's `names.includes(...)` rung. These tests pin the cases that were
+// IMPOSSIBLE TO EXPRESS before `readFileMeasured` existed — a LISTED file
+// whose read is measured `absent` — plus the compatibility pin (an
+// old-agent-shaped io, every read `unreadable`, reproduces today's answers
+// exactly) and, per migrated field, the not-listed+unreadable case that
+// today's answer is unchanged.
+describe('the measured read reaching the registry ladder (Task 5)', () => {
+  let home: string;
+  let reg: string;
+  beforeEach(() => {
+    home = mkTmp('ccrc-');
+    seedRoster(home);
+    reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+  });
+
+  const cfg = () => loadConfig({ CCRC_HOME: home });
+
+  describe('branchEvidence', () => {
+    it('a LISTED .branch whose measured read is absent reads `absent`, not `unreadable`', async () => {
+      seed(reg, 'demo-quiet-basin', {
+        wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'e'.repeat(36),
+        workspace: 'quiet-basin', branch: 'ws/quiet-basin',
+      });
+      const io = absentField('demo-quiet-basin', 'branch');
+      const rec = (await readRegistry(io, cfg()))[0]!;
+      expect(rec.branchEvidence).toBe('absent');
+      expect(rec.branch).toBeNull();
+    });
+
+    it('a NOT-LISTED .branch, measured unreadable, keeps today\'s answer: `absent`', async () => {
+      // The file never existed at all — not seeded, so `names` never lists
+      // it either — while the double still forces `unreadable`. Today's
+      // fallback rung (`names.includes(...)`) settles it exactly as before.
+      seed(reg, 'claude-demo', { wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'f'.repeat(36) });
+      const io = unreadableField('claude-demo', 'branch');
+      const rec = (await readRegistry(io, cfg())).find((r) => r.id === 'claude-demo')!;
+      expect(rec.branchEvidence).toBe('absent');
+    });
+  });
+
+  describe('held (D-112)', () => {
+    it('a LISTED .hold whose measured read is absent reads null directly — no second listing', async () => {
+      seed(reg, 'demo-quiet-basin', { wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'e'.repeat(36) });
+      writeFileSync(path.join(reg, 'demo-quiet-basin.hold'), 'program:agent-evals wave:1/4');
+      let listings = 0;
+      const io: FleetIO = {
+        ...absentField('demo-quiet-basin', 'hold'),
+        readdir: async (p) => { listings += 1; return localIO.readdir(p); },
+      };
+      const rec = (await readRegistry(io, cfg()))[0]!;
+      expect(rec.held).toBeNull();
+      // Today, a LISTED+null hold is HOLD_UNREADABLE and triggers exactly one
+      // extra (second) listing to reconfirm. A measured-absent hold is
+      // proof enough on its own — D-112 — so the second listing never fires.
+      expect(listings).toBe(1);
+    });
+
+    it('a NOT-LISTED .hold, measured unreadable, keeps today\'s answer: null', async () => {
+      seed(reg, 'claude-demo', { wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'f'.repeat(36) });
+      const io = unreadableField('claude-demo', 'hold');
+      const rec = (await readRegistry(io, cfg())).find((r) => r.id === 'claude-demo')!;
+      expect(rec.held).toBeNull();
+    });
+  });
+
+  describe('substrate (D-113)', () => {
+    it('a LISTED .substrate whose measured read is absent reads null', async () => {
+      seed(reg, 'demo-quiet-basin', { wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'e'.repeat(36) });
+      writeFileSync(path.join(reg, 'demo-quiet-basin.substrate'), '1755620112 protocol version mismatch');
+      const io = absentField('demo-quiet-basin', 'substrate');
+      const rec = (await readRegistry(io, cfg()))[0]!;
+      expect(rec.substrate).toBeNull();
+    });
+
+    it('a NOT-LISTED .substrate, measured unreadable, keeps today\'s answer: null', async () => {
+      seed(reg, 'claude-demo', { wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'f'.repeat(36) });
+      const io = unreadableField('claude-demo', 'substrate');
+      const rec = (await readRegistry(io, cfg())).find((r) => r.id === 'claude-demo')!;
+      expect(rec.substrate).toBeNull();
+    });
+  });
+
+  describe('the identity triple', () => {
+    it('a LISTED .wrapper whose measured read is absent drops the row — never unmeasured', async () => {
+      // Today (collapsed evidence): listed + null infers `unreadable`, and
+      // the row is DEGRADED (kept, unmeasured: ['wrapper']). A measured
+      // `absent` is proof the file is genuinely gone — the row is DROPPED,
+      // the same end state `readRegistryMeasured`'s second-listing
+      // reconfirm reaches for the collapsed case, one listing fewer.
+      seed(reg, 'demo-quiet-basin', { wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'e'.repeat(36) });
+      const io = absentField('demo-quiet-basin', 'wrapper');
+      const out = await readRegistry(io, cfg());
+      expect(out.find((r) => r.id === 'demo-quiet-basin')).toBeUndefined();
+    });
+
+    it('a NOT-LISTED .wrapper, measured unreadable, keeps today\'s answer: dropped', async () => {
+      seed(reg, 'demo-quiet-basin', { project: 'demo', workdir: '/w', uuid: 'e'.repeat(36) }); // no .wrapper at all
+      const io = unreadableField('demo-quiet-basin', 'wrapper');
+      const out = await readRegistry(io, cfg());
+      expect(out).toEqual([]);
+    });
+
+    it('a LISTED .uuid whose measured read is absent drops the row, and readSessionRecord ' +
+       'reports {found:false, reason:\'absent\'} (B4)', async () => {
+      // `.uuid` is the one identity-triple member `buildRecord`'s own
+      // docstring calls TRUE BY CONSTRUCTION — `names.includes(id+'.uuid')`
+      // holds for every id either caller ever derives `id` from, so before
+      // `readFileMeasured` existed a measured-absent `.uuid` specifically was
+      // unreachable: the only way to get there was `raw === null`, which the
+      // by-construction guarantee always paired with `names.includes(...) ===
+      // true`, landing on `unmeasured`, never the drop. A measured `absent`
+      // is the race that guarantee never covered — reaped between the
+      // listing this function opened with and `.uuid`'s own read — and this
+      // pins the already-correct behaviour (probed by the reviewer, not a
+      // bug) rather than manufacturing a red: GREEN on first run.
+      seed(reg, 'demo-quiet-basin', { wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'e'.repeat(36) });
+      const io = absentField('demo-quiet-basin', 'uuid');
+      const out = await readRegistry(io, cfg());
+      expect(out.find((r) => r.id === 'demo-quiet-basin')).toBeUndefined();
+      expect(await readSessionRecord(io, cfg(), 'demo-quiet-basin')).toEqual({ found: false, reason: 'absent' });
+    });
+  });
+
+  describe('lifecycleUnmeasured', () => {
+    it('a LISTED .started whose measured read is absent is NOT pushed to lifecycleUnmeasured', async () => {
+      // Today: listed + null infers `unreadable`, pushed as unmeasured. A
+      // measured `absent` is the ordinary "never started" answer instead —
+      // a positive result, not a fault.
+      seed(reg, 'demo-quiet-basin', { wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'e'.repeat(36) });
+      writeFileSync(path.join(reg, 'demo-quiet-basin.started'), '1');
+      const io = absentField('demo-quiet-basin', 'started');
+      const rec = (await readRegistry(io, cfg()))[0]!;
+      expect(rec.lifecycleUnmeasured).toEqual([]);
+      expect(rec.started).toBe(false);
+    });
+
+    it('a NOT-LISTED .started, measured unreadable, keeps today\'s answer: not pushed', async () => {
+      seed(reg, 'demo-quiet-basin', { wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'e'.repeat(36) });
+      const io = unreadableField('demo-quiet-basin', 'started');
+      const rec = (await readRegistry(io, cfg()))[0]!;
+      expect(rec.lifecycleUnmeasured).toEqual([]);
+    });
+
+    it('a LISTED .stopped whose measured read is absent is NOT pushed — the wide net does not fire on absence', async () => {
+      seed(reg, 'demo-quiet-basin', { wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'e'.repeat(36) });
+      writeFileSync(path.join(reg, 'demo-quiet-basin.stopped'), '1785300000 pwa');
+      const io = absentField('demo-quiet-basin', 'stopped');
+      const rec = (await readRegistry(io, cfg()))[0]!;
+      expect(rec.lifecycleUnmeasured).toEqual([]);
+      expect(rec.stopped).toBeNull();
+    });
+
+    it('a NOT-LISTED .stopped, measured unreadable, keeps today\'s answer: not pushed', async () => {
+      seed(reg, 'demo-quiet-basin', { wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'e'.repeat(36) });
+      const io = unreadableField('demo-quiet-basin', 'stopped');
+      const rec = (await readRegistry(io, cfg()))[0]!;
+      expect(rec.lifecycleUnmeasured).toEqual([]);
+      expect(rec.stopped).toBeNull();
+    });
+  });
+
+  // 5.2 — THE GOVERNING RULE, mechanised: an io shaped like an OLDER agent
+  // (its `read` response never carries the `absent` marker at all, so every
+  // `readFileMeasured` call answers `unreadable`, regardless of path) must
+  // reproduce EXACTLY the answers this ladder gave before Task 5 — the
+  // fail-shut argument the whole wave depends on (an agent mid-deploy-window
+  // degrades to today's behaviour, never past it).
+  describe('the compatibility pin — an old-agent-shaped io reproduces today\'s ladder exactly', () => {
+    it('walks every migrated field and matches the pre-migration answer, field by field', async () => {
+      seed(reg, 'demo-quiet-basin', {
+        wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'e'.repeat(36), started: '1',
+        home: 'home1', pool: 'claude claude2', lastswap: '1784500000', workspace: 'quiet-basin',
+        branch: 'ws/quiet-basin', base: 'origin/main', prphase: 'merged', prnumber: '42',
+        prcheckedat: '1785300000000', archived: '1785300123',
+        archivemanifest: '{"worktreeBytes":123}',
+        hold: 'program:agent-evals wave:1/4',
+        stopped: '1785300000 pwa', supervised: '1785300100',
+        swapblocked: '1785299000 no transcript found for uuid under claude', spawn: '1785299500 4',
+        substrate: '1755620112 protocol version mismatch',
+      });
+      // Every readFileMeasured call fails 'unreadable', for EVERY path — the
+      // shape an older agent's read response produces once `readFile`
+      // derives from it (Task 1), regardless of what predicate a narrower
+      // double would have matched.
+      const oldAgentShapedIO: FleetIO = {
+        ...localIO,
+        readFileMeasured: async () => ({ ok: false, reason: 'unreadable' }),
+      };
+      const rec = (await readRegistry(oldAgentShapedIO, cfg()))[0]!;
+
+      // Identity triple: every member listed + unreadable -> degraded, kept,
+      // never dropped (today's ladder, unchanged).
+      expect(rec.unmeasured).toEqual(['uuid', 'wrapper', 'workdir']);
+      expect(rec.uuid).toBe('');
+      expect(rec.wrapper).toBe('');
+      expect(rec.workdir).toBe('');
+      // Every OTHER field also collapses through the same derived readFile —
+      // project falls back to the id, exactly as an absent/unreadable
+      // project always has.
+      expect(rec.project).toBe('demo-quiet-basin');
+      expect(rec.started).toBe(false);
+      expect([rec.home, rec.pool, rec.lastswap, rec.workspace, rec.base]).toEqual([null, null, null, null, null]);
+      expect([rec.prPhase, rec.prNumber, rec.prCheckedAt, rec.archivedAt, rec.archivedBytes])
+        .toEqual([null, null, null, null, null]);
+      // branchEvidence: listed + unreadable -> 'unreadable', branch null.
+      expect(rec.branchEvidence).toBe('unreadable');
+      expect(rec.branch).toBeNull();
+      // held: listed + unreadable -> HOLD_UNREADABLE, fail-shut.
+      expect(rec.held).toBe(HOLD_UNREADABLE);
+      // substrate: listed + unreadable -> SUBSTRATE_UNREADABLE, fail-shut.
+      expect(rec.substrate).toEqual({ at: 0, text: SUBSTRATE_UNREADABLE });
+      // lifecycleUnmeasured: started/supervised/stopped all listed +
+      // unreadable -> all three pushed; the packed stamps themselves null.
+      expect(rec.lifecycleUnmeasured.slice().sort()).toEqual(['started', 'stopped', 'supervised']);
+      expect(rec.stopped).toBeNull();
+      expect(rec.supervisedAt).toBeNull();
+      // Unmigrated fields (still `field()`/`io.readFile`, same derivation)
+      // also collapse to null, unaffected by Task 5 either way.
+      expect(rec.swapBlocked).toBeNull();
+      expect(rec.spawn).toBeNull();
+    });
+  });
+});
+
 describe('workspace on the wire', () => {
   let home: string;
   beforeEach(() => {
@@ -302,7 +521,7 @@ describe('PR and archive fields', () => {
 });
 
 // C0.3: readSessionRecord is the SAME parser (buildRecord) as readRegistry,
-// narrowed to one id — one readdir plus that id's 21 field reads instead of
+// narrowed to one id — one readdir plus that id's 22 field reads instead of
 // a whole-fleet sweep. These pin that it agrees with readRegistry's own
 // per-record answer, id-by-id, rather than re-testing every field this file
 // already covers above.
@@ -340,7 +559,7 @@ describe('readSessionRecord', () => {
     let fieldReads = 0;
     const countingIO: FleetIO = {
       ...localIO,
-      readFile: async (p) => { fieldReads++; return localIO.readFile(p); },
+      readFileMeasured: async (p) => { fieldReads++; return localIO.readFileMeasured(p); },
     };
     seed(reg, 'claude2-MekWarLive', {
       wrapper: 'claude2', project: 'MekWarLive', workdir: '/data/projects/MekWarLive',
@@ -350,7 +569,7 @@ describe('readSessionRecord', () => {
 
     const rec = await readSessionRecord(countingIO, cfg, 'nope');
     expect(rec).toEqual({ found: false, reason: 'absent' });
-    // A miss must not fire the 17-field Promise.all `buildRecord` would — the
+    // A miss must not fire the 22-field Promise.all `buildRecord` would — the
     // whole point of checking the listing FIRST.
     expect(fieldReads).toBe(0);
   });
@@ -370,7 +589,7 @@ describe('readSessionRecord', () => {
     expect(await readSessionRecord(localIO, cfg, 'claude-demo')).toEqual({ found: false, reason: 'absent' });
   });
 
-  it('costs exactly one readdir plus the one id\'s 21 field reads — never a per-session Promise.all for a sibling', async () => {
+  it('costs exactly one readdir plus the one id\'s 22 field reads — never a per-session Promise.all for a sibling', async () => {
     const reg = path.join(home, '.cc-sessions');
     seed(reg, 'claude2-MekWarLive', {
       wrapper: 'claude2', project: 'MekWarLive', workdir: '/data/projects/MekWarLive', uuid: 'a'.repeat(36),
@@ -384,17 +603,18 @@ describe('readSessionRecord', () => {
     const countingIO: FleetIO = {
       ...localIO,
       readdir: async (p) => { readdirCalls++; return localIO.readdir(p); },
-      readFile: async (p) => { fieldReads.push(p); return localIO.readFile(p); },
+      readFileMeasured: async (p) => { fieldReads.push(p); return localIO.readFileMeasured(p); },
     };
     const cfg = loadConfig({ CCRC_HOME: home });
 
     await readSessionRecord(countingIO, cfg, 'claude2-MekWarLive');
 
     expect(readdirCalls).toBe(1);
-    // 17 + D3's four stamps (stopped, supervised, swapblocked, spawn). The
+    // 17 + D3's four stamps (stopped, supervised, swapblocked, spawn) + the
+    // substrate marker (D-B8-14) — the substrate file joined the sweep. The
     // number is pinned rather than derived because it IS the remote-mode cost:
     // one round trip each, per session, per 2-second tick.
-    expect(fieldReads).toHaveLength(21);
+    expect(fieldReads).toHaveLength(22);
     expect(fieldReads.every((p) => p.includes('claude2-MekWarLive'))).toBe(true);
   });
 
@@ -406,7 +626,7 @@ describe('readSessionRecord', () => {
     writeFileSync(path.join(reg, 'demo-quiet-basin.hold'), 'program:agent-evals wave:1/4');
     const holdUnreadableIO: FleetIO = {
       ...localIO,
-      readFile: async (p) => (p.endsWith('.hold') ? null : localIO.readFile(p)),
+      readFileMeasured: async (p) => (p.endsWith('.hold') ? { ok: false, reason: 'unreadable' } : localIO.readFileMeasured(p)),
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const rec = await readSessionRecord(holdUnreadableIO, cfg, 'demo-quiet-basin');
@@ -503,7 +723,7 @@ describe('the identity ladder (unmeasured evidence)', () => {
         if (listings === 1) return names;
         return names.filter((n) => !n.startsWith('demo-quiet-basin.'));
       },
-      readFile: async (p) => (p.endsWith('.wrapper') ? null : localIO.readFile(p)),
+      readFileMeasured: async (p) => (p.endsWith('.wrapper') ? { ok: false, reason: 'unreadable' } : localIO.readFileMeasured(p)),
     };
     const out = await readRegistry(reapedMidRead, cfg);
     expect(out).toEqual([]);
@@ -522,7 +742,7 @@ describe('the identity ladder (unmeasured evidence)', () => {
         if (listings === 1) return localIO.readdir(p);
         return null;
       },
-      readFile: async (p) => (p.endsWith('.wrapper') ? null : localIO.readFile(p)),
+      readFileMeasured: async (p) => (p.endsWith('.wrapper') ? { ok: false, reason: 'unreadable' } : localIO.readFileMeasured(p)),
     };
     const out = await readRegistry(secondListingFails, cfg);
     expect(out).toHaveLength(1);
@@ -544,7 +764,7 @@ describe('the identity ladder (unmeasured evidence)', () => {
         if (listings === 1) return names;
         return names.filter((n) => !n.startsWith('demo-quiet-basin.'));
       },
-      readFile: async (p) => (p.endsWith('.wrapper') ? null : localIO.readFile(p)),
+      readFileMeasured: async (p) => (p.endsWith('.wrapper') ? { ok: false, reason: 'unreadable' } : localIO.readFileMeasured(p)),
     };
     expect(await readSessionRecord(reapedMidRead, cfg, 'demo-quiet-basin')).toEqual({ found: false, reason: 'absent' });
   });
@@ -626,7 +846,7 @@ describe('readRegistryMeasured / RegistryRead', () => {
         // at all (an unmeasured identity triple + a twice-observed absence).
         return listings === 1 ? names : names.filter((n) => n !== 'coordinator-paused' && !n.endsWith('.uuid'));
       },
-      readFile: async (p) => (p.endsWith('.wrapper') ? null : localIO.readFile(p)),
+      readFileMeasured: async (p) => (p.endsWith('.wrapper') ? { ok: false, reason: 'unreadable' } : localIO.readFileMeasured(p)),
     };
     const read = await readRegistryMeasured(markerVanishesOnRelist, cfg);
     expect(listings).toBe(2);          // the re-listing really did run
@@ -887,5 +1107,61 @@ describe('the lifecycle stamps (D3)', () => {
       expect(r.stopped, JSON.stringify(bad)).toBeNull();
       expect(r.lifecycleUnmeasured, JSON.stringify(bad)).toEqual(['stopped']);
     }
+  });
+});
+
+// D-B8-14, spec §2 (docs/superpowers/specs/2026-08-19-substrate-unreachable-design.md):
+// `$REG/<id>.substrate` is a supervisor's own "I could not reach tmux" record —
+// `<epoch-seconds> <verbatim reason>`, written by `_substrate_mark` on every
+// unknown tick, removed by `_substrate_clear` on the first live one. The
+// `.hold` listed-vs-readable ladder applies verbatim, and with the same
+// polarity stakes: "no fault recorded" (null) re-enables every destructive
+// affordance downstream, so it must never be the misreading of "the marker
+// would not read".
+describe('SessionRecord.substrate — presence from the LISTING, never from a non-null read (spec §2)', () => {
+  let home: string;
+  let reg: string;
+  beforeEach(() => {
+    home = mkTmp('ccrc-');
+    seedRoster(home);
+    reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    seed(reg, 'demo-quiet-basin', {
+      uuid: 'a'.repeat(36), wrapper: 'claude', workdir: '/w', project: 'demo',
+    });
+  });
+
+  const read = async (io = localIO) =>
+    (await readRegistry(io, loadConfig({ CCRC_HOME: home })))[0]!;
+
+  it('absent file -> null; well-formed "<epoch> <text>" -> {at, text}', async () => {
+    // The overwhelming majority of rows, and every row a pre-D-B8-14 ccd ever
+    // wrote: no marker at all. Absence is absence — the one shape that reads
+    // as "no fault recorded".
+    expect((await read()).substrate).toBeNull();
+    seed(reg, 'demo-quiet-basin', { substrate: '1755620112 protocol version mismatch' });
+    // Epoch SECONDS, registry-native — `fleet.ts` is the one place it becomes
+    // ms, like `stoppedBy` (the Global Constraints timebase rule).
+    expect((await read()).substrate).toEqual({ at: 1755620112, text: 'protocol version mismatch' });
+  });
+
+  it('LISTED but unreadable -> SUBSTRATE_UNREADABLE, never null — "no fault recorded" and "the marker ' +
+     'would not read" are opposite answers', async () => {
+    seed(reg, 'demo-quiet-basin', { substrate: '1755620112 protocol version mismatch' });
+    const r = await read(unreadableField('demo-quiet-basin', 'substrate'));
+    expect(r.substrate).toEqual({ at: 0, text: SUBSTRATE_UNREADABLE });
+  });
+
+  it('empty or unstamped content degrades loudly, not silently', async () => {
+    // `_substrate_mark` refuses to write an empty reason (a killed probe gets
+    // a synthesized one), so an empty marker is a torn write — it gets a
+    // sentence, the `HOLD_NO_REASON` ruling.
+    seed(reg, 'demo-quiet-basin', { substrate: '' });
+    expect((await read()).substrate).toEqual({ at: 0, text: SUBSTRATE_NO_REASON });
+    // A stampless text keeps its WHOLE content as the reason at `at: 0` —
+    // `packedStamp` refuses the epoch, but the one sentence a maintainer
+    // could act on must not be lost with it.
+    seed(reg, 'demo-quiet-basin', { substrate: 'no epoch here' });
+    expect((await read()).substrate).toEqual({ at: 0, text: 'no epoch here' });
   });
 });

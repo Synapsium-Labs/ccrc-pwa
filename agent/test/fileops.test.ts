@@ -44,11 +44,27 @@ describe('ccrc-agent file ops', () => {
     expect(res2).toMatchObject({ ok: true, data: null });
   });
 
+  it('read marks a genuinely missing whitelisted file with absent:true', async () => {
+    await open();
+    const res = await client!.req<Res>(nextId(), { op: 'read', path: path.join(fixture!.home, '.cc-sessions', 'nope-absent') });
+    expect(res).toMatchObject({ ok: true, data: null, absent: true });
+  });
+
+  it('read of a directory (EISDIR) answers null with no absent key — unreadable is not absent', async () => {
+    await open();
+    // .cc-sessions is pre-created by the fixture as a directory under a whitelist root.
+    const dir = path.join(fixture!.home, '.cc-sessions');
+    const res = await client!.req<Res>(nextId(), { op: 'read', path: dir });
+    expect(res).toMatchObject({ ok: true, data: null });
+    expect(res).not.toHaveProperty('absent');
+  });
+
   it('read rejects a path outside every whitelist prefix', async () => {
     await open();
     const file = path.join(fixture!.outside, 'secret.txt');
     writeFileSync(file, 'nope');
     const res = await client!.req<Res>(nextId(), { op: 'read', path: file });
+    expect(res).not.toHaveProperty('absent');
     expect(res).toMatchObject({ ok: false, err: 'forbidden' });
   });
 

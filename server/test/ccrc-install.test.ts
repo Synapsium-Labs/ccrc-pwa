@@ -258,6 +258,20 @@ function healthyDoctorBox(home: string, opts: { upstream?: boolean } = {}): void
   // GH_OK). It REPLACES `ghContainedEnv`'s poison, and the containment is not
   // weakened by that: this stub never execs the real gh either, and unlike the
   // poison it exits 90 — loudly — on any argv but the one ccrc asks.
+  // Hermetic doctor tail (branch review, confirmed major): without this stub
+  // the skew check dialed whatever tmux server holds this UID's REAL socket —
+  // the verdict depended on the host (red on a legitimately-skewed box, and a
+  // wedged server stalled every full-verb test 15s). Versions 9.9/9.9: numbers
+  // no packaged tmux prints, so an assertion seeing them proves the host was
+  // never asked. Replanted into `.local/bin` on every run, so it shadows both
+  // the system tmux and pathWithout's real-tmux symlink. Any argv beyond the
+  // two the doctor asks is a loud 90, the fixture's own gh idiom.
+  stub('tmux', [
+    'if [ "$1" = "-V" ]; then echo "tmux 9.9"; exit 0; fi',
+    'if [ "$1" = "display-message" ]; then echo "9.9"; exit 0; fi',
+    'echo "fixture tmux: unexpected argv: $*" >&2; exit 90',
+  ].join('\n'));
+
   stub('gh', [
     'printf \'%s\\n\' "$*" >> "$HOME/gh-calls"',
     'if [ "$1" = "auth" ] && [ "$2" = "status" ]; then',
@@ -323,7 +337,7 @@ function healthyDoctorBox(home: string, opts: { upstream?: boolean } = {}): void
  *  `~/.local/bin`. Everything else there was written by the verb — which is
  *  what the "the default roster generates no wrappers" assertion measures. */
 const FIXTURE_BINS = ['gh', 'curl', 'journalctl', 'systemctl', 'loginctl', 'npm', 'rsync',
-  'df', 'claude'];
+  'df', 'claude', 'tmux'];
 
 /** A box with a shipped tree on it and nothing else — no `~/.ccrc`, no
  *  `~/.local/bin` beyond the stubs the runner plants. Doctor-healthy, because
@@ -2264,7 +2278,20 @@ describe('ccrc install: both skills reach every rostered account', () => {
 });
 
 describe('ccrc install: the landing block, and doctor as the last word', () => {
-  it('ends with doctor, and a box with nothing wrong with it exits 0', () => {
+  it("the doctor tail's tmux_skew verdict comes from the FIXTURE's tmux, never the host's (branch review)", () => {
+    // Hermeticity pin: before the fixture grew its own tmux stub, the skew
+    // check dialed whatever server holds this UID's real socket — the verdict
+    // depended on the HOST (red on a legitimately-skewed box, a 15s stall per
+    // full-verb test under a wedged one). The stub's versions are 9.9/9.9 —
+    // numbers no packaged tmux prints — so this line proving 9.9 is what
+    // proves the host was never asked.
+    const home = freshBox('ccrc-install-doctor-hermetic-');
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^PASS tmux_skew: client 9\.9, running server 9\.9 — versions agree$/m);
+  });
+
+  it('ends with doctor, and a box that passes every check exits 0', () => {
     const home = freshBox('ccrc-install-doctor-ok-');
     const r = runInstall(home);
     expect(r.code, r.stderr).toBe(0);

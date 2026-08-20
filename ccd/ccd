@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=d1dbe7213c34e8d37c9495636913f112e97090e68dc6b9ce3a2cb00de3aaa8ac
+# ccrc:generated 1 sha256=80bea10755f513677da02c671274f0ea60dde4260dfea70f2004a741907e5e4f
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box, not on this file: `_rc_enabled` reads
@@ -125,6 +125,11 @@ TMUX_SERVER_LOCK_WAIT=15        # seconds a spawn waits for the right to CREATE 
                                 # this bound only decides how long a WEDGED lock may stall a spawn
                                 # before it proceeds unserialised, which is the pre-lock behaviour
                                 # rather than a failure.
+SUBSTRATE_PROBE_DEADLINE_S=8    # bound on ONE has-session probe. Healthy answer: ~8ms (measured
+                                # 2026-08-19); a SIGSTOPped server blocks the client FOREVER, so
+                                # an unbounded probe turns a wedge into a silent supervisor hang.
+SUBSTRATE_BACKOFF_S=30          # unknown-tick interval once the fault is established
+SUBSTRATE_BACKOFF_AFTER=3       # consecutive unknowns before backing off 5s -> 30s
 SPAWN_EFFORT="ultracode"        # /effort sent to every freshly spawned session ("" disables).
                                 # ultracode is session-only by design (no settings.json key),
                                 # so injecting it at spawn is the only way to default it.
@@ -325,13 +330,35 @@ _tmux()  { echo "cc-$1"; }                                  # id -> tmux name
 # refuse, rather than in `gone`, which makes them destroy. A tmux upgrade that
 # rewords its errors therefore degrades this to "refuses too often", never to
 # "reaps a live session".
-_session_verdict() {   # id -> live|gone|unknown on stdout; always rc 0
-  local out
-  out=$(tmux has-session -t "$(_tmux "$1")" 2>&1) && { echo live; return 0; }
+#
+# The probe form (D-B8-14) exists because the supervisor needs BOTH the verdict
+# and tmux's own words for the substrate marker, and a `$( )` caller would eat
+# the second fact with the subshell. Same classifier, same polarity — the probe
+# IS the one classifier now; `_session_verdict` merely re-derives from it.
+_session_probe() {   # id -> PROBE_VERDICT=live|gone|unknown, PROBE_DETAIL (unknown only); rc 0
+  # Direct call, never $( ) — the whole point is returning TWO facts without a subshell
+  # eating them. The deadline applies ONLY when tmux is a real executable: `timeout` execs
+  # its argv, so a test's `tmux() { … }` function stub would be invisible behind it — and a
+  # stubbed substrate needs no deadline, it cannot wedge.
+  local out rc
+  if [[ $(type -t tmux) == function ]]; then
+    out=$(tmux has-session -t "$(_tmux "$1")" 2>&1); rc=$?
+  else
+    out=$(timeout "$SUBSTRATE_PROBE_DEADLINE_S" tmux has-session -t "$(_tmux "$1")" 2>&1); rc=$?
+  fi
+  if (( rc == 0 )); then PROBE_VERDICT=live; PROBE_DETAIL=""; return 0; fi
+  # rc 124 is timeout's own kill: tmux printed nothing, so the reason is SYNTHESIZED —
+  # an empty marker reason is the one shape a maintainer can do nothing with (spec §1).
+  if (( rc == 124 )) && [[ -z "$out" ]]; then
+    PROBE_VERDICT=unknown; PROBE_DETAIL="tmux did not answer within ${SUBSTRATE_PROBE_DEADLINE_S}s"; return 0
+  fi
   case "$out" in
-    *"can't find session"*) echo gone ;;
-    *)                      echo unknown ;;
+    *"can't find session"*) PROBE_VERDICT=gone;    PROBE_DETAIL="" ;;
+    *)                      PROBE_VERDICT=unknown; PROBE_DETAIL="${out:-tmux exited $rc with no message}" ;;
   esac
+}
+_session_verdict() {   # id -> live|gone|unknown on stdout; always rc 0 (derived; one classifier)
+  _session_probe "$1"; echo "$PROBE_VERDICT"
 }
 # Unchanged in meaning for its eleven other callers: true for `live` only, so
 # `unknown` still reads as "not alive" everywhere that has not been taught the
@@ -380,9 +407,9 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # today: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
   # `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`, `pool`,
   # `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `reaping`,
-  # `setup`, `spawn`, `started`, `stopped`, `supervised`, `swapblocked`,
-  # `uuid`, `workdir`, `workspace`, `wrapper`. That is a WIDER set than
-  # `_reg_set`/`_reg_get`: the inventory
+  # `setup`, `spawn`, `started`, `stopped`, `substrate`, `supervised`,
+  # `swapblocked`, `uuid`, `workdir`, `workspace`, `wrapper`. That is a WIDER
+  # set than `_reg_set`/`_reg_get`: the inventory
   # that stood here named only the shell-written fields and so silently dropped
   # `prcheckedat`, `prphase` and `prhistory` (written by `_pr_py`'s own
   # `put`/append) and `hookstate` (written by the hooks). The purge itself was
@@ -454,6 +481,28 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # observable to a test — nothing else about two adjacent unlinks is.
   [[ -e "$REG/$id.reaping" ]] || rm -f "$REG/$id.archived"
 }
+_substrate_mark() {   # id — record "this supervisor could not reach tmux" ($REG/<id>.substrate)
+  # ONE writer per file: this row's supervisor — and the FIRST WRITE WINS. The epoch is
+  # the fault's ONSET ("could not reach tmux SINCE <epoch>", spec §2) and the skew
+  # comparison rides the same first write; the first version of this function rewrote the
+  # file on every unknown tick, which fabricated the duration (the epoch was never more
+  # than one tick old) and destroyed the skew diagnosis one tick after it was recorded
+  # (branch review, confirmed major). Nothing needs a rewrite: freshness is `supervised`'s
+  # job, and the marker's life is bounded by _substrate_clear on the first live tick.
+  # The fleet-wide statement is DERIVED by the reader, never written. Text is never empty.
+  local id="$1" why="${PROBE_DETAIL:-tmux gave no reason}" f="$REG/$1.substrate"
+  [[ -e "$f" ]] && return 0
+  local client server
+  client=$(tmux -V 2>&1 || true)
+  # Same function-vs-binary split as _session_probe, same reason: `timeout` execs.
+  if [[ $(type -t tmux) == function ]]; then
+    server=$(tmux display-message -p '#{version}' 2>/dev/null) || server="unreachable"
+  else
+    server=$(timeout "$SUBSTRATE_PROBE_DEADLINE_S" tmux display-message -p '#{version}' 2>/dev/null) || server="unreachable"
+  fi
+  printf '%s %s' "$(date +%s)" "$why (client ${client:-unknown}; server ${server:-unreachable})" > "$f"
+}
+_substrate_clear() { rm -f -- "$REG/$1.substrate"; }
 _ws_seed_home() {   # id wrapper — set home once; never clobber a deliberate choice
   [[ -f "$REG/$1.home" ]] || _reg_set "$1" home "$2"
 }
@@ -8607,15 +8656,53 @@ cmd_supervise() {   # systemd ExecStart: ensure then block until the session die
   # the value lands in `(( ))`, which executes a command substitution written
   # into an array subscript. That is why this is a variable.
   local CCD_SETTLE_BOUND=$SPAWN_SETTLE_SUPERVISE_S
-  cmd_ensure "$id"
+  # PRE-FLIGHT PROBE, before ensure (branch review, confirmed major): a supervisor
+  # (re)started MID-FAULT must not walk into cmd_ensure — under the hang-shaped wedge its
+  # `_alive` reads unknown->false after the deadline and it falls into `_spawn_start` ->
+  # `_tmux_new_session`, whose `tmux list-sessions`/`new-session` carry NO deadline and
+  # block forever on the wedged socket: a hang wearing an active unit, stuck BEFORE the
+  # loop below could mark or back off. On `unknown` the loop is entered directly — it
+  # marks, stamps, and probes its way to live (pane survived the fault) or gone (exit 1;
+  # the NEXT supervise run ensures normally against a healed substrate). `live`/`gone`
+  # take ensure exactly as before: alive short-circuits it, gone is the cold start.
+  _session_probe "$id"
+  if [[ "$PROBE_VERDICT" != unknown ]]; then
+    cmd_ensure "$id"
+  fi
   # Re-stamped every 30s from the 5-second tick this loop already runs, so the
   # 120-second freshness window never expires under a live supervisor.
-  local beat=0
-  while _alive "$id"; do
-    _sync_uuid "$id"; _auto_swap_check "$id"; _auto_compact_check "$id"
-    beat=$((beat + 5))
-    (( beat >= 30 )) && { _reg_set "$id" supervised "$(date +%s)"; beat=0; }
-    sleep 5
+  #
+  # VERDICT-DRIVEN, not boolean (D-B8-14): the old `while _alive` collapsed
+  # `gone` and `unknown` into one exit, so a wedged or version-skewed tmux
+  # read as seventeen simultaneous deaths — every supervisor exited, systemd
+  # restarted each one into `cmd_ensure`, and the fleet churned against a
+  # substrate that had refused to answer, not pronounced anything dead.
+  local beat=0 unknown_run=0 tick=5
+  while :; do
+    _session_probe "$id"
+    case "$PROBE_VERDICT" in
+      gone) break ;;   # the ONLY exit — a session tmux itself pronounced dead (D-B8-14)
+      live)
+        [[ -e "$REG/$id.substrate" ]] && _substrate_clear "$id"
+        unknown_run=0; tick=5
+        _sync_uuid "$id"; _auto_swap_check "$id"; _auto_compact_check "$id"
+        beat=$((beat + tick))
+        (( beat >= 30 )) && { _reg_set "$id" supervised "$(date +%s)"; beat=0; }
+        ;;
+      unknown)
+        # Not death — refusal to guess (spec §1). Mark, keep the heartbeat honest EVERY
+        # tick (beat counts ASSUMED seconds; a 30s sleep against beat+=5 stamps every 180
+        # real seconds and ages all 17 rows into orphan mid-fault — the false dead by a
+        # slower route), skip the tick helpers (each shells into the tmux that just did
+        # not answer), and back off: 17 supervisors hammering a wedged server every 5s is
+        # a thundering herd against a component already unwell.
+        unknown_run=$((unknown_run + 1))
+        _substrate_mark "$id"
+        _reg_set "$id" supervised "$(date +%s)"; beat=0
+        tick=5; (( unknown_run >= SUBSTRATE_BACKOFF_AFTER )) && tick=$SUBSTRATE_BACKOFF_S
+        ;;
+    esac
+    sleep "$tick"
   done
   echo "session $id ended; exiting for systemd restart" >&2
   exit 1

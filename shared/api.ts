@@ -147,6 +147,26 @@ export interface FleetSession {
    *  leaves the refusal banner standing on the row it just revived teaches the
    *  operator to ignore banners. */
   readonly swapBlocked: { readonly at: number; readonly reason: string } | null;
+  /** The supervisor's standing substrate fault — `$REG/<id>.substrate`, the
+   *  decision record `cmd_supervise` writes while tmux answers neither `live`
+   *  nor `gone` (spec §2). Epoch MS (converted from the registry's seconds in
+   *  `fleet.ts`, like `stoppedBy`) and the reason VERBATIM; the reason is the
+   *  display on every surface, never parsed. Null when no fault stands.
+   *
+   *  AN AXIS, NOT A STATE (spec §3, M10): a new FIELD riding beside
+   *  `status`/`bucket`/`lifecycle`, never a new member of any of them — the
+   *  row keeps whatever those said last, and this says the console currently
+   *  cannot re-measure them. `at: 0` is the "marker listed but unreadable"
+   *  degrade from the registry read; renderers show the text without
+   *  fabricating a 1970 timestamp.
+   *
+   *  `reviveFleetSession` below: absent → null (an older snapshot predates
+   *  the axis), present-but-malformed → reject the WHOLE session — the
+   *  `swapBlocked` contract, because free text has no vocabulary to degrade
+   *  onto and "no fault recorded" over a flagged row is the destructive
+   *  direction (the affordance gates key off this field). Live frames are
+   *  CAST, not revived — read this field through `substrateFault` below. */
+  readonly substrate: { readonly at: number; readonly text: string } | null;
   /** `$REG/<id>.started` reads `1`. MEASURED every snapshot as
    *  `SessionRecord.started` and, before Wave 1, discarded one branch later
    *  inside `sessionLifecycle`. It reaches the wire because the spawn chip needs
@@ -184,6 +204,35 @@ export interface FleetSession {
  */
 export function unmeasuredFields(s: { unmeasured?: readonly IdentityField[] }): readonly IdentityField[] {
   return s.unmeasured ?? [];
+}
+
+/**
+ * Tolerant read of `FleetSession.substrate` for a value that has NOT been
+ * through `reviveFleetSession` — the live `fleet` WS frame, cast on arrival
+ * (`unmeasuredFields` above records the whole argument, and the TypeError it
+ * cost the one time a field was read directly). The ONE place every PWA
+ * surface (chip, affordance gates, banner) reads the field, so they cannot
+ * drift onto different fallbacks: a missing key or a null reads as "no fault".
+ *
+ * A PRESENT object degrades PER-HALF, never per-object — the `stampParts`
+ * discipline (`pwa/src/fleet/lifecycleWords.ts`): the object's presence is
+ * itself the fault claim, and collapsing a half-valid one to null would
+ * un-flag a row a supervisor flagged. A bad `at` keeps the text (`at: 0`, the
+ * same "undatable" value the unreadable-marker registry arm ships, so
+ * renderers already suppress the timestamp for it); a bad or empty text keeps
+ * the fault with a synthesized reason — never `''`, which renders as a blank
+ * chip that looks like a styling bug instead of a fault.
+ */
+export function substrateFault(
+  s: { substrate?: { at: number; text: string } | null },
+): { at: number; text: string } | null {
+  const v = s.substrate ?? null;
+  if (v === null || typeof v !== 'object') return null;
+  const raw = v as { at?: unknown; text?: unknown };
+  return {
+    at: typeof raw.at === 'number' && Number.isFinite(raw.at) ? raw.at : 0,
+    text: typeof raw.text === 'string' && raw.text !== '' ? raw.text : 'substrate fault (reason unreadable)',
+  };
 }
 
 /** The task list Claude Code keeps for a session, as the TUI's widget shows it:
@@ -1360,6 +1409,21 @@ const reviveSwapBlocked = (o: RawObj, k: string): { at: number; reason: string }
   return { at: reqNum(s, 'at'), reason: reqStr(s, 'reason') };
 };
 
+/** `reviveSwapBlocked`'s contract exactly, for the same reason: the text is
+ *  free prose the supervisor wrote and it IS the display, so a malformed value
+ *  has no vocabulary to degrade onto. Absent → null (an older snapshot
+ *  predates the axis); present-but-malformed rejects the session — null would
+ *  read "no fault recorded" over a row a supervisor flagged unreachable,
+ *  which is the direction the affordance gates fail open. (The per-half
+ *  tolerance lives in `substrateFault`, for CAST live frames only — a
+ *  PERSISTED snapshot this build wrote is held to the full shape.) */
+const reviveSubstrate = (o: RawObj, k: string): { at: number; text: string } | null => {
+  const v = o[k];
+  if (v === undefined || v === null) return null;
+  const s = asObj(v, k);
+  return { at: reqNum(s, 'at'), text: reqStr(s, 'text') };
+};
+
 function revivePr(raw: unknown): PrState {
   const o = asObj(raw, 'pr');
 
@@ -1551,6 +1615,7 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       lifecycle: lifecycleRaw,
       stoppedBy: reviveStoppedBy(o, 'stoppedBy'),
       swapBlocked: reviveSwapBlocked(o, 'swapBlocked'),
+      substrate: reviveSubstrate(o, 'substrate'),
       // THE DEGRADE, DOCUMENTED: absent reads TRUE, not false. Every session a
       // pre-Wave-1 build persisted had a claim, and `false` would light
       // `unstarted` on every restored row — the false-positive direction that

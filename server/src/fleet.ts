@@ -120,6 +120,11 @@ export async function liveStatus(io: FleetIO, cfg: CcrcConfig, tmux: Tmux, id: s
   // plainly busy one. `!read.found` (genuinely absent, or the whole
   // directory unlistable) is still 'dead': there is no pane to ask about
   // either way, the same answer this gave before the ladder existed.
+  // D-B8-13: `hasSession` here deliberately collapses `unknown` into 'dead' —
+  // which this route turns into a REFUSED interrupt, the safe direction this
+  // function's own comment above already argues for. Splitting the pair for
+  // the operator's view is the substrate-unreachable spec's job (a state word
+  // through shared/server/pwa), not a guard's.
   if (!read.found || !(await tmux.hasSession(id))) return 'dead';
   const rec = read.record;
   const pid = await tmux.panePid(id);
@@ -196,6 +201,12 @@ export async function assembleFleet(
 ): Promise<FleetSession[]> {
   const [recs, limits] = await Promise.all([records ?? readRegistry(io, cfg), readLimits(io, cfg, now)]);
   return Promise.all(recs.map(async (r): Promise<FleetSession> => {
+    // D-B8-13: `hasSession` here deliberately collapses `unknown` into `alive
+    // = false`, so a substrate fault reads 'dead' in the PWA — a false dead,
+    // with the ungated Restart button under it. Known, and deferred BY DECISION
+    // to the substrate-unreachable spec: what the fleet view shows for
+    // cannot-ask is a product judgement (a new SessionStatus crosses the wire
+    // and every render seam), not a guard this assembly may improvise.
     const alive = await tmux.hasSession(r.id);
     let status: SessionStatus = 'dead';
     let name: string | null = null, statusUpdatedAt: number | null = null, version: string | null = null;
@@ -360,6 +371,13 @@ export async function assembleFleet(
       swapBlocked: r.swapBlocked === null
         ? null
         : { at: r.swapBlocked.at * 1000, reason: r.swapBlocked.reason },
+      // Same seconds→MS conversion, at THIS seam only, like `stoppedBy` and
+      // `swapBlocked` above. An unreadable marker's fail-shut `{at: 0}` rides
+      // through as 0 (not a real 1970 stamp — the PWA renders text-only when
+      // `at === 0` rather than fabricate an epoch-dawn timestamp).
+      substrate: r.substrate === null
+        ? null
+        : { at: r.substrate.at * 1000, text: r.substrate.text },
       // Carried straight off the record. `SessionRecord.spawn: { at; rc } | null`
       // ALREADY EXISTS and is already parsed from `$REG/<id>.spawn` — nothing new
       // is read off disk here, and the `<epoch-seconds> <rc>` encoding is

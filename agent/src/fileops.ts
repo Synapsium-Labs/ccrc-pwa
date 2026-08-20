@@ -18,10 +18,33 @@ function readRange(file: string, start: number, end: number): Promise<Buffer> {
  * ops — intentionally mirrors `server/src/io.ts`'s `localIO` byte-for-byte
  * so a remote fleet behaves identically to a local one. Callers (server.ts)
  * are responsible for running paths through whitelist.checkPath first.
+ *
+ * `readWhole` mirrors `localIO`'s ERRNO BEHAVIOUR, not its TYPE: both sides
+ * branch ENOENT vs. everything-else identically, but `readWhole` returns
+ * `{data, absent}` here while the server-side distinction lives in a
+ * SEPARATE, differently-shaped type — `MeasuredRead` in `server/src/io.ts`.
+ * Deliberate, not a gap to close: `agent/tsconfig.json` includes only
+ * `src/**` + `../shared/**`, so this side cannot import `server/src/io.ts`
+ * at all, and the plan (`docs/superpowers/plans/2026-08-20-fleetio-measured-
+ * read.md`, "the seam's shape") keeps the reason union out of `shared/` on
+ * purpose — putting it there would also put it on the PWA's bundle path.
+ * No convergence is coming; the two stay parallel local types on purpose.
  */
 
-export async function readWhole(p: string): Promise<string | null> {
-  try { return await readFile(p, 'utf8'); } catch { return null; }
+/** `readWhole`'s result: `data` keeps the pre-existing null-for-any-failure
+ *  meaning; `absent` is set true only when the failure was ENOENT (the file
+ *  genuinely does not exist), so a caller that cares can distinguish that
+ *  from EACCES/EISDIR/ELOOP/EIO/anything else — all of which mean the file
+ *  IS there and this box just can't read it. Never-throw, same contract as
+ *  every other op in this file. */
+export type ReadResult = { data: string | null; absent: boolean };
+
+export async function readWhole(p: string): Promise<ReadResult> {
+  try {
+    return { data: await readFile(p, 'utf8'), absent: false };
+  } catch (e) {
+    return { data: null, absent: (e as NodeJS.ErrnoException).code === 'ENOENT' };
+  }
 }
 
 /** Same cap as the server's post-downscale upload ceiling (`MAX_UPLOAD_BYTES`

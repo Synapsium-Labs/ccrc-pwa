@@ -33,7 +33,10 @@
  * one to keep if the others are ever rewritten.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { VERDICT_MESSAGE_ROWS } from './sessionVerdictFixture.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-verdict-'); });
@@ -53,30 +56,21 @@ describe('_session_verdict — three answers, not one boolean', () => {
     expect(verdict(TMUX_LIVE)).toBe('live');
   });
 
-  it('gone: the one message that actually means the session died', () => {
-    expect(verdict(tmuxSaying("can't find session: cc-demo"))).toBe('gone');
-  });
-
-  it('unknown: the socket is not there', () => {
-    expect(verdict(tmuxSaying('error connecting to /tmp/tmux-1000/default (No such file or directory)')))
-      .toBe('unknown');
-  });
-
-  it('unknown: the socket is there but nothing is serving it', () => {
-    expect(verdict(tmuxSaying('no server running on /tmp/tmux-1000/default'))).toBe('unknown');
-  });
+  // The message rows are SHARED with the TS twin (`classifyHasSession`,
+  // exec.test.ts) via the fixture — D-B8-13's whole mechanism: two
+  // implementations of one contract cannot drift once one table drives both.
+  // Nothing here may be rewritten into a list of failures: a tmux upgrade may
+  // reword or add errors, and `unknown` refuses where `gone` destroys.
+  for (const row of VERDICT_MESSAGE_ROWS) {
+    it(row.name, () => {
+      expect(verdict(tmuxSaying(row.message))).toBe(row.expected);
+    });
+  }
 
   it('unknown: tmux is not on PATH at all', () => {
     expect(h.sh(`command() { if [[ "$1 $2" == "-v tmux" ]]; then return 1; fi; builtin command "$@"; }
                  tmux() { echo "bash: tmux: command not found" >&2; return 127; }
                  _session_verdict demo`).trim()).toBe('unknown');
-  });
-
-  it('unknown, NOT gone, for a message this ccd has never seen — the fail-safe direction', () => {
-    // A tmux upgrade may reword or add errors. `unknown` refuses; `gone`
-    // destroys. Nothing here may be rewritten into a list of failures.
-    expect(verdict(tmuxSaying('protocol version mismatch (client 8, server 7)'))).toBe('unknown');
-    expect(verdict(tmuxSaying('some error nobody has written yet'))).toBe('unknown');
   });
 
   it('_alive keeps its old meaning exactly: true only for live', () => {
@@ -135,5 +129,39 @@ describe('ccd forget proves deadness, and cannot be talked out of it by silence'
 
   it('proceeds when the session is genuinely gone', () => {
     expect(forget(tmuxSaying("can't find session: cc-demo")).code).toBe(0);
+  });
+});
+
+describe('_session_probe — the verdict plus its diagnosis, without a subshell (spec §1)', () => {
+  it('sets PROBE_VERDICT and a verbatim PROBE_DETAIL for unknown', () => {
+    expect(h.sh(`${tmuxSaying('protocol version mismatch (client 8, server 7)')}
+      _session_probe demo; echo "$PROBE_VERDICT|$PROBE_DETAIL"`).trim())
+      .toBe('unknown|protocol version mismatch (client 8, server 7)');
+  });
+  it('live and gone carry no detail', () => {
+    expect(h.sh(`${TMUX_LIVE} _session_probe demo; echo "$PROBE_VERDICT|$PROBE_DETAIL"`).trim()).toBe('live|');
+    expect(h.sh(`${tmuxSaying("can't find session: cc-demo")} _session_probe demo; echo "$PROBE_VERDICT|$PROBE_DETAIL"`).trim()).toBe('gone|');
+  });
+  it('_session_verdict still answers through the probe — one classifier, not two', () => {
+    // Delete/duplicate guard: shadowing _session_probe must change _session_verdict's answer.
+    // The tmux stub says LIVE, so a standalone reimplementation of _session_verdict answers
+    // `live` on every box — deterministic, and never a probe of the box's real tmux.
+    expect(h.sh(`${TMUX_LIVE} _session_probe() { PROBE_VERDICT=gone; PROBE_DETAIL=; }; _session_verdict demo`).trim()).toBe('gone');
+  });
+  it('a WEDGED tmux is bounded by the deadline and answers unknown with a synthesized, non-empty reason', () => {
+    // The wedge shape (spec §1): an EXECUTABLE stub that never answers — timeout(1) can kill a
+    // binary, not a bash function, so this test plants a real file on PATH.
+    const bin = path.join(h.home, 'wedge-bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(path.join(bin, 'tmux'), '#!/usr/bin/env bash\nsleep 60\n', { mode: 0o755 });
+    const out = h.sh(`export PATH="${bin}:$PATH"; SUBSTRATE_PROBE_DEADLINE_S=1
+      _session_probe demo; echo "$PROBE_VERDICT|$PROBE_DETAIL"`).trim();
+    expect(out).toMatch(/^unknown\|tmux did not answer within 1s$/);
+  });
+  it('the deadline applies ONLY to a real binary — function stubs keep working undeadlined', () => {
+    // The largest test-compat hazard, pinned: `timeout` execs, so every `tmux() { … }` stub in
+    // this suite would be invisible if the deadline wrapped them. `_session_probe` must detect
+    // the function and call it directly.
+    expect(h.sh(`${TMUX_LIVE} _session_probe demo; echo "$PROBE_VERDICT"`).trim()).toBe('live');
   });
 });

@@ -165,6 +165,7 @@ fi
 CCRC_DOCTOR_CHECKS=(
   node
   tmux
+  tmux_skew
   git
   gh
   jq
@@ -389,6 +390,76 @@ _check_tmux() {
   _dr_need_bin tmux "every ccd session lives in a tmux window, and that is how one is attached, read and driven" \
     "install it: sudo apt install tmux"
 }
+
+# ── tmux_skew: the loaded gun — a new client under the running server ─────
+# `tmux -V` names the CLIENT: the binary on disk, the one every next attach
+# and every `ccd` call runs. `display-message -p '#{version}'` asks the
+# RUNNING SERVER for its own. Disagreement means an upgrade landed under a
+# live server, and the moment a new client speaks to it the server refuses
+# the whole conversation ("protocol version mismatch") — on a fleet host that
+# severs the console from every session at once, while the sessions
+# themselves keep running unattached (the substrate-unreachable spec §5 calls
+# this the loaded gun, seen before it fires). A version FLOOR is deliberately
+# NOT checked: the dangerous direction is client/server skew, which is
+# instant and total, not slow drift below some minimum.
+#
+# WARN and not FAIL, because the gun is loaded and not fired: nothing is
+# broken while no new client starts, and the remedy is a scheduled action
+# ("at the next quiet moment"), not an emergency.
+#
+# The server probe is deadline-bounded by CCRC_DOCTOR_GH_TIMEOUT — the same
+# knob that bounds this file's other could-hang probe (`gh_auth`), reused
+# rather than cloned because both mean one thing: how long doctor may sit on
+# a call that should answer instantly. A wedged server holding the socket
+# without answering is precisely a box this check will be run on.
+_check_tmux_skew() {
+  # Absence is the `tmux` check's FAIL, one entry up — a second verdict here
+  # would count the same finding twice, and with no client there is no
+  # client/server pair to compare.
+  if ! command -v tmux >/dev/null 2>&1; then
+    _dr_skip tmux_skew "tmux is not on PATH (the tmux check FAILs on that), so there is no client/server pair to compare"
+    return 3
+  fi
+
+  local vline client
+  vline="$(tmux -V 2>/dev/null)"
+  client="$(_dr_trim "${vline#tmux }")"
+  if [ -z "$client" ]; then
+    _dr_skip tmux_skew "'tmux -V' printed \"$vline\", which names no client version, so there is nothing to compare a server against"
+    return 3
+  fi
+
+  local server rc
+  if command -v timeout >/dev/null 2>&1; then
+    server="$(timeout "$CCRC_DOCTOR_GH_TIMEOUT" tmux display-message -p '#{version}' 2>/dev/null)"; rc=$?
+  else
+    # The same trade gh_auth makes: a box without coreutils' `timeout` still
+    # gets an answer, just without a deadline.
+    server="$(tmux display-message -p '#{version}' 2>/dev/null)"; rc=$?
+  fi
+  if [ "$rc" -eq 124 ]; then
+    # NOT the "no server" sentence below: a server that holds the socket
+    # without answering and a socket nobody holds are two different facts
+    # about the box, and collapsing them is the overloaded seam this file
+    # bans by name. Still a skip — nothing was measured — but the detail
+    # names which nothing.
+    _dr_skip tmux_skew "a tmux server holds the socket but did not answer within ${CCRC_DOCTOR_GH_TIMEOUT}s, so its version could not be read"
+    return 3
+  fi
+  server="$(_dr_trim "$server")"
+  if [ "$rc" -ne 0 ] || [ -z "$server" ]; then
+    _dr_skip tmux_skew "no tmux server is running, so there is nothing to skew against — the next client to start one will be this client"
+    return 3
+  fi
+
+  if [ "$server" = "$client" ]; then
+    _dr_pass tmux_skew "client $client, running server $server — versions agree"
+    return 0
+  fi
+  _dr_warn tmux_skew "the client on disk is $client but the running server is $server" \
+    "a tmux upgrade landed under the running server — restart the tmux server at the next quiet moment or the next new client will be refused"
+}
+
 _check_git() {
   _dr_need_bin git "ccd builds every workspace as a git worktree" \
     "install it: sudo apt install git"

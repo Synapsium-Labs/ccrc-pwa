@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { defaultCachePath, loadSnapshot, saveSnapshot } from '../src/fleetstate.js';
-import type { FleetSession } from '../../shared/api.js';
+import { substrateFault, type FleetSession } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const tmpDir = (): string => mkTmp('ccrc-cache-');
@@ -16,7 +16,7 @@ const session = (id: string): FleetSession => ({
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, held: null, bucket: 'idle', bucketSince: null,
-  unmeasured: [], lifecycle: null, stoppedBy: null, swapBlocked: null,
+  unmeasured: [], lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null,
   started: true, spawnState: null,
 });
 
@@ -327,6 +327,48 @@ describe('loadSnapshot revives a cache written by an older build', () => {
     expect(await loadSnapshot(cachePath)).toBeNull();
   });
 
+  it('revives `substrate` — absent degrades to null, a populated fault survives, a malformed one ' +
+     'rejects the whole session (Task 5)', async () => {
+    // The `swapBlocked` contract, copied for the same reason: the text is free
+    // prose the supervisor wrote and it IS the display, so a malformed value
+    // has no vocabulary to degrade onto. Absent → null (an older snapshot
+    // simply predates the axis); anything unparseable rejects the WHOLE
+    // session — laundering it into null would read "no fault recorded" over a
+    // row a supervisor flagged unreachable, the destructive direction: the
+    // affordance gates all key off this field.
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    writeRaw(cachePath, [v1Session('claude-quiet-basin')]);
+    const absent = (await loadSnapshot(cachePath))?.sessions[0];
+    expect(absent?.substrate).toBeNull();
+    expect(Object.keys(absent ?? {})).toContain('substrate');
+
+    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'),
+      substrate: { at: 1755620112000, text: 'protocol version mismatch (client 8, server 7)' } }]);
+    expect((await loadSnapshot(cachePath))?.sessions[0]?.substrate)
+      .toEqual({ at: 1755620112000, text: 'protocol version mismatch (client 8, server 7)' });
+
+    for (const bad of [
+      { substrate: 'wedged' },
+      { substrate: { text: 'x' } },                          // no `at`
+      { substrate: { at: 'soon', text: 'x' } },
+      { substrate: { at: 1755620112000 } },                  // no `text`
+      { substrate: { at: 1755620112000, text: 7 } },
+    ]) {
+      writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), ...bad }]);
+      expect(await loadSnapshot(cachePath), JSON.stringify(bad)).toBeNull();
+    }
+  });
+
+  it('round-trips a populated substrate fault', async () => {
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    const populated: FleetSession = {
+      ...session('claude-quiet-basin'),
+      substrate: { at: 1755620112000, text: 'protocol version mismatch (client 8, server 7)' },
+    };
+    await saveSnapshot([populated], cachePath);
+    expect((await loadSnapshot(cachePath))?.sessions[0]).toEqual(populated);
+  });
+
   it('rejects a malformed subagents entry rather than laundering it', async () => {
     const cachePath = path.join(tmpDir(), 'state-cache.json');
     writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), subagents: [{ name: 'reviewer' }] }]);
@@ -428,5 +470,29 @@ describe('loadSnapshot revives a cache written by an older build', () => {
       writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), ...bad }]);
       expect(await loadSnapshot(cachePath), JSON.stringify(bad)).toBeNull();
     }
+  });
+});
+
+describe('substrateFault — the ONE tolerant reader both PWA surfaces use (spec §4)', () => {
+  // Unit rows here rather than in a pwa suite: the helper lives in shared/ so
+  // the chip, the gates and the banner cannot drift onto three fallbacks, and
+  // this file is where the rest of the field's contract is already pinned.
+  it('reads a valid fault through, and answers null for a missing key or a null field', () => {
+    expect(substrateFault({ substrate: { at: 1755620112000, text: 'protocol version mismatch' } }))
+      .toEqual({ at: 1755620112000, text: 'protocol version mismatch' });
+    // A live `fleet` frame is CAST, never revived (`unmeasuredFields`' own
+    // docstring above it records what that cost once) — a row from an older
+    // server genuinely lacks the key at runtime, and that reads as "no fault".
+    expect(substrateFault({})).toBeNull();
+    expect(substrateFault({ substrate: null })).toBeNull();
+  });
+  it('degrades per-half, never per-object — the stampParts discipline', () => {
+    // A half-valid object still names a FAULT; dropping the whole thing to
+    // null would un-flag the row. Bad `at` keeps the text; bad text keeps the
+    // fault with a synthesized reason.
+    expect(substrateFault({ substrate: { at: Number.NaN, text: 'kept verbatim' } }))
+      .toEqual({ at: 0, text: 'kept verbatim' });
+    expect(substrateFault({ substrate: { at: 5, text: '' } }))
+      .toEqual({ at: 5, text: 'substrate fault (reason unreadable)' });
   });
 });

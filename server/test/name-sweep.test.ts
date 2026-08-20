@@ -15,6 +15,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { unreadableField } from './ioDoubles.js';
 
 const ID = 'demo-quiet-mesa';
 const UUID = 'a'.repeat(36);
@@ -120,10 +121,7 @@ describe('the naming sweep', () => {
     const h = harness();
     seed(h.home);
     transcript(h.home, [USER('go'), TITLE('Brainstorm Helix and slide notes integration')]);
-    const unreadableWrapper: FleetIO = {
-      ...localIO,
-      readFile: async (p) => (p.endsWith(`${ID}.wrapper`) ? null : localIO.readFile(p)),
-    };
+    const unreadableWrapper = unreadableField(ID, 'wrapper');
     const w = new FleetWatcher({ ...testDeps(h.home, h.run), io: unreadableWrapper }, new Bus(), 2000);
 
     await w.sweepNames();
@@ -152,10 +150,7 @@ describe('the naming sweep', () => {
      'the guard', async () => {
     const h = harness();
     seed(h.home);
-    const unreadableWorkdir: FleetIO = {
-      ...localIO,
-      readFile: async (p) => (p.endsWith(`${ID}.workdir`) ? null : localIO.readFile(p)),
-    };
+    const unreadableWorkdir = unreadableField(ID, 'workdir');
     const trapDir = path.join(h.home, '.claude', 'projects');
     mkdirSync(trapDir, { recursive: true });
     writeFileSync(path.join(trapDir, `${UUID}.jsonl`),

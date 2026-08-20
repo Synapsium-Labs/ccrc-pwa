@@ -1,8 +1,19 @@
 import '@testing-library/jest-dom/vitest';
+import { cleanup } from '@testing-library/react';
 import { afterEach, vi } from 'vitest';
 import { useFleetStore } from '../src/stores/fleet';
 
-// THE MODULE-LEVEL FLEET SOCKET IS TORN DOWN AFTER EVERY TEST.
+// ONE teardown hook doing two unrelated jobs, merged deliberately rather than
+// registered as two: both arrived in the same week from different branches
+// (the socket teardown from Stage 3a, the Radix timer flush from the
+// draft-conflict flake fix), and each carried an ordering claim about the
+// other's absence — "the FIRST thing in this file's teardown" and "vitest's
+// stack hook order runs this setup-registered hook last". Two hooks would have
+// made that order an emergent property of registration; one hook makes it a
+// readable line. The socket goes first: stop it before anything unmounts, so a
+// reconnect cannot be scheduled by a component on its way out.
+//
+// (1) THE MODULE-LEVEL FLEET SOCKET IS TORN DOWN AFTER EVERY TEST.
 //
 // `useFleetStore` is a singleton, and `<App/>`'s mount effect connects it. A
 // test that renders the shell and never disconnects therefore leaves a live
@@ -26,8 +37,32 @@ import { useFleetStore } from '../src/stores/fleet';
 // the FIRST thing in this file's teardown and this file's only `src/` import —
 // a global hook that reached further into the app would be a fixture pretending
 // to be a harness.
-afterEach(() => {
+//
+// (2) Radix's FocusScope returns focus on unmount from a `setTimeout(..., 0)`
+// (@radix-ui/react-focus-scope dist/index.mjs, the unmount CustomEvent). A
+// test whose LAST render mounted a focus scope therefore leaves a pending
+// macrotask behind, and when the file's jsdom is torn down before it fires,
+// the callback constructs a CustomEvent in one realm and dispatches it at a
+// container from another — vitest reports `dispatchEvent: parameter 1 is not
+// of type 'Event'` as an unhandled error and FAILS THE JOB with every test
+// green (seen on CI 2026-08-19 and twice on 2026-08-20, always attributed to
+// whichever file ran a Radix dialog last — draft-conflict.test.tsx both
+// times). The fix is to let that timer fire while this file's realm is still
+// alive: unmount now (idempotent — a file's own `afterEach(cleanup)` just
+// no-ops after this), then yield one macrotask so every 0 ms timer the
+// unmount scheduled runs before the environment can go away. Under fake
+// timers the yield would never resolve, so pending timers are run inside
+// fake time instead; files that restore real timers in their own afterEach
+// ran it already — vitest's stack hook order runs this setup-registered hook
+// last.
+afterEach(async () => {
   useFleetStore.getState().disconnect();
+  cleanup();
+  if (vi.isFakeTimers()) {
+    vi.runOnlyPendingTimers();
+  } else {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
 });
 
 // jsdom gaps touched by vaul/radix (the Sheet primitive). All guarded so a

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { appendFileSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { localIO } from '../src/io.js';
@@ -16,6 +16,43 @@ describe('localIO.readFile', () => {
     expect(await localIO.readFile(file)).toBe('hello world');
     expect(await localIO.readFile(path.join(path.dirname(file), 'nope.txt'))).toBeNull();
   });
+});
+
+describe('localIO.readFileMeasured', () => {
+  it('returns {ok:true, content} for a readable file', async () => {
+    const file = tmpFile();
+    writeFileSync(file, 'hello world');
+    expect(await localIO.readFileMeasured(file)).toEqual({ ok: true, content: 'hello world' });
+  });
+
+  it('a missing path (ENOENT) reads as {ok:false, reason:"absent"}', async () => {
+    const dir = mktempDir();
+    expect(await localIO.readFileMeasured(path.join(dir, 'nope.txt'))).toEqual({
+      ok: false,
+      reason: 'absent',
+    });
+  });
+
+  it('a DIRECTORY path (EISDIR, not ENOENT) reads as {ok:false, reason:"unreadable"}', async () => {
+    const dir = mktempDir();
+    const sub = path.join(dir, 'a-directory');
+    mkdirSync(sub);
+    expect(await localIO.readFileMeasured(sub)).toEqual({ ok: false, reason: 'unreadable' });
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'a chmod 000 file (EACCES, not ENOENT) reads as {ok:false, reason:"unreadable"}',
+    async () => {
+      const file = tmpFile();
+      writeFileSync(file, 'secret');
+      chmodSync(file, 0o000);
+      try {
+        expect(await localIO.readFileMeasured(file)).toEqual({ ok: false, reason: 'unreadable' });
+      } finally {
+        chmodSync(file, 0o644); // let fixture cleanup remove it without fighting perms
+      }
+    },
+  );
 });
 
 describe('localIO.readFileFrom', () => {

@@ -8,9 +8,9 @@ import { FleetWatcher } from '../src/watch.js';
 import { buildServer } from '../src/server.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { unreadableField } from './ioDoubles.js';
 import type { PrState } from '../../shared/api.js';
 import type { PushPayload } from '../src/push.js';
-import { localIO, type FleetIO } from '../src/io.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 
@@ -780,13 +780,49 @@ describe('archiveSafety — an unconfigured wrapper is UNKNOWN, never a silent o
      'previously-dropped row\'s own answer exactly', async () => {
     const home = seed(['demo-quiet-basin']);
     liveIdle(home);
-    const unreadableWorkdir: FleetIO = {
-      ...localIO,
-      readFile: async (p) => (p.endsWith('demo-quiet-basin.workdir') ? null : localIO.readFile(p)),
-    };
+    const unreadableWorkdir = unreadableField('demo-quiet-basin', 'workdir');
     const calls: string[][] = [];
     const w = new FleetWatcher({ ...testDeps(home, runnerFor('', calls)), io: unreadableWorkdir }, new Bus(), 10_000);
     await expect(w.archiveSafety('demo-quiet-basin')).resolves.toEqual({ verdict: 'unknown', held: null });
+    w.stop();
+  });
+});
+
+describe('archiveSafety — the tmux arm answers three ways, and silence REFUSES (D-B8-13)', () => {
+  it('a tmux that DID NOT ANSWER is unknown, never ok — silence is not proof there is nothing to destroy', async () => {
+    // D-B8-12's fail-shut polarity, carried to the server seam it was missing
+    // from. This function's four other cannot-tell branches all answer
+    // 'unknown'; the tmux branch was the one that answered 'ok' — on the one
+    // reading whose caller ARCHIVES on that answer, with the same comment and
+    // the same defect as ccd's `_ws_status` before D-B8-12. The fixture plants
+    // an idle live-state so BOTH ways of losing the guard die here: reverting
+    // to the boolean (`!hasSession` -> 'ok') answers 'ok' directly, and letting
+    // `unknown` fall through to the pid/live reads resolves a concrete 'ok'
+    // off the live file. Only the guard itself can be what answers 'unknown'.
+    const home = seed(['demo-quiet-basin']);
+    liveIdle(home);
+    writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.hold'), 'program:orca wave:2/3');
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: 1, stdout: '', stderr: 'no server running on /tmp/tmux-1000/default\n' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const w = new FleetWatcher(testDeps(home, run), new Bus(), 10_000);
+    // `held` carried, not nulled: the unknown answer still feeds the caller's
+    // held-merged push, same as the pid/cfgDir unknown arm below it.
+    await expect(w.archiveSafety('demo-quiet-basin')).resolves.toEqual({ verdict: 'unknown', held: 'program:orca wave:2/3' });
+    w.stop();
+  });
+
+  it('a session tmux PROVED gone is ok — the genuine no-pane answer keeps its meaning', async () => {
+    const home = seed(['demo-quiet-basin']);
+    writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.hold'), 'program:orca wave:2/3');
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: 1, stdout: '', stderr: "can't find session: cc-demo-quiet-basin\n" };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const w = new FleetWatcher(testDeps(home, run), new Bus(), 10_000);
+    await expect(w.archiveSafety('demo-quiet-basin')).resolves.toEqual({ verdict: 'ok', held: 'program:orca wave:2/3' });
     w.stop();
   });
 });

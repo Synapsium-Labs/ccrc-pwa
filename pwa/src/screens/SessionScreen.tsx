@@ -6,6 +6,7 @@
 // DialogSheet and the TerminalDrawer mount at the bottom.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
+import { substrateFault } from '../../../shared/api';
 import { QuickConfirm } from '../components/QuickConfirm';
 import { Skeleton } from '../components/Skeleton';
 import { toast } from '../components/Toast';
@@ -169,6 +170,16 @@ export function SessionScreen({
   // transcript, and that is worth saying.
   const empty = !loading && events.length === 0 && pending.length === 0 && searchComplete;
 
+  // The substrate gate (spec §4): under a standing fault the console cannot
+  // SEE this session, so the two destructive controls this screen owns — the
+  // dead banner's Restart and the stop confirm — refuse rather than fire at a
+  // pane nobody can measure. Read through `substrateFault`, never
+  // `live.substrate`: the live frame is cast, not revived, so an older
+  // server's row lacks the key at runtime. `faultTitle` is SessionLine's
+  // chip's own `tmux unreachable — <reason>` string, never a second copy.
+  const fault = live === null ? null : substrateFault(live);
+  const faultTitle = fault !== null ? `tmux unreachable — ${fault.text}` : undefined;
+
   const restart = async (): Promise<void> => {
     if (restarting) return;
     setRestarting(true);
@@ -212,6 +223,17 @@ export function SessionScreen({
   };
 
   const stopSession = async (): Promise<void> => {
+    // The gate's confirm-path half. The header's Stop menu item is already
+    // disabled under a fault, but the fleet frame updates LIVE beneath an
+    // open confirm and QuickConfirm owns its own button — so the fault is
+    // re-checked at the moment of firing, and the refusal is named (the same
+    // one string) rather than swallowed. Guarded on `faultTitle`, the one
+    // composition site, so TS ties the toast to the check without a second
+    // copy of the template.
+    if (faultTitle !== undefined) {
+      toast(faultTitle, 'error');
+      return;
+    }
     try {
       await api.stop(id);
     } catch (err) {
@@ -298,7 +320,8 @@ export function SessionScreen({
             type="button"
             className="btn-ghost"
             onClick={() => void restart()}
-            disabled={restarting}
+            disabled={restarting || fault !== null}
+            title={faultTitle}
           >
             {restarting ? 'Restarting…' : 'Restart session'}
           </button>

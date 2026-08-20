@@ -8,11 +8,13 @@ import { describe, it, expect } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
+import { SUBSTRATE_UNREADABLE } from '../src/registry.js';
 import { assembleFleet } from '../src/fleet.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
+import { degradedReadIO } from './ioDoubles.js';
 
 const NOW_SEC = 1785300000;
 const ID = 'demo-quiet-basin';
@@ -83,8 +85,7 @@ describe('assembleFleet ships the lifecycle', () => {
     // Before the ladder existed this row printed a confident `orphan` about a
     // session nobody managed to look at.
     const { cfg, tmux } = fixture({ stopped: `${NOW_SEC - 90} pwa`, started: '1' }, false);
-    const blind = { ...localIO, readFile: async (p: string) =>
-      (p.endsWith(`${ID}.stopped`) ? null : localIO.readFile(p)) };
+    const blind = degradedReadIO((p) => p.endsWith(`${ID}.stopped`));
     const fleet = await assembleFleet(blind, cfg, tmux, NOW_SEC);
     expect(fleet.find((s) => s.id === ID)!.lifecycle).toBe('unmeasurable');
   });
@@ -157,5 +158,50 @@ describe('§1.6b — the spawn verdict reaches the wire off the SHIPPED `spawn` 
     expect(s.started).toBe(false);
     expect(s.spawnState).toBeNull();
     expect(s.lifecycle).toBe('unclaimed');
+  });
+});
+
+describe('the substrate axis reaches the wire — projected, not re-read (D-B8-14, spec §3)', () => {
+  it('projects a seeded marker as {at: seconds*1000, text} — conversion at THIS seam only', async () => {
+    // The exact-MS assertion is this task's mutation tooth: drop the `* 1000`
+    // and the stamp is off by three orders of magnitude. Same seam, same
+    // timebase rule as `stoppedBy` (`fleet.ts:370`) — the registry is epoch
+    // SECONDS, the wire is epoch MS, and the conversion happens here only.
+    const s = await one({
+      started: '1', supervised: String(NOW_SEC - 5),
+      substrate: `${NOW_SEC - 120} protocol version mismatch (client 8, server 7)`,
+    }, true);
+    expect(s.substrate).toEqual({
+      at: (NOW_SEC - 120) * 1000, text: 'protocol version mismatch (client 8, server 7)',
+    });
+  });
+
+  it('a row without a marker ships substrate: null, and never undefined', async () => {
+    const s = await one({ started: '1' }, true);
+    expect(s.substrate).toBeNull();
+    expect(Object.keys(s)).toEqual(expect.arrayContaining(['substrate']));
+  });
+
+  it('an unreadable marker keeps `at: 0` on the wire — fail-shut text, no fabricated 1970 stamp', async () => {
+    // The `.hold` ladder's remote-mode shape again: the file is LISTED, its
+    // bytes never come back. `buildRecord` already ruled fail-shut
+    // (SUBSTRATE_UNREADABLE, `at: 0`); what is only provable HERE is that the
+    // verdict crosses the seam intact — 0 stays 0, so the PWA can render
+    // text-only instead of a confident "since 1970".
+    const { cfg, tmux } = fixture({ started: '1', substrate: `${NOW_SEC - 120} x` }, true);
+    const blind = degradedReadIO((p) => p.endsWith(`${ID}.substrate`));
+    const fleet = await assembleFleet(blind, cfg, tmux, NOW_SEC);
+    expect(fleet.find((s) => s.id === ID)!.substrate).toEqual({ at: 0, text: SUBSTRATE_UNREADABLE });
+  });
+
+  it('moves neither status nor bucket — a faulted stopped row is still `dead`/`dead` (M10)', async () => {
+    // The negative this task is bounded by, same as the lifecycle's own M10
+    // pin above: the axis rides BESIDE status/bucket/lifecycle, it never
+    // moves them.
+    const s = await one({ stopped: `${NOW_SEC - 90} agent`, substrate: `${NOW_SEC - 60} wedged` }, false);
+    expect(s.status).toBe('dead');
+    expect(s.bucket).toBe('dead');
+    expect(s.lifecycle).toBe('stopped');
+    expect(s.substrate).toEqual({ at: (NOW_SEC - 60) * 1000, text: 'wedged' });
   });
 });

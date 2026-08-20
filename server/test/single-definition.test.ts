@@ -1147,3 +1147,33 @@ describe('Build 8 vocabularies — one definition each, all derived from their m
     expect(dispatch).toContain('spawnstate');  // in the run_events detail comment
   });
 });
+
+// Task 5 (docs/superpowers/plans/2026-08-20-fleetio-measured-read.md): the
+// `'absent' | 'unreadable'` read-failure vocabulary lives once, in
+// `server/src/io.ts`'s `ReadFailure`, and `registry.ts`'s `BranchEvidence`
+// DERIVES it (`'named' | ReadFailure | 'empty'`) rather than restating the
+// pair — it used to spell `'absent' | 'unreadable'` a second time at
+// `registry.ts:20`. `oneDefinition` above is per-named-symbol and hardcodes
+// `shared/api.ts` as the one legal home, so it cannot be reused for a
+// symbol whose home is `server/src/io.ts` — this is a bespoke assertion in
+// the same style.
+//
+// The fingerprint is the ORDERED PAIR, not either word alone:
+// `shared/api.ts` legitimately declares `WsAuditUnit = 'enabled' | 'loaded'
+// | 'absent'`, where `'absent'` appears with no `'unreadable'` beside it —
+// a bare `/'absent'/` or `/'unreadable'/` scan would false-positive there.
+describe('one absent/unreadable read vocabulary', () => {
+  const PAIR = /'absent'\s*\|\s*'unreadable'/;
+
+  it('is declared in exactly one file, and that file is server/src/io.ts', () => {
+    const holders = ALL.filter((f) => PAIR.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['server/src/io.ts']);
+  });
+
+  it('is what registry.ts derives BranchEvidence from, not a second copy', () => {
+    const registry = readFileSync(path.join(ccrcRoot, 'server/src/registry.ts'), 'utf8');
+    expect(registry).not.toMatch(PAIR);
+    expect(registry).toMatch(/export type BranchEvidence = 'named' \| ReadFailure \| 'empty';/);
+    expect(registry).toMatch(/import\s+type\s*\{[^}]*\bReadFailure\b[^}]*\}\s*from\s*'\.\/io\.js'/);
+  });
+});

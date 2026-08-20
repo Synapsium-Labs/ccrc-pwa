@@ -87,7 +87,7 @@ const forceDue = (w: FleetWatcher): void => {
  *  `field()` from a file that is not there. */
 const holdUnreadableIO: FleetIO = {
   ...localIO,
-  readFile: async (p) => (p.endsWith('.hold') ? null : localIO.readFile(p)),
+  readFileMeasured: async (p) => (p.endsWith('.hold') ? { ok: false, reason: 'unreadable' } : localIO.readFileMeasured(p)),
 };
 
 describe('archiveMerged — merged AND unheld', () => {
@@ -229,7 +229,7 @@ describe('archiveMerged — merged AND unheld', () => {
       started: true, home: null, pool: null, lastswap: null,
       workspace: 'quiet-basin', branch: 'ws/quiet-basin', branchEvidence: 'named', base: 'origin/main',
       prPhase: null, prNumber: null, prCheckedAt: null, archivedAt: null, archivedBytes: null, held: null,
-      stopped: null, supervisedAt: null, swapBlocked: null, spawn: null, lifecycleUnmeasured: [],
+      substrate: null, stopped: null, supervisedAt: null, swapBlocked: null, spawn: null, lifecycleUnmeasured: [],
       unmeasured: ['wrapper'],
     };
     const merged: PrState = { phase: 'merged', number: 42, url: null, title: null, checks: null,
@@ -385,7 +385,7 @@ describe('SessionRecord.held', () => {
         if (listings === 1) return names;
         return names.filter((n) => n !== 'demo-quiet-basin.hold');
       },
-      readFile: async (p) => (p.endsWith('.hold') ? null : localIO.readFile(p)),
+      readFileMeasured: async (p) => (p.endsWith('.hold') ? { ok: false, reason: 'unreadable' } : localIO.readFileMeasured(p)),
     };
     const records = await readRegistry(releasedMidReadIO, cfg);
     expect(records.find((r) => r.id === 'demo-quiet-basin')?.held).toBeNull();

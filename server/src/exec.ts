@@ -72,10 +72,54 @@ export const realRunner: Runner = (cmd, args) =>
 
 const target = (id: string) => `cc-${id}`;
 
+/** D-B8-13: the server twin of ccd's `_session_verdict` (D-B8-12). `tmux
+ *  has-session` answers three different questions with one exit status —
+ *  session gone, server unreachable, client cut short — and only the first is
+ *  evidence a session died. `detail` exists ONLY on `unknown`, because there it
+ *  is the diagnosis (the tmux message, or what cut the client short) and on the
+ *  other two it would be noise pretending to be measurement. */
+export type SessionVerdict =
+  | { verdict: 'live' }
+  | { verdict: 'gone' }
+  | { verdict: 'unknown'; detail: string };
+
+/** THE POLARITY IS THE WHOLE DESIGN (D-B8-12, and its bash twin is the
+ *  contract: `_session_verdict`, ccd/ccd — the shared fixture
+ *  `test/sessionVerdictFixture.ts` keeps the two agreeing). Recognise the ONE
+ *  message that means death; call everything else unknown. Never a list of
+ *  failures: an unrecognised future tmux error must refuse, not destroy.
+ *
+ *  `detail` is never '': a blank reason is the one shape a maintainer can do
+ *  nothing with, so an empty stderr falls through to whichever measured fact
+ *  remains — the signal that cut the client short (the remote agent's execFile
+ *  deadline kills a client wedged on an unresponsive server; measured
+ *  2026-08-19, a SIGSTOPped server blocks `has-session` indefinitely), the
+ *  bare `killed`, or last the exit code itself. */
+export function classifyHasSession(r: ExecResult): SessionVerdict {
+  if (r.code === 0) return { verdict: 'live' };
+  if (r.stderr.includes("can't find session")) return { verdict: 'gone' };
+  const msg = r.stderr.trim();
+  if (msg !== '') return { verdict: 'unknown', detail: msg };
+  if (typeof r.signal === 'string') {
+    return { verdict: 'unknown', detail: `tmux client got ${r.signal} before it answered (exit ${r.code})` };
+  }
+  if (r.killed === true) {
+    return { verdict: 'unknown', detail: `tmux client was killed before it answered (exit ${r.code})` };
+  }
+  return { verdict: 'unknown', detail: `tmux exited ${r.code} with no message` };
+}
+
 export class Tmux {
   constructor(private run: Runner) {}
+  async sessionVerdict(id: string): Promise<SessionVerdict> {
+    return classifyHasSession(await this.run('tmux', ['has-session', '-t', target(id)]));
+  }
+  /** Derived, exactly like bash `_alive`: true only for `live`. A caller that
+   *  handles `gone` differently from `unknown` must use `sessionVerdict`
+   *  instead — this boolean is for the sites whose collapse is deliberate and
+   *  documented in place (D-B8-13). */
   async hasSession(id: string): Promise<boolean> {
-    return (await this.run('tmux', ['has-session', '-t', target(id)])).code === 0;
+    return (await this.sessionVerdict(id)).verdict === 'live';
   }
   async panePid(id: string): Promise<number | null> {
     const r = await this.run('tmux', ['list-panes', '-t', target(id), '-F', '#{pane_pid}']);

@@ -209,12 +209,22 @@ const MAIL_REPLAY_MAX_ATTEMPTS = 20;
 /** The fleet kill-switch, `$REG/mail-disabled` — ccd's `-disabled` family
  *  (`ccd/ccd:20-22`, `_lane_enabled` at `:53`), which the operator already
  *  knows how to use: `touch` to stop, `rm` to resume. Read by LISTING the
- *  registry directory, never by reading the file: `FleetIO.readFile` maps
- *  every failure to null (`io.ts:41-43`), so a read would make an unreadable
- *  kill-switch look like an absent one — fail-OPEN on the one control whose
- *  entire job is to stop injection. `limits.ts:134-142` already filters
- *  unknown `<name>-disabled` markers out of `/api/accounts`, so this name
- *  cannot fabricate an account row there. */
+ *  registry directory, never by reading the file — and that stays true even
+ *  though `FleetIO` no longer has to collapse "unreadable" into "absent":
+ *  `readFileMeasured` (`MeasuredRead`/`ReadFailure`, `io.ts`) can now tell
+ *  the two apart for a single file. It can't tell them apart for the CASE
+ *  THAT MATTERS MOST here: a measured read of just this file answers
+ *  `absent` on a plain ENOENT, and that ENOENT fires identically whether
+ *  the marker itself is missing or the whole registry directory underneath
+ *  it is gone — so treating a targeted `absent` as "not disabled" would
+ *  fail OPEN exactly when the registry has vanished, the one case this
+ *  kill-switch most needs to fail SHUT on. `io.readdir` still collapses
+ *  every failure of its own to `null` — no measured variant exists for it —
+ *  but that collapse is the point: `listing === null` means "can't tell",
+ *  and "can't tell" must read as disabled, not as license to proceed
+ *  because the marker itself couldn't be seen. `limits.ts:134-142` already
+ *  filters unknown `<name>-disabled` markers out of `/api/accounts`, so
+ *  this name cannot fabricate an account row there. */
 const MAIL_DISABLED_MARKER = 'mail-disabled';
 
 // `UNCHECKED_PR` was a local copy of the literal `PrKeycap.tsx` and
@@ -1827,12 +1837,23 @@ export class FleetWatcher {
         // altogether ABSENT are two different facts, evidence read straight
         // off the row itself (`measuredIdentity(rec)`) rather than the
         // hand-rolled `listing.includes` probe this block used to run.
-        // `rec === undefined` therefore NARROWS to PROVEN absence: either
-        // never listed, or twice-observed gone within `readRegistryMeasured`'s
-        // own second-listing retirement — never "we just couldn't list the
-        // registry this pass" (that case is refused above, before this loop
-        // is ever reached) and never "we just couldn't read one field this
-        // pass" (that is the degraded branch, not this one).
+        // `rec === undefined` therefore NARROWS to PROVEN absence: one of
+        // THREE routes now, not two. Never listed. Twice-observed gone within
+        // `readRegistryMeasured`'s own second-listing retirement. Or (Task 5)
+        // `buildRecord`'s identity-triple loop dropping the row on a SINGLE
+        // measured-`absent` identity field, no second listing at all — see
+        // its own comment in registry.ts. That third route is STRONGER
+        // evidence than the second, not weaker: a listed-then-ENOENT
+        // `.uuid`/`.wrapper`/`.workdir` can only come from ccd's
+        // `_reg_purge`, i.e. a full reap. But it widens the residual the
+        // second route already carried: the pre-branch ladder kept a
+        // degraded row degraded — never parks — whenever the CONFIRMING
+        // second listing itself failed, and this route drops the row on the
+        // first read alone, so the same failed-second-listing window that
+        // used to protect against a park no longer does. Never "we just
+        // couldn't list the registry this pass" (that case is refused above,
+        // before this loop is ever reached) and never "we just couldn't read
+        // one field this pass" (that is the degraded branch, not this one).
         const identity = rec !== undefined ? measuredIdentity(rec) : null;
         if (identity === null) {
           const unmeasurable = rec !== undefined;
@@ -1897,7 +1918,27 @@ export class FleetWatcher {
           }
           continue;
         }
-        if (!(await this.deps.tmux.hasSession(d.toId))) continue;
+        // D-B8-13: `gone` — tmux itself said the recipient's pane does not
+        // exist — stays the ordinary silent gate, exactly like busy or
+        // on-cooldown: the mail waits for the session to come back, nothing
+        // recorded, retried next sweep. `unknown` — tmux DID NOT ANSWER — must
+        // not wear the same bare `continue`, four lines below a registry read
+        // that carefully distinguishes the matching pair on its own seam. It
+        // backs off on the unmeasurable arm's exact never-ratcheting terms
+        // (`countsAsAttempt: false`, so `attempts` stays send-failure budget
+        // and the step stays pinned at MAIL_BACKOFF_BASE_MS — a substrate
+        // outage must never walk a row toward the undeliverable park), and the
+        // tmux message rides in `lastError` verbatim because the message IS
+        // the diagnosis (substrate-unreachable spec §2). The backoff is also
+        // the herd valve: without it every due row re-spawns a doomed tmux
+        // client each sweep against a component that is already unwell.
+        const sv = await this.deps.tmux.sessionVerdict(d.toId);
+        if (sv.verdict === 'gone') continue;
+        if (sv.verdict === 'unknown') {
+          const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** d.attempts, MAIL_BACKOFF_MAX_MS);
+          store.backOff(d.id, `tmux did not answer (substrate-unknown): ${sv.detail}`, now + step, false);
+          continue;
+        }
         const hs = await hookStateFor(d.toId);
         // Pending-question guard ONLY (robust-mail-delivery spec §2.1 / F6b
         // fix). A null/stale `hs` must NOT block delivery: a resumed
@@ -2226,7 +2267,16 @@ export class FleetWatcher {
     const identity = measuredIdentity(rec);
     if (identity === null) return { verdict: 'unknown', held: null };
     const held = rec.held;
-    if (!(await this.deps.tmux.hasSession(id))) return { verdict: 'ok', held };   // no pane: nothing is running
+    // D-B8-13: three answers, not one boolean. `gone` — tmux itself said the
+    // session does not exist — is the only reading that may mean "no pane:
+    // nothing is running". `unknown` (unreachable server, cut-short client)
+    // REFUSES, like every other cannot-tell branch of this function already
+    // did; this arm was the one that answered 'ok' on a question it had not
+    // managed to ask, the same defect D-B8-12 fixed in ccd's `_ws_status`,
+    // on the same destructive caller class.
+    const sv = await this.deps.tmux.sessionVerdict(id);
+    if (sv.verdict === 'gone') return { verdict: 'ok', held };
+    if (sv.verdict === 'unknown') return { verdict: 'unknown', held };
     const pid = await this.deps.tmux.panePid(id);
     const cfgDir = configDirFor(this.deps.cfg, identity.wrapper);
     if (!pid || !cfgDir) return { verdict: 'unknown', held };
