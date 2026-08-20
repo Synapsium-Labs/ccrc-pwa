@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=82de55a805ffde52f6ef37ef47a075de3e5a2d1ccf54aec5aafa7088cc7a9968
+# ccrc:generated 1 sha256=80bea10755f513677da02c671274f0ea60dde4260dfea70f2004a741907e5e4f
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box, not on this file: `_rc_enabled` reads
@@ -482,22 +482,25 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   [[ -e "$REG/$id.reaping" ]] || rm -f "$REG/$id.archived"
 }
 _substrate_mark() {   # id — record "this supervisor could not reach tmux" ($REG/<id>.substrate)
-  # ONE writer per file: this row's supervisor. The fleet-wide statement is DERIVED by the
-  # reader, never written (spec §2). Text is never empty; the skew comparison rides on the
-  # FIRST write only — that is the moment the answer is wanted, one bounded call per fault.
+  # ONE writer per file: this row's supervisor — and the FIRST WRITE WINS. The epoch is
+  # the fault's ONSET ("could not reach tmux SINCE <epoch>", spec §2) and the skew
+  # comparison rides the same first write; the first version of this function rewrote the
+  # file on every unknown tick, which fabricated the duration (the epoch was never more
+  # than one tick old) and destroyed the skew diagnosis one tick after it was recorded
+  # (branch review, confirmed major). Nothing needs a rewrite: freshness is `supervised`'s
+  # job, and the marker's life is bounded by _substrate_clear on the first live tick.
+  # The fleet-wide statement is DERIVED by the reader, never written. Text is never empty.
   local id="$1" why="${PROBE_DETAIL:-tmux gave no reason}" f="$REG/$1.substrate"
-  if [[ ! -e "$f" ]]; then
-    local client server
-    client=$(tmux -V 2>&1 || true)
-    # Same function-vs-binary split as _session_probe, same reason: `timeout` execs.
-    if [[ $(type -t tmux) == function ]]; then
-      server=$(tmux display-message -p '#{version}' 2>/dev/null) || server="unreachable"
-    else
-      server=$(timeout "$SUBSTRATE_PROBE_DEADLINE_S" tmux display-message -p '#{version}' 2>/dev/null) || server="unreachable"
-    fi
-    why="$why (client ${client:-unknown}; server ${server:-unreachable})"
+  [[ -e "$f" ]] && return 0
+  local client server
+  client=$(tmux -V 2>&1 || true)
+  # Same function-vs-binary split as _session_probe, same reason: `timeout` execs.
+  if [[ $(type -t tmux) == function ]]; then
+    server=$(tmux display-message -p '#{version}' 2>/dev/null) || server="unreachable"
+  else
+    server=$(timeout "$SUBSTRATE_PROBE_DEADLINE_S" tmux display-message -p '#{version}' 2>/dev/null) || server="unreachable"
   fi
-  printf '%s %s' "$(date +%s)" "$why" > "$f"
+  printf '%s %s' "$(date +%s)" "$why (client ${client:-unknown}; server ${server:-unreachable})" > "$f"
 }
 _substrate_clear() { rm -f -- "$REG/$1.substrate"; }
 _ws_seed_home() {   # id wrapper — set home once; never clobber a deliberate choice
@@ -8653,7 +8656,19 @@ cmd_supervise() {   # systemd ExecStart: ensure then block until the session die
   # the value lands in `(( ))`, which executes a command substitution written
   # into an array subscript. That is why this is a variable.
   local CCD_SETTLE_BOUND=$SPAWN_SETTLE_SUPERVISE_S
-  cmd_ensure "$id"
+  # PRE-FLIGHT PROBE, before ensure (branch review, confirmed major): a supervisor
+  # (re)started MID-FAULT must not walk into cmd_ensure — under the hang-shaped wedge its
+  # `_alive` reads unknown->false after the deadline and it falls into `_spawn_start` ->
+  # `_tmux_new_session`, whose `tmux list-sessions`/`new-session` carry NO deadline and
+  # block forever on the wedged socket: a hang wearing an active unit, stuck BEFORE the
+  # loop below could mark or back off. On `unknown` the loop is entered directly — it
+  # marks, stamps, and probes its way to live (pane survived the fault) or gone (exit 1;
+  # the NEXT supervise run ensures normally against a healed substrate). `live`/`gone`
+  # take ensure exactly as before: alive short-circuits it, gone is the cold start.
+  _session_probe "$id"
+  if [[ "$PROBE_VERDICT" != unknown ]]; then
+    cmd_ensure "$id"
+  fi
   # Re-stamped every 30s from the 5-second tick this loop already runs, so the
   # 120-second freshness window never expires under a live supervisor.
   #

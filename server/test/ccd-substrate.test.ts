@@ -34,15 +34,20 @@ describe('the substrate marker — one writer, epoch + verbatim reason (spec §2
     expect(existsSync(path.join(h.home, '.cc-sessions', 'demo.substrate'))).toBe(false);
     h.sh('_substrate_clear demo');   // absent: no error
   });
-  it('the FIRST write records the skew comparison; later writes do not repeat it', () => {
-    const stub = `date() { [[ "$1" == +%s ]] && echo 100 || command date "$@"; }
+  it('the FIRST write WINS — the onset epoch and the skew record survive every later tick', () => {
+    // The first version of _substrate_mark rewrote the file per tick, which
+    // fabricated the fault duration (the epoch was never more than one tick
+    // old — "since <epoch>" was a lie) and destroyed the skew diagnosis one
+    // tick after recording it (branch review, confirmed major). The marker's
+    // life is bounded by _substrate_clear on the first live tick, so nothing
+    // ever needs a rewrite.
+    const stub = (epoch: number): string => `date() { [[ "$1" == +%s ]] && echo ${epoch} || command date "$@"; }
       tmux() { case "$1" in -V) echo 'tmux 3.5'; return 0 ;; display-message) echo 'protocol version mismatch' >&2; return 1 ;; esac; };`;
-    h.sh(`${stub} PROBE_DETAIL='x'; _substrate_mark demo`);
+    h.sh(`${stub(100)} PROBE_DETAIL='x'; _substrate_mark demo`);
     const first = h.reg('demo', 'substrate');
-    expect(first).toContain('client tmux 3.5');
-    expect(first).toContain('server unreachable');
-    h.sh(`${stub} PROBE_DETAIL='y'; _substrate_mark demo`);
-    expect(h.reg('demo', 'substrate')).toBe('100 y');   // refresh, no second skew suffix
+    expect(first).toMatch(/^100 x \(client tmux 3\.5; server unreachable\)$/);
+    h.sh(`${stub(200)} PROBE_DETAIL='y'; _substrate_mark demo`);
+    expect(h.reg('demo', 'substrate')).toBe(first);   // byte-identical: epoch 100 stands, diagnosis stands
   });
   it('the reason is NEVER empty — an empty PROBE_DETAIL is refused with a synthesized text', () => {
     h.sh(`PROBE_DETAIL=''; tmux() { echo 'tmux 3.4'; }; _substrate_mark demo`);
@@ -85,29 +90,31 @@ const LOOP_STUBS = `systemctl() { :; }; sleep() { echo "sleep \${1:-}" >> "$HOME
   cmd_ensure() { :; }; _sync_uuid() { :; }; _auto_swap_check() { :; }; _auto_compact_check() { :; }
   tmux() { case "$1" in -V) echo 'tmux 3.4' ;; *) return 1 ;; esac; }`;
 
+// Every sequence below carries ONE leading element for cmd_supervise's
+// PRE-FLIGHT probe (the ensure gate), consumed before the loop's first tick.
 describe('cmd_supervise under a substrate fault (spec §1)', () => {
   it('unknown does NOT exit, marks the row, and stamps the heartbeat EVERY unknown tick', () => {
     run(`${LOOP_STUBS}
-      ${seq('unknown:protocol mismatch', 'unknown:protocol mismatch', 'gone')}
+      ${seq('unknown:protocol mismatch', 'unknown:protocol mismatch', 'unknown:protocol mismatch', 'gone')}
       _reg_set() { printf '%s' "$3" > "$REG/$1.$2"; echo "stamp $2" >> "$HOME/ccd-calls"; }
       cmd_supervise ${ID}`);
-    expect(h.calls().filter((l) => l === 'stamp supervised').length).toBeGreaterThanOrEqual(3); // pre-ensure + 2 unknown ticks
+    expect(h.calls().filter((l) => l === 'stamp supervised').length).toBeGreaterThanOrEqual(3); // top stamp + 2 unknown loop ticks
     expect(h.reg(ID, 'substrate')).toContain('protocol mismatch');
   });
   it('the FIRST live after unknown clears the marker; a STALE marker from a dead supervisor clears too', () => {
     run(`${LOOP_STUBS}
-      ${seq('unknown:x', 'live', 'gone')}
+      ${seq('live', 'unknown:x', 'live', 'gone')}
       cmd_supervise ${ID}`);
     expect(existsSync(path.join(h.home, '.cc-sessions', `${ID}.substrate`))).toBe(false);
     h.sh(`printf '1 stale' > "$REG/${ID}.substrate"`);
     run(`${LOOP_STUBS}
-      ${seq('live', 'gone')}
+      ${seq('live', 'live', 'gone')}
       cmd_supervise ${ID}`);
     expect(existsSync(path.join(h.home, '.cc-sessions', `${ID}.substrate`))).toBe(false);
   });
   it('backs off 5s -> 30s after SUBSTRATE_BACKOFF_AFTER consecutive unknowns, and 5s again on live', () => {
     run(`${LOOP_STUBS}
-      ${seq('unknown:x', 'unknown:x', 'unknown:x', 'unknown:x', 'live', 'unknown:x', 'gone')}
+      ${seq('live', 'unknown:x', 'unknown:x', 'unknown:x', 'unknown:x', 'live', 'unknown:x', 'gone')}
       cmd_supervise ${ID}`);
     const sleeps = h.calls().filter((l) => l.startsWith('sleep ')).map((l) => l.slice(6));
     // unknown_run 1,2 sleep 5; run 3 REACHES the threshold so the sleep AFTER the third
@@ -127,9 +134,38 @@ describe('cmd_supervise under a substrate fault (spec §1)', () => {
   });
   it('the three tick helpers are SKIPPED on an unknown tick — each would shell into the dead tmux', () => {
     run(`${LOOP_STUBS}
-      ${seq('unknown:x', 'gone')}
+      ${seq('unknown:x', 'unknown:x', 'gone')}
       _sync_uuid() { echo tickhelper >> "$HOME/ccd-calls"; }
       cmd_supervise ${ID}`);
     expect(h.calls().filter((l) => l === 'tickhelper')).toHaveLength(0);
+  });
+});
+
+describe('cmd_supervise pre-flight — ensure is gated on the substrate answering (branch review)', () => {
+  // A supervisor (re)started MID-FAULT must not walk into cmd_ensure: under the
+  // hang-shaped wedge, ensure's spawn path (`tmux list-sessions`/`new-session`)
+  // carries no deadline and blocks forever — a hang wearing an active unit,
+  // stuck BEFORE the loop could mark or back off. The marker mechanism only
+  // protects supervisors already inside the loop; this gate extends it to the
+  // restart path (deploy's try-restart sweep lands here for all 17 at once).
+  it('a supervisor (re)started mid-fault SKIPS cmd_ensure and still marks from the loop', () => {
+    run(`${LOOP_STUBS}
+      ${seq('unknown:x', 'unknown:wedge stands', 'gone')}
+      cmd_ensure() { echo ensure-called >> "$HOME/ccd-calls"; }
+      cmd_supervise ${ID}`);
+    expect(h.calls().filter((l) => l === 'ensure-called')).toHaveLength(0);
+    expect(h.reg(ID, 'substrate')).toContain('wedge stands');
+  });
+  it('a healthy start still ensures — the gate is for unknown only (gone is the cold start)', () => {
+    run(`${LOOP_STUBS}
+      ${seq('gone', 'gone')}
+      cmd_ensure() { echo ensure-called >> "$HOME/ccd-calls"; }
+      cmd_supervise ${ID}`);
+    expect(h.calls().filter((l) => l === 'ensure-called')).toHaveLength(1);
+    run(`${LOOP_STUBS}
+      ${seq('live', 'gone')}
+      cmd_ensure() { echo ensure-called >> "$HOME/ccd-calls"; }
+      cmd_supervise ${ID}`);
+    expect(h.calls().filter((l) => l === 'ensure-called')).toHaveLength(2);   // cumulative log
   });
 });
