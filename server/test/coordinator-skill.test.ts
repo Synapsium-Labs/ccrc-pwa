@@ -19,7 +19,11 @@ import { readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { renderEnvelope, type EnvelopeInput } from '../src/coord/envelope.js';
-import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, isRunRefuseCode } from '../../shared/api.js';
+import { WORKER_KICKOFF_PREFIX } from '../src/coord/dispatch.js';
+import type { DoneClaim } from '../src/coord/fingerprint.js';
+import {
+  MAIL_BODY_MAX_BYTES, MAIL_REJECT_CODES, RUN_REFUSE_CODES, isPrPhase, isRunRefuseCode,
+} from '../../shared/api.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const skillDir = path.join(root, 'ccd/coordinator-skill');
@@ -465,4 +469,166 @@ describe('the skill tells a SENDER what a blocked delivery obliges them to do', 
   // mutation-table discipline this branch enforces everywhere else. The
   // constraint binds the prose; the MECHANISM is the shipped test, and this
   // file runs whole.
+});
+
+// ── The trim: the coordinator DELEGATES the standing protocol ──────────────
+//
+// Before this task, a brief was told to re-type the worker's protocol clause by
+// clause; the protocol now ships as the `ccrc-worker` skill and dispatch names
+// it in the prefix of every brief mail (`WORKER_KICKOFF_PREFIX`). The prose that
+// says so is a MECHANISM only while something reds when it is reverted, and the
+// obvious revert — restoring the old "The brief must say" block — deletes
+// exactly the sentences pinned below.
+//
+// WHITESPACE-COLLAPSED, the `readme-holds.test.ts` idiom: both files wrap these
+// sentences mid-clause (and SKILL.md indents its step-2 continuation lines by
+// three spaces), so a literal `toContain` would pin the wrap point rather than
+// the sentence and would red on a re-flow that changed nothing.
+const flat = (s: string): string => s.replace(/\s+/g, ' ');
+
+describe('the coordinator delegates the standing protocol to the worker skill', () => {
+  /** The worker skill's own frontmatter `name:`, harvested — never typed here.
+   *  `worker-skill.test.ts` binds that name to `WORKER_KICKOFF_PREFIX`; this
+   *  binds the COORDINATOR's side of the same handshake to it, so a rename
+   *  cannot leave the coordinator's docs pointing a brief at a ghost skill. */
+  const WORKER_SKILL_NAME = ((): string => {
+    const wsk = readFileSync(path.join(root, 'ccd/worker-skill/SKILL.md'), 'utf8');
+    const m = /^name:\s*(\S+)\s*$/m.exec(wsk.slice(4, wsk.indexOf('\n---', 4)));
+    if (!m) throw new Error('ccd/worker-skill/SKILL.md declares no `name:` — this pin is looking ' +
+      'at the wrong file, or the skill lost the one field it is invoked by');
+    return m[1]!;
+  })();
+
+  it('tells the coordinator the protocol rides the skill, not a re-typed paragraph', () => {
+    // SKILL.md's step 2 and wave-lifecycle.md's brief block, each in its own
+    // words — the two places a coordinator actually looks before writing a
+    // brief. Restoring either file's pre-trim text reds this.
+    expect(flat(skill)).toContain(
+      'The standing protocol is not yours to re-type: dispatch prefixes every brief with the ' +
+      `sentence that sends the worker to the \`${WORKER_SKILL_NAME}\` skill, and that skill IS the protocol`);
+    expect(flat(refs('wave-lifecycle.md'))).toContain(
+      'The standing worker protocol is a SKILL, not a paragraph you re-type every wave.');
+    // And the brief's REPLACEMENT job is stated, not merely the deletion: a
+    // coordinator told what to stop writing and not what to write instead ships
+    // an empty brief.
+    expect(flat(refs('wave-lifecycle.md'))).toContain('A brief carries what only THIS wave knows:');
+    expect(flat(refs('wave-lifecycle.md'))).toMatch(
+      /A brief carries what only THIS wave knows:[\s\S]{0,320}deviations already ledgered/);
+  });
+
+  it('names the worker skill by the name dispatch actually invokes', () => {
+    // The delegation is only real if both halves agree on the string. The
+    // prefix is IMPORTED (never harvested as text), so this is a rename
+    // detector on the coordinator corpus, not a spelling test.
+    expect(WORKER_KICKOFF_PREFIX).toContain(`the ${WORKER_SKILL_NAME} skill`);
+    expect(routeSkillText, `the coordinator corpus never names the \`${WORKER_SKILL_NAME}\` skill it ` +
+      'now delegates the whole standing protocol to').toContain(WORKER_SKILL_NAME);
+  });
+
+  it('KEEPS the branch-discipline sentence in every brief — belt and braces, not deletion', () => {
+    // The one sentence the trim deliberately does NOT delegate: a skill reaches
+    // a config dir only once its installer has run there, and a worker on a
+    // home that has not had it has the brief and nothing else. F5 is what this
+    // costs when it is missing, and `stale-tip` is the shape it arrives in.
+    const wl = flat(refs('wave-lifecycle.md'));
+    // STRAIGHT apostrophes throughout, and both reference files are measured to
+    // carry no curly ones (`grep -c ’ wave-lifecycle.md` → 0): a curly
+    // apostrophe pasted into either file is a different byte and would red
+    // these pins without looking like an edit — D-104's constraint, met here by
+    // the prose rather than by escaping.
+    expect(wl).toContain(
+      "commit on this workspace's own branch; do not create or switch to a separate feature branch.");
+    expect(wl).toContain('One sentence from the protocol goes in every brief anyway');
+    expect(wl).toContain('stale-tip');
+    expect(flat(skill)).toContain(
+      "One sentence from that protocol still goes in every brief anyway: commit on this " +
+      "workspace's own branch, never a separate feature branch");
+    // Clause 5 is untouched and still pinned verbatim above; the reconciliation
+    // that keeps this sentence OUT of "the content is this session's judgement"
+    // has to survive the trim too, or the one non-negotiable sentence becomes
+    // optional by omission.
+    expect(wl).toContain(`clause 5's "the content is this session's judgement" does not cover it`);
+  });
+});
+
+describe('the coordinator docs state the oversize ceiling the brief writer actually has', () => {
+  // T3 review ⚠2. Since dispatch composes `WORKER_KICKOFF_PREFIX + brief` and
+  // caps the COMPOSED body, a brief in (cap - prefix, cap] is refused without
+  // itself exceeding the cap — and both of the coordinator's own sentences
+  // still said "the wave brief itself". No suite went red on that drift: the
+  // refusal-code scan above pins only that each promised code is EXPLAINED
+  // somewhere, never what the explanation says.
+  const wl = (): string => flat(refs('wave-lifecycle.md'));
+
+  it('derives the stated ceiling from the two constants, not from a typed-in number', () => {
+    const m = /the effective brief ceiling is \*\*(\d+)\*\* bytes today \(`MAIL_BODY_MAX_BYTES` (\d+) − the prefix's (\d+)\)/
+      .exec(wl());
+    expect(m, 'wave-lifecycle.md §2 states no effective brief ceiling in the pinned form').not.toBeNull();
+    const [ceiling, cap, prefix] = [Number(m![1]), Number(m![2]), Number(m![3])];
+    // Each number bound to its own source of truth, so raising the cap or
+    // editing the kickoff sentence reds this instead of silently making the
+    // documented ceiling a lie a coordinator trims against.
+    expect(cap, 'the quoted cap is not MAIL_BODY_MAX_BYTES').toBe(MAIL_BODY_MAX_BYTES);
+    expect(prefix, 'the quoted prefix size is not WORKER_KICKOFF_PREFIX\'s')
+      .toBe(Buffer.byteLength(WORKER_KICKOFF_PREFIX, 'utf8'));
+    expect(ceiling, 'the stated ceiling is not cap minus prefix').toBe(cap - prefix);
+  });
+
+  it('no longer says the BRIEF ITSELF is what exceeds the cap', () => {
+    // The two drifted sentences, by their own words — the mutation this whole
+    // describe exists for is someone restoring either of them.
+    expect(refs('wave-lifecycle.md')).not.toMatch(/the wave brief itself exceeds/);
+    expect(skill).not.toMatch(/when the wave brief itself is too long/);
+    // And the corrected claim is actually made, in both places, rather than the
+    // wrong sentence merely having been deleted.
+    expect(wl()).toMatch(/COMPOSED mail/);
+    expect(flat(skill)).toContain('what it measures is the COMPOSED mail, the worker kickoff prefix plus your brief');
+  });
+});
+
+describe('the coordinator/worker handshake: shape in, detail out', () => {
+  // T1 review F-2 and F-3, both of which are defects in THIS corpus rather than
+  // in the worker skill: the worker is told to send four fingerprint fields and
+  // no reference ever showed the body shape, and the worker's own
+  // `pr-unmeasurable` bullet keys on a `reject.detail` the coordinator was
+  // never instructed to forward.
+  const workerSkill = readFileSync(path.join(root, 'ccd/worker-skill/SKILL.md'), 'utf8');
+
+  /** The four fields, from `DoneClaim` itself — a fifth field added there
+   *  forces a key in here (the tests directory is typechecked,
+   *  `typecheck-tests.test.ts`) and then reds the worked example below, which a
+   *  hand-written list of four strings structurally cannot do. */
+  const CLAIM_FIELDS: Record<keyof DoneClaim, true> = {
+    branchTip: true, prNumber: true, prPhase: true, handoffCommit: true,
+  };
+
+  it('shows ONE worked wave-done fingerprint, and it is a valid claim shape', () => {
+    const lifecycle = refs('wave-lifecycle.md');
+    const blocks = [...lifecycle.matchAll(/```json\n([\s\S]*?)```/g)].map((m) => m[1]!)
+      .filter((b) => b.includes('branchTip'));
+    expect(blocks, 'wave-lifecycle.md carries no fenced JSON wave-done fingerprint').toHaveLength(1);
+    const example = JSON.parse(blocks[0]!) as Record<string, unknown>;
+    expect(Object.keys(example).sort()).toEqual(Object.keys(CLAIM_FIELDS).sort());
+    // The shape `verifyDone` demands, minus the sha values themselves — those
+    // are deliberately placeholders, and the prose says so.
+    expect(typeof example.branchTip).toBe('string');
+    expect(typeof example.handoffCommit).toBe('string');
+    expect(typeof example.prNumber === 'number' || example.prNumber === null).toBe(true);
+    expect(isPrPhase(example.prPhase as string),
+      `the worked example's prPhase (${String(example.prPhase)}) is not a real PrPhase — the one ` +
+      'example in the corpus must not teach the vocabulary error it warns about').toBe(true);
+    expect(flat(lifecycle)).toMatch(/PLACEHOLDERS/);
+  });
+
+  it('tells the coordinator to forward reject.detail verbatim — the worker bullet keys on it', () => {
+    // The SYSTEM fix for F-3: the worker skill reads the detail, so the
+    // coordinator has to send it. Both halves asserted together, in one test,
+    // because either alone is a half-protocol — a worker reading a field nobody
+    // sends, or a coordinator sending one nobody reads.
+    expect(flat(refs('wave-lifecycle.md'))).toContain(
+      "Put `reject.detail` in that mail's body, verbatim.");
+    expect(flat(skill)).toContain('mail the worker the rejection code **and its `detail`, verbatim**');
+    expect(workerSkill, 'the worker skill no longer reads the detail this forward exists for')
+      .toMatch(/`rejected: pr-unmeasurable`, with a detail that mentions `prPhase`/);
+  });
 });

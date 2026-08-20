@@ -346,23 +346,30 @@ pause, why `ws-reap` stays human-only, and the honest boundary — this section
 covers only what that one does not: the install lane, the PWA surfaces, the
 disaster-recovery drill, and the Build 4 dogfood runbook.
 
-**The skill ships to every account's config dir — five today, not four.**
-Skills resolve per `CLAUDE_CONFIG_DIR`, and a session's account drifts on
-swap — so `ccd/install-coordinator-skill.sh` installs into *every* config dir
+**Both skills ship to every account's config dir — five today, not four.** The
+coordinator's protocol is one of a pair: its worker counterpart is the
+`ccrc-worker` skill (`ccd/worker-skill/SKILL.md`, ten clauses pinned by
+`server/test/worker-skill.test.ts`), which carries no `references/` of its own
+and points at the coordinator's — so it must land *beside* it, never instead of
+it, and never first. Skills resolve per `CLAUDE_CONFIG_DIR`, and a session's
+account drifts on swap — so `ccd/install-coordinator-skill.sh` and
+`ccd/install-worker-skill.sh` each install into *every* config dir
 the roster names (`~/.claude`, `~/.claude-personal`, `~/.claude-corp`,
 `~/.claude-gpt` and `~/.claude-dev0` on this fleet), the same list
 `install-session-hooks.sh` uses. There is no hooks-able subset — that concept
-existed only while both installers carried a hand-typed `homes=(…)` array;
-both now `source` the generated `~/.ccrc/accounts.sh` and `continue` past any
+existed only while the installers carried a hand-typed `homes=(…)` array; all
+three now `source` the generated `~/.ccrc/accounts.sh` and `continue` past any
 config dir that is absent, which is what makes "every account" the safe answer
-rather than a broader one. Neither list is trusted: `install-session-hooks.test.ts`
-and `install-coordinator-skill.test.ts` each RUN their installer with no
+rather than a broader one. No list is trusted: `install-session-hooks.test.ts`,
+`install-coordinator-skill.test.ts` and `install-worker-skill.test.ts` each RUN
+their installer with no
 `--homes` argv against a fixture home holding a config dir per rostered
 account, and assert every one of them was touched (the older source-text pin in
 `wrapper-roster-fixture.test.ts` went away with the array it was reading).
-Installation happens on every agent deploy, idempotently, backing up anything it
-replaces. That lane is what makes "place the coordinator like any other
-session" safe.
+Installation happens on every agent deploy AND inside `ccrc install`'s own
+`_inst_skills` step, idempotently, backing up anything it
+replaces. That lane is what makes "place the coordinator — or a worker — like
+any other session" safe.
 
 **Three surfaces.** `/runs` is the board — runs grouped by program, with their
 own status words (a run is a lifecycle position, not an attention state, so it
@@ -837,10 +844,15 @@ declares (the seeded default roster declares one `upstream` account, so a
 fresh install writes none), and ends by running `ccrc doctor` — the install's
 own exit code is doctor's. **Green means the box
 is ready**; the PWA answers at `http://127.0.0.1:7788/`. Re-running either
-script converges rather than damaging an existing install. `rsync` is a hard
-by-name dependency of `ccrc install` (it places the tree) with **no doctor
-check for it yet** — absent, the install refuses naming the package rather
-than failing opaquely mid-copy.
+script converges rather than damaging an existing install. `rsync` and `diff`
+are hard by-name dependencies of `ccrc install` — `rsync` places the tree, and
+`diff` is what both skill installers compare a config dir against — with **no
+doctor check for either yet**; absent, each refuses naming the package rather
+than failing opaquely mid-copy, and a refused skill install is fatal to the
+whole verb. `cmp` is the third of the class and the mildest: `_inst_atomic`
+and `_inst_tree_copy` leave their comparison unguarded on purpose, so a box
+without it rewrites identical bytes rather than refusing — the safe direction,
+and the reason it is not a refusal like the other two.
 
 This is the **single-box** shape only: local fleet mode, localhost, no TLS, no
 agent (`ccrc-agent.service` is deliberately not installed — local mode never
@@ -1118,7 +1130,17 @@ replacement for them, and a lost `coord.db` reconstructs from them.
 **The skill's contract.** A coordinator is an ordinary fleet session running
 the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its nine
 clauses are pinned verbatim by `server/test/coordinator-skill.test.ts` — a
-softened clause is a red suite, not a silent drift. One of those clauses is
+softened clause is a red suite, not a silent drift. **A worker is the same
+shape:** the `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`), ten clauses,
+pinned the same way by `server/test/worker-skill.test.ts`, and it is what a
+dispatched session is told to run by the kickoff sentence dispatch composes
+onto every brief mail. That is why a wave brief is short: the standing
+protocol loads mechanically, so the brief carries the wave's own specifics —
+plan path, task range, interfaces earlier waves settled, deviations already
+ledgered. The one protocol sentence a brief still repeats is the
+branch-discipline line ("commit on this workspace's own branch"), said twice
+on purpose, because a skill reaches a config dir only once its installer has
+run against that home. One of the coordinator's clauses is
 that **`ws-reap` stays human-only, by convention plus a speed bump, named as
 exactly that**: the skill's contract excludes the verb outright (the same
 test asserts it is named only inside the clause that forbids it), the
@@ -1151,7 +1173,11 @@ buy.
    "genuinely fresh context" stays mechanical rather than hoped for. Either
    path ends in `ccd ws-hold` and the transition to `dispatched`; only once
    that commits does the wave brief go out as mail, into a context proven
-   empty (wave 1) or proven `/clear`-verified (wave N≥2).
+   empty (wave 1) or proven `/clear`-verified (wave N≥2). The mail body is
+   `WORKER_KICKOFF_PREFIX + brief` — the sentence naming the `ccrc-worker`
+   skill, then the coordinator's prose — and the byte cap is measured on that
+   composed body, so the ceiling a brief actually has is
+   `MAIL_BODY_MAX_BYTES` less the prefix's own length.
 3. The coordinator watches mail and `pr-state` the way an operator would —
    `GET /api/runs` and the `runs` frame on `/ws/fleet` carry state and
    work-item tallies, nothing new to poll.

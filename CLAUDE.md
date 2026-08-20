@@ -117,6 +117,12 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   (`ccd/coordinator-skill/SKILL.md`); its nine clauses are pinned VERBATIM by
   `server/test/coordinator-skill.test.ts` — a softened clause is a red suite. Pause kill-switches are FILES
   (`$REG/coordinator-paused`, `$REG/mail-disabled`), removable only by a human at a terminal.
+- **The worker has a skill too** (`ccd/worker-skill/SKILL.md`, `ccrc-worker`, ten clauses pinned by
+  `server/test/worker-skill.test.ts`; it ships no `references/` and points at the coordinator's).
+  `WORKER_KICKOFF_PREFIX` (`server/src/coord/dispatch.ts`) prefixes EVERY brief mail with the sentence that
+  invokes it, so a wave brief carries WAVE SPECIFICS — plan path, task range, interfaces, deviations — never the
+  standing protocol. The one exception is deliberate: the branch-discipline sentence is said in both, because a
+  skill reaches a home only once its installer has run there.
 
 ## Open on `main` — do NOT assume these are fixed
 `MailDeliveryState` terminality is incomplete (some writers lack the guard); `FleetIO.readFile`'s

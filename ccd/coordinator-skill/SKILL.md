@@ -77,6 +77,15 @@ per step, and the dispatch route is the chokepoint (clause 1's "never runs
 rule stated against the mail route too, since a `/clear` mailed as a message
 would be no less a second writer).
 
+**Clause 5, read against a brief that no longer carries the protocol.** "The
+template is the shape" is the LEDGER template (`references/ledger-template.md`),
+never a list of protocol sentences to reproduce in each brief — the standing
+worker protocol ships as the `ccrc-worker` skill, dispatch names it in the
+prefix of every brief mail, and a brief that re-types it is longer rather than
+safer. What clause 5 leaves to your judgement is this WAVE's content; the one
+protocol sentence it does NOT leave to judgement is the branch-discipline line
+(step 2 below, and `references/wave-lifecycle.md` §2).
+
 ## How to call the API
 
 **Never use `curl -f`/`curl -fsS` against these routes.** `-f` makes curl
@@ -128,11 +137,14 @@ covers the ones you can actually cause by acking or sending mail wrong
 (`bad-kind`, `stale-uuid`); the rest are there for completeness.
 
 **`oversize` is not mail-exclusive.** `POST /api/runs/:id/dispatch` sends the
-identical `error:'oversize'` (413) when the wave brief itself is too long —
-a RUN-route answer, checked before anything on the run is touched. Its own
-meaning and recovery rule (trim the brief and resend; the run is untouched)
-are in the dispatch table, `references/wave-lifecycle.md` §2 — not repeated
-here, so there is exactly one place this code's dispatch-side meaning lives.
+identical `error:'oversize'` (413) when the mail it would queue is too long —
+and what it measures is the COMPOSED mail, the worker kickoff prefix plus your
+brief, so a brief can be refused without itself exceeding the cap. A RUN-route
+answer, checked before anything on the run is touched. Its own meaning, the
+effective ceiling on a brief and the recovery rule (trim the brief and resend;
+the run is untouched) are in the dispatch table, `references/wave-lifecycle.md`
+§2 — not repeated here, so there is exactly one place this code's dispatch-side
+meaning lives.
 
 **Not every non-2xx body carries a code at all.** `error:'bad-request'` (400,
 a malformed request body — including the fingerprint SHAPE `POST
@@ -179,10 +191,18 @@ not after.
    declared no ledger, and the board renders `—` rather than `0/0`. The ledger
    is **fixed at dispatch** — no route adds an item to a dispatched run, so
    work discovered mid-wave is a note in the wave-done mail and an item in the
-   NEXT wave's brief. **The brief must tell the worker to commit on its
-   WORKSPACE branch, never a separate feature branch** — the done-fingerprint
-   (step 4) re-measures the workspace branch, and a feature branch wedges every
-   close with `stale-tip` forever (F5, `references/wave-lifecycle.md` §2). This
+   NEXT wave's brief. **The standing protocol is not yours to re-type: dispatch
+   prefixes every brief with the sentence that sends the worker to the
+   `ccrc-worker` skill, and that skill IS the protocol** — so your brief carries
+   what only this wave knows (the plan file's path, the task range, the
+   interfaces earlier waves settled, the deviations already ledgered), not the
+   identity, ack, question and fingerprint rules the worker already has.
+   **One sentence from that protocol still goes in every brief anyway: commit on
+   this workspace's own branch, never a separate feature branch** — the
+   done-fingerprint (step 4) re-measures the workspace branch, a feature branch
+   wedges every close with `stale-tip` forever (F5), and a skill reaches a home
+   only once its installer has run there, so say it again even though the skill
+   says it (`references/wave-lifecycle.md` §2). This
    is also where wave 1's hold actually lands, reason `program:<slug>
    wave:1/M`. For wave ≥ 2 the route itself resumes the workspace and injects
    `/clear` before queuing the brief — this session never sends `/clear`
@@ -198,7 +218,10 @@ not after.
    or the delivery lane replays the nudge.
 4. **Re-measure a claimed `wave-done`**, then `POST /api/runs/:id/advance` with
    the fingerprint. A typed rejection means the claim was stale: mail the worker
-   the rejection code and leave the run where it is. Once — and only once —
+   the rejection code **and its `detail`, verbatim** — the detail is the only
+   thing that separates `pr-unmeasurable`'s two causes
+   (`references/wave-lifecycle.md` §4) — and leave the run where it is.
+   Once — and only once —
    that advance answers `ok`, settle the wave's work items:
    `POST /api/runs/:id/items` with `{"items":[{"id":<n>,"state":"done"}]}`.
    That ordering IS the authorisation: the server's own re-measurement is what
