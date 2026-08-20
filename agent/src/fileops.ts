@@ -18,10 +18,29 @@ function readRange(file: string, start: number, end: number): Promise<Buffer> {
  * ops — intentionally mirrors `server/src/io.ts`'s `localIO` byte-for-byte
  * so a remote fleet behaves identically to a local one. Callers (server.ts)
  * are responsible for running paths through whitelist.checkPath first.
+ *
+ * `readWhole` is temporarily ahead of its mirror: it now returns
+ * `{data, absent}` so the server can tell ENOENT apart from EACCES/EISDIR/
+ * etc. over the wire, while `localIO.readFile` still answers plain
+ * `string | null`. The raw fs try/catch behavior (which errno maps to which
+ * outcome) stays in lockstep; only this one op's return shape diverges,
+ * and only until `localIO.readFile` gains the same distinction next.
  */
 
-export async function readWhole(p: string): Promise<string | null> {
-  try { return await readFile(p, 'utf8'); } catch { return null; }
+/** `readWhole`'s result: `data` keeps the pre-existing null-for-any-failure
+ *  meaning; `absent` is set true only when the failure was ENOENT (the file
+ *  genuinely does not exist), so a caller that cares can distinguish that
+ *  from EACCES/EISDIR/ELOOP/EIO/anything else — all of which mean the file
+ *  IS there and this box just can't read it. Never-throw, same contract as
+ *  every other op in this file. */
+export type ReadResult = { data: string | null; absent: boolean };
+
+export async function readWhole(p: string): Promise<ReadResult> {
+  try {
+    return { data: await readFile(p, 'utf8'), absent: false };
+  } catch (e) {
+    return { data: null, absent: (e as NodeJS.ErrnoException).code === 'ENOENT' };
+  }
 }
 
 /** Same cap as the server's post-downscale upload ceiling (`MAX_UPLOAD_BYTES`
