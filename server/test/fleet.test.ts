@@ -4,13 +4,14 @@ import path from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { assembleFleet, hookAskSummary, idHomeWrapper, liveStatus } from '../src/fleet.js';
 import { Tmux, type Runner } from '../src/exec.js';
-import { localIO, type FleetIO } from '../src/io.js';
+import { localIO } from '../src/io.js';
 import type { Statusline } from '../src/pane/statusline.js';
 import type { HookState } from '../src/hookstate.js';
 import type { PrState } from '../../shared/api.js';
 import { parseRoster } from '../../shared/roster.js';
 import { mkTmp } from './tmpHelpers.js';
 import { DEFAULT_TEST_ROSTER, seedRoster } from './helpers.js';
+import { unreadableField } from './ioDoubles.js';
 
 const seedSession = (home: string, id: string, wrapper: string, extra: Record<string, string> = {}) => {
   const reg = path.join(home, '.cc-sessions');
@@ -135,10 +136,7 @@ describe('liveStatus', () => {
     // `workdir` (irrelevant to liveStatus: it never reads it) is the ONE
     // unreadable field — `wrapper` (which liveStatus DOES need, to resolve
     // cfgDir) reads clean.
-    const unreadableWorkdir: FleetIO = {
-      ...localIO,
-      readFile: async (p) => (p.endsWith('claude-quiet-mesa.workdir') ? null : localIO.readFile(p)),
-    };
+    const unreadableWorkdir = unreadableField('claude-quiet-mesa', 'workdir');
     const status = await liveStatus(unreadableWorkdir, loadConfig({ CCRC_HOME: home }), new Tmux(run), 'claude-quiet-mesa');
     expect(status).toBe('busy');
   });
@@ -160,10 +158,7 @@ describe('liveStatus', () => {
       if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
       return { code: 0, stdout: '', stderr: '' };
     };
-    const unreadableWrapper: FleetIO = {
-      ...localIO,
-      readFile: async (p) => (p.endsWith('claude-quiet-mesa.wrapper') ? null : localIO.readFile(p)),
-    };
+    const unreadableWrapper = unreadableField('claude-quiet-mesa', 'wrapper');
     const status = await liveStatus(unreadableWrapper, loadConfig({ CCRC_HOME: home }), new Tmux(run), 'claude-quiet-mesa');
     expect(status).toBe('idle');
   });

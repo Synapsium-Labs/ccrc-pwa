@@ -8,9 +8,9 @@ import { FleetWatcher } from '../src/watch.js';
 import { buildServer } from '../src/server.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { unreadableField } from './ioDoubles.js';
 import type { PrState } from '../../shared/api.js';
 import type { PushPayload } from '../src/push.js';
-import { localIO, type FleetIO } from '../src/io.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 
@@ -780,10 +780,7 @@ describe('archiveSafety — an unconfigured wrapper is UNKNOWN, never a silent o
      'previously-dropped row\'s own answer exactly', async () => {
     const home = seed(['demo-quiet-basin']);
     liveIdle(home);
-    const unreadableWorkdir: FleetIO = {
-      ...localIO,
-      readFile: async (p) => (p.endsWith('demo-quiet-basin.workdir') ? null : localIO.readFile(p)),
-    };
+    const unreadableWorkdir = unreadableField('demo-quiet-basin', 'workdir');
     const calls: string[][] = [];
     const w = new FleetWatcher({ ...testDeps(home, runnerFor('', calls)), io: unreadableWorkdir }, new Bus(), 10_000);
     await expect(w.archiveSafety('demo-quiet-basin')).resolves.toEqual({ verdict: 'unknown', held: null });

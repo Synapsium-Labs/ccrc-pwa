@@ -13,6 +13,7 @@ import { Bus } from '../src/bus.js';
 import type { SessionStreamMsg } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 import { guardRunner, seedRoster, testDeps } from './helpers.js';
+import { unreadableField } from './ioDoubles.js';
 import { askKey } from '../src/askkey.js';
 import { KeyedQueue } from '../src/inject/queue.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -135,10 +136,7 @@ describe('write routes', () => {
     // `holdUnreadableIO`) — here on `workdir`, one of readRegistry's three
     // completeness fields, chosen because ITS failure is exactly what used to
     // drop the whole row.
-    const workdirUnreadableIO: FleetIO = {
-      ...localIO,
-      readFile: async (p) => (p.endsWith(`${ID}.workdir`) ? null : localIO.readFile(p)),
-    };
+    const workdirUnreadableIO = unreadableField(ID, 'workdir');
     const cfg = loadConfig({ CCRC_HOME: home });
     const app = await buildServer(
       { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: workdirUnreadableIO, queue: new KeyedQueue() },
@@ -155,10 +153,7 @@ describe('write routes', () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
     seedSession(home, ID, 'claude2');
-    const workdirUnreadableIO: FleetIO = {
-      ...localIO,
-      readFile: async (p) => (p.endsWith(`${ID}.workdir`) ? null : localIO.readFile(p)),
-    };
+    const workdirUnreadableIO = unreadableField(ID, 'workdir');
     const cfg = loadConfig({ CCRC_HOME: home });
     const run: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
     const app = await buildServer(
@@ -645,11 +640,6 @@ describe('notify ingestion', () => {
 // answered 404 unknown-session (a LIE: the row is right there, just
 // unmeasured) rather than 503.
 describe('POST /api/sessions/:id/stop', () => {
-  const unreadableField = (id: string, field: string): FleetIO => ({
-    ...localIO,
-    readFile: async (p) => (p.endsWith(`${id}.${field}`) ? null : localIO.readFile(p)),
-  });
-
   it('refuses 503 registry-unmeasurable, NOT 404 unknown-session, when the row is listed but its ' +
      'identity could not be measured', async () => {
     const home = mkTmp('ccrc-');

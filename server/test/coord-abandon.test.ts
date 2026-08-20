@@ -292,7 +292,7 @@ describe('POST /api/runs/:id/abandon', () => {
     let recording = false;
     const io: FleetIO = {
       ...localIO,
-      readFile: async (p) => { if (recording) reads.push(p); return localIO.readFile(p); },
+      readFileMeasured: async (p) => { if (recording) reads.push(p); return localIO.readFileMeasured(p); },
       readdir: async (p) => { if (recording) reads.push(p); return localIO.readdir(p); },
     };
     const w = await openApp(home, run, { io }); app = w.app;
@@ -316,9 +316,9 @@ describe('POST /api/runs/:id/abandon', () => {
     const reads: string[] = [];
     const io: FleetIO = {
       ...localIO,
-      readFile: async (p) => {
-        if (p.endsWith('.prhistory')) { reads.push(p); return null; }
-        return localIO.readFile(p);
+      readFileMeasured: async (p) => {
+        if (p.endsWith('.prhistory')) { reads.push(p); return { ok: false, reason: 'unreadable' }; }
+        return localIO.readFileMeasured(p);
       },
     };
     const home2 = home;

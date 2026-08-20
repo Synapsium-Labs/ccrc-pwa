@@ -14,6 +14,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { unreadableField as withUnreadableField } from './ioDoubles.js';
 
 const TOKEN = 'f'.repeat(64);
 const UUID = 'a'.repeat(36);
@@ -62,13 +63,6 @@ const GOOD = { fromId: 'demo-quiet-mesa', fromUuid: UUID, toId: 'coordinator',
  *  genuinely empty. */
 const unlistableIO: FleetIO = { ...localIO, readdir: async () => null };
 
-/** A registry whose directory listing is fine but one specific session's
- *  field read is not — `readRegistry` drops that row entirely
- *  (`registry.ts:123`) even though its `.uuid` file is still listed. */
-const withUnreadableField = (id: string, field: string): FleetIO => ({
-  ...localIO,
-  readFile: async (p) => (p.endsWith(`${id}.${field}`) ? null : localIO.readFile(p)),
-});
 
 describe('POST /api/mail — the rejection table', () => {
   let app: FastifyInstance | undefined;

@@ -20,6 +20,7 @@ import { CoordStore } from '../src/coord/store.js';
 import type { AskQuestion, Dialog, SessionStreamMsg } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
+import { degradedReadIO, unreadableField } from './ioDoubles.js';
 
 const ID = 'claude2-MekWarLive';
 const UUID_A = 'a'.repeat(36);
@@ -813,16 +814,6 @@ describe('session WS', () => {
  *  `mail-routes.test.ts`'s `unlistableIO`. */
 const unlistableIO: FleetIO = { ...localIO, readdir: async () => null };
 
-/** A registry whose directory listing is fine but one specific session's
- *  field read is not — the LISTED-but-unreadable shape `measuredIdentity`
- *  degrades rather than drops. Same helper shape as `mail-routes.test.ts`'s
- *  `withUnreadableField`, reimplemented here rather than imported: these are
- *  two independent test files and the shape is three lines. */
-const withUnreadableField = (id: string, field: string): FleetIO => ({
-  ...localIO,
-  readFile: async (p) => (p.endsWith(`${id}.${field}`) ? null : localIO.readFile(p)),
-});
-
 const mkLadderDeps = (home: string, io: FleetIO): Deps => {
   const run: Runner = async (_cmd, args) => {
     if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
@@ -1048,7 +1039,7 @@ describe('registry ladder: resolve() three-way, degrade-and-heal vs refuse (Task
     const home = mkTmp('ccrc-ladder-');
     seedRoster(home);
     seed(home);
-    const deps = mkLadderDeps(home, withUnreadableField(ID, 'uuid'));
+    const deps = mkLadderDeps(home, unreadableField(ID, 'uuid'));
     const frames: { type: string; message?: string }[] = [];
     const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m as { type: string; message?: string }));
     try {
@@ -1104,7 +1095,7 @@ describe('registry ladder: resolve() three-way, degrade-and-heal vs refuse (Task
     seedRoster(home);
     seed(home);
     let broken = true;
-    const io: FleetIO = { ...localIO, readFile: async (p) => (broken && p.endsWith(`${ID}.uuid`) ? null : localIO.readFile(p)) };
+    const io = degradedReadIO((p) => broken && p.endsWith(`${ID}.uuid`));
     const deps = mkLadderDeps(home, io);
     const frames: { type: string; message?: string; uuid?: string }[] = [];
     const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m as { type: string; message?: string; uuid?: string }), { uuid: UUID_A, offset: 0 });
@@ -1133,7 +1124,7 @@ describe('registry ladder: resolve() three-way, degrade-and-heal vs refuse (Task
     seedRoster(home);
     seed(home);
     let broken = false;
-    const io: FleetIO = { ...localIO, readFile: async (p) => (broken && p.endsWith(`${ID}.uuid`) ? null : localIO.readFile(p)) };
+    const io = degradedReadIO((p) => broken && p.endsWith(`${ID}.uuid`));
     const deps = mkLadderDeps(home, io);
     const frames: { type: string }[] = [];
     const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m as { type: string }));
@@ -1166,7 +1157,7 @@ describe('registry ladder: a mid-stream degrade never interrupts the open tail (
     seed(home);
     const fileA = path.join(home, '.claude-personal', 'projects', MUNGED, `${UUID_A}.jsonl`);
     let degrade = false;
-    const io: FleetIO = { ...localIO, readFile: async (p) => (degrade && p.endsWith(`${ID}.uuid`) ? null : localIO.readFile(p)) };
+    const io = degradedReadIO((p) => degrade && p.endsWith(`${ID}.uuid`));
     const run: Runner = async (_cmd, args) => {
       if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
       if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };

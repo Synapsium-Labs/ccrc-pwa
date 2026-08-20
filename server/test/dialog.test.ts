@@ -14,6 +14,7 @@ import { tasksDir } from '../src/tasks/read.js';
 import type { Dialog, FleetSession, SessionStreamMsg } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
+import { degradedReadIO } from './ioDoubles.js';
 
 const panesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'panes');
 const fixture = (name: string) => readFileSync(path.join(panesDir, name), 'utf8');
@@ -321,15 +322,6 @@ describe('FleetWatcher hookstate wiring', () => {
 // method's own comment in watch.ts for why a naive full-rebuild blanks a
 // value that may still be true the instant the identity triple degrades.
 
-/** A registry whose directory listing is fine but one specific session's
- *  field read is not — the LISTED-but-unreadable shape `measuredIdentity`
- *  degrades rather than drops. Same helper shape as `mail-routes.test.ts`'s
- *  `withUnreadableField` / `sessionws.test.ts`'s own copy. */
-const withUnreadableField = (id: string, field: string): FleetIO => ({
-  ...localIO,
-  readFile: async (p) => (p.endsWith(`${id}.${field}`) ? null : localIO.readFile(p)),
-});
-
 describe('FleetWatcher retain-don\'t-erase (Task 2, the heal side)', () => {
   const HOOK_UUID = '1'.repeat(36); // seedSession's own fixed uuid
 
@@ -345,7 +337,7 @@ describe('FleetWatcher retain-don\'t-erase (Task 2, the heal side)', () => {
       updatedAt: Date.now(), ask: null, subagents: [],
     }));
     let degrade = false;
-    const io: FleetIO = { ...localIO, readFile: async (p) => (degrade && p.endsWith(`${id}.uuid`) ? null : localIO.readFile(p)) };
+    const io = degradedReadIO((p) => degrade && p.endsWith(`${id}.uuid`));
     const run: Runner = async (_cmd, args) => {
       if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
       if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
@@ -391,7 +383,7 @@ describe('FleetWatcher retain-don\'t-erase (Task 2, the heal side)', () => {
     }));
 
     let degrade = false;
-    const io: FleetIO = { ...localIO, readFile: async (p) => (degrade && p.endsWith(`${id}.wrapper`) ? null : localIO.readFile(p)) };
+    const io = degradedReadIO((p) => degrade && p.endsWith(`${id}.wrapper`));
     const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
     const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
     const watcher = new FleetWatcher(deps, new Bus());

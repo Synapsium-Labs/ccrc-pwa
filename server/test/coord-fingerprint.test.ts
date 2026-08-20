@@ -7,12 +7,13 @@
 import { describe, it, expect } from 'vitest';
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { localIO, type FleetIO } from '../src/io.js';
+import { localIO } from '../src/io.js';
 import { readBranchTip } from '../src/coord/gitref.js';
 import { verifyDone, type DoneClaim } from '../src/coord/fingerprint.js';
 import type { Runner } from '../src/exec.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { degradedReadIO } from './ioDoubles.js';
 
 const TIP = 'a'.repeat(40);
 const OTHER = 'b'.repeat(40);
@@ -530,10 +531,7 @@ describe('verifyDone — the branch to re-measure comes from the live registry (
     const home = mkTmp('ccrc-fp-');
     seedRegistry(home, 'ws/fix-the-parser');
     const root = project(TIP, null);
-    const io: FleetIO = {
-      ...localIO,
-      readFile: async (p) => (p.endsWith(`${SESSION}.branch`) ? null : localIO.readFile(p)),
-    };
+    const io = degradedReadIO((p) => p.endsWith(`${SESSION}.branch`));
     const deps = { ...fingerprintDeps(runnerFor('open'), root, home), io };
     const res = await verifyDone(deps, RUN, FIXED_CLAIM);
     expect(res).toMatchObject({ ok: false, code: 'branch-unmeasurable' });
@@ -709,9 +707,7 @@ describe('verifyDone — the run.branch fallback is reached by more than "sessio
     seedField(home, SESSION, 'workdir', '/w/demo/quiet-mesa');
     seedField(home, SESSION, 'uuid', 'a'.repeat(36));
     const root = project(TIP, null); // ref lives at RUN.branch — the fallback a gate-less run would settle on
-    const unreadableWrapper: FleetIO = {
-      ...localIO, readFile: async (p) => (p.endsWith(`${SESSION}.wrapper`) ? null : localIO.readFile(p)),
-    };
+    const unreadableWrapper = degradedReadIO((p) => p.endsWith(`${SESSION}.wrapper`));
     const deps = { ...fingerprintDeps(runnerFor('open'), root, home), io: unreadableWrapper };
     const res = await verifyDone(deps, RUN, FIXED_CLAIM);
     expect(res.ok).toBe(false);

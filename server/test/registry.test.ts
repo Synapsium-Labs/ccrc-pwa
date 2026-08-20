@@ -10,22 +10,11 @@ import {
 } from '../src/registry.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
+import { unreadableField } from './ioDoubles.js';
 
 const seed = (dir: string, id: string, fields: Record<string, string>) => {
   for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(dir, `${id}.${k}`), v);
 };
-
-/** `localIO` with every read of `<id>.<field>` failing — the file is still
- *  LISTED (a real, present file on disk), only its bytes never come back —
- *  the shape `remote/io.ts` produces on one dropped agent-WS round trip among
- *  the ~22 a session's read fires in parallel. Module scope (DISPATCH-CONTEXT
- *  §6 / task-9 brief Step 1): shared by the identity ladder, the
- *  observability suite and the D3 stamp suite below — two nested copies of
- *  this were the drift a hoist exists to prevent. */
-const unreadableField = (id: string, field: string): FleetIO => ({
-  ...localIO,
-  readFile: async (p) => (p.endsWith(`${id}.${field}`) ? null : localIO.readFile(p)),
-});
 
 describe('readRegistry', () => {
   let home: string;
@@ -341,7 +330,7 @@ describe('readSessionRecord', () => {
     let fieldReads = 0;
     const countingIO: FleetIO = {
       ...localIO,
-      readFile: async (p) => { fieldReads++; return localIO.readFile(p); },
+      readFileMeasured: async (p) => { fieldReads++; return localIO.readFileMeasured(p); },
     };
     seed(reg, 'claude2-MekWarLive', {
       wrapper: 'claude2', project: 'MekWarLive', workdir: '/data/projects/MekWarLive',
@@ -385,7 +374,7 @@ describe('readSessionRecord', () => {
     const countingIO: FleetIO = {
       ...localIO,
       readdir: async (p) => { readdirCalls++; return localIO.readdir(p); },
-      readFile: async (p) => { fieldReads.push(p); return localIO.readFile(p); },
+      readFileMeasured: async (p) => { fieldReads.push(p); return localIO.readFileMeasured(p); },
     };
     const cfg = loadConfig({ CCRC_HOME: home });
 
@@ -408,7 +397,7 @@ describe('readSessionRecord', () => {
     writeFileSync(path.join(reg, 'demo-quiet-basin.hold'), 'program:agent-evals wave:1/4');
     const holdUnreadableIO: FleetIO = {
       ...localIO,
-      readFile: async (p) => (p.endsWith('.hold') ? null : localIO.readFile(p)),
+      readFileMeasured: async (p) => (p.endsWith('.hold') ? { ok: false, reason: 'unreadable' } : localIO.readFileMeasured(p)),
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const rec = await readSessionRecord(holdUnreadableIO, cfg, 'demo-quiet-basin');
@@ -505,7 +494,7 @@ describe('the identity ladder (unmeasured evidence)', () => {
         if (listings === 1) return names;
         return names.filter((n) => !n.startsWith('demo-quiet-basin.'));
       },
-      readFile: async (p) => (p.endsWith('.wrapper') ? null : localIO.readFile(p)),
+      readFileMeasured: async (p) => (p.endsWith('.wrapper') ? { ok: false, reason: 'unreadable' } : localIO.readFileMeasured(p)),
     };
     const out = await readRegistry(reapedMidRead, cfg);
     expect(out).toEqual([]);
@@ -524,7 +513,7 @@ describe('the identity ladder (unmeasured evidence)', () => {
         if (listings === 1) return localIO.readdir(p);
         return null;
       },
-      readFile: async (p) => (p.endsWith('.wrapper') ? null : localIO.readFile(p)),
+      readFileMeasured: async (p) => (p.endsWith('.wrapper') ? { ok: false, reason: 'unreadable' } : localIO.readFileMeasured(p)),
     };
     const out = await readRegistry(secondListingFails, cfg);
     expect(out).toHaveLength(1);
@@ -546,7 +535,7 @@ describe('the identity ladder (unmeasured evidence)', () => {
         if (listings === 1) return names;
         return names.filter((n) => !n.startsWith('demo-quiet-basin.'));
       },
-      readFile: async (p) => (p.endsWith('.wrapper') ? null : localIO.readFile(p)),
+      readFileMeasured: async (p) => (p.endsWith('.wrapper') ? { ok: false, reason: 'unreadable' } : localIO.readFileMeasured(p)),
     };
     expect(await readSessionRecord(reapedMidRead, cfg, 'demo-quiet-basin')).toEqual({ found: false, reason: 'absent' });
   });
@@ -628,7 +617,7 @@ describe('readRegistryMeasured / RegistryRead', () => {
         // at all (an unmeasured identity triple + a twice-observed absence).
         return listings === 1 ? names : names.filter((n) => n !== 'coordinator-paused' && !n.endsWith('.uuid'));
       },
-      readFile: async (p) => (p.endsWith('.wrapper') ? null : localIO.readFile(p)),
+      readFileMeasured: async (p) => (p.endsWith('.wrapper') ? { ok: false, reason: 'unreadable' } : localIO.readFileMeasured(p)),
     };
     const read = await readRegistryMeasured(markerVanishesOnRelist, cfg);
     expect(listings).toBe(2);          // the re-listing really did run

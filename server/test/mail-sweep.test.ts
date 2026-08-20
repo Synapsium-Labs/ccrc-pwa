@@ -25,6 +25,7 @@ import { NotifyLog } from '../src/notifylog.js';
 import type { PushPayload } from '../src/push.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { unreadableField } from './ioDoubles.js';
 
 const ID = 'demo-coordinator';
 const UUID = 'a'.repeat(36);
@@ -149,16 +150,6 @@ const alternatingUnlistableIO = (): { io: FleetIO; arm: () => void } => {
   } };
   return { io, arm: () => { armed = true; } };
 };
-
-/** A registry whose directory listing is fine but one specific session's
- *  field read is not — `readRegistry` drops that row entirely
- *  (`registry.ts:123`) even though its `.uuid` file is still listed. Mirrors
- *  `mail-routes.test.ts`'s own fixture of the same name for the ingress side
- *  of this identical distinction (D-37). */
-const withUnreadableField = (id: string, field: string): FleetIO => ({
-  ...localIO,
-  readFile: async (p) => (p.endsWith(`${id}.${field}`) ? null : localIO.readFile(p)),
-});
 
 const queueTestDelivery = (coord: CoordStore, toId: string, envelope: string): { mailId: number; id: number } => {
   const mail = coord.insertMail({ fromId: FROM_ID, fromUuid: FROM_UUID, toId, runId: null,
@@ -1188,7 +1179,7 @@ describe('sweepMail: a dead recipient eventually parks (review finding 30)', () 
     // MAIL_MAX_ATTEMPTS backoffs — about 15 minutes of one dropped agent-WS
     // round trip on a single field.
     const h = harness();
-    const io = withUnreadableField(ID, 'wrapper');
+    const io = unreadableField(ID, 'wrapper');
     const coord = store(h.home);
     const { w } = await primedWatcher(h, coord, { io });
     seedRegistry(h.home, ID);   // .uuid IS listed; `wrapper` never reads back

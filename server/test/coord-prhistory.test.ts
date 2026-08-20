@@ -74,10 +74,10 @@ describe('readPrHistory', () => {
     let reads = 0;
     const io: FleetIO = {
       ...localIO,
-      readFile: async (p) => {
-        if (p !== f) return localIO.readFile(p);
+      readFileMeasured: async (p) => {
+        if (p !== f) return localIO.readFileMeasured(p);
         reads += 1;
-        return reads === 1 ? null : localIO.readFile(p);
+        return reads === 1 ? { ok: false, reason: 'unreadable' } : localIO.readFileMeasured(p);
       },
       readdir: async (p) => {
         // The race, spelled directly: the file did not exist for the read
