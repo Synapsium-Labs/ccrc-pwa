@@ -465,18 +465,6 @@ export function sessionVerdict(req: GateRequest, deps: GateDeps, now: number): G
  * POST" — a sentence contradicted by the paragraph above it, in the same file.
  * That was D-115.
  *
- * `SameSite=Lax` DOES NOT STOP IT HERE, and that is the whole reason this exists
- * rather than being someone else's problem. Lax withholds a cookie on
- * CROSS-SITE requests, and "site" means registrable domain. **`ts.net` is on the
- * Public Suffix List**, so the registrable domain of every node on this tailnet
- * is `tailnet-example.ts.net` — which makes `other-box.tailnet-example.ts.net` and
- * `server-box.tailnet-example.ts.net` SAME-SITE. Lax sends the cookie between them
- * happily. Any page served by any other node on the tailnet — a colleague's dev
- * server, a container someone ran, a compromised device — can therefore reach
- * this box's sockets with the operator's credential attached. The same public
- * suffix that makes `rpId` dangerous to derive makes `SameSite` insufficient to
- * rely on; it is one fact with two consequences.
- *
  * ── THE POLICY, AND WHY `'absent'` ALLOWS ──
  *
  * A BROWSER ALWAYS SENDS `Origin` — required of it on a WebSocket handshake
@@ -576,8 +564,9 @@ export interface InstallGateDeps {
   /** `cfg.cookieSecure` — needed only so an `'expired'` refusal can hand back a
    *  matching expiry line (see {@link installGate}). */
   cookieSecure: boolean;
-  /** `cfg.origin` — the ONE origin a websocket upgrade may come from. See
-   *  {@link WsOriginVerdict} for the attack this closes. */
+  /** `cfg.origin` — the ONE origin a websocket upgrade OR a non-exempt write may
+   *  come from. See {@link OriginVerdict} for the two attacks this closes and
+   *  {@link needsOriginCheck} for the scope. */
   origin: string;
 }
 

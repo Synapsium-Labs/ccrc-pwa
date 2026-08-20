@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { configDirFor, loadConfig } from '../src/config.js';
@@ -256,13 +256,41 @@ describe('loadConfig', () => {
   });
 
   it('a nonsense CCRC_PORT falls back rather than carrying NaN into listen()', () => {
-    for (const bad of ['abc', '0', '-1', '70000', '80.5', 'NaN']) {
-      const cfg = loadConfig({ CCRC_HOME: '/h', CCRC_ACCOUNTS: ROSTER_PATH, CCRC_PORT: bad });
-      expect(cfg.port, bad).toBe(7788);
-      expect(cfg.origin, bad).toBe('http://localhost:7788');
-    }
-    // …and a real one still works, so the guard is not refusing everything.
-    expect(loadConfig({ CCRC_HOME: '/h', CCRC_ACCOUNTS: ROSTER_PATH, CCRC_PORT: '443' }).port).toBe(443);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      for (const bad of ['abc', '0', '-1', '70000', '80.5', 'NaN']) {
+        const cfg = loadConfig({ CCRC_HOME: '/h', CCRC_ACCOUNTS: ROSTER_PATH, CCRC_PORT: bad });
+        expect(cfg.port, bad).toBe(7788);
+        expect(cfg.origin, bad).toBe('http://localhost:7788');
+      }
+      // …and a real one still works, so the guard is not refusing everything.
+      expect(loadConfig({ CCRC_HOME: '/h', CCRC_ACCOUNTS: ROSTER_PATH, CCRC_PORT: '443' }).port).toBe(443);
+    } finally { warn.mockRestore(); }
+  });
+
+  it('SAYS SO when it rejects a CCRC_PORT — the fallback must not be quieter than the crash', () => {
+    // The range check is strictly safer than the old `Number(env.CCRC_PORT ??
+    // 7788)`, but it is also quieter: `CCRC_PORT=70000` used to reach `listen()`
+    // and die with ERR_SOCKET_BAD_PORT, which is ugly and unmissable. Falling
+    // back in silence would turn a loud typo into a box listening somewhere
+    // nobody asked for — and, because `origin` derives from the same value, one
+    // whose every socket and non-exempt write is refused.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      loadConfig({ CCRC_HOME: '/h', CCRC_ACCOUNTS: ROSTER_PATH, CCRC_PORT: '70000' });
+      const said = warn.mock.calls.flat().join(' ');
+      expect(said).toContain('CCRC_PORT');
+      expect(said).toContain('70000');   // names the value the operator typed
+      expect(said).toContain('7788');    // …and what it fell back to
+
+      // ABSENT and EMPTY stay SILENT — 7788 is the right answer for both, and a
+      // warning about a key nobody set is noise in every journal on every boot.
+      warn.mockClear();
+      loadConfig({ CCRC_HOME: '/h', CCRC_ACCOUNTS: ROSTER_PATH });
+      loadConfig({ CCRC_HOME: '/h', CCRC_ACCOUNTS: ROSTER_PATH, CCRC_PORT: '' });
+      loadConfig({ CCRC_HOME: '/h', CCRC_ACCOUNTS: ROSTER_PATH, CCRC_PORT: '9001' });
+      expect(warn).not.toHaveBeenCalled();
+    } finally { warn.mockRestore(); }
   });
 
   it('takes CCRC_RP_ID / CCRC_ORIGIN / CCRC_PASSKEYS_PATH as written', () => {

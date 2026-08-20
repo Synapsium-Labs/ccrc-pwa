@@ -107,7 +107,18 @@ export type AddResult =
   | { ok: false; reason: 'full' }
   /** The file exists and could not be read — enrolling would overwrite it. */
   | { ok: false; reason: 'unusable' }
-  /** The row is in memory but did not reach the disk. */
+  /**
+   * The row did not reach the disk, AND HAS BEEN ROLLED BACK OUT OF MEMORY
+   * (D-123) — so this answer is true rather than true-until-restart. The
+   * credential is not enrolled, on disk or in this process.
+   *
+   * NOTE the deliberate asymmetry with {@link PasskeyStore.recordUse}, which
+   * does NOT roll back: there the in-memory update is the replay defence and
+   * must hold whatever the disk does, so a failed write leaves the counter
+   * ADVANCED in memory and merely stale on disk. Enrolment is the opposite
+   * polarity — a row that exists only in memory is a credential the operator was
+   * told they do not have.
+   */
   | { ok: false; reason: 'write-failed' };
 
 export class PasskeyStore {
@@ -266,12 +277,40 @@ export class PasskeyStore {
     if (!this.canEnroll()) return { ok: false, reason: 'unusable' };
     const existing = this.records.findIndex((r) => r.credentialId === cred.credentialId);
     if (existing < 0 && this.records.length >= MAX_CREDENTIALS) return { ok: false, reason: 'full' };
+    const displaced = existing >= 0 ? this.records[existing] : undefined;
     if (existing >= 0) this.records[existing] = cred;
     else this.records.push(cred);
     await this.flush();
     // The write's outcome is REPORTED, not swallowed (D-120). A full disk used
     // to answer `204 Passkey added` for a row that vanished on the next restart.
-    if (!this.lastWriteOk) return { ok: false, reason: 'write-failed' };
+    if (!this.lastWriteOk) {
+      /**
+       * AND THE ROW IS ROLLED BACK, so the answer is TRUE (D-123).
+       *
+       * Without this the credential stayed live in memory while the response
+       * said the enrolment had failed: the key worked until the next restart and
+       * then vanished. That is two states a caller handles differently — "your
+       * key is enrolled" and "your key is not enrolled" — collapsed into one
+       * outcome, in the store whose whole job this round was to make honest, and
+       * it is the worse polarity of the two: an operator told enrolment failed
+       * will try again, and meanwhile a credential they do not believe exists
+       * can sign in.
+       *
+       * RE-ENROLMENT RESTORES THE DISPLACED ROW rather than deleting the id.
+       * Dropping it would revoke a WORKING key because a disk write failed,
+       * which is a lockout manufactured out of an I/O error.
+       *
+       * Found by credentialId rather than by the saved index: `flush` is
+       * serialized and awaited, so another mutation can have landed in between,
+       * and an index captured before the await may no longer point at this row.
+       */
+      const at = this.records.findIndex((r) => r.credentialId === cred.credentialId);
+      if (at >= 0) {
+        if (displaced === undefined) this.records.splice(at, 1);
+        else this.records[at] = displaced;
+      }
+      return { ok: false, reason: 'write-failed' };
+    }
     return { ok: true };
   }
 

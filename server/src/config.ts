@@ -274,8 +274,25 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
   // 'http://localhost:NaN')` throws, which `originProblem`'s `try` would turn
   // into a merely-loud "not a URL" — but a `NaN` handed to `listen()` is not
   // something to carry that far.
+  //
+  // AND IT SAYS SO WHEN IT REJECTS ONE. The fallback above is strictly safer
+  // than the old `Number(env.CCRC_PORT ?? 7788)`, but it is also QUIETER, and
+  // that regression is worth one line: `CCRC_PORT=70000` and `CCRC_PORT=abc`
+  // used to reach `listen()` and crash with `ERR_SOCKET_BAD_PORT`, which is
+  // ugly and unmissable. Falling back silently would turn a loud typo into a
+  // box quietly listening somewhere the operator did not ask for.
+  //
+  // The ABSENT and EMPTY cases stay silent on purpose — 7788 is the correct
+  // answer for both, and warning about a key nobody set is noise in every
+  // journal on every boot.
   const portNum = Number(env.CCRC_PORT);
-  const port = Number.isInteger(portNum) && portNum > 0 && portNum <= 65535 ? portNum : 7788;
+  const portOk = Number.isInteger(portNum) && portNum > 0 && portNum <= 65535;
+  if (!portOk && env.CCRC_PORT !== undefined && env.CCRC_PORT !== '') {
+    console.warn(`ccrc-server: CCRC_PORT=${JSON.stringify(env.CCRC_PORT.slice(0, 40))} is not a ` +
+      'TCP port (want an integer 1-65535); falling back to 7788. Both the listening port AND the ' +
+      'default CCRC_ORIGIN come from this value.');
+  }
+  const port = portOk ? portNum : 7788;
   return {
     host: env.CCRC_HOST ?? '127.0.0.1',
     port,

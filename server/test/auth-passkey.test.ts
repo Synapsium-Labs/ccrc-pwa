@@ -21,7 +21,7 @@
 //   2. Nothing here mocks a verifier. There is no seam at which a test could
 //      pass against a stub.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createHash, createSign, generateKeyPairSync, randomBytes } from 'node:crypto';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
@@ -1133,9 +1133,47 @@ describe('PasskeyStore', () => {
       expect(store.canEnroll()).toBe(true);
       // …and NOW break the parent, so `mkdir` fails ENOTDIR for any uid.
       writeFileSync(dir, 'i am a file, not a directory');
-      const added = await store.add(row(b64(randomBytes(32))));
+      const cred = row(b64(randomBytes(32)));
+      const added = await store.add(cred);
       expect(added).toEqual({ ok: false, reason: 'write-failed' });
       expect(warn.mock.calls.flat().join(' ')).toContain('could not write');
+      // …AND THE ANSWER IS TRUE (D-123): the row is rolled back out of memory,
+      // not left live until the next restart. Otherwise "enrolment failed" and
+      // "this key can sign in" were the same outcome — the worse polarity, since
+      // an operator told it failed will try again while a credential they do not
+      // believe exists is accepted.
+      expect(store.count()).toBe(0);
+      expect(store.find(cred.credentialId)).toBeUndefined();
+      expect(store.ids()).toEqual([]);
+    } finally { warn.mockRestore(); }
+  });
+
+  it('a failed RE-enrolment restores the displaced row — it does not revoke a working key', async () => {
+    // The other half of the rollback. Dropping the id outright would turn an I/O
+    // error into a lockout: the operator taps "add a passkey" on a device that
+    // already has one, the disk is full, and the key that WAS working is gone.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const home = mkTmp('ccrc-passkeys-reenrol-fail-');
+      mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+      const dir = path.join(home, '.ccrc', 'holder');
+      mkdirSync(dir, { recursive: true });
+      const file = path.join(dir, 'passkeys.json');
+      const store = new PasskeyStore(file);
+      const id = b64(randomBytes(32));
+      expect(await store.add(row(id, { label: 'the original', signCount: 4 }))).toEqual({ ok: true });
+
+      // Break the parent so the NEXT write fails, then re-enrol the same id.
+      rmSync(dir, { recursive: true, force: true });
+      writeFileSync(dir, 'a file where the directory was');
+      const again = await store.add(row(id, { label: 'the replacement', signCount: 0 }));
+      expect(again).toEqual({ ok: false, reason: 'write-failed' });
+
+      // The ORIGINAL row survives — same id, same label, same counter.
+      expect(store.count()).toBe(1);
+      const kept = store.find(id);
+      expect(kept?.label).toBe('the original');
+      expect(kept?.signCount).toBe(4);
     } finally { warn.mockRestore(); }
   });
 
