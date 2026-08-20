@@ -13,7 +13,7 @@ import { verifyDone, type DoneClaim } from '../src/coord/fingerprint.js';
 import type { Runner } from '../src/exec.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
-import { degradedReadIO } from './ioDoubles.js';
+import { degradedReadIO, absentReadIO } from './ioDoubles.js';
 
 const TIP = 'a'.repeat(40);
 const OTHER = 'b'.repeat(40);
@@ -161,6 +161,25 @@ describe('readBranchTip', () => {
     for (const bad of ['..', '.']) {
       expect(await readBranchTip(localIO, projectsRoot, bad, 'ws/quiet-mesa')).toBeNull();
     }
+  });
+  it('a measured-absent loose ref reaches packed-refs WITHOUT a stat call (Task 6.1)', async () => {
+    // Before the migration, `readBranchTip` cannot tell "no loose ref exists"
+    // from "a loose ref exists but its bytes would not come back", so it
+    // spends an extra `io.stat` round trip on the identical path to find out.
+    // A measured `absent` (a proven ENOENT) is already the answer that
+    // question exists to get — no `stat` call should follow it. `absentReadIO`
+    // forces the loose path's `readFileMeasured` to answer `absent` regardless
+    // of what is actually on disk (there is nothing there either way — this
+    // fixture has no loose ref, only packed-refs), and a counting wrapper on
+    // `stat` proves the rung was skipped, not merely that the eventual answer
+    // was right.
+    const root = project(null, TIP);
+    const loosePath = path.join(root, 'demo', '.git', 'refs', 'heads', 'ws', 'quiet-mesa');
+    let statCalls = 0;
+    const base = absentReadIO((p) => p === loosePath);
+    const io = { ...base, stat: async (p: string) => { statCalls += 1; return base.stat(p); } };
+    expect(await readBranchTip(io, root, 'demo', 'ws/quiet-mesa')).toBe(TIP);
+    expect(statCalls).toBe(0);
   });
 });
 

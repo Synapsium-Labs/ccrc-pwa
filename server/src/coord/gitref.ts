@@ -38,15 +38,18 @@ const BRANCH_OK = /^[A-Za-z0-9][A-Za-z0-9._\-\/]*$/;
  * through to whatever packed-refs happens to say about the same name.
  *
  * A LOOSE REF THIS PROCESS CANNOT READ THE BYTES OF is not the same fact as an
- * ABSENT one, and this function does not conflate them. `FleetIO.readFile`'s
- * contract is `null = missing` (`io.ts:12`), and its `local` implementation
- * collapses every error — ENOENT, EACCES, EISDIR, a torn read, and (`remote`,
- * T3) any single failed round trip over the agent WS — to that same `null`
- * (`io.ts:41-43`); the read alone genuinely cannot tell "no loose ref exists"
- * from "a loose ref exists but its bytes could not be fetched right now".
- * Below, `io.stat` on the IDENTICAL path is independent proof of presence
- * that does not depend on the bytes being readable — `stat` only needs search
- * permission on the parent directory chain, not read permission on the leaf,
+ * ABSENT one, and this function does not conflate them: it reads through
+ * `FleetIO.readFileMeasured` (`MeasuredRead`/`ReadFailure`, `io.ts`), which
+ * tells a proven ENOENT (`reason: 'absent'`) apart from every other failure —
+ * EACCES, EISDIR, a torn read, and (`remote`, T3) any single failed round
+ * trip over the agent WS — collapsed instead to `reason: 'unreadable'`. An
+ * `absent` loose ref goes straight to `packed-refs` below with nothing left
+ * to corroborate: a proven ENOENT already IS "no loose ref exists". An
+ * `unreadable` loose ref is the weaker fact — it does not know whether the
+ * ref exists — so it still needs independent proof before falling through.
+ * Below, `io.stat` on the IDENTICAL path is that proof, independent of
+ * whether the bytes are readable — `stat` only needs search permission on
+ * the parent directory chain, not read permission on the leaf,
  * so it succeeds on a `chmod 000` file and on a directory (the `EISDIR`
  * trigger) alike. A loose ref that `stat` proves present is git's
  * authoritative answer for this branch, so this function refuses (`null`, UNMEASURABLE)
@@ -76,17 +79,24 @@ export async function readBranchTip(
   // symref answer null instead of a stale packed-refs entry for the same
   // name).
   const loosePath = path.join(gitDir, 'refs', 'heads', ...branch.split('/'));
-  const loose = await io.readFile(loosePath);
-  if (loose !== null) {
-    const v = loose.trim();
+  const loose = await io.readFileMeasured(loosePath);
+  if (loose.ok) {
+    const v = loose.content.trim();
     return SHA.test(v) ? v : null;
   }
-  // The read came back null: could be ENOENT (absent) or a present-but-
-  // unreadable ref (EACCES/EISDIR/a transport hiccup). `stat` on the same
-  // path proves presence without needing the bytes (docstring above) — if it
-  // succeeds, this IS the loose ref, git's authoritative answer, and it must
-  // be refused rather than silently answered from packed-refs.
-  if (await io.stat(loosePath) !== null) return null;
+  if (loose.reason === 'unreadable') {
+    // A proven ENOENT (`reason === 'absent'`) already answers "no loose ref
+    // exists" — nothing left to corroborate, straight to packed-refs below.
+    // `unreadable` is weaker: EACCES/EISDIR/a transport hiccup — the path
+    // could still be a live ref this box just can't read the bytes of, so
+    // `stat` on the SAME path proves presence without needing the bytes
+    // (docstring above) — if it succeeds, this IS the loose ref, git's
+    // authoritative answer, and it must be refused rather than silently
+    // answered from packed-refs. An older agent's every measured read
+    // collapses to `unreadable`, so this arm is also what makes it take
+    // today's path verbatim (THE GOVERNING RULE).
+    if (await io.stat(loosePath) !== null) return null;
+  }
   const packed = await io.readFile(path.join(gitDir, 'packed-refs'));
   if (packed === null) return null;
   for (const line of packed.split('\n')) {
