@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=61417ad59e56db46b97c8deb10b91cc696c844826ab9d0c1574e56c3449513ad
+# ccrc:generated 1 sha256=53435e799da305141fd4a7b2a9817e1e2368d535fd98e326b96adbb475e4b3bf
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box, not on this file: `_rc_enabled` reads
@@ -2518,7 +2518,13 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
 
   # Into the REGISTRY, never into the worktree — the worktree is the thing that
   # may later be deleted, and a manifest inside it would die with it.
-  printf '%s\n' "$manifest" > "$REG/$id.archivemanifest"
+  # Through `_reg_set` (wave 2), with the TRAILING NEWLINE carried in the value:
+  # `printf '%s\n'` put one there and `_reg_set` adds none, so passing it
+  # explicitly keeps the file byte-identical. `manifestBytes` (registry.ts)
+  # JSON.parses this and would tolerate either, which is the reason to be
+  # deliberate rather than casual — a migration that also moves the bytes is two
+  # changes in one commit.
+  _reg_set "$id" archivemanifest "$manifest"$'\n'
 
   _ws_unsupervise "$id"                                   # clears Restart=always
   tmux kill-session -t "$(_tmux "$id")" 2>/dev/null || true

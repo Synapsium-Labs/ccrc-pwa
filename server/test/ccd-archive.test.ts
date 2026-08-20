@@ -1419,3 +1419,33 @@ describe('ws-attic', () => {
     }
   });
 });
+
+describe('the archive manifest is written atomically (registry-durability wave 2)', () => {
+  it('rides _reg_set and KEEPS its trailing newline — the bytes do not move', () => {
+    // The manifest was `printf '%s\n' "$manifest" > …`, and `_reg_set` adds no
+    // newline of its own, so the newline is passed IN THE VALUE. Its one
+    // consumer (`manifestBytes`, server/src/registry.ts:363) runs JSON.parse
+    // and would not notice either way — which is exactly why the bytes are
+    // preserved deliberately rather than by luck: a migration that also
+    // changes what is on disk is two changes wearing one commit.
+    const src = fs.readFileSync(CCD, 'utf8');
+    expect(src).not.toMatch(/>\s*"\$REG\/\$id\.archivemanifest"/);
+    expect(src).toMatch(/_reg_set "\$id" archivemanifest "\$manifest"\$'\\n'/);
+  });
+
+  it('and the file on disk still ENDS IN A NEWLINE and still parses as the manifest', () => {
+    // The behavioural half — a source scan alone would pass on a migration
+    // that dropped the newline, which is the one byte this task exists to
+    // preserve. Written against the helper directly rather than a whole
+    // ws-archive run, so it pins the BYTES without depending on a fixture
+    // worktree, a gh row, or systemd.
+    const h2 = makeCcdHarness('ccrc-ccd-manifestbytes-');
+    try {
+      h2.sh(`_reg_set demo-quiet-basin archivemanifest '{"worktreeBytes":4096}'$'\\n'`);
+      const raw = fs.readFileSync(
+        path.join(h2.home, '.cc-sessions', 'demo-quiet-basin.archivemanifest'), 'utf8');
+      expect(raw).toBe('{"worktreeBytes":4096}\n');
+      expect(JSON.parse(raw).worktreeBytes).toBe(4096);
+    } finally { h2.cleanup(); }
+  });
+});
