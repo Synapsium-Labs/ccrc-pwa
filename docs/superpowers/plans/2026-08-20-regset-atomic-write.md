@@ -90,10 +90,15 @@ Definition at `ccd/ccd:368`. Callers, by field:
 | `supervised` | `8631`, `8690`, `8701`, `9025`, `9206`, `9296` | **the heartbeat — every ~30 s per session** |
 | `swapblocked` | `9072` | |
 
-**Cost.** The heartbeat is the hot caller: one `_reg_set` per session per ~30 s. Today that is one
-`open`/`write`/`close`. After the change it is `open`/`write`/`close` + `rename` — one extra
-in-directory syscall, no fork, no subprocess (`mv` IS a fork; see Task 1's note on why it is
-accepted). No caller changes its semantics.
+**Cost.** The heartbeat is the hot caller: one `_reg_set` per session per ~30 s. Before the change
+that was one `open`/`write`/`close`. After it, the same plus a `rename` — one extra in-directory
+syscall — **and one fork**, because `mv` is an external binary and not a bash builtin. The fork is
+the honest price and it is accepted rather than waved away: the heartbeat is ~11 live sessions × one
+fork / 30 s, i.e. well under one fork a second across the whole fleet, and the heartbeat line
+already forks `date +%s` to build the stamp it writes (`_reg_set "$id" supervised "$(date +%s)"`),
+so this doubles a fork count that was never one. **The earlier wording here — "no fork, no
+subprocess (`mv` IS a fork; see Task 1's note on why it is accepted)" — contradicted itself inside
+one sentence, and the note it deferred to was never written.** No caller changes its semantics.
 
 ### S3 — every direct `> "$REG/…"` write that bypasses the helper
 
@@ -1132,6 +1137,12 @@ Then send the `wave-done` mail with `{branchTip, prNumber, prPhase:"open", hando
   id is `<project>-<slug>` and `_ws_slug_valid` forbids a leading dot — and the direction if it ever
   collided is toward suppressing a report-only "unclaimed worktree" finding, never toward a false
   repair.
+  **Amended (final review): the pr-state lock lands in the same set, permanently.**
+  `$REG/.prstate-<id>.lock` (D-123) is created on demand and NEVER unlinked, so unlike a tmp it is
+  in every listing for ever. `unclaimedWorktrees` splits it at its last dot by the identical
+  `lastIndexOf('.')` path and contributes `.prstate-<id>` to `claimedById`. Inert for the identical
+  reason — a leading dot can never equal a `<project>-<slug>` id — and named here so the next reader
+  does not have to re-derive it for the second producer.
 - **D-128 (2026-08-20, survey)** — m1 was reported with two halves and only one is done here.
   Order-insensitivity is fixed (Task 6). The second half — `server/test/` being outside
   `single-definition.test.ts`'s four scanned ROOTS, so a second copy of the pair inside a TEST file
@@ -1189,5 +1200,43 @@ Then send the `wave-done` mail with `{branchTip, prNumber, prPhase:"open", hando
   `readRegistryMeasured`'s top-level `readdir` and the start of its `buildRecord` loop; a loss
   landing mid-loop spares the rows already read. The mechanism it describes is right and the
   one-pass bound is right; the word "every" is the part that is approximate.
+
+### Found during the final fix wave
+
+- **D-135 (2026-08-20, final review)** — `_reg_set` now **SUCCEEDS where it used to refuse**, and
+  silently rewrites the destination's MODE. Re-measured for this entry on the fleet box (uid 1000,
+  `umask 0002`, GNU coreutils 9.4), destination `demo-quiet-basin.wrapper` at mode `0444` holding
+  `oldvalue`, inside a WRITABLE `$REG`:
+
+  | writer | rc | stderr | content after | mode after |
+  |---|---|---|---|---|
+  | OLD `printf '%s' newvalue > "$REG/$1.$2"` | **1** | `…/demo-quiet-basin.wrapper: Permission denied` | `oldvalue` — unchanged | `444` |
+  | NEW `_reg_set` (the shipped body, verbatim) | **0** | none | `newvalue` — replaced | **`664`** |
+
+  The mode is neither preserved nor chosen: `rename(2)` installs the TMP's inode under the
+  destination name, so the destination ends up with the tmp's `0666 & ~umask` mode and the writing
+  process's uid/gid. (The ownership half is unobservable on the fleet, which runs as one UNIX user —
+  it is stated as mechanism, not as a measurement.) This is the **fail-OPEN** mirror of **D-122**,
+  which recorded only the fail-SHUT direction (an unwritable `$REG` now refusing where it used to
+  update an existing field), and it is not **D-125** either — that entry is about replacing a
+  SYMLINK, not about a regular file's mode. **Benign**: no ccd verb chmods a registry field and
+  nothing on the server side reads a registry file's mode (both checked), so a `0444` field is only
+  reachable by hand, and the consequence of reaching it is that a hand-set protection quietly stops
+  protecting. Recorded because it is precisely the entry missing between the two that were there.
+- **D-136 (2026-08-20, final review)** — `mv -fT` is a **GNU coreutils** spelling
+  (`-T` = `--no-target-directory`), it is MANDATORY (D-121), and it is now carried by the registry's
+  most fundamental primitive. **RULING: documented, not probed.** ccd does gate `flock` with a named
+  `die` at three sites (`flock (util-linux) is unavailable — refusing to …`), but a probe on
+  `_reg_set` would put a fork on the hottest path in the file — the `supervised` heartbeat, ~11
+  sessions every 30 s — to re-answer per call a question that is settled per box; and this adds no
+  new class of assumption, since ccd already depends on GNU `stat -c` (6 sites), `readlink -f` (2)
+  and `df -P` (2). Both fleet boxes are GNU/Linux; measured here, `mv (GNU coreutils) 9.4`.
+  **The named failure shape**, which is the part `_reg_set`'s comment now carries: a `mv` that does
+  not know `-T` rejects the option and exits non-zero, so EVERY `_reg_set` returns 1. Exactly one
+  caller reads that status — `cmd_ws_hold`'s `|| die "could not record the hold for $id — it is NOT
+  held"` — and every other call site drops it, so nothing announces the fault. The visible symptom
+  is the `supervised` heartbeat silently ceasing to land, after which `_session_state`'s 120 s
+  freshness window ages every row to `orphan` inside two minutes: a fleet that reads as entirely
+  dead, from one missing flag.
 
 <!-- Execution appends D-129… here, with measured before/after counts for every mutation claim. -->
