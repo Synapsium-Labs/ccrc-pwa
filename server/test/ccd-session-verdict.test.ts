@@ -34,6 +34,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { VERDICT_MESSAGE_ROWS } from './sessionVerdictFixture.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-verdict-'); });
@@ -53,30 +54,21 @@ describe('_session_verdict — three answers, not one boolean', () => {
     expect(verdict(TMUX_LIVE)).toBe('live');
   });
 
-  it('gone: the one message that actually means the session died', () => {
-    expect(verdict(tmuxSaying("can't find session: cc-demo"))).toBe('gone');
-  });
-
-  it('unknown: the socket is not there', () => {
-    expect(verdict(tmuxSaying('error connecting to /tmp/tmux-1000/default (No such file or directory)')))
-      .toBe('unknown');
-  });
-
-  it('unknown: the socket is there but nothing is serving it', () => {
-    expect(verdict(tmuxSaying('no server running on /tmp/tmux-1000/default'))).toBe('unknown');
-  });
+  // The message rows are SHARED with the TS twin (`classifyHasSession`,
+  // exec.test.ts) via the fixture — D-B8-13's whole mechanism: two
+  // implementations of one contract cannot drift once one table drives both.
+  // Nothing here may be rewritten into a list of failures: a tmux upgrade may
+  // reword or add errors, and `unknown` refuses where `gone` destroys.
+  for (const row of VERDICT_MESSAGE_ROWS) {
+    it(row.name, () => {
+      expect(verdict(tmuxSaying(row.message))).toBe(row.expected);
+    });
+  }
 
   it('unknown: tmux is not on PATH at all', () => {
     expect(h.sh(`command() { if [[ "$1 $2" == "-v tmux" ]]; then return 1; fi; builtin command "$@"; }
                  tmux() { echo "bash: tmux: command not found" >&2; return 127; }
                  _session_verdict demo`).trim()).toBe('unknown');
-  });
-
-  it('unknown, NOT gone, for a message this ccd has never seen — the fail-safe direction', () => {
-    // A tmux upgrade may reword or add errors. `unknown` refuses; `gone`
-    // destroys. Nothing here may be rewritten into a list of failures.
-    expect(verdict(tmuxSaying('protocol version mismatch (client 8, server 7)'))).toBe('unknown');
-    expect(verdict(tmuxSaying('some error nobody has written yet'))).toBe('unknown');
   });
 
   it('_alive keeps its old meaning exactly: true only for live', () => {
