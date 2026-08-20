@@ -196,7 +196,14 @@ export interface SessionRecord {
    *  `numOrNull` does below, so no such widening applies there. Collapsing a
    *  present-but-unparseable `.stopped` to `stopped: null` would let
    *  `sessionLifecycle`'s `dead + started -> orphan` rung fire about a row
-   *  bash confidently calls stopped — rule (b)'s exact prohibition. */
+   *  bash confidently calls stopped — rule (b)'s exact prohibition.
+   *
+   *  Task 5: a MEASURED `absent` read never pushes a field here — it is the
+   *  ordinary "no stamp was ever written" answer, a positive result rather
+   *  than a fault — including for `.stopped`, whose wide net only fires on
+   *  proven, unparseable CONTENT; there is nothing to fail to parse when the
+   *  file is proven not to exist. Only a measured `unreadable` still falls
+   *  back to the listed-vs-not rung above. */
   lifecycleUnmeasured: readonly LifecycleField[];
 }
 
@@ -473,19 +480,19 @@ function noteWholeFleetListing(listable: boolean, now: number): void {
 async function buildRecord(
   io: FleetIO, cfg: CcrcConfig, names: string[], id: string, now: number,
 ): Promise<SessionRecord | null> {
-  const [wrapperRead, project, workdirRead, uuidRead, started, home, pool, lastswap, workspace, branchRead,
+  const [wrapperRead, project, workdirRead, uuidRead, startedRead, home, pool, lastswap, workspace, branchRead,
     base, prPhaseRaw, prNumberRaw, prCheckedAtRaw, archivedRaw, manifestRaw, holdRead,
-    stoppedRaw, supervisedRaw, swapBlockedRaw, spawnRaw, substrateRead] = await Promise.all([
+    stoppedRead, supervisedRead, swapBlockedRaw, spawnRaw, substrateRead] = await Promise.all([
     fieldMeasured(io, cfg.registryDir, id, 'wrapper'), field(io, cfg.registryDir, id, 'project'),
     fieldMeasured(io, cfg.registryDir, id, 'workdir'), fieldMeasured(io, cfg.registryDir, id, 'uuid'),
-    field(io, cfg.registryDir, id, 'started'), field(io, cfg.registryDir, id, 'home'),
+    fieldMeasured(io, cfg.registryDir, id, 'started'), field(io, cfg.registryDir, id, 'home'),
     field(io, cfg.registryDir, id, 'pool'), field(io, cfg.registryDir, id, 'lastswap'),
     field(io, cfg.registryDir, id, 'workspace'), fieldMeasured(io, cfg.registryDir, id, 'branch'),
     field(io, cfg.registryDir, id, 'base'), field(io, cfg.registryDir, id, 'prphase'),
     field(io, cfg.registryDir, id, 'prnumber'), field(io, cfg.registryDir, id, 'prcheckedat'),
     field(io, cfg.registryDir, id, 'archived'), field(io, cfg.registryDir, id, 'archivemanifest'),
     fieldMeasured(io, cfg.registryDir, id, 'hold'),
-    field(io, cfg.registryDir, id, 'stopped'), field(io, cfg.registryDir, id, 'supervised'),
+    fieldMeasured(io, cfg.registryDir, id, 'stopped'), fieldMeasured(io, cfg.registryDir, id, 'supervised'),
     field(io, cfg.registryDir, id, 'swapblocked'), field(io, cfg.registryDir, id, 'spawn'),
     fieldMeasured(io, cfg.registryDir, id, 'substrate'),
   ]);
@@ -544,23 +551,38 @@ async function buildRecord(
   // no stop at all, and the classifier prints `orphan` about a session nobody
   // managed to look at. That is rule (b)'s exact prohibition, and it is why the
   // discrimination lives here rather than in the pure function.
-  const stopStamp = packedStamp(stoppedRaw);
+  //
+  // Task 5, THE GOVERNING RULE: a measured `absent` `started`/`supervised`/
+  // `stopped` is the ORDINARY case — no stamp was ever written — and is
+  // simply not pushed, same as today's answer for a genuinely-absent field.
+  // A measured `unreadable` falls back to exactly today's `names.includes`
+  // rung. (One narrow difference from the OLD collapsed-evidence ladder: a
+  // field listed at this function's own listing but genuinely gone by its
+  // own read — the same race the identity triple can now prove too — used
+  // to be inferred as `unreadable`-and-listed and pushed; a measured read
+  // now proves it `absent` and does not push it. Same reasoning as the
+  // identity triple's drop, applied here to "not a fault" instead of "row
+  // gone".)
+  const stopStamp = stoppedRead.ok ? packedStamp(stoppedRead.content) : null;
   const swapStamp = packedStamp(swapBlockedRaw);
   const spawnStamp = packedStamp(spawnRaw);
   const spawnRc = spawnStamp === null ? null : numOrNull(spawnStamp.rest);
 
   const lifecycleUnmeasured: LifecycleField[] = [];
-  for (const [f, raw] of [
-    ['started', started], ['supervised', supervisedRaw],
+  for (const [f, read] of [
+    ['started', startedRead], ['supervised', supervisedRead],
   ] as const) {
-    if (raw === null && names.includes(`${id}.${f}`)) lifecycleUnmeasured.push(f);
+    if (!read.ok && read.reason === 'unreadable' && names.includes(`${id}.${f}`)) lifecycleUnmeasured.push(f);
   }
   // `.stopped` gets the wider net `SessionRecord.lifecycleUnmeasured`'s own
   // docstring explains: unreadable-but-listed (the shared rule above) OR
-  // listed-and-readable-but-unparseable (`stopStamp === null` while
-  // `stoppedRaw` itself is non-null) — the proven bash/TS divergence a
-  // zero-byte or torn `.stopped` produces.
-  if (stopStamp === null && (stoppedRaw !== null || names.includes(`${id}.stopped`))) {
+  // listed-and-readable-but-unparseable (`stopStamp === null` while the read
+  // itself succeeded) — the proven bash/TS divergence a zero-byte or torn
+  // `.stopped` produces. A measured `absent` does NOT trip the wide net —
+  // there is no content to fail to parse when there is proven to be no file.
+  if (stoppedRead.ok) {
+    if (stopStamp === null) lifecycleUnmeasured.push('stopped');
+  } else if (stoppedRead.reason === 'unreadable' && names.includes(`${id}.stopped`)) {
     lifecycleUnmeasured.push('stopped');
   }
 
@@ -604,7 +626,7 @@ async function buildRecord(
 
   return {
     id, wrapper: measured.wrapper, project: project ?? id, workdir: measured.workdir, uuid: measured.uuid,
-    started: started === '1',
+    started: startedRead.ok && startedRead.content === '1',
     home, pool: pool ? pool.split(/\s+/).filter(Boolean) : null,
     lastswap: lastswap ? parseInt(lastswap, 10) : null,
     workspace, branch: branchName,
@@ -678,7 +700,7 @@ async function buildRecord(
     stopped: stopStamp === null
       ? null
       : { at: stopStamp.at, surface: isStopSurface(stopStamp.rest) ? stopStamp.rest : 'unknown' },
-    supervisedAt: numOrNull(supervisedRaw),
+    supervisedAt: numOrNull(supervisedRead.ok ? supervisedRead.content : null),
     swapBlocked: swapStamp === null
       ? null
       : { at: swapStamp.at, reason: swapStamp.rest === '' ? SWAP_BLOCKED_NO_REASON : swapStamp.rest },
