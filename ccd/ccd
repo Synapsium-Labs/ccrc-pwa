@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=7b23c71f70916726e2971937981354ae45d3d13ca48966e26df7bab70f21afec
+# ccrc:generated 1 sha256=ca757b0f4603a5a0c83c093631a334b9e34a68ad7a9ab35818c052d1dbe5ce55
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box, not on this file: `_rc_enabled` reads
@@ -1320,8 +1320,11 @@ if mode == 'state':
     #
     # A DEDICATED lock file, never a registry FIELD — wave 2. `flock` attaches
     # to an open file description, i.e. to an INODE, and `_reg_set "$id" uuid`
-    # (ccd:1682, 7369, 8561 — the last on the ordinary supervise path) now
-    # RENAMES a new inode over `.uuid`. Two `ccd pr-state` runs straddling that
+    # (ccd:1682, 7369, 8561 — the write on the ORDINARY SUPERVISE PATH is the
+    # middle one, ccd:7369, inside `_sync_uuid`, which `cmd_supervise`'s own
+    # loop calls (ccd:8778); the other two run once each, at `cmd_ws_add` and
+    # `cmd_start`) now RENAMES a new inode over `.uuid`. Two `ccd pr-state`
+    # runs straddling that
     # rewrite would take LOCK_EX on two different inodes and both enter the
     # compare-and-set below: the duplicate ledger append and the lost update
     # this lock exists to prevent. `$REG/.prstate-<id>.lock` is never written,
@@ -1332,8 +1335,8 @@ if mode == 'state':
     # id-minting listing sees it; it leaks one 0-byte file per session that has
     # ever run pr-state, which is the disclosed price.
     #
-    # UNCHANGED: if the lock cannot be taken AT ALL (no fcntl, unwritable $REG)
-    # the write goes ahead unlocked. This guard may only remove races, never add
+    # UNCHANGED: if the lock cannot be taken AT ALL (unwritable $REG) the
+    # write goes ahead unlocked. This guard may only remove races, never add
     # a refusal that stops a phase from ever updating.
     lock_f = None
     try:
