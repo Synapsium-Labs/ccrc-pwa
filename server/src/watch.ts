@@ -1843,9 +1843,18 @@ export class FleetWatcher {
         // `buildRecord`'s identity-triple loop dropping the row on a SINGLE
         // measured-`absent` identity field, no second listing at all — see
         // its own comment in registry.ts. That third route is STRONGER
-        // evidence than the second, not weaker: a listed-then-ENOENT
-        // `.uuid`/`.wrapper`/`.workdir` can only come from ccd's
-        // `_reg_purge`, i.e. a full reap. But it widens the residual the
+        // evidence than the second, not weaker, in the ORDINARY case: a
+        // listed-then-ENOENT `.uuid`/`.wrapper`/`.workdir` comes from ccd's
+        // `_reg_purge`, i.e. a full reap. It is not the ONLY producer, and
+        // the earlier "can only come from" here was wrong (wave-1 review
+        // minor m3): losing the registry DIRECTORY itself mid-pass produces
+        // the same observation — this method's own listing succeeded at the
+        // top, the per-field reads afterwards ENOENT, and every row takes
+        // this route at once. That case is fleet-wide and lasts ONE PASS
+        // (the next sweep's listing fails and the method returns before this
+        // loop), where a reap is per-row and permanent; the cost of the
+        // difference is that a directory lost for one pass mass-parks
+        // deliveries that used to sit degraded. But it widens the residual the
         // second route already carried: the pre-branch ladder kept a
         // degraded row degraded — never parks — whenever the CONFIRMING
         // second listing itself failed, and this route drops the row on the
