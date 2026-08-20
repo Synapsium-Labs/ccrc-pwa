@@ -25,6 +25,7 @@ import type { FormEvent, ReactNode } from 'react';
 import type { AuthStatus, AuthVerdict } from '../../../shared/api';
 import { ApiError, api } from '../lib/api';
 import { clearAuthLost, readAuthStatus, useAuthLost, verdictOf } from '../lib/auth';
+import { PasskeyCeremonyError, assertPasskey, passkeySupported } from '../lib/passkey';
 
 /**
  * One sentence per verdict — the whole point of `AuthVerdict` being a six-member
@@ -62,6 +63,14 @@ export const VERDICT_TEXT: Record<AuthVerdict, string> = {
  *  a correct secret. */
 const UNREACHABLE_TEXT = "Couldn't reach the box — check the connection and try again.";
 
+/** The ceremony itself failed or was dismissed — NOT a refusal from the box, and
+ *  kept separate for `UNREACHABLE_TEXT`'s reason: "that passkey didn't match" in
+ *  front of someone who simply tapped Cancel sends them looking for a problem
+ *  that is not there. `PasskeyCeremonyError` is the browser-side failure;
+ *  anything the SERVER refused arrives as an `ApiError` and gets a verdict
+ *  sentence like any other refusal. */
+const PASSKEY_CANCELLED_TEXT = 'Passkey sign-in was cancelled. Try again, or use the passphrase.';
+
 export function LoginScreen(): ReactNode {
   // WHY the session went (first-wins, `lib/auth.ts`) — set by whichever refusal
   // arrived first and never overwritten while the screen is up.
@@ -71,6 +80,9 @@ export function LoginScreen(): ReactNode {
   // standing verdict below, because it is the newer fact.
   const [refusal, setRefusal] = useState<AuthVerdict | null>(null);
   const [unreachable, setUnreachable] = useState(false);
+  /** The ceremony was dismissed or the browser could not run it — a third
+   *  failure kind, beside "the box refused" and "the box never answered". */
+  const [cancelled, setCancelled] = useState(false);
   const [passphrase, setPassphrase] = useState('');
   const [busy, setBusy] = useState(false);
   /** The anonymous half of `GET /api/auth/status` — the one route readable
@@ -114,6 +126,7 @@ export function LoginScreen(): ReactNode {
     setBusy(true);
     setRefusal(null);
     setUnreachable(false);
+    setCancelled(false);
     try {
       await api.login({ passphrase });
       // 204 + Set-Cookie. Drop the secret from state first, then let go of the
@@ -134,17 +147,66 @@ export function LoginScreen(): ReactNode {
     }
   };
 
+  /**
+   * SIGN IN WITH A PASSKEY. Same ending as `submit` — `clearAuthLost()`, which
+   * unmounts this screen AND wakes every parked socket — because it is the same
+   * event: a session cookie arrived.
+   *
+   * THREE FAILURE KINDS, THREE SENTENCES, and keeping them apart is the whole
+   * reason this is not one `catch`:
+   *   - `PasskeyCeremonyError` — the browser or the user stopped. Not a refusal.
+   *   - an `ApiError` carrying a verdict — the BOX refused. A refused assertion
+   *     is `'wrong'` (the server sends one indistinguishable answer for every
+   *     verification failure, deliberately — no oracle), and `VERDICT_TEXT` is
+   *     already exhaustive, so it needs no new sentence.
+   *   - anything else — the box never answered.
+   */
+  const signInWithPasskey = async (): Promise<void> => {
+    if (busy) return;
+    setBusy(true);
+    setRefusal(null);
+    setUnreachable(false);
+    setCancelled(false);
+    try {
+      await assertPasskey();
+      clearAuthLost();
+    } catch (err) {
+      if (err instanceof PasskeyCeremonyError) setCancelled(true);
+      else {
+        const v = err instanceof ApiError ? verdictOf(err.body) : null;
+        if (v === null) setUnreachable(true);
+        else setRefusal(v);
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /**
+   * Offer the button only when a key EXISTS and this browser can actually run
+   * the ceremony. Both halves matter, and both fail CLOSED:
+   *  - `passkeysEnrolled` is `0` on a box with none and on a DARK box (the
+   *    server does not load the store when the gate is off), so a dark box never
+   *    draws it. `?? 0` covers an older server and a minimized body.
+   *  - `passkeySupported()` checks the specific WebAuthn methods this design
+   *    needs, not merely that `PublicKeyCredential` exists — a button that opens
+   *    a dialog and then cannot complete is worse than no button.
+   */
+  const offerPasskey = (status?.passkeysEnrolled ?? 0) > 0 && passkeySupported();
+
   // Newest fact first: what just happened, then what the box says about itself,
   // then why the session went in the first place.
-  const message = unreachable
-    ? UNREACHABLE_TEXT
-    : refusal !== null
-      ? VERDICT_TEXT[refusal]
-      : status?.mode === 'locked-out'
-        ? VERDICT_TEXT['locked-out']
-        : verdict !== null
-          ? VERDICT_TEXT[verdict]
-          : VERDICT_TEXT['no-session'];
+  const message = cancelled
+    ? PASSKEY_CANCELLED_TEXT
+    : unreachable
+      ? UNREACHABLE_TEXT
+      : refusal !== null
+        ? VERDICT_TEXT[refusal]
+        : status?.mode === 'locked-out'
+          ? VERDICT_TEXT['locked-out']
+          : verdict !== null
+            ? VERDICT_TEXT[verdict]
+            : VERDICT_TEXT['no-session'];
 
   return (
     <div className="login-screen" role="dialog" aria-modal="true" aria-labelledby="login-title">
@@ -170,7 +232,15 @@ export function LoginScreen(): ReactNode {
           value={passphrase}
           onChange={(e) => setPassphrase(e.target.value)}
         />
-        {/* Task 8 draws the passkey button here — see `status` above. */}
+        {/* The passkey button, ABOVE the submit button and inside the form.
+            `type="button"` is load-bearing: a bare <button> inside a <form>
+            defaults to `type="submit"`, so without it tapping this would submit
+            an empty passphrase instead of starting the ceremony. */}
+        {offerPasskey && (
+          <button type="button" className="btn-primary" disabled={busy} onClick={() => void signInWithPasskey()}>
+            Sign in with a passkey
+          </button>
+        )}
         <button type="submit" className="btn-primary" disabled={busy || passphrase === ''}>
           {busy ? 'Signing in…' : 'Sign in'}
         </button>

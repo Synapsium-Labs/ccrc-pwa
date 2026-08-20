@@ -13,13 +13,15 @@
 // beats coupling component trees that must not depend on each other mounting.
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { AccountUsage, ProjectedHome, RosterWire } from '../../../shared/api';
+import type { AccountUsage, AuthStatus, ProjectedHome, RosterWire } from '../../../shared/api';
 import { limitBand } from '../components/LimitBar';
 import { Skeleton } from '../components/Skeleton';
 import { formatAge, formatReset } from '../fleet/formatReset';
 import { sessionLabel } from '../fleet/sessionLabel';
 import { accountColorVar, accountLabel, homeAbleLabelList, rosterWrapperIds } from '../lib/accounts';
-import { api } from '../lib/api';
+import { api, apiErrorText } from '../lib/api';
+import { readAuthStatus } from '../lib/auth';
+import { PasskeyCeremonyError, enrollPasskey, passkeySupported } from '../lib/passkey';
 import { navigate } from '../lib/router';
 import { useNow } from '../lib/useNow';
 import { useFleetStore } from '../stores/fleet';
@@ -243,6 +245,81 @@ export function AccountsScreen(): ReactNode {
           );
         })}
       </div>
+
+      <PasskeySection />
     </div>
+  );
+}
+
+/**
+ * ENROLLING A PASSKEY — the one control the passkey feature needs behind the
+ * gate, and the reason it lives HERE rather than on the login screen: you must
+ * already be signed in to enrol (the server gates `register/*`, which is what
+ * makes the whole no-attestation design safe), so the login screen is the one
+ * place it could not go. This is the closest thing the PWA has to a box-settings
+ * surface, one back-tap from the fleet.
+ *
+ * IT RENDERS NOTHING ON A DARK BOX, and that is three independent falsy checks
+ * rather than one, each failing closed:
+ *   - `mode` absent or `'off'` — `CCRC_AUTH` is off, or this server has no gate
+ *     at all (an older build, a proxy answering its own 200). There is nothing
+ *     to enrol into.
+ *   - `passkeySupported()` — this browser cannot run the ceremony (no WebAuthn,
+ *     or a non-secure context). A button that opens a dialog it cannot finish is
+ *     worse than no button.
+ *   - the status read failed — `status` stays `null` and nothing draws.
+ *
+ * It costs ONE extra GET on a screen the operator visits rarely, and
+ * `readAuthStatus` is deliberately the one call in the app that never raises the
+ * auth-lost signal (`lib/auth.ts`), so a failure here cannot put a login screen
+ * over a working console.
+ */
+function PasskeySection(): ReactNode {
+  const [status, setStatus] = useState<Partial<AuthStatus> | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+
+  const refresh = (): void => {
+    void readAuthStatus().then(setStatus).catch(() => { /* no gate, or unreachable — draw nothing */ });
+  };
+  useEffect(refresh, []);
+
+  if (status === null || status.mode === undefined || status.mode === 'off' || !passkeySupported()) return null;
+
+  const enroll = async (): Promise<void> => {
+    setBusy(true);
+    setNote(null);
+    try {
+      await enrollPasskey();
+      setNote('Passkey added. It can sign you in from now on.');
+      refresh();
+    } catch (err) {
+      // The ceremony's own failure and the box's refusal read differently, for
+      // `LoginScreen`'s reason: telling someone their key was rejected when they
+      // tapped Cancel sends them hunting for a problem that is not there.
+      setNote(err instanceof PasskeyCeremonyError
+        ? 'That passkey ceremony was cancelled or could not finish.'
+        : apiErrorText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const count = status.passkeysEnrolled ?? 0;
+  return (
+    <section className="accounts-row" aria-labelledby="passkeys-title">
+      <div className="accounts-row-head">
+        <span className="account-gauge-label" id="passkeys-title">Passkeys</span>
+      </div>
+      <p className="accounts-fresh">
+        {count === 0
+          ? 'No passkey is enrolled on this box — the passphrase is the only way in.'
+          : `${count} passkey${count === 1 ? '' : 's'} enrolled on this box.`}
+      </p>
+      <button type="button" className="btn-primary" disabled={busy} onClick={() => void enroll()}>
+        {busy ? 'Waiting for the authenticator…' : 'Add a passkey on this device'}
+      </button>
+      {note !== null && <p className="accounts-fresh" role="status">{note}</p>}
+    </section>
   );
 }

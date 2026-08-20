@@ -41,6 +41,46 @@ export const WINDOW_MS = 60_000;
  *  source — do not re-type this value. */
 export const MAX_FAILURES = 8;
 
+/**
+ * The PASSKEY assertion budget — deliberately much looser than
+ * {@link MAX_FAILURES}, and the reasoning is worth stating because "looser"
+ * looks like weaker.
+ *
+ * THE PASSPHRASE BUDGET IS 8 BECAUSE OF WHAT ONE ATTEMPT COSTS AND WHAT IT
+ * BUYS. A passphrase is a low-entropy secret a human chose, so guesses are worth
+ * making; and each guess costs ~100 ms of scrypt on a 4-slot libuv threadpool, so
+ * eight concurrent ones starve the whole server. The number is bounding a
+ * BRUTE-FORCE SEARCH and a DENIAL OF SERVICE at once, and it can be small
+ * because a human types one passphrase.
+ *
+ * NEITHER PRESSURE EXISTS HERE.
+ *  - THERE IS NOTHING TO GUESS. Forging an assertion requires the P-256 private
+ *    key, which never leaves the authenticator. That is a ~2^128 search, not a
+ *    dictionary; a rate limit does not meaningfully change it, and there is no
+ *    "wrong passkey" the way there is a wrong passphrase.
+ *  - AN ATTEMPT IS ~50 MICROSECONDS. An ECDSA verify is synchronous CPU, three
+ *    orders of magnitude cheaper than scrypt, and it never touches the
+ *    threadpool — so a flood cannot starve `fs/promises` the way a passphrase
+ *    flood could. (This is exactly why the passkey routes still take a slot at
+ *    admission: cheap is not free, and the concurrency half of the budget is
+ *    what makes a flood a 429 instead of a queue.)
+ *
+ * SO WHAT IS THIS BRAKE FOR? Two things, and both are satisfied by a loose
+ * number: log-flood control (every refusal writes a journal line naming the
+ * reason), and a bound on how fast an unauthenticated caller can churn the
+ * challenge store (`webauthn.ts`'s `MAX_LIVE_CHALLENGES`, which evicts rather
+ * than refuses precisely so this cannot lock the operator out).
+ *
+ * 60 PER MINUTE IS ONE PER SECOND — two orders of magnitude above any human
+ * tapping a passkey button (a ceremony takes seconds, and three retries is a bad
+ * day), and low enough that neither the journal nor the challenge map can be
+ * driven anywhere interesting. A TIGHTER number would be actively worse: the
+ * window is GLOBAL (see the module docstring), so on a single-operator box a
+ * small passkey budget is a denial of service against the one person who is
+ * supposed to get in, bought with no security at all.
+ */
+export const PASSKEY_MAX_FAILURES = 60;
+
 /** What `loginVerdict` answers: whether login may proceed, the (possibly
  *  rolled) state the caller should persist, and — only when locked — the ms
  *  until the window ends. */
@@ -86,9 +126,9 @@ function msUntilWindowEnd(state: RateState, now: number): number {
  * brake bound CONCURRENCY, not merely history. Defaulted to 0 so a caller that
  * only asks the policy question ("is the window closed?") is unchanged.
  */
-export function loginVerdict(state: RateState, now: number, inFlight = 0): RateLimitVerdict {
+export function loginVerdict(state: RateState, now: number, inFlight = 0, max = MAX_FAILURES): RateLimitVerdict {
   const next = rolled(state, now);
-  if (next.count + inFlight < MAX_FAILURES) return { ok: true, state: next };
+  if (next.count + inFlight < max) return { ok: true, state: next };
   return { ok: false, state: next, retryAfter: msUntilWindowEnd(next, now) };
 }
 
@@ -122,7 +162,22 @@ export class LoginRateLimiter {
    *  reducer. `loginVerdict` takes it as an argument for exactly that reason. */
   private inFlight = 0;
 
-  constructor(now = Date.now()) {
+  /**
+   * `max` is the ceiling this instance spends against — {@link MAX_FAILURES} by
+   * default (the passphrase door), {@link PASSKEY_MAX_FAILURES} for the passkey
+   * lane, which is a different budget for reasons that constant sets out.
+   *
+   * A PARAMETER, NOT A SECOND CLASS. The window mechanics — rolling, the shared
+   * failure/in-flight budget, the idempotent release — are subtle enough that a
+   * copy of them under another name is how the two would come to disagree in a
+   * way no test compares. One reducer, two ceilings.
+   *
+   * Each instance carries its OWN `RateState`, so a passkey flood cannot spend
+   * the passphrase window (which would let an attacker lock the operator out of
+   * the door that actually works) and a wrong passphrase cannot spend the
+   * passkey one.
+   */
+  constructor(now = Date.now(), private readonly max = MAX_FAILURES) {
     this.state = { windowStart: now, count: 0 };
   }
 
@@ -130,7 +185,7 @@ export class LoginRateLimiter {
    *  proceed right now. A READ — it neither counts a failure nor takes a slot;
    *  {@link reserve} is the one that admits. */
   check(now = Date.now()): { ok: boolean; retryAfter?: number } {
-    const verdict = loginVerdict(this.state, now, this.inFlight);
+    const verdict = loginVerdict(this.state, now, this.inFlight, this.max);
     this.state = verdict.state;
     return verdict.retryAfter === undefined
       ? { ok: verdict.ok }
@@ -156,7 +211,7 @@ export class LoginRateLimiter {
    * return cannot double-decrement its way to a budget that never fills.
    */
   reserve(now = Date.now()): { ok: true; release: () => void } | { ok: false; retryAfter: number } {
-    const verdict = loginVerdict(this.state, now, this.inFlight);
+    const verdict = loginVerdict(this.state, now, this.inFlight, this.max);
     this.state = verdict.state;
     // Recomputed through `msUntilWindowEnd` rather than read off the optional
     // `verdict.retryAfter` with a `!`: the field is optional-shaped (Task 4's

@@ -2,7 +2,7 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
-import type { AccountsResponse, CatchUp, FleetHealth, FleetSession, LoginRequest, NotifyEvent, PrView, ReapResult, RunSummary, SlashCommand, StagedClip, WsAudit } from '../../../shared/api';
+import type { AccountsResponse, CatchUp, FleetHealth, FleetSession, LoginRequest, NotifyEvent, PasskeyAssertFinish, PasskeyAssertStart, PasskeyRegisterFinish, PasskeyRegisterStart, PrView, ReapResult, RunSummary, SlashCommand, StagedClip, WsAudit } from '../../../shared/api';
 import { raiseAuthLostFrom } from './auth';
 
 export class ApiError extends Error {
@@ -240,6 +240,21 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     );
   };
 
+  /** A POST whose RESPONSE is JSON — the passkey ceremonies' shape, where `post`
+   *  (which resolves to `void`) would throw the answer away. Same funnel, so a
+   *  401 still raises the one login screen. */
+  const postJson = async <T>(path: string, body?: unknown): Promise<T> =>
+    (await request(
+      path,
+      body === undefined
+        ? { method: 'POST', headers: { accept: 'application/json' } }
+        : {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', accept: 'application/json' },
+            body: JSON.stringify(body),
+          },
+    )).json() as Promise<T>;
+
   const sid = (id: string): string => `/api/sessions/${encodeURIComponent(id)}`;
 
   return {
@@ -265,6 +280,29 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      * body it catches.
      */
     login: (req: LoginRequest): Promise<void> => post('/api/auth/login', req),
+
+    /**
+     * THE FOUR PASSKEY CEREMONIES (Task 8). Wire shapes only — the WebAuthn
+     * ceremony itself lives in `lib/passkey.ts`, which is the one module that
+     * touches `navigator.credentials` and the one place base64url is spoken.
+     *
+     * The REGISTER pair requires a live session (the server gates it: enrolling
+     * a key is something only someone already signed in may do). The ASSERT pair
+     * does not, and cannot — it IS the login.
+     *
+     * `assertFinish` resolves on `204 + Set-Cookie`, exactly like `login`: the
+     * cookie is the response, so there is no body to read and nothing for this
+     * client to attach by hand (it is `HttpOnly`).
+     */
+    passkeyRegisterStart: (): Promise<PasskeyRegisterStart> =>
+      postJson<PasskeyRegisterStart>('/api/auth/passkey/register/start'),
+    passkeyRegisterFinish: (b: PasskeyRegisterFinish): Promise<void> =>
+      post('/api/auth/passkey/register/finish', b),
+    passkeyAssertStart: (): Promise<PasskeyAssertStart> =>
+      postJson<PasskeyAssertStart>('/api/auth/passkey/assert/start'),
+    passkeyAssertFinish: (b: PasskeyAssertFinish): Promise<void> =>
+      post('/api/auth/passkey/assert/finish', b),
+
     fleet: () => getJson<{ sessions: FleetSession[]; stale?: boolean; downSince?: number | null }>('/api/fleet'),
     fleetHealth: () => getJson<FleetHealth>('/api/fleet/health'),
     rebootFleet: () => post('/api/fleet/reboot'),

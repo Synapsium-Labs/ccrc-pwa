@@ -5,7 +5,7 @@ import { SESSION_COOKIE, expireCookie, parseCookies } from './cookie.js';
 import type { SessionStore } from './sessions.js';
 
 /**
- * THE GATE. One `onRequest` hook stands in front of all 49 routes, the static
+ * THE GATE. One `onRequest` hook stands in front of all 53 routes, the static
  * wildcard, the SPA fallback and all three websocket upgrades.
  *
  * ONE HOOK, NOT A PER-ROUTE CHECK, and that is the whole design: a route added
@@ -55,7 +55,7 @@ import type { SessionStore } from './sessions.js';
  * used to pick the handler. Set membership on the ROUTER's own answer cannot
  * disagree with the handler that is about to run.
  *
- * THE FOUR REASONS, and there are only four:
+ * THE FIVE REASONS, and there are only five:
  *
  *  1. `/health` — the liveness probe. `deploy/deploy.sh`'s final gate reads the
  *     shipped sha out of it to decide whether a deploy succeeded, from a shell
@@ -98,8 +98,30 @@ import type { SessionStore } from './sessions.js';
  *     files under that directory (the `send` library refuses traversal), i.e.
  *     nothing but the bundle a browser downloads before it has logged in anyway.
  *
+ *  5. `POST /api/auth/passkey/assert/start` and `…/assert/finish` — the passkey
+ *     door. Identical in kind to reason 3: these two routes ARE how a passkey
+ *     logs in, so gating them makes every enrolled key unusable. Their
+ *     credential test is their OWN (`webauthn.ts`: origin, rpIdHash, a
+ *     single-use challenge, a monotonic signature counter and an ECDSA
+ *     signature over `authData ‖ sha256(clientDataJSON)`), which is a stronger
+ *     check than the session gate could make — the gate has no session to look
+ *     at yet, which is the point. They spend a SEPARATE, looser rate-limit
+ *     budget (`PASSKEY_MAX_FAILURES`), and `assert/start` publishes the
+ *     credential ids without which no browser can run the ceremony at all.
+ *     The REGISTER pair is deliberately NOT here — see below.
+ *
  * NOT EXEMPT, and worth saying out loud because their absence is a decision:
  *  - `POST /api/auth/logout` — see 3 above.
+ *  - `POST /api/auth/passkey/register/start` and `…/register/finish` — ENROLLING
+ *    A KEY REQUIRES ALREADY BEING IN. This is the single most load-bearing
+ *    exemption decision in Task 8, and it is the one that makes
+ *    `attestation: 'none'` safe: an ungated enrol route would let anyone on the
+ *    tailnet register their own authenticator and then log in with it forever,
+ *    which is not a weakness in the crypto but a door beside it. Behind the
+ *    gate, the only caller who can enrol is one who has already proven the
+ *    passphrase — so a forged registration is an operator enrolling a key they
+ *    control, i.e. exactly what enrolling a key is. (`webauthn.ts`'s module
+ *    docstring states the same argument from the crypto side.)
  *  - `POST /api/coord/pause` and `POST /api/runs/:id/abandon` — `coord/routes.ts`
  *    leaves these off the BOX-TOKEN gate on purpose (D-B4-9: the coordinator
  *    holds that token, and a pause it can lift is not a pause). That argument is
@@ -137,6 +159,14 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
 
   ['POST /api/auth/login',
     'the door — a gate that gated its own login route would be a box nobody can enter'],
+  ['POST /api/auth/passkey/assert/start',
+    'the passkey door: this route IS how you log in, so gating it would make every enrolled key ' +
+    'unusable — the same argument as POST /api/auth/login, and it publishes only the credential ids ' +
+    'the ceremony cannot run without. On its own looser rate-limit budget (PASSKEY_MAX_FAILURES)'],
+  ['POST /api/auth/passkey/assert/finish',
+    'the passkey door, second half — it verifies a signature and mints the session, exactly as the ' +
+    'login route verifies a passphrase and mints one. Its OWN checks (origin, rpIdHash, challenge, ' +
+    'signCount, signature) are the credential test; the session gate has nothing to check yet'],
   ['GET /api/auth/status',
     'the sign on the door: the login screen must know, before anyone types, whether the gate is armed, ' +
     'whether a passkey exists to offer, and whether the rate-limit window is closed. An unauthenticated ' +
@@ -381,6 +411,76 @@ export function sessionVerdict(req: GateRequest, deps: GateDeps, now: number): G
   };
 }
 
+/**
+ * WHAT THE `Origin` HEADER ON A WEBSOCKET UPGRADE SAYS. Three states, never a
+ * boolean — the two "allow" arms mean genuinely different things and a caller
+ * that collapsed them would be unable to log the interesting one.
+ *
+ * ── THE ATTACK THIS CLOSES (deferred to Task 8 by the Task 5 review) ──
+ *
+ * CROSS-SITE WEBSOCKET HIJACKING. A page the operator visits can open
+ * `new WebSocket('wss://server-box.tailnet-example.ts.net/ws/fleet')`, and the browser
+ * attaches the session cookie to the handshake. There is no preflight on a
+ * WebSocket upgrade and no same-origin policy on the socket that results, so a
+ * successful hijack streams the whole fleet — every session, every statusline,
+ * every transcript frame — to a page the operator did not write.
+ *
+ * `SameSite=Lax` DOES NOT STOP IT HERE, and that is the whole reason this exists
+ * rather than being someone else's problem. Lax withholds a cookie on
+ * CROSS-SITE requests, and "site" means registrable domain. **`ts.net` is on the
+ * Public Suffix List**, so the registrable domain of every node on this tailnet
+ * is `tailnet-example.ts.net` — which makes `other-box.tailnet-example.ts.net` and
+ * `server-box.tailnet-example.ts.net` SAME-SITE. Lax sends the cookie between them
+ * happily. Any page served by any other node on the tailnet — a colleague's dev
+ * server, a container someone ran, a compromised device — can therefore reach
+ * this box's sockets with the operator's credential attached. The same public
+ * suffix that makes `rpId` dangerous to derive makes `SameSite` insufficient to
+ * rely on; it is one fact with two consequences.
+ *
+ * ── THE POLICY, AND WHY `'absent'` ALLOWS ──
+ *
+ * A BROWSER ALWAYS SENDS `Origin` ON A WEBSOCKET HANDSHAKE — it is required of
+ * them (RFC 6455 §4.1), and it is one of the few headers a page cannot forge.
+ * So a MISMATCH is positive evidence of a browser on the wrong page, and it is
+ * refused.
+ *
+ * ABSENCE MEANS NO BROWSER, and refusing it would buy nothing while breaking
+ * real callers. A non-browser client (`curl`, a monitoring script, `injectWS` in
+ * this repo's own suite) sends no `Origin` and can set any value it likes if
+ * required to — so a presence requirement stops nobody who is not already
+ * stopped. More to the point, such a client has NO AMBIENT COOKIE JAR: it can
+ * only present a session token someone gave it, and a caller who already holds
+ * the cookie does not need a cross-site page to use it. The hijack shape needs a
+ * browser; the check is aimed at browsers.
+ *
+ * This is the one place in this file where an ambiguous input does not deny, so
+ * it is spelled as its own named state with this paragraph attached, rather than
+ * disappearing into an `!== expected` that happens to be true for `undefined`.
+ */
+export type WsOriginVerdict = 'ok' | 'absent' | 'mismatch';
+
+/**
+ * Compare an upgrade's `Origin` against the box's configured one
+ * (`cfg.origin`) — pure, no request object, no clock.
+ *
+ * WHOLE-STRING EQUALITY: scheme, host AND port. Not `endsWith`, not a hostname
+ * comparison, not a prefix — `https://box.example` and
+ * `https://box.example.evil.test` share a prefix, and `https://box:8443` and
+ * `http://box:8443` differ only in the part that carries the transport
+ * guarantee. `cfg.origin` is validated at boot to be a bare serialized origin
+ * (`webauthn.ts`'s `originProblem`), which is what makes equality the right
+ * comparison rather than a fragile one.
+ *
+ * An array-valued header (a request carrying two `Origin` lines) arrives as an
+ * array from node and is refused as a mismatch by the `typeof` test — two
+ * origins is not one origin, and picking either would be guessing.
+ */
+export function wsOriginVerdict(origin: unknown, expected: string): WsOriginVerdict {
+  if (origin === undefined || origin === '') return 'absent';
+  if (typeof origin !== 'string') return 'mismatch';
+  return origin === expected ? 'ok' : 'mismatch';
+}
+
 /** What {@link installGate} needs from the composition root. Deliberately NOT the
  *  server's whole `Deps`: the gate reads a flag, a path and a store, and a
  *  narrower parameter is a narrower blast radius. */
@@ -391,6 +491,9 @@ export interface InstallGateDeps {
   /** `cfg.cookieSecure` — needed only so an `'expired'` refusal can hand back a
    *  matching expiry line (see {@link installGate}). */
   cookieSecure: boolean;
+  /** `cfg.origin` — the ONE origin a websocket upgrade may come from. See
+   *  {@link WsOriginVerdict} for the attack this closes. */
+  origin: string;
 }
 
 /**
@@ -419,6 +522,47 @@ export interface InstallGateDeps {
  */
 export function installGate(app: FastifyInstance, deps: InstallGateDeps): void {
   app.addHook('onRequest', async (req: FastifyRequest, reply: FastifyReply) => {
+    /**
+     * THE ORIGIN CHECK, ON UPGRADES ONLY, AND BEFORE THE CREDENTIAL CHECK.
+     *
+     * BEFORE, not after, and the order is the whole defence: a cross-site socket
+     * arrives WITH a perfectly valid cookie (that is what makes it an attack),
+     * so a session check running first would ALLOW it and there would be nothing
+     * left to refuse. The question "is this page allowed to talk to us" has to be
+     * asked before "does this request carry a credential".
+     *
+     * UPGRADES ONLY. Ordinary requests are not left unguarded — they are guarded
+     * by `SameSite=Lax` plus the fact that every write on this server is a POST,
+     * which Lax withholds the cookie from cross-SITE. The gap this closes is the
+     * one Lax cannot: same-site-but-different-host, which on a public-suffix
+     * domain like `ts.net` is every other node on the tailnet, and which for a
+     * websocket means a full read-stream of the fleet. (Extending the check to
+     * every route would also refuse the box-token machine lanes, which are
+     * `curl` inside a session and have no origin at all.)
+     *
+     * ONLY WHEN THE GATE IS ARMED. With `CCRC_AUTH` off there is no credential to
+     * hijack — every route and every socket is already open to anyone who can
+     * reach the port, so a cross-site socket obtains precisely what a one-line
+     * script would. Gating it on the flag keeps the promise the whole slice is
+     * built on ("arming the flag is the only thing that changes behaviour") and,
+     * concretely, stops the shipped default from breaking on the day a developer
+     * browses to `127.0.0.1:7788` while `CCRC_ORIGIN` still says `localhost`.
+     */
+    if (deps.enabled && req.ws === true) {
+      const origin = wsOriginVerdict(req.headers.origin, deps.origin);
+      if (origin === 'mismatch') {
+        // The received origin is attacker-chosen text: bounded and quoted before
+        // it reaches the journal, so it can neither flood the log nor forge a
+        // line. Never logs the cookie or any part of it.
+        console.warn('ccrc-server: refused a websocket upgrade from a foreign origin ' +
+          `${JSON.stringify(String(req.headers.origin).slice(0, 120))} — this box accepts only ` +
+          `${JSON.stringify(deps.origin)} (CCRC_ORIGIN). If that is wrong, fix the config; if it ` +
+          'is right, a page somewhere tried to open this box\'s sockets with your session.');
+        // A bare 401, like every other refused upgrade — the client is parsing a
+        // response it expected to be 101.
+        return reply.code(401).send();
+      }
+    }
     // The ternary is a COST gate, not a decision gate, and it is fail-safe by
     // construction: measuring when the flag is off would only waste a read, and
     // NOT measuring when it is on yields `'unread'`, which `authVerdict` denies.

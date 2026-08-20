@@ -222,6 +222,52 @@ describe('loadConfig', () => {
     const cfg = loadConfig({ CCRC_HOME: '/h', CCRC_ACCOUNTS: ROSTER_PATH, CCRC_FLEET: 'bogus' });
     expect(cfg.fleetMode).toBe('local');
   });
+
+  // ── the WebAuthn relying party (Task 8) ────────────────────────────────
+
+  it('defaults the relying party to localhost, with the origin built from the SAME port', () => {
+    // The default is deliberately one that cannot silently work in production:
+    // a credential enrolled under `localhost` is RECORDED with `localhost`
+    // (`credentials.ts`), so a box that later gets a real name refuses it
+    // loudly ("re-enrol") instead of failing an opaque signature check.
+    const cfg = loadConfig({ CCRC_HOME: '/h', CCRC_ACCOUNTS: ROSTER_PATH });
+    expect(cfg.rpId).toBe('localhost');
+    expect(cfg.origin).toBe('http://localhost:7788');
+    expect(cfg.passkeysPath).toBe(path.join('/h', '.ccrc', 'passkeys.json'));
+  });
+
+  it('the default origin follows CCRC_PORT — one port, not two that can drift', () => {
+    const cfg = loadConfig({ CCRC_HOME: '/h', CCRC_ACCOUNTS: ROSTER_PATH, CCRC_PORT: '9001' });
+    expect(cfg.port).toBe(9001);
+    expect(cfg.origin).toBe('http://localhost:9001');
+  });
+
+  it('takes CCRC_RP_ID / CCRC_ORIGIN / CCRC_PASSKEYS_PATH as written', () => {
+    const cfg = loadConfig({
+      CCRC_HOME: '/h', CCRC_ACCOUNTS: ROSTER_PATH,
+      CCRC_RP_ID: 'tailnet-example.ts.net',
+      CCRC_ORIGIN: 'https://server-box.tailnet-example.ts.net',
+      CCRC_PASSKEYS_PATH: '/elsewhere/keys.json',
+    });
+    expect(cfg.rpId).toBe('tailnet-example.ts.net');
+    expect(cfg.origin).toBe('https://server-box.tailnet-example.ts.net');
+    expect(cfg.passkeysPath).toBe('/elsewhere/keys.json');
+  });
+
+  it('a BARE `CCRC_RP_ID=` line reads as unset, not as the empty domain', () => {
+    // The house `||` vs `??` rule (`accountsPath`, :185-191): that is exactly
+    // how `deploy/ccrc.env.example` ships a key whose default lives in this
+    // file. With `??` the ceremony would be handed `rpId: ''`, which every
+    // browser refuses with an opaque SecurityError and no server-side trace —
+    // and `origin: ''`, which no `clientDataJSON.origin` could ever equal.
+    const cfg = loadConfig({
+      CCRC_HOME: '/h', CCRC_ACCOUNTS: ROSTER_PATH,
+      CCRC_RP_ID: '', CCRC_ORIGIN: '', CCRC_PASSKEYS_PATH: '',
+    });
+    expect(cfg.rpId).toBe('localhost');
+    expect(cfg.origin).toBe('http://localhost:7788');
+    expect(cfg.passkeysPath).toBe(path.join('/h', '.ccrc', 'passkeys.json'));
+  });
 });
 
 describe('configDirFor — the ONE place a wrapper becomes a directory', () => {

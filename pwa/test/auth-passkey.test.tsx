@@ -1,0 +1,388 @@
+// Stage 3a Task 8 — the PWA half of the passkey ceremony.
+//
+// FOUR SEAMS, and the failure each one exists to prevent:
+//
+//   1. `lib/passkey.ts`'s base64url — `atob`/`btoa` speak STANDARD base64 and
+//      every field on this wire is base64url. The server's decoder is strict
+//      (it refuses padding and the `+`/`/` alphabet outright), so a slip here is
+//      an enrolment the browser completes and the box refuses.
+//   2. THE EXTRACTION — `getPublicKey()`/`getPublicKeyAlgorithm()`/
+//      `getAuthenticatorData()`, which is the entire reason no CBOR decoder
+//      exists anywhere in this repo. A test that sent `attestationObject`
+//      instead would still "work" against a mock and fail against the server.
+//   3. THE BUTTON'S CONDITION — it must not appear on a dark box, on a box with
+//      no key enrolled, or in a browser that cannot finish the ceremony. All
+//      three fail CLOSED.
+//   4. THE THREE FAILURE KINDS — cancelled / refused / unreachable get three
+//      different sentences, because they are three different situations.
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { COSE_ES256 } from '../../shared/api';
+import { LoginScreen, VERDICT_TEXT } from '../src/components/LoginScreen';
+import { ApiError } from '../src/lib/api';
+import { clearAuthLost, isAuthLost, raiseAuthLost } from '../src/lib/auth';
+import {
+  PasskeyCeremonyError, assertPasskey, enrollPasskey, fromB64url, passkeySupported, toB64url,
+} from '../src/lib/passkey';
+
+const json = (status: number, body?: unknown): Response =>
+  new Response(status === 204 || body === undefined ? null : JSON.stringify(body), {
+    status, headers: { 'content-type': 'application/json' },
+  });
+
+const b64url = (bytes: number[]): string => toB64url(new Uint8Array(bytes).buffer);
+
+/** A browser that CAN run the ceremony, as `passkeySupported` measures one. */
+const supportBrowser = (): void => {
+  vi.stubGlobal('PublicKeyCredential', class {
+    getClientExtensionResults(): unknown { return {}; }
+  });
+  vi.stubGlobal('navigator', { ...navigator, credentials: { create: vi.fn(), get: vi.fn() } });
+};
+
+afterEach(() => {
+  cleanup();
+  clearAuthLost();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+// ── 1. base64url, both directions ───────────────────────────────────────────
+
+describe('base64url is base64url — not base64 with a different comment', () => {
+  it('emits the URL alphabet and NO padding', () => {
+    // 0xff 0xef 0xfe is `/+/+` in standard base64 — the two characters the url
+    // alphabet replaces. A `btoa` shipped raw would send exactly this and the
+    // server's strict decoder would refuse it.
+    expect(b64url([0xff, 0xef, 0xfe])).toBe('_-_-');
+    // One byte → two base64 chars plus `==` in the standard alphabet. None here.
+    expect(b64url([0x41])).toBe('QQ');
+    expect(b64url([0x41])).not.toContain('=');
+  });
+
+  it('round-trips every byte value', () => {
+    const all = new Uint8Array(256);
+    for (let i = 0; i < 256; i++) all[i] = i;
+    expect([...fromB64url(toB64url(all.buffer))]).toEqual([...all]);
+  });
+
+  it('decodes an unpadded field — which is the only kind the wire carries', () => {
+    expect([...fromB64url('QQ')]).toEqual([0x41]);
+    expect([...fromB64url('_-_-')]).toEqual([0xff, 0xef, 0xfe]);
+  });
+});
+
+// ── 2. the no-CBOR extraction ───────────────────────────────────────────────
+
+describe('enrollPasskey sends the EXTRACTED key, never the attestation object', () => {
+  const spki = new Uint8Array([0x30, 0x59, 0x01, 0x02]).buffer;
+  const authData = new Uint8Array([1, 2, 3, 4]).buffer;
+  const clientDataJSON = new Uint8Array([5, 6, 7]).buffer;
+  const rawId = new Uint8Array([9, 9, 9]).buffer;
+
+  const fakeCredential = (over: Partial<{ getPublicKey: () => ArrayBuffer | null }> = {}) => ({
+    rawId,
+    response: {
+      clientDataJSON,
+      getPublicKey: over.getPublicKey ?? (() => spki),
+      getPublicKeyAlgorithm: () => COSE_ES256,
+      getAuthenticatorData: () => authData,
+      // Present, and DELIBERATELY NEVER READ. Its existence in the fixture is
+      // what makes the assertion below meaningful: the client could have sent
+      // it, and does not.
+      attestationObject: new Uint8Array([0xa3, 0x63, 0x66, 0x6d, 0x74]).buffer,
+    },
+  });
+
+  it('POSTs the SPKI, the alg NUMBER and the raw authenticator data', async () => {
+    const fetchImpl = vi.fn(async (url: unknown, _init?: RequestInit) =>
+      String(url).endsWith('/register/start')
+        ? json(200, { challengeB64url: 'QUJD', rpId: 'localhost', userHandleB64url: 'QUJD' })
+        : json(204));
+    vi.stubGlobal('fetch', fetchImpl);
+    const create = vi.fn(async (_o: CredentialCreationOptions) => fakeCredential());
+
+    await enrollPasskey({ create, get: vi.fn() } as never);
+
+    const finish = fetchImpl.mock.calls.find(([u]) => String(u).endsWith('/register/finish'));
+    expect(finish).toBeTruthy();
+    const sent = JSON.parse((finish![1] as RequestInit).body as string) as Record<string, unknown>;
+    expect(sent).toEqual({
+      credentialIdB64url: toB64url(rawId),
+      publicKeySpkiB64url: toB64url(spki),
+      algorithm: COSE_ES256,
+      authenticatorDataB64url: toB64url(authData),
+      clientDataJsonB64url: toB64url(clientDataJSON),
+    });
+    // THE NO-CBOR CLAIM, as an assertion: the attestation object never crosses
+    // the wire, so nothing on the far side could need a decoder for it.
+    expect(JSON.stringify(sent)).not.toContain('attestation');
+    expect(Object.keys(sent)).not.toContain('attestationObject');
+  });
+
+  it('asks for `attestation: none`, ES256, and REQUIRED user verification', async () => {
+    // All three must agree with the server. `userVerification` especially: the
+    // server refuses an assertion with the UV flag clear AND refuses to enrol a
+    // key that cannot set it, so asking for anything weaker here would run a
+    // full ceremony that is then rejected.
+    vi.stubGlobal('fetch', vi.fn(async (url: unknown, _init?: RequestInit) =>
+      String(url).endsWith('/register/start')
+        ? json(200, { challengeB64url: 'QUJD', rpId: 'localhost', userHandleB64url: 'QUJD' })
+        : json(204)));
+    const create = vi.fn(async (_o: CredentialCreationOptions) => fakeCredential());
+
+    await enrollPasskey({ create, get: vi.fn() } as never);
+
+    const opts = create.mock.calls[0]![0] as CredentialCreationOptions;
+    const pk = opts.publicKey!;
+    expect(pk.attestation).toBe('none');
+    expect(pk.pubKeyCredParams).toEqual([{ type: 'public-key', alg: COSE_ES256 }]);
+    expect(pk.authenticatorSelection?.userVerification).toBe('required');
+    // The rpId is the SERVER's, echoed — never derived from `location.hostname`,
+    // which is the public-suffix hazard with a different author.
+    expect(pk.rp.id).toBe('localhost');
+    expect([...new Uint8Array(pk.challenge as ArrayBuffer)]).toEqual([...fromB64url('QUJD')]);
+    // No PII in the user handle.
+    expect(pk.user.name).not.toContain('@');
+  });
+
+  it('refuses when the browser cannot export the key — the failure stays at ENROLMENT', async () => {
+    // `getPublicKey()` returns null for a key type the client cannot render as
+    // SPKI. Sending something incomplete would produce a credential that exists
+    // and can never assert; refusing keeps the failure where the passphrase
+    // still works.
+    const fetchImpl = vi.fn(async (_url: unknown, _init?: RequestInit) =>
+      json(200, { challengeB64url: 'QUJD', rpId: 'localhost', userHandleB64url: 'QUJD' }));
+    vi.stubGlobal('fetch', fetchImpl);
+    const create = vi.fn(async (_o: CredentialCreationOptions) => fakeCredential({ getPublicKey: () => null }));
+
+    await expect(enrollPasskey({ create, get: vi.fn() } as never)).rejects.toBeInstanceOf(PasskeyCeremonyError);
+    expect(fetchImpl.mock.calls.some(([u]) => String(u).endsWith('/register/finish'))).toBe(false);
+  });
+});
+
+// ── 3. the assertion ────────────────────────────────────────────────────────
+
+describe('assertPasskey', () => {
+  const rawId = new Uint8Array([1, 1, 1]).buffer;
+  const assertion = {
+    rawId,
+    response: {
+      authenticatorData: new Uint8Array([2, 2]).buffer,
+      clientDataJSON: new Uint8Array([3, 3]).buffer,
+      // DER, as the authenticator produced it — 0x30 is an ASN.1 SEQUENCE.
+      signature: new Uint8Array([0x30, 0x44, 0x02, 0x20]).buffer,
+    },
+  };
+
+  it('sends the DER signature unchanged — no (r, s) unpacking anywhere', async () => {
+    const fetchImpl = vi.fn(async (url: unknown, _init?: RequestInit) =>
+      String(url).endsWith('/assert/start')
+        ? json(200, { challengeB64url: 'QUJD', rpId: 'localhost', allowCredentialIdsB64url: ['AQEB'] })
+        : json(204));
+    vi.stubGlobal('fetch', fetchImpl);
+    const get = vi.fn(async (_o: CredentialRequestOptions) => assertion);
+
+    await assertPasskey({ create: vi.fn(), get } as never);
+
+    const finish = fetchImpl.mock.calls.find(([u]) => String(u).endsWith('/assert/finish'));
+    const sent = JSON.parse((finish![1] as RequestInit).body as string) as Record<string, string>;
+    expect(sent.signatureB64url).toBe(toB64url(assertion.response.signature));
+    // Byte-for-byte what the authenticator gave us, DER header and all.
+    expect([...fromB64url(sent.signatureB64url!)]).toEqual([0x30, 0x44, 0x02, 0x20]);
+    expect(sent.authenticatorDataB64url).toBe(toB64url(assertion.response.authenticatorData));
+    expect(sent.clientDataJsonB64url).toBe(toB64url(assertion.response.clientDataJSON));
+  });
+
+  it('passes the server\'s allowCredentials through, and asks for UV', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: unknown, _init?: RequestInit) =>
+      String(url).endsWith('/assert/start')
+        ? json(200, { challengeB64url: 'QUJD', rpId: 'localhost', allowCredentialIdsB64url: ['AQEB', 'AgIC'] })
+        : json(204)));
+    const get = vi.fn(async (_o: CredentialRequestOptions) => assertion);
+
+    await assertPasskey({ create: vi.fn(), get } as never);
+
+    const pk = (get.mock.calls[0]![0] as CredentialRequestOptions).publicKey!;
+    expect(pk.userVerification).toBe('required');
+    expect(pk.rpId).toBe('localhost');
+    expect(pk.allowCredentials?.map((c) => [...new Uint8Array(c.id as ArrayBuffer)]))
+      .toEqual([[...fromB64url('AQEB')], [...fromB64url('AgIC')]]);
+  });
+
+  it('refuses to prompt when NO key is enrolled — a dialog nobody can satisfy', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (_url: unknown, _init?: RequestInit) =>
+      json(200, { challengeB64url: 'QUJD', rpId: 'localhost', allowCredentialIdsB64url: [] })));
+    const get = vi.fn();
+    await expect(assertPasskey({ create: vi.fn(), get } as never))
+      .rejects.toBeInstanceOf(PasskeyCeremonyError);
+    expect(get).not.toHaveBeenCalled();
+  });
+
+  it('a dismissed ceremony is a PasskeyCeremonyError, never a box refusal', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      json(200, { challengeB64url: 'QUJD', rpId: 'localhost', allowCredentialIdsB64url: ['AQEB'] })));
+    const get = vi.fn(async (_o: CredentialRequestOptions) => null);
+    await expect(assertPasskey({ create: vi.fn(), get } as never))
+      .rejects.toBeInstanceOf(PasskeyCeremonyError);
+  });
+
+  it('a refused assertion still rejects with the server\'s ApiError', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: unknown, _init?: RequestInit) =>
+      String(url).endsWith('/assert/start')
+        ? json(200, { challengeB64url: 'QUJD', rpId: 'localhost', allowCredentialIdsB64url: ['AQEB'] })
+        : json(401, { ok: false, error: 'unauthenticated', verdict: 'wrong' })));
+    const get = vi.fn(async (_o: CredentialRequestOptions) => assertion);
+    const err = await assertPasskey({ create: vi.fn(), get } as never).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(401);
+  });
+});
+
+// ── 4. passkeySupported ─────────────────────────────────────────────────────
+
+describe('passkeySupported fails CLOSED', () => {
+  it('is false with no WebAuthn at all', () => {
+    vi.stubGlobal('PublicKeyCredential', undefined);
+    expect(passkeySupported()).toBe(false);
+  });
+
+  it('is false with no credentials container — a non-secure context', () => {
+    vi.stubGlobal('PublicKeyCredential', class {});
+    vi.stubGlobal('navigator', { ...navigator, credentials: undefined });
+    expect(passkeySupported()).toBe(false);
+  });
+
+  it('is true only when both halves are there', () => {
+    supportBrowser();
+    expect(passkeySupported()).toBe(true);
+  });
+});
+
+// ── 5. the login screen's button ────────────────────────────────────────────
+
+const statusFetch = (body: unknown, rest: () => Response = () => json(204)) =>
+  vi.fn(async (url: unknown, _init?: RequestInit) =>
+    String(url).startsWith('/api/auth/status') ? json(200, body) : rest());
+
+const PASSKEY_BUTTON = /sign in with a passkey/i;
+
+describe('the passkey button on the login screen', () => {
+  it('appears when a key is enrolled and this browser can use it', async () => {
+    supportBrowser();
+    vi.stubGlobal('fetch', statusFetch({ authed: false, passkeysEnrolled: 1, mode: 'passphrase' }));
+    raiseAuthLost('no-session');
+    render(<LoginScreen />);
+    expect(await screen.findByRole('button', { name: PASSKEY_BUTTON })).toBeInTheDocument();
+  });
+
+  it('does NOT appear on a box with no key enrolled', async () => {
+    supportBrowser();
+    vi.stubGlobal('fetch', statusFetch({ authed: false, passkeysEnrolled: 0, mode: 'passphrase' }));
+    raiseAuthLost('no-session');
+    render(<LoginScreen />);
+    await screen.findByLabelText(/passphrase/i);
+    expect(screen.queryByRole('button', { name: PASSKEY_BUTTON })).not.toBeInTheDocument();
+  });
+
+  it('does NOT appear when the browser cannot run the ceremony', async () => {
+    vi.stubGlobal('PublicKeyCredential', undefined);
+    vi.stubGlobal('fetch', statusFetch({ authed: false, passkeysEnrolled: 3, mode: 'passphrase' }));
+    raiseAuthLost('no-session');
+    render(<LoginScreen />);
+    await screen.findByLabelText(/passphrase/i);
+    expect(screen.queryByRole('button', { name: PASSKEY_BUTTON })).not.toBeInTheDocument();
+  });
+
+  it('does NOT appear on a DARK box — the count is absent and absence draws nothing', async () => {
+    // `?? 0`: an older server, or a body that carries no count. Dark by default
+    // is a property this file holds, not a promise.
+    supportBrowser();
+    vi.stubGlobal('fetch', statusFetch({ authed: true, mode: 'off' }));
+    render(<LoginScreen />);
+    await screen.findByLabelText(/passphrase/i);
+    expect(screen.queryByRole('button', { name: PASSKEY_BUTTON })).not.toBeInTheDocument();
+  });
+
+  it('is type="button" — it must not submit an empty passphrase', async () => {
+    // A bare <button> inside a <form> defaults to type="submit".
+    supportBrowser();
+    vi.stubGlobal('fetch', statusFetch({ authed: false, passkeysEnrolled: 1, mode: 'passphrase' }));
+    raiseAuthLost('no-session');
+    render(<LoginScreen />);
+    const btn = await screen.findByRole('button', { name: PASSKEY_BUTTON });
+    expect(btn).toHaveAttribute('type', 'button');
+  });
+
+  it('a successful ceremony clears the signal — the same ending as a passphrase login', async () => {
+    supportBrowser();
+    const fetchImpl = vi.fn(async (url: unknown, _init?: RequestInit) => {
+      const u = String(url);
+      if (u.startsWith('/api/auth/status')) {
+        return json(200, { authed: false, passkeysEnrolled: 1, mode: 'passphrase' });
+      }
+      if (u.endsWith('/assert/start')) {
+        return json(200, { challengeB64url: 'QUJD', rpId: 'localhost', allowCredentialIdsB64url: ['AQEB'] });
+      }
+      return json(204);
+    });
+    vi.stubGlobal('fetch', fetchImpl);
+    (navigator.credentials as unknown as { get: ReturnType<typeof vi.fn> }).get = vi.fn(async () => ({
+      rawId: new Uint8Array([1]).buffer,
+      response: {
+        authenticatorData: new Uint8Array([2]).buffer,
+        clientDataJSON: new Uint8Array([3]).buffer,
+        signature: new Uint8Array([0x30]).buffer,
+      },
+    }));
+    raiseAuthLost('expired');
+    render(<LoginScreen />);
+    const btn = await screen.findByRole('button', { name: PASSKEY_BUTTON });
+    await act(async () => { fireEvent.click(btn); });
+    await waitFor(() => expect(isAuthLost()).toBe(false));
+  });
+
+  it('a CANCELLED ceremony says so — never "that passkey didn\'t match"', async () => {
+    supportBrowser();
+    vi.stubGlobal('fetch', statusFetch({ authed: false, passkeysEnrolled: 1, mode: 'passphrase' },
+      () => json(200, { challengeB64url: 'QUJD', rpId: 'localhost', allowCredentialIdsB64url: ['AQEB'] })));
+    (navigator.credentials as unknown as { get: ReturnType<typeof vi.fn> }).get =
+      vi.fn(async () => { throw new DOMException('cancelled', 'NotAllowedError'); });
+    raiseAuthLost('no-session');
+    render(<LoginScreen />);
+    const btn = await screen.findByRole('button', { name: PASSKEY_BUTTON });
+    await act(async () => { fireEvent.click(btn); });
+    expect(await screen.findByText(/cancelled/i)).toBeInTheDocument();
+    // The box refused nothing — so it must not say the box refused anything.
+    expect(screen.queryByText(VERDICT_TEXT.wrong)).not.toBeInTheDocument();
+    expect(isAuthLost()).toBe(true);
+  });
+
+  it('a REFUSED assertion reuses the `wrong` sentence — the server sends one answer for all', async () => {
+    supportBrowser();
+    const fetchImpl = vi.fn(async (url: unknown, _init?: RequestInit) => {
+      const u = String(url);
+      if (u.startsWith('/api/auth/status')) {
+        return json(200, { authed: false, passkeysEnrolled: 1, mode: 'passphrase' });
+      }
+      if (u.endsWith('/assert/start')) {
+        return json(200, { challengeB64url: 'QUJD', rpId: 'localhost', allowCredentialIdsB64url: ['AQEB'] });
+      }
+      return json(401, { ok: false, error: 'unauthenticated', verdict: 'wrong' });
+    });
+    vi.stubGlobal('fetch', fetchImpl);
+    (navigator.credentials as unknown as { get: ReturnType<typeof vi.fn> }).get = vi.fn(async () => ({
+      rawId: new Uint8Array([1]).buffer,
+      response: {
+        authenticatorData: new Uint8Array([2]).buffer,
+        clientDataJSON: new Uint8Array([3]).buffer,
+        signature: new Uint8Array([0x30]).buffer,
+      },
+    }));
+    raiseAuthLost('no-session');
+    render(<LoginScreen />);
+    const btn = await screen.findByRole('button', { name: PASSKEY_BUTTON });
+    await act(async () => { fireEvent.click(btn); });
+    expect(await screen.findByText(VERDICT_TEXT.wrong)).toBeInTheDocument();
+  });
+});

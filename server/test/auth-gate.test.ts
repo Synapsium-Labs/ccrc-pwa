@@ -167,12 +167,12 @@ describe('the scanner is looking at something', () => {
     // precisely the state this whole file exists to make impossible. Adding a
     // route is now a deliberate act that edits these three numbers, with a
     // reviewer looking at them.
-    expect(scanRoutes('server.ts').length).toBe(39);
+    expect(scanRoutes('server.ts').length).toBe(43);
     expect(scanRoutes('coord/routes.ts').length).toBe(13);
-    expect(ROUTES.length).toBe(52);
-    // …and the three partitions add up: 3 websockets + 49 HTTP.
+    expect(ROUTES.length).toBe(56);
+    // …and the three partitions add up: 3 websockets + 53 HTTP.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
-    expect(ROUTES.filter((r) => !isWs(r)).length).toBe(49);
+    expect(ROUTES.filter((r) => !isWs(r)).length).toBe(53);
   });
 
   it('found the specific registrations this file reasons about', () => {
@@ -182,6 +182,12 @@ describe('the scanner is looking at something', () => {
       'POST /api/runs', 'GET /api/runs', 'GET /api/feed', 'POST /api/coord/pause',
       'POST /api/sessions/:id/prompt', 'GET /ws/fleet', 'GET /ws/pty/:id',
       'POST /api/auth/login', 'POST /api/auth/logout', 'GET /api/auth/status',
+      // Task 8's four, which split TWO ways under the gate: the register pair is
+      // gated (enrolling requires already being in), the assert pair is exempt
+      // (it IS the door). A scanner that missed either would leave the sweep
+      // blind to exactly that distinction.
+      'POST /api/auth/passkey/register/start', 'POST /api/auth/passkey/register/finish',
+      'POST /api/auth/passkey/assert/start', 'POST /api/auth/passkey/assert/finish',
     ]) expect(keys, `${k} was not found by the scanner`).toContain(k);
     // Both a GET and a POST on the same path, which is the case a path-only
     // exempt table would get wrong (the POST is a box-token machine lane, the
@@ -273,7 +279,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 52 scanned + the static wildcard when the bundle is built.
+    // 56 scanned + the static wildcard when the bundle is built.
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
     // And the reconstruction really joins the tree back up, rather than reading
     // leaf segments: these two only exist if the depth walk works.
@@ -312,10 +318,11 @@ describe('EXEMPT is complete in both directions', () => {
     }
   });
 
-  it('exempts exactly the four classes the plan names — nothing has crept in', () => {
+  it('exempts exactly the five classes the plan names — nothing has crept in', () => {
     // The whole set, spelled out, so that adding an exemption is a deliberate act
-    // that edits this list with a reviewer looking at it. 14 = /health + the 9
-    // box-token lanes + /api/notify + login + status + the SPA shell.
+    // that edits this list with a reviewer looking at it. 16 = /health + the 9
+    // box-token lanes + /api/notify + login + status + the SPA shell + the two
+    // halves of the passkey door.
     expect([...EXEMPT.keys()].sort()).toEqual([
       'GET /*',
       'GET /api/auth/status',
@@ -323,6 +330,8 @@ describe('EXEMPT is complete in both directions', () => {
       'GET /api/mail/:id',
       'GET /health',
       'POST /api/auth/login',
+      'POST /api/auth/passkey/assert/finish',
+      'POST /api/auth/passkey/assert/start',
       'POST /api/mail',
       'POST /api/mail/:id/ack',
       'POST /api/notify',
@@ -335,6 +344,14 @@ describe('EXEMPT is complete in both directions', () => {
     // `/api/auth/logout` is the auth route that is NOT here — logging out is
     // something only a logged-in caller can do.
     expect(EXEMPT.has('POST /api/auth/logout')).toBe(false);
+    // AND THE TASK 8 SPLIT, asserted as its own clause rather than left implicit
+    // in the list above: ENROLLING A KEY IS GATED. An exempt register route
+    // would let anyone on the tailnet register their own authenticator and log
+    // in with it forever — it is the decision that makes `attestation: 'none'`
+    // safe (`webauthn.ts`), and it is one line away from being reversed by
+    // someone tidying the table into a `/api/auth/passkey/*` wildcard.
+    expect(EXEMPT.has('POST /api/auth/passkey/register/start')).toBe(false);
+    expect(EXEMPT.has('POST /api/auth/passkey/register/finish')).toBe(false);
   });
 
   it('the nine box-token lanes in EXEMPT are the nine that really check the token', () => {
@@ -374,9 +391,9 @@ describe('with the gate ARMED and no cookie', () => {
     // Guards the `it.each` below the same way the scanner meta-test guards the
     // scan: an EXEMPT table that had swallowed everything would leave nothing to
     // assert and report green. Exact rather than a floor, for the same reason —
-    // 52 scanned − 3 websockets − 13 exempt-and-scanned (14 EXEMPT entries less
-    // `GET /*`, which no `app.get('…')` registers) = 36.
-    expect(gated.length).toBe(36);
+    // 56 scanned − 3 websockets − 15 exempt-and-scanned (16 EXEMPT entries less
+    // `GET /*`, which no `app.get('…')` registers) = 38.
+    expect(gated.length).toBe(38);
     expect(ROUTES.length - ROUTES.filter(isWs).length - gated.length).toBe(EXEMPT.size - 1);
   });
 
@@ -479,9 +496,16 @@ describe('with CCRC_AUTH off — the shipped default', () => {
    * inferred, and both answer `501 not-configured` on a box with no session gate
    * — there is nothing there to log into or out of.
    */
-  const FLAG_AWARE = new Set(['POST /api/auth/login', 'POST /api/auth/logout']);
+  const FLAG_AWARE = new Set([
+    'POST /api/auth/login', 'POST /api/auth/logout',
+    // Task 8's four. Predicted by the note below when it was written, and it
+    // landed exactly that way: with no session gate there is nothing to enrol
+    // into and nothing to log into, so all four answer `501 not-configured`.
+    'POST /api/auth/passkey/register/start', 'POST /api/auth/passkey/register/finish',
+    'POST /api/auth/passkey/assert/start', 'POST /api/auth/passkey/assert/finish',
+  ]);
 
-  it('FLAG_AWARE is exactly those two — joining it is how a route leaves the sweep', () => {
+  it('FLAG_AWARE is exactly those six — joining it is how a route leaves the sweep', () => {
     // Review F2. The set is self-checking in ONE direction (a member is held to an
     // exact 501 dark) and nothing pinned its size, so a future route — Task 8's
     // passkey endpoints plausibly 501 when the gate is dark — could join it and
@@ -495,7 +519,14 @@ describe('with CCRC_AUTH off — the shipped default', () => {
     // `not-configured` for its own unrelated reason, dropping all of them from the
     // authenticated comparison. That is precisely the failure this test exists to
     // prevent, arrived at by automation.
-    expect([...FLAG_AWARE].sort()).toEqual(['POST /api/auth/login', 'POST /api/auth/logout']);
+    expect([...FLAG_AWARE].sort()).toEqual([
+      'POST /api/auth/login',
+      'POST /api/auth/logout',
+      'POST /api/auth/passkey/assert/finish',
+      'POST /api/auth/passkey/assert/start',
+      'POST /api/auth/passkey/register/finish',
+      'POST /api/auth/passkey/register/start',
+    ]);
     // …and both really are exempt-or-gated as the loop below assumes: login is
     // EXEMPT (the door), logout is GATED (only a logged-in caller can log out).
     expect(EXEMPT.has('POST /api/auth/login')).toBe(true);
@@ -503,7 +534,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 49 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 53 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -550,8 +581,8 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware. This is the assertion that covers all 49
-          //    rather than the 13 exempt ones.
+          //    is not itself flag-aware. This is the assertion that covers all 53
+          //    rather than the 15 exempt ones.
           if (auth === null) {
             if (dk.statusCode !== 501) drift.push(`${k}: dark → ${dk.statusCode}, want 501 not-configured`);
           } else if (dk.statusCode !== auth.statusCode) {
@@ -566,7 +597,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it.each(WS_ROUTES)('the %s socket still upgrades with the gate dark', async (route) => {
-    // All THREE (review R2), not just `/ws/fleet`: "49 routes and 3 websockets
+    // All THREE (review R2), not just `/ws/fleet`: "53 routes and 3 websockets
     // are unaffected when the flag is off" is the claim, and one socket did not
     // establish it. Safe to open here for the same reason the armed sweep is
     // safe to run: `spawnPty` is stubbed, so `/ws/pty` attaches nothing, and its
@@ -750,6 +781,12 @@ describe('the refusal', () => {
     writeFileSync(secretPath, `${await hashLine(PASSPHRASE, FAST_PARAMS, 1)}\n`);
     installGate(probe, {
       enabled: true, secretPath, cookieSecure: false,
+      // Task 8's `/ws/*` Origin check reads this. These probes send NO `Origin`
+      // header, which is the `'absent'` verdict — allowed, because a browser
+      // always sends one on a real upgrade and its absence means no browser is
+      // calling (`wsOriginVerdict`). So the refusals below are still the SESSION
+      // gate's, unchanged, which is what this describe measures.
+      origin: 'http://localhost:7788',
       store: new SessionStore(path.join(home, '.ccrc', 'sessions.json')),
     });
     probe.get('/api/probe', async () => ({ ok: true }));

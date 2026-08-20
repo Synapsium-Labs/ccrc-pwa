@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { defaultCoordDbPath } from './coord/db.js';
 import { defaultSessionsPath } from './auth/sessions.js';
+import { defaultPasskeysPath } from './auth/credentials.js';
 import { parseRoster, RosterError, type Roster } from '../../shared/roster.js';
 
 export type FleetMode = 'local' | 'remote';
@@ -99,6 +100,56 @@ export interface CcrcConfig {
    * different (or brand-new, empty) file in the other.
    */
   sessionsPath: string;
+  /**
+   * THE WEBAUTHN RELYING-PARTY ID — the registrable domain a passkey is scoped
+   * to (`server/src/auth/webauthn.ts`, Task 8).
+   *
+   * IT IS CONFIGURED AND NEVER DERIVED, and that is the single most dangerous
+   * line in this file to "simplify". The obvious derivation — take the request's
+   * `Host` and strip a label — walks straight into the PUBLIC SUFFIX LIST: this
+   * fleet's own hostname is `server-box.tailnet-example.ts.net` and **`ts.net` is a
+   * public suffix**, as is `duckdns.org`, the other host shape this project
+   * documents. Stripping one label off `server-box.tailnet-example.ts.net` gives
+   * `tailnet-example.ts.net`, which is right; stripping two gives `ts.net`, which
+   * would scope the credential to EVERY tailnet on the internet, and a browser
+   * would (correctly) refuse it — or, on a host shape where the suffix has one
+   * label fewer, quietly widen it. There is no way to know how many labels to
+   * strip without a copy of the PSL, which is a dependency this repo does not
+   * take. So the operator states it.
+   *
+   * Default `'localhost'` — the dev value, and deliberately one that CANNOT
+   * silently work in production: a credential enrolled under `localhost` is
+   * recorded with `localhost` in its own row (`credentials.ts`), so a box that
+   * later gets a real name refuses that credential and says WHY ("enrolled for
+   * localhost — re-enrol"), rather than failing an opaque signature check.
+   *
+   * `||`, not `??`, for the `accountsPath` reason at :185-191.
+   */
+  rpId: string;
+  /**
+   * THE FULL ORIGIN a browser must be at — scheme, host and port, serialized
+   * exactly as `clientDataJSON.origin` carries it (`https://host:port`, NO
+   * trailing slash, no path).
+   *
+   * Two consumers, and they are why this is one value rather than two:
+   *  1. every passkey assertion is checked against the origin RECORDED ON THE
+   *     CREDENTIAL at enrolment (`webauthn.ts`), which is this value;
+   *  2. the `/ws/*` upgrade's Origin check (`gate.ts`) — the cross-site
+   *     WebSocket hijack that `SameSite=Lax` does NOT stop, because `ts.net` is
+   *     a public suffix and so every node on one tailnet is SAME-SITE with
+   *     every other. A page on a sibling tailnet node can open a `wss://`
+   *     socket to this box with the session cookie attached; only an Origin
+   *     check refuses it.
+   *
+   * Default `http://localhost:<port>`, built from the port resolved above so
+   * the two cannot drift. Same fail-loud property as {@link rpId}.
+   */
+  origin: string;
+  /**
+   * The flat-file passkey credential store (`server/src/auth/credentials.ts`).
+   * `defaultPasskeysPath(home)`, for `sessionsPath`'s reason one field up.
+   */
+  passkeysPath: string;
 }
 
 /**
@@ -191,9 +242,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
   // nobody wrote.
   const accountsPath = env.CCRC_ACCOUNTS || path.join(home, '.ccrc', 'accounts.json');
   const roster = loadRoster(accountsPath);
+  // Hoisted out of the literal below because `origin`'s default is built FROM
+  // it: `http://localhost:7788` and `port: 7788` must be the same 7788, and a
+  // second `Number(env.CCRC_PORT ?? 7788)` inside a template string is exactly
+  // the "same value derived twice" shape `coordDbPath` warns about.
+  const port = Number(env.CCRC_PORT ?? 7788);
   return {
     host: env.CCRC_HOST ?? '127.0.0.1',
-    port: Number(env.CCRC_PORT ?? 7788),
+    port,
     home,
     registryDir: path.join(home, '.cc-sessions'),
     limitsDir: path.join(home, '.cc-limits'),
@@ -222,10 +278,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
     coordDbPath: env.CCRC_COORD_DB ?? defaultCoordDbPath(home),
     mailTokenPath: env.CCRC_MAIL_TOKEN_PATH ?? path.join(home, '.ccrc', 'mail.token'),
     buildInfoPath: path.join(home, '.ccrc', 'build.json'),
-    // The four auth keys. Task 5 adds ONLY the ones the gate itself consumes
-    // (the plan parks config in Task 10, but there is no gating a route on a
-    // key that does not exist); Task 8 adds `rpId`/`origin`; Task 10 documents
-    // all of them in `deploy/ccrc.env.example` and the runbook.
+    // The auth keys. Task 5 added ONLY the ones the gate itself consumes (the
+    // plan parks config in Task 10, but there is no gating a route on a key
+    // that does not exist); Task 8 adds `rpId`/`origin`/`passkeysPath`; Task 10
+    // documents all of them in `deploy/ccrc.env.example` and the runbook.
     authEnabled: env.CCRC_AUTH === 'on',
     cookieSecure: env.CCRC_COOKIE_INSECURE !== 'on',
     // `||`, not `??`, for both paths — the `accountsPath` lesson at :133-140:
@@ -236,5 +292,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
     // anywhere and a path nobody wrote.
     authSecretPath: env.CCRC_AUTH_SECRET_PATH || path.join(home, '.ccrc', 'auth.scrypt'),
     sessionsPath: env.CCRC_SESSIONS_PATH || defaultSessionsPath(home),
+    // `||` for all three, same reason: a bare `CCRC_RP_ID=` line in an
+    // EnvironmentFile is an empty string, and an empty rpId is not "the
+    // operator chose the empty domain" — it is an unset key. With `??` the
+    // enrolment ceremony would be handed `rpId: ''`, which every browser
+    // refuses with an opaque `SecurityError` and no server-side trace.
+    rpId: env.CCRC_RP_ID || 'localhost',
+    origin: env.CCRC_ORIGIN || `http://localhost:${port}`,
+    passkeysPath: env.CCRC_PASSKEYS_PATH || defaultPasskeysPath(home),
   };
 }

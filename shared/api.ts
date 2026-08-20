@@ -3146,6 +3146,30 @@ export interface AuthStatus {
 // imports nothing, not even `node:*`.
 
 /**
+ * The COSE algorithm identifier for ECDSA-P256-SHA256 — the ONE algorithm this
+ * box's passkeys use, and a WIRE value rather than a server implementation
+ * detail, which is why it lives here.
+ *
+ * THREE CONSUMERS, ONE DEFINITION, and that is the whole reason it is not just
+ * written `-7` where each needs it. The PWA hands it to
+ * `navigator.credentials.create` as `pubKeyCredParams`; the server verifies
+ * `PasskeyRegisterFinish.algorithm` against it, and re-checks it on every
+ * assertion; `server/src/auth/webauthn.ts` derives its `SUPPORTED_ALGS` list
+ * from it. Three hand-typed `-7`s across two packages is precisely the shape
+ * `single-definition.test.ts` exists to fail the build on — and the failure
+ * would be silent rather than loud: a PWA asking for one algorithm while the
+ * server accepts another produces an enrolment the browser completes and the
+ * server refuses, with nothing anywhere naming the mismatch.
+ *
+ * WHY ONLY THIS ONE — and why the server's list is a list rather than this
+ * constant alone — is argued at `SUPPORTED_ALGS` in `server/src/auth/webauthn.ts`:
+ * ES256 is mandatory-to-implement for WebAuthn authenticators, so one member
+ * costs no device compatibility, and every other algorithm is verification
+ * surface nobody needs.
+ */
+export const COSE_ES256 = -7;
+
+/**
  * Server→client, `POST /api/auth/passkey/register/start`. Behind the session
  * gate: enrolling a key requires already being logged in with the passphrase.
  *
