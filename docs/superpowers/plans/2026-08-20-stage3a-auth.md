@@ -123,7 +123,7 @@
 
 ## Deviations found
 
-(Next free number at plan time: **D-108**. Next free now: **D-136**. D-123 is
+(Next free number at plan time: **D-108**. Next free now: **D-137**. D-123 is
 claimed by `server/src/auth/credentials.ts` from Task 8 and has no ledger entry here.)
 
 - **D-115 — the Origin check stopped at the socket, leaving CSRF open.** Task 8 added a
@@ -316,6 +316,46 @@ claimed by `server/src/auth/credentials.ts` from Task 8 and has no ledger entry 
   still says `~/.ccrc/sessions.json` — it is never handed the sessions path, and it already hedges
   with "CCRC_SESSIONS_PATH overrides where it lives"; widening the helper's CLI for a message was
   judged the worse trade.
+
+- **D-136 — the armed gate broke the coordinator protocol's mandated read of `GET /api/runs`.**
+  `gate.ts`'s entry for `POST /api/runs` ended "GET /api/runs is the PWA read and is NOT here", and
+  that characterisation was **false one corpus over**:
+  `ccd/coordinator-skill/references/wave-lifecycle.md` makes the GET part of the pinned protocol,
+  performed **cookieless** from the fleet host — `:34` is the standing re-orientation after every
+  compaction ("never parse a hold reason to learn what wave you are on. Ask `GET /api/runs` and read
+  the run row's own `wave`"), `:95`/`:386` are the documented `unknown-run` recovery, `:375` is the
+  ledger tally. The gate reads only the session cookie, and the route had no token check of its own,
+  so an armed box answers `401 no-session` to all four — wedging the coordinator out of the run it
+  owns at the two moments it is least able to diagnose itself, with the pause files untouched and
+  nothing red anywhere. Workers were unaffected: their whole surface is exempt box-token lanes.
+  Fixed as **exempt-but-authenticated**, the `GET /api/auth/status` pattern — the handler requires a
+  live session **or** a valid box token, so the confidentiality the method-keyed table bought is
+  unchanged. Flag-aware, so a dark box is untouched; the refusal carries the session's own
+  `AuthVerdict`, so the PWA's one login screen keeps working and D-114's expired-vs-no-session split
+  survives; and it authenticates BEFORE it answers `501`, which the gate would have done for it.
+  Softening the skill was rejected: re-measure-not-parse is load-bearing there and
+  `coordinator-skill.test.ts` pins those clauses verbatim.
+  **THE GENERAL LESSON, bigger than the route:** `auth-gate.test.ts` validated `EXEMPT` against the
+  server's own route table in *both* directions and against every `checkMailToken` call site — and
+  never against consumers **outside `server/`**. The skills and `ccd/ccrc` read this HTTP surface
+  too, and a route's "who calls this" is not a fact the server package can see about itself. Two
+  source-scanning tests now close that: one asserts every `METHOD /api/…` either skill corpus names
+  is in `EXEMPT` (it reds if `GET /api/runs` leaves the table — measured), and one asserts every path
+  a real `curl` in `ccd/`/`deploy/` reaches is either exempt or carries a written ruling.
+  A side effect worth noting: the table's "keyed by METHOD" paragraph was justified by `/api/runs`
+  being exempt as a POST and gated as a GET. Both methods are now in the table, so that argument was
+  rewritten to the forward-looking one it always really was — an exemption is a decision about a
+  (method, path) PAIR, and a path-only table would hand a `DELETE /api/runs` registered next month a
+  hole nobody decided about.
+  **Also recorded, NOT fixed:** `ccrc doctor`'s one network call (`GET /api/fleet/health`,
+  `ccd/ccrc:615`) is gated and answers 401 on an armed box. Left gated deliberately — that route
+  publishes roster digests, build stamps and divergence, and exempting it to spare a diagnostic
+  would widen the tailnet surface. It is **degraded, not wedged**, which is the difference from the
+  finding above: doctor prints `fleet: not measured (the server answered HTTP 401 …)` beside its own
+  `auth` check reporting the gate is armed, so a human reading two adjacent lines can connect them —
+  where the coordinator had no human and no second line. Follow-up for the `ccd/ccrc` owner is a
+  message naming the gate rather than the bare code; the sweep test carries that ruling so a new
+  unexempt `curl` fails instead of joining a tolerated set.
 
 **Recorded, deliberately unchanged:** the `signCount` both-zero carve-out. Most Apple/Android
 platform passkeys and every synced credential always send 0; accepting them forfeits nothing,

@@ -38,12 +38,21 @@ import type { SessionStore } from './sessions.js';
 /**
  * EXEMPT — the routes the gate lets through, each with the reason it is here.
  *
- * KEYED BY METHOD **AND** PATH, which is not decoration: `/api/runs` is a
- * box-token machine lane as a POST (the coordinator opens a run) and a PWA read
- * as a GET (the run list on the console). A path-only table would have exempted
- * the GET along with the POST and published every open program to anyone on the
- * tailnet. `HEAD` is normalised to `GET` by {@link exemptKey} — HEAD is GET
- * without a body, and Fastify auto-exposes one per GET route.
+ * KEYED BY METHOD **AND** PATH, which is not decoration — though the example
+ * that used to justify it has since moved, and saying so is the honest version.
+ * `/api/runs` was the illustration: a box-token machine lane as a POST, gated as
+ * a GET. D-136 made the GET exempt-but-authenticated too, so today BOTH methods
+ * of both multi-method paths on this surface (`/api/runs`, `/api/mail`) are in
+ * the table. The mechanism is unchanged and still load-bearing, but its argument
+ * is now forward-looking rather than illustrated by a live pair:
+ *
+ * AN EXEMPTION IS A DECISION ABOUT A (METHOD, PATH) PAIR, AND ONLY THAT PAIR.
+ * Under a path-only table, `DELETE /api/runs` registered next month would be
+ * exempt for free — inheriting a hole nobody decided about, from an entry
+ * written for a read. Each of the two `/api/runs` entries carries its own,
+ * DIFFERENT reason precisely because they are two different decisions that
+ * happen to agree today. `HEAD` is normalised to `GET` by {@link exemptKey} —
+ * HEAD is GET without a body, and Fastify auto-exposes one per GET route.
  *
  * THE PATH IS THE MATCHED ROUTE, NEVER THE RAW URL (`exemptKey` takes
  * `request.routeOptions.url`, which Fastify fills in with the pattern the router
@@ -55,7 +64,7 @@ import type { SessionStore } from './sessions.js';
  * used to pick the handler. Set membership on the ROUTER's own answer cannot
  * disagree with the handler that is about to run.
  *
- * THE FIVE REASONS, and there are only five:
+ * THE SIX REASONS, and there are only six:
  *
  *  1. `/health` — the liveness probe. `deploy/deploy.sh`'s final gate reads the
  *     shipped sha out of it to decide whether a deploy succeeded, from a shell
@@ -110,6 +119,27 @@ import type { SessionStore } from './sessions.js';
  *     credential ids without which no browser can run the ceremony at all.
  *     The REGISTER pair is deliberately NOT here — see below.
  *
+ *  6. `GET /api/runs` — EXEMPT-BUT-AUTHENTICATED, and the newest entry (D-136),
+ *     found by the whole-branch review rather than by any task review. It is
+ *     reason 3's shape — a route that authenticates for ITSELF because the gate
+ *     cannot make the right decision for it — arrived at from the opposite
+ *     direction: not "the gate would lock everyone out", but "the gate reads the
+ *     wrong credential for one of two callers".
+ *
+ *     THE LESSON, WHICH IS BIGGER THAN THE ROUTE. This table's entry for
+ *     `POST /api/runs` used to end "GET /api/runs is the PWA read and is NOT
+ *     here", and that sentence was FALSE one corpus over:
+ *     `ccd/coordinator-skill/references/wave-lifecycle.md` makes the GET part of
+ *     the pinned protocol, performed cookieless from the fleet host. The sweep
+ *     in `auth-gate.test.ts` validated this table against the server's own route
+ *     table in both directions and against every `checkMailToken` call site —
+ *     and NEVER against consumers outside `server/`. The skills and `ccd/ccrc`
+ *     read this HTTP surface too, and a route's "who calls this" is not a fact
+ *     the server package can see about itself.
+ *
+ *     The handler requires a live session OR a valid box token, so the
+ *     confidentiality the method-keyed table bought is unchanged.
+ *
  * NOT EXEMPT, and worth saying out loud because their absence is a decision:
  *  - `POST /api/auth/logout` — see 3 above.
  *  - `POST /api/auth/passkey/register/start` and `…/register/finish` — ENROLLING
@@ -147,7 +177,15 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
   ['GET /api/mail/:id',
     'the envelope body channel the nudge points a worker at — box-token gated'],
   ['POST /api/runs',
-    'the coordinator opens a run — box-token gated. GET /api/runs is the PWA read and is NOT here'],
+    'the coordinator opens a run — box-token gated'],
+  ['GET /api/runs',
+    'EXEMPT-BUT-AUTHENTICATED (D-136), the `GET /api/auth/status` pattern: this route has TWO ' +
+    'callers, and the second one has no cookie jar. The coordinator skill reads it COOKIELESS from ' +
+    'the fleet host — `wave-lifecycle.md:34` makes "ask GET /api/runs and read the run row\'s own ' +
+    'wave" the standing re-orientation after every compaction, and :95/:386 make it the documented ' +
+    '`unknown-run` recovery — so a gated one wedges the coordinator out of its own run at exactly ' +
+    'the two moments it cannot diagnose itself. The handler requires a live session OR a valid box ' +
+    'token (coord/routes.ts), so nothing is published to the tailnet that was published before'],
   ['POST /api/runs/:id/dispatch',
     'the coordinator dispatches a wave — box-token gated'],
   ['POST /api/runs/:id/close',
@@ -291,6 +329,18 @@ export type GateAllowReason = 'flag-off' | 'exempt' | 'session';
 export type GateDecision =
   | { allow: true; verdict: 'ok'; reason: GateAllowReason }
   | { allow: false; verdict: AuthVerdict; reason: 'refused' };
+
+/**
+ * THE DENYING DECISION, named — the `SECRET_UNREAD` idiom for the other axis.
+ *
+ * It exists for one caller: `registerCoordRoutes`' `sessionAuth` parameter
+ * defaults to `() => NO_SESSION`, so a composition root that forgets to wire the
+ * session layer falls back on the box token rather than on nothing (D-136).
+ * Naming it keeps the literal `'no-session'` out of `server/src/coord/`, where
+ * `mail-routes.test.ts` scans every quoted kebab token and requires it to be a
+ * declared reject code — a guard worth not weakening with an exception.
+ */
+export const NO_SESSION: GateDecision = { allow: false, verdict: 'no-session', reason: 'refused' };
 
 /** Everything {@link authVerdict} is allowed to consult. All three are VALUES,
  *  already measured by the caller — there is no port here to reach through. */

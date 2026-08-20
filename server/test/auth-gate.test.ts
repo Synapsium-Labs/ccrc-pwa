@@ -43,6 +43,24 @@ const srcRoot = path.resolve(here, '..', 'src');
  */
 const FAST_PARAMS: ScryptParams = { n: 1024, r: 8, p: 1, keylen: 32 };
 const PASSPHRASE = 'correct horse battery staple';
+/** The box token the fleet host presents (`x-ccrc-mail-token`). */
+const BOX_TOKEN = 'box-token-for-the-gate-suite';
+const tokenHeader = { 'x-ccrc-mail-token': BOX_TOKEN };
+
+/**
+ * EXEMPT FROM THE GATE, BUT AUTHENTICATED BY THE HANDLER — D-136's category,
+ * declared here rather than derived, exactly as `FLAG_AWARE` is and for the same
+ * reason: membership is the only way out of the strongest assertions in this
+ * file, so it has to be a line a reviewer looks at.
+ *
+ * These routes are in `EXEMPT`, so the hook lets them through — and then they
+ * refuse an anonymous caller themselves, with a body deliberately shaped like
+ * the gate's (it carries an `AuthVerdict`, so the PWA's one login screen keeps
+ * working). That shape is why `gateRefused` CANNOT tell the two apart for them,
+ * and why the sweep below probes them with the box token instead: if the GATE
+ * were refusing, presenting a token would change nothing.
+ */
+const EXEMPT_BUT_AUTHENTICATED = new Set(['GET /api/runs']);
 
 // ── the scanner ──────────────────────────────────────────────────────────
 
@@ -119,6 +137,11 @@ const openApp = async (opts: AppOpts = {}): Promise<{ app: FastifyInstance; home
       authEnabled: opts.enabled ?? true,
       cookieSecure: opts.cookieSecure ?? false,
     },
+    // The box token, so the EXEMPT-BUT-AUTHENTICATED lane (D-136) can be probed
+    // with its OTHER credential. Without one configured, `checkMailToken`
+    // answers `'unconfigured'`, which those routes refuse — fail-shut, and not
+    // the thing this file wants to measure.
+    mailToken: BOX_TOKEN,
     spawnPty: stubPty,
   };
   const app = await buildServer(deps);
@@ -322,16 +345,17 @@ describe('EXEMPT is complete in both directions', () => {
     }
   });
 
-  it('exempts exactly the five classes the plan names — nothing has crept in', () => {
+  it('exempts exactly the six classes the plan names — nothing has crept in', () => {
     // The whole set, spelled out, so that adding an exemption is a deliberate act
-    // that edits this list with a reviewer looking at it. 16 = /health + the 9
+    // that edits this list with a reviewer looking at it. 17 = /health + the 9
     // box-token lanes + /api/notify + login + status + the SPA shell + the two
-    // halves of the passkey door.
+    // halves of the passkey door + GET /api/runs (D-136, exempt-BUT-authenticated).
     expect([...EXEMPT.keys()].sort()).toEqual([
       'GET /*',
       'GET /api/auth/status',
       'GET /api/mail',
       'GET /api/mail/:id',
+      'GET /api/runs',
       'GET /health',
       'POST /api/auth/login',
       'POST /api/auth/passkey/assert/finish',
@@ -358,7 +382,7 @@ describe('EXEMPT is complete in both directions', () => {
     expect(EXEMPT.has('POST /api/auth/passkey/register/finish')).toBe(false);
   });
 
-  it('the nine box-token lanes in EXEMPT are the nine that really check the token', () => {
+  it('the TEN box-token lanes in EXEMPT are the ten that really check the token', () => {
     // The claim "they are already guarded" is checked against the source, not
     // trusted: an exemption whose stated justification is a gate the route does
     // not actually have is the worst kind of hole.
@@ -371,8 +395,14 @@ describe('EXEMPT is complete in both directions', () => {
       const body = coord.slice(at, end);
       return /requireMailToken\(req/.test(body) || /checkMailToken\(/.test(body);
     }).map((h) => h.k);
+    // TEN since D-136: `GET /api/runs` accepts a live session OR the box token,
+    // and it is the token half that puts it in this list. The scan reads the
+    // SOURCE rather than trusting the table, which is the whole point — an
+    // exemption whose stated justification is a gate the route does not actually
+    // have is the worst kind of hole.
     expect(gated.sort()).toEqual([
-      'GET /api/mail', 'GET /api/mail/:id', 'POST /api/mail', 'POST /api/mail/:id/ack',
+      'GET /api/mail', 'GET /api/mail/:id', 'GET /api/runs',
+      'POST /api/mail', 'POST /api/mail/:id/ack',
       'POST /api/runs', 'POST /api/runs/:id/advance', 'POST /api/runs/:id/close',
       'POST /api/runs/:id/dispatch', 'POST /api/runs/:id/items',
     ]);
@@ -395,9 +425,9 @@ describe('with the gate ARMED and no cookie', () => {
     // Guards the `it.each` below the same way the scanner meta-test guards the
     // scan: an EXEMPT table that had swallowed everything would leave nothing to
     // assert and report green. Exact rather than a floor, for the same reason —
-    // 58 scanned − 3 websockets − 15 exempt-and-scanned (16 EXEMPT entries less
-    // `GET /*`, which no `app.get('…')` registers) = 40.
-    expect(gated.length).toBe(40);
+    // 58 scanned − 3 websockets − 16 exempt-and-scanned (17 EXEMPT entries less
+    // `GET /*`, which no `app.get('…')` registers) = 39.
+    expect(gated.length).toBe(39);
     expect(ROUTES.length - ROUTES.filter(isWs).length - gated.length).toBe(EXEMPT.size - 1);
   });
 
@@ -423,11 +453,35 @@ describe('with the gate ARMED and no cookie', () => {
       const w = await openApp(); app = w.app;
       const method = k.slice(0, k.indexOf(' '));
       const url = concrete(k.slice(k.indexOf(' ') + 1));
-      const res = await app.inject({ method: method as 'GET', url });
+      // D-136's lane refuses an anonymous caller ITSELF, with a verdict-carrying
+      // body that `gateRefused` cannot distinguish from the gate's. So it is
+      // probed with the credential it actually takes — and THAT is the proof the
+      // gate let it through: a gated route ignores the box token entirely, so if
+      // this route left `EXEMPT` the header below would make no difference.
+      const headers = EXEMPT_BUT_AUTHENTICATED.has(k) ? tokenHeader : undefined;
+      const res = await app.inject({ method: method as 'GET', url, ...(headers ? { headers } : {}) });
       // Not "answers 200": `/api/mail` still answers its OWN 401 for a caller
       // with no box token, and `/api/runs` a 501 with no coordination database.
       // The property is that THE GATE let it through.
       expect(gateRefused(res), `${k} was refused by the session gate`).toBe(false);
+    });
+
+  it.each([...EXEMPT_BUT_AUTHENTICATED])(
+    '%s is exempt from the GATE and refused by its own HANDLER', async (k) => {
+      // Both halves, because either one alone is the bug. Exempt-and-open would
+      // publish the run list to the tailnet; gated-and-closed would wedge the
+      // coordinator out of its own program (D-136).
+      const w = await openApp(); app = w.app;
+      const method = k.slice(0, k.indexOf(' '));
+      const url = concrete(k.slice(k.indexOf(' ') + 1));
+      const anon = await app.inject({ method: method as 'GET', url });
+      expect(anon.statusCode, `${k} answered an anonymous caller`).toBe(401);
+      const withToken = await app.inject({ method: method as 'GET', url, headers: tokenHeader });
+      expect(withToken.statusCode, `${k} refused a valid box token`).not.toBe(401);
+      const withCookie = await app.inject({
+        method: method as 'GET', url, headers: { cookie: await login(app) },
+      });
+      expect(withCookie.statusCode, `${k} refused a live session`).not.toBe(401);
     });
 
   it('the SPA shell loads with no cookie — the login screen must be able to render', async () => {
@@ -470,9 +524,17 @@ describe('the exempt check is set membership on the MATCHED ROUTE, not the raw u
   it('a crafted url cannot borrow an exemption it did not match', async () => {
     const w = await openApp(); app = w.app;
     // `/api/runs/1/dispatch` is exempt; `/api/runs/1` is not a route at all and
-    // `/api/runs` as a GET is a different entry. Neither may ride the other's.
+    // `GET /api/feed` is a wholly different entry. Neither may ride the other's.
+    //
+    // `GET /api/runs` USED TO BE THE FOIL HERE and no longer can be: D-136 put
+    // it in the table (exempt-but-authenticated), so the GATE lets it through
+    // and its own handler refuses. `gateRefused` would still answer `true` —
+    // that helper matches a verdict-carrying 401, which this route now sends
+    // deliberately — so leaving it here would have kept the test GREEN while it
+    // measured something else entirely. `/api/feed` is a real gated sibling on
+    // the same router.
     expect(gateRefused(await app.inject({ method: 'POST', url: '/api/runs/1/dispatch' }))).toBe(false);
-    expect(gateRefused(await app.inject({ method: 'GET', url: '/api/runs' }))).toBe(true);
+    expect(gateRefused(await app.inject({ method: 'GET', url: '/api/feed' }))).toBe(true);
   });
 
   it('EXEMPT is keyed by METHOD as well as path — POST /api/runs is a machine lane, GET is not', async () => {
@@ -581,7 +643,24 @@ describe('with CCRC_AUTH off — the shipped default', () => {
 
           // 2. Armed and anonymous: exempt routes answer for themselves, gated
           //    routes answer exactly `401 no-session`.
-          if (EXEMPT.has(k)) {
+          //
+          //    …and D-136's category is neither. An EXEMPT-BUT-AUTHENTICATED
+          //    route is let through by the hook and then refuses an anonymous
+          //    caller itself, so its dark and armed-anonymous answers are
+          //    legitimately DIFFERENT — which is the plain exempt branch's whole
+          //    assertion. It is held to the STRONGER pair instead: refuse
+          //    anonymously (like a gated route) and match dark when
+          //    authenticated (clause 3 below, which it is not excused from).
+          //    NOT folded into `FLAG_AWARE`: that set's own docstring warns
+          //    against exactly this — it would excuse the route from the
+          //    dark-vs-authenticated comparison, and `GET /api/runs` answering
+          //    `501` dark here is an artefact of no coord database in the
+          //    fixture, not a fact about the flag.
+          if (EXEMPT_BUT_AUTHENTICATED.has(k)) {
+            if (anon.statusCode !== 401) {
+              drift.push(`${k}: exempt-but-authenticated, yet armed-anonymous → ${anon.statusCode}`);
+            }
+          } else if (EXEMPT.has(k)) {
             if (!FLAG_AWARE.has(k) && dk.statusCode !== anon.statusCode) {
               drift.push(`${k}: EXEMPT but dark ${dk.statusCode} ≠ armed-anonymous ${anon.statusCode}`);
             }
@@ -899,8 +978,12 @@ describe('authVerdict — the decision, with no server around it', () => {
   it('HEAD rides its route\'s GET exemption, and nothing else\'s', () => {
     expect(exemptKey('HEAD', '/health')).toBe('GET /health');
     expect(authVerdict(req('HEAD', '/health'), { enabled: true, secret: secretOk, store }, 0).allow).toBe(true);
-    // …but a HEAD on a gated route is still gated.
-    expect(authVerdict(req('HEAD', '/api/runs'), { enabled: true, secret: secretOk, store }, 0).allow).toBe(false);
+    // …but a HEAD on a gated route is still gated. NOT `/api/runs` any more —
+    // D-136 made that one exempt-but-authenticated, so it would pass the GATE
+    // (and be refused by its own handler), which is a different property from
+    // the one this line measures.
+    expect(authVerdict(req('HEAD', '/api/accounts'), { enabled: true, secret: secretOk, store }, 0).allow)
+      .toBe(false);
   });
 
   it('an empty or absent cookie is `no-session`, never a pass', () => {

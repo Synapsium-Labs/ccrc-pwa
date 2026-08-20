@@ -21,9 +21,10 @@
 //   2. Nothing here mocks a verifier. There is no seam at which a test could
 //      pass against a stub.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createHash, createSign, generateKeyPairSync, randomBytes } from 'node:crypto';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
 import { COSE_ES256 } from '../../shared/api.js';
 import { buildServer, type Deps } from '../src/server.js';
@@ -39,6 +40,8 @@ import {
 } from '../src/auth/webauthn.js';
 import type { PtyLike } from '../src/pty.js';
 import { loadConfig } from '../src/config.js';
+import { CoordStore } from '../src/coord/store.js';
+import { openCoordDb } from '../src/coord/db.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -53,6 +56,8 @@ const PASSPHRASE = 'correct horse battery staple';
 
 const RP_ID = 'localhost';
 const ORIGIN = 'http://localhost:7788';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
 
 const sha256 = (b: Buffer | string): Buffer => createHash('sha256').update(b).digest();
 const b64 = (b: Buffer): string => b.toString('base64url');
@@ -333,7 +338,6 @@ describe('rpId is the registrable domain — never a public suffix, never derive
     // never grow into one) — it is that no code path can ARRIVE at a public
     // suffix, because none computes an rpId at all. This is the assertion that
     // says so, over the source rather than over a promise.
-    const here = path.dirname(new URL(import.meta.url).pathname);
     const src = readFileSync(path.join(here, '..', 'src', 'auth', 'webauthn.ts'), 'utf8');
     const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
     // The two shapes a label-strip takes. Either one appearing in CODE (comments
@@ -2141,5 +2145,222 @@ describe('assert/start spends the passkey budget', () => {
       }
       expect(warn.mock.calls.length - before).toBe(1);
     } finally { warn.mockRestore(); }
+  });
+});
+
+// ── 12. GET /api/runs: exempt from the gate, authenticated by the handler ────
+//
+// D-136, found by the whole-branch review and by no task review — because the
+// defect was not IN `server/`. `gate.ts` said "GET /api/runs is the PWA read",
+// and one corpus over `ccd/coordinator-skill/references/wave-lifecycle.md`
+// makes it the coordinator's standing re-orientation read, performed COOKIELESS
+// from the fleet host. Gated, an armed box wedges the coordinator out of the run
+// it owns after every compaction — with the pause files untouched and nothing
+// red anywhere.
+
+describe('GET /api/runs takes EITHER credential, and never neither', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  const BOX_TOKEN = 'the-fleet-hosts-box-token';
+
+  /** A server with coordination configured, so the route can actually answer. */
+  const openRunsApp = async (over: { enabled?: boolean; token?: string | null } = {}) => {
+    const home = mkTmp('ccrc-runs-auth-');
+    const base = testDeps(home);
+    mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    writeFileSync(path.join(home, '.ccrc', 'auth.scrypt'), `${await hashLine(PASSPHRASE, FAST_PARAMS, 1)}\n`,
+      { mode: 0o600 });
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const server = await buildServer({
+      ...base,
+      cfg: {
+        ...base.cfg, authEnabled: over.enabled ?? true, cookieSecure: false,
+        rpId: RP_ID, origin: ORIGIN,
+      },
+      mailToken: over.token === undefined ? BOX_TOKEN : over.token,
+      coord,
+      spawnPty: stubPty,
+    });
+    await server.ready();
+    return server;
+  };
+
+  const runs = (a: FastifyInstance, headers?: Record<string, string>) =>
+    a.inject({ method: 'GET', url: '/api/runs', ...(headers ? { headers } : {}) });
+
+  it('THE COORDINATOR PATH: cookieless, with a valid box token, succeeds', async () => {
+    // `wave-lifecycle.md:34` — "ask GET /api/runs and read the run row's own
+    // wave" — run from the fleet host, which has no cookie jar and never will.
+    app = await openRunsApp();
+    const res = await runs(app, { 'x-ccrc-mail-token': BOX_TOKEN });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(JSON.parse(res.body)).toHaveProperty('runs');
+  });
+
+  it('THE PWA PATH: a live session cookie, no token, succeeds', async () => {
+    app = await openRunsApp();
+    const login = await app.inject({
+      method: 'POST', url: '/api/auth/login', payload: { passphrase: PASSPHRASE },
+    });
+    const set = login.headers['set-cookie'];
+    const line = Array.isArray(set) ? set[0]! : String(set);
+    const res = await runs(app, { cookie: line.slice(0, line.indexOf(';')) });
+    expect(res.statusCode, res.body).toBe(200);
+  });
+
+  it('NEITHER credential is refused — the confidentiality the table bought is unchanged', async () => {
+    app = await openRunsApp();
+    const res = await runs(app);
+    expect(res.statusCode).toBe(401);
+    expect(res.body).not.toContain('"runs"');
+  });
+
+  it('a WRONG box token is refused, exactly as no token is', async () => {
+    app = await openRunsApp();
+    const res = await runs(app, { 'x-ccrc-mail-token': 'not-the-token' });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('an UNCONFIGURED box token fails SHUT — it does not fail open', async () => {
+    // `requireMailToken`'s stance, kept: a server with no token configured
+    // refuses the token path rather than treating "nothing to check" as "ok".
+    // That is D-39 inverted, and it is why this route can be exempt at all.
+    app = await openRunsApp({ token: null });
+    expect((await runs(app, { 'x-ccrc-mail-token': BOX_TOKEN })).statusCode).toBe(401);
+    expect((await runs(app)).statusCode).toBe(401);
+  });
+
+  it('the refusal carries the SESSION verdict, so the PWA still raises its one login screen', async () => {
+    // Not this file's usual bare-`detail` 401: `pwa/src/lib/api.ts` raises the
+    // login screen from a 401 body naming an `AuthVerdict`, so answering the way
+    // `/api/mail` does would leave a browser with a lapsed cookie silently
+    // failing this call — and would lose D-114's expired-vs-no-session split.
+    app = await openRunsApp();
+    const cold = await runs(app);
+    expect(JSON.parse(cold.body).verdict).toBe('no-session');
+    // A cookie that matches nothing is `expired` (D-114), not `no-session`.
+    const stale = await runs(app, { cookie: `${SESSION_COOKIE}=${'a'.repeat(43)}` });
+    expect(JSON.parse(stale.body).verdict).toBe('expired');
+  });
+
+  it('is UNCHANGED on a dark box — no token, no cookie, still answers', async () => {
+    // The promise the whole slice rests on. A `requireMailToken` here with no
+    // flag check would have broken `GET /api/runs` for every PWA on every dark
+    // box in the fleet.
+    app = await openRunsApp({ enabled: false });
+    const res = await runs(app);
+    expect(res.statusCode, res.body).toBe(200);
+  });
+
+  it('authenticates BEFORE it answers 501 — a stranger learns nothing about the box', async () => {
+    // On a gated route the hook refuses before the handler runs; moving the
+    // check into the handler means keeping that order by hand. `501
+    // not-configured` tells an anonymous caller whether this box runs
+    // coordination at all.
+    const home = mkTmp('ccrc-runs-nocoord-');
+    const base = testDeps(home);
+    mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    writeFileSync(path.join(home, '.ccrc', 'auth.scrypt'), `${await hashLine(PASSPHRASE, FAST_PARAMS, 1)}\n`,
+      { mode: 0o600 });
+    app = await buildServer({
+      ...base,
+      cfg: { ...base.cfg, authEnabled: true, cookieSecure: false, rpId: RP_ID, origin: ORIGIN },
+      mailToken: BOX_TOKEN,
+      spawnPty: stubPty,
+    });
+    await app.ready();
+    expect((await runs(app)).statusCode).toBe(401);
+    // …and the credentialed caller gets the honest 501.
+    expect((await runs(app, { 'x-ccrc-mail-token': BOX_TOKEN })).statusCode).toBe(501);
+  });
+
+  it('THE SWEEP: every /api/ path either skill corpus names is reachable by its own credential', () => {
+    // THE GENERAL LESSON OF D-136, as a mechanism rather than a memory. The
+    // EXEMPT sweep validated the table against the server's route table in both
+    // directions and against every `checkMailToken` call site — and never
+    // against consumers OUTSIDE `server/`. A route's "who calls this" is not a
+    // fact the server package can see about itself, so this reads the skills.
+    const root = path.resolve(here, '..', '..', 'ccd');
+    const corpora = [path.join(root, 'coordinator-skill'), path.join(root, 'worker-skill')];
+    const files: string[] = [];
+    const walk = (dir: string): void => {
+      for (const e of readdirSync(dir)) {
+        const p = path.join(dir, e);
+        if (statSync(p).isDirectory()) walk(p);
+        else if (p.endsWith('.md')) files.push(p);
+      }
+    };
+    for (const c of corpora) walk(c);
+    // A scan over an empty list passes everything — the same guard the route
+    // scanner at the top of `auth-gate.test.ts` opens with.
+    expect(files.length, 'found no skill files to scan').toBeGreaterThanOrEqual(4);
+
+    const mentioned = new Set<string>();
+    for (const f of files) {
+      const text = readFileSync(f, 'utf8');
+      for (const m of text.matchAll(/(GET|POST|PUT|PATCH|DELETE)\s+`?(\/api\/[A-Za-z0-9/:_<>-]+)/g)) {
+        // Normalise the doc spellings (`<deliveryId>`, `7`) onto route patterns.
+        const norm = m[2]!.replace(/\/(<[^>]+>|\d+)(?=\/|$)/g, '/:id').replace(/[.,`)]+$/, '');
+        mentioned.add(`${m[1]!} ${norm}`);
+      }
+    }
+    expect(mentioned.size, 'the skill scan matched no HTTP paths').toBeGreaterThanOrEqual(10);
+
+    // EVERY one of them must be reachable by a caller with no cookie — i.e. in
+    // EXEMPT. A skill clause the gate refuses is a wedged fleet, and it is
+    // invisible from inside `server/`.
+    const blocked = [...mentioned].filter((k) => !EXEMPT.has(k)).sort();
+    expect(blocked,
+      'these are mandated by a skill and REFUSED by the armed gate — the D-136 shape').toEqual([]);
+  });
+
+  it('THE OTHER CONSUMERS: every real curl in ccd/ and deploy/ is accounted for', () => {
+    // The skills are not the only corpus outside `server/` that speaks to this
+    // HTTP surface — `ccd/ccrc`, `ccd/ccd` and `deploy/notify.sh` do too, and
+    // D-136's lesson is about consumers the server package cannot see, not about
+    // skills specifically. This scans for an actual `curl` reaching a `/api/`
+    // path, so the many PROSE mentions of routes in ccd's comments (which are
+    // documentation of what the PWA does, not calls) do not register.
+    const root = path.resolve(here, '..', '..');
+    const scan = ['ccd/ccrc', 'ccd/ccd', 'ccd/ccrc-doctor-checks', 'deploy/notify.sh'];
+    const called = new Set<string>();
+    for (const rel of scan) {
+      const f = path.join(root, rel);
+      if (!existsSync(f)) continue;
+      for (const line of readFileSync(f, 'utf8').split('\n')) {
+        if (!/\bcurl\b/.test(line)) continue;
+        for (const m of line.matchAll(/(\/api\/[A-Za-z0-9/_-]+)/g)) called.add(m[1]!);
+      }
+    }
+    expect(called.size, 'the curl scan matched nothing — it has stopped looking')
+      .toBeGreaterThanOrEqual(2);
+
+    /**
+     * Paths a real curl reaches that are NOT exempt, each with the ruling that
+     * says why that is acceptable. Named individually, so a NEW unexempt curl
+     * fails this test instead of joining a tolerated set.
+     */
+    const ACCOUNTED: Record<string, string> = {
+      // `ccrc doctor`'s ONE network call. Gated deliberately — `/api/fleet/health`
+      // publishes roster digests, build stamps and divergence, and exempting it
+      // to spare a diagnostic would widen the tailnet surface for convenience.
+      //
+      // ON AN ARMED BOX IT IS DEGRADED, NOT WEDGED, and that is the difference
+      // from D-136: doctor prints `fleet: not measured (the server answered
+      // HTTP 401 …)` NEXT TO its own `auth` check reporting the gate is armed,
+      // so a human reading two adjacent lines can connect them. The coordinator
+      // case had no human and no second line. Recommended follow-up for the
+      // `ccd/ccrc` owner: name the gate in that message rather than the bare
+      // code. NOT fixed here, because it is Task 9's file and an exemption is
+      // the wrong fix.
+      '/api/fleet/health': 'ccrc doctor — gated on purpose; degraded but self-describing (see above)',
+    };
+    const unaccounted = [...called]
+      .filter((p2) => !ACCOUNTED[p2])
+      .filter((p2) => ![...EXEMPT.keys()].some((k) => k.endsWith(` ${p2}`)))
+      .sort();
+    expect(unaccounted,
+      'a real curl reaches these and the armed gate refuses them, with no ruling on record').toEqual([]);
   });
 });

@@ -49,7 +49,7 @@ import { LoginRateLimiter, PASSKEY_MAX_FAILURES } from './auth/ratelimit.js';
 import {
   SESSION_COOKIE, cookiePolicyProblem, expireCookie, parseCookies, serializeCookie,
 } from './auth/cookie.js';
-import { SECRET_UNREAD, installGate, measureSecret, sessionVerdict } from './auth/gate.js';
+import { SECRET_UNREAD, installGate, measureSecret, sessionVerdict, type GateDecision } from './auth/gate.js';
 import { PasskeyStore } from './auth/credentials.js';
 import {
   ChallengeStore, relyingPartyProblem, userHandleFor, verifyAssertion, verifyRegistration,
@@ -402,6 +402,24 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   /** The measured secret for THIS moment — `SECRET_UNREAD` when the flag is off,
    *  so nothing touches the disk on a box whose gate is dark. */
   const secretNow = () => (deps.cfg.authEnabled ? measureSecret(deps.cfg.authSecretPath) : SECRET_UNREAD);
+
+  /**
+   * THE CREDENTIAL QUESTION, as a value other route families can be handed —
+   * `GET /api/runs` is the one caller (D-136), and it needs the whole decision
+   * rather than a boolean so its refusal can carry the same `AuthVerdict` the
+   * gate would have sent.
+   *
+   * Passed as a FUNCTION rather than by exposing `authStore` on `Deps`: the
+   * store must be loaded exactly once at boot, and putting it on `Deps` is the
+   * "second KeyedQueue" shape that `Deps.queue`'s own docstring warns about.
+   * `sessionVerdict`, not `authVerdict`, for `GET /api/auth/status`'s reason —
+   * on an EXEMPT route `authVerdict` answers `reason: 'exempt'` without ever
+   * looking at the cookie, and reading that as authentication would tell every
+   * anonymous browser it was signed in.
+   */
+  const sessionAuth = (req: FastifyRequest): GateDecision => sessionVerdict(req, {
+    enabled: deps.cfg.authEnabled, secret: secretNow(), store: authStore,
+  }, Date.now());
 
   /**
    * `POST /api/auth/login` — one of the two EXEMPT auth routes (`gate.ts`'s
@@ -1212,7 +1230,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // sharing one token+attribution gate inline here would be a second copy of
   // that gate. 501 `{ok:false,error:'not-configured'}` without `deps.coord`,
   // the same shape as the push routes and `/api/notifications/catchup` above.
-  registerCoordRoutes(app, deps, bus);
+  // The 4th argument is D-136: `GET /api/runs` is EXEMPT from the session gate
+  // and authenticates for itself, because the coordinator skill reads it
+  // cookieless from the fleet host with the box token. The session half of that
+  // decision can only be made here, where `authStore` lives.
+  registerCoordRoutes(app, deps, bus, sessionAuth);
 
   app.get('/ws/session/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };
