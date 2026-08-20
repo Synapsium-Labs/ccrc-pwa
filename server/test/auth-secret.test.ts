@@ -5,7 +5,7 @@
 // passphrase". These cases drive that split directly; the round-trip proves the
 // writer (`hashLine`, the Task 9 node helper's engine) against the reader.
 import { describe, it, expect } from 'vitest';
-import { mkdirSync, chmodSync, writeFileSync } from 'node:fs';
+import { chmodSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import {
@@ -81,6 +81,14 @@ describe('readAuthSecret — a garbled line fails SHUT, never reads as "no passp
     ['params missing p', validishLine({ params: 'N=1024,r=8' })],
     ['non-integer N', validishLine({ params: 'N=abc,r=8,p=1' })],
     ['digit-prefixed junk N (65536x)', validishLine({ params: 'N=65536x,r=8,p=1' })],
+    // FIX 1: `Number` would accept each of these as a finite value — a strict
+    // parser must refuse a field that is not plain decimal digits, BEFORE Number.
+    ['hex-radix N (0x10000)', validishLine({ params: 'N=0x10000,r=8,p=1' })],
+    ['leading-whitespace N (" 65536")', validishLine({ params: 'N= 65536,r=8,p=1' })],
+    ['plus-signed N (+65536)', validishLine({ params: 'N=+65536,r=8,p=1' })],
+    // gen has no power-of-two backstop, so exponent notation here reds ONLY on the
+    // strictness gate — `Number('1e2')` is 100, silently accepted by a lenient parse.
+    ['exponent gen (1e2)', validishLine({ gen: 'gen=1e2' })],
     ['non-power-of-two N', validishLine({ params: 'N=1000,r=8,p=1' })],
     ['N past the working-set ceiling', validishLine({ params: 'N=8388608,r=8,p=1' })],
     ['r below 1', validishLine({ params: 'N=1024,r=0,p=1' })],

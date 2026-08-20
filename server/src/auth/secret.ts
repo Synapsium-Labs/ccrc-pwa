@@ -126,11 +126,22 @@ function decodeB64(field: string, what: string, path: string): Buffer {
 }
 
 function parseIntStrict(s: string, what: string, path: string): number {
-  // `Number` (not `parseInt`) so `65536x`, `6.5`, ` 6`, `0x10`, `` all fail — a
-  // digit-prefixed garbage string must NOT read as its leading digits.
+  // A well-formed field is decimal digits and NOTHING else. `^\d+$` first, BEFORE
+  // `Number`, because `Number` is lenient in exactly the ways a secret file must
+  // not be: `Number(' 65536')`, `Number('0x10000')`, `Number('6e4')`, `Number('+9')`
+  // all yield a finite value, so a field carrying leading whitespace, a hex/octal
+  // radix, a sign, or an exponent would parse to a NUMBER rather than being refused
+  // as malformed. The fail-shut posture wants "the field was well-formed", not
+  // merely "it parsed to some integer" — a garbled cost factor must lock out, and
+  // it can only do that if it is rejected here.
+  if (!/^\d+$/.test(s)) {
+    throw new AuthSecretUnusable(`${path}: ${what} is not a plain decimal integer (${JSON.stringify(s)})`);
+  }
   const n = Number(s);
-  if (!Number.isInteger(n)) {
-    throw new AuthSecretUnusable(`${path}: ${what} is not an integer (${JSON.stringify(s)})`);
+  // `^\d+$` admits arbitrarily long digit strings; guard the ones past exact
+  // integer range so a downstream comparison never sees a rounded value.
+  if (!Number.isSafeInteger(n)) {
+    throw new AuthSecretUnusable(`${path}: ${what} is out of safe integer range (${JSON.stringify(s)})`);
   }
   return n;
 }
