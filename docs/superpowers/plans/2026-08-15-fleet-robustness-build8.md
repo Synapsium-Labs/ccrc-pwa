@@ -13867,3 +13867,46 @@ moves a process moves what its children inherit. This one: *a predicate that can
 know" will be believed by callers that needed to hear it* — and the tell is already in the codebase,
 because `_ws_status` had the three-valued contract and one of its own branches wasn't using it.
 **When a helper returns a boolean, ask what it does when it fails to measure.**
+
+### D-B8-13 — the server's `Tmux.hasSession` was D-B8-12's collapse, unfixed, one seam over
+
+**Found:** 2026-08-19, by the adversarial pass over the substrate-unreachable spec's open questions; the
+dominant finding was not in the spec at all. **Fixed:** 2026-08-20. **Scope:** `server/src/exec.ts`,
+`server/src/watch.ts` (two callers), documented deferrals at `fleet.ts`/`sessionws.ts`.
+
+D-B8-12 gave ccd an honest three-valued `_session_verdict` and stopped two destructive verbs from
+believing silence. The server side of the same seam was untouched: `Tmux.hasSession` reduced the whole
+`ExecResult` — `stderr`, `killed`, `signal`, everything the runner had carefully carried across the
+agent WebSocket — to `code === 0`. An adapter narrowing a distinction it received, in the exact adapter
+class the architecture doc's highest-yield rule names. Two of its six callers were live defects:
+
+- **`archiveSafety` (`watch.ts`) failed OPEN on a destructive path.** Its tmux arm answered
+  `{verdict: 'ok'}` — the answer its caller archives on — when tmux could not be asked, with the same
+  `// no pane: nothing is running` comment as ccd's `_ws_status` before D-B8-12, while the function's
+  four other cannot-tell branches all said `unknown`. Now: `gone` alone is 'ok'; `unknown` refuses,
+  carrying `held`.
+- **The mail sweep's bare `continue`** treated "recipient's pane is gone" and "tmux did not answer" as
+  the same non-event, four lines below a registry read that distinguishes the matching pair on its own
+  seam. Now `unknown` backs off on the unmeasurable arm's never-ratcheting terms
+  (`countsAsAttempt: false`, step pinned at base — a substrate outage must never walk a row toward the
+  undeliverable park) with the tmux message verbatim in `lastError`, which is also the herd valve
+  against re-probing a wedged server every sweep.
+
+**The mechanism, not just the fix:** `classifyHasSession` mirrors `_session_verdict`'s polarity — the
+ONE death message is recognised, everything else refuses — and the message table is now a **shared
+fixture** (`server/test/sessionVerdictFixture.ts`) driven by both the bash suite and the TS suite, the
+lifecycle-ladder idiom applied to this contract so the twins cannot drift. `unknown` carries a
+never-empty `detail` (stderr verbatim, else the signal/kill that cut the client short, else the exit
+code): a blank reason is the one shape a maintainer can do nothing with. `hasSession` is derived
+(`live` only), exactly as `_alive` is, for the callers whose collapse is deliberate.
+
+**Deferred BY DECISION, marked in place:** `assembleFleet` and `liveStatus` (`fleet.ts`) and the chat
+resolve (`sessionws.ts`) still read `unknown` as dead. `liveStatus`'s collapse fails toward *refusing*
+an interrupt — the safe direction. The fleet view's false 'dead' (with the ungated Restart button under
+it) is a product judgement — a new `SessionStatus` crosses the wire and every render seam — and belongs
+to the substrate-unreachable spec, not to a guard.
+
+**The transferable lesson.** A fix to one implementation of a two-implementation contract is half a
+fix, and the halves drift unless a fixture binds them. D-B8-12's own ledger entry said "the polarity is
+the whole design" — and the polarity existed in one language. **When you fix a collapse on one side of
+a seam, grep for its twin on the other side before closing the deviation.**

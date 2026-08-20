@@ -491,6 +491,9 @@ export class SessionStream {
     let cwd = identity.workdir;
     let status: SessionStatus = 'dead';
     let statusUpdatedAt: number | null = null;
+    // D-B8-13: `unknown` deliberately reads as not-alive here, so the chat
+    // header shows 'dead' during a substrate fault — display-only, and the
+    // same deferred product decision as assembleFleet's (see fleet.ts).
     if (await this.deps.tmux.hasSession(this.id)) {
       status = 'idle';
       const pid = await this.deps.tmux.panePid(this.id);
