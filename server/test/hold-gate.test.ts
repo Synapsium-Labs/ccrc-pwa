@@ -349,7 +349,9 @@ describe('archiveMerged — the hold is re-read at the DECISION POINT', () => {
 
 describe('SessionRecord.held', () => {
   it('an EMPTY .hold file is held, and says so instead of showing nothing', async () => {
-    // `touch $REG/<id>.hold` and a truncated write both land here. `''` is not
+    // `touch $REG/<id>.hold` and every other residual empty-field route land
+    // here (`BranchEvidence`'s `'empty'` rung; a truncated write is no longer
+    // one of them). `''` is not
     // null, so every consumer enforces the hold — while the reason, which IS
     // the display, renders as nothing at all on every surface: `Held — `, an
     // empty chip tooltip, `PR #591 merged — ; nothing archived.` The one thing

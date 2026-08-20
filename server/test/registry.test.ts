@@ -121,10 +121,14 @@ describe('readRegistry', () => {
   // was false, so `branchUnmeasured` was false AND `verifyDone`'s null check
   // missed it, and `''` went on to be used AS A BRANCH NAME.
   //
-  // Producible, not theoretical. `_reg_set` is `printf '%s' "$3" > "$REG/$1.$2"`
-  // (ccd:252) — a plain truncating redirect with no tmp+rename, so a process
-  // killed between the truncate and the write leaves exactly this file; `touch
-  // $REG/<id>.branch` is the other way in.
+  // Producible, not theoretical — though no longer by a torn write. `_reg_set`
+  // writes a hidden tmp and `mv -fT`s it into place (registry-durability wave),
+  // so a killed writer now leaves the WHOLE OLD value, never an empty file.
+  // What still produces one: `touch $REG/<id>.branch`, a registry file left by
+  // a build older than that change, or a power loss — `_reg_set` orders its
+  // bytes but fsyncs neither the tmp nor the directory, and atomicity is a
+  // concurrency property, not a durability one. See `BranchEvidence`'s
+  // `'empty'` rung in registry.ts for the long form.
   describe('and a .branch that reads back EMPTY', () => {
     const seedEmptyBranch = (reg: string) => seed(reg, 'demo-quiet-basin', {
       wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'e'.repeat(36),
@@ -1036,7 +1040,10 @@ describe('the lifecycle stamps (D3)', () => {
   });
 
   it('nulls a stamp whose epoch is missing or non-numeric — a torn write is not a fact', async () => {
-    // An interrupted `_reg_set` leaves a zero-byte or half-written field.
+    // An empty or garbage field reaches this reader by the routes
+    // `BranchEvidence`'s `'empty'` rung sets out — an older build's file, a
+    // hand-edit, a power loss — never any more by an interrupted `_reg_set`,
+    // which renames rather than truncates.
     // `Number('')` is 0, and `stoppedAt: 0` classifies a live session as
     // stopped-in-1970 — the same silent lie `numOrNull` exists to refuse.
     for (const bad of ['', '   ', 'pwa', 'notanepoch pwa']) {
@@ -1088,12 +1095,13 @@ describe('the lifecycle stamps (D3)', () => {
 
   // BINDING FINDING #1 from task-8's review (task-9-brief does not draft this
   // case — routed here deliberately, DISPATCH context for task 9). ccd's own
-  // `_session_state` (ccd/ccd:377) tests ONLY `[[ -e "$REG/$id.stopped" ]]` —
-  // existence, never content — while `.supervised`'s bash reader (ccd/ccd:367)
+  // `_session_state` tests ONLY `[[ -e "$REG/$id.stopped" ]]` —
+  // existence, never content — while `.supervised`'s bash reader
   // already guards with `^[0-9]+$` before trusting it, the same guard
   // `numOrNull` gives it here. `.stopped` has no such guard on the bash side,
-  // and its own write (`printf '%s %s' "$(date +%s)" "$surface" > file`,
-  // ccd/ccd:336) is non-atomic — so a zero-byte or garbage `.stopped` is a
+  // and its own write (`_reg_set "$id" stopped "$(date +%s) $surface"`, in
+  // `_ws_unsupervise`) is atomic now but not durable — so a zero-byte or
+  // garbage `.stopped` is still a
   // PROVEN divergence: bash confidently answers `stopped` for this exact
   // on-disk state. A reader that collapsed the same bytes to `stoppedAt: null`
   // would let `dead + started -> orphan` fire about a row bash calls stopped —
@@ -1154,8 +1162,8 @@ describe('SessionRecord.substrate — presence from the LISTING, never from a no
 
   it('empty or unstamped content degrades loudly, not silently', async () => {
     // `_substrate_mark` refuses to write an empty reason (a killed probe gets
-    // a synthesized one), so an empty marker is a torn write — it gets a
-    // sentence, the `HOLD_NO_REASON` ruling.
+    // a synthesized one), so an empty marker never came from ccd writing one —
+    // it gets a sentence, the `HOLD_NO_REASON` ruling.
     seed(reg, 'demo-quiet-basin', { substrate: '' });
     expect((await read()).substrate).toEqual({ at: 0, text: SUBSTRATE_NO_REASON });
     // A stampless text keeps its WHOLE content as the reason at `at: 0` —

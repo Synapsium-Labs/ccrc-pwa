@@ -124,9 +124,11 @@ describe('ccd ws-hold / ws-release', () => {
 
   it('a failed registry write REFUSES — never `held` on stdout with no hold on disk', () => {
     const id = workspaceId();
-    // A directory at the target path makes `printf > "$REG/$id.hold"` fail with
-    // EISDIR for ANY uid, root included — the portable stand-in for the
-    // read-only-FS / ENOSPC / quota failure measured with `chmod 500 "$REG"`.
+    // A directory at the target path makes `_reg_set`'s `mv -fT` refuse for ANY
+    // uid, root included (`cannot overwrite directory ... with non-directory`)
+    // — the portable stand-in for the read-only-FS / ENOSPC / quota failure
+    // measured with `chmod 500 "$REG"`. `-T` is what keeps it a refusal: a bare
+    // `mv -f` moves the tmp INSIDE the directory and exits 0 (D-121).
     // Unguarded, `_reg_set` fails, ccd (`set -uo pipefail`, no `-e`) carries on,
     // and the verb prints `held <id>: <reason>` at exit 0 while nothing is held:
     // the orchestrator records the claim, the next archiveMerged sweep sees no

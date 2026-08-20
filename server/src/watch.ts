@@ -1849,8 +1849,11 @@ export class FleetWatcher {
         // the earlier "can only come from" here was wrong (wave-1 review
         // minor m3): losing the registry DIRECTORY itself mid-pass produces
         // the same observation — this method's own listing succeeded at the
-        // top, the per-field reads afterwards ENOENT, and every row takes
-        // this route at once. That case is fleet-wide and lasts ONE PASS
+        // top, the per-field reads afterwards ENOENT, and every row not yet
+        // read takes this route in the same pass (a loss landing mid-loop
+        // spares the rows `buildRecord` already read; only a loss between
+        // `readRegistryMeasured`'s top-level `readdir` and the start of that
+        // loop catches the whole fleet). That case is fleet-wide and lasts ONE PASS
         // (the next sweep's listing fails and the method returns before this
         // loop), where a reap is per-row and permanent; the cost of the
         // difference is that a directory lost for one pass mass-parks

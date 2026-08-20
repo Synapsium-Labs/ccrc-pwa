@@ -580,9 +580,10 @@ describe('verifyDone — the branch to re-measure comes from the live registry (
       // The whole point of a typed refusal is that the sentence is true. An
       // empty file is not a failed read (its bytes came back) and it is not an
       // absent field (a main checkout's ordinary state) — it is evidence that
-      // something wrote, or half-wrote, this field. `_reg_set` is a truncating
-      // redirect with no tmp+rename (ccd:252), so a kill between truncate and
-      // write produces exactly this.
+      // something wrote, or half-wrote, this field. `_reg_set` renames a tmp
+      // into place now, so a kill no longer produces it; an older build's
+      // leftover file, a hand-edit, or a power loss still do (see
+      // `BranchEvidence`'s `'empty'` rung).
       const home = mkTmp('ccrc-fp-');
       seedRegistry(home, '');
       const root = project(TIP, null);
