@@ -29,7 +29,7 @@ import type {
 import { parseCcdCaps } from '../../shared/agent-protocol.js';
 import { parseBuildInfo, type BuildInfo } from '../../shared/buildinfo.js';
 import { bodyDigest } from '../../shared/mark.mjs';
-import { readB64, readFrom, listDir, readWhole, statPath, writeB64 } from './fileops.js';
+import { readB64, readFrom, listDir, readWhole, statPath, writeB64, type ReadResult } from './fileops.js';
 import { isSessionIdAllowed, spawnFleetPty, type PtyProcess, type PtySpawn } from './pty.js';
 import { openTail, type TailHandle } from './tail.js';
 import { checkPath, isExecAllowed, type WhitelistConfig } from './whitelist.js';
@@ -159,6 +159,16 @@ function fail(id: number, message: string): ResErr {
   return { t: 'res', id, ok: false, err: message };
 }
 
+/** Builds the `read` op's wire payload from `readWhole`'s result. `data`
+ *  keeps its exact pre-existing meaning (null for BOTH absent and
+ *  unreadable) so an older server's `typeof data === 'string' ? data : null`
+ *  reader is unaffected. `absent` is spread in ONLY when true — never sent
+ *  as `absent: false` — matching the wire contract `{data: string|null,
+ *  absent?: true}` in `shared/agent-protocol.ts`. */
+function readPayload(r: ReadResult): { data: string | null; absent?: true } {
+  return { data: r.data, ...(r.absent ? { absent: true as const } : {}) };
+}
+
 function clampTimeout(ms: number | undefined): number {
   if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0) return DEFAULT_EXEC_TIMEOUT_MS;
   return Math.min(ms, MAX_EXEC_TIMEOUT_MS);
@@ -241,7 +251,7 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
     case 'read': {
       const p = await checkPath(req.path, ctx.cfg, 'read');
       if (!p) { send(ws, fail(req.id, 'forbidden')); return; }
-      send(ws, ok(req.id, { data: await readWhole(p) }));
+      send(ws, ok(req.id, readPayload(await readWhole(p))));
       return;
     }
     case 'readFrom': {

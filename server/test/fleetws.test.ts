@@ -16,6 +16,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { NotifyLog } from '../src/notifylog.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { degradedReadIO } from './ioDoubles.js';
 
 const seedSession = (home: string, id: string, wrapper: string) => {
   const reg = path.join(home, '.cc-sessions');
@@ -425,7 +426,7 @@ describe('fleet REST + WS', () => {
      *  assertions below to mean anything. */
     const degradableIO = (id: string, field: string): { io: FleetIO; setDegraded: (v: boolean) => void } => {
       let degrade = false;
-      const io: FleetIO = { ...localIO, readFile: async (p) => (degrade && p.endsWith(`${id}.${field}`) ? null : localIO.readFile(p)) };
+      const io = degradedReadIO((p) => degrade && p.endsWith(`${id}.${field}`));
       return { io, setDegraded: (v) => { degrade = v; } };
     };
 

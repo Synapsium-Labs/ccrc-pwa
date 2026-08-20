@@ -14,6 +14,7 @@ import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
+import { degradedReadIO } from './ioDoubles.js';
 
 const NOW_SEC = 1785300000;
 const ID = 'demo-quiet-basin';
@@ -84,8 +85,7 @@ describe('assembleFleet ships the lifecycle', () => {
     // Before the ladder existed this row printed a confident `orphan` about a
     // session nobody managed to look at.
     const { cfg, tmux } = fixture({ stopped: `${NOW_SEC - 90} pwa`, started: '1' }, false);
-    const blind = { ...localIO, readFile: async (p: string) =>
-      (p.endsWith(`${ID}.stopped`) ? null : localIO.readFile(p)) };
+    const blind = degradedReadIO((p) => p.endsWith(`${ID}.stopped`));
     const fleet = await assembleFleet(blind, cfg, tmux, NOW_SEC);
     expect(fleet.find((s) => s.id === ID)!.lifecycle).toBe('unmeasurable');
   });
@@ -189,8 +189,7 @@ describe('the substrate axis reaches the wire — projected, not re-read (D-B8-1
     // verdict crosses the seam intact — 0 stays 0, so the PWA can render
     // text-only instead of a confident "since 1970".
     const { cfg, tmux } = fixture({ started: '1', substrate: `${NOW_SEC - 120} x` }, true);
-    const blind = { ...localIO, readFile: async (p: string) =>
-      (p.endsWith(`${ID}.substrate`) ? null : localIO.readFile(p)) };
+    const blind = degradedReadIO((p) => p.endsWith(`${ID}.substrate`));
     const fleet = await assembleFleet(blind, cfg, tmux, NOW_SEC);
     expect(fleet.find((s) => s.id === ID)!.substrate).toEqual({ at: 0, text: SUBSTRATE_UNREADABLE });
   });

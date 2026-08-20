@@ -74,7 +74,7 @@ export const clearRefusedDetail = (code: string): string => `clear-refused:${cod
  */
 export const CLEAR_REFUSED_STRANDS_TEXT = clearRefusedDetail('enter-ignored');
 
-/** The standing hold-reason convention (`registry.ts:26-46`, spec:120-123):
+/** The standing hold-reason convention (`SessionRecord.held`, `registry.ts`; spec:120-123):
  *  DISPLAY-ONLY, never parsed back anywhere in this tree — the run row's own
  *  `program`/`wave`/`waveOf` columns are what every route and the store
  *  actually read. Shared by the open route's immediate hold, dispatch's own

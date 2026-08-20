@@ -16,6 +16,7 @@ import type { Runner } from '../src/exec.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { degradedReadIO, unreadableField } from './ioDoubles.js';
 import { holdReason } from '../src/coord/rundefs.js';
 import { WORKER_KICKOFF_PREFIX } from '../src/coord/dispatch.js';
 import { MAIL_BODY_MAX_BYTES, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX } from '../../shared/api.js';
@@ -160,15 +161,6 @@ const getMail = (
 /** A directory listing that always fails — the ordinary transient shape in
  *  remote mode, reused from `mail-routes.test.ts`'s own fixture. */
 const unlistableIO: FleetIO = { ...localIO, readdir: async () => null };
-
-/** A registry whose directory listing is fine but one specific session's
- *  field read is not — `withUnreadableField` idiom `mail-routes.test.ts`
- *  already uses: the file IS listed (a real, present file `seed`/the runner's
- *  own `ws-add` handler wrote), only its bytes never come back. */
-const withUnreadableField = (id: string, field: string): FleetIO => ({
-  ...localIO,
-  readFile: async (p) => (p.endsWith(`${id}.${field}`) ? null : localIO.readFile(p)),
-});
 
 describe('POST /api/runs', () => {
   let app: FastifyInstance | undefined;
@@ -372,7 +364,7 @@ describe('POST /api/runs/:id/dispatch', () => {
        'own identity could not be measured', async () => {
       const home = mkTmp('ccrc-runs-');
       const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-fresh1'] });
-      const io = withUnreadableField('demo-fresh1', 'wrapper');
+      const io = unreadableField('demo-fresh1', 'wrapper');
       const w = await openApp(home, run, { io }); app = w.app;
       const opened = (await postOpen(app)).json() as { id: number };
       const res = await postDispatch(app, opened.id);
@@ -472,7 +464,7 @@ describe('POST /api/runs/:id/dispatch', () => {
      'before the busy gate, before /clear, and before persisting workspace/branch onto the run row', async () => {
     const home = mkTmp('ccrc-runs-');
     seed(home, 'demo-existing');
-    const io = withUnreadableField('demo-existing', 'uuid');
+    const io = unreadableField('demo-existing', 'uuid');
     const { run, calls } = makeRunner(home);
     const w = await openApp(home, run, { io }); app = w.app;
     const opened = (await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' }))
@@ -795,9 +787,7 @@ describe('POST /api/runs/:id/close', () => {
     // `withUnreadableField` idiom `mail-routes.test.ts` uses.
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
     writeFileSync(path.join(home, '.cc-sessions', `${sessionId}.prhistory`), '');
-    const unreadablePrhistory: FleetIO = {
-      ...localIO, readFile: async (p) => (p.endsWith('.prhistory') ? null : localIO.readFile(p)),
-    };
+    const unreadablePrhistory = degradedReadIO((p) => p.endsWith('.prhistory'));
     const { run } = makeRunner(home, { wsAddCreates: [sessionId],
       prState: { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' } });
     const base = testDeps(home, run);

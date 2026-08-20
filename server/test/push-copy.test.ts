@@ -9,6 +9,7 @@ import { localIO, type FleetIO } from '../src/io.js';
 import { FleetWatcher } from '../src/watch.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { degradedReadIO } from './ioDoubles.js';
 import { NotifyLog } from '../src/notifylog.js';
 import { Presence } from '../src/presence.js';
 import { askKey } from '../src/askkey.js';
@@ -260,10 +261,7 @@ describe('push copy discipline — project context, presence suppression, log fi
  *  reads, so a test can drive a degrade→heal round trip within one fixture. */
 function toggleableIO(): { io: FleetIO; degrade: (id: string, field: string) => void; heal: () => void } {
   let bad: { id: string; field: string } | null = null;
-  const io: FleetIO = {
-    ...localIO,
-    readFile: async (p) => (bad !== null && p.endsWith(`${bad.id}.${bad.field}`) ? null : localIO.readFile(p)),
-  };
+  const io = degradedReadIO((p) => bad !== null && p.endsWith(`${bad.id}.${bad.field}`));
   return { io, degrade: (id, field) => { bad = { id, field }; }, heal: () => { bad = null; } };
 }
 
@@ -332,17 +330,17 @@ describe('a degraded row must never fire the busy→idle "✓ Finished" push (bl
     let readsThisTick = 0;
     const io: FleetIO = {
       ...localIO,
-      readFile: async (p) => {
+      readFileMeasured: async (p) => {
         // Once armed, `cc-a.wrapper` reads clean exactly ONCE per tick and
-        // null thereafter. The first read of a tick is `tick()`'s own
+        // fails thereafter. The first read of a tick is `tick()`'s own
         // top-of-method `readRegistry` (its very first await), so the
         // suppression set sees a MEASURED row; every later reader in the same
         // tick — the fleet assembly among them — used to see a degraded one.
         if (armed && p.endsWith('cc-a.wrapper')) {
           readsThisTick += 1;
-          if (readsThisTick > 1) return null;
+          if (readsThisTick > 1) return { ok: false, reason: 'unreadable' };
         }
-        return localIO.readFile(p);
+        return localIO.readFileMeasured(p);
       },
     };
 

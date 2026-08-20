@@ -1,6 +1,6 @@
 import path from 'node:path';
 import type { CcrcConfig } from './config.js';
-import type { FleetIO } from './io.js';
+import type { FleetIO, MeasuredRead, ReadFailure } from './io.js';
 import {
   isPrPhase, isStopSurface, type IdentityField, type LifecycleField, type PrPhase, type StopSurface,
 } from '../../shared/api.js';
@@ -16,8 +16,11 @@ import {
 export type { IdentityField };
 
 /** Why `SessionRecord.branch` reads the way it does — see the field's own
- *  docstring for what each member means and what a consumer owes it. */
-export type BranchEvidence = 'named' | 'absent' | 'unreadable' | 'empty';
+ *  docstring for what each member means and what a consumer owes it.
+ *  Derives the two read-failure members from `io.ts`'s `ReadFailure` rather
+ *  than restating that pair a second time — `single-definition.test.ts`'s
+ *  "one absent/unreadable read vocabulary" pins it. */
+export type BranchEvidence = 'named' | ReadFailure | 'empty';
 
 export interface SessionRecord {
   id: string; wrapper: string; project: string; workdir: string; uuid: string;
@@ -86,14 +89,19 @@ export interface SessionRecord {
    *  null when absent. Absence IS release (the verb unlinks), so ONLY absence
    *  reads as unheld.
    *
-   *  Fail-shut here too, and this layer can be (review finding 2): `field()`'s
-   *  own `readFile` cannot tell a failed read from a missing file — remote
-   *  `io.ts` maps every error to null — but `readRegistry` reads the registry
-   *  DIRECTORY first, and that listing names `<id>.hold` whether or not its
-   *  bytes can be fetched. A present-but-unread file therefore reads as held,
-   *  carrying `HOLD_UNREADABLE` as its reason — after a second listing has
-   *  confirmed the file is still there, so an ordinary `ws-release` landing in
-   *  the gap between the two reads is not reported as corruption.
+   *  Fail-shut here too, and this layer can be (review finding 2). A
+   *  MEASURED read (`io.readFileMeasured`, Task 5) tells a proven ENOENT
+   *  apart from everything else: a measured `absent` `.hold` reads `null`
+   *  DIRECTLY — D-112 — because absence proven at the read IS the strongest
+   *  form of "the verb unlinked this", strictly better evidence than a
+   *  listing that did not come back. A measured `unreadable` (or an older
+   *  agent's read, which cannot tell the two apart at all) falls back to
+   *  today's rung: `readRegistry` reads the registry DIRECTORY first, and
+   *  that listing names `<id>.hold` whether or not its bytes can be
+   *  fetched. A present-but-unread file therefore reads as held, carrying
+   *  `HOLD_UNREADABLE` as its reason — after a second listing has confirmed
+   *  the file is still there, so an ordinary `ws-release` landing in the gap
+   *  between the two reads is not reported as corruption.
    *
    *  A readable but EMPTY file is held too (an empty string is not null), and
    *  it carries `HOLD_NO_REASON` rather than the empty string: the reason IS
@@ -111,7 +119,14 @@ export interface SessionRecord {
    *  ms. Null ONLY on absence: the `.hold` listed-vs-readable ladder above
    *  applies verbatim, because "no fault recorded" re-enables every
    *  destructive affordance downstream while "the marker would not read" must
-   *  not — opposite answers a caller handles differently, never collapsed. An
+   *  not — opposite answers a caller handles differently, never collapsed.
+   *  D-113: a MEASURED absent read (a proven ENOENT, `io.readFileMeasured`)
+   *  is null directly, with no second-listing reconfirm of its own — closing
+   *  a live false alarm `.hold`'s second listing exists to catch for that
+   *  field but `.substrate` never had one for: `_substrate_clear` removes
+   *  the marker on the first live probe, a routine event, so a marker listed
+   *  at the top of a read and cleared before its own field read used to
+   *  report `SUBSTRATE_UNREADABLE` on an ordinary recovery. An
    *  unreadable-but-listed marker carries `SUBSTRATE_UNREADABLE`; a readable
    *  but empty one (a torn write — ccd's writer synthesizes a reason rather
    *  than write nothing) carries `SUBSTRATE_NO_REASON`; a stampless text keeps
@@ -181,7 +196,14 @@ export interface SessionRecord {
    *  `numOrNull` does below, so no such widening applies there. Collapsing a
    *  present-but-unparseable `.stopped` to `stopped: null` would let
    *  `sessionLifecycle`'s `dead + started -> orphan` rung fire about a row
-   *  bash confidently calls stopped — rule (b)'s exact prohibition. */
+   *  bash confidently calls stopped — rule (b)'s exact prohibition.
+   *
+   *  Task 5: a MEASURED `absent` read never pushes a field here — it is the
+   *  ordinary "no stamp was ever written" answer, a positive result rather
+   *  than a fault — including for `.stopped`, whose wide net only fires on
+   *  proven, unparseable CONTENT; there is nothing to fail to parse when the
+   *  file is proven not to exist. Only a measured `unreadable` still falls
+   *  back to the listed-vs-not rung above. */
   lifecycleUnmeasured: readonly LifecycleField[];
 }
 
@@ -286,6 +308,32 @@ export const SUBSTRATE_NO_REASON = '<substrate marker empty — reason lost>';
 async function field(io: FleetIO, dir: string, id: string, name: string): Promise<string | null> {
   const content = await io.readFile(path.join(dir, `${id}.${name}`));
   return content !== null ? content.trim() : null;
+}
+
+/**
+ * `field()`'s measured twin (Task 5): reads through `io.readFileMeasured`
+ * instead of `io.readFile`, so a caller gets `absent`/`unreadable` apart
+ * rather than collapsed to one `null`. `field()` itself is UNCHANGED and
+ * keeps calling `io.readFile` — it stays the reader for every registry field
+ * that has not migrated to the measured ladder (see the per-site ruling in
+ * the plan; `field()` still backs `project`/`home`/`pool`/`lastswap`/
+ * `workspace`/`base`/`prphase`/`prnumber`/`prcheckedat`/`archived`/
+ * `archivemanifest`/`swapblocked`/`spawn`).
+ *
+ * Trims INSIDE the `ok` arm, deliberately, so `r.content` on a hit is
+ * ALREADY what `field()`'s callers have always received: `field()`'s own
+ * `.trim()` is load-bearing for `branchEvidence`'s `'empty'` rung (a
+ * zero-byte or torn `.branch` must read as `''`, not as whitespace) and for
+ * `HOLD_NO_REASON`/`SUBSTRATE_NO_REASON` (an all-whitespace `.hold`/
+ * `.substrate` must collapse to the same empty-content branch a zero-byte
+ * one does). Trimming here, once, is also the one-parser reason `field()`
+ * itself trims rather than leaving it to each of the ladder's ~9 call
+ * sites to remember. A `reason` (`absent`/`unreadable`) carries no content
+ * to trim and passes through unchanged.
+ */
+async function fieldMeasured(io: FleetIO, dir: string, id: string, name: string): Promise<MeasuredRead> {
+  const r = await io.readFileMeasured(path.join(dir, `${id}.${name}`));
+  return r.ok ? { ok: true, content: r.content.trim() } : r;
 }
 
 /** A registry field as a finite number, or null. `parseInt` alone yields NaN
@@ -432,43 +480,82 @@ function noteWholeFleetListing(listable: boolean, now: number): void {
 async function buildRecord(
   io: FleetIO, cfg: CcrcConfig, names: string[], id: string, now: number,
 ): Promise<SessionRecord | null> {
-  const [wrapper, project, workdir, uuid, started, home, pool, lastswap, workspace, branch,
-    base, prPhaseRaw, prNumberRaw, prCheckedAtRaw, archivedRaw, manifestRaw, holdRaw,
-    stoppedRaw, supervisedRaw, swapBlockedRaw, spawnRaw, substrateRaw] = await Promise.all([
-    field(io, cfg.registryDir, id, 'wrapper'), field(io, cfg.registryDir, id, 'project'),
-    field(io, cfg.registryDir, id, 'workdir'), field(io, cfg.registryDir, id, 'uuid'),
-    field(io, cfg.registryDir, id, 'started'), field(io, cfg.registryDir, id, 'home'),
+  const [wrapperRead, project, workdirRead, uuidRead, startedRead, home, pool, lastswap, workspace, branchRead,
+    base, prPhaseRaw, prNumberRaw, prCheckedAtRaw, archivedRaw, manifestRaw, holdRead,
+    stoppedRead, supervisedRead, swapBlockedRaw, spawnRaw, substrateRead] = await Promise.all([
+    fieldMeasured(io, cfg.registryDir, id, 'wrapper'), field(io, cfg.registryDir, id, 'project'),
+    fieldMeasured(io, cfg.registryDir, id, 'workdir'), fieldMeasured(io, cfg.registryDir, id, 'uuid'),
+    fieldMeasured(io, cfg.registryDir, id, 'started'), field(io, cfg.registryDir, id, 'home'),
     field(io, cfg.registryDir, id, 'pool'), field(io, cfg.registryDir, id, 'lastswap'),
-    field(io, cfg.registryDir, id, 'workspace'), field(io, cfg.registryDir, id, 'branch'),
+    field(io, cfg.registryDir, id, 'workspace'), fieldMeasured(io, cfg.registryDir, id, 'branch'),
     field(io, cfg.registryDir, id, 'base'), field(io, cfg.registryDir, id, 'prphase'),
     field(io, cfg.registryDir, id, 'prnumber'), field(io, cfg.registryDir, id, 'prcheckedat'),
     field(io, cfg.registryDir, id, 'archived'), field(io, cfg.registryDir, id, 'archivemanifest'),
-    field(io, cfg.registryDir, id, 'hold'),
-    field(io, cfg.registryDir, id, 'stopped'), field(io, cfg.registryDir, id, 'supervised'),
+    fieldMeasured(io, cfg.registryDir, id, 'hold'),
+    fieldMeasured(io, cfg.registryDir, id, 'stopped'), fieldMeasured(io, cfg.registryDir, id, 'supervised'),
     field(io, cfg.registryDir, id, 'swapblocked'), field(io, cfg.registryDir, id, 'spawn'),
-    field(io, cfg.registryDir, id, 'substrate'),
+    fieldMeasured(io, cfg.registryDir, id, 'substrate'),
   ]);
 
   // The identity-triple ladder. `uuid` first: `names.includes(id + '.uuid')`
   // is TRUE BY CONSTRUCTION for every id this function is ever called with —
   // both callers below derive/confirm `id` from that exact listing — so a
-  // null `uuid` read can only mean "listed but unreadable", never "absent".
-  // `wrapper`/`workdir` carry no such guarantee: either can genuinely be
+  // MEASURED-UNREADABLE `uuid` read can only mean "listed but unreadable",
+  // never "absent" (the `unreadable` arm below still relies on this: for
+  // `uuid` specifically, `names.includes(...)` is always true, so it always
+  // takes the `unmeasured` branch, never the final drop). A MEASURED-ABSENT
+  // `uuid` read is the one case that guarantee does NOT cover — the race
+  // window between the listing this function opened with and this field's
+  // own read (a reap landing in that gap) — and Task 5 lets that be proven
+  // directly instead of merely inferred: see below. `wrapper`/`workdir`
+  // carry no by-construction guarantee at all: either can genuinely be
   // absent from the listing (a half-written or half-torn-down entry).
+  //
+  // THE GOVERNING RULE: a measured `absent` drops the row IMMEDIATELY —
+  // the same end state `readRegistryMeasured`'s second-listing reconfirm
+  // reaches for the OLD collapsed-evidence case (raced-absent used to read
+  // as `unmeasured` first, then get retired once the second listing also
+  // failed to find it), just proven at THIS read instead of inferred two
+  // listings later. That equivalence holds only when the second listing both
+  // SUCCEEDS and AGREES (no longer names `<id>.uuid`): a second `readdir`
+  // that FAILS, or one that still names it, is exactly where the OLD code
+  // KEPT the row degraded rather than dropping it — this code drops it on
+  // the proven read alone regardless, in strictly more cases than the old
+  // ladder retired. The direction is fail-safe (a proven ENOENT outranks an
+  // unconfirmed or failed listing) and is not what this comment changes;
+  // only the "same end state" claim above is corrected to say so. A
+  // measured `unreadable` falls back to exactly today's `names.includes(...)`
+  // rung.
   const unmeasured: IdentityField[] = [];
   const measured: { uuid: string; wrapper: string; workdir: string } = { uuid: '', wrapper: '', workdir: '' };
-  for (const f of ['uuid', 'wrapper', 'workdir'] as const) {
-    const raw = f === 'uuid' ? uuid : f === 'wrapper' ? wrapper : workdir;
-    if (raw !== null && raw !== '') { measured[f] = raw; continue; }
-    if (raw === null && names.includes(`${id}.${f}`)) {
+  for (const [f, read] of [
+    ['uuid', uuidRead], ['wrapper', wrapperRead], ['workdir', workdirRead],
+  ] as const) {
+    if (read.ok) {
+      if (read.content !== '') { measured[f] = read.content; continue; }
+      noteIssue(`${id}#${f}#dropped`, now,
+        `registry entry ${id} dropped — ${f} read back empty`, false);
+      return null;   // narrowed drop, logged — see this function's own docstring
+    }
+    if (read.reason === 'unreadable' && names.includes(`${id}.${f}`)) {
       unmeasured.push(f);
       noteIssue(`${id}#${f}#degraded`, now,
         `registry ${id}.${f} is listed but unreadable — ${f} is unmeasured, not absent`, true);
       continue;
     }
+    // Two conditions used to share one sentence ("is not present in the
+    // registry directory"), which is only true for the second: a measured
+    // `absent` field that WAS in this function's own listing means the
+    // ENOENT came from the read racing a removal, not from the listing never
+    // having named it — an operator grepping this line for a half-written
+    // entry deserves the true one.
+    if (read.reason === 'absent' && names.includes(`${id}.${f}`)) {
+      noteIssue(`${id}#${f}#dropped`, now,
+        `registry entry ${id} dropped — ${f} was listed but is gone by the time it was read (raced a removal)`, false);
+      return null;   // narrowed drop, logged — see this function's own docstring
+    }
     noteIssue(`${id}#${f}#dropped`, now,
-      `registry entry ${id} dropped — ${f} ${raw === null ? 'is not present in the registry directory' : 'read back empty'}`,
-      false);
+      `registry entry ${id} dropped — ${f} is not present in the registry directory`, false);
     return null;   // narrowed drop, logged — see this function's own docstring
   }
 
@@ -483,23 +570,38 @@ async function buildRecord(
   // no stop at all, and the classifier prints `orphan` about a session nobody
   // managed to look at. That is rule (b)'s exact prohibition, and it is why the
   // discrimination lives here rather than in the pure function.
-  const stopStamp = packedStamp(stoppedRaw);
+  //
+  // Task 5, THE GOVERNING RULE: a measured `absent` `started`/`supervised`/
+  // `stopped` is the ORDINARY case — no stamp was ever written — and is
+  // simply not pushed, same as today's answer for a genuinely-absent field.
+  // A measured `unreadable` falls back to exactly today's `names.includes`
+  // rung. (One narrow difference from the OLD collapsed-evidence ladder: a
+  // field listed at this function's own listing but genuinely gone by its
+  // own read — the same race the identity triple can now prove too — used
+  // to be inferred as `unreadable`-and-listed and pushed; a measured read
+  // now proves it `absent` and does not push it. Same reasoning as the
+  // identity triple's drop, applied here to "not a fault" instead of "row
+  // gone".)
+  const stopStamp = stoppedRead.ok ? packedStamp(stoppedRead.content) : null;
   const swapStamp = packedStamp(swapBlockedRaw);
   const spawnStamp = packedStamp(spawnRaw);
   const spawnRc = spawnStamp === null ? null : numOrNull(spawnStamp.rest);
 
   const lifecycleUnmeasured: LifecycleField[] = [];
-  for (const [f, raw] of [
-    ['started', started], ['supervised', supervisedRaw],
+  for (const [f, read] of [
+    ['started', startedRead], ['supervised', supervisedRead],
   ] as const) {
-    if (raw === null && names.includes(`${id}.${f}`)) lifecycleUnmeasured.push(f);
+    if (!read.ok && read.reason === 'unreadable' && names.includes(`${id}.${f}`)) lifecycleUnmeasured.push(f);
   }
   // `.stopped` gets the wider net `SessionRecord.lifecycleUnmeasured`'s own
   // docstring explains: unreadable-but-listed (the shared rule above) OR
-  // listed-and-readable-but-unparseable (`stopStamp === null` while
-  // `stoppedRaw` itself is non-null) — the proven bash/TS divergence a
-  // zero-byte or torn `.stopped` produces.
-  if (stopStamp === null && (stoppedRaw !== null || names.includes(`${id}.stopped`))) {
+  // listed-and-readable-but-unparseable (`stopStamp === null` while the read
+  // itself succeeded) — the proven bash/TS divergence a zero-byte or torn
+  // `.stopped` produces. A measured `absent` does NOT trip the wide net —
+  // there is no content to fail to parse when there is proven to be no file.
+  if (stoppedRead.ok) {
+    if (stopStamp === null) lifecycleUnmeasured.push('stopped');
+  } else if (stoppedRead.reason === 'unreadable' && names.includes(`${id}.stopped`)) {
     lifecycleUnmeasured.push('stopped');
   }
 
@@ -525,17 +627,25 @@ async function buildRecord(
   // Normalised at THIS one place — the only place that reads the file — rather
   // than defended against three times downstream. `.stopped` above already
   // refuses to trust the same shape, for the same reason.
+  //
+  // Task 5, THE GOVERNING RULE: `branchRead.ok` is today's content branch,
+  // unchanged. `reason === 'absent'` is a POSITIVE answer that short-circuits
+  // to `'absent'` directly — the case that was impossible to express before
+  // `readFileMeasured` existed (a LISTED `.branch` a race genuinely removed
+  // before its own bytes were read). `reason === 'unreadable'` falls back to
+  // EXACTLY today's `names.includes(...)` rung, so an older agent (every read
+  // `unreadable`) reproduces today's answer verbatim.
   const branchEvidence: BranchEvidence =
-    branch === null ? (names.includes(`${id}.branch`) ? 'unreadable' : 'absent')
-      : branch === '' ? 'empty'
-        : 'named';
+    branchRead.ok ? (branchRead.content === '' ? 'empty' : 'named')
+      : branchRead.reason === 'absent' ? 'absent'
+        : (names.includes(`${id}.branch`) ? 'unreadable' : 'absent');
   // The invariant every consumer may rely on, stated once: `branch` is a
   // string exactly when the evidence is `'named'`.
-  const branchName = branchEvidence === 'named' ? branch : null;
+  const branchName = branchEvidence === 'named' && branchRead.ok ? branchRead.content : null;
 
   return {
     id, wrapper: measured.wrapper, project: project ?? id, workdir: measured.workdir, uuid: measured.uuid,
-    started: started === '1',
+    started: startedRead.ok && startedRead.content === '1',
     home, pool: pool ? pool.split(/\s+/).filter(Boolean) : null,
     lastswap: lastswap ? parseInt(lastswap, 10) : null,
     workspace, branch: branchName,
@@ -556,14 +666,19 @@ async function buildRecord(
      *  manifest is absent or half-written — never 0, which would argue
      *  against a cleanup that would free gigabytes. */
     archivedBytes: manifestBytes(manifestRaw),
-    // `names` is the directory listing this function opened with, so it
-    // proves PRESENCE independently of whether the read succeeded — the one
-    // piece of evidence `field()` alone does not have. See `HOLD_UNREADABLE`.
-    // An empty read is a hold with nothing to show, which is not the same
-    // fact as an unreadable one — see `HOLD_NO_REASON`.
-    held: holdRaw === null
-      ? (holdListed ? HOLD_UNREADABLE : null)
-      : (holdRaw === '' ? HOLD_NO_REASON : holdRaw),
+    // Task 5 / D-112: a measured `absent` `.hold` reads null DIRECTLY — a
+    // proven ENOENT is the strongest form of "absence IS release" there is,
+    // strictly better evidence than a listing that did not come back, so it
+    // short-circuits without waiting for `readRegistryMeasured`'s second
+    // listing at all. A measured `unreadable` falls back to EXACTLY today's
+    // rung: `names` is the directory listing this function opened with, so
+    // it proves PRESENCE independently of whether the read succeeded — the
+    // one piece of evidence `field()` alone does not have. See
+    // `HOLD_UNREADABLE`. An empty read is a hold with nothing to show, which
+    // is not the same fact as an unreadable one — see `HOLD_NO_REASON`.
+    held: holdRead.ok
+      ? (holdRead.content === '' ? HOLD_NO_REASON : holdRead.content)
+      : (holdRead.reason === 'absent' ? null : (holdListed ? HOLD_UNREADABLE : null)),
     // The `.hold` ladder, applied to the supervisor's fault record (D-B8-14,
     // spec §2): presence from the LISTING, never from a non-null read — "no
     // fault recorded" re-enables every destructive affordance downstream, so
@@ -572,14 +687,24 @@ async function buildRecord(
     // produces one — `_substrate_mark` synthesizes a reason rather than write
     // nothing), and a stampless one keeps its whole text at `at: 0` rather
     // than losing the one sentence a maintainer could act on.
-    substrate: substrateRaw === null
-      ? (substrateListed ? { at: 0, text: SUBSTRATE_UNREADABLE } : null)
-      : substrateRaw === ''
-        ? { at: 0, text: SUBSTRATE_NO_REASON }
-        : (() => {
-            const p = packedStamp(substrateRaw);
-            return p === null ? { at: 0, text: substrateRaw } : { at: p.at, text: p.rest || substrateRaw };
-          })(),
+    //
+    // D-113: a measured `absent` reads null DIRECTLY, same reasoning as
+    // `held`/D-112 — and it closes a live false alarm here specifically,
+    // since `.substrate` has no second listing of its own to demote a
+    // false HOLD_UNREADABLE-shaped answer the way `held` does: `_substrate_
+    // clear` removes the marker on the first live probe (a routine event),
+    // so a marker listed at the top of a read and cleared before its own
+    // field read used to report `SUBSTRATE_UNREADABLE` — "the registry is
+    // broken" — on an ordinary recovery. A measured `unreadable` still falls
+    // back to exactly today's `substrateListed` rung.
+    substrate: substrateRead.ok
+      ? (substrateRead.content === ''
+          ? { at: 0, text: SUBSTRATE_NO_REASON }
+          : (() => {
+              const p = packedStamp(substrateRead.content);
+              return p === null ? { at: 0, text: substrateRead.content } : { at: p.at, text: p.rest || substrateRead.content };
+            })())
+      : (substrateRead.reason === 'absent' ? null : (substrateListed ? { at: 0, text: SUBSTRATE_UNREADABLE } : null)),
     // The surface is validated on READ as well as on write. The write-side
     // check is `_ws_unsupervise`'s own `case "$surface" in cli|pwa|agent|ccd)
     // ;; *) surface=unknown ;;` — NOT `cmd_stop`, which this comment used to
@@ -594,7 +719,7 @@ async function buildRecord(
     stopped: stopStamp === null
       ? null
       : { at: stopStamp.at, surface: isStopSurface(stopStamp.rest) ? stopStamp.rest : 'unknown' },
-    supervisedAt: numOrNull(supervisedRaw),
+    supervisedAt: numOrNull(supervisedRead.ok ? supervisedRead.content : null),
     swapBlocked: swapStamp === null
       ? null
       : { at: swapStamp.at, reason: swapStamp.rest === '' ? SWAP_BLOCKED_NO_REASON : swapStamp.rest },
@@ -652,15 +777,24 @@ export async function readRegistryMeasured(io: FleetIO, cfg: CcrcConfig): Promis
     if (rec.unmeasured.length > 0) identityUnconfirmed.add(id);
     out.push(rec);
   }
-  // ONE SECOND LISTING, and only when something needs it. `names` was taken
-  // before ~22 field reads per session; a `ccd ws-release` that lands anywhere
-  // inside that window leaves the name in the listing and no bytes behind it,
-  // which the evidence above cannot tell apart from a read that failed — so a
-  // perfectly ordinary release was reported as `HOLD_UNREADABLE`, the
-  // registry-is-broken sentence, and `archiveMerged` fired a held-merged push
-  // announcing corruption seconds after the operator tapped Release.
+  // ONE SECOND LISTING, and only when something needs it. Before Task 5, a
+  // `ccd ws-release` landing anywhere inside the ~22-field-read window left
+  // the name in the listing and no bytes behind it, indistinguishable at
+  // `field()` alone from a read that failed — a perfectly ordinary release
+  // was reported as `HOLD_UNREADABLE`, the registry-is-broken sentence, and
+  // `archiveMerged` fired a held-merged push announcing corruption seconds
+  // after the operator tapped Release.
   //
-  // Re-listing distinguishes them, because a directory read is exactly the
+  // `.hold`'s ordinary race is resolved WITHOUT a second listing now: a
+  // measured-absent read short-circuits straight to `held: null` in
+  // `buildRecord` (D-112), and a measured-absent identity-triple member
+  // drops the row immediately in the loop above — neither ever reaches
+  // `holdUnconfirmed`/`identityUnconfirmed` at all. What still lands here is
+  // exactly a read that came back `reason: 'unreadable'`: a genuine fault
+  // (EACCES/EISDIR/a dropped agent-WS round trip), or — until the fleet
+  // host's agent is redeployed — the fail-shut collapse that cannot tell a
+  // race from a fault at all (THE GOVERNING RULE). Re-listing still
+  // distinguishes those two, because a directory read is exactly the
   // evidence `field()` lacks: gone from the second listing = deleted on
   // purpose (absence IS release, and — for a degraded row — it is now
   // TWICE-observed absence, not an absent read: the row is RETIRED, dropped
@@ -718,9 +852,12 @@ export type SingleRead =
  * Carries the SAME hold-reconfirm discipline as `readRegistry` (see
  * `readRegistryMeasured`'s "ONE SECOND LISTING" comment): a hold that reads
  * `HOLD_UNREADABLE`, OR a record with an unmeasured identity field, gets ONE
- * follow-up listing, because a `ws-release`/full reap landing inside this
- * call's own field-read window is indistinguishable from a failed read at
- * `field()` alone, exactly as for the whole-fleet sweep. Twice-observed
+ * follow-up listing. Both are narrowed to genuine `reason: 'unreadable'`
+ * reads now (D-112): an ordinary `ws-release`/full-reap race resolves at
+ * `buildRecord` on a measured-absent read without ever reaching here, so
+ * what lands in this reconfirm is a real fault, or — until the fleet host's
+ * agent is redeployed — the fail-shut collapse that still cannot tell a
+ * race from a fault, exactly as for the whole-fleet sweep. Twice-observed
  * absence there retires the record to `{found:false, reason:'absent'}`,
  * never a silent degrade-forever.
  */
