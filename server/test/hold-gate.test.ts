@@ -229,7 +229,7 @@ describe('archiveMerged — merged AND unheld', () => {
       started: true, home: null, pool: null, lastswap: null,
       workspace: 'quiet-basin', branch: 'ws/quiet-basin', branchEvidence: 'named', base: 'origin/main',
       prPhase: null, prNumber: null, prCheckedAt: null, archivedAt: null, archivedBytes: null, held: null,
-      stopped: null, supervisedAt: null, swapBlocked: null, spawn: null, lifecycleUnmeasured: [],
+      substrate: null, stopped: null, supervisedAt: null, swapBlocked: null, spawn: null, lifecycleUnmeasured: [],
       unmeasured: ['wrapper'],
     };
     const merged: PrState = { phase: 'merged', number: 42, url: null, title: null, checks: null,

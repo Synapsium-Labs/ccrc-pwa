@@ -39,7 +39,7 @@ export interface SessionRecord {
    *    `'unreadable'` — the file is LISTED in the registry directory this read
    *                     opened with, and its bytes did not come back.
    *                     TRANSIENT — one dropped agent-WS round trip among the
-   *                     ~21 a session's read fires — so it asks to be retried.
+   *                     ~22 a session's read fires — so it asks to be retried.
    *                     `field()` cannot see this on its own (`io.readFile`
    *                     maps a failed read and a missing file to the same
    *                     null); the directory listing is the evidence, the same
@@ -103,6 +103,22 @@ export interface SessionRecord {
    *  (whitespace included, since `field()` trims), so the only ways to reach
    *  it are `touch $REG/<id>.hold` and a truncated write. */
   held: string | null;
+  /** `$REG/<id>.substrate` — a supervisor's own "I could not reach tmux"
+   *  record (D-B8-14, spec §2): `<epoch-seconds> <verbatim reason>`, written
+   *  by `_substrate_mark` on every unknown probe tick, removed by
+   *  `_substrate_clear` on the first live one. Epoch SECONDS, registry-native
+   *  like `stopped`/`supervisedAt` — `fleet.ts` is the one place it becomes
+   *  ms. Null ONLY on absence: the `.hold` listed-vs-readable ladder above
+   *  applies verbatim, because "no fault recorded" re-enables every
+   *  destructive affordance downstream while "the marker would not read" must
+   *  not — opposite answers a caller handles differently, never collapsed. An
+   *  unreadable-but-listed marker carries `SUBSTRATE_UNREADABLE`; a readable
+   *  but empty one (a torn write — ccd's writer synthesizes a reason rather
+   *  than write nothing) carries `SUBSTRATE_NO_REASON`; a stampless text keeps
+   *  its whole content as `text`. All three degraded shapes sit at `at: 0`,
+   *  which downstream renders text-only rather than as 1970. `text` is never
+   *  `''`. */
+  substrate: { at: number; text: string } | null;
   /** Which of `uuid`/`wrapper`/`workdir` — the identity triple — could not be
    *  MEASURED this read: LISTED in the registry directory (so provably not
    *  absent — `names.includes(id + '.uuid')` is true by construction for
@@ -212,7 +228,7 @@ export function measuredIdentity(rec: SessionRecord): { uuid: string; wrapper: s
 /**
  * The reason a held workspace carries when its `.hold` file is listed in the
  * registry directory but its contents could not be read — one failed op over
- * the agent WS is enough (`readRegistry` fires ~21 reads per session under one
+ * the agent WS is enough (`readRegistry` fires ~22 reads per session under one
  * request timeout). Held with an unreadable reason, never unheld: the
  * consumer is `archiveMerged`'s `held !== null` gate, and `ccd ws-archive` has
  * no held rung of its own, so a misread that read as released would kill a
@@ -246,6 +262,26 @@ export const HOLD_NO_REASON = '<hold file is empty — no program named>';
  * ignore.
  */
 export const SWAP_BLOCKED_NO_REASON = '<swap refusal recorded no reason>';
+
+/**
+ * The reason a substrate fault carries when `$REG/<id>.substrate` is listed in
+ * the registry directory but its bytes could not be read — `HOLD_UNREADABLE`'s
+ * ruling applied to the marker, with the same polarity stakes: the consumers
+ * are the PWA's destructive-affordance gates, and a misread that read as "no
+ * fault recorded" would re-enable Restart/Reap against a session nobody can
+ * see (D-B8-14, spec §2). Fail-shut, never null.
+ */
+export const SUBSTRATE_UNREADABLE = '<substrate marker unreadable>';
+
+/**
+ * The reason a substrate fault carries when the marker reads back EMPTY.
+ * `_substrate_mark` refuses to write one — an empty `PROBE_DETAIL` gets a
+ * synthesized text — so the only way in is a torn write. Same ruling as
+ * `HOLD_NO_REASON` and for the same reason: the reason string IS the display,
+ * and a fault chip with nothing in its tooltip is visible enough to alarm and
+ * empty enough to ignore.
+ */
+export const SUBSTRATE_NO_REASON = '<substrate marker empty — reason lost>';
 
 async function field(io: FleetIO, dir: string, id: string, name: string): Promise<string | null> {
   const content = await io.readFile(path.join(dir, `${id}.${name}`));
@@ -290,8 +326,8 @@ function manifestBytes(raw: string | null): number | null {
 // ── Observability (spec's OBSERVABILITY section) ───────────────────────────
 //
 // A degraded field must be LOUD without being a flood: a read-storm sweep
-// (registry.ts's own module docstring: "~21 reads per session" — a 24-session
-// fleet sees ~505 round trips PER `readRegistry` call) would otherwise log the
+// (registry.ts's own module docstring: "~22 reads per session" — a 24-session
+// fleet sees ~529 round trips PER `readRegistry` call) would otherwise log the
 // same stuck field dozens of times a minute. `warnOnce` is keyed `id#field`,
 // not just `field`, so one wrapper's degraded read never silences a
 // DIFFERENT session's — and it is pruned per id no longer listed, so a
@@ -376,7 +412,7 @@ function noteWholeFleetListing(listable: boolean, now: number): void {
 }
 
 /**
- * One session's 17-field read plus the `SessionRecord` it builds — the ONE
+ * One session's 22-field read plus the `SessionRecord` it builds — the ONE
  * parser, shared by `readRegistry`'s whole-fleet sweep and
  * `readSessionRecord`'s single-id read below (C0.3), so there is no second
  * copy of this shape to drift out of sync with the first. `names` is the
@@ -398,7 +434,7 @@ async function buildRecord(
 ): Promise<SessionRecord | null> {
   const [wrapper, project, workdir, uuid, started, home, pool, lastswap, workspace, branch,
     base, prPhaseRaw, prNumberRaw, prCheckedAtRaw, archivedRaw, manifestRaw, holdRaw,
-    stoppedRaw, supervisedRaw, swapBlockedRaw, spawnRaw] = await Promise.all([
+    stoppedRaw, supervisedRaw, swapBlockedRaw, spawnRaw, substrateRaw] = await Promise.all([
     field(io, cfg.registryDir, id, 'wrapper'), field(io, cfg.registryDir, id, 'project'),
     field(io, cfg.registryDir, id, 'workdir'), field(io, cfg.registryDir, id, 'uuid'),
     field(io, cfg.registryDir, id, 'started'), field(io, cfg.registryDir, id, 'home'),
@@ -410,6 +446,7 @@ async function buildRecord(
     field(io, cfg.registryDir, id, 'hold'),
     field(io, cfg.registryDir, id, 'stopped'), field(io, cfg.registryDir, id, 'supervised'),
     field(io, cfg.registryDir, id, 'swapblocked'), field(io, cfg.registryDir, id, 'spawn'),
+    field(io, cfg.registryDir, id, 'substrate'),
   ]);
 
   // The identity-triple ladder. `uuid` first: `names.includes(id + '.uuid')`
@@ -436,6 +473,7 @@ async function buildRecord(
   }
 
   const holdListed = names.includes(`${id}.hold`);
+  const substrateListed = names.includes(`${id}.substrate`);
 
   // §4.3's three-valued read, over the three fields the lifecycle classifier
   // consumes. Same evidence as the identity ladder above: `names` is the
@@ -526,6 +564,22 @@ async function buildRecord(
     held: holdRaw === null
       ? (holdListed ? HOLD_UNREADABLE : null)
       : (holdRaw === '' ? HOLD_NO_REASON : holdRaw),
+    // The `.hold` ladder, applied to the supervisor's fault record (D-B8-14,
+    // spec §2): presence from the LISTING, never from a non-null read — "no
+    // fault recorded" re-enables every destructive affordance downstream, so
+    // it must never be the misreading of "the marker would not read". Content
+    // degrades LOUDLY: an empty marker gets a sentence (only a torn write
+    // produces one — `_substrate_mark` synthesizes a reason rather than write
+    // nothing), and a stampless one keeps its whole text at `at: 0` rather
+    // than losing the one sentence a maintainer could act on.
+    substrate: substrateRaw === null
+      ? (substrateListed ? { at: 0, text: SUBSTRATE_UNREADABLE } : null)
+      : substrateRaw === ''
+        ? { at: 0, text: SUBSTRATE_NO_REASON }
+        : (() => {
+            const p = packedStamp(substrateRaw);
+            return p === null ? { at: 0, text: substrateRaw } : { at: p.at, text: p.rest || substrateRaw };
+          })(),
     // The surface is validated on READ as well as on write. The write-side
     // check is `_ws_unsupervise`'s own `case "$surface" in cli|pwa|agent|ccd)
     // ;; *) surface=unknown ;;` — NOT `cmd_stop`, which this comment used to
@@ -599,7 +653,7 @@ export async function readRegistryMeasured(io: FleetIO, cfg: CcrcConfig): Promis
     out.push(rec);
   }
   // ONE SECOND LISTING, and only when something needs it. `names` was taken
-  // before ~21 field reads per session; a `ccd ws-release` that lands anywhere
+  // before ~22 field reads per session; a `ccd ws-release` that lands anywhere
   // inside that window leaves the name in the listing and no bytes behind it,
   // which the evidence above cannot tell apart from a read that failed — so a
   // perfectly ordinary release was reported as `HOLD_UNREADABLE`, the
@@ -648,8 +702,8 @@ export type SingleRead =
 
 /**
  * `readRegistry`, narrowed to ONE session (C0.3). One `readdir` plus that
- * id's 21 field reads — ~22 agent-WS round trips in remote mode, instead of
- * `readRegistry`'s 24-generation sweep of the whole fleet (~505 round trips
+ * id's 22 field reads — ~23 agent-WS round trips in remote mode, instead of
+ * `readRegistry`'s 24-generation sweep of the whole fleet (~529 round trips
  * on a 24-session fleet) — for every caller that only ever asked "what does
  * the registry say about THIS session" and never needed uniqueness or a
  * subtraction over the rest of the fleet. Built from the SAME `buildRecord`
