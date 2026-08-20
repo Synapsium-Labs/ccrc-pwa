@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=795cfbba050b708728babad60ba87b4e8080efa0c25800aa4d624c453b3ed942
+# ccrc:generated 1 sha256=bf52424bf9b2f324684245a0d912e8ac4c6bef2e55962b16d2cd3c211fa2a7e0
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box, not on this file: `_rc_enabled` reads
@@ -388,6 +388,24 @@ _alive() { [[ "$(_session_verdict "$1")" == live ]]; }
 # silent absence is destructive (`cmd_ws_hold` reads this exit status and dies
 # on it, and `ccd-hold.test.ts` uses exactly that directory as its any-uid
 # stand-in for a failed write). With `-T` it exits 1, as `printf > dir` did.
+#
+# `-T` IS GNU COREUTILS (`--no-target-directory`), and it is DOCUMENTED HERE
+# RATHER THAN PROBED. ccd does gate `flock` with a named `die` at three sites
+# (`flock (util-linux) is unavailable — refusing to …`), but a probe on
+# `_reg_set` would sit on the hottest path in the file — the `supervised`
+# heartbeat, ~11 live sessions each re-stamping every 30s — to re-answer, fork
+# by fork, a question that is settled per box; and this is not a new class of
+# assumption, since ccd already depends on GNU `stat -c`, `readlink -f` and
+# `df -P`. Both fleet boxes are GNU/Linux; measured here, GNU coreutils 9.4.
+#
+# WHAT IT LOOKS LIKE IF THAT EVER STOPS BEING TRUE, which is the part worth
+# writing down: a `mv` that does not know `-T` rejects the option and exits
+# non-zero, so EVERY `_reg_set` in the process returns 1. Exactly one caller
+# reads that status — `cmd_ws_hold`'s `|| die "could not record the hold …"` —
+# and every other call site drops it, so nothing announces the fault. The
+# visible symptom is the `supervised` heartbeat quietly ceasing to land, and
+# `_session_state`'s 120s freshness window then ages EVERY row to `orphan`
+# inside two minutes: a fleet that reads as entirely dead, from one flag.
 #
 # THE TMP NAME: leading dot, trailing `.tmp`, field never last. The dot keeps
 # it out of every bash glob in the tree (`$REG/*.uuid`, `$REG/*.workspace`,
