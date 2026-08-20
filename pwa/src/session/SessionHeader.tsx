@@ -339,7 +339,17 @@ export function SessionHeader({
               /effort
             </span>
           </button>
-          <button type="button" className="menu-item" onClick={() => menuAct(onMoveAccount)}>
+          <button
+            type="button"
+            className="menu-item"
+            disabled={fault !== null}
+            title={faultTitle}
+            onClick={() => menuAct(onMoveAccount)}
+          >
+            {/* Gated like Stop below (branch review): this item opens the SAME
+                SwapSheet as the actions sheet's gated opener, and SwapSheet's
+                confirm fires api.swap with no substrate check of its own — so
+                an ungated door here was a swap reachable with no gate anywhere. */}
             <span className="menu-label">Move to another account</span>
           </button>
           <button

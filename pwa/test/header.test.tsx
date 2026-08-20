@@ -805,3 +805,29 @@ describe('useKeyboardInsets', () => {
     expect(screen.getByTestId('inset')).toHaveTextContent(/^0$/);
   });
 });
+
+describe('the substrate gate — the Move (swap) door refuses too (branch review)', () => {
+  // Spec §4 names swap in the destructive list; the actions sheet's opener is
+  // gated, and this menu item opens the SAME SwapSheet whose confirm fires
+  // api.swap with no check of its own — so an ungated item here was a swap
+  // reachable end-to-end with zero gate anywhere.
+  it('disables Move to another account under a fault, naming it', async () => {
+    const p = renderHeader({ session: fleetSession({ substrate: { at: 1, text: 'x' } }) });
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    const move = await screen.findByRole('button', { name: /Move to another account/ });
+    expect(move).toBeDisabled();
+    expect(move.getAttribute('title')).toContain('x');
+    expect(move.getAttribute('title')).toMatch(/tmux unreachable/);
+    fireEvent.click(move);
+    expect(p.onMoveAccount).not.toHaveBeenCalled();
+  });
+
+  it('a null substrate leaves Move live', async () => {
+    const p = renderHeader();
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    const move = await screen.findByRole('button', { name: /Move to another account/ });
+    expect(move).toBeEnabled();
+    fireEvent.click(move);
+    expect(p.onMoveAccount).toHaveBeenCalledOnce();
+  });
+});

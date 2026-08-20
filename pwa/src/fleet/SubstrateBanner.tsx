@@ -1,4 +1,4 @@
-// One fault, one banner (spec §4): when EVERY running row reports a substrate
+// One fault, one banner (spec §4): when EVERY watched row reports a substrate
 // fault inside one snapshot, that is one event, not seventeen — this banner
 // states it once and names the remedy; the per-row `sess-substrate` chips keep
 // the partial case (and the reasons the majority text below does not carry).
@@ -30,15 +30,27 @@ export function SubstrateBanner({
   // `?? null`: the live frame is cast, not revived (`asFleetMsg`), so an older
   // server's row can lack the key at runtime — the same tolerance
   // `substrateFault` itself applies to its own field.
-  const running = sessions.filter((s) => (s.lifecycle ?? null) === 'running');
-  if (running.length === 0) return null;
+  //
+  // The population is the rows a supervisor is WATCHING (fresh heartbeat):
+  // `running` OR `restarting`. During the very fault this banner exists for,
+  // the SERVER's own tmux probe reads unknown too, so `alive` arrives false
+  // and every faulted row's lifecycle classifies 'restarting' — never
+  // 'running'. A running-only filter therefore could not fire in exactly the
+  // fleet-wide event (branch review, confirmed blocking). A benignly
+  // restarting row without a marker still suppresses the fleet-wide sentence
+  // below, correctly: it is a watched row not reporting the fault.
+  const watched = sessions.filter((s) => {
+    const l = s.lifecycle ?? null;
+    return l === 'running' || l === 'restarting';
+  });
+  if (watched.length === 0) return null;
 
-  // EVERY running row, not some: the partial case is real (one wrapper's
+  // EVERY watched row, not some: the partial case is real (one wrapper's
   // supervisor wedged, the rest fine) and belongs to the per-row chips — a
   // fleet-wide sentence over it would name a fault most of the fleet does not
   // have. Read through `substrateFault`, never `session.substrate` directly.
   const faults: { at: number; text: string }[] = [];
-  for (const row of running) {
+  for (const row of watched) {
     const f = substrateFault(row);
     if (f === null) return null;
     faults.push(f);
@@ -57,7 +69,7 @@ export function SubstrateBanner({
     if (n > best) { best = n; commonest = text; }
   }
 
-  const n = running.length;
+  const n = watched.length;
   return (
     <div className="substrate-banner" role="status">
       <span className="substrate-banner-msg">

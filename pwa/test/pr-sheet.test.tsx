@@ -762,3 +762,42 @@ describe('the sheet names the directory, not the branch', () => {
     expect(await screen.findByText('quiet-basin')).toBeInTheDocument();
   });
 });
+
+// — the substrate gate (spec §4, branch review) —
+
+describe('the substrate gate — this sheet refuses its archive and reap doors under a fault', () => {
+  // The actions sheet disables the identical verbs with the named reason; a
+  // second door one sheet away that still offers them is the inconsistency
+  // the review confirmed. Same contract: one derived fault, the chip's own
+  // `tmux unreachable — <reason>` string on `title`, the click proven inert.
+  it('Archive now is disabled with the named reason and never calls the API', async () => {
+    const merged = pr({ phase: 'merged', number: 42, url: 'u', mergedAt: Date.now() - 12 * 60_000 });
+    fetched = view({ pr: merged, draft: null });
+    open(sess({ pr: merged, archivedAt: null, substrate: { at: 1, text: 'x' } }));
+    const btn = await screen.findByRole('button', { name: /archive now/i });
+    expect(btn).toBeDisabled();
+    expect(btn.getAttribute('title')).toContain('x');
+    expect(btn.getAttribute('title')).toMatch(/tmux unreachable/);
+    fireEvent.click(btn);
+    expect((globalThis.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls
+      .some((c) => String(c[0]).endsWith('/archive'))).toBe(false);
+  });
+
+  it('Clean up… is disabled under a fault — the reap door, one sheet from the gated one', async () => {
+    const merged = pr({ phase: 'merged', number: 42, url: 'u', mergedAt: Date.now() - 12 * 60_000 });
+    fetched = view({ pr: merged, draft: null });
+    const onReap = vi.fn();
+    open(sess({ pr: merged, archivedAt: 1755620112, substrate: { at: 1, text: 'x' } }), onReap);
+    const btn = await screen.findByRole('button', { name: /clean up/i });
+    expect(btn).toBeDisabled();
+    expect(btn.getAttribute('title')).toContain('x');
+    fireEvent.click(btn);
+    expect(onReap).not.toHaveBeenCalled();
+  });
+
+  it('a null substrate leaves both doors live', async () => {
+    fetched = view({ pr: pr({ phase: 'merged', number: 42, url: 'u', mergedAt: Date.now() - 12 * 60_000 }), draft: null });
+    open(mergedUnarchived());
+    expect(await screen.findByRole('button', { name: /archive now/i })).toBeEnabled();
+  });
+});

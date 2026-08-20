@@ -24,8 +24,10 @@ const makeStore = (): FleetStore => createFleetStore({
     close(): void {} }) as unknown as WebSocket,
 });
 
-/** RUNNING by default — the banner's population is `lifecycle === 'running'`,
- *  so the base row is a member and each test opts rows out explicitly. */
+/** RUNNING by default — a member of the banner's watched population (which
+ *  is `running` OR `restarting`: during the fault the SERVER's own probe
+ *  reads unknown, so every faulted row classifies `restarting` on the wire —
+ *  the wire-true fixtures below say so). Each test opts rows out explicitly. */
 const s = (over: Partial<FleetSession> = {}): FleetSession => ({
   id: 'demo-quiet-basin', wrapper: 'claude', home: 'claude', project: 'demo', workdir: '/w',
   workspace: 'quiet-basin', name: null, status: 'busy', statusUpdatedAt: null, limits: null,
@@ -43,9 +45,12 @@ describe('the substrate banner — one fault, one banner (spec §4)', () => {
   it('states the fault ONCE when every running row reports it, naming the most-common reason and the remedy — and offers no button', () => {
     const store = makeStore();
     act(() => {
+      // WIRE-TRUE rows: a faulted row's lifecycle is 'restarting' (the server's
+      // own probe reads unknown -> alive false -> the ladder's restarting rung);
+      // 'running' + fault is kept on one row as the defensive combination.
       store.setState({ sessions: [
-        s({ id: 'a', substrate: FAULT }),
-        s({ id: 'b', substrate: { at: 1755620113000, text: 'protocol version mismatch' } }),
+        s({ id: 'a', lifecycle: 'restarting', substrate: FAULT }),
+        s({ id: 'b', lifecycle: 'restarting', substrate: { at: 1755620113000, text: 'protocol version mismatch' } }),
         s({ id: 'c', substrate: { at: 0, text: 'no server running on /tmp/x' } }),
       ] });
     });
@@ -69,12 +74,12 @@ describe('the substrate banner — one fault, one banner (spec §4)', () => {
     expect(screen.queryByRole('button')).toBeNull();
   });
 
-  it('renders NOTHING while even one running row is unfaulted — the partial case belongs to the chips', () => {
+  it('renders NOTHING while even one watched row is unfaulted — the partial case belongs to the chips', () => {
     const store = makeStore();
     act(() => {
       store.setState({ sessions: [
-        s({ id: 'a', substrate: FAULT }),
-        s({ id: 'b', substrate: FAULT }),
+        s({ id: 'a', lifecycle: 'restarting', substrate: FAULT }),
+        s({ id: 'b', lifecycle: 'restarting', substrate: FAULT }),
         s({ id: 'c', substrate: null }),   // one supervisor still reaches tmux
       ] });
     });
@@ -82,7 +87,7 @@ describe('the substrate banner — one fault, one banner (spec §4)', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it('renders NOTHING with zero running rows — a faulted marker on a stopped row is not a fleet-wide event', () => {
+  it('renders NOTHING with zero watched rows — a faulted marker on a stopped row is not a fleet-wide event', () => {
     const store = makeStore();
     act(() => {
       // A stopped row can still carry a marker (its supervisor died mid-fault);
@@ -119,7 +124,7 @@ describe('the substrate banner — one fault, one banner (spec §4)', () => {
   it('mounts on the fleet screen, beside the host banner — driven by the SAME injected store', () => {
     const store = makeStore();
     act(() => {
-      store.setState({ conn: 'open', sessions: [s({ id: 'a', substrate: FAULT })] });
+      store.setState({ conn: 'open', sessions: [s({ id: 'a', lifecycle: 'restarting', substrate: FAULT })] });
     });
     render(<FleetScreen store={store} />);
     expect(document.querySelector('.substrate-banner')).not.toBeNull();
