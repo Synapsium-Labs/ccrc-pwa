@@ -32,7 +32,7 @@ export interface FleetIO {
   readFileMeasured(path: string): Promise<MeasuredRead>;
   readFile(path: string): Promise<string | null>;   // null on ANY failure — absent and unreadable both collapse here; use readFileMeasured to tell them apart
   readFileFrom(path: string, offset: number): Promise<{ data: string; size: number } | null>;
-  readFileB64(path: string): Promise<string | null>;      // null on ANY failure (missing, unreadable, or over-cap) — binary-safe
+  readFileB64(path: string): Promise<string | null>;      // null on missing or unreadable; the agent's implementation folds in a THIRD condition, over-cap (D-114, agent/src/fileops.ts's MAX_READ_B64_BYTES) — localIO has no cap — binary-safe
   readdir(path: string): Promise<string[] | null>;
   stat(path: string): Promise<{ mtimeMs: number; size: number } | null>;
   /** Physical path for `path`, or null when it cannot be resolved (missing

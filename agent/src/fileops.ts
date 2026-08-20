@@ -19,12 +19,16 @@ function readRange(file: string, start: number, end: number): Promise<Buffer> {
  * so a remote fleet behaves identically to a local one. Callers (server.ts)
  * are responsible for running paths through whitelist.checkPath first.
  *
- * `readWhole` is temporarily ahead of its mirror: it now returns
- * `{data, absent}` so the server can tell ENOENT apart from EACCES/EISDIR/
- * etc. over the wire, while `localIO.readFile` still answers plain
- * `string | null`. The raw fs try/catch behavior (which errno maps to which
- * outcome) stays in lockstep; only this one op's return shape diverges,
- * and only until `localIO.readFile` gains the same distinction next.
+ * `readWhole` mirrors `localIO`'s ERRNO BEHAVIOUR, not its TYPE: both sides
+ * branch ENOENT vs. everything-else identically, but `readWhole` returns
+ * `{data, absent}` here while the server-side distinction lives in a
+ * SEPARATE, differently-shaped type — `MeasuredRead` in `server/src/io.ts`.
+ * Deliberate, not a gap to close: `agent/tsconfig.json` includes only
+ * `src/**` + `../shared/**`, so this side cannot import `server/src/io.ts`
+ * at all, and the plan (`docs/superpowers/plans/2026-08-20-fleetio-measured-
+ * read.md`, "the seam's shape") keeps the reason union out of `shared/` on
+ * purpose — putting it there would also put it on the PWA's bundle path.
+ * No convergence is coming; the two stay parallel local types on purpose.
  */
 
 /** `readWhole`'s result: `data` keeps the pre-existing null-for-any-failure

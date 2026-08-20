@@ -1837,12 +1837,23 @@ export class FleetWatcher {
         // altogether ABSENT are two different facts, evidence read straight
         // off the row itself (`measuredIdentity(rec)`) rather than the
         // hand-rolled `listing.includes` probe this block used to run.
-        // `rec === undefined` therefore NARROWS to PROVEN absence: either
-        // never listed, or twice-observed gone within `readRegistryMeasured`'s
-        // own second-listing retirement — never "we just couldn't list the
-        // registry this pass" (that case is refused above, before this loop
-        // is ever reached) and never "we just couldn't read one field this
-        // pass" (that is the degraded branch, not this one).
+        // `rec === undefined` therefore NARROWS to PROVEN absence: one of
+        // THREE routes now, not two. Never listed. Twice-observed gone within
+        // `readRegistryMeasured`'s own second-listing retirement. Or (Task 5)
+        // `buildRecord`'s identity-triple loop dropping the row on a SINGLE
+        // measured-`absent` identity field, no second listing at all — see
+        // its own comment in registry.ts. That third route is STRONGER
+        // evidence than the second, not weaker: a listed-then-ENOENT
+        // `.uuid`/`.wrapper`/`.workdir` can only come from ccd's
+        // `_reg_purge`, i.e. a full reap. But it widens the residual the
+        // second route already carried: the pre-branch ladder kept a
+        // degraded row degraded — never parks — whenever the CONFIRMING
+        // second listing itself failed, and this route drops the row on the
+        // first read alone, so the same failed-second-listing window that
+        // used to protect against a park no longer does. Never "we just
+        // couldn't list the registry this pass" (that case is refused above,
+        // before this loop is ever reached) and never "we just couldn't read
+        // one field this pass" (that is the degraded branch, not this one).
         const identity = rec !== undefined ? measuredIdentity(rec) : null;
         if (identity === null) {
           const unmeasurable = rec !== undefined;

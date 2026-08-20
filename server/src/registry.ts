@@ -777,15 +777,24 @@ export async function readRegistryMeasured(io: FleetIO, cfg: CcrcConfig): Promis
     if (rec.unmeasured.length > 0) identityUnconfirmed.add(id);
     out.push(rec);
   }
-  // ONE SECOND LISTING, and only when something needs it. `names` was taken
-  // before ~22 field reads per session; a `ccd ws-release` that lands anywhere
-  // inside that window leaves the name in the listing and no bytes behind it,
-  // which the evidence above cannot tell apart from a read that failed — so a
-  // perfectly ordinary release was reported as `HOLD_UNREADABLE`, the
-  // registry-is-broken sentence, and `archiveMerged` fired a held-merged push
-  // announcing corruption seconds after the operator tapped Release.
+  // ONE SECOND LISTING, and only when something needs it. Before Task 5, a
+  // `ccd ws-release` landing anywhere inside the ~22-field-read window left
+  // the name in the listing and no bytes behind it, indistinguishable at
+  // `field()` alone from a read that failed — a perfectly ordinary release
+  // was reported as `HOLD_UNREADABLE`, the registry-is-broken sentence, and
+  // `archiveMerged` fired a held-merged push announcing corruption seconds
+  // after the operator tapped Release.
   //
-  // Re-listing distinguishes them, because a directory read is exactly the
+  // `.hold`'s ordinary race is resolved WITHOUT a second listing now: a
+  // measured-absent read short-circuits straight to `held: null` in
+  // `buildRecord` (D-112), and a measured-absent identity-triple member
+  // drops the row immediately in the loop above — neither ever reaches
+  // `holdUnconfirmed`/`identityUnconfirmed` at all. What still lands here is
+  // exactly a read that came back `reason: 'unreadable'`: a genuine fault
+  // (EACCES/EISDIR/a dropped agent-WS round trip), or — until the fleet
+  // host's agent is redeployed — the fail-shut collapse that cannot tell a
+  // race from a fault at all (THE GOVERNING RULE). Re-listing still
+  // distinguishes those two, because a directory read is exactly the
   // evidence `field()` lacks: gone from the second listing = deleted on
   // purpose (absence IS release, and — for a degraded row — it is now
   // TWICE-observed absence, not an absent read: the row is RETIRED, dropped
@@ -843,9 +852,12 @@ export type SingleRead =
  * Carries the SAME hold-reconfirm discipline as `readRegistry` (see
  * `readRegistryMeasured`'s "ONE SECOND LISTING" comment): a hold that reads
  * `HOLD_UNREADABLE`, OR a record with an unmeasured identity field, gets ONE
- * follow-up listing, because a `ws-release`/full reap landing inside this
- * call's own field-read window is indistinguishable from a failed read at
- * `field()` alone, exactly as for the whole-fleet sweep. Twice-observed
+ * follow-up listing. Both are narrowed to genuine `reason: 'unreadable'`
+ * reads now (D-112): an ordinary `ws-release`/full-reap race resolves at
+ * `buildRecord` on a measured-absent read without ever reaching here, so
+ * what lands in this reconfirm is a real fault, or — until the fleet host's
+ * agent is redeployed — the fail-shut collapse that still cannot tell a
+ * race from a fault, exactly as for the whole-fleet sweep. Twice-observed
  * absence there retires the record to `{found:false, reason:'absent'}`,
  * never a silent degrade-forever.
  */

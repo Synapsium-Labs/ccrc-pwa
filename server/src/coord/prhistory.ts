@@ -73,13 +73,14 @@ export type PrHistoryRead =
  *     didn't.
  *
  * Both hold, so migrating one line without the other is not on the table;
- * `registry.ts:26-46`'s `HOLD_UNREADABLE` leans on the same DIRECTORY-listing
- * evidence for the same reason. Unlike `registry.ts`, which lists FIRST and
- * confirms an ambiguous read with a SECOND listing, this reader reads first
- * (the common case never needs a listing at all) and, only when that read
- * comes back null, takes a second LOOK before refusing: a listing naming the
- * file could mean the file is genuinely unreadable, or it could mean the
- * file was CREATED in the gap just described. The second look is a plain
+ * `HOLD_UNREADABLE` (`registry.ts`, its own docstring) leans on the same
+ * DIRECTORY-listing evidence for the same reason. Unlike `registry.ts`,
+ * which lists FIRST and confirms an ambiguous read with a SECOND listing,
+ * this reader reads first (the common case never needs a listing at all)
+ * and, only when that read comes back null, takes a second LOOK before
+ * refusing: a listing naming the file could mean the file is genuinely
+ * unreadable, or it could mean the file was CREATED in the gap just
+ * described. The second look is a plain
  * re-read rather than a re-list: a read is the only op that can produce this
  * function's actual answer, and refusal is reserved for a file that is
  * STILL unreadable on that second attempt. In remote mode every one of these

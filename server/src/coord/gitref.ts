@@ -56,9 +56,12 @@ const BRANCH_OK = /^[A-Za-z0-9][A-Za-z0-9._\-\/]*$/;
  * rather than let a possibly-stale `packed-refs` entry stand in for one it
  * could not read — the same fail-shut move `registry.ts` makes for
  * `HOLD_UNREADABLE` and `prhistory.ts` makes with its own listing/re-read.
- * Only when the `stat` ALSO reads absent (the ordinary "packed and never
- * re-committed" case, or the rare inability to even traverse the ref tree) is
- * `packed-refs` treated as git's honest fallback below.
+ * This is the `unreadable` arm's own fallback, not the only path to it — the
+ * `absent` arm above already goes straight to `packed-refs` with no `stat`
+ * involved. Only when THIS arm's `stat` ALSO reads absent (the ordinary
+ * "packed and never re-committed" case, or the rare inability to even
+ * traverse the ref tree) is `packed-refs` treated as git's honest fallback
+ * below.
  */
 export async function readBranchTip(
   io: FleetIO, projectsRoot: string, project: string, branch: string,

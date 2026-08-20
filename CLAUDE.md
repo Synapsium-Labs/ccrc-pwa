@@ -129,7 +129,7 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
 `// null = missing` docstring is now correct and `readFileMeasured` (`MeasuredRead`/`ReadFailure`,
 `server/src/io.ts`) ships a result-returning read that tells absent from unreadable — but the collapse
 isn't gone from the tree: `readFileB64` and `readFileFrom` still fold every failure to one `null`
-(`readFileB64` folds in a THIRD condition, an over-cap file), and the agent's `stat` op answers EACCES
+(the agent's half of `readFileB64` folds in a THIRD condition, an over-cap file — `localIO`'s has no cap), and the agent's `stat` op answers EACCES
 as `{missing: true}`, so that wire's own absent-marker already lies for non-ENOENT failures (D-114,
 `docs/superpowers/plans/2026-08-20-fleetio-measured-read.md`); the "account = wrapper" concept still
 has no single type. **Live build/roadmap state is NOT tracked here** — it lives in the orchestrator
