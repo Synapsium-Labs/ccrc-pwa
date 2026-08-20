@@ -94,7 +94,13 @@ they are not duplicated here on purpose — one copy of the protocol, in the
 place its own tests pin it.
 
 ```bash
-TOKEN=$(cat ~/.cc-secrets/ccrc-mail.token)
+# EXTRACT, never `cat`: the token file ships in deploy/ccrc-mail.token.example's
+# shape — a `#`-comment preamble above ONE value line — and the server reads it
+# with coord/token.ts's extractToken (first non-blank, non-`#` line, whitespace
+# stripped everywhere; deploy/notify.sh runs the identical rule). `cat` sends
+# the whole preamble as the header value, which is not even a legal header:
+# every call answers a bare 400 before any route logic runs.
+TOKEN=$(grep -v '^[[:space:]]*#' ~/.cc-secrets/ccrc-mail.token | grep -v '^[[:space:]]*$' | head -n1 | tr -d '[:space:]')
 resp=$(curl -sS -w '\n%{http_code}' -X POST "http://203.0.113.7:7788/api/mail" \
   -H "x-ccrc-mail-token: $TOKEN" -H 'content-type: application/json' \
   -d "{\"fromId\":\"$id\",\"fromUuid\":\"$uuid\",\"toId\":\"coordinator\",\"runId\":<run id>,\

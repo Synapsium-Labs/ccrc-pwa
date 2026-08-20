@@ -674,3 +674,37 @@ describe('the coordinator/worker handshake: shape in, detail out', () => {
       .toContain('Invoke the execution skill the brief names rather than improvising one.');
   });
 });
+
+describe('the token is EXTRACTED, never cat-ed whole (first-program dogfood finding, 2026-08-20)', () => {
+  // The token file ships in deploy/ccrc-mail.token.example's shape — a
+  // `#`-comment preamble above one value line — and the server reads it with
+  // coord/token.ts's extractToken. Both skills used to teach
+  // `TOKEN=$(cat …)`, which sends the whole preamble as the header value:
+  // not even a legal header, so every coordination write answered a bare 400
+  // before any route logic ran. Found live, before the first program's first
+  // dispatch — a worker following its own skill would have wedged on its
+  // first ack. The rule must stay IDENTICAL to deploy/notify.sh's (that
+  // file's own comment binds it to extractToken); this pin binds the skills
+  // to the same pipeline.
+  const workerSkill = readFileSync(
+    path.join(skillDir, '..', 'worker-skill', 'SKILL.md'), 'utf8');
+  const PIPELINE = "grep -v '^[[:space:]]*#' ~/.cc-secrets/ccrc-mail.token | grep -v '^[[:space:]]*$' | head -n1 | tr -d '[:space:]'";
+
+  it('neither skill teaches the cat that can never authenticate', () => {
+    for (const [name, text] of [['coordinator', skill], ['worker', workerSkill]] as const) {
+      expect(text, `${name} SKILL.md regressed to cat-ing the token file whole`)
+        .not.toContain('TOKEN=$(cat ~/.cc-secrets/ccrc-mail.token)');
+    }
+    expect(refs('wave-lifecycle.md')).not.toContain('$(cat ~/.cc-secrets/ccrc-mail.token)');
+  });
+
+  it("both skills carry notify.sh's exact extraction pipeline", () => {
+    const notify = readFileSync(path.join(root, 'deploy/notify.sh'), 'utf8');
+    // notify.sh reads $TOKEN_FILE; the skills name the path inline — same
+    // pipeline either side of the filename.
+    expect(notify).toContain("grep -v '^[[:space:]]*#'");
+    for (const [name, text] of [['coordinator', skill], ['worker', workerSkill]] as const) {
+      expect(text, `${name} SKILL.md's extraction drifted from notify.sh's rule`).toContain(PIPELINE);
+    }
+  });
+});
