@@ -109,6 +109,18 @@ const LOOP_STUBS = `systemctl() { :; }; sleep() { echo "sleep \${1:-}" >> "$HOME
 // PRE-FLIGHT probe (the ensure gate), consumed before the loop's first tick.
 describe('cmd_supervise under a substrate fault (spec §1)', () => {
   it('unknown does NOT exit, marks the row, and stamps the heartbeat EVERY unknown tick', () => {
+    // THE `_reg_set` BELOW REPLACES THE REAL ONE. It is a RECORDING stub —
+    // the `stamp <field>` log is what the heartbeat assertion counts — and it
+    // is deliberately BYTE-EQUIVALENT to the shipped writer (same value, no
+    // trailing newline) but NOT MECHANISM-EQUIVALENT: it is the old
+    // truncating redirect, with no tmp and no rename. So the
+    // `h.reg(ID, 'substrate')` assertion below measures THE STUB'S bytes, not
+    // ccd's — which is fine for what it asks (did `_substrate_mark` pass the
+    // right value?) and worthless as evidence about atomicity. Atomicity is
+    // pinned in `ccd-reg-set-atomic.test.ts`, and the structural check
+    // earlier in this file ("rides `_reg_set`…") is what keeps this file
+    // honest about which writer `_substrate_mark` calls. Do not "fix" the stub to rename:
+    // a stub that renamed would still not be the real function.
     run(`${LOOP_STUBS}
       ${seq('unknown:protocol mismatch', 'unknown:protocol mismatch', 'unknown:protocol mismatch', 'gone')}
       _reg_set() { printf '%s' "$3" > "$REG/$1.$2"; echo "stamp $2" >> "$HOME/ccd-calls"; }
