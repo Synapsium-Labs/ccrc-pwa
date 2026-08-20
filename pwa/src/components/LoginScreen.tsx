@@ -39,13 +39,13 @@ import { PasskeyCeremonyError, assertPasskey, passkeyLoginSupported } from '../l
  * different thing that happened:
  *   - `unconfigured` never says "try again": nothing the operator types can EVER
  *     match, and a retry sentence there is a lie that costs them the afternoon.
- *     It also does not say `ccrc passwd`, and that is D-138. This verdict covers
+ *     It also does not say `ccrc passwd`, and that is D-151. This verdict covers
  *     TWO box states — the secret file is ABSENT, or it is PRESENT AND UNUSABLE
  *     — collapsed on the wire deliberately (`AuthVerdict` has no "present but
  *     unreadable" member, and publishing one would tell an anonymous caller
  *     which). The old sentence was true of only the first: on the second a
  *     passphrase IS set, and `ccrc passwd` REFUSES to overwrite a file it cannot
- *     read (D-125), printing the real `mv … && rm … && ccrc passwd` remedy. So
+ *     read (D-138), printing the real `mv … && rm … && ccrc passwd` remedy. So
  *     it points at the one command that is correct in BOTH states and leaks
  *     neither: `ccrc doctor`, whose `auth` check measures the file and prints
  *     the fix the box actually needs.
@@ -81,7 +81,7 @@ export const UNREACHABLE_TEXT = "Couldn't reach the box — check the connection
 const PASSKEY_CANCELLED_TEXT = 'Passkey sign-in was cancelled. Try again, or use the passphrase.';
 
 /**
- * THE BOX CANNOT RUN A PASSKEY CEREMONY AT ALL (D-139) — a `501` from either
+ * THE BOX CANNOT RUN A PASSKEY CEREMONY AT ALL (D-152) — a `501` from either
  * assert route, which `passkeyUnavailable` (`server.ts`) sends for exactly one
  * reason a login screen can meet: this box's WebAuthn config is refused
  * (`relyingPartyProblem` — a bad `CCRC_RP_ID`, or one that disagrees with
@@ -113,7 +113,7 @@ export function LoginScreen(): ReactNode {
   // standing verdict below, because it is the newer fact.
   const [refusal, setRefusal] = useState<AuthVerdict | null>(null);
   const [unreachable, setUnreachable] = useState(false);
-  /** The box answered, and said it cannot run a passkey ceremony at all (D-139).
+  /** The box answered, and said it cannot run a passkey ceremony at all (D-152).
    *  Its own state beside `unreachable`, because "the box refused this feature"
    *  and "the box never answered" send an operator to two different places. */
   const [unavailable, setUnavailable] = useState(false);
@@ -216,7 +216,7 @@ export function LoginScreen(): ReactNode {
       if (err instanceof PasskeyCeremonyError) setCancelled(true);
       else {
         const v = err instanceof ApiError ? verdictOf(err.body) : null;
-        // FOUR failure kinds, not three (D-139). A `501` is the box saying it
+        // FOUR failure kinds, not three (D-152). A `501` is the box saying it
         // cannot run this ceremony at all — `passkeyUnavailable` sends it with
         // no `verdict`, so without this arm it landed in the null branch below
         // and rendered a NETWORK sentence for a CONFIG refusal.

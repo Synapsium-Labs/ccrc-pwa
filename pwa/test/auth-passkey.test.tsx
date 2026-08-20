@@ -411,7 +411,7 @@ describe('the passkey button on the login screen', () => {
     expect(isAuthLost()).toBe(true);
   });
 
-  it('a 501 says the BOX cannot run the ceremony — never "couldn\'t reach the box" (D-139)', async () => {
+  it('a 501 says the BOX cannot run the ceremony — never "couldn\'t reach the box" (D-152)', async () => {
     // THE REACHABLE STATE: keys are enrolled, then `CCRC_RP_ID` is broken (a
     // rename, a copied env file). The button is STILL offered — it keys off
     // `passkeysEnrolled > 0`, and the credential store loads regardless of the
@@ -439,7 +439,7 @@ describe('the passkey button on the login screen', () => {
   });
 
   it('a genuinely unreachable box still says SO — the 501 arm did not eat it', async () => {
-    // The boundary D-139's arm must not cross: no response at all is still a
+    // The boundary D-152's arm must not cross: no response at all is still a
     // network problem, and it keeps the network sentence.
     supportBrowser();
     vi.stubGlobal('fetch', statusFetch({ authed: false, passkeysEnrolled: 1, mode: 'passphrase' },
@@ -541,7 +541,7 @@ describe('PasskeySection', () => {
     expect(await screen.findByText(/revoked/i)).toBeInTheDocument();
   });
 
-  it('an UNREADABLE store says DO NOT ENROL — never "no passkey is enrolled" (D-119)', async () => {
+  it('an UNREADABLE store says DO NOT ENROL — never "no passkey is enrolled" (D-132)', async () => {
     // The sentence that caused the data loss. An operator told "no passkey is
     // enrolled" enrols, and the enrolment rewrites a file the server could not
     // read, destroying the keys inside it.
@@ -556,7 +556,7 @@ describe('PasskeySection', () => {
     expect(screen.queryByText(/No passkey is enrolled/i)).not.toBeInTheDocument();
     // …and there is no way to enrol from here at all.
     expect(screen.queryByRole('button', { name: /add a passkey/i })).not.toBeInTheDocument();
-    // D-140: the path is HEDGED, not asserted. `CCRC_PASSKEYS_PATH` can redirect
+    // D-153: the path is HEDGED, not asserted. `CCRC_PASSKEYS_PATH` can redirect
     // this file and a browser is the one surface here that genuinely cannot
     // resolve it — no route publishes it, and adding one would put a filesystem
     // path on a screen for the sake of a sentence. So it names the default AND
@@ -587,7 +587,7 @@ describe('PasskeySection', () => {
   });
 });
 
-// ── 7. the sign-out control (D-132) ─────────────────────────────────────────
+// ── 7. the sign-out control (D-145) ─────────────────────────────────────────
 //
 // `POST /api/auth/logout` shipped with the server in Task 5 — gated, tested,
 // and with NO CALLER anywhere in `pwa/src` until now. So a box with the gate
@@ -677,7 +677,7 @@ describe('the sign-out control', () => {
     expect(isAuthLost(), 'a dark box must never raise the signal').toBe(false);
   });
 
-  it('is still offered when the PASSKEY store is unreadable (D-119\'s branch)', async () => {
+  it('is still offered when the PASSKEY store is unreadable (D-132\'s branch)', async () => {
     // The unreadable-file branch returns early with its own sentence, and the
     // sign-out block is rendered in BOTH arms deliberately: an operator whose
     // credential store is broken has every right to end their own session, and

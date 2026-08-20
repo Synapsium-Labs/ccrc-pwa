@@ -110,7 +110,7 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 /**
  * The path under `home`, and the ONE place `sessions.json` is spelled.
  *
- * `home` IS REQUIRED, AND THAT IS THE SAFETY RULE MADE STRUCTURAL (D-110, Task 5
+ * `home` IS REQUIRED, AND THAT IS THE SAFETY RULE MADE STRUCTURAL (D-123, Task 5
  * + its review fold-in). This function was `defaultSessionsPath()` with no
  * parameter, reaching `os.homedir()` — and `config.ts` must derive the path from
  * `cfg.home`, which is `CCRC_HOME` when set, which every server test sets to a

@@ -74,7 +74,7 @@ export const MAX_FAILURES = 8;
  * THE SECOND OF THOSE IS ONLY TRUE BECAUSE ISSUANCE SPENDS THE BUDGET. Both
  * halves of the ceremony charge against this window — `assert/finish` through
  * {@link LoginRateLimiter.fail} on a refusal, and `assert/start` through
- * {@link LoginRateLimiter.spend} on every challenge minted. Until D-118 only the
+ * {@link LoginRateLimiter.spend} on every challenge minted. Until D-131 only the
  * first did, which made the sentence above false in the exact case it was
  * written for: a start-only flood cost nothing and evicted the operator's live
  * challenge for free. A brake that cannot fire on the path that spends the
@@ -250,7 +250,7 @@ export class LoginRateLimiter {
    * describes what it does rather than why a caller does it.
    *
    * It exists because the passkey lane spends budget on something that is not a
-   * failure (D-118): ISSUING A CHALLENGE. `assert/start` is unauthenticated,
+   * failure (D-131): ISSUING A CHALLENGE. `assert/start` is unauthenticated,
    * exempt, takes a bodyless POST, and consumes a bounded resource — a slot in
    * the 64-entry challenge map, which evicts OLDEST-FIRST. Until this existed the
    * route took a reservation and released it in the same tick (the handler is

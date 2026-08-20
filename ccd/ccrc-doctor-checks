@@ -845,7 +845,7 @@ _check_config() {
 # `_check_wrappers` already reads a JSON file with `node -e` rather than
 # re-implementing a parser in bash, and this is the same rule with more at
 # stake: `readAuthSecret` enforces the format AND five parameter bounds
-# (D-111/113), and a bash approximation would inevitably PASS a line the server
+# (D-124/113), and a bash approximation would inevitably PASS a line the server
 # refuses. That refusal is not a refused login — `buildServer` calls
 # `readAuthSecret` UNCAUGHT at boot, so a garbled line is a server that does not
 # start, and doctor is the one place an operator can see that coming before a
@@ -853,7 +853,7 @@ _check_config() {
 # --check`, which is the same program `ccrc passwd` writes with, importing the
 # same compiled module the server boots on.
 #
-# NOT ONE BYTE OF THE FILE REACHES A VERDICT LINE (D-127). The helper reports a class
+# NOT ONE BYTE OF THE FILE REACHES A VERDICT LINE (D-140). The helper reports a class
 # and a parameter summary, never content, and this check validates even that
 # summary against a strict regex before printing it — because a doctor
 # transcript goes into tickets, and the plausible way to get an unparseable
@@ -900,7 +900,7 @@ _check_auth() {
     where="no readable $BOX_ENV_FILE"
   fi
 
-  # ── WHICH FILE (D-130), and the case where following config is worse ────
+  # ── WHICH FILE (D-143), and the case where following config is worse ────
   # The same resolver `cmd_passwd` writes through (`ccrc`'s `_box_auth_path`),
   # for the reason its header gives: a doctor that measured the DEFAULT path on
   # a box whose `ccrc.env` redirects the server would report `PASS auth` about a
@@ -978,7 +978,7 @@ _check_auth() {
           "run: ccrc passwd (no restart needed — the gate re-reads the file per request)"
         return 1
       fi
-      # ── A PASS, BY OPERATOR RULING (D-126) — THE REASONING IS ABOUT WARNINGS ──
+      # ── A PASS, BY OPERATOR RULING (D-139) — THE REASONING IS ABOUT WARNINGS ──
       # This shipped as a WARN (the plan's own Task 9 text) and the operator
       # overruled it: `CCRC_AUTH` off with no passphrase is the state EVERY box
       # ships in — `ccrc install` writes no passphrase, by doctrine — so a
@@ -1003,7 +1003,7 @@ _check_auth() {
       # action is the same — which is why the remedy is one sentence and the
       # detail is two.
       #
-      # THE REMEDY IS THE `mv`, NOT A BARE `ccrc passwd` (D-125), and that is the
+      # THE REMEDY IS THE `mv`, NOT A BARE `ccrc passwd` (D-138), and that is the
       # writer's contract showing through: `gen-auth-hash.mjs` REFUSES to write
       # over a file it cannot read, because the generation it carries cannot be
       # read either and inventing one would revalidate sessions instead of
@@ -1011,10 +1011,10 @@ _check_auth() {
       # to a command that is about to refuse.
       local when="the moment CCRC_AUTH=on is set, the server will refuse to boot on it"
       [ "$armed" -eq 0 ] || when="with $gate the server REFUSES TO BOOT on it — readAuthSecret is called uncaught at startup"
-      # ── AND THE SESSION FILE IS RESOLVED, NOT ASSUMED (D-135) ────────────
+      # ── AND THE SESSION FILE IS RESOLVED, NOT ASSUMED (D-148) ────────────
       # This clause used to be a hard-coded `rm -f ~/.ccrc/sessions.json`,
       # printed in the same breath as a `$secret` that WAS resolved through
-      # `_box_auth_path` — D-130's own defect class, one key over. On a box
+      # `_box_auth_path` — D-143's own defect class, one key over. On a box
       # setting `CCRC_SESSIONS_PATH` it told the operator to delete a file
       # nothing reads, leaving the sessions the fresh generation-1 secret is
       # about to revalidate exactly where they were.
@@ -1935,7 +1935,7 @@ _check_fleet() {
         "install Node first — see the 'node' check above"
       return 2 ;;
     9)
-      # ── A SKIP, NOT A WARN, AND NOT THE OLD "read the server's log" (D-137) ──
+      # ── A SKIP, NOT A WARN, AND NOT THE OLD "read the server's log" (D-150) ──
       # This is the one non-200 that means NOTHING IS WRONG. `/api/fleet/health`
       # is gated on purpose (it publishes roster digests, build stamps and
       # divergence), so an armed box refusing an unauthenticated diagnostic is
@@ -1947,7 +1947,7 @@ _check_fleet() {
       # WARN is wrong for it twice over: this doctor's rule is that a WARN owes a
       # REMEDY, and the only honest remedy here would be "turn the gate off",
       # which is not advice. And a yellow line every armed box shows on every run
-      # is D-126's lesson exactly — the warnings that matter lose to the one
+      # is D-139's lesson exactly — the warnings that matter lose to the one
       # everybody learns to skim.
       #
       # THE COST IS REAL AND IS STATED, not glossed: on an armed box this check

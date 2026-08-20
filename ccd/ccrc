@@ -502,7 +502,7 @@ _box_env_value() {
   printf '%s' "$v"
 }
 
-# ── _box_auth_path — WHICH FILE IS THIS BOX'S PASSPHRASE SECRET (D-130) ───
+# ── _box_auth_path — WHICH FILE IS THIS BOX'S PASSPHRASE SECRET (D-143) ───
 # `server/src/config.ts:339` is `env.CCRC_AUTH_SECRET_PATH || <default>`, so a
 # box CAN redirect the gate's secret, and the two things in this tree that
 # touch that file — `cmd_passwd`, which writes it, and doctor's `auth` check,
@@ -532,7 +532,7 @@ _box_env_value() {
 #      nothing on the box can say which one is the secret. The path is still
 #      printed, for the message.
 #
-# ── AND THE SAME QUESTION FOR THE SESSION FILE (D-135) ───────────────────
+# ── AND THE SAME QUESTION FOR THE SESSION FILE (D-148) ───────────────────
 # `CCRC_SESSIONS_PATH` is the same kind of key with the same `||` reader in
 # `config.ts`, and doctor's `auth` remedy NAMES the session file — so it had
 # the same defect one key over: it resolved the SECRET through this function
@@ -542,7 +542,7 @@ _box_env_value() {
 #
 # ONE FUNCTION, PARAMETERISED, rather than a second near-identical copy: two
 # resolvers with two spellings of the same three-way rule is precisely the
-# drift this file's header bans, and the whole point of D-130 was that the
+# drift this file's header bans, and the whole point of D-143 was that the
 # tools which touch a file must not each hold their own opinion about which
 # file it is. `_box_auth_path` and `_box_sessions_path` are now the same code
 # with a different key and a different default, so they cannot disagree.
@@ -577,9 +577,9 @@ _box_sessions_path() { _box_path_for CCRC_SESSIONS_PATH "$BOX_SESSIONS_FILE"; }
 #   6 -> it answered an HTTP error;      BOX_HEALTH_WHY = "HTTP <code>"
 #   7 -> what came back is not the health JSON
 #   8 -> node is not on PATH, so nothing could parse the answer
-#   9 -> THE SESSION GATE REFUSED IT (D-137). Its own code, split out of 6.
+#   9 -> THE SESSION GATE REFUSED IT (D-150). Its own code, split out of 6.
 #
-# ── WHY 9 EXISTS (D-137) ─────────────────────────────────────────────────
+# ── WHY 9 EXISTS (D-150) ─────────────────────────────────────────────────
 # `/api/fleet/health` is GATED, deliberately and after review: it publishes
 # roster digests, build stamps and divergence, and exempting a route that says
 # that much to widen a diagnostic's reach is a worse trade than losing the
@@ -866,7 +866,7 @@ cmd_status() {
     6) printf 'fleet:     not measured (the server answered %s when asked for /api/fleet/health)\n' "$BOX_HEALTH_WHY"; return 0 ;;
     7) printf 'fleet:     not measured (the server answered something that is not the health JSON)\n'; return 0 ;;
     8) printf 'fleet:     not measured (node is not on PATH, so the answer could not be parsed)\n'; return 0 ;;
-    # D-137. Not a fault, and it must not read as one: the gate is armed and
+    # D-150. Not a fault, and it must not read as one: the gate is armed and
     # /api/fleet/health is behind it, so this measurement is unavailable from
     # outside the gate BY DESIGN. `services:` and the doctor's `auth` check
     # above still say everything else about this box.
@@ -1727,7 +1727,7 @@ cmd_adopt() {
 #   - it is `unset` the moment the hasher has had it, and nothing in this
 #     function prints it, logs it, or puts it in a diagnostic.
 #
-# ── THE TRAP IS ABOUT THE OPERATOR'S TERMINAL, AND IT MUST ABORT (D-128) ──
+# ── THE TRAP IS ABOUT THE OPERATOR'S TERMINAL, AND IT MUST ABORT (D-141) ──
 # `read -s` turns echo off and restores it itself on a normal return — but not
 # when a Ctrl-C arrives mid-prompt, which leaves the shell alive with a
 # terminal that no longer shows what is typed into it. `stty echo` on
@@ -1763,7 +1763,7 @@ cmd_adopt() {
 # `_box_auth_path` is the one resolver both this verb and doctor's `auth` check
 # go through.
 #
-# ── WHAT IT INVALIDATES, AND WHAT IT DOES NOT (D-125) ────────────────────
+# ── WHAT IT INVALIDATES, AND WHAT IT DOES NOT (D-138) ────────────────────
 # A rotation bumps the file's `generation`, and `SessionStore.verify` answers
 # `'expired'` for every session stamped with an older one — so every logged-in
 # browser is logged out, with no restart. ENROLLED PASSKEYS ARE UNAFFECTED, by
@@ -1838,7 +1838,7 @@ cmd_passwd() {
 
   local p1="" p2=""
   printf '%s\n' "$PROG: setting the PWA passphrase in $target (nothing is echoed; Ctrl-C aborts)" >&2
-  # `IFS=` ON BOTH READS (D-129), exactly as every other `read` in this file has it
+  # `IFS=` ON BOTH READS (D-142), exactly as every other `read` in this file has it
   # (:473, :932, :2008) — and here it is the difference between a working box
   # and a silent lockout. Without it bash splits on $IFS and hands back the
   # value with leading and trailing whitespace STRIPPED: measured,

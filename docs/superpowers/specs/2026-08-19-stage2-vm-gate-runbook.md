@@ -277,7 +277,7 @@ is fine for `curl`; for the browser half of this step you must reach the box at
 `http://localhost:7788/`. WebAuthn will not scope a credential to an IP address. Both wrong turns
 are now caught at boot, with passkeys 501 and the passphrase login still working:
 `CCRC_ORIGIN=http://127.0.0.1:7788` with `CCRC_RP_ID=localhost` is a disagreeing pair, and
-"fixing" it by setting `CCRC_RP_ID=127.0.0.1` is refused as an IP literal (D-134 — until this task
+"fixing" it by setting `CCRC_RP_ID=127.0.0.1` is refused as an IP literal (D-147 — until this task
 that second one was accepted by the server and rejected by every browser, with nothing in the
 journal). Keep both on `localhost`.
 
@@ -301,7 +301,7 @@ The gate is read at boot, so nothing above takes effect until this runs. Confirm
   Every route answers 401 and no login can succeed. `ccrc passwd` fixes it with no restart (the gate
   re-reads the file per request).
 - `ccrc-server: CCRC_ORIGIN is plain http (…) and the session cookie is still marked Secure` — the
-  cookie warning (D-133). **On this localhost VM you WILL see this one**, and it is the point of
+  cookie warning (D-146). **On this localhost VM you WILL see this one**, and it is the point of
   step 10d: see there for what to do. It is the only signal that failure has, which is why the
   server now emits it.
 

@@ -253,7 +253,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `notifyLog`, and for a reason those three do not have: the store must be
   // LOADED exactly once, at boot, before any request can reach `verify` — a
   // second live-time `load()` re-reads the file into memory and can clobber a
-  // create that has not flushed yet (`sessions.ts:152`, D-109's write-side
+  // create that has not flushed yet (`sessions.ts:152`, D-122's write-side
   // mirror). `buildServer` is the one async function every caller — index.ts,
   // every test — goes through exactly once, so putting the store here makes
   // "loaded once" structural instead of a rule each composition root has to
@@ -308,7 +308,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // (`measureSecret`) — that read never throws, because at REQUEST time the
     // answer must be a 401, not a 500.
     //
-    // D-131 — AND THE REFUSAL SAYS THE STATE, NEVER THE BYTES. The throw stays
+    // D-144 — AND THE REFUSAL SAYS THE STATE, NEVER THE BYTES. The throw stays
     // uncaught in the sense that matters (nothing here recovers, the process
     // still dies), but the message that reaches the journal is REWRITTEN,
     // because `AuthSecretUnusable`'s own message QUOTES THE FIELD IT CHOKED ON
@@ -317,7 +317,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // a misplaced copy of some OTHER secret. An uncaught rejection here is
     // printed by node with its message AND its `[cause]` chain, straight into
     // the journal, where `deploy.sh`'s `verify-service.sh` then tails it into a
-    // deploy transcript and a ticket. D-127 closed exactly this leak in `ccrc
+    // deploy transcript and a ticket. D-140 closed exactly this leak in `ccrc
     // doctor` (which shells to `--check` and reports an exit CODE, never a
     // message); this was the last path by which a byte of the secret file
     // reached a log, and it is closed the same way and for the same reason.
@@ -342,11 +342,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         'is on, and a present-but-unusable passphrase file is not "no passphrase": starting on it ' +
         'would be the fail-OPEN the flag exists to prevent. The parser\'s own reason is WITHHELD ' +
         'from this message on purpose — it quotes the field it choked on, and that field is file ' +
-        'content (see D-127: `ccrc doctor` withholds it for the same reason). Measure the file with ' +
+        'content (see D-140: `ccrc doctor` withholds it for the same reason). Measure the file with ' +
         '`ccrc doctor` (the `auth` check), which reports its state without printing any of it. ' +
         `To move it aside and set a fresh passphrase: mv ${deps.cfg.authSecretPath} ` +
         `${deps.cfg.authSecretPath}.broken && rm -f ${deps.cfg.sessionsPath} && ccrc passwd ` +
-        '(`ccrc passwd` REFUSES to overwrite a file it cannot read — D-125).');
+        '(`ccrc passwd` REFUSES to overwrite a file it cannot read — D-138).');
     }
     if (secret === null) {
       // ARMED WITH NO PASSPHRASE — every request will answer 401
@@ -381,7 +381,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         'ALSO be refused for any browser that is not at it. The passphrase login itself still ' +
         'works. Fix CCRC_RP_ID / CCRC_ORIGIN and redeploy.');
     }
-    // THE OTHER BOOT CHECK THAT IS ACTUALLY IMPLEMENTABLE (D-133). The one an
+    // THE OTHER BOOT CHECK THAT IS ACTUALLY IMPLEMENTABLE (D-146). The one an
     // operator asks for first — "is CCRC_ORIGIN really this box's name?" — is
     // not, and `cookiePolicyProblem`'s docstring says why. This one compares two
     // values stated by the same operator in the same file and fires only when
@@ -418,7 +418,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   /**
    * THE CREDENTIAL QUESTION, as a value other route families can be handed —
-   * `GET /api/runs` is the one caller (D-136), and it needs the whole decision
+   * `GET /api/runs` is the one caller (D-149), and it needs the whole decision
    * rather than a boolean so its refusal can carry the same `AuthVerdict` the
    * gate would have sent.
    *
@@ -686,7 +686,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       lastUsedAt: now,
       label: deviceLabel(req),
     });
-    // A DISCRIMINATED RESULT, not a boolean (D-120): three different things can
+    // A DISCRIMINATED RESULT, not a boolean (D-133): three different things can
     // stop an enrolment and the operator needs a different sentence for each.
     // `write-failed` especially — that used to answer `204 Passkey added` for a
     // credential that would vanish on the next restart.
@@ -711,7 +711,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (passkeyUnavailable(reply)) return;
     return {
       credentials: passkeys.list(),
-      // NOT derivable from an empty list — see `PasskeyListResponse` (D-119).
+      // NOT derivable from an empty list — see `PasskeyListResponse` (D-132).
       storeUnreadable: !passkeys.canEnroll(),
     };
   });
@@ -778,7 +778,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return;
     }
     try {
-      // ISSUANCE SPENDS THE BUDGET (D-118). Without this the route was
+      // ISSUANCE SPENDS THE BUDGET (D-131). Without this the route was
       // effectively unmetered: the handler is `async` but has no `await` —
       // `issue()` and `ids()` are synchronous — so the reservation was released
       // in the same tick and `inFlight` never exceeded 1, and nothing here ever
@@ -1243,7 +1243,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // sharing one token+attribution gate inline here would be a second copy of
   // that gate. 501 `{ok:false,error:'not-configured'}` without `deps.coord`,
   // the same shape as the push routes and `/api/notifications/catchup` above.
-  // The 4th argument is D-136: `GET /api/runs` is EXEMPT from the session gate
+  // The 4th argument is D-149: `GET /api/runs` is EXEMPT from the session gate
   // and authenticates for itself, because the coordinator skill reads it
   // cookieless from the fleet host with the box token. The session half of that
   // decision can only be made here, where `authStore` lives.

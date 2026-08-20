@@ -48,7 +48,7 @@ const BOX_TOKEN = 'box-token-for-the-gate-suite';
 const tokenHeader = { 'x-ccrc-mail-token': BOX_TOKEN };
 
 /**
- * EXEMPT FROM THE GATE, BUT AUTHENTICATED BY THE HANDLER — D-136's category,
+ * EXEMPT FROM THE GATE, BUT AUTHENTICATED BY THE HANDLER — D-149's category,
  * declared here rather than derived, exactly as `FLAG_AWARE` is and for the same
  * reason: membership is the only way out of the strongest assertions in this
  * file, so it has to be a line a reviewer looks at.
@@ -137,7 +137,7 @@ const openApp = async (opts: AppOpts = {}): Promise<{ app: FastifyInstance; home
       authEnabled: opts.enabled ?? true,
       cookieSecure: opts.cookieSecure ?? false,
     },
-    // The box token, so the EXEMPT-BUT-AUTHENTICATED lane (D-136) can be probed
+    // The box token, so the EXEMPT-BUT-AUTHENTICATED lane (D-149) can be probed
     // with its OTHER credential. Without one configured, `checkMailToken`
     // answers `'unconfigured'`, which those routes refuse — fail-shut, and not
     // the thing this file wants to measure.
@@ -349,7 +349,7 @@ describe('EXEMPT is complete in both directions', () => {
     // The whole set, spelled out, so that adding an exemption is a deliberate act
     // that edits this list with a reviewer looking at it. 17 = /health + the 9
     // box-token lanes + /api/notify + login + status + the SPA shell + the two
-    // halves of the passkey door + GET /api/runs (D-136, exempt-BUT-authenticated).
+    // halves of the passkey door + GET /api/runs (D-149, exempt-BUT-authenticated).
     expect([...EXEMPT.keys()].sort()).toEqual([
       'GET /*',
       'GET /api/auth/status',
@@ -395,7 +395,7 @@ describe('EXEMPT is complete in both directions', () => {
       const body = coord.slice(at, end);
       return /requireMailToken\(req/.test(body) || /checkMailToken\(/.test(body);
     }).map((h) => h.k);
-    // TEN since D-136: `GET /api/runs` accepts a live session OR the box token,
+    // TEN since D-149: `GET /api/runs` accepts a live session OR the box token,
     // and it is the token half that puts it in this list. The scan reads the
     // SOURCE rather than trusting the table, which is the whole point — an
     // exemption whose stated justification is a gate the route does not actually
@@ -453,7 +453,7 @@ describe('with the gate ARMED and no cookie', () => {
       const w = await openApp(); app = w.app;
       const method = k.slice(0, k.indexOf(' '));
       const url = concrete(k.slice(k.indexOf(' ') + 1));
-      // D-136's lane refuses an anonymous caller ITSELF, with a verdict-carrying
+      // D-149's lane refuses an anonymous caller ITSELF, with a verdict-carrying
       // body that `gateRefused` cannot distinguish from the gate's. So it is
       // probed with the credential it actually takes — and THAT is the proof the
       // gate let it through: a gated route ignores the box token entirely, so if
@@ -470,7 +470,7 @@ describe('with the gate ARMED and no cookie', () => {
     '%s is exempt from the GATE and refused by its own HANDLER', async (k) => {
       // Both halves, because either one alone is the bug. Exempt-and-open would
       // publish the run list to the tailnet; gated-and-closed would wedge the
-      // coordinator out of its own program (D-136).
+      // coordinator out of its own program (D-149).
       const w = await openApp(); app = w.app;
       const method = k.slice(0, k.indexOf(' '));
       const url = concrete(k.slice(k.indexOf(' ') + 1));
@@ -526,7 +526,7 @@ describe('the exempt check is set membership on the MATCHED ROUTE, not the raw u
     // `/api/runs/1/dispatch` is exempt; `/api/runs/1` is not a route at all and
     // `GET /api/feed` is a wholly different entry. Neither may ride the other's.
     //
-    // `GET /api/runs` USED TO BE THE FOIL HERE and no longer can be: D-136 put
+    // `GET /api/runs` USED TO BE THE FOIL HERE and no longer can be: D-149 put
     // it in the table (exempt-but-authenticated), so the GATE lets it through
     // and its own handler refuses. `gateRefused` would still answer `true` —
     // that helper matches a verdict-carrying 401, which this route now sends
@@ -644,7 +644,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           // 2. Armed and anonymous: exempt routes answer for themselves, gated
           //    routes answer exactly `401 no-session`.
           //
-          //    …and D-136's category is neither. An EXEMPT-BUT-AUTHENTICATED
+          //    …and D-149's category is neither. An EXEMPT-BUT-AUTHENTICATED
           //    route is let through by the hook and then refuses an anonymous
           //    caller itself, so its dark and armed-anonymous answers are
           //    legitimately DIFFERENT — which is the plain exempt branch's whole
@@ -720,7 +720,7 @@ describe('a live session cookie passes the gate', () => {
     ws.close();
   });
 
-  it('a cookie for a DIFFERENT token does not, and is told it was signed OUT (D-114)', async () => {
+  it('a cookie for a DIFFERENT token does not, and is told it was signed OUT (D-127)', async () => {
     const w = await openApp({ cookieSecure: true }); app = w.app;
     await login(app);
     const forged = serializeCookie(SESSION_COOKIE, 'a'.repeat(43), { secure: false, maxAgeSeconds: 60 });
@@ -731,7 +731,7 @@ describe('a live session cookie passes the gate', () => {
     // `'expired'`, NOT the `'no-session'` the store answered. A cookie was
     // PRESENTED, so "you were signed out" is the true sentence and a cold "sign
     // in to reach this box" is not — the gate has both facts and must not narrow
-    // them to the store's one (D-114).
+    // them to the store's one (D-127).
     expect(verdictOf(res)).toBe('expired');
     // …and THIS is why it matters rather than being a nicety: the expire-cookie
     // guard fires only on `'expired'`, so under the conflation it missed the case
@@ -746,14 +746,14 @@ describe('a live session cookie passes the gate', () => {
   });
 
   it('…while NO cookie stays `no-session` — the two arms are the point', async () => {
-    // The other half of D-114, and the assertion that keeps the fix from being a
+    // The other half of D-127, and the assertion that keeps the fix from being a
     // blanket rename: a caller who sent nothing has nothing to be signed out of.
     const w = await openApp(); app = w.app;
     const res = await app.inject({ method: 'GET', url: '/api/accounts' });
     expect(verdictOf(res)).toBe('no-session');
     expect(res.headers['set-cookie']).toBeUndefined();
     // An EMPTY cookie value is the no-cookie arm too — handled one line earlier
-    // than the store call, so it never reaches the D-114 mapping.
+    // than the store call, so it never reaches the D-127 mapping.
     const empty = await app.inject({
       method: 'GET', url: '/api/accounts', headers: { cookie: `${SESSION_COOKIE}=` },
     });
@@ -979,7 +979,7 @@ describe('authVerdict — the decision, with no server around it', () => {
     expect(exemptKey('HEAD', '/health')).toBe('GET /health');
     expect(authVerdict(req('HEAD', '/health'), { enabled: true, secret: secretOk, store }, 0).allow).toBe(true);
     // …but a HEAD on a gated route is still gated. NOT `/api/runs` any more —
-    // D-136 made that one exempt-but-authenticated, so it would pass the GATE
+    // D-149 made that one exempt-but-authenticated, so it would pass the GATE
     // (and be refused by its own handler), which is a different property from
     // the one this line measures.
     expect(authVerdict(req('HEAD', '/api/accounts'), { enabled: true, secret: secretOk, store }, 0).allow)
@@ -989,14 +989,14 @@ describe('authVerdict — the decision, with no server around it', () => {
   it('an empty or absent cookie is `no-session`, never a pass', () => {
     // Every one of these is the NO-COOKIE arm — `other=1` carries no session
     // cookie at all and `ccrc_session=` carries an empty value, which is caught
-    // one line above the store call and so never reaches D-114's mapping.
+    // one line above the store call and so never reaches D-127's mapping.
     for (const cookie of [undefined, '', 'other=1', `${SESSION_COOKIE}=`]) {
       expect(authVerdict(req('GET', '/api/accounts', cookie), { enabled: true, secret: secretOk, store }, 0))
         .toEqual({ allow: false, verdict: 'no-session', reason: 'refused' });
     }
   });
 
-  it('D-114 is a REFUSAL-side mapping only — it can never turn a deny into an allow', () => {
+  it('D-127 is a REFUSAL-side mapping only — it can never turn a deny into an allow', () => {
     // The property the whole change rests on, asserted rather than argued: the
     // mapping rewrites `verdict` on a branch whose `allow` is a hard-coded
     // `false`, and `allow: true` is returned one line EARLIER, from a separate

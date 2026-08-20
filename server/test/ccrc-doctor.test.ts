@@ -1380,7 +1380,7 @@ describe('ccrc doctor: config', () => {
 // THE FILE IS MEASURED BY THE SERVER'S OWN PARSER, through
 // `deploy/gen-auth-hash.mjs --check`, which imports the compiled
 // `server/src/auth/secret.ts`. Not for elegance: `readAuthSecret` enforces five
-// parameter bounds beyond the format (D-111/113) and `buildServer` calls it
+// parameter bounds beyond the format (D-124/113) and `buildServer` calls it
 // UNCAUGHT at boot, so a line a bash approximation would wave through is a
 // server that does not start. Doctor is the one place an operator can see that
 // coming before a restart does.
@@ -1534,8 +1534,8 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
     expect(r.code).toBe(1);
   });
 
-  it('the remedy RESOLVES the session file, it does not hard-code it (D-135)', () => {
-    // D-130's defect class, one key over. This remedy resolved the SECRET
+  it('the remedy RESOLVES the session file, it does not hard-code it (D-148)', () => {
+    // D-143's defect class, one key over. This remedy resolved the SECRET
     // through `_box_auth_path` and then printed a literal
     // `rm -f ~/.ccrc/sessions.json` beside it — so on a box that redirects
     // `CCRC_SESSIONS_PATH` it told the operator to delete a file nothing reads,
@@ -1692,7 +1692,7 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
   });
 
   // ── the two layers that keep a byte of the file off the screen ───────────
-  // D-127 rests on TWO defences, and each one alone is enough to keep the suite
+  // D-140 rests on TWO defences, and each one alone is enough to keep the suite
   // green while the other is deleted — which is how a defence-in-depth pair
   // quietly becomes a defence-in-depth single. Both are pinned here with a
   // STUB helper: the fixture's copy is replaced by a script that leaks
@@ -3068,7 +3068,7 @@ describe('ccrc doctor: fleet', () => {
     expect(r.code).toBe(0);
   });
 
-  it('SKIPS — never "read the server\'s log" — when the session gate refuses it (D-137)', () => {
+  it('SKIPS — never "read the server\'s log" — when the session gate refuses it (D-150)', () => {
     // `/api/fleet/health` is GATED on purpose: it publishes roster digests,
     // build stamps and divergence, and exempting it to spare a diagnostic would
     // widen the tailnet surface for convenience. So on an armed box this call
@@ -3099,7 +3099,7 @@ describe('ccrc doctor: fleet', () => {
   it('a 401 that is NOT this server\'s refusal stays the generic HTTP error', () => {
     // A reverse proxy or a captive portal in front of the address answers 401
     // too, and telling that operator "your session gate refused it" would be the
-    // same class of wrong answer D-137 exists to stop. The discriminator is this
+    // same class of wrong answer D-150 exists to stop. The discriminator is this
     // server's own refusal envelope, not the status code.
     const home = healthy('ccrc-doctor-fleet-proxy401-');
     stubHealth(home, '<html>Proxy Authentication Required</html>', 401);
@@ -3587,7 +3587,7 @@ describe('ccrc status', () => {
     expect(r.code).toBe(0);
   });
 
-  it('says the GATE refused it, not "HTTP 401", when the gate is armed (D-137)', () => {
+  it('says the GATE refused it, not "HTTP 401", when the gate is armed (D-150)', () => {
     // The second caller of `_box_health`, and it had the same misleading
     // sentence: `fleet: not measured (the server answered HTTP 401 …)`. Both
     // callers now read arm 9, so neither can drift back on its own.

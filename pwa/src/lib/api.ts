@@ -282,7 +282,7 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     login: (req: LoginRequest): Promise<void> => post('/api/auth/login', req),
 
     /**
-     * `POST /api/auth/logout` — end THIS session (D-132).
+     * `POST /api/auth/logout` — end THIS session (D-145).
      *
      * It shipped with the server in Task 5 and had NO CALLER until now, which
      * made "sign out" a thing the box could do and the operator could not ask

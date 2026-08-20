@@ -586,7 +586,7 @@ describe('loadConfig — the four auth keys', () => {
   });
 
   it('derives sessionsPath from CCRC_HOME — never from the real os.homedir()', () => {
-    // D-110. `defaultSessionsPath()` took no argument and reached `os.homedir()`
+    // D-123. `defaultSessionsPath()` took no argument and reached `os.homedir()`
     // unconditionally; wired that way, every server test would have minted
     // sessions into the LIVE `~/.ccrc/sessions.json`. The review fold-in went
     // further and made `home` REQUIRED (and `new SessionStore()`'s path with it),
@@ -612,7 +612,7 @@ describe('loadConfig — the four auth keys', () => {
   });
 });
 
-// ── the boot refusal, and the bytes it must not print (D-131) ────────────
+// ── the boot refusal, and the bytes it must not print (D-144) ────────────
 
 describe('buildServer — an unusable secret refuses the boot without quoting it', () => {
   /**
@@ -626,7 +626,7 @@ describe('buildServer — an unusable secret refuses the boot without quoting it
    * names a count and nothing else — and a leak assertion written against one of
    * those passes for the wrong reason, proving only that a message which could
    * never carry the bytes does not carry them. (That is exactly what the Task 9
-   * review caught in D-127's first fixture.) So (b) is MEASURED by the first
+   * review caught in D-140's first fixture.) So (b) is MEASURED by the first
    * test below rather than assumed, and every entry here is a real leak arm of
    * `parseAuthSecretLine`: the prefix, the whole params field, one params value,
    * and the generation field.
@@ -674,7 +674,7 @@ describe('buildServer — an unusable secret refuses the boot without quoting it
       expect(inspect(caught, { depth: 5 }), name).not.toContain(planted);
       expect((caught as Error).cause, name).toBeUndefined();
       // …and the refusal is still ACTIONABLE without the bytes: which file, what
-      // state, which tool measures it safely, and the D-125 two-step remedy.
+      // state, which tool measures it safely, and the D-138 two-step remedy.
       const msg = (caught as Error).message;
       expect(msg, name).toContain('REFUSING TO BOOT');
       expect(msg, name).toContain('auth.scrypt');
@@ -695,11 +695,11 @@ describe('buildServer — an unusable secret refuses the boot without quoting it
   });
 });
 
-// ── the cookie-policy boot warning (D-133) ──────────────────────────────
+// ── the cookie-policy boot warning (D-146) ──────────────────────────────
 
 describe('cookiePolicyProblem — the boot check that IS implementable', () => {
   it('is silent on both CORRECT combinations', () => {
-    // D-126's rule, applied here: a warning every operator sees on every boot is
+    // D-139's rule, applied here: a warning every operator sees on every boot is
     // one they learn to skim, and the warnings that matter lose by it. These two
     // are the shipped-correct deployments.
     expect(cookiePolicyProblem('https://server-box.tailnet-example.ts.net:8443', true)).toBeNull();

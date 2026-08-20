@@ -3268,7 +3268,7 @@ export interface PasskeySummary {
 /**
  * `GET /api/auth/passkeys` — the enrolment screen's whole view. Gated.
  *
- * `storeUnreadable` IS NOT A NICETY (D-119). The credential file has three
+ * `storeUnreadable` IS NOT A NICETY (D-132). The credential file has three
  * states, not two — absent, readable, and PRESENT-BUT-UNREADABLE — and the third
  * one used to be reported as an empty list, i.e. as "no passkey is enrolled on
  * this box". An operator who believes that enrols, and the enrolment REWRITES

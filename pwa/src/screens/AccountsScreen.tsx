@@ -341,7 +341,7 @@ function AuthSection(): ReactNode {
   };
 
   /**
-   * SIGN OUT — the control that was missing entirely (D-132).
+   * SIGN OUT — the control that was missing entirely (D-145).
    *
    * The server side shipped in Task 5, gated and tested, and nothing called it,
    * so the only ways back to a login screen were an empty cookie jar, a
@@ -407,7 +407,7 @@ function AuthSection(): ReactNode {
 
   const count = status.passkeysEnrolled ?? 0;
   /**
-   * THE UNREADABLE-FILE BRANCH, and it is not cosmetic (D-119). When the
+   * THE UNREADABLE-FILE BRANCH, and it is not cosmetic (D-132). When the
    * credential file exists and cannot be read, the server reports zero
    * credentials — and the sentence this screen used to render for zero was "No
    * passkey is enrolled on this box". An operator who believes it enrols, and
@@ -423,7 +423,7 @@ function AuthSection(): ReactNode {
           <div className="accounts-row-head">
             <span className="account-gauge-label" id="passkeys-title">Passkeys</span>
           </div>
-          {/* THE PATH IS HEDGED, NOT ASSERTED (D-140). `CCRC_PASSKEYS_PATH` can
+          {/* THE PATH IS HEDGED, NOT ASSERTED (D-153). `CCRC_PASSKEYS_PATH` can
               redirect this file, and a BROWSER is the one surface in this tree
               that genuinely cannot resolve it — there is no route that
               publishes it, and adding one would publish a filesystem path to an

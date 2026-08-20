@@ -67,7 +67,7 @@ export function fromB64url(value: string): Uint8Array<ArrayBuffer> {
 /**
  * TWO PREDICATES, BECAUSE THE TWO CEREMONIES NEED DIFFERENT THINGS — and the
  * first version of this file had ONE, which probed the wrong level entirely
- * (D-122).
+ * (D-135).
  *
  * It tested `PublicKeyCredential.prototype.getClientExtensionResults`, which is
  * **WebAuthn Level 1** and has been present since 2019 — so it answered "yes" on

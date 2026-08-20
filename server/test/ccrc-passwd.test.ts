@@ -330,7 +330,7 @@ describe('gen-auth-hash: the write is validated BEFORE it is installed', () => {
   });
 
   it('refuses cleanly when scrypt itself will not derive under the build\'s params', () => {
-    // D-113's own pair, measured: `{n: 65536, r: 1}` does not reach the parser
+    // D-126's own pair, measured: `{n: 65536, r: 1}` does not reach the parser
     // at all — `crypto.scrypt` throws `ERR_CRYPTO_INVALID_SCRYPT_PARAMS`
     // synchronously (OpenSSL's `N < 2^(16*r)`), which rejects `hashLine`'s
     // promise. Uncaught that is a stack trace where the caller promises a
@@ -786,7 +786,7 @@ describe('ccrc passwd', () => {
     const body = /cmd_passwd\(\)[\s\S]*?\n\}/.exec(src);
     expect(body, 'ccd/ccrc has no cmd_passwd').toBeTruthy();
     expect(body![0]).toContain('_box_auth_path');
-    // ONE RESOLVER, TWO CALLERS (D-135). The three-way rule (default / absolute
+    // ONE RESOLVER, TWO CALLERS (D-148). The three-way rule (default / absolute
     // override / relative refusal) is written once in `_box_path_for`, and each
     // caller is a one-liner naming only its key and its default — so the
     // secret's path and the session store's cannot come to hold different
@@ -799,7 +799,7 @@ describe('ccrc passwd', () => {
     expect(/_check_auth\(\) \{[\s\S]*?\n\}/.exec(checks)?.[0]).toContain('_box_auth_path');
   });
 
-  it('names ~/.ccrc/sessions.json exactly once too — the D-135 half', () => {
+  it('names ~/.ccrc/sessions.json exactly once too — the D-148 half', () => {
     // The same D-88 shape for the second path, and the reason it needs its own
     // guard: doctor's `auth` remedy NAMES the session file, and it named it as a
     // literal while resolving the secret beside it through `_box_auth_path`. A

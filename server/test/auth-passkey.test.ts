@@ -203,7 +203,7 @@ describe('decodeB64url refuses everything Buffer.from would swallow', () => {
     expect(decodeB64url('QR', 8)).toBeNull();
   });
 
-  it('the ROUND-TRIP subsumes an alphabet test — every class, enumerated (D-121)', () => {
+  it('the ROUND-TRIP subsumes an alphabet test — every class, enumerated (D-134)', () => {
     // `decodeB64url` used to run `/^[A-Za-z0-9_-]+$/` before decoding, and
     // deleting it reded nothing — a guard whose removal is invisible is a defect
     // here, not defence in depth. The reason it was invisible is a PROOF, not a
@@ -281,7 +281,7 @@ describe('rpId is the registrable domain — never a public suffix, never derive
   });
 
   it('REFUSES an IP literal — v4 and v6 — because a browser will never scope a credential to one', () => {
-    // D-134, found by writing the localhost runbook: reaching the box by its IP
+    // D-147, found by writing the localhost runbook: reaching the box by its IP
     // is the obvious thing to do, and `127.0.0.1` slipped through EVERY other
     // check here — it has dots (so not a single label), holds no character
     // outside `[a-z0-9.-]`, and is on no suffix list. Worse, `originProblem`
@@ -318,7 +318,7 @@ describe('rpId is the registrable domain — never a public suffix, never derive
 
   it('the whole PAIR is refused too — an IP rpId cannot be rescued by a matching origin', () => {
     // The trap in full: this pair is internally CONSISTENT (the origin's host is
-    // the rpId), which is all `originProblem` asks, so before D-134 the pair
+    // the rpId), which is all `originProblem` asks, so before D-147 the pair
     // sailed through `relyingPartyProblem` and every browser refused it.
     expect(relyingPartyProblem('127.0.0.1', 'http://127.0.0.1:7788')).toContain('IP address');
     // The documented localhost pair still passes, which is what the runbook's
@@ -1037,7 +1037,7 @@ describe('PasskeyStore', () => {
     for (let i = 0; i < MAX_CREDENTIALS; i++) {
       expect(await store.add(row(b64(randomBytes(32))))).toEqual({ ok: true });
     }
-    // A REASON, not a bare `false` (D-120): "full" and "the disk write failed"
+    // A REASON, not a bare `false` (D-133): "full" and "the disk write failed"
     // and "the file is unreadable" are three different sentences the operator
     // needs, and two of them used to be indistinguishable from success.
     expect(await store.add(row(b64(randomBytes(32))))).toEqual({ ok: false, reason: 'full' });
@@ -1101,7 +1101,7 @@ describe('PasskeyStore', () => {
     expect(store.ids()).toEqual([good.credentialId]);
   });
 
-  it('ABSENT and UNREADABLE are different states, and only one permits enrolling (D-119)', async () => {
+  it('ABSENT and UNREADABLE are different states, and only one permits enrolling (D-132)', async () => {
     // THE DATA-LOSS CASE. Folding EACCES/corrupt into the same `records = []` as
     // ENOENT made every reader downstream say "no passkey is enrolled" — and the
     // operator who believes that enrols, which REWRITES the file from an
@@ -1160,7 +1160,7 @@ describe('PasskeyStore', () => {
     })();
   });
 
-  it('a FAILED WRITE is reported, never reported as success (D-120)', async () => {
+  it('a FAILED WRITE is reported, never reported as success (D-133)', async () => {
     // `doFlush` swallows its error into a warn (a rejection inside a route
     // handler is a 500 on a path that must answer a refusal), so the outcome has
     // to come back some other way. Before this it did not, and a full disk
@@ -1187,7 +1187,7 @@ describe('PasskeyStore', () => {
       const added = await store.add(cred);
       expect(added).toEqual({ ok: false, reason: 'write-failed' });
       expect(warn.mock.calls.flat().join(' ')).toContain('could not write');
-      // …AND THE ANSWER IS TRUE (D-123): the row is rolled back out of memory,
+      // …AND THE ANSWER IS TRUE (D-136): the row is rolled back out of memory,
       // not left live until the next restart. Otherwise "enrolment failed" and
       // "this key can sign in" were the same outcome — the worse polarity, since
       // an operator told it failed will try again while a credential they do not
@@ -1501,7 +1501,7 @@ describe('the passkey routes, end to end', () => {
   it('CCRC_PASSKEYS_PATH really relocates the store — the key has a consumer, end to end', async () => {
     // The env key's justification, measured rather than asserted: config →
     // `buildServer` → `PasskeyStore` → the file an enrolment actually lands in.
-    // It does NOT re-open D-110, whose mechanism is the REQUIRED constructor
+    // It does NOT re-open D-123, whose mechanism is the REQUIRED constructor
     // parameter — that is untouched; this only changes which path `loadConfig`
     // produces, and a test that forgot to set it still gets a fixture HOME.
     const home = mkTmp('ccrc-passkey-relocated-');
@@ -1515,7 +1515,7 @@ describe('the passkey routes, end to end', () => {
     expect(existsSync(defaultPasskeysPath(w.home))).toBe(false);
   });
 
-  it('an UNREADABLE store REFUSES enrolment rather than overwriting it (D-119)', async () => {
+  it('an UNREADABLE store REFUSES enrolment rather than overwriting it (D-132)', async () => {
     // The server half of the data-loss fix: the operator is told, the file is
     // untouched, and the enrol screen has a `storeUnreadable` flag to render
     // instead of the "no passkey is enrolled" sentence that caused the loss.
@@ -1707,7 +1707,7 @@ describe('originVerdict — the pure decision', () => {
   });
 });
 
-describe('needsOriginCheck — the scope, which is no longer upgrades-only (D-115)', () => {
+describe('needsOriginCheck — the scope, which is no longer upgrades-only (D-128)', () => {
   it('checks every websocket upgrade, whatever the method', () => {
     expect(needsOriginCheck('GET', '/ws/fleet', true)).toBe(true);
   });
@@ -1815,7 +1815,7 @@ describe('the /ws/* upgrade is origin-bound', () => {
   });
 });
 
-// ── 9. CSRF: the Origin check reaches the WRITES, not just the socket (D-115) ──
+// ── 9. CSRF: the Origin check reaches the WRITES, not just the socket (D-128) ──
 
 describe('a same-site sibling node cannot drive this box with the operator\'s cookie', () => {
   let app: FastifyInstance | undefined;
@@ -2076,13 +2076,13 @@ describe('revoking a passkey', () => {
   });
 });
 
-// ── 11. issuance is metered (D-118) ──────────────────────────────────────────
+// ── 11. issuance is metered (D-131) ──────────────────────────────────────────
 
 describe('assert/start spends the passkey budget', () => {
   let app: FastifyInstance | undefined;
   afterEach(async () => { if (app) await app.close(); app = undefined; });
 
-  it('a start-ONLY flood locks out — the route was free before (D-118)', async () => {
+  it('a start-ONLY flood locks out — the route was free before (D-131)', async () => {
     // THE TEST THE OLD ONE WAS NOT. The previous lockout test drove BOTH halves
     // of the ceremony, so `assert/finish`'s `fail()` was doing all the counting
     // — deleting `reserve`/`release` AND the metering from `assert/start` left it
@@ -2150,7 +2150,7 @@ describe('assert/start spends the passkey budget', () => {
 
 // ── 12. GET /api/runs: exempt from the gate, authenticated by the handler ────
 //
-// D-136, found by the whole-branch review and by no task review — because the
+// D-149, found by the whole-branch review and by no task review — because the
 // defect was not IN `server/`. `gate.ts` said "GET /api/runs is the PWA read",
 // and one corpus over `ccd/coordinator-skill/references/wave-lifecycle.md`
 // makes it the coordinator's standing re-orientation read, performed COOKIELESS
@@ -2235,11 +2235,11 @@ describe('GET /api/runs takes EITHER credential, and never neither', () => {
     // Not this file's usual bare-`detail` 401: `pwa/src/lib/api.ts` raises the
     // login screen from a 401 body naming an `AuthVerdict`, so answering the way
     // `/api/mail` does would leave a browser with a lapsed cookie silently
-    // failing this call — and would lose D-114's expired-vs-no-session split.
+    // failing this call — and would lose D-127's expired-vs-no-session split.
     app = await openRunsApp();
     const cold = await runs(app);
     expect(JSON.parse(cold.body).verdict).toBe('no-session');
-    // A cookie that matches nothing is `expired` (D-114), not `no-session`.
+    // A cookie that matches nothing is `expired` (D-127), not `no-session`.
     const stale = await runs(app, { cookie: `${SESSION_COOKIE}=${'a'.repeat(43)}` });
     expect(JSON.parse(stale.body).verdict).toBe('expired');
   });
@@ -2276,7 +2276,7 @@ describe('GET /api/runs takes EITHER credential, and never neither', () => {
   });
 
   it('THE SWEEP: every /api/ path either skill corpus names is reachable by its own credential', () => {
-    // THE GENERAL LESSON OF D-136, as a mechanism rather than a memory. The
+    // THE GENERAL LESSON OF D-149, as a mechanism rather than a memory. The
     // EXEMPT sweep validated the table against the server's route table in both
     // directions and against every `checkMailToken` call site — and never
     // against consumers OUTSIDE `server/`. A route's "who calls this" is not a
@@ -2312,13 +2312,13 @@ describe('GET /api/runs takes EITHER credential, and never neither', () => {
     // invisible from inside `server/`.
     const blocked = [...mentioned].filter((k) => !EXEMPT.has(k)).sort();
     expect(blocked,
-      'these are mandated by a skill and REFUSED by the armed gate — the D-136 shape').toEqual([]);
+      'these are mandated by a skill and REFUSED by the armed gate — the D-149 shape').toEqual([]);
   });
 
   it('THE OTHER CONSUMERS: every real curl in ccd/ and deploy/ is accounted for', () => {
     // The skills are not the only corpus outside `server/` that speaks to this
     // HTTP surface — `ccd/ccrc`, `ccd/ccd` and `deploy/notify.sh` do too, and
-    // D-136's lesson is about consumers the server package cannot see, not about
+    // D-149's lesson is about consumers the server package cannot see, not about
     // skills specifically. This scans for an actual `curl` reaching a `/api/`
     // path, so the many PROSE mentions of routes in ccd's comments (which are
     // documentation of what the PWA does, not calls) do not register.
@@ -2347,11 +2347,11 @@ describe('GET /api/runs takes EITHER credential, and never neither', () => {
       // to spare a diagnostic would widen the tailnet surface for convenience.
       //
       // ON AN ARMED BOX IT IS DEGRADED, NOT WEDGED, and that is the difference
-      // from D-136: doctor prints its line NEXT TO its own `auth` check
+      // from D-149: doctor prints its line NEXT TO its own `auth` check
       // reporting the gate is armed, so a human reading two adjacent lines can
       // connect them. The coordinator case had no human and no second line.
       //
-      // THE FOLLOW-UP THIS COMMENT ASKED FOR IS DONE (D-137). It used to read
+      // THE FOLLOW-UP THIS COMMENT ASKED FOR IS DONE (D-150). It used to read
       // `fleet: not measured (the server answered HTTP 401 …)` with a remedy of
       // "read the server's own log", which sent an operator to a journal where
       // nothing was wrong. `_box_health` now classifies this server's own
@@ -2359,7 +2359,7 @@ describe('GET /api/runs takes EITHER credential, and never neither', () => {
       // SKIPs rather than WARNs, and says out loud that build skew and roster
       // divergence are consequently not being measured. Pinned in
       // `ccrc-doctor.test.ts`. Still no exemption — that remains the wrong fix.
-      '/api/fleet/health': 'ccrc doctor — gated on purpose; degraded, and D-137 made it say so',
+      '/api/fleet/health': 'ccrc doctor — gated on purpose; degraded, and D-150 made it say so',
     };
     const unaccounted = [...called]
       .filter((p2) => !ACCOUNTED[p2])

@@ -27,7 +27,7 @@
 // how a writer comes to emit lines its own reader refuses — see the round trip
 // below, which exists because that gap is REAL even with one parser:
 // `hashLine` is happy to emit `{n: 65536, r: 1, p: 1}` and the parser rejects
-// it (D-113, OpenSSL's `N < 2^(16*r)`).
+// it (D-126, OpenSSL's `N < 2^(16*r)`).
 //
 // That import is why this needs a BUILT server, and why a box without one gets
 // its own exit code rather than a crash: the secret file only means anything on
@@ -176,7 +176,7 @@ function readPassphrase() {
 /**
  * `<path>` — hash the passphrase on stdin and install it, bumping `generation`.
  *
- * THE GENERATION IS READ FROM THE FILE BEING REPLACED (D-125), and the three answers
+ * THE GENERATION IS READ FROM THE FILE BEING REPLACED (D-138), and the three answers
  * are kept apart (secret.ts's own polarity, which this must not flatten):
  *   absent            -> INITIAL_GENERATION. The honest "never configured" box.
  *   parses            -> its generation + 1. Every live session is now stamped
@@ -223,10 +223,10 @@ async function write(file) {
     return die(`cannot create ${path.dirname(file)} (${e && e.code ? e.code : 'unknown'}) — nothing was written`);
   }
 
-  // THE DERIVE CAN REFUSE BEFORE THERE IS A LINE TO VALIDATE (D-124), and it is caught
+  // THE DERIVE CAN REFUSE BEFORE THERE IS A LINE TO VALIDATE (D-137), and it is caught
   // for the same reason the round trip below exists: `DEFAULT_PARAMS` is data,
   // and OpenSSL enforces structural rules of its own on it. Measured on node
-  // 24.14.1: `{n: 65536, r: 1}` — the pair D-113 added a PARSER bound for —
+  // 24.14.1: `{n: 65536, r: 1}` — the pair D-126 added a PARSER bound for —
   // never reaches the parser at all, because `crypto.scrypt` throws
   // `ERR_CRYPTO_INVALID_SCRYPT_PARAMS` synchronously inside `scryptDerive`'s
   // promise executor, which rejects this `await`. Uncaught, that is a stack
@@ -268,7 +268,7 @@ async function write(file) {
   // separate things, because they can fail separately:
   //   1. `readAuthSecret` accepts the line. `hashLine` will happily emit
   //      params the parser refuses (`{n: 65536, r: 1, p: 1}`: legal to derive
-  //      under, and rejected by D-113's `N < 2^(16*r)` bound), and an
+  //      under, and rejected by D-126's `N < 2^(16*r)` bound), and an
   //      unparseable line here is a server that does not start.
   //   2. `verifyPassphrase` says TRUE for the passphrase just typed. That is
   //      the assertion that this file will actually let this operator in —

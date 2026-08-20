@@ -217,12 +217,12 @@ export function registerCoordRoutes(
    * Does this request carry a live session? Supplied by `buildServer`, because
    * the session store deliberately does NOT live in `Deps` — it must be loaded
    * exactly once, at boot, and `buildServer` is the one function every caller
-   * goes through (see its own comment, D-109's read-side mirror).
+   * goes through (see its own comment, D-122's read-side mirror).
    *
    * A FUNCTION RETURNING THE DECISION, not a boolean: `GET /api/runs` needs the
    * `verdict` as well as the yes/no, so its refusal can carry the same
    * `AuthVerdict` the gate would have sent and the PWA's one login screen keeps
-   * working (D-136). Defaulted, so the handful of tests that construct these
+   * working (D-149). Defaulted, so the handful of tests that construct these
    * routes without a session layer are unchanged — and defaulted to "no
    * session", which DENIES, so a caller that forgets to wire it falls back on
    * the box token rather than on nothing.
@@ -1062,7 +1062,7 @@ export function registerCoordRoutes(
    *
    * EXEMPT FROM THE SESSION GATE, AND AUTHENTICATED HERE INSTEAD — the
    * `GET /api/auth/status` pattern, for a reason no task-level review could
-   * see (D-136).
+   * see (D-149).
    *
    * THIS ROUTE HAS TWO CALLERS, NOT ONE. `gate.ts` used to say "GET /api/runs
    * is the PWA read", and that is false one corpus over:
@@ -1101,7 +1101,7 @@ export function registerCoordRoutes(
    * bare-`detail` 401. That is deliberate: `pwa/src/lib/api.ts` raises the one
    * login screen from a 401 body naming an `AuthVerdict`, so answering the way
    * `/api/mail` does would leave a browser with a lapsed cookie silently failing
-   * this call instead of being told to sign in — and would lose D-114's
+   * this call instead of being told to sign in — and would lose D-127's
    * `expired`-vs-`no-session` distinction on the way. The `detail` names the
    * token half for whoever is holding a terminal.
    */

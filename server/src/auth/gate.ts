@@ -41,7 +41,7 @@ import type { SessionStore } from './sessions.js';
  * KEYED BY METHOD **AND** PATH, which is not decoration — though the example
  * that used to justify it has since moved, and saying so is the honest version.
  * `/api/runs` was the illustration: a box-token machine lane as a POST, gated as
- * a GET. D-136 made the GET exempt-but-authenticated too, so today BOTH methods
+ * a GET. D-149 made the GET exempt-but-authenticated too, so today BOTH methods
  * of both multi-method paths on this surface (`/api/runs`, `/api/mail`) are in
  * the table. The mechanism is unchanged and still load-bearing, but its argument
  * is now forward-looking rather than illustrated by a live pair:
@@ -119,7 +119,7 @@ import type { SessionStore } from './sessions.js';
  *     credential ids without which no browser can run the ceremony at all.
  *     The REGISTER pair is deliberately NOT here — see below.
  *
- *  6. `GET /api/runs` — EXEMPT-BUT-AUTHENTICATED, and the newest entry (D-136),
+ *  6. `GET /api/runs` — EXEMPT-BUT-AUTHENTICATED, and the newest entry (D-149),
  *     found by the whole-branch review rather than by any task review. It is
  *     reason 3's shape — a route that authenticates for ITSELF because the gate
  *     cannot make the right decision for it — arrived at from the opposite
@@ -179,7 +179,7 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
   ['POST /api/runs',
     'the coordinator opens a run — box-token gated'],
   ['GET /api/runs',
-    'EXEMPT-BUT-AUTHENTICATED (D-136), the `GET /api/auth/status` pattern: this route has TWO ' +
+    'EXEMPT-BUT-AUTHENTICATED (D-149), the `GET /api/auth/status` pattern: this route has TWO ' +
     'callers, and the second one has no cookie jar. The coordinator skill reads it COOKIELESS from ' +
     'the fleet host — `wave-lifecycle.md:34` makes "ask GET /api/runs and read the run row\'s own ' +
     'wave" the standing re-orientation after every compaction, and :95/:386 make it the documented ' +
@@ -335,7 +335,7 @@ export type GateDecision =
  *
  * It exists for one caller: `registerCoordRoutes`' `sessionAuth` parameter
  * defaults to `() => NO_SESSION`, so a composition root that forgets to wire the
- * session layer falls back on the box token rather than on nothing (D-136).
+ * session layer falls back on the box token rather than on nothing (D-149).
  * Naming it keeps the literal `'no-session'` out of `server/src/coord/`, where
  * `mail-routes.test.ts` scans every quoted kebab token and requires it to be a
  * declared reject code — a guard worth not weakening with an exception.
@@ -410,13 +410,13 @@ export function sessionVerdict(req: GateRequest, deps: GateDeps, now: number): G
 
   const token = parseCookies(req.headers.cookie).get(SESSION_COOKIE);
   // THE NO-COOKIE ARM. Everything below it knows a cookie WAS presented, and
-  // that difference is the whole of D-114 — see the note on the return.
+  // that difference is the whole of D-127 — see the note on the return.
   if (token === undefined || token === '') return { allow: false, verdict: 'no-session', reason: 'refused' };
 
   const verdict = deps.store.verify(token, deps.secret.secret.generation, now);
   if (verdict === 'ok') return { allow: true, verdict, reason: 'session' };
   /**
-   * D-114. A cookie was PRESENTED and matched nothing, so this is `'expired'` —
+   * D-127. A cookie was PRESENTED and matched nothing, so this is `'expired'` —
    * NOT the `'no-session'` the store answered.
    *
    * `SessionStore.verify` returns `'no-session'` for an unmatched hash and it is
@@ -475,7 +475,7 @@ export function sessionVerdict(req: GateRequest, deps: GateDeps, now: number): G
  * successful hijack streams the whole fleet — every session, every statusline,
  * every transcript frame — to a page the operator did not write.
  *
- * …AND ITS TWIN, CROSS-SITE REQUEST FORGERY (D-115). The socket was only half
+ * …AND ITS TWIN, CROSS-SITE REQUEST FORGERY (D-128). The socket was only half
  * the surface, and the half that was left open was the WRITE half. The same
  * same-site page can auto-submit
  * `<form method=POST action="https://server-box…/api/fleet/reboot">`, and the
@@ -513,7 +513,7 @@ export function sessionVerdict(req: GateRequest, deps: GateDeps, now: number): G
  * An earlier version of this file drew the line at the socket and justified it
  * with "ordinary requests are guarded by `SameSite=Lax` plus every write being a
  * POST" — a sentence contradicted by the paragraph above it, in the same file.
- * That was D-115.
+ * That was D-128.
  *
  * ── THE POLICY, AND WHY `'absent'` ALLOWS ──
  *
@@ -657,7 +657,7 @@ export function installGate(app: FastifyInstance, deps: InstallGateDeps): void {
      * us" has to be asked before "does this request carry a credential".
      *
      * SCOPE is {@link needsOriginCheck} — see it for why reads and exempt routes
-     * are skipped. It was UPGRADES ONLY until D-115, on a justification
+     * are skipped. It was UPGRADES ONLY until D-128, on a justification
      * (`SameSite=Lax` covers the rest) that the module docstring above refutes
      * three paragraphs earlier: on a public-suffix domain every tailnet node is
      * same-site, so Lax sends the cookie to a form POST exactly as it sends it to
@@ -670,7 +670,7 @@ export function installGate(app: FastifyInstance, deps: InstallGateDeps): void {
      * slice is built on ("arming the flag is the only thing that changes
      * behaviour").
      *
-     * ── THE COST, STATED (D-116) ──
+     * ── THE COST, STATED (D-129) ──
      *
      * THIS REFUSES A PWA LOADED FROM ANY HOST ALIAS THAT IS NOT `CCRC_ORIGIN`.
      * An operator who has armed the flag with `CCRC_ORIGIN=https://server-box.…`

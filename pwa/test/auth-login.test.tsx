@@ -178,13 +178,13 @@ describe('the AuthVerdict → sentence map', () => {
     // match, so a retry sentence is a lie that costs them the afternoon.
     expect(VERDICT_TEXT.unconfigured).not.toMatch(/try again/i);
 
-    // The other half is D-138. `'unconfigured'` covers TWO box states — the
+    // The other half is D-151. `'unconfigured'` covers TWO box states — the
     // secret file is ABSENT, or PRESENT AND UNUSABLE — collapsed on the wire on
     // purpose (`AuthVerdict` has no member for the second, and publishing one
     // would tell an anonymous caller which box is unenterable-but-open). The old
     // sentence, `No passphrase is set on this box — run ccrc passwd`, was true
     // of only the first: in the second a passphrase IS set, and `ccrc passwd`
-    // REFUSES to overwrite a file it cannot read (D-125). It ended correctly
+    // REFUSES to overwrite a file it cannot read (D-138). It ended correctly
     // after two hops and was never a lockout — but Task 7's sentence and Task
     // 9's refusal disagreed across the seam.
     expect(VERDICT_TEXT.unconfigured).not.toContain('ccrc passwd');

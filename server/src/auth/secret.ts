@@ -380,7 +380,7 @@ export function readAuthSecret(path: string): AuthSecret | null {
  * length-check-first guard LIVE against a secret built out of band (a future
  * writer, a test) whose hash is a different length: without a fixed derivation
  * length there is no length for the two buffers to disagree on, and the guard
- * could never fire. See D-108.
+ * could never fire. See D-121.
  */
 export async function verifyPassphrase(secret: AuthSecret, presented: string): Promise<boolean> {
   const stored = Buffer.from(secret.hashB64, 'base64');
@@ -429,7 +429,7 @@ export function needsRehash(secret: AuthSecret): boolean {
  * AND proves the passphrase against it with `verifyPassphrase` while the
  * passphrase is still in hand, and only then renames it into place. A line this
  * function is happy to emit is not automatically a line the parser accepts —
- * `{n: 65536, r: 1, p: 1}` is exactly such a pair (D-113's `N < 2^(16*r)`
+ * `{n: 65536, r: 1, p: 1}` is exactly such a pair (D-126's `N < 2^(16*r)`
  * bound) — so that round trip is a real gate, not a ritual.
  *
  * A FRESH random salt every call: two boxes given the same passphrase, or one box

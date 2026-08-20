@@ -242,7 +242,7 @@ describe('loadConfig', () => {
     expect(cfg.origin).toBe('http://localhost:9001');
   });
 
-  it('a BARE `CCRC_PORT=` line reads as unset — it must not become port 0 (D-117)', () => {
+  it('a BARE `CCRC_PORT=` line reads as unset — it must not become port 0 (D-130)', () => {
     // The `||` rule was applied to the three new auth keys and NOT to `port`,
     // from which `origin`'s default derives. `Number('') === 0`, so a bare line
     // used to give `http://localhost:0` — which `new URL` parses and

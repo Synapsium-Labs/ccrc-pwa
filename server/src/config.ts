@@ -247,7 +247,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
   // second `Number(env.CCRC_PORT ?? 7788)` inside a template string is exactly
   // the "same value derived twice" shape `coordDbPath` warns about.
   //
-  // VALIDATED, WHICH IS THE HOUSE `||` RULE AND MORE (D-117).
+  // VALIDATED, WHICH IS THE HOUSE `||` RULE AND MORE (D-130).
   //
   // THE BUG: `port` used to be `Number(env.CCRC_PORT ?? 7788)`, and it is the
   // one auth-adjacent key that never got the empty-string treatment

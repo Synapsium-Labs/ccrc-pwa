@@ -167,7 +167,7 @@ const FLAG_AT = 0x40;
  * decode to `0x41`) that an alphabet test alone cannot see.
  *
  * THERE IS NO SEPARATE ALPHABET TEST, AND THAT IS A PROOF RATHER THAN A
- * SHORTCUT (D-121). This function used to run `/^[A-Za-z0-9_-]+$/` before
+ * SHORTCUT (D-134). This function used to run `/^[A-Za-z0-9_-]+$/` before
  * decoding, and the review found that deleting it reded nothing — a guard whose
  * removal is invisible is a defect in this repo, not defence in depth. The
  * reason it was invisible: `toString('base64url')` can only ever EMIT characters
@@ -250,7 +250,7 @@ export function rpIdProblem(rpId: string): string | null {
     return `CCRC_RP_ID ${JSON.stringify(rpId)} has uppercase letters — an rpId is compared as a ` +
       'lowercased domain, so this can only ever mismatch';
   }
-  // AN IP LITERAL IS NOT A DOMAIN, AND CAN NEVER BECOME ONE (D-134). WebAuthn
+  // AN IP LITERAL IS NOT A DOMAIN, AND CAN NEVER BECOME ONE (D-147). WebAuthn
   // requires `rpId` to be a valid domain string — an address literal is
   // explicitly not one — so a browser refuses the ceremony outright.
   //
@@ -408,7 +408,7 @@ export const CHALLENGE_TTL_MS = 2 * 60 * 1000;
  * the worst an attacker achieves is invalidating a ceremony that is already in
  * flight, which self-heals on the next tap.
  *
- * EVICTION IS ONLY TOLERABLE BECAUSE ISSUANCE IS METERED (D-118). The claim that
+ * EVICTION IS ONLY TOLERABLE BECAUSE ISSUANCE IS METERED (D-131). The claim that
  * this is "the backstop, not the brake" was FALSE as first shipped: the brake in
  * front of it — `PASSKEY_MAX_FAILURES` — was spent only by a failed
  * `assert/finish`, never by `assert/start`, so minting challenges was free and

@@ -2276,7 +2276,7 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     // the verb's exit code is its verdict.
     const lines = r.stdout.split('\n').filter(Boolean);
     expect(lines[lines.length - 1]).toMatch(/^summary: \d+ checks \(\d+ skipped\), /);
-    // A FRESH INSTALL ENDS GREEN — operator ruling, Task 9 review (D-126).
+    // A FRESH INSTALL ENDS GREEN — operator ruling, Task 9 review (D-139).
     // `auth` joined the table in stage 3a and first shipped WARNing about the
     // box this verb deliberately leaves without a passphrase, which turned
     // every clean install yellow and taught operators to skim the colour that

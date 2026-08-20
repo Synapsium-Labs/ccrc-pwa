@@ -20,7 +20,7 @@ import { MAX_CREDENTIAL_ID_BYTES, MAX_SPKI_BYTES, decodeB64url, type StoredCrede
  * login and leaves the passphrase working.
  *
  * BUT "DENIES" IS NOT THE WHOLE STORY, AND COLLAPSING THE TWO CAUSES COST THE
- * OPERATOR THEIR CREDENTIALS (D-119). `doLoad` used to fold ENOENT, EACCES and a
+ * OPERATOR THEIR CREDENTIALS (D-132). `doLoad` used to fold ENOENT, EACCES and a
  * corrupt file into one `records = []`, and every reader downstream then said
  * the same sentence — the enrol screen's "No passkey is enrolled on this box".
  * An operator who believes it does the obvious thing and enrols, and the first
@@ -80,7 +80,7 @@ export const MAX_CREDENTIALS = 20;
 
 /** The path under `home`, and the ONE place `passkeys.json` is spelled.
  *
- *  `home` IS REQUIRED, for `defaultSessionsPath`'s reason (D-110): a
+ *  `home` IS REQUIRED, for `defaultSessionsPath`'s reason (D-123): a
  *  zero-argument version reaching `os.homedir()` would have every test that
  *  forgot to pass one writing the operator's LIVE `~/.ccrc/passkeys.json`, and a
  *  compile error is the only version of that rule that cannot be forgotten. */
@@ -89,12 +89,12 @@ export function defaultPasskeysPath(home: string): string {
 }
 
 /** What the last {@link PasskeyStore.load} found. See the module docstring
- *  (D-119) for why `'absent'` and `'unusable'` must not be one value. */
+ *  (D-132) for why `'absent'` and `'unusable'` must not be one value. */
 export type StoreState = 'unread' | 'absent' | 'ok' | 'unusable';
 
 /**
  * Why an enrolment could not be stored. A discriminated result, never a bare
- * `false` (D-120): `add` used to answer `boolean`, which meant "the store is
+ * `false` (D-133): `add` used to answer `boolean`, which meant "the store is
  * full" and "the disk write failed" and "the file is unreadable" were the same
  * value — and two of those three were not even reachable, because a failed
  * `doFlush` is swallowed into a `console.warn`, so a full disk returned `true`
@@ -109,7 +109,7 @@ export type AddResult =
   | { ok: false; reason: 'unusable' }
   /**
    * The row did not reach the disk, AND HAS BEEN ROLLED BACK OUT OF MEMORY
-   * (D-123) — so this answer is true rather than true-until-restart. The
+   * (D-136) — so this answer is true rather than true-until-restart. The
    * credential is not enrolled, on disk or in this process.
    *
    * NOTE the deliberate asymmetry with {@link PasskeyStore.recordUse}, which
@@ -161,7 +161,7 @@ export class PasskeyStore {
       // after a bad chmod, EISDIR, EIO) is a file that EXISTS and cannot be
       // read: `'unusable'`, which denies assertions AND refuses enrolment,
       // because enrolling rewrites the file from an in-memory array that is
-      // empty only because the read failed (D-119).
+      // empty only because the read failed (D-132).
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
         this.state = 'absent';
         return;
@@ -195,7 +195,7 @@ export class PasskeyStore {
   }
 
   /** Can a credential be enrolled right now? False on an unreadable file, so the
-   *  route can refuse rather than overwrite (D-119). */
+   *  route can refuse rather than overwrite (D-132). */
   canEnroll(): boolean {
     return this.state === 'absent' || this.state === 'ok';
   }
@@ -208,7 +208,7 @@ export class PasskeyStore {
    * this one: the anonymous status route is deciding whether to offer a button,
    * and a button that cannot work should not be offered. The caller that must
    * NOT read 0 as "none enrolled" is the authenticated enrol screen, and it
-   * reads {@link loadState} instead — that split is the whole of D-119.
+   * reads {@link loadState} instead — that split is the whole of D-132.
    */
   count(): number {
     return this.records.length;
@@ -273,7 +273,7 @@ export class PasskeyStore {
     // REFUSED ON AN UNREADABLE FILE, before anything is pushed. The flush that
     // would follow rewrites the whole file from `this.records`, which is empty
     // because the READ failed — so this is the line between "you have no
-    // passkeys" and "you had passkeys and now you do not" (D-119).
+    // passkeys" and "you had passkeys and now you do not" (D-132).
     if (!this.canEnroll()) return { ok: false, reason: 'unusable' };
     const existing = this.records.findIndex((r) => r.credentialId === cred.credentialId);
     if (existing < 0 && this.records.length >= MAX_CREDENTIALS) return { ok: false, reason: 'full' };
@@ -281,11 +281,11 @@ export class PasskeyStore {
     if (existing >= 0) this.records[existing] = cred;
     else this.records.push(cred);
     await this.flush();
-    // The write's outcome is REPORTED, not swallowed (D-120). A full disk used
+    // The write's outcome is REPORTED, not swallowed (D-133). A full disk used
     // to answer `204 Passkey added` for a row that vanished on the next restart.
     if (!this.lastWriteOk) {
       /**
-       * AND THE ROW IS ROLLED BACK, so the answer is TRUE (D-123).
+       * AND THE ROW IS ROLLED BACK, so the answer is TRUE (D-136).
        *
        * Without this the credential stayed live in memory while the response
        * said the enrolment had failed: the key worked until the next restart and

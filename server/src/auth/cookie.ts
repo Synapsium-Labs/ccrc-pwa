@@ -172,7 +172,7 @@ export function expireCookie(name: string, opts: Omit<CookieOptions, 'maxAgeSeco
  * box.
  *
  * Both CORRECT combinations are silent (`http:` + opted out, `https:` + `Secure`),
- * which is `_check_auth`'s rule from D-126: a warning every operator sees on
+ * which is `_check_auth`'s rule from D-139: a warning every operator sees on
  * every boot is a warning they learn to skim past, and the ones that matter lose
  * by it.
  *
