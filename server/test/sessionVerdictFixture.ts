@@ -56,4 +56,29 @@ export const VERDICT_MESSAGE_ROWS: readonly VerdictFixtureRow[] = [
     message: 'some error nobody has written yet',
     expected: 'unknown',
   },
+  // NEAR-MISS TRAPS (adversarial review of D-B8-13, confirmed finding): every
+  // row above is vocabulary-disjoint from the death message, so a BROADENED
+  // matcher — `includes('session')`, a case-insensitive compare — survived the
+  // whole table in BOTH suites while being the destructive fail-open
+  // direction. These rows carry the death message's own vocabulary and still
+  // expect `unknown`, so loosening the matcher in either implementation goes
+  // red in both. They are also the threat model stated plainly: a tmux
+  // upgrade REWORDING the death message must degrade to `unknown` (refuse),
+  // never be recovered by a fuzzy match (destroy) — refusing on rewording is
+  // the design, not a gap.
+  {
+    name: 'unknown, NOT gone: a case-variant of the death message — the matcher is exact, never fuzzy',
+    message: "Can't find session: cc-demo",
+    expected: 'unknown',
+  },
+  {
+    name: 'unknown, NOT gone: a REWORDED death message — refusing on rewording is the polarity working',
+    message: "couldn't find session: cc-demo",
+    expected: 'unknown',
+  },
+  {
+    name: "unknown, NOT gone: an unrelated message that merely contains the word 'session'",
+    message: 'sessions should be nested with care',
+    expected: 'unknown',
+  },
 ];
