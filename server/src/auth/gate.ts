@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { AuthVerdict } from '../../../shared/api.js';
 import { AuthSecretUnusable, readAuthSecret, type AuthSecret } from './secret.js';
-import { SESSION_COOKIE, parseCookies } from './cookie.js';
+import { SESSION_COOKIE, expireCookie, parseCookies } from './cookie.js';
 import type { SessionStore } from './sessions.js';
 
 /**
@@ -65,14 +65,30 @@ import type { SessionStore } from './sessions.js';
  *
  *  2. The NINE box-token machine lanes plus `/api/notify` — the fleet host's
  *     ingress. These callers are `curl` inside a Claude Code session and ccd's
- *     `notify.sh`; they have no cookie jar and never will. They are not
- *     unauthenticated: every one of them already verifies the box token
- *     (`checkMailToken`, `coord/routes.ts` and `server.ts`'s `/api/notify`), and
- *     the mail pair records every refusal. Putting them behind the session gate
- *     as well would not add a factor — it would take the mail bus off the air.
+ *     `notify.sh`; they have no cookie jar and never will. All ten CHECK the box
+ *     token (`checkMailToken`), and the mail pair records every refusal — but
+ *     "checks" is not "requires" for one of them, and the difference is worth
+ *     stating rather than rounding off: the nine coordination lanes refuse every
+ *     verdict but `'ok'`, while `/api/notify` still passes `'legacy'` (no token
+ *     presented) and `'unconfigured'` (this box was never given one) THROUGH, by
+ *     the operator's one-deploy-generation rollout ruling. So `/api/notify` is
+ *     the one exempt route that a caller with no credential at all can still
+ *     reach on a box mid-rollout. That tolerance has a scheduled removal —
+ *     `coord/token.ts:207`, "REMOVE `/api/notify`'S `'legacy'` TOLERANCE ONE
+ *     DEPLOY AFTER THIS SHIPS" — and this exemption inherits its lifetime: the
+ *     day the tolerance goes, this entry is a plain box-token lane like the
+ *     other nine. Session-gating it instead is not the fix, because the caller
+ *     genuinely has no cookie; the fix is the removal already scheduled.
  *
- *  3. `POST /api/auth/login` — the door. A gate that gated its own login route
- *     would be a box nobody can enter.
+ *  3. `POST /api/auth/login` and `GET /api/auth/status` — the door, and the sign
+ *     on it. A gate that gated its own login route would be a box nobody can
+ *     enter; and the login screen has to know, BEFORE anyone types, whether the
+ *     gate is even armed, whether a passkey exists to offer, and whether the
+ *     rate-limit window is closed. `status` answers a MINIMIZED body to an
+ *     unauthenticated caller (`ANON_VISIBLE`, `server.ts`) — the leak is
+ *     enumerated in one place so a field added later cannot widen it silently.
+ *     `POST /api/auth/logout` is deliberately NOT here: logging out is something
+ *     only a logged-in caller can do.
  *
  *  4. `GET /*` — the static/SPA shell. The login screen has to be able to LOAD;
  *     the client bundle is public and the API is not. `@fastify/static` registers
@@ -83,10 +99,7 @@ import type { SessionStore } from './sessions.js';
  *     nothing but the bundle a browser downloads before it has logged in anyway.
  *
  * NOT EXEMPT, and worth saying out loud because their absence is a decision:
- *  - `GET /api/auth/status` and `POST /api/auth/logout`. Logging out requires
- *    being logged in. `status` follows the plan's list, which names login and
- *    only login — a 401 from it is a signal Task 7's PWA handles like any other
- *    (raise the login screen), and `auth-routes.test.ts` pins the 401.
+ *  - `POST /api/auth/logout` — see 3 above.
  *  - `POST /api/coord/pause` and `POST /api/runs/:id/abandon` — `coord/routes.ts`
  *    leaves these off the BOX-TOKEN gate on purpose (D-B4-9: the coordinator
  *    holds that token, and a pause it can lift is not a pause). That argument is
@@ -101,7 +114,8 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     'gated one fails every deploy the moment the flag is armed'],
 
   ['POST /api/notify',
-    'ccd notify.sh on the fleet host — carries the box token, never a cookie (checkMailToken, server.ts)'],
+    'ccd notify.sh on the fleet host — checks the box token but still tolerates `legacy`/`unconfigured` ' +
+    'for one deploy generation (coord/token.ts:207 schedules the removal); it has no cookie jar either way'],
   ['POST /api/mail',
     'the mail ingress — box-token gated and every refusal recorded (coord/routes.ts check 1)'],
   ['POST /api/mail/:id/ack',
@@ -123,6 +137,10 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
 
   ['POST /api/auth/login',
     'the door — a gate that gated its own login route would be a box nobody can enter'],
+  ['GET /api/auth/status',
+    'the sign on the door: the login screen must know, before anyone types, whether the gate is armed, ' +
+    'whether a passkey exists to offer, and whether the rate-limit window is closed. An unauthenticated ' +
+    'caller gets a MINIMIZED body (ANON_VISIBLE, server.ts) — the leak is enumerated, not incidental'],
 
   ['GET /*',
     'the static/SPA shell: the login screen must be able to load. @fastify/static serves only ' +
@@ -208,15 +226,41 @@ export function measureSecret(path: string): SecretState {
   }
 }
 
-/** What the gate decided, and why. `verdict` rides onto the 401 body so the PWA
- *  can pick a sentence — "you were signed out" (`'expired'`) reads differently
- *  from a cold login screen (`'no-session'`) and from "run `ccrc passwd`"
- *  (`'unconfigured'`); that distinction is the entire reason `AuthVerdict` is a
- *  union and not a boolean (`shared/api.ts`). */
-export interface GateDecision {
-  allow: boolean;
-  verdict: AuthVerdict;
-}
+/**
+ * WHY the gate allowed a request. Three genuinely different facts, and a caller
+ * that treats them as one is the "no overloaded null at a seam" rule
+ * (`CLAUDE.md`) broken in the file that can least afford it:
+ *
+ *  - `'flag-off'` — the gate is dark. NOTHING was checked: no secret was read,
+ *    no cookie was parsed. Everyone is through, which is the pre-slice
+ *    behaviour and the shipped default.
+ *  - `'exempt'`   — this route is named in {@link EXEMPT}. Also nothing was
+ *    checked, and for the same reason it must not be mistaken for the next one:
+ *    on an exempt route the caller is ANONYMOUS unless something else proves
+ *    otherwise, INCLUDING on a box whose secret is `'absent'`.
+ *  - `'session'`  — and only this one — means a credential was presented and
+ *    verified.
+ *
+ * `GET /api/auth/status` is why this is load-bearing rather than tidy: it is an
+ * exempt route that publishes `authed`, and reading that field off `allow` would
+ * tell every anonymous browser it was signed in. `server.ts` computes it from
+ * `reason === 'session'`, and `auth-routes.test.ts` reds if that ever regresses.
+ */
+export type GateAllowReason = 'flag-off' | 'exempt' | 'session';
+
+/**
+ * What the gate decided, and why — a discriminated union, so `allow: true`
+ * cannot be read without also being handed the reason it is true.
+ *
+ * `verdict` rides onto the 401 body so the PWA can pick a sentence — "you were
+ * signed out" (`'expired'`) reads differently from a cold login screen
+ * (`'no-session'`) and from "run `ccrc passwd`" (`'unconfigured'`); that
+ * distinction is the entire reason `AuthVerdict` is a union and not a boolean
+ * (`shared/api.ts`).
+ */
+export type GateDecision =
+  | { allow: true; verdict: 'ok'; reason: GateAllowReason }
+  | { allow: false; verdict: AuthVerdict; reason: 'refused' };
 
 /** Everything {@link authVerdict} is allowed to consult. All three are VALUES,
  *  already measured by the caller — there is no port here to reach through. */
@@ -255,21 +299,42 @@ export interface GateDeps {
  *     through into the open branch.
  */
 export function authVerdict(req: GateRequest, deps: GateDeps, now: number): GateDecision {
-  if (!deps.enabled) return { allow: true, verdict: 'ok' };
+  if (!deps.enabled) return { allow: true, verdict: 'ok', reason: 'flag-off' };
 
   const key = exemptKey(req.method, req.routeOptions.url);
-  if (key !== null && EXEMPT.has(key)) return { allow: true, verdict: 'ok' };
+  // `reason: 'exempt'`, NEVER `'session'`: this arm returns before the secret or
+  // the cookie has been read, so it says nothing at all about who is calling.
+  if (key !== null && EXEMPT.has(key)) return { allow: true, verdict: 'ok', reason: 'exempt' };
 
+  return sessionVerdict(req, deps, now);
+}
+
+/**
+ * THE CREDENTIAL QUESTION, on its own: does this request carry a live session?
+ *
+ * Arms 3–5 of {@link authVerdict}, split out because ONE caller needs to ask it
+ * without the two shortcuts above — `GET /api/auth/status`, which is EXEMPT and
+ * still has to report `authed` honestly. Calling `authVerdict` there would get
+ * `allow: true, reason: 'exempt'` for an anonymous browser and, if that were
+ * read as authentication, would tell it that it was signed in — most loudly on a
+ * box whose secret is `'absent'`, the exact state the D-39 arm exists to refuse.
+ *
+ * Never returns `reason: 'exempt'` or `'flag-off'`: those are not answers to
+ * this question, which is why they live one level up.
+ */
+export function sessionVerdict(req: GateRequest, deps: GateDeps, now: number): GateDecision {
   if (deps.secret.kind !== 'ok') {
     // D-39, inverted. Do not turn this into an allow. See the module docstring.
-    return { allow: false, verdict: 'unconfigured' };
+    return { allow: false, verdict: 'unconfigured', reason: 'refused' };
   }
 
   const token = parseCookies(req.headers.cookie).get(SESSION_COOKIE);
-  if (token === undefined || token === '') return { allow: false, verdict: 'no-session' };
+  if (token === undefined || token === '') return { allow: false, verdict: 'no-session', reason: 'refused' };
 
   const verdict = deps.store.verify(token, deps.secret.secret.generation, now);
-  return verdict === 'ok' ? { allow: true, verdict } : { allow: false, verdict };
+  return verdict === 'ok'
+    ? { allow: true, verdict, reason: 'session' }
+    : { allow: false, verdict, reason: 'refused' };
 }
 
 /** What {@link installGate} needs from the composition root. Deliberately NOT the
@@ -279,6 +344,9 @@ export interface InstallGateDeps {
   enabled: boolean;
   secretPath: string;
   store: SessionStore;
+  /** `cfg.cookieSecure` — needed only so an `'expired'` refusal can hand back a
+   *  matching expiry line (see {@link installGate}). */
+  cookieSecure: boolean;
 }
 
 /**
@@ -315,9 +383,24 @@ export function installGate(app: FastifyInstance, deps: InstallGateDeps): void {
     const secret = deps.enabled ? measureSecret(deps.secretPath) : SECRET_UNREAD;
     const decision = authVerdict(req, { enabled: deps.enabled, secret, store: deps.store }, Date.now());
     if (decision.allow) return;
-    // A bare 401 on an upgrade; JSON on an ordinary request. Never logs the
-    // cookie, the token, or any part of either — the rule `server.ts:443-446`
-    // states for the box token applies with more force to a bearer session.
+    // A DEAD token is swept out of the jar on the way past. `'expired'` is the
+    // one verdict where the browser is holding something the server has already
+    // written off — a session past its TTL, or one stamped with a generation
+    // `ccrc passwd` has since bumped — and it would otherwise sit there for the
+    // rest of its 30-day `Max-Age` being presented on every request: `POST
+    // /api/auth/logout` is gated, so there is no in-app way to shed it, and the
+    // login screen cannot clear an `HttpOnly` cookie from script. Attached on
+    // the socket path too: it costs one header, and a rejected upgrade is
+    // exactly where a phone that has been asleep for a week finds out.
+    if (decision.verdict === 'expired') {
+      reply.header('set-cookie', expireCookie(SESSION_COOKIE, { secure: deps.cookieSecure }));
+    }
+    // A bare 401 on an upgrade; JSON on an ordinary request. The upgrade's client
+    // is parsing an HTTP response it expected to be 101 — the status line is the
+    // whole message, and a JSON body it will never read is noise on a socket that
+    // is about to close. Never logs the cookie, the token, or any part of either
+    // — the rule `server.ts:443-446` states for the box token applies with more
+    // force to a bearer session.
     if (req.ws === true) return reply.code(401).send();
     return reply.code(401).send({ ok: false, error: 'unauthenticated', verdict: decision.verdict });
   });

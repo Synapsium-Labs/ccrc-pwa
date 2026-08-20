@@ -59,6 +59,13 @@ function rolled(state: RateState, now: number): RateState {
   return state;
 }
 
+/** ms from `now` until `state`'s window ends. The ONE place this arithmetic
+ *  lives — `loginVerdict` and `LoginRateLimiter.reserve` both answer with it,
+ *  and a second copy is how the two would come to disagree. */
+function msUntilWindowEnd(state: RateState, now: number): number {
+  return state.windowStart + WINDOW_MS - now;
+}
+
 /**
  * The pure gate check: does `state`, as of `now`, permit a login attempt?
  *
@@ -66,11 +73,23 @@ function rolled(state: RateState, now: number): RateState {
  * `check()` — never `fail()` — still sees the window reset in time), but NEVER
  * increments: reading the verdict is side-effect-free on the failure count.
  * `retryAfter` (ms until the window ends) is present iff `ok` is false.
+ *
+ * `inFlight` — logins that have been ADMITTED and are still running — shares the
+ * SAME `MAX_FAILURES` ceiling as the recorded failures, and that is the whole
+ * point of it (review Important 1). Counting only what has already been RECORDED
+ * bounds a sequential attacker and nothing else: a failure is recorded after the
+ * ~100 ms scrypt derivation resolves, so N requests fired at once all read
+ * `count === 0`, all pass, and all queue a 64 MiB derivation onto libuv's 4-slot
+ * threadpool — starving every `fs/promises` caller in the server (fleet
+ * assembly, clip reads, the session store's own flush) for as long as the flood
+ * lasts. A budget that counts admissions as well as failures is what makes the
+ * brake bound CONCURRENCY, not merely history. Defaulted to 0 so a caller that
+ * only asks the policy question ("is the window closed?") is unchanged.
  */
-export function loginVerdict(state: RateState, now: number): RateLimitVerdict {
+export function loginVerdict(state: RateState, now: number, inFlight = 0): RateLimitVerdict {
   const next = rolled(state, now);
-  if (next.count < MAX_FAILURES) return { ok: true, state: next };
-  return { ok: false, state: next, retryAfter: next.windowStart + WINDOW_MS - now };
+  if (next.count + inFlight < MAX_FAILURES) return { ok: true, state: next };
+  return { ok: false, state: next, retryAfter: msUntilWindowEnd(next, now) };
 }
 
 /** Pure reducer: roll an expired window, then count one failure. This is the
@@ -97,19 +116,69 @@ export function recordSuccess(_state: RateState, now: number): RateState {
  */
 export class LoginRateLimiter {
   private state: RateState;
+  /** Logins ADMITTED and not yet finished — the concurrency half of the budget.
+   *  Held here rather than in `RateState` because it is not policy: it is a
+   *  count of live callers, meaningless to persist and meaningless to a pure
+   *  reducer. `loginVerdict` takes it as an argument for exactly that reason. */
+  private inFlight = 0;
 
   constructor(now = Date.now()) {
     this.state = { windowStart: now, count: 0 };
   }
 
   /** Persists the (possibly rolled) state and answers whether login may
-   *  proceed right now. */
+   *  proceed right now. A READ — it neither counts a failure nor takes a slot;
+   *  {@link reserve} is the one that admits. */
   check(now = Date.now()): { ok: boolean; retryAfter?: number } {
-    const verdict = loginVerdict(this.state, now);
+    const verdict = loginVerdict(this.state, now, this.inFlight);
     this.state = verdict.state;
     return verdict.retryAfter === undefined
       ? { ok: verdict.ok }
       : { ok: verdict.ok, retryAfter: verdict.retryAfter };
+  }
+
+  /**
+   * ADMIT one login, taking a slot against the shared budget — the call the
+   * route must make, in place of {@link check}, before it spends any scrypt.
+   *
+   * The difference from `check()` is the whole fix for review Important 1:
+   * `check()` READS a count that only moves ~100 ms later, when the derivation
+   * resolves and `fail()` runs, so it bounds a sequential attacker and nothing
+   * else. `reserve()` takes the slot AT ADMISSION, so N requests fired at once
+   * see the budget shrink as they are let in, and only `MAX_FAILURES` scrypt
+   * derivations can ever be running at once.
+   *
+   * THE RELEASE MUST RUN ON EVERY EXIT PATH — success, wrong passphrase, a
+   * malformed body, an unconfigured box, and a throw. A leaked slot is
+   * permanent: it never times out, so `MAX_FAILURES` of them brick login until
+   * the process restarts. `finally` is the only correct shape at the call site,
+   * and `release` is IDEMPOTENT so a caller that also releases on an early
+   * return cannot double-decrement its way to a budget that never fills.
+   */
+  reserve(now = Date.now()): { ok: true; release: () => void } | { ok: false; retryAfter: number } {
+    const verdict = loginVerdict(this.state, now, this.inFlight);
+    this.state = verdict.state;
+    // Recomputed through `msUntilWindowEnd` rather than read off the optional
+    // `verdict.retryAfter` with a `!`: the field is optional-shaped (Task 4's
+    // tests read it off an `ok:true` verdict to assert it is absent), and one
+    // shared helper is what keeps the two answers identical.
+    if (!verdict.ok) return { ok: false, retryAfter: msUntilWindowEnd(verdict.state, now) };
+    this.inFlight++;
+    let released = false;
+    return {
+      ok: true,
+      release: () => {
+        if (released) return;
+        released = true;
+        this.inFlight--;
+      },
+    };
+  }
+
+  /** How many admitted logins are still running. For tests and diagnostics —
+   *  no decision reads it except through `loginVerdict`'s `inFlight` argument. */
+  get pending(): number {
+    return this.inFlight;
   }
 
   /** Records one failed login attempt against the window. */

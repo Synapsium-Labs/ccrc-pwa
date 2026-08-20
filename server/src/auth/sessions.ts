@@ -1,6 +1,5 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import os from 'node:os';
 import path from 'node:path';
 import type { AuthVerdict } from '../../../shared/api.js';
 
@@ -109,21 +108,25 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 }
 
 /**
- * The default production path, and the ONE place `sessions.json` is spelled.
+ * The path under `home`, and the ONE place `sessions.json` is spelled.
  *
- * `home` is a PARAMETER (D-110, Task 5): `config.ts` calls this with its own
- * `cfg.home`, which is `CCRC_HOME` when set — and every server test sets it to a
- * throwaway fixture. A zero-argument version that reached `os.homedir()`
- * unconditionally would have had the whole suite minting sessions into the LIVE
- * `~/.ccrc/sessions.json`, and the alternative — `config.ts` building
- * `path.join(home, '.ccrc', 'sessions.json')` itself — is the second copy of a
- * path `defaultCoordDbPath(home)` already exists to prevent ("the same string
- * built twice, once tested and once not, is how a rename in one place silently
- * opens a different, brand-new, empty file in the other", `config.ts:169`). The
- * default keeps the no-argument call working for a caller that genuinely has no
- * config in hand.
+ * `home` IS REQUIRED, AND THAT IS THE SAFETY RULE MADE STRUCTURAL (D-110, Task 5
+ * + its review fold-in). This function was `defaultSessionsPath()` with no
+ * parameter, reaching `os.homedir()` — and `config.ts` must derive the path from
+ * `cfg.home`, which is `CCRC_HOME` when set, which every server test sets to a
+ * throwaway fixture. Wired the original way the suite would have minted and
+ * swept sessions in the operator's LIVE `~/.ccrc/sessions.json`. A DEFAULT
+ * parameter would have left that one keystroke away; a required one makes the
+ * dangerous call a compile error, which is the difference between a rule and a
+ * mechanism ("the ccd suite's single isolation boundary is HOME", `CLAUDE.md`).
+ *
+ * It exists at all — rather than `config.ts` writing `path.join(home, '.ccrc',
+ * 'sessions.json')` inline — for `defaultCoordDbPath(home)`'s reason: "the same
+ * string built twice, once tested and once not, is how a rename in one place
+ * silently opens a different, brand-new, empty file in the other"
+ * (`config.ts:169`).
  */
-export function defaultSessionsPath(home: string = os.homedir()): string {
+export function defaultSessionsPath(home: string): string {
   return path.join(home, '.ccrc', 'sessions.json');
 }
 
@@ -144,7 +147,11 @@ export class SessionStore {
   private flushChain: Promise<void> = Promise.resolve();
   private sweepTimer: ReturnType<typeof setInterval> | undefined;
 
-  constructor(private readonly storePath: string = defaultSessionsPath()) {}
+  /** `storePath` is REQUIRED — no default, for {@link defaultSessionsPath}'s
+   *  reason: a zero-argument `new SessionStore()` would have written the live
+   *  `~/.ccrc/sessions.json` from any test that forgot to pass one, and a
+   *  compile error is the only version of that rule that cannot be forgotten. */
+  constructor(private readonly storePath: string) {}
 
   /**
    * Read the file into memory and sweep out anything already dead. NEVER throws:

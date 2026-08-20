@@ -16,9 +16,13 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance } from 'fastify';
+import fastifyWebsocket from '@fastify/websocket';
 import { buildServer, type Deps } from '../src/server.js';
-import { EXEMPT, SECRET_UNREAD, authVerdict, exemptKey, type GateRequest } from '../src/auth/gate.js';
+import {
+  EXEMPT, SECRET_UNREAD, authVerdict, exemptKey, installGate, measureSecret, sessionVerdict,
+  type GateRequest,
+} from '../src/auth/gate.js';
 import { SESSION_COOKIE, serializeCookie } from '../src/auth/cookie.js';
 import { SessionStore } from '../src/auth/sessions.js';
 import { hashLine, type ScryptParams } from '../src/auth/secret.js';
@@ -155,13 +159,20 @@ describe('the scanner is looking at something', () => {
   // A scanner that matched zero registrations would make every `it.each` in this
   // file iterate an empty array and report green — the exact failure mode that
   // makes a source-scanning suite worse than no suite. This one fails first.
-  it('found both files, and a route count in the range the surface actually has', () => {
-    expect(scanRoutes('server.ts').length).toBeGreaterThanOrEqual(30);
-    expect(scanRoutes('coord/routes.ts').length).toBeGreaterThanOrEqual(10);
-    // 49 at the time of writing (36 + 13). The floor is deliberately a little
-    // below it so an intentional deletion does not red this, while a scanner
-    // that broke — a changed quote style, a regex typo — falls straight through.
-    expect(ROUTES.length).toBeGreaterThanOrEqual(45);
+  it('found both files, and EXACTLY the route count the surface has', () => {
+    // EXACT, not a floor (review fold-in). A `toBeGreaterThanOrEqual` catches a
+    // scanner that broke outright but not one that quietly stops matching SOME
+    // registrations — a changed quote style in one file, a verb the regex does
+    // not know — and a sweep that silently shrank from 52 routes to 46 is
+    // precisely the state this whole file exists to make impossible. Adding a
+    // route is now a deliberate act that edits these three numbers, with a
+    // reviewer looking at them.
+    expect(scanRoutes('server.ts').length).toBe(39);
+    expect(scanRoutes('coord/routes.ts').length).toBe(13);
+    expect(ROUTES.length).toBe(52);
+    // …and the three partitions add up: 3 websockets + 49 HTTP.
+    expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
+    expect(ROUTES.filter((r) => !isWs(r)).length).toBe(49);
   });
 
   it('found the specific registrations this file reasons about', () => {
@@ -216,11 +227,12 @@ describe('EXEMPT is complete in both directions', () => {
   });
 
   it('exempts exactly the four classes the plan names — nothing has crept in', () => {
-    // The size is pinned so that adding an exemption is a deliberate act that
-    // updates this number, with a reviewer looking at it. 13 = /health + the 9
-    // box-token lanes + /api/notify + login + the SPA shell.
+    // The whole set, spelled out, so that adding an exemption is a deliberate act
+    // that edits this list with a reviewer looking at it. 14 = /health + the 9
+    // box-token lanes + /api/notify + login + status + the SPA shell.
     expect([...EXEMPT.keys()].sort()).toEqual([
       'GET /*',
+      'GET /api/auth/status',
       'GET /api/mail',
       'GET /api/mail/:id',
       'GET /health',
@@ -234,6 +246,9 @@ describe('EXEMPT is complete in both directions', () => {
       'POST /api/runs/:id/dispatch',
       'POST /api/runs/:id/items',
     ]);
+    // `/api/auth/logout` is the auth route that is NOT here — logging out is
+    // something only a logged-in caller can do.
+    expect(EXEMPT.has('POST /api/auth/logout')).toBe(false);
   });
 
   it('the nine box-token lanes in EXEMPT are the nine that really check the token', () => {
@@ -269,11 +284,14 @@ describe('with the gate ARMED and no cookie', () => {
 
   const gated = ROUTES.filter((r) => !isWs(r) && !EXEMPT.has(key(r)));
 
-  it('sweeps a non-empty set of gated routes', () => {
+  it('sweeps EXACTLY the routes that are neither websockets nor exempt', () => {
     // Guards the `it.each` below the same way the scanner meta-test guards the
     // scan: an EXEMPT table that had swallowed everything would leave nothing to
-    // assert and report green.
-    expect(gated.length).toBeGreaterThanOrEqual(30);
+    // assert and report green. Exact rather than a floor, for the same reason —
+    // 52 scanned − 3 websockets − 13 exempt-and-scanned (14 EXEMPT entries less
+    // `GET /*`, which no `app.get('…')` registers) = 36.
+    expect(gated.length).toBe(36);
+    expect(ROUTES.length - ROUTES.filter(isWs).length - gated.length).toBe(EXEMPT.size - 1);
   });
 
   it.each(gated.map((r) => [key(r), r] as const))(
@@ -369,12 +387,47 @@ describe('with CCRC_AUTH off — the shipped default', () => {
 
   const httpRoutes = ROUTES.filter((r) => !isWs(r));
 
-  it.each(httpRoutes.map((r) => [key(r), r] as const))(
-    '%s is reachable — the gate is a passthrough', async (_k, r) => {
-      const w = await openApp({ enabled: false, secret: false }); app = w.app;
-      const res = await app.inject({ method: r.method as 'GET', url: concrete(r.routePath) });
-      expect(gateRefused(res), `${key(r)} was gated with the flag off`).toBe(false);
-    });
+  /**
+   * Routes whose OWN behaviour depends on the flag, so the armed and dark
+   * answers are legitimately different. Exactly one, and it is named rather than
+   * inferred: `POST /api/auth/login` answers `501 not-configured` on a box with
+   * no session gate, because there is nothing there to log into.
+   */
+  const FLAG_AWARE = new Set(['POST /api/auth/login']);
+
+  it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
+    // Stronger than `!gateRefused` on its own (review fold-in): that predicate is
+    // satisfied by a 503, a 500, or any other unrelated failure, so it proves the
+    // gate did not refuse without proving the route was reachable at all. This
+    // compares the SAME route's status with the gate dark and with it armed —
+    // a property that needs no hand-maintained expected-status table and cannot
+    // rot, and that says precisely what the gate is supposed to do: turn the
+    // gated routes into 401s and leave every other answer byte-identical.
+    const dark = await openApp({ enabled: false, secret: false });
+    const armed = await openApp();
+    try {
+      const drift: string[] = [];
+      for (const r of httpRoutes) {
+        const url = concrete(r.routePath);
+        const a = await dark.app.inject({ method: r.method as 'GET', url });
+        const b = await armed.app.inject({ method: r.method as 'GET', url });
+        // The flag OFF is a passthrough for every route, gated or not.
+        if (gateRefused(a)) drift.push(`${key(r)}: DARK, and the gate refused it anyway`);
+        if (FLAG_AWARE.has(key(r))) {
+          if (a.statusCode !== 501) drift.push(`${key(r)}: dark → ${a.statusCode}, want 501 not-configured`);
+          continue;
+        }
+        if (EXEMPT.has(key(r))) {
+          if (a.statusCode !== b.statusCode) {
+            drift.push(`${key(r)}: EXEMPT but dark ${a.statusCode} ≠ armed ${b.statusCode}`);
+          }
+        } else if (b.statusCode !== 401 || verdictOf(b) !== 'no-session') {
+          drift.push(`${key(r)}: gated but armed → ${b.statusCode} ${b.body.slice(0, 80)}`);
+        }
+      }
+      expect(drift).toEqual([]);
+    } finally { await dark.app.close(); await armed.app.close(); }
+  });
 
   it('the fleet socket still upgrades', async () => {
     const w = await openApp({ enabled: false, secret: false }); app = w.app;
@@ -469,12 +522,19 @@ describe('fail SHUT — the D-39 inversion', () => {
     // has not run `ccrc passwd` yet — the single most likely misconfiguration
     // this slice will ever meet.
     const w = await openApp({ secret: false }); app = w.app;
-    for (const url of ['/api/accounts', '/api/fleet', '/api/runs', '/api/auth/status']) {
+    for (const url of ['/api/accounts', '/api/fleet', '/api/runs', '/api/feed']) {
       const res = await app.inject({ method: 'GET', url });
       expect(gateRefused(res), `${url} was let through with no passphrase configured`).toBe(true);
       expect(verdictOf(res), url).toBe('unconfigured');
     }
     await expect(app.injectWS('/ws/fleet')).rejects.toThrow('Unexpected server response: 401');
+    // `/api/auth/status` is EXEMPT, so it still answers — and it must answer
+    // ANONYMOUSLY. Reading `authed` off the gate's `allow` (which is `true` here,
+    // for `reason: 'exempt'`) would tell a cold browser it was signed in, on the
+    // one box state where nobody can be.
+    const status = await app.inject({ method: 'GET', url: '/api/auth/status' });
+    expect(status.statusCode).toBe(200);
+    expect(status.json()).toMatchObject({ authed: false });
   });
 
   it('a GARBLED passphrase file refuses to boot, rather than starting on a secret it cannot trust', async () => {
@@ -494,6 +554,87 @@ describe('fail SHUT — the D-39 inversion', () => {
   });
 });
 
+// ── the two refusal shapes ───────────────────────────────────────────────
+
+describe('the refusal', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  /**
+   * A bare app with `installGate` on it and `request.ws` FORCED — the only way to
+   * measure the upgrade branch's BODY.
+   *
+   * `injectWS` can report the status of a rejected upgrade and nothing else (it
+   * rejects with `Unexpected server response: 401`), so the armed sweep above
+   * proves the refusal happened and cannot see what was in it. Fastify runs root
+   * `onRequest` hooks in registration order, so a hook added here BEFORE
+   * `installGate` sets the same flag `@fastify/websocket`'s own hook would have
+   * set — which is the one input that branch reads — and then an ordinary
+   * `inject` can read the body back.
+   */
+  const gateWithWs = async (ws: boolean): Promise<FastifyInstance> => {
+    const probe = Fastify({ logger: false });
+    await probe.register(fastifyWebsocket);          // decorates `request.ws`
+    probe.addHook('onRequest', async (req) => { req.ws = ws; });
+    const home = mkTmp('ccrc-auth-wsbody-');
+    mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    const secretPath = path.join(home, '.ccrc', 'auth.scrypt');
+    writeFileSync(secretPath, `${await hashLine(PASSPHRASE, FAST_PARAMS, 1)}\n`);
+    installGate(probe, {
+      enabled: true, secretPath, cookieSecure: false,
+      store: new SessionStore(path.join(home, '.ccrc', 'sessions.json')),
+    });
+    probe.get('/api/probe', async () => ({ ok: true }));
+    await probe.ready();
+    return probe;
+  };
+
+  it('an ordinary refusal carries the JSON envelope the PWA reads', async () => {
+    app = await gateWithWs(false);
+    const res = await app.inject({ method: 'GET', url: '/api/probe' });
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toEqual({ ok: false, error: 'unauthenticated', verdict: 'no-session' });
+  });
+
+  it('a refused UPGRADE carries NO body — the status line is the whole message', async () => {
+    // The client of an upgrade is parsing an HTTP response it expected to be
+    // `101`; a JSON body on a socket that is about to close is noise it never
+    // reads. Without this the branch was asserted only by the fact that
+    // `injectWS` rejects, which it would do just as happily with a body.
+    app = await gateWithWs(true);
+    const res = await app.inject({ method: 'GET', url: '/api/probe' });
+    expect(res.statusCode).toBe(401);
+    expect(res.body).toBe('');
+  });
+
+  it('an EXPIRED session is swept out of the jar on the way past', async () => {
+    // `POST /api/auth/logout` is gated and the cookie is HttpOnly, so a browser
+    // holding a dead token has no other way to shed it — it would keep presenting
+    // it for the rest of its 30-day Max-Age.
+    const w = await openApp({ generation: 1, cookieSecure: true }); app = w.app;
+    const cookie = await login(app);
+    writeFileSync(path.join(w.home, '.ccrc', 'auth.scrypt'),
+      `${await hashLine(PASSPHRASE, FAST_PARAMS, 2)}\n`, { mode: 0o600 });
+    const res = await app.inject({ method: 'GET', url: '/api/accounts', headers: { cookie } });
+    expect(verdictOf(res)).toBe('expired');
+    const set = res.headers['set-cookie'];
+    const line = Array.isArray(set) ? String(set[0]) : String(set);
+    expect(line).toContain(`${SESSION_COOKIE}=;`);
+    expect(line).toContain('Max-Age=0');
+    // The attributes must MATCH the login line's or the browser will not replace
+    // the cookie — including `Secure`, which is why this app sets it.
+    expect(line).toContain('Secure');
+    expect(line).toContain('Path=/');
+  });
+
+  it('a `no-session` refusal does NOT clear anything — there is nothing to clear', async () => {
+    const w = await openApp(); app = w.app;
+    const res = await app.inject({ method: 'GET', url: '/api/accounts' });
+    expect(verdictOf(res)).toBe('no-session');
+    expect(res.headers['set-cookie']).toBeUndefined();
+  });
+});
+
 // ── the pure decision ────────────────────────────────────────────────────
 
 describe('authVerdict — the decision, with no server around it', () => {
@@ -504,7 +645,7 @@ describe('authVerdict — the decision, with no server around it', () => {
 
   it('the flag off allows everything, before anything else is read', () => {
     expect(authVerdict(req('GET', '/api/accounts'), { enabled: false, secret: SECRET_UNREAD, store }, 0))
-      .toEqual({ allow: true, verdict: 'ok' });
+      .toEqual({ allow: true, verdict: 'ok', reason: 'flag-off' });
   });
 
   it('an unmeasured secret with the flag ON denies — nobody looked is not permission', () => {
@@ -512,13 +653,27 @@ describe('authVerdict — the decision, with no server around it', () => {
     // exists so that a future caller who forgets to measure is refused rather
     // than admitted.
     const d = authVerdict(req('GET', '/api/accounts'), { enabled: true, secret: SECRET_UNREAD, store }, 0);
-    expect(d).toEqual({ allow: false, verdict: 'unconfigured' });
+    expect(d).toEqual({ allow: false, verdict: 'unconfigured', reason: 'refused' });
   });
 
   it('an absent and an unusable secret both deny, and stay distinct facts', () => {
     for (const secret of [{ kind: 'absent' as const }, { kind: 'unusable' as const, detail: 'EACCES' }]) {
       expect(authVerdict(req('GET', '/api/accounts'), { enabled: true, secret, store }, 0).allow).toBe(false);
     }
+    // …and "distinct" is MEASURED, not asserted in the name (review fold-in: the
+    // old version of this test claimed a distinction it never looked at).
+    // `measureSecret` is what draws it, off the real filesystem: ENOENT is
+    // `'absent'`, a present-but-garbled file is `'unusable'` and carries a detail
+    // string. Collapsing them is the `secret.ts` polarity error one layer down —
+    // a chmod reading as "no passphrase was ever set".
+    const dir = mkTmp('ccrc-auth-distinct-');
+    const missing = measureSecret(path.join(dir, 'nope.scrypt'));
+    writeFileSync(path.join(dir, 'broken.scrypt'), 'not a secret line\n');
+    const broken = measureSecret(path.join(dir, 'broken.scrypt'));
+    expect(missing.kind).toBe('absent');
+    expect(broken.kind).toBe('unusable');
+    expect(missing.kind).not.toBe(broken.kind);
+    expect(broken.kind === 'unusable' && broken.detail.length > 0).toBe(true);
   });
 
   it('a request the router matched to nothing is gated, not exempted', () => {
@@ -537,7 +692,47 @@ describe('authVerdict — the decision, with no server around it', () => {
   it('an empty or absent cookie is `no-session`, never a pass', () => {
     for (const cookie of [undefined, '', 'other=1', `${SESSION_COOKIE}=`]) {
       expect(authVerdict(req('GET', '/api/accounts', cookie), { enabled: true, secret: secretOk, store }, 0))
-        .toEqual({ allow: false, verdict: 'no-session' });
+        .toEqual({ allow: false, verdict: 'no-session', reason: 'refused' });
     }
+  });
+
+  it('names WHY it allowed — three different facts, never one boolean', () => {
+    // `allow: true` has three causes and only ONE of them is "this caller proved
+    // who they are". Collapsing them is the "no overloaded null at a seam" rule
+    // (CLAUDE.md) broken in the crown-jewel file, and it is load-bearing rather
+    // than tidy: `GET /api/auth/status` is EXEMPT and publishes `authed`, so a
+    // handler reading that field off `allow` would tell every anonymous browser
+    // it was signed in.
+    const off = authVerdict(req('GET', '/api/accounts'), { enabled: false, secret: SECRET_UNREAD, store }, 0);
+    const exempt = authVerdict(req('GET', '/health'), { enabled: true, secret: secretOk, store }, 0);
+    expect(off.reason).toBe('flag-off');
+    expect(exempt.reason).toBe('exempt');
+    // Both are `allow: true` — which is exactly why the reason has to be there.
+    expect([off.allow, exempt.allow]).toEqual([true, true]);
+  });
+
+  it('sessionVerdict asks the CREDENTIAL question, skipping both shortcuts', async () => {
+    // `/health` is exempt, so `authVerdict` never looks at the cookie. The status
+    // route needs the answer anyway, and this is the function that gives it.
+    const dir = mkTmp('ccrc-auth-sessionverdict-');
+    const live = new SessionStore(path.join(dir, 'sessions.json'));
+    await live.load();
+    const { token } = await live.create('probe', 3, 1_000);
+    const deps = { enabled: true, secret: secretOk, store: live };
+
+    // Exempt route, no cookie: the gate lets it through as `'exempt'`, and the
+    // credential question answers `'no-session'` for the very same request.
+    expect(authVerdict(req('GET', '/health'), deps, 1_000).reason).toBe('exempt');
+    expect(sessionVerdict(req('GET', '/health'), deps, 1_000))
+      .toEqual({ allow: false, verdict: 'no-session', reason: 'refused' });
+
+    // Exempt route, LIVE cookie: `'session'`, which is the only value that means
+    // a credential verified.
+    const withCookie = req('GET', '/health', `${SESSION_COOKIE}=${token}`);
+    expect(sessionVerdict(withCookie, deps, 1_000)).toEqual({ allow: true, verdict: 'ok', reason: 'session' });
+
+    // And it never invents the two shortcuts it exists to skip.
+    expect(sessionVerdict(req('GET', '/health'), { ...deps, enabled: false }, 1_000).reason)
+      .not.toBe('flag-off');
   });
 });

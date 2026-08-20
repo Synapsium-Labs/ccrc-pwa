@@ -51,12 +51,24 @@ export interface CookieOptions {
 /**
  * The `Cookie:` request header, split into name→value.
  *
- * FIRST OCCURRENCE WINS. A jar can legitimately carry two cookies of the same
- * name (one set for `Path=/`, one for a sub-path, or one from a parent domain),
- * and the browser sends the most specific first without saying which is which —
- * so "first" is the conventional read and the only one that matches what a
- * browser means by it. It also bounds cookie-shadowing: a second `ccrc_session`
- * injected after ours cannot displace it.
+ * FIRST OCCURRENCE WINS, and that is the conventional read rather than a
+ * defence. A jar can legitimately carry two cookies of the same name (one set
+ * for `Path=/`, one for a sub-path, or one from a parent domain), and RFC 6265
+ * §5.4 has the browser send them in DESCENDING PATH LENGTH — most specific
+ * first, with nothing on the wire to say which is which. Taking the first is
+ * therefore the only reading that agrees with what a browser means by the order
+ * it chose.
+ *
+ * WHAT IT DOES NOT DO IS STOP SHADOWING, and an earlier version of this comment
+ * claimed it did (review Important 4). Our cookie is pinned at the SHORTEST
+ * possible path (`Path=/`), so a shadow set for a longer path sorts AHEAD of it
+ * and is exactly what this function returns. Shadowing is bounded by the
+ * deployment and by `Secure` — one origin, one operator, and a `Secure` cookie a
+ * plaintext origin cannot set — not by this parser. What the parser does
+ * guarantee is that a shadow cannot become a BYPASS: whatever value comes back
+ * still has to survive `SessionStore.verify`, and a token that is not a live
+ * session ends in a 401 like any other. The failure mode is denial of service
+ * against one session, never entry.
  *
  * NEVER THROWS. This runs inside the `onRequest` hook, where a throw is a 500 —
  * the wrong polarity for a gate whose whole job is to answer 401. A pair with no
@@ -75,7 +87,7 @@ export function parseCookies(header: string | undefined): Map<string, string> {
     const eq = pair.indexOf('=');
     if (eq < 0) continue;                       // a bare attribute, not a name=value pair
     const name = pair.slice(0, eq).trim();
-    if (name === '' || out.has(name)) continue; // first occurrence wins — see above
+    if (name === '' || out.has(name)) continue; // first occurrence wins — see the docstring
     let value = pair.slice(eq + 1).trim();
     // RFC 6265 permits a DQUOTE-wrapped value; strip the pair, never one half.
     if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {

@@ -6,7 +6,7 @@
 // through it: what the Set-Cookie line actually says, what a wrong passphrase
 // costs, what a logout revokes, and what the status route reports.
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildServer, type Deps } from '../src/server.js';
@@ -99,8 +99,16 @@ describe('parseCookies', () => {
     expect(jar.get('b')).toBe('2');
   });
 
-  it('takes the FIRST of a duplicated name — a shadowing cookie cannot displace ours', () => {
+  it('takes the FIRST of a duplicated name — the order the browser chose, not a defence', () => {
     expect(parseCookies('ccrc_session=mine; ccrc_session=theirs').get(SESSION_COOKIE)).toBe('mine');
+    // NOT anti-shadowing, and the docstring says so (review Important 4 corrected
+    // the claim that it was): RFC 6265 §5.4 orders by DESCENDING path length, and
+    // our cookie is pinned at `Path=/` — the shortest — so a shadow set for a
+    // longer path arrives FIRST and is what this returns. What is guaranteed is
+    // that a shadow cannot become a bypass: whatever comes back still has to
+    // survive `SessionStore.verify`, so the worst case is a 401.
+    expect(parseCookies('ccrc_session=longer-path-shadow; ccrc_session=ours').get(SESSION_COOKIE))
+      .toBe('longer-path-shadow');
   });
 
   it('never throws on a header a browser (or an attacker) can send', () => {
@@ -245,6 +253,71 @@ describe('POST /api/auth/login', () => {
       expect((await postLogin(app, PASSPHRASE)).statusCode).toBe(429);
     });
 
+    it('bounds CONCURRENT logins, not just sequential ones (review Important 1)', async () => {
+      // THE DEFECT THIS PINS: the brake used to `check()` — a pure read of a
+      // counter that only moves ~100 ms later, when the scrypt derivation
+      // resolves and `fail()` runs. Every test above is `for (…) await …`, i.e.
+      // strictly sequential, so all of them stayed green while N requests fired
+      // AT ONCE all read `count === 0`, all passed, and all queued a 64 MiB
+      // derivation onto libuv's 4-slot threadpool — starving every `fs/promises`
+      // caller in the server. `reserve()` takes the slot at admission, so the
+      // budget shrinks as callers are let in rather than as they finish.
+      const w = await openApp(); app = w.app;
+      const burst = MAX_FAILURES * 4;
+      const results = await Promise.all(
+        Array.from({ length: burst }, () => postLogin(app!, 'wrong')),
+      );
+      const admitted = results.filter((r) => r.statusCode === 401).length;
+      const refused = results.filter((r) => r.statusCode === 429).length;
+      expect(admitted + refused).toBe(burst);
+      // At most the budget's worth of derivations were ever admitted; the rest
+      // were refused without spending any scrypt at all.
+      expect(admitted).toBeLessThanOrEqual(MAX_FAILURES);
+      expect(refused).toBeGreaterThanOrEqual(burst - MAX_FAILURES);
+    });
+
+    it('gives every slot back — a leaked one would brick login until restart', async () => {
+      // A slot never times out, so `MAX_FAILURES` leaks are permanent. Each of
+      // these bursts drives a DIFFERENT early exit out of the handler: a 400 on a
+      // malformed body, and a 401 on a box with no passphrase file. Neither is a
+      // failure (the window is untouched), so if the slot were not released in a
+      // `finally` the budget would simply never refill and the correct passphrase
+      // below would 429.
+      const w = await openApp(); app = w.app;
+      await Promise.all(Array.from({ length: MAX_FAILURES * 3 }, () => postLogin(app!, 42)));
+      expect((await postLogin(app, PASSPHRASE)).statusCode, 'after a burst of 400s').toBe(204);
+
+      const bare = await openApp({ secret: false });
+      try {
+        await Promise.all(Array.from({ length: MAX_FAILURES * 3 },
+          () => postLogin(bare.app, PASSPHRASE)));
+        // Still `unconfigured`, never `locked-out`: the slots came back.
+        expect((await postLogin(bare.app, PASSPHRASE)).json()).toMatchObject({ verdict: 'unconfigured' });
+      } finally { await bare.app.close(); }
+    });
+
+    it('gives the slot back when the handler THROWS, not only when it returns', async () => {
+      // The exception path, reached with a secret line that PARSES but that
+      // `crypto.scrypt` refuses: `p` is bounded by nothing in the parser, and
+      // `128 * r * p` past `maxmem` makes node throw `ERR_CRYPTO_INVALID_SCRYPT_PARAMS`
+      // out of `verifyPassphrase`. The route answers 500 — honest for a box whose
+      // secret file is corrupt — and the assertion is what happens NEXT.
+      const w = await openApp({
+        // The hash must decode to exactly KEYLEN=32 bytes or `verifyPassphrase`
+        // short-circuits `false` before it ever reaches scrypt — 43 chars plus
+        // one `=` is base64 for 32 bytes.
+        secretText: `scrypt$N=2,r=1,p=1048576$${'A'.repeat(24)}$${'B'.repeat(43)}=$gen=1\n`,
+      });
+      app = w.app;
+      for (let i = 0; i < MAX_FAILURES + 2; i++) {
+        expect((await postLogin(app, PASSPHRASE)).statusCode, `throw ${i + 1}`).toBe(500);
+      }
+      // MAX_FAILURES + 2 throws, and the budget is untouched: the window counts
+      // failures (none of these are), and every slot was released by the
+      // `finally`. Without it the 9th call here would have been a 429.
+      expect((await postLogin(app, PASSPHRASE)).statusCode).toBe(500);
+    });
+
     it('counts failures, not attempts — a fat-finger then a correct login costs nothing', async () => {
       const w = await openApp(); app = w.app;
       for (let i = 0; i < MAX_FAILURES - 1; i++) await postLogin(app, 'wrong');
@@ -301,6 +374,24 @@ describe('POST /api/auth/logout', () => {
     expect((await app.inject({ method: 'GET', url: '/api/accounts', headers: { cookie: laptop } })).statusCode)
       .toBe(200);
   });
+
+  it('the expiry line takes Secure from CONFIG too, so the browser will match it', async () => {
+    // A browser replaces a cookie only when the name, Path and Domain all match;
+    // an expiry line whose attributes had drifted from the login line's would
+    // leave the original sitting in the jar with the server's record already
+    // revoked — a logout that looks like it worked. Measured both ways, like the
+    // login line's own.
+    for (const cookieSecure of [true, false]) {
+      const w = await openApp({ cookieSecure }); const a = w.app;
+      try {
+        const cookie = cookieHeader(setCookieOf(await postLogin(a, PASSPHRASE)));
+        const out = await a.inject({ method: 'POST', url: '/api/auth/logout', headers: { cookie } });
+        const line = setCookieOf(out);
+        expect(line.includes('Secure'), `cookieSecure=${cookieSecure}`).toBe(cookieSecure);
+        expect(line).toContain('Path=/');
+      } finally { await a.close(); }
+    }
+  });
 });
 
 // ── GET /api/auth/status ─────────────────────────────────────────────────
@@ -331,14 +422,63 @@ describe('GET /api/auth/status', () => {
       .toMatchObject({ mode: 'locked-out' });
   });
 
-  it('is NOT exempt: an anonymous caller gets the gate\'s 401 (see the route\'s docstring)', async () => {
-    // Recorded as a decision rather than left to be discovered. The plan's
-    // EXEMPT list names `/api/auth/login` and no other auth route; Task 7 owns
-    // the PWA's pre-login story and a 401 from any call raises the login screen.
+  it('is EXEMPT: an anonymous caller gets an answer, not the gate\'s 401', async () => {
+    // Operator ruling, overriding the plan's exempt list: the login screen has to
+    // read this BEFORE anyone types (`AuthStatus`'s own docstring says so three
+    // times over), and gated it could never be read at all.
     const w = await openApp(); app = w.app;
     const res = await app.inject({ method: 'GET', url: '/api/auth/status' });
-    expect(res.statusCode).toBe(401);
-    expect(res.json()).toMatchObject({ verdict: 'no-session' });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('tells an ANONYMOUS caller `authed:false` — never `true` off the exempt allow', async () => {
+    // THE TRAP: the gate's `allow` is `true` here, because the route is EXEMPT —
+    // a fact about the ROUTE, not about the caller. Reading `authed` off it would
+    // tell every cold browser it was signed in. `reason === 'session'` is the only
+    // value that means a credential verified, and this test reds the moment the
+    // handler goes back to `decision.allow`.
+    const w = await openApp(); app = w.app;
+    expect((await app.inject({ method: 'GET', url: '/api/auth/status' })).json())
+      .toMatchObject({ authed: false, mode: 'passphrase' });
+    // …and the same box with a garbage cookie, which is `allow: true` for the
+    // identical reason.
+    const junk = await app.inject({
+      method: 'GET', url: '/api/auth/status', headers: { cookie: `${SESSION_COOKIE}=nope` },
+    });
+    expect(junk.json()).toMatchObject({ authed: false });
+  });
+
+  it('says `authed:false` on an armed box with NO passphrase file, of all places', async () => {
+    // The state the D-39 arm exists to refuse. An exempt route that reported
+    // `authed: true` here would be announcing a session on the one box where
+    // nobody can have one.
+    const w = await openApp({ secret: false }); app = w.app;
+    const res = await app.inject({ method: 'GET', url: '/api/auth/status' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ authed: false });
+    // `mode` still says `passphrase`, never a seventh value: `AuthStatus`
+    // deliberately has no "armed but unconfigured" member, because publishing it
+    // on an unauthenticated route would advertise which boxes are
+    // unenterable-but-open. `ccrc doctor` reports it; the login route says it to
+    // someone who has actually tried.
+    expect(res.json()).toMatchObject({ mode: 'passphrase' });
+  });
+
+  it('an anonymous body carries ONLY the enumerated fields — a later one cannot widen the leak', async () => {
+    // `ANON_VISIBLE` (server.ts) is a `Record<keyof AuthStatus, boolean>`, so a
+    // field added to the wire type is a compile error until someone decides
+    // whether an anonymous browser may see it. This is the runtime half: the
+    // anonymous body is exactly the three fields, and nothing has been spread in.
+    const w = await openApp(); app = w.app;
+    const anon = (await app.inject({ method: 'GET', url: '/api/auth/status' })).json() as Record<string, unknown>;
+    expect(Object.keys(anon).sort()).toEqual(['authed', 'mode', 'passkeysEnrolled']);
+    // The authenticated body is the FULL `AuthStatus` — today the same three
+    // fields, which is a fact about this build and not the contract.
+    const cookie = cookieHeader(setCookieOf(await postLogin(app, PASSPHRASE)));
+    const full = (await app.inject({ method: 'GET', url: '/api/auth/status', headers: { cookie } }))
+      .json() as Record<string, unknown>;
+    expect(Object.keys(full).sort()).toEqual(['authed', 'mode', 'passkeysEnrolled']);
+    expect(full).toMatchObject({ authed: true });
   });
 });
 
@@ -391,8 +531,26 @@ describe('loadConfig — the four auth keys', () => {
   it('derives sessionsPath from CCRC_HOME — never from the real os.homedir()', () => {
     // D-110. `defaultSessionsPath()` took no argument and reached `os.homedir()`
     // unconditionally; wired that way, every server test would have minted
-    // sessions into the LIVE `~/.ccrc/sessions.json`.
+    // sessions into the LIVE `~/.ccrc/sessions.json`. The review fold-in went
+    // further and made `home` REQUIRED (and `new SessionStore()`'s path with it),
+    // so the dangerous call is a compile error rather than a convention — see
+    // `never-defaults-to-the-live-home` below.
     const { cfg, home } = cfgWith({});
     expect(cfg.sessionsPath.startsWith(home)).toBe(true);
+  });
+
+  it('never defaults to the live home: both session-path entry points REQUIRE one', () => {
+    // Structural, not conventional. `HOME` is the single isolation boundary the
+    // whole suite relies on (`CLAUDE.md`), and a default parameter leaves the
+    // live-home call one keystroke away. The compiler is what closes it, so this
+    // asserts against the SOURCE — a default reintroduced here would compile
+    // clean and this is what would notice.
+    const src = readFileSync(path.resolve(__dirname, '../src/auth/sessions.ts'), 'utf8');
+    expect(src).toContain('export function defaultSessionsPath(home: string): string');
+    expect(src).toContain('constructor(private readonly storePath: string) {}');
+    // …and the module can no longer reach the real home at all: `node:os` is not
+    // imported, so `os.homedir()` is a compile error rather than a temptation.
+    // (The name still appears in the docstring that explains why it went.)
+    expect(src).not.toMatch(/^import .* from 'node:os';$/m);
   });
 });

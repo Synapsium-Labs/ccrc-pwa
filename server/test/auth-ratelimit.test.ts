@@ -167,3 +167,81 @@ describe('LoginRateLimiter — the L4 in-memory holder', () => {
     expect(() => limiter.succeed()).not.toThrow();
   });
 });
+
+// ── reserve(): the concurrency half of the budget (Task 5 review, Important 1) ──
+//
+// `check()` is a READ of a counter that only moves when a failure is RECORDED —
+// which happens ~100 ms after admission, once the scrypt derivation resolves. So
+// a budget spent only by `fail()` bounds a sequential attacker and nothing else:
+// N requests fired at once all read the same zero, all pass, and all queue a
+// 64 MiB derivation onto libuv's 4-slot threadpool. `reserve()` takes the slot at
+// ADMISSION, against the same ceiling, which is what makes the brake bound
+// concurrency rather than history.
+describe('reserve — a slot taken at admission, not at completion', () => {
+  it('admits at most MAX_FAILURES at once, with nothing recorded as a failure', () => {
+    const limiter = new LoginRateLimiter(1_000_000);
+    const held = [];
+    for (let i = 0; i < MAX_FAILURES; i++) {
+      const slot = limiter.reserve(1_000_000);
+      expect(slot.ok, `admission ${i + 1}`).toBe(true);
+      if (slot.ok) held.push(slot);
+    }
+    expect(limiter.pending).toBe(MAX_FAILURES);
+    // The budget is spent by admissions alone — no failure has been recorded.
+    const over = limiter.reserve(1_000_000);
+    expect(over.ok).toBe(false);
+    if (!over.ok) expect(over.retryAfter).toBe(WINDOW_MS);
+    // …and one release is one slot back, immediately.
+    held[0]!.release();
+    expect(limiter.pending).toBe(MAX_FAILURES - 1);
+    expect(limiter.reserve(1_000_000).ok).toBe(true);
+  });
+
+  it('shares ONE ceiling with the recorded failures', () => {
+    const limiter = new LoginRateLimiter(1_000_000);
+    for (let i = 0; i < MAX_FAILURES - 1; i++) limiter.fail(1_000_000);
+    // One of the budget left: one admission, then locked.
+    const first = limiter.reserve(1_000_000);
+    expect(first.ok).toBe(true);
+    expect(limiter.reserve(1_000_000).ok).toBe(false);
+  });
+
+  it('release is IDEMPOTENT — a double release cannot inflate the budget', () => {
+    // The failure this closes is quieter than a leak and worse: a slot given back
+    // twice makes `inFlight` go negative, and a negative in-flight count raises
+    // the effective ceiling for everyone.
+    const limiter = new LoginRateLimiter(1_000_000);
+    const slot = limiter.reserve(1_000_000);
+    expect(slot.ok).toBe(true);
+    if (!slot.ok) return;
+    slot.release();
+    slot.release();
+    slot.release();
+    expect(limiter.pending).toBe(0);
+  });
+
+  it('a leaked slot is PERMANENT — which is why the route releases in a `finally`', () => {
+    // Not a bug being asserted: the honest cost of the design, written down. A
+    // slot has no timeout, so MAX_FAILURES of them brick login until restart, and
+    // that is exactly why `server.ts`'s login route wraps its whole body.
+    const limiter = new LoginRateLimiter(1_000_000);
+    for (let i = 0; i < MAX_FAILURES; i++) limiter.reserve(1_000_000);
+    expect(limiter.reserve(1_000_000).ok).toBe(false);
+    // Even a whole window later: the window rolls, the failures reset — and the
+    // in-flight count does not, because nothing ever gave those slots back.
+    expect(limiter.reserve(1_000_000 + WINDOW_MS + 1).ok).toBe(false);
+  });
+
+  it('a rolled window frees the FAILURE half of the budget as it always did', () => {
+    const limiter = new LoginRateLimiter(1_000_000);
+    for (let i = 0; i < MAX_FAILURES; i++) limiter.fail(1_000_000);
+    expect(limiter.reserve(1_000_000).ok).toBe(false);
+    expect(limiter.reserve(1_000_000 + WINDOW_MS).ok).toBe(true);
+  });
+
+  it('check() sees the in-flight slots too, so `mode` cannot say `passphrase` while login is closed', () => {
+    const limiter = new LoginRateLimiter(1_000_000);
+    for (let i = 0; i < MAX_FAILURES; i++) limiter.reserve(1_000_000);
+    expect(limiter.check(1_000_000).ok).toBe(false);
+  });
+});
