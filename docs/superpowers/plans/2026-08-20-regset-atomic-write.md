@@ -1140,4 +1140,54 @@ Then send the `wave-done` mail with `{branchTip, prNumber, prPhase:"open", hando
   closes ("any registry read-side semantic change beyond the comment fixes named above"). Named here
   so the next owner finds it instead of rediscovering it.
 
+### Found during execution
+
+- **D-129 (2026-08-20, execution)** — the wave's own smallest change produced its only Critical
+  finding, and the shape is worth keeping. Task 5's review raised two comment-accuracy minors; the
+  fix for one of them (E1, re-anchoring the `ccd:<N>` citations in `_pr_py`'s lock comment)
+  replaced 2 comment lines with 5 — **net +3, ABOVE every line it cited** — and the numbers were
+  recomputed against the PRE-edit file. Measured on the shipped commit: all five citations off by
+  exactly 3, with `ccd:8778` landing on a bare `live)` case label and `ccd:7369` on a
+  `tmux list-panes` line — i.e. the reader that comment exists for (which `.uuid` write can swap
+  the inode under a long-lived session) landed on neither write. The prior review named four; the
+  controller found the fifth (the reap-lock reference). Fixed LINE-COUNT-NEUTRALLY — a digit-for-
+  digit substitution on the four existing lines — so nothing below could shift again, and each
+  corrected number was verified by printing its line back. **The general rule this earns: a commit
+  that re-anchors line citations must either be line-count-neutral or iterate to a fixed point,
+  because the edit is upstream of its own evidence.**
+- **D-130 (2026-08-20, execution)** — a defect in THIS PLAN, ruled in the implementer's favour.
+  Task 8 step 2 told the executor to `grep -rn "can only come from" src/ test/` and expect zero
+  hits. Wrong on its face: m3's own replacement sentence QUOTES that phrase (`the earlier "can
+  only come from" here was wrong`), m2's new `io.ts` text quotes it inside a nested clause, and six
+  unrelated pre-existing uses live in test files — 8 hits, not 0. The executor reported the
+  mismatch instead of forcing the expectation. The check was a proxy; the real question — does
+  `watch.ts` still ASSERT "only `_reg_purge`" as fact — was verified directly instead, and does not.
+- **D-131 (2026-08-20, execution)** — moving `_pr_py`'s lock off `.uuid` (D-123) broke a
+  PRE-EXISTING test: `server/test/ccd-prhistory.test.ts`'s "the write is under an exclusive lock",
+  which took an external `flock` on `.uuid` to prove serialisation. It was amended to contend the
+  new `$REG/.prstate-<id>.lock` instead. A test changed to agree with new code is how a regression
+  hides, so it was MEASURED rather than argued, three ways: `fcntl.flock(...)` → `pass` (lock file
+  still created, serialisation gone) → test **RED** (`expected 170 to be greater than 700`); lock
+  target reverted to `.uuid` → test **RED**, plus 2 of the 3 new pr-state tests RED; `put()`
+  reverted to `open(dst,'w')` → 1 RED (the text-scan). The amended test is still a mechanism.
+- **D-132 (2026-08-20, execution)** — `_pr_py`'s new `put()` re-raises `OSError`, which widens
+  refusal by exactly one case the old `open(dst,'w')` survived: a `$REG` DIRECTORY that is
+  unwritable while the existing field file is writable (`chmod 0555`). There `cmd_pr_state` now
+  exits non-zero with no JSON on stdout, so the caller loses the DISPLAY answer as well as the
+  persistence. Accepted: such a registry already breaks `_reg_set` for every other field (D-122),
+  and raise-on-persist-failure is the pre-existing class, not a new one.
+- **D-133 (2026-08-20, execution)** — `_reg_set`'s `printf '%s' "$3" > "$tmp" 2>/dev/null`
+  silences printf's OWN stderr, i.e. a failure AFTER the tmp is open (ENOSPC mid-write). Measured
+  that this is narrower than it looks: bash reports a FAILED REDIRECTION before `2>/dev/null` is
+  applied, so an unwritable `$REG` still prints `Permission denied`, and `mv`'s stderr is not
+  redirected at all, so a refused rename still prints `cannot overwrite directory`. One narrow
+  observability gap, not a correctness one; the exit-status contract and the no-tmp-leak guarantee
+  hold on every path.
+- **D-134 (2026-08-20, execution)** — a residual overstatement introduced by m3's own fix, left
+  standing: `server/src/watch.ts`'s new sentence says registry-directory loss mid-pass makes
+  "every row take this route at once". Exact only if the loss lands between
+  `readRegistryMeasured`'s top-level `readdir` and the start of its `buildRecord` loop; a loss
+  landing mid-loop spares the rows already read. The mechanism it describes is right and the
+  one-pass bound is right; the word "every" is the part that is approximate.
+
 <!-- Execution appends D-129… here, with measured before/after counts for every mutation claim. -->
