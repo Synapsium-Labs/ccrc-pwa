@@ -178,13 +178,17 @@ describe('the worker skill: the facts it states about the wire', () => {
    * and the coordinator suite's route/refusal scans). A rename or a deletion
    * throws HERE, at module scope, rather than passing vacuously.
    */
+  const REPLAY_CONST = 'MAIL_REPLAY_MAX_ATTEMPTS';
   const replayCeiling = ((): number => {
     const src = readFileSync(path.join(root, 'server/src/watch.ts'), 'utf8');
-    const m = /^const MAIL_REPLAY_MAX_ATTEMPTS = (\d+);$/m.exec(src);
-    if (!m) throw new Error('watch.ts declares no MAIL_REPLAY_MAX_ATTEMPTS — this harvest is ' +
+    const m = new RegExp(`^const ${REPLAY_CONST} = (\\d+);$`, 'm').exec(src);
+    if (!m) throw new Error(`watch.ts declares no ${REPLAY_CONST} — this harvest is ` +
       'looking at the wrong file, or the constant was renamed and the skill now cites a ghost');
     return Number(m[1]);
   })();
+  /** `\`NAME\` (N)` — the one form the skill states a ceiling in, built from the
+   *  live value so a moved constant moves the pattern with it. */
+  const cited = (name: string, n: number): string => `\`${name}\` \\(${n}\\)`;
 
   it('names BOTH delivery ceilings, each with the constant its own lane enforces (D-105)', () => {
     // The two lanes are deliberately separate in the delivery code, and
@@ -200,11 +204,42 @@ describe('the worker skill: the facts it states about the wire', () => {
     // constant that owns them, and both are pinned to their source — a policy
     // number restated in prose is only safe while something reds when it moves.
     expect(skill).toContain(`\`MAIL_MAX_ATTEMPTS\` (${MAIL_MAX_ATTEMPTS})`);
-    expect(skill).toContain(`\`MAIL_REPLAY_MAX_ATTEMPTS\` (${replayCeiling})`);
-    // And the distinction itself, not just the two numbers: a clause that named
-    // one ceiling twice would satisfy neither of the two lines above, but a
-    // clause that named both and blurred which is which would satisfy both.
-    expect(skill).toMatch(/never landed[\s\S]{0,160}parks unread/);
-    expect(skill).toMatch(/delivered[\s\S]{0,120}unacked[\s\S]{0,160}replays/);
+    expect(skill).toContain(`\`${REPLAY_CONST}\` (${replayCeiling})`);
+  });
+
+  // ── each ceiling BOUND TO ITS OWN LANE ───────────────────────────────────
+  //
+  // MEASURED, and the reason this shape replaced the first one (fix round 2,
+  // re-review): the earlier pair of regexes matched the lane PHRASES only
+  // (`never landed … parks unread`, `delivered … unacked … replays`) and left
+  // the numbers to the two `toContain` lines above, which do not care WHERE in
+  // the file a citation sits. Swapping the two citations between the lanes —
+  // both numbers present, both correctly formatted, each attached to the wrong
+  // lane, which is D-105's original error with the words rearranged — left all
+  // 8 tests GREEN. A guard that cannot red for the very error it was written
+  // for is the thing this repo's mutation discipline exists to catch.
+  //
+  // The verbatim CONTRACT pin cannot cover it either, and that is structural,
+  // not an oversight: the pin FORCES its literal to be updated by whoever edits
+  // the clause, so an author who "corrects" the sentence wrongly updates the
+  // literal in the same breath and the pin follows them. Only an assertion that
+  // knows which number belongs to which lane can disagree with that author.
+  //
+  // Two separate `it`s rather than two `expect`s in one: a failing `expect`
+  // throws, so a single test would report the first lane and never evaluate the
+  // second — and the swap breaks BOTH lanes, which is what the measurement
+  // needs to show. Both patterns are built from the live constants, so a
+  // renamed or re-valued ceiling moves the assertion with it instead of
+  // silently ceasing to match.
+  it('binds the never-landed lane to MAIL_MAX_ATTEMPTS, inside that lane (D-105)', () => {
+    expect(skill, `the never-landed lane must cite ${cited('MAIL_MAX_ATTEMPTS', MAIL_MAX_ATTEMPTS)}`)
+      .toMatch(new RegExp(
+        `never landed[\\s\\S]{0,120}${cited('MAIL_MAX_ATTEMPTS', MAIL_MAX_ATTEMPTS)}[\\s\\S]{0,80}parks unread`));
+  });
+
+  it(`binds the delivered-but-unacked lane to ${REPLAY_CONST}, inside that lane (D-105)`, () => {
+    expect(skill, `the delivered-but-unacked lane must cite ${cited(REPLAY_CONST, replayCeiling)}`)
+      .toMatch(new RegExp(
+        `delivered[\\s\\S]{0,120}unacked[\\s\\S]{0,80}replays[\\s\\S]{0,80}${cited(REPLAY_CONST, replayCeiling)}`));
   });
 });
