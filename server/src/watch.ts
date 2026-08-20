@@ -209,12 +209,22 @@ const MAIL_REPLAY_MAX_ATTEMPTS = 20;
 /** The fleet kill-switch, `$REG/mail-disabled` — ccd's `-disabled` family
  *  (`ccd/ccd:20-22`, `_lane_enabled` at `:53`), which the operator already
  *  knows how to use: `touch` to stop, `rm` to resume. Read by LISTING the
- *  registry directory, never by reading the file: `FleetIO.readFile` maps
- *  every failure to null (`io.ts:41-43`), so a read would make an unreadable
- *  kill-switch look like an absent one — fail-OPEN on the one control whose
- *  entire job is to stop injection. `limits.ts:134-142` already filters
- *  unknown `<name>-disabled` markers out of `/api/accounts`, so this name
- *  cannot fabricate an account row there. */
+ *  registry directory, never by reading the file — and that stays true even
+ *  though `FleetIO` no longer has to collapse "unreadable" into "absent":
+ *  `readFileMeasured` (`MeasuredRead`/`ReadFailure`, `io.ts`) can now tell
+ *  the two apart for a single file. It can't tell them apart for the CASE
+ *  THAT MATTERS MOST here: a measured read of just this file answers
+ *  `absent` on a plain ENOENT, and that ENOENT fires identically whether
+ *  the marker itself is missing or the whole registry directory underneath
+ *  it is gone — so treating a targeted `absent` as "not disabled" would
+ *  fail OPEN exactly when the registry has vanished, the one case this
+ *  kill-switch most needs to fail SHUT on. `io.readdir` still collapses
+ *  every failure of its own to `null` — no measured variant exists for it —
+ *  but that collapse is the point: `listing === null` means "can't tell",
+ *  and "can't tell" must read as disabled, not as license to proceed
+ *  because the marker itself couldn't be seen. `limits.ts:134-142` already
+ *  filters unknown `<name>-disabled` markers out of `/api/accounts`, so
+ *  this name cannot fabricate an account row there. */
 const MAIL_DISABLED_MARKER = 'mail-disabled';
 
 // `UNCHECKED_PR` was a local copy of the literal `PrKeycap.tsx` and

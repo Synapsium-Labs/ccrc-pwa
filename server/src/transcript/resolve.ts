@@ -102,7 +102,7 @@ export interface GlobHit {
  * Fold candidates that agree on `(size, mtimeMs)` into one.
  *
  * THE TWO SIDES OF THIS FIX DEDUPE DIFFERENTLY, DELIBERATELY. `FleetIO.stat`
- * answers `{ mtimeMs, size } | null` (`io.ts:16`) — there is no inode on this
+ * answers `{ mtimeMs, size } | null` (`io.ts`) — there is no inode on this
  * seam and the remote `stat` op does not carry one — so the server collapses on
  * `(size, mtimeMs)`: hardlinked names share both exactly (M1: one inode wore
  * three names in production), and two genuinely distinct files agreeing on size

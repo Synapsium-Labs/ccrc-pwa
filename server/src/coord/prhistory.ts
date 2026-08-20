@@ -47,23 +47,44 @@ export type PrHistoryRead =
  * (Task 9), and how it should present a partially-rejected ledger is that
  * route's call to make, not this reader's to guess ahead of it.
  *
- * `FleetIO.readFile` maps every error to `null` (`io.ts:41-43`), so present and
- * unreadable are indistinguishable from the read alone. The registry DIRECTORY
- * listing is what separates them — it names `<id>.prhistory` whether or not its
- * bytes can be fetched — the same evidence `registry.ts:26-46` uses for
- * `HOLD_UNREADABLE`. Unlike `registry.ts`, which lists FIRST and confirms an
- * ambiguous read with a SECOND listing, this reader reads first (the common
- * case never needs a listing at all) and, only when that read comes back null,
- * takes a second LOOK before refusing: a listing naming the file could mean the
- * file is genuinely unreadable, or it could mean the file was CREATED in the
- * gap between the read above and the listing below — ccd's chokepoint only
- * appends on a `prnumber` replacement, which lands at exactly the moment a run
- * is most likely to close, so that gap is not a theoretical one. The second
- * look is a plain re-read rather than a re-list: a read is the only op that can
- * produce this function's actual answer, and refusal is reserved for a file
- * that is STILL unreadable on that second attempt. In remote mode every one of
- * these is an agent round trip; up to three is the price of the distinction,
- * and it is paid once per run close, never per sweep.
+ * This reader deliberately did NOT migrate onto `FleetIO.readFileMeasured`
+ * (`MeasuredRead`/`ReadFailure`, `io.ts`) when that landed elsewhere in this
+ * tree. `readFile`'s own collapse — every error to `null`, present and
+ * unreadable indistinguishable from the read alone — is no longer the ONLY
+ * reason this reader lists the registry DIRECTORY rather than trusting a
+ * single read, but it is still A reason, and a second one stands beside it:
+ *
+ *   - A measured read of `<id>.prhistory` ALONE answers `absent` on a plain
+ *     ENOENT, and that ENOENT fires identically whether the file itself is
+ *     missing or the whole registry directory underneath it is gone —
+ *     collapsing "this workspace retired no PRs" (the MEASURED answer the
+ *     ladder above depends on) into "nobody could even look," which is
+ *     exactly the flip `coord-prhistory.test.ts:100` pins against: *"REFUSES
+ *     when the registry directory itself does not exist — no listing, no
+ *     evidence."* Only a directory listing can tell "the marker is absent"
+ *     apart from "the directory holding it can't be seen at all" — so
+ *     listing is still the contract here, not a workaround for a since-fixed
+ *     limitation.
+ *   - The second read below exists to catch a ledger CREATED in the gap
+ *     between the two ops (ccd's chokepoint appends on a `prnumber`
+ *     replacement, which lands at exactly the moment a run is most likely to
+ *     close) — a measured first read would not make that race any less
+ *     real, so this divergence survives on its own even if the first one
+ *     didn't.
+ *
+ * Both hold, so migrating one line without the other is not on the table;
+ * `registry.ts:26-46`'s `HOLD_UNREADABLE` leans on the same DIRECTORY-listing
+ * evidence for the same reason. Unlike `registry.ts`, which lists FIRST and
+ * confirms an ambiguous read with a SECOND listing, this reader reads first
+ * (the common case never needs a listing at all) and, only when that read
+ * comes back null, takes a second LOOK before refusing: a listing naming the
+ * file could mean the file is genuinely unreadable, or it could mean the
+ * file was CREATED in the gap just described. The second look is a plain
+ * re-read rather than a re-list: a read is the only op that can produce this
+ * function's actual answer, and refusal is reserved for a file that is
+ * STILL unreadable on that second attempt. In remote mode every one of these
+ * is an agent round trip; up to three is the price of the distinction, and
+ * it is paid once per run close, never per sweep.
  */
 export async function readPrHistory(
   io: FleetIO, registryDir: string, id: string,
