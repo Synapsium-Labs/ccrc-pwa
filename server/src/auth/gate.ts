@@ -329,12 +329,56 @@ export function sessionVerdict(req: GateRequest, deps: GateDeps, now: number): G
   }
 
   const token = parseCookies(req.headers.cookie).get(SESSION_COOKIE);
+  // THE NO-COOKIE ARM. Everything below it knows a cookie WAS presented, and
+  // that difference is the whole of D-114 — see the note on the return.
   if (token === undefined || token === '') return { allow: false, verdict: 'no-session', reason: 'refused' };
 
   const verdict = deps.store.verify(token, deps.secret.secret.generation, now);
-  return verdict === 'ok'
-    ? { allow: true, verdict, reason: 'session' }
-    : { allow: false, verdict, reason: 'refused' };
+  if (verdict === 'ok') return { allow: true, verdict, reason: 'session' };
+  /**
+   * D-114. A cookie was PRESENTED and matched nothing, so this is `'expired'` —
+   * NOT the `'no-session'` the store answered.
+   *
+   * `SessionStore.verify` returns `'no-session'` for an unmatched hash and it is
+   * right to: it only ever sees a presented token, so it cannot know whether the
+   * caller had a cookie at all. THIS function knows — it read the header six
+   * lines up — and collapsing its two facts into the store's one is the
+   * "no overloaded null at a seam" rule (`CLAUDE.md`) broken in the file that can
+   * least afford it. The two conditions a caller handles differently: no cookie
+   * means the operator never had a session ("Sign in to reach this box"); a
+   * cookie that matches nothing means the row lapsed and the five-minute sweep
+   * reclaimed it ("You were signed out"). `pwa/src/components/LoginScreen.tsx`
+   * renders a different sentence for each, and a test there pins that they
+   * differ — under the conflation the server simply never sent the second one.
+   *
+   * NOT COSMETIC: THE CONFLATION MADE THE EXPIRE-COOKIE GUARD INERT in the case
+   * it was written for. `installGate` sheds a dead cookie only on `'expired'`,
+   * because a browser holding one has no other way to drop it (logout is gated,
+   * the cookie is HttpOnly). A row past its idle TTL answers `'expired'` only in
+   * the window between lapsing and the sweep DELETING it — and the browser is
+   * idle by definition in that window, so in practice it returns after the sweep,
+   * hit this arm, and kept presenting a dead cookie for the rest of its 30-day
+   * `Max-Age`. Only the `ccrc passwd` generation bump fired the guard reliably
+   * (`sweep()` ignores generation, so those rows survive to be matched).
+   *
+   * THIS REVEALS NOTHING AND REMOVES AN ORACLE. The answer is now a pure function
+   * of the caller's own request — did you send a cookie or not — and says nothing
+   * about the box or about whether that token was ever real. Before, an attacker
+   * could tell "this token never existed" (`'no-session'`) from "this token
+   * existed and is dead" (`'expired'`); uniform `'expired'` deletes that
+   * distinguisher. A malformed cookie lands here too and is called "signed out",
+   * which is mildly imprecise and far cheaper than the alternative.
+   *
+   * The ternary, not a bare `'expired'`: `'expired'` from the store (a stale
+   * generation, or a TTL lapse caught before the sweep) is already the right
+   * answer and is passed through unchanged, and any FUTURE verdict `verify`
+   * learns to return must not be overwritten by this one.
+   */
+  return {
+    allow: false,
+    verdict: verdict === 'no-session' ? 'expired' : verdict,
+    reason: 'refused',
+  };
 }
 
 /** What {@link installGate} needs from the composition root. Deliberately NOT the

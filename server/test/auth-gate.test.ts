@@ -601,15 +601,45 @@ describe('a live session cookie passes the gate', () => {
     ws.close();
   });
 
-  it('a cookie for a DIFFERENT token does not', async () => {
-    const w = await openApp(); app = w.app;
+  it('a cookie for a DIFFERENT token does not, and is told it was signed OUT (D-114)', async () => {
+    const w = await openApp({ cookieSecure: true }); app = w.app;
     await login(app);
     const forged = serializeCookie(SESSION_COOKIE, 'a'.repeat(43), { secure: false, maxAgeSeconds: 60 });
     const res = await app.inject({
       method: 'GET', url: '/api/accounts', headers: { cookie: forged.slice(0, forged.indexOf(';')) },
     });
     expect(gateRefused(res)).toBe(true);
+    // `'expired'`, NOT the `'no-session'` the store answered. A cookie was
+    // PRESENTED, so "you were signed out" is the true sentence and a cold "sign
+    // in to reach this box" is not — the gate has both facts and must not narrow
+    // them to the store's one (D-114).
+    expect(verdictOf(res)).toBe('expired');
+    // …and THIS is why it matters rather than being a nicety: the expire-cookie
+    // guard fires only on `'expired'`, so under the conflation it missed the case
+    // it was written for — an idle-lapsed row, swept away, whose browser then
+    // presented a dead cookie for the rest of its 30-day Max-Age with no in-app
+    // way to shed it (logout is gated, the cookie is HttpOnly).
+    const set = res.headers['set-cookie'];
+    const line = Array.isArray(set) ? String(set[0]) : String(set);
+    expect(line).toContain(`${SESSION_COOKIE}=;`);
+    expect(line).toContain('Max-Age=0');
+    expect(line).toContain('Secure');
+  });
+
+  it('…while NO cookie stays `no-session` — the two arms are the point', async () => {
+    // The other half of D-114, and the assertion that keeps the fix from being a
+    // blanket rename: a caller who sent nothing has nothing to be signed out of.
+    const w = await openApp(); app = w.app;
+    const res = await app.inject({ method: 'GET', url: '/api/accounts' });
     expect(verdictOf(res)).toBe('no-session');
+    expect(res.headers['set-cookie']).toBeUndefined();
+    // An EMPTY cookie value is the no-cookie arm too — handled one line earlier
+    // than the store call, so it never reaches the D-114 mapping.
+    const empty = await app.inject({
+      method: 'GET', url: '/api/accounts', headers: { cookie: `${SESSION_COOKIE}=` },
+    });
+    expect(verdictOf(empty)).toBe('no-session');
+    expect(empty.headers['set-cookie']).toBeUndefined();
   });
 
   it('a session minted under a superseded generation is expired, not accepted', async () => {
@@ -828,10 +858,32 @@ describe('authVerdict — the decision, with no server around it', () => {
   });
 
   it('an empty or absent cookie is `no-session`, never a pass', () => {
+    // Every one of these is the NO-COOKIE arm — `other=1` carries no session
+    // cookie at all and `ccrc_session=` carries an empty value, which is caught
+    // one line above the store call and so never reaches D-114's mapping.
     for (const cookie of [undefined, '', 'other=1', `${SESSION_COOKIE}=`]) {
       expect(authVerdict(req('GET', '/api/accounts', cookie), { enabled: true, secret: secretOk, store }, 0))
         .toEqual({ allow: false, verdict: 'no-session', reason: 'refused' });
     }
+  });
+
+  it('D-114 is a REFUSAL-side mapping only — it can never turn a deny into an allow', () => {
+    // The property the whole change rests on, asserted rather than argued: the
+    // mapping rewrites `verdict` on a branch whose `allow` is a hard-coded
+    // `false`, and `allow: true` is returned one line EARLIER, from a separate
+    // `verdict === 'ok'` test that the mapping never sees.
+    const deps = { enabled: true, secret: secretOk, store };
+    for (const token of ['a'.repeat(43), 'not-base64!!', 'x', 'ccrc_session', '%%%']) {
+      const d = authVerdict(req('GET', '/api/accounts', `${SESSION_COOKIE}=${token}`), deps, 0);
+      expect(d.allow, token).toBe(false);
+      expect(d.reason, token).toBe('refused');
+      expect(d.verdict, token).toBe('expired');
+    }
+    // A malformed cookie header — `parseCookies` never throws, so garbage lands
+    // in the presented-but-unmatched path and is called "signed out". Imprecise,
+    // and far cheaper than the alternative.
+    const junk = authVerdict(req('GET', '/api/accounts', `${SESSION_COOKIE}=%E0%A4%A`), deps, 0);
+    expect(junk).toEqual({ allow: false, verdict: 'expired', reason: 'refused' });
   });
 
   it('names WHY it allowed — three different facts, never one boolean', () => {
