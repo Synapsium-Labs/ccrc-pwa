@@ -1,0 +1,95 @@
+# The worker protocol becomes a mechanism — `ccrc-worker` skill Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** A dispatched program worker loads its standing protocol from a shipped, verbatim-pinned skill (`ccrc-worker`) instead of per-brief prose — the branch discipline, mail etiquette, ask envelopes, fingerprint rules and destructive-verb ban become a mechanism the dispatch path invokes by name — while the coordinator's brief shrinks to wave specifics.
+
+**Architecture:** `ccd/worker-skill/SKILL.md` mirrors the coordinator skill's exact shape (two-key frontmatter, an identity recipe, a numbered CONTRACT of clauses pinned verbatim by `server/test/worker-skill.test.ts` with the census-equality rule over five destructive verbs). It ships the coordinator's way — deploy stages to `~/.cc-sessions/worker-skill/`, `ccd/install-worker-skill.sh` converges it into every rostered account's `<config dir>/skills/ccrc-worker/` (skills resolve per CLAUDE_CONFIG_DIR; the account drifts on swap, the id does not). The dispatch route composes a SERVER-SIDE PREFIX onto the wave-brief mail body — `Run the ccrc-worker skill; it is your standing protocol. Your wave brief follows.` — because dispatch writes nothing to a wave-1 pane (the brief travels as mail; `run-routes.test.ts:606` pins zero send-keys on wave 1) and skills are invoked BY NAME (the PWA coordinator kickoff at `StartProgramSheet.tsx:65-68` is the idiom). The 8KiB `oversize` check moves to measure the COMPOSED body. `ccrc install` gains `_inst_skills` (both skills — the coordinator skill is deploy-only today, an asymmetry this slice closes) after `_inst_dirs`, running the INSTALLED installers with `CCRC_SKILL_SRC` pointed at the placed tree. The coordinator's re-typed protocol paragraphs trim LAST (SKILL.md step-2 template + wave-lifecycle.md:122-137's "The brief must say" block), so older-style briefs stay self-sufficient throughout the transition.
+
+**Tech Stack:** markdown skill + bash installer, TypeScript (dispatch prefix), vitest.
+
+## Global Constraints
+
+- **ZERO `ccd/ccd` edits.** Per-worker RC (orchestrator task #37) stays OPEN — a clause states the current per-box behavior and names the open ruling; no spawn-path mechanism ships here.
+- **Verbatim-pin discipline:** the worker CONTRACT is a literal string array; the census rule is exact equality per destructive verb (`ws-rm`, `ws-reap`, `ws-gc`, `ws-archive`, `ws-restore`) between the whole skill corpus and the forbidding clause's own count — copy `coordinator-skill.test.ts:56-95`'s mechanics, including the no-weaker-duplicate-census doctrine.
+- **Dispatch-path pins that must stay green:** zero send-keys on wave 1 (`run-routes.test.ts:606`); exactly ONE due delivery per dispatch (:608-615 — the prefix rides the SAME mail, never a second); `briefQueued:false` suppression (:553-586 — no prefix mail when /clear was refused); the wave-≥2 sequence (:532-551). The composed-body oversize accounting gets its own red-first test (a brief within 8KiB whose composed form exceeds it → `oversize`).
+- **Installer parity:** `install-worker-skill.sh` copies `install-coordinator-skill.sh`'s fail-closed guards (REQUIRED_REFS per its own reference set — or an explicit empty list with the reason), inode convergence, backup+rollback, per-home isolation. Its test copies `install-coordinator-skill.test.ts`'s shape (byte equality with the repo tree, absent-home stays absent, broken-home continues).
+- **Deploy text pins:** the new deploy block mirrors deploy.sh:482-485; `install-coordinator-skill.test.ts` locates the coordinator rsync by the FIRST line containing `coordinator-skill/` — the worker block's token is `worker-skill/` and no comment may spell either token above its real line; the "FIFTH artifact" count comment updates.
+- **`ccrc install` spine pin:** `server/test/ccrc-install.test.ts:1442-1481` pins the step list — `_inst_skills` is a pinned-list edit in the same commit; it sits AFTER `_inst_dirs` (the installers skip absent homes) and runs the INSTALLED copies from `~/.cc-sessions/` (the `_inst_hooks` doctrine).
+- **Trim-last ordering:** the coordinator-skill trim is the FINAL task; every earlier task leaves the coordinator's own pinned strings untouched (`coordinator-skill.test.ts` pins "frozen for the life of the claim" :110-118, "fixed at dispatch" :352, ledger-template byte-identity :355-361 — the trim edits around them or updates the pins in the same commit).
+- Fixture HOMEs only; red-first with measured mutations; foreground vitest, never npx, never backgrounded; all three suites green before done.
+
+## The CONTRACT (draft — Task 1 finalizes wording; content locked here)
+
+1. Identity: derive `fromId` from `tmux display-message -p '#S'` (`cc-<id>`) and `fromUuid` from `$REG/<id>.uuid` on EVERY call — `/clear` rotates the uuid, and dispatch /clears you on every wave ≥ 2; a cached uuid is guaranteed stale.
+2. Commit on THIS workspace's own branch (`ws/<slug>`), never a new feature branch — the done-fingerprint re-measures the workspace branch tip; a feature branch wedges every close `stale-tip` forever (F5; the server's own `stale-tip` detail says so — fingerprint.ts:218-230).
+3. Ack before acting, by DELIVERY id, never the mail row's id — an unacked nudge replays; the budget is 6 attempts and then your brief parks unread. Reply to the coordinator through mail (`toId:'coordinator'`), never by typing into your own pane.
+4. Keep your input box empty — a half-typed draft makes the delivery lane refuse `draft-present`; only you can clear your own text, and a parked delivery means your brief was never read.
+5. Operator questions ride the AskUserQuestion tool (the structured ask the hook captures and the PWA surfaces), not free text.
+6. Your requirements are the brief plus the plan file it names, including its deviation ledger; the plan's text governs over your recollection of the spec. Invoke the execution skill the brief names rather than improvising.
+7. Large payloads travel as files + an absolute path in the mail's `artifacts` (relative paths refuse `bad-kind`) — never ask for content to be pasted into your pane (F7).
+8. Never run `ws-rm`, `ws-reap`, `ws-gc`, `ws-archive` or `ws-restore` — your workspace's lifecycle belongs to ccd and the human.
+9. A done-claim's fingerprint is measured ONCE and sent ONCE: `handoffCommit` must equal the branch tip you measured, `prPhase` is one of the eight enum words, and after `wave-done` you stop pushing — new commits under your own claim make it stale. Never re-assert a rejected claim without new commits and a fresh measurement.
+10. Remote-control: your pane's RC state is the BOX's (`~/.ccrc/remote-control`), not yours to change; the per-worker ruling (task #37) is open — do not toggle the box flag.
+
+## File structure
+
+- Create: `ccd/worker-skill/SKILL.md`, `ccd/install-worker-skill.sh`, `server/test/worker-skill.test.ts`, `server/test/install-worker-skill.test.ts`
+- Modify: `server/src/coord/dispatch.ts` (+ its tests), `deploy/deploy.sh`, `ccd/ccrc` (`_inst_skills`), `server/test/ccrc-install.test.ts` (spine pin), `ccd/coordinator-skill/SKILL.md` + `references/wave-lifecycle.md` + `server/test/coordinator-skill.test.ts` (the trim, LAST), `docs/superpowers/specs/2026-08-19-stage2-vm-gate-runbook.md` (skills step), `CLAUDE.md`, `README.md`
+
+---
+
+### Task 1: The skill and its verbatim pin
+
+**Files:** Create `ccd/worker-skill/SKILL.md`, `server/test/worker-skill.test.ts`.
+
+**Decision locked:** NO `references/` directory of its own — the skill POINTS (by relative-path prose, the coordinator idiom) at `../ccrc-coordinator/references/wave-lifecycle.md` and `mail-envelope.md` for the deep protocol, because both skills install side by side under `<cfg>/skills/` and duplicating 35KB of references would create an untested second copy of pinned content. The installer guard (Task 2) checks SKILL.md alone.
+
+- [ ] **Step 1: RED** — write `worker-skill.test.ts` first, copying `coordinator-skill.test.ts:56-95`'s mechanics: `CONTRACT` literal array holding the ten clauses from this plan's CONTRACT section (Task 1 finalizes exact sentences; the semantic content of each clause is LOCKED above — a reviewer judges wording, not content); the frontmatter triple (`name: ccrc-worker`, a description whose anti-use sentence is "Never use it to coordinate a program — a worker that starts dispatching has become a coordinator without a ledger", pinned lowercase-contains); the id-recipe pin (`tmux display-message -p '#S'`); the census equality over ALL FIVE destructive verbs (`ws-rm`, `ws-reap`, `ws-gc`, `ws-archive`, `ws-restore`) against the forbidding clause's own counts, corpus = SKILL.md alone. Red: the file does not exist.
+- [ ] **Step 2: GREEN** — write SKILL.md: frontmatter; "you are a dispatched wave worker" identity + the id/uuid recipe (adapted from coordinator SKILL.md:27-48, noting /clear rotates the uuid); the CONTRACT clauses; a short "how to call the API" section REUSING the coordinator's rules by pointer (`../ccrc-coordinator/references/…` — read before your first mail); the wave-done fingerprint mini-table (branchTip/prNumber/prPhase-enum/handoffCommit with the eight prPhase words spelled); "when something is wrong" bullets (parked delivery, stale-tip on close, dialog stuck).
+- [ ] **Step 3: Mutations** — plant an extra `ws-reap` mention in a prose paragraph → census red; paraphrase clause 2 → its pin red. Record both; restore.
+- [ ] **Step 4: Commit** `feat(skill): ccrc-worker — the worker protocol is a mechanism, pinned verbatim`
+
+### Task 2: The installer and its test
+
+**Files:** Create `ccd/install-worker-skill.sh`, `server/test/install-worker-skill.test.ts`.
+
+- [ ] **Step 1: RED** — test first, copying `install-coordinator-skill.test.ts`'s shape: installed tree byte-equal to the repo's `ccd/worker-skill/`; inode-stable on re-run; absent home stays absent; one broken home does not stop the rest; `CCRC_SKILL_SRC` override honored.
+- [ ] **Step 2: GREEN** — clone `install-coordinator-skill.sh` with `NAME=ccrc-worker`, `SRC="${CCRC_SKILL_SRC:-$HOME/.cc-sessions/worker-skill}"`, `REQUIRED_REFS=()` REPLACED by a `REQUIRED_FILES=(SKILL.md)` guard (comment: this skill carries no references of its own — it points at the coordinator's; an empty-refs clone of the coordinator guard would be a lie about why). Everything else parity: fail-closed, diff -r -q converge, backup+rollback, per-home rc=1-continue.
+- [ ] **Step 3: Mutation** — break one home's skills dir permissions → that home fails, the next still converges (the per-home test); record. Commit `feat(skill): install-worker-skill converges every rostered home, coordinator-style`
+
+### Task 3: The dispatch prefix
+
+**Files:** Modify `server/src/coord/dispatch.ts`; tests in `server/test/run-routes.test.ts` (+ the oversize accounting case wherever the oversize test lives today).
+
+- [ ] **Step 1: RED** — three tests: (a) the ONE due delivery's envelope body begins with the kickoff prefix and still contains the coordinator's brief verbatim after it; (b) a brief that fits 8KiB alone but whose COMPOSED body exceeds it → `oversize` (red today: the check measures the raw brief at dispatch.ts:119); (c) the briefQueued:false path queues NO mail (existing pin — assert it still holds with the prefix code present, i.e. the prefix never becomes its own mail).
+- [ ] **Step 2: GREEN** —
+```ts
+// The worker kickoff rides the brief mail itself: dispatch writes nothing to a
+// wave-1 pane (the zero-send-keys pin), and skills are invoked BY NAME (the
+// coordinator kickoff idiom, StartProgramSheet.kickoff). One constant, one place.
+export const WORKER_KICKOFF_PREFIX =
+  "Run the ccrc-worker skill — it is your standing protocol; read it before acting on anything below.\n\n";
+```
+  Compose `const body = WORKER_KICKOFF_PREFIX + brief;` immediately after the brief-shape validation; MOVE the `Buffer.byteLength` oversize check onto `body` (the refusal's `detail` still reports the operator-meaningful numbers: brief bytes + prefix bytes vs the cap); `queueSystemMail(..., body)`. The zero-send-keys and one-delivery pins stay green untouched.
+- [ ] **Step 3: Mutations** — drop the prefix from composition → test (a) red; restore the oversize check to raw `brief` → test (b) red. Record. Commit `feat(coord): dispatch hands every worker its protocol by name, inside the brief mail`
+
+### Task 4: Ship it — deploy and `ccrc install`
+
+**Files:** Modify `deploy/deploy.sh`, `ccd/ccrc`, `server/test/ccrc-install.test.ts`, `agent/test/deploy-verify.test.ts` (or the skill-installer test for the ordering pin), `docs/superpowers/specs/2026-08-19-stage2-vm-gate-runbook.md`.
+
+- [ ] **Step 1: RED+GREEN, deploy** — mirror deploy.sh:482-485 with `worker-skill` tokens (mkdir staging, rsync --delete, install_atomic the installer, run it), placed immediately after the coordinator block; update the artifact-count comment at :471-476. Pin: a new test (in `install-worker-skill.test.ts`, the coordinator suite's :207-228 idiom) locating the rsync by the FIRST line containing `worker-skill/` and requiring `--delete` + ordering after the coordinator run. NO comment may spell either skill-dir token above its real line.
+- [ ] **Step 2: RED+GREEN, install** — `_inst_skills` in `ccd/ccrc`, wired AFTER `_inst_dirs`, BEFORE `_inst_hooks`... placement decision: beside `_inst_hooks` (both run installed converge scripts). It: places both skill trees into `~/.cc-sessions/{coordinator-skill,worker-skill}` from `$BOX_TREE_DIR/ccd/` (cp -a via a small `_inst_tree_copy` helper — `_inst_atomic` is single-file), places both installers 755, then runs each INSTALLED installer (`_inst_hooks` doctrine). This closes the asymmetry: a self-installed box now has BOTH skills. Spine pin at ccrc-install.test.ts:1442-1481 updated in the same commit; new tests: both skills land per rostered config dir on a fresh box; re-run inode-stable; runbook gains the skills step + the preflight `ls` line (README:451-452's form, now naming both).
+- [ ] **Step 3: Mutations** — remove `_inst_skills` from the spine → pinned-list red; move the deploy worker block above the coordinator's → ordering red. Record. Commit `feat(install,deploy): both skills ship both ways — the coordinator-only asymmetry closes`
+
+### Task 5: The coordinator trim (LAST, deliberately)
+
+**Files:** Modify `ccd/coordinator-skill/SKILL.md` (step-2 template), `ccd/coordinator-skill/references/wave-lifecycle.md` (:122-137), `server/test/coordinator-skill.test.ts` (pins for the edited region), `CLAUDE.md` + `README.md` (the coordinator paragraphs + preflight).
+
+- [ ] **Step 1** — rewrite the "The brief must say" block: the standing protocol now loads mechanically (dispatch's prefix + the ccrc-worker skill); the brief carries WAVE SPECIFICS (plan path, task range, interfaces, deviations); the branch-discipline sentence REMAINS as one line ("the skill says it; say it again — it is the one sentence that keeps the wave closeable") — belt and braces, not deletion, because pre-skill workers may still exist mid-transition. Reconcile clause 5's wording. Preserve the pinned strings ("frozen for the life of the claim", "fixed at dispatch", ledger-template byte-identity) or update their pins in the same commit.
+- [ ] **Step 2** — CLAUDE.md's coordinator bullet gains the worker-skill sentence; README's program section + preflight updated (both skills). Run the full coordinator-skill + worker-skill suites; mutation: restore the old re-typed paragraph → the updated pin red (the test must pin the NEW delegating sentence). Commit `feat(skill): the coordinator delegates the standing protocol and keeps the one load-bearing sentence`
+
+### Task 6: Close-out
+
+- [ ] Ledger (D-10x entries as found); the per-worker-RC note (still open, now with its destination existing — a clause states the box-level fact); full three suites foreground; commit `docs(skill): worker-skill slice closes — the protocol is a mechanism`
+\n\n## Deviations found\n\n(Next free number at plan time: D-103.)\n
