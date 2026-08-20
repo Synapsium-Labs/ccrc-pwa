@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=7dec1294ac2ea41233697e7d1bcd1b3a37c880cf6cb341af053bde995de3ad5c
+# ccrc:generated 1 sha256=61417ad59e56db46b97c8deb10b91cc696c844826ab9d0c1574e56c3449513ad
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box, not on this file: `_rc_enabled` reads
@@ -592,7 +592,11 @@ _ws_unsupervise() {   # id [surface] — disable the unit AND RECORD THAT SOMEBO
   # non-member word.
   local id="$1" surface="${2-ccd}"
   case "$surface" in cli|pwa|agent|ccd) ;; *) surface=unknown ;; esac
-  printf '%s %s' "$(date +%s)" "$surface" > "$REG/$id.stopped"
+  # Through `_reg_set` (wave 2): the two words are one value, so the join moves
+  # to the call site and the bytes on disk are unchanged. `_session_state` reads
+  # this field to tell a deliberate stop from an orphan — a half-written stamp
+  # is a session reclassified.
+  _reg_set "$id" stopped "$(date +%s) $surface"
   rm -f "$REG/$id.supervised"
   # A silent failure here used to be observable at cmd_stop's own inlined call
   # (the message this replaced); routing all five call sites through one
