@@ -101,8 +101,12 @@ export function idHomeWrapper(roster: Roster, id: string): string {
 
 /**
  * Authoritative live status for one session — the same signal the fleet uses:
- * dead if no tmux session, else busy/idle from the live status file. Used by the
- * interrupt route, since the --remote-control pane carries no busy marker.
+ * dead if no tmux session, else busy/idle from the live status file. Used by
+ * the interrupt route: a --remote-control pane never renders the busy marker
+ * at all, and an RC-off pane does render it, but the same pane can ALSO be
+ * showing a dialog painted right alongside it — either way busy-ness has to
+ * come from the live status file, which also sees subagents the pane never
+ * shows.
  */
 export async function liveStatus(io: FleetIO, cfg: CcrcConfig, tmux: Tmux, id: string): Promise<SessionStatus> {
   // C0.3: this only ever asks about ONE id — no uniqueness or subtraction

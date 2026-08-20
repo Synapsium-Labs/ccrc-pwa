@@ -7,7 +7,7 @@ import {
   rungRank, TranscriptResolver, type TranscriptResolution,
 } from './transcript/resolve.js';
 import { readBacklog, TranscriptTailer } from './transcript/tail.js';
-import { paneState, parseDialog } from './pane/dialog.js';
+import { hasMenu, parseDialog } from './pane/dialog.js';
 import { alignAsk, readPendingAsk } from './transcript/ask.js';
 import { readTasks } from './tasks/read.js';
 import { readHookState } from './hookstate.js';
@@ -16,6 +16,7 @@ import type { Dialog, DialogAsk, SessionStatus, SessionStreamMsg } from '../../s
 
 const POLL_MS = 2000;
 const BACKLOG_N = 50;
+const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:76 — see checkDialog's own comment
 
 interface Resolved {
   uuid: string;
@@ -240,7 +241,16 @@ export class SessionStream {
   private async checkDialog(file: string | null): Promise<void> {
     if (this.stopped) return;
     const pane = await this.deps.tmux.capture(this.id);
-    let dialog = pane !== null && paneState(pane) === 'menu' ? parseDialog(pane) : null;
+    // hasMenu, not paneState() === 'menu': paneState tests BUSY_RE across the
+    // WHOLE pane, and an RC-off pane renders the busy marker WHILE a dialog is
+    // painted below it (fleet.ts's liveStatus doc) — so paneState would answer
+    // 'busy' here and this call site would suppress the parse forever. hasMenu
+    // is deliberately independent of the busy check for exactly that reason
+    // (pane/dialog.ts:33-45); it's the same idiom send.ts:320 uses to decide
+    // whether a menu owns the keyboard. SGR strip mirrors that idiom, though
+    // tmux.capture() (-p, no -e) carries no escape codes to strip today, unlike
+    // captureAnsi().
+    let dialog = pane !== null && hasMenu(pane.replace(SGR, '')) ? parseDialog(pane) : null;
     // Read the transcript only while this menu is still unexplained. Once its ask
     // is latched, re-reading costs a 256 KB tail every 2 s and can buy nothing:
     // nextDialogFrame would suppress the frame anyway. Menus that never latch are

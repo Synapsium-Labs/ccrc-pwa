@@ -40,6 +40,12 @@ function menuPane(selected: number): string {
 
 const DIALOG_ID = parseDialog(menuPane(1))!.id;
 
+/** The real spinner row from fixtures/panes/busy.txt, plus the blank line an
+ *  RC-off pane paints between it and the dialog below — same shape as
+ *  sessionws.test.ts's / push-copy.test.ts's D-102 combo panes. Prepending it
+ *  leaves `menuPane`'s title and labels (hence `Dialog.id`) unchanged. */
+const BUSY = '✳ Cerebrating… (12s · ↑ 1.2k tokens · esc to interrupt)\n\n';
+
 describe('answerDialog', () => {
   it('walks down 2 with 150ms steps, verifies landing, then Enter', async () => {
     const { tmux, calls } = fakeTmux([menuPane(1), menuPane(3)]);
@@ -95,12 +101,32 @@ describe('answerDialog', () => {
     expect(res).toEqual({ ok: false, error: 'not-alive' });
     expect(sendKeysCalls(calls)).toEqual([]);
   });
+
+  // D-102 fix round 2. parseDialog's own busy-veto used to make this pane
+  // read as no-dialog-here, so a busy marker painted alongside a still-open
+  // menu forced 'stale-dialog' — an accidental refusal in the ONE path that
+  // types keys into a live session. Nothing else in the suite notices this
+  // widening (a busy veto re-added inside answerDialog leaves the whole repo
+  // green): pin it here, directly.
+  it('D-102: a busy spinner painted alongside the menu no longer refuses the answer', async () => {
+    const { tmux, calls } = fakeTmux([BUSY + menuPane(1), BUSY + menuPane(2)]);
+    const res = await answerDialog(deps(tmux), 'x', DIALOG_ID, 2);
+    expect(res).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([
+      ['tmux', 'send-keys', '-t', 'cc-x', 'Down'],
+      ['tmux', 'send-keys', '-t', 'cc-x', 'Enter'],
+    ]);
+  });
 });
 
 describe('interrupt', () => {
   // Busy-ness comes from an injected resolver (the authoritative live status
-  // file), NOT the pane — a --remote-control pane never renders "esc to
-  // interrupt", so pane-scraping would always report not-busy.
+  // file), NOT the pane: a --remote-control pane never renders "esc to
+  // interrupt" at all, and an RC-off pane does render it, but the same marker
+  // can sit under (or beside) a dialog painted over it — either way
+  // pane-based busy detection would report the wrong thing, and the live
+  // status file is the one signal that also sees subagents (inject/send.ts's
+  // `interrupt` docstring, D-102).
   it('busy (per resolver): sends Escape', async () => {
     const { tmux, calls } = fakeTmux(['generation in progress\n❯ \n']);
     const res = await interrupt(deps(tmux), 'x', async () => true);

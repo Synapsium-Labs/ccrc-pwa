@@ -566,6 +566,28 @@ describe('dialog enrichment', () => {
     expect(d.ask).toBeUndefined();
     expect(d.options.map((o: { label: string }) => o.label)).toEqual(['Yes, switch to Fable 5', 'No, go back']);
   });
+
+  // Stage 2e Task 3 (D-102). With RC off, a genuinely busy pane renders "esc
+  // to interrupt" WHILE a permission/AskUserQuestion dialog is painted below
+  // it — a real, expected combined screen (fleet.ts's liveStatus doc: an
+  // RC-off pane DOES render the busy marker, unlike a --remote-control one).
+  // `checkDialog`'s own gate asks `hasMenu`, not `paneState() === 'menu'` —
+  // the send.ts:320 idiom, independent of the busy check for exactly this
+  // reason (pane/dialog.ts:33-45). Fix round 1 closed the second half: the
+  // plan's own "dialog.ts UNTOUCHED" fence had sat directly on the hazard's
+  // real seat (`parseDialog`'s internal `paneState(pane) !== 'menu'` gate,
+  // pane/dialog.ts:169) — the fence lifted for that one line, so `parseDialog`
+  // now gates on `hasMenu` too and stops vetoing a real menu parse on a busy
+  // pane. This is the real behavioral pin the D-102 gap test could not be
+  // until both halves were fixed.
+  it('D-102: a dialog under a live busy spinner reaches the frame — RC-off panes render both at once', async () => {
+    const combo = `${fixture('busy.txt')}\n${fixture('ask-user-question.txt')}`;
+    const { frames } = await streamWith({ pane: combo });
+    const dialog = frames.find((f) => f.type === 'dialog');
+    expect(dialog).toBeDefined();
+    expect((dialog as { dialog: Dialog }).dialog.parsed).toBe(true);
+    expect((dialog as { dialog: Dialog }).dialog.title).toBe('Which architecture should we go with?');
+  });
 });
 
 describe('session WS', () => {

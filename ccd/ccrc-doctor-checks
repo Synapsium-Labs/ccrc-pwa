@@ -51,7 +51,7 @@
 # make the check answer, that goes in the detail, as a fact about what is
 # missing rather than as an instruction.
 #
-# ── ONE CHECK MAY ANSWER IN TWO (OR THREE) CLASSES ────────────────────────
+# ── ONE CHECK MAY ANSWER IN TWO (OR MORE) CLASSES ─────────────────────────
 # Almost every check prints exactly ONE verdict line. A check that has found
 # findings of two different classes may print a FAIL line and then a WARN line
 # — each with its own remedy — and returns the WORSE class (1). It is not a
@@ -73,10 +73,23 @@
 # joined. The worst-class rule does not change: two FAILs still return 1, the
 # same as one would.
 #
+# THREE FAIL LINES from one check is the same rule again, still not an
+# exception: `_check_wrappers` a third time (A2-NEW) — an absent upstream
+# binary ("go install Claude Code") joins the other two FAIL classes above as
+# a THIRD hard finding with a THIRD distinct operator action. `cmd_doctor`'s
+# line-counting below is not a fixed arity: it scans a check's captured output
+# line by line, counts every `FAIL <name>: `/`WARN <name>: ` it sees (however
+# many there are), and cross-checks only whether ANY FAIL line was printed
+# against the return code (worst = FAIL if the FAIL count is nonzero) — so a
+# check answering in four classes at once (this one, on a box that is BOTH
+# missing its upstream binary and disagreeing about a generated one) needs no
+# change there. Adding a bucket costs the bucket's own `if`, not a change to
+# what counts it.
+#
 # `ccrc`'s `cmd_doctor` counts VERDICT LINES, not return codes, so a check that
-# answers in two (or three) classes is counted in all of them — and it
-# cross-checks the loudest statement against the return code: a return code
-# that is not the worst class the check printed is reported as a bug in ccrc.
+# answers in several classes is counted in all of them — and it cross-checks
+# the loudest statement against the return code: a return code that is not the
+# worst class the check printed is reported as a bug in ccrc.
 #
 # The verdict lines are the RESULT of the verb, so they go to stdout — NOT to
 # stderr through `_ccrc_say`, which `ccrc`'s own header (Task 1) had guessed
@@ -163,6 +176,7 @@ CCRC_DOCTOR_CHECKS=(
   path
   services
   config
+  rc
   disk
   wrappers
   fleet
@@ -795,6 +809,110 @@ _check_config() {
   _dr_pass config "$BOX_ENV_FILE present, fleet mode remote, and both CCRC_AGENT_URL and CCRC_AGENT_TOKEN are set (whether the agent ANSWERS is the 'fleet' check below)"
 }
 
+# ── what this box's sessions are SPAWNED AS ───────────────────────────────
+# `~/.ccrc/remote-control` decides whether `ccd` spawns a session with
+# `--remote-control` — driven over the RC socket and discoverable on claude.ai
+# — or as a plain pane. It is per-box, operator-owned, and seeded once by
+# whichever lane installed the box (`ccrc install` writes `off`, `deploy.sh`'s
+# fleet lane writes `on`; each has its own reason, stated where it is written).
+#
+# THE AUTHORITY IS `ccd`'s `_rc_enabled`, not this function. There the rule is:
+# first line, ALL whitespace stripped, must equal `on`; absent, unreadable,
+# empty or anything else is OFF, because a garbled file must not half-enable a
+# mode. `_dr_rc_state` prints what that reader would decide and why; it never
+# decides anything itself, and `_check_rc` REPORTS that answer rather than
+# judging it, because both values are legitimate states for a box to be in.
+#
+# ── A CHECK OF ITS OWN, NOT A RIDER ON `config` (fix round 1) ─────────────
+# This shipped first as an append to `_check_config`'s two PASS details, and
+# that made a fact about SPAWN SHAPE conditional on the health of an unrelated
+# file. The readout vanished on four of that check's arms — the fleet-role SKIP
+# and all three `ccrc.env` WARNs — which meant the reference FLEET HOST, the one
+# box in this topology that actually runs `on`, printed nothing about RC at all:
+# it has no `ccrc.env` and never will (D-86's topology branch, `_check_config`
+# above). A `chmod 000 ccrc.env` did the same on a server box whose flag file
+# was perfectly readable. Splitting it out is strictly SMALLER than the append —
+# one table entry, one function, no coupling — and it is what puts the answer on
+# the box the pointers in `ccd/ccd` and the README send operators to.
+#
+# THE SECOND SPELLING OF THE PATH IS DELIBERATE, and it is the trade D-92
+# already records for `CCRC_UNIT_DIR` (and `_check_path`'s note about
+# `WRAPPER_BIN_DIR` before it): this table is sourced under `set -u` by things
+# that are NOT `ccrc` — and `ccd`, which owns the authoritative copy, never
+# sources it at all — so it cannot reach either tool's variable, and a
+# `${…:-…}` fallback IS the second spelling with a branch in front of it.
+# `single-definition.test.ts` compares all four literals in this repository and
+# goes red on a drift, which is the mechanism the promise would otherwise be.
+#
+# FIVE PRINTED FORMS OVER THREE SEMANTIC STATES, and the last two are why this
+# is a function rather than an inline `[ -f ] && cat`:
+#   - `off (default)` and a bare `off` are different facts about the box —
+#     "nobody has decided" and "somebody decided no" — and an operator acts on
+#     them differently: one is a file to write, the other a file to edit.
+#   - `off (unparseable …)` covers the file whose first line is neither, and
+#     THAT INCLUDES A NEWLINE-LESS `on`: bash's `read` returns non-zero at
+#     EOF-before-delimiter, so `printf 'on' > …` reads as OFF. Printing a bare
+#     `off` for it would tell an operator they had chosen the mode their edit
+#     never reached. The reader stays strict (that direction is fail-safe);
+#     the surprise is paid for here, at the reporting layer, which is the right
+#     place for it.
+#   - `off (unreadable …)` is split off from unparseable because a mode problem
+#     and a bytes problem are two different mornings, and telling somebody to
+#     fix bytes that were never the problem is this file's own overloaded-seam
+#     defect. `_check_config` above draws the same line for `ccrc.env` (its
+#     `[ ! -f ]` and `[ ! -r ]` arms) — this is a coarser echo of that
+#     precedent, not a copy of it: there the two conditions get two WARN arms
+#     with two different remedies, here they share one always-PASS form,
+#     because nothing about the flag file is a defect to remedy.
+CCRC_RC_FILE="$HOME/.ccrc/remote-control"
+
+_dr_rc_state() {
+  local first="" garbled="off (unparseable — the file must hold one line reading 'on' or 'off')"
+  [ -e "$CCRC_RC_FILE" ] || { printf '%s' "off (default)"; return 0; }
+  # THE TWO GUARDS COME BEFORE THE READ, not after it, and that is what keeps
+  # the two answers apart. A chmod-000 file and an EMPTY file both make `read`
+  # fail with nothing in the variable, so a post-hoc `[ -n "$first" ]` would
+  # report an empty file — which is a bytes problem with an obvious fix — as a
+  # permissions problem. Asking first means everything below this point is a
+  # file whose bytes really were the answer.
+  if [ ! -f "$CCRC_RC_FILE" ] || [ ! -r "$CCRC_RC_FILE" ]; then
+    printf '%s' "off (unreadable — it is there and nothing could be read out of it; look at what is really there)"
+    return 0
+  fi
+  # `2>/dev/null` BEFORE the input redirect, exactly as `_rc_enabled` writes it
+  # and for the reason measured there: bash applies redirections left to right,
+  # so with the suppression written last a file the guards above did not catch
+  # prints a raw `Permission denied` — with this file's line number,
+  # unattributed — onto doctor's stderr, which this suite asserts is empty.
+  #
+  # A FAILED READ HERE IS EOF-BEFORE-DELIMITER, i.e. an empty file or a last
+  # line with no newline. Both are unparseable in the same sense: no LINE was
+  # there to read. `printf 'on' > …` is that case and is the whole reason this
+  # form exists.
+  IFS= read -r first 2>/dev/null < "$CCRC_RC_FILE" || { printf '%s' "$garbled"; return 0; }
+  case "${first//[[:space:]]/}" in
+    on)  printf '%s' "on" ;;
+    off) printf '%s' "off" ;;
+    *)   printf '%s' "$garbled" ;;
+  esac
+}
+
+# ALWAYS PASS — this check has no WARN and no FAIL, and that is a contract
+# rather than an omission. The state is a FACT about how the box is configured,
+# not a defect: `on` and `off` are both correct for the boxes that chose them,
+# and a doctor that WARNed on either would be asserting a preference it has no
+# standing for. The two degraded forms are PASSes for the same reason and one
+# more — this file's own rule is that a WARN OWES A REMEDY, and the honest
+# remedy for a garbled flag file ("write `on` or `off` into it") is already the
+# whole detail. Nothing here can make a healthy box exit 1.
+#
+# IT READS ONE FILE AND NOTHING ELSE: no `ccrc.env`, no unit files, no box role.
+# That independence is the finding this check exists for, and it is what lets
+# the answer appear on the fleet host.
+_check_rc() {
+  _dr_pass rc "$(_dr_rc_state)"
+}
+
 # ── room on the filesystem $HOME is on ────────────────────────────────────
 # Spec §5's "disk headroom (including the backup dir)". THREE things this
 # project writes land on one filesystem and all three fail unhelpfully when it
@@ -1067,7 +1185,11 @@ _check_wrappers() {
   local bin="$WRAPPER_BIN_DIR" roster="$HOME/.ccrc/accounts.json"
   # D-82: `wr_absent` is its own bucket, not a third name for `wr_hard` — see
   # `_dr_wr_present`'s own header for the class it holds and why.
-  local -a wr_hard=() wr_soft=() wr_absent=()
+  #
+  # A2-NEW (this task): `wr_upstream` is a FOURTH bucket, not a second name for
+  # `wr_absent` — see the `upstream)` case arm below for why an absent upstream
+  # binary is not the same operator instruction as an absent generated wrapper.
+  local -a wr_hard=() wr_soft=() wr_absent=() wr_upstream=()
 
   if [ ! -e "$roster" ]; then
     _dr_fail wrappers "no account roster at \$HOME/.ccrc/accounts.json, so nothing on this box says what \$HOME/.local/bin is supposed to hold" \
@@ -1285,19 +1407,46 @@ _check_wrappers() {
   local ok target wsuffix wsecrets
   for id in ${wr_ids[@]+"${wr_ids[@]}"}; do
     case "${wr_kind[$id]}" in
-      external|upstream)
-        # RECORDED, NEVER READ. Exactly one question is asked of either kind:
-        # is there an executable at the path ccd will run? An external
-        # account's content is not this tool's business (it is somebody else's
-        # launcher, possibly compiled), and the upstream account's normal shape
-        # is a binary. Anything more than existence would be inventing a
-        # contract nobody made.
+      upstream)
+        # RECORDED, NEVER READ, same as `external` below: the only question
+        # asked is whether there is an executable at the path ccd will run.
+        # The upstream account's normal shape is a binary (a ~300 MB ELF), so
+        # nothing more than existence would be inventing a contract nobody
+        # made.
         #
-        # `wr_hard`, not `wr_absent`: `ccrc wrappers` never creates an external
-        # or upstream account (D-71's own wording — it writes GENERATED
-        # wrappers only), so the roster-sync remedy is the correct one for an
-        # absent external/upstream wrapper too. Only the generated path above
-        # gets the ccrc-wrappers remedy.
+        # `wr_upstream`, NOT `wr_hard` and NOT `wr_absent` (A2-NEW): an absent
+        # upstream binary is a fresh box that has never had Claude Code
+        # installed on it at all — `ccrc wrappers` never writes this account
+        # either way (D-71: GENERATED wrappers only), so it is absent-class
+        # same as `wr_absent`'s reasoning, but the ROSTER-SYNC remedy
+        # ("make \$HOME/.ccrc/accounts.json and the wrapper agree") is
+        # actively wrong for it — there is no wrapper to write or roster
+        # entry to fix, only a binary to install, and `ccrc wrappers` would
+        # not create it even if run. A fresh VM's `ccrc doctor` used to hand
+        # the operator that sentence and the operator had nothing to do with
+        # it: the roster already says "upstream", correctly. It is its own
+        # bucket, not a fourth caller of `wr_absent`, so its FAIL line can
+        # carry a remedy that names the one thing actually missing —
+        # `install Claude Code`, below in the verdict assembly — rather than
+        # inheriting `wr_absent`'s "run: ccrc wrappers", which does not
+        # install anything either.
+        #
+        # Present-but-wrong (not a regular file, not executable) still lands
+        # in `wr_hard` regardless — `_dr_wr_present` hard-wires that arm to
+        # `wr_hard` no matter which bucket the caller names, so that class
+        # needed no change here.
+        _dr_wr_present "$id" wr_upstream || true
+        ;;
+      external)
+        # Somebody else's launcher, possibly compiled, spelling its config dir
+        # any way it likes — its content is not this tool's business, so the
+        # only question asked is the same existence probe `upstream` gets.
+        # Unlike `upstream`, there is nothing to tell an operator to INSTALL:
+        # ccrc did not write this account and does not know what a bespoke
+        # external launcher even is, so `wr_hard`'s roster-sync remedy stays
+        # correct here — "the roster is the source of truth" is the honest
+        # instruction for an account this tool never generates and never
+        # installs on anyone's behalf, absent or present-but-wrong alike.
         _dr_wr_present "$id" wr_hard || true
         ;;
       generated)
@@ -1393,8 +1542,8 @@ _check_wrappers() {
   # A hard finding and a soft one are two different requests to the operator,
   # each with its own remedy, so they get one line each and the check returns
   # the worse of the two (see this file's header, "ONE CHECK MAY ANSWER IN TWO
-  # CLASSES"). The soft findings are NOT joined onto the FAIL line: that
-  # laundered "somebody keeps a launcher the fleet does not drive" into
+  # (OR THREE) CLASSES"). The soft findings are NOT joined onto the FAIL line:
+  # that laundered "somebody keeps a launcher the fleet does not drive" into
   # "somebody broke an account", handed it the wrong remedy, and left the
   # summary counting zero warnings while warnings were on the screen.
   # D-82: `wr_absent` gets its OWN FAIL line, BEFORE `wr_hard`'s — a check may
@@ -1403,7 +1552,22 @@ _check_wrappers() {
   # the same instruction as "the roster and the wrapper disagree", and joining
   # them would either launder the absent case into a defect it is not, or hand
   # the disagreement case a remedy that fixes nothing it names.
+  #
+  # A2-NEW (this task): `wr_upstream` gets its OWN FAIL line too, and it goes
+  # FIRST — before `wr_absent`'s, before `wr_hard`'s. Ordering is not
+  # decoration here: on the box this bucket exists for (a fresh VM, roster
+  # seeded, Claude Code never installed), it is very often the ONLY finding,
+  # but when it is not, it is the most-actionable one — nothing else on the
+  # box can be meaningfully fixed before the binary ccd execs actually exists
+  # — so it leads. The FIRST sentence a fresh-VM operator reads has to be the
+  # one they can act on.
   local rc=0
+  if [ "${#wr_upstream[@]}" -gt 0 ]; then
+    _dr_fail wrappers \
+      "$(_dr_join ${wr_upstream[@]+"${wr_upstream[@]}"})" \
+      "install Claude Code so its binary lands at \$HOME/.local/bin/$upstream_id — that path is literally what ccd execs, and nothing here installs it for you; then re-run 'ccrc doctor'. If it lives elsewhere, symlink it there"
+    rc=1
+  fi
   if [ "${#wr_absent[@]}" -gt 0 ]; then
     _dr_fail wrappers \
       "$(_dr_join ${wr_absent[@]+"${wr_absent[@]}"})" \

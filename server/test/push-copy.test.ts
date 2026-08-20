@@ -79,6 +79,12 @@ function runnerFor(info: Map<string, Seeded>, pane = 'ready\n❯ \n'): Runner {
  *  can't have an ask fire underneath them. */
 const MENU_PANE = 'Which colour?\n❯ 1. Red\n  2. Blue\n  3. Green\nEnter to select\n';
 
+/** The real spinner row from `fixtures/panes/busy.txt`, inlined to match this
+ *  file's existing style (panes here are literals, not file reads). Used by
+ *  the Stage 2e Task 3 (D-102) case below: an RC-off pane renders this WHILE
+ *  a dialog is up, on the same screen. */
+const BUSY_LINE = '✳ Cerebrating… (12s · ↑ 1.2k tokens · esc to interrupt)';
+
 /**
  * Write one `<id>.hookstate.json` the way `session-hook.sh` does, with the
  * `sessionId` `seedSessions` gave the registry entry — `readHookState`'s
@@ -367,7 +373,7 @@ describe('ask notifications carry actions only where the route would accept them
   function askFixture(): {
     sent: PushPayload[];
     tick: () => Promise<void>;
-    showMenu: () => void;
+    showMenu: (text?: string) => void;
     clearMenu: () => void;
     writeAsk: (ask: unknown, state?: string) => void;
   } {
@@ -386,7 +392,7 @@ describe('ask notifications carry actions only where the route would accept them
     return {
       sent,
       tick: () => w.tick(),
-      showMenu: () => { pane = MENU_PANE; },
+      showMenu: (text: string = MENU_PANE) => { pane = text; },
       clearMenu: () => { pane = 'ready\n❯ \n'; },
       writeAsk: (ask: unknown, state?: string) => writeHookState(home, 'cc-a', ask, state),
     };
@@ -548,6 +554,22 @@ describe('ask notifications carry actions only where the route would accept them
     const ask = oneQuestion([{ label: 'Red' }, { label: 'Blue' }]);
     const sent = await raiseAsk(ask);
     expect(sent[0]!.actions).toHaveLength(2);
+  });
+
+  // Stage 2e Task 3 (D-102). Same hazard as sessionws.test.ts's twin case: an
+  // RC-off pane renders the busy spinner WHILE a dialog is painted below it —
+  // a real, expected combined screen. `detectDialogs`'s own gate asks
+  // `hasMenu`, not `paneState() === 'menu'` (the send.ts:320 idiom). Fix
+  // round 1 closed the second half: `parseDialog` (pane/dialog.ts:169) also
+  // now gates on `hasMenu` instead of vetoing on the busy marker, so the
+  // pending set really does pick this session up and the ask push fires.
+  it('D-102: a live busy spinner painted alongside a menu still raises the ask push — RC-off panes render both at once', async () => {
+    const f = askFixture();
+    await f.tick();                                  // priming: no menu
+    f.showMenu(`${BUSY_LINE}\n\n${MENU_PANE}`);
+    await f.tick();                                   // RC-off: both on screen at once
+    expect(f.sent).toHaveLength(1);
+    expect(f.sent[0]!.title).toBe('❓ Question');
   });
 });
 

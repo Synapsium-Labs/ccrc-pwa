@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=6f4960c3057dc479dad4bd4b4a9e7fb461b9b48c1a4245f5d0405a7525a3b945
+# ccrc:generated 1 sha256=d1dbe7213c34e8d37c9495636913f112e97090e68dc6b9ce3a2cb00de3aaa8ac
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
-# One tmux session per (wrapper, project): `<wrapper> --remote-control <id> --resume|--session-id <uuid>`.
+# One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
+# The RC flag is CONDITIONAL on the box, not on this file: `_rc_enabled` reads
+# `~/.ccrc/remote-control` and a box that does not say `on` spawns plain panes.
 set -uo pipefail
 
 REG="$HOME/.cc-sessions"
@@ -187,6 +189,56 @@ CCRC_ACCOUNTS_SH="$HOME/.ccrc/accounts.sh"
 # shellcheck source=/dev/null
 source "$CCRC_ACCOUNTS_SH" \
   || die "account roster unreadable: $CCRC_ACCOUNTS_SH — regenerate it from ~/.ccrc/accounts.json"
+
+# ── DOES THIS BOX DRIVE ITS SESSIONS OVER THE RC SOCKET? ──────────────────
+# The ONE spelling of the flag path in ccd. `_spawn_start` is its only reader
+# here, and THE WRITERS NOW EXIST — both of them seed-once, neither ever
+# overwrites, and each has its own reason for the value it picks:
+#   `ccrc install` (`_inst_rc`)  — seeds `off`. A fresh single-box install has
+#     made no claim on claude.ai and must not start publishing sessions there
+#     because an installer defaulted it.
+#   `deploy/deploy.sh`, agent lane — seeds `on`, in the agent branch, ORDERED
+#     BEFORE the ccd install below it. That box has run every session with
+#     `--remote-control` since before this flag existed, so the file describes
+#     it rather than deciding something new about it.
+# Their spelling of this path is their own — `ccd/ccrc` cannot source this file
+# and neither can `deploy.sh` — and `server/test/single-definition.test.ts`
+# holds all four literals (with `ccrc-doctor-checks`') equal.
+#
+# THE ORDERING IS THE LIVE FACT TO KEEP: the flag must be seeded BEFORE this
+# ccd lands on a box. Absent reads OFF, so the gap between a new ccd and an
+# unseeded box is a window in which a respawn strips `--remote-control` from a
+# live session. The standing AGENT-FIRST rule (a change under `ccd/` goes to
+# the fleet host before the server) is what would open that window, which is
+# why deploy seeds within the same run and before its own installs;
+# `agent/test/deploy-verify.test.ts` pins that order, and D-99 in the stage-2e
+# plan records what it is protecting.
+CCRC_RC_FILE="$HOME/.ccrc/remote-control"
+_rc_enabled() {   # first line 'on' => sessions spawn with --remote-control.
+  # A FILE, not an env var (HOME is ccd's only isolation boundary — see
+  # SPAWN_GATE_TRIES) and not ccrc.env (never read by ccd: it carries tokens,
+  # and the fleet host does not have one). Absent or anything-but-'on' is OFF:
+  # a garbled file must not half-enable a mode. The file is OPERATOR-OWNED —
+  # seeded once by whichever lane installed the box and never rewritten after —
+  # so an edit here survives every later install and deploy. `ccrc doctor`'s
+  # `rc` check reports what this function would decide — on EVERY box including
+  # this one, the fleet host, which has no `ccrc.env` for a check to hang off —
+  # including the cases where the strictness above surprises somebody (a
+  # newline-less `on` reads as OFF and doctor says `unparseable`, not `off`).
+  local first=""
+  [[ -f "$CCRC_RC_FILE" ]] || return 1
+  # `2>/dev/null` BEFORE the input redirect, and the order is the whole point:
+  # bash applies redirections left to right, so with the suppression written
+  # last the `<` is attempted while stderr is still the caller's, and a
+  # chmod-000 flag file prints a raw `Permission denied` — with ccd's own line
+  # number, unattributed — onto `_spawn_start`'s stderr on EVERY spawn. That
+  # function's header takes stray output seriously ("a stray line here would
+  # land in whatever `ws-add`/`start` was printing"), and this is the fleet's
+  # supervisor. The return value was always right; the suppression was not
+  # suppressing. `ccd-rc-flag.test.ts` pins the silence, not just the verdict.
+  IFS= read -r first 2>/dev/null < "$CCRC_RC_FILE" || return 1
+  [[ "${first//[[:space:]]/}" == "on" ]]
+}
 
 _lane_enabled() { [[ ! -f "$REG/$1-disabled" ]]; }   # operator kill-switch: touch/rm $REG/<w>-disabled
 # An account is a legal AUTOMATIC destination iff its wrapper exists and its
@@ -2133,25 +2185,60 @@ EOF
 cmd_version() {   # what THIS box runs, per the deploy's own stamp — never a guess.
   # ~/.ccrc/build.json is written by deploy.sh's stamp_build (temp + rename,
   # so no torn reads). No stamp = a dev checkout or a box no deploy touched:
-  # "unstamped" at exit 0 is the honest ANSWER there, not an error. A stamp
-  # that exists but does not parse is different — something wrote garbage
-  # where the deploy writes facts — and that refuses loudly instead of
-  # printing a version nobody measured.
+  # "unstamped" at exit 0 is the honest ANSWER there, not an error. Everything
+  # else is a genuine fault, and each now gets ITS OWN sentence — the same
+  # condition split `ccd/ccrc`'s `_box_build_fields` makes (that function's
+  # own header gives the full rationale). A MISSING DEPENDENCY (python3 not
+  # on PATH), a WRONG SHAPE (a directory sitting where the stamp belongs), a
+  # PARSE FAILURE, a stamp UNREADABLE FOR PERMISSIONS, and a field that does
+  # not TYPE-CHECK (`dirty` as a string, say) are conditions an operator acts
+  # on completely differently — `apt install python3` vs. redeploy vs.
+  # chmod/chown vs. "something wrote garbage" — and used to collapse into one
+  # "build stamp unreadable", sending every one of them toward whichever
+  # remedy happened to be wrong.
   [[ $# -eq 0 ]] || die "usage: ccd version"
   local stamp="$HOME/.ccrc/build.json"
-  if [[ ! -f "$stamp" ]]; then
+  if [[ ! -e "$stamp" ]]; then
     echo "ccd unstamped (no ~/.ccrc/build.json — not deployed by deploy.sh)"
     return 0
   fi
-  python3 - "$stamp" <<'PY' || die "build stamp unreadable: $stamp"
+  # Exists but is not a plain file (e.g. a directory left by a half-finished
+  # rsync/mkdir race) — a SHAPE problem, not an absence, and must not be read
+  # as "unstamped" (the identical split `_box_build_fields` makes, ccd/ccrc).
+  [[ -f "$stamp" ]] || die "build stamp unreadable: $stamp (not a regular file)"
+  command -v python3 >/dev/null 2>&1 \
+    || die "python3 is required by 'ccd version' but is not on PATH"
+  local out rc=0
+  out="$(python3 - "$stamp" <<'PY'
 import json, sys
 try:
-    o = json.load(open(sys.argv[1]))
+    data = open(sys.argv[1]).read()
+except Exception:
+    sys.exit(2)   # exists, is a regular file, still unreadable -> permissions
+try:
+    o = json.loads(data)
+except Exception:
+    sys.exit(3)   # not valid JSON
+try:
     sha, ref, built, dirty = o["sha"], o["ref"], o["builtAt"], o["dirty"]
 except Exception:
-    sys.exit(1)
+    sys.exit(4)   # valid JSON, missing a required field
+if not isinstance(dirty, bool):
+    sys.exit(5)   # dirty present but not a boolean — a string like "false"
+                   # is truthy in Python, and would otherwise print "dirty"
+                   # for a stamp that says the opposite (ccrc:240-245).
 print(f"ccd {sha} ({ref}, built {built}{', dirty' if dirty else ''})")
 PY
+)" || rc=$?
+  case "$rc" in
+    0) ;;
+    2) die "build stamp unreadable: $stamp (permission denied)" ;;
+    3) die "build stamp unreadable: $stamp (not valid JSON)" ;;
+    4) die "build stamp unreadable: $stamp (missing a required field)" ;;
+    5) die "build stamp unreadable: $stamp (dirty is not a boolean)" ;;
+    *) die "build stamp unreadable: $stamp" ;;
+  esac
+  echo "$out"
 }
 
 cmd_ws_hold() {   # ccd ws-hold --session <id> --reason <text> — claim a
@@ -7899,7 +7986,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # single job, and the callers decide when. Writes nothing to STDOUT either:
   # callers read the variable, and a stray line here would land in whatever
   # `ws-add`/`start` was printing.
-  local id="$1" mode="$2" wrapper workdir uuid tname sidflag
+  local id="$1" mode="$2" wrapper workdir uuid tname sidflag rcflag
   # Set before anything that can fail, so no path out of this function leaves a
   # PREVIOUS spawn's answer standing. The failure direction is stated at the
   # bottom of this function and is the same one: unknown degrades to 0.
@@ -7913,6 +8000,15 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   lastswap=$(_reg_get "$id" lastswap)
   [[ "$lastswap" =~ ^[0-9]+$ && $(( $(date +%s) - lastswap )) -lt 300 ]] && fromswap=1
   if [[ "$mode" == "resume" ]]; then sidflag="--resume '$uuid'"; else sidflag="--session-id '$uuid'"; fi
+  # WHETHER THIS BOX DRIVES ITS SESSIONS OVER THE RC SOCKET — read ONCE, here,
+  # and used by BOTH spawn lines below (the primary and the --session-id retry).
+  # Once, not per line, so the two can never disagree: a resume that died and
+  # retried inside the same call must not come back a different KIND of pane
+  # than the one it was replacing. Empty collapses out of the composed command
+  # string exactly as `$sidflag`'s alternatives do — the flag is absent, not
+  # passed empty, and `--remote-control` with an empty operand is not a thing
+  # the wrapper accepts.
+  rcflag=""; _rc_enabled && rcflag="--remote-control '$id'"
   # COLORTERM=truecolor so Claude Code emits 24-bit colour (it otherwise quantises
   # to 256, collapsing its palette). tmux passes it through to the terminal-drawer
   # xterm once the server has the RGB terminal-feature (see hardening/tmux.conf).
@@ -7920,7 +8016,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # can create the server, and it is AFTER everything that can `die`, so a spawn
   # that is going to abort never leaves a scope behind.
   _tmux_new_session -d -s "$tname" -x 220 -y 50 \
-    "cd '$workdir' && exec env COLORTERM=truecolor '$WRAPPER_DIR/$wrapper' --remote-control '$id' $sidflag --dangerously-skip-permissions"
+    "cd '$workdir' && exec env COLORTERM=truecolor '$WRAPPER_DIR/$wrapper' $rcflag $sidflag --dangerously-skip-permissions"
   # THE PRICE OF A MONOTONE `started`, PAID AUTOMATICALLY INSTEAD OF BY HAND.
   # Nothing in ccd ever clears the field: there is no registry delete/unset
   # helper at all — `ccd-reg-claim.test.ts` greps this file for one and pins
@@ -7955,8 +8051,13 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
     sleep "$SPAWN_RESUME_SETTLE_S"
     if ! tmux has-session -t "$tname" 2>/dev/null; then
       echo "ccd: $id: --resume '$uuid' left no session; retrying once with --session-id" >&2
+      # `$rcflag`, the SAME value the primary line above used — computed once,
+      # before either spawn, so the retry cannot spawn a differently-shaped
+      # pane than the attempt it is replacing. (This is the copy that gets
+      # forgotten: `ccd-spawn-split.test.ts` pins this line's argv on its own,
+      # not merely the pair.)
       _tmux_new_session -d -s "$tname" -x 220 -y 50 \
-        "cd '$workdir' && exec env COLORTERM=truecolor '$WRAPPER_DIR/$wrapper' --remote-control '$id' --session-id '$uuid' --dangerously-skip-permissions"
+        "cd '$workdir' && exec env COLORTERM=truecolor '$WRAPPER_DIR/$wrapper' $rcflag --session-id '$uuid' --dangerously-skip-permissions"
     fi
   fi
   # Make this window's terminal title = the tmux session name ("cc-<id>"), so a frontmost-window-
@@ -8026,8 +8127,10 @@ _spawn_settle() {   # id fromswap — the BLOCKING half: gate loop, fact, warnin
 
 _spawn() {   # id mode(new|resume) — the composition, so cmd_swap and friends are unchanged
   # NOTE: v2.1.177 does not print the claude.ai URL to the pane or debug log, so there is no
-  # URL to capture. The session is discovered on claude.ai by its name, which == the id
-  # (we pass `--remote-control '$id'`).
+  # URL to capture. On a box whose `~/.ccrc/remote-control` says `on` we pass
+  # `--remote-control '$id'` (see `_rc_enabled`), and there the session is discovered on
+  # claude.ai by its name, which == the id. Where the flag is off there is no claude.ai
+  # session to discover at all — the pane is an ordinary local TUI.
   #
   # A CALLER THAT WANTS THE F8-SAFE ORDERING DOES NOT USE THIS: it calls the two halves and puts
   # `_reg_claim` (and its `_ws_supervise`, where it has one) between them.

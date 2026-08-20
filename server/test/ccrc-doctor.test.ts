@@ -414,6 +414,17 @@ function writeCcrcEnv(home: string, text: string): void {
   writeFileSync(join(home, '.ccrc', 'ccrc.env'), text);
 }
 
+/** `~/.ccrc/remote-control` — the per-box switch `ccd`'s `_rc_enabled` reads to
+ *  decide whether a session spawns with `--remote-control` (D-99). Written as
+ *  TEXT, and with no newline added for you, because the trailing newline IS the
+ *  contract: `read` returns non-zero at EOF-before-delimiter, so `'on'` and
+ *  `'on\n'` are two different files and a helper that quietly normalised them
+ *  would make the case doctor's third state exists for untestable. */
+function writeRcFlag(home: string, text: string): void {
+  mkdirSync(join(home, '.ccrc'), { recursive: true });
+  writeFileSync(join(home, '.ccrc', 'remote-control'), text);
+}
+
 /** `systemctl --user is-active <unit>` answers from `<home>/fixture-unit-<unit>`;
  *  with the file absent it answers `inactive` and exits 3, exactly as systemd
  *  does for a unit that is not running. Any other argv is a loud failure — a
@@ -1327,6 +1338,174 @@ describe('ccrc doctor: config', () => {
   });
 });
 
+// ── what this box's sessions are spawned AS ───────────────────────────────
+// Stage 2e, Task 2 (fix round 1). `~/.ccrc/remote-control` is the per-box
+// switch `ccd`'s `_rc_enabled` reads on every spawn (D-99), and `rc` is a check
+// OF ITS OWN in the table. It was first shipped as an append to
+// `_check_config`'s two PASS details, which coupled a fact about SPAWN SHAPE to
+// the health of an unrelated file: the readout vanished on four arms — the
+// fleet-role SKIP and all three `ccrc.env` WARNs — so the reference fleet host,
+// the one box in the topology that actually runs `on`, printed nothing about it
+// while three shipped pointers told operators to look there. A standalone check
+// is strictly smaller AND correct: it reads one file and answers about one
+// thing.
+//
+// ALWAYS PASS, never WARN or FAIL. The state is a FACT, not a defect — both
+// values are legitimate states for a box to be in, and a doctor that WARNed
+// about `on` (or about `off`) would be asserting a preference it has no
+// standing for. Even the two degraded forms are PASSes: they say what ccd will
+// do, which is the question. This file's remedy contract makes that concrete —
+// a WARN owes a remedy, and there is no remedy for "your box is configured the
+// way you configured it".
+//
+// FIVE PRINTED FORMS OVER THREE SEMANTIC STATES, and the two extra forms are
+// the point of having a helper at all:
+//   on                        — this box publishes its sessions to claude.ai
+//   off                       — a deliberate off, written by somebody
+//   off (default)             — no file; ccd reads absent as off
+//   off (unparseable …)       — a file whose first line is neither, INCLUDING
+//                               the newline-less `on` that `read` rejects at
+//                               EOF-before-delimiter. Reporting that as a
+//                               deliberate `off` tells an operator they chose
+//                               a mode when their edit simply did not take.
+//   off (unreadable …)        — the file is there and nothing came out of it.
+//                               A mode problem and a bytes problem are two
+//                               different mornings; `_check_config` splits the
+//                               same pair for `ccrc.env` two screens up.
+//
+// MUTATIONS MEASURED (applied to the shipped helper, run, reverted): recorded
+// beside the implementation in this task's report.
+describe('ccrc doctor: rc — the state this box spawns its sessions in', () => {
+  const rcLine = (home: string): string => lineFor(runDoctor(home).stdout, 'rc') ?? '';
+
+  it('is a check of its own, and it answers on a FLEET-ROLE box — where config SKIPs', () => {
+    // THE FINDING THIS CHECK EXISTS FOR (fix round 1, Important). The state was
+    // first appended to `_check_config`'s two PASS details, which made a fact
+    // about SPAWN SHAPE conditional on the health of `ccrc.env` — a file the
+    // fleet host does not have at all (D-86's topology branch SKIPs it). So on
+    // the reference fleet, the ONE box that runs `on`, doctor said nothing
+    // about RC while `ccd`, `ccrc-doctor-checks` and the README all pointed
+    // operators at a line that was not printed there.
+    //
+    // The fixture is that box: agent unit, no `ccrc.env`, flag `on`.
+    const home = healthy('ccrc-doctor-rc-fleetrole-');
+    rmSync(join(home, '.ccrc', 'ccrc.env'), { force: true });
+    rmSync(join(home, '.config', 'systemd', 'user', 'ccrc.service'), { force: true });
+    writeUnitFile(home, 'ccrc-agent.service');
+    writeFileSync(join(home, 'fixture-unit-ccrc-agent.service'), 'active\n');
+    writeRcFlag(home, 'on\n');
+    const r = runDoctor(home);
+    expect(r.stdout, r.stdout).toMatch(/^PASS rc: on$/m);
+    // …and `config` still SKIPs on that box, unchanged: the two checks are
+    // independent now, which is the whole point.
+    expect(r.stdout).toMatch(/^SKIP config: /m);
+    expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) config: /m);
+  });
+
+  it('answers when ccrc.env is UNREADABLE too — the two files are unrelated', () => {
+    // The other three silent arms were the `ccrc.env` WARNs. A chmod-000
+    // `ccrc.env` says nothing whatsoever about how sessions spawn, and it used
+    // to take the RC readout down with it.
+    const home = healthy('ccrc-doctor-rc-envwarn-');
+    rmSync(join(home, '.ccrc', 'ccrc.env'), { force: true });
+    writeRcFlag(home, 'on\n');
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^WARN config: .*defaults apply/m);
+    expect(r.stdout).toMatch(/^PASS rc: on$/m);
+  });
+
+  it('says "off (default)" on a box with no flag file — absent is what ccd reads as off', () => {
+    const home = healthy('ccrc-doctor-rc-absent-');
+    expect(rcLine(home)).toBe('PASS rc: off (default)');
+  });
+
+  it('says "on" for a box that drives its sessions over the RC socket', () => {
+    const home = healthy('ccrc-doctor-rc-on-');
+    writeRcFlag(home, 'on\n');
+    expect(rcLine(home)).toBe('PASS rc: on');
+  });
+
+  it('says "off" for a deliberate off, and does not dress it as the default', () => {
+    // The two are different facts about the box — "nobody has decided" and
+    // "somebody decided no" — and an operator reading a transcript acts on
+    // them differently (one is a file to write, the other a file to edit).
+    const home = healthy('ccrc-doctor-rc-off-');
+    writeRcFlag(home, 'off\n');
+    expect(rcLine(home)).toBe('PASS rc: off');
+  });
+
+  it('says "unparseable" for a first line that is neither — never a deliberate off', () => {
+    const home = healthy('ccrc-doctor-rc-garbage-');
+    writeRcFlag(home, 'yes please\n');
+    expect(rcLine(home)).toBe(
+      "PASS rc: off (unparseable — the file must hold one line reading 'on' or 'off')");
+  });
+
+  it('says "unparseable" for a newline-less `on` — the operator edit that did not take', () => {
+    // THE CASE THE THIRD FORM EXISTS FOR, and it is not hypothetical: `printf
+    // 'on' > ~/.ccrc/remote-control` is what a person types. `read` returns
+    // non-zero at EOF-before-delimiter, so ccd reads those bytes as OFF, and a
+    // doctor that printed a bare `off` would be telling the operator they had
+    // chosen the mode their edit failed to reach. Both writers in this repo
+    // end the line for exactly this reason.
+    const home = healthy('ccrc-doctor-rc-nonewline-');
+    writeRcFlag(home, 'on');
+    expect(rcLine(home)).toMatch(/^PASS rc: off \(unparseable — /);
+  });
+
+  it('says "unparseable" for an EMPTY file — the other side of the D-100 split', () => {
+    // The row D-100's whole argument turns on (review Minor 5): an empty file
+    // is READABLE, so it must not report as a permissions problem. Both sides
+    // of the split are asserted now — this one and the unreadable case below —
+    // because a deviation that exists to keep two conditions apart is only
+    // held by tests that pin BOTH of them.
+    const home = healthy('ccrc-doctor-rc-empty-');
+    writeRcFlag(home, '');
+    expect(rcLine(home)).toMatch(/^PASS rc: off \(unparseable — /);
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'says "unreadable" for a flag file it cannot open — a mode problem is not a bytes problem', () => {
+      const home = healthy('ccrc-doctor-rc-unreadable-');
+      writeRcFlag(home, 'on\n');
+      chmodSync(join(home, '.ccrc', 'remote-control'), 0o000);
+      const r = runDoctor(home);
+      expect(lineFor(r.stdout, 'rc') ?? '').toMatch(/^PASS rc: off \(unreadable — /);
+      // …and bash does not diagnose it on stderr, for `_rc_enabled`'s own
+      // measured reason: the redirect is attempted with stderr already
+      // suppressed, not after.
+      expect(r.stderr).toBe('');
+    });
+
+  it('never WARNs and never FAILs — the state is a fact, and a WARN owes a remedy', () => {
+    // Every one of the five forms, including the two degraded ones, through the
+    // PASS class. A check that WARNed here would be asserting a preference
+    // about how somebody should run their box, and would owe a remedy line
+    // this file's contract has no sentence for.
+    for (const [what, bytes] of [
+      ['on', 'on\n'], ['off', 'off\n'], ['garbage', 'zzz\n'], ['empty', ''],
+    ] as const) {
+      const home = healthy(`ccrc-doctor-rc-alwayspass-${what}-`);
+      writeRcFlag(home, bytes);
+      const out = runDoctor(home).stdout;
+      expect(out, what).toMatch(/^PASS rc: /m);
+      expect(out, what).not.toMatch(/^(WARN|FAIL) rc: /m);
+    }
+  });
+
+  it('leaves `config` carrying nothing about it — the fact has one home', () => {
+    // The append is GONE, both arms. Two surfaces reporting one fact is how
+    // they come to disagree, and `_check_config`'s detail is a statement about
+    // `ccrc.env` again.
+    const home = healthy('ccrc-doctor-rc-config-clean-');
+    writeRcFlag(home, 'on\n');
+    const out = runDoctor(home).stdout;
+    const config = lineFor(out, 'config') ?? '';
+    expect(config).toMatch(/^PASS config: /);
+    expect(config).not.toContain('remote-control');
+  });
+});
+
 // ── room on the filesystem $HOME is on ────────────────────────────────────
 // Stage 2d, Task 2. Spec §5 asks for "disk headroom (including the backup
 // dir)": a ccd workspace is a full clone, `~/.ccrc/coord.db` is a WAL database
@@ -1879,31 +2058,92 @@ describe('ccrc doctor: wrappers', () => {
   });
 
   // ── the upstream account: the same presence triad ───────────────────────
-  it('fails when the upstream account has no executable at all', () => {
+  // A2-NEW: the absent-class arms of this triad (no file at all, a dangling
+  // symlink) route to `wr_upstream`, not `wr_hard` — a fresh box that has
+  // never had Claude Code installed is told to install it, not to reconcile a
+  // roster that is already correct. The DETAIL sentence is unchanged (same
+  // `_dr_wr_present` wording as the generated/external arms); only the
+  // REMEDY moves. Present-but-wrong (not executable) is the one arm that
+  // stays `wr_hard` — `_dr_wr_present` hard-wires that arm regardless of
+  // which bucket the caller names, so a file on disk that disagrees is still
+  // a roster/wrapper disagreement, not an absent binary.
+  it('fails when the upstream account has no executable at all — told to install it, not sync the roster (A2-NEW)', () => {
     const home = healthy('ccrc-doctor-wrappers-up-missing-');
     rmSync(join(binDir(home), 'claude'), { force: true });
     const r = runDoctor(home);
-    expect(r.stdout).toMatch(/FAIL wrappers: claude has no executable at \$HOME\/\.local\/bin\/claude/);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL wrappers: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toMatch(/claude has no executable at \$HOME\/\.local\/bin\/claude/);
+    // MEASURED RED (before A2-NEW's split): the remedy here was the generic
+    // "the roster is the source of truth … 'ccrc adopt --out /tmp/accounts.json'"
+    // sentence — the wrong instruction for a binary nothing on disk has ever
+    // tried to be, and one a fresh-VM operator cannot act on.
+    expect(lines[i + 1]).toMatch(/install Claude Code/);
+    expect(lines[i + 1]).not.toMatch(/ccrc adopt/);
     expect(r.code).toBe(1);
   });
 
-  it('fails when the upstream account is a symlink to a path that does not exist', () => {
+  it('fails when the upstream account is a symlink to a path that does not exist — same install remedy (A2-NEW)', () => {
     const home = healthy('ccrc-doctor-wrappers-up-dangling-');
     rmSync(join(binDir(home), 'claude'), { force: true });
     symlinkSync(join(home, '.local', 'share', 'claude', 'versions', 'gone'), join(binDir(home), 'claude'));
     const r = runDoctor(home);
     // The measured shape of a real upstream account is exactly this symlink,
     // pointing at a versions/ directory an update can remove.
-    expect(r.stdout).toMatch(/FAIL wrappers: claude's \$HOME\/\.local\/bin\/claude is a symlink to a path that does not exist/);
-    expect(r.stdout).not.toMatch(/claude has no executable/);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL wrappers: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toMatch(/claude's \$HOME\/\.local\/bin\/claude is a symlink to a path that does not exist/);
+    expect(lines[i]).not.toMatch(/claude has no executable/);
+    expect(lines[i + 1]).toMatch(/install Claude Code/);
+    expect(lines[i + 1]).not.toMatch(/ccrc adopt/);
     expect(r.code).toBe(1);
   });
 
-  it('fails when the upstream account is present but not executable', () => {
+  it('fails when the upstream account is present but not executable — stays the roster-sync remedy', () => {
+    // The DELIBERATE asymmetry, pinned from the other side: present-but-wrong
+    // is a file on disk that disagrees, which `_dr_wr_present` hard-wires to
+    // `wr_hard` no matter which bucket the caller names — a `chmod` is not an
+    // install, so this one keeps the OLD remedy.
     const home = healthy('ccrc-doctor-wrappers-up-noexec-');
     chmodSync(join(binDir(home), 'claude'), 0o644);
     const r = runDoctor(home);
-    expect(r.stdout).toMatch(/FAIL wrappers: claude's \$HOME\/\.local\/bin\/claude is not executable/);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL wrappers: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toMatch(/claude's \$HOME\/\.local\/bin\/claude is not executable/);
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: the roster is the source of truth/);
+    expect(lines[i + 1]).not.toMatch(/install Claude Code/);
+    expect(r.code).toBe(1);
+  });
+
+  it('both buckets in one run: an absent upstream binary and a disagreeing generated wrapper — two FAIL lines, distinct remedies, upstream first (A2-NEW)', () => {
+    const home = healthy('ccrc-doctor-wrappers-upstream-and-hard-');
+    // claude: upstream, declared, nothing on disk at all — the wr_upstream class.
+    rmSync(join(binDir(home), 'claude'), { force: true });
+    // acct-a: generated, present, but its wrapper's CLAUDE_CONFIG_DIR disagrees
+    // with the roster's configDirSuffix — the wr_hard (disagreement) class.
+    writeWrapper(home, 'acct-a', { cfgDir: '.somewhere-else' });
+    writeRoster(home, [
+      UPSTREAM,
+      { id: 'acct-a', configDirSuffix: '.acct-a', exec: { kind: 'generated' } },
+    ]);
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const failIdx = lines.reduce<number[]>((acc, l, idx) => {
+      if (l.startsWith('FAIL wrappers: ')) acc.push(idx);
+      return acc;
+    }, []);
+    expect(failIdx.length, r.stdout).toBe(2);
+    const [upstreamIdx, hardIdx] = failIdx;
+    // The upstream line comes FIRST — the verdict assembly's own ordering,
+    // most-actionable leads.
+    expect(lines[upstreamIdx]).toMatch(/claude has no executable at \$HOME\/\.local\/bin\/claude/);
+    expect(lines[upstreamIdx + 1]).toMatch(/install Claude Code/);
+    expect(lines[hardIdx]).toContain('acct-a');
+    expect(lines[hardIdx]).toMatch(/\.somewhere-else.*\.acct-a/);
+    expect(lines[hardIdx + 1]).toMatch(/^ {2}remedy: the roster is the source of truth/);
     expect(r.code).toBe(1);
   });
 

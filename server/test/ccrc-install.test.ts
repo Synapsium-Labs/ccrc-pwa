@@ -220,8 +220,15 @@ export function installFixtureTree(home: string, sub = 'checkout'): string {
  *  `node`, `tmux`, `jq`, `python3`, `flock` and `timeout` are NOT stubbed out
  *  of existence the way the doctor suite stubs them: this fixture's PATH keeps
  *  the real system directories, because the verb runs `node`, `jq` and `rsync`
- *  for real. `df` is the one exception — see below. */
-function healthyDoctorBox(home: string): void {
+ *  for real. `df` is the one exception — see below.
+ *
+ *  `opts.upstream = false` (A2-NEW) builds the box WITHOUT planting the
+ *  upstream binary below — the state the 2d fixtures hid: a truly fresh VM,
+ *  where `bash install.sh` has seeded the default roster's one `upstream`
+ *  account but nothing has ever installed Claude Code. Every other stub still
+ *  lands, because the point is to isolate this ONE absence, not to also break
+ *  gh/curl/df/git and drown the assertion in unrelated FAILs. */
+function healthyDoctorBox(home: string, opts: { upstream?: boolean } = {}): void {
   const d = join(home, 'doctor-stubs');
   mkdirSync(d, { recursive: true });
   const stub = (name: string, body: string): void =>
@@ -280,9 +287,17 @@ function healthyDoctorBox(home: string): void {
   // The upstream account's binary, which the roster this verb seeds declares
   // and `_check_wrappers` looks for. A few bytes of ELF prove "not a script"
   // without the real ~300 MB (ccrc-doctor.test.ts's `writeBinary`).
+  //
+  // `mkdir` runs UNCONDITIONALLY (A2-NEW): `~/.local/bin` itself is not what
+  // `opts.upstream = false` is testing the absence of — it is the shipped
+  // stubs' own directory (gh/curl/df above already live there by the time
+  // this line runs), and the doctor-side "no $HOME/.local/bin at all" FAIL is
+  // a different check with its own test elsewhere in this suite.
   mkdirSync(join(home, '.local', 'bin'), { recursive: true });
-  writeFileSync(join(home, '.local', 'bin', 'claude'),
-    '\x7fELF\x02\x01\x01\x00not-a-real-binary-just-a-fixture-marker', { mode: 0o755 });
+  if (opts.upstream ?? true) {
+    writeFileSync(join(home, '.local', 'bin', 'claude'),
+      '\x7fELF\x02\x01\x01\x00not-a-real-binary-just-a-fixture-marker', { mode: 0o755 });
+  }
 }
 
 /** The names `healthyDoctorBox` and the runner between them put in
@@ -298,6 +313,18 @@ function freshBox(prefix: string): string {
   const home = mkTmp(prefix);
   installFixtureTree(home);
   healthyDoctorBox(home);
+  return home;
+}
+
+/** The e2e the 2d fixtures hid (A2-NEW): `freshBox` above always plants the
+ *  fake upstream binary, so no test in this file ever ran the FULL `ccrc
+ *  install` transcript against the box a real fresh VM actually starts as —
+ *  roster seeded, Claude Code never installed. Everything else is identical
+ *  to `freshBox`; only the one binary is missing. */
+function freshBoxNoUpstream(prefix: string): string {
+  const home = mkTmp(prefix);
+  installFixtureTree(home);
+  healthyDoctorBox(home, { upstream: false });
   return home;
 }
 
@@ -866,6 +893,30 @@ describe('ccrc install: a fresh box', () => {
     expect(r.stdout).toMatch(/^install: ccrc\.env: written \(localhost, local fleet mode\)$/m);
   });
 
+  it("seeds the remote-control flag OFF — one line, and the trailing newline its reader requires", () => {
+    // Stage 2e, Task 2. THE ASSERTION IS ON THE BYTES, and that is the whole
+    // point of it: `ccd`'s `_rc_enabled` reads this file with
+    // `IFS= read -r first < "$CCRC_RC_FILE"`, and bash's `read` returns
+    // NON-ZERO at EOF-before-delimiter — so `printf 'on' > file` (no newline)
+    // reads as OFF. The direction is fail-safe and deliberately left that way
+    // (D-99), which makes the trailing newline this writer's obligation rather
+    // than the reader's problem. A `toContain('off')` would pass with the
+    // newline dropped, i.e. against a writer that produces a file whose only
+    // honest reading is "unparseable".
+    //
+    // OFF on a FRESH box, not on: `--remote-control` publishes a session to
+    // claude.ai, and a box nobody asked that of must not start doing it
+    // because an installer defaulted it. The reference fleet gets `on` from
+    // the other lane (deploy.sh), where the box's existing behaviour is the
+    // reason.
+    const home = freshBox('ccrc-install-fresh-rc-');
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(read(dotCcrc(home, 'remote-control'))).toBe('off\n');
+    expect(r.stdout).toMatch(
+      /^install: remote-control: off \(fresh installs default off — edit ~\/\.ccrc\/remote-control to 'on' for claude\.ai discoverability\)$/m);
+  });
+
   it('names the box and the tree — the two things it measured — before it changes anything', () => {
     // The two inputs every step is computed from. A run under the wrong HOME
     // (sudo) or out of the wrong tree (a stale `~/ccrc` rather than the
@@ -956,6 +1007,30 @@ describe('ccrc install: the files the operator owns', () => {
     // run kept that file, and nothing in the run established otherwise: a
     // transcript that claimed it would be describing a box nobody has.
     expect(r.stdout).not.toMatch(/local fleet mode|localhost/);
+  });
+
+  it('keeps a remote-control flag the box already had, byte for byte, on every re-run', () => {
+    // The THIRD file on the user-owned side of `deploy.sh:196-206`'s rule, and
+    // the one whose overwrite is loudest: this flag decides what every session
+    // on the box is SPAWNED AS, so a step that rewrote it would change the
+    // shape of ~11 live panes at their next respawn — the exact outage D-99
+    // records and the reason Task 1's ccd was deploy-blocked until this step
+    // existed.
+    //
+    // TWO RUNS, because "seed once" and "never overwrite" are two claims and
+    // only the second one is about a box that has already been installed. The
+    // bytes are compared whole (not "contains on") for `_inst_env`'s reason:
+    // an operator's file is theirs, including the newline they ended it with.
+    const home = freshBox('ccrc-install-kept-rc-');
+    preexisting(home, 'remote-control', 'on\n');
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(read(dotCcrc(home, 'remote-control'))).toBe('on\n');
+    expect(r.stdout).toMatch(/^install: remote-control: kept \(operator-owned\)$/m);
+    const again = runInstall(home);
+    expect(again.code, again.stderr).toBe(0);
+    expect(read(dotCcrc(home, 'remote-control'))).toBe('on\n');
+    expect(again.stdout).toMatch(/^install: remote-control: kept \(operator-owned\)$/m);
   });
 });
 
@@ -1383,6 +1458,11 @@ describe('ccrc install: the order is stated in one place', () => {
       '_inst_roster',
       '_inst_accounts_sh',
       '_inst_env',
+      // Stage 2e, Task 2. Beside the other two seed-once steps and BEFORE the
+      // tree: nothing later in this sequence reads the flag, so its position
+      // is a grouping rather than a dependency — the three files an operator
+      // owns are seeded together, and the transcript reads that way too.
+      '_inst_rc',
       '_inst_tree',
       '_inst_bins',
       '_inst_files',
@@ -2028,6 +2108,37 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     // reported it could not (fix round 1, Minor 1).
     expect(r.stdout).toMatch(/^install: done — converged with 1 degraded step \(linger\)$/m);
     expect(r.stdout).not.toMatch(/^install: done — every step above converged$/m);
+  });
+
+  it('a fresh VM with no Claude Code installed is told to install it, not to edit its roster (A2-NEW)', () => {
+    // The e2e the 2d fixtures hid: `freshBox` always planted the fake upstream
+    // binary, so no test in this file ever ran the FULL `ccrc install`
+    // transcript against the box a real fresh VM actually is — `bash
+    // install.sh` seeded the default roster (one `upstream` account,
+    // `claude`), Claude Code was never installed, and the closing `ccrc
+    // doctor` is the FIRST thing that measures the gap. The first sentence a
+    // fresh operator reads has to be actionable.
+    const home = freshBoxNoUpstream('ccrc-install-no-claude-');
+    const r = runInstall(home);
+    expect(r.code).toBe(1);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL wrappers: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toMatch(/claude has no executable at \$HOME\/\.local\/bin\/claude/);
+    // MEASURED RED (before A2-NEW): this remedy read "the roster is the
+    // source of truth … 'ccrc adopt --out /tmp/accounts.json'" — the
+    // roster-sync remedy, which cannot fix an absent binary and sends a
+    // fresh-VM operator looking at the wrong file.
+    expect(lines[i + 1]).toMatch(/install Claude Code/);
+    expect(lines[i + 1]).not.toMatch(/ccrc adopt/);
+    // …and every install step above still converged clean — `_inst_wrappers`
+    // only writes GENERATED accounts, the default roster has none, so there
+    // is nothing for that step to degrade on. This is doctor's OWN verdict,
+    // run as the verb's last word, over an install that otherwise finished:
+    // the FIRST sentence a fresh operator reads is actionable precisely
+    // because it is not buried under an unrelated step failure.
+    expect(r.stdout).toMatch(/^install: done — every step above converged$/m);
+    expect(r.stdout).not.toMatch(/degraded/);
   });
 });
 

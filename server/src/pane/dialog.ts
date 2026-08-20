@@ -3,6 +3,7 @@ import type { Dialog } from '../../../shared/api.js';
 
 const BUSY_RE = /esc to interrupt/;
 const MENU_RE = /Enter to (confirm|select)/;
+const SGR = /\x1b\[[0-9;]*m/g; // any ANSI colour/attr code — same idiom as inject/send.ts:76
 const MULTISELECT_RE = /Space to select/;
 /** A numbered menu option line, optionally carrying the ❯ selection marker. */
 const OPTION_RE = /^\s*(❯)?\s*(\d+)\.\s+(.+)$/;
@@ -19,12 +20,28 @@ export type PaneState = 'busy' | 'prompt' | 'menu' | 'other';
 /**
  * Classify a captured pane. Order matters: busy overrides everything; menu is
  * checked before prompt because menus also use the ❯ marker on the selected row.
+ *
+ * Retained as the documented pane classifier (named in two shipped specs) and
+ * for its own contract suite (`dialog.test.ts`), but has NO production caller
+ * as of D-102: `parseDialog` and both display-path call sites (`sessionws.ts`,
+ * `watch.ts`) now gate on `hasMenu` directly, precisely because this
+ * function's busy-first ordering is wrong for them — see `hasMenu`'s own
+ * docstring below for which three classes of caller that ordering fails, and
+ * why. The consumers this docstring's ordering is load-bearing for today are
+ * tests, not production code.
  */
 /**
  * Is a menu on screen? Deliberately independent of the busy check, because
- * callers that must not type into a menu (sendPrompt) cannot rely on
- * `paneState`: BUSY_RE tests the WHOLE pane, so one "esc to interrupt" left in
- * scrollback classifies a menu pane as busy and the menu branch never runs.
+ * `paneState` cannot serve any of this function's three consumer classes:
+ * BUSY_RE tests the WHOLE pane, so one "esc to interrupt" left in scrollback
+ * classifies a menu pane as busy, and — depending on which way the caller
+ * needs that answer to be wrong — either outcome is a bug. Callers that must
+ * not TYPE into a menu (`inject/send.ts`'s `sendPrompt`/`clearBox`) cannot
+ * treat a false 'busy' as safe-to-type. Callers that must not MISS a menu
+ * (`sessionws.ts`'s `checkDialog`, `watch.ts`'s `detectDialogs` — the display
+ * path) cannot treat it as safe-to-suppress. And `parseDialog` itself
+ * (`:169` below) cannot let it veto a parse of a dialog that is genuinely on
+ * screen, busy marker or not (D-102).
  */
 export function hasMenu(pane: string): boolean {
   if (MENU_RE.test(pane)) return true;
@@ -139,7 +156,17 @@ export function paneOptionRows(pane: string): OptionRow[] {
  * back as `{ parsed: false, raw }` — terminal-drawer territory in v1.
  */
 export function parseDialog(pane: string): Dialog | null {
-  if (paneState(pane) !== 'menu') return null;
+  // hasMenu, not paneState(pane) !== 'menu': the busy check must not veto a
+  // menu parse (D-102). paneState tests BUSY_RE across the WHOLE pane, and an
+  // RC-off pane renders the busy marker WHILE a dialog is painted alongside
+  // it — a real, expected combined screen — so the old gate answered 'busy'
+  // and refused to parse a dialog that was genuinely on screen. hasMenu is
+  // deliberately independent of the busy check for exactly this reason
+  // (:33-45 above); it's the same idiom inject/send.ts:320 uses. SGR strip
+  // mirrors that idiom too — every current caller already captures pane text
+  // without escape codes (tmux.capture, never captureAnsi), so this is
+  // defensive idiom-consistency, not a behavior change today.
+  if (!hasMenu(pane.replace(SGR, ''))) return null;
   if (MULTISELECT_RE.test(pane)) return unparsed(pane);
 
   const lines = pane.split('\n');
