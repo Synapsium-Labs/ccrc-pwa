@@ -15,9 +15,10 @@
  *     first live tick after a restart clears unconditionally).
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-substrate-'); });
@@ -52,5 +53,78 @@ describe('the substrate marker — one writer, epoch + verbatim reason (spec §2
     // "<epoch>  (client …)" — a double space `.` happily matches. Only the
     // synthesized text itself distinguishes guarded from unguarded.
     expect(marker).toContain('tmux gave no reason');
+  });
+});
+
+const ID = 'demo';
+
+/** `cmd_supervise` as a PROGRAM, bounded: the loop under test is a `while :`,
+ *  so spawnSync's own timeout turns a loop that stops exiting into one failed
+ *  case instead of a hung suite (the ccd-session-state.test.ts run idiom). */
+const run = (snippet: string): { code: number; stdout: string; stderr: string } => {
+  const r = spawnSync('bash', ['-c', `source "${CCD}"; ${snippet}`], {
+    encoding: 'utf8', cwd: h.home, timeout: 15000,
+    env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true }),
+  });
+  return { code: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+};
+
+// Sequenced probe: answers from an array, then 'gone' forever — the loop's only
+// exit. Elements are single-quoted: a detail with a SPACE must stay one array
+// element.
+const seq = (...v: string[]): string =>
+  `_i=0; _seq=(${v.map((x) => `'${x}'`).join(' ')}); _session_probe() {
+     local x="\${_seq[$_i]:-gone}"; _i=$((_i+1))
+     PROBE_VERDICT="\${x%%:*}"; PROBE_DETAIL="\${x#*:}"; [[ "$PROBE_DETAIL" == "$x" ]] && PROBE_DETAIL=""; }`;
+
+// The loop's collaborators, stubbed quiet; `sleep` RECORDS its argument — the
+// backoff contract is read from that log. `tmux` is a function stub so
+// `_substrate_mark`'s first-write skew probe stays hermetic (no real binary,
+// no real socket; `_session_probe` itself is sequenced above anyway).
+const LOOP_STUBS = `systemctl() { :; }; sleep() { echo "sleep \${1:-}" >> "$HOME/ccd-calls"; }
+  cmd_ensure() { :; }; _sync_uuid() { :; }; _auto_swap_check() { :; }; _auto_compact_check() { :; }
+  tmux() { case "$1" in -V) echo 'tmux 3.4' ;; *) return 1 ;; esac; }`;
+
+describe('cmd_supervise under a substrate fault (spec §1)', () => {
+  it('unknown does NOT exit, marks the row, and stamps the heartbeat EVERY unknown tick', () => {
+    run(`${LOOP_STUBS}
+      ${seq('unknown:protocol mismatch', 'unknown:protocol mismatch', 'gone')}
+      _reg_set() { printf '%s' "$3" > "$REG/$1.$2"; echo "stamp $2" >> "$HOME/ccd-calls"; }
+      cmd_supervise ${ID}`);
+    expect(h.calls().filter((l) => l === 'stamp supervised').length).toBeGreaterThanOrEqual(3); // pre-ensure + 2 unknown ticks
+    expect(h.reg(ID, 'substrate')).toContain('protocol mismatch');
+  });
+  it('the FIRST live after unknown clears the marker; a STALE marker from a dead supervisor clears too', () => {
+    run(`${LOOP_STUBS}
+      ${seq('unknown:x', 'live', 'gone')}
+      cmd_supervise ${ID}`);
+    expect(existsSync(path.join(h.home, '.cc-sessions', `${ID}.substrate`))).toBe(false);
+    h.sh(`printf '1 stale' > "$REG/${ID}.substrate"`);
+    run(`${LOOP_STUBS}
+      ${seq('live', 'gone')}
+      cmd_supervise ${ID}`);
+    expect(existsSync(path.join(h.home, '.cc-sessions', `${ID}.substrate`))).toBe(false);
+  });
+  it('backs off 5s -> 30s after SUBSTRATE_BACKOFF_AFTER consecutive unknowns, and 5s again on live', () => {
+    run(`${LOOP_STUBS}
+      ${seq('unknown:x', 'unknown:x', 'unknown:x', 'unknown:x', 'live', 'unknown:x', 'gone')}
+      cmd_supervise ${ID}`);
+    const sleeps = h.calls().filter((l) => l.startsWith('sleep ')).map((l) => l.slice(6));
+    // unknown_run 1,2 sleep 5; run 3 REACHES the threshold so the sleep AFTER the third
+    // unknown is already 30 (and stays 30); live resets to 5; a fresh unknown starts at 5.
+    expect(sleeps).toEqual(['5', '5', '30', '30', '5', '5']);
+  });
+  it('gone stays the ONLY exit — an unknown-only run is bounded by the seq fallback, not by exiting', () => {
+    const r = run(`${LOOP_STUBS}
+      ${seq('unknown:x', 'gone')}
+      cmd_supervise ${ID}`);
+    expect(r.code).toBe(1);   // the gone exit, systemd's restart signal, unchanged
+  });
+  it('the three tick helpers are SKIPPED on an unknown tick — each would shell into the dead tmux', () => {
+    run(`${LOOP_STUBS}
+      ${seq('unknown:x', 'gone')}
+      _sync_uuid() { echo tickhelper >> "$HOME/ccd-calls"; }
+      cmd_supervise ${ID}`);
+    expect(h.calls().filter((l) => l === 'tickhelper')).toHaveLength(0);
   });
 });

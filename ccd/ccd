@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=d9e6efcfd2cffc4d1b14518126bcce15ae7c65e262f81af3521b10ec0a091560
+# ccrc:generated 1 sha256=82de55a805ffde52f6ef37ef47a075de3e5a2d1ccf54aec5aafa7088cc7a9968
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box, not on this file: `_rc_enabled` reads
@@ -128,6 +128,8 @@ TMUX_SERVER_LOCK_WAIT=15        # seconds a spawn waits for the right to CREATE 
 SUBSTRATE_PROBE_DEADLINE_S=8    # bound on ONE has-session probe. Healthy answer: ~8ms (measured
                                 # 2026-08-19); a SIGSTOPped server blocks the client FOREVER, so
                                 # an unbounded probe turns a wedge into a silent supervisor hang.
+SUBSTRATE_BACKOFF_S=30          # unknown-tick interval once the fault is established
+SUBSTRATE_BACKOFF_AFTER=3       # consecutive unknowns before backing off 5s -> 30s
 SPAWN_EFFORT="ultracode"        # /effort sent to every freshly spawned session ("" disables).
                                 # ultracode is session-only by design (no settings.json key),
                                 # so injecting it at spawn is the only way to default it.
@@ -8654,12 +8656,38 @@ cmd_supervise() {   # systemd ExecStart: ensure then block until the session die
   cmd_ensure "$id"
   # Re-stamped every 30s from the 5-second tick this loop already runs, so the
   # 120-second freshness window never expires under a live supervisor.
-  local beat=0
-  while _alive "$id"; do
-    _sync_uuid "$id"; _auto_swap_check "$id"; _auto_compact_check "$id"
-    beat=$((beat + 5))
-    (( beat >= 30 )) && { _reg_set "$id" supervised "$(date +%s)"; beat=0; }
-    sleep 5
+  #
+  # VERDICT-DRIVEN, not boolean (D-B8-14): the old `while _alive` collapsed
+  # `gone` and `unknown` into one exit, so a wedged or version-skewed tmux
+  # read as seventeen simultaneous deaths — every supervisor exited, systemd
+  # restarted each one into `cmd_ensure`, and the fleet churned against a
+  # substrate that had refused to answer, not pronounced anything dead.
+  local beat=0 unknown_run=0 tick=5
+  while :; do
+    _session_probe "$id"
+    case "$PROBE_VERDICT" in
+      gone) break ;;   # the ONLY exit — a session tmux itself pronounced dead (D-B8-14)
+      live)
+        [[ -e "$REG/$id.substrate" ]] && _substrate_clear "$id"
+        unknown_run=0; tick=5
+        _sync_uuid "$id"; _auto_swap_check "$id"; _auto_compact_check "$id"
+        beat=$((beat + tick))
+        (( beat >= 30 )) && { _reg_set "$id" supervised "$(date +%s)"; beat=0; }
+        ;;
+      unknown)
+        # Not death — refusal to guess (spec §1). Mark, keep the heartbeat honest EVERY
+        # tick (beat counts ASSUMED seconds; a 30s sleep against beat+=5 stamps every 180
+        # real seconds and ages all 17 rows into orphan mid-fault — the false dead by a
+        # slower route), skip the tick helpers (each shells into the tmux that just did
+        # not answer), and back off: 17 supervisors hammering a wedged server every 5s is
+        # a thundering herd against a component already unwell.
+        unknown_run=$((unknown_run + 1))
+        _substrate_mark "$id"
+        _reg_set "$id" supervised "$(date +%s)"; beat=0
+        tick=5; (( unknown_run >= SUBSTRATE_BACKOFF_AFTER )) && tick=$SUBSTRATE_BACKOFF_S
+        ;;
+    esac
+    sleep "$tick"
   done
   echo "session $id ended; exiting for systemd restart" >&2
   exit 1

@@ -240,8 +240,14 @@ describe('the supervisor heartbeat', () => {
     // `unsupervised` — the loudest possible false alarm, fired precisely when
     // the fleet is doing the most work. The stub reads the stamp from inside
     // ensure, so "after" cannot pass.
+    //
+    // REWRITTEN for D-B8-14: the watch loop asks `_session_probe`, not
+    // `_alive`, so the old `_alive() { return 1; }` stub went dark — the loop
+    // would probe the REAL substrate, read the silence as `unknown`, and spin
+    // for ever (unknown refuses to exit by design). The stub now speaks the
+    // probe's own contract, and `gone` is the loop's only exit.
     h.sh(`_reg_set ${ID} uuid u`);
-    const r = run(`_alive() { return 1; }; systemctl() { :; }; sleep() { :; };
+    const r = run(`_session_probe() { PROBE_VERDICT=gone; PROBE_DETAIL=; }; systemctl() { :; }; sleep() { :; };
       cmd_ensure() { echo "ensure saw: $(cat "$HOME/.cc-sessions/$1.supervised" 2>/dev/null || echo none)"; };
       cmd_supervise ${ID}`);
     expect(r.stdout).toMatch(/ensure saw: \d{10}/);
@@ -252,8 +258,12 @@ describe('the supervisor heartbeat', () => {
     // supervisor that stamped once at entry would go stale UNDER ITS OWN
     // LIVE SESSION after two minutes. Eight simulated ticks cross the 30s
     // beat exactly once: entry stamp + one loop stamp = 2.
+    //
+    // REWRITTEN for D-B8-14, same reason as above: the counter now drives
+    // `_session_probe` — eight `live` answers, then `gone`, the only exit.
     h.sh(`_reg_set ${ID} uuid u`);
-    run(`n=0; _alive() { n=$((n+1)); (( n <= 8 )); };
+    run(`n=0; _session_probe() { n=$((n+1)); PROBE_DETAIL="";
+        if (( n <= 8 )); then PROBE_VERDICT=live; else PROBE_VERDICT=gone; fi; };
       systemctl() { :; }; sleep() { :; }; cmd_ensure() { :; };
       _sync_uuid() { :; }; _auto_swap_check() { :; }; _auto_compact_check() { :; };
       _reg_set() { printf '%s' "$3" > "$REG/$1.$2"; echo "stamp $2" >> "$HOME/ccd-calls"; };
