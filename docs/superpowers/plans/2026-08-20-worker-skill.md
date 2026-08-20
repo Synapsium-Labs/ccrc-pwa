@@ -92,4 +92,22 @@ export const WORKER_KICKOFF_PREFIX =
 ### Task 6: Close-out
 
 - [ ] Ledger (D-10x entries as found); the per-worker-RC note (still open, now with its destination existing — a clause states the box-level fact); full three suites foreground; commit `docs(skill): worker-skill slice closes — the protocol is a mechanism`
-\n\n## Deviations found\n\n(Next free number at plan time: D-103.)\n
+
+
+## Deviations found
+
+(Next free number at plan time: D-103.)
+
+**D-103 — the census corpus ("SKILL.md alone") ships as a GUARD, and two pins are DERIVED from the source of truth rather than from the plan's own list.** (Task 1, `server/test/worker-skill.test.ts`.)
+
+The plan's Step 1 named four pins (CONTRACT array, frontmatter triple, id recipe, five-verb census) and stated "corpus = SKILL.md alone" as a property of the decision above it — a sentence, not a mechanism. Three additions shipped, each because the thing it guards is invisible to the four:
+
+- **`carries no references of its own`** — `readdirSync(ccd/worker-skill)` must equal exactly `['SKILL.md']`, plus both `../ccrc-coordinator/references/*.md` pointers must resolve to real files in the repo. Without it, the day someone adds a `references/` directory here the census quietly stops covering part of the skill it claims to cover, and the locked no-duplicate-references decision becomes a comment in a plan nobody re-reads. It is also the assertion Task 2's `REQUIRED_FILES=(SKILL.md)` installer guard is honest about. *Measured: planting `references/wave-lifecycle.md` → red.*
+- **the eight `PrPhase` words, derived from `Record<PrPhase,true>`** (`prphase.test.ts`'s idiom — `PR_PHASES` stays module-private). NOT a weaker duplicate of the clause-9 literal: the literal can only red for an edit a human is already making to that sentence, while this reds when the UNION grows and the skill still promises eight. *Measured: a planted ninth phase → red on the count, and on the word once the count is relaxed.*
+- **the delivery budget, derived from `MAIL_MAX_ATTEMPTS`** rather than typed as a 6. *Measured: `MAIL_MAX_ATTEMPTS = 8` → red naming clause 3's "6 attempts".*
+
+The two plan-mandated mutations were measured as specified: an extra `ws-reap` in a "when something is wrong" bullet → census red (`ws-reap appears 2×; only the forbidding clause may name it`); clause 2 paraphrased ("Always commit on this workspace's very own branch…") → `carries all ten clauses verbatim` red. Suite: 7 tests, green.
+
+**D-104 — the worker skill is written with STRAIGHT apostrophes, and its CONTRACT literals are double-quoted.** (Task 1, `ccd/worker-skill/SKILL.md` + its test.)
+
+`coordinator-skill.test.ts`'s literals carry curly apostrophes (`operator’s`, `session’s`) because its prose does; a straight/curly mismatch between the two files is a verbatim-pin failure that reads like a mystery, and it is one an editor introduces by typing normally. The mirror suite avoids the class rather than documenting it: SKILL.md uses `'` everywhere, so no clause literal needs an escape for it. The literals are then double-quoted (the sibling's are single-quoted) because clause 1 quotes `tmux display-message -p '#S'` and clause 3 quotes `toId:'coordinator'` — with single-quoted TS strings, the two clauses most worth copy-pasting out of SKILL.md would be the two that need hand-escaping. Consequence for every later task: **no clause in this skill may contain a `"` character**, and a curly apostrophe pasted into SKILL.md reds the CONTRACT pin without looking like a change.

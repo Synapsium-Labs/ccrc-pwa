@@ -1,0 +1,162 @@
+// The worker skill is prose a model follows unsupervised, in a workspace it can
+// wedge and on a fleet it can destroy. It is the coordinator skill's mirror
+// image and it gets the same mechanism: the CONTRACT is a literal array, so a
+// PARAPHRASE fails exactly as a deletion does, and the destructive verbs are
+// counted rather than merely forbidden.
+//
+// CORPUS = `ccd/worker-skill/SKILL.md` ALONE, and that is a deliberate,
+// enforced property rather than an assumption (`the skill carries no
+// references of its own` below). The plan's locked decision is that this skill
+// POINTS at `../ccrc-coordinator/references/{wave-lifecycle,mail-envelope}.md`
+// instead of shipping 35KB of its own copies — both skills install side by side
+// under `<config dir>/skills/`, and a second copy of pinned content is a second
+// thing to rot. MEASURED at that decision: neither coordinator reference names
+// any of the five destructive verbs even once (`coordinator-skill.test.ts`'s
+// own census pins all three of ITS verbs to SKILL.md's clause 3), so pointing
+// at them licenses nothing this file cannot see.
+import { describe, it, expect } from 'vitest';
+import { readFileSync, readdirSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { MAIL_MAX_ATTEMPTS, type PrPhase } from '../../shared/api.js';
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const skillDir = path.join(root, 'ccd/worker-skill');
+const skill = readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8');
+
+// The ten clauses, verbatim. Every entry is DOUBLE-quoted on purpose: clause 1
+// quotes `tmux display-message -p '#S'` and clause 3 quotes `toId:'coordinator'`
+// — both carry single quotes, and the sibling suite's single-quoted style would
+// need escaping exactly where a copy-paste from SKILL.md is most useful.
+// For the same reason SKILL.md is written with STRAIGHT apostrophes throughout:
+// `coordinator-skill.test.ts`'s literals carry curly ones (`operator’s`,
+// `judgement`) because its prose does, and a straight/curly mismatch is a
+// paraphrase failure that reads like a mystery.
+const CONTRACT = [
+  "Learn who you are on EVERY call: `fromId` is your own `cc-<id>` from `tmux display-message -p '#S'`, and `fromUuid` is the current contents of `$REG/<id>.uuid`, re-read each time. `/clear` rotates that uuid and dispatch `/clear`s you on every wave >= 2, so a uuid you cached is guaranteed stale.",
+  "Commit on THIS workspace's own branch (`ws/<slug>`), never a separate feature branch. The done-fingerprint re-measures the workspace branch's tip, so work parked on a feature branch leaves that tip unmoved and wedges every close `stale-tip` forever (F5 — the server's own `stale-tip` detail names this as the almost-certain cause).",
+  "Ack before you act, and key the ack on the row's DELIVERY id, never the mail row's own `id` — an unacked nudge replays, the budget is 6 attempts, and then your brief parks unread. Reply to the coordinator through mail (`toId:'coordinator'`), never by typing into your own pane.",
+  "Keep your input box empty. A half-typed draft makes the delivery lane refuse `draft-present`, only you can clear your own text, and a parked delivery means your brief was never read.",
+  "Every question for the operator rides the AskUserQuestion tool — the structured ask the session hook captures and the PWA surfaces — never free text in your pane.",
+  "Your requirements are the brief plus the plan file it names, including that plan's deviation ledger, and the plan's text governs over your recollection of the spec. Invoke the execution skill the brief names rather than improvising one.",
+  "Large payloads travel as files: write the file, then name its ABSOLUTE path in the mail's `artifacts` (a relative entry is refused `bad-kind`). Never ask for content to be pasted into your pane (F7).",
+  "Never run `ws-rm`, `ws-reap`, `ws-gc`, `ws-archive` or `ws-restore`. This workspace's lifecycle belongs to ccd and to the human, at any wave, for any reason.",
+  "A done-claim's fingerprint is measured ONCE and sent ONCE: `handoffCommit` must equal the branch tip you measured, and `prPhase` must be one of the eight enum words (`unchecked`, `none`, `no-commits`, `open`, `draft`, `merged`, `closed`, `unknown`). After `wave-done` you stop pushing — a new commit under your own claim makes it stale — and a rejected claim is never re-asserted without new commits and a fresh measurement.",
+  "Remote control is the BOX's setting, not yours: `~/.ccrc/remote-control` decides whether this box's panes run with it, and you never write that file. The per-worker ruling (orchestrator task #37) is still open, so there is no per-session form of this flag to reach for.",
+];
+
+/** The forbidding clause, by its own index — named once so a re-ordering of the
+ *  array cannot silently point the census at the wrong sentence. */
+const FORBIDS = CONTRACT[7]!;
+
+describe('the worker skill: its contract', () => {
+  it('carries all ten clauses verbatim', () => {
+    for (const clause of CONTRACT) {
+      expect(skill, `missing contract clause: ${clause.slice(0, 48)}…`).toContain(clause);
+    }
+  });
+
+  it('names the five destructive verbs ONLY inside the clause that forbids them', () => {
+    // A skill that mentions `ws-reap` anywhere else has given a model a reason
+    // to consider it. The forbidding clause is the one licensed mention, and
+    // the assertion is EQUALITY (not a ceiling): a guard that stays green on an
+    // extra mention cannot red for the thing it claims to guard.
+    //
+    // Five verbs here, three in the coordinator's: a worker sits INSIDE the
+    // workspace these verbs delete, so `ws-archive`/`ws-restore` — a
+    // coordinator's clutter — are a worker's own foot-gun.
+    for (const verb of ['ws-rm', 'ws-reap', 'ws-gc', 'ws-archive', 'ws-restore']) {
+      const hits = skill.split(verb).length - 1;
+      const licensed = FORBIDS.split(verb).length - 1;
+      expect(licensed, `${verb} is not named in the forbidding clause at all`).toBeGreaterThan(0);
+      expect(hits, `${verb} appears ${hits}×; only the forbidding clause may name it`).toBe(licensed);
+    }
+  });
+
+  it('carries no references of its own — the census corpus is the whole skill', () => {
+    // The plan's locked decision, made mechanical. Two things break the moment
+    // a `references/` directory appears here: the duplicate-content ban (the
+    // coordinator's references are pinned by their own suite; a copy would be
+    // an untested second one), AND the census above, which would quietly stop
+    // covering part of the skill it claims to cover.
+    expect(readdirSync(skillDir).sort()).toEqual(['SKILL.md']);
+    // And the pointer it uses instead is a real relative path from
+    // `<config dir>/skills/ccrc-worker/` to the coordinator's own tree.
+    for (const ref of ['../ccrc-coordinator/references/wave-lifecycle.md',
+      '../ccrc-coordinator/references/mail-envelope.md']) {
+      expect(skill, `the skill points at no ${ref}`).toContain(ref);
+      expect(readFileSync(path.join(root, 'ccd/coordinator-skill',
+        ref.replace('../ccrc-coordinator/', '')), 'utf8').length,
+      `${ref} does not exist in the repo`).toBeGreaterThan(0);
+    }
+  });
+
+  it('tells the session how to learn its own id the ONE way that works on this box', () => {
+    // ccd/session-hook.sh:15-19 — derived from tmux, never from a `from:`
+    // field, and never cached: `/clear` rotates `$REG/<id>.uuid`, and dispatch
+    // clears this session on every wave >= 2.
+    expect(skill).toContain("tmux display-message -p '#S'");
+    expect(skill).toContain('cc-');
+    expect(skill).toContain('.uuid');
+  });
+
+  it('has YAML frontmatter with exactly a name and a description that says when NOT to use it', () => {
+    expect(skill.startsWith('---\n')).toBe(true);
+    const fm = skill.slice(4, skill.indexOf('\n---', 4));
+    expect(fm).toContain('name: ccrc-worker');
+    expect(fm).toMatch(/description:.+/);
+    // Two keys, exactly — the coordinator skill's shape. A third key here is
+    // either a harness field this repo does not ship or a description that
+    // wrapped onto a line starting with a word and a colon.
+    expect(fm.split('\n').filter((l) => /^[A-Za-z][A-Za-z0-9_-]*:/.test(l))
+      .map((l) => l.slice(0, l.indexOf(':')))).toEqual(['name', 'description']);
+    // The anti-use sentence, in the register the coordinator's own description
+    // set: the mirror-image failure is a worker that starts dispatching.
+    expect(fm.toLowerCase()).toContain(
+      'never use it to coordinate a program — a worker that starts dispatching ' +
+      'has become a coordinator without a ledger');
+  });
+});
+
+describe('the worker skill: the facts it states about the wire', () => {
+  /**
+   * The eight phases, derived from the UNION rather than from a list —
+   * `prphase.test.ts`'s idiom, and its reasoning applies here unchanged:
+   * `PR_PHASES` is module-private in `shared/api.ts` and importing it would
+   * re-open that hole for a test's convenience.
+   *
+   * This is NOT a weaker duplicate of the clause-9 pin above, which is what
+   * would make it worth deleting. That pin is a hand-written literal: it can
+   * only ever go red for an edit to the sentence a human already knows about.
+   * THIS one goes red for a cause the literal structurally cannot see — a ninth
+   * member added to `PrPhase` forces a key into the record below (the tests
+   * directory is typechecked, `typecheck-tests.test.ts`), and a skill that
+   * still promises eight words then fails: MEASURED on a planted `'x-ninth'`
+   * phase, red on the count, and on the word itself once the count is relaxed.
+   */
+  const ALL_PHASES: Record<PrPhase, true> = {
+    unchecked: true, none: true, 'no-commits': true, open: true,
+    draft: true, merged: true, closed: true, unknown: true,
+  };
+  const PHASES = Object.keys(ALL_PHASES) as PrPhase[];
+
+  it('spells every PrPhase word a worker is allowed to claim, and says how many there are', () => {
+    expect(PHASES.length).toBe(8);
+    for (const phase of PHASES) {
+      // Backticked, deliberately: a bare `draft` also matches `draft-present`
+      // and a bare `open` matches ordinary prose, so the unquoted form would
+      // pass on text that never told the worker the vocabulary at all.
+      expect(skill, `the skill never spells the \`${phase}\` phase`).toContain(`\`${phase}\``);
+    }
+    expect(skill, 'the skill should say the vocabulary is closed at eight').toContain('eight');
+  });
+
+  it('states the delivery budget as the number the lane actually enforces', () => {
+    // `MAIL_MAX_ATTEMPTS` (shared/api.ts) is 6, and a worker whose input box is
+    // occupied has that many ticks before its brief parks unread. DERIVED from
+    // the constant rather than typed as a 6, so raising the ceiling turns this
+    // red — the clause-9-style literal pin above cannot see that change.
+    expect(skill, 'the skill states a delivery budget the lane does not enforce')
+      .toContain(`${MAIL_MAX_ATTEMPTS} attempts`);
+  });
+});
