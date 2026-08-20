@@ -1897,7 +1897,27 @@ export class FleetWatcher {
           }
           continue;
         }
-        if (!(await this.deps.tmux.hasSession(d.toId))) continue;
+        // D-B8-13: `gone` — tmux itself said the recipient's pane does not
+        // exist — stays the ordinary silent gate, exactly like busy or
+        // on-cooldown: the mail waits for the session to come back, nothing
+        // recorded, retried next sweep. `unknown` — tmux DID NOT ANSWER — must
+        // not wear the same bare `continue`, four lines below a registry read
+        // that carefully distinguishes the matching pair on its own seam. It
+        // backs off on the unmeasurable arm's exact never-ratcheting terms
+        // (`countsAsAttempt: false`, so `attempts` stays send-failure budget
+        // and the step stays pinned at MAIL_BACKOFF_BASE_MS — a substrate
+        // outage must never walk a row toward the undeliverable park), and the
+        // tmux message rides in `lastError` verbatim because the message IS
+        // the diagnosis (substrate-unreachable spec §2). The backoff is also
+        // the herd valve: without it every due row re-spawns a doomed tmux
+        // client each sweep against a component that is already unwell.
+        const sv = await this.deps.tmux.sessionVerdict(d.toId);
+        if (sv.verdict === 'gone') continue;
+        if (sv.verdict === 'unknown') {
+          const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** d.attempts, MAIL_BACKOFF_MAX_MS);
+          store.backOff(d.id, `tmux did not answer (substrate-unknown): ${sv.detail}`, now + step, false);
+          continue;
+        }
         const hs = await hookStateFor(d.toId);
         // Pending-question guard ONLY (robust-mail-delivery spec §2.1 / F6b
         // fix). A null/stale `hs` must NOT block delivery: a resumed
