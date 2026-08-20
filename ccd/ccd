@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=4f5001078446b518c1bbe4ddd71e5522752b3803e95424cbc12edf6eaadec384
+# ccrc:generated 1 sha256=d9e6efcfd2cffc4d1b14518126bcce15ae7c65e262f81af3521b10ec0a091560
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box, not on this file: `_rc_enabled` reads
@@ -405,9 +405,9 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # today: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
   # `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`, `pool`,
   # `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `reaping`,
-  # `setup`, `spawn`, `started`, `stopped`, `supervised`, `swapblocked`,
-  # `uuid`, `workdir`, `workspace`, `wrapper`. That is a WIDER set than
-  # `_reg_set`/`_reg_get`: the inventory
+  # `setup`, `spawn`, `started`, `stopped`, `substrate`, `supervised`,
+  # `swapblocked`, `uuid`, `workdir`, `workspace`, `wrapper`. That is a WIDER
+  # set than `_reg_set`/`_reg_get`: the inventory
   # that stood here named only the shell-written fields and so silently dropped
   # `prcheckedat`, `prphase` and `prhistory` (written by `_pr_py`'s own
   # `put`/append) and `hookstate` (written by the hooks). The purge itself was
@@ -479,6 +479,25 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # observable to a test — nothing else about two adjacent unlinks is.
   [[ -e "$REG/$id.reaping" ]] || rm -f "$REG/$id.archived"
 }
+_substrate_mark() {   # id — record "this supervisor could not reach tmux" ($REG/<id>.substrate)
+  # ONE writer per file: this row's supervisor. The fleet-wide statement is DERIVED by the
+  # reader, never written (spec §2). Text is never empty; the skew comparison rides on the
+  # FIRST write only — that is the moment the answer is wanted, one bounded call per fault.
+  local id="$1" why="${PROBE_DETAIL:-tmux gave no reason}" f="$REG/$1.substrate"
+  if [[ ! -e "$f" ]]; then
+    local client server
+    client=$(tmux -V 2>&1 || true)
+    # Same function-vs-binary split as _session_probe, same reason: `timeout` execs.
+    if [[ $(type -t tmux) == function ]]; then
+      server=$(tmux display-message -p '#{version}' 2>/dev/null) || server="unreachable"
+    else
+      server=$(timeout "$SUBSTRATE_PROBE_DEADLINE_S" tmux display-message -p '#{version}' 2>/dev/null) || server="unreachable"
+    fi
+    why="$why (client ${client:-unknown}; server ${server:-unreachable})"
+  fi
+  printf '%s %s' "$(date +%s)" "$why" > "$f"
+}
+_substrate_clear() { rm -f -- "$REG/$1.substrate"; }
 _ws_seed_home() {   # id wrapper — set home once; never clobber a deliberate choice
   [[ -f "$REG/$1.home" ]] || _reg_set "$1" home "$2"
 }
