@@ -89,14 +89,19 @@ export interface SessionRecord {
    *  null when absent. Absence IS release (the verb unlinks), so ONLY absence
    *  reads as unheld.
    *
-   *  Fail-shut here too, and this layer can be (review finding 2): `field()`'s
-   *  own `readFile` cannot tell a failed read from a missing file — remote
-   *  `io.ts` maps every error to null — but `readRegistry` reads the registry
-   *  DIRECTORY first, and that listing names `<id>.hold` whether or not its
-   *  bytes can be fetched. A present-but-unread file therefore reads as held,
-   *  carrying `HOLD_UNREADABLE` as its reason — after a second listing has
-   *  confirmed the file is still there, so an ordinary `ws-release` landing in
-   *  the gap between the two reads is not reported as corruption.
+   *  Fail-shut here too, and this layer can be (review finding 2). A
+   *  MEASURED read (`io.readFileMeasured`, Task 5) tells a proven ENOENT
+   *  apart from everything else: a measured `absent` `.hold` reads `null`
+   *  DIRECTLY — D-112 — because absence proven at the read IS the strongest
+   *  form of "the verb unlinked this", strictly better evidence than a
+   *  listing that did not come back. A measured `unreadable` (or an older
+   *  agent's read, which cannot tell the two apart at all) falls back to
+   *  today's rung: `readRegistry` reads the registry DIRECTORY first, and
+   *  that listing names `<id>.hold` whether or not its bytes can be
+   *  fetched. A present-but-unread file therefore reads as held, carrying
+   *  `HOLD_UNREADABLE` as its reason — after a second listing has confirmed
+   *  the file is still there, so an ordinary `ws-release` landing in the gap
+   *  between the two reads is not reported as corruption.
    *
    *  A readable but EMPTY file is held too (an empty string is not null), and
    *  it carries `HOLD_NO_REASON` rather than the empty string: the reason IS
@@ -462,7 +467,7 @@ async function buildRecord(
   io: FleetIO, cfg: CcrcConfig, names: string[], id: string, now: number,
 ): Promise<SessionRecord | null> {
   const [wrapper, project, workdir, uuid, started, home, pool, lastswap, workspace, branchRead,
-    base, prPhaseRaw, prNumberRaw, prCheckedAtRaw, archivedRaw, manifestRaw, holdRaw,
+    base, prPhaseRaw, prNumberRaw, prCheckedAtRaw, archivedRaw, manifestRaw, holdRead,
     stoppedRaw, supervisedRaw, swapBlockedRaw, spawnRaw, substrateRaw] = await Promise.all([
     field(io, cfg.registryDir, id, 'wrapper'), field(io, cfg.registryDir, id, 'project'),
     field(io, cfg.registryDir, id, 'workdir'), field(io, cfg.registryDir, id, 'uuid'),
@@ -472,7 +477,7 @@ async function buildRecord(
     field(io, cfg.registryDir, id, 'base'), field(io, cfg.registryDir, id, 'prphase'),
     field(io, cfg.registryDir, id, 'prnumber'), field(io, cfg.registryDir, id, 'prcheckedat'),
     field(io, cfg.registryDir, id, 'archived'), field(io, cfg.registryDir, id, 'archivemanifest'),
-    field(io, cfg.registryDir, id, 'hold'),
+    fieldMeasured(io, cfg.registryDir, id, 'hold'),
     field(io, cfg.registryDir, id, 'stopped'), field(io, cfg.registryDir, id, 'supervised'),
     field(io, cfg.registryDir, id, 'swapblocked'), field(io, cfg.registryDir, id, 'spawn'),
     field(io, cfg.registryDir, id, 'substrate'),
@@ -593,14 +598,19 @@ async function buildRecord(
      *  manifest is absent or half-written — never 0, which would argue
      *  against a cleanup that would free gigabytes. */
     archivedBytes: manifestBytes(manifestRaw),
-    // `names` is the directory listing this function opened with, so it
-    // proves PRESENCE independently of whether the read succeeded — the one
-    // piece of evidence `field()` alone does not have. See `HOLD_UNREADABLE`.
-    // An empty read is a hold with nothing to show, which is not the same
-    // fact as an unreadable one — see `HOLD_NO_REASON`.
-    held: holdRaw === null
-      ? (holdListed ? HOLD_UNREADABLE : null)
-      : (holdRaw === '' ? HOLD_NO_REASON : holdRaw),
+    // Task 5 / D-112: a measured `absent` `.hold` reads null DIRECTLY — a
+    // proven ENOENT is the strongest form of "absence IS release" there is,
+    // strictly better evidence than a listing that did not come back, so it
+    // short-circuits without waiting for `readRegistryMeasured`'s second
+    // listing at all. A measured `unreadable` falls back to EXACTLY today's
+    // rung: `names` is the directory listing this function opened with, so
+    // it proves PRESENCE independently of whether the read succeeded — the
+    // one piece of evidence `field()` alone does not have. See
+    // `HOLD_UNREADABLE`. An empty read is a hold with nothing to show, which
+    // is not the same fact as an unreadable one — see `HOLD_NO_REASON`.
+    held: holdRead.ok
+      ? (holdRead.content === '' ? HOLD_NO_REASON : holdRead.content)
+      : (holdRead.reason === 'absent' ? null : (holdListed ? HOLD_UNREADABLE : null)),
     // The `.hold` ladder, applied to the supervisor's fault record (D-B8-14,
     // spec §2): presence from the LISTING, never from a non-null read — "no
     // fault recorded" re-enables every destructive affordance downstream, so
