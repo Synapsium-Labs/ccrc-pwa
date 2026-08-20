@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=ad2f7bd5bbc5118153aeea70b6d3c3b1cf80cb8fd2c819db262a569f2fc822a1
+# ccrc:generated 1 sha256=795cfbba050b708728babad60ba87b4e8080efa0c25800aa4d624c453b3ed942
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box, not on this file: `_rc_enabled` reads
@@ -1342,9 +1342,21 @@ if mode == 'state':
     # id-minting listing sees it; it leaks one 0-byte file per session that has
     # ever run pr-state, which is the disclosed price.
     #
-    # UNCHANGED: if the lock cannot be taken AT ALL (unwritable $REG) the
-    # write goes ahead unlocked. This guard may only remove races, never add
-    # a refusal that stops a phase from ever updating.
+    # WIDENED BY ONE STATE AND NARROWED BY ANOTHER — not "unchanged". The old
+    # lock opened `$REG/<id>.uuid` READ-ONLY, so it still took in a `$REG`
+    # that is readable but NOT WRITABLE; this one opens with mode 'a', which
+    # needs create+write, so that state now degrades to an UNLOCKED
+    # compare-and-set. In the other direction, the old condition list also
+    # carried "no `.uuid` at all" — a lock that could not be taken because the
+    # field had not been written yet — and this one cannot hit that, which is
+    # a strict improvement. The widened state is unreachable in practice: a
+    # `$REG` nothing may create a file in already makes `put()` raise (D-132),
+    # so `cmd_pr_state` fails before an unlocked compare-and-set could matter.
+    #
+    # THE GUARANTEE IS UNCHANGED, and it is the part that matters: if the lock
+    # cannot be taken AT ALL — the state above, or a filesystem whose `flock`
+    # refuses — the write goes ahead UNLOCKED. This guard may only remove
+    # races, never add a refusal that stops a phase from ever updating.
     lock_f = None
     try:
         lock_f = open(os.path.join(reg, '.prstate-' + id_ + '.lock'), 'a')
