@@ -176,6 +176,7 @@ CCRC_DOCTOR_CHECKS=(
   path
   services
   config
+  auth
   rc
   disk
   wrappers
@@ -807,6 +808,170 @@ _check_config() {
     return 1
   fi
   _dr_pass config "$BOX_ENV_FILE present, fleet mode remote, and both CCRC_AGENT_URL and CCRC_AGENT_TOKEN are set (whether the agent ANSWERS is the 'fleet' check below)"
+}
+
+# ── the session gate: the flag, and the passphrase it needs ───────────────
+# TWO FACTS, ONE VERDICT, because neither is worth anything without the other.
+# `CCRC_AUTH=on` with no `~/.ccrc/auth.scrypt` is a box that answers 401 to
+# every request and cannot be logged into at all (Task 5's fail-SHUT polarity);
+# a passphrase with the flag off is a console anybody on the tailnet can drive.
+# An operator acts on those two differently, so they get different classes —
+# but they are one CHECK, because "is this box's gate in a working state" is
+# one question and answering it out of two checks is how two checks come to
+# disagree.
+#
+# ── THE FLAG IS READ FROM ccrc.env, NEVER FROM THIS SHELL ─────────────────
+# The server gets its environment from `ccrc.service`'s `EnvironmentFile=`,
+# i.e. from `~/.ccrc/ccrc.env` — so that file is what decides whether the gate
+# is armed, and an exported `CCRC_AUTH` in the operator's own shell decides
+# nothing at all. Reading `${CCRC_AUTH:-}` here would report a box that does
+# not exist. Same reader and same path as `_check_config` (D-85): `ccrc`'s
+# `_box_env_value` and `BOX_ENV_FILE`, never a private copy.
+#
+# ── THE FILE IS MEASURED BY THE SERVER'S OWN PARSER, THROUGH NODE ─────────
+# `_check_wrappers` already reads a JSON file with `node -e` rather than
+# re-implementing a parser in bash, and this is the same rule with more at
+# stake: `readAuthSecret` enforces the format AND five parameter bounds
+# (D-111/113), and a bash approximation would inevitably PASS a line the server
+# refuses. That refusal is not a refused login — `buildServer` calls
+# `readAuthSecret` UNCAUGHT at boot, so a garbled line is a server that does not
+# start, and doctor is the one place an operator can see that coming before a
+# restart does. The measurement therefore runs `deploy/gen-auth-hash.mjs
+# --check`, which is the same program `ccrc passwd` writes with, importing the
+# same compiled module the server boots on.
+#
+# NOT ONE BYTE OF THE FILE REACHES A VERDICT LINE (D-127). The helper reports a class
+# and a parameter summary, never content, and this check validates even that
+# summary against a strict regex before printing it — because a doctor
+# transcript goes into tickets, and the plausible way to get an unparseable
+# `auth.scrypt` is a misplaced copy of some OTHER secret (see the helper's own
+# `--check` header for the `mail.token` case).
+_check_auth() {
+  # `ccrc` owns both the path and the env reader — the same guard, for the same
+  # reason, that `_check_config` opens with. A table sourced by something that
+  # is not `ccrc` has neither, and must say so rather than measure a default it
+  # invented.
+  if [ -z "${BOX_AUTH_FILE:-}" ] || [ -z "${BOX_ENV_FILE:-}" ] \
+     || ! declare -F _box_env_value >/dev/null 2>&1; then
+    _dr_fail auth "ccrc's own config reader is not loaded, so neither this box's CCRC_AUTH flag nor its passphrase file was measured" \
+      "this is a bug in ccrc, not a fact about your box — _check_auth reads BOX_AUTH_FILE and BOX_ENV_FILE through _box_env_value, all declared once in ccrc itself, and this check table was sourced by something that is not ccrc"
+    return 1
+  fi
+
+  # ── THE FLEET HOST HAS NO GATE TO MEASURE (D-86's evidence, reused) ────
+  # The gate is the SERVER's, and `~/.ccrc/auth.scrypt` is read by nothing on
+  # the fleet host. `ccrc` ships to that box too, so without this branch every
+  # doctor run there would WARN that a box with no server has no passphrase,
+  # and send its operator to write a file nothing will ever read. The evidence
+  # is the unit files — the only thing on a box that records its role — and
+  # both halves are required, exactly as `_check_config` requires them: "no
+  # ccrc.service" alone is also a dev checkout, and a dev checkout DOES run a
+  # server.
+  if [ ! -f "$CCRC_UNIT_DIR/ccrc.service" ] && [ -f "$CCRC_UNIT_DIR/ccrc-agent.service" ]; then
+    _dr_skip auth "this box's units are the fleet role's ($CCRC_UNIT_DIR has ccrc-agent.service and no ccrc.service) — the PWA's session gate belongs to the server box, and nothing here reads $BOX_AUTH_FILE"
+    return 3
+  fi
+
+  # An absent, non-regular or unreadable ccrc.env leaves the flag empty, which
+  # is exactly how `server/src/config.ts` reads an absent variable: OFF. Not a
+  # finding of this check's — `_check_config` above owns the file's own health
+  # and has three arms for it — but the flag's PROVENANCE is named in every
+  # verdict below, so a reader can tell "the file says off" from "there is no
+  # file" without this check having to duplicate that check's arms.
+  local flag="" where="$BOX_ENV_FILE"
+  if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ]; then
+    flag="$(_box_env_value "$BOX_ENV_FILE" CCRC_AUTH)"
+  else
+    where="no readable $BOX_ENV_FILE"
+  fi
+  # `= on` and nothing else, because `config.ts:331` is `env.CCRC_AUTH === 'on'`
+  # — a check laxer OR stricter than the reader it describes reports a box
+  # nobody is running.
+  local armed=0 gate="the gate is OFF (CCRC_AUTH is not \"on\" in $where)"
+  if [ "$flag" = on ]; then
+    armed=1
+    gate="CCRC_AUTH=on in $where"
+  fi
+
+  local helper="$CCRC_HERE/../deploy/gen-auth-hash.mjs"
+  if [ ! -f "$helper" ]; then
+    _dr_fail auth "the passphrase helper is missing ($helper), so $BOX_AUTH_FILE was never read" \
+      "this is a bug in ccrc, or an install that shipped ccd/ but not deploy/ — both lanes rsync the whole tree to ~/ccrc"
+    return 1
+  fi
+  if ! command -v node >/dev/null 2>&1; then
+    # `_check_wrappers`' rule: a box with no node gets exactly one FAIL, from
+    # the `node` check, and every check that NEEDED node says which one to read.
+    _dr_fail auth "node is not on PATH, so $BOX_AUTH_FILE could not be read" \
+      "install Node first — see the 'node' check above"
+    return 1
+  fi
+
+  # stderr is DISCARDED (`_check_wrappers`' `2>/dev/null`), and here that is a
+  # containment rather than tidiness: an unexpected node error could quote the
+  # file it was reading, and this check's contract is that no byte of it is
+  # ever printed.
+  local detail rc
+  detail="$(node "$helper" --check "$BOX_AUTH_FILE" 2>/dev/null)"; rc=$?
+
+  case "$rc" in
+    0)
+      # The helper's summary is DATA from a subprocess and lands in a line a
+      # human reads on a terminal that acts on control bytes, so it is pinned
+      # to a shape rather than trusted — `_box_build_fields`' rule for the
+      # build stamp's fields, applied to the one string that crosses here.
+      if [[ ! "$detail" =~ ^N=[0-9]+,r=[0-9]+,p=[0-9]+,gen=[0-9]+$ ]]; then
+        _dr_fail auth "the passphrase helper reported a state line this check does not recognise" \
+          "this is a bug in ccrc, not a fact about your box — see _check_auth in $CCRC_HERE/ccrc-doctor-checks and --check in $helper"
+        return 1
+      fi
+      if [ "$armed" -eq 1 ]; then
+        _dr_pass auth "$gate, and $BOX_AUTH_FILE holds a usable passphrase ($detail) — logins are gated"
+        return 0
+      fi
+      # A PASS, not a WARN, and deliberately: `CCRC_AUTH` off is the SHIPPED
+      # DEFAULT and a legitimate state for a box to be in (`_check_rc`'s rule —
+      # a doctor that WARNed here would be asserting a preference). The detail
+      # says the gate is off so nobody reads this line as "we are protected".
+      _dr_pass auth "$BOX_AUTH_FILE holds a usable passphrase ($detail), but $gate, so no request is gated yet"
+      return 0 ;;
+    3)
+      if [ "$armed" -eq 1 ]; then
+        _dr_fail auth "$gate and there is NO passphrase file at $BOX_AUTH_FILE — the gate is armed and failing SHUT: every route answers 401 and no login can succeed" \
+          "run: ccrc passwd (no restart needed — the gate re-reads the file per request)"
+        return 1
+      fi
+      _dr_warn auth "no passphrase file at $BOX_AUTH_FILE, and $gate — this box's console is open to anyone who can reach it" \
+        "run: ccrc passwd — then arm it by setting CCRC_AUTH=on together with CCRC_RP_ID and CCRC_ORIGIN in $BOX_ENV_FILE, and restart ccrc.service"
+      return 2 ;;
+    4)
+      # BOTH ARMS ARE A FAIL, and the difference between them is tense, not
+      # class: with the flag on the server is refusing to boot NOW; with it off
+      # the box works and the one command that arms it is a boot refusal
+      # waiting to happen. Neither is a state anyone chose, and the operator
+      # action is the same — which is why the remedy is one sentence and the
+      # detail is two.
+      #
+      # THE REMEDY IS THE `mv`, NOT A BARE `ccrc passwd` (D-125), and that is the
+      # writer's contract showing through: `gen-auth-hash.mjs` REFUSES to write
+      # over a file it cannot read, because the generation it carries cannot be
+      # read either and inventing one would revalidate sessions instead of
+      # expiring them. Printing `ccrc passwd` alone here would send an operator
+      # to a command that is about to refuse.
+      local when="the moment CCRC_AUTH=on is set, the server will refuse to boot on it"
+      [ "$armed" -eq 0 ] || when="with $gate the server REFUSES TO BOOT on it — readAuthSecret is called uncaught at startup"
+      _dr_fail auth "$BOX_AUTH_FILE exists and this box cannot use it (it does not parse as a scrypt secret line, or it cannot be read at all) — $when" \
+        "move it aside and set a fresh one: mv $BOX_AUTH_FILE $BOX_AUTH_FILE.broken && ccrc passwd (ccrc passwd refuses to overwrite a file it cannot read)"
+      return 1 ;;
+    5)
+      _dr_warn auth "$BOX_AUTH_FILE exists but could not be measured: this box has no server build, and the passphrase file is read by the server's own parser" \
+        "build it (npm run build in server/, or re-run bash deploy/deploy.sh) — until then nothing here can tell a usable passphrase file from one that will refuse the boot"
+      return 2 ;;
+    *)
+      _dr_fail auth "reading $BOX_AUTH_FILE exited $rc — this check does not know what that means" \
+        "this is a bug in ccrc, not a fact about your box — see _check_auth in $CCRC_HERE/ccrc-doctor-checks"
+      return 1 ;;
+  esac
 }
 
 # ── what this box's sessions are SPAWNED AS ───────────────────────────────

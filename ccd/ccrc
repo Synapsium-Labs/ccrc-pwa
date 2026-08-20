@@ -106,6 +106,23 @@ CCRC_HERE="$(cd "${CCRC_HERE%/*}" && pwd)"
 BOX_STAMP_FILE="$HOME/.ccrc/build.json"
 BOX_ENV_FILE="$HOME/.ccrc/ccrc.env"
 
+# ── THE PASSPHRASE SECRET, WHICH THIS FILE NEVER READS ────────────────────
+# `~/.ccrc/auth.scrypt` — the scrypt line the server's session gate verifies a
+# login against (`server/src/auth/secret.ts` owns the format). Spelled here for
+# the reason the two above it are: `cmd_passwd` WRITES it and doctor's `auth`
+# check MEASURES it, and a writer and a reader that spelled the path separately
+# is the drift that comment names. `server/src/config.ts` derives the same
+# default (`CCRC_AUTH_SECRET_PATH || ~/.ccrc/auth.scrypt`) in the other
+# language; that pair is the same cross-language second spelling D-92 already
+# records for `CCRC_UNIT_DIR`, and it is not fixable from either side.
+#
+# NEITHER OF THIS FILE'S USES EVER OPENS IT. `cmd_passwd` hands the path to
+# `deploy/gen-auth-hash.mjs`, which writes it; `_check_auth` hands the same path
+# to the same helper, which reports a CLASS and never a byte. Bash holds the
+# path and nothing else — the rule `_check_wrappers` already keeps for the
+# accounts' secrets files ("PATHS ONLY. THE SECRETS FILE IS NEVER OPENED").
+BOX_AUTH_FILE="$HOME/.ccrc/auth.scrypt"
+
 # ── WHERE A BOX KEEPS THE SHIPPED TREE ────────────────────────────────────
 # `~/ccrc` is not this file's choice and is not a default: it is the layout
 # every sibling contract in this repository already assumes. Both deploy lanes
@@ -180,7 +197,7 @@ INST_DEGRADED=()
 
 usage() {
   cat <<EOF
-usage: $PROG {doctor|status|adopt|wrappers|install|version}
+usage: $PROG {doctor|status|adopt|wrappers|install|passwd|version}
 
 The lifecycle CLI for a Claude Code fleet box — installs, updates and
 diagnoses a box, as a sibling to ccd (which drives sessions once one is
@@ -202,6 +219,11 @@ already running).
             (never overwriting yours), install executables, units and hooks,
             generate wrappers, then run doctor. Single-box, localhost.
             Re-running converges; it never damages an existing install
+  passwd    set (or rotate) this box's PWA passphrase in ~/.ccrc/auth.scrypt.
+            Prompts twice on a tty; the gate also needs CCRC_AUTH=on in this
+            box's ccrc.env. Rotating invalidates every logged-in SESSION —
+            enrolled passkeys keep working, by design, so a lost device is
+            "revoke its passkey in the PWA, THEN run this"
 
   -h, --help   print this message and exit 0
 
@@ -1565,6 +1587,125 @@ cmd_adopt() {
   exec "$BASH" "$adopt" "$@"
 }
 
+# ── cmd_passwd — THE ONE WRITER OF ~/.ccrc/auth.scrypt ────────────────────
+# Sets, or rotates, the passphrase the server's session gate checks a login
+# against. `install` deliberately does not do this and never will (see
+# `_inst_env`'s seed-once doctrine and the landing block's own line): a
+# passphrase is the operator's, typed by the operator, once.
+#
+# ── STDIN MUST BE A TTY, AND A PIPE IS REFUSED OUTRIGHT ───────────────────
+# Not politeness — `install.sh` is documented as `curl … | bash`, where stdin
+# IS THE SCRIPT. A `read` on that stdin does not fail and does not block: it
+# silently consumes the installer's own next line and hashes it as the box's
+# passphrase, leaving a box that is credentialed with a fragment of shell
+# nobody can retype. The refusal is what makes that unreachable, and
+# `ccrc-passwd.test.ts` pins it by piping one.
+#
+# ── THE PASSPHRASE NEVER TOUCHES argv, A FILE, OR THE SCREEN ──────────────
+#   - `read -rs` — no echo, no history, backslashes literal (`-r`).
+#   - it reaches the hasher through a pipe from `printf`, which is a bash
+#     BUILTIN: no second process is forked, so nothing ever appears in
+#     /proc/<pid>/cmdline, which is world-readable. A here-string (`<<<`) is
+#     NOT used for the same class of reason — bash implements one with a temp
+#     file on disk.
+#   - it is `unset` the moment the hasher has had it, and nothing in this
+#     function prints it, logs it, or puts it in a diagnostic.
+#
+# ── THE TRAP IS ABOUT THE OPERATOR'S TERMINAL ─────────────────────────────
+# `read -s` turns echo off and restores it itself on a normal return — but not
+# when a Ctrl-C arrives mid-prompt, which leaves the shell alive with a
+# terminal that no longer shows what is typed into it. `stty echo` on
+# EXIT/INT/TERM is the whole fix; its failure is discarded because a terminal
+# that cannot be stty'd is not a reason to change this command's exit code.
+#
+# ── WHAT IT INVALIDATES, AND WHAT IT DOES NOT (D-125) ────────────────────
+# A rotation bumps the file's `generation`, and `SessionStore.verify` answers
+# `'expired'` for every session stamped with an older one — so every logged-in
+# browser is logged out, with no restart. ENROLLED PASSKEYS ARE UNAFFECTED, by
+# design (the Task 8 operator ruling: `StoredCredential` carries no generation
+# stamp). An operator who believes `passwd` is a panic button for a lost phone
+# has the failure mode exactly backwards, so the success block says so: revoke
+# the passkey in the PWA FIRST, then rotate.
+cmd_passwd() {
+  # `cmd_wrappers`/`cmd_install`'s loop. `-h`/`--help` prints usage at exit 0
+  # rather than being `cmd_version`'s usage error: this is a verb that CHANGES
+  # THE BOX and locks people out of a console, so "what will this do" must be
+  # answerable without running it.
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -h|--help) usage; exit 0 ;;
+      *) _ccrc_usage_die "$1" ;;
+    esac
+  done
+
+  [ -t 0 ] \
+    || _ccrc_die "stdin is not a terminal, and this verb will not read a passphrase from a pipe or a file. A piped passphrase cannot be confirmed, cannot be typed without echo, and — the case this refusal exists for — under \`curl … | bash\` stdin is the INSTALLER SCRIPT, so a read here would hash a line of shell as your passphrase. Run 'ccrc passwd' from a terminal. Nothing was written."
+
+  # BY NAME, BEFORE ANY PROMPT — `cmd_install:1626-1641`'s idiom and its exact
+  # reason: without it an absent interpreter arrives as the hasher "failing",
+  # after the operator has typed a passphrase twice, and the message is about
+  # the wrong thing entirely.
+  command -v node >/dev/null 2>&1 \
+    || _ccrc_die "node is required by 'ccrc passwd' — it runs ${CCRC_HERE%/*}/deploy/gen-auth-hash.mjs to hash the passphrase — but is not on PATH. Install Node (this repo's floor is in server/package.json's \"engines\") or put it on PATH, then re-run. Nothing on this box was written or changed."
+
+  local helper="$CCRC_HERE/../deploy/gen-auth-hash.mjs"
+  [ -f "$helper" ] \
+    || _ccrc_die "the passphrase hasher is missing: $helper — is this a complete ccrc install? Nothing was written."
+
+  # 12, and the number is a floor rather than a policy. Online guessing is
+  # already bounded by the login brake (`server/src/auth/ratelimit.ts`'s
+  # MAX_FAILURES = 8 failures per window, each holding a scrypt slot), so what
+  # a length floor buys is resistance to an OFFLINE attack on the hash if the
+  # file ever leaves the box, and a stop on the one-character passphrase
+  # somebody types to "test it quickly" and then keeps.
+  local min=12
+
+  trap 'stty echo 2>/dev/null' EXIT INT TERM
+
+  local p1="" p2=""
+  printf '%s\n' "$PROG: setting the PWA passphrase in $BOX_AUTH_FILE (nothing is echoed; Ctrl-C aborts)" >&2
+  if ! read -rsp "New passphrase (at least $min characters): " p1; then
+    printf '\n' >&2
+    _ccrc_die "no passphrase was entered — nothing was written"
+  fi
+  printf '\n' >&2
+  if ! read -rsp "Repeat it: " p2; then
+    printf '\n' >&2
+    unset p1 p2
+    _ccrc_die "no passphrase was entered — nothing was written"
+  fi
+  printf '\n' >&2
+
+  # LENGTH BEFORE MATCH would tell an operator who mistyped the second entry
+  # that their FIRST one was too short, so the comparison comes first — and
+  # both refusals name only the property that failed, never any part of what
+  # was typed.
+  if [ "$p1" != "$p2" ]; then
+    unset p1 p2
+    _ccrc_die "the two entries do not match — nothing was written"
+  fi
+  if [ "${#p1}" -lt "$min" ]; then
+    unset p1 p2
+    _ccrc_die "the passphrase is shorter than $min characters — nothing was written"
+  fi
+
+  # The hasher writes the file (atomically, 0600), bumps the generation, and —
+  # the part that matters — reads its own output back through the server's own
+  # parser AND verifies this passphrase against it before installing it. Its
+  # stdout is the RESULT and goes straight to the terminal; a refusal is its
+  # own sentence on stderr and this adds one line rather than re-wording it
+  # (`_inst_accounts_sh`'s rule).
+  local rc=0
+  printf '%s' "$p1" | node "$helper" "$BOX_AUTH_FILE" || rc=$?
+  unset p1 p2
+  [ "$rc" -eq 0 ] \
+    || _ccrc_die "the passphrase was NOT set — read the line above; $BOX_AUTH_FILE is exactly as it was"
+
+  echo "$PROG: the gate is still OFF until CCRC_AUTH=on is set in $BOX_ENV_FILE and ccrc.service is restarted — a passphrase on its own changes nothing"
+  echo "$PROG: set CCRC_RP_ID and CCRC_ORIGIN in the SAME edit that arms CCRC_AUTH — with the flag on and those two wrong, every /ws/* upgrade and every non-exempt write is refused from the real origin, and the server prints no warning about it at boot"
+  echo "$PROG: every logged-in session is now expired. ENROLLED PASSKEYS ARE NOT — they keep working across a rotation, by design. For a lost device: revoke its passkey in the PWA first, THEN run this"
+}
+
 # ── cmd_install — the verb this CLI is named for ──────────────────────────
 # `ccrc install` converges THIS box from the tree `ccrc` itself was run out of:
 # it seeds the config a box cannot boot without, installs the executables,
@@ -1721,6 +1862,24 @@ cmd_install() {
   [ -n "$port" ] || port=7788
   echo "install: PWA: http://$host:$port/ (CCRC_HOST/CCRC_PORT in $BOX_ENV_FILE change this)"
   echo "install: next: add your first session with: ccd menu   (and read $BOX_ENV_FILE)"
+  # ── THE ONE LINE ABOUT THE GATE, AND WHY THIS RUN DID NOT SET IT ───────
+  # `install` writes NO passphrase, and that is the seed-once doctrine applied
+  # to a credential rather than an omission: a passphrase this run invented
+  # would be a password nobody chose sitting on disk, and a passphrase this run
+  # PROMPTED for cannot be read at all — `install.sh` is documented as
+  # `curl … | bash`, where stdin is the script itself, so a `read` here would
+  # consume the installer's own text (`cmd_passwd`'s tty refusal is the same
+  # hazard from the other side). So the box lands with the gate DARK, which is
+  # the shipped default (`CCRC_AUTH` off), and doctor's `auth` check WARNs
+  # about exactly that four lines below this one.
+  #
+  # THE THREE VARIABLES ARE NAMED TOGETHER because setting `CCRC_AUTH` alone
+  # produces a console that can read and cannot act: `CCRC_ORIGIN` also gates
+  # every /ws/* upgrade and every non-exempt write, and the server cannot warn
+  # about a wrong one at boot (behind `tailscale serve` it never learns the
+  # hostname it is reached under). An operator who arms the flag from this line
+  # alone would find that out one tap at a time.
+  echo "install: gate: this box has NO PWA passphrase — install never writes one. To arm the gate: ccrc passwd, then set CCRC_AUTH=on together with CCRC_RP_ID and CCRC_ORIGIN in $BOX_ENV_FILE, then: systemctl --user restart ccrc.service"
   cmd_doctor
 }
 
@@ -2594,6 +2753,7 @@ case "$VERB" in
   adopt)   cmd_adopt "$@" ;;
   wrappers) cmd_wrappers "$@" ;;
   install) cmd_install "$@" ;;
+  passwd)  cmd_passwd "$@" ;;
   *) _ccrc_usage_die "$VERB" ;;
 esac
 

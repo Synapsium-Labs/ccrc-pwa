@@ -152,6 +152,13 @@ const TREE_FILES = [
   'deploy/ccrc.service',
   'ccd/claude-session@.service',
   'deploy/verify-service.sh',
+  // ── Stage 3a Task 9: the passphrase hasher. This install writes NO
+  // passphrase (the seed-once doctrine applied to a credential, and the
+  // `curl … | bash` stdin hazard `cmd_passwd`'s tty refusal exists for), but
+  // the run ENDS with doctor, whose `auth` check reaches this file through
+  // `$CCRC_HERE/../deploy/` to measure what is (not) there. Without it in the
+  // tree, that check would report a bug in ccrc on every fixture box.
+  'deploy/gen-auth-hash.mjs',
   // ── The two SKILL TREES and their two installers (worker-skill Task 4).
   // `_inst_skills` places each tree into `~/.cc-sessions/` and then RUNS the
   // installer it just placed beside it, so all four are read out of the tree
@@ -2257,7 +2264,7 @@ describe('ccrc install: both skills reach every rostered account', () => {
 });
 
 describe('ccrc install: the landing block, and doctor as the last word', () => {
-  it('ends with doctor, and a box that passes every check exits 0', () => {
+  it('ends with doctor, and a box with nothing wrong with it exits 0', () => {
     const home = freshBox('ccrc-install-doctor-ok-');
     const r = runInstall(home);
     expect(r.code, r.stderr).toBe(0);
@@ -2269,7 +2276,36 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     // the verb's exit code is its verdict.
     const lines = r.stdout.split('\n').filter(Boolean);
     expect(lines[lines.length - 1]).toMatch(/^summary: \d+ checks \(\d+ skipped\), /);
-    expect(r.stdout).toMatch(/^summary: \d+ checks \(\d+ skipped\), \d+ verdicts — \d+ passed, 0 warned, 0 failed$/m);
+    // EXACTLY ONE WARNING, AND IT IS THE GATE (D-126). This line
+    // asserted `0 warned` until `auth` joined the table, and the change is a
+    // fact about what `install` does rather than a test being loosened: this
+    // verb writes NO passphrase, deliberately and permanently, so every box it
+    // finishes has a console with no credential on it and doctor says so. The
+    // warning is NAMED here so the assertion keeps its teeth — a second
+    // warning, or a different one, is still red.
+    expect(r.stdout).toMatch(/^summary: \d+ checks \(\d+ skipped\), \d+ verdicts — \d+ passed, 1 warned, 0 failed$/m);
+    expect(r.stdout).toMatch(/^WARN auth: no passphrase file at /m);
+  });
+
+  it('says, in one line, that it wrote no passphrase and what arming the gate takes', () => {
+    // Three variables in one sentence, because `CCRC_AUTH=on` alone produces a
+    // console that can read and cannot act: the same unvalidated `CCRC_ORIGIN`
+    // gates every /ws/* upgrade and every non-exempt write, and the server
+    // cannot warn about a wrong one at boot (behind `tailscale serve` it never
+    // learns the hostname it is reached under). An operator working from this
+    // transcript is the one who needs to be told all three at once.
+    const home = freshBox('ccrc-install-gate-line-');
+    const r = runInstall(home);
+    const line = r.stdout.split('\n').find((l) => l.startsWith('install: gate: ')) ?? '';
+    expect(line, r.stdout).toContain('NO PWA passphrase');
+    expect(line).toContain('ccrc passwd');
+    expect(line).toContain('CCRC_AUTH=on');
+    expect(line).toContain('CCRC_RP_ID');
+    expect(line).toContain('CCRC_ORIGIN');
+    // …and the install really did not write one. A passphrase this run invented
+    // would be a credential nobody chose, and one it PROMPTED for cannot be
+    // read at all under `curl … | bash`, where stdin is the script itself.
+    expect(existsSync(join(home, '.ccrc', 'auth.scrypt'))).toBe(false);
   });
 
   it('reads the PWA address back out of the env file it installed', () => {

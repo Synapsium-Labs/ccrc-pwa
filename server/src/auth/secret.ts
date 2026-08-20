@@ -71,6 +71,25 @@ export interface AuthSecret {
  *  the hash length IS the keylen, and the parser pins it to this. */
 export const KEYLEN = 32;
 
+/**
+ * The generation a box's FIRST `ccrc passwd` stamps. Every later rotation is
+ * `existing + 1` (`deploy/gen-auth-hash.mjs` is the only writer), and
+ * `SessionStore.verify` answers `'expired'` for any session not carrying the
+ * CURRENT generation — so this is the number every session on a
+ * freshly-configured box is stamped with, and the bump is the whole mechanism
+ * by which `ccrc passwd` logs everyone out without a restart.
+ *
+ * 1 AND NOT 0, and that is not style. The parser admits `gen=0` (it requires
+ * only `>= 0`), and 0 is the one integer that is falsy in JavaScript: any
+ * future `generation || fallback` — the exact `||`-not-`??` shape this
+ * codebase writes deliberately elsewhere (`config.ts`'s bare-`KEY=` rule) —
+ * would silently replace a real generation 0 with something else, and a
+ * generation nobody chose is a logout nobody asked for or, worse, a stale
+ * cookie that revalidates. Starting at 1 keeps 0 as a value this project never
+ * writes.
+ */
+export const INITIAL_GENERATION = 1;
+
 /** The tunable scrypt parameters `hashLine` derives under. */
 export interface ScryptParams {
   n: number;
@@ -393,11 +412,25 @@ export function needsRehash(secret: AuthSecret): boolean {
 
 /**
  * Produce the exact `~/.ccrc/auth.scrypt` line for `passphrase` under `params`,
- * stamped `generation`. The Task 9 node helper (`gen-auth-hash.mjs`) is the real
- * caller — `ccrc passwd` pipes the passphrase to it on stdin and redirects this
- * line into the file — and this same function round-trips through `readAuthSecret`
- * + `verifyPassphrase` in the unit tests, so the writer and the reader are proven
- * against each other here rather than only in production.
+ * stamped `generation`. The node helper (`deploy/gen-auth-hash.mjs`) is the real
+ * caller — `ccrc passwd` pipes the passphrase to it on stdin — and this same
+ * function round-trips through `readAuthSecret` + `verifyPassphrase` in the unit
+ * tests, so the writer and the reader are proven against each other here rather
+ * than only in production.
+ *
+ * THE HELPER WRITES THE FILE ITSELF; this docstring used to say `ccrc passwd`
+ * "redirects this line into the file", which Task 9 measured to be the wrong
+ * shape and did not build. A shell redirect truncates the destination BEFORE
+ * the line exists, so a hash that turned out unreadable would already have
+ * destroyed the working secret it was replacing — and `readAuthSecret` is
+ * called UNCAUGHT at boot (`server.ts`), which makes an unreadable line a
+ * server that does not start, fixable only by the command that wrote it. The
+ * helper therefore writes a temp file, reads it back through `readAuthSecret`
+ * AND proves the passphrase against it with `verifyPassphrase` while the
+ * passphrase is still in hand, and only then renames it into place. A line this
+ * function is happy to emit is not automatically a line the parser accepts —
+ * `{n: 65536, r: 1, p: 1}` is exactly such a pair (D-113's `N < 2^(16*r)`
+ * bound) — so that round trip is a real gate, not a ritual.
  *
  * A FRESH random salt every call: two boxes given the same passphrase, or one box
  * re-run of `ccrc passwd`, never share a hash.

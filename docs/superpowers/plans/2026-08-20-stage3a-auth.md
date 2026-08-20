@@ -121,7 +121,8 @@
 
 ## Deviations found
 
-(Next free number at plan time: **D-108**. Next free now: **D-123**.)
+(Next free number at plan time: **D-108**. Next free now: **D-128**. D-123 is
+claimed by `server/src/auth/credentials.ts` from Task 8 and has no ledger entry here.)
 
 - **D-115 — the Origin check stopped at the socket, leaving CSRF open.** Task 8 added a
   `/ws/*` Origin check because `ts.net` is a public suffix, so every tailnet node is
@@ -173,6 +174,44 @@
   into `passkeyLoginSupported` (L1 is enough to assert) and `passkeyEnrollSupported` (L2),
   because a browser that cannot enrol can still sign in with a key enrolled on a phone.
   `pwa/src/lib/passkey.ts`.
+
+- **D-124 — the "parseable by `hashLine`, rejected by the parser" pair fails EARLIER than
+  predicted.** Task 9's brief named `{n: 65536, r: 1, p: 1}` (D-113's bound) as the pair
+  that would prove the round-trip guard fires. Measured on node 24.14.1: it never reaches
+  the parser — `crypto.scrypt` throws `ERR_CRYPTO_INVALID_SCRYPT_PARAMS` synchronously
+  inside `scryptDerive`'s promise executor, so `hashLine` REJECTS and there is no line to
+  read back. Two consequences, both shipped: `gen-auth-hash.mjs` catches the derive so that
+  case is a sentence rather than an unhandled rejection under a caller that promised one,
+  and the round trip is proven with a different real pair — `keylen: 16`, which derives
+  happily and which the parser refuses ("hash is 16 bytes, want 32"). Both are measured, by
+  a fixture that re-exports the SHIPPED module with `DEFAULT_PARAMS` swapped
+  (`server/test/authFixtures.ts`), so no broken default ships to prove a guard.
+- **D-125 — `ccrc passwd` REFUSES to overwrite a secret file it cannot read.** The brief
+  says `passwd` is the operator's only remedy for a bad `auth.scrypt`, which argues for
+  overwriting anything. But the generation cannot be read out of an unusable file, and
+  writing `INITIAL_GENERATION` over a box that WAS at generation 1 would REVALIDATE every
+  session minted under it — the exact opposite of what the command is for. So the writer
+  carries `secret.ts`'s own polarity (absent ≠ unusable): absent → initial, parsed →
+  `+ 1`, unusable → refuse, printing `mv <file> <file>.broken && ccrc passwd`. Doctor's
+  `auth` remedy prints the same two-step rather than a bare `ccrc passwd`, which would send
+  an operator to a command that is about to refuse. The round-trip guard is what makes this
+  affordable: `passwd` can no longer CREATE the state it refuses to repair.
+- **D-126 — `ccrc install`'s doctor tail now ends with exactly one WARN, by design.**
+  `install` writes no passphrase (seed-once, plus the `curl … | bash` stdin hazard), and
+  the `auth` check WARNs about a console with no credential — so the transcript that used
+  to assert `0 warned` cannot. `ccrc-install.test.ts` asserts `1 warned, 0 failed` AND names
+  the warning (`WARN auth: no passphrase file at …`), so a second warning, or a different
+  one, is still red. `ccrc-doctor.test.ts`'s `healthy()` fixture grew a real passphrase file
+  instead, keeping "every check PASSES" true of the box that suite calls healthy.
+- **D-127 — doctor measures the secret with the SERVER's parser, and prints no byte of the
+  file.** `_check_auth` shells to `deploy/gen-auth-hash.mjs --check`, which imports the
+  compiled `secret.ts` — a bash approximation would inevitably pass a line the server
+  refuses, and that refusal is a boot failure, not a refused login. The helper answers with
+  an exit CODE (absent / parsed / unusable / no-build) and a params-and-generation summary
+  the check re-validates against a strict regex; `AuthSecretUnusable`'s message is never
+  printed, because it quotes the field it choked on (measured: `unknown prefix "<field>"`,
+  `N is not a plain decimal integer ("<field>")`) and the plausible way to get an unusable
+  `auth.scrypt` is a misplaced copy of another secret. Both leak shapes are pinned by test.
 
 **Recorded, deliberately unchanged:** the `signCount` both-zero carve-out. Most Apple/Android
 platform passkeys and every synced credential always send 0; accepting them forfeits nothing,
