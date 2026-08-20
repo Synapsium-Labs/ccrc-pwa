@@ -364,6 +364,20 @@ that migrates to `readFileMeasured` makes those overrides **inert** — the spre
   suite can be called green, and a red `typecheck-tests` after an agent edit is not necessarily a
   server defect.
 
+- **D-118 (2026-08-20)** — `server/test/push-copy.test.ts:333`'s "reads clean exactly ONCE per tick"
+  double is VACUOUS: neutering it (degrade nothing) leaves the test green. Measured on BOTH the
+  converted double and the pre-conversion original at `c1a6866`, so it is pre-existing, not a
+  regression from Task 4. Root cause: the busy→idle fix that test was written for already landed, and
+  `assembleFleet` no longer re-reads the field per tick, so the double's `>1 reads` branch is dead
+  either way. Preserved bug-for-bug here because Task 4's charter is exact semantics preservation —
+  changing it would have been a silent assertion change. Left for whoever next owns that test.
+- **D-119 (2026-08-20)** — Task 4.1's wording ("overrides **both** `readFileMeasured` and `readFile`
+  consistently") was superseded during execution by "overrides `readFileMeasured` ONLY". Both aim at
+  the same invariant, but the `this`-based derivation ACHIEVES it where two overrides only PROMISE
+  it — one source of truth instead of two kept in step by hand. This resolves an internal
+  inconsistency in the plan rather than departing from it: the seam section above already anticipates
+  "a test double that overrides only `readFileMeasured` degrade[s] `readFile` too".
+
 ## Open questions for the operator
 
 None blocking. Two judgment calls were made rather than asked, both recorded above with their
