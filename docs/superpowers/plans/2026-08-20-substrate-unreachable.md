@@ -466,4 +466,28 @@ describe('substrate chip — the console cannot see this session, and says so (s
 
 ## Deviations found
 
-*(numbered D-B8-14.x during execution; the global ledger entry lands in the build8 plan.)*
+*(the global ledger entry, with the full mutation tables and the review findings, is D-B8-14 in
+`2026-08-15-fleet-robustness-build8.md`.)*
+
+- **D-B8-14.1** — Task 2's marker refreshed per tick as this plan specified; the branch review
+  confirmed that shape destroys the onset epoch and the skew record. First write wins now
+  (`_substrate_mark` early-returns on an existing file), and the task's pin was rewritten from
+  "refresh, no second suffix" to byte-identical persistence under a moved clock.
+- **D-B8-14.2** — `cmd_supervise` gained a PRE-FLIGHT probe this plan did not have: `cmd_ensure` is
+  skipped when the substrate does not answer, because its spawn path (`tmux list-sessions` /
+  `new-session`) carries no deadline and a supervisor (re)started mid-wedge hung before the loop
+  could mark. Every supervise-loop test sequence carries one leading element for it.
+- **D-B8-14.3** — Task 9's banner population (`lifecycle === 'running'`) was wrong on the wire:
+  during the fault every faulted row classifies `restarting` (the server's own probes read
+  unknown). The population is now watched = running OR restarting, and the fixtures are wire-true.
+- **D-B8-14.4** — Task 8's inventory missed two doors: SessionHeader's Move (swap) item and
+  PrSheet's Archive-now/Clean-up. Both gated with the same derived fault and named reason.
+- **D-B8-14.5** — Task 10's fixture reached the HOST's tmux from the install suite's doctor tail;
+  `healthyDoctorBox` now plants a 9.9/9.9 version stub and `tmux` joined `FIXTURE_BINS`.
+- **D-B8-14.6** — line anchors in Tasks 2-4 had drifted by the time their implementers arrived
+  (`_reg_claim` at ccd:382 not :357; the loop at ccd:8655 not :8613; six count-prose sites not
+  five); the code was followed per the anchors-are-snapshots rule.
+- **D-B8-14.7** — the plan's `seq`/stub sketches carried two bash syntax errors (unquoted
+  space-bearing array elements; a function's closing brace followed by a word) and one
+  wrong-shaped runner return (`r.status` vs the harness's `{code}`); fixed in place by the
+  implementers, noted here because the plan is otherwise executable verbatim.

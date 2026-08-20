@@ -13910,3 +13910,58 @@ to the substrate-unreachable spec, not to a guard.
 fix, and the halves drift unless a fixture binds them. D-B8-12's own ledger entry said "the polarity is
 the whole design" — and the polarity existed in one language. **When you fix a collapse on one side of
 a seam, grep for its twin on the other side before closing the deviation.**
+
+### D-B8-14 — the supervise loop stops treating silence as death, and the fault gets a face
+
+**Shipped:** 2026-08-20, `feat/substrate-unreachable`, implementing the substrate-unreachable spec v2
+(operator-approved same day). Ten plan tasks executed by a serial implementer+reviewer workflow (20
+agents, every task review-gated); one blocking and six major defects then found by a four-lens
+adversarial branch review (11 agents) and fixed before the PR.
+
+**The mechanism, end to end.** `_session_probe` (deadline-bounded `has-session`, 8 s; the deadline
+applies only to a real binary, so the suites' function stubs keep working) feeds a verdict-driven
+`cmd_supervise` loop: `gone` is the ONLY exit; `unknown` writes `$REG/<id>.substrate`
+(`<epoch-seconds> <text>`, first write WINS, skew comparison riding it), stamps the heartbeat EVERY
+tick (beat counts assumed seconds — a naive backoff stamps every 180 s against the 120 s window and
+ages all 17 rows into orphan mid-fault), skips the tick helpers, and backs off 5 s → 30 s after
+three. A pre-flight probe gates `cmd_ensure`: a supervisor (re)started mid-wedge must not walk into
+the deadline-less spawn path. The server reads the marker in `buildRecord` on the `.hold`
+listed-vs-readable ladder (22 field reads now); `FleetSession.substrate: { at(ms), text } | null`
+rides the wire additively (`FLEET_PROTO` still 1) through `reviveSubstrate` and the ONE tolerant
+reader `substrateFault`; the PWA renders the `sess-substrate` chip, gates every destructive door
+(Restart, Stop, Swap — both openers — Archive, Restore-adjacent Clean-up, Forget, and PrSheet's own
+archive/reap doors) disabled+titled with the chip's own string, and derives ONE banner when every
+watched row (`running` OR `restarting`) reports the fault. `ccrc-doctor` gained `tmux_skew`
+(client/server version comparison; wedge and no-client get their own SKIP arms).
+
+**What the adversarial review caught that ten green task-reviews did not:**
+1. *(blocking)* The banner filtered on `lifecycle === 'running'` — a word the server cannot emit
+   during the fault (its own probes read unknown → `alive` false → every faulted row classifies
+   `restarting`), so it could never render in exactly the event it was built for, and the fixtures
+   had seeded the wire-impossible `running`+fault combination.
+2. `_substrate_mark` rewrote the marker every tick: the onset epoch was never more than one tick old
+   ("since <epoch>" was a lie) and the skew diagnosis was destroyed one tick after recording — and
+   the task's own green test PINNED the rewrite. Tests pin shape, not effect, again.
+3. The restart path hung before the loop: `cmd_ensure` before the first probe walks into
+   `_tmux_new_session`'s deadline-less `tmux list-sessions`/`new-session` under a wedge — a hang
+   wearing an active unit, on the deploy `try-restart` path that hits all 17 at once.
+4-5. Two ungated doors to gated verbs: SessionHeader's Move (swap, end-to-end ungated) and PrSheet's
+   Archive-now/Clean-up (the verbs its neighbour sheet disables).
+6. The install suite's doctor tail probed the HOST's tmux — verdict depended on the box.
+7. The `gone`-only-exit test's expected code 1 was also what a spawnSync timeout kill maps to — the
+   intent-named test survived deletion of the very arm it names (caught, strengthened with the
+   loop's own exit sentence).
+
+**Mutation tables** (all measured red→restored): probe deadline 1; rc-124 synthesized reason 1;
+one-classifier derivation 1; skew-on-every-write 1; empty-reason guard 1; first-write-wins 1;
+ensure gate 1; every-tick stamp 1; unknown-exits 2; backoff 1; clear-on-live 1; helpers-skipped 1;
+registry unreadable-arm fail-open 1; listing-check 1; revive-line compile; substrateFault
+empty-text 1; s→ms conversion 2; chip-direct-read 1; achromatic-group 2; eight per-control gate
+mutations 1 each; banner some-vs-every 1; skew equal-versions-forced 1.
+
+**The transferable lesson.** A serial task chain with per-task review gates produced ten green,
+individually-reviewed tasks — and the cross-cutting defects lived exactly in the seams BETWEEN
+tasks: the banner's filter against the lifecycle the server actually emits (task 9 vs task 6's
+semantics), the marker's rewrite against the spec's "since" (task 2's test pinned its own bug), the
+ensure path nobody's task owned. **Per-task review verifies tasks; only a whole-branch adversarial
+pass verifies the design.** Budget for both.
