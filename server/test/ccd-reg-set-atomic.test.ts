@@ -63,7 +63,43 @@ describe('_reg_set writes atomically', () => {
     expect(body, 'the destination is reached by rename only').toMatch(/mv\s+-[a-zA-Z]*T[a-zA-Z]*\s/);
   });
 
+  it('names its tmp DOT-FIRST and never ends it in the field — the two properties every listing reader depends on', () => {
+    // STRUCTURAL, and deliberately so: the only moment a tmp exists is between
+    // `_reg_set`'s redirection and its `mv`, and a behavioural test cannot
+    // observe that window without racing the very write it is watching. So
+    // the NAME is pinned where the name is decided — a scan of `_reg_set`'s
+    // own body, the same instrument `ccd-pr-state.test.ts` uses on the python
+    // half ("put() renames rather than truncating…"). The sibling test below
+    // can only assert what is left AFTER a successful `_reg_set`, and a
+    // success renames the tmp out of existence, so nothing there can see a
+    // tmp name at all.
+    //
+    // Both properties are load-bearing and each closes a different reader
+    // class (`_reg_set`'s own comment states them):
+    //   - LEADING DOT — every registry glob in ccd is un-`dotglob`'d
+    //     (`$REG/$id.*` in `_reg_purge`/`_ws_slug_free`/`_ws_slug_residue`,
+    //     `$REG/*.workspace`, `$REG/*.uuid`), and a dotfile matches none of
+    //     them. Drop the dot and a leaked tmp wedges a slug.
+    //   - FIELD NEVER LAST — node's `readdir` DOES return dotfiles, and
+    //     `readRegistryMeasured` mints session ids from
+    //     `names.filter(n => n.endsWith('.uuid'))`. A tmp ending in the field
+    //     name would mint a phantom session out of an in-flight write.
+    const body = /_reg_set\(\)\s*\{([\s\S]*?)\n\}/.exec(ccd)?.[1] ?? '';
+    const assigned = /^\s*tmp=("[^"]*")/m.exec(body)?.[1] ?? '';
+    expect(assigned, '_reg_set must build its tmp path in one quoted assignment').not.toBe('');
+    const parts = assigned.slice(1, -1).split('.');
+    expect(parts[0], 'the tmp must be DOT-PREFIXED — the first path component after $REG/ is the dot')
+      .toBe('$REG/');
+    expect(parts[parts.length - 1], 'the FIELD may never be the last component — a `.tmp` suffix is what keeps it out of `endsWith(\'.uuid\')`')
+      .toBe('tmp');
+    expect(parts, 'the field must still appear, just never last').toContain('$2');
+  });
+
   it('leaves NO tmp file behind on the success path, and its tmp is invisible to every registry glob', () => {
+    // Everything here is asserted AFTER `_reg_set` succeeded, and success
+    // renames the tmp out of existence — so this test pins CLEANUP and the
+    // resulting listing, never the tmp's NAME. The naming scheme itself is
+    // pinned structurally by the test above.
     h.sh(`_reg_set demo-quiet-basin uuid u1
           _reg_set demo-quiet-basin workspace quiet-basin
           _reg_set demo-quiet-basin wrapper claude`);
