@@ -2,7 +2,8 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
-import type { AccountsResponse, CatchUp, FleetHealth, FleetSession, NotifyEvent, PrView, ReapResult, RunSummary, SlashCommand, StagedClip, WsAudit } from '../../../shared/api';
+import type { AccountsResponse, CatchUp, FleetHealth, FleetSession, LoginRequest, NotifyEvent, PrView, ReapResult, RunSummary, SlashCommand, StagedClip, WsAudit } from '../../../shared/api';
+import { raiseAuthLostFrom } from './auth';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -206,6 +207,18 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       } catch {
         /* non-JSON error body stays raw text */
       }
+      // THE 401 BRANCH (Stage 3a, Task 7). One line, at the one funnel every
+      // call in this file goes through, and it SIGNALS rather than decorating
+      // the throw: `lib/auth.ts` explains why a rejection each caller must
+      // separately catch could never raise exactly one login screen.
+      //
+      // The rejection below is UNCHANGED — same `ApiError`, same status, same
+      // body. Callers await these promises to stop spinners, roll back
+      // optimistic edits and release queues; swallowing the rejection (or
+      // returning a promise that never settles) would leave the app half
+      // committed behind the login screen. What is suppressed is the NOISE, not
+      // the failure: `toast()` drops anything fired while the screen is up.
+      if (res.status === 401) raiseAuthLostFrom(body);
       throw new ApiError(res.status, body);
     }
     return res;
@@ -230,6 +243,28 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
   const sid = (id: string): string => `/api/sessions/${encodeURIComponent(id)}`;
 
   return {
+    /**
+     * `POST /api/auth/login` — the ONE write that is made while the gate is
+     * refusing everything else (`server/src/auth/gate.ts`'s EXEMPT table).
+     *
+     * Success is `204 No Content` plus `Set-Cookie`, and `shared/api.ts`
+     * declares no `LoginResponse` to go with it: the cookie IS the response, so
+     * this resolves to `void` and reads no body. NO SEND-SIDE CHANGE IS NEEDED
+     * ANYWHERE — the cookie is same-origin and rides every later request (and
+     * every websocket upgrade) automatically; it is `HttpOnly`, so this client
+     * never sees it and could not attach it by hand if it wanted to.
+     *
+     * Takes the whole `LoginRequest` rather than a bare string so the wire shape
+     * is checked at the seam by the type its producer declares. The passphrase
+     * travels in the BODY and nowhere else — never a query string, never a
+     * header, both of which proxies routinely log.
+     *
+     * Its refusals reach the caller as ordinary `ApiError`s: 401 `wrong`/
+     * `unconfigured`, and — note — 429 `locked-out`, which is NOT a 401 and so
+     * never touches the funnel's signal at all. `LoginScreen` reads both off the
+     * body it catches.
+     */
+    login: (req: LoginRequest): Promise<void> => post('/api/auth/login', req),
     fleet: () => getJson<{ sessions: FleetSession[]; stale?: boolean; downSince?: number | null }>('/api/fleet'),
     fleetHealth: () => getJson<FleetHealth>('/api/fleet/health'),
     rebootFleet: () => post('/api/fleet/reboot'),

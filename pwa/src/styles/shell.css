@@ -240,3 +240,65 @@
   width: auto;
   min-width: 180px;
 }
+
+/* ---- LoginScreen: the session gate (Stage 3a, Task 7) ---------------- */
+/* Beside .block-screen because it is the same kind of thing and mounted the
+   same way — a preceding sibling of .app-shell, fixed, covering panes, sheets
+   and toasts alike. It shares --z-block rather than minting a token of its
+   own: app.tsx renders this one FIRST, so at equal z-index the block screen
+   paints on top, which is the right order (a build too old for the fleet
+   protocol cannot be fixed by signing in).
+
+   Every declaration here is either layout or a token pair that already ships:
+   the container is .block-screen's own --ink-primary on --bg-page, and
+   .login-input copies .sess-hold-input's declarations verbatim (edge-subtle
+   border, bg-raised, ink-primary) — same tokens, no new pair for the contrast
+   gate to measure. The copy and the label set NO colour and inherit the
+   container's ink. */
+.login-screen {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-block);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-4);
+  padding: var(--sp-6);
+  background: var(--bg-page);
+  color: var(--ink-primary);
+  text-align: center;
+}
+.login-title {
+  font: var(--weight-semibold) var(--text-lg) / var(--leading-tight) var(--font-mono);
+  letter-spacing: 0.04em;
+}
+.login-copy {
+  max-width: 40ch;
+  font: var(--weight-medium) var(--text-base) / var(--leading-normal) var(--font-ui);
+}
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  width: 100%;
+  max-width: 320px;
+  text-align: left;
+}
+.login-label {
+  font: var(--weight-medium) var(--text-sm) / var(--leading-normal) var(--font-ui);
+}
+.login-input {
+  width: 100%;
+  min-height: var(--tap-min);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  background: var(--bg-raised);
+  color: var(--ink-primary);
+  font: var(--weight-regular) var(--text-input) / var(--leading-normal) var(--font-ui);
+  padding: 0 var(--sp-3);
+  outline: none;
+}
+.login-input:focus {
+  border-color: var(--accent);
+}

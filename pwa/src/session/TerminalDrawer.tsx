@@ -12,6 +12,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { Sheet } from '../components/Sheet';
+import { checkAuth, onAuthRegained } from '../lib/auth';
 import { useKeyboardInset } from '../lib/keyboard';
 import { wsUrl } from '../lib/ws';
 import './chat.css';
@@ -155,15 +156,40 @@ export function TerminalDrawer({
     const ws = make(wsUrl(`/ws/pty/${encodeURIComponent(id)}?cols=${cols}&rows=${rows}`));
     sockRef.current = ws;
 
+    // The SECOND websocket path, and it needs the same treatment as
+    // `ReconnectingSocket` (lib/ws.ts's AuthGate) for the same reason: a refused
+    // upgrade is a bare 401 the browser never shows us, so an attach that dies
+    // without ever opening might be a gate rather than a network. Un-asked, this
+    // drawer would sit on "connection lost" behind a Reconnect button that can
+    // never work and never says why.
+    //
+    // No reconnect ladder here to stand still — the drawer retries only when
+    // tapped — so the two halves are: ASK on a failed attach, and re-attach by
+    // itself when the operator is back in (the `attempt` bump the Reconnect
+    // button already uses).
+    // `asked` because a browser fires `onerror` AND `onclose` for one dead
+    // handshake, and `ReconnectingSocket`'s socket-identity guard — which makes
+    // its own probe once-per-attempt — has no equivalent here.
+    let opened = false;
+    let asked = false;
+    const down = (): void => {
+      setState('down');
+      if (opened || asked) return;
+      asked = true;
+      checkAuth();
+    };
+
     ws.onopen = () => {
+      opened = true;
       setState('open');
       term.focus();
     };
     ws.onmessage = (ev: MessageEvent) => {
       if (typeof ev.data === 'string') term.write(ev.data); // raw utf8 frames
     };
-    ws.onclose = () => setState('down');
-    ws.onerror = () => setState('down');
+    ws.onclose = down;
+    ws.onerror = down;
+    const unsubAuth = onAuthRegained(() => setAttempt((a) => a + 1));
 
     term.onData((data) => sendFrame({ type: 'input', data }));
 
@@ -184,6 +210,7 @@ export function TerminalDrawer({
     return () => {
       window.removeEventListener('resize', refit);
       window.visualViewport?.removeEventListener('resize', refit);
+      unsubAuth();
       refitRef.current = null;
       // Detach handlers first so our own close() can't echo a 'down' overlay.
       ws.onopen = null;
