@@ -1,5 +1,10 @@
 # Stage 2 VM gate — the operator's fresh-install proof
 
+**Scope note (2026-08-20):** steps 1–9 are the stage-2 install proof this document was written for.
+**Step 10 arms the stage-3a session gate on the same box** — off by default, so a run that stops at
+step 9 is complete on its own terms. Step 10's proof is `localhost`-scoped by design; read "What this
+run does NOT prove" before deciding what it buys you.
+
 **Status: PENDING-OPERATOR.** Everything this document depends on is shipped and tested — `bash
 install.sh`, `ccrc install`, `ccrc doctor`'s A2-NEW remedy, the per-box `--remote-control` flag
 (D-99..D-101), the dialog fix (D-102) — but every claim behind those commits is a hermetic-suite
@@ -195,6 +200,247 @@ reasonably provisioned VM (network-bound: `npm ci` twice and cloning Claude Code
 Note the actual wall-clock time in your run notes — this document does not get to claim the number,
 only report it once someone has watched a clock.
 
+### 10. Arm the session gate (stage 3a)
+
+**Not part of the stage-2 timing above** — steps 1–9 are the install proof, and this step is the
+stage-3a one bolted onto the same fresh box, because a gate is only meaningfully proven on a machine
+that was built by the documented path. Everything below is off by default: a box that stops at step 9
+is a box with no gate, which is the shipped state and a legitimate one.
+
+Before you start, know what this step does and does not prove — see **"What this run does NOT prove"**
+below. In short: it proves the MECHANISM on `localhost`. The passkey you enrol here will not work
+against stage 3b's public name, and that is by design, not a defect.
+
+#### 10a. Set the passphrase
+
+```bash
+ccrc passwd
+```
+
+It prompts twice with echo off (Ctrl-C aborts, and aborts cleanly — nothing is written and nothing is
+echoed), requires at least 12 characters, and writes `~/.ccrc/auth.scrypt` at 0600. It refuses to run
+outside a terminal, refuses without `node`, and refuses on a box with no server build — all three
+BEFORE prompting, so you never type a passphrase into a command that was going to fail anyway.
+
+Expect a result line naming the generation:
+
+```
+gen-auth-hash: wrote /home/<you>/.ccrc/auth.scrypt (0600, scrypt N=65536,r=8,p=1, generation 1 —
+first passphrase on this box); read back and verified before installing
+```
+
+**"generation 1 — first passphrase on this box"** is the fresh-file case; a later run reads
+`generation 2 — was generation 1`, and that bump is the whole logout mechanism. **"read back and
+verified before installing"** is not decoration: the helper wrote a temp file, re-read it through the
+server's own parser, and proved your passphrase against it, before renaming it into place. That is
+what makes it impossible for this command to write a line the server will not boot on.
+
+Three `ccrc:` lines follow it. Read all three — they are the same three facts this step is about.
+
+```bash
+ccrc doctor
+```
+
+Expect the `auth` line to PASS and to say the gate is still off:
+
+```
+PASS auth: /home/<you>/.ccrc/auth.scrypt holds a usable passphrase (N=65536,r=8,p=1,gen=1), but the
+gate is OFF (CCRC_AUTH is not "on" in /home/<you>/.ccrc/ccrc.env), so no request is gated yet
+```
+
+**A passphrase on its own changes nothing.** Nothing is gated until step 10b.
+
+#### 10b. Arm the flag — and set the other two keys IN THE SAME EDIT
+
+> **`CCRC_RP_ID` and `CCRC_ORIGIN` must be set in the same change that arms `CCRC_AUTH`.**
+
+This is the one step in this document that fails silently if you do half of it. With `CCRC_AUTH=on`
+and the other two unset, the defaults are `rpId: localhost` and `origin: http://localhost:<CCRC_PORT>`
+— and every non-exempt write and every `/ws/*` upgrade arriving from the origin you are actually
+using is refused, giving a console that loads, reads, and cannot act. **There is no boot warning for
+it.** The pair is internally coherent, so the boot check that catches a malformed or disagreeing pair
+passes it; and a self-check that tried to catch it was investigated and judged not implementable —
+behind `tailscale serve` the server cannot learn the hostname it is reached under, so every arm of
+such a check has to fail shut on correctly-configured boxes too. The only signals are one journal
+line per refused request and a `foreign-origin` failure on every write in the PWA.
+
+On this VM, all three values in one edit of `~/.ccrc/ccrc.env`:
+
+```
+CCRC_AUTH=on
+CCRC_RP_ID=localhost
+CCRC_ORIGIN=http://localhost:7788
+```
+
+**`localhost`, not `127.0.0.1`, and it matters here.** Step 8's `curl` used the loopback IP, which
+is fine for `curl`; for the browser half of this step you must reach the box at
+`http://localhost:7788/`. WebAuthn will not scope a credential to an IP address. Both wrong turns
+are now caught at boot, with passkeys 501 and the passphrase login still working:
+`CCRC_ORIGIN=http://127.0.0.1:7788` with `CCRC_RP_ID=localhost` is a disagreeing pair, and
+"fixing" it by setting `CCRC_RP_ID=127.0.0.1` is refused as an IP literal (D-147 — until this task
+that second one was accepted by the server and rejected by every browser, with nothing in the
+journal). Keep both on `localhost`.
+
+If your `CCRC_PORT` is not 7788, `CCRC_ORIGIN` must carry the port you actually set — the default
+origin is built from `CCRC_PORT`, but an explicit one is taken literally. No trailing slash, no path.
+
+#### 10c. Restart
+
+```bash
+systemctl --user restart ccrc.service
+systemctl --user status ccrc.service --no-pager
+journalctl --user -u ccrc.service -n 40 --no-pager
+```
+
+The gate is read at boot, so nothing above takes effect until this runs. Confirm the unit is
+`active (running)`, and read the journal tail for two lines that must NOT be there:
+
+- `ccrc-server: WebAuthn config is refused — …` — the `rpId`/`origin` pair disagrees or is
+  malformed. Passkeys are disabled (the ceremony routes answer 501); the passphrase door still works.
+- `ccrc-server: CCRC_AUTH=on but no passphrase file at …` — you armed the flag without step 10a.
+  Every route answers 401 and no login can succeed. `ccrc passwd` fixes it with no restart (the gate
+  re-reads the file per request).
+- `ccrc-server: CCRC_ORIGIN is plain http (…) and the session cookie is still marked Secure` — the
+  cookie warning (D-146). **On this localhost VM you WILL see this one**, and it is the point of
+  step 10d: see there for what to do. It is the only signal that failure has, which is why the
+  server now emits it.
+
+And one that means the unit did not start at all: `REFUSING TO BOOT — … exists and this process
+cannot use it`. That is a present-but-unusable `auth.scrypt`; the remedy is in 10f. The message names
+the file and the state and deliberately prints no byte of its contents.
+
+Then measure the gate from outside the browser:
+
+```bash
+curl -s http://127.0.0.1:7788/health                 # still {"ok":true,...} — /health is EXEMPT
+curl -s http://127.0.0.1:7788/api/auth/status        # {"authed":false,"passkeysEnrolled":0,"mode":"passphrase"}
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:7788/api/fleet   # 401
+```
+
+`/health` staying open is deliberate — `deploy/deploy.sh`'s final gate reads the shipped sha out of
+it from a shell with no cookie, so a gated `/health` would fail every deploy the moment the flag was
+armed. `mode` flipping from `off` to `passphrase` is the single clearest confirmation that the flag
+took; the 401 on `/api/fleet` is the gate itself. If `/api/auth/status` still reads `"mode":"off"`,
+the unit did not pick up the edit — check the file path (`~/.ccrc/ccrc.env`, which
+`ccrc.service` reads as `EnvironmentFile=-%h/.ccrc/ccrc.env`) and that the value is the exact string
+`on`; `1`, `true`, `yes` and `ON` are all OFF, deliberately.
+
+Re-run `ccrc doctor`. **Expect the `fleet` line to become a SKIP**, and expect that rather than
+reading it as a fault:
+
+```
+SKIP fleet: the server at 127.0.0.1:7788 refused this check because its session gate is ARMED and
+/api/fleet/health is behind it (see the 'auth' check) — nothing is wrong at either end, but the two
+boxes cannot be compared from outside the gate, so build skew and roster divergence are NOT being
+measured on this box; compare by hand with 'ccrc version' on each
+```
+
+That route is gated on purpose — it publishes roster digests, build stamps and divergence — and
+`ccrc doctor` carries no session cookie, so an armed box refuses it and both parties are behaving
+correctly. **The cost is real and is not cosmetic:** doctor stops reporting build skew and roster
+divergence on an armed box, so its silence there is not evidence that the two boxes agree. On the
+reference two-box fleet, compare `ccrc version` on each box by hand after a deploy. On this
+single-box VM there is no second box, so nothing is lost. (This runs in local mode anyway; the SKIP
+above is what you would see on a remote-mode box, and on this one the check may skip for the
+local-mode reason instead.)
+
+Then expect the `auth` line to have changed tense:
+
+```
+PASS auth: CCRC_AUTH=on in /home/<you>/.ccrc/ccrc.env, and /home/<you>/.ccrc/auth.scrypt holds a
+usable passphrase (N=65536,r=8,p=1,gen=1) — logins are gated
+```
+
+#### 10d. Log in
+
+Load `http://localhost:7788/` in a browser. Expect a full-screen login asking for the passphrase,
+with the sentence *"Sign in to reach this box."* Enter the passphrase from step 10a. You should land
+on the board from step 8.
+
+**If the login POST succeeds and the login screen comes straight back**, the browser declined to
+store the cookie because it is marked `Secure` and this VM is plain http — the boot warning in 10c
+predicted exactly this. Add:
+
+```
+CCRC_COOKIE_INSECURE=on
+```
+
+…to the same `~/.ccrc/ccrc.env`, restart, and the warning goes with the symptom. **This is a
+localhost-development opt-out and belongs nowhere else** — on any box reached over TLS, leaving it
+set earns the mirror-image warning, because a `Secure`-less cookie there travels over any plain-http
+request to the same host.
+
+Sessions last 30 days absolute, 4 days idle.
+
+#### 10e. Enrol a passkey (optional)
+
+Navigate to `/accounts` in the PWA. The **Passkeys** section reads *"No passkey is enrolled on this
+box — the passphrase is the only way in."* and offers **"Add a passkey on this device"** if this
+browser can run the enrolment ceremony. Tap it, complete the platform prompt, and expect
+*"Passkey added. It can sign you in from now on."*
+
+Then, on the same screen, tap **Sign out** (under **This session**) and expect the login screen —
+now offering **"Sign in with a passkey"** above the passphrase field. Complete the ceremony and
+expect to land on the board without typing the passphrase. That round trip — enrol, sign out, sign
+back in with the key — is the whole passkey proof.
+
+**Sign out ends this browser's session only.** Other devices stay signed in and enrolled passkeys
+are untouched; it is `revokeThis`, not `revokeAll`. To end every session at once, rotate the
+passphrase (10f). And note what it does NOT do: signing out does not un-enrol the key you just
+added, which is exactly why the lost-device procedure below starts with Revoke and not with this
+button.
+
+Enrolling requires being signed in already; that is the load-bearing exemption decision behind the
+whole design, not an inconvenience. Revocation is in the same place: each enrolled key gets a
+**Revoke** button.
+
+#### 10f. Operator procedures worth rehearsing once, on this VM
+
+These are the procedures a real incident needs, and the only cheap time to run them is on a box you
+are about to destroy.
+
+**Ending your own session.** Accounts → **This session** → **Sign out**. It revokes this session
+server-side and returns you to the login screen; other devices are unaffected. (An empty cookie jar
+— a private window, or clearing the cookie in devtools — gets you to the same screen without
+revoking anything, which is the difference worth knowing on a shared machine.)
+
+**Lost or stolen device.** `ccrc passwd` invalidates **sessions, not passkeys** — a rotation bumps the
+generation, every logged-in browser is expired at once with no restart, and every enrolled
+authenticator keeps working. That is deliberate (a passkey carries no generation stamp). So the order
+is fixed:
+
+1. **Revoke the passkey in the PWA** — Accounts → Passkeys → Revoke, on the row for that device.
+2. **Then** `ccrc passwd`, to expire the sessions that device already holds.
+
+Doing it the other way round logs the thief out and leaves them a working key. And do NOT reach for
+`rm ~/.ccrc/passkeys.json` on a running server: the store is loaded once at boot and rewritten from
+memory on the next accepted assertion, so the deleted row comes back. The PWA's Revoke button takes
+effect in-process, immediately, with no restart.
+
+**A corrupt or unreadable `auth.scrypt`.** With the flag armed the server REFUSES TO BOOT on it —
+present-but-unusable is not "no passphrase", and starting on it would be the fail-open the flag
+exists to prevent. The journal line names the file and the remedy but deliberately prints no byte of
+the file's contents (it would quote the field it choked on, and the plausible way to get an unusable
+`auth.scrypt` is a misplaced copy of some other secret). `ccrc doctor`'s `auth` check reports the same
+state on a box that has NOT yet been armed — "a boot refusal waiting to happen". The remedy, from
+either:
+
+```bash
+mv ~/.ccrc/auth.scrypt ~/.ccrc/auth.scrypt.broken && rm -f ~/.ccrc/sessions.json && ccrc passwd
+```
+
+All three parts are needed. `ccrc passwd` REFUSES to overwrite a file it cannot read — the generation
+cannot be read out of it either, and writing a fresh one under an invented generation would
+*revalidate* the very sessions the command exists to expire — so the `mv` comes first. And the fresh
+file restarts at **generation 1**, which is the generation any session minted on this box's first
+passphrase carries, so `~/.ccrc/sessions.json` has to go with it or a stale cookie from the box's
+first life would revalidate. Losing that file costs nothing but logging in again; it is a flat file
+precisely so it can be thrown away.
+
+**Disarming.** Set `CCRC_AUTH=` (or remove the line) and restart. The passphrase file stays where it
+is and nothing reads it; `ccrc doctor` goes back to reporting a usable passphrase behind an off gate.
+That is the rollback for this whole step and it needs no other undo.
+
 ## The deliverable beyond pass/fail
 
 A clean pass/fail on the above is necessary but is not, by itself, the reason this gate exists — the
@@ -257,3 +503,17 @@ point of the A2-NEW work this gate is proving. If a step above does not converge
   with no real capture yet. An RC-on run on the same box is worth doing too, but it is proving an
   already-measured path (the existing real captures in `server/test/fixtures/panes/` are all RC-on),
   not closing a gap.
+- **The gate at a real name, or behind real TLS.** Step 10's proof runs on **localhost**, and that is
+  a deliberate scope, not a shortcut. What it proves is the MECHANISM: that the flag arms, that the
+  passphrase door works, that a passkey can be enrolled and can then sign in, that revocation takes
+  effect without a restart, that a rotation expires sessions and leaves keys alone. What it does NOT
+  carry forward is the deployment. **A passkey enrolled here does not work at stage 3b's public
+  name** — a credential records the `rpId` it was enrolled under, so the same authenticator against
+  `<name>.duckdns.org` is refused with "enrolled for localhost — re-enrol". That is the designed
+  behaviour (it is how a rename fails loudly instead of silently), and it means the enrolment step
+  has to be repeated once on the real name. Likewise `Secure` behind a TLS-terminating proxy, and the
+  `trustProxy` / `X-Forwarded-Proto` decision that goes with it, is stage 3b's work: this run either
+  ships `Secure` over plain-http localhost or opts out of it, and neither is the production answer.
+- **More than one operator.** The session layer carries a single identity — there are no users, no
+  roles, and no per-person audit. That is the team-edition seam, held open deliberately; this slice
+  ships one operator.

@@ -6,6 +6,7 @@
 // an offer that vanishes mid-reach is worse than none.
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
+import { isAuthLost } from '../lib/auth';
 import './primitives.css';
 
 export type ToastKind = 'info' | 'error';
@@ -30,6 +31,13 @@ const listeners = new Set<(item: ToastItem) => void>();
 /** Fire a toast from anywhere. Rendered by whatever <ToastHost/> is mounted;
  *  dropped silently when none is (e.g. in non-UI unit tests). */
 export function toast(message: string, kind: ToastKind = 'info', action?: ToastAction): void {
+  // A 401 is ONE event however many calls it breaks (Stage 3a, Task 7). The
+  // login screen is the answer to all of them; a stack of "unauthenticated"
+  // toasts behind it is noise about a fact already on screen, and an action
+  // toast would be an offer nothing can accept until the operator is back in.
+  // Dropped at the single funnel rather than at ~40 catch blocks — the same
+  // argument `lib/auth.ts` makes for the signal itself.
+  if (isAuthLost()) return;
   const item: ToastItem = { id: nextId++, message, kind, action };
   for (const notify of listeners) notify(item);
 }

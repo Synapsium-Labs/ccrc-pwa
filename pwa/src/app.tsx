@@ -11,8 +11,10 @@
 import { useEffect } from 'react';
 import type { ReactNode } from 'react';
 import { BlockScreen } from './components/BlockScreen';
+import { LoginScreen } from './components/LoginScreen';
 import { ToastHost } from './components/Toast';
 import { AccountsStrip } from './fleet/AccountsStrip';
+import { useAuthLost } from './lib/auth';
 import { navigate, usePath } from './lib/router';
 import { useMediaQuery } from './lib/useMediaQuery';
 import { AccountsScreen } from './screens/AccountsScreen';
@@ -40,6 +42,15 @@ export function App(): ReactNode {
   // BlockScreen mounts as a SIBLING before .app-shell, not inside it — a
   // banner lives in a pane; this has to cover panes, sheets and toasts alike.
   const blocked = useFleetStore((s) => s.blocked);
+  // The session gate's signal (lib/auth.ts): set by the ONE 401 branch in the
+  // api funnel, or by a websocket that asked why its upgrade was refused. Same
+  // sibling mount as BlockScreen, for the same reason, and rendered BEFORE it so
+  // that when both are up the block screen is the one on top — a build too old
+  // to speak the fleet protocol cannot be fixed by signing in.
+  //
+  // With `CCRC_AUTH` off this can never be true: nothing on a dark box produces
+  // an auth refusal, and `raiseAuthLostFrom` demands positive evidence of one.
+  const { lost: authLost } = useAuthLost();
   const m = /^\/s\/([^/]+)\/?$/.exec(path);
   const sessionId = m ? decodeURIComponent(m[1]!) : null;
   const archive = /^\/archive\/?$/.test(path);
@@ -52,6 +63,7 @@ export function App(): ReactNode {
   const desktop = useMediaQuery('(min-width: 900px)');
   return (
     <>
+      {authLost && <LoginScreen />}
       {blocked && <BlockScreen />}
       <div className="app-shell" data-view={sessionId || archive || accounts || mail || runs ? 'session' : 'fleet'}>
         {desktop && (

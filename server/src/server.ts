@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import fastifyWebsocket from '@fastify/websocket';
 import fastifyMultipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
@@ -43,10 +43,23 @@ import { Presence } from './presence.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
 import { registerCoordRoutes } from './coord/routes.js';
 import { toRunSummary, type CoordStore } from './coord/store.js';
+import { AuthSecretUnusable, readAuthSecret, verifyPassphrase, type AuthSecret } from './auth/secret.js';
+import { ABSOLUTE_TTL_MS, SessionStore } from './auth/sessions.js';
+import { LoginRateLimiter, PASSKEY_MAX_FAILURES } from './auth/ratelimit.js';
+import {
+  SESSION_COOKIE, cookiePolicyProblem, expireCookie, parseCookies, serializeCookie,
+} from './auth/cookie.js';
+import { SECRET_UNREAD, installGate, measureSecret, sessionVerdict, type GateDecision } from './auth/gate.js';
+import { PasskeyStore } from './auth/credentials.js';
+import {
+  ChallengeStore, relyingPartyProblem, userHandleFor, verifyAssertion, verifyRegistration,
+} from './auth/webauthn.js';
 import {
   FLEET_PROTO, FLEET_PROTO_MIN,
-  type AccountsResponse, type AccountUsage, type CoordStatus, type Divergence, type FleetHealth, type FleetMsg,
+  type AccountsResponse, type AccountUsage, type AuthStatus, type CoordStatus, type Divergence,
+  type FleetHealth, type FleetMsg,
   type FleetSession,
+  type PasskeyAssertStart, type PasskeyListResponse, type PasskeyRegisterStart,
   type RunSummary,
   type SessionClientMsg, type SessionStreamMsg, type TaskItem,
 } from '../../shared/api.js';
@@ -79,6 +92,64 @@ const MAX_ATTACHMENTS = 4;
 const CLIP_MIME: Record<string, string> = {
   png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp',
 };
+
+/**
+ * Which `AuthStatus` fields an UNAUTHENTICATED caller may see on the exempt
+ * `GET /api/auth/status`. The whole enumerated leak, in one place: the gate is
+ * armed, how many passkeys exist (so the login screen knows whether to offer the
+ * button), and whether the login window is currently closed (so it knows whether
+ * to offer a field that cannot succeed).
+ *
+ * A `Record<keyof AuthStatus, boolean>`, NOT a list of key names, and that is the
+ * mechanism rather than the decoration: a field added to `AuthStatus` tomorrow is
+ * a TS2739 here ("missing the following properties") until someone decides,
+ * deliberately, whether an anonymous browser may see it. A spread or a
+ * hand-written key list would let the next field widen the leak silently, which
+ * is the failure this exists to prevent — the same shape `PR_REASON_MAP` and
+ * `AUTH_VERDICT_MAP` use in `shared/api.ts`.
+ *
+ * Every field is visible today, so the anonymous body and the full one happen to
+ * coincide. That is a fact about this build, not the contract.
+ */
+const ANON_VISIBLE: Record<keyof AuthStatus, boolean> = {
+  authed: true, passkeysEnrolled: true, mode: true,
+};
+
+/** `full`, reduced to {@link ANON_VISIBLE}'s fields. */
+function anonymousStatus(full: AuthStatus): Partial<AuthStatus> {
+  return Object.fromEntries(
+    Object.entries(full).filter(([k]) => ANON_VISIBLE[k as keyof AuthStatus]),
+  ) as Partial<AuthStatus>;
+}
+
+/**
+ * Which `PasskeyAssertStart` fields an UNAUTHENTICATED caller may see —
+ * {@link ANON_VISIBLE}'s discipline applied to the other anonymous body on this
+ * server, which had none (Task 8 review).
+ *
+ * All three are visible, because the ceremony cannot run without any of them: a
+ * browser needs the challenge to sign, the `rpId` to scope the request, and the
+ * credential ids to ask the authenticator for a non-discoverable key. A
+ * credential id is an opaque handle, useless without the private key, and the
+ * COUNT is already published by `AuthStatus.passkeysEnrolled` under the same
+ * ruling.
+ *
+ * The point is not today's answer but tomorrow's: `PasskeySummary` exists now,
+ * carrying `label`, `enrolledAt` and `lastUsedAt`, and "just send the summaries
+ * here too" is a one-line change that would hand an anonymous tailnet caller a
+ * fingerprint of the operator's devices. As a `Record<keyof …, boolean>` that
+ * change is a TS2739 until somebody decides it deliberately.
+ */
+const ASSERT_START_VISIBLE: Record<keyof PasskeyAssertStart, boolean> = {
+  challengeB64url: true, rpId: true, allowCredentialIdsB64url: true,
+};
+
+/** `full`, reduced to {@link ASSERT_START_VISIBLE}'s fields. */
+function anonymousAssertStart(full: PasskeyAssertStart): Partial<PasskeyAssertStart> {
+  return Object.fromEntries(
+    Object.entries(full).filter(([k]) => ASSERT_START_VISIBLE[k as keyof PasskeyAssertStart]),
+  ) as Partial<PasskeyAssertStart>;
+}
 
 export interface Deps {
   cfg: CcrcConfig;
@@ -175,6 +246,710 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // SAME instance regardless of construction order.
   deps.presence ??= new Presence();
   const presence = deps.presence;
+
+  // ── The session gate (Stage 3a) ───────────────────────────────────────
+  //
+  // Owned HERE rather than threaded through `Deps`, unlike `push`/`coord`/
+  // `notifyLog`, and for a reason those three do not have: the store must be
+  // LOADED exactly once, at boot, before any request can reach `verify` — a
+  // second live-time `load()` re-reads the file into memory and can clobber a
+  // create that has not flushed yet (`sessions.ts:152`, D-122's write-side
+  // mirror). `buildServer` is the one async function every caller — index.ts,
+  // every test — goes through exactly once, so putting the store here makes
+  // "loaded once" structural instead of a rule each composition root has to
+  // remember. An optional `Deps.auth` with a local fallback would be the
+  // "second KeyedQueue" shape `Deps.queue`'s own docstring warns about.
+  const authStore = new SessionStore(deps.cfg.sessionsPath);
+  // One limiter per server (the `CoordMutex` model, not a module singleton):
+  // independent test servers in one process must not share a lockout window.
+  const loginLimiter = new LoginRateLimiter();
+  // ── the passkey lane (Task 8) ─────────────────────────────────────────
+  //
+  // Owned here for `authStore`'s reason (loaded exactly once, at boot), and
+  // built even when the gate is dark so the four routes can be REGISTERED
+  // unconditionally — a route that exists only under a flag is a route the
+  // gate sweep cannot measure in both flag positions, which is the property
+  // `auth-gate.test.ts` rests on.
+  //
+  // WHAT IS TRUE WHILE DARK is "no disk", NOT "nothing is read" — this comment
+  // claimed the stronger thing and was wrong (whole-branch review). The four
+  // ceremony routes do 501 before they touch it, but `GET /api/auth/status` is
+  // EXEMPT and calls `passkeys.count()` on every request including a dark one.
+  // Harmless, and harmless for a structural reason worth stating rather than
+  // rediscovering: `load()` is only called when armed, so on a dark box that
+  // count reads an empty in-memory array and answers `0` without opening
+  // anything. The no-disk property the sweep pins genuinely holds; the sentence
+  // that used to describe it did not.
+  //
+  // `0` is also the RIGHT answer for that route to give while dark, not a
+  // convenient one — see the `passkeysEnrolled` docstring on the status handler:
+  // with the gate off there is no login screen to draw a passkey button on, and
+  // `mode: 'off'` has already told the PWA to do nothing.
+  const passkeys = new PasskeyStore(deps.cfg.passkeysPath);
+  // TWO challenge stores, not one. A challenge issued to enrol a key must never
+  // satisfy a login — `webauthn.ts`'s `ChallengeStore` docstring has the
+  // argument; the split is what makes purpose confusion structurally impossible
+  // rather than dependent on the `clientDataJSON.type` check alone.
+  const registerChallenges = new ChallengeStore('register');
+  const assertChallenges = new ChallengeStore('assert');
+  // A SEPARATE, LOOSER budget from the passphrase door — see
+  // `PASSKEY_MAX_FAILURES`. Separate STATE too: a passkey flood must not be able
+  // to close the passphrase window, which would lock the operator out of the one
+  // door that still works.
+  const passkeyLimiter = new LoginRateLimiter(Date.now(), PASSKEY_MAX_FAILURES);
+  if (deps.cfg.authEnabled) {
+    // BOOT REFUSAL, uncaught on purpose: `readAuthSecret` throws
+    // `AuthSecretUnusable` for a secret that is PRESENT but unreadable or
+    // garbled, and `secret.ts`'s contract is that this kills the process rather
+    // than starting on a secret the box cannot trust (`coord/db.ts`'s
+    // `CoordDbUnmigratable` and `coord/token.ts`'s own refusals are the same
+    // stance). `deploy.sh`'s `verify-service.sh` turns it into a failed deploy
+    // with the journal attached. The gate re-reads per request too
+    // (`measureSecret`) — that read never throws, because at REQUEST time the
+    // answer must be a 401, not a 500.
+    //
+    // D-144 — AND THE REFUSAL SAYS THE STATE, NEVER THE BYTES. The throw stays
+    // uncaught in the sense that matters (nothing here recovers, the process
+    // still dies), but the message that reaches the journal is REWRITTEN,
+    // because `AuthSecretUnusable`'s own message QUOTES THE FIELD IT CHOKED ON
+    // — `unknown prefix "<field>"`, `N is not a plain decimal integer
+    // ("<field>")` — and the plausible way to get an unusable `auth.scrypt` is
+    // a misplaced copy of some OTHER secret. An uncaught rejection here is
+    // printed by node with its message AND its `[cause]` chain, straight into
+    // the journal, where `deploy.sh`'s `verify-service.sh` then tails it into a
+    // deploy transcript and a ticket. D-140 closed exactly this leak in `ccrc
+    // doctor` (which shells to `--check` and reports an exit CODE, never a
+    // message); this was the last path by which a byte of the secret file
+    // reached a log, and it is closed the same way and for the same reason.
+    //
+    // NO `{ cause: err }`, deliberately: attaching it would put the original
+    // message back in the journal through the printer rather than through this
+    // string, which is the same leak with an extra step. The original is
+    // dropped on the floor — `ccrc doctor`'s `auth` check is the supported way
+    // to measure this file, and it is the one that already knows how to do it
+    // without printing it.
+    let secret: AuthSecret | null;
+    try {
+      secret = readAuthSecret(deps.cfg.authSecretPath);
+    } catch (err) {
+      // `readAuthSecret` throws exactly one type; anything else is a
+      // programming error and must not be dressed up as a secret-file verdict
+      // (`measureSecret`'s rule at the request-time mirror of this seam).
+      if (!(err instanceof AuthSecretUnusable)) throw err;
+      throw new AuthSecretUnusable(
+        `ccrc-server: REFUSING TO BOOT — ${deps.cfg.authSecretPath} exists and this process cannot ` +
+        'use it (it does not parse as a scrypt secret line, or it cannot be read at all). CCRC_AUTH ' +
+        'is on, and a present-but-unusable passphrase file is not "no passphrase": starting on it ' +
+        'would be the fail-OPEN the flag exists to prevent. The parser\'s own reason is WITHHELD ' +
+        'from this message on purpose — it quotes the field it choked on, and that field is file ' +
+        'content (see D-140: `ccrc doctor` withholds it for the same reason). Measure the file with ' +
+        '`ccrc doctor` (the `auth` check), which reports its state without printing any of it. ' +
+        `To move it aside and set a fresh passphrase: mv ${deps.cfg.authSecretPath} ` +
+        `${deps.cfg.authSecretPath}.broken && rm -f ${deps.cfg.sessionsPath} && ccrc passwd ` +
+        '(`ccrc passwd` REFUSES to overwrite a file it cannot read — D-138).');
+    }
+    if (secret === null) {
+      // ARMED WITH NO PASSPHRASE — every request will answer 401
+      // `'unconfigured'` and nobody can log in. Not a boot refusal: the file is
+      // absent, which is the honest "never configured" state, and `ccrc passwd`
+      // creates it without a restart. But it is worth exactly one line in the
+      // journal, because the symptom (a box that refuses a passphrase nobody
+      // ever set) is otherwise indistinguishable from a wrong one.
+      console.warn(`ccrc-server: CCRC_AUTH=on but no passphrase file at ${deps.cfg.authSecretPath} — ` +
+        'the gate is ARMED and FAILING SHUT: every route answers 401 and no login can succeed. ' +
+        'Run `ccrc passwd` on this box.');
+    }
+    // A MISCONFIGURED RELYING PARTY IS A WARNING, NOT A BOOT REFUSAL, and the
+    // asymmetry with `readAuthSecret` above is deliberate: a bad `CCRC_RP_ID`
+    // breaks PASSKEYS, while the passphrase door — the one every box has — keeps
+    // working. Refusing to boot would take a working box off the air over an
+    // optional feature. The routes answer 501 (see `rpProblem`), and this line
+    // is what tells the operator why at deploy time rather than at the first tap.
+    const rp = relyingPartyProblem(deps.cfg.rpId, deps.cfg.origin);
+    if (rp !== null) {
+      // WORDING MATTERS HERE and the first version got it wrong (Task 8 review):
+      // it said "passkeys are disabled, the passphrase still works", which is
+      // true of a bad `CCRC_RP_ID` and FALSE of a bad `CCRC_ORIGIN` — the same
+      // unvalidated `cfg.origin` also goes to `installGate`, where every
+      // websocket upgrade and every non-exempt write is compared against it. A
+      // refused origin does not merely disable passkeys; it leaves a console
+      // that can read and cannot act. The per-refusal warning in `gate.ts` is
+      // the better diagnostic when it happens; this is the one that fires at
+      // deploy time, before anyone has tried.
+      console.warn(`ccrc-server: WebAuthn config is refused — ${rp}. Passkeys are DISABLED. ` +
+        'If CCRC_ORIGIN is the bad value, every /ws/* upgrade and every non-exempt write will ' +
+        'ALSO be refused for any browser that is not at it. The passphrase login itself still ' +
+        'works. Fix CCRC_RP_ID / CCRC_ORIGIN and redeploy.');
+    }
+    // THE OTHER BOOT CHECK THAT IS ACTUALLY IMPLEMENTABLE (D-146). The one an
+    // operator asks for first — "is CCRC_ORIGIN really this box's name?" — is
+    // not, and `cookiePolicyProblem`'s docstring says why. This one compares two
+    // values stated by the same operator in the same file and fires only when
+    // they disagree with each other; the misconfiguration it catches otherwise
+    // has NO signal at all, because nothing fails: the login answers 204, the
+    // session row is written, and the browser silently discards the cookie.
+    const cookieProblem = cookiePolicyProblem(deps.cfg.origin, deps.cfg.cookieSecure);
+    if (cookieProblem !== null) console.warn(`ccrc-server: ${cookieProblem}`);
+    await authStore.load();
+    await passkeys.load();
+    authStore.startSweep();
+    app.addHook('onClose', async () => { authStore.stopSweep(); await authStore.flush(); });
+  }
+  // Unconditional — the flag is decided INSIDE the hook (`authVerdict`'s first
+  // line), so there is exactly one place in the tree that answers "is this
+  // request allowed", and the sweep in `auth-gate.test.ts` measures the same
+  // hook in both flag positions.
+  installGate(app, {
+    enabled: deps.cfg.authEnabled, secretPath: deps.cfg.authSecretPath, store: authStore,
+    cookieSecure: deps.cfg.cookieSecure, origin: deps.cfg.origin,
+  });
+
+  /** The session row's human-facing note — the device that logged in. NEVER a
+   *  decision input (`sessions.ts`), and never logged; truncated because a
+   *  user-agent is attacker-controlled text landing in a file we rewrite. */
+  const deviceLabel = (req: FastifyRequest): string => {
+    const ua = req.headers['user-agent'];
+    return typeof ua === 'string' && ua.trim() !== '' ? ua.slice(0, 120) : 'unknown device';
+  };
+
+  /** The measured secret for THIS moment — `SECRET_UNREAD` when the flag is off,
+   *  so nothing touches the disk on a box whose gate is dark. */
+  const secretNow = () => (deps.cfg.authEnabled ? measureSecret(deps.cfg.authSecretPath) : SECRET_UNREAD);
+
+  /**
+   * THE CREDENTIAL QUESTION, as a value other route families can be handed —
+   * `GET /api/runs` is the one caller (D-149), and it needs the whole decision
+   * rather than a boolean so its refusal can carry the same `AuthVerdict` the
+   * gate would have sent.
+   *
+   * Passed as a FUNCTION rather than by exposing `authStore` on `Deps`: the
+   * store must be loaded exactly once at boot, and putting it on `Deps` is the
+   * "second KeyedQueue" shape that `Deps.queue`'s own docstring warns about.
+   * `sessionVerdict`, not `authVerdict`, for `GET /api/auth/status`'s reason —
+   * on an EXEMPT route `authVerdict` answers `reason: 'exempt'` without ever
+   * looking at the cookie, and reading that as authentication would tell every
+   * anonymous browser it was signed in.
+   */
+  const sessionAuth = (req: FastifyRequest): GateDecision => sessionVerdict(req, {
+    enabled: deps.cfg.authEnabled, secret: secretNow(), store: authStore,
+  }, Date.now());
+
+  /**
+   * `POST /api/auth/login` — one of the two EXEMPT auth routes (`gate.ts`'s
+   * table); a gate that gated its own door would be a box nobody can enter.
+   *
+   * THE BRAKE ADMITS, IT DOES NOT MERELY READ (review Important 1). The first
+   * act is `reserve()`, which takes a slot against the SAME `MAX_FAILURES`
+   * budget the recorded failures spend, and the slot is held until this handler
+   * returns. The distinction is the whole defence: a brake that only READ the
+   * failure count would bound a sequential attacker and nothing else, because a
+   * failure is not recorded until the ~100 ms scrypt derivation resolves — so N
+   * requests fired AT ONCE would all see `count === 0`, all pass, and all queue
+   * a 64 MiB / N=65536 derivation onto libuv's 4-slot threadpool, starving every
+   * `fs/promises` caller in this server (fleet assembly, clip reads, the session
+   * store's own flush) for as long as the flood lasted. That was a remote DoS
+   * against an armed box, reachable by anyone who can open a socket, and the
+   * earlier version of this comment — "a flood cannot make this box spend
+   * scrypt" — was true request-at-a-time and false under concurrency. What is
+   * true now: at most `MAX_FAILURES` derivations can be in flight at once, and a
+   * flood is refused 429 rather than queued.
+   *
+   * `finally { slot.release() }` IS LOAD-BEARING. Every exit path — 400, the
+   * unconfigured 401, the wrong-passphrase 401, the 204, and a throw out of
+   * `verifyPassphrase` — must give the slot back, because a leaked slot never
+   * times out: `MAX_FAILURES` of them brick login until the process restarts.
+   * `release` is idempotent, so this cannot double-decrement either.
+   *
+   * The passphrase is verified with the ASYNC `crypto.scrypt`
+   * (`verifyPassphrase`): at N=65536 a sync derivation is ~100 ms of stalled
+   * event loop, and this server runs pty and websocket lanes on it. Only a
+   * proven-correct passphrase reaches `store.create`.
+   *
+   * FAILURES ARE COUNTED, ATTEMPTS ARE NOT (`ratelimit.ts`): a malformed body or
+   * an unconfigured box spends none of the window — neither is a guess. It still
+   * spends a SLOT for its (very short) lifetime, which is the concurrency half
+   * of the same budget and is what stops a flood of any shape.
+   *
+   * 204 + `Set-Cookie` on success, with NO body, and `shared/api.ts` deliberately
+   * declares no `LoginResponse` to go with it: the cookie IS the response.
+   *
+   * NEVER LOGS THE PRESENTED PASSPHRASE, the minted token, or the cookie — the
+   * rule `/api/notify` states for the box token (:443-446), with more force.
+   */
+  app.post('/api/auth/login', async (req, reply) => {
+    if (!deps.cfg.authEnabled) return reply.code(501).send({ ok: false, error: 'not-configured' });
+    const now = Date.now();
+    const slot = loginLimiter.reserve(now);
+    if (!slot.ok) {
+      // 429 with `Retry-After` in SECONDS (the header's unit), rounded UP so a
+      // client that obeys it never returns while the window is still closed.
+      // `retryAfter` is the window's end, which is an UPPER bound when the
+      // refusal came from concurrency rather than from recorded failures (those
+      // slots free themselves in ~100 ms) — the window is the only clock this
+      // policy has, and erring long is the safe direction for a brake.
+      // The verdict rides in the body for the same reason every other refusal
+      // here carries one: the login screen's sentence is "wait", not "retry".
+      return reply.code(429).header('retry-after', String(Math.ceil(slot.retryAfter / 1000)))
+        .send({ ok: false, error: 'unauthenticated', verdict: 'locked-out', retryAfter: slot.retryAfter });
+    }
+    try {
+      const body = (req.body ?? {}) as { passphrase?: unknown };
+      if (typeof body.passphrase !== 'string' || body.passphrase === '') {
+        return reply.code(400).send({ ok: false, error: 'bad-request' });
+      }
+      const measured = secretNow();
+      if (measured.kind !== 'ok') {
+        if (measured.kind === 'unusable') {
+          // The file was broken WHILE the server ran (boot would have refused
+          // otherwise). One journal line naming the state, never its contents.
+          console.warn(`ccrc-server: /api/auth/login cannot read ${deps.cfg.authSecretPath} — ` +
+            'the passphrase file is present but unusable, so no login can succeed. ' +
+            'Re-run `ccrc passwd` on this box.');
+        }
+        // ONE verdict for both `'absent'` and `'unusable'`, and that is a wire
+        // limit rather than a collapse: `AuthVerdict` has six members and none of
+        // them is "present but unreadable". Both mean the same thing to the person
+        // typing — nothing you enter can match, run `ccrc passwd` — while the two
+        // stay distinct where it matters, in `SecretState` and in the journal.
+        return reply.code(401).send({ ok: false, error: 'unauthenticated', verdict: 'unconfigured' });
+      }
+      if (!(await verifyPassphrase(measured.secret, body.passphrase))) {
+        // Recorded INSIDE the try, released after: for the instant between them
+        // this attempt counts twice against the budget (once as a failure, once
+        // as a slot). Conservative in the safe direction — it can only refuse a
+        // concurrent caller slightly sooner, never admit one.
+        loginLimiter.fail(now);
+        return reply.code(401).send({ ok: false, error: 'unauthenticated', verdict: 'wrong' });
+      }
+      loginLimiter.succeed(now);
+      const { token } = await authStore.create(deviceLabel(req), measured.secret.generation, now);
+      // `Max-Age` mirrors the session's own ABSOLUTE ttl, derived from the store's
+      // constant rather than re-typed: a jar that outlives the server's record
+      // would keep presenting a token that can only ever answer `'expired'`.
+      return reply
+        .header('set-cookie', serializeCookie(SESSION_COOKIE, token, {
+          secure: deps.cfg.cookieSecure, maxAgeSeconds: Math.floor(ABSOLUTE_TTL_MS / 1000),
+        }))
+        .code(204).send();
+    } finally {
+      slot.release();
+    }
+  });
+
+  /**
+   * `POST /api/auth/logout` — NOT exempt, deliberately: logging out is something
+   * only a logged-in caller can do, and an ungated logout is a way for anyone on
+   * the tailnet to revoke a session id they guessed.
+   *
+   * Revokes THIS session only (`revokeThis`, not `revokeAll`) — the phone
+   * logging out must not sign the laptop out too. The "log out everywhere"
+   * control is `revokeAll`, and the passphrase rotation that invalidates every
+   * session at once is `ccrc passwd`'s generation bump.
+   *
+   * The cookie is expired through `expireCookie`, which shares
+   * `serializeCookie`'s attributes — a browser only replaces a cookie whose
+   * name/Path/Domain all match.
+   */
+  app.post('/api/auth/logout', async (req, reply) => {
+    if (!deps.cfg.authEnabled) return reply.code(501).send({ ok: false, error: 'not-configured' });
+    const token = parseCookies(req.headers.cookie).get(SESSION_COOKIE);
+    if (token !== undefined) await authStore.revokeThis(token);
+    return reply
+      .header('set-cookie', expireCookie(SESSION_COOKIE, { secure: deps.cfg.cookieSecure }))
+      .code(204).send();
+  });
+
+  // ── the passkey ceremonies (Task 8) ───────────────────────────────────
+  //
+  // FOUR ROUTES, TWO GATE DECISIONS, and the split is the security design:
+  //
+  //   register/start, register/finish → GATED. Enrolling a key requires already
+  //     being signed in. This is what makes `attestation: 'none'` safe (see
+  //     `webauthn.ts`) — an ungated enrol route would let anyone on the tailnet
+  //     register their own authenticator and own the box forever.
+  //   assert/start, assert/finish     → EXEMPT (`gate.ts`, reason 5). These ARE
+  //     the door; gating them would make every enrolled key unusable, exactly as
+  //     gating `POST /api/auth/login` would.
+  //
+  // ALL FOUR ARE FLAG-AWARE: with `CCRC_AUTH` off they answer `501
+  // not-configured`, like login and logout, because there is no session gate to
+  // enrol into or to log into. `auth-gate.test.ts`'s `FLAG_AWARE` set names them.
+  //
+  // NEVER LOGS a credential id's owner, a cookie, a token or a passphrase. The
+  // refusal REASON goes to the journal and NEVER to the wire — every failure
+  // below answers one indistinguishable `401 { verdict: 'wrong' }`, so the
+  // endpoint cannot be used as an oracle ("that id exists but its counter is
+  // stale" is a very different sentence from "no such credential").
+
+  /** The box's WebAuthn config, re-measured per request — `null` when it is
+   *  coherent. Measured rather than cached so `ccrc doctor`'s eventual fix takes
+   *  effect without a restart, and because it is two string comparisons. */
+  const rpProblem = (): string | null => relyingPartyProblem(deps.cfg.rpId, deps.cfg.origin);
+
+  /** The shared preamble of all four routes: the flag, then the config. Returns
+   *  `true` when the route has already answered and the handler must stop.
+   *
+   *  THE CONFIG PROBLEM IS LOGGED, NOT SENT. On `assert/*` the caller is
+   *  unauthenticated, and "your CCRC_RP_ID is a public suffix" published to the
+   *  tailnet is a free map of the box's misconfiguration. One journal line, one
+   *  bare 501. */
+  /**
+   * The RP problems already written to the journal, so an anonymous caller
+   * cannot make this box write log lines by looping a bodyless POST at a
+   * misconfigured route (found by the Task 8 review).
+   *
+   * A SET RATHER THAN A BOOLEAN because the value it guards is a string an
+   * operator may fix and re-break differently, and the second, different problem
+   * deserves its own line. It is bounded by construction: `relyingPartyProblem`
+   * returns one of a fixed handful of sentences derived from two config values
+   * that do not change while the process runs, so this cannot grow with traffic.
+   * Per-server, not module-level, for `loginLimiter`'s reason — independent test
+   * servers in one process must not silence each other's warnings.
+   */
+  const warnedRpProblems = new Set<string>();
+  const passkeyUnavailable = (reply: FastifyReply): boolean => {
+    if (!deps.cfg.authEnabled) {
+      void reply.code(501).send({ ok: false, error: 'not-configured' });
+      return true;
+    }
+    const problem = rpProblem();
+    if (problem !== null) {
+      if (!warnedRpProblems.has(problem)) {
+        warnedRpProblems.add(problem);
+        console.warn(`ccrc-server: refusing a passkey ceremony — ${problem}`);
+      }
+      void reply.code(501).send({ ok: false, error: 'not-configured' });
+      return true;
+    }
+    return false;
+  };
+
+  /**
+   * `POST /api/auth/passkey/register/start` — GATED. Issues a single-use,
+   * two-minute registration challenge.
+   *
+   * `rpId` is SENT to the client rather than left for it to infer from its own
+   * origin, and `shared/api.ts`'s `PasskeyRegisterStart` carries the argument:
+   * the client deriving it by stripping labels off `location.hostname` is the
+   * public-suffix hazard with a different author. One configured value, echoed,
+   * so the ceremony and the stored binding cannot disagree.
+   */
+  app.post('/api/auth/passkey/register/start', async (_req, reply): Promise<PasskeyRegisterStart | void> => {
+    if (passkeyUnavailable(reply)) return;
+    return {
+      challengeB64url: registerChallenges.issue(Date.now()),
+      rpId: deps.cfg.rpId,
+      userHandleB64url: userHandleFor(deps.cfg.rpId),
+    };
+  });
+
+  /**
+   * `POST /api/auth/passkey/register/finish` — GATED. Verifies the ceremony and
+   * stores the credential.
+   *
+   * NO RATE LIMIT, deliberately: the caller has already proven the passphrase,
+   * so there is no credential here to guess, and the only budget worth bounding
+   * is the row count (`MAX_CREDENTIALS`) and the challenge map (which is capped
+   * and self-evicting). A limiter here would only be a way for the operator to
+   * lock themselves out of enrolling.
+   *
+   * `rpId`/`origin` are RECORDED ON THE ROW from config, which is the property
+   * that makes a Stage 3b rename fail LOUDLY — see `StoredCredential`.
+   */
+  app.post('/api/auth/passkey/register/finish', async (req, reply) => {
+    if (passkeyUnavailable(reply)) return;
+    const now = Date.now();
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const result = verifyRegistration({
+      credentialIdB64url: body['credentialIdB64url'],
+      publicKeySpkiB64url: body['publicKeySpkiB64url'],
+      algorithm: body['algorithm'],
+      authenticatorDataB64url: body['authenticatorDataB64url'],
+      clientDataJsonB64url: body['clientDataJsonB64url'],
+    }, { rpId: deps.cfg.rpId, origin: deps.cfg.origin }, registerChallenges, now);
+    if (!result.ok) {
+      // The REASON is worth a journal line here, unlike on the assertion path,
+      // because the caller is the operator and the answer is actionable ("your
+      // key cannot do user verification").
+      console.warn(`ccrc-server: passkey enrolment refused (${result.reason}): ${result.detail}`);
+      return reply.code(400).send({ ok: false, error: 'bad-request', reason: result.reason });
+    }
+    const stored = await passkeys.add({
+      credentialId: result.credentialId,
+      spkiB64url: result.spkiB64url,
+      algorithm: result.algorithm,
+      rpId: deps.cfg.rpId,
+      origin: deps.cfg.origin,
+      signCount: result.signCount,
+      uvAtEnrollment: result.uv,
+      enrolledAt: now,
+      lastUsedAt: now,
+      label: deviceLabel(req),
+    });
+    // A DISCRIMINATED RESULT, not a boolean (D-133): three different things can
+    // stop an enrolment and the operator needs a different sentence for each.
+    // `write-failed` especially — that used to answer `204 Passkey added` for a
+    // credential that would vanish on the next restart.
+    if (!stored.ok) {
+      const status = stored.reason === 'full' ? 409 : stored.reason === 'unusable' ? 409 : 500;
+      console.warn(`ccrc-server: passkey enrolment could not be stored (${stored.reason})`);
+      return reply.code(status).send({ ok: false, error: `passkey-store-${stored.reason}` });
+    }
+    return reply.code(204).send();
+  });
+
+  /**
+   * `GET /api/auth/passkeys` — the enrolment screen's view. GATED, like the
+   * register pair and for the same reason: which keys exist, when they were
+   * enrolled and when each was last used is the operator's own inventory, and it
+   * is exactly the fingerprinting material that must not leave the box to an
+   * anonymous caller. `assert/start` publishes the bare ids because the ceremony
+   * cannot run without them; this publishes the rest because the REVOCATION
+   * decision cannot be made without them. Two audiences, two shapes.
+   */
+  app.get('/api/auth/passkeys', async (_req, reply): Promise<PasskeyListResponse | void> => {
+    if (passkeyUnavailable(reply)) return;
+    return {
+      credentials: passkeys.list(),
+      // NOT derivable from an empty list — see `PasskeyListResponse` (D-132).
+      storeUnreadable: !passkeys.canEnroll(),
+    };
+  });
+
+  /**
+   * `DELETE /api/auth/passkey/:id` — REVOCATION. GATED.
+   *
+   * WHY THIS EXISTS AT ALL (operator ruling, Task 8 review). Without it a lost or
+   * compromised authenticator could not be un-enrolled: `PasskeyStore.remove`
+   * had no caller, there was no list in the UI, and the obvious workaround —
+   * `rm ~/.ccrc/passkeys.json` — DOES NOT WORK on a running server. `load()`
+   * happens once at boot and `ensureLoaded()` caches the promise forever, while
+   * `add`/`recordUse` re-serialize the whole in-memory array, so the next
+   * accepted assertion RESURRECTS the deleted row. The correct recovery was
+   * "`rm` plus a service restart", documented nowhere, and the store's own
+   * docstring ("it is removed when the operator removes it") rested on a
+   * lifecycle step that had never been built.
+   *
+   * IT TAKES EFFECT IMMEDIATELY IN THE RUNNING PROCESS — in-memory removal first,
+   * then the flush — which is the whole point given the resurrection above. No
+   * restart, and a revoked credential's very next assertion is refused as
+   * `unknown-credential`.
+   *
+   * `ccrc passwd` KEEPS ITS CURRENT MEANING: it bumps the secret generation,
+   * which invalidates SESSIONS, not authenticators. There is deliberately no
+   * generation stamp on `StoredCredential` — a passkey is a credential in its own
+   * right, exactly as it is on any ordinary service, and the documented emergency
+   * procedure is "revoke the passkey, then rotate the passphrase". Conflating the
+   * two would mean a passphrase rotation silently un-enrolled every device, which
+   * is a surprise in the direction of a lockout.
+   *
+   * 404 for an id that is not enrolled — the caller is already authenticated, so
+   * there is no oracle to protect here, and "that key is already gone" is the
+   * true and useful answer.
+   */
+  app.delete('/api/auth/passkey/:id', async (req, reply) => {
+    if (passkeyUnavailable(reply)) return;
+    const { id } = req.params as { id: string };
+    const removed = await passkeys.remove(id);
+    if (!removed) return reply.code(404).send({ ok: false, error: 'no-such-passkey' });
+    return reply.code(204).send();
+  });
+
+  /**
+   * `POST /api/auth/passkey/assert/start` — EXEMPT. Issues a login challenge and
+   * the credential ids the ceremony cannot run without.
+   *
+   * WHAT THIS PUBLISHES TO AN ANONYMOUS CALLER, stated rather than incidental: a
+   * fresh random challenge, the configured `rpId`, and the list of enrolled
+   * credential ids. A credential id is an opaque handle — useless without the
+   * private key, which never leaves the authenticator — and the COUNT is already
+   * published by `GET /api/auth/status`'s `passkeysEnrolled` under the same
+   * ruling (`ANON_VISIBLE`). A box with no keys answers an empty list, and the
+   * client falls back to the passphrase rather than prompting for a key that
+   * cannot exist.
+   */
+  app.post('/api/auth/passkey/assert/start', async (_req, reply): Promise<Partial<PasskeyAssertStart> | void> => {
+    if (passkeyUnavailable(reply)) return;
+    const now = Date.now();
+    const slot = passkeyLimiter.reserve(now);
+    if (!slot.ok) {
+      void reply.code(429).header('retry-after', String(Math.ceil(slot.retryAfter / 1000)))
+        .send({ ok: false, error: 'unauthenticated', verdict: 'locked-out', retryAfter: slot.retryAfter });
+      return;
+    }
+    try {
+      // ISSUANCE SPENDS THE BUDGET (D-131). Without this the route was
+      // effectively unmetered: the handler is `async` but has no `await` —
+      // `issue()` and `ids()` are synchronous — so the reservation was released
+      // in the same tick and `inFlight` never exceeded 1, and nothing here ever
+      // called `fail()`. `loginVerdict` therefore evaluated `0 + 0 < 60` on
+      // every request, forever. An anonymous peer looping this route evicted the
+      // operator's in-flight challenge (the map is 64 entries, oldest-first)
+      // faster than a Face ID prompt can resolve, turning a legitimate sign-in
+      // into "That passphrase didn't match" for the duration of the flood.
+      //
+      // `spend`, not `fail`: minting a challenge is not a failed guess. Same
+      // window, same reducer, honest name at the call site (`ratelimit.ts`).
+      passkeyLimiter.spend(now);
+      const full: PasskeyAssertStart = {
+        challengeB64url: assertChallenges.issue(now),
+        rpId: deps.cfg.rpId,
+        allowCredentialIdsB64url: passkeys.ids(),
+      };
+      // ENUMERATED, like `ANON_VISIBLE` on the status route, and for the same
+      // reason: this body goes to an UNAUTHENTICATED caller, so a field added to
+      // `PasskeyAssertStart` next month must be a compile error here — a
+      // deliberate decision — rather than a leak that ships with tsc clean and
+      // nothing red.
+      return anonymousAssertStart(full);
+    } finally {
+      slot.release();
+    }
+  });
+
+  /**
+   * `POST /api/auth/passkey/assert/finish` — EXEMPT. THE PASSKEY DOOR.
+   *
+   * Every check lives in `webauthn.ts`'s `verifyAssertion` (pure, no fastify, no
+   * disk); this handler is the delivery half — the brake, the lookup, the
+   * counter write and the cookie.
+   *
+   * `slot.release()` IN A `finally` IS LOAD-BEARING, exactly as on the passphrase
+   * door: a leaked slot never times out, and `PASSKEY_MAX_FAILURES` of them brick
+   * the passkey lane until the process restarts.
+   *
+   * THE UNCONFIGURED-SECRET ARM IS NOT AN OVERSIGHT. A session is stamped with
+   * the passphrase secret's GENERATION (`sessions.ts`) — that is how `ccrc
+   * passwd` invalidates every live session at once — so there is no session to
+   * mint on a box with no passphrase file. It is also the D-39 inversion applied
+   * consistently: an unconfigured box must never be enterable, by ANY door. In
+   * practice the state is unreachable, because enrolling a key requires a session
+   * and a session requires the passphrase; it is spelled out anyway, denying,
+   * because "unreachable" is a claim about today's routes.
+   *
+   * ONE REFUSAL SHAPE FOR EVERY FAILURE — unknown credential, wrong origin, stale
+   * counter, bad signature — so the route is not an oracle. The reason goes to
+   * the journal.
+   */
+  app.post('/api/auth/passkey/assert/finish', async (req, reply) => {
+    if (passkeyUnavailable(reply)) return;
+    const now = Date.now();
+    const slot = passkeyLimiter.reserve(now);
+    if (!slot.ok) {
+      return reply.code(429).header('retry-after', String(Math.ceil(slot.retryAfter / 1000)))
+        .send({ ok: false, error: 'unauthenticated', verdict: 'locked-out', retryAfter: slot.retryAfter });
+    }
+    try {
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const credentialId = body['credentialIdB64url'];
+      if (typeof credentialId !== 'string' || credentialId === '') {
+        return reply.code(400).send({ ok: false, error: 'bad-request' });
+      }
+      const measured = secretNow();
+      if (measured.kind !== 'ok') {
+        return reply.code(401).send({ ok: false, error: 'unauthenticated', verdict: 'unconfigured' });
+      }
+      const cred = passkeys.find(credentialId);
+      // A failure, counted, and the SAME body an unverifiable signature gets.
+      if (cred === undefined) {
+        passkeyLimiter.fail(now);
+        // A DIFFERENT SENTENCE from the verifier's own `unknown-credential`
+        // (which means "the id does not match the row supplied"): these are two
+        // different facts — "no such credential is enrolled here" versus "the
+        // caller was handed the wrong row" — and one log line for both would
+        // make the two indistinguishable in the only place they are allowed to
+        // differ. The WIRE answer stays identical; see this route's docstring.
+        console.warn('ccrc-server: passkey assertion refused (unknown-credential): ' +
+          'no credential with that id is enrolled on this box');
+        return reply.code(401).send({ ok: false, error: 'unauthenticated', verdict: 'wrong' });
+      }
+      const result = verifyAssertion({
+        credentialIdB64url: credentialId,
+        authenticatorDataB64url: body['authenticatorDataB64url'],
+        clientDataJsonB64url: body['clientDataJsonB64url'],
+        signatureB64url: body['signatureB64url'],
+      }, cred, assertChallenges, now);
+      if (!result.ok) {
+        passkeyLimiter.fail(now);
+        console.warn(`ccrc-server: passkey assertion refused (${result.reason}): ${result.detail}`);
+        return reply.code(401).send({ ok: false, error: 'unauthenticated', verdict: 'wrong' });
+      }
+      // THE COUNTER IS ADVANCED BEFORE THE SESSION IS MINTED. In-memory first and
+      // unconditionally (`credentials.ts`), so a replay of this exact assertion
+      // is refused by the counter even if the disk write fails — the challenge is
+      // already spent too, which is the second, independent wall.
+      await passkeys.recordUse(cred.credentialId, result.signCount, now);
+      passkeyLimiter.succeed(now);
+      const { token } = await authStore.create(deviceLabel(req), measured.secret.generation, now);
+      return reply
+        .header('set-cookie', serializeCookie(SESSION_COOKIE, token, {
+          secure: deps.cfg.cookieSecure, maxAgeSeconds: Math.floor(ABSOLUTE_TTL_MS / 1000),
+        }))
+        .code(204).send();
+    } finally {
+      slot.release();
+    }
+  });
+
+  /**
+   * `GET /api/auth/status` — the box's standing gate posture (`AuthStatus`).
+   *
+   * EXEMPT, by operator ruling, and the ruling is "exempt with a MINIMIZED
+   * anonymous body". The plan's exempt list named `/api/auth/login` and no other
+   * auth route; Task 1's own `AuthStatus` docstring contradicts it in three
+   * places — "what the login screen reads BEFORE anyone types anything", the
+   * `passkeysEnrolled > 0` decision about whether to draw the passkey button,
+   * and `'locked-out'` existing so "a browser arriving mid-window needs to be
+   * told to wait before it offers a field that cannot succeed". Gated, all three
+   * are unreachable and `authed` is a dead field. So it is exempt, and the leak
+   * that buys is ENUMERATED rather than incidental — see {@link ANON_VISIBLE}.
+   *
+   * `authed` IS COMPUTED FROM THE COOKIE PATH, never from `decision.allow`.
+   * `allow` is true for three different reasons (`GateDecision.reason`), and on
+   * an EXEMPT route it is true because the route is exempt — before the cookie
+   * or the secret has been looked at at all. Reading `authed` off it would tell
+   * every anonymous browser it was signed in, and would do so most loudly on a
+   * box whose secret is `'absent'`, which is exactly the state the D-39 arm
+   * exists to refuse. `reason === 'session'` is the only value that means a
+   * credential verified.
+   *
+   * `passkeysEnrolled` IS A REAL COUNT since Task 8 — the number of rows in
+   * `~/.ccrc/passkeys.json` — and it is `0` on a DARK box regardless of what is
+   * enrolled, because the store is only loaded when the flag is armed. That is
+   * not a lie: with the gate off there is no login screen to draw a passkey
+   * button on, `mode: 'off'` already tells the PWA to do nothing, and loading
+   * the file would break the "a dark box touches no disk" property
+   * `auth-gate.test.ts` pins.
+   *
+   * `mode` never says "armed but no secret file" — `AuthVerdict`'s
+   * `'unconfigured'`. That omission is `AuthStatus`'s own, deliberately: this
+   * route is unauthenticated, and publishing it here would advertise exactly
+   * which boxes are unenterable-but-open. `ccrc doctor` (Task 9) reports it, and
+   * the login route says it to someone who has actually tried to get in.
+   */
+  app.get('/api/auth/status', async (req): Promise<Partial<AuthStatus>> => {
+    const now = Date.now();
+    // `sessionVerdict`, NOT `authVerdict`: this route is EXEMPT, so `authVerdict`
+    // would answer `allow: true, reason: 'exempt'` and never look at the cookie
+    // at all. The credential question has to be asked directly.
+    const decision = sessionVerdict(req, {
+      enabled: deps.cfg.authEnabled, secret: secretNow(), store: authStore,
+    }, now);
+    // `check()` is a READ that never increments and never admits (`ratelimit.ts`);
+    // it only rolls an expired window forward, which is the same thing the next
+    // login would do.
+    const mode = !deps.cfg.authEnabled
+      ? 'off'
+      : loginLimiter.check(now).ok ? 'passphrase' : 'locked-out';
+    // With the gate dark, everyone is authed — `AuthStatus`'s own definition of
+    // `'off'`. Armed, only a verified session counts.
+    const authed = !deps.cfg.authEnabled || decision.reason === 'session';
+    // Typed as `AuthStatus` HERE, at the producer, so a field added to the wire
+    // type is a compile error in this handler rather than a silently missing key
+    // (the `FleetHealth` precedent, :211).
+    const full: AuthStatus = { authed, passkeysEnrolled: passkeys.count(), mode };
+    return authed ? full : anonymousStatus(full);
+  });
 
   app.get('/health', async () => ({ ok: true, build: deps.build ?? null }));
 
@@ -468,7 +1243,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // sharing one token+attribution gate inline here would be a second copy of
   // that gate. 501 `{ok:false,error:'not-configured'}` without `deps.coord`,
   // the same shape as the push routes and `/api/notifications/catchup` above.
-  registerCoordRoutes(app, deps, bus);
+  // The 4th argument is D-149: `GET /api/runs` is EXEMPT from the session gate
+  // and authenticates for itself, because the coordinator skill reads it
+  // cookieless from the fleet host with the box token. The session half of that
+  // decision can only be made here, where `authStore` lives.
+  registerCoordRoutes(app, deps, bus, sessionAuth);
 
   app.get('/ws/session/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };

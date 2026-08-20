@@ -8,6 +8,7 @@ import { tx } from './db.js';
 import { toRunSummary, type CoordStore } from './store.js';
 import { renderEnvelope } from './envelope.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './token.js';
+import { NO_SESSION, type GateDecision } from '../auth/gate.js';
 import { verifyDone, type DoneClaim } from './fingerprint.js';
 import { dispatchRun, type DispatchOutcome, type DispatchRunDeps } from './dispatch.js';
 import { closeRun, type CloseOutcome, type CloseRunDeps } from './close.js';
@@ -212,6 +213,21 @@ export function registerCoordRoutes(
   // run routes land in this same file and share it — a signature that grows
   // per-task would be a second copy of the token+attribution gate wiring.
   _bus: Bus,
+  /**
+   * Does this request carry a live session? Supplied by `buildServer`, because
+   * the session store deliberately does NOT live in `Deps` — it must be loaded
+   * exactly once, at boot, and `buildServer` is the one function every caller
+   * goes through (see its own comment, D-122's read-side mirror).
+   *
+   * A FUNCTION RETURNING THE DECISION, not a boolean: `GET /api/runs` needs the
+   * `verdict` as well as the yes/no, so its refusal can carry the same
+   * `AuthVerdict` the gate would have sent and the PWA's one login screen keeps
+   * working (D-149). Defaulted, so the handful of tests that construct these
+   * routes without a session layer are unchanged — and defaulted to "no
+   * session", which DENIES, so a caller that forgets to wire it falls back on
+   * the box token rather than on nothing.
+   */
+  sessionAuth: (req: FastifyRequest) => GateDecision = () => NO_SESSION,
 ): void {
   const notConfigured = (reply: FastifyReply) => reply.code(501).send({ ok: false, error: 'not-configured' });
 
@@ -1040,9 +1056,76 @@ export function registerCoordRoutes(
     return reply.code(200).send({ ok: true, requested: body.paused });
   });
 
-  /** `GET /api/runs?closed=1` — cold start, and the archive of finished runs
-   *  (spec:225-227). Strips `prLineage` on the way out (`toRunSummary`). */
+  /**
+   * `GET /api/runs?closed=1` — cold start, and the archive of finished runs
+   * (spec:225-227). Strips `prLineage` on the way out (`toRunSummary`).
+   *
+   * EXEMPT FROM THE SESSION GATE, AND AUTHENTICATED HERE INSTEAD — the
+   * `GET /api/auth/status` pattern, for a reason no task-level review could
+   * see (D-149).
+   *
+   * THIS ROUTE HAS TWO CALLERS, NOT ONE. `gate.ts` used to say "GET /api/runs
+   * is the PWA read", and that is false one corpus over:
+   * `ccd/coordinator-skill/references/wave-lifecycle.md` makes this read part of
+   * the PINNED protocol, performed COOKIELESS from the fleet host —
+   *   - `:34` "never parse a hold reason to learn what wave you are on. Ask
+   *     `GET /api/runs` and read the run row's own `wave`" — the standing
+   *     re-orientation instruction, i.e. what a coordinator does after EVERY
+   *     compaction or resume in a multi-day program;
+   *   - `:95`/`:386` the documented recovery for `unknown-run`;
+   *   - `:375` the ledger tally.
+   * Gated, an armed box answers `401 no-session` to all four, and the
+   * coordinator is wedged out of the run it owns at exactly the two moments it
+   * is least able to diagnose itself — orientation and recovery — with the
+   * pause files untouched and nothing red anywhere. Workers are unaffected:
+   * their whole surface is `GET/POST /api/mail*`, which are exempt box-token
+   * lanes already.
+   *
+   * SOFTENING THE SKILL WOULD HAVE BEEN THE WRONG FIX. Re-measure-not-parse is
+   * load-bearing there and `server/test/coordinator-skill.test.ts` pins those
+   * clauses verbatim.
+   *
+   * EITHER CREDENTIAL, NEVER NEITHER. A live session passes (the PWA); failing
+   * that, a valid box token is REQUIRED (the coordinator). So the
+   * confidentiality the method-keyed table bought is unchanged — open programs
+   * are still not published to anyone on the tailnet — while the credentialed
+   * read is restored. This is the ONE route where either credential works, so
+   * both directions are pinned by tests and by mutation.
+   *
+   * FLAG-AWARE, and that ordering is load-bearing: with `CCRC_AUTH` off this
+   * check does not run at all, so a dark box behaves exactly as it did before
+   * the slice — which is the whole promise, and which a bare
+   * `requireMailToken` here would have broken for every PWA on every dark box.
+   *
+   * THE REFUSAL CARRIES THE SESSION'S OWN `verdict`, not this file's usual
+   * bare-`detail` 401. That is deliberate: `pwa/src/lib/api.ts` raises the one
+   * login screen from a 401 body naming an `AuthVerdict`, so answering the way
+   * `/api/mail` does would leave a browser with a lapsed cookie silently failing
+   * this call instead of being told to sign in — and would lose D-127's
+   * `expired`-vs-`no-session` distinction on the way. The `detail` names the
+   * token half for whoever is holding a terminal.
+   */
   app.get('/api/runs', async (req, reply) => {
+    // AUTHENTICATE BEFORE ANSWERING ANYTHING, INCLUDING `501 not-configured`.
+    // On a gated route the hook would have refused before the handler ran, so
+    // moving the check in here means keeping that order by hand: a `501` tells
+    // an anonymous tailnet caller whether this box runs coordination at all,
+    // which is a fact the gate never published about any other route.
+    if (deps.cfg.authEnabled) {
+      const session = sessionAuth(req);
+      if (session.reason !== 'session') {
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        if (token !== 'ok') {
+          return reply.code(401).send({
+            ok: false,
+            error: 'unauthenticated',
+            verdict: session.verdict,
+            detail: 'GET /api/runs takes a session cookie OR the box token ' +
+              `(${MAIL_TOKEN_HEADER}); the coordinator skill reads it cookieless from the fleet host`,
+          });
+        }
+      }
+    }
     if (!deps.coord) return notConfigured(reply);
     const q = req.query as { closed?: string };
     const runs = deps.coord.runs({ includeClosed: q.closed === '1' });

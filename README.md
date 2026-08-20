@@ -828,6 +828,90 @@ a respawn strips `--remote-control` from a live session. `deploy.sh` seeds it in
 the same run, above its own installs, and `agent/test/deploy-verify.test.ts`
 pins that order.
 
+## The session gate: `CCRC_AUTH` (off by default)
+
+The PWA and its API can be put behind a **passphrase**, with optional
+**passkeys** on top. It is **off in the shipped default**, and that is the whole
+deploy story: with the flag off the gate's one `onRequest` hook is a
+passthrough, nothing reads a passphrase file, and the box behaves exactly as it
+did before the gate existed — so the mechanism ships to a live fleet before
+anyone decides to turn it on. A box that never arms it is a box anyone who can
+reach it can drive, which is the pre-existing posture, stated rather than
+implied.
+
+**A passphrase on its own changes nothing, and so does the flag on its own.**
+Arming is one operator act with two halves, and the order is: set the
+passphrase, then arm the flag.
+
+```bash
+ccrc passwd                       # prompts twice, echo off, 12-char floor,
+                                  # writes ~/.ccrc/auth.scrypt at 0600
+$EDITOR ~/.ccrc/ccrc.env          # CCRC_AUTH=on  +  CCRC_RP_ID  +  CCRC_ORIGIN
+systemctl --user restart ccrc.service
+```
+
+> **`CCRC_RP_ID` and `CCRC_ORIGIN` must be set in the same edit that arms
+> `CCRC_AUTH`.** Their defaults are `localhost` and `http://localhost:<port>`;
+> armed with those on a box actually reached over the tailnet, **every
+> non-exempt write and every `/ws/*` upgrade is refused** — a console that
+> loads, reads and cannot act — **and nothing warns at boot.** The pair is
+> internally coherent, so the boot check that catches a *disagreeing* pair
+> passes it, and a self-check that could catch it is not implementable behind
+> `tailscale serve` (the server cannot learn the hostname it is reached under).
+> The only signals are one journal line per refusal and a `foreign-origin`
+> failure on every write.
+
+`CCRC_RP_ID` is the **registrable domain** (`tailnet-example.ts.net`,
+`<name>.duckdns.org`) — never a bare public suffix, and never derived by
+stripping labels off the hostname, because `ts.net` and `duckdns.org` are
+themselves public suffixes and nothing here carries a PSL to know how many
+labels to strip. A credential records the rpId it was enrolled under, so
+changing it makes existing passkeys fail **loudly** ("re-enrol"), which is the
+intended way for a rename to behave. Full key-by-key documentation, including
+the path overrides and the `Secure`-cookie opt-out, is in
+[`deploy/ccrc.env.example`](deploy/ccrc.env.example); the step-by-step arming
+procedure and the operator runbooks (lost device, corrupt secret, disarming) are
+step 10 of
+[`docs/superpowers/specs/2026-08-19-stage2-vm-gate-runbook.md`](docs/superpowers/specs/2026-08-19-stage2-vm-gate-runbook.md).
+
+What is gated, and what is not: **everything except** `/health` (deploy's own
+liveness gate reads the shipped sha out of it), the ten machine lanes the fleet
+host posts to (nine box-token-gated coordination routes plus `/api/notify`,
+which still tolerates an absent token for one deploy generation — none of them
+has a cookie jar), the login and passkey-assertion doors themselves,
+`GET /api/auth/status` (with a minimized anonymous body), and `GET /*`, the
+static bundle a browser has to
+download before it can show a login screen. Enrolling a passkey is **not**
+exempt — it requires already being signed in, which is what makes
+`attestation: 'none'` safe.
+
+**Ending a session** is Accounts → **This session** → **Sign out**: it revokes
+this browser's session server-side and leaves other devices signed in. Enrolled
+passkeys survive it, which is why it is not the lost-device procedure.
+
+**`ccrc passwd` invalidates sessions, not passkeys.** A rotation bumps the
+file's generation and every logged-in browser is expired at once with no
+restart; every enrolled authenticator keeps working, deliberately. For a lost
+device the order is therefore **revoke the passkey in the PWA (Accounts →
+Passkeys → Revoke) first, then rotate the passphrase**. `rm ~/.ccrc/passkeys.json`
+on a running server revokes nothing — the store is loaded once at boot and
+rewritten from memory on the next accepted assertion.
+
+**Two boot warnings worth knowing**, because each catches a misconfiguration
+that is otherwise silent: an `rpId`/`origin` pair that disagrees, is malformed,
+or is an IP literal (passkeys go 501, the passphrase door keeps working); and a
+cookie policy that contradicts the origin's scheme — an `http:` `CCRC_ORIGIN`
+with a `Secure` cookie, which produces a login that answers 204 and bounces
+straight back to the login screen with nothing failing anywhere, or an `https:`
+one with the dev opt-out left on.
+
+**`ccrc doctor`'s `auth` check** reports where a box actually stands: a PASS on
+an un-armed box (that is the shipped default, and a doctor that warned about it
+would train an operator to skim), a FAIL on an armed box with no passphrase
+file, and a FAIL on a passphrase file the server would refuse to boot on. It
+prints no byte of the file's contents, and neither does the server's own boot
+refusal.
+
 ## Install (single box)
 
 ```bash

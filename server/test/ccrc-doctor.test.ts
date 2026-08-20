@@ -45,6 +45,7 @@ import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { ghContainedEnv, ghPoisonAt } from './ccdWsHelpers.js';
+import { plantAuthHelper, plantAuthModule, fixtureSecretLine } from './authFixtures.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -82,6 +83,28 @@ function installCcrc(home: string): void {
   symlinkSync(CCRC_SRC, join(ccd, 'ccrc'));
   symlinkSync(CHECKS_SRC, join(ccd, 'ccrc-doctor-checks'));
   symlinkSync(LIB_SRC, join(ccd, 'ccrc-wrapper-shape'));
+  // ── the `auth` check's two artifacts (Task 9) ──────────────────────────
+  // `_check_auth` measures `~/.ccrc/auth.scrypt` by running
+  // `deploy/gen-auth-hash.mjs --check`, which imports the compiled reader out
+  // of `server/dist/` — the module the SERVER boots on, so the check cannot
+  // pass a line the server would refuse. Both are part of the shipped tree
+  // (`deploy.sh` rsyncs `deploy/` and builds `server/` on the box), so a
+  // fixture box that lacks them is not a box.
+  //
+  // The helper is COPIED, not symlinked, unlike the three above: node resolves
+  // a module's own imports from its REAL path, so a symlinked helper would
+  // import THIS CHECKOUT's `server/dist/…` — which may or may not exist on a
+  // developer's tree — instead of the fixture's own.
+  plantAuthHelper(join(home, 'ccrc'));
+  plantAuthModule(join(home, 'ccrc'));
+}
+
+/** `~/.ccrc/auth.scrypt`, as `ccrc passwd` really writes it: 0600, one line,
+ *  produced by the real writer under the real parameters. `text` overrides the
+ *  content for the tests that are ABOUT an unusable file. */
+function writeAuthSecret(home: string, text = fixtureSecretLine()): void {
+  mkdirSync(join(home, '.ccrc'), { recursive: true });
+  writeFileSync(join(home, '.ccrc', 'auth.scrypt'), text, { mode: 0o600 });
 }
 
 const ccrcIn = (home: string): string => join(home, 'ccrc', 'ccd', 'ccrc');
@@ -579,6 +602,11 @@ function healthy(prefix: string): string {
     '',
   ].join('\n'));
   stubHealth(home, { mode: 'remote', connected: true, downSince: null, build: 'agreed', roster: 'agreed' });
+  // …and its PWA has a passphrase set. A box with none is a real and common
+  // state — it is what `ccrc install` leaves behind, deliberately — but it is a
+  // WARN (`auth`), and `healthy()`'s contract is that every check PASSES, which
+  // several tests below assert on directly ("0 warned").
+  writeAuthSecret(home);
   // …and it is a SERVER BOX that has been installed: the two unit files
   // `ccrc install` leaves in `~/.config/systemd/user`, both running, and a
   // filesystem with room on it. `path` needs no fixture at all — `<home>/.local/bin`
@@ -1308,9 +1336,12 @@ describe('ccrc doctor: config', () => {
     expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) config: /m);
     expect(lines[i + 1] ?? '').not.toMatch(/^ {2}remedy: /);
     expect(r.stdout).not.toMatch(/ccrc install/);
-    // `fleet` skips on the same box for its own reason (no server address), so
-    // the summary proves the runner accepted BOTH skips as skips.
-    expect(r.stdout).toMatch(/^summary: \d+ checks \(2 skipped\)/m);
+    // `fleet` skips on the same box for its own reason (no server address), and
+    // `auth` for a third (the session gate is the server's, and nothing on a
+    // fleet host reads `~/.ccrc/auth.scrypt`) — so the summary proves the
+    // runner accepted ALL THREE skips as skips.
+    expect(r.stdout).toMatch(/^SKIP auth: .*ccrc-agent\.service/m);
+    expect(r.stdout).toMatch(/^summary: \d+ checks \(3 skipped\)/m);
     expect(r.code).toBe(0);
   });
 
@@ -1450,6 +1481,389 @@ describe('ccrc doctor: config', () => {
     expect(r.stdout).toMatch(/^FAIL config: ccrc's own config reader is not loaded/m);
     expect(r.stdout).toMatch(/^ {2}remedy: this is a bug in ccrc/m);
     expect(r.status).toBe(1);
+  });
+});
+
+// ── the session gate: the flag, and the passphrase it needs ───────────────
+// Stage 3a, Task 9. TWO FACTS, ONE VERDICT — `CCRC_AUTH` (out of `ccrc.env`,
+// because that is the file `ccrc.service`'s `EnvironmentFile=` hands the
+// server) and `~/.ccrc/auth.scrypt`. Neither is worth anything without the
+// other: the flag on with no passphrase is a box that answers 401 to
+// everything and cannot be logged into at all, and a passphrase with the flag
+// off is a console anyone on the tailnet can drive.
+//
+// THE FILE IS MEASURED BY THE SERVER'S OWN PARSER, through
+// `deploy/gen-auth-hash.mjs --check`, which imports the compiled
+// `server/src/auth/secret.ts`. Not for elegance: `readAuthSecret` enforces five
+// parameter bounds beyond the format (D-124/113) and `buildServer` calls it
+// UNCAUGHT at boot, so a line a bash approximation would wave through is a
+// server that does not start. Doctor is the one place an operator can see that
+// coming before a restart does.
+describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
+  /** `CCRC_AUTH=<value>` appended to the fixture's own `ccrc.env` — the file
+   *  the SERVER reads its environment from. Appended rather than rewritten so
+   *  the other checks that read that file keep measuring what they measured. */
+  const armGate = (home: string, value = 'on'): void => {
+    const p = join(home, '.ccrc', 'ccrc.env');
+    writeFileSync(p, `${readFileSync(p, 'utf8')}CCRC_AUTH=${value}\n`);
+  };
+  const authLine = (out: string): string => lineFor(out, 'auth') ?? '';
+  const remedyFor = (out: string, name: string): string => {
+    const lines = out.split('\n');
+    const i = lines.findIndex((l) => new RegExp(`^(WARN|FAIL) ${name}: `).test(l));
+    return i === -1 ? '' : (lines[i + 1] ?? '');
+  };
+
+  it('PASSES a box with no passphrase and the gate off — a fresh install ends GREEN', () => {
+    // ── OPERATOR RULING (Task 9 review), amending the plan's own text ─────
+    // This shipped as a WARN, faithfully to the plan. The operator overruled
+    // it: `CCRC_AUTH` off with no passphrase is the state EVERY box ships in —
+    // `ccrc install` writes no passphrase, by doctrine — so the warning ended
+    // every clean install yellow, which trains an operator to skim past the
+    // warnings that matter. The state is a fact about a box configured the way
+    // the project ships it (`rc`'s rule), and the arming instructions ride the
+    // DETAIL as next-steps text instead of a remedy.
+    const home = healthy('ccrc-doctor-auth-none-');
+    rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
+    const r = runDoctor(home);
+    expect(authLine(r.stdout)).toMatch(/^PASS auth: no passphrase file at .*\/\.ccrc\/auth\.scrypt/);
+    // …and the line still says, out loud, that nothing is gated. A PASS that
+    // read as "we are protected" would be worse than the WARN it replaced.
+    expect(authLine(r.stdout)).toMatch(/nothing is gated/);
+    expect(authLine(r.stdout)).toMatch(/ccrc passwd/);
+    // A PASS owes no remedy line, and must not print one.
+    expect(remedyFor(r.stdout, 'auth')).toBe('');
+    expect(r.code).toBe(0);
+  });
+
+  it('names CCRC_RP_ID and CCRC_ORIGIN in the same breath as CCRC_AUTH', () => {
+    // Task 8's finding, and the reason it has to be said by the CLI: with the
+    // flag armed and those two wrong, every /ws/* upgrade and every non-exempt
+    // write is refused from the real origin — and the server cannot warn about
+    // it at boot, because behind `tailscale serve` it never learns the
+    // hostname it is reached under. An operator who arms the flag from this
+    // line alone would find out one tap at a time.
+    const home = healthy('ccrc-doctor-auth-rpid-');
+    rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
+    const line = authLine(runDoctor(home).stdout);
+    expect(line).toContain('CCRC_AUTH=on');
+    expect(line).toContain('CCRC_RP_ID');
+    expect(line).toContain('CCRC_ORIGIN');
+  });
+
+  it('FAILS when the gate is ARMED and there is no passphrase — the fail-shut state, made visible', () => {
+    // `readAuthSecret` returning null with the flag on is Task 5's fail-SHUT
+    // polarity: every route answers 401 `'unconfigured'` and no login can
+    // succeed. The server logs one line at boot; this is the instrument that
+    // reports it without reading a journal.
+    const home = healthy('ccrc-doctor-auth-armed-none-');
+    rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
+    armGate(home);
+    const r = runDoctor(home);
+    expect(authLine(r.stdout)).toMatch(/^FAIL auth: .*CCRC_AUTH=on.*NO passphrase file/);
+    expect(authLine(r.stdout)).toMatch(/failing SHUT|401/);
+    expect(remedyFor(r.stdout, 'auth')).toMatch(/ccrc passwd/);
+    expect(r.code).toBe(1);
+  });
+
+  it('PASSES an armed box with a usable passphrase, naming what it measured', () => {
+    const home = healthy('ccrc-doctor-auth-armed-ok-');
+    armGate(home);
+    const r = runDoctor(home);
+    expect(authLine(r.stdout)).toMatch(/^PASS auth: CCRC_AUTH=on/);
+    // The detail is a MEASUREMENT, never the bare word "ok": the parameters
+    // and the generation the reader really found in the file.
+    expect(authLine(r.stdout)).toMatch(/N=\d+,r=\d+,p=\d+,gen=\d+/);
+    expect(r.code).toBe(0);
+  });
+
+  it('PASSES a box with a passphrase and the gate OFF — and says nothing is gated yet', () => {
+    // A PASS rather than a WARN: `CCRC_AUTH` off is the shipped default and a
+    // legitimate state (`rc`'s rule — a doctor that WARNed here would be
+    // asserting a preference). The detail is what stops the line reading as
+    // "we are protected".
+    const home = healthy('ccrc-doctor-auth-unarmed-ok-');
+    const r = runDoctor(home);
+    expect(authLine(r.stdout)).toMatch(/^PASS auth: .*holds a usable passphrase/);
+    expect(authLine(r.stdout)).toMatch(/the gate is OFF \(CCRC_AUTH is not "on"/);
+    expect(authLine(r.stdout)).toMatch(/no request is gated yet/);
+    expect(r.code).toBe(0);
+  });
+
+  it('reads the flag from ccrc.env and NOT from the shell it was run in', () => {
+    // The server's environment comes from `ccrc.service`'s `EnvironmentFile=`,
+    // i.e. from `~/.ccrc/ccrc.env`. An exported `CCRC_AUTH` in the operator's
+    // own shell arms nothing, and a check that believed it would report a box
+    // that does not exist — here, a FAIL about a fail-shut gate on a box whose
+    // gate is off.
+    const home = healthy('ccrc-doctor-auth-env-shell-');
+    rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
+    const r = runDoctor(home, ['doctor'], { CCRC_AUTH: 'on' });
+    expect(authLine(r.stdout)).toMatch(/^PASS auth: no passphrase file/);
+    expect(r.code).toBe(0);
+  });
+
+  it('reads a value systemd would not set as OFF, exactly as config.ts does', () => {
+    // `config.ts:331` is `env.CCRC_AUTH === 'on'` and nothing else. A check
+    // laxer OR stricter than the reader it describes reports a box nobody is
+    // running — `_check_config` pins the same rule for CCRC_FLEET.
+    const home = healthy('ccrc-doctor-auth-flagcase-');
+    rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
+    for (const v of ['ON', 'true', 'yes', 'on ', '"on"x']) {
+      armGate(home, v);
+      expect(authLine(runDoctor(home).stdout), v).toMatch(/^PASS auth: no passphrase file/);
+      writeCcrcEnv(home, readFileSync(join(home, '.ccrc', 'ccrc.env'), 'utf8')
+        .split('\n').filter((l) => !l.startsWith('CCRC_AUTH=')).join('\n'));
+    }
+  });
+
+  it('FAILS on a file the server would refuse to boot on, and quotes NOT ONE BYTE of it', () => {
+    // The boot-brick state. With the flag on, `buildServer`'s uncaught
+    // `readAuthSecret` means the unit does not come up at all — which reaches
+    // an operator as a dead service and a journal to read, unless something
+    // measured it first.
+    //
+    // AND THE CONTENT NEVER APPEARS. `AuthSecretUnusable`'s message quotes the
+    // FIELD it choked on — measured: `unknown prefix "<field 1>" (want
+    // "scrypt")` — so a misplaced copy of some other secret would put its
+    // bytes, verbatim, in a transcript that goes into a ticket. CLAUDE.md:
+    // never print secret file CONTENTS. The fixture is exactly that shape.
+    const home = healthy('ccrc-doctor-auth-garbled-');
+    const planted = 'PLANTED-SECRET-9f3a2b';
+    writeAuthSecret(home, `${planted}$b$c$d$e\n`);
+    armGate(home);
+    const r = runDoctor(home);
+    expect(authLine(r.stdout)).toMatch(/^FAIL auth: .*auth\.scrypt exists and this box cannot use it/);
+    expect(authLine(r.stdout)).toMatch(/REFUSES TO BOOT/);
+    expect(r.stdout).not.toContain(planted);
+    expect(r.stderr).not.toContain(planted);
+    // The remedy is the `mv`, because `ccrc passwd` REFUSES to overwrite a file
+    // it cannot read (it cannot read the generation either, and inventing one
+    // revalidates sessions instead of expiring them). A bare `ccrc passwd` here
+    // would send an operator to a command that is about to refuse.
+    // The session file is NAMED, absolutely, and resolved rather than assumed —
+    // see the override case below.
+    expect(remedyFor(r.stdout, 'auth'))
+      .toMatch(/mv .*auth\.scrypt .*auth\.scrypt\.broken && rm -f .*sessions\.json && ccrc passwd/);
+    expect(remedyFor(r.stdout, 'auth')).toContain(join(home, '.ccrc', 'sessions.json'));
+    expect(r.code).toBe(1);
+  });
+
+  it('the remedy RESOLVES the session file, it does not hard-code it (D-148)', () => {
+    // D-143's defect class, one key over. This remedy resolved the SECRET
+    // through `_box_auth_path` and then printed a literal
+    // `rm -f ~/.ccrc/sessions.json` beside it — so on a box that redirects
+    // `CCRC_SESSIONS_PATH` it told the operator to delete a file nothing reads,
+    // leaving the sessions that the fresh generation-1 secret is about to
+    // REVALIDATE exactly where they were. Both paths now come from one
+    // parameterised resolver, so they cannot disagree.
+    const home = healthy('ccrc-doctor-auth-sessover-');
+    writeAuthSecret(home, 'PLANTED-SECRET-4c1a$b$c$d$e\n');
+    writeCcrcEnv(home, `${readFileSync(join(home, '.ccrc', 'ccrc.env'), 'utf8')
+      }CCRC_SESSIONS_PATH=/srv/ccrc/sessions.json\n`);
+    const remedy = remedyFor(runDoctor(home).stdout, 'auth');
+    expect(remedy).toContain('rm -f /srv/ccrc/sessions.json');
+    expect(remedy).not.toContain('.ccrc/sessions.json');
+    expect(remedy).toContain('CCRC_SESSIONS_PATH');
+  });
+
+  it('names NO session file at all when CCRC_SESSIONS_PATH is relative', () => {
+    // The `_box_auth_path` rule for a relative override, reached by the same
+    // code: the server resolves it against systemd's working directory and this
+    // tool against the operator's, so nothing on the box can say which file it
+    // is. A remedy that guessed would delete something else.
+    const home = healthy('ccrc-doctor-auth-sessrel-');
+    writeAuthSecret(home, 'PLANTED-SECRET-4c1a$b$c$d$e\n');
+    writeCcrcEnv(home, `${readFileSync(join(home, '.ccrc', 'ccrc.env'), 'utf8')
+      }CCRC_SESSIONS_PATH=sessions.json\n`);
+    const remedy = remedyFor(runDoctor(home).stdout, 'auth');
+    expect(remedy).toContain("rm -f <this box's session file>");
+    expect(remedy).toContain('RELATIVE');
+    // …and it must not have fallen back to the default, which is the mistake
+    // this arm exists to refuse.
+    expect(remedy).not.toContain(join(home, '.ccrc', 'sessions.json'));
+  });
+
+  it('FAILS on the same file with the gate OFF too — a boot refusal waiting to happen', () => {
+    // Same class, different tense, and the tense is in the detail: the box
+    // works today, and the one command that arms it takes the server down.
+    const home = healthy('ccrc-doctor-auth-garbled-off-');
+    writeAuthSecret(home, 'not a secret line at all\n');
+    const r = runDoctor(home);
+    expect(authLine(r.stdout)).toMatch(/^FAIL auth: /);
+    expect(authLine(r.stdout)).toMatch(/the moment CCRC_AUTH=on is set, the server will refuse to boot/);
+    expect(r.code).toBe(1);
+  });
+
+  it('never prints the salt or the hash out of a file it CAN read', () => {
+    const home = healthy('ccrc-doctor-auth-quiet-');
+    const r = runDoctor(home);
+    const [, , salt, hash] = fixtureSecretLine().trim().split('$');
+    expect(salt.length).toBeGreaterThan(10);
+    expect(r.stdout).not.toContain(salt);
+    expect(r.stdout).not.toContain(hash);
+  });
+
+  it('WARNS — not passes — when this box has no server build to read the file with', () => {
+    // A dev checkout that never ran `npm run build`. The file is there and
+    // nothing on this box can say whether it is usable, which is neither a
+    // PASS (nothing was measured) nor a FAIL (nothing is known to be wrong).
+    const home = healthy('ccrc-doctor-auth-nobuild-');
+    // `dist/` only — `server/package.json` beside it is what the `node` check
+    // reads its floor out of, and taking that away too would make this a test
+    // about two checks at once.
+    rmSync(join(home, 'ccrc', 'server', 'dist'), { recursive: true, force: true });
+    const r = runDoctor(home);
+    expect(authLine(r.stdout)).toMatch(/^WARN auth: .*no server build/);
+    expect(remedyFor(r.stdout, 'auth')).toMatch(/npm run build/);
+    expect(r.code).toBe(0);
+  });
+
+  it('FAILS, naming the node check, when node is not on PATH', () => {
+    // `_check_wrappers`' rule: a box with no node gets exactly one FAIL about
+    // node itself, and every check that NEEDED it says which one to read
+    // rather than inventing a second diagnosis of the same absence.
+    const home = healthy('ccrc-doctor-auth-nonode-');
+    unstub(home, 'node');
+    const r = runDoctor(home);
+    expect(authLine(r.stdout)).toMatch(/^FAIL auth: node is not on PATH/);
+    expect(remedyFor(r.stdout, 'auth')).toMatch(/see the 'node' check above/);
+  });
+
+  it('FAILS, blaming ccrc, when the hasher did not ship beside it', () => {
+    const home = healthy('ccrc-doctor-auth-nohelper-');
+    rmSync(join(home, 'ccrc', 'deploy', 'gen-auth-hash.mjs'), { force: true });
+    const r = runDoctor(home);
+    expect(authLine(r.stdout)).toMatch(/^FAIL auth: the passphrase helper is missing/);
+    expect(remedyFor(r.stdout, 'auth')).toMatch(/bug in ccrc/);
+  });
+
+  it('SKIPS on a FLEET-ROLE box — the gate belongs to the server, with no remedy', () => {
+    // `_check_config`'s D-86 evidence, reused for the same reason: `ccrc` ships
+    // to the fleet host, nothing there reads `~/.ccrc/auth.scrypt`, and a WARN
+    // would send that operator to write a file no process will ever open. NO
+    // REMEDY under a skip — there is nothing here to fix.
+    const home = healthy('ccrc-doctor-auth-fleetrole-');
+    rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
+    rmSync(join(home, '.config', 'systemd', 'user', 'ccrc.service'), { force: true });
+    writeUnitFile(home, 'ccrc-agent.service');
+    writeFileSync(join(home, 'fixture-unit-ccrc-agent.service'), 'active\n');
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('SKIP auth: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i + 1] ?? '').not.toMatch(/^ {2}remedy: /);
+    expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) auth: /m);
+    expect(r.stdout).not.toMatch(/ccrc passwd/);
+  });
+
+  // ── CCRC_AUTH_SECRET_PATH: the override, and the silent no-op it would be ──
+  // `config.ts:339` is `env.CCRC_AUTH_SECRET_PATH || <default>`, so a box can
+  // redirect the gate's secret. A doctor that measured the DEFAULT on such a
+  // box would report `PASS auth … gen=1` about a file nothing reads — right
+  // after a `ccrc passwd` that wrote the same wrong file. An operator rotating
+  // after a compromise would get a green transcript over a live, unchanged
+  // secret. Both tools go through ONE resolver (`ccrc`'s `_box_auth_path`).
+
+  it('MEASURES the overridden path, and says the redirect out loud', () => {
+    const home = healthy('ccrc-doctor-auth-override-');
+    const elsewhere = join(home, 'secrets', 'gate.scrypt');
+    mkdirSync(join(home, 'secrets'), { recursive: true });
+    writeFileSync(elsewhere, fixtureSecretLine(), { mode: 0o600 });
+    // …and the DEFAULT path is deliberately left holding something unusable:
+    // if the check were still reading it, this would be a FAIL, not a PASS.
+    writeAuthSecret(home, 'not a secret line at all\n');
+    writeCcrcEnv(home, `${readFileSync(join(home, '.ccrc', 'ccrc.env'), 'utf8')}CCRC_AUTH_SECRET_PATH=${elsewhere}\n`);
+    const r = runDoctor(home);
+    expect(authLine(r.stdout)).toMatch(/^PASS auth: /);
+    expect(authLine(r.stdout)).toContain(elsewhere);
+    expect(authLine(r.stdout)).toContain('CCRC_AUTH_SECRET_PATH');
+    expect(r.code).toBe(0);
+  });
+
+  it('FAILS a RELATIVE override rather than guessing which file it means', () => {
+    // `config.ts` does not resolve it either, so the server resolves it against
+    // whatever working directory systemd gives ccrc.service and every tool
+    // against its own. Nothing on the box can say which file the secret is, and
+    // a verdict about "the secret" is not available.
+    const home = healthy('ccrc-doctor-auth-relative-');
+    writeCcrcEnv(home, `${readFileSync(join(home, '.ccrc', 'ccrc.env'), 'utf8')}CCRC_AUTH_SECRET_PATH=secrets/gate.scrypt\n`);
+    const r = runDoctor(home);
+    expect(authLine(r.stdout)).toMatch(/^FAIL auth: .*RELATIVE path \(secrets\/gate\.scrypt\)/);
+    expect(remedyFor(r.stdout, 'auth')).toMatch(/make it absolute/);
+    expect(r.code).toBe(1);
+  });
+
+  it('an EMPTY override is absent, exactly as config.ts\'s `||` reads it', () => {
+    // The bare-`KEY=` lesson (`accountsPath`, D-…): systemd sets an empty
+    // string for `CCRC_AUTH_SECRET_PATH=`, and `||` falls through to the
+    // default. A resolver using `??` would take the empty string as a path.
+    const home = healthy('ccrc-doctor-auth-emptyoverride-');
+    writeCcrcEnv(home, `${readFileSync(join(home, '.ccrc', 'ccrc.env'), 'utf8')}CCRC_AUTH_SECRET_PATH=\n`);
+    const r = runDoctor(home);
+    expect(authLine(r.stdout)).toMatch(/^PASS auth: /);
+    expect(authLine(r.stdout)).toContain(join(home, '.ccrc', 'auth.scrypt'));
+    expect(authLine(r.stdout)).not.toContain('CCRC_AUTH_SECRET_PATH');
+  });
+
+  // ── the two layers that keep a byte of the file off the screen ───────────
+  // D-140 rests on TWO defences, and each one alone is enough to keep the suite
+  // green while the other is deleted — which is how a defence-in-depth pair
+  // quietly becomes a defence-in-depth single. Both are pinned here with a
+  // STUB helper: the fixture's copy is replaced by a script that leaks
+  // deliberately, so the check's own containment is what is under test.
+
+  /** Replace the fixture's helper copy with a script of our own. */
+  const stubHelper = (home: string, body: string): void =>
+    writeFileSync(join(home, 'ccrc', 'deploy', 'gen-auth-hash.mjs'),
+      `#!/usr/bin/env node\n${body}\n`, { mode: 0o644 });
+
+  it('discards the helper\'s stderr — a leaky subprocess cannot print through this check', () => {
+    const home = healthy('ccrc-doctor-auth-stderr-');
+    const planted = 'LEAKED-VIA-STDERR-4b1c';
+    stubHelper(home, `process.stderr.write(${JSON.stringify(planted)} + "\\n"); process.exit(4);`);
+    const r = runDoctor(home);
+    expect(authLine(r.stdout)).toMatch(/^FAIL auth: /);      // the state still lands
+    expect(r.stdout).not.toContain(planted);
+    expect(r.stderr).not.toContain(planted);
+  });
+
+  it('refuses a state line it does not recognise instead of printing it', () => {
+    // The second layer. `--check`'s stdout crosses into a verdict line a human
+    // reads on a terminal that acts on control bytes, so it is pinned to a
+    // shape rather than trusted — `_box_build_fields`' rule for the build
+    // stamp's fields.
+    const home = healthy('ccrc-doctor-auth-shape-');
+    const planted = 'LEAKED-VIA-STDOUT-7c2d';
+    stubHelper(home, `process.stdout.write(${JSON.stringify(planted)} + "\\n"); process.exit(0);`);
+    const r = runDoctor(home);
+    expect(authLine(r.stdout)).toMatch(/^FAIL auth: the passphrase helper reported a state line this check does not recognise/);
+    expect(remedyFor(r.stdout, 'auth')).toMatch(/bug in ccrc/);
+    expect(r.stdout).not.toContain(planted);
+  });
+
+  it('names an exit code it does not understand as a bug in ccrc', () => {
+    // `_check_wrappers` pins the same arm for the same reason: a code nobody
+    // taught this check about must not fall through to one of the legal
+    // answers.
+    const home = healthy('ccrc-doctor-auth-badcode-');
+    stubHelper(home, 'process.exit(9);');
+    const r = runDoctor(home);
+    expect(authLine(r.stdout)).toMatch(/^FAIL auth: reading .* exited 9 — this check does not know what that means/);
+    expect(remedyFor(r.stdout, 'auth')).toMatch(/bug in ccrc/);
+    expect(r.code).toBe(1);
+  });
+
+  it('a dev checkout with no units at all is NOT the fleet role — it still answers', () => {
+    // The other side of that branch, exactly as `config` draws it: "no
+    // ccrc.service" alone is also a box that has installed nothing, and a dev
+    // checkout DOES run a server.
+    const home = healthy('ccrc-doctor-auth-nounits-');
+    rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
+    rmSync(join(home, '.config', 'systemd', 'user'), { recursive: true, force: true });
+    const r = runDoctor(home);
+    expect(authLine(r.stdout)).toMatch(/^PASS auth: no passphrase file/);
+    expect(r.stdout).not.toMatch(/^SKIP auth: /m);
   });
 });
 
@@ -2769,6 +3183,61 @@ describe('ccrc doctor: fleet', () => {
     expect(r.code).toBe(0);
   });
 
+  it('SKIPS — never "read the server\'s log" — when the session gate refuses it (D-150)', () => {
+    // `/api/fleet/health` is GATED on purpose: it publishes roster digests,
+    // build stamps and divergence, and exempting it to spare a diagnostic would
+    // widen the tailnet surface for convenience. So on an armed box this call
+    // answers 401, which is BOTH PARTIES BEHAVING CORRECTLY — and it used to
+    // land in the generic HTTP-error arm, whose remedy is "read the server's own
+    // log", sending an operator to a journal where nothing is wrong. On exactly
+    // the box the runbook tells them to run doctor on right after arming.
+    const home = healthy('ccrc-doctor-fleet-gated-');
+    stubHealth(home, '{"ok":false,"error":"unauthenticated","verdict":"no-session"}', 401);
+    const r = runDoctor(home);
+    const line = r.stdout.split('\n').find((l) => l.startsWith('SKIP fleet: ')) ?? '';
+    expect(line, r.stdout).not.toBe('');
+    expect(line).toMatch(/session gate is ARMED/);
+    // The two sentences the old wording got wrong, pinned as absences — and the
+    // SKIP contract's own half: no remedy line under it, because the only
+    // honest "remedy" would be "turn the gate off", which is not advice.
+    expect(line).not.toMatch(/HTTP 401/);
+    expect(r.stdout).not.toMatch(/journalctl/);
+    expect(lineFor(r.stdout, 'fleet'), 'a SKIP is not a PASS/WARN/FAIL').toBeUndefined();
+    // THE COST IS STATED RATHER THAN GLOSSED: silence here is not evidence that
+    // the two boxes agree, and the line has to say so or it becomes the reason
+    // a skew goes unnoticed.
+    expect(line).toMatch(/NOT being measured/);
+    expect(line).toContain('ccrc version');
+    expect(r.code).toBe(0);
+  });
+
+  it('a 401 that is NOT this server\'s refusal stays the generic HTTP error', () => {
+    // A reverse proxy or a captive portal in front of the address answers 401
+    // too, and telling that operator "your session gate refused it" would be the
+    // same class of wrong answer D-150 exists to stop. The discriminator is this
+    // server's own refusal envelope, not the status code.
+    const home = healthy('ccrc-doctor-fleet-proxy401-');
+    stubHealth(home, '<html>Proxy Authentication Required</html>', 401);
+    const r = runDoctor(home);
+    const line = lineFor(r.stdout, 'fleet') ?? '';
+    expect(line).toMatch(/^WARN fleet: /);
+    expect(line).toContain('401');
+    expect(line).not.toMatch(/session gate/);
+    expect(r.code).toBe(0);
+  });
+
+  it('classifies the refusal WITHOUT quoting a byte of it', () => {
+    // `_box_health`'s standing rule — nothing from the body is ever printed —
+    // now applies to a body this code READS rather than merely classifies, so
+    // it is measured rather than assumed.
+    const home = healthy('ccrc-doctor-fleet-gated-quiet-');
+    stubHealth(home,
+      '{"ok":false,"error":"unauthenticated","verdict":"no-session","canary":"PLANTED-BODY-7f2a"}', 401);
+    const r = runDoctor(home);
+    expect(r.stdout).not.toContain('PLANTED-BODY-7f2a');
+    expect(r.stderr).not.toContain('PLANTED-BODY-7f2a');
+  });
+
   it('warns when the answer is not the health JSON at all', () => {
     // The measured shape of a reverse proxy or a captive portal answering 200
     // with an HTML page.
@@ -3230,6 +3699,22 @@ describe('ccrc status', () => {
     const r = runDoctor(home, ['status']);
     expect(r.stdout).toMatch(/fleet: +not measured/);
     expect(r.stdout).not.toMatch(/fleet: +agreed/);
+    expect(r.code).toBe(0);
+  });
+
+  it('says the GATE refused it, not "HTTP 401", when the gate is armed (D-150)', () => {
+    // The second caller of `_box_health`, and it had the same misleading
+    // sentence: `fleet: not measured (the server answered HTTP 401 …)`. Both
+    // callers now read arm 9, so neither can drift back on its own.
+    const home = statusBox('ccrc-status-gated-');
+    stubHealth(home, '{"ok":false,"error":"unauthenticated","verdict":"no-session"}', 401);
+    const r = runDoctor(home, ['status']);
+    expect(r.stdout).toMatch(/fleet: +not measured/);
+    expect(r.stdout).toMatch(/session gate is armed/);
+    // It must read as EXPECTED, not as a fault — this is the state every armed
+    // box is in, on every run.
+    expect(r.stdout).toMatch(/not a fault/);
+    expect(r.stdout).not.toMatch(/HTTP 401/);
     expect(r.code).toBe(0);
   });
 

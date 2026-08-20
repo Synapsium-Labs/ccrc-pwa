@@ -3065,3 +3065,285 @@ export function splitClipPaths(text: string): { paths: string[]; rest: string } 
 
   return { paths, rest: kept.join('\n') };
 }
+
+// ─── Auth — the session gate's wire vocabulary (Stage 3a) ───────────────────
+//
+// Declared HERE for `AccountsResponse`'s reason, one section up: the server
+// produces these shapes and the PWA consumes them, and a shape restated on each
+// side is a shape that drifts. `server/test/auth-wire.test.ts` pins the runtime
+// half and `pwa/test/auth-wire.test-d.ts` pins that the same declarations
+// resolve under the PWA's bundler resolution — one definition, two importers.
+//
+// NOTHING IN THIS SECTION IS A FLEET FRAME, so `FLEET_PROTO`/`FLEET_PROTO_MIN`
+// do not move; they stay 1. Adding a route family is not a protocol change, and
+// the wire-discipline rule this file states at :560-566 is about a peer reading
+// a frame it did not expect — an HTTP route an old client never calls cannot
+// present that problem.
+
+/**
+ * Why the gate answered the way it did. SIX outcomes, a union, never a boolean —
+ * and the boolean is not a hypothetical alternative, it is the shipped defect
+ * this vocabulary is written against.
+ *
+ * `server/src/coord/token.ts` (D-39) folded `'unconfigured'` into `'ok'`: a box
+ * with NO token configured returned the same answer as a box whose token
+ * matched, and the mail lane ran unauthenticated. The two conditions a caller
+ * handles differently had collapsed to one value — the overloaded-null defect
+ * (`CLAUDE.md`), wearing an enum's clothes. Here the polarity is inverted and
+ * each member names a DIFFERENT thing the operator must do:
+ *
+ *  - `ok`            — a live session, or the flag is off. Proceed.
+ *  - `wrong`         — the passphrase (or the assertion) did not verify. Retry
+ *                      is the remedy, and it is rate-limited.
+ *  - `unconfigured`  — `CCRC_AUTH=on` but no `~/.ccrc/auth.scrypt` exists. NOT
+ *                      "wrong": nothing the user can type will ever match, and
+ *                      the login screen must say `ccrc passwd`, not "try again".
+ *                      Fails SHUT — an absent secret never means "let them in".
+ *  - `locked-out`    — the login rate limiter's window is closed. Distinct from
+ *                      `wrong` because the answer is a clock, not a keyboard.
+ *  - `expired`       — a session that WAS valid no longer is: past its TTL, or
+ *                      stamped with a generation `ccrc passwd` has since bumped.
+ *                      Distinct from `no-session` so the PWA can say "you were
+ *                      signed out" instead of showing a cold login screen.
+ *  - `no-session`    — no cookie, or one this build cannot parse. The ordinary
+ *                      first visit, and the ordinary unparseable-cookie case:
+ *                      both mean "present credentials", neither is an error.
+ *
+ * `AuthStatus['mode']` below is a DIFFERENT axis and deliberately not this type
+ * — see its own note.
+ */
+export type AuthVerdict =
+  | 'ok' | 'wrong' | 'unconfigured' | 'locked-out' | 'expired' | 'no-session';
+
+/**
+ * The runtime list, derived from the type — `PR_REASON_MAP`'s idiom (:264) and
+ * its exact guarantee: `Record<AuthVerdict, true>` makes a seventh verdict a
+ * TS2739 here ("missing the following properties") instead of a list that is
+ * silently one short, and a key the union does not have a TS2353. A
+ * hand-written `readonly AuthVerdict[]` gives neither.
+ *
+ * `Object.keys` is safe to derive an order from: every key is a non-numeric
+ * string, for which insertion order is specified. Nothing downstream depends on
+ * the order regardless — the consumers ask membership.
+ */
+const AUTH_VERDICT_MAP: Record<AuthVerdict, true> = {
+  ok: true, wrong: true, unconfigured: true, 'locked-out': true,
+  expired: true, 'no-session': true,
+};
+export const AUTH_VERDICTS: readonly AuthVerdict[] =
+  Object.keys(AUTH_VERDICT_MAP) as AuthVerdict[];
+
+/**
+ * The only way to narrow an untrusted string to an `AuthVerdict` — same shape
+ * and same reasoning as `isPrReason` (:286): the parameter is `unknown`, so
+ * nothing is smuggled in by claiming it is already a verdict, and the CONSTANT
+ * is cast rather than the input (`AUTH_VERDICTS.includes(raw as AuthVerdict)`
+ * would assert the very thing the check is asking).
+ *
+ * The PWA is the caller that needs it: a 401's JSON body arrives as `unknown`
+ * and has to become a verdict before the login screen can choose its sentence.
+ */
+export function isAuthVerdict(v: unknown): v is AuthVerdict {
+  return typeof v === 'string' && (AUTH_VERDICTS as readonly string[]).includes(v);
+}
+
+/**
+ * `POST /api/auth/login`'s body. The passphrase travels in the body and NOWHERE
+ * else — never a query string, never a header — because both of those are
+ * routinely logged by proxies and by the server's own request logging.
+ *
+ * There is deliberately NO `LoginResponse` type. A successful login is `204 No
+ * Content` plus `Set-Cookie`: the cookie IS the response, and an empty
+ * interface would be a shape the server never sends and the PWA would then be
+ * tempted to parse. A REFUSAL does carry a body (`{ verdict: AuthVerdict }`
+ * plus, when `locked-out`, a retry hint) — that shape belongs to the route that
+ * sends it (Task 5), not here, because it is a refusal envelope shared with the
+ * gate rather than a login-specific document.
+ */
+export interface LoginRequest {
+  passphrase: string;
+}
+
+/**
+ * `GET /api/auth/status` — the box's standing gate posture, which is what the
+ * login screen reads BEFORE anyone types anything.
+ *
+ * `mode` is not an `AuthVerdict` and must not be conflated with one: a verdict
+ * is THIS REQUEST's outcome, `mode` is how the box is configured. `'off'` and
+ * `'passphrase'` are not verdicts at all, which is the proof they are different
+ * axes; `'locked-out'` appears in both spellings on purpose, because a browser
+ * arriving mid-window needs to be told to wait before it offers a field that
+ * cannot succeed.
+ *
+ *  - `'off'`        — `CCRC_AUTH` is off; the gate is a passthrough and
+ *                     `authed` is true for everyone. The shipped default.
+ *  - `'passphrase'` — the gate is armed and a secret exists.
+ *  - `'locked-out'` — armed, and the login rate limiter's window is closed.
+ *
+ * `passkeysEnrolled` is a COUNT, not a boolean, for two surfaces: the login
+ * screen decides whether to offer the passkey button at all (`> 0`), and the
+ * enroll screen renders the number. It is intentionally not a list of
+ * credential ids — an unauthenticated caller learns how many keys exist, which
+ * it must to draw the right screen, and nothing that identifies them.
+ *
+ * NOTE the state this shape does NOT have: "armed but no secret file"
+ * (`AuthVerdict`'s `'unconfigured'`). That is a misconfigured box, and it is
+ * reported by `ccrc doctor` (Task 9) rather than published on an unauthenticated
+ * route, where it would advertise exactly which boxes are unenterable-but-open.
+ */
+export interface AuthStatus {
+  authed: boolean;
+  passkeysEnrolled: number;
+  mode: 'off' | 'passphrase' | 'locked-out';
+}
+
+// ── WebAuthn (Task 8) ──
+//
+// EVERY `…B64url` field below is base64url — RFC 4648 §5, the `-`/`_` alphabet
+// with NO `=` padding. That is what the browser's own WebAuthn JSON helpers
+// emit and what `Buffer.from(s, 'base64url')` reads; standard base64 would
+// round-trip through `+`/`/` and break the first time one of these rides in a
+// URL or a JSON string that something re-encodes. The suffix is on the field
+// NAME rather than only in a comment so a caller cannot hand `toString('base64')`
+// to it without reading what it is called.
+//
+// These are the shapes only — no crypto lives in L0, and none can: `shared/`
+// imports nothing, not even `node:*`.
+
+/**
+ * The COSE algorithm identifier for ECDSA-P256-SHA256 — the ONE algorithm this
+ * box's passkeys use, and a WIRE value rather than a server implementation
+ * detail, which is why it lives here.
+ *
+ * THREE CONSUMERS, ONE DEFINITION, and that is the whole reason it is not just
+ * written `-7` where each needs it. The PWA hands it to
+ * `navigator.credentials.create` as `pubKeyCredParams`; the server verifies
+ * `PasskeyRegisterFinish.algorithm` against it, and re-checks it on every
+ * assertion; `server/src/auth/webauthn.ts` derives its `SUPPORTED_ALGS` list
+ * from it. Three hand-typed `-7`s across two packages is precisely the shape
+ * `single-definition.test.ts` exists to fail the build on — and the failure
+ * would be silent rather than loud: a PWA asking for one algorithm while the
+ * server accepts another produces an enrolment the browser completes and the
+ * server refuses, with nothing anywhere naming the mismatch.
+ *
+ * WHY ONLY THIS ONE — and why the server's list is a list rather than this
+ * constant alone — is argued at `SUPPORTED_ALGS` in `server/src/auth/webauthn.ts`:
+ * ES256 is mandatory-to-implement for WebAuthn authenticators, so one member
+ * costs no device compatibility, and every other algorithm is verification
+ * surface nobody needs.
+ */
+export const COSE_ES256 = -7;
+
+/**
+ * Server→client, `POST /api/auth/passkey/register/start`. Behind the session
+ * gate: enrolling a key requires already being logged in with the passphrase.
+ *
+ * `rpId` is SENT, not derived by the client from its own origin, and not
+ * derived by the server by stripping labels off a hostname. It is the
+ * registrable domain from `CCRC_RP_ID` config, and label-stripping walks
+ * straight into the public-suffix hazard (`ts.net`, `duckdns.org` are public
+ * suffixes; a credential scoped to one would be offered to every other box
+ * under it). It is echoed here so the client's `create()` call and the server's
+ * stored binding cannot disagree — a box renamed between enroll and use fails
+ * loudly ("enrolled for localhost — re-enroll") instead of silently not
+ * matching.
+ */
+export interface PasskeyRegisterStart {
+  challengeB64url: string;
+  rpId: string;
+  /** The `user.id` handed to `navigator.credentials.create` — an opaque
+   *  per-box handle, never an email or a username. Single-operator boxes have
+   *  no user identity to carry (spec §6 holds that seam for the team edition),
+   *  so this exists to satisfy the ceremony, not to name anyone. */
+  userHandleB64url: string;
+}
+
+/**
+ * Client→server, `POST /api/auth/passkey/register/finish`. The client sends the
+ * PUBLIC KEY ALREADY EXTRACTED — `PublicKeyCredential`'s own
+ * `response.getPublicKey()` returns SPKI DER — which is what lets the server
+ * verify assertions with `node:crypto` alone and parse NO CBOR. That is the
+ * whole no-new-dependency argument, and it lives in the shape of this
+ * interface: an `attestationObject` field here would drag a COSE decoder in
+ * behind it.
+ */
+export interface PasskeyRegisterFinish {
+  credentialIdB64url: string;
+  /** SubjectPublicKeyInfo DER, from `response.getPublicKey()`. */
+  publicKeySpkiB64url: string;
+  /** The COSE algorithm identifier, from `response.getPublicKeyAlgorithm()` — a
+   *  NUMBER (ES256 is -7, RS256 is -257), never a name, so the server refuses
+   *  an algorithm it cannot verify rather than guessing from a string. */
+  algorithm: number;
+  authenticatorDataB64url: string;
+  clientDataJsonB64url: string;
+}
+
+/** Server→client, `POST /api/auth/passkey/assert/start`. Unauthenticated by
+ *  necessity — this is how you log IN — and rate-limited on its own looser
+ *  budget, because a free challenge is a free CPU oracle. */
+export interface PasskeyAssertStart {
+  challengeB64url: string;
+  /** As `PasskeyRegisterStart.rpId`, and for the same public-suffix reason. */
+  rpId: string;
+  /** `allowCredentials`, flattened to the ids: every credential this box would
+   *  accept. Empty means none are enrolled, and the client must fall back to
+   *  the passphrase rather than prompting for a key that cannot exist. */
+  allowCredentialIdsB64url: readonly string[];
+}
+
+/** Client→server, `POST /api/auth/passkey/assert/finish`. `signatureB64url` is
+ *  DER as the authenticator produced it — `createVerify('SHA256')` reads DER
+ *  natively, so nothing here unpacks it into (r, s). */
+export interface PasskeyAssertFinish {
+  credentialIdB64url: string;
+  authenticatorDataB64url: string;
+  clientDataJsonB64url: string;
+  signatureB64url: string;
+}
+
+/**
+ * One enrolled key, as the ENROLMENT SCREEN sees it — `GET /api/auth/passkeys`,
+ * which is BEHIND the session gate.
+ *
+ * NOT an anonymous shape, and the difference from {@link PasskeyAssertStart}'s
+ * bare id list is the point: `enrolledAt`/`lastUsedAt`/`label` are how an
+ * operator tells one key from another when deciding which to revoke ("the phone
+ * I lost, last used three weeks ago"), and they are exactly the fields that
+ * would be a fingerprinting gift to an anonymous caller. Two routes, two
+ * audiences, two shapes.
+ *
+ * `label` is the enrolling device's user-agent, truncated. It is attacker-
+ * controlled text that a browser will render, so the PWA must treat it as text
+ * and never as markup — React does that by default, which is why it is safe to
+ * carry here at all.
+ */
+export interface PasskeySummary {
+  /** base64url — the id `DELETE /api/auth/passkey/:id` takes. */
+  credentialIdB64url: string;
+  label: string;
+  enrolledAt: number;
+  lastUsedAt: number;
+  /** Whether user verification was performed at enrolment. Informational: the
+   *  policy is enforced on every assertion from the authenticator's own flags,
+   *  never from this. */
+  uvAtEnrollment: boolean;
+}
+
+/**
+ * `GET /api/auth/passkeys` — the enrolment screen's whole view. Gated.
+ *
+ * `storeUnreadable` IS NOT A NICETY (D-132). The credential file has three
+ * states, not two — absent, readable, and PRESENT-BUT-UNREADABLE — and the third
+ * one used to be reported as an empty list, i.e. as "no passkey is enrolled on
+ * this box". An operator who believes that enrols, and the enrolment REWRITES
+ * the file from an in-memory array that is empty only because the read failed,
+ * destroying the credentials that were there. So the screen is told the
+ * difference, and the server refuses the enrolment besides.
+ */
+export interface PasskeyListResponse {
+  credentials: PasskeySummary[];
+  /** True iff the file EXISTS and could not be read or parsed. `credentials` is
+   *  then empty for a reason that is not "there are none". */
+  storeUnreadable: boolean;
+}

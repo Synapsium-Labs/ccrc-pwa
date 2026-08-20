@@ -147,9 +147,21 @@ describe('ccrc: dispatch and usage', () => {
     // for, and the one an operator reaches for FIRST, before there is anything
     // on the box for the other five to measure. Same split: this line owns its
     // discoverability, `server/test/ccrc-install.test.ts` owns what it does.
+    //
+    // `passwd` joined it in stage 3a Task 9 — the ONE writer of
+    // `~/.ccrc/auth.scrypt`, and the only way to set the passphrase the PWA's
+    // session gate checks a login against. A verb that dispatches and is not
+    // in this line is a verb nobody can find, and this one is the operator's
+    // only recovery path from a box they cannot log into:
+    // `server/test/ccrc-passwd.test.ts` owns what it does.
     const home = mkTmp('ccrc-cli-usage-verbs-');
     const r = runCcrcRaw(home, ['-h']);
-    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|install\|version\}/);
+    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|install\|passwd\|version\}/);
+    // …and the body explains it, including the half an operator gets wrong:
+    // rotating expires SESSIONS and leaves enrolled passkeys working.
+    expect(r.stdout).toMatch(/^ {2}passwd {4}set \(or rotate\) this box's PWA passphrase/m);
+    expect(r.stdout).toMatch(/CCRC_AUTH=on/);
+    expect(r.stdout).toMatch(/enrolled passkeys keep working/);
   });
 
   // ── install's ARGUMENT surface ──────────────────────────────────────────

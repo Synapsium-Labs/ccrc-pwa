@@ -18,7 +18,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PR_REASONS, isPrReason } from '../../shared/api.js';
+import { AUTH_VERDICTS, PR_REASONS, isPrReason } from '../../shared/api.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -144,6 +144,63 @@ describe('integration finding 7 — one reason vocabulary', () => {
     // a tenth reason cannot ship without one.
     expect(readFileSync(path.join(ccrcRoot, 'pwa/src/session/PrKeycap.tsx'), 'utf8'))
       .toContain('Record<PrReason, string>');
+  });
+});
+
+describe('Stage 3a — one auth verdict vocabulary', () => {
+  // The same rule as finding 7 above, applied to a vocabulary that has not had
+  // its drift yet — which is the point of writing it on day one rather than
+  // after the fourth copy. A file may enumerate all six verdicts ONLY where a
+  // `Record<AuthVerdict, …>` makes a missing member a compile error; today the
+  // only such file is `shared/api.ts` (the union and `AUTH_VERDICT_MAP`).
+  //
+  // The login screen's sentences (Task 7) are the expected second holder, and
+  // when they land the fix is to type their map `Record<AuthVerdict, string>`
+  // and add the file here — exactly what `PrKeycap.tsx` did. Turning this list
+  // into a wildcard instead would retire the guard.
+  //
+  // THEY LANDED. `pwa/src/components/LoginScreen.tsx`'s `VERDICT_TEXT` is that
+  // map, typed over the union, so a seventh verdict is a TS2739 in the file that
+  // renders the sentences rather than a screen showing a bare slug. The list
+  // below GREW BY ONE NAMED FILE — it did not become a pattern — which is what
+  // keeps a THIRD copy (the obvious one: a `switch (verdict)` somewhere in the
+  // socket path, where the compiler enforces nothing) failing this test.
+  //
+  // `pwa/src/lib/auth.ts`, which holds the signal these sentences describe, is
+  // deliberately NOT here and must not become a holder: it names the two
+  // verdicts the status probe can actually produce and no others, because
+  // reciting the whole vocabulary in a file that does not render it is exactly
+  // the drift this guard is for.
+  //
+  // Same token form as finding 7's scan — quoted OR as an object key — because
+  // `AUTH_VERDICT_MAP` writes four of the six unquoted, and a
+  // quoted-literals-only scan would exclude the map by accident rather than by
+  // rule, then miss a real copy written the same way.
+  const enumerates = (src: string): boolean =>
+    AUTH_VERDICTS.every((v) => new RegExp(`(?:'${v}'|(?<![\\w'-])${v}\\s*:)`).test(src));
+
+  it('is enumerated only where the compiler enforces exhaustiveness', () => {
+    const holders = ALL.filter((f) => enumerates(readFileSync(f, 'utf8'))).map(rel).sort();
+    expect(holders).toEqual(['pwa/src/components/LoginScreen.tsx', 'shared/api.ts']);
+  });
+
+  it('and the login screen’s map is typed over the union, not a bare object', () => {
+    // The other half of admitting a second holder: it is admitted BECAUSE the
+    // compiler enforces exhaustiveness there. A `Record<string, string>` would
+    // satisfy the list above while giving a seventh verdict a silent slug —
+    // the `PrKeycap.tsx` assertion below finding 7, for its reason.
+    expect(readFileSync(path.join(ccrcRoot, 'pwa/src/components/LoginScreen.tsx'), 'utf8'))
+      .toContain('Record<AuthVerdict, string>');
+  });
+
+  it('and the scan is looking at something — the six are really in that file', () => {
+    // Guards the guard: an `AUTH_VERDICTS` that had gone empty would make
+    // `every` vacuously true for EVERY file, turning the assertion above into
+    // a list of all 200-odd sources — loud, but for the wrong reason. This
+    // fails first, and specifically.
+    expect(AUTH_VERDICTS.length).toBe(6);
+    expect(enumerates(readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8'))).toBe(true);
+    expect(enumerates(readFileSync(path.join(ccrcRoot, 'server/src/prstate.ts'), 'utf8'))).toBe(false);
   });
 });
 

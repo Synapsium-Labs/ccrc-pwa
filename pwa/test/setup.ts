@@ -1,8 +1,44 @@
 import '@testing-library/jest-dom/vitest';
 import { cleanup } from '@testing-library/react';
 import { afterEach, vi } from 'vitest';
+import { useFleetStore } from '../src/stores/fleet';
 
-// Radix's FocusScope returns focus on unmount from a `setTimeout(..., 0)`
+// ONE teardown hook doing two unrelated jobs, merged deliberately rather than
+// registered as two: both arrived in the same week from different branches
+// (the socket teardown from Stage 3a, the Radix timer flush from the
+// draft-conflict flake fix), and each carried an ordering claim about the
+// other's absence — "the FIRST thing in this file's teardown" and "vitest's
+// stack hook order runs this setup-registered hook last". Two hooks would have
+// made that order an emergent property of registration; one hook makes it a
+// readable line. The socket goes first: stop it before anything unmounts, so a
+// reconnect cannot be scheduled by a component on its way out.
+//
+// (1) THE MODULE-LEVEL FLEET SOCKET IS TORN DOWN AFTER EVERY TEST.
+//
+// `useFleetStore` is a singleton, and `<App/>`'s mount effect connects it. A
+// test that renders the shell and never disconnects therefore leaves a live
+// `ReconnectingSocket` climbing its backoff ladder against jsdom's absent
+// server for the rest of the file — and since Stage 3a that socket also asks
+// `GET /api/auth/status` on every failed attempt (`lib/ws.ts`'s AuthGate). A
+// later test in the same file that stubs `fetch` gets answered by a component
+// it is not testing.
+//
+// That is not hypothetical: it is how `auth-login.test.tsx`'s TerminalDrawer
+// probe test passed with the drawer's own `checkAuth()` DELETED — the leaked
+// fleet socket raised auth-lost instead. The fix lived in that file's own
+// `afterEach` for one round; it belongs here, because the hazard's real shape
+// is "a suite nobody has written yet renders `<App/>` and stubs `fetch`", which
+// no per-file fix can reach. (`app.test.tsx` renders the shell too and leaks
+// the same socket today; it stubs no `fetch`, so it has no symptom — but it is
+// one `vi.stubGlobal` away from one.)
+//
+// A no-op wherever nothing connected: `disconnect()` on an unconnected store
+// removes two listeners that were never added and returns. It is deliberately
+// the FIRST thing in this file's teardown and this file's only `src/` import —
+// a global hook that reached further into the app would be a fixture pretending
+// to be a harness.
+//
+// (2) Radix's FocusScope returns focus on unmount from a `setTimeout(..., 0)`
 // (@radix-ui/react-focus-scope dist/index.mjs, the unmount CustomEvent). A
 // test whose LAST render mounted a focus scope therefore leaves a pending
 // macrotask behind, and when the file's jsdom is torn down before it fires,
@@ -20,6 +56,7 @@ import { afterEach, vi } from 'vitest';
 // ran it already — vitest's stack hook order runs this setup-registered hook
 // last.
 afterEach(async () => {
+  useFleetStore.getState().disconnect();
   cleanup();
   if (vi.isFakeTimers()) {
     vi.runOnlyPendingTimers();

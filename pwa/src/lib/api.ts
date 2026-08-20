@@ -2,7 +2,8 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
-import type { AccountsResponse, CatchUp, FleetHealth, FleetSession, NotifyEvent, PrView, ReapResult, RunSummary, SlashCommand, StagedClip, WsAudit } from '../../../shared/api';
+import type { AccountsResponse, CatchUp, FleetHealth, FleetSession, LoginRequest, NotifyEvent, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, PrView, ReapResult, RunSummary, SlashCommand, StagedClip, WsAudit } from '../../../shared/api';
+import { raiseAuthLostFrom } from './auth';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -206,6 +207,18 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       } catch {
         /* non-JSON error body stays raw text */
       }
+      // THE 401 BRANCH (Stage 3a, Task 7). One line, at the one funnel every
+      // call in this file goes through, and it SIGNALS rather than decorating
+      // the throw: `lib/auth.ts` explains why a rejection each caller must
+      // separately catch could never raise exactly one login screen.
+      //
+      // The rejection below is UNCHANGED — same `ApiError`, same status, same
+      // body. Callers await these promises to stop spinners, roll back
+      // optimistic edits and release queues; swallowing the rejection (or
+      // returning a promise that never settles) would leave the app half
+      // committed behind the login screen. What is suppressed is the NOISE, not
+      // the failure: `toast()` drops anything fired while the screen is up.
+      if (res.status === 401) raiseAuthLostFrom(body);
       throw new ApiError(res.status, body);
     }
     return res;
@@ -227,9 +240,112 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     );
   };
 
+  /** A POST whose RESPONSE is JSON — the passkey ceremonies' shape, where `post`
+   *  (which resolves to `void`) would throw the answer away. Same funnel, so a
+   *  401 still raises the one login screen. */
+  const postJson = async <T>(path: string, body?: unknown): Promise<T> =>
+    (await request(
+      path,
+      body === undefined
+        ? { method: 'POST', headers: { accept: 'application/json' } }
+        : {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', accept: 'application/json' },
+            body: JSON.stringify(body),
+          },
+    )).json() as Promise<T>;
+
   const sid = (id: string): string => `/api/sessions/${encodeURIComponent(id)}`;
 
   return {
+    /**
+     * `POST /api/auth/login` — the ONE write that is made while the gate is
+     * refusing everything else (`server/src/auth/gate.ts`'s EXEMPT table).
+     *
+     * Success is `204 No Content` plus `Set-Cookie`, and `shared/api.ts`
+     * declares no `LoginResponse` to go with it: the cookie IS the response, so
+     * this resolves to `void` and reads no body. NO SEND-SIDE CHANGE IS NEEDED
+     * ANYWHERE — the cookie is same-origin and rides every later request (and
+     * every websocket upgrade) automatically; it is `HttpOnly`, so this client
+     * never sees it and could not attach it by hand if it wanted to.
+     *
+     * Takes the whole `LoginRequest` rather than a bare string so the wire shape
+     * is checked at the seam by the type its producer declares. The passphrase
+     * travels in the BODY and nowhere else — never a query string, never a
+     * header, both of which proxies routinely log.
+     *
+     * Its refusals reach the caller as ordinary `ApiError`s: 401 `wrong`/
+     * `unconfigured`, and — note — 429 `locked-out`, which is NOT a 401 and so
+     * never touches the funnel's signal at all. `LoginScreen` reads both off the
+     * body it catches.
+     */
+    login: (req: LoginRequest): Promise<void> => post('/api/auth/login', req),
+
+    /**
+     * `POST /api/auth/logout` — end THIS session (D-145).
+     *
+     * It shipped with the server in Task 5 and had NO CALLER until now, which
+     * made "sign out" a thing the box could do and the operator could not ask
+     * for: the only routes back to a login screen were an empty cookie jar, a
+     * `ccrc passwd` rotation, or waiting out a 30-day TTL. `api.ts` deliberately
+     * shipped no `logout` at the time because nothing used it, and the gap was
+     * only visible from the outside — writing the runbook is what found it.
+     *
+     * GATED, unlike `login`: only a logged-in caller may end a session, so an
+     * already-dead session answers 401 and the funnel above raises the login
+     * screen anyway. Both outcomes put the operator in the same place, which is
+     * why the caller does not have to distinguish them.
+     *
+     * Resolves on 204. The `Set-Cookie` that expires the jar is the response —
+     * there is no body, and this client could not clear an `HttpOnly` cookie by
+     * hand if it wanted to. The LOCAL half (raising the signal so the login
+     * screen mounts and both socket ladders park) belongs to the caller:
+     * `lib/auth.ts`'s signal is a UI concern and this module is a wire client.
+     */
+    logout: (): Promise<void> => post('/api/auth/logout'),
+
+    /**
+     * THE FOUR PASSKEY CEREMONIES (Task 8). Wire shapes only — the WebAuthn
+     * ceremony itself lives in `lib/passkey.ts`, which is the one module that
+     * touches `navigator.credentials` and the one place base64url is spoken.
+     *
+     * The REGISTER pair requires a live session (the server gates it: enrolling
+     * a key is something only someone already signed in may do). The ASSERT pair
+     * does not, and cannot — it IS the login.
+     *
+     * `assertFinish` resolves on `204 + Set-Cookie`, exactly like `login`: the
+     * cookie is the response, so there is no body to read and nothing for this
+     * client to attach by hand (it is `HttpOnly`).
+     */
+    passkeyRegisterStart: (): Promise<PasskeyRegisterStart> =>
+      postJson<PasskeyRegisterStart>('/api/auth/passkey/register/start'),
+    passkeyRegisterFinish: (b: PasskeyRegisterFinish): Promise<void> =>
+      post('/api/auth/passkey/register/finish', b),
+    passkeyAssertStart: (): Promise<PasskeyAssertStart> =>
+      postJson<PasskeyAssertStart>('/api/auth/passkey/assert/start'),
+    passkeyAssertFinish: (b: PasskeyAssertFinish): Promise<void> =>
+      post('/api/auth/passkey/assert/finish', b),
+
+    /**
+     * The enrolment screen's two gated calls (Task 8 review, MF-2).
+     *
+     * `revokePasskey` is the control that was missing entirely: without it a lost
+     * authenticator could not be un-enrolled, and the obvious workaround —
+     * deleting `~/.ccrc/passkeys.json` — does NOT work on a running server,
+     * because the store loads once at boot and the next accepted assertion
+     * rewrites the file from memory, resurrecting the row.
+     *
+     * The id goes in the PATH, so it is `encodeURIComponent`'d: it is base64url,
+     * whose alphabet (`A-Za-z0-9-_`) percent-encoding leaves untouched, so this
+     * is the identity today — and it is written anyway, because "today's values
+     * happen not to need escaping" is how a path-injection ships the day the id
+     * format changes.
+     */
+    passkeys: (): Promise<PasskeyListResponse> => getJson<PasskeyListResponse>('/api/auth/passkeys'),
+    revokePasskey: async (credentialIdB64url: string): Promise<void> => {
+      await request(`/api/auth/passkey/${encodeURIComponent(credentialIdB64url)}`, { method: 'DELETE' });
+    },
+
     fleet: () => getJson<{ sessions: FleetSession[]; stale?: boolean; downSince?: number | null }>('/api/fleet'),
     fleetHealth: () => getJson<FleetHealth>('/api/fleet/health'),
     rebootFleet: () => post('/api/fleet/reboot'),
