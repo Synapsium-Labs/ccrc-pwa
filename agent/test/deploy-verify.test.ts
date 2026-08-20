@@ -1245,6 +1245,11 @@ describe('the verification is actually wired into the deploy, and can observe a 
     for (const [what, invocation] of [
       ['session hooks', "\"${SSH[@]}\" \"$BOX\" 'bash ~/.cc-sessions/install-session-hooks.sh'"],
       ['coordinator skill', "\"${SSH[@]}\" \"$BOX\" 'bash ~/.cc-sessions/install-coordinator-skill.sh'"],
+      // The worker skill's installer is the third roster reader this branch
+      // starts (worker-skill Task 4) and it `source`s the same generated file
+      // for the same reason — the roster is where it learns which config dirs
+      // exist at all.
+      ['worker skill', "\"${SSH[@]}\" \"$BOX\" 'bash ~/.cc-sessions/install-worker-skill.sh'"],
     ] as const) {
       const runIdx = agentBranch.indexOf(invocation);
       expect(runIdx, `the agent branch no longer runs the ${what} installer (looked for: ${invocation})`)

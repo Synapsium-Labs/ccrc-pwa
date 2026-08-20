@@ -102,10 +102,21 @@ of them is how a workspace gets orphaned:
 
 | shape | meaning | what you do |
 |---|---|---|
-| `error:'oversize'` (413) | the wave brief itself exceeds the mail body byte cap (`MAIL_BODY_MAX_BYTES`) — checked FIRST, before the pause/kill-switch check, before caps, before anything is spawned or held (`dispatch.ts:98`). Not a mail-routes-only code: this is the SAME field/status `POST /api/mail`'s own oversize body/subject/artifacts refusals use (SKILL.md), but this occurrence is dispatch's own | trim the brief and resend — the run is untouched, still `planned`, and nothing on the fleet was spawned |
+| `error:'oversize'` (413) | the mail this dispatch would queue — the worker kickoff prefix **plus** your brief, composed — exceeds the mail body byte cap (`MAIL_BODY_MAX_BYTES`). Checked EARLY, before the pause/kill-switch check, before caps, before anything is spawned or held (`dispatch.ts`'s own `MAIL_BODY_MAX_BYTES` check). Not a mail-routes-only code: this is the SAME field/status `POST /api/mail`'s own oversize body/subject/artifacts refusals use (SKILL.md), but this occurrence is dispatch's own | trim the brief and resend — the run is untouched, still `planned`, and nothing on the fleet was spawned |
 | `error:'registry-unmeasurable'` (502) | the fleet's registry directory could not be listed — and this can land AFTER `ccd ws-add` already ran, before the run row records the new workspace | **stop and report; the operator resolves it** — exactly like `ambiguous-dispatch`, never a blind retry. A retry's `before` snapshot now includes the orphaned workspace, so the retry binds a SECOND one and strands the first, unheld and unrecorded, on the fleet |
 | `error:'unsupported'` (501) | this ccd build does not support a verb this route needs | stop and report — an operator/fleet-host issue, not a retryable one |
 | a bare `{"ok":false,"stderr":"<text>"}`, no `refused`/`error`/`reject.code` field at all (502) | the underlying `ccd` call itself failed for one of its ordinary reasons — `ws-add` (wave 1's fresh spawn), `ensure` (wave ≥2's resume), or `ws-hold` (either wave, the claim itself) | stop and report — the SAME as the rows above, even though none of the three fields SKILL.md's own check reads is populated. `state` always stays `planned` (this shape never advances it) — but that is NOT "nothing happened yet": `sessionId` may already be WRITTEN onto the row (a wave-1 `ws-add` success writes it before `ws-hold` can go on to fail; wave ≥2 always starts with it already there, from an earlier open or dispatch), and a workspace may already exist on the fleet, freshly spawned and unheld. Confirm no partially-spawned or partially-held workspace was left behind by an earlier attempt before ANY retry — the fleet is where that evidence lives, not the run row's own `state` |
+
+**A brief can be refused `oversize` without itself exceeding the cap.** What
+dispatch measures is the COMPOSED mail — the worker kickoff prefix (the
+sentence that sends the worker to its `ccrc-worker` skill; see "What a brief
+carries" below) followed by your prose — so the cap bounds the envelope, not
+the thing you are holding. Subtract the prefix to get the number that actually
+binds you: the effective brief ceiling is **8090** bytes today
+(`MAIL_BODY_MAX_BYTES` 8192 − the prefix's 102). The 413's `detail` spells the
+same arithmetic out for the brief you actually sent — your brief's bytes, the
+prefix's bytes, the cap — while the `limit` field beside it is the CAP, never
+what your brief may weigh. Trim against the ceiling, not against `limit`.
 
 `error:'bad-request'` (400) is also possible — a malformed request body —
 covered where it actually bites on the ordinary path, §4 below.
@@ -119,21 +130,45 @@ route (clause 9); dispatch is the one writer of that step, and a coordinator
 that "helps" by clearing the pane itself is a second writer racing the
 first.
 
-**The brief must say: commit on the WORKSPACE branch — never a separate
-feature branch (F5, build4 dogfood wave 1).** `ws-add` creates the workspace
-on its own branch (`ws/<slug>`); §4's done-fingerprint re-measures THAT
-branch's tip (`record.branch`, the live registry's own field), never a
-branch the brief merely names. The ordinary per-PR SDD convention elsewhere
-in this codebase — "cut a fresh `feat/<name>` branch from main" — is WRONG
-here: a worker that follows it faithfully leaves the workspace branch
-unmoved, so every later `/advance`/`/close` re-measures a tip that never
-changes and refuses `stale-tip` forever, with no non-abandon path to close a
-run whose work is otherwise correct and reviewed. Every brief — wave 1's
-spawn and every reclaim after it — must say plainly: **"commit on this
+**What a brief carries — and what it no longer has to.** The standing worker
+protocol is a SKILL, not a paragraph you re-type every wave. Dispatch composes
+the brief mail as `WORKER_KICKOFF_PREFIX` + your prose, and that prefix tells
+the worker to run the `ccrc-worker` skill before it acts on anything below it;
+the skill is where identity-on-every-call, ack-before-you-act, the
+AskUserQuestion rule, the ban on the destructive verbs and the shape of a
+done-claim's fingerprint already live, pinned by their own suite. Restating any
+of that in a brief buys nothing and spends the one budget a brief is short of
+(the `oversize` ceiling above). **A brief carries what only THIS wave knows:**
+the plan file's path, the tasks or task range this wave owns, **the execution
+skill the worker should invoke** (`superpowers:executing-plans` or
+`superpowers:subagent-driven-development`), the interfaces earlier waves
+settled, the deviations already ledgered, and whatever your review of the last
+handoff decided.
+
+**The execution skill is the one list item that is not merely useful.** The
+worker's own clause 6 reads "Invoke the execution skill the brief names rather
+than improvising one" — it keys on YOUR brief, so a brief that names none
+leaves that clause pointing at nothing and the worker improvising the very
+thing the clause exists to stop. Name it explicitly, every wave, the same way
+you name the plan file.
+
+**One sentence from the protocol goes in every brief anyway: "commit on this
 workspace's own branch; do not create or switch to a separate feature
-branch."** This is not optional phrasing left to judgement (clause 5's "the
-content is this session's judgement" does not cover it) — it is the one
-sentence that keeps the wave closeable at all.
+branch."** (F5, build4 dogfood wave 1.) `ws-add` creates the workspace on its
+own branch (`ws/<slug>`); §4's done-fingerprint re-measures THAT branch's tip
+(`record.branch`, the live registry's own field), never a branch the brief
+merely names. The ordinary per-PR SDD convention elsewhere in this codebase —
+"cut a fresh `feat/<name>` branch from main" — is WRONG here: a worker that
+follows it faithfully leaves the workspace branch unmoved, so every later
+`/advance`/`/close` re-measures a tip that never changes and refuses
+`stale-tip` forever, with no non-abandon path to close a run whose work is
+otherwise correct and reviewed. The skill's own clause 2 says it; say it again
+— belt and braces, deliberately, because a skill reaches a config dir only
+once the installer has run against that home, and a worker dispatched onto a
+home that has not had it has your brief and nothing else. This is not optional
+phrasing left to judgement (clause 5's "the content is this session's
+judgement" does not cover it) — it is the one sentence that keeps the wave
+closeable at all.
 
 **The workspace's name is frozen for the life of the claim.** This is a fact
 the fleet did not previously guarantee, not a correction to anything above:
@@ -216,6 +251,11 @@ when given, must be **absolute paths** — the ingress refuses a relative one
 `bad-kind` — because the recipient reads the file directly, from whatever
 directory its own turn happens to be in, not from this session's.
 
+**One `kind`/`subject` pair has a body SHAPE rather than free prose:** a
+worker's `status`/`wave-done`, whose four fingerprint fields the coordinator
+submits unchanged. The worked example is in §4 — a worker sent here by its own
+skill should read that block before it writes its first done-claim.
+
 ## 4 — Advance the run as the wave progresses
 
 `RunState` reaches `awaiting-review` only from `working`, and `merging` only
@@ -234,6 +274,22 @@ this one code rides `error`, not `reject.code`, unlike everything else this
 route sends (see SKILL.md's field-check rule). For `{"to":"working"}`, where
 there is nothing yet to claim, send the empty-claim shape:
 `{"branchTip":"","prNumber":null,"prPhase":"none","handoffCommit":""}`.
+
+**The shape a `wave-done` mail carries it in.** The fingerprint is the
+worker's to measure and yours to submit unchanged, so it travels as JSON in
+the mail body rather than as prose you would have to re-type by eye. One
+correct wave-done body, minimal — both shas below are PLACEHOLDERS, and a real
+claim repeats one and the same 40-hex sha in both fields:
+
+```json
+{"branchTip":"<40-hex sha>","prNumber":591,"prPhase":"open",
+ "handoffCommit":"<the same 40-hex sha>"}
+```
+
+Prose around that object is fine and often useful. Prose INSTEAD of it is what
+produces `pr-unmeasurable` below: "PR #591 is green" is not a `prPhase`, and
+inventing one out of a sentence is the single commonest way a finished wave is
+refused.
 
 - **`{"to":"working"}`** — no re-measurement (this is a status marker, not a
   doneness claim; the fingerprint above only satisfies the shape check and is
@@ -287,6 +343,15 @@ Mail the code back to the worker — `POST /api/mail` (§3's body shape), kind
 `answer`, subject `rejected: <code>`, `toId` the worker's session id, `runId`
 this run's id — and leave the run alone. A stale `wave-done` must never
 settle a wave.
+
+**Put `reject.detail` in that mail's body, verbatim.** The code alone is not
+always the whole message: `pr-unmeasurable` above means two different things —
+"your `prPhase` is not one of the eight words" and "the fleet could not read
+the PR" — and `detail` is the ONLY thing that separates them. The worker's own
+skill tells it to read that detail and act on which one it is, so a rejection
+that arrives with the code and nothing else asks a worker to guess between a
+fix-and-resend and a wait-and-retry. Copy it as the server sent it; do not
+paraphrase it into your own words.
 
 ### 4b — Settle the work items, AFTER the advance answers `ok`
 

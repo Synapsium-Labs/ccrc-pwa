@@ -36,6 +36,10 @@ This document exists to convert that invented fixture into a measured one, once,
   version here; let the script tell you.
 - `git`, `rsync` (a hard by-name dependency of `ccrc install` — absent, the install refuses naming
   the package rather than failing opaquely mid-copy), and normal build tooling for `npm ci`.
+- `diff` (diffutils). It joined the by-name set with the skills step below: both skill installers
+  refuse rather than rewrite a skill directory blind without it, and their refusal is fatal to the
+  install. It ships in a base Ubuntu, so this is a note about containers stripped below that, not
+  about an ordinary VM.
 - A way to install Claude Code on this box when the time comes (however you normally obtain the
   `claude` binary) — deliberately not scripted here; this repo does not install Claude Code and the
   doctor remedy below tells you what path it needs to land at.
@@ -78,6 +82,19 @@ this whole workstream (A2-NEW) exists to ship.** Before it, this same box got a 
 ("`ccrc adopt`") that could not fix an absent binary and pointed a fresh operator at the wrong file.
 If your transcript instead names `ccrc adopt`, or fails on a different step, stop — that is a real
 regression, not an expected state, and belongs in a bug report, not a checkbox.
+
+One of the lines above it is `install: skills: ...`, and it is the step that makes this box able to
+run a coordinated program at all. It places both skill trees from the tree it just installed —
+`ccd/coordinator-skill` and `ccd/worker-skill` — into `~/.cc-sessions/`, exactly where
+`deploy/deploy.sh agent <host>` rsyncs them on the fleet host, and then runs each installer from the
+copy it just placed there. Each installer walks the roster and converges
+`<config dir>/skills/ccrc-coordinator` and `<config dir>/skills/ccrc-worker` for every rostered
+account. On this box the seeded roster has one account, so confirm two paths:
+`ls ~/.claude*/skills/ccrc-{coordinator,worker}/SKILL.md` — two per rostered account config dir, and
+five accounts on the reference fleet host makes ten there. Both, not one: a session is placed with
+no pinned account, so a swap must never land a coordinator — or a worker — on a home that has no
+protocol for it, and until this step existed a self-installed box had neither skill anywhere while
+the fleet lane had been shipping the coordinator's since Build 7.
 
 Also confirm, further up the same transcript, the RC line:
 

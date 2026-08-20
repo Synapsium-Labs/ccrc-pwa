@@ -16,6 +16,19 @@ import {
   type RunRefuseCode, type RunState, type SpawnVerdict,
 } from '../../../shared/api.js';
 
+// The worker kickoff rides the brief mail itself: dispatch writes nothing to a
+// wave-1 pane (the zero-send-keys pin), and skills are invoked BY NAME (the
+// coordinator kickoff idiom, StartProgramSheet.kickoff). One constant, one place.
+//
+// THE SKILL IT NAMES SHIPS ON THIS SAME BRANCH (`ccd/worker-skill/SKILL.md`) and
+// reaches no box until that branch's installer has run there — prefix and skill
+// are one slice on purpose, because either half alone is a lie: a skill nobody
+// is told to run, or an instruction to run a skill that is not installed.
+// `worker-skill.test.ts` binds this string to that file's own frontmatter
+// `name:`, so a rename cannot leave every worker being sent after a ghost.
+export const WORKER_KICKOFF_PREFIX =
+  "Run the ccrc-worker skill — it is your standing protocol; read it before acting on anything below.\n\n";
+
 /**
  * L1 decision function (architecture doc increment 4 — "deciding split from
  * acting"): everything `POST /api/runs/:id/dispatch` used to decide AND act
@@ -53,7 +66,15 @@ export type DispatchOutcome =
   | { ok: false; kind: 'unknown-run' }
   | { ok: false; kind: 'bad-transition'; from: RunState; to: RunState }
   | { ok: false; kind: 'bad-request' }
-  | { ok: false; kind: 'oversize'; limit: number }
+  /** `detail` is the operator's own arithmetic, and it exists because the cap
+   *  no longer measures the thing the sender is holding: the mail is
+   *  `WORKER_KICKOFF_PREFIX + brief`, so a brief AT the cap refuses and
+   *  "oversize, limit 8192" would read as a bug to whoever wrote 8192 bytes.
+   *  Both numbers, in the same sentence, or the refusal is unactionable —
+   *  the caps doctrine below ("a cap that refuses without saying what it is is
+   *  indistinguishable from a bug") applied to a total the sender cannot
+   *  compute from what they sent. */
+  | { ok: false; kind: 'oversize'; limit: number; detail: string }
   | { ok: false; kind: 'refused';
       code: Extract<RunRefuseCode, 'paused' | 'mail-disabled' | 'cap-concurrency' | 'cap-daily' |
         'ambiguous-dispatch' | 'worker-busy'>;
@@ -106,18 +127,32 @@ export async function dispatchRun(
   if (typeof brief !== 'string' || brief.trim() === '') {
     return { ok: false, kind: 'bad-request' };
   }
+  // THE MAIL, composed once: the standing protocol by name, then the wave's
+  // own brief. Composed HERE, before the cap below, because the cap must
+  // measure what is actually queued — see that check's own comment.
+  const body = WORKER_KICKOFF_PREFIX + brief;
   // Fix, review finding 2: the SAME byte cap `POST /api/mail` enforces on
-  // its own `body`, applied to the brief — `queueSystemMail` below is a
-  // SECOND producer of `mail`/`mail_deliveries` rows that used to bypass
-  // every cap the envelope's own cost model depends on (`envelope.ts`'s
-  // COST paragraph: the caps exist "precisely so this paragraph's 'a few
-  // hundred' [round trips] stays the true worst case"). `server.ts` builds
-  // Fastify with no `bodyLimit` override, so without this the ceiling was
-  // Fastify's default 1 MiB — a whole plan document pasted as a wave brief
-  // types as tens of thousands of `sendPrompt` round trips, one per line,
-  // inside this session's single `KeyedQueue` slot.
-  if (Buffer.byteLength(brief, 'utf8') > MAIL_BODY_MAX_BYTES) {
-    return { ok: false, kind: 'oversize', limit: MAIL_BODY_MAX_BYTES };
+  // its own `body`, applied to the mail this dispatch will queue —
+  // `queueSystemMail` below is a SECOND producer of `mail`/`mail_deliveries`
+  // rows that used to bypass every cap the envelope's own cost model depends
+  // on (`envelope.ts`'s COST paragraph: the caps exist "precisely so this
+  // paragraph's 'a few hundred' [round trips] stays the true worst case").
+  // `server.ts` builds Fastify with no `bodyLimit` override, so without this
+  // the ceiling was Fastify's default 1 MiB — a whole plan document pasted as
+  // a wave brief types as tens of thousands of `sendPrompt` round trips, one
+  // per line, inside this session's single `KeyedQueue` slot.
+  //
+  // MEASURED ON `body`, NOT ON `brief`, and that is the whole point rather
+  // than tidiness: the cost this cap exists to bound is the ENVELOPE's, and
+  // the envelope carries the composed body. A cap on the raw brief would let a
+  // brief at exactly the ceiling through and queue a mail over it — the one
+  // ingress (`POST /api/mail`) and this one would then disagree about what
+  // 8 KiB means, by exactly the length of a constant in this file.
+  if (Buffer.byteLength(body, 'utf8') > MAIL_BODY_MAX_BYTES) {
+    return { ok: false, kind: 'oversize', limit: MAIL_BODY_MAX_BYTES,
+      detail: `brief ${Buffer.byteLength(brief, 'utf8')} bytes + worker kickoff prefix ` +
+        `${Buffer.byteLength(WORKER_KICKOFF_PREFIX, 'utf8')} bytes exceeds the ` +
+        `${MAIL_BODY_MAX_BYTES}-byte mail body cap` };
   }
 
   // Spec §3.1. The BRIEF stays opaque prose and is parsed by nothing
@@ -453,7 +488,10 @@ export async function dispatchRun(
   // open to send the brief directly once the context is actually fresh.
   const briefQueued = !resumed || clearedAt !== null;
   if (briefQueued) {
-    queueSystemMail(coord, run, { toId: sessionId, runId: id, kind: 'status', subject: 'wave-brief', body: brief });
+    // `body`, not `brief`: what lands in the worker is its standing protocol
+    // followed by the wave's specifics, as ONE mail — the kickoff is never a
+    // message of its own, so a path that queues no brief queues nothing at all.
+    queueSystemMail(coord, run, { toId: sessionId, runId: id, kind: 'status', subject: 'wave-brief', body });
   }
 
   return { ok: true, id, sessionId, resumed, clearedAt, briefQueued, clearError,

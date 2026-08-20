@@ -17,7 +17,8 @@ import { localIO, type FleetIO } from '../src/io.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { holdReason } from '../src/coord/rundefs.js';
-import { WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX } from '../../shared/api.js';
+import { WORKER_KICKOFF_PREFIX } from '../src/coord/dispatch.js';
+import { MAIL_BODY_MAX_BYTES, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX } from '../../shared/api.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -584,6 +585,27 @@ describe('POST /api/runs/:id/dispatch', () => {
     expect(w.coord.dueDeliveries(Date.now(), 60_000)).toEqual([]);
   });
 
+  it('queues NO mail AT ALL on that same path — the kickoff prefix never becomes a mail of its ' +
+     'own when there is no brief to carry it', async () => {
+    // The sibling test above pins the BRIEF's absence through
+    // `dueDeliveries`, which answers "what should a sweep type next". This one
+    // asks the wider question the prefix makes worth asking: composing a
+    // kickoff into every dispatch must not create a message on a path that
+    // sends none. `mailForRecipient` sees every row in every state, so a mail
+    // parked, delivered or merely queued-but-not-yet-due would all show here.
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing2b');
+    const menuPane = '❯ 1. Yes\n  2. No\n  ──────────────\nEnter to select\n';
+    const { run } = makeRunner(home, { panes: [menuPane] });
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing2b' }))
+      .json() as { id: number };
+    const res = await postDispatch(app, opened.id, { brief: 'the wave the worker never gets' });
+    expect(res.json()).toMatchObject({ ok: true, briefQueued: false });
+    expect(w.coord.mailForRecipient('demo-existing2b')).toEqual([]);
+    expect(w.coord.dueDeliveries(Date.now(), 60_000)).toEqual([]);
+  });
+
   it('places the hold with the convention reason, and never parses one back', async () => {
     const home = mkTmp('ccrc-runs-');
     const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-fresh2'] });
@@ -613,6 +635,27 @@ describe('POST /api/runs/:id/dispatch', () => {
     expect(due[0]!.envelope).toContain('subject: wave-brief');
     expect(due[0]!.envelope).toContain('implement task 3, then the review lens pass');
     expect(due[0]!.envelope).toContain('from: coordinator');
+  });
+
+  it('hands the worker its protocol BY NAME inside that same mail — the body OPENS with the ' +
+     'kickoff prefix and the coordinator\'s brief follows it verbatim', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-fresh3b'] });
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    const brief = 'implement task 3, then the review lens pass';
+    await postDispatch(app, opened.id, { brief });
+    // The prefix rides the MAIL. It is not a second thing typed at the pane
+    // beside it — wave 1 still gets zero keystrokes, the pin one test up.
+    expect(calls.some((c) => c[0] === 'send-keys')).toBe(false);
+    const due = w.coord.dueDeliveries(Date.now(), 60_000);
+    expect(due.length).toBe(1);   // ONE mail — a kickoff is not a second message
+    // POSITION, not mere presence. `renderEnvelope` terminates its header block
+    // with a bare `--` line and then emits the body and nothing else but the
+    // closing fence, so this one assertion says three things at once: the
+    // prefix opens the body, the brief is unaltered, and nothing was inserted
+    // between them.
+    expect(due[0]!.envelope).toContain(`\n--\n${WORKER_KICKOFF_PREFIX}${brief}\n`);
   });
 
   it('records the transition with causedBy=coordinator', async () => {
@@ -1175,6 +1218,35 @@ describe('dispatch caps the brief the same as /api/mail (review finding 2)', () 
     expect(res.statusCode).toBe(413);
     expect(res.json()).toMatchObject({ ok: false, error: 'oversize' });
     expect(calls).toEqual([]);   // refused before ws-add, before anything is counted or spawned
+    expect(w.coord.run(opened.id)?.state).toBe('planned');
+  });
+
+  it('caps what it actually SENDS, not what it was handed: a brief that fits the cap alone but ' +
+     'not once the kickoff prefix is composed onto it is refused, with both numbers', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-bigbrief2'] });
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    // EXACTLY the cap: a legal brief (the check is `>`, not `>=`) and an
+    // illegal MAIL, because the mail is the prefix plus this. A cap that still
+    // measured the raw brief would accept it and queue a body over the very
+    // ceiling `/api/mail` refuses — the cost model `envelope.ts` states is the
+    // envelope's, and the envelope carries the composed body.
+    const brief = 'a'.repeat(MAIL_BODY_MAX_BYTES);
+    expect(Buffer.byteLength(brief, 'utf8')).toBe(MAIL_BODY_MAX_BYTES);
+    const res = await postDispatch(app, opened.id, { brief });
+    expect(res.statusCode).toBe(413);
+    expect(res.json()).toMatchObject({ ok: false, error: 'oversize', limit: MAIL_BODY_MAX_BYTES });
+    // The operator's own arithmetic, in the refusal. "Your 8192-byte brief
+    // exceeds the 8192-byte cap" is indistinguishable from a bug — the caps
+    // doctrine one describe up ("a cap that refuses without saying what it is")
+    // applied to a cap the sender cannot compute from the brief in their hand.
+    const { detail } = res.json() as { detail: string };
+    expect(detail, 'the refusal never names the brief\'s own size')
+      .toContain(String(MAIL_BODY_MAX_BYTES));
+    expect(detail, 'the refusal never names what the prefix costs')
+      .toContain(String(Buffer.byteLength(WORKER_KICKOFF_PREFIX, 'utf8')));
+    expect(calls).toEqual([]);   // still refused before ws-add, before anything is spawned
     expect(w.coord.run(opened.id)?.state).toBe('planned');
   });
 });
