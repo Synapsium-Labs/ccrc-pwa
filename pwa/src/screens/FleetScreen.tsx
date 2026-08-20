@@ -10,6 +10,7 @@ import { toast } from '../components/Toast';
 import { NewSessionSheet } from '../fleet/NewSessionSheet';
 import { AccountsStrip } from '../fleet/AccountsStrip';
 import { FleetHostBanner } from '../fleet/FleetHostBanner';
+import { SubstrateBanner } from '../fleet/SubstrateBanner';
 import { MailBadge } from '../fleet/MailBadge';
 import { NotificationBell } from '../fleet/NotificationBell';
 import { groupFleet } from '../fleet/groupFleet';
@@ -242,6 +243,11 @@ export function FleetScreen({
       </header>
 
       <FleetHostBanner />
+
+      {/* The substrate fault, said once (spec §4) — derived from the SAME
+          injected store the rows render from, so the banner and the chips can
+          never disagree about which fleet they describe. */}
+      <SubstrateBanner store={useStore} />
 
       {conn === 'down' && (
         <div className="offline-banner" role="status">

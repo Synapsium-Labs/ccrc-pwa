@@ -261,6 +261,37 @@
 }
 
 /* ------------------------------------------------------------------ *
+ *  Substrate banner — one fault, one banner (spec §4): every RUNNING  *
+ *  row reports a substrate fault, so it is said once up here and the  *
+ *  per-row .sess-substrate chips keep the partial case. Amber, not    *
+ *  the dead red: the sessions are still running, unattached. Same     *
+ *  token pair as .fleet-host-banner--warn above (attention-text on    *
+ *  attention-tint, both solid, already floored at 4.5 by              *
+ *  design/contrast-check.mjs), so no new colour pairing. Not sticky   *
+ *  and no button — recovery is a human at a terminal (spec §1), so    *
+ *  there is no action here to keep in reach while scrolling.          *
+ * ------------------------------------------------------------------ */
+.substrate-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  background: var(--status-attention-tint);
+  border: 1px solid var(--status-attention);
+  border-radius: var(--r-md);
+  padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-4);
+  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-ui);
+  color: var(--status-attention-text);
+}
+.substrate-banner-msg {
+  flex: 1;
+  min-width: 0;
+}
+.substrate-banner-reason {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+/* ------------------------------------------------------------------ *
  *  Notices — dismissible fleet-wide banners (account moves etc.).     *
  * ------------------------------------------------------------------ */
 .notice {
