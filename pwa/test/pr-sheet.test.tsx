@@ -19,7 +19,7 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
   ultracode: false, branch: 'ws/quiet-basin', tasks: null, pr: pr(), archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, held: null,
   bucket: 'idle', bucketSince: null, unmeasured: [],
-  lifecycle: null, stoppedBy: null, swapBlocked: null, started: true, spawnState: null, ...over,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null, started: true, spawnState: null, ...over,
 });
 
 const view = (over: Partial<PrView> = {}): PrView => ({

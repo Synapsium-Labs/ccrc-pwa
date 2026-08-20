@@ -20,7 +20,7 @@
 import { useId, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import {
-  unmeasuredFields,
+  substrateFault, unmeasuredFields,
   type FleetSession, type RosterWire, type SessionBucket, type SpawnVerdict,
 } from '../../../shared/api';
 import { accountColorVar, accountLabel } from '../lib/accounts';
@@ -216,6 +216,23 @@ export function SessionLine({
     : swapReason === null ? 'swap blocked'
     : `swap blocked — ${swapReason}`;
 
+  // The supervisor's standing substrate fault (spec §4) — the console cannot
+  // currently SEE this session, so every field above may be frozen at its
+  // last good measurement. Read through `substrateFault`, never
+  // `session.substrate` directly: the live frame is cast, not revived
+  // (`asFleetMsg`), so an older server's row lacks the key at runtime — the
+  // exact TypeError `unmeasuredFields`' docstring records. `at === 0` is the
+  // registry's "marker listed but unreadable" degrade: the fault is real,
+  // its date is not, so the title skips the `since` clause rather than
+  // claiming tmux has been unreachable since 1970.
+  const fault = substrateFault(session);
+  const faultTitle =
+    fault === null ? undefined
+    : fault.at === 0 ? `tmux unreachable — ${fault.text}`
+    : `tmux unreachable since ${new Date(fault.at).toLocaleString(undefined, {
+        day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+      })} — ${fault.text}`;
+
   // Dead sessions stay silent about limits: they are meaningless when nothing runs.
   const five = session.limits?.five ?? null;
   const seven = session.limits?.seven ?? null;
@@ -371,6 +388,19 @@ export function SessionLine({
               title={`registry ${unmeasuredFields(session).join('/')} temporarily unreadable — retrying`}
             >
               unreadable
+            </span>
+          )}
+
+          {/* The substrate fault (spec §4), same quiet register as
+              .sess-unmeasured above: generic words on the cell, the REASON
+              VERBATIM in `title`, never parsed — the .sess-held contract. An
+              AXIS beside the state word, not a takeover of it (M10): the row
+              keeps whatever status/bucket said last, and this says the
+              console currently cannot re-measure them. See `fault` above for
+              the tolerant read and the `at === 0` no-1970 rule. */}
+          {fault !== null && (
+            <span className="sess-substrate" data-substrate="true" title={faultTitle}>
+              unreachable tmux
             </span>
           )}
 

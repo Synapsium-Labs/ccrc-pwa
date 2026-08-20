@@ -314,6 +314,11 @@ describe('selection is polarity, status is hue', () => {
                         // "stopped by agent, 2d ago".
                         '.sess-held', '.sess-lifecycle', '.sess-swapblocked',
                         '.sess-unmeasured',
+                        // The substrate chip (spec §4) joined the same way:
+                        // its own `color: var(--ink-tertiary)` beats the
+                        // slab's inherited ink exactly like .sess-unmeasured
+                        // next to it, so absence here is the same stranding.
+                        '.sess-substrate',
                         // §1.6b's chip: it sets its own `--status-dead-text`
                         // (and `--ink-tertiary` on two variants), so it is a
                         // coloured cell exactly like `.sess-warn` above and
