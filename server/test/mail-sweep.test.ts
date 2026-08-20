@@ -179,7 +179,7 @@ interface Harness { home: string; calls: string[][]; run: Runner }
  *  `capture-pane` call IN ORDER (the last entry repeats for any call past
  *  the end of the script — the same convention send.test.ts's `fakeTmux`
  *  uses). */
-const harness = (opts: { hasSession?: boolean; panes?: (string | null)[] } = {}): Harness => {
+const harness = (opts: { hasSession?: boolean; substrate?: string; panes?: (string | null)[] } = {}): Harness => {
   const home = mkTmp('ccrc-mail-sweep-');
   // Empty, but LISTABLE (blocking review findings 1/3): `primedWatcher`'s
   // priming tick now takes the typed `readRegistryMeasured` read, and
@@ -201,7 +201,15 @@ const harness = (opts: { hasSession?: boolean; panes?: (string | null)[] } = {})
   const panes = opts.panes ?? [];
   const run: Runner = async (_cmd, args) => {
     calls.push([...args]);
-    if (args[0] === 'has-session') return { code: opts.hasSession === false ? 1 : 0, stdout: '', stderr: '' };
+    if (args[0] === 'has-session') {
+      // D-B8-13: `hasSession: false` means the session is PROVEN gone, so the
+      // stub says so the way the real binary does — a bare rc=1 with silent
+      // stderr now means `unknown`, which is `substrate`'s job to simulate.
+      if (opts.substrate !== undefined) return { code: 1, stdout: '', stderr: `${opts.substrate}\n` };
+      return opts.hasSession === false
+        ? { code: 1, stdout: '', stderr: "can't find session: cc-x\n" }
+        : { code: 0, stdout: '', stderr: '' };
+    }
     if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
     if (args[0] === 'capture-pane') {
       const pane = panes[Math.min(capIdx, panes.length - 1)] ?? null;
@@ -1283,6 +1291,70 @@ describe('sweepMail: a dead recipient eventually parks (review finding 30)', () 
     const row = deliveryRow(coord, id);
     expect(row.state).toBe('queued');
     expect(row.attempts).toBe(0);
+  });
+});
+
+describe('sweepMail: a tmux that did not answer is not a silent skip (D-B8-13)', () => {
+  it('backs off with a greppable substrate reason, never accruing an attempt and never parking', async () => {
+    // The bare `continue` treated "tmux said the session is gone" and "tmux
+    // did not answer" as the same fact, four lines below a registry read that
+    // carefully distinguishes the matching pair on ITS seam
+    // (registry-unmeasurable vs recipient-not-in-registry). During a substrate
+    // outage every due row would also re-spawn a doomed tmux client every
+    // sweep — the same thundering herd the substrate-unreachable spec's
+    // backoff exists to avoid — so the unknown arm backs off on the SAME
+    // never-ratcheting terms as the unmeasurable arm above it, with the tmux
+    // message riding in `lastError` because the message IS the diagnosis.
+    const h = harness({ substrate: 'protocol version mismatch (client 8, server 7)', panes: HAPPY_PANES });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(literalSends(h.calls), 'nothing was typed anywhere').toEqual([]);
+    let row = deliveryRow(coord, id);
+    expect(row.state).toBe('queued');
+    expect(row.attempts, 'never attempted, so nothing may ratchet toward the park ceiling').toBe(0);
+    expect(row.lastError).toContain('substrate-unknown');
+    expect(row.lastError).toContain('protocol version mismatch (client 8, server 7)');
+    // A real backoff was scheduled — the bare skip left `nextAttemptAt` in the
+    // past and re-probed tmux on every sweep.
+    expect(row.nextAttemptAt).toBeGreaterThan(Date.now());
+
+    // Forever, like the unmeasurable arm: drive well past what parks a
+    // genuinely absent recipient — still queued, still zero attempts.
+    for (let i = 1; i < MAIL_MAX_ATTEMPTS + 4; i++) {
+      row = deliveryRow(coord, id);
+      vi.setSystemTime(row.nextAttemptAt + 1_000);
+      await w.sweepMail();
+    }
+    row = deliveryRow(coord, id);
+    expect(row.state).toBe('queued');
+    expect(row.rejectCode).toBeNull();
+    expect(row.attempts).toBe(0);
+  });
+
+  it('a recipient tmux PROVED gone stays the ordinary silent gate — queued, no error, no backoff', async () => {
+    // The `gone` half of the pair keeps its exact old meaning: the session is
+    // not up, the mail simply waits for it, and nothing is recorded — same as
+    // busy or on-cooldown. Only the CANNOT-ASK answer earns a lastError.
+    const h = harness({ hasSession: false, panes: HAPPY_PANES });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([]);
+    const row = deliveryRow(coord, id);
+    expect(row.state).toBe('queued');
+    expect(row.attempts).toBe(0);
+    expect(row.lastError).toBeNull();
   });
 });
 

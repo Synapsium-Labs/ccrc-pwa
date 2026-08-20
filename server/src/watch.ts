@@ -1897,7 +1897,27 @@ export class FleetWatcher {
           }
           continue;
         }
-        if (!(await this.deps.tmux.hasSession(d.toId))) continue;
+        // D-B8-13: `gone` — tmux itself said the recipient's pane does not
+        // exist — stays the ordinary silent gate, exactly like busy or
+        // on-cooldown: the mail waits for the session to come back, nothing
+        // recorded, retried next sweep. `unknown` — tmux DID NOT ANSWER — must
+        // not wear the same bare `continue`, four lines below a registry read
+        // that carefully distinguishes the matching pair on its own seam. It
+        // backs off on the unmeasurable arm's exact never-ratcheting terms
+        // (`countsAsAttempt: false`, so `attempts` stays send-failure budget
+        // and the step stays pinned at MAIL_BACKOFF_BASE_MS — a substrate
+        // outage must never walk a row toward the undeliverable park), and the
+        // tmux message rides in `lastError` verbatim because the message IS
+        // the diagnosis (substrate-unreachable spec §2). The backoff is also
+        // the herd valve: without it every due row re-spawns a doomed tmux
+        // client each sweep against a component that is already unwell.
+        const sv = await this.deps.tmux.sessionVerdict(d.toId);
+        if (sv.verdict === 'gone') continue;
+        if (sv.verdict === 'unknown') {
+          const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** d.attempts, MAIL_BACKOFF_MAX_MS);
+          store.backOff(d.id, `tmux did not answer (substrate-unknown): ${sv.detail}`, now + step, false);
+          continue;
+        }
         const hs = await hookStateFor(d.toId);
         // Pending-question guard ONLY (robust-mail-delivery spec §2.1 / F6b
         // fix). A null/stale `hs` must NOT block delivery: a resumed
@@ -2226,7 +2246,16 @@ export class FleetWatcher {
     const identity = measuredIdentity(rec);
     if (identity === null) return { verdict: 'unknown', held: null };
     const held = rec.held;
-    if (!(await this.deps.tmux.hasSession(id))) return { verdict: 'ok', held };   // no pane: nothing is running
+    // D-B8-13: three answers, not one boolean. `gone` — tmux itself said the
+    // session does not exist — is the only reading that may mean "no pane:
+    // nothing is running". `unknown` (unreachable server, cut-short client)
+    // REFUSES, like every other cannot-tell branch of this function already
+    // did; this arm was the one that answered 'ok' on a question it had not
+    // managed to ask, the same defect D-B8-12 fixed in ccd's `_ws_status`,
+    // on the same destructive caller class.
+    const sv = await this.deps.tmux.sessionVerdict(id);
+    if (sv.verdict === 'gone') return { verdict: 'ok', held };
+    if (sv.verdict === 'unknown') return { verdict: 'unknown', held };
     const pid = await this.deps.tmux.panePid(id);
     const cfgDir = configDirFor(this.deps.cfg, identity.wrapper);
     if (!pid || !cfgDir) return { verdict: 'unknown', held };
