@@ -89,10 +89,11 @@ export function recordSuccess(_state: RateState, now: number): RateState {
 
 /**
  * The ONE impure surface in this file: a per-process, in-memory holder of a
- * single global `RateState`, mirroring `fleet.ts:149`'s idiom (a default
- * parameter is the sole place a clock default lives; everything it calls stays
- * clock-free and takes `now` explicitly). Lost on restart — acceptable, since
- * the scrypt KDF, not this window, is the actual brake.
+ * single global `RateState`, mirroring fleet.ts's `now = Date.now()`
+ * default-parameter idiom (a default parameter is the sole place a clock
+ * default lives; everything it calls stays clock-free and takes `now`
+ * explicitly). Lost on restart — acceptable, since the scrypt KDF, not this
+ * window, is the actual brake.
  */
 export class LoginRateLimiter {
   private state: RateState;

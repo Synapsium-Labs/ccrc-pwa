@@ -30,13 +30,22 @@ describe('pure functions never read the real clock', () => {
 });
 
 describe('under the limit', () => {
-  it('MAX_FAILURES - 1 failures still reads ok, with no retryAfter', () => {
+  it('MAX_FAILURES - 1 failures still reads ok, with no retryAfter, and does not mutate the state it read', () => {
     const now = 1_000_000;
     let state = freshState(now);
     for (let i = 0; i < MAX_FAILURES - 1; i++) state = recordFailure(state, now);
     const verdict = loginVerdict(state, now);
     expect(verdict.ok).toBe(true);
     expect(verdict.retryAfter).toBeUndefined();
+    // Read-purity (I-2): an `ok: true` verdict inside an UNROLLED window must
+    // hand back the exact state it was given — not a copy with a creeping
+    // increment stashed in it. `.toBe` (identity), not just `.toEqual`: the
+    // correct implementation returns the same object reference here, since
+    // there is nothing to roll, and a mutant that fabricates a new object
+    // with `count + 1` would still pass a weaker `.toEqual` if the count
+    // stayed under MAX_FAILURES, but fails identity outright.
+    expect(verdict.state).toBe(state);
+    expect(verdict.state).toEqual({ windowStart: now, count: MAX_FAILURES - 1 });
   });
 });
 
@@ -67,9 +76,33 @@ describe('at and over the limit', () => {
     loginVerdict(state, now);
     expect(loginVerdict(state, now).ok).toBe(true);
   });
+
+  it('retryAfter has an exact hard-coded value (M-2 — not just the source\'s own formula echoed back)', () => {
+    const start = 1_000_000;
+    let state = freshState(start);
+    for (let i = 0; i < MAX_FAILURES; i++) state = recordFailure(state, start);
+    // Locked one ms into the window: 60_000ms window, 1ms elapsed → 59_999ms left.
+    const oneMsIn = start + 1;
+    const verdict = loginVerdict(state, oneMsIn);
+    expect(verdict.ok).toBe(false);
+    expect(verdict.retryAfter).toBe(59_999);
+    expect(verdict.retryAfter).toBe(WINDOW_MS - 1);
+  });
 });
 
 describe('window rollover resets the count', () => {
+  it('at EXACTLY now = windowStart + WINDOW_MS the window is already fresh (I-1 — pins >=, not >)', () => {
+    const start = 1_000_000;
+    let state = freshState(start);
+    for (let i = 0; i < MAX_FAILURES; i++) state = recordFailure(state, start);
+    expect(loginVerdict(state, start).ok).toBe(false);
+
+    const boundaryNow = start + WINDOW_MS;
+    const verdict = loginVerdict(state, boundaryNow);
+    expect(verdict.ok).toBe(true);
+    expect(verdict.state).toEqual({ windowStart: boundaryNow, count: 0 });
+  });
+
   it('a locked state read past WINDOW_MS comes back ok, on a fresh window', () => {
     const start = 1_000_000;
     let state = freshState(start);
