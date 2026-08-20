@@ -17,8 +17,8 @@ export type { IdentityField };
 
 /** Why `SessionRecord.branch` reads the way it does — see the field's own
  *  docstring for what each member means and what a consumer owes it.
- *  Derives `'absent' | 'unreadable'` from `io.ts`'s `ReadFailure` rather
- *  than restating the pair a second time — `single-definition.test.ts`'s
+ *  Derives the two read-failure members from `io.ts`'s `ReadFailure` rather
+ *  than restating that pair a second time — `single-definition.test.ts`'s
  *  "one absent/unreadable read vocabulary" pins it. */
 export type BranchEvidence = 'named' | ReadFailure | 'empty';
 
