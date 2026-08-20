@@ -43,7 +43,7 @@ import { Presence } from './presence.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
 import { registerCoordRoutes } from './coord/routes.js';
 import { toRunSummary, type CoordStore } from './coord/store.js';
-import { readAuthSecret, verifyPassphrase } from './auth/secret.js';
+import { AuthSecretUnusable, readAuthSecret, verifyPassphrase, type AuthSecret } from './auth/secret.js';
 import { ABSOLUTE_TTL_MS, SessionStore } from './auth/sessions.js';
 import { LoginRateLimiter, PASSKEY_MAX_FAILURES } from './auth/ratelimit.js';
 import { SESSION_COOKIE, expireCookie, parseCookies, serializeCookie } from './auth/cookie.js';
@@ -292,7 +292,47 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // with the journal attached. The gate re-reads per request too
     // (`measureSecret`) — that read never throws, because at REQUEST time the
     // answer must be a 401, not a 500.
-    const secret = readAuthSecret(deps.cfg.authSecretPath);
+    //
+    // D-131 — AND THE REFUSAL SAYS THE STATE, NEVER THE BYTES. The throw stays
+    // uncaught in the sense that matters (nothing here recovers, the process
+    // still dies), but the message that reaches the journal is REWRITTEN,
+    // because `AuthSecretUnusable`'s own message QUOTES THE FIELD IT CHOKED ON
+    // — `unknown prefix "<field>"`, `N is not a plain decimal integer
+    // ("<field>")` — and the plausible way to get an unusable `auth.scrypt` is
+    // a misplaced copy of some OTHER secret. An uncaught rejection here is
+    // printed by node with its message AND its `[cause]` chain, straight into
+    // the journal, where `deploy.sh`'s `verify-service.sh` then tails it into a
+    // deploy transcript and a ticket. D-127 closed exactly this leak in `ccrc
+    // doctor` (which shells to `--check` and reports an exit CODE, never a
+    // message); this was the last path by which a byte of the secret file
+    // reached a log, and it is closed the same way and for the same reason.
+    //
+    // NO `{ cause: err }`, deliberately: attaching it would put the original
+    // message back in the journal through the printer rather than through this
+    // string, which is the same leak with an extra step. The original is
+    // dropped on the floor — `ccrc doctor`'s `auth` check is the supported way
+    // to measure this file, and it is the one that already knows how to do it
+    // without printing it.
+    let secret: AuthSecret | null;
+    try {
+      secret = readAuthSecret(deps.cfg.authSecretPath);
+    } catch (err) {
+      // `readAuthSecret` throws exactly one type; anything else is a
+      // programming error and must not be dressed up as a secret-file verdict
+      // (`measureSecret`'s rule at the request-time mirror of this seam).
+      if (!(err instanceof AuthSecretUnusable)) throw err;
+      throw new AuthSecretUnusable(
+        `ccrc-server: REFUSING TO BOOT — ${deps.cfg.authSecretPath} exists and this process cannot ` +
+        'use it (it does not parse as a scrypt secret line, or it cannot be read at all). CCRC_AUTH ' +
+        'is on, and a present-but-unusable passphrase file is not "no passphrase": starting on it ' +
+        'would be the fail-OPEN the flag exists to prevent. The parser\'s own reason is WITHHELD ' +
+        'from this message on purpose — it quotes the field it choked on, and that field is file ' +
+        'content (see D-127: `ccrc doctor` withholds it for the same reason). Measure the file with ' +
+        '`ccrc doctor` (the `auth` check), which reports its state without printing any of it. ' +
+        `To move it aside and set a fresh passphrase: mv ${deps.cfg.authSecretPath} ` +
+        `${deps.cfg.authSecretPath}.broken && rm -f ${deps.cfg.sessionsPath} && ccrc passwd ` +
+        '(`ccrc passwd` REFUSES to overwrite a file it cannot read — D-125).');
+    }
     if (secret === null) {
       // ARMED WITH NO PASSPHRASE — every request will answer 401
       // `'unconfigured'` and nobody can log in. Not a boot refusal: the file is

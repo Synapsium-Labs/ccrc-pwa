@@ -114,14 +114,16 @@
 
 **Files:** `server/src/config.ts` (`CCRC_AUTH`, `CCRC_RP_ID`, `CCRC_ORIGIN`, `cookieSecure`), `deploy/ccrc.env.example`, the VM-gate runbook (the auth step), `README.md`, the plan ledger.
 
-- [ ] Config keys through `loadConfig` (the `||`-not-`??` discipline; `cookieSecure` defaults on, off only for an explicit localhost-http dev flag); `ccrc.env.example` documents all four with the rpId non-portability warning. The runbook's install flow gains: set `CCRC_AUTH=on`, `ccrc passwd`, restart, log in — and the honest note that 3a's proof runs on localhost (passkeys enrolled there don't carry to 3b's name; the mechanism is what's proven). README's auth section. Ledger: D-entries; the config-flag-default-off deploy note; the pending items (Caddy/`Secure`-behind-real-TLS is 3b; per-user identity is the team edition).
-- [ ] Full three suites; commit `docs(auth): the gate is documented, flagged off, and ready for the operator to arm`.
+- [x] Config keys through `loadConfig` (the `||`-not-`??` discipline; `cookieSecure` defaults on, off only for an explicit localhost-http dev flag); `ccrc.env.example` documents all four with the rpId non-portability warning. The runbook's install flow gains: set `CCRC_AUTH=on`, `ccrc passwd`, restart, log in — and the honest note that 3a's proof runs on localhost (passkeys enrolled there don't carry to 3b's name; the mechanism is what's proven). README's auth section. Ledger: D-entries; the config-flag-default-off deploy note; the pending items (Caddy/`Secure`-behind-real-TLS is 3b; per-user identity is the team edition).
+- [x] Full three suites; commit `docs(auth): the gate is documented, flagged off, and ready for the operator to arm`.
+
+**Amended by the Task 5 controller ruling:** the config keys were introduced by Tasks 5 and 8 (there is no gating a route on a key that does not exist); this task DOCUMENTS them. It also carries one CODE fix from Task 9 — **D-131**, the boot refusal's journal leak.
 
 ---
 
 ## Deviations found
 
-(Next free number at plan time: **D-108**. Next free now: **D-131**. D-123 is
+(Next free number at plan time: **D-108**. Next free now: **D-132**. D-123 is
 claimed by `server/src/auth/credentials.ts` from Task 8 and has no ledger entry here.)
 
 - **D-115 — the Origin check stopped at the socket, leaving CSRF open.** Task 8 added a
@@ -245,6 +247,25 @@ claimed by `server/src/auth/credentials.ts` from Task 8 and has no ledger entry 
   RELATIVE one is refused by both — `config.ts` does not resolve it either, so the server
   resolves it against systemd's working directory and every tool against its own, and no
   verdict about "the secret" is available when nothing can say which file that is.
+- **D-131 — the BOOT refusal was the last path by which a byte of `auth.scrypt` reached a
+  log.** D-127 closed this class in the doctor (which shells to `--check` and reads an exit
+  CODE, never a message) and the same leak stayed open one seam over: `buildServer` called
+  `readAuthSecret` uncaught, and `AuthSecretUnusable`'s message QUOTES the field it choked on
+  — `unknown prefix "<field>"`, `N is not a plain decimal integer ("<field>")`, `final field
+  must be "gen=..", got "<field>"`. Node prints an uncaught rejection's message, stack **and
+  `[cause]` chain**, `verify-service.sh` tails that into a deploy transcript, and the
+  plausible way to get an unusable `auth.scrypt` is a misplaced copy of some OTHER secret.
+  Fixed at the boot call site: the throw is caught and re-thrown as a NEW `AuthSecretUnusable`
+  whose message is structural (which file, that it is present-but-unusable, `ccrc doctor` as
+  the safe way to measure it, and D-125's `mv … && rm -f <sessions> && ccrc passwd` remedy)
+  — with **no `{ cause: err }`**, because attaching it would put the original message back in
+  the journal through the printer instead of through the string. The refusal is unchanged in
+  every other respect: same class, still fatal, still armed-path-only. Measured with a
+  three-way mutation, and the FIXTURES are measured too: one test asserts the planted bytes
+  really do appear in `readAuthSecret`'s own message, because a garbled line whose failure arm
+  quotes nothing (`expected 5 '$'-separated fields, got 1`) would make the leak assertion pass
+  for the wrong reason — the defect the Task 9 review caught in D-127's first fixture.
+  `server.ts`, `auth-routes.test.ts`.
 
 **Recorded, deliberately unchanged:** the `signCount` both-zero carve-out. Most Apple/Android
 platform passkeys and every synced credential always send 0; accepting them forfeits nothing,
@@ -261,7 +282,64 @@ rewrites the file from memory, resurrecting the row.
 
 ## Deferred / seams recorded
 
+**Scope decisions, taken at plan time:**
+
 - **Passkeys are origin-bound; 3a's proof is localhost-scoped** — enrolled-there credentials don't carry to 3b's DuckDNS name; per-credential rpId binding makes that a loud failure, not a silent one. Stated, not engineered around.
 - **`Secure` behind real TLS + `trustProxy`** — 3a drives `Secure` from config; the `trustProxy`/`X-Forwarded-Proto` decision lands properly in 3b when Caddy terminates TLS.
 - **Per-user identity** — the single-identity session layer is deliberately the team-edition seam (spec §6); this slice ships one operator.
 - **Attestation verification** (packed/tpm/etc.) — out of scope; `attestation:'none'` is what keeps the crypto library-free; the team edition revisits it.
+
+**Minors found DURING the stage, recorded rather than fixed.** Consolidated here
+from each task's own progress notes at close-out, because once the plan is the
+only surviving artifact a note that lives only in a task ledger is a note that is
+lost. None is a bypass or a fail-open; each is a real seam somebody will meet.
+
+*The gate (Task 5):*
+
+- **`gate.ts:315` measures the secret BEFORE the exempt check** — so an exempt request on an armed box still pays one `readFileSync`. Fail-SAFE as-is (the ternary is a cost gate, not a decision gate: not measuring yields `'unread'`, which denies), so it is a cost, not a hole. Reordering would be an optimisation with a security-relevant ordering change in it.
+- **`gate.ts:127`'s `GET /*` exempts every UNMATCHED GET on a box with a built `dist-pwa/`** — so an unmatched `/api/...` GET answers 404 rather than 401 there, while on an API-only box (no static plugin, no `/*` route) the same url is gated. It leaks the existence of a route table that is public in this repo anyway; noted so nobody later reads the 404 as a gate failure.
+- **`server.ts:310`'s cookie `Max-Age` derives from `ABSOLUTE_TTL_MS` (30d) while `IDLE_TTL_MS` is 4d** — so an idle lapse is a cookie the browser still holds against a row the sweep has deleted, which answers `'no-session'` (a cold login screen) rather than `'expired'` ("you were signed out"). The PWA's side of that distinction is correct and unreachable in this case; the box is what conflates them. D-114 fixed the *unmatched-token* half of this; the idle half is the residue.
+- **`expireCookie` sweeping lives only in the gate** — an expired cookie presented to the EXEMPT status route is not swept.
+- **`GET /api/auth/status` does a second `readFileSync` per anonymous request on an armed box** — the gate already does one, so this doubles rather than introduces.
+
+*The PWA (Task 7):*
+
+- **No focus trap on the login screen** — matches `BlockScreen`, so this is consistency, not a regression. It is still a full-screen modal a keyboard user can tab behind.
+- **A dark box serves one extra `/api/auth/status` per failed socket attempt** — the probe fires whenever an attempt never opened, and on a gateless box that is a request with no answer to give. Behaviourally identical, not byte-identical.
+- **`checkAuth`'s cost, if ever trimmed, must use a TIME THROTTLE and never a memoised "this box is dark"** — arming the flag is a server restart that does NOT reload the page, so a permanent memo recreates the endless-reconnect failure the whole task exists to prevent.
+- **A success toast fired in the same tick as a 401 wave is dropped** — so a non-idempotent action may be re-done after signing back in. Narrowing the guard would need the ~40 catch blocks the design exists to avoid.
+
+*The CLI and the helper (Task 9):*
+
+- **Stale `auth.scrypt.tmp.*` files are never reaped, and the doctor does not report them** — the writer unlinks its own temp on every failure path it can see, but a crash between `writeFileSync` and `renameSync` leaves one behind. 0600 and randomly suffixed, so it is litter rather than a leak, and litter beside a credential is still litter nobody is looking for.
+- **The 12-character passphrase floor lives in bash only, deliberately** — `gen-auth-hash.mjs` validates FORMAT, `ccrc passwd` owns POLICY, and a second copy of the number is exactly the drift `single-definition.test.ts` fails builds over. Recorded so the asymmetry reads as a decision.
+
+*Found while writing the documentation (Task 10):*
+
+- **There is no sign-out control in the PWA.** `POST /api/auth/logout` exists, is gated, and is tested — and nothing in the client calls it (`api.ts` deliberately ships no `logout`, as unused). The only ways back to a login screen today are an empty cookie jar, a `ccrc passwd` rotation, or the TTL. The runbook says so out loud rather than inventing a button; it is a real gap in the operator surface and the cheapest possible follow-up.
+- **On a plain-http localhost box the cookie still carries `Secure` by default**, because `cookieSecure` is config-driven and never scheme-derived (which is the correct call — see the field's docstring). Whether a browser accepts a `Secure` cookie from `http://localhost` is per-browser policy this box cannot control, so the documented symptom is "the login POST succeeds and the screen comes straight back", and the documented switch is `CCRC_COOKIE_INSECURE=on`. Not changed: making the default scheme-aware is exactly the shape that fails silently behind `tailscale serve`.
+- **An IP-address origin cannot carry passkeys, and the server's own check does not say so.** `CCRC_ORIGIN=http://127.0.0.1:7788` with `CCRC_RP_ID=127.0.0.1` is a pair `relyingPartyProblem` ACCEPTS (`rpIdProblem` only refuses single labels, and `127.0.0.1` has dots) and every browser refuses, because an rpId must be a domain. Documented in the runbook as "keep both on `localhost`". A `rpId` that is a bare IPv4 literal would be a cheap, exact check to add later.
+
+## Close-out — stage 3a, 2026-08-20
+
+**What shipped.** A session gate over every route, dark by default.
+
+- **L0 wire vocabulary** (`shared/api.ts`): `AuthVerdict` in the `PrReason` shape, `LoginRequest`, `AuthStatus`, four WebAuthn shapes. No `FLEET_PROTO` bump — the frames are additive.
+- **The secret** (`auth/secret.ts`): a self-describing scrypt line, parsed strictly, failing SHUT on anything present-but-unusable; `verifyPassphrase` async and length-check-first; a generation the rotation bumps.
+- **The session store** (`auth/sessions.ts`): a flat file holding `sha256(token)` and never the token, 0600, tmp+rename, 30d absolute / 4d idle, sweeping on load and on a timer, and DEGRADING rather than crashing on a corrupt file — deliberately the inverse polarity to the secret's.
+- **The brake** (`auth/ratelimit.ts`): a pure L1 policy plus one impure holder, counting failures rather than attempts, and RESERVING at admission so a concurrent flood cannot all pass while the count is still zero.
+- **The gate** (`auth/gate.ts`, `auth/cookie.ts`): one `onRequest` hook, an exempt table keyed by METHOD as well as path, an Origin check on every upgrade and every non-exempt write, and a decision that is pure and returns WHY it allowed.
+- **Passkeys** (`auth/webauthn.ts`, `auth/credentials.ts`): WebAuthn with `node:crypto` alone — no new dependency — two separate challenge stores, per-credential rpId/origin binding, enrolment behind the gate, and revocation wired end to end.
+- **The client** (`pwa/src/lib/auth.ts`, `LoginScreen.tsx`): a login screen that rises on POSITIVE evidence only, so no route on a dark box can raise it; both socket ladders park while lost and resume on regain.
+- **The operator surface** (`ccd/ccrc passwd`, `deploy/gen-auth-hash.mjs`, `ccrc doctor`'s `auth` check): one writer for the secret, one resolver for its path, a round trip through the server's own parser before any install, and a check that measures the file without printing a byte of it.
+- **The documentation** (this task): `deploy/ccrc.env.example`, README's session-gate section, and step 10 of the VM-gate runbook.
+
+**Deliberately deferred** — the four scope decisions and the fourteen minors above, none of them load-bearing for arming the gate.
+
+**Pending operator proofs.** Everything above is a hermetic-suite measurement over fixture `$HOME`s. Three things only a real run can answer, and all three are step 10 of the runbook:
+
+1. **The arming sequence on a real box** — `ccrc passwd`, the three-key edit, the restart, the login. In particular whether the `Secure` cookie survives a plain-http localhost browser, which is the one step whose answer this repository genuinely does not know.
+2. **A passkey ceremony against a real authenticator.** Every passkey test in this stage signs with a real P-256 keypair, but no test has ever driven a browser, a platform prompt or a security key.
+3. **The emergency procedures, rehearsed once** — revoke-then-rotate, and the `mv … && rm -f … && ccrc passwd` recovery from a corrupt secret. The cheapest time to run them is on a VM that is about to be destroyed.
+
+**The deploy posture this stage ends in:** `CCRC_AUTH` is off everywhere, including the live fleet. The whole slice can ship to production and change nothing until an operator makes one edit; that was the design constraint and it held to the end.

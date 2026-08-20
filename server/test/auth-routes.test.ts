@@ -7,6 +7,7 @@
 // costs, what a logout revokes, and what the status route reports.
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { inspect } from 'node:util';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildServer, type Deps } from '../src/server.js';
@@ -14,7 +15,7 @@ import { loadConfig } from '../src/config.js';
 import { SESSION_COOKIE, expireCookie, parseCookies, serializeCookie } from '../src/auth/cookie.js';
 import { ABSOLUTE_TTL_MS, SessionStore } from '../src/auth/sessions.js';
 import { MAX_FAILURES } from '../src/auth/ratelimit.js';
-import { hashLine, type ScryptParams } from '../src/auth/secret.js';
+import { AuthSecretUnusable, hashLine, readAuthSecret, type ScryptParams } from '../src/auth/secret.js';
 import type { PtyLike } from '../src/pty.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -606,5 +607,88 @@ describe('loadConfig — the four auth keys', () => {
     // imported, so `os.homedir()` is a compile error rather than a temptation.
     // (The name still appears in the docstring that explains why it went.)
     expect(src).not.toMatch(/^import .* from 'node:os';$/m);
+  });
+});
+
+// ── the boot refusal, and the bytes it must not print (D-131) ────────────
+
+describe('buildServer — an unusable secret refuses the boot without quoting it', () => {
+  /**
+   * Lines that do BOTH halves of the job, and the second half is the one a
+   * fixture loses silently:
+   *
+   *  (a) they make `readAuthSecret` throw `AuthSecretUnusable`, and
+   *  (b) they make its MESSAGE quote bytes taken out of the file.
+   *
+   * Most garbled lines only do (a) — `expected 5 '$'-separated fields, got 1`
+   * names a count and nothing else — and a leak assertion written against one of
+   * those passes for the wrong reason, proving only that a message which could
+   * never carry the bytes does not carry them. (That is exactly what the Task 9
+   * review caught in D-127's first fixture.) So (b) is MEASURED by the first
+   * test below rather than assumed, and every entry here is a real leak arm of
+   * `parseAuthSecretLine`: the prefix, the whole params field, one params value,
+   * and the generation field.
+   *
+   * The planted strings never appear in a FILENAME — the refusal message names
+   * the path, so a planted value in the path would satisfy the leak assertion
+   * from the wrong side.
+   */
+  const VALID_HASH_B64 = Buffer.alloc(32).toString('base64');
+  const LEAKY: Array<[string, string, string]> = [
+    ['the prefix field', 'PLANTED-PREFIX-9f3a2b$b$c$d$e', 'PLANTED-PREFIX-9f3a2b'],
+    ['the whole params field', `scrypt$PLANTED-PARAMS-4d1e7c$c2FsdA==$${VALID_HASH_B64}$gen=1`,
+      'PLANTED-PARAMS-4d1e7c'],
+    ['one params value', `scrypt$N=PLANTED-N-8b0c15,r=8,p=1$c2FsdA==$${VALID_HASH_B64}$gen=1`,
+      'PLANTED-N-8b0c15'],
+    ['the generation field', `scrypt$N=1024,r=8,p=1$c2FsdA==$${VALID_HASH_B64}$PLANTED-GEN-7a2f11`,
+      'PLANTED-GEN-7a2f11'],
+  ];
+
+  it('the fixtures are genuinely leakable: readAuthSecret quotes these bytes', () => {
+    const dir = mkTmp('ccrc-auth-leaky-');
+    LEAKY.forEach(([name, line, planted], i) => {
+      const p = path.join(dir, `case${i}.scrypt`);
+      writeFileSync(p, `${line}\n`, { mode: 0o600 });
+      let msg = '';
+      expect(() => readAuthSecret(p), name).toThrow(AuthSecretUnusable);
+      try { readAuthSecret(p); } catch (err) { msg = (err as Error).message; }
+      // If this ever goes red because the parser stopped quoting, the fixture —
+      // not the guard — is what needs replacing: a non-leaking line cannot
+      // measure a leak.
+      expect(msg, name).toContain(planted);
+    });
+  });
+
+  it('REFUSES TO BOOT, and not one of those bytes reaches what node would print', async () => {
+    for (const [name, line, planted] of LEAKY) {
+      let caught: unknown;
+      try { await openApp({ secretText: `${line}\n` }); } catch (err) { caught = err; }
+      expect(caught, name).toBeInstanceOf(AuthSecretUnusable);
+      // `inspect` WITH the cause chain, not `.message`, because that is what an
+      // uncaught rejection actually puts in the journal: node prints the message,
+      // the stack, AND `[cause]`. A fix that rewrote the message but attached
+      // `{ cause: err }` would pass a `.message` assertion and leak anyway, one
+      // line further down the same journal entry.
+      expect(inspect(caught, { depth: 5 }), name).not.toContain(planted);
+      expect((caught as Error).cause, name).toBeUndefined();
+      // …and the refusal is still ACTIONABLE without the bytes: which file, what
+      // state, which tool measures it safely, and the D-125 two-step remedy.
+      const msg = (caught as Error).message;
+      expect(msg, name).toContain('REFUSING TO BOOT');
+      expect(msg, name).toContain('auth.scrypt');
+      expect(msg, name).toContain('ccrc doctor');
+      expect(msg, name)
+        .toMatch(/mv .*auth\.scrypt .*auth\.scrypt\.broken && rm -f .*sessions\.json && ccrc passwd/);
+    }
+  });
+
+  it('does NOT refuse the boot on a DARK box — the same file, flag off', async () => {
+    // The refusal belongs to the armed path only: with `CCRC_AUTH` off nothing
+    // reads the file at all (`buildServer`'s whole auth block is inside the
+    // flag), so a box carrying a broken `auth.scrypt` it has never armed keeps
+    // serving. Doctor is what tells that operator it is a boot refusal waiting
+    // to happen; the server has no business refusing over a file it never reads.
+    const w = await openApp({ enabled: false, secretText: `${LEAKY[0][1]}\n` });
+    await w.app.close();
   });
 });
