@@ -18,7 +18,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PR_REASONS, isPrReason } from '../../shared/api.js';
+import { AUTH_VERDICTS, PR_REASONS, isPrReason } from '../../shared/api.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -144,6 +144,41 @@ describe('integration finding 7 — one reason vocabulary', () => {
     // a tenth reason cannot ship without one.
     expect(readFileSync(path.join(ccrcRoot, 'pwa/src/session/PrKeycap.tsx'), 'utf8'))
       .toContain('Record<PrReason, string>');
+  });
+});
+
+describe('Stage 3a — one auth verdict vocabulary', () => {
+  // The same rule as finding 7 above, applied to a vocabulary that has not had
+  // its drift yet — which is the point of writing it on day one rather than
+  // after the fourth copy. A file may enumerate all six verdicts ONLY where a
+  // `Record<AuthVerdict, …>` makes a missing member a compile error; today the
+  // only such file is `shared/api.ts` (the union and `AUTH_VERDICT_MAP`).
+  //
+  // The login screen's sentences (Task 7) are the expected second holder, and
+  // when they land the fix is to type their map `Record<AuthVerdict, string>`
+  // and add the file here — exactly what `PrKeycap.tsx` did. Turning this list
+  // into a wildcard instead would retire the guard.
+  //
+  // Same token form as finding 7's scan — quoted OR as an object key — because
+  // `AUTH_VERDICT_MAP` writes four of the six unquoted, and a
+  // quoted-literals-only scan would exclude the map by accident rather than by
+  // rule, then miss a real copy written the same way.
+  const enumerates = (src: string): boolean =>
+    AUTH_VERDICTS.every((v) => new RegExp(`(?:'${v}'|(?<![\\w'-])${v}\\s*:)`).test(src));
+
+  it('is enumerated only where the compiler enforces exhaustiveness', () => {
+    const holders = ALL.filter((f) => enumerates(readFileSync(f, 'utf8'))).map(rel).sort();
+    expect(holders).toEqual(['shared/api.ts']);
+  });
+
+  it('and the scan is looking at something — the six are really in that file', () => {
+    // Guards the guard: an `AUTH_VERDICTS` that had gone empty would make
+    // `every` vacuously true for EVERY file, turning the assertion above into
+    // a list of all 200-odd sources — loud, but for the wrong reason. This
+    // fails first, and specifically.
+    expect(AUTH_VERDICTS.length).toBe(6);
+    expect(enumerates(readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8'))).toBe(true);
+    expect(enumerates(readFileSync(path.join(ccrcRoot, 'server/src/prstate.ts'), 'utf8'))).toBe(false);
   });
 });
 
