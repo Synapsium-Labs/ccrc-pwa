@@ -119,6 +119,11 @@ describe('cmd_supervise under a substrate fault (spec §1)', () => {
       ${seq('unknown:x', 'gone')}
       cmd_supervise ${ID}`);
     expect(r.code).toBe(1);   // the gone exit, systemd's restart signal, unchanged
+    // The exit must be the loop's OWN, not spawnSync's timeout kill: a killed
+    // run has `status: null`, which `run()` maps to the SAME code 1 — measured,
+    // deleting the `gone) break` arm left this test green after a 15s stall.
+    // The sentence is the proof the loop pronounced it, not the reaper.
+    expect(r.stderr).toContain('ended; exiting for systemd restart');
   });
   it('the three tick helpers are SKIPPED on an unknown tick — each would shell into the dead tmux', () => {
     run(`${LOOP_STUBS}

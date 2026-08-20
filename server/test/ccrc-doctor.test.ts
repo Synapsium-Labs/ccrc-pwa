@@ -827,6 +827,40 @@ describe('ccrc doctor: tmux_skew', () => {
     expect(r.stdout).toMatch(/^SKIP tmux_skew: /m);
     expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) tmux_skew: /m);
   });
+
+  it('SKIPS when a server holds the socket but does not answer — a wedge is NOT "no server"', () => {
+    // The rc-124 arm. Delete it and the timed-out probe falls one branch down
+    // into the "no server is running" sentence — a server that holds the
+    // socket without answering and a socket nobody holds collapsed into one
+    // reading, the overloaded seam the check's own comment bans by name. The
+    // stub hangs (sleep 60) and is killed by the check's OWN deadline at
+    // CCRC_DOCTOR_GH_TIMEOUT=1 — the test is bounded by the very mechanism
+    // under test, and by nothing else, which is the point.
+    const home = healthy('ccrc-doctor-skew-wedge-');
+    linkReal(home, 'sleep');
+    stub(home, 'tmux', [
+      'if [ "$1" = "-V" ]; then echo "tmux 3.4"; exit 0; fi',
+      'if [ "$1" = "display-message" ]; then sleep 60; exit 0; fi',
+      'echo "fixture tmux: unexpected argv: $*" >&2; exit 90',
+    ].join('\n'));
+    const r = runDoctor(home, ['doctor'], { CCRC_DOCTOR_GH_TIMEOUT: '1' });
+    expect(r.stdout).toMatch(
+      /^SKIP tmux_skew: a tmux server holds the socket but did not answer within 1s/m);
+    expect(r.stdout).not.toMatch(/no tmux server is running/);   // the collapse, banned
+    expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) tmux_skew: /m);
+  });
+
+  it("SKIPS when 'tmux -V' names no client version — nothing to compare a server against", () => {
+    // The empty-client arm: a tmux that answers `-V` with nothing (a broken
+    // or truncated binary) has named no client, so there is no pair. Without
+    // this arm the check would compare a running server against `""` and WARN
+    // on every such box — a finding about the comparison, not the substrate.
+    const home = healthy('ccrc-doctor-skew-noclient-');
+    stub(home, 'tmux', 'exit 0');   // present (the tmux check still PASSes); `-V` prints nothing
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^SKIP tmux_skew: 'tmux -V' printed ""/m);
+    expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) tmux_skew: /m);
+  });
 });
 
 // ── gh's authentication ───────────────────────────────────────────────────
