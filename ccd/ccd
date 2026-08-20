@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=9c9ee1f7bb6ef7ea6f9e821ad76aeb80332ab26185db44b1706854235f53a8a9
+# ccrc:generated 1 sha256=ad2f7bd5bbc5118153aeea70b6d3c3b1cf80cb8fd2c819db262a569f2fc822a1
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box, not on this file: `_rc_enabled` reads
@@ -396,9 +396,16 @@ _alive() { [[ "$(_session_verdict "$1")" == live ]]; }
 # dotfiles: `readRegistryMeasured` mints session ids from
 # `names.filter(n => n.endsWith('.uuid'))`, so a tmp ending in the field name
 # would mint a phantom session. `$BASHPID` separates concurrent supervisors
-# (and background subshells of one shell, where `$$` would not); the sequence
-# separates two writes by one shell. Same shape and same reason as
-# `session-hook.sh`'s own `$REG/.$id.$$.hookstate.tmp`.
+# (and background subshells of one shell, where `$$` would not). THE SEQUENCE
+# IS BELT AND BRACES: nothing currently depends on it. Two writes by one shell
+# are strictly sequential, and the first tmp is renamed (or `rm -f`'d) away
+# before the second is created; two background subshells of one shell inherit
+# the SAME counter value, which is precisely the case `$BASHPID` is there for;
+# and no `trap` in this file calls `_reg_set`, so there is no re-entrancy path
+# that would make it load-bearing either. It is kept because it costs nothing
+# and it keeps the name unique for a future caller that holds neither of those
+# properties. Same shape and same reason as `session-hook.sh`'s own
+# `$REG/.$id.$$.hookstate.tmp`.
 #
 # A SIGKILL between the write and the rename leaks one tmp file, forever:
 # `_reg_purge`'s glob cannot see a dotfile, and giving it a second glob that
