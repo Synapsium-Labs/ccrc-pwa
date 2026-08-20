@@ -473,11 +473,11 @@ function noteWholeFleetListing(listable: boolean, now: number): void {
 async function buildRecord(
   io: FleetIO, cfg: CcrcConfig, names: string[], id: string, now: number,
 ): Promise<SessionRecord | null> {
-  const [wrapper, project, workdir, uuid, started, home, pool, lastswap, workspace, branchRead,
+  const [wrapperRead, project, workdirRead, uuidRead, started, home, pool, lastswap, workspace, branchRead,
     base, prPhaseRaw, prNumberRaw, prCheckedAtRaw, archivedRaw, manifestRaw, holdRead,
     stoppedRaw, supervisedRaw, swapBlockedRaw, spawnRaw, substrateRead] = await Promise.all([
-    field(io, cfg.registryDir, id, 'wrapper'), field(io, cfg.registryDir, id, 'project'),
-    field(io, cfg.registryDir, id, 'workdir'), field(io, cfg.registryDir, id, 'uuid'),
+    fieldMeasured(io, cfg.registryDir, id, 'wrapper'), field(io, cfg.registryDir, id, 'project'),
+    fieldMeasured(io, cfg.registryDir, id, 'workdir'), fieldMeasured(io, cfg.registryDir, id, 'uuid'),
     field(io, cfg.registryDir, id, 'started'), field(io, cfg.registryDir, id, 'home'),
     field(io, cfg.registryDir, id, 'pool'), field(io, cfg.registryDir, id, 'lastswap'),
     field(io, cfg.registryDir, id, 'workspace'), fieldMeasured(io, cfg.registryDir, id, 'branch'),
@@ -493,23 +493,43 @@ async function buildRecord(
   // The identity-triple ladder. `uuid` first: `names.includes(id + '.uuid')`
   // is TRUE BY CONSTRUCTION for every id this function is ever called with —
   // both callers below derive/confirm `id` from that exact listing — so a
-  // null `uuid` read can only mean "listed but unreadable", never "absent".
-  // `wrapper`/`workdir` carry no such guarantee: either can genuinely be
+  // MEASURED-UNREADABLE `uuid` read can only mean "listed but unreadable",
+  // never "absent" (the `unreadable` arm below still relies on this: for
+  // `uuid` specifically, `names.includes(...)` is always true, so it always
+  // takes the `unmeasured` branch, never the final drop). A MEASURED-ABSENT
+  // `uuid` read is the one case that guarantee does NOT cover — the race
+  // window between the listing this function opened with and this field's
+  // own read (a reap landing in that gap) — and Task 5 lets that be proven
+  // directly instead of merely inferred: see below. `wrapper`/`workdir`
+  // carry no by-construction guarantee at all: either can genuinely be
   // absent from the listing (a half-written or half-torn-down entry).
+  //
+  // THE GOVERNING RULE: a measured `absent` drops the row IMMEDIATELY —
+  // the same end state `readRegistryMeasured`'s second-listing reconfirm
+  // reaches for the OLD collapsed-evidence case (raced-absent used to read
+  // as `unmeasured` first, then get retired once the second listing also
+  // failed to find it), just proven at THIS read instead of inferred two
+  // listings later. A measured `unreadable` falls back to exactly today's
+  // `names.includes(...)` rung.
   const unmeasured: IdentityField[] = [];
   const measured: { uuid: string; wrapper: string; workdir: string } = { uuid: '', wrapper: '', workdir: '' };
-  for (const f of ['uuid', 'wrapper', 'workdir'] as const) {
-    const raw = f === 'uuid' ? uuid : f === 'wrapper' ? wrapper : workdir;
-    if (raw !== null && raw !== '') { measured[f] = raw; continue; }
-    if (raw === null && names.includes(`${id}.${f}`)) {
+  for (const [f, read] of [
+    ['uuid', uuidRead], ['wrapper', wrapperRead], ['workdir', workdirRead],
+  ] as const) {
+    if (read.ok) {
+      if (read.content !== '') { measured[f] = read.content; continue; }
+      noteIssue(`${id}#${f}#dropped`, now,
+        `registry entry ${id} dropped — ${f} read back empty`, false);
+      return null;   // narrowed drop, logged — see this function's own docstring
+    }
+    if (read.reason === 'unreadable' && names.includes(`${id}.${f}`)) {
       unmeasured.push(f);
       noteIssue(`${id}#${f}#degraded`, now,
         `registry ${id}.${f} is listed but unreadable — ${f} is unmeasured, not absent`, true);
       continue;
     }
     noteIssue(`${id}#${f}#dropped`, now,
-      `registry entry ${id} dropped — ${f} ${raw === null ? 'is not present in the registry directory' : 'read back empty'}`,
-      false);
+      `registry entry ${id} dropped — ${f} is not present in the registry directory`, false);
     return null;   // narrowed drop, logged — see this function's own docstring
   }
 
