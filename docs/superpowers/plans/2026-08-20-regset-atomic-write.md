@@ -311,7 +311,12 @@ describe('_reg_set writes atomically', () => {
       .toEqual(['uuid', 'workspace', 'wrapper']);
   });
 
-  it('REFUSES when the registry directory cannot be written, and leaves no tmp', () => {
+  // ROOT-TOLERANT, deliberately: `chmod 500` does not stop uid 0, so under a
+  // root test runner this fixture proves nothing and would fail for a reason
+  // unrelated to the guard. The DIRECTORY-destination case below is the
+  // any-uid stand-in (`ccd-hold.test.ts` says so in its own words) and covers
+  // the same refusal for every uid.
+  it.skipIf(process.getuid?.() === 0)('REFUSES when the registry directory cannot be written, and leaves no tmp', () => {
     // The `chmod 500 "$REG"` class, which `cmd_ws_hold`'s `|| die` depends on.
     h.sh(`_reg_set demo-quiet-basin uuid u1`);
     const r = h.sh(`chmod 500 "$REG"; _reg_set demo-quiet-basin wrapper claude; printf 'rc=%s' "$?"; chmod 700 "$REG"`);
@@ -627,8 +632,27 @@ describe('the archive manifest is written atomically (registry-durability wave 2
     expect(src).not.toMatch(/>\s*"\$REG\/\$id\.archivemanifest"/);
     expect(src).toMatch(/_reg_set "\$id" archivemanifest "\$manifest"\$'\\n'/);
   });
+
+  it('and the file on disk still ENDS IN A NEWLINE and still parses as the manifest', () => {
+    // The behavioural half — a source scan alone would pass on a migration
+    // that dropped the newline, which is the one byte this task exists to
+    // preserve. Written against the helper directly rather than a whole
+    // ws-archive run, so it pins the BYTES without depending on a fixture
+    // worktree, a gh row, or systemd.
+    const h2 = makeCcdHarness('ccrc-ccd-manifestbytes-');
+    try {
+      h2.sh(`_reg_set demo-quiet-basin archivemanifest '{"worktreeBytes":4096}'$'\\n'`);
+      const raw = readFileSync(
+        path.join(h2.home, '.cc-sessions', 'demo-quiet-basin.archivemanifest'), 'utf8');
+      expect(raw).toBe('{"worktreeBytes":4096}\n');
+      expect(JSON.parse(raw).worktreeBytes).toBe(4096);
+    } finally { h2.cleanup(); }
+  });
 });
 ```
+
+Add whatever of `readFileSync` / `path` / `CCD` / `makeCcdHarness` `ccd-archive.test.ts` does not
+already import.
 
 - [ ] **Step 2: Run test to verify it fails**
 
