@@ -94,6 +94,20 @@ export const WORKER_KICKOFF_PREFIX =
 - [x] Ledger (D-10x entries as found); the per-worker-RC note (still open, now with its destination existing — a clause states the box-level fact); full three suites foreground; commit `docs(skill): worker-skill slice closes — the protocol is a mechanism`
 
 
+### Follow-ups from the whole-branch final review (2026-08-20, verdict CLEAN)
+
+- **Pending live proof (honesty):** no program has RUN with the worker skill — the first real
+  dispatch is this branch's analogue of the install runbook's VM gate. Not claimed; the first
+  coordinated program after this merges is the measurement.
+- **-> next skill-suite touch:** clause 2's re-measure claim gets a source harvest (the doctrine:
+  a verbatim pin guards drift, not wrongness); the eight-code "every mail-route refusal" list gets
+  a union scan against MAIL_REJECT_CODES' ingress subset (a ninth code makes "every" silently false).
+- **-> next install-lane slice:** the T4 stray-temp comment claims a sweep that does not exist
+  (_inst_atomic's is file-scoped; kill-mid-copy strays under <cfg>/skills/ swept by nothing —
+  same exposure predates this branch in the coordinator installer); comment fix + glob sweeps.
+- **-> coordinator-suite hygiene:** the list-window pin's end-marker fallback silently widens to
+  EOF (slice(start,-1)); one-line end > start guard.
+
 ## Deviations found
 
 (Next free number at plan time: D-103.)
