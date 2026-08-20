@@ -516,8 +516,16 @@ async function buildRecord(
   // reaches for the OLD collapsed-evidence case (raced-absent used to read
   // as `unmeasured` first, then get retired once the second listing also
   // failed to find it), just proven at THIS read instead of inferred two
-  // listings later. A measured `unreadable` falls back to exactly today's
-  // `names.includes(...)` rung.
+  // listings later. That equivalence holds only when the second listing both
+  // SUCCEEDS and AGREES (no longer names `<id>.uuid`): a second `readdir`
+  // that FAILS, or one that still names it, is exactly where the OLD code
+  // KEPT the row degraded rather than dropping it — this code drops it on
+  // the proven read alone regardless, in strictly more cases than the old
+  // ladder retired. The direction is fail-safe (a proven ENOENT outranks an
+  // unconfirmed or failed listing) and is not what this comment changes;
+  // only the "same end state" claim above is corrected to say so. A
+  // measured `unreadable` falls back to exactly today's `names.includes(...)`
+  // rung.
   const unmeasured: IdentityField[] = [];
   const measured: { uuid: string; wrapper: string; workdir: string } = { uuid: '', wrapper: '', workdir: '' };
   for (const [f, read] of [
@@ -534,6 +542,17 @@ async function buildRecord(
       noteIssue(`${id}#${f}#degraded`, now,
         `registry ${id}.${f} is listed but unreadable — ${f} is unmeasured, not absent`, true);
       continue;
+    }
+    // Two conditions used to share one sentence ("is not present in the
+    // registry directory"), which is only true for the second: a measured
+    // `absent` field that WAS in this function's own listing means the
+    // ENOENT came from the read racing a removal, not from the listing never
+    // having named it — an operator grepping this line for a half-written
+    // entry deserves the true one.
+    if (read.reason === 'absent' && names.includes(`${id}.${f}`)) {
+      noteIssue(`${id}#${f}#dropped`, now,
+        `registry entry ${id} dropped — ${f} was listed but is gone by the time it was read (raced a removal)`, false);
+      return null;   // narrowed drop, logged — see this function's own docstring
     }
     noteIssue(`${id}#${f}#dropped`, now,
       `registry entry ${id} dropped — ${f} is not present in the registry directory`, false);

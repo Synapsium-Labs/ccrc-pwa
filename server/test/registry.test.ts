@@ -5,7 +5,7 @@ import { loadConfig } from '../src/config.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import {
   readRegistry, readRegistryMeasured, readSessionRecord, measuredIdentity,
-  HOLD_UNREADABLE, HOLD_NO_REASON, REGISTRY_UNMEASURED_STUCK_MS, SWAP_BLOCKED_NO_REASON,
+  HOLD_UNREADABLE, REGISTRY_UNMEASURED_STUCK_MS, SWAP_BLOCKED_NO_REASON,
   SUBSTRATE_UNREADABLE, SUBSTRATE_NO_REASON,
 } from '../src/registry.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -299,6 +299,26 @@ describe('the measured read reaching the registry ladder (Task 5)', () => {
       const io = unreadableField('demo-quiet-basin', 'wrapper');
       const out = await readRegistry(io, cfg());
       expect(out).toEqual([]);
+    });
+
+    it('a LISTED .uuid whose measured read is absent drops the row, and readSessionRecord ' +
+       'reports {found:false, reason:\'absent\'} (B4)', async () => {
+      // `.uuid` is the one identity-triple member `buildRecord`'s own
+      // docstring calls TRUE BY CONSTRUCTION — `names.includes(id+'.uuid')`
+      // holds for every id either caller ever derives `id` from, so before
+      // `readFileMeasured` existed a measured-absent `.uuid` specifically was
+      // unreachable: the only way to get there was `raw === null`, which the
+      // by-construction guarantee always paired with `names.includes(...) ===
+      // true`, landing on `unmeasured`, never the drop. A measured `absent`
+      // is the race that guarantee never covered — reaped between the
+      // listing this function opened with and `.uuid`'s own read — and this
+      // pins the already-correct behaviour (probed by the reviewer, not a
+      // bug) rather than manufacturing a red: GREEN on first run.
+      seed(reg, 'demo-quiet-basin', { wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'e'.repeat(36) });
+      const io = absentField('demo-quiet-basin', 'uuid');
+      const out = await readRegistry(io, cfg());
+      expect(out.find((r) => r.id === 'demo-quiet-basin')).toBeUndefined();
+      expect(await readSessionRecord(io, cfg(), 'demo-quiet-basin')).toEqual({ found: false, reason: 'absent' });
     });
   });
 
