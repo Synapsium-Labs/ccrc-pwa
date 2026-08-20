@@ -1,0 +1,543 @@
+// THE SWEEP. One `onRequest` hook is supposed to stand in front of every route
+// and every socket on this server; this file is the measurement that says so.
+//
+// It does NOT hold a hand-copied list of routes, and that is the whole point:
+// `coord-pause-route.test.ts:152-211` and `verb-gate.test.ts` are the templates
+// — read the registrations out of the SOURCE, then assert the property over
+// what was read. A route added next month is covered because it exists, not
+// because someone remembered to add it here; a list typed out by hand goes stale
+// on the first PR and reports green for a surface it no longer describes.
+//
+// The scanner is therefore the single most load-bearing thing in the file, and a
+// scanner that matched NOTHING would make every `it.each` below vacuously green
+// — a suite that asserts a property over the empty set. `the scanner is looking
+// at something` (first describe) fails first and specifically for exactly that.
+import { describe, it, expect, afterEach } from 'vitest';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import type { FastifyInstance } from 'fastify';
+import { buildServer, type Deps } from '../src/server.js';
+import { EXEMPT, SECRET_UNREAD, authVerdict, exemptKey, type GateRequest } from '../src/auth/gate.js';
+import { SESSION_COOKIE, serializeCookie } from '../src/auth/cookie.js';
+import { SessionStore } from '../src/auth/sessions.js';
+import { hashLine, type ScryptParams } from '../src/auth/secret.js';
+import type { PtyLike } from '../src/pty.js';
+import { testDeps } from './helpers.js';
+import { mkTmp } from './tmpHelpers.js';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const srcRoot = path.resolve(here, '..', 'src');
+
+/**
+ * scrypt at the shipped `DEFAULT_PARAMS` (N=65536) is ~100 ms of deliberate CPU
+ * per verify — that cost is the actual brute-force brake and it belongs in
+ * production. Here it would be ~100 ms × every login this file performs, for a
+ * property that has nothing to do with the cost factor. The FORMAT is
+ * self-describing (`secret.ts`), so a cheap line verifies through the identical
+ * code path a real one does.
+ */
+const FAST_PARAMS: ScryptParams = { n: 1024, r: 8, p: 1, keylen: 32 };
+const PASSPHRASE = 'correct horse battery staple';
+
+// ── the scanner ──────────────────────────────────────────────────────────
+
+interface ScannedRoute { method: string; routePath: string; file: string }
+
+/** Every `app.get('…')` / `app.post('…')` registration in one file. Matches the
+ *  five HTTP verbs Fastify's shorthand exposes, not just the two in use today —
+ *  a `app.delete(...)` added tomorrow must be swept, not silently skipped. */
+function scanRoutes(file: string): ScannedRoute[] {
+  const src = readFileSync(path.join(srcRoot, file), 'utf8');
+  return [...src.matchAll(/app\.(get|post|put|patch|delete)\('([^']+)'/g)]
+    .map((m) => ({ method: m[1]!.toUpperCase(), routePath: m[2]!, file }));
+}
+
+const ROUTES: ScannedRoute[] = [...scanRoutes('server.ts'), ...scanRoutes('coord/routes.ts')];
+
+/** The three websocket upgrades — the same registrations, told apart by their
+ *  `{ websocket: true }` option. They are swept through `injectWS`, not
+ *  `inject`. */
+const WS_ROUTES = ['/ws/fleet', '/ws/session/:id', '/ws/pty/:id'];
+const isWs = (r: ScannedRoute): boolean => WS_ROUTES.includes(r.routePath);
+
+const key = (r: ScannedRoute): string => `${r.method} ${r.routePath}`;
+
+/** A concrete url for a route pattern — `:id` becomes something a param route
+ *  will match. The VALUE is irrelevant: every assertion here is about the gate,
+ *  which runs before any handler looks at a param. */
+const concrete = (routePath: string): string => routePath.replace(/:[^/]+/g, 'x');
+
+/** Is the dist-pwa bundle present in this checkout? `server/dist-pwa/` is a
+ *  BUILD ARTEFACT and gitignored, so it is there on a developer box that has run
+ *  the PWA build and absent on a fresh clone. `buildServer` skips the static
+ *  plugin and the SPA fallback entirely when it is missing, which means the
+ *  `GET /*` exemption is dormant rather than wrong — the tests that touch it say
+ *  so out loud instead of quietly passing. */
+const HAS_PWA = existsSync(path.resolve(here, '..', 'dist-pwa', 'index.html'));
+
+// ── fixtures ─────────────────────────────────────────────────────────────
+
+/** A pty that never touches tmux. REQUIRED, not tidiness: the real `attachPty`
+ *  runs `tmux attach -t cc-<id>` on this box, and `/ws/pty/:id` is one of the
+ *  three sockets swept below. The gate refuses the upgrade before the handler
+ *  runs — but the mutation runs that measure this suite DELETE the gate, and a
+ *  suite whose mutant spawns tmux against the live box is not a suite anyone can
+ *  run. */
+const stubPty = (): PtyLike => ({
+  onData: () => ({ dispose: () => {} }), write: () => {}, resize: () => {}, kill: () => {},
+});
+
+interface AppOpts {
+  /** `CCRC_AUTH` — armed unless a test says otherwise. */
+  enabled?: boolean;
+  /** Write a passphrase file? `false` is the fail-shut "armed but unconfigured" box. */
+  secret?: boolean;
+  /** Raw bytes for the secret file, for the garbled/unusable cases. */
+  secretText?: string;
+  generation?: number;
+  cookieSecure?: boolean;
+}
+
+const openApp = async (opts: AppOpts = {}): Promise<{ app: FastifyInstance; home: string }> => {
+  const home = mkTmp('ccrc-auth-gate-');
+  const base = testDeps(home);
+  if (opts.secretText !== undefined || opts.secret !== false) {
+    mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    const line = opts.secretText
+      ?? `${await hashLine(PASSPHRASE, FAST_PARAMS, opts.generation ?? 1)}\n`;
+    writeFileSync(path.join(home, '.ccrc', 'auth.scrypt'), line, { mode: 0o600 });
+  }
+  const deps: Deps = {
+    ...base,
+    cfg: {
+      ...base.cfg,
+      authEnabled: opts.enabled ?? true,
+      cookieSecure: opts.cookieSecure ?? false,
+    },
+    spawnPty: stubPty,
+  };
+  const app = await buildServer(deps);
+  await app.ready();
+  return { app, home };
+};
+
+/** A live session cookie for `app`, minted through the real login route. */
+const login = async (app: FastifyInstance): Promise<string> => {
+  const res = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { passphrase: PASSPHRASE } });
+  expect(res.statusCode, res.body).toBe(204);
+  const set = res.headers['set-cookie'];
+  const line = Array.isArray(set) ? set[0]! : String(set);
+  return line.slice(0, line.indexOf(';'));
+};
+
+/**
+ * Is this response THE GATE's refusal, as opposed to a route's own 401?
+ *
+ * The distinction is load-bearing in both directions: `/api/mail` answers its
+ * OWN 401 (`checkMailToken`, no `verdict` field) for a caller with no box token,
+ * and it must keep doing so — an exempt route is exempt from the SESSION gate,
+ * not from its own. Matching on the `verdict` field rather than on the status
+ * code is what lets the sweep tell "the gate refused this" from "the route
+ * refused this for its own, unrelated reason".
+ */
+const gateRefused = (res: { statusCode: number; body: string }): boolean => {
+  if (res.statusCode !== 401) return false;
+  try { return typeof (JSON.parse(res.body) as { verdict?: unknown }).verdict === 'string'; }
+  catch { return false; }
+};
+
+const verdictOf = (res: { body: string }): unknown => (JSON.parse(res.body) as { verdict?: unknown }).verdict;
+
+// ── the meta-test: the scanner is looking at something ───────────────────
+
+describe('the scanner is looking at something', () => {
+  // A scanner that matched zero registrations would make every `it.each` in this
+  // file iterate an empty array and report green — the exact failure mode that
+  // makes a source-scanning suite worse than no suite. This one fails first.
+  it('found both files, and a route count in the range the surface actually has', () => {
+    expect(scanRoutes('server.ts').length).toBeGreaterThanOrEqual(30);
+    expect(scanRoutes('coord/routes.ts').length).toBeGreaterThanOrEqual(10);
+    // 49 at the time of writing (36 + 13). The floor is deliberately a little
+    // below it so an intentional deletion does not red this, while a scanner
+    // that broke — a changed quote style, a regex typo — falls straight through.
+    expect(ROUTES.length).toBeGreaterThanOrEqual(45);
+  });
+
+  it('found the specific registrations this file reasons about', () => {
+    const keys = ROUTES.map(key);
+    for (const k of [
+      'GET /health', 'POST /api/notify', 'POST /api/mail', 'GET /api/mail/:id',
+      'POST /api/runs', 'GET /api/runs', 'GET /api/feed', 'POST /api/coord/pause',
+      'POST /api/sessions/:id/prompt', 'GET /ws/fleet', 'GET /ws/pty/:id',
+      'POST /api/auth/login', 'POST /api/auth/logout', 'GET /api/auth/status',
+    ]) expect(keys, `${k} was not found by the scanner`).toContain(k);
+    // Both a GET and a POST on the same path, which is the case a path-only
+    // exempt table would get wrong (the POST is a box-token machine lane, the
+    // GET is the PWA's read).
+    expect(keys.filter((k) => k.endsWith(' /api/runs')).sort()).toEqual(['GET /api/runs', 'POST /api/runs']);
+  });
+
+  it('sweeps all three websockets, and finds them registered', () => {
+    const keys = ROUTES.map(key);
+    for (const w of WS_ROUTES) expect(keys).toContain(`GET ${w}`);
+    expect(ROUTES.filter(isWs)).toHaveLength(3);
+  });
+});
+
+// ── EXEMPT, in both directions ───────────────────────────────────────────
+
+describe('EXEMPT is complete in both directions', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  it('every EXEMPT entry names a route this server really registers — no dead entries', async () => {
+    const w = await openApp(); app = w.app;
+    const dead: string[] = [];
+    for (const k of EXEMPT.keys()) {
+      const [method, url] = [k.slice(0, k.indexOf(' ')), k.slice(k.indexOf(' ') + 1)];
+      // `GET /*` is @fastify/static's wildcard, registered only when the bundle
+      // has been built into `server/dist-pwa/`. On a checkout without one the
+      // entry is DORMANT, not dead — and the branch says so rather than being
+      // quietly skipped.
+      if (url === '/*' && !HAS_PWA) continue;
+      if (!app.hasRoute({ method: method as 'GET', url })) dead.push(k);
+    }
+    expect(dead, 'EXEMPT names routes that do not exist').toEqual([]);
+  });
+
+  it('every EXEMPT entry states its reason, in the source', () => {
+    // An exemption is a hole with an argument attached. A later edit that adds
+    // one must have to write the argument, not merely add a line.
+    for (const [k, reason] of EXEMPT) {
+      expect(reason, `${k} carries no reason`).toBeTruthy();
+      expect(reason.length, `${k}'s reason is too short to be one`).toBeGreaterThan(40);
+    }
+  });
+
+  it('exempts exactly the four classes the plan names — nothing has crept in', () => {
+    // The size is pinned so that adding an exemption is a deliberate act that
+    // updates this number, with a reviewer looking at it. 13 = /health + the 9
+    // box-token lanes + /api/notify + login + the SPA shell.
+    expect([...EXEMPT.keys()].sort()).toEqual([
+      'GET /*',
+      'GET /api/mail',
+      'GET /api/mail/:id',
+      'GET /health',
+      'POST /api/auth/login',
+      'POST /api/mail',
+      'POST /api/mail/:id/ack',
+      'POST /api/notify',
+      'POST /api/runs',
+      'POST /api/runs/:id/advance',
+      'POST /api/runs/:id/close',
+      'POST /api/runs/:id/dispatch',
+      'POST /api/runs/:id/items',
+    ]);
+  });
+
+  it('the nine box-token lanes in EXEMPT are the nine that really check the token', () => {
+    // The claim "they are already guarded" is checked against the source, not
+    // trusted: an exemption whose stated justification is a gate the route does
+    // not actually have is the worst kind of hole.
+    const coord = readFileSync(path.join(srcRoot, 'coord/routes.ts'), 'utf8');
+    const server = readFileSync(path.join(srcRoot, 'server.ts'), 'utf8');
+    const handlers = [...coord.matchAll(/app\.(get|post)\('([^']+)'/g)]
+      .map((m) => ({ k: `${m[1]!.toUpperCase()} ${m[2]!}`, at: m.index! }));
+    const gated = handlers.filter(({ at }, i) => {
+      const end = handlers[i + 1]?.at ?? coord.length;
+      const body = coord.slice(at, end);
+      return /requireMailToken\(req/.test(body) || /checkMailToken\(/.test(body);
+    }).map((h) => h.k);
+    expect(gated.sort()).toEqual([
+      'GET /api/mail', 'GET /api/mail/:id', 'POST /api/mail', 'POST /api/mail/:id/ack',
+      'POST /api/runs', 'POST /api/runs/:id/advance', 'POST /api/runs/:id/close',
+      'POST /api/runs/:id/dispatch', 'POST /api/runs/:id/items',
+    ]);
+    for (const k of gated) expect(EXEMPT.has(k), `${k} is box-token gated but not EXEMPT`).toBe(true);
+    // …and `/api/notify`, the tenth, which lives in server.ts.
+    expect(server).toContain('checkMailToken(deps.mailToken');
+    expect(EXEMPT.has('POST /api/notify')).toBe(true);
+  });
+});
+
+// ── the sweep: CCRC_AUTH=on, no cookie ───────────────────────────────────
+
+describe('with the gate ARMED and no cookie', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  const gated = ROUTES.filter((r) => !isWs(r) && !EXEMPT.has(key(r)));
+
+  it('sweeps a non-empty set of gated routes', () => {
+    // Guards the `it.each` below the same way the scanner meta-test guards the
+    // scan: an EXEMPT table that had swallowed everything would leave nothing to
+    // assert and report green.
+    expect(gated.length).toBeGreaterThanOrEqual(30);
+  });
+
+  it.each(gated.map((r) => [key(r), r] as const))(
+    '%s answers 401 no-session', async (_k, r) => {
+      const w = await openApp(); app = w.app;
+      const res = await app.inject({ method: r.method as 'GET', url: concrete(r.routePath) });
+      expect(gateRefused(res), `${key(r)} answered ${res.statusCode} ${res.body.slice(0, 120)}`).toBe(true);
+      expect(verdictOf(res)).toBe('no-session');
+    });
+
+  it.each(WS_ROUTES)('the %s upgrade is refused before any socket exists', async (route) => {
+    const w = await openApp(); app = w.app;
+    // `injectWS` resolves only on a `101`; a non-101 rejects with the status in
+    // the message. That IS the assertion — a 401 here means the hook answered
+    // before @fastify/websocket ever handed the connection to `ws`, which for
+    // `/ws/pty/:id` is also the difference between refusing and spawning a pty.
+    await expect(app.injectWS(concrete(route))).rejects.toThrow('Unexpected server response: 401');
+  });
+
+  it.each([...EXEMPT.keys()].filter((k) => k !== 'GET /*'))(
+    '%s is NOT refused by the gate', async (k) => {
+      const w = await openApp(); app = w.app;
+      const method = k.slice(0, k.indexOf(' '));
+      const url = concrete(k.slice(k.indexOf(' ') + 1));
+      const res = await app.inject({ method: method as 'GET', url });
+      // Not "answers 200": `/api/mail` still answers its OWN 401 for a caller
+      // with no box token, and `/api/runs` a 501 with no coordination database.
+      // The property is that THE GATE let it through.
+      expect(gateRefused(res), `${k} was refused by the session gate`).toBe(false);
+    });
+
+  it('the SPA shell loads with no cookie — the login screen must be able to render', async () => {
+    const w = await openApp(); app = w.app;
+    if (!HAS_PWA) {
+      // Fail SHUT is still the right answer with no bundle to serve: there is no
+      // login screen on this box, so there is nothing to let through.
+      const res = await app.inject({ method: 'GET', url: '/' });
+      expect(gateRefused(res)).toBe(true);
+      return;
+    }
+    for (const url of ['/', '/index.html', '/sessions/deep/link']) {
+      const res = await app.inject({ method: 'GET', url });
+      expect(gateRefused(res), `${url} was refused — the login screen cannot load`).toBe(false);
+      expect(res.statusCode, url).toBe(200);
+    }
+  });
+});
+
+// ── the two shapes a hole would take ─────────────────────────────────────
+
+describe('the exempt check is set membership on the MATCHED ROUTE, not the raw url', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  it('a param route reaches its exemption through the router pattern', async () => {
+    const w = await openApp(); app = w.app;
+    // The url `/api/mail/7` is in no table anywhere. It is exempt because the
+    // ROUTER matched `/api/mail/:id`, which is. A raw-url comparison would 401
+    // this — and with it every box-token machine lane that carries a param,
+    // i.e. the whole coordinator surface.
+    for (const url of ['/api/mail/7', '/api/mail/7?x=1']) {
+      const res = await app.inject({ method: 'GET', url });
+      expect(gateRefused(res), `${url} was gate-refused`).toBe(false);
+    }
+    const ack = await app.inject({ method: 'POST', url: '/api/mail/7/ack' });
+    expect(gateRefused(ack)).toBe(false);
+  });
+
+  it('a crafted url cannot borrow an exemption it did not match', async () => {
+    const w = await openApp(); app = w.app;
+    // `/api/runs/1/dispatch` is exempt; `/api/runs/1` is not a route at all and
+    // `/api/runs` as a GET is a different entry. Neither may ride the other's.
+    expect(gateRefused(await app.inject({ method: 'POST', url: '/api/runs/1/dispatch' }))).toBe(false);
+    expect(gateRefused(await app.inject({ method: 'GET', url: '/api/runs' }))).toBe(true);
+  });
+
+  it('EXEMPT is keyed by METHOD as well as path — POST /api/runs is a machine lane, GET is not', async () => {
+    const w = await openApp(); app = w.app;
+    // One path, two meanings. A path-only table publishes every open program to
+    // anything on the tailnet.
+    expect(gateRefused(await app.inject({ method: 'POST', url: '/api/runs' }))).toBe(false);
+    const read = await app.inject({ method: 'GET', url: '/api/runs' });
+    expect(gateRefused(read)).toBe(true);
+    expect(verdictOf(read)).toBe('no-session');
+  });
+});
+
+// ── the flag: dark by default ────────────────────────────────────────────
+
+describe('with CCRC_AUTH off — the shipped default', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  const httpRoutes = ROUTES.filter((r) => !isWs(r));
+
+  it.each(httpRoutes.map((r) => [key(r), r] as const))(
+    '%s is reachable — the gate is a passthrough', async (_k, r) => {
+      const w = await openApp({ enabled: false, secret: false }); app = w.app;
+      const res = await app.inject({ method: r.method as 'GET', url: concrete(r.routePath) });
+      expect(gateRefused(res), `${key(r)} was gated with the flag off`).toBe(false);
+    });
+
+  it('the fleet socket still upgrades', async () => {
+    const w = await openApp({ enabled: false, secret: false }); app = w.app;
+    // `/ws/fleet` only. The other two are not opened here on purpose: a live
+    // `/ws/pty` upgrade attaches a pty (stubbed here, real in production) and a
+    // live `/ws/session` starts a transcript tail — neither is what this test is
+    // about, and the ARMED case above already proves all three reach the hook.
+    const ws = await app.injectWS('/ws/fleet');
+    expect(ws.readyState).toBe(ws.OPEN);
+    ws.close();
+  });
+
+  it('touches no disk: a box with the flag off and no secret file boots and serves', async () => {
+    const w = await openApp({ enabled: false, secret: false }); app = w.app;
+    const res = await app.inject({ method: 'GET', url: '/api/accounts' });
+    expect(res.statusCode).toBe(200);
+  });
+});
+
+// ── a live session passes ────────────────────────────────────────────────
+
+describe('a live session cookie passes the gate', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  it('login → cookie → the gated route answers its own status, not the gate\'s', async () => {
+    const w = await openApp(); app = w.app;
+    const cookie = await login(app);
+    const res = await app.inject({ method: 'GET', url: '/api/accounts', headers: { cookie } });
+    expect(res.statusCode).toBe(200);
+    const ws = await app.injectWS('/ws/fleet', { headers: { cookie } });
+    expect(ws.readyState).toBe(ws.OPEN);
+    ws.close();
+  });
+
+  it('a cookie for a DIFFERENT token does not', async () => {
+    const w = await openApp(); app = w.app;
+    await login(app);
+    const forged = serializeCookie(SESSION_COOKIE, 'a'.repeat(43), { secure: false, maxAgeSeconds: 60 });
+    const res = await app.inject({
+      method: 'GET', url: '/api/accounts', headers: { cookie: forged.slice(0, forged.indexOf(';')) },
+    });
+    expect(gateRefused(res)).toBe(true);
+    expect(verdictOf(res)).toBe('no-session');
+  });
+
+  it('a session minted under a superseded generation is expired, not accepted', async () => {
+    // The `ccrc passwd` invalidation, end to end: log in at generation 1, then
+    // rewrite the secret file at generation 2 while the server runs. No restart.
+    const w = await openApp({ generation: 1 }); app = w.app;
+    const cookie = await login(app);
+    expect((await app.inject({ method: 'GET', url: '/api/accounts', headers: { cookie } })).statusCode).toBe(200);
+    writeFileSync(path.join(w.home, '.ccrc', 'auth.scrypt'),
+      `${await hashLine(PASSPHRASE, FAST_PARAMS, 2)}\n`, { mode: 0o600 });
+    const after = await app.inject({ method: 'GET', url: '/api/accounts', headers: { cookie } });
+    expect(gateRefused(after)).toBe(true);
+    expect(verdictOf(after)).toBe('expired');
+  });
+
+  it('the store is loaded ONCE at boot — a session written before boot verifies', async () => {
+    // Proves `await store.load()` ran in `buildServer`: this record was never
+    // created through the login route, it was on disk before the server existed.
+    // (An unloaded store answers `'no-session'` safely but never `'ok'`.)
+    const home = mkTmp('ccrc-auth-gate-boot-');
+    const base = testDeps(home);
+    mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    writeFileSync(path.join(home, '.ccrc', 'auth.scrypt'), `${await hashLine(PASSPHRASE, FAST_PARAMS, 1)}\n`);
+    // Minted through the store's own API, then a fresh server reads that file.
+    const seeder = new SessionStore(path.join(home, '.ccrc', 'sessions.json'));
+    await seeder.load();
+    const { token } = await seeder.create('fixture', 1, Date.now());
+    app = await buildServer({
+      ...base, cfg: { ...base.cfg, authEnabled: true, cookieSecure: false }, spawnPty: stubPty,
+    });
+    const res = await app.inject({
+      method: 'GET', url: '/api/accounts', headers: { cookie: `${SESSION_COOKIE}=${token}` },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+  });
+});
+
+// ── fail SHUT ────────────────────────────────────────────────────────────
+
+describe('fail SHUT — the D-39 inversion', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  it('ARMED with NO passphrase file refuses every gated route — it does not pass through', async () => {
+    // `coord/token.ts`'s D-39 folded `'unconfigured'` into `'ok'` and ran
+    // /api/mail unauthenticated. The same mistake here, inverted, would run the
+    // WHOLE server unauthenticated on a box whose operator armed the flag and
+    // has not run `ccrc passwd` yet — the single most likely misconfiguration
+    // this slice will ever meet.
+    const w = await openApp({ secret: false }); app = w.app;
+    for (const url of ['/api/accounts', '/api/fleet', '/api/runs', '/api/auth/status']) {
+      const res = await app.inject({ method: 'GET', url });
+      expect(gateRefused(res), `${url} was let through with no passphrase configured`).toBe(true);
+      expect(verdictOf(res), url).toBe('unconfigured');
+    }
+    await expect(app.injectWS('/ws/fleet')).rejects.toThrow('Unexpected server response: 401');
+  });
+
+  it('a GARBLED passphrase file refuses to boot, rather than starting on a secret it cannot trust', async () => {
+    await expect(openApp({ secretText: 'scrypt$N=notanumber$aaaa$bbbb$gen=1\n' }))
+      .rejects.toThrow(/not a plain decimal integer|auth\.scrypt/);
+  });
+
+  it('a secret broken WHILE the server runs answers 401, never a 500', async () => {
+    const w = await openApp(); app = w.app;
+    const cookie = await login(app);
+    writeFileSync(path.join(w.home, '.ccrc', 'auth.scrypt'), 'not a secret line at all\n');
+    const res = await app.inject({ method: 'GET', url: '/api/accounts', headers: { cookie } });
+    // The polarity that matters: an uncaught throw inside `onRequest` is a 500,
+    // which is an error page on a path whose only correct answer is a refusal.
+    expect(res.statusCode).toBe(401);
+    expect(verdictOf(res)).toBe('unconfigured');
+  });
+});
+
+// ── the pure decision ────────────────────────────────────────────────────
+
+describe('authVerdict — the decision, with no server around it', () => {
+  const req = (method: string, url: string | undefined, cookie?: string): GateRequest =>
+    ({ method, routeOptions: { url }, headers: cookie === undefined ? {} : { cookie } });
+  const store = new SessionStore(path.join(mkTmp('ccrc-auth-verdict-'), 'sessions.json'));
+  const secretOk = { kind: 'ok' as const, secret: { n: 2, r: 8, p: 1, saltB64: '', hashB64: '', generation: 3 } };
+
+  it('the flag off allows everything, before anything else is read', () => {
+    expect(authVerdict(req('GET', '/api/accounts'), { enabled: false, secret: SECRET_UNREAD, store }, 0))
+      .toEqual({ allow: true, verdict: 'ok' });
+  });
+
+  it('an unmeasured secret with the flag ON denies — nobody looked is not permission', () => {
+    // The belt-and-braces arm: it is unreachable through `installGate`, and it
+    // exists so that a future caller who forgets to measure is refused rather
+    // than admitted.
+    const d = authVerdict(req('GET', '/api/accounts'), { enabled: true, secret: SECRET_UNREAD, store }, 0);
+    expect(d).toEqual({ allow: false, verdict: 'unconfigured' });
+  });
+
+  it('an absent and an unusable secret both deny, and stay distinct facts', () => {
+    for (const secret of [{ kind: 'absent' as const }, { kind: 'unusable' as const, detail: 'EACCES' }]) {
+      expect(authVerdict(req('GET', '/api/accounts'), { enabled: true, secret, store }, 0).allow).toBe(false);
+    }
+  });
+
+  it('a request the router matched to nothing is gated, not exempted', () => {
+    // `routeOptions.url` is `undefined` exactly when `request.is404` is true.
+    expect(exemptKey('GET', undefined)).toBeNull();
+    expect(authVerdict(req('GET', undefined), { enabled: true, secret: secretOk, store }, 0).allow).toBe(false);
+  });
+
+  it('HEAD rides its route\'s GET exemption, and nothing else\'s', () => {
+    expect(exemptKey('HEAD', '/health')).toBe('GET /health');
+    expect(authVerdict(req('HEAD', '/health'), { enabled: true, secret: secretOk, store }, 0).allow).toBe(true);
+    // …but a HEAD on a gated route is still gated.
+    expect(authVerdict(req('HEAD', '/api/runs'), { enabled: true, secret: secretOk, store }, 0).allow).toBe(false);
+  });
+
+  it('an empty or absent cookie is `no-session`, never a pass', () => {
+    for (const cookie of [undefined, '', 'other=1', `${SESSION_COOKIE}=`]) {
+      expect(authVerdict(req('GET', '/api/accounts', cookie), { enabled: true, secret: secretOk, store }, 0))
+        .toEqual({ allow: false, verdict: 'no-session' });
+    }
+  });
+});

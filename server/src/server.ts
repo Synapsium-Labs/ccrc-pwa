@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import fastifyWebsocket from '@fastify/websocket';
 import fastifyMultipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
@@ -43,9 +43,15 @@ import { Presence } from './presence.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
 import { registerCoordRoutes } from './coord/routes.js';
 import { toRunSummary, type CoordStore } from './coord/store.js';
+import { readAuthSecret, verifyPassphrase } from './auth/secret.js';
+import { ABSOLUTE_TTL_MS, SessionStore } from './auth/sessions.js';
+import { LoginRateLimiter } from './auth/ratelimit.js';
+import { SESSION_COOKIE, expireCookie, parseCookies, serializeCookie } from './auth/cookie.js';
+import { SECRET_UNREAD, authVerdict, installGate, measureSecret } from './auth/gate.js';
 import {
   FLEET_PROTO, FLEET_PROTO_MIN,
-  type AccountsResponse, type AccountUsage, type CoordStatus, type Divergence, type FleetHealth, type FleetMsg,
+  type AccountsResponse, type AccountUsage, type AuthStatus, type CoordStatus, type Divergence,
+  type FleetHealth, type FleetMsg,
   type FleetSession,
   type RunSummary,
   type SessionClientMsg, type SessionStreamMsg, type TaskItem,
@@ -175,6 +181,187 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // SAME instance regardless of construction order.
   deps.presence ??= new Presence();
   const presence = deps.presence;
+
+  // ── The session gate (Stage 3a) ───────────────────────────────────────
+  //
+  // Owned HERE rather than threaded through `Deps`, unlike `push`/`coord`/
+  // `notifyLog`, and for a reason those three do not have: the store must be
+  // LOADED exactly once, at boot, before any request can reach `verify` — a
+  // second live-time `load()` re-reads the file into memory and can clobber a
+  // create that has not flushed yet (`sessions.ts:152`, D-109's write-side
+  // mirror). `buildServer` is the one async function every caller — index.ts,
+  // every test — goes through exactly once, so putting the store here makes
+  // "loaded once" structural instead of a rule each composition root has to
+  // remember. An optional `Deps.auth` with a local fallback would be the
+  // "second KeyedQueue" shape `Deps.queue`'s own docstring warns about.
+  const authStore = new SessionStore(deps.cfg.sessionsPath);
+  // One limiter per server (the `CoordMutex` model, not a module singleton):
+  // independent test servers in one process must not share a lockout window.
+  const loginLimiter = new LoginRateLimiter();
+  if (deps.cfg.authEnabled) {
+    // BOOT REFUSAL, uncaught on purpose: `readAuthSecret` throws
+    // `AuthSecretUnusable` for a secret that is PRESENT but unreadable or
+    // garbled, and `secret.ts`'s contract is that this kills the process rather
+    // than starting on a secret the box cannot trust (`coord/db.ts`'s
+    // `CoordDbUnmigratable` and `coord/token.ts`'s own refusals are the same
+    // stance). `deploy.sh`'s `verify-service.sh` turns it into a failed deploy
+    // with the journal attached. The gate re-reads per request too
+    // (`measureSecret`) — that read never throws, because at REQUEST time the
+    // answer must be a 401, not a 500.
+    const secret = readAuthSecret(deps.cfg.authSecretPath);
+    if (secret === null) {
+      // ARMED WITH NO PASSPHRASE — every request will answer 401
+      // `'unconfigured'` and nobody can log in. Not a boot refusal: the file is
+      // absent, which is the honest "never configured" state, and `ccrc passwd`
+      // creates it without a restart. But it is worth exactly one line in the
+      // journal, because the symptom (a box that refuses a passphrase nobody
+      // ever set) is otherwise indistinguishable from a wrong one.
+      console.warn(`ccrc-server: CCRC_AUTH=on but no passphrase file at ${deps.cfg.authSecretPath} — ` +
+        'the gate is ARMED and FAILING SHUT: every route answers 401 and no login can succeed. ' +
+        'Run `ccrc passwd` on this box.');
+    }
+    await authStore.load();
+    authStore.startSweep();
+    app.addHook('onClose', async () => { authStore.stopSweep(); await authStore.flush(); });
+  }
+  // Unconditional — the flag is decided INSIDE the hook (`authVerdict`'s first
+  // line), so there is exactly one place in the tree that answers "is this
+  // request allowed", and the sweep in `auth-gate.test.ts` measures the same
+  // hook in both flag positions.
+  installGate(app, {
+    enabled: deps.cfg.authEnabled, secretPath: deps.cfg.authSecretPath, store: authStore,
+  });
+
+  /** The session row's human-facing note — the device that logged in. NEVER a
+   *  decision input (`sessions.ts`), and never logged; truncated because a
+   *  user-agent is attacker-controlled text landing in a file we rewrite. */
+  const deviceLabel = (req: FastifyRequest): string => {
+    const ua = req.headers['user-agent'];
+    return typeof ua === 'string' && ua.trim() !== '' ? ua.slice(0, 120) : 'unknown device';
+  };
+
+  /** The measured secret for THIS moment — `SECRET_UNREAD` when the flag is off,
+   *  so nothing touches the disk on a box whose gate is dark. */
+  const secretNow = () => (deps.cfg.authEnabled ? measureSecret(deps.cfg.authSecretPath) : SECRET_UNREAD);
+
+  /**
+   * `POST /api/auth/login` — the one EXEMPT auth route (`gate.ts`'s table).
+   *
+   * The order is the design: the rate-limit brake comes FIRST, before the body
+   * is even looked at, so a flood cannot make this box spend scrypt; the
+   * passphrase is verified with the ASYNC `crypto.scrypt` (`verifyPassphrase`),
+   * because at N=65536 a sync derivation is ~100 ms of stalled event loop and
+   * this server runs pty and websocket lanes on it. Only a proven-correct
+   * passphrase reaches `store.create`.
+   *
+   * FAILURES ARE COUNTED, ATTEMPTS ARE NOT (`ratelimit.ts`): a malformed body or
+   * an unconfigured box spends none of the window — neither is a guess.
+   *
+   * 204 + `Set-Cookie` on success, with NO body, and `shared/api.ts` deliberately
+   * declares no `LoginResponse` to go with it: the cookie IS the response.
+   *
+   * NEVER LOGS THE PRESENTED PASSPHRASE, the minted token, or the cookie — the
+   * rule `/api/notify` states for the box token (:443-446), with more force.
+   */
+  app.post('/api/auth/login', async (req, reply) => {
+    if (!deps.cfg.authEnabled) return reply.code(501).send({ ok: false, error: 'not-configured' });
+    const now = Date.now();
+    const brake = loginLimiter.check(now);
+    if (!brake.ok) {
+      const retryAfter = brake.retryAfter ?? 0;
+      // 429 with `Retry-After` in SECONDS (the header's unit), rounded UP so a
+      // client that obeys it never returns while the window is still closed.
+      // The verdict rides in the body for the same reason every other refusal
+      // here carries one: the login screen's sentence is "wait", not "retry".
+      return reply.code(429).header('retry-after', String(Math.ceil(retryAfter / 1000)))
+        .send({ ok: false, error: 'unauthenticated', verdict: 'locked-out', retryAfter });
+    }
+    const body = (req.body ?? {}) as { passphrase?: unknown };
+    if (typeof body.passphrase !== 'string' || body.passphrase === '') {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    const measured = secretNow();
+    if (measured.kind !== 'ok') {
+      if (measured.kind === 'unusable') {
+        // The file was broken WHILE the server ran (boot would have refused
+        // otherwise). One journal line naming the state, never its contents.
+        console.warn(`ccrc-server: /api/auth/login cannot read ${deps.cfg.authSecretPath} — ` +
+          'the passphrase file is present but unusable, so no login can succeed. ' +
+          'Re-run `ccrc passwd` on this box.');
+      }
+      // ONE verdict for both `'absent'` and `'unusable'`, and that is a wire
+      // limit rather than a collapse: `AuthVerdict` has six members and none of
+      // them is "present but unreadable". Both mean the same thing to the person
+      // typing — nothing you enter can match, run `ccrc passwd` — while the two
+      // stay distinct where it matters, in `SecretState` and in the journal.
+      return reply.code(401).send({ ok: false, error: 'unauthenticated', verdict: 'unconfigured' });
+    }
+    if (!(await verifyPassphrase(measured.secret, body.passphrase))) {
+      loginLimiter.fail(now);
+      return reply.code(401).send({ ok: false, error: 'unauthenticated', verdict: 'wrong' });
+    }
+    loginLimiter.succeed(now);
+    const { token } = await authStore.create(deviceLabel(req), measured.secret.generation, now);
+    // `Max-Age` mirrors the session's own ABSOLUTE ttl, derived from the store's
+    // constant rather than re-typed: a jar that outlives the server's record
+    // would keep presenting a token that can only ever answer `'expired'`.
+    return reply
+      .header('set-cookie', serializeCookie(SESSION_COOKIE, token, {
+        secure: deps.cfg.cookieSecure, maxAgeSeconds: Math.floor(ABSOLUTE_TTL_MS / 1000),
+      }))
+      .code(204).send();
+  });
+
+  /**
+   * `POST /api/auth/logout` — NOT exempt, deliberately: logging out is something
+   * only a logged-in caller can do, and an ungated logout is a way for anyone on
+   * the tailnet to revoke a session id they guessed.
+   *
+   * Revokes THIS session only (`revokeThis`, not `revokeAll`) — the phone
+   * logging out must not sign the laptop out too. The "log out everywhere"
+   * control is `revokeAll`, and the passphrase rotation that invalidates every
+   * session at once is `ccrc passwd`'s generation bump.
+   *
+   * The cookie is expired through `expireCookie`, which shares
+   * `serializeCookie`'s attributes — a browser only replaces a cookie whose
+   * name/Path/Domain all match.
+   */
+  app.post('/api/auth/logout', async (req, reply) => {
+    if (!deps.cfg.authEnabled) return reply.code(501).send({ ok: false, error: 'not-configured' });
+    const token = parseCookies(req.headers.cookie).get(SESSION_COOKIE);
+    if (token !== undefined) await authStore.revokeThis(token);
+    return reply
+      .header('set-cookie', expireCookie(SESSION_COOKIE, { secure: deps.cfg.cookieSecure }))
+      .code(204).send();
+  });
+
+  /**
+   * `GET /api/auth/status` — the box's standing gate posture (`AuthStatus`).
+   *
+   * NOT EXEMPT, following the plan's list, which names `/api/auth/login` and no
+   * other auth route. The consequence is stated rather than hidden: with the
+   * flag ARMED an unauthenticated caller gets the gate's 401 here and never
+   * reaches this handler, so `authed` can only ever be read as `true`. It is
+   * still COMPUTED — from the same `authVerdict` the hook runs, over this very
+   * request — rather than asserted as a literal, so the day the exempt table
+   * gains this route (Task 7/8 own the PWA's pre-login story) the answer is
+   * already correct for a caller with no cookie, and nothing here has to change.
+   *
+   * `passkeysEnrolled: 0` is a MEASUREMENT, not a placeholder: no credential
+   * store exists until Task 8, so zero keys are enrolled on this box today.
+   */
+  app.get('/api/auth/status', async (req): Promise<AuthStatus> => {
+    const now = Date.now();
+    const decision = authVerdict(req, {
+      enabled: deps.cfg.authEnabled, secret: secretNow(), store: authStore,
+    }, now);
+    // `check()` is a READ that never increments (`ratelimit.ts`); it only rolls
+    // an expired window forward, which is the same thing the next login would do.
+    const mode = !deps.cfg.authEnabled
+      ? 'off'
+      : loginLimiter.check(now).ok ? 'passphrase' : 'locked-out';
+    return { authed: decision.allow, passkeysEnrolled: 0, mode };
+  });
 
   app.get('/health', async () => ({ ok: true, build: deps.build ?? null }));
 

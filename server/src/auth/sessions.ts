@@ -108,11 +108,23 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null;
 }
 
-/** The default production path. Task 5 wires the store with a `cfg.home`-based path
- *  (as `index.ts` does for `notify-log.json`/`push-subs.json`); this default is for
- *  ergonomics and is NEVER used by tests, which inject a tmp path. */
-export function defaultSessionsPath(): string {
-  return path.join(os.homedir(), '.ccrc', 'sessions.json');
+/**
+ * The default production path, and the ONE place `sessions.json` is spelled.
+ *
+ * `home` is a PARAMETER (D-110, Task 5): `config.ts` calls this with its own
+ * `cfg.home`, which is `CCRC_HOME` when set — and every server test sets it to a
+ * throwaway fixture. A zero-argument version that reached `os.homedir()`
+ * unconditionally would have had the whole suite minting sessions into the LIVE
+ * `~/.ccrc/sessions.json`, and the alternative — `config.ts` building
+ * `path.join(home, '.ccrc', 'sessions.json')` itself — is the second copy of a
+ * path `defaultCoordDbPath(home)` already exists to prevent ("the same string
+ * built twice, once tested and once not, is how a rename in one place silently
+ * opens a different, brand-new, empty file in the other", `config.ts:169`). The
+ * default keeps the no-argument call working for a caller that genuinely has no
+ * config in hand.
+ */
+export function defaultSessionsPath(home: string = os.homedir()): string {
+  return path.join(home, '.ccrc', 'sessions.json');
 }
 
 export class SessionStore {
