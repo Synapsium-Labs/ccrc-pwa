@@ -4010,3 +4010,122 @@ export function isLcRefusalToken(v: unknown): v is LcRefusalToken {
 export function lcRefusalWord(token: string): string | null {
   return isLcRefusalToken(token) ? LC_REFUSAL_WORD[token] : null;
 }
+
+/* --- The journal's names and ceilings. -----------------------------------
+ *
+ * Every name here has a bash twin in ccd, and the numbers are bound to their
+ * twins by `server/test/lifecycle-constants-twin.test.ts`. `LC_SWEEP_MS` is
+ * deliberately NOT here: it is a server tick-gate with no bash twin and no
+ * wire meaning, and its siblings (`TASK_SWEEP_MS`, `NAME_SWEEP_MS`,
+ * `DIVERGENCE_SWEEP_MS`, `MAIL_SWEEP_MS`) all live in `server/src/watch.ts`.
+ * One sweep interval in L0 would be a second home for one class of value.
+ * ------------------------------------------------------------------------ */
+
+/** `$REG/.lifecycle/`. A DOT-PREFIXED DIRECTORY, and that is the whole
+ *  feature: `_reg_purge`'s suffix filter (`ccd:527-536`) globs `$REG/<id>.*`
+ *  and ids never begin with a dot, so no id's purge glob matches it — and
+ *  `rm -f` cannot take a directory regardless. Precedent already load-bearing:
+ *  `$REG/.reaped/` has survived since Aug 6 with zero deleters in 9,815 lines.
+ *  ccd's `$REG` inventory comment (`ccd:1536`) today says SEVEN dot-prefixed
+ *  artifacts live there; wave 2 amends it to EIGHT — not nine, because
+ *  `.rotate.lock` and the generations live INSIDE `.lifecycle/` and are
+ *  counted with it exactly as `.reaped/`'s contents are. An inventory a future
+ *  reader trusts and a future writer copies is exactly the defect
+ *  `_reg_purge`'s own header records having shipped once. */
+export const LC_DIR_NAME = '.lifecycle';
+
+/** `journal-<epochNs>.ndjson`. THE GENERATION IS IN THE FILENAME (D1): a
+ *  `readdir` alone tells the mirror the whole generation set with no second
+ *  read; a rotation is "a new name appeared", never "the same file got
+ *  smaller"; and a shrink on an immutably-named generation is unambiguously a
+ *  truncation rather than an ambiguity to guess at. */
+export const LC_GEN_PREFIX = 'journal-';
+export const LC_GEN_SUFFIX = '.ndjson';
+
+/** The counted write-failure file (D7), temp+rename. Surfaced as
+ *  `lifecycle.writeErrors` in the fleet health payload, because a silently
+ *  stopped journal must not be indistinguishable from a quiet fleet. */
+export const LC_ERRORS_NAME = 'errors';
+
+/** `_lc_rotate`'s lock. NEVER UNLINKED, not even as cleanup — "unlinking a
+ *  lock file while another process holds it is exactly how two processes come
+ *  to hold the lock on two different inodes" (`ccd:1531-1534`), and all four
+ *  of ccd's existing lock paths already follow that rule. */
+export const LC_ROTATE_LOCK_NAME = '.rotate.lock';
+
+/** Bytes, not characters — the same char-vs-byte care `MAIL_BODY_MAX_BYTES`
+ *  (:2498) and `hookstate.ts:128-135` already take. One event per line, LF
+ *  terminated. Over-length lines are not truncated silently: the emitter drops
+ *  named fields in a stated order and sets `LifecycleEvent.truncated`. */
+export const LC_LINE_MAX = 2048;
+
+/** `--reason`'s cap. BYTES, and the policy is REFUSE — an over-cap reason is
+ *  declined at the surface that received it, never shortened to fit. A
+ *  900-byte reason recorded as 512 reads as the operator's own words, which is
+ *  the overloaded-value defect at the one seam whose whole job is to record
+ *  what a person said. Free text off the wire: written verbatim, parsed
+ *  nowhere. ccd's twin is `_LC_DEC_MAX=512` (wave 3), measured with
+ *  `LC_ALL=C` so `${#s}` counts bytes; the two are held equal by
+ *  `server/test/lifecycle-constants-twin.test.ts`. */
+export const LC_REASON_MAX_BYTES = 512;
+
+/** Rotation: 4 MiB per generation, 4 generations. Measured sizing — ~100 acts
+ *  a day at ~350 B is ~35 KB/day, so one generation is about three months and
+ *  four about a year. RETENTION IS A CEILING, NOT A SCHEDULE, which is the
+ *  answer to "is the flat file really still ground truth". Rotation MINTS A
+ *  GREATER NAME and never truncates: `agent/src/tail.ts:53-58` treats a shrink
+ *  as a reset and hands its reader an `onReset(size)` it must model, so a
+ *  truncating rotation would turn every ordinary roll into a reset. */
+export const LC_GEN_MAX_BYTES = 4 * 1024 * 1024;
+export const LC_GEN_KEEP = 4;
+
+/** The hard ceiling, DERIVED — 16 MiB is not a second number to keep in step
+ *  with the two above. A hand-maintained constant beside a computed pair is
+ *  how the pair goes out of step, and the failure is silent. */
+export const LC_TOTAL_MAX_BYTES = LC_GEN_MAX_BYTES * LC_GEN_KEEP;
+
+/** `_spawn_settle` emits CHANGE-ONLY — a differing rc, or this long since this
+ *  id's last `spawn` line. Without the rule, `Restart=always` across 18
+ *  sessions is the whole disk budget. ccd's twin carries 300, in SECONDS;
+ *  wave 2 names it and adds its row to the twin test. */
+export const LC_SPAWN_QUIET_MS = 300_000;
+
+/**
+ * "Is this a generation file at all?" — prefix and suffix only.
+ *
+ * Deliberately a SEPARATE question from `parseLifecycleGeneration`, because a
+ * generation whose name cannot be ordered (a `date +%N` that did not expand
+ * would mint `journal-1755000000N.ndjson`) is a file FULL OF REAL EVENTS, not
+ * a stray. Collapsing the two into one null would make the mirror ignore it
+ * silently; kept apart, `looksLike && !parse` is a gap the reader records.
+ */
+export function looksLikeGenerationFile(name: string): boolean {
+  return name.startsWith(LC_GEN_PREFIX) && name.endsWith(LC_GEN_SUFFIX)
+    && name.length > LC_GEN_PREFIX.length + LC_GEN_SUFFIX.length;
+}
+
+/** The generation's epoch-nanosecond digits, or null when the name cannot be
+ *  ordered. Bounded at 25 digits so a pathological name is refused rather than
+ *  compared. */
+export function parseLifecycleGeneration(name: string): string | null {
+  if (!looksLikeGenerationFile(name)) return null;
+  const mid = name.slice(LC_GEN_PREFIX.length, name.length - LC_GEN_SUFFIX.length);
+  return /^[0-9]{1,25}$/.test(mid) ? mid : null;
+}
+
+/**
+ * Orders two parsed generation strings; "greatest name is live" (D1), made a
+ * single reader so nobody hand-rolls it — and so nobody reaches for a bare
+ * `.sort()` on the filenames, which is the bug below in disguise.
+ *
+ * BY LENGTH FIRST, and that is the whole point: plain lexicographic compare
+ * puts a 20-digit name BEFORE a 19-digit one, so a clock that crossed a digit
+ * boundary would make the live generation read as an old one and the mirror
+ * would ingest a stale file forever. Equal lengths compare lexicographically,
+ * which for digit strings IS numerically — and stays exact past
+ * `Number.MAX_SAFE_INTEGER`, which a 19-digit nanosecond epoch is.
+ */
+export function compareGenerations(a: string, b: string): number {
+  if (a.length !== b.length) return a.length - b.length;
+  return a < b ? -1 : a > b ? 1 : 0;
+}
