@@ -143,11 +143,29 @@
     border-right: 1px solid var(--edge-subtle);
     background: var(--bg-surface);
   }
+  /* THE PANE SCROLLS; THE CHAT IS THE NAMED EXCEPTION (D-161).
+     This was `overflow: hidden`, chosen for the chat — which manages its own
+     internal scrolling (`.shell-detail .chat` below is `height: 100%`, and
+     `.chat-body` is the `flex: 1` scroll region). But the chat was the only
+     screen ever GIVEN a scroll region, and `/accounts`, `/archive`, `/mail`
+     and `/runs` render into this same pane: every one of them was clipped at
+     the fold on desktop with no way to reach anything below it. The passkey
+     enrolment button was unreachable on a laptop while working on a phone,
+     where the mobile layout (max-width: 899.98px) has no containment at all.
+     So the DEFAULT is inverted: a screen added to the detail pane later is
+     scrollable automatically and has to opt out by name, which is exactly how
+     `.shell-nav` above already behaves. Both `min-*: 0` floors stay — they are
+     about grid sizing, not overflow (see .shell-nav's comment).
+     `overflow-x` is explicit and not decoration: with only `overflow-y: auto`,
+     the initial `visible` on the other axis computes to `auto` (CSS Overflow 3
+     — the axes may not disagree that way), so one wide child would give this
+     pane a sideways scrollbar that `overflow: hidden` used to clip. */
   .shell-detail {
     grid-column: 2;
     grid-row: 2;
     min-height: 0;
-    overflow: hidden;
+    overflow-y: auto;
+    overflow-x: clip;
     min-width: 0;
   }
 
@@ -172,11 +190,17 @@
   /* Session fills the detail pane edge-to-edge — use the whole width (the
      head/body/composer keep their own side padding, so text isn't flush to the
      pane border). Scrolls internally (.chat-body is the flex:1 scroll region).
-     No back button — the fleet is always visible in the sidebar. */
+     No back button — the fleet is always visible in the sidebar.
+     `overflow: hidden` is the opt-out from the pane's own scrolling (D-161):
+     the chat is exactly one pane tall and hands its overflow to `.chat-body`,
+     so without this the pane would ALSO scroll it — a second scrollbar around
+     the first, and a composer that walks off the bottom edge instead of
+     staying pinned to it. */
   .shell-detail .chat {
     height: 100%;
     max-width: none;
     margin: 0;
+    overflow: hidden;
   }
   .shell-detail .chat-back {
     display: none;
