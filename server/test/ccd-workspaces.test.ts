@@ -311,8 +311,10 @@ describe('ws-add', () => {
 // session `demo-quiet-basin`. Unlinking a lock while another process holds it
 // is exactly how two processes come to hold "the lock" on two different
 // inodes — the double compare-and-set this branch's lock migration closed.
-// The same shape aliases `.reap-<id>.lock` and `.ws-add-<project>.lock` too
-// (both pre-date this wave); only the creation sites are fixed here.
+// A dot-leading project thereby aliases every `$REG/.<name>.<dot-free-suffix>`
+// file ccd owns: `.prstate-<id>.lock` (new this wave), `.reap-<id>.lock`,
+// `.ws-add-<project>.lock`, and `.tmux-server.lock` (the last three pre-date
+// this wave); only the creation sites are fixed here.
 describe('a leading-dot project cannot alias ccd\'s own hidden registry files', () => {
   const shFail = (snippet: string): { code: number; stdout: string; stderr: string } => {
     try { return { code: 0, stdout: sh(snippet), stderr: '' }; }
