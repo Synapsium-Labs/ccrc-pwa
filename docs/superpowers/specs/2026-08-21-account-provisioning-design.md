@@ -24,7 +24,7 @@ This design adds that vocabulary, then builds the verb on it.
 
 | slice | deliverable |
 |---|---|
-| **A** | the roster learns providers and credentials; the three hand-written wrappers are described honestly; `cck3` becomes generated and proves the api-key template |
+| **A** | the roster learns providers and credentials; the three hand-written wrappers are described honestly; `cck3` becomes generated and proves the api-key template. **§3.6 grew this from two commits to five** — the migration mechanism, the shape validator and the equivalence triple are all prerequisites that do not exist yet |
 | **A2** | credential *health*: a dead account becomes nameable instead of silently routed around |
 | **B1** | `ccrc account add` for api-key providers — CLI verb plus a PWA form |
 | **B2** | the OAuth pane flow, shared by `account add` and a new `account reauth` |
@@ -149,12 +149,15 @@ fleet, or read from the shipped source. Claims that could not be evidenced are i
     undeclared, and the upstream wrapper is unauditable by construction — it must not match the
     predicate that makes a file visible to the wrapper classifier, or every `ccrc install` fails. **Any
     credential check must therefore be driven off the roster, never off the classifier.**
-28. `~/.ccrc/accounts.sh` carries ids, home-ability and the upstream id but **no `telemetry` field**, so
-    bash cannot apply the server's stricter rule that a `telemetry: 'none'` account's permanent unknown
-    must not read as permanent emptiness. Parity with `projectHome` holds today only because `gpt` is
-    the sole such account and is not home-able — an agreement of circumstance, not of rule.
-    `projected-home.test.ts` runs both sides over the same fixtures and exists to say so the day the
-    circumstance changes.
+28. **CORRECTED 2026-08-21 (this claim was stale when first written).** `~/.ccrc/accounts.sh` *does*
+    carry telemetry: `shared/generate.mjs:210` emits `CCRC_MEASURED` derived from
+    `telemetry === 'anthropic'`, shipped 2026-08-13 in `a6a6a01` and pinned by
+    `roster-generate.test.ts:130-134`. What is missing is the **consumer**: `_ws_least_loaded`'s loop
+    (`ccd:1688-1694`) never reads it, and its own comment (`ccd:1651-1656`) still asserts accounts.sh
+    has "no telemetry field at all". So the work is a consumer change plus deleting a stale comment —
+    **not** a first emission, and adding a second projection would trip `single-definition.test.ts`.
+    This is the second time in this design a source comment proved staler than the source
+    (cf. item 14); trust the code, then fix the comment.
 
 ### 3.5 The three hand-written wrappers
 
@@ -174,6 +177,67 @@ fleet, or read from the shipped source. Claims that could not be evidenced are i
 34. `litellm-config.yaml`'s own header states it presents the **ChatGPT subscription** (flat-rate, not
     the per-token OpenAI API) as an Anthropic `/v1/messages` endpoint. `LITELLM_MASTER_KEY` is the local
     proxy's own bearer, **not a provider credential**.
+
+### 3.6 What the current pipeline cannot do yet
+
+Measured 2026-08-21 while gathering anchors for the implementation plan. These are not design choices;
+they are gates that must be moved before slice A can land, and none of them was known when §11 was
+first written.
+
+35. **An api-key wrapper body cannot be installed, and the failure is all-or-nothing.**
+    `_wrap_parse_shape` (`ccd/ccrc-wrapper-shape:163-166`) accepts a body of exactly **2 or 3
+    significant lines** and hard-matches the first as the `CLAUDE_CONFIG_DIR` export;
+    `cmd_wrappers:1458-1460` runs every staged file through it and `_ccrc_die`s the **entire run**
+    ("nothing was written") on a `no`. §11.2's body is ~12–15 significant lines. Commit 2 must widen
+    that validator — with its own pins — before it can write anything at all.
+36. **Equivalence is judged on a three-field triple that cannot see an api-key wrapper's identity.**
+    `cmd_wrappers:1509-1512` compares only (target, suffix, secrets). Base URL, the auth-token variable
+    and the six model names are invisible, so once api-key wrappers exist, two accounts differing only
+    in their model map compare **equivalent** — and `--adopt`/`--force` would rewrite one as the other.
+    Widening the reader's output belongs to the same commit.
+37. **The wrapper manifest's fields are positional and non-empty by construction (D-71).**
+    `IFS=$'\t' read -r kind a b c d` is safe only because every field is always populated. Adding an
+    *optional* field silently shifts every later column left with **no parse error** — which here means
+    reading a wrapper's `classify` out of the `equal` column and overwriting a file on the strength of
+    it. Append, never insert, and widen the reader in the same change.
+38. **`parseExec` validates `secretsFile` only inside the `generated` branch.** `shared/roster.ts:299-300`
+    return bare `{ kind: 'upstream' }` / `{ kind: 'external' }`, dropping a declared `secretsFile`
+    **un-validated**. §5.2 puts it on all three arms, so the path gate must be hoisted out of the
+    branch — otherwise `claude`'s newly-declared secrets file (§11.1's first row) reaches
+    `shared/wrapper.mjs`'s double-quoted bash embedding without ever passing it.
+39. **`warnUnknownKeys`' exec key sets are split by kind on purpose** (`EXEC_KEYS_BASE` /
+    `EXEC_KEYS_GENERATED`, `roster.ts:225-226`) so a typo'd `secretFile` warns instead of vanishing —
+    the comment records that the account then "launches with no OAuth token and no diagnostic
+    anywhere". Adding `provider`/`auth`/`models`/`providers` without splitting into **three** per-arm
+    key sets reopens exactly that hole.
+40. **`single-definition.test.ts` is blind to the file where a second `PROVIDERS` copy would land.** It
+    scans `/\.tsx?$/` only, across four roots, and its bash scanner skips dotted extensions — so
+    `shared/generate.mjs`, `shared/roster-json.mjs` and `deploy/gen-wrappers.mjs` are invisible to
+    **both** scanners. Its `oneDefinition` helper additionally hardcodes `shared/api.ts` as the sole
+    legal home, so it cannot be reused for a table living in `shared/roster.ts`. §11.1's mutation 3
+    therefore needs a new describe with its own fingerprint and its own positive control.
+41. **`shared/roster-json.mjs` is a bare-`node` mirror that may be stricter than `parseRoster`, never
+    laxer** — enforced by `gen-accounts.test.ts`, which runs `deploy/gen-accounts.mjs` as a subprocess
+    and compares stdout **byte-for-byte** against the TypeScript path over four rosters. Every new
+    validation rule lands in both, and `assignHues` must stay byte-identical across the two.
+42. **Tightening `ExecSpec` produces ZERO compile errors and breaks ~18 fixtures at runtime.** Every
+    fixture roster enters through `parseRoster(json: unknown)` or `seedRoster(roster: unknown)`, so
+    §5.3's derived-union safety does not reach them. The highest-leverage single object is
+    `server/test/helpers.ts`'s `DEFAULT_TEST_ROSTER`, whose `claude-corp` is `generated` with no
+    `secretsFile`: requiring it breaks nearly every server test at `loadConfig` until that one literal
+    is fixed, and `server/test/fixtures/ccdMirror.ts` throws at import on disagreement with it.
+43. **Doctor's `wrappers` check is already four buckets with pinned order and pinned remedy strings.**
+    Verdict order is asserted by index (`failIdx[0]`/`failIdx[1]`), so a new line inserted anywhere but
+    the end shifts what every `lineFor`-based test compares, and each bucket's remedy prefix is its
+    pin. Adding a table entry costs four separate green-suite constraints: the bijection test, "runs
+    every check in the table", the output-shape arithmetic over two fixtures, and the summary total.
+44. **The PWA has no local typecheck gate.** `pwa`'s vitest run does not typecheck; the gate is
+    `npm run build` in CI's separate `build-pwa` job. A PWA change that compiles nowhere locally passes
+    `cd pwa && npm run test` and fails CI.
+45. **The agent's `rosterFp` is `bodyDigest(generateAccountsSh(roster))`**, compared by
+    `rosterAgreement`. Any change to what `accounts.sh` contains makes server and agent report
+    disagreement until **both** boxes ship — which is why §11.3's agent-first ordering is mandatory
+    rather than stylistic.
 
 ## 4. The provider whitelist
 
@@ -575,7 +639,15 @@ is precisely the case where a mis-tap must not be sufficient.
 3. Let the token reach rendered output -> red.
 4. Close the add sheet before the smoke test answers -> red.
 5. Drop `provider` from the shared `RosterWire` while the handler still sends it -> typecheck red in
-   **all three** importers, not one.
+   **all three** importers, not one. The PWA leg does **not** come from the fetch generic:
+   `pwa/src/lib/api.ts:356` is `getJson<AccountsResponse>(…)`, which emits no diagnostic for a removed
+   field. The provider chip component is what makes that third leg fail, so the mutation is measured
+   against the component. Two further readers must be handled in the same change:
+   `accounts-route.test.ts:178` pins the wire key set **exactly** (`['homeAble','hue','id','label']`)
+   and is the only structural proof that `secretsFile` never reaches a browser — update it to the new
+   exact set, never relax it to `toContain`; and `pwa/src/lib/offline.ts`'s `isRosterWireLike` is a
+   *fourth* reader the `AccountsResponse` docstring does not name, which would start lying about every
+   pre-upgrade `localStorage` snapshot if a new field were required.
 
 ## 10. Removal and rehoming — slice B3
 
@@ -674,7 +746,17 @@ declared external, and `ccrc doctor` is clean.
 
 ### 11.1 Commit 1 — the roster tells the truth
 
-`shared/roster.ts` gains §4 and §5. The live `~/.ccrc/accounts.json` goes to version 2 on both boxes.
+`shared/roster.ts` gains §4 and §5.
+
+**The roster version stays at 1.** Every new field is additive and absence-permitting, so there is no
+incompatible change to signal — and bumping would be a flag day across three readers that disagree:
+`shared/roster-json.mjs:266` and `shared/roster.ts:523` both refuse `version !== 1`, while doctor's own
+inline reader never inspects version at all. A v2 file would therefore kill `_inst_accounts_sh` and so
+every `ccrc install`, kill `cmd_wrappers`, and stop the server booting — while `ccrc doctor`'s
+`wrappers` check still reported PASS. That is the same rule the wire already follows
+(`FLEET_PROTO` is not bumped for a new field), applied to the roster. It also avoids chasing the bare
+literal `1` through six sites in three files, and avoids inverting `roster.test.ts:86`, which currently
+uses `{ version: 2 }` as its *unknown-version refusal* fixture.
 
 | account | change |
 |---|---|
@@ -685,13 +767,23 @@ declared external, and `ccrc doctor` is clean.
 | `claude-glm` | adopted `external`, `providers: ['cortecs', 'openrouter']` |
 | `gpt` | adopted `external`, `providers: ['openai']` |
 
-Migration rides `_inst_roster`, idempotently. A v1 entry with `upstream`/`generated` exec and an
-`-oauth.env` secrets file **derives** to anthropic/oauth safely. What it cannot derive — the three
-external accounts — makes doctor **FAIL** asking the operator to declare them. Fail loud, never guess.
+**A migration mechanism has to be built; there is none today.** Both writers of
+`~/.ccrc/accounts.json` are create-if-missing — `_inst_roster` (`ccd/ccrc:2102-2105`) and `deploy.sh`'s
+`ship_roster` (`deploy.sh:264-270`) — and `deploy/accounts.migration.json` is only ever a **seed for a
+box that has no roster**. Nothing applies it to a box that already has one. *That is precisely why
+`claude-corp`'s `secretsFile` has been stale since stage 2b (D-69) and why §11.1's second row exists at
+all.* So "apply the shipped migration" is not a step; it is a feature.
 
-**Also in commit 1, because slice A is already touching roster generation:** emit `telemetry` into
-`~/.ccrc/accounts.sh`, closing the parity gap `_ws_least_loaded` documents against itself (§3.4 item
-28). `projected-home.test.ts` already exists to prove it.
+The migration derives what it safely can — an entry with `upstream`/`generated` exec and an
+`-oauth.env` secrets file becomes anthropic/oauth — and makes doctor **FAIL** for what it cannot
+derive, the three external accounts, asking the operator to declare them. Fail loud, never guess. It
+must be idempotent, and it must run before wrappers are generated from the roster.
+
+**Also in commit 1, because slice A is already touching this seam:** make `_ws_least_loaded` *consume*
+the `CCRC_MEASURED` array that `accounts.sh` has carried since 2026-08-13, and delete the comment
+asserting it does not exist (§3.4 item 28). This closes the parity gap against `projectHome` that the
+function documents against itself. `projected-home.test.ts` already runs both sides over the same
+fixtures and is where it is proved.
 
 **The doctor rule that makes the slice worth doing: converge owns files, doctor owns viability.**
 `ccrc wrappers` makes the file match the roster; `ccrc doctor` reports whether the account can actually
@@ -703,12 +795,21 @@ Mutation tests, each measured red before and after:
 
 1. Delete the "generated implies `wire: 'anthropic-native'`" constraint -> a fixture declaring a
    generated `openai` account must go red.
-2. Collapse WARN(credential-absent-here) into FAIL(undeclared-wrapper) -> red. This is the
-   no-overloaded-null rule at the doctor's seam, and it is the exact conflation that made three
-   unrelated warnings read as one problem.
+2. Collapse the credential-absent-here state into the undeclared-wrapper state -> red. **Both are
+   WARN classes in the shipped code, not WARN-vs-FAIL** (undeclared is `wr_soft`, exit 0, pinned at
+   `ccrc-doctor.test.ts:2345-2356`); what must stay apart is two WARNs with *different remedies*,
+   which `cmd_doctor` already counts separately. Note the pin this collides with:
+   `ccrc-doctor.test.ts:3005-3026` asserts the `wrappers` verdict line is **byte-identical with and
+   without the secrets file present**, with a comment stating the intent. Slice A's
+   unavailable-here state is by definition a fact about a credential on this box, so that pin must be
+   reconciled deliberately — not quietly relaxed.
 3. Hand-maintain `PROVIDER_IDS` instead of deriving it -> `single-definition.test.ts` red.
 4. Widen the derived `AccountAuth` union to `string` -> a fixture with
-   `{ provider: 'openrouter', auth: 'oauth' }` must fail typecheck, pinned by `typecheck-tests`.
+   `{ provider: 'openrouter', auth: 'oauth' }` must fail typecheck. **Not pinnable by
+   `typecheck-tests`**, which asserts `server/test/` produces *empty* tsc output and exit 0
+   (`typecheck-tests.test.ts:56-68`) — a must-fail fixture placed there breaks the gate itself. The
+   mechanism is a dedicated `server/test/types/<name>/` directory with its own
+   `tsconfig.<name>.json`, excluded from `test/tsconfig.tests.json`, asserted to fail.
 5. Drop a `secretsFile` whose wrapper sources it -> doctor FAIL.
 6. Remove `telemetry` from the emitted `accounts.sh` -> `projected-home.test.ts` red.
 
