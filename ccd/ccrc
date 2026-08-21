@@ -2051,6 +2051,12 @@ cmd_expose() {
     case "$host" in
       */*|*' '*)
         _ccrc_die "\"$origin\" carries a path or a space — an origin is scheme and host only, no trailing slash. Nothing was written." ;;
+      # `?`/`#`/`@` pass a browser's URL parser but land verbatim in the
+      # Caddyfile site address, where Caddy refuses to load — surfacing the
+      # typo at the caddy/cert doctor checks instead of at this prompt
+      # (branch review, 2026-08-21).
+      *'?'*|*'#'*|*'@'*)
+        _ccrc_die "\"$origin\" carries '?', '#' or '@' — an origin is scheme and host only (a query, fragment or userinfo would be written into the Caddyfile as a site address Caddy refuses to load). Nothing was written." ;;
     esac
     if ! IFS= read -rp "Passkey rp id (usually the same: $host): " rpid; then
       printf '\n' >&2

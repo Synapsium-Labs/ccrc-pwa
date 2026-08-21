@@ -393,6 +393,22 @@ describe('ccrc expose byo', () => {
     expect(r.stdout).toMatch(/carries a path/);
     expect(ccrcDirEntries(home)).toEqual([]);
   });
+
+  // Branch review, 2026-08-21: '?', '#' and '@' pass a browser's URL parser
+  // but land verbatim in the Caddyfile site address, where Caddy refuses to
+  // load — the operator's typo would otherwise surface only later, at the
+  // caddy/cert doctor checks, instead of at this prompt.
+  it.each([
+    ['a query', 'https://box.example.com?x=1'],
+    ['a fragment', 'https://box.example.com#pwa'],
+    ['userinfo', 'https://me@box.example.com'],
+  ])('refuses an origin carrying %s — Caddy would refuse the site address later', async (_what, origin) => {
+    const home = box('ccrc-expose-byo-caddyhostile-');
+    const r = await runExposeTty(home, ['byo'], [origin]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toMatch(/carries '\?', '#' or '@'/);
+    expect(ccrcDirEntries(home)).toEqual([]);
+  });
 });
 
 // ── status ────────────────────────────────────────────────────────────────

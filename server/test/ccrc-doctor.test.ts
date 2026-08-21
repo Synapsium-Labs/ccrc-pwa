@@ -4470,6 +4470,21 @@ describe('ccrc doctor: name', () => {
     expect(r.stdout).not.toMatch(/^(WARN|FAIL) name: /m);
   });
 
+  // Branch review, 2026-08-21: 100.64.0.0/10 is CGNAT (RFC 6598) — and
+  // tailscale's own address range, i.e. THIS project's fleet topology.
+  // Counting it as a global address sent every NAT'd tailscale box down the
+  // mismatch-WARN arm ("propagation lag… this box's own public address is
+  // 100.x") on every doctor run, forever — a false sentence about an address
+  // that is not public.
+  it('a CGNAT 100.64/10 address (tailscale) is NOT a public address — the NAT arm PASSes', () => {
+    const home = healthy('ccrc-doctor-name-cgnat-');
+    writeFileSync(join(home, 'fixture-getent'), `198.51.100.9     ${EXPOSED_HOST}\n`);
+    writeFileSync(join(home, 'fixture-host-ips'), '203.0.113.7 10.0.0.5\n');
+    const r = runDoctor(home);
+    expect(lineFor(r.stdout, 'name'), r.stdout).toMatch(/^PASS name: /);
+    expect(r.stdout).not.toMatch(/^(WARN|FAIL) name: /m);
+  });
+
   it('FAILs naming the ccrc-ddns timer when the name does not resolve', () => {
     const home = healthy('ccrc-doctor-name-unresolved-');
     rmSync(join(home, 'fixture-getent'), { force: true });
