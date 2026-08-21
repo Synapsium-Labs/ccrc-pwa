@@ -151,11 +151,14 @@ refusal), enables it, SKIPS `ccrc.service` + coord/auth/skills steps that presup
 server. `server`: today's spine minus nothing (documented as both-without-fleet-extras;
 the difference from `both` is reserved for later stages — one sentence in the help text).
 
-- [ ] RED: `--role fleet` writes agent.env 0600 with both keys (values SET, never echoed),
+- [x] RED: `--role fleet` writes agent.env 0600 with both keys (values SET, never echoed),
   installs+enables the agent unit and NOT ccrc.service; re-run keeps agent.env (seed-once);
   piped stdin refused; `--role both` byte-identical to today on a fresh box (compare the
   installed unit set against the existing test's expectations); unknown role → usage die.
-- [ ] GREEN; mutations: drop the agent-unit install on fleet (red); echo the token (red).
+  (Ran red: 10/13 new before implementation; the 3 that did not are named in the Task 5
+  entry below. The fleet happy path runs the WHOLE verb on a node-pty terminal —
+  `ccrc-passwd.test.ts`'s idiom — because `_inst_agent_env` is `[ -t 0 ]` + `read -rs`.)
+- [x] GREEN; mutations: drop the agent-unit install on fleet (red); echo the token (red).
   Commit `feat(ccrc): install --role — a fleet box has an installer path (D-73 closes)`.
 
 ### Task 6: `cmd_update` — fetch, verify, back up, install, report
@@ -271,6 +274,36 @@ it merges first.)
   MANIFEST test: the node-crypto spot-verify of that file's digest, independently of
   `sha256sum -c MANIFEST` which reds on the same bytes). Suite green 10/10 before and
   after; typecheck-tests + single-definition + install-sh green (79/79).
+- **D-140** (Task 5): the task text's "SKIPS `ccrc.service` + coord/auth/skills steps that
+  presuppose a server" is applied with the restrictive clause doing the work: the steps a
+  fleet box skips are `ccrc.service` (unit + enable/restart/verify — replaced by
+  `ccrc-agent.service` end-to-end) and the two server-only landing lines (the PWA address
+  and the passphrase-gate sentence; doctor's `auth` check SKIPs on that box for the same
+  reason). `_inst_hooks`, `_inst_skills`, `_inst_dirs` and `_inst_wrappers` are KEPT on
+  fleet, deliberately: none presupposes a server, and the fleet host is exactly where
+  `deploy.sh agent` ships the session hooks and both skills today — skipping them would
+  make `--role fleet` converge less of the box than the deploy lane it replaces. No
+  install step touches coord at all (coord.db is created by the server at boot), so the
+  "coord" member of the list has no referent in this verb. agent.env's two keys are
+  spelled `CCRC_AGENT_TOKEN` (the unit's existing contract) and `CCRC_SERVER_URL` (new,
+  additive — recorded for later stages; nothing reads it yet), plus a header pointing at
+  `deploy/ccrc-agent.env.example` for the keys the prompts don't cover.
+- **Task 5 mutation measurements** (applied, run, reverted): (M1) the fleet arm of
+  `_inst_units`' role gate deleted (fleet gets `ccrc.service` like everyone) → 2 red
+  (`installs ccrc-agent.service — byte for byte — and NOT ccrc.service`, and the
+  enable-argv test via doctor's `is-active ccrc.service` appearing in the recorded argv);
+  (M2) the token expanded into `_inst_agent_env`'s result line → 1 red (`never echoes the
+  token`). Red-first honesty: 10/13 new tests red before implementation; the 3 that
+  passed pre-implementation did so for stated reasons — the two usage-error tests because
+  `--role` was an unknown ARGUMENT before the flag existed (exit 2 with `--role` in the
+  message either way, so the observable is the same refusal), and the landing-lines test
+  vacuously against a failed run (its real force is that it runs against the green fleet
+  transcript, where a leaked `install: gate:`/`install: PWA:` line reds it). Suite 96/96
+  before and after; ccrc-cli + single-definition +
+  install-sh + typecheck-tests (117/117) and ccrc-doctor + ccrc-passwd + ccrc-wrappers
+  (338/338) green. The existing spine pin (`cmd_install is the sequence…`) and
+  `TREE_FILES` gained `_inst_agent_env` / `deploy/ccrc-agent.service` — intended
+  extensions, both annotated in place.
 - **Task 3 mutation measurements** (applied to the workflow, run, reverted): (M1)
   `workflow_dispatch:` added to the trigger set → 1 red (the trigger pin — deliberately
   stricter than ci.yml, which keeps dispatch as its webhook-incident escape hatch; a

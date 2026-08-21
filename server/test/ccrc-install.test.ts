@@ -45,6 +45,7 @@
 // $HOME.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
+import * as pty from 'node-pty';
 import {
   copyFileSync, cpSync, mkdirSync, readFileSync, writeFileSync, existsSync, statSync,
   chmodSync, readdirSync, rmSync, symlinkSync,
@@ -152,6 +153,10 @@ const TREE_FILES = [
   'deploy/ccrc.service',
   'ccd/claude-session@.service',
   'deploy/verify-service.sh',
+  // ── Stage 4 Task 5: the agent's unit, which `--role fleet` installs and
+  // every other role still refuses (its REQUIRED EnvironmentFile is the
+  // reasoned exclusion — the role gate replaced the blanket refusal).
+  'deploy/ccrc-agent.service',
   // ── Stage 3a Task 9: the passphrase hasher. This install writes NO
   // passphrase (the seed-once doctrine applied to a credential, and the
   // `curl … | bash` stdin hazard `cmd_passwd`'s tty refusal exists for), but
@@ -1519,6 +1524,13 @@ describe('ccrc install: the order is stated in one place', () => {
       '_inst_roster',
       '_inst_accounts_sh',
       '_inst_env',
+      // Stage 4, Task 5. In the seed-once cluster (it writes a user-owned
+      // file, or keeps it) and BEFORE `_inst_units`: on a fleet box the agent
+      // unit's REQUIRED EnvironmentFile must exist by the time the unit lands
+      // and `_inst_enable` asks systemd to start it. On every other role the
+      // step is a silent no-op, which is what keeps the default transcript
+      // byte-identical to Stage 2d's.
+      '_inst_agent_env',
       // Stage 2e, Task 2. Beside the other two seed-once steps and BEFORE the
       // tree: nothing later in this sequence reads the flag, so its position
       // is a grouping rather than a dependency — the three files an operator
@@ -2531,6 +2543,226 @@ describe('ccrc install: running the WHOLE verb twice', () => {
     // 6. And no run left a temp sibling behind, in any directory a step writes
     //    into — including the two drop-in dirs and the escaped one.
     expect(strays(home)).toEqual([]);
+  });
+});
+
+// ── Stage 4 Task 5: `--role server|fleet|both` — D-73 closes ──────────────
+// A fleet box (the one that runs `ccrc-agent` and the sessions, but no server)
+// had NO installer path: `_inst_units` refused `ccrc-agent.service` outright
+// because its REQUIRED `EnvironmentFile=%h/.ccrc/agent.env` had no writer. The
+// role gate replaces that blanket refusal: `--role fleet` writes `agent.env`
+// (tty prompts, 0600, seed-once) and installs/enables the AGENT unit instead
+// of `ccrc.service`; `--role both` (the default) is byte-identical to today;
+// `--role server` is today's spine minus nothing.
+
+/** The two values the fleet prompts are answered with. The token is the
+ *  fixture's own — a value the transcript must NEVER contain. */
+const FLEET_URL = 'ws://203.0.113.7:7788';
+const FLEET_TOKEN = 'fixture-agent-token-8b1f2c4d';
+
+/** `ccrc install --role fleet` on a REAL terminal — `ccrc-passwd.test.ts`'s
+ *  pty idiom, for the same reason: `_inst_agent_env` is `[ -t 0 ]` plus a
+ *  `read -rs`, so without a terminal the only reachable branch is the refusal.
+ *  Entries are typed when their prompts appear (the URL prompt echoes; the
+ *  token prompt must not). A pty merges the two streams into `stdout`. */
+function runInstallTty(home: string, args: string[], entries: string[]): Promise<Result> {
+  // `runInstall`'s order, which is load-bearing: `ccrcEnv` re-plants the
+  // poisons (gh, curl) on every call, so the doctor stubs must land AFTER it
+  // or the doctor tail measures a poisoned box.
+  const raw = ccrcEnv(home);
+  replantDoctorStubs(home);
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw)) if (v !== undefined) env[k] = v;
+  return new Promise((resolve) => {
+    const p = pty.spawn(BASH, [ccrcIn(treeRoot(home)), ...args], {
+      name: 'xterm-color', cols: 200, rows: 40, cwd: home, env,
+    });
+    let out = '';
+    let sent = 0;
+    let done = false;
+    const finish = (code: number): void => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve({ code, stdout: out, stderr: '' });
+    };
+    const timer = setTimeout(() => { p.kill(); finish(-1); }, 19_000);
+    p.onData((d) => {
+      out += d;
+      // One entry per prompt SEEN, so a run that refuses before the second
+      // prompt is typed one entry and no more.
+      const prompts = (out.match(/(Server WS URL|Agent token)/g) ?? []).length;
+      while (sent < prompts && sent < entries.length) p.write(`${entries[sent++]}\r`);
+    });
+    p.onExit(({ exitCode }) => finish(exitCode));
+  });
+}
+
+describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
+  /** One fleet install on a pty, shared by the read-only assertions. The
+   *  re-run test at the bottom runs against the same box, LAST, so nothing
+   *  here reads state it rewrote.
+   *
+   *  LAZY, not a module-scope IIFE, and the difference is the pty's own 19s
+   *  guard: the earlier describes run whole installs through `spawnSync` AT
+   *  MODULE SCOPE, which blocks the event loop for the better part of a
+   *  minute — an eagerly-started pty child would sit unanswered (its onData
+   *  never runs) until the guard fires the moment the loop unblocks. First
+   *  `await` starts the run, inside a test, where the loop is free. */
+  let fleetRun: Promise<{ home: string; r: Result }> | undefined;
+  const fleet = (): Promise<{ home: string; r: Result }> => (fleetRun ??= (async () => {
+    const home = freshBox('ccrc-install-role-fleet-');
+    const r = await runInstallTty(home, ['install', '--role', 'fleet'], [FLEET_URL, FLEET_TOKEN]);
+    return { home, r };
+  })());
+
+  it('the run this describe measures succeeded, ending with doctor at exit 0', async () => {
+    const { r } = await fleet();
+    expect(r.code, r.stdout).toBe(0);
+  });
+
+  it('writes ~/.ccrc/agent.env at 0600 with both keys SET', async () => {
+    const { home } = await fleet();
+    const p = dotCcrc(home, 'agent.env');
+    expect(existsSync(p)).toBe(true);
+    // 0600 under the ambient umask 022, where a plain redirect produces 0644 —
+    // so the mode can only come from the step's own chmod, and this file holds
+    // the bearer token the whole agent surface authenticates by.
+    expect(statSync(p).mode & 0o777).toBe(0o600);
+    const env = read(p);
+    expect(env).toMatch(new RegExp(`^CCRC_AGENT_TOKEN=${FLEET_TOKEN}$`, 'm'));
+    expect(env).toMatch(/^CCRC_SERVER_URL=ws:\/\/203\.0\.113\.7:7788$/m);
+  });
+
+  it('never echoes the token — its only destination is the 0600 file', async () => {
+    // The pty transcript is everything a shoulder-surfer (or a pasted terminal
+    // log) sees: the URL is typed at an echoing prompt and may appear, the
+    // token was read with -s and must not — not as an echo, not in the step's
+    // result line, not in doctor's tail.
+    const { r } = await fleet();
+    expect(r.stdout).not.toContain(FLEET_TOKEN);
+    expect(r.stdout).toContain('install: agent.env: written');
+  });
+
+  it('records the role in ccrc.env\'s first write', async () => {
+    const { home } = await fleet();
+    expect(read(dotCcrc(home, 'ccrc.env'))).toMatch(/^CCRC_ROLE=fleet$/m);
+  });
+
+  it('installs ccrc-agent.service — byte for byte — and NOT ccrc.service', async () => {
+    const { home } = await fleet();
+    const agent = unitDir(home, 'ccrc-agent.service');
+    expect(existsSync(agent)).toBe(true);
+    expect(readFileSync(agent)).toEqual(readFileSync(placed(home, 'deploy', 'ccrc-agent.service')));
+    expect(statSync(agent).mode & 0o777).toBe(0o644);
+    expect(existsSync(unitDir(home, 'ccrc.service'))).toBe(false);
+    // …while the four role-independent units and drop-ins still land.
+    for (const [dest] of UNIT_FILES) {
+      if (dest === 'ccrc.service') continue;
+      expect(existsSync(unitDir(home, ...dest.split('/'))), dest).toBe(true);
+    }
+  });
+
+  it('enables and restarts the AGENT unit, and never asks systemd about ccrc.service', async () => {
+    const { home, r } = await fleet();
+    const argv = systemctlCalls(home).map((c) => c.argv);
+    expect(argv).toContain('--user enable --now ccrc-agent.service');
+    expect(argv).toContain('--user enable --now ccd-cap-scopes.timer');
+    expect(argv).toContain('--user restart ccrc-agent.service');
+    // The blanket half of the old refusal, inverted: on a fleet box it is
+    // ccrc.service that must never be touched — there is no server here.
+    expect(argv.join('\n')).not.toMatch(/\bccrc\.service\b/);
+    expect(r.stdout).toContain(
+      'install: services: ccrc-agent.service and ccd-cap-scopes.timer enabled, and ccrc-agent.service restarted onto the tree this run placed');
+  });
+
+  it('skips the server-only landing lines — no PWA address, no passphrase gate', async () => {
+    const { r } = await fleet();
+    expect(r.stdout).not.toContain('install: PWA:');
+    expect(r.stdout).not.toContain('install: gate:');
+  });
+
+  it('a re-run needs no terminal and keeps agent.env byte for byte (seed-once)', async () => {
+    // LAST in this describe, because it re-runs the verb against the shared
+    // box. Piped stdin on purpose: the file exists, so the tty gate must not
+    // even be reached — which is what makes `ccrc update`'s non-interactive
+    // re-run of this spine possible on a converged fleet box.
+    const { home } = await fleet();
+    const p = dotCcrc(home, 'agent.env');
+    const before = read(p);
+    const mtimeBefore = mtime(p);
+    const r2 = runInstall(home, ['install', '--role', 'fleet']);
+    expect(r2.code, r2.stderr).toBe(0);
+    expect(r2.stdout).toMatch(/^install: agent\.env: kept \(user-owned, never overwritten\)$/m);
+    expect(read(p)).toBe(before);
+    expect(mtime(p)).toBe(mtimeBefore);
+  });
+});
+
+describe('ccrc install --role: the refusals and the default', () => {
+  it('with no terminal on a fresh box, --role fleet refuses before prompting and writes no agent.env', () => {
+    // `cmd_passwd`'s refusal, for the same hazard: under `curl … | bash` stdin
+    // is the INSTALLER SCRIPT, so a read here would take a line of shell as
+    // the fleet's bearer token.
+    const home = freshBox('ccrc-install-role-piped-');
+    const r = runInstall(home, ['install', '--role', 'fleet']);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/stdin is not a terminal/);
+    expect(existsSync(dotCcrc(home, 'agent.env'))).toBe(false);
+    // …and the run stopped there: no unit landed, no systemd call was made.
+    expect(r.stdout).not.toMatch(/^install: units:/m);
+    expect(existsSync(join(home, 'systemctl-calls'))).toBe(false);
+  });
+
+  it('--role both is byte-identical to a plain install — same units, same calls, no agent.env', () => {
+    const home = freshBox('ccrc-install-role-both-');
+    const r = runInstall(home, ['install', '--role', 'both']);
+    expect(r.code, r.stderr).toBe(0);
+    for (const [dest] of UNIT_FILES) {
+      expect(existsSync(unitDir(home, ...dest.split('/'))), dest).toBe(true);
+    }
+    expect(existsSync(unitDir(home, 'ccrc-agent.service'))).toBe(false);
+    expect(existsSync(dotCcrc(home, 'agent.env'))).toBe(false);
+    expect(read(dotCcrc(home, 'ccrc.env'))).toMatch(/^CCRC_ROLE=both$/m);
+    const calls = systemctlCalls(home)
+      .filter((c) => !c.argv.includes('is-active') && !c.argv.includes('show'))
+      .map((c) => c.argv);
+    expect(calls).toEqual([
+      '--user daemon-reload',
+      '--user enable --now ccrc.service',
+      '--user enable --now ccd-cap-scopes.timer',
+      '--user restart ccrc.service',
+    ]);
+    expect(r.stdout).toMatch(
+      /^install: units: ccrc\.service, claude-session@\.service, ccd-cap-scopes\.\{service,timer\} and both drop-ins in \$HOME\/\.config\/systemd\/user$/m);
+  });
+
+  it('--role server is today\'s spine minus nothing — the difference from both is reserved', () => {
+    const home = freshBox('ccrc-install-role-server-');
+    const r = runInstall(home, ['install', '--role', 'server']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(unitDir(home, 'ccrc.service'))).toBe(true);
+    expect(existsSync(unitDir(home, 'ccrc-agent.service'))).toBe(false);
+    expect(existsSync(dotCcrc(home, 'agent.env'))).toBe(false);
+    expect(read(dotCcrc(home, 'ccrc.env'))).toMatch(/^CCRC_ROLE=server$/m);
+    expect(r.stdout).toMatch(/^install: gate: /m);
+  });
+
+  it('an unknown role is a usage error at exit 2, refused before the first step', () => {
+    const home = freshBox('ccrc-install-role-bogus-');
+    const r = runInstall(home, ['install', '--role', 'bogus']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/--role/);
+    expect(r.stderr).toMatch(/usage: ccrc/);
+    expect(existsSync(join(home, '.ccrc'))).toBe(false);
+  });
+
+  it('--role with no value is the same usage error', () => {
+    const home = freshBox('ccrc-install-role-empty-');
+    const r = runInstall(home, ['install', '--role']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/--role/);
+    expect(existsSync(join(home, '.ccrc'))).toBe(false);
   });
 });
 

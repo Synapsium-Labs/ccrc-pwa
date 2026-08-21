@@ -230,7 +230,13 @@ already running).
   install   converge this box from the shipped tree: seed ~/.ccrc config
             (never overwriting yours), install executables, units and hooks,
             generate wrappers, then run doctor. Single-box, localhost.
-            Re-running converges; it never damages an existing install
+            Re-running converges; it never damages an existing install.
+            [--role server|fleet|both] (default both, today's single box).
+            fleet: prompts (tty-only) for the server URL and agent token,
+            writes ~/.ccrc/agent.env 0600 seed-once, and runs
+            ccrc-agent.service instead of ccrc.service. server: today's
+            spine minus nothing — the difference from 'both' is reserved
+            for later stages
   passwd    set (or rotate) this box's PWA passphrase in ~/.ccrc/auth.scrypt.
             Prompts twice on a tty; the gate also needs CCRC_AUTH=on in this
             box's ccrc.env. Rotating invalidates every logged-in SESSION —
@@ -1962,12 +1968,36 @@ cmd_install() {
   # running it. Anything else is a usage error at exit 2, refused BEFORE the
   # first step — an install that half-ran because argument 2 was a typo is
   # worse than one that did not start.
+  # ── `--role server|fleet|both` (Stage 4, Task 5 — D-73 closes) ─────────
+  # The role decides WHICH long-running unit this box gets and whether the
+  # agent's env file is seeded. `both` is the default and is today's exact
+  # single-box behaviour; `fleet` makes this box a fleet host (agent.env +
+  # `ccrc-agent.service`, no server); `server` is today's spine minus nothing
+  # — the difference from `both` is reserved for later stages. A role that is
+  # none of the three is a USAGE error, refused before the first step, with
+  # its own sentence rather than `_ccrc_usage_die`'s "unknown argument" — the
+  # operator typed the right flag and the wrong value, which are two different
+  # mistakes to fix.
+  local role=both
   while [ $# -gt 0 ]; do
     case "$1" in
       -h|--help) usage; exit 0 ;;
+      --role)
+        [ $# -ge 2 ] || { echo "$PROG: --role needs a value: server, fleet or both" >&2; usage >&2; exit 2; }
+        role="$2"; shift ;;
+      --role=*) role="${1#--role=}" ;;
       *) _ccrc_usage_die "$1" ;;
     esac
+    shift
   done
+  case "$role" in
+    server|fleet|both) ;;
+    *) echo "$PROG: unknown --role: $role (expected server, fleet or both)" >&2; usage >&2; exit 2 ;;
+  esac
+  # A GLOBAL, like `INST_DEGRADED` below: the `_inst_*` steps take no
+  # arguments by contract (the spine reads as a sequence), so the one input
+  # that varies a step's behaviour is stated once, here, before any step runs.
+  INST_ROLE="$role"
 
   # BY NAME, ONCE, AND BEFORE THE FIRST STEP — `cmd_wrappers:1069-1076`'s guard,
   # in the same shape and for a sharper version of the same reason. Every step
@@ -2012,6 +2042,7 @@ cmd_install() {
   _inst_roster
   _inst_accounts_sh
   _inst_env
+  _inst_agent_env
   _inst_rc
   _inst_tree
   _inst_bins
@@ -2057,6 +2088,19 @@ cmd_install() {
     [ "${#INST_DEGRADED[@]}" -eq 1 ] && word="step"
     names="$(IFS=', '; printf '%s' "${INST_DEGRADED[*]}")"
     echo "install: done — converged with ${#INST_DEGRADED[@]} degraded $word ($names)"
+  fi
+  # ── THE ROLE GATE ON THE SERVER-ONLY LINES (Stage 4, Task 5) ───────────
+  # The PWA address and the passphrase gate are statements about a SERVER, and
+  # a fleet box runs none: printing either there would send its operator to a
+  # console that does not exist and a passphrase file nothing reads (doctor's
+  # `auth` check SKIPs on that box for exactly this reason). What a fleet box
+  # lands with instead is the one fact its operator needs next: the agent is
+  # up, and the SERVER box's ccrc.env is where the pairing happens.
+  if [ "$INST_ROLE" = fleet ]; then
+    echo "install: agent: fleet role — ccrc-agent.service serves this box; set CCRC_AGENT_URL and CCRC_AGENT_TOKEN in the SERVER box's ccrc.env (CCRC_FLEET=remote) to reach it"
+    echo "install: next: add your first session with: ccd menu   (and read $BOX_ENV_FILE)"
+    cmd_doctor
+    return
   fi
   local host="" port=""
   if [ -f "$BOX_ENV_FILE" ]; then
@@ -2185,8 +2229,79 @@ _inst_env() {   # seed-once, exactly like the roster: the env file is the box's
     printf '%s\n' "CCRC_PORT=7788"
     printf '%s\n' "CCRC_FLEET=local"
     printf '%s\n' "CCRC_PROJECTS_ROOT=$HOME/projects"
+    # The role is RECORDED here rather than inferred (Stage 4, Task 5): the
+    # unit files were the only thing on a box that stated its role at all
+    # (D-73, `_box_role`), and a first-write label makes it a fact the box
+    # carries. Seed-once applies: an existing box keeps its file and the role
+    # stays inferred-with-a-label as today.
+    printf '%s\n' "CCRC_ROLE=$INST_ROLE"
   } > "$tmp" && mv -f "$tmp" "$dest" || { rm -f "$tmp"; _ccrc_die "writing $dest failed"; }
   echo "install: ccrc.env: written (localhost, local fleet mode)"
+}
+
+# ── _inst_agent_env — the fleet role's one credential file (Stage 4, Task 5) ─
+# `~/.ccrc/agent.env` is what `ccrc-agent.service`'s REQUIRED
+# `EnvironmentFile=` reads, and until this step existed it had no local writer
+# at all — which is exactly why `_inst_units` used to refuse the agent's unit
+# outright (D-73: a fleet box had no installer path). Seed-once, like every
+# user-owned file above it: the box's operator edits it (bind address, port,
+# projects root — `deploy/ccrc-agent.env.example` documents the rest) and ccrc
+# never rewrites it.
+#
+# THE PROMPTS ARE TTY-ONLY, `cmd_passwd`'s refusal for `cmd_passwd`'s reason:
+# under `curl … | bash` stdin is the INSTALLER SCRIPT, so a read here would
+# take a line of shell as this fleet's bearer token. The token itself is read
+# with `-s` (never echoed) under the same two traps `cmd_passwd` arms — a
+# Ctrl-C mid-read must not leave the terminal with echo off, and must LEAVE.
+# The seed-once check runs BEFORE the tty gate, so a converged fleet box
+# re-runs (and `ccrc update` re-runs) non-interactively.
+#
+# 0600 VIA `umask 077` ON THE TEMP *AND* `chmod 600` BEFORE THE RENAME: the
+# umask means no instant exists in which the token sits readable at any name,
+# and the chmod is the stated mode (a permissive umask must not widen it).
+_inst_agent_env() {
+  [ "$INST_ROLE" = fleet ] || return 0
+  local dest="$HOME/.ccrc/agent.env"
+  if [ -e "$dest" ]; then
+    echo "install: agent.env: kept (user-owned, never overwritten)"
+    return 0
+  fi
+  [ -t 0 ] \
+    || _ccrc_die "stdin is not a terminal, and --role fleet will not read the agent token from a pipe or a file. Under \`curl … | bash\` stdin is the INSTALLER SCRIPT, so a read here would take a line of shell as this fleet's bearer token. Run 'ccrc install --role fleet' from a terminal. Nothing was written to \$HOME/.ccrc/agent.env."
+  local url="" token=""
+  printf '%s\n' "$PROG: configuring this box as a FLEET host — two values land in \$HOME/.ccrc/agent.env (0600); the token is not echoed; Ctrl-C aborts" >&2
+  if ! IFS= read -rp "Server WS URL (where this fleet's ccrc server runs, e.g. ws://100.64.0.1:7788): " url; then
+    printf '\n' >&2
+    _ccrc_die "no server URL was entered — nothing was written"
+  fi
+  [ -n "$url" ] || _ccrc_die "the server URL is empty — nothing was written"
+  # `cmd_passwd`'s two traps, for its stated reason: one restores echo on ANY
+  # exit, the other restores it and LEAVES on Ctrl-C — a single handler that
+  # only ran `stty echo` would turn Ctrl-C into "echo back on, prompt still
+  # running", i.e. the token typed in cleartext.
+  trap 'stty echo 2>/dev/null' EXIT
+  trap 'stty echo 2>/dev/null; printf "\n" >&2; exit 130' INT TERM
+  if ! IFS= read -rsp "Agent token (becomes CCRC_AGENT_TOKEN — the bearer the server must present; generate with: openssl rand -hex 32): " token; then
+    printf '\n' >&2
+    _ccrc_die "no agent token was entered — nothing was written"
+  fi
+  printf '\n' >&2
+  trap - EXIT INT TERM
+  [ -n "$token" ] || _ccrc_die "the agent token is empty — nothing was written"
+  local tmp="$dest.tmp.$$"
+  if ! (
+    umask 077
+    {
+      printf '%s\n' "# ccrc fleet-box agent config — written once by 'ccrc install --role fleet'; edit freely, ccrc never rewrites it."
+      printf '%s\n' "# Keys and defaults: deploy/ccrc-agent.env.example in the shipped tree."
+      printf '%s\n' "CCRC_AGENT_TOKEN=$token"
+      printf '%s\n' "CCRC_SERVER_URL=$url"
+    } > "$tmp"
+  ) || ! chmod 600 "$tmp" || ! mv -f "$tmp" "$dest"; then
+    rm -f "$tmp"
+    _ccrc_die "writing $dest failed"
+  fi
+  echo "install: agent.env: written (0600 — CCRC_AGENT_TOKEN and CCRC_SERVER_URL set; neither value is ever printed)"
 }
 
 _inst_rc() {   # seed-once, the third file on the user-owned side of the rule
@@ -2648,21 +2763,23 @@ _inst_stamp() {   # what this box is RUNNING, stated by the box itself
   echo "install: stamp: $sha ($ref$said)"
 }
 
-# ── _inst_units — the unit files, and the one this box must NOT be given ──
-# `deploy.sh:402-417`'s copy set, minus one, plus the escape that set records.
+# ── _inst_units — the unit files, and the one this box's ROLE decides ─────
+# `deploy.sh:402-417`'s copy set, role-gated, plus the escape that set records.
 #
-# ── WHY `ccrc-agent.service` IS DELIBERATELY ABSENT ───────────────────────
-# It is the only unit in that set this verb refuses to install, and the reason
-# is one character: `deploy/ccrc-agent.service:6` is `EnvironmentFile=%h/.ccrc/agent.env`
-# with NO leading `-`, i.e. REQUIRED. `deploy.sh agent` ships it to a box whose
-# other steps write `agent.env`; `ccrc install` converges a SINGLE box in local
-# mode, which has no agent and no `agent.env` — so installing the unit here
-# manufactures a unit systemd refuses to start, on a box that needs no agent at
-# all. A failing unit is worse than an absent one: it is a red line in every
-# `systemctl --user` listing and in doctor's own `services` check, describing a
-# thing the operator never asked for. (Compare `deploy/ccrc.service:12`, whose
-# `EnvironmentFile=-%h/.ccrc/ccrc.env` carries the dash and therefore boots on a
-# box with no env file at all.)
+# ── THE ROLE GATE THAT REPLACED THE BLANKET `ccrc-agent.service` REFUSAL ──
+# This verb used to refuse the agent's unit OUTRIGHT, and the reason was one
+# character: `deploy/ccrc-agent.service:6` is `EnvironmentFile=%h/.ccrc/agent.env`
+# with NO leading `-`, i.e. REQUIRED — and no step here wrote `agent.env`, so
+# installing the unit manufactured one systemd refuses to start, a red line in
+# every `systemctl --user` listing describing a thing the operator never asked
+# for. Stage 4's Task 5 keeps that reasoning and moves the gate onto the ROLE:
+# `--role fleet` now WRITES `agent.env` (`_inst_agent_env`, seed-once, before
+# this step runs), so on a fleet box the required file exists by the time the
+# unit lands — and it is `ccrc.service` that must not be given to THAT box,
+# because a fleet host runs no server. Every other role keeps today's exact
+# set: `ccrc.service` in, agent unit out. (Compare `deploy/ccrc.service:12`,
+# whose `EnvironmentFile=-%h/.ccrc/ccrc.env` carries the dash and therefore
+# boots on a box with no env file at all.)
 #
 # ── THE `\x2d` IN THE DESTINATION IS LOAD-BEARING ────────────────────────
 # `deploy.sh:404-407` states it and this is the same fact from the other side:
@@ -2673,7 +2790,8 @@ _inst_stamp() {   # what this box is RUNNING, stated by the box itself
 # Inside double quotes bash keeps the backslash (`\x` is not one of the four
 # sequences it consumes there), so the literal below IS the directory name.
 _inst_units() {
-  local tree="$BOX_TREE_DIR" dir="$BOX_UNIT_DIR"
+  local tree="$BOX_TREE_DIR" dir="$BOX_UNIT_DIR" role_unit=ccrc.service
+  [ "$INST_ROLE" = fleet ] && role_unit=ccrc-agent.service
   local slice="$dir/app-claude\x2dsession.slice.d"
   mkdir -p "$dir" "$dir/claude-session@.service.d" "$slice" \
     || _ccrc_die "cannot create $dir and its drop-in directories"
@@ -2681,7 +2799,7 @@ _inst_units() {
   # rename for a sharper version of `_inst_atomic`'s own reason — `daemon-reload`
   # below reads whatever is at these paths the instant it runs, and half a unit
   # file parses as a broken unit rather than as no unit at all.
-  _inst_atomic "$tree/deploy/ccrc.service" "$dir/ccrc.service" 644
+  _inst_atomic "$tree/deploy/$role_unit" "$dir/$role_unit" 644
   _inst_atomic "$tree/ccd/claude-session@.service" "$dir/claude-session@.service" 644
   _inst_atomic "$tree/deploy/systemd/ccd-cap-scopes.service" "$dir/ccd-cap-scopes.service" 644
   _inst_atomic "$tree/deploy/systemd/ccd-cap-scopes.timer" "$dir/ccd-cap-scopes.timer" 644
@@ -2689,7 +2807,7 @@ _inst_units() {
     "$dir/claude-session@.service.d/limits.conf" 644
   _inst_atomic "$tree/deploy/systemd/app-claude-session.slice.d/limits.conf" \
     "$slice/limits.conf" 644
-  echo "install: units: ccrc.service, claude-session@.service, ccd-cap-scopes.{service,timer} and both drop-ins in \$HOME/.config/systemd/user"
+  echo "install: units: $role_unit, claude-session@.service, ccd-cap-scopes.{service,timer} and both drop-ins in \$HOME/.config/systemd/user"
 }
 
 # ── _inst_enable — ask systemd to read them, then prove one stayed up ─────
@@ -2725,12 +2843,19 @@ _inst_units() {
 # SERVICE. The `CCRC_VERIFY_*` knobs are the script's own (settle, window, log
 # lines) and are honoured here by not being touched.
 _inst_enable() {
+  # THE ROLE'S UNIT, `_inst_units`' own gate applied to the asking side: on a
+  # fleet box the long-running unit this step must enable, restart and verify
+  # is the agent's, and `ccrc.service` — which that box was never given — must
+  # never appear in a systemctl argv here. Every message below is templated on
+  # the same variable so the remedy always names the unit this box actually has.
+  local main=ccrc.service
+  [ "$INST_ROLE" = fleet ] && main=ccrc-agent.service
   : "${XDG_RUNTIME_DIR:=/run/user/$UID}"; export XDG_RUNTIME_DIR
   : "${DBUS_SESSION_BUS_ADDRESS:=unix:path=${XDG_RUNTIME_DIR}/bus}"; export DBUS_SESSION_BUS_ADDRESS
   systemctl --user daemon-reload \
-    || _ccrc_die "systemctl --user daemon-reload failed, so systemd never read the units this run installed — read what it says: systemctl --user status ccrc.service"
+    || _ccrc_die "systemctl --user daemon-reload failed, so systemd never read the units this run installed — read what it says: systemctl --user status $main"
   local u
-  for u in ccrc.service ccd-cap-scopes.timer; do
+  for u in "$main" ccd-cap-scopes.timer; do
     systemctl --user enable --now "$u" \
       || _ccrc_die "systemctl --user enable --now $u failed — read what it says: systemctl --user status $u"
   done
@@ -2761,14 +2886,14 @@ _inst_enable() {
   # verb must never touch (CLAUDE.md). Deploy's supervisor sweep is a fleet-host
   # operation with its own KillMode preflight; a single-box installer does not
   # inherit it.
-  systemctl --user restart ccrc.service \
-    || _ccrc_die "systemctl --user restart ccrc.service failed, so this box is still running the server the previous install started — read what it says: systemctl --user status ccrc.service"
+  systemctl --user restart "$main" \
+    || _ccrc_die "systemctl --user restart $main failed, so this box is still running the server the previous install started — read what it says: systemctl --user status $main"
   local verify="$CCRC_HERE/../deploy/verify-service.sh"
   if [ -f "$verify" ]; then
-    bash "$verify" ccrc.service \
-      || _ccrc_die "ccrc.service was restarted and did not stay up, so this box has the unit and not the service — read what it says: systemctl --user status ccrc.service"
+    bash "$verify" "$main" \
+      || _ccrc_die "$main was restarted and did not stay up, so this box has the unit and not the service — read what it says: systemctl --user status $main"
   fi
-  echo "install: services: ccrc.service and ccd-cap-scopes.timer enabled, and ccrc.service restarted onto the tree this run placed"
+  echo "install: services: $main and ccd-cap-scopes.timer enabled, and $main restarted onto the tree this run placed"
 }
 
 # ── _inst_linger — the one step that reports a failure and CONTINUES ──────
