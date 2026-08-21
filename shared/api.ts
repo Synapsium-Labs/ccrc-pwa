@@ -3699,3 +3699,225 @@ export function corroboration(obsClass: ActorClass | null, decSurface: DecSurfac
   if (decSurface === 'ccd') return 'not-comparable';
   return DEC_CORROBORATES[obsClass].includes(decSurface) ? 'agrees' : 'disagrees';
 }
+
+/**
+ * D2 — kernel-observed. Unforgeable by env: read from `/proc`, not from
+ * argv or the environment. A double fork makes a caller ANONYMOUS
+ * (`ppid 1`), never someone else.
+ */
+export interface LifecycleObs {
+  /** The `0::` path, classified. `null` = no cgroup was read at all;
+   *  `'unknown'` = it was read and matched none of the four shapes. The seam
+   *  spelling of this same fact is `obsClass` — see `ActorClass`'s docstring. */
+  readonly cg: ActorClass | null;
+  /** The `0::` path VERBATIM, and it is never dropped even when `cg` names it.
+   *  A fifth cgroup shape a later build learns to classify is re-projectable
+   *  from this without touching the fleet box — which is what makes the mirror
+   *  a re-measurement rather than an authority (D8). */
+  readonly cgraw: string | null;
+  readonly pid: number | null;
+  /** From `/proc/<pid>/status`'s `PPid:` line, NEVER `stat` field 4 — `comm`
+   *  can contain spaces, so field-4 parsing is wrong for any process whose
+   *  name has one. */
+  readonly ppid: number | null;
+  /** The tmux `session_name` owning an ancestor pid, from
+   *  `tmux list-panes -a -F '#{session_name} #{pane_pid}'` intersected with
+   *  the ppid ancestry. `null` when no pane owns this process. */
+  readonly pane: string | null;
+  /** ccd's own word for HOW the `pane` answer was reached, so a null `pane` is
+   *  not overloaded across "no ancestor is a pane", "tmux did not answer" and
+   *  "the caller double-forked itself anonymous". DISPLAY-ONLY — nothing
+   *  parses it back, exactly as `Divergence.detail` (:1128). */
+  readonly paneWhy: string | null;
+  /** `[[ -t 0 ]]` — a human was at a terminal. */
+  readonly tty: boolean | null;
+  /** `$SSH_CONNECTION` verbatim, or null. Environment, so self-asserted in
+   *  principle; kept in `obs` because it is read the same way and at the same
+   *  moment as the rest, and `corroboration()` does not consult it. */
+  readonly ssh: string | null;
+}
+
+/**
+ * D2 — declared. SELF-ASSERTED, and the wire says so by keeping it in its own
+ * object: `--surface pwa` means only that the caller said so
+ * (`ccd:610-617`'s own words about the same field).
+ */
+export interface LifecycleDec {
+  /** `'none'` when NO flag was passed. ccd's internal defaults — `cmd_stop`'s
+   *  `cli` (`ccd:9607`), `_ws_unsupervise`'s `ccd` (`ccd:618`) — must never
+   *  reach this field. Seam spelling: `decSurface`. */
+  readonly surface: DecSurface;
+  /** `--actor`, free text, or null. Attribution, not authentication. */
+  readonly actor: string | null;
+  /** `--reason`, <= `LC_REASON_MAX_BYTES` BYTES, or null — and ccd REFUSES a
+   *  longer one rather than truncating it, because a 900-byte reason recorded
+   *  as 512 reads as the operator's own words. Written verbatim, PARSED
+   *  NOWHERE — `cmd_ws_hold`'s standing rule for the same kind of value
+   *  (`ccd:2515-2516`). It is free text off the wire, so it must never reach
+   *  an arithmetic context, an array subscript, an `eval` or an unquoted
+   *  expansion: `ccd:8781-8790` is the paid lesson. */
+  readonly reason: string | null;
+}
+
+/**
+ * D2 — measured about the SUBJECT, read BEFORE any destruction. Every field is
+ * nullable and `null` MEANS NOT MEASURED — never zero, never empty string.
+ * `attic: 0` is a pin that ran and created no refs; `attic: null` is a pin
+ * that was never taken. `archivedReason: ''` is a blank reason;
+ * `archivedReason: null` is a row that was never archived.
+ *
+ * THIS TEN IS CLOSED, AND THAT IS A RULING, NOT AN OVERSIGHT. ccd writes more
+ * `meas.<key>` pairs than these — `atticsrc`, `workdir`, `base`, `old`, `new`,
+ * `rc`, `mode`, `inUnit`, `from`, `to`, `prev`, `dropped`, `was`, `registered`,
+ * `manifestBytes`, `bytes`, `resumed`, `tombstone`, `state`, `path`, `slug` —
+ * and none of them is silently widened into this interface, nor lost:
+ * `LifecycleEvent.raw` carries the line verbatim on EVERY path, so an
+ * unmodelled key is re-projectable later without touching the fleet box. That
+ * is the same argument `obs.cgraw` makes, and it is what keeps the modelled
+ * shape a decision rather than an accumulation. Promoting a key is a two-line
+ * edit here plus its reader; minting it in `journalparse.ts` is not.
+ */
+export interface LifecycleMeas {
+  readonly project: string | null;
+  readonly workspace: string | null;
+  readonly branch: string | null;
+  readonly uuid: string | null;
+  readonly wrapper: string | null;
+  /** The tip commit as resolved before the act. */
+  readonly tip: string | null;
+  /** How many `refs/ccrc/attic/<id>/` refs `_ws_attic_pin` created. */
+  readonly attic: number | null;
+  /** Epoch SECONDS as `_reg_set "$id" archived "$(date +%s)"` wrote it
+   *  (`ccd:2753`) — the registry's own unit, carried unconverted so the record
+   *  is what the file said. */
+  readonly archivedAt: number | null;
+  /** `merged:#N | empty | manual` as `ccd:2754` wrote it, or null when the row
+   *  carries no reason. Not proven present by any guard — absent is a
+   *  legitimate state. */
+  readonly archivedReason: string | null;
+  /** The `.hold` text, verbatim, or null. */
+  readonly held: string | null;
+}
+
+/**
+ * One journal line. NDJSON, UTF-8, LF-terminated, <= `LC_LINE_MAX` bytes, one
+ * `printf '%s\n' "$line" >> "$f"` per event — an `O_APPEND` write to a regular
+ * file on Linux is serialised under the inode lock, so concurrent writers
+ * cannot interleave. The precedent is measured, not assumed: `$REG/swap.log`,
+ * 13 concurrent write sites over 49 days, zero corruption.
+ *
+ * THE THREE IDENTITY FAMILIES ARE THREE FIELDS AND THEY NEVER MERGE (operator
+ * ruling R3). There is no `who`. `corroboration(obs.cg, dec.surface)` is the
+ * only sanctioned relation between two of them, and it reports rather than
+ * resolves.
+ *
+ * THIS IS THE LINE, NOT THE ROW. `gen` and `ingestedAt` are the MIRROR's own
+ * facts and live on `MirroredLifecycleEvent` below; no ccd emit carries
+ * either. Two wire fields ccd writes are deliberately NOT modelled here and
+ * are read by `parseJournalLine` without being carried: `v` (the envelope's
+ * version — the wire is additive-only, so a version is not a fact about the
+ * act) and `atNs` (the same clock read `uid`'s prefix already holds). Both
+ * survive in `raw`.
+ *
+ * There is no `reviveLifecycleEvent` here on purpose: parsing a line is
+ * `parseJournalLine` in `server/src/coord/journalparse.ts`, which D8 requires
+ * to be PURE and TOTAL (no clock, no lookup, no registry, no other row) —
+ * that is what makes `lifecycle_events` a re-measurement rather than an
+ * authority, and what makes replay from offset 0 idempotent.
+ */
+export interface LifecycleEvent {
+  /** `<epochNs>.<BASHPID>.<seq>` — INTRINSIC, not positional (D6). `UNIQUE`
+   *  in the mirror, inserted `OR IGNORE`, so re-reading a generation from
+   *  offset 0 is always no-op-or-catch-up and a truncation is recoverable
+   *  rather than fatal. Positional identity (`gen`,`startOffset`) was
+   *  rejected: it is not a function of the bytes when the consumer does not
+   *  own the tail's offset, and a shifted offset silently collides.
+   *
+   *  NULL WHEN THE LINE CARRIED NO PARSEABLE UID — an unparseable or
+   *  cut-short line is still ingested (`raw` below), and a row with no uid is
+   *  simply not deduplicable, so a replay may re-insert it. That is the
+   *  honest cost: MINTING a uid the bytes did not contain would fabricate
+   *  identity, which is worse than a duplicate a reader can see. */
+  readonly uid: string | null;
+  /** Epoch MILLISECONDS, ccd's clock. Derived from the SAME clock read as
+   *  `uid`'s nanosecond prefix, so the two can never disagree about one event.
+   *  Never the server's clock: `MirroredLifecycleEvent.ingestedAt` is the
+   *  separate, explicitly server-owned fact and is never read as an event
+   *  time. Null when the line carried no readable clock. */
+  readonly at: number | null;
+  readonly act: LifecycleAct;
+  /** The act token ccd wrote when this build cannot name it; null whenever
+   *  `act` is not `LC_ACT_UNKNOWN`. The two are never both set. */
+  readonly badact: string | null;
+  readonly outcome: LifecycleOutcome;
+  /** `badact`'s twin on the outcome side; null whenever `outcome` is not
+   *  `LC_OUTCOME_UNKNOWN`. Both halves of the vocabulary degrade the same way
+   *  and keep the token, so neither sends a reader to `raw` for it. */
+  readonly badoutcome: string | null;
+  /** The SUBJECT session id, or null for an act about no single row. Spelled
+   *  `id` here and on every seam; the mirror's COLUMN is `sessionId`, which is
+   *  the one sanctioned rename and is `JournalRow`'s business, not this
+   *  type's. */
+  readonly id: string | null;
+  /** Pairs an `intent` with its outcome (D4). Null for a single-shot act. An
+   *  intent with no sibling at all is a process that died mid-destroy —
+   *  DERIVED BY THE READER over the pair, never stored as an outcome. */
+  readonly tx: string | null;
+  /** The ccd verb that ran (`ws-rm`, `ws-gc`, `forget`, ...). */
+  readonly verb: string | null;
+  /** The refusal token when `outcome === 'refused'`.
+   *
+   *  SPELLED `refusal`, NEVER `refused`, AND THAT IS LOAD-BEARING (D15).
+   *  `server/test/wsaudit.test.ts:57` greps ccd's raw text — comments included
+   *  — with /"refused":"([a-zA-Z0-9-]+)"/ and holds the result set-equal in
+   *  both directions to `wsaudit.ts`'s SENTENCES. An emitter whose format
+   *  string spelled `"refused":"%s"` would inject tokens into that scan and
+   *  red it; that suite must stay green WITH NO EDIT, which is itself an
+   *  assertion of this program. Journal-only tokens get their word from
+   *  `LC_REFUSAL_WORD` below instead. */
+  readonly refusal: string | null;
+  /** One line for a person. DISPLAY-ONLY — nothing parses it back. */
+  readonly detail: string | null;
+  /** The emitter hit `LC_LINE_MAX` and dropped fields to fit — `dec.reason`,
+   *  then `obs.cgraw`, then `meas`, in that order. FALSE when the wire says
+   *  nothing, because absence-permits.
+   *
+   *  MODELLED RATHER THAN INFERRED, and that is the point: without it a
+   *  `meas: null` from truncation and a `meas: null` from "nothing was
+   *  measured" would be one value for two conditions a reader handles
+   *  differently. `refusal` and `detail` are never in the drop set — a refusal
+   *  whose token was dropped would be an untyped refusal. */
+  readonly truncated: boolean;
+  readonly obs: LifecycleObs | null;
+  readonly dec: LifecycleDec | null;
+  readonly meas: LifecycleMeas | null;
+  /** The line VERBATIM, on EVERY path — parsed, degraded and unparseable
+   *  alike. A byte we saw and could not model is a different fact from a byte
+   *  that was never there; keeping all of them is what makes wave 4's replay
+   *  drill byte EQUALITY rather than resemblance, and what lets an unmodelled
+   *  `meas.*` key or a future wire field be re-projected without touching the
+   *  fleet box. */
+  readonly raw: string;
+}
+
+/**
+ * A journal line AS THE MIRROR HOLDS IT.
+ *
+ * `gen` (which generation FILE it was read from) and `ingestedAt` (the
+ * SERVER's clock, at insert) are facts about the READING, not about the act —
+ * no ccd emit carries either, and neither may travel as though it did. They
+ * live here so `LifecycleEvent` stays exactly what a line says, and so the
+ * replay drill can exclude `ingestedAt` by name and still compare everything
+ * else byte for byte.
+ *
+ * One-way: every `MirroredLifecycleEvent` IS a `LifecycleEvent`; the reverse
+ * is a TS2739, which is the compile error that stops a reader inventing a
+ * generation for a line that came off the wire.
+ */
+export interface MirroredLifecycleEvent extends LifecycleEvent {
+  /** The generation's epoch-nanosecond digits — `parseLifecycleGeneration`'s
+   *  answer for the file this line was read from. */
+  readonly gen: string;
+  /** Epoch milliseconds, the SERVER's clock, at insert. Never an event time. */
+  readonly ingestedAt: number;
+}
