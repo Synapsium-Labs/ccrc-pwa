@@ -43,7 +43,7 @@ afterEach(() => { h.cleanup(); });
 
 /** ccd's value for a top-level scalar, or null when it is not declared.
  *  `declare -p` rather than a bare expansion because ccd runs under
- *  `set -uo pipefail` (`ccd/ccd:6`) and an unset expansion exits the shell.
+ *  `set -uo pipefail` (`ccd/ccd:7`) and an unset expansion exits the shell.
  *  `prelude` exists so the reader can be pinned against a SYNTHETIC
  *  declaration before it is pointed at the real file. */
 const scalar = (name: string, prelude = ''): string | null => {
