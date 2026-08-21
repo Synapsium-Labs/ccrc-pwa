@@ -113,6 +113,13 @@ const CLIP_MIME: Record<string, string> = {
  */
 const ANON_VISIBLE: Record<keyof AuthStatus, boolean> = {
   authed: true, passkeysEnrolled: true, mode: true,
+  // Deliberate (Task 5, spec D7): the login screen must say "your passkeys were
+  // enrolled for a different box name" BEFORE anyone signs in, so the names ride
+  // the anonymous body under `passkeysEnrolled`'s own ruling — an anonymous
+  // caller learns that some passkey exists for some name, which the passkey
+  // button being drawn already discloses. Names only; ids and counts stay where
+  // they were.
+  enrolledRpIds: true,
 };
 
 /** `full`, reduced to {@link ANON_VISIBLE}'s fields. */
@@ -947,7 +954,18 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // Typed as `AuthStatus` HERE, at the producer, so a field added to the wire
     // type is a compile error in this handler rather than a silently missing key
     // (the `FleetHealth` precedent, :211).
-    const full: AuthStatus = { authed, passkeysEnrolled: passkeys.count(), mode };
+    //
+    // `enrolledRpIds` is EMITTED ONLY WHEN NON-EMPTY (Task 5): absent means
+    // "unknown" — an older server's silence — and emitting `[]` would make this
+    // build spell "no passkeys" the same way, so the PWA's single reader could
+    // never tell the two apart again. On a DARK box the store is never loaded
+    // and the projection is empty, so the field stays absent there too — the
+    // same no-disk property `passkeysEnrolled`'s `0` rides on.
+    const rpIds = passkeys.enrolledRpIds();
+    const full: AuthStatus = {
+      authed, passkeysEnrolled: passkeys.count(), mode,
+      ...(rpIds.length > 0 ? { enrolledRpIds: rpIds } : {}),
+    };
     return authed ? full : anonymousStatus(full);
   });
 

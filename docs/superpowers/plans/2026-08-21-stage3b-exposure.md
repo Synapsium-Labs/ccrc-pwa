@@ -273,21 +273,35 @@ Verdict table (each row is a test):
   `Your passkeys were enrolled for a different box name (<old>). Sign in with the passphrase and re-enrol.`
   — otherwise the existing cancelled sentence stands.
 
-- [ ] **Step 1: RED (server)** — status route: with two credentials under `localhost` and one
+- [x] **Step 1: RED (server)** — status route: with two credentials under `localhost` and one
   under `mybox.duckdns.org`, `enrolledRpIds` is `['localhost','mybox.duckdns.org']`; with no
   store, the field is absent or `[]` (pick absent — assert absent); the field never contains a
-  credential id (shape assertion).
-- [ ] **Step 2: GREEN (server)** — `enrolledRpIds()` on the store; emit from the route.
-  Single reader on the PWA side.
-- [ ] **Step 3: RED (pwa)** — the rename state renders the re-enrol sentence naming the old
+  credential id (shape assertion). *(Measured: auth-routes 1 failed / 52 passed — the
+  projection case reds; the absent-with-no-store case is green pre-implementation by nature,
+  since absence is today's shape.)*
+- [x] **Step 2: GREEN (server)** — `enrolledRpIds()` on the store; emit from the route.
+  Single reader on the PWA side. *(53/53. The PWA's single reader is the existing
+  `readAuthStatus` — `STATUS_PATH` is spelled once in `pwa/src/lib/auth.ts` and the field
+  arrives through `Partial<AuthStatus>` with no new code, so that file needed no edit.)*
+- [x] **Step 3: RED (pwa)** — the rename state renders the re-enrol sentence naming the old
   rpId; a plain cancel (empty/matching `enrolledRpIds`) still renders the cancelled sentence.
-- [ ] **Step 4: GREEN (pwa)** — thread the field through the login screen's status read.
-- [ ] **Step 5:** mutation — drop the rpId-mismatch condition (the plain-cancel test reds,
+  *(Measured: auth-login 1 failed / 39 passed — the rename case reds; the two plain-cancel
+  cases pass pre-implementation by nature (today every ceremony failure is a cancel); the
+  Step-5 mutation is what proves the matching-name one guards.)*
+- [x] **Step 4: GREEN (pwa)** — thread the field through the login screen's status read.
+  *(40/40, `tsc --noEmit` clean. The current-rpId half rides `PasskeyCeremonyError.rpId` —
+  D-142.)*
+- [x] **Step 5:** mutation — drop the rpId-mismatch condition (the plain-cancel test reds,
   because every cancel would claim a rename). D-149 sweep note in the commit (no route
   added; the exempt GET's body widened — checked `ccd/ccrc` + both skills for `auth/status`
   readers: doctor's `_check_auth` reads it; verify its parser tolerates the new field).
   Suites + `single-definition` + pwa typecheck green. Commit
   `feat(auth): status names enrolled rpIds; the rename failure says what is true`.
+  *(Measured: mismatch condition reduced to `enrolled.length > 0` → auth-login 1 red (the
+  matching-name plain-cancel pin) / 39 passed; reverted. D-149 sweep: ZERO out-of-package
+  `auth/status` readers exist — the parenthetical's `_check_auth` claim was stale, D-141.
+  Gate + neighbour suites green: server auth-routes + single-definition + auth-passkey +
+  auth-gate 378/378, typecheck-tests 9/9; pwa auth-login + auth-passkey 76/76, tsc clean.)*
 
 ### Task 6: trustProxy settled as none
 
@@ -355,3 +369,18 @@ Verdict table (each row is a test):
   verb prints the exact `daemon-reload && enable --now` command and exits 0, pinned by a
   fifth test (`a failing systemctl DEGRADES, never dies`) beyond Step 1's three named bullets.
   Doctor's `name` check (Task 4) carries the not-yet-enabled state.
+- **D-141** (Task 5): the D-149 sweep's parenthetical claim is stale — measured, NO
+  out-of-package consumer reads `/api/auth/status` at all (`grep -rn "api/auth" ccd/ deploy/`
+  → zero hits). Doctor's `_check_auth` measures `ccrc.env`, the secret file and the session
+  store ON DISK through `_box_env_value`/`_box_auth_path`, never the HTTP route, so there is
+  no parser to verify tolerance on. The sweep still ran and the commit says what it checked;
+  the widened exempt body has exactly one out-of-server reader, the PWA's `readAuthStatus`,
+  which types the body `Partial<AuthStatus>` and is additive-tolerant by construction.
+- **D-142** (Task 5): the rename condition needs the box's CURRENT rpId, which the plan
+  locates "already present in the assert-start response" — a response only
+  `pwa/src/lib/passkey.ts` (not in the task's file list) has in scope. Shipped: `assertPasskey`
+  stamps it onto every `PasskeyCeremonyError` it throws after start (`readonly rpId`), and the
+  login screen compares that against `status.enrolledRpIds`. Two adjacent anchor corrections:
+  the login screen lives at `pwa/src/components/LoginScreen.tsx` (the list says `screens/`),
+  and `pwa/src/lib/auth.ts` needed no edit — its `readAuthStatus` was already the single
+  reader the field rides in on.

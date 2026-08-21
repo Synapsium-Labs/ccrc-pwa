@@ -31,7 +31,26 @@ const stubPty = (): PtyLike => ({
   onData: () => ({ dispose: () => {} }), write: () => {}, resize: () => {}, kill: () => {},
 });
 
-interface AppOpts { enabled?: boolean; secret?: boolean; secretText?: string; cookieSecure?: boolean }
+interface AppOpts {
+  enabled?: boolean; secret?: boolean; secretText?: string; cookieSecure?: boolean;
+  /** rpIds to seed `~/.ccrc/passkeys.json` with, one credential per entry
+   *  (repeat a name to enrol two under it) — Task 5 (3b)'s `enrolledRpIds`
+   *  measurements. */
+  rpIds?: string[];
+}
+
+/** Distinct valid-base64url credential ids for {@link credRow} — nothing about
+ *  them is cryptographically real, and nothing needs to be: the route under
+ *  test projects NAMES off stored rows, it verifies nothing. */
+const CRED_IDS = ['AQID', 'BAUG', 'BwgJ'] as const;
+
+/** A minimal stored row `parseCredentials` (credentials.ts) keeps: every field
+ *  present and well-formed, both base64url fields canonical. */
+const credRow = (credentialId: string, rpId: string): Record<string, unknown> => ({
+  credentialId, spkiB64url: 'AAAA', algorithm: -7, rpId,
+  origin: `https://${rpId}`, signCount: 0, uvAtEnrollment: true,
+  enrolledAt: 1, lastUsedAt: 1, label: 'x',
+});
 
 const openApp = async (opts: AppOpts = {}): Promise<{ app: FastifyInstance; home: string }> => {
   const home = mkTmp('ccrc-auth-routes-');
@@ -40,6 +59,12 @@ const openApp = async (opts: AppOpts = {}): Promise<{ app: FastifyInstance; home
     mkdirSync(path.join(home, '.ccrc'), { recursive: true });
     writeFileSync(path.join(home, '.ccrc', 'auth.scrypt'),
       opts.secretText ?? `${await hashLine(PASSPHRASE, FAST_PARAMS, 1)}\n`, { mode: 0o600 });
+  }
+  if (opts.rpIds !== undefined) {
+    mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    writeFileSync(path.join(home, '.ccrc', 'passkeys.json'),
+      JSON.stringify(opts.rpIds.map((rpId, i) => credRow(CRED_IDS[i] as string, rpId))),
+      { mode: 0o600 });
   }
   const deps: Deps = {
     ...base,
@@ -519,6 +544,42 @@ describe('GET /api/auth/status', () => {
     const after = await app.inject({ method: 'GET', url: '/api/auth/status', headers: { cookie } });
     expect(after.statusCode).toBe(200);
     expect(after.json()).toMatchObject({ authed: false, mode: 'passphrase' });
+  });
+
+  it('names the enrolled rpIds to an ANONYMOUS caller — distinct, sorted, names only', async () => {
+    // Task 5 (3b, spec D7): the login screen must be able to say "your passkeys
+    // were enrolled for a different box name" BEFORE anyone is signed in, so the
+    // field rides the same exempt read as `passkeysEnrolled`, under the same
+    // ruling — an anonymous caller learns that some passkey exists for some
+    // name, which the passkey button already discloses. Two credentials under
+    // `localhost` and one under `mybox.duckdns.org`: the projection is DISTINCT
+    // (two rows collapse to one name) and SORTED.
+    const w = await openApp({ rpIds: ['mybox.duckdns.org', 'localhost', 'localhost'] });
+    app = w.app;
+    const res = await app.inject({ method: 'GET', url: '/api/auth/status' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Record<string, unknown>;
+    expect(body['enrolledRpIds']).toEqual(['localhost', 'mybox.duckdns.org']);
+    // The distinctness above is doing work: three rows were seeded.
+    expect(body['passkeysEnrolled']).toBe(3);
+    // NAMES ONLY — never a credential id (the shape assertion): every member is
+    // one of the seeded rpIds, and none of the seeded ids leaks in anywhere.
+    for (const v of body['enrolledRpIds'] as unknown[]) {
+      expect(['localhost', 'mybox.duckdns.org']).toContain(v);
+    }
+    expect(JSON.stringify(body['enrolledRpIds'])).not.toMatch(/AQID|BAUG|BwgJ/);
+  });
+
+  it('with NO store the field is ABSENT — absence means "unknown", never "no passkeys"', async () => {
+    // The wire-discipline half (Global Constraints): an OLDER server omits the
+    // field entirely, so a reader must treat absence as "this box has not said".
+    // Emitting `[]` here would make absence and emptiness two spellings of one
+    // producer, and the PWA's single reader could no longer tell an older server
+    // from a box with no keys.
+    const w = await openApp(); app = w.app;
+    const body = (await app.inject({ method: 'GET', url: '/api/auth/status' }))
+      .json() as Record<string, unknown>;
+    expect('enrolledRpIds' in body).toBe(false);
   });
 
   it('an anonymous body carries ONLY the enumerated fields — a later one cannot widen the leak', async () => {
