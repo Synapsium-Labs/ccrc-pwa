@@ -6,7 +6,7 @@
 // through it: what the Set-Cookie line actually says, what a wrong passphrase
 // costs, what a logout revokes, and what the status route reports.
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { inspect } from 'node:util';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
@@ -670,6 +670,43 @@ describe('loadConfig — the four auth keys', () => {
     // imported, so `os.homedir()` is a compile error rather than a temptation.
     // (The name still appears in the docstring that explains why it went.)
     expect(src).not.toMatch(/^import .* from 'node:os';$/m);
+  });
+});
+
+// ── trustProxy is settled: none (spec 3b D5) ─────────────────────────────
+
+describe('trustProxy is settled: none — no proxy trust, no forwarded-header consumer', () => {
+  /** Every `.ts` under `server/src`, walked the way `single-definition.test.ts` walks
+   *  its roots — recursive, and `__`-prefixed entries skipped because they
+   *  are TRANSIENT mutants a parallel suite writes (`boot.test.ts`'s
+   *  `__boot_control_mutant__.ts`), which vanish mid-walk. */
+  const srcFiles = (dir: string): string[] => {
+    const out: string[] = [];
+    for (const e of readdirSync(dir)) {
+      if (e.startsWith('__')) continue;
+      const p = path.join(dir, e);
+      if (statSync(p).isDirectory()) { out.push(...srcFiles(p)); continue; }
+      if (/\.tsx?$/.test(p)) out.push(p);
+    }
+    return out;
+  };
+
+  it('the string appears nowhere in server/src except config.ts, whose docstring records the settlement', () => {
+    const root = path.resolve(__dirname, '../src');
+    const files = srcFiles(root);
+    // A scan over an empty list passes everything — assert the walk found the
+    // tree before trusting anything the loop below says.
+    expect(files.length).toBeGreaterThan(0);
+    expect(files.map((f) => path.relative(root, f))).toContain('config.ts');
+    for (const f of files) {
+      if (path.basename(f) === 'config.ts') continue;
+      expect(readFileSync(f, 'utf8'), path.relative(root, f)).not.toContain('trustProxy');
+    }
+    // …and config.ts's one mention is the SETTLED statement, not the old
+    // forward-reference: the decision no longer "belongs to Stage 3b".
+    const cfg = readFileSync(path.join(root, 'config.ts'), 'utf8');
+    expect(cfg).not.toContain('belongs to Stage 3b');
+    expect(cfg).toContain('settled: none');
   });
 });
 

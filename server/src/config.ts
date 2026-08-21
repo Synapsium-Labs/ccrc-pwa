@@ -73,11 +73,21 @@ export interface CcrcConfig {
    *
    * DRIVEN BY CONFIG, NEVER BY THE REQUEST. Deriving it from `req.protocol`
    * (or from `X-Forwarded-Proto`) is the shape that fails silently behind a
-   * TLS-terminating proxy: `tailscale serve` speaks https to the browser and
-   * plain http to this process, so a scheme-derived flag would drop `Secure`
-   * on exactly the deployment that needs it most. The proxy-trust decision
-   * (`trustProxy`) belongs to Stage 3b, when Caddy terminates TLS; until then
-   * this is a value the operator states, not one the server guesses.
+   * TLS-terminating proxy: `tailscale serve` and Caddy alike speak https to
+   * the browser and plain http to this process, so a scheme-derived flag
+   * would drop `Secure` on exactly the deployment that needs it most. This
+   * is a value the operator states, not one the server guesses.
+   *
+   * The proxy-trust decision is settled: none (spec 3b D5). Fastify is
+   * constructed without `trustProxy`, and the 2026-08-21 survey measured ZERO
+   * consumers of `req.ip` / `req.protocol` / `req.hostname` / `X-Forwarded-*`
+   * in this package: the rate limiter is deliberately global (its own
+   * docstring names spoofable `X-Forwarded-For` as the reason), and `Secure`
+   * and the Origin check are config-driven by design. Turning proxy trust on
+   * would buy nothing today and would create a spoof surface for whatever
+   * reads `req.ip` NEXT — a consumer that arrives armed by a setting nobody
+   * re-audits. `auth-routes.test.ts` pins the settlement: the string
+   * `trustProxy` appears nowhere in `server/src` outside this docstring.
    *
    * The positive test is inverted relative to `authEnabled` — anything that is
    * not exactly `'on'` leaves the cookie `Secure` — because here the fail-safe

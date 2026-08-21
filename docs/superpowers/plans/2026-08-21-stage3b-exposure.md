@@ -309,14 +309,19 @@ Verdict table (each row is a test):
 - Modify: `server/src/config.ts:74-80` (the forward-reference paragraph)
 - Test: `server/test/auth-routes.test.ts` (one new case)
 
-- [ ] **Step 1: RED** — a source-scan test in the `auth-routes` file's idiom: the string
+- [x] **Step 1: RED** — a source-scan test in the `auth-routes` file's idiom: the string
   `trustProxy` appears nowhere in `server/src/**/*.ts` except `config.ts`'s docstring (grep
   the corpus the way `single-definition` builds file lists). It fails only in the sense of
   needing the docstring update to exist — combine: assert `config.ts`'s cookieSecure
   docstring no longer says "belongs to Stage 3b" and instead says "settled: none".
-- [ ] **Step 2: GREEN** — rewrite the paragraph per spec D5 (config-driven, no proxy trust, no
+  *(Measured: auth-routes 1 failed / 53 passed — the docstring half; the corpus-scan half
+  proven separately by mutation below.)*
+- [x] **Step 2: GREEN** — rewrite the paragraph per spec D5 (config-driven, no proxy trust, no
   forwarded-header consumer; the measured zero-consumer fact and the spoof-surface argument).
-- [ ] **Step 3:** suites green. Commit `docs(config): trustProxy is settled — none, and why`.
+  *(54/54 green. Corpus-scan mutation: `// trustProxy` planted in `src/watch.ts` →
+  1 red / 53 passed; reverted.)*
+- [x] **Step 3:** suites green. Commit `docs(config): trustProxy is settled — none, and why`.
+  *(auth-routes 54/54.)*
 
 ### Task 7: Runbook step 11, docs, example env
 
