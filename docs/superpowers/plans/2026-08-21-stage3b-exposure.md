@@ -331,18 +331,29 @@ Verdict table (each row is a test):
 - Test: `server/test/runbook-holds.test.ts` (pins for any quoted transcript lines),
   `server/test/readme-holds.test.ts` if README quotes transcripts
 
-- [ ] **Step 1:** write step 11: prerequisites (router forwards 80/443 — the D1 sentence; a
+- [x] **Step 1:** write step 11: prerequisites (router forwards 80/443 — the D1 sentence; a
   DuckDNS account), `ccrc expose duckdns`, the sudo ceremony, `ccrc doctor` expected
   transcript (exposure/caddy/cert/name PASS lines), restart, phone install, login, re-enrol
   passkeys (the D7 choreography order verbatim), and the reference-box migration note (D8.2,
   operator-only). Rewrite `:508-516`'s two bullets to point at step 11 and correct the
   refusal-text claim (the shipped sentence is Task 5's, not "enrolled for localhost —
-  re-enrol").
-- [ ] **Step 2:** `ccrc.env.example`: document that exposure keys live in `exposure.env` and
+  re-enrol"). *(Shipped as 11 + 11a–11f, including the 11a un-shadow edit the runbook path
+  itself forces — step 10b put both keys in `ccrc.env`, exactly the state Task 2's shadow
+  refusal exists for. The `:508-516` region held ONE bullet carrying both stale claims —
+  D-143.)*
+- [x] **Step 2:** `ccrc.env.example`: document that exposure keys live in `exposure.env` and
   which file wins; README: the exposure section (BYO-proxy contract sentence from spec
-  `:160-164` verbatim).
-- [ ] **Step 3: RED→GREEN** — add `runbook-holds` pins for every doctor line step 11 quotes.
+  `:160-164` verbatim). *(README quotes no transcript fences, so `readme-holds` needed no
+  extension; the two stale 3a sentences found in `ccrc.env.example` fixed in the same pass —
+  D-143.)*
+- [x] **Step 3: RED→GREEN** — add `runbook-holds` pins for every doctor line step 11 quotes.
   Full server suite green. Commit `docs(runbook): step 11 — expose, ceremony, phone proof`.
+  *(Red-first: the eight step-11 pins written BEFORE the docs — runbook-holds 8 failed /
+  6 passed — then the docs, then 14/14. The exposure and name PASS lines are measured off the
+  REAL `_check_exposure`/`_check_name` (ccrc sourced, fixture HOME, stubbed
+  `getent`/`hostname`); caddy is a source literal, cert a source template. Mutations, each
+  reverted: quoted exposure line paraphrased (`mode 0600`→`mode 600`) → 1 red / 13 passed;
+  the never-shipped "enrolled for localhost — re-enrol" quote restored → 1 red / 13 passed.)*
 
 ### Task 8: Whole-branch review + close-out
 
@@ -389,3 +400,15 @@ Verdict table (each row is a test):
   the login screen lives at `pwa/src/components/LoginScreen.tsx` (the list says `screens/`),
   and `pwa/src/lib/auth.ts` needed no edit — its `readAuthStatus` was already the single
   reader the field rides in on.
+- **D-143** (Task 7): the plan's "`:508-516`'s two bullets" was ONE bullet carrying both stale
+  claims (the refusal text and the trustProxy forward-reference). Shipped as a split into two
+  bullets — the real-name/TLS one now pointing at step 11 and quoting Task 5's shipped
+  sentence, and a proxy-trust one stating the D5 settlement ("settled: none", grounded in
+  `config.ts`) — so the region reads as the two claims it always contained. Adjacent finding,
+  same stale-sentence class, fixed in the same pass though outside the named checklist:
+  `deploy/ccrc.env.example` carried its own copy of the never-shipped refusal quote
+  (`"enrolled for <old> — re-enrol"`, the CCRC_RP_ID bullet) and a "proxy-trust belongs to
+  stage 3b" forward-reference (the CCRC_COOKIE_INSECURE comment); both rewritten to the
+  shipped sentence and the settled decision. The runbook-holds pin greps the RUNBOOK only, so
+  the example file's copy is corrected but not pinned — it quotes UI prose, not an
+  operator-diffable transcript line.

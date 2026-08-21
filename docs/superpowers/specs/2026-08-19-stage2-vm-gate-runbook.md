@@ -441,6 +441,129 @@ precisely so it can be thrown away.
 is and nothing reads it; `ccrc doctor` goes back to reporting a usable passphrase behind an off gate.
 That is the rollback for this whole step and it needs no other undo.
 
+### 11. Expose the box publicly (stage 3b) — `ccrc expose`, the root ceremony, the phone proof
+
+**Not part of the stage-2 timing either**, and unlike step 10 it may not be runnable on a throwaway
+VM at all: it needs a router you control forwarding ports 80 and 443 to this box, which a NAT'd VM
+in someone else's cloud does not have. This is the stage-3b half of the same story — the box gets a
+public name and a real certificate, and the proof moves off localhost onto a phone on the open
+internet. A box that stops at step 10 has no public name; that is the shipped default and a
+legitimate end state.
+
+**Prerequisites:**
+
+- **Your router forwards ports 80 and 443 to this box.** Stock Caddy's automatic HTTPS gets its
+  certificate through the standard ACME challenges (HTTP-01/TLS-ALPN-01), and both need inbound
+  reachability: inbound `:80` and `:443` reaching this box (a router port-forward on a home NAT) is
+  a **prerequisite**, not something any tool on the box can arrange — or even check — for you. The
+  doctor detects its absence only indirectly, as certificate issuance failing loudly.
+- **A DuckDNS account** (free): sign in at duckdns.org, add a subdomain, and keep the token from
+  that page at hand. (A domain of your own works too — `ccrc expose byo` prompts for the full
+  origin and the passkey rp id, installs no updater, and leaves DNS yours by contract.)
+- **Step 10 done on this box**: passphrase set, gate armed. Exposure without the gate is a
+  driveable box on the public internet.
+
+#### 11a. Un-shadow `ccrc.env`
+
+Step 10b put `CCRC_RP_ID` and `CCRC_ORIGIN` into `~/.ccrc/ccrc.env` — the right move on a box whose
+only name was `localhost`, and exactly the state `ccrc expose` refuses to write over: exposure keys
+live in their own file, `~/.ccrc/exposure.env`, which the server unit reads AFTER `ccrc.env`
+(systemd's later-file-wins), so the verb's copy would silently override yours — it refuses instead,
+naming both files, and writes nothing. Edit `~/.ccrc/ccrc.env` and blank (or delete) three lines,
+leaving `CCRC_AUTH=on` in place:
+
+```
+CCRC_RP_ID=
+CCRC_ORIGIN=
+CCRC_COOKIE_INSECURE=
+```
+
+The third never shadowed anything, but it was step 10d's plain-http localhost opt-out and this box
+is about to be https: left `on`, the session cookie loses `Secure` on exactly the deployment that
+needs it, and the mirror image of 10c's cookie boot warning comes back to say so.
+
+#### 11b. `ccrc expose duckdns`
+
+Run it from a terminal on the box — it refuses a pipe, because the token is read with echo off and
+under `curl … | bash` stdin is the installer script:
+
+```bash
+ccrc expose duckdns
+```
+
+Two prompts: the subdomain (the `<sub>` of `<sub>.duckdns.org` — one label, no dots) and the token
+(never echoed, never in argv). The verb writes `~/.ccrc/exposure.env` (0600 — it holds the token),
+writes `~/.ccrc/Caddyfile`, installs and enables the `ccrc-ddns` user timer that re-points the
+DuckDNS record at this box every five minutes, and PRINTS the root ceremony below without running
+any of it. Re-running with the same answers converges; `ccrc expose status` re-reads the state at
+any time and reports the token as SET/NOT SET, never its value.
+
+#### 11c. The root ceremony — the three commands that are yours
+
+`ccrc` has never run `sudo` and does not start here: Caddy binds ports 80 and 443 as root, so
+installing and starting it is the operator's — printed by the verb, and repeated by `ccrc doctor`'s
+`caddy` check as the remedy until it is done:
+
+```bash
+sudo apt install caddy      # Debian/Ubuntu; the stock binary — no plugins needed
+sudo ln -sf ~/.ccrc/Caddyfile /etc/caddy/Caddyfile   # or copy it — then re-copy after every 'ccrc expose'
+sudo systemctl enable --now caddy
+```
+
+Caddy reads the generated two-line Caddyfile (`<sub>.duckdns.org { reverse_proxy 127.0.0.1:7788 }`,
+with the port read from your `ccrc.env`) and fetches the certificate itself. Nothing else changes:
+the server keeps listening on loopback only, exactly as installed, and Caddy is the one thing in
+front of it.
+
+#### 11d. `ccrc doctor` — expect four new green lines
+
+Doctor measures each piece of the exposure separately. With `mybox` standing in for your subdomain
+— and the day count and the address being your box's own — a converged box reads:
+
+```
+PASS exposure: configured — CCRC_ORIGIN=https://mybox.duckdns.org (rp id: mybox.duckdns.org), mode 0600
+PASS caddy: the caddy system unit is active — TLS terminates there and proxies to this box's loopback server
+PASS cert: 127.0.0.1:443 serves a certificate for mybox.duckdns.org, valid another 89 days
+PASS name: mybox.duckdns.org resolves to this box (203.0.113.7)
+```
+
+All four SKIP on a box that never ran `ccrc expose` — not-configured is a valid end state, not a
+fault. In the first minutes after the verb, `cert` and `name` legitimately go red while the DNS
+record propagates and Caddy fetches its first certificate; each verdict carries its remedy, and
+`name` deliberately WARNs rather than FAILs when the record resolves somewhere unexpected, because
+propagation lag is normal and a red line every operator learns to skim is worse than a yellow one.
+A `cert` FAIL that persists is almost always the port-forward prerequisite unmet.
+
+#### 11e. Restart, the phone proof, and re-enrolling passkeys
+
+The cutover order is fixed (stage-3b spec, D7): name resolves → Caddy serves → `ccrc expose` wrote
+`CCRC_ORIGIN=https://<name>` + `CCRC_RP_ID=<registrable domain>` → `systemctl --user restart ccrc`
+→ log in with the passphrase → **re-enrol every passkey**.
+
+```bash
+systemctl --user restart ccrc.service
+```
+
+The restart is what makes the server read `exposure.env` — the gate's origin and rp id are boot
+config, exactly as in 10c. Then, on a phone OFF your home network (cellular data — that is what
+makes it the public-internet proof): open `https://mybox.duckdns.org/`, expect the login screen
+over a real certificate, sign in with the passphrase, and install the PWA (Add to Home Screen).
+That is the stage's proof criterion.
+
+Passkeys are origin-bound, so the key from step 10e — enrolled under `localhost` — does not come
+along, by design. A passkey attempt on the new name fails with the sentence that says what is true:
+*"Your passkeys were enrolled for a different box name (localhost). Sign in with the passphrase and
+re-enrol."* Do exactly that: passphrase in, then Accounts → Passkeys → **Revoke** the stale
+`localhost` key, then **Add a passkey on this device** — step 10e's flow, now at the real name.
+
+#### 11f. The reference box migrates by hand, not by this repo
+
+The reference box (the live fleet's server, `CCRC_HOST=203.0.113.7` behind `tailscale serve`) is
+exposure by operator ceremony that predates this verb, and nothing in this repository performs its
+migration (stage-3b spec, D8.2): moving it onto `ccrc expose` is a two-sided edit — rebind to
+loopback, and re-point or retire the out-of-repo serve config — done at its own terminal, by its
+operator, on its own schedule. This step documents that; it does not do it.
+
 ## The deliverable beyond pass/fail
 
 A clean pass/fail on the above is necessary but is not, by itself, the reason this gate exists — the
@@ -503,17 +626,23 @@ point of the A2-NEW work this gate is proving. If a step above does not converge
   with no real capture yet. An RC-on run on the same box is worth doing too, but it is proving an
   already-measured path (the existing real captures in `server/test/fixtures/panes/` are all RC-on),
   not closing a gap.
-- **The gate at a real name, or behind real TLS.** Step 10's proof runs on **localhost**, and that is
-  a deliberate scope, not a shortcut. What it proves is the MECHANISM: that the flag arms, that the
-  passphrase door works, that a passkey can be enrolled and can then sign in, that revocation takes
-  effect without a restart, that a rotation expires sessions and leaves keys alone. What it does NOT
-  carry forward is the deployment. **A passkey enrolled here does not work at stage 3b's public
-  name** — a credential records the `rpId` it was enrolled under, so the same authenticator against
-  `<name>.duckdns.org` is refused with "enrolled for localhost — re-enrol". That is the designed
-  behaviour (it is how a rename fails loudly instead of silently), and it means the enrolment step
-  has to be repeated once on the real name. Likewise `Secure` behind a TLS-terminating proxy, and the
-  `trustProxy` / `X-Forwarded-Proto` decision that goes with it, is stage 3b's work: this run either
-  ships `Secure` over plain-http localhost or opts out of it, and neither is the production answer.
+- **The gate at a real name, or behind real TLS — that is step 11's run, not this one.** Step 10's
+  proof runs on **localhost**, and that is a deliberate scope, not a shortcut. What it proves is the
+  MECHANISM: that the flag arms, that the passphrase door works, that a passkey can be enrolled and
+  can then sign in, that revocation takes effect without a restart, that a rotation expires sessions
+  and leaves keys alone. What it does NOT carry forward is the deployment. **A passkey enrolled here
+  does not work at the public name** — a credential records the `rpId` it was enrolled under, so the
+  same authenticator against `<name>.duckdns.org` fails, and the login screen says what is true:
+  *"Your passkeys were enrolled for a different box name (localhost). Sign in with the passphrase
+  and re-enrol."* That is the designed behaviour (it is how a rename fails loudly instead of
+  silently), and step 11e is where the enrolment is repeated once, on the real name.
+- **Anything about proxy-header trust — because there is nothing left to prove.** This run either
+  ships `Secure` over plain-http localhost or opts out of it, and neither is the production answer;
+  step 11 is where `Secure` runs behind real TLS. The `trustProxy` / `X-Forwarded-Proto` decision
+  that goes with a TLS-terminating proxy is **settled: none** (stage-3b spec, D5; recorded in
+  `server/src/config.ts` and pinned by test): every auth decision is config-driven, the server
+  consumes no forwarded header, and turning proxy trust on would only arm a spoof surface for
+  whatever reads `req.ip` next.
 - **More than one operator.** The session layer carries a single identity — there are no users, no
   roles, and no per-person audit. That is the team-edition seam, held open deliberately; this slice
   ships one operator.
