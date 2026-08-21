@@ -109,10 +109,12 @@ describe('openCoordDb', () => {
     try { openCoordDb(p); } catch (err) { caught = err; }
     expect(caught).toBeInstanceOf(CoordDbUnmigratable);
     const message = (caught as Error).message;
-    // The message must not point the operator at a backup that was never
-    // taken — deploy.sh backs up dist-pwa/agent-dist/etc, never coord.db.
-    expect(message).not.toMatch(/restore from ~\/ccrc-backups/i);
-    expect(message).toMatch(/no coord\.db backup/i);
+    // The message points the operator at the snapshot deploy.sh actually
+    // takes every run (backup-coord.mjs, VACUUM INTO) — it spent its first
+    // week claiming "There is no coord.db backup" after that became false,
+    // sending an operator to ledger reconstruction with a restorable
+    // snapshot sitting in ~/ccrc-backups/<ts>/.
+    expect(message).toMatch(/ccrc-backups\/<ts>\/coord\.db/);
     // And it must not claim "nothing changed" unconditionally — here it
     // happens to be true (this was the first migration attempted this boot).
     expect(message).toMatch(/no table data changed/i);
