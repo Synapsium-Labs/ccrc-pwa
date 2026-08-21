@@ -3435,3 +3435,132 @@ export interface PasskeyListResponse {
    *  then empty for a reason that is not "there are none". */
   storeUnreadable: boolean;
 }
+
+/* ---------------------------------------------------------------------------
+ * THE LIFECYCLE JOURNAL — build 9, §1 (D1-D7). The fleet's PAST TENSE.
+ *
+ * Every act a session or a human takes on the fleet leaves an append-only
+ * NDJSON line in `$REG/.lifecycle/`, a dot-prefixed DIRECTORY that `_reg_purge`
+ * (`ccd:458-556`) structurally cannot reach — its suffix filter globs
+ * `$REG/<id>.*` and ids never begin with a dot. That is what makes a
+ * destruction record possible at all: a new registry FIELD would be destroyed
+ * by the loop the day it was added.
+ *
+ * NAME COLLISION, SAID OUT LOUD SO THE NEXT READER DOES NOT CONFLATE THEM.
+ * `SessionLifecycle` / `sessionLifecycle()` / `LifecycleField` /
+ * `LifecycleInput` (:963-1260 above) classify a registry row AS IT IS NOW —
+ * WHY a session is not alive. Everything below is what was DONE, by whom, and
+ * with what result. Two different lifecycles, two different questions. The
+ * journal half is prefixed `LC_` / `Lifecycle{Act,Outcome,Obs,Dec,Meas,Event}`
+ * and lives here, at the far end of the file, rather than beside them.
+ *
+ * Nothing here decides anything about the fleet. ccd cannot refuse on identity
+ * — single UNIX user, attribution not authentication — and this vocabulary does
+ * not pretend otherwise. The record IS the mechanism.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Every act ccd can journal. ONE WORD PER OPERATOR-VISIBLE ACT, named for the
+ * verb a person would say and not for the bash function that implements it:
+ * `destroy`, because `ws-rm` and `ws-gc --prune` both destroy a workspace and
+ * a reader asking "what destroyed this" must not have to know which ran. The
+ * verb itself travels separately, in `LifecycleEvent.verb`.
+ *
+ * `unknown` IS THE READER'S DEGRADE, NEVER A CALL SITE'S CHOICE (D6). A line
+ * naming an act this build does not model is ingested as `unknown`, with the
+ * token preserved in `LifecycleEvent.badact` and the bytes in `raw`: a byte we
+ * saw and could not model is a different fact from a byte that was never
+ * there, and both differ from a row we dropped. So ccd's own `_LC_ACTS` holds
+ * this list MINUS `unknown` — set-equal in both directions, pinned by
+ * `server/test/lifecycle-vocabulary.test.ts`, which EXECUTES the bash array
+ * rather than grepping for it.
+ *
+ * Adding an act is a two-line edit here (union member + map key) and a
+ * `_LC_ACTS` entry in ccd. `Record<LifecycleAct, true>` makes forgetting the
+ * map a TS2739 and an extra key a TS2353; the cross-language test makes
+ * forgetting ccd a red suite. A hand-written `readonly LifecycleAct[]` gives
+ * neither, which is why `LIFECYCLE_ACTS` is derived below.
+ */
+export type LifecycleAct =
+  | 'create'        // ws-add minted a workspace
+  | 'claim'         // _reg_claim wrote `started`
+  | 'purge'         // _reg_purge is about to unlink the row (the D3 backstop)
+  | 'supervise'     // _ws_supervise enabled the unit
+  | 'unsupervise'   // _ws_unsupervise disabled it and stamped `.stopped`
+  | 'destroy'       // ws-rm / ws-gc --prune removed a workspace
+  | 'rename'        // ws-rename moved the branch
+  | 'hold' | 'release'
+  | 'archive' | 'restore'
+  | 'attic-drop'    // ws-attic --drop deleted pinned refs
+  | 'reap'          // ws-reap
+  | 'gc'            // ws-gc --prune, as a run rather than a per-row destroy
+  | 'spawn'         // _spawn_settle, CHANGE-ONLY (§2)
+  | 'start' | 'ensure' | 'swap' | 'enable' | 'stop' | 'forget'
+  | 'unknown';      // the reader's degrade. NEVER written by a ccd call site.
+
+/** Derived from the type, never restated beside it — `PR_REASON_MAP`'s idiom
+ *  (:299) and its exact guarantee. Module-private: only the derived list and
+ *  the guard are exported, so `LIFECYCLE_ACTS.includes(raw as LifecycleAct)`
+ *  — asserting the very thing the check asks — has no shorter route than
+ *  `isLifecycleAct`. */
+const LIFECYCLE_ACT_MAP: Record<LifecycleAct, true> = {
+  create: true, claim: true, purge: true, supervise: true, unsupervise: true,
+  destroy: true, rename: true, hold: true, release: true, archive: true, restore: true,
+  'attic-drop': true, reap: true, gc: true, spawn: true, start: true, ensure: true,
+  swap: true, enable: true, stop: true, forget: true,
+  unknown: true,
+};
+export const LIFECYCLE_ACTS: readonly LifecycleAct[] =
+  Object.keys(LIFECYCLE_ACT_MAP) as LifecycleAct[];
+
+/** The one act ccd may never name at a call site. Exported so every filter
+ *  that excludes the degrade filters by THIS, not by a literal a later edit
+ *  could quietly point at the wrong member — the improvement on
+ *  `SESSION_LIFECYCLES.filter((s) => s !== 'unmeasurable')`, which spells its
+ *  exclusion inline in two suites. */
+export const LC_ACT_UNKNOWN: LifecycleAct = 'unknown';
+
+/** The only way to narrow an untrusted string to a `LifecycleAct`. The
+ *  parameter is `unknown` so nothing can be smuggled in by claiming it is
+ *  already an act, and the CONSTANT is cast rather than the input. */
+export function isLifecycleAct(v: unknown): v is LifecycleAct {
+  return typeof v === 'string' && (LIFECYCLE_ACTS as readonly string[]).includes(v);
+}
+
+/**
+ * What happened to the act. D4: the destructive verbs (`ws-rm`, `ws-reap`,
+ * `ws-gc --prune`, `forget`) write one `intent` line BEFORE the irreversible
+ * act and one outcome line after, sharing a `tx`.
+ *
+ * THERE IS DELIBERATELY NO `orphaned` MEMBER. "An `intent` with a `failed`
+ * sibling is a half-destroyed workspace; an `intent` with no sibling at all is
+ * a process that died mid-destroy" is a fact about a PAIR of rows, DERIVED BY
+ * THE READER and never stored — a writer cannot know it, and storing it would
+ * give the reader two sources for one fact.
+ *
+ * `_lc_obs` gathers the `obs` block once per process and emits nothing, so it
+ * contributes no outcome — there is NO `observed` member. If wave 2 finds it
+ * must emit, adding one here is the same two-line edit as an act.
+ */
+export type LifecycleOutcome =
+  | 'intent'    // said before the irreversible act
+  | 'done'      // it happened
+  | 'refused'   // ccd declined; `LifecycleEvent.refusal` carries the token
+  | 'failed'    // it was attempted past the point of no return and did not finish
+  | 'unknown';  // the reader's degrade, exactly as `LifecycleAct.unknown`
+
+const LIFECYCLE_OUTCOME_MAP: Record<LifecycleOutcome, true> = {
+  intent: true, done: true, refused: true, failed: true, unknown: true,
+};
+export const LIFECYCLE_OUTCOMES: readonly LifecycleOutcome[] =
+  Object.keys(LIFECYCLE_OUTCOME_MAP) as LifecycleOutcome[];
+
+/** The outcome side's degrade, named once for the same reason `LC_ACT_UNKNOWN`
+ *  is: `journalparse.ts`'s `isLifecycleOutcome(raw) ? raw : LC_OUTCOME_UNKNOWN`
+ *  and ccd's `_LC_OUTCOMES` (this list minus this member) must not each spell
+ *  it inline. Both halves of the vocabulary have a degrade; both name it. */
+export const LC_OUTCOME_UNKNOWN: LifecycleOutcome = 'unknown';
+
+export function isLifecycleOutcome(v: unknown): v is LifecycleOutcome {
+  return typeof v === 'string' && (LIFECYCLE_OUTCOMES as readonly string[]).includes(v);
+}
