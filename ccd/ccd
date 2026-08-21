@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=8d281a2e7835f79aad3dd5f4c90f121cbaae610b41577482f5b65f3e52ff659a
+# ccrc:generated 1 sha256=92c96e17018500b6bf929493a7cf86f2065e37c918f8c5dfe8dec04a75adec6e
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box, not on this file: `_rc_enabled` reads
@@ -1360,11 +1360,21 @@ if mode == 'state':
     # NOT LINE: a line number here goes stale the moment anything above it grows —
     # twice now on this branch.
     #
-    # WIDENED BY ONE STATE AND NARROWED BY ANOTHER — not "unchanged". The old
-    # lock opened `$REG/<id>.uuid` READ-ONLY, so it still took in a `$REG`
-    # that is readable but NOT WRITABLE; this one opens with mode 'a', which
-    # needs create+write, so that state now degrades to an UNLOCKED
-    # compare-and-set. In the other direction, the old condition list also
+    # WIDENED BY ONE STATE AND NARROWED BY ANOTHER — not "unchanged", and the
+    # widened state is narrower than it first looks. Measured both ways under
+    # a `$REG` that is readable but NOT WRITABLE (`chmod 0555`):
+    #
+    #   - An EXISTING `.prstate-<id>.lock` (mode 0664) — `open(path, 'a')`
+    #     SUCCEEDS and the flock is taken. Appending to an existing file needs
+    #     write permission on the FILE, not on the directory it lives in.
+    #   - The FIRST-EVER `.prstate-<id>.lock` for a session — `open(path, 'a')`
+    #     raises `PermissionError` (EACCES), because that open must CREATE the
+    #     file, which does need write on the directory.
+    #
+    # So the widening is only the FIRST-EVER `ccd pr-state` for a given
+    # session under an unwritable `$REG`; every run after that creates no new
+    # file and takes the lock normally, same as the old `$REG/<id>.uuid`
+    # READ-ONLY open did. In the other direction, the old condition list also
     # carried "no `.uuid` at all" — a lock that could not be taken because the
     # field had not been written yet — and this one cannot hit that, which is
     # a strict improvement. The widened state is unreachable in practice: a
