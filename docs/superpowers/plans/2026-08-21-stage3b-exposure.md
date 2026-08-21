@@ -145,16 +145,26 @@ Behaviour contract (each bullet is a test):
   `sudo systemctl enable --now caddy`. Assert the transcript contains `sudo` ONLY inside the
   printed remedy (the `_inst_linger` grep shape).
 
-- [ ] **Step 1: RED** — write `ccrc-expose.test.ts` with the harness preamble copied from
+- [x] **Step 1: RED** — write `ccrc-expose.test.ts` with the harness preamble copied from
   `ccrc-passwd.test.ts` (throwaway HOME, symlinked ccrc, fixture PATH; `caddy` NOT stubbed —
   the verb never executes it) covering every bullet above. All red (verb unknown).
-- [ ] **Step 2: GREEN** — implement `cmd_expose` + `_exp_env_write` (tmp+`mv -f` in the same
+  *(Measured: ccrc-expose 24 failed / 0 passed; plus the two RED extensions written in the
+  same step — ccrc-cli 1 failed / 22 passed (usage line gains `expose`), single-definition
+  2 failed / 74 passed (the new `CCRC_CADDYFILE` pin block).)*
+- [x] **Step 2: GREEN** — implement `cmd_expose` + `_exp_env_write` (tmp+`mv -f` in the same
   dir — the wave-2 discipline), `_exp_caddyfile`, `_exp_landing`; usage + dispatch rows.
-- [ ] **Step 3:** mutations — drop `[ -t 0 ]` (piped-token test reds); echo the token
+  *(124/124 across the three suites; `_exp_status` implemented beside them — the status
+  bullet's tests live in the same RED set.)*
+- [x] **Step 3:** mutations — drop `[ -t 0 ]` (piped-token test reds); echo the token
   (never-echoed test reds); drop the shadow refusal (reds); chmod 0644 the env file (0600
-  test reds). Record.
-- [ ] **Step 4:** `ccrc-cli`, `ccrc-expose`, `single-definition` green. Commit
+  test reds). Record. *(Measured, each against ccrc-expose (24 tests), each reverted:
+  `[ -t 0 ]` disarmed → 2 red (duckdns + byo piped refusals); token `read -rsp`→`read -rp`
+  → 1 red (never-echoed); shadow refusal disarmed → 2 red (both shadow keys); env chmod
+  600→644 → 2 red (both 0600 mode assertions).)*
+- [x] **Step 4:** `ccrc-cli`, `ccrc-expose`, `single-definition` green. Commit
   `feat(expose): ccrc expose — duckdns and byo, the no-sudo ceremony`.
+  *(Gate suites green, and the neighbour suites that also pin `ccd/ccrc` re-run beside
+  them: ccrc-passwd + ccrc-install + ccrc-doctor — 501/501 across all six.)*
 
 ### Task 3: The DuckDNS updater units
 
@@ -300,3 +310,13 @@ Verdict table (each row is a test):
 ## Deviations found
 
 (D-139 onward; recorded during execution.)
+
+- **D-139** (Task 2): the tty refusal is the `cmd_passwd` sentence's SHAPE, not its verbatim
+  bytes. The plan says "the `cmd_passwd` sentence verbatim", but that sentence names a
+  passphrase, a confirmation read, and `Run 'ccrc passwd' from a terminal` — three claims
+  that are false for this verb. Shipped: the same structure and the same load-bearing
+  clauses (`stdin is not a terminal` opener, the `curl … | bash` stdin-is-the-installer
+  hazard, `Nothing was written.` closer), reworded for a DuckDNS token/origin and naming
+  `ccrc expose <sub>`. The test pins the same two anchors the passwd suite pins
+  (`/^ccrc: stdin is not a terminal/m`, `/curl … \| bash/`), so the two refusals cannot
+  drift apart on the parts that matter.

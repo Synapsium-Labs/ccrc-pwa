@@ -154,9 +154,15 @@ describe('ccrc: dispatch and usage', () => {
     // in this line is a verb nobody can find, and this one is the operator's
     // only recovery path from a box they cannot log into:
     // `server/test/ccrc-passwd.test.ts` owns what it does.
+    //
+    // `expose` joined it in stage 3b Task 2 — the post-install verb that gives
+    // a box a public name and a real certificate (spec D1–D3), the same shape
+    // as `passwd`: prompts on a tty, writes ccrc-owned files, never runs sudo.
+    // `server/test/ccrc-expose.test.ts` owns what it does.
     const home = mkTmp('ccrc-cli-usage-verbs-');
     const r = runCcrcRaw(home, ['-h']);
-    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|install\|passwd\|version\}/);
+    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|install\|passwd\|expose\|version\}/);
+    expect(r.stdout).toMatch(/^ {2}expose {4}give this box a public name/m);
     // …and the body explains it, including the half an operator gets wrong:
     // rotating expires SESSIONS and leaves enrolled passkeys working.
     expect(r.stdout).toMatch(/^ {2}passwd {4}set \(or rotate\) this box's PWA passphrase/m);

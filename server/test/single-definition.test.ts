@@ -959,6 +959,34 @@ describe('one ~/.ccrc/exposure.env, spelled once in bash through CCRC_EXPOSURE_F
   });
 });
 
+// — Stage 3b, Task 2: the Caddyfile the expose verb regenerates —
+describe('one ~/.ccrc/Caddyfile, spelled once in bash through CCRC_CADDYFILE', () => {
+  // Spec D2: `ccrc expose` generates the COMPLETE Caddyfile into `~/.ccrc` —
+  // ccrc-owned, regenerated every run — and the OPERATOR, never ccrc, links or
+  // copies it into /etc/caddy in the printed root ceremony (ccrc has never run
+  // sudo and does not start here). The path is spelled once, for
+  // `CCRC_EXPOSURE_FILE`'s reason above: `cmd_expose` WRITES through the
+  // variable and the ceremony lines PRINT the path at the operator through the
+  // same variable, so a literal anywhere else is a path the verb does not
+  // actually write. `/etc/caddy/Caddyfile` in the printed remedy is a
+  // DIFFERENT path — caddy's own, on the root side of the boundary — and is
+  // deliberately not this needle.
+  const NEEDLE = '.ccrc/Caddyfile';
+
+  it('is touched by exactly one bash file, and that file is ccd/ccrc', () => {
+    expect(holdersOf(NEEDLE)).toEqual([
+      'ccd/ccrc',   // CCRC_CADDYFILE — the declaration cmd_expose writes through
+    ]);
+  });
+
+  it('ccrc spells the path once — the declaration is the only line of shell naming it', () => {
+    const code = codeLines(path.join(ccrcRoot, 'ccd', 'ccrc'));
+    expect(code.filter((l) => l.includes(NEEDLE))).toEqual([
+      'CCRC_CADDYFILE="$HOME/.ccrc/Caddyfile"',
+    ]);
+  });
+});
+
 // — Build 4, Task 10: the wave's own two definitions —
 describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
   // The type's fingerprint: the union as it is declared, not every mention.
