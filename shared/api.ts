@@ -3921,3 +3921,92 @@ export interface MirroredLifecycleEvent extends LifecycleEvent {
   /** Epoch milliseconds, the SERVER's clock, at insert. Never an event time. */
   readonly ingestedAt: number;
 }
+
+/**
+ * Refusal tokens that live ONLY in the journal — the ones `_lc_refuse` /
+ * `_lc_fail` write and no `"refused":"…"` JSON on ccd's stdout ever carries.
+ *
+ * DELIBERATELY DISJOINT FROM `wsaudit.ts`'s SENTENCES, and the disjointness is
+ * a red suite (`server/test/lifecycle-refusal-word.test.ts`). D15's ruling:
+ * `wsaudit.test.ts` holds SENTENCES set-equal IN BOTH DIRECTIONS to the tokens
+ * its four regexes grep out of ccd's source, and a `_lc_refuse` call changes
+ * no stdout and no exit contract — so it contributes no token to that scan. An
+ * entry there for a journal-only token would red the stale-copy direction, and
+ * the only fixes would be deleting copy or weakening an approved mechanism
+ * (`ccd:2121-2128` records that argument being had once already).
+ * `wsaudit.test.ts` must stay green WITH NO EDIT; that is itself an assertion
+ * of this program. The shared rungs — `held`, `dirty-tree`, `no-such-session`,
+ * `foreign-worktree`, `tree-unreadable`, `nested-checkouts-present`,
+ * `in-progress` and the rest of the 54 — keep their single home over there.
+ *
+ * THE CONTRACT WAVE 3 HONOURS, AND WHAT ENFORCES IT: every token wave 3 hands
+ * `_lc_refuse` / `_lc_fail` is a member of this union OR already a SENTENCES
+ * key, and wave 3's own cross-language scan over `ccd/ccd` asserts it in both
+ * directions with a coverage floor. It cannot live here — it would be red
+ * until wave 3 lands. Adding a tenth token is a two-line edit;
+ * `Record<LcRefusalToken, string>` makes forgetting its word a TS2739.
+ */
+export type LcRefusalToken =
+  | 'scratch-unwritable'       // ws-rm could not make the scratch file it reads $workdir with
+  | 'tip-unreadable'           // ws-rm could not resolve a tip while the worktree is STILL THERE
+  | 'bad-session-id'           // ws-restore / forget: the id is not a shape ccrc mints
+  | 'flock-unavailable'        // no util-linux flock — a destructive verb refuses to run unserialised
+  | 'lock-unopenable'          // the reap lock could not be opened
+  | 'is-a-workspace'           // forget, aimed at a workspace: use the audited path
+  | 'session-live'             // forget, on a running session
+  | 'session-verdict-unknown'  // tmux did not answer: fail-shut, nothing removed
+  | 'spawn-failed';            // _lc_fail: the undo landed, the session did not come back
+
+/**
+ * The word for each. DECLARED ONCE AND EXPORTED — there is no module-private
+ * `…_MAP` twin, on purpose. The "total maps stay module-private" rule exists
+ * for NARROWING maps, where an exported map gives a second route past the
+ * guard (`LIFECYCLE_ACT_MAP[raw]`); this is a RENDERING map, the PWA types its
+ * own `Record<LcRefusalToken, …>` renderer against it, and `isLcRefusalToken`
+ * is still the only narrowing door. `SENTENCES` (`wsaudit.ts:17`) is the
+ * precedent and is exported directly for exactly this reason. An alias
+ * declared only to satisfy a guard written for the other case would be a
+ * second name for one value.
+ */
+export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
+  'scratch-unwritable':
+    'ccrc could not make a scratch file to read this worktree, so it proved nothing about what removing it would delete. Nothing was touched.',
+  'tip-unreadable':
+    'ccrc could not resolve this workspace’s tip commit while its worktree is still here, so it could not pin the commits before deleting them. Nothing was touched.',
+  'bad-session-id':
+    'That is not a shape a ccrc session id can have, so nothing was looked up and nothing was touched.',
+  'flock-unavailable':
+    'This box has no flock, so ccrc refused to run a destructive verb without serialising it against a concurrent cleanup.',
+  'lock-unopenable':
+    'ccrc could not open the cleanup lock for this session, so it refused to act unserialised.',
+  'is-a-workspace':
+    'This is a workspace, and removing one is audited and confirmed. Use the workspace sheet, or ccd ws-rm.',
+  'session-live':
+    'This session is still running. Stop it first, then try again.',
+  'session-verdict-unknown':
+    'tmux did not answer, so ccrc cannot tell whether this session is still running. Nothing was removed.',
+  'spawn-failed':
+    'The undo landed, but the session did not come back up. The workspace and its branch are intact.',
+};
+
+/** Derived from the map — the `PR_REASON_MAP` idiom, so a member added to the
+ *  union is a TS2739 rather than a runtime list one short. */
+export const LC_REFUSAL_TOKENS: readonly LcRefusalToken[] =
+  Object.keys(LC_REFUSAL_WORD) as LcRefusalToken[];
+
+export function isLcRefusalToken(v: unknown): v is LcRefusalToken {
+  return typeof v === 'string' && (LC_REFUSAL_TOKENS as readonly string[]).includes(v);
+}
+
+/**
+ * The word for a journal refusal token, or `null`.
+ *
+ * NULL IS A POSITIVE ANSWER — "this token is not mine, ask
+ * `refusalSentence()`" — and never an error. L0 imports nothing, so it cannot
+ * fall through to `wsaudit.ts` itself; the caller composes
+ * `lcRefusalWord(t) ?? refusalSentence(t)`. Two maps, one lookup order, no
+ * token with copy in both.
+ */
+export function lcRefusalWord(token: string): string | null {
+  return isLcRefusalToken(token) ? LC_REFUSAL_WORD[token] : null;
+}
