@@ -129,11 +129,12 @@ to `mktemp -d`, `exec bash <staging>/ccd/ccrc install "$@"`. Checkout mode untou
 `CCRC_RELEASE_BASE_URL` env override — the test seam (points at a `file://`-style local dir
 via a stub `curl`; the harness's poisoned curl stays for every other test).
 
-- [ ] RED: `--release` with stubbed curl serving a fixture tarball+SHA256SUMS installs from
+- [x] RED: `--release` with stubbed curl serving a fixture tarball+SHA256SUMS installs from
   the staging tree (assert the handoff argv via a recording `bash`/`ccrc` stub); checksum
   mismatch refuses with nothing extracted; absent release answers curl's own failure; plain
   run (no flag) still takes checkout mode (existing tests keep passing untouched).
-- [ ] GREEN; mutations: skip the checksum verify (red). Commit
+  (Ran red: 4/4 new before implementation, 6 existing green.)
+- [x] GREEN; mutations: skip the checksum verify (red). Commit
   `feat(release): install.sh fetches and verifies a release`.
 
 ### Task 5: `ccrc install --role server|fleet|both`
@@ -279,3 +280,11 @@ it merges first.)
   (M3) the upload glob narrowed to `release-out/ccrc-*.tar.gz` → 1 red (the
   both-artifacts pin: SHA256SUMS silently dropped). Suite 13/13 green before and after;
   typecheck-tests + single-definition green (73/73).
+- **Task 4 mutation measurements** (applied, run, reverted): (M1) the `sha256sum -c`
+  verify replaced with `true` → 1 red (`checksum mismatch: refuses loudly, extracts
+  NOTHING, runs NO install` — the tampered tarball extracted and its ccrc ran, both
+  asserted against). Suite 10/10 green before and after; typecheck-tests +
+  single-definition + build-release green (96/96 across the four); ccrc-install 83/83
+  (checkout-mode handoff untouched). Note: `usage()`'s pinned one-line string is
+  deliberately unchanged (existing tests pass untouched, per this task's own checklist);
+  `--release` is documented in install.sh's header and lands in README/runbook at Task 10.
