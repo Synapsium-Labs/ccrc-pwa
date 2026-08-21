@@ -178,6 +178,18 @@ describe('loadConfig', () => {
     expect(cfg.projectsRoot).toBe('/data/projects');
   });
 
+  // Stage 3b design D8 (docs/superpowers/specs/2026-08-21-stage3b-exposure-design.md):
+  // a bare `CCRC_HOST=` line — exactly how an EnvironmentFile ships a
+  // defaulted key — must fall back to loopback, never reach
+  // `listen({host: ''})`, which binds EVERY interface: the exact opposite of
+  // the loopback confinement the exposure stage's whole premise rests on.
+  // Same bug class D-130 closed for CCRC_PORT; every auth key already uses
+  // `||` for this reason (config.ts's own docstring at the auth block).
+  it('an empty CCRC_HOST falls back to loopback, never a bind-all listen (3b D8)', () => {
+    const cfg = loadConfig({ CCRC_HOME: '/h', CCRC_ACCOUNTS: ROSTER_PATH, CCRC_HOST: '' });
+    expect(cfg.host).toBe('127.0.0.1');
+  });
+
   // Spec §2 (docs/superpowers/specs/2026-08-11-ccrc-oss-single-dev-infra-design.md):
   // "the three disagreeing projects-root definitions ($HOME/projects,
   // /data/projects, /srv/projects) reconcile to one
