@@ -592,9 +592,17 @@ function pathWithout(home: string, missing: string): string {
   // link, `pathWithout(home, 'git')` — a fixture about ONE absence, which runs
   // the whole verb through to the wrappers step — would instead die at the
   // skills step for a reason the test is not about.
+  //
+  // `stat` joins it for precisely that reason in D-156: `cmd_wrappers` now
+  // names it as an up-front dependency, because the witness index size-gates
+  // every file it reads out of ~/.local/bin and a size gate that reads the file
+  // anyway when it cannot measure it is not a gate. Measured when the lock
+  // landed: without this entry, the git fixture died at the wrappers step and
+  // `says GIT IS ABSENT when git is absent` went red — the test's own trap,
+  // sprung by a new dependency rather than by anything about git.
   for (const b of ['mkdir', 'cp', 'mv', 'rm', 'cat', 'chmod', 'cmp', 'date',
     'node', 'git', 'npm', 'rsync', 'bash', 'sleep', 'jq', 'mktemp', 'basename',
-    'diff', 'tmux', 'python3', 'flock', 'timeout']) {
+    'diff', 'tmux', 'python3', 'flock', 'timeout', 'stat']) {
     if (b === missing || existsSync(join(d, b))) continue;
     symlinkSync(realPath(b), join(d, b));
   }

@@ -21,7 +21,7 @@
 # `-u` (unset variables are errors) and `pipefail` (a failing left-hand side
 # of a pipe fails the whole pipeline) carry no such conflict and stay on.
 #
-# ── EXIT CODES (house convention — see ccd/ccrc-adopt:68-91 and
+# ── EXIT CODES (house convention — see ccd/ccrc-adopt:83-106 and
 #    deploy/verify-service.sh:50-54, both already committed to this table) ──
 #   0 = success.
 #   1 = the tool ran and the answer was bad (a check failed, a stamp did not
@@ -70,7 +70,7 @@ set -uo pipefail
 PROG=ccrc
 
 # Where the rest of the shipped tree is, relative to THIS FILE rather than to
-# $PWD — `ccrc-adopt:124-125`'s idiom, so `ccrc` works run as `bash ccd/ccrc`
+# $PWD — `ccrc-adopt:139-140`'s idiom, so `ccrc` works run as `bash ccd/ccrc`
 # from anywhere, and on a bare installed box (~/ccrc/ccd/ccrc) with no checkout
 # in sight. Two deliberate differences from adopt's line, both measured:
 #   - `${BASH_SOURCE[0]}`, not `$0`: THIS script is meant to be source-able
@@ -1127,6 +1127,21 @@ cmd_doctor() {
     "$ran" "$skipped" "$((pass + warn + fail))" "$pass" "$warn" "$fail"
   [[ "$fail" -eq 0 ]] || return 1
 }
+# ── the remedy for a `foreign` file, said once ────────────────────────────
+# TWO arms of `cmd_wrappers`'s decision table print this same sentence since
+# D-156 — the file that IS a wrapper but says something else, and the file this
+# reader cannot parse at all — and a second copy of it is how the two would come
+# to disagree about what an operator should do.
+#
+# `_ccrc_*` and not `_wrap_*`: `ccrc-wrapper-shape:37-46` reserves the latter for
+# the shape library, where `_wrap_set_diff`'s dynamic-scope contract makes a
+# shadowed name a correctness bug rather than a style one.
+_ccrc_foreign_remedy() {
+  local id="$1" stamp="$2"
+  printf 'move it aside (mv "%s/%s" "%s/%s.saved-%s") and re-run, or set exec.kind to "external" for "%s" in %s/.ccrc/accounts.json so ccrc stops claiming that name\n' \
+    "$WRAPPER_BIN_DIR" "$id" "$WRAPPER_BIN_DIR" "$id" "$stamp" "$id" "$HOME"
+}
+
 # ── cmd_wrappers — THE ROSTER WRITES THE WRAPPERS ─────────────────────────
 # Stage 2c. `~/.ccrc/accounts.json` stops being a DESCRIPTION of what is in
 # `$HOME/.local/bin` and becomes the thing that PRODUCES it. This verb converges
@@ -1159,6 +1174,42 @@ cmd_doctor() {
 #      installed. A wrapper at `~/.local/bin/claude` that ends
 #      `exec "$HOME/.local/bin/claude" "$@"` is a fork bomb, and it is exactly
 #      what a generator talked into staging the upstream account would produce.
+#   5. THE WITNESS INDEX (D-156). Before any write, this function reads every
+#      id-shaped file already in `$WRAPPER_BIN_DIR` and records which ids they
+#      `exec` as their upstream binary. It then refuses — under every flag, per
+#      id — to write an id anything else already execs. Built once, before the
+#      action pass, so the answer cannot depend on the order records happen to
+#      be processed in.
+#
+# WHY FIVE AND NOT FOUR — lock 5 is the only one whose evidence is not something
+# the generator said:
+#   - Locks 2 and 4 both ultimately key on `execKind === 'generated'` (see
+#     below), and lock 3 constrains only the SHAPE of a path, never its
+#     meaning. All three therefore believe a mis-edited roster, because a
+#     mis-edited roster is internally consistent — `parseRoster` requires
+#     exactly one upstream and it has exactly one.
+#   - Measured: with `claude` flipped to "generated" and another account made
+#     upstream, `ccrc wrappers --force` overwrote `~/.local/bin/claude` — a
+#     2741-byte launcher — with a generated wrapper, and exited 0. Because
+#     claude2, claude-corp and claude-dev0 all end
+#     `exec "$HOME/.local/bin/claude" "$@"`, that closed an exec loop across
+#     EVERY LANE AT ONCE: `claude2 --version` went from rc=127 to rc=124, i.e.
+#     it stopped terminating at all. Lock 4 does not catch it — the staged
+#     wrapper execs the OTHER account, so it is not self-referential, and lock
+#     4 tests only self-reference.
+#   - `--force` was never the only route, which is why lock 5 sits above the
+#     decision table rather than inside the `foreign` arm. Obeying this
+#     function's OWN printed remedy — move the file aside and re-run — makes
+#     the path `absent`, and the absent arm writes with no flag at all;
+#     thereafter the file is `ccrc-unmodified` and is rewritten on every roster
+#     change. A lock keyed on the subject file's bytes cannot survive the
+#     subject file being moved away. One keyed on the OTHER files can, and that
+#     is the whole design.
+#   - Until 2026-08-20 none of this was reachable, and not by design: the file
+#     at that path was ~334 MB, so it classified `oversize`, which no flag
+#     overrides. The box's launcher shrank to 2.7 KB and a lock nobody had
+#     written down stopped existing. That is the incident this lock is the
+#     answer to, recorded here so it is not later removed as redundant.
 #
 # WHY FOUR AND NOT THREE — the measurements that bought lock 1, because a lock
 # added without its incident becomes a lock somebody removes as redundant:
@@ -1208,9 +1259,21 @@ cmd_doctor() {
 #   ccrc-edited                     -> REFUSE; --force rewrites (backup first)
 #   foreign, EQUIVALENT (D4)        -> REFUSE, reported as adoptable;
 #                                      --adopt or --force rewrites (backup)
-#   foreign, not equivalent         -> REFUSE; only --force rewrites (backup)
+#   foreign, parses as a wrapper    -> REFUSE; only --force rewrites (backup)
+#   foreign, does NOT parse (D-156) -> REFUSE under every flag
 #   unreadable                      -> REFUSE under every flag
 #   oversize                        -> REFUSE under every flag (D-81)
+#
+# …and ABOVE all of it, lock 5 (D-156): any id another file on disk already
+# execs is REFUSED under every flag, whatever the row above would have said —
+# including `absent`, which is the row this table's own foreign remedy creates.
+#
+# D-156 SPLIT THE `foreign` ROW because one classify was covering two different
+# sentences. "A wrapper that says something else" is a file ccrc has read and
+# can name every field of, so `--force` answers a real question. "A script this
+# reader cannot parse at all" is not that: overwriting it is the same act as
+# overwriting `unreadable` or `oversize` — destroying something on the strength
+# of a judgement this process never made — so it refuses in those arms' terms.
 #
 # `unreadable` refuses even under `--force` because "I could not read it" is not
 # "I know what it is" — the one refusal no flag can talk out of. `oversize`
@@ -1234,7 +1297,7 @@ cmd_doctor() {
 # write failed. 2 = a usage error (this file's standing table).
 cmd_wrappers() {
   local dry=0 adopt=0 force=0
-  # `ccrc-adopt:95-103`'s loop, minus the value-taking flags it needs and this
+  # `ccrc-adopt:110-118`'s loop, minus the value-taking flags it needs and this
   # verb does not. Unlike `version`, this verb HAS flags of its own — three, and
   # each one changes what it is willing to overwrite — so `-h`/`--help` prints
   # the usage that explains them rather than being the usage error it is for a
@@ -1249,7 +1312,7 @@ cmd_wrappers() {
     esac
   done
 
-  # The shape contract, sourced rather than restated — `ccrc-adopt:61-79`'s
+  # The shape contract, sourced rather than restated — `ccrc-adopt:76-94`'s
   # reasoning applies unchanged, and this verb is the one that most needs it:
   # it is the WRITER, and the writer judging "is this file mine" by a second,
   # looser copy of the reader's rules is how a generator comes to disown its own
@@ -1276,6 +1339,26 @@ cmd_wrappers() {
   # branch for the same refusal in the same shape).
   command -v node >/dev/null 2>&1 \
     || _ccrc_die "node is required by 'ccrc wrappers' — it runs $gen to read the roster and stage each wrapper — but is not on PATH. Install Node (this repo's floor is in server/package.json's \"engines\") or put it on PATH, then re-run."
+  # D-156: `stat` joins node in the up-front dependency list, and that placement
+  # is the whole point. The witness index below size-gates every file it reads
+  # out of $WRAPPER_BIN_DIR before reading it, and a size gate that falls back
+  # to "read it anyway" when `stat` is missing is not a gate. Naming the
+  # dependency HERE makes the in-loop fallback branch unreachable, which is how
+  # this avoids copying `ccrc-doctor-checks`'s fall-open — doctor may go on
+  # REPORTING without `stat`, because reporting destroys nothing; this verb
+  # WRITES, and `cmd_wrappers` already hard-requires node, mktemp, date, cp,
+  # chmod and mv, so coreutils is not a new class of dependency for it.
+  command -v stat >/dev/null 2>&1 \
+    || _ccrc_die "stat is required by 'ccrc wrappers' — it size-gates every file this verb reads out of $WRAPPER_BIN_DIR before reading it — but is not on PATH. Nothing was written."
+  # The same mixed-install question `_check_wrappers` asks (D-155): the shape
+  # library is a SEPARATE install artifact, landed by its own `install_atomic`,
+  # so "it loaded" and "it is the build this file expects" are two facts. Under
+  # `set -u` the second one, unasked, takes the whole verb down on an unbound
+  # variable mid-run — after staging, which is exactly when "nothing was
+  # written" stops being true. `:-` is not the answer: it would put a second
+  # spelling of each threshold back into this file.
+  [ -n "${WRAPPER_WITNESS_MAX_BYTES:-}" ] && [ -n "${WRAPPER_SHEBANG:-}" ] \
+    || _ccrc_die "$shape loaded but is older than this ccrc — it declares no WRAPPER_WITNESS_MAX_BYTES/WRAPPER_SHEBANG, which this verb needs to tell what execs what before it writes anything. The files ship together and must be one build: re-run the install (or redeploy). Nothing was written."
 
   # A FRESH BOX HAS NO ~/.local/bin, AND THAT IS NOT AN ERROR: this verb is the
   # installer, so a missing bin dir is a box at the start of its life rather
@@ -1469,16 +1552,139 @@ cmd_wrappers() {
     s_target+=("$starget"); s_suffix+=("$ssuffix"); s_secrets+=("$ssecrets")
   done
 
+  # ── LOCK 5 (D-156): THE WITNESS INDEX — who already execs what ───────────
+  # Built ONCE, off disk, before a single write. Every other lock in this
+  # function reasons about what the GENERATOR said; this one reasons about what
+  # is already on the box, and that is the whole of its value: it is the only
+  # lock that still refuses after the subject file has been moved aside, because
+  # its evidence is the OTHER files and they are still there.
+  #
+  # Hoisted rather than computed per record for two reasons, and the second is
+  # the load-bearing one. It saves re-scanning the directory once per generated
+  # account — but more importantly it makes the answer ORDER-INDEPENDENT. This
+  # file's own header records that `gpt` was once believed saved by lock 4 and
+  # was actually saved by roster ORDER, and calls an accident of ordering "not a
+  # lock". A per-record scan would have the same shape: by the time a late
+  # record is reached, this run may already have rewritten the very wrappers
+  # that witness it, and the lock would evaporate exactly when the roster is
+  # most wrong.
+  #
+  # `$scan_dir`, never `$WRAPPER_BIN_DIR` directly — on a fresh box that is the
+  # empty scratch dir inside the staging tree, so `--dry-run` still creates
+  # nothing.
+  #
+  # NO `-x` FILTER, deliberately diverging from `ccrc-adopt`'s candidate rule
+  # and doctor's: a witness is a fact about TEXT, and mode 0644 today is 0755
+  # after one chmod.
+  local -A wit_by=()
+  local wit_blind=""
+  local -a wit_cand=() wit_size=()
+  local wf wname wsz wln1 wok wtarget wsuf wsec whad=0 wi
+  shopt -q nullglob && whad=1
+  shopt -s nullglob
+  for wf in "$scan_dir"/*; do
+    [ -f "$wf" ] || continue
+    [[ "${wf##*/}" =~ $WRAPPER_ID_RE ]] || continue
+    wit_cand+=("$wf")
+  done
+  [ "$whad" -eq 1 ] || shopt -u nullglob
+  # ONE batched `stat`, not one per candidate: measured on the real 86-entry bin
+  # dir, the per-file spelling cost 1.15 s against 0.10-0.15 s batched, and the
+  # cost was the ~75 forks rather than the reads. `-L`, because a symlink's own
+  # size is the length of its target string — `gpt -> ccgpt` stats as 33 bytes
+  # while the file behind it is 7.8 KB, and a scan that measured the link would
+  # then read the target whole. (`ccrc-doctor-checks`'s own size gate omits
+  # `-L`; that is a separate defect, recorded, not fixed here.)
+  #
+  # `stat` prints one line per operand IN OPERAND ORDER and simply omits one it
+  # could not answer for, so a count mismatch is the ONLY way a size could be
+  # attached to the wrong name — and it is fatal rather than per-id, because a
+  # misaligned index cannot be trusted about any id.
+  if [ "${#wit_cand[@]}" -gt 0 ]; then
+    mapfile -t wit_size < <(stat -L -c%s -- "${wit_cand[@]}" 2>/dev/null)
+    [ "${#wit_size[@]}" -eq "${#wit_cand[@]}" ] \
+      || _ccrc_die "stat answered for ${#wit_size[@]} of the ${#wit_cand[@]} id-shaped files in $WRAPPER_BIN_DIR, so this run cannot line a size up with a name and cannot tell what execs what. Nothing was written."
+  fi
+  for ((wi = 0; wi < ${#wit_cand[@]}; wi++)); do
+    wf="${wit_cand[$wi]}"; wname="${wf##*/}"; wsz="${wit_size[$wi]}"
+    [[ "$wsz" =~ ^[0-9]+$ ]] || { wit_blind="$wit_blind $wname"; continue; }
+    [ "$wsz" -gt "$WRAPPER_WITNESS_MAX_BYTES" ] && continue
+    # ITS OWN `-r` TEST, and this is not belt-and-braces. `_wrap_parse_shape`
+    # folds "I could not read it" into "not a wrapper" (its `[ -r ]` guard),
+    # which is right for its other callers and WRONG here: an unreadable file
+    # could be a witness, so trusting that fold would make this lock fail OPEN
+    # on exactly the file it cannot see. Same overloaded-null rule, applied to a
+    # shared function's return value rather than to a variable.
+    [ -r "$wf" ] || { wit_blind="$wit_blind $wname"; continue; }
+    wln1=""; IFS= read -r wln1 < "$wf" 2>/dev/null || true
+    [ "$wln1" = "$WRAPPER_SHEBANG" ] || continue
+    IFS=$'\t' read -r wok wtarget wsuf wsec < <(_wrap_parse_shape "$wf")
+    # STRICT: a witness must parse as the full generated shape. That is what
+    # makes the size cap an entailment rather than a hole (a file too big to be
+    # 2-3 significant lines is provably not one), and it is the same
+    # one-reader-for-both-sides discipline the equivalence test states. The cost
+    # is stated rather than hidden: a BESPOKE launcher casts no vote. Measured
+    # live, the loose witness set for `claude` is 7 files and the strict set is
+    # 3 — non-empty, so the launcher is protected here, but on a box where the
+    # only thing exec'ing the upstream is bespoke this lock is silent and the
+    # `foreign` arm is the remaining guard.
+    [ "$wok" = ok ] || continue
+    wit_by["$wtarget"]="${wit_by[$wtarget]:-} $wname"
+  done
+
   # ── ACTION PASS: from here on, a refusal is about the BOX, not the manifest,
   #    and is reported per account rather than aborting the run. ─────────────
   local klass eq action why remedy backup tmp equivalent
   local dok dtarget dsuffix dsecrets
+  local wit w
   local n_written=0 n_converged=0 n_refused=0
   for ((i = 0; i < ${#w_id[@]}; i++)); do
     id="${w_id[$i]}"; klass="${w_class[$i]}"; eq="${w_equal[$i]}"
     starget="${s_target[$i]}"; ssuffix="${s_suffix[$i]}"; ssecrets="${s_secrets[$i]}"
 
     action=""; why=""; remedy=""; backup=""
+
+    # LOCK 5's gate, ABOVE the table on purpose. It has to fire on `absent`,
+    # because `absent` is precisely the state ccrc's own foreign remedy
+    # manufactures ("move it aside and re-run") and the absent arm writes with
+    # no flag at all. Placed here it also pre-empts `--force` on a foreign file,
+    # which is what lets this refusal say "No flag overrides this one" in the
+    # same absolute terms as `unreadable` and `oversize`.
+    #
+    # `unreadable` and `oversize` are EXCLUDED, and that exclusion is measured
+    # rather than tidy: both already refuse under every flag, so pre-empting
+    # them protects nothing, and a mode-000 file at a write-target path is BOTH
+    # an unreadable candidate and a record with its own table verdict — whose
+    # voice is the right one, and whose remedy is pinned elsewhere. The property
+    # this gate needs is "pre-empt every class that can WRITE", which is exactly
+    # {absent, ccrc-unmodified, ccrc-edited, foreign}.
+    #
+    # Per-id, not whole-run: lock 1 aborts everything because the generator
+    # contradicted ITSELF and its other verdicts are then worthless. A witnessed
+    # id is not that — the roster is internally consistent and merely wrong
+    # about one name, and refusing that one write is sufficient. `return 1` at
+    # the end still makes it a failed `ccrc install`.
+    case "$klass" in
+      unreadable|oversize) ;;
+      *)
+        wit=""
+        for w in ${wit_by[$id]:-}; do [ "$w" = "$id" ] || wit="$wit $w"; done
+        if [ -n "$wit" ]; then
+          n_refused=$((n_refused + 1))
+          printf 'REFUSE %s: %s — the roster calls "%s" a generated account, but%s in %s already exec it as their upstream binary\n' \
+            "$id" "$WRAPPER_BIN_DIR/$id" "$id" "$wit" "$WRAPPER_BIN_DIR"
+          printf '  remedy: %s\n' "set \"$id\"'s exec.kind to \"upstream\" (or \"external\") in $HOME/.ccrc/accounts.json so ccrc stops claiming that name. Moving the file aside does NOT help: what refuses this write is the OTHER files. No flag overrides this one."
+          continue
+        fi
+        if [ -n "$wit_blind" ]; then
+          n_refused=$((n_refused + 1))
+          printf 'REFUSE %s: %s — this run could not read%s in %s, so it cannot tell whether anything there execs "%s"\n' \
+            "$id" "$WRAPPER_BIN_DIR/$id" "$wit_blind" "$WRAPPER_BIN_DIR" "$id"
+          printf '  remedy: %s\n' "make those file(s) readable and stattable, or move them aside, then re-run. No flag overrides this one."
+          continue
+        fi ;;
+    esac
+
     case "$klass" in
       absent)
         action="write"; why="nothing was at that path" ;;
@@ -1519,16 +1725,53 @@ cmd_wrappers() {
             why="ccrc did not write it, but it says exactly what ccrc would say (same target, same config dir, same secrets file)"
             remedy="take it over with: ccrc wrappers --adopt — the file you have now is backed up first"
           fi
-        else
+        elif [ "$dok" = ok ]; then
+          # CUT 2 (D-156). `--force` MAY ONLY OVERWRITE A FILE THIS READER CAN
+          # PARSE AS A WRAPPER. `$dok` is that parse and it is already in hand —
+          # the equivalence test above read it — so this costs no second read.
+          #
+          # `foreign` is one classify covering two genuinely different
+          # sentences, and until D-156 they shared an arm that honoured
+          # `--force`:
+          #   dok = ok — "a wrapper, saying something else". ccrc has read the
+          #     file and can name every field it would replace, so `--force` is
+          #     a real answer to a real question: I know what that is,
+          #     overwrite it. This is the capability cut 2 KEEPS, and the one
+          #     the README advertises.
+          #   dok = no — "a script this reader cannot make sense of at all".
+          #     Measured on the reference box: `~/.local/bin/claude` is 2741
+          #     bytes of version-picking, token-injecting launcher. Under
+          #     `OVERSIZE_BYTES` so `$gen` reads it; no ccrc marker so it
+          #     classifies `foreign`; and one `--force` under a mis-edited
+          #     roster overwrote it with a wrapper exec'ing
+          #     `$HOME/.local/bin/claude` — itself — while claude-corp, claude2
+          #     and claude-dev0 all end `exec "$HOME/.local/bin/claude" "$@"`.
+          #     A FLEET-WIDE EXEC LOOP, from one flag. Until 2026-08-20 the
+          #     only thing stopping it was that the file was ~334 MB and
+          #     classified `oversize`; shrinking it to 2.7 KB removed a lock
+          #     nobody had written down.
+          #
+          # Overwriting a file ccrc has just said it cannot parse is the same
+          # category of act as overwriting `unreadable` or `oversize`:
+          # destroying something on the strength of a judgement this process
+          # never made. It refuses in those two arms' own absolute terms.
           if [ "$force" -eq 1 ]; then
-            action="rewrite"; why="ccrc did not write it and it says something else (--force)"
+            action="rewrite"; why="ccrc did not write it, it is a wrapper, and it says something else (--force)"
           else
             action="refuse"
             why="ccrc did not write it, and it is not the wrapper this roster describes"
             # NO `--force` IN THIS REMEDY, EVER — see the header. This is the
             # branch that holds somebody's bespoke launcher.
-            remedy="move it aside (mv \"$WRAPPER_BIN_DIR/$id\" \"$WRAPPER_BIN_DIR/$id.saved-$stamp\") and re-run, or set exec.kind to \"external\" for \"$id\" in $HOME/.ccrc/accounts.json so ccrc stops claiming that name"
+            remedy="$(_ccrc_foreign_remedy "$id" "$stamp")"
           fi
+        else
+          # No flag reaches this branch, exactly as in `unreadable` and
+          # `oversize`. Move-aside is still offered, because for an id that
+          # nothing else execs it genuinely works — the same shape `oversize`'s
+          # own remedy has: an escape hatch AND "No flag overrides this one."
+          action="refuse"
+          why="ccrc did not write it and this reader cannot parse it as a wrapper at all"
+          remedy="$(_ccrc_foreign_remedy "$id" "$stamp"). No flag overrides this one."
         fi ;;
       unreadable)
         # No flag reaches this branch. "I could not read it" is not "I know what
@@ -2909,7 +3152,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 # ── top-level argument parsing ──────────────────────────────────────────
 # Only -h/--help is recognised ahead of the verb; anything else in that
 # position IS the verb (data, not a flag), so there is no --flag/--flag=value
-# loop to run at this level yet. That idiom (ccrc-adopt:82-90: --out PATH /
+# loop to run at this level yet. That idiom (ccrc-adopt:97-105: --out PATH /
 # --out=PATH, --force, -h|--help, unknown -> usage+exit 2) is what each
 # cmd_<verb> follows once a verb grows flags of its own.
 while [ $# -gt 0 ]; do
