@@ -31,7 +31,8 @@ export interface SessionRecord {
    *
    *  It was `branchUnmeasured: boolean` for three commits of Wave 3 and that
    *  was one condition short (review finding): `field()` returns
-   *  `content.trim()`, so a zero-byte or torn `.branch` comes back as `''`,
+   *  `content.trim()`, so a zero-byte or whitespace-only `.branch` comes back
+   *  as `''`,
    *  which is neither of a boolean's two answers. It read as `branch: ''` with
    *  the flag false — a MEASURED BRANCH NAMED NOTHING — and `''` then went on
    *  to be used as a branch name by three consumers (see `buildRecord`).
@@ -50,11 +51,22 @@ export interface SessionRecord {
    *    `'empty'`      — the file is there, its bytes came back, and there are
    *                     none (or only whitespace). NOT transient: re-reading
    *                     returns the same nothing. NOT absent either: something
-   *                     wrote, or half-wrote, this field. `ccd`'s `_reg_set` is
-   *                     `printf '%s' "$3" > "$REG/$1.$2"` — a truncating
-   *                     redirect with no tmp+rename — so a process killed
-   *                     between the truncate and the write leaves exactly this,
-   *                     and `touch $REG/<id>.branch` is the other way in.
+   *                     wrote, or half-wrote, this field. THE TORN WRITE IS NO
+   *                     LONGER ONE OF THE WAYS IN: as of the
+   *                     registry-durability wave `ccd`'s `_reg_set` writes a
+   *                     hidden tmp in `$REG` and `mv -fT`s it onto the
+   *                     destination, so no reader can land inside a
+   *                     truncate-then-write window. THREE PRODUCERS REMAIN,
+   *                     and they are why this rung stays: (1) a registry file
+   *                     written by a build BEFORE that change and still on
+   *                     disk; (2) a hand-edited or `touch`ed file, which
+   *                     nothing prevents; (3) crash durability — `_reg_set`
+   *                     orders its bytes but does not `fsync` the tmp before
+   *                     the rename or the directory after, so a power loss can
+   *                     still expose a zero-length destination. Atomicity is a
+   *                     concurrency property, not a durability one. This is
+   *                     the long form; the other `'empty'`-aware comments in
+   *                     this file point back here rather than restate it.
    *                     Its own value, not folded into a neighbour, for the
    *                     reason `HOLD_NO_REASON` above exists: the refusal
    *                     sentence a coordinator reads has to be true, and one
@@ -108,8 +120,11 @@ export interface SessionRecord {
    *  the display, and `held: ''` renders as nothing on every surface while
    *  every consumer still enforces it — a hold visible nowhere is exactly what
    *  the no-expiry design cannot afford. `ccd ws-hold` refuses to write one
-   *  (whitespace included, since `field()` trims), so the only ways to reach
-   *  it are `touch $REG/<id>.hold` and a truncated write. */
+   *  (whitespace included, since `field()` trims), so reaching it takes
+   *  `touch $REG/<id>.hold` or one of the other residual empty-field routes
+   *  `branchEvidence`'s `'empty'` rung sets out — an older build's leftover
+   *  file, a power loss with no fsync. A torn write is no longer among them:
+   *  `_reg_set` renames rather than truncates. */
   held: string | null;
   /** `$REG/<id>.substrate` — a supervisor's own "I could not reach tmux"
    *  record (D-B8-14, spec §2): `<epoch-seconds> <verbatim reason>`, written
@@ -128,8 +143,10 @@ export interface SessionRecord {
    *  at the top of a read and cleared before its own field read used to
    *  report `SUBSTRATE_UNREADABLE` on an ordinary recovery. An
    *  unreadable-but-listed marker carries `SUBSTRATE_UNREADABLE`; a readable
-   *  but empty one (a torn write — ccd's writer synthesizes a reason rather
-   *  than write nothing) carries `SUBSTRATE_NO_REASON`; a stampless text keeps
+   *  but empty one (never ccd's own writing — `_substrate_mark` synthesizes a
+   *  reason rather than write nothing — so it arrived by one of the residual
+   *  routes `branchEvidence`'s `'empty'` rung sets out) carries
+   *  `SUBSTRATE_NO_REASON`; a stampless text keeps
    *  its whole content as `text`. All three degraded shapes sit at `at: 0`,
    *  which downstream renders text-only rather than as 1970. `text` is never
    *  `''`. */
@@ -187,12 +204,14 @@ export interface SessionRecord {
    *  not only when unreadable-but-listed (the shared evidence rule) but also
    *  when its bytes come back LISTED, READABLE and still fail to parse an
    *  epoch (`packedStamp` returns null). That second case is real: ccd's own
-   *  `.stopped` write is `printf '%s %s' "$(date +%s)" "$surface" > file`
-   *  (ccd/ccd:336) — non-atomic, so an interrupted write leaves a zero-byte or
-   *  half-written file — and ccd's OWN reader (`_session_state`, ccd/ccd:377)
+   *  `.stopped` write is `_reg_set "$id" stopped "$(date +%s) $surface"`
+   *  (`_ws_unsupervise`) — atomic since the registry-durability wave, so an
+   *  interrupted write no longer produces this, but the residual routes
+   *  `branchEvidence`'s `'empty'` rung sets out still do — and ccd's OWN
+   *  reader (`_session_state`)
    *  tests only `[[ -e "$REG/$id.stopped" ]]`, never content, so bash answers
    *  `stopped` for exactly that on-disk state. `.supervised`'s bash reader
-   *  (ccd/ccd:367) already guards content with `^[0-9]+$`, matching what
+   *  already guards content with `^[0-9]+$`, matching what
    *  `numOrNull` does below, so no such widening applies there. Collapsing a
    *  present-but-unparseable `.stopped` to `stopped: null` would let
    *  `sessionLifecycle`'s `dead + started -> orphan` rung fire about a row
@@ -264,8 +283,11 @@ export const HOLD_UNREADABLE = '<hold file unreadable — treated as held>';
 
 /**
  * The reason a held workspace carries when its `.hold` file reads back EMPTY.
- * `ccd ws-hold` refuses to write one, but `touch $REG/<id>.hold` and a
- * truncated write both produce it, and `''` is not null — so every consumer
+ * `ccd ws-hold` refuses to write one, but `touch $REG/<id>.hold` still does,
+ * and so does every residual empty-field route `BranchEvidence`'s `'empty'`
+ * rung sets out (an older build's file, a hand-edit, a power loss — no longer
+ * a torn write, which `_reg_set`'s rename closed), and `''` is not null — so
+ * every consumer
  * enforces the hold while every surface renders the reason as nothing at all:
  * a `Held — ` with a blank after it, a fleet chip with an empty tooltip, a
  * push reading `PR #591 merged — ; nothing archived.` The spec's stated price
@@ -298,7 +320,10 @@ export const SUBSTRATE_UNREADABLE = '<substrate marker unreadable>';
 /**
  * The reason a substrate fault carries when the marker reads back EMPTY.
  * `_substrate_mark` refuses to write one — an empty `PROBE_DETAIL` gets a
- * synthesized text — so the only way in is a torn write. Same ruling as
+ * synthesized text — so the only ways in are the residual empty-field routes
+ * `BranchEvidence`'s `'empty'` rung sets out (an older build's file, a
+ * hand-edit, a power loss); the torn write that used to head that list is gone,
+ * `_reg_set` having stopped truncating. Same ruling as
  * `HOLD_NO_REASON` and for the same reason: the reason string IS the display,
  * and a fault chip with nothing in its tooltip is visible enough to alarm and
  * empty enough to ignore.
@@ -323,7 +348,7 @@ async function field(io: FleetIO, dir: string, id: string, name: string): Promis
  * Trims INSIDE the `ok` arm, deliberately, so `r.content` on a hit is
  * ALREADY what `field()`'s callers have always received: `field()`'s own
  * `.trim()` is load-bearing for `branchEvidence`'s `'empty'` rung (a
- * zero-byte or torn `.branch` must read as `''`, not as whitespace) and for
+ * zero-byte or whitespace-only `.branch` must read as `''`) and for
  * `HOLD_NO_REASON`/`SUBSTRATE_NO_REASON` (an all-whitespace `.hold`/
  * `.substrate` must collapse to the same empty-content branch a zero-byte
  * one does). Trimming here, once, is also the one-parser reason `field()`
@@ -337,7 +362,7 @@ async function fieldMeasured(io: FleetIO, dir: string, id: string, name: string)
 }
 
 /** A registry field as a finite number, or null. `parseInt` alone yields NaN
- *  for a truncated write, and NaN on the wire renders as `null` in JSON while
+ *  for an empty or garbage field, and NaN on the wire renders as `null` in JSON while
  *  typing as `number` — a silent lie. */
 function numOrNull(raw: string | null): number | null {
   if (raw === null || raw.trim() === '') return null;
@@ -349,8 +374,9 @@ function numOrNull(raw: string | null): number | null {
  *  Epoch and payload share ONE registry file on purpose (§4.1): the registry is
  *  read per-field per-session on a 2s tick, and packing is what keeps `stopped`
  *  one read instead of two. A stamp whose epoch does not parse is NOT a stamp —
- *  an interrupted `_reg_set` leaves a zero-byte file, and `Number('')` is 0,
- *  which would date a live session's stop to 1970. */
+ *  an empty field trims to `''` and `Number('')` is 0, which would date a live
+ *  session's stop to 1970. (`_reg_set` no longer tears mid-write; the routes
+ *  that still reach an empty field are `BranchEvidence`'s `'empty'` rung.) */
 function packedStamp(raw: string | null): { at: number; rest: string } | null {
   if (raw === null) return null;
   const trimmed = raw.trim();
@@ -473,7 +499,8 @@ function noteWholeFleetListing(listable: boolean, now: number): void {
  * blanket rule to exactly two evidenced cases, both now LOGGED rather than
  * silent: a triple member that is neither readable NOR listed at all (the
  * file genuinely does not exist — a session mid-write or mid-teardown), or
- * one that reads back MEASURED-EMPTY (a truncated write — a permanent fault,
+ * one that reads back MEASURED-EMPTY (an empty field, by one of the routes
+ * `BranchEvidence`'s `'empty'` rung sets out — a permanent fault,
  * not a read failure). A triple member that is null but LISTED degrades the
  * row instead of dropping it — see `SessionRecord.unmeasured`.
  */
@@ -596,7 +623,7 @@ async function buildRecord(
   // `.stopped` gets the wider net `SessionRecord.lifecycleUnmeasured`'s own
   // docstring explains: unreadable-but-listed (the shared rule above) OR
   // listed-and-readable-but-unparseable (`stopStamp === null` while the read
-  // itself succeeded) — the proven bash/TS divergence a zero-byte or torn
+  // itself succeeded) — the proven bash/TS divergence a zero-byte or garbage
   // `.stopped` produces. A measured `absent` does NOT trip the wide net —
   // there is no content to fail to parse when there is proven to be no file.
   if (stoppedRead.ok) {
@@ -612,7 +639,8 @@ async function buildRecord(
   //
   // THE `'empty'` RUNG WAS THE ONE MISSING (review finding, Wave 3), and it is
   // also where `branch` gets normalised. `field()` returns `content.trim()`, so
-  // a zero-byte or torn `.branch` arrives here as `''` — not null — and the
+  // a zero-byte or whitespace-only `.branch` arrives here as `''` — not null
+  // — and the
   // boolean this replaced could not see it: the record carried a MEASURED
   // branch that named nothing, and `''` was then used AS A BRANCH NAME by
   // three consumers.
@@ -683,9 +711,11 @@ async function buildRecord(
     // spec §2): presence from the LISTING, never from a non-null read — "no
     // fault recorded" re-enables every destructive affordance downstream, so
     // it must never be the misreading of "the marker would not read". Content
-    // degrades LOUDLY: an empty marker gets a sentence (only a torn write
-    // produces one — `_substrate_mark` synthesizes a reason rather than write
-    // nothing), and a stampless one keeps its whole text at `at: 0` rather
+    // degrades LOUDLY: an empty marker gets a sentence (`_substrate_mark` never
+    // writes one — it synthesizes a reason rather than write nothing — so an
+    // empty marker came by one of the residual routes `branchEvidence`'s
+    // `'empty'` rung sets out), and a stampless one keeps its whole text at
+    // `at: 0` rather
     // than losing the one sentence a maintainer could act on.
     //
     // D-113: a measured `absent` reads null DIRECTLY, same reasoning as
@@ -724,8 +754,9 @@ async function buildRecord(
       ? null
       : { at: swapStamp.at, reason: swapStamp.rest === '' ? SWAP_BLOCKED_NO_REASON : swapStamp.rest },
     // An rc that does not parse is not a verdict. `_spawn` writes the stamp
-    // ALWAYS, before returning, so a half-written one means a torn write, not
-    // an ambiguous outcome — and `rc: NaN` on the wire renders as `null` while
+    // ALWAYS, before returning, so an unparseable one means the stamp never
+    // landed whole, not an ambiguous outcome — and `rc: NaN` on the wire
+    // renders as `null` while
     // typing as `number`, the silent lie `numOrNull` exists to refuse.
     spawn: spawnStamp === null || spawnRc === null ? null : { at: spawnStamp.at, rc: spawnRc },
     lifecycleUnmeasured,

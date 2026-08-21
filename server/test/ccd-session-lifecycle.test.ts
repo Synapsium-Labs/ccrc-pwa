@@ -204,3 +204,25 @@ describe('the unclaimed rung in bash, and its POSITION', () => {
       '_session_state() {   # id -> running|unsupervised|unclaimed|stopped|restarting|orphan|never-started');
   });
 });
+
+describe('the stop stamp rides _reg_set (registry-durability wave 2)', () => {
+  it('writes "<epoch> <surface>" through the helper, not a bare redirection', () => {
+    // `_ws_unsupervise` is the single choke point for ws-rm / ws-archive /
+    // ws-reap / forget / cmd_stop, and `stopped` is what tells `stopped` from
+    // `orphan` in §4.3's ladder. A torn read there reclassifies a session that
+    // somebody deliberately stopped.
+    const src = fs.readFileSync(CCD, 'utf8');
+    const body = /_ws_unsupervise\(\)\s*\{([\s\S]*?)\n\}/.exec(src)?.[1] ?? '';
+    expect(body).not.toMatch(/>\s*"\$REG\/\$id\.stopped"/);
+    expect(body).toMatch(/_reg_set "\$id" stopped "\$\(date \+%s\) \$surface"/);
+  });
+
+  it('and the bytes are unchanged — epoch, one space, the validated surface word', () => {
+    const h = makeCcdHarness('ccrc-ccd-stopstamp-');
+    try {
+      h.sh(`systemctl() { :; }; date() { [[ "$1" == +%s ]] && echo 1755620112 || command date "$@"; }
+            _ws_unsupervise demo-quiet-basin pwa`);
+      expect(h.reg('demo-quiet-basin', 'stopped')).toBe('1755620112 pwa');
+    } finally { h.cleanup(); }
+  });
+});

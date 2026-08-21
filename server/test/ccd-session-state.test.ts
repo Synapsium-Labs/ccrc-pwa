@@ -268,6 +268,14 @@ describe('the supervisor heartbeat', () => {
       _sync_uuid() { :; }; _auto_swap_check() { :; }; _auto_compact_check() { :; };
       _reg_set() { printf '%s' "$3" > "$REG/$1.$2"; echo "stamp $2" >> "$HOME/ccd-calls"; };
       cmd_supervise ${ID}`);
+    // THAT `_reg_set` REPLACED THE REAL ONE for the run above. It is a
+    // RECORDING stub — the `stamp <field>` log is the only thing this test
+    // reads — and it is deliberately BYTE-EQUIVALENT to the shipped writer
+    // but NOT MECHANISM-EQUIVALENT: the old truncating redirect, no tmp, no
+    // rename. Any `h.reg(...)` assertion in a block carrying this stub would
+    // measure THE STUB'S bytes, not ccd's; atomicity is pinned in
+    // `ccd-reg-set-atomic.test.ts`, never here. Do not "fix" the stub to
+    // rename — a stub that renamed would still not be the real function.
     expect(h.calls().filter((l) => l === 'stamp supervised').length).toBe(2);
   });
 

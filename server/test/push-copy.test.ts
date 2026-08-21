@@ -321,6 +321,18 @@ describe('a degraded row must never fire the busy→idle "✓ Finished" push (bl
   // whose live-status file says 'busy' throughout. The fix is that there is
   // now only ONE read — `tick()` passes its rows into `assembleFleet` — so
   // the evidence and the emitted row cannot be two different observations.
+  //
+  // AND IT IS CURRENTLY VACUOUS — D-118, measured (wave-1 review minor m4).
+  // Neutering the double below (degrade nothing at all) leaves this test
+  // GREEN, on both the converted double and the pre-conversion original at
+  // `c1a6866`, so it is pre-existing rather than a Task 4 regression. The
+  // reason is in the paragraph above: the fix this was written for landed,
+  // `tick()` passes its own rows into `assembleFleet`, and there IS no
+  // second read for the `readsThisTick > 1` branch to catch. It is kept as a
+  // REGRESSION TRIPWIRE for the day someone re-introduces a second
+  // whole-fleet read — not as live coverage of the gate, which the FIRST
+  // test in this describe provides. Do not read a green run here as evidence
+  // that the suppression works.
   it('suppresses the push when the degrade lands on the fleet assembly\'s read rather than the tick\'s ' +
      'own — the suppression set and the assembled rows must be ONE observation', async () => {
     const sent: PushPayload[] = [];

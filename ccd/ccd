@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=80bea10755f513677da02c671274f0ea60dde4260dfea70f2004a741907e5e4f
+# ccrc:generated 1 sha256=bd8a6684acce015c8279f1d9e8c10c695453df748369381f0b31c396c1dd3b24
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box, not on this file: `_rc_enabled` reads
@@ -365,7 +365,80 @@ _session_verdict() {   # id -> live|gone|unknown on stdout; always rc 0 (derived
 # difference. The two callers where that collapse was destructive — `_ws_status`
 # and `cmd_forget` — ask `_session_verdict` directly (D-B8-12).
 _alive() { [[ "$(_session_verdict "$1")" == live ]]; }
-_reg_set() { printf '%s' "$3" > "$REG/$1.$2"; }             # id field value
+# ATOMIC BY RENAME (registry-durability wave 2). The old body was
+# `printf '%s' "$3" > "$REG/$1.$2"` — truncate-then-write IN PLACE, so any
+# reader that opened the file inside the window read ZERO BYTES or a prefix of
+# the new value. The registry's read side treats a field's bytes as a fact, and
+# a torn field is a fact that was never true. Write to a tmp in THE SAME
+# DIRECTORY (hence the same filesystem, hence a real rename(2) rather than a
+# copy) and rename it into place: every reader sees the whole old value or the
+# whole new one.
+#
+# D-112'S INVARIANT SURVIVES AND IS STRONGER HERE. `buildRecord` drops a row on
+# a single measured-`absent` identity field with no second listing, which is
+# only sound if the NAME never disappears. Truncation never unlinked; rename
+# never unlinks either — POSIX requires the destination path stay resolvable to
+# the old or the new inode throughout. There is NO ENOENT WINDOW at any point,
+# before or after this change. Nothing in this function may `rm` the
+# destination.
+#
+# `-T` (--no-target-directory) IS NOT OPTIONAL. Measured, GNU coreutils 9.4: a
+# plain `mv -f tmp "$REG/$id.hold"` where `$REG/$id.hold` is a DIRECTORY exits
+# 0 having moved the tmp INSIDE it — a false success on the one field whose
+# silent absence is destructive (`cmd_ws_hold` reads this exit status and dies
+# on it, and `ccd-hold.test.ts` uses exactly that directory as its any-uid
+# stand-in for a failed write). With `-T` it exits 1, as `printf > dir` did.
+#
+# `-T` IS GNU COREUTILS (`--no-target-directory`), and it is DOCUMENTED HERE
+# RATHER THAN PROBED. ccd does gate `flock` with a named `die` at three sites
+# (`flock (util-linux) is unavailable — refusing to …`), but a probe on
+# `_reg_set` would sit on the hottest path in the file — the `supervised`
+# heartbeat, ~11 live sessions each re-stamping every 30s — to re-answer, fork
+# by fork, a question that is settled per box; and this is not a new class of
+# assumption, since ccd already depends on GNU `stat -c`, `readlink -f` and
+# `df -P`. Both fleet boxes are GNU/Linux; measured here, GNU coreutils 9.4.
+#
+# WHAT IT LOOKS LIKE IF THAT EVER STOPS BEING TRUE, which is the part worth
+# writing down: a `mv` that does not know `-T` rejects the option and exits
+# non-zero, so EVERY `_reg_set` in the process returns 1. Exactly one caller
+# reads that status — `cmd_ws_hold`'s `|| die "could not record the hold …"` —
+# and every other call site drops it, so nothing announces the fault. The
+# visible symptom is the `supervised` heartbeat quietly ceasing to land, and
+# `_session_state`'s 120s freshness window then ages EVERY row to `orphan`
+# inside two minutes: a fleet that reads as entirely dead, from one flag.
+#
+# THE TMP NAME: leading dot, trailing `.tmp`, field never last. The dot keeps
+# it out of every bash glob in the tree (`$REG/*.uuid`, `$REG/*.workspace`,
+# `$REG/$id.*` — none match a dotfile without `dotglob`, which nothing sets),
+# and the `.tmp` suffix keeps it out of node's `readdir`, which DOES return
+# dotfiles: `readRegistryMeasured` mints session ids from
+# `names.filter(n => n.endsWith('.uuid'))`, so a tmp ending in the field name
+# would mint a phantom session. `$BASHPID` separates concurrent supervisors
+# (and background subshells of one shell, where `$$` would not). THE SEQUENCE
+# IS BELT AND BRACES: nothing currently depends on it. Two writes by one shell
+# are strictly sequential, and the first tmp is renamed (or `rm -f`'d) away
+# before the second is created; two background subshells of one shell inherit
+# the SAME counter value, which is precisely the case `$BASHPID` is there for;
+# and no `trap` in this file calls `_reg_set`, so there is no re-entrancy path
+# that would make it load-bearing either. It is kept because it costs nothing
+# and it keeps the name unique for a future caller that holds neither of those
+# properties. Same shape and same reason as `session-hook.sh`'s own
+# `$REG/.$id.$$.hookstate.tmp`.
+#
+# A SIGKILL between the write and the rename leaks one tmp file, forever:
+# `_reg_purge`'s glob cannot see a dotfile, and giving it a second glob that
+# could would let one session's purge delete another session's IN-FLIGHT tmp
+# (ids may nest — see `_reg_purge`'s own note) and turn that write into a false
+# refusal. Disclosed rather than swept: an inert few bytes, the same price
+# `$REG/.reap-$id.lock` already pays for a lock whose identity is an inode.
+_REG_SET_SEQ=0
+_reg_set() {   # id field value -> 0 iff the value is on disk under its own name
+  local tmp
+  _REG_SET_SEQ=$(( _REG_SET_SEQ + 1 ))
+  tmp="$REG/.$1.$2.$BASHPID.$_REG_SET_SEQ.tmp"
+  printf '%s' "$3" > "$tmp" 2>/dev/null || { rm -f -- "$tmp"; return 1; }
+  mv -fT -- "$tmp" "$REG/$1.$2" || { rm -f -- "$tmp"; return 1; }
+}
 _reg_get() { cat "$REG/$1.$2" 2>/dev/null; }                # id field
 # THE ONE WRITER OF `started`, and the reason it is a function rather than eight
 # `_reg_set` lines: the field is what `_session_state` and shared/'s
@@ -500,7 +573,12 @@ _substrate_mark() {   # id — record "this supervisor could not reach tmux" ($R
   else
     server=$(timeout "$SUBSTRATE_PROBE_DEADLINE_S" tmux display-message -p '#{version}' 2>/dev/null) || server="unreachable"
   fi
-  printf '%s %s' "$(date +%s)" "$why (client ${client:-unknown}; server ${server:-unreachable})" > "$f"
+  # Through `_reg_set` (wave 2), so the marker cannot be read half-written like
+  # any other field. FIRST-WRITE-WINS is untouched: the `[[ -e "$f" ]]` guard
+  # above asks about the DESTINATION name, which rename replaces atomically and
+  # never unlinks — there is no instant at which a second supervisor's guard
+  # could see the marker missing and re-record a later onset.
+  _reg_set "$id" substrate "$(date +%s) $why (client ${client:-unknown}; server ${server:-unreachable})"
 }
 _substrate_clear() { rm -f -- "$REG/$1.substrate"; }
 _ws_seed_home() {   # id wrapper — set home once; never clobber a deliberate choice
@@ -539,7 +617,11 @@ _ws_unsupervise() {   # id [surface] — disable the unit AND RECORD THAT SOMEBO
   # non-member word.
   local id="$1" surface="${2-ccd}"
   case "$surface" in cli|pwa|agent|ccd) ;; *) surface=unknown ;; esac
-  printf '%s %s' "$(date +%s)" "$surface" > "$REG/$id.stopped"
+  # Through `_reg_set` (wave 2): the two words are one value, so the join moves
+  # to the call site and the bytes on disk are unchanged. `_session_state` reads
+  # this field to tell a deliberate stop from an orphan — a half-written stamp
+  # is a session reclassified.
+  _reg_set "$id" stopped "$(date +%s) $surface"
   rm -f "$REG/$id.supervised"
   # A silent failure here used to be observable at cmd_stop's own inlined call
   # (the message this replaced); routing all five call sites through one
@@ -1140,8 +1222,25 @@ if mode == 'state':
                 commits.append({'sha': parts[0], 'subject': parts[1], 'body': parts[2].strip()})
 
     def put(field, value):
-        with open(os.path.join(reg, id_ + '.' + field), 'w') as f:
-            f.write(str(value))
+        # ATOMIC, the python half of `_reg_set`. `open(…,'w')`
+        # truncates in place, so a reader landing inside the window read an
+        # EMPTY `prphase`/`prnumber` — and `prphase` is read by `ws-archive`,
+        # which files `archivedreason merged:#N` off it. Same tmp shape and same
+        # invisibility argument as `_reg_set`: leading dot (out of every bash
+        # glob) and a `.tmp` suffix (out of `readRegistryMeasured`'s
+        # `endsWith('.uuid')` id minting, which DOES see dotfiles).
+        dst = os.path.join(reg, id_ + '.' + field)
+        tmp = os.path.join(reg, '.' + id_ + '.' + field + '.' + str(os.getpid()) + '.tmp')
+        try:
+            with open(tmp, 'w') as f:
+                f.write(str(value))
+            os.replace(tmp, dst)
+        except OSError:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise
 
     def get(field):
         # put/clear's own path arithmetic, read instead of written. Needed by
@@ -1244,16 +1343,76 @@ if mode == 'state':
     # T0+1.4s with a stamp that OUTRANKS the newer answer. #583 went into the
     # append-only ledger and `prnumber` went back to #577.
     #
-    # `flock` on this session's own `.uuid` — an existing file, opened
-    # read-only, never written here — rather than a new registry file: the
-    # contended pair is always same-id, the lock is advisory and every writer of
-    # these fields is this same block. If it cannot be taken at all (no `.uuid`,
-    # no fcntl, unreadable $REG) the write goes ahead unlocked, which is exactly
-    # today's behaviour: this guard may only remove races, never add a refusal
-    # that stops a phase from ever updating.
+    # A DEDICATED lock file, never a registry FIELD — wave 2. `flock` attaches to
+    # an open file description (an INODE), and `_reg_set "$id" uuid` is written from
+    # three call sites — `cmd_ws_add`, `_sync_uuid`, `cmd_start`. The write on the
+    # ORDINARY SUPERVISE PATH is `_sync_uuid`, which `cmd_supervise`'s loop calls
+    # every tick; the other two, `cmd_ws_add` and `cmd_start`, run once each. Every
+    # such write RENAMES a new inode over `.uuid`. Two `ccd pr-state` runs straddling
+    # that rewrite would take LOCK_EX on two different inodes and both enter the
+    # compare-and-set below: the duplicate append and lost update this lock prevents.
+    # `$REG/.prstate-<id>.lock` is never written, never renamed and NEVER UNLINKED
+    # — the same idiom, for the same reason, as `$REG/.reap-$id.lock`, inside
+    # `cmd_ws_reap`, which also explains why unlinking a lock while holding it is how
+    # two processes come to hold "the lock" on two inodes. Hidden by its leading dot,
+    # so no registry glob or id-minting listing sees it; it leaks one 0-byte file per
+    # session that has ever run pr-state — the disclosed price. NAMED BY FUNCTION,
+    # NOT LINE: a line number here goes stale the moment anything above it grows —
+    # twice now on this branch.
+    #
+    # WIDENED BY ONE STATE AND NARROWED BY ANOTHER — not "unchanged", and the
+    # widened state is narrower than it first looks. Measured both ways under
+    # a `$REG` that is readable but NOT WRITABLE (`chmod 0555`):
+    #
+    #   - An EXISTING `.prstate-<id>.lock` (mode 0664) — `open(path, 'a')`
+    #     SUCCEEDS and the flock is taken. Appending to an existing file needs
+    #     write permission on the FILE, not on the directory it lives in.
+    #   - The FIRST-EVER `.prstate-<id>.lock` for a session — `open(path, 'a')`
+    #     raises `PermissionError` (EACCES), because that open must CREATE the
+    #     file, which does need write on the directory.
+    #
+    # So the widening is only the FIRST-EVER `ccd pr-state` for a given
+    # session under an unwritable `$REG`; every run after that creates no new
+    # file and takes the lock normally, same as the old `$REG/<id>.uuid`
+    # READ-ONLY open did. In the other direction, the old condition list also
+    # carried "no `.uuid` at all" — a lock that could not be taken because the
+    # field had not been written yet — and this one cannot hit that, which is
+    # a strict improvement. The widened state is a REAL residual, not a dead
+    # one — measured, not assumed. Under a `$REG` at `chmod 0555` (readable,
+    # not writable): an EXISTING `.prstate-<id>.lock` opens (`open(path, 'a')`)
+    # and its flock is taken, fine; the FIRST-EVER `.prstate-<id>.lock` for a
+    # session raises `PermissionError` at that same open, because THIS open
+    # must CREATE the file, which needs write on the DIRECTORY; an append to
+    # an EXISTING `.prhistory` (`open(path, 'a')`, below) is fine too, because
+    # appending needs write on the FILE, not the directory — the unwritable
+    # `$REG` never touches it; and `clear`'s `os.remove` and `put`'s tmp-create
+    # both raise `PermissionError`, because both need write on the DIRECTORY
+    # (D-132). So for a session that has never run `pr-state` under an
+    # unwritable `$REG`: the lock cannot be created, the compare-and-set below
+    # proceeds UNLOCKED, and two concurrent runs can each reach the prhistory
+    # append — the duplicate-append harm this lock exists to prevent — before
+    # both die at `clear`/`put`. The result is a duplicated PR lineage record,
+    # which `_ws_archive_manifest` later folds into the archive manifest
+    # verbatim.
+    #
+    # DISCLOSED, NOT CLOSED (ruling, D-139). It takes a read-only `$REG` AND
+    # concurrent `pr-state` runs AND a session with no lock file yet — all
+    # three at once — and the natural closes each trade this rare duplicate
+    # for a worse ordinary-case cost: locking `.prhistory` itself adds a new
+    # inode-stability assumption to the hot path, and skipping the append when
+    # unlocked loses a lineage record any time the lock open fails for the
+    # ORDINARY reason — a filesystem whose `flock` refuses, or any other
+    # `OSError` on the lock open — not only in the unwritable-`$REG` case
+    # above — both worse trades for a state in which the registry is already
+    # unwritable.
+    #
+    # THE GUARANTEE IS UNCHANGED, and it is the part that matters: if the lock
+    # cannot be taken AT ALL — the state above, or a filesystem whose `flock`
+    # refuses — the write goes ahead UNLOCKED. This guard may only remove
+    # races, never add a refusal that stops a phase from ever updating.
     lock_f = None
     try:
-        lock_f = open(os.path.join(reg, id_ + '.uuid'))
+        lock_f = open(os.path.join(reg, '.prstate-' + id_ + '.lock'), 'a')
         fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX)
     except OSError:
         if lock_f is not None:
@@ -1351,6 +1510,64 @@ WS_ADJ=(quiet swift amber still brisk clear plain warm bright calm keen soft)
 WS_NOUN=(mesa river ridge harbor meadow canyon summit hollow prairie basin cove delta)
 
 _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
+
+# R-3, wave review. Ids are `<project>-<slug>`, and `_reg_purge` unlinks
+# `"$REG/$id".*` for every dot-free suffix — so a PROJECT with a LEADING DOT
+# mints an id that ALIASES one of ccd's own hidden, dot-prefixed registry
+# files for an unrelated session. THE RULE, not a fixed list: a dot-leading
+# project aliases EVERY `$REG/.<name>.<dot-free-suffix>` file ccd owns. Four
+# known instances illustrate it, all verified: project `.prstate-demo` +
+# slug `quiet-basin` -> id `.prstate-demo-quiet-basin`, whose purge glob
+# matches `$REG/.prstate-demo-quiet-basin.lock` — the PR-STATE LOCK of the
+# unrelated session `demo-quiet-basin` (new this wave, the lock `_pr_py`'s
+# migration off `.uuid` introduced); project `.reap-demo` + slug
+# `quiet-basin` aliases that same session's REAP LOCK,
+# `$REG/.reap-demo-quiet-basin.lock` (pre-dates this wave); project
+# `.ws-add` + slug `demo` -> id `.ws-add-demo`, aliasing the WS-ADD LOCK for
+# project `demo`, `$REG/.ws-add-demo.lock` (pre-dates this wave); and
+# project `.tmux` + slug `server` -> id `.tmux-server`, aliasing the
+# TMUX-SERVER LOCK `$REG/.tmux-server.lock` that `_tmux_new_session` takes
+# (pre-dates this wave) — `server` passes `_ws_slug_valid` exactly as the
+# other three slugs do, no more contrived. Unlinking a lock file while
+# another process holds it is exactly how two processes come to hold "the
+# lock" on two different inodes — reopening the double compare-and-set this
+# branch's lock migration closed.
+#
+# NOT reachable this way, and this set IS the boundary — seven dot-prefixed
+# artifacts live under `$REG`; the four above are reachable, these three are
+# not: `$REG/.reaped/` (a directory, not a `.reaped.<suffix>` file — no id's
+# purge glob matches a bare directory, and `rm -f` cannot take one
+# regardless); `_reg_set`'s own tmps; and session-hook.sh's
+# `.$id.$$.hookstate.tmp` — the last two ARE candidate glob matches when
+# `<id>` is the aliasing id, but their suffix after the match carries a
+# SECOND dot, which is exactly what `_reg_purge`'s own `*.*` skip excludes.
+#
+# THAT SKIP IS THE LOOP'S RULE ONLY, not a general immunity — `_reg_purge`
+# also removes one named two-dot file EXPLICITLY, after the loop:
+# `rm -f "$REG/$id.hookstate.json"`, un-skipped on purpose (see the note in
+# `_reg_purge` beside that line). "Has a dot in the suffix" is sufficient
+# for these two tmp families specifically, because nothing in `_reg_purge`
+# names them outside the loop, but it is not a general rule. No dot-prefixed
+# artifact under `$REG` is ever named `<id>.hookstate.json` for an aliasing
+# id, so no alias follows from this explicit line either.
+#
+# Enforced at CREATION ONLY — `cmd_ws_add` and `cmd_start`, the two sites
+# that mint a NEW registry row for a project — never at `cmd_pr_state`,
+# which applies this same `^[A-Za-z0-9._-]+$` shape FOUR times (its
+# `--session` argv, its `--project` argv, the `*.workspace` loop's id
+# check, and the registry-project check), of which two are PROJECT checks.
+# The justification is not that those uses are read-only — `cmd_pr_state`
+# persists three registry fields (`prnumber`, `prphase`, `prcheckedat`) and
+# creates `$REG/.prstate-<id>.lock` — it is that NONE OF THEM MINTS AN ID:
+# each validates a project that either already exists in a registry row or
+# arrived for a read, and refusing there could STRAND an existing row
+# rather than prevent a new one. The creation gate is what stops such a row
+# ever existing in the first place, so the read side does not need to
+# police it too.
+_ws_project_valid() {   # project -> 0 when it is a legal project name to CREATE under
+  [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]] || return 1
+  [[ "$1" != .* ]] || return 1
+}
 
 # A slug is free only when the registry holds NOTHING for `<project>-<slug>` —
 # verification round 3 P1. The old form was `[[ ! -f "$REG/$1-$2.uuid" ]]`, i.e.
@@ -1500,7 +1717,8 @@ _ws_disk_free_gb() {   # dir -> whole GiB available on the filesystem holding it
 
 cmd_ws_add() {   # project [slug] — new worktree + session for an existing project
   local project="${1:?usage: ccd ws-add <project> [slug]}" slug="${2:-}"
-  [[ "$project" =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid project '$project'"
+  _ws_project_valid "$project" \
+    || die "invalid project '$project' — allowed chars: A-Za-z0-9 . _ -, and no LEADING dot (a dot-leading id aliases ccd's own hidden registry files — see _ws_project_valid)"
   local main="$PROJECTS_ROOT/$project"
   [[ -d "$main/.git" ]] || die "not a git repo: $main"
 
@@ -2322,15 +2540,35 @@ cmd_ws_hold() {   # ccd ws-hold --session <id> --reason <text> — claim a
   [[ -f "$REG/$id.archived" ]] \
     && die "$id is archived — restore first: a hold cannot protect a pane that is already gone"
   # CHECKED, unlike every other `_reg_set` in this file, because this is the one
-  # field whose silent absence is destructive. `_reg_set` is `printf > file` and
-  # ccd runs `set -uo pipefail` with NO `-e`, so an unchecked write that failed
-  # falls straight through to the echo below. Measured on the unguarded version:
-  # `chmod 500 "$REG"` -> `Permission denied` on stderr, `held <id>: <reason>` on
-  # stdout, exit 0, no `.hold` file. The orchestrator protocol reads exit code +
+  # field whose silent absence is destructive. ccd runs `set -uo pipefail` with
+  # NO `-e`, so an unchecked failed write would fall straight through to the
+  # echo below. Left unprotected, the orchestrator protocol reads exit code +
   # stdout, records the workspace as claimed, and dispatches the next wave; the
   # archiveMerged sweep sees no hold and archives the merged workspace mid-run.
   # So the ONE verb whose failure means UNPROTECTED refuses like every other
   # doubt path in this function rather than announcing a success it did not have.
+  #
+  # `_reg_set` writes a tmp and renames it over the destination, and on EVERY
+  # failure path it removes its own tmp and returns non-zero — so a failed
+  # hold leaves no NEW or PARTIAL `.hold`: none exists if none did before,
+  # and any PRE-EXISTING `.hold` is left byte-intact (the rename that would
+  # have replaced it never happens). A partial or empty `.hold` is not a
+  # state this mechanism can produce any more. The `|| die` below is what
+  # turns that non-zero into a named refusal instead of a false success on
+  # the echo below — it is not a weaker guard than before, it is the same
+  # guard over a narrower failure set.
+  #
+  # RE-MEASURED FOR THE SHIPPED MECHANISM: `chmod 500 "$REG"` now fails at TMP
+  # CREATE — bash reports the failed redirection before `_reg_set`'s own
+  # `2>/dev/null` ever applies to it, so `Permission denied` still reaches
+  # stderr — `_reg_set` returns 1, and `die` fires: no stdout, no `.hold` file,
+  # exit 1. (PRE-WAVE, for contrast: `Permission denied` on stderr, `held <id>:
+  # <reason>` on stdout, exit 0, no `.hold` file — the false success this
+  # guard exists to refuse.) `ccd-hold.test.ts`'s own stand-in for "$REG"
+  # unwritable is a DIRECTORY at `$REG/<id>.hold` — `chmod` does not constrain
+  # root, a directory does — and it is `mv -fT`'s `-T` that keeps THAT case a
+  # refusal too: a bare `mv -f` would move the tmp inside the directory and
+  # exit 0.
   _reg_set "$id" hold "$reason" \
     || die "could not record the hold for $id — it is NOT held"
   echo "held $id: $reason"
@@ -2461,7 +2699,13 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
 
   # Into the REGISTRY, never into the worktree — the worktree is the thing that
   # may later be deleted, and a manifest inside it would die with it.
-  printf '%s\n' "$manifest" > "$REG/$id.archivemanifest"
+  # Through `_reg_set` (wave 2), with the TRAILING NEWLINE carried in the value:
+  # `printf '%s\n'` put one there and `_reg_set` adds none, so passing it
+  # explicitly keeps the file byte-identical. `manifestBytes` (registry.ts)
+  # JSON.parses this and would tolerate either, which is the reason to be
+  # deliberate rather than casual — a migration that also moves the bytes is two
+  # changes in one commit.
+  _reg_set "$id" archivemanifest "$manifest"$'\n'
 
   _ws_unsupervise "$id"                                   # clears Restart=always
   tmux kill-session -t "$(_tmux "$id")" 2>/dev/null || true
@@ -8403,7 +8647,14 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
     [[ -n "$wrapper" && -n "$project" ]] \
       || die "usage: ccd start <id> | ccd start <wrapper> <project> [workdir]"
     _is_valid_wrapper "$wrapper" || die "unknown wrapper '$wrapper' (valid: ${CCRC_ACCOUNTS[*]})"
-    [[ "$project" =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid project '$project' (allowed chars: A-Za-z0-9 . _ -)"
+    # SYMMETRY, not aliasing risk here: `cmd_start` mints no aliasing id of
+    # its own — its id is `<wrapper>-<project>`, and roster ids cannot lead
+    # with a dot. Refusing the same value at BOTH creation verbs is what
+    # makes the stronger, simpler statement true — no registry row EVER
+    # holds a dot-leading project — so no future reader has to re-derive
+    # which verb could alias and which could not. See `_ws_project_valid`.
+    _ws_project_valid "$project" \
+      || die "invalid project '$project' — allowed chars: A-Za-z0-9 . _ -, and no LEADING dot"
     id=$(_id "$wrapper" "$project")
   else
     id="${1:?usage: ccd start <id> | ccd start <wrapper> <project> [workdir]}"

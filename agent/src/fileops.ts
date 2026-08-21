@@ -36,7 +36,15 @@ function readRange(file: string, start: number, end: number): Promise<Buffer> {
  *  genuinely does not exist), so a caller that cares can distinguish that
  *  from EACCES/EISDIR/ELOOP/EIO/anything else — all of which mean the file
  *  IS there and this box just can't read it. Never-throw, same contract as
- *  every other op in this file. */
+ *  every other op in this file.
+ *
+ *  SAME RESIDUAL AS THE SERVER'S `ReadFailure` (wave-1 review minor m2), and
+ *  it must be stated on both sides because this is where the wire's own
+ *  absent-marker is decided: a DANGLING SYMLINK is followed, the target's
+ *  ENOENT is what `readFile` throws, and `absent` comes back true for a name
+ *  that is still in the directory listing. Not closed with an `lstat` ladder
+ *  here for the same reason as there — a second syscall on every field read
+ *  to separate a state no ccd verb can produce. */
 export type ReadResult = { data: string | null; absent: boolean };
 
 export async function readWhole(p: string): Promise<ReadResult> {

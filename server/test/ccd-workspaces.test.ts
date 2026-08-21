@@ -302,6 +302,75 @@ describe('ws-add', () => {
   });
 });
 
+// R-3, wave review: `_reg_purge` unlinks `"$REG/$id".*` for every dot-free
+// suffix, and ids are `<project>-<slug>`. Project validation
+// (`^[A-Za-z0-9._-]+$`) permits a LEADING DOT, so a project named
+// `.prstate-demo` with slug `quiet-basin` mints the id
+// `.prstate-demo-quiet-basin` — whose purge glob matches
+// `$REG/.prstate-demo-quiet-basin.lock`, the pr-state lock of the UNRELATED
+// session `demo-quiet-basin`. Unlinking a lock while another process holds it
+// is exactly how two processes come to hold "the lock" on two different
+// inodes — the double compare-and-set this branch's lock migration closed.
+// A dot-leading project thereby aliases every `$REG/.<name>.<dot-free-suffix>`
+// file ccd owns: `.prstate-<id>.lock` (new this wave), `.reap-<id>.lock`,
+// `.ws-add-<project>.lock`, and `.tmux-server.lock` (the last three pre-date
+// this wave); only the creation sites are fixed here.
+describe('a leading-dot project cannot alias ccd\'s own hidden registry files', () => {
+  const shFail = (snippet: string): { code: number; stdout: string; stderr: string } => {
+    try { return { code: 0, stdout: sh(snippet), stderr: '' }; }
+    catch (e) {
+      const err = e as { status?: number; stdout?: Buffer; stderr?: Buffer };
+      return { code: err.status ?? 1, stdout: String(err.stdout ?? ''), stderr: String(err.stderr ?? '') };
+    }
+  };
+
+  it('cmd_ws_add refuses a project with a leading dot, and creates no registry row', () => {
+    makeRepo('.prstate-demo');
+    const r = shFail(`${WS_ADD} cmd_ws_add .prstate-demo quiet-basin`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('invalid project');
+    expect(r.stderr).toContain('.prstate-demo');
+    // The aliasing consequence, prevented at the root: no row for the
+    // dot-leading id exists to alias anything with.
+    expect(reg('.prstate-demo-quiet-basin', 'uuid')).toBeNull();
+    expect(fs.existsSync(path.join(home, '.cc-sessions', '.prstate-demo-quiet-basin.uuid'))).toBe(false);
+    expect(fs.existsSync(path.join(home, 'worktrees', '.prstate-demo', 'quiet-basin'))).toBe(false);
+  });
+
+  it('cmd_start refuses the same project shape, and creates no registry row', () => {
+    makeRepo('.prstate-demo');
+    const r = shFail(`${WS_ADD} cmd_start claude .prstate-demo`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('invalid project');
+    expect(r.stderr).toContain('.prstate-demo');
+    expect(reg('claude-.prstate-demo', 'uuid')).toBeNull();
+  });
+
+  it('pins the mechanism directly: _reg_purge on a dot-leading id WOULD unlink an unrelated session\'s pr-state lock', () => {
+    // Demonstration, not a regression: this is the reason the guard above
+    // exists, written down as an executable fact rather than left to the
+    // comment alone. `demo-quiet-basin` is an ordinary, unrelated session;
+    // its pr-state lock is `$REG/.prstate-demo-quiet-basin.lock`. A session
+    // with id `.prstate-demo-quiet-basin` (project `.prstate-demo`, slug
+    // `quiet-basin`) purges to the exact same glob.
+    //
+    // This test calls `_reg_purge` ALONE, bypassing `_ws_project_valid`
+    // entirely, so it deliberately CANNOT go red when the dot line in
+    // `_ws_project_valid` is deleted — it asserts the dangerous unlink still
+    // happens for an id that passes the guard, which is exactly the fact the
+    // guard exists to keep unreachable. Only a future hardening of
+    // `_reg_purge` ITSELF would turn this test red, and that failure must be
+    // read as that hardening working, not as a regression.
+    const lockPath = path.join(home, '.cc-sessions', '.prstate-demo-quiet-basin.lock');
+    fs.writeFileSync(lockPath, '');
+    expect(fs.existsSync(lockPath), 'the fixture lock must exist before the purge').toBe(true);
+    sh(`_reg_purge .prstate-demo-quiet-basin`);
+    expect(fs.existsSync(lockPath),
+      '_reg_purge on the aliasing id unlinked the UNRELATED session\'s pr-state lock')
+      .toBe(false);
+  });
+});
+
 describe('ws-add branch naming', () => {
   // The branch is namespaced; the directory and the session id are NOT. A change
   // that unified them would break the id -> registry lookup, so assert all three.

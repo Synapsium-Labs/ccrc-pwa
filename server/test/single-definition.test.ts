@@ -1163,7 +1163,13 @@ describe('Build 8 vocabularies — one definition each, all derived from their m
 // | 'absent'`, where `'absent'` appears with no `'unreadable'` beside it —
 // a bare `/'absent'/` or `/'unreadable'/` scan would false-positive there.
 describe('one absent/unreadable read vocabulary', () => {
-  const PAIR = /'absent'\s*\|\s*'unreadable'/;
+  // ORDER-INSENSITIVE (wave-1 review minor m1). The vocabulary is a SET of two
+  // words; a second copy that happens to spell them the other way round is
+  // exactly the drift this scan exists to catch, and the original single
+  // ordering let it through silently. Still a PAIR rather than either word
+  // alone — `shared/api.ts`'s `WsAuditUnit = 'enabled' | 'loaded' | 'absent'`
+  // is a legitimate lone `'absent'` and must not trip it.
+  const PAIR = /'absent'\s*\|\s*'unreadable'|'unreadable'\s*\|\s*'absent'/;
 
   it('is declared in exactly one file, and that file is server/src/io.ts', () => {
     const holders = ALL.filter((f) => PAIR.test(readFileSync(f, 'utf8'))).map(rel);
@@ -1175,5 +1181,18 @@ describe('one absent/unreadable read vocabulary', () => {
     expect(registry).not.toMatch(PAIR);
     expect(registry).toMatch(/export type BranchEvidence = 'named' \| ReadFailure \| 'empty';/);
     expect(registry).toMatch(/import\s+type\s*\{[^}]*\bReadFailure\b[^}]*\}\s*from\s*'\.\/io\.js'/);
+  });
+
+  it('trips on EITHER ordering — a second copy spelled the other way round is still a second copy', () => {
+    // Wave-1 review minor m1. The scan is a text scan, so the fingerprint has
+    // to be the SET, not one spelling of it. Measured before the fix: a file
+    // containing `type X = 'unreadable' | 'absent'` scored zero hits and the
+    // suite stayed green.
+    expect(PAIR.test("type X = 'unreadable' | 'absent';")).toBe(true);
+    expect(PAIR.test("type X = 'absent' | 'unreadable';")).toBe(true);
+    // Still not a bare-word scan: `WsAuditUnit = 'enabled' | 'loaded' |
+    // 'absent'` must stay invisible, which is the whole reason the fingerprint
+    // is a PAIR (see this describe's own header).
+    expect(PAIR.test("type WsAuditUnit = 'enabled' | 'loaded' | 'absent';")).toBe(false);
   });
 });

@@ -16,7 +16,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { CCD, ghContainedEnv, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 
@@ -59,6 +59,21 @@ describe('the substrate marker — one writer, epoch + verbatim reason (spec §2
     // synthesized text itself distinguishes guarded from unguarded.
     expect(marker).toContain('tmux gave no reason');
   });
+  it('rides `_reg_set`, so the marker is written atomically like every other field', () => {
+    // Wave 2. `_substrate_mark` used to write `printf … > "$f"` directly,
+    // which is the torn-read window `_reg_set` no longer has. FIRST-WRITE-WINS
+    // is unaffected: the `[[ -e "$f" ]]` guard sits ABOVE the write and asks
+    // about the DESTINATION, which rename replaces without ever unlinking.
+    const src = readFileSync(CCD, 'utf8');
+    const body = /_substrate_mark\(\)\s*\{([\s\S]*?)\n\}/.exec(src)?.[1] ?? '';
+    expect(body, 'nothing may redirect into the marker path any more').not.toMatch(/>\s*"\$f"/);
+    expect(body).toMatch(/_reg_set "\$id" substrate/);
+    // And the guard is still there, still ahead of the write.
+    expect(body.indexOf('[[ -e "$f" ]] && return 0'))
+      .toBeGreaterThanOrEqual(0);
+    expect(body.indexOf('[[ -e "$f" ]] && return 0'))
+      .toBeLessThan(body.indexOf('_reg_set "$id" substrate'));
+  });
 });
 
 const ID = 'demo';
@@ -94,6 +109,18 @@ const LOOP_STUBS = `systemctl() { :; }; sleep() { echo "sleep \${1:-}" >> "$HOME
 // PRE-FLIGHT probe (the ensure gate), consumed before the loop's first tick.
 describe('cmd_supervise under a substrate fault (spec §1)', () => {
   it('unknown does NOT exit, marks the row, and stamps the heartbeat EVERY unknown tick', () => {
+    // THE `_reg_set` BELOW REPLACES THE REAL ONE. It is a RECORDING stub —
+    // the `stamp <field>` log is what the heartbeat assertion counts — and it
+    // is deliberately BYTE-EQUIVALENT to the shipped writer (same value, no
+    // trailing newline) but NOT MECHANISM-EQUIVALENT: it is the old
+    // truncating redirect, with no tmp and no rename. So the
+    // `h.reg(ID, 'substrate')` assertion below measures THE STUB'S bytes, not
+    // ccd's — which is fine for what it asks (did `_substrate_mark` pass the
+    // right value?) and worthless as evidence about atomicity. Atomicity is
+    // pinned in `ccd-reg-set-atomic.test.ts`, and the structural check
+    // earlier in this file ("rides `_reg_set`…") is what keeps this file
+    // honest about which writer `_substrate_mark` calls. Do not "fix" the stub to rename:
+    // a stub that renamed would still not be the real function.
     run(`${LOOP_STUBS}
       ${seq('unknown:protocol mismatch', 'unknown:protocol mismatch', 'unknown:protocol mismatch', 'gone')}
       _reg_set() { printf '%s' "$3" > "$REG/$1.$2"; echo "stamp $2" >> "$HOME/ccd-calls"; }

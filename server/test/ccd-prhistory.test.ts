@@ -343,16 +343,19 @@ describe('the chokepoint is serialised, and only the newest answer writes', () =
     // because under it the loser's `get('prnumber')` is fresh and reads 601.
     //
     // Asserted by BLOCKING, which is deterministic where a real double-run is
-    // not: an external `flock` holds this session's `.uuid` for 1.5 s, so a
-    // `pr-state` that takes the lock cannot return before it is released. The
-    // unlocked run is ~150 ms (the whole of this file's heaviest test,
-    // fixture and all, is 400 ms), so the 700 ms floor has a wide margin in
-    // both directions. `timeout` is NOT usable here: `GH_STUB` shadows it with
-    // a shell function, by design, so that ccd's own gh wrapper is stubbed.
+    // not: an external `flock` holds this session's dedicated
+    // `.prstate-<id>.lock` (registry-durability wave 2 moved the lock off
+    // `.uuid`, which `_reg_set` now renames a new inode over — see `_pr_py`'s
+    // lock-acquisition comment) for 1.5 s, so a `pr-state` that takes the lock
+    // cannot return before it is released. The unlocked run is ~150 ms (the
+    // whole of this file's heaviest test, fixture and all, is 400 ms), so the
+    // 700 ms floor has a wide margin in both directions. `timeout` is NOT
+    // usable here: `GH_STUB` shadows it with a shell function, by design, so
+    // that ccd's own gh wrapper is stubbed.
     const { id, tip } = workspace();
     h.ghRows([mergedRow({ number: 591, headRefOid: tip })]);
     const r = h.run(`${GH_STUB}
-      flock -x "$HOME/.cc-sessions/${id}.uuid" -c 'touch "$HOME/locked"; sleep 1.5' &
+      flock -x "$HOME/.cc-sessions/.prstate-${id}.lock" -c 'touch "$HOME/locked"; sleep 1.5' &
       while [[ ! -f "$HOME/locked" ]]; do sleep 0.02; done
       s=$(date +%s%N); cmd_pr_state --session ${id} >/dev/null 2>&1; e=$(date +%s%N)
       echo "waitedMs=$(( (e - s) / 1000000 ))"
