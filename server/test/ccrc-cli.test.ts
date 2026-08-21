@@ -159,10 +159,18 @@ describe('ccrc: dispatch and usage', () => {
     // release, back up, re-run the install spine from the verified staged
     // tree. Same split again: `server/test/ccrc-update.test.ts` owns what it
     // does, this line owns that an operator can find it.
+    //
+    // `uninstall`, `backup` and `logs` joined it in stage 4 Task 8 (spec §7):
+    // the exit ramp that leaves reinstall safe, update's backup step
+    // standalone, and the role-aware journalctl passthrough. Same split:
+    // `server/test/ccrc-uninstall.test.ts` owns all three behaviours.
     const home = mkTmp('ccrc-cli-usage-verbs-');
     const r = runCcrcRaw(home, ['-h']);
-    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|install\|update\|passwd\|version\}/);
+    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|install\|update\|uninstall\|backup\|logs\|passwd\|version\}/);
     expect(r.stdout).toMatch(/^ {2}update {4}fetch a published release/m);
+    expect(r.stdout).toMatch(/^ {2}uninstall {1}/m);
+    expect(r.stdout).toMatch(/^ {2}backup {4}/m);
+    expect(r.stdout).toMatch(/^ {2}logs {6}/m);
     // …and the body explains it, including the half an operator gets wrong:
     // rotating expires SESSIONS and leaves enrolled passkeys working.
     expect(r.stdout).toMatch(/^ {2}passwd {4}set \(or rotate\) this box's PWA passphrase/m);

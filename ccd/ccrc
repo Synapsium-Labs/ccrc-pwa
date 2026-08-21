@@ -241,7 +241,7 @@ INST_DEGRADED=()
 
 usage() {
   cat <<EOF
-usage: $PROG {doctor|status|adopt|wrappers|install|update|passwd|version}
+usage: $PROG {doctor|status|adopt|wrappers|install|update|uninstall|backup|logs|passwd|version}
 
 The lifecycle CLI for a Claude Code fleet box — installs, updates and
 diagnoses a box, as a sibling to ccd (which drives sessions once one is
@@ -278,6 +278,23 @@ already running).
             rollback path too: a downgrade prints the coord.db restore
             commands and never auto-restores. Never automatic; per box;
             fleet box first, then the server box
+  uninstall move this box off ccrc, leaving reinstall safe: stop, disable
+            and remove the units (incl. both drop-ins and the slice
+            escape), remove ccrc's managed settings.json hook entries
+            (unmanaged entries survive byte-identically, rewritten files
+            are backed up first), remove marker-verified wrappers ONLY, and
+            remove ccrc's own files in ~/.cc-sessions, ~/ccrc and the
+            executables. PRESERVES ~/.ccrc, the session registry rows,
+            worktrees and ~/ccrc-backups. Refuses while live sessions
+            exist. [--force] proceeds anyway; [--purge] also removes
+            ~/.ccrc and ~/ccrc-backups — never worktrees, never tmux state
+  backup    take update's backup step standalone: coord.db snapshot, dists,
+            ccd and the units to ~/ccrc-backups/<ts>/, then prune to the
+            newest \$CCRC_BACKUP_KEEP (default 10) timestamped backups —
+            hand-made siblings in that directory are never touched
+  logs      this box's service journal: journalctl --user -u ccrc.service
+            (or ccrc-agent.service when ccrc.env records CCRC_ROLE=fleet).
+            [-f] follows, [-n LINES] limits — both pass straight through
   passwd    set (or rotate) this box's PWA passphrase in ~/.ccrc/auth.scrypt.
             Prompts twice on a tty; the gate also needs CCRC_AUTH=on in this
             box's ccrc.env. Rotating invalidates every logged-in SESSION —
@@ -3326,6 +3343,12 @@ _upd_fetch() {   # $1 = pinned tag, or "" for the newest release
 # resolved out of THIS tree (`$CCRC_HERE/..`): the tool that snapshots the
 # old world ships beside the ccrc doing the snapshotting, never fetched.
 _upd_backup() {
+  # The optional argument (Task 8) is the LINE PREFIX for the one
+  # announcement below — `cmd_backup` runs this very function standalone and
+  # a transcript line that said "update:" from a verb nobody ran would be a
+  # claim about a run that never happened. The SET and the directory shape
+  # are the same by construction: one function, two callers.
+  local say="${1:-update: backup}"
   local ts
   ts="$(date +%Y%m%d-%H%M%S)"
   UPD_BACKUP_DIR="$BOX_BACKUP_ROOT/$ts"
@@ -3345,7 +3368,7 @@ _upd_backup() {
   for u in "${BOX_UNIT_NAMES[@]}" claude-session@.service; do
     _upd_backup_copy "$BOX_UNIT_DIR/$u" "$u"
   done
-  echo "update: backup: $UPD_BACKUP_DIR (coord.db snapshot, dists, ccd, units — taken before anything was installed)"
+  echo "$say: $UPD_BACKUP_DIR (coord.db snapshot, dists, ccd, units — taken before anything was installed)"
 }
 
 _upd_backup_copy() {   # <src> <name under $UPD_BACKUP_DIR> — absent src is ordinary
@@ -3462,6 +3485,344 @@ _upd_report() {   # $1 = old description, $2 = old version ("" when unknown)
   fi
 }
 
+# ── cmd_backup — update's step 2 standalone (stage 4, Task 8; spec §7) ────
+# The SAME set to the SAME directory shape, because it is the same function:
+# `_upd_backup`, called with this verb's own line prefix. What this verb adds
+# is the pruning `cmd_update` deliberately does not do: an operator running
+# `ccrc backup` on a schedule is the caller deploy.sh's `prune_backups`
+# exists for, and a backup directory that only ever grows is that function's
+# own measured failure case (18MB/13 dirs before it existed).
+cmd_backup() {
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -h|--help) usage; exit 0 ;;
+      *) _ccrc_usage_die "$1" ;;
+    esac
+  done
+  # BY NAME, before anything runs — `cmd_update`'s own probe discipline, for
+  # the same first-step reason: backup-coord.mjs is a node program, and a
+  # backup that failed for a missing interpreter must not read as a broken
+  # coord.db.
+  command -v node >/dev/null 2>&1 \
+    || _ccrc_die "node is required by 'ccrc backup' (it runs deploy/backup-coord.mjs for the coord.db snapshot) but is not on PATH — nothing was backed up"
+  _upd_backup backup
+  _bak_prune
+}
+
+# Keep the newest ${CCRC_BACKUP_KEEP:-10} TIMESTAMPED backups —
+# `deploy.sh`'s `prune_backups` glob exactly (`[0-9]{8}-[0-9]{6}`, the shape
+# `_upd_backup`'s `date +%Y%m%d-%H%M%S` writes), because the directory also
+# holds hand-made siblings (a real `pre-flip-agent-dist` exists on the fleet
+# host today) that a bare newest-N sweep would silently destroy. The glob
+# expansion is already lexically sorted, which for this shape IS
+# chronological order.
+_bak_prune() {
+  local keep="${CCRC_BACKUP_KEEP:-10}"
+  [[ "$keep" =~ ^[0-9]+$ ]] \
+    || _ccrc_die "CCRC_BACKUP_KEEP must be a number (got a non-numeric value) — nothing was pruned"
+  local -a dirs=()
+  local had_nullglob=0 d
+  shopt -q nullglob && had_nullglob=1
+  shopt -s nullglob
+  for d in "$BOX_BACKUP_ROOT"/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]; do
+    [ -d "$d" ] && dirs+=("$d")
+  done
+  [ "$had_nullglob" -eq 1 ] || shopt -u nullglob
+  local n=${#dirs[@]} i
+  for ((i = 0; i < n - keep; i++)); do
+    rm -rf -- "${dirs[$i]}" \
+      || _ccrc_die "could not prune ${dirs[$i]} — the newer backups above it are all intact"
+    echo "backup: pruned ${dirs[$i]} (keeping the newest $keep timestamped backups; hand-made siblings are never touched)"
+  done
+}
+
+# ── cmd_logs — the journal, thin (stage 4, Task 8; spec §7) ───────────────
+# `journalctl --user -u <this box's unit>` with `-f`/`-n` passed straight
+# through — no parsing, no filtering: journalctl's own interface is the
+# feature, and this verb only answers the question an operator would
+# otherwise have to know the topology for: WHICH unit is this box's.
+# The RECORDED role decides (`ccrc.env`'s CCRC_ROLE, `cmd_update`'s own
+# reader), never a probe of what happens to be running: a fleet box whose
+# agent is down is exactly the box whose logs are being asked for.
+cmd_logs() {
+  local -a pass=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -h|--help) usage; exit 0 ;;
+      -f) pass+=(-f) ;;
+      -n)
+        [ $# -ge 2 ] || { echo "$PROG: -n needs a value: how many journal lines" >&2; usage >&2; exit 2; }
+        pass+=(-n "$2"); shift ;;
+      *) _ccrc_usage_die "$1" ;;
+    esac
+    shift
+  done
+  command -v journalctl >/dev/null 2>&1 \
+    || _ccrc_die "journalctl is not on PATH — this box's service journal cannot be read from here"
+  local role="" unit=ccrc.service
+  if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ]; then
+    role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  fi
+  [ "$role" = fleet ] && unit=ccrc-agent.service
+  exec journalctl --user -u "$unit" ${pass[@]+"${pass[@]}"}
+}
+
+# ── cmd_uninstall — off the box, reinstall left safe (stage 4, Task 8) ────
+# Spec §7's three sets, exactly:
+#   REMOVES  the units (stop, disable, delete — both drop-ins and the slice
+#            escape included), ccrc's managed settings.json hook entries
+#            (through the installer's OWN predicate, `--remove` mode, with
+#            its per-file backup), marker-verified wrappers ONLY
+#            (`shared/mark.mjs` — the marker is the proof ccrc wrote the
+#            file; nothing else is ccrc's to delete), ccrc's own artifacts
+#            inside ~/.cc-sessions file-by-file, `~/ccrc`, and the
+#            executables `_inst_bins` placed.
+#   PRESERVES `~/.ccrc` whole (the box's config, roster and identity — what
+#            makes reinstall converge instead of starting over), the
+#            registry rows and operator switches in ~/.cc-sessions,
+#            worktrees (sessions' WORK — never ccrc's), ~/ccrc-backups, and
+#            the two operator-namespace files (`~/.tmux.conf`,
+#            `~/.claude/statusline-command.sh`) whose `.pre-ccrc-<UTC>`
+#            keep-asides get their restore commands PRINTED, never run.
+#   REFUSES  while live sessions exist (counted the way ccd counts them,
+#            `_box_sessions`) unless --force: uninstalling under a live
+#            fleet orphans every supervisor mid-carry.
+# `--purge` additionally removes `~/.ccrc` and ~/ccrc-backups — NEVER
+# worktrees, never tmux state (no tmux argv exists anywhere in this verb).
+cmd_uninstall() {
+  local force=0 purge=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --force) force=1 ;;
+      --purge) purge=1 ;;
+      -h|--help) usage; exit 0 ;;
+      *) _ccrc_usage_die "$1" ;;
+    esac
+    shift
+  done
+  # BY NAME, before anything is removed — the file's own probe discipline.
+  # node is the marker verifier (shared/mark.mjs) and jq is the settings.json
+  # surgeon (install-session-hooks.sh); a removal pass that discovered either
+  # missing halfway through would leave a box neither installed nor not.
+  local t
+  for t in node jq; do
+    command -v "$t" >/dev/null 2>&1 \
+      || _ccrc_die "$t is required by 'ccrc uninstall' but is not on PATH — nothing on this box was removed"
+  done
+
+  # ── THE LIVE-SESSION GATE, FIRST ────────────────────────────────────────
+  # `_box_sessions` answers "N in <reg> (…)" or "0 (…)"; the count is its
+  # first word. The refusal is the DEFAULT: an operator who really means it
+  # says so with the flag, and the message tells them both halves.
+  local sessions count
+  sessions="$(_box_sessions)"
+  count="${sessions%% *}"
+  if [ "$count" != 0 ] && [ "$force" -eq 0 ]; then
+    _ccrc_die "this box holds $count live ccd session(s) ($sessions) — uninstalling under them orphans every supervisor. Stop them first (ccd list, then ccd stop each), or run: ccrc uninstall --force"
+  fi
+
+  _uninst_units
+  _uninst_hooks
+  _uninst_wrappers
+  _uninst_cc_sessions
+  _uninst_tree_bins
+  _uninst_keep_asides
+  [ "$purge" -eq 1 ] && _uninst_purge
+  if [ "$purge" -eq 1 ]; then
+    echo "uninstall: done — this box is off ccrc. Worktrees and the session registry rows were preserved; ~/.ccrc and ~/ccrc-backups are gone (--purge)"
+  else
+    echo "uninstall: done — this box is off ccrc, and reinstall is safe: ~/.ccrc (config, roster, identity), the session registry rows, worktrees and ~/ccrc-backups were all preserved"
+  fi
+}
+
+# Stop, disable, delete — in that order, because a unit file removed under a
+# still-enabled unit leaves systemd holding a dangling enablement symlink.
+# `disable --now` per unit that is actually installed here; a failure is
+# REPORTED and the removal continues (the unit FILE going away is this
+# step's contract — a wedged systemd must not leave the box half-uninstalled
+# with the transcript claiming otherwise). `claude-session@*` INSTANCES are
+# never a systemctl target: the never-touch rule holds even on the way out —
+# deleting the template file does not touch the live instances, and their
+# operator stops them through ccd, not through an uninstall's side effect.
+_uninst_units() {
+  local dir="$BOX_UNIT_DIR"
+  # The `\x2d` literal is `_inst_units`' own (see its header: systemd's
+  # escaping of the `-` in the slice name, kept verbatim by double quotes).
+  local slice="$dir/app-claude\x2dsession.slice.d"
+  local u
+  if command -v systemctl >/dev/null 2>&1; then
+    : "${XDG_RUNTIME_DIR:=/run/user/$UID}"; export XDG_RUNTIME_DIR
+    : "${DBUS_SESSION_BUS_ADDRESS:=unix:path=${XDG_RUNTIME_DIR}/bus}"; export DBUS_SESSION_BUS_ADDRESS
+    for u in "${BOX_UNIT_NAMES[@]}" ccd-cap-scopes.timer ccd-cap-scopes.service; do
+      [ -f "$dir/$u" ] || continue
+      systemctl --user disable --now "$u" \
+        || echo "uninstall: units: disable --now $u failed (continuing — the unit file is removed below; read: systemctl --user status $u)" >&2
+    done
+  else
+    echo "uninstall: units: systemctl is not on PATH — the unit files are removed but nothing was stopped or disabled"
+  fi
+  rm -f -- "$dir/${BOX_UNIT_NAMES[0]}" "$dir/${BOX_UNIT_NAMES[1]}" \
+    "$dir/claude-session@.service" "$dir/ccd-cap-scopes.service" "$dir/ccd-cap-scopes.timer" \
+    || _ccrc_die "removing the unit files under $dir failed"
+  rm -rf -- "$dir/claude-session@.service.d" "$slice" \
+    || _ccrc_die "removing the drop-in directories under $dir failed"
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl --user daemon-reload \
+      || echo "uninstall: units: daemon-reload failed — systemd may still list units whose files are gone until the next reload" >&2
+  fi
+  echo "uninstall: units: stopped, disabled and removed (incl. both drop-ins and the slice escape)"
+}
+
+# THE TREE'S OWN installer, in `--remove` mode — never the INSTALLED copy at
+# ~/.cc-sessions (the opposite of `_inst_hooks`' choice, for a reason that
+# only exists on this path): an installed copy that predates the flag does
+# not KNOW `--remove`, and its argument handling would read the call as a
+# default INSTALL run — an uninstall that re-registered every hook it was
+# asked to remove. The sibling at $CCRC_HERE is version-locked to this very
+# function by shipping in the same tree.
+_uninst_hooks() {
+  local inst="$CCRC_HERE/install-session-hooks.sh"
+  if [ ! -f "$inst" ]; then
+    echo "uninstall: hooks: $inst is missing (a partial tree) — no settings.json was touched; remove ccrc's entries by hand if any remain"
+    return 0
+  fi
+  if [ ! -f "$HOME/.ccrc/accounts.sh" ]; then
+    echo "uninstall: hooks: no roster projection at \$HOME/.ccrc/accounts.sh — no account homes to sweep, no settings.json was touched"
+    return 0
+  fi
+  bash "$inst" --remove \
+    || _ccrc_die "install-session-hooks.sh --remove refused — read its lines above; it never rewrites a settings.json it could not validate, so nothing was damaged"
+  echo "uninstall: hooks: ccrc's managed entries removed from each account's settings.json (unmanaged entries survive byte-identically; every rewritten file was backed up first)"
+}
+
+# MARKER-VERIFIED ONLY. The candidates are every legal-id-named file in the
+# wrapper directory, and the verdict on each is `shared/mark.mjs`'s
+# `verifyMarker` — the same module `gen-wrappers.mjs` classifies with, read
+# through node because bash re-implementing the digest would be the second
+# definition the marker exists to prevent. The verdicts and what they earn:
+#   ccrc-unmodified -> REMOVED: exactly what ccrc last wrote, nothing lost.
+#   ccrc-edited     -> KEPT, and said: the marker proves ccrc wrote it, the
+#                      hash proves someone worked on it since — that work is
+#                      the operator's, exactly as `cmd_wrappers` refuses to
+#                      overwrite it without --force.
+#   foreign / oversize / unverifiable -> KEPT SILENTLY: a marker-less file
+#                      with a wrapper's name is somebody's hand-written
+#                      launcher (or the upstream binary itself), and "I
+#                      could not verify it" is never license to delete it.
+# The >1MiB stat guard is `gen-wrappers.mjs`'s own OVERSIZE gate from the
+# other language (D-92's cross-language class): the 324MB upstream binary is
+# never read, let alone judged.
+_uninst_wrappers() {
+  local shape="$CCRC_HERE/ccrc-wrapper-shape"
+  if [ ! -f "$shape" ]; then
+    echo "uninstall: wrappers: the shape contract is missing ($shape) — no wrapper was judged and none was removed"
+    return 0
+  fi
+  # shellcheck source=ccrc-wrapper-shape
+  . "$shape" \
+    || _ccrc_die "the wrapper shape contract failed to load: $shape"
+  local mark="$CCRC_HERE/../shared/mark.mjs"
+  if [ ! -f "$mark" ]; then
+    echo "uninstall: wrappers: the marker module is missing ($mark) — nothing can be verified, so nothing was removed"
+    return 0
+  fi
+  if [ ! -d "$WRAPPER_BIN_DIR" ]; then
+    echo "uninstall: wrappers: no $WRAPPER_BIN_DIR on this box — nothing to remove"
+    return 0
+  fi
+  local f name verdict removed=0
+  for f in "$WRAPPER_BIN_DIR"/*; do
+    [ -f "$f" ] || continue
+    name="${f##*/}"
+    # The three executables are `_uninst_tree_bins`' subject, not wrappers.
+    case "$name" in ccd|ccrc|ccd-cap-scopes) continue ;; esac
+    [[ "$name" =~ $WRAPPER_ID_RE ]] || continue
+    verdict="$(node --no-warnings --input-type=module -e '
+import { readFileSync, statSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+const [markPath, filePath] = process.argv.slice(1);
+if (statSync(filePath).size > 1024 * 1024) { console.log("oversize"); process.exit(0); }
+const { verifyMarker } = await import(pathToFileURL(markPath).href);
+console.log(verifyMarker(readFileSync(filePath, "utf8")));
+' "$mark" "$f" 2>/dev/null)" || verdict=""
+    case "$verdict" in
+      ccrc-unmodified)
+        rm -f -- "$f" || _ccrc_die "could not remove $f"
+        removed=$((removed + 1))
+        echo "uninstall: wrappers: removed $f (marker-verified: exactly what ccrc last wrote)" ;;
+      ccrc-edited)
+        echo "uninstall: wrappers: kept $f — ccrc wrote it but it has been edited since, and that edit is yours; remove it by hand if it is worthless" ;;
+      *) : ;;   # foreign, oversize, or unverifiable — not ccrc's to remove.
+    esac
+  done
+  echo "uninstall: wrappers: $removed marker-verified wrapper(s) removed; everything ccrc could not prove it wrote was left in place"
+}
+
+# File-by-file, NEVER a directory sweep of ~/.cc-sessions: the registry rows
+# (`<id>.uuid` and friends) and the operator switches (`coordinator-paused`,
+# `mail-disabled` — removable only by a human at a terminal, CLAUDE.md) live
+# in the same directory, and a glob one character too wide here is a fleet
+# whose sessions all lost their identity. The list below is `_inst_files` +
+# `_inst_skills`' install set, exactly.
+_uninst_cc_sessions() {
+  local reg="$HOME/.cc-sessions"
+  if [ ! -d "$reg" ]; then
+    echo "uninstall: ~/.cc-sessions: not present — nothing of ccrc's to remove there"
+    return 0
+  fi
+  rm -f -- "$reg/session-hook.sh" "$reg/install-session-hooks.sh" "$reg/notify.sh" \
+    "$reg/install-coordinator-skill.sh" "$reg/install-worker-skill.sh" \
+    || _ccrc_die "removing ccrc's files under $reg failed"
+  rm -rf -- "$reg/coordinator-skill" "$reg/worker-skill" \
+    || _ccrc_die "removing the skill trees under $reg failed"
+  echo "uninstall: ~/.cc-sessions: ccrc's own artifacts removed (hooks, notify, both skill trees); the registry rows and operator switches stay"
+}
+
+# The tree, then the executables `_inst_bins` placed OUT of it. Removing the
+# file bash is currently executing is safe — the inode outlives the
+# directory entry until this process exits — which is why this step needs no
+# staging dance on the way down.
+_uninst_tree_bins() {
+  rm -rf -- "$BOX_TREE_DIR" \
+    || _ccrc_die "removing $BOX_TREE_DIR failed"
+  # `ccd-cap-scopes` is `_inst_bins`' third executable: an uninstall that
+  # removed its units (above) and left the binary would strand an orphan on
+  # PATH for ever (spec §7 predates the third bin; the ledger records this).
+  rm -f -- "$HOME/.local/bin/ccd" "$HOME/.local/bin/ccrc" "$HOME/.local/bin/ccd-cap-scopes" \
+    || _ccrc_die "removing the executables from \$HOME/.local/bin failed"
+  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes and the ccrc launcher removed from \$HOME/.local/bin"
+}
+
+# The keep-asides `_inst_keep_aside` wrote for the two operator-namespace
+# files. PRINTED, never performed: the file at the live path may carry the
+# operator's own edits made since the install, and a restore that ate them
+# would be the very damage the keep-aside existed to prevent. Restoring is
+# one visible `mv`, and it is theirs to run.
+_uninst_keep_asides() {
+  local f said=0
+  local had_nullglob=0
+  shopt -q nullglob && had_nullglob=1
+  shopt -s nullglob
+  for f in "$HOME/.tmux.conf.pre-ccrc-"* "$HOME/.claude/statusline-command.sh.pre-ccrc-"*; do
+    if [ "$said" -eq 0 ]; then
+      echo "uninstall: keep-asides: the files ccrc copied aside before replacing them are still there — restore any of them with:"
+      said=1
+    fi
+    echo "uninstall: keep-asides:   mv $f ${f%.pre-ccrc-*}"
+  done
+  [ "$had_nullglob" -eq 1 ] || shopt -u nullglob
+  return 0
+}
+
+# `--purge` only. NEVER worktrees (~/worktrees is sessions' WORK — ccd's
+# WORKTREES_ROOT, human-gated even inside ccd itself) and never tmux state:
+# no tmux argv exists anywhere in this verb, purge included.
+_uninst_purge() {
+  rm -rf -- "$HOME/.ccrc" "$BOX_BACKUP_ROOT" \
+    || _ccrc_die "purging ~/.ccrc and $BOX_BACKUP_ROOT failed"
+  echo "uninstall: purge: ~/.ccrc and ~/ccrc-backups removed (worktrees and tmux state are never touched)"
+}
+
 # Guard so the script can be `source`d (the way server/test/ccd-clip.test.ts:32
 # and server/test/ccd-workspaces.test.ts:394 source ccd itself, to call one
 # function directly without running the whole CLI) without running a command
@@ -3503,6 +3864,9 @@ case "$VERB" in
   wrappers) cmd_wrappers "$@" ;;
   install) cmd_install "$@" ;;
   update)  cmd_update "$@" ;;
+  uninstall) cmd_uninstall "$@" ;;
+  backup)  cmd_backup "$@" ;;
+  logs)    cmd_logs "$@" ;;
   passwd)  cmd_passwd "$@" ;;
   *) _ccrc_usage_die "$VERB" ;;
 esac

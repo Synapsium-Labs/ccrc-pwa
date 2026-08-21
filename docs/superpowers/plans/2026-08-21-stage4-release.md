@@ -213,7 +213,7 @@ comparison silently (D-150). NO sweep in this task (Task 7).
 
 **Files:** `ccd/ccrc` (three verbs + usage/dispatch); new `server/test/ccrc-uninstall.test.ts`;
 extend `ccrc-cli.test.ts`.
-- [ ] RED per spec §7's exact remove/preserve/refuse sets — the load-bearing cases:
+- [x] RED per spec §7's exact remove/preserve/refuse sets — the load-bearing cases:
   refuses with live sessions unless `--force` (fixture registry rows); removes ONLY
   marker-verified wrappers (a marker-less file with a wrapper's name survives); settings.json
   hook entries removed via the existing predicate WITH per-file backup, unmanaged hooks
@@ -222,7 +222,9 @@ extend `ccrc-cli.test.ts`.
   NEVER worktrees (fixture worktree survives); keep-aside restore commands printed, files
   untouched. `backup` = update's step 2 standalone with `CCRC_BACKUP_KEEP` pruning. `logs`
   passes `-f`/`-n` through to journalctl (recording stub argv), role-aware unit name.
-- [ ] GREEN; mutations: drop the marker check on wrapper removal (red); drop the live-session
+  (Ran red: 18/19 in the new `ccrc-uninstall.test.ts` + 1 in `ccrc-cli.test.ts` (the usage
+  verb list) before implementation; the 1 pre-pass is named in the Task 8 ledger entry.)
+- [x] GREEN; mutations: drop the marker check on wrapper removal (red); drop the live-session
   refusal (red). Commit `feat(ccrc): uninstall makes reinstall safe; backup and logs join`.
 
 ### Task 9: Doctor — the `build` check + retargeted remedies
@@ -387,3 +389,45 @@ it merges first.)
   the absence of the record), and the fixture systemctl gained `try-restart`,
   `list-units` (per-state fixture files) and `show -p KillMode` (answered by the fixture
   drop-in's presence) arms.
+- **D-143** (Task 8): **the settings.json predicate stays defined once, so the sweep rides
+  the installer.** `ccd/install-session-hooks.sh` — outside Task 8's named file list —
+  gained a `--remove` mode: the `unmanaged` jq def (its line 72 predicate) is THE single
+  definition of "which settings.json entries are ccrc's", and an uninstaller that
+  re-spelled it in bash is exactly how the two would come to disagree about whose entry a
+  file holds. `--remove` runs the sweep half only (managed entries out, empty event arrays
+  dropped, an emptied `.hooks` deleted rather than left as `{}` so a no-change file is not
+  rewritten; a HOME with no settings.json gains none), keeps the per-file backup, and never
+  touches statusLine in either direction. `_uninst_hooks` runs the TREE's copy
+  (`$CCRC_HERE/install-session-hooks.sh`), deliberately the OPPOSITE of `_inst_hooks`'
+  installed-copy doctrine: an installed copy that predates the flag would read `--remove`
+  as a default install run and RE-REGISTER every hook it was asked to remove.
+- **D-144** (Task 8): `~/.local/bin/ccd-cap-scopes` is in the remove set although spec §7
+  spells only `~/.local/bin/{ccd,ccrc}` — `_inst_bins` installs THREE executables, and this
+  same verb removes `ccd-cap-scopes.{service,timer}`; leaving the third binary would strand
+  an orphan on PATH for ever. The spec's pair predates the third bin; annotated in place.
+- **Task 8 mutation measurements** (applied, run, reverted): (M1) the marker check dropped
+  from `_uninst_wrappers` (every id-named file removed unconditionally) → 2 red (the
+  marker-less-file-survives test and the marked-but-edited-is-kept test); (M2) the
+  live-session refusal dropped from `cmd_uninstall` → 1 red (the refusal test: exit 1,
+  names the count and `--force`, removes NOTHING). Suite 19/19 green before and after each.
+  Red-first honesty: 18/19 new tests red before implementation; the 1 that passed
+  pre-implementation did so for a stated reason — the `logs -n`-without-a-value usage test,
+  vacuous while `logs` was an unknown VERB (exit 2 with journalctl never run is the same
+  observable either way); its real force arrives with the verb, where a `-n` that fell
+  through to journalctl would red it. Sibling suites green after implementation:
+  ccrc-cli 34/34, install-session-hooks + ccrc-update + single-definition +
+  typecheck-tests (136 across the five with ccrc-cli), ccrc-install + ccrc-doctor +
+  build-release + install-sh + ccrc-wrappers + ccrc-passwd (458 across the six),
+  session-hook 22/22 (isolated), runbook-holds 6/6.
+- **D-145** (Task 8, found — NOT caused — during execution; for Task 11's fix round):
+  `agent/test/deploy-verify.test.ts` is red 2/42 at this branch's pre-Task-8 HEAD
+  (`3eb0d4d`) and on the working tree alike, and the cause is Task 1's `stamp_build`
+  comment: the sentence "MEASURED, like everything else in this stamp" contains the
+  substring `else`, and two source-scan pins slice `deploy.sh` at a bare
+  `deploySh.indexOf('else')` from position 0 — the agent-branch slice
+  (`indexOf('if [ "$TARGET" = "agent" ]')` → first `else`) is now EMPTY (end before
+  start), and the "server branch" slice now begins at that comment, so the first
+  `rsync -az` it finds is the AGENT lane's and the coord-guard-before-rsync ordering pin
+  flips. Verified pre-existing by stashing Task 8's changes and re-running. Fix belongs to
+  the whole-branch round: reword the comment or (better) anchor the pins on something less
+  incidental than the four letters `else`.
