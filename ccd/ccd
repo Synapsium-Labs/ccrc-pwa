@@ -767,7 +767,6 @@ sys.stdout.write(json.dumps(sys.stdin.buffer.read().decode("utf-8", "replace")))
 # `set -u` can never reach an unset read. They carry no event payload.
 _LC_DIR="$REG/.lifecycle"
 _LC_LINE_MAX=2048                # twin of L0's LC_LINE_MAX      (BYTES)
-_LC_DEC_MAX=512                  # twin of L0's LC_REASON_MAX_BYTES (BYTES)
 _LC_GEN_MAX_BYTES=4194304        # twin of L0's LC_GEN_MAX_BYTES — 4 MiB
 _LC_GEN_KEEP=4                   # twin of L0's LC_GEN_KEEP — ~a year at ~35 KB/day
 _LC_SEQ=0
@@ -783,8 +782,15 @@ _LC_OBS=""
 _LC_ACTS=(archive attic-drop claim create destroy enable ensure forget gc
           hold purge reap release rename restore spawn start stop supervise
           swap unsupervise)
-# Outcomes DO include the degrade word, because `_lc_emit` writes it itself.
-_LC_OUTCOMES=(intent done refused failed unknown)
+# The vocabulary is the set of ACCEPTABLE INPUTS; the degrade word is the
+# OUTPUT `_lc_emit` produces when an input is not in that set — the same rule
+# the acts array above follows. `unknown` stays OUT of this array for the same
+# reason it stays out of that one: if a caller could pass `unknown` and have it
+# accepted as a legitimate outcome, "the outcome genuinely was unknown" and
+# "the caller passed a token we could not recognise" collapse into one value,
+# and `badoutcome` — which exists to preserve the raw token — becomes
+# unreachable for that input.
+_LC_OUTCOMES=(intent done refused failed)
 
 _lc_now_ns() {   # -> exactly 19 ASCII digits of epoch nanoseconds, on stdout
   # THREE RUNGS, because `%N` is not portable and its failure is silent and

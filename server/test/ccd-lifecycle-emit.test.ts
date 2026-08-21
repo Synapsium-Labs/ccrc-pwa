@@ -6,7 +6,7 @@
 // answer". `_LC_ACTS` is a declared bash array, so `"${_LC_ACTS[@]}"` is the
 // strongest reading available.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { LIFECYCLE_ACTS, LIFECYCLE_OUTCOMES, LC_ACT_UNKNOWN } from '../../shared/api.js';
+import { LIFECYCLE_ACTS, LIFECYCLE_OUTCOMES, LC_ACT_UNKNOWN, LC_OUTCOME_UNKNOWN } from '../../shared/api.js';
 import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
@@ -34,12 +34,20 @@ describe('_LC_ACTS / _LC_OUTCOMES — the closed vocabularies, bound to L0', () 
     }
   });
 
-  it('is set-equal to LIFECYCLE_OUTCOMES, degrade name INCLUDED', () => {
-    // The asymmetry is deliberate: `_lc_emit` writes `outcome:"unknown"` itself,
-    // so ccd must know the word; it never writes `act:"unknown"` from a caller's
-    // token without also writing `badact`.
+  it('is set-equal to LIFECYCLE_OUTCOMES minus the degrade name, BOTH directions', () => {
+    // Symmetric with the acts case above, and for the same reason: the
+    // vocabulary is the set of ACCEPTABLE INPUTS, and the degrade word is the
+    // OUTPUT `_lc_emit` produces when an input is not in that set. If a
+    // caller's token could legitimately BE `unknown`, "the outcome genuinely
+    // was unknown" and "the caller passed a token we could not recognise"
+    // would collapse into one value, and `badoutcome` — which exists to
+    // preserve the raw token — would become unreachable for that input.
+    const want = LIFECYCLE_OUTCOMES.filter((o) => o !== LC_OUTCOME_UNKNOWN);
+    expect(want.length, 'guards the guard: an empty want passes everything').toBe(4);
     const got = lines(h.sh('printf "%s\\n" "${_LC_OUTCOMES[@]}"'));
-    expect([...got].sort()).toEqual([...LIFECYCLE_OUTCOMES].sort());
+    expect([...got].sort()).toEqual([...want].sort());
+    expect(got, 'unknown is the READER\'s degrade, never a call site\'s choice')
+      .not.toContain(LC_OUTCOME_UNKNOWN);
   });
 });
 
