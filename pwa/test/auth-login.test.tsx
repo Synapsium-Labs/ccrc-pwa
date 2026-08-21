@@ -300,6 +300,90 @@ describe('logging back in', () => {
   });
 });
 
+// ── 4b. the rename sentence (Stage 3b Task 5, spec D7) ──────────────────────
+//
+// A box renamed by `ccrc expose` keeps its old credentials on disk. Every
+// ceremony against them fails with the browser's GENERIC `NotAllowedError` —
+// byte-identical to the operator dismissing the prompt — and the screen used to
+// say "cancelled" in that reachable state: a false sentence, the exact class
+// D-151/D-152 fixed twice before. `AuthStatus.enrolledRpIds` (the names the
+// stored keys are bound to) against the assert-start response's CURRENT `rpId`
+// is what lets the screen tell the two apart.
+
+/** A WebAuthn-capable browser whose authenticator refuses the ceremony the way
+ *  a renamed box's stale credentials do — `NotAllowedError`, which is also what
+ *  a dismissed prompt throws. The ambiguity is the point. */
+const refusingBrowser = (): void => {
+  vi.stubGlobal('PublicKeyCredential', class {
+    getClientExtensionResults(): unknown { return {}; }
+  });
+  vi.stubGlobal('navigator', {
+    ...navigator,
+    credentials: {
+      create: vi.fn(),
+      get: vi.fn(async () => { throw new DOMException('not allowed', 'NotAllowedError'); }),
+    },
+  });
+};
+
+/** `POST …/assert/start` answering with the box's CURRENT rpId. */
+const assertStart = (rpId: string) => () =>
+  json(200, { challengeB64url: 'QUJD', rpId, allowCredentialIdsB64url: ['AQEB'] });
+
+const PASSKEY_BUTTON = /sign in with a passkey/i;
+const RENAMED = /enrolled for a different box name/i;
+
+describe('the rename sentence — stale keys under the old box name', () => {
+  it('a ceremony failing while every enrolled name is some OTHER name says so, naming the old one', async () => {
+    refusingBrowser();
+    vi.stubGlobal('fetch', statusFetch(
+      { authed: false, passkeysEnrolled: 1, mode: 'passphrase', enrolledRpIds: ['localhost'] },
+      assertStart('mybox.duckdns.org')));
+    raiseAuthLost('no-session');
+    render(<LoginScreen />);
+    const btn = await screen.findByRole('button', { name: PASSKEY_BUTTON });
+    await act(async () => { fireEvent.click(btn); });
+    const line = await screen.findByText(RENAMED);
+    expect(line.textContent).toBe(
+      'Your passkeys were enrolled for a different box name (localhost). '
+      + 'Sign in with the passphrase and re-enrol.');
+    // It is NOT a cancel, so it must not also say cancelled.
+    expect(screen.queryByText(/cancelled/i)).not.toBeInTheDocument();
+    expect(isAuthLost()).toBe(true);
+  });
+
+  it('a plain cancel on a box whose name MATCHES its keys still reads as a cancel', async () => {
+    // The guard the Step-5 mutation disarms: drop the rpId-mismatch condition
+    // and every dismissed prompt on a healthy box would claim a rename.
+    refusingBrowser();
+    vi.stubGlobal('fetch', statusFetch(
+      { authed: false, passkeysEnrolled: 1, mode: 'passphrase', enrolledRpIds: ['mybox.duckdns.org'] },
+      assertStart('mybox.duckdns.org')));
+    raiseAuthLost('no-session');
+    render(<LoginScreen />);
+    const btn = await screen.findByRole('button', { name: PASSKEY_BUTTON });
+    await act(async () => { fireEvent.click(btn); });
+    expect(await screen.findByText(/cancelled/i)).toBeInTheDocument();
+    expect(screen.queryByText(RENAMED)).not.toBeInTheDocument();
+  });
+
+  it('an ABSENT enrolledRpIds (an older server) reads as a cancel — absence is unknown, never proof', async () => {
+    // The wire-discipline half: an older server omits the field entirely, and a
+    // reader that treated silence as evidence would claim a rename it cannot
+    // have measured.
+    refusingBrowser();
+    vi.stubGlobal('fetch', statusFetch(
+      { authed: false, passkeysEnrolled: 1, mode: 'passphrase' },
+      assertStart('mybox.duckdns.org')));
+    raiseAuthLost('no-session');
+    render(<LoginScreen />);
+    const btn = await screen.findByRole('button', { name: PASSKEY_BUTTON });
+    await act(async () => { fireEvent.click(btn); });
+    expect(await screen.findByText(/cancelled/i)).toBeInTheDocument();
+    expect(screen.queryByText(RENAMED)).not.toBeInTheDocument();
+  });
+});
+
 // ── 5. the two websocket paths ──────────────────────────────────────────────
 
 class FakeSocket {

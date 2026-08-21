@@ -612,9 +612,17 @@ function pathWithout(home: string, missing: string): string {
   // link, `pathWithout(home, 'git')` — a fixture about ONE absence, which runs
   // the whole verb through to the wrappers step — would instead die at the
   // skills step for a reason the test is not about.
+  //
+  // `stat` joins it for precisely that reason in D-156: `cmd_wrappers` now
+  // names it as an up-front dependency, because the witness index size-gates
+  // every file it reads out of ~/.local/bin and a size gate that reads the file
+  // anyway when it cannot measure it is not a gate. Measured when the lock
+  // landed: without this entry, the git fixture died at the wrappers step and
+  // `says GIT IS ABSENT when git is absent` went red — the test's own trap,
+  // sprung by a new dependency rather than by anything about git.
   for (const b of ['mkdir', 'cp', 'mv', 'rm', 'cat', 'chmod', 'cmp', 'date',
     'node', 'git', 'npm', 'rsync', 'bash', 'sleep', 'jq', 'mktemp', 'basename',
-    'diff', 'tmux', 'python3', 'flock', 'timeout']) {
+    'diff', 'tmux', 'python3', 'flock', 'timeout', 'stat']) {
     if (b === missing || existsSync(join(d, b))) continue;
     symlinkSync(realPath(b), join(d, b));
   }
@@ -1870,6 +1878,22 @@ describe('ccrc install: the units, and the one this box must not be given', () =
         .toEqual(readFileSync(placed(home, ...src.split('/'))));
       expect(statSync(p).mode & 0o777, `${dest} has the wrong mode`).toBe(0o644);
     }
+  });
+
+  it('the installed ccrc.service reads ccrc.env first, then exposure.env, both optional', () => {
+    // Stage 3b Task 1 (spec D3): exposure keys live in their own
+    // ~/.ccrc/exposure.env, written by `ccrc expose`, never by touching the
+    // seed-once ccrc.env. systemd's EnvironmentFile semantics make the LATER
+    // file win for a key present in both — so the order below is the whole
+    // mechanism by which `expose` overrides a hand-set placeholder — and the
+    // leading `-` on each is what lets a box that never ran the verb (or has
+    // no env file at all) boot anyway. Asserted as the exact ordered list, so
+    // a dropped `-`, a swapped order, or a third line all land here.
+    const unit = read(unitDir(units.home, 'ccrc.service'));
+    expect(unit.split('\n').filter((l) => l.startsWith('EnvironmentFile='))).toEqual([
+      'EnvironmentFile=-%h/.ccrc/ccrc.env',
+      'EnvironmentFile=-%h/.ccrc/exposure.env',
+    ]);
   });
 
   it('puts the slice drop-in in the ESCAPED directory name, and nowhere else', () => {

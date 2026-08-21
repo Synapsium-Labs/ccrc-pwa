@@ -126,9 +126,22 @@ const realCredentials = (): CredentialsApi => navigator.credentials as unknown a
  *  rather than "the box refused you", which are different sentences for
  *  different situations. */
 export class PasskeyCeremonyError extends Error {
-  constructor(message: string) {
+  /**
+   * The rpId the failed ceremony ran under — the box's CURRENT name, which only
+   * the assert-start response knows (Stage 3b Task 5, spec D7). The login
+   * screen compares it against `AuthStatus.enrolledRpIds` to tell "you
+   * dismissed the prompt" from "your keys are bound to the old box name", two
+   * states the browser collapses into one generic `NotAllowedError`. Absent
+   * when the ceremony never got far enough to have one (the start call itself
+   * failed — but that failure is an `ApiError`, not this type) or on the enrol
+   * path, where the distinction has no sentence to feed.
+   */
+  readonly rpId: string | undefined;
+
+  constructor(message: string, rpId?: string) {
     super(message);
     this.name = 'PasskeyCeremonyError';
+    this.rpId = rpId;
   }
 }
 
@@ -150,17 +163,19 @@ export class PasskeyCeremonyError extends Error {
  * "the box refused this" and "the ceremony did not finish" are the two different
  * situations this whole type exists to keep apart.
  */
-async function runCeremony(what: string, fn: () => Promise<Credential | null>): Promise<Credential> {
+async function runCeremony(
+  what: string, fn: () => Promise<Credential | null>, rpId?: string,
+): Promise<Credential> {
   let credential: Credential | null;
   try {
     credential = await fn();
   } catch (err) {
     // The message is the browser's, and it is a DOMException name rather than
     // anything user-supplied — safe to carry, and useful in a console.
-    throw new PasskeyCeremonyError(`${what}: ${err instanceof Error ? err.message : String(err)}`);
+    throw new PasskeyCeremonyError(`${what}: ${err instanceof Error ? err.message : String(err)}`, rpId);
   }
   // `null` rather than a throw is the spec's other refusal shape.
-  if (credential === null) throw new PasskeyCeremonyError(`${what}: the authenticator returned nothing`);
+  if (credential === null) throw new PasskeyCeremonyError(`${what}: the authenticator returned nothing`, rpId);
   return credential;
 }
 
@@ -236,8 +251,10 @@ export async function assertPasskey(
 ): Promise<void> {
   const options = await start();
   if (options.allowCredentialIdsB64url.length === 0) {
-    throw new PasskeyCeremonyError('no passkey is enrolled on this box');
+    throw new PasskeyCeremonyError('no passkey is enrolled on this box', options.rpId);
   }
+  // `options.rpId` rides every ceremony error from here on — the rename
+  // sentence's raw material (see `PasskeyCeremonyError.rpId`).
   const got = await runCeremony('signing in with a passkey', () => creds.get({
     publicKey: {
       challenge: fromB64url(options.challengeB64url),
@@ -250,7 +267,7 @@ export async function assertPasskey(
       userVerification: 'required',
       timeout: 60_000,
     },
-  }));
+  }), options.rpId);
   const response = (got as PublicKeyCredential).response as AuthenticatorAssertionResponse;
   await api.passkeyAssertFinish({
     credentialIdB64url: toB64url((got as PublicKeyCredential).rawId),

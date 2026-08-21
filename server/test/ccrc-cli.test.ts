@@ -164,13 +164,19 @@ describe('ccrc: dispatch and usage', () => {
     // the exit ramp that leaves reinstall safe, update's backup step
     // standalone, and the role-aware journalctl passthrough. Same split:
     // `server/test/ccrc-uninstall.test.ts` owns all three behaviours.
+    //
+    // `expose` joined it in stage 3b Task 2 — the post-install verb that gives
+    // a box a public name and a real certificate (spec D1–D3), the same shape
+    // as `passwd`: prompts on a tty, writes ccrc-owned files, never runs sudo.
+    // `server/test/ccrc-expose.test.ts` owns what it does.
     const home = mkTmp('ccrc-cli-usage-verbs-');
     const r = runCcrcRaw(home, ['-h']);
-    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|install\|update\|uninstall\|backup\|logs\|passwd\|version\}/);
+    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|install\|update\|uninstall\|backup\|logs\|passwd\|expose\|version\}/);
     expect(r.stdout).toMatch(/^ {2}update {4}fetch a published release/m);
     expect(r.stdout).toMatch(/^ {2}uninstall {1}/m);
     expect(r.stdout).toMatch(/^ {2}backup {4}/m);
     expect(r.stdout).toMatch(/^ {2}logs {6}/m);
+    expect(r.stdout).toMatch(/^ {2}expose {4}give this box a public name/m);
     // …and the body explains it, including the half an operator gets wrong:
     // rotating expires SESSIONS and leaves enrolled passkeys working.
     expect(r.stdout).toMatch(/^ {2}passwd {4}set \(or rotate\) this box's PWA passphrase/m);

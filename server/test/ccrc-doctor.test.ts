@@ -153,6 +153,10 @@ function unstub(home: string, name: string): void {
 }
 
 const linkReal = (home: string, name: string): void => {
+  // Idempotent since healthy() itself links `stat`/`date`/`timeout`: a test
+  // that re-links one it needs (the oversize-wrapper test predates that) must
+  // not trip over the fixture already having it. Last caller wins.
+  rmSync(join(stubBin(home), name), { force: true });
   symlinkSync(realPath(name), join(stubBin(home), name));
 };
 
@@ -511,12 +515,23 @@ function writeRcFlag(home: string, text: string): void {
 
 /** `systemctl --user is-active <unit>` answers from `<home>/fixture-unit-<unit>`;
  *  with the file absent it answers `inactive` and exits 3, exactly as systemd
- *  does for a unit that is not running. Any other argv is a loud failure — a
- *  status verb that started MUTATING a unit could not pass unnoticed. */
+ *  does for a unit that is not running. SYSTEM-scope `is-active <unit>` (no
+ *  `--user`) answers from `<home>/fixture-system-unit-<unit>` — a SEPARATE
+ *  namespace on purpose: the caddy check asks in system scope (caddy binds
+ *  :80/:443 as root and is nobody's user unit), and a stub that answered both
+ *  scopes from one file could not catch a check asking in the wrong one (a
+ *  `--user is-active caddy` reads the OTHER namespace, finds nothing, and the
+ *  PASS case reds). Any other argv is a loud failure — a status verb that
+ *  started MUTATING a unit could not pass unnoticed. */
 function stubSystemctl(home: string): void {
   stub(home, 'systemctl',
     'if [ "$1" = "--user" ] && [ "$2" = "is-active" ]; then\n'
     + '  f="$HOME/fixture-unit-$3"\n'
+    + '  if [ -f "$f" ]; then IFS= read -r v < "$f"; echo "$v"; [ "$v" = active ] && exit 0; exit 3; fi\n'
+    + '  echo inactive; exit 3\n'
+    + 'fi\n'
+    + 'if [ "$1" = "is-active" ] && [ -n "$2" ]; then\n'
+    + '  f="$HOME/fixture-system-unit-$2"\n'
     + '  if [ -f "$f" ]; then IFS= read -r v < "$f"; echo "$v"; [ "$v" = active ] && exit 0; exit 3; fi\n'
     + '  echo inactive; exit 3\n'
     + 'fi\n'
@@ -557,6 +572,112 @@ function stubDf(home: string, availKiB = 42_991_616): void {
   ].join('\n'));
   writeFileSync(join(home, 'fixture-df-avail'), `${availKiB}\n`);
   rmSync(join(home, 'fixture-df-exit'), { force: true });
+}
+
+// ── stage 3b: the exposure quartet's fixtures ─────────────────────────────
+// Four checks (`exposure`, `caddy`, `cert`, `name`), one shared subject: the
+// file `ccrc expose` writes. The token below is a CANARY — it must never
+// appear in a run's output, and the test that says so runs the WHOLE doctor.
+
+const CANARY_TOKEN = 'fixture-canary-duckdns-token-3b';
+const EXPOSED_HOST = 'fixture.duckdns.org';
+
+interface ExposureOpts {
+  origin?: string; rpid?: string;
+  /** false = the byo shape: origin + rp id, no ddns trio at all. */
+  duckdns?: boolean;
+  domain?: string; token?: string;
+  mode?: number;
+  /** key names to leave out entirely — how a hand-edited half-file is made. */
+  omit?: string[];
+}
+
+/** `~/.ccrc/exposure.env`, in the shape `_exp_env_write` really writes it:
+ *  a comment line, then KEY=value pairs, 0600 unless a test is ABOUT the mode. */
+function writeExposureEnv(home: string, o: ExposureOpts = {}): void {
+  const lines = ["# ccrc exposure config — fixture, the shape _exp_env_write writes."];
+  const put = (k: string, v: string): void => {
+    if (!(o.omit ?? []).includes(k)) lines.push(`${k}=${v}`);
+  };
+  put('CCRC_ORIGIN', o.origin ?? `https://${EXPOSED_HOST}`);
+  put('CCRC_RP_ID', o.rpid ?? EXPOSED_HOST);
+  if (o.duckdns ?? true) {
+    put('CCRC_DDNS_PROVIDER', 'duckdns');
+    put('CCRC_DDNS_DOMAIN', o.domain ?? EXPOSED_HOST);
+    put('CCRC_DDNS_TOKEN', o.token ?? CANARY_TOKEN);
+  }
+  mkdirSync(join(home, '.ccrc'), { recursive: true });
+  const p = join(home, '.ccrc', 'exposure.env');
+  writeFileSync(p, lines.join('\n') + '\n');
+  chmodSync(p, o.mode ?? 0o600);
+}
+
+/** An openssl-shaped `notAfter=` value `days` from now, in the one format
+ *  `openssl x509 -enddate` prints ("Aug 30 12:00:00 2026 GMT") — which GNU
+ *  `date -d` (linked real into the fixture) parses back. Second precision, so
+ *  the check's integer day count lands on `days` or `days - 1`. */
+function endDateFixture(days: number): string {
+  const d = new Date(Date.now() + days * 86_400_000);
+  const mon = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.getUTCMonth()];
+  const p = (n: number): string => String(n).padStart(2, '0');
+  return `${mon} ${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())} ${d.getUTCFullYear()} GMT`;
+}
+
+/** openssl, answering the ONLY two argv shapes the cert check sends — both
+ *  hops of its pipeline. `s_client` answers a handshake marker (or, with
+ *  `<home>/fixture-tls-refused` planted, fails the way a closed :443 really
+ *  does); `x509 -noout -enddate` answers `notAfter=` from
+ *  `<home>/fixture-cert-enddate`. Every argv is logged to
+ *  `<home>/openssl-calls`, so a test can prove the SNI host and the loopback
+ *  address were really sent. Any other argv is a loud failure (exit 90). */
+function stubOpenssl(home: string): void {
+  stub(home, 'openssl', [
+    'printf \'%s\\n\' "$*" >> "$HOME/openssl-calls"',
+    'if [ "$1" = "s_client" ]; then',
+    '  if [ -f "$HOME/fixture-tls-refused" ]; then',
+    '    echo "connect:errno=111" >&2; exit 1',
+    '  fi',
+    '  echo "FIXTURE-TLS-SESSION"; exit 0',
+    'fi',
+    'if [ "$1" = "x509" ] && [ "$2" = "-noout" ] && [ "$3" = "-enddate" ]; then',
+    '  read -r _piped || :',
+    '  if [ -f "$HOME/fixture-cert-enddate" ]; then IFS= read -r d < "$HOME/fixture-cert-enddate"; echo "notAfter=$d"; exit 0; fi',
+    '  exit 1',
+    'fi',
+    'echo "fixture openssl: unexpected argv: $*" >&2; exit 90',
+  ].join('\n'));
+}
+
+/** `getent hosts <domain>` answers the resolver table from
+ *  `<home>/fixture-getent` (address first, name after — getent's own column
+ *  order); with the file absent it exits 2 printing nothing, exactly as getent
+ *  does for a name that does not resolve. Argv is logged. */
+function stubGetent(home: string): void {
+  stub(home, 'getent', [
+    'printf \'%s\\n\' "$*" >> "$HOME/getent-calls"',
+    'if [ "$1" = "hosts" ] && [ -n "$2" ]; then',
+    '  if [ -f "$HOME/fixture-getent" ]; then',
+    '    while IFS= read -r l; do printf \'%s\\n\' "$l"; done < "$HOME/fixture-getent"',
+    '    exit 0',
+    '  fi',
+    '  exit 2',
+    'fi',
+    'echo "fixture getent: unexpected argv: $*" >&2; exit 90',
+  ].join('\n'));
+}
+
+/** `hostname -I` answers this box's interface addresses from
+ *  `<home>/fixture-host-ips` — one line, space-separated, exactly the real
+ *  flag's shape. The name check compares the resolved record against these
+ *  "where discoverable" (spec D6). */
+function stubHostname(home: string): void {
+  stub(home, 'hostname', [
+    'if [ "$1" = "-I" ]; then',
+    '  if [ -f "$HOME/fixture-host-ips" ]; then IFS= read -r v < "$HOME/fixture-host-ips"; echo "$v"; exit 0; fi',
+    '  exit 1',
+    'fi',
+    'echo "fixture hostname: unexpected argv: $*" >&2; exit 90',
+  ].join('\n'));
 }
 
 /** `n` ccd sessions in the registry, as ccd itself counts them: one `<id>.uuid`
@@ -668,6 +789,23 @@ function healthy(prefix: string): string {
     writeFileSync(join(home, `fixture-unit-${u}`), 'active\n');
   }
   stubDf(home);
+  // …and it is EXPOSED (stage 3b): `ccrc expose duckdns` has been run — the
+  // exposure file is 0600 with the whole duckdns set, the caddy system unit is
+  // active, the served cert is 90 days out, and the DDNS record resolves to an
+  // address this box's own interfaces carry. `healthy()`'s contract is that
+  // every check PASSES, and the quartet is four more checks. `stat` and `date`
+  // are the real binaries (a mode readout and GNU date's parser are the things
+  // under test, not things to imitate); everything else is a stub.
+  writeExposureEnv(home);
+  linkReal(home, 'stat');
+  linkReal(home, 'date');
+  writeFileSync(join(home, 'fixture-system-unit-caddy'), 'active\n');
+  stubOpenssl(home);
+  writeFileSync(join(home, 'fixture-cert-enddate'), `${endDateFixture(90)}\n`);
+  stubGetent(home);
+  writeFileSync(join(home, 'fixture-getent'), `203.0.113.7     ${EXPOSED_HOST}\n`);
+  stubHostname(home);
+  writeFileSync(join(home, 'fixture-host-ips'), '203.0.113.7 10.0.0.5\n');
   return home;
 }
 
@@ -2395,7 +2533,7 @@ describe('ccrc doctor: wrappers', () => {
   });
 
   it('WARNS about a wrapper on disk the roster describes nowhere — reported, never resolved', () => {
-    // adopt's bias rule (ccrc-adopt:32-39), carried over: the ambiguous case is
+    // adopt's bias rule (ccrc-adopt:41-48), carried over: the ambiguous case is
     // REPORTED. It is not a FAIL — keeping a launcher the fleet does not drive
     // is a legitimate thing to do — but a silent pass would hide the account
     // that was added to disk and never written down.
@@ -4278,5 +4416,251 @@ describe('ccrc doctor: the output contract', () => {
     expect(r.code).toBe(1);
     expect(r.stdout).toBe('');
     expect(r.stderr).toMatch(/^ccrc: doctor's check table is missing/m);
+  });
+});
+
+// ── stage 3b (spec D6): the exposure quartet ──────────────────────────────
+// Four checks, one shared gate: `~/.ccrc/exposure.env`. A box that never ran
+// `ccrc expose` is a VALID END STATE (a BYO proxy, or a pre-3b box), so all
+// four SKIP there rather than nagging a box that chose to stay dark.
+//
+// MUTATIONS MEASURED (Task 4, Step 3 — applied to the shipped checks, run,
+// reverted; counts recorded in the plan):
+//   - the cert threshold comparison flipped (`-lt 14` -> `-ge 14`) -> RED,
+//     both the WARN case and the PASS-naming-days case.
+//   - the name check's resolves-elsewhere WARN hardened to a FAIL -> RED,
+//     "WARNs — not FAILs — when the name resolves elsewhere…" (propagation
+//     lag is normal, and a FAIL would page an operator over DNS being DNS).
+//   - the canary token appended to the exposure PASS detail -> RED, "never
+//     prints the token…" (the `_check_config` SET/NOT-SET rule, held by
+//     mechanism rather than promise).
+
+const skipLineFor = (out: string, name: string): string | undefined =>
+  out.split('\n').find((l) => l.startsWith(`SKIP ${name}: `));
+
+describe('ccrc doctor: exposure', () => {
+  it('SKIPs when the box was never exposed — a BYO proxy or a pre-3b box is an end state, not a fault', () => {
+    const home = healthy('ccrc-doctor-exposure-skip-');
+    rmSync(join(home, '.ccrc', 'exposure.env'), { force: true });
+    const r = runDoctor(home);
+    const l = skipLineFor(r.stdout, 'exposure');
+    expect(l, r.stdout).toBeTruthy();
+    expect(l).toContain('not configured');
+    expect(l).toContain('pre-3b');
+    // The SKIP contract: no verdict line, and no remedy under it.
+    expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) exposure: /m);
+  });
+
+  it('PASSes naming the origin when the file is 0600 and both origin keys are set', () => {
+    const home = healthy('ccrc-doctor-exposure-ok-');
+    const r = runDoctor(home);
+    const l = lineFor(r.stdout, 'exposure');
+    expect(l, r.stdout).toMatch(/^PASS exposure: /);
+    expect(l).toContain(`https://${EXPOSED_HOST}`);
+  });
+
+  it('never prints the token — not in any verdict, any remedy, or anywhere else in a full run', () => {
+    const home = healthy('ccrc-doctor-exposure-token-');
+    const r = runDoctor(home);
+    expect(r.stdout).not.toContain(CANARY_TOKEN);
+    expect(r.stderr).not.toContain(CANARY_TOKEN);
+  });
+
+  it('FAILs with the ccrc expose remedy when the mode is not 0600', () => {
+    const home = healthy('ccrc-doctor-exposure-mode-');
+    chmodSync(join(home, '.ccrc', 'exposure.env'), 0o644);
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL exposure: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('644');
+    expect(lines[i + 1]).toContain('ccrc expose');
+    expect(r.code).toBe(1);
+  });
+
+  it('FAILs with the ccrc expose remedy when an origin key is missing', () => {
+    const home = healthy('ccrc-doctor-exposure-key-');
+    writeExposureEnv(home, { omit: ['CCRC_RP_ID'] });
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL exposure: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('CCRC_RP_ID');
+    expect(lines[i + 1]).toContain('ccrc expose');
+  });
+});
+
+describe('ccrc doctor: caddy', () => {
+  it('SKIPs without exposure — no proxy is owed on a box that never ran the verb', () => {
+    const home = healthy('ccrc-doctor-caddy-skip-');
+    rmSync(join(home, '.ccrc', 'exposure.env'), { force: true });
+    const r = runDoctor(home);
+    expect(skipLineFor(r.stdout, 'caddy'), r.stdout).toBeTruthy();
+    expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) caddy: /m);
+  });
+
+  it('PASSes when the caddy SYSTEM unit is active', () => {
+    // The stub answers system-scope `is-active caddy` from its own fixture
+    // file and `--user is-active caddy` from a different (absent) one — so
+    // reaching this PASS at all pins the scope: a check that asked systemd's
+    // user manager would find nothing and FAIL here.
+    const home = healthy('ccrc-doctor-caddy-ok-');
+    const r = runDoctor(home);
+    expect(lineFor(r.stdout, 'caddy'), r.stdout).toMatch(/^PASS caddy: /);
+  });
+
+  it('FAILs with the sudo ceremony when exposure is configured but the unit is not active', () => {
+    const home = healthy('ccrc-doctor-caddy-dead-');
+    writeFileSync(join(home, 'fixture-system-unit-caddy'), 'inactive\n');
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL caddy: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('inactive');       // systemd's own word, quoted back
+    // The remedy IS the D2 ceremony — all three steps, so an operator can act
+    // on the line without going back to the expose transcript.
+    expect(lines[i + 1]).toContain('install caddy');
+    expect(lines[i + 1]).toContain('/etc/caddy/Caddyfile');
+    expect(lines[i + 1]).toContain('enable --now caddy');
+    expect(r.code).toBe(1);
+  });
+
+  it('SKIPs when there is no systemctl at all — a container or dev box cannot run a system unit', () => {
+    const home = healthy('ccrc-doctor-caddy-nosystemctl-');
+    unstub(home, 'systemctl');
+    const r = runDoctor(home);
+    // `services` FAILs beside it (that box has user unit FILES and nothing to
+    // ask about them — its own finding); the caddy check itself must skip.
+    expect(skipLineFor(r.stdout, 'caddy'), r.stdout).toBeTruthy();
+    expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) caddy: /m);
+  });
+});
+
+describe('ccrc doctor: cert', () => {
+  it('SKIPs without exposure — there is no certificate this box is supposed to serve', () => {
+    const home = healthy('ccrc-doctor-cert-skip-');
+    rmSync(join(home, '.ccrc', 'exposure.env'), { force: true });
+    const r = runDoctor(home);
+    expect(skipLineFor(r.stdout, 'cert'), r.stdout).toBeTruthy();
+    expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) cert: /m);
+  });
+
+  it('PASSes naming the days when the served cert is at least 14 days out — measured on the LOOPBACK listener with SNI', () => {
+    const home = healthy('ccrc-doctor-cert-ok-');
+    const r = runDoctor(home);
+    const l = lineFor(r.stdout, 'cert');
+    expect(l, r.stdout).toMatch(/^PASS cert: /);
+    const m = /(\d+) days/.exec(l ?? '');
+    expect(m, `no day count in: ${l}`).toBeTruthy();
+    expect(Number(m![1])).toBeGreaterThanOrEqual(85);
+    expect(Number(m![1])).toBeLessThanOrEqual(90);
+    // The probe went to 127.0.0.1:443 with the origin's host in SNI — before
+    // DNS propagates and independent of the WAN path (spec D6).
+    const calls = readFileSync(join(home, 'openssl-calls'), 'utf8');
+    expect(calls).toContain('-connect 127.0.0.1:443');
+    expect(calls).toContain(`-servername ${EXPOSED_HOST}`);
+  });
+
+  it('WARNs when the cert expires within 14 days — renewal is failing, not yet failed', () => {
+    const home = healthy('ccrc-doctor-cert-close-');
+    writeFileSync(join(home, 'fixture-cert-enddate'), `${endDateFixture(5)}\n`);
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN cert: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toMatch(/\d+ days/);
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: \S/);
+    expect(r.code).toBe(0);                       // a warning does not fail the run
+  });
+
+  it('FAILs pointing at the caddy check when nothing answers the handshake', () => {
+    const home = healthy('ccrc-doctor-cert-refused-');
+    writeFileSync(join(home, 'fixture-tls-refused'), '');
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL cert: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    // "nothing serves TLS here" is the CADDY check's territory, and this line
+    // must send the reader there rather than duplicating its diagnosis.
+    expect(`${lines[i]}\n${lines[i + 1]}`).toContain('caddy check');
+    expect(r.code).toBe(1);
+  });
+});
+
+describe('ccrc doctor: name', () => {
+  it('SKIPs without exposure — there is no public name to resolve', () => {
+    const home = healthy('ccrc-doctor-name-skip-');
+    rmSync(join(home, '.ccrc', 'exposure.env'), { force: true });
+    const r = runDoctor(home);
+    expect(skipLineFor(r.stdout, 'name'), r.stdout).toBeTruthy();
+    expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) name: /m);
+  });
+
+  it('SKIPs for a BYO domain — that DNS is the operator\'s, and no ccrc timer maintains it', () => {
+    const home = healthy('ccrc-doctor-name-byo-');
+    writeExposureEnv(home, { duckdns: false, origin: 'https://box.example.com', rpid: 'box.example.com' });
+    const r = runDoctor(home);
+    const l = skipLineFor(r.stdout, 'name');
+    expect(l, r.stdout).toBeTruthy();
+    expect(l).toContain('BYO');
+    expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) name: /m);
+  });
+
+  it('PASSes when the name resolves to an address this box carries', () => {
+    const home = healthy('ccrc-doctor-name-ok-');
+    const r = runDoctor(home);
+    const l = lineFor(r.stdout, 'name');
+    expect(l, r.stdout).toMatch(/^PASS name: /);
+    expect(l).toContain('203.0.113.7');
+  });
+
+  it('WARNs — not FAILs — when the name resolves elsewhere while this box has its own public address (propagation)', () => {
+    const home = healthy('ccrc-doctor-name-elsewhere-');
+    writeFileSync(join(home, 'fixture-getent'), `198.51.100.9     ${EXPOSED_HOST}\n`);
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN name: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('198.51.100.9');   // where it points
+    expect(lines[i]).toContain('203.0.113.7');    // where this box is
+    // THE PIN (spec D6): propagation lag is normal, so this must not harden
+    // into a FAIL that pages an operator over DNS being DNS.
+    expect(r.stdout).not.toMatch(/^FAIL name: /m);
+    expect(r.code).toBe(0);
+  });
+
+  it('PASSes on resolution alone when this box\'s public address is not discoverable — NAT is not a mismatch', () => {
+    const home = healthy('ccrc-doctor-name-nat-');
+    writeFileSync(join(home, 'fixture-getent'), `198.51.100.9     ${EXPOSED_HOST}\n`);
+    writeFileSync(join(home, 'fixture-host-ips'), '10.0.0.5 192.168.1.7\n');
+    const r = runDoctor(home);
+    expect(lineFor(r.stdout, 'name'), r.stdout).toMatch(/^PASS name: /);
+    expect(r.stdout).not.toMatch(/^(WARN|FAIL) name: /m);
+  });
+
+  // Branch review, 2026-08-21: 100.64.0.0/10 is CGNAT (RFC 6598) — and
+  // tailscale's own address range, i.e. THIS project's fleet topology.
+  // Counting it as a global address sent every NAT'd tailscale box down the
+  // mismatch-WARN arm ("propagation lag… this box's own public address is
+  // 100.x") on every doctor run, forever — a false sentence about an address
+  // that is not public.
+  it('a CGNAT 100.64/10 address (tailscale) is NOT a public address — the NAT arm PASSes', () => {
+    const home = healthy('ccrc-doctor-name-cgnat-');
+    writeFileSync(join(home, 'fixture-getent'), `198.51.100.9     ${EXPOSED_HOST}\n`);
+    writeFileSync(join(home, 'fixture-host-ips'), '203.0.113.7 10.0.0.5\n');
+    const r = runDoctor(home);
+    expect(lineFor(r.stdout, 'name'), r.stdout).toMatch(/^PASS name: /);
+    expect(r.stdout).not.toMatch(/^(WARN|FAIL) name: /m);
+  });
+
+  it('FAILs naming the ccrc-ddns timer when the name does not resolve', () => {
+    const home = healthy('ccrc-doctor-name-unresolved-');
+    rmSync(join(home, 'fixture-getent'), { force: true });
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL name: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i + 1]).toContain('ccrc-ddns.timer');
+    expect(r.code).toBe(1);
   });
 });

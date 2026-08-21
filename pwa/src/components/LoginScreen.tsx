@@ -81,6 +81,26 @@ export const UNREACHABLE_TEXT = "Couldn't reach the box — check the connection
 const PASSKEY_CANCELLED_TEXT = 'Passkey sign-in was cancelled. Try again, or use the passphrase.';
 
 /**
+ * THE BOX WAS RENAMED AND THE KEYS WERE NOT (Stage 3b Task 5, spec D7) — the
+ * third false-sentence fix in this file's lineage (D-151, D-152, and now this).
+ *
+ * The reachable state: `ccrc expose` gives the box a public name, the operator
+ * restarts, and every passkey on disk is still bound to the OLD rpId. The
+ * ceremony fails with the browser's generic `NotAllowedError` — byte-identical
+ * to a dismissed prompt — so {@link PASSKEY_CANCELLED_TEXT} would send them
+ * tapping retry forever on a button that can never work. The evidence that
+ * tells the two apart: `AuthStatus.enrolledRpIds` (which names the stored keys
+ * are bound to, read before login) is non-empty AND excludes the rpId this
+ * ceremony actually ran under (`PasskeyCeremonyError.rpId`, from the
+ * assert-start response). Both halves are required — an ABSENT list is an older
+ * server saying nothing, and absence-permits means it must read as a plain
+ * cancel, never as proof of a rename.
+ */
+const passkeyRenamedText = (old: string[]): string =>
+  `Your passkeys were enrolled for a different box name (${old.join(', ')}). `
+  + 'Sign in with the passphrase and re-enrol.';
+
+/**
  * THE BOX CANNOT RUN A PASSKEY CEREMONY AT ALL (D-152) — a `501` from either
  * assert route, which `passkeyUnavailable` (`server.ts`) sends for exactly one
  * reason a login screen can meet: this box's WebAuthn config is refused
@@ -120,6 +140,10 @@ export function LoginScreen(): ReactNode {
   /** The ceremony was dismissed or the browser could not run it — a third
    *  failure kind, beside "the box refused" and "the box never answered". */
   const [cancelled, setCancelled] = useState(false);
+  /** The ceremony failed AND every enrolled key is bound to another box name —
+   *  the names themselves, for {@link passkeyRenamedText}. Mutually exclusive
+   *  with `cancelled`: the same browser error, split by evidence. */
+  const [renamed, setRenamed] = useState<string[] | null>(null);
   const [passphrase, setPassphrase] = useState('');
   const [busy, setBusy] = useState(false);
   /** The anonymous half of `GET /api/auth/status` — the one route readable
@@ -165,6 +189,7 @@ export function LoginScreen(): ReactNode {
     setUnreachable(false);
     setUnavailable(false);
     setCancelled(false);
+    setRenamed(null);
     try {
       await api.login({ passphrase });
       // 204 + Set-Cookie. Drop the secret from state first, then let go of the
@@ -209,12 +234,22 @@ export function LoginScreen(): ReactNode {
     setUnreachable(false);
     setUnavailable(false);
     setCancelled(false);
+    setRenamed(null);
     try {
       await assertPasskey();
       clearAuthLost();
     } catch (err) {
-      if (err instanceof PasskeyCeremonyError) setCancelled(true);
-      else {
+      if (err instanceof PasskeyCeremonyError) {
+        // ONE browser error, TWO situations, split by evidence
+        // ({@link passkeyRenamedText}): the enrolled names are known AND none of
+        // them is the name this ceremony ran under → the keys predate a rename.
+        // Either half missing — an older server that sent no list, or a list
+        // containing the current name — and this is an ordinary cancel.
+        const enrolled = status?.enrolledRpIds ?? [];
+        if (enrolled.length > 0 && err.rpId !== undefined && !enrolled.includes(err.rpId)) {
+          setRenamed(enrolled);
+        } else setCancelled(true);
+      } else {
         const v = err instanceof ApiError ? verdictOf(err.body) : null;
         // FOUR failure kinds, not three (D-152). A `501` is the box saying it
         // cannot run this ceremony at all — `passkeyUnavailable` sends it with
@@ -246,7 +281,9 @@ export function LoginScreen(): ReactNode {
 
   // Newest fact first: what just happened, then what the box says about itself,
   // then why the session went in the first place.
-  const message = cancelled
+  const message = renamed !== null
+    ? passkeyRenamedText(renamed)
+    : cancelled
     ? PASSKEY_CANCELLED_TEXT
     : unavailable
       ? PASSKEY_UNAVAILABLE_TEXT

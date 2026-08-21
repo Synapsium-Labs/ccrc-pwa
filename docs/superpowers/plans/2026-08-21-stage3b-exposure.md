@@ -80,19 +80,23 @@ systemd user units, Caddy as a system package (never a node dependency).
   key present in both — systemd semantics; the leading `-` keeps a box without exposure
   booting).
 
-- [ ] **Step 1: RED** — extend `single-definition.test.ts`'s bash corpus with a
+- [x] **Step 1: RED** — extend `single-definition.test.ts`'s bash corpus with a
   `CCRC_EXPOSURE_FILE` pin copied structurally from the `CCRC_RC_FILE` block (`:850-925`):
   declared exactly once in `ccd/ccrc`, literal path spelled nowhere else in bash. Add to
   `ccrc-install.test.ts` a case asserting the installed `ccrc.service` unit text contains BOTH
   EnvironmentFile lines in order (`ccrc.env` first, `exposure.env` second, both `-`-prefixed).
-  Run both suites: the new cases fail.
-- [ ] **Step 2: GREEN** — declare `CCRC_EXPOSURE_FILE` in `ccd/ccrc` beside `BOX_ENV_FILE`
+  Run both suites: the new cases fail. *(Measured: single-definition 2 failed / 64 passed;
+  ccrc-install 1 failed / 82 passed.)*
+- [x] **Step 2: GREEN** — declare `CCRC_EXPOSURE_FILE` in `ccd/ccrc` beside `BOX_ENV_FILE`
   with a comment naming D3 and the seed-once conflict it resolves; add the line to
-  `deploy/ccrc.service`.
-- [ ] **Step 3:** mutation — remove the second EnvironmentFile line → the install case reds;
+  `deploy/ccrc.service`. *(66/66 and 83/83 green.)*
+- [x] **Step 3:** mutation — remove the second EnvironmentFile line → the install case reds;
   spell the literal path a second time in `ccd/ccrc` → single-definition reds. Record counts.
-- [ ] **Step 4:** full `ccrc-install` + `single-definition` suites green. Commit
+  *(Measured: EnvironmentFile line removed → ccrc-install 1 red (82 pass); literal spelled a
+  second time in `ccd/ccrc` → single-definition 1 red (65 pass). Both reverted.)*
+- [x] **Step 4:** full `ccrc-install` + `single-definition` suites green. Commit
   `feat(expose): the exposure seam — one file constant, a second EnvironmentFile`.
+  *(149/149 across both suites.)*
 
 ### Task 2: `ccrc expose` — the verb
 
@@ -141,16 +145,26 @@ Behaviour contract (each bullet is a test):
   `sudo systemctl enable --now caddy`. Assert the transcript contains `sudo` ONLY inside the
   printed remedy (the `_inst_linger` grep shape).
 
-- [ ] **Step 1: RED** — write `ccrc-expose.test.ts` with the harness preamble copied from
+- [x] **Step 1: RED** — write `ccrc-expose.test.ts` with the harness preamble copied from
   `ccrc-passwd.test.ts` (throwaway HOME, symlinked ccrc, fixture PATH; `caddy` NOT stubbed —
   the verb never executes it) covering every bullet above. All red (verb unknown).
-- [ ] **Step 2: GREEN** — implement `cmd_expose` + `_exp_env_write` (tmp+`mv -f` in the same
+  *(Measured: ccrc-expose 24 failed / 0 passed; plus the two RED extensions written in the
+  same step — ccrc-cli 1 failed / 22 passed (usage line gains `expose`), single-definition
+  2 failed / 74 passed (the new `CCRC_CADDYFILE` pin block).)*
+- [x] **Step 2: GREEN** — implement `cmd_expose` + `_exp_env_write` (tmp+`mv -f` in the same
   dir — the wave-2 discipline), `_exp_caddyfile`, `_exp_landing`; usage + dispatch rows.
-- [ ] **Step 3:** mutations — drop `[ -t 0 ]` (piped-token test reds); echo the token
+  *(124/124 across the three suites; `_exp_status` implemented beside them — the status
+  bullet's tests live in the same RED set.)*
+- [x] **Step 3:** mutations — drop `[ -t 0 ]` (piped-token test reds); echo the token
   (never-echoed test reds); drop the shadow refusal (reds); chmod 0644 the env file (0600
-  test reds). Record.
-- [ ] **Step 4:** `ccrc-cli`, `ccrc-expose`, `single-definition` green. Commit
+  test reds). Record. *(Measured, each against ccrc-expose (24 tests), each reverted:
+  `[ -t 0 ]` disarmed → 2 red (duckdns + byo piped refusals); token `read -rsp`→`read -rp`
+  → 1 red (never-echoed); shadow refusal disarmed → 2 red (both shadow keys); env chmod
+  600→644 → 2 red (both 0600 mode assertions).)*
+- [x] **Step 4:** `ccrc-cli`, `ccrc-expose`, `single-definition` green. Commit
   `feat(expose): ccrc expose — duckdns and byo, the no-sudo ceremony`.
+  *(Gate suites green, and the neighbour suites that also pin `ccd/ccrc` re-run beside
+  them: ccrc-passwd + ccrc-install + ccrc-doctor — 501/501 across all six.)*
 
 ### Task 3: The DuckDNS updater units
 
@@ -166,15 +180,25 @@ Behaviour contract (each bullet is a test):
   `ExecStart=/usr/bin/curl -fsS --max-time 30 "https://www.duckdns.org/update?domains=${CCRC_DDNS_DOMAIN}&token=${CCRC_DDNS_TOKEN}&ip="`
   (DuckDNS infers the caller's IP from an empty `ip=`).
 
-- [ ] **Step 1: RED** — tests: the duckdns arm installs both units into `$CCRC_UNIT_DIR` via
+- [x] **Step 1: RED** — tests: the duckdns arm installs both units into `$CCRC_UNIT_DIR` via
   the atomic idiom and runs `systemctl --user daemon-reload` + `enable --now ccrc-ddns.timer`
   (recording `systemctl` stub asserts argv); the byo arm installs neither; the unit text
   reads the token from the EnvironmentFile and NEVER inlines it (assert the installed service
   file contains `${CCRC_DDNS_TOKEN}` literally and not the fixture token value).
-- [ ] **Step 2: GREEN** — write the two templates + `_exp_ddns_units`.
-- [ ] **Step 3:** mutation — inline the token into ExecStart at generation time → the
+  *(Measured: ccrc-expose 4 failed / 25 passed — five new tests, of which the
+  byo-installs-neither guard cannot red pre-implementation (nothing installs units yet); its
+  arming mutation is calling `_exp_ddns_units` on both arms. Plus the Global-Constraints pin
+  written in the same RED set: single-definition 2 failed / 68 passed (the `CCRC_DDNS_UNIT`
+  block — the ddns unit name spelled once in bash).)*
+- [x] **Step 2: GREEN** — write the two templates + `_exp_ddns_units`. *(99/99 across
+  ccrc-expose + single-definition.)*
+- [x] **Step 3:** mutation — inline the token into ExecStart at generation time → the
   never-inlined test reds. Record. Suites green. Commit
   `feat(expose): the duckdns updater is a user timer reading its token from exposure.env`.
+  *(Measured: sed the `${CCRC_DDNS_TOKEN}` placeholder in the installed service to the value
+  read back from exposure.env → ccrc-expose 2 red (never-inlined + templates-byte-for-byte)
+  / 27 passed; reverted. Gate + neighbour suites green: ccrc-expose, single-definition,
+  ccrc-cli, ccrc-passwd, ccrc-install, ccrc-doctor — 508/508.)*
 
 ### Task 4: Doctor — `exposure`, `caddy`, `cert`, `name`
 
@@ -206,15 +230,30 @@ Verdict table (each row is a test):
 | name | `getent hosts <domain>` resolves | PASS (WARN, not FAIL, when it resolves elsewhere — propagation) |
 | name | does not resolve | FAIL + "duckdns update not landed — check ccrc-ddns.timer" |
 
-- [ ] **Step 1: RED** — bijection first (four array entries, no functions → four MISSING
+- [x] **Step 1: RED** — bijection first (four array entries, no functions → four MISSING
   reds), then the verdict-table cases against stubbed `openssl`/`getent`/`systemctl`.
-- [ ] **Step 2: GREEN** — implement the four checks. `openssl` invoked as
+  *(Measured: bijection test 1 red printing exactly `MISSING _check_exposure/caddy/cert/name`;
+  with the 19 verdict-table cases written and the `healthy()` fixture exposed, the full
+  ccrc-doctor suite in the RED state: 64 failed / 208 passed — the four missing functions
+  also FAIL every healthy-fixture run, so the collateral is the mechanism working.)*
+- [x] **Step 2: GREEN** — implement the four checks. `openssl` invoked as
   `openssl s_client -connect 127.0.0.1:443 -servername "$host" </dev/null 2>/dev/null | openssl x509 -noout -enddate`
-  with both hops through stubs in tests.
-- [ ] **Step 3:** mutations — flip the cert threshold comparison (WARN case reds); make the
+  with both hops through stubs in tests. *(272/272. The constants are reached through
+  `_check_config`'s bug-in-ccrc guard shape — no literal respelling of
+  `CCRC_EXPOSURE_FILE`/`CCRC_CADDYFILE`/`CCRC_DDNS_UNIT`, so single-definition's holder
+  lists stay `['ccd/ccrc']`. Harness note: `linkReal` made idempotent (rm-then-link) —
+  `healthy()` now links `stat`/`date` and the pre-existing oversize-wrapper test re-links
+  `stat`.)*
+- [x] **Step 3:** mutations — flip the cert threshold comparison (WARN case reds); make the
   name check FAIL on mismatch (the WARN-not-FAIL case reds); print the token in the exposure
   PASS detail (never-printed test reds). Record. `ccrc-doctor` suite green. Commit
   `feat(doctor): exposure, caddy, cert, name — four checks, D-150 arms`.
+  *(Measured, each against ccrc-doctor (272 tests), each reverted: `-lt 14` → `-ge 14` →
+  5 red (PASS-naming-days + WARN-under-14, plus three warn-count collaterals); the
+  resolves-elsewhere `_dr_warn`→`_dr_fail` → 1 red (the WARN-not-FAIL pin); the canary
+  token appended to the exposure PASS detail → 1 red (never-printed). Gate + neighbour
+  suites green: ccrc-doctor 272/272, and single-definition + ccrc-expose + ccrc-cli +
+  ccrc-install + ccrc-passwd 255/255 — 527/527.)*
 
 ### Task 5: `enrolledRpIds` — the rename sentence stops lying
 
@@ -234,21 +273,35 @@ Verdict table (each row is a test):
   `Your passkeys were enrolled for a different box name (<old>). Sign in with the passphrase and re-enrol.`
   — otherwise the existing cancelled sentence stands.
 
-- [ ] **Step 1: RED (server)** — status route: with two credentials under `localhost` and one
+- [x] **Step 1: RED (server)** — status route: with two credentials under `localhost` and one
   under `mybox.duckdns.org`, `enrolledRpIds` is `['localhost','mybox.duckdns.org']`; with no
   store, the field is absent or `[]` (pick absent — assert absent); the field never contains a
-  credential id (shape assertion).
-- [ ] **Step 2: GREEN (server)** — `enrolledRpIds()` on the store; emit from the route.
-  Single reader on the PWA side.
-- [ ] **Step 3: RED (pwa)** — the rename state renders the re-enrol sentence naming the old
+  credential id (shape assertion). *(Measured: auth-routes 1 failed / 52 passed — the
+  projection case reds; the absent-with-no-store case is green pre-implementation by nature,
+  since absence is today's shape.)*
+- [x] **Step 2: GREEN (server)** — `enrolledRpIds()` on the store; emit from the route.
+  Single reader on the PWA side. *(53/53. The PWA's single reader is the existing
+  `readAuthStatus` — `STATUS_PATH` is spelled once in `pwa/src/lib/auth.ts` and the field
+  arrives through `Partial<AuthStatus>` with no new code, so that file needed no edit.)*
+- [x] **Step 3: RED (pwa)** — the rename state renders the re-enrol sentence naming the old
   rpId; a plain cancel (empty/matching `enrolledRpIds`) still renders the cancelled sentence.
-- [ ] **Step 4: GREEN (pwa)** — thread the field through the login screen's status read.
-- [ ] **Step 5:** mutation — drop the rpId-mismatch condition (the plain-cancel test reds,
+  *(Measured: auth-login 1 failed / 39 passed — the rename case reds; the two plain-cancel
+  cases pass pre-implementation by nature (today every ceremony failure is a cancel); the
+  Step-5 mutation is what proves the matching-name one guards.)*
+- [x] **Step 4: GREEN (pwa)** — thread the field through the login screen's status read.
+  *(40/40, `tsc --noEmit` clean. The current-rpId half rides `PasskeyCeremonyError.rpId` —
+  D-142.)*
+- [x] **Step 5:** mutation — drop the rpId-mismatch condition (the plain-cancel test reds,
   because every cancel would claim a rename). D-149 sweep note in the commit (no route
   added; the exempt GET's body widened — checked `ccd/ccrc` + both skills for `auth/status`
   readers: doctor's `_check_auth` reads it; verify its parser tolerates the new field).
   Suites + `single-definition` + pwa typecheck green. Commit
   `feat(auth): status names enrolled rpIds; the rename failure says what is true`.
+  *(Measured: mismatch condition reduced to `enrolled.length > 0` → auth-login 1 red (the
+  matching-name plain-cancel pin) / 39 passed; reverted. D-149 sweep: ZERO out-of-package
+  `auth/status` readers exist — the parenthetical's `_check_auth` claim was stale, D-141.
+  Gate + neighbour suites green: server auth-routes + single-definition + auth-passkey +
+  auth-gate 378/378, typecheck-tests 9/9; pwa auth-login + auth-passkey 76/76, tsc clean.)*
 
 ### Task 6: trustProxy settled as none
 
@@ -256,14 +309,19 @@ Verdict table (each row is a test):
 - Modify: `server/src/config.ts:74-80` (the forward-reference paragraph)
 - Test: `server/test/auth-routes.test.ts` (one new case)
 
-- [ ] **Step 1: RED** — a source-scan test in the `auth-routes` file's idiom: the string
+- [x] **Step 1: RED** — a source-scan test in the `auth-routes` file's idiom: the string
   `trustProxy` appears nowhere in `server/src/**/*.ts` except `config.ts`'s docstring (grep
   the corpus the way `single-definition` builds file lists). It fails only in the sense of
   needing the docstring update to exist — combine: assert `config.ts`'s cookieSecure
   docstring no longer says "belongs to Stage 3b" and instead says "settled: none".
-- [ ] **Step 2: GREEN** — rewrite the paragraph per spec D5 (config-driven, no proxy trust, no
+  *(Measured: auth-routes 1 failed / 53 passed — the docstring half; the corpus-scan half
+  proven separately by mutation below.)*
+- [x] **Step 2: GREEN** — rewrite the paragraph per spec D5 (config-driven, no proxy trust, no
   forwarded-header consumer; the measured zero-consumer fact and the spoof-surface argument).
-- [ ] **Step 3:** suites green. Commit `docs(config): trustProxy is settled — none, and why`.
+  *(54/54 green. Corpus-scan mutation: `// trustProxy` planted in `src/watch.ts` →
+  1 red / 53 passed; reverted.)*
+- [x] **Step 3:** suites green. Commit `docs(config): trustProxy is settled — none, and why`.
+  *(auth-routes 54/54.)*
 
 ### Task 7: Runbook step 11, docs, example env
 
@@ -273,18 +331,29 @@ Verdict table (each row is a test):
 - Test: `server/test/runbook-holds.test.ts` (pins for any quoted transcript lines),
   `server/test/readme-holds.test.ts` if README quotes transcripts
 
-- [ ] **Step 1:** write step 11: prerequisites (router forwards 80/443 — the D1 sentence; a
+- [x] **Step 1:** write step 11: prerequisites (router forwards 80/443 — the D1 sentence; a
   DuckDNS account), `ccrc expose duckdns`, the sudo ceremony, `ccrc doctor` expected
   transcript (exposure/caddy/cert/name PASS lines), restart, phone install, login, re-enrol
   passkeys (the D7 choreography order verbatim), and the reference-box migration note (D8.2,
   operator-only). Rewrite `:508-516`'s two bullets to point at step 11 and correct the
   refusal-text claim (the shipped sentence is Task 5's, not "enrolled for localhost —
-  re-enrol").
-- [ ] **Step 2:** `ccrc.env.example`: document that exposure keys live in `exposure.env` and
+  re-enrol"). *(Shipped as 11 + 11a–11f, including the 11a un-shadow edit the runbook path
+  itself forces — step 10b put both keys in `ccrc.env`, exactly the state Task 2's shadow
+  refusal exists for. The `:508-516` region held ONE bullet carrying both stale claims —
+  D-143.)*
+- [x] **Step 2:** `ccrc.env.example`: document that exposure keys live in `exposure.env` and
   which file wins; README: the exposure section (BYO-proxy contract sentence from spec
-  `:160-164` verbatim).
-- [ ] **Step 3: RED→GREEN** — add `runbook-holds` pins for every doctor line step 11 quotes.
+  `:160-164` verbatim). *(README quotes no transcript fences, so `readme-holds` needed no
+  extension; the two stale 3a sentences found in `ccrc.env.example` fixed in the same pass —
+  D-143.)*
+- [x] **Step 3: RED→GREEN** — add `runbook-holds` pins for every doctor line step 11 quotes.
   Full server suite green. Commit `docs(runbook): step 11 — expose, ceremony, phone proof`.
+  *(Red-first: the eight step-11 pins written BEFORE the docs — runbook-holds 8 failed /
+  6 passed — then the docs, then 14/14. The exposure and name PASS lines are measured off the
+  REAL `_check_exposure`/`_check_name` (ccrc sourced, fixture HOME, stubbed
+  `getent`/`hostname`); caddy is a source literal, cert a source template. Mutations, each
+  reverted: quoted exposure line paraphrased (`mode 0600`→`mode 600`) → 1 red / 13 passed;
+  the never-shipped "enrolled for localhost — re-enrol" quote restored → 1 red / 13 passed.)*
 
 ### Task 8: Whole-branch review + close-out
 
@@ -296,3 +365,50 @@ Verdict table (each row is a test):
 ## Deviations found
 
 (D-139 onward; recorded during execution.)
+
+- **D-139** (Task 2): the tty refusal is the `cmd_passwd` sentence's SHAPE, not its verbatim
+  bytes. The plan says "the `cmd_passwd` sentence verbatim", but that sentence names a
+  passphrase, a confirmation read, and `Run 'ccrc passwd' from a terminal` — three claims
+  that are false for this verb. Shipped: the same structure and the same load-bearing
+  clauses (`stdin is not a terminal` opener, the `curl … | bash` stdin-is-the-installer
+  hazard, `Nothing was written.` closer), reworded for a DuckDNS token/origin and naming
+  `ccrc expose <sub>`. The test pins the same two anchors the passwd suite pins
+  (`/^ccrc: stdin is not a terminal/m`, `/curl … \| bash/`), so the two refusals cannot
+  drift apart on the parts that matter.
+- **D-140** (Task 3): the timer enable is DEGRADED, not fatal — the plan's Step 1 named the
+  `systemctl` calls without naming their failure mode, and Task 2's already-shipped contract
+  decides it: every duckdns-arm test runs against the fixture's poisoned `systemctl` (exit 97)
+  and asserts exit 0, so a fatal enable would red the whole shipped suite. Shipped as
+  `_inst_linger`'s doctrine at verb scale (both config files and both units have landed by
+  that line; a box without a session bus — container, bare ssh, this repo's own fixture —
+  must not turn a converged run into an abort over a thing one command fixes): on failure the
+  verb prints the exact `daemon-reload && enable --now` command and exits 0, pinned by a
+  fifth test (`a failing systemctl DEGRADES, never dies`) beyond Step 1's three named bullets.
+  Doctor's `name` check (Task 4) carries the not-yet-enabled state.
+- **D-141** (Task 5): the D-149 sweep's parenthetical claim is stale — measured, NO
+  out-of-package consumer reads `/api/auth/status` at all (`grep -rn "api/auth" ccd/ deploy/`
+  → zero hits). Doctor's `_check_auth` measures `ccrc.env`, the secret file and the session
+  store ON DISK through `_box_env_value`/`_box_auth_path`, never the HTTP route, so there is
+  no parser to verify tolerance on. The sweep still ran and the commit says what it checked;
+  the widened exempt body has exactly one out-of-server reader, the PWA's `readAuthStatus`,
+  which types the body `Partial<AuthStatus>` and is additive-tolerant by construction.
+- **D-142** (Task 5): the rename condition needs the box's CURRENT rpId, which the plan
+  locates "already present in the assert-start response" — a response only
+  `pwa/src/lib/passkey.ts` (not in the task's file list) has in scope. Shipped: `assertPasskey`
+  stamps it onto every `PasskeyCeremonyError` it throws after start (`readonly rpId`), and the
+  login screen compares that against `status.enrolledRpIds`. Two adjacent anchor corrections:
+  the login screen lives at `pwa/src/components/LoginScreen.tsx` (the list says `screens/`),
+  and `pwa/src/lib/auth.ts` needed no edit — its `readAuthStatus` was already the single
+  reader the field rides in on.
+- **D-143** (Task 7): the plan's "`:508-516`'s two bullets" was ONE bullet carrying both stale
+  claims (the refusal text and the trustProxy forward-reference). Shipped as a split into two
+  bullets — the real-name/TLS one now pointing at step 11 and quoting Task 5's shipped
+  sentence, and a proxy-trust one stating the D5 settlement ("settled: none", grounded in
+  `config.ts`) — so the region reads as the two claims it always contained. Adjacent finding,
+  same stale-sentence class, fixed in the same pass though outside the named checklist:
+  `deploy/ccrc.env.example` carried its own copy of the never-shipped refusal quote
+  (`"enrolled for <old> — re-enrol"`, the CCRC_RP_ID bullet) and a "proxy-trust belongs to
+  stage 3b" forward-reference (the CCRC_COOKIE_INSECURE comment); both rewritten to the
+  shipped sentence and the settled decision. The runbook-holds pin greps the RUNBOOK only, so
+  the example file's copy is corrected but not pinned — it quotes UI prose, not an
+  operator-diffable transcript line.

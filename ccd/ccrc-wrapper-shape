@@ -72,6 +72,55 @@ WRAPPER_ID_RE='^[a-z][a-z0-9-]{0,31}$'
 # import shared/roster.ts either.
 WRAPPER_SUFFIX_SAFE_RE='^\.[A-Za-z0-9._-]+$'
 
+# D-155. The size past which a file is not classified AT ALL — the bash-side
+# spelling of `deploy/gen-wrappers.mjs`'s `OVERSIZE_BYTES` (D-81), and the
+# reason it is a constant here rather than a literal at each call site: it was
+# already written out twice in bash (`ccrc-doctor-checks`, bare `1048576`) and
+# the gate change below needed a third. Two spellings remain, one per language,
+# and that is the floor — a bare `node` cannot import bash and a bare bash
+# cannot import the ESM.
+#
+# THE COMPARISON, NOT THE READ, LIVES AT THE CALL SITES. Measuring a file needs
+# `stat`, and this file makes no PATH lookups (see the header) — so what ships
+# here is the number, and each caller does its own `stat` in whatever guarded
+# idiom it already uses (`ccrc-adopt` calls `stat` outright, as it already does
+# for its own reporting; `ccrc-doctor-checks` guards with `command -v`, as it
+# does for every external tool). The two callers also want OPPOSITE fail-safe
+# directions when a size cannot be had, which is the second reason this is a
+# number and not a predicate: adopt REFUSES an unmeasurable upstream, while the
+# candidate scan SKIPS an unmeasurable candidate. One predicate answering both
+# would have to fold those into one boolean, and that is the overloaded-null
+# defect this codebase treats as a bug rather than a style.
+WRAPPER_OVERSIZE_BYTES=1048576
+
+# D-156. A SECOND, TIGHTER threshold, and deliberately not a re-spelling of the
+# one above. `WRAPPER_OVERSIZE_BYTES` answers "is this too big to be judged at
+# all"; this answers "is this too big to be a GENERATED WRAPPER", which is a far
+# smaller claim and provable from the shape itself: `_wrap_parse_shape` accepts
+# two or three significant lines, and a real generated wrapper measures 370-374
+# bytes on the reference box. 64 KiB is ~175x headroom.
+#
+# It exists because the witness scan in `ccrc wrappers` reads EVERY id-shaped
+# file in ~/.local/bin, not just the ones the roster names. Measured on the real
+# 86-entry bin dir: 0.15 s at 64 KiB against 0.70 s at 1 MiB, for the IDENTICAL
+# witness set. The whole 0.55 s difference is one file — `~/.local/bin/ccd`,
+# 608 KB, whose first line really is this shebang and whose second line really
+# does carry a ccrc marker, so no cheaper filter drops it.
+#
+# The tightness also turns the cap from a hole into an entailment: under the
+# strict "a witness must parse as the full generated shape" rule, a file over
+# this size is PROVABLY not a witness, so skipping it unread loses nothing. A
+# looser "does the text contain an exec line" rule would have made the same cap
+# a silent blind spot.
+WRAPPER_WITNESS_MAX_BYTES=65536
+
+# The generated shape's first line, spelled once. `_wrap_parse_shape` compares
+# against it, and the witness scan uses it as a cheap pre-filter so it can drop
+# a candidate before paying for a process substitution — measured, that gate
+# turns 66 parses into 15 on a live-shaped bin dir.
+WRAPPER_SHEBANG='#!/usr/bin/env bash'
+
+
 # ── is this file a script? ────────────────────────────────────────────────
 # The first two bytes, and never a third. `read -N 2` reads EXACTLY two
 # characters and stops, delimiters and all — the file's remaining 324 MB are
@@ -90,8 +139,24 @@ _wrap_is_script() {
 
 # ── does this script declare a config dir at all? ─────────────────────────
 # The one question that separates "an account wrapper" from "some other script
-# in ~/.local/bin". Call it only on something `_wrap_is_script` accepted: on a
-# non-script this would read the whole file.
+# in ~/.local/bin" — and, since D-155, the question `ccrc-adopt` asks of the
+# upstream account it just elected, because "is it a script" stopped being a
+# proxy for it the day the binary path became a launcher.
+#
+# TWO OBLIGATIONS ON THE CALLER, and this function enforces neither, because it
+# cannot: it makes no PATH lookups and so cannot measure anything.
+#   1. Call it only on something `_wrap_is_script` accepted — on a non-script
+#      this reads the whole file.
+#   2. Size it first, against `WRAPPER_OVERSIZE_BYTES`. `_wrap_is_script`'s
+#      two-byte bound says nothing about how big a SCRIPT is, and this reads
+#      whatever it is handed to the last line before answering `1`. Both
+#      callers do it; each picks its own direction for a size it cannot get
+#      (`ccrc-adopt` refuses, its candidate scan skips).
+#
+# The answer is a two-state one on purpose — declares, or does not. "Could not
+# tell" is deliberately NOT folded in as a third `return`: the two callers
+# resolve that case differently, and a predicate that collapsed it would be
+# handing them one value for two conditions they must not treat alike.
 _wrap_declares_config_dir() {
   local f="$1" ln
   [ -r "$f" ] || return 1
@@ -147,7 +212,7 @@ _wrap_parse_shape() {
   [ -r "$f" ] || { printf 'no\t\t\t\n'; return; }
   mapfile -t lines < "$f"
 
-  if [ "${lines[0]:-}" != '#!/usr/bin/env bash' ]; then
+  if [ "${lines[0]:-}" != "$WRAPPER_SHEBANG" ]; then
     printf 'no\t\t\t\n'; return
   fi
 
@@ -219,7 +284,7 @@ _wrap_parse_shape() {
 # independent sources that usually agree with its discovery; doctor reports a
 # roster and a disk that must agree. Both obey the same rule, which is the
 # whole point of the shape: REPORT the disagreement, never resolve it by
-# silently trusting one side (ccrc-adopt:32-39, "the direction of every
+# silently trusting one side (ccrc-adopt:41-48, "the direction of every
 # uncertain call is to report it").
 #
 #   _wrap_set_diff <callback> <name of array A> <name of array B>
