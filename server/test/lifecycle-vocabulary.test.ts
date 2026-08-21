@@ -177,22 +177,26 @@ describe('ccd <-> shared: the journal vocabulary', () => {
   it('_LC_ACTS is READ, not merely declared to satisfy this file', () => {
     if (ccdArray('_LC_ACTS') === null) return;
     // The mutant this kills: declare the array, never consult it, and emit
-    // whatever a call site passes. A naive occurrence COUNT does not kill
-    // it: a docstring that mentions `_LC_ACTS` in prose a second time (this
-    // very file's own header does, and a wave-2 commit's comments plausibly
-    // will too — caught for real, task-12 FIX ROUND 2) satisfies a bare
-    // `.match(/_LC_ACTS/g).length > 1`, which retires the question rather
-    // than answering it. Comments are stripped first — a line whose first
-    // non-whitespace character is `#`, and any trailing ` #…` — and what
-    // remains must contain a genuine bash DEREFERENCE of the array
-    // (`"${_LC_ACTS[@]}"`, `${_LC_ACTS[...]}`, or bare `$_LC_ACTS`), which
-    // the assignment `_LC_ACTS=(` is not and a second prose mention is not.
-    const code = ccdSrc
+    // whatever a call site passes. Comments are stripped first — a line
+    // whose first non-whitespace character is `#`, and any trailing ` #…` —
+    // which is what keeps a prose-only mention (this very file's own header
+    // does this, and FIX ROUND 1's own outcomes comment did too, by
+    // accident) from ever counting: prose lives in comments, and comments
+    // are gone before this check runs. What remains must mention
+    // `_LC_ACTS` on some line OTHER than its own declaration
+    // (`_LC_ACTS=(`) — a strictly weaker, strictly more complete bar than
+    // requiring a specific dereference FORM (task-12 FIX ROUND 3 dropped an
+    // earlier, narrower version of this check that missed bare-name readers
+    // like `declare -p _LC_ACTS`, `local -n ref=_LC_ACTS` and
+    // `${!_LC_ACTS[@]}`): every legitimate reader, dereference or bare-name
+    // alike, mentions the name on a line the declaration does not occupy.
+    const codeLines = ccdSrc
       .split('\n')
       .map((line) => (line.trimStart().startsWith('#') ? '' : line.replace(/\s#.*$/, '')))
-      .join('\n');
-    const dereferenced = /\$\{#?_LC_ACTS(\[[^}]*\])?\}|\$_LC_ACTS\b/.test(code);
-    expect(dereferenced, '_LC_ACTS is declared but never dereferenced in code').toBe(true);
+      .filter((line) => !line.includes('_LC_ACTS=('));
+    const consulted = codeLines.some((line) => line.includes('_LC_ACTS'));
+    expect(consulted, '_LC_ACTS is declared but never mentioned outside its own declaration line')
+      .toBe(true);
   });
 
   it('the caps token and the vocabulary ship together', () => {
