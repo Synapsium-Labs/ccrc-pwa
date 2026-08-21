@@ -176,13 +176,17 @@ staged tree (role-aware per the recorded role); print the from→to report; fini
 fleet is behind — WARN text names fleet-box-first; a 401/unreachable answer skips the
 comparison silently (D-150). NO sweep in this task (Task 7).
 
-- [ ] RED (fixture box from `freshBox` + a fixture release tarball): happy path replaces
+- [x] RED (fixture box from `freshBox` + a fixture release tarball): happy path replaces
   `~/ccrc` and reports both build.json versions; checksum mismatch changes NOTHING
   (byte-compare `~/ccrc` before/after); backup dir contains coord.db snapshot + old ccd +
   units before any install write (ordering pin: a fault injected between backup and install
   leaves the backup complete); `--to` fetches the named tag's URL (recording curl stub
   argv); rollback prints the coord.db restore lines and does NOT copy the db itself.
-- [ ] GREEN; mutations: reorder backup after install (the ordering pin reds); skip manifest
+  (Ran red: 12/12 in the new `ccrc-update.test.ts`, +2 in `build-release.test.ts` (the
+  shipped build.json — see D-141), +1 in `ccrc-cli.test.ts` (the usage verb list), before
+  implementation. The harness copies `freshBox`'s pieces rather than importing them —
+  `build-release.test.ts`'s stated reason: importing a .test.ts registers its whole suite.)
+- [x] GREEN; mutations: reorder backup after install (the ordering pin reds); skip manifest
   verify (red). Commit `feat(ccrc): update — verified artifact in, backup first, atomic`.
 
 ### Task 7: The sweep + the CLAUDE.md carve-out (R1)
@@ -321,3 +325,45 @@ it merges first.)
   (checkout-mode handoff untouched). Note: `usage()`'s pinned one-line string is
   deliberately unchanged (existing tests pass untouched, per this task's own checklist);
   `--release` is documented in install.sh's header and lands in README/runbook at Task 10.
+- **D-141** (Task 6): **the release artifact must carry the identity it installs, or every
+  release-mode box lies about its build for ever.** An extracted tarball is not a git
+  repository, so `_inst_stamp` skips on it BY DESIGN — which meant a `--release` install or
+  an update left the OLD stamp in place while the box ran new code, and the restated proof
+  (§R3: `/health` and `ccrc version` report N+1 after update) was unreachable. Two files
+  outside Task 6's named list were touched to close it, both minimally: (a)
+  `deploy/build-release.sh` now writes `build.json` (sha/ref/builtAt/`dirty:false`/version,
+  the stampers' exact shape, `dirty:false` guaranteed by the script's own dirty-tree
+  refusal) into the staged tree BEFORE the MANIFEST, so the per-file digests cover it —
+  pinned by a new `build-release.test.ts` test (sha=HEAD, version=tag, MANIFEST-covered);
+  (b) `_inst_stamp` gained a shipped-stamp arm (`_inst_stamp_shipped`) taken only when the
+  git measurement is impossible, validating the artifact's stamp through the file's ONE
+  parser (`_box_build_fields`, which gained an optional file argument — no second jq
+  filter; `single-definition`'s one-parse pin stays green). The git measurement still wins
+  whenever it is possible; every existing skip transcript is byte-identical when no shipped
+  stamp exists (ccrc-install's pinned skip strings all green). This also fixes the same
+  latent gap in `install.sh --release` (Task 4 shipped it unstamped) with the one
+  implementation.
+- **D-142** (Task 6): the task text's "print the from→to report; finish with `cmd_doctor`"
+  is implemented as spine-then-report: the staged `ccrc install` IS the `_inst_*` re-run
+  and already ENDS with `cmd_doctor` from the NEW tree, so update's transcript is
+  …install steps… doctor …report — the report closes the transcript instead of preceding
+  doctor. Running a second doctor after the report would measure the box twice and, worse,
+  from the OLD tree's check table (`cmd_update` executes from the tree being replaced);
+  re-implementing the spine without its tail would spell the sequence twice. The exit code
+  is the staged install's (= doctor's), unchanged in meaning. The report's "to" half is
+  re-measured off `~/.ccrc/build.json` after the install, never inferred from the artifact.
+- **Task 6 mutation measurements** (applied, run, reverted): (M1) `_upd_backup` moved
+  AFTER the install step → 1 red (`the backup is COMPLETE before the install step runs` —
+  the fault-injection fixture whose staged install dies at its first instruction found no
+  backup dir); (M2) the post-extraction `sha256sum -c MANIFEST` replaced with `true` →
+  1 red (`MANIFEST mismatch after an honest outer checksum` — the inner file corrupted
+  after MANIFEST generation installed cleanly under the mutation). Suite 12/12 green
+  before and after each; sibling suites green after implementation: build-release 14/14,
+  ccrc-cli 34/34, install-sh + single-definition (122 across the four), ccrc-install
+  96/96, ccrc-doctor + runbook-holds 260/260, typecheck-tests 9/9. Intended extensions
+  beyond the task's named files, annotated in place: `ccrc-cli.test.ts`'s usage-verb pin
+  gained `update` (a verb that dispatches but is not in the usage line is a verb nobody
+  can find), `build-release.test.ts` gained the D-141 stamp test + `build.json` in
+  `EXPECTED_ENTRIES`. The fleet-behind WARN and its D-150 silences (401, unreachable, no
+  address) are covered by two dedicated tests (skewed → WARN naming fleet-box-first;
+  401 → silent, run proceeds).

@@ -173,6 +173,29 @@ BOX_TREE_DIR="$HOME/ccrc"
 # (D-92.)
 BOX_UNIT_DIR="$HOME/.config/systemd/user"
 
+# ── WHERE A BOX KEEPS ITS BACKUPS (stage 4, Task 6) ───────────────────────
+# `~/ccrc-backups/<ts>/` is deploy's own layout (deploy.sh:33-34: "every
+# backup this run takes lands under the same ~/ccrc-backups/<ts>/ … so a
+# rollback is one directory, not a hunt"), and the timestamp shape below it
+# is `prune_backups`' glob (deploy.sh:68-72) — a backup named outside that
+# shape is a backup the pruner can never reclaim. Spelled once, for the
+# reason every BOX_* path above is: `_upd_backup` WRITES under it and
+# `_upd_report` prints restore commands OUT of it, and two spellings is how
+# the printed command comes to name a directory nothing wrote.
+BOX_BACKUP_ROOT="$HOME/ccrc-backups"
+
+# ── THE RELEASE SOURCE (stage 4, Task 6) ──────────────────────────────────
+# One owner/repo pair, and `install.sh:23-24` spells the same one — a
+# DELIBERATE cross-file second spelling of D-92's class: `install.sh
+# --release` runs before any ccrc exists on the box, so it cannot read this
+# pair, and this file runs on boxes install.sh has long left. The two are
+# held equal by `server/test/ccrc-update.test.ts` (the pin IS the mechanism;
+# a comment would be the promise). `CCRC_RELEASE_BASE_URL` overrides the
+# derived `…/releases` prefix — the same test seam and mirror escape hatch
+# install.sh documents. Stage 5 de-brands the pair in both files at once.
+CCRC_RELEASE_OWNER="example-org"
+CCRC_RELEASE_REPO="ccrc-pwa"
+
 # How long the ONE network call in this file (`GET /api/fleet/health`) may take.
 # Overridable for the reason `deploy/verify-service.sh:56-62` makes its
 # settle/window knobs overridable, and `ccrc-doctor-checks` makes
@@ -190,6 +213,15 @@ BOX_UNIT_DIR="$HOME/.config/systemd/user"
 BOX_BUILD=()
 BOX_HEALTH=()
 BOX_HEALTH_WHY=""
+
+# `cmd_update`'s out-parameters (stage 4, Task 6), declared at file scope for
+# the `set -u` reason the arrays above are: `_upd_fetch` fills the first
+# three, `_upd_backup` the fourth, and `cmd_update`'s tail (and its EXIT
+# trap) read them whether or not the writer ran.
+UPD_STAGE=""
+UPD_TREE=""
+UPD_VERSION=""
+UPD_BACKUP_DIR=""
 
 # ── WHICH STEPS DEGRADED, so the closing line can say so ──────────────────
 # `cmd_install`'s steps either converge or die — with ONE exception by design,
@@ -209,7 +241,7 @@ INST_DEGRADED=()
 
 usage() {
   cat <<EOF
-usage: $PROG {doctor|status|adopt|wrappers|install|passwd|version}
+usage: $PROG {doctor|status|adopt|wrappers|install|update|passwd|version}
 
 The lifecycle CLI for a Claude Code fleet box — installs, updates and
 diagnoses a box, as a sibling to ccd (which drives sessions once one is
@@ -237,6 +269,15 @@ already running).
             ccrc-agent.service instead of ccrc.service. server: today's
             spine minus nothing — the difference from 'both' is reserved
             for later stages
+  update    fetch a published release and move this box onto it: verify the
+            download (checksum, then the per-file MANIFEST) before anything
+            changes, back up coord.db, dists, ccd and the units to
+            ~/ccrc-backups/<ts>/, then re-run the install spine from the
+            verified staged tree (role-aware, from ccrc.env's CCRC_ROLE) and
+            print the from -> to report. [--to vX.Y.Z] pins a version — the
+            rollback path too: a downgrade prints the coord.db restore
+            commands and never auto-restores. Never automatic; per box;
+            fleet box first, then the server box
   passwd    set (or rotate) this box's PWA passphrase in ~/.ccrc/auth.scrypt.
             Prompts twice on a tty; the gate also needs CCRC_AUTH=on in this
             box's ccrc.env. Rotating invalidates every logged-in SESSION —
@@ -335,11 +376,19 @@ _ccrc_usage_die() { echo "$PROG: unknown argument: $1" >&2; usage >&2; exit 2; }
 # unreadable rather than printed — the same rule `_check_wrappers` applies to
 # roster ids, for the same reason.
 _box_build_fields() {
+  # The optional argument (stage 4, Task 6) points this SAME parser at a
+  # stamp that is not the box's own — `_inst_stamp`'s shipped-stamp arm
+  # validates a release artifact's `build.json` before installing it. One
+  # parser, two files, rather than a second jq filter that would come to
+  # disagree with this one about what a well-formed stamp is
+  # (single-definition.test.ts counts the `jq -r` parses in this file and
+  # fails on a second). No caller but that arm passes an argument.
+  local stamp="${1:-$BOX_STAMP_FILE}"
   BOX_BUILD=()
-  [[ -e "$BOX_STAMP_FILE" ]] || return 3
+  [[ -e "$stamp" ]] || return 3
   # Exists but is not a plain file (e.g. a directory) — a shape problem, not
   # an absence; must not be read as "unstamped" (round-1 review, Minor 8).
-  [[ -f "$BOX_STAMP_FILE" ]] || return 4
+  [[ -f "$stamp" ]] || return 4
   command -v jq >/dev/null 2>&1 || return 5
   local out
   # `version` (stage 4, Task 1) is ADDITIVE: absent on every pre-release stamp
@@ -362,7 +411,7 @@ _box_build_fields() {
       else empty
       end
     ) catch empty
-  ' -- "$BOX_STAMP_FILE" 2>/dev/null)"
+  ' -- "$stamp" 2>/dev/null)"
   [[ -n "$out" ]] || return 6
   mapfile -t BOX_BUILD <<< "$out"
   [[ "${#BOX_BUILD[@]}" -eq 6 && "${BOX_BUILD[5]}" == END ]] || { BOX_BUILD=(); return 6; }
@@ -2665,6 +2714,33 @@ _inst_files() {   # the artifacts the box RUNS that are not on PATH
   echo "install: files: session hooks, notify.sh, tmux.conf and the statusline in place"
 }
 
+# ── _inst_stamp_shipped — the release-artifact arm (stage 4, Task 6) ──────
+# A box installing from an extracted release tarball has no repository to
+# measure — `git rev-parse` fails there BY DESIGN — but the artifact carries
+# its identity: `deploy/build-release.sh` writes `build.json` (sha, ref,
+# builtAt, dirty:false, version) into the tree it tars, and the per-file
+# MANIFEST covers it. When the git measurement is impossible and the tree
+# ships that stamp, installing it IS a measurement — of the artifact, made on
+# the release machine, verified file-by-file on this box before this step
+# ran. It is validated through `_box_build_fields` (this file's ONE stamp
+# parser — a second jq filter here is exactly what single-definition.test.ts
+# forbids) and a stamp that does not parse is refused, falling through to the
+# caller's ordinary skip line. The GIT measurement still wins whenever it is
+# possible: a checkout's own state is the truth about a checkout, and a
+# stray build.json beside a real repository must never outvote it.
+_inst_stamp_shipped() {
+  local shipped="$CCRC_HERE/../build.json"
+  [ -f "$shipped" ] || return 1
+  _box_build_fields "$shipped" || return 1
+  mkdir -p "${BOX_STAMP_FILE%/*}" || _ccrc_die "cannot create ${BOX_STAMP_FILE%/*}"
+  _inst_atomic "$shipped" "$BOX_STAMP_FILE" 644
+  local said=""
+  [ "${BOX_BUILD[3]}" = true ] && said=", dirty"
+  [ -n "${BOX_BUILD[4]}" ] && said="$said, ${BOX_BUILD[4]}"
+  echo "install: stamp: ${BOX_BUILD[0]} (${BOX_BUILD[1]}$said, shipped in the release artifact)"
+  return 0
+}
+
 _inst_stamp() {   # what this box is RUNNING, stated by the box itself
   # `deploy.sh:75-93`'s `stamp_build`, translated to one machine. Until this
   # step existed the ONLY writer of `~/.ccrc/build.json` was a deploy, so a box
@@ -2712,15 +2788,20 @@ _inst_stamp() {   # what this box is RUNNING, stated by the box itself
   local src sha ref dirty version vfield tmp why rc=0 dest="$BOX_STAMP_FILE"
   src="$CCRC_HERE/.."
   if ! command -v git >/dev/null 2>&1; then
+    _inst_stamp_shipped && return 0
     echo "install: stamp: skipped (no git on PATH) — ccrc version will say unstamped"
     return 0
   fi
   sha="$(git -C "$src" rev-parse HEAD 2>/dev/null)" || rc=$?
   if [ "$rc" -eq 0 ] && [ -z "$sha" ]; then
+    _inst_stamp_shipped && return 0
     echo "install: stamp: skipped (git rev-parse HEAD exited 0 but printed no sha) — ccrc version will say unstamped"
     return 0
   fi
   if [ "$rc" -ne 0 ]; then
+    # The one ORDINARY landing of the shipped-stamp arm: an extracted release
+    # tarball is exactly "a tree git refuses to call a repository".
+    _inst_stamp_shipped && return 0
     # A SECOND invocation, reached only because the first one failed, and only
     # to read the diagnosis the first one discarded. Capturing both streams from
     # one call needs a temp file or fd juggling, for a saving of one process on
@@ -3053,6 +3134,252 @@ _inst_wrappers() {
   echo "install: wrappers: converged (the summary line above is ccrc wrappers' own)"
 }
 
+# ── cmd_update — the box moves to a published release (stage 4, Task 6) ───
+# Per box, explicit, never automatic (spec §4). The sequence, each step
+# refusing loudly rather than degrading:
+#   1. FETCH + VERIFY (`_upd_fetch`): SHA256SUMS first (under `latest/` the
+#      tag is unknown until the sums file names the tarball — install.sh's
+#      own order), then the tarball; `sha256sum -c` BEFORE extraction (the
+#      outer checksum guards transport), then the per-file MANIFEST after it
+#      (the manifest guards the SET — a file corrupted after the MANIFEST was
+#      generated ships in a tarball whose SHA256SUMS is perfectly honest).
+#      A box with no network answers with curl's failure and changes nothing.
+#   2. BACK UP (`_upd_backup`): coord.db by VACUUM INTO (never cp — the WAL
+#      has been measured holding 10x the main file; backup-coord.mjs's
+#      header), plus dists, ccd and the units, all under ONE
+#      `~/ccrc-backups/<ts>/`. BEFORE the install touches anything, so a
+#      fault at any later step leaves the backup complete — the ordering is
+#      pinned by a test that injects exactly that fault.
+#   3. INSTALL: the `_inst_*` spine, re-run FROM THE STAGED TREE by invoking
+#      the staged `ccrc install` (role-aware, per the CCRC_ROLE this box
+#      recorded in ccrc.env). Not a re-implementation and not a sourced
+#      function list: the sequence is spelled ONCE, in `cmd_install`, and a
+#      step added there must run on update without anyone remembering to add
+#      it here too. The staged verb ends with `cmd_doctor` from the NEW tree,
+#      which is this verb's doctor too — running a second doctor from the
+#      tree this run just replaced would measure the box with the old check
+#      table and print every verdict twice.
+#   4. (The supervisor sweep is Task 7's, deliberately absent here.)
+#   5. REPORT (`_upd_report`): from → to off the build stamps — the old one
+#      read before anything changed, the new one re-measured off disk, never
+#      inferred from what step 3 was expected to do. A `--to` DOWNGRADE also
+#      prints the coord.db restore commands from this run's backup and NEVER
+#      performs them: migrations are forward-only, and an older server READS
+#      a newer coord.db (shipped behavior) — auto-restoring would destroy
+#      rows to fix a compatibility problem the system does not have.
+#
+# THE FLEET-FIRST WARNING (`_upd_fleet_warn`, D-150 aware): on a box that
+# knows its server's address, `/api/fleet/health` saying `skewed` earns a
+# WARN naming the order (fleet box first) — a warning, never a refusal,
+# because the operator mid-rollout is exactly who must be able to proceed.
+# A 401 is the session gate answering correctly from outside (D-150), and an
+# unreachable server is a box that cannot compare; both skip the comparison
+# SILENTLY — a diagnostic that is not available is not a finding.
+cmd_update() {
+  local to=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -h|--help) usage; exit 0 ;;
+      --to)
+        [ $# -ge 2 ] || { echo "$PROG: --to needs a value: a release tag shaped vX.Y.Z" >&2; usage >&2; exit 2; }
+        to="$2"; shift ;;
+      --to=*) to="${1#--to=}" ;;
+      *) _ccrc_usage_die "$1" ;;
+    esac
+    shift
+  done
+  if [ -n "$to" ] && [[ ! "$to" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "$PROG: --to expects a release tag shaped vX.Y.Z (got: $to)" >&2
+    usage >&2
+    exit 2
+  fi
+
+  # BY NAME, BEFORE ANYTHING RUNS — `cmd_install`'s own probe discipline: a
+  # missing tool three steps in would arrive as that step "failing", and two
+  # conditions an operator acts on differently (install the tool / debug the
+  # release) must not share a signal. `node` is probed here even though the
+  # staged install probes it again, because `_upd_backup` runs it FIRST
+  # (backup-coord.mjs) and a backup that failed for a missing interpreter
+  # must not read as a broken coord.db.
+  local t
+  for t in curl tar gzip sha256sum node; do
+    command -v "$t" >/dev/null 2>&1 \
+      || _ccrc_die "$t is required by 'ccrc update' but is not on PATH — nothing on this box was changed"
+  done
+
+  # The OLD identity, read before anything changes — the report's "from"
+  # half. `rc` per condition, same split `cmd_status` renders: absent is the
+  # honest "unstamped", anything else unreadable — never collapsed into a
+  # version nobody measured.
+  local old_desc="unstamped" old_version="" rc=0
+  _box_build_fields || rc=$?
+  case "$rc" in
+    0) old_version="${BOX_BUILD[4]}"
+       if [ -n "$old_version" ]; then old_desc="$old_version (${BOX_BUILD[0]})"
+       else old_desc="${BOX_BUILD[0]}"; fi ;;
+    3) old_desc="unstamped" ;;
+    *) old_desc="unreadable" ;;
+  esac
+
+  _upd_fleet_warn
+  _upd_fetch "$to"
+  _upd_backup
+
+  # THE RECORDED ROLE (spec §5): `ccrc.env`'s CCRC_ROLE, written by
+  # `_inst_env` at first install. Absent — an older box whose env file
+  # predates the key — means the staged install runs BARE and its own
+  # default (both, today's single-box shape) decides, exactly as a fresh
+  # `ccrc install` would. An unrecognisable value is treated as absent for
+  # the same reason: passing it through would make the staged install refuse
+  # a run this box's operator never mistyped.
+  local role=""
+  if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ]; then
+    role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  fi
+  case "$role" in server|fleet|both) ;; *) role="" ;; esac
+
+  echo "update: installing $UPD_VERSION from the verified staged tree${role:+ (recorded role: $role)}"
+  local inst_rc=0
+  if [ -n "$role" ]; then
+    bash "$UPD_TREE/ccd/ccrc" install --role "$role" || inst_rc=$?
+  else
+    bash "$UPD_TREE/ccd/ccrc" install || inst_rc=$?
+  fi
+  [ "$inst_rc" -eq 0 ] \
+    || _ccrc_die "the staged install (which ends with doctor) exited $inst_rc — read its lines above. The backup taken BEFORE it ran is complete at $UPD_BACKUP_DIR"
+
+  _upd_report "$old_desc" "$old_version"
+}
+
+# One warning, or silence — never a refusal and never a guess. Address
+# resolution and the health call are the two readers this file already has
+# (`_box_server_addr`, `_box_health`); every non-zero answer from either is a
+# comparison that is NOT AVAILABLE, which is not a finding: no address (a
+# fleet box, ordinarily), a gate that answered 401 (D-150 — correct behaviour
+# by both parties), a server that is down. Only a server that ANSWERED and
+# said `skewed` produces a line.
+_upd_fleet_warn() {
+  local addr_out addr
+  addr_out="$(_box_server_addr)" || return 0
+  addr="${addr_out%%$'\n'*}"
+  _box_health "$addr" || return 0
+  if [ "${BOX_HEALTH[2]}" = skewed ]; then
+    echo "update: WARN: /api/fleet/health at $addr says the two boxes' builds are SKEWED — the update order is fleet box first, then this server box. This run proceeds; update the fleet box too, then re-check with: ccrc status"
+  fi
+  return 0
+}
+
+# Fetch + verify, into a throwaway staging dir this process removes on ANY
+# exit. The URL space is GitHub's release layout (`latest/download/<asset>`,
+# `download/<tag>/<asset>`) under the one owner/repo pair at the top;
+# `install.sh --release` walks the same space with the same order — SUMS
+# first, because under `latest/` only the sums file knows the tarball's name.
+_upd_fetch() {   # $1 = pinned tag, or "" for the newest release
+  local to="$1" base url_dir _sum tarname
+  base="${CCRC_RELEASE_BASE_URL:-https://github.com/$CCRC_RELEASE_OWNER/$CCRC_RELEASE_REPO/releases}"
+  if [ -n "$to" ]; then url_dir="$base/download/$to"; else url_dir="$base/latest/download"; fi
+  UPD_STAGE="$(mktemp -d)" || _ccrc_die "mktemp -d failed — no staging dir could be made, nothing was fetched"
+  # The staging tree holds nothing this run does not either install or
+  # refuse, so it is removed on every exit — success, die, or Ctrl-C.
+  trap '[ -z "$UPD_STAGE" ] || rm -rf "$UPD_STAGE"' EXIT
+  echo "update: fetching $url_dir/SHA256SUMS …"
+  curl -fsSL -o "$UPD_STAGE/SHA256SUMS" "$url_dir/SHA256SUMS" \
+    || _ccrc_die "download failed: $url_dir/SHA256SUMS (is there a release?) — nothing on this box was changed"
+  read -r _sum tarname < "$UPD_STAGE/SHA256SUMS" \
+    || _ccrc_die "SHA256SUMS is empty — refusing; nothing on this box was changed"
+  tarname="${tarname#\*}"
+  case "$tarname" in
+    ccrc-*.tar.gz) ;;
+    *) _ccrc_die "SHA256SUMS names no ccrc tarball (got: $tarname) — refusing; nothing on this box was changed" ;;
+  esac
+  UPD_VERSION="${tarname#ccrc-}"
+  UPD_VERSION="${UPD_VERSION%.tar.gz}"
+  echo "update: fetching $url_dir/$tarname …"
+  curl -fsSL -o "$UPD_STAGE/$tarname" "$url_dir/$tarname" \
+    || _ccrc_die "download failed: $url_dir/$tarname — nothing on this box was changed"
+  # Verify BEFORE extracting: a tarball that fails its checksum never puts a
+  # file on disk, let alone runs one (install.sh's rule, same words).
+  ( cd "$UPD_STAGE" && sha256sum -c SHA256SUMS >/dev/null 2>&1 ) \
+    || _ccrc_die "checksum verification FAILED for $tarname — refusing to extract or install; nothing on this box was changed"
+  UPD_TREE="$UPD_STAGE/tree"
+  mkdir "$UPD_TREE" || _ccrc_die "cannot create $UPD_TREE"
+  tar -xzf "$UPD_STAGE/$tarname" -C "$UPD_TREE" \
+    || _ccrc_die "extracting $tarname failed — nothing outside the staging dir was touched"
+  [ -f "$UPD_TREE/MANIFEST" ] \
+    || _ccrc_die "the release ships no MANIFEST — refusing to install a set nothing can verify"
+  ( cd "$UPD_TREE" && sha256sum -c MANIFEST >/dev/null 2>&1 ) \
+    || _ccrc_die "MANIFEST verification FAILED after extraction — a file in the release set does not match its recorded digest; refusing to install"
+  echo "update: verified $tarname (transport checksum, then the per-file MANIFEST)"
+}
+
+# Deploy's backup set (deploy.sh:363-369 agent lane, :762-766 server lane),
+# both lanes' union because a single box may be both, each entry guarded —
+# absence is the ordinary state of the role a box is not. coord.db goes
+# through the shipped backup-coord.mjs (VACUUM INTO — a cp of a WAL-mode db
+# is a plausible-looking backup missing everything recent, worse than none),
+# resolved out of THIS tree (`$CCRC_HERE/..`): the tool that snapshots the
+# old world ships beside the ccrc doing the snapshotting, never fetched.
+_upd_backup() {
+  local ts
+  ts="$(date +%Y%m%d-%H%M%S)"
+  UPD_BACKUP_DIR="$BOX_BACKUP_ROOT/$ts"
+  mkdir -p "$UPD_BACKUP_DIR" || _ccrc_die "cannot create $UPD_BACKUP_DIR — refusing to install with no backup taken"
+  if [ -f "$HOME/.ccrc/coord.db" ]; then
+    node --no-warnings "$CCRC_HERE/../deploy/backup-coord.mjs" \
+      "$HOME/.ccrc/coord.db" "$UPD_BACKUP_DIR/coord.db" \
+      || _ccrc_die "the coord.db snapshot failed — refusing to install with an incomplete backup (read backup-coord.mjs's lines above)"
+  fi
+  _upd_backup_copy "$BOX_TREE_DIR/server/dist"     server-dist
+  _upd_backup_copy "$BOX_TREE_DIR/server/dist-pwa" dist-pwa
+  _upd_backup_copy "$BOX_TREE_DIR/agent/dist"      agent-dist
+  _upd_backup_copy "$HOME/.local/bin/ccd"          ccd
+  _upd_backup_copy "$HOME/.cc-sessions/session-hook.sh" session-hook.sh
+  _upd_backup_copy "$HOME/.cc-sessions/notify.sh"  notify.sh
+  local u
+  for u in "${BOX_UNIT_NAMES[@]}" claude-session@.service; do
+    _upd_backup_copy "$BOX_UNIT_DIR/$u" "$u"
+  done
+  echo "update: backup: $UPD_BACKUP_DIR (coord.db snapshot, dists, ccd, units — taken before anything was installed)"
+}
+
+_upd_backup_copy() {   # <src> <name under $UPD_BACKUP_DIR> — absent src is ordinary
+  [ -e "$1" ] || return 0
+  cp -a "$1" "$UPD_BACKUP_DIR/$2" \
+    || _ccrc_die "backing up $1 failed — refusing to install with an incomplete backup"
+}
+
+# The from → to report, off MEASUREMENTS: the "from" was read before anything
+# changed and arrives as arguments; the "to" is re-read off disk here — never
+# inferred from what the install was expected to write, which is exactly how
+# a stub of a step would go unnoticed. The downgrade lines fire on a version
+# comparison (`sort -V`) between the OLD stamp and the ARTIFACT's version —
+# both vX.Y.Z by construction — and print the restore; nothing here ever
+# writes coord.db.
+_upd_report() {   # $1 = old description, $2 = old version ("" when unknown)
+  local old_desc="$1" old_version="$2" new_desc="unstamped" rc=0
+  _box_build_fields || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    if [ -n "${BOX_BUILD[4]}" ]; then new_desc="${BOX_BUILD[4]} (${BOX_BUILD[0]})"
+    else new_desc="${BOX_BUILD[0]}"; fi
+  elif [ "$rc" -ne 3 ]; then
+    new_desc="unreadable"
+  fi
+  echo "update: build: $old_desc -> $new_desc"
+  if [[ "$old_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+     && [[ "$UPD_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+     && [ "$UPD_VERSION" != "$old_version" ] \
+     && [ "$(printf '%s\n%s\n' "$old_version" "$UPD_VERSION" | sort -V | head -n1)" = "$UPD_VERSION" ]; then
+    echo "update: rollback: $old_version -> $UPD_VERSION is a DOWNGRADE. coord.db was NOT restored — migrations are forward-only, and an older server reads a newer coord.db (shipped behavior). To restore the pre-update snapshot by hand:"
+    if [ -f "$UPD_BACKUP_DIR/coord.db" ]; then
+      echo "update: rollback:   systemctl --user stop ccrc.service"
+      echo "update: rollback:   cp $UPD_BACKUP_DIR/coord.db \$HOME/.ccrc/coord.db"
+      echo "update: rollback:   systemctl --user restart ccrc.service"
+    else
+      echo "update: rollback:   (no coord.db existed before this run — there is nothing to restore)"
+    fi
+  fi
+}
+
 # Guard so the script can be `source`d (the way server/test/ccd-clip.test.ts:32
 # and server/test/ccd-workspaces.test.ts:394 source ccd itself, to call one
 # function directly without running the whole CLI) without running a command
@@ -3093,6 +3420,7 @@ case "$VERB" in
   adopt)   cmd_adopt "$@" ;;
   wrappers) cmd_wrappers "$@" ;;
   install) cmd_install "$@" ;;
+  update)  cmd_update "$@" ;;
   passwd)  cmd_passwd "$@" ;;
   *) _ccrc_usage_die "$VERB" ;;
 esac

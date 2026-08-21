@@ -203,6 +203,7 @@ const EXPECTED_ENTRIES = [
   'deploy/ccrc.service', 'deploy/verify-service.sh',
   'install.sh',
   'MANIFEST',
+  'build.json',
 ];
 
 describe('build-release.sh: the two refusals, before anything is written', () => {
@@ -304,6 +305,33 @@ describe('build-release.sh: the tagged run — the matched set, checksummed', ()
     // update verb will do after extraction.
     const r = spawnSync(SHA256SUM, ['-c', 'MANIFEST'], { cwd: dest, encoding: 'utf8' });
     expect(r.status, r.stdout + r.stderr).toBe(0);
+  });
+
+  // ── Stage 4, Task 6: the artifact carries its own identity ──────────────
+  // An extracted release tree is not a git repository, so the box-side
+  // stamper (`_inst_stamp`) cannot measure it — it installs THIS file, and
+  // `ccrc update` reports from → to off the same fields. sha/ref are measured
+  // on the release machine from the same HEAD `git archive` shipped; dirty is
+  // false by the dirty-tree refusal; version is the artifact's own name.
+  it('ships build.json stamping the tagged commit — sha=HEAD, dirty:false, version=the tag, MANIFEST-covered', () => {
+    const home = mkTmp('build-release-stamp-');
+    const root = fixtureRepo(home, { tag: 'v1.2.3' });
+    const out = join(home, 'out');
+    expect(runRelease(root, home, ['--out', out]).code).toBe(0);
+    const dest = join(home, 'extracted-stamp');
+    extract(join(out, 'ccrc-v1.2.3.tar.gz'), dest);
+    const stamp = JSON.parse(readFileSync(join(dest, 'build.json'), 'utf8')) as Record<string, unknown>;
+    expect(stamp['sha']).toBe(git(root, 'rev-parse', 'HEAD'));
+    expect(stamp['version']).toBe('v1.2.3');
+    expect(stamp['dirty']).toBe(false);
+    expect(typeof stamp['ref']).toBe('string');
+    expect(stamp['builtAt']).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+    // Covered by the per-file digests like everything else in the set — a
+    // stamp the MANIFEST cannot vouch for is an identity nobody verified.
+    const manifest = readFileSync(join(dest, 'MANIFEST'), 'utf8');
+    const line = manifest.split('\n').find((l) => l.endsWith(' build.json') || l.endsWith('*build.json'));
+    expect(line, 'the MANIFEST does not name build.json').toBeTruthy();
+    expect(line!.slice(0, 64)).toBe(sha256(join(dest, 'build.json')));
   });
 
   it('--untagged names the artifact untagged-<shortsha>, and only with the flag', () => {

@@ -111,6 +111,23 @@ cp -a "$ROOT/server/dist"     "$TOP/server/dist"
 cp -a "$ROOT/server/dist-pwa" "$TOP/server/dist-pwa"
 cp -a "$ROOT/agent/dist"      "$TOP/agent/dist"
 
+# ── build.json: the artifact carries its own identity (stage 4, Task 6) ───
+# An extracted release tree is not a git repository, so the box-side stamper
+# (`ccd/ccrc`'s `_inst_stamp`) cannot measure it — it installs THIS file
+# instead (its shipped-stamp arm), and `ccrc update` reports from → to off
+# the same fields. sha/ref are measured here, on the release machine, from
+# the same HEAD `git archive` just shipped; `dirty` is false BY THE REFUSAL
+# at the top (a dirty tree never reaches this line); `version` is the
+# artifact's own name. Written before the MANIFEST, so the per-file digests
+# cover it like everything else in the set. The field shape is the two
+# stampers' exact shape (deploy.sh `stamp_build`, `_inst_stamp`), which
+# `shared/buildinfo.ts` and `_box_build_fields` both validate.
+printf '{"sha":"%s","ref":"%s","builtAt":"%s","dirty":false,"version":"%s"}\n' \
+  "$(git -C "$ROOT" rev-parse HEAD)" \
+  "$(git -C "$ROOT" rev-parse --abbrev-ref HEAD)" \
+  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  "$VERSION" > "$TOP/build.json"
+
 # ── MANIFEST: every file, per-file sha256 ─────────────────────────────────
 # Generated OUTSIDE the tree then moved in, so `find` can never race its own
 # output; `LC_ALL=C sort` so the line order is a property of the set, not of
