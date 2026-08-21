@@ -556,6 +556,17 @@ ccrc wrappers                        # the other direction: roster → ~/.local/
   no wrappers, no units, no hooks. On a box that has never run `ccrc install`
   there is no installed `ccrc` binary yet, so it runs from the checkout, as
   `bash ccd/ccrc-adopt`; on an installed box it is reachable as `ccrc adopt`.
+
+  **The upstream account may be a launcher script (D-155).** Adopt elects the
+  upstream by counting which binary the generated wrappers `exec`, and it used
+  to refuse the winner if the file started with `#!`. That was a proxy for the
+  hazard it actually meant to catch — electing an *account wrapper*, which would
+  leave those wrappers exec'ing a wrapper — and the proxy stopped tracking the
+  hazard the day a box's `~/.local/bin/claude` became a version-picking,
+  token-injecting launcher instead of the installer's symlink. It now asks the
+  real question: the elected upstream is refused if it sets its own
+  `CLAUDE_CONFIG_DIR`. This is not one box's quirk — an npm- or mise-installed
+  Claude Code lands a `#!` shim at the same path.
 - `ccrc wrappers` goes roster → disk, and is the reason `accounts.json` now
   PRODUCES `~/.local/bin/<id>` rather than merely describing it. **It writes
   only the wrappers ccrc marked as its own** (`shared/mark.mjs`'s provenance
@@ -566,9 +577,24 @@ ccrc wrappers                        # the other direction: roster → ~/.local/
   written, backed up, moved or removed, under any flag. `--dry-run` reports
   without touching anything; `--adopt` takes over a hand-written wrapper that
   already says exactly what the roster says; `--force` overwrites ccrc's own
-  edited files and, after a backup, any foreign file under a generated id —
-  the one thing no flag overrides is `unreadable`. Orphans — a marked wrapper
-  the roster no longer names — are reported and never removed.
+  edited files and, after a backup, any foreign file **that this reader can
+  parse as a wrapper** under a generated id. Orphans — a marked wrapper the
+  roster no longer names — are reported and never removed.
+
+  **Four things no flag overrides:** `unreadable`; `oversize` (D-81); a foreign
+  file this reader cannot parse as a wrapper at all (D-155); and any id that
+  another file already on disk `exec`s as its upstream binary (D-156, "lock 5").
+  The last two exist because the sentence above about `upstream` accounts is
+  conditional on the ROSTER, not on the path: it holds while the roster says
+  which id is upstream, and a mis-edited roster is internally consistent, so
+  every other lock believes it. Measured on the reference box — where
+  `~/.local/bin/claude` is a launcher script rather than the installer's symlink
+  — flipping that id to `generated` and running `ccrc wrappers --force`
+  overwrote the launcher and exited 0, closing an exec loop across every lane at
+  once. And `--force` was never the only route: obeying ccrc's own "move it
+  aside and re-run" remedy makes the path `absent`, which the absent arm writes
+  with no flag at all. Lock 5 is keyed on the OTHER files precisely so that
+  moving the subject file away does not defeat it.
 - `CCRC_ACCOUNTS` (in `~/.ccrc/ccrc.env`) overrides where the **server** reads
   the roster from. `ccd` has no such override on purpose: it derives the path
   from `HOME` alone, so a stray `Environment=` cannot run a live box against

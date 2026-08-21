@@ -42,7 +42,7 @@ import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import {
   chmodSync, closeSync, existsSync, ftruncateSync, mkdirSync, openSync, readdirSync, readFileSync,
-  statSync, writeFileSync,
+  renameSync, statSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -464,6 +464,347 @@ describe('ccrc wrappers: a file ccrc did NOT write', () => {
     expect(readFileSync(p, 'utf8')).toBe(text);
     expect(backupsFor(home, 'claude2')).toEqual([]);
     expect(r.stdout).not.toMatch(/--force/);
+  });
+
+  // ── D-156: `foreign` was one classify covering two different sentences ───
+  //
+  // The reference box's `~/.local/bin/claude` is a 2741-byte LAUNCHER: it picks
+  // which installed version to run and injects the upstream account's OAuth
+  // token. It is under OVERSIZE_BYTES, so `gen-wrappers` reads it; it carries
+  // no ccrc marker, so it classifies `foreign`; and `_wrap_parse_shape` answers
+  // `no`. Until D-156 that landed in the same arm as "a wrapper that says
+  // something else", which honours `--force` — so one flag under a mis-edited
+  // roster overwrote it with a two-line wrapper ending
+  // `exec "$HOME/.local/bin/claude" "$@"` — itself — while claude2,
+  // claude-corp and claude-dev0 all exec that same path. A fleet-wide exec
+  // loop, from one flag.
+  //
+  // Until 2026-08-20 the only thing preventing that was the file's SIZE: at
+  // ~334 MB it classified `oversize`, which no flag overrides. Shrinking the
+  // file to 2.7 KB removed a lock nobody had written down.
+  const UPSTREAM_LAUNCHER = [
+    '#!/usr/bin/env bash',
+    '# picks the newest installed version and injects an OAuth token',
+    'set -euo pipefail',
+    'shopt -s nullglob',
+    'vers=("$HOME/.local/share/claude/versions"/*)',
+    'newest="${vers[-1]}"',
+    'CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/.cc-secrets/upstream-oauth.token")"',
+    'export CLAUDE_CODE_OAUTH_TOKEN',
+    'exec "$newest" "$@"',
+    '',
+  ].join('\n');
+
+  // MUTATION MEASURED (2026-08-21): folding the split back — `elif [ "$dok" =
+  // ok ]` -> `elif true`, i.e. the pre-D-156 single arm that honours `--force`
+  // — reds two of the three cases below and nothing else:
+  //   2 failed | 44 passed  (`ccrc-wrappers`)
+  // The two are (a) and the explicit MUTATION case; the `--force`-still-works
+  // case stays green, which is the point of having it.
+  //
+  // MUTATION MEASURED (2026-08-21), the OTHER direction: over-correcting —
+  // killing `--force` in the `dok = ok` arm as well, i.e. "refuse everything
+  // foreign" — reds exactly the opposite one:
+  //   1 failed | 45 passed  (`ccrc-wrappers`)
+  // So the pair discriminates the narrowing from a blanket ban. Neither
+  // measurement is a claim about coverage this suite does not have: before
+  // D-156 the `--force`-on-foreign arm (`ccd/ccrc`, the old :1523-1524) was
+  // reached by ZERO tests in this file — every `--force` case here was
+  // `ccrc-edited`, `unreadable`, `oversize`, or a stub manifest — so the
+  // capability was live and unpinned. Both mutants restored afterwards.
+  it('refuses a foreign file it cannot parse AS A WRAPPER, under --force --adopt too (D-156)', () => {
+    const home = makeHome('ccrc-wrappers-foreign-unparseable-');
+    const p = join(binOf(home), 'claude2');
+    writeFileSync(p, UPSTREAM_LAUNCHER, { mode: 0o755 });
+
+    const r = runWrappers(home, ['--force', '--adopt']);
+    expect(r.code, `stdout:\n${r.stdout}`).toBe(1);
+    expect(readFileSync(p, 'utf8')).toBe(UPSTREAM_LAUNCHER);
+    expect(backupsFor(home, 'claude2')).toEqual([]);
+    expect(r.stdout).toMatch(/^REFUSE claude2: /m);
+    // ITS OWN sentence, not the shared foreign one and not the catch-all's:
+    // folding this arm back into the `dok = ok` arm restores the defect, and a
+    // bare exit-1 assertion would stay green straight through that fold.
+    expect(r.stdout).toMatch(/cannot parse it as a wrapper at all/);
+    expect(r.stdout).not.toMatch(/which this verb does not know/);
+    const remedy = remedyAfter(r.stdout, /^REFUSE claude2: /);
+    expect(remedy).toMatch(/^ {2}remedy: /);
+    expect(remedy).toMatch(/No flag overrides this one\./);
+    expect(remedy).not.toMatch(/--force/);
+    expect(r.stdout).not.toMatch(/--force/);
+  });
+
+  it('--force still rewrites a foreign file that IS a wrapper — D-156 narrows the arm, it does not close it', () => {
+    // The other side of cut 2, and the reason it is a `dok` test rather than a
+    // blanket ban: when ccrc can parse the file it can name every field it
+    // would replace, and `--force` answers a question ccrc actually asked.
+    // Without this case, "refuse everything foreign" passes the two cases
+    // around it and silently removes a capability the README documents.
+    const home = makeHome('ccrc-wrappers-foreign-ne-force-');
+    const p = join(binOf(home), 'claude2');
+    writeFileSync(p, divergentText, { mode: 0o755 });
+
+    const r = runWrappers(home, ['--force']);
+    expect(r.code, `stdout:\n${r.stdout}\nstderr:\n${r.stderr}`).toBe(0);
+    expect(readFileSync(p, 'utf8')).toBe(bodyFor(MIGRATION, 'claude2'));
+    const backups = backupsFor(home, 'claude2');
+    expect(backups).toHaveLength(1);
+    expect(readFileSync(join(binOf(home), backups[0] ?? ''), 'utf8')).toBe(divergentText);
+    expect(r.stdout).toMatch(/^REWRITE claude2: /m);
+  });
+
+  it('MUTATION: the parse gate is what stops --force clobbering an unparseable launcher (D-156)', () => {
+    // Written as "did it write?" rather than "did it refuse?" so it cannot be
+    // satisfied by any refusal that happens to arrive for a different reason.
+    const home = makeHome('ccrc-wrappers-foreign-dok-mutation-');
+    const p = join(binOf(home), 'claude2');
+    writeFileSync(p, UPSTREAM_LAUNCHER, { mode: 0o755 });
+
+    const r = runWrappers(home, ['--force']);
+    expect(r.stdout).not.toMatch(/^REWRITE claude2: /m);
+    expect(readFileSync(p, 'utf8')).toBe(UPSTREAM_LAUNCHER);
+    expect(binEntries(home).filter((n) => n.startsWith('claude2.'))).toEqual([]);
+  });
+});
+
+// ── D-156: LOCK 5, THE WITNESS INDEX ──────────────────────────────────────
+//
+// D-156 (cut 2) closed the `--force` door on a file this reader cannot parse.
+// It does NOT close the door ccrc's own remedy opens: "move it aside and
+// re-run" makes the path `absent`, and the absent arm writes with NO FLAG AT
+// ALL — after which the file is `ccrc-unmodified` and is rewritten on every
+// roster change for ever. `ccrc install` reaches that path too.
+//
+// Lock 5 is the only one of the five whose evidence is OTHER FILES: it refuses
+// to write `~/.local/bin/<id>` while anything else already on disk execs that
+// id as its upstream binary. That is what survives the subject file being
+// moved aside — the witnesses are still there — and it is why locks 2 and 4
+// cannot substitute for it: both key on `execKind === 'generated'`, so one bug
+// in that predicate defeats them together, and neither looks at the disk.
+// MUTATION MEASURED (2026-08-21), four mutants, restored between each, full
+// `ccrc-wrappers` run every time (baseline 54/54):
+//   1. the witness refusal never fires (`if [ -n "$wit" ]` -> `if false`)
+//        2 failed | 52 passed — the move-aside case and the ordering case.
+//   2. the blind-index arm falls open (`if [ -n "$wit_blind" ]` -> `if false`)
+//        1 failed | 53 passed — the unreadable-candidate case, alone.
+//   3. `foreign` skips the pre-table gate (added to the `unreadable|oversize`
+//      arm), so the foreign arm speaks instead
+//        1 failed | 53 passed — the ordering case, alone. This is what makes
+//        "the old `move it aside` remedy is not a lie" a mechanism rather than
+//        an argument: the sentence is not reworded, it is made unreachable.
+//   4. the strict-parse requirement dropped, so any shebang file is a witness
+//        11 failed | 43 passed — and NOT the cases above. An over-broad witness
+//        predicate wedges a legitimate box, which is the failure mode the
+//        negative half of this lock has no direct assertion for; mutant 4 is
+//        the closest thing to a proof that the narrowing is load-bearing.
+//
+// Stated so the table claims no coverage it does not have: the "under every
+// flag" case, the termination case and the roster-flip half of the legitimate
+// box case all stay GREEN under mutant 1, because D-156's cut 2 already refuses
+// that file on its own. Their value is as guards against BOTH locks regressing,
+// not as evidence for this one.
+describe('ccrc wrappers: the witness lock (D-156)', () => {
+  /** The reference box's `~/.local/bin/claude`: a launcher that picks a version
+   *  and injects a token, deliberately never matching
+   *  `_wrap_declares_config_dir`'s regex. Padded past 2 KB so it is the size
+   *  the real one is — small enough to be READ (so it classifies `foreign`,
+   *  not `oversize`), which is the whole shape of the defect. */
+  const LAUNCHER = [
+    '#!/usr/bin/env bash',
+    '# Launcher: picks the newest installed version and injects an OAuth token.',
+    ...Array.from({ length: 40 }, (_, i) => `# padding line ${i} — the real launcher is 2741 bytes of exactly this kind of prose.`),
+    'set -euo pipefail',
+    'shopt -s nullglob',
+    'vers=("$HOME/.local/share/claude/versions"/*)',
+    'newest="${vers[-1]:-}"',
+    '[ -n "$newest" ] || { echo "no installed version" >&2; exit 127; }',
+    'exec "$newest" "$@"',
+    '',
+  ].join('\n');
+
+  /** MIGRATION with the upstream moved off `claude` — the mis-edit. `claude`
+   *  becomes a generated account (so it gets a `wrapper` record and is written)
+   *  and `claude2` becomes the upstream. parseRoster still sees exactly one. */
+  function misEdited(): Roster {
+    const r = clone(MIGRATION);
+    for (const a of r.accounts) {
+      if (a.id === 'claude') a.exec = { kind: 'generated' };
+      if (a.id === 'claude2') a.exec = { kind: 'upstream' };
+    }
+    return r;
+  }
+
+  /** A converged reference box: the three generated wrappers as ccrc writes
+   *  them, then the launcher planted at the upstream path. */
+  function seededBox(prefix: string): string {
+    const home = makeHome(prefix);
+    expect(runWrappers(home).code).toBe(0);
+    writeFileSync(join(binOf(home), 'claude'), LAUNCHER, { mode: 0o755 });
+    return home;
+  }
+
+  it('refuses to write an id that other wrappers on disk already exec — under every flag', () => {
+    const home = seededBox('ccrc-wrappers-witness-flags-');
+    putRoster(home, misEdited());
+    const p = join(binOf(home), 'claude');
+
+    for (const flags of [[], ['--force'], ['--adopt'], ['--force', '--adopt'], ['--dry-run']]) {
+      const r = runWrappers(home, flags);
+      expect(r.code, `flags=${JSON.stringify(flags)} stdout:\n${r.stdout}`).toBe(1);
+      expect(r.stdout, `flags=${JSON.stringify(flags)}`).toMatch(/^REFUSE claude: /m);
+      expect(remedyAfter(r.stdout, /^REFUSE claude: /)).toMatch(/No flag overrides this one/);
+      expect(readFileSync(p, 'utf8')).toBe(LAUNCHER);
+      expect(backupsFor(home, 'claude')).toEqual([]);
+    }
+  });
+
+  it('closes the move-aside hole: the witnesses refuse the write even once the file is gone', () => {
+    // THE POINT OF THE WHOLE LOCK. Before D-156, obeying ccrc's own printed
+    // remedy made the path `absent`, and the absent arm writes with no flag.
+    const home = seededBox('ccrc-wrappers-witness-moveaside-');
+    putRoster(home, misEdited());
+    renameSync(join(binOf(home), 'claude'), join(binOf(home), 'claude.saved-x'));
+
+    const r = runWrappers(home);                       // NO FLAGS
+    expect(r.code, r.stdout).toBe(1);
+    expect(r.stdout).toMatch(/^REFUSE claude: /m);
+    expect(existsSync(join(binOf(home), 'claude'))).toBe(false);
+    expect(remedyAfter(r.stdout, /^REFUSE claude: /)).toMatch(/Moving the file aside does NOT help/);
+  });
+
+  it('speaks BEFORE the foreign arm, so ccrc never prints a remedy that would break the box', () => {
+    // The placement guard. `move it aside` is still the right remedy for a
+    // foreign file nothing execs, so it is not reworded — instead the witness
+    // gate is placed above the decision table, which makes that sentence
+    // unreachable for a witnessed id. Moving the gate below the table brings
+    // it back, and reds this.
+    const home = seededBox('ccrc-wrappers-witness-ordering-');
+    putRoster(home, misEdited());
+
+    const r = runWrappers(home);
+    expect(r.stdout).toMatch(/^REFUSE claude: /m);
+    expect(r.stdout).not.toContain('move it aside');
+    expect(r.stdout).not.toContain('it is not the wrapper this roster describes');
+  });
+
+  it('leaves a legitimate box entirely alone, and the same box refuses once the roster is wrong', () => {
+    // The negative half — "a correct box still converges" — has no mutation of
+    // its own: deleting the lock passes it too, because silence and absence
+    // look identical from outside. The final flip is the honest proxy: it
+    // proves the index built on THIS box could name `claude`, so the silence
+    // above was a decision rather than an absence. Under deletion, it reds.
+    const home = seededBox('ccrc-wrappers-witness-legit-');
+    // A box with the noise a real one carries: a bespoke launcher execing the
+    // upstream, its symlink alias, a big marked script, a non-script blob, and
+    // a dated backup.
+    const bin = binOf(home);
+    writeFileSync(join(bin, 'ccgpt'), `${bespokeLauncher('.claude-gpt')}\nexec "$HOME/.local/bin/claude" "$@"\n`, { mode: 0o755 });
+    symlinkSync('ccgpt', join(bin, 'gpt'));
+    writeFileSync(join(bin, 'ccd'), `#!/usr/bin/env bash\n${'# filler\n'.repeat(90000)}`, { mode: 0o755 });
+    writeFileSync(join(bin, 'bigblob'), Buffer.alloc(2 * 1024 * 1024, 0x41), { mode: 0o755 });
+    writeFileSync(join(bin, 'claude2.bak-20260805-181306'), readFileSync(join(bin, 'claude2')));
+
+    const before = binEntries(home);
+    const mt = Object.fromEntries(before.map((n) => [n, statSync(join(bin, n)).mtimeMs]));
+
+    const r = runWrappers(home);
+    expect(r.code, r.stdout).toBe(0);
+    expect(r.stdout).not.toMatch(/^REFUSE/m);
+    for (const id of GENERATED_IDS) expect(r.stdout).toMatch(new RegExp(`^CONVERGED ${id}: `, 'm'));
+    expect(binEntries(home)).toEqual(before);
+    for (const n of before) expect(statSync(join(bin, n)).mtimeMs, n).toBe(mt[n]);
+
+    putRoster(home, misEdited());
+    const r2 = runWrappers(home);
+    expect(r2.code, r2.stdout).toBe(1);
+    expect(r2.stdout).toMatch(/^REFUSE claude: /m);
+  });
+
+  it('MUTATION: without the lock the box stops terminating — so the assertion is that it exits', () => {
+    // The measured failure is not a lost file, it is a box that never exits:
+    // claude2/claude-corp/claude-dev0 all end `exec "$HOME/.local/bin/claude"`,
+    // so a generated wrapper written AT `claude` closes an exec loop across
+    // every lane at once. A byte-equality assertion would go green for the
+    // wrong reason; this runs the thing.
+    const home = seededBox('ccrc-wrappers-witness-terminates-');
+    putRoster(home, misEdited());
+
+    const r = runWrappers(home, ['--force']);
+    expect(r.code, r.stdout).toBe(1);
+    expect(r.stdout).toMatch(/^REFUSE claude: /m);
+
+    const run = spawnSync('bash', ['-c', `exec "${join(binOf(home), 'claude')}" --version`],
+      { env: wrappersEnv(home), encoding: 'utf8', timeout: 5000 });
+    expect(run.signal, 'the wrapper chain never terminated — an exec loop').toBe(null);
+    expect(run.status, 'it must EXIT; the code itself is whatever the launcher does').not.toBe(null);
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'refuses every write when it cannot read an id-shaped file, rather than guessing what execs what', () => {
+      // Fail closed: a file this run could not read might exec anything, so it
+      // cannot prove nothing execs the id it is about to write.
+      const home = seededBox('ccrc-wrappers-witness-blind-');
+      const mystery = join(binOf(home), 'mystery');
+      writeFileSync(mystery, '#!/usr/bin/env bash\nexec "$HOME/.local/bin/claude" "$@"\n');
+      chmodSync(mystery, 0o000);
+
+      const r = runWrappers(home, ['--force']);
+      expect(r.code, r.stdout).toBe(1);
+      for (const id of GENERATED_IDS) expect(r.stdout).toMatch(new RegExp(`^REFUSE ${id}: `, 'm'));
+      expect(remedyAfter(r.stdout, /^REFUSE claude2: /)).toMatch(/No flag overrides this one/);
+
+      chmodSync(mystery, 0o644);
+      expect(runWrappers(home).code).toBe(0);
+    });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'lets the unreadable ARM speak for an unreadable write target, not the blind-index one', () => {
+      // The regression that caught the first prototype: a mode-000 file AT a
+      // write-target path is both an unreadable candidate and a record with its
+      // own table verdict, and the table's voice is the right one — its remedy
+      // is pinned elsewhere in this file.
+      const home = seededBox('ccrc-wrappers-witness-unreadable-target-');
+      const p = join(binOf(home), 'claude2');
+      chmodSync(p, 0o000);
+
+      const r = runWrappers(home);
+      expect(r.code).toBe(1);
+      const remedy = remedyAfter(r.stdout, /^REFUSE claude2: /);
+      expect(remedy).toMatch(/No flag overrides this one/);
+      expect(remedy).not.toMatch(/so it cannot tell/);
+      chmodSync(p, 0o600);
+    });
+
+  it('refuses the whole run when stat is not on PATH, having written nothing', () => {
+    // EVERY other tool stays on PATH — a stub holding symlinks to all of them
+    // and to nothing named `stat`. The first draft of this test planted only a
+    // handful and passed VACUOUSLY: the run died on a missing `mkdir`, and the
+    // `/stat/` assertion matched the fixture's own tmp path, which had "nostat"
+    // in it. Hence both the exhaustive stub and the distinctive phrase below.
+    const home = seededBox('ccrc-wrappers-witness-nogauge-');
+    const before = binEntries(home);
+    const stub = join(home, 'gauge-less-bin');
+    mkdirSync(stub, { recursive: true });
+    const seen = new Set<string>();
+    for (const dir of (process.env.PATH ?? '').split(':').filter(Boolean)) {
+      if (!existsSync(dir)) continue;
+      for (const name of readdirSync(dir)) {
+        if (name === 'stat' || seen.has(name)) continue;
+        seen.add(name);
+        try { symlinkSync(join(dir, name), join(stub, name)); } catch { /* first wins */ }
+      }
+    }
+    expect(existsSync(join(stub, 'mkdir')), 'the stub must be complete but for stat').toBe(true);
+    expect(existsSync(join(stub, 'stat'))).toBe(false);
+
+    const r = spawnSync('bash', [CCRC, 'wrappers'],
+      { env: { ...wrappersEnv(home), PATH: stub }, encoding: 'utf8' });
+    expect(r.status).not.toBe(0);
+    // The verb's OWN sentence about its OWN dependency — not merely the string
+    // "stat" appearing somewhere, which a tmp path can supply for free.
+    expect(`${r.stdout}${r.stderr}`).toMatch(/stat is required by 'ccrc wrappers'/);
+    expect(`${r.stdout}${r.stderr}`).toMatch(/[Nn]othing was written/);
+    expect(binEntries(home)).toEqual(before);
   });
 });
 
