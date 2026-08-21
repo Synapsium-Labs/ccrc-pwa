@@ -594,7 +594,11 @@ describe('the verification is actually wired into the deploy, and can observe a 
     // the tmux substrate must survive a supervisor restart, and
     // `cmd_supervise` re-enters via `cmd_ensure`, which attaches to a live
     // session rather than spawning a second one.
-    const agentBranch = deploySh.slice(deploySh.indexOf('if [ "$TARGET" = "agent" ]'), deploySh.indexOf('else'));
+    // '\nelse' — the TARGET dispatch's own top-level else (the only line-start
+    // else in the file), NOT a bare indexOf('else'): the bare form matched the
+    // word inside an unrelated comment added 60 lines up and silently EMPTIED
+    // this slice, inverting both ordering pins (stage-4 branch review, D-145).
+    const agentBranch = deploySh.slice(deploySh.indexOf('if [ "$TARGET" = "agent" ]'), deploySh.indexOf('\nelse'));
     expect(agentBranch, 'the agent branch no longer try-restarts claude-session@*')
       .toContain('try-restart "claude-session@*"');
     // After the agent chain, so a broken agent fails the deploy before any
@@ -950,7 +954,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
     expect(mjs.lastIndexOf('renameSync('), 'rename must follow the VACUUM, not precede it')
       .toBeGreaterThan(mjs.indexOf("'VACUUM INTO ?'"));
 
-    const serverBranch = deploySh.slice(deploySh.indexOf('else'));
+    const serverBranch = deploySh.slice(deploySh.indexOf('\nelse'));   // structural anchor — see the agentBranch comment (D-145)
     // The INVOCATION is pinned, not just the guard (review finding: replacing
     // the node call with `|| true` while a comment mentioned the tool's name
     // left the suite green).

@@ -208,6 +208,29 @@ BOX_TREE_DIR="$HOME/ccrc"
 # (D-92.)
 BOX_UNIT_DIR="$HOME/.config/systemd/user"
 
+# ── WHERE A BOX KEEPS ITS BACKUPS (stage 4, Task 6) ───────────────────────
+# `~/ccrc-backups/<ts>/` is deploy's own layout (deploy.sh:33-34: "every
+# backup this run takes lands under the same ~/ccrc-backups/<ts>/ … so a
+# rollback is one directory, not a hunt"), and the timestamp shape below it
+# is `prune_backups`' glob (deploy.sh:68-72) — a backup named outside that
+# shape is a backup the pruner can never reclaim. Spelled once, for the
+# reason every BOX_* path above is: `_upd_backup` WRITES under it and
+# `_upd_report` prints restore commands OUT of it, and two spellings is how
+# the printed command comes to name a directory nothing wrote.
+BOX_BACKUP_ROOT="$HOME/ccrc-backups"
+
+# ── THE RELEASE SOURCE (stage 4, Task 6) ──────────────────────────────────
+# One owner/repo pair, and `install.sh:23-24` spells the same one — a
+# DELIBERATE cross-file second spelling of D-92's class: `install.sh
+# --release` runs before any ccrc exists on the box, so it cannot read this
+# pair, and this file runs on boxes install.sh has long left. The two are
+# held equal by `server/test/ccrc-update.test.ts` (the pin IS the mechanism;
+# a comment would be the promise). `CCRC_RELEASE_BASE_URL` overrides the
+# derived `…/releases` prefix — the same test seam and mirror escape hatch
+# install.sh documents. Stage 5 de-brands the pair in both files at once.
+CCRC_RELEASE_OWNER="example-org"
+CCRC_RELEASE_REPO="ccrc-pwa"
+
 # How long the ONE network call in this file (`GET /api/fleet/health`) may take.
 # Overridable for the reason `deploy/verify-service.sh:56-62` makes its
 # settle/window knobs overridable, and `ccrc-doctor-checks` makes
@@ -225,6 +248,19 @@ BOX_UNIT_DIR="$HOME/.config/systemd/user"
 BOX_BUILD=()
 BOX_HEALTH=()
 BOX_HEALTH_WHY=""
+
+# `cmd_update`'s out-parameters (stage 4, Task 6), declared at file scope for
+# the `set -u` reason the arrays above are: `_upd_fetch` fills the first
+# three, `_upd_backup` the fourth, and `cmd_update`'s tail (and its EXIT
+# trap) read them whether or not the writer ran.
+UPD_STAGE=""
+UPD_TREE=""
+UPD_VERSION=""
+UPD_BACKUP_DIR=""
+# `set -u` out-parameter discipline, same as the UPD_* four above: the _inst_*
+# steps read it, cmd_install overwrites it — a direct _inst_* call must meet a
+# stated default, never an unbound-variable death.
+INST_ROLE=both
 
 # ── WHICH STEPS DEGRADED, so the closing line can say so ──────────────────
 # `cmd_install`'s steps either converge or die — with ONE exception by design,
@@ -244,7 +280,7 @@ INST_DEGRADED=()
 
 usage() {
   cat <<EOF
-usage: $PROG {doctor|status|adopt|wrappers|install|passwd|expose|version}
+usage: $PROG {doctor|status|adopt|wrappers|install|update|uninstall|backup|logs|passwd|expose|version}
 
 The lifecycle CLI for a Claude Code fleet box — installs, updates and
 diagnoses a box, as a sibling to ccd (which drives sessions once one is
@@ -265,7 +301,39 @@ already running).
   install   converge this box from the shipped tree: seed ~/.ccrc config
             (never overwriting yours), install executables, units and hooks,
             generate wrappers, then run doctor. Single-box, localhost.
-            Re-running converges; it never damages an existing install
+            Re-running converges; it never damages an existing install.
+            [--role server|fleet|both] (default both, today's single box).
+            fleet: prompts (tty-only) for the server URL and agent token,
+            writes ~/.ccrc/agent.env 0600 seed-once, and runs
+            ccrc-agent.service instead of ccrc.service. server: today's
+            spine minus nothing — the difference from 'both' is reserved
+            for later stages
+  update    fetch a published release and move this box onto it: verify the
+            download (checksum, then the per-file MANIFEST) before anything
+            changes, back up coord.db, dists, ccd and the units to
+            ~/ccrc-backups/<ts>/, then re-run the install spine from the
+            verified staged tree (role-aware, from ccrc.env's CCRC_ROLE) and
+            print the from -> to report. [--to vX.Y.Z] pins a version — the
+            rollback path too: a downgrade prints the coord.db restore
+            commands and never auto-restores. Never automatic; per box;
+            fleet box first, then the server box
+  uninstall move this box off ccrc, leaving reinstall safe: stop, disable
+            and remove the units (incl. both drop-ins and the slice
+            escape), remove ccrc's managed settings.json hook entries
+            (unmanaged entries survive byte-identically, rewritten files
+            are backed up first), remove marker-verified wrappers ONLY, and
+            remove ccrc's own files in ~/.cc-sessions, ~/ccrc and the
+            executables. PRESERVES ~/.ccrc, the session registry rows,
+            worktrees and ~/ccrc-backups. Refuses while live sessions
+            exist. [--force] proceeds anyway; [--purge] also removes
+            ~/.ccrc and ~/ccrc-backups — never worktrees, never tmux state
+  backup    take update's backup step standalone: coord.db snapshot, dists,
+            ccd and the units to ~/ccrc-backups/<ts>/, then prune to the
+            newest \$CCRC_BACKUP_KEEP (default 10) timestamped backups —
+            hand-made siblings in that directory are never touched
+  logs      this box's service journal: journalctl --user -u ccrc.service
+            (or ccrc-agent.service when ccrc.env records CCRC_ROLE=fleet).
+            [-f] follows, [-n LINES] limits — both pass straight through
   passwd    set (or rotate) this box's PWA passphrase in ~/.ccrc/auth.scrypt.
             Prompts twice on a tty; the gate also needs CCRC_AUTH=on in this
             box's ccrc.env. Rotating invalidates every logged-in SESSION —
@@ -350,7 +418,9 @@ _ccrc_usage_die() { echo "$PROG: unknown argument: $1" >&2; usage >&2; exit 2; }
 # `single-definition` is pointed at that pair.) It answers with a return code
 # per CONDITION, because the callers do different things about each:
 #
-#   0  the stamp parsed  -> BOX_BUILD=(sha ref builtAt true|false)
+#   0  the stamp parsed  -> BOX_BUILD=(sha ref builtAt true|false version)
+#                           (version = "" when the stamp carries none — the
+#                           additive fifth field, stage 4 Task 1)
 #   3  no stamp at all   -> a dev checkout, or a box no deploy has touched
 #   4  the path is there but is not a regular file (a directory, say)
 #   5  jq is not on PATH — a MISSING DEPENDENCY, never a corrupt stamp
@@ -360,21 +430,37 @@ _ccrc_usage_die() { echo "$PROG: unknown argument: $1" >&2; usage >&2; exit 2; }
 # an operator acts on completely differently (`apt install jq` vs. redeploy)
 # must not share one signal.
 #
-# The output is FIVE lines — the four fields and an `END` sentinel — and both
-# are checked. `$( )` strips trailing newlines, so a four-line form would lose
+# The output is SIX lines — the five fields (version as `""` when absent) and
+# an `END` sentinel — and both
+# are checked. `$( )` strips trailing newlines, so a sentinel-less form would lose
 # an empty last field silently; the sentinel makes any truncation loud. A field
 # carrying a control byte (a newline in `ref` would break the line format; a
 # backspace would let the printed sha lie on a terminal) is rejected as
 # unreadable rather than printed — the same rule `_check_wrappers` applies to
 # roster ids, for the same reason.
 _box_build_fields() {
+  # The optional argument (stage 4, Task 6) points this SAME parser at a
+  # stamp that is not the box's own — `_inst_stamp`'s shipped-stamp arm
+  # validates a release artifact's `build.json` before installing it. One
+  # parser, two files, rather than a second jq filter that would come to
+  # disagree with this one about what a well-formed stamp is
+  # (single-definition.test.ts counts the `jq -r` parses in this file and
+  # fails on a second). No caller but that arm passes an argument.
+  local stamp="${1:-$BOX_STAMP_FILE}"
   BOX_BUILD=()
-  [[ -e "$BOX_STAMP_FILE" ]] || return 3
+  [[ -e "$stamp" ]] || return 3
   # Exists but is not a plain file (e.g. a directory) — a shape problem, not
   # an absence; must not be read as "unstamped" (round-1 review, Minor 8).
-  [[ -f "$BOX_STAMP_FILE" ]] || return 4
+  [[ -f "$stamp" ]] || return 4
   command -v jq >/dev/null 2>&1 || return 5
   local out
+  # `version` (stage 4, Task 1) is ADDITIVE: absent on every pre-release stamp
+  # — the `has` arm below accepts that as the ordinary case — and, when
+  # present, held to the same non-empty-string rule as the other three, the
+  # exact split `shared/buildinfo.ts` makes (two validators that disagree
+  # about a well-formed stamp would have this verb printing one the server
+  # refuses to serve). It travels as a fifth line, `""` for absent, so the END
+  # sentinel keeps its truncation duty at index 5.
   out="$(jq -r '
     try (
       if (type == "object")
@@ -382,15 +468,17 @@ _box_build_fields() {
          and (.ref | type == "string") and (.ref | length > 0)
          and (.builtAt | type == "string") and (.builtAt | length > 0)
          and (.dirty | type == "boolean")
-      then "\(.sha)\n\(.ref)\n\(.builtAt)\n\(.dirty)\nEND"
+         and ((has("version") | not)
+              or ((.version | type == "string") and (.version | length > 0)))
+      then "\(.sha)\n\(.ref)\n\(.builtAt)\n\(.dirty)\n\(.version // "")\nEND"
       else empty
       end
     ) catch empty
-  ' -- "$BOX_STAMP_FILE" 2>/dev/null)"
+  ' -- "$stamp" 2>/dev/null)"
   [[ -n "$out" ]] || return 6
   mapfile -t BOX_BUILD <<< "$out"
-  [[ "${#BOX_BUILD[@]}" -eq 5 && "${BOX_BUILD[4]}" == END ]] || { BOX_BUILD=(); return 6; }
-  unset 'BOX_BUILD[4]'
+  [[ "${#BOX_BUILD[@]}" -eq 6 && "${BOX_BUILD[5]}" == END ]] || { BOX_BUILD=(); return 6; }
+  unset 'BOX_BUILD[5]'
   local f
   for f in "${BOX_BUILD[@]}"; do
     [[ "$f" =~ [[:cntrl:]] ]] && { BOX_BUILD=(); return 6; }
@@ -413,6 +501,11 @@ cmd_version() {
   local dirty=""
   [[ "${BOX_BUILD[3]}" == true ]] && dirty=", dirty"
   echo "$PROG ${BOX_BUILD[0]} (${BOX_BUILD[1]}, built ${BOX_BUILD[2]}$dirty)"
+  # The release tag, iff the stamp carries one (stage 4, Task 1) — its own
+  # line, so an unversioned box's output is byte-identical to before.
+  if [[ -n "${BOX_BUILD[4]}" ]]; then
+    echo "version ${BOX_BUILD[4]}"
+  fi
 }
 
 # ── WHERE IS THIS BOX'S SERVER? ───────────────────────────────────────────
@@ -868,7 +961,12 @@ cmd_status() {
     0) local dirty="clean"
        [[ "${BOX_BUILD[3]}" == true ]] && dirty="DIRTY — what runs here is not the commit it names"
        printf 'build:     %s (%s) built %s, %s\n' \
-         "${BOX_BUILD[0]}" "${BOX_BUILD[1]}" "${BOX_BUILD[2]}" "$dirty" ;;
+         "${BOX_BUILD[0]}" "${BOX_BUILD[1]}" "${BOX_BUILD[2]}" "$dirty"
+       # The release tag, iff the stamp carries one (stage 4, Task 1) — its
+       # own fact line; absent field, absent line.
+       if [[ -n "${BOX_BUILD[4]}" ]]; then
+         printf 'version:   %s\n' "${BOX_BUILD[4]}"
+       fi ;;
     3) printf 'build:     unstamped (no %s — no deploy has ever stamped this box)\n' "$BOX_STAMP_FILE" ;;
     4) printf 'build:     unreadable (%s is not a regular file)\n' "$BOX_STAMP_FILE" ;;
     5) printf 'build:     unreadable (jq is not on PATH, so %s cannot be parsed)\n' "$BOX_STAMP_FILE" ;;
@@ -2503,12 +2601,36 @@ cmd_install() {
   # running it. Anything else is a usage error at exit 2, refused BEFORE the
   # first step — an install that half-ran because argument 2 was a typo is
   # worse than one that did not start.
+  # ── `--role server|fleet|both` (Stage 4, Task 5 — D-73 closes) ─────────
+  # The role decides WHICH long-running unit this box gets and whether the
+  # agent's env file is seeded. `both` is the default and is today's exact
+  # single-box behaviour; `fleet` makes this box a fleet host (agent.env +
+  # `ccrc-agent.service`, no server); `server` is today's spine minus nothing
+  # — the difference from `both` is reserved for later stages. A role that is
+  # none of the three is a USAGE error, refused before the first step, with
+  # its own sentence rather than `_ccrc_usage_die`'s "unknown argument" — the
+  # operator typed the right flag and the wrong value, which are two different
+  # mistakes to fix.
+  local role=both
   while [ $# -gt 0 ]; do
     case "$1" in
       -h|--help) usage; exit 0 ;;
+      --role)
+        [ $# -ge 2 ] || { echo "$PROG: --role needs a value: server, fleet or both" >&2; usage >&2; exit 2; }
+        role="$2"; shift ;;
+      --role=*) role="${1#--role=}" ;;
       *) _ccrc_usage_die "$1" ;;
     esac
+    shift
   done
+  case "$role" in
+    server|fleet|both) ;;
+    *) echo "$PROG: unknown --role: $role (expected server, fleet or both)" >&2; usage >&2; exit 2 ;;
+  esac
+  # A GLOBAL, like `INST_DEGRADED` below: the `_inst_*` steps take no
+  # arguments by contract (the spine reads as a sequence), so the one input
+  # that varies a step's behaviour is stated once, here, before any step runs.
+  INST_ROLE="$role"
 
   # BY NAME, ONCE, AND BEFORE THE FIRST STEP — `cmd_wrappers:1069-1076`'s guard,
   # in the same shape and for a sharper version of the same reason. Every step
@@ -2553,6 +2675,7 @@ cmd_install() {
   _inst_roster
   _inst_accounts_sh
   _inst_env
+  _inst_agent_env
   _inst_rc
   _inst_tree
   _inst_bins
@@ -2598,6 +2721,19 @@ cmd_install() {
     [ "${#INST_DEGRADED[@]}" -eq 1 ] && word="step"
     names="$(IFS=', '; printf '%s' "${INST_DEGRADED[*]}")"
     echo "install: done — converged with ${#INST_DEGRADED[@]} degraded $word ($names)"
+  fi
+  # ── THE ROLE GATE ON THE SERVER-ONLY LINES (Stage 4, Task 5) ───────────
+  # The PWA address and the passphrase gate are statements about a SERVER, and
+  # a fleet box runs none: printing either there would send its operator to a
+  # console that does not exist and a passphrase file nothing reads (doctor's
+  # `auth` check SKIPs on that box for exactly this reason). What a fleet box
+  # lands with instead is the one fact its operator needs next: the agent is
+  # up, and the SERVER box's ccrc.env is where the pairing happens.
+  if [ "$INST_ROLE" = fleet ]; then
+    echo "install: agent: fleet role — ccrc-agent.service serves this box; set CCRC_AGENT_URL and CCRC_AGENT_TOKEN in the SERVER box's ccrc.env (CCRC_FLEET=remote) to reach it"
+    echo "install: next: add your first session with: ccd menu   (and read $BOX_ENV_FILE)"
+    cmd_doctor
+    return
   fi
   local host="" port=""
   if [ -f "$BOX_ENV_FILE" ]; then
@@ -2726,8 +2862,79 @@ _inst_env() {   # seed-once, exactly like the roster: the env file is the box's
     printf '%s\n' "CCRC_PORT=7788"
     printf '%s\n' "CCRC_FLEET=local"
     printf '%s\n' "CCRC_PROJECTS_ROOT=$HOME/projects"
+    # The role is RECORDED here rather than inferred (Stage 4, Task 5): the
+    # unit files were the only thing on a box that stated its role at all
+    # (D-73, `_box_role`), and a first-write label makes it a fact the box
+    # carries. Seed-once applies: an existing box keeps its file and the role
+    # stays inferred-with-a-label as today.
+    printf '%s\n' "CCRC_ROLE=$INST_ROLE"
   } > "$tmp" && mv -f "$tmp" "$dest" || { rm -f "$tmp"; _ccrc_die "writing $dest failed"; }
   echo "install: ccrc.env: written (localhost, local fleet mode)"
+}
+
+# ── _inst_agent_env — the fleet role's one credential file (Stage 4, Task 5) ─
+# `~/.ccrc/agent.env` is what `ccrc-agent.service`'s REQUIRED
+# `EnvironmentFile=` reads, and until this step existed it had no local writer
+# at all — which is exactly why `_inst_units` used to refuse the agent's unit
+# outright (D-73: a fleet box had no installer path). Seed-once, like every
+# user-owned file above it: the box's operator edits it (bind address, port,
+# projects root — `deploy/ccrc-agent.env.example` documents the rest) and ccrc
+# never rewrites it.
+#
+# THE PROMPTS ARE TTY-ONLY, `cmd_passwd`'s refusal for `cmd_passwd`'s reason:
+# under `curl … | bash` stdin is the INSTALLER SCRIPT, so a read here would
+# take a line of shell as this fleet's bearer token. The token itself is read
+# with `-s` (never echoed) under the same two traps `cmd_passwd` arms — a
+# Ctrl-C mid-read must not leave the terminal with echo off, and must LEAVE.
+# The seed-once check runs BEFORE the tty gate, so a converged fleet box
+# re-runs (and `ccrc update` re-runs) non-interactively.
+#
+# 0600 VIA `umask 077` ON THE TEMP *AND* `chmod 600` BEFORE THE RENAME: the
+# umask means no instant exists in which the token sits readable at any name,
+# and the chmod is the stated mode (a permissive umask must not widen it).
+_inst_agent_env() {
+  [ "$INST_ROLE" = fleet ] || return 0
+  local dest="$HOME/.ccrc/agent.env"
+  if [ -e "$dest" ]; then
+    echo "install: agent.env: kept (user-owned, never overwritten)"
+    return 0
+  fi
+  [ -t 0 ] \
+    || _ccrc_die "stdin is not a terminal, and --role fleet will not read the agent token from a pipe or a file. Under \`curl … | bash\` stdin is the INSTALLER SCRIPT, so a read here would take a line of shell as this fleet's bearer token. Run 'ccrc install --role fleet' from a terminal. Nothing was written to \$HOME/.ccrc/agent.env."
+  local url="" token=""
+  printf '%s\n' "$PROG: configuring this box as a FLEET host — two values land in \$HOME/.ccrc/agent.env (0600); the token is not echoed; Ctrl-C aborts" >&2
+  if ! IFS= read -rp "Server WS URL (where this fleet's ccrc server runs, e.g. ws://100.64.0.1:7788): " url; then
+    printf '\n' >&2
+    _ccrc_die "no server URL was entered — nothing was written"
+  fi
+  [ -n "$url" ] || _ccrc_die "the server URL is empty — nothing was written"
+  # `cmd_passwd`'s two traps, for its stated reason: one restores echo on ANY
+  # exit, the other restores it and LEAVES on Ctrl-C — a single handler that
+  # only ran `stty echo` would turn Ctrl-C into "echo back on, prompt still
+  # running", i.e. the token typed in cleartext.
+  trap 'stty echo 2>/dev/null' EXIT
+  trap 'stty echo 2>/dev/null; printf "\n" >&2; exit 130' INT TERM
+  if ! IFS= read -rsp "Agent token (becomes CCRC_AGENT_TOKEN — the bearer the server must present; generate with: openssl rand -hex 32): " token; then
+    printf '\n' >&2
+    _ccrc_die "no agent token was entered — nothing was written"
+  fi
+  printf '\n' >&2
+  trap - EXIT INT TERM
+  [ -n "$token" ] || _ccrc_die "the agent token is empty — nothing was written"
+  local tmp="$dest.tmp.$$"
+  if ! (
+    umask 077
+    {
+      printf '%s\n' "# ccrc fleet-box agent config — written once by 'ccrc install --role fleet'; edit freely, ccrc never rewrites it."
+      printf '%s\n' "# Keys and defaults: deploy/ccrc-agent.env.example in the shipped tree."
+      printf '%s\n' "CCRC_AGENT_TOKEN=$token"
+      printf '%s\n' "CCRC_SERVER_URL=$url"
+    } > "$tmp"
+  ) || ! chmod 600 "$tmp" || ! mv -f "$tmp" "$dest"; then
+    rm -f "$tmp"
+    _ccrc_die "writing $dest failed"
+  fi
+  echo "install: agent.env: written (0600 — CCRC_AGENT_TOKEN and CCRC_SERVER_URL set; neither value is ever printed)"
 }
 
 _inst_rc() {   # seed-once, the third file on the user-owned side of the rule
@@ -3091,6 +3298,33 @@ _inst_files() {   # the artifacts the box RUNS that are not on PATH
   echo "install: files: session hooks, notify.sh, tmux.conf and the statusline in place"
 }
 
+# ── _inst_stamp_shipped — the release-artifact arm (stage 4, Task 6) ──────
+# A box installing from an extracted release tarball has no repository to
+# measure — `git rev-parse` fails there BY DESIGN — but the artifact carries
+# its identity: `deploy/build-release.sh` writes `build.json` (sha, ref,
+# builtAt, dirty:false, version) into the tree it tars, and the per-file
+# MANIFEST covers it. When the git measurement is impossible and the tree
+# ships that stamp, installing it IS a measurement — of the artifact, made on
+# the release machine, verified file-by-file on this box before this step
+# ran. It is validated through `_box_build_fields` (this file's ONE stamp
+# parser — a second jq filter here is exactly what single-definition.test.ts
+# forbids) and a stamp that does not parse is refused, falling through to the
+# caller's ordinary skip line. The GIT measurement still wins whenever it is
+# possible: a checkout's own state is the truth about a checkout, and a
+# stray build.json beside a real repository must never outvote it.
+_inst_stamp_shipped() {
+  local shipped="$CCRC_HERE/../build.json"
+  [ -f "$shipped" ] || return 1
+  _box_build_fields "$shipped" || return 1
+  mkdir -p "${BOX_STAMP_FILE%/*}" || _ccrc_die "cannot create ${BOX_STAMP_FILE%/*}"
+  _inst_atomic "$shipped" "$BOX_STAMP_FILE" 644
+  local said=""
+  [ "${BOX_BUILD[3]}" = true ] && said=", dirty"
+  [ -n "${BOX_BUILD[4]}" ] && said="$said, ${BOX_BUILD[4]}"
+  echo "install: stamp: ${BOX_BUILD[0]} (${BOX_BUILD[1]}$said, shipped in the release artifact)"
+  return 0
+}
+
 _inst_stamp() {   # what this box is RUNNING, stated by the box itself
   # `deploy.sh:75-93`'s `stamp_build`, translated to one machine. Until this
   # step existed the ONLY writer of `~/.ccrc/build.json` was a deploy, so a box
@@ -3135,18 +3369,23 @@ _inst_stamp() {   # what this box is RUNNING, stated by the box itself
   # for the same reason ("a backspace would let the printed sha lie on a
   # terminal"), and a git that writes a megabyte of stderr must not become the
   # install transcript.
-  local src sha ref dirty tmp why rc=0 dest="$BOX_STAMP_FILE"
+  local src sha ref dirty version vfield tmp why rc=0 dest="$BOX_STAMP_FILE"
   src="$CCRC_HERE/.."
   if ! command -v git >/dev/null 2>&1; then
+    _inst_stamp_shipped && return 0
     echo "install: stamp: skipped (no git on PATH) — ccrc version will say unstamped"
     return 0
   fi
   sha="$(git -C "$src" rev-parse HEAD 2>/dev/null)" || rc=$?
   if [ "$rc" -eq 0 ] && [ -z "$sha" ]; then
+    _inst_stamp_shipped && return 0
     echo "install: stamp: skipped (git rev-parse HEAD exited 0 but printed no sha) — ccrc version will say unstamped"
     return 0
   fi
   if [ "$rc" -ne 0 ]; then
+    # The one ORDINARY landing of the shipped-stamp arm: an extracted release
+    # tarball is exactly "a tree git refuses to call a repository".
+    _inst_stamp_shipped && return 0
     # A SECOND invocation, reached only because the first one failed, and only
     # to read the diagnosis the first one discarded. Capturing both streams from
     # one call needs a temp file or fd juggling, for a saving of one process on
@@ -3168,32 +3407,44 @@ _inst_stamp() {   # what this box is RUNNING, stated by the box itself
   else
     dirty=true
   fi
+  # Stage 4, Task 1: the release tag rides as an ADDITIVE fifth field, present
+  # iff a vX.Y.Z tag points at the installed commit — `deploy.sh`'s own
+  # derivation, translated to this machine. Only the release shape qualifies
+  # (which also keeps refname characters a JSON string can't carry, like `"`,
+  # out of the stamp); no match is the ordinary case, not a failure.
+  version="$(git -C "$src" tag --points-at HEAD 2>/dev/null \
+    | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1)" || version=""
+  vfield=""
+  [ -n "$version" ] && vfield=",\"version\":\"$version\""
   mkdir -p "${dest%/*}" || _ccrc_die "cannot create ${dest%/*}"
   tmp="$dest.tmp.$$"
-  printf '{"sha":"%s","ref":"%s","builtAt":"%s","dirty":%s}\n' \
-    "$sha" "$ref" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$dirty" > "$tmp" \
+  printf '{"sha":"%s","ref":"%s","builtAt":"%s","dirty":%s%s}\n' \
+    "$sha" "$ref" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$dirty" "$vfield" > "$tmp" \
     && chmod 644 "$tmp" && mv -f "$tmp" "$dest" \
     || { rm -f "$tmp"; _ccrc_die "writing $dest failed"; }
   local said=""
   [ "$dirty" = true ] && said=", dirty"
+  [ -n "$version" ] && said="$said, $version"
   echo "install: stamp: $sha ($ref$said)"
 }
 
-# ── _inst_units — the unit files, and the one this box must NOT be given ──
-# `deploy.sh:402-417`'s copy set, minus one, plus the escape that set records.
+# ── _inst_units — the unit files, and the one this box's ROLE decides ─────
+# `deploy.sh:402-417`'s copy set, role-gated, plus the escape that set records.
 #
-# ── WHY `ccrc-agent.service` IS DELIBERATELY ABSENT ───────────────────────
-# It is the only unit in that set this verb refuses to install, and the reason
-# is one character: `deploy/ccrc-agent.service:6` is `EnvironmentFile=%h/.ccrc/agent.env`
-# with NO leading `-`, i.e. REQUIRED. `deploy.sh agent` ships it to a box whose
-# other steps write `agent.env`; `ccrc install` converges a SINGLE box in local
-# mode, which has no agent and no `agent.env` — so installing the unit here
-# manufactures a unit systemd refuses to start, on a box that needs no agent at
-# all. A failing unit is worse than an absent one: it is a red line in every
-# `systemctl --user` listing and in doctor's own `services` check, describing a
-# thing the operator never asked for. (Compare `deploy/ccrc.service:12`, whose
-# `EnvironmentFile=-%h/.ccrc/ccrc.env` carries the dash and therefore boots on a
-# box with no env file at all.)
+# ── THE ROLE GATE THAT REPLACED THE BLANKET `ccrc-agent.service` REFUSAL ──
+# This verb used to refuse the agent's unit OUTRIGHT, and the reason was one
+# character: `deploy/ccrc-agent.service:6` is `EnvironmentFile=%h/.ccrc/agent.env`
+# with NO leading `-`, i.e. REQUIRED — and no step here wrote `agent.env`, so
+# installing the unit manufactured one systemd refuses to start, a red line in
+# every `systemctl --user` listing describing a thing the operator never asked
+# for. Stage 4's Task 5 keeps that reasoning and moves the gate onto the ROLE:
+# `--role fleet` now WRITES `agent.env` (`_inst_agent_env`, seed-once, before
+# this step runs), so on a fleet box the required file exists by the time the
+# unit lands — and it is `ccrc.service` that must not be given to THAT box,
+# because a fleet host runs no server. Every other role keeps today's exact
+# set: `ccrc.service` in, agent unit out. (Compare `deploy/ccrc.service:12`,
+# whose `EnvironmentFile=-%h/.ccrc/ccrc.env` carries the dash and therefore
+# boots on a box with no env file at all.)
 #
 # ── THE `\x2d` IN THE DESTINATION IS LOAD-BEARING ────────────────────────
 # `deploy.sh:404-407` states it and this is the same fact from the other side:
@@ -3204,7 +3455,8 @@ _inst_stamp() {   # what this box is RUNNING, stated by the box itself
 # Inside double quotes bash keeps the backslash (`\x` is not one of the four
 # sequences it consumes there), so the literal below IS the directory name.
 _inst_units() {
-  local tree="$BOX_TREE_DIR" dir="$BOX_UNIT_DIR"
+  local tree="$BOX_TREE_DIR" dir="$BOX_UNIT_DIR" role_unit=ccrc.service
+  [ "$INST_ROLE" = fleet ] && role_unit=ccrc-agent.service
   local slice="$dir/app-claude\x2dsession.slice.d"
   mkdir -p "$dir" "$dir/claude-session@.service.d" "$slice" \
     || _ccrc_die "cannot create $dir and its drop-in directories"
@@ -3212,7 +3464,7 @@ _inst_units() {
   # rename for a sharper version of `_inst_atomic`'s own reason — `daemon-reload`
   # below reads whatever is at these paths the instant it runs, and half a unit
   # file parses as a broken unit rather than as no unit at all.
-  _inst_atomic "$tree/deploy/ccrc.service" "$dir/ccrc.service" 644
+  _inst_atomic "$tree/deploy/$role_unit" "$dir/$role_unit" 644
   _inst_atomic "$tree/ccd/claude-session@.service" "$dir/claude-session@.service" 644
   _inst_atomic "$tree/deploy/systemd/ccd-cap-scopes.service" "$dir/ccd-cap-scopes.service" 644
   _inst_atomic "$tree/deploy/systemd/ccd-cap-scopes.timer" "$dir/ccd-cap-scopes.timer" 644
@@ -3220,7 +3472,7 @@ _inst_units() {
     "$dir/claude-session@.service.d/limits.conf" 644
   _inst_atomic "$tree/deploy/systemd/app-claude-session.slice.d/limits.conf" \
     "$slice/limits.conf" 644
-  echo "install: units: ccrc.service, claude-session@.service, ccd-cap-scopes.{service,timer} and both drop-ins in \$HOME/.config/systemd/user"
+  echo "install: units: $role_unit, claude-session@.service, ccd-cap-scopes.{service,timer} and both drop-ins in \$HOME/.config/systemd/user"
 }
 
 # ── _inst_enable — ask systemd to read them, then prove one stayed up ─────
@@ -3256,12 +3508,19 @@ _inst_units() {
 # SERVICE. The `CCRC_VERIFY_*` knobs are the script's own (settle, window, log
 # lines) and are honoured here by not being touched.
 _inst_enable() {
+  # THE ROLE'S UNIT, `_inst_units`' own gate applied to the asking side: on a
+  # fleet box the long-running unit this step must enable, restart and verify
+  # is the agent's, and `ccrc.service` — which that box was never given — must
+  # never appear in a systemctl argv here. Every message below is templated on
+  # the same variable so the remedy always names the unit this box actually has.
+  local main=ccrc.service
+  [ "$INST_ROLE" = fleet ] && main=ccrc-agent.service
   : "${XDG_RUNTIME_DIR:=/run/user/$UID}"; export XDG_RUNTIME_DIR
   : "${DBUS_SESSION_BUS_ADDRESS:=unix:path=${XDG_RUNTIME_DIR}/bus}"; export DBUS_SESSION_BUS_ADDRESS
   systemctl --user daemon-reload \
-    || _ccrc_die "systemctl --user daemon-reload failed, so systemd never read the units this run installed — read what it says: systemctl --user status ccrc.service"
+    || _ccrc_die "systemctl --user daemon-reload failed, so systemd never read the units this run installed — read what it says: systemctl --user status $main"
   local u
-  for u in ccrc.service ccd-cap-scopes.timer; do
+  for u in "$main" ccd-cap-scopes.timer; do
     systemctl --user enable --now "$u" \
       || _ccrc_die "systemctl --user enable --now $u failed — read what it says: systemctl --user status $u"
   done
@@ -3292,14 +3551,14 @@ _inst_enable() {
   # verb must never touch (CLAUDE.md). Deploy's supervisor sweep is a fleet-host
   # operation with its own KillMode preflight; a single-box installer does not
   # inherit it.
-  systemctl --user restart ccrc.service \
-    || _ccrc_die "systemctl --user restart ccrc.service failed, so this box is still running the server the previous install started — read what it says: systemctl --user status ccrc.service"
+  systemctl --user restart "$main" \
+    || _ccrc_die "systemctl --user restart $main failed, so this box is still running the server the previous install started — read what it says: systemctl --user status $main"
   local verify="$CCRC_HERE/../deploy/verify-service.sh"
   if [ -f "$verify" ]; then
-    bash "$verify" ccrc.service \
-      || _ccrc_die "ccrc.service was restarted and did not stay up, so this box has the unit and not the service — read what it says: systemctl --user status ccrc.service"
+    bash "$verify" "$main" \
+      || _ccrc_die "$main was restarted and did not stay up, so this box has the unit and not the service — read what it says: systemctl --user status $main"
   fi
-  echo "install: services: ccrc.service and ccd-cap-scopes.timer enabled, and ccrc.service restarted onto the tree this run placed"
+  echo "install: services: $main and ccd-cap-scopes.timer enabled, and $main restarted onto the tree this run placed"
 }
 
 # ── _inst_linger — the one step that reports a failure and CONTINUES ──────
@@ -3459,6 +3718,680 @@ _inst_wrappers() {
   echo "install: wrappers: converged (the summary line above is ccrc wrappers' own)"
 }
 
+# ── cmd_update — the box moves to a published release (stage 4, Task 6) ───
+# Per box, explicit, never automatic (spec §4). The sequence, each step
+# refusing loudly rather than degrading:
+#   1. FETCH + VERIFY (`_upd_fetch`): SHA256SUMS first (under `latest/` the
+#      tag is unknown until the sums file names the tarball — install.sh's
+#      own order), then the tarball; `sha256sum -c` BEFORE extraction (the
+#      outer checksum guards transport), then the per-file MANIFEST after it
+#      (the manifest guards the SET — a file corrupted after the MANIFEST was
+#      generated ships in a tarball whose SHA256SUMS is perfectly honest).
+#      A box with no network answers with curl's failure and changes nothing.
+#   2. BACK UP (`_upd_backup`): coord.db by VACUUM INTO (never cp — the WAL
+#      has been measured holding 10x the main file; backup-coord.mjs's
+#      header), plus dists, ccd and the units, all under ONE
+#      `~/ccrc-backups/<ts>/`. BEFORE the install touches anything, so a
+#      fault at any later step leaves the backup complete — the ordering is
+#      pinned by a test that injects exactly that fault.
+#   3. INSTALL: the `_inst_*` spine, re-run FROM THE STAGED TREE by invoking
+#      the staged `ccrc install` (role-aware, per the CCRC_ROLE this box
+#      recorded in ccrc.env). Not a re-implementation and not a sourced
+#      function list: the sequence is spelled ONCE, in `cmd_install`, and a
+#      step added there must run on update without anyone remembering to add
+#      it here too. The staged verb ends with `cmd_doctor` from the NEW tree,
+#      which is this verb's doctor too — running a second doctor from the
+#      tree this run just replaced would measure the box with the old check
+#      table and print every verdict twice.
+#   4. SWEEP (`_upd_sweep`): every live `claude-session@*` supervisor is
+#      try-restarted onto the ccd this run just installed — behind the
+#      MANDATORY KillMode=process preflight (R1, granted 2026-08-21; the
+#      one scoped exception to CLAUDE.md's never-touch rule). A failed
+#      preflight refuses the SWEEP, never the UPDATE: the run continues to
+#      its report, degraded and saying so.
+#   5. REPORT (`_upd_report`): from → to off the build stamps — the old one
+#      read before anything changed, the new one re-measured off disk, never
+#      inferred from what step 3 was expected to do. A `--to` DOWNGRADE also
+#      prints the coord.db restore commands from this run's backup and NEVER
+#      performs them: migrations are forward-only, and an older server READS
+#      a newer coord.db (shipped behavior) — auto-restoring would destroy
+#      rows to fix a compatibility problem the system does not have.
+#
+# THE FLEET-FIRST WARNING (`_upd_fleet_warn`, D-150 aware): on a box that
+# knows its server's address, `/api/fleet/health` saying `skewed` earns a
+# WARN naming the order (fleet box first) — a warning, never a refusal,
+# because the operator mid-rollout is exactly who must be able to proceed.
+# A 401 is the session gate answering correctly from outside (D-150), and an
+# unreachable server is a box that cannot compare; both skip the comparison
+# SILENTLY — a diagnostic that is not available is not a finding.
+cmd_update() {
+  local to=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -h|--help) usage; exit 0 ;;
+      --to)
+        [ $# -ge 2 ] || { echo "$PROG: --to needs a value: a release tag shaped vX.Y.Z" >&2; usage >&2; exit 2; }
+        to="$2"; shift ;;
+      --to=*) to="${1#--to=}" ;;
+      *) _ccrc_usage_die "$1" ;;
+    esac
+    shift
+  done
+  if [ -n "$to" ] && [[ ! "$to" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "$PROG: --to expects a release tag shaped vX.Y.Z (got: $to)" >&2
+    usage >&2
+    exit 2
+  fi
+
+  # BY NAME, BEFORE ANYTHING RUNS — `cmd_install`'s own probe discipline: a
+  # missing tool three steps in would arrive as that step "failing", and two
+  # conditions an operator acts on differently (install the tool / debug the
+  # release) must not share a signal. `node` is probed here even though the
+  # staged install probes it again, because `_upd_backup` runs it FIRST
+  # (backup-coord.mjs) and a backup that failed for a missing interpreter
+  # must not read as a broken coord.db.
+  local t
+  # awk: _upd_sweep's unit enumeration rides it — absent, the per-unit
+  # preflight would silently narrow to the template probe (branch review).
+  for t in curl tar gzip sha256sum node awk; do
+    command -v "$t" >/dev/null 2>&1 \
+      || _ccrc_die "$t is required by 'ccrc update' but is not on PATH — nothing on this box was changed"
+  done
+
+  # The OLD identity, read before anything changes — the report's "from"
+  # half. `rc` per condition, same split `cmd_status` renders: absent is the
+  # honest "unstamped", anything else unreadable — never collapsed into a
+  # version nobody measured.
+  local old_desc="unstamped" old_version="" rc=0
+  _box_build_fields || rc=$?
+  case "$rc" in
+    0) old_version="${BOX_BUILD[4]}"
+       if [ -n "$old_version" ]; then old_desc="$old_version (${BOX_BUILD[0]})"
+       else old_desc="${BOX_BUILD[0]}"; fi ;;
+    3) old_desc="unstamped" ;;
+    *) old_desc="unreadable" ;;
+  esac
+
+  _upd_fleet_warn
+  _upd_fetch "$to"
+  _upd_backup
+
+  # THE RECORDED ROLE (spec §5): `ccrc.env`'s CCRC_ROLE, written by
+  # `_inst_env` at first install. Absent — an older box whose env file
+  # predates the key — means the staged install runs BARE and its own
+  # default (both, today's single-box shape) decides, exactly as a fresh
+  # `ccrc install` would. An unrecognisable value is treated as absent for
+  # the same reason: passing it through would make the staged install refuse
+  # a run this box's operator never mistyped.
+  local role=""
+  if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ]; then
+    role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  fi
+  case "$role" in server|fleet|both) ;; *) role="" ;; esac
+
+  echo "update: installing $UPD_VERSION from the verified staged tree${role:+ (recorded role: $role)}"
+  local inst_rc=0
+  if [ -n "$role" ]; then
+    bash "$UPD_TREE/ccd/ccrc" install --role "$role" || inst_rc=$?
+  else
+    bash "$UPD_TREE/ccd/ccrc" install || inst_rc=$?
+  fi
+  [ "$inst_rc" -eq 0 ] \
+    || _ccrc_die "the staged install (which ends with doctor) exited $inst_rc — read its lines above. The backup taken BEFORE it ran is complete at $UPD_BACKUP_DIR"
+
+  _upd_sweep
+  _upd_report "$old_desc" "$old_version"
+}
+
+# One warning, or silence — never a refusal and never a guess. Address
+# resolution and the health call are the two readers this file already has
+# (`_box_server_addr`, `_box_health`); every non-zero answer from either is a
+# comparison that is NOT AVAILABLE, which is not a finding: no address (a
+# fleet box, ordinarily), a gate that answered 401 (D-150 — correct behaviour
+# by both parties), a server that is down. Only a server that ANSWERED and
+# said `skewed` produces a line.
+_upd_fleet_warn() {
+  local addr_out addr
+  addr_out="$(_box_server_addr)" || return 0
+  addr="${addr_out%%$'\n'*}"
+  _box_health "$addr" || return 0
+  if [ "${BOX_HEALTH[2]}" = skewed ]; then
+    echo "update: WARN: /api/fleet/health at $addr says the two boxes' builds are SKEWED — the update order is fleet box first, then this server box. This run proceeds; update the fleet box too, then re-check with: ccrc status"
+  fi
+  return 0
+}
+
+# Fetch + verify, into a throwaway staging dir this process removes on ANY
+# exit. The URL space is GitHub's release layout (`latest/download/<asset>`,
+# `download/<tag>/<asset>`) under the one owner/repo pair at the top;
+# `install.sh --release` walks the same space with the same order — SUMS
+# first, because under `latest/` only the sums file knows the tarball's name.
+_upd_fetch() {   # $1 = pinned tag, or "" for the newest release
+  local to="$1" base url_dir _sum tarname
+  base="${CCRC_RELEASE_BASE_URL:-https://github.com/$CCRC_RELEASE_OWNER/$CCRC_RELEASE_REPO/releases}"
+  if [ -n "$to" ]; then url_dir="$base/download/$to"; else url_dir="$base/latest/download"; fi
+  UPD_STAGE="$(mktemp -d)" || _ccrc_die "mktemp -d failed — no staging dir could be made, nothing was fetched"
+  # The staging tree holds nothing this run does not either install or
+  # refuse, so it is removed on every exit — success, die, or Ctrl-C.
+  trap '[ -z "$UPD_STAGE" ] || rm -rf "$UPD_STAGE"' EXIT
+  echo "update: fetching $url_dir/SHA256SUMS …"
+  curl -fsSL -o "$UPD_STAGE/SHA256SUMS" "$url_dir/SHA256SUMS" \
+    || _ccrc_die "download failed: $url_dir/SHA256SUMS (is there a release?) — nothing on this box was changed"
+  read -r _sum tarname < "$UPD_STAGE/SHA256SUMS" \
+    || _ccrc_die "SHA256SUMS is empty — refusing; nothing on this box was changed"
+  tarname="${tarname#\*}"
+  case "$tarname" in
+    ccrc-*.tar.gz) ;;
+    *) _ccrc_die "SHA256SUMS names no ccrc tarball (got: $tarname) — refusing; nothing on this box was changed" ;;
+  esac
+  UPD_VERSION="${tarname#ccrc-}"
+  UPD_VERSION="${UPD_VERSION%.tar.gz}"
+  echo "update: fetching $url_dir/$tarname …"
+  curl -fsSL -o "$UPD_STAGE/$tarname" "$url_dir/$tarname" \
+    || _ccrc_die "download failed: $url_dir/$tarname — nothing on this box was changed"
+  # Verify BEFORE extracting: a tarball that fails its checksum never puts a
+  # file on disk, let alone runs one (install.sh's rule, same words).
+  ( cd "$UPD_STAGE" && sha256sum -c SHA256SUMS >/dev/null 2>&1 ) \
+    || _ccrc_die "checksum verification FAILED for $tarname — refusing to extract or install; nothing on this box was changed"
+  UPD_TREE="$UPD_STAGE/tree"
+  mkdir "$UPD_TREE" || _ccrc_die "cannot create $UPD_TREE"
+  tar -xzf "$UPD_STAGE/$tarname" -C "$UPD_TREE" \
+    || _ccrc_die "extracting $tarname failed — nothing outside the staging dir was touched"
+  [ -f "$UPD_TREE/MANIFEST" ] \
+    || _ccrc_die "the release ships no MANIFEST — refusing to install a set nothing can verify"
+  ( cd "$UPD_TREE" && sha256sum -c MANIFEST >/dev/null 2>&1 ) \
+    || _ccrc_die "MANIFEST verification FAILED after extraction — a file in the release set does not match its recorded digest; refusing to install"
+  echo "update: verified $tarname (transport checksum, then the per-file MANIFEST)"
+}
+
+# Deploy's backup set (deploy.sh:363-369 agent lane, :762-766 server lane),
+# both lanes' union because a single box may be both, each entry guarded —
+# absence is the ordinary state of the role a box is not. coord.db goes
+# through the shipped backup-coord.mjs (VACUUM INTO — a cp of a WAL-mode db
+# is a plausible-looking backup missing everything recent, worse than none),
+# resolved out of THIS tree (`$CCRC_HERE/..`): the tool that snapshots the
+# old world ships beside the ccrc doing the snapshotting, never fetched.
+_upd_backup() {
+  # The optional argument (Task 8) is the LINE PREFIX for the one
+  # announcement below — `cmd_backup` runs this very function standalone and
+  # a transcript line that said "update:" from a verb nobody ran would be a
+  # claim about a run that never happened. The SET and the directory shape
+  # are the same by construction: one function, two callers.
+  local say="${1:-update: backup}"
+  local ts
+  ts="$(date +%Y%m%d-%H%M%S)"
+  UPD_BACKUP_DIR="$BOX_BACKUP_ROOT/$ts"
+  mkdir -p "$UPD_BACKUP_DIR" || _ccrc_die "cannot create $UPD_BACKUP_DIR — refusing to install with no backup taken"
+  if [ -f "$HOME/.ccrc/coord.db" ]; then
+    node --no-warnings "$CCRC_HERE/../deploy/backup-coord.mjs" \
+      "$HOME/.ccrc/coord.db" "$UPD_BACKUP_DIR/coord.db" \
+      || _ccrc_die "the coord.db snapshot failed — refusing to install with an incomplete backup (read backup-coord.mjs's lines above)"
+  fi
+  _upd_backup_copy "$BOX_TREE_DIR/server/dist"     server-dist
+  _upd_backup_copy "$BOX_TREE_DIR/server/dist-pwa" dist-pwa
+  _upd_backup_copy "$BOX_TREE_DIR/agent/dist"      agent-dist
+  _upd_backup_copy "$HOME/.local/bin/ccd"          ccd
+  _upd_backup_copy "$HOME/.cc-sessions/session-hook.sh" session-hook.sh
+  _upd_backup_copy "$HOME/.cc-sessions/notify.sh"  notify.sh
+  local u
+  for u in "${BOX_UNIT_NAMES[@]}" claude-session@.service; do
+    _upd_backup_copy "$BOX_UNIT_DIR/$u" "$u"
+  done
+  echo "$say: $UPD_BACKUP_DIR (coord.db snapshot, dists, ccd, units — taken before anything was installed)"
+}
+
+_upd_backup_copy() {   # <src> <name under $UPD_BACKUP_DIR> — absent src is ordinary
+  [ -e "$1" ] || return 0
+  cp -a "$1" "$UPD_BACKUP_DIR/$2" \
+    || _ccrc_die "backing up $1 failed — refusing to install with an incomplete backup"
+}
+
+# ── _upd_sweep — step 4: the supervisor sweep (stage 4, Task 7; R1) ───────
+# Every `claude-session@*` unit is a LONG-LIVED `ccd supervise`: even after
+# the atomic install above, each live supervisor keeps executing the
+# PRE-update ccd (the old inode) until restarted, so auto-swap, auto-compact
+# and uuid-sync run yesterday's logic for days. deploy.sh's sweep
+# (deploy.sh:662-673) exists for exactly this, and this function is its
+# in-process twin — the operator ruling of 2026-08-21 (R1) grants BOTH the
+# one scoped exception to CLAUDE.md's never-touch rule, and a source pin in
+# `server/test/single-definition.test.ts` holds the two implementations to
+# the same preflight so neither can drop it silently.
+#
+# THE PREFLIGHT IS THE POINT OF THE WHOLE BLOCK, and it is MANDATORY:
+# systemd's default KillMode is control-group, and whenever the tmux server
+# placement falls back to a bare create (no systemd-run, no D-Bus — see
+# deploy.sh's sweep header, "THE KillMode GUARD SURVIVES THE PLACEMENT FIX")
+# every session on this box is a child of ONE tmux server sitting in
+# whichever claude-session@ cgroup created it: without KillMode=process the
+# try-restart below is a fleet kill, not a restart. So the guard ASKS SYSTEMD
+# (`systemctl show` resolves the whole override chain — base, drop-ins,
+# lexical order, last wins), per unit the sweep would touch PLUS an
+# uninstantiated template probe (a fresh box with zero sessions would
+# otherwise check nothing at all), and the enumeration is deliberately
+# UNFILTERED — the opposite of the verify loop's `--state=active`, for
+# deploy.sh's stated reason: this is a CONFIG gate, and over-listing is the
+# cheap direction.
+#
+# A FAILED PREFLIGHT REFUSES THE SWEEP, NEVER THE UPDATE (spec §6): the
+# install above already converged, and unwinding a good update over a
+# refused sweep would leave the box worse than degraded. The refusal is loud
+# (stderr names the resolved value and the drop-in that fixes it) and the
+# degraded line on stdout says exactly what did not happen.
+#
+# PANES ARE NEVER TOUCHED; TMUX IS NEVER TOUCHED. KillMode=process keeps the
+# tmux substrate — the sessions themselves — alive across the restart, and
+# `cmd_supervise` re-enters via `cmd_ensure`, which ATTACHES to a live
+# session rather than spawning a second one. A test pins that no tmux argv
+# appears anywhere in a sweep.
+_upd_sweep() {
+  # The bus contingency `_inst_enable` carries, for the same reason: without
+  # XDG_RUNTIME_DIR, `systemctl --user` from a non-interactive context fails
+  # for a reason that has nothing to do with this box.
+  : "${XDG_RUNTIME_DIR:=/run/user/$UID}"; export XDG_RUNTIME_DIR
+  : "${DBUS_SESSION_BUS_ADDRESS:=unix:path=${XDG_RUNTIME_DIR}/bus}"; export DBUS_SESSION_BUS_ADDRESS
+  local u km
+  for u in $(systemctl --user list-units "claude-session@*" --plain --no-legend | awk '{print $1}') \
+           claude-session@ccrc-update-preflight.service; do
+    km="$(systemctl --user show -p KillMode "$u" 2>/dev/null)" || km=""
+    if [ "$km" != "KillMode=process" ]; then
+      echo "update: sweep REFUSED — $u resolves to ${km:-no answer from systemd}, and the sweep needs KillMode=process: systemds default is control-group, and whenever the tmux server placement falls back to a bare create every session on this box is a child of ONE tmux server sitting in a claude-session@ cgroup, so try-restart would kill the lot. A drop-in under $BOX_UNIT_DIR/claude-session@.service.d/ can set this without the base unit changing a byte." >&2
+      echo "update: DEGRADED: the supervisor sweep did not run — every live claude-session@ supervisor keeps executing the PREVIOUS ccd until restarted. Fix the KillMode above, then: systemctl --user try-restart 'claude-session@*'"
+      return 0
+    fi
+  done
+  systemctl --user try-restart "claude-session@*" \
+    || _ccrc_die "systemctl --user try-restart claude-session@* failed — the supervisors' state is now mixed; read: systemctl --user list-units 'claude-session@*'"
+  # try-restart is a no-op on a failed unit (its own man page), so a
+  # pre-existing failed session was neither restarted nor verified — not this
+  # update's doing, must not fail it, must not be silent either.
+  for u in $(systemctl --user list-units "claude-session@*" --state=failed --plain --no-legend | awk '{print $1}'); do
+    echo "update: warning: $u is FAILED — try-restart skipped it and this sweep did not verify it. On the box: systemctl --user reset-failed $u, then ccd start the session" >&2
+  done
+  # Each restarted supervisor is held to the same standard as the services the
+  # staged install just verified — verify-service.sh out of the NEW tree,
+  # guarded by [ -f ] exactly as `_inst_enable` guards it. `--state=active`
+  # here and NOT above: handing verify-service.sh a unit try-restart never
+  # touched is deploy.sh's final-review finding 6.
+  local verify="$BOX_TREE_DIR/deploy/verify-service.sh"
+  for u in $(systemctl --user list-units "claude-session@*" --state=active --plain --no-legend | awk '{print $1}'); do
+    if [ -f "$verify" ]; then
+      bash "$verify" "$u" \
+        || _ccrc_die "$u was restarted and did not stay up — read: systemctl --user status $u. The pre-update backup is complete at $UPD_BACKUP_DIR"
+    fi
+  done
+  echo "update: sweep: every live claude-session@ supervisor now runs the ccd this update installed (KillMode=process verified per unit before any restart; panes untouched)"
+}
+
+# The from → to report, off MEASUREMENTS: the "from" was read before anything
+# changed and arrives as arguments; the "to" is re-read off disk here — never
+# inferred from what the install was expected to write, which is exactly how
+# a stub of a step would go unnoticed. The downgrade lines fire on a version
+# comparison (`sort -V`) between the OLD stamp and the ARTIFACT's version —
+# both vX.Y.Z by construction — and print the restore; nothing here ever
+# writes coord.db.
+_upd_report() {   # $1 = old description, $2 = old version ("" when unknown)
+  local old_desc="$1" old_version="$2" new_desc="unstamped" rc=0
+  _box_build_fields || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    if [ -n "${BOX_BUILD[4]}" ]; then new_desc="${BOX_BUILD[4]} (${BOX_BUILD[0]})"
+    else new_desc="${BOX_BUILD[0]}"; fi
+  elif [ "$rc" -ne 3 ]; then
+    new_desc="unreadable"
+  fi
+  echo "update: build: $old_desc -> $new_desc"
+  if [[ "$old_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+     && [[ "$UPD_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+     && [ "$UPD_VERSION" != "$old_version" ] \
+     && [ "$(printf '%s\n%s\n' "$old_version" "$UPD_VERSION" | sort -V | head -n1)" = "$UPD_VERSION" ]; then
+    echo "update: rollback: $old_version -> $UPD_VERSION is a DOWNGRADE. coord.db was NOT restored — migrations are forward-only, and an older server reads a newer coord.db (shipped behavior). To restore the pre-update snapshot by hand:"
+    if [ -f "$UPD_BACKUP_DIR/coord.db" ]; then
+      echo "update: rollback:   systemctl --user stop ccrc.service"
+      echo "update: rollback:   cp $UPD_BACKUP_DIR/coord.db \$HOME/.ccrc/coord.db"
+      echo "update: rollback:   systemctl --user restart ccrc.service"
+    else
+      echo "update: rollback:   (no coord.db existed before this run — there is nothing to restore)"
+    fi
+  fi
+}
+
+# ── cmd_backup — update's step 2 standalone (stage 4, Task 8; spec §7) ────
+# The SAME set to the SAME directory shape, because it is the same function:
+# `_upd_backup`, called with this verb's own line prefix. What this verb adds
+# is the pruning `cmd_update` deliberately does not do: an operator running
+# `ccrc backup` on a schedule is the caller deploy.sh's `prune_backups`
+# exists for, and a backup directory that only ever grows is that function's
+# own measured failure case (18MB/13 dirs before it existed).
+cmd_backup() {
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -h|--help) usage; exit 0 ;;
+      *) _ccrc_usage_die "$1" ;;
+    esac
+  done
+  # BY NAME, before anything runs — `cmd_update`'s own probe discipline, for
+  # the same first-step reason: backup-coord.mjs is a node program, and a
+  # backup that failed for a missing interpreter must not read as a broken
+  # coord.db.
+  command -v node >/dev/null 2>&1 \
+    || _ccrc_die "node is required by 'ccrc backup' (it runs deploy/backup-coord.mjs for the coord.db snapshot) but is not on PATH — nothing was backed up"
+  _upd_backup backup
+  _bak_prune
+}
+
+# Keep the newest ${CCRC_BACKUP_KEEP:-10} TIMESTAMPED backups —
+# `deploy.sh`'s `prune_backups` glob exactly (`[0-9]{8}-[0-9]{6}`, the shape
+# `_upd_backup`'s `date +%Y%m%d-%H%M%S` writes), because the directory also
+# holds hand-made siblings (a real `pre-flip-agent-dist` exists on the fleet
+# host today) that a bare newest-N sweep would silently destroy. The glob
+# expansion is already lexically sorted, which for this shape IS
+# chronological order.
+_bak_prune() {
+  local keep="${CCRC_BACKUP_KEEP:-10}"
+  [[ "$keep" =~ ^[0-9]+$ ]] \
+    || _ccrc_die "CCRC_BACKUP_KEEP must be a number (got a non-numeric value) — nothing was pruned"
+  local -a dirs=()
+  local had_nullglob=0 d
+  shopt -q nullglob && had_nullglob=1
+  shopt -s nullglob
+  for d in "$BOX_BACKUP_ROOT"/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]; do
+    [ -d "$d" ] && dirs+=("$d")
+  done
+  [ "$had_nullglob" -eq 1 ] || shopt -u nullglob
+  local n=${#dirs[@]} i
+  for ((i = 0; i < n - keep; i++)); do
+    rm -rf -- "${dirs[$i]}" \
+      || _ccrc_die "could not prune ${dirs[$i]} — the newer backups above it are all intact"
+    echo "backup: pruned ${dirs[$i]} (keeping the newest $keep timestamped backups; hand-made siblings are never touched)"
+  done
+}
+
+# ── cmd_logs — the journal, thin (stage 4, Task 8; spec §7) ───────────────
+# `journalctl --user -u <this box's unit>` with `-f`/`-n` passed straight
+# through — no parsing, no filtering: journalctl's own interface is the
+# feature, and this verb only answers the question an operator would
+# otherwise have to know the topology for: WHICH unit is this box's.
+# The RECORDED role decides (`ccrc.env`'s CCRC_ROLE, `cmd_update`'s own
+# reader), never a probe of what happens to be running: a fleet box whose
+# agent is down is exactly the box whose logs are being asked for.
+cmd_logs() {
+  local -a pass=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -h|--help) usage; exit 0 ;;
+      -f) pass+=(-f) ;;
+      -n)
+        [ $# -ge 2 ] || { echo "$PROG: -n needs a value: how many journal lines" >&2; usage >&2; exit 2; }
+        pass+=(-n "$2"); shift ;;
+      *) _ccrc_usage_die "$1" ;;
+    esac
+    shift
+  done
+  command -v journalctl >/dev/null 2>&1 \
+    || _ccrc_die "journalctl is not on PATH — this box's service journal cannot be read from here"
+  local role="" unit=ccrc.service
+  if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ]; then
+    role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  fi
+  [ "$role" = fleet ] && unit=ccrc-agent.service
+  exec journalctl --user -u "$unit" ${pass[@]+"${pass[@]}"}
+}
+
+# ── cmd_uninstall — off the box, reinstall left safe (stage 4, Task 8) ────
+# Spec §7's three sets, exactly:
+#   REMOVES  the units (stop, disable, delete — both drop-ins and the slice
+#            escape included), ccrc's managed settings.json hook entries
+#            (through the installer's OWN predicate, `--remove` mode, with
+#            its per-file backup), marker-verified wrappers ONLY
+#            (`shared/mark.mjs` — the marker is the proof ccrc wrote the
+#            file; nothing else is ccrc's to delete), ccrc's own artifacts
+#            inside ~/.cc-sessions file-by-file, `~/ccrc`, and the
+#            executables `_inst_bins` placed.
+#   PRESERVES `~/.ccrc` whole (the box's config, roster and identity — what
+#            makes reinstall converge instead of starting over), the
+#            registry rows and operator switches in ~/.cc-sessions,
+#            worktrees (sessions' WORK — never ccrc's), ~/ccrc-backups, and
+#            the two operator-namespace files (`~/.tmux.conf`,
+#            `~/.claude/statusline-command.sh`) whose `.pre-ccrc-<UTC>`
+#            keep-asides get their restore commands PRINTED, never run.
+#   REFUSES  while live sessions exist (counted the way ccd counts them,
+#            `_box_sessions`) unless --force: uninstalling under a live
+#            fleet orphans every supervisor mid-carry.
+# `--purge` additionally removes `~/.ccrc` and ~/ccrc-backups — NEVER
+# worktrees, never tmux state (no tmux argv exists anywhere in this verb).
+cmd_uninstall() {
+  local force=0 purge=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --force) force=1 ;;
+      --purge) purge=1 ;;
+      -h|--help) usage; exit 0 ;;
+      *) _ccrc_usage_die "$1" ;;
+    esac
+    shift
+  done
+  # BY NAME, before anything is removed — the file's own probe discipline.
+  # node is the marker verifier (shared/mark.mjs) and jq is the settings.json
+  # surgeon (install-session-hooks.sh); a removal pass that discovered either
+  # missing halfway through would leave a box neither installed nor not.
+  local t
+  for t in node jq; do
+    command -v "$t" >/dev/null 2>&1 \
+      || _ccrc_die "$t is required by 'ccrc uninstall' but is not on PATH — nothing on this box was removed"
+  done
+
+  # ── THE LIVE-SESSION GATE, FIRST ────────────────────────────────────────
+  # `_box_sessions` answers "N in <reg> (…)" or "0 (…)"; the count is its
+  # first word. The refusal is the DEFAULT: an operator who really means it
+  # says so with the flag, and the message tells them both halves.
+  local sessions count
+  sessions="$(_box_sessions)"
+  count="${sessions%% *}"
+  if [ "$count" != 0 ] && [ "$force" -eq 0 ]; then
+    _ccrc_die "this box holds $count live ccd session(s) ($sessions) — uninstalling under them orphans every supervisor. Stop them first (ccd list, then ccd stop each), or run: ccrc uninstall --force"
+  fi
+
+  _uninst_units
+  _uninst_hooks
+  _uninst_wrappers
+  _uninst_cc_sessions
+  _uninst_tree_bins
+  _uninst_keep_asides
+  [ "$purge" -eq 1 ] && _uninst_purge
+  if [ "$purge" -eq 1 ]; then
+    echo "uninstall: done — this box is off ccrc. Worktrees and the session registry rows were preserved; ~/.ccrc and ~/ccrc-backups are gone (--purge)"
+  else
+    echo "uninstall: done — this box is off ccrc, and reinstall is safe: ~/.ccrc (config, roster, identity), the session registry rows, worktrees and ~/ccrc-backups were all preserved"
+  fi
+}
+
+# Stop, disable, delete — in that order, because a unit file removed under a
+# still-enabled unit leaves systemd holding a dangling enablement symlink.
+# `disable --now` per unit that is actually installed here; a failure is
+# REPORTED and the removal continues (the unit FILE going away is this
+# step's contract — a wedged systemd must not leave the box half-uninstalled
+# with the transcript claiming otherwise). `claude-session@*` INSTANCES are
+# never a systemctl target: the never-touch rule holds even on the way out —
+# deleting the template file does not touch the live instances, and their
+# operator stops them through ccd, not through an uninstall's side effect.
+_uninst_units() {
+  local dir="$BOX_UNIT_DIR"
+  # The `\x2d` literal is `_inst_units`' own (see its header: systemd's
+  # escaping of the `-` in the slice name, kept verbatim by double quotes).
+  local slice="$dir/app-claude\x2dsession.slice.d"
+  local u
+  if command -v systemctl >/dev/null 2>&1; then
+    : "${XDG_RUNTIME_DIR:=/run/user/$UID}"; export XDG_RUNTIME_DIR
+    : "${DBUS_SESSION_BUS_ADDRESS:=unix:path=${XDG_RUNTIME_DIR}/bus}"; export DBUS_SESSION_BUS_ADDRESS
+    for u in "${BOX_UNIT_NAMES[@]}" ccd-cap-scopes.timer ccd-cap-scopes.service; do
+      [ -f "$dir/$u" ] || continue
+      systemctl --user disable --now "$u" \
+        || echo "uninstall: units: disable --now $u failed (continuing — the unit file is removed below; read: systemctl --user status $u)" >&2
+    done
+  else
+    echo "uninstall: units: systemctl is not on PATH — the unit files are removed but nothing was stopped or disabled"
+  fi
+  rm -f -- "$dir/${BOX_UNIT_NAMES[0]}" "$dir/${BOX_UNIT_NAMES[1]}" \
+    "$dir/claude-session@.service" "$dir/ccd-cap-scopes.service" "$dir/ccd-cap-scopes.timer" \
+    || _ccrc_die "removing the unit files under $dir failed"
+  rm -rf -- "$dir/claude-session@.service.d" "$slice" \
+    || _ccrc_die "removing the drop-in directories under $dir failed"
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl --user daemon-reload \
+      || echo "uninstall: units: daemon-reload failed — systemd may still list units whose files are gone until the next reload" >&2
+  fi
+  echo "uninstall: units: stopped, disabled and removed (incl. both drop-ins and the slice escape)"
+}
+
+# THE TREE'S OWN installer, in `--remove` mode — never the INSTALLED copy at
+# ~/.cc-sessions (the opposite of `_inst_hooks`' choice, for a reason that
+# only exists on this path): an installed copy that predates the flag does
+# not KNOW `--remove`, and its argument handling would read the call as a
+# default INSTALL run — an uninstall that re-registered every hook it was
+# asked to remove. The sibling at $CCRC_HERE is version-locked to this very
+# function by shipping in the same tree.
+_uninst_hooks() {
+  local inst="$CCRC_HERE/install-session-hooks.sh"
+  if [ ! -f "$inst" ]; then
+    echo "uninstall: hooks: $inst is missing (a partial tree) — no settings.json was touched; remove ccrc's entries by hand if any remain"
+    return 0
+  fi
+  if [ ! -f "$HOME/.ccrc/accounts.sh" ]; then
+    echo "uninstall: hooks: no roster projection at \$HOME/.ccrc/accounts.sh — no account homes to sweep, no settings.json was touched"
+    return 0
+  fi
+  bash "$inst" --remove \
+    || _ccrc_die "install-session-hooks.sh --remove refused — read its lines above; it never rewrites a settings.json it could not validate, so nothing was damaged"
+  echo "uninstall: hooks: ccrc's managed entries removed from each account's settings.json (unmanaged entries survive byte-identically; every rewritten file was backed up first)"
+}
+
+# MARKER-VERIFIED ONLY. The candidates are every legal-id-named file in the
+# wrapper directory, and the verdict on each is `shared/mark.mjs`'s
+# `verifyMarker` — the same module `gen-wrappers.mjs` classifies with, read
+# through node because bash re-implementing the digest would be the second
+# definition the marker exists to prevent. The verdicts and what they earn:
+#   ccrc-unmodified -> REMOVED: exactly what ccrc last wrote, nothing lost.
+#   ccrc-edited     -> KEPT, and said: the marker proves ccrc wrote it, the
+#                      hash proves someone worked on it since — that work is
+#                      the operator's, exactly as `cmd_wrappers` refuses to
+#                      overwrite it without --force.
+#   foreign / oversize / unverifiable -> KEPT SILENTLY: a marker-less file
+#                      with a wrapper's name is somebody's hand-written
+#                      launcher (or the upstream binary itself), and "I
+#                      could not verify it" is never license to delete it.
+# The >1MiB stat guard is `gen-wrappers.mjs`'s own OVERSIZE gate from the
+# other language (D-92's cross-language class): the 324MB upstream binary is
+# never read, let alone judged.
+_uninst_wrappers() {
+  local shape="$CCRC_HERE/ccrc-wrapper-shape"
+  if [ ! -f "$shape" ]; then
+    echo "uninstall: wrappers: the shape contract is missing ($shape) — no wrapper was judged and none was removed"
+    return 0
+  fi
+  # shellcheck source=ccrc-wrapper-shape
+  . "$shape" \
+    || _ccrc_die "the wrapper shape contract failed to load: $shape"
+  local mark="$CCRC_HERE/../shared/mark.mjs"
+  if [ ! -f "$mark" ]; then
+    echo "uninstall: wrappers: the marker module is missing ($mark) — nothing can be verified, so nothing was removed"
+    return 0
+  fi
+  if [ ! -d "$WRAPPER_BIN_DIR" ]; then
+    echo "uninstall: wrappers: no $WRAPPER_BIN_DIR on this box — nothing to remove"
+    return 0
+  fi
+  local f name verdict removed=0
+  for f in "$WRAPPER_BIN_DIR"/*; do
+    [ -f "$f" ] || continue
+    name="${f##*/}"
+    # The three executables are `_uninst_tree_bins`' subject, not wrappers.
+    case "$name" in ccd|ccrc|ccd-cap-scopes) continue ;; esac
+    [[ "$name" =~ $WRAPPER_ID_RE ]] || continue
+    verdict="$(node --no-warnings --input-type=module -e '
+import { readFileSync, statSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+const [markPath, filePath] = process.argv.slice(1);
+if (statSync(filePath).size > 1024 * 1024) { console.log("oversize"); process.exit(0); }
+const { verifyMarker } = await import(pathToFileURL(markPath).href);
+console.log(verifyMarker(readFileSync(filePath, "utf8")));
+' "$mark" "$f" 2>/dev/null)" || verdict=""
+    case "$verdict" in
+      ccrc-unmodified)
+        rm -f -- "$f" || _ccrc_die "could not remove $f"
+        removed=$((removed + 1))
+        echo "uninstall: wrappers: removed $f (marker-verified: exactly what ccrc last wrote)" ;;
+      ccrc-edited)
+        echo "uninstall: wrappers: kept $f — ccrc wrote it but it has been edited since, and that edit is yours; remove it by hand if it is worthless" ;;
+      *) : ;;   # foreign, oversize, or unverifiable — not ccrc's to remove.
+    esac
+  done
+  echo "uninstall: wrappers: $removed marker-verified wrapper(s) removed; everything ccrc could not prove it wrote was left in place"
+}
+
+# File-by-file, NEVER a directory sweep of ~/.cc-sessions: the registry rows
+# (`<id>.uuid` and friends) and the operator switches (`coordinator-paused`,
+# `mail-disabled` — removable only by a human at a terminal, CLAUDE.md) live
+# in the same directory, and a glob one character too wide here is a fleet
+# whose sessions all lost their identity. The list below is `_inst_files` +
+# `_inst_skills`' install set, exactly.
+_uninst_cc_sessions() {
+  local reg="$HOME/.cc-sessions"
+  if [ ! -d "$reg" ]; then
+    echo "uninstall: ~/.cc-sessions: not present — nothing of ccrc's to remove there"
+    return 0
+  fi
+  rm -f -- "$reg/session-hook.sh" "$reg/install-session-hooks.sh" "$reg/notify.sh" \
+    "$reg/install-coordinator-skill.sh" "$reg/install-worker-skill.sh" \
+    || _ccrc_die "removing ccrc's files under $reg failed"
+  rm -rf -- "$reg/coordinator-skill" "$reg/worker-skill" \
+    || _ccrc_die "removing the skill trees under $reg failed"
+  echo "uninstall: ~/.cc-sessions: ccrc's own artifacts removed (hooks, notify, both skill trees); the registry rows and operator switches stay"
+}
+
+# The tree, then the executables `_inst_bins` placed OUT of it. Removing the
+# file bash is currently executing is safe — the inode outlives the
+# directory entry until this process exits — which is why this step needs no
+# staging dance on the way down.
+_uninst_tree_bins() {
+  rm -rf -- "$BOX_TREE_DIR" \
+    || _ccrc_die "removing $BOX_TREE_DIR failed"
+  # `ccd-cap-scopes` is `_inst_bins`' third executable: an uninstall that
+  # removed its units (above) and left the binary would strand an orphan on
+  # PATH for ever (spec §7 predates the third bin; the ledger records this).
+  rm -f -- "$HOME/.local/bin/ccd" "$HOME/.local/bin/ccrc" "$HOME/.local/bin/ccd-cap-scopes" \
+    || _ccrc_die "removing the executables from \$HOME/.local/bin failed"
+  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes and the ccrc launcher removed from \$HOME/.local/bin"
+}
+
+# The keep-asides `_inst_keep_aside` wrote for the two operator-namespace
+# files. PRINTED, never performed: the file at the live path may carry the
+# operator's own edits made since the install, and a restore that ate them
+# would be the very damage the keep-aside existed to prevent. Restoring is
+# one visible `mv`, and it is theirs to run.
+_uninst_keep_asides() {
+  local f said=0
+  local had_nullglob=0
+  shopt -q nullglob && had_nullglob=1
+  shopt -s nullglob
+  for f in "$HOME/.tmux.conf.pre-ccrc-"* "$HOME/.claude/statusline-command.sh.pre-ccrc-"*; do
+    if [ "$said" -eq 0 ]; then
+      echo "uninstall: keep-asides: the files ccrc copied aside before replacing them are still there — restore any of them with:"
+      said=1
+    fi
+    echo "uninstall: keep-asides:   mv $f ${f%.pre-ccrc-*}"
+  done
+  [ "$had_nullglob" -eq 1 ] || shopt -u nullglob
+  return 0
+}
+
+# `--purge` only. NEVER worktrees (~/worktrees is sessions' WORK — ccd's
+# WORKTREES_ROOT, human-gated even inside ccd itself) and never tmux state:
+# no tmux argv exists anywhere in this verb, purge included.
+_uninst_purge() {
+  rm -rf -- "$HOME/.ccrc" "$BOX_BACKUP_ROOT" \
+    || _ccrc_die "purging ~/.ccrc and $BOX_BACKUP_ROOT failed"
+  echo "uninstall: purge: ~/.ccrc and ~/ccrc-backups removed (worktrees and tmux state are never touched)"
+}
+
 # Guard so the script can be `source`d (the way server/test/ccd-clip.test.ts:32
 # and server/test/ccd-workspaces.test.ts:394 source ccd itself, to call one
 # function directly without running the whole CLI) without running a command
@@ -3499,6 +4432,10 @@ case "$VERB" in
   adopt)   cmd_adopt "$@" ;;
   wrappers) cmd_wrappers "$@" ;;
   install) cmd_install "$@" ;;
+  update)  cmd_update "$@" ;;
+  uninstall) cmd_uninstall "$@" ;;
+  backup)  cmd_backup "$@" ;;
+  logs)    cmd_logs "$@" ;;
   passwd)  cmd_passwd "$@" ;;
   expose)  cmd_expose "$@" ;;
   *) _ccrc_usage_die "$VERB" ;;

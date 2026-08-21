@@ -90,6 +90,18 @@ describe('buildAgreement — three answers, because "no evidence" is not "disagr
     expect(buildAgreement({ ...OWN, dirty: true }, { ...OWN, dirty: true })).toBe('skewed');
   });
 
+  it('ignores version too — two stamps differing only in the tag still compare agreed', () => {
+    // Stage 4, Task 1's pin: `buildAgreement` stays sha + dirty ONLY. The sha
+    // is the truth and the tag is the label — a tag-equal/sha-differ pair is
+    // skew, and a sha-equal pair is agreed whatever either box's tag says
+    // (one box stamped by the release job, the other by a deploy of the same
+    // commit, is a healthy fleet, not a skewed one).
+    expect(buildAgreement({ ...OWN, version: 'v1.2.3' }, OWN)).toBe('agreed');
+    expect(buildAgreement({ ...OWN, version: 'v1.2.3' }, { ...OWN, version: 'v9.9.9' })).toBe('agreed');
+    expect(buildAgreement({ ...OWN, sha: 'other', version: 'v1.2.3' }, { ...OWN, version: 'v1.2.3' }))
+      .toBe('skewed');
+  });
+
   it('ignores ref and builtAt — the same commit deployed twice is not skew', () => {
     // Two boxes are deployed by two runs of `deploy.sh`, minutes apart, and the
     // agent lane goes first by contract (agent-first). `builtAt` therefore
@@ -204,6 +216,18 @@ describe('end to end — a stamp on the fleet host\'s disk becomes an answer on 
     // assertion that fails if `onReady` never reads `frame.build`.
     expect(fleet.state.build).toEqual(OWN);
     expect(await healthOverWire(fleet, OWN)).toMatchObject({ mode: 'remote', connected: true, build: 'agreed' });
+  });
+
+  it('a stamp carrying a release version crosses the wire intact', async () => {
+    // Stage 4, Task 1: the ready frame's build is revalidated through
+    // `parseBuildInfo` on arrival (`remote/client.ts`), so a validator that
+    // dropped or rejected the additive `version` field would silently strip
+    // the tag — or discard the whole stamp — between the fleet host's disk
+    // and this assertion.
+    const tagged = { ...OWN, version: 'v1.2.3' };
+    fleet = await liveFleet(tagged);
+    expect(fleet.state.build).toEqual(tagged);
+    expect(await healthOverWire(fleet, OWN)).toMatchObject({ build: 'agreed' });
   });
 
   it('a fleet host on a different commit reads as skewed', async () => {

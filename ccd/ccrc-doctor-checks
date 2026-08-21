@@ -152,9 +152,10 @@ fi
 # How long `gh auth status` may take. Overridable for the same reason
 # `deploy/verify-service.sh:56-62` makes its settle/window knobs overridable: so
 # a test need not wait out a production timeout. The DEFAULT is what an operator
-# gets. (The OTHER check that touches the network, `fleet`, is bounded by
-# `CCRC_HEALTH_TIMEOUT`, declared in `ccrc` beside the reader that uses it —
-# `ccrc status` makes the same call and must be bounded by the same knob.)
+# gets. (The OTHER checks that touch the network, `build` and `fleet`, are
+# bounded by `CCRC_HEALTH_TIMEOUT`, declared in `ccrc` beside the reader that
+# uses it — `ccrc status` makes the same call and must be bounded by the same
+# knob.)
 : "${CCRC_DOCTOR_GH_TIMEOUT:=15}"
 
 # ── the check table ───────────────────────────────────────────────────────
@@ -185,6 +186,7 @@ CCRC_DOCTOR_CHECKS=(
   name
   disk
   wrappers
+  build
   fleet
 )
 
@@ -2222,6 +2224,161 @@ _check_wrappers() {
   _dr_pass wrappers "${#wr_ids[@]} accounts in \$HOME/.ccrc/accounts.json match \$HOME/.local/bin ($n_up upstream, $n_gen generated, $n_ext external)"
 }
 
+# ── the running build against the stamp (stage 4, Task 9 — spec §8) ───────
+# `~/.ccrc/build.json` says what is INSTALLED; the server process reports what
+# it BOOTED with, on `GET /health` — the same stamp, read at startup and held
+# in memory. Between an install/update and a restart the two legitimately
+# differ, and until this check existed nothing on the box said so: `ccrc
+# install` replaces the tree and stamps it, doctor read only the stamp, and a
+# server still running last week's build passed every check while `install:
+# service:` was the one transcript line that knew. FAIL's remedy is the restart
+# because that IS the repair — the bits are already on disk.
+#
+# THE ADDRESS IS `_box_server_addr`'s ANSWER, the same one the fleet check
+# asks, because it is the box's ONE statement of where its server listens
+# (CCRC_ADDR, or ccrc.env's CCRC_HOST/CCRC_PORT — the exact pair
+# `ccrc.service` itself reads through `EnvironmentFile=`). A box with no
+# address has no server of its own to compare against — the FLEET host's
+# ordinary state — and that is a SKIP, not a finding.
+#
+# UNREACHABLE IS A SKIP HERE, deliberately unlike the fleet check's WARN for
+# the same curl failure: the fleet check's subject is a comparison a
+# configured server is expected to be up for, while this check's subject is
+# the RUNNING process — and "nothing is running" means there is no running
+# build to measure, which is `_check_services`' finding to make (it FAILs an
+# inactive ccrc.service with its own remedy). Reporting it here too would
+# hand one condition two verdicts in two vocabularies.
+#
+# THE 401 ARM IS D-150's RULE, restated: `GET /health` is EXEMPT from the
+# session gate on this build (auth/gate.ts names it — deploy's liveness
+# probe), so a gated answer means an older server or something else entirely
+# in front of the port — and either way the GATE answered, not the build.
+# Classified from this server's own refusal envelope exactly as `_box_health`
+# does; a bare 401 (a proxy demanding credentials) stays the generic
+# HTTP-error WARN.
+#
+# NOTHING FROM THE BODY IS EVER PRINTED — `_box_health`'s standing rule. The
+# sha the network sent is compared and discarded; every printed sha is the
+# LOCAL stamp's, off this box's own disk.
+_check_build() {
+  # The readers live in `ccrc`, not here — `_check_fleet`'s guard, for
+  # `_check_fleet`'s reason: this file is only ever sourced BY ccrc, and a
+  # check that assumed so silently would report on a box it never measured.
+  if ! declare -F _box_server_addr >/dev/null 2>&1 || ! declare -F _box_build_fields >/dev/null 2>&1; then
+    _dr_fail build "ccrc's own readers are not loaded, so the running server was never compared to the stamp" \
+      "this is a bug in ccrc, not a fact about your box — _check_build calls _box_server_addr/_box_build_fields from ccrc itself, and this check table was sourced by something that is not ccrc"
+    return 1
+  fi
+
+  # THIS BOX'S HALF FIRST: no stamp means nothing to compare, whatever is or
+  # is not listening — so nothing is asked over the network at all.
+  local s_rc=0
+  _box_build_fields || s_rc=$?
+  case "$s_rc" in
+    0) ;;
+    3)
+      _dr_skip build "this box has no build stamp ($BOX_STAMP_FILE), so there is nothing to compare the running server against — a deploy or an update writes one"
+      return 3 ;;
+    5)
+      _dr_warn build "jq is not on PATH, so this box's build stamp could not be read" \
+        "install it first — see the 'jq' check above"
+      return 2 ;;
+    *)
+      _dr_warn build "the build stamp at $BOX_STAMP_FILE cannot be read, so the running server cannot be compared to it" \
+        "something wrote garbage where the stampers write facts — 'ccrc version' names the same refusal; a re-deploy or 'ccrc update' restamps the box"
+      return 2 ;;
+  esac
+  local stamped="${BOX_BUILD[0]}"
+
+  local addr_out addr_rc=0
+  addr_out="$(_box_server_addr)" || addr_rc=$?
+  local -a af=()
+  [ -z "$addr_out" ] || mapfile -t af <<< "$addr_out"
+  if [ "$addr_rc" -eq 1 ]; then
+    _dr_skip build "this box has no server address (no CCRC_ADDR, and no CCRC_HOST/CCRC_PORT in $BOX_ENV_FILE), so it runs no server of its own whose build could disagree with the stamp"
+    return 3
+  fi
+  if [ "$addr_rc" -ne 0 ]; then
+    _dr_skip build "this box's server address cannot be used (${af[0]:-$BOX_ENV_FILE}), so no running server was asked what build it is on"
+    return 3
+  fi
+  local addr="${af[0]}"
+
+  if ! command -v curl >/dev/null 2>&1; then
+    _dr_warn build "curl is not on PATH, so the server at $addr could not be asked what build it is running" \
+      "install it: sudo apt install curl — the fleet host's own swap hook already needs it (deploy/notify.sh)"
+    return 2
+  fi
+
+  local out rc=0
+  out="$(curl -s --max-time "$CCRC_HEALTH_TIMEOUT" -H 'accept: application/json' \
+    -w '\n%{http_code}' "http://$addr/health" 2>/dev/null)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    _dr_skip build "no server answered /health at $addr (curl exited $rc), so there is no RUNNING build to compare the stamp against — whether one SHOULD be running is the 'services' check's finding"
+    return 3
+  fi
+  case "$out" in
+    *$'\n'*) ;;
+    *)
+      _dr_warn build "whatever is listening at $addr answered /health with something this check could not read" \
+        "check what that address really is — a ccrc server answers /health with its build stamp as JSON"
+      return 2 ;;
+  esac
+  local code="${out##*$'\n'}" body="${out%$'\n'*}"
+  if [ "$code" != 200 ]; then
+    if [ "$code" = 401 ] \
+       && [[ "$body" =~ \"error\"[[:space:]]*:[[:space:]]*\"unauthenticated\" ]] \
+       && [[ "$body" =~ \"verdict\"[[:space:]]*:[[:space:]]*\" ]]; then
+      _dr_skip build "the session gate answered /health at $addr, not the build (D-150) — GET /health is exempt on this build, so whatever refused it predates the exemption or sits in front of the port; either way the running build was not measured, and 'ccrc version' still names what is installed"
+      return 3
+    fi
+    local why
+    case "$code" in
+      [0-9][0-9][0-9]) why="HTTP $code" ;;
+      *) why="a status this check could not read" ;;
+    esac
+    _dr_warn build "the server at $addr answered $why when asked for /health, so it never said what build it is running" \
+      "read the server's own log: journalctl --user -u ccrc.service -n 50"
+    return 2
+  fi
+
+  command -v node >/dev/null 2>&1 || {
+    _dr_warn build "node is not on PATH, so the server's answer could not be parsed" \
+      "install Node first — see the 'node' check above"
+    return 2
+  }
+  # `unstamped` is a real answer (`/health` serves `build: null` on a box the
+  # deploy never stamped) and it is kept apart from a malformed body: a server
+  # SAYING it carries no stamp, on a box whose disk carries one, booted before
+  # the stamp existed — the same staleness the sha mismatch means, so it lands
+  # in the same FAIL with the same remedy.
+  local running
+  running="$(CCRC_HEALTH_BODY="$body" node -e '
+    let j; try { j = JSON.parse(process.env.CCRC_HEALTH_BODY); } catch (e) { process.exit(3); }
+    if (!j || typeof j !== "object" || Array.isArray(j) || j.ok !== true || !("build" in j)) process.exit(3);
+    const b = j.build;
+    if (b === null) { process.stdout.write("unstamped"); process.exit(0); }
+    if (typeof b !== "object" || Array.isArray(b) || typeof b.sha !== "string" || b.sha.length === 0) process.exit(3);
+    process.stdout.write(b.sha);
+  ' 2>/dev/null)" || {
+    _dr_warn build "whatever answered /health at $addr did not answer with the health JSON, so the running build is unknown" \
+      "check what that address really is (a reverse proxy or a captive portal answers exactly this way), and that CCRC_HOST/CCRC_PORT name this box's own server"
+    return 2
+  }
+  if [ "$running" = unstamped ]; then
+    _dr_fail build "the server at $addr reports NO build stamp while this box's $BOX_STAMP_FILE names ${stamped:0:12} — the running process predates the stamp on disk" \
+      "restart it onto the installed build: systemctl --user restart ccrc.service"
+    return 1
+  fi
+  if [ "$running" = "$stamped" ]; then
+    _dr_pass build "the running server at $addr reports the sha the stamp names (${stamped:0:12})"
+    return 0
+  fi
+  _dr_fail build "the running server at $addr reports a DIFFERENT sha than $BOX_STAMP_FILE (${stamped:0:12} is installed) — the process is still on the build it booted with" \
+    "restart it onto the installed build: systemctl --user restart ccrc.service"
+  return 1
+}
+
 # ── the two boxes' matched set ────────────────────────────────────────────
 # THE ONE CHECK THAT IS NOT ABOUT THIS BOX. Every check above measures the box
 # it runs on; this one asks whether this box and the OTHER one are a matched
@@ -2374,7 +2531,7 @@ _check_fleet() {
   local rc=0
   if [ "$build" = skewed ]; then
     _dr_fail fleet "the two boxes are running different builds (the server at $addr answers build: skewed — the shas differ, or one of them is dirty and is therefore not the commit it names)" \
-      "deploy the lagging box, agent first, then server: 'bash deploy/deploy.sh agent <fleet-host>' and only then 'bash deploy/deploy.sh'. The server reads what the fleet host's hook writes and the agent caches 'ccd caps' at boot, so the other order ships a server that reads fields the fleet host does not yet write. 'ccrc version' on each box names the sha it is running"
+      "run 'ccrc update' on the lagging box — fleet box first, then the server box (stage 4, spec §8): the server reads what the fleet host's hook writes and the agent caches 'ccd caps' at boot, so the other order runs a server that reads fields the fleet host does not yet write. 'ccrc version' on each box names the sha it is running"
     rc=1
   fi
   if [ "$roster" = divergent ]; then
@@ -2398,7 +2555,7 @@ _check_fleet() {
   esac
   if [ "${#soft[@]}" -gt 0 ]; then
     _dr_warn fleet "$(_dr_join ${soft[@]+"${soft[@]}"})" \
-      "no evidence is not disagreement — deploy the fleet host so its agent reports both ('bash deploy/deploy.sh agent <fleet-host>'), and check 'ccrc version' there: an unstamped box has nothing to report"
+      "no evidence is not disagreement — run 'ccrc update' on the fleet host (fleet box first is the standing order) so its agent reports both, and check 'ccrc version' there: an unstamped box has nothing to report"
     [ "$rc" -eq 1 ] || rc=2
   fi
 

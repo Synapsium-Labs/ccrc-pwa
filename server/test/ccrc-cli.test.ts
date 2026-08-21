@@ -155,13 +155,27 @@ describe('ccrc: dispatch and usage', () => {
     // only recovery path from a box they cannot log into:
     // `server/test/ccrc-passwd.test.ts` owns what it does.
     //
+    // `update` joined it in stage 4 Task 6 — fetch + verify a published
+    // release, back up, re-run the install spine from the verified staged
+    // tree. Same split again: `server/test/ccrc-update.test.ts` owns what it
+    // does, this line owns that an operator can find it.
+    //
+    // `uninstall`, `backup` and `logs` joined it in stage 4 Task 8 (spec §7):
+    // the exit ramp that leaves reinstall safe, update's backup step
+    // standalone, and the role-aware journalctl passthrough. Same split:
+    // `server/test/ccrc-uninstall.test.ts` owns all three behaviours.
+    //
     // `expose` joined it in stage 3b Task 2 — the post-install verb that gives
     // a box a public name and a real certificate (spec D1–D3), the same shape
     // as `passwd`: prompts on a tty, writes ccrc-owned files, never runs sudo.
     // `server/test/ccrc-expose.test.ts` owns what it does.
     const home = mkTmp('ccrc-cli-usage-verbs-');
     const r = runCcrcRaw(home, ['-h']);
-    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|install\|passwd\|expose\|version\}/);
+    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|install\|update\|uninstall\|backup\|logs\|passwd\|expose\|version\}/);
+    expect(r.stdout).toMatch(/^ {2}update {4}fetch a published release/m);
+    expect(r.stdout).toMatch(/^ {2}uninstall {1}/m);
+    expect(r.stdout).toMatch(/^ {2}backup {4}/m);
+    expect(r.stdout).toMatch(/^ {2}logs {6}/m);
     expect(r.stdout).toMatch(/^ {2}expose {4}give this box a public name/m);
     // …and the body explains it, including the half an operator gets wrong:
     // rotating expires SESSIONS and leaves enrolled passkeys working.
@@ -405,6 +419,38 @@ describe('ccrc: version', () => {
     const r = runCcrcRaw(home, ['version']);
     expect(r.code).toBe(0);
     expect(r.stdout).not.toMatch(/dirty/);
+  });
+
+  it('prints a "version vX.Y.Z" line iff the stamp carries one', () => {
+    // Stage 4, Task 1: the release tag rides in build.json as an additive
+    // fifth field. Present -> its own line; absent -> NO line, and the rest of
+    // the output is unchanged (every stamp already on a box omits it).
+    const home = mkTmp('ccrc-cli-version-tag-');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'build.json'),
+      JSON.stringify({ sha: 'abc123', ref: 'main', builtAt: '2026-08-21T00:00:00Z', dirty: false, version: 'v1.2.3' }));
+    const tagged = runCcrc(home, ['version']);
+    expect(tagged).toMatch(/^version v1\.2\.3$/m);
+    expect(tagged).toContain('abc123');
+    writeFileSync(join(home, '.ccrc', 'build.json'),
+      JSON.stringify({ sha: 'abc123', ref: 'main', builtAt: '2026-08-21T00:00:00Z', dirty: false }));
+    const untagged = runCcrc(home, ['version']);
+    expect(untagged).not.toMatch(/^version /m);
+    expect(untagged).toContain('abc123');
+  });
+
+  it('a present-but-invalid version is an unreadable stamp — same whole-or-nothing rule as the TS parser', () => {
+    // `shared/buildinfo.ts` rejects `version: ""` (no stamper writes one), and
+    // the jq reader must agree with it — two validators that disagree about
+    // what a well-formed stamp is would have `ccrc version` printing a stamp
+    // the server refuses to serve.
+    const home = mkTmp('ccrc-cli-version-emptytag-');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'build.json'),
+      JSON.stringify({ sha: 'abc123', ref: 'main', builtAt: '2026-08-21T00:00:00Z', dirty: false, version: '' }));
+    const r = runCcrcRaw(home, ['version']);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: build stamp unreadable/m);
   });
 
   it('refuses a stamp that exists but does not parse, rather than printing a version nobody measured', () => {

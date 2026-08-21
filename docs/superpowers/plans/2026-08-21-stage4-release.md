@@ -69,15 +69,18 @@ built sha, or always from the release job); `/health` body gains sibling `versio
 known; `ccrc version` prints it when present. `buildAgreement` UNCHANGED (sha+dirty) with a
 new pin: two stamps differing only in `version` still compare `agreed`.
 
-- [ ] RED: `parseBuildInfo` keeps a valid `version` and tolerates absence; `/health` emits
+- [x] RED: `parseBuildInfo` keeps a valid `version` and tolerates absence; `/health` emits
   it only when present; `ccrc version` prints `version vX.Y.Z` line iff present (fixture
   build.json both ways); stampers: fixture repo WITH a tag at HEAD stamps it, without omits
   it (`git tag --points-at HEAD` in both stampers); the buildAgreement pin above.
-- [ ] GREEN across every reader listed. If `ccd version`'s python3 reader lives in
-  `ccd/ccd`, leave it and record the deviation (it omits the tag; additive absence).
-- [ ] Mutations: drop the absence-tolerance (red); make buildAgreement compare version
-  (the version-only-differ pin reds). Suites: buildinfo + config + single-definition +
-  ccrc-cli. Commit `feat(release): the tag rides in build.json, additively, everywhere`.
+  (Ran red: 7 TS-side + 2 ccrc-cli + 1 status + 1 install-stamp before implementation.)
+- [x] GREEN across every reader listed. `ccd version`'s python3 reader lives in `ccd/ccd`
+  — left untouched, deviation D-139 (it omits the tag; additive absence).
+- [x] Mutations: drop the absence-tolerance (7 red); make buildAgreement compare version
+  (2 red — the version-only-differ pin, unit + end-to-end). Suites: buildinfo + config +
+  single-definition + ccrc-cli all green (plus health, fleet-build-skew, ccrc-doctor,
+  ccrc-install, typecheck-tests, agent build-fp).
+  Commit `feat(release): the tag rides in build.json, additively, everywhere`.
 
 ### Task 2: `deploy/build-release.sh`
 
@@ -90,26 +93,30 @@ dists, three package.json+locks, shared/, ccd/, deploy units+helpers, install.sh
 with per-file sha256) and `SHA256SUMS` beside it. `<version>` = the tag, or
 `untagged-<shortsha>` under `--untagged`.
 
-- [ ] RED (harness: fixture git repo via the `gitInit` idiom, PATH-contained; npm stubbed by
+- [x] RED (harness: fixture git repo via the `gitInit` idiom, PATH-contained; npm stubbed by
   a recording stub that fabricates `dist/` — the test pins orchestration, not tsc): dirty
   tree refused with nothing written; untagged refused; tagged run produces tarball whose
   listing contains the layout's every top-level entry; `sha256sum -c SHA256SUMS` passes;
   MANIFEST names every file in the tarball with a correct digest (spot-verify two).
-- [ ] GREEN. `set -euo pipefail`; staging under `mktemp -d`; tar with `--sort=name
+  (Ran red: 10/10 before implementation.)
+- [x] GREEN. `set -euo pipefail`; staging under `mktemp -d`; tar with `--sort=name
   --mtime=@0 --owner=0 --group=0` (reproducible-ish; pin the flags in a test so a casual
-  edit doesn't silently make artifacts unstable).
-- [ ] Mutations: drop the dirty refusal (red); corrupt one file post-MANIFEST (the
+  edit doesn't silently make artifacts unstable). Tracked content staged via
+  `git archive HEAD` (a gitignored secret can never ride into a release), pinned by a
+  source-scan test.
+- [x] Mutations: drop the dirty refusal (red); corrupt one file post-MANIFEST (the
   spot-verify reds). Commit `feat(release): build-release.sh — the matched set, checksummed`.
 
 ### Task 3: `.github/workflows/release.yml`
 
 **Files:** create the workflow; extend `server/test/build-release.test.ts` with source pins.
-- [ ] The workflow: `on: push: tags: ['v*']`; single job: checkout (full depth for the tag),
-  node from `server/package.json` engines (the ci.yml idiom), `bash deploy/build-release.sh
-  --out release-out`, `gh release create "$GITHUB_REF_NAME" release-out/* --verify-tag`
-  (via `GH_TOKEN: ${{ github.token }}`).
-- [ ] Pins (source-scan, the runbook-holds idiom): the workflow invokes `build-release.sh`
+- [x] The workflow: `on: push: tags: ['v*']`; single job: checkout (full depth for the tag),
+  node from `server/package.json` engines (the ci.yml idiom, via `node-version-file`),
+  `bash deploy/build-release.sh --out release-out`, `gh release create "$GITHUB_REF_NAME"
+  release-out/* --verify-tag` (via `GH_TOKEN: ${{ github.token }}`).
+- [x] Pins (source-scan, the runbook-holds idiom): the workflow invokes `build-release.sh`
   and never a second build path; it triggers only on `v*` tags; it uploads both artifacts.
+  (RED first: 3/3 pins failed with the workflow absent, 10 existing passed.)
   Commit `feat(release): the release workflow is thin — the script owns the build`.
 
 ### Task 4: `install.sh --release`
@@ -122,11 +129,12 @@ to `mktemp -d`, `exec bash <staging>/ccd/ccrc install "$@"`. Checkout mode untou
 `CCRC_RELEASE_BASE_URL` env override — the test seam (points at a `file://`-style local dir
 via a stub `curl`; the harness's poisoned curl stays for every other test).
 
-- [ ] RED: `--release` with stubbed curl serving a fixture tarball+SHA256SUMS installs from
+- [x] RED: `--release` with stubbed curl serving a fixture tarball+SHA256SUMS installs from
   the staging tree (assert the handoff argv via a recording `bash`/`ccrc` stub); checksum
   mismatch refuses with nothing extracted; absent release answers curl's own failure; plain
   run (no flag) still takes checkout mode (existing tests keep passing untouched).
-- [ ] GREEN; mutations: skip the checksum verify (red). Commit
+  (Ran red: 4/4 new before implementation, 6 existing green.)
+- [x] GREEN; mutations: skip the checksum verify (red). Commit
   `feat(release): install.sh fetches and verifies a release`.
 
 ### Task 5: `ccrc install --role server|fleet|both`
@@ -143,11 +151,14 @@ refusal), enables it, SKIPS `ccrc.service` + coord/auth/skills steps that presup
 server. `server`: today's spine minus nothing (documented as both-without-fleet-extras;
 the difference from `both` is reserved for later stages — one sentence in the help text).
 
-- [ ] RED: `--role fleet` writes agent.env 0600 with both keys (values SET, never echoed),
+- [x] RED: `--role fleet` writes agent.env 0600 with both keys (values SET, never echoed),
   installs+enables the agent unit and NOT ccrc.service; re-run keeps agent.env (seed-once);
   piped stdin refused; `--role both` byte-identical to today on a fresh box (compare the
   installed unit set against the existing test's expectations); unknown role → usage die.
-- [ ] GREEN; mutations: drop the agent-unit install on fleet (red); echo the token (red).
+  (Ran red: 10/13 new before implementation; the 3 that did not are named in the Task 5
+  entry below. The fleet happy path runs the WHOLE verb on a node-pty terminal —
+  `ccrc-passwd.test.ts`'s idiom — because `_inst_agent_env` is `[ -t 0 ]` + `read -rs`.)
+- [x] GREEN; mutations: drop the agent-unit install on fleet (red); echo the token (red).
   Commit `feat(ccrc): install --role — a fleet box has an installer path (D-73 closes)`.
 
 ### Task 6: `cmd_update` — fetch, verify, back up, install, report
@@ -165,13 +176,17 @@ staged tree (role-aware per the recorded role); print the from→to report; fini
 fleet is behind — WARN text names fleet-box-first; a 401/unreachable answer skips the
 comparison silently (D-150). NO sweep in this task (Task 7).
 
-- [ ] RED (fixture box from `freshBox` + a fixture release tarball): happy path replaces
+- [x] RED (fixture box from `freshBox` + a fixture release tarball): happy path replaces
   `~/ccrc` and reports both build.json versions; checksum mismatch changes NOTHING
   (byte-compare `~/ccrc` before/after); backup dir contains coord.db snapshot + old ccd +
   units before any install write (ordering pin: a fault injected between backup and install
   leaves the backup complete); `--to` fetches the named tag's URL (recording curl stub
   argv); rollback prints the coord.db restore lines and does NOT copy the db itself.
-- [ ] GREEN; mutations: reorder backup after install (the ordering pin reds); skip manifest
+  (Ran red: 12/12 in the new `ccrc-update.test.ts`, +2 in `build-release.test.ts` (the
+  shipped build.json — see D-141), +1 in `ccrc-cli.test.ts` (the usage verb list), before
+  implementation. The harness copies `freshBox`'s pieces rather than importing them —
+  `build-release.test.ts`'s stated reason: importing a .test.ts registers its whole suite.)
+- [x] GREEN; mutations: reorder backup after install (the ordering pin reds); skip manifest
   verify (red). Commit `feat(ccrc): update — verified artifact in, backup first, atomic`.
 
 ### Task 7: The sweep + the CLAUDE.md carve-out (R1)
@@ -179,17 +194,18 @@ comparison silently (D-150). NO sweep in this task (Task 7).
 **Files:** `ccd/ccrc` (`_upd_sweep` called as update step 4), `CLAUDE.md`, extend
 `ccrc-update.test.ts` + a both-copies pin in `server/test/single-definition.test.ts` or
 `build-release.test.ts`.
-- [ ] RED (recording `systemctl` stub): with the `KillMode=process` drop-in present in the
+- [x] RED (recording `systemctl` stub): with the `KillMode=process` drop-in present in the
   fixture unit dir, the sweep issues `try-restart` per `claude-session@*` unit, then the
   failed-state warn query and the active-state verify query (argv order pinned); with the
   drop-in ABSENT, the sweep REFUSES (loud, names the drop-in) and the update still exits 0
   with a degraded line (the sweep is refused, not the update); panes/tmux never appear in
   any argv (pin: no `tmux` in the recording log).
-- [ ] GREEN. Then CLAUDE.md: inside the SAFETY section's never-touch bullet, add the scoped
+  (Ran red: 2/2 before implementation, 12 existing green.)
+- [x] GREEN. Then CLAUDE.md: inside the SAFETY section's never-touch bullet, add the scoped
   exception sentence citing the 2026-08-21 ruling and the mandatory preflight; a source pin
   asserts BOTH sweep implementations (deploy.sh's and ccrc's) contain the preflight grep
   (`KillMode=process`) so neither can drop it silently.
-- [ ] Mutations: delete the preflight from `_upd_sweep` (both the refusal test AND the
+- [x] Mutations: delete the preflight from `_upd_sweep` (both the refusal test AND the
   both-copies pin red). Commit `feat(ccrc): the supervisor sweep, under its preflight —
   the sacred rule gains its one scoped exception (ruling 2026-08-21)`.
 
@@ -197,7 +213,7 @@ comparison silently (D-150). NO sweep in this task (Task 7).
 
 **Files:** `ccd/ccrc` (three verbs + usage/dispatch); new `server/test/ccrc-uninstall.test.ts`;
 extend `ccrc-cli.test.ts`.
-- [ ] RED per spec §7's exact remove/preserve/refuse sets — the load-bearing cases:
+- [x] RED per spec §7's exact remove/preserve/refuse sets — the load-bearing cases:
   refuses with live sessions unless `--force` (fixture registry rows); removes ONLY
   marker-verified wrappers (a marker-less file with a wrapper's name survives); settings.json
   hook entries removed via the existing predicate WITH per-file backup, unmanaged hooks
@@ -206,24 +222,29 @@ extend `ccrc-cli.test.ts`.
   NEVER worktrees (fixture worktree survives); keep-aside restore commands printed, files
   untouched. `backup` = update's step 2 standalone with `CCRC_BACKUP_KEEP` pruning. `logs`
   passes `-f`/`-n` through to journalctl (recording stub argv), role-aware unit name.
-- [ ] GREEN; mutations: drop the marker check on wrapper removal (red); drop the live-session
+  (Ran red: 18/19 in the new `ccrc-uninstall.test.ts` + 1 in `ccrc-cli.test.ts` (the usage
+  verb list) before implementation; the 1 pre-pass is named in the Task 8 ledger entry.)
+- [x] GREEN; mutations: drop the marker check on wrapper removal (red); drop the live-session
   refusal (red). Commit `feat(ccrc): uninstall makes reinstall safe; backup and logs join`.
 
 ### Task 9: Doctor — the `build` check + retargeted remedies
 
 **Files:** `ccd/ccrc-doctor-checks`; extend `ccrc-doctor.test.ts`.
-- [ ] RED: `build` (new array entry + `_check_*`): running server's `/health` sha ==
+- [x] RED: `build` (new array entry + `_check_*`): running server's `/health` sha ==
   build.json sha → PASS naming the short sha; mismatch → FAIL, remedy names
   `systemctl --user restart ccrc.service`; no server/local-unreachable → SKIP; a 401 →
   SKIP whose text says the gate answered, not the build (D-150). `_check_fleet`'s two skew
   remedies now say `ccrc update` fleet-box-first (update the strings + their pins).
-- [ ] GREEN; bijection stays green; mutation: flip the sha comparison (red). Commit
+  (Ran red: 9/9 — 7 new build tests + the 2 retargeted remedy pins — before
+  implementation, 252 existing green.)
+- [x] GREEN; bijection stays green; mutation: flip the sha comparison (red — 40, see the
+  Task 9 ledger entry). Commit
   `feat(doctor): the running build is compared to the stamp; remedies name ccrc update`.
 
 ### Task 10: Runbook step 12 + docs
 
 **Files:** runbook, `README.md`, `deploy/ccrc.env.example`; extend `runbook-holds.test.ts`.
-- [ ] Step 12 per spec §9 (tag → release → `--release` install on VM1 → `--role fleet` on
+- [x] Step 12 per spec §9 (tag → release → `--release` install on VM1 → `--role fleet` on
   VM2 → restated proof → update across a second tag → uninstall+reinstall), with
   `runbook-holds` pins for quoted transcript lines; README gains the release/update/uninstall
   section and retires the "full multi-box guide is Stage 5" sentence if it now tells enough;
@@ -242,3 +263,214 @@ extend `ccrc-cli.test.ts`.
 
 (D-139 onward; recorded during execution — renumber against 3b's ledger at review time if
 it merges first.)
+
+- **D-139** (Task 1): `ccd version`'s python3 reader of `~/.ccrc/build.json` lives in
+  `ccd/ccd` (the heredoc near `ccd/ccd:2453`), which this branch does not touch by
+  contract. That one reader is OUT of Task 1's scope: `ccd version` simply omits the tag —
+  additive absence, correct by the same wire rule every other reader follows.
+  `single-definition.test.ts`'s "read from exactly two places" pin already names `ccd/ccd`
+  as the deliberate second reader and stays green. Migrating it rides with whatever future
+  task next touches `ccd/ccd`.
+- **Task 1 mutation measurements** (applied, run, reverted): (M1) parseBuildInfo's
+  absence-tolerance dropped (version made required) → 7 red across buildinfo +
+  fleet-build-skew; (M2) buildAgreement made to compare `version` → 2 red in
+  fleet-build-skew (the version-only-differ unit pin and the end-to-end wire pin).
+  The deploy.sh stamper is guarded by executing its extracted derivation lines
+  (`buildinfo.test.ts`), so dropping the tag lookup or making the field unconditional
+  reds there; `_inst_stamp`'s tag arm is pinned behaviorally in `ccrc-install.test.ts`.
+- **Task 2 mutation measurements** (applied, run, reverted): (M1) the dirty-tree refusal
+  dropped → 1 red (`refuses a dirty tree — die, nothing written, no npm ran`); (M2) one
+  file (`install.sh`) corrupted in staging AFTER the MANIFEST was written → 1 red (the
+  MANIFEST test: the node-crypto spot-verify of that file's digest, independently of
+  `sha256sum -c MANIFEST` which reds on the same bytes). Suite green 10/10 before and
+  after; typecheck-tests + single-definition + install-sh green (79/79).
+- **D-140** (Task 5): the task text's "SKIPS `ccrc.service` + coord/auth/skills steps that
+  presuppose a server" is applied with the restrictive clause doing the work: the steps a
+  fleet box skips are `ccrc.service` (unit + enable/restart/verify — replaced by
+  `ccrc-agent.service` end-to-end) and the two server-only landing lines (the PWA address
+  and the passphrase-gate sentence; doctor's `auth` check SKIPs on that box for the same
+  reason). `_inst_hooks`, `_inst_skills`, `_inst_dirs` and `_inst_wrappers` are KEPT on
+  fleet, deliberately: none presupposes a server, and the fleet host is exactly where
+  `deploy.sh agent` ships the session hooks and both skills today — skipping them would
+  make `--role fleet` converge less of the box than the deploy lane it replaces. No
+  install step touches coord at all (coord.db is created by the server at boot), so the
+  "coord" member of the list has no referent in this verb. agent.env's two keys are
+  spelled `CCRC_AGENT_TOKEN` (the unit's existing contract) and `CCRC_SERVER_URL` (new,
+  additive — recorded for later stages; nothing reads it yet), plus a header pointing at
+  `deploy/ccrc-agent.env.example` for the keys the prompts don't cover.
+- **Task 5 mutation measurements** (applied, run, reverted): (M1) the fleet arm of
+  `_inst_units`' role gate deleted (fleet gets `ccrc.service` like everyone) → 2 red
+  (`installs ccrc-agent.service — byte for byte — and NOT ccrc.service`, and the
+  enable-argv test via doctor's `is-active ccrc.service` appearing in the recorded argv);
+  (M2) the token expanded into `_inst_agent_env`'s result line → 1 red (`never echoes the
+  token`). Red-first honesty: 10/13 new tests red before implementation; the 3 that
+  passed pre-implementation did so for stated reasons — the two usage-error tests because
+  `--role` was an unknown ARGUMENT before the flag existed (exit 2 with `--role` in the
+  message either way, so the observable is the same refusal), and the landing-lines test
+  vacuously against a failed run (its real force is that it runs against the green fleet
+  transcript, where a leaked `install: gate:`/`install: PWA:` line reds it). Suite 96/96
+  before and after; ccrc-cli + single-definition +
+  install-sh + typecheck-tests (117/117) and ccrc-doctor + ccrc-passwd + ccrc-wrappers
+  (338/338) green. The existing spine pin (`cmd_install is the sequence…`) and
+  `TREE_FILES` gained `_inst_agent_env` / `deploy/ccrc-agent.service` — intended
+  extensions, both annotated in place.
+- **Task 3 mutation measurements** (applied to the workflow, run, reverted): (M1)
+  `workflow_dispatch:` added to the trigger set → 1 red (the trigger pin — deliberately
+  stricter than ci.yml, which keeps dispatch as its webhook-incident escape hatch; a
+  release must always match a pushed tag); (M2) `npm ci &&` prepended to the build step
+  → 1 red (the single-build-path pin — it also caught the workflow's own first-draft
+  COMMENT quoting `npm ci && npm run build`, which is the pin working as a source-scan);
+  (M3) the upload glob narrowed to `release-out/ccrc-*.tar.gz` → 1 red (the
+  both-artifacts pin: SHA256SUMS silently dropped). Suite 13/13 green before and after;
+  typecheck-tests + single-definition green (73/73).
+- **Task 4 mutation measurements** (applied, run, reverted): (M1) the `sha256sum -c`
+  verify replaced with `true` → 1 red (`checksum mismatch: refuses loudly, extracts
+  NOTHING, runs NO install` — the tampered tarball extracted and its ccrc ran, both
+  asserted against). Suite 10/10 green before and after; typecheck-tests +
+  single-definition + build-release green (96/96 across the four); ccrc-install 83/83
+  (checkout-mode handoff untouched). Note: `usage()`'s pinned one-line string is
+  deliberately unchanged (existing tests pass untouched, per this task's own checklist);
+  `--release` is documented in install.sh's header and lands in README/runbook at Task 10.
+- **D-141** (Task 6): **the release artifact must carry the identity it installs, or every
+  release-mode box lies about its build for ever.** An extracted tarball is not a git
+  repository, so `_inst_stamp` skips on it BY DESIGN — which meant a `--release` install or
+  an update left the OLD stamp in place while the box ran new code, and the restated proof
+  (§R3: `/health` and `ccrc version` report N+1 after update) was unreachable. Two files
+  outside Task 6's named list were touched to close it, both minimally: (a)
+  `deploy/build-release.sh` now writes `build.json` (sha/ref/builtAt/`dirty:false`/version,
+  the stampers' exact shape, `dirty:false` guaranteed by the script's own dirty-tree
+  refusal) into the staged tree BEFORE the MANIFEST, so the per-file digests cover it —
+  pinned by a new `build-release.test.ts` test (sha=HEAD, version=tag, MANIFEST-covered);
+  (b) `_inst_stamp` gained a shipped-stamp arm (`_inst_stamp_shipped`) taken only when the
+  git measurement is impossible, validating the artifact's stamp through the file's ONE
+  parser (`_box_build_fields`, which gained an optional file argument — no second jq
+  filter; `single-definition`'s one-parse pin stays green). The git measurement still wins
+  whenever it is possible; every existing skip transcript is byte-identical when no shipped
+  stamp exists (ccrc-install's pinned skip strings all green). This also fixes the same
+  latent gap in `install.sh --release` (Task 4 shipped it unstamped) with the one
+  implementation.
+- **D-142** (Task 6): the task text's "print the from→to report; finish with `cmd_doctor`"
+  is implemented as spine-then-report: the staged `ccrc install` IS the `_inst_*` re-run
+  and already ENDS with `cmd_doctor` from the NEW tree, so update's transcript is
+  …install steps… doctor …report — the report closes the transcript instead of preceding
+  doctor. Running a second doctor after the report would measure the box twice and, worse,
+  from the OLD tree's check table (`cmd_update` executes from the tree being replaced);
+  re-implementing the spine without its tail would spell the sequence twice. The exit code
+  is the staged install's (= doctor's), unchanged in meaning. The report's "to" half is
+  re-measured off `~/.ccrc/build.json` after the install, never inferred from the artifact.
+- **Task 6 mutation measurements** (applied, run, reverted): (M1) `_upd_backup` moved
+  AFTER the install step → 1 red (`the backup is COMPLETE before the install step runs` —
+  the fault-injection fixture whose staged install dies at its first instruction found no
+  backup dir); (M2) the post-extraction `sha256sum -c MANIFEST` replaced with `true` →
+  1 red (`MANIFEST mismatch after an honest outer checksum` — the inner file corrupted
+  after MANIFEST generation installed cleanly under the mutation). Suite 12/12 green
+  before and after each; sibling suites green after implementation: build-release 14/14,
+  ccrc-cli 34/34, install-sh + single-definition (122 across the four), ccrc-install
+  96/96, ccrc-doctor + runbook-holds 260/260, typecheck-tests 9/9. Intended extensions
+  beyond the task's named files, annotated in place: `ccrc-cli.test.ts`'s usage-verb pin
+  gained `update` (a verb that dispatches but is not in the usage line is a verb nobody
+  can find), `build-release.test.ts` gained the D-141 stamp test + `build.json` in
+  `EXPECTED_ENTRIES`. The fleet-behind WARN and its D-150 silences (401, unreachable, no
+  address) are covered by two dedicated tests (skewed → WARN naming fleet-box-first;
+  401 → silent, run proceeds).
+- **Task 7 mutation measurements** (applied, run, reverted): (M1) the whole preflight loop
+  deleted from `_upd_sweep` (the enumeration + per-unit `show -p KillMode` + refusal) →
+  3 red — BOTH sweep behavior tests (the argv-order pin, whose expected recording begins
+  with the preflight calls, and the refusal test, whose box now got swept instead of
+  refused) AND the both-copies pin's presence test in `single-definition.test.ts`. The
+  measurement also exposed a vacuous-pass hole in the both-copies ORDERING pin — with the
+  preflight absent, `indexOf` answers -1, which sits "before" any try-restart — closed
+  during the same round with an explicit `guard > -1` assertion. The both-copies pin was
+  written at the GREEN step per this task's own checklist (its red proof is this mutation,
+  not a pre-implementation run); the two behavior tests ran red-first (2/2, 12 existing
+  green). Placement choice the task left open: the pin lives in
+  `single-definition.test.ts` (the "both copies held equal" idiom is that file's), not
+  `build-release.test.ts`. Suites green after revert: ccrc-update 14/14,
+  single-definition + ccrc-cli + ccrc-install (210 across the four), build-release +
+  install-sh + ccrc-doctor + typecheck-tests 287/287. Intended harness extensions,
+  annotated in place: the fixture tmux stub now RECORDS its argv (the no-tmux pin reads
+  the absence of the record), and the fixture systemctl gained `try-restart`,
+  `list-units` (per-state fixture files) and `show -p KillMode` (answered by the fixture
+  drop-in's presence) arms.
+- **D-143** (Task 8): **the settings.json predicate stays defined once, so the sweep rides
+  the installer.** `ccd/install-session-hooks.sh` — outside Task 8's named file list —
+  gained a `--remove` mode: the `unmanaged` jq def (its line 72 predicate) is THE single
+  definition of "which settings.json entries are ccrc's", and an uninstaller that
+  re-spelled it in bash is exactly how the two would come to disagree about whose entry a
+  file holds. `--remove` runs the sweep half only (managed entries out, empty event arrays
+  dropped, an emptied `.hooks` deleted rather than left as `{}` so a no-change file is not
+  rewritten; a HOME with no settings.json gains none), keeps the per-file backup, and never
+  touches statusLine in either direction. `_uninst_hooks` runs the TREE's copy
+  (`$CCRC_HERE/install-session-hooks.sh`), deliberately the OPPOSITE of `_inst_hooks`'
+  installed-copy doctrine: an installed copy that predates the flag would read `--remove`
+  as a default install run and RE-REGISTER every hook it was asked to remove.
+- **D-144** (Task 8): `~/.local/bin/ccd-cap-scopes` is in the remove set although spec §7
+  spells only `~/.local/bin/{ccd,ccrc}` — `_inst_bins` installs THREE executables, and this
+  same verb removes `ccd-cap-scopes.{service,timer}`; leaving the third binary would strand
+  an orphan on PATH for ever. The spec's pair predates the third bin; annotated in place.
+- **Task 8 mutation measurements** (applied, run, reverted): (M1) the marker check dropped
+  from `_uninst_wrappers` (every id-named file removed unconditionally) → 2 red (the
+  marker-less-file-survives test and the marked-but-edited-is-kept test); (M2) the
+  live-session refusal dropped from `cmd_uninstall` → 1 red (the refusal test: exit 1,
+  names the count and `--force`, removes NOTHING). Suite 19/19 green before and after each.
+  Red-first honesty: 18/19 new tests red before implementation; the 1 that passed
+  pre-implementation did so for a stated reason — the `logs -n`-without-a-value usage test,
+  vacuous while `logs` was an unknown VERB (exit 2 with journalctl never run is the same
+  observable either way); its real force arrives with the verb, where a `-n` that fell
+  through to journalctl would red it. Sibling suites green after implementation:
+  ccrc-cli 34/34, install-session-hooks + ccrc-update + single-definition +
+  typecheck-tests (136 across the five with ccrc-cli), ccrc-install + ccrc-doctor +
+  build-release + install-sh + ccrc-wrappers + ccrc-passwd (458 across the six),
+  session-hook 22/22 (isolated), runbook-holds 6/6.
+- **Task 9 mutation measurements** (applied, run, reverted): (M1) the sha comparison in
+  `_check_build` flipped (`=` → `!=`) → 40 red in `ccrc-doctor.test.ts` — the two direct
+  pins (`passes when the running server reports the stamped sha` and `fails on a
+  mismatch … the remedy is the restart`) plus the collateral every healthy-box fixture
+  now shows (a flipped comparison FAILs the healthy box, exit 1, so every summary/exit
+  pin reds too). Suite 261/261 green before and after. Red-first honesty: 9/9 red before
+  implementation (7 new build tests + the 2 retargeted `_check_fleet` remedy pins), 252
+  existing green. Sibling suites green after implementation: ccrc-install 96/96,
+  ccrc-update + ccrc-cli + single-definition + install-sh + build-release +
+  runbook-holds + typecheck-tests 153/153 (one run, seven files). Intended extensions
+  beyond the task's named files, annotated in place: (a) the doctor suite's `healthy()`
+  now models the check's two halves agreeing — a REAL jq replaces the presence stub
+  (`_box_build_fields` parses with it; `statusBox` had already made the same swap), a
+  `build.json` stamp, and the fixture `curl` dispatches on the URL so `/health` answers
+  beside `/api/fleet/health`; (b) three count pins moved with the table:
+  the fleet `really asks` test filters the log to its own URL (still exactly one call),
+  the env-less fleet-role box counts 4 skips (build joins config/auth/fleet), and the
+  shape test's address-less box counts 2; (c) `ccrc-install.test.ts`'s curl stub gained
+  the `/health` arm, answering the sha `_inst_stamp` wrote (read at run time), so the
+  install's doctor tail PASSes `build` for the reason a freshly restarted box really
+  does and the `0 warned, 0 failed` close stays green on its original meaning.
+  Unreachable is a SKIP in `_check_build` (deliberately unlike `_check_fleet`'s WARN,
+  and per this task's own text): a dead ccrc.service is `_check_services`' FAIL, and a
+  second verdict in a second vocabulary for one condition is the overloaded seam.
+- **Task 10 mutation measurements** (applied, run, reverted): the 8 new step-12 pins in
+  `runbook-holds.test.ts` ran RED-FIRST (8/8, section absent) before step 12 was written.
+  Then, with the section in place (14/14 green): (M1) the runbook's quoted sweep line
+  corrupted (`; panes untouched` dropped from the fenced quote) → 1 red (the sweep pin —
+  the runbook side of the link); (M2) `_upd_report`'s template in `ccd/ccrc` mutated
+  (`->` → `=>`) → 1 red (the report pin's source-template assert — the source side of the
+  same link, proving the pins bind the two rather than free-floating an expected string).
+  Suite 14/14 green before and after each; typecheck-tests + single-definition 75/75.
+  Notes: the runbook's step numbering deliberately jumps 10 → 12 (step 11 is stage 3b's,
+  on its own branch — said in the section header, so a reader does not hunt for a missing
+  section); README's Stage-5 sentence at "Install (single box)" is retired in favour of a
+  pointer to the new "Releases" section + "Remote fleet mode" + runbook step 12 (the full
+  outside-developer proof stays Stage 5 work — the README sentence it replaces claimed
+  less than the section now tells); `ccrc.env.example`'s `CCRC_ROLE` entry states it is
+  the one key in that file the server never reads (readers: `ccrc update`/`logs`/
+  `uninstall`), matching `cmd_update`'s absent/unrecognisable → default-both fallback.
+- **D-145** (Task 8, found — NOT caused — during execution; for Task 11's fix round):
+  `agent/test/deploy-verify.test.ts` is red 2/42 at this branch's pre-Task-8 HEAD
+  (`3eb0d4d`) and on the working tree alike, and the cause is Task 1's `stamp_build`
+  comment: the sentence "MEASURED, like everything else in this stamp" contains the
+  substring `else`, and two source-scan pins slice `deploy.sh` at a bare
+  `deploySh.indexOf('else')` from position 0 — the agent-branch slice
+  (`indexOf('if [ "$TARGET" = "agent" ]')` → first `else`) is now EMPTY (end before
+  start), and the "server branch" slice now begins at that comment, so the first
+  `rsync -az` it finds is the AGENT lane's and the coord-guard-before-rsync ordering pin
+  flips. Verified pre-existing by stashing Task 8's changes and re-running. Fix belongs to
+  the whole-branch round: reword the comment or (better) anchor the pins on something less
+  incidental than the four letters `else`.

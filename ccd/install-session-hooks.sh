@@ -47,6 +47,18 @@ BACKUPS="$HOME/ccrc-backups/$TS"
 # EVERY account, not a hooks-able subset: there is no such concept. A box that
 # does not have some of the roster's wrappers is ordinary, and the loop below
 # already `continue`s past a directory that is not there.
+#
+# `--remove` (stage 4, Task 8 — `ccrc uninstall`) runs the SWEEP half of the
+# converge and never the insert half: managed entries go, unmanaged entries
+# survive byte-identically, and the statusLine is not touched in either
+# direction (seed-if-absent on install, operator-owned always — removal has
+# no more business inspecting it than installation does). It lives HERE, not
+# in `ccrc`, because the `unmanaged` predicate below is the ONE definition of
+# "which settings.json entries are ccrc's" and a second spelling in the
+# uninstaller is exactly how the two would come to disagree about whose entry
+# a file holds. Parsed BEFORE --homes, which consumes the rest of argv.
+MODE=install
+if [[ "${1:-}" == --remove ]]; then MODE=remove; shift; fi
 homes=()
 if [[ "${1:-}" == --homes ]]; then shift; homes=("$@")
 else
@@ -68,14 +80,25 @@ fi
 # true for ANY existing value, custom or not, so an operator's own statusLine
 # is never inspected let alone replaced. This keeps the byte-level converge
 # check below intact (a single "next" computed per run, compared once).
-JQ_PROGRAM='
-def unmanaged: map(select((.hooks // []) | any(.command | tostring | contains("/session-hook.sh")) | not));
+# The predicate is spelled ONCE and shared by both modes — `ccrc uninstall`
+# rides `--remove` precisely so that this line stays the single definition of
+# a managed entry.
+JQ_UNMANAGED='def unmanaged: map(select((.hooks // []) | any(.command | tostring | contains("/session-hook.sh")) | not));'
+JQ_PROGRAM="$JQ_UNMANAGED"'
 .hooks = ((.hooks // {})
   | with_entries(.value |= unmanaged)
   | reduce $events[] as $ev (.; .[$ev] = ((.[$ev] // []) + [{hooks:[{type:"command", command:$cmd}]}]))
   | .PreToolUse = ((.PreToolUse // []) + [{matcher:"*", hooks:[{type:"command", command:$cmd}]}])
   | with_entries(select(.value != [])))
 | if has("statusLine") then . else .statusLine = {type:"command", command:$sl} end
+'
+# The sweep alone. An empty `.hooks` left behind is DELETED rather than kept
+# as `{}` — a file that never had the key must not gain one from a removal,
+# or the byte-level converge check below would rewrite a file this mode has
+# no changes for.
+JQ_REMOVE="$JQ_UNMANAGED"'
+.hooks = ((.hooks // {}) | with_entries(.value |= unmanaged) | with_entries(select(.value != [])))
+| if .hooks == {} then del(.hooks) else . end
 '
 
 rc=0
@@ -86,10 +109,15 @@ for dir in "${homes[@]}"; do
     jq empty "$f" 2>/dev/null || { echo "install-session-hooks: $f is not valid JSON — refusing" >&2; rc=1; continue; }
     cur=$(cat "$f")
   else
+    # Nothing to remove FROM: a home with no settings.json must not gain one
+    # from an uninstall.
+    [[ "$MODE" == remove ]] && continue
     cur='{}'
   fi
 
-  next=$(jq --arg cmd "$HOOK_CMD" --argjson events "$EVENTS_JSON" --arg sl "$STATUSLINE_CMD" "$JQ_PROGRAM" <<<"$cur") \
+  prog="$JQ_PROGRAM"
+  [[ "$MODE" == remove ]] && prog="$JQ_REMOVE"
+  next=$(jq --arg cmd "$HOOK_CMD" --argjson events "$EVENTS_JSON" --arg sl "$STATUSLINE_CMD" "$prog" <<<"$cur") \
     || { echo "install-session-hooks: merge failed for $f" >&2; rc=1; continue; }
 
   # Converged already? Do not touch the file (idempotence is byte-level: the

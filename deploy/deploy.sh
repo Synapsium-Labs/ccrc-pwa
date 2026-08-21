@@ -82,11 +82,22 @@ prune_backups() {   # keep the newest $CCRC_BACKUP_KEEP (default 10) timestamped
 BUILD_SHA="$(git rev-parse HEAD)"
 git diff --quiet && git diff --cached --quiet && BUILD_DIRTY=false || BUILD_DIRTY=true
 BUILD_REF="$(git rev-parse --abbrev-ref HEAD)"
+# Stage 4, Task 1: the release tag rides as an ADDITIVE fifth field, present
+# iff a vX.Y.Z tag points at the built commit — MEASURED, like every other
+# field in this stamp. Only the release shape qualifies (a `wip` tag at HEAD is not
+# an identity claim), and the grep exiting 1 on no match is the ordinary case,
+# hence the `|| BUILD_VERSION=""` that keeps set -e out of it.
+BUILD_VERSION="$(git tag --points-at HEAD | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1)" || BUILD_VERSION=""
 stamp_build() {
   local stamp
   stamp="$(mktemp)"
-  printf '{"sha":"%s","ref":"%s","builtAt":"%s","dirty":%s}\n' \
-    "$BUILD_SHA" "$BUILD_REF" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$BUILD_DIRTY" > "$stamp"
+  # `vfield` is deliberately NOT `local`: server/test/buildinfo.test.ts runs
+  # the lines between the mktemp above and the ssh below verbatim, at top
+  # level, in a fixture repo — the one way this derivation stays measured.
+  vfield=""
+  if [ -n "$BUILD_VERSION" ]; then vfield=",\"version\":\"$BUILD_VERSION\""; fi
+  printf '{"sha":"%s","ref":"%s","builtAt":"%s","dirty":%s%s}\n' \
+    "$BUILD_SHA" "$BUILD_REF" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$BUILD_DIRTY" "$vfield" > "$stamp"
   "${SSH[@]}" "$BOX" 'mkdir -p ~/.ccrc'
   install_atomic "$stamp" .ccrc/build.json 644
   rm -f "$stamp"

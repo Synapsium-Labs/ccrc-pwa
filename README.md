@@ -1014,11 +1014,69 @@ installers it then runs.)
 
 This is the **single-box** shape only: local fleet mode, localhost, no TLS, no
 agent (`ccrc-agent.service` is deliberately not installed — local mode never
-touches it). The full multi-box remote-fleet guide is Stage 5.
+touches it). The two-box shape — a fleet box installed with `--role fleet`,
+the server box flipped to `CCRC_FLEET=remote` — is "Releases" below plus
+"Remote fleet mode"; runbook step 12 is its worked, boxed proof.
 
 The steps above are proven hermetically (fixture `$HOME`s, every suite in "Develop" below); the
 real-VM proof — an actual fresh box, a stopwatch, RC verifiably off — is the operator's stage gate
 and remains pending. `docs/superpowers/specs/2026-08-19-stage2-vm-gate-runbook.md` is its runbook.
+
+## Releases — install from an artifact, update, uninstall
+
+Design: `docs/superpowers/specs/2026-08-21-stage4-release-design.md`. Runbook step 12 (same file
+as above) is the two-box worked proof of everything in this section.
+
+**The pipeline.** Pushing a tag `v*` runs `.github/workflows/release.yml`, which is deliberately
+thin: it runs `deploy/build-release.sh` (the testable core — runnable locally, refuses a dirty
+tree and refuses an untagged HEAD without `--untagged`) and uploads what the script built to the
+tag's GitHub Release: `ccrc-<tag>.tar.gz` plus `SHA256SUMS`. The tarball is the matched set —
+prebuilt `server/dist`, `server/dist-pwa`, `agent/dist`, the three `package.json`+lock pairs,
+`shared/`, `ccd/`, the deploy units and helpers, `install.sh` — with a `MANIFEST` of per-file
+sha256 digests and a shipped `build.json` that always carries the tag as `version`, so a
+release-installed box reports its identity (`ccrc version` prints a `version vX.Y.Z` line;
+`/health` emits a sibling `version` field; `buildAgreement` still compares sha+dirty only — the
+sha is the truth, the tag is the label).
+
+**Install from a release.** `bash install.sh --release [vX.Y.Z]` (default: latest) downloads the
+tarball and `SHA256SUMS`, verifies `sha256sum -c` **before extracting a single file**, extracts to
+a staging dir and hands off to the STAGED `ccrc install` — no build step on the box. Everything
+after `--release [tag]` passes through to that verb; `--role` rides here. Checkout mode
+(`bash install.sh` from a clone, as in "Install" above) is unchanged.
+
+**Roles.** `ccrc install --role server|fleet|both` (default `both` = the single-box shape above;
+the role is recorded as `CCRC_ROLE` in `ccrc.env`'s first write). `--role fleet` is the fleet
+box's installer path: it prompts — tty-only, the token is never echoed — for the server's WS URL
+and the agent bearer token, writes `~/.ccrc/agent.env` (0600, seed-once), and installs and enables
+`ccrc-agent.service` instead of `ccrc.service`. Wiring the server box to it (`CCRC_FLEET=remote`,
+`CCRC_AGENT_URL`, `CCRC_AGENT_TOKEN`) is "Remote fleet mode" below.
+
+**Update.** `ccrc update [--to vX.Y.Z]` — per box, explicit, never automatic, fleet-box-first
+across a two-box fleet (the server-box run WARNs loudly when `/api/fleet/health` says the fleet
+host is behind; it never refuses). Its spine, each step refusing loudly rather than degrading:
+fetch + verify (transport checksum, then the per-file `MANIFEST`); back up to
+`~/ccrc-backups/<ts>/` (coord.db via `VACUUM INTO`, dists, ccd, units — complete before any
+install write); re-run the install spine from the verified staged tree (role-aware, atomic,
+seed-once files untouched); the supervisor sweep — `try-restart` each `claude-session@*` unit onto
+the new ccd, **only** behind its mandatory `KillMode=process` preflight (a failed preflight
+refuses the sweep, loudly, never the update; panes and tmux are never touched); then the from→to
+report off the re-measured `build.json`. Rolling back is `--to <the older tag>`: it reinstalls
+that artifact set and **prints** the coord.db restore commands from the newest pre-update backup
+rather than auto-restoring (migrations are forward-only; an older server reads a newer coord.db).
+`ccrc doctor`'s `build` check compares the *running* server's `/health` sha against the stamp, and
+its `fleet` check's skew remedies name `ccrc update`, fleet box first.
+
+**The maintenance verbs.** `ccrc backup` runs update's backup step standalone (same set, same
+directory shape, pruned to the newest `CCRC_BACKUP_KEEP` timestamped dirs, default 10 — hand-made
+siblings are never touched). `ccrc logs [-f] [-n N]` is `journalctl --user` against this box's own
+unit (`ccrc.service`, or `ccrc-agent.service` when the recorded role is `fleet`). `ccrc uninstall`
+takes the box off ccrc and leaves reinstall safe: it refuses while live sessions exist (unless
+`--force`), removes the units, ccrc's managed settings.json hook entries (per-file backup;
+unmanaged entries survive byte-identically), marker-verified wrappers only, ccrc's own artifacts
+inside `~/.cc-sessions` file-by-file, `~/ccrc` and the installed executables — and preserves
+`~/.ccrc` whole, the registry rows and operator switches, worktrees and `~/ccrc-backups`, printing
+(never running) the keep-aside restore commands. `--purge` additionally removes `~/.ccrc` and the
+backups — never worktrees, never tmux state.
 
 ## Develop
 

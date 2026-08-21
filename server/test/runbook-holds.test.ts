@@ -46,6 +46,7 @@ const runbookPath = path.join(root, 'docs/superpowers/specs/2026-08-19-stage2-vm
 const runbook = readFileSync(runbookPath, 'utf8');
 const ccrcSrc = readFileSync(CCRC, 'utf8');
 const doctorChecksSrc = readFileSync(DOCTOR_CHECKS, 'utf8');
+const installShSrc = readFileSync(join(root, 'install.sh'), 'utf8');
 
 /** Step 2's own subsection — from its heading to the next `### ` heading —
  *  so a fence search below cannot wander into Step 5's or Step 7's blocks. */
@@ -347,5 +348,96 @@ describe("step 11 quotes what the exposure doctor checks actually print", () => 
     expect(sec.toLowerCase()).toContain('settled');
     const configTs = readFileSync(path.join(root, 'server/src/config.ts'), 'utf8');
     expect(configTs).toContain('The proxy-trust decision is settled: none');
+  });
+});
+
+// ── Step 12 — the stage-4 release round-trip (spec §9) ─────────────────────
+// Step 12 stakes an operator's diff against exact transcript lines from FOUR
+// verbs that did not exist when this file was written: `install.sh --release`,
+// `ccrc update`, `ccrc status` (its fleet line) and `ccrc uninstall`. Same
+// doctrine as above — every pinned line is DERIVED from the source template
+// that prints it (never a free-floating expected string), and only the
+// exact-match lines the runbook fences are pinned, not its prose. The worked
+// example uses two throwaway tags, v0.0.1 and v0.0.2, the way
+// `deploy/ccrc.env.example` uses worked triples: concrete enough to diff
+// against, obviously not a real release.
+describe('step 12 (the release round-trip) quotes what the release verbs actually print', () => {
+  /** Step 12's own section — from its heading to the next `### `/`## `
+   *  heading (its `#### 12x.` sub-headings do not match either terminator). */
+  const step12Section = (): string => {
+    const start = runbook.indexOf('### 12.');
+    expect(start, 'step 12 heading not found in the runbook').toBeGreaterThan(-1);
+    const ends = [runbook.indexOf('\n### ', start), runbook.indexOf('\n## ', start)]
+      .filter((i) => i > start);
+    expect(ends.length, 'step 12 section never closes').toBeGreaterThan(0);
+    return runbook.slice(start, Math.min(...ends));
+  };
+
+  it('the worked example is the two throwaway tags, and both appear', () => {
+    const s = step12Section();
+    expect(s).toContain('v0.0.1');
+    expect(s).toContain('v0.0.2');
+  });
+
+  it("install.sh --release's handoff line is derived from install.sh's own template", () => {
+    // The template, verbatim from install.sh — if the wording there changes,
+    // this red says the runbook's quoted transcript is now stale.
+    const template = 'echo "install.sh: verified $TARNAME — handing off to the staged \'ccrc install\'"';
+    expect(installShSrc).toContain(template);
+    // The worked example installs v0.0.1, so $TARNAME = ccrc-v0.0.1.tar.gz.
+    expect(step12Section()).toContain(
+      "install.sh: verified ccrc-v0.0.1.tar.gz — handing off to the staged 'ccrc install'");
+  });
+
+  it("`ccrc version`'s tag line is quoted for both tags, off the one echo that prints it", () => {
+    expect(ccrcSrc).toContain('echo "version ${BOX_BUILD[4]}"');
+    const s = step12Section();
+    expect(s).toMatch(/^version v0\.0\.1$/m);
+    expect(s).toMatch(/^version v0\.0\.2$/m);
+  });
+
+  it("`ccrc update`'s verified line is derived from _upd_fetch's template", () => {
+    const template = 'echo "update: verified $tarname (transport checksum, then the per-file MANIFEST)"';
+    expect(ccrcSrc).toContain(template);
+    // The update in the worked example crosses to v0.0.2.
+    expect(step12Section()).toContain(
+      'update: verified ccrc-v0.0.2.tar.gz (transport checksum, then the per-file MANIFEST)');
+  });
+
+  it('the sweep close line is quoted verbatim — it is a constant in _upd_sweep', () => {
+    const line = 'update: sweep: every live claude-session@ supervisor now runs the ccd this update installed (KillMode=process verified per unit before any restart; panes untouched)';
+    expect(ccrcSrc).toContain(`echo "${line}"`);
+    expect(step12Section()).toContain(line);
+  });
+
+  it("the from→to report line matches _upd_report's template and its versioned-desc shape", () => {
+    // The template and the shape a VERSIONED stamp renders as ("vX.Y.Z (sha)")
+    // — both source facts; the runbook line substitutes the two tags and marks
+    // the shas as the box's own with explicit placeholders.
+    expect(ccrcSrc).toContain('echo "update: build: $old_desc -> $new_desc"');
+    expect(ccrcSrc).toContain('new_desc="${BOX_BUILD[4]} (${BOX_BUILD[0]})"');
+    expect(step12Section()).toMatch(
+      /^update: build: v0\.0\.1 \(<old sha>\) -> v0\.0\.2 \(<new sha>\)$/m);
+  });
+
+  it("`ccrc status`'s fleet line is quoted in both states, formatted off the one printf", () => {
+    // The printf template is the single renderer of the fleet line
+    // (`cmd_status`); the two quoted states are (skewed while one box is
+    // stale) and (agreed after both updated) — R3's two halves. The empty
+    // fourth field is the connected:true arm (link=""), which is the state a
+    // live two-box run measures.
+    const template = "printf 'fleet:     %s — build %s, roster %s%s\\n'";
+    expect(ccrcSrc).toContain(template);
+    const render = (overall: string, build: string, roster: string, link: string) =>
+      `fleet:     ${overall} — build ${build}, roster ${roster}${link}`;
+    const s = step12Section();
+    expect(s).toContain(render('disagreed', 'skewed', 'agreed', ''));
+    expect(s).toContain(render('agreed', 'agreed', 'agreed', ''));
+  });
+
+  it("`ccrc uninstall`'s close line is quoted verbatim — it is a constant in cmd_uninstall", () => {
+    const line = 'uninstall: done — this box is off ccrc, and reinstall is safe: ~/.ccrc (config, roster, identity), the session registry rows, worktrees and ~/ccrc-backups were all preserved';
+    expect(ccrcSrc).toContain(`echo "${line}"`);
+    expect(step12Section()).toContain(line);
   });
 });

@@ -969,7 +969,18 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return authed ? full : anonymousStatus(full);
   });
 
-  app.get('/health', async () => ({ ok: true, build: deps.build ?? null }));
+  // The release version rides as a SIBLING of `build` (stage 4 spec §3 :87),
+  // and ONLY when the stamp carries one — an unversioned box's body stays
+  // byte-identical to before, which is the additive rule every wire surface
+  // carrying `version` follows. Emitting `version: undefined` instead would
+  // serialise away, but the conditional keeps the two cases distinguishable
+  // in tests (`toEqual` is strict about keys) and in intent.
+  app.get('/health', async () => {
+    const build = deps.build ?? null;
+    return build?.version !== undefined
+      ? { ok: true, build, version: build.version }
+      : { ok: true, build };
+  });
 
   const stateCachePath = deps.stateCachePath ?? defaultCachePath();
 

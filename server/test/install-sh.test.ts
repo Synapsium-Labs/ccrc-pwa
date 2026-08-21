@@ -31,6 +31,7 @@ import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import {
   mkdirSync, writeFileSync, existsSync, chmodSync, readFileSync, copyFileSync, symlinkSync,
+  appendFileSync, readdirSync,
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -232,5 +233,194 @@ describe('install.sh: the node floor, before anything is built', () => {
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/^install\.sh: node [0-9.]+ is below the required 99\.0\.0$/m);
     expect(existsSync(join(home, 'npm-argv')), 'npm ran before the refusal').toBe(false);
+  });
+});
+
+// ── Release mode (stage 4, spec §3) ──────────────────────────────────────
+// `install.sh --release [vX.Y.Z]` downloads SHA256SUMS + the tarball it
+// names from GitHub Releases (latest, or the named tag's download path),
+// verifies `sha256sum -c`, extracts to a `mktemp -d` staging dir, and execs
+// the STAGED `ccd/ccrc install` — no build on the box, prebuilt dists ship
+// in the tarball. `CCRC_RELEASE_BASE_URL` is the deliberate test seam: it
+// replaces only the `https://github.com/<owner>/<repo>/releases` prefix, so
+// a stub `curl` mapping `local://<path>` to a file copy serves a fixture
+// release directory laid out exactly like GitHub's URL space
+// (`latest/download/<asset>`, `download/<tag>/<asset>`). The checkout-mode
+// tests above stay byte-identical — release mode is a branch taken before
+// the node probe, not a rewrite of it.
+describe('install.sh --release: fetch, verify, hand off to the staged ccrc', () => {
+  const REAL_TAR = realPath('tar');
+  const REAL_GZIP = realPath('gzip');
+  const REAL_SHA256SUM = realPath('sha256sum');
+  const REAL_MKTEMP = realPath('mktemp');
+  const REAL_MKDIR = realPath('mkdir');
+  const REAL_CP = realPath('cp');
+
+  /** Fixture bin for release runs: the real extract/verify chain, a stub
+   *  curl that serves `local://` URLs from disk (and records every URL it
+   *  was asked for), and NO node/npm at all — release mode must never need
+   *  a compiler or the floor probe; if it reaches for one, ENOENT reds the
+   *  test. */
+  function plantReleaseTools(home: string): string {
+    const bin = fixtureBin(home);
+    symlinkSync(BASH, join(bin, 'bash'));
+    symlinkSync(REAL_TAR, join(bin, 'tar'));
+    symlinkSync(REAL_GZIP, join(bin, 'gzip'));
+    symlinkSync(REAL_SHA256SUM, join(bin, 'sha256sum'));
+    symlinkSync(REAL_MKTEMP, join(bin, 'mktemp'));
+    symlinkSync(REAL_MKDIR, join(bin, 'mkdir'));
+    symlinkSync(REAL_CP, join(bin, 'cp'));
+    writeFileSync(join(bin, 'curl'), [
+      '#!/bin/sh',
+      '# stub curl: local://<path> is a file on disk; missing = curl\'s own 404.',
+      'dest=""; url=""',
+      'while [ $# -gt 0 ]; do',
+      '  case "$1" in',
+      '    -o) dest="$2"; shift 2 ;;',
+      '    -*) shift ;;',
+      '    *) url="$1"; shift ;;',
+      '  esac',
+      'done',
+      'printf \'%s\\n\' "$url" >> "$HOME/curl-argv"',
+      'src="${url#local://}"',
+      'if [ ! -f "$src" ]; then',
+      '  echo "curl: (22) The requested URL returned error: 404 for $url" >&2',
+      '  exit 22',
+      'fi',
+      'cp "$src" "$dest"',
+    ].join('\n'), { mode: 0o755 });
+    return bin;
+  }
+
+  /** A fixture release under `<home>/releases`, laid out like GitHub's URL
+   *  space. The payload's `ccd/ccrc` is a RECORDING stub (argv0 + argv to
+   *  `$HOME/ccrc-argv`) — the handoff assertion — and `MARKER` rides along
+   *  so "extracted" and "not extracted" are both observable facts. SHA256SUMS
+   *  is computed from the REAL tarball bytes; `tamper` appends to the
+   *  tarball AFTERWARD, so the sums file is honest and the bytes are not. */
+  function fixtureRelease(home: string, opts: { tag?: string; tamper?: boolean } = {}): void {
+    const payload = join(home, 'payload');
+    mkdirSync(join(payload, 'ccd'), { recursive: true });
+    writeFileSync(join(payload, 'ccd', 'ccrc'),
+      '#!/bin/sh\nprintf \'%s\\n\' "$0" "$@" > "$HOME/ccrc-argv"\nexit 0\n', { mode: 0o755 });
+    writeFileSync(join(payload, 'MARKER'), 'release payload\n');
+    const relDir = opts.tag
+      ? join(home, 'releases', 'download', opts.tag)
+      : join(home, 'releases', 'latest', 'download');
+    mkdirSync(relDir, { recursive: true });
+    const name = `ccrc-${opts.tag ?? 'v9.9.9'}.tar.gz`;
+    const tarRes = spawnSync('tar', ['-czf', join(relDir, name), '-C', payload, '.'], { encoding: 'utf8' });
+    if (tarRes.status !== 0) throw new Error(`fixture tar failed: ${tarRes.stderr}`);
+    const sumRes = spawnSync('bash', ['-c', `sha256sum '${name}' > SHA256SUMS`],
+      { cwd: relDir, encoding: 'utf8' });
+    if (sumRes.status !== 0) throw new Error(`fixture sha256sum failed: ${sumRes.stderr}`);
+    if (opts.tamper) appendFileSync(join(relDir, name), 'one appended byte-run after the sums were written');
+  }
+
+  /** TMPDIR is pointed INSIDE the fixture home so the `mktemp -d` staging
+   *  dir — whose path the test cannot predict — is still inside a tree the
+   *  test can search, making "nothing extracted" a positive assertion. */
+  function runRelease(root: string, args: string[], home: string): Result {
+    mkdirSync(join(home, 'tmp'), { recursive: true });
+    const env = {
+      HOME: home,
+      PATH: fixtureBin(home),
+      TMPDIR: join(home, 'tmp'),
+      CCRC_RELEASE_BASE_URL: `local://${home}/releases`,
+    };
+    const r = spawnSync(BASH, [join(root, 'install.sh'), ...args], { env, encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  }
+
+  const filesUnder = (dir: string): string[] => (existsSync(dir)
+    ? (readdirSync(dir, { recursive: true, encoding: 'utf8' }) as string[])
+    : []);
+
+  it('latest: fetches, verifies, and execs the STAGED ccrc install, passing extra args through', () => {
+    const home = mkTmp('install-sh-release-latest-');
+    const root = fixtureRoot(home, REAL_FLOOR_RANGE);
+    plantReleaseTools(home);
+    fixtureRelease(home);
+    const r = runRelease(root, ['--release', '--role', 'fleet'], home);
+    expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    // The handoff: argv0 is the staged ccrc, inside OUR TMPDIR (the staging
+    // tree), and the verb + passthrough args arrive verbatim.
+    const argv = readFileSync(join(home, 'ccrc-argv'), 'utf8').split('\n').filter((l) => l !== '');
+    expect(argv.slice(1)).toEqual(['install', '--role', 'fleet']);
+    expect(argv[0]).toMatch(/\/ccd\/ccrc$/);
+    expect(argv[0].startsWith(join(home, 'tmp')), `staged ccrc ran from ${argv[0]}, not the staging tree`).toBe(true);
+    // The tree it ran from is OUR payload, fully extracted.
+    expect(existsSync(join(path.dirname(argv[0]), '..', 'MARKER'))).toBe(true);
+    // Both fetches went to the latest/download URL space.
+    const urls = readFileSync(join(home, 'curl-argv'), 'utf8').split('\n').filter((l) => l !== '');
+    expect(urls).toEqual([
+      `local://${home}/releases/latest/download/SHA256SUMS`,
+      `local://${home}/releases/latest/download/ccrc-v9.9.9.tar.gz`,
+    ]);
+  });
+
+  it('--release vX.Y.Z: fetches the named tag\'s download URLs', () => {
+    const home = mkTmp('install-sh-release-tag-');
+    const root = fixtureRoot(home, REAL_FLOOR_RANGE);
+    plantReleaseTools(home);
+    fixtureRelease(home, { tag: 'v1.2.3' });
+    const r = runRelease(root, ['--release', 'v1.2.3'], home);
+    expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    const argv = readFileSync(join(home, 'ccrc-argv'), 'utf8').split('\n').filter((l) => l !== '');
+    expect(argv.slice(1)).toEqual(['install']);
+    const urls = readFileSync(join(home, 'curl-argv'), 'utf8').split('\n').filter((l) => l !== '');
+    expect(urls).toEqual([
+      `local://${home}/releases/download/v1.2.3/SHA256SUMS`,
+      `local://${home}/releases/download/v1.2.3/ccrc-v1.2.3.tar.gz`,
+    ]);
+  });
+
+  it('checksum mismatch: refuses loudly, extracts NOTHING, runs NO install', () => {
+    const home = mkTmp('install-sh-release-tamper-');
+    const root = fixtureRoot(home, REAL_FLOOR_RANGE);
+    plantReleaseTools(home);
+    fixtureRelease(home, { tamper: true });
+    const r = runRelease(root, ['--release'], home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/checksum verification FAILED/);
+    expect(existsSync(join(home, 'ccrc-argv')), 'the staged ccrc ran despite a bad checksum').toBe(false);
+    // Nothing extracted: the staging dir under TMPDIR holds downloads at
+    // most — never the payload's files.
+    const staged = filesUnder(join(home, 'tmp'));
+    expect(staged.some((f) => f.endsWith('MARKER')), `payload extracted: ${staged.join(', ')}`).toBe(false);
+    expect(staged.some((f) => f.endsWith('ccd/ccrc'))).toBe(false);
+  });
+
+  // Branch review, 2026-08-21 (minor): every refusal used to leave the mktemp
+  // staging dir — downloads included, possibly TAMPERED bytes — behind in
+  // TMPDIR. The EXIT trap now removes it on refusal and is disarmed only for
+  // the exec handoff. `rm` is linked real here because the trap tolerates a
+  // PATH without it (`|| :` — a failed cleanup must never override the
+  // refusal's own exit code), so only a harness WITH rm can observe the
+  // cleanup itself. Mutation: deleting the trap leaves the tarball behind —
+  // this test red.
+  it('a refused release leaves NOTHING in TMPDIR — the staging dir is removed by the trap', () => {
+    const home = mkTmp('install-sh-release-cleanup-');
+    const root = fixtureRoot(home, REAL_FLOOR_RANGE);
+    const bin = plantReleaseTools(home);
+    symlinkSync(realPath('rm'), join(bin, 'rm'));
+    fixtureRelease(home, { tamper: true });
+    const r = runRelease(root, ['--release'], home);
+    expect(r.code).toBe(1);
+    expect(filesUnder(join(home, 'tmp'))).toEqual([]);
+  });
+
+  it('absent release: answers with curl\'s own failure, extracts nothing, runs nothing', () => {
+    const home = mkTmp('install-sh-release-absent-');
+    const root = fixtureRoot(home, REAL_FLOOR_RANGE);
+    plantReleaseTools(home);
+    // No fixtureRelease at all — the URL space is empty.
+    const r = runRelease(root, ['--release'], home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/curl: \(22\)/);
+    expect(r.stderr).toMatch(/^install\.sh: download failed: /m);
+    expect(existsSync(join(home, 'ccrc-argv'))).toBe(false);
+    const staged = filesUnder(join(home, 'tmp'));
+    expect(staged.some((f) => f.endsWith('MARKER'))).toBe(false);
   });
 });
