@@ -726,6 +726,93 @@ _json_str() {   # value -> a JSON string literal (quote/backslash/control safe)
 sys.stdout.write(json.dumps(sys.stdin.buffer.read().decode("utf-8", "replace")))'
 }
 
+# ── lifecycle journal ──────────────────────────────────────────── LC-BEGIN ──
+# THE APPEND-ONLY RECORD `_reg_purge` CANNOT REACH.
+#
+# `$REG/.lifecycle/` is a dot-prefixed DIRECTORY, and that is the whole reason
+# the feature is possible: `_reg_purge`'s suffix filter globs `$REG/<id>.*` and
+# ids never begin with a dot, so no per-session field can hold a destruction
+# record but a dotted directory is untouchable. Precedent already load-bearing:
+# `$REG/.reaped/` has had zero deleters in this file since Aug 6.
+#
+# THE INVENTORY AT ccd:1536 IS AMENDED IN THIS SAME COMMIT — it counted seven
+# dot-prefixed artifacts and this block adds an eighth. That comment counts
+# DIRECTORIES, not their contents (`.reaped/` is one entry, its tombstones are
+# not counted), so `.lifecycle/`'s generations, `errors` and `.rotate.lock` are
+# counted WITH it. An inventory a future writer copies is exactly the defect
+# `_reg_purge`'s own header records having shipped once.
+#
+# EVERY FUNCTION HERE RETURNS 0 ON EVERY PATH except `_lc_refuse`, which emits
+# and then `die`s so refusal and death cannot drift. The journal is best-effort
+# and NEVER gates an act: the disk condition that makes an append fail is
+# exactly the condition in which `ws-rm`/`ws-gc --prune`/`ws-reap` are the
+# recovery tools. One unrecorded destruction is a gap in a record; a fleet that
+# cannot clean up is an outage. A failed append bumps `.lifecycle/errors`.
+#
+# THE WRAPPERS BIND THEIR POSITIONALS WITH `${1-}`, NOT `$1`. ccd runs
+# `set -uo pipefail`: a function reading an unset positional EXITS THE SHELL, it
+# does not return. With 21 hand-written call sites, one dropped `""` would turn
+# a destructive verb into a mid-verb abort — the precise failure "the journal
+# never gates an act" exists to prevent, arriving through the journal itself.
+#
+# `_lc_refuse` therefore enters `ccd-die-containment.test.ts`'s can-die set:
+# it must never be wrapped in `$( )`. `_lc_emit`/`_lc_obs`/`_lc_live`/
+# `_lc_rotate`/`_lc_tx`/`_lc_json`/`_lc_err`/`_lc_surface_norm`/`_lc_dec_ok`
+# are die-free and safe to capture.
+#
+# NO CARRY GLOBALS. `tip`, `attic` and `tx` are ARGUMENTS. The `LC_TIP=` idiom
+# dies under `set -u` on the first call in a process and appends a blank line
+# nobody notices. `_LC_SEQ` and `_LC_OBS` are the two exceptions and both are
+# initialised HERE at file scope — the `_REG_SET_SEQ` precedent (ccd:434) — so
+# `set -u` can never reach an unset read. They carry no event payload.
+_LC_DIR="$REG/.lifecycle"
+_LC_LINE_MAX=2048                # twin of L0's LC_LINE_MAX      (BYTES)
+_LC_DEC_MAX=512                  # twin of L0's LC_REASON_MAX_BYTES (BYTES)
+_LC_GEN_MAX_BYTES=4194304        # twin of L0's LC_GEN_MAX_BYTES — 4 MiB
+_LC_GEN_KEEP=4                   # twin of L0's LC_GEN_KEEP — ~a year at ~35 KB/day
+_LC_SEQ=0
+_LC_OBS=""
+
+# THE CLOSED VOCABULARY, and its twin lives in `shared/api.ts` as
+# `LIFECYCLE_ACTS`. `server/test/ccd-lifecycle-emit.test.ts` reads THIS array by
+# running it and asserts set equality against L0 in both directions. `unknown`
+# is DELIBERATELY ABSENT here and present in L0: it is the READER's degrade, not
+# a call site's choice. `_lc_emit` maps an unrecognised act to `unknown` plus a
+# `badact` field, which is what makes the equality hold by construction rather
+# than by everyone remembering.
+_LC_ACTS=(archive attic-drop claim create destroy enable ensure forget gc
+          hold purge reap release rename restore spawn start stop supervise
+          swap unsupervise)
+# Outcomes DO include the degrade word, because `_lc_emit` writes it itself.
+_LC_OUTCOMES=(intent done refused failed unknown)
+
+_lc_now_ns() {   # -> exactly 19 ASCII digits of epoch nanoseconds, on stdout
+  # THREE RUNGS, because `%N` is not portable and its failure is silent and
+  # poisonous: busybox `date` emits the literal `N`, which makes a generation
+  # FILENAME that sorts wrong for ever (the greatest name is the live one) and
+  # a `uid` that collides. The only sub-second precedent in this file is
+  # ccd:3383's `+%s%3N`, milliseconds, error-suppressed for the same reason.
+  local ns
+  ns=$(date +%s%N 2>/dev/null)
+  [[ "$ns" =~ ^[0-9]{19}$ ]] || ns="$(date +%s 2>/dev/null)000000000"
+  [[ "$ns" =~ ^[0-9]{19}$ ]] || ns=0000000000000000000
+  printf '%s' "$ns"
+}
+
+_lc_tx() {   # -> a correlation id for ONE intent/outcome pair, on stdout
+  # Callers hold it in a `local` and pass it to both halves. It is minted here
+  # rather than returned by `_lc_intent` so that the emit itself never runs in a
+  # subshell — `_lc_obs`'s memo and `_LC_SEQ` are both lost across `$( )`, and
+  # `_lc_obs` reads /proc and shells `tmux list-panes`.
+  #
+  # UNIQUENESS, honestly: called as `$(_lc_tx)` this runs in a SUBSHELL, so
+  # `_LC_SEQ` is 1 every time and the guarantee rests on `$BASHPID` (a subshell
+  # pid, distinct from the parent's, so a tx can never collide with an event
+  # uid) plus a nanosecond clock read one fork apart.
+  _LC_SEQ=$(( _LC_SEQ + 1 ))
+  printf '%s.%s.%s' "$(_lc_now_ns)" "$BASHPID" "$_LC_SEQ"
+}
+# ── end lifecycle journal ────────────────────────────────────────── LC-END ──
 _ws_status() {   # id -> busy|idle on stdout; NON-ZERO when it cannot be read.
   # Fails closed twice over, and both halves are load-bearing.
   #
@@ -1533,9 +1620,13 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # lock" on two different inodes — reopening the double compare-and-set this
 # branch's lock migration closed.
 #
-# NOT reachable this way, and this set IS the boundary — seven dot-prefixed
-# artifacts live under `$REG`; the four above are reachable, these three are
-# not: `$REG/.reaped/` (a directory, not a `.reaped.<suffix>` file — no id's
+# NOT reachable this way, and this set IS the boundary — EIGHT dot-prefixed
+# artifacts live under `$REG`; the four above are reachable, these four are
+# not: `$REG/.lifecycle/` (the lifecycle journal — a dotted DIRECTORY for
+# exactly this reason; see the LC-BEGIN block, and note that its generations,
+# `errors` and `.rotate.lock` are counted WITH it, as `.reaped/`'s tombstones
+# are counted with `.reaped/`); `$REG/.reaped/` (a directory, not a
+# `.reaped.<suffix>` file — no id's
 # purge glob matches a bare directory, and `rm -f` cannot take one
 # regardless); `_reg_set`'s own tmps; and session-hook.sh's
 # `.$id.$$.hookstate.tmp` — the last two ARE candidate glob matches when
