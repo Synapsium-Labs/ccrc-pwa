@@ -818,6 +818,102 @@ _lc_tx() {   # -> a correlation id for ONE intent/outcome pair, on stdout
   _LC_SEQ=$(( _LC_SEQ + 1 ))
   printf '%s.%s.%s' "$(_lc_now_ns)" "$BASHPID" "$_LC_SEQ"
 }
+
+_lc_cgroup_read() {   # -> this process's `0::` cgroup path, verbatim, on stdout
+  # Its own function so a test can plant a cgroup without a container. The
+  # `0::` line is the unified-hierarchy one; on this box it is the only line.
+  sed -n 's/^0:://p' "/proc/$$/cgroup" 2>/dev/null | head -1
+}
+
+_lc_ppid_of() {   # pid -> its PPid, on stdout, or nothing
+  # `/proc/<pid>/status`'s `PPid:` line, NEVER `stat` field 4: `comm` is field 2
+  # and can contain spaces AND parentheses, so every positional read of `stat`
+  # is wrong for a process someone named `foo) 1 2 3 (bar`.
+  sed -n 's/^PPid:[[:space:]]*//p' "/proc/${1-}/status" 2>/dev/null | head -1
+}
+
+_lc_obs_json() {   # cg cgraw pid ppid pane paneWhy tty ssh -> one JSON object
+  # THE SECOND AND LAST python3 ENCODER IN THIS BLOCK. `_lc_json` builds an
+  # EVENT, once per line; this builds the obs FRAGMENT, once per process. A
+  # THIRD encoder in this block is a defect — it is how `"pane":,` gets written
+  # by a printf argument list that swallowed `_json_str`'s status (ccd:711-713).
+  LC_ALL=C.UTF-8 python3 -c '
+import json, sys
+k = ["cg", "cgraw", "pid", "ppid", "pane", "paneWhy", "tty", "ssh"]
+o = dict(zip(k, sys.argv[1:9]))
+for n in ("pid", "ppid"):
+    o[n] = int(o[n]) if o[n].isdigit() else None
+o["pane"] = o["pane"] or None
+o["tty"] = o["tty"] == "true"
+# `ssh` IS THE CONNECTION STRING, not a boolean: L0 types it `string | null`,
+# and folding it to true/false throws away the only address the record sees.
+o["ssh"] = o["ssh"] or None
+sys.stdout.write(json.dumps(o, ensure_ascii=True, allow_nan=False, separators=(",", ":")))
+' "$@"
+}
+
+_lc_obs() {   # populate _LC_OBS once per process. Prints NOTHING. Always 0.
+  # THE UNFORGEABLE FAMILY. `dec` is what a caller SAID; this is what the kernel
+  # says. Nothing here computes a single "who" — `corroboration()` in L0 relates
+  # the two and a disagreement is a fact the operator sees, never a silently
+  # picked winner. A double fork makes a caller ANONYMOUS (ppid 1), never
+  # someone else.
+  [[ -z "$_LC_OBS" ]] || return 0
+
+  local cgraw cg pid ppid pane panewhy tty ssh panes p depth sname spid
+  pid=$$
+  cgraw=$(_lc_cgroup_read)
+  # ORDER IS PRECEDENCE, and the innermost fact wins. A pane started by the
+  # supervisor sits inside BOTH cgroups; the scope it is RUNNING in is the
+  # observed fact, the unit that started it is provenance the path still
+  # carries verbatim in `cgraw`.
+  case "$cgraw" in
+    */ccrc-agent.service*)        cg=agent ;;
+    */tmux-spawn-*.scope*)        cg=pane ;;
+    */claude-session@*.service*)  cg=supervisor ;;
+    */session-*.scope*)           cg=login ;;
+    *)                            cg=unknown ;;
+  esac
+  ppid=$(_lc_ppid_of "$pid"); [[ "$ppid" =~ ^[0-9]+$ ]] || ppid=""
+
+  # THE PANE IS AN INTERSECTION, and its absence gets a REASON. A bare null
+  # would fold "no tmux on this box", "tmux did not answer" and "no ancestor is
+  # a pane" into one value a reader cannot act on — the overloaded null at a
+  # seam this repo bans by name.
+  pane=""; panewhy=no-ancestor
+  if ! command -v tmux >/dev/null 2>&1; then
+    panewhy=no-tmux
+  elif ! panes=$(tmux list-panes -a -F '#{session_name} #{pane_pid}' 2>/dev/null); then
+    panewhy=not-listed
+  else
+    p="$pid"; depth=0
+    # The regex runs FIRST and every arithmetic test is downstream of it: `p`
+    # comes off /proc, and bash evaluates a variable's CONTENTS as arithmetic
+    # (ccd:8784-8787 is the paid lesson). `depth` bounds a /proc that lies.
+    while [[ "$p" =~ ^[0-9]+$ ]] && (( p > 1 )) && (( depth < 16 )); do
+      while IFS=' ' read -r sname spid; do
+        [[ "$spid" == "$p" ]] && { pane="$sname"; break; }
+      done <<< "$panes"
+      [[ -n "$pane" ]] && { panewhy=ok; break; }
+      p=$(_lc_ppid_of "$p")
+      depth=$(( depth + 1 ))
+    done
+  fi
+
+  tty=false; [[ -t 0 ]] && tty=true
+  ssh="${SSH_CONNECTION-}"
+
+  # ONE fork for the whole fragment, MEMOISED — not eight `_json_str`
+  # substitutions, each of which swallows its own status inside a printf
+  # argument list (ccd:711-713) and prints `"pane":,` when the interpreter is
+  # gone. NO python3 means the four bytes `null`: not measured is a different
+  # fact from measured-as-empty, and `null` is also non-empty, so the memo holds
+  # and this whole function does not re-run on every event.
+  _LC_OBS=$(_lc_obs_json "$cg" "$cgraw" "$pid" "$ppid" "$pane" "$panewhy" "$tty" "$ssh" 2>/dev/null) \
+    || _LC_OBS=null
+  [[ -n "$_LC_OBS" ]] || _LC_OBS=null
+  return 0
+}
 # ── end lifecycle journal ────────────────────────────────────────── LC-END ──
 _ws_status() {   # id -> busy|idle on stdout; NON-ZERO when it cannot be read.
   # Fails closed twice over, and both halves are load-bearing.

@@ -8,6 +8,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { LIFECYCLE_ACTS, LIFECYCLE_OUTCOMES, LC_ACT_UNKNOWN, LC_OUTCOME_UNKNOWN } from '../../shared/api.js';
 import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { NO_TMUX, readJournal, measOf, decOf } from './lifecycleHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-lc-emit-'); });
@@ -83,5 +84,121 @@ describe('_lc_tx — a correlation id, minted at the call site, never a global',
     expect.soft(a).toMatch(/^[0-9]{19}\.[0-9]+\.[0-9]+$/);
     expect.soft(b).toMatch(/^[0-9]{19}\.[0-9]+\.[0-9]+$/);
     expect.soft(a).not.toBe(b);
+  });
+});
+
+describe('_lc_obs — kernel-observed, memoised, never a decision', () => {
+  // Terminated with `;` after the closing `}` — a function definition is a
+  // compound command, and several call sites below splice another statement
+  // right after `${OBS}` on the SAME line (no newline to serve as the
+  // separator bash otherwise needs): `f() { :; } g() { :; }` is a syntax
+  // error, `f() { :; }; g() { :; }` is not.
+  const OBS = `_lc_obs_probe() { _lc_obs; printf '%s' "$_LC_OBS"; };`;
+
+  it('classifies a supervisor cgroup and keeps the raw path verbatim', () => {
+    const raw = '/user.slice/user-1000.slice/user@1000.service/app.slice/claude-session@ccrc-pwa-still-river.service';
+    const o = JSON.parse(h.sh(`${OBS}
+      _lc_cgroup_read() { printf '%s' '${raw}'; }
+      _lc_obs_probe`)) as Record<string, unknown>;
+    expect(o['cg']).toBe('supervisor');
+    expect(o['cgraw'], 'the raw path is NEVER dropped — it is the unforgeable half').toBe(raw);
+  });
+
+  it.each([
+    ['/user.slice/x/app.slice/ccrc-agent.service', 'agent'],
+    ['/user.slice/x/app.slice/tmux-spawn-3f2a.scope', 'pane'],
+    ['/user.slice/user-1000.slice/session-7.scope', 'login'],
+    ['/some/thing/nobody/modelled', 'unknown'],
+  ])('resolves %s to %s', (raw, want) => {
+    const o = JSON.parse(h.sh(`${OBS} _lc_cgroup_read() { printf '%s' '${raw}'; }; _lc_obs_probe`)) as Record<string, unknown>;
+    expect(o['cg']).toBe(want);
+  });
+
+  it('a pane inside a SUPERVISOR cgroup reads `pane` — the precedence is deliberate', () => {
+    // Mutant: move the `claude-session@*.service` arm above the
+    // `tmux-spawn-*.scope` one -> this fails with `expected 'supervisor' to be
+    // 'pane'`. The supervisor is what STARTED the process; the pane scope is
+    // where it is RUNNING, and the innermost fact is the observed one.
+    const raw = '/user.slice/user@1000.service/app.slice/claude-session@x.service/tmux-spawn-9.scope';
+    const o = JSON.parse(h.sh(`${OBS} _lc_cgroup_read() { printf '%s' '${raw}'; }; _lc_obs_probe`)) as Record<string, unknown>;
+    expect(o['cg']).toBe('pane');
+  });
+
+  it('says WHY there is no pane rather than answering a bare null', () => {
+    const o = JSON.parse(h.sh(`${OBS}
+      _lc_cgroup_read() { printf '%s' '/x'; }
+      ${NO_TMUX}
+      command() { if [[ "$2" == tmux ]]; then return 1; fi; builtin command "$@"; }
+      _lc_obs_probe`)) as Record<string, unknown>;
+    expect(o['pane']).toBeNull();
+    expect(o['paneWhy'], 'a null with no reason is the overloaded null this file bans').toBe('no-tmux');
+  });
+
+  it('says `not-listed` when tmux is there and does not answer — the harness default', () => {
+    const o = JSON.parse(h.sh(`${OBS} _lc_cgroup_read() { printf '%s' '/x'; }; _lc_obs_probe`)) as Record<string, unknown>;
+    expect(o['paneWhy'], 'the harness plants a REFUSING tmux, so this is the default answer')
+      .toBe('not-listed');
+    expect(h.tmuxCalls(), 'and it reached the poison, never the live server').toEqual(['list-panes -a -F #{session_name} #{pane_pid}']);
+  });
+
+  it('names the tmux session when an ancestor pid is a pane pid', () => {
+    const o = JSON.parse(h.sh(`${OBS}
+      _lc_cgroup_read() { printf '%s' '/x'; }
+      tmux() { echo "cc-claude2 $$"; }
+      _lc_obs_probe`)) as Record<string, unknown>;
+    expect(o['pane']).toBe('cc-claude2');
+    expect(o['paneWhy']).toBe('ok');
+  });
+
+  it('carries ssh as the CONNECTION STRING and tty as a boolean', () => {
+    // L0's LifecycleObs: `ssh: string | null`, `tty: boolean | null`. A boolean
+    // ssh would throw away the only address the record ever sees.
+    const o = JSON.parse(h.sh(`${OBS}
+      _lc_cgroup_read() { printf '%s' '/x'; }
+      SSH_CONNECTION='10.0.0.2 51000 10.0.0.9 22'
+      _lc_obs_probe`)) as Record<string, unknown>;
+    expect(o['ssh']).toBe('10.0.0.2 51000 10.0.0.9 22');
+    expect(typeof o['tty']).toBe('boolean');
+  });
+
+  it('survives an UNSET $SSH_CONNECTION and answers ssh:null — the fleet-wide hazard', () => {
+    // ccd runs `set -uo pipefail`: a bare `"$SSH_CONNECTION"` read is FATAL to
+    // the whole invocation for every caller that is not an interactive ssh
+    // login, which is most of the fleet. `unset` here (rather than relying on
+    // the harness's ambient env, which happens not to carry it) makes the
+    // absence explicit rather than incidental, so this test still means what
+    // it says even if a future harness starts forwarding the operator's shell
+    // env. Two independent claims — process survival and the null shape — so
+    // expect.soft per the standing rule.
+    const out = h.sh(`unset SSH_CONNECTION
+      ${OBS}
+      _lc_cgroup_read() { printf '%s' '/x'; }
+      _lc_obs_probe`);
+    const o = JSON.parse(out) as Record<string, unknown>;
+    expect.soft(o['ssh'], 'unset reads as null — not a thrown error, not an empty string mistaken for set').toBeNull();
+    expect.soft(typeof o['tty'], 'the rest of the fragment still measures normally').toBe('boolean');
+  });
+
+  it('MEMOISES — /proc and tmux are read once per process, not once per event', () => {
+    // Mutant: delete the `[[ -z "$_LC_OBS" ]] || return 0` guard -> this fails
+    // with `expected 3 to be 1`, and every emit re-shells `tmux list-panes`.
+    const out = h.sh(`${OBS}
+      _lc_cgroup_read() { printf '%s' '/x'; }
+      tmux() { echo tmuxcall >> "$HOME/obs-calls"; echo "none 999999"; }
+      _lc_obs; _lc_obs; _lc_obs
+      wc -l < "$HOME/obs-calls"`);
+    expect(Number(out.trim())).toBe(1);
+  });
+
+  it('answers the four bytes `null` — never a fabricated object — when python3 is gone', () => {
+    const out = h.sh(`${OBS}
+      _lc_cgroup_read() { printf '%s' '/x'; }
+      python3() { return 127; }
+      _lc_obs_probe`);
+    expect(out.trim()).toBe('null');
+  });
+
+  it('never writes to stdout or stderr of its own accord', () => {
+    expect(h.sh(`_lc_cgroup_read() { printf '%s' '/x'; }; _lc_obs 2>&1; printf END`)).toBe('END');
   });
 });
