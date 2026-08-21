@@ -7,7 +7,8 @@
 // strongest reading available.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { LIFECYCLE_ACTS, LIFECYCLE_OUTCOMES, LC_ACT_UNKNOWN, LC_OUTCOME_UNKNOWN } from '../../shared/api.js';
-import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { execFileSync } from 'node:child_process';
+import { makeCcdHarness, type CcdHarness, CCD, ghContainedEnv } from './ccdWsHelpers.js';
 import { NO_TMUX, readJournal, measOf, decOf } from './lifecycleHelpers.js';
 
 let h: CcdHarness;
@@ -87,6 +88,23 @@ describe('_lc_tx — a correlation id, minted at the call site, never a global',
   });
 });
 
+describe('_lc_ppid_of — ALWAYS rc 0, even for a pid that does not exist', () => {
+  it('answers rc 0 for a nonexistent pid, not pipefail’s rc 2', () => {
+    // FIX ROUND 1 (b). Mutant: delete the trailing `return 0` -> this fails
+    // with `expected 'rc=2' to be 'rc=0'`: under this file's `pipefail`,
+    // `sed`'s failure to open a gone pid's /proc entry (rc 2) outranks
+    // `head`'s own 0, so the pipeline's status becomes 2 — a lie against this
+    // function's own documented "on stdout, or nothing. rc 0" contract, and
+    // exactly the pid a stale ancestor walk (`_lc_obs`, ccd:945) would meet.
+    const out = h.sh('_lc_ppid_of 999999999; printf "rc=%s" "$?"');
+    expect(out).toBe('rc=0');
+  });
+
+  it('still answers the real PPid, on stdout, for a real pid', () => {
+    expect(h.sh('_lc_ppid_of $$')).toMatch(/^[0-9]+$/);
+  });
+});
+
 describe('_lc_obs — kernel-observed, memoised, never a decision', () => {
   // Terminated with `;` after the closing `}` — a function definition is a
   // compound command, and several call sites below splice another statement
@@ -100,8 +118,8 @@ describe('_lc_obs — kernel-observed, memoised, never a decision', () => {
     const o = JSON.parse(h.sh(`${OBS}
       _lc_cgroup_read() { printf '%s' '${raw}'; }
       _lc_obs_probe`)) as Record<string, unknown>;
-    expect(o['cg']).toBe('supervisor');
-    expect(o['cgraw'], 'the raw path is NEVER dropped — it is the unforgeable half').toBe(raw);
+    expect.soft(o['cg']).toBe('supervisor');
+    expect.soft(o['cgraw'], 'the raw path is NEVER dropped — it is the unforgeable half').toBe(raw);
   });
 
   it.each([
@@ -130,24 +148,70 @@ describe('_lc_obs — kernel-observed, memoised, never a decision', () => {
       ${NO_TMUX}
       command() { if [[ "$2" == tmux ]]; then return 1; fi; builtin command "$@"; }
       _lc_obs_probe`)) as Record<string, unknown>;
-    expect(o['pane']).toBeNull();
-    expect(o['paneWhy'], 'a null with no reason is the overloaded null this file bans').toBe('no-tmux');
+    expect.soft(o['pane']).toBeNull();
+    expect.soft(o['paneWhy'], 'a null with no reason is the overloaded null this file bans').toBe('no-tmux');
   });
 
   it('says `not-listed` when tmux is there and does not answer — the harness default', () => {
     const o = JSON.parse(h.sh(`${OBS} _lc_cgroup_read() { printf '%s' '/x'; }; _lc_obs_probe`)) as Record<string, unknown>;
-    expect(o['paneWhy'], 'the harness plants a REFUSING tmux, so this is the default answer')
+    expect.soft(o['paneWhy'], 'the harness plants a REFUSING tmux, so this is the default answer')
       .toBe('not-listed');
-    expect(h.tmuxCalls(), 'and it reached the poison, never the live server').toEqual(['list-panes -a -F #{session_name} #{pane_pid}']);
+    expect.soft(h.tmuxCalls(), 'and it reached the poison, never the live server').toEqual(['list-panes -a -F #{session_name} #{pane_pid}']);
+  });
+
+  it('a HUNG tmux does not hang `_lc_obs` — bounded by its own stall budget, never gates the act it observes', () => {
+    // FIX ROUND 1 (a), CRITICAL. Mutant: delete the `timeout … bash -c` wrap
+    // (call `tmux list-panes` directly again) -> `_lc_obs` blocks on the
+    // `sleep 30` stub forever, `execFileSync`'s own 6000ms/SIGKILL backstop
+    // fires instead, and this throws — the same shape the reviewer measured
+    // against the unfixed code (an OUTER `timeout -s KILL 3` had to SIGKILL
+    // it; it never returned on its own). `_LC_OBS_TMUX_DEADLINE_S=1` shrinks
+    // the internal stall budget so the FIXED path stays fast without
+    // weakening what is proven: the deadline is a data value the fix reads,
+    // not a hardcoded 2s this test would otherwise have to wait out.
+    //
+    // Node's `timeout`/`killSignal` option is this test's own safety net —
+    // the shell-level equivalent of the reviewer's `timeout -s KILL 3
+    // bash -c …` probe — so a still-broken fix fails this test in ~6s rather
+    // than hanging the whole suite for the stub's full 30s.
+    const script = `source "${CCD}"; _lc_cgroup_read() { printf '%s' '/x'; }; tmux() { sleep 30; }; _LC_OBS_TMUX_DEADLINE_S=1; _lc_obs; printf '%s' "$_LC_OBS"`;
+    // Raw `execFileSync('bash', …)`, not `h.sh` — the timeout/killSignal
+    // safety net isn't in `h.sh`'s signature — so this call site builds its
+    // own env and MUST still route through the same containment every ccd
+    // bash spawn does (`ccd-workspaces.test.ts`'s source-scan guard reds
+    // otherwise): systemd AND tmux, same as `makeCcdHarness` itself asks.
+    const env = ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true });
+    const start = Date.now();
+    let threw: unknown = null;
+    let out = '';
+    try {
+      out = execFileSync('bash', ['-c', script], {
+        encoding: 'utf8', cwd: h.home, timeout: 6000, killSignal: 'SIGKILL', env,
+      });
+    } catch (e) { threw = e; }
+    const elapsed = Date.now() - start;
+    expect.soft(threw, 'must return on its own — never need the 6s/SIGKILL backstop').toBeNull();
+    expect.soft(elapsed, 'returns near its OWN ~1s stall budget, not the 6s backstop').toBeLessThan(4000);
+    const o = JSON.parse(out) as Record<string, unknown>;
+    expect.soft(o['pane'], 'a stall is not "no ancestor is a pane" — no pane was ever found').toBeNull();
+    expect.soft(o['paneWhy'], 'a stall gets its OWN reason, never folded into `not-listed`').toBe('timed-out');
   });
 
   it('names the tmux session when an ancestor pid is a pane pid', () => {
+    // FIX ROUND 1 (a): `tmux` now runs inside its OWN `bash -c` child (a real,
+    // killable subprocess — see the timeout fix below), so a bare `$$` inside
+    // the stub would read the CHILD's pid, not the process under test — an
+    // exec boundary the un-timed original code never crossed. `export`ing the
+    // pid under test into the environment survives that boundary the same way
+    // `PATH` already does; the stimulus changes, `pane`/`paneWhy`'s expected
+    // values do not.
     const o = JSON.parse(h.sh(`${OBS}
       _lc_cgroup_read() { printf '%s' '/x'; }
-      tmux() { echo "cc-claude2 $$"; }
+      export _lc_test_self=$$
+      tmux() { echo "cc-claude2 $_lc_test_self"; }
       _lc_obs_probe`)) as Record<string, unknown>;
-    expect(o['pane']).toBe('cc-claude2');
-    expect(o['paneWhy']).toBe('ok');
+    expect.soft(o['pane']).toBe('cc-claude2');
+    expect.soft(o['paneWhy']).toBe('ok');
   });
 
   it('carries ssh as the CONNECTION STRING and tty as a boolean', () => {
@@ -157,8 +221,8 @@ describe('_lc_obs — kernel-observed, memoised, never a decision', () => {
       _lc_cgroup_read() { printf '%s' '/x'; }
       SSH_CONNECTION='10.0.0.2 51000 10.0.0.9 22'
       _lc_obs_probe`)) as Record<string, unknown>;
-    expect(o['ssh']).toBe('10.0.0.2 51000 10.0.0.9 22');
-    expect(typeof o['tty']).toBe('boolean');
+    expect.soft(o['ssh']).toBe('10.0.0.2 51000 10.0.0.9 22');
+    expect.soft(typeof o['tty']).toBe('boolean');
   });
 
   it('survives an UNSET $SSH_CONNECTION and answers ssh:null — the fleet-wide hazard', () => {
