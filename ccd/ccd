@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=bf52424bf9b2f324684245a0d912e8ac4c6bef2e55962b16d2cd3c211fa2a7e0
+# ccrc:generated 1 sha256=43ae7f82aced24e5227ab448dd329b10528d59497073f00dff0e9044da6333db
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box, not on this file: `_rc_enabled` reads
@@ -1222,7 +1222,7 @@ if mode == 'state':
                 commits.append({'sha': parts[0], 'subject': parts[1], 'body': parts[2].strip()})
 
     def put(field, value):
-        # ATOMIC, the python half of wave 2's `_reg_set` (ccd:410). `open(…,'w')`
+        # ATOMIC, the python half of `_reg_set`. `open(…,'w')`
         # truncates in place, so a reader landing inside the window read an
         # EMPTY `prphase`/`prnumber` — and `prphase` is read by `ws-archive`,
         # which files `archivedreason merged:#N` off it. Same tmp shape and same
@@ -1343,22 +1343,22 @@ if mode == 'state':
     # T0+1.4s with a stamp that OUTRANKS the newer answer. #583 went into the
     # append-only ledger and `prnumber` went back to #577.
     #
-    # A DEDICATED lock file, never a registry FIELD — wave 2. `flock` attaches
-    # to an open file description, i.e. to an INODE, and `_reg_set "$id" uuid`
-    # (ccd:1685, 7372, 8564 — the write on the ORDINARY SUPERVISE PATH is the
-    # middle one, ccd:7372, inside `_sync_uuid`, which `cmd_supervise`'s own
-    # loop calls (ccd:8781); the other two run once each, at `cmd_ws_add` and
-    # `cmd_start`) now RENAMES a new inode over `.uuid`. Two `ccd pr-state`
-    # runs straddling that
-    # rewrite would take LOCK_EX on two different inodes and both enter the
-    # compare-and-set below: the duplicate ledger append and the lost update
-    # this lock exists to prevent. `$REG/.prstate-<id>.lock` is never written,
-    # never renamed and NEVER UNLINKED — the identical idiom, for the identical
-    # reason, as `$REG/.reap-$id.lock` (ccd:5752), which also explains why
-    # unlinking a lock while holding it is how two processes come to hold "the
-    # lock" on two inodes. Hidden by its leading dot, so no registry glob or
-    # id-minting listing sees it; it leaks one 0-byte file per session that has
-    # ever run pr-state, which is the disclosed price.
+    # A DEDICATED lock file, never a registry FIELD — wave 2. `flock` attaches to
+    # an open file description (an INODE), and `_reg_set "$id" uuid` is written from
+    # three call sites — `cmd_ws_add`, `_sync_uuid`, `cmd_start`. The write on the
+    # ORDINARY SUPERVISE PATH is `_sync_uuid`, which `cmd_supervise`'s loop calls
+    # every tick; the other two, `cmd_ws_add` and `cmd_start`, run once each. Every
+    # such write RENAMES a new inode over `.uuid`. Two `ccd pr-state` runs straddling
+    # that rewrite would take LOCK_EX on two different inodes and both enter the
+    # compare-and-set below: the duplicate append and lost update this lock prevents.
+    # `$REG/.prstate-<id>.lock` is never written, never renamed and NEVER UNLINKED
+    # — the same idiom, for the same reason, as `$REG/.reap-$id.lock`, inside
+    # `cmd_ws_reap`, which also explains why unlinking a lock while holding it is how
+    # two processes come to hold "the lock" on two inodes. Hidden by its leading dot,
+    # so no registry glob or id-minting listing sees it; it leaks one 0-byte file per
+    # session that has ever run pr-state — the disclosed price. NAMED BY FUNCTION,
+    # NOT LINE: a line number here goes stale the moment anything above it grows —
+    # twice now on this branch.
     #
     # WIDENED BY ONE STATE AND NARROWED BY ANOTHER — not "unchanged". The old
     # lock opened `$REG/<id>.uuid` READ-ONLY, so it still took in a `$REG`
