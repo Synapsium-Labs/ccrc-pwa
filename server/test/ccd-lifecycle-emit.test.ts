@@ -29,8 +29,11 @@ describe('_LC_ACTS / _LC_OUTCOMES — the closed vocabularies, bound to L0', () 
   });
 
   it('spells every act kebab-lowercase', () => {
+    // Independent claims — one per act — so a failure on one act must not
+    // hide whether the other 20 also fail. expect.soft per the standing rule
+    // (this file's sibling `lifecycle-constants-twin.test.ts:108-109`).
     for (const a of lines(h.sh('printf "%s\\n" "${_LC_ACTS[@]}"'))) {
-      expect(a, `${a} is not kebab-lowercase`).toMatch(/^[a-z][a-z-]*$/);
+      expect.soft(a, `${a} is not kebab-lowercase`).toMatch(/^[a-z][a-z-]*$/);
     }
   });
 
@@ -74,8 +77,11 @@ describe('_lc_tx — a correlation id, minted at the call site, never a global',
   it('is uid-shaped and distinct across two calls in one process', () => {
     const out = h.sh('a=$(_lc_tx); b=$(_lc_tx); printf "%s\\n%s\\n" "$a" "$b"');
     const [a, b] = lines(out);
-    expect(a).toMatch(/^[0-9]{19}\.[0-9]+\.[0-9]+$/);
-    expect(b).toMatch(/^[0-9]{19}\.[0-9]+\.[0-9]+$/);
-    expect(a).not.toBe(b);
+    // Independent claims about two DIFFERENT variables — expect.soft per the
+    // standing rule, so a shape failure on `a` does not hide whether `b`
+    // (a separate `_lc_tx()` call) also misbehaves.
+    expect.soft(a).toMatch(/^[0-9]{19}\.[0-9]+\.[0-9]+$/);
+    expect.soft(b).toMatch(/^[0-9]{19}\.[0-9]+\.[0-9]+$/);
+    expect.soft(a).not.toBe(b);
   });
 });
