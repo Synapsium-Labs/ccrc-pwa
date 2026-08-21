@@ -18,11 +18,20 @@
 # ccd.bak-<date> / claude2.bak-<date> backups this box accumulates, since a
 # dot never appears in a real id).
 #
-#   - A non-script file that some OTHER candidate `exec`s -> the upstream
-#     account (shared/roster.ts's exec.kind "upstream"). Its config dir is
-#     "$HOME/.claude" — that default lives in the claude binary itself, not
-#     in anything this script reads, because upstream is by definition
-#     invoked with CLAUDE_CONFIG_DIR unset.
+#   - A file that some OTHER candidate `exec`s and that does NOT set its own
+#     CLAUDE_CONFIG_DIR -> the upstream account (shared/roster.ts's exec.kind
+#     "upstream"). Its config dir is "$HOME/.claude" — that default lives in
+#     the claude binary itself, not in anything this script reads, because
+#     upstream is by definition invoked with CLAUDE_CONFIG_DIR unset.
+#
+#     THE UPSTREAM MAY BE A SCRIPT (D-155). It was required to be a non-script
+#     until 2026-08-20, when this box's own `~/.local/bin/claude` stopped being
+#     the installer's symlink into ~/.local/share/claude/versions/<ver> and
+#     became a launcher that picks a version and injects the upstream account's
+#     token before exec'ing it. "Not a script" was only ever a proxy for "not
+#     an account wrapper", and the two parted company that day; the gate at
+#     pass 3 now asks the real question. An npm- or mise-installed Claude Code
+#     puts a `#!` shim at the same path, so this is not one box's quirk.
 #   - A script whose content, once blank lines and comments are stripped, is
 #     BYTE-FOR-BYTE the known 2- or 3-line generated shape -> "generated",
 #     with configDirSuffix and (if present) secretsFile read back out of it.
@@ -39,13 +48,19 @@
 # by hand.
 #
 # ── WHAT IT NEVER DOES ──────────────────────────────────────────────────
-# It never reads a candidate whole. The one file in play that matters here is
-# 300+ MB (the claude binary itself): classification only ever looks at a
-# candidate's first two bytes (script vs. binary) before deciding whether to
-# read it as text at all, and only actual small SCRIPTS get `read`. It also
-# never writes to $HOME/.local/bin — every path below is read-only until the
-# very last step, which is the one write this tool is allowed: accounts.json,
-# and only when it does not already exist (or --force says to overwrite it).
+# It never reads a candidate whole. Classification looks at a candidate's first
+# two bytes (script vs. binary) and then at its SIZE before deciding whether to
+# read it as text at all, so only actual small scripts get `read`. Both bounds
+# are load-bearing and neither subsumes the other: the two-byte test is what
+# keeps a 300+ MB binary from being read, and the size test (D-155,
+# WRAPPER_OVERSIZE_BYTES) is what keeps a large SCRIPT from being read — a case
+# that only became reachable at the upstream path once a script was allowed to
+# hold it.
+#
+# It also never writes to $HOME/.local/bin — every path below is read-only
+# until the very last step, which is the one write this tool is allowed:
+# accounts.json, and only when it does not already exist (or --force says to
+# overwrite it).
 set -euo pipefail
 # Locale-independent byte ordering for glob expansion, `sort` and regex
 # matching: en_US.UTF-8's collation (measured on this box) sorts
@@ -122,7 +137,7 @@ BIN_DIR="$WRAPPER_BIN_DIR"
 # fallback to disagree with it. The refusal below therefore names both places
 # rather than asking a box that was never a checkout whether it is one.
 #
-# `_ADOPT_SELF`, not `$0`+`dirname`: it is already computed, at :74-75, with
+# `_ADOPT_SELF`, not `$0`+`dirname`: it is already computed, at :89-90, with
 # the same defensive idiom the wrapper-shape load three lines above needs —
 # and for the same reason. `dirname` is an external command, a PATH lookup
 # this script has no business depending on twice (once early, via
@@ -196,11 +211,36 @@ fi
 #    trust), so `_wrap_is_script` gates the scan — the binary it rejects never
 #    gets read a second time. Both halves live in ccrc-wrapper-shape, so
 #    `ccrc doctor` decides what counts as an account wrapper by running THIS
-#    code rather than by carrying its own opinion of it. ───────────────────
+#    code rather than by carrying its own opinion of it.
+#
+#    D-155: SIZED BEFORE IT IS READ. `_wrap_is_script` stops at two bytes, but
+#    `_wrap_declares_config_dir` reads whatever it is handed WHOLE, so a
+#    multi-megabyte script in this directory was read end to end on every run —
+#    `ccd` itself is 608 KB and `clickhousectl` is 17 MB, so the shape is not
+#    hypothetical, only lucky. The skip is ANNOUNCED rather than silent: a
+#    candidate dropped here would otherwise be indistinguishable from one that
+#    simply declares no config dir, and those are two different facts about the
+#    box that an operator resolves differently. ────────────────────────────
 declare -a CFG_SCRIPTS=()
 for name in "${CAND[@]}"; do
   f="$BIN_DIR/$name"
   _wrap_is_script "$f" || continue
+  sz="$(stat -L -c%s -- "$f" 2>/dev/null || echo '')"
+  # TWO CONDITIONS, TWO SENTENCES. Both end in the same skip, and folding them
+  # into one test was a defect measured before it shipped: a box whose `stat`
+  # does not take `-c%s` — every BSD-flavoured one — was told its 102-byte
+  # wrappers were "over 1 MiB", and then that nothing here sets
+  # CLAUDE_CONFIG_DIR at all. Same skip, different fact, different fix, so they
+  # get different words; that is this codebase's no-overloaded-null rule
+  # applied to a message rather than to a return value.
+  if [ -z "$sz" ] || ! [[ "$sz" =~ ^[0-9]+$ ]]; then
+    echo "$PROG: note: \"$name\" is a script whose size this box's stat would not report, so classifying it would need an unbounded read — skipped, and not proposed as an account (check: stat -L -c%s \"$f\")" >&2
+    continue
+  fi
+  if [ "$sz" -gt "$WRAPPER_OVERSIZE_BYTES" ]; then
+    echo "$PROG: note: \"$name\" is a script of $sz bytes — over $WRAPPER_OVERSIZE_BYTES is too big to be an account wrapper, so it was not read and is not proposed as an account" >&2
+    continue
+  fi
   _wrap_declares_config_dir "$f" && CFG_SCRIPTS+=("$name")
 done
 
@@ -258,8 +298,8 @@ for name in "${REST[@]}"; do
   # LAST field — is the only one that can be, and a trailing empty field is
   # exactly the case `read` gets right. (A `no` answer is `no` plus three empty
   # fields; the cache below stores them all, and every later read of
-  # SHAPE_TARGET/SUFFIX/SECRETS is gated on `SHAPE_OK = ok` first — :269, :317,
-  # :321.) RELAXING EITHER REGEX, OR ADDING A FIFTH FIELD BEFORE
+  # SHAPE_TARGET/SUFFIX/SECRETS is gated on `SHAPE_OK = ok` first — :312, :423,
+  # :427.) RELAXING EITHER REGEX, OR ADDING A FIFTH FIELD BEFORE
   # `secrets`, breaks this silently: adopt would cache a secrets path taken
   # from the wrong column and write it into the roster. Split by hand if that
   # day comes, the way `_check_wrappers`'s roster reader does.
@@ -308,12 +348,73 @@ if [ ! -e "$UPSTREAM_PATH" ]; then
   echo "$PROG: $UPSTREAM_ID is exec'd by${UPSTREAM_VOTERS[$UPSTREAM_ID]} but $UPSTREAM_PATH does not exist" >&2
   exit 1
 fi
+# D-155: THE ELECTED UPSTREAM MUST NOT BE AN ACCOUNT WRAPPER — which is not
+# the same question as "is it a script", though it was spelled that way until
+# now.
+#
+# What this gate exists to stop is a CYCLE: electing a file that the voters
+# would then be exec'ing as their upstream while it, in turn, sets its own
+# CLAUDE_CONFIG_DIR and execs onward. `#!` was a proxy for that, and it held
+# only while the binary path was guaranteed to be the binary. It stopped
+# holding on 2026-08-20, when this box's `~/.local/bin/claude` became a 2.7 KB
+# LAUNCHER — a script that picks which installed version to run and injects the
+# upstream account's token before exec'ing the real binary out of
+# `~/.local/share/claude/versions/`. That file is the binary path in every
+# sense that matters here: nothing about it is an account, and it declares no
+# config dir. The old gate refused it, exit 1, writing nothing — and since
+# `ccrc adopt` is the remedy four `_check_wrappers` FAILs name, the entire
+# re-bootstrap path terminated in a refusal. It is not a local quirk either: an
+# npm- or mise-installed Claude Code lands a `#!` shim at the same path.
+#
+# So the question is asked directly of the elected file's own bytes.
+#
+# DIRECTLY, and not by testing the winner for membership of `CFG_SCRIPTS`:
+# those two are NOT equivalent, and the difference is a cycle adopted in
+# silence. `CFG_SCRIPTS` encodes pass 0's filters as well as this question — a
+# textbook account wrapper parked here whose only anomaly is mode 0644 is
+# dropped by pass 0 for want of `-x`, so it is in no list, and a membership
+# test would call it "not a wrapper" and adopt it. Reading its bytes gets it
+# right. (`server/test/adopt.test.ts` pins exactly that case.) `set -euo
+# pipefail` is the second reason: a bare lookup of a missing associative key is
+# fatal here, so the membership spelling could not even be written plainly.
+#
+# THE RESIDUAL, stated rather than hidden: `_wrap_declares_config_dir` is one
+# line-wise regex, so the two-statement form (`CLAUDE_CONFIG_DIR=...` on one
+# line, `export CLAUDE_CONFIG_DIR` on the next) does not match it, and a cycle
+# built that way would be adopted at exit 0. The old gate did not detect that
+# case either — it refused it by accident, along with every legitimate box.
+# Trading an accidental refusal of everything for a precise refusal with one
+# known hole is the deliberate call here, not an oversight.
+UPSTREAM_SIZE="$(stat -L -c%s -- "$UPSTREAM_PATH" 2>/dev/null || echo '')"
+UPSTREAM_SHAPE=binary
 if _wrap_is_script "$UPSTREAM_PATH"; then
-  echo "$PROG: $UPSTREAM_ID is exec'd by${UPSTREAM_VOTERS[$UPSTREAM_ID]} as the upstream binary, but it is itself a script — refusing to guess an upstream account" >&2
-  exit 1
+  UPSTREAM_SHAPE="launcher script"
+  # BOUND THE READ BEFORE TAKING IT. `_wrap_is_script` stops at two bytes, but
+  # `_wrap_declares_config_dir` reads its argument WHOLE — and until this gate
+  # moved, no script ever reached it at the upstream path, because the refusal
+  # above fired first. Relaxing the gate without this puts an unbounded read on
+  # the one file this tool's own header promises never to read whole.
+  #
+  # FAILS CLOSED, unlike `ccrc-doctor-checks`'s sibling gate, and the asymmetry
+  # is deliberate: doctor's job is to keep REPORTING on a box whose environment
+  # is broken, so it falls back to the unbounded read rather than going blind.
+  # This is a WRITE path. A file adopt could not measure is one it cannot prove
+  # is not a wrapper, and "I could not tell" is not "I know what it is" — the
+  # same sentence `cmd_wrappers` refuses `unreadable` under.
+  if [ -z "$UPSTREAM_SIZE" ] || ! [[ "$UPSTREAM_SIZE" =~ ^[0-9]+$ ]]; then
+    echo "$PROG: $UPSTREAM_ID is exec'd by${UPSTREAM_VOTERS[$UPSTREAM_ID]} as the upstream binary, and $UPSTREAM_PATH is a script whose size this box's stat would not report — proving it is not itself an account wrapper would need an unbounded read of it. Refusing to guess an upstream account (check: stat -L -c%s \"$UPSTREAM_PATH\")" >&2
+    exit 1
+  fi
+  if [ "$UPSTREAM_SIZE" -gt "$WRAPPER_OVERSIZE_BYTES" ]; then
+    echo "$PROG: $UPSTREAM_ID is exec'd by${UPSTREAM_VOTERS[$UPSTREAM_ID]} as the upstream binary, and $UPSTREAM_PATH is a script of $UPSTREAM_SIZE bytes — over $WRAPPER_OVERSIZE_BYTES is too big to classify as a wrapper, and it was not read. Refusing to guess an upstream account; move it aside or name the upstream by hand" >&2
+    exit 1
+  fi
+  if _wrap_declares_config_dir "$UPSTREAM_PATH"; then
+    echo "$PROG: $UPSTREAM_ID is exec'd by${UPSTREAM_VOTERS[$UPSTREAM_ID]} as the upstream binary, but $UPSTREAM_PATH is itself an account wrapper — it sets CLAUDE_CONFIG_DIR, so adopting it would leave those wrappers exec'ing a wrapper. Refusing to guess an upstream account" >&2
+    exit 1
+  fi
 fi
-UPSTREAM_SIZE="$(stat -L -c%s -- "$UPSTREAM_PATH" 2>/dev/null || echo '?')"
-echo "$PROG: upstream account \"$UPSTREAM_ID\" -> $UPSTREAM_PATH ($UPSTREAM_SIZE bytes, non-script), exec'd by:${UPSTREAM_VOTERS[$UPSTREAM_ID]}" >&2
+echo "$PROG: upstream account \"$UPSTREAM_ID\" -> $UPSTREAM_PATH (${UPSTREAM_SIZE:-unmeasured} bytes, $UPSTREAM_SHAPE), exec'd by:${UPSTREAM_VOTERS[$UPSTREAM_ID]}" >&2
 
 # ── pass 4: finalize every script's kind now that UPSTREAM_ID is settled —
 #    "generated" iff its shape matched AND its target IS the winning
@@ -327,7 +428,13 @@ if [ ! -d "$HOME/.claude" ]; then
 fi
 
 for name in "${REST[@]}"; do
-  [ "$name" = "$UPSTREAM_ID" ] && continue   # can't happen (upstream is non-script) but stay defensive
+  # Still unreachable, but for a different reason since D-155: the upstream may
+  # now BE a script, so `_wrap_is_script` no longer excludes it from this loop.
+  # What does is that this loop runs over `REST` (i.e. `CFG_SCRIPTS`), and the
+  # gate at pass 3 refuses any elected upstream that declares a config dir — so
+  # an id in this list can never be the winner. Kept defensive: the day that
+  # reasoning changes, this is the line that stops a duplicate account row.
+  [ "$name" = "$UPSTREAM_ID" ] && continue
   if [ "${SHAPE_OK[$name]}" = ok ] && [ "${SHAPE_TARGET[$name]}" = "$UPSTREAM_ID" ]; then
     kind=generated; suffix="${SHAPE_SUFFIX[$name]}"; secrets="${SHAPE_SECRETS[$name]}"
   else

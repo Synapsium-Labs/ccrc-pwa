@@ -533,3 +533,184 @@ describe('ccrc-adopt: self-validation', () => {
     expect(() => parseRoster({ version: 1, accounts: [] })).toThrow(RosterError);
   });
 });
+
+// ── D-155: the elected upstream may legitimately be a LAUNCHER SCRIPT ─────
+//
+// The measured shape on the fleet host changed on 2026-08-20.
+// `~/.local/bin/claude` had been the native installer's symlink into
+// `~/.local/share/claude/versions/<ver>` — a 334 MB ELF, and the file every
+// fixture above models as `\x7fELF…`. It is now a 2.7 KB bash LAUNCHER that
+// picks which installed version to run and injects the upstream account's
+// token before `exec`ing the real binary.
+//
+// Adopt refused that box outright, exit 1, writing nothing — and adopt is the
+// remedy four `ccrc doctor` checks name, so the whole re-bootstrap path
+// terminated in a refusal. The gate it tripped keyed on "does this file start
+// with `#!`", which was never the hazard: the hazard is electing an ACCOUNT
+// WRAPPER as the upstream, because the wrappers that voted for it would then
+// exec a wrapper — a cycle. `#!` was a proxy for that, and the proxy stopped
+// tracking the thing when the binary path became a script.
+//
+// These cases pin the re-keyed gate from both sides: a launcher is adopted, a
+// wrapper is still refused, and the refusal is judged on the elected file's
+// OWN bytes rather than on whether it happened to pass the candidate filter.
+describe('ccrc-adopt: an upstream that is a launcher script, not the binary itself', () => {
+  /** The real launcher's shape, in miniature: a script that execs onward to a
+   *  versioned binary OUTSIDE `.local/bin`, and that declares no
+   *  `CLAUDE_CONFIG_DIR` — which is exactly what makes it the binary path
+   *  rather than an account. */
+  const LAUNCHER = [
+    '#!/usr/bin/env bash',
+    '# Launcher: picks the newest installed version and execs it. It declares',
+    '# no CLAUDE_CONFIG_DIR deliberately — it is the binary path, not an account.',
+    'set -u',
+    '_vdir="${XDG_DATA_HOME:-$HOME/.local/share}/claude/versions"',
+    'exec "$_vdir/2.1.238" "$@"',
+    '',
+  ].join('\n');
+
+  /** The measured five-account box, with the upstream binary replaced by the
+   *  launcher — i.e. the fleet host as it actually is today. */
+  function launcherBox(): string {
+    const home = mkTmp('ccrc-adopt-launcher-');
+    buildMeasuredBox(home);
+    writeExec(path.join(binDir(home), 'claude'), LAUNCHER);
+    return home;
+  }
+
+  it('adopts it: a script that execs onward but declares no config dir is the upstream account', () => {
+    const home = launcherBox();
+    const r = runAdoptRaw(home);
+    expect(r.code, `adopt refused a launcher-shaped upstream:\n${r.stderr}`).toBe(0);
+    const roster = parseRoster(JSON.parse(r.stdout));
+    expect(roster.upstreamId).toBe('claude');
+    expect(roster.byId.get('claude')!.exec.kind).toBe('upstream');
+    // The rest of the box still classifies exactly as it did with a binary
+    // there — the gate is the only thing that changed.
+    expect(roster.byId.get('claude2')!.exec).toEqual({ kind: 'generated', secretsFile: '.cc-secrets/claude2-oauth.env' });
+    expect(roster.byId.get('gpt')!.exec.kind).toBe('external');
+  });
+
+  it('writes accounts.json for such a box, so the re-bootstrap path doctor names actually completes', () => {
+    const home = launcherBox();
+    expect(runAdoptRaw(home).code).toBe(0);
+    const written = JSON.parse(readFileSync(path.join(home, '.ccrc', 'accounts.json'), 'utf8')) as unknown;
+    expect(parseRoster(written).upstreamId).toBe('claude');
+  });
+
+  it('still refuses when the elected upstream is itself an account wrapper — the exec cycle the old gate was a proxy for', () => {
+    // `claude2` and `claude-corp` both exec `claude`, so `claude` wins the
+    // vote — but `claude` here sets its own CLAUDE_CONFIG_DIR and execs
+    // onward, which makes it an account wrapper. Adopting it would write a
+    // roster whose generated wrappers exec a wrapper.
+    const home = mkTmp('ccrc-adopt-cycle-');
+    buildMeasuredBox(home);
+    writeExec(path.join(binDir(home), 'claude'), [
+      '#!/usr/bin/env bash',
+      'export CLAUDE_CONFIG_DIR="$HOME/.claude-cycle"',
+      'exec "$HOME/.local/bin/claude-real" "$@"',
+      '',
+    ].join('\n'));
+    const r = runAdoptRaw(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/account wrapper/i);
+    expect(r.stderr).toMatch(/CLAUDE_CONFIG_DIR/);
+    expect(existsSync(path.join(home, '.ccrc', 'accounts.json'))).toBe(false);
+  });
+
+  it('judges the elected upstream by its own bytes, not by whether it passed the candidate filter', () => {
+    // THE SPELLING TEST. The gate can be written two ways: ask
+    // `_wrap_declares_config_dir` about the elected path directly, or test the
+    // winner for membership of `CFG_SCRIPTS`, the list built in pass 1. They
+    // are not equivalent, and this is the case that separates them: a textbook
+    // account wrapper parked at the upstream path whose only anomaly is mode
+    // 0644. Pass 0 drops it for want of `-x`, so it is in no list — the
+    // membership spelling would call it "not a wrapper" and adopt a cycle.
+    // Reading its bytes gets it right.
+    const home = mkTmp('ccrc-adopt-unreadable-mode-');
+    buildMeasuredBox(home);
+    const p = path.join(binDir(home), 'claude');
+    writeFileSync(p, [
+      '#!/usr/bin/env bash',
+      'export CLAUDE_CONFIG_DIR="$HOME/.claude-cycle"',
+      'exec "$HOME/.local/bin/claude-real" "$@"',
+      '',
+    ].join('\n'));
+    chmodSync(p, 0o644);
+    const r = runAdoptRaw(home);
+    expect(r.code, `a wrapper at the upstream path was adopted:\n${r.stderr}`).toBe(1);
+    expect(r.stderr).toMatch(/account wrapper/i);
+  });
+
+  it('does not call a script "non-script" in its own success line', () => {
+    // Rider to the gate change: the success echo asserted `non-script` as a
+    // measured fact about the elected file. The moment the gate admits a
+    // script that literal is a falsehood ccrc prints about the operator's own
+    // box, and nothing pins it — `ccrc-cli.test.ts` pins this line by prefix
+    // only.
+    const launcher = runAdoptRaw(launcherBox());
+    expect(launcher.code).toBe(0);
+    expect(launcher.stderr).toMatch(/^ccrc-adopt: upstream account "claude"/m);
+    expect(launcher.stderr).not.toMatch(/non-script/);
+    expect(launcher.stderr).toMatch(/launcher script/);
+
+    // …and a real binary is still described as one.
+    const binary = runAdoptRaw((() => { const h = mkTmp('ccrc-adopt-binary-'); buildMeasuredBox(h); return h; })());
+    expect(binary.code).toBe(0);
+    expect(binary.stderr).toMatch(/^ccrc-adopt: upstream account "claude".*\bbinary\b/m);
+  });
+
+  it('does not call a file it could not measure "over 1 MiB" (D-155)', () => {
+    // The size gate is fail-closed, which is right on a write path. But
+    // "I measured it and it is too big" and "I could not measure it at all"
+    // are two different facts about the box, resolved two different ways, and
+    // the first spelling of this gate folded them into one sentence — so a box
+    // whose `stat` does not take `-c%s` (every BSD-flavoured one) was told its
+    // 102-byte wrappers were over a megabyte, and adopt then reported that
+    // nothing under .local/bin sets CLAUDE_CONFIG_DIR. Measured, not
+    // hypothetical: that is the overloaded-null class CLAUDE.md names, shipped
+    // by the very change that closed D-81's hole on this path.
+    const home = launcherBox();
+    const stubBin = path.join(home, 'stub-bin');
+    mkdirSync(stubBin, { recursive: true });
+    writeExec(path.join(stubBin, 'stat'), '#!/bin/sh\nexit 1\n');
+    const r = spawnSync('bash', [ADOPT, '--out', path.join(home, 'out.json')], {
+      env: { ...process.env, HOME: home, PATH: `${stubBin}:${process.env.PATH ?? ''}` },
+      encoding: 'utf8',
+    });
+    const stderr = r.stderr ?? '';
+    expect(stderr, 'an unmeasurable file must not be reported as an oversize one')
+      .not.toMatch(/\? bytes/);
+    expect(stderr).not.toMatch(/of \? bytes — over/);
+    // It must name the thing that actually failed, and name it as a size it
+    // could not obtain rather than a size it obtained and disliked.
+    expect(stderr).toMatch(/size/i);
+    expect(stderr).toMatch(/stat/);
+  });
+
+  it('never reads a huge script at the upstream path whole', () => {
+    // D-81's rule, on the path that just became reachable. `_wrap_is_script`
+    // bounds itself to two bytes, but `_wrap_declares_config_dir` reads its
+    // argument WHOLE — and until the gate moved, no script ever reached it at
+    // the upstream path, because `_wrap_is_script` refused first. Relaxing the
+    // gate without a size bound would put an unbounded read on exactly the
+    // file this tool has always promised never to read whole.
+    const home = launcherBox();
+    const big = Buffer.concat([
+      Buffer.from('#!/usr/bin/env bash\n'),
+      Buffer.alloc(8 * 1024 * 1024, 0x41),   // 8 MiB of 'A', no newlines
+      Buffer.from('\nexec "$HOME/.local/share/claude/versions/2.1.238" "$@"\n'),
+    ]);
+    writeFileSync(path.join(binDir(home), 'claude'), big);
+    chmodSync(path.join(binDir(home), 'claude'), 0o755);
+
+    const start = Date.now();
+    const r = runAdoptRaw(home);
+    expect(Date.now() - start).toBeLessThan(10_000);
+    // Refusing is the right answer — a file too big to classify is not one
+    // adopt may call the upstream account — but it must refuse having read
+    // two bytes and a size, not 8 MiB.
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/too big|over 1 MiB/i);
+  });
+});

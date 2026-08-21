@@ -118,7 +118,7 @@
 # the run an operator needs to see whole. Nothing here may turn `-e` back on.
 
 # Where the shipped tree is, relative to THIS file rather than to $PWD —
-# `ccrc-adopt:124-125`'s idiom, in the same PATH-free spelling `ccrc` uses (see
+# `ccrc-adopt:139-140`'s idiom, in the same PATH-free spelling `ccrc` uses (see
 # that file for why `dirname` is not called here: doctor has to work on a box
 # whose PATH is the broken thing). `${BASH_SOURCE[0]}` and not `$0`, because
 # this file is only ever reached by `source`, where `$0` is the CALLER's
@@ -1487,6 +1487,24 @@ _check_wrappers() {
       "install ccrc-wrapper-shape into the same directory as ccrc and ccrc-doctor-checks (all three resolve each other through \${BASH_SOURCE[0]}, and bash does not follow that through a symlink)"
     return 1
   fi
+  # D-155: the same question asked of a VALUE, not only of a function, because
+  # "the library loaded" and "the library is the one this file was written
+  # against" are two different facts and the second one is the one that bites.
+  # A `ccrc-wrapper-shape` predating `WRAPPER_OVERSIZE_BYTES` defines
+  # `_wrap_parse_shape` perfectly well, so the guard above passes — and then the
+  # size gate further down dereferences an unset variable under this file's
+  # `set -u` and takes the WHOLE doctor run down, every other check with it,
+  # rather than failing one verdict line. A mixed install is transient but real:
+  # the three files land through separate `install_atomic` calls.
+  #
+  # `:-` would be the cheap answer and it is the wrong one: it would put a
+  # second spelling of D-81's threshold back into this file, which is the exact
+  # duplication moving the constant into the library removed.
+  if [ -z "${WRAPPER_OVERSIZE_BYTES:-}" ]; then
+    _dr_fail wrappers "the wrapper-shape library at $CCRC_WRAPPER_LIB loaded but is older than this ccrc — it declares no WRAPPER_OVERSIZE_BYTES, so the roster and \$HOME/.local/bin were not compared" \
+      "the three files ship together and must be the same build: re-run the install (or redeploy) so ccrc, ccrc-doctor-checks and ccrc-wrapper-shape all come from one tree"
+    return 1
+  fi
 
   local bin="$WRAPPER_BIN_DIR" roster="$HOME/.ccrc/accounts.json"
   # D-82: `wr_absent` is its own bucket, not a third name for `wr_hard` — see
@@ -1790,7 +1808,10 @@ _check_wrappers() {
         # cannot do without. Skip-and-count, not a crash: a wrapper too big to
         # check is a disagreement (`wr_hard`), exactly like one that fails the
         # shape test outright, and the mirrored threshold is D-81's own
-        # `OVERSIZE_BYTES` (`deploy/gen-wrappers.mjs`).
+        # `OVERSIZE_BYTES` (`deploy/gen-wrappers.mjs`) — reached here through
+        # `WRAPPER_OVERSIZE_BYTES` (D-155) rather than as a bare literal, so the
+        # bash side of D-81's threshold is written once instead of once per
+        # caller.
         #
         # D-87: NOT `read -N` (the pure-bash reach `_wrap_is_script` uses for
         # its own two-byte gate) — measured NOT bounded here. `read -N n`
@@ -1801,7 +1822,7 @@ _check_wrappers() {
         if command -v stat >/dev/null 2>&1; then
           local wr_sz=""
           wr_sz="$(stat -c%s -- "$bin/$id" 2>/dev/null)" || wr_sz=""
-          if [[ "$wr_sz" =~ ^[0-9]+$ ]] && [ "$wr_sz" -gt 1048576 ]; then
+          if [[ "$wr_sz" =~ ^[0-9]+$ ]] && [ "$wr_sz" -gt "$WRAPPER_OVERSIZE_BYTES" ]; then
             wr_hard+=("$id's \$HOME/.local/bin/$id is over 1 MiB — too big to be the generated shape, and never read")
             continue
           fi

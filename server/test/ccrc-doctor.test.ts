@@ -2343,7 +2343,7 @@ describe('ccrc doctor: wrappers', () => {
   });
 
   it('WARNS about a wrapper on disk the roster describes nowhere — reported, never resolved', () => {
-    // adopt's bias rule (ccrc-adopt:32-39), carried over: the ambiguous case is
+    // adopt's bias rule (ccrc-adopt:41-48), carried over: the ambiguous case is
     // REPORTED. It is not a FAIL — keeping a launcher the fleet does not drive
     // is a legitimate thing to do — but a silent pass would hide the account
     // that was added to disk and never written down.
