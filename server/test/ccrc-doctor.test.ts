@@ -634,8 +634,18 @@ function stubOpenssl(home: string): void {
   stub(home, 'openssl', [
     'printf \'%s\\n\' "$*" >> "$HOME/openssl-calls"',
     'if [ "$1" = "s_client" ]; then',
+    '  addr=""; prev=""',
+    '  for a in "$@"; do [ "$prev" = "-connect" ] && addr="${a%%:*}"; prev="$a"; done',
     '  if [ -f "$HOME/fixture-tls-refused" ]; then',
     '    echo "connect:errno=111" >&2; exit 1',
+    '  fi',
+    // Per-address refusal — the caddy-binds-one-interface topology (the live
+    // 2026-08-21 ceremony: tailscaled owns the tailnet IP's :443, caddy binds
+    // the public IP only, loopback refuses).
+    '  if [ -f "$HOME/fixture-tls-refused-addrs" ]; then',
+    '    while IFS= read -r bad; do',
+    '      if [ "$bad" = "$addr" ]; then echo "connect:errno=111" >&2; exit 1; fi',
+    '    done < "$HOME/fixture-tls-refused-addrs"',
     '  fi',
     '  echo "FIXTURE-TLS-SESSION"; exit 0',
     'fi',
@@ -4559,6 +4569,37 @@ describe('ccrc doctor: cert', () => {
     const calls = readFileSync(join(home, 'openssl-calls'), 'utf8');
     expect(calls).toContain('-connect 127.0.0.1:443');
     expect(calls).toContain(`-servername ${EXPOSED_HOST}`);
+  });
+
+  // Live finding, 2026-08-21 ceremony: caddy CAN bind one interface only —
+  // tailscaled held the tailnet IP's :443, so caddy took the public IP and
+  // loopback refused. A loopback-only probe FAILed a box that was serving a
+  // perfectly good certificate. The probe now walks loopback first, then the
+  // box's own addresses (`hostname -I`, the name check's source), and
+  // measures the first listener that answers.
+  it('falls back to the box\'s own addresses when loopback refuses — caddy bound to one interface is not a missing cert', () => {
+    const home = healthy('ccrc-doctor-cert-onebind-');
+    writeFileSync(join(home, 'fixture-tls-refused-addrs'), '127.0.0.1\n');
+    writeFileSync(join(home, 'fixture-host-ips'), '203.0.113.7 10.0.0.5\n');
+    const r = runDoctor(home);
+    const l = lineFor(r.stdout, 'cert');
+    expect(l, r.stdout).toMatch(/^PASS cert: /);
+    expect(l).toContain('203.0.113.7');
+    // Loopback was still tried FIRST — the fallback is ordered, not a swap.
+    const calls = readFileSync(join(home, 'openssl-calls'), 'utf8');
+    expect(calls.indexOf('-connect 127.0.0.1:443')).toBeGreaterThan(-1);
+    expect(calls.indexOf('-connect 127.0.0.1:443'))
+      .toBeLessThan(calls.indexOf('-connect 203.0.113.7:443'));
+  });
+
+  it('still FAILs when NO listener answers on any of the box\'s addresses', () => {
+    const home = healthy('ccrc-doctor-cert-nowhere-');
+    writeFileSync(join(home, 'fixture-tls-refused'), '');
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL cert: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: .*caddy/);
   });
 
   it('WARNs when the cert expires within 14 days — renewal is failing, not yet failed', () => {

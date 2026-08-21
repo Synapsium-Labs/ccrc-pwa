@@ -272,13 +272,15 @@ describe("step 11 quotes what the exposure doctor checks actually print", () => 
   });
 
   it("the cert PASS line matches _check_cert's template, with the worked host and SOME day count", () => {
-    // The template, pinned in the source it is printed from…
+    // The template, pinned in the source it is printed from… ($addr since the
+    // probe walks the box's addresses — loopback is candidate ONE, so the
+    // worked line below is what the typical all-interfaces Caddy prints.)
     expect(doctorChecksSrc).toMatch(
-      /_dr_pass cert "127\.0\.0\.1:443 serves a certificate for \$host, valid another \$days days"/,
+      /_dr_pass cert "\$addr:443 serves a certificate for \$host, valid another \$days days"/,
     );
-    // …and the runbook's quoted line is that template with the worked host
-    // substituted and a day count (the one part of the line the runbook's own
-    // prose says varies box to box).
+    // …and the runbook's quoted line is that template with the worked host and
+    // worked address substituted and a day count (the parts the runbook's own
+    // prose says vary box to box).
     expect(step11Section()).toMatch(
       new RegExp(`^PASS cert: 127\\.0\\.0\\.1:443 serves a certificate for ${EXAMPLE_HOST.replace(/\./g, '\\.')}, valid another \\d+ days$`, 'm'),
     );

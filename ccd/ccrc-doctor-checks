@@ -1374,22 +1374,39 @@ _check_cert() {
       "install it: sudo apt install openssl — until then nothing here can tell a fresh certificate from an expired one"
     return 2
   fi
-  local pem rc
-  if command -v timeout >/dev/null 2>&1; then
-    pem="$(timeout "$CCRC_DOCTOR_GH_TIMEOUT" openssl s_client -connect 127.0.0.1:443 -servername "$host" </dev/null 2>/dev/null)"; rc=$?
-  else
-    # gh_auth's trade: a box without coreutils' `timeout` still gets an
-    # answer, just without a deadline.
-    pem="$(openssl s_client -connect 127.0.0.1:443 -servername "$host" </dev/null 2>/dev/null)"; rc=$?
+  # Candidates: loopback first (the common all-interfaces bind), then this
+  # box's own addresses (`hostname -I` — the name check's source). Caddy CAN
+  # bind a single interface: live 2026-08-21, tailscaled held the tailnet
+  # IP's :443, caddy took the public IP, and loopback REFUSED — a probe that
+  # stopped there FAILed a box serving a perfectly good certificate. The
+  # first listener that completes a handshake is the one measured.
+  local -a cert_cands=(127.0.0.1)
+  local cip
+  if command -v hostname >/dev/null 2>&1; then
+    for cip in $(hostname -I 2>/dev/null); do
+      case " ${cert_cands[*]} " in *" $cip "*) ;; *) cert_cands+=("$cip") ;; esac
+    done
   fi
-  if [ "$rc" -eq 124 ]; then
-    _dr_fail cert "something holds 127.0.0.1:443 but did not finish a TLS handshake within ${CCRC_DOCTOR_GH_TIMEOUT}s" \
-      "whatever is on :443 is wedged — see the caddy check above, and read its log: journalctl -u caddy -n 50"
-    return 1
-  fi
+  local pem="" rc=1 addr="" cert_timed_out=""
+  for addr in "${cert_cands[@]}"; do
+    if command -v timeout >/dev/null 2>&1; then
+      pem="$(timeout "$CCRC_DOCTOR_GH_TIMEOUT" openssl s_client -connect "$addr:443" -servername "$host" </dev/null 2>/dev/null)"; rc=$?
+    else
+      # gh_auth's trade: a box without coreutils' `timeout` still gets an
+      # answer, just without a deadline.
+      pem="$(openssl s_client -connect "$addr:443" -servername "$host" </dev/null 2>/dev/null)"; rc=$?
+    fi
+    [ "$rc" -eq 124 ] && cert_timed_out="$addr"
+    [ "$rc" -eq 0 ] && [ -n "$pem" ] && break
+  done
   if [ "$rc" -ne 0 ] || [ -z "$pem" ]; then
-    _dr_fail cert "nothing answered a TLS handshake at 127.0.0.1:443 for $host" \
-      "caddy is not serving — see the caddy check above; once its unit is active, stock caddy fetches the certificate itself (and if THAT fails, the usual cause is ports 80/443 not forwarded to this box)"
+    if [ -n "$cert_timed_out" ]; then
+      _dr_fail cert "something holds $cert_timed_out:443 but did not finish a TLS handshake within ${CCRC_DOCTOR_GH_TIMEOUT}s" \
+        "whatever is on :443 is wedged — see the caddy check above, and read its log: journalctl -u caddy -n 50"
+    else
+      _dr_fail cert "nothing answered a TLS handshake for $host on :443 at any of this box's addresses (${cert_cands[*]})" \
+        "caddy is not serving — see the caddy check above; once its unit is active, stock caddy fetches the certificate itself (and if THAT fails, the usual cause is ports 80/443 not forwarded to this box)"
+    fi
     return 1
   fi
   local enddate
@@ -1397,7 +1414,7 @@ _check_cert() {
   case "$enddate" in
     notAfter=?*) ;;
     *)
-      _dr_fail cert "the listener at 127.0.0.1:443 answered the handshake but no certificate could be read out of the answer" \
+      _dr_fail cert "the listener at $addr:443 answered the handshake but no certificate could be read out of the answer" \
         "whatever holds :443 is probably not caddy — see the caddy check above, and look at what is listening: sudo ss -tlnp 'sport = :443'"
       return 1 ;;
   esac
@@ -1410,7 +1427,7 @@ _check_cert() {
      || ! end_s="$(date -d "${enddate#notAfter=}" +%s 2>/dev/null)" \
      || ! now_s="$(date +%s 2>/dev/null)"; then
     _dr_warn cert "a certificate is served for $host but its expiry (\"${enddate#notAfter=}\") could not be turned into a date on this box" \
-      "check it by hand: openssl s_client -connect 127.0.0.1:443 -servername $host </dev/null | openssl x509 -noout -enddate"
+      "check it by hand: openssl s_client -connect $addr:443 -servername $host </dev/null | openssl x509 -noout -enddate"
     return 2
   fi
   days=$(( (end_s - now_s) / 86400 ))
@@ -1423,7 +1440,7 @@ _check_cert() {
       "read caddy's renewal error: journalctl -u caddy -n 50 — the usual cause is ports 80/443 no longer reaching this box"
     return 2
   fi
-  _dr_pass cert "127.0.0.1:443 serves a certificate for $host, valid another $days days"
+  _dr_pass cert "$addr:443 serves a certificate for $host, valid another $days days"
 }
 
 # ── name: the DDNS record, and where it points ────────────────────────────
