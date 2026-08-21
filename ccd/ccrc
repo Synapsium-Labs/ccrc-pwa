@@ -222,6 +222,10 @@ UPD_STAGE=""
 UPD_TREE=""
 UPD_VERSION=""
 UPD_BACKUP_DIR=""
+# `set -u` out-parameter discipline, same as the UPD_* four above: the _inst_*
+# steps read it, cmd_install overwrites it — a direct _inst_* call must meet a
+# stated default, never an unbound-variable death.
+INST_ROLE=both
 
 # ── WHICH STEPS DEGRADED, so the closing line can say so ──────────────────
 # `cmd_install`'s steps either converge or die — with ONE exception by design,
@@ -3224,7 +3228,9 @@ cmd_update() {
   # (backup-coord.mjs) and a backup that failed for a missing interpreter
   # must not read as a broken coord.db.
   local t
-  for t in curl tar gzip sha256sum node; do
+  # awk: _upd_sweep's unit enumeration rides it — absent, the per-unit
+  # preflight would silently narrow to the template probe (branch review).
+  for t in curl tar gzip sha256sum node awk; do
     command -v "$t" >/dev/null 2>&1 \
       || _ccrc_die "$t is required by 'ccrc update' but is not on PATH — nothing on this box was changed"
   done

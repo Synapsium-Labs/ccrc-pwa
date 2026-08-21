@@ -52,6 +52,14 @@ if [ "$RELEASE_MODE" = true ]; then
   if [ -n "$RELEASE_TAG" ]; then URL_DIR="$BASE/download/$RELEASE_TAG"; else URL_DIR="$BASE/latest/download"; fi
 
   STAGING="$(mktemp -d)"
+  # `|| :` — the fixture harness PATH may lack rm; a failed cleanup must
+  # never override the refusal's own exit code (set -e in an EXIT trap does).
+  trap 'rm -rf "$STAGING" 2>/dev/null || :' EXIT
+  # Every refusal below exits through this trap, so a failed or TAMPERED
+  # download never lingers in /tmp; the success path disarms it right before
+  # the exec — the staged tree must outlive install.sh exactly then.
+  # `|| :` — the fixture harness PATH may lack rm; a failed cleanup must
+  # never override the refusal's own exit code (set -e in an EXIT trap does).
   # SHA256SUMS first: under `latest/` the tag is unknown until the sums file
   # names the tarball. A missing release is curl's own failure, surfaced —
   # `-f` turns the 404 into exit 22 and the message below names the URL.
@@ -77,6 +85,7 @@ if [ "$RELEASE_MODE" = true ]; then
   mkdir "$STAGING/tree"
   tar -xzf "$STAGING/$TARNAME" -C "$STAGING/tree"
   echo "install.sh: verified $TARNAME — handing off to the staged 'ccrc install'"
+  trap - EXIT
   exec bash "$STAGING/tree/ccd/ccrc" install "$@"
 fi
 

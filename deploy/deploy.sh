@@ -83,8 +83,8 @@ BUILD_SHA="$(git rev-parse HEAD)"
 git diff --quiet && git diff --cached --quiet && BUILD_DIRTY=false || BUILD_DIRTY=true
 BUILD_REF="$(git rev-parse --abbrev-ref HEAD)"
 # Stage 4, Task 1: the release tag rides as an ADDITIVE fifth field, present
-# iff a vX.Y.Z tag points at the built commit — MEASURED, like everything else
-# in this stamp. Only the release shape qualifies (a `wip` tag at HEAD is not
+# iff a vX.Y.Z tag points at the built commit — MEASURED, like every other
+# field in this stamp. Only the release shape qualifies (a `wip` tag at HEAD is not
 # an identity claim), and the grep exiting 1 on no match is the ordinary case,
 # hence the `|| BUILD_VERSION=""` that keeps set -e out of it.
 BUILD_VERSION="$(git tag --points-at HEAD | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1)" || BUILD_VERSION=""

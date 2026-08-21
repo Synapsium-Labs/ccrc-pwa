@@ -391,6 +391,25 @@ describe('install.sh --release: fetch, verify, hand off to the staged ccrc', () 
     expect(staged.some((f) => f.endsWith('ccd/ccrc'))).toBe(false);
   });
 
+  // Branch review, 2026-08-21 (minor): every refusal used to leave the mktemp
+  // staging dir — downloads included, possibly TAMPERED bytes — behind in
+  // TMPDIR. The EXIT trap now removes it on refusal and is disarmed only for
+  // the exec handoff. `rm` is linked real here because the trap tolerates a
+  // PATH without it (`|| :` — a failed cleanup must never override the
+  // refusal's own exit code), so only a harness WITH rm can observe the
+  // cleanup itself. Mutation: deleting the trap leaves the tarball behind —
+  // this test red.
+  it('a refused release leaves NOTHING in TMPDIR — the staging dir is removed by the trap', () => {
+    const home = mkTmp('install-sh-release-cleanup-');
+    const root = fixtureRoot(home, REAL_FLOOR_RANGE);
+    const bin = plantReleaseTools(home);
+    symlinkSync(realPath('rm'), join(bin, 'rm'));
+    fixtureRelease(home, { tamper: true });
+    const r = runRelease(root, ['--release'], home);
+    expect(r.code).toBe(1);
+    expect(filesUnder(join(home, 'tmp'))).toEqual([]);
+  });
+
   it('absent release: answers with curl\'s own failure, extracts nothing, runs nothing', () => {
     const home = mkTmp('install-sh-release-absent-');
     const root = fixtureRoot(home, REAL_FLOOR_RANGE);
