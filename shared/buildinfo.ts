@@ -30,6 +30,14 @@ export interface BuildInfo {
   ref: string;
   builtAt: string;
   dirty: boolean;
+  /** The release tag (`vX.Y.Z`) that pointed at the built commit, when one
+   *  did — stamped by both stampers via `git tag --points-at HEAD`, and by
+   *  the release job always. ADDITIVE (stage 4, Task 1): absent on every
+   *  untagged dev build and on every stamp written before the field existed,
+   *  and absence is the ordinary case every reader tolerates. It is a LABEL,
+   *  not the truth: `buildAgreement` compares sha + dirty only, so two stamps
+   *  differing only here still compare agreed. */
+  version?: string;
 }
 
 /** A stamp's string field: present, a string, and NOT EMPTY.
@@ -82,5 +90,16 @@ export function parseBuildInfo(raw: string): BuildInfo | null {
   const o = parsed as Record<string, unknown>;
   if (!nonEmptyString(o.sha) || !nonEmptyString(o.ref)
     || !nonEmptyString(o.builtAt) || typeof o.dirty !== 'boolean') return null;
+  // `version` is additive: absent is the ordinary case (every pre-stage-4
+  // stamp, every untagged dev build) and the stamp parses exactly as before —
+  // with NO `version` key on the literal, so a JSON round-trip (the ready
+  // frame's revalidation in `remote/client.ts`) is identical to the disk
+  // read. Present, it obeys the same whole-or-nothing rule as the other
+  // strings: no stamper writes an empty or non-string version, so one means
+  // the file was not written by a deploy, and the stamp is rejected whole.
+  if ('version' in o) {
+    if (!nonEmptyString(o.version)) return null;
+    return { sha: o.sha, ref: o.ref, builtAt: o.builtAt, dirty: o.dirty, version: o.version };
+  }
   return { sha: o.sha, ref: o.ref, builtAt: o.builtAt, dirty: o.dirty };
 }

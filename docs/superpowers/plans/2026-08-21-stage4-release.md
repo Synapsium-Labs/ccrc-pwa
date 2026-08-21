@@ -69,15 +69,18 @@ built sha, or always from the release job); `/health` body gains sibling `versio
 known; `ccrc version` prints it when present. `buildAgreement` UNCHANGED (sha+dirty) with a
 new pin: two stamps differing only in `version` still compare `agreed`.
 
-- [ ] RED: `parseBuildInfo` keeps a valid `version` and tolerates absence; `/health` emits
+- [x] RED: `parseBuildInfo` keeps a valid `version` and tolerates absence; `/health` emits
   it only when present; `ccrc version` prints `version vX.Y.Z` line iff present (fixture
   build.json both ways); stampers: fixture repo WITH a tag at HEAD stamps it, without omits
   it (`git tag --points-at HEAD` in both stampers); the buildAgreement pin above.
-- [ ] GREEN across every reader listed. If `ccd version`'s python3 reader lives in
-  `ccd/ccd`, leave it and record the deviation (it omits the tag; additive absence).
-- [ ] Mutations: drop the absence-tolerance (red); make buildAgreement compare version
-  (the version-only-differ pin reds). Suites: buildinfo + config + single-definition +
-  ccrc-cli. Commit `feat(release): the tag rides in build.json, additively, everywhere`.
+  (Ran red: 7 TS-side + 2 ccrc-cli + 1 status + 1 install-stamp before implementation.)
+- [x] GREEN across every reader listed. `ccd version`'s python3 reader lives in `ccd/ccd`
+  — left untouched, deviation D-139 (it omits the tag; additive absence).
+- [x] Mutations: drop the absence-tolerance (7 red); make buildAgreement compare version
+  (2 red — the version-only-differ pin, unit + end-to-end). Suites: buildinfo + config +
+  single-definition + ccrc-cli all green (plus health, fleet-build-skew, ccrc-doctor,
+  ccrc-install, typecheck-tests, agent build-fp).
+  Commit `feat(release): the tag rides in build.json, additively, everywhere`.
 
 ### Task 2: `deploy/build-release.sh`
 
@@ -242,3 +245,18 @@ extend `ccrc-cli.test.ts`.
 
 (D-139 onward; recorded during execution — renumber against 3b's ledger at review time if
 it merges first.)
+
+- **D-139** (Task 1): `ccd version`'s python3 reader of `~/.ccrc/build.json` lives in
+  `ccd/ccd` (the heredoc near `ccd/ccd:2453`), which this branch does not touch by
+  contract. That one reader is OUT of Task 1's scope: `ccd version` simply omits the tag —
+  additive absence, correct by the same wire rule every other reader follows.
+  `single-definition.test.ts`'s "read from exactly two places" pin already names `ccd/ccd`
+  as the deliberate second reader and stays green. Migrating it rides with whatever future
+  task next touches `ccd/ccd`.
+- **Task 1 mutation measurements** (applied, run, reverted): (M1) parseBuildInfo's
+  absence-tolerance dropped (version made required) → 7 red across buildinfo +
+  fleet-build-skew; (M2) buildAgreement made to compare `version` → 2 red in
+  fleet-build-skew (the version-only-differ unit pin and the end-to-end wire pin).
+  The deploy.sh stamper is guarded by executing its extracted derivation lines
+  (`buildinfo.test.ts`), so dropping the tag lookup or making the field unconditional
+  reds there; `_inst_stamp`'s tag arm is pinned behaviorally in `ccrc-install.test.ts`.

@@ -401,6 +401,38 @@ describe('ccrc: version', () => {
     expect(r.stdout).not.toMatch(/dirty/);
   });
 
+  it('prints a "version vX.Y.Z" line iff the stamp carries one', () => {
+    // Stage 4, Task 1: the release tag rides in build.json as an additive
+    // fifth field. Present -> its own line; absent -> NO line, and the rest of
+    // the output is unchanged (every stamp already on a box omits it).
+    const home = mkTmp('ccrc-cli-version-tag-');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'build.json'),
+      JSON.stringify({ sha: 'abc123', ref: 'main', builtAt: '2026-08-21T00:00:00Z', dirty: false, version: 'v1.2.3' }));
+    const tagged = runCcrc(home, ['version']);
+    expect(tagged).toMatch(/^version v1\.2\.3$/m);
+    expect(tagged).toContain('abc123');
+    writeFileSync(join(home, '.ccrc', 'build.json'),
+      JSON.stringify({ sha: 'abc123', ref: 'main', builtAt: '2026-08-21T00:00:00Z', dirty: false }));
+    const untagged = runCcrc(home, ['version']);
+    expect(untagged).not.toMatch(/^version /m);
+    expect(untagged).toContain('abc123');
+  });
+
+  it('a present-but-invalid version is an unreadable stamp — same whole-or-nothing rule as the TS parser', () => {
+    // `shared/buildinfo.ts` rejects `version: ""` (no stamper writes one), and
+    // the jq reader must agree with it — two validators that disagree about
+    // what a well-formed stamp is would have `ccrc version` printing a stamp
+    // the server refuses to serve.
+    const home = mkTmp('ccrc-cli-version-emptytag-');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'build.json'),
+      JSON.stringify({ sha: 'abc123', ref: 'main', builtAt: '2026-08-21T00:00:00Z', dirty: false, version: '' }));
+    const r = runCcrcRaw(home, ['version']);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: build stamp unreadable/m);
+  });
+
   it('refuses a stamp that exists but does not parse, rather than printing a version nobody measured', () => {
     const home = mkTmp('ccrc-cli-version-garbage-');
     mkdirSync(join(home, '.ccrc'), { recursive: true });

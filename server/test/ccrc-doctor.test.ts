@@ -3538,6 +3538,20 @@ describe('ccrc status', () => {
     expect(r.stderr).toBe('');
   });
 
+  it('prints a version line iff the stamp carries one (Stage 4, Task 1)', () => {
+    // The release tag is an additive fifth stamp field: absent on every
+    // dev-deployed box (statusBox's stamp above omits it — no line), present
+    // after a release install/update — its own fact line, in status's
+    // one-fact-per-line register.
+    const home = statusBox('ccrc-status-version-');
+    expect(runDoctor(home, ['status']).stdout).not.toMatch(/^version:/m);
+    writeFileSync(join(home, '.ccrc', 'build.json'),
+      JSON.stringify({ sha: 'abc123', ref: 'main', builtAt: '2026-08-15T00:00:00Z', dirty: false, version: 'v1.2.3' }));
+    const out = runDoctor(home, ['status']).stdout;
+    expect(out).toMatch(/^version: +v1\.2\.3$/m);
+    expect(out).toMatch(/build: +abc123 \(main\)/);
+  });
+
   it('prints the two services\' state and a session count', () => {
     const home = statusBox('ccrc-status-services-');
     const out = runDoctor(home, ['status']).stdout;

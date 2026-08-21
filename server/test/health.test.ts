@@ -19,10 +19,26 @@ describe('health', () => {
       build: { sha: 'b'.repeat(40), ref: 'main', builtAt: '2026-08-11T11:00:00Z', dirty: false },
     });
     const res = await app.inject({ method: 'GET', url: '/health' });
+    // `toEqual` is strict about extra keys: this also pins that NO sibling
+    // `version` appears when the stamp carries none — additive absence.
     expect(res.json()).toEqual({
       ok: true,
       build: { sha: 'b'.repeat(40), ref: 'main', builtAt: '2026-08-11T11:00:00Z', dirty: false },
     });
+    await app.close();
+  });
+
+  it('GET /health emits the release version beside the build — only when the stamp carries one', async () => {
+    // Stage 4, Task 1: the tag rides in build.json additively, and /health
+    // surfaces it as a SIBLING of `build` (spec §3 :87) without changing the
+    // existing shape — an unversioned box's body is byte-identical to before.
+    const stamp = {
+      sha: 'c'.repeat(40), ref: 'main', builtAt: '2026-08-21T00:00:00Z', dirty: false,
+      version: 'v1.2.3',
+    };
+    const app = await buildServer({ ...testDeps(), build: stamp });
+    const res = await app.inject({ method: 'GET', url: '/health' });
+    expect(res.json()).toEqual({ ok: true, build: stamp, version: 'v1.2.3' });
     await app.close();
   });
 });

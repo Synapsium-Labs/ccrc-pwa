@@ -308,7 +308,9 @@ _ccrc_usage_die() { echo "$PROG: unknown argument: $1" >&2; usage >&2; exit 2; }
 # `single-definition` is pointed at that pair.) It answers with a return code
 # per CONDITION, because the callers do different things about each:
 #
-#   0  the stamp parsed  -> BOX_BUILD=(sha ref builtAt true|false)
+#   0  the stamp parsed  -> BOX_BUILD=(sha ref builtAt true|false version)
+#                           (version = "" when the stamp carries none — the
+#                           additive fifth field, stage 4 Task 1)
 #   3  no stamp at all   -> a dev checkout, or a box no deploy has touched
 #   4  the path is there but is not a regular file (a directory, say)
 #   5  jq is not on PATH — a MISSING DEPENDENCY, never a corrupt stamp
@@ -318,8 +320,9 @@ _ccrc_usage_die() { echo "$PROG: unknown argument: $1" >&2; usage >&2; exit 2; }
 # an operator acts on completely differently (`apt install jq` vs. redeploy)
 # must not share one signal.
 #
-# The output is FIVE lines — the four fields and an `END` sentinel — and both
-# are checked. `$( )` strips trailing newlines, so a four-line form would lose
+# The output is SIX lines — the five fields (version as `""` when absent) and
+# an `END` sentinel — and both
+# are checked. `$( )` strips trailing newlines, so a sentinel-less form would lose
 # an empty last field silently; the sentinel makes any truncation loud. A field
 # carrying a control byte (a newline in `ref` would break the line format; a
 # backspace would let the printed sha lie on a terminal) is rejected as
@@ -333,6 +336,13 @@ _box_build_fields() {
   [[ -f "$BOX_STAMP_FILE" ]] || return 4
   command -v jq >/dev/null 2>&1 || return 5
   local out
+  # `version` (stage 4, Task 1) is ADDITIVE: absent on every pre-release stamp
+  # — the `has` arm below accepts that as the ordinary case — and, when
+  # present, held to the same non-empty-string rule as the other three, the
+  # exact split `shared/buildinfo.ts` makes (two validators that disagree
+  # about a well-formed stamp would have this verb printing one the server
+  # refuses to serve). It travels as a fifth line, `""` for absent, so the END
+  # sentinel keeps its truncation duty at index 5.
   out="$(jq -r '
     try (
       if (type == "object")
@@ -340,15 +350,17 @@ _box_build_fields() {
          and (.ref | type == "string") and (.ref | length > 0)
          and (.builtAt | type == "string") and (.builtAt | length > 0)
          and (.dirty | type == "boolean")
-      then "\(.sha)\n\(.ref)\n\(.builtAt)\n\(.dirty)\nEND"
+         and ((has("version") | not)
+              or ((.version | type == "string") and (.version | length > 0)))
+      then "\(.sha)\n\(.ref)\n\(.builtAt)\n\(.dirty)\n\(.version // "")\nEND"
       else empty
       end
     ) catch empty
   ' -- "$BOX_STAMP_FILE" 2>/dev/null)"
   [[ -n "$out" ]] || return 6
   mapfile -t BOX_BUILD <<< "$out"
-  [[ "${#BOX_BUILD[@]}" -eq 5 && "${BOX_BUILD[4]}" == END ]] || { BOX_BUILD=(); return 6; }
-  unset 'BOX_BUILD[4]'
+  [[ "${#BOX_BUILD[@]}" -eq 6 && "${BOX_BUILD[5]}" == END ]] || { BOX_BUILD=(); return 6; }
+  unset 'BOX_BUILD[5]'
   local f
   for f in "${BOX_BUILD[@]}"; do
     [[ "$f" =~ [[:cntrl:]] ]] && { BOX_BUILD=(); return 6; }
@@ -371,6 +383,11 @@ cmd_version() {
   local dirty=""
   [[ "${BOX_BUILD[3]}" == true ]] && dirty=", dirty"
   echo "$PROG ${BOX_BUILD[0]} (${BOX_BUILD[1]}, built ${BOX_BUILD[2]}$dirty)"
+  # The release tag, iff the stamp carries one (stage 4, Task 1) — its own
+  # line, so an unversioned box's output is byte-identical to before.
+  if [[ -n "${BOX_BUILD[4]}" ]]; then
+    echo "version ${BOX_BUILD[4]}"
+  fi
 }
 
 # ── WHERE IS THIS BOX'S SERVER? ───────────────────────────────────────────
@@ -826,7 +843,12 @@ cmd_status() {
     0) local dirty="clean"
        [[ "${BOX_BUILD[3]}" == true ]] && dirty="DIRTY — what runs here is not the commit it names"
        printf 'build:     %s (%s) built %s, %s\n' \
-         "${BOX_BUILD[0]}" "${BOX_BUILD[1]}" "${BOX_BUILD[2]}" "$dirty" ;;
+         "${BOX_BUILD[0]}" "${BOX_BUILD[1]}" "${BOX_BUILD[2]}" "$dirty"
+       # The release tag, iff the stamp carries one (stage 4, Task 1) — its
+       # own fact line; absent field, absent line.
+       if [[ -n "${BOX_BUILD[4]}" ]]; then
+         printf 'version:   %s\n' "${BOX_BUILD[4]}"
+       fi ;;
     3) printf 'build:     unstamped (no %s — no deploy has ever stamped this box)\n' "$BOX_STAMP_FILE" ;;
     4) printf 'build:     unreadable (%s is not a regular file)\n' "$BOX_STAMP_FILE" ;;
     5) printf 'build:     unreadable (jq is not on PATH, so %s cannot be parsed)\n' "$BOX_STAMP_FILE" ;;
@@ -2572,7 +2594,7 @@ _inst_stamp() {   # what this box is RUNNING, stated by the box itself
   # for the same reason ("a backspace would let the printed sha lie on a
   # terminal"), and a git that writes a megabyte of stderr must not become the
   # install transcript.
-  local src sha ref dirty tmp why rc=0 dest="$BOX_STAMP_FILE"
+  local src sha ref dirty version vfield tmp why rc=0 dest="$BOX_STAMP_FILE"
   src="$CCRC_HERE/.."
   if ! command -v git >/dev/null 2>&1; then
     echo "install: stamp: skipped (no git on PATH) — ccrc version will say unstamped"
@@ -2605,14 +2627,24 @@ _inst_stamp() {   # what this box is RUNNING, stated by the box itself
   else
     dirty=true
   fi
+  # Stage 4, Task 1: the release tag rides as an ADDITIVE fifth field, present
+  # iff a vX.Y.Z tag points at the installed commit — `deploy.sh`'s own
+  # derivation, translated to this machine. Only the release shape qualifies
+  # (which also keeps refname characters a JSON string can't carry, like `"`,
+  # out of the stamp); no match is the ordinary case, not a failure.
+  version="$(git -C "$src" tag --points-at HEAD 2>/dev/null \
+    | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1)" || version=""
+  vfield=""
+  [ -n "$version" ] && vfield=",\"version\":\"$version\""
   mkdir -p "${dest%/*}" || _ccrc_die "cannot create ${dest%/*}"
   tmp="$dest.tmp.$$"
-  printf '{"sha":"%s","ref":"%s","builtAt":"%s","dirty":%s}\n' \
-    "$sha" "$ref" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$dirty" > "$tmp" \
+  printf '{"sha":"%s","ref":"%s","builtAt":"%s","dirty":%s%s}\n' \
+    "$sha" "$ref" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$dirty" "$vfield" > "$tmp" \
     && chmod 644 "$tmp" && mv -f "$tmp" "$dest" \
     || { rm -f "$tmp"; _ccrc_die "writing $dest failed"; }
   local said=""
   [ "$dirty" = true ] && said=", dirty"
+  [ -n "$version" ] && said="$said, $version"
   echo "install: stamp: $sha ($ref$said)"
 }
 

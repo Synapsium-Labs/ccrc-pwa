@@ -1588,10 +1588,39 @@ describe('ccrc install: the build stamp', () => {
     expect(stamp['ref']).toBe('fixture-branch');
     expect(stamp['dirty']).toBe(false);
     expect(stamp['builtAt']).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+    // Stage 4, Task 1: no v* tag points at the fixture commit, so the stamp
+    // carries NO version key at all — additive absence, not an empty value.
+    expect('version' in stamp).toBe(false);
     // 0644 like deploy's, and asserted under a hostile umask so the mode can
     // only have come from a chmod — at 077 a plain redirect makes it 0600.
     expect(statSync(dotCcrc(home, 'build.json')).mode & 0o777).toBe(0o644);
     expect(r.stdout).toMatch(new RegExp(`^install: stamp: ${sha}`, 'm'));
+  });
+
+  it('stamps the version when a v* tag points at the installed commit (Stage 4, Task 1)', () => {
+    // The tag IS the release identity, measured by `git tag --points-at HEAD`
+    // — never assumed. The transcript line carries it too, so an operator
+    // watching an install sees the release they got.
+    const home = freshBox('ccrc-install-stamp-tag-');
+    const root = treeRoot(home);
+    const sha = gitInit(root);
+    const tag = (name: string): void => {
+      const r = spawnSync('git', ['-C', root, 'tag', name], {
+        env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' },
+        encoding: 'utf8',
+      });
+      if (r.status !== 0) throw new Error(`fixture git tag failed: ${r.stderr}`);
+    };
+    // A non-release tag at the same commit must NOT become the version — the
+    // stamp claims an identity only a vX.Y.Z tag states.
+    tag('release-candidate');
+    tag('v2.0.1');
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    const stamp = stampOf(home);
+    expect(stamp['sha']).toBe(sha);
+    expect(stamp['version']).toBe('v2.0.1');
+    expect(r.stdout).toMatch(/^install: stamp: [0-9a-f]{40} \(fixture-branch, v2\.0\.1\)$/m);
   });
 
   it('says dirty when the checkout has uncommitted work', () => {
