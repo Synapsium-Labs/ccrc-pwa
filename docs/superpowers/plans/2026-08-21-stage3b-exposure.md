@@ -230,15 +230,30 @@ Verdict table (each row is a test):
 | name | `getent hosts <domain>` resolves | PASS (WARN, not FAIL, when it resolves elsewhere — propagation) |
 | name | does not resolve | FAIL + "duckdns update not landed — check ccrc-ddns.timer" |
 
-- [ ] **Step 1: RED** — bijection first (four array entries, no functions → four MISSING
+- [x] **Step 1: RED** — bijection first (four array entries, no functions → four MISSING
   reds), then the verdict-table cases against stubbed `openssl`/`getent`/`systemctl`.
-- [ ] **Step 2: GREEN** — implement the four checks. `openssl` invoked as
+  *(Measured: bijection test 1 red printing exactly `MISSING _check_exposure/caddy/cert/name`;
+  with the 19 verdict-table cases written and the `healthy()` fixture exposed, the full
+  ccrc-doctor suite in the RED state: 64 failed / 208 passed — the four missing functions
+  also FAIL every healthy-fixture run, so the collateral is the mechanism working.)*
+- [x] **Step 2: GREEN** — implement the four checks. `openssl` invoked as
   `openssl s_client -connect 127.0.0.1:443 -servername "$host" </dev/null 2>/dev/null | openssl x509 -noout -enddate`
-  with both hops through stubs in tests.
-- [ ] **Step 3:** mutations — flip the cert threshold comparison (WARN case reds); make the
+  with both hops through stubs in tests. *(272/272. The constants are reached through
+  `_check_config`'s bug-in-ccrc guard shape — no literal respelling of
+  `CCRC_EXPOSURE_FILE`/`CCRC_CADDYFILE`/`CCRC_DDNS_UNIT`, so single-definition's holder
+  lists stay `['ccd/ccrc']`. Harness note: `linkReal` made idempotent (rm-then-link) —
+  `healthy()` now links `stat`/`date` and the pre-existing oversize-wrapper test re-links
+  `stat`.)*
+- [x] **Step 3:** mutations — flip the cert threshold comparison (WARN case reds); make the
   name check FAIL on mismatch (the WARN-not-FAIL case reds); print the token in the exposure
   PASS detail (never-printed test reds). Record. `ccrc-doctor` suite green. Commit
   `feat(doctor): exposure, caddy, cert, name — four checks, D-150 arms`.
+  *(Measured, each against ccrc-doctor (272 tests), each reverted: `-lt 14` → `-ge 14` →
+  5 red (PASS-naming-days + WARN-under-14, plus three warn-count collaterals); the
+  resolves-elsewhere `_dr_warn`→`_dr_fail` → 1 red (the WARN-not-FAIL pin); the canary
+  token appended to the exposure PASS detail → 1 red (never-printed). Gate + neighbour
+  suites green: ccrc-doctor 272/272, and single-definition + ccrc-expose + ccrc-cli +
+  ccrc-install + ccrc-passwd 255/255 — 527/527.)*
 
 ### Task 5: `enrolledRpIds` — the rename sentence stops lying
 

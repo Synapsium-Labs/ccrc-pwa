@@ -179,6 +179,10 @@ CCRC_DOCTOR_CHECKS=(
   config
   auth
   rc
+  exposure
+  caddy
+  cert
+  name
   disk
   wrappers
   fleet
@@ -1217,6 +1221,300 @@ _dr_rc_state() {
 # the answer appear on the fleet host.
 _check_rc() {
   _dr_pass rc "$(_dr_rc_state)"
+}
+
+# ── stage 3b (spec D6): the exposure quartet ──────────────────────────────
+# Four checks, one subject each, all keyed off ONE fact: does
+# $CCRC_EXPOSURE_FILE exist? A box that never ran `ccrc expose` — a BYO-proxy
+# box (parent spec :160-164), or a pre-3b box — is a VALID END STATE, not a
+# fault, so all four SKIP there (THE FOURTH OUTCOME) and none of them nags a
+# box that chose to stay dark. The four are separate checks and not one,
+# because their remedies are four different operator actions (re-run the verb;
+# run the root ceremony; read caddy's renewal log; look at the ddns timer) —
+# joining any two is the overloaded-seam collapse `_check_wrappers` was split
+# for.
+#
+# ── D-150, SATISFIED BY CONSTRUCTION ─────────────────────────────────────
+# None of these probes crosses the armed session gate: `caddy` asks systemd,
+# `name` asks the resolver, and `cert` reads only the TLS HANDSHAKE off the
+# local listener (`openssl s_client` with SNI — no HTTP request is ever sent,
+# so there is no 401 to classify into `_check_fleet`'s rc shape). Measuring
+# the cert against 127.0.0.1:443 rather than the WAN path is the same
+# discipline from the other side: the answer exists before DNS propagates and
+# never depends on the router.
+#
+# ── THE TOKEN IS NEVER READ, LET ALONE PRINTED ───────────────────────────
+# `exposure` fetches exactly two keys (CCRC_ORIGIN, CCRC_RP_ID) through
+# `_box_env_value` and reports the ORIGIN; CCRC_DDNS_TOKEN is never fetched by
+# any of the four (`_check_config`'s standing rule, and ccrc-doctor.test.ts
+# plants a canary token that must not appear anywhere in a full run).
+#
+# ── THE CONSTANTS COME FROM `ccrc`, NEVER RESPELLED (D-85's rule) ─────────
+# `CCRC_EXPOSURE_FILE`, `CCRC_CADDYFILE` and `CCRC_DDNS_UNIT` are each
+# declared once in `ccrc` (single-definition.test.ts pins all three), and this
+# file reaches them the way `_check_config` reaches `BOX_ENV_FILE`: through a
+# guard that FAILs as "a bug in ccrc" when the table was sourced by something
+# that is not `ccrc` — a `${…:-…}` fallback would be the second spelling with
+# a branch in front of it (D-92's trade, stated at `CCRC_RC_FILE` above).
+
+# ── exposure: the file the verb wrote, still whole and still private ──────
+_check_exposure() {
+  if [ -z "${CCRC_EXPOSURE_FILE:-}" ] || ! declare -F _box_env_value >/dev/null 2>&1; then
+    _dr_fail exposure "ccrc's own exposure-file constant is not loaded, so this box's exposure config was never read" \
+      "this is a bug in ccrc, not a fact about your box — _check_exposure reads CCRC_EXPOSURE_FILE through _box_env_value, both declared once in ccrc itself, and this check table was sourced by something that is not ccrc"
+    return 1
+  fi
+  if [ ! -e "$CCRC_EXPOSURE_FILE" ]; then
+    _dr_skip exposure "not configured — no $CCRC_EXPOSURE_FILE (a BYO proxy, or a pre-3b box; both are valid end states, and 'ccrc expose' is what writes one)"
+    return 3
+  fi
+  # `_check_config`'s split, coarser: not-a-file and unreadable are one FAIL
+  # here (not two WARNs) because for THIS file either state means the server
+  # unit's second EnvironmentFile line is feeding it nothing usable.
+  if [ ! -f "$CCRC_EXPOSURE_FILE" ] || [ ! -r "$CCRC_EXPOSURE_FILE" ]; then
+    _dr_fail exposure "$CCRC_EXPOSURE_FILE is there and cannot be read (not a regular file, or unreadable), so this box's origin was never measured" \
+      "look at what is really there (ls -ld $CCRC_EXPOSURE_FILE), then re-run: ccrc expose duckdns (or: ccrc expose byo) — it rewrites the file 0600"
+    return 1
+  fi
+  local -a gaps=()
+  local mode="" modesaid=" (mode not measured — no stat on PATH)"
+  # `stat` guarded exactly like `_check_wrappers`' size gate: never assumed.
+  # With it absent the keys are still measured — a box missing coreutils must
+  # not lose the half of this check that needs only bash.
+  if command -v stat >/dev/null 2>&1; then
+    mode="$(stat -c%a -- "$CCRC_EXPOSURE_FILE" 2>/dev/null)" || mode=""
+    if [ "$mode" = 600 ]; then
+      modesaid=", mode 0600"
+    else
+      gaps+=("its mode is ${mode:-unreadable}, not 0600 — the DuckDNS token must never be world-readable")
+    fi
+  fi
+  local origin rpid
+  origin="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_ORIGIN)"
+  rpid="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_RP_ID)"
+  [ -n "$origin" ] || gaps+=("CCRC_ORIGIN is empty or absent")
+  [ -n "$rpid" ] || gaps+=("CCRC_RP_ID is empty or absent")
+  if [ "${#gaps[@]}" -gt 0 ]; then
+    _dr_fail exposure "$CCRC_EXPOSURE_FILE is present but $(_dr_join ${gaps[@]+"${gaps[@]}"})" \
+      "re-run: ccrc expose duckdns (or: ccrc expose byo) — it rewrites $CCRC_EXPOSURE_FILE 0600 with both keys; the server reads the file as written, so a gap here is a box whose auth origin is half-set"
+    return 1
+  fi
+  _dr_pass exposure "configured — CCRC_ORIGIN=$origin (rp id: $rpid)$modesaid"
+}
+
+# ── caddy: the SYSTEM unit the D2 ceremony was supposed to arm ────────────
+# Its own `systemctl`, in SYSTEM scope — NOT `_check_services`, which reads
+# only `$CCRC_UNIT_DIR` user units: caddy binds :80/:443 as root and is
+# nobody's user unit. The FAIL is the D2 pending state made visible: exposure
+# configured, ceremony not yet run — so the remedy IS the ceremony, all three
+# steps, not a pointer back to a transcript that has scrolled away.
+_check_caddy() {
+  if [ -z "${CCRC_EXPOSURE_FILE:-}" ] || [ -z "${CCRC_CADDYFILE:-}" ]; then
+    _dr_fail caddy "ccrc's own exposure constants are not loaded, so whether caddy serves this box was never asked" \
+      "this is a bug in ccrc, not a fact about your box — _check_caddy reads CCRC_EXPOSURE_FILE and CCRC_CADDYFILE, both declared once in ccrc itself, and this check table was sourced by something that is not ccrc"
+    return 1
+  fi
+  if [ ! -e "$CCRC_EXPOSURE_FILE" ]; then
+    _dr_skip caddy "no exposure configured (no $CCRC_EXPOSURE_FILE), so no proxy is owed on this box"
+    return 3
+  fi
+  if ! command -v systemctl >/dev/null 2>&1; then
+    # A SKIP where `_check_services` FAILs on the same absence, deliberately:
+    # that check has unit FILES on disk contradicted by a box that cannot run
+    # them; here there is no artifact of ours — caddy is a system package on a
+    # box with systemd, and a container/dev box without systemd simply has
+    # nothing to measure.
+    _dr_skip caddy "systemctl is not on PATH (a container, or a dev box), so the caddy system unit could not be asked — a box without systemd runs its proxy some other way"
+    return 3
+  fi
+  local st rc
+  st="$(systemctl is-active caddy 2>/dev/null)"; rc=$?
+  if [ "$rc" -eq 0 ]; then
+    _dr_pass caddy "the caddy system unit is active — TLS terminates there and proxies to this box's loopback server"
+    return 0
+  fi
+  # systemd's own word is quoted back (`_check_services`' rule): "failed" and
+  # "inactive" send an operator to different places, and an empty answer is a
+  # unit systemd would not talk about at all — the not-yet-installed state.
+  _dr_fail caddy "exposure is configured but the caddy system unit is ${st:-not known to systemd} — the root ceremony has not been run (ccrc never escalates, so these steps are the operator's)" \
+    "install caddy from your distro (Debian/Ubuntu: apt install caddy), then: sudo ln -sf $CCRC_CADDYFILE /etc/caddy/Caddyfile (or copy it), then: sudo systemctl enable --now caddy"
+}
+
+# ── cert: what the listener actually serves, measured from inside ─────────
+# `openssl s_client` to 127.0.0.1:443 with the origin's host in SNI (spec D6):
+# the answer exists before DNS propagates and never depends on the WAN path.
+# The handshake is the WHOLE conversation — no HTTP request is sent (the
+# D-150 note above). Bounded by CCRC_DOCTOR_GH_TIMEOUT for the reason that
+# knob exists: a wedged listener holding :443 without answering is precisely a
+# box this check will be run on.
+_check_cert() {
+  if [ -z "${CCRC_EXPOSURE_FILE:-}" ] || ! declare -F _box_env_value >/dev/null 2>&1; then
+    _dr_fail cert "ccrc's own exposure-file constant is not loaded, so the served certificate was never read" \
+      "this is a bug in ccrc, not a fact about your box — _check_cert reads CCRC_EXPOSURE_FILE through _box_env_value, both declared once in ccrc itself, and this check table was sourced by something that is not ccrc"
+    return 1
+  fi
+  if [ ! -e "$CCRC_EXPOSURE_FILE" ]; then
+    _dr_skip cert "no exposure configured (no $CCRC_EXPOSURE_FILE), so there is no certificate this box is supposed to be serving"
+    return 3
+  fi
+  local origin host
+  origin="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_ORIGIN)"
+  host="${origin#https://}"
+  if [ -z "$host" ] || [ "$host" = "$origin" ]; then
+    # No https:// origin means no name to put in SNI. The exposure check owns
+    # that finding (it FAILs on the missing key); a second verdict here would
+    # count one gap twice.
+    _dr_skip cert "$CCRC_EXPOSURE_FILE names no https:// origin to ask the listener for (the exposure check FAILs on that), so there is no SNI name to measure with"
+    return 3
+  fi
+  if ! command -v openssl >/dev/null 2>&1; then
+    _dr_warn cert "openssl is not on PATH, so the served certificate could not be read" \
+      "install it: sudo apt install openssl — until then nothing here can tell a fresh certificate from an expired one"
+    return 2
+  fi
+  local pem rc
+  if command -v timeout >/dev/null 2>&1; then
+    pem="$(timeout "$CCRC_DOCTOR_GH_TIMEOUT" openssl s_client -connect 127.0.0.1:443 -servername "$host" </dev/null 2>/dev/null)"; rc=$?
+  else
+    # gh_auth's trade: a box without coreutils' `timeout` still gets an
+    # answer, just without a deadline.
+    pem="$(openssl s_client -connect 127.0.0.1:443 -servername "$host" </dev/null 2>/dev/null)"; rc=$?
+  fi
+  if [ "$rc" -eq 124 ]; then
+    _dr_fail cert "something holds 127.0.0.1:443 but did not finish a TLS handshake within ${CCRC_DOCTOR_GH_TIMEOUT}s" \
+      "whatever is on :443 is wedged — see the caddy check above, and read its log: journalctl -u caddy -n 50"
+    return 1
+  fi
+  if [ "$rc" -ne 0 ] || [ -z "$pem" ]; then
+    _dr_fail cert "nothing answered a TLS handshake at 127.0.0.1:443 for $host" \
+      "caddy is not serving — see the caddy check above; once its unit is active, stock caddy fetches the certificate itself (and if THAT fails, the usual cause is ports 80/443 not forwarded to this box)"
+    return 1
+  fi
+  local enddate
+  enddate="$(printf '%s\n' "$pem" | openssl x509 -noout -enddate 2>/dev/null)"
+  case "$enddate" in
+    notAfter=?*) ;;
+    *)
+      _dr_fail cert "the listener at 127.0.0.1:443 answered the handshake but no certificate could be read out of the answer" \
+        "whatever holds :443 is probably not caddy — see the caddy check above, and look at what is listening: sudo ss -tlnp 'sport = :443'"
+      return 1 ;;
+  esac
+  # GNU date turns openssl's own `notAfter=` spelling into an epoch; guarded
+  # like every other external tool this file cannot do without. A cert that IS
+  # being served but cannot be dated is a WARN, not a FAIL — nothing measured
+  # says it is bad, and the remedy is the by-hand form of this same probe.
+  local end_s now_s days
+  if ! command -v date >/dev/null 2>&1 \
+     || ! end_s="$(date -d "${enddate#notAfter=}" +%s 2>/dev/null)" \
+     || ! now_s="$(date +%s 2>/dev/null)"; then
+    _dr_warn cert "a certificate is served for $host but its expiry (\"${enddate#notAfter=}\") could not be turned into a date on this box" \
+      "check it by hand: openssl s_client -connect 127.0.0.1:443 -servername $host </dev/null | openssl x509 -noout -enddate"
+    return 2
+  fi
+  days=$(( (end_s - now_s) / 86400 ))
+  # 14 days, WARN below it: caddy renews around 30 days out, so a cert this
+  # close means RENEWAL IS FAILING while nothing is broken yet — a morning's
+  # warning, not an emergency (`_check_disk`'s two-floors reasoning; here the
+  # hard floor is the handshake itself failing, which the FAIL arms above own).
+  if [ "$days" -lt 14 ]; then
+    _dr_warn cert "the certificate served for $host expires in $days days — under the 14-day floor (caddy renews ~30 days out, so renewal is failing)" \
+      "read caddy's renewal error: journalctl -u caddy -n 50 — the usual cause is ports 80/443 no longer reaching this box"
+    return 2
+  fi
+  _dr_pass cert "127.0.0.1:443 serves a certificate for $host, valid another $days days"
+}
+
+# ── name: the DDNS record, and where it points ────────────────────────────
+# duckdns only — a BYO domain's DNS is the operator's by contract (spec D4),
+# so it is a SKIP, not a measurement. The comparison side (spec D6: "to this
+# box's current public IP where discoverable") is deliberately soft: WARN and
+# not FAIL on a mismatch, because propagation lag is NORMAL and a red line
+# every operator sees for five minutes after every update is D-139's skimmed
+# yellow with a worse costume. A NAT'd box has no discoverable public address
+# at all — its interfaces hold RFC1918 space — and for it resolution alone is
+# the whole measurement, not a mismatch.
+
+# A GLOBAL IPv4 — the only interface address worth comparing a public DNS
+# record against. Private (RFC1918), loopback and link-local are what a NAT'd
+# box carries, and a "mismatch" against those would fail every home box
+# forever. IPv6 is deliberately not classified: the duckdns updater's empty
+# `ip=` writes an A record.
+_dr_ip4_global() {
+  case "$1" in
+    ''|*[!0-9.]*) return 1 ;;
+    10.*|127.*|169.254.*|192.168.*) return 1 ;;
+    172.1[6-9].*|172.2[0-9].*|172.3[01].*) return 1 ;;
+    *.*.*.*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+_check_name() {
+  if [ -z "${CCRC_EXPOSURE_FILE:-}" ] || [ -z "${CCRC_DDNS_UNIT:-}" ] || ! declare -F _box_env_value >/dev/null 2>&1; then
+    _dr_fail name "ccrc's own exposure constants are not loaded, so whether this box's name resolves was never asked" \
+      "this is a bug in ccrc, not a fact about your box — _check_name reads CCRC_EXPOSURE_FILE and CCRC_DDNS_UNIT through _box_env_value, all declared once in ccrc itself, and this check table was sourced by something that is not ccrc"
+    return 1
+  fi
+  if [ ! -e "$CCRC_EXPOSURE_FILE" ]; then
+    _dr_skip name "no exposure configured (no $CCRC_EXPOSURE_FILE), so there is no public name to resolve"
+    return 3
+  fi
+  local provider domain
+  provider="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_DDNS_PROVIDER)"
+  if [ "$provider" != duckdns ]; then
+    _dr_skip name "a BYO domain — its DNS is the operator's by contract (no CCRC_DDNS_PROVIDER in $CCRC_EXPOSURE_FILE), so there is no ddns record of ours to measure"
+    return 3
+  fi
+  domain="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_DDNS_DOMAIN)"
+  if [ -z "$domain" ]; then
+    _dr_fail name "$CCRC_EXPOSURE_FILE declares CCRC_DDNS_PROVIDER=duckdns but no CCRC_DDNS_DOMAIN, so there is no name to resolve — a state only a hand-edit reaches (the verb writes the trio together)" \
+      "re-run: ccrc expose duckdns — it rewrites the file with the whole duckdns set"
+    return 1
+  fi
+  if ! command -v getent >/dev/null 2>&1; then
+    _dr_warn name "getent is not on PATH, so whether $domain resolves was never measured" \
+      "install it (glibc's libc-bin ships it) — until then check from any box: getent hosts $domain"
+    return 2
+  fi
+  local out rc
+  out="$(getent hosts "$domain" 2>/dev/null)"; rc=$?
+  if [ "$rc" -ne 0 ] || [ -z "$out" ]; then
+    _dr_fail name "$domain does not resolve — the duckdns update has not landed (a record created moments ago, or a timer that never fired)" \
+      "check the updater: systemctl --user status $CCRC_DDNS_UNIT.timer (and journalctl --user -u $CCRC_DDNS_UNIT.service -n 20); a fresh record can also just need a minute"
+    return 1
+  fi
+  # First field of every answer line is an address the name resolves to.
+  local -a resolved=()
+  local line ip
+  while IFS= read -r line; do
+    ip="${line%%[[:space:]]*}"
+    [ -n "$ip" ] && resolved+=("$ip")
+  done <<< "$out"
+  # This box's own addresses, where discoverable. `hostname -I` is guarded
+  # like every external tool here; with it absent (or answering nothing) the
+  # comparison half is simply not made, which is the NAT arm below.
+  local -a boxips=() globals=()
+  if command -v hostname >/dev/null 2>&1; then
+    local hout=""
+    hout="$(hostname -I 2>/dev/null)" || hout=""
+    for ip in $hout; do
+      boxips+=("$ip")
+      if _dr_ip4_global "$ip"; then globals+=("$ip"); fi
+    done
+  fi
+  local r
+  for r in ${resolved[@]+"${resolved[@]}"}; do
+    if _dr_wr_has "$r" ${boxips[@]+"${boxips[@]}"}; then
+      _dr_pass name "$domain resolves to this box ($r)"
+      return 0
+    fi
+  done
+  if [ "${#globals[@]}" -gt 0 ]; then
+    _dr_warn name "$domain resolves to ${resolved[0]}, but this box's own public address is ${globals[0]} — DNS propagation lag, or the last duckdns update has not landed yet" \
+      "give it a few minutes and re-run; if it persists, check the updater: systemctl --user status $CCRC_DDNS_UNIT.timer"
+    return 2
+  fi
+  _dr_pass name "$domain resolves (${resolved[0]}); this box's own public address is not discoverable from inside (NAT, or no global address on an interface), so where the record points was not compared"
 }
 
 # ── room on the filesystem $HOME is on ────────────────────────────────────
