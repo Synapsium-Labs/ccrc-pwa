@@ -16,7 +16,7 @@ the pending proof the worker-skill slice named.
 | # | scope | PRs | state |
 |---|---|---|---|
 | 1 | The `FleetIO.readFile` null collapse: a result-returning read (absent vs unreadable) at the seam, local + remote halves, `field()` consumes it | run 6, PR #71 (merged e4da1dd) | done 2026-08-20 21:13 UTC — deployed both boxes, fleet agreed/agreed |
-| 2 | `_reg_set` atomic writes (tmp+rename, same dir/filesystem); `_substrate_mark` rides the same helper | — | planned |
+| 2 | `_reg_set` atomic writes (tmp+rename, same dir/filesystem); `_substrate_mark` rides the same helper | run 7, PR #73 (merged ba30ddf) | done 2026-08-21 02:20 UTC — deployed both boxes, fleet agreed/agreed |
 
 ## Decisions & deviations
 
@@ -52,8 +52,30 @@ the pending proof the worker-skill slice named.
   down (the skills were fixed; the failure still has no error code anywhere). Wave 1's full
   deviation ledger D-108..D-120 is in the plan, now on main:
   `docs/superpowers/plans/2026-08-20-fleetio-measured-read.md`.
-- Wave order is dependency-free; sequential anyway (one workspace, and wave 2's ccd surface wants
-  wave 1's registry semantics settled).
+- **Wave 2 verdict (2026-08-21):** first wave-done (`daff8831`) verified and reviewed — four
+  lenses, adversarially checked, NO correctness defects; three review findings sent back for one
+  fix round (the designed `awaiting-review` -> `working` path, its first live use): R-1 the
+  cmd_ws_hold guard comment still described the pre-wave `printf > file` body (three lenses found
+  it independently); R-2 the pr-state lock comment overstated the unlocked-CAS widening (an
+  existing 0664 lock file opens under a 0555 $REG); R-3 a dot-leading PROJECT id aliases ccd's own
+  dotfile locks in `_reg_purge`'s glob (`.prstate-`, and the pre-existing `.reap-`/`.ws-add-`
+  pair). Worker fixed all three — taking R-3's authorized hardening: `_ws_project_valid` refuses a
+  leading dot at the two creation sites only, mutation-measured — plus a five-item self-audit.
+  Final fingerprint `fceee24a` re-verified, merged, closed `released:true`. Wave-2 deviations
+  D-121..D-138 in `docs/superpowers/plans/2026-08-20-regset-atomic-write.md`.
+- **Residuals recorded, deliberately not fixed:** `server/test/` stays outside
+  single-definition's scanned ROOTS (D-128); tree-wide `ccd:<N>` line-citation drift is systemic
+  and pre-dates the program (~500 cited lines; CI anchor check is the roadmap candidate,
+  D-129/D-137); registry file modes carry no invariant (D-122/D-135's two disclosed edge flips).
+
+## Program closed
+
+Both waves merged (PR #71, PR #73), deployed agent-first then server, fleet agreed/agreed on
+`ba30ddf`. Run 7 closed `final:true`, `released:true` — the workspace claim is handed to the
+ordinary sweep. This was the FIRST program driven end-to-end through the `ccrc-worker` skill:
+both wave briefs were read, acked and executed by the skill's protocol; the review-fix round
+exercised `awaiting-review -> working` live; findings F-1 (skill token read, fixed pre-open in
+PR #70) and F-2 (work-item ids unexposed over HTTP) are the coordination-surface yield.
 
 ## Carried constraints
 
@@ -67,61 +89,4 @@ the pending proof the worker-skill slice named.
 
 ## Next-wave brief
 
-Program `registry-durability`, wave 2 of 2 — the final wave. Ledger:
-`docs/superpowers/programs/registry-durability.md` on `origin/docs/registry-durability-ledger`
-(fetch that ref to read it; it is not on main until program close). Wave 1 merged as PR #71; its
-deviation ledger is `docs/superpowers/plans/2026-08-20-fleetio-measured-read.md` on main.
-
-GOAL — make `_reg_set` atomic. Today it truncates-then-writes in place
-(`printf '%s' "$3" > "$REG/$1.$2"` in `ccd/ccd`), so a reader can catch a half-written or empty
-field mid-write; the registry's whole read side (including wave 1's measured reads) deserves a
-write side that never exposes a torn state. Settled shape (do not redesign): write to a tmp file
-IN THE SAME DIRECTORY (`$REG`), same filesystem, then `mv -f` (rename(2), atomic replace) into
-place. THE INVARIANT D-112 RELIES ON MUST SURVIVE AND THE PLAN MUST SAY SO EXPLICITLY: today the
-name never disappears because `_reg_set` truncates and never unlinks; with tmp+rename the name
-still never disappears because rename atomically replaces — there is NO ENOENT window at any
-point. Choose a tmp naming scheme that (a) cannot collide across concurrent supervisors
-(`$$`/mktemp), (b) is invisible to registry LISTING consumers — check every reader of `$REG`'s
-directory listing (server `readRegistryMeasured`/`RegistryRead.names`, ccd's own globs, doctor
-checks) and either name tmps so no glob matches (e.g. leading dot) or prove each reader ignores
-them; state which in the plan. `_substrate_mark` writes through the same helper — its
-FIRST-WRITE-WINS check (existence test before write) must stay correct under the new scheme, and
-`_reg_set`'s other callers (supervisor heartbeat stamps every tick) must not regress in cost or
-semantics. Survey every `_reg_set` call site and every direct `> "$REG/..."` write that bypasses
-it; migrate bypassers onto the helper where semantics allow, or document why not, per site.
-
-CARRIED FROM WAVE-1 REVIEW (four minors, all small, do them after the main work): (m1)
-`server/test/single-definition.test.ts`'s absent/unreadable pair guard: make it order-insensitive
-(`'unreadable' | 'absent'` must also trip it); (m2) the dangling-symlink residual — a symlinked
-`$REG` marker whose target is gone ENOENTs and reads measured-absent though listed; do NOT build
-an lstat ladder, just state the residual honestly in `server/src/io.ts`'s and
-`agent/src/fileops.ts`'s contract comments where 'absent' is specified; (m3)
-`server/src/watch.ts` ~:1840 — the absence-route comment claims `_reg_purge` is the only
-listed-then-ENOENT producer; registry-directory loss mid-pass is a second one (fleet-wide,
-one-pass window) — fix the sentence; (m4) `server/test/push-copy.test.ts`'s second
-"blocking review finding 2" test — add a site comment stating the degrade double is currently
-dead (plan D-118) so its reader does not mistake it for live coverage.
-
-CONSTRAINTS. `ccd/ccd` is agent-side bash: every commit touching it re-stamps the provenance
-marker IN THAT COMMIT — from repo root:
-`node --input-type=module -e "import { readFileSync, writeFileSync } from 'node:fs'; const { markGenerated } = await import('./shared/mark.mjs'); writeFileSync('ccd/ccd', markGenerated(readFileSync('ccd/ccd', 'utf8')))"`.
-Deploy is agent-first but is NOT yours (out of scope). ccd tests run ONLY against fixture HOMEs
-(`makeCcdHarness`, `server/test/ccdWsHelpers.ts`) — never the live `$HOME`; suites from inside
-each package as `./node_modules/.bin/vitest run` (never bare `npx vitest`), foreground. TDD
-red-first; every new guard mutation-measured with before/after counts in the plan's deviations.
-Known load-flaky suites (`ccd-ws-gc`, `pr-sweep`, `session-hook`, `typecheck-tests`,
-`ccd-session-state`): re-run in isolation before calling a real break.
-
-FIRST TASK: survey (call sites of `_reg_set`, direct `$REG` writes, tmp-visibility across
-listing readers) and commit a short plan
-(`docs/superpowers/plans/2026-08-20-regset-atomic-write.md`) ON THIS WORKSPACE'S BRANCH, then
-execute it with `superpowers:subagent-driven-development` — the execution skill this brief names.
-
-Commit on this workspace's own branch; do not create or switch to a separate feature branch.
-
-DONE = PR open from the workspace branch against main, CI green, `wave-done` mail whose body
-carries the JSON fingerprint `{branchTip, prNumber, prPhase: "open", handoffCommit}` with
-`branchTip === handoffCommit ===` the branch tip's 40-hex sha.
-
-OUT OF SCOPE: merging, deploying (the coordinator's, agent-first); any new ccd verbs; any
-registry read-side semantic change beyond the comment fixes named above.
+None — the program is closed.
