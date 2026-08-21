@@ -1042,7 +1042,7 @@ describe('gh containment is the harness\'s, not the caller\'s', () => {
     expect(h.ghPoison()[0]).toContain('pr list --repo o/r');
   });
 
-  it('routes EVERY bash call site in every ccd test file through BOTH poisons', () => {
+  it('routes EVERY bash call site in every ccd test file through ALL THREE poisons', () => {
     // A behavioural test can only pin the call sites that exist today, and the
     // failure mode this whole boundary exists for is the one written tomorrow:
     // four sites already built their own env (`ccd-limits` and `ccd-clip`
@@ -1057,6 +1057,10 @@ describe('gh containment is the harness\'s, not the caller\'s', () => {
     // about the fifteen call sites that happened to be edited on the day. This
     // is where a sixteenth one is caught. The behavioural half lives in
     // `ccd-harness-containment.test.ts`; this half is the coverage.
+    //
+    // THE THIRD CLAUSE IS THE TMUX ONE (Task 11b), added the same way and for
+    // the same reason once `ContainOpts.tmux` became a second opt-in poison:
+    // see the clause itself, below the systemd one, for the detail.
     const dir = __dirname;
     const files = fs.readdirSync(dir).filter((f) => /^ccd.*\.ts$/.test(f));
     expect(files.length).toBeGreaterThanOrEqual(7);
@@ -1087,6 +1091,17 @@ describe('gh containment is the harness\'s, not the caller\'s', () => {
         // site ask for systemd containment", not "does it ask for ONLY that".
         expect(window, `${f}:${i + 1} runs ccd without asking for systemd containment`)
           .toContain('systemd: true');
+        // THE THIRD CLAUSE IS THE TMUX ONE, symmetric to the systemd clause
+        // above and for the identical reason: `ContainOpts.tmux` is opt-in
+        // too (Task 11b), and once `_lc_obs` lands and shells
+        // `tmux list-panes -a` on every ccd lifecycle emit, "every call site
+        // is contained" would otherwise be a claim about only the systemd
+        // half of the option. The SYSTEMD-OPT-OUT return above already
+        // covers this clause as well — the one call site exempted from
+        // asking for systemd runs no ccd at all, so it never needed to ask
+        // for tmux either.
+        expect(window, `${f}:${i + 1} runs ccd without asking for tmux containment`)
+          .toContain('tmux: true');
         asked++;
       });
     }

@@ -108,10 +108,12 @@ describe('ghContainedEnv contains gh always, systemd only when asked', () => {
    *  the CHILD's env, so bare `bash` would be ENOENT. Same trick
    *  `ccrc-doctor.test.ts` uses, for the same reason.
    *
-   *  SYSTEMD-OPT-OUT IS THE ASSERTION — the marker that scan's systemd clause
-   *  exempts by, and this is the only call site in the suite that has earned it:
-   *  it runs NO ccd. It measures the OPTION, and half of what follows asserts
-   *  nothing unless it runs with the option OFF. `gh` is exempt from nothing,
+   *  SYSTEMD-OPT-OUT IS THE ASSERTION — the marker that scan's systemd AND
+   *  tmux clauses both exempt by (Task 11b added the second clause; it reuses
+   *  this same marker rather than earning its own, because the reason is the
+   *  same one), and this is the only call site in the suite that has earned
+   *  it: it runs NO ccd. It measures the OPTION, and half of what follows
+   *  asserts nothing unless it runs with the option OFF. `gh` is exempt from nothing,
    *  here or anywhere, and is asserted below like every other call site. */
   const BASH = execFileSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).trim();
   const run = (home: string, bin: string, snippet: string,
