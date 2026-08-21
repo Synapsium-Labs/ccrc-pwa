@@ -9,7 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  LC_DIR_NAME, compareGenerations, looksLikeGenerationFile,
+  LC_DIR_NAME, LC_GEN_SUFFIX, compareGenerations, looksLikeGenerationFile,
   parseLifecycleGeneration,
 } from '../../shared/api.js';
 
@@ -55,3 +55,14 @@ export const decOf = (e: Record<string, unknown>): Record<string, string> =>
 /** Belt to the harness's braces: a snippet that must answer `no-tmux` rather
  *  than the harness poison's `not-listed` prepends this. */
 export const NO_TMUX = 'tmux() { return 1; };';
+
+/** The generation filenames present, in order. */
+export const generationsOf = (home: string): string[] => {
+  const dir = lcDir(home);
+  return (fs.existsSync(dir) ? fs.readdirSync(dir) : [])
+    .filter((f) => looksLikeGenerationFile(f) && f.endsWith(LC_GEN_SUFFIX))
+    .map((f) => [parseLifecycleGeneration(f), f] as const)
+    .filter((p): p is readonly [string, string] => p[0] !== null)
+    .sort((a, b) => compareGenerations(a[0], b[0]))
+    .map(([, f]) => f);
+};
