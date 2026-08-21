@@ -1239,4 +1239,23 @@ Then send the `wave-done` mail with `{branchTip, prNumber, prPhase:"open", hando
   freshness window ages every row to `orphan` inside two minutes: a fleet that reads as entirely
   dead, from one missing flag.
 
+- **D-137 (2026-08-21, final review)** — D-129 recurred, which is the finding that matters more
+  than D-129 itself. The final fix wave's three `ccd/ccd` commits added +7/+12/+18 lines UPSTREAM
+  of `_pr_py`'s citations and re-staled all six — each was correct at `b036e94` and pointed at an
+  unrelated comment line afterwards. So the rule D-129 states is not sufficient: a commit can be
+  line-count-neutral *and* correct at the moment it lands, and still be invalidated by the NEXT
+  commit in the same wave. **A line number in a comment is not a fact about the code; it is a fact
+  about a revision.** Fixed by removing the class rather than resetting the trap: every citation
+  this branch introduced into `ccd/ccd` now names a FUNCTION (`_reg_set`, `cmd_ws_add`,
+  `_sync_uuid`, `cmd_start`, `cmd_supervise`'s loop, `cmd_ws_reap`) and the block says so in its
+  own words, so the next person who tries to be helpful with numbers is told why not. Measured
+  after: zero branch-introduced `ccd:<N>` citations remain in `ccd/ccd`, and the edit was
+  18-insertions/18-deletions so nothing else shifted.
+  Residual, named and NOT fixed here: the tree-wide `ccd:<N>` drift is systemic and PRE-DATES this
+  branch — roughly 500 cited lines across `server/`, `pwa/`, `agent/` and `ccd/ccd` itself no
+  longer match, and sampled ones were already wrong at `e4da1dd` (e.g. `registry.ts` cited
+  `ccd/ccd:336` for the `.stopped` write, which on `main` is a `_session_probe` comment). Worth a
+  mechanical anchor check in CI, or the same function-name conversion applied in bulk. Not this
+  wave's job, and doing it here would have buried a registry change under a repo-wide reflow.
+
 <!-- Execution appends D-129… here, with measured before/after counts for every mutation claim. -->
