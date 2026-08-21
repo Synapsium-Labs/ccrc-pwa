@@ -14,7 +14,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  makeCcdHarness, harnessBin, ghContainedEnv, WS_ADD, type ContainOpts, type CcdHarness,
+  makeCcdHarness, harnessBin, ghContainedEnv, WS_ADD, SCAN_LOOKBACK_LINES, type ContainOpts, type CcdHarness,
 } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -103,7 +103,9 @@ describe('ghContainedEnv contains gh always, systemd only when asked', () => {
    *  the source scan in `ccd-workspaces.test.ts` reads the lines AROUND a bash
    *  spawn: an env assembled inside each `it` would be invisible to it — which
    *  is also why the marker below sits at the END of this comment rather than
-   *  the top: the scan's window is only 12 lines back from the spawn it reads.
+   *  the top: the scan's window looks back only `SCAN_LOOKBACK_LINES`
+   *  (`ccdWsHelpers.ts`) lines from the spawn it reads — see the self-check
+   *  `it` below the tmux tests, which pins that distance directly.
    *
    *  `BASH` is bash resolved under the REAL PATH, once — every spawn here hands
    *  the child a fixture-only PATH, and libuv resolves the executable against
@@ -237,5 +239,37 @@ describe('ghContainedEnv contains gh always, systemd only when asked', () => {
     // The poison's own log file must not exist: if the poison had ever run,
     // even once, it would have created it.
     expect(fs.existsSync(path.join(home, 'tmux-calls'))).toBe(false);
+  });
+
+  it('keeps the SYSTEMD-OPT-OUT marker within the scan\'s lookback window of every spawn it exempts', () => {
+    // Fix Round 2's self-check. Fix Round 1 pushed the marker out of the
+    // scan's window with a comment-only edit, and the failure that produced
+    // was a LIE about the cause: "runs ccd without asking for tmux
+    // containment", when the real defect was "the marker fell out of
+    // range" — two conditions a reader must handle differently,
+    // collapsed to one message. This asserts the real invariant, at the
+    // site a future comment edit would break it, with a message that names
+    // the actual problem instead.
+    const src = fs.readFileSync(path.join(__dirname, 'ccd-harness-containment.test.ts'), 'utf8').split('\n');
+    const markerLine = src.findIndex((ln) => ln.includes('SYSTEMD-OPT-OUT IS THE ASSERTION'));
+    expect(markerLine, 'the marker text itself is missing from this file').toBeGreaterThanOrEqual(0);
+    // The SAME match `ccd-workspaces.test.ts`'s scan uses to find a bash-spawn
+    // call site — duplicated here rather than exported, per the "no new
+    // abstractions" bound on this fix: this exists to find the ACTUAL spawn
+    // lines in THIS file, not to become a second scan.
+    const spawnLines = src
+      .map((ln, i) => (/(?:execFileSync|spawnSync)\((?:'bash'|BASH)[,)]/.test(ln) ? i : -1))
+      .filter((i) => i >= 0);
+    expect(spawnLines.length, 'no bash-spawn call site found in this file to check the marker against')
+      .toBeGreaterThanOrEqual(2);
+    for (const spawnLine of spawnLines) {
+      const distance = spawnLine - markerLine;
+      expect.soft(distance,
+        `the marker sits ${distance} lines before the spawn at ` +
+        `ccd-harness-containment.test.ts:${spawnLine + 1} — that is outside ` +
+        `SCAN_LOOKBACK_LINES (${SCAN_LOOKBACK_LINES}), so the scan would misreport this call site as ` +
+        `LACKING CONTAINMENT rather than as "the marker fell out of the window"`)
+        .toBeLessThanOrEqual(SCAN_LOOKBACK_LINES);
+    }
   });
 });

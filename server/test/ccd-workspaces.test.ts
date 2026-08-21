@@ -5,7 +5,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
-import { makeCcdHarness, ghContainedEnv, CCD, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, ghContainedEnv, CCD, WS_ADD, SCAN_LOOKBACK_LINES, type CcdHarness } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 let home: string;
@@ -1077,7 +1077,7 @@ describe('gh containment is the harness\'s, not the caller\'s', () => {
         if (!/(?:execFileSync|spawnSync)\((?:'bash'|BASH)[,)]/.test(ln)) return;
         // Either side of the call: `ccd-archive`'s `runCcd` builds its `opts`
         // object several lines above the spawn.
-        const window = src.slice(Math.max(0, i - 12), i + 8).join('\n');
+        const window = src.slice(Math.max(0, i - SCAN_LOOKBACK_LINES), i + 8).join('\n');
         expect.soft(window, `${f}:${i + 1} spawns bash without ghContainedEnv`).toContain('ghContainedEnv(');
         // ONE deliberate exception, and it has to say so in the source it is
         // read from: the negative control that proves the opt-in is real must

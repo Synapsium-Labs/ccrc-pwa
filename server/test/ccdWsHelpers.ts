@@ -20,6 +20,16 @@ const HOME_ABLE_WRAPPERS: readonly string[] =
 
 export const CCD = path.resolve(__dirname, '../../ccd/ccd');
 
+/** How many lines BACK of source `ccd-workspaces.test.ts`'s bash-spawn scan
+ *  reads to find a call site's `ghContainedEnv(...)` and its opts — single-
+ *  sourced here so `ccd-harness-containment.test.ts`'s own self-check (the
+ *  SYSTEMD-OPT-OUT marker must stay within this many lines of the spawn
+ *  lines it exempts) can never drift from the number the scan itself uses.
+ *  Two conditions the scan cannot currently tell apart — "this call site
+ *  really lacks containment" and "the marker fell out of the window" — must
+ *  not silently start disagreeing about where the window ends. */
+export const SCAN_LOOKBACK_LINES = 12;
+
 /**
  * Writes `<home>/.ccrc/accounts.sh` — the generated roster `ccd` sources on the
  * line after it defines `die`, and the FIRST thing any fixture home needs,
