@@ -1196,3 +1196,51 @@ describe('one absent/unreadable read vocabulary', () => {
     expect(PAIR.test("type WsAuditUnit = 'enabled' | 'loaded' | 'absent';")).toBe(false);
   });
 });
+
+// — Stage 4, Task 7: the supervisor sweep's preflight, in BOTH copies —
+describe('the supervisor sweep — both copies carry the KillMode=process preflight', () => {
+  // R1 (granted 2026-08-21) carves the ONE scoped exception into CLAUDE.md's
+  // never-touch rule: `ccrc update`'s step-4 sweep and deploy.sh's existing
+  // sweep may try-restart `claude-session@*` units — each ONLY behind the
+  // mandatory preflight, because without KillMode=process a try-restart is a
+  // fleet kill (every session a child of ONE tmux server sitting in whichever
+  // claude-session@ cgroup created it). deploy.sh keeps its own copy for now
+  // (it executes over SSH while `ccrc` may be mid-replacement — spec §6), so
+  // the safety property exists TWICE by design; this pin is what keeps the
+  // two from drifting on it. Deleting the preflight from either copy is a
+  // red suite, not a review comment.
+  const sweepBodies = (): Array<[name: string, body: string]> => {
+    const ccrc = readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc'), 'utf8');
+    const upd = /_upd_sweep\(\) \{([\s\S]*?)\n\}/.exec(ccrc);
+    expect(upd, 'ccd/ccrc has no _upd_sweep').toBeTruthy();
+    const deploySh = readFileSync(path.join(ccrcRoot, 'deploy', 'deploy.sh'), 'utf8');
+    // SWEEP_CMD is a single-quoted assignment with no embedded single quotes
+    // (deploy.sh's own comment: bash has no escape for one inside one).
+    const cmd = /SWEEP_CMD='([\s\S]*?)'/.exec(deploySh);
+    expect(cmd, 'deploy.sh has no SWEEP_CMD').toBeTruthy();
+    return [['ccd/ccrc _upd_sweep', upd![1]!], ['deploy.sh SWEEP_CMD', cmd![1]!]];
+  };
+
+  it('each implementation compares the resolved value to KillMode=process', () => {
+    for (const [name, body] of sweepBodies()) {
+      expect(body, `${name} lost its KillMode=process preflight`)
+        .toContain('"KillMode=process"');
+      expect(body, `${name} asks the unit file, not systemd — drop-ins would be invisible`)
+        .toContain('show -p KillMode');
+    }
+  });
+
+  it('and in each, the preflight comes BEFORE the try-restart', () => {
+    // Not merely present: a guard that runs after the sweep guards nothing.
+    for (const [name, body] of sweepBodies()) {
+      const guard = body.indexOf('"KillMode=process"');
+      const restart = body.indexOf('try-restart');
+      expect(restart, `${name} has no try-restart — the sweep is gone`).toBeGreaterThan(-1);
+      // indexOf's -1 would sit "before" any restart — an ABSENT preflight must
+      // red THIS test too, not only its sibling.
+      expect(guard, `${name} has no preflight at all`).toBeGreaterThan(-1);
+      expect(guard, `${name}: the preflight does not precede the try-restart`)
+        .toBeLessThan(restart);
+    }
+  });
+});

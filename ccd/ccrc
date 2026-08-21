@@ -3159,7 +3159,12 @@ _inst_wrappers() {
 #      which is this verb's doctor too — running a second doctor from the
 #      tree this run just replaced would measure the box with the old check
 #      table and print every verdict twice.
-#   4. (The supervisor sweep is Task 7's, deliberately absent here.)
+#   4. SWEEP (`_upd_sweep`): every live `claude-session@*` supervisor is
+#      try-restarted onto the ccd this run just installed — behind the
+#      MANDATORY KillMode=process preflight (R1, granted 2026-08-21; the
+#      one scoped exception to CLAUDE.md's never-touch rule). A failed
+#      preflight refuses the SWEEP, never the UPDATE: the run continues to
+#      its report, degraded and saying so.
 #   5. REPORT (`_upd_report`): from → to off the build stamps — the old one
 #      read before anything changed, the new one re-measured off disk, never
 #      inferred from what step 3 was expected to do. A `--to` DOWNGRADE also
@@ -3248,6 +3253,7 @@ cmd_update() {
   [ "$inst_rc" -eq 0 ] \
     || _ccrc_die "the staged install (which ends with doctor) exited $inst_rc — read its lines above. The backup taken BEFORE it ran is complete at $UPD_BACKUP_DIR"
 
+  _upd_sweep
   _upd_report "$old_desc" "$old_version"
 }
 
@@ -3346,6 +3352,82 @@ _upd_backup_copy() {   # <src> <name under $UPD_BACKUP_DIR> — absent src is or
   [ -e "$1" ] || return 0
   cp -a "$1" "$UPD_BACKUP_DIR/$2" \
     || _ccrc_die "backing up $1 failed — refusing to install with an incomplete backup"
+}
+
+# ── _upd_sweep — step 4: the supervisor sweep (stage 4, Task 7; R1) ───────
+# Every `claude-session@*` unit is a LONG-LIVED `ccd supervise`: even after
+# the atomic install above, each live supervisor keeps executing the
+# PRE-update ccd (the old inode) until restarted, so auto-swap, auto-compact
+# and uuid-sync run yesterday's logic for days. deploy.sh's sweep
+# (deploy.sh:662-673) exists for exactly this, and this function is its
+# in-process twin — the operator ruling of 2026-08-21 (R1) grants BOTH the
+# one scoped exception to CLAUDE.md's never-touch rule, and a source pin in
+# `server/test/single-definition.test.ts` holds the two implementations to
+# the same preflight so neither can drop it silently.
+#
+# THE PREFLIGHT IS THE POINT OF THE WHOLE BLOCK, and it is MANDATORY:
+# systemd's default KillMode is control-group, and whenever the tmux server
+# placement falls back to a bare create (no systemd-run, no D-Bus — see
+# deploy.sh's sweep header, "THE KillMode GUARD SURVIVES THE PLACEMENT FIX")
+# every session on this box is a child of ONE tmux server sitting in
+# whichever claude-session@ cgroup created it: without KillMode=process the
+# try-restart below is a fleet kill, not a restart. So the guard ASKS SYSTEMD
+# (`systemctl show` resolves the whole override chain — base, drop-ins,
+# lexical order, last wins), per unit the sweep would touch PLUS an
+# uninstantiated template probe (a fresh box with zero sessions would
+# otherwise check nothing at all), and the enumeration is deliberately
+# UNFILTERED — the opposite of the verify loop's `--state=active`, for
+# deploy.sh's stated reason: this is a CONFIG gate, and over-listing is the
+# cheap direction.
+#
+# A FAILED PREFLIGHT REFUSES THE SWEEP, NEVER THE UPDATE (spec §6): the
+# install above already converged, and unwinding a good update over a
+# refused sweep would leave the box worse than degraded. The refusal is loud
+# (stderr names the resolved value and the drop-in that fixes it) and the
+# degraded line on stdout says exactly what did not happen.
+#
+# PANES ARE NEVER TOUCHED; TMUX IS NEVER TOUCHED. KillMode=process keeps the
+# tmux substrate — the sessions themselves — alive across the restart, and
+# `cmd_supervise` re-enters via `cmd_ensure`, which ATTACHES to a live
+# session rather than spawning a second one. A test pins that no tmux argv
+# appears anywhere in a sweep.
+_upd_sweep() {
+  # The bus contingency `_inst_enable` carries, for the same reason: without
+  # XDG_RUNTIME_DIR, `systemctl --user` from a non-interactive context fails
+  # for a reason that has nothing to do with this box.
+  : "${XDG_RUNTIME_DIR:=/run/user/$UID}"; export XDG_RUNTIME_DIR
+  : "${DBUS_SESSION_BUS_ADDRESS:=unix:path=${XDG_RUNTIME_DIR}/bus}"; export DBUS_SESSION_BUS_ADDRESS
+  local u km
+  for u in $(systemctl --user list-units "claude-session@*" --plain --no-legend | awk '{print $1}') \
+           claude-session@ccrc-update-preflight.service; do
+    km="$(systemctl --user show -p KillMode "$u" 2>/dev/null)" || km=""
+    if [ "$km" != "KillMode=process" ]; then
+      echo "update: sweep REFUSED — $u resolves to ${km:-no answer from systemd}, and the sweep needs KillMode=process: systemds default is control-group, and whenever the tmux server placement falls back to a bare create every session on this box is a child of ONE tmux server sitting in a claude-session@ cgroup, so try-restart would kill the lot. A drop-in under $BOX_UNIT_DIR/claude-session@.service.d/ can set this without the base unit changing a byte." >&2
+      echo "update: DEGRADED: the supervisor sweep did not run — every live claude-session@ supervisor keeps executing the PREVIOUS ccd until restarted. Fix the KillMode above, then: systemctl --user try-restart 'claude-session@*'"
+      return 0
+    fi
+  done
+  systemctl --user try-restart "claude-session@*" \
+    || _ccrc_die "systemctl --user try-restart claude-session@* failed — the supervisors' state is now mixed; read: systemctl --user list-units 'claude-session@*'"
+  # try-restart is a no-op on a failed unit (its own man page), so a
+  # pre-existing failed session was neither restarted nor verified — not this
+  # update's doing, must not fail it, must not be silent either.
+  for u in $(systemctl --user list-units "claude-session@*" --state=failed --plain --no-legend | awk '{print $1}'); do
+    echo "update: warning: $u is FAILED — try-restart skipped it and this sweep did not verify it. On the box: systemctl --user reset-failed $u, then ccd start the session" >&2
+  done
+  # Each restarted supervisor is held to the same standard as the services the
+  # staged install just verified — verify-service.sh out of the NEW tree,
+  # guarded by [ -f ] exactly as `_inst_enable` guards it. `--state=active`
+  # here and NOT above: handing verify-service.sh a unit try-restart never
+  # touched is deploy.sh's final-review finding 6.
+  local verify="$BOX_TREE_DIR/deploy/verify-service.sh"
+  for u in $(systemctl --user list-units "claude-session@*" --state=active --plain --no-legend | awk '{print $1}'); do
+    if [ -f "$verify" ]; then
+      bash "$verify" "$u" \
+        || _ccrc_die "$u was restarted and did not stay up — read: systemctl --user status $u. The pre-update backup is complete at $UPD_BACKUP_DIR"
+    fi
+  done
+  echo "update: sweep: every live claude-session@ supervisor now runs the ccd this update installed (KillMode=process verified per unit before any restart; panes untouched)"
 }
 
 # The from → to report, off MEASUREMENTS: the "from" was read before anything

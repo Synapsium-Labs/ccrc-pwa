@@ -26,7 +26,11 @@ Two physical boxes; the live server runs `CCRC_FLEET=remote` as standing config.
 - **NEVER run destructive `ccd` verbs against the live host:** `ws-rm`, `ws-reap`, `ws-gc --prune`,
   `ws-archive`/`ws-restore`. They delete workspaces/branches/clips. `ws-reap` is **human-only by contract**.
 - **NEVER touch tmux, `~/.cc-sessions`, `~/.cc-limits`, or `claude-session@*.service` directly.** Each unit is a
-  long-lived `ccd supervise`; killing/overwriting one out of band breaks the live fleet.
+  long-lived `ccd supervise`; killing/overwriting one out of band breaks the live fleet. ONE scoped exception
+  (operator ruling 2026-08-21, R1): `ccrc update`'s step-4 supervisor sweep (`_upd_sweep`) and deploy.sh's
+  existing sweep may `try-restart` `claude-session@*` units — each ONLY behind its mandatory `KillMode=process`
+  preflight (which refuses the sweep when the answer is anything else); panes/tmux stay untouched, and every
+  other actor remains forbidden.
 - **In tests, use FIXTURE HOMEs only — never run `ccd` against the live `$HOME`.** `HOME` is the single isolation
   boundary the whole ccd suite relies on. Harness: `makeCcdHarness(prefix)` (`server/test/ccdWsHelpers.ts`);
   cleanup in `tmpHelpers.ts`. Second boundary: `ghContainedEnv()` plants a poisoned `gh` on PATH so a stray real

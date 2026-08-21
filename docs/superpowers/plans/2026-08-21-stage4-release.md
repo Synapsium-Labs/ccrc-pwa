@@ -194,17 +194,18 @@ comparison silently (D-150). NO sweep in this task (Task 7).
 **Files:** `ccd/ccrc` (`_upd_sweep` called as update step 4), `CLAUDE.md`, extend
 `ccrc-update.test.ts` + a both-copies pin in `server/test/single-definition.test.ts` or
 `build-release.test.ts`.
-- [ ] RED (recording `systemctl` stub): with the `KillMode=process` drop-in present in the
+- [x] RED (recording `systemctl` stub): with the `KillMode=process` drop-in present in the
   fixture unit dir, the sweep issues `try-restart` per `claude-session@*` unit, then the
   failed-state warn query and the active-state verify query (argv order pinned); with the
   drop-in ABSENT, the sweep REFUSES (loud, names the drop-in) and the update still exits 0
   with a degraded line (the sweep is refused, not the update); panes/tmux never appear in
   any argv (pin: no `tmux` in the recording log).
-- [ ] GREEN. Then CLAUDE.md: inside the SAFETY section's never-touch bullet, add the scoped
+  (Ran red: 2/2 before implementation, 12 existing green.)
+- [x] GREEN. Then CLAUDE.md: inside the SAFETY section's never-touch bullet, add the scoped
   exception sentence citing the 2026-08-21 ruling and the mandatory preflight; a source pin
   asserts BOTH sweep implementations (deploy.sh's and ccrc's) contain the preflight grep
   (`KillMode=process`) so neither can drop it silently.
-- [ ] Mutations: delete the preflight from `_upd_sweep` (both the refusal test AND the
+- [x] Mutations: delete the preflight from `_upd_sweep` (both the refusal test AND the
   both-copies pin red). Commit `feat(ccrc): the supervisor sweep, under its preflight —
   the sacred rule gains its one scoped exception (ruling 2026-08-21)`.
 
@@ -367,3 +368,22 @@ it merges first.)
   `EXPECTED_ENTRIES`. The fleet-behind WARN and its D-150 silences (401, unreachable, no
   address) are covered by two dedicated tests (skewed → WARN naming fleet-box-first;
   401 → silent, run proceeds).
+- **Task 7 mutation measurements** (applied, run, reverted): (M1) the whole preflight loop
+  deleted from `_upd_sweep` (the enumeration + per-unit `show -p KillMode` + refusal) →
+  3 red — BOTH sweep behavior tests (the argv-order pin, whose expected recording begins
+  with the preflight calls, and the refusal test, whose box now got swept instead of
+  refused) AND the both-copies pin's presence test in `single-definition.test.ts`. The
+  measurement also exposed a vacuous-pass hole in the both-copies ORDERING pin — with the
+  preflight absent, `indexOf` answers -1, which sits "before" any try-restart — closed
+  during the same round with an explicit `guard > -1` assertion. The both-copies pin was
+  written at the GREEN step per this task's own checklist (its red proof is this mutation,
+  not a pre-implementation run); the two behavior tests ran red-first (2/2, 12 existing
+  green). Placement choice the task left open: the pin lives in
+  `single-definition.test.ts` (the "both copies held equal" idiom is that file's), not
+  `build-release.test.ts`. Suites green after revert: ccrc-update 14/14,
+  single-definition + ccrc-cli + ccrc-install (210 across the four), build-release +
+  install-sh + ccrc-doctor + typecheck-tests 287/287. Intended harness extensions,
+  annotated in place: the fixture tmux stub now RECORDS its argv (the no-tmux pin reads
+  the absence of the record), and the fixture systemctl gained `try-restart`,
+  `list-units` (per-state fixture files) and `show -p KillMode` (answered by the fixture
+  drop-in's presence) arms.

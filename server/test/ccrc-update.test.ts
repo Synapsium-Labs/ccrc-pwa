@@ -69,7 +69,11 @@ function healthyBox(home: string): void {
   const stub = (name: string, body: string): void =>
     writeFileSync(join(d, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
 
+  // RECORDING, and the record is a Task 7 pin: the supervisor sweep must
+  // never reach for tmux (panes are never touched), so a sweep-flavour run
+  // asserts this file simply does not exist.
   stub('tmux', [
+    'printf \'%s\\n\' "$*" >> "$HOME/tmux-argv"',
     'if [ "$1" = "-V" ]; then echo "tmux 9.9"; exit 0; fi',
     'if [ "$1" = "display-message" ]; then echo "9.9"; exit 0; fi',
     'echo "fixture tmux: unexpected argv: $*" >&2; exit 90',
@@ -157,8 +161,35 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     '  daemon-reload) exit 0 ;;',
     '  enable) [ "$2" = "--now" ] && [ -n "$3" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }; exit 0 ;;',
     '  restart) [ -n "$2" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }; exit 0 ;;',
+    '  try-restart) [ -n "$2" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }; exit 0 ;;',
     '  is-active) echo active; exit 0 ;;',
+    // The sweep's three list-units queries (Task 7): the unfiltered preflight
+    // enumeration and the failed/active follow-ups, answered from per-state
+    // fixture files a test plants (absent file = empty listing, exit 0 — a box
+    // with no supervisors).
+    '  list-units)',
+    '    [ "$2" = "claude-session@*" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }',
+    '    state=""',
+    '    for a in "$@"; do case "$a" in --state=*) state="${a#--state=}" ;; esac; done',
+    '    case "$state" in',
+    '      "") [ -f "$HOME/fixture-sweep-units" ] && cat "$HOME/fixture-sweep-units" ;;',
+    '      failed) [ -f "$HOME/fixture-sweep-failed" ] && cat "$HOME/fixture-sweep-failed" ;;',
+    '      active) [ -f "$HOME/fixture-sweep-active" ] && cat "$HOME/fixture-sweep-active" ;;',
+    '      *) echo "fixture systemctl: unexpected argv: $*" >&2; exit 90 ;;',
+    '    esac',
+    '    exit 0 ;;',
     '  show)',
+    // `show -p KillMode <unit>` resolves the override chain on a real box; the
+    // fixture models it as "the drop-in decides": present in the fixture unit
+    // dir -> KillMode=process, absent -> systemd's control-group default.
+    '    if [ "$2" = "-p" ] && [ "$3" = "KillMode" ] && [ -n "$4" ]; then',
+    '      if [ -f "$HOME/.config/systemd/user/claude-session@.service.d/50-killmode.conf" ]; then',
+    '        echo "KillMode=process"',
+    '      else',
+    '        echo "KillMode=control-group"',
+    '      fi',
+    '      exit 0',
+    '    fi',
     '    [ "$2" = "-p" ] && [ "$3" = "MainPID" ] && [ "$4" = "--value" ] \\',
     '      || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }',
     '    echo 4242; exit 0 ;;',
@@ -563,6 +594,77 @@ describe('ccrc update: the fleet-behind warning (D-150 aware)', () => {
     expect(r.stdout).not.toMatch(/WARN/);
     // The update itself proceeded: the staged install ran.
     expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(true);
+  });
+});
+
+describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)', () => {
+  // The one scoped exception to CLAUDE.md's never-touch rule: update's step-4
+  // sweep may try-restart `claude-session@*` units, but ONLY behind the
+  // mandatory KillMode=process preflight — without KillMode=process a
+  // try-restart is a fleet kill (every session is a child of ONE tmux server
+  // sitting in whichever claude-session@ cgroup created it), so an absent
+  // drop-in refuses the SWEEP, never fails the UPDATE. All against the
+  // RECORDING systemctl stub above — no real systemd, no real sweep, ever.
+  const plantKillModeDropIn = (home: string): void => {
+    const d = join(home, '.config', 'systemd', 'user', 'claude-session@.service.d');
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, '50-killmode.conf'), '[Service]\nKillMode=process\n');
+  };
+  const UNIT_LINES =
+    'claude-session@alpha.service loaded active running fixture supervisor\n'
+    + 'claude-session@beta.service loaded active running fixture supervisor\n';
+
+  it('with KillMode=process resolving per unit, the sweep runs: preflight, try-restart, the failed warn query, the active verify query — in that argv order', () => {
+    const home = freshUpdateBox('ccrc-update-sweep-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantKillModeDropIn(home);
+    writeFileSync(join(home, 'fixture-sweep-units'), UNIT_LINES);
+    writeFileSync(join(home, 'fixture-sweep-active'), UNIT_LINES);
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    // The ONLY systemctl traffic in a stub-flavour run is the sweep's, so the
+    // whole recording is the order pin: enumerate, preflight EVERY unit plus
+    // the uninstantiated template probe, try-restart, then the two state
+    // queries — warn about failed, verify active.
+    const calls = readFileSync(join(home, 'systemctl-calls'), 'utf8')
+      .split('\n').filter((l) => l !== '');
+    expect(calls).toEqual([
+      '--user list-units claude-session@* --plain --no-legend',
+      '--user show -p KillMode claude-session@alpha.service',
+      '--user show -p KillMode claude-session@beta.service',
+      '--user show -p KillMode claude-session@ccrc-update-preflight.service',
+      '--user try-restart claude-session@*',
+      '--user list-units claude-session@* --state=failed --plain --no-legend',
+      '--user list-units claude-session@* --state=active --plain --no-legend',
+    ]);
+    // Panes are NEVER touched: no tmux invocation happened at all (the tmux
+    // stub records every call), and no recorded argv so much as names it.
+    expect(existsSync(join(home, 'tmux-argv')), 'the sweep reached for tmux').toBe(false);
+    expect(calls.join('\n')).not.toMatch(/tmux/);
+    expect(r.stdout).toMatch(/^update: sweep: /m);
+    expect(r.stdout).not.toMatch(/DEGRADED/);
+  });
+
+  it('with the drop-in ABSENT the sweep is REFUSED — loud, naming the drop-in — and the update still exits 0 with a degraded line', () => {
+    const home = freshUpdateBox('ccrc-update-sweep-refused-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    writeFileSync(join(home, 'fixture-sweep-units'), UNIT_LINES);
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    // The sweep is refused, not the update: the run completes, reports, exits 0.
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^update: build: /m);
+    // Loud, and it names both the resolved value and the drop-in that fixes it.
+    expect(r.stderr).toMatch(/sweep REFUSED/);
+    expect(r.stderr).toContain('KillMode=process');
+    expect(r.stderr).toContain('claude-session@.service.d');
+    expect(r.stdout).toMatch(/^update: DEGRADED: the supervisor sweep/m);
+    // Refused means NOTHING was restarted: the preflight stopped at the first
+    // bad unit and no try-restart ever hit the recording.
+    const calls = readFileSync(join(home, 'systemctl-calls'), 'utf8');
+    expect(calls).not.toMatch(/try-restart/);
+    expect(existsSync(join(home, 'tmux-argv'))).toBe(false);
   });
 });
 
