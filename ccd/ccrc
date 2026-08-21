@@ -130,6 +130,17 @@ CCRC_EXPOSURE_FILE="$HOME/.ccrc/exposure.env"
 # operator pastes and the file this verb writes cannot drift apart.
 CCRC_CADDYFILE="$HOME/.ccrc/Caddyfile"
 
+# ── THE DDNS UNIT PAIR, WHICH THE duckdns ARM INSTALLS AND ENABLES ────────
+# `ccrc-ddns.service` + `ccrc-ddns.timer` — stage 3b, spec D4: a user timer
+# (the ccd-cap-scopes.timer precedent) curling the DuckDNS update endpoint
+# every 5 minutes, reading its token from $CCRC_EXPOSURE_FILE at RUN time —
+# the 0644 unit text never carries the 0600 secret. The name is spelled once
+# because `_exp_ddns_units` uses it three ways — install destination, enable
+# argument, printed remedy — and a drift between any two is a box whose timer
+# was installed under one name and enabled under another. Pinned like
+# CCRC_CADDYFILE (single-definition.test.ts, "one ccrc-ddns unit name").
+CCRC_DDNS_UNIT="ccrc-ddns"
+
 # ── THE PASSPHRASE SECRET, WHICH THIS FILE NEVER READS ────────────────────
 # `~/.ccrc/auth.scrypt` — the scrypt line the server's session gate verifies a
 # login against (`server/src/auth/secret.ts` owns the format). Spelled here for
@@ -2051,7 +2062,48 @@ cmd_expose() {
   _exp_env_write "$sub" "$origin" "$rpid" "$host" "$token"
   unset token
   _exp_caddyfile "$host"
+  # AFTER the env write, deliberately: the ddns service's EnvironmentFile has
+  # no leading '-', so a timer enabled before exposure.env existed would fire
+  # a unit systemd refuses to start.
+  if [ "$sub" = duckdns ]; then
+    _exp_ddns_units
+  fi
   _exp_landing "$origin"
+}
+
+# ── _exp_ddns_units — the DuckDNS updater, installed and (best-effort) armed ─
+# Spec D4. The duckdns arm ONLY — a BYO domain's DNS is the operator's. The
+# two templates ship in the tree (`deploy/systemd/`) and land VERBATIM through
+# `_inst_atomic`, out of the tree this ccrc runs from (`_inst_enable`'s
+# `$CCRC_HERE/..` idiom) — verbatim is load-bearing: the service reads
+# CCRC_DDNS_DOMAIN/CCRC_DDNS_TOKEN from $CCRC_EXPOSURE_FILE at run time
+# through systemd's own ${...} expansion, so this function never touches the
+# token and the 0644 unit never becomes a second copy of the 0600 secret
+# (ccrc-expose.test.ts pins the installed bytes contain the literal
+# placeholder and not the value).
+#
+# THE ENABLE IS DEGRADED, NOT FATAL — `_inst_linger`'s doctrine at verb scale:
+# by this line both config files and both units have landed, and a box without
+# a reachable session bus (a container, ssh without XDG_RUNTIME_DIR, this
+# repo's own test fixture) must not turn a converged run into an abort over a
+# thing one command fixes. The exact command is printed; doctor's `name` check
+# (Task 4) re-measures the record and points back at the timer.
+_exp_ddns_units() {
+  local tree="$CCRC_HERE/.." dir="$BOX_UNIT_DIR"
+  mkdir -p "$dir" || _ccrc_die "cannot create $dir"
+  _inst_atomic "$tree/deploy/systemd/$CCRC_DDNS_UNIT.service" "$dir/$CCRC_DDNS_UNIT.service" 644
+  _inst_atomic "$tree/deploy/systemd/$CCRC_DDNS_UNIT.timer" "$dir/$CCRC_DDNS_UNIT.timer" 644
+  echo "expose: installed $CCRC_DDNS_UNIT.service + $CCRC_DDNS_UNIT.timer in \$HOME/.config/systemd/user (the token stays in $CCRC_EXPOSURE_FILE — the units read it, never carry it)"
+  # The bus-location defaults `_inst_enable` sets, for its reason: an install
+  # is most often run over non-interactive ssh, where systemctl --user cannot
+  # find the bus without them. daemon-reload BEFORE enable, also its reason.
+  : "${XDG_RUNTIME_DIR:=/run/user/$UID}"; export XDG_RUNTIME_DIR
+  : "${DBUS_SESSION_BUS_ADDRESS:=unix:path=${XDG_RUNTIME_DIR}/bus}"; export DBUS_SESSION_BUS_ADDRESS
+  if systemctl --user daemon-reload && systemctl --user enable --now "$CCRC_DDNS_UNIT.timer"; then
+    echo "expose: $CCRC_DDNS_UNIT.timer enabled — the DuckDNS record refreshes every 5 minutes"
+  else
+    echo "expose: DEGRADED — could not enable $CCRC_DDNS_UNIT.timer (no session bus?). The units are installed; when you can, run: systemctl --user daemon-reload && systemctl --user enable --now $CCRC_DDNS_UNIT.timer"
+  fi
 }
 
 # ── _exp_env_write — the ONE writer of $CCRC_EXPOSURE_FILE ────────────────

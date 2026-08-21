@@ -987,6 +987,34 @@ describe('one ~/.ccrc/Caddyfile, spelled once in bash through CCRC_CADDYFILE', (
   });
 });
 
+// — Stage 3b, Task 3: the ddns unit pair's name —
+describe('one ccrc-ddns unit name, spelled once in bash through CCRC_DDNS_UNIT', () => {
+  // Spec D4: the duckdns arm installs `ccrc-ddns.service` + `ccrc-ddns.timer`
+  // and enables the timer — so the name is an INSTALL destination, an enable
+  // argument and (degraded) a printed remedy, and a drift between any two is a
+  // box whose timer was installed under one name and enabled under another.
+  // The unit FILES never carry the name (a .timer with no `Unit=` starts the
+  // same-named .service — systemd's own default is the single source there),
+  // and the template FILENAMES under deploy/systemd are reached through the
+  // variable. Later 3b tasks that add a bash toucher (Task 4's `name` check
+  // remedy, "check ccrc-ddns.timer", is the known one) extend the holder list
+  // HERE, by name, like the remote-control block's.
+  const NEEDLE = 'ccrc-ddns';
+
+  it('is touched by exactly one bash file, and that file is ccd/ccrc', () => {
+    expect(holdersOf(NEEDLE)).toEqual([
+      'ccd/ccrc',   // CCRC_DDNS_UNIT — the declaration `_exp_ddns_units` installs and enables through
+    ]);
+  });
+
+  it('ccrc spells the name once — the declaration is the only line of shell naming it', () => {
+    const code = codeLines(path.join(ccrcRoot, 'ccd', 'ccrc'));
+    expect(code.filter((l) => l.includes(NEEDLE))).toEqual([
+      'CCRC_DDNS_UNIT="ccrc-ddns"',
+    ]);
+  });
+});
+
 // — Build 4, Task 10: the wave's own two definitions —
 describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
   // The type's fingerprint: the union as it is declared, not every mention.

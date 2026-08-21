@@ -180,15 +180,25 @@ Behaviour contract (each bullet is a test):
   `ExecStart=/usr/bin/curl -fsS --max-time 30 "https://www.duckdns.org/update?domains=${CCRC_DDNS_DOMAIN}&token=${CCRC_DDNS_TOKEN}&ip="`
   (DuckDNS infers the caller's IP from an empty `ip=`).
 
-- [ ] **Step 1: RED** — tests: the duckdns arm installs both units into `$CCRC_UNIT_DIR` via
+- [x] **Step 1: RED** — tests: the duckdns arm installs both units into `$CCRC_UNIT_DIR` via
   the atomic idiom and runs `systemctl --user daemon-reload` + `enable --now ccrc-ddns.timer`
   (recording `systemctl` stub asserts argv); the byo arm installs neither; the unit text
   reads the token from the EnvironmentFile and NEVER inlines it (assert the installed service
   file contains `${CCRC_DDNS_TOKEN}` literally and not the fixture token value).
-- [ ] **Step 2: GREEN** — write the two templates + `_exp_ddns_units`.
-- [ ] **Step 3:** mutation — inline the token into ExecStart at generation time → the
+  *(Measured: ccrc-expose 4 failed / 25 passed — five new tests, of which the
+  byo-installs-neither guard cannot red pre-implementation (nothing installs units yet); its
+  arming mutation is calling `_exp_ddns_units` on both arms. Plus the Global-Constraints pin
+  written in the same RED set: single-definition 2 failed / 68 passed (the `CCRC_DDNS_UNIT`
+  block — the ddns unit name spelled once in bash).)*
+- [x] **Step 2: GREEN** — write the two templates + `_exp_ddns_units`. *(99/99 across
+  ccrc-expose + single-definition.)*
+- [x] **Step 3:** mutation — inline the token into ExecStart at generation time → the
   never-inlined test reds. Record. Suites green. Commit
   `feat(expose): the duckdns updater is a user timer reading its token from exposure.env`.
+  *(Measured: sed the `${CCRC_DDNS_TOKEN}` placeholder in the installed service to the value
+  read back from exposure.env → ccrc-expose 2 red (never-inlined + templates-byte-for-byte)
+  / 27 passed; reverted. Gate + neighbour suites green: ccrc-expose, single-definition,
+  ccrc-cli, ccrc-passwd, ccrc-install, ccrc-doctor — 508/508.)*
 
 ### Task 4: Doctor — `exposure`, `caddy`, `cert`, `name`
 
@@ -320,3 +330,13 @@ Verdict table (each row is a test):
   `ccrc expose <sub>`. The test pins the same two anchors the passwd suite pins
   (`/^ccrc: stdin is not a terminal/m`, `/curl … \| bash/`), so the two refusals cannot
   drift apart on the parts that matter.
+- **D-140** (Task 3): the timer enable is DEGRADED, not fatal — the plan's Step 1 named the
+  `systemctl` calls without naming their failure mode, and Task 2's already-shipped contract
+  decides it: every duckdns-arm test runs against the fixture's poisoned `systemctl` (exit 97)
+  and asserts exit 0, so a fatal enable would red the whole shipped suite. Shipped as
+  `_inst_linger`'s doctrine at verb scale (both config files and both units have landed by
+  that line; a box without a session bus — container, bare ssh, this repo's own fixture —
+  must not turn a converged run into an abort over a thing one command fixes): on failure the
+  verb prints the exact `daemon-reload && enable --now` command and exits 0, pinned by a
+  fifth test (`a failing systemctl DEGRADES, never dies`) beyond Step 1's three named bullets.
+  Doctor's `name` check (Task 4) carries the not-yet-enabled state.

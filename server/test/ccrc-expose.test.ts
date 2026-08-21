@@ -73,16 +73,26 @@ const byoEnv = (origin: string, rpid: string): string => [
 const caddyfile = (host: string, port: number): string =>
   `${host} {\n    reverse_proxy 127.0.0.1:${port}\n}\n`;
 
-/** A box with the tree `ccrc expose` needs and nothing in `~/.ccrc` yet. */
+/** A box with the tree `ccrc expose` needs and nothing in `~/.ccrc` yet. The
+ *  tree carries `deploy/systemd/` too (a symlink to the repo's): Task 3's
+ *  duckdns arm installs the ddns unit TEMPLATES out of the tree it runs from
+ *  (`_inst_enable`'s `$CCRC_HERE/..` idiom), and a fixture tree without them
+ *  would red every arm on "is this a complete ccrc tree?". */
 function box(prefix: string): string {
   const home = mkTmp(prefix);
   const ccd = join(home, 'ccrc', 'ccd');
   mkdirSync(ccd, { recursive: true });
   symlinkSync(CCRC_SRC, join(ccd, 'ccrc'));
+  mkdirSync(join(home, 'ccrc', 'deploy'), { recursive: true });
+  symlinkSync(join(REPO, 'deploy', 'systemd'), join(home, 'ccrc', 'deploy', 'systemd'));
   return home;
 }
 
-function env(home: string): NodeJS.ProcessEnv {
+/** `systemctlOk`: replace the poison with a stub that RECORDS argv (one line
+ *  per call, to `$HOME/systemctl-argv`) and succeeds — the happy-path shape of
+ *  a box with a session bus. The default stays the poison: exit 97 IS a test —
+ *  the degraded arm — and containment besides. */
+function env(home: string, opts: { systemctlOk?: boolean } = {}): NodeJS.ProcessEnv {
   const e = ghContainedEnv(home, { ...process.env, HOME: home });
   // curl and systemctl are poisoned the way ccrc-cli.test.ts poisons them —
   // Task 3's duckdns arm runs `systemctl --user`, and containment each test
@@ -92,7 +102,12 @@ function env(home: string): NodeJS.ProcessEnv {
       `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/${name}-poison"\n`
       + `echo "${says}" >&2\nexit 97\n`, { mode: 0o755 });
   poison('curl', 'ccrc tests must never reach a real server');
-  poison('systemctl', 'ccrc tests must never touch this box\'s real systemd');
+  if (opts.systemctlOk) {
+    writeFileSync(join(home, '.local', 'bin', 'systemctl'),
+      '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/systemctl-argv"\nexit 0\n', { mode: 0o755 });
+  } else {
+    poison('systemctl', 'ccrc tests must never touch this box\'s real systemd');
+  }
   for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT']) delete e[k];
   return e;
 }
@@ -114,11 +129,14 @@ const PROMPTS = /(DuckDNS subdomain|DuckDNS token|Public origin|Passkey rp id)/g
 /** `ccrc expose <args>` on a REAL terminal, typing `entries` at the prompts.
  *  A pty because `[ -t 0 ]` and `read -rs` are two of the things this verb IS:
  *  without a terminal the only reachable branch is the refusal. */
-function runExposeTty(home: string, args: string[], entries: string[]): Promise<Result> {
+function runExposeTty(
+  home: string, args: string[], entries: string[],
+  opts: { systemctlOk?: boolean } = {},
+): Promise<Result> {
   return new Promise((resolve) => {
     const p = pty.spawn(BASH, [ccrcIn(home), 'expose', ...args], {
       name: 'xterm-color', cols: 200, rows: 40, cwd: home,
-      env: env(home) as Record<string, string>,
+      env: env(home, opts) as Record<string, string>,
     });
     let out = '';
     let sent = 0;
@@ -407,5 +425,88 @@ describe('ccrc expose status', () => {
     const r = runPiped(home, ['expose', 'status']);
     expect(r.code).toBe(0);
     expect(r.stdout).toMatch(/token: NOT SET/);
+  });
+});
+
+// ── the duckdns updater units (Task 3, spec D4) ───────────────────────────
+// A user timer curling the DuckDNS update endpoint every 5 minutes, reading
+// its token from exposure.env AT RUN TIME — the 0644 unit text never becomes
+// a second copy of the 0600 secret. Installed by the duckdns arm only (BYO
+// domains own their DNS), out of the tree's `deploy/systemd/` templates,
+// through the same atomic idiom every other unit lands by.
+
+const unitDir = (home: string): string => join(home, '.config', 'systemd', 'user');
+const ddnsUnit = (home: string, ext: 'service' | 'timer'): string =>
+  join(unitDir(home), `ccrc-ddns.${ext}`);
+
+describe('ccrc expose: the duckdns updater units', () => {
+  it('duckdns installs ccrc-ddns.service + ccrc-ddns.timer (0644) — the shipped templates, byte for byte', async () => {
+    const home = box('ccrc-expose-ddns-units-');
+    const r = await runExposeTty(home, ['duckdns'], [SUB, TOKEN]);
+    expect(r.code, r.stdout).toBe(0);
+    // Byte-equal to the templates: the installer transforms NOTHING, which is
+    // half of the never-inlined guarantee below.
+    expect(bytesAt(ddnsUnit(home, 'service')))
+      .toBe(readFileSync(join(REPO, 'deploy', 'systemd', 'ccrc-ddns.service'), 'utf8'));
+    expect(bytesAt(ddnsUnit(home, 'timer')))
+      .toBe(readFileSync(join(REPO, 'deploy', 'systemd', 'ccrc-ddns.timer'), 'utf8'));
+    expect(mode(ddnsUnit(home, 'service')), 'units are read by systemd, not executed').toBe(0o644);
+    expect(mode(ddnsUnit(home, 'timer'))).toBe(0o644);
+    // …and the atomic idiom left no temp file beside them.
+    expect(readdirSync(unitDir(home)).sort()).toEqual(['ccrc-ddns.service', 'ccrc-ddns.timer']);
+    // The contract lines the templates must carry (spec D4 / the plan's
+    // interface block) — asserted on the INSTALLED text, the copy systemd reads.
+    const svc = readFileSync(ddnsUnit(home, 'service'), 'utf8');
+    expect(svc).toContain('EnvironmentFile=%h/.ccrc/exposure.env');
+    expect(svc).toContain(
+      'ExecStart=/usr/bin/curl -fsS --max-time 30 "https://www.duckdns.org/update?domains=${CCRC_DDNS_DOMAIN}&token=${CCRC_DDNS_TOKEN}&ip="');
+    const timer = readFileSync(ddnsUnit(home, 'timer'), 'utf8');
+    expect(timer).toContain('OnCalendar=*:0/5');
+    expect(timer).toContain('Persistent=true');
+    expect(timer).toContain('WantedBy=timers.target');
+  });
+
+  it('runs systemctl --user daemon-reload, then enable --now ccrc-ddns.timer — that argv, that order', async () => {
+    // The recording stub: every call is one line of argv. daemon-reload FIRST,
+    // for `_inst_enable`'s reason — a unit enabled before systemd has read its
+    // file is enabled without it.
+    const home = box('ccrc-expose-ddns-argv-');
+    const r = await runExposeTty(home, ['duckdns'], [SUB, TOKEN], { systemctlOk: true });
+    expect(r.code, r.stdout).toBe(0);
+    expect(readFileSync(join(home, 'systemctl-argv'), 'utf8')).toBe(
+      '--user daemon-reload\n--user enable --now ccrc-ddns.timer\n');
+  });
+
+  it('the byo arm installs neither unit and never calls systemctl — DNS is the operator\'s', async () => {
+    const home = box('ccrc-expose-ddns-byo-');
+    const r = await runExposeTty(home, ['byo'], [BYO_ORIGIN, BYO_RPID]);
+    expect(r.code, r.stdout).toBe(0);
+    expect(existsSync(unitDir(home)), 'byo must not create the unit dir').toBe(false);
+    expect(existsSync(join(home, 'systemctl-poison')), 'byo must not touch systemctl').toBe(false);
+  });
+
+  it('the installed service reads the token from the EnvironmentFile — ${CCRC_DDNS_TOKEN} literally, NEVER the value', async () => {
+    // The mutation this pins: substitute the token at generation time and the
+    // 0644 unit file becomes a world-readable second copy of the secret.
+    const home = box('ccrc-expose-ddns-token-');
+    const r = await runExposeTty(home, ['duckdns'], [SUB, TOKEN]);
+    expect(r.code, r.stdout).toBe(0);
+    const svc = readFileSync(ddnsUnit(home, 'service'), 'utf8');
+    expect(svc).toContain('${CCRC_DDNS_TOKEN}');
+    expect(svc).not.toContain(TOKEN);
+  });
+
+  it('a failing systemctl DEGRADES, never dies: units installed, exit 0, the exact commands printed', async () => {
+    // `_inst_linger`'s doctrine at this verb's scale: the poisoned systemctl
+    // (exit 97) is this suite's stand-in for "no session bus", and a run whose
+    // files all landed must not abort over a thing one command fixes. The
+    // operator is told the command; doctor (Task 4) will carry the rest.
+    const home = box('ccrc-expose-ddns-degraded-');
+    const r = await runExposeTty(home, ['duckdns'], [SUB, TOKEN]);   // default env: systemctl exits 97
+    expect(r.code, r.stdout).toBe(0);
+    expect(existsSync(ddnsUnit(home, 'service'))).toBe(true);
+    expect(existsSync(ddnsUnit(home, 'timer'))).toBe(true);
+    expect(r.stdout).toMatch(
+      /systemctl --user daemon-reload && systemctl --user enable --now ccrc-ddns\.timer/);
   });
 });

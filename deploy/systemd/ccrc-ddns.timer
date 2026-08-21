@@ -1,0 +1,9 @@
+[Unit]
+Description=Periodically refresh this box's DuckDNS record
+# No Unit= line: systemd's default — the same-named .service — is the single
+# source of that pairing.
+[Timer]
+OnCalendar=*:0/5
+Persistent=true
+[Install]
+WantedBy=timers.target
