@@ -107,14 +107,18 @@ describe('LifecycleMeas — measured about the SUBJECT, before any destruction',
 
 describe('LifecycleEvent — the line', () => {
   it('carries exactly the sixteen fields, and the three families are three fields', () => {
-    expect(Object.keys(EVENT).sort()).toEqual(
-      ['act', 'at', 'badact', 'badoutcome', 'dec', 'detail', 'id', 'meas', 'obs',
-       'outcome', 'raw', 'refusal', 'truncated', 'tx', 'uid', 'verb'].sort());
     // The assertion R3 is actually about: no `who`, no `actorResolved`, no
-    // `identity`. Nothing merges the three.
+    // `identity`. Nothing merges the three. Runs BEFORE the broad shape
+    // check below: none of these banned names is in the canonical list, so
+    // the `toEqual` below is a strict superset of this loop and would throw
+    // first and mask it if left in the original order — making the named
+    // assertion for R3's own mutant unreachable on failure.
     for (const banned of ['who', 'actor', 'identity', 'actorResolved', 'addressable']) {
       expect(Object.keys(EVENT), banned).not.toContain(banned);
     }
+    expect(Object.keys(EVENT).sort()).toEqual(
+      ['act', 'at', 'badact', 'badoutcome', 'dec', 'detail', 'id', 'meas', 'obs',
+       'outcome', 'raw', 'refusal', 'truncated', 'tx', 'uid', 'verb'].sort());
   });
 
   it('spells the refusal field `refusal` and NEVER `refused`', () => {
@@ -184,10 +188,15 @@ describe('LifecycleEvent — the line', () => {
 
 describe('MirroredLifecycleEvent — the mirror`s own two facts, kept off the line', () => {
   it('is the line PLUS `gen` and `ingestedAt`, and the line has neither', () => {
-    expect(Object.keys(MIRRORED).sort())
-      .toEqual([...Object.keys(EVENT), 'gen', 'ingestedAt'].sort());
+    // Runs BEFORE the broad shape check below, same reasoning as
+    // LifecycleEvent's field-list test above: `gen`/`ingestedAt` are not in
+    // EVENT's own canonical list, so the `toEqual` below is a strict
+    // superset of these two checks and would throw first and mask them if
+    // left in the original order.
     expect(Object.keys(EVENT)).not.toContain('gen');
     expect(Object.keys(EVENT)).not.toContain('ingestedAt');
+    expect(Object.keys(MIRRORED).sort())
+      .toEqual([...Object.keys(EVENT), 'gen', 'ingestedAt'].sort());
   });
 
   it('every mirrored event IS a LifecycleEvent — the extension is one-way', () => {
