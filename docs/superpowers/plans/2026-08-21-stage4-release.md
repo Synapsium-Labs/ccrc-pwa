@@ -93,15 +93,18 @@ dists, three package.json+locks, shared/, ccd/, deploy units+helpers, install.sh
 with per-file sha256) and `SHA256SUMS` beside it. `<version>` = the tag, or
 `untagged-<shortsha>` under `--untagged`.
 
-- [ ] RED (harness: fixture git repo via the `gitInit` idiom, PATH-contained; npm stubbed by
+- [x] RED (harness: fixture git repo via the `gitInit` idiom, PATH-contained; npm stubbed by
   a recording stub that fabricates `dist/` — the test pins orchestration, not tsc): dirty
   tree refused with nothing written; untagged refused; tagged run produces tarball whose
   listing contains the layout's every top-level entry; `sha256sum -c SHA256SUMS` passes;
   MANIFEST names every file in the tarball with a correct digest (spot-verify two).
-- [ ] GREEN. `set -euo pipefail`; staging under `mktemp -d`; tar with `--sort=name
+  (Ran red: 10/10 before implementation.)
+- [x] GREEN. `set -euo pipefail`; staging under `mktemp -d`; tar with `--sort=name
   --mtime=@0 --owner=0 --group=0` (reproducible-ish; pin the flags in a test so a casual
-  edit doesn't silently make artifacts unstable).
-- [ ] Mutations: drop the dirty refusal (red); corrupt one file post-MANIFEST (the
+  edit doesn't silently make artifacts unstable). Tracked content staged via
+  `git archive HEAD` (a gitignored secret can never ride into a release), pinned by a
+  source-scan test.
+- [x] Mutations: drop the dirty refusal (red); corrupt one file post-MANIFEST (the
   spot-verify reds). Commit `feat(release): build-release.sh — the matched set, checksummed`.
 
 ### Task 3: `.github/workflows/release.yml`
@@ -260,3 +263,9 @@ it merges first.)
   The deploy.sh stamper is guarded by executing its extracted derivation lines
   (`buildinfo.test.ts`), so dropping the tag lookup or making the field unconditional
   reds there; `_inst_stamp`'s tag arm is pinned behaviorally in `ccrc-install.test.ts`.
+- **Task 2 mutation measurements** (applied, run, reverted): (M1) the dirty-tree refusal
+  dropped → 1 red (`refuses a dirty tree — die, nothing written, no npm ran`); (M2) one
+  file (`install.sh`) corrupted in staging AFTER the MANIFEST was written → 1 red (the
+  MANIFEST test: the node-crypto spot-verify of that file's digest, independently of
+  `sha256sum -c MANIFEST` which reds on the same bytes). Suite green 10/10 before and
+  after; typecheck-tests + single-definition + install-sh green (79/79).
