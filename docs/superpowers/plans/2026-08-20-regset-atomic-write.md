@@ -1276,7 +1276,13 @@ Then send the `wave-done` mail with `{branchTip, prNumber, prPhase:"open", hando
   way and three are not: `$REG/.reaped/` (a directory, not a `.reaped.<suffix>` file — no id's
   purge glob matches a bare directory, and `rm -f` cannot take one regardless), `_reg_set`'s own
   tmps, and session-hook.sh's `.$id.$$.hookstate.tmp` — the last two unreachable because their
-  suffix carries a second dot, which `_reg_purge`'s own `*.*` skip already excludes.
+  suffix carries a second dot, which `_reg_purge`'s own `*.*` skip already excludes. That skip is
+  the LOOP's rule only, not a general immunity: `_reg_purge` also removes one named two-dot file
+  explicitly, after the loop (`rm -f "$REG/$id.hookstate.json"`), un-skipped on purpose. "Has a dot
+  in the suffix" is sufficient for these two tmp families specifically, because nothing in
+  `_reg_purge` names them outside the loop, but it is not a general rule. No dot-prefixed artifact
+  under `$REG` is ever named `<id>.hookstate.json` for an aliasing id, so no alias follows from
+  this explicit line either.
   **Fixed** by refusing a leading dot in project validation at the CREATION sites only — a new
   `_ws_project_valid` helper (beside `_ws_slug_valid`), wired into `cmd_ws_add` and `cmd_start`, the
   two verbs that mint a NEW registry row for a project. **Deliberately left alone**: `cmd_pr_state`,
@@ -1318,8 +1324,9 @@ Then send the `wave-done` mail with `{branchTip, prNumber, prPhase:"open", hando
   **Ruling: DISCLOSED, NOT CLOSED.** It takes a read-only `$REG` AND concurrent `pr-state` runs AND a
   session with no lock file yet — all three at once — and the natural closes each trade this rare
   duplicate for a worse ordinary-case cost: locking `.prhistory` itself adds a new inode-stability
-  assumption to the hot path, and skipping the append when unlocked loses a lineage record in the
-  ordinary no-`fcntl` fallback (no `flock` binary, not an unwritable `$REG`) — both worse trades for
+  assumption to the hot path, and skipping the append when unlocked loses a lineage record any time
+  the lock open fails for the ORDINARY reason — a filesystem whose `flock` refuses, or any other
+  `OSError` on the lock open — not only in the unwritable-`$REG` case above — both worse trades for
   a state in which the registry is already unwritable.
 
 <!-- Execution appends D-129… here, with measured before/after counts for every mutation claim. -->

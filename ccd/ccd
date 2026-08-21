@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=21268de886aff8609dd38b6e2ad36093061e49f1829154515625bcb8e6a3ca59
+# ccrc:generated 1 sha256=bd8a6684acce015c8279f1d9e8c10c695453df748369381f0b31c396c1dd3b24
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box, not on this file: `_rc_enabled` reads
@@ -1400,9 +1400,11 @@ if mode == 'state':
     # three at once — and the natural closes each trade this rare duplicate
     # for a worse ordinary-case cost: locking `.prhistory` itself adds a new
     # inode-stability assumption to the hot path, and skipping the append when
-    # unlocked loses a lineage record in the ordinary no-`fcntl` fallback (no
-    # `flock` binary, not an unwritable `$REG`) — both worse trades for a
-    # state in which the registry is already unwritable.
+    # unlocked loses a lineage record any time the lock open fails for the
+    # ORDINARY reason — a filesystem whose `flock` refuses, or any other
+    # `OSError` on the lock open — not only in the unwritable-`$REG` case
+    # above — both worse trades for a state in which the registry is already
+    # unwritable.
     #
     # THE GUARANTEE IS UNCHANGED, and it is the part that matters: if the lock
     # cannot be taken AT ALL — the state above, or a filesystem whose `flock`
@@ -1539,6 +1541,15 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # `.$id.$$.hookstate.tmp` — the last two ARE candidate glob matches when
 # `<id>` is the aliasing id, but their suffix after the match carries a
 # SECOND dot, which is exactly what `_reg_purge`'s own `*.*` skip excludes.
+#
+# THAT SKIP IS THE LOOP'S RULE ONLY, not a general immunity — `_reg_purge`
+# also removes one named two-dot file EXPLICITLY, after the loop:
+# `rm -f "$REG/$id.hookstate.json"`, un-skipped on purpose (see the note in
+# `_reg_purge` beside that line). "Has a dot in the suffix" is sufficient
+# for these two tmp families specifically, because nothing in `_reg_purge`
+# names them outside the loop, but it is not a general rule. No dot-prefixed
+# artifact under `$REG` is ever named `<id>.hookstate.json` for an aliasing
+# id, so no alias follows from this explicit line either.
 #
 # Enforced at CREATION ONLY — `cmd_ws_add` and `cmd_start`, the two sites
 # that mint a NEW registry row for a project — never at `cmd_pr_state`,
@@ -8636,8 +8647,14 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
     [[ -n "$wrapper" && -n "$project" ]] \
       || die "usage: ccd start <id> | ccd start <wrapper> <project> [workdir]"
     _is_valid_wrapper "$wrapper" || die "unknown wrapper '$wrapper' (valid: ${CCRC_ACCOUNTS[*]})"
+    # SYMMETRY, not aliasing risk here: `cmd_start` mints no aliasing id of
+    # its own — its id is `<wrapper>-<project>`, and roster ids cannot lead
+    # with a dot. Refusing the same value at BOTH creation verbs is what
+    # makes the stronger, simpler statement true — no registry row EVER
+    # holds a dot-leading project — so no future reader has to re-derive
+    # which verb could alias and which could not. See `_ws_project_valid`.
     _ws_project_valid "$project" \
-      || die "invalid project '$project' (allowed chars: A-Za-z0-9 . _ -, and no LEADING dot — a dot-leading PROJECT VALUE would land in this session's registry row, which ws-gc later recomposes)"
+      || die "invalid project '$project' — allowed chars: A-Za-z0-9 . _ -, and no LEADING dot"
     id=$(_id "$wrapper" "$project")
   else
     id="${1:?usage: ccd start <id> | ccd start <wrapper> <project> [workdir]}"
