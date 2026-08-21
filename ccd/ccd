@@ -769,6 +769,13 @@ _LC_DIR="$REG/.lifecycle"
 _LC_LINE_MAX=2048                # twin of L0's LC_LINE_MAX      (BYTES)
 _LC_GEN_MAX_BYTES=4194304        # twin of L0's LC_GEN_MAX_BYTES — 4 MiB
 _LC_GEN_KEEP=4                   # twin of L0's LC_GEN_KEEP — ~a year at ~35 KB/day
+_LC_OBS_TMUX_DEADLINE_S=2        # bound on `_lc_obs`'s ONE `tmux list-panes -a`. Runs ONCE PER
+                                 # CCD PROCESS, fleet-wide (the memo guard sees to that) — a STALL
+                                 # BUDGET, not a generous per-lookup allowance like
+                                 # `SUBSTRATE_PROBE_DEADLINE_S`'s 8s. A healthy answer is
+                                 # milliseconds; 2s tolerates scheduler contention on a busy box
+                                 # without turning a wedged tmux server into a fleet-wide hang once
+                                 # wave 3/4 wires this into the hot path.
 _LC_SEQ=0
 _LC_OBS=""
 
@@ -825,11 +832,21 @@ _lc_cgroup_read() {   # -> this process's `0::` cgroup path, verbatim, on stdout
   sed -n 's/^0:://p' "/proc/$$/cgroup" 2>/dev/null | head -1
 }
 
-_lc_ppid_of() {   # pid -> its PPid, on stdout, or nothing
+_lc_ppid_of() {   # pid -> its PPid, on stdout, or nothing. ALWAYS rc 0.
   # `/proc/<pid>/status`'s `PPid:` line, NEVER `stat` field 4: `comm` is field 2
   # and can contain spaces AND parentheses, so every positional read of `stat`
   # is wrong for a process someone named `foo) 1 2 3 (bar`.
+  #
+  # THE TRAILING `return 0` IS LOAD-BEARING, not decoration: under this file's
+  # `pipefail`, a gone/unreadable pid makes `sed` fail (rc 2) while `head`
+  # still succeeds on its empty input, and pipefail keeps the RIGHTMOST
+  # non-zero — `sed`'s 2, not `head`'s 0 — as the pipeline's own status.
+  # Measured: `_lc_ppid_of 999999999` answered rc 2 without this line, which
+  # is not what this function documents or what its own callers assume;
+  # `_lc_obs`'s ancestor walk at ccd:945 calls this once per hop and would be
+  # the first production caller to meet a stale or reaped pid.
   sed -n 's/^PPid:[[:space:]]*//p' "/proc/${1-}/status" 2>/dev/null | head -1
+  return 0
 }
 
 _lc_obs_json() {   # cg cgraw pid ppid pane paneWhy tty ssh -> one JSON object
@@ -860,7 +877,7 @@ _lc_obs() {   # populate _LC_OBS once per process. Prints NOTHING. Always 0.
   # someone else.
   [[ -z "$_LC_OBS" ]] || return 0
 
-  local cgraw cg pid ppid pane panewhy tty ssh panes p depth sname spid
+  local cgraw cg pid ppid pane panewhy tty ssh panes p depth sname spid rc
   pid=$$
   cgraw=$(_lc_cgroup_read)
   # ORDER IS PRECEDENCE, and the innermost fact wins. A pane started by the
@@ -877,27 +894,58 @@ _lc_obs() {   # populate _LC_OBS once per process. Prints NOTHING. Always 0.
   ppid=$(_lc_ppid_of "$pid"); [[ "$ppid" =~ ^[0-9]+$ ]] || ppid=""
 
   # THE PANE IS AN INTERSECTION, and its absence gets a REASON. A bare null
-  # would fold "no tmux on this box", "tmux did not answer" and "no ancestor is
-  # a pane" into one value a reader cannot act on — the overloaded null at a
-  # seam this repo bans by name.
+  # would fold "no tmux on this box", "tmux did not answer", "no ancestor is
+  # a pane" AND "tmux did not answer IN TIME" into one value a reader cannot
+  # act on — the overloaded null at a seam this repo bans by name. A stall is
+  # its own fourth condition, not a slower `not-listed`: an operator facing a
+  # wedged tmux server (restart it) needs a different action than one facing a
+  # tmux that answered "no" cleanly (nothing to fix).
   pane=""; panewhy=no-ancestor
   if ! command -v tmux >/dev/null 2>&1; then
     panewhy=no-tmux
-  elif ! panes=$(tmux list-panes -a -F '#{session_name} #{pane_pid}' 2>/dev/null); then
-    panewhy=not-listed
   else
-    p="$pid"; depth=0
-    # The regex runs FIRST and every arithmetic test is downstream of it: `p`
-    # comes off /proc, and bash evaluates a variable's CONTENTS as arithmetic
-    # (ccd:8784-8787 is the paid lesson). `depth` bounds a /proc that lies.
-    while [[ "$p" =~ ^[0-9]+$ ]] && (( p > 1 )) && (( depth < 16 )); do
-      while IFS=' ' read -r sname spid; do
-        [[ "$spid" == "$p" ]] && { pane="$sname"; break; }
-      done <<< "$panes"
-      [[ -n "$pane" ]] && { panewhy=ok; break; }
-      p=$(_lc_ppid_of "$p")
-      depth=$(( depth + 1 ))
-    done
+    # BASH-LEVEL SUBPROCESS, not a bare `timeout tmux …`: `timeout` EXECS its
+    # argv, which is invisible to a shell FUNCTION named `tmux` — the same
+    # function-vs-binary split `_session_probe` documents (ccd:340-343) — so a
+    # stub `tmux() { sleep 30; }` would sail straight past a bare
+    # `timeout tmux …` and defeat the guard this exists to add. `declare -f
+    # tmux` serializes any function definition into the child `bash -c`
+    # script, so the SAME thing runs there — function stub or the real
+    # binary either way — as a genuine, killable subprocess. A blank first
+    # line rather than `; tmux …`: a leading bare `;` is itself a syntax
+    # error when the substitution is empty (the ordinary case: a real tmux on
+    # PATH, no stub).
+    #
+    # UNBOUNDED WAS THE BUG: a wedged tmux socket, contention, or a D-state
+    # process previously blocked this call FOREVER — measured: a `sleep 30`
+    # stub left `_lc_obs` unreturned past an outer `timeout -s KILL 3`, i.e.
+    # SIGKILLed rather than answering — which breaks "never gate the act it
+    # observes" the moment wave 3/4 wires this into the hot path.
+    panes=$(timeout "$_LC_OBS_TMUX_DEADLINE_S" bash -c "$(declare -f tmux 2>/dev/null)
+tmux list-panes -a -F '#{session_name} #{pane_pid}'" 2>/dev/null)
+    rc=$?
+    # rc 124 is `timeout`'s own SIGTERM; 137 is what a caller sees if an OUTER
+    # kill reached this whole invocation before `timeout` itself could report
+    # — both mean "tmux did not answer IN TIME", so both get the SAME distinct
+    # reason, never folded into `not-listed`'s "tmux answered no".
+    if (( rc == 124 )) || (( rc == 137 )); then
+      panewhy=timed-out
+    elif (( rc != 0 )); then
+      panewhy=not-listed
+    else
+      p="$pid"; depth=0
+      # The regex runs FIRST and every arithmetic test is downstream of it: `p`
+      # comes off /proc, and bash evaluates a variable's CONTENTS as arithmetic
+      # (ccd:8784-8787 is the paid lesson). `depth` bounds a /proc that lies.
+      while [[ "$p" =~ ^[0-9]+$ ]] && (( p > 1 )) && (( depth < 16 )); do
+        while IFS=' ' read -r sname spid; do
+          [[ "$spid" == "$p" ]] && { pane="$sname"; break; }
+        done <<< "$panes"
+        [[ -n "$pane" ]] && { panewhy=ok; break; }
+        p=$(_lc_ppid_of "$p")
+        depth=$(( depth + 1 ))
+      done
+    fi
   fi
 
   tty=false; [[ -t 0 ]] && tty=true
