@@ -141,12 +141,12 @@ export function openCoordDb(dbPath: string): DatabaseSync {
     throw new CoordDbUnmigratable(
       `ccrc-server: ${dbPath} exists but is 0 bytes. REFUSING TO START: SQLite would treat this as ` +
       'a brand-new empty database and migrate 0->1 clean, silently erasing whatever this file held ' +
-      'before it was truncated — the outcome rule 2 forbids by name. There is no coord.db backup: ' +
-      'deploy.sh backs up dist-pwa/agent-dist/ccd/notify.sh/session-hook.sh under ~/ccrc-backups/, ' +
-      'never coord.db, so that directory has nothing to restore for this file. Reconstruct the ' +
-      'program history from the markdown ledger (docs/superpowers/programs/<slug>.md) plus the ' +
-      'registry and .prhistory (spec:82-85), or move the file aside and accept the loss — starting ' +
-      'empty would erase it silently instead.',
+      'before it was truncated — the outcome rule 2 forbids by name. Check ~/ccrc-backups/<ts>/coord.db ' +
+      'first: every deploy.sh run snapshots coord.db there (VACUUM INTO, backup-coord.mjs) before ' +
+      'touching anything, so the newest timestamped snapshot is the restore path. Only if no ' +
+      'snapshot exists, reconstruct the program history from the markdown ledger ' +
+      '(docs/superpowers/programs/<slug>.md) plus the registry and .prhistory (spec:82-85), or ' +
+      'move the file aside and accept the loss — starting empty would erase it silently instead.',
     );
   }
 
@@ -218,11 +218,12 @@ export function openCoordDb(dbPath: string): DatabaseSync {
       throw new CoordDbUnmigratable(
         `ccrc-server: ${dbPath} is at schema ${v} and migration ${v + 1} failed: ` +
         `${err instanceof Error ? err.message : String(err)}. REFUSING TO START. ${dataStatus} ` +
-        'There is no coord.db backup: deploy.sh backs up dist-pwa/agent-dist/ccd/notify.sh/' +
-        'session-hook.sh under ~/ccrc-backups/, never coord.db, so that directory has nothing to ' +
-        'restore for this file. Reconstruct the program history from the markdown ledger ' +
-        '(docs/superpowers/programs/<slug>.md) plus the registry and .prhistory (spec:82-85), or ' +
-        'move the file aside and accept the loss — starting empty would erase it silently instead.',
+        'Check ~/ccrc-backups/<ts>/coord.db first: every deploy.sh run snapshots coord.db there ' +
+        '(VACUUM INTO, backup-coord.mjs) before touching anything, so the newest timestamped ' +
+        'snapshot is the restore path. Only if no snapshot exists, reconstruct the program history ' +
+        'from the markdown ledger (docs/superpowers/programs/<slug>.md) plus the registry and ' +
+        '.prhistory (spec:82-85), or move the file aside and accept the loss — starting empty ' +
+        'would erase it silently instead.',
       );
     }
   }
