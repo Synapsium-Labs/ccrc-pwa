@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=92c96e17018500b6bf929493a7cf86f2065e37c918f8c5dfe8dec04a75adec6e
+# ccrc:generated 1 sha256=a7a1f4601d97df5641bd6818d64511215996deb061f62c0a719d67cbd6bdfb23
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box, not on this file: `_rc_enabled` reads
@@ -1486,6 +1486,34 @@ WS_NOUN=(mesa river ridge harbor meadow canyon summit hollow prairie basin cove 
 
 _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 
+# R-3, wave review. Ids are `<project>-<slug>`, and `_reg_purge` unlinks
+# `"$REG/$id".*` for every dot-free suffix — so a PROJECT with a LEADING DOT
+# mints an id that ALIASES one of ccd's own hidden, dot-prefixed registry
+# files for an unrelated session. Three named instances, verified: project
+# `.prstate-demo` + slug `quiet-basin` -> id `.prstate-demo-quiet-basin`,
+# whose purge glob matches `$REG/.prstate-demo-quiet-basin.lock` — the
+# PR-STATE LOCK of the unrelated session `demo-quiet-basin` (new this wave,
+# the lock `_pr_py`'s migration off `.uuid` introduced); project `.reap-demo`
+# + slug `quiet-basin` aliases that same session's REAP LOCK,
+# `$REG/.reap-demo-quiet-basin.lock` (pre-dates this wave); project `.ws-add`
+# + slug `demo` -> id `.ws-add-demo`, aliasing the WS-ADD LOCK for project
+# `demo`, `$REG/.ws-add-demo.lock` (pre-dates this wave). Unlinking a lock
+# file while another process holds it is exactly how two processes come to
+# hold "the lock" on two different inodes — reopening the double
+# compare-and-set this branch's lock migration closed.
+#
+# Enforced at CREATION ONLY — `cmd_ws_add` and `cmd_start`, the two sites
+# that mint a NEW registry row for a project — never at `cmd_pr_state`'s two
+# `^[A-Za-z0-9._-]+$` checks. Those are read-only: they validate a project
+# that either already exists in a registry row or arrived for a read, and
+# refusing there could STRAND an existing row rather than prevent a new one.
+# The creation gate is what stops such a row ever existing in the first
+# place, so the read side does not need to police it too.
+_ws_project_valid() {   # project -> 0 when it is a legal project name to CREATE under
+  [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]] || return 1
+  [[ "$1" != .* ]] || return 1
+}
+
 # A slug is free only when the registry holds NOTHING for `<project>-<slug>` —
 # verification round 3 P1. The old form was `[[ ! -f "$REG/$1-$2.uuid" ]]`, i.e.
 # one field standing in for eighteen, and `_reg_purge` (see the long note there)
@@ -1634,7 +1662,8 @@ _ws_disk_free_gb() {   # dir -> whole GiB available on the filesystem holding it
 
 cmd_ws_add() {   # project [slug] — new worktree + session for an existing project
   local project="${1:?usage: ccd ws-add <project> [slug]}" slug="${2:-}"
-  [[ "$project" =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid project '$project'"
+  _ws_project_valid "$project" \
+    || die "invalid project '$project' — allowed chars: A-Za-z0-9 . _ -, and no LEADING dot (a dot-leading id aliases ccd's own hidden registry files — see _ws_project_valid)"
   local main="$PROJECTS_ROOT/$project"
   [[ -d "$main/.git" ]] || die "not a git repo: $main"
 
@@ -8562,7 +8591,8 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
     [[ -n "$wrapper" && -n "$project" ]] \
       || die "usage: ccd start <id> | ccd start <wrapper> <project> [workdir]"
     _is_valid_wrapper "$wrapper" || die "unknown wrapper '$wrapper' (valid: ${CCRC_ACCOUNTS[*]})"
-    [[ "$project" =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid project '$project' (allowed chars: A-Za-z0-9 . _ -)"
+    _ws_project_valid "$project" \
+      || die "invalid project '$project' (allowed chars: A-Za-z0-9 . _ -, and no LEADING dot — a dot-leading id aliases ccd's own hidden registry files)"
     id=$(_id "$wrapper" "$project")
   else
     id="${1:?usage: ccd start <id> | ccd start <wrapper> <project> [workdir]}"

@@ -1258,4 +1258,33 @@ Then send the `wave-done` mail with `{branchTip, prNumber, prPhase:"open", hando
   mechanical anchor check in CI, or the same function-name conversion applied in bulk. Not this
   wave's job, and doing it here would have buried a registry change under a repo-wide reflow.
 
+- **D-138 (2026-08-21, wave review round)** — a dot-leading PROJECT id aliases ccd's own hidden
+  registry files, reopening the double compare-and-set this branch's lock migration was supposed to
+  close. The mechanism: `_reg_purge` unlinks `"$REG/$id".*` for every suffix holding no dot, ids are
+  `<project>-<slug>`, and project validation (`^[A-Za-z0-9._-]+$`) permits a LEADING DOT — so a
+  project named `.prstate-demo` with slug `quiet-basin` gives id `.prstate-demo-quiet-basin`, whose
+  purge glob matches `$REG/.prstate-demo-quiet-basin.lock`, the pr-state lock of the UNRELATED
+  session `demo-quiet-basin`. Unlinking a lock while another process holds it is exactly how two
+  processes come to hold "the lock" on two different inodes. The class is wider than one file, all
+  three verified: `.prstate-<id>.lock` (new this wave, the lock `_pr_py`'s migration off `.uuid`
+  introduced), `.reap-<id>.lock`, and `.ws-add-<project>.lock` (the latter two pre-date this wave).
+  `$REG/.reaped/` and `$REG/.tmux-server.lock` are NOT reachable this way — no `<project>-<slug>` id
+  produces a matching glob for either — and `_reg_set`'s own tmps are unreachable too, since their
+  suffix holds dots and `_reg_purge`'s `*.*` skip already excludes them.
+  **Fixed** by refusing a leading dot in project validation at the CREATION sites only — a new
+  `_ws_project_valid` helper (beside `_ws_slug_valid`), wired into `cmd_ws_add` and `cmd_start`, the
+  two verbs that mint a NEW registry row for a project. **Deliberately left alone**: `cmd_pr_state`'s
+  two `^[A-Za-z0-9._-]+$` checks, unchanged — it is read-only, it validates a project that already
+  exists in a registry row or arrived for a read, and refusing there could STRAND an existing row
+  rather than prevent a new one; the creation gate is what stops such a row ever existing, so the
+  read side does not need to police it too. TDD, red-first: three tests added to
+  `server/test/ccd-workspaces.test.ts` (`cmd_ws_add` refuses a leading dot and creates no registry
+  row, `cmd_start` refuses the same, and a mechanism-pinning test that calls `_reg_purge` directly on
+  a fixture `.prstate-demo-quiet-basin.lock` to show the unlink happening as an executable fact, not
+  just a comment). Measured RED before the guard existed (the two refusal tests failed with
+  `expected +0 not to be +0` — cmd_ws_add/cmd_start both created the row and exited 0) and GREEN
+  after. Mutation-measured: deleting the `[[ "$1" != .* ]]` line from `_ws_project_valid` turns both
+  refusal tests RED again (mutant-killed), confirming the guard is load-bearing rather than
+  decorative.
+
 <!-- Execution appends D-129… here, with measured before/after counts for every mutation claim. -->
