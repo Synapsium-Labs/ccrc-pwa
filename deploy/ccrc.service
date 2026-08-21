@@ -10,6 +10,12 @@ After=network-online.target
 # and the live box's real config rode an unmanaged drop-in this line retires
 # (see the 2026-08-11 stage-1 plan, Task 9, for the migration).
 EnvironmentFile=-%h/.ccrc/ccrc.env
+# Exposure (stage 3b, spec D3): `ccrc expose` writes ~/.ccrc/exposure.env and
+# never touches the seed-once ccrc.env above. Read SECOND deliberately — for a
+# key present in both files the LATER file wins, so exposure keys (CCRC_ORIGIN,
+# CCRC_RP_ID, …) override hand-set placeholders — and `-`-optional so a box
+# that never ran the verb still boots.
+EnvironmentFile=-%h/.ccrc/exposure.env
 ExecStart=/usr/bin/env node %h/ccrc/server/dist/server/src/index.js
 Restart=always
 RestartSec=3

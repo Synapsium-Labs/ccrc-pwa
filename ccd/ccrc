@@ -106,6 +106,18 @@ CCRC_HERE="$(cd "${CCRC_HERE%/*}" && pwd)"
 BOX_STAMP_FILE="$HOME/.ccrc/build.json"
 BOX_ENV_FILE="$HOME/.ccrc/ccrc.env"
 
+# ── THE EXPOSURE FILE, WHICH `expose` WRITES AND THE SERVER UNIT READS ────
+# `~/.ccrc/exposure.env` — stage 3b, spec D3. Exposure keys (CCRC_ORIGIN,
+# CCRC_RP_ID, the DuckDNS trio) get their OWN EnvironmentFile because ccrc.env
+# is seed-once: `_inst_env` writes it when the box has none and NEVER again
+# (D-88), so a verb that had to rewrite it would break that contract, and one
+# that appended would fight the operator's own hand edits. The server unit
+# reads this file SECOND (`deploy/ccrc.service`) — systemd's later-file-wins —
+# so `cmd_expose`'s keys override a hand-set placeholder without either file
+# touching the other. Spelled once, pinned like CCRC_RC_FILE
+# (single-definition.test.ts, "one ~/.ccrc/exposure.env").
+CCRC_EXPOSURE_FILE="$HOME/.ccrc/exposure.env"
+
 # ── THE PASSPHRASE SECRET, WHICH THIS FILE NEVER READS ────────────────────
 # `~/.ccrc/auth.scrypt` — the scrypt line the server's session gate verifies a
 # login against (`server/src/auth/secret.ts` owns the format). Spelled here for

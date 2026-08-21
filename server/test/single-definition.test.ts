@@ -928,6 +928,37 @@ describe('one ~/.ccrc/remote-control, spelled once per tool and equal across all
   });
 });
 
+// — Stage 3b, Task 1: the exposure seam —
+describe('one ~/.ccrc/exposure.env, spelled once in bash through CCRC_EXPOSURE_FILE', () => {
+  // Spec D3: exposure config (CCRC_ORIGIN, CCRC_RP_ID, the DuckDNS trio) lives
+  // in its OWN file, written by the post-install verb `ccrc expose` — never in
+  // the seed-once `ccrc.env` (`_inst_env` writes that once and never again,
+  // D-88). The server unit reads it as a SECOND, optional `EnvironmentFile=`
+  // line, which the ccrc-install suite pins ("reads ccrc.env then
+  // exposure.env"); THIS block pins the bash side the way `CCRC_RC_FILE`'s
+  // does above: one declaration, and no second spelling of the literal path
+  // for a later writer/reader to drift from. The path also appears in unit
+  // TEMPLATES (`deploy/ccrc.service`, and Task 3's ccrc-ddns.service) as
+  // `%h/.ccrc/exposure.env` — systemd's own dialect, not bash, outside this
+  // corpus, and the install suite holds those bytes instead. Later 3b tasks
+  // that add a bash toucher (doctor's `exposure` check is the known one)
+  // extend the holder list HERE, by name, like the remote-control block's.
+  const NEEDLE = '.ccrc/exposure.env';
+
+  it('is touched by exactly one bash file, and that file is ccd/ccrc', () => {
+    expect(holdersOf(NEEDLE)).toEqual([
+      'ccd/ccrc',   // CCRC_EXPOSURE_FILE — the declaration `cmd_expose` writes through
+    ]);
+  });
+
+  it('ccrc spells the path once — the declaration is the only line of shell naming it', () => {
+    const code = codeLines(path.join(ccrcRoot, 'ccd', 'ccrc'));
+    expect(code.filter((l) => l.includes(NEEDLE))).toEqual([
+      'CCRC_EXPOSURE_FILE="$HOME/.ccrc/exposure.env"',
+    ]);
+  });
+});
+
 // — Build 4, Task 10: the wave's own two definitions —
 describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
   // The type's fingerprint: the union as it is declared, not every mention.

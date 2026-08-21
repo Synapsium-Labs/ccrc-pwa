@@ -80,19 +80,23 @@ systemd user units, Caddy as a system package (never a node dependency).
   key present in both — systemd semantics; the leading `-` keeps a box without exposure
   booting).
 
-- [ ] **Step 1: RED** — extend `single-definition.test.ts`'s bash corpus with a
+- [x] **Step 1: RED** — extend `single-definition.test.ts`'s bash corpus with a
   `CCRC_EXPOSURE_FILE` pin copied structurally from the `CCRC_RC_FILE` block (`:850-925`):
   declared exactly once in `ccd/ccrc`, literal path spelled nowhere else in bash. Add to
   `ccrc-install.test.ts` a case asserting the installed `ccrc.service` unit text contains BOTH
   EnvironmentFile lines in order (`ccrc.env` first, `exposure.env` second, both `-`-prefixed).
-  Run both suites: the new cases fail.
-- [ ] **Step 2: GREEN** — declare `CCRC_EXPOSURE_FILE` in `ccd/ccrc` beside `BOX_ENV_FILE`
+  Run both suites: the new cases fail. *(Measured: single-definition 2 failed / 64 passed;
+  ccrc-install 1 failed / 82 passed.)*
+- [x] **Step 2: GREEN** — declare `CCRC_EXPOSURE_FILE` in `ccd/ccrc` beside `BOX_ENV_FILE`
   with a comment naming D3 and the seed-once conflict it resolves; add the line to
-  `deploy/ccrc.service`.
-- [ ] **Step 3:** mutation — remove the second EnvironmentFile line → the install case reds;
+  `deploy/ccrc.service`. *(66/66 and 83/83 green.)*
+- [x] **Step 3:** mutation — remove the second EnvironmentFile line → the install case reds;
   spell the literal path a second time in `ccd/ccrc` → single-definition reds. Record counts.
-- [ ] **Step 4:** full `ccrc-install` + `single-definition` suites green. Commit
+  *(Measured: EnvironmentFile line removed → ccrc-install 1 red (82 pass); literal spelled a
+  second time in `ccd/ccrc` → single-definition 1 red (65 pass). Both reverted.)*
+- [x] **Step 4:** full `ccrc-install` + `single-definition` suites green. Commit
   `feat(expose): the exposure seam — one file constant, a second EnvironmentFile`.
+  *(149/149 across both suites.)*
 
 ### Task 2: `ccrc expose` — the verb
 

@@ -1816,6 +1816,22 @@ describe('ccrc install: the units, and the one this box must not be given', () =
     }
   });
 
+  it('the installed ccrc.service reads ccrc.env first, then exposure.env, both optional', () => {
+    // Stage 3b Task 1 (spec D3): exposure keys live in their own
+    // ~/.ccrc/exposure.env, written by `ccrc expose`, never by touching the
+    // seed-once ccrc.env. systemd's EnvironmentFile semantics make the LATER
+    // file win for a key present in both — so the order below is the whole
+    // mechanism by which `expose` overrides a hand-set placeholder — and the
+    // leading `-` on each is what lets a box that never ran the verb (or has
+    // no env file at all) boot anyway. Asserted as the exact ordered list, so
+    // a dropped `-`, a swapped order, or a third line all land here.
+    const unit = read(unitDir(units.home, 'ccrc.service'));
+    expect(unit.split('\n').filter((l) => l.startsWith('EnvironmentFile='))).toEqual([
+      'EnvironmentFile=-%h/.ccrc/ccrc.env',
+      'EnvironmentFile=-%h/.ccrc/exposure.env',
+    ]);
+  });
+
   it('puts the slice drop-in in the ESCAPED directory name, and nowhere else', () => {
     // THE MUTATION THIS TEST EXISTS FOR: drop the `\x2d` and the drop-in lands
     // in `app-claude-session.slice.d`, where systemd — which escapes `-` in a
