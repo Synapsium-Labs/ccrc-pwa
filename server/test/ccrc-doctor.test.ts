@@ -420,10 +420,22 @@ function stubCurl(home: string): void {
     '  echo "curl: ($c) fixture: could not connect" >&2',
     '  exit "$c"',
     'fi',
+    // TWO routes, dispatched on the URL (the last argv): `/api/fleet/health`
+    // is the fleet check's question and everything else — in practice
+    // `/health` — is the build check's (Stage 4, Task 9). One canned body
+    // could not answer both, and a stub that answered the fleet JSON to
+    // `/health` would be testing the build check against an answer no server
+    // sends.
+    'url=; for a in "$@"; do url="$a"; done',
+    'bf=fixture-health-body; cf=fixture-health-code',
+    'case "$url" in',
+    '  */api/fleet/health*) ;;',
+    '  *) bf=fixture-build-health-body; cf=fixture-build-health-code ;;',
+    'esac',
     'code=200',
-    '[ -f "$HOME/fixture-health-code" ] && read -r code < "$HOME/fixture-health-code"',
+    '[ -f "$HOME/$cf" ] && read -r code < "$HOME/$cf"',
     'body=',
-    '[ -f "$HOME/fixture-health-body" ] && read -r body < "$HOME/fixture-health-body"',
+    '[ -f "$HOME/$bf" ] && read -r body < "$HOME/$bf"',
     'printf \'%s\\n%s\' "$body" "$code"',
   ].join('\n'));
 }
@@ -444,6 +456,32 @@ function stubHealthUnreachable(home: string, exitCode = 7): void {
   stubCurl(home);
   writeFileSync(join(home, 'fixture-curl-exit'), String(exitCode));
 }
+
+// ── this box's own stamp, and its own server's /health (Stage 4, Task 9) ──
+// `_check_build` compares `~/.ccrc/build.json` (read through ccrc's ONE stamp
+// parser, which needs a REAL jq) against what the RUNNING server reports on
+// GET /health. `healthy()` therefore models both halves agreeing.
+
+const HEALTHY_SHA = '1f2e3d4c5b6a79881f2e3d4c5b6a79881f2e3d4c';
+
+/** `~/.ccrc/build.json`, the stampers' exact shape (no `version` — the build
+ *  check compares shas and an unversioned stamp is the common case). */
+function writeStamp(home: string, sha = HEALTHY_SHA): void {
+  mkdirSync(join(home, '.ccrc'), { recursive: true });
+  writeFileSync(join(home, '.ccrc', 'build.json'),
+    JSON.stringify({ sha, ref: 'main', builtAt: '2026-08-21T00:00:00Z', dirty: false }));
+}
+
+/** Point the fixture's `curl` at a canned /health answer — the sibling of
+ *  `stubHealth`, for the OTHER route the stub dispatches on. */
+function stubBuildHealth(home: string, body: string, code = 200): void {
+  stubCurl(home);
+  writeFileSync(join(home, 'fixture-build-health-body'), body);
+  writeFileSync(join(home, 'fixture-build-health-code'), String(code));
+}
+
+const healthBodyFor = (sha: string): string =>
+  JSON.stringify({ ok: true, build: { sha, ref: 'main', builtAt: '2026-08-21T00:00:00Z', dirty: false } });
 
 /** Every argv the fixture's `curl` saw. Empty means the check never asked. */
 const curlCalls = (home: string): string[] => {
@@ -569,7 +607,14 @@ function healthy(prefix: string): string {
   containedPath(home);   // plant the poisoned gh FIRST; ghStub overwrites it below
   writePkg(home, '>=1.0.0');
   stubNode(home, 'v22.20.0');
-  for (const b of ['jq', 'python3', 'flock']) stub(home, b, 'exit 0');
+  for (const b of ['python3', 'flock']) stub(home, b, 'exit 0');
+  // jq is REAL here, not a presence stub (Stage 4, Task 9): `_check_build`
+  // reads the box's stamp through ccrc's one parser (`_box_build_fields`),
+  // which parses with jq — a stub that exits 0 printing nothing would make
+  // every stamp "unreadable". The presence check (`_dr_need_bin jq`) is
+  // equally satisfied by the real thing, and `statusBox` below already made
+  // this exact swap for the same reader.
+  linkReal(home, 'jq');
   // tmux answers its versions, client and server agreeing — a healthy box is
   // one where every check PASSES (see the fleet note below), and tmux_skew
   // measures a version pair, not a presence.
@@ -602,6 +647,11 @@ function healthy(prefix: string): string {
     '',
   ].join('\n'));
   stubHealth(home, { mode: 'remote', connected: true, downSince: null, build: 'agreed', roster: 'agreed' });
+  // …and it is STAMPED, and the server RUNNING here reports the same sha on
+  // /health (Stage 4, Task 9) — `build` is a check, and `healthy()`'s contract
+  // is that every check PASSES (several tests assert summary counts on it).
+  writeStamp(home);
+  stubBuildHealth(home, healthBodyFor(HEALTHY_SHA));
   // …and its PWA has a passphrase set. A box with none is a real and common
   // state — it is what `ccrc install` leaves behind, deliberately — but it is a
   // WARN (`auth`), and `healthy()`'s contract is that every check PASSES, which
@@ -1336,12 +1386,14 @@ describe('ccrc doctor: config', () => {
     expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) config: /m);
     expect(lines[i + 1] ?? '').not.toMatch(/^ {2}remedy: /);
     expect(r.stdout).not.toMatch(/ccrc install/);
-    // `fleet` skips on the same box for its own reason (no server address), and
+    // `fleet` skips on the same box for its own reason (no server address),
     // `auth` for a third (the session gate is the server's, and nothing on a
-    // fleet host reads `~/.ccrc/auth.scrypt`) — so the summary proves the
-    // runner accepted ALL THREE skips as skips.
+    // fleet host reads `~/.ccrc/auth.scrypt`), and `build` for a fourth
+    // (Stage 4, Task 9: no address means no server of its own to compare
+    // against) — so the summary proves the runner accepted ALL FOUR skips.
     expect(r.stdout).toMatch(/^SKIP auth: .*ccrc-agent\.service/m);
-    expect(r.stdout).toMatch(/^summary: \d+ checks \(3 skipped\)/m);
+    expect(r.stdout).toMatch(/^SKIP build: /m);
+    expect(r.stdout).toMatch(/^summary: \d+ checks \(4 skipped\)/m);
     expect(r.code).toBe(0);
   });
 
@@ -3048,7 +3100,10 @@ describe('ccrc doctor: fleet', () => {
     // this suite can reach is the fixture's own, and it saw exactly one URL.
     const home = healthy('ccrc-doctor-fleet-asked-');
     runDoctor(home);
-    const calls = curlCalls(home);
+    // The `build` check (Stage 4, Task 9) asks its own ONE question of the
+    // same stub — GET /health — so the log is filtered to this check's URL
+    // rather than asserted to be the whole log. Still exactly once.
+    const calls = curlCalls(home).filter((c) => c.includes('/api/fleet/health'));
     expect(calls.length).toBe(1);
     expect(calls[0]).toContain(`http://${FIXTURE_ADDR}/api/fleet/health`);
   });
@@ -3059,10 +3114,13 @@ describe('ccrc doctor: fleet', () => {
     const r = runDoctor(home);
     expect(r.code).toBe(1);
     expect(r.stdout).toMatch(/FAIL fleet: the two boxes are running different builds/);
-    // AGENT FIRST is the whole content of the remedy: a change touching ccd/
-    // ships to the fleet host before the server, because the server reads what
-    // the hook writes.
-    expect(r.stdout).toMatch(/remedy: .*deploy the lagging box.*agent first/i);
+    // FLEET BOX FIRST is the whole content of the remedy, and the INSTRUMENT
+    // is now `ccrc update` (Stage 4, Task 9 — spec §8): the server reads what
+    // the fleet host's hook writes and the agent caches `ccd caps` at boot,
+    // so the other order runs a server reading fields nobody writes yet.
+    // deploy.sh is the developer lane, not the box's own remedy.
+    expect(r.stdout).toMatch(/remedy: .*ccrc update.*fleet box first/i);
+    expect(r.stdout).not.toMatch(/deploy\.sh/);
   });
 
   it('fails on a divergent roster, in its own words and with its own remedy', () => {
@@ -3103,6 +3161,10 @@ describe('ccrc doctor: fleet', () => {
     const r = runDoctor(home);
     expect(r.stdout).toMatch(/^WARN fleet: /m);
     expect(r.stdout).not.toMatch(/FAIL fleet: /);
+    // The unknown remedy names `ccrc update` too (Stage 4, Task 9 — the second
+    // of the two strings spec §8 retargets off `bash deploy/deploy.sh …`).
+    expect(r.stdout).toMatch(/remedy: .*ccrc update/);
+    expect(r.stdout).not.toMatch(/deploy\.sh/);
     expect(r.code).toBe(0);
   });
 
@@ -3502,6 +3564,96 @@ describe('ccrc doctor: fleet', () => {
   });
 });
 
+// ── the running build against the stamp (Stage 4, Task 9 — spec §8) ───────
+// `~/.ccrc/build.json` says what is INSTALLED; the server process reports what
+// it BOOTED with on GET /health. Between an install/update and a restart the
+// two legitimately differ, and until this check existed nothing on the box
+// said so — the hole `ccrc install`'s own transcript recorded. The check asks
+// this box's OWN server (the address `_box_server_addr` reads) and compares
+// shas; it never prints a byte the network sent.
+
+describe('ccrc doctor: build', () => {
+  it('passes when the running server reports the stamped sha, naming the short sha', () => {
+    const home = healthy('ccrc-doctor-build-agreed-');
+    const r = runDoctor(home);
+    const line = lineFor(r.stdout, 'build');
+    expect(line, r.stdout).toMatch(/^PASS build: /);
+    // The measurement, never the bare word "ok": the short sha it compared.
+    expect(line).toContain(HEALTHY_SHA.slice(0, 12));
+    expect(r.code).toBe(0);
+  });
+
+  it('fails on a mismatch — the process is stale — and the remedy is the restart', () => {
+    const home = healthy('ccrc-doctor-build-stale-');
+    stubBuildHealth(home, healthBodyFor('ccrc-canary-running-9d4f'));
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^FAIL build: /m);
+    expect(r.stdout).toMatch(/remedy: .*systemctl --user restart ccrc\.service/);
+    // The stamp's sha is local and named; the sha off the NETWORK is not
+    // echoed — `_box_health`'s standing nothing-from-the-body rule.
+    expect(r.stdout).toContain(HEALTHY_SHA.slice(0, 12));
+    expect(r.stdout).not.toContain('ccrc-canary-running-9d4f');
+    expect(r.code).toBe(1);
+  });
+
+  it('SKIPS when this box has no server address — a fleet box has no server to ask', () => {
+    const home = healthy('ccrc-doctor-build-noaddr-');
+    rmSync(join(home, '.ccrc', 'ccrc.env'), { force: true });
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^SKIP build: this box has no server address/m);
+    expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) build: /m);
+    expect(r.code).toBe(0);
+  });
+
+  it('SKIPS when nothing answers — a stopped server is the services check\'s finding, not a mismatch', () => {
+    const home = healthy('ccrc-doctor-build-unreachable-');
+    stubHealthUnreachable(home);
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^SKIP build: no server answered/m);
+    expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) build: /m);
+    expect(r.code).toBe(0);
+  });
+
+  it('SKIPS a gated 401 saying the GATE answered, not the build (D-150)', () => {
+    // The discriminator is this server's own refusal envelope, `_box_health`'s
+    // D-150 rule — a bare 401 (a proxy) must not read as the session gate.
+    const home = healthy('ccrc-doctor-build-gated-');
+    stubBuildHealth(home, '{"ok":false,"error":"unauthenticated","verdict":"no-session"}', 401);
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('SKIP build: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toMatch(/gate answered/i);
+    expect(lines[i]).toMatch(/not the build/i);
+    // The SKIP contract: no verdict line, and NO remedy under it.
+    expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) build: /m);
+    expect(lines[i + 1] ?? '').not.toMatch(/^ {2}remedy: /);
+    expect(r.code).toBe(0);
+  });
+
+  it('SKIPS an unstamped box — nothing to compare the running server against', () => {
+    const home = healthy('ccrc-doctor-build-unstamped-');
+    rmSync(join(home, '.ccrc', 'build.json'), { force: true });
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^SKIP build: this box has no build stamp/m);
+    expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) build: /m);
+    // Nothing was asked: the one curl this fixture logs is the fleet check's.
+    expect(curlCalls(home).filter((c) => !c.includes('/api/fleet/health'))).toEqual([]);
+    expect(r.code).toBe(0);
+  });
+
+  it('a running server that answers something else entirely is a WARN, not a verdict about the build', () => {
+    // A reverse proxy or captive portal answering 200 HTML — classified,
+    // never quoted (the same rule as the fleet check's canary test).
+    const home = healthy('ccrc-doctor-build-notjson-');
+    stubBuildHealth(home, '<html>ccrc-canary-body-3c1e</html>');
+    const r = runDoctor(home);
+    expect(lineFor(r.stdout, 'build')).toMatch(/^WARN build: /);
+    expect(r.stdout).not.toContain('ccrc-canary-body-3c1e');
+    expect(r.code).toBe(0);
+  });
+});
+
 // ── ccrc status ───────────────────────────────────────────────────────────
 // Read-only, one fact per line, exit 0. It answers the question doctor cannot:
 // not "is this box fit to work" but "what IS this box, and does it agree with
@@ -3855,12 +4007,14 @@ describe('ccrc doctor: the output contract', () => {
     // SKIP is in the alternation and NOT in the verdict count: a check that did
     // not run has not answered, and counting it as an answer is the whole
     // defect the skip exists to avoid. Both fixtures are walked, because the
-    // healthy box has no skip and the address-less one has exactly one.
+    // healthy box has no skip and the address-less one has exactly two —
+    // `fleet` and, since Stage 4 Task 9, `build`, each for its own reading of
+    // the same missing address.
     const home = healthy('ccrc-doctor-shape-');
     ghStub(home, ['github.com', '  - Logged in to github.com account fixture-bot (oauth_token)'], 0);
     const skipBox = healthy('ccrc-doctor-shape-skip-');
     rmSync(join(skipBox, '.ccrc', 'ccrc.env'), { force: true });
-    for (const [h, wantSkips] of [[home, 0], [skipBox, 1]] as const) {
+    for (const [h, wantSkips] of [[home, 0], [skipBox, 2]] as const) {
       let verdicts = 0; let skips = 0;
       for (const l of runDoctor(h).stdout.split('\n')) {
         if (!l || l.startsWith('  remedy: ') || l.startsWith('summary: ')) continue;

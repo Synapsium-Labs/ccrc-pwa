@@ -230,12 +230,15 @@ extend `ccrc-cli.test.ts`.
 ### Task 9: Doctor — the `build` check + retargeted remedies
 
 **Files:** `ccd/ccrc-doctor-checks`; extend `ccrc-doctor.test.ts`.
-- [ ] RED: `build` (new array entry + `_check_*`): running server's `/health` sha ==
+- [x] RED: `build` (new array entry + `_check_*`): running server's `/health` sha ==
   build.json sha → PASS naming the short sha; mismatch → FAIL, remedy names
   `systemctl --user restart ccrc.service`; no server/local-unreachable → SKIP; a 401 →
   SKIP whose text says the gate answered, not the build (D-150). `_check_fleet`'s two skew
   remedies now say `ccrc update` fleet-box-first (update the strings + their pins).
-- [ ] GREEN; bijection stays green; mutation: flip the sha comparison (red). Commit
+  (Ran red: 9/9 — 7 new build tests + the 2 retargeted remedy pins — before
+  implementation, 252 existing green.)
+- [x] GREEN; bijection stays green; mutation: flip the sha comparison (red — 40, see the
+  Task 9 ledger entry). Commit
   `feat(doctor): the running build is compared to the stamp; remedies name ccrc update`.
 
 ### Task 10: Runbook step 12 + docs
@@ -419,6 +422,30 @@ it merges first.)
   typecheck-tests (136 across the five with ccrc-cli), ccrc-install + ccrc-doctor +
   build-release + install-sh + ccrc-wrappers + ccrc-passwd (458 across the six),
   session-hook 22/22 (isolated), runbook-holds 6/6.
+- **Task 9 mutation measurements** (applied, run, reverted): (M1) the sha comparison in
+  `_check_build` flipped (`=` → `!=`) → 40 red in `ccrc-doctor.test.ts` — the two direct
+  pins (`passes when the running server reports the stamped sha` and `fails on a
+  mismatch … the remedy is the restart`) plus the collateral every healthy-box fixture
+  now shows (a flipped comparison FAILs the healthy box, exit 1, so every summary/exit
+  pin reds too). Suite 261/261 green before and after. Red-first honesty: 9/9 red before
+  implementation (7 new build tests + the 2 retargeted `_check_fleet` remedy pins), 252
+  existing green. Sibling suites green after implementation: ccrc-install 96/96,
+  ccrc-update + ccrc-cli + single-definition + install-sh + build-release +
+  runbook-holds + typecheck-tests 153/153 (one run, seven files). Intended extensions
+  beyond the task's named files, annotated in place: (a) the doctor suite's `healthy()`
+  now models the check's two halves agreeing — a REAL jq replaces the presence stub
+  (`_box_build_fields` parses with it; `statusBox` had already made the same swap), a
+  `build.json` stamp, and the fixture `curl` dispatches on the URL so `/health` answers
+  beside `/api/fleet/health`; (b) three count pins moved with the table:
+  the fleet `really asks` test filters the log to its own URL (still exactly one call),
+  the env-less fleet-role box counts 4 skips (build joins config/auth/fleet), and the
+  shape test's address-less box counts 2; (c) `ccrc-install.test.ts`'s curl stub gained
+  the `/health` arm, answering the sha `_inst_stamp` wrote (read at run time), so the
+  install's doctor tail PASSes `build` for the reason a freshly restarted box really
+  does and the `0 warned, 0 failed` close stays green on its original meaning.
+  Unreachable is a SKIP in `_check_build` (deliberately unlike `_check_fleet`'s WARN,
+  and per this task's own text): a dead ccrc.service is `_check_services`' FAIL, and a
+  second verdict in a second vocabulary for one condition is the overloaded seam.
 - **D-145** (Task 8, found — NOT caused — during execution; for Task 11's fix round):
   `agent/test/deploy-verify.test.ts` is red 2/42 at this branch's pre-Task-8 HEAD
   (`3eb0d4d`) and on the working tree alike, and the cause is Task 1's `stamp_build`

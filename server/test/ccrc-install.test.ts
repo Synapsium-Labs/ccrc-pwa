@@ -289,13 +289,28 @@ function healthyDoctorBox(home: string, opts: { upstream?: boolean } = {}): void
     'echo "fixture gh: unexpected argv: $*" >&2; exit 90',
   ].join('\n'));
 
-  // The ONE network call ccrc makes, answered locally. `mode: local` is the
-  // truthful answer for the box this verb builds — a single box whose server
-  // drives the fleet itself — and `_check_fleet` SKIPS on it ("there is no
-  // second box to disagree with"), which is a check that ran and had nothing
-  // to compare rather than a check that failed.
+  // The TWO network calls ccrc makes, answered locally (intended extension,
+  // Stage 4 Task 9 — this stub answered one). `mode: local` is the truthful
+  // answer for the box this verb builds — a single box whose server drives
+  // the fleet itself — and `_check_fleet` SKIPS on it ("there is no second
+  // box to disagree with"), which is a check that ran and had nothing to
+  // compare rather than a check that failed. `_check_build`'s question — GET
+  // /health — is answered with the sha `_inst_stamp` just wrote (read at RUN
+  // time, so the answer is the running-server-agrees case whatever sha the
+  // fixture repo has), which is what a freshly installed-and-restarted box
+  // really reports; the doctor tail therefore PASSes `build`, keeping the
+  // "0 warned, 0 failed" close green for its original reason.
   stub('curl', [
     'printf \'%s\\n\' "$*" >> "$HOME/curl-calls"',
+    'url=; for a in "$@"; do url="$a"; done',
+    'case "$url" in',
+    '  */api/fleet/health*) ;;',
+    '  */health*)',
+    '    sha=',
+    '    [ -f "$HOME/.ccrc/build.json" ] && sha="$(jq -r .sha "$HOME/.ccrc/build.json" 2>/dev/null)"',
+    '    printf \'{"ok":true,"build":{"sha":"%s","ref":"fixture","builtAt":"fixture","dirty":false}}\\n200\' "$sha"',
+    '    exit 0 ;;',
+    'esac',
     'body=\'{"mode":"local","connected":true,"downSince":null,"build":"agreed","roster":"agreed"}\'',
     '[ -f "$HOME/fixture-health-body" ] && IFS= read -r body < "$HOME/fixture-health-body"',
     'code=200',
