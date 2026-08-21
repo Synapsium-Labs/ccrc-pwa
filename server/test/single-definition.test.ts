@@ -601,11 +601,11 @@ describe('the program ledger is parsed by nothing', () => {
   // OTHER non-comment mention, on any number of lines — the actual signal,
   // and not one a split read can dodge.
   const ALLOWED_NON_COMMENT = [
-    // coord/db.ts:144 and :221 — the 0-byte-file refusal and the
-    // migration-failure refusal, the same sentence told to the operator
-    // twice. Each throws a message; neither reads a byte off either path.
-    "'program history from the markdown ledger (docs/superpowers/programs/<slug>.md) plus the ' +",
+    // coord/db.ts — the 0-byte-file refusal and the migration-failure
+    // refusal, the same sentence told to the operator twice. Each throws a
+    // message; neither reads a byte off either path.
     "'(docs/superpowers/programs/<slug>.md) plus the registry and .prhistory (spec:82-85), or ' +",
+    "'from the markdown ledger (docs/superpowers/programs/<slug>.md) plus the registry and ' +",
     // coord/routes.ts:692 — POST /api/runs's response names where a
     // coordinator should commit the ledger; the route never opens it.
     'ledgerPath: `docs/superpowers/programs/${program}.md`,',
