@@ -6,9 +6,14 @@
 // component mounts twice (desktop top bar, mobile fleet list) and tapping
 // either one goes to /accounts.
 //
-// This is now the ONLY door to /accounts (grep `'/accounts'` in pwa/src — one
-// hit, the navigate() below), so it must never render nothing: the state it
-// used to bail out on entirely — every lane markered `-disabled`, or no poll
+// NO LONGER THE ONLY DOOR to /accounts, and it should never have been the only
+// one (D-161): as a full-width readout of 5h/7d meters it reads as DATA rather
+// than navigation, so an operator hunting for the passkey enrolment button on
+// the screen behind it never found it. FleetScreen's header now carries a named
+// control ("Your sign-in and accounts"), and PasskeyNotice is a third route in
+// the one posture that most needs it. This stays a door — it is where a gauge
+// is being looked at anyway — and it still must never render nothing: the state
+// it used to bail out on entirely — every lane markered `-disabled`, or no poll
 // landed/succeeded yet — is exactly the state the accounts screen exists to
 // explain (its bespoke "<home-able accounts>, all disabled" copy — see
 // homeAbleLabelList in lib/accounts.ts). The link stays mounted with a quiet

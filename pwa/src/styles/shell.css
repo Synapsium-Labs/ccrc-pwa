@@ -50,13 +50,15 @@
      So it stays open, paid for by folding each gauge from three stacked lines
      (name / 5h / 7d) down to two — 46px against the old 158px, cheap enough to
      keep on screen permanently. Genuinely permanent since Task 6 made the
-     strip double as the only nav affordance onto /accounts: AccountsStrip
-     used to render null (and this rule hid the now-empty bar with it) while
-     no telemetry had landed, or while every lane was disabled — exactly the
-     state the accounts screen exists to explain, so hiding its only door
-     there was the bug, not a feature. AccountsStrip now always renders a
-     non-empty `.accounts-strip`, with a quiet placeholder body in that state,
-     so this bar is never `:empty` and the old auto-hide rule is gone. */
+     strip double as a nav affordance onto /accounts — the ONLY one until D-161
+     gave the fleet header a named control, a readout of meters reading as data
+     rather than as navigation: AccountsStrip used to render null (and this rule
+     hid the now-empty bar with it) while no telemetry had landed, or while every
+     lane was disabled — exactly the state the accounts screen exists to explain,
+     so hiding what was then its only door there was the bug, not a feature.
+     AccountsStrip now always renders a non-empty `.accounts-strip`, with a quiet
+     placeholder body in that state, so this bar is never `:empty` and the old
+     auto-hide rule is gone. */
   .shell-accounts {
     grid-column: 1 / -1;
     grid-row: 1;

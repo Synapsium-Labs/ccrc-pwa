@@ -20,7 +20,7 @@ import { formatAge, formatReset } from '../fleet/formatReset';
 import { sessionLabel } from '../fleet/sessionLabel';
 import { accountColorVar, accountLabel, homeAbleLabelList, rosterWrapperIds } from '../lib/accounts';
 import { api, apiErrorText } from '../lib/api';
-import { raiseAuthLost, readAuthStatus } from '../lib/auth';
+import { authPostureChanged, raiseAuthLost, readAuthStatus } from '../lib/auth';
 import { PasskeyCeremonyError, enrollPasskey, passkeyEnrollSupported } from '../lib/passkey';
 import { navigate } from '../lib/router';
 import { useNow } from '../lib/useNow';
@@ -314,6 +314,12 @@ function AuthSection(): ReactNode {
       await enrollPasskey();
       setNote('Passkey added. It can sign you in from now on.');
       refresh();
+      // The box's posture just changed, and something else on screen describes
+      // it: on desktop the fleet sidebar's passphrase-only notice (D-161) is
+      // mounted right beside this pane, and its whole design is that it retires
+      // the instant a passkey exists rather than carrying a dismiss-state.
+      // Announced from the WRITER, not polled by the reader (lib/auth.ts).
+      authPostureChanged();
     } catch (err) {
       // The ceremony's own failure and the box's refusal read differently, for
       // `LoginScreen`'s reason: telling someone their key was rejected when they
@@ -333,6 +339,10 @@ function AuthSection(): ReactNode {
       await api.revokePasskey(id);
       setNote('Passkey revoked. It cannot sign in again.');
       refresh();
+      // Same announcement as enrolment, and needed in BOTH directions:
+      // revoking the last key puts the box back on the passphrase alone, which
+      // is exactly when the notice has to come back.
+      authPostureChanged();
     } catch (err) {
       setNote(apiErrorText(err));
     } finally {
@@ -387,11 +397,15 @@ function AuthSection(): ReactNode {
 
   /** The session block. Rendered in BOTH passkey branches below — including the
    *  unreadable-file one, where an operator whose credential store is broken
-   *  still has every right to end their own session. */
+   *  still has every right to end their own session.
+   *
+   *  `.auth-block`, not `.accounts-row` (D-161) — see the passkey block's own
+   *  note below; this block had the identical problem, reading as a fleet
+   *  account named "This session". */
   const sessionBlock = (
-    <section className="accounts-row" aria-labelledby="session-title">
-      <div className="accounts-row-head">
-        <span className="account-gauge-label" id="session-title">This session</span>
+    <section className="auth-block" aria-labelledby="session-title">
+      <div className="auth-block-head">
+        <h2 className="auth-block-title" id="session-title">This session</h2>
       </div>
       <p className="accounts-fresh">
         Signing out ends this browser&rsquo;s session only &mdash; other devices stay signed in, and
@@ -419,10 +433,11 @@ function AuthSection(): ReactNode {
   if (list?.storeUnreadable === true) {
     return (
       <>
-        <section className="accounts-row" aria-labelledby="passkeys-title">
-          <div className="accounts-row-head">
-            <span className="account-gauge-label" id="passkeys-title">Passkeys</span>
+        <section className="auth-block" aria-labelledby="auth-title">
+          <div className="auth-block-head">
+            <h2 className="auth-block-title" id="auth-title">Your sign-in</h2>
           </div>
+          <h3 className="auth-block-sub" id="passkeys-title">Passkeys</h3>
           {/* THE PATH IS HEDGED, NOT ASSERTED (D-153). `CCRC_PASSKEYS_PATH` can
               redirect this file, and a BROWSER is the one surface in this tree
               that genuinely cannot resolve it — there is no route that
@@ -446,10 +461,18 @@ function AuthSection(): ReactNode {
 
   return (
     <>
-    <section className="accounts-row" aria-labelledby="passkeys-title">
-      <div className="accounts-row-head">
-        <span className="account-gauge-label" id="passkeys-title">Passkeys</span>
+    {/* THIS BLOCK IS NOT AN ACCOUNT (D-161). It used to be a `.accounts-row`
+        whose label was an `.account-gauge-label` — the same two classes every
+        Claude account row above wears — so "Passkeys" scanned as a fifth fleet
+        account named Passkeys, sitting in the same list as claude2 and gpt. It
+        gets its own class and a heading that says WHOSE it is; "Passkeys"
+        survives one level down, where it belongs, as the label of the list of
+        keys rather than as the block's identity. */}
+    <section className="auth-block" aria-labelledby="auth-title">
+      <div className="auth-block-head">
+        <h2 className="auth-block-title" id="auth-title">Your sign-in</h2>
       </div>
+      <h3 className="auth-block-sub" id="passkeys-title">Passkeys</h3>
       <p className="accounts-fresh">
         {count === 0
           ? 'No passkey is enrolled on this box — the passphrase is the only way in.'
@@ -463,7 +486,10 @@ function AuthSection(): ReactNode {
           user-agent — attacker-controlled text — and is rendered as TEXT, which
           React does by default. */}
       {list !== null && list.credentials.length > 0 && (
-        <ul className="accounts-sessions">
+        /* `aria-labelledby` moved DOWN here with the heading (D-161): the
+           section is "Your sign-in" now, and "Passkeys" labels the list it
+           actually describes. */
+        <ul className="accounts-sessions" aria-labelledby="passkeys-title">
           {list.credentials.map((c) => (
             <li key={c.credentialIdB64url}>
               <span className="acct-win">{c.label}</span>

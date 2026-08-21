@@ -13,6 +13,7 @@ import { FleetHostBanner } from '../fleet/FleetHostBanner';
 import { SubstrateBanner } from '../fleet/SubstrateBanner';
 import { MailBadge } from '../fleet/MailBadge';
 import { NotificationBell } from '../fleet/NotificationBell';
+import { PasskeyNotice } from '../fleet/PasskeyNotice';
 import { groupFleet } from '../fleet/groupFleet';
 import { ProjectCard } from '../fleet/ProjectCard';
 import { SessionActionsSheet } from '../fleet/SessionActionsSheet';
@@ -237,6 +238,31 @@ export function FleetScreen({
         <span className="wordmark">ccrc</span>
         <div className="fleet-head-right">
           {sessions.length > 0 && <span className="fleet-count">{countLine}</span>}
+          {/* THE DURABLE DOOR TO /accounts (D-161). The AccountsStrip tap
+              target was the only one — its own comment says so — and its
+              accessible name is "account usage — open accounts": a full-width
+              readout of 5h/7d meters, which reads as DATA and not as
+              navigation. /runs, /archive and /mail each have an explicit
+              control; the screen carrying the passkey enrolment button and the
+              sign-out button had none, so the operator hunting for it on a
+              laptop never found the screen at all. The strip STAYS a door (a
+              second one costs nothing and it is where a gauge is being looked
+              at anyway); this is the one that says what it is.
+
+              A SHORT TEXT LABEL, not a lone glyph: icon-only would be exactly
+              as undiscoverable as the strip, which is the defect. The
+              accessible name names both halves of the screen — sign-in and
+              accounts — because "Account" alone is what the strip already
+              failed to communicate. */}
+          <button
+            type="button"
+            className="accounts-door"
+            aria-label="Your sign-in and accounts"
+            onClick={() => navigate('/accounts')}
+          >
+            <span className="accounts-door-glyph" aria-hidden="true">🔑</span>
+            Account
+          </button>
           <MailBadge unread={unreadMail} />
           <NotificationBell />
         </div>
@@ -281,9 +307,21 @@ export function FleetScreen({
           branch below, not just the populated one. It used to sit only in
           the third (populated) arm, so a fresh fleet with zero sessions ever
           started (the first-run panel, mobile's only view of the strip)
-          rendered no accounts strip at all — the app's only door to
-          /accounts, gone in the exact state a new operator hits first. */}
+          rendered no accounts strip at all — and at the time that was the
+          app's only door to /accounts, gone in the exact state a new operator
+          hits first. It is not the only door any more (the header control
+          above, D-161); the rule that a door must never render nothing is
+          unchanged. */}
       {showAccounts && <AccountsStrip />}
+
+      {/* The passphrase-only notice (D-161) — renders ITSELF or nothing, from
+          the box's own posture, so it is mounted unconditionally here for the
+          same reason AccountsStrip and the runs row are: every branch below
+          needs it, and a first-run box with zero sessions is the one most
+          likely to have a gate armed and no passkey on it yet. Outside
+          `showAccounts` too — that flag is about which surface owns the
+          accounts STRIP (top bar vs fleet list), and this is not it. */}
+      <PasskeyNotice />
 
       {/* The only door to /runs (fix, review finding 20) — moved OUT of the
           populated arm for the identical reason `AccountsStrip` was, three

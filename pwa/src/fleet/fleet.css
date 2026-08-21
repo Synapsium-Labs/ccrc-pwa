@@ -1598,6 +1598,54 @@
   cursor: pointer;
 }
 
+/* — Your sign-in, which is NOT one of your accounts (D-161) —
+   The passkey block and the session block used to be `.accounts-row` with an
+   `.account-gauge-label` — the two classes a claude2/gpt row wears — so
+   "Passkeys" read as a fifth fleet account in the same list. They keep the
+   card treatment (the same `--bg-surface` ground every child's ink pair is
+   already vetted against) and take their own identity from a real heading
+   instead of an account label. */
+.auth-block {
+  display: grid;
+  gap: 4px;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--bg-surface);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+}
+.auth-block-head { display: flex; align-items: center; gap: var(--sp-2); }
+.auth-block-title {
+  font: var(--weight-semibold) var(--text-sm) / var(--leading-tight) var(--font-ui);
+  color: var(--ink-primary);
+}
+/* "Passkeys" one level down — an eyebrow over the list it labels, in the same
+   muted mono as `.accounts-fresh` right beside it. */
+.auth-block-sub {
+  font: var(--weight-medium) var(--text-2xs) / 1.25 var(--font-mono);
+  color: var(--ink-tertiary);
+  letter-spacing: 0.04em;
+  margin-top: 2px;
+}
+
+/* — The passphrase-only notice (D-161) —
+   A row, not a banner: `.notice` is for something that HAPPENED and can be
+   dismissed; this states a standing fact about the box and retires itself when
+   the fact changes (PasskeyNotice.tsx). Same card trio as `.auth-block` above
+   so it reads as belonging to the same subject, and the same tap floor every
+   other full-width fleet row carries. */
+.passkey-notice {
+  width: 100%;
+  min-height: var(--tap-min);
+  padding: var(--sp-1) var(--sp-3);
+  text-align: left;
+  background: var(--bg-surface);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  color: var(--ink-secondary);
+  font: var(--weight-medium) var(--text-2xs) / 1.4 var(--font-mono);
+  cursor: pointer;
+}
+
 /* — Build 7: the mail door and the feed —
    No glow anywhere below: a record is not a living pane (DIRECTION.md's
    refused list). "Unread" is a rule in the accent on the leading edge, never
@@ -1620,6 +1668,31 @@
   font: var(--weight-semibold) var(--text-2xs) / 1.6 var(--font-mono);
   font-variant-numeric: tabular-nums;
 }
+/* — The durable door to /accounts (D-161) —
+   A separate rule rather than joining `.mail-badge`'s group, for the reason
+   `.accounts-back` gives beside `.chat-back`: the two controls are the same
+   SHAPE today and are not the same thing, and one of them carries a text
+   label. Same box, same already-vetted pair (`--ink-secondary` on the header's
+   inherited ground, no background of its own), same 44px floor — a header
+   control that is 20px high on a phone is not tappable.
+
+   It has a TEXT label on purpose. Icon-only would leave it exactly as
+   undiscoverable as the AccountsStrip tap target it exists to supplement,
+   which is the entire defect (FleetScreen.tsx carries that story). */
+.accounts-door {
+  display: inline-flex; align-items: center; gap: 5px;
+  min-height: var(--tap-min); padding: 0 var(--sp-1);
+  border: 0; border-radius: var(--r-sm);
+  background: none; color: var(--ink-secondary);
+  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift), color var(--dur-fast) var(--ease-swift);
+}
+.accounts-door:active { transform: scale(0.88); color: var(--ink-primary); }
+/* The glyph is decoration beside the word, so it is aria-hidden in the markup
+   and sized in the UI font — the label is what carries the meaning. */
+.accounts-door-glyph { font-family: var(--font-ui); font-size: var(--text-xs); line-height: 1; }
+
 .mail-screen { display: grid; gap: var(--sp-2); padding: var(--sp-2); }
 .mail-head { display: flex; align-items: center; gap: var(--sp-2); }
 .mail-back {
