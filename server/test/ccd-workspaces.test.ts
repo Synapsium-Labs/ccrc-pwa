@@ -1081,8 +1081,12 @@ describe('gh containment is the harness\'s, not the caller\'s', () => {
         // it like everything else — opting out of one boundary is not a way out
         // of the other.
         if (window.includes('SYSTEMD-OPT-OUT IS THE ASSERTION')) return;
+        // Substring, not the exact `{ systemd: true }` literal: `ccdWsHelpers.ts`'s
+        // own two call sites now ask `{ systemd: true, tmux: true }` (wave 2's
+        // tmux poison), and the invariant this scan checks is "did this call
+        // site ask for systemd containment", not "does it ask for ONLY that".
         expect(window, `${f}:${i + 1} runs ccd without asking for systemd containment`)
-          .toContain('{ systemd: true }');
+          .toContain('systemd: true');
         asked++;
       });
     }
