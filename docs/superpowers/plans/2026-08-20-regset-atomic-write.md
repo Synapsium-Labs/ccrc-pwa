@@ -1265,12 +1265,18 @@ Then send the `wave-done` mail with `{branchTip, prNumber, prPhase:"open", hando
   project named `.prstate-demo` with slug `quiet-basin` gives id `.prstate-demo-quiet-basin`, whose
   purge glob matches `$REG/.prstate-demo-quiet-basin.lock`, the pr-state lock of the UNRELATED
   session `demo-quiet-basin`. Unlinking a lock while another process holds it is exactly how two
-  processes come to hold "the lock" on two different inodes. The class is wider than one file, all
-  three verified: `.prstate-<id>.lock` (new this wave, the lock `_pr_py`'s migration off `.uuid`
-  introduced), `.reap-<id>.lock`, and `.ws-add-<project>.lock` (the latter two pre-date this wave).
-  `$REG/.reaped/` and `$REG/.tmux-server.lock` are NOT reachable this way — no `<project>-<slug>` id
-  produces a matching glob for either — and `_reg_set`'s own tmps are unreachable too, since their
-  suffix holds dots and `_reg_purge`'s `*.*` skip already excludes them.
+  processes come to hold "the lock" on two different inodes. THE RULE is wider than any one file: a
+  dot-leading project aliases EVERY `$REG/.<name>.<dot-free-suffix>` file ccd owns. Four known
+  instances illustrate it, all verified: `.prstate-<id>.lock` (new this wave, the lock `_pr_py`'s
+  migration off `.uuid` introduced), `.reap-<id>.lock`, `.ws-add-<project>.lock`, and
+  `.tmux-server.lock` (the latter three pre-date this wave) — project `.tmux` with slug `server`
+  gives id `.tmux-server`, whose purge glob matches `$REG/.tmux-server.lock`, the blocking flock
+  `_tmux_new_session` takes; `server` passes `_ws_slug_valid` exactly as the other three slugs do,
+  no more contrived. Seven dot-prefixed artifacts live under `$REG`; these four are reachable this
+  way and three are not: `$REG/.reaped/` (a directory, not a `.reaped.<suffix>` file — no id's
+  purge glob matches a bare directory, and `rm -f` cannot take one regardless), `_reg_set`'s own
+  tmps, and session-hook.sh's `.$id.$$.hookstate.tmp` — the last two unreachable because their
+  suffix carries a second dot, which `_reg_purge`'s own `*.*` skip already excludes.
   **Fixed** by refusing a leading dot in project validation at the CREATION sites only — a new
   `_ws_project_valid` helper (beside `_ws_slug_valid`), wired into `cmd_ws_add` and `cmd_start`, the
   two verbs that mint a NEW registry row for a project. **Deliberately left alone**: `cmd_pr_state`'s
@@ -1286,5 +1292,25 @@ Then send the `wave-done` mail with `{branchTip, prNumber, prPhase:"open", hando
   after. Mutation-measured: deleting the `[[ "$1" != .* ]]` line from `_ws_project_valid` turns both
   refusal tests RED again (mutant-killed), confirming the guard is load-bearing rather than
   decorative.
+
+- **D-139 (2026-08-21, wave review round)** — D-138 closes the CREATION side; `_pr_py`'s pr-state
+  lock has its own residual, disclosed rather than closed. Measured under a `$REG` at `chmod 0555`
+  (readable, not writable): an EXISTING `.prstate-<id>.lock` opens (`open(path, 'a')`) and its flock
+  is taken, fine; the FIRST-EVER `.prstate-<id>.lock` for a session raises `PermissionError` at that
+  same open, because it must CREATE the file, which needs write on the DIRECTORY; an append to an
+  EXISTING `.prhistory` (also `open(path, 'a')`) is fine too, because appending needs write on the
+  FILE, not the directory; and both `clear`'s `os.remove` and `put`'s tmp-create raise
+  `PermissionError`, because both need write on the DIRECTORY (D-132). So for a session that has
+  never run `pr-state` under an unwritable `$REG`: the lock cannot be created, the compare-and-set
+  proceeds UNLOCKED, and two concurrent runs can each reach the prhistory append — the
+  duplicate-append harm the lock exists to prevent — before both die at `clear`/`put`. The result is
+  a duplicated PR lineage record, which `_ws_archive_manifest` folds into the archive manifest
+  verbatim.
+  **Ruling: DISCLOSED, NOT CLOSED.** It takes a read-only `$REG` AND concurrent `pr-state` runs AND a
+  session with no lock file yet — all three at once — and the natural closes each trade this rare
+  duplicate for a worse ordinary-case cost: locking `.prhistory` itself adds a new inode-stability
+  assumption to the hot path, and skipping the append when unlocked loses a lineage record in the
+  ordinary no-`fcntl` fallback (no `flock` binary, not an unwritable `$REG`) — both worse trades for
+  a state in which the registry is already unwritable.
 
 <!-- Execution appends D-129… here, with measured before/after counts for every mutation claim. -->

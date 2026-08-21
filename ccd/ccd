@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=a7a1f4601d97df5641bd6818d64511215996deb061f62c0a719d67cbd6bdfb23
+# ccrc:generated 1 sha256=41dd14d820879cf2b5a671bc20cfc54013b2afeba419674dc0a0d8e954141144
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box, not on this file: `_rc_enabled` reads
@@ -1377,9 +1377,32 @@ if mode == 'state':
     # READ-ONLY open did. In the other direction, the old condition list also
     # carried "no `.uuid` at all" — a lock that could not be taken because the
     # field had not been written yet — and this one cannot hit that, which is
-    # a strict improvement. The widened state is unreachable in practice: a
-    # `$REG` nothing may create a file in already makes `put()` raise (D-132),
-    # so `cmd_pr_state` fails before an unlocked compare-and-set could matter.
+    # a strict improvement. The widened state is a REAL residual, not a dead
+    # one — measured, not assumed. Under a `$REG` at `chmod 0555` (readable,
+    # not writable): an EXISTING `.prstate-<id>.lock` opens (`open(path, 'a')`)
+    # and its flock is taken, fine; the FIRST-EVER `.prstate-<id>.lock` for a
+    # session raises `PermissionError` at that same open, because THIS open
+    # must CREATE the file, which needs write on the DIRECTORY; an append to
+    # an EXISTING `.prhistory` (`open(path, 'a')`, below) is fine too, because
+    # appending needs write on the FILE, not the directory — the unwritable
+    # `$REG` never touches it; and `clear`'s `os.remove` and `put`'s tmp-create
+    # both raise `PermissionError`, because both need write on the DIRECTORY
+    # (D-132). So for a session that has never run `pr-state` under an
+    # unwritable `$REG`: the lock cannot be created, the compare-and-set below
+    # proceeds UNLOCKED, and two concurrent runs can each reach the prhistory
+    # append — the duplicate-append harm this lock exists to prevent — before
+    # both die at `clear`/`put`. The result is a duplicated PR lineage record,
+    # which `_ws_archive_manifest` later folds into the archive manifest
+    # verbatim.
+    #
+    # DISCLOSED, NOT CLOSED (ruling, D-139). It takes a read-only `$REG` AND
+    # concurrent `pr-state` runs AND a session with no lock file yet — all
+    # three at once — and the natural closes each trade this rare duplicate
+    # for a worse ordinary-case cost: locking `.prhistory` itself adds a new
+    # inode-stability assumption to the hot path, and skipping the append when
+    # unlocked loses a lineage record in the ordinary no-`fcntl` fallback (no
+    # `flock` binary, not an unwritable `$REG`) — both worse trades for a
+    # state in which the registry is already unwritable.
     #
     # THE GUARANTEE IS UNCHANGED, and it is the part that matters: if the lock
     # cannot be taken AT ALL — the state above, or a filesystem whose `flock`
@@ -1489,18 +1512,33 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # R-3, wave review. Ids are `<project>-<slug>`, and `_reg_purge` unlinks
 # `"$REG/$id".*` for every dot-free suffix — so a PROJECT with a LEADING DOT
 # mints an id that ALIASES one of ccd's own hidden, dot-prefixed registry
-# files for an unrelated session. Three named instances, verified: project
-# `.prstate-demo` + slug `quiet-basin` -> id `.prstate-demo-quiet-basin`,
-# whose purge glob matches `$REG/.prstate-demo-quiet-basin.lock` — the
-# PR-STATE LOCK of the unrelated session `demo-quiet-basin` (new this wave,
-# the lock `_pr_py`'s migration off `.uuid` introduced); project `.reap-demo`
-# + slug `quiet-basin` aliases that same session's REAP LOCK,
-# `$REG/.reap-demo-quiet-basin.lock` (pre-dates this wave); project `.ws-add`
-# + slug `demo` -> id `.ws-add-demo`, aliasing the WS-ADD LOCK for project
-# `demo`, `$REG/.ws-add-demo.lock` (pre-dates this wave). Unlinking a lock
-# file while another process holds it is exactly how two processes come to
-# hold "the lock" on two different inodes — reopening the double
-# compare-and-set this branch's lock migration closed.
+# files for an unrelated session. THE RULE, not a fixed list: a dot-leading
+# project aliases EVERY `$REG/.<name>.<dot-free-suffix>` file ccd owns. Four
+# known instances illustrate it, all verified: project `.prstate-demo` +
+# slug `quiet-basin` -> id `.prstate-demo-quiet-basin`, whose purge glob
+# matches `$REG/.prstate-demo-quiet-basin.lock` — the PR-STATE LOCK of the
+# unrelated session `demo-quiet-basin` (new this wave, the lock `_pr_py`'s
+# migration off `.uuid` introduced); project `.reap-demo` + slug
+# `quiet-basin` aliases that same session's REAP LOCK,
+# `$REG/.reap-demo-quiet-basin.lock` (pre-dates this wave); project
+# `.ws-add` + slug `demo` -> id `.ws-add-demo`, aliasing the WS-ADD LOCK for
+# project `demo`, `$REG/.ws-add-demo.lock` (pre-dates this wave); and
+# project `.tmux` + slug `server` -> id `.tmux-server`, aliasing the
+# TMUX-SERVER LOCK `$REG/.tmux-server.lock` that `_tmux_new_session` takes
+# (pre-dates this wave) — `server` passes `_ws_slug_valid` exactly as the
+# other three slugs do, no more contrived. Unlinking a lock file while
+# another process holds it is exactly how two processes come to hold "the
+# lock" on two different inodes — reopening the double compare-and-set this
+# branch's lock migration closed.
+#
+# NOT reachable this way, and this set IS the boundary — seven dot-prefixed
+# artifacts live under `$REG`; the four above are reachable, these three are
+# not: `$REG/.reaped/` (a directory, not a `.reaped.<suffix>` file — no id's
+# purge glob matches a bare directory, and `rm -f` cannot take one
+# regardless); `_reg_set`'s own tmps; and session-hook.sh's
+# `.$id.$$.hookstate.tmp` — the last two ARE candidate glob matches when
+# `<id>` is the aliasing id, but their suffix after the match carries a
+# SECOND dot, which is exactly what `_reg_purge`'s own `*.*` skip excludes.
 #
 # Enforced at CREATION ONLY — `cmd_ws_add` and `cmd_start`, the two sites
 # that mint a NEW registry row for a project — never at `cmd_pr_state`'s two
