@@ -33,7 +33,7 @@ is a partial description of it. This workstream closes that gap.
 | Exposure | HTTPS on a real name; PWA requires a secure context | Service workers, install prompts, push — the PWA is the product surface |
 | Naming | Pluggable name+cert acquisition: free dynamic-DNS subdomain as the zero-homework default, bring-your-own domain as the same code path; a ccrc-operated subdomain service (`you.ccrc.app`) is a LATER third provider and the natural business feature | v1 ships no central infrastructure this project must keep alive; the provider seam is where the paid tier slots in without redesign |
 | TLS termination | Installer-managed Caddy in front; ccrc stays plain HTTP on localhost | ACME issuance/renewal is Caddy's core competency, not surface we should own; bring-your-own-proxy users skip it |
-| Auth mechanism | Passphrase set at install (scrypt-hashed, server-side sessions, rate-limited) + optional WebAuthn passkey enrolled after first login | The PWA lives on a phone; passkeys are the right ergonomics there. Recovery = `ccrc passwd` run locally on the box (i.e. over SSH) — see §6 |
+| Auth mechanism | Passphrase set by `ccrc passwd` immediately after install — install itself writes none, since under `curl \| bash` stdin is the script (shipped 3a deviation) — scrypt-hashed, server-side sessions, rate-limited + optional WebAuthn passkey enrolled after first login | The PWA lives on a phone; passkeys are the right ergonomics there. Recovery = `ccrc passwd` run locally on the box (i.e. over SSH) — see §6 |
 | Remote control | `--remote-control` becomes per-install config (`CCRC_REMOTE_CONTROL`); default **off** for OSS installs | Nothing in ccrc's data/control path uses it (prompts go via tmux send-keys, chat via transcripts); it exists to make sessions discoverable on claude.ai — a second UI the ccrc PWA supersedes — and it costs render workarounds (fleet.ts:93, inject/send.ts:559). CAVEAT: ccd's pane-parsing heuristics were calibrated against RC-mode rendering, so the off-mode needs validation, not just a flag (Stage 2) |
 | License | AGPL-3.0, sole copyright holder | Protects the future team edition from hosted-fork competition; dual licensing stays available for the commercial edition |
 | Lifecycle CLI | New thin `ccrc` command (install/update/doctor/status/logs/backup/uninstall) | ccd is versioned BY the thing the updater replaces — the updater must live outside it (the in-place-overwrite bug class PR #28 just fixed, one level up). ccd remains the session tool |
@@ -104,7 +104,9 @@ Role is per box: `server`, `fleet`, or `both` (single-box).
 tarball, verifies its checksum, unpacks, and hands off to `ccrc install`:
 
 1. Asks the minimum: box role (both/server/fleet), how this box gets its name
-   (§6), projects root (default `$HOME/projects`), passphrase (also §6, Auth).
+   (§6), projects root (default `$HOME/projects`). The passphrase is NOT asked
+   here: install never prompts for it (`curl | bash` stdin is the script — 3a's
+   shipped deviation); `ccrc passwd` right after install is the step (§6, Auth).
    (This is the stage-3 end state; the stage-2 installer skips the
    naming/exposure step entirely and configures localhost-only exposure.)
 2. Writes `~/.ccrc/ccrc.env` + `~/.ccrc/accounts.json` (single `claude`
@@ -162,7 +164,9 @@ Caddy step; the documented contract is "terminate TLS, forward to
 value). ccrc itself never speaks TLS and listens on loopback only.
 
 **Auth:** server-side sessions (HttpOnly cookie), a login page, a passphrase
-created at install (scrypt-hashed, stored in `~/.ccrc`), rate-limited login,
+created by `ccrc passwd` right after install (install itself never prompts —
+under `curl | bash` stdin is the script; scrypt-hashed, stored in `~/.ccrc`),
+rate-limited login,
 optional WebAuthn passkey enrollment after first login. Recovery:
 `ccrc passwd`, run locally on the box (i.e. over SSH), rewrites the scrypt
 hash, invalidates all server-side sessions, and leaves enrolled passkeys

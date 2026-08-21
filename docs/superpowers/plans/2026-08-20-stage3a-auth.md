@@ -44,7 +44,7 @@
 
 **Interfaces produces:** `LoginRequest {passphrase}`; `LoginResponse` (empty 204 on success — the cookie IS the response); `AuthStatus {authed: boolean, passkeysEnrolled: number, mode: 'off'|'passphrase'|'locked-out'}`; `AUTH_VERDICTS` union derived from an `AUTH_VERDICT_MAP` (`'ok'|'wrong'|'unconfigured'|'locked-out'|'expired'|'no-session'`) + `isAuthVerdict`; WebAuthn wire types (`PasskeyRegisterStart/Finish`, `PasskeyAssertStart/Finish` — the client→server shapes carrying base64url SPKI + authenticatorData + clientDataJSON + signature). NO `FLEET_PROTO` bump.
 
-- [ ] Step 1: RED — a shared-type contract test (the `AccountsResponse` precedent) asserting the union derives from the map and the request/response shapes exist. Step 2: GREEN — declare them. Step 3: single-definition + module-format green (new `shared` type is covered automatically). Commit `feat(auth): the wire vocabulary — verdicts derived, no proto bump`.
+- [x] Step 1: RED — a shared-type contract test (the `AccountsResponse` precedent) asserting the union derives from the map and the request/response shapes exist. Step 2: GREEN — declare them. Step 3: single-definition + module-format green (new `shared` type is covered automatically). Commit `feat(auth): the wire vocabulary — verdicts derived, no proto bump`.
 
 ### Task 2: The passphrase file — reader, scrypt verify, generation (L2)
 
@@ -52,7 +52,7 @@
 
 **Interfaces:** `readAuthSecret(path): AuthSecret | null` (null = ENOENT only; every other errno throws `AuthSecretUnusable`, uncaught → boot refusal); `AuthSecret {n,r,p,saltB64,hashB64,generation}` parsed from the PHC-ish line; `verifyPassphrase(secret, presented): Promise<boolean>` (async `crypto.scrypt`, `timingSafeEqual`, length-check-first); `hashLine(passphrase, params): Promise<string>` (used by the node helper AND testable here). A placeholder-detection refusal if any `auth.scrypt.example` ever ships (recommend: ship none).
 
-- [ ] Steps: RED per state (absent→null; garbled→throws; wrong-length hash→throws; correct passphrase→true; wrong→false; a lower-N old line still verifies and is flagged for rehash); GREEN mirroring `token.ts`'s errno discipline with the inverted polarity documented; scrypt params `N=65536,r=8,p=1,keylen=32,maxmem=96MiB`, 16-byte salt; mutations: collapse EACCES→null (red); drop the length check (red). Commit `feat(auth): the passphrase file reads like the mail token but fails shut`.
+- [x] Steps: RED per state (absent→null; garbled→throws; wrong-length hash→throws; correct passphrase→true; wrong→false; a lower-N old line still verifies and is flagged for rehash); GREEN mirroring `token.ts`'s errno discipline with the inverted polarity documented; scrypt params `N=65536,r=8,p=1,keylen=32,maxmem=96MiB`, 16-byte salt; mutations: collapse EACCES→null (red); drop the length check (red). Commit `feat(auth): the passphrase file reads like the mail token but fails shut`.
 
 ### Task 3: The session store (L2/L3)
 
@@ -60,7 +60,7 @@
 
 **Interfaces:** `SessionStore` over `~/.ccrc/sessions.json` (0600, tmp+rename, NotifyLog flush-chain serialization); `create(label, generation): token` (256-bit `randomBytes`, stores `sha256(token)` never the token); `verify(token, currentGeneration, now): AuthVerdict` (`timingSafeEqual` on the hash; generation mismatch → `'expired'`; absolute+idle TTL); `revokeAll()`; a sweep on load and on a minutes-cadence timer. `lastSeenAt` held in memory, persisted on create/delete + periodic flush (a restart falls back to absolute TTL — documented).
 
-- [ ] Steps: RED (create→verify roundtrip; sha256 stored not token; generation bump → all `'expired'`; absolute TTL expiry; corrupt file → the store refuses ONE caller, never throws to boot; concurrent create/delete lands both, no torn rename — the NotifyLog hazard); GREEN; mutations: store the raw token (red — the "never the token" test); skip generation compare (red). Commit `feat(auth): sessions are a flat file whose loss is free`.
+- [x] Steps: RED (create→verify roundtrip; sha256 stored not token; generation bump → all `'expired'`; absolute TTL expiry; corrupt file → the store refuses ONE caller, never throws to boot; concurrent create/delete lands both, no torn rename — the NotifyLog hazard); GREEN; mutations: store the raw token (red — the "never the token" test); skip generation compare (red). Commit `feat(auth): sessions are a flat file whose loss is free`.
 
 ### Task 4: The rate limiter (L1 pure policy)
 
@@ -68,7 +68,7 @@
 
 **Interfaces:** `loginVerdict(state, now): {ok, state, retryAfter?}` — a pure global fixed-window over FAILURES (reset on success), ~8/60s, escalating window optional; the L4 lifetime (the single in-memory `{windowStart,count}`, `fleet.ts:149`'s in-memory-per-process idiom) is a thin wrapper. Counts failures not attempts; the KDF is the real brake (documented threat paragraph).
 
-- [ ] Steps: RED (under-limit ok; over-limit locked with retryAfter; window rollover resets; success resets); GREEN, pure function no `Date.now()` inside (now injected); mutation: count attempts instead of failures (red — the fat-finger-then-succeed test). Commit `feat(auth): a global fixed window brakes login; the KDF does the rest`.
+- [x] Steps: RED (under-limit ok; over-limit locked with retryAfter; window rollover resets; success resets); GREEN, pure function no `Date.now()` inside (now injected); mutation: count attempts instead of failures (red — the fat-finger-then-succeed test). Commit `feat(auth): a global fixed window brakes login; the KDF does the rest`.
 
 ### Task 5: The gate hook, cookies, and the login/logout/status routes (L4) — THE CORE
 
@@ -76,12 +76,12 @@
 
 **Interfaces:** `authVerdict(req, deps, now): {allow: boolean, verdict: AuthVerdict}` (pure over the exempt set + cookie + session store + flag); `installGate(app, deps)` adds the single onRequest hook; `parseCookies`/`serializeCookie` (HttpOnly, `SameSite=Lax`, `Secure` from `deps.cfg.cookieSecure`, `Path=/`, `Max-Age`). Login: rate-limit → verify passphrase → mint session → Set-Cookie → 204. Logout: revoke this session, clear cookie. Status: the `AuthStatus`.
 
-- [ ] Step 1: RED — the SWEEP: source-scan every `app.(get|post|...)('...')` in server.ts + coord/routes.ts into a table; the named `EXEMPT` set (health, the 9 box-token lanes + notify, `/api/auth/login`, the static/SPA login surface); assert every non-exempt route answers 401 with no cookie (`inject`) and every websocket answers 401 (`injectWS` — first repo use); assert EXEMPT is complete in both directions; a scanner-matches-something meta-test.
-- [ ] Step 2: RED — the flag: with `CCRC_AUTH=off` the gate is passthrough (every route reachable, the pre-slice behavior); with `on` and no cookie, 401; with a valid cookie, through.
-- [ ] Step 3: GREEN — the hook reads `request.ws` (the plugin sets it) to answer a bare 401 on upgrades vs JSON on HTTP; the exempt check is a set membership on the routerPath, not the raw url (so `/api/mail/:id` matches its param route); scrypt async in the login route.
-- [ ] Step 4: the cookie attributes pinned (Secure driven by config, measured both ways); the login rate-limit path; logout revocation; status shape.
-- [ ] Step 5: MUTATIONS — delete the hook → the sweep reds (the load-bearing measurement); make the exempt check compare raw url → a param-route test reds; derive Secure from `req.protocol` → the behind-proxy test reds. Record all.
-- [ ] Step 6: full server suite; commit `feat(auth): one hook gates every route and socket; login mints a cookie session`.
+- [x] Step 1: RED — the SWEEP: source-scan every `app.(get|post|...)('...')` in server.ts + coord/routes.ts into a table; the named `EXEMPT` set (health, the 9 box-token lanes + notify, `/api/auth/login`, the static/SPA login surface); assert every non-exempt route answers 401 with no cookie (`inject`) and every websocket answers 401 (`injectWS` — first repo use); assert EXEMPT is complete in both directions; a scanner-matches-something meta-test.
+- [x] Step 2: RED — the flag: with `CCRC_AUTH=off` the gate is passthrough (every route reachable, the pre-slice behavior); with `on` and no cookie, 401; with a valid cookie, through.
+- [x] Step 3: GREEN — the hook reads `request.ws` (the plugin sets it) to answer a bare 401 on upgrades vs JSON on HTTP; the exempt check is a set membership on the routerPath, not the raw url (so `/api/mail/:id` matches its param route); scrypt async in the login route.
+- [x] Step 4: the cookie attributes pinned (Secure driven by config, measured both ways); the login rate-limit path; logout revocation; status shape.
+- [x] Step 5: MUTATIONS — delete the hook → the sweep reds (the load-bearing measurement); make the exempt check compare raw url → a param-route test reds; derive Secure from `req.protocol` → the behind-proxy test reds. Record all.
+- [x] Step 6: full server suite; commit `feat(auth): one hook gates every route and socket; login mints a cookie session`.
 
 ### Task 6: (folded into Task 5 — cookie.ts ships there)
 
@@ -89,26 +89,26 @@
 
 **Files:** Modify `pwa/src/lib/api.ts` (the `request` funnel), create a login screen (the `BlockScreen` sibling pattern), modify `pwa/src/lib/ws.ts` + `TerminalDrawer.tsx` (the rejected-upgrade signal); tests beside.
 
-- [ ] Step 1: RED — `request` on a 401 sets a module auth-lost signal (not a throw the callers must each catch); a login screen mounts as an `app.tsx` sibling above the shell (the `BlockScreen` mount) when auth-lost; submitting the passphrase calls `/api/auth/login` and, on 204, clears the signal and reconnects the sockets. The two ws paths (`ReconnectingSocket` + the bare pty `WebSocket`) surface a rejected upgrade as auth-lost rather than reconnect-looping forever.
-- [ ] Step 2: GREEN, minimal — same-origin cookies ride automatically (no send-side change); the login screen is inside the SPA (the service-worker `navigateFallback` trap avoided); a 401 anywhere → one full-screen login, not per-call toasts.
-- [ ] Step 3: mutation — remove the 401 branch → the login-screen-appears test reds. Commit `feat(pwa): a 401 raises the login screen, not an endless reconnect`.
+- [x] Step 1: RED — `request` on a 401 sets a module auth-lost signal (not a throw the callers must each catch); a login screen mounts as an `app.tsx` sibling above the shell (the `BlockScreen` mount) when auth-lost; submitting the passphrase calls `/api/auth/login` and, on 204, clears the signal and reconnects the sockets. The two ws paths (`ReconnectingSocket` + the bare pty `WebSocket`) surface a rejected upgrade as auth-lost rather than reconnect-looping forever.
+- [x] Step 2: GREEN, minimal — same-origin cookies ride automatically (no send-side change); the login screen is inside the SPA (the service-worker `navigateFallback` trap avoided); a 401 anywhere → one full-screen login, not per-call toasts.
+- [x] Step 3: mutation — remove the 401 branch → the login-screen-appears test reds. Commit `feat(pwa): a 401 raises the login screen, not an endless reconnect`.
 
 ### Task 8: WebAuthn passkeys, builtin-crypto only
 
 **Files:** Create `server/src/auth/webauthn.ts` (+ credential storage in the session store's file or a sibling), the `/api/auth/passkey/*` routes, PWA enroll/assert; tests.
 
-- [ ] Registration (after first passphrase login, behind the session gate): server issues a challenge; client `navigator.credentials.create` with `attestation:'none'`; client sends `getPublicKey()` SPKI + `getAuthenticatorData()` + the client-parsed alg; server stores `{credentialId, spkiDer, rpId, origin, signCount, enrolledAt}` — rpId/origin from `CCRC_RP_ID`/`CCRC_ORIGIN` config, RECORDED per credential so a 3b rename fails loudly ("enrolled for localhost — re-enroll"). Trust caveat documented (attestation none + behind-session-gate + single-user).
-- [ ] Assertion: challenge → `navigator.credentials.get` → server verifies `createVerify('SHA256').verify(createPublicKey({key:spkiDer,format:'der',type:'spki'}), authenticatorData ‖ sha256(clientDataJSON), derSignature)`; checks rpIdHash, origin (full `https://host:port`), UP/UV flags, challenge, signCount monotonic; mints a session on success. Rate-limited (looser than passphrase — free CPU oracle otherwise).
-- [ ] The PSL hazard recorded: rpId is the registrable domain (`tailnet-example.ts.net` or `<name>.duckdns.org`, never a bare public suffix); configured, not derived by label-stripping.
-- [ ] Mutations: accept a signature over the wrong message (red); accept a stale signCount (red — replay); wrong-origin assertion (red). Commit `feat(auth): passkeys with node:crypto — no CBOR, no library, origin-bound`.
+- [x] Registration (after first passphrase login, behind the session gate): server issues a challenge; client `navigator.credentials.create` with `attestation:'none'`; client sends `getPublicKey()` SPKI + `getAuthenticatorData()` + the client-parsed alg; server stores `{credentialId, spkiDer, rpId, origin, signCount, enrolledAt}` — rpId/origin from `CCRC_RP_ID`/`CCRC_ORIGIN` config, RECORDED per credential so a 3b rename fails loudly ("enrolled for localhost — re-enroll"). Trust caveat documented (attestation none + behind-session-gate + single-user).
+- [x] Assertion: challenge → `navigator.credentials.get` → server verifies `createVerify('SHA256').verify(createPublicKey({key:spkiDer,format:'der',type:'spki'}), authenticatorData ‖ sha256(clientDataJSON), derSignature)`; checks rpIdHash, origin (full `https://host:port`), UP/UV flags, challenge, signCount monotonic; mints a session on success. Rate-limited (looser than passphrase — free CPU oracle otherwise).
+- [x] The PSL hazard recorded: rpId is the registrable domain (`tailnet-example.ts.net` or `<name>.duckdns.org`, never a bare public suffix); configured, not derived by label-stripping.
+- [x] Mutations: accept a signature over the wrong message (red); accept a stale signCount (red — replay); wrong-origin assertion (red). Commit `feat(auth): passkeys with node:crypto — no CBOR, no library, origin-bound`.
 
 ### Task 9: `ccrc passwd`, the hashing helper, the doctor check
 
 **Files:** Create `deploy/gen-auth-hash.mjs`; modify `ccd/ccrc` (`cmd_passwd`, usage, dispatch, the `auth` doctor check, the install next-steps line); modify `server/test/ccrc-cli.test.ts` (verb regex), `server/test/ccrc-doctor.test.ts`.
 
-- [ ] `cmd_passwd`: `[ -t 0 ]` or die; `read -rs` twice + confirm; min-length; `trap 'stty echo' EXIT INT TERM`; probe `node` by name (the cmd_install idiom); pipe the passphrase on stdin (never argv) to `gen-auth-hash.mjs` which hashes (scryptSync is fine in this one-shot) and writes `~/.ccrc/auth.scrypt` atomically 0600, bumping `generation`; a success line naming that the gate needs `CCRC_AUTH=on` too.
-- [ ] The `auth` doctor check: `off (no ~/.ccrc/auth.scrypt)` → WARN with `ccrc passwd` remedy when the flag is off; FAIL when `CCRC_AUTH=on` but the file is absent (the fail-shut state made visible before a login ever 500s).
-- [ ] `cmd_install`'s landing block gains one next-steps line (install writes NO passphrase — the seed-once/no-prompt doctrine; `curl|bash` stdin hazard). Mutations: verb missing from usage (red); doctor check absent (bijection red); passwd reads a piped passphrase (red — the non-tty refusal test). Commit `feat(ccrc): passwd sets the box passphrase; doctor reports the gate`.
+- [x] `cmd_passwd`: `[ -t 0 ]` or die; `read -rs` twice + confirm; min-length; `trap 'stty echo' EXIT INT TERM`; probe `node` by name (the cmd_install idiom); pipe the passphrase on stdin (never argv) to `gen-auth-hash.mjs` which hashes (scryptSync is fine in this one-shot) and writes `~/.ccrc/auth.scrypt` atomically 0600, bumping `generation`; a success line naming that the gate needs `CCRC_AUTH=on` too.
+- [x] The `auth` doctor check: `off (no ~/.ccrc/auth.scrypt)` → WARN with `ccrc passwd` remedy when the flag is off; FAIL when `CCRC_AUTH=on` but the file is absent (the fail-shut state made visible before a login ever 500s).
+- [x] `cmd_install`'s landing block gains one next-steps line (install writes NO passphrase — the seed-once/no-prompt doctrine; `curl|bash` stdin hazard). Mutations: verb missing from usage (red); doctor check absent (bijection red); passwd reads a piped passphrase (red — the non-tty refusal test). Commit `feat(ccrc): passwd sets the box passphrase; doctor reports the gate`.
 
 ### Task 10: Config, docs, and close-out
 
