@@ -3,7 +3,7 @@
 **Date:** 2026-08-21
 **Status:** design approved in conversation; this document awaits operator review before any plan is written.
 **Depends on:** the `~/.local/bin/claude`-is-not-a-wrapper invariant fix currently in flight on
-`ws/ccrc-adopt-and-wrappers-upstream-account`. That branch must land on `main` first — see §9.4.
+`ws/ccrc-adopt-and-wrappers-upstream-account`. That branch must land on `main` first — see §10.4.
 
 ---
 
@@ -29,6 +29,9 @@ This design adds that vocabulary, then builds the verb on it.
 | **B1** | `ccrc account add` for api-key providers — CLI verb plus a PWA form |
 | **B2** | the OAuth pane flow, shared by `account add` and a new `account reauth` |
 
+Every slice has a UI surface, and they all land on one screen — **§9 gathers them in one place** so the
+PWA work is not scattered across four sections.
+
 Deferred, to be decided with evidence rather than now:
 
 - **C** — kind-aware limits. An API-key account has *spend*, not a weekly *pool*; today it opts out of
@@ -39,7 +42,7 @@ Deferred, to be decided with evidence rather than now:
 ## 3. Evidence base
 
 Every claim below was measured on 2026-08-21 against the installed Claude Code 2.1.238 and the live
-fleet, or read from the shipped source. Claims that could not be evidenced are in §11, not here.
+fleet, or read from the shipped source. Claims that could not be evidenced are in §12, not here.
 
 ### 3.1 Long-lived tokens
 
@@ -263,7 +266,7 @@ export type GeneratedExec = {
     provider: P;
     auth: keyof (typeof PROVIDERS)[P]['auth'];
     secretsFile: string;   // required — a generated account always carries its own credential
-    models?: ModelMap;     // the emitter requires it for every non-anthropic provider (§9.2)
+    models?: ModelMap;     // the emitter requires it for every non-anthropic provider (§10.2)
   };
 }[GeneratableId];
 
@@ -283,7 +286,7 @@ an `external` account cannot carry a model map ccrc would never write.
 
 `secretsFile` survives on **all three** arms — optional on `upstream` (the real binary may authenticate
 from a stored login instead), optional on `external` (a human's wrapper may source nothing ccrc can
-name), required on `generated`. Dropping it from the union would make §9.1's very first row —
+name), required on `generated`. Dropping it from the union would make §10.1's very first row —
 declaring `claude`'s undeclared secrets file — unrepresentable.
 
 The operator still answers exactly one provider and one auth, because `account add` only ever creates
@@ -427,6 +430,8 @@ this design. It is recorded for the plan to weigh, with the false-positive it pr
 
 ## 8. The OAuth flow through the UI — slice B2
 
+*(Where this renders: §9.5.)*
+
 A headless box cannot complete a browser flow, so the URL must reach the operator's phone. The flow is
 interactive and multi-round-trip: `setup-token` must stay alive between "here is the URL" and "here is
 the code", which no one-shot exec frame can carry.
@@ -449,7 +454,7 @@ as a reusable unit**, with two callers. That also sets its priority: with a one-
 refresh (§3.1 item 2), re-authentication is a **recurring** operational chore across five wrapper HOMEs,
 usually performed when something is already broken. It has to be pleasant on a phone.
 
-Because nothing exposes a token's real expiry (§11), ccrc records the **mint date** at `add`/`reauth`
+Because nothing exposes a token's real expiry (§12), ccrc records the **mint date** at `add`/`reauth`
 time and warns ahead of the one-year cliff. That is the only available pre-warning.
 
 ### 8.1 Transport
@@ -460,9 +465,106 @@ secret-bearing route must **refuse unless reached over the HTTPS path** (`tailsc
 gated on the box token like every other coordination write. This is also the first genuine operational
 reason to arm Stage 3a's auth on the live box, which so far has had none.
 
-## 9. Slice A concretely
+## 9. UI surfaces
 
-### 9.1 Commit 1 — the roster tells the truth
+Everything below lands on the **existing** `pwa/src/screens/AccountsScreen.tsx`. No new screen: it
+already polls `GET /api/accounts`, merges roster against usage (`rowOrder`), renders a `Bar` per account
+for the 5h and 7d windows with their reset times, and since Stage 3a hosts `AuthSection` (passkey list,
+revoke, sign out). Provisioning belongs beside the accounts it provisions.
+
+Primitives are reused rather than reinvented: `Sheet` (`open`/`onClose`/`title`/`eyebrow`/`full`),
+`QuickConfirm`, `Toast`, `StatusDot`, `Skeleton`, and `lib/accounts.ts`, which already resolves an
+account's label, hue, colour variable and home-ability from the roster.
+
+### 9.1 The wire field, added once
+
+`RosterWire` is `{ id, label, hue, homeAble }` today. It gains `provider`, `auth` and an availability
+verdict — additively, with no `FLEET_PROTO` bump. The docstring immediately below it in `shared/api.ts`
+records why this must go through the one shared interface: the same shape was once restated by hand in
+the handler's return, the PWA's fetch generic and the route test's cast, and it names that as *"exactly
+the shape of change where two get the new field and the third quietly drops it, with no compiler
+anywhere to notice"*. One interface, three importers.
+
+### 9.2 Slice A — the row tells the truth
+
+Each row gains a **provider chip** and an **availability state**. Three states, never collapsed into a
+boolean:
+
+- **ok** — rostered, credential present here
+- **unavailable here** — rostered, credential absent on this box (§10.1's per-box measurement)
+- **undeclared** — a wrapper exists that no account describes
+
+These are the same three verdicts `ccrc doctor` reports: one vocabulary, two renderers. A divergence
+between what the CLI says and what the row shows is the drift this design exists to end.
+
+**A `telemetry: 'none'` account must not render two 0% bars.** It has no weekly pool, so the `Bar` pair
+is replaced by an explicit "no usage telemetry" state. Two empty bars read as *completely free* — which
+is the PWA-side of the same unknown-is-not-zero rule §3.4 item 28 covers for bash, and the same mistake
+`_ws_least_loaded`'s own comment records having already made once.
+
+### 9.3 Slice A2 — a dead account is visible
+
+The row carries a credential-health state, and a session that cannot authenticate gets a chip in the
+**same slot `swapblocked` already uses** (§7.2) rather than a second chip system.
+
+Health is a cold-path measurement that spends an inference request, so the UI shows **when it was last
+measured** and offers a manual re-check. It never poll-probes: a screen refreshing health on an interval
+would spend one request per account per interval, a cost the operator never asked for.
+
+### 9.4 Slice B1 — Add account, api-key path
+
+A `Sheet` from the Accounts screen: **+ Add account**. Fields in the order §6 establishes — id, provider
+(menu filtered to `GENERATABLE`, so `openai` never appears), the secret as a single password field, and
+the model map for non-Anthropic providers, pre-filled with the known-good default.
+
+- **Submit is gated twice.** The route refuses unless reached over HTTPS carrying the box token (§8.1);
+  the button is *also* disabled, with a stated reason, when the page was loaded over plain HTTP. The
+  disabled button is a courtesy and the route is the mechanism — both, because either alone is wrong.
+- **The sheet does not close on "created".** It stays open through the smoke test, because "account
+  created" is not the signal the operator needs; "account works" is.
+- **Failure states are named, not generic:** id collision, invalid credential (a 401 from the probe),
+  provider unreachable, and the model's provider missing from `providers-whitelist.json`. Each implies a
+  different next action, so each gets its own message.
+- Offline is a refusal, never a half-submit — `lib/offline.ts` exists and the sheet must consult it.
+
+### 9.5 Slice B2 — the OAuth flow, on a phone
+
+The same sheet, subscription path. Once the roster entry and wrapper have converged, a pane runs the
+ccrc-owned helper (§8) and the PWA reads its marker line to render the authorization URL as a **large
+tappable button**, with one code field beneath it. Making that URL tappable *is* the feature: selecting
+a URL out of terminal text on a phone is the failure the marker-line format exists to prevent.
+
+The pane stays viewable behind a disclosure, using the existing session-pane render, so a stuck flow is
+debuggable without leaving the sheet.
+
+**`reauth` reuses this component unchanged**, minus the roster write, entered from the row's own
+overflow rather than from `+ Add account`. With a one-year horizon, no refresh and five wrapper HOMEs
+(§3.1 item 2), re-authentication is a recurring chore usually performed when something is already
+broken — so it earns a first-class entry point on the row, not a buried one.
+
+**The token never renders.** The helper prints only a redacted confirmation, and a test pins that no
+rendered output carries it.
+
+### 9.6 Not built
+
+- **No new screen.** Accounts is the home.
+- **No account deletion.** Removing an account removes some session's home; that is `ws-reap`-adjacent
+  and out of scope.
+- **No roster editor.** The roster is converged from data, not hand-edited through a UI. A UI that let
+  you edit it directly would reintroduce precisely the drift this design removes.
+
+### 9.7 Mutation tests
+
+1. Collapse the three availability states into a boolean -> red.
+2. Render a `Bar` pair for a `telemetry: 'none'` account -> red.
+3. Let the token reach rendered output -> red.
+4. Close the add sheet before the smoke test answers -> red.
+5. Drop `provider` from the shared `RosterWire` while the handler still sends it -> typecheck red in
+   **all three** importers, not one.
+
+## 10. Slice A concretely
+
+### 10.1 Commit 1 — the roster tells the truth
 
 `shared/roster.ts` gains §4 and §5. The live `~/.ccrc/accounts.json` goes to version 2 on both boxes.
 
@@ -502,7 +604,7 @@ Mutation tests, each measured red before and after:
 5. Drop a `secretsFile` whose wrapper sources it -> doctor FAIL.
 6. Remove `telemetry` from the emitted `accounts.sh` -> `projected-home.test.ts` red.
 
-### 9.2 Commit 2 — the api-key template, proved against `cck3`
+### 10.2 Commit 2 — the api-key template, proved against `cck3`
 
 `gen-wrappers.mjs` learns to emit an api-key body: credential precondition, proxy bootstrap when the
 endpoint is `local-proxy`, config dir, base URL, auth token, the six-variable model map, the whitelist
@@ -530,12 +632,12 @@ instead of later against an account that has none.
 `claude-glm` and `gpt` stay untouched. The generator already emits `protected\t<id>` for every
 non-generated account, so that path exists.
 
-### 9.3 Deploy
+### 10.3 Deploy
 
 Both commits touch `ccd/ccrc`, `ccd/ccrc-doctor-checks` and `deploy/gen-wrappers.mjs`, so both are
 **agent-first**: fleet host before server.
 
-### 9.4 Ordering against work in flight
+### 10.4 Ordering against work in flight
 
 `ws/ccrc-adopt-and-wrappers-upstream-account` is fixing the invariant that `~/.local/bin/claude` is the
 binary and never a wrapper — the guards key on `exec.kind: 'upstream'` rather than on whether the file
@@ -544,7 +646,7 @@ credential check is roster-driven precisely because the upstream wrapper is unau
 (§3.4 item 27). It must land on `main` first; slice A then builds on a fixed invariant rather than
 designing around a broken one.
 
-## 10. Non-goals
+## 11. Non-goals
 
 - **Managed LiteLLM.** OpenAI stays `external`. Taking on the config yaml, the venv, the folding shim,
   device-code login and teardown is a slice at least the size of A and B together, and nothing needs it.
@@ -557,7 +659,7 @@ designing around a broken one.
 - **Changing placement eligibility.** §7.5.
 - **Any new `ccd` verb for coordination mutation**, any new exec-whitelist entry, any `FLEET_PROTO` bump.
 
-## 11. Open questions
+## 12. Open questions
 
 1. **Is the one-year figure an enforced TTL or a documented approximation?** No per-token expiry is
    exposed by `setup-token`, `auth status --json`, or any doc page found. ccrc therefore cannot read a
@@ -576,7 +678,7 @@ designing around a broken one.
    relying on the env token. Whether that becomes a doctor check or a documented note is a plan-time
    call.
 
-## 12. Deviations
+## 13. Deviations
 
 D-numbers are **not allocated in this document**. The ledger is global and monotonic across project
 history, and four PRs merged onto `main` during this design conversation. The next free number must be
