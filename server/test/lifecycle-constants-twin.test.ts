@@ -106,9 +106,12 @@ describe('the twin-world classifier, pinned before it is pointed at ccd', () => 
 
 describe('the reader itself, pinned against synthetic declarations', () => {
   it('reads a declared scalar, and answers null for an undeclared one', () => {
-    // Two independent claims — expect.soft per the standing rule.
+    // Two independent claims — expect.soft per the standing rule. The
+    // undeclared half probes a SENTINEL name, never a real constant: a real
+    // name makes this test a hostage to whichever wave declares it (`_LC_LINE_MAX`
+    // itself stopped being undeclared the moment wave 2 landed it for real).
     expect.soft(scalar('_LC_LINE_MAX', '_LC_LINE_MAX=2048')).toBe('2048');
-    expect.soft(scalar('_LC_LINE_MAX')).toBeNull();
+    expect.soft(scalar('_LC_NEVER_DECLARED_SENTINEL')).toBeNull();
   });
 
   it('sees a function as declared, and a missing one as not', () => {
