@@ -72,7 +72,7 @@ const runCcd = (...args: string[]): { code: number; stdout: string; stderr: stri
     // the poisoned `gh`: it is prepended, and the tmux/systemctl stubs below
     // it are still found.
     env: ghContainedEnv(h.home,
-      { ...process.env, HOME: h.home, PATH: `${stub}:${process.env.PATH ?? ''}` }, { systemd: true }),
+      { ...process.env, HOME: h.home, PATH: `${stub}:${process.env.PATH ?? ''}` }, { systemd: true, tmux: true }),
   };
   try { return { code: 0, stdout: execFileSync('bash', [CCD, ...args], opts).trim(), stderr: '' }; }
   catch (e) {

@@ -463,7 +463,7 @@ describe('disk floor', () => {
       execFileSync('bash', ['-c', `source "${CCD}"; ${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`],
         { encoding: 'utf8',
           env: ghContainedEnv(home, { ...process.env, HOME: home, CCD_DISK_FLOOR_GB: '999999' },
-            { systemd: true }) });
+            { systemd: true, tmux: true }) });
     } catch (e) {
       stderr = String((e as { stderr?: string }).stderr ?? '');
     }

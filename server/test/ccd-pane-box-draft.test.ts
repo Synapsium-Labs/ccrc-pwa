@@ -42,7 +42,7 @@ const draft = (pane: string): string => {
     // `_have_systemctl`/`_supervised_start`, and `ccd-workspaces.test.ts`'s
     // source scan is what makes that a property of every ccd test file rather
     // than a rule each one remembers.
-    env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true }),
+    env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }),
   });
   expect(r.status, r.stderr ?? '').toBe(0);
   return (r.stdout ?? '').replace(/\n$/, '');

@@ -118,7 +118,7 @@ describe('the dispatcher', () => {
         code: 0, stderr: '',
         stdout: execFileSync('bash', [CCD, ...args], {
           encoding: 'utf8', cwd: h.home,
-          env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true }),
+          env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }),
         }),
       };
     } catch (e) {

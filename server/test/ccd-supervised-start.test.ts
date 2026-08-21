@@ -98,7 +98,7 @@ const runCcd = (...args: string[]): { code: number; stdout: string; stderr: stri
   const opts = {
     encoding: 'utf8' as const, cwd: h.home,
     env: ghContainedEnv(h.home,
-      { ...process.env, HOME: h.home, PATH: `${stub}:${process.env.PATH ?? ''}` }, { systemd: true }),
+      { ...process.env, HOME: h.home, PATH: `${stub}:${process.env.PATH ?? ''}` }, { systemd: true, tmux: true }),
   };
   try { return { code: 0, stdout: execFileSync('bash', [CCD, ...args], opts).trim(), stderr: '' }; }
   catch (e) {
