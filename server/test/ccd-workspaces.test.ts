@@ -1078,7 +1078,7 @@ describe('gh containment is the harness\'s, not the caller\'s', () => {
         // Either side of the call: `ccd-archive`'s `runCcd` builds its `opts`
         // object several lines above the spawn.
         const window = src.slice(Math.max(0, i - 12), i + 8).join('\n');
-        expect(window, `${f}:${i + 1} spawns bash without ghContainedEnv`).toContain('ghContainedEnv(');
+        expect.soft(window, `${f}:${i + 1} spawns bash without ghContainedEnv`).toContain('ghContainedEnv(');
         // ONE deliberate exception, and it has to say so in the source it is
         // read from: the negative control that proves the opt-in is real must
         // spawn bash with the systemd poison ABSENT. `gh` is asserted above for
@@ -1089,7 +1089,7 @@ describe('gh containment is the harness\'s, not the caller\'s', () => {
         // own two call sites now ask `{ systemd: true, tmux: true }` (wave 2's
         // tmux poison), and the invariant this scan checks is "did this call
         // site ask for systemd containment", not "does it ask for ONLY that".
-        expect(window, `${f}:${i + 1} runs ccd without asking for systemd containment`)
+        expect.soft(window, `${f}:${i + 1} runs ccd without asking for systemd containment`)
           .toContain('systemd: true');
         // THE THIRD CLAUSE IS THE TMUX ONE, symmetric to the systemd clause
         // above and for the identical reason: `ContainOpts.tmux` is opt-in
@@ -1100,7 +1100,7 @@ describe('gh containment is the harness\'s, not the caller\'s', () => {
         // covers this clause as well — the one call site exempted from
         // asking for systemd runs no ccd at all, so it never needed to ask
         // for tmux either.
-        expect(window, `${f}:${i + 1} runs ccd without asking for tmux containment`)
+        expect.soft(window, `${f}:${i + 1} runs ccd without asking for tmux containment`)
           .toContain('tmux: true');
         asked++;
       });

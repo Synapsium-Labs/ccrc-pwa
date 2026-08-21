@@ -101,19 +101,27 @@ describe('the harness contains systemctl structurally', () => {
 describe('ghContainedEnv contains gh always, systemd only when asked', () => {
   /** The two spawn lines below are one mechanism, and they sit together because
    *  the source scan in `ccd-workspaces.test.ts` reads the lines AROUND a bash
-   *  spawn: an env assembled inside each `it` would be invisible to it.
+   *  spawn: an env assembled inside each `it` would be invisible to it — which
+   *  is also why the marker below sits at the END of this comment rather than
+   *  the top: the scan's window is only 12 lines back from the spawn it reads.
    *
    *  `BASH` is bash resolved under the REAL PATH, once — every spawn here hands
    *  the child a fixture-only PATH, and libuv resolves the executable against
    *  the CHILD's env, so bare `bash` would be ENOENT. Same trick
    *  `ccrc-doctor.test.ts` uses, for the same reason.
    *
-   *  SYSTEMD-OPT-OUT IS THE ASSERTION — the marker that scan's systemd AND
-   *  tmux clauses both exempt by (Task 11b added the second clause; it reuses
-   *  this same marker rather than earning its own, because the reason is the
-   *  same one), and this is the only call site in the suite that has earned
-   *  it: it runs NO ccd. It measures the OPTION, and half of what follows
-   *  asserts nothing unless it runs with the option OFF. `gh` is exempt from nothing,
+   *  This call site runs NO ccd at all — the only one in the suite that
+   *  doesn't — and that ONE condition logically ENTAILS both of the scan's
+   *  exemptions below, systemd's and tmux's, rather than being two conditions
+   *  collapsing into one token: a site that runs no ccd can need neither
+   *  poison. That is also the boundary: a future call site needing exactly
+   *  ONE exemption (a test parameterizing `tmux` while holding `systemd`
+   *  fixed at `true`, so it DOES run ccd) has not earned "runs no ccd" and
+   *  must mint its own marker, not reuse this one.
+   *
+   *  SYSTEMD-OPT-OUT IS THE ASSERTION is that marker, read by both scan
+   *  clauses. It measures the OPTION, and half of what follows asserts
+   *  nothing unless it runs with the option OFF. `gh` is exempt from nothing,
    *  here or anywhere, and is asserted below like every other call site. */
   const BASH = execFileSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).trim();
   const run = (home: string, bin: string, snippet: string,
