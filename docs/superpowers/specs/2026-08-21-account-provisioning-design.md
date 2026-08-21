@@ -3,7 +3,7 @@
 **Date:** 2026-08-21
 **Status:** design approved in conversation; this document awaits operator review before any plan is written.
 **Depends on:** the `~/.local/bin/claude`-is-not-a-wrapper invariant fix currently in flight on
-`ws/ccrc-adopt-and-wrappers-upstream-account`. That branch must land on `main` first — see §10.4.
+`ws/ccrc-adopt-and-wrappers-upstream-account`. That branch must land on `main` first — see §11.4.
 
 ---
 
@@ -28,6 +28,7 @@ This design adds that vocabulary, then builds the verb on it.
 | **A2** | credential *health*: a dead account becomes nameable instead of silently routed around |
 | **B1** | `ccrc account add` for api-key providers — CLI verb plus a PWA form |
 | **B2** | the OAuth pane flow, shared by `account add` and a new `account reauth` |
+| **B3** | `ccrc account remove`, with automated rehoming of every session the account was home to |
 
 Every slice has a UI surface, and they all land on one screen — **§9 gathers them in one place** so the
 PWA work is not scattered across four sections.
@@ -42,7 +43,7 @@ Deferred, to be decided with evidence rather than now:
 ## 3. Evidence base
 
 Every claim below was measured on 2026-08-21 against the installed Claude Code 2.1.238 and the live
-fleet, or read from the shipped source. Claims that could not be evidenced are in §12, not here.
+fleet, or read from the shipped source. Claims that could not be evidenced are in §13, not here.
 
 ### 3.1 Long-lived tokens
 
@@ -266,7 +267,7 @@ export type GeneratedExec = {
     provider: P;
     auth: keyof (typeof PROVIDERS)[P]['auth'];
     secretsFile: string;   // required — a generated account always carries its own credential
-    models?: ModelMap;     // the emitter requires it for every non-anthropic provider (§10.2)
+    models?: ModelMap;     // the emitter requires it for every non-anthropic provider (§11.2)
   };
 }[GeneratableId];
 
@@ -286,7 +287,7 @@ an `external` account cannot carry a model map ccrc would never write.
 
 `secretsFile` survives on **all three** arms — optional on `upstream` (the real binary may authenticate
 from a stored login instead), optional on `external` (a human's wrapper may source nothing ccrc can
-name), required on `generated`. Dropping it from the union would make §10.1's very first row —
+name), required on `generated`. Dropping it from the union would make §11.1's very first row —
 declaring `claude`'s undeclared secrets file — unrepresentable.
 
 The operator still answers exactly one provider and one auth, because `account add` only ever creates
@@ -454,7 +455,7 @@ as a reusable unit**, with two callers. That also sets its priority: with a one-
 refresh (§3.1 item 2), re-authentication is a **recurring** operational chore across five wrapper HOMEs,
 usually performed when something is already broken. It has to be pleasant on a phone.
 
-Because nothing exposes a token's real expiry (§12), ccrc records the **mint date** at `add`/`reauth`
+Because nothing exposes a token's real expiry (§13), ccrc records the **mint date** at `add`/`reauth`
 time and warns ahead of the one-year cliff. That is the only available pre-warning.
 
 ### 8.1 Transport
@@ -491,7 +492,7 @@ Each row gains a **provider chip** and an **availability state**. Three states, 
 boolean:
 
 - **ok** — rostered, credential present here
-- **unavailable here** — rostered, credential absent on this box (§10.1's per-box measurement)
+- **unavailable here** — rostered, credential absent on this box (§11.1's per-box measurement)
 - **undeclared** — a wrapper exists that no account describes
 
 These are the same three verdicts `ccrc doctor` reports: one vocabulary, two renderers. A divergence
@@ -548,12 +549,26 @@ rendered output carries it.
 ### 9.6 Not built
 
 - **No new screen.** Accounts is the home.
-- **No account deletion.** Removing an account removes some session's home; that is `ws-reap`-adjacent
-  and out of scope.
+- **No irreversible purge from the UI.** Removal *is* supported (§10), but only its reversible half:
+  the config dir — which holds session transcripts — is purged only by a human at a terminal, in the
+  same family as `ws-reap`.
 - **No roster editor.** The roster is converged from data, not hand-edited through a UI. A UI that let
   you edit it directly would reintroduce precisely the drift this design removes.
 
-### 9.7 Mutation tests
+### 9.7 Slice B3 — Remove account
+
+Entered from the row's overflow, never a bare button. The sheet shows the **measured plan before
+anything acts**: how many sessions get rehomed and to which account, how many live sessions get swapped
+off, which files are removed, and — stated prominently — that the config dir is **kept** with its size
+and transcript count, and that the credential is **not revoked at the provider** (§10.5).
+
+Refusals render as refusals with their reason, not as a disabled button: upstream account, last
+home-able account, external wrapper (§10.3).
+
+Confirmation is **typing the account id**, not tapping. The blast radius is other sessions' homes, which
+is precisely the case where a mis-tap must not be sufficient.
+
+### 9.8 Mutation tests
 
 1. Collapse the three availability states into a boolean -> red.
 2. Render a `Bar` pair for a `telemetry: 'none'` account -> red.
@@ -562,9 +577,102 @@ rendered output carries it.
 5. Drop `provider` from the shared `RosterWire` while the handler still sends it -> typecheck red in
    **all three** importers, not one.
 
-## 10. Slice A concretely
+## 10. Removal and rehoming — slice B3
 
-### 10.1 Commit 1 — the roster tells the truth
+Addition without removal is half a lifecycle. Removal is the harder half, because an account is not just
+a wrapper and a key — it is the **home** of some set of sessions, and homes are load-bearing.
+
+### 10.1 Two impact sets, two different failure modes
+
+`_home_for` reads the registry's `home` file first and falls back to `_ccrc_id_wrapper`, the generated
+`case` over id prefixes whose final arm is `*) echo "$CCRC_UPSTREAM"`. `ccd prefer <id> <wrapper>` writes
+an explicit home — that is what "pinning" is — and `_ws_seed_home` seeds one once and **never clobbers a
+deliberate choice**.
+
+Measured on the live fleet: **22 sessions carry an explicit `home` file, and the id prefix routinely
+disagrees with it.** `claude2-expoAI-assistant` is homed on `claude`; `claude-corp-orchard-api`
+is homed on `claude`; `claude-rp-llm` is homed on `claude2`. A session's home therefore cannot be
+inferred from its id, and removal splits into two sets that fail differently:
+
+1. **Sessions whose `home` file names the account.** After removal `_home_for` returns a wrapper that no
+   longer exists. `cmd_prefer` validates against `CCRC_ACCOUNTS` **on write**, and nothing re-validates
+   on read — so the session sits permanently away-from-home, with a home that can never recover.
+2. **Sessions with no `home` file whose id prefix encoded the account.** These do **not** fall to the
+   default arm. They fall to whichever *remaining* arm now matches: remove `claude2` while `claude`
+   remains, and `claude2-*` matches `claude-*`, silently rehoming to **a sibling account nobody chose**.
+   The generator emits arms longest-id-first precisely so prefixes disambiguate — which means deleting
+   an arm changes what the *surviving* arms match.
+
+Neither is a crash. Both are durable, silent, and unnameable by any read-only verb — the same shape as
+the auth-loss hole in §7.2.
+
+### 10.2 Rehoming is materialisation, not a new policy
+
+One move fixes both: **before the arm disappears, write every affected session's home explicitly.** That
+turns an implicit home into a recorded one, and `_ws_seed_home`'s seed-once guard then defends it exactly
+as it defends a deliberate `ccd prefer`.
+
+The destination comes from **the rule placement already uses** — `_ws_least_loaded` on the box,
+`projectHome` on the server — so removal makes the choice the system would have made anyway instead of
+inventing a second placement policy. Sessions running *on* the wrapper are swapped off through the
+existing `cmd_swap` path **before** the binary is unlinked, because a respawn against a missing
+executable is the one failure that cannot be recovered in place.
+
+### 10.3 What removal refuses
+
+- **The upstream account.** `CCRC_UPSTREAM` (`claude`) is the target of the default arm; removing it
+  leaves every unmatched id resolving to nothing.
+- **The last home-able account.** `CCRC_HOME_ABLE` is four of five today; emptying it breaks placement.
+- **An account with live sessions**, unless rehoming is permitted to swap them off first.
+  Refuse-and-explain, never half-act.
+- **An `external` wrapper's body.** ccrc drops the roster entry and says plainly that the file belongs to
+  a human and stays. Deleting what a human wrote is not ccrc's to do.
+
+### 10.4 What it deletes, and what it deliberately keeps
+
+| artifact | action |
+|---|---|
+| roster entry | removed |
+| `~/.local/bin/<id>` | removed for `generated`; **never** for `external` or `upstream` |
+| `~/.cc-secrets/<id>-*.env` | removed |
+| `~/.cc-limits/<id>.json` | removed — a stale telemetry file for an account that no longer exists is a lie `_limit_score` would still read |
+| `~/.claude-<id>` config dir | **kept by default** |
+
+The config dir is kept because it holds the **session transcripts**
+(`~/.claude-<id>/projects/<path>/<uuid>.jsonl`) — the forensic record of every session that ran on that
+account. Deleting it is irreversible and destroys history that has nothing to do with the credential.
+
+**The line that follows:** removing the roster entry, wrapper, secret and telemetry is fully
+**reversible** — `account add` plus `reauth` reconstructs it. Purging the config dir is **not**. So the
+reversible half is an ordinary operation available in the UI, and the purge is human-only at a terminal,
+in the same family as `ws-reap`.
+
+### 10.5 What ccrc cannot do, stated
+
+**Removing the secrets file does not revoke the credential at the provider.** It stops *this box* using
+it; the token stays valid until revoked upstream, and ccrc has no API for that. The verb must say so
+plainly — and §13's open question 2, what the official revocation surface even is, matters here more
+than anywhere else in this design.
+
+### 10.6 Verification and mutation tests
+
+Removal ends by **re-measuring** rather than trusting its own steps: no session's `home` names the
+removed id, no session runs on it, no `_ccrc_id_wrapper` arm mentions it, the wrapper is absent or
+declared external, and `ccrc doctor` is clean.
+
+1. Remove an account while a session's `home` names it, without rehoming -> red.
+2. Remove `claude2` with a `claude2-*` session carrying **no** `home` file; assert its home is the
+   explicitly-written destination and **not** `claude` -> red if the arm-rematch stays implicit.
+3. Remove the upstream account -> must refuse.
+4. Remove the last home-able account -> must refuse.
+5. Delete an `external` wrapper's file -> red.
+6. Purge the config dir without the explicit human step -> red.
+7. Leave `~/.cc-limits/<id>.json` behind -> red.
+8. Unlink the wrapper before live sessions are swapped off -> red.
+
+## 11. Slice A concretely
+
+### 11.1 Commit 1 — the roster tells the truth
 
 `shared/roster.ts` gains §4 and §5. The live `~/.ccrc/accounts.json` goes to version 2 on both boxes.
 
@@ -604,7 +712,7 @@ Mutation tests, each measured red before and after:
 5. Drop a `secretsFile` whose wrapper sources it -> doctor FAIL.
 6. Remove `telemetry` from the emitted `accounts.sh` -> `projected-home.test.ts` red.
 
-### 10.2 Commit 2 — the api-key template, proved against `cck3`
+### 11.2 Commit 2 — the api-key template, proved against `cck3`
 
 `gen-wrappers.mjs` learns to emit an api-key body: credential precondition, proxy bootstrap when the
 endpoint is `local-proxy`, config dir, base URL, auth token, the six-variable model map, the whitelist
@@ -632,12 +740,12 @@ instead of later against an account that has none.
 `claude-glm` and `gpt` stay untouched. The generator already emits `protected\t<id>` for every
 non-generated account, so that path exists.
 
-### 10.3 Deploy
+### 11.3 Deploy
 
 Both commits touch `ccd/ccrc`, `ccd/ccrc-doctor-checks` and `deploy/gen-wrappers.mjs`, so both are
 **agent-first**: fleet host before server.
 
-### 10.4 Ordering against work in flight
+### 11.4 Ordering against work in flight
 
 `ws/ccrc-adopt-and-wrappers-upstream-account` is fixing the invariant that `~/.local/bin/claude` is the
 binary and never a wrapper — the guards key on `exec.kind: 'upstream'` rather than on whether the file
@@ -646,7 +754,7 @@ credential check is roster-driven precisely because the upstream wrapper is unau
 (§3.4 item 27). It must land on `main` first; slice A then builds on a fixed invariant rather than
 designing around a broken one.
 
-## 11. Non-goals
+## 12. Non-goals
 
 - **Managed LiteLLM.** OpenAI stays `external`. Taking on the config yaml, the venv, the folding shim,
   device-code login and teardown is a slice at least the size of A and B together, and nothing needs it.
@@ -659,7 +767,7 @@ designing around a broken one.
 - **Changing placement eligibility.** §7.5.
 - **Any new `ccd` verb for coordination mutation**, any new exec-whitelist entry, any `FLEET_PROTO` bump.
 
-## 12. Open questions
+## 13. Open questions
 
 1. **Is the one-year figure an enforced TTL or a documented approximation?** No per-token expiry is
    exposed by `setup-token`, `auth status --json`, or any doc page found. ccrc therefore cannot read a
@@ -678,7 +786,7 @@ designing around a broken one.
    relying on the env token. Whether that becomes a doctor check or a documented note is a plan-time
    call.
 
-## 13. Deviations
+## 14. Deviations
 
 D-numbers are **not allocated in this document**. The ledger is global and monotonic across project
 history, and four PRs merged onto `main` during this design conversation. The next free number must be
