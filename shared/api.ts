@@ -3564,3 +3564,138 @@ export const LC_OUTCOME_UNKNOWN: LifecycleOutcome = 'unknown';
 export function isLifecycleOutcome(v: unknown): v is LifecycleOutcome {
   return typeof v === 'string' && (LIFECYCLE_OUTCOMES as readonly string[]).includes(v);
 }
+
+/**
+ * What the KERNEL says about the process that ran ccd, resolved from
+ * `/proc/self/cgroup`'s `0::` path (D2). Unforgeable by env — the systemd unit
+ * names the session id in the path, which is respawn provenance nothing on
+ * this box has today.
+ *
+ *   `app.slice/ccrc-agent.service`           -> agent
+ *   `app.slice/tmux-spawn-<uuid>.scope`      -> pane
+ *   `app.slice/claude-session@<id>.service`  -> supervisor
+ *   `user.slice/session-N.scope`             -> login
+ *
+ * TWO SPELLINGS, ONE FACT, AND THE MAPPING IS WRITTEN DOWN HERE SO NOBODY
+ * "FIXES" EITHER: on the WIRE this value is `LifecycleObs.cg` (ccd writes
+ * `obs.cg`, spec-mandated); as a DERIVED PAIR crossing the L1/L3 seams it is
+ * `obsClass`, matching this file's `corroboration(obsClass, decSurface)`
+ * parameter names and `ProvenancePair` in `server/src/coord/store.ts`. Same
+ * for `LifecycleDec.surface` <-> `decSurface`. Wire names are short because a
+ * million lines carry them; seam names are explicit because a reader of one
+ * call site has no object to look at.
+ *
+ * `unknown` means the path WAS read and matched none of the four. It is not
+ * the same condition as "no cgroup was read at all", which the wire spells
+ * `obs.cg === null` — two conditions a caller handles differently, so two
+ * values (`corroboration` answers `not-comparable` for the first and
+ * `unmeasured` for the second).
+ *
+ * A double fork makes a caller ANONYMOUS (`ppid 1`), never someone else. The
+ * raw path travels beside this in `obs.cgraw` and is never dropped, so a fifth
+ * shape this build cannot name is still recoverable from the record.
+ */
+export type ActorClass = 'agent' | 'pane' | 'supervisor' | 'login' | 'unknown';
+const ACTOR_CLASS_MAP: Record<ActorClass, true> = {
+  agent: true, pane: true, supervisor: true, login: true, unknown: true,
+};
+export const ACTOR_CLASSES: readonly ActorClass[] =
+  Object.keys(ACTOR_CLASS_MAP) as ActorClass[];
+
+export function isActorClass(v: unknown): v is ActorClass {
+  return typeof v === 'string' && (ACTOR_CLASSES as readonly string[]).includes(v);
+}
+
+/**
+ * What the CALLER said (D2, wire `dec.surface`, seam `decSurface`): ccd's own
+ * closed set (`ccd:619`) plus `'none'`, which is what the journal writes when
+ * no `--surface` flag was passed at all.
+ *
+ * `StopSurface` IS UNCHANGED (spec §2) — no fifth surface word. `'none'` is a
+ * journal-only member, and it is a MEASUREMENT of absence rather than a
+ * default: `cmd_stop` defaults its own `surface` to `cli` (`ccd:9607`) and
+ * `_ws_unsupervise` defaults its second parameter to `ccd` (`ccd:610-618`,
+ * `${2-ccd}` and not `${2:-ccd}`), and NEITHER of those internal defaults may
+ * reach this field. Journaling a default as a declaration would manufacture
+ * corroboration out of silence, which is the one thing this family exists to
+ * prevent.
+ */
+export type DecSurface = StopSurface | 'none';
+
+/** Derived from `isStopSurface` (:1146) rather than restating its list — the
+ *  list is module-private there precisely so there is one door. */
+export function isDecSurface(v: unknown): v is DecSurface {
+  return v === 'none' || isStopSurface(v);
+}
+
+/** What `corroboration()` can answer. Four words, because there are four
+ *  conditions and a reader handles each differently: only `disagrees` raises
+ *  `divergence.provenance-mismatch`. */
+export type Corroboration = 'agrees' | 'disagrees' | 'not-comparable' | 'unmeasured';
+const CORROBORATION_MAP: Record<Corroboration, true> = {
+  agrees: true, disagrees: true, 'not-comparable': true, unmeasured: true,
+};
+export const CORROBORATIONS: readonly Corroboration[] =
+  Object.keys(CORROBORATION_MAP) as Corroboration[];
+
+export function isCorroboration(v: unknown): v is Corroboration {
+  return typeof v === 'string' && (CORROBORATIONS as readonly string[]).includes(v);
+}
+
+/**
+ * Which declared surfaces the observed host CORROBORATES. Total over
+ * `ActorClass` so a sixth class is a TS2739 here rather than a silent
+ * `undefined.includes`.
+ *
+ * `supervisor` and `unknown` map to the empty list, and the two empties are
+ * not the same statement: `unknown` is unreachable (rung 3 of the ladder
+ * catches it first, and the ladder's own test pins that), while `supervisor`
+ * is genuinely reachable and genuinely disagrees with every declaration — the
+ * supervisor passes no flags, so a declaration arriving from
+ * `claude-session@<id>.service` is a fact worth showing an operator.
+ */
+const DEC_CORROBORATES: Record<ActorClass, readonly DecSurface[]> = {
+  agent: ['pwa', 'agent'],   // PWA -> server -> agent -> ccd, and the agent itself
+  pane: ['cli'],             // a session shelling ccd from its own Bash tool
+  login: ['cli'],            // a human at an ssh shell
+  supervisor: [],
+  unknown: [],
+};
+
+/**
+ * The ONE function permitted to relate the `obs` and `dec` families (D2).
+ * PURE, and deliberately clock-free — inputs only, no `fs`, no timers — for
+ * the reasons `sessionLifecycle` states at :1242.
+ *
+ * THE PARAMETER NAMES ARE THE SEAM SPELLING and are load-bearing: callers hand
+ * it `obsClass` / `decSurface` (`ProvenancePair`), which are the same two
+ * facts the wire spells `obs.cg` / `dec.surface`. Both arguments must be
+ * NARROWED, never cast: `isActorClass` and `isDecSurface` are the only doors,
+ * and a value that passes neither is not a disagreement — it is a value this
+ * build cannot model, which a caller drops rather than reports.
+ *
+ * IT REPORTS, IT NEVER DECIDES. A `disagrees` raises
+ * `divergence.provenance-mismatch` for a human to read; it refuses nothing and
+ * picks no winner. ccd cannot authenticate a caller on a single-uid box and
+ * this does not pretend to — "a disagreement is a fact the operator sees,
+ * never a silently picked winner".
+ *
+ * The ladder's ORDER is the design. Each rung exists because collapsing it
+ * into the table below would turn "we cannot compare these" into "you lied":
+ *   1. no observation at all       -> unmeasured
+ *   2. no declaration at all       -> unmeasured
+ *   3. a word one side cannot name -> not-comparable
+ *   4. `ccd` names a LAYER, not a host (ccd re-entering itself: `cmd_swap`'s
+ *      `|| cmd_ensure "$id"` fallback at `ccd:9548`, `cmd_enable`'s
+ *      `cmd_start "$@"` at `ccd:9587`), so it corroborates nothing about who
+ *      was at the keyboard
+ *                                  -> not-comparable
+ *   5. the table                   -> agrees | disagrees
+ */
+export function corroboration(obsClass: ActorClass | null, decSurface: DecSurface): Corroboration {
+  if (obsClass === null) return 'unmeasured';
+  if (decSurface === 'none') return 'unmeasured';
+  if (obsClass === 'unknown' || decSurface === 'unknown') return 'not-comparable';
+  if (decSurface === 'ccd') return 'not-comparable';
+  return DEC_CORROBORATES[obsClass].includes(decSurface) ? 'agrees' : 'disagrees';
+}
