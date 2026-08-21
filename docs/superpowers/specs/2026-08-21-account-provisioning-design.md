@@ -1,0 +1,585 @@
+# Account provisioning — design
+
+**Date:** 2026-08-21
+**Status:** design approved in conversation; this document awaits operator review before any plan is written.
+**Depends on:** the `~/.local/bin/claude`-is-not-a-wrapper invariant fix currently in flight on
+`ws/ccrc-adopt-and-wrappers-upstream-account`. That branch must land on `main` first — see §9.4.
+
+---
+
+## 1. Why
+
+Adding an account to the fleet is today an undocumented manual procedure: hand-write a wrapper in
+`~/.local/bin`, hand-write a secrets file, hand-edit `~/.ccrc/accounts.json`, hope the three agree.
+The evidence that this does not hold is a standing `ccrc doctor` FAIL on both boxes and two orphan
+warnings that have been tolerated long enough to become scenery.
+
+The roster is already data and `ccrc wrappers` already converges it. What is missing is the vocabulary
+to describe **what authenticates an account** — so nothing can converge a credential, nothing can
+measure whether an account actually works, and there is no verb to create one.
+
+This design adds that vocabulary, then builds the verb on it.
+
+## 2. Scope and slices
+
+| slice | deliverable |
+|---|---|
+| **A** | the roster learns providers and credentials; the three hand-written wrappers are described honestly; `cck3` becomes generated and proves the api-key template |
+| **A2** | credential *health*: a dead account becomes nameable instead of silently routed around |
+| **B1** | `ccrc account add` for api-key providers — CLI verb plus a PWA form |
+| **B2** | the OAuth pane flow, shared by `account add` and a new `account reauth` |
+
+Deferred, to be decided with evidence rather than now:
+
+- **C** — kind-aware limits. An API-key account has *spend*, not a weekly *pool*; today it opts out of
+  scoring entirely via `telemetry: 'none'`. §7.5 names the seam; this design does not build it.
+- **D** — proxy lifecycle. Promoting `handoff-proxy` to a managed unit. The lazy `nohup` bootstrap in
+  the existing wrappers works; nothing yet demands better.
+
+## 3. Evidence base
+
+Every claim below was measured on 2026-08-21 against the installed Claude Code 2.1.238 and the live
+fleet, or read from the shipped source. Claims that could not be evidenced are in §11, not here.
+
+### 3.1 Long-lived tokens
+
+1. `claude setup-token` is current and carries **no deprecation marker**. This is an evidenced
+   negative, not an absence of information: the same binary carries explicit deprecation strings for
+   other surfaces (`--max-thinking-tokens`, `includeCoAuthoredBy`), and no deprecation wording appears
+   near any auth/token/setup string.
+2. The documented horizon is **one year**, the token **prints once and is saved nowhere**, and there
+   is no refresh. Nothing in the CLI will warn before the cliff; the `/login` three-day expiry warning
+   explicitly does not cover env credentials.
+3. Anthropic is actively *repairing* long-lived token handling (changelog v2.1.219–v2.1.234) and still
+   recommends `setup-token` as the subscription credential for CI. This is investment, not withdrawal.
+4. **A version floor follows from that repair work.** v2.1.225/228 fixed a transient 401 replacing a
+   long-lived `CLAUDE_CODE_OAUTH_TOKEN` with a stored login's short-lived token, wedging headless
+   sessions until restart. Any box relying on the env token needs **>= 2.1.228**.
+5. Long-lived tokens are scoped **inference-only and cannot establish Remote Control**. Verbatim from
+   the binary: *"Remote Control requires a full-scope login token. Long-lived tokens (from
+   `claude setup-token` or CLAUDE_CODE_OAUTH_TOKEN) are limited to inference-only for security
+   reasons."* The docs corroborate. The refusal is a hard exit, not a degraded session.
+6. **The forward risk is not deprecation — it is a default change that bypasses the token.** `--bare`
+   never reads `CLAUDE_CODE_OAUTH_TOKEN` and is documented to become the default for `-p` in a future
+   release. When that lands, every non-interactive subscription-token invocation silently loses its
+   credential.
+7. An undocumented refreshable-env path already ships in the binary: `CLAUDE_CODE_OAUTH_REFRESH_TOKEN`
+   with a mandatory `CLAUDE_CODE_OAUTH_SCOPES`, plus client-id and file-descriptor variants, all absent
+   from the documented env-var table. **Do not build on it.** It is recorded here only as evidence that
+   a successor mechanism exists, which is why §5.4 records *how* a credential was minted.
+
+### 3.2 How a dead credential presents
+
+8. Measured: an invalid token exits **1** with the message on **stdout** and **stderr completely
+   empty**. Any supervisor classifying health by scraping stderr sees nothing at all.
+9. The docs state the rule generally: stderr means the invocation was malformed; stdout means the run
+   started and failed. A credential problem is always the second kind, so it is indistinguishable from
+   a normal answer by stream alone. Parse it; do not sniff it.
+10. `--output-format json` is the robust path: `is_error: true`, `api_error_status: 401`,
+    `terminal_reason: "api_error"`. **`subtype` is `"success"` even on a hard auth failure** — it is not
+    a health signal.
+11. `claude auth status --json` answers `loggedIn: true` for deliberate garbage. It reports which
+    source was *selected*, not whether it works. **Not usable as a health probe.**
+12. **No on-disk field distinguishes alive from dead.** The credential serving a live session today
+    carries `expiresAt: 0` and a `refreshTokenExpiresAt` eight days in the past. Health cannot be read
+    from a file; it costs one inference request.
+13. There are **two** credential artifacts per lane — the env token and a rotating `.credentials.json`
+    — and revoking either produces the same unnamed login screen. A check that tests only the env token
+    reports green on a lane whose refresh token was revoked.
+
+### 3.3 What the fleet does today when a credential dies
+
+14. **Placement ranking is correct and needs no fix.** `_avail` is deliberately permissive because it
+    answers eligibility, not rank; `_ws_least_loaded` *skips* an unmeasured account (with a fallback for
+    an all-unmeasured fleet); `_swap_target` ranks unmeasured at **100** against `SWAP_CEILING` **98**,
+    so a measured candidate always outranks an unmeasured one while a rescue can still land. The shipped
+    rule, stated in `ccd`'s own comment: *unmeasured never OUTRANKS measured, and never becomes
+    INELIGIBLE.* An earlier draft of this design claimed a self-amplifying routing bug here. It was
+    wrong; the defect it described was fixed in a prior review round and the source documents it.
+15. **The rescue works; the naming does not.** `ccd` states it plainly: *"auth loss writes NO telemetry
+    (nothing marks cc-limits on a 401)"* — which is precisely why the `force`/`hard_blocked` path exists
+    to bypass the "home is fine, stay" shortcut. So a session does get rescued off a dead account.
+16. But for a **home-able** account the rescue writes no durable marker, and all four Anthropic
+    accounts are home-able. A successful rescue never tells the operator an account died. The only trace
+    is one line in `~/.cc-sessions/swap.log`, which has zero consumers in `server/`, `agent/` or `pwa/`.
+17. At **spawn**, a dead token does land in a durable named state (rc 2 -> `login`, rc 5 -> `blocked`,
+    stamped into the registry, rendered as a PWA chip). Mid-run, it lands in **no** named state: the
+    spawn field describes only the last spawn (its own docstring says so), and `_session_state`'s
+    seven-word vocabulary has no auth member. A pane sitting at an auth banner with a fresh heartbeat
+    reads exactly `running`.
+18. No read-only `ccd` verb can name it. `ccd ls` prints the lifecycle; `ccd ws-audit` prints
+    alive/started/unit. An operator on the box cannot ask "which sessions cannot authenticate?" while
+    the PWA can — which inverts the normal degrade direction, since the CLI is the fallback when the
+    server is down.
+19. `_pane_hard_blocked` collapses "rate-limited" and "auth lost" into one boolean and the log line
+    says only `(blocked)`. Two conditions an operator handles differently — wait out a window versus
+    re-authenticate — reduced to one word. **An overloaded value at a seam by this repo's own
+    definition.**
+20. Detection is tmux pane-text scraping for literal vendor banners, pinned in tests against *fixture*
+    strings rather than the real binary's output. A Claude Code release that rewords its auth banner
+    silently deletes the entire detection lane and **no test goes red**.
+21. The mid-run detector reads `tail -8`; the spawn-time detector reads the whole pane. The narrow
+    window is the one that could catch a mid-run revocation. Widening it re-opens a documented
+    false-positive on restored scrollback, so this is a real trade, not an oversight.
+22. **The mail delivery gate will hand work to a session that cannot authenticate.** A login-screened
+    session runs no tools, so it fires no hooks, so its hookstate freezes at the last value — and
+    `SessionStart` writes `done`, the exact word the gate reads as "safe to inject". A wave brief
+    delivered to a dead-token worker is consumed by the durable store, acked by nobody, and the
+    coordinator re-measures `stale-tip` forever.
+
+### 3.4 The roster against the disk
+
+23. All four subscription secrets files hold **exactly one** variable, `CLAUDE_CODE_OAUTH_TOKEN`.
+    Uniform, with no second key anywhere.
+24. `secretsFile` is a path that is **deliberately never opened** — stated as an invariant in three file
+    headers and pinned by a canary-token test. Doctor compares the roster's path string to the wrapper's
+    path string and stops, so a declared-but-missing secrets file is structurally invisible. Existence
+    and mode (`test -r`) can be checked without violating the never-print-a-secret invariant.
+25. Doctor's 19-entry check table probes GitHub credential validity *and scope* (`gh_auth`) but has no
+    check of any kind for a Claude Code account token. **The cold path already accepts one network
+    round-trip to prove a credential**, and the timeout constant and FAIL/WARN vocabulary are in place.
+26. The `claude-corp` drift is an **un-applied migration**, not a model defect:
+    `deploy/accounts.migration.json:26` already declares its `secretsFile`; the live
+    `~/.ccrc/accounts.json` is simply stale against it.
+27. The `claude` drift is **not reportable at all**. Its secrets file exists and is sourced but is
+    undeclared, and the upstream wrapper is unauditable by construction — it must not match the
+    predicate that makes a file visible to the wrapper classifier, or every `ccrc install` fails. **Any
+    credential check must therefore be driven off the roster, never off the classifier.**
+28. `~/.ccrc/accounts.sh` carries ids, home-ability and the upstream id but **no `telemetry` field**, so
+    bash cannot apply the server's stricter rule that a `telemetry: 'none'` account's permanent unknown
+    must not read as permanent emptiness. Parity with `projectHome` holds today only because `gpt` is
+    the sole such account and is not home-able — an agreement of circumstance, not of rule.
+    `projected-home.test.ts` runs both sides over the same fixtures and exists to say so the day the
+    circumstance changes.
+
+### 3.5 The three hand-written wrappers
+
+29. `cck3` is **single-provider**: OpenRouter only, one model map, no runtime switch. Losslessly
+    templatable.
+30. `claude-glm` is **two-provider**: `case "${HANDOFF_PROVIDER:-cortecs}"` selects Cortecs direct
+    (`https://api.cortecs.ai`, `CORTECS_API_KEY`, `glm-5.2`) or OpenRouter via the whitelist proxy
+    (`OPENROUTER_API_KEY`, `z-ai/glm-5.2`) — different model names per branch.
+31. `gpt` is a program, not a wrapper: a LiteLLM venv, a second home-grown system-folding shim on :4000
+    in front of LiteLLM on :4001, a device-code OAuth `login` subcommand, a `_sync_gpt_config` that
+    copies plugins and settings out of `~/.claude`, and a `pkill` teardown verb.
+32. `handoff-proxy` is a **pass-through**, not a translator: it forwards to `https://openrouter.ai`,
+    normalising `/v1/...` to `/api/v1/...`, and injects `provider.only` from
+    `~/.handoff/providers-whitelist.json`. So OpenRouter serves the Anthropic wire format natively; the
+    proxy exists for the **ownership whitelist**, not for translation.
+33. Cortecs needs no proxy at all — `ANTHROPIC_BASE_URL` points straight at it.
+34. `litellm-config.yaml`'s own header states it presents the **ChatGPT subscription** (flat-rate, not
+    the per-token OpenAI API) as an Anthropic `/v1/messages` endpoint. `LITELLM_MASTER_KEY` is the local
+    proxy's own bearer, **not a provider credential**.
+
+## 4. The provider whitelist
+
+The line between "a roster row" and "a program" is not Anthropic-versus-not. It is **whether the
+provider serves the Anthropic `/v1/messages` wire format** (§3.5, items 32–34).
+
+| provider | wire | auth | endpoint | ccrc can generate |
+|---|---|---|---|---|
+| `anthropic` | native | `oauth`, `api-key` | default | **yes** |
+| `openrouter` | native | `api-key` | local proxy :8642 (whitelist) | **yes** |
+| `cortecs` | native | `api-key` | direct `https://api.cortecs.ai` | **yes** |
+| `openai` | needs translation | `oauth` (ChatGPT sub) | LiteLLM + folding shim | **no** |
+
+```ts
+export const PROVIDERS = {
+  anthropic: {
+    label: 'Anthropic', wire: 'anthropic-native',
+    endpoint: { kind: 'default' },
+    auth: {
+      oauth:     { envVar: 'CLAUDE_CODE_OAUTH_TOKEN', scope: 'inference-only' },
+      'api-key': { envVar: 'ANTHROPIC_API_KEY',       scope: 'full' },
+    },
+  },
+  openrouter: {
+    label: 'OpenRouter', wire: 'anthropic-native',
+    endpoint: { kind: 'local-proxy', port: 8642, bin: '.local/bin/handoff-proxy' },
+    auth: { 'api-key': { envVar: 'OPENROUTER_API_KEY', scope: 'full' } },
+  },
+  cortecs: {
+    label: 'Cortecs', wire: 'anthropic-native',
+    endpoint: { kind: 'direct', baseUrl: 'https://api.cortecs.ai' },
+    auth: { 'api-key': { envVar: 'CORTECS_API_KEY', scope: 'full' } },
+  },
+  openai: {
+    label: 'OpenAI', wire: 'needs-translation',
+    endpoint: { kind: 'external-stack' },
+    auth: { oauth: { envVar: 'LITELLM_MASTER_KEY', scope: 'full' } },
+  },
+} as const;
+
+export type ProviderId = keyof typeof PROVIDERS;
+export const PROVIDER_IDS = Object.keys(PROVIDERS) as ProviderId[];
+
+// Generatability derives from `wire` at BOTH the value and the type level, so the
+// runtime menu and the compile-time constraint cannot disagree.
+export const GENERATABLE = PROVIDER_IDS.filter((p) => PROVIDERS[p].wire === 'anthropic-native');
+export type GeneratableId = {
+  [P in ProviderId]: (typeof PROVIDERS)[P]['wire'] extends 'anthropic-native' ? P : never;
+}[ProviderId];
+```
+
+**The credential variable hangs off the `(provider, auth)` pair, not off the provider**, because
+Anthropic's two methods read different variables — `CLAUDE_CODE_OAUTH_TOKEN` for a subscription,
+`ANTHROPIC_API_KEY` for a key. Putting `envVar` on the auth entry is also what lets §5.4 *derive*
+credential scope from the same place instead of storing it separately.
+
+One honesty caveat on `openai`. Its declared `envVar` is the **local proxy's own bearer**, not an
+upstream credential (§3.5 item 34); the real ChatGPT credential is a token *directory* this design does
+not model. So availability for a `needs-translation` provider is partial by construction, and doctor
+must report it as partial rather than a green it cannot justify.
+
+`openai` is **in** the whitelist as a provider ccrc knows and cannot generate for — not omitted. That
+keeps `gpt`'s credential measurable by doctor while `account add`'s menu filters itself. Generatability
+**derives** from `wire` rather than being a second hand-maintained flag, per the house rule that
+single-source values are enumerated once and derived (`PR_REASONS = Object.keys(PR_REASON_MAP)`).
+
+`single-definition.test.ts` must see exactly one copy of this table.
+
+## 5. Roster model
+
+### 5.1 `external` is a destination, not a waypoint
+
+`external` means: **a human owns this wrapper's body; ccrc records that the account exists, what config
+dir it claims and what credential it needs, and never writes the file.** `claude-glm` and `gpt` are
+`external` permanently. Templating them would mean either dropping real behaviour (`claude-glm`'s
+runtime provider switch) or expressing a venv, two chained proxies, an OAuth subcommand and a
+config-sync in JSON — which is a shell script with extra steps, not a data model.
+
+### 5.2 The credential requirement lives inside `ExecSpec`
+
+```ts
+export type ExecSpec =
+  | { kind: 'upstream'; provider: 'anthropic'; auth: 'oauth'; secretsFile?: string }
+  | GeneratedExec
+  | { kind: 'external'; providers: ProviderId[]; secretsFile?: string };
+
+// One arm per generatable provider, so `auth` can only name a method THAT provider offers.
+export type GeneratedExec = {
+  [P in GeneratableId]: {
+    kind: 'generated';
+    provider: P;
+    auth: keyof (typeof PROVIDERS)[P]['auth'];
+    secretsFile: string;   // required — a generated account always carries its own credential
+    models?: ModelMap;     // the emitter requires it for every non-anthropic provider (§9.2)
+  };
+}[GeneratableId];
+
+export type ModelMap = {
+  model: string; small: string; haiku: string;
+  sonnet: string; opus: string; subagent: string;
+};
+```
+
+Because the *shape* of the requirement differs by who owns the body. `external` takes a **list**:
+`claude-glm` genuinely needs either `CORTECS_API_KEY` or `OPENROUTER_API_KEY` depending on
+`HANDOFF_PROVIDER`, and declaring one would narrow a distinction we received. This is not speculative
+generality — there is one real user today.
+
+The union makes illegal states unrepresentable: a `generated` account cannot declare two providers, and
+an `external` account cannot carry a model map ccrc would never write.
+
+`secretsFile` survives on **all three** arms — optional on `upstream` (the real binary may authenticate
+from a stored login instead), optional on `external` (a human's wrapper may source nothing ccrc can
+name), required on `generated`. Dropping it from the union would make §9.1's very first row —
+declaring `claude`'s undeclared secrets file — unrepresentable.
+
+The operator still answers exactly one provider and one auth, because `account add` only ever creates
+`generated` accounts. The list exists solely to describe hand-written wrappers honestly.
+
+### 5.3 Auth is constrained by provider at compile time
+
+```ts
+export type AccountAuth =
+  { [P in ProviderId]: { provider: P; auth: keyof (typeof PROVIDERS)[P]['auth'] } }[ProviderId];
+```
+
+Derived from the one table, so `{ provider: 'openrouter', auth: 'oauth' }` is a **compile error** rather
+than a runtime validation. No second copy of the whitelist exists to drift.
+
+### 5.4 Credential scope is derived, not stored
+
+Per §3.1 item 5, a `setup-token` credential is inference-only and cannot establish Remote Control. The
+operator has ruled that **Remote Control is not in use** (`~/.ccrc/remote-control` is `on` on the fleet
+host and absent on the server box, but nothing depends on it establishing), so this design **records the
+scope rather than chasing it**.
+
+Scope is read from the `(provider, auth)` entry in §4 — `anthropic.auth.oauth.scope` is
+`'inference-only'` — so it is **derived from the one table, not a fifth field to keep in sync**. The
+rule it encodes:
+*"has a credential" and "can be remote-controlled" are two different facts and must not collapse into
+one field.*
+
+### 5.5 The secrets file
+
+Every account's credential is **one variable in one file** (§3.4 item 23), and *which* variable comes
+from the `(provider, auth)` entry in §4 — never from a second list:
+
+- subscription: `CLAUDE_CODE_OAUTH_TOKEN` in `~/.cc-secrets/<id>-oauth.env`
+- api key: the provider's `envVar` in `~/.cc-secrets/<id>-<provider>.env`
+
+Both 0600, one variable per file, matching the shape already on disk. The shared `~/.handoff/env` is
+untouched: its accounts stay `external`, so nothing migrates.
+
+`secretsFile` remains a path that is never opened **for content**. Existence and mode are fair game
+(§7.1) and nothing checks them today.
+
+## 6. What the operator provides
+
+One name, one provider, one secret — plus model names when the provider is not Anthropic.
+
+| account type | the secret | where they get it | models |
+|---|---|---|---|
+| Claude subscription | `CLAUDE_CODE_OAUTH_TOKEN` | ccrc runs `setup-token`; they approve in a browser | none |
+| Anthropic API key | `sk-ant-…` | console.anthropic.com | none |
+| OpenRouter API key | `sk-or-…` | openrouter.ai/keys | **required** |
+| Cortecs API key | key | cortecs.ai | **required** |
+
+Four flat menu items, not a nested provider-then-auth question: a subscription is **always** OAuth
+(operator ruling, and it is what all four existing accounts already do), and an Anthropic API key is a
+separate account *kind* rather than a second way to authenticate a subscription.
+
+**Four questions, not nine.** The id answers five at once — the binary `~/.local/bin/<id>`, the config
+dir `~/.claude-<id>`, the secrets filename, the session-id prefix, and the `ccd` case arm. It is
+validated against the existing `^[a-z][a-z0-9-]{0,31}$` and refused on collision with any account or
+binary.
+
+Everything else **derives and is never asked**: `configDirSuffix` from the id, `hue` = next free in the
+palette, `telemetry` = `anthropic` for a subscription and `none` otherwise, `exec.kind` = `generated`,
+`homeAble` = true for subscriptions and false for api-key workers (overridable by flag).
+
+The secret is read on **stdin, never argv, never echoed**. That discipline is inherited, not
+re-derived: `ccrc passwd` leaked a passphrase into terminal scrollback because bash restarts an
+interrupted `read` after a trapped handler, and then *accepted* it under a banner promising the
+interrupt aborts.
+
+Then ccrc acts: write the secret 0600 -> write the roster entry -> converge the wrapper -> **smoke-test
+it**, running the new wrapper on one trivial prompt and requiring a real answer. That last step is the
+acceptance gate and the reason this is a verb rather than a runbook: a typo'd key fails in the ten
+seconds the operator is standing there, not three days later when a wave dispatches a worker into it.
+
+**A generated OpenRouter account routes through `handoff-proxy`, not straight at `openrouter.ai`.** The
+proxy exists so a provider absent from `providers-whitelist.json` cannot serve; a generated account
+going direct would silently open the hole the proxy was built to close.
+
+## 7. Credential health — slice A2
+
+### 7.1 What health can and cannot be
+
+It cannot be read from disk (§3.2 item 12) and it cannot be asked of `claude auth status` (item 11). It
+costs **one inference request**, classified on `api_error_status == 401` together with
+`terminal_reason == "api_error"` — never on `subtype`, which reports `"success"` even on a hard auth
+failure, and never on the human-readable string.
+
+Doctor already has the precedent: `gh_auth` spends a network round-trip to prove a credential inside the
+19-entry table, with the timeout constant and FAIL/WARN vocabulary in place. A new
+`_check_account_tokens` entry belongs in that table, driven **off the roster** (§3.4 item 27), with the
+bijection test in `server/test/ccrc-doctor.test.ts` pinning it.
+
+Two tiers, because they cost differently:
+
+- **Free, and nothing does it today:** does the account have a credential *source* at all — a readable
+  secrets file defining the expected variable, or a readable `.credentials.json`. Existence and mode
+  only, never content, so the canary test still passes.
+- **One round-trip, cold path only:** is the credential *accepted*.
+
+### 7.2 A dead account must be nameable
+
+The gap is mid-run, not at spawn (§3.3 items 17–18). "Cannot authenticate" is a fact about *now* that
+only the spawn-time lane can currently express, and the spawn field's own docstring forbids reusing it.
+So a mid-run auth verdict needs **its own registry field and its own wire member**, mirroring
+`swapblocked` — the existing precedent for a durable, PWA-rendered, mid-run fault marker that reaches
+the fleet wire within one tick. Additive only; `FLEET_PROTO` is not bumped.
+
+It must also be answerable **on the box**: a read-only `ccd` verb has to be able to say which sessions
+cannot authenticate, or the CLI stays worse-informed than the PWA it is meant to back up.
+
+### 7.3 Un-collapse the classifier
+
+`_pane_hard_blocked` must return **which** class it matched (§3.3 item 19). The rescue may still treat
+both identically — that is a correct policy — but the log line and any durable marker must not, because
+the operator's next action differs: wait out a window, or re-authenticate.
+
+### 7.4 Make the detection lane load-bearing
+
+The auth-banner regexes are pinned against fixture strings, so a vendor rewording deletes detection
+with no test going red (§3.3 item 20). The fix is not a better regex — it is to stop depending on the
+TUI's copy where a machine-readable signal exists. `--output-format json` gives one for any probe ccrc
+initiates. Pane scraping remains necessary for a *human-driven* interactive session, so it stays, but it
+must no longer be the **only** lane.
+
+The `tail -8` versus whole-pane asymmetry (item 21) is a documented trade and is **not** resolved by
+this design. It is recorded for the plan to weigh, with the false-positive it protects against stated.
+
+### 7.5 Two consumers that must respect health, and one seam left open
+
+- **The mail delivery gate** needs a conjunct beyond `hs.state === 'done'` — something meaning "and
+  this session can actually take a turn" (§3.3 item 22). Coordination correctness depends on it.
+- **`--bare`** (§3.1 item 6) is a dated external deadline. Wherever a subscription token is the intended
+  credential, the non-bare mode must be explicit, with a test that goes red if a `-p` path stops
+  carrying the token.
+- **Left open, deliberately:** whether a health signal should feed placement *eligibility*. Placement
+  ranking is already correct (§3.3 item 14) and `_avail`'s permissiveness is load-bearing for the
+  rescue. Making a dead account ineligible is a behaviour change to a working mechanism and is slice C's
+  question, not this design's.
+
+## 8. The OAuth flow through the UI — slice B2
+
+A headless box cannot complete a browser flow, so the URL must reach the operator's phone. The flow is
+interactive and multi-round-trip: `setup-token` must stay alive between "here is the URL" and "here is
+the code", which no one-shot exec frame can carry.
+
+**The vehicle is a tmux pane** — the shape ccrc already exists to drive. Not a new interactive exec
+surface across the agent link, which is precisely what `EXEC_COMMANDS = ['tmux','ccd']` and one-shot
+`CcdArgv` exist to prevent, and which would own a lifecycle problem the pane gets for free.
+
+**But the pane runs a ccrc-owned helper, not `setup-token` directly.** `setup-token` prints the token to
+stdout, and pane output reaches the browser, the pane history and `.cc-clips`. The helper captures the
+token straight into `~/.cc-secrets/<id>-oauth.env` at 0600 and prints only two things: the URL on a
+known marker line, and a redacted confirmation. So the pane stays safe to render and clip, and the URL
+is machine-detectable *because ccrc chose the format* — which is what makes it a tappable button rather
+than text to select on a phone.
+
+**Pinned by test: the token must never appear in anything renderable.**
+
+`ccrc account reauth <id>` is `add` minus the roster write. So B2's deliverable is **the OAuth pane flow
+as a reusable unit**, with two callers. That also sets its priority: with a one-year horizon and no
+refresh (§3.1 item 2), re-authentication is a **recurring** operational chore across five wrapper HOMEs,
+usually performed when something is already broken. It has to be pleasant on a phone.
+
+Because nothing exposes a token's real expiry (§11), ccrc records the **mint date** at `add`/`reauth`
+time and warns ahead of the one-year cliff. That is the only available pre-warning.
+
+### 8.1 Transport
+
+These routes carry a provider credential. `account add` over the plain HTTP listener would put an API
+key on the wire in clear; inside the tailnet that is WireGuard-encrypted rather than naked, but the
+secret-bearing route must **refuse unless reached over the HTTPS path** (`tailscale serve` :8443) and be
+gated on the box token like every other coordination write. This is also the first genuine operational
+reason to arm Stage 3a's auth on the live box, which so far has had none.
+
+## 9. Slice A concretely
+
+### 9.1 Commit 1 — the roster tells the truth
+
+`shared/roster.ts` gains §4 and §5. The live `~/.ccrc/accounts.json` goes to version 2 on both boxes.
+
+| account | change |
+|---|---|
+| `claude` | declare the `secretsFile` that exists and is sourced but was never declared (§3.4 item 27) |
+| `claude-corp` | **apply the shipped migration** — `deploy/accounts.migration.json:26` already declares it |
+| `claude2`, `claude-dev0` | provider/auth added; `secretsFile` unchanged |
+| `cck3` | adopted `external`, `providers: ['openrouter']` |
+| `claude-glm` | adopted `external`, `providers: ['cortecs', 'openrouter']` |
+| `gpt` | adopted `external`, `providers: ['openai']` |
+
+Migration rides `_inst_roster`, idempotently. A v1 entry with `upstream`/`generated` exec and an
+`-oauth.env` secrets file **derives** to anthropic/oauth safely. What it cannot derive — the three
+external accounts — makes doctor **FAIL** asking the operator to declare them. Fail loud, never guess.
+
+**Also in commit 1, because slice A is already touching roster generation:** emit `telemetry` into
+`~/.ccrc/accounts.sh`, closing the parity gap `_ws_least_loaded` documents against itself (§3.4 item
+28). `projected-home.test.ts` already exists to prove it.
+
+**The doctor rule that makes the slice worth doing: converge owns files, doctor owns viability.**
+`ccrc wrappers` makes the file match the roster; `ccrc doctor` reports whether the account can actually
+work *here*. So the server box's missing `claude-dev0` wrapper gets written — that is drift — while its
+absent credentials become **WARN: unavailable on this box**, not FAIL, and not roster drift. An
+account's definition is fleet-wide; its availability is per-box and **measured, never declared**.
+
+Mutation tests, each measured red before and after:
+
+1. Delete the "generated implies `wire: 'anthropic-native'`" constraint -> a fixture declaring a
+   generated `openai` account must go red.
+2. Collapse WARN(credential-absent-here) into FAIL(undeclared-wrapper) -> red. This is the
+   no-overloaded-null rule at the doctor's seam, and it is the exact conflation that made three
+   unrelated warnings read as one problem.
+3. Hand-maintain `PROVIDER_IDS` instead of deriving it -> `single-definition.test.ts` red.
+4. Widen the derived `AccountAuth` union to `string` -> a fixture with
+   `{ provider: 'openrouter', auth: 'oauth' }` must fail typecheck, pinned by `typecheck-tests`.
+5. Drop a `secretsFile` whose wrapper sources it -> doctor FAIL.
+6. Remove `telemetry` from the emitted `accounts.sh` -> `projected-home.test.ts` red.
+
+### 9.2 Commit 2 — the api-key template, proved against `cck3`
+
+`gen-wrappers.mjs` learns to emit an api-key body: credential precondition, proxy bootstrap when the
+endpoint is `local-proxy`, config dir, base URL, auth token, the six-variable model map, the whitelist
+grep for the model's provider prefix, `exec claude "$@"`. It **drops** two things the hand-written
+wrappers carry: the `case "${HANDOFF_PROVIDER}"` runtime switch (one provider per generated account) and
+the `${HANDOFF_CLAUDE_MODEL:-…}` env overrides — with the roster owning the model map, the place you
+change a model is the roster, not an env var that shadows it.
+
+Then `cck3` flips to `generated`, and it is the **proof** rather than a beneficiary. Equivalence is
+behavioural, not byte-identity. In a fixture HOME: shim a fake `~/.local/bin/claude` that dumps `env`
+and exits, bind an ephemeral port and set `HANDOFF_PROXY_PORT` to it so the bootstrap short-circuits
+without spawning python, run both wrappers, and assert
+
+- the **set** of `ANTHROPIC_*` and `CLAUDE_*` variables is equal — so a dropped variable fails, not only
+  a changed one
+- every value is equal
+- with the key unset, both refuse with the same exit status
+- with the port closed, both attempt the bootstrap (asserted via a stub `python3` on PATH)
+
+The hand-written body is snapshotted to `server/test/fixtures/cck3.reference.sh` as the contract.
+Deleting a model-map line from the template turns the env-set diff red — the mutation test and the proof
+in one mechanism. If the template cannot reproduce `cck3`, that is learned now against a reference
+instead of later against an account that has none.
+
+`claude-glm` and `gpt` stay untouched. The generator already emits `protected\t<id>` for every
+non-generated account, so that path exists.
+
+### 9.3 Deploy
+
+Both commits touch `ccd/ccrc`, `ccd/ccrc-doctor-checks` and `deploy/gen-wrappers.mjs`, so both are
+**agent-first**: fleet host before server.
+
+### 9.4 Ordering against work in flight
+
+`ws/ccrc-adopt-and-wrappers-upstream-account` is fixing the invariant that `~/.local/bin/claude` is the
+binary and never a wrapper — the guards key on `exec.kind: 'upstream'` rather than on whether the file
+is a symlink, and doctor reports nothing. **That fix is a precondition for this design**, because §7.1's
+credential check is roster-driven precisely because the upstream wrapper is unauditable by construction
+(§3.4 item 27). It must land on `main` first; slice A then builds on a fixed invariant rather than
+designing around a broken one.
+
+## 10. Non-goals
+
+- **Managed LiteLLM.** OpenAI stays `external`. Taking on the config yaml, the venv, the folding shim,
+  device-code login and teardown is a slice at least the size of A and B together, and nothing needs it.
+- **Templating `claude-glm` or `gpt`.** §5.1.
+- **A proxy registry.** There is one proxy; it is inlined on the endpoint and generalises when a second
+  appears.
+- **A `posture: 'orchestrator' | 'worker'` field.** It governs what goes *inside* the config dir and has
+  no reader until `account add` exists. It lands in slice B with its consumer, not in the schema early.
+- **Building on `CLAUDE_CODE_OAUTH_REFRESH_TOKEN`.** Undocumented (§3.1 item 7).
+- **Changing placement eligibility.** §7.5.
+- **Any new `ccd` verb for coordination mutation**, any new exec-whitelist entry, any `FLEET_PROTO` bump.
+
+## 11. Open questions
+
+1. **Is the one-year figure an enforced TTL or a documented approximation?** No per-token expiry is
+   exposed by `setup-token`, `auth status --json`, or any doc page found. ccrc therefore cannot read a
+   token's real expiry and must infer it from the mint date it records itself (§8).
+2. **What is the official revocation surface?** claude.ai -> Settings -> Claude Code appears only in
+   community and issue text; no Anthropic doc states it. Needs a human to open that page. This matters
+   for `reauth`'s documentation, not for its mechanism.
+3. **Are the undocumented `CLAUDE_CODE_OAUTH_*` variables a public contract or internal plumbing?**
+   Treated as internal here.
+4. **Does `--remote-control` currently fail silently on the fleet host?** `rc` is `on` there and the
+   Anthropic wrappers authenticate by env token, which the binary says cannot establish Remote Control —
+   yet sessions run fine, implying the flag is passed but never establishes. The operator does not use
+   Remote Control, so this design records scope rather than chasing it (§5.4). Worth confirming before
+   anyone ever *does* rely on RC.
+5. **Should a minimum Claude Code version be enforced?** §3.1 item 4 gives a floor of 2.1.228 for any box
+   relying on the env token. Whether that becomes a doctor check or a documented note is a plan-time
+   call.
+
+## 12. Deviations
+
+D-numbers are **not allocated in this document**. The ledger is global and monotonic across project
+history, and four PRs merged onto `main` during this design conversation. The next free number must be
+read from `origin/main` at plan-writing time — not from this branch, and not from Stage 3a's ceiling.
+The renumber that cost a full descending-order rewrite of D-108..D-140 is the reason this paragraph
+exists.
