@@ -1516,9 +1516,9 @@ describe('Build 9 nouns — the lifecycle journal vocabulary', () => {
       // `it` below.
       ['LC_REFUSAL_TOKENS', 'LC_REFUSAL_WORD'],
     ] as const) {
-      expect(api, `${list} must derive from ${map}`)
+      expect.soft(api, `${list} must derive from ${map}`)
         .toMatch(new RegExp(`export const ${list}[^=]*=\\s*\\n?\\s*Object\\.keys\\(${map}\\)`));
-      expect(api, `${list} is a hand-written array`)
+      expect.soft(api, `${list} is a hand-written array`)
         .not.toMatch(new RegExp(`export const ${list}[^=]*=\\s*\\[`));
     }
   });
@@ -1538,9 +1538,9 @@ describe('Build 9 nouns — the lifecycle journal vocabulary', () => {
     const api = readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8');
     for (const m of ['LIFECYCLE_ACT_MAP', 'LIFECYCLE_OUTCOME_MAP', 'ACTOR_CLASS_MAP',
       'CORROBORATION_MAP', 'DEC_CORROBORATES']) {
-      expect(api, `${m} must not be exported`)
+      expect.soft(api, `${m} must not be exported`)
         .not.toMatch(new RegExp(`^\\s*export const ${m}\\b`, 'm'));
-      expect(api, `${m} must exist`).toMatch(new RegExp(`^\\s*const ${m}\\b`, 'm'));
+      expect.soft(api, `${m} must exist`).toMatch(new RegExp(`^\\s*const ${m}\\b`, 'm'));
     }
     expect(api, 'LC_REFUSAL_WORD is the renderer and is exported directly')
       .toMatch(/^\s*export const LC_REFUSAL_WORD\b/m);
