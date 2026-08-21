@@ -244,7 +244,7 @@ extend `ccrc-cli.test.ts`.
 ### Task 10: Runbook step 12 + docs
 
 **Files:** runbook, `README.md`, `deploy/ccrc.env.example`; extend `runbook-holds.test.ts`.
-- [ ] Step 12 per spec §9 (tag → release → `--release` install on VM1 → `--role fleet` on
+- [x] Step 12 per spec §9 (tag → release → `--release` install on VM1 → `--role fleet` on
   VM2 → restated proof → update across a second tag → uninstall+reinstall), with
   `runbook-holds` pins for quoted transcript lines; README gains the release/update/uninstall
   section and retires the "full multi-box guide is Stage 5" sentence if it now tells enough;
@@ -446,6 +446,22 @@ it merges first.)
   Unreachable is a SKIP in `_check_build` (deliberately unlike `_check_fleet`'s WARN,
   and per this task's own text): a dead ccrc.service is `_check_services`' FAIL, and a
   second verdict in a second vocabulary for one condition is the overloaded seam.
+- **Task 10 mutation measurements** (applied, run, reverted): the 8 new step-12 pins in
+  `runbook-holds.test.ts` ran RED-FIRST (8/8, section absent) before step 12 was written.
+  Then, with the section in place (14/14 green): (M1) the runbook's quoted sweep line
+  corrupted (`; panes untouched` dropped from the fenced quote) → 1 red (the sweep pin —
+  the runbook side of the link); (M2) `_upd_report`'s template in `ccd/ccrc` mutated
+  (`->` → `=>`) → 1 red (the report pin's source-template assert — the source side of the
+  same link, proving the pins bind the two rather than free-floating an expected string).
+  Suite 14/14 green before and after each; typecheck-tests + single-definition 75/75.
+  Notes: the runbook's step numbering deliberately jumps 10 → 12 (step 11 is stage 3b's,
+  on its own branch — said in the section header, so a reader does not hunt for a missing
+  section); README's Stage-5 sentence at "Install (single box)" is retired in favour of a
+  pointer to the new "Releases" section + "Remote fleet mode" + runbook step 12 (the full
+  outside-developer proof stays Stage 5 work — the README sentence it replaces claimed
+  less than the section now tells); `ccrc.env.example`'s `CCRC_ROLE` entry states it is
+  the one key in that file the server never reads (readers: `ccrc update`/`logs`/
+  `uninstall`), matching `cmd_update`'s absent/unrecognisable → default-both fallback.
 - **D-145** (Task 8, found — NOT caused — during execution; for Task 11's fix round):
   `agent/test/deploy-verify.test.ts` is red 2/42 at this branch's pre-Task-8 HEAD
   (`3eb0d4d`) and on the working tree alike, and the cause is Task 1's `stamp_build`

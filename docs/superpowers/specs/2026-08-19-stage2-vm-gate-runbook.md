@@ -3,7 +3,9 @@
 **Scope note (2026-08-20):** steps 1–9 are the stage-2 install proof this document was written for.
 **Step 10 arms the stage-3a session gate on the same box** — off by default, so a run that stops at
 step 9 is complete on its own terms. Step 10's proof is `localhost`-scoped by design; read "What this
-run does NOT prove" before deciding what it buys you.
+run does NOT prove" before deciding what it buys you. **Step 12 (added 2026-08-21) is the stage-4
+release round-trip** — two fresh boxes, a checksummed release artifact, update across a second tag,
+uninstall + reinstall — and is its own gate, runnable independently of steps 1–10.
 
 **Status: PENDING-OPERATOR.** Everything this document depends on is shipped and tested — `bash
 install.sh`, `ccrc install`, `ccrc doctor`'s A2-NEW remedy, the per-box `--remote-control` flag
@@ -440,6 +442,196 @@ precisely so it can be thrown away.
 **Disarming.** Set `CCRC_AUTH=` (or remove the line) and restart. The passphrase file stays where it
 is and nothing reads it; `ccrc doctor` goes back to reporting a usable passphrase behind an off gate.
 That is the rollback for this whole step and it needs no other undo.
+
+### 12. The release round-trip — two boxes, two tags (stage 4)
+
+Everything above installs from a checkout it builds on the box. This step proves the OTHER install
+path — the stage-4 release pipeline (`docs/superpowers/specs/2026-08-21-stage4-release-design.md`)
+— end to end: a CI-built, checksummed artifact installs a server box and a fleet box, both boxes
+update across a second tag with one command each, and one box uninstalls to a state where reinstall
+is safe. This is the restated proof (§R3) run for real. (Step 11 — stage 3b's exposure ceremony —
+ships on its own branch; the numbering gap here is that, not a missing section.)
+
+**Prerequisites beyond the top of this document:** TWO fresh VMs that can reach each other (a
+tailnet works; call them VM1 = the server box, VM2 = the fleet box), outbound HTTPS to github.com
+on both, `curl`/`tar`/`sha256sum`/`jq` on both (all in a base Ubuntu), and push rights on a fork
+whose default branch carries `.github/workflows/release.yml`. The worked example below uses two
+throwaway tags, `v0.0.1` and `v0.0.2` — substitute your own pair; nothing below depends on the
+numbers, and every `v0.0.1`/`v0.0.2` in a quoted transcript line arrives via the tag you cut, so
+your diff must substitute consistently.
+
+#### 12a. Cut the first tag, wait for the release
+
+```bash
+git tag v0.0.1 && git push origin v0.0.1
+```
+
+Watch the `release` workflow run. When it is green, the tag's GitHub Release holds exactly two
+assets: `ccrc-v0.0.1.tar.gz` and `SHA256SUMS`. The workflow is thin by design — `deploy/
+build-release.sh` owns the whole build (it runs locally too), refuses a dirty tree and refuses an
+untagged HEAD — so a red run here prints the script's own refusal, not YAML archaeology.
+
+#### 12b. VM1 — install from the release
+
+```bash
+git clone <your fork> ccrc && cd ccrc
+bash install.sh --release v0.0.1
+```
+
+(The clone is only a way of having `install.sh`; release mode never builds on the box — the
+prebuilt dists ship in the tarball, verified by `sha256sum -c` before a single file is extracted.)
+Expect two `install.sh: fetching …` lines, then exactly:
+
+```
+install.sh: verified ccrc-v0.0.1.tar.gz — handing off to the staged 'ccrc install'
+```
+
+then the staged install's own transcript — the same steps as step 2, closing with
+`install: done — every step above converged` and its doctor. On a truly fresh VM1 the doctor FAILs
+on `wrappers` exactly as step 2 documents, until you repeat step 3 (install Claude Code) on this
+box. Then prove the installed identity:
+
+```bash
+ccrc version
+curl -s http://127.0.0.1:7788/health
+```
+
+`ccrc version` prints its sha line and then, on its own line (release artifacts always carry the
+tag in their shipped `build.json`):
+
+```
+version v0.0.1
+```
+
+and `/health`'s JSON carries the sibling field `"version":"v0.0.1"`.
+
+#### 12c. VM2 — the fleet role
+
+```bash
+git clone <your fork> ccrc && cd ccrc
+bash install.sh --release v0.0.1 --role fleet
+```
+
+Everything after `--release [tag]` passes through to the staged `ccrc install`, so `--role fleet`
+rides. Run it from a terminal — the two prompts are tty-only, and the token refuses to arrive over
+a pipe. It asks for the server WS URL and the agent token (generate one: `openssl rand -hex 32`;
+it is never echoed), writes `~/.ccrc/agent.env` 0600 seed-once, and installs and enables
+`ccrc-agent.service` — and NOT `ccrc.service`. Then edit `~/.ccrc/agent.env` to bind the address
+VM1 will dial (`CCRC_AGENT_HOST=<VM2's tailnet address>` — the default is loopback, and never
+`0.0.0.0`) and `systemctl --user restart ccrc-agent.service`.
+
+Wire VM1 to it: in VM1's `~/.ccrc/ccrc.env` set `CCRC_FLEET=remote`,
+`CCRC_AGENT_URL=ws://<VM2's address>:7789/agent` and `CCRC_AGENT_TOKEN=<the same token>`, then
+`systemctl --user restart ccrc.service` there.
+
+#### 12d. The restated proof at N
+
+Both boxes now run v0.0.1's build from the same artifact. On VM1:
+
+```bash
+ccrc status
+```
+
+The fleet line (server in contact with the fleet host, both answers measured):
+
+```
+fleet:     agreed — build agreed, roster agreed
+```
+
+and on VM2, `ccrc version` answers `version v0.0.1` exactly as VM1's did in 12b.
+
+#### 12e. Update across a second tag — fleet box first
+
+Cut `v0.0.2` (any newer commit) and wait for its release as in 12a. Then update the FLEET box
+first — that is the standing order (the server reads what the fleet host's hook writes, and the
+agent caches `ccd caps` at boot, so the other order runs a server reading fields the fleet host
+does not yet write). On VM2:
+
+```bash
+ccrc update
+```
+
+(`ccrc update --to v0.0.2` pins the same thing explicitly.) Expect, in order: two
+`update: fetching …` lines, then
+
+```
+update: verified ccrc-v0.0.2.tar.gz (transport checksum, then the per-file MANIFEST)
+```
+
+then `update: backup: ~/ccrc-backups/<ts> …` — the backup is complete BEFORE any install write —
+then the staged install's transcript (role-aware: this box re-runs with `--role fleet`), its
+closing doctor, and the supervisor sweep:
+
+```
+update: sweep: every live claude-session@ supervisor now runs the ccd this update installed (KillMode=process verified per unit before any restart; panes untouched)
+```
+
+The same line closes the sweep on a box with no live sessions — the `KillMode=process` preflight
+still ran, against an uninstantiated instance of the template, and `try-restart` simply matched
+nothing. If you instead see `update: sweep REFUSED — …` and an `update: DEGRADED: …` line, the
+update itself still converged (it exits 0); the refusal names the resolved KillMode and the
+drop-in path that fixes it — a real finding on that box, not a broken update. The transcript
+closes with the from→to report, your boxes' own two shas in the parentheses:
+
+```
+update: build: v0.0.1 (<old sha>) -> v0.0.2 (<new sha>)
+```
+
+Now, BEFORE updating VM1 — this is §R3's skew half. On VM1:
+
+```bash
+ccrc status
+```
+
+```
+fleet:     disagreed — build skewed, roster agreed
+```
+
+and `ccrc doctor` there FAILs its `fleet` check with the remedy naming `ccrc update`,
+fleet-box-first. Then run `ccrc update` on VM1 the same way. (Had you updated the server box
+first, the run would have printed a loud `update: WARN: … SKEWED …` line naming the ordering and
+proceeded — a warning, never a refusal.) After VM1's update, `ccrc status` there reads
+
+```
+fleet:     agreed — build agreed, roster agreed
+```
+
+again, VM1's `/health` carries `"version":"v0.0.2"`, and `ccrc version` on either box answers:
+
+```
+version v0.0.2
+```
+
+That sentence — one command per box, both `/health` and `ccrc version` reporting N+1, skew visible
+in between — is the restated criterion, measured.
+
+#### 12f. Uninstall + reinstall on one box
+
+On VM2 (stop any sessions first — the verb refuses while live sessions exist unless `--force`):
+
+```bash
+ccrc uninstall
+```
+
+Expect the close:
+
+```
+uninstall: done — this box is off ccrc, and reinstall is safe: ~/.ccrc (config, roster, identity), the session registry rows, worktrees and ~/ccrc-backups were all preserved
+```
+
+Confirm the Claude settings are clean — `jq .hooks ~/.claude/settings.json` shows none of ccrc's
+managed entries (anything you added by hand survives byte-identically, and every rewritten file
+was backed up first) — and that the marker-verified wrappers are gone while anything ccrc could
+not prove it wrote was left in place. Then reinstall:
+
+```bash
+bash install.sh --release v0.0.2 --role fleet
+```
+
+It converges with NO prompts: `~/.ccrc` survived the uninstall, so `agent.env`, the roster and
+`ccrc.env`'s recorded role are all kept seed-once, and the closing doctor reports the same box you
+had. That is the whole stage-4 claim closed: install from a verified artifact, update N→N+1 with
+one command per box, uninstall to a box that reinstalls safely.
 
 ## The deliverable beyond pass/fail
 
