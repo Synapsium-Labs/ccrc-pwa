@@ -110,12 +110,13 @@ with per-file sha256) and `SHA256SUMS` beside it. `<version>` = the tag, or
 ### Task 3: `.github/workflows/release.yml`
 
 **Files:** create the workflow; extend `server/test/build-release.test.ts` with source pins.
-- [ ] The workflow: `on: push: tags: ['v*']`; single job: checkout (full depth for the tag),
-  node from `server/package.json` engines (the ci.yml idiom), `bash deploy/build-release.sh
-  --out release-out`, `gh release create "$GITHUB_REF_NAME" release-out/* --verify-tag`
-  (via `GH_TOKEN: ${{ github.token }}`).
-- [ ] Pins (source-scan, the runbook-holds idiom): the workflow invokes `build-release.sh`
+- [x] The workflow: `on: push: tags: ['v*']`; single job: checkout (full depth for the tag),
+  node from `server/package.json` engines (the ci.yml idiom, via `node-version-file`),
+  `bash deploy/build-release.sh --out release-out`, `gh release create "$GITHUB_REF_NAME"
+  release-out/* --verify-tag` (via `GH_TOKEN: ${{ github.token }}`).
+- [x] Pins (source-scan, the runbook-holds idiom): the workflow invokes `build-release.sh`
   and never a second build path; it triggers only on `v*` tags; it uploads both artifacts.
+  (RED first: 3/3 pins failed with the workflow absent, 10 existing passed.)
   Commit `feat(release): the release workflow is thin — the script owns the build`.
 
 ### Task 4: `install.sh --release`
@@ -269,3 +270,12 @@ it merges first.)
   MANIFEST test: the node-crypto spot-verify of that file's digest, independently of
   `sha256sum -c MANIFEST` which reds on the same bytes). Suite green 10/10 before and
   after; typecheck-tests + single-definition + install-sh green (79/79).
+- **Task 3 mutation measurements** (applied to the workflow, run, reverted): (M1)
+  `workflow_dispatch:` added to the trigger set → 1 red (the trigger pin — deliberately
+  stricter than ci.yml, which keeps dispatch as its webhook-incident escape hatch; a
+  release must always match a pushed tag); (M2) `npm ci &&` prepended to the build step
+  → 1 red (the single-build-path pin — it also caught the workflow's own first-draft
+  COMMENT quoting `npm ci && npm run build`, which is the pin working as a source-scan);
+  (M3) the upload glob narrowed to `release-out/ccrc-*.tar.gz` → 1 red (the
+  both-artifacts pin: SHA256SUMS silently dropped). Suite 13/13 green before and after;
+  typecheck-tests + single-definition green (73/73).

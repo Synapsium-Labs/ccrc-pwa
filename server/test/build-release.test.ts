@@ -317,6 +317,48 @@ describe('build-release.sh: the tagged run — the matched set, checksummed', ()
   });
 });
 
+// ── .github/workflows/release.yml — the THIN delivery layer (spec §2) ─────
+// "No logic in YAML that the script doesn't own." The workflow cannot be
+// executed here (it runs only on GitHub's runners, on a tag push), so it is
+// pinned the way runbook-holds pins transcript lines: source-scan against the
+// exact strings whose loss would change what a release IS. Three properties:
+// the trigger set (only `v*` tags — a branch or PR trigger would cut releases
+// from unreviewed pushes), the single build path (the script, never a second
+// `npm run build` lane that could drift from it), and the upload (both
+// artifacts — tarball AND SHA256SUMS — via the glob over the script's --out).
+describe('release.yml: the thin workflow, pinned to the script', () => {
+  const WORKFLOW = join(REPO, '.github', 'workflows', 'release.yml');
+  const wf = (): string => readFileSync(WORKFLOW, 'utf8');
+
+  it('triggers on v* tag pushes and on NOTHING else', () => {
+    const src = wf();
+    expect(src).toMatch(/^on:\n  push:\n    tags: \['v\*'\]$/m);
+    // The full trigger vocabulary that would widen when a release fires:
+    // ci.yml's own workflow_dispatch escape hatch is deliberately absent —
+    // a re-cut is `git tag -f` + push, so the artifact always matches a tag.
+    for (const trigger of ['branches:', 'pull_request', 'schedule:', 'workflow_dispatch', 'workflow_call']) {
+      expect(src, `release.yml must not also trigger on ${trigger}`).not.toContain(trigger);
+    }
+  });
+
+  it('invokes build-release.sh and owns no second build path', () => {
+    const src = wf();
+    expect(src).toContain('bash deploy/build-release.sh --out release-out');
+    // The script runs `npm ci`/`npm run build` itself, per package. A copy of
+    // either in the YAML is a second build path — the drift this pin forbids.
+    expect(src, 'the YAML must not run npm itself').not.toMatch(/npm ci|npm run/);
+    expect(src, 'the YAML must not invoke a compiler').not.toMatch(/\btsc\b|\bvite\b/);
+  });
+
+  it('uploads both artifacts to the tag\'s release, token from the workflow', () => {
+    const src = wf();
+    // `release-out/*` is the script's whole --out dir: ccrc-<tag>.tar.gz AND
+    // SHA256SUMS — naming one file here would silently drop the other.
+    expect(src).toContain('gh release create "$GITHUB_REF_NAME" release-out/* --verify-tag');
+    expect(src).toContain('GH_TOKEN: ${{ github.token }}');
+  });
+});
+
 describe('build-release.sh: source pins', () => {
   // A casual edit that drops one of these flags makes every artifact's bytes
   // depend on who built it and when — silently, since nothing else fails.

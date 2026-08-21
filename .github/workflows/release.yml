@@ -1,0 +1,55 @@
+# The release pipeline's delivery layer, kept THIN by design (stage 4 spec
+# §2): everything a release artifact promises — the refusals, the layout, the
+# MANIFEST, the checksums — is promised by deploy/build-release.sh, which runs
+# and is TESTED locally (server/test/build-release.test.ts). This file only
+# gives the script a clean tagged checkout and hands its output to a GitHub
+# Release. No logic lives in YAML that the script doesn't own; the pins in
+# build-release.test.ts hold this file to that ("release.yml: the thin
+# workflow" — trigger set, single build path, both artifacts uploaded).
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      # `gh release create` writes to the repo's releases; everything else
+      # stays read-only.
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full depth: build-release.sh names the artifact by `git tag
+          # --points-at HEAD` and refuses an untagged HEAD — the tag ref (and
+          # any history a future stamper walks) must actually be present, not
+          # a shallow single-commit fetch.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          # The engines floor itself (>=22.13.0, node:sqlite) — read from the
+          # one place it is declared, so the release builder can never drift
+          # below the floor the packages pin (server/test/node-floor.test.ts).
+          node-version-file: server/package.json
+          cache: npm
+          cache-dependency-path: |
+            server/package-lock.json
+            agent/package-lock.json
+            pwa/package-lock.json
+
+      # The script owns the build: refuses dirty/untagged (CI never passes
+      # --untagged), installs and builds each package itself, assembles
+      # ccrc-<tag>.tar.gz + SHA256SUMS under --out.
+      - name: Build the release artifact
+        run: bash deploy/build-release.sh --out release-out
+
+      # Both artifacts — the tarball AND SHA256SUMS — ride the glob.
+      # --verify-tag: the release is cut only for a tag that exists on the
+      # remote, never a ref name conjured some other way.
+      - name: Publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" release-out/* --verify-tag
