@@ -3195,6 +3195,26 @@ export interface AuthStatus {
   authed: boolean;
   passkeysEnrolled: number;
   mode: 'off' | 'passphrase' | 'locked-out';
+  /**
+   * The DISTINCT `rpId` values over this box's stored passkeys, sorted — names
+   * only, never a credential id, a count, or key material (Stage 3b, spec D7).
+   *
+   * It exists for ONE sentence: a box renamed by `ccrc expose` keeps its old
+   * credentials on disk, every ceremony against them fails with the browser's
+   * generic `NotAllowedError`, and the login screen used to render "cancelled"
+   * for a state that is really "enrolled under the old name". With this field
+   * the screen can say what is true — and the anonymous ruling is
+   * `passkeysEnrolled`'s: the login screen reads it BEFORE anyone signs in, and
+   * "some passkey exists for some name" is already disclosed by the passkey
+   * button being drawn at all.
+   *
+   * ADDITIVE, `FLEET_PROTO` stays 1, and ABSENT means "unknown", never "no
+   * passkeys": an older server omits the field entirely, and the producer emits
+   * it only when at least one credential exists, so absence and emptiness never
+   * become two spellings from one build. A reader that collapsed absent to `[]`
+   * would tell every operator on an older server their keys were gone.
+   */
+  enrolledRpIds?: string[];
 }
 
 // ── WebAuthn (Task 8) ──

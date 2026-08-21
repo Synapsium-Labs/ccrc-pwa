@@ -912,6 +912,52 @@ file, and a FAIL on a passphrase file the server would refuse to boot on. It
 prints no byte of the file's contents, and neither does the server's own boot
 refusal.
 
+## Exposure: a public name and a real certificate (`ccrc expose`)
+
+A box goes public the same way its gate armed: dark by default, one operator
+verb, and nothing privileged ever run by ccrc. `ccrc expose duckdns` prompts
+for a DuckDNS subdomain and token (tty-only, echo off, never argv); `ccrc
+expose byo` prompts for your own origin and passkey rp id and leaves DNS to
+you. Either way the verb writes two ccrc-owned files and prints the rest:
+
+- **`~/.ccrc/exposure.env`** (0600 — the DuckDNS token lives here, and is
+  never printed: `ccrc expose status` and doctor report it as SET/NOT SET
+  only). It carries `CCRC_ORIGIN` and `CCRC_RP_ID` (plus the DuckDNS trio on
+  that arm) and is read by `ccrc.service` as a **second `EnvironmentFile`
+  after `ccrc.env`** — systemd's later-file-wins, so exposure keys override a
+  hand-set placeholder without touching the seed-once `ccrc.env`. To keep the
+  two files from ever disagreeing, the verb refuses to run while `ccrc.env`
+  still sets either key itself, naming both files and which would win.
+- **`~/.ccrc/Caddyfile`**, regenerated whole on every run: the host and
+  `reverse_proxy 127.0.0.1:<CCRC_PORT>`, nothing else. Stock Caddy's automatic
+  HTTPS does the certificate through the standard ACME challenges
+  (HTTP-01/TLS-ALPN-01) — which is why **a router forwarding ports 80 and 443
+  to the box is a prerequisite** the verb states loudly and nothing on the box
+  can verify for you.
+
+Everything root-side is a printed three-step ceremony — install caddy from the
+distro, symlink or copy the Caddyfile to `/etc/caddy/Caddyfile`,
+`sudo systemctl enable --now caddy` — that ccrc never executes: the same
+degraded-step doctrine as the installer's linger step, at verb scale. On the
+DuckDNS arm the verb also installs a user timer (`ccrc-ddns.timer`) that
+re-points the record at this box every five minutes, reading the token from
+`exposure.env` at run time so the world-readable unit file never carries the
+0600 secret. Four doctor checks — `exposure`, `caddy`, `cert`, `name` —
+measure each piece, and all four SKIP on a box that never ran the verb:
+not-configured is a valid end state, not a fault.
+
+Users with their own proxy skip the Caddy step; the documented contract is
+"terminate TLS, forward to `localhost:$CCRC_PORT`" (set in ccrc.env at
+install; default 7788, today's value). ccrc itself never speaks TLS and
+listens on loopback only.
+
+After exposing: restart the server so it reads the new origin, and **re-enrol
+every passkey** — passkeys are origin-bound, and a key enrolled at the old
+name fails loudly, with the login screen naming the old rp id. The full
+choreography — prerequisites, the sudo ceremony, the expected doctor
+transcript, the phone proof — is step 11 of
+[`docs/superpowers/specs/2026-08-19-stage2-vm-gate-runbook.md`](docs/superpowers/specs/2026-08-19-stage2-vm-gate-runbook.md).
+
 ## Install (single box)
 
 ```bash

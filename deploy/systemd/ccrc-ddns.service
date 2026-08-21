@@ -1,0 +1,13 @@
+[Unit]
+Description=Refresh this box's DuckDNS record (ccrc exposure, stage 3b spec D4)
+# The token stays in the 0600 EnvironmentFile and is expanded by systemd AT RUN
+# TIME — ${...} below is systemd's own syntax, not shell, and the installer
+# (ccrc's _exp_ddns_units) copies these bytes verbatim so this 0644 unit never
+# carries the secret itself. No leading '-': a box with no exposure.env has no
+# business running this unit, and a loud failure is the right answer.
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.ccrc/exposure.env
+# An empty ip= tells DuckDNS to use the caller's own address — the one thing
+# this box knows better than anything inside it does.
+ExecStart=/usr/bin/curl -fsS --max-time 30 "https://www.duckdns.org/update?domains=${CCRC_DDNS_DOMAIN}&token=${CCRC_DDNS_TOKEN}&ip="

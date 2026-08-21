@@ -214,6 +214,22 @@ export class PasskeyStore {
     return this.records.length;
   }
 
+  /**
+   * The DISTINCT rpIds over the stored rows, sorted — what
+   * `AuthStatus.enrolledRpIds` publishes so a login screen facing a renamed box
+   * can say "enrolled for a different box name" instead of "cancelled" (Stage
+   * 3b, spec D7).
+   *
+   * NAMES ONLY: no ids, no counts, no material — the projection discipline
+   * {@link list} states, applied to the anonymous route. Empty on an unusable
+   * file for {@link count}'s reason (the caller is drawing a login screen, not
+   * auditing a store), and the route turns empty into ABSENT so an older
+   * server's silence and "no keys" stay distinguishable on the wire.
+   */
+  enrolledRpIds(): string[] {
+    return [...new Set(this.records.map((r) => r.rpId))].sort();
+  }
+
   /** The credential ids, for the ceremony's `allowCredentials`.
    *
    *  PUBLISHED TO AN UNAUTHENTICATED CALLER, deliberately and unavoidably: a

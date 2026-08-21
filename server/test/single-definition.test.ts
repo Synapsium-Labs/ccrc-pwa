@@ -928,6 +928,93 @@ describe('one ~/.ccrc/remote-control, spelled once per tool and equal across all
   });
 });
 
+// — Stage 3b, Task 1: the exposure seam —
+describe('one ~/.ccrc/exposure.env, spelled once in bash through CCRC_EXPOSURE_FILE', () => {
+  // Spec D3: exposure config (CCRC_ORIGIN, CCRC_RP_ID, the DuckDNS trio) lives
+  // in its OWN file, written by the post-install verb `ccrc expose` — never in
+  // the seed-once `ccrc.env` (`_inst_env` writes that once and never again,
+  // D-88). The server unit reads it as a SECOND, optional `EnvironmentFile=`
+  // line, which the ccrc-install suite pins ("reads ccrc.env then
+  // exposure.env"); THIS block pins the bash side the way `CCRC_RC_FILE`'s
+  // does above: one declaration, and no second spelling of the literal path
+  // for a later writer/reader to drift from. The path also appears in unit
+  // TEMPLATES (`deploy/ccrc.service`, and Task 3's ccrc-ddns.service) as
+  // `%h/.ccrc/exposure.env` — systemd's own dialect, not bash, outside this
+  // corpus, and the install suite holds those bytes instead. Later 3b tasks
+  // that add a bash toucher (doctor's `exposure` check is the known one)
+  // extend the holder list HERE, by name, like the remote-control block's.
+  const NEEDLE = '.ccrc/exposure.env';
+
+  it('is touched by exactly one bash file, and that file is ccd/ccrc', () => {
+    expect(holdersOf(NEEDLE)).toEqual([
+      'ccd/ccrc',   // CCRC_EXPOSURE_FILE — the declaration `cmd_expose` writes through
+    ]);
+  });
+
+  it('ccrc spells the path once — the declaration is the only line of shell naming it', () => {
+    const code = codeLines(path.join(ccrcRoot, 'ccd', 'ccrc'));
+    expect(code.filter((l) => l.includes(NEEDLE))).toEqual([
+      'CCRC_EXPOSURE_FILE="$HOME/.ccrc/exposure.env"',
+    ]);
+  });
+});
+
+// — Stage 3b, Task 2: the Caddyfile the expose verb regenerates —
+describe('one ~/.ccrc/Caddyfile, spelled once in bash through CCRC_CADDYFILE', () => {
+  // Spec D2: `ccrc expose` generates the COMPLETE Caddyfile into `~/.ccrc` —
+  // ccrc-owned, regenerated every run — and the OPERATOR, never ccrc, links or
+  // copies it into /etc/caddy in the printed root ceremony (ccrc has never run
+  // sudo and does not start here). The path is spelled once, for
+  // `CCRC_EXPOSURE_FILE`'s reason above: `cmd_expose` WRITES through the
+  // variable and the ceremony lines PRINT the path at the operator through the
+  // same variable, so a literal anywhere else is a path the verb does not
+  // actually write. `/etc/caddy/Caddyfile` in the printed remedy is a
+  // DIFFERENT path — caddy's own, on the root side of the boundary — and is
+  // deliberately not this needle.
+  const NEEDLE = '.ccrc/Caddyfile';
+
+  it('is touched by exactly one bash file, and that file is ccd/ccrc', () => {
+    expect(holdersOf(NEEDLE)).toEqual([
+      'ccd/ccrc',   // CCRC_CADDYFILE — the declaration cmd_expose writes through
+    ]);
+  });
+
+  it('ccrc spells the path once — the declaration is the only line of shell naming it', () => {
+    const code = codeLines(path.join(ccrcRoot, 'ccd', 'ccrc'));
+    expect(code.filter((l) => l.includes(NEEDLE))).toEqual([
+      'CCRC_CADDYFILE="$HOME/.ccrc/Caddyfile"',
+    ]);
+  });
+});
+
+// — Stage 3b, Task 3: the ddns unit pair's name —
+describe('one ccrc-ddns unit name, spelled once in bash through CCRC_DDNS_UNIT', () => {
+  // Spec D4: the duckdns arm installs `ccrc-ddns.service` + `ccrc-ddns.timer`
+  // and enables the timer — so the name is an INSTALL destination, an enable
+  // argument and (degraded) a printed remedy, and a drift between any two is a
+  // box whose timer was installed under one name and enabled under another.
+  // The unit FILES never carry the name (a .timer with no `Unit=` starts the
+  // same-named .service — systemd's own default is the single source there),
+  // and the template FILENAMES under deploy/systemd are reached through the
+  // variable. Later 3b tasks that add a bash toucher (Task 4's `name` check
+  // remedy, "check ccrc-ddns.timer", is the known one) extend the holder list
+  // HERE, by name, like the remote-control block's.
+  const NEEDLE = 'ccrc-ddns';
+
+  it('is touched by exactly one bash file, and that file is ccd/ccrc', () => {
+    expect(holdersOf(NEEDLE)).toEqual([
+      'ccd/ccrc',   // CCRC_DDNS_UNIT — the declaration `_exp_ddns_units` installs and enables through
+    ]);
+  });
+
+  it('ccrc spells the name once — the declaration is the only line of shell naming it', () => {
+    const code = codeLines(path.join(ccrcRoot, 'ccd', 'ccrc'));
+    expect(code.filter((l) => l.includes(NEEDLE))).toEqual([
+      'CCRC_DDNS_UNIT="ccrc-ddns"',
+    ]);
+  });
+});
+
 // — Build 4, Task 10: the wave's own two definitions —
 describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
   // The type's fingerprint: the union as it is declared, not every mention.

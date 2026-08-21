@@ -6,7 +6,7 @@
 // through it: what the Set-Cookie line actually says, what a wrong passphrase
 // costs, what a logout revokes, and what the status route reports.
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { inspect } from 'node:util';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
@@ -31,7 +31,26 @@ const stubPty = (): PtyLike => ({
   onData: () => ({ dispose: () => {} }), write: () => {}, resize: () => {}, kill: () => {},
 });
 
-interface AppOpts { enabled?: boolean; secret?: boolean; secretText?: string; cookieSecure?: boolean }
+interface AppOpts {
+  enabled?: boolean; secret?: boolean; secretText?: string; cookieSecure?: boolean;
+  /** rpIds to seed `~/.ccrc/passkeys.json` with, one credential per entry
+   *  (repeat a name to enrol two under it) — Task 5 (3b)'s `enrolledRpIds`
+   *  measurements. */
+  rpIds?: string[];
+}
+
+/** Distinct valid-base64url credential ids for {@link credRow} — nothing about
+ *  them is cryptographically real, and nothing needs to be: the route under
+ *  test projects NAMES off stored rows, it verifies nothing. */
+const CRED_IDS = ['AQID', 'BAUG', 'BwgJ'] as const;
+
+/** A minimal stored row `parseCredentials` (credentials.ts) keeps: every field
+ *  present and well-formed, both base64url fields canonical. */
+const credRow = (credentialId: string, rpId: string): Record<string, unknown> => ({
+  credentialId, spkiB64url: 'AAAA', algorithm: -7, rpId,
+  origin: `https://${rpId}`, signCount: 0, uvAtEnrollment: true,
+  enrolledAt: 1, lastUsedAt: 1, label: 'x',
+});
 
 const openApp = async (opts: AppOpts = {}): Promise<{ app: FastifyInstance; home: string }> => {
   const home = mkTmp('ccrc-auth-routes-');
@@ -40,6 +59,12 @@ const openApp = async (opts: AppOpts = {}): Promise<{ app: FastifyInstance; home
     mkdirSync(path.join(home, '.ccrc'), { recursive: true });
     writeFileSync(path.join(home, '.ccrc', 'auth.scrypt'),
       opts.secretText ?? `${await hashLine(PASSPHRASE, FAST_PARAMS, 1)}\n`, { mode: 0o600 });
+  }
+  if (opts.rpIds !== undefined) {
+    mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    writeFileSync(path.join(home, '.ccrc', 'passkeys.json'),
+      JSON.stringify(opts.rpIds.map((rpId, i) => credRow(CRED_IDS[i] as string, rpId))),
+      { mode: 0o600 });
   }
   const deps: Deps = {
     ...base,
@@ -521,6 +546,42 @@ describe('GET /api/auth/status', () => {
     expect(after.json()).toMatchObject({ authed: false, mode: 'passphrase' });
   });
 
+  it('names the enrolled rpIds to an ANONYMOUS caller — distinct, sorted, names only', async () => {
+    // Task 5 (3b, spec D7): the login screen must be able to say "your passkeys
+    // were enrolled for a different box name" BEFORE anyone is signed in, so the
+    // field rides the same exempt read as `passkeysEnrolled`, under the same
+    // ruling — an anonymous caller learns that some passkey exists for some
+    // name, which the passkey button already discloses. Two credentials under
+    // `localhost` and one under `mybox.duckdns.org`: the projection is DISTINCT
+    // (two rows collapse to one name) and SORTED.
+    const w = await openApp({ rpIds: ['mybox.duckdns.org', 'localhost', 'localhost'] });
+    app = w.app;
+    const res = await app.inject({ method: 'GET', url: '/api/auth/status' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Record<string, unknown>;
+    expect(body['enrolledRpIds']).toEqual(['localhost', 'mybox.duckdns.org']);
+    // The distinctness above is doing work: three rows were seeded.
+    expect(body['passkeysEnrolled']).toBe(3);
+    // NAMES ONLY — never a credential id (the shape assertion): every member is
+    // one of the seeded rpIds, and none of the seeded ids leaks in anywhere.
+    for (const v of body['enrolledRpIds'] as unknown[]) {
+      expect(['localhost', 'mybox.duckdns.org']).toContain(v);
+    }
+    expect(JSON.stringify(body['enrolledRpIds'])).not.toMatch(/AQID|BAUG|BwgJ/);
+  });
+
+  it('with NO store the field is ABSENT — absence means "unknown", never "no passkeys"', async () => {
+    // The wire-discipline half (Global Constraints): an OLDER server omits the
+    // field entirely, so a reader must treat absence as "this box has not said".
+    // Emitting `[]` here would make absence and emptiness two spellings of one
+    // producer, and the PWA's single reader could no longer tell an older server
+    // from a box with no keys.
+    const w = await openApp(); app = w.app;
+    const body = (await app.inject({ method: 'GET', url: '/api/auth/status' }))
+      .json() as Record<string, unknown>;
+    expect('enrolledRpIds' in body).toBe(false);
+  });
+
   it('an anonymous body carries ONLY the enumerated fields — a later one cannot widen the leak', async () => {
     // `ANON_VISIBLE` (server.ts) is a `Record<keyof AuthStatus, boolean>`, so a
     // field added to the wire type is a compile error until someone decides
@@ -609,6 +670,43 @@ describe('loadConfig — the four auth keys', () => {
     // imported, so `os.homedir()` is a compile error rather than a temptation.
     // (The name still appears in the docstring that explains why it went.)
     expect(src).not.toMatch(/^import .* from 'node:os';$/m);
+  });
+});
+
+// ── trustProxy is settled: none (spec 3b D5) ─────────────────────────────
+
+describe('trustProxy is settled: none — no proxy trust, no forwarded-header consumer', () => {
+  /** Every `.ts` under `server/src`, walked the way `single-definition.test.ts` walks
+   *  its roots — recursive, and `__`-prefixed entries skipped because they
+   *  are TRANSIENT mutants a parallel suite writes (`boot.test.ts`'s
+   *  `__boot_control_mutant__.ts`), which vanish mid-walk. */
+  const srcFiles = (dir: string): string[] => {
+    const out: string[] = [];
+    for (const e of readdirSync(dir)) {
+      if (e.startsWith('__')) continue;
+      const p = path.join(dir, e);
+      if (statSync(p).isDirectory()) { out.push(...srcFiles(p)); continue; }
+      if (/\.tsx?$/.test(p)) out.push(p);
+    }
+    return out;
+  };
+
+  it('the string appears nowhere in server/src except config.ts, whose docstring records the settlement', () => {
+    const root = path.resolve(__dirname, '../src');
+    const files = srcFiles(root);
+    // A scan over an empty list passes everything — assert the walk found the
+    // tree before trusting anything the loop below says.
+    expect(files.length).toBeGreaterThan(0);
+    expect(files.map((f) => path.relative(root, f))).toContain('config.ts');
+    for (const f of files) {
+      if (path.basename(f) === 'config.ts') continue;
+      expect(readFileSync(f, 'utf8'), path.relative(root, f)).not.toContain('trustProxy');
+    }
+    // …and config.ts's one mention is the SETTLED statement, not the old
+    // forward-reference: the decision no longer "belongs to Stage 3b".
+    const cfg = readFileSync(path.join(root, 'config.ts'), 'utf8');
+    expect(cfg).not.toContain('belongs to Stage 3b');
+    expect(cfg).toContain('settled: none');
   });
 });
 
