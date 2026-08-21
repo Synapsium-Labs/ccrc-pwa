@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=41dd14d820879cf2b5a671bc20cfc54013b2afeba419674dc0a0d8e954141144
+# ccrc:generated 1 sha256=21268de886aff8609dd38b6e2ad36093061e49f1829154515625bcb8e6a3ca59
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box, not on this file: `_rc_enabled` reads
@@ -1541,12 +1541,18 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # SECOND dot, which is exactly what `_reg_purge`'s own `*.*` skip excludes.
 #
 # Enforced at CREATION ONLY — `cmd_ws_add` and `cmd_start`, the two sites
-# that mint a NEW registry row for a project — never at `cmd_pr_state`'s two
-# `^[A-Za-z0-9._-]+$` checks. Those are read-only: they validate a project
-# that either already exists in a registry row or arrived for a read, and
-# refusing there could STRAND an existing row rather than prevent a new one.
-# The creation gate is what stops such a row ever existing in the first
-# place, so the read side does not need to police it too.
+# that mint a NEW registry row for a project — never at `cmd_pr_state`,
+# which applies this same `^[A-Za-z0-9._-]+$` shape FOUR times (its
+# `--session` argv, its `--project` argv, the `*.workspace` loop's id
+# check, and the registry-project check), of which two are PROJECT checks.
+# The justification is not that those uses are read-only — `cmd_pr_state`
+# persists three registry fields (`prnumber`, `prphase`, `prcheckedat`) and
+# creates `$REG/.prstate-<id>.lock` — it is that NONE OF THEM MINTS AN ID:
+# each validates a project that either already exists in a registry row or
+# arrived for a read, and refusing there could STRAND an existing row
+# rather than prevent a new one. The creation gate is what stops such a row
+# ever existing in the first place, so the read side does not need to
+# police it too.
 _ws_project_valid() {   # project -> 0 when it is a legal project name to CREATE under
   [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]] || return 1
   [[ "$1" != .* ]] || return 1
@@ -2533,12 +2539,13 @@ cmd_ws_hold() {   # ccd ws-hold --session <id> --reason <text> — claim a
   #
   # `_reg_set` writes a tmp and renames it over the destination, and on EVERY
   # failure path it removes its own tmp and returns non-zero — so a failed
-  # hold leaves NO `.hold` FILE AT ALL, and leaves any PRE-EXISTING `.hold`
-  # byte-intact (the rename that would have replaced it never happens). A
-  # partial or empty `.hold` is not a state this mechanism can produce any
-  # more. The `|| die` below is what turns that non-zero into a named refusal
-  # instead of a false success on the echo below — it is not a weaker guard
-  # than before, it is the same guard over a narrower failure set.
+  # hold leaves no NEW or PARTIAL `.hold`: none exists if none did before,
+  # and any PRE-EXISTING `.hold` is left byte-intact (the rename that would
+  # have replaced it never happens). A partial or empty `.hold` is not a
+  # state this mechanism can produce any more. The `|| die` below is what
+  # turns that non-zero into a named refusal instead of a false success on
+  # the echo below — it is not a weaker guard than before, it is the same
+  # guard over a narrower failure set.
   #
   # RE-MEASURED FOR THE SHIPPED MECHANISM: `chmod 500 "$REG"` now fails at TMP
   # CREATE — bash reports the failed redirection before `_reg_set`'s own
@@ -8630,7 +8637,7 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
       || die "usage: ccd start <id> | ccd start <wrapper> <project> [workdir]"
     _is_valid_wrapper "$wrapper" || die "unknown wrapper '$wrapper' (valid: ${CCRC_ACCOUNTS[*]})"
     _ws_project_valid "$project" \
-      || die "invalid project '$project' (allowed chars: A-Za-z0-9 . _ -, and no LEADING dot — a dot-leading id aliases ccd's own hidden registry files)"
+      || die "invalid project '$project' (allowed chars: A-Za-z0-9 . _ -, and no LEADING dot — a dot-leading PROJECT VALUE would land in this session's registry row, which ws-gc later recomposes)"
     id=$(_id "$wrapper" "$project")
   else
     id="${1:?usage: ccd start <id> | ccd start <wrapper> <project> [workdir]}"

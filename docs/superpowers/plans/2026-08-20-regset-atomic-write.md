@@ -1279,11 +1279,15 @@ Then send the `wave-done` mail with `{branchTip, prNumber, prPhase:"open", hando
   suffix carries a second dot, which `_reg_purge`'s own `*.*` skip already excludes.
   **Fixed** by refusing a leading dot in project validation at the CREATION sites only — a new
   `_ws_project_valid` helper (beside `_ws_slug_valid`), wired into `cmd_ws_add` and `cmd_start`, the
-  two verbs that mint a NEW registry row for a project. **Deliberately left alone**: `cmd_pr_state`'s
-  two `^[A-Za-z0-9._-]+$` checks, unchanged — it is read-only, it validates a project that already
-  exists in a registry row or arrived for a read, and refusing there could STRAND an existing row
-  rather than prevent a new one; the creation gate is what stops such a row ever existing, so the
-  read side does not need to police it too. TDD, red-first: three tests added to
+  two verbs that mint a NEW registry row for a project. **Deliberately left alone**: `cmd_pr_state`,
+  which applies this same `^[A-Za-z0-9._-]+$` shape FOUR times (its `--session` argv, `--project`
+  argv, the `*.workspace` loop's id check, and the registry-project check — two of the four are
+  project checks), unchanged. Not because those uses are read-only — the verb persists `prnumber`,
+  `prphase` and `prcheckedat` and creates `$REG/.prstate-<id>.lock` — but because NONE OF THEM MINTS
+  AN ID: each validates a project that already exists in a registry row or arrived for a read, and
+  refusing there could STRAND an existing row rather than prevent a new one; the creation gate is
+  what stops such a row ever existing, so the read side does not need to police it too. TDD,
+  red-first: three tests added to
   `server/test/ccd-workspaces.test.ts` (`cmd_ws_add` refuses a leading dot and creates no registry
   row, `cmd_start` refuses the same, and a mechanism-pinning test that calls `_reg_purge` directly on
   a fixture `.prstate-demo-quiet-basin.lock` to show the unlink happening as an executable fact, not
@@ -1292,6 +1296,11 @@ Then send the `wave-done` mail with `{branchTip, prNumber, prPhase:"open", hando
   after. Mutation-measured: deleting the `[[ "$1" != .* ]]` line from `_ws_project_valid` turns both
   refusal tests RED again (mutant-killed), confirming the guard is load-bearing rather than
   decorative.
+  Residual, named and NOT fixed here: the creation gate stops NEW dot-leading rows only. A row
+  minted before this guard shipped — on the live fleet box, pre-deploy — still purge-aliases exactly
+  as described above, and nothing here detects or migrates one. The cheap check is
+  `ls ~/.cc-sessions/.*.workspace` at deploy time: any match names a pre-existing dot-leading
+  workspace row that needs manual attention (rename or reap) before it can be trusted not to alias.
 
 - **D-139 (2026-08-21, wave review round)** — D-138 closes the CREATION side; `_pr_py`'s pr-state
   lock has its own residual, disclosed rather than closed. Measured under a `$REG` at `chmod 0555`

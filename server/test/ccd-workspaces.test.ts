@@ -351,6 +351,14 @@ describe('a leading-dot project cannot alias ccd\'s own hidden registry files', 
     // its pr-state lock is `$REG/.prstate-demo-quiet-basin.lock`. A session
     // with id `.prstate-demo-quiet-basin` (project `.prstate-demo`, slug
     // `quiet-basin`) purges to the exact same glob.
+    //
+    // This test calls `_reg_purge` ALONE, bypassing `_ws_project_valid`
+    // entirely, so it deliberately CANNOT go red when the dot line in
+    // `_ws_project_valid` is deleted — it asserts the dangerous unlink still
+    // happens for an id that passes the guard, which is exactly the fact the
+    // guard exists to keep unreachable. Only a future hardening of
+    // `_reg_purge` ITSELF would turn this test red, and that failure must be
+    // read as that hardening working, not as a regression.
     const lockPath = path.join(home, '.cc-sessions', '.prstate-demo-quiet-basin.lock');
     fs.writeFileSync(lockPath, '');
     expect(fs.existsSync(lockPath), 'the fixture lock must exist before the purge').toBe(true);
