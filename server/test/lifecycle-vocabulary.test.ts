@@ -177,10 +177,22 @@ describe('ccd <-> shared: the journal vocabulary', () => {
   it('_LC_ACTS is READ, not merely declared to satisfy this file', () => {
     if (ccdArray('_LC_ACTS') === null) return;
     // The mutant this kills: declare the array, never consult it, and emit
-    // whatever a call site passes. One occurrence is the declaration; a
-    // second is the emitter validating against it.
-    const uses = ccdSrc.match(/_LC_ACTS/g) ?? [];
-    expect(uses.length, '_LC_ACTS is declared but never consulted').toBeGreaterThan(1);
+    // whatever a call site passes. A naive occurrence COUNT does not kill
+    // it: a docstring that mentions `_LC_ACTS` in prose a second time (this
+    // very file's own header does, and a wave-2 commit's comments plausibly
+    // will too — caught for real, task-12 FIX ROUND 2) satisfies a bare
+    // `.match(/_LC_ACTS/g).length > 1`, which retires the question rather
+    // than answering it. Comments are stripped first — a line whose first
+    // non-whitespace character is `#`, and any trailing ` #…` — and what
+    // remains must contain a genuine bash DEREFERENCE of the array
+    // (`"${_LC_ACTS[@]}"`, `${_LC_ACTS[...]}`, or bare `$_LC_ACTS`), which
+    // the assignment `_LC_ACTS=(` is not and a second prose mention is not.
+    const code = ccdSrc
+      .split('\n')
+      .map((line) => (line.trimStart().startsWith('#') ? '' : line.replace(/\s#.*$/, '')))
+      .join('\n');
+    const dereferenced = /\$\{#?_LC_ACTS(\[[^}]*\])?\}|\$_LC_ACTS\b/.test(code);
+    expect(dereferenced, '_LC_ACTS is declared but never dereferenced in code').toBe(true);
   });
 
   it('the caps token and the vocabulary ship together', () => {
