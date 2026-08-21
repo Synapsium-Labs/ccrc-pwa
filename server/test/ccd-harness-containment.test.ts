@@ -180,4 +180,62 @@ describe('ghContainedEnv contains gh always, systemd only when asked', () => {
     expect(run(home, bin, 'systemd-run --user true', { systemd: true }, { SYSTEMD_RUN_RC: '0' })).toBe('rc=0');
     expect(run(home, bin, 'systemd-run --user true', { systemd: true })).toBe('rc=97');
   });
+
+  // ── THE TMUX HALF (Task 11b), symmetric to the three systemd tests above ──
+  // and covering exactly the mechanics Task 11's reviewer proved by hand in
+  // scratch tests that were then deleted: create-if-absent, the opt-in itself
+  // in both directions, and TMUX_STUB_RC steering the poison to succeed. "A
+  // comment is a request; a red suite is a mechanism" — this is the mechanism.
+  it('leaves a non-asking consumer\'s OWN tmux answering, on its own PATH', () => {
+    // Mirrors the systemd opt-out test above, one poison over: a consumer
+    // that never asks for `{ tmux: true }` keeps whatever it planted on its
+    // own PATH, because the harness never wrote a tmux poison for it to lose
+    // to.
+    const { home, bin } = consumer('ccrc-contain-tmux-optout-');
+    fs.writeFileSync(path.join(bin, 'tmux'), '#!/bin/sh\necho "mine: $*"\nexit 0\n', { mode: 0o755 });
+    expect(run(home, bin, 'command -v tmux')).toBe(`${path.join(bin, 'tmux')}\nrc=0`);
+    expect(run(home, bin, 'tmux list-panes -a')).toBe('mine: list-panes -a\nrc=0');
+    // Not merely "the poison lost the race": it was never written, same as
+    // the systemd case above.
+    expect(fs.existsSync(path.join(harnessBin(home), 'tmux'))).toBe(false);
+  });
+
+  it('plants the tmux poison when a caller DOES ask, over that same PATH', () => {
+    // The positive control on the tmux OPTION itself, and the steering test
+    // the coordinator asked for by name: TMUX_STUB_RC is to `_lc_obs`'s
+    // `tmux list-panes -a` what SYSTEMD_RUN_RC is to `_tmux_server_ensure`'s
+    // `systemd-run` — the one way a test may make the stub SUCCEED, so the
+    // "tmux present and answering" branch is reachable as a positive control
+    // rather than dead code behind a refusal-only stub.
+    const { home, bin } = consumer('ccrc-contain-tmux-optin-');
+    fs.writeFileSync(path.join(bin, 'tmux'), '#!/bin/sh\necho "mine: $*"\nexit 0\n', { mode: 0o755 });
+    expect(run(home, bin, 'command -v tmux', { tmux: true }))
+      .toBe(`${path.join(harnessBin(home), 'tmux')}\nrc=0`);
+    expect(run(home, bin, 'tmux list-panes -a', { tmux: true })).toBe('rc=97');
+    expect(fs.readFileSync(path.join(home, 'tmux-calls'), 'utf8').trim()).toBe('list-panes -a');
+    expect(run(home, bin, 'tmux list-panes -a', { tmux: true }, { TMUX_STUB_RC: '0' })).toBe('rc=0');
+    expect(run(home, bin, 'tmux list-panes -a', { tmux: true })).toBe('rc=97');
+  });
+
+  it('create-if-absent for tmux too: a caller-owned stub planted in harnessBin() KEEPS winning', () => {
+    // Symmetric to `describe('the harness contains systemctl structurally')`'s
+    // "lets a test that needs a FUNCTIONAL systemctl win, and KEEPS letting
+    // it" above, but through THIS describe's own `run()`/`BASH` idiom instead
+    // of `h.sh()`, and in the SAME directory `{ tmux: true }` would write its
+    // poison into (`harnessBin()`), not `consumer()`'s separate stub-bin —
+    // the create-if-absent guard only answers WITHIN harnessBin, so a stub
+    // outside it would not be testing this at all. `run()` calls
+    // `ghContainedEnv` fresh on every invocation, same as `h.sh()` does, so
+    // the SECOND call is the assertion: a re-plant would silently replace
+    // what the first call built.
+    const home = mkTmp('ccrc-contain-tmux-createabsent-');
+    const bin = harnessBin(home);
+    fs.writeFileSync(path.join(bin, 'tmux'),
+      '#!/bin/sh\necho "mine: $*" >> "$HOME/ccd-calls"\nexit 0\n', { mode: 0o755 });
+    expect(run(home, bin, 'tmux list-panes -a', { tmux: true })).toBe('rc=0');
+    expect(run(home, bin, 'tmux list-panes -a', { tmux: true })).toBe('rc=0');
+    // The poison's own log file must not exist: if the poison had ever run,
+    // even once, it would have created it.
+    expect(fs.existsSync(path.join(home, 'tmux-calls'))).toBe(false);
+  });
 });
