@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=43ae7f82aced24e5227ab448dd329b10528d59497073f00dff0e9044da6333db
+# ccrc:generated 1 sha256=8d281a2e7835f79aad3dd5f4c90f121cbaae610b41577482f5b65f3e52ff659a
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box, not on this file: `_rc_enabled` reads
@@ -2446,15 +2446,34 @@ cmd_ws_hold() {   # ccd ws-hold --session <id> --reason <text> — claim a
   [[ -f "$REG/$id.archived" ]] \
     && die "$id is archived — restore first: a hold cannot protect a pane that is already gone"
   # CHECKED, unlike every other `_reg_set` in this file, because this is the one
-  # field whose silent absence is destructive. `_reg_set` is `printf > file` and
-  # ccd runs `set -uo pipefail` with NO `-e`, so an unchecked write that failed
-  # falls straight through to the echo below. Measured on the unguarded version:
-  # `chmod 500 "$REG"` -> `Permission denied` on stderr, `held <id>: <reason>` on
-  # stdout, exit 0, no `.hold` file. The orchestrator protocol reads exit code +
+  # field whose silent absence is destructive. ccd runs `set -uo pipefail` with
+  # NO `-e`, so an unchecked failed write would fall straight through to the
+  # echo below. Left unprotected, the orchestrator protocol reads exit code +
   # stdout, records the workspace as claimed, and dispatches the next wave; the
   # archiveMerged sweep sees no hold and archives the merged workspace mid-run.
   # So the ONE verb whose failure means UNPROTECTED refuses like every other
   # doubt path in this function rather than announcing a success it did not have.
+  #
+  # `_reg_set` writes a tmp and renames it over the destination, and on EVERY
+  # failure path it removes its own tmp and returns non-zero — so a failed
+  # hold leaves NO `.hold` FILE AT ALL, and leaves any PRE-EXISTING `.hold`
+  # byte-intact (the rename that would have replaced it never happens). A
+  # partial or empty `.hold` is not a state this mechanism can produce any
+  # more. The `|| die` below is what turns that non-zero into a named refusal
+  # instead of a false success on the echo below — it is not a weaker guard
+  # than before, it is the same guard over a narrower failure set.
+  #
+  # RE-MEASURED FOR THE SHIPPED MECHANISM: `chmod 500 "$REG"` now fails at TMP
+  # CREATE — bash reports the failed redirection before `_reg_set`'s own
+  # `2>/dev/null` ever applies to it, so `Permission denied` still reaches
+  # stderr — `_reg_set` returns 1, and `die` fires: no stdout, no `.hold` file,
+  # exit 1. (PRE-WAVE, for contrast: `Permission denied` on stderr, `held <id>:
+  # <reason>` on stdout, exit 0, no `.hold` file — the false success this
+  # guard exists to refuse.) `ccd-hold.test.ts`'s own stand-in for "$REG"
+  # unwritable is a DIRECTORY at `$REG/<id>.hold` — `chmod` does not constrain
+  # root, a directory does — and it is `mv -fT`'s `-T` that keeps THAT case a
+  # refusal too: a bare `mv -f` would move the tmp inside the directory and
+  # exit 0.
   _reg_set "$id" hold "$reason" \
     || die "could not record the hold for $id — it is NOT held"
   echo "held $id: $reason"
