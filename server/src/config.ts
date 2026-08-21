@@ -294,7 +294,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
   }
   const port = portOk ? portNum : 7788;
   return {
-    host: env.CCRC_HOST ?? '127.0.0.1',
+    // `||`, not `??`: a bare `CCRC_HOST=` EnvironmentFile line yields '', and
+    // `listen({host: ''})` binds ALL interfaces — the opposite of the loopback
+    // confinement 3b rests on (D-130's bug class, closed for CCRC_PORT above).
+    host: env.CCRC_HOST || '127.0.0.1',
     port,
     home,
     registryDir: path.join(home, '.cc-sessions'),
