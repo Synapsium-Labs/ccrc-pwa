@@ -14,9 +14,10 @@ import { sendPrompt } from './inject/send.js';
 import { askActions } from './askkey.js';
 import type { SessionRecord } from './registry.js';
 import type {
-  CoordStatus, NotifyEvent, PrState, RunSummary, SessionStatus, TaskProgress,
+  CoordStatus, LifecycleHealth, NotifyEvent, PrState, RunSummary, SessionStatus, TaskProgress,
 } from '../../shared/api.js';
 import { MAIL_MAX_ATTEMPTS, UNCHECKED_PR } from '../../shared/api.js';
+import { JournalMirror } from './coord/mirror.js';
 // The pause marker's ONE definition in the tree. `MAIL_DISABLED_MARKER` is
 // NOT imported beside it: this file holds its own module-local literal
 // (`sweepMail` already uses it), a second `const` of that name in one scope is
@@ -58,6 +59,17 @@ const NAME_SWEEP_MS = 10_000;
  *  the name sweep, deliberately: this one touches the filesystem per PROJECT,
  *  not per pane. */
 const DIVERGENCE_SWEEP_MS = 60_000;
+
+/** The journal mirror's lane, and it is fast for the one reason the census's is
+ *  slow: a sweep is ONE `readdir` plus one `readFileFrom` per live generation,
+ *  and a destruction's `intent`/outcome pair should be visible while the
+ *  operator is still looking at the screen. DECLARED HERE, beside its five
+ *  siblings, and deliberately NOT in `shared/api.ts`: it has no bash twin and
+ *  no wire meaning, and one sweep interval in L0 would be a second home for a
+ *  class of value that already has one. EXPORTED because `mirror.ts` cannot
+ *  import it — that would be L3 importing L4 — so the staleness window is
+ *  passed in from the one construction site below. */
+export const LC_SWEEP_MS = 5_000;
 
 /** Refusal tokens (of ccd's fourteen, `spec:252-266` — the spec's own table
  *  predates the ninth and the fourteenth, `spec:49` is the unrelated `ws/`-
@@ -303,6 +315,12 @@ export class FleetWatcher {
    *  an empty one — mirroring `lastRunsJson`'s own initial value, and the reason
    *  a HEALTHY fleet is a frame rather than a silence. */
   private lastDivergenceSweep = 0;
+  private lastLifecycleSweep = 0;
+  /** Built lazily on the first sweep that has a coordination database — the
+   *  mirror holds the cursor, the error tally and the recorded-once gap names
+   *  in memory, so there is exactly one instance per process and it must not
+   *  be re-minted per tick. */
+  private mirror: JournalMirror | null = null;
   private lastDivergenceJson: string | null = null;
   /** `<project>/<name>` for the worktrees the PREVIOUS sweep found unclaimed —
    *  the census's one-interval debounce on `unregistered-worktree`, and the
@@ -663,6 +681,11 @@ export class FleetWatcher {
       // (`inject/send.ts:26-36,115,126`). Awaiting it would put the dialog
       // detector and the busy->idle push behind a mail delivery.
       void this.sweepMail().catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, same reasoning as `sweepDivergences` above: in remote
+      // mode this is one agent-WS `readdir` plus one `readFileFrom` per live
+      // generation per sweep. Awaiting it would put the dialog detector and
+      // the busy->idle push behind a journal read.
+      void this.sweepLifecycle().catch(() => { /* one bad sweep must not kill the poll */ });
       // `records` PASSED IN, never re-read here: `assembleFleet` would
       // otherwise take its OWN read (`records ?? await readRegistry(...)`),
       // a SEPARATE whole-fleet sweep a few hundred ms after the one above —
@@ -1615,6 +1638,45 @@ export class FleetWatcher {
     if (json === this.lastDivergenceJson) return;
     this.lastDivergenceJson = json;
     this.bus.emit('divergence', found);
+  }
+
+  /**
+   * Mirror `$REG/.lifecycle/` into `coord.db` (build 9 §1 D5).
+   *
+   * ON THE EXISTING TICK, WITH NO NEW TIMER. Its own clock, like
+   * `sweepDivergences` and `sweepNames`: `!== 0` so the FIRST sweep runs
+   * immediately after a restart instead of waiting `LC_SWEEP_MS`, which is the
+   * shape those two already ship.
+   *
+   * PUBLIC so a test can await it. `sweepMail` is not touched by this wave, by
+   * name (D9): a second producer lands BESIDE the most load-bearing loop on
+   * the box, never inside it.
+   */
+  async sweepLifecycle(): Promise<void> {
+    const store = this.deps.coord;
+    if (!store) return;
+    const now = Date.now();
+    if (this.lastLifecycleSweep !== 0 && now - this.lastLifecycleSweep < LC_SWEEP_MS) return;
+    this.lastLifecycleSweep = now;
+    this.mirror ??= new JournalMirror({
+      io: this.deps.io,
+      registryDir: this.deps.cfg.registryDir,
+      store,
+      ccdVerbs: () => this.deps.fleetState?.ccdVerbs ?? null,
+      now: () => Date.now(),
+      // THREE INTERVALS. One missed sweep is not an alarm, three is — and the
+      // multiplication happens HERE, at the one construction site, because
+      // `mirror.ts` is L3 and may not import this module.
+      staleAfterMs: LC_SWEEP_MS * 3,
+    });
+    await this.mirror.sweep();
+  }
+
+  /** `null` when this box runs no coordination database, or before the first
+   *  sweep has built the mirror — `/api/fleet/health` renders that as an
+   *  ABSENT block, which reads as `'unknown'`, never as `'ok'`. */
+  lifecycleHealth(): LifecycleHealth | null {
+    return this.mirror?.health() ?? null;
   }
 
   /**
