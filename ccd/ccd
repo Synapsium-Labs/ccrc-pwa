@@ -1411,8 +1411,8 @@ _lc_emit() {   # act outcome id tx [key value]... — THE ONE WRITER. Always 0.
 # and passes it twice. There is no global to carry it, deliberately.
 #
 # tx IS FOR ONE PAIR, NEVER FOR A CALL TREE. `cmd_enable` runs `cmd_start`
-# in-process (ccd:10352) and `_swap_refuse`'s `|| cmd_ensure`
-# fallback fires at ccd:10133; each writes its OWN independent
+# in-process (ccd:10361) and `_swap_refuse`'s `|| cmd_ensure`
+# fallback fires at ccd:10142; each writes its OWN independent
 # event with its own tx, because two acts happened and the record says so
 # rather than folding one into the other.
 #

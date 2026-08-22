@@ -506,7 +506,14 @@ describe('the four wrappers', () => {
   it('_lc_fail records a token and detail at the TOP LEVEL, WITHOUT dying', () => {
     const out = h.sh('t=$(_lc_tx); _lc_fail destroy sess "$t" worktree-remove-failed "git refused"; printf "rc=%s" "$?"');
     expect.soft(out).toBe('rc=0');
-    const [e] = readJournal(h.home);
+    const journal = readJournal(h.home);
+    // HARD, on purpose (fix round 1): `e!` below dereferences the first entry,
+    // so a soft failure here would let an empty journal crash the next line
+    // with an uncaught TypeError instead of a clean assertion failure — the
+    // same downstream-dependency exception this file's own "an intent with no
+    // sibling…" test above already applies.
+    expect(journal).toHaveLength(1);
+    const [e] = journal;
     expect.soft(e!['outcome']).toBe('failed');
     expect.soft(e!['refusal']).toBe('worktree-remove-failed');
     expect.soft(e!['detail']).toBe('git refused');
@@ -525,7 +532,12 @@ describe('the four wrappers', () => {
     }
     expect.soft(code).not.toBe(0);
     expect.soft(stderr).toContain('held: program X');
-    const [e] = readJournal(h.home);
+    const journal = readJournal(h.home);
+    // HARD, on purpose (fix round 1): same downstream-dependency exception as
+    // above — `e!` below would crash uncaught on an empty journal rather than
+    // failing cleanly.
+    expect(journal).toHaveLength(1);
+    const [e] = journal;
     expect.soft(e!['outcome']).toBe('refused');
     expect.soft(e!['refusal']).toBe('held');
   });
