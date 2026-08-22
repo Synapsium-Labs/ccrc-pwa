@@ -533,8 +533,8 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # ANY-FIELD check now; see the note there.
   # ── THE BACKSTOP (D3) ────────────────────────────────────────────────────
   # HERE, AND NOT ONE LINE LOWER. Every destruction path on this box terminates
-  # in this function — ws-rm (ccd:2927), ws-reap (ccd:7674), ws-gc's dead-reg
-  # arm (ccd:8168), forget (ccd:10681) — and a destructive verb added LATER that
+  # in this function — ws-rm (ccd:2968), ws-reap (ccd:7715), ws-gc's dead-reg
+  # arm (ccd:8209), forget (ccd:10722) — and a destructive verb added LATER that
   # forgets to journal itself still leaves a record. A silent destruction has to
   # defeat two independent emit sites.
   #
@@ -1008,7 +1008,7 @@ tmux list-panes -a -F '#{session_name} #{pane_pid}'" 2>/dev/null)
       p="$pid"; depth=0
       # The regex runs FIRST and every arithmetic test is downstream of it: `p`
       # comes off /proc, and bash evaluates a variable's CONTENTS as arithmetic
-      # (ccd:8784-8787 is the paid lesson). `depth` bounds a /proc that lies.
+      # (ccd:8825-8828 is the paid lesson). `depth` bounds a /proc that lies.
       while [[ "$p" =~ ^[0-9]+$ ]] && (( p > 1 )) && (( depth < 16 )); do
         while IFS=' ' read -r sname spid; do
           [[ "$spid" == "$p" ]] && { pane="$sname"; break; }
@@ -1177,7 +1177,7 @@ _lc_rotate() {   # live-path — mint a fresh generation when the live one is fu
     # only as the tiebreak — one ordering claim, expressed once, agreeing
     # with `_lc_live` and with L0 by construction rather than by two authors
     # remembering the same rule. `LC_ALL=C` on the `sort` invocation itself,
-    # this file's own idiom (ccd:4007, 4033, 1152, 6801) — a `local` variable
+    # this file's own idiom (ccd:4048, 4033, 1152, 6801) — a `local` variable
     # is never enough for an EXTERNAL command's collation, only for bash's
     # own builtin `[[ ]]` comparisons.
     # FIX ROUND 2 (task 15) — TWO gaps closed with one wrap. (1) Neither
@@ -1480,7 +1480,7 @@ _lc_done()   { local a="${1-}" i="${2-}" t="${3-}"; shift 3 2>/dev/null || :
 _lc_fail() {   # act id tx token detail [k v]... — an act that STARTED and broke
   # Distinct from `_lc_refuse` by WHEN, not by severity: a refusal happens
   # before anything irreversible, a failure after. `cmd_ws_rm`'s
-  # `git worktree remove` die at ccd:2893 is a FAILURE — the session
+  # `git worktree remove` die at ccd:2932 is a FAILURE — the session
   # is already stopped when it fires — and calling it a refusal would say
   # nothing was touched, which is false.
   local a="${1-}" i="${2-}" t="${3-}" tok="${4-}" msg="${5-}"; shift 5 2>/dev/null || :
@@ -2923,17 +2923,17 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
   fi
 
   # ── R4-1 · THE ATTIC PIN, BEFORE ANYTHING IS TOUCHED ────────────────────
-  # `git worktree remove` at ccd:2053 deletes both $workdir and
+  # `git worktree remove` at ccd:2929 deletes both $workdir and
   # $main/.git/worktrees/<slug>/, and the latter holds the HEAD reflog.
   # `_ws_attic_pin`'s reflog read is guarded by `[[ -d "$workdir" ]]`, so a pin
   # taken after that call sees nothing and contributes only a pre-resolved tip.
-  # Placing it above `_ws_unsupervise` rather than merely above 2053 puts it on
+  # Placing it above `_ws_unsupervise` rather than merely above 2929 puts it on
   # the near side of EVERY irreversible act, so the intent/done pair below
   # brackets a workspace whose commits are already referenced.
   #
-  # UNCONDITIONAL: it runs even when `git branch -d` later refuses at ccd:2066,
+  # UNCONDITIONAL: it runs even when `git branch -d` later refuses at ccd:2946,
   # because that is the case where the commits matter most, and even when
-  # `registered != 0` so ccd:2053 never runs at all.
+  # `registered != 0` so ccd:2929 never runs at all.
   #
   # `_ws_attic_pin` contains no `die`, which is what makes this `$( )` capture
   # safe under `ccd-die-containment.test.ts`. Nothing added here may die inside
@@ -3031,7 +3031,7 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
   # `purge` line and this `destroy`/`done` — and that redundancy is the design:
   # a silent destruction has to defeat two independent emit sites.
   #
-  # THREE STATES, THREE VALUES. `git branch -d` at ccd:2905 refuses an unmerged
+  # THREE STATES, THREE VALUES. `git branch -d` at ccd:2946 refuses an unmerged
   # branch and that refusal is wanted; an empty `bd` is OMITTED by the encoder,
   # which is how "there was no branch" stays distinct from "the branch is gone".
   # A two-valued expression answers `true` for a detached HEAD — a fabricated
