@@ -987,6 +987,32 @@ describe('one ~/.ccrc/Caddyfile, spelled once in bash through CCRC_CADDYFILE', (
   });
 });
 
+// — the system Caddyfile: caddy's own path, on the root side of the boundary —
+describe('one /etc/caddy/Caddyfile, spelled once through CCRC_CADDY_SYSTEM_FILE', () => {
+  // The block above pins `~/.ccrc/Caddyfile` — the file ccrc WRITES. This
+  // pins the other end of the ceremony: the file caddy READS, which ccrc
+  // never writes and only ever names. It became a constant for a measured
+  // reason (D-166): doctor's `caddyfile` check MEASURES that path while the
+  // expose landing block and the caddy remedy PRINT it, and three literals
+  // are three chances for a remedy to send an operator to a file the check is
+  // not looking at. It is also the only way the suite can test the check at
+  // all — no test may create /etc/caddy, and none should ever need root to.
+  const NEEDLE = '/etc/caddy/Caddyfile';
+
+  it('is touched by exactly one bash file, and that file is ccd/ccrc', () => {
+    expect(holdersOf(NEEDLE)).toEqual([
+      'ccd/ccrc',   // CCRC_CADDY_SYSTEM_FILE — the declaration everything else reads
+    ]);
+  });
+
+  it('ccrc spells the path once — the declaration is the only line of shell naming it', () => {
+    const code = codeLines(path.join(ccrcRoot, 'ccd', 'ccrc'));
+    expect(code.filter((l) => l.includes(NEEDLE))).toEqual([
+      'CCRC_CADDY_SYSTEM_FILE="${CCRC_CADDY_SYSTEM_FILE:-/etc/caddy/Caddyfile}"',
+    ]);
+  });
+});
+
 // — Stage 3b, Task 3: the ddns unit pair's name —
 describe('one ccrc-ddns unit name, spelled once in bash through CCRC_DDNS_UNIT', () => {
   // Spec D4: the duckdns arm installs `ccrc-ddns.service` + `ccrc-ddns.timer`
