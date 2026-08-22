@@ -64,10 +64,17 @@ describe('FleetWatcher.sweepLifecycle', () => {
     expect(r.coord.lifecycleFor({ limit: 10 }).map((e) => e.uid)).toEqual(['a.1']);
   });
 
-  it('answers a health block once it has swept, and null with no coordination database', async () => {
+  // FIX ROUND 1, F8 (task-36-37 review, STANDING RULE 1): this used to be one
+  // `it` asserting both claims with hard `expect`s — if the `'ok'` claim ever
+  // failed, the coord-absent `null` claim was never measured at all. Split so
+  // each has its own failure surface.
+  it('answers a health block once it has swept', async () => {
     const r = rig();
     await r.w.sweepLifecycle();
     expect(r.w.lifecycleHealth()?.state).toBe('ok');
+  });
+
+  it('answers null with no coordination database', () => {
     const bare = new FleetWatcher(testDeps(mkTmp('ccrc-lcsweep-')), new Bus());
     expect(bare.lifecycleHealth()).toBeNull();
   });
@@ -93,16 +100,28 @@ describe('the tick itself', () => {
   it('adds NO new timer — the sweep rides the tick that already exists', () => {
     // `start()` is the one place a timer is created in this class (`:484`). A
     // second setInterval/setTimeout would be a second clock nothing stops on
-    // close.
-    expect(src.match(/setInterval\(/g) ?? []).toHaveLength(1);
-    expect(src).not.toContain('lifecycleTimer');
+    // close. FIX ROUND 1, F8: two independent claims, softened (lower stakes
+    // than the health split above — neither dereferences the other's result —
+    // but both should get to report rather than the first hiding the second).
+    expect.soft(src.match(/setInterval\(/g) ?? []).toHaveLength(1);
+    expect.soft(src).not.toContain('lifecycleTimer');
   });
 
   it('dispatches the sweep from tick(), never awaited', () => {
     expect(src).toContain('void this.sweepLifecycle().catch(');
   });
 
-  it('leaves sweepMail byte-identical — D9 ships a parity test INSTEAD of a refactor', () => {
+  // FIX ROUND 1, F7 (task-36-37 review): renamed from "leaves sweepMail
+  // byte-identical" — this body proves sweepMail has not SHRUNK and carries
+  // no lifecycle vocabulary, which is a parity SIGNAL a reviewer can act on,
+  // NOT a byte-identity proof; a wholesale rewrite that happened to avoid
+  // both words would still pass here. Actual byte-identity against the
+  // pre-wave commit is a `diff` a human/reviewer runs against git history —
+  // not reproducible inside a hermetic suite without embedding a specific
+  // commit SHA — and was confirmed that way in review (`sweepMail`
+  // unchanged against `05033c5`). This test is the parity SIGNAL, named for
+  // exactly that.
+  it('sweepMail has not shrunk and carries no lifecycle vocabulary — a parity SIGNAL, not a proof of byte-identity', () => {
     // The most load-bearing loop on the box. Wave 4 adds a producer beside it,
     // never inside it. The slice ends on the method's OWN closing brace —
     // `\n  }\n` at two-space indent — rather than on the next member, so it
@@ -112,8 +131,8 @@ describe('the tick itself', () => {
     const to = src.indexOf('\n  }\n', from);
     expect(to, 'sweepMail has no two-space closing brace').toBeGreaterThan(from);
     const body = src.slice(from, to);
-    expect(body.length).toBeGreaterThan(2000);
-    expect(body).not.toContain('lifecycle');
-    expect(body).not.toContain('Lifecycle');
+    expect.soft(body.length).toBeGreaterThan(2000);
+    expect.soft(body).not.toContain('lifecycle');
+    expect.soft(body).not.toContain('Lifecycle');
   });
 });
