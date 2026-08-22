@@ -30,7 +30,7 @@ import type { PushPayload } from './push.js';
 import { deriveBranch } from './naming.js';
 import { TranscriptResolver } from './transcript/resolve.js';
 import { readAiTitle } from './transcript/title.js';
-import { MAIL_REPLAY_CEILING_ERROR, toRunSummary } from './coord/store.js';
+import { MAIL_REPLAY_CEILING_ERROR, toRunSummary, type CoordStore } from './coord/store.js';
 import { renderMailNudge } from './coord/envelope.js';
 import { configDirFor } from './config.js';
 
@@ -320,10 +320,11 @@ export class FleetWatcher {
    *  carries the lane's own docstring; this is only the clock field, same
    *  shape as `lastNameSweep`/`lastDivergenceSweep` above it. */
   private lastLifecycleSweep = 0;
-  /** Built lazily on the first sweep that has a coordination database — the
-   *  mirror holds the cursor, the error tally and the recorded-once gap names
-   *  in memory, so there is exactly one instance per process and it must not
-   *  be re-minted per tick. */
+  /** Built lazily (`mirrorFor` below) as soon as a coordination database
+   *  exists — NOT only on the first sweep, since `lifecycleHealth()` must be
+   *  able to ask it before any sweep has run. The mirror holds the cursor,
+   *  the error tally and the recorded-once gap names in memory, so there is
+   *  exactly one instance per process and it must not be re-minted per tick. */
   private mirror: JournalMirror | null = null;
   /** `<project>/<name>` for the worktrees the PREVIOUS sweep found unclaimed —
    *  the census's one-interval debounce on `unregistered-worktree`, and the
@@ -1644,6 +1645,32 @@ export class FleetWatcher {
   }
 
   /**
+   * Built as soon as a coordination database exists, not only on the first
+   * SWEEP — `lifecycleHealth()` below needs one to ask before any sweep has
+   * run, so the ONLY condition left absent is "no coordination database",
+   * never "database present but not swept yet" (fix round 1: those two must
+   * not collapse to the same `null`, the seam-overload rule). Construction
+   * itself is side-effect-free (`JournalMirror`'s constructor only assigns
+   * its deps); the filesystem and the clock are touched by `sweep()`, not by
+   * this. One instance per process, same as before — `??=` still guards a
+   * second store existing across two calls in the same tick.
+   */
+  private mirrorFor(store: CoordStore): JournalMirror {
+    this.mirror ??= new JournalMirror({
+      io: this.deps.io,
+      registryDir: this.deps.cfg.registryDir,
+      store,
+      ccdVerbs: () => this.deps.fleetState?.ccdVerbs ?? null,
+      now: () => Date.now(),
+      // THREE INTERVALS. One missed sweep is not an alarm, three is — and the
+      // multiplication happens HERE, at the one construction site, because
+      // `mirror.ts` is L3 and may not import this module.
+      staleAfterMs: LC_SWEEP_MS * 3,
+    });
+    return this.mirror;
+  }
+
+  /**
    * Mirror `$REG/.lifecycle/` into `coord.db` (build 9 §1 D5).
    *
    * ON THE EXISTING TICK, WITH NO NEW TIMER. Its own clock, like
@@ -1661,25 +1688,22 @@ export class FleetWatcher {
     const now = Date.now();
     if (this.lastLifecycleSweep !== 0 && now - this.lastLifecycleSweep < LC_SWEEP_MS) return;
     this.lastLifecycleSweep = now;
-    this.mirror ??= new JournalMirror({
-      io: this.deps.io,
-      registryDir: this.deps.cfg.registryDir,
-      store,
-      ccdVerbs: () => this.deps.fleetState?.ccdVerbs ?? null,
-      now: () => Date.now(),
-      // THREE INTERVALS. One missed sweep is not an alarm, three is — and the
-      // multiplication happens HERE, at the one construction site, because
-      // `mirror.ts` is L3 and may not import this module.
-      staleAfterMs: LC_SWEEP_MS * 3,
-    });
-    await this.mirror.sweep();
+    await this.mirrorFor(store).sweep();
   }
 
-  /** `null` when this box runs no coordination database, or before the first
-   *  sweep has built the mirror — `/api/fleet/health` renders that as an
-   *  ABSENT block, which reads as `'unknown'`, never as `'ok'`. */
+  /**
+   * `null` ONLY when this box runs no coordination database — `/api/fleet/health`
+   * renders that as an ABSENT block. A database with no sweep yet is no longer
+   * folded into the same `null`: the mirror exists as soon as the store does
+   * (`mirrorFor` above), and its own `health()` answers truthfully with
+   * `state: 'unknown'`, `lastOk: null` (`mirrorplan.ts`'s `lifecycleState`,
+   * `lastOkAt === null` arm) — real evidence of "no evidence yet", not a
+   * second meaning stuffed into this method's own `null`.
+   */
   lifecycleHealth(): LifecycleHealth | null {
-    return this.mirror?.health() ?? null;
+    const store = this.deps.coord;
+    if (!store) return null;
+    return this.mirrorFor(store).health();
   }
 
   /**

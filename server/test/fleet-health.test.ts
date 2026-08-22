@@ -287,4 +287,47 @@ describe('/api/fleet/health: the lifecycle block (build 9)', () => {
       expect('lifecycle' in body && body['lifecycle'] !== undefined).toBe(false);
     } finally { await app.close(); }
   });
+
+  // Fix round 1: the collapse flagged in the Task 38/39 review. `null` used to
+  // mean BOTH "no coordination database" AND "database present, no sweep yet"
+  // — two conditions a caller would handle differently, folded into one value.
+  // The three cases below prove they are now distinguishable OVER THE WIRE,
+  // not merely in `lifecycleHealth()`'s return type.
+
+  it('has a watcher but NO coordination database — the block is absent, same as no watcher at all', async () => {
+    const deps = testDeps(mkTmp('ccrc-fh-lc-'));
+    const bus = new Bus();
+    const watcher = new FleetWatcher(deps, bus);
+    const app = await buildServer(deps, bus, watcher);
+    try {
+      const body = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as
+        Record<string, unknown>;
+      const present = 'lifecycle' in body && body['lifecycle'] !== undefined;
+      expect(present, 'no Deps.coord means no block, watcher or not').toBe(false);
+    } finally { await app.close(); }
+  });
+
+  it('has a coordination database but has NOT swept yet — the block is present, as `unknown`, never absent', async () => {
+    const home = mkTmp('ccrc-fh-lc-');
+    const deps = testDeps(home);
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const full = { ...deps, coord,
+      fleetState: { connected: true, downSince: null, ccdVerbs: ['ws-rm', LC_CAP_TOKEN] } } as never;
+    const bus = new Bus();
+    const watcher = new FleetWatcher(full, bus);
+    const app = await buildServer(full, bus, watcher);
+    try {
+      // Deliberately NOT calling `watcher.sweepLifecycle()` — that omission is
+      // the entire point of this case.
+      const body = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as
+        { lifecycle?: { state: string; rows: number; horizon: number | null; gaps: number;
+                         lastOk: number | null } };
+      expect(body.lifecycle, 'a database with no sweep yet must still report a block').toBeDefined();
+      const lc = body.lifecycle!;   // HARD guard above already stopped the test if absent.
+      expect.soft(lc.state, 'state').toBe('unknown');
+      expect.soft(lc.lastOk, 'lastOk').toBeNull();
+      expect.soft(lc.rows, 'rows').toBe(0);
+      expect.soft(lc.gaps, 'gaps').toBe(0);
+    } finally { await app.close(); }
+  });
 });
