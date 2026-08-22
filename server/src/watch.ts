@@ -26,6 +26,7 @@ import { JournalMirror } from './coord/mirror.js';
 import { COORDINATOR_PAUSE_MARKER } from './coord/rundefs.js';
 import { readWorktreeRecords } from './coord/gitref.js';
 import { divergences, unclaimedWorktrees, type DivergenceInput } from './divergence.js';
+import type { ProvenancePair } from './coord/store.js';
 import type { PushPayload } from './push.js';
 import { deriveBranch } from './naming.js';
 import { TranscriptResolver } from './transcript/resolve.js';
@@ -70,6 +71,11 @@ const DIVERGENCE_SWEEP_MS = 60_000;
  *  import it — that would be L3 importing L4 — so the staleness window is
  *  passed in from the one construction site below. */
 export const LC_SWEEP_MS = 5_000;
+
+/** How far back the census weighs provenance pairs. One hour, not the whole
+ *  table: a divergence the operator has already dealt with must stop being
+ *  reported, and the durable record is `GET /api/lifecycle`. */
+const PROVENANCE_WINDOW_MS = 3_600_000;
 
 /** Refusal tokens (of ccd's fourteen, `spec:252-266` — the spec's own table
  *  predates the ninth and the fourteenth, `spec:49` is the unrelated `ws/`-
@@ -1615,10 +1621,25 @@ export class FleetWatcher {
     // done-fingerprint trusts, and the field a rename moves, is this one — which
     // is exactly why this method takes `records`, the same reason `sweepNames`
     // reads the registry itself.
+    // EMPTY ON REFUSAL, never stale: an absence is not a disagreement, and the
+    // same one-bad-read-must-not-kill-the-poll rule the `runs()` arm above
+    // states — except this one DEGRADES rather than returning, because the
+    // other four kinds are unaffected by a mirror this lane could not read.
+    let provenance: ProvenancePair[] = [];
+    try {
+      provenance = this.deps.coord?.recentProvenance(now - PROVENANCE_WINDOW_MS, 500) ?? [];
+    } catch (err) {
+      console.warn(`ccrc-server: sweepDivergences recentProvenance failed (${err instanceof Error ? err.message : String(err)}) — no provenance findings this pass`);
+    }
     const classifierInput = {
       records: records.map((r) => ({
         id: r.id, project: r.project, workspace: r.workspace, workdir: r.workdir,
         branch: r.branch, held: r.held, archivedAt: r.archivedAt,
+        // OFF THE RECORDS THIS SWEEP WAS HANDED, never a second read. The tick
+        // already measured `.supervised` for every row (`registry.ts:185`), and
+        // a re-read here would be a whole-fleet field sweep a minute for a
+        // number sitting in scope.
+        supervisedAt: r.supervisedAt,
       })),
       worktrees, headBranch, openRunSessionIds,
       // THE REGISTRY'S OWN DIRECTORY LISTING — the evidence that a workspace
@@ -1626,6 +1647,16 @@ export class FleetWatcher {
       // `unclaimedWorktrees`), taken above AFTER git's records for the ordering
       // reason stated there.
       registryNames,
+      // THE CLOCK, HANDED IN. `divergence.ts` is pure and reads no clock of its
+      // own, so the census and the ladder cannot drift against each other by
+      // reading two different `Date.now()`s.
+      nowMs: now,
+      // THE PAIRS, NOT THE VERDICT. `corroboration` is L0's and is called in
+      // `divergence.ts`; this lane only reads rows. Bounded to the last hour so
+      // a standing disagreement is re-reported while it stands and drops off
+      // once the session has been restarted honestly — the census is a list of
+      // things to look at now, not an archive (that is `GET /api/lifecycle`).
+      provenance,
     };
     const found = divergences({
       ...classifierInput, unclaimedLastSweep: this.lastUnclaimedWorktrees,
