@@ -147,31 +147,47 @@ describe('the meas key vocabulary is ONE list', () => {
   // instead of drifting silently.
   //
   // Re-measured, not trusted from the brief: L0 declared TEN
-  // (`awk '/export interface LifecycleMeas/,/^}/' shared/api.ts`); ccd emits
-  // TWENTY-TWO distinct `meas.<key>` names (`grep -oE "meas\.[a-zA-Z]+"
-  // ccd/ccd | sort -u`); the union is TWENTY-THREE, not the brief's
-  // twenty-five. `manifestBytes` and `atticsrc` — named in an earlier draft —
-  // are emitted NOWHERE in `ccd/ccd`; see the second test below.
+  // (`awk '/export interface LifecycleMeas/,/^}/' shared/api.ts`); at wave 2
+  // HEAD ccd emitted TWENTY-TWO distinct `meas.<key>` names (`grep -oE
+  // "meas\.[a-zA-Z]+" ccd/ccd | sort -u`); the union was TWENTY-THREE, not
+  // the brief's twenty-five — `manifestBytes` and `atticsrc`, named in an
+  // earlier draft, were emitted NOWHERE in `ccd/ccd` at that HEAD, so wave 2
+  // pinned their absence (see the second test below, then).
+  //
+  // FIX ROUND 1 (Task 24 fix round 1): wave 3 supplied the missing evidence.
+  // `cmd_ws_rm`'s attic pin now emits `meas.atticsrc` (`ccd:2917`) and
+  // `cmd_ws_restore`'s R4-2 supersede now emits `meas.manifestBytes`
+  // (`ccd:4036`) — re-measuring the same scan at this HEAD finds TWENTY-FOUR
+  // distinct names, and the union with L0's now-twelve is the brief's
+  // TWENTY-FIVE.
   const all = new Set<string>(LIFECYCLE_MEAS_KEYS);
 
-  it('every meas.<key> ccd writes is on the list, and the list is exactly 23', () => {
+  it('every meas.<key> ccd writes is on the list, and the list is exactly 25', () => {
     // Mutant: emit `meas.slug` at any call site -> this fails with
     // `an unlisted meas key: [ 'slug' ]`, and wave 4 drops it at ingest with
     // nothing saying so.
-    expect.soft(all.size, 'LIFECYCLE_MEAS_KEYS drifted from the measured 23').toBe(23);
+    expect.soft(all.size, 'LIFECYCLE_MEAS_KEYS drifted from the measured 25').toBe(25);
     const used = new Set([...src.matchAll(/\bmeas\.([A-Za-z][A-Za-z0-9]*)\b/g)].map((m) => m[1]!));
     expect.soft(used.size, 'no meas key found at all — the scan is vacuous').toBeGreaterThan(10);
     expect.soft([...used].filter((k) => !all.has(k)).sort(), 'an unlisted meas key').toEqual([]);
   });
 
-  it('never invents an emit for manifestBytes or atticsrc — they are not on the wire', () => {
-    // A prior draft of this vocabulary named these two, but neither is
-    // emitted anywhere in the shipped `ccd/ccd`. Re-adding them to the list
-    // "on the brief's say-so" would widen `LifecycleMeas` with dead members;
-    // this pins that ccd itself still agrees they are unused.
+  it('now invents no emit for anything OTHER than manifestBytes or atticsrc — the wire evidence for those two, not a blanket widening', () => {
+    // FIX ROUND 1 (Task 24 fix round 1): this test PINNED THE ABSENCE of
+    // `manifestBytes`/`atticsrc` through wave 2 and all of wave 3's first
+    // pass — a guard specifically against re-adding either "on the brief's
+    // say-so" with no wire evidence. Wave 3's fix round supplied that
+    // evidence (`ccd:2917`, `ccd:4036`), so the two are now real members of
+    // `LifecycleMeas` (see above) and this guard is INVERTED, not deleted:
+    // deleting it would let a future edit quietly remove either emitter with
+    // nothing noticing, which is exactly the drift class this whole describe
+    // block exists to catch. It now holds the line from the other side —
+    // both keys MUST still be on the wire — while continuing to prove the
+    // scan itself is not vacuous for any other speculative key nobody has
+    // proposed yet.
     const used = new Set([...src.matchAll(/\bmeas\.([A-Za-z][A-Za-z0-9]*)\b/g)].map((m) => m[1]!));
-    expect.soft(used.has('manifestBytes')).toBe(false);
-    expect.soft(used.has('atticsrc')).toBe(false);
+    expect.soft(used.has('manifestBytes'), 'ws-restore stopped emitting meas.manifestBytes').toBe(true);
+    expect.soft(used.has('atticsrc'), 'ws-rm stopped emitting meas.atticsrc').toBe(true);
   });
 
   it('every top-level key ccd writes is one of the five', () => {

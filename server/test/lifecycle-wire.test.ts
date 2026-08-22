@@ -28,7 +28,8 @@ const DEC: LifecycleDec = { surface: 'cli', actor: 'still-river', reason: 'wave 
 const MEAS: LifecycleMeas = {
   project: 'ccrc-pwa', workspace: 'still-river', branch: 'ws/still-river',
   uuid: '72be9ee2-0000-4bcc-b60b-0cfc0dc3d199', wrapper: 'claude-corp',
-  tip: 'a'.repeat(40), attic: 201, archivedAt: null, archivedReason: null, held: null,
+  tip: 'a'.repeat(40), attic: 201, atticsrc: 'worktree', archivedAt: null,
+  archivedReason: null, manifestBytes: null, held: null,
   workdir: '/home/you/worktrees/ccrc-pwa/still-river', base: 'main', old: null,
   rc: 0, mode: 'resume', inUnit: 1, from: null, dropped: null, registered: 0,
   state: null, bytes: null, resumed: null, tombstone: null,
@@ -76,18 +77,22 @@ describe('LifecycleDec — declared, self-asserted', () => {
 });
 
 describe('LifecycleMeas — measured about the SUBJECT, before any destruction', () => {
-  it('carries exactly D2`s ten plus wave 2`s thirteen — twenty-three fields', () => {
+  it('carries exactly D2`s ten plus wave 2`s thirteen plus wave 3`s two — twenty-five fields', () => {
+    // FIX ROUND 1 (Task 24 fix round 1): `atticsrc` and `manifestBytes`
+    // rejoin the list — see the inverted test below and
+    // `ccd-lifecycle-contain.test.ts` for why.
     expect(Object.keys(MEAS).sort()).toEqual(
-      ['archivedAt', 'archivedReason', 'attic', 'base', 'branch', 'bytes',
-       'dropped', 'from', 'held', 'inUnit', 'mode', 'old', 'project',
-       'rc', 'registered', 'resumed', 'state', 'tip', 'tombstone', 'uuid',
-       'workdir', 'workspace', 'wrapper'].sort());
+      ['archivedAt', 'archivedReason', 'attic', 'atticsrc', 'base', 'branch',
+       'bytes', 'dropped', 'from', 'held', 'inUnit', 'manifestBytes', 'mode',
+       'old', 'project', 'rc', 'registered', 'resumed', 'state', 'tip',
+       'tombstone', 'uuid', 'workdir', 'workspace', 'wrapper'].sort());
   });
 
   it('every field is nullable — null means NOT MEASURED, never zero or empty', () => {
     const nothing: LifecycleMeas = {
       project: null, workspace: null, branch: null, uuid: null, wrapper: null,
-      tip: null, attic: null, archivedAt: null, archivedReason: null, held: null,
+      tip: null, attic: null, atticsrc: null, archivedAt: null,
+      archivedReason: null, manifestBytes: null, held: null,
       workdir: null, base: null, old: null, rc: null, mode: null, inUnit: null,
       from: null, dropped: null, registered: null, state: null, bytes: null,
       resumed: null, tombstone: null,
@@ -98,20 +103,30 @@ describe('LifecycleMeas — measured about the SUBJECT, before any destruction',
     // null is a row that was never archived. Different facts, different values.
   });
 
-  it('is a NAMED twenty-three, not an index signature — a 24th key is a compile error', () => {
+  it('is a NAMED twenty-five, not an index signature — a 26th key is a compile error', () => {
     // Task 21's ruling, replacing the wave-1 "closed ten, the rest lives in
     // raw" draft: `reviveMeas` (wave 4) reads `meas.*` through THIS
     // interface's own key list, so a key not modelled here is not merely
     // deferred to `raw` — it is silently dropped from the mirror's typed
-    // shape. Widening with thirteen NAMED members (not an index signature)
-    // keeps the vocabulary closed: an emit ccd does not yet have is still a
-    // TS2739/TS2740 here, exactly like the original ten. The two keys a
-    // prior draft speculated on — `manifestBytes`, `atticsrc` — are
-    // deliberately NOT members: neither is emitted anywhere in `ccd/ccd`
-    // (verified by `ccd-lifecycle-contain.test.ts`, which derives ccd's
-    // side by scanning the file rather than a second hand-written list).
-    expect(Object.keys(MEAS)).not.toContain('atticsrc');
-    expect(Object.keys(MEAS)).not.toContain('manifestBytes');
+    // shape. Widening (now with fifteen NAMED members beyond the original
+    // ten, not an index signature) keeps the vocabulary closed: an emit ccd
+    // does not yet have is still a TS2739/TS2740 here, exactly like the
+    // original ten.
+    //
+    // FIX ROUND 1 (Task 24 fix round 1): `manifestBytes` and `atticsrc` — the
+    // two keys a prior draft speculated on — were deliberately NOT members
+    // through wave 2 and wave 3's first pass, pinned here as an absence,
+    // because neither was emitted anywhere in `ccd/ccd` at that HEAD. Wave 3
+    // supplied the missing wire evidence (`cmd_ws_rm`'s attic pin emits
+    // `meas.atticsrc`, `cmd_ws_restore`'s supersede emits
+    // `meas.manifestBytes`; both verified by `ccd-lifecycle-contain.test.ts`,
+    // which derives ccd's side by scanning the file rather than a second
+    // hand-written list), so this assertion is INVERTED rather than deleted:
+    // it now pins their PRESENCE, the same way it pinned their absence
+    // before — a guard that has served one purpose gets turned around to
+    // hold the line from the other side, not discarded.
+    expect(Object.keys(MEAS), 'atticsrc rejoined the wire').toContain('atticsrc');
+    expect(Object.keys(MEAS), 'manifestBytes rejoined the wire').toContain('manifestBytes');
     expect(EVENT.raw.length, 'raw still holds the line verbatim on every path').toBeGreaterThan(0);
   });
 });

@@ -3773,20 +3773,20 @@ export interface LifecycleDec {
  * that was never taken. `archivedReason: ''` is a blank reason;
  * `archivedReason: null` is a row that was never archived.
  *
- * THIS TWENTY-THREE IS CLOSED, AND THAT IS A RULING, NOT AN OVERSIGHT —
+ * THIS TWENTY-FIVE IS CLOSED, AND THAT IS A RULING, NOT AN OVERSIGHT —
  * widened from the original ten in wave 2 (Task 21) because "closed ten, the
  * rest lives on in `raw`" turned out to be the wrong shape for THIS field
  * specifically: `LifecycleEvent.raw` is a per-event escape hatch, but wave
  * 4's `reviveMeas` reads `meas.*` through this interface's OWN key list, and a
  * key not on that list is not merely deferred to `raw` — it is silently
  * DROPPED from the mirror's typed shape, with nothing anywhere reporting the
- * loss. Measured at HEAD (`awk '/export interface LifecycleMeas/,/^}/'
+ * loss. Measured at wave 2 HEAD (`awk '/export interface LifecycleMeas/,/^}/'
  * shared/api.ts` against `grep -oE "meas\.[a-zA-Z]+" ccd/ccd | sort -u`): ccd
- * emits 22 distinct `meas.<key>` names; 13 of them — `base`, `bytes`,
+ * emitted 22 distinct `meas.<key>` names; 13 of them — `base`, `bytes`,
  * `dropped`, `from`, `inUnit`, `mode`, `old`, `rc`, `registered`, `resumed`,
  * `state`, `tombstone`, `workdir` — were emitted but undeclared, i.e. silently
- * lost at ingest. Those 13 are named below; the union with the original ten
- * is 23. `tip` stays even though nothing currently emits it — a reader
+ * lost at ingest. Those 13 were named then; the union with the original ten
+ * was 23. `tip` stays even though nothing currently emits it — a reader
  * tolerating a key the writer does not yet produce is fine, the reverse is
  * the defect this widening fixes.
  *
@@ -3794,17 +3794,22 @@ export interface LifecycleDec {
  * half of the ruling. An index signature would let any key through and
  * destroy the closed vocabulary; this project's doctrine runs the other way
  * (`_LC_ACTS` pinned set-equal to `LIFECYCLE_ACTS`, `single-definition.test.ts`
- * failing the build on a second copy of an enumerated value). A 24th key
+ * failing the build on a second copy of an enumerated value). A 26th key
  * ccd starts emitting is a compile error here AND a red
  * `server/test/ccd-lifecycle-contain.test.ts`, which derives ccd's side by
  * scanning `ccd/ccd` rather than hand-maintaining a second list — that is
  * the point, not an inconvenience.
  *
- * Two keys a prior draft of this list speculated on — `manifestBytes` and
- * `atticsrc` — are NOT members: neither is emitted anywhere in the shipped
- * `ccd/ccd`, and this widening adds only keys actually observed on the wire.
- * A future emit of either is exactly the "26th key" case above: a compile
- * error and a red suite, not a silent pass-through.
+ * `manifestBytes` and `atticsrc` — RESTORED, wave 3 (Task 24 fix round 1).
+ * Wave 2 (Task 21) speculated on both, found neither emitted anywhere in the
+ * shipped `ccd/ccd` at that HEAD, and removed them as dead members — a guard
+ * (`ccd-lifecycle-contain.test.ts`'s "never invents an emit" case, now
+ * inverted, see there) was pinned specifically to stop either being re-added
+ * "on the brief's say-so" without the wire evidence to back it. Wave 3
+ * supplied that evidence: `cmd_ws_rm`'s attic pin now emits `meas.atticsrc`
+ * (`ccd:2917`) and `cmd_ws_restore`'s supersede now emits
+ * `meas.manifestBytes` (`ccd:4036`), so the union returns to the plan's
+ * original 25.
  */
 export interface LifecycleMeas {
   readonly project: string | null;
@@ -3816,6 +3821,12 @@ export interface LifecycleMeas {
   readonly tip: string | null;
   /** How many `refs/ccrc/attic/<id>/` refs `_ws_attic_pin` created. */
   readonly attic: number | null;
+  /** Where the attic pin's tip came from — `worktree` (read live off
+   *  `$workdir`'s HEAD), `registry` (the worktree was already gone; read off
+   *  the registry's own `branch` field instead), or `none` (neither had one
+   *  to pin). `cmd_ws_rm`'s attic pin (`ccd:2917`); the local starts `none`
+   *  and only ever moves to `worktree` or `registry` (`ccd:2887,2889,2900`). */
+  readonly atticsrc: 'worktree' | 'registry' | 'none' | null;
   /** Epoch SECONDS as `_reg_set "$id" archived "$(date +%s)"` wrote it
    *  (`ccd:2753`) — the registry's own unit, carried unconverted so the record
    *  is what the file said. */
@@ -3824,6 +3835,12 @@ export interface LifecycleMeas {
    *  carries no reason. Not proven present by any guard — absent is a
    *  legitimate state. */
   readonly archivedReason: string | null;
+  /** The byte total of the `.archivemanifest` file `ws-restore` is about to
+   *  remove, read fresh with `stat` right before the removal (`cmd_ws_restore`
+   *  R4-2 supersede, `ccd:4036`) — null when `stat` could not measure it
+   *  (missing or unreadable), never a fabricated 0. Nothing in ccd reads the
+   *  manifest back; this byte count is the one thing preserved of it. */
+  readonly manifestBytes: number | null;
   /** The `.hold` text, verbatim, or null. */
   readonly held: string | null;
   /** The worktree path, as `_reg_get "$id" workdir` or the just-created path
@@ -3880,7 +3897,8 @@ export interface LifecycleMeas {
  *  the map. */
 const LIFECYCLE_MEAS_KEY_MAP: Record<keyof LifecycleMeas, true> = {
   project: true, workspace: true, branch: true, uuid: true, wrapper: true,
-  tip: true, attic: true, archivedAt: true, archivedReason: true, held: true,
+  tip: true, attic: true, atticsrc: true, archivedAt: true,
+  archivedReason: true, manifestBytes: true, held: true,
   workdir: true, base: true, old: true, rc: true, mode: true, inUnit: true,
   from: true, dropped: true, registered: true, state: true, bytes: true,
   resumed: true, tombstone: true,
