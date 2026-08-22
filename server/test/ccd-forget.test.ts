@@ -75,6 +75,8 @@ describe('ccd forget', () => {
     const id = deadWrapperSession();
     h.sh(`${DEAD} cmd_forget ${id}`);
     const calls = fs.readFileSync(path.join(h.home, 'ccd-calls'), 'utf8');
+    // Subset match, deliberately — the exact-sequence guard for the tmux
+    // probe `_reg_purge`'s backstop adds lives in `ccd-lifecycle-purge.test.ts`.
     expect(calls).toContain(`unsupervise ${id}`);
   });
 

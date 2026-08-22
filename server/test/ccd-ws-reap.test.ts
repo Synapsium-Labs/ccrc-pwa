@@ -720,6 +720,8 @@ describe('destruction order', () => {
     expect(h.git(main, 'branch', '--list', 'ws/quiet-basin')).toBe('');
     expect(h.reg('demo-quiet-basin', 'uuid')).toBeNull();
     expect(h.reg('demo-quiet-basin', 'reaping')).toBeNull();
+    // Subset match, deliberately — the exact-sequence guard for the tmux
+    // probe `_reg_purge`'s backstop adds lives in `ccd-lifecycle-purge.test.ts`.
     expect(h.calls()).toContain('unsupervise demo-quiet-basin');
     // (e), which is not (d): the unit and the pane are two different things to
     // stop, and leaving the pane alive holds the deleted directory open as some
