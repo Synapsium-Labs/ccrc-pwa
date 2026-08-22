@@ -182,10 +182,12 @@ describe('CoordStore.lifecycleFor', () => {
       row('a.2', {}),
     ], cursor: 220, size: 220, at: 9 });
     const [degraded, known] = s.lifecycleFor({ limit: 10 });
-    expect(degraded!.outcome).toBe('unknown');
-    expect(degraded!.badoutcome).toBe('quarantined');
-    expect(known!.outcome).toBe('done');
-    expect(known!.badoutcome).toBeNull();
+    expect(degraded, 'the degraded-outcome row exists at all').toBeDefined();
+    expect(known, 'the known-outcome row exists at all').toBeDefined();
+    expect.soft(degraded!.outcome, 'degraded outcome').toBe('unknown');
+    expect.soft(degraded!.badoutcome, 'degraded badoutcome').toBe('quarantined');
+    expect.soft(known!.outcome, 'known outcome').toBe('done');
+    expect.soft(known!.badoutcome, 'known badoutcome').toBeNull();
   });
 });
 
