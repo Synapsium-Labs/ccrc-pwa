@@ -4102,6 +4102,33 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   [[ -f "$REG/$id.archived" ]]   || die "not archived: $id"
   local workdir; workdir=$(_reg_get "$id" workdir)
   [[ -d "$workdir" ]] || die "worktree is gone: $workdir — see: ccd ws-attic --session $id"
+  # ── R4-2 · SUPERSEDE, DO NOT ERASE ──────────────────────────────────────
+  # INLINE AND INSIDE THE FLOCK REGION (opened ccd:4000, closed ccd:4081), so
+  # the values recorded are the ones being erased: a concurrent `ws-reap` holds
+  # the same `$REG/.reap-<id>.lock` and can change `.archived` underneath an
+  # unserialised read.
+  #
+  # `_lc_done` returns 0 on every path, and that is not a nicety here:
+  # ccd:4050-4053 records that any new non-zero `return` between the
+  # acquisition and `exec {lfd}>&-` leaks this lock in the SOURCING shell for
+  # ever, and ccd is sourced by itself and by its tests.
+  #
+  # NO NEW REGISTRY FIELD. A 25th per-session field costs a `SessionRecord`
+  # field, a `reviveFleetSession` literal change and 24 extra agent round-trips
+  # per 2 s tick, for a fact the journal already carries and `_reg_purge`
+  # deletes anyway.
+  #
+  # DISCLOSED RESIDUAL: the manifest is preserved as a BYTE TOTAL only. Read
+  # fresh with `stat` because nothing in ccd reads that field back (ccd:3853
+  # says so verbatim), and left ABSENT rather than 0 when it cannot be measured
+  # — a fabricated 0 would argue that nothing was lost.
+  _lc_done restore "$id" "" verb ws-restore \
+    meas.archivedAt     "$(_reg_get "$id" archived)" \
+    meas.archivedReason "$(_reg_get "$id" archivedreason)" \
+    meas.manifestBytes  "$(stat -c %s -- "$REG/$id.archivemanifest" 2>/dev/null)" \
+    meas.workdir        "$workdir" \
+    meas.branch         "$(_reg_get "$id" branch)"
+  # ─────────────────────────────────────────────────────────────────────────
   rm -f "$REG/$id.archived" "$REG/$id.archivedreason" "$REG/$id.archivemanifest"
   # THE SAME F8 SHAPE, converted the same way — and this verb's agent budget is
   # CCD_VERB_TIMEOUT_MS['ws-restore'] = 60s, FIVE TIMES TIGHTER than the ws-add
@@ -4148,9 +4175,17 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   # Given back regardless of the spawn's fate — the undo (archive stamps gone)
   # is real either way, which is what made the old placement unconditional too.
   exec {lfd}>&-
-  [[ "$rc" -eq 0 ]] || return "$rc"
+  # THE UNDO LANDED AND THE SESSION DID NOT COME BACK — `_lc_fail`, never
+  # `_lc_refuse`: the archive stamps are already gone at ccd:4036, so calling
+  # this a refusal would say nothing was touched, which is false. AFTER
+  # ccd:4081's close, so it sits on no path that still holds the descriptor.
+  [[ "$rc" -eq 0 ]] || { _lc_fail restore "$id" "" spawn-failed \
+      "the archive stamps were removed but $id did not come back up (spawn rc $rc)"
+    return "$rc"; }
   _spawn_settle "$id" "$SPAWN_FROMSWAP"; rc=$?
   if [[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 ]]; then
+    _lc_fail restore "$id" "" spawn-failed \
+      "the archive stamps were removed but $id did not settle (spawn rc $rc)"
     echo "ccd: ws-restore spawn failed for $id (spawn rc $rc) — see $REG/$id.spawn" >&2
     return "$rc"
   fi
