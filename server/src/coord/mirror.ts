@@ -145,15 +145,20 @@ export class JournalMirror {
 
   /** `$REG/.lifecycle/errors` — ccd's own counted append failures (D7). Read,
    *  reported, and NEVER acted on: the journal is best-effort and never gates
-   *  an act, and the errors file is the mitigation, not a kill switch. THREE
+   *  an act, and the errors file is the mitigation, not a kill switch. FOUR
    *  CONDITIONS: absent (ccd has never written the counter — `null`),
-   *  unreadable (keep the last measurement rather than manufacturing one), and
-   *  a number. */
+   *  unreadable (keep the last measurement rather than manufacturing one),
+   *  present-but-unparseable (fix round 1, F1 — a malformed counter is NOT
+   *  evidence the counter was never written; it means this read could not
+   *  produce a fresh measurement, the identical fact `unreadable` states, so
+   *  it must degrade the same way — to the last good measurement, never to
+   *  `null`, which the docstring above reserves for a genuine absence), and a
+   *  number. */
   private async readErrors(dir: string): Promise<number | null> {
     const r = await this.deps.io.readFileMeasured(path.join(dir, LC_ERRORS_NAME));
     if (!r.ok) return r.reason === 'absent' ? null : this.writeErrors;
     const n = Number(r.content.trim());
-    return Number.isFinite(n) && n >= 0 ? n : null;
+    return Number.isFinite(n) && n >= 0 ? n : this.writeErrors;
   }
 
   private state(): LifecycleHealth['state'] {

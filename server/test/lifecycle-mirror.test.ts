@@ -27,6 +27,18 @@ const line = (uid: string, over: Record<string, unknown> = {}): string => JSON.s
 
 interface Rig { mirror: JournalMirror; store: CoordStore; dir: string; registryDir: string; now: { v: number } }
 
+/** A `CoordStore` proxy whose ONE named method throws — everything else forwards
+ *  to the real store unchanged. Exercises "a store method that throws" as its
+ *  own code path (fix round 1, F2), distinct from the io-layer throw the
+ *  existing `never throws, whatever the io does` test already covers. */
+const throwingStore = (real: CoordStore, method: 'recordGap' | 'ingestJournal'): CoordStore =>
+  new Proxy(real, {
+    get(target, prop, receiver) {
+      if (prop === method) return () => { throw new Error(`${String(prop)} exploded`); };
+      return Reflect.get(target, prop, receiver);
+    },
+  }) as CoordStore;
+
 const rig = (io: FleetIO = localIO, verbs: readonly string[] | null = ['ws-rm', LC_CAP_TOKEN]): Rig => {
   const home = mkTmp('ccrc-mirror-');
   const registryDir = path.join(home, '.cc-sessions');
@@ -188,6 +200,37 @@ describe('JournalMirror.sweep', () => {
   });
 });
 
+describe('JournalMirror.sweep — a store method that throws (fix round 1, F2)', () => {
+  it('never throws when store.recordGap itself throws', async () => {
+    // Drives the SAME undrained-rotation shape as the sweep test above, so
+    // `recordGap` is actually reached this sweep, then swaps in a store whose
+    // `recordGap` throws.
+    const r = rig();
+    const f = path.join(r.dir, genFile(G1));
+    const partial = line('a.2').slice(0, 20);
+    fs.writeFileSync(f, `${line('a.1')}\n${partial}`);
+    await r.mirror.sweep();
+    fs.rmSync(f);
+    fs.writeFileSync(path.join(r.dir, genFile(G2)), `${line('b.1')}\n`);
+    r.now.v += 5000;
+    const m2 = new JournalMirror({
+      io: localIO, registryDir: r.registryDir, store: throwingStore(r.store, 'recordGap'),
+      ccdVerbs: () => ['ws-rm', LC_CAP_TOKEN], now: () => r.now.v, staleAfterMs: STALE_AFTER,
+    });
+    await expect(m2.sweep()).resolves.toBeUndefined();
+  });
+
+  it('never throws when store.ingestJournal itself throws', async () => {
+    const r = rig();
+    fs.writeFileSync(path.join(r.dir, genFile(G1)), `${line('a.1')}\n`);
+    const m2 = new JournalMirror({
+      io: localIO, registryDir: r.registryDir, store: throwingStore(r.store, 'ingestJournal'),
+      ccdVerbs: () => ['ws-rm', LC_CAP_TOKEN], now: () => r.now.v, staleAfterMs: STALE_AFTER,
+    });
+    await expect(m2.sweep()).resolves.toBeUndefined();
+  });
+});
+
 describe('JournalMirror.health', () => {
   it('reports the counts, the horizon, the server clock and the ccd-side error tally', async () => {
     const r = rig();
@@ -206,6 +249,48 @@ describe('JournalMirror.health', () => {
     fs.writeFileSync(path.join(r.dir, genFile(G1)), `${line('a.1')}\n`);
     await r.mirror.sweep();
     expect(r.mirror.health().writeErrors).toBeNull();
+  });
+
+  it('keeps the last measured writeErrors when the counter is present but unparseable — F1', async () => {
+    // Fix round 1, F1: `readErrors`'s present-but-unparseable branch used to
+    // fall to `null` — indistinguishable from "never written" — instead of
+    // degrading the same way `unreadable` already does. Measured sequence:
+    // 9 -> garbage must read 9 -> 9, never 9 -> null.
+    const r = rig();
+    fs.writeFileSync(path.join(r.dir, genFile(G1)), `${line('a.1')}\n`);
+    fs.writeFileSync(path.join(r.dir, LC_ERRORS_NAME), '9\n');
+    await r.mirror.sweep();
+    expect(r.mirror.health().writeErrors).toBe(9);
+
+    fs.writeFileSync(path.join(r.dir, LC_ERRORS_NAME), 'not-a-number\n');
+    r.now.v += 5000;
+    await r.mirror.sweep();
+    expect(r.mirror.health().writeErrors).toBe(9);
+  });
+
+  it('keeps the last measured writeErrors when the counter file cannot be read — unreadable (F2)', async () => {
+    // The sibling of the F1 test above, but for the io-level `unreadable`
+    // branch specifically: a fake `FleetIO` whose `readFileMeasured` answers
+    // `{ok:false, reason:'unreadable'}` for the errors file only, on the
+    // SAME mirror instance (so `writeErrors` really is being carried across
+    // sweeps in the running process, not merely re-derived by test scaffolding).
+    let breakErrors = false;
+    const flaky: FleetIO = {
+      ...localIO,
+      readFileMeasured: async (p) => (breakErrors && p.endsWith(LC_ERRORS_NAME)
+        ? { ok: false, reason: 'unreadable' }
+        : localIO.readFileMeasured(p)),
+    };
+    const r = rig(flaky);
+    fs.writeFileSync(path.join(r.dir, genFile(G1)), `${line('a.1')}\n`);
+    fs.writeFileSync(path.join(r.dir, LC_ERRORS_NAME), '9\n');
+    await r.mirror.sweep();
+    expect(r.mirror.health().writeErrors).toBe(9);
+
+    breakErrors = true;
+    r.now.v += 5000;
+    await r.mirror.sweep();
+    expect(r.mirror.health().writeErrors).toBe(9);
   });
 
   it('says `unknown` before any sweep has run', () => {
