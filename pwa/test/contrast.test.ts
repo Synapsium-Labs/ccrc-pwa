@@ -1363,3 +1363,44 @@ describe('the spawn chip is measured, not left in the blind spot', () => {
     for (const row of rows) expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
   });
 });
+
+// ── D-161's two new coloured children on the sign-in card ───────────────────
+describe("the sign-in block's ink is measured, not asserted in a comment", () => {
+  it.each([
+    ['fleet.css .auth-block-title', 'var(--ink-primary)'],
+    ['fleet.css .auth-block-sub', 'var(--ink-tertiary)'],
+  ])('%s is grounded on the card it sits in', (key, ink) => {
+    // Both are children of `.auth-block`, which sets
+    // `background: var(--bg-surface)` two rules up in the SAME stylesheet — and
+    // neither selector names it, so the auditor cannot recover the ground and
+    // both landed in the uncovered census. fleet.css meanwhile claimed the pairs
+    // were "already vetted" against that ground: an unmeasured claim, which is
+    // the thing this file exists to make impossible. Same shape, and the same
+    // fix, as the spawn chip above.
+    expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-surface)']);
+    const rows = report.measured.filter((m) => m.label.endsWith(key));
+    expect(rows, key).toHaveLength(2);                    // dark and light
+    for (const row of rows) {
+      expect(row.detail, row.label).toContain(ink);
+      expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it('leaves the header door in the census, because its ground is genuinely two', () => {
+    // NOT an oversight, and stated here so the next reader does not "fix" it:
+    // `.fleet-head` paints nothing, so `.accounts-door` sits on the page on a
+    // phone and on `.shell-nav`'s --bg-surface in the desktop sidebar, while an
+    // INHERITED_GROUNDS entry is a layer STACK and cannot say "either of these".
+    // Its `.mail-badge`/`.bell` neighbours are in the census for the same
+    // reason. The pair clears AA on BOTH candidate grounds (fleet.css carries
+    // the four numbers), so the census line is the whole cost.
+    expect(INHERITED_GROUNDS['fleet.css .accounts-door']).toBeUndefined();
+    expect(report.uncovered).toContain('fleet.css .accounts-door');
+    for (const ground of ['var(--bg-page)', 'var(--bg-surface)']) {
+      for (const theme of [DARK, LIGHT]) {
+        expect(ratio('var(--ink-secondary)', [ground], theme)).toBeGreaterThanOrEqual(4.5);
+        expect(ratio('var(--ink-primary)', [ground], theme)).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+});

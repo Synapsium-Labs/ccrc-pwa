@@ -16,7 +16,10 @@
 // selectors, the selector LIST of a rule, and the body of an at-rule — so
 // their contracts are pinned here too.
 import { describe, expect, it } from 'vitest';
-import { atBlock, declValue, norm, normSel, ruleIn, selectorsOf, stripComments } from './cssRule';
+import {
+  atBlock, declValue, declaredValues, effectiveValue, longhandValues, norm, normSel, ruleIn,
+  rulesFor, selectorsOf, stripComments,
+} from './cssRule';
 
 const CANONICAL = `
 .reap-go {
@@ -187,5 +190,122 @@ describe('and still fails on the things it exists to catch', () => {
   it('does not let a comment satisfy a declaration assertion', () => {
     const fake = '\n.reap-go { /* min-height: var(--tap-min); */ background: red; }\n';
     expect(declValue(ruleIn(fake, '.reap-go'), 'min-height')).toBeNull();
+  });
+});
+
+// ── the cascade-aware reader (D-161 fix round) ──────────────────────────────
+//
+// `ruleIn` reads ONE rule, and every one of these stylesheets is a cascade.
+// Three mutants put `overflow: hidden` back on the detail pane — the exact
+// D-161 regression — with the whole suite green, and a fourth spelling
+// (`overflow: clip auto`, which is what the build's minifier emits) turned
+// three of four assertions red while changing nothing. Both classes are pinned
+// here, on synthetic sheets, for the reason at the top of this file.
+
+describe('rulesFor collects every rule that styles the element', () => {
+  const later = `
+.pane { overflow-y: auto; overflow-x: hidden; }
+.other { color: red; }
+.pane { overflow: hidden; }
+`;
+  it('sees a LATER rule of the same name — the bypass ruleIn cannot see', () => {
+    expect(ruleIn(later, '.pane')).toContain('overflow-y: auto');   // the old reader
+    expect(declaredValues(later, '.pane', 'overflow-y')).toEqual(['auto', 'hidden']);
+  });
+
+  it('sees a HIGHER-SPECIFICITY restatement that names more ancestors', () => {
+    const stronger = '\n.pane { overflow-y: auto; }\n.shell .pane { overflow-y: hidden; }\n';
+    expect(declaredValues(stronger, '.pane', 'overflow-y')).toEqual(['auto', 'hidden']);
+  });
+
+  it('sees a narrower subject — a state variant is still this element', () => {
+    const variant = `\n.pane { overflow-y: auto; }\n.pane[data-view='x']:hover { overflow-y: hidden; }\n`;
+    expect(declaredValues(variant, '.pane', 'overflow-y')).toEqual(['auto', 'hidden']);
+  });
+
+  it('sees a GROUPED rule from any position in the list', () => {
+    const grouped = '\n.nav,\n.pane { overflow: hidden; }\n';
+    expect(declaredValues(grouped, '.pane', 'overflow-y')).toEqual(['hidden']);
+  });
+
+  it('does NOT see a different class whose name merely begins the same', () => {
+    expect(() => rulesFor('\n.pane-wide { overflow: hidden; }\n', '.pane'))
+      .toThrow(/no rule targeting \.pane/);
+  });
+
+  it('does NOT see a rule whose subject is a DESCENDANT of this element', () => {
+    // `.pane .chat`'s declarations are the chat's, not the pane's — the
+    // distinction the detail pane's own guard rests on (.shell-detail vs
+    // .shell-detail .chat, which want OPPOSITE overflow).
+    expect(() => rulesFor('\n.pane .chat { overflow: hidden; }\n', '.pane'))
+      .toThrow(/no rule targeting/);
+  });
+
+  it('does NOT see a ::pseudo-element — that box is not the element', () => {
+    expect(() => rulesFor('\n.pane::before { overflow: hidden; }\n', '.pane'))
+      .toThrow(/no rule targeting/);
+  });
+
+  it('reads a DESCENDANT selector as its own subject, ancestors allowed to grow', () => {
+    const sheet = `
+.pane .chat { overflow: hidden; }
+.shell .pane > .chat:focus { overflow: clip; }
+.pane .chat-back { overflow: auto; }
+.chat .pane-x { overflow: auto; }
+`;
+    expect(declaredValues(sheet, '.pane .chat', 'overflow-x')).toEqual(['hidden', 'clip']);
+  });
+
+  it('throws when nothing targets the selector, exactly as ruleIn does', () => {
+    expect(() => declaredValues('\n.pane { color: red; }\n', '.gone', 'overflow-y'))
+      .toThrow(/no rule targeting \.gone/);
+  });
+
+  it('reports a property nobody sets as an empty list, not as a throw', () => {
+    // The two answers must stay apart: a renamed rule is a broken test, a
+    // missing declaration is a finding about the stylesheet.
+    expect(declaredValues('\n.pane { color: red; }\n', '.pane', 'overflow-y')).toEqual([]);
+  });
+});
+
+describe('the overflow shorthand and its longhands are the same declaration', () => {
+  it('splits the two-value form across the axes, x first', () => {
+    // Exactly what lightningcss emits into the shipped bundle:
+    // `.shell-detail{…overflow:clip auto}`.
+    expect(longhandValues('overflow: clip auto;', 'overflow-x')).toEqual(['clip']);
+    expect(longhandValues('overflow: clip auto;', 'overflow-y')).toEqual(['auto']);
+  });
+
+  it('feeds BOTH axes from the one-value form', () => {
+    expect(longhandValues('overflow: hidden;', 'overflow-x')).toEqual(['hidden']);
+    expect(longhandValues('overflow: hidden;', 'overflow-y')).toEqual(['hidden']);
+  });
+
+  it('keeps shorthand and longhand in SOURCE ORDER — the later one wins', () => {
+    const rule = 'overflow: hidden; overflow-y: auto;';
+    expect(longhandValues(rule, 'overflow-y')).toEqual(['hidden', 'auto']);
+    expect(effectiveValue('\n.pane { overflow: hidden; overflow-y: auto; }\n', '.pane', 'overflow-y'))
+      .toBe('auto');
+  });
+
+  it('leaves a property with no shorthand entry alone', () => {
+    expect(longhandValues('min-height: var(--tap-min);', 'min-height')).toEqual(['var(--tap-min)']);
+    expect(longhandValues('overflow: hidden;', 'min-height')).toEqual([]);
+  });
+
+  it('does not let a comment mentioning a value satisfy anything', () => {
+    const commented = '\n.pane { /* overflow-y: auto; */ overflow: hidden; }\n';
+    expect(declaredValues(commented, '.pane', 'overflow-y')).toEqual(['hidden']);
+  });
+});
+
+describe('effectiveValue answers "which one shows"', () => {
+  it('takes the last in source order across rules', () => {
+    const sheet = '\n.pane { min-height: 0; }\n.shell .pane { min-height: 44px; }\n';
+    expect(effectiveValue(sheet, '.pane', 'min-height')).toBe('44px');
+  });
+
+  it('is null when nothing sets it', () => {
+    expect(effectiveValue('\n.pane { color: red; }\n', '.pane', 'min-height')).toBeNull();
   });
 });

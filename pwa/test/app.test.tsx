@@ -121,3 +121,66 @@ describe('App /runs route', () => {
     expect(document.querySelector('.app-shell')).toHaveAttribute('data-view', 'session');
   });
 });
+
+// ── the detail pane's scroll offset does not survive a route change (D-161) ──
+
+describe('a route change puts the detail pane back at the top (D-161)', () => {
+  /** jsdom does NO LAYOUT, so nothing here is really scrollable: the prototype
+   *  `scrollTop` is a hard 0 and assigning it is discarded. An own accessor
+   *  pair on the node records what the shell WRITES, which is exactly the
+   *  property under test — a route change writes 0 to the pane — and it is the
+   *  only way this suite can observe it. (The offset itself was measured in a
+   *  real browser: scrolled to 2517, children replaced, still 2517.) */
+  const track = (el: Element, start: number): { readonly top: number } => {
+    let top = start;
+    Object.defineProperty(el, 'scrollTop', {
+      configurable: true,
+      get: () => top,
+      set: (v: number) => { top = v; },
+    });
+    return { get top() { return top; } };
+  };
+
+  const panes = (): { detail: Element; nav: Element } => {
+    const detail = document.querySelector('.shell-detail');
+    const nav = document.querySelector('.shell-nav');
+    expect(detail, '.shell-detail is the pane the reset is about').not.toBeNull();
+    expect(nav, '.shell-nav is the pane the reset must NOT touch').not.toBeNull();
+    return { detail: detail!, nav: nav! };
+  };
+
+  it('resets .shell-detail when the route changes under it', () => {
+    navigate('/mail');
+    render(<App />);
+    const { detail } = panes();
+    const scroll = track(detail, 2517);      // where a long screen leaves it
+    act(() => { navigate('/runs'); });
+    // The new screen's <h1> and its Back button are the top of this pane; at
+    // 2517 they are above the fold and the operator sees a mid-list stranger.
+    expect(scroll.top).toBe(0);
+  });
+
+  it('resets on back/forward too — popstate is the same route change', () => {
+    navigate('/mail');
+    render(<App />);
+    const { detail } = panes();
+    const scroll = track(detail, 1200);
+    act(() => {
+      history.pushState(null, '', '/runs');
+      dispatchEvent(new PopStateEvent('popstate'));
+    });
+    expect(scroll.top).toBe(0);
+  });
+
+  it('LEAVES THE SIDEBAR ALONE — its content does not swap per route', () => {
+    // .shell-nav has always been scrollable and always shows the same fleet
+    // list. Resetting it would throw away the operator's place in that list
+    // every time they opened a session: a regression dressed as a fix.
+    navigate('/');
+    render(<App />);
+    const { nav } = panes();
+    const scroll = track(nav, 900);
+    act(() => { navigate('/mail'); });
+    expect(scroll.top).toBe(900);
+  });
+});

@@ -529,6 +529,14 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-surface)'],
     why: 'the spawn chip is a .sess-meta cell on an unselected .sess-line, whose ground is the project card. Its selector names no ancestor, so no route could ground it — without this entry it joins .sess-held/.sess-lifecycle in the uncovered census, which is exactly where the last unmeasured meta cell was shipping below AA. The SELECTED row is answered by the achromatic group (--edge-strong), pinned separately in fleet-css.test.ts',
   },
+  'fleet.css .auth-block-title': {
+    under: ['var(--bg-surface)'],
+    why: 'the heading of the .auth-block card two rules up in the same stylesheet, which sets background: var(--bg-surface). Its selector names no ancestor, so no route could ground it — and fleet.css claimed in a comment that "every child\'s ink pair is already vetted" against that ground while nothing measured it. Same shape as .sess-spawn below',
+  },
+  'fleet.css .auth-block-sub': {
+    under: ['var(--bg-surface)'],
+    why: 'the "Passkeys" eyebrow inside the same .auth-block card, one ink step down (--ink-tertiary). Grounding only the title would leave HALF the card measured, which is worse than neither: the report then LOOKS like the block is covered (the trap spelled out on the .sess-spawn variant entry below)',
+  },
   "fleet.css .sess-spawn[data-spawn='expired'], .sess-spawn[data-spawn='unrecognised']": {
     under: ['var(--bg-surface)'],
     why: 'the two "we do not know" verdicts drop to --ink-tertiary, and an attribute variant recovers no ground from its selector any more than the base rule does — so grounding only the base would leave HALF a new cell measured. Same project-card ground, same unselected row; the selected row is again the achromatic group, which carries the [data-spawn] member for exactly this rule',
