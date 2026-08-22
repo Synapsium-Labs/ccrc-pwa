@@ -74,6 +74,13 @@ const REASON_TEXT: Record<PrReason, string> = {
   // So this copy must not blame the connection — it says what is missing and
   // implies the safe consequence (ccrc will not offer cleanup on this).
   'merge-unproven': 'GitHub reports this merged but named no usable merge commit, so ccrc will not call it merged.',
+  // The second reason that is NOT a failed read: ccrc's registry and git
+  // disagree about which branch this workspace is on, so there are two
+  // candidate answers to "its PR" and ccd measured neither rather than
+  // re-binding the PR to a name nobody chose. The copy names the remedy,
+  // because unlike every other reason here this one is fixed by the operator
+  // rather than by waiting.
+  'branch-drift': 'ccrc’s registry and git disagree about this workspace’s branch, so its PR was not measured. Reconcile with `ccd ws-rename`.',
 };
 
 /** Task 3 review finding 9's docket: the registry persists `prPhase` and

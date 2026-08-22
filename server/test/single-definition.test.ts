@@ -101,12 +101,16 @@ describe('integration finding 7 — one reason vocabulary', () => {
   // compiler is not watching.
 
   it('derives the runtime list from the union rather than restating it', () => {
-    // Nine, and every one of them recognised by the predicate that both
-    // validators now use. If `PR_REASONS` were ever hand-written back into an
-    // array this still passes — which is why the source scan below exists —
-    // but a DERIVED list that has gone out of step with the union is
-    // impossible to construct, and that is the point being recorded.
-    expect(PR_REASONS).toHaveLength(9);
+    // Ten — the tenth is `branch-drift`, added when the PR poller stopped
+    // asserting a phase for a workspace whose registry and worktree record name
+    // different branches (D-178). Every one of them is recognised by the
+    // predicate that both validators now use. If `PR_REASONS` were ever
+    // hand-written back into an array this still passes — which is why the
+    // source scan below exists — but a DERIVED list that has gone out of step
+    // with the union is impossible to construct, and that is the point being
+    // recorded. The literal count is the ONE thing here that a new member
+    // touches, deliberately: it is what makes adding one a decision.
+    expect(PR_REASONS).toHaveLength(10);
     expect(new Set(PR_REASONS).size).toBe(PR_REASONS.length);
     for (const r of PR_REASONS) expect(isPrReason(r), r).toBe(true);
     expect(isPrReason('not-a-reason')).toBe(false);

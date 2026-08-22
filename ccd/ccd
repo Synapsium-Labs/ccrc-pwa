@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=5fb599b9c2ce0d9ad365d25d23467b55989d5e1fb20c0860eb570008de391287
+# ccrc:generated 1 sha256=d31ae3a89bd9c1acf7daab1b9e838c91d129e0cdca9ffe2f6f4d51c3fdd82585
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box, not on this file: `_rc_enabled` reads
@@ -3271,6 +3271,48 @@ _pr_state_one() {   # id main repo rows [answered-at-ms] -> one JSON line
   local wthead registered wd_common main_common porcelain prc
   dirty=""
   wthead=$(_ws_wt_branch "$main" "$workdir"); registered=$?
+  # ── DRIFT IS NOT A PHASE, AND THIS VERB MAY NOT INVENT ONE ────────
+  # The defect: `swift-delta`'s `.prphase` read `no-commits` while its worktree
+  # held 27 commits — on a DIFFERENT branch. Everything above measured the
+  # REGISTRY's `branch`, which still resolved and was still level with its base,
+  # so `ahead=0` was true about a branch nobody was working in, and `no-commits`
+  # is exactly the claim built from it. Downstream that is not cosmetic: it
+  # hard-disables the PWA's "Open pull request" composer (only `none` renders
+  # it), it is in `verifyDone`'s REGRESSED set, and the first poll of the
+  # mismatch retires the live `prnumber` into the append-only `.prhistory`.
+  #
+  # AND THE FIX IS NOT TO SWITCH THE SOURCE. Unlike `ws-reap` — which destroys
+  # the worktree and the branch git has checked out, so git's record is the
+  # subject of the act — this verb BINDS A REMOTE PR TO A NAME AND WRITES THAT
+  # BINDING DOWN. Measuring git's branch instead would silently re-bind every
+  # drifted workspace on the fleet at the next 120 s sweep: `bound()` fails on
+  # the old name, `prnumber` is cleared and one line is appended to the ledger
+  # that `_ws_archive_manifest` folds into archive records — irreversible, and
+  # done before anyone looked. Every other verb that meets drift either refuses
+  # and names both records (`cmd_pr_open`, `cmd_ws_rename`) or records both as
+  # fields (`_ws_archive_manifest`: "DRIFT IS A FIELD, NOT A REFUSAL"); a poller
+  # that picked would be the only one in ccd that resolves drift by rewriting
+  # lineage.
+  #
+  # So: say `unknown`, name both, PERSIST NOTHING — `_pr_py state` is what
+  # persists, and this returns before it, leaving `prphase`/`prnumber` at their
+  # last honest values. `unknown` is the FAILED-READ bucket (`prVerdict` reads
+  # it as `unmeasurable`, never `regressed`), which is what this is: nobody
+  # measured this workspace's PR, because there are two candidate answers to
+  # "this workspace's branch" and choosing between them is the operator's call
+  # (`ccd ws-rename` reconciles them).
+  #
+  # `-n "$tip"` IS PART OF THE CONDITION, not decoration. It narrows this to the
+  # shape that lies: the registry's branch still RESOLVES, so the measurement
+  # above produced a confident answer about the wrong branch. When it does not
+  # resolve — the rename shape — `tip` is already null and `ahead` already
+  # unmeasured, so this function is already saying "I did not measure that", and
+  # the four pinned cases of that shape keep their behaviour untouched.
+  if (( registered == 0 )) && [[ -n "$wthead" && -n "$tip" && "$wthead" != "$branch" ]]; then
+    echo "pr-state: the registry says $branch, git's worktree record for $workdir says $wthead — PR state not measured for $id (reconcile with: ccd ws-rename --session $id --branch $wthead)" >&2
+    printf '{"id":%s,"phase":"unknown","reason":"branch-drift"}\n' "$(_json_str "$id")"
+    return 0
+  fi
   wd_common=$(_ws_common_dir "$workdir"); main_common=$(_ws_common_dir "$main")
   if (( registered != 0 )) || [[ -z "$main_common" || "$wd_common" != "$main_common" ]]; then
     echo "pr-state: $workdir is not a corroborated worktree of $main — dirty unknown for $id" >&2

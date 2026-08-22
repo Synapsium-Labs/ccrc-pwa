@@ -271,11 +271,16 @@ export type PrPhase =
 export type PrChecks = 'pass' | 'fail' | 'pending' | null;
 
 /**
- * Why a `PrState`'s phase is `unknown`. Every member but `merge-unproven` is a
- * FAILED READ; `merge-unproven` is the opposite — GitHub answered fine and said
- * MERGED, and a conjunct of the merge predicate did not hold, so ccrc declines
- * to call it merged. It exists because `error` renders as "GitHub could not be
- * read", which in that case is simply untrue.
+ * Why a `PrState`'s phase is `unknown`. Every member but `merge-unproven` and
+ * `branch-drift` is a FAILED READ; those two are the opposite — nothing failed.
+ * `merge-unproven`: GitHub answered fine and said MERGED, and a conjunct of the
+ * merge predicate did not hold, so ccrc declines to call it merged. It exists
+ * because `error` renders as "GitHub could not be read", which in that case is
+ * simply untrue. `branch-drift`: ccrc's registry and git's worktree record name
+ * different branches for one workspace, so "this workspace's branch" has two
+ * candidate answers and ccd measures neither — the poller BINDS a PR to a name
+ * and persists that binding, so picking a side would rewrite lineage rather
+ * than report a fact. Reconcile with `ccd ws-rename`.
  *
  * Integration finding 7. This vocabulary lived in FOUR places: this union
  * (inline in `PrState.reason`), the snapshot-revival list below, `prstate.ts`'s
@@ -293,7 +298,7 @@ export type PrChecks = 'pass' | 'fail' | 'pending' | null;
 export type PrReason =
   | 'timeout' | 'offline' | 'unauthenticated' | 'rate-limit'
   | 'no-remote' | 'unsupported' | 'agent-down' | 'error'
-  | 'merge-unproven';
+  | 'merge-unproven' | 'branch-drift';
 
 /**
  * The runtime list, derived from the type. `Record<PrReason, true>` is what
@@ -313,7 +318,7 @@ export type PrReason =
 const PR_REASON_MAP: Record<PrReason, true> = {
   timeout: true, offline: true, unauthenticated: true, 'rate-limit': true,
   'no-remote': true, unsupported: true, 'agent-down': true, error: true,
-  'merge-unproven': true,
+  'merge-unproven': true, 'branch-drift': true,
 };
 export const PR_REASONS: readonly PrReason[] = Object.keys(PR_REASON_MAP) as PrReason[];
 
