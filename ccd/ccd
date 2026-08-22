@@ -525,8 +525,8 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # ANY-FIELD check now; see the note there.
   # ── THE BACKSTOP (D3) ────────────────────────────────────────────────────
   # HERE, AND NOT ONE LINE LOWER. Every destruction path on this box terminates
-  # in this function — ws-rm (ccd:2853), ws-reap (ccd:7548), ws-gc's dead-reg
-  # arm (ccd:8027), forget (ccd:10462) — and a destructive verb added LATER that
+  # in this function — ws-rm (ccd:2882), ws-reap (ccd:7577), ws-gc's dead-reg
+  # arm (ccd:8056), forget (ccd:10491) — and a destructive verb added LATER that
   # forgets to journal itself still leaves a record. A silent destruction has to
   # defeat two independent emit sites.
   #
