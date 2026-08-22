@@ -396,9 +396,82 @@ The report is explicit, and it is the acceptance criterion for this wave:
 > Re-create an archived workspace whose branch was squash-merged with its remote head deleted, and
 > drive the reap through the PWA UI, not just the CLI.
 
-- [x] On the fleet host, create a scratch workspace, squash-merge its branch, delete the remote head,
-      archive it.
-- [x] Open the reap sheet in the PWA. It must offer the reap, showing proof `patch-id`.
-- [x] Tap it. The workspace, its branch and its registry row go; the tombstone records the proof.
-- [x] Repeat with a drifted registry entry and confirm the note is visible in the sheet BEFORE the
-      tap, and that the registry-named branch survives the reap.
+**WHO RUNS THIS: the operator, not an agent.** `CLAUDE.md`'s SAFETY block is unconditional —
+`ws-archive`, `ws-restore`, `ws-rm` and `ws-reap` are never run against the live host by an agent,
+and `ws-reap` is human-only by contract. Everything below is therefore a runbook, not a task, and it
+is what this wave is not finished without.
+
+### Prerequisite — deploy AGENT-FIRST
+
+The centre of mass is `ccd/`, so the fleet host ships first; the server reads what ccd writes. From
+`openclaw`, with the documented per-workstation overrides:
+
+```bash
+CCRC_SSH_PORT=22 CCRC_SSH_KEY=$HOME/.ssh/your-key-b bash deploy/deploy.sh agent you@198.51.100.7
+CCRC_SSH_PORT=22 CCRC_SSH_KEY=$HOME/.ssh/your-key-b bash deploy/deploy.sh
+```
+
+The agent lane's gate is `ccd version`; the server lane's is `/health` reporting the shipped sha.
+
+### A — the ladder, end to end, through the UI (no GitHub needed)
+
+Exercises rung 1 (`contained`), which after this wave runs for **every** branch rather than only for
+branches with no upstream — so it is the rung most of the fleet will now meet.
+
+```bash
+# on the fleet host
+ccd ws-add <project> && ccd ls | tail -3          # note the id and the workspace path
+cd <the new worktree> && git commit --allow-empty -m scratch
+git -C ~/projects/<project> merge --ff-only <the ws branch>    # only where that is safe
+```
+
+Then, **by hand**: `ccd ws-archive --session <id>`, open that workspace's reap sheet in the PWA, and
+read the branch row: `… — origin already holds every commit on it (proof: contained)`. Tap Remove.
+The worktree, the branch and the registry row go; `~/.cc-sessions/.reaped/<id>.json` records
+`"proof":"contained"`.
+
+### B — the defect's own shape: squash-merged, remote head deleted
+
+The acceptance criterion. It needs a real GitHub PR, because the prover under test is
+`_ws_merge_proof`'s `patch-id` rung against a **merged PR's merge commit**, and `gh` on that box is
+the real one.
+
+1. `ccd ws-add <a repo you own>`; make **two or more** commits in the worktree — a single commit can
+   be proven by `tree` alone, which is not the rung that was unreachable.
+2. `ccd pr-open --session <id> …`, then **squash-merge** the PR with *Automatically delete head
+   branches* on (or `gh pr merge --squash --delete-branch`).
+3. `git -C ~/projects/<repo> fetch --prune origin`, then confirm the precondition the whole wave is
+   about:
+   ```bash
+   git -C ~/projects/<repo> rev-parse --verify --quiet 'ws/<slug>@{upstream}'   # must FAIL (rc 1)
+   git -C ~/projects/<repo> config --get branch.ws/<slug>.merge                 # must SUCCEED
+   ```
+   The first is what used to select the wrong prover; the second is what now keeps the refusal
+   sentence honest when nothing proves the branch.
+4. `ccd ws-archive --session <id>`, then open the reap sheet **in the PWA**.
+   - **Before this wave:** "This branch was never pushed, so nothing on the remote holds its
+     commits." and no Remove button.
+   - **After:** `… — merged in #<n> (proof: patch-id), …`, and Remove is offered.
+5. Tap Remove, then read the record:
+   `jq '.branch,.registryBranch,.proof,.pr' ~/.cc-sessions/.reaped/<id>.json`.
+
+### C — drift, visible before the tap
+
+1. In a scratch workspace's worktree: `git checkout -b feat/x origin/main` — git's record moves, the
+   registry's `branch` does not.
+2. `ccd ws-archive --session <id>`, open the reap sheet.
+   - **Before:** "git has this worktree on a different branch than ccrc recorded. Nothing is removed
+     while the two disagree." — a wall, on a workspace `ccd ws-rm` would have removed.
+   - **After:** the removal is offered AND the note reads *the registry recorded `ws/<slug>`; git's
+     worktree record … says `feat/x` — `feat/x` is the branch this cleanup evaluates and removes,
+     and `ws/<slug>` is left alone.*
+3. Tap Remove, then confirm the registry-named branch is **still there**:
+   `git -C ~/projects/<project> branch --list 'ws/<slug>'`.
+
+### D — the poller, on a drifted row
+
+`ccd pr-state --session <id>` for C's workspace must answer
+`{"phase":"unknown","reason":"branch-drift"}` and leave `~/.cc-sessions/<id>.prphase`, `.prnumber`
+and `.prhistory` byte-identical. In the PWA the PR cap reads *"ccrc's registry and git disagree about
+this workspace's branch, so its PR was not measured. Reconcile with `ccd ws-rename`."* — where it
+used to read `no-commits` about a branch nobody was in.
