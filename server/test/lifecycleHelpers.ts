@@ -9,7 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  LC_DIR_NAME, LC_GEN_SUFFIX, compareGenerations, looksLikeGenerationFile,
+  LC_DIR_NAME, LC_GEN_PREFIX, LC_GEN_SUFFIX, compareGenerations, looksLikeGenerationFile,
   parseLifecycleGeneration,
 } from '../../shared/api.js';
 
@@ -66,3 +66,9 @@ export const generationsOf = (home: string): string[] => {
     .sort((a, b) => compareGenerations(a[0], b[0]))
     .map(([, f]) => f);
 };
+
+/** `journal-<gen>.ndjson`, built from L0's two halves rather than from a
+ *  literal. Four test files in this wave plant generation files; four spellings
+ *  of the name is four chances to differ, in a repo whose
+ *  `single-definition.test.ts` exists for exactly that. */
+export const genFile = (gen: string): string => `${LC_GEN_PREFIX}${gen}${LC_GEN_SUFFIX}`;
