@@ -121,6 +121,25 @@ export class JournalMirror {
     // are lost — and the loss is a ROW, not a silence. `lostTo` is the LARGER
     // of the cursor and the last measured size, because a file cut to a length
     // still ahead of the cursor lost bytes above it.
+    //
+    // FIX ROUND 1, F6 (task-36-37 review): sweeps CAN overlap — `FleetWatcher`
+    // stamps `lastLifecycleSweep` at the START of a sweep, before this method
+    // ever runs, so a slow or hung sweep does not hold the next tick's call
+    // back. This is bounded, not eliminated: `ingestJournal` is one `tx()` and
+    // `uid` dedupes under `INSERT OR IGNORE`, so a second, overlapping pass
+    // over the SAME bytes cannot duplicate a row, and a stale cursor rewind is
+    // a proven no-op (`lifecycle-replay.test.ts`'s "cursor is an
+    // optimisation" case). The one known artefact: if a stale in-flight call
+    // here commits the PRE-truncation `size` after a second, newer sweep has
+    // already recorded and re-read past this same truncation, the next
+    // `frameRead` (`mirrorplan.ts`'s `size < lastSize` check) sees a size that
+    // went backwards again and declares the same truncation a SECOND time —
+    // one duplicate `lifecycle_gaps` row plus a redundant re-read from 0, not
+    // a correctness break (`gaps` is a log, never a cursor). Named here as a
+    // known bound, not fixed: a same-instance mutex over `sweep()` would
+    // close it, and is not worth the complexity for lifecycle acts running
+    // ~100/day against a generation that shrinks only on an operator's
+    // deliberate `ws-gc`.
     this.deps.store.recordGap({
       at, gen, reason: 'shrank',
       detail: `generation ${gen} shrank to ${first.size} bytes from ${Math.max(from, lastSize)} ` +
