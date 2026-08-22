@@ -454,7 +454,15 @@ _reg_get() { cat "$REG/$1.$2" 2>/dev/null; }                # id field
 # one eraser is `_reg_purge`, which unlinks EVERY field for an id (forget, reap,
 # dead-reg) — that destroys the identity, it does not un-claim it. Deliberate,
 # and what `_spawn_start`'s --resume -> --session-id fallback exists to pay for.
-_reg_claim() { _reg_set "$1" started 1; }                   # id
+_reg_claim() {   # id — THE ONE WRITER of `started`, and now of its record
+  # Its name is a trap (§0): this is an idempotent flag, not a compare-and-swap.
+  # The journal line is what makes a re-claim distinguishable from a first one.
+  # It adds NO second writer of `started` — `ccd-reg-claim.test.ts`'s "exactly
+  # one `_reg_set … started` line" must still find exactly one.
+  _lc_done claim "$1" "" meas.wrapper "$(_reg_get "$1" wrapper)" \
+    meas.project "$(_reg_get "$1" project)"
+  _reg_set "$1" started 1
+}
 _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # final-review-destructive finding F3. The THREE call sites that used to spell
   # this `rm -f "$REG/$id".*` directly were an unanchored glob: `$id.*`
@@ -618,6 +626,9 @@ _ws_seed_home() {   # id wrapper — set home once; never clobber a deliberate c
 # so the test harness can stub them — sourcing ccd and calling cmd_ws_add under
 # vitest would otherwise enable a REAL claude-session@<id> unit on the host.
 _ws_supervise()   { rm -f "$REG/$1.stopped"                                   # supervision supersedes an earlier stop
+                    # POSITIONAL, and there is no `$id` in this function: it is
+                    # a one-liner with no `local`, so the emit must say `$1`.
+                    _lc_done supervise "$1" "" meas.wrapper "$(_reg_get "$1" wrapper)"
                     systemctl --user enable  --now "claude-session@$1" 2>/dev/null \
                       || echo "warn: could not enable unit claude-session@$1" >&2; }
 
@@ -644,13 +655,24 @@ _ws_unsupervise() {   # id [surface] — disable the unit AND RECORD THAT SOMEBO
   # call sites, which pass no second argument at all) and leaves an explicit
   # empty string to fall into the `case`'s `*` arm below, same as any other
   # non-member word.
-  local id="$1" surface="${2-ccd}"
+  # `$3` IS THE DECLARATION, `$2` IS THE STAMP. The stamp defaults to `ccd`
+  # because the four internal callers ARE ccd acting on its own account, and L0
+  # forbids ccd's own defaults from reaching `dec.surface`: a default laundered
+  # into a declaration is exactly what `none` exists to prevent. `cmd_stop` is
+  # the one caller with something declared to pass, and it passes it here.
+  local id="$1" surface="${2-ccd}" declared="${3-}"
   case "$surface" in cli|pwa|agent|ccd) ;; *) surface=unknown ;; esac
   # Through `_reg_set` (wave 2): the two words are one value, so the join moves
   # to the call site and the bytes on disk are unchanged. `_session_state` reads
   # this field to tell a deliberate stop from an orphan — a half-written stamp
   # is a session reclassified.
   _reg_set "$id" stopped "$(date +%s) $surface"
+  # THE CHOKE POINT'S ERASURE OF THE VERB IS REPAIRED UPWARD, HERE. The stamp
+  # keeps one field for two words and names a software PATH, never a human;
+  # this line carries the same act into a record `_reg_purge` cannot reach.
+  # `_lc_surface_norm` answers EMPTY when nothing was declared, and the encoder
+  # omits an empty value, so an internal call reads `dec.surface:"none"`.
+  _lc_done unsupervise "$id" "" dec.surface "$(_lc_surface_norm "$declared")"
   rm -f "$REG/$id.supervised"
   # A silent failure here used to be observable at cmd_stop's own inlined call
   # (the message this replaced); routing all five call sites through one
@@ -9747,7 +9769,23 @@ _spawn_settle() {   # id fromswap — the BLOCKING half: gate loop, fact, warnin
   # polls. KEEP THE FIELD AND ITS `<epoch-seconds> <rc>` ENCODING: the timestamp is load-bearing,
   # because _supervised_start compares `at >= since` to tell THIS attempt's failure from the
   # previous one's, and a bare word field would destroy that.
-  _reg_set "$id" spawn "$(date +%s) $prompt_rc"
+  # CHANGE-ONLY, AND IT MUST BE READ BEFORE THE WRITE BELOW. `_reg_set` is a
+  # truncating writer, so this is the last instant the PREVIOUS epoch and rc
+  # exist anywhere. Restart=always means this function runs on every supervisor
+  # cycle for 18 sessions; a line per cycle is the whole disk budget for no
+  # forensic gain, and a spawn whose rc has not changed inside five minutes is
+  # not news.
+  local _lc_prev _lc_prev_at _lc_prev_rc _lc_now
+  _lc_prev=$(_reg_get "$id" spawn)
+  _lc_prev_at="${_lc_prev%% *}"; _lc_prev_rc="${_lc_prev##* }"
+  _lc_now=$(date +%s)
+  # Regex before every arithmetic test: `_lc_prev_at` is bytes off disk.
+  if [[ "$_lc_prev_rc" != "$prompt_rc" ]] \
+     || ! [[ "$_lc_prev_at" =~ ^[0-9]+$ ]] \
+     || (( _lc_now - _lc_prev_at > 300 )); then
+    _lc_done spawn "$id" "" meas.rc "$prompt_rc" meas.wrapper "$wrapper"
+  fi
+  _reg_set "$id" spawn "$_lc_now $prompt_rc"
   case "$prompt_rc" in
     # A revival supersedes an earlier deliberate stop (§4.1). `rm -f` on an absent file is a no-op,
     # so this is correct whether or not the .stopped stamp itself has landed yet.
@@ -10106,6 +10144,15 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   # someone tried and it didn't come up — instead of a stale `stopped` that
   # hides the attempt and tells the operator to do the thing they just did.
   rm -f "$REG/$id.stopped"
+  # ONE EMIT, AT THE TOP, because this verb has FIVE exits — the supervised
+  # arm's (ccd:9606 `return "$rc"`, ccd:9608 `return 0`), the in-unit arm's
+  # (ccd:9617's `|| return $?`, ccd:9625 `return "$rc"`, and falling off the end
+  # at ccd:9627) — plus `_supervised_start`'s own unsupervised fallbacks. A line
+  # per exit misses one. The OUTCOME is not asserted here: `_reg_claim`'s
+  # `claim` line and `_spawn_settle`'s `spawn` line (with its rc) are the
+  # measured downstream facts, and composing the record from independent
+  # measurements is the point.
+  _lc_done start "$id" "" meas.mode "$mode" meas.wrapper "$(_reg_get "$id" wrapper)"
   if [[ "${CCD_IN_UNIT:-}" != 1 ]]; then
     local rc; _supervised_start "$id"; rc=$?
     # `started` stays unconditional here too (Task 4's own invariant, restated below): a
@@ -10193,6 +10240,12 @@ cmd_ensure() {   # id — idempotent; used by systemd. arg is the id directly.
   # unconditionally — `ensure` is `POST /api/sessions/:id/ensure`'s actual
   # revive route, so this is the case the spec sentence was written for.
   rm -f "$REG/$id.stopped"
+  # The Restart=always hot path, which is exactly why `_spawn_settle`'s
+  # change-only rule exists one function up. This line is cheap — no fork beyond
+  # the emitter's own — and it is what tells a respawn from a human's
+  # `ccd ensure`, through `obs.cg`: the systemd unit names the id in the cgroup
+  # path, which is respawn provenance nothing on this box has today.
+  _lc_done ensure "$id" "" meas.inUnit "${CCD_IN_UNIT:-0}"
   # Inside the unit (cmd_supervise sets CCD_IN_UNIT in its own process) this IS the spawn; anywhere
   # else it is a REQUEST for one, and the request goes through the unit so the session comes back
   # supervised. `cmd_swap`'s tail (ccd:7064) reaches this from inside a transient systemd-run unit
@@ -10903,6 +10956,12 @@ cmd_swap() {   # [--force] id target-wrapper — move a session to another accou
   _swap_beat_stop "$beat"
   _reg_set "$id" wrapper "$target"
   _reg_set "$id" lastswap "$(date +%s)"
+  # `cmd_ensure` runs in this same process at ccd:10410, but only when
+  # `systemctl --user start` FAILS — the `||` fallback — and it writes its own
+  # line WHEN IT FIRES. Two acts, two events, two tx-free records: the same
+  # ruling as `cmd_enable`. Without this one a reader would see an `ensure` it
+  # could not attribute.
+  _lc_done swap "$id" "" meas.from "$cur" meas.wrapper "$target" meas.uuid "$uuid"
   rm -f "$REG/$id.swapblocked"   # a completed swap supersedes an earlier refusal: a
                                  # banner left standing on a row that just worked teaches
                                  # the operator to ignore banners.
@@ -10947,6 +11006,11 @@ cmd_enable() {   # <id>  |  <wrapper> <project> [workdir]
   # a raw argument — so this line names the row cmd_start actually touched,
   # even on the two-argument form once the registry's wrapper has won.
   local id; if [[ $# -ge 2 ]]; then id=$(_id "$1" "$2"); else id="$1"; fi
+  # TWO EVENTS, NOT ONE. `cmd_start` runs in THIS process and writes its own
+  # `start` line; this one records that boot-persistence was asked for. No
+  # shared tx: tx is for one intent/outcome PAIR, never for a call tree, and
+  # folding these would report one act where two happened.
+  _lc_done enable "$id" ""
   cmd_start "$@" || return $?
   echo "enabled boot-persistence for $id"
 }
@@ -10967,15 +11031,15 @@ cmd_stop() {   # [--surface <word>] <id>  |  [--surface <word>] <wrapper> <proje
   # cmd_stop's OWN default is `cli`, not _ws_unsupervise's `ccd`: a session
   # shelling `ccd stop` from its own Bash tool passes no flag, and `cli` is
   # exactly what that looks like from the box.
-  local surface=cli args=()
+  local surface=cli declared="" args=()
   while (( $# )); do
     case "$1" in
       # An explicit arity check, not a bare `shift 2`: ccd runs under
       # `set -uo pipefail` with NO `-e`, so a shift past the end of argv fails,
       # shifts nothing, and this loop never terminates.
       --surface)   [[ $# -ge 2 ]] || die "usage: ccd stop [--surface <word>] <id> | ccd stop [--surface <word>] <wrapper> <project>"
-                   surface="$2"; shift 2 ;;
-      --surface=*) surface="${1#--surface=}"; shift ;;
+                   surface="$2"; declared="$2"; shift 2 ;;
+      --surface=*) surface="${1#--surface=}"; declared="$surface"; shift ;;
       *)           args+=("$1"); shift ;;
     esac
   done
@@ -10998,7 +11062,12 @@ cmd_stop() {   # [--surface <word>] <id>  |  [--surface <word>] <wrapper> <proje
   # no record, which is how a deliberate stop became indistinguishable from a
   # crash (§4.1). The pane kill stays HERE rather than moving inward, because
   # every other call site already runs these two as a pair.
-  _ws_unsupervise "$id" "$surface"
+  # The ONLY call site with a DECLARATION to carry, which is why it is the only
+  # one that passes a third argument. `$surface` (defaulted to `cli`) is still
+  # the stamp's word; `$declared` is empty unless a flag actually arrived, and
+  # the journal keeps the two apart.
+  _lc_done stop "$id" "" dec.surface "$(_lc_surface_norm "$declared")"
+  _ws_unsupervise "$id" "$surface" "$declared"
   tmux kill-session -t "$(_tmux "$id")" 2>/dev/null || true
   echo "stopped $id"
 }
