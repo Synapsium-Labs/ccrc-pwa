@@ -4,8 +4,10 @@
 // `/^ccd.*\.ts$/` containment scan; every snippet runs through `h.sh`.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
+import fs from 'node:fs';
+import path from 'node:path';
 import { CCD, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
-import { actsOf, readJournal, eventsOf, measOf, decOf } from './lifecycleHelpers.js';
+import { actsOf, readJournal, eventsOf, measOf, decOf, lcDir } from './lifecycleHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-lc-sites-'); });
@@ -133,9 +135,12 @@ describe('session call sites', () => {
     // FIX ROUND 1 (b), REQUIRED (promoted from the review's recommendation).
     // Mirrors ccd-lifecycle-purge.test.ts's identical pin for `_reg_purge`
     // ("one whole `_reg_purge` run shells exactly one tmux probe"). This site
-    // pair needs the pin MORE than that one did: cmd_enable -> cmd_start is
-    // the only pair in this plan that runs TWO `_lc_done` calls in ONE
-    // process, which is exactly where `_lc_obs`'s once-per-process
+    // pair needs the pin MORE than that one did: at the time this test was
+    // written, cmd_enable -> cmd_start was the only pair in this plan that ran
+    // TWO `_lc_done` calls in ONE process (Task 19 added a second — see
+    // `cmd_ws_add`'s own pin, below in the `workspace call sites` describe —
+    // once `create`'s new emit joined `_reg_claim`'s pre-existing `claim`),
+    // which is exactly where `_lc_obs`'s once-per-process
     // memoisation (`[[ -z "$_LC_OBS" ]] || return 0`) could regress silently
     // — nothing else checks the tmux call COUNT on this path; the re-entrant
     // test above asserts journal `tx` only. No snippet here shadows `tmux`,
@@ -165,5 +170,153 @@ describe('the two sites that must NEVER emit', () => {
     const hook = readFileSync(CCD.replace(/ccd$/, 'session-hook.sh'), 'utf8');
     expect(hook).not.toMatch(/_lc_/);
     expect(hook).not.toMatch(/\.lifecycle/);
+  });
+});
+
+describe('workspace call sites', () => {
+  /** A real worktree on a real branch — cmd_ws_rename's ladder measures
+   *  `.uuid`, hold, workspace, project+workdir+branch, `-d workdir`, the
+   *  worktree record, detachment, foreignness and branch drift before it
+   *  reaches the emit, so a stubbed `git` never gets there. */
+  const renameable = (id = 'demo-still-river'): { main: string; wt: string } => {
+    const main = h.makeRepo('demo');
+    h.git(main, 'commit', '--allow-empty', '-m', 'base');
+    const wt = path.join(h.home, 'worktrees', 'demo', 'still-river');
+    fs.mkdirSync(path.dirname(wt), { recursive: true });
+    h.git(main, 'worktree', 'add', '-b', 'ws/still-river', wt);
+    h.sh(`_reg_set ${id} uuid u; _reg_set ${id} project demo
+      _reg_set ${id} workspace still-river; _reg_set ${id} branch ws/still-river
+      _reg_set ${id} workdir ${wt}`);
+    return { main, wt };
+  };
+
+  it('cmd_ws_rename records old and new, and its stdout document is untouched', () => {
+    renameable();
+    const out = h.sh(`cmd_ws_rename --session demo-still-river --branch ws/new`);
+    expect(out, 'the verb refused — the fixture is wrong, not the emit').toContain('"renamed"');
+    expect(JSON.parse(out) as Record<string, string>, 'the emit must not add a byte to a document a consumer parses')
+      .toEqual({ renamed: 'demo-still-river', old: 'ws/still-river', new: 'ws/new' });
+    const [e] = eventsOf(h.home, 'rename');
+    expect(e, 'ws-rename wrote no line').toBeTruthy();
+    expect(measOf(e!)['old']).toBe('ws/still-river');
+    expect(measOf(e!)['branch']).toBe('ws/new');
+  });
+
+  it('cmd_ws_hold records the reason verbatim, parsed nowhere', () => {
+    // FIX (brief defect): cmd_ws_hold refuses `id is not a workspace` (ccd:3355)
+    // unless the `workspace` field is set — the brief's own snippet omitted it
+    // and the verb died before ever reaching the emit, in RED as much as GREEN.
+    h.sh(`_reg_set w uuid u; _reg_set w workspace w
+      cmd_ws_hold --session w --reason 'program:build9 wave:2/6'`);
+    const [e] = eventsOf(h.home, 'hold');
+    expect(decOf(e!)['reason']).toBe('program:build9 wave:2/6');
+  });
+
+  it('cmd_ws_release records a release, and records nothing when nothing was held', () => {
+    h.sh(`_reg_set w uuid u; cmd_ws_release --session w`);
+    expect(eventsOf(h.home, 'release')).toHaveLength(0);
+    h.sh(`_reg_set w hold 'program:x'; cmd_ws_release --session w`);
+    const rel = eventsOf(h.home, 'release');
+    expect(rel).toHaveLength(1);
+    expect(measOf(rel[0]!)['held'], 'the text being released is the fact worth keeping').toBe('program:x');
+  });
+
+  it('cmd_ws_archive records the closed reason vocabulary, through the VERB', () => {
+    // Mutant: emit before ccd:2753-2754 -> this fails with `expected undefined
+    // to be 'manual'`, because `$reason` is not decided until ccd:2750-2752.
+    const main = h.makeRepo('demo');
+    h.git(main, 'commit', '--allow-empty', '-m', 'base');
+    const wt = path.join(h.home, 'worktrees', 'demo', 'still-river');
+    fs.mkdirSync(path.dirname(wt), { recursive: true });
+    h.git(main, 'worktree', 'add', '-b', 'ws/still-river', wt);
+    fs.writeFileSync(path.join(wt, 'f.txt'), 'one');
+    h.git(wt, 'add', 'f.txt'); h.git(wt, 'commit', '-m', 'one');
+    h.sh(`_reg_set demo-still-river uuid u; _reg_set demo-still-river project demo
+      _reg_set demo-still-river workspace still-river
+      _reg_set demo-still-river branch ws/still-river
+      _reg_set demo-still-river workdir ${wt}
+      _ws_status() { echo idle; }; _ws_unsupervise() { :; }; _tmux() { echo t; }; tmux() { :; }
+      cmd_ws_archive --session demo-still-river 2>/dev/null || true`);
+    const [e] = eventsOf(h.home, 'archive');
+    expect(e, 'ws-archive wrote no line').toBeTruthy();
+    expect(measOf(e!)['archivedReason']).toBe('manual');
+    expect(measOf(e!)['branch']).toBe('ws/still-river');
+  });
+
+  it('ws-attic --drop records HOW MANY refs it destroyed — a count only the loop knows', () => {
+    // Mutant: move the emit above the `while … done` loop -> this fails with
+    // `expected NaN to be greater than or equal to 2`, because `$n` is 0 before
+    // ccd:3164 and a fabricated zero on a destructive verb is a false record.
+    const repo = h.makeRepo('demo');
+    h.git(repo, 'commit', '--allow-empty', '-m', 'a');
+    const one = h.git(repo, 'rev-parse', 'HEAD').trim();
+    h.git(repo, 'commit', '--allow-empty', '-m', 'b');
+    const two = h.git(repo, 'rev-parse', 'HEAD').trim();
+    h.git(repo, 'update-ref', `refs/ccrc/attic/w/${one}`, one);
+    h.git(repo, 'update-ref', `refs/ccrc/attic/w/${two}`, two);
+    // `_attic_project` reads the registry FIRST (ccd:3137-3145); with no row and
+    // no tombstone the verb dies `no such session` at ccd:3153.
+    h.sh(`_reg_set w project demo; cmd_ws_attic --drop w`);
+    const [e] = eventsOf(h.home, 'attic-drop');
+    expect(e, 'ws-attic --drop wrote no line').toBeTruthy();
+    expect(Number(measOf(e!)['dropped'])).toBeGreaterThanOrEqual(2);
+  });
+
+  it('cmd_ws_add shells exactly ONE tmux probe across its `create` and `claim` `_lc_done` calls', () => {
+    // The `cmd_enable -> cmd_start` pin (Task 18, above in this file) claimed
+    // that pairing was "the only pair in this plan that runs TWO `_lc_done`
+    // calls in ONE process" — this task adds a second, in the SAME function
+    // this brief's own §0 measured locals against: `cmd_ws_add`'s new
+    // `create` emit runs immediately before `_spawn_start`, and `_reg_claim`
+    // (pre-existing, wired by an earlier task) fires its own `_lc_done claim`
+    // right after. Same risk, same pin: `_lc_obs`'s once-per-process
+    // memoisation (`[[ -z "$_LC_OBS" ]] || return 0`) could regress silently,
+    // and nothing else checks the tmux call COUNT on this path — the
+    // rename/hold/release/archive/attic-drop tests above each run exactly
+    // ONE `_lc_done` call per process, so only ws-add among this task's six
+    // sites needs this pin.
+    //
+    // No snippet here shadows `tmux`, so the probe resolves through the
+    // harness's CONTAINED PATH stub and is recorded in `h.tmuxCalls()` —
+    // never the `ccd-calls` log `WS_ADD` (ccdWsHelpers.ts) reads through its
+    // own local `tmux() { :; }` shell function, which this test deliberately
+    // omits.
+    h.makeRepo('demo');
+    h.sh(`_spawn() { :; }; _spawn_start() { SPAWN_FROMSWAP=0; }; _spawn_settle() { :; };
+      _ws_supervise() { :; }; _supervised_start() { :; };
+      CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
+    expect(h.tmuxCalls()).toEqual(['list-panes -a -F #{session_name} #{pane_pid}']);
+  });
+
+  it('cmd_ws_add completes with its normal success line even when the journal directory cannot be written at all', () => {
+    // THE WORST FAILURE AVAILABLE IN THIS TASK: a wrong variable name under
+    // `set -uo pipefail` would EXIT the shell between the lock (already
+    // released, ccd:2665) and the spawn, leaving a worktree on disk with no
+    // registry entry and no session — a half-created workspace. This test
+    // covers the OTHER half of that same worry: a journal that cannot be
+    // WRITTEN AT ALL must not abort the verb either. Mirrors
+    // ccd-lifecycle-purge.test.ts's identical proof for `_reg_purge`
+    // ("purges even when the journal cannot record it — D7, never gate the
+    // act"): `_lc_emit` is documented "Always 0" (ccd:1401), and every one of
+    // its failure branches is `|| { _lc_err; return 0; }` — this is the
+    // creation-path analogue of that destruction-path proof.
+    const dir = lcDir(h.home);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.chmodSync(dir, 0o555);
+    h.makeRepo('demo');
+    let out: string;
+    try {
+      out = h.sh(`_spawn() { :; }; _spawn_start() { SPAWN_FROMSWAP=0; }; _spawn_settle() { :; };
+        _ws_supervise() { :; }; _supervised_start() { :; }; tmux() { :; };
+        CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
+    } finally {
+      fs.chmodSync(dir, 0o755);   // restore so afterEach's own cleanup can remove the tree
+    }
+    expect(out, 'the verb must complete and print its normal success line').toMatch(/^workspace demo-quiet-mesa /);
+    expect(h.reg('demo-quiet-mesa', 'uuid'), 'the workspace must be fully created, not half').not.toBeNull();
+    expect(h.reg('demo-quiet-mesa', 'workspace')).toBe('quiet-mesa');
+    // Nothing landed — the directory truly was unwritable, so this is not a
+    // false pass through some other write path.
+    expect(readJournal(h.home)).toEqual([]);
   });
 });

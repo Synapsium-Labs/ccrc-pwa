@@ -2680,6 +2680,17 @@ cmd_ws_add() {   # project [slug] — new worktree + session for an existing pro
   # rc=0 with the success line printed over a spawn whose tmux session had
   # vanished).
   local rc
+  # BEFORE the spawn, because `_spawn_start` can `return` and the fact worth
+  # recording is that this workspace came into existence — the registry has no
+  # creation timestamp anywhere (§0), and `.spawn` is the LAST respawn.
+  #
+  # THE NAMES ARE THIS FUNCTION'S OWN, measured against its local set: the slug
+  # is `$slug` and the wrapper is `$hw` (`_ws_least_loaded`'s pick, used again
+  # at ccd:2691). There is no `$ws` and no `$wrapper` here, and under
+  # `set -uo pipefail` naming one would EXIT the shell between the lock and the
+  # spawn, with the worktree already on disk.
+  _lc_done create "$id" "" meas.project "$project" meas.workspace "$slug" \
+    meas.branch "$branch" meas.base "$base" meas.workdir "$wt" meas.wrapper "$hw"
   _spawn_start "$id" new || return $?
   _reg_claim "$id"
   _ws_supervise "$id"
@@ -3289,6 +3300,10 @@ cmd_ws_rename() {   # ccd ws-rename --session <id> --branch <name> — rename a
   # definition — it is answering the first prompt. A busy guard would refuse the
   # only moment automatic naming ever fires.
   git -C "$main" branch -m "$old" "$new" || die "rename failed: $old -> $new"
+  # AFTER ccd:3210's `git branch -m` succeeded, so `branch` is the name the
+  # repository actually carries now, and `old` is what it carried before.
+  _lc_done rename "$id" "" meas.old "$old" meas.branch "$new" \
+    meas.project "$(_reg_get "$id" project)"
   _reg_set "$id" branch "$new"
   printf '{"renamed":%s,"old":%s,"new":%s}\n' \
     "$(_json_str "$id")" "$(_json_str "$old")" "$(_json_str "$new")"
@@ -3486,6 +3501,11 @@ cmd_ws_hold() {   # ccd ws-hold --session <id> --reason <text> — claim a
   # root, a directory does — and it is `mv -fT`'s `-T` that keeps THAT case a
   # refusal too: a bare `mv -f` would move the tmp inside the directory and
   # exit 0.
+  # The reason is DECLARED (`dec`), never measured: ccd:3352-3353's contract is
+  # "write it verbatim, parse it nowhere", and the journal keeps that promise.
+  # `_lc_json` quotes it with `json.dumps`, so it cannot forge a field however
+  # it is spelled.
+  _lc_done hold "$id" "" dec.reason "$reason"
   _reg_set "$id" hold "$reason" \
     || die "could not record the hold for $id — it is NOT held"
   echo "held $id: $reason"
@@ -3514,6 +3534,11 @@ cmd_ws_release() {   # ccd ws-release --session <id> — end the program's claim
     # claim is gone while `archiveMerged` keeps deferring and `ws-rm`/`ws-reap`
     # keep refusing. Fail-shut in the safe direction, but a lie either way, and
     # the sibling verb's own guard is the standard this file set.
+    # INSIDE the `-e` arm (ccd:3431), so a `not held` answer writes nothing: an
+    # idempotent no-op is not an act, and recording one would make the record
+    # disagree with what happened. Read BEFORE the unlink, which is the only
+    # instant the text exists.
+    _lc_done release "$id" "" meas.held "$(cat "$REG/$id.hold" 2>/dev/null)"
     rm -f -- "$REG/$id.hold" \
       || die "could not remove the hold for $id — it is STILL held"
     echo "released $id"
@@ -3669,6 +3694,13 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
   else reason="manual"; fi
   _reg_set "$id" archived "$(date +%s)"
   _reg_set "$id" archivedreason "$reason"
+  # AFTER both markers, so `reason` is the value that actually landed. It is one
+  # of exactly three words (ccd:3600-3602): merged:#N | empty | manual.
+  # `.archived` is the one registry field carrying a WHY, and it is measurably
+  # false on four live rows right now — which is why the journal records the act
+  # rather than trusting the field.
+  _lc_done archive "$id" "" meas.archivedReason "$reason" \
+    meas.branch "$(_reg_get "$id" branch)" meas.project "$(_reg_get "$id" project)"
 
   local note=""
   case "$reason" in
@@ -4083,6 +4115,11 @@ cmd_ws_attic() {   # ccd ws-attic --session <id>   |   ccd ws-attic --drop <id>
         [[ -n "$ref" ]] || continue
         git -C "$main" update-ref -d "$ref" && n=$(( n + 1 ))
       done < <(git -C "$main" for-each-ref --format='%(refname)' "refs/ccrc/attic/$id/" 2>/dev/null)
+      # AFTER the loop, and that is not style: `$n` is the destroyed count and
+      # it does not exist until ccd:4021 has run. An emit above the loop can
+      # only report zero, which on a destructive verb is a fabricated
+      # measurement — the class this file names by number.
+      _lc_done attic-drop "$id" "" meas.dropped "$n" meas.project "$project"
       echo "dropped $n attic ref$( (( n == 1 )) || echo s ) for $id"
       ;;
     *) die "usage: ccd ws-attic --session <id> | ccd ws-attic --drop <id>" ;;
