@@ -962,6 +962,109 @@ tmux list-panes -a -F '#{session_name} #{pane_pid}'" 2>/dev/null)
   [[ -n "$_LC_OBS" ]] || _LC_OBS=null
   return 0
 }
+
+_lc_live() {   # -> the generation to append to, on stdout. Mints one if none.
+  # THE GREATEST NAME IS THE LIVE ONE, and "greatest" is LENGTH-FIRST, the
+  # same rule L0's `compareGenerations` (shared/api.ts) makes a single reader
+  # for: comparing LENGTH before content, so a 20-digit name is greater than
+  # ANY 19-digit name regardless of what its digits say. `_lc_now_ns` mints
+  # fixed-width 19-digit names, so this never bites production — but a bare
+  # `[[ "$a" > "$b" ]]` is lexicographic, and lexicographically
+  # "9999999999999999999" (19 nines) sorts AFTER "10000000000000000000" (20
+  # digits) at the very first byte, exactly backwards from L0. `${#f}` is
+  # compared first for that reason, string `>` only as the equal-length
+  # tiebreak — which for equal-length digit strings IS numeric order.
+  local f newest="" LC_ALL=C
+  mkdir -p -- "$_LC_DIR" 2>/dev/null || { printf '%s' ''; return 0; }
+  for f in "$_LC_DIR"/journal-*.ndjson; do
+    [[ -f "$f" ]] || continue                      # unmatched glob stays literal: no nullglob here
+    if [[ -z "$newest" ]] \
+      || (( ${#f} > ${#newest} )) \
+      || { (( ${#f} == ${#newest} )) && [[ "$f" > "$newest" ]]; }; then
+      newest="$f"
+    fi
+  done
+  if [[ -z "$newest" ]]; then
+    newest="$_LC_DIR/journal-$(_lc_now_ns).ndjson"
+    # `>>`, never `>`: the create form that CANNOT truncate, even if two
+    # processes reach it at once.
+    : >> "$newest" 2>/dev/null || { printf '%s' ''; return 0; }
+  fi
+  printf '%s' "$newest"
+}
+
+_lc_rotate() {   # live-path — mint a fresh generation when the live one is full
+  # MINT-A-GREATER-NAME, NEVER TRUNCATE: the full generation is neither renamed
+  # nor rewritten, and a new, greater name appears beside it. A truncate would
+  # shrink a file the mirror is reading, and `agent/src/tail.ts:53-58` hands its
+  # reader a RESET it must model; the whole point of putting the generation in
+  # the NAME is that a rotation is a new name appearing rather than an old file
+  # getting smaller. Retention is a CEILING, not a schedule: 4 x 4 MiB at the
+  # measured ~35 KB/day is about a year.
+  #
+  # DIE-FREE AND REFUSAL-FREE, unlike every other flock site in this file
+  # (all of which `die` when `flock` is unavailable or contested). D7 forbids
+  # the journal from gating an act, so a missing or contested lock SKIPS the
+  # rotation and lets the generation grow past its cap. `.rotate.lock` is
+  # NEVER unlinked — unlinking a lock file while another process holds it is
+  # exactly how two processes come to hold "the lock" on two different inodes.
+  local live="${1-}" sz lock lfd f n live_now minted="" gens=()
+  [[ -n "$live" && -f "$live" ]] || return 0
+  sz=$(stat -c %s -- "$live" 2>/dev/null)
+  [[ "$sz" =~ ^[0-9]+$ ]] || return 0              # regex BEFORE the arithmetic, always
+  (( sz >= _LC_GEN_MAX_BYTES )) || return 0
+
+  command -v flock >/dev/null 2>&1 || return 0
+  lock="$_LC_DIR/.rotate.lock"
+  exec {lfd}>>"$lock" 2>/dev/null || return 0
+  flock -n "$lfd" 2>/dev/null || { exec {lfd}>&-; return 0; }
+
+  # Re-measured UNDER the lock: another ccd may have rotated between the test
+  # above and the acquisition, and a second mint would burn a generation slot.
+  sz=$(stat -c %s -- "$live" 2>/dev/null)
+  if [[ "$sz" =~ ^[0-9]+$ ]] && (( sz >= _LC_GEN_MAX_BYTES )); then
+    minted="$_LC_DIR/journal-$(_lc_now_ns).ndjson"
+    : >> "$minted" 2>/dev/null || minted=""
+  fi
+
+  for f in "$_LC_DIR"/journal-*.ndjson; do [[ -f "$f" ]] && gens+=("$f"); done
+  n=${#gens[@]}                                    # bash 5.2: an empty array under set -u is fine
+  if (( n > _LC_GEN_KEEP )); then
+    # THE LIVE ONE IS NEVER PRUNED, and the guard is not decoration. TWO
+    # NAMES are protected, not one: `minted`, THIS CALL's own fresh name,
+    # captured directly rather than re-derived — a future-dated name already
+    # on disk (impossible today; `_lc_now_ns` is monotonic, but not enforced)
+    # would make `minted` the SECOND-smallest by content, and re-deriving via
+    # `_lc_live` would answer the OLD future-dated name instead, so the prune
+    # would eat the mint it just made and rotation would never converge:
+    # `_lc_live` picks the full generation again on the very next event. And
+    # `live_now`, re-read rather than assumed: another ccd may have minted a
+    # greater one than this call's `minted` between the two.
+    live_now=$(_lc_live)
+    # LENGTH-FIRST, NOT A BARE `LC_ALL=C sort`: sorting the filenames plain
+    # is lexicographic and disagrees with L0's `compareGenerations` across a
+    # digit-length boundary. Each name is prefixed with its own zero-padded
+    # LENGTH before sorting, so the sort compares length first and content
+    # only as the tiebreak — one ordering claim, expressed once, agreeing
+    # with `_lc_live` and with L0 by construction rather than by two authors
+    # remembering the same rule. `LC_ALL=C` on the `sort` invocation itself,
+    # this file's own idiom (ccd:4007, 4033, 1152, 6801) — a `local` variable
+    # is never enough for an EXTERNAL command's collation, only for bash's
+    # own builtin `[[ ]]` comparisons.
+    while IFS= read -r f; do
+      f="${f#*|}"
+      [[ -n "$f" && "$f" != "$live_now" && "$f" != "$minted" ]] && rm -f -- "$f"
+    done < <(
+      for f in "${gens[@]}"; do printf '%05d|%s\n' "${#f}" "$f"; done \
+        | LC_ALL=C sort | head -n $(( n - _LC_GEN_KEEP ))
+    )
+  fi
+  # A CONTRACT, NOT HYGIENE: flock treats two open()s of one path in one
+  # process as two strangers, and ccd is SOURCED, so a descriptor left open
+  # here refuses the NEXT rotation in the same shell.
+  exec {lfd}>&-
+  return 0
+}
 # ── end lifecycle journal ────────────────────────────────────────── LC-END ──
 _ws_status() {   # id -> busy|idle on stdout; NON-ZERO when it cannot be read.
   # Fails closed twice over, and both halves are load-bearing.
