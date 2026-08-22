@@ -204,21 +204,48 @@ describe('_lc_rotate', () => {
   // section (re-check, mint, prune, release) before the loser even attempts
   // `flock`, so the loser's attempt is UNCONTESTED and it re-runs the same
   // stale check. This is the reviewer's own reproduction shape ("5 of 8").
+  //
+  // FIX ROUND 2 (b): THIS TEST IS FLAKY BY NATURE, and that is a fact about
+  // the race, not a defect in the test. A single race is a coin that is only
+  // WEIGHTED toward catching the regression, not certain to. Measured: with
+  // the real fix reverted (the old `$live`-size re-measure restored) and
+  // this SAME single-race form run 10 times, the regression went red only
+  // 9 times out of 10 — a ~10% per-run miss rate, on the one function in
+  // this whole program that DELETES. If you see this test fail
+  // intermittently, that is the race firing and the guard holding or not —
+  // real signal, not flake to be silenced. Racing 3 TIMES inside one test,
+  // each iteration against its OWN fresh harness (so `_LC_GEN_KEEP`
+  // retention from one iteration can never confuse another iteration's
+  // count), takes the per-run miss rate from ~10% to ~0.1% (0.1^3). DO NOT
+  // lower this iteration count without re-measuring: the whole point of
+  // repeating it is the number this comment states, and a lower count
+  // trades detection power for a few milliseconds of test time.
   it('two racing rotators mint exactly ONE new generation, never two', async () => {
-    const p = big(gen('1000000000000000000'));
-    const env = ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true });
-    const runOnce = (): Promise<number | null> => new Promise((resolve, reject) => {
-      const child = spawn('bash', ['-c', `source "${CCD}"; _lc_rotate "${p}"`], { cwd: h.home, env });
-      child.on('error', reject);
-      child.on('close', (code) => resolve(code));
-    });
-    const p1 = runOnce();
-    await new Promise((resolve) => { setTimeout(resolve, 15); });
-    const p2 = runOnce();
-    const [c1, c2] = await Promise.all([p1, p2]);
-    expect.soft(c1, 'each racer stays rc 0 regardless of who wins the lock').toBe(0);
-    expect.soft(c2, 'each racer stays rc 0 regardless of who wins the lock').toBe(0);
-    const minted = gens().filter((f) => f !== gen('1000000000000000000'));
-    expect(minted, 'exactly one new generation must appear — one per racer is the bug').toHaveLength(1);
+    for (let i = 0; i < 3; i++) {
+      const hh = makeCcdHarness(`ccrc-lc-gen-race${i}-`);
+      try {
+        const ddir = lcDir(hh.home);
+        fs.mkdirSync(ddir, { recursive: true });
+        const p = path.join(ddir, gen('1000000000000000000'));
+        fs.writeFileSync(p, 'x'.repeat(4 * 1024 * 1024 + 1));
+        const env = ghContainedEnv(hh.home, { ...process.env, HOME: hh.home }, { systemd: true, tmux: true });
+        const runOnce = (): Promise<number | null> => new Promise((resolve, reject) => {
+          const child = spawn('bash', ['-c', `source "${CCD}"; _lc_rotate "${p}"`], { cwd: hh.home, env });
+          child.on('error', reject);
+          child.on('close', (code) => resolve(code));
+        });
+        const p1 = runOnce();
+        await new Promise((resolve) => { setTimeout(resolve, 15); });
+        const p2 = runOnce();
+        const [c1, c2] = await Promise.all([p1, p2]);
+        expect.soft(c1, `iteration ${i}: each racer stays rc 0 regardless of who wins the lock`).toBe(0);
+        expect.soft(c2, `iteration ${i}: each racer stays rc 0 regardless of who wins the lock`).toBe(0);
+        const minted = generationsOf(hh.home).filter((f) => f !== gen('1000000000000000000'));
+        expect.soft(minted, `iteration ${i}: exactly one new generation must appear — one per racer is the bug`)
+          .toHaveLength(1);
+      } finally {
+        hh.cleanup();
+      }
+    }
   });
 });
