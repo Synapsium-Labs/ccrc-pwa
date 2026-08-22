@@ -150,7 +150,7 @@ describe('ccd caps', () => {
   // still fail loudly on anything ELSE that drifts: a THIRD capability token
   // added without updating this list is exactly as much a silent hole as an
   // undispatched verb would be.
-  const KNOWN_CAPABILITY_TOKENS = ['stop-surface'];
+  const KNOWN_CAPABILITY_TOKENS = ['lifecycle-v1', 'stop-surface'];
 
   it('advertises exactly the verbs the dispatcher implements, plus the known capability tokens', () => {
     // The deployed ~/.local/bin/ccd is a COPY, not a symlink to the repo, so a

@@ -769,6 +769,8 @@ _LC_DIR="$REG/.lifecycle"
 _LC_LINE_MAX=2048                # twin of L0's LC_LINE_MAX      (BYTES)
 _LC_GEN_MAX_BYTES=4194304        # twin of L0's LC_GEN_MAX_BYTES — 4 MiB
 _LC_GEN_KEEP=4                   # twin of L0's LC_GEN_KEEP — ~a year at ~35 KB/day
+_LC_DEC_MAX=512                  # twin of L0's LC_REASON_MAX_BYTES — BYTES, not characters;
+                                 # `_lc_dec_ok` below measures under `LC_ALL=C`
 _LC_OBS_TMUX_DEADLINE_S=2        # bound on `_lc_obs`'s ONE `tmux list-panes -a`. Runs ONCE PER
                                  # CCD PROCESS, fleet-wide (the memo guard sees to that) — a STALL
                                  # BUDGET, not a generous per-lookup allowance like
@@ -1402,6 +1404,87 @@ _lc_emit() {   # act outcome id tx [key value]... — THE ONE WRITER. Always 0.
   { printf '%s\n' "$line" >> "$live"; } 2>/dev/null || { _lc_err; return 0; }
   _lc_rotate "$live"
   return 0
+}
+
+# THE FOUR CALLER-FACING SHAPES. `tx` is an ARGUMENT on all of them: a caller
+# that pairs an intent with an outcome mints one with `_lc_tx` into a `local`
+# and passes it twice. There is no global to carry it, deliberately.
+#
+# tx IS FOR ONE PAIR, NEVER FOR A CALL TREE. `cmd_enable` runs `cmd_start`
+# in-process (ccd:10352) and `_swap_refuse`'s `|| cmd_ensure`
+# fallback fires at ccd:10133; each writes its OWN independent
+# event with its own tx, because two acts happened and the record says so
+# rather than folding one into the other.
+#
+# EVERY POSITIONAL IS BOUND `${N-}`, NOT `$N`. ccd runs `set -uo pipefail`, and
+# a function that reads an unset positional EXITS THE SHELL rather than
+# returning. With 21 hand-written call sites one dropped `""` would abort a
+# destructive verb mid-teardown — through the journal, which exists precisely to
+# gate nothing. `shift N 2>/dev/null || :` for the same reason.
+_lc_intent() { local a="${1-}" i="${2-}" t="${3-}"; shift 3 2>/dev/null || :
+               _lc_emit "$a" intent "$i" "$t" "$@"; }
+_lc_done()   { local a="${1-}" i="${2-}" t="${3-}"; shift 3 2>/dev/null || :
+               _lc_emit "$a" done   "$i" "$t" "$@"; }
+
+_lc_fail() {   # act id tx token detail [k v]... — an act that STARTED and broke
+  # Distinct from `_lc_refuse` by WHEN, not by severity: a refusal happens
+  # before anything irreversible, a failure after. `cmd_ws_rm`'s
+  # `git worktree remove` die at ccd:2819 is a FAILURE — the session
+  # is already stopped when it fires — and calling it a refusal would say
+  # nothing was touched, which is false.
+  local a="${1-}" i="${2-}" t="${3-}" tok="${4-}" msg="${5-}"; shift 5 2>/dev/null || :
+  _lc_emit "$a" failed "$i" "$t" refusal "$tok" detail "$msg" "$@"
+}
+
+_lc_refuse() {   # act id token detail [k v]... — EMITS, THEN DIES. Never returns.
+  # Refusal and death cannot drift because they are one call. Call sites live
+  # ONLY inside the destructive verbs, never inside `die` itself — putting it
+  # there would fabricate a refusal record for every usage error on every verb
+  # in the file.
+  #
+  # THIS FUNCTION IS IN `ccd-die-containment.test.ts`'s CAN-DIE SET (that suite
+  # derives the set by call-graph reachability, so there is no list to edit). It
+  # must never be wrapped in `$( )`: the capture demotes a fatal to rc 1 and the
+  # verb carries on destroying.
+  #
+  # The field is `refusal`, never `refused`, and the token is an ARGUMENT
+  # rather than a format-string literal — both so `ccd-wsaudit-nonpoison.test.ts`'s
+  # four-shape scan over this whole block's text cannot see it. That guard's
+  # own docstring is the precedent for why the spelling matters, not a
+  # specific ccd line.
+  local a="${1-}" i="${2-}" tok="${3-}" msg="${4-}"; shift 4 2>/dev/null || :
+  _lc_emit "$a" refused "$i" "" refusal "$tok" detail "$msg" "$@"
+  die "$msg"
+}
+
+_lc_surface_norm() {   # word -> the DECLARED surface, or NOTHING when none was
+  # THREE STATES, THREE ANSWERS, and the empty one is the whole point: "no flag
+  # was passed" is a different fact from "a word this build does not model".
+  # The encoder omits an empty value, so an undeclared surface reads `none`;
+  # `unknown` is reserved for a word that arrived and was not recognised.
+  #
+  # ccd's OWN DEFAULTS MUST NEVER REACH THIS FIELD — `cmd_stop`'s `cli`,
+  # `_ws_unsupervise`'s `ccd`. They are ccd acting on its own account, not a
+  # caller's declaration, and laundering one into `dec.surface` is exactly the
+  # default-as-declaration defect `none` exists to prevent. The closed set is
+  # ccd:619's, so the journal and the `.stopped` stamp agree by construction.
+  [[ -n "${1-}" ]] || { printf '%s' ''; return 0; }
+  case "$1" in cli|pwa|agent|ccd) printf '%s' "$1" ;; *) printf '%s' unknown ;; esac
+  return 0
+}
+
+_lc_dec_ok() {   # text -> 0 iff it fits _LC_DEC_MAX *BYTES*. Prints nothing.
+  # BYTES, NOT CHARACTERS, and `local LC_ALL=C` is what makes `${#1}` count
+  # them — restored on return, because `local` shadows the caller's value for
+  # this frame only. A 200-emoji reason is 200 characters and 800 bytes; with a
+  # character cap it would pass one surface and be refused by the next, which
+  # is one value with two meanings at a provenance seam.
+  #
+  # THE POLICY IS REFUSE, NEVER TRUNCATE. A 900-byte reason silently recorded
+  # as 512 reads as the operator's own words, and the record is the one
+  # artefact that outlives the workspace.
+  local LC_ALL=C
+  (( ${#1} <= _LC_DEC_MAX ))
 }
 # ── end lifecycle journal ────────────────────────────────────────── LC-END ──
 _ws_status() {   # id -> busy|idle on stdout; NON-ZERO when it cannot be read.
@@ -3218,9 +3301,18 @@ EOF
   # existing `/^[a-z][a-z-]*$/` filter unchanged. Names the FLAG `cmd_stop`
   # has carried since D3 (spec §4.1): `ccd stop [--surface <word>] <id>`.
   # `server/test/ccd-archive.test.ts`'s caps<->dispatcher parity check knows
-  # this one token by name and requires it to stay exactly one token — a
-  # third one added here without updating that list fails loudly there.
+  # these tokens by name (`KNOWN_CAPABILITY_TOKENS`, that file's line 153) and
+  # holds the advertised set EXACTLY equal to it — a token added here without
+  # updating that list fails loudly there, in BOTH directions: :175 sees it as
+  # a phantom verb, :180 sees the list short one.
   echo stop-surface
+  # `lifecycle-v1` says THIS copy of ccd writes `$REG/.lifecycle/`. It gates a
+  # SERVER DECISION — sweep at all — not a file: absent means the mirror never
+  # sweeps and every surface says "this box's ccd does not write the lifecycle
+  # journal", because an old ccd's silence must not read as a quiet fleet.
+  # Verb-shaped so it needs no new parsing anywhere, exactly the argument that
+  # put `stop-surface` on this channel.
+  echo lifecycle-v1
 }
 
 cmd_version() {   # what THIS box runs, per the deploy's own stamp — never a guess.

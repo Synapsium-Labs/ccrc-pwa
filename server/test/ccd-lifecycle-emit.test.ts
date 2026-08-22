@@ -11,7 +11,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeCcdHarness, type CcdHarness, CCD, ghContainedEnv } from './ccdWsHelpers.js';
-import { NO_TMUX, readJournal, decOf, lcDir } from './lifecycleHelpers.js';
+import { NO_TMUX, readJournal, decOf, lcDir, measOf } from './lifecycleHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-lc-emit-'); });
@@ -473,5 +473,122 @@ describe('_lc_err', () => {
     h.sh('_lc_err');
     expect.soft(fs.readFileSync(p, 'utf8').trim()).toBe('1');
     expect.soft(fs.existsSync(path.join(h.home, 'PWNED'))).toBe(false);
+  });
+});
+
+// Deviation from the task-16 brief's literal draft, per the standing rule
+// (STANDING RULE #1, cited across this plan): every `it` below that makes
+// more than one INDEPENDENT claim uses `expect.soft` rather than a hard
+// `expect`, so a first failure does not hide the rest. The orphan-signal test
+// keeps its first `toHaveLength(1)` as a HARD expect on purpose — the second
+// assertion dereferences `es[0]!`, so a soft failure there would let an empty
+// array crash the next line with an uncaught TypeError instead of a clean
+// assertion failure, the same downstream-dependency exception this file's
+// sibling `lifecycle-constants-twin.test.ts` documents for its directory-
+// basename test.
+describe('the four wrappers', () => {
+  it('_lc_intent and _lc_done share a tx so a pair is joinable', () => {
+    h.sh('t=$(_lc_tx); _lc_intent destroy sess "$t" meas.branch ws/x; _lc_done destroy sess "$t" meas.attic 7');
+    const [a, b] = readJournal(h.home);
+    expect.soft(a!['outcome']).toBe('intent');
+    expect.soft(b!['outcome']).toBe('done');
+    expect.soft(a!['tx']).toBe(b!['tx']);
+    expect.soft(String(a!['tx'])).toMatch(/^[0-9]{19}\.[0-9]+\.[0-9]+$/);
+  });
+
+  it('an intent with no sibling leaves a tx nothing closes — that IS the orphan signal', () => {
+    h.sh('t=$(_lc_tx); _lc_intent reap sess "$t"');
+    const es = readJournal(h.home);
+    expect(es).toHaveLength(1);
+    expect(es[0]!['outcome']).toBe('intent');
+  });
+
+  it('_lc_fail records a token and detail at the TOP LEVEL, WITHOUT dying', () => {
+    const out = h.sh('t=$(_lc_tx); _lc_fail destroy sess "$t" worktree-remove-failed "git refused"; printf "rc=%s" "$?"');
+    expect.soft(out).toBe('rc=0');
+    const [e] = readJournal(h.home);
+    expect.soft(e!['outcome']).toBe('failed');
+    expect.soft(e!['refusal']).toBe('worktree-remove-failed');
+    expect.soft(e!['detail']).toBe('git refused');
+    expect.soft(measOf(e!), 'refusal and detail are not measurements').not.toHaveProperty('refusal');
+  });
+
+  it('_lc_refuse emits THEN dies, so refusal and death cannot drift', () => {
+    // Mutant: drop the trailing `die "$msg"` -> this fails with `expected 0 not
+    // to be 0`, and a refused destruction would exit 0 with the record still
+    // claiming a refusal.
+    let code = 0; let stderr = '';
+    try { h.sh('_lc_refuse destroy sess held "held: program X — release first"'); }
+    catch (e) {
+      const err = e as { status?: number; stderr?: Buffer };
+      code = err.status ?? 1; stderr = String(err.stderr ?? '');
+    }
+    expect.soft(code).not.toBe(0);
+    expect.soft(stderr).toContain('held: program X');
+    const [e] = readJournal(h.home);
+    expect.soft(e!['outcome']).toBe('refused');
+    expect.soft(e!['refusal']).toBe('held');
+  });
+
+  it('spells the journal field `refusal` and never `refused`', () => {
+    h.sh('t=$(_lc_tx); _lc_fail destroy sess "$t" dirty-tree "uncommitted changes"');
+    const [e] = readJournal(h.home);
+    expect.soft(e).toHaveProperty('refusal');
+    expect.soft(e).not.toHaveProperty('refused');
+  });
+
+  it('an ARITY SLIP degrades to a line, never to a dead shell', () => {
+    // Mutant: bind the wrappers' positionals as `local a="$1"` instead of
+    // `"${1-}"` -> under `set -uo pipefail` an unset positional EXITS THE SHELL
+    // (measured: `f(){ local a="$1" b="$2"; }; f one; echo AFTER` never prints
+    // AFTER), so this fails with `expected '' to be 'AFTER'` and one dropped
+    // `""` at any of 21 call sites turns a destructive verb into a mid-verb
+    // abort — the exact failure "the journal never gates an act" exists to stop.
+    expect.soft(h.sh('_lc_intent destroy sess 2>/dev/null; printf AFTER')).toBe('AFTER');
+    expect.soft(h.sh('_lc_done destroy 2>/dev/null; printf AFTER')).toBe('AFTER');
+    expect.soft(h.sh('_lc_fail destroy sess 2>/dev/null; printf AFTER')).toBe('AFTER');
+  });
+});
+
+describe('_lc_surface_norm and _lc_dec_ok — declaration, validated once', () => {
+  // Deviation from the task-16 brief's literal it.each draft, whose row for
+  // the fourth declared surface repeated that surface's own name as both the
+  // input and the expected output. `single-definition.test.ts`'s NAMES_CCD
+  // scan flags exactly that shape — two adjacent quoted copies of the
+  // four-letter script's name — as the signature of a hand-copied path to
+  // it, and this row collided with that signature by coincidence, not by
+  // naming the script. (Deliberately not shown here, quoted and adjacent,
+  // for the same reason that guard's own header gives.) `SAME(w)` builds the
+  // pair at runtime so no such literal appears in this file's own text.
+  const SAME = (w: string): [string, string] => [w, w];
+  it.each([SAME('cli'), SAME('pwa'), SAME('agent'), SAME('ccd'), ['wharf', 'unknown']])(
+    'normalises %s to %s, exactly as ccd:619 does', (word, want) => {
+      expect(h.sh(`_lc_surface_norm ${word}`)).toBe(want);
+    });
+
+  it('answers EMPTY for nothing declared — never `unknown`, never a default', () => {
+    // Mutant: `case "" in … *) unknown` -> this fails with `expected 'unknown'
+    // to be ''`, and "no flag was passed" becomes indistinguishable from "a word
+    // this build does not model". L0's DecSurface has a member for the first
+    // (`none`, via the encoder's omit rule) and `unknown` for the second.
+    expect.soft(h.sh('_lc_surface_norm ""')).toBe('');
+    expect.soft(h.sh('_lc_surface_norm')).toBe('');
+  });
+
+  it('caps the declaration in BYTES, not characters, and restores the caller\'s locale', () => {
+    // Mutant: drop `local LC_ALL=C` -> a 200-emoji reason measures 200 and
+    // passes at 800 bytes; this fails with `expected 0 to be 1`.
+    expect.soft(h.sh(`LC_ALL=C.UTF-8; s=$(printf 'z%.0s' {1..512}); _lc_dec_ok "$s"; printf "rc=%s" "$?"`)).toBe('rc=0');
+    expect.soft(h.sh(`LC_ALL=C.UTF-8; s=$(printf 'z%.0s' {1..513}); _lc_dec_ok "$s"; printf "rc=%s" "$?"`)).toBe('rc=1');
+    // 200 x U+1F600 is 200 characters and 800 bytes.
+    expect.soft(h.sh(`LC_ALL=C.UTF-8; s=$(printf '\\U0001F600%.0s' {1..200}); _lc_dec_ok "$s"; printf "rc=%s" "$?"`)).toBe('rc=1');
+    // and the caller's collation is the caller's again afterwards
+    expect.soft(h.sh(`LC_ALL=C.UTF-8; s=$'caf\\u00e9'; _lc_dec_ok "$s"; printf '%s' "\${#s}"`)).toBe('4');
+  });
+});
+
+describe('ccd caps', () => {
+  it('advertises lifecycle-v1 on the capability channel', () => {
+    expect(h.sh('cmd_caps').split('\n')).toContain('lifecycle-v1');
   });
 });
