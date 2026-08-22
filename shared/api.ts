@@ -4049,7 +4049,7 @@ export const LC_ERRORS_NAME = 'errors';
 
 /** `_lc_rotate`'s lock. NEVER UNLINKED, not even as cleanup — "unlinking a
  *  lock file while another process holds it is exactly how two processes come
- *  to hold the lock on two different inodes" (`ccd:1531-1534`), and all four
+ *  to hold the lock on two different inodes" (`ccd:6259-6262`), and all four
  *  of ccd's existing lock paths already follow that rule. */
 export const LC_ROTATE_LOCK_NAME = '.rotate.lock';
 
