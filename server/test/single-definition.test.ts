@@ -943,11 +943,22 @@ describe('one ~/.ccrc/exposure.env, spelled once in bash through CCRC_EXPOSURE_F
   // corpus, and the install suite holds those bytes instead. Later 3b tasks
   // that add a bash toucher (doctor's `exposure` check is the known one)
   // extend the holder list HERE, by name, like the remote-control block's.
+  //
+  // D-169 added the second holder, and it is a genuine exception rather than
+  // a drift: `deploy/deploy.sh` runs on a WORKSTATION and reads this file on
+  // the box, over ssh, before the box has been given the build that could
+  // answer for itself — so it cannot reach `CCRC_EXPOSURE_FILE`, and there is
+  // no verb to ask. What the exception costs is a second parser of one file,
+  // which is the thing this rule exists to prevent, so that cost is paid
+  // explicitly: deploy-env-guard.test.ts feeds BOTH readers the same awkward
+  // lines (leading tab, trailing CR, quotes, duplicate keys, `export KEY=`)
+  // and fails if they disagree on any of them.
   const NEEDLE = '.ccrc/exposure.env';
 
-  it('is touched by exactly one bash file, and that file is ccd/ccrc', () => {
+  it('is touched by exactly two bash files, and both are named', () => {
     expect(holdersOf(NEEDLE)).toEqual([
-      'ccd/ccrc',   // CCRC_EXPOSURE_FILE — the declaration `cmd_expose` writes through
+      'ccd/ccrc',         // CCRC_EXPOSURE_FILE — the declaration `cmd_expose` writes through
+      'deploy/deploy.sh', // derive_health_urls — reads it ON THE BOX, over ssh (D-169)
     ]);
   });
 
