@@ -1163,13 +1163,33 @@ export function spawnVerdict(rc: number | null): SpawnVerdict | null {
  * form — `orphan` means "a registry row with no pane" in one half of this repo
  * and "a worktree with no registry row", the exact opposite, in the other.
  * Naming this kind explicitly defuses it.
+ *
+ * `provenance-mismatch` (build 9 D2). `corroboration()` is the ONE pure
+ * function allowed to relate the three identity families, and a `disagrees` is
+ * a fact the operator sees, never a silently picked winner. ccd cannot refuse
+ * on identity — single UNIX user, attribution not authentication — and does
+ * not pretend to, so the record IS the mechanism. NOT a boolean on the event
+ * row: a disagreement is about the pair, and the census is where pairs are
+ * weighed.
+ *
+ * `archived-but-live` (build 9 D9). Four rows measured on the live box are
+ * stamped `merged:#N` and heartbeating. `.archived` is cleared only by
+ * ws-restore and `_reg_purge`, never by start/ensure, so the one registry
+ * field carrying a WHY is false on half the rows that have it — and a field
+ * that is silently false reads as authoritative, which is worse than absence.
+ * This kind names the contradiction with ZERO ccd semantic change. It does not
+ * clear the stamp: clearing it destroys the archive record exactly as
+ * `ws-restore` did until wave 3.
  */
 export type DivergenceKind =
   | 'unregistered-worktree'   // git records a worktree no registry row claims
   | 'branch-drift'            // registry `.branch` != the worktree's own HEAD
-  | 'claim-divergence';       // a hold with no open run, or an open run with no hold
+  | 'claim-divergence'        // a hold with no open run, or an open run with no hold
+  | 'provenance-mismatch'     // the kernel field contradicts the declared surface
+  | 'archived-but-live';      // a row stamped archived that is heartbeating now
 const DIVERGENCE_KIND_MAP: Record<DivergenceKind, true> = {
   'unregistered-worktree': true, 'branch-drift': true, 'claim-divergence': true,
+  'provenance-mismatch': true, 'archived-but-live': true,
 };
 export const DIVERGENCE_KINDS: readonly DivergenceKind[] =
   Object.keys(DIVERGENCE_KIND_MAP) as DivergenceKind[];

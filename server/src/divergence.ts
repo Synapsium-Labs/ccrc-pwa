@@ -1,12 +1,19 @@
-import type { Divergence } from '../../shared/api.js';
+import {
+  corroboration, isActorClass, isDecSurface, SUPERVISED_FRESH_MS, type Divergence,
+} from '../../shared/api.js';
 
 /**
- * L1: pure, clock-free, `fs`-free, fastify-free — it imports TYPES from
- * `shared/api.js` and nothing else. Gathering is L4's job
+ * L1: pure, clock-free, `fs`-free, fastify-free — it imports L0 TYPES and
+ * three L0 PURE VALUES (`corroboration`, the two guards it needs to call it
+ * honestly, and `SUPERVISED_FRESH_MS`) and nothing else. THE CLOCK IS AN INPUT
+ * (`nowMs`), never read here. Gathering is L4's job
  * (`FleetWatcher.sweepDivergences`), THE CENSUS'S SINGLE PRODUCER.
  *
  * Deliberately NOT under `server/src/coord/`: it holds no DB handle and has no
- * business near the coord-ring scanner in `single-definition.test.ts`.
+ * business near the coord-ring scanner in `single-definition.test.ts`. That is
+ * also why `provenance` below is declared INLINE rather than imported as
+ * `ProvenancePair` from `coord/store.ts` — L1 may not reach into L3, and the
+ * two shapes are structurally identical so the sweep can hand one straight in.
  */
 export interface DivergenceInput {
   readonly records: readonly {
@@ -17,6 +24,7 @@ export interface DivergenceInput {
     readonly branch: string | null;
     readonly held: string | null;
     readonly archivedAt: number | null;
+    readonly supervisedAt: number | null;
   }[];
   /**
    * Every linked worktree GIT ITSELF records, per project, read out of
@@ -62,6 +70,29 @@ export interface DivergenceInput {
    * and nothing else.
    */
   readonly unclaimedLastSweep: ReadonlySet<string>;
+  /**
+   * The clock, as an INPUT. This module is pure and stays pure —
+   * `sessionLifecycle` takes `nowMs` the same way and for the same reason: the
+   * whole table is then testable with no timers, and the census cannot drift
+   * against the ladder by reading a different `Date.now()`.
+   */
+  readonly nowMs: number;
+  /**
+   * `(observed actor class, declared surface)` pairs off recent lifecycle
+   * rows, from the journal mirror. Both are RAW strings: narrowing them is
+   * `corroboration`'s job, and an input that pre-narrowed them would be an
+   * adapter deciding.
+   *
+   * EMPTY WHEN THE MIRROR IS UNAVAILABLE, and that is the safe direction — an
+   * absence is never a disagreement, the same rule `headBranch`'s own
+   * docstring states for a null HEAD.
+   */
+  readonly provenance: readonly {
+    readonly id: string;
+    readonly at: number | null;
+    readonly obsClass: string;
+    readonly decSurface: string;
+  }[];
 }
 
 const key = (project: string, name: string): string => `${project}/${name}`;
@@ -290,6 +321,48 @@ export function divergences(input: DivergenceInput): Divergence[] {
     out.push({
       kind: 'claim-divergence', id, path: null,
       detail: 'an open run names this session, which carries no hold',
+    });
+  }
+
+  // 4 — the kernel field contradicts the declared surface (build 9 D2). ONE
+  // per session however many times it disagreed: the census is a list of
+  // things to look at, and 500 rows about one session is a list nobody reads.
+  // `corroboration` is the only function allowed to relate the families, and
+  // `not-comparable`/`unmeasured` raise NOTHING — not knowing is not a
+  // disagreement.
+  const named = new Set<string>();
+  for (const p of input.provenance) {
+    if (named.has(p.id)) continue;
+    // THE GUARDS, NEVER A CAST. `as never` on either argument would launder an
+    // unvalidated string past the only narrowing door L0 built, which is "an
+    // adapter may not narrow a distinction it received" inverted. A value this
+    // build cannot model is not a disagreement — it is a value this build
+    // cannot model, and the row is in `GET /api/lifecycle` either way.
+    if (!isActorClass(p.obsClass) || !isDecSurface(p.decSurface)) continue;
+    if (corroboration(p.obsClass, p.decSurface) !== 'disagrees') continue;
+    named.add(p.id);
+    out.push({
+      kind: 'provenance-mismatch', id: p.id, path: null,
+      detail: `the cgroup says ${p.obsClass}, the caller declared ${p.decSurface}`,
+    });
+  }
+
+  // 5 — a row stamped archived that is heartbeating right now (build 9 D9).
+  // Four such rows were measured on the live box, every one of them stamped
+  // `merged:#N`. THE HEARTBEAT IS THE EVIDENCE, not tmux: `.supervised` is
+  // re-stamped every 30 s by the supervisor, so a fresh stamp on an archived
+  // row is a supervisor watching a workspace the registry says is gone.
+  //
+  // `>= 0` is the same guard `sessionLifecycle` carries and states at length:
+  // without it a future-dated stamp reads fresh forever, and a skewed clock
+  // would flag every archived row on the box.
+  for (const r of input.records) {
+    if (r.archivedAt === null || r.supervisedAt === null) continue;
+    const age = input.nowMs - r.supervisedAt;
+    if (age < 0 || age >= SUPERVISED_FRESH_MS) continue;
+    out.push({
+      kind: 'archived-but-live', id: r.id, path: r.workdir,
+      detail: `stamped archived, and the supervisor heartbeat is ${Math.round(age / 1000)}s old`,
     });
   }
 

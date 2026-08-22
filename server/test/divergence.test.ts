@@ -1,13 +1,19 @@
 // §1.6's census. THE ENFORCEMENT CLAUSE IS ONLY REAL IF THE CLASSES ARE
 // INDIVIDUALLY PINNED: one test per kind, each red when its kind is deleted.
 import { describe, it, expect } from 'vitest';
-import { DIVERGENCE_KINDS, SESSION_LIFECYCLES, isDivergenceKind } from '../../shared/api.js';
+import {
+  DIVERGENCE_KINDS, SESSION_LIFECYCLES, isDivergenceKind,
+  ACTOR_CLASSES, corroboration, isDecSurface, SUPERVISED_FRESH_MS,
+} from '../../shared/api.js';
 import { divergences, unclaimedWorktrees, type DivergenceInput } from '../src/divergence.js';
+
+const NOW = 1_785_300_000_000;
 
 const rec = (over: Partial<DivergenceInput['records'][number]> = {}) => ({
   id: 'demo-quiet-basin', project: 'demo', workspace: 'quiet-basin',
   workdir: '/home/u/worktrees/demo/quiet-basin', branch: 'ws/quiet-basin',
-  held: null as string | null, archivedAt: null as number | null, ...over,
+  held: null as string | null, archivedAt: null as number | null,
+  supervisedAt: null as number | null, ...over,
 });
 
 /** The registry directory listing for one healthy `demo-quiet-basin`, in
@@ -26,10 +32,12 @@ const input = (over: Partial<DivergenceInput> = {}): DivergenceInput => ({
   openRunSessionIds: new Set<string>(),
   registryNames: REG_NAMES,
   unclaimedLastSweep: new Set<string>(),
+  nowMs: NOW,
+  provenance: [],
   ...over,
 });
 
-describe('divergences — the three kinds, individually', () => {
+describe('divergences — the original three kinds, individually', () => {
   it('A HEALTHY FLEET PRODUCES AN EMPTY CENSUS', () => {
     // The direction that decides whether the surface is ignorable. A census that
     // is never empty is a census nobody reads.
@@ -293,6 +301,8 @@ describe('divergences — the three kinds, individually', () => {
       registryNames: ['demo-quiet-basin', 'demo-still-cove', 'demo-warm-ridge']
         .flatMap((id) => [`${id}.uuid`, `${id}.workspace`]),
       unclaimedLastSweep: new Set(['demo/nobody']),
+      nowMs: NOW,
+      provenance: [],
     });
     expect(out.map((d) => d.kind).sort()).toEqual(
       ['branch-drift', 'claim-divergence', 'unregistered-worktree']);
@@ -300,9 +310,10 @@ describe('divergences — the three kinds, individually', () => {
 });
 
 describe('the vocabulary', () => {
-  it('is exactly three kinds — dead-row/unsupervised/not-boot-persistent are DELETED', () => {
+  it('is exactly five kinds — dead-row/unsupervised/not-boot-persistent are still DELETED', () => {
     expect([...DIVERGENCE_KINDS].sort()).toEqual(
-      ['branch-drift', 'claim-divergence', 'unregistered-worktree']);
+      ['archived-but-live', 'branch-drift', 'claim-divergence',
+       'provenance-mismatch', 'unregistered-worktree']);
     // `dead-row` IS `lifecycle === 'orphan'` and strictly broader; the other two
     // would cost one `ws-audit` exec per session per sweep (see the type's own
     // docstring — the objection is COST, not capability: ws-audit is already
@@ -316,5 +327,112 @@ describe('the vocabulary', () => {
     for (const k of DIVERGENCE_KINDS) {
       expect((SESSION_LIFECYCLES as readonly string[]).includes(k)).toBe(false);
     }
+  });
+});
+
+/** `STOP_SURFACES` is MODULE-PRIVATE by design (its docstring says so at
+ *  length: with the list unexported, `STOP_SURFACES.includes(raw as
+ *  StopSurface)` is TS2459 before the casts are even considered). So this
+ *  file spells the surfaces — and then checks its own copy, so the copy
+ *  cannot silently drift into a subset. */
+const SURFACES = ['cli', 'pwa', 'agent', 'ccd', 'unknown', 'none'] as const;
+const CLASSES = ACTOR_CLASSES;
+
+/** Found by ASKING `corroboration`, never hard-coded: the table is wave 1's and
+ *  this file must not become a second copy of it. */
+const pairs = CLASSES.flatMap((c) => SURFACES.map((s) => [c, s] as const));
+const DISAGREES = pairs.find(([c, s]) => corroboration(c, s) === 'disagrees')!;
+const AGREES = pairs.find(([c, s]) => corroboration(c, s) === 'agrees')!;
+
+describe('divergences — provenance-mismatch', () => {
+  it('has a fixture for both directions — otherwise every assertion below is vacuous', () => {
+    expect(SURFACES.every(isDecSurface), 'the local surface list drifted from DecSurface').toBe(true);
+    expect(DISAGREES, 'no (class, surface) pair disagrees; the arm cannot be tested').toBeDefined();
+    expect(AGREES, 'no (class, surface) pair agrees; the arm cannot be tested').toBeDefined();
+  });
+
+  it('raises when the kernel field contradicts the declared surface', () => {
+    const out = divergences(input({
+      provenance: [{ id: 'demo-quiet-basin', at: NOW - 1000,
+                     obsClass: DISAGREES[0], decSurface: DISAGREES[1] }],
+    }));
+    expect(out.map((d) => d.kind)).toEqual(['provenance-mismatch']);
+    expect(out[0]!.id).toBe('demo-quiet-basin');
+    expect(out[0]!.detail).toContain(DISAGREES[0]);
+    expect(out[0]!.detail).toContain(DISAGREES[1]);
+  });
+
+  it('raises on `disagrees` and ONLY on `disagrees` — not-comparable and unmeasured are not disagreements', () => {
+    // The whole cross product, so a fourth answer added to `corroboration`
+    // later cannot silently start raising divergences.
+    for (const [obsClass, decSurface] of pairs) {
+      const out = divergences(input({
+        provenance: [{ id: 'demo-quiet-basin', at: NOW, obsClass, decSurface }],
+      })).filter((d) => d.kind === 'provenance-mismatch');
+      expect(out.length, `${obsClass} vs ${decSurface}`)
+        .toBe(corroboration(obsClass, decSurface) === 'disagrees' ? 1 : 0);
+    }
+  });
+
+  it('raises NOTHING on a pair this build cannot even model — unmodellable is not a disagreement', () => {
+    // A newer ccd's fifth cgroup shape, or a hand-edited row. The guard is
+    // `isActorClass`/`isDecSurface`, never a cast: laundering an unvalidated
+    // string past the only narrowing door wave 1 built is the "an adapter may
+    // not narrow a distinction it received" rule inverted.
+    expect(divergences(input({
+      provenance: [{ id: 'demo-quiet-basin', at: NOW, obsClass: 'martian', decSurface: 'kiosk' }],
+    }))).toEqual([]);
+    expect(divergences(input({
+      provenance: [{ id: 'demo-quiet-basin', at: NOW, obsClass: 'martian', decSurface: DISAGREES[1] }],
+    }))).toEqual([]);
+  });
+
+  it('names a session ONCE however many times it disagreed', () => {
+    const out = divergences(input({
+      provenance: [
+        { id: 'demo-quiet-basin', at: NOW - 3000, obsClass: DISAGREES[0], decSurface: DISAGREES[1] },
+        { id: 'demo-quiet-basin', at: NOW - 1000, obsClass: DISAGREES[0], decSurface: DISAGREES[1] },
+      ],
+    })).filter((d) => d.kind === 'provenance-mismatch');
+    expect(out).toHaveLength(1);
+  });
+
+  it('raises nothing at all when the mirror supplied no pairs', () => {
+    expect(divergences(input({ provenance: [] }))).toEqual([]);
+  });
+});
+
+describe('divergences — archived-but-live', () => {
+  it('flags a row stamped archived that is heartbeating right now', () => {
+    // The four measured rows (spec §0): `.archived` is cleared only by
+    // ws-restore and _reg_purge, never by start/ensure, so half the rows that
+    // carry a `why` carry a false one. This names the contradiction; it does
+    // NOT clear the field, because clearing it destroys the archive record.
+    const out = divergences(input({
+      records: [rec({ archivedAt: 1_785_200_000, supervisedAt: NOW - 30_000 })],
+      worktrees: [], headBranch: new Map(),
+    }));
+    expect(out.map((d) => d.kind)).toEqual(['archived-but-live']);
+    expect(out[0]!.id).toBe('demo-quiet-basin');
+  });
+
+  it('says nothing about an archived row whose supervisor stamp is stale or absent', () => {
+    for (const supervisedAt of [null, NOW - SUPERVISED_FRESH_MS, NOW - 86_400_000]) {
+      expect(divergences(input({
+        records: [rec({ archivedAt: 1_785_200_000, supervisedAt })],
+        worktrees: [], headBranch: new Map(),
+      }))).toEqual([]);
+    }
+  });
+
+  it('does not call a FUTURE-dated heartbeat live', () => {
+    expect(divergences(input({
+      records: [rec({ archivedAt: 1_785_200_000, supervisedAt: NOW + 60_000 })],
+      worktrees: [], headBranch: new Map(),
+    }))).toEqual([]);
+  });
+
+  it('says nothing about a live row that was never archived', () => {
+    expect(divergences(input({ records: [rec({ supervisedAt: NOW - 1000 })] }))).toEqual([]);
   });
 });
