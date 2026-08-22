@@ -708,3 +708,38 @@ describe('the token is EXTRACTED, never cat-ed whole (first-program dogfood find
     }
   });
 });
+
+describe('the server address is config, never a literal (operator ruling 2026-08-22)', () => {
+  // The live lesson behind this pin: 3b rebound the server to loopback behind
+  // Caddy, and every program died silently — the skills were curling a
+  // hardcoded tailnet address that no longer answered. The base URL is now
+  // DERIVED from ~/.ccrc/agent.env's CCRC_SERVER_URL (the key
+  // `ccrc install --role fleet` writes), and an empty derivation is a
+  // stop-and-report, never a fallback literal.
+  const workerSkill = readFileSync(path.join(root, 'ccd/worker-skill/SKILL.md'), 'utf8');
+  const corpus: ReadonlyArray<readonly [string, string]> = [
+    ['coordinator SKILL.md', skill],
+    ['worker SKILL.md', workerSkill],
+    ['wave-lifecycle.md', refs('wave-lifecycle.md')],
+    ['mail-envelope.md', refs('mail-envelope.md')],
+    ['ledger-template.md', refs('ledger-template.md')],
+  ];
+
+  it('no skill file carries a numeric server-host literal', () => {
+    for (const [name, text] of corpus) {
+      expect(text, `${name} regressed to a hardcoded server address`)
+        .not.toMatch(/(?:https?|wss?):\/\/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/);
+    }
+  });
+
+  it('both SKILL.md files derive $CCRC_API from agent.env, and their examples ride it', () => {
+    for (const [name, text] of [['coordinator', skill], ['worker', workerSkill]] as const) {
+      expect(text, `${name} SKILL.md does not derive the base URL from CCRC_SERVER_URL`)
+        .toContain(`CCRC_API=$(grep -E '^[[:space:]]*CCRC_SERVER_URL=' "$HOME/.ccrc/agent.env"`);
+      expect(text, `${name} SKILL.md's curl example does not use the derived base`)
+        .toContain('"$CCRC_API/api/');
+      expect(text, `${name} SKILL.md must say an empty derivation is a stop, not a guess`)
+        .toMatch(/empty[^.]*stop|stop[^.]*empty/i);
+    }
+  });
+});

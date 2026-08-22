@@ -1,6 +1,8 @@
 # The wave lifecycle, in full
 
-Every call below is `POST`/`GET` against `http://203.0.113.7:7788` with
+Every call below is `POST`/`GET` against `$CCRC_API` — the server base URL
+SKILL.md's own block derives from `~/.ccrc/agent.env`'s `CCRC_SERVER_URL`,
+never a hardcoded address — with
 `x-ccrc-mail-token: $TOKEN` — with `$TOKEN` EXTRACTED as SKILL.md's own
 block shows (the file carries a `#`-comment preamble above its one value
 line; `cat`-ing it whole makes an illegal header and a bare 400). One **run row per
