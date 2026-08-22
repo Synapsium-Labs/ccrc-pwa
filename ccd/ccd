@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=6ad1340340f52ae004379b954ae4dcbc56226e47764336de535a9c62e4a4adca
+# ccrc:generated 1 sha256=65db1e1f6b585ff82e1040a99be2c11df03918db66a2775bdb699a4893663e78
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box, not on this file: `_rc_enabled` reads
@@ -4631,17 +4631,26 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
     # detached worktree now yields "" where `rev-parse` yielded the literal
     # `HEAD` — unobservable, because rung 2 refuses before this line.
     #
-    # NO LONGER A MUTATION SURVIVOR, and the day the old note warned about is
-    # this one. It used to read: "writing `REAP_WTHEAD="$branch"` here leaves
-    # the suite green, and always will — rung 1 above refuses unless
+    # STILL A MUTATION SURVIVOR, and for a DIFFERENT REASON than the note this
+    # replaces — which is the whole point of rewriting it rather than deleting
+    # it. It used to read: "writing `REAP_WTHEAD="$branch"` here leaves the
+    # suite green, and always will — rung 1 above refuses unless
     # `wthead == branch`, so on this line the two are equal BY CONSTRUCTION …
     # the day that rung moves or softens, the fingerprint must follow git rather
-    # than quietly follow the registry." Rung 1 has moved: it notes the
-    # divergence instead of refusing it, `$branch` is now git's answer, and
-    # `$regbranch` carries the registry's. So the two are no longer equal by
-    # construction, this line and the fingerprint's second input are two
-    # different facts again, and swapping either for the other is a kill rather
-    # than a survivor — pinned by the drifted-workspace token test.
+    # than quietly follow the registry." Rung 1 HAS moved: it notes the
+    # divergence instead of refusing it. But it resolves that divergence by
+    # assigning `branch="$wthead"`, so by this line the two are equal by
+    # construction AGAIN — same survivor, new mechanism, and the swap is still
+    # unobservable.
+    #
+    # What the old note asked for did happen, one line at a time and somewhere
+    # else: the fingerprint's SECOND input is `$regbranch`, the registry's name,
+    # kept under its own name precisely so that git's answer and the registry's
+    # are two hashed facts rather than one. THAT swap is a kill (`hashes BOTH
+    # names, so rewriting either one invalidates the consent`). This line is
+    # written from `wthead` because the field means "what git's record says",
+    # and if a later edit ever stops the drift rung equalising the two, this is
+    # the line that must follow git.
     REAP_WTHEAD="$branch"
 
     # OURS TO REMOVE, AND NOBODY ELSE'S. The last identity question, and the one
@@ -6172,8 +6181,19 @@ _ws_tomb_str() {   # tombstone-json-file field -> that STRING field on stdout,
   # not collapsing two conditions a caller handles differently. An absent field
   # is `""` at rc 0 — that is how a tombstone written by an older ccd, which
   # never recorded `registryBranch`, reads as "nothing to say" rather than as a
-  # broken journal — while a document that will not parse is non-zero, and
-  # every call site turns that into a refusal.
+  # broken journal — while a document that will not parse is non-zero.
+  #
+  # WHAT EACH CALLER DOES WITH THAT NON-ZERO, stated per site rather than as a
+  # blanket claim (an earlier draft of this comment said "every call site turns
+  # that into a refusal", which was false of the third): `_ws_reap_locked` and
+  # `_ws_reap_tail` are ABOUT TO DESTROY, so an unreadable journal refuses there
+  # — the tip is the CAS old-value and an empty one degrades the delete into an
+  # unconditional one. `_ws_reap_eval`'s resume-shaped arm is a READ, taken to
+  # describe a cleanup that is already interrupted, and it falls back to the
+  # registry's name: it destroys nothing, an older tombstone legitimately lacks
+  # the field, and the reap that would follow refuses on the same unreadable
+  # document one function later — so refusing the DESCRIPTION as well would
+  # remove the operator's only view of a state they still have to resolve.
   local f="$1" field="$2"
   [[ -s "$f" ]] || return 1
   LC_ALL=C.UTF-8 python3 -c '

@@ -164,12 +164,18 @@ describe('the manifest', () => {
     expect(screen.queryByText(/different branches/)).toBeNull();
   });
 
-  it('renders no drift note when the two records agree', async () => {
-    // The negative control: the note is a statement about a disagreement, so
-    // its absence has to be a measurement too. Without this, deleting the
-    // condition and rendering it unconditionally would leave the suite green.
+  it('renders no drift NODE when the two records agree', async () => {
+    // The negative control, and it asserts the NODE rather than the text —
+    // which is what makes it a kill instead of a claim. `drift` is `''` when
+    // the records agree, so dropping the render condition emits an EMPTY
+    // `<span class="reap-note">` inside the branch row: no text changes, every
+    // text-matching assertion still passes, and the mutation survives. Counting
+    // the notes inside that row is what notices. (An earlier version of this
+    // test claimed to kill exactly that mutation while matching only text.)
     open();
-    expect(await screen.findByText(/ws\/quiet-basin — merged in #42/)).toBeInTheDocument();
+    const dd = (await screen.findByText(/ws\/quiet-basin — merged in #42/)).closest('dd');
+    expect(dd).not.toBeNull();
+    expect(dd!.querySelectorAll('.reap-note')).toHaveLength(0);
     expect(screen.queryByText(/different branches/)).toBeNull();
     expect(screen.queryByText(/left alone/)).toBeNull();
   });

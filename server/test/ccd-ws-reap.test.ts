@@ -2392,9 +2392,19 @@ describe('the contained rung end to end', () => {
  * run where the worktree is already gone and git has no record left to ask.
  */
 describe('a drifted workspace is reaped in git’s name, not the registry’s', () => {
-  /** Registry: `ws/quiet-basin` (still a real branch, carrying the merged
-   *  work). git: `feat/x`, checked out inside the worktree at origin/main, so
-   *  the ladder can prove it and the two names cannot be confused by accident. */
+  /** Registry: `ws/quiet-basin` (still a real branch). git: `feat/x`, checked
+   *  out inside the worktree at origin/main, so the ladder can prove it.
+   *
+   *  THE TWO BRANCHES MUST NOT SHARE AN OID, and the extra commit at the end is
+   *  what guarantees it. Cut `feat/x` from origin/main after a fast-forward and
+   *  the two refs point at the SAME commit — every assertion about WHICH branch
+   *  a rung read then passes for either one, and in particular
+   *  `_ws_reap_locked`'s resume-time re-validation (`rev-parse
+   *  refs/heads/$branch` vs the journal's tip) could still be reading the
+   *  registry's name with the suite green. One unmerged commit on the
+   *  registry's branch separates them: it is never evaluated (that branch is
+   *  not the one this workspace is on) and it makes every OID comparison
+   *  discriminating. */
   function drifted(): { main: string; wt: string } {
     const main = h.makeGhRepo('demo');
     h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
@@ -2405,6 +2415,16 @@ describe('a drifted workspace is reaped in git’s name, not the registry’s', 
     h.git(main, 'merge', '--ff-only', 'ws/quiet-basin');
     h.git(main, 'push', 'origin', 'main');
     h.sh(`cd "${wt}" && git checkout -q -b feat/x origin/main`);
+    // The separator, committed on the REGISTRY's branch from $main (the
+    // worktree is on `feat/x` now, and a branch checked out nowhere can still
+    // be moved with `update-ref`).
+    fs.writeFileSync(path.join(main, 'stray.txt'), 'only on the registry branch\n');
+    h.git(main, 'add', 'stray.txt');
+    h.git(main, 'commit', '-m', 'a commit only ws/quiet-basin has');
+    h.git(main, 'update-ref', 'refs/heads/ws/quiet-basin', 'HEAD');
+    h.git(main, 'reset', '--hard', 'HEAD~1');
+    expect(h.git(main, 'rev-parse', 'refs/heads/feat/x'))
+      .not.toBe(h.git(main, 'rev-parse', 'refs/heads/ws/quiet-basin'));
     h.ghRows([]);
     h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
     return { main, wt };
