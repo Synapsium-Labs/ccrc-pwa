@@ -1195,7 +1195,7 @@ try:
 except ValueError:
     ev["obs"] = None
 
-# THE KEY NAMESPACE. Dotted keys name their family; five names are top-level;
+# THE KEY NAMESPACE. Dotted keys name their family; FOUR names are top-level;
 # anything else is DROPPED AND NAMED. That last rule is `badact`s own idiom
 # applied to keys — a key we saw and could not model is a different fact from a
 # key that was never passed — and it is what lets this encoder be TOTAL without
@@ -1205,7 +1205,22 @@ except ValueError:
 # every meas value ccd passes is a `_reg_get` (which cats a missing file to
 # empty) or a git ref read, so "measured as empty" and "not measured" are ONE
 # condition at this seam, not two a caller handles differently.
-TOP = ("detail", "refusal", "verb", "badact", "branchDeleted")
+#
+# FIX ROUND 2 (task 15): `badact` is DELIBERATELY ABSENT from TOP, even
+# though it is a genuine top-level field on the wire — it is set ONLY below,
+# by the ENCODER itself, never by a callers key/value pair. `badact` exists
+# to say that L0 never heard of this act, and that is a fact only this
+# function can know; a caller passing a literal `badact` key is meaningless
+# by construction, indistinguishable on the wire from the genuine degrade if
+# it were allowed through here. Measured: with `badact` in TOP,
+# `_lc_emit stop done sess badact forged-not-real` — a perfectly VALID act —
+# wrote `badact:forged-not-real`, forging the exact signal a reader uses to
+# decide that ccds own vocabulary is stale. `badoutcome` was NEVER in TOP and
+# the identical probe against it correctly fell through to
+# `badkey:badoutcome` — proof this was a TOP-membership bug, not a design
+# question. A stray `badact` key now takes the same path every other
+# unmodelled key does: `badkey`.
+TOP = ("detail", "refusal", "verb", "branchDeleted")
 dec, meas = {}, {}
 for i in range(0, len(rest) - 1, 2):
     k, v = rest[i], rest[i + 1]

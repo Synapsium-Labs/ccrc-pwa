@@ -329,6 +329,26 @@ describe('_lc_emit — the one writer', () => {
     expect.soft(e!['meas']).toEqual({ branch: 'ws/x' });
   });
 
+  // FIX ROUND 2 (task 15). `badact` is ENCODER-PRODUCED ONLY: it exists to
+  // say "L0 never heard of this act", a fact only the encoder itself can
+  // know. Before this fix, `badact` sat in `TOP`, so a CALLER passing a
+  // literal `badact` key alongside a perfectly valid act forged that exact
+  // signal — indistinguishable on the wire from a genuine degrade. The
+  // asymmetry with `badoutcome` (never in `TOP`) is what proved it was a
+  // `TOP`-membership bug rather than a design choice: the identical probe
+  // against `badoutcome` already fell through to `badkey` correctly.
+  it('a CALLER-passed badact key is not the encoders own signal — it falls into badkey like any other unmodelled key', () => {
+    // Mutant: put `badact` back in `TOP` -> this fails with
+    // `expected undefined to be 'forged-not-real'`, and `_lc_emit stop done
+    // sess "" badact forged-not-real` — a perfectly VALID act — forges
+    // `"badact":"forged-not-real"`, indistinguishable from a genuine "ccd
+    // does not recognise this act" degrade.
+    h.sh('_lc_emit stop done sess "" badact forged-not-real');
+    const [e] = readJournal(h.home);
+    expect.soft(e!['badkey'], 'a caller cannot mint badact — only the encoder may').toBe('badact');
+    expect.soft(e!, 'the forged value must not land under badact').not.toHaveProperty('badact');
+  });
+
   it('OMITS a pair whose value is empty — never writes it as ""', () => {
     h.sh('_lc_emit destroy done sess "" meas.branch "" meas.tip 3f2a');
     const [e] = readJournal(h.home);
