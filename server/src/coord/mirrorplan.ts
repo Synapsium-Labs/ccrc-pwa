@@ -57,3 +57,124 @@ export function frameRead(
     shrank: false,
   };
 }
+
+import {
+  compareGenerations, looksLikeGenerationFile, parseLifecycleGeneration,
+  type LifecycleGapReason,
+} from '../../../shared/api.js';
+
+/** One generation as the mirror last left it. */
+export interface KnownGeneration {
+  readonly gen: string;
+  readonly cursor: number;
+  readonly size: number;
+  readonly retired: boolean;
+}
+
+export interface PlannedGap {
+  readonly gen: string;
+  readonly reason: LifecycleGapReason;
+  readonly detail: string;
+  readonly lostFrom: number | null;
+  readonly lostTo: number | null;
+}
+
+export interface SweepPlan {
+  /** False when `readdir` answered null. NOTHING is read and — the half that
+   *  matters — nothing is RETIRED: a dropped agent socket is not evidence
+   *  that a generation was rotated away, and it is the same fail-shut
+   *  direction `sweepDivergences` takes on its own registry listing. A field
+   *  rather than an empty array, because the two are different facts. */
+  readonly listed: boolean;
+  /** Oldest generation first. `lastSize` is what `lifecycle_generations.size`
+   *  said, and `frameRead` needs it to see a truncation that stayed ahead of
+   *  the cursor. */
+  readonly reads: readonly { readonly gen: string; readonly from: number; readonly lastSize: number }[];
+  readonly gaps: readonly PlannedGap[];
+  readonly retire: readonly string[];
+  /** Names that LOOK like generations and cannot be ORDERED
+   *  (`looksLikeGenerationFile` true, `parseLifecycleGeneration` null). Not
+   *  read — placing them in the sequence is exactly what cannot be done — and
+   *  not ignored either. The caller turns each into ONE gap row per process;
+   *  a row per sweep would be an alarm that fires every five seconds, which is
+   *  an alarm nobody reads. */
+  readonly unorderable: readonly string[];
+}
+
+/**
+ * Couples `lostFrom`/`lostTo` at the one point in this file that constructs a
+ * `PlannedGap` (task 31 ruling). `LifecycleGap`'s wire type (`shared/api.ts`)
+ * keeps them as two INDEPENDENT nullable fields — deliberately, to match
+ * Task 27's already-reviewed schema, which has two separate columns — so
+ * nothing in the type stops `{lostFrom: 500, lostTo: null}`, or a precise
+ * range alongside `reason:'unknown'`. This file is the only producer of a
+ * `LifecycleGap`, so the invariant is enforced HERE rather than in the type:
+ * `lostFrom`/`lostTo` are always set as one pair, never independently, and a
+ * `reason` of `'unknown'` always carries a null pair — there is no bounded
+ * range for a hole the mirror could not place at all.
+ */
+function coupledLoss(
+  reason: LifecycleGapReason, range: { readonly from: number; readonly to: number } | null,
+): Pick<PlannedGap, 'lostFrom' | 'lostTo'> {
+  const bounded = reason === 'unknown' ? null : range;
+  return bounded === null
+    ? { lostFrom: null, lostTo: null }
+    : { lostFrom: bounded.from, lostTo: bounded.to };
+}
+
+/**
+ * A rotation is "a new name appeared", never "the same file got smaller" —
+ * which is the reason the generation lives in the filename (D1). So a
+ * generation that stops being listed can only have been rotated away, and the
+ * only question left is whether the mirror had finished draining it.
+ *
+ * A DRAINED generation that disappears records no gap: `_lc_rotate` deletes
+ * oldest-first and only ever removes a generation that stopped growing when
+ * the live one was minted, so `cursor === size` means there was nothing left
+ * to lose. DISCLOSED RESIDUAL: bytes appended to a drained generation and
+ * rotated away inside one sweep interval would be lost unrecorded. That
+ * cannot happen while `_lc_rotate` mints rather than appends, and the
+ * alternative — a gap row on every ordinary rotation — is an alarm that fires
+ * when nothing is wrong.
+ */
+export function planSweep(
+  names: readonly string[] | null, known: readonly KnownGeneration[],
+): SweepPlan {
+  if (names === null) {
+    return { listed: false, reads: [], gaps: [], retire: [], unorderable: [] };
+  }
+
+  const unorderable = names.filter(
+    (nm) => looksLikeGenerationFile(nm) && parseLifecycleGeneration(nm) === null,
+  );
+  // TWO QUESTIONS, TWO READERS (wave 1's own rule for this pair): "is it a
+  // generation at all" and "can it be ordered". Only names that answer yes to
+  // both are read; the ones that answer yes-then-no are reported above.
+  const present = [...new Set(
+    names.map(parseLifecycleGeneration).filter((g): g is string => g !== null),
+  )].sort(compareGenerations);
+  const presentSet = new Set(present);
+
+  const gaps: PlannedGap[] = [];
+  const retire: string[] = [];
+  for (const k of known) {
+    if (presentSet.has(k.gen) || k.retired) continue;
+    retire.push(k.gen);
+    if (k.cursor >= k.size) continue;
+    gaps.push({
+      gen: k.gen, reason: 'rotated-away',
+      detail: `generation ${k.gen} stopped being listed with ${k.size - k.cursor} byte(s) undrained`,
+      ...coupledLoss('rotated-away', { from: k.cursor, to: k.size }),
+    });
+  }
+
+  const byGen = new Map(known.map((k) => [k.gen, k]));
+  return {
+    listed: true,
+    reads: present.map((gen) => {
+      const k = byGen.get(gen);
+      return { gen, from: k?.cursor ?? 0, lastSize: k?.size ?? 0 };
+    }),
+    gaps, retire, unorderable,
+  };
+}

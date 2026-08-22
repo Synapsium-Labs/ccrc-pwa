@@ -82,3 +82,126 @@ describe('frameRead: a shrink is an ANSWER, not a stall', () => {
     expect(frameRead(100, 'a\n', 4096, 100).shrank).toBe(false);
   });
 });
+
+import { planSweep, type KnownGeneration } from '../src/coord/mirrorplan.js';
+import { LC_ERRORS_NAME, LC_ROTATE_LOCK_NAME, LC_GEN_PREFIX, LC_GEN_SUFFIX } from '../../shared/api.js';
+import { genFile } from './lifecycleHelpers.js';
+
+const G1 = '1755780000000000000';
+const G2 = '1755790000000000000';
+const known = (over: Partial<KnownGeneration> = {}): KnownGeneration =>
+  ({ gen: G1, cursor: 0, size: 0, retired: false, ...over });
+
+describe('planSweep: an unlistable directory is a FAIL-SHUT, not an empty fleet', () => {
+  it('plans nothing and retires nothing when readdir answered null', () => {
+    const p = planSweep(null, [known({ cursor: 10, size: 400 })]);
+    expect(p.listed).toBe(false);
+    expect(p.reads).toEqual([]);
+    expect(p.gaps).toEqual([]);
+    expect(p.retire).toEqual([]);     // an agent WS drop must not retire a live generation
+    expect(p.unorderable).toEqual([]);
+  });
+});
+
+describe('planSweep: reads', () => {
+  it('ignores every name in the directory that is not a generation', () => {
+    const p = planSweep([LC_ERRORS_NAME, LC_ROTATE_LOCK_NAME, 'README', genFile(G1)], []);
+    expect(p.reads).toEqual([{ gen: G1, from: 0, lastSize: 0 }]);
+    expect(p.unorderable).toEqual([]);
+  });
+
+  it('reads a generation it has never seen from offset 0, oldest first', () => {
+    const p = planSweep([genFile(G2), genFile(G1), LC_ERRORS_NAME], []);
+    expect(p.reads).toEqual([
+      { gen: G1, from: 0, lastSize: 0 }, { gen: G2, from: 0, lastSize: 0 },
+    ]);
+  });
+
+  it('orders by MAGNITUDE, not lexicographically — a 20-digit name is newer, not older', () => {
+    // The bug `compareGenerations` exists to prevent: `.sort()` puts
+    // '10000000000000000000' before '9999999999999999999', so the live
+    // generation reads as an old one and the mirror ingests a stale file
+    // forever.
+    const big = '10000000000000000000';
+    const small = '9999999999999999999';
+    expect(planSweep([genFile(big), genFile(small)], []).reads.map((r) => r.gen))
+      .toEqual([small, big]);
+  });
+
+  it('resumes a known generation at its cursor AND carries its last measured size', () => {
+    const p = planSweep([genFile(G1)], [known({ cursor: 410, size: 4096 })]);
+    expect(p.reads).toEqual([{ gen: G1, from: 410, lastSize: 4096 }]);
+  });
+
+  it('re-reads a generation that came BACK after being retired, and records no new gap', () => {
+    const p = planSweep([genFile(G1)], [known({ cursor: 410, size: 410, retired: true })]);
+    expect(p.reads).toEqual([{ gen: G1, from: 410, lastSize: 410 }]);
+    expect(p.gaps).toEqual([]);
+  });
+});
+
+describe('planSweep: a rotated-away generation is a RECORDED GAP, never a silent skip', () => {
+  it('records the undrained bytes and retires the generation', () => {
+    const p = planSweep([genFile(G2)], [known({ cursor: 100, size: 4096 })]);
+    expect(p.retire).toEqual([G1]);
+    expect(p.gaps).toHaveLength(1);
+    expect(p.gaps[0]).toMatchObject({
+      gen: G1, reason: 'rotated-away', lostFrom: 100, lostTo: 4096,
+    });
+    expect(p.gaps[0]!.detail).toContain('3996');
+  });
+
+  it('retires a FULLY DRAINED generation with no gap — nothing was lost', () => {
+    const p = planSweep([genFile(G2)], [known({ cursor: 4096, size: 4096 })]);
+    expect(p.retire).toEqual([G1]);
+    expect(p.gaps).toEqual([]);
+  });
+
+  it('does not re-record a gap for a generation already retired', () => {
+    const p = planSweep([genFile(G2)], [known({ cursor: 100, size: 4096, retired: true })]);
+    expect(p.gaps).toEqual([]);
+    expect(p.retire).toEqual([]);
+  });
+});
+
+describe('planSweep: a name that LOOKS like a generation but cannot be ORDERED', () => {
+  it('names it rather than reading it or ignoring it — it is a hole, not an absence', () => {
+    // `looksLikeGenerationFile` true, `parseLifecycleGeneration` null: the
+    // mirror saw a file it cannot place in the sequence. Reading it would put
+    // it in the wrong place; ignoring it would be the silent skip D6 forbids.
+    // The caller records ONE gap per name per process (`JournalMirror`).
+    const broken = `${LC_GEN_PREFIX}1755000000N${LC_GEN_SUFFIX}`;
+    const p = planSweep([broken, genFile(G1)], []);
+    expect(p.unorderable).toEqual([broken]);
+    expect(p.reads).toEqual([{ gen: G1, from: 0, lastSize: 0 }]);
+  });
+});
+
+describe('planSweep: the LifecycleGap invariant — lostFrom/lostTo are coupled, never independently null (task 31 ruling)', () => {
+  // `LifecycleGap.lostFrom`/`lostTo` are two INDEPENDENT nullable fields on
+  // the wire type (matching Task 27's two schema columns), so nothing in the
+  // TYPE stops `{lostFrom: 500, lostTo: null}` or a precise range under
+  // `reason:'unknown'`. `planSweep` is the only place in the mirror that
+  // constructs a `PlannedGap`, so the invariant is enforced and proven HERE:
+  // the two fields are always both null or both numbers, and `reason:
+  // 'unknown'` always carries a null pair.
+  it('every gap planSweep produces has lostFrom/lostTo both null or both numbers, and reason "unknown" implies both null', () => {
+    const scenarios = [
+      planSweep([genFile(G2)], [known({ cursor: 100, size: 4096 })]),
+      planSweep([genFile(G2)], [known({ cursor: 0, size: 4096 })]),
+      planSweep([genFile(G2), genFile(G1)], []),
+    ];
+    for (const p of scenarios) {
+      for (const g of p.gaps) {
+        expect.soft(
+          (g.lostFrom === null) === (g.lostTo === null),
+          `gen ${g.gen}: lostFrom=${String(g.lostFrom)} lostTo=${String(g.lostTo)} must be coupled`,
+        ).toBe(true);
+        if (g.reason === 'unknown') {
+          expect.soft(g.lostFrom, `reason 'unknown' implies lostFrom null for gen ${g.gen}`).toBeNull();
+          expect.soft(g.lostTo, `reason 'unknown' implies lostTo null for gen ${g.gen}`).toBeNull();
+        }
+      }
+    }
+  });
+});
