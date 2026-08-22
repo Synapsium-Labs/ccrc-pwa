@@ -1,10 +1,12 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { tx } from './db.js';
 import { CLEAR_REFUSED_STRANDS_TEXT } from './rundefs.js';
+import type { JournalRow } from './journalparse.js';
 import {
   isMailDeliveryState, isMailKind, isNotifyKind, isProgramState, isRunState, isWorkItemState,
   RUN_TRANSITIONS,
-  type CoordCaps, type MailDeliveryState, type MailKind, type MailRejectCode, type MailSummary,
+  type CoordCaps, type LifecycleGapReason, type MailDeliveryState, type MailKind,
+  type MailRejectCode, type MailSummary,
   type NotifyEvent, type ProgramState, type RunItemTally, type RunState, type RunSummary,
   type WorkItemState,
 } from '../../../shared/api.js';
@@ -224,6 +226,14 @@ interface MailRowDb {
  *  shared with `outstandingMailFor`. */
 const clampMailLimit = (limit: number): number =>
   Number.isFinite(limit) && limit > 0 ? Math.min(Math.floor(limit), 500) : 100;
+
+/** One row of `lifecycle_generations`. `retired` is a boolean here and an
+ *  INTEGER in the column — the narrowing happens once, in
+ *  `journalGenerations`, so no caller ever sees SQLite's 0/1. */
+export interface JournalGeneration {
+  gen: string; firstSeenAt: number; lastSweepAt: number;
+  cursor: number; size: number; retired: boolean;
+}
 
 /**
  * Every read and every write of the coordination database, in one class, and
@@ -1698,5 +1708,108 @@ export class CoordStore {
       }
       return ids.map((id) => this.run(id)!);
     });
+  }
+
+  /* ── the lifecycle journal mirror (build 9) ────────────────────────────── */
+
+  /**
+   * Every generation this mirror has ever seen, retired ones included — the
+   * retired rows are what make "this generation was rotated away with N bytes
+   * undrained" answerable a year later.
+   */
+  journalGenerations(): JournalGeneration[] {
+    const rows = this.db.prepare(
+      'SELECT gen, firstSeenAt, lastSweepAt, cursor, size, retired ' +
+      'FROM lifecycle_generations ORDER BY gen',
+    ).all() as (Omit<JournalGeneration, 'retired'> & { retired: number })[];
+    return rows.map((r) => ({ ...r, retired: r.retired !== 0 }));
+  }
+
+  /**
+   * ONE TRANSACTION FOR THE ROWS AND THE CURSOR, and that is the whole of D6's
+   * "the cursor is an optimisation, never a correctness input": it is advanced
+   * only inside the same `tx()` as the rows it covers, so it can never move
+   * past uncommitted data. A cursor hoisted out of here — even one line above
+   * the loop, in its own transaction — is the mutant `lifecycle-store.test.ts`
+   * exists to kill.
+   *
+   * `INSERT OR IGNORE` against the two partial unique indexes is what makes
+   * idempotency INTRINSIC rather than positional: a parsed line dedupes on its
+   * own `uid`, and a uid-less one on its bytes within its generation. Neither
+   * is a function of where in the file the line happened to sit, so re-reading
+   * a generation from offset 0 is always no-op-or-catch-up.
+   *
+   * Returns how many rows actually LANDED — the caller logs nothing on 0,
+   * which is the ordinary answer for a sweep that only advanced a cursor.
+   *
+   * `badoutcome` rides alongside `badact` in the column list — added to
+   * `MIGRATIONS[2]` and `JournalRow` by a fix round after this brief was
+   * written, because ccd writes it today and `LifecycleEvent.badoutcome`
+   * already requires it on every `MirroredLifecycleEvent`. Dropping it here
+   * would silently lie on every row where ccd wrote one.
+   */
+  ingestJournal(input: {
+    readonly gen: string;
+    readonly rows: readonly JournalRow[];
+    readonly cursor: number;
+    readonly size: number;
+    readonly at: number;
+  }): number {
+    return tx(this.db, () => {
+      const ins = this.db.prepare(
+        'INSERT OR IGNORE INTO lifecycle_events ' +
+        '(uid, gen, at, ingestedAt, act, badact, outcome, badoutcome, verb, sessionId, tx, refusal, ' +
+        'detail, truncated, obsJson, decJson, measJson, raw) ' +
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      );
+      let inserted = 0;
+      for (const r of input.rows) {
+        const res = ins.run(
+          r.uid, input.gen, r.at, input.at, r.act, r.badact, r.outcome, r.badoutcome, r.verb,
+          r.sessionId, r.tx, r.refusal, r.detail, r.truncated ? 1 : 0,
+          r.obs === null ? null : JSON.stringify(r.obs),
+          r.dec === null ? null : JSON.stringify(r.dec),
+          r.meas === null ? null : JSON.stringify(r.meas),
+          r.raw,
+        );
+        inserted += Number(res.changes);
+      }
+      this.db.prepare(
+        'INSERT INTO lifecycle_generations (gen, firstSeenAt, lastSweepAt, cursor, size, retired) ' +
+        'VALUES (?, ?, ?, ?, ?, 0) ' +
+        'ON CONFLICT(gen) DO UPDATE SET lastSweepAt = excluded.lastSweepAt, ' +
+        'cursor = excluded.cursor, size = excluded.size, retired = 0',
+      ).run(input.gen, input.at, input.at, input.cursor, input.size);
+      return inserted;
+    });
+  }
+
+  /** A hole in the mirror, recorded rather than skipped (D6). Never pruned:
+   *  the gap outlives the generation it is about, which is the only reason it
+   *  is worth writing down.
+   *
+   *  `lostFrom`/`lostTo` are taken AS GIVEN, never constructed here: the
+   *  coupling invariant (both null, or both numbers) is `mirrorplan.ts`'s
+   *  private `coupledLoss` helper's job, at the one call site that builds a
+   *  `PlannedGap`. This method is a pure write of whatever pair its caller
+   *  already produced, so it does not re-derive — and cannot drift from —
+   *  that invariant. */
+  recordGap(g: {
+    readonly at: number; readonly gen: string; readonly reason: LifecycleGapReason;
+    readonly detail: string; readonly lostFrom: number | null; readonly lostTo: number | null;
+  }): void {
+    this.db.prepare(
+      'INSERT INTO lifecycle_gaps (at, gen, reason, detail, lostFrom, lostTo) ' +
+      'VALUES (?, ?, ?, ?, ?, ?)',
+    ).run(g.at, g.gen, g.reason, g.detail, g.lostFrom, g.lostTo);
+  }
+
+  /** RETIRE, NEVER DELETE. A retired generation's cursor and size are the
+   *  evidence behind its gap row; destroying them would destroy the record of
+   *  what was lost, which is the same mistake `ws-restore` made until wave 3. */
+  retireGeneration(gen: string, at: number): void {
+    this.db.prepare(
+      'UPDATE lifecycle_generations SET retired = 1, lastSweepAt = ? WHERE gen = ?',
+    ).run(at, gen);
   }
 }
