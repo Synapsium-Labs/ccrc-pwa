@@ -265,94 +265,127 @@ behaviour names the test that pins it.
 
 **Red-first.** No production change in this task.
 
-- [ ] Add `squashRemoteHeadDeleted()` beside `squashMovedBase()` in `server/test/ccd-ws-audit.test.ts`:
+- [x] Add `squashRemoteHeadDeleted()` beside `squashMovedBase()` in `server/test/ccd-ws-audit.test.ts`:
       a genuine multi-commit squash with a moved base, pushed with `-u`, PR row bound via
       `mergedRow({ headRefOid, mergeCommit })`, then `git push origin --delete ws/quiet-basin` so the
       remote-tracking ref is gone and `@{upstream}` no longer resolves. Assert the precondition in the
       fixture itself (`rev-parse --verify --quiet 'ws/quiet-basin@{upstream}'` must fail) — a fixture
       that silently stops reproducing the defect is worse than no fixture.
-- [ ] New test: **audit → `reapable`, `merge.proof === 'patch-id'`, `pr.number` bound**. RED today
+- [x] New test: **audit → `reapable`, `merge.proof === 'patch-id'`, `pr.number` bound**. RED today
       (`no-upstream`).
-- [ ] New test: same fixture with the remote head **still present** → `reapable`, `patch-id`. GREEN
+- [x] New test: same fixture with the remote head **still present** → `reapable`, `patch-id`. GREEN
       today; it exists so the fix cannot merely move the failure.
-- [ ] Record both RED outputs verbatim in the task's commit message.
+- [x] Record both RED outputs verbatim in the task's commit message.
 
 ## Task 2 — the containment ladder (`_ws_reap_eval`)
 
-- [ ] Restructure Phase C into C0…C7 above. The `if up … else … fi` arm split is deleted; the
+- [x] Restructure Phase C into C0…C7 above. The `if up … else … fi` arm split is deleted; the
       upstream probe survives only as C1.
-- [ ] `_ws_merge_proof` is UNCHANGED. So is every refusal it can reach.
-- [ ] Rung 1's `set-head --auto` / `symbolic-ref` failures become **"ancestry unprovable"**, falling
+- [x] `_ws_merge_proof` is UNCHANGED. So is every refusal it can reach.
+- [x] Rung 1's `set-head --auto` / `symbolic-ref` failures become **"ancestry unprovable"**, falling
       through to rung 2 — they refuse only at C7, where the detail names what could not be checked.
       (Today they refuse `no-upstream` outright.)
-- [ ] Refusal details are rewritten to be TRUE: no sentence may say "was never pushed" about a branch
+- [x] Refusal details are rewritten to be TRUE: no sentence may say "was never pushed" about a branch
       whose upstream merely stopped resolving. Name what was checked and what was missing.
-- [ ] Invert D-179's test; re-cut the `ancestor`-rung fixture onto a non-default base (D-173); add
+- [x] Invert D-179's test; re-cut the `ancestor`-rung fixture onto a non-default base (D-173); add
       D-174's pair.
-- [ ] Verify the six regression cases from the report end to end (audit AND reap, not audit alone).
+- [x] Verify the six regression cases from the report end to end (audit AND reap, not audit alone).
 
 ## Task 3 — drift, the evaluation side
 
-- [ ] Replace the `registry-branch-drift` refusal with the `cmd_ws_rm` rule: `REAP_REGBRANCH` keeps
+- [x] Replace the `registry-branch-drift` refusal with the `cmd_ws_rm` rule: `REAP_REGBRANCH` keeps
       the registry's name, `branch` becomes git's, `REAP_DRIFT` carries the note.
-- [ ] Fingerprint inputs keep their MEANINGS: `branch=` stays the registry's name and `worktreeHead=`
+- [x] Fingerprint inputs keep their MEANINGS: `branch=` stays the registry's name and `worktreeHead=`
       stays git's, so both names are hashed and either one changing between audit and reap still
       moves the token. Fourteen inputs, unchanged in count and order.
-- [ ] Every downstream rung evaluates git's branch: stash count, tip resolve, upstream probe, PR
+- [x] Every downstream rung evaluates git's branch: stash count, tip resolve, upstream probe, PR
       bind, `commitsAheadOfBase`, and every refusal string that names a branch.
-- [ ] `no-worktree-record` and `detached-head` stay refusals, unchanged, with their tests.
-- [ ] Tests 3 and 4 from the report: drift + contained → ALLOWS, evaluates git's branch, emits the
+- [x] `no-worktree-record` and `detached-head` stay refusals, unchanged, with their tests.
+- [x] Tests 3 and 4 from the report: drift + contained → ALLOWS, evaluates git's branch, emits the
       note, leaves the registry-named branch alone; drift + not contained → REFUSES **naming git's
       branch**, not the registry's.
 
 ## Task 4 — drift, the destructive side
 
-- [ ] `_ws_tombstone` records the branch that was consented to (git's) and `registryBranch` beside it.
-- [ ] `_ws_reap_tail` takes the branch from the eval on the fresh path and from the TOMBSTONE on the
+- [x] `_ws_tombstone` records the branch that was consented to (git's) and `registryBranch` beside it.
+- [x] `_ws_reap_tail` takes the branch from the eval on the fresh path and from the TOMBSTONE on the
       resume path; `_ws_reap_locked`'s live-tip re-validation reads the same source. Absence-permits
       for a tombstone written by an older ccd.
-- [ ] The CAS delete at (g) targets git's branch with git's tip. The registry-named branch is never
+- [x] The CAS delete at (g) targets git's branch with git's tip. The registry-named branch is never
       deleted and never renamed — `_reg_purge` removes the registry ROW, which is unchanged.
-- [ ] The reap receipt names the branch actually deleted, and carries the note.
-- [ ] Test: drift + resume from each breadcrumb phase finishes without `branch-moved`, and the
+- [x] The reap receipt names the branch actually deleted, and carries the note.
+- [x] Test: drift + resume from each breadcrumb phase finishes without `branch-moved`, and the
       registry-named branch still exists afterwards.
 
 ## Task 5 — the wire and the sheet
 
-- [ ] `cmd_ws_audit` emits `worktreeBranch` (git's) beside `branch` (the registry's); `parseWsAudit`
+- [x] `cmd_ws_audit` emits `worktreeBranch` (git's) beside `branch` (the registry's); `parseWsAudit`
       reads it with `optStr`; `WsAudit` gains the optional field.
-- [ ] `ReapSheet` renders the drift note whenever `headMatchesRegistry === false`, naming both
+- [x] `ReapSheet` renders the drift note whenever `headMatchesRegistry === false`, naming both
       branches and which one is removed. The operator must see it before the tap, not after.
-- [ ] Correct `SENTENCES['registry-branch-drift']` to describe the verb that still emits it.
-- [ ] `wsaudit.test.ts`'s token set equality stays green in both directions.
+- [x] Correct `SENTENCES['registry-branch-drift']` to describe the verb that still emits it.
+- [x] `wsaudit.test.ts`'s token set equality stays green in both directions.
 
 ## Task 6 — `.prphase` stops asserting what it did not measure (D-178)
 
-- [ ] `_pr_state_one` reads `_ws_wt_branch` before it resolves a tip (two statements, `$?` on its own
+- [x] `_pr_state_one` reads `_ws_wt_branch` before it resolves a tip (two statements, `$?` on its own
       line — `local x=$(cmd)` returns local's status). Three states, three answers, no narrowing:
       **rc 0 + name == registry** → today's path verbatim; **rc 0 + name != registry** → the new
       answer; **rc 0 + empty (detached)** and **rc 1 (no record, or `$main` unreadable)** → today's
       behaviour, unchanged, because those two already collide with pinned shapes
       (`ccd-pr-state.test.ts:344-359`) and this wave does not widen them.
-- [ ] New `PrReason` in the SINGLE enumeration (`PR_REASON_MAP`, `shared/api.ts` — `PR_REASONS` is
+- [x] New `PrReason` in the SINGLE enumeration (`PR_REASON_MAP`, `shared/api.ts` — `PR_REASONS` is
       derived, never hand-listed), its `isPrReason` narrowing, and the matching copy in
       `PrKeycap.tsx`. `phase:'unknown'`, so `prVerdict` answers `unmeasurable`, never `regressed`.
-- [ ] **Persists nothing** on that answer: `prphase`/`prnumber`/`prcheckedat` keep their last honest
+- [x] **Persists nothing** on that answer: `prphase`/`prnumber`/`prcheckedat` keep their last honest
       values and `.prhistory` gains no line. Pinned by a test that reads the three files before and
       after and asserts them byte-identical.
-- [ ] Test: registry `.branch` != git's branch, worktree holds commits on git's branch → the answer
+- [x] Test: registry `.branch` != git's branch, worktree holds commits on git's branch → the answer
       is NOT `no-commits`, names both branches, and the "Open pull request" composer is not
       hard-disabled by a phase nobody measured.
-- [ ] The five pinned tests the naive fix would have broken (`ccd-pr-state.test.ts:294-359`,
+- [x] The five pinned tests the naive fix would have broken (`ccd-pr-state.test.ts:294-359`,
       `:917-937`) stay GREEN unchanged — they are the negative control that this task did not switch
       the source.
 
+### Recorded, not fixed — the seams this wave deliberately did not widen
+
+Found while implementing (an adversarial completeness pass over every branch-name flow); each
+is real, each is out of this wave's scope, and each would be re-found by a whole-branch review
+if it were not written down.
+
+- **D-180 — `verifyDone` re-measures the REGISTRY's branch tip.** `server/src/coord/
+  fingerprint.ts` measures the done-fingerprint against the branch the live registry names, not
+  git's. Under drift a worker commits on git's branch and the coordinator refuses `stale-tip`.
+  This wave does not touch it: RULE 2 is scoped to the verbs whose SUBJECT is the checked-out
+  branch (reap destroys it, `ws-rm` deletes it), and a wave close is a claim about a program's
+  ledger. Left as is, deliberately, because moving it is a Build-7 decision with its own
+  blast radius — not a side effect of a reap fix.
+- **D-181 — the server's drift census is blind on exactly the rows reap operates on.**
+  `server/src/divergence.ts` skips archived rows with the comment *"its worktree is gone by
+  construction"*, which is false: `cmd_ws_archive` ends "worktree kept at `$workdir`, nothing
+  deleted", and `_ws_gc_row` classifies live archived worktrees. So the fleet-wide drift signal
+  never fires for an archived workspace — and now that reap no longer refuses on drift, the reap
+  sheet's note (D-177) is the only place that disagreement surfaces at all. The note is at the
+  point of action, which is where it matters most; the census remains worth fixing.
+- **D-182 — `ws-gc --prune`'s orphan arm reads a branch name the way this file bans.**
+  It takes the name from `git -C "$p" rev-parse --abbrev-ref HEAD` — the read
+  `_ws_reap_eval` and `cmd_ws_rm` both refuse to use, because it answers from whatever
+  repository owns the DIRECTORY — and hands it to `git branch -d` in `$main`. Its `ours` gate is
+  a path-SHAPE test, not an ownership proof. Measured on git 2.43: unreachable today, because
+  `git worktree remove` refuses a hijacked path (`fatal: validation failed … '.git' is not a
+  .git file`, rc 128) before the branch-delete arm is entered. A latent single-guard-deep
+  defect of exactly the family this wave is about.
+- **Observed, unrelated: a cross-test race in `server/test/typecheck-tests.test.ts`.** Its
+  "every .ts file is in some typecheck project" scan sees `src/__boot_control_mutant__.ts`,
+  which `boot.test.ts` writes for ~15 s. `single-definition.test.ts` and `auth-routes.test.ts`
+  already tolerate that file by name; this scan does not. Passes in isolation.
+
 ## Task 7 — sweep, docs, ship
 
-- [ ] Full suites: `server`, `agent`, `pwa`. Known flakes re-run in isolation.
-- [ ] Mutation sweep over every guard this wave touched; record survivors and kills in the ledger.
-- [ ] `CLAUDE.md` / `README.md` updated where they describe the reap ladder.
-- [ ] Deploy **agent-first**, then the server. Then the live verification below.
+- [x] Full suites: `server`, `agent`, `pwa`. Known flakes re-run in isolation.
+- [x] Mutation sweep over every guard this wave touched; record survivors and kills in the ledger.
+- [x] `CLAUDE.md` / `README.md` updated where they describe the reap ladder.
+- [x] Deploy **agent-first**, then the server. Then the live verification below.
 
 ---
 
@@ -363,9 +396,9 @@ The report is explicit, and it is the acceptance criterion for this wave:
 > Re-create an archived workspace whose branch was squash-merged with its remote head deleted, and
 > drive the reap through the PWA UI, not just the CLI.
 
-- [ ] On the fleet host, create a scratch workspace, squash-merge its branch, delete the remote head,
+- [x] On the fleet host, create a scratch workspace, squash-merge its branch, delete the remote head,
       archive it.
-- [ ] Open the reap sheet in the PWA. It must offer the reap, showing proof `patch-id`.
-- [ ] Tap it. The workspace, its branch and its registry row go; the tombstone records the proof.
-- [ ] Repeat with a drifted registry entry and confirm the note is visible in the sheet BEFORE the
+- [x] Open the reap sheet in the PWA. It must offer the reap, showing proof `patch-id`.
+- [x] Tap it. The workspace, its branch and its registry row go; the tombstone records the proof.
+- [x] Repeat with a drifted registry entry and confirm the note is visible in the sheet BEFORE the
       tap, and that the registry-named branch survives the reap.

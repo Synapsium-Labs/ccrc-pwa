@@ -135,10 +135,19 @@ ask only `origin`, and — refusing here would make ws-rename unusable offline
 for a branch that has never been pushed — both warn and proceed rather than
 refuse when it cannot be reached. `ccd ws-rename` also refuses `registry-branch-drift`
 when git's own record for the worktree disagrees with the registry's `branch`
-field — the same corroboration `ws-reap` already requires — so a workspace
-hand-renamed with a bare `git branch -m` (bypassing this verb, and so never
-updating the registry) cannot have some *other* branch renamed out from under
-it by a sweep that still believes the registry's stale name. It refuses in
+field, so a workspace hand-renamed with a bare `git branch -m` (bypassing this
+verb, and so never updating the registry) cannot have some *other* branch
+renamed out from under it by a sweep that still believes the registry's stale
+name. **It is the last verb that refuses on drift, and that is deliberate**:
+`ws-reap` used to refuse the same token and no longer does (it removes the
+branch git actually has checked out and reports the registry's as a note, the
+rule `ws-rm` has always applied), because drift is the ordinary end state of a
+workspace that was archived and then reused — refusing it stranded three
+archived workspaces, ~3.6 G, which then had to be removed by hand. A rename is
+different in kind: it ACTS ON the name, so renaming git's branch off a stale
+registry entry drives the two records further apart rather than reconciling
+them. The remedy the refusal names — run `ccd ws-rename` once by hand — is what
+puts them back in agreement. It refuses in
 JSON on stdout at exit 0 — fourteen named tokens, whose copy lives in
 `server/src/wsaudit.ts` — and the one REFUSAL path that keeps a non-zero exit
 is `git branch -m` itself failing, a fault rather than a refusal (the only
