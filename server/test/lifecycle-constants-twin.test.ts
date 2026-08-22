@@ -115,8 +115,15 @@ describe('the reader itself, pinned against synthetic declarations', () => {
   });
 
   it('sees a function as declared, and a missing one as not', () => {
+    // Pre-existing defect, found by this task: the negative half originally
+    // reused `_lc_dec_ok` — a REAL wave-3 name — with no prelude, on the same
+    // reasoning the `scalar()` probe above already documents ("a real name
+    // makes this test a hostage to whichever wave declares it"). It passed
+    // only because wave 3 had not landed `_lc_dec_ok` for real yet; task 16
+    // does, and the probe must be a name no wave will ever declare, same as
+    // `_LC_NEVER_DECLARED_SENTINEL` above.
     expect.soft(declared('_lc_dec_ok', '_lc_dec_ok() { :; }')).toBe(true);
-    expect.soft(declared('_lc_dec_ok')).toBe(false);
+    expect.soft(declared('_lc_never_declared_sentinel')).toBe(false);
   });
 
   it('a DRIFTED twin is visible — the comparison is not vacuous', () => {

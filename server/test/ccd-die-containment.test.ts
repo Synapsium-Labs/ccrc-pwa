@@ -325,9 +325,12 @@ describe('ccd/ccd', () => {
     expect(functions(src).length).toBeGreaterThan(100);
     // `_spawn_start` is the D-B8-1 function and still carries its `die`
     // (ccd:7759). `_spawn` and `_supervised_start` inherit it by call. Every
-    // `cmd_*` verb that validates its argv dies directly.
+    // `cmd_*` verb that validates its argv dies directly. `_lc_refuse`
+    // (task 16) is the lifecycle journal's own direct `die` caller — its own
+    // docstring names this exact set as the reason it must never be wrapped
+    // in `$( )`.
     expect([...fatal].filter((f) => f.startsWith('_')).sort())
-      .toEqual(['_spawn', '_spawn_start', '_supervised_start', '_swap_refuse']);
+      .toEqual(['_lc_refuse', '_spawn', '_spawn_start', '_supervised_start', '_swap_refuse']);
     expect(fatal.has('cmd_ws_add')).toBe(true);
     expect(fatal.has('cmd_start')).toBe(true);
     expect(fatal.has('cmd_ensure')).toBe(true);
