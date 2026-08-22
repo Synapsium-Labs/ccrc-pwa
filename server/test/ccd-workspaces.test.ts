@@ -533,6 +533,10 @@ describe('cmd_stop', () => {
   it('takes a workspace id whole rather than reversing it into a wrapper', () => {
     expect(sh(`${STOP} cmd_stop rp-llm-quiet-mesa`)).toBe('stopped rp-llm-quiet-mesa');
     expect(calls()).toEqual([
+      // cmd_stop's own `_lc_done` (task 18) is the first `_lc_emit` in this
+      // process, so `_lc_obs`'s once-per-process `tmux list-panes` probe fires
+      // before the disable/kill pair.
+      'tmux list-panes -a -F #{session_name} #{pane_pid}',
       'systemctl --user disable --now claude-session@rp-llm-quiet-mesa',
       'tmux kill-session -t cc-rp-llm-quiet-mesa',
     ]);
@@ -541,6 +545,7 @@ describe('cmd_stop', () => {
   it('still recomputes <wrapper>-<project> for the legacy two-argument form', () => {
     expect(sh(`${STOP} cmd_stop claude2 demo`)).toBe('stopped claude2-demo');
     expect(calls()).toEqual([
+      'tmux list-panes -a -F #{session_name} #{pane_pid}',
       'systemctl --user disable --now claude-session@claude2-demo',
       'tmux kill-session -t cc-claude2-demo',
     ]);

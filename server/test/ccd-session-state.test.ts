@@ -181,6 +181,11 @@ describe('cmd_stop', () => {
     // while the real one keeps running.
     expect(h.sh(`${STOP} cmd_stop ${ID} --surface pwa`)).toBe(`stopped ${ID}`);
     expect(h.calls()).toEqual([
+      // `cmd_stop`'s own `_lc_done` (task 18) is the first `_lc_emit` in this
+      // process, so `_lc_obs`'s once-per-process `tmux list-panes` probe fires
+      // before the disable/kill pair — see task 17's identical fallout on
+      // `_reg_purge`'s call sites.
+      `tmux list-panes -a -F #{session_name} #{pane_pid}`,
       `systemctl --user disable --now claude-session@${ID}`,
       `tmux kill-session -t cc-${ID}`,
     ]);
