@@ -178,3 +178,52 @@ export function planSweep(
     gaps, retire, unorderable,
   };
 }
+
+import type { LifecycleHealthState } from '../../../shared/api.js';
+
+/**
+ * THE ONE READER of this token in the whole server, and it stays one: wave 6
+ * lands `capSupported(state, token)` in `ccdargv.ts` with the flag threading
+ * that needs it, and this call site becomes its first caller then. A second
+ * `verbs.includes('lifecycle-v1')` anywhere before that is a copy.
+ *
+ * Caps tokens negotiate a SERVER DECISION, not a file (spec §5): `lifecycle-v1`
+ * decides "sweep at all".
+ */
+export const LC_CAP_TOKEN = 'lifecycle-v1';
+
+/**
+ * PURE, and deliberately clock-free: `nowMs` and `staleAfterMs` are inputs, so
+ * the whole table is testable with no timers and this L1 file needs nothing
+ * from `watch.ts`.
+ *
+ * THE NO-EVIDENCE DEFAULT IS NOT `unavailable`, and the three-way split is the
+ * point. `unavailable` is a MEASURED absence — ccd answered `caps` and the
+ * token was not there — and an operator may act on it. A null caps list is NO
+ * EVIDENCE, so it degrades to whatever the sweep's own freshness says;
+ * `unknown` is not knowing, and a reader must stay silent on it, exactly as
+ * `FleetHealth.roster`'s own docstring requires of its third state.
+ */
+export function lifecycleState(input: {
+  readonly ccdVerbs: readonly string[] | null;
+  readonly lastOkAt: number | null;
+  readonly nowMs: number;
+  readonly staleAfterMs: number;
+}): LifecycleHealthState {
+  if (input.ccdVerbs !== null && !input.ccdVerbs.includes(LC_CAP_TOKEN)) return 'unavailable';
+  if (input.lastOkAt === null) return 'unknown';
+  const age = input.nowMs - input.lastOkAt;
+  // `age >= 0` is not a style tic: without it a future-dated stamp stays
+  // "< staleAfterMs" for the life of the process and reads fresh forever.
+  // `sessionLifecycle` carries the identical guard, and states why at length.
+  return age >= 0 && age < input.staleAfterMs ? 'ok' : 'stale';
+}
+
+/** Sweep on everything but a measured absence of the capability. `unknown` is
+ *  no evidence, and the cost of guessing wrong there is one `readdir` per
+ *  sweep that answers null — `verbSupported`'s permit-on-no-evidence trade,
+ *  not `stopSurfaceSupported`'s inverted one, because the wrong guess here
+ *  costs a cheap failed read rather than a silent success. */
+export function shouldSweep(state: LifecycleHealthState): boolean {
+  return state !== 'unavailable';
+}

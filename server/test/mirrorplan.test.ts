@@ -205,3 +205,50 @@ describe('planSweep: the LifecycleGap invariant — lostFrom/lostTo are coupled,
     }
   });
 });
+
+import { lifecycleState, shouldSweep, LC_CAP_TOKEN } from '../src/coord/mirrorplan.js';
+
+const st = (over: Partial<Parameters<typeof lifecycleState>[0]> = {}) => lifecycleState({
+  ccdVerbs: ['ws-rm', LC_CAP_TOKEN], lastOkAt: 1_000_000, nowMs: 1_002_000, staleAfterMs: 15_000,
+  ...over,
+});
+
+describe("lifecycleState: an old ccd's silence must not read as a quiet fleet", () => {
+  it('says `unavailable` when caps were measured and lifecycle-v1 is not among them', () => {
+    expect(st({ ccdVerbs: ['ws-rm', 'stop-surface'] })).toBe('unavailable');
+  });
+
+  it('degrades a NULL caps list to the sweep\'s own freshness — never to `unavailable`', () => {
+    // `ccdVerbs === null` is local mode, or an agent old enough not to send a
+    // list. `verbSupported`'s own default permits on no evidence for the same
+    // reason: an absent list must never grey out the fleet. Here the cost of
+    // guessing wrong is one readdir per sweep.
+    expect(st({ ccdVerbs: null })).toBe('ok');
+  });
+
+  it('says `unknown` when there is no caps evidence AND no sweep has succeeded', () => {
+    expect(st({ ccdVerbs: null, lastOkAt: null })).toBe('unknown');
+  });
+
+  it('says `unknown` before any sweep has succeeded', () => {
+    expect(st({ lastOkAt: null })).toBe('unknown');
+  });
+
+  it('says `ok` inside the staleness window and `stale` outside it', () => {
+    expect(st({ nowMs: 1_014_999 })).toBe('ok');
+    expect(st({ nowMs: 1_015_000 })).toBe('stale');
+  });
+
+  it('does not call a FUTURE-dated lastOk fresh', () => {
+    // The `>= 0` guard `sessionLifecycle` carries for the identical reason —
+    // without it a skewed clock reads fresh forever.
+    expect(st({ nowMs: 999_000 })).toBe('stale');
+  });
+});
+
+describe('shouldSweep', () => {
+  it('sweeps on every state except a MEASURED absence of the capability', () => {
+    expect(shouldSweep('unavailable')).toBe(false);
+    for (const s of ['ok', 'stale', 'unknown'] as const) expect(shouldSweep(s)).toBe(true);
+  });
+});
