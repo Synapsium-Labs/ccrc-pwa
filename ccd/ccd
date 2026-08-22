@@ -533,8 +533,8 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # ANY-FIELD check now; see the note there.
   # ── THE BACKSTOP (D3) ────────────────────────────────────────────────────
   # HERE, AND NOT ONE LINE LOWER. Every destruction path on this box terminates
-  # in this function — ws-rm (ccd:2882), ws-reap (ccd:7577), ws-gc's dead-reg
-  # arm (ccd:8056), forget (ccd:10491) — and a destructive verb added LATER that
+  # in this function — ws-rm (ccd:2927), ws-reap (ccd:7674), ws-gc's dead-reg
+  # arm (ccd:8168), forget (ccd:10681) — and a destructive verb added LATER that
   # forgets to journal itself still leaves a record. A silent destruction has to
   # defeat two independent emit sites.
   #
@@ -1480,7 +1480,7 @@ _lc_done()   { local a="${1-}" i="${2-}" t="${3-}"; shift 3 2>/dev/null || :
 _lc_fail() {   # act id tx token detail [k v]... — an act that STARTED and broke
   # Distinct from `_lc_refuse` by WHEN, not by severity: a refusal happens
   # before anything irreversible, a failure after. `cmd_ws_rm`'s
-  # `git worktree remove` die at ccd:2819 is a FAILURE — the session
+  # `git worktree remove` die at ccd:2893 is a FAILURE — the session
   # is already stopped when it fires — and calling it a refusal would say
   # nothing was touched, which is false.
   local a="${1-}" i="${2-}" t="${3-}" tok="${4-}" msg="${5-}"; shift 5 2>/dev/null || :
@@ -2922,6 +2922,16 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
       || die "worktree not removed — nested checkouts live under it, and ccd deletes no repository it did not create: ${nested//$'\n'/, } — nothing was touched"
   fi
 
+  # THE PAIR. `tx` is a `local`, minted here and passed to both halves — there
+  # is no global carrying it, and there must not be: the `LC_TIP=` idiom dies
+  # under `set -u` on the first call in a process and appends a blank line
+  # nobody notices. Everything above this point is the refuse-first ladder, so
+  # the intent sits exactly on the boundary of the irreversible.
+  local lctx; lctx=$(_lc_tx)
+  _lc_intent destroy "$id" "$lctx" verb ws-rm meas.project "$project" \
+    meas.workspace "$ws" meas.branch "$branch" meas.workdir "$workdir" \
+    meas.registered "$registered"
+
   _ws_unsupervise "$id"
   tmux kill-session -t "$(_tmux "$id")" 2>/dev/null || true
 
@@ -2937,7 +2947,9 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
     # that case and not offered as a general remedy — the "directory is there
     # but is not ours" case refuses above, before anything is torn down.
     git -C "$main" worktree remove "$workdir" \
-      || die "worktree record not cleared for $workdir — the session was stopped; git refused: unlock it (git -C $main worktree unlock $workdir) or clean the tree, then re-run — and if the directory is already gone, git -C $main worktree prune clears the record"
+      || { _lc_fail destroy "$id" "$lctx" worktree-remove-failed \
+             "git refused to clear the worktree record for $workdir"
+           die "worktree record not cleared for $workdir — the session was stopped; git refused: unlock it (git -C $main worktree unlock $workdir) or clean the tree, then re-run — and if the directory is already gone, git -C $main worktree prune clears the record"; }
   fi
 
   local reg_branch; reg_branch=$(_reg_get "$id" branch)
@@ -2972,6 +2984,23 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
   fi
 
   _reg_purge "$id"                                                          # finding F3
+
+  # AFTER `_reg_purge`, so the `done` line sits after the terminal act. Note
+  # this workspace now has TWO records for one removal — the D3 backstop's
+  # `purge` line and this `destroy`/`done` — and that redundancy is the design:
+  # a silent destruction has to defeat two independent emit sites.
+  #
+  # THREE STATES, THREE VALUES. `git branch -d` at ccd:2905 refuses an unmerged
+  # branch and that refusal is wanted; an empty `bd` is OMITTED by the encoder,
+  # which is how "there was no branch" stays distinct from "the branch is gone".
+  # A two-valued expression answers `true` for a detached HEAD — a fabricated
+  # fact on the one record that outlives the workspace.
+  local bd=""
+  if [[ -n "$branch" ]]; then
+    if git -C "$main" show-ref --verify --quiet "refs/heads/$branch" 2>/dev/null
+    then bd=false; else bd=true; fi
+  fi
+  _lc_done destroy "$id" "$lctx" verb ws-rm meas.branch "$branch" branchDeleted "$bd"
   echo "removed workspace $id"
 }
 
@@ -7668,6 +7697,15 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
   # know what a delete cost, and it may not answer with a number nobody took.
   bytes=$(_ws_gc_bytes "$workdir"); [[ "$bytes" =~ ^[0-9]+$ ]] || bytes=null
 
+  # THE PAIR, opened after the last measurement and before every destructive
+  # step in this function. `resumed` is on the line because an interrupted reap
+  # that resumes writes a SECOND intent — two attempts, two records, which is
+  # exactly what the 12 orphaned `.reap-<id>.lock` files could not say.
+  local lctx; lctx=$(_lc_tx)
+  _lc_intent reap "$id" "$lctx" verb ws-reap meas.project "$project" \
+    meas.workdir "$workdir" meas.branch "$branch" meas.bytes "$bytes" \
+    meas.resumed "$resumed"
+
   # A breadcrumb holding anything ccd did not write is not a phase this can
   # reason about, so it gets the stricter reading, not the looser one — the
   # same rule `_ws_reap_locked`'s tip re-validation already states for the same
@@ -8187,6 +8225,14 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
   fi
 
   _reg_purge "$id"                                                         # (i) LAST, finding F3
+  # `WsTombstone` stays reap's, and this line names it so `GET /api/lifecycle`
+  # can join the two through the already-whitelisted `$REG/.reaped/` read —
+  # the tombstone's first CONSUMER. No `_ws_tombstone` call is added to any
+  # other verb: it dereferences seven `REAP_*` globals set only inside
+  # `_ws_reap_eval`, so under `set -uo pipefail` the subshell dies and the
+  # promised record is silently absent.
+  _lc_done reap "$id" "$lctx" verb ws-reap meas.branch "$branch" \
+    meas.tombstone "$tomb" meas.attic "${attic:-0}" meas.bytes "$bytes"
   # MUTATION SURVIVOR, disclosed: `${attic:-0}` is removable with the suite
   # green, because both arms above assign `attic` and neither can leave it
   # unset. It is `set -u` insurance on the ONE printf that reports a completed
@@ -8672,7 +8718,15 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
       # to a temporarily-missing worktree; pruning it here would foreclose that.
       _gc_declined "$project/$slug is foreign metadata — ccd removes only what it created" ;;
     dead-reg)
+      # A `local` inside this arm, and the calls are NOT wrapped in `$( )`:
+      # ccd:7480-7486 records that a subshell here puts `_gc_reclaimed`'s
+      # increment out of reach and the footer reads 0 for every run. `_lc_*`
+      # prints nothing, so no capture is needed and none is taken.
+      local lctx; lctx=$(_lc_tx)
+      _lc_intent destroy "$project-$slug" "$lctx" verb ws-gc \
+        meas.project "$project" meas.workspace "$slug" meas.state dead-reg
       _reg_purge "$project-$slug"                                          # finding F3
+      _lc_done destroy "$project-$slug" "$lctx" verb ws-gc
       _gc_reclaimed "dead registry entry $project-$slug" ;;
     reg-broken)
       # `_ws_gc_scan` deliberately reconstructed NOTHING for this row (see
@@ -8781,6 +8835,10 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
       if [[ -n "$nested" ]]; then
         _gc_declined "$p holds nested checkouts — ccd removes only what it created"; return 0
       fi
+      local lctx; lctx=$(_lc_tx)
+      _lc_intent destroy "$project-$slug" "$lctx" verb ws-gc \
+        meas.project "$project" meas.workspace "$slug" meas.state orphan \
+        meas.workdir "$p" meas.branch "$branch"
       if git -C "$main" worktree remove "$p" 2>/dev/null; then
         _gc_reclaimed "removed orphan worktree $p"
         # No -D: git refuses an unmerged branch and that refusal is wanted.
@@ -8803,7 +8861,20 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
         if git -C "$main" branch -d "$branch" >/dev/null 2>&1; then
           _gc_reclaimed "deleted merged branch $branch"
         fi
+        # `git branch -d` above has NO else — a refused delete is silent
+        # in the report. The `done` line therefore measures it rather than
+        # inheriting the report's silence, and omits the key entirely when
+        # there was no branch.
+        local bd=""
+        if [[ -n "$branch" ]]; then
+          if git -C "$main" show-ref --verify --quiet "refs/heads/$branch" 2>/dev/null
+          then bd=false; else bd=true; fi
+        fi
+        _lc_done destroy "$project-$slug" "$lctx" verb ws-gc \
+          meas.workdir "$p" meas.branch "$branch" branchDeleted "$bd"
       else
+        _lc_fail destroy "$project-$slug" "$lctx" worktree-remove-failed \
+          "git refused to remove $p"
         _gc_declined "git refused to remove $p"
       fi ;;
     archived)
@@ -11162,9 +11233,13 @@ cmd_forget() {   # <id> — remove a DEAD non-workspace session's registry entry
   # The unit outlives the tmux session: enabled + dead is exactly the state
   # systemd exists to reverse, and a purge that left it enabled would race a
   # resurrection writing fresh registry files behind it.
+  local lctx; lctx=$(_lc_tx)
+  _lc_intent forget "$id" "$lctx" verb forget meas.wrapper "$(_reg_get "$id" wrapper)" \
+    meas.project "$(_reg_get "$id" project)" meas.uuid "$(_reg_get "$id" uuid)"
   _ws_unsupervise "$id"
   tmux kill-session -t "$(_tmux "$id")" 2>/dev/null || true
   _reg_purge "$id"
+  _lc_done forget "$id" "$lctx" verb forget
   echo "forgot $id — registry entry removed; the transcript and any pasted images are kept"
 }
 
