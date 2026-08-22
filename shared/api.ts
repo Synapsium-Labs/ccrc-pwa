@@ -3859,6 +3859,31 @@ export interface LifecycleMeas {
   readonly tombstone: string | null;
 }
 
+/** Derived from the interface, never restated beside it — `LIFECYCLE_ACT_MAP`'s
+ *  exact idiom (:3418), and the fix for the same defect it already prevents
+ *  for acts: a hand-written `readonly string[]` of key names drifts silently
+ *  from the interface it claims to describe (measured — FIX ROUND 1, task 21
+ *  review: `ccd-lifecycle-contain.test.ts` shipped with a hand-listed
+ *  `DECLARED` array that happened to agree with this interface today but
+ *  nothing enforced that forward). `Record<keyof LifecycleMeas, true>` makes
+ *  a member added to the interface without a map entry a TS2741/TS2739, and
+ *  an extra map key with no interface member a TS2353 — the same two-sided
+ *  compile-time guarantee `LIFECYCLE_ACT_MAP` gives acts. Module-private:
+ *  only the derived array is exported, so a consumer reads the list, never
+ *  the map. */
+const LIFECYCLE_MEAS_KEY_MAP: Record<keyof LifecycleMeas, true> = {
+  project: true, workspace: true, branch: true, uuid: true, wrapper: true,
+  tip: true, attic: true, archivedAt: true, archivedReason: true, held: true,
+  workdir: true, base: true, old: true, rc: true, mode: true, inUnit: true,
+  from: true, dropped: true, registered: true, state: true, bytes: true,
+  resumed: true, tombstone: true,
+};
+/** The one list `server/test/ccd-lifecycle-contain.test.ts` checks ccd's
+ *  emitted keys against — imported, not re-typed, so the two sides cannot
+ *  independently drift the way a second hand-written copy would let them. */
+export const LIFECYCLE_MEAS_KEYS: readonly (keyof LifecycleMeas)[] =
+  Object.keys(LIFECYCLE_MEAS_KEY_MAP) as (keyof LifecycleMeas)[];
+
 /**
  * One journal line. NDJSON, UTF-8, LF-terminated, <= `LC_LINE_MAX` bytes, one
  * `printf '%s\n' "$line" >> "$f"` per event — an `O_APPEND` write to a regular
