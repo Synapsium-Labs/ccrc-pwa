@@ -8,8 +8,10 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { LIFECYCLE_ACTS, LIFECYCLE_OUTCOMES, LC_ACT_UNKNOWN, LC_OUTCOME_UNKNOWN } from '../../shared/api.js';
 import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 import { makeCcdHarness, type CcdHarness, CCD, ghContainedEnv } from './ccdWsHelpers.js';
-import { NO_TMUX, readJournal, measOf, decOf } from './lifecycleHelpers.js';
+import { NO_TMUX, readJournal, decOf, lcDir } from './lifecycleHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-lc-emit-'); });
@@ -264,5 +266,163 @@ describe('_lc_obs — kernel-observed, memoised, never a decision', () => {
 
   it('never writes to stdout or stderr of its own accord', () => {
     expect(h.sh(`_lc_cgroup_read() { printf '%s' '/x'; }; _lc_obs 2>&1; printf END`)).toBe('END');
+  });
+});
+
+// Deviation from the brief's literal draft, per the standing rule (STANDING
+// RULE #1, cited across six tasks in this plan): every `it` below that makes
+// more than one INDEPENDENT claim about the same event uses `expect.soft`
+// rather than a hard `expect`, so a first failure does not hide the rest.
+// Softening changes no assertion — only whether a sibling failure is masked.
+describe('_lc_emit — the one writer', () => {
+  it('writes one parseable line carrying act, outcome, id, uid, atNs and MILLISECOND at', () => {
+    h.sh('_lc_emit destroy intent ccrc-pwa-still-river ""');
+    const [e] = readJournal(h.home);
+    expect.soft(e!['v']).toBe(1);
+    expect.soft(e!['act']).toBe('destroy');
+    expect.soft(e!['outcome']).toBe('intent');
+    expect.soft(e!['id']).toBe('ccrc-pwa-still-river');
+    expect.soft(e!['atNs']).toMatch(/^[0-9]{19}$/);
+    // Mutant: `int(ns[:10])` (seconds) -> this fails with
+    // `expected 1787327575 to be 1787327575151`, and every event lands 1000x
+    // early against a mirror that stores milliseconds.
+    expect.soft(e!['at']).toBe(Number(String(e!['atNs']).slice(0, 13)));
+    expect.soft(e!['uid']).toMatch(/^[0-9]{19}\.[0-9]+\.[0-9]+$/);
+  });
+
+  it('mints a MONOTONIC seq inside one process — two emits never share a uid', () => {
+    h.sh('_lc_emit start done a ""; _lc_emit stop done a ""');
+    const [x, y] = readJournal(h.home);
+    expect.soft(x!['uid']).not.toBe(y!['uid']);
+    expect.soft(String(x!['uid']).split('.')[2]).toBe('1');
+    expect.soft(String(y!['uid']).split('.')[2], 'the seq lives in _lc_emit\'s own frame, not a subshell').toBe('2');
+  });
+
+  it('routes dec.* into dec, meas.* into meas, and defaults surface to "none"', () => {
+    h.sh('_lc_emit stop done sess "" dec.surface pwa dec.actor you meas.branch ws/x');
+    const [e] = readJournal(h.home);
+    expect.soft(e!['dec']).toEqual({ surface: 'pwa', actor: 'you' });
+    expect.soft(e!['meas']).toEqual({ branch: 'ws/x' });
+    h.sh('_lc_emit stop done sess ""');
+    expect(readJournal(h.home)[1]!['dec']).toEqual({ surface: 'none' });
+  });
+
+  it('puts refusal, detail, verb and branchDeleted at the TOP LEVEL, never inside meas', () => {
+    // Mutant: route bare keys into `meas` -> this fails with
+    // `expected undefined to be 'held'`, and wave 4's parser reads `refusal` at
+    // the root and finds nothing on EVERY refusal line waves 2-3 write.
+    h.sh('_lc_emit destroy refused sess "" refusal held detail "held: program X" verb ws-rm branchDeleted false');
+    const [e] = readJournal(h.home);
+    expect.soft(e!['refusal']).toBe('held');
+    expect.soft(e!['detail']).toBe('held: program X');
+    expect.soft(e!['verb']).toBe('ws-rm');
+    expect.soft(e!['branchDeleted']).toBe('false');
+    expect.soft(e!['meas'], 'nothing top-level leaks into meas').toBeNull();
+  });
+
+  it('NAMES a key it cannot model rather than folding it somewhere', () => {
+    // badact's own idiom, applied to keys: a key we saw and could not model is
+    // a different fact from a key that was never passed.
+    h.sh('_lc_emit stop done sess "" nosuchfamily v meas.branch ws/x');
+    const [e] = readJournal(h.home);
+    expect.soft(e!['badkey']).toBe('nosuchfamily');
+    expect.soft(e!['meas']).toEqual({ branch: 'ws/x' });
+  });
+
+  it('OMITS a pair whose value is empty — never writes it as ""', () => {
+    h.sh('_lc_emit destroy done sess "" meas.branch "" meas.tip 3f2a');
+    const [e] = readJournal(h.home);
+    expect.soft(e!['meas']).toEqual({ tip: '3f2a' });
+    expect.soft(e!['meas']).not.toHaveProperty('branch');
+  });
+
+  it('degrades an act L0 never heard of to `unknown` plus badact', () => {
+    // Mutant: delete the `_LC_ACTS` membership loop -> this fails with
+    // `expected 'teleport' to be 'unknown'`, and lifecycle-vocabulary's set
+    // equality stops holding by construction.
+    h.sh('_lc_emit teleport done sess ""');
+    const [e] = readJournal(h.home);
+    expect.soft(e!['act']).toBe('unknown');
+    expect.soft(e!['badact']).toBe('teleport');
+  });
+
+  it('degrades an unknown outcome the same way', () => {
+    h.sh('_lc_emit stop maybe sess ""');
+    const [e] = readJournal(h.home);
+    expect.soft(e!['outcome']).toBe('unknown');
+    expect.soft(e!['badoutcome']).toBe('maybe');
+  });
+
+  it('quotes hostile bytes rather than letting them forge a field', () => {
+    h.sh(`_lc_emit hold done sess "" dec.reason '","act":"purge","x":"'`);
+    const [e] = readJournal(h.home);
+    expect.soft(e!['act'], 'a --reason must never be able to forge a field').toBe('hold');
+    expect.soft(decOf(e!)['reason']).toBe('","act":"purge","x":"');
+  });
+
+  it('keeps every line under LC_LINE_MAX and SAYS SO when it had to drop something', () => {
+    h.sh(`_lc_emit hold done sess "" dec.reason '${'z'.repeat(4000)}'`);
+    const [e] = readJournal(h.home);
+    expect.soft(Buffer.byteLength(JSON.stringify(e), 'utf8')).toBeLessThanOrEqual(2048);
+    expect.soft(e!['truncated'], 'a dropped field is a fact, not a silence').toBe(true);
+    expect.soft(e!['act']).toBe('hold');
+  });
+
+  it('the LAST-RESORT line still carries tx, dec.surface and refusal', () => {
+    // Mutant: drop `tx`/`dec`/`refusal` from the fallback dict -> this fails
+    // with `expected undefined to be '1787000000000000000.9.1'`, and the pair
+    // becomes unjoinable at exactly the moment the payload was interesting.
+    h.sh(`t=1787000000000000000.9.1
+      _lc_emit destroy refused sess "$t" refusal dirty-tree dec.surface pwa detail '${'d'.repeat(4000)}'`);
+    const [e] = readJournal(h.home);
+    expect.soft(e!['truncated']).toBe(true);
+    expect.soft(e!['tx']).toBe('1787000000000000000.9.1');
+    expect.soft(e!['refusal']).toBe('dirty-tree');
+    expect.soft(decOf(e!)['surface']).toBe('pwa');
+  });
+
+  it('RETURNS 0 AND PRINTS NOTHING when python3 is gone — and counts the error', () => {
+    // Mutant: change any `|| { _lc_err; return 0; }` to `|| return 1` -> this
+    // fails with a non-zero exit from h.sh, and `cmd_ws_restore`'s emit inside
+    // the flock region would leak the reap lock in the sourcing shell for ever.
+    const out = h.sh('python3() { return 127; }; _lc_emit stop done sess "" 2>&1; printf "rc=%s" "$?"');
+    expect.soft(out).toBe('rc=0');
+    expect.soft(fs.readFileSync(path.join(lcDir(h.home), 'errors'), 'utf8').trim()).toBe('1');
+  });
+
+  it('returns 0 when the journal directory itself cannot be made', () => {
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', '.lifecycle'), 'not a directory');
+    expect(h.sh('_lc_emit stop done sess "" 2>/dev/null; printf "rc=%s" "$?"')).toBe('rc=0');
+  });
+
+  it('prints nothing on stdout — a capture around a caller must stay unchanged', () => {
+    expect(h.sh('out=$(_lc_emit stop done sess ""; printf VALUE); printf "%s" "$out"')).toBe('VALUE');
+  });
+
+  it('APPENDS — a second emit does not replace the first', () => {
+    h.sh('_lc_emit start done a ""; _lc_emit stop done b ""; _lc_emit purge done c ""');
+    expect(readJournal(h.home).map((e) => e['id'])).toEqual(['a', 'b', 'c']);
+  });
+});
+
+describe('_lc_err', () => {
+  it('MINTS ITS OWN DIRECTORY — the counter must be writable when the journal is not', () => {
+    // Mutant: delete `mkdir -p -- "$_LC_DIR"` -> this fails with ENOENT on
+    // readFileSync, because on the very path the counter exists for (`_lc_live`
+    // could not make the directory) nothing else has created it.
+    h.sh('_lc_err; _lc_err');
+    expect(fs.readFileSync(path.join(lcDir(h.home), 'errors'), 'utf8').trim()).toBe('2');
+  });
+
+  it('restarts at 1 on a corrupt counter rather than reaching arithmetic', () => {
+    // Mutant: delete the `[[ "$n" =~ ^[0-9]+$ ]] || n=0` rung -> `n=$(( n + 1 ))`
+    // evaluates the FILE'S CONTENTS as arithmetic, where a command substitution
+    // inside an array subscript executes (ccd:8784-8787).
+    const p = path.join(lcDir(h.home), 'errors');
+    h.sh('_lc_err');
+    fs.writeFileSync(p, 'a[$(touch $HOME/PWNED)]');
+    h.sh('_lc_err');
+    expect.soft(fs.readFileSync(p, 'utf8').trim()).toBe('1');
+    expect.soft(fs.existsSync(path.join(h.home, 'PWNED'))).toBe(false);
   });
 });

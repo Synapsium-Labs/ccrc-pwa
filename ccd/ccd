@@ -988,7 +988,20 @@ _lc_live() {   # -> the generation to append to, on stdout. Mints one if none.
     newest="$_LC_DIR/journal-$(_lc_now_ns).ndjson"
     # `>>`, never `>`: the create form that CANNOT truncate, even if two
     # processes reach it at once.
-    : >> "$newest" 2>/dev/null || { printf '%s' ''; return 0; }
+    #
+    # FIX ROUND 2 (task 15): a bare `: >> "$newest" 2>/dev/null` does NOT
+    # suppress bash's own redirect-setup diagnostic — the `>>` open is
+    # attempted and fails BEFORE the trailing `2>/dev/null` is installed,
+    # the same class `_lc_rotate`'s flock `exec` already fixed two FIX
+    # ROUNDs ago (see below) but this sibling site was missed. Measured: an
+    # existing `.lifecycle` at chmod 555 leaked
+    # `ccd: line …: …/journal-….ndjson: Permission denied` to the caller's
+    # stderr even though `_lc_emit`'s own rc stayed 0 — a Critical against
+    # `_lc_emit`'s "prints nothing on stdout or stderr" contract, since this
+    # is the path a caller with an unwritable-but-present `.lifecycle`
+    # reaches on every event. The COMPOUND, not the bare `:`, is what the
+    # redirect must wrap.
+    { : >> "$newest"; } 2>/dev/null || { printf '%s' ''; return 0; }
   fi
   printf '%s' "$newest"
 }
@@ -1044,7 +1057,11 @@ _lc_rotate() {   # live-path — mint a fresh generation when the live one is fu
   # never trigger from here.
   if [[ "$(_lc_live)" == "$live" ]]; then
     minted="$_LC_DIR/journal-$(_lc_now_ns).ndjson"
-    : >> "$minted" 2>/dev/null || minted=""
+    # FIX ROUND 2 (task 15): same sibling bug as `_lc_live`'s mint above —
+    # the COMPOUND, not the bare `:`, must wrap the redirect for
+    # `2>/dev/null` to suppress bash's own diagnostic rather than the
+    # external command's.
+    { : >> "$minted"; } 2>/dev/null || minted=""
   fi
 
   for f in "$_LC_DIR"/journal-*.ndjson; do [[ -f "$f" ]] && gens+=("$f"); done
@@ -1083,6 +1100,201 @@ _lc_rotate() {   # live-path — mint a fresh generation when the live one is fu
   # process as two strangers, and ccd is SOURCED, so a descriptor left open
   # here refuses the NEXT rotation in the same shell.
   exec {lfd}>&-
+  return 0
+}
+
+_lc_err() {   # bump the counted errors file. Prints nothing. Always 0.
+  # IT MINTS THE DIRECTORY ITSELF, and that is the one place besides `_lc_live`
+  # that does: this counter exists for exactly the states in which the journal
+  # could not be written, and half of those are "the directory was not there".
+  # A counter that needs the journal's own directory to already exist records
+  # nothing on the path it was written for.
+  #
+  # Temp+rename, `_reg_set`'s idiom (ccd:435-441), because a half-written
+  # counter is a counter. Surfaced by the server as `lifecycle.writeErrors`,
+  # which together with `lifecycle.newestAt` is what makes a silently-stopped
+  # journal visible rather than indistinguishable from a quiet fleet.
+  local n tmp
+  mkdir -p -- "$_LC_DIR" 2>/dev/null || return 0
+  n=$(cat "$_LC_DIR/errors" 2>/dev/null)
+  # THE REGEX IS THE GUARD, not a tidiness check: the next line is an
+  # ARITHMETIC context over bytes off disk, and bash evaluates a variable's
+  # contents there — a command substitution inside an array subscript EXECUTES.
+  [[ "$n" =~ ^[0-9]+$ ]] || n=0
+  n=$(( n + 1 ))
+  tmp="$_LC_DIR/.errors.$BASHPID.tmp"
+  # FIX ROUND 1 (task 15, found by this task's own operator-mandated
+  # unwritable-$_LC_DIR proof): a bare `printf … > "$tmp" 2>/dev/null` does
+  # NOT suppress bash's own redirect-setup diagnostic for `printf`, a
+  # BUILTIN — the `>` open is attempted and fails before the trailing
+  # `2>/dev/null` is installed, the exact class `_lc_rotate`'s flock `exec`
+  # fix already records (ccd:1019-1028) and two sibling `_lc_live`/
+  # `_lc_rotate` mint sites needed the same fix for (FIX ROUND 2, above).
+  # Measured: a chmod-555 `.lifecycle` leaked
+  # `ccd: line …: …/.errors.<pid>.tmp: Permission denied` to the caller's
+  # stderr even with rc 0 — a Critical against `_lc_err`'s own "prints
+  # nothing" contract. `mv`/`rm` below are EXTERNAL commands, so their own
+  # `2>/dev/null` already captures normally; only the builtin `printf`
+  # needed the compound wrap.
+  { printf '%s\n' "$n" > "$tmp"; } 2>/dev/null && mv -fT -- "$tmp" "$_LC_DIR/errors" 2>/dev/null
+  rm -f -- "$tmp" 2>/dev/null
+  return 0
+}
+
+_lc_json() {   # cap uid ns act outcome id tx badact badoutcome obsjson [k v]...
+  # THE SINGLE-FORK EVENT ENCODER, taking fields as argv. The alternative —
+  # eight `$(_json_str …)` substitutions inside a printf argument list — is the
+  # defect ccd:711-713 records: a bare `$(_json_str …)` swallows its own status
+  # by construction, so a missing interpreter prints `"reason":,` and an
+  # unparseable line lands in the record. Here a failed interpreter is a
+  # NON-ZERO return with empty stdout and the caller writes nothing at all,
+  # which is a gap the errors counter records rather than a corrupt line the
+  # mirror has to model.
+  #
+  # The only OTHER python3 encoder in this block is `_lc_obs_json`, which builds
+  # the obs FRAGMENT once per process. A third is a defect.
+  #
+  # NO `_json_str probe … || die` up front, unlike `_ws_manifest` and
+  # `cmd_ws_audit`: D7 forbids this path from dying, and the caller's own
+  # non-zero branch already covers the same condition.
+  LC_ALL=C.UTF-8 python3 -c '
+import json, sys
+a = sys.argv[1:]
+cap = int(a[0])
+uid, ns, act, outcome, sid, tx, badact, badoutcome, obs = a[1:10]
+rest = a[10:]
+
+# `at` IS MILLISECONDS — L0 types LifecycleEvent.at that way and the mirror
+# stores it that way. Both it and `atNs` come from ONE clock read, so the two
+# can never disagree about one event.
+ev = {"v": 1, "uid": uid, "atNs": ns, "at": int(ns[:13]), "act": act,
+      "outcome": outcome, "id": sid}
+if tx: ev["tx"] = tx
+try:
+    ev["obs"] = json.loads(obs) if obs else None
+except ValueError:
+    ev["obs"] = None
+
+# THE KEY NAMESPACE. Dotted keys name their family; five names are top-level;
+# anything else is DROPPED AND NAMED. That last rule is `badact`s own idiom
+# applied to keys — a key we saw and could not model is a different fact from a
+# key that was never passed — and it is what lets this encoder be TOTAL without
+# quietly inventing a home for a typo.
+#
+# AN EMPTY VALUE OMITS ITS KEY. Disclosed, and it is not an overloaded null:
+# every meas value ccd passes is a `_reg_get` (which cats a missing file to
+# empty) or a git ref read, so "measured as empty" and "not measured" are ONE
+# condition at this seam, not two a caller handles differently.
+TOP = ("detail", "refusal", "verb", "badact", "branchDeleted")
+dec, meas = {}, {}
+for i in range(0, len(rest) - 1, 2):
+    k, v = rest[i], rest[i + 1]
+    if v == "":
+        continue
+    if k.startswith("dec."):
+        dec[k[4:]] = v
+    elif k.startswith("meas."):
+        meas[k[5:]] = v
+    elif k in TOP:
+        ev[k] = v
+    elif "badkey" not in ev:
+        ev["badkey"] = k
+dec.setdefault("surface", "none")
+ev["dec"] = dec
+ev["meas"] = meas or None
+# The ENCODER computes these two, after the loop, so they always win over a
+# caller that passed `badact` as a key.
+if badact:     ev["badact"] = badact
+if badoutcome: ev["badoutcome"] = badoutcome
+
+def line(o):
+    return json.dumps(o, ensure_ascii=True, allow_nan=False, separators=(",", ":"))
+
+# THE CAP IS ENFORCED BY DROPPING IN A FIXED ORDER, AND BY SAYING SO. A line
+# silently cut at 2048 bytes is a line that does not parse; `truncated` is what
+# makes the loss a row rather than a silence. `refusal` and `detail` are NOT in
+# the ladder: an over-cap refusal that dropped its own token would be an
+# untyped `outcome:"refused"`, which is the one thing the record exists to say.
+for drop in (None, "reason", "cgraw", "meas"):
+    if drop == "reason":
+        ev["dec"].pop("reason", None); ev["truncated"] = True
+    elif drop == "cgraw" and isinstance(ev.get("obs"), dict):
+        ev["obs"].pop("cgraw", None); ev["truncated"] = True
+    elif drop == "meas":
+        ev["meas"] = None; ev["truncated"] = True
+    s = line(ev)
+    if len(s.encode("utf-8")) <= cap:
+        sys.stdout.write(s); raise SystemExit(0)
+
+# THE LAST RESORT CARRIES THE JOINABLE MINIMUM. `tx` and `dec.surface` and the
+# refusal token are what a reader needs to pair an intent with its outcome and
+# to know what was refused; dropping them here loses the record at exactly the
+# moment its payload was interesting.
+fb = {"v": 1, "uid": uid, "atNs": ns, "at": int(ns[:13]), "act": act,
+      "outcome": outcome, "id": sid,
+      "dec": {"surface": ev["dec"].get("surface", "none")}, "truncated": True}
+if tx: fb["tx"] = tx
+if ev.get("refusal"): fb["refusal"] = ev["refusal"]
+sys.stdout.write(line(fb))
+' "$@"
+}
+
+_lc_emit() {   # act outcome id tx [key value]... — THE ONE WRITER. Always 0.
+  # NOTHING BUT THIS FUNCTION WRITES INTO `.lifecycle/` (and `_lc_err`/
+  # `_lc_live`/`_lc_rotate`, which only it calls). That is scanned by
+  # `ccd-lifecycle-contain.test.ts`, and it is the one defect of `swap.log` this
+  # design does not copy: ccd:7568 and ccd:9423 redirect a CHILD'S stdout and
+  # stderr into that log, which is why ~30% of its lines are untimestamped and
+  # unstructured. No `bash -c` or `systemd-run` string in this file may name
+  # `.lifecycle`.
+  #
+  # PRINTS NOTHING on stdout or stderr. Several call sites sit inside functions
+  # whose stdout IS the record (`cmd_ws_rename`'s printf, `_ws_gc_prune_row`'s
+  # rows, `_ws_reap_tail`'s receipt); one stray byte corrupts a document a
+  # consumer parses.
+  local act="${1-}" outcome="${2-}" id="${3-}" tx="${4-}"
+  shift 4 2>/dev/null || { _lc_err; return 0; }
+
+  local a badact="" badoutcome="" found=0
+  for a in "${_LC_ACTS[@]}"; do [[ "$a" == "$act" ]] && { found=1; break; }; done
+  (( found )) || { badact="$act"; act=unknown; }
+  found=0
+  for a in "${_LC_OUTCOMES[@]}"; do [[ "$a" == "$outcome" ]] && { found=1; break; }; done
+  (( found )) || { badoutcome="$outcome"; outcome=unknown; }
+
+  _lc_obs
+  # The seq increments in THIS frame — a function is not a subshell — so it is
+  # genuinely monotonic per process. Only the `date` read forks.
+  _LC_SEQ=$(( _LC_SEQ + 1 ))
+  local ns; ns=$(_lc_now_ns)
+  local uid="$ns.$BASHPID.$_LC_SEQ"
+
+  local live; live=$(_lc_live)
+  [[ -n "$live" ]] || { _lc_err; return 0; }
+
+  local line
+  line=$(_lc_json "$_LC_LINE_MAX" "$uid" "$ns" "$act" "$outcome" "$id" "$tx" \
+                  "$badact" "$badoutcome" "$_LC_OBS" "$@" 2>/dev/null) \
+    || { _lc_err; return 0; }
+  [[ -n "$line" ]] || { _lc_err; return 0; }
+
+  # ONE `printf … >>` per event. On Linux an O_APPEND write to a regular file is
+  # serialised under the inode lock, so concurrent writers cannot interleave —
+  # measured, not assumed: `$REG/swap.log` is 13 concurrent write sites over 49
+  # days with zero corruption.
+  #
+  # FIX ROUND 3 (task 15, same proof as FIX ROUNDs 1-2 above): `printf` is a
+  # BUILTIN, so a bare `>> "$live" 2>/dev/null` leaks bash's own
+  # redirect-setup diagnostic to the caller's stderr when `$live` exists but
+  # is unwritable (its generation file present, its permissions stripped —
+  # a live-not-a-mint failure `_lc_live`'s own return-empty guard cannot
+  # catch, because `_lc_live` never attempts to WRITE an existing
+  # generation). Measured: `ccd: line …: …/journal-….ndjson: Permission
+  # denied` on the caller's real stderr with rc 0 — a Critical against
+  # `_lc_emit`'s own contract. The COMPOUND wraps the redirect, not the bare
+  # builtin.
+  { printf '%s\n' "$line" >> "$live"; } 2>/dev/null || { _lc_err; return 0; }
+  _lc_rotate "$live"
   return 0
 }
 # ── end lifecycle journal ────────────────────────────────────────── LC-END ──
