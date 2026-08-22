@@ -6,6 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { CCD } from './ccdWsHelpers.js';
+import { LIFECYCLE_MEAS_KEYS } from '../../shared/api.js';
 
 const src = readFileSync(CCD, 'utf8');
 const BEGIN = '# ── lifecycle journal ';
@@ -18,14 +19,42 @@ const END = '# ── end lifecycle journal ';
 const code = (s: string): string[] =>
   s.split('\n').map((l) => (/^\s*#/.test(l) ? '' : l));
 
+/** How many times `needle` occurs in `haystack`, non-overlapping. Used to
+ *  prove each marker is unique BEFORE trusting `indexOf`'s result — see the
+ *  first test below. */
+const occurrences = (haystack: string, needle: string): number =>
+  haystack.split(needle).length - 1;
+
 describe('nothing but the _lc_* block writes into .lifecycle/', () => {
   const from = src.indexOf(BEGIN);
   const to = src.indexOf(END);
 
+  it('each marker appears EXACTLY ONCE — indexOf silently keeps only the first of a duplicate', () => {
+    // FIX ROUND 1 (CRITICAL, task 21 review): `indexOf` returns the FIRST
+    // occurrence and nothing asserted uniqueness. The reviewer planted a
+    // spurious duplicate `LC-BEGIN` line two lines above the real one
+    // (ccd:780), with a genuine `echo x >> "$REG/.lifecycle/probe-tight"` in
+    // the gap between the two — and the suite reported 10/10 green: `from`
+    // silently moved to the SPURIOUS marker, so the planted write landed
+    // INSIDE the (wrongly widened) "protected" slice and every downstream
+    // assertion passed on a live D1 violation. A missing marker was already
+    // caught by `toBeGreaterThan(-1)` below; a DUPLICATED one was not — same
+    // class of defect as the brief's own vacuous-scan bug, arriving by a
+    // different route.
+    const beginCount = occurrences(src, BEGIN);
+    const endCount = occurrences(src, END);
+    expect.soft(beginCount,
+      `LC-BEGIN ("${BEGIN}") appears ${beginCount} times, not once — a duplicate silently moves the block boundary`)
+      .toBe(1);
+    expect.soft(endCount,
+      `LC-END ("${END}") appears ${endCount} times, not once — a duplicate silently moves the block boundary`)
+      .toBe(1);
+  });
+
   it('found the block, and it is substantial — an empty slice passes everything', () => {
-    expect(from, 'LC-BEGIN not found').toBeGreaterThan(-1);
-    expect(to).toBeGreaterThan(from);
-    expect(src.slice(from, to).length,
+    expect.soft(from, 'LC-BEGIN not found').toBeGreaterThan(-1);
+    expect.soft(to, 'LC-END not found, or not after LC-BEGIN').toBeGreaterThan(from);
+    expect.soft(src.slice(from, to).length,
       'the block collapsed — every assertion below would be vacuous').toBeGreaterThan(4000);
   });
 
@@ -55,9 +84,17 @@ describe('nothing but the _lc_* block writes into .lifecycle/', () => {
     // The swap.log defect exactly: a child's stdout redirected into the log
     // from inside a quoted string produces unstructured, untimestamped lines
     // that no parser can model and no cap can bound.
-    for (const line of src.split('\n')) {
+    //
+    // FIX ROUND 1 (IMPORTANT, task 21 review): a hard `expect` per loop
+    // iteration only ever reports the FIRST violating line — demonstrated
+    // with two simultaneous plants, where the second was silently absent
+    // from the failure output. `expect.soft` reports every line in one run.
+    const lines = src.split('\n');
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i]!;
       if (/bash -c|systemd-run/.test(line)) {
-        expect(line, 'a child process is being pointed at the journal').not.toContain('.lifecycle');
+        expect.soft(line, `line ${i + 1}: a child process is being pointed at the journal`)
+          .not.toContain('.lifecycle');
       }
     }
   });
@@ -82,56 +119,49 @@ describe('nothing but the _lc_* block writes into .lifecycle/', () => {
     // ccd:711-713 records what a third, unchecked encoder costs: `"reason":,`
     // inside a printf argument list that swallowed the status.
     const block = src.slice(from, to);
-    expect([...block.matchAll(/python3 -c/g)]).toHaveLength(2);
-    expect(block).toContain('_lc_obs_json()');
-    expect(block).toContain('_lc_json()');
+    expect.soft([...block.matchAll(/python3 -c/g)]).toHaveLength(2);
+    expect.soft(block).toContain('_lc_obs_json()');
+    expect.soft(block).toContain('_lc_json()');
   });
 
   it('the agent structurally cannot write it — no write grant is added anywhere', () => {
     const wl = readFileSync(CCD.replace(/ccd\/ccd$/, 'agent/src/whitelist.ts'), 'utf8');
-    expect(wl).not.toContain('.lifecycle');
-    expect(wl.match(/mode === 'write'/g), 'the write whitelist grew a second arm').toHaveLength(1);
+    expect.soft(wl).not.toContain('.lifecycle');
+    expect.soft(wl.match(/mode === 'write'/g), 'the write whitelist grew a second arm').toHaveLength(1);
   });
 });
 
 describe('the meas key vocabulary is ONE list', () => {
-  // L0's LifecycleMeas declares the first ten. The other thirteen are this
-  // wave's, and wave 4's `reviveMeas` reads through one list either way — a key
-  // not on it is silently dropped at ingest, which is why the list lives in a
-  // test rather than in a comment.
+  // L0's `LifecycleMeas` interface is the single source. `LIFECYCLE_MEAS_KEYS`
+  // (`shared/api.ts`) is DERIVED from it via `Object.keys(LIFECYCLE_MEAS_KEY_MAP)`
+  // — the same idiom `LIFECYCLE_ACTS` already uses for acts — so this test
+  // IMPORTS the declared side rather than hand-listing it.
   //
-  // FIX (Task 21): the brief's own counts were wrong, and re-measuring is what
-  // this task exists to do:
-  //   awk '/export interface LifecycleMeas/,/^}/' shared/api.ts
-  //     -> declares TEN: project workspace branch uuid wrapper tip attic
-  //        archivedAt archivedReason held.
-  //   grep -oE "meas\.[a-zA-Z]+" ccd/ccd | sort -u
-  //     -> emits TWENTY-TWO distinct keys.
-  // Emitted-but-undeclared = 13 (not 15): base bytes dropped from inUnit mode
-  // old rc registered resumed state tombstone workdir. Declared-but-unemitted
-  // = 1: tip (kept — a reader tolerating a key the writer does not yet
-  // produce is fine). Real total = 23, not 25. `manifestBytes` and `atticsrc`
-  // — named in an earlier draft of this list — are emitted NOWHERE in
-  // `ccd/ccd` and are deliberately NOT members of the vocabulary; see the
-  // second test below.
-  const DECLARED = [
-    'project', 'workspace', 'branch', 'uuid', 'wrapper',
-    'tip', 'attic', 'archivedAt', 'archivedReason', 'held',
-  ];
-  const EXTENSIONS = [
-    'workdir', 'base', 'old', 'rc', 'mode', 'inUnit', 'from', 'dropped',
-    'registered', 'state', 'bytes', 'resumed', 'tombstone',
-  ];
+  // FIX ROUND 1 (IMPORTANT, task 21 review): the first draft of this file
+  // hand-listed `DECLARED`/`EXTENSIONS` here, a THIRD copy of the same 23
+  // names next to the interface and next to `lifecycle-wire.test.ts`'s
+  // literals — exactly the class of defect `single-definition.test.ts` exists
+  // to catch, just outside the four roots it scans. Importing
+  // `LIFECYCLE_MEAS_KEYS` makes a future interface rename (which `tsc` already
+  // forces into `lifecycle-wire.test.ts`) reach this file automatically
+  // instead of drifting silently.
+  //
+  // Re-measured, not trusted from the brief: L0 declared TEN
+  // (`awk '/export interface LifecycleMeas/,/^}/' shared/api.ts`); ccd emits
+  // TWENTY-TWO distinct `meas.<key>` names (`grep -oE "meas\.[a-zA-Z]+"
+  // ccd/ccd | sort -u`); the union is TWENTY-THREE, not the brief's
+  // twenty-five. `manifestBytes` and `atticsrc` — named in an earlier draft —
+  // are emitted NOWHERE in `ccd/ccd`; see the second test below.
+  const all = new Set<string>(LIFECYCLE_MEAS_KEYS);
 
   it('every meas.<key> ccd writes is on the list, and the list is exactly 23', () => {
     // Mutant: emit `meas.slug` at any call site -> this fails with
     // `an unlisted meas key: [ 'slug' ]`, and wave 4 drops it at ingest with
     // nothing saying so.
-    const all = new Set([...DECLARED, ...EXTENSIONS]);
-    expect(all.size, 'the list itself has a duplicate').toBe(23);
+    expect.soft(all.size, 'LIFECYCLE_MEAS_KEYS drifted from the measured 23').toBe(23);
     const used = new Set([...src.matchAll(/\bmeas\.([A-Za-z][A-Za-z0-9]*)\b/g)].map((m) => m[1]!));
-    expect(used.size, 'no meas key found at all — the scan is vacuous').toBeGreaterThan(10);
-    expect([...used].filter((k) => !all.has(k)).sort(), 'an unlisted meas key').toEqual([]);
+    expect.soft(used.size, 'no meas key found at all — the scan is vacuous').toBeGreaterThan(10);
+    expect.soft([...used].filter((k) => !all.has(k)).sort(), 'an unlisted meas key').toEqual([]);
   });
 
   it('never invents an emit for manifestBytes or atticsrc — they are not on the wire', () => {
@@ -140,15 +170,18 @@ describe('the meas key vocabulary is ONE list', () => {
     // "on the brief's say-so" would widen `LifecycleMeas` with dead members;
     // this pins that ccd itself still agrees they are unused.
     const used = new Set([...src.matchAll(/\bmeas\.([A-Za-z][A-Za-z0-9]*)\b/g)].map((m) => m[1]!));
-    expect(used.has('manifestBytes')).toBe(false);
-    expect(used.has('atticsrc')).toBe(false);
+    expect.soft(used.has('manifestBytes')).toBe(false);
+    expect.soft(used.has('atticsrc')).toBe(false);
   });
 
   it('every top-level key ccd writes is one of the five', () => {
+    // FIX ROUND 1 (IMPORTANT, task 21 review): a hard `expect` per TOP entry
+    // only ever reports the first missing key. `expect.soft` reports all of
+    // them in one run.
     const TOP = ['detail', 'refusal', 'verb', 'badact', 'branchDeleted'];
     const block = src.slice(src.indexOf(BEGIN), src.indexOf(END));
-    for (const t of TOP) expect(block, `${t} is not routed by the encoder`).toContain(`"${t}"`);
-    expect([...src.matchAll(/^\s*TOP = \(/gm)], 'the TOP tuple moved or was duplicated')
+    for (const t of TOP) expect.soft(block, `${t} is not routed by the encoder`).toContain(`"${t}"`);
+    expect.soft([...src.matchAll(/^\s*TOP = \(/gm)], 'the TOP tuple moved or was duplicated')
       .toHaveLength(1);
   });
 });
