@@ -186,6 +186,14 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     '`unknown-run` recovery — so a gated one wedges the coordinator out of its own run at exactly ' +
     'the two moments it cannot diagnose itself. The handler requires a live session OR a valid box ' +
     'token (coord/routes.ts), so nothing is published to the tailnet that was published before'],
+  ['GET /api/lifecycle',
+    "EXEMPT-BUT-AUTHENTICATED (D-149's pattern, ruled for this route by build 9 D16), the same " +
+    'shape as `GET /api/runs` directly above and for a sharper reason: a WORKER asks this route ' +
+    'what happened to its own workspace, cookieless, from the fleet host — and the workspace it ' +
+    'is asking about may already be gone, since `_reg_purge` deletes every per-session registry ' +
+    'field on ws-rm/ws-reap/ws-gc/forget. Gated, the one surface that outlives a destruction is ' +
+    'unreachable from the box that performed it. The handler requires a live session OR a valid ' +
+    'box token (coord/routes.ts), so nothing is published to the tailnet that was not before'],
   ['POST /api/runs/:id/dispatch',
     'the coordinator dispatches a wave — box-token gated'],
   ['POST /api/runs/:id/close',
