@@ -1172,6 +1172,23 @@ _lc_err() {   # bump the counted errors file. Prints nothing. Always 0.
   # counter is a counter. Surfaced by the server as `lifecycle.writeErrors`,
   # which together with `lifecycle.newestAt` is what makes a silently-stopped
   # journal visible rather than indistinguishable from a quiet fleet.
+  #
+  # A KNOWN, ACCEPTED LOSS UNDER CONCURRENCY — RECORDED, NOT MERELY MEASURED
+  # ONCE (task 15 FIX ROUND 2). Temp+rename is READ-MODIFY-WRITE, not atomic
+  # increment: two concurrent callers can both read the same "$n", both
+  # compute the same "n + 1", and the SECOND rename simply overwrites the
+  # first — last-writer-wins, not last-writer-adds. Measured directly, 30
+  # truly-concurrent `_lc_err` calls (real separate processes, launched
+  # together, not staggered): the counter settled at 14-16 across repeated
+  # runs, roughly half the true count. This is ACCEPTED: `errors` is a
+  # diagnostics-only counter surfaced as `lifecycle.writeErrors`, never the
+  # journal itself, and the operator ruling is that temp+rename cannot do
+  # meaningfully better here without a lock this best-effort path is not
+  # allowed to take (D7: the journal, and everything in this block, must
+  # never gate or serialise the act it is recording). The consequence a
+  # reader MUST carry: `errors` is a FLOOR, a lower bound on how many
+  # appends failed, never an exact count. Treating it as exact is the
+  # mistake this comment exists to stop before it is made.
   local n tmp
   mkdir -p -- "$_LC_DIR" 2>/dev/null || return 0
   n=$(cat "$_LC_DIR/errors" 2>/dev/null)
@@ -1296,6 +1313,22 @@ for drop in (None, "reason", "cgraw", "meas"):
     elif drop == "meas":
         ev["meas"] = None; ev["truncated"] = True
     s = line(ev)
+    # FIX ROUND 2 (task 15): THE BYTE MEASUREMENT IS CURRENTLY UNDETECTABLE
+    # AS A DISTINCT CHOICE, and that is worth writing down rather than
+    # leaving implicit. `line()` calls `json.dumps(…, ensure_ascii=True)`,
+    # which guarantees pure-ASCII output for every possible input — every
+    # non-ASCII character comes out as a `\uXXXX` escape, all ASCII bytes —
+    # so `len(s.encode("utf-8")) == len(s)` always, for any event this
+    # encoder can build. A mutant that swapped the byte measurement for a
+    # bare `len(s)` would NOT be caught by any test today; verified: 2048
+    # bytes untruncated, 2049 truncated, both figures identical whether
+    # measured in bytes or characters at `ensure_ascii=True`. The byte
+    # measurement is still the CORRECT choice — `LC_LINE_MAX` is a wire
+    # BYTE cap, matching L0s and the append writes bytes, not characters —
+    # and it becomes LOAD-BEARING, not merely correct, the moment
+    # `ensure_ascii` is ever changed to `False`: a non-ASCII `dec.reason` or
+    # `detail` would then encode to MORE bytes than characters, and a bare
+    # `len(s)` would silently pass lines over the real 2048-byte cap.
     if len(s.encode("utf-8")) <= cap:
         sys.stdout.write(s); raise SystemExit(0)
 

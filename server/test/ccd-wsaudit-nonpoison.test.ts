@@ -4,8 +4,19 @@
 // with four regexes, comments included, and holds it set-equal to `SENTENCES`.
 // The lifecycle emitter is a new writer of refusal-shaped JSON, so it is exactly
 // the shape that could poison that scan — which is why the journal field is
-// spelled `refusal`, never `refused`. ccd:2120-2126 and ccd:5834-5839 both record
-// this class having shipped once already.
+// spelled `refusal`, never `refused`.
+//
+// FIX ROUND 2 (task 15) — CITATION CORRECTED. This originally cited
+// ccd:2120-2126 and ccd:5834-5839 as recording this class having shipped
+// once already; neither range is about a poisoned refusal-token scan (one
+// is `_pr_py`'s PR-check JSON output, the other is `_ws_reap_locked`'s audit
+// row builder) and the citation was wrong. The actual precedent is
+// `wsaudit.test.ts:12-15`'s own docstring: a token renamed in `ccd`
+// (`branch-drift` -> `registry-branch-drift`) failed no test and the UI
+// silently fell back to `ccrc declined: <token>.` until a human read the
+// sheet by hand — the class this whole linkage exists to catch, and the
+// reason THIS file exists as its own guard: a new writer of refusal-shaped
+// JSON is exactly the shape that class recurs in.
 //
 // STANDING NOTE: this file matches `ccd-workspaces.test.ts:1045`'s
 // `/^ccd.*\.ts$/` containment scan. It reads ccd's TEXT and runs nothing, so it
