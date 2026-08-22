@@ -117,6 +117,54 @@ describe('CoordStore.recordGap / retireGeneration', () => {
   });
 });
 
+// F2 (coordinator fix round 1): the `LifecycleGap` pairing invariant
+// (`mirrorplan.ts`'s private `coupledLoss`) was a caller-discipline-only rule
+// until now — nothing in the store or the schema caught a violated row. These
+// hit the CHECK constraint directly with a raw INSERT, bypassing
+// `recordGap` entirely, because the guarantee this proves is that SQLite
+// itself refuses the row — not that `recordGap`'s own callers happen to be
+// well-behaved.
+describe('lifecycle_gaps CHECK constraint (F2)', () => {
+  const insertGap = (
+    s: CoordStore,
+    g: { reason: string; lostFrom: number | null; lostTo: number | null },
+  ): void => {
+    s.db.prepare(
+      'INSERT INTO lifecycle_gaps (at, gen, reason, detail, lostFrom, lostTo) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run(1, GEN, g.reason, 'd', g.lostFrom, g.lostTo);
+  };
+
+  it('rejects a mismatched pair — lostFrom set, lostTo null', () => {
+    const s = store();
+    expect(() => insertGap(s, { reason: 'shrank', lostFrom: 10, lostTo: null }))
+      .toThrow(/CHECK constraint failed/);
+  });
+
+  it('rejects a mismatched pair — lostFrom null, lostTo set', () => {
+    const s = store();
+    expect(() => insertGap(s, { reason: 'shrank', lostFrom: null, lostTo: 10 }))
+      .toThrow(/CHECK constraint failed/);
+  });
+
+  it("rejects reason:'unknown' carrying a non-null pair", () => {
+    const s = store();
+    expect(() => insertGap(s, { reason: 'unknown', lostFrom: 0, lostTo: 10 }))
+      .toThrow(/CHECK constraint failed/);
+  });
+
+  it('accepts every legitimate combination, including a non-unknown reason with a null pair', () => {
+    const s = store();
+    expect(() => insertGap(s, { reason: 'unknown', lostFrom: null, lostTo: null })).not.toThrow();
+    expect(() => insertGap(s, { reason: 'rotated-away', lostFrom: 100, lostTo: 4096 })).not.toThrow();
+    // Allowed by design: `coupledLoss`'s `bounded === null` branch can hand a
+    // non-'unknown' reason a null pair too (an unbounded range on a reason
+    // that isn't itself the we-do-not-know one) — the CHECK is a
+    // one-directional implication on 'unknown', not a biconditional.
+    expect(() => insertGap(s, { reason: 'rotated-away', lostFrom: null, lostTo: null })).not.toThrow();
+    expect(() => insertGap(s, { reason: 'shrank', lostFrom: 0, lostTo: 500 })).not.toThrow();
+  });
+});
+
 describe('CoordStore.lifecycleFor', () => {
   it("answers one session's timeline oldest-first, and nobody else's", () => {
     const s = store();

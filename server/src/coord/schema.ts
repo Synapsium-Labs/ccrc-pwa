@@ -281,6 +281,15 @@ export const MIGRATIONS: readonly string[] = [
   // rather than adding `MIGRATIONS[3]` avoids a fourth table shape
   // (`lifecycle_events` missing `badoutcome`, briefly, between versions 3
   // and 4) that nothing would ever have actually run against.
+  //
+  // FIX ROUND 2 (Tasks 33/34 review, F2) AMENDS THIS MIGRATION AGAIN, adding
+  // the CHECK constraint on `lifecycle_gaps` below. The premise above was
+  // RE-VERIFIED for this round, not assumed: `origin/main`'s `schema.ts`
+  // still has exactly TWO migration entries (no `lifecycle_events`,
+  // `lifecycle_gaps` or `badoutcome` anywhere in it), and `git merge-base
+  // --is-ancestor` against `origin/main` says NO for both Task 27's commit
+  // and Fix Round 1's `badoutcome` commit — so this migration still has not
+  // shipped and the same reasoning applies again.
   `
   CREATE TABLE lifecycle_events (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -363,7 +372,20 @@ export const MIGRATIONS: readonly string[] = [
     reason   TEXT NOT NULL,      -- rotated-away|shrank|unknown; read back through isLifecycleGapReason
     detail   TEXT NOT NULL,      -- DISPLAY-ONLY -- nothing parses it back
     lostFrom INTEGER,            -- the byte range known lost. NULL where it could not be bounded
-    lostTo   INTEGER
+    lostTo   INTEGER,
+    -- COUPLED, AS A STORAGE CONSTRAINT rather than caller discipline (Fix
+    -- Round 2, F2): \`lostFrom\`/\`lostTo\` are either both NULL or both set,
+    -- and a \`reason\` of 'unknown' always carries a null pair -- there is no
+    -- bounded range for a hole the mirror could not place at all. This is
+    -- the same invariant \`mirrorplan.ts\`'s private \`coupledLoss\` enforces
+    -- at its one call site (still the ONLY producer of a LifecycleGap pair
+    -- anywhere in server/src or shared/), restated here so it is a MECHANISM
+    -- rather than a fact resting on every future writer remembering to route
+    -- through an unexported helper in another file. Only a one-directional
+    -- implication on 'unknown' -- a NON-'unknown' reason MAY still carry a
+    -- null pair (\`coupledLoss\`'s own \`bounded === null\` branch), so this
+    -- does not assert the converse.
+    CHECK ((lostFrom IS NULL) = (lostTo IS NULL) AND (reason <> 'unknown' OR lostFrom IS NULL))
   );
   CREATE INDEX lifecycle_gaps_by_at ON lifecycle_gaps(at);
   `,
