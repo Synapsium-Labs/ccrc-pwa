@@ -116,3 +116,126 @@ describe('CoordStore.recordGap / retireGeneration', () => {
     expect(gaps).toEqual([{ gen: GEN, reason: 'rotated-away', lostFrom: 110, lostTo: 4096 }]);
   });
 });
+
+describe('CoordStore.lifecycleFor', () => {
+  it("answers one session's timeline oldest-first, and nobody else's", () => {
+    const s = store();
+    s.ingestJournal({ gen: GEN, rows: [
+      row('a.1', { id: 'demo-quiet-basin', at: 100 }),
+      row('a.2', { id: 'other-session',    at: 110 }),
+      row('a.3', { id: 'demo-quiet-basin', at: 120 }),
+    ], cursor: 300, size: 300, at: 9 });
+    const got = s.lifecycleFor({ sessionId: 'demo-quiet-basin', limit: 50 });
+    expect(got.map((e) => e.uid)).toEqual(['a.1', 'a.3']);
+    expect(got[0]!.id).toBe('demo-quiet-basin');   // the row says sessionId, the wire says id
+    expect(got[0]!.ingestedAt).toBe(9);
+    expect(got[0]!.gen).toBe(GEN);
+    expect(got[0]!.truncated).toBe(false);
+  });
+
+  it('keeps the NEWEST n when limited, still returned oldest-first', () => {
+    const s = store();
+    s.ingestJournal({ gen: GEN, rows: ['a.1', 'a.2', 'a.3', 'a.4'].map((u) => row(u)),
+                      cursor: 400, size: 400, at: 9 });
+    expect(s.lifecycleFor({ limit: 2 }).map((e) => e.uid)).toEqual(['a.3', 'a.4']);
+  });
+
+  it('clamps a limit it was never going to honour, and survives a NaN', () => {
+    const s = store();
+    s.ingestJournal({ gen: GEN, rows: [row('a.1')], cursor: 110, size: 110, at: 9 });
+    expect(s.lifecycleFor({ limit: 99_999 })).toHaveLength(1);
+    expect(s.lifecycleFor({ limit: Number.NaN })).toHaveLength(1);
+  });
+
+  it('reads an act token this build does not know as `unknown`, never as a raw string', () => {
+    const s = store();
+    s.ingestJournal({ gen: GEN, rows: [row('a.1')], cursor: 110, size: 110, at: 9 });
+    s.db.prepare('UPDATE lifecycle_events SET act = ?, outcome = ? WHERE uid = ?')
+      .run('quarantine', 'partially', 'a.1');
+    const e = s.lifecycleFor({ limit: 10 })[0]!;
+    expect(e.act).toBe(LC_ACT_UNKNOWN);
+    expect(e.outcome).toBe('unknown');
+    expect(e.raw).toContain('"uid":"a.1"');   // the bytes survive the degrade
+  });
+
+  it('revives the three families as three objects, or null where the line carried none', () => {
+    const s = store();
+    s.ingestJournal({ gen: GEN, rows: [row('a.1', {
+      obs: { cg: 'supervisor', cgraw: '0::/x', pid: 7 },
+      dec: { surface: 'pwa', actor: 'nobody', reason: 'r' },
+    })], cursor: 110, size: 110, at: 9 });
+    const e = s.lifecycleFor({ limit: 10 })[0]!;
+    expect(e.obs).toMatchObject({ cg: 'supervisor', cgraw: '0::/x', pid: 7, ppid: null });
+    expect(e.dec).toMatchObject({ surface: 'pwa', actor: 'nobody' });
+    expect(e.meas).toBeNull();
+  });
+
+  // Not in the brief: prove `badoutcome` round-trips through the read side
+  // too, both when it is set (a degraded outcome) and when it is null (a
+  // known one) — `MirroredLifecycleEvent extends LifecycleEvent` requires
+  // the field on every returned row, so a reader that invents `null` for a
+  // row where ccd actually wrote a token would silently lie.
+  it("carries `badoutcome` through — the degrade's own token, or null for a known outcome", () => {
+    const s = store();
+    s.ingestJournal({ gen: GEN, rows: [
+      row('a.1', { outcome: 'quarantined' }),
+      row('a.2', {}),
+    ], cursor: 220, size: 220, at: 9 });
+    const [degraded, known] = s.lifecycleFor({ limit: 10 });
+    expect(degraded!.outcome).toBe('unknown');
+    expect(degraded!.badoutcome).toBe('quarantined');
+    expect(known!.outcome).toBe('done');
+    expect(known!.badoutcome).toBeNull();
+  });
+});
+
+describe('CoordStore.lifecycleStats and lifecycleGaps', () => {
+  it('reports the horizon, the newest event, and the counts', () => {
+    const s = store();
+    s.ingestJournal({ gen: GEN, rows: [row('a.1', { at: 100 }), row('a.2', { at: 300 })],
+                      cursor: 220, size: 220, at: 9 });
+    s.recordGap({ at: 20, gen: GEN, reason: 'shrank', detail: 'truncated',
+                  lostFrom: 0, lostTo: 100 });
+    expect(s.lifecycleStats()).toEqual({
+      rows: 2, oldestAt: 100, newestAt: 300, generations: 1, gaps: 1,
+    });
+    expect(s.lifecycleGaps(10)).toEqual([{
+      at: 20, gen: GEN, reason: 'shrank', detail: 'truncated', lostFrom: 0, lostTo: 100,
+    }]);
+  });
+
+  it('reads a gap reason this build does not know as `unknown`', () => {
+    const s = store();
+    s.recordGap({ at: 20, gen: GEN, reason: 'shrank', detail: 'd', lostFrom: null, lostTo: null });
+    s.db.prepare('UPDATE lifecycle_gaps SET reason = ?').run('vacuumed');
+    expect(s.lifecycleGaps(10)[0]!.reason).toBe('unknown');
+  });
+});
+
+describe('CoordStore.recentProvenance', () => {
+  it('returns only rows carrying BOTH an observed class and a declared surface', () => {
+    const s = store();
+    s.ingestJournal({ gen: GEN, rows: [
+      row('a.1', { at: 500, obs: { cg: 'pane' }, dec: { surface: 'agent' } }),
+      row('a.2', { at: 500, obs: { cg: 'pane' } }),                    // no dec
+      row('a.3', { at: 500, dec: { surface: 'agent' } }),              // no obs
+      row('a.4', { at: 100, obs: { cg: 'pane' }, dec: { surface: 'agent' } }),  // too old
+    ], cursor: 400, size: 400, at: 9 });
+    expect(s.recentProvenance(200, 50)).toEqual([
+      { id: 'demo-quiet-basin', at: 500, obsClass: 'pane', decSurface: 'agent' },
+    ]);
+  });
+
+  it('DROPS a row whose class or surface is not even a string — unmodellable is not a disagreement', () => {
+    // A newer ccd writing `"cg": 7`, or a hand-edited row. `json_extract`
+    // answers whatever the JSON held, and an adapter that cast it would hand
+    // `corroboration` a value it cannot narrow — the "an adapter may not
+    // narrow a distinction it received" rule, inverted.
+    const s = store();
+    s.ingestJournal({ gen: GEN, rows: [row('b.1', { at: 500 })], cursor: 110, size: 110, at: 9 });
+    s.db.prepare("UPDATE lifecycle_events SET obsJson = '{\"cg\":7}', decJson = '{\"surface\":\"cli\"}'")
+      .run();
+    expect(() => s.recentProvenance(200, 50)).not.toThrow();
+    expect(s.recentProvenance(200, 50)).toEqual([]);
+  });
+});

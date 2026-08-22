@@ -1,12 +1,14 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { tx } from './db.js';
 import { CLEAR_REFUSED_STRANDS_TEXT } from './rundefs.js';
-import type { JournalRow } from './journalparse.js';
+import { reviveDec, reviveMeas, reviveObs, type JournalRow } from './journalparse.js';
 import {
+  isLifecycleAct, isLifecycleGapReason, isLifecycleOutcome,
   isMailDeliveryState, isMailKind, isNotifyKind, isProgramState, isRunState, isWorkItemState,
+  LC_ACT_UNKNOWN, LC_OUTCOME_UNKNOWN,
   RUN_TRANSITIONS,
-  type CoordCaps, type LifecycleGapReason, type MailDeliveryState, type MailKind,
-  type MailRejectCode, type MailSummary,
+  type CoordCaps, type LifecycleGap, type LifecycleGapReason, type MailDeliveryState,
+  type MailKind, type MailRejectCode, type MailSummary, type MirroredLifecycleEvent,
   type NotifyEvent, type ProgramState, type RunItemTally, type RunState, type RunSummary,
   type WorkItemState,
 } from '../../../shared/api.js';
@@ -234,6 +236,36 @@ export interface JournalGeneration {
   gen: string; firstSeenAt: number; lastSweepAt: number;
   cursor: number; size: number; retired: boolean;
 }
+
+/**
+ * One `(observed class, declared surface)` pair off a lifecycle row — the only
+ * type that crosses the L1/L3 seam carrying two of the three identity
+ * families, and the one place their two legitimate spellings are reconciled.
+ *
+ * THE WIRE/JOURNAL FIELDS ARE `obs.cg` AND `dec.surface`; the DERIVED PAIR is
+ * `obsClass`/`decSurface`, matching `corroboration(obsClass, decSurface)`'s own
+ * parameter names. Both spellings are correct at their own layer; this
+ * docstring is what stops a later reader "fixing" either one. Likewise `id`:
+ * the COLUMN is `sessionId` (because `id` is `lifecycle_events`' autoincrement
+ * key) and the SQL below aliases it back.
+ *
+ * Both strings are RAW. Narrowing them is `corroboration`'s job and
+ * `divergence.ts`'s call, and this type must not pre-empt it by claiming they
+ * are members of anything.
+ */
+export interface ProvenancePair {
+  readonly id: string;
+  readonly at: number | null;
+  readonly obsClass: string;
+  readonly decSurface: string;
+}
+
+/** JSON text out of a column back to `unknown`, or null. Never throws: a
+ *  column this process wrote can still be a column an older build wrote. */
+const jsonOrNull = (s: string | null): unknown => {
+  if (s === null) return null;
+  try { return JSON.parse(s); } catch { return null; }
+};
 
 /**
  * Every read and every write of the coordination database, in one class, and
@@ -1811,5 +1843,146 @@ export class CoordStore {
     this.db.prepare(
       'UPDATE lifecycle_generations SET retired = 1, lastSweepAt = ? WHERE gen = ?',
     ).run(at, gen);
+  }
+
+  /** Bounded like `FEED_RETENTION` is, and for the same reason: a route that
+   *  can be asked for the whole table is a route that can be asked for 90 MB. */
+  static readonly LIFECYCLE_PAGE_MAX = 500;
+
+  /** The column list, named ONCE. `SELECT *` is banned in this directory —
+   *  naming every column is exactly what makes "an older build ignores unknown
+   *  columns" true rather than aspirational. Includes `badoutcome`, added to
+   *  the schema by a fix round after this brief was written — omitting it
+   *  here would silently drop the outcome-side degrade token on every read. */
+  private static readonly LC_COLS =
+    'id, uid, gen, at, ingestedAt, act, badact, outcome, badoutcome, verb, sessionId, tx, refusal, ' +
+    'detail, truncated, obsJson, decJson, measJson, raw';
+
+  /**
+   * One session's past tense, oldest-first, newest-`limit` window.
+   *
+   * ORDERED BY THIS TABLE'S OWN `id`, NEVER BY `at`. `at` is CCD's clock and is
+   * nullable; `id` is monotonic across a generation rotation. `feed_events`
+   * already relies on the identical argument for `GET /api/feed`.
+   */
+  lifecycleFor(q: { readonly sessionId?: string | null; readonly limit?: number }): MirroredLifecycleEvent[] {
+    const raw = q.limit ?? CoordStore.LIFECYCLE_PAGE_MAX;
+    const n = Number.isFinite(raw) && raw > 0
+      ? Math.min(Math.floor(raw), CoordStore.LIFECYCLE_PAGE_MAX)
+      : CoordStore.LIFECYCLE_PAGE_MAX;
+    const c = CoordStore.LC_COLS;
+    const rows = (q.sessionId
+      ? this.db.prepare(
+          `SELECT ${c} FROM (SELECT ${c} FROM lifecycle_events WHERE sessionId = ? ` +
+          'ORDER BY id DESC LIMIT ?) ORDER BY id ASC',
+        ).all(q.sessionId, n)
+      : this.db.prepare(
+          `SELECT ${c} FROM (SELECT ${c} FROM lifecycle_events ORDER BY id DESC LIMIT ?) ` +
+          'ORDER BY id ASC',
+        ).all(n)) as {
+          uid: string | null; gen: string; at: number | null; ingestedAt: number;
+          act: string; badact: string | null; outcome: string; badoutcome: string | null;
+          verb: string | null; sessionId: string | null; tx: string | null;
+          refusal: string | null; detail: string | null; truncated: number;
+          obsJson: string | null; decJson: string | null; measJson: string | null; raw: string;
+        }[];
+    return rows.map((r) => ({
+      uid: r.uid, gen: r.gen, at: r.at, ingestedAt: r.ingestedAt,
+      // Through the guards, never a cast — the same discipline `feedEvents`
+      // gives `kind` and `programs()` gives `state`. A token a NEWER build
+      // wrote lands somewhere honest, and `raw` still carries the bytes.
+      act: isLifecycleAct(r.act) ? r.act : LC_ACT_UNKNOWN,
+      badact: r.badact,
+      outcome: isLifecycleOutcome(r.outcome) ? r.outcome : LC_OUTCOME_UNKNOWN,
+      // `badact`'s twin. Same shape as `badact` above: a free-text echo of
+      // whatever ccd (or this build's own degrade) wrote, never re-narrowed
+      // here — narrowing already happened once, on the way in.
+      badoutcome: r.badoutcome,
+      verb: r.verb,
+      // The COLUMN is `sessionId`; the WIRE event is `id`. One rename,
+      // declared in `journalparse.ts` and undone here — see `ProvenancePair`.
+      id: r.sessionId,
+      tx: r.tx, refusal: r.refusal, detail: r.detail,
+      truncated: r.truncated !== 0,
+      // The SAME revivers the parser used on the way in: one definition, both
+      // directions, and each returns a literal so a family gaining a field is
+      // a compile error rather than a silently-dropped one.
+      obs: reviveObs(jsonOrNull(r.obsJson)),
+      dec: reviveDec(jsonOrNull(r.decJson)),
+      meas: reviveMeas(jsonOrNull(r.measJson)),
+      raw: r.raw,
+    }));
+  }
+
+  /** The holes, newest-first — a timeline with a hole in it says so. */
+  lifecycleGaps(limit = 100): LifecycleGap[] {
+    const n = Number.isFinite(limit) && limit > 0
+      ? Math.min(Math.floor(limit), CoordStore.LIFECYCLE_PAGE_MAX)
+      : 100;
+    const rows = this.db.prepare(
+      'SELECT at, gen, reason, detail, lostFrom, lostTo FROM lifecycle_gaps ORDER BY id DESC LIMIT ?',
+    ).all(n) as {
+      at: number; gen: string; reason: string; detail: string;
+      lostFrom: number | null; lostTo: number | null;
+    }[];
+    return rows.map((r) => ({
+      at: r.at, gen: r.gen,
+      reason: isLifecycleGapReason(r.reason) ? r.reason : 'unknown',
+      detail: r.detail, lostFrom: r.lostFrom, lostTo: r.lostTo,
+    }));
+  }
+
+  /** What `/api/fleet/health` reports so the operator sees the growth coming
+   *  (D8). `oldestAt` IS the reconstruction horizon: below it the mirror holds
+   *  history the flat file no longer does. `AS n` and not `AS rows` — `ROWS`
+   *  is a SQLite window-frame keyword and only parses here as a fallback
+   *  identifier. */
+  lifecycleStats(): {
+    rows: number; oldestAt: number | null; newestAt: number | null;
+    generations: number; gaps: number;
+  } {
+    const e = this.db.prepare(
+      'SELECT count(*) AS n, MIN(at) AS oldestAt, MAX(at) AS newestAt FROM lifecycle_events',
+    ).get() as { n: number; oldestAt: number | null; newestAt: number | null };
+    const g = this.db.prepare('SELECT count(*) AS c FROM lifecycle_generations').get() as { c: number };
+    const p = this.db.prepare('SELECT count(*) AS c FROM lifecycle_gaps').get() as { c: number };
+    return { rows: e.n, oldestAt: e.oldestAt, newestAt: e.newestAt, generations: g.c, gaps: p.c };
+  }
+
+  /**
+   * The pairs `divergence.provenance-mismatch` weighs — rows carrying BOTH a
+   * kernel-observed actor class and a declared surface. NOTHING IS DECIDED
+   * HERE: `corroboration()` (L0) is the only function allowed to relate the
+   * families, and `divergence.ts` is where it is called. This is a read.
+   *
+   * `json_extract` rather than a second column pair: the families ride as JSON
+   * precisely because they never merge, and two more columns would be two more
+   * places for a newer ccd's field to be dropped.
+   *
+   * MAPPED, NOT CAST. `json_extract` answers whatever the JSON held — a
+   * number, a boolean, a null — and `as unknown as ProvenancePair[]` would
+   * launder that past the only narrowing door there is. A row whose class or
+   * surface is not a string cannot be modelled AS A PAIR, and an unmodellable
+   * value is not a disagreement, so it is dropped here rather than raised
+   * downstream.
+   */
+  recentProvenance(sinceAt: number, limit: number): ProvenancePair[] {
+    const n = Number.isFinite(limit) && limit > 0 ? Math.min(Math.floor(limit), 1000) : 500;
+    const rows = this.db.prepare(
+      "SELECT sessionId AS id, at, json_extract(obsJson, '$.cg') AS obsClass, " +
+      "json_extract(decJson, '$.surface') AS decSurface FROM lifecycle_events " +
+      'WHERE sessionId IS NOT NULL AND obsJson IS NOT NULL AND decJson IS NOT NULL ' +
+      // `lifecycle_events.id`, QUALIFIED: `id` is now an output alias for
+      // `sessionId`, and SQLite resolves a bare `ORDER BY id` to the alias —
+      // which would order this window by session name instead of by arrival.
+      'AND at IS NOT NULL AND at >= ? ORDER BY lifecycle_events.id DESC LIMIT ?',
+    ).all(sinceAt, n) as {
+      id: string; at: number | null; obsClass: unknown; decSurface: unknown;
+    }[];
+    return rows.flatMap((r) => (
+      typeof r.obsClass === 'string' && typeof r.decSurface === 'string'
+        ? [{ id: r.id, at: r.at, obsClass: r.obsClass, decSurface: r.decSurface }]
+        : []
+    ));
   }
 }
