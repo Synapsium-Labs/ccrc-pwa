@@ -86,9 +86,10 @@ describe('ws-rm pins the workspace into the attic before it destroys it', () => 
     fixture();
     h.sh(`${STUB} cmd_ws_rm demo-still-river 2>/dev/null || true`);
     const m = intentMeas();
-    expect(Number(m['attic'])).toBeGreaterThanOrEqual(1);
-    expect(m['atticsrc']).toBe('worktree');
-    expect(m['tip']).toMatch(/^[0-9a-f]{40}$/);
+    expect(m, 'the destroy intent line exists with a meas object').toBeDefined();
+    expect.soft(Number(m['attic']), 'meas.attic').toBeGreaterThanOrEqual(1);
+    expect.soft(m['atticsrc'], 'meas.atticsrc').toBe('worktree');
+    expect.soft(m['tip'], 'meas.tip').toMatch(/^[0-9a-f]{40}$/);
   });
 
   it('REFUSES when the tip is unreadable and the directory is still there', () => {
@@ -107,9 +108,9 @@ describe('ws-rm pins the workspace into the attic before it destroys it', () => 
       const err = e as { status?: number; stderr?: Buffer };
       code = err.status ?? 1; stderr = String(err.stderr ?? '');
     }
-    expect(code).not.toBe(0);
-    expect(stderr).toContain('could not resolve');
-    expect(refusalsOf(h.home)).toEqual([{ act: 'destroy', token: 'tip-unreadable' }]);
+    expect.soft(code, 'exit code').not.toBe(0);
+    expect.soft(stderr, 'stderr').toContain('could not resolve');
+    expect.soft(refusalsOf(h.home), 'the journal refusal row').toEqual([{ act: 'destroy', token: 'tip-unreadable' }]);
   });
 
   it('PROCEEDS with atticsrc "none" when the tip is unreadable and the directory is gone', () => {
@@ -120,7 +121,9 @@ describe('ws-rm pins the workspace into the attic before it destroys it', () => 
     h.sh(`_reg_set gone-x uuid u; _reg_set gone-x project demo; _reg_set gone-x workspace x
       _reg_set gone-x workdir ${h.home}/not-here`);
     h.sh(`${STUB} cmd_ws_rm gone-x 2>/dev/null || true`);
-    expect(intentMeas()['atticsrc']).toBe('none');
-    expect(refusalsOf(h.home), 'a missing directory is not a refusal').toEqual([]);
+    const m = intentMeas();
+    expect(m, 'the destroy intent line exists with a meas object').toBeDefined();
+    expect.soft(m['atticsrc'], 'meas.atticsrc').toBe('none');
+    expect.soft(refusalsOf(h.home), 'a missing directory is not a refusal').toEqual([]);
   });
 });

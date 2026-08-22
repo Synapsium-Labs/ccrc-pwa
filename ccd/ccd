@@ -1008,7 +1008,7 @@ tmux list-panes -a -F '#{session_name} #{pane_pid}'" 2>/dev/null)
       p="$pid"; depth=0
       # The regex runs FIRST and every arithmetic test is downstream of it: `p`
       # comes off /proc, and bash evaluates a variable's CONTENTS as arithmetic
-      # (ccd:8825-8828 is the paid lesson). `depth` bounds a /proc that lies.
+      # (ccd:8784-8787 is the paid lesson). `depth` bounds a /proc that lies.
       while [[ "$p" =~ ^[0-9]+$ ]] && (( p > 1 )) && (( depth < 16 )); do
         while IFS=' ' read -r sname spid; do
           [[ "$spid" == "$p" ]] && { pane="$sname"; break; }
@@ -1177,7 +1177,7 @@ _lc_rotate() {   # live-path — mint a fresh generation when the live one is fu
     # only as the tiebreak — one ordering claim, expressed once, agreeing
     # with `_lc_live` and with L0 by construction rather than by two authors
     # remembering the same rule. `LC_ALL=C` on the `sort` invocation itself,
-    # this file's own idiom (ccd:4048, 4033, 1152, 6801) — a `local` variable
+    # this file's own idiom (ccd:4007, 4033, 1152, 6801) — a `local` variable
     # is never enough for an EXTERNAL command's collation, only for bash's
     # own builtin `[[ ]]` comparisons.
     # FIX ROUND 2 (task 15) — TWO gaps closed with one wrap. (1) Neither
