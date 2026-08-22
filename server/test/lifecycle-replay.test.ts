@@ -5,18 +5,34 @@
 //
 // Byte equality rather than resemblance, because `raw` holds the line verbatim.
 //
-// SCOPE OF THE BYTE-EQUALITY CLAIM, stated honestly rather than papered over:
+// SCOPE OF THE BYTE-EQUALITY CLAIM, stated honestly rather than papered over
+// (FIX ROUND 1, F2/F3 — task-36-37 review; corrects an earlier draft of this
+// same paragraph that named only three columns and undersold the `uid` case):
 // it holds for `raw` unconditionally (a real UTF-8 file read can never decode
 // into a JS string carrying a raw unpaired surrogate — invalid UTF-8 degrades
 // to U+FFFD at read time, before this code ever sees it), and for
 // `obs`/`dec`/`meas` even when a nested string carries a lone-surrogate JSON
 // escape (`CoordStore.ingestJournal` re-`JSON.stringify`s them before storage,
 // which re-escapes the surrogate to plain ASCII before it reaches a bind
-// parameter). It does NOT hold for `detail`/`badact`/`badoutcome`: those are
-// bound to `node:sqlite` as the JS string itself, and a lone unpaired UTF-16
-// surrogate in one of them is silently replaced with U+FFFD by the TEXT
-// column, with no signal. The last test below in this file proves and pins
-// exactly that boundary, on `detail`.
+// parameter). It does NOT hold for the EIGHT columns `store.ts`'s
+// `ingestJournal` binds as the raw JS string itself, with no re-escaping pass
+// in between: `uid`, `badact`, `badoutcome`, `verb`, `sessionId`, `tx`,
+// `refusal`, `detail`. A lone unpaired UTF-16 surrogate in any of those is
+// silently replaced with U+FFFD by the TEXT column, with no signal. The
+// `detail` test below in this file proves and pins that boundary directly.
+//
+// `uid` is the one of the eight where this is NOT merely a display caveat:
+// `lifecycle_uid` is `CREATE UNIQUE INDEX … ON lifecycle_events(uid) WHERE
+// uid IS NOT NULL`, so two DISTINCT uids that differ only in a surrogate that
+// degrades identically collapse to ONE row under `INSERT OR IGNORE` — no gap
+// row, no error, no counter. Measured directly: uids `k\uD800` and `k\uD801`
+// (both real, both legal JSON, both syntactically distinct) yield exactly one
+// stored row, `{uid: 'k�', ...}`. This is durable data loss, not a
+// cosmetic byte-equality footnote — and it is confined to a genuinely
+// malformed uid: real ccd uids are ASCII `<epochNs>.<pid>.<seq>`
+// (`journalparse.ts`'s own comment on `JournalRow.uid`), so a forged or
+// corrupt line carrying an invalid uid can collide with another invalid uid,
+// but can never erase a genuine ASCII one.
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -34,8 +50,14 @@ const G1 = '1755780000000000000';
 const G2 = '1755790000000000000';
 
 /** A body with every shape the mirror has to model: a full record with all
- *  three families, a refusal with its detail, a line whose act this build does
- *  not declare, and a line that is not JSON at all. */
+ *  three families, a refusal with its detail, a line whose act AND outcome
+ *  this build does not declare (FIX ROUND 1, F1: `outcome: 'stalled'` added
+ *  to `a.3` so `badoutcome` — the column `COLS` was silently skipping — is
+ *  actually non-null somewhere this drill checks), and a line without an
+ *  `at` key at all (FIX ROUND 1, F4: `a.4`, so Step 2's clock-fallback
+ *  mutant has a row to leak through — every other line here carries a
+ *  numeric `at`, so `n(o,'at') ?? Date.now()` was previously dead code on
+ *  every path this fixture exercised), and a line that is not JSON at all. */
 const BODY_1 = [
   JSON.stringify({ uid: 'a.1', at: 100, act: AN_ACT, outcome: 'intent', verb: 'ws-rm',
     id: 'demo-quiet-basin', tx: 'a',
@@ -48,22 +70,35 @@ const BODY_1 = [
   JSON.stringify({ uid: 'a.2', at: 110, act: AN_ACT, outcome: 'refused',
     verb: 'ws-rm', id: 'demo-quiet-basin', tx: 'a', refusal: 'held',
     detail: 'held: program:build8 wave:2/4 — release first' }),
-  JSON.stringify({ uid: 'a.3', at: 120, act: 'quarantine', outcome: 'done',
+  JSON.stringify({ uid: 'a.3', at: 120, act: 'quarantine', outcome: 'stalled',
     verb: 'ws-rm', id: 'demo-quiet-basin', truncated: true }),
+  JSON.stringify({ uid: 'a.4', act: AN_ACT, outcome: 'done', verb: 'ws-rm',
+    id: 'demo-quiet-basin' }),
   'ws-rm demo-quiet-basin  # a child wrote into the log',
 ].join('\n') + '\n';
 
 const BODY_2 = JSON.stringify({ uid: 'b.1', at: 200, act: AN_ACT, outcome: 'done',
   verb: 'forget', id: 'other-session' }) + '\n';
 
-/** EVERY column except the two that legitimately move. `id` is an
- *  autoincrement; `ingestedAt` is the server's clock and is pinned separately
- *  below, so its exclusion is deliberate rather than quiet. */
-const COLS = 'uid, gen, at, act, badact, outcome, verb, sessionId, tx, refusal, ' +
-             'detail, truncated, obsJson, decJson, measJson, raw';
+/** FIX ROUND 1, F1: EVERY column this table has, DERIVED from
+ *  `PRAGMA table_info` rather than hand-listed, except `id` (an
+ *  autoincrement) and `ingestedAt` (the server's clock, pinned separately
+ *  below). The previous version of this file hand-listed sixteen names and
+ *  silently dropped a THIRD column, `badoutcome`, alongside the two
+ *  deliberately-excluded ones — exactly the "second enumeration of a value
+ *  that already has one" this repo's `single-definition.test.ts` exists to
+ *  catch, just not in a place that scanner reaches. A 20th column added
+ *  later cannot be silently skipped here: it is either excluded by name,
+ *  deliberately, or it is in `COLS`. */
+const EXCLUDED_COLS = new Set(['id', 'ingestedAt']);
+const colsFor = (s: CoordStore): string =>
+  (s.db.prepare('PRAGMA table_info(lifecycle_events)').all() as { name: string }[])
+    .map((c) => c.name)
+    .filter((n) => !EXCLUDED_COLS.has(n))
+    .join(', ');
 
 const snapshot = (s: CoordStore): unknown[] =>
-  s.db.prepare(`SELECT ${COLS} FROM lifecycle_events ORDER BY gen, uid, raw`).all();
+  s.db.prepare(`SELECT ${colsFor(s)} FROM lifecycle_events ORDER BY gen, uid, raw`).all();
 
 const plant = (bodies: readonly (readonly [string, string])[]) => {
   const home = mkTmp('ccrc-replay-');
@@ -88,7 +123,8 @@ describe('the re-measurement drill (D8)', () => {
     await mirrorOver(w.registryDir, w.store, () => now).sweep();
 
     const before = snapshot(w.store);
-    expect(before, 'the drill would pass vacuously over an empty table').toHaveLength(5);
+    // FIX ROUND 1, F4: 5 -> 6 rows (BODY_1 gained `a.4`).
+    expect(before, 'the drill would pass vacuously over an empty table').toHaveLength(6);
 
     // LOSE THE MIRROR. Both tables: the events AND the cursors, which is what
     // "a lost coord.db reconstructs from the flat files" actually means.
@@ -112,7 +148,8 @@ describe('the re-measurement drill (D8)', () => {
     const mirror = mirrorOver(w.registryDir, w.store, () => now);
     await mirror.sweep();
     const before = snapshot(w.store);
-    expect(before).toHaveLength(4);
+    // FIX ROUND 1, F4: 4 -> 5 rows (BODY_1 gained `a.4`).
+    expect(before).toHaveLength(5);
 
     // Wind the cursor back to 0 by hand: re-reading a generation from offset 0
     // must be no-op-or-catch-up, never a duplicate (D6). `size` is wound back
@@ -138,10 +175,11 @@ describe('the re-measurement drill (D8)', () => {
     // before storage (`store.ts`'s `ingestJournal`) — that second pass
     // re-escapes any lone surrogate back to plain ASCII before it ever
     // reaches a bind parameter, so a surrogate nested inside those three
-    // families does NOT hit this hazard the way `detail`/`badact`/`badoutcome`
-    // do. Verified directly (scratch probe, not asserted here): an identical
-    // lone surrogate placed in `obs.ssh` round-trips exactly, because by the
-    // time it is bound it is the ASCII escape sequence, not a raw code unit.
+    // families does NOT hit this hazard the way the eight raw-bound string
+    // columns (file-level docstring above) do. Verified directly (scratch
+    // probe, not asserted here): an identical lone surrogate placed in
+    // `obs.ssh` round-trips exactly, because by the time it is bound it is
+    // the ASCII escape sequence, not a raw code unit.
     const detail = 'x\uD800y';
     const gen = '1755795000000000000';
     const body = JSON.stringify({ uid: 'c.1', at: 300, act: AN_ACT, outcome: 'refused',
@@ -157,8 +195,10 @@ describe('the re-measurement drill (D8)', () => {
     // `detail` IS affected: this is the documented, measured boundary —
     // `node:sqlite`'s TEXT column silently replaces a lone unpaired surrogate
     // with U+FFFD on the way back out. D8's byte-equality claim does NOT
-    // extend to `detail`/`badact`/`badoutcome` for a line carrying one; it is
-    // scoped to `raw`, which cannot carry a raw surrogate by construction.
+    // extend to the eight raw-bound string columns for a line carrying one;
+    // it is scoped to `raw`, which cannot carry a raw surrogate by
+    // construction, and to `obs`/`dec`/`meas`, which re-escape one before
+    // storage.
     expect.soft(row!.detail, 'detail silently degrades — documented, not papered over').not.toBe(detail);
     expect.soft(row!.detail, 'degrades exactly to U+FFFD in place of the lone surrogate').toBe('x�y');
   });
