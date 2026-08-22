@@ -363,6 +363,39 @@ behaviour names the test that pins it.
       `:917-937`) stay GREEN unchanged — they are the negative control that this task did not switch
       the source.
 
+### Found by the wave's own adversarial review, and fixed
+
+Six lenses over the branch diff, every claimed finding put to an independent skeptic instructed to
+refute it. Fifteen survived refutation; these are the ones that changed code.
+
+- **D-183 — `branch-elsewhere`, a rung this plan did not foresee.** The drift fix removed an
+  accidental guard: while `registry-branch-drift` refused, the only name that could reach step (g)
+  was the workspace's own `ws/<slug>`, which nothing else holds. With git's record naming the
+  branch, one `git switch --ignore-other-worktrees main` inside a workspace is enough to make the
+  branch a reap deletes the one the project's own checkout is standing on — and `update-ref -d`
+  (which step (g) uses deliberately, because `branch -d` refuses a squash merge) does not make the
+  check `branch -d` makes. Measured, git 2.43: the ref goes, rc 0, and `git status` in the project
+  reads "No commits yet on main" over a full history. The per-child ladder has asked this question
+  since Task 8 (`child-branch-elsewhere`); the parent now asks it too, in the eval AND in the tail
+  ahead of (a), because the resume path never runs the eval.
+- **D-184 — the remedy three verbs name was not executable.** `ws-reap`'s drift note, `pr-state`'s
+  `branch-drift` answer and `ws-rename`'s own refusal all say "run `ccd ws-rename` once by hand to
+  re-corroborate the two". Measured: every spelling of that command was refused, because the drift
+  rung runs before `$new` is used for anything but a validity check. `cmd_ws_rename` now accepts
+  exactly `--branch <the branch git already has>` as a RECORD correction — no ref moves — and still
+  refuses every other spelling.
+- **D-185 — the resume-shaped audit named the branch it would KEEP.** The drift rung lives inside
+  `if [[ -d "$workdir" ]]`, so once the worktree is gone `$branch` stayed the registry's, and the
+  sheet described `ws/quiet-basin` while the journal, the tail and step (g) were all about `feat/x`.
+  The resume-shaped arm now reads its branch from the journal, through the same decoder the tail and
+  `_ws_reap_locked` already use.
+- **D-186 — three smaller ones, each measured.** `no-upstream` still said "never pushed" about a
+  branch pushed with no `-u` (the tracking REF is a third witness beside `@{upstream}` and
+  `branch.<name>.merge`); `_ws_branch_holders` swallowed a failed `git worktree list` and read as
+  "nobody else holds it" — fail-open in front of the only irreversible line in the file; and
+  `base-missing` had moved behind the merge proof, so a deleted base ref surfaced as a `tree-differs`
+  diff dump instead of the state it is in.
+
 ### Recorded, not fixed — the seams this wave deliberately did not widen
 
 Found while implementing (an adversarial completeness pass over every branch-name flow); each
@@ -391,6 +424,12 @@ if it were not written down.
   `git worktree remove` refuses a hijacked path (`fatal: validation failed … '.git' is not a
   .git file`, rc 128) before the branch-delete arm is entered. A latent single-guard-deep
   defect of exactly the family this wave is about.
+- **D-187 — a `prphase` poisoned before the drift appeared stays poisoned.** Task 6 persists nothing
+  on the drift answer, which is the point (a poller that wrote would rewrite lineage). The cost is
+  that a `no-commits` already on disk from before the drift survives as the honest-stale value a
+  cold-started server rebuilds from. The LIVE answer is `unknown`/`branch-drift` on every sweep, so
+  this is visible only across a server restart, and clearing the field would be a write on the one
+  path this wave promised would not write. Recorded rather than resolved.
 - **Observed, unrelated: a cross-test race in `server/test/typecheck-tests.test.ts`.** Its
   "every .ts file is in some typecheck project" scan sees `src/__boot_control_mutant__.ts`,
   which `boot.test.ts` writes for ~15 s. `single-definition.test.ts` and `auth-routes.test.ts`
