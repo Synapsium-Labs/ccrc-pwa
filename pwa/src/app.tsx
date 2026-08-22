@@ -8,7 +8,7 @@
 // swap `/s/:id` already uses — CSS never learned a third state, it only
 // needed to know "fleet" vs "something else is in the detail pane".
 // ToastHost mounts here so stores/screens can fire toasts from anywhere.
-import { useEffect } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { BlockScreen } from './components/BlockScreen';
 import { LoginScreen } from './components/LoginScreen';
@@ -61,6 +61,44 @@ export function App(): ReactNode {
   // on mobile it stays inside the fleet screen. useMediaQuery keeps it a single
   // instance either way — no duplication, no double polling.
   const desktop = useMediaQuery('(min-width: 900px)');
+  // A ROUTE CHANGE PUTS THE DETAIL PANE BACK AT THE TOP (D-161).
+  //
+  // `.shell-detail` is ONE persistent DOM node whose CHILDREN swap per route
+  // (the ternary below is inside it), so React reconciles the contents and
+  // leaves the pane's own scroll offset exactly where the last screen left it.
+  // Before D-161 gave the pane a scroll region that offset was always 0 and
+  // this could not happen; now /mail → /runs lands mid-list, with the new
+  // screen's <h1> and its Back button above the fold. Measured: scrolled to
+  // 2517, children replaced, still 2517.
+  //
+  // A LAYOUT effect, not a passive one: the reset runs INSIDE the commit that
+  // put the new screen in the pane, before any passive effect of that commit.
+  // MEASURED, in app-pane-reset-timing.test.tsx — a screen mounted into the
+  // pane reads the offset from its own `useEffect` and gets 0; the moment this
+  // becomes `useEffect` it reads 2517 instead, because passive effects run
+  // child-before-parent. None of app.test.tsx's twelve can see that swap:
+  // `navigate` wraps the path change in `flushSync`, which flushes passive
+  // effects too, so the whole-commit view of the two spellings is identical
+  // there. What is NOT measured is the last step — that the browser gets no
+  // chance to paint between the commit and the passive flush, which is the
+  // platform's definition of a layout effect. That one is REASONED: jsdom does
+  // no layout and paints nothing, so no test in this package can observe a
+  // frame, and a real-browser runner is not on this branch.
+  // `popstate` (back/forward) goes through `usePath`, so it is covered by the
+  // same dependency.
+  //
+  // THE SIDEBAR IS DELIBERATELY LEFT ALONE. `.shell-nav` has always been
+  // scrollable, and its content does NOT swap per route — it is the same fleet
+  // list before and after. Resetting it would throw away the operator's place
+  // in that list every time they opened a session, which is a regression, not
+  // a fix.
+  const detail = useRef<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    const pane = detail.current;
+    // Null only if the shell has not mounted; on mobile the document scrolls
+    // rather than this pane, so the write is a harmless no-op there.
+    if (pane !== null) pane.scrollTop = 0;
+  }, [path]);
   return (
     <>
       {authLost && <LoginScreen />}
@@ -77,7 +115,7 @@ export function App(): ReactNode {
               showAccounts is false on desktop (they're in the top bar instead). */}
           <FleetScreen selectedId={sessionId} showAccounts={!desktop} />
         </aside>
-        <section className="shell-detail">
+        <section className="shell-detail" ref={detail}>
           {sessionId ? (
             // key remounts per session so per-session UI state (terminal drawer,
             // pickers) never leaks across a sidebar switch.

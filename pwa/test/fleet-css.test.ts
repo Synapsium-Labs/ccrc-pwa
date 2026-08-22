@@ -4,7 +4,9 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { atBlock, declValue, norm, normSel, ruleIn, selectorsOf, stripComments } from './cssRule';
+import {
+  atBlock, declValue, declaredValues, norm, normSel, ruleIn, selectorsOf, stripComments,
+} from './cssRule';
 
 const css = readFileSync(
   path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
@@ -489,13 +491,23 @@ describe('selection is polarity, status is hue', () => {
 });
 
 describe('shell-nav overflow backstop', () => {
-  it('clips horizontal overflow on the desktop sidebar as a backstop behind min-width: 0', () => {
+  it('CONTAINS horizontal overflow on the desktop sidebar, behind min-width: 0', () => {
     // .proj-card's min-width: 0 (asserted above) is the real fix — this is
     // a belt-and-braces guarantee that the sidebar itself can never scroll
     // sideways even if some future child regresses that fix.
-    const rule = ruleIn(shellCss, '.shell-nav');
-    expect(rule).toContain('overflow-x: clip');
-    expect(rule).toMatch(/backstop/i);
+    //
+    // D-161 fix round, TWO corrections. (1) This asserted the literal text
+    // `overflow-x: clip` against the rule body WITH its comments, so once the
+    // rule's own comment came to mention `overflow-x: clip` (correcting the
+    // claim that it clips) the assertion was satisfied by the PROSE — measured:
+    // green with the declaration spelled `hidden`. `declaredValues` reads
+    // declarations only. (2) The contract is "this axis does not scroll", not a
+    // token: next to a scrolling axis the platform computes `clip` to `hidden`,
+    // so both spellings are the same pixels and either satisfies this.
+    const x = declaredValues(shellCss, '.shell-nav', 'overflow-x');
+    expect(x, 'nothing sets overflow-x on .shell-nav').not.toEqual([]);
+    for (const v of x) expect(['hidden', 'clip'], `overflow-x: ${v}`).toContain(v);
+    expect(ruleIn(shellCss, '.shell-nav')).toMatch(/backstop/i);
   });
 });
 

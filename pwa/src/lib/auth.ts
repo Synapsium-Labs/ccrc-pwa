@@ -103,6 +103,41 @@ export function onAuthRegained(fn: () => void): () => void {
   };
 }
 
+const posture = new Set<() => void>();
+
+/**
+ * SUBSCRIBE TO "THE BOX'S POSTURE CHANGED" — the cue for anything standing on
+ * screen that describes `GET /api/auth/status` to read it again (D-161).
+ *
+ * A NUDGE AND NOT A CACHE, deliberately. The fleet screen's passphrase-only
+ * notice and the accounts screen's auth section are on screen TOGETHER on
+ * desktop (sidebar + detail pane), and the notice's whole design is that it
+ * retires by itself the instant a passkey exists rather than carrying a
+ * dismiss-state anyone could permanently silence. Enrolment happens in the
+ * other component, so something has to tell it. The three alternatives all
+ * cost more: a poll spends a GET a minute forever to notice a thing that
+ * happens once; a module-level cached snapshot would make one test's posture
+ * the next test's initial render (this module's state outlives a `cleanup()`);
+ * and lifting the read into a shared parent would couple two screens that have
+ * no other reason to know about each other. This carries no state, so there is
+ * nothing to leak and nothing to invalidate — every subscriber still reads the
+ * route through {@link readAuthStatus}, which stays the one place it is spelled.
+ *
+ * Returns an unsubscribe.
+ */
+export function onAuthPostureChanged(fn: () => void): () => void {
+  posture.add(fn);
+  return () => {
+    posture.delete(fn);
+  };
+}
+
+/** Say the posture changed — called by whoever CHANGED it (enrolled a passkey,
+ *  revoked one), not by whoever merely read it. */
+export function authPostureChanged(): void {
+  announce(posture);
+}
+
 function subscribe(fn: () => void): () => void {
   watchers.add(fn);
   return () => {

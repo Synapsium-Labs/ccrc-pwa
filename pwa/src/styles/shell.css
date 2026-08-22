@@ -50,13 +50,15 @@
      So it stays open, paid for by folding each gauge from three stacked lines
      (name / 5h / 7d) down to two — 46px against the old 158px, cheap enough to
      keep on screen permanently. Genuinely permanent since Task 6 made the
-     strip double as the only nav affordance onto /accounts: AccountsStrip
-     used to render null (and this rule hid the now-empty bar with it) while
-     no telemetry had landed, or while every lane was disabled — exactly the
-     state the accounts screen exists to explain, so hiding its only door
-     there was the bug, not a feature. AccountsStrip now always renders a
-     non-empty `.accounts-strip`, with a quiet placeholder body in that state,
-     so this bar is never `:empty` and the old auto-hide rule is gone. */
+     strip double as a nav affordance onto /accounts — the ONLY one until D-161
+     gave the fleet header a named control, a readout of meters reading as data
+     rather than as navigation: AccountsStrip used to render null (and this rule
+     hid the now-empty bar with it) while no telemetry had landed, or while every
+     lane was disabled — exactly the state the accounts screen exists to explain,
+     so hiding what was then its only door there was the bug, not a feature.
+     AccountsStrip now always renders a non-empty `.accounts-strip`, with a quiet
+     placeholder body in that state, so this bar is never `:empty` and the old
+     auto-hide rule is gone. */
   .shell-accounts {
     grid-column: 1 / -1;
     grid-row: 1;
@@ -138,16 +140,55 @@
        auto/min-content, which refused to let the card shrink below its
        row's content). This just guarantees the symptom can never
        resurface in this pane even if a future child regresses that fix —
-       it clips, it doesn't solve. */
-    overflow-x: clip;
+       it CONTAINS the overflow, it doesn't solve it.
+       It also does not CLIP, whatever the value is spelled: next to a
+       scrolling axis the platform computes this one to `hidden`, so
+       `overflow-x: clip` here was a false name for a real mechanism (the
+       correction is written out in full over `.shell-detail` below, which
+       carried the same wrong claim). Spelled `hidden` because that is what
+       it computes to and because `clip` is dropped outright by engines older
+       than Safari 16 — where, y being `auto`, x would fall back to `auto` and
+       hand this pane the sideways scrollbar the declaration exists to
+       prevent. */
+    overflow-x: hidden;
     border-right: 1px solid var(--edge-subtle);
     background: var(--bg-surface);
   }
+  /* THE PANE SCROLLS; THE CHAT IS THE NAMED EXCEPTION (D-161).
+     This was `overflow: hidden`, chosen for the chat — which manages its own
+     internal scrolling (`.shell-detail .chat` below is `height: 100%`, and
+     `.chat-body` is the `flex: 1` scroll region). But the chat was the only
+     screen ever GIVEN a scroll region, and `/accounts`, `/archive`, `/mail`
+     and `/runs` render into this same pane: every one of them was clipped at
+     the fold on desktop with no way to reach anything below it. The passkey
+     enrolment button was unreachable on a laptop while working on a phone,
+     where the mobile layout (max-width: 899.98px) has no containment at all.
+     So the DEFAULT is inverted: a screen added to the detail pane later is
+     scrollable automatically and has to opt out by name, which is exactly how
+     `.shell-nav` above already behaves. Both `min-*: 0` floors stay — they are
+     about grid sizing, not overflow (see .shell-nav's comment).
+     `overflow-x` IS LOAD-BEARING AND IS NOT A CLIP — both halves measured in
+     Chromium against the SHIPPED stylesheet. Load-bearing: with only
+     `overflow-y: auto`, the other axis's initial `visible` computes to `auto`
+     (CSS Overflow 3 — the axes may not disagree that way), so one wide child
+     would give this pane a real sideways scrollbar that `overflow: hidden`
+     used to prevent. Not a clip: the SAME clause demotes `clip` to `hidden`
+     next to a scrolling axis, so `overflow-x: clip` here computed to
+     `overflow-x: hidden` — `getComputedStyle` reports `hidden`, a focusable
+     child 2400px off to the right was still scrolled into view on focus
+     (scrollLeft 0 → 3368, identical with `overflow: hidden` force-restored),
+     and `overflow-clip-margin` could never apply. So it is spelled `hidden`:
+     the value it actually computes to, and the one every engine has had for
+     twenty years — `clip` is dropped outright below Safari 16, which with y
+     scrolling would put x back on `auto` and hand this pane the scrollbar the
+     declaration exists to prevent. `.shell-nav` above carried the same wrong
+     claim and is corrected with it. */
   .shell-detail {
     grid-column: 2;
     grid-row: 2;
     min-height: 0;
-    overflow: hidden;
+    overflow-y: auto;
+    overflow-x: hidden;
     min-width: 0;
   }
 
@@ -172,11 +213,17 @@
   /* Session fills the detail pane edge-to-edge — use the whole width (the
      head/body/composer keep their own side padding, so text isn't flush to the
      pane border). Scrolls internally (.chat-body is the flex:1 scroll region).
-     No back button — the fleet is always visible in the sidebar. */
+     No back button — the fleet is always visible in the sidebar.
+     `overflow: hidden` is the opt-out from the pane's own scrolling (D-161):
+     the chat is exactly one pane tall and hands its overflow to `.chat-body`,
+     so without this the pane would ALSO scroll it — a second scrollbar around
+     the first, and a composer that walks off the bottom edge instead of
+     staying pinned to it. */
   .shell-detail .chat {
     height: 100%;
     max-width: none;
     margin: 0;
+    overflow: hidden;
   }
   .shell-detail .chat-back {
     display: none;
