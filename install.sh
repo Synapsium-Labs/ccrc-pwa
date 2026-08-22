@@ -20,7 +20,7 @@ ROOT="$(cd "${HERE%/*}" && pwd)"
 # Stage 5 de-brands it. `CCRC_RELEASE_BASE_URL` overrides the derived
 # `…/releases` prefix — the deliberate test seam, and an escape hatch for a
 # mirror.
-CCRC_RELEASE_OWNER="example-org"
+CCRC_RELEASE_OWNER="Synapsium-Labs"
 CCRC_RELEASE_REPO="ccrc-pwa"
 
 usage() { echo "usage: bash install.sh — build this checkout and run 'ccrc install' (single box, localhost)"; }

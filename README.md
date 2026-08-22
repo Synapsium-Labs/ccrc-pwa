@@ -1556,3 +1556,26 @@ Known real-format subtleties already encoded:
 
 Anything the parser can't handle degrades to `parsed:false` / the terminal
 drawer rather than crashing.
+
+## License
+
+Copyright (C) 2026 Synapsium Labs.
+
+ccrc is free software: you can redistribute it and/or modify it under the terms of the
+**GNU Affero General Public License, version 3**, as published by the Free Software
+Foundation. The full text is in [`LICENSE`](LICENSE).
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+See the GNU Affero General Public License for more details.
+
+**Why AGPL, and what §13 means for you.** ccrc is a server you reach over a network, and
+that is exactly the case an ordinary GPL does not cover: someone could run a modified ccrc
+as a service for others and never publish the changes. AGPL §13 closes that — if you run a
+modified version and let other people interact with it remotely, those users are entitled to
+the source of *your* version. Running unmodified ccrc for yourself or your own fleet
+triggers nothing; you owe source only when you both modify it and expose it to others.
+
+Source files carry no per-file licence headers. Every file in this repository opens with a
+comment explaining the reasoning behind its design, and a boilerplate header on top of that
+would compete with the thing the reader is actually there for. This section is the notice.

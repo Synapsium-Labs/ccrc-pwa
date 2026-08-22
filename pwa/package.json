@@ -2,6 +2,7 @@
   "name": "ccrc-pwa",
   "private": true,
   "version": "0.0.0",
+  "license": "AGPL-3.0-only",
   "type": "module",
   "engines": { "node": ">=22.13.0" },
   "scripts": {

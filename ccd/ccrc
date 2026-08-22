@@ -238,7 +238,7 @@ BOX_BACKUP_ROOT="$HOME/ccrc-backups"
 # a comment would be the promise). `CCRC_RELEASE_BASE_URL` overrides the
 # derived `…/releases` prefix — the same test seam and mirror escape hatch
 # install.sh documents. Stage 5 de-brands the pair in both files at once.
-CCRC_RELEASE_OWNER="example-org"
+CCRC_RELEASE_OWNER="Synapsium-Labs"
 CCRC_RELEASE_REPO="ccrc-pwa"
 
 # How long the ONE network call in this file (`GET /api/fleet/health`) may take.
