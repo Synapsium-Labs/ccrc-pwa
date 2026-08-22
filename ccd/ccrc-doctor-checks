@@ -182,6 +182,7 @@ CCRC_DOCTOR_CHECKS=(
   rc
   exposure
   caddy
+  caddyfile
   cert
   name
   disk
@@ -1296,9 +1297,48 @@ _check_exposure() {
   rpid="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_RP_ID)"
   [ -n "$origin" ] || gaps+=("CCRC_ORIGIN is empty or absent")
   [ -n "$rpid" ] || gaps+=("CCRC_RP_ID is empty or absent")
+  # ── D-167: exposed means BEHIND the proxy, and that is a bind, not a wish ─
+  # Caddy proxies to 127.0.0.1:<port>. A server bound to one non-loopback
+  # address answers caddy with nothing, and every public request becomes a
+  # 502 while the unit sits there `active` and every other check passes.
+  # Measured live 2026-08-22: a deploy shipped a ccrc.env carrying a
+  # workstation's stale tailnet IP and took the public name down for 3m17s;
+  # what made it expensive was that NOTHING said so. Empty is the config.ts
+  # default (127.0.0.1) and the wildcards include loopback, so only a genuine
+  # single-address bind elsewhere is a gap.
+  #
+  # Read the way SYSTEMD reads it, or the verdict is about a value nothing
+  # uses: the unit carries TWO EnvironmentFile lines — ccrc.env then this
+  # file — and for a key in both, the LATER file wins. Measuring only
+  # ccrc.env would FAIL a box whose exposure.env corrects it, which is
+  # precisely the shape an operator reaches for after being bitten once.
+  local bindhost="" bindsrc=""
+  if [ -n "${BOX_ENV_FILE:-}" ] && [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ]; then
+    bindhost="$(_box_env_value "$BOX_ENV_FILE" CCRC_HOST)"
+    [ -z "$bindhost" ] || bindsrc="$BOX_ENV_FILE"
+  fi
+  local expbind
+  expbind="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_HOST)"
+  if [ -n "$expbind" ]; then
+    bindhost="$expbind"
+    bindsrc="$CCRC_EXPOSURE_FILE"
+  fi
+  #
+  # Judged only when the value is a literal ADDRESS. A hostname would have to
+  # be resolved to be judged, and a check that resolved names to decide a
+  # verdict would answer differently depending on the box's DNS — so a
+  # hostname gets no verdict here rather than a guessed one. Nothing is lost:
+  # the shape this exists to catch is an IP pasted from another box.
+  case "$bindhost" in
+    ''|127.0.0.1|localhost|::1|0.0.0.0|'::'|'[::]') ;;
+    # dotted-quad, or anything carrying a ':' (an IPv6 literal, bracketed or
+    # not) — the two spellings an address arrives in.
+    [0-9]*.[0-9]*.[0-9]*.[0-9]*|*:*|'['*)
+      gaps+=("$bindsrc binds the server to CCRC_HOST=$bindhost, which is not loopback and not a wildcard — caddy proxies to 127.0.0.1 and will answer every public request with 502") ;;
+  esac
   if [ "${#gaps[@]}" -gt 0 ]; then
     _dr_fail exposure "$CCRC_EXPOSURE_FILE is present but $(_dr_join ${gaps[@]+"${gaps[@]}"})" \
-      "re-run: ccrc expose duckdns (or: ccrc expose byo) — it rewrites $CCRC_EXPOSURE_FILE 0600 with both keys; the server reads the file as written, so a gap here is a box whose auth origin is half-set"
+      "re-run: ccrc expose duckdns (or: ccrc expose byo) — it rewrites $CCRC_EXPOSURE_FILE 0600 with both keys; the server reads the file as written, so a gap here is a box whose auth origin is half-set. A CCRC_HOST gap is the other file: set CCRC_HOST=127.0.0.1 in $BOX_ENV_FILE (or delete the line — that is the default) and restart: systemctl --user restart ccrc.service"
     return 1
   fi
   _dr_pass exposure "configured — CCRC_ORIGIN=$origin (rp id: $rpid)$modesaid"
@@ -1339,7 +1379,62 @@ _check_caddy() {
   # "inactive" send an operator to different places, and an empty answer is a
   # unit systemd would not talk about at all — the not-yet-installed state.
   _dr_fail caddy "exposure is configured but the caddy system unit is ${st:-not known to systemd} — the root ceremony has not been run (ccrc never escalates, so these steps are the operator's)" \
-    "install caddy from your distro (Debian/Ubuntu: apt install caddy), then: sudo ln -sf $CCRC_CADDYFILE /etc/caddy/Caddyfile (or copy it), then: sudo systemctl enable --now caddy"
+    "install caddy from your distro (Debian/Ubuntu: apt install caddy), then: sudo install -m 0644 $CCRC_CADDYFILE $CCRC_CADDY_SYSTEM_FILE (a COPY — a symlink into your home is unreadable by the caddy user), then: sudo systemctl enable --now caddy"
+}
+
+# ── caddyfile: the COPY at /etc/caddy, and whether it is still the one ────
+# D-166. `ccrc expose` regenerates `$CCRC_CADDYFILE`; caddy reads
+# /etc/caddy/Caddyfile; nothing connects them but an operator running one
+# command. Two ways that goes wrong, both measured live and both silent:
+#
+#   1. the ceremony was followed with `ln -sf` (which this repo printed until
+#      D-165). Caddy runs as its own user and cannot traverse $HOME/.ccrc, so
+#      the link resolves to nothing it may read.
+#   2. `ccrc expose` was re-run and the copy never was, so caddy still serves
+#      the previous origin, port or bind.
+#
+# BOTH are measurable WITHOUT reading /etc/caddy/Caddyfile — which matters,
+# because a 0640 root:caddy file is exactly what the ceremony produces and
+# doctor is not root and never escalates. `stat` needs only search permission
+# on /etc/caddy (0755 from the distro package), so a symlink is visible as a
+# symlink and mtimes compare without either file being readable.
+_check_caddyfile() {
+  local sys="${CCRC_CADDY_SYSTEM_FILE:-}"
+  if [ -z "${CCRC_EXPOSURE_FILE:-}" ] || [ -z "${CCRC_CADDYFILE:-}" ] || [ -z "$sys" ]; then
+    _dr_fail caddyfile "ccrc's own exposure constants are not loaded, so the Caddyfile caddy actually reads was never compared with the one ccrc generates" \
+      "this is a bug in ccrc, not a fact about your box — _check_caddyfile reads CCRC_EXPOSURE_FILE and CCRC_CADDYFILE, both declared once in ccrc itself, and this check table was sourced by something that is not ccrc"
+    return 1
+  fi
+  if [ ! -e "$CCRC_EXPOSURE_FILE" ]; then
+    _dr_skip caddyfile "no exposure configured (no $CCRC_EXPOSURE_FILE), so no Caddyfile is owed on this box"
+    return 3
+  fi
+  if [ ! -e "$CCRC_CADDYFILE" ]; then
+    _dr_fail caddyfile "exposure is configured but $CCRC_CADDYFILE is not there, so there is nothing for the ceremony to copy — the exposure file and the Caddyfile are written by the same run, and one without the other means that run did not finish" \
+      "re-run: ccrc expose duckdns (or: ccrc expose byo) — it rewrites both files, then copy it across: sudo install -m 0644 $CCRC_CADDYFILE $sys"
+    return 1
+  fi
+  # `-L`: a DANGLING symlink fails `-e` and would otherwise read as "never
+  # copied", sending an operator to re-run a copy that is not the problem.
+  if [ ! -e "$sys" ] && [ ! -L "$sys" ]; then
+    _dr_fail caddyfile "$CCRC_CADDYFILE is generated but $sys is not there, so caddy is not serving what ccrc configured (if caddy is up at all, it is up on some other config)" \
+      "sudo install -m 0644 $CCRC_CADDYFILE $sys, then: sudo systemctl reload caddy"
+    return 1
+  fi
+  if [ -L "$sys" ]; then
+    _dr_fail caddyfile "$sys is a SYMLINK ($(readlink "$sys" 2>/dev/null || echo 'target unreadable')) — caddy runs as its own user and cannot read a file inside your home no matter what the link points at, so this box's caddy is loading something other than the config ccrc wrote (older ccrc printed this form; it never worked)" \
+      "replace the link with a copy: sudo install -m 0644 $CCRC_CADDYFILE $sys, then: sudo systemctl reload caddy"
+    return 1
+  fi
+  # Mtimes, because contents are unreadable by design. `-nt` is false when the
+  # two are equal, which is what `install` leaves behind — so only a
+  # regeneration that was never copied trips this.
+  if [ "$CCRC_CADDYFILE" -nt "$sys" ]; then
+    _dr_fail caddyfile "$CCRC_CADDYFILE is NEWER than $sys — 'ccrc expose' regenerated the Caddyfile after the last copy, so caddy is still serving the previous origin, port or bind" \
+      "copy it across and reload: sudo install -m 0644 $CCRC_CADDYFILE $sys && sudo systemctl reload caddy"
+    return 1
+  fi
+  _dr_pass caddyfile "$sys is a regular file no older than $CCRC_CADDYFILE — the copy caddy reads is current with what ccrc generated"
 }
 
 # ── cert: what the listener actually serves, measured from inside ─────────

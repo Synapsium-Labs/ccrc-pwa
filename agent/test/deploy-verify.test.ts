@@ -37,7 +37,7 @@
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import path from 'node:path';
+import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bodyDigest, markGenerated } from '../../shared/mark.mjs';
 import { mkTmp } from './tmpHelpers.js';
@@ -1480,9 +1480,17 @@ describe('the verification is actually wired into the deploy, and can observe a 
     // HEALTH_URL) and EXECUTE it for real — this proves the runtime
     // expansion, not merely that some substring exists in the file.
     const start = deploySh.indexOf('BOX="${CCRC_BOX:-');
-    const healthLine = /HEALTH_URL="\$\{CCRC_HEALTH_URL:-[^\n]*\n/.exec(deploySh);
+    // D-169 split one assignment into a derivation: the gate now ASKS THE BOX
+    // for its front door (an exposed box is bound to loopback and does not
+    // answer on the address this used to probe — worse, the deploy that broke
+    // the public path passed the old gate, because the same bad config had
+    // re-bound the server onto the very address it probed). The property this
+    // test exists for is unchanged and still executed for real: a CCRC_BOX or
+    // agent-host override must move HEALTH_URL, and CCRC_HEALTH_URL must win.
+    const healthLine = /\[ -z "\$\{CCRC_HEALTH_URL:-\}" \] \|\| HEALTH_URL="\$CCRC_HEALTH_URL"\n/
+      .exec(deploySh);
     expect(start, 'BOX default assignment not found').toBeGreaterThan(-1);
-    expect(healthLine, 'HEALTH_URL default assignment not found').toBeTruthy();
+    expect(healthLine, 'the CCRC_HEALTH_URL override is gone').toBeTruthy();
     const targetOverrideAt = deploySh.indexOf('[ "$TARGET" = "agent" ]');
     expect(healthLine!.index!,
       'HEALTH_URL must be resolved AFTER the agent-target BOX override, not before')
@@ -1490,9 +1498,18 @@ describe('the verification is actually wired into the deploy, and can observe a 
     const header = deploySh.slice(start, healthLine!.index! + healthLine![0].length);
 
     const run = (args: string[], env: Record<string, string> = {}): string => {
+      // `ssh` answers as a box with no ccrc.env and no exposure — the shape
+      // whose front door IS its own address, which is what this test is about.
+      // A stub rather than a skip: the derivation must really run, or the
+      // execution this test was written to do stops happening.
+      const bin = mkTmp('deploy-health-');
+      writeFileSync(join(bin, 'ssh'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
       const r = spawnSync('bash', ['-c', `${header}\nprintf '%s' "$HEALTH_URL"`, '_', ...args], {
         encoding: 'utf8',
-        env: { ...process.env, CCRC_BOX: '', CCRC_HEALTH_URL: '', ...env },
+        env: {
+          ...process.env, CCRC_BOX: '', CCRC_HEALTH_URL: '', ...env,
+          PATH: `${bin}:${process.env.PATH ?? ''}`,
+        },
       });
       expect(r.status, `header exited nonzero: ${r.stderr}`).toBe(0);
       return r.stdout;

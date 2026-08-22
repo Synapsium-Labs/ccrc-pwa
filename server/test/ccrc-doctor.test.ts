@@ -39,7 +39,7 @@ import { describe, it, expect } from 'vitest';
 import { spawnSync, execFileSync } from 'node:child_process';
 import {
   writeFileSync, readFileSync, mkdirSync, symlinkSync, rmSync, chmodSync, existsSync,
-  openSync, writeSync, ftruncateSync, closeSync,
+  openSync, writeSync, ftruncateSync, closeSync, copyFileSync, utimesSync, appendFileSync,
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -721,7 +721,36 @@ function doctorEnv(home: string): NodeJS.ProcessEnv {
     // verify-service.sh's `CCRC_VERIFY_*` model: a knob whose only reason to
     // exist is that a test must not wait out a production timeout.
     CCRC_DOCTOR_GH_TIMEOUT: '5',
+    // D-166's knob, and the only reason it exists: `_check_caddyfile`
+    // measures /etc/caddy/Caddyfile, which no test may create and no test
+    // should ever need root to create. Pointed at a path inside the fixture
+    // HOME, it measures the same three facts (a symlink, an absence, a
+    // staleness) against files a test owns.
+    CCRC_CADDY_SYSTEM_FILE: sysCaddyfile(home),
   };
+}
+
+/** The fixture's stand-in for /etc/caddy/Caddyfile — outside `~/.ccrc`, since
+ *  the real one is outside the home entirely and `ccrcDirEntries`-style
+ *  assertions elsewhere would otherwise see it. */
+const sysCaddyfile = (home: string): string => join(home, 'etc-caddy-Caddyfile');
+
+/** The ceremony, performed: the generated Caddyfile copied to the system path,
+ *  the copy no older than its source (what `install` leaves behind). */
+function performCaddyCeremony(home: string): void {
+  mkdirSync(join(home, '.ccrc'), { recursive: true });
+  const src = join(home, '.ccrc', 'Caddyfile');
+  if (!existsSync(src)) {
+    writeFileSync(src, `${EXPOSED_HOST} {\n    reverse_proxy 127.0.0.1:7788\n}\n`);
+  }
+  copyFileSync(src, sysCaddyfile(home));
+  // `install` preserves nothing about mtime, but it does run AFTER the source
+  // was written, so the copy is never older. Stamp both to the same instant so
+  // the `-nt` comparison is decided by the test, not by filesystem timestamp
+  // granularity.
+  const t = new Date();
+  utimesSync(src, t, t);
+  utimesSync(sysCaddyfile(home), t, t);
 }
 
 function runDoctor(home: string, args: string[] = ['doctor'], extraEnv: NodeJS.ProcessEnv = {}): Result {
@@ -735,6 +764,10 @@ function runDoctor(home: string, args: string[] = ['doctor'], extraEnv: NodeJS.P
 function healthy(prefix: string): string {
   const home = mkTmp(prefix);
   installCcrc(home);
+  // A box with exposure configured owes a Caddyfile AND the copy of it that
+  // caddy reads (D-166) — so the healthy fixture performs the ceremony, and
+  // the per-check tests below break exactly one part of it.
+  performCaddyCeremony(home);
   containedPath(home);   // plant the poisoned gh FIRST; ghStub overwrites it below
   writePkg(home, '>=1.0.0');
   stubNode(home, 'v22.20.0');
@@ -1708,11 +1741,6 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
     writeFileSync(p, `${readFileSync(p, 'utf8')}CCRC_AUTH=${value}\n`);
   };
   const authLine = (out: string): string => lineFor(out, 'auth') ?? '';
-  const remedyFor = (out: string, name: string): string => {
-    const lines = out.split('\n');
-    const i = lines.findIndex((l) => new RegExp(`^(WARN|FAIL) ${name}: `).test(l));
-    return i === -1 ? '' : (lines[i + 1] ?? '');
-  };
 
   it('PASSES a box with no passphrase and the gate off — a fresh install ends GREEN', () => {
     // ── OPERATOR RULING (Task 9 review), amending the plan's own text ─────
@@ -4448,6 +4476,16 @@ describe('ccrc doctor: the output contract', () => {
 const skipLineFor = (out: string, name: string): string | undefined =>
   out.split('\n').find((l) => l.startsWith(`SKIP ${name}: `));
 
+/** The line AFTER a non-PASS verdict — the remedy, by the `_dr_line` contract
+ *  that a remedy always immediately follows its verdict. Module-scoped since
+ *  the 3b checks below assert on remedies too; it used to be private to the
+ *  `auth` describe. */
+const remedyFor = (out: string, name: string): string => {
+  const lines = out.split('\n');
+  const i = lines.findIndex((l) => new RegExp(`^(WARN|FAIL) ${name}: `).test(l));
+  return i === -1 ? '' : (lines[i + 1] ?? '');
+};
+
 describe('ccrc doctor: exposure', () => {
   it('SKIPs when the box was never exposed — a BYO proxy or a pre-3b box is an end state, not a fault', () => {
     const home = healthy('ccrc-doctor-exposure-skip-');
@@ -4530,8 +4568,16 @@ describe('ccrc doctor: caddy', () => {
     // The remedy IS the D2 ceremony — all three steps, so an operator can act
     // on the line without going back to the expose transcript.
     expect(lines[i + 1]).toContain('install caddy');
-    expect(lines[i + 1]).toContain('/etc/caddy/Caddyfile');
+    // The destination the remedy PRINTS is the one the `caddyfile` check
+    // MEASURES — the same constant, so a fixture redirect moves both or
+    // neither. Asserting the literal /etc path here would have passed while
+    // the two drifted apart (D-166).
+    expect(lines[i + 1]).toContain(sysCaddyfile(home));
     expect(lines[i + 1]).toContain('enable --now caddy');
+    // D-165: never the symlink form. It cannot work — caddy runs as its own
+    // user and cannot traverse `$HOME/.ccrc` (0700, ccrc's own doing).
+    expect(lines[i + 1], 'a symlink remedy the caddy user could not follow')
+      .not.toContain('ln -s');
     expect(r.code).toBe(1);
   });
 
@@ -4705,3 +4751,144 @@ describe('ccrc doctor: name', () => {
     expect(r.code).toBe(1);
   });
 });
+
+// ── caddyfile: the copy caddy actually reads (D-166) ──────────────────────
+// `ccrc expose` writes ~/.ccrc/Caddyfile; caddy reads /etc/caddy/Caddyfile;
+// the only thing joining them is an operator running one command. Both ways
+// that goes wrong were measured on the live box, and both are silent — caddy
+// stays `active`, the certificate stays valid, and the box serves the wrong
+// config or none.
+//
+// Every assertion here reaches the system path through `sysCaddyfile(home)`,
+// never a literal: the check and the fixture share ccrc's one constant, so a
+// test cannot pass by measuring a path the shipped code does not use.
+
+describe('ccrc doctor: caddyfile', () => {
+  const failLine = (out: string): string | undefined =>
+    out.split('\n').find((l) => l.startsWith('FAIL caddyfile: '));
+
+  it('SKIPs a box with no exposure — no proxy is owed, so no copy is either', () => {
+    const home = healthy('ccrc-doctor-caddyfile-skip-');
+    rmSync(join(home, '.ccrc', 'exposure.env'), { force: true });
+    const r = runDoctor(home);
+    expect(skipLineFor(r.stdout, 'caddyfile'), r.stdout).toBeTruthy();
+    expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) caddyfile: /m);
+  });
+
+  it('PASSES when the ceremony was performed and the copy is current', () => {
+    const home = healthy('ccrc-doctor-caddyfile-pass-');
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^PASS caddyfile: /m);
+  });
+
+  it('FAILs when the copy was never made — caddy is serving something else, or nothing', () => {
+    const home = healthy('ccrc-doctor-caddyfile-nocopy-');
+    rmSync(sysCaddyfile(home), { force: true });
+    const r = runDoctor(home);
+    expect(failLine(r.stdout), r.stdout).toContain('is not there');
+    expect(remedyFor(r.stdout, 'caddyfile')).toContain('install -m 0644');
+    expect(r.code).toBe(1);
+  });
+
+  it('FAILs on a SYMLINK — the form ccrc itself printed until D-165, which never worked', () => {
+    // The whole point: this is not a hypothetical misuse. The verb told
+    // operators to do exactly this, and caddy — running as its own user,
+    // unable to traverse a 0700 ~/.ccrc — could not read what the link
+    // pointed at. A box in this state looks configured and is not.
+    const home = healthy('ccrc-doctor-caddyfile-symlink-');
+    rmSync(sysCaddyfile(home), { force: true });
+    symlinkSync(join(home, '.ccrc', 'Caddyfile'), sysCaddyfile(home));
+    const r = runDoctor(home);
+    expect(failLine(r.stdout), r.stdout).toContain('SYMLINK');
+    expect(remedyFor(r.stdout, 'caddyfile')).toContain('install -m 0644');
+    expect(r.code).toBe(1);
+  });
+
+  it('FAILs on a DANGLING symlink too — and does not misreport it as never-copied', () => {
+    // `-e` is false for a dangling link, so the absence arm would claim the
+    // copy was never made and send the operator to re-run a copy that is not
+    // the problem. `-L` is why that does not happen.
+    const home = healthy('ccrc-doctor-caddyfile-dangling-');
+    rmSync(sysCaddyfile(home), { force: true });
+    symlinkSync(join(home, '.ccrc', 'nothing-here'), sysCaddyfile(home));
+    const r = runDoctor(home);
+    expect(failLine(r.stdout), r.stdout).toContain('SYMLINK');
+    expect(failLine(r.stdout)).not.toContain('is not there');
+  });
+
+  it('FAILs when expose has run since the last copy — caddy still serves the previous origin', () => {
+    const home = healthy('ccrc-doctor-caddyfile-stale-');
+    // What `ccrc expose` does: rewrite the generated file. The copy is not
+    // touched, so it is now older — the exact state a re-exposed box sits in
+    // until someone re-runs step 2.
+    const src = join(home, '.ccrc', 'Caddyfile');
+    writeFileSync(src, 'newbox.duckdns.org {\n    reverse_proxy 127.0.0.1:7788\n}\n');
+    const later = new Date(Date.now() + 5000);
+    utimesSync(src, later, later);
+    const r = runDoctor(home);
+    expect(failLine(r.stdout), r.stdout).toContain('NEWER');
+    expect(remedyFor(r.stdout, 'caddyfile')).toContain('reload caddy');
+    expect(r.code).toBe(1);
+  });
+
+  it('does NOT fail when the copy is newer than its source — that is what a copy looks like', () => {
+    const home = healthy('ccrc-doctor-caddyfile-fresh-');
+    const later = new Date(Date.now() + 5000);
+    utimesSync(sysCaddyfile(home), later, later);
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^PASS caddyfile: /m);
+  });
+
+  it('FAILs when exposure exists but ccrc generated no Caddyfile — half a run', () => {
+    const home = healthy('ccrc-doctor-caddyfile-nosrc-');
+    rmSync(join(home, '.ccrc', 'Caddyfile'), { force: true });
+    const r = runDoctor(home);
+    expect(failLine(r.stdout), r.stdout).toContain('is not there');
+    expect(remedyFor(r.stdout, 'caddyfile')).toMatch(/ccrc expose/);
+  });
+});
+
+// ── the bind that took the public name down (D-167) ───────────────────────
+describe('ccrc doctor: exposure measures the server bind', () => {
+  it('FAILs when an exposed box binds a non-loopback ADDRESS — every request becomes a 502', () => {
+    // Measured 2026-08-22: a deploy shipped a workstation's stale tailnet IP,
+    // caddy's 127.0.0.1 upstream refused, and the box served 502 for 3m17s
+    // while the unit sat `active` and every other check passed.
+    const home = healthy('ccrc-doctor-bind-502-');
+    writeCcrcEnv(home, 'CCRC_FLEET=local\nCCRC_HOST=203.0.113.7\nCCRC_PORT=7788\n');
+    const r = runDoctor(home);
+    const line = r.stdout.split('\n').find((l) => l.startsWith('FAIL exposure: '));
+    expect(line, r.stdout).toContain('502');
+    expect(line).toContain('CCRC_HOST=203.0.113.7');
+    expect(remedyFor(r.stdout, 'exposure')).toContain('CCRC_HOST=127.0.0.1');
+    expect(r.code).toBe(1);
+  });
+
+  it.each([['127.0.0.1'], ['0.0.0.0'], ['::1'], ['localhost']])(
+    'accepts %s — loopback and the wildcards all answer caddy', (host) => {
+      const home = healthy(`ccrc-doctor-bind-ok-${host.replace(/[^a-z0-9]/gi, '')}-`);
+      writeCcrcEnv(home, `CCRC_FLEET=local\nCCRC_HOST=${host}\nCCRC_PORT=7788\n`);
+      const r = runDoctor(home);
+      expect(r.stdout, `${host} was reported as unreachable by caddy`)
+        .not.toMatch(/^FAIL exposure: .*502/m);
+    });
+
+  it('reads the bind the way SYSTEMD does — exposure.env is the second EnvironmentFile and wins', () => {
+    // A box bitten once reaches for the override. If this check read only
+    // ccrc.env it would FAIL a box that is, in fact, correctly bound —
+    // and send its operator to fix a value nothing uses.
+    const home = healthy('ccrc-doctor-bind-precedence-');
+    writeCcrcEnv(home, 'CCRC_FLEET=local\nCCRC_HOST=203.0.113.7\nCCRC_PORT=7788\n');
+    appendFileSync(join(home, '.ccrc', 'exposure.env'), 'CCRC_HOST=127.0.0.1\n');
+    const r = runDoctor(home);
+    expect(r.stdout, r.stdout).not.toMatch(/^FAIL exposure: .*502/m);
+  });
+
+  it('says nothing about a HOSTNAME bind — it would have to resolve it to know', () => {
+    const home = healthy('ccrc-doctor-bind-hostname-');
+    writeCcrcEnv(home, 'CCRC_FLEET=local\nCCRC_HOST=ccrc-fixture.invalid\nCCRC_PORT=7788\n');
+    const r = runDoctor(home);
+    expect(r.stdout).not.toMatch(/^FAIL exposure: .*502/m);
+  });
+});
+

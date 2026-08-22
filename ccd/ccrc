@@ -129,6 +129,16 @@ CCRC_EXPOSURE_FILE="$HOME/.ccrc/exposure.env"
 # print the path at the operator THROUGH this variable, so the command an
 # operator pastes and the file this verb writes cannot drift apart.
 CCRC_CADDYFILE="$HOME/.ccrc/Caddyfile"
+# `/etc/caddy/Caddyfile` — CADDY'S OWN, on the root side of the boundary. ccrc
+# never writes it; the operator copies our file onto it in the printed
+# ceremony, and doctor's `caddyfile` check measures whether that copy happened
+# and is still current (D-166). It is a CONSTANT and not a literal for the
+# reason CCRC_CADDYFILE is: the line that PRINTS the destination and the check
+# that MEASURES it must name the same path by construction, or the remedy
+# sends an operator to a file the check is not looking at. Overridable so the
+# suite can point it at a fixture — nothing else may write an absolute /etc
+# path, and a test that needed root would simply not be written.
+CCRC_CADDY_SYSTEM_FILE="${CCRC_CADDY_SYSTEM_FILE:-/etc/caddy/Caddyfile}"
 
 # ── THE DDNS UNIT PAIR, WHICH THE duckdns ARM INSTALLS AND ENABLES ────────
 # `ccrc-ddns.service` + `ccrc-ddns.timer` — stage 3b, spec D4: a user timer
@@ -2334,13 +2344,20 @@ cmd_expose() {
   # two answers into a run that was never going to write them.
   local shadow_keys="" k
   if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ]; then
-    for k in CCRC_ORIGIN CCRC_RP_ID; do
+    for k in CCRC_ORIGIN CCRC_RP_ID CCRC_AUTH; do
       # `-n`: a bare `KEY=` line is an EMPTY value, which `config.ts` reads
       # with `||` — i.e. unset. Refusing over a line that decides nothing
       # would block the verb on exactly the boxes it exists to fix.
       [ -n "$(_box_env_value "$BOX_ENV_FILE" "$k")" ] && shadow_keys="$shadow_keys $k"
     done
   fi
+  # D-162: CCRC_AUTH joined the list when `_exp_env_write` started writing it.
+  # A box put on the public internet must be armed, and arming has exactly one
+  # owner for the same reason the origin does — the 3a runbook's hand-edit in
+  # ccrc.env would be silently outvoted by this verb's copy, which is the
+  # overloaded seam D3 bans, applied to the one key whose silent loss takes a
+  # PUBLIC box dark (measured live 2026-08-22: a deploy shipped a ccrc.env
+  # without it and the box ran unauthenticated for 3m17s).
   [ -z "$shadow_keys" ] \
     || _ccrc_die "refusing to write $CCRC_EXPOSURE_FILE — $BOX_ENV_FILE already sets$shadow_keys (the stage-3a hand-edit path). The server reads BOTH files and $CCRC_EXPOSURE_FILE wins for any key in both — so this verb's copy would silently override yours. Remove those keys from $BOX_ENV_FILE (that file is yours; this verb owns the other), then re-run. Nothing was written."
 
@@ -2406,9 +2423,42 @@ cmd_expose() {
     [ -n "$rpid" ] || _ccrc_die "the rp id is empty — nothing was written"
   fi
 
-  _exp_env_write "$sub" "$origin" "$rpid" "$host" "$token"
+  # ── the caddy bind address (D-163) ────────────────────────────────────
+  # Stock caddy binds :80/:443 on EVERY address. `tailscale serve` — a path
+  # ccrc's own README documents — already holds :443 on the tailnet address,
+  # so on a box running both, caddy dies at start with EADDRINUSE. The cure is
+  # one Caddyfile directive, and until now it was a HAND EDIT to a file this
+  # verb regenerates: measured live 2026-08-21, added by hand, and standing
+  # one `ccrc expose` away from being silently deleted. Asked here so it is
+  # DATA (exposure.env), which regeneration reproduces instead of destroying.
+  #
+  # Asked on both arms, and asked LAST: it is the only question whose answer
+  # depends on what else this box runs, so the measurement below is worth
+  # more than the question.
+  local bind="" holders=""
+  holders="$(_exp_443_holders)"
+  if [ -n "$holders" ]; then
+    printf '%s\n' "$PROG: something already listens on :443 here — $holders. Caddy binds every address by default and will fail to start against that; give it one address of its own (usually this box's PUBLIC ip)." >&2
+  else
+    printf '%s\n' "$PROG: nothing else appears to hold :443 on this box, so caddy can take every address (blank is the right answer). Name one only if you run something like 'tailscale serve' that binds :443 later." >&2
+  fi
+  if ! IFS= read -rp "Address for caddy to bind (blank = all interfaces): " bind; then
+    printf '\n' >&2
+    _ccrc_die "no answer was given — nothing was written"
+  fi
+  case "$bind" in
+    '') ;;
+    # The value lands VERBATIM as a Caddyfile directive argument. The same
+    # class of refusal the origin gets, for the same reason: a character
+    # caddy's parser treats structurally turns a config into one caddy will
+    # not load, and the failure would surface two ceremony steps later.
+    *[[:space:]]*|*'{'*|*'}'*|*'#'*)
+      _ccrc_die "\"$bind\" carries whitespace, a brace or a '#' — a bind address is one host or ip, written verbatim into the Caddyfile as a directive caddy would refuse to load. Nothing was written." ;;
+  esac
+
+  _exp_env_write "$sub" "$origin" "$rpid" "$host" "$token" "$bind"
   unset token
-  _exp_caddyfile "$host"
+  _exp_caddyfile "$host" "$bind"
   # AFTER the env write, deliberately: the ddns service's EnvironmentFile has
   # no leading '-', so a timer enabled before exposure.env existed would fire
   # a unit systemd refuses to start.
@@ -2416,6 +2466,20 @@ cmd_expose() {
     _exp_ddns_units
   fi
   _exp_landing "$origin"
+}
+
+# ── _exp_443_holders — who already owns :443, in the operator's words ─────
+# Read-only, best-effort, and SILENT when it cannot tell: `ss` is not on every
+# box, and a bind prompt that invented a holder would be worse than one that
+# admits it looked. Prints a comma-joined list of listening addresses, or
+# nothing at all — the caller phrases both cases.
+_exp_443_holders() {
+  command -v ss >/dev/null 2>&1 || return 0
+  # -H (no header) is not in every ss; the awk filter does not need it to be.
+  ss -ltn 2>/dev/null | awk '
+    NR > 1 && $4 ~ /:443$/ { a[$4] = 1 }
+    END { n = 0; for (k in a) { printf "%s%s", (n++ ? ", " : ""), k } }
+  '
 }
 
 # ── _exp_ddns_units — the DuckDNS updater, installed and (best-effort) armed ─
@@ -2459,8 +2523,8 @@ _exp_ddns_units() {
 # EnvironmentFile is a box with half an origin. `umask 077` in the writing
 # subshell so the temp file is 0600 FROM ITS FIRST BYTE — the token must never
 # sit world-readable even for the window between create and chmod.
-_exp_env_write() {   # <arm> <origin> <rpid> <host> <token>
-  local arm="$1" origin="$2" rpid="$3" host="$4" token="$5" dest="$CCRC_EXPOSURE_FILE" tmp
+_exp_env_write() {   # <arm> <origin> <rpid> <host> <token> <bind>
+  local arm="$1" origin="$2" rpid="$3" host="$4" token="$5" bind="${6:-}" dest="$CCRC_EXPOSURE_FILE" tmp
   mkdir -p "$HOME/.ccrc" || _ccrc_die "cannot create \$HOME/.ccrc"
   tmp="$dest.tmp.$$"
   if ! (
@@ -2469,6 +2533,18 @@ _exp_env_write() {   # <arm> <origin> <rpid> <host> <token>
       printf '%s\n' "# ccrc exposure config — regenerated by 'ccrc expose'; delete it to go dark."
       printf '%s\n' "CCRC_ORIGIN=$origin"
       printf '%s\n' "CCRC_RP_ID=$rpid"
+      # D-162. Written by this verb because it is a FACT ABOUT BEING EXPOSED,
+      # not a preference: the box now answers from the public internet, and
+      # the alternative to arming is publishing the fleet. It lives here
+      # rather than in ccrc.env because this file is the one deploy does not
+      # ship — the measured failure (2026-08-22) was a deploy overwriting
+      # ccrc.env from a workstation whose copy predated arming, which dropped
+      # the key and took a public box dark with nothing to notice.
+      printf '%s\n' "CCRC_AUTH=on"
+      # Absent = every address, which is stock caddy's own default: writing a
+      # bare `CCRC_CADDY_BIND=` would be a key that decides nothing, and
+      # `_box_env_value`'s readers already treat empty as unset.
+      [ -n "$bind" ] && printf '%s\n' "CCRC_CADDY_BIND=$bind"
       if [ "$arm" = duckdns ]; then
         printf '%s\n' "CCRC_DDNS_PROVIDER=duckdns"
         printf '%s\n' "CCRC_DDNS_DOMAIN=$host"
@@ -2479,7 +2555,14 @@ _exp_env_write() {   # <arm> <origin> <rpid> <host> <token>
     rm -f "$tmp"
     _ccrc_die "writing $dest failed — nothing was installed"
   fi
-  echo "expose: wrote $dest (0600) — CCRC_ORIGIN=$origin"
+  echo "expose: wrote $dest (0600) — CCRC_ORIGIN=$origin, CCRC_AUTH=on${bind:+, CCRC_CADDY_BIND=$bind}"
+  # The one way arming can bite: `CCRC_AUTH=on` with no passphrase file is a
+  # box that refuses EVERYTHING (auth/secret.ts fails shut, by design). Said
+  # as `_inst_linger`'s degraded step — loud, exact, and not a reason to
+  # abort a run that has already written the file correctly.
+  if [ ! -e "$BOX_AUTH_FILE" ]; then
+    echo "expose: DEGRADED — this box now arms its gate but has no passphrase, so it will refuse every request including yours. Set one before you restart the server: ccrc passwd"
+  fi
 }
 
 # The complete Caddyfile (spec D1): the host, a loopback reverse_proxy, and
@@ -2489,8 +2572,8 @@ _exp_env_write() {   # <arm> <origin> <rpid> <host> <token>
 # when the file names no CCRC_PORT — the same pair of defaults
 # `cmd_install`'s landing block uses, for the same reason: hardcoding the
 # port would be right on a fresh box and a lie on every edited one.
-_exp_caddyfile() {   # <host>
-  local host="$1" port="" dest="$CCRC_CADDYFILE" tmp
+_exp_caddyfile() {   # <host> [bind]
+  local host="$1" bind="${2:-}" port="" dest="$CCRC_CADDYFILE" tmp
   if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ]; then
     port="$(_box_env_value "$BOX_ENV_FILE" CCRC_PORT)"
   fi
@@ -2499,14 +2582,38 @@ _exp_caddyfile() {   # <host>
   if ! {
     {
       printf '%s\n' "$host {"
+      [ -n "$bind" ] && printf '%s\n' "    bind $bind"
       printf '%s\n' "    reverse_proxy 127.0.0.1:$port"
       printf '%s\n' "}"
-    } > "$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$dest"
+    } > "$tmp" && chmod 644 "$tmp"
   }; then
     rm -f "$tmp"
     _ccrc_die "writing $dest failed"
   fi
-  echo "expose: wrote $dest — caddy will serve https://$host and proxy to 127.0.0.1:$port"
+  # ── D-164: REGENERATE, but never in silence ─────────────────────────────
+  # This file is ccrc-owned and rewritten every run, which is the contract —
+  # but "regenerated" had been indistinguishable from "your edits are gone".
+  # Measured live 2026-08-21: an operator hand-added `bind` and a `log` block
+  # to make caddy start at all, and the next run of this verb would have
+  # deleted both with a line that said only "wrote". The bind is now data
+  # (asked for, stored, reproduced); everything else an operator adds is
+  # still theirs to re-apply, so it is PRESERVED and NAMED instead of lost.
+  # The backup lands under deploy's own ~/ccrc-backups/<ts>/ layout so
+  # `prune_backups`' glob can reclaim it — a backup outside that shape is one
+  # nothing ever collects (BOX_BACKUP_ROOT's own note).
+  if [ -f "$dest" ] && ! cmp -s "$tmp" "$dest"; then
+    local kts kdir
+    kts="$(date +%Y%m%d-%H%M%S)"
+    kdir="$BOX_BACKUP_ROOT/$kts"
+    if mkdir -p "$kdir" && cp -p "$dest" "$kdir/Caddyfile"; then
+      echo "expose: the Caddyfile already here differed from the one this run generates — the previous file is kept at $kdir/Caddyfile (re-apply anything of yours it carried; only the bind address survives a regeneration on its own)"
+    else
+      rm -f "$tmp"
+      _ccrc_die "$dest differs from what this run would write and the backup at $kdir failed — refusing to overwrite an edited Caddyfile with nothing kept. Nothing was written."
+    fi
+  fi
+  mv -f "$tmp" "$dest" || { rm -f "$tmp"; _ccrc_die "writing $dest failed"; }
+  echo "expose: wrote $dest — caddy will serve https://$host${bind:+ on $bind} and proxy to 127.0.0.1:$port"
 }
 
 # ── _exp_landing — what this run did NOT do, said in exact commands ───────
@@ -2520,7 +2627,16 @@ _exp_landing() {   # <origin>
   local origin="$1"
   echo "expose: this run started NO system service — caddy binds ports 80/443 as root, and ccrc never escalates (the commands below are printed, not run). Three steps are yours:"
   echo "expose:   1. install caddy from your distro (Debian/Ubuntu: apt install caddy) — the stock binary; no plugins needed"
-  echo "expose:   2. sudo ln -sf $CCRC_CADDYFILE /etc/caddy/Caddyfile   (or copy it: sudo cp $CCRC_CADDYFILE /etc/caddy/Caddyfile — re-copy after every 'ccrc expose')"
+  # ── D-165: a COPY, and never the symlink this line used to lead with ────
+  # The symlink cannot work, and measured why (2026-08-22): caddy runs as its
+  # own user (uid 996 on Debian), and reaching $CCRC_CADDYFILE means
+  # traversing $HOME and $HOME/.ccrc. This box's own numbers were 750 and
+  # 700 — and the 700 is CCRC'S OWN DOING, so the symlink is not merely
+  # unlucky here, it is unreachable on every stock ccrc box. Caddy then fails
+  # to load with a permission error two steps away from the instruction that
+  # caused it. `install -m 0644` in one command: mode stated, not inherited
+  # from whatever umask the operator's root shell happens to carry.
+  echo "expose:   2. sudo install -m 0644 $CCRC_CADDYFILE $CCRC_CADDY_SYSTEM_FILE   (a COPY — do NOT symlink it: caddy runs as another user and cannot read inside your home. Re-run this line after every 'ccrc expose'; 'ccrc doctor' measures whether you did)"
   echo "expose:   3. sudo systemctl enable --now caddy"
   echo "expose: prerequisite: your router must forward ports 80 and 443 to this box — stock caddy's certificate issuance (ACME HTTP-01/TLS-ALPN-01) fails loudly without it, and nothing inside the box can check it for you"
   echo "expose: then restart the server so it reads the new origin: systemctl --user restart ccrc.service — and RE-ENROL every passkey (passkeys are origin-bound; the old ones will be refused by name)"
@@ -2537,11 +2653,15 @@ _exp_status() {
     echo "expose: not configured — this box has no exposure file (run: ccrc expose duckdns, or ccrc expose byo)"
     return 0
   fi
-  local origin rpid token
+  local origin rpid token bind
   origin="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_ORIGIN)"
   rpid="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_RP_ID)"
   token="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_DDNS_TOKEN)"
+  bind="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_CADDY_BIND)"
   echo "expose: configured — CCRC_ORIGIN=${origin:-(missing)} (rp id: ${rpid:-(missing)})"
+  # Absent is a real answer here, not a gap: no bind means caddy takes every
+  # address, which is its own default and the right answer on most boxes.
+  echo "expose: caddy binds ${bind:-every address (no CCRC_CADDY_BIND)}"
   if [ -n "$token" ]; then
     echo "expose: duckdns token: SET (never printed; it lives in $CCRC_EXPOSURE_FILE, 0600)"
   else

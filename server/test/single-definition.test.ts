@@ -943,11 +943,22 @@ describe('one ~/.ccrc/exposure.env, spelled once in bash through CCRC_EXPOSURE_F
   // corpus, and the install suite holds those bytes instead. Later 3b tasks
   // that add a bash toucher (doctor's `exposure` check is the known one)
   // extend the holder list HERE, by name, like the remote-control block's.
+  //
+  // D-169 added the second holder, and it is a genuine exception rather than
+  // a drift: `deploy/deploy.sh` runs on a WORKSTATION and reads this file on
+  // the box, over ssh, before the box has been given the build that could
+  // answer for itself — so it cannot reach `CCRC_EXPOSURE_FILE`, and there is
+  // no verb to ask. What the exception costs is a second parser of one file,
+  // which is the thing this rule exists to prevent, so that cost is paid
+  // explicitly: deploy-env-guard.test.ts feeds BOTH readers the same awkward
+  // lines (leading tab, trailing CR, quotes, duplicate keys, `export KEY=`)
+  // and fails if they disagree on any of them.
   const NEEDLE = '.ccrc/exposure.env';
 
-  it('is touched by exactly one bash file, and that file is ccd/ccrc', () => {
+  it('is touched by exactly two bash files, and both are named', () => {
     expect(holdersOf(NEEDLE)).toEqual([
-      'ccd/ccrc',   // CCRC_EXPOSURE_FILE — the declaration `cmd_expose` writes through
+      'ccd/ccrc',         // CCRC_EXPOSURE_FILE — the declaration `cmd_expose` writes through
+      'deploy/deploy.sh', // derive_health_urls — reads it ON THE BOX, over ssh (D-169)
     ]);
   });
 
@@ -983,6 +994,32 @@ describe('one ~/.ccrc/Caddyfile, spelled once in bash through CCRC_CADDYFILE', (
     const code = codeLines(path.join(ccrcRoot, 'ccd', 'ccrc'));
     expect(code.filter((l) => l.includes(NEEDLE))).toEqual([
       'CCRC_CADDYFILE="$HOME/.ccrc/Caddyfile"',
+    ]);
+  });
+});
+
+// — the system Caddyfile: caddy's own path, on the root side of the boundary —
+describe('one /etc/caddy/Caddyfile, spelled once through CCRC_CADDY_SYSTEM_FILE', () => {
+  // The block above pins `~/.ccrc/Caddyfile` — the file ccrc WRITES. This
+  // pins the other end of the ceremony: the file caddy READS, which ccrc
+  // never writes and only ever names. It became a constant for a measured
+  // reason (D-166): doctor's `caddyfile` check MEASURES that path while the
+  // expose landing block and the caddy remedy PRINT it, and three literals
+  // are three chances for a remedy to send an operator to a file the check is
+  // not looking at. It is also the only way the suite can test the check at
+  // all — no test may create /etc/caddy, and none should ever need root to.
+  const NEEDLE = '/etc/caddy/Caddyfile';
+
+  it('is touched by exactly one bash file, and that file is ccd/ccrc', () => {
+    expect(holdersOf(NEEDLE)).toEqual([
+      'ccd/ccrc',   // CCRC_CADDY_SYSTEM_FILE — the declaration everything else reads
+    ]);
+  });
+
+  it('ccrc spells the path once — the declaration is the only line of shell naming it', () => {
+    const code = codeLines(path.join(ccrcRoot, 'ccd', 'ccrc'));
+    expect(code.filter((l) => l.includes(NEEDLE))).toEqual([
+      'CCRC_CADDY_SYSTEM_FILE="${CCRC_CADDY_SYSTEM_FILE:-/etc/caddy/Caddyfile}"',
     ]);
   });
 });

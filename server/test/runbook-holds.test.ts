@@ -319,7 +319,15 @@ describe("step 11 quotes what the exposure doctor checks actually print", () => 
     expect(ccrcSrc).toContain('apt install caddy');
     const section = step11Section();
     expect(section).toContain('apt install caddy');
-    expect(section).toMatch(/sudo ln -sf .*\.ccrc\/Caddyfile \/etc\/caddy\/Caddyfile/);
+    // D-165: a COPY. The runbook printed `ln -sf` alongside the verb, and the
+    // symlink cannot work — caddy runs as its own user and cannot traverse
+    // `$HOME/.ccrc` (0700, ccrc's own doing), so it fails to load with a
+    // permission error nowhere near the instruction that caused it. Pinned in
+    // both directions so the doc and the verb cannot drift apart again.
+    expect(section).toMatch(/sudo install -m 0644 .*\.ccrc\/Caddyfile \/etc\/caddy\/Caddyfile/);
+    expect(section, 'the runbook still teaches the symlink that never worked')
+      .not.toMatch(/ln -s/);
+    expect(ccrcSrc, 'the verb still prints the symlink form').not.toContain('ln -sf $CCRC_CADDYFILE');
     expect(section).toContain('sudo systemctl enable --now caddy');
   });
 

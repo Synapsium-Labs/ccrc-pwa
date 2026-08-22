@@ -508,12 +508,20 @@ installing and starting it is the operator's — printed by the verb, and repeat
 
 ```bash
 sudo apt install caddy      # Debian/Ubuntu; the stock binary — no plugins needed
-sudo ln -sf ~/.ccrc/Caddyfile /etc/caddy/Caddyfile   # or copy it — then re-copy after every 'ccrc expose'
+sudo install -m 0644 ~/.ccrc/Caddyfile /etc/caddy/Caddyfile   # a COPY; re-run after every 'ccrc expose'
 sudo systemctl enable --now caddy
 ```
 
-Caddy reads the generated two-line Caddyfile (`<sub>.duckdns.org { reverse_proxy 127.0.0.1:7788 }`,
-with the port read from your `ccrc.env`) and fetches the certificate itself. Nothing else changes:
+**Copy it — never symlink it.** Caddy runs as its own user and reaching `~/.ccrc/Caddyfile` means
+traversing your home directory and `~/.ccrc`, which ccrc itself creates unreadable to anyone else;
+a symlink there leaves caddy failing to load with a permission error two steps from its cause.
+Because a copy can go stale, `ccrc doctor`'s `caddyfile` check measures whether `/etc/caddy/Caddyfile`
+is still newer than the file `ccrc expose` generates, and FAILs when a regeneration was never copied
+across.
+
+Caddy reads the generated Caddyfile (`<sub>.duckdns.org { reverse_proxy 127.0.0.1:7788 }`, with the
+port read from your `ccrc.env`, plus a `bind` line when you gave `ccrc expose` an address) and
+fetches the certificate itself. Nothing else changes:
 the server keeps listening on loopback only, exactly as installed, and Caddy is the one thing in
 front of it.
 

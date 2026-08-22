@@ -28,7 +28,78 @@ TARGET="${1:-server}"
 # THE TARGET (I4, final review). `${BOX#*@}` strips the `user@` prefix BOX
 # always carries. CCRC_HEALTH_URL remains the explicit override for a box
 # whose health route isn't at the tailnet-IP:7788 shape.
-HEALTH_URL="${CCRC_HEALTH_URL:-http://${BOX#*@}:7788/health}"
+# ── D-169: the default probes an address an EXPOSED box stops answering on ─
+# The tailnet-IP:7788 shape is right for a plain box and wrong for every box
+# behind caddy: exposure means the server binds LOOPBACK and the public name
+# is the only way in. Measured 2026-08-22, and the failure is worse than a
+# false alarm — the deploy that broke the public path PASSED this gate,
+# because the same bad ccrc.env that caused the outage also re-bound the
+# server onto the address the gate probes. The gate agreed with the breakage
+# it had just shipped.
+#
+# So it is derived from the box, not from this workstation: if the box has an
+# exposure file naming an origin, that origin's /health IS this box's front
+# door, and probing it measures the whole path — caddy, the proxy hop, and
+# the server — instead of one hop of it. Read over the same ssh the rest of
+# the script uses; falls back to the old shape for a box with no exposure.
+# CCRC_HEALTH_URL still overrides both (a box fronted by something ccrc did
+# not configure).
+# THE TWO CURLS ASK DIFFERENT QUESTIONS AND NEED DIFFERENT URLS. Until now
+# they shared one, which is why this went unnoticed. The curl inside
+# REMOTE_CMD runs ON THE BOX and means "is Fastify listening?" — it must
+# target whatever the server actually binds, and pointing it at the public
+# name would make it depend on NAT hairpin, i.e. on a thing that has nothing
+# to do with the question. The curl at the bottom runs HERE and means "does
+# the box serve the build I just shipped, through the door its users use?"
+# — that one is the public origin, and its whole value is that it traverses
+# caddy and the proxy hop.
+#
+# Both are read from the box rather than assumed, in the order systemd reads
+# them: ccrc.env, then exposure.env, last line wins (the unit's two
+# EnvironmentFile lines). One ssh, both answers.
+derive_health_urls() {
+  local raw host port origin
+  # The remote snippet is a SECOND READER of files `ccd/ccrc`'s
+  # `_box_env_value` already reads, and single-definition.test.ts names
+  # deploy.sh as a holder because of it. It therefore copies that reader's
+  # rules deliberately — skip leading whitespace, require a bare `KEY=` (never
+  # `export KEY=`, which systemd does not accept either), take the LAST
+  # occurrence across both files in the unit's own order, strip a trailing CR
+  # and one layer of surrounding quotes — and a test feeds both readers the
+  # same awkward lines and asserts they agree. Sent on stdin (`bash -s`) so
+  # the quoting is the remote shell's problem and not a nest of escapes.
+  raw="$("${SSH[@]}" "$BOX" bash -s <<'EOSH' 2>/dev/null || true
+v() {
+  sed -n "s/^[[:space:]]*$1=//p" ~/.ccrc/ccrc.env ~/.ccrc/exposure.env 2>/dev/null \
+    | tail -n1 \
+    | sed -e 's/\r$//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/"
+}
+for k in CCRC_HOST CCRC_PORT CCRC_ORIGIN; do printf '%s=%s\n' "$k" "$(v "$k")"; done
+EOSH
+  )"
+  host="$(printf '%s\n' "$raw" | sed -n 's/^CCRC_HOST=//p' | tail -n1)"
+  port="$(printf '%s\n' "$raw" | sed -n 's/^CCRC_PORT=//p' | tail -n1)"
+  origin="$(printf '%s\n' "$raw" | sed -n 's/^CCRC_ORIGIN=//p' | tail -n1)"
+  # config.ts's own defaults, restated here because a box with no ccrc.env at
+  # all is a legal (if rare) shape and must not produce `http://:/health`.
+  [ -n "$port" ] || port=7788
+  case "$host" in
+    ''|0.0.0.0|'::'|'[::]') host=127.0.0.1 ;;   # wildcards answer on loopback
+  esac
+  BOX_HEALTH_URL="http://$host:$port/health"
+  origin="${origin%/}"
+  case "$origin" in
+    https://?*|http://?*) HEALTH_URL="$origin/health" ;;
+    # No exposure: the box's own address IS the front door, which is the
+    # shape this gate has always had.
+    *) HEALTH_URL="http://${BOX#*@}:$port/health" ;;
+  esac
+}
+BOX_HEALTH_URL=""
+HEALTH_URL=""
+derive_health_urls
+[ -z "${CCRC_HEALTH_URL:-}" ] || HEALTH_URL="$CCRC_HEALTH_URL"
+echo "deploy: health gates — on the box: $BOX_HEALTH_URL; from here: $HEALTH_URL" >&2
 
 # One timestamp per run: every backup this run takes lands under the same
 # ~/ccrc-backups/<ts>/ on the target, so a rollback is one directory, not a hunt.
@@ -177,10 +248,45 @@ CCRC_SHIM
 ship_env() {
   local local_file="deploy/$1" remote_path="$2"
   if [ -f "$local_file" ]; then
+    env_drop_guard "$local_file" "$remote_path"
     echo "shipping $local_file -> $BOX:$remote_path"
     "${SSH[@]}" "$BOX" 'mkdir -p ~/.ccrc'
     "${SCP[@]}" "$local_file" "$BOX:$remote_path"
   fi
+}
+
+# ── env_drop_guard — a deploy may change a value, never silently un-set one ─
+# D-168, and the whole reason this function exists is one measured incident
+# (2026-08-22). These env files are LOCAL and GITIGNORED — one per
+# workstation, shared with nobody, and therefore quietly divergent. A deploy
+# from a checkout whose copy predated the box being armed shipped a ccrc.env
+# with no CCRC_AUTH line at all. scp does not merge; the key did not change
+# value, it CEASED TO EXIST, and a publicly-reachable box came back up
+# unauthenticated. Nothing in the pipeline noticed: the unit was active, the
+# process was stable, and the sha gate at the bottom of this script passed.
+#
+# The rule is narrow on purpose. Shipping config is FOR changing values, so a
+# differing value is never questioned. Dropping a key the box is currently
+# running with is a different act — it hands the box back to a default it was
+# deliberately moved off — so it stops the deploy before anything is touched.
+#
+# KEY NAMES ONLY, both ends. These files are the tokens; a guard that printed
+# a value to explain itself would put secrets in every CI log that ever runs
+# a deploy.
+env_drop_guard() {
+  local local_file="$1" remote_path="$2" remote_keys="" local_keys="" dropped=""
+  # `|| true`: no file on the box (a first deploy) is not a drop — there is
+  # nothing yet for this shipment to take away.
+  remote_keys="$("${SSH[@]}" "$BOX" "sed -n 's/^[[:space:]]*\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' $remote_path 2>/dev/null | sort -u" 2>/dev/null || true)"
+  [ -n "$remote_keys" ] || return 0
+  local_keys="$(sed -n 's/^[[:space:]]*\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' "$local_file" | sort -u)"
+  dropped="$(comm -23 <(printf '%s\n' "$remote_keys") <(printf '%s\n' "$local_keys") | tr '\n' ' ')"
+  dropped="${dropped% }"
+  [ -n "$dropped" ] || return 0
+  echo "deploy: FAILED — $local_file would un-set keys that $BOX:$remote_path currently sets: $dropped" >&2
+  echo "deploy: shipping this file REPLACES the box's copy, so those keys would revert to their built-in defaults. That is how a public box silently went dark on 2026-08-22 (CCRC_AUTH)." >&2
+  echo "deploy: add them to $local_file (it is gitignored and per-workstation, so it drifts from the box by design), or remove them from the box if they are genuinely obsolete. Nothing was shipped." >&2
+  exit 1
 }
 
 # One local, gitignored token file -> BOTH boxes, so the two copies of the one
@@ -810,7 +916,7 @@ else
     && systemctl --user daemon-reload && systemctl --user enable --now ccrc.service \
     && systemctl --user restart ccrc.service \
     && bash ~/ccrc/deploy/verify-service.sh ccrc.service \
-    && curl -fsS '"$HEALTH_URL"
+    && curl -fsS '"$BOX_HEALTH_URL"
   "${SSH[@]}" "$BOX" "$REMOTE_CMD"
   # /health's build stamp must equal what this run shipped. The curl inside
   # REMOTE_CMD proved "something answers"; this proves it answers AS the
