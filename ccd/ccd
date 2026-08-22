@@ -1016,13 +1016,33 @@ _lc_rotate() {   # live-path — mint a fresh generation when the live one is fu
 
   command -v flock >/dev/null 2>&1 || return 0
   lock="$_LC_DIR/.rotate.lock"
-  exec {lfd}>>"$lock" 2>/dev/null || return 0
+  # FIX ROUND 1 (a): a BARE `exec {lfd}>>"$lock" 2>/dev/null` does not
+  # suppress bash's own diagnostic for a failed exec-redirection — the
+  # message is emitted while the shell is SETTING UP the redirection, before
+  # the redirect it names is installed, so it reaches the real stderr rather
+  # than the one about to be redirected. Measured: a `.lifecycle` at chmod
+  # 555 leaked `ccd: line …: …/.rotate.lock: Permission denied` to stderr
+  # even though rc stayed 0. The COMPOUND, not the bare `exec`, is what the
+  # redirect must wrap — `2>/dev/null` on `{ …; }` applies to everything
+  # inside it, `exec` included, the same way it would to any other command.
+  { exec {lfd}>>"$lock"; } 2>/dev/null || return 0
   flock -n "$lfd" 2>/dev/null || { exec {lfd}>&-; return 0; }
 
-  # Re-measured UNDER the lock: another ccd may have rotated between the test
-  # above and the acquisition, and a second mint would burn a generation slot.
-  sz=$(stat -c %s -- "$live" 2>/dev/null)
-  if [[ "$sz" =~ ^[0-9]+$ ]] && (( sz >= _LC_GEN_MAX_BYTES )); then
+  # FIX ROUND 1 (b): re-measuring `$live`'s OWN size here, as this used to,
+  # is a structural no-op — rotation never truncates `$live` (mint-a-
+  # greater-name, never truncate), so its size answers "over cap" FOREVER
+  # after the very first rotation, and can never tell a SECOND rotator that
+  # a first one already acted. Measured with two real concurrent processes
+  # racing this function against one over-cap `$live`: 8 of 10 runs (a
+  # 15ms stagger between launches) minted TWO generations from one over-cap
+  # event, not one. The question under the lock is "has someone ELSE
+  # already rotated `$live` away", and `_lc_live` answers it directly: if
+  # its CURRENT greatest name is still `$live` itself, nobody has, and this
+  # call should mint. `_lc_live` only mints when NO generation exists at
+  # all — `$live` is itself already a generation on disk at this point (the
+  # `-f "$live"` check at the top of this function), so that branch can
+  # never trigger from here.
+  if [[ "$(_lc_live)" == "$live" ]]; then
     minted="$_LC_DIR/journal-$(_lc_now_ns).ndjson"
     : >> "$minted" 2>/dev/null || minted=""
   fi

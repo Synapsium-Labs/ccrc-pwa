@@ -13,8 +13,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawn, spawnSync } from 'node:child_process';
 import { LC_GEN_PREFIX, LC_GEN_SUFFIX, LC_ROTATE_LOCK_NAME } from '../../shared/api.js';
-import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, CCD, ghContainedEnv } from './ccdWsHelpers.js';
 import { generationsOf, lcDir } from './lifecycleHelpers.js';
 
 let h: CcdHarness;
@@ -158,6 +159,66 @@ describe('_lc_rotate', () => {
     const p = big(gen('1000000000000000000'));
     h.sh(`_lc_rotate "${p}"`);
     expect(fs.existsSync(path.join(dir, LC_ROTATE_LOCK_NAME)),
-      'unlinking a held lock is how two processes come to hold it on two inodes (ccd:1531-1534)').toBe(true);
+      'unlinking a held lock is how two processes come to hold it on two inodes (ccd:6239-6242)').toBe(true);
+  });
+
+  // FIX ROUND 1 (a) — CRITICAL. `exec {lfd}>>"$lock" 2>/dev/null` does NOT
+  // suppress bash's own diagnostic for a failed BARE-`exec` redirection: the
+  // message is emitted while the shell sets the redirection up, before the
+  // redirect it names is installed, so it reaches the real stderr rather than
+  // the one being redirected. `_lc_rotate`'s contract is silent on both
+  // streams; raw `spawnSync`, not `h.sh`, because `h.sh` only ever returns
+  // stdout — a successful (rc 0) run's stderr is discarded before this test
+  // could see it either way.
+  it('leaks nothing to stderr when the lock file cannot be opened (unwritable .lifecycle)', () => {
+    const p = big(gen('1000000000000000000'));
+    fs.chmodSync(dir, 0o555);
+    let r: ReturnType<typeof spawnSync>;
+    try {
+      const env = ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true });
+      r = spawnSync('bash', ['-c', `source "${CCD}"; _lc_rotate "${p}"`],
+        { encoding: 'utf8', cwd: h.home, env });
+    } finally {
+      fs.chmodSync(dir, 0o755);   // restore so afterEach's own cleanup can remove the tree
+    }
+    expect.soft(r.status, `stderr: ${r.stderr}`).toBe(0);
+    expect.soft(r.stdout).toBe('');
+    expect.soft(r.stderr).toBe('');
+  });
+
+  // FIX ROUND 1 (b) — IMPORTANT. Two real concurrent processes racing
+  // `_lc_rotate` against the SAME over-cap live file. `flock` serialises the
+  // critical SECTION, but that alone does not stop a double mint: the loser
+  // of the race, once it eventually gets the lock (after the winner has
+  // already minted and released), re-measures `$live`'s own size — still
+  // over cap forever, since rotation never truncates it — and mints AGAIN,
+  // because nothing tells it a generation greater than `$live` now exists.
+  // `spawn` (async, non-blocking), not `spawnSync`: both children are
+  // launched before either is awaited, so both start against the SAME
+  // over-cap `$live` — a real OS-level race, not a simulated one. A bare
+  // back-to-back launch (no stagger) mostly lands the two `flock -n` calls
+  // CONTENDED — the loser sees the lock held and skips cleanly, which is not
+  // the bug. Measured across staggers of 0/2/5/10/20/40ms: a 15ms gap between
+  // launching the two children reproduced the double mint in 8 of 10 runs —
+  // long enough that the winner has usually finished its ENTIRE critical
+  // section (re-check, mint, prune, release) before the loser even attempts
+  // `flock`, so the loser's attempt is UNCONTESTED and it re-runs the same
+  // stale check. This is the reviewer's own reproduction shape ("5 of 8").
+  it('two racing rotators mint exactly ONE new generation, never two', async () => {
+    const p = big(gen('1000000000000000000'));
+    const env = ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true });
+    const runOnce = (): Promise<number | null> => new Promise((resolve, reject) => {
+      const child = spawn('bash', ['-c', `source "${CCD}"; _lc_rotate "${p}"`], { cwd: h.home, env });
+      child.on('error', reject);
+      child.on('close', (code) => resolve(code));
+    });
+    const p1 = runOnce();
+    await new Promise((resolve) => { setTimeout(resolve, 15); });
+    const p2 = runOnce();
+    const [c1, c2] = await Promise.all([p1, p2]);
+    expect.soft(c1, 'each racer stays rc 0 regardless of who wins the lock').toBe(0);
+    expect.soft(c2, 'each racer stays rc 0 regardless of who wins the lock').toBe(0);
+    const minted = gens().filter((f) => f !== gen('1000000000000000000'));
+    expect(minted, 'exactly one new generation must appear — one per racer is the bug').toHaveLength(1);
   });
 });
