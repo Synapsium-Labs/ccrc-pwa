@@ -2377,3 +2377,99 @@ describe('the contained rung end to end', () => {
     expect(tomb.pr).toBeNull();
   }, 30000);
 });
+
+/**
+ * DRIFT IS RESOLVED THE WAY `ws-rm` RESOLVES IT — git's worktree record names
+ * the branch, the registry entry is a witness (D-175, D-176). What made this
+ * urgent is that the old refusal was not a safety property at all: `ws-rm`
+ * accepted the identical evidence, so the operator's only route was the
+ * unaudited one, by hand, on three workspaces at once.
+ *
+ * The destructive half is what these pin. The eval can be right about which
+ * branch it MEASURED and the tail still delete the other one — they read their
+ * branch from different places (the eval from git, the tail used to read the
+ * registry), and the resume path reads it from a third (the tombstone), on a
+ * run where the worktree is already gone and git has no record left to ask.
+ */
+describe('a drifted workspace is reaped in git’s name, not the registry’s', () => {
+  /** Registry: `ws/quiet-basin` (still a real branch, carrying the merged
+   *  work). git: `feat/x`, checked out inside the worktree at origin/main, so
+   *  the ladder can prove it and the two names cannot be confused by accident. */
+  function drifted(): { main: string; wt: string } {
+    const main = h.makeGhRepo('demo');
+    h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
+    const wt = path.join(h.home, 'worktrees', 'demo', 'quiet-basin');
+    fs.writeFileSync(path.join(wt, 'f1.txt'), 'work 1\n');
+    h.git(wt, 'add', 'f1.txt');
+    h.git(wt, 'commit', '-m', 'work 1');
+    h.git(main, 'merge', '--ff-only', 'ws/quiet-basin');
+    h.git(main, 'push', 'origin', 'main');
+    h.sh(`cd "${wt}" && git checkout -q -b feat/x origin/main`);
+    h.ghRows([]);
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    return { main, wt };
+  }
+
+  it('deletes the branch git had checked out and leaves the registry’s alone', () => {
+    const { main, wt } = drifted();
+    const r = reap(tokenOf());
+    expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.reaped).toBe('demo-quiet-basin');
+    // The receipt names what actually went, and what was spared.
+    expect(out.branch).toBe('feat/x');
+    expect(out.registryBranch).toBe('ws/quiet-basin');
+    expect(fs.existsSync(wt)).toBe(false);
+    expect(h.git(main, 'branch', '--list', 'feat/x')).toBe('');
+    // THE ASSERTION THIS WHOLE BLOCK EXISTS FOR: the registry-named branch is
+    // not ours to delete and is still here.
+    expect(h.git(main, 'branch', '--list', 'ws/quiet-basin')).toContain('ws/quiet-basin');
+    // And the one document that outlives the workspace records both, so the
+    // pair can never be reconstructed as a single fact.
+    const tomb = JSON.parse(fs.readFileSync(
+      path.join(h.home, '.cc-sessions', '.reaped', 'demo-quiet-basin.json'), 'utf8'));
+    expect(tomb.branch).toBe('feat/x');
+    expect(tomb.registryBranch).toBe('ws/quiet-basin');
+  }, 30000);
+
+  it('resumes an interrupted drifted reap from the tombstone, not the registry', () => {
+    // The wedge this closes: the tail's branch used to come from the registry
+    // on BOTH paths, so a resume would CAS-delete `refs/heads/ws/quiet-basin`
+    // with `feat/x`'s tip as the old value — which fails, refuses
+    // `branch-moved`, and leaves the workspace half-deleted for ever. By then
+    // the worktree is usually gone, so git has no record left to re-ask: the
+    // journal is the only source, which is why (b) has to write git's name into
+    // it and every later read has to come back out of it.
+    const { main, wt } = drifted();
+    const tok = tokenOf();
+    // A real interruption, not a hand-built journal: die inside (d), after (a),
+    // (b) and (c) have run. Same lever the `worktree` breadcrumb tests use.
+    const KILL = ARCH.replace('_ws_unsupervise() { echo "unsupervise $1" >> "$HOME/ccd-calls"; };',
+      '_ws_unsupervise() { exit 9; };');
+    expect(KILL).not.toBe(ARCH);   // a .replace() that matched nothing is a silent no-op
+    const killed = h.run(`${GH_STUB} ${KILL} cmd_ws_reap --expect ${tok} --session demo-quiet-basin`);
+    expect(killed.code, 'the fixture must really have died mid-tail').toBe(9);
+    expect(h.reg('demo-quiet-basin', 'reaping')).toBe('worktree');
+    // (b) recorded the branch this cleanup is ABOUT, and the witness beside it.
+    const tombPath = path.join(h.home, '.cc-sessions', '.reaped', 'demo-quiet-basin.json');
+    const tomb = JSON.parse(fs.readFileSync(tombPath, 'utf8'));
+    expect(tomb.branch).toBe('feat/x');
+    expect(tomb.registryBranch).toBe('ws/quiet-basin');
+    expect(tomb.tip).toBe(h.git(main, 'rev-parse', 'refs/heads/feat/x'));
+    // Now finish it. The token is not checked on this path (the tombstone is
+    // the consent record) — what is checked is that the journal's tip still
+    // matches the ref the journal names, which is the assertion that would have
+    // failed against the registry's branch.
+    const r = reap('0'.repeat(64));
+    expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.reaped).toBe('demo-quiet-basin');
+    expect(out.resumed).toBe('worktree');
+    expect(out.branch).toBe('feat/x');
+    expect(out.registryBranch).toBe('ws/quiet-basin');
+    expect(fs.existsSync(wt)).toBe(false);
+    expect(h.git(main, 'branch', '--list', 'feat/x')).toBe('');
+    expect(h.git(main, 'branch', '--list', 'ws/quiet-basin')).toContain('ws/quiet-basin');
+    expect(h.reg('demo-quiet-basin', 'uuid'), 'the registry entry is purged').toBeNull();
+  }, 30000);
+});

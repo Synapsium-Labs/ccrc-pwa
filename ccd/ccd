@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=bd8a6684acce015c8279f1d9e8c10c695453df748369381f0b31c396c1dd3b24
+# ccrc:generated 1 sha256=5fb599b9c2ce0d9ad365d25d23467b55989d5e1fb20c0860eb570008de391287
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box, not on this file: `_rc_enabled` reads
@@ -4244,6 +4244,15 @@ _ws_fingerprint() {   # id branch tip headOid mergeOid proof dirty igndigest sen
 
 _ws_reap_reset() {
   REAP_VERDICT=""; REAP_DETAIL=""; REAP_PROOF=""; REAP_TOKEN=""
+  # THE TWO NAMES AND THE NOTE. `REAP_BRANCH` is the branch this cleanup is
+  # ABOUT — git's worktree record when there is one, which is the branch that
+  # gets evaluated and, at (g), deleted. `REAP_REGBRANCH` is the registry's,
+  # which after the drift rung is a WITNESS: reported everywhere, deleted
+  # nowhere. Both are reset here and not only in `_ws_reap_eval` because
+  # `cmd_ws_reap`'s resume fork never calls the eval at all and `set -u` would
+  # kill the run at the first read (the same argument the `REAP_PRNUM` comment
+  # at that call site makes for itself).
+  REAP_BRANCH=""; REAP_REGBRANCH=""; REAP_DRIFT=""
   REAP_TIP=""; REAP_HEADOID=""; REAP_MERGE=""; REAP_BASEOID=""; REAP_WTHEAD=""
   # `REAP_STASHES` and `REAP_FETCHED` are "" and not 0 — final-round tests
   # review F3's class, swept over every default in this function that
@@ -4275,7 +4284,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   _ws_reap_reset
   local id="$1" ws project workdir branch base baseShort main wthead common mainreal
   local st up ahead repo rows row registered errf err rc stashall dirt clipsjson nested
-  local children strays contained=0 obase ourl ancwhy
+  local children strays contained=0 obase ourl ancwhy regbranch
 
   # ── Phase A: identity ────────────────────────────────────────────
   [[ -f "$REG/$id.uuid" ]] || { _reap_refuse no-such-session "no registry entry for $id"; return 1; }
@@ -4297,6 +4306,15 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   # rest of this function operates on is no longer a question anyone can get
   # wrong.
   project=$(_reg_get "$id" project); workdir=$(_reg_get "$id" workdir); branch=$(_reg_get "$id" branch)
+  # THE REGISTRY'S NAME, KEPT UNDER ITS OWN NAME from the moment it is read.
+  # `$branch` is about to become git's answer (the drift rung below), and the
+  # registry's is still wanted in three places that must NOT follow it: the
+  # fingerprint's second input, the drift note the sheet renders, and the
+  # tombstone's record of the branch this cleanup left alone. `REAP_BRANCH` is
+  # seeded here too, so every path that reaches the tail has an answer even
+  # when the worktree block below is skipped (the resume-shaped state, where
+  # git has no record to ask).
+  regbranch="$branch"; REAP_REGBRANCH="$branch"; REAP_BRANCH="$branch"
   base=$(_reg_get "$id" base); [[ -n "$base" ]] || base="origin/HEAD"
   baseShort="${base#origin/}"
   [[ -n "$project" && -n "$workdir" && -n "$branch" ]] \
@@ -4353,16 +4371,47 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
     # failed: it fires only when git positively recorded a detached HEAD.
     [[ -n "$wthead" ]] \
       || { _reap_refuse detached-head "$main records $workdir on a detached HEAD"; return 1; }
-    # Rung 1 — registered, on a branch, and it has to be the branch the registry
-    # names. Both sides of this comparison are now RECORDS — ccrc's registry and
-    # git's registration — which is what the token is named for. ws-rm can let
-    # git win and merely note the divergence (ccd:787-788) because it deletes
-    # whatever git had checked out there; reap cannot, because the registry's
-    # name is what its stash count, its upstream check, its tip, its PR bind and
-    # its CAS delete are all built from. So a disagreement here is never
-    # resolved, it is refused, and both names are printed as §6 requires.
-    [[ "$wthead" == "$branch" ]] \
-      || { _reap_refuse registry-branch-drift "the registry says $branch, git's worktree record for $workdir says $wthead"; return 1; }
+    # Rung 1 — registered, on a branch, and GIT'S RECORD IS THE ONE THAT NAMES
+    # IT. Both sides here are RECORDS — ccrc's registry and git's registration —
+    # and they disagree whenever the operator switched branch inside the
+    # workspace, which is the NORMAL end state of a workspace that was archived
+    # and then reused: it hit 2 of the 3 workspaces this rung stranded on
+    # 2026-08-22, and one of those drifts was created by work merged FOUR DAYS
+    # AFTER the archive.
+    #
+    # This used to refuse (`registry-branch-drift`), on the argument that "the
+    # registry's name is what its stash count, its upstream check, its tip, its
+    # PR bind and its CAS delete are all built from". That argument was true and
+    # is now answered rather than repeated: every one of those five is built
+    # from `$branch`, and `$branch` becomes GIT'S name right here, so the thing
+    # being measured and the thing being deleted are the same branch again.
+    # `cmd_ws_rm` already reaches this conclusion for the same evidence
+    # (ccd:2063-2066, "git had a record, so the registry is a witness, never the
+    # decider") and the refusal made the PWA disagree with the CLI about
+    # identical facts, in the direction that strands gigabytes.
+    #
+    # THE PRECEDENT IS NOT LIKE-FOR-LIKE, AND THE DIFFERENCE IS WORTH SAYING:
+    # `cmd_ws_rm` follows its name resolution with `git branch -d`, so git
+    # itself refuses an unmerged branch and ws-rm prints "kept branch …". Step
+    # (g) here is a compare-and-swap `update-ref -d`, which force-deletes
+    # whatever still matches the tip. What stands in `-d`'s place is this
+    # function's whole Phase C — an ancestry proof or `_ws_merge_proof`, both
+    # STRICTER than `branch -d`'s test (which refuses a squash merge outright)
+    # — plus Phase B and the stash rung, and all of them now measure git's
+    # branch. So the branch that gets deleted is the branch that was proven,
+    # which is the property the old refusal was protecting by refusing to act
+    # at all.
+    #
+    # THE REGISTRY ENTRY IS REPORTED, NEVER TRUSTED, NEVER SILENTLY DELETED:
+    # `REAP_REGBRANCH` keeps it, `REAP_DRIFT` carries the sentence the audit
+    # puts on the wire and the sheet renders BEFORE the tap, and step (g)
+    # never names it. The two conditions that are not drift — no worktree
+    # record, and a recorded detached HEAD — are still refusals, above.
+    if [[ "$wthead" != "$branch" ]]; then
+      REAP_DRIFT="the registry recorded $regbranch; git's worktree record for $workdir says $wthead — $wthead is the branch this cleanup evaluates and removes, and $regbranch is left alone"
+      branch="$wthead"
+      REAP_BRANCH="$wthead"
+    fi
     # STILL REQUIRED — and now for a different reason, which is why it is worth
     # saying out loud rather than leaving in place by inertia. It used to sit
     # immediately after the branch read in order to CONTAIN a name that might
@@ -4420,12 +4469,17 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
     # detached worktree now yields "" where `rev-parse` yielded the literal
     # `HEAD` — unobservable, because rung 2 refuses before this line.
     #
-    # MUTATION SURVIVOR, disclosed: writing `REAP_WTHEAD="$branch"` here leaves
+    # NO LONGER A MUTATION SURVIVOR, and the day the old note warned about is
+    # this one. It used to read: "writing `REAP_WTHEAD="$branch"` here leaves
     # the suite green, and always will — rung 1 above refuses unless
-    # `wthead == branch`, so on this line the two are equal BY CONSTRUCTION. It
-    # is written from `wthead` because the field means "what git's record says",
-    # and the day that rung moves or softens, the fingerprint must follow git
-    # rather than quietly follow the registry.
+    # `wthead == branch`, so on this line the two are equal BY CONSTRUCTION …
+    # the day that rung moves or softens, the fingerprint must follow git rather
+    # than quietly follow the registry." Rung 1 has moved: it notes the
+    # divergence instead of refusing it, `$branch` is now git's answer, and
+    # `$regbranch` carries the registry's. So the two are no longer equal by
+    # construction, this line and the fingerprint's second input are two
+    # different facts again, and swapping either for the other is a kill rather
+    # than a survivor — pinned by the drifted-workspace token test.
     REAP_WTHEAD="$wthead"
 
     # ── Phase B: nothing local is lost ─────────────────────────────
@@ -5022,7 +5076,14 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   # digest is `sha256sum` of nothing, exactly what a fixture with no
   # registered children computes by hand.
   REAP_CHILDDIGEST=$(printf '%s' "$REAP_CHILDLINES" | sha256sum | cut -d' ' -f1)
-  REAP_TOKEN=$(_ws_fingerprint "$id" "$branch" "$REAP_TIP" "$REAP_HEADOID" "$REAP_MERGE" "$REAP_PROOF" \
+  # `$regbranch`, NOT `$branch`: input 2 is "what the registry says" and input
+  # 11 (`REAP_WTHEAD`) is "what git says", and after the drift rung `$branch` IS
+  # input 11. Passing it here would hash git's name twice and leave the
+  # registry's out of the token altogether — so a registry entry rewritten
+  # between the audit and the tap would not move the fingerprint, on the one
+  # verb whose whole consent mechanism is that any change to a fact it measured
+  # invalidates the token.
+  REAP_TOKEN=$(_ws_fingerprint "$id" "$regbranch" "$REAP_TIP" "$REAP_HEADOID" "$REAP_MERGE" "$REAP_PROOF" \
                  "$REAP_DIRTY" "$REAP_IGNDIGEST" "$REAP_SENSDIGEST" "$REAP_STASHES" "$REAP_WTHEAD" \
                  "$REAP_BASEOID" "$REAP_CLIPDIGEST" "$REAP_CHILDDIGEST")
   REAP_VERDICT=reapable
@@ -5215,8 +5276,21 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only; the token's sour
   local exists=false headmatch=false ahead=null bytes=0
   [[ -d "$workdir" ]] && exists=true
   [[ -n "$REAP_WTHEAD" && "$REAP_WTHEAD" == "$branch" ]] && headmatch=true
-  if [[ -n "$branch" ]] && git -C "$PROJECTS_ROOT/$project" rev-parse --verify --quiet "$base" >/dev/null 2>&1; then
-    ahead=$(git -C "$PROJECTS_ROOT/$project" rev-list --count "$base..refs/heads/$branch" 2>/dev/null)
+  # THE BRANCH THIS DOCUMENT IS ABOUT is the one `_ws_reap_eval` just evaluated
+  # — git's worktree record when there is one — and `$branch` here is still the
+  # REGISTRY's, read at the top of this function. They differ under drift, and
+  # every field below that says "branch" has to mean the branch a reap would
+  # actually remove, or the sheet describes one branch and the tap deletes
+  # another. `$branch` keeps the registry's name under `registryBranch`, so
+  # nothing is lost and nobody has to infer either from the other.
+  #
+  # The fallback is the registry's, for the refusals that never reach the
+  # worktree block at all (`no-such-session`, `not-archived`, and every other
+  # Phase A rung): `REAP_BRANCH` is "" there, and an empty branch on the wire
+  # would be a worse answer than the name the registry does have.
+  local evbranch="$REAP_BRANCH"; [[ -n "$evbranch" ]] || evbranch="$branch"
+  if [[ -n "$evbranch" ]] && git -C "$PROJECTS_ROOT/$project" rev-parse --verify --quiet "$base" >/dev/null 2>&1; then
+    ahead=$(git -C "$PROJECTS_ROOT/$project" rev-list --count "$base..refs/heads/$evbranch" 2>/dev/null)
     [[ "$ahead" =~ ^[0-9]+$ ]] || ahead=null
   fi
   # Pre-merge fix round, finding F: `null`, never a fabricated `0` — the same
@@ -5259,8 +5333,15 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only; the token's sour
     children_json=$(_ws_child_manifest "$main" "$workdir") || children_json=null
   fi
 
-  printf '{"id":%s,"branch":%s,"base":%s,"workdir":%s,"project":%s,"repo":%s,' \
-    "$(_json_str "$id")" "$(_json_str "$branch")" "$(_json_str "$base")" \
+  # `branch` IS THE BRANCH A REAP WOULD REMOVE, and `registryBranch` is the
+  # witness beside it — additive and absence-permitting, so a server reading an
+  # older ccd sees the key missing and renders no note rather than throwing.
+  # `drift` is the SENTENCE, built once on the box where both names and the
+  # workdir are in hand, because a client that assembled it from two fields
+  # would be a second definition of the same rule.
+  printf '{"id":%s,"branch":%s,"registryBranch":%s,"drift":%s,"base":%s,"workdir":%s,"project":%s,"repo":%s,' \
+    "$(_json_str "$id")" "$(_json_str "$evbranch")" "$(_json_str "$branch")" \
+    "$(_json_str "$REAP_DRIFT")" "$(_json_str "$base")" \
     "$(_json_str "$workdir")" "$(_json_str "$project")" "$(_json_str "$repo")"
   printf '"exists":%s,"headMatchesRegistry":%s,"reaping":%s,' \
     "$exists" "$headmatch" "$( [[ -n "$reaping" ]] && _json_str "$reaping" || echo null)"
@@ -5735,13 +5816,40 @@ _ws_tombstone() {   # id clipsjson -> writes .reaped/<id>.json, echoes its path
     children_json+="$(_json_str "$cchild")"
   done <<< "$REAP_CHILDLINES"$'\n'
   children_json+="]"
+  # THE TWO NAMES, READ THROUGH A DEFAULT AND A FALLBACK, and both halves are
+  # deliberate. `${REAP_BRANCH-}` because this function is also called directly
+  # — `ccd-prhistory.test.ts` drives the WRITER, seeding only the REAP_* globals
+  # the document's field list needs — and under `set -u` a bare read there kills
+  # the command substitution, which leaves `"branch":,` in a printf ARGUMENT
+  # LIST: the exact swallowed-status shape `cmd_ws_audit`'s `_json_str` probe
+  # exists to prevent, and a tombstone that does not parse is a tombstone that
+  # cannot be read back by the resume path. The registry fallback because an
+  # EMPTY name is not a fact this document may state: it is the one record that
+  # outlives the workspace, and "the branch this cleanup was about" has to name
+  # something. On every real path `_ws_reap_eval` has already set both (and
+  # `_ws_reap_reset` at least emptied them), so the fallback is reachable only
+  # from a caller that skipped the eval — where the registry IS what such a
+  # caller means.
+  local tbranch="${REAP_BRANCH-}" tregbranch="${REAP_REGBRANCH-}"
+  [[ -n "$tbranch" ]] || tbranch=$(_reg_get "$id" branch)
+  [[ -n "$tregbranch" ]] || tregbranch=$(_reg_get "$id" branch)
   local reflog="" transcript
   [[ -d "$(_reg_get "$id" workdir)" ]] && reflog=$(git -C "$(_reg_get "$id" workdir)" reflog show --all --format='%H %gs' 2>/dev/null | head -200)
   transcript=$(_transcript_path "$id") || transcript=""
   {
-    printf '{"id":%s,"project":%s,"workdir":%s,"branch":%s,"base":%s,"tip":%s,' \
+    # `branch` IS THE BRANCH THIS CLEANUP IS ABOUT — `REAP_BRANCH`, i.e. git's
+    # worktree record — not the registry field it used to read. Under drift the
+    # two differ, and this document is the only thing that outlives the
+    # workspace: recording the registry's name here would name a branch that
+    # still exists while saying nothing about the one that was deleted, and the
+    # resume path (which reads its branch back out of this file) would then CAS
+    # the wrong ref and wedge every later attempt on `branch-moved`.
+    # `registryBranch` records the witness beside it — the name this cleanup
+    # LEFT ALONE — so the pair can never be reconstructed as one fact.
+    printf '{"id":%s,"project":%s,"workdir":%s,"branch":%s,"registryBranch":%s,"base":%s,"tip":%s,' \
       "$(_json_str "$id")" "$(_json_str "$(_reg_get "$id" project)")" \
-      "$(_json_str "$(_reg_get "$id" workdir)")" "$(_json_str "$(_reg_get "$id" branch)")" \
+      "$(_json_str "$(_reg_get "$id" workdir)")" "$(_json_str "$tbranch")" \
+      "$(_json_str "$tregbranch")" \
       "$(_json_str "$(_reg_get "$id" base)")" "$(_json_str "$REAP_TIP")"
     printf '"uuid":%s,"wrapper":%s,"mergeCommit":%s,"proof":%s,"pr":%s,"prUrl":%s,' \
       "$(_json_str "$(_reg_get "$id" uuid)")" "$(_json_str "$(_reg_get "$id" wrapper)")" \
@@ -5816,6 +5924,42 @@ doc["clips"] = clips
 with open(path, "w", encoding="utf-8") as fh:
     json.dump(doc, fh, separators=(",", ":"))
 ' "$f" 2>/dev/null
+}
+
+_ws_tomb_str() {   # tombstone-json-file field -> that STRING field on stdout,
+                    # empty (rc 0) when the field is absent, null, or not a
+                    # string; NON-ZERO only when the document could not be
+                    # opened or parsed at all.
+  #
+  # PYTHON, AND THE `sed` IT REPLACES IS WHY. The resume path used
+  # `sed -n 's/.*"tip"[[:space:]]*:[[:space:]]*"\([0-9a-f]*\)".*/\1/p'` over a
+  # one-line document, and `.*` is GREEDY: with two `"tip"` keys on the line it
+  # returns the LAST one (measured — a hand-built document with a duplicate key
+  # answered `2222`, not `1111`). That was survivable while the only other
+  # fields were an oid and a path array, and it stops being survivable the
+  # moment this record grows a second field whose NAME is a branch: a `"branch"`
+  # pattern would match the last one on the line, and the value it returned
+  # would be handed to `update-ref -d` at (g). JSON is not a regular language
+  # and the one decoder in this file that already knows that is python's
+  # (`_ws_tomb_children`, immediately below, which says the rest of the
+  # argument in full: `cmd_ws_reap` makes python3 a hard precondition of every
+  # reap path before either fork).
+  #
+  # ABSENT AND UNREADABLE ARE DIFFERENT ANSWERS, per the file's own rule about
+  # not collapsing two conditions a caller handles differently. An absent field
+  # is `""` at rc 0 — that is how a tombstone written by an older ccd, which
+  # never recorded `registryBranch`, reads as "nothing to say" rather than as a
+  # broken journal — while a document that will not parse is non-zero, and
+  # every call site turns that into a refusal.
+  local f="$1" field="$2"
+  [[ -s "$f" ]] || return 1
+  LC_ALL=C.UTF-8 python3 -c '
+import json, sys
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    doc = json.load(fh)
+v = doc.get(sys.argv[2])
+sys.stdout.write(v if isinstance(v, str) else "")
+' "$f" "$field" 2>/dev/null
 }
 
 _ws_tomb_children() {   # tombstone-json-file -> one raw
@@ -6048,8 +6192,25 @@ _ws_reap_locked() {   # token id — everything the reap lock serialises
     # accepted is that a SECOND human, holding any 64-hex string, can finish a
     # cleanup a first human authorised. Measured: after a kill at (c),
     # `ws-reap --expect ffff…ff` completed the reap.
-    local tombtip; tombtip=$(sed -n 's/.*"tip"[[:space:]]*:[[:space:]]*"\([0-9a-f]*\)".*/\1/p' "$REG/.reaped/$id.json" 2>/dev/null | head -1)
-    local branch; branch=$(_reg_get "$id" branch)
+    # BOTH FACTS COME OUT OF THE JOURNAL, through the one decoder that can read
+    # it (`_ws_tomb_str`, which records why the `sed` this replaces was a hazard
+    # rather than a style). The tip is the CAS old-value at (g); the BRANCH is
+    # the ref that CAS names, and reading it from the registry — which is what
+    # this line did — is exactly wrong under drift: the tombstone was written
+    # about git's branch, so a registry read here would re-validate the tip of a
+    # DIFFERENT ref, refuse `branch-moved`, and wedge the resume permanently on
+    # a workspace whose cleanup was already authorised.
+    #
+    # ABSENCE-PERMITS on the branch, and only on the branch: a tombstone written
+    # before this field existed carries the registry's name in `branch` — which,
+    # under the rung that then refused every drift, was equal to git's by
+    # construction — so falling back to the registry reproduces exactly what
+    # that older run would have deleted. The TIP has no fallback: it is the only
+    # proof this journal belongs to this branch and its absence is a refusal.
+    local tombtip branch
+    tombtip=$(_ws_tomb_str "$REG/.reaped/$id.json" tip) || tombtip=""
+    branch=$(_ws_tomb_str "$REG/.reaped/$id.json" branch) || branch=""
+    [[ -n "$branch" ]] || branch=$(_reg_get "$id" branch)
     # THE TIP IS REQUIRED ON EVERY PHASE. It is the CAS old-value at (g) and the
     # only proof this journal belongs to this branch, since Phase C is
     # deliberately not re-run here. Empty is the ABSENCE of that proof, never a
@@ -6344,9 +6505,35 @@ _ws_reap_locked() {   # token id — everything the reap lock serialises
 }
 
 _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
-  local id="$1" resumed="$2" project workdir branch main attic clips tomb bytes
-  project=$(_reg_get "$id" project); workdir=$(_reg_get "$id" workdir); branch=$(_reg_get "$id" branch)
+  local id="$1" resumed="$2" project workdir branch regbranch main attic clips tomb bytes
+  project=$(_reg_get "$id" project); workdir=$(_reg_get "$id" workdir)
   main="$PROJECTS_ROOT/$project"
+  # THE BRANCH THIS TAIL DESTROYS, and it is not the registry's field any more.
+  # Two origins, one per path, exactly as `childlines` has two below and for the
+  # same reason:
+  #   FRESH — `REAP_BRANCH`, THIS SAME PROCESS's `_ws_reap_eval`, which set it
+  #     from git's worktree record moments ago. That is the branch every rung of
+  #     Phase B and Phase C just measured, so it is the only branch a proof was
+  #     taken about.
+  #   RESUME — the tombstone, because the eval never ran on this path and the
+  #     worktree is usually already gone, so git has no record left to ask. The
+  #     journal is the consent record and it is what (b) wrote the branch into.
+  # The registry is the fallback on both, and it is a fallback rather than a
+  # source: it answers only for a tombstone written before this field existed
+  # (where the two names were equal by construction anyway), and `set -u` makes
+  # an unset `REAP_BRANCH` fatal rather than silent.
+  if [[ -z "$resumed" ]]; then
+    branch="$REAP_BRANCH"; regbranch="$REAP_REGBRANCH"
+  else
+    branch=$(_ws_tomb_str "$REG/.reaped/$id.json" branch) || branch=""
+    # The witness travels with the fact it is a witness to. A resume that read
+    # the registry for this would answer with whatever the row says NOW, which
+    # is a different question from "what did the run this is finishing say it
+    # was leaving alone" — and an older tombstone simply has no answer, which is
+    # the empty string, not a guess.
+    regbranch=$(_ws_tomb_str "$REG/.reaped/$id.json" registryBranch) || regbranch=""
+  fi
+  [[ -n "$branch" ]] || branch=$(_reg_get "$id" branch)
   # THE RECEIPT IS A MEASUREMENT TOO — final-round tests review F2. This was
   # `|| bytes=0`, the last of the three identical `_ws_gc_bytes "$workdir"`
   # lines to still fabricate (ccd:1503 archive manifest and ccd:3006 audit were
@@ -6858,8 +7045,15 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
   # deletion — an unbound variable here kills the process after the work is
   # done and before anything says so, which is the failure mode this whole
   # function is arranged to avoid.
-  printf '{"reaped":%s,"branch":%s,"pr":%s,"proof":%s,"tombstone":%s,"attic":%s,"bytes":%s,"resumed":%s}\n' \
+  # `registryBranch` on the receipt as well as in the tombstone: the PWA reads
+  # this object back and `parseReap` spreads it through untyped, so the line the
+  # operator sees after the tap can name the branch that went AND the one that
+  # was left, without a second round trip to a document only the box can read.
+  # Empty when there was no drift — the pair is a measurement, not a claim, and
+  # `_json_str ""` is the same unbound shape every other optional field here has.
+  printf '{"reaped":%s,"branch":%s,"registryBranch":%s,"pr":%s,"proof":%s,"tombstone":%s,"attic":%s,"bytes":%s,"resumed":%s}\n' \
     "$(_json_str "$id")" "$(_json_str "$branch")" \
+    "$(_json_str "$( [[ -n "$regbranch" && "$regbranch" != "$branch" ]] && printf '%s' "$regbranch")")" \
     "$( [[ "$REAP_PRNUM" =~ ^[0-9]+$ ]] && echo "$REAP_PRNUM" || echo null)" \
     "$(_json_str "$REAP_PROOF")" "$(_json_str "$tomb")" "${attic:-0}" "$bytes" \
     "$( [[ -n "$resumed" ]] && _json_str "$resumed" || echo null)"

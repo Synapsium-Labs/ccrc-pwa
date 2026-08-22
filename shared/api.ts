@@ -523,8 +523,32 @@ export function isWsAuditUnit(v: unknown): v is WsAuditUnit {
  *  present ONLY when `verdict === 'reapable'`; the client sends it back as
  *  `expect`, and ccd re-proves the world state matches it. */
 export interface WsAudit {
-  id: string; branch: string; base: string; workdir: string; project: string; repo: string;
-  exists: boolean; headMatchesRegistry: boolean; reaping: string | null;
+  id: string;
+  /** THE BRANCH A REAP WOULD REMOVE — git's worktree record for this workspace
+   *  when git has one, which is what `_ws_reap_eval` evaluates and what step
+   *  (g) CAS-deletes. It is NOT necessarily the registry's `branch` field: an
+   *  operator who switches branch inside a workspace makes the two diverge, and
+   *  that is the normal end state of a workspace that was archived and reused.
+   *  ccd used to refuse that state outright; it now resolves it the way
+   *  `ccd ws-rm` always has (git decides, the registry witnesses), so this
+   *  field and `registryBranch` are two facts rather than one. */
+  branch: string;
+  /** The registry's own `branch` field — reported, never acted on. `null` from
+   *  an older ccd that did not emit it (absence-permits); equal to `branch`
+   *  whenever the two records agree, which is the ordinary case. */
+  registryBranch: string | null;
+  /** The one sentence naming both branches and which one goes, built on the box
+   *  where both names and the workdir are in hand. Empty string when the two
+   *  records agree, `null` from an older ccd. A client MUST NOT reassemble this
+   *  from the two names — that would be a second definition of the same rule. */
+  drift: string | null;
+  base: string; workdir: string; project: string; repo: string;
+  exists: boolean;
+  /** `false` when `branch` and `registryBranch` disagree. It used to imply a
+   *  refusal (drift was one); it no longer does, so a `reapable` verdict can
+   *  carry `false` here and the sheet must render the note either way. */
+  headMatchesRegistry: boolean;
+  reaping: string | null;
   /* ── THE SESSION BEHIND THE WORKSPACE ──────────────────────────────────────
    * Computed by ccd BEFORE `_ws_reap_eval`'s early refusal, unlike everything
    * in the `null MEANS NOBODY LOOKED` block below — a `not-archived` verdict
@@ -1784,6 +1808,11 @@ export function reviveWsAudit(v: unknown, sentence: string): WsAudit {
   return {
     id: reqStr(o, 'id'),
     branch: reqStr(o, 'branch'),
+    // optStr, NOT reqStr, for the reason the `alive`/`started` block below
+    // states in full: an older ccd on the fleet host omits both, and a required
+    // read would throw away the whole sheet rather than one note.
+    registryBranch: optStr(o, 'registryBranch'),
+    drift: optStr(o, 'drift'),
     base: reqStr(o, 'base'),
     workdir: reqStr(o, 'workdir'),
     project: reqStr(o, 'project'),

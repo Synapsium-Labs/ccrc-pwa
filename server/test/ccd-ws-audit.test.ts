@@ -1268,25 +1268,76 @@ describe('identity refusals', () => {
     expect(refusal(wt).verdict).toBe('detached-head');
   });
 
-  it('refuses when git’s record and the registry name different branches, printing both', () => {
+  it('evaluates GIT’s branch when the two records disagree, and refuses in ITS name', () => {
     // Verified against git 2.43: `git checkout -b feat/x` inside a linked
     // worktree rewrites `$GIT_DIR/worktrees/<slug>/HEAD`, so `worktree list
-    // --porcelain` read from $main reports `branch refs/heads/feat/x`. The
-    // divergence this refuses is therefore between two RECORDS — ccrc's
-    // registry and git's registration — and both names go in the detail,
-    // because the remedy is to reconcile them and neither one is guessable
-    // from the other.
+    // --porcelain` read from $main reports `branch refs/heads/feat/x`.
+    //
+    // THIS USED TO REFUSE `registry-branch-drift` OUTRIGHT (D-175). Drift is
+    // the normal end state of a workspace that was archived and then reused,
+    // and refusing it stranded 2 of the 3 workspaces this wave is about while
+    // `ws-rm` — which resolves the same evidence the same way — removed them by
+    // hand. What must NOT change is which branch the answer is about: `feat/x`
+    // is what git has checked out, so `feat/x` is what every rung measures and
+    // what the refusal names. `ws/quiet-basin`, the registry's, is a witness:
+    // reported on the wire, never evaluated, never deleted.
     const { wt, tip } = squashMovedBase();
     h.sh(`cd "${wt}" && git checkout -q -b feat/x`);
     const a = refusal(wt);
-    expect(a.verdict).toBe('registry-branch-drift');
-    expect(a.detail).toContain('ws/quiet-basin');
+    // `feat/x` carries the squash's commits and has no PR of its own, so
+    // nothing proves it — the refusal is about the branch git actually has.
+    expect(a.verdict).toBe('no-upstream');
     expect(a.detail).toContain('feat/x');
-    // The corroboration is on the wire too, and it is FALSE here — the field
-    // exists so a reader can see the disagreement without parsing a sentence.
+    expect(a.detail).not.toContain('ws/quiet-basin');
+    // Both names on the wire, plus the sentence the sheet renders.
+    expect(a.branch).toBe('feat/x');
+    expect(a.registryBranch).toBe('ws/quiet-basin');
+    expect(a.drift).toContain('feat/x');
+    expect(a.drift).toContain('ws/quiet-basin');
     expect(a.headMatchesRegistry).toBe(false);
     expect(tip).toMatch(/^[0-9a-f]{40}$/);
   });
+
+  it('ALLOWS a drifted workspace whose git branch is provably contained (D-175)', () => {
+    // The other half, and the case that cost 3.6 G: the registry names a branch
+    // that has moved on, git names one whose every commit origin already holds.
+    // `ws-rm` accepts this; the sheet refused it. Now the ladder evaluates
+    // git's branch, proves it, and says so — while the registry-named branch is
+    // left standing, which the reap test asserts by looking for it afterwards.
+    const { main, wt } = squashMovedBase();
+    h.sh(`cd "${wt}" && git checkout -q -b feat/x origin/main`);
+    expect(containedByOriginHead(main, 'feat/x')).toBe(true);
+    const a = audit();
+    expect(a.verdict).toBe('reapable');
+    expect(a.merge.proof).toBe('contained');
+    expect(a.branch).toBe('feat/x');
+    expect(a.registryBranch).toBe('ws/quiet-basin');
+    expect(a.headMatchesRegistry).toBe(false);
+    // The note is the operator's warning, and it has to be legible BEFORE the
+    // tap: both names, and which one goes.
+    expect(a.drift).toContain('feat/x');
+    expect(a.drift).toContain('ws/quiet-basin');
+    expect(a.drift).toContain('left alone');
+    expect(a.token).toMatch(/^[0-9a-f]{64}$/);
+  }, 30000);
+
+  it('hashes BOTH names, so rewriting either one invalidates the consent', () => {
+    // The token is the consent boundary, and under drift it covers two
+    // different facts: input 2 is the registry's name, input 11 is git's. A
+    // change to EITHER must invalidate a token issued before it — hashing
+    // git's name twice (the natural mistake once `$branch` becomes git's
+    // answer) would leave a registry rewrite silently consented to.
+    const { wt } = squashMovedBase();
+    h.sh(`cd "${wt}" && git checkout -q -b feat/x origin/main`);
+    const first = audit().token;
+    expect(first).toMatch(/^[0-9a-f]{64}$/);
+    // Move ONLY the registry's name. Nothing git records has changed.
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', 'demo-quiet-basin.branch'), 'ws/renamed\n');
+    const second = audit();
+    expect(second.verdict).toBe('reapable');
+    expect(second.registryBranch).toBe('ws/renamed');
+    expect(second.token).not.toBe(first);
+  }, 30000);
 
   it('asks $main for the branch, so a stray git init cannot speak for us', () => {
     // THE case the unified read exists for, and it is written so it can fail:

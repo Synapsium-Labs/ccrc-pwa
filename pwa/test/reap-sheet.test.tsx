@@ -6,7 +6,8 @@ import { ToastHost } from '../src/components/Toast';
 import { ReapSheet } from '../src/session/ReapSheet';
 
 const audit = (over: Partial<WsAudit> = {}): WsAudit => ({
-  id: 'demo-quiet-basin', branch: 'ws/quiet-basin', base: 'origin/main', workdir: '/home/u/worktrees/custom-tools/quiet-basin',
+  id: 'demo-quiet-basin', branch: 'ws/quiet-basin', registryBranch: 'ws/quiet-basin', drift: '',
+  base: 'origin/main', workdir: '/home/u/worktrees/custom-tools/quiet-basin',
   project: 'custom-tools', repo: 'o/r', exists: true, headMatchesRegistry: true, reaping: null,
   alive: true, started: true, unit: 'enabled',
   dirty: [], ignored: [
@@ -85,20 +86,71 @@ describe('the manifest', () => {
   });
 
   it('renders the contained verdict without claiming a PR nobody bound', async () => {
-    // The contained rung reaps a never-pushed branch with no PR anywhere, so
-    // "merged in #?" — the copy every other reapable audit gets — would claim
-    // a merge this verdict deliberately rests on no PR for. The line states
-    // the actual proof instead, and the Remove button still renders: this is
-    // a full reapable verdict, not a refusal.
+    // The contained rung reaps a branch with no PR bound, so "merged in #?" —
+    // the copy every other reapable audit gets — would claim a merge this
+    // verdict deliberately rests on no PR for. The line states the actual
+    // proof instead, and the Remove button still renders: this is a full
+    // reapable verdict, not a refusal.
+    //
+    // AND IT NO LONGER SAYS "never pushed". That clause was true while the
+    // rung only ran for branches with no upstream; the containment ladder now
+    // asks it of every branch, so a pushed-and-merged branch reaches it too and
+    // the old copy would assert something the sheet cannot know.
     auditBody = audit({
       pr: { number: null, url: '', mergeCommit: '', headRefOid: '' },
       merge: { proof: 'contained', fetchedAt: Math.floor(Date.now() / 1000) },
     });
     open();
     expect(await screen.findByText(
-      /ws\/quiet-basin — never pushed; origin already holds every commit on it \(proof: contained\), today/,
+      /ws\/quiet-basin — origin already holds every commit on it \(proof: contained\), today/,
     )).toBeInTheDocument();
+    expect(screen.queryByText(/never pushed/)).toBeNull();
     expect(screen.getByRole('button', { name: /^Remove quiet-basin/ })).toBeInTheDocument();
+  });
+
+  it('names BOTH branches when the two records disagree, on a reapable verdict', async () => {
+    // The operator has to see which branch is about to go. ccd used to refuse
+    // drift outright, so this state never reached a rendered sheet; it now
+    // resolves it (git's record decides) and reaps, which makes this sheet the
+    // last moment anyone can see the disagreement. The sentence is ccd's own —
+    // one definition of the rule, on the box — and the button still offers the
+    // removal, because a refusal is not what drift means any more.
+    auditBody = audit({
+      branch: 'feat/x', registryBranch: 'ws/quiet-basin', headMatchesRegistry: false,
+      drift: "the registry recorded ws/quiet-basin; git's worktree record for "
+        + '/home/u/worktrees/custom-tools/quiet-basin says feat/x — feat/x is the branch this '
+        + 'cleanup evaluates and removes, and ws/quiet-basin is left alone',
+      pr: { number: null, url: '', mergeCommit: '', headRefOid: '' },
+      merge: { proof: 'contained', fetchedAt: Math.floor(Date.now() / 1000) },
+    });
+    open();
+    expect(await screen.findByText(/feat\/x is the branch this cleanup evaluates and removes/))
+      .toBeInTheDocument();
+    expect(screen.getByText(/ws\/quiet-basin is left alone/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Remove quiet-basin/ })).toBeInTheDocument();
+  });
+
+  it('still says something when an older ccd reports the drift but not the sentence', async () => {
+    // Absence-permits, all the way to the pixel: `drift` is `null` from a ccd
+    // that predates it, and `headMatchesRegistry` — which that build DOES send
+    // — is the condition. A sheet that keyed on the sentence would go silent on
+    // exactly the mixed-version window the wire rules exist for.
+    auditBody = audit({
+      branch: 'feat/x', registryBranch: null, drift: null, headMatchesRegistry: false,
+    });
+    open();
+    expect(await screen.findByText(/name different branches/)).toBeInTheDocument();
+    expect(screen.getByText(/feat\/x is the one that would be removed/)).toBeInTheDocument();
+  });
+
+  it('renders no drift note when the two records agree', async () => {
+    // The negative control: the note is a statement about a disagreement, so
+    // its absence has to be a measurement too. Without this, deleting the
+    // condition and rendering it unconditionally would leave the suite green.
+    open();
+    expect(await screen.findByText(/ws\/quiet-basin — merged in #42/)).toBeInTheDocument();
+    expect(screen.queryByText(/different branches/)).toBeNull();
+    expect(screen.queryByText(/left alone/)).toBeNull();
   });
 
   it('shows the worktree path and size, and the uncommitted row', async () => {
