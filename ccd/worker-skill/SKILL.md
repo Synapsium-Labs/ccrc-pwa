@@ -94,6 +94,15 @@ they are not duplicated here on purpose — one copy of the protocol, in the
 place its own tests pin it.
 
 ```bash
+# THE ADDRESS IS CONFIG, NEVER A LITERAL: ~/.ccrc/agent.env's CCRC_SERVER_URL
+# (written by `ccrc install --role fleet`; ws:// or http(s):// forms both
+# occur) names where this fleet's server runs. GREP it, never source it —
+# agent.env is 0600 and carries this box's agent bearer token. If the
+# derivation comes up EMPTY, stop and report to the coordinator by the one
+# lane that still works (your handoff commit / the pane): never guess an
+# address, never fall back to a hardcoded one.
+CCRC_API=$(grep -E '^[[:space:]]*CCRC_SERVER_URL=' "$HOME/.ccrc/agent.env" | tail -n1 | cut -d= -f2- | tr -d '[:space:]')
+CCRC_API="${CCRC_API/#ws:/http:}"; CCRC_API="${CCRC_API/#wss:/https:}"; CCRC_API="${CCRC_API%/}"
 # EXTRACT, never `cat`: the token file ships in deploy/ccrc-mail.token.example's
 # shape — a `#`-comment preamble above ONE value line — and the server reads it
 # with coord/token.ts's extractToken (first non-blank, non-`#` line, whitespace
@@ -101,7 +110,7 @@ place its own tests pin it.
 # the whole preamble as the header value, which is not even a legal header:
 # every call answers a bare 400 before any route logic runs.
 TOKEN=$(grep -v '^[[:space:]]*#' ~/.cc-secrets/ccrc-mail.token | grep -v '^[[:space:]]*$' | head -n1 | tr -d '[:space:]')
-resp=$(curl -sS -w '\n%{http_code}' -X POST "http://203.0.113.7:7788/api/mail" \
+resp=$(curl -sS -w '\n%{http_code}' -X POST "$CCRC_API/api/mail" \
   -H "x-ccrc-mail-token: $TOKEN" -H 'content-type: application/json' \
   -d "{\"fromId\":\"$id\",\"fromUuid\":\"$uuid\",\"toId\":\"coordinator\",\"runId\":<run id>,\
 \"kind\":\"status\",\"subject\":\"wave-done\",\"body\":\"<prose>\",\"artifacts\":[]}")

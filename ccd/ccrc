@@ -2903,7 +2903,7 @@ _inst_agent_env() {
     || _ccrc_die "stdin is not a terminal, and --role fleet will not read the agent token from a pipe or a file. Under \`curl … | bash\` stdin is the INSTALLER SCRIPT, so a read here would take a line of shell as this fleet's bearer token. Run 'ccrc install --role fleet' from a terminal. Nothing was written to \$HOME/.ccrc/agent.env."
   local url="" token=""
   printf '%s\n' "$PROG: configuring this box as a FLEET host — two values land in \$HOME/.ccrc/agent.env (0600); the token is not echoed; Ctrl-C aborts" >&2
-  if ! IFS= read -rp "Server WS URL (where this fleet's ccrc server runs, e.g. ws://100.64.0.1:7788): " url; then
+  if ! IFS= read -rp "Server WS URL (where this fleet's ccrc server runs, e.g. ws://100.64.0.1:7788 or https://mybox.example.com): " url; then
     printf '\n' >&2
     _ccrc_die "no server URL was entered — nothing was written"
   fi
