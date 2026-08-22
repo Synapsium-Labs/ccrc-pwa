@@ -1,5 +1,5 @@
 import {
-  isActorClass, isLifecycleAct, isLifecycleOutcome, isStopSurface,
+  isActorClass, isDecSurface, isLifecycleAct, isLifecycleOutcome,
   LC_ACT_UNKNOWN, LC_OUTCOME_UNKNOWN,
   type LifecycleAct, type LifecycleDec, type LifecycleMeas, type LifecycleObs,
   type LifecycleOutcome,
@@ -28,8 +28,18 @@ export interface JournalRow {
   readonly uid: string | null;
   readonly at: number | null;
   readonly act: LifecycleAct;
+  /** The act token ccd wrote when this build cannot name it; null whenever
+   *  `act` is not `LC_ACT_UNKNOWN` (`shared/api.ts:4003-4005`'s invariant on
+   *  `LifecycleEvent.badact`, and `parseJournalLine` re-establishes it rather
+   *  than trusting the line: the journal is append-only on a box with a
+   *  single UNIX user, so a forged line pairing a VALID `act` with a
+   *  caller-supplied `badact` is a real input this parser must not believe). */
   readonly badact: string | null;
   readonly outcome: LifecycleOutcome;
+  /** `badact`'s twin on the outcome side (`shared/api.ts:4007-4010`); null
+   *  whenever `outcome` is not `LC_OUTCOME_UNKNOWN`, same invariant, same
+   *  reason it is re-established rather than trusted. */
+  readonly badoutcome: string | null;
   readonly verb: string | null;
   readonly sessionId: string | null;
   readonly tx: string | null;
@@ -62,11 +72,30 @@ const b = (o: Obj, k: string): boolean | null => (typeof o[k] === 'boolean' ? (o
  *  out-of-vocabulary all fall to `null` alike, because — unlike `cg` and
  *  `surface` — this field's type has no fourth `'unknown'` member to receive
  *  a garbage token, so there is nowhere type-safe to preserve one. The raw
- *  byte is never lost: it is still sitting in `JournalRow.raw` verbatim. */
-const ATTICSRC = new Set<string>(['worktree', 'registry', 'none']);
+ *  byte is never lost: it is still sitting in `JournalRow.raw` verbatim.
+ *
+ *  FIX ROUND 1, F3: the membership check used to be a hand-written
+ *  `Set(['worktree','registry','none'])` plus an `as LifecycleMeas['atticsrc']`
+ *  cast — a SECOND, unenforced copy of the union `shared/api.ts:3874`
+ *  declares. The reviewer proved it was inert by adding a fourth member
+ *  (`'branchref'`) to that union and getting `tsc --noEmit` clean: a real
+ *  fourth attic source would have silently landed on `null` — the field's
+ *  "never measured" value — for every such row, forever, with no compile
+ *  error and no red test. `ATTICSRC_MAP` below is the same
+ *  `LIFECYCLE_ACT_MAP`/`LIFECYCLE_MEAS_KEY_MAP` idiom this file already uses
+ *  for the act list and the meas key list: a `Record` keyed by the type
+ *  itself, so a member added to `LifecycleMeas['atticsrc']` without a
+ *  matching map entry is `TS2741`/`TS2739`, and a stray map entry with no
+ *  type member is `TS2353` — the membership check and the type can no longer
+ *  drift apart silently. */
+const ATTICSRC_MAP: Record<NonNullable<LifecycleMeas['atticsrc']>, true> = {
+  worktree: true, registry: true, none: true,
+};
+const ATTICSRC: ReadonlySet<string> = new Set(Object.keys(ATTICSRC_MAP));
 const atticsrc = (o: Obj, k: string): LifecycleMeas['atticsrc'] => {
   const v = o[k];
-  return typeof v === 'string' && ATTICSRC.has(v) ? (v as LifecycleMeas['atticsrc']) : null;
+  return typeof v === 'string' && ATTICSRC.has(v)
+    ? (v as NonNullable<LifecycleMeas['atticsrc']>) : null;
 };
 
 /** Each reviver returns an object LITERAL, so a member added to the interface
@@ -105,7 +134,15 @@ export function reviveDec(v: unknown): LifecycleDec | null {
     // is also where a `dec` object carrying no `surface` key at all lands —
     // ccd always writes one, so its absence is a malformed line and not a
     // fourth condition to invent a value for.
-    surface: surface === 'none' ? 'none' : isStopSurface(surface) ? surface : 'unknown',
+    //
+    // FIX ROUND 1, F3 (related, lower priority): this used to hand-roll
+    // `surface === 'none' ? 'none' : isStopSurface(surface) ? surface :
+    // 'unknown'` when `isDecSurface` (`shared/api.ts:3679`) already says the
+    // same thing — its own docstring (`:3678`) exists so "there is one
+    // door". Functionally identical (verified: `isDecSurface(null)` is
+    // `false` the same way the hand-rolled check was, so an absent `surface`
+    // key still lands on `'unknown'`), just one fewer place to edit tomorrow.
+    surface: isDecSurface(surface) ? surface : 'unknown',
     actor: s(o, 'actor'),
     reason: s(o, 'reason'),
   };
@@ -129,8 +166,10 @@ export function reviveDec(v: unknown): LifecycleDec | null {
  * file imports already has twenty-five required readonly members. A literal
  * modelling only ten of them does not merely mis-model — it fails to
  * typecheck (TS2741/TS2739), which `server/test/typecheck-tests.test.ts`
- * would catch. `shared/api.ts`'s own docstring on `LifecycleMeas` (:3828-
- * :3854) states the twenty-five as "A RULING, NOT AN OVERSIGHT", and
+ * would catch. `shared/api.ts`'s own docstring on `LifecycleMeas` (:3814-
+ * 3858, quoted sentence at :3821) states the twenty-five as "A RULING, NOT AN
+ * OVERSIGHT" [FIX ROUND 1, F6: corrected from a mis-measured :3828-:3854 —
+ * STANDING RULE 2], and
  * `server/test/lifecycle-wire.test.ts` and `server/test/ccd-lifecycle-
  * contain.test.ts` both already pin the twenty-five independently of this
  * file. Per STANDING RULE 6 ("when a brief's prose and its code sample
@@ -164,8 +203,8 @@ export function reviveMeas(v: unknown): LifecycleMeas | null {
 
 const UNMODELLED: Omit<JournalRow, 'raw'> = {
   uid: null, at: null, act: LC_ACT_UNKNOWN, badact: null, outcome: LC_OUTCOME_UNKNOWN,
-  verb: null, sessionId: null, tx: null, refusal: null, detail: null, truncated: false,
-  obs: null, dec: null, meas: null,
+  badoutcome: null, verb: null, sessionId: null, tx: null, refusal: null, detail: null,
+  truncated: false, obs: null, dec: null, meas: null,
 };
 
 export function parseJournalLine(line: string): JournalRow {
@@ -177,7 +216,9 @@ export function parseJournalLine(line: string): JournalRow {
   const actRaw = s(o, 'act');
   const act: LifecycleAct = isLifecycleAct(actRaw) ? actRaw : LC_ACT_UNKNOWN;
   const outRaw = s(o, 'outcome');
+  const outcome: LifecycleOutcome = isLifecycleOutcome(outRaw) ? outRaw : LC_OUTCOME_UNKNOWN;
   const badact = s(o, 'badact');
+  const badoutcome = s(o, 'badoutcome');
   return {
     uid: s(o, 'uid'),
     at: n(o, 'at'),
@@ -190,8 +231,39 @@ export function parseJournalLine(line: string): JournalRow {
     // the same `badact: null` as a wholly absent `act` key: only a STRING
     // token is a meaningful "bad word" to echo back, and either way the raw
     // bytes are still sitting in `raw`, verbatim.
-    badact: badact ?? (act === LC_ACT_UNKNOWN ? actRaw : null),
-    outcome: isLifecycleOutcome(outRaw) ? outRaw : LC_OUTCOME_UNKNOWN,
+    //
+    // FIX ROUND 1, F2 (a forging vector, closed): this used to be
+    // `badact ?? (act === LC_ACT_UNKNOWN ? actRaw : null)`, which reads
+    // ccd's OWN `badact` key first regardless of what `act` turned out to
+    // be — so a forged line reading `{"act":"destroy","badact":"forged"}`
+    // came out as `{act:'destroy', badact:'forged'}`, violating
+    // `shared/api.ts:4003-4005`'s invariant ("null whenever `act` is not
+    // `LC_ACT_UNKNOWN`. The two are never both set.") on a line this parser
+    // itself produced. The journal is append-only on a box with a single
+    // UNIX user — identity there is attribution, not authentication
+    // (`CLAUDE.md`) — so any session can append a line, and this parser is
+    // the boundary that has to re-establish the invariant the writer
+    // enforces (`ccd/ccd:1417-1422`'s `_lc_emit`, which only ever sets
+    // `badact`/`badoutcome` for a token that FAILED its vocabulary match,
+    // never alongside a matched one) rather than trust it off the wire.
+    // ONE condition now: `badact` only exists to answer "what did `act`
+    // degrade FROM", so it is read at all only when `act` actually is the
+    // degrade value, and ccd's own token (when ccd already computed one)
+    // wins over re-deriving it from `actRaw`.
+    badact: act === LC_ACT_UNKNOWN ? (badact ?? actRaw) : null,
+    outcome,
+    // `badoutcome` — F1: previously dropped entirely (no field on
+    // `JournalRow`, `o['badoutcome']` never read), even though ccd writes it
+    // today (`ccd/ccd:1351`, `:1417-1422`) and `LifecycleEvent.badoutcome`
+    // (`shared/api.ts:4007-4010`) already declares it with the identical
+    // invariant `badact` has: "null whenever `outcome` is not
+    // `LC_OUTCOME_UNKNOWN`... neither sends a reader to `raw` for it."
+    // Without this, "ccd said an outcome word this build can't model",
+    // "the line carried no outcome", and "outcome was a non-string" were one
+    // value for three conditions — exactly what `badact` exists to prevent
+    // on the act side. Same one-condition shape as `badact` above, same
+    // forging concern, same fix.
+    badoutcome: outcome === LC_OUTCOME_UNKNOWN ? (badoutcome ?? outRaw) : null,
     verb: s(o, 'verb'),
     sessionId: s(o, 'id'),
     tx: s(o, 'tx'),
