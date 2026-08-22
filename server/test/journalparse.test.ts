@@ -74,24 +74,41 @@ describe('parseJournalLine: adversarial totality — hostile inputs beyond the b
   });
 
   it('never throws on deeply nested JSON — measured, not assumed, against THIS runtime', () => {
-    // Measured directly with a bare `node script.mjs` (this box, this Node):
-    // `JSON.parse('['.repeat(50000) + '1' + ']'.repeat(50000))` throws
-    // `RangeError: Maximum call stack size exceeded` — NOT a `SyntaxError`.
-    // Measured again from INSIDE this suite's own vitest runtime (a throwaway
-    // probe test, since deleted): the same call, even at 8,000,000 levels,
-    // does NOT throw — vitest's fork-pool child evidently gets a much larger
-    // usable stack than a bare `node -e`/`node script.mjs` invocation. So a
-    // depth chosen to overflow a plain `node` process is not a reliable way
-    // to reproduce the RangeError from inside THIS suite, and asserting one
-    // here would be exactly RULE 4's mistake — a mutation "proof" that never
-    // actually applies in the environment it is run in.
+    // FIX ROUND 1, F4: this comment previously stated as measured fact that a
+    // bare `node script.mjs` reliably throws `RangeError: Maximum call stack
+    // size exceeded` at 50,000 levels, and inferred that vitest's fork pool
+    // has a much larger stack. Review re-ran the same claim on this box
+    // (Node v24.14.1) with a standalone `.mjs` probe at 50,000 / 1,000,000 /
+    // 5,000,000 levels, arrays and objects both, and got NO throw at any
+    // depth — even in bare node. Re-measured here, independently, twice more:
+    // a script shaped like the review's probe (a `probe(depth, kind)`
+    // function called from a small loop, JSON.parse'd immediately) reproduces
+    // NO THROW, deterministically, across three separate runs, even at
+    // 5,000,000. But the ORIGINAL script this file's claim was measured from
+    // (several unrelated `JSON.parse`/`JSON.stringify` calls first, THEN the
+    // 50,000-deep call, all inline at a script's top level) reproduces THROW
+    // just as deterministically, across three more separate runs, same box,
+    // same Node — so the earlier claim was not fabricated, but its
+    // EXPLANATION was wrong: this is not "plain node throws, vitest doesn't".
+    // Whatever actually governs it — V8's JSON parser evidently is not
+    // uniformly iterative regardless of context, contra a simpler read of
+    // "it's iterative, so it can't overflow" — depends on something about the
+    // calling script's shape or prior activity in the isolate that neither
+    // review's re-test nor this re-measurement pinned down, and chasing V8
+    // internals further is out of scope for this file. The one fact that
+    // held in EVERY measurement, review's and ours: no depth found here is a
+    // RELIABLE, portable way to hit the `RangeError` branch of
+    // `parseJournalLine`'s `catch` on demand — so this test does not lean on
+    // one. It keeps only the narrower, unconditionally-true claim below, and
+    // the `vi.spyOn(JSON, 'parse')` case right after this one — deterministic
+    // regardless of engine internals — is the actual proof of the guard.
     //
-    // What is still true and worth pinning: a very large, successfully-
-    // parsed structure does not crash the parser through some OTHER path
-    // (e.g. a recursive reviver walking the tree) — `reviveObs`/`reviveDec`/
-    // `reviveMeas` only ever read named top-level keys off the object JSON.parse
-    // already built, never recursing themselves, so this is a real, if
-    // narrower, guarantee.
+    // What IS still true and worth pinning regardless of any of the above: a
+    // very large, successfully-parsed structure does not crash the parser
+    // through some OTHER path (e.g. a recursive reviver walking the tree) —
+    // `reviveObs`/`reviveDec`/`reviveMeas` only ever read named top-level
+    // keys off the object JSON.parse already built, never recursing
+    // themselves, so this is a real, if narrower, guarantee.
     const deepArray = '['.repeat(50_000) + '1' + ']'.repeat(50_000);
     const deepObject = '{"a":'.repeat(50_000) + '1' + '}'.repeat(50_000);
     for (const raw of [deepArray, deepObject]) {
@@ -203,6 +220,54 @@ describe('parseJournalLine: the vocabulary', () => {
     const r = parseJournalLine(line({ act: LC_ACT_UNKNOWN, badact: 'quarantine' }));
     expect(r.act).toBe(LC_ACT_UNKNOWN);
     expect(r.badact).toBe('quarantine');
+  });
+
+  // FIX ROUND 1, F1: `badoutcome` was entirely dropped before this round —
+  // no field on `JournalRow`, `o['badoutcome']` never read — even though
+  // ccd writes it today (`ccd/ccd:1351`, `:1417-1422`) and
+  // `LifecycleEvent.badoutcome` (`shared/api.ts:4007-4010`) already declares
+  // it with the identical invariant `badact` has. These two cases mirror the
+  // two `badact` cases directly above, one per side of the pair.
+  it('degrades an outcome this build does not declare to `unknown` AND KEEPS THE TOKEN', () => {
+    const raw = line({ outcome: 'stalled' });
+    const r = parseJournalLine(raw);
+    expect(r.outcome).toBe(LC_OUTCOME_UNKNOWN);
+    expect(r.badoutcome).toBe('stalled');
+    expect(r.raw).toBe(raw);
+  });
+
+  it("keeps ccd's own `badoutcome` when ccd already degraded the outcome itself", () => {
+    const r = parseJournalLine(line({ outcome: LC_OUTCOME_UNKNOWN, badoutcome: 'stalled' }));
+    expect(r.outcome).toBe(LC_OUTCOME_UNKNOWN);
+    expect(r.badoutcome).toBe('stalled');
+  });
+
+  // FIX ROUND 1, F2 (a forging vector, closed): `shared/api.ts:4003-4005` /
+  // `:4007-4010` state the invariant in so many words — "null whenever `act`
+  // [`outcome`] is not `LC_ACT_UNKNOWN` [`LC_OUTCOME_UNKNOWN`]. The two are
+  // never both set." Before this round, `badact: badact ?? (act ===
+  // LC_ACT_UNKNOWN ? actRaw : null)` read a caller-supplied `badact` key
+  // FIRST regardless of what `act` resolved to, so a forged line pairing a
+  // perfectly valid `act` with an attacker's own `badact` string came out
+  // with BOTH set — exactly the signal `ccd/ccd:1417-1422`'s `_lc_emit`
+  // guarantees never happens on a genuine line, and exactly what a reader
+  // uses to decide "ccd's own vocabulary is stale". The journal is
+  // append-only on a box with a single UNIX user (identity there is
+  // attribution, not authentication), so this parser — not the writer — is
+  // the boundary that has to hold the invariant against a forged line.
+  // Mutant: revert `badact`/`badoutcome` to the old `x ?? (cond ? y : null)`
+  // shape -> this goes red with `expected null to be 'forged-not-real'`.
+  it('never carries a `badact`/`badoutcome` alongside a VALID `act`/`outcome` — forging is refused', () => {
+    const forgedAct = line({ act: AN_ACT, badact: 'forged-not-real' });
+    const rAct = parseJournalLine(forgedAct);
+    expect(rAct.act).toBe(AN_ACT);
+    expect(rAct.badact, 'a valid act must never carry a badact alongside it').toBeNull();
+
+    const forgedOutcome = line({ outcome: AN_OUTCOME, badoutcome: 'forged-not-real' });
+    const rOutcome = parseJournalLine(forgedOutcome);
+    expect(rOutcome.outcome).toBe(AN_OUTCOME);
+    expect(rOutcome.badoutcome, 'a valid outcome must never carry a badoutcome alongside it')
+      .toBeNull();
   });
 
   it('reads the refusal token from `refusal`, never from `refused`', () => {
