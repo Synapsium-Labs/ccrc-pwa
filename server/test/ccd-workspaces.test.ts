@@ -585,15 +585,18 @@ describe('ws-rm', () => {
     // The kill went to the stub — i.e. it was intercepted, not merely aimed at
     // a name no live session happens to use.
     expect(calls()).toEqual([
+      // D4 (task 20): `_lc_intent`'s call, immediately before
+      // `_ws_unsupervise`, is now the FIRST `_lc_*` emit this verb makes —
+      // earlier than D3's `_reg_purge` backstop below — so `_lc_obs`'s pane
+      // probe (memoized once per process; still the ONLY extra call a whole
+      // `ws-rm` run adds) fires HERE, before either teardown call, not after
+      // them. Not a mock artifact: this is `_lc_obs` asking tmux which pane
+      // this destruction ran in, the unforgeable half of the journal record
+      // `ccd-lifecycle-purge.test.ts` and `ccd-lifecycle-pairs.test.ts` both
+      // prove gets written.
+      'tmux list-panes -a -F #{session_name} #{pane_pid}',
       'unsupervise demo-quiet-mesa',
       'tmux kill-session -t cc-demo-quiet-mesa',
-      // D3 (task 17): `_reg_purge`'s backstop emit is the first REAL call
-      // site of `_lc_done`, and `_lc_obs`'s pane probe — memoized once per
-      // process, so this is the ONLY extra call a whole `ws-rm` run adds —
-      // fires inside it. Not a mock artifact: this is `_lc_obs` asking tmux
-      // which pane this destruction ran in, the unforgeable half of the
-      // journal record `ccd-lifecycle-purge.test.ts` proves gets written.
-      'tmux list-panes -a -F #{session_name} #{pane_pid}',
     ]);
   });
 
@@ -891,15 +894,18 @@ describe('ws-rm', () => {
     expect(reg('demo-quiet-mesa', 'uuid')).toBeNull();
     expect(branches('ws/quiet-mesa')).toBe('');
     expect(calls()).toEqual([
+      // D4 (task 20): `_lc_intent`'s call, immediately before
+      // `_ws_unsupervise`, is now the FIRST `_lc_*` emit this verb makes —
+      // earlier than D3's `_reg_purge` backstop below — so `_lc_obs`'s pane
+      // probe (memoized once per process; still the ONLY extra call a whole
+      // `ws-rm` run adds) fires HERE, before either teardown call, not after
+      // them. Not a mock artifact: this is `_lc_obs` asking tmux which pane
+      // this destruction ran in, the unforgeable half of the journal record
+      // `ccd-lifecycle-purge.test.ts` and `ccd-lifecycle-pairs.test.ts` both
+      // prove gets written.
+      'tmux list-panes -a -F #{session_name} #{pane_pid}',
       'unsupervise demo-quiet-mesa',
       'tmux kill-session -t cc-demo-quiet-mesa',
-      // D3 (task 17): `_reg_purge`'s backstop emit is the first REAL call
-      // site of `_lc_done`, and `_lc_obs`'s pane probe — memoized once per
-      // process, so this is the ONLY extra call a whole `ws-rm` run adds —
-      // fires inside it. Not a mock artifact: this is `_lc_obs` asking tmux
-      // which pane this destruction ran in, the unforgeable half of the
-      // journal record `ccd-lifecycle-purge.test.ts` proves gets written.
-      'tmux list-panes -a -F #{session_name} #{pane_pid}',
     ]);
   });
 
@@ -945,15 +951,18 @@ describe('ws-rm', () => {
     expect(reg('demo-quiet-mesa', 'uuid')).toBeNull();
     expect(branches('ws/quiet-mesa')).toBe('');
     expect(calls()).toEqual([
+      // D4 (task 20): `_lc_intent`'s call, immediately before
+      // `_ws_unsupervise`, is now the FIRST `_lc_*` emit this verb makes —
+      // earlier than D3's `_reg_purge` backstop below — so `_lc_obs`'s pane
+      // probe (memoized once per process; still the ONLY extra call a whole
+      // `ws-rm` run adds) fires HERE, before either teardown call, not after
+      // them. Not a mock artifact: this is `_lc_obs` asking tmux which pane
+      // this destruction ran in, the unforgeable half of the journal record
+      // `ccd-lifecycle-purge.test.ts` and `ccd-lifecycle-pairs.test.ts` both
+      // prove gets written.
+      'tmux list-panes -a -F #{session_name} #{pane_pid}',
       'unsupervise demo-quiet-mesa',
       'tmux kill-session -t cc-demo-quiet-mesa',
-      // D3 (task 17): `_reg_purge`'s backstop emit is the first REAL call
-      // site of `_lc_done`, and `_lc_obs`'s pane probe — memoized once per
-      // process, so this is the ONLY extra call a whole `ws-rm` run adds —
-      // fires inside it. Not a mock artifact: this is `_lc_obs` asking tmux
-      // which pane this destruction ran in, the unforgeable half of the
-      // journal record `ccd-lifecycle-purge.test.ts` proves gets written.
-      'tmux list-panes -a -F #{session_name} #{pane_pid}',
     ]);
   });
 
@@ -974,15 +983,18 @@ describe('ws-rm', () => {
     expect(reg('demo-quiet-mesa', 'uuid')).toBeNull();
     expect(branches('ws/quiet-mesa')).toBe('');
     expect(calls()).toEqual([
+      // D4 (task 20): `_lc_intent`'s call, immediately before
+      // `_ws_unsupervise`, is now the FIRST `_lc_*` emit this verb makes —
+      // earlier than D3's `_reg_purge` backstop below — so `_lc_obs`'s pane
+      // probe (memoized once per process; still the ONLY extra call a whole
+      // `ws-rm` run adds) fires HERE, before either teardown call, not after
+      // them. Not a mock artifact: this is `_lc_obs` asking tmux which pane
+      // this destruction ran in, the unforgeable half of the journal record
+      // `ccd-lifecycle-purge.test.ts` and `ccd-lifecycle-pairs.test.ts` both
+      // prove gets written.
+      'tmux list-panes -a -F #{session_name} #{pane_pid}',
       'unsupervise demo-quiet-mesa',
       'tmux kill-session -t cc-demo-quiet-mesa',
-      // D3 (task 17): `_reg_purge`'s backstop emit is the first REAL call
-      // site of `_lc_done`, and `_lc_obs`'s pane probe — memoized once per
-      // process, so this is the ONLY extra call a whole `ws-rm` run adds —
-      // fires inside it. Not a mock artifact: this is `_lc_obs` asking tmux
-      // which pane this destruction ran in, the unforgeable half of the
-      // journal record `ccd-lifecycle-purge.test.ts` proves gets written.
-      'tmux list-panes -a -F #{session_name} #{pane_pid}',
     ]);
   });
 
