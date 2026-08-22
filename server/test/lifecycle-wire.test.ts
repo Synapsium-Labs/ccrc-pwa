@@ -237,3 +237,90 @@ describe('MirroredLifecycleEvent — the mirror`s own two facts, kept off the li
     expect(MIRRORED.ingestedAt).not.toBe(MIRRORED.at);
   });
 });
+
+// ── wave 4's additions ────────────────────────────────────────────────────
+// The mirror's own vocabulary, pinned the way every other L0 enum in this file
+// is: derived from the union, guarded by an `isX` that casts the CONSTANT and
+// never the input, and carrying a designated we-do-not-know member on every
+// token that is READ BACK OUT OF A COLUMN.
+import {
+  LIFECYCLE_GAP_REASONS, LIFECYCLE_HEALTH_STATES, LC_ACT_UNKNOWN, LC_OUTCOME_UNKNOWN,
+  isLifecycleGapReason, isLifecycleHealthState,
+} from '../../shared/api.js';
+import type { LifecycleGapReason, LifecycleHealthState } from '../../shared/api.js';
+// `MirroredLifecycleEvent` is already imported in the type-only import block
+// at the top of this file (wave 1, Task 4) — not re-imported here, which
+// would be a duplicate identifier.
+
+const GAP_REASONS: Record<LifecycleGapReason, true> =
+  { 'rotated-away': true, shrank: true, unknown: true };
+const HEALTH_STATES: Record<LifecycleHealthState, true> =
+  { ok: true, stale: true, unavailable: true, unknown: true };
+
+describe('LifecycleGapReason', () => {
+  it('derives its runtime list from the union, in both directions', () => {
+    expect([...LIFECYCLE_GAP_REASONS].sort()).toEqual(Object.keys(GAP_REASONS).sort());
+  });
+  it('carries a we-do-not-know member, because `lifecycle_gaps.reason` is a column read back', () => {
+    expect(isLifecycleGapReason('unknown')).toBe(true);
+    expect(isLifecycleGapReason('vacuumed')).toBe(false);
+    expect(isLifecycleGapReason(7)).toBe(false);
+  });
+});
+
+describe('LifecycleHealthState', () => {
+  it('derives its runtime list from the union, in both directions', () => {
+    expect([...LIFECYCLE_HEALTH_STATES].sort()).toEqual(Object.keys(HEALTH_STATES).sort());
+  });
+  it('tells "no evidence" from "the box does not write a journal" — the two must not share a word', () => {
+    // `unavailable` = ccd advertised its caps and `lifecycle-v1` was not among
+    // them. `unknown` = nothing has been measured yet. An old ccd's silence
+    // must not read as a quiet fleet, and neither may read as `ok`.
+    expect(isLifecycleHealthState('unavailable')).toBe(true);
+    expect(isLifecycleHealthState('unknown')).toBe(true);
+    expect(LIFECYCLE_HEALTH_STATES).not.toContain('none');
+  });
+});
+
+describe('the degrade tokens are named once each', () => {
+  it('names the act degrade and the outcome degrade separately, and both are `unknown`', () => {
+    // ONE NAME PER DEGRADE, in L0. Eight files in wave 4 read a column back
+    // through a guard and fall to one of these two; a bare `'unknown'` literal
+    // in any of them would be a second home for the value.
+    expect(LC_ACT_UNKNOWN).toBe('unknown');
+    expect(LC_OUTCOME_UNKNOWN).toBe('unknown');
+  });
+});
+
+describe('MirroredLifecycleEvent — a journal LINE plus what only the MIRROR knows', () => {
+  it('adds exactly gen and ingestedAt to the wire event — truncated already travels on the line', () => {
+    // `gen` is the FILENAME's, `ingestedAt` is THE SERVER'S clock. Neither
+    // belongs on `LifecycleEvent`, which is what ccd wrote; both are facts
+    // about the row a reader must be able to see. `truncated` is already one
+    // of `LifecycleEvent`'s own sixteen fields (wave 1, Task 4) — ccd's own
+    // admission that `_lc_json` shed fields to fit — so it is not a THIRD
+    // addition here, only carried through.
+    //
+    // DEVIATION from the brief's literal Step 1 sample: that sample's
+    // `mirrored` object and its expected-keys array both omit `badoutcome`,
+    // which is a required field on `LifecycleEvent` (badact's twin — "Both
+    // halves of the vocabulary degrade the same way", :4008-4011). Omitting
+    // it does not typecheck against the shipped `MirroredLifecycleEvent`.
+    // Restored here, `null`, matching the sibling "unparseable line" case
+    // above (`badact: null, outcome: 'unknown', badoutcome: null`).
+    const mirrored: MirroredLifecycleEvent = {
+      uid: null, at: null, act: LC_ACT_UNKNOWN, badact: null, outcome: LC_OUTCOME_UNKNOWN,
+      badoutcome: null, id: null, tx: null, verb: null, refusal: null, detail: null,
+      obs: null, dec: null, meas: null, raw: 'ws-rm demo  # not json',
+      gen: '1755780000000000000', ingestedAt: 1_060_000, truncated: false,
+    };
+    expect(Object.keys(mirrored).sort()).toEqual(
+      ['act', 'at', 'badact', 'badoutcome', 'dec', 'detail', 'gen', 'id', 'ingestedAt', 'meas',
+       'obs', 'outcome', 'raw', 'refusal', 'truncated', 'tx', 'uid', 'verb'].sort());
+    // The nullability wave 4 needs and wave 1 declared too narrowly: the mirror
+    // genuinely holds rows whose line carried no `uid` and no readable `at` —
+    // that is what `lifecycle_raw_uid` exists for.
+    expect(mirrored.uid).toBeNull();
+    expect(mirrored.at).toBeNull();
+  });
+});

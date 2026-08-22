@@ -1923,6 +1923,13 @@ export interface FleetHealth {
    * server's response omits it, and absent reads as `'unknown'`.
    */
   build?: BuildAgreement;
+  /**
+   * The lifecycle journal mirror (build 9). Optional for the same
+   * absence-permits reason `roster` and `build` are — an older server's
+   * response omits it, and a reader must treat an absent block as
+   * `state: 'unknown'`, never as `'ok'` and never as an empty history.
+   */
+  lifecycle?: LifecycleHealth;
 }
 
 /**
@@ -1945,6 +1952,112 @@ export interface FleetHealth {
  * sentence it is reading.
  */
 export type BuildAgreement = 'agreed' | 'skewed' | 'unknown';
+
+/* ---------------------------------------------------------------------------
+ * The lifecycle JOURNAL's MIRROR — build 9's provenance record, server side.
+ *
+ * DISAMBIGUATION, said out loud because the name is already taken twice in
+ * this file: `SessionLifecycle`/`sessionLifecycle()` classify why a REGISTRY
+ * ROW is not alive, and `LifecycleField`/`LifecycleInput` are that ladder's
+ * inputs. NOTHING below is related to them. These types describe
+ * `$REG/.lifecycle/journal-<epochNs>.ndjson` — an append-only file `_reg_purge`
+ * cannot reach — and its mirror in `coord.db`.
+ *
+ * `LifecycleEvent`, `MirroredLifecycleEvent` and `LC_OUTCOME_UNKNOWN` already
+ * live above (wave 1, Task 4) — not restated here, so there is one home for
+ * each rather than a second copy under this banner.
+ * ------------------------------------------------------------------------- */
+
+/** Why the mirror could not read bytes it knows existed. RECORDED, never
+ *  silently skipped (spec D6): a byte we saw and could not model is a
+ *  different fact from a byte that was never there.
+ *
+ *  `rotated-away` — a generation stopped being listed while undrained.
+ *  `shrank` — an immutably-named generation got smaller, i.e. a truncation;
+ *             the cursor resets to 0 and the whole file is re-read, and `uid`
+ *             dedupes what comes back. Only genuinely-lost bytes are lost.
+ *  `unknown` — the we-do-not-know member. `lifecycle_gaps.reason` IS a column
+ *             read back, so a token a newer build wrote lands here rather than
+ *             being switched on and rendered as nothing. It is also what a
+ *             name that LOOKS like a generation but cannot be ORDERED gets
+ *             (`looksLikeGenerationFile` true, `parseLifecycleGeneration`
+ *             null) — the mirror saw a file it could not place in the
+ *             sequence, which is a hole and not an absence. */
+export type LifecycleGapReason = 'rotated-away' | 'shrank' | 'unknown';
+const LIFECYCLE_GAP_REASON_MAP: Record<LifecycleGapReason, true> = {
+  'rotated-away': true, shrank: true, unknown: true,
+};
+export const LIFECYCLE_GAP_REASONS: readonly LifecycleGapReason[] =
+  Object.keys(LIFECYCLE_GAP_REASON_MAP) as LifecycleGapReason[];
+/** The only way to narrow an untrusted string to a `LifecycleGapReason` — the
+ *  CONSTANT is cast, never the input, exactly as `isDivergenceKind` above. */
+export function isLifecycleGapReason(v: unknown): v is LifecycleGapReason {
+  return typeof v === 'string' && (LIFECYCLE_GAP_REASONS as readonly string[]).includes(v);
+}
+
+/** One recorded hole in the mirror. `lostFrom`/`lostTo` are BYTE offsets in
+ *  the named generation and are `null` together when the range could not be
+ *  bounded — never 0, which would claim a measured empty loss. */
+export interface LifecycleGap {
+  readonly at: number;
+  readonly gen: string;
+  readonly reason: LifecycleGapReason;
+  /** One actionable line. DISPLAY-ONLY — nothing parses it back. */
+  readonly detail: string;
+  readonly lostFrom: number | null;
+  readonly lostTo: number | null;
+}
+
+/**
+ * Whether the journal is being mirrored, and it is FOUR states rather than a
+ * boolean for the reason `roster`/`build` above are three: a second
+ * disagreement between the same two boxes gets its own word.
+ *
+ *   `ok`          — a sweep succeeded recently.
+ *   `stale`       — no sweep has succeeded inside the staleness window. A
+ *                   silently-stopped mirror must be distinguishable from a
+ *                   quiet fleet, which is the whole point of reporting it.
+ *   `unavailable` — the fleet host's ccd advertised its caps and
+ *                   `lifecycle-v1` was NOT among them. A MEASURED ABSENCE,
+ *                   never an empty history.
+ *   `unknown`     — nothing has been measured (no caps evidence yet, or no
+ *                   sweep has run). Not `ok`, and not `unavailable` either.
+ */
+export type LifecycleHealthState = 'ok' | 'stale' | 'unavailable' | 'unknown';
+const LIFECYCLE_HEALTH_STATE_MAP: Record<LifecycleHealthState, true> = {
+  ok: true, stale: true, unavailable: true, unknown: true,
+};
+export const LIFECYCLE_HEALTH_STATES: readonly LifecycleHealthState[] =
+  Object.keys(LIFECYCLE_HEALTH_STATE_MAP) as LifecycleHealthState[];
+export function isLifecycleHealthState(v: unknown): v is LifecycleHealthState {
+  return typeof v === 'string' && (LIFECYCLE_HEALTH_STATES as readonly string[]).includes(v);
+}
+
+/** The `/api/fleet/health` block. `horizon`/`newestAt` are CCD's clock (event
+ *  times); `lastOk` is THE SERVER'S (when a sweep last succeeded) — two clocks,
+ *  two fields, never one. `writeErrors` is `$REG/.lifecycle/errors` as last
+ *  measured: `null` = never measured, `0` = measured zero. */
+export interface LifecycleHealth {
+  readonly state: LifecycleHealthState;
+  readonly newestAt: number | null;
+  /** The oldest event still mirrored — the reconstruction window's floor
+   *  (spec D8: `LC_TOTAL_MAX_BYTES` is roughly one year). Beyond it the mirror
+   *  holds history the file no longer does. */
+  readonly horizon: number | null;
+  readonly rows: number;
+  readonly generations: number;
+  readonly gaps: number;
+  readonly writeErrors: number | null;
+  readonly lastOk: number | null;
+}
+
+/** `GET /api/lifecycle` — one session's past tense, oldest-first. `gaps` rides
+ *  alongside the events deliberately: a timeline with a hole in it must say so
+ *  in the same answer, not in a second call nobody makes. */
+export interface LifecycleQueryResult {
+  readonly events: readonly MirroredLifecycleEvent[];
+  readonly gaps: readonly LifecycleGap[];
+}
 
 /**
  * "An account" (the operator's word) and "a wrapper" (ccd's word) are the same
@@ -3939,21 +4052,20 @@ export interface LifecycleEvent {
   /** `<epochNs>.<BASHPID>.<seq>` — INTRINSIC, not positional (D6). `UNIQUE`
    *  in the mirror, inserted `OR IGNORE`, so re-reading a generation from
    *  offset 0 is always no-op-or-catch-up and a truncation is recoverable
-   *  rather than fatal. Positional identity (`gen`,`startOffset`) was
-   *  rejected: it is not a function of the bytes when the consumer does not
-   *  own the tail's offset, and a shifted offset silently collides.
+   *  rather than fatal.
    *
-   *  NULL WHEN THE LINE CARRIED NO PARSEABLE UID — an unparseable or
-   *  cut-short line is still ingested (`raw` below), and a row with no uid is
-   *  simply not deduplicable, so a replay may re-insert it. That is the
-   *  honest cost: MINTING a uid the bytes did not contain would fabricate
-   *  identity, which is worse than a duplicate a reader can see. */
+   *  NULL WHEN THE LINE CARRIED NONE, and that is not a widening for
+   *  convenience: an unparseable line is INSERTED rather than dropped (a byte
+   *  we saw and could not model is a different fact from a byte that was never
+   *  there), and such a row has no uid to carry. `lifecycle_raw_uid` dedupes
+   *  it on its bytes within its generation instead. */
   readonly uid: string | null;
   /** Epoch MILLISECONDS, ccd's clock. Derived from the SAME clock read as
    *  `uid`'s nanosecond prefix, so the two can never disagree about one event.
-   *  Never the server's clock: `MirroredLifecycleEvent.ingestedAt` is the
-   *  separate, explicitly server-owned fact and is never read as an event
-   *  time. Null when the line carried no readable clock. */
+   *  Never the server's clock: `MirroredLifecycleEvent.ingestedAt` is a
+   *  separate, explicitly server-owned value and is never read as an event
+   *  time. NULL = the line carried no readable `at`; NEVER 0, which is a date
+   *  and not an absence. */
   readonly at: number | null;
   readonly act: LifecycleAct;
   /** The act token ccd wrote when this build cannot name it; null whenever
