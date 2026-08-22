@@ -8,10 +8,26 @@ server/dist/
 server/dist-pwa/
 agent/dist/
 
-# local, gitignored env files with real tokens
-deploy/ccrc.env
-deploy/ccrc-agent.env
-deploy/ccrc-mail.token
+# local, gitignored env files with real tokens.
+#
+# The GLOB, not the three bare names it replaced (D-170). Every one of these
+# files is edited by hand on a real workstation, and the reflex before editing
+# a file full of tokens is to copy it: `cp deploy/ccrc.env deploy/ccrc.env.bak`.
+# The bare names ignored the original and left the copy UNTRACKED-BUT-VISIBLE,
+# one `git add -A` away from publishing every secret in it — in a repo that is
+# public. Measured 2026-08-22: the backup was written, and caught only because
+# something else prompted a `git check-ignore`.
+#
+# The `!` lines are why the glob is safe: the committed .example placeholders
+# carry no secrets and MUST stay tracked (boot refuses the unedited mail-token
+# placeholder by name, so its absence would be a different failure).
+deploy/ccrc.env*
+deploy/ccrc-agent.env*
+deploy/ccrc-mail.token*
+deploy/exposure.env*
+!deploy/ccrc.env.example
+!deploy/ccrc-agent.env.example
+!deploy/ccrc-mail.token.example
 
 # migration working artifacts
 .extraction/
