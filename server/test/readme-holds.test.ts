@@ -35,10 +35,20 @@ const holdsSection = (): string => {
 
 describe('README: workspace holds', () => {
   it('names every consumer of the hold that ccd actually ships', () => {
-    // Both rungs exist, right now, in ccd — `cmd_ws_rm` dies, `cmd_ws_reap`
-    // answers a named token on stdout (a die there would put a shell string
-    // on a phone screen).
-    expect(ccd).toMatch(/die "held: /);
+    // Both rungs exist, right now, in ccd — `cmd_ws_rm` refuses FATALLY,
+    // `cmd_ws_reap` answers a named token on stdout (a die there would put a
+    // shell string on a phone screen). That asymmetry is the whole point of
+    // this assertion, and it is what the two patterns below pin.
+    //
+    // BUILD 9a WAVE 3 (task 24): the ws-rm rung used to read
+    // `die "held: …"`, and this line matched that spelling. It is now
+    // `_lc_refuse destroy "$id" held …`, which emits the refusal to the
+    // journal and THEN dies — same fatality, same message, new spelling. The
+    // pattern moved with it rather than being deleted, and it is now stricter
+    // than what it replaced: `die "held: ` matched a message PREFIX, whereas
+    // this names the act and the token, so a rung that keeps the sentence but
+    // loses the token no longer passes.
+    expect(ccd).toMatch(/_lc_refuse destroy "\$id" held/);
     expect(ccd).toMatch(/"refused":"held"/);
     const section = holdsSection();
     expect(section).toMatch(/ws-rm/);
