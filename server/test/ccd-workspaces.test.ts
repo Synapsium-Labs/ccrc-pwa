@@ -582,6 +582,13 @@ describe('ws-rm', () => {
     expect(calls()).toEqual([
       'unsupervise demo-quiet-mesa',
       'tmux kill-session -t cc-demo-quiet-mesa',
+      // D3 (task 17): `_reg_purge`'s backstop emit is the first REAL call
+      // site of `_lc_done`, and `_lc_obs`'s pane probe — memoized once per
+      // process, so this is the ONLY extra call a whole `ws-rm` run adds —
+      // fires inside it. Not a mock artifact: this is `_lc_obs` asking tmux
+      // which pane this destruction ran in, the unforgeable half of the
+      // journal record `ccd-lifecycle-purge.test.ts` proves gets written.
+      'tmux list-panes -a -F #{session_name} #{pane_pid}',
     ]);
   });
 
@@ -881,6 +888,13 @@ describe('ws-rm', () => {
     expect(calls()).toEqual([
       'unsupervise demo-quiet-mesa',
       'tmux kill-session -t cc-demo-quiet-mesa',
+      // D3 (task 17): `_reg_purge`'s backstop emit is the first REAL call
+      // site of `_lc_done`, and `_lc_obs`'s pane probe — memoized once per
+      // process, so this is the ONLY extra call a whole `ws-rm` run adds —
+      // fires inside it. Not a mock artifact: this is `_lc_obs` asking tmux
+      // which pane this destruction ran in, the unforgeable half of the
+      // journal record `ccd-lifecycle-purge.test.ts` proves gets written.
+      'tmux list-panes -a -F #{session_name} #{pane_pid}',
     ]);
   });
 
@@ -928,6 +942,13 @@ describe('ws-rm', () => {
     expect(calls()).toEqual([
       'unsupervise demo-quiet-mesa',
       'tmux kill-session -t cc-demo-quiet-mesa',
+      // D3 (task 17): `_reg_purge`'s backstop emit is the first REAL call
+      // site of `_lc_done`, and `_lc_obs`'s pane probe — memoized once per
+      // process, so this is the ONLY extra call a whole `ws-rm` run adds —
+      // fires inside it. Not a mock artifact: this is `_lc_obs` asking tmux
+      // which pane this destruction ran in, the unforgeable half of the
+      // journal record `ccd-lifecycle-purge.test.ts` proves gets written.
+      'tmux list-panes -a -F #{session_name} #{pane_pid}',
     ]);
   });
 
@@ -950,6 +971,13 @@ describe('ws-rm', () => {
     expect(calls()).toEqual([
       'unsupervise demo-quiet-mesa',
       'tmux kill-session -t cc-demo-quiet-mesa',
+      // D3 (task 17): `_reg_purge`'s backstop emit is the first REAL call
+      // site of `_lc_done`, and `_lc_obs`'s pane probe — memoized once per
+      // process, so this is the ONLY extra call a whole `ws-rm` run adds —
+      // fires inside it. Not a mock artifact: this is `_lc_obs` asking tmux
+      // which pane this destruction ran in, the unforgeable half of the
+      // journal record `ccd-lifecycle-purge.test.ts` proves gets written.
+      'tmux list-panes -a -F #{session_name} #{pane_pid}',
     ]);
   });
 
