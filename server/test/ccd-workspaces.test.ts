@@ -763,7 +763,11 @@ describe('ws-rm', () => {
     expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`)).toThrow();
     expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
     expect(fs.existsSync(wt)).toBe(true);
-    expect(calls()).toEqual([]);
+    // Task 26: this rung now goes through `_lc_refuse`, which records the
+    // refusal in the journal — and that emit's `_lc_obs` probes tmux for the
+    // pane it ran in (same probe the dirty-tree case above documents), so ONE
+    // read-only `tmux list-panes` call is expected here.
+    expect(calls()).toEqual(['tmux list-panes -a -F #{session_name} #{pane_pid}']);
   });
 
   // The `|| die` on the dirty read is load-bearing and nothing was failing when
@@ -777,7 +781,11 @@ describe('ws-rm', () => {
     const wt = addOne();
     fs.writeFileSync(path.join(main(), '.git', 'worktrees', 'quiet-mesa', 'index'), 'GARBAGE');
     expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`)).toThrow(/could not read/);
-    expect(calls()).toEqual([]);
+    // Task 26: this rung now goes through `_lc_refuse`, which records the
+    // refusal in the journal — and that emit's `_lc_obs` probes tmux for the
+    // pane it ran in (same probe the dirty-tree case above documents), so ONE
+    // read-only `tmux list-panes` call is expected here.
+    expect(calls()).toEqual(['tmux list-panes -a -F #{session_name} #{pane_pid}']);
     expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
     expect(fs.existsSync(wt)).toBe(true);
     expect(branches('ws/quiet-mesa')).not.toBe('');
@@ -815,7 +823,11 @@ describe('ws-rm', () => {
       expect(probe, probe).toContain('Permission denied');
 
       expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`)).toThrow(/could not read/);
-      expect(calls(), 'REFUSE FIRST: neither the unit nor the pane may be touched').toEqual([]);
+      // Task 26: this rung now goes through `_lc_refuse`, which records the
+      // refusal in the journal — and that emit's `_lc_obs` probes tmux for the
+      // pane it ran in (same probe the dirty-tree case above documents), so ONE
+      // read-only `tmux list-panes` call is expected here.
+      expect(calls(), 'REFUSE FIRST: neither the unit nor the pane may be touched').toEqual(['tmux list-panes -a -F #{session_name} #{pane_pid}']);
       expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
       expect(fs.existsSync(wt)).toBe(true);
       expect(branches('ws/quiet-mesa')).not.toBe('');
@@ -854,7 +866,11 @@ describe('ws-rm', () => {
     execFileSync('git', ['-C', wt, 'commit', '-m', 'someone else lives here'], { env: gitEnv() });
 
     expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`)).toThrow();
-    expect(calls()).toEqual([]);
+    // Task 26: this rung now goes through `_lc_refuse`, which records the
+    // refusal in the journal — and that emit's `_lc_obs` probes tmux for the
+    // pane it ran in (same probe the dirty-tree case above documents), so ONE
+    // read-only `tmux list-panes` call is expected here.
+    expect(calls()).toEqual(['tmux list-panes -a -F #{session_name} #{pane_pid}']);
     expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
     expect(fs.existsSync(path.join(wt, 'PRECIOUS'))).toBe(true);
     expect(branches('ws/quiet-mesa')).not.toBe('');
@@ -867,7 +883,11 @@ describe('ws-rm', () => {
       'worktree', 'add', '-b', 'ws/borrowed', wt], { env: gitEnv() });
 
     expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`)).toThrow();
-    expect(calls()).toEqual([]);
+    // Task 26: this rung now goes through `_lc_refuse`, which records the
+    // refusal in the journal — and that emit's `_lc_obs` probes tmux for the
+    // pane it ran in (same probe the dirty-tree case above documents), so ONE
+    // read-only `tmux list-panes` call is expected here.
+    expect(calls()).toEqual(['tmux list-panes -a -F #{session_name} #{pane_pid}']);
     expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
     expect(fs.existsSync(wt)).toBe(true);
     expect(execFileSync('git', ['-C', path.join(home, 'projects', 'other'),
@@ -881,7 +901,12 @@ describe('ws-rm', () => {
     execFileSync('git', ['init', '-b', 'main', wt], { env: gitEnv() });
     expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`)).toThrow();
     expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`)).toThrow();
-    expect(calls()).toEqual([]);
+    // Task 26: two refusals, two processes — `_lc_obs` memoizes only WITHIN a
+    // process, so each `cmd_ws_rm` invocation probes tmux independently.
+    expect(calls()).toEqual([
+      'tmux list-panes -a -F #{session_name} #{pane_pid}',
+      'tmux list-panes -a -F #{session_name} #{pane_pid}',
+    ]);
     expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
   });
 
@@ -934,7 +959,11 @@ describe('ws-rm', () => {
     fs.mkdirSync(path.join(decoy, '.git'), { recursive: true });
 
     expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`, { CDPATH: decoy })).toThrow();
-    expect(calls()).toEqual([]);
+    // Task 26: this rung now goes through `_lc_refuse`, which records the
+    // refusal in the journal — and that emit's `_lc_obs` probes tmux for the
+    // pane it ran in (same probe the dirty-tree case above documents), so ONE
+    // read-only `tmux list-panes` call is expected here.
+    expect(calls()).toEqual(['tmux list-panes -a -F #{session_name} #{pane_pid}']);
     expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
     expect(fs.existsSync(path.join(wt, 'PRECIOUS'))).toBe(true);
     expect(branches('ws/quiet-mesa')).not.toBe('');
@@ -1015,7 +1044,11 @@ describe('ws-rm', () => {
     execFileSync('git', ['-C', wt, 'commit', '-m', 'someone else lives here'], { env: gitEnv() });
 
     expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`, CHATTY_CD)).toThrow();
-    expect(calls()).toEqual([]);
+    // Task 26: this rung now goes through `_lc_refuse`, which records the
+    // refusal in the journal — and that emit's `_lc_obs` probes tmux for the
+    // pane it ran in (same probe the dirty-tree case above documents), so ONE
+    // read-only `tmux list-panes` call is expected here.
+    expect(calls()).toEqual(['tmux list-panes -a -F #{session_name} #{pane_pid}']);
     expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
     expect(fs.existsSync(path.join(wt, 'PRECIOUS'))).toBe(true);
     expect(branches('ws/quiet-mesa')).not.toBe('');

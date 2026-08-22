@@ -533,7 +533,7 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # ANY-FIELD check now; see the note there.
   # ── THE BACKSTOP (D3) ────────────────────────────────────────────────────
   # HERE, AND NOT ONE LINE LOWER. Every destruction path on this box terminates
-  # in this function — ws-rm (ccd:3028), ws-reap (ccd:7715), ws-gc's dead-reg
+  # in this function — ws-rm (ccd:3038), ws-reap (ccd:7715), ws-gc's dead-reg
   # arm (ccd:8209), forget (ccd:10722) — and a destructive verb added LATER that
   # forgets to journal itself still leaves a record. A silent destruction has to
   # defeat two independent emit sites.
@@ -1480,7 +1480,7 @@ _lc_done()   { local a="${1-}" i="${2-}" t="${3-}"; shift 3 2>/dev/null || :
 _lc_fail() {   # act id tx token detail [k v]... — an act that STARTED and broke
   # Distinct from `_lc_refuse` by WHEN, not by severity: a refusal happens
   # before anything irreversible, a failure after. `cmd_ws_rm`'s
-  # `git worktree remove` die at ccd:2992 is a FAILURE — the session
+  # `git worktree remove` die at ccd:3002 is a FAILURE — the session
   # is already stopped when it fires — and calling it a refusal would say
   # nothing was touched, which is false.
   local a="${1-}" i="${2-}" t="${3-}" tok="${4-}" msg="${5-}"; shift 5 2>/dev/null || :
@@ -2838,16 +2838,16 @@ _ws_branch_elsewhere() {
 
 cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destroy.
   # FLAGS ARE STRIPPED BEFORE THE ARITY RULE, and that order is the correctness
-  # argument — `cmd_stop`'s own header (ccd:10731-10735) records what the other
+  # argument — `cmd_stop`'s own header (ccd:10746-10750) records what the other
   # order costs: with the flag left in argv the verb aims at a session that does
   # not exist while the real one keeps running.
   #
-  # A VALIDATED FLAG, NEVER A POSITIONAL. ccd:9895-9899 is the paid lesson: an
+  # A VALIDATED FLAG, NEVER A POSITIONAL. ccd:9910-9914 is the paid lesson: an
   # extra argv word on a prefix-whitelisted verb reached a bash arithmetic
   # context where a command substitution EXECUTES. This value reaches no `(( ))`,
   # no `$(( ))`, no `[[ x -ge y ]]` and no array subscript — it is written
   # verbatim into one journal field and parsed nowhere, `cmd_ws_hold`'s own
-  # contract (ccd:3485-3486) applied here.
+  # contract (ccd:3495-3496) applied here.
   #
   # AND IT CLOSES A HOLE ON THE WAY PAST: this verb had NO arity guard at all,
   # so `ccd ws-rm x y z` silently ignored `y z`. The residue is checked below.
@@ -2856,7 +2856,7 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
     case "$1" in
       # An explicit arity check, not a bare `shift 2`: ccd runs under
       # `set -uo pipefail` with NO `-e`, so a shift past the end of argv fails,
-      # shifts nothing, and this loop never terminates (ccd:10749-10751).
+      # shifts nothing, and this loop never terminates (ccd:10764-10766).
       #
       # A BARE `die` HERE, DELIBERATELY, and `ccd-refusal-scan.test.ts` names
       # this line in its SANCTIONED set: no `$id` exists yet, and a refusal
@@ -2938,7 +2938,9 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
     local wd_common main_common
     wd_common=$(_ws_common_dir "$workdir"); main_common=$(_ws_common_dir "$main")
     (( registered == 0 )) && [[ -n "$main_common" && "$wd_common" == "$main_common" ]] \
-      || die "$workdir is not a worktree of $main — nothing was touched; move or delete the directory by hand, then re-run (with it gone, ccd clears the leftover record itself; \`git worktree prune\` will not, while the directory is there)"
+      || _lc_refuse destroy "$id" foreign-worktree \
+           "$workdir is not a worktree of $main — nothing was touched; move or delete the directory by hand, then re-run (with it gone, ccd clears the leftover record itself; \`git worktree prune\` will not, while the directory is there)" \
+           dec.reason "$reason"
     # --porcelain counts untracked files, which is what `git worktree remove`
     # itself objects to. Doing this after the kill would leave the uncommitted
     # work intact but the session dead and out of supervision — and the refusal
@@ -2967,22 +2969,30 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
     # through by a translated warning. Two statements and a scratch file rather
     # than a pipeline, because `local x=$(cmd)` returns local's status.
     local dirty derrf derr drc
-    derrf=$(mktemp) || die "could not make a scratch file to read $workdir — nothing was touched"
+    derrf=$(mktemp) || _lc_refuse destroy "$id" scratch-unwritable \
+      "could not make a scratch file to read $workdir — nothing was touched" \
+      dec.reason "$reason"
     dirty=$(git -C "$workdir" status --porcelain 2>"$derrf"); drc=$?
     derr=$(cat "$derrf" 2>/dev/null); rm -f "$derrf"
     { (( drc == 0 )) && [[ -z "$derr" ]]; } \
-      || die "could not read $workdir${derr:+ ($derr)} — nothing was touched"
+      || _lc_refuse destroy "$id" tree-unreadable \
+           "could not read $workdir${derr:+ ($derr)} — nothing was touched" \
+           dec.reason "$reason"
     [[ -z "$dirty" ]] || _lc_refuse destroy "$id" dirty-tree \
       "worktree not removed (uncommitted changes?) — nothing was touched: $workdir" verb ws-rm dec.reason "$reason"
     local nested
     nested=$(_ws_nested_checkouts "$workdir") \
-      || die "could not scan $workdir for nested checkouts${_WS_NESTED_WHY:+ ($_WS_NESTED_WHY)} — nothing was touched"
+      || _lc_refuse destroy "$id" tree-unreadable \
+           "could not scan $workdir for nested checkouts${_WS_NESTED_WHY:+ ($_WS_NESTED_WHY)} — nothing was touched" \
+           dec.reason "$reason"
     [[ -z "$nested" ]] \
-      || die "worktree not removed — nested checkouts live under it, and ccd deletes no repository it did not create: ${nested//$'\n'/, } — nothing was touched"
+      || _lc_refuse destroy "$id" nested-checkouts-present \
+           "worktree not removed — nested checkouts live under it, and ccd deletes no repository it did not create: ${nested//$'\n'/, } — nothing was touched" \
+           dec.reason "$reason"
   fi
 
   # ── R4-1 · THE ATTIC PIN, BEFORE ANYTHING IS TOUCHED ────────────────────
-  # `git worktree remove` at ccd:2989 deletes both $workdir and
+  # `git worktree remove` at ccd:2999 deletes both $workdir and
   # $main/.git/worktrees/<slug>/, and the latter holds the HEAD reflog.
   # `_ws_attic_pin`'s reflog read is guarded by `[[ -d "$workdir" ]]`, so a pin
   # taken after that call sees nothing and contributes only a pre-resolved tip.
@@ -2990,9 +3000,9 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
   # the near side of EVERY irreversible act, so the intent/done pair below
   # brackets a workspace whose commits are already referenced.
   #
-  # UNCONDITIONAL: it runs even when `git branch -d` later refuses at ccd:3006,
+  # UNCONDITIONAL: it runs even when `git branch -d` later refuses at ccd:3016,
   # because that is the case where the commits matter most, and even when
-  # `registered != 0` so ccd:2989 never runs at all.
+  # `registered != 0` so ccd:2999 never runs at all.
   #
   # `_ws_attic_pin` contains no `die`, which is what makes this `$( )` capture
   # safe under `ccd-die-containment.test.ts`. Nothing added here may die inside
@@ -3091,7 +3101,7 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
   # `purge` line and this `destroy`/`done` — and that redundancy is the design:
   # a silent destruction has to defeat two independent emit sites.
   #
-  # THREE STATES, THREE VALUES. `git branch -d` at ccd:3006 refuses an unmerged
+  # THREE STATES, THREE VALUES. `git branch -d` at ccd:3016 refuses an unmerged
   # branch and that refusal is wanted; an empty `bd` is OMITTED by the encoder,
   # which is how "there was no branch" stays distinct from "the branch is gone".
   # A two-valued expression answers `true` for a detached HEAD — a fabricated
@@ -4114,10 +4124,11 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   # stale twice over: the numbers had drifted, and `cmd_ensure` now adopts a
   # live-but-unsupervised pane via `_resupervise_live`. It restores nothing on
   # THIS path regardless, because `_spawn` below has not run yet.)
-  [[ $# -eq 2 && $1 == --session ]] || die "usage: ccd ws-restore --session <id>"
-  local id=$2
-  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
-  [[ -f "$REG/$id.uuid" ]]       || die "no such session: $id"
+  local id="${2-}"
+  [[ $# -eq 2 && $1 == --session ]] \
+    || _lc_refuse restore "$id" bad-args "usage: ccd ws-restore --session <id>"
+  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || _lc_refuse restore "$id" bad-session-id "bad session id"
+  [[ -f "$REG/$id.uuid" ]]       || _lc_refuse restore "$id" no-such-session "no such session: $id"
 
   # SERIALISED WITH `ws-reap`, ON WS-REAP'S OWN LOCK — final-round destructive
   # review, finding F5. These two verbs are the only pair in the design that
@@ -4151,25 +4162,28 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   # `workdir` — the two facts a concurrent reap can change — are read UNDER the
   # lock rather than in front of it.
   command -v flock >/dev/null 2>&1 \
-    || die "flock (util-linux) is unavailable — refusing to restore unserialised against ws-reap"
+    || _lc_refuse restore "$id" flock-unavailable \
+         "flock (util-linux) is unavailable — refusing to restore unserialised against ws-reap"
   local lock="$REG/.reap-$id.lock" lfd
-  exec {lfd}>>"$lock" || die "cannot open the reap lock at $lock"
+  exec {lfd}>>"$lock" || _lc_refuse restore "$id" lock-unopenable "cannot open the reap lock at $lock"
   flock -n "$lfd" || {
     exec {lfd}>&-
-    die "another ccd process is reaping $id and still holds the lock — refusing to restore mid-cleanup"
+    _lc_refuse restore "$id" in-progress \
+      "another ccd process is reaping $id and still holds the lock — refusing to restore mid-cleanup"
   }
 
-  [[ -f "$REG/$id.archived" ]]   || die "not archived: $id"
+  [[ -f "$REG/$id.archived" ]]   || _lc_refuse restore "$id" not-archived "not archived: $id"
   local workdir; workdir=$(_reg_get "$id" workdir)
-  [[ -d "$workdir" ]] || die "worktree is gone: $workdir — see: ccd ws-attic --session $id"
+  [[ -d "$workdir" ]] || _lc_refuse restore "$id" worktree-missing \
+    "worktree is gone: $workdir — see: ccd ws-attic --session $id"
   # ── R4-2 · SUPERSEDE, DO NOT ERASE ──────────────────────────────────────
-  # INLINE AND INSIDE THE FLOCK REGION (opened ccd:4060, closed ccd:4141), so
+  # INLINE AND INSIDE THE FLOCK REGION (opened ccd:4072, closed ccd:4155), so
   # the values recorded are the ones being erased: a concurrent `ws-reap` holds
   # the same `$REG/.reap-<id>.lock` and can change `.archived` underneath an
   # unserialised read.
   #
   # `_lc_done` returns 0 on every path, and that is not a nicety here:
-  # ccd:4110-4113 records that any new non-zero `return` between the
+  # ccd:4124-4127 records that any new non-zero `return` between the
   # acquisition and `exec {lfd}>&-` leaks this lock in the SOURCING shell for
   # ever, and ccd is sourced by itself and by its tests.
   #
@@ -4179,7 +4193,7 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   # deletes anyway.
   #
   # DISCLOSED RESIDUAL: the manifest is preserved as a BYTE TOTAL only. Read
-  # fresh with `stat` because nothing in ccd reads that field back (ccd:3913
+  # fresh with `stat` because nothing in ccd reads that field back (ccd:3923
   # says so verbatim), and left ABSENT rather than 0 when it cannot be measured
   # — a fabricated 0 would argue that nothing was lost.
   _lc_done restore "$id" "" verb ws-restore \
@@ -4236,9 +4250,9 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   # is real either way, which is what made the old placement unconditional too.
   exec {lfd}>&-
   # THE UNDO LANDED AND THE SESSION DID NOT COME BACK — `_lc_fail`, never
-  # `_lc_refuse`: the archive stamps are already gone at ccd:4096, so calling
+  # `_lc_refuse`: the archive stamps are already gone at ccd:4110, so calling
   # this a refusal would say nothing was touched, which is false. AFTER
-  # ccd:4141's close, so it sits on no path that still holds the descriptor.
+  # ccd:4155's close, so it sits on no path that still holds the descriptor.
   [[ "$rc" -eq 0 ]] || { _lc_fail restore "$id" "" spawn-failed \
       "the archive stamps were removed but $id did not come back up (spawn rc $rc)"
     return "$rc"; }
@@ -7144,15 +7158,15 @@ _ws_tombstone_reclip() {   # id clipsjson -> rewrites an EXISTING tombstone's
   # Measured: a 3 MB clip pasted after the tombstone was written was
   # destroyed on resume, and the tombstone still named only the first one.
   # The tokenless resume is disclosed and defensible (the tombstone IS the
-  # consent record, ccd:2916-2933); the undisclosed half this closes is that
+  # consent record, ccd:2922-2943); the undisclosed half this closes is that
   # the record has to cover what THIS run destroys, not what the original
   # run saw.
   #
   # Only the `clips` field moves. `ignored`/`attic`/`reflog`/`pr`/`proof` etc.
   # keep whatever the ORIGINAL evaluated run measured — re-deriving them here
-  # would need Phase C re-run (deliberately not, ccd:2929-2931) and Phase B's
+  # would need Phase C re-run (deliberately not, ccd:2939-2941) and Phase B's
   # full ignored-set walk (the resume only re-proves dirty/sensitive-ignored
-  # as REFUSALS, ccd:3057-3068 — it never rebuilds `ignored[]` as a document).
+  # as REFUSALS, ccd:3067-3078 — it never rebuilds `ignored[]` as a document).
   # `clips` is the one field this resume both re-measures AND is about to
   # destroy, so it is the one field this rewrites.
   #
@@ -7163,7 +7177,7 @@ _ws_tombstone_reclip() {   # id clipsjson -> rewrites an EXISTING tombstone's
   # compact style (no spaces) — without it a round-trip through python's
   # default `json.dump` changes every byte in the file even when `clips`
   # itself did not change, which would silently break
-  # `_ws_reap_tail`'s own promise (ccd:3055-3061, the ORIGINAL wording this
+  # `_ws_reap_tail`'s own promise (ccd:3065-3071, the ORIGINAL wording this
   # finding narrows rather than removes) that an unrelated resume leaves the
   # journal alone.
   #
@@ -7415,9 +7429,10 @@ cmd_ws_reap() {   # ccd ws-reap --expect <token> --session <id>
   # rather than emptying PATH, because every stub in that file spells its own
   # passthrough `command git`.
   command -v flock >/dev/null 2>&1 \
-    || die "flock (util-linux) is unavailable — refusing to run the destructive verb unserialised"
+    || _lc_refuse reap "$id" flock-unavailable \
+         "flock (util-linux) is unavailable — refusing to run the destructive verb unserialised"
   exec {lfd}>>"$lock" \
-    || die "cannot open the reap lock at $lock"
+    || _lc_refuse reap "$id" lock-unopenable "cannot open the reap lock at $lock"
   flock -n "$lfd" || {
     # Close OUR descriptor and touch nothing else: the winner's lock lives on
     # its own description and no path operation here can reach it. (Under the
