@@ -324,8 +324,10 @@ behaviour names the test that pins it.
 - [x] The CAS delete at (g) targets git's branch with git's tip. The registry-named branch is never
       deleted and never renamed — `_reg_purge` removes the registry ROW, which is unchanged.
 - [x] The reap receipt names the branch actually deleted, and carries the note.
-- [x] Test: drift + resume from each breadcrumb phase finishes without `branch-moved`, and the
-      registry-named branch still exists afterwards.
+- [x] Test: a drifted reap interrupted at the `worktree` phase resumes and finishes without
+      `branch-moved`, and the registry-named branch still exists afterwards. (Pinned for `worktree`
+      and — through `branch-elsewhere`'s own resume case — for `branch`; `children` and `clips` keep
+      the coverage they already had, which does not exercise drift.)
 
 ## Task 5 — the wire and the sheet
 

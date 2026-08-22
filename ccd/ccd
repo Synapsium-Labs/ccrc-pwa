@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=768f6d13a452a4c659102105284d06dc7a7571f6ee36677c30961b8a44a6b0ba
+# ccrc:generated 1 sha256=6ad1340340f52ae004379b954ae4dcbc56226e47764336de535a9c62e4a4adca
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box, not on this file: `_rc_enabled` reads
@@ -1965,7 +1965,7 @@ _ws_branch_holders() {   # main branch -> every worktree PATH whose record names
   #
   # The per-child ladder already asks it (`child-branch-elsewhere`, "removing it
   # here would strand that other checkout"); until now the PARENT did not, and
-  # did not have to, because `registry-branch-drift` refused every branch except
+  # did not have to, because `registry-branch-drift` then refused every branch except
   # the workspace's own — a name only its own worktree could hold. That refusal
   # is gone, so this rung is what replaces it rather than a new idea.
   #
@@ -2349,8 +2349,11 @@ cmd_ws_rename() {   # ccd ws-rename --session <id> --branch <name> — rename a
   # function's git-derived `$old` — the two are different sources of truth for
   # the same fact, and this repo already models what happens when they drift: a
   # hand `git branch -m` moves git's answer while the registry keeps the old
-  # name (`cmd_ws_reap`'s `registry-branch-drift`, ccd:3381, and
-  # `server/test/ccd-workspaces.test.ts:587`'s pinned scenario). Without this
+  # name (`cmd_ws_rm`'s note-and-proceed, ccd:2063-2066; `cmd_ws_reap` resolves
+  # it the same way now and no longer refuses, which is exactly why THIS verb
+  # still must — a rename ACTS ON the name, so renaming git's branch off a stale
+  # registry entry drives the two records further apart, while a delete simply
+  # removes the branch git actually has). Without this
   # check, a workspace hand-renamed outside `ccd ws-rename` still reads as
   # "still on its born name" to the sweep (the registry never moved) while this
   # verb renames whatever git says instead — silently renaming a hand-chosen
@@ -2985,10 +2988,14 @@ _ws_archive_manifest() {   # id -> one JSON object on stdout
   # and pairing it with any other name
   # would make the record two things at once. So on a drifted worktree this can
   # read 0 while `worktreeHead`'s branch holds stashes — which is safe in the one
-  # direction that matters, because `ws-reap` refuses drift (`registry-branch-drift`,
-  # `detached-head`, `branch-missing`) before it ever consults a stash count, and
-  # recomputes the count itself when it does. `worktreeHead` beside it is what
-  # tells a reader which question the number answered.
+  # direction that matters, and the reason CHANGED with the drift rung and is
+  # worth restating rather than leaving as it stood. It used to be "`ws-reap`
+  # refuses drift before it ever consults a stash count". `ws-reap` no longer
+  # refuses drift: it resolves it, and its stash rung then counts against GIT'S
+  # branch, the one it is about to delete. What still holds — and is now the
+  # whole argument — is the second half: reap recomputes the count itself, from
+  # the branch it resolved, and never reads this field. `worktreeHead` beside it
+  # is what tells a reader which question THIS number answered.
   stashes=$(_ws_stash_count "$main" "$branch")
   # Pre-merge fix round, finding 5: `null`, not `0` — the seventh instance of
   # the measurement-forgery class in this plan (deviation 10, "a number is a
@@ -5293,7 +5300,20 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   return 0
 }
 
-cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only; the token's source
+cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only about the WORKSPACE;
+                    # the token's source
+  # "READ-ONLY" IS ABOUT THE WORKSPACE, NOT ABOUT THE REPOSITORY, and the
+  # distinction is worth stating where the header makes the claim. This verb
+  # destroys nothing and creates nothing that outlives it — no worktree, no
+  # branch, no registry field, no tombstone — which is the property the sheet
+  # depends on. It does, through `_ws_reap_eval`, run `git fetch origin` and
+  # `git remote set-head origin --auto`, so it can advance remote-tracking refs
+  # and REPOINT `refs/remotes/origin/HEAD` when the remote has changed its
+  # default branch. Both were already true on the contained arm; the containment
+  # ladder made them true on every audit, which is a widening of WHEN rather
+  # than of WHAT. Neither is optional: mergedness is never proven against an
+  # unfetched ref, and a symref read from clone-time memory proved containment
+  # against a default the remote had deleted (measured, git 2.43).
   [[ $# -eq 2 && $1 == --session ]] || die "usage: ccd ws-audit --session <id>"
   local id=$2
   [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
