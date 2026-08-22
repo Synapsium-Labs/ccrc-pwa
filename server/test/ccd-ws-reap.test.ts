@@ -2473,3 +2473,106 @@ describe('a drifted workspace is reaped in git’s name, not the registry’s', 
     expect(h.reg('demo-quiet-basin', 'uuid'), 'the registry entry is purged').toBeNull();
   }, 30000);
 });
+
+/**
+ * THE REF IS NOT ALWAYS OURS TO DELETE, and this is what replaces the guard the
+ * drift refusal used to be. While `registry-branch-drift` refused, the only
+ * name that could reach step (g) was the workspace's own `ws/<slug>` — a branch
+ * nothing else holds. Now it is whatever git has checked out here, and
+ * `git switch --ignore-other-worktrees <shared branch>` is one command.
+ *
+ * Measured on git 2.43, in a scratch repo, before this guard existed:
+ *   git switch --ignore-other-worktrees main   # inside the linked worktree: OK
+ *   git worktree list --porcelain              # reports refs/heads/main TWICE
+ *   git update-ref -d refs/heads/main <tip>    # rc 0 — DELETED
+ *   git status   (in the project checkout)     # "No commits yet on main"
+ * `git branch -d main` refuses the same delete outright ("cannot delete branch
+ * 'main' used by worktree at …"). Step (g) is deliberately not `branch -d` (it
+ * refuses a squash merge, which is the whole point of the proof ladder), so the
+ * check `branch -d` would have made is made explicitly.
+ */
+describe('a branch another checkout is standing on', () => {
+  function shared(): { main: string; wt: string } {
+    const main = h.makeGhRepo('demo');
+    h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
+    const wt = path.join(h.home, 'worktrees', 'demo', 'quiet-basin');
+    // The project's own checkout is on `main`; put the workspace on it too.
+    h.sh(`cd "${wt}" && git switch -q --ignore-other-worktrees main`);
+    h.ghRows([]);
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    return { main, wt };
+  }
+
+  it('refuses the audit — every rung else would have proved it reapable', () => {
+    const { main, wt } = shared();
+    // The precondition: two worktrees, one branch. And the ladder WOULD prove
+    // it — `main` is trivially an ancestor of origin/HEAD — so this refusal is
+    // the only thing standing between the tap and a broken project checkout.
+    expect(h.git(main, 'worktree', 'list', '--porcelain')
+      .split('\n').filter((l) => l === 'branch refs/heads/main')).toHaveLength(2);
+    const a = JSON.parse(h.sh(`${GH_STUB} ${ARCH} cmd_ws_audit --session demo-quiet-basin`));
+    expect(a.verdict).toBe('branch-elsewhere');
+    expect(a.detail).toContain(path.join(h.home, 'projects', 'demo'));
+    expect(a.token, 'a refusal must not hand out a reap token').toBeUndefined();
+    expect(fs.existsSync(wt)).toBe(true);
+  }, 30000);
+
+  it('refuses the reap too, and writes NOTHING — no tombstone, no breadcrumb', () => {
+    // §5.3: every guard is re-evaluated on the box at the instant of deletion.
+    // The token here is a real one, minted before the branch was shared, which
+    // is the shape a stale sheet produces.
+    const { main, wt } = shared();
+    const r = h.run(`${GH_STUB} ${ARCH} cmd_ws_reap --expect ${'0'.repeat(64)} --session demo-quiet-basin`);
+    expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    expect(JSON.parse(r.stdout).refused).toBe('branch-elsewhere');
+    expect(h.git(main, 'branch', '--list', 'main')).toContain('main');
+    expect(h.git(main, 'rev-parse', '--verify', 'refs/heads/main')).toMatch(/^[0-9a-f]{40}$/);
+    expect(fs.existsSync(wt), 'nothing is destroyed').toBe(true);
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', '.reaped', 'demo-quiet-basin.json')),
+      'a refusal ahead of (a) writes no tombstone').toBe(false);
+    expect(h.reg('demo-quiet-basin', 'reaping'), 'and no breadcrumb').toBeNull();
+  }, 30000);
+
+  it('refuses on the RESUME path too, where the eval never runs', () => {
+    // The tail carries its own copy of this rung, and the resume is the only
+    // route that can reach it: on the fresh path `_ws_reap_eval` refuses first.
+    // It is also the route that MOST needs it — the eval ran minutes or hours
+    // ago, and a `git switch --ignore-other-worktrees` since then is exactly
+    // the drift a tokenless resume cannot otherwise notice.
+    const { main, wt } = shared();
+    // Stage the interruption by hand, the way this file's other breadcrumb
+    // tests do: journal written, worktree gone, branch still there.
+    h.sh('_reg_set demo-quiet-basin reaping branch');
+    fs.mkdirSync(path.join(h.home, '.cc-sessions', '.reaped'), { recursive: true });
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', '.reaped', 'demo-quiet-basin.json'),
+      JSON.stringify({ id: 'demo-quiet-basin', project: 'demo', branch: 'main',
+        registryBranch: 'ws/quiet-basin',
+        tip: h.git(main, 'rev-parse', 'refs/heads/main') }));
+    h.git(main, 'worktree', 'remove', wt);
+    const r = h.run(`${GH_STUB} ${ARCH} cmd_ws_reap --expect ${'0'.repeat(64)} --session demo-quiet-basin`);
+    expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    expect(JSON.parse(r.stdout).refused).toBe('branch-elsewhere');
+    // The project's own checkout still has its branch, which is the whole point.
+    expect(h.git(main, 'rev-parse', '--verify', 'refs/heads/main')).toMatch(/^[0-9a-f]{40}$/);
+    // And the interrupted cleanup is left exactly as it was — recoverable.
+    expect(h.reg('demo-quiet-basin', 'reaping')).toBe('branch');
+    expect(h.reg('demo-quiet-basin', 'uuid')).not.toBeNull();
+  }, 30000);
+
+  it('still reaps the ordinary case — one worktree, one branch', () => {
+    // The negative control. Without it, a guard that refused EVERYTHING would
+    // pass both assertions above.
+    const main = h.makeGhRepo('demo');
+    h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
+    const wt = path.join(h.home, 'worktrees', 'demo', 'quiet-basin');
+    fs.writeFileSync(path.join(wt, 'f1.txt'), 'work 1\n');
+    h.git(wt, 'add', 'f1.txt'); h.git(wt, 'commit', '-m', 'work 1');
+    h.git(main, 'merge', '--ff-only', 'ws/quiet-basin');
+    h.git(main, 'push', 'origin', 'main');
+    h.ghRows([]);
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    const out = JSON.parse(reap(tokenOf()).stdout);
+    expect(out.reaped).toBe('demo-quiet-basin');
+    expect(h.git(main, 'branch', '--list', 'ws/quiet-basin')).toBe('');
+  }, 30000);
+});

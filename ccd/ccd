@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=d31ae3a89bd9c1acf7daab1b9e838c91d129e0cdca9ffe2f6f4d51c3fdd82585
+# ccrc:generated 1 sha256=56565b077a550589111216a79102d4528c20465d802de11fe6aef84a7955aa9a
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box, not on this file: `_rc_enabled` reads
@@ -1948,6 +1948,53 @@ _ws_wt_branch() {   # main path
     esac
   done < <(git -C "$main" worktree list --porcelain 2>/dev/null)
   return 1
+}
+
+_ws_branch_holders() {   # main branch -> every worktree PATH whose record names
+                          # that branch, one per line (resolved), rc 0 even when
+                          # none do. `_ws_wt_branch` read backwards.
+  # THE QUESTION `git branch -d` ASKS AND `update-ref -d` DOES NOT. Measured on
+  # git 2.43: `git branch -d develop` refuses with "cannot delete branch
+  # 'develop' used by worktree at …", while `git update-ref -d refs/heads/develop
+  # <tip>` deletes it, rc 0, leaving that worktree's HEAD pointing at a ref that
+  # no longer resolves — `git status` there reads "No commits yet on develop" on
+  # a checkout with a full history. `_ws_reap_tail` (g) is an `update-ref -d`
+  # deliberately (`branch -d` refuses a squash merge, which is the whole point of
+  # the proof ladder), so the check `branch -d` would have made has to be made
+  # explicitly, by whoever is about to delete.
+  #
+  # The per-child ladder already asks it (`child-branch-elsewhere`, "removing it
+  # here would strand that other checkout"); until now the PARENT did not, and
+  # did not have to, because `registry-branch-drift` refused every branch except
+  # the workspace's own — a name only its own worktree could hold. That refusal
+  # is gone, so this rung is what replaces it rather than a new idea.
+  #
+  # PATHS, not the child rung's COUNT, because the remedy is a place: an
+  # operator told "checked out in 2 worktrees" has to go and find the other one.
+  # Resolved, the same way `_ws_wt_branch` resolves the path it matches, so a
+  # symlinked ancestor cannot make our own worktree read as a stranger.
+  local main="$1" branch="$2" cur="" line
+  while IFS= read -r line; do
+    case "$line" in
+      "worktree "*) cur="${line#worktree }" ;;
+      "branch refs/heads/$branch") [[ -n "$cur" ]] && _ws_realpath "$cur" ;;
+    esac
+  done < <(git -C "$main" worktree list --porcelain 2>/dev/null)
+  return 0
+}
+
+# `main branch workdir` -> the holders that are NOT this workspace, comma-joined,
+# empty when none. One reader for the two call sites (`_ws_reap_eval`'s rung and
+# `_ws_reap_tail`'s re-proof immediately before the CAS), so the two cannot come
+# to different answers about the same repository.
+_ws_branch_elsewhere() {
+  local main="$1" branch="$2" workdir="$3" mine other out=""
+  mine=$(_ws_realpath "$workdir")
+  while IFS= read -r other; do
+    [[ -n "$other" && "$other" != "$mine" ]] || continue
+    out+="${out:+, }$other"
+  done < <(_ws_branch_holders "$main" "$branch")
+  printf '%s' "$out"
 }
 
 cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destroy.
@@ -4522,7 +4569,28 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
     # construction, this line and the fingerprint's second input are two
     # different facts again, and swapping either for the other is a kill rather
     # than a survivor — pinned by the drifted-workspace token test.
-    REAP_WTHEAD="$wthead"
+    REAP_WTHEAD="$branch"
+
+    # OURS TO REMOVE, AND NOBODY ELSE'S. The last identity question, and the one
+    # the drift rung above made necessary: while that rung refused, the only
+    # branch that could reach the CAS delete was the workspace's own
+    # `ws/<slug>`, a name nothing else holds. Now the branch is whatever git has
+    # checked out here — and `git switch --ignore-other-worktrees develop`
+    # inside a workspace is a thing an operator can do in one command (measured,
+    # git 2.43: it succeeds, and `worktree list --porcelain` then reports
+    # `refs/heads/develop` for BOTH paths). Reaping that workspace would then
+    # delete the branch the project's own checkout is standing on: measured, the
+    # ref goes, rc 0, and `git status` in `$main` reads "No commits yet on
+    # develop" over a full history.
+    #
+    # Same rule and same word as the per-child ladder's `child-branch-elsewhere`
+    # ("removing it here would strand that other checkout"), asked of the parent.
+    # It is deliberately NOT a proof about the work — the ladder below proves
+    # that — but about the REF: a branch two checkouts share is not this
+    # workspace's to delete, however thoroughly its commits are merged.
+    local elsewhere; elsewhere=$(_ws_branch_elsewhere "$main" "$branch" "$workdir")
+    [[ -z "$elsewhere" ]] \
+      || { _reap_refuse branch-elsewhere "$branch is also checked out at $elsewhere — removing it here would strand that checkout; move it off $branch first"; return 1; }
 
     # ── Phase B: nothing local is lost ─────────────────────────────
     # TWO statements, and the pipeline's status is not the read's. `status
@@ -6617,6 +6685,30 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
         "$(_json_str "breadcrumb phase '$resumed' for $id is not one ccd ever writes — refusing to guess which steps already ran")"
       return 0 ;;
   esac
+
+  # AND SO IS "IS THIS REF ANYONE ELSE'S?", for the same reason and in the same
+  # place: §5.3 is unconditional — every guard is evaluated HERE, on the box, at
+  # the instant of deletion — and this one guards the single most irreversible
+  # line in the file. `_ws_reap_eval` asks it too (`branch-elsewhere`), but the
+  # eval does not run on the RESUME path at all, and between a consent and the
+  # tap somebody can `git switch --ignore-other-worktrees` onto this branch from
+  # anywhere in the project.
+  #
+  # `<= 0`, not `== 0` COUNTING OUR OWN: on the fresh path our worktree still
+  # holds the branch and is filtered out by path; on a resume it is already gone
+  # and holds nothing. Both reduce to "no OTHER checkout has it".
+  #
+  # PLACED WITH THE ARCHIVED RE-READ, ahead of (a)/(b)/(c), so a refusal writes
+  # NOTHING — no attic pin, no tombstone, no breadcrumb. A refusal here on a
+  # resume leaves the cleanup exactly as interrupted, which is recoverable (move
+  # the other checkout off the branch, re-run) in a way a deleted shared branch
+  # is not.
+  local tail_elsewhere; tail_elsewhere=$(_ws_branch_elsewhere "$main" "$branch" "$workdir")
+  [[ -z "$tail_elsewhere" ]] || {
+    printf '{"refused":"branch-elsewhere","detail":%s,"paths":[]}\n' \
+      "$(_json_str "$branch is also checked out at $tail_elsewhere — refusing to delete a branch another checkout is standing on; move it off $branch first, then re-run")"
+    return 0
+  }
 
   # THE ARCHIVED MARKER IS RE-READ HERE, immediately before the first step that
   # writes anything — final-round destructive review, finding F5. `archived` is
