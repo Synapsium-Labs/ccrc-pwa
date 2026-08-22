@@ -334,6 +334,26 @@ describe('parseJournalLine: the three families never merge', () => {
     expect(parseJournalLine(line({ at: undefined })).at).toBeNull();
   });
 
+  // FIX ROUND 1, F5 (task-36-37 review): Step 4's mutant check on `raw: line`
+  // (`journalparse.ts`) has nowhere else to live — `lifecycle-replay.test.ts`
+  // CANNOT catch a `raw: line.trim()` mutant by construction: `.trim()` is
+  // pure and deterministic, so a first sweep and a replay both trim
+  // identically and `toEqual(before)` still holds. This file owns the
+  // parser, and already owns the sibling guard on `at` immediately above, so
+  // this is where the padding guard belongs. The `\r` is deliberate:
+  // `frameRead` splits on `\n`, so a CRLF-terminated journal line arrives
+  // here with a trailing `\r` still attached, and a `raw` that silently
+  // trimmed it would also weaken `lifecycle_raw_uid ON lifecycle_events(gen,
+  // raw)` — the uid-less dedup key — by folding two on-disk-distinct lines
+  // to one normalised string.
+  it('a padded but valid JSON line keeps its padding in `raw`', () => {
+    const l = `  ${JSON.stringify({ uid: 'p.1', at: 1, act: 'destroy', outcome: 'done' })}\r`;
+    const row = parseJournalLine(l);
+    expect(row, 'the row exists at all').toBeDefined();
+    expect.soft(row.raw, 'raw is the line VERBATIM').toBe(l);
+    expect.soft(row.uid, 'and it really did parse — not the UNMODELLED path').toBe('p.1');
+  });
+
   // DEVIATION FROM THE BRIEF, recorded here (see journalparse.ts's own
   // deviation note beside `reviveMeas` for the full evidence trail): the
   // brief's version of this case is titled "models the TEN declared meas
