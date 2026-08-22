@@ -4275,7 +4275,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   _ws_reap_reset
   local id="$1" ws project workdir branch base baseShort main wthead common mainreal
   local st up ahead repo rows row registered errf err rc stashall dirt clipsjson nested
-  local children strays contained=0 obase
+  local children strays contained=0 obase ourl ancwhy
 
   # ── Phase A: identity ────────────────────────────────────────────
   [[ -f "$REG/$id.uuid" ]] || { _reap_refuse no-such-session "no registry entry for $id"; return 1; }
@@ -4739,6 +4739,48 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   REAP_STASHES=$(_ws_stash_count "$main" "$branch")
   (( REAP_STASHES == 0 )) \
     || { _reap_refuse stashes-present "$REAP_STASHES stash entr$( (( REAP_STASHES == 1 )) && echo y || echo ies) belonging to $branch (a stash taken from it on a detached HEAD names no branch and is attributed by its base commit, so an anonymous entry based on shared history counts against every workspace of $project): 'git -C $main stash list' names them, and 'git stash branch <name> stash@{N}' keeps one, 'git -C $main stash drop stash@{N}' discards one"; return 1; }
+  # ── Phase C: containment, proven from the EVIDENCE ───────────────
+  # THE RULE THIS BLOCK IS ARRANGED AROUND, because getting it wrong is what
+  # made three archived workspaces (~3.6 G) permanently un-reapable from the
+  # sheet on 2026-08-22 while `ws-rm` removed all three by hand: WHICH PROVER
+  # RUNS MAY NEVER DEPEND ON A FACT THAT IS ORTHOGONAL TO WHAT IS BEING PROVEN.
+  #
+  # This used to be `if <the branch has a remote-tracking ref> then <PR bind and
+  # `_ws_merge_proof`> else <strict ancestry, or refuse>`. `@{upstream}`
+  # resolving is a fact about a REF IN THIS CLONE, not about whether the work is
+  # safely somewhere else — and GitHub deletes the head branch on merge
+  # ("Automatically delete head branches", the default), so the tracking ref
+  # disappears exactly for the branches that ARE merged. A merged branch
+  # therefore took the ancestry-only arm, which a squash can never satisfy
+  # (its commits are not ancestors of anything), and answered `no-upstream`:
+  # "<branch> was never pushed and holds commits not reachable from
+  # origin/HEAD", about a branch that was pushed, reviewed and merged.
+  # `_ws_merge_proof` — the ancestor -> tree -> patch-id -> cherry ladder — is
+  # precisely the prover for that case, and it was sitting behind the arm split,
+  # unreachable. Measured on `clear-cove` (tip e071a3aa, PR #618 squashed as
+  # e5ffe56d): ancestor fail, tree fail, patch-id PASS, cherry fail. The prover
+  # approved it. It was never called.
+  #
+  # So the ladder below is walked by every branch, in one order, and the
+  # upstream probe keeps exactly ONE job — C1, which is a refusal about local
+  # work, not a choice of prover — plus a say in the WORDING of C5's last
+  # refusal (which missing evidence to name). Nothing else consults it.
+
+  # ── C0: the tip, once ────────────────────────────────────────────
+  # Every rung below needs it, and `_ws_reap_tail`'s branch delete is
+  # `update-ref -d refs/heads/$branch "$REAP_TIP"` — an empty old-value degrades
+  # that CAS into an unconditional delete (measured, git 2.43 — see the comment
+  # at the call site). Reapable with an empty tip is not a state this function
+  # may reach by any path, on any rung, which is why this is resolved here
+  # rather than inside whichever rung happens to prove.
+  REAP_TIP=$(git -C "$main" rev-parse --verify "refs/heads/$branch" 2>/dev/null) \
+    || { _reap_refuse branch-missing "refs/heads/$branch does not resolve"; return 1; }
+
+  # ── C1: work that is only here ───────────────────────────────────
+  # A tracking ref that EXISTS and is behind the branch is direct evidence of
+  # commits that are nowhere else — cheap, local, and it refuses before any
+  # network cost. It selects no prover: when the tracking ref is gone (the whole
+  # defect above) this rung is simply SKIPPED and both provers still run.
   if up=$(git -C "$main" rev-parse --verify --quiet "$branch@{upstream}" 2>/dev/null); then
     # The DIRECTION is unchanged and the SENTENCE is not — round-3 P2's class,
     # last instance, found by the final-round destructive review (F5b). A failed
@@ -4752,89 +4794,129 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
       || { _reap_refuse unpushed-commits "$( [[ "$ahead" =~ ^[0-9]+$ ]] \
              && echo "$ahead commit(s) are not on the remote" \
              || echo "could not count the commits between $up and refs/heads/$branch — refusing on a comparison that did not run")"; return 1; }
-  else
-    # ── THE CONTAINED RUNG — never pushed, and nothing origin lacks ──
-    # A branch with no upstream used to refuse here unconditionally, which made
-    # every abandoned-but-merged workspace permanently unremovable from the
-    # sheet: the ladder demanded remote evidence (upstream -> pushed -> merged
-    # PR) for a proposition — "no unique work would be destroyed" — that is
-    # directly provable with no remote evidence at all when the tip is an
-    # ancestor of origin/HEAD. That is the same definition of merged that
-    # `_ws_gc_merged` applies to orphans and the per-child ladder above applies
-    # to nested checkouts; the parent was the only place that never asked.
-    #
-    # The rung mints proof `contained` and binds NO PR: REAP_PRNUM, REAP_PRURL,
-    # REAP_MERGE and REAP_HEADOID keep their reset "" — the audit prints them
-    # as null/"" (the same unbound shape every pre-Phase-C refusal has always
-    # had), never a plausible value nobody measured. Phase C's PR bind is
-    # skipped entirely below: there is no PR to bind, and `gh` has nothing to
-    # answer about a branch it has never seen.
-    #
-    # REAP_TIP is resolved HERE, not left to Phase C: `_ws_reap_tail`'s branch
-    # delete is `update-ref -d refs/heads/$branch "$REAP_TIP"`, and an empty
-    # old-value degrades that CAS into an unconditional delete (measured, git
-    # 2.43 — see the comment at the call site). Reapable with an empty tip is
-    # not a state this function may reach by any path.
-    REAP_TIP=$(git -C "$main" rev-parse --verify "refs/heads/$branch" 2>/dev/null) \
-      || { _reap_refuse branch-missing "refs/heads/$branch does not resolve"; return 1; }
-    git -C "$main" remote get-url origin >/dev/null 2>&1 \
-      || { _reap_refuse no-remote "no origin remote for $project — $branch was never pushed and there is nothing to prove containment against"; return 1; }
-    # Mergedness is NEVER proven against an unfetched ref — Phase C's own
-    # doctrine, and this rung proves a mergedness. The fetch runs FIRST, and a
-    # fetch that failed proves nothing rather than proving against yesterday.
-    timeout 60 git -C "$main" fetch --quiet origin \
-      || { _reap_refuse fetch-failed "could not fetch origin — nothing is claimed about your commits"; return 1; }
-    REAP_FETCHED=$(date +%s)
-    # THE SYMREF IS RE-DERIVED FROM THE REMOTE, not read from the clone-time
-    # memory — adversarial-review finding on this rung's first draft. `git
-    # fetch` neither prunes a branch the remote deleted nor moves the local
-    # origin/HEAD symref, so a remote that switched its default and deleted
-    # the old one left the draft proving containment against a FROZEN tracking
-    # ref: "origin already holds every commit on it", said about an origin
-    # that holds none of them (measured, git 2.43 — deleted default, symref
-    # still resolving, is-ancestor still 0). `set-head --auto` asks the remote
-    # what its HEAD is NOW and repoints the symref; the branch it lands on was
-    # just fetched, so the proof below runs against origin's present, not its
-    # past. A remote that advertises no default (unborn HEAD) fails this and
-    # refuses — the verdict stays no-upstream because the branch WAS never
-    # pushed, and the detail names the half that could not be checked.
-    timeout 60 git -C "$main" remote set-head origin --auto >/dev/null 2>&1 \
-      || { _reap_refuse no-upstream "$branch was never pushed, and origin did not advertise a default branch to prove containment against (git remote set-head origin --auto failed) — push the branch instead"; return 1; }
-    # No origin/HEAD is NOT "not an ancestor": `merge-base --is-ancestor`
-    # against a ref that does not resolve exits non-zero for a comparison that
-    # never ran. The per-child ladder refuses that state out loud; so does
-    # this. Post-set-head this is near-unreachable belt-and-braces, kept for
-    # the same polarity everywhere: nothing read, nothing passed.
-    obase=$(git -C "$main" symbolic-ref --quiet refs/remotes/origin/HEAD) \
-      || { _reap_refuse no-upstream "$branch was never pushed, and origin/HEAD does not resolve so containment cannot be proven"; return 1; }
-    git -C "$main" merge-base --is-ancestor "refs/heads/$branch" "$obase" 2>/dev/null
-    case $? in
-      0) REAP_PROOF=contained ;;
-      1) _reap_refuse no-upstream "$branch was never pushed and holds commits not reachable from $obase"; return 1 ;;
-      *) _reap_refuse no-upstream "$branch was never pushed, and comparing it against $obase failed — refusing on a comparison that did not run"; return 1 ;;
-    esac
-    # The base oid is a fingerprint input (12 of 14). Phase C resolves it after
-    # its own fetch and refuses `base-missing` rather than hashing a field
-    # nobody measured — deviation 6's rule — and this rung reaps under the same
-    # token discipline, so it does the same.
-    REAP_BASEOID=$(git -C "$main" rev-parse --verify "$base" 2>/dev/null) \
-      || { _reap_refuse base-missing "$base does not resolve"; return 1; }
-    contained=1
   fi
 
-  # ── Phase C: the work is genuinely in main ─────────────────────
-  # Skipped in full when the contained rung proved there is no unique work: a
-  # PR bind for a branch that has no PR refuses `no-bound-pr`, and a merge
-  # proof against an empty merge commit refuses `merge-commit-missing` — both
-  # statements about evidence this verdict does not rest on.
+  # ── C2: there is a remote at all ─────────────────────────────────
+  # `git config --get remote.origin.url`, NOT `git remote get-url origin`, and
+  # the difference is a measured hole rather than a preference: with
+  # `remote.origin.url` unset but a `pushurl` still configured, `get-url` prints
+  # the REMOTE'S NAME and exits 0 (measured, git 2.43), so a repository with no
+  # fetch URL walked this rung and failed at C3 instead — `fetch-failed`, a
+  # transport story, about a repository that has no address at all. `--get` is
+  # also `_gh_repo_slug`'s own first line, so C2 and C5's slug parse now agree
+  # about what "there is no origin" means. Two statements, and the emptiness is
+  # tested rather than inferred: `--get` exits 0 for a key that is set to "".
+  ourl=$(git -C "$main" config --get remote.origin.url 2>/dev/null) || ourl=""
+  [[ -n "$ourl" ]] \
+    || { _reap_refuse no-remote "no origin remote for $project — there is nothing to prove this work is anywhere else"; return 1; }
+
+  # ── C3: the fetch, ONCE, before any proof ────────────────────────
+  # Mergedness is NEVER proven against an unfetched ref — the doctrine both old
+  # arms already stated for themselves, now said once. Six repos on this box
+  # have never been fetched; one is 24 days stale. A fetch that FAILED proves
+  # nothing rather than proving against yesterday.
+  #
+  # ONE fetch, not two: the old arms fetched one each and no path ever ran
+  # both, so this is the same cost, not a new one. What DID move is precedence
+  # — a repository that cannot be fetched now refuses `fetch-failed` before
+  # `gh pr list` is ever spent on it, where the old Phase C called gh first.
+  # That is the cheaper order and the more honest one: an unfetched clone
+  # cannot answer a mergedness question no matter what gh says about it.
+  timeout 60 git -C "$main" fetch --quiet origin \
+    || { _reap_refuse fetch-failed "could not fetch origin — nothing is claimed about your commits"; return 1; }
+  REAP_FETCHED=$(date +%s)
+
+  # ── C4 — RUNG 1: strict ancestry against origin/HEAD ─────────────
+  # The strongest and cheapest statement available: every commit on this branch
+  # is reachable from origin's CURRENT default branch, so nothing unique can be
+  # destroyed. It needs no PR, no gh call and no network beyond the fetch just
+  # made, which is why it is asked first — and it is the same definition of
+  # merged that `_ws_gc_merged` applies to orphans and the per-child ladder
+  # applies to nested checkouts.
+  #
+  # OPERATOR RULING 2026-08-22, recorded because it has two consequences a
+  # reader will otherwise think are bugs (D-173, D-174). Ancestry runs BEFORE
+  # the PR bind, so a workspace whose PR was merged with a real merge commit
+  # ONTO THE DEFAULT BRANCH now proves `contained` and binds no PR, where it
+  # used to prove `ancestor` and carry the PR number into the audit and the
+  # tombstone; and a workspace whose bound PR is still OPEN, but whose commits
+  # have all reached origin/HEAD by some other route, is now reapable where it
+  # refused `not-merged`. Both were put to the operator with their costs before
+  # this was written. Neither destroys anything unique — that is exactly what
+  # the ancestry proof states — and reap deletes only the LOCAL branch, so an
+  # open PR and its remote head are untouched.
+  #
+  # THE SYMREF IS RE-DERIVED FROM THE REMOTE, not read from the clone-time
+  # memory — adversarial-review finding on this rung's first draft, and it
+  # survives the reorder unchanged. `git fetch` neither prunes a branch the
+  # remote deleted nor moves the local origin/HEAD symref, so a remote that
+  # switched its default and deleted the old one left the draft proving
+  # containment against a FROZEN tracking ref: "origin already holds every
+  # commit on it", said about an origin that holds none of them (measured, git
+  # 2.43 — deleted default, symref still resolving, is-ancestor still 0).
+  #
+  # AND A COMPARISON THAT DID NOT RUN IS NEVER A "NO". Each way this rung can
+  # fail to ANSWER — the remote advertising no default, a symref that does not
+  # resolve, a merge-base that errored — records WHY in `ancwhy` and falls
+  # through to rung 2, whose merge proof needs no origin/HEAD at all. `ancwhy`
+  # is then spent in C5's last refusal, so the operator is told which half could
+  # not be checked instead of being told "not an ancestor" about a question
+  # nobody managed to ask. That polarity is `_ws_gc_merged`'s and
+  # `_ws_gc_dirty`'s, and it is the one thing that must survive any later edit
+  # to this rung.
+  ancwhy="its commits are not reachable from origin's default branch"
+  if timeout 60 git -C "$main" remote set-head origin --auto >/dev/null 2>&1; then
+    if obase=$(git -C "$main" symbolic-ref --quiet refs/remotes/origin/HEAD); then
+      git -C "$main" merge-base --is-ancestor "refs/heads/$branch" "$obase" 2>/dev/null
+      case $? in
+        0) REAP_PROOF=contained; contained=1 ;;
+        1) ancwhy="its commits are not reachable from $obase" ;;
+        *) ancwhy="comparing it against $obase failed, so containment was never actually compared" ;;
+      esac
+    else
+      ancwhy="origin/HEAD does not resolve, so containment could not be compared against anything"
+    fi
+  else
+    ancwhy="origin did not advertise a default branch (git remote set-head origin --auto failed), so containment could not be compared against anything"
+  fi
+
+  # ── C5 — RUNG 2: the merged PR, and `_ws_merge_proof` ────────────
+  # Skipped in full when rung 1 proved there is no unique work: a PR bind for a
+  # branch that has no PR refuses `no-bound-pr`, and a merge proof against an
+  # empty merge commit refuses `merge-commit-missing` — both statements about
+  # evidence this verdict does not rest on. Rung 1 mints proof `contained` and
+  # binds NO PR: REAP_PRNUM, REAP_PRURL, REAP_MERGE and REAP_HEADOID keep their
+  # reset "" — the audit prints them as null/"" (the same unbound shape every
+  # pre-Phase-C refusal has always had), never a plausible value nobody
+  # measured.
   if (( ! contained )); then
-  REAP_TIP=$(git -C "$main" rev-parse --verify "refs/heads/$branch" 2>/dev/null) \
-    || { _reap_refuse branch-missing "refs/heads/$branch does not resolve"; return 1; }
   repo=$(_gh_repo_slug "$main") || { _reap_refuse no-remote "no origin remote for $project"; return 1; }
   rows=$(_gh_pr_list "$repo")   || { _reap_refuse gh-unreadable "$rows"; return 1; }
   row=$(printf '%s' "$rows" | _pr_py pick "$main" "$branch" "$baseShort" "$REAP_TIP")
   case "$row" in
-    '')                   _reap_refuse no-bound-pr "no merged PR binds to $branch"; return 1 ;;
+    '')
+      # BOTH RUNGS HAVE NOW FAILED, and the token names the strongest evidence
+      # that is MISSING rather than the arm that ran — there is only one arm
+      # now. This decides a SENTENCE, never a prover.
+      #
+      # AND "WAS IT EVER PUSHED" IS ASKED OF THE CONFIG, NOT OF THE TRACKING
+      # REF, which is the whole lesson of this block restated one rung lower.
+      # `$up` is the tracking ref, and the tracking ref is exactly what
+      # disappears when GitHub deletes a merged head — so answering from it
+      # would print "was never pushed" about a branch that was pushed and
+      # merged, the precise falsehood this ladder exists to stop, just from a
+      # different line. `branch.<name>.merge` SURVIVES the delete (measured,
+      # git 2.43: after `git push origin --delete`, `@{upstream}` stops
+      # resolving with rc 1 while `git config --get branch.ws/x.merge` still
+      # answers `refs/heads/ws/x`), so it is the honest witness that this
+      # branch once had a home on the remote. `git branch --unset-upstream`
+      # removes it, and that IS a branch with no remote evidence left.
+      if [[ -n "$up" ]] || git -C "$main" config --get "branch.$branch.merge" >/dev/null 2>&1; then
+        _reap_refuse no-bound-pr "no merged PR binds to $branch, and $ancwhy"
+      else
+        _reap_refuse no-upstream "$branch was never pushed (it has no remote-tracking branch and no tracking configuration), no merged PR binds to it, and $ancwhy"
+      fi
+      return 1 ;;
     '!pr-head-not-ours')  _reap_refuse pr-head-not-ours "the PR head commit is not reachable from $branch"; return 1 ;;
     '!'*)                 _reap_refuse "${row#!}" "the bound PR is not merged"; return 1 ;;
   esac
@@ -4874,31 +4956,29 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   # inheriting one from its neighbour.
   [[ "$REAP_MERGE" =~ ^[0-9a-f]{7,40}$ && "$REAP_HEADOID" =~ ^[0-9a-f]{7,40}$ ]] \
     || { _reap_refuse pr-fields-malformed "gh named mergeCommit='$REAP_MERGE' headRefOid='$REAP_HEADOID'"; return 1; }
-
-  # Mergedness is NEVER proven against an unfetched ref. Six repos on this box
-  # have never been fetched; one is 24 days stale.
-  timeout 60 git -C "$main" fetch --quiet origin \
-    || { _reap_refuse fetch-failed "could not fetch origin — nothing is claimed about your commits"; return 1; }
-  REAP_FETCHED=$(date +%s)
   git -C "$main" cat-file -e "${REAP_MERGE}^{commit}" 2>/dev/null \
     || { _reap_refuse merge-commit-missing "$REAP_MERGE is not in the object store after a fetch"; return 1; }
-  # A REFUSAL, not a default. This was the last fingerprint input that answered
-  # a failed read with `""`: measured, with only this read failing the verdict
-  # stayed `reapable` and a token was issued over a field nobody measured — and
-  # because the failure is deterministic, ws-reap recomputes the same `""` and
-  # the `--expect` consent check matches. Same class as the ignored digest
-  # (deviation 6) and the stash count above. `$base` is the registry's, so this
-  # fires for a workspace whose base ref was deleted or renamed under it, which
-  # is a state to reconcile rather than one to delete over.
-  REAP_BASEOID=$(git -C "$main" rev-parse --verify "$base" 2>/dev/null) \
-    || { _reap_refuse base-missing "$base does not resolve in $main"; return 1; }
   if _ws_merge_proof "$main" "$REAP_MERGE" "$REAP_TIP"; then
     REAP_PROOF="$_WS_PROOF"
   else
     _reap_refuse tree-differs "$(git -C "$main" diff --stat "$REAP_MERGE" "$REAP_TIP" -- | head -5; git -C "$main" log --oneline "$REAP_MERGE".."$REAP_TIP" | head -5)"
     return 1
   fi
-  fi   # (( ! contained )) — the contained rung proved its own tip, base and proof
+  fi   # (( ! contained )) — rung 1 proved it, so rung 2 has nothing to add
+
+  # ── C6: the base oid ─────────────────────────────────────────────
+  # A REFUSAL, not a default, and it belongs to BOTH rungs — which is why it
+  # sits here rather than inside either. This was the last fingerprint input
+  # that answered a failed read with `""`: measured, with only this read failing
+  # the verdict stayed `reapable` and a token was issued over a field nobody
+  # measured — and because the failure is deterministic, ws-reap recomputes the
+  # same `""` and the `--expect` consent check matches. Same class as the
+  # ignored digest (deviation 6) and the stash count above. `$base` is the
+  # registry's, so this fires for a workspace whose base ref was deleted or
+  # renamed under it, which is a state to reconcile rather than one to delete
+  # over.
+  REAP_BASEOID=$(git -C "$main" rev-parse --verify "$base" 2>/dev/null) \
+    || { _reap_refuse base-missing "$base does not resolve in $main"; return 1; }
 
   # ── Phase D1: the session ──────────────────────────────────────
   st=$(_ws_status "$id") || { _reap_refuse status-unknown "cannot read the wrapper status file"; return 1; }
