@@ -2,7 +2,7 @@
 // tests its sibling: a fixture HOME, never the live one, and the properties
 // that matter are convergence, non-destruction and per-home isolation.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -251,9 +251,18 @@ describe('the deploy ships the skill, agent-side — and PR I’s token lane is 
     // tree by design (PR I's own note — "shipped only when the operator has
     // minted one"), so a raw filesystem check would fail on exactly the box
     // this project runs on. `git ls-files` is what "committed" means.
-    expect(repo('.gitignore')).toContain('deploy/ccrc-mail.token');
+    // Ask GIT whether it is ignored, not .gitignore whether it contains a
+    // particular string (D-171). This asserted the literal `deploy/ccrc-mail.token`
+    // and so went red when the rule was STRENGTHENED from a `deploy/…` glob —
+    // which matches one directory — to an unanchored name that matches at any
+    // depth. The property is "git will not add this file"; the spelling of the
+    // rule that achieves it is not this test's business.
+    const root = path.resolve(__dirname, '../..');
+    const ignored = (rel: string): boolean =>
+      spawnSync('git', ['-C', root, 'check-ignore', '-q', '--no-index', rel]).status === 0;
+    expect(ignored('deploy/ccrc-mail.token'), 'the mail token is not gitignored').toBe(true);
     const tracked = execFileSync('git', ['ls-files', 'deploy/ccrc-mail.token'],
-      { cwd: path.resolve(__dirname, '../..'), encoding: 'utf8' }).trim();
+      { cwd: root, encoding: 'utf8' }).trim();
     expect(tracked, 'a real token must never be committed to this repo').toBe('');
   });
 });

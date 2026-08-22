@@ -21,13 +21,23 @@ agent/dist/
 # The `!` lines are why the glob is safe: the committed .example placeholders
 # carry no secrets and MUST stay tracked (boot refuses the unedited mail-token
 # placeholder by name, so its absence would be a different failure).
-deploy/ccrc.env*
-deploy/ccrc-agent.env*
-deploy/ccrc-mail.token*
-deploy/exposure.env*
-!deploy/ccrc.env.example
-!deploy/ccrc-agent.env.example
-!deploy/ccrc-mail.token.example
+# UNANCHORED on purpose (D-171). These were `deploy/…` globs, which is where the
+# files actually live — and that is exactly why it was wrong: a pattern with a
+# slash matches ONE directory, so `ccrc.env` at the repo root, `server/ccrc.env`,
+# or a copy inside any subdirectory was publishable while looking covered. A
+# pattern with no slash matches the NAME at any depth, which is the property
+# wanted: these names are never safe, wherever they appear.
+ccrc.env*
+ccrc-agent.env*
+agent.env*
+ccrc-mail.token*
+exposure.env*
+.env*
+!*.example
+
+# Local harness configuration. Was protected only by .git/info/exclude, which is
+# per-clone and travels with nobody — so the protection did not survive a fork.
+.claude/
 
 # migration working artifacts
 .extraction/
