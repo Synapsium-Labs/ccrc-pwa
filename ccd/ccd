@@ -2358,9 +2358,39 @@ cmd_ws_rename() {   # ccd ws-rename --session <id> --branch <name> — rename a
   # remedy: the registry only self-heals through `ws-rename`'s own
   # `_reg_set … branch`, so a human who renamed by hand runs `ccd ws-rename`
   # once by hand to re-corroborate the two.
+  # ── RECONCILE — the one call that makes the drift refusal's own remedy true ──
+  # `ws-reap`'s note, `pr-state`'s `branch-drift` answer and this verb's own
+  # refusal all tell the operator to "run `ccd ws-rename` once by hand to
+  # re-corroborate the two". Measured: before this rung, EVERY spelling of that
+  # command was refused — `--branch <git's name>`, `--branch <the registry's>`
+  # and `--branch <anything else>` all hit the drift refusal below, which runs
+  # before `$new` has been used for anything but a validity check, so the
+  # registry could not be made to agree with git through any invocation of the
+  # verb that names it. A remedy nobody can execute is worse than no remedy: it
+  # reads as a step the operator got wrong.
+  #
+  # THE ONE INVOCATION THIS ACCEPTS is `--branch <the branch git already has>`,
+  # which is a RECORD CORRECTION and not a rename: no ref moves, `git` is not
+  # asked to do anything, and the value written is the one `_ws_wt_branch` just
+  # read out of `$main`'s own worktree record — the same authority `ws-rm` and
+  # `ws-reap` delete on. The pushed-branch guard below is deliberately NOT
+  # consulted for it: that guard exists because renaming a pushed branch strands
+  # its name on the remote, and nothing here renames anything.
+  #
+  # It answers in this verb's success shape rather than a refusal, because it
+  # SUCCEEDED at the thing it was asked to do — with `old` and `new` equal,
+  # which is exactly what "the two records now agree" looks like on the wire.
+  # `unchanged` is the neighbouring refusal and is NOT the same state: that one
+  # means the registry already said this, and this one means it did not.
+  if [[ "$old" != "$reg_branch" && "$new" == "$old" ]]; then
+    _reg_set "$id" branch "$old"
+    printf '{"renamed":%s,"old":%s,"new":%s,"reconciled":true}\n' \
+      "$(_json_str "$id")" "$(_json_str "$reg_branch")" "$(_json_str "$old")"
+    return 0
+  fi
   if [[ "$old" != "$reg_branch" ]]; then
     printf '{"refused":"registry-branch-drift","detail":%s,"paths":[]}\n' \
-      "$(_json_str "the registry says $reg_branch, git's worktree record for $workdir says $old — refusing to rename on a stale registry entry")"
+      "$(_json_str "the registry says $reg_branch, git's worktree record for $workdir says $old — refusing to rename on a stale registry entry; to make the two agree, run this verb again with --branch $old, which corrects the registry and moves no ref")"
     return 0
   fi
   if [[ "$old" == "$new" ]]; then

@@ -1709,6 +1709,50 @@ describe('containment comes from the evidence, not from @{upstream}', () => {
     expect(refusal(wt).verdict).toBe('not-merged');
   }, 30000);
 
+  it('names the branch the RESUME will remove, not the one it will keep', () => {
+    // The drift rung lives inside `if [[ -d "$workdir" ]]`, so once the
+    // worktree is gone — the ordinary state after a reap was interrupted at
+    // (f) — there is no git record left to ask and `$branch` stayed the
+    // REGISTRY's. On a drifted workspace that is the one branch the cleanup is
+    // NOT about: the sheet named `ws/quiet-basin` while the journal, the tail
+    // and step (g) were all about `feat/x`. Measured before the fix, end to
+    // end, with a real reap killed after (f).
+    const { main, wt } = squashMovedBase();
+    h.sh(`cd "${wt}" && git checkout -q -b feat/x origin/main`);
+    // The journal a killed run leaves behind, written by ccd itself at (b).
+    h.sh('_reg_set demo-quiet-basin reaping branch');
+    fs.mkdirSync(path.join(h.home, '.cc-sessions', '.reaped'), { recursive: true });
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', '.reaped', 'demo-quiet-basin.json'),
+      JSON.stringify({ id: 'demo-quiet-basin', project: 'demo', branch: 'feat/x',
+        registryBranch: 'ws/quiet-basin',
+        tip: h.git(main, 'rev-parse', 'refs/heads/feat/x') }));
+    h.git(main, 'worktree', 'remove', wt);
+    const a = audit();
+    expect(a.verdict).toBe('reap-interrupted');
+    expect(a.branch).toBe('feat/x');
+    expect(a.registryBranch).toBe('ws/quiet-basin');
+    expect(a.drift).toContain('feat/x');
+  }, 30000);
+
+  it('does not call a branch pushed WITHOUT -u "never pushed"', () => {
+    // The third witness. `@{upstream}` needs config AND a tracking ref;
+    // `branch.<name>.merge` is absent for `git push origin ws/x` with no `-u` —
+    // a push that leaves the branch on origin and configures nothing, which
+    // `cmd_ws_rename` already asks origin directly about for the same reason.
+    // Without the tracking-REF witness the refusal reads "was never pushed"
+    // about commits that are demonstrably on origin: the same false sentence
+    // the whole ladder was fixed for, one rung further down.
+    const { wt, main } = squashMovedBase();
+    h.git(main, 'branch', '--unset-upstream', 'ws/quiet-basin');
+    h.ghRows([]);
+    expect(upstreamResolves(main, 'ws/quiet-basin')).toBe(false);
+    expect(h.git(main, 'rev-parse', '--verify', 'refs/remotes/origin/ws/quiet-basin'))
+      .toMatch(/^[0-9a-f]{40}$/);
+    const r = refusal(wt);
+    expect(r.verdict).toBe('no-bound-pr');
+    expect(r.detail).not.toMatch(/never pushed/);
+  }, 30000);
+
   it('refuses when the head is deleted and NO merged PR binds — a missing upstream proves nothing either way', () => {
     // The other half of the same rule. Losing the upstream must not authorise
     // anything on its own: with no PR to bind and no ancestry, there is no

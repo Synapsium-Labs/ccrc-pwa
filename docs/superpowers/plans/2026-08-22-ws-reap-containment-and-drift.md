@@ -232,9 +232,19 @@ behaviour names the test that pins it.
   branch that was consented to (git's) plus `registryBranch` beside it, and the resume reads it from
   there — the same pattern `tombtip` already uses. Absence-permits: a tombstone written by an older
   ccd carries the registry name, which under the old rule was equal to git's by construction.
-- **D-177 — `headMatchesRegistry` can now be `false` on a `reapable` verdict.** It was previously
-  false only on a refusal, so the PWA never rendered it. The audit gains `worktreeBranch` (additive,
-  `optStr`) and the sheet grows a visible drift note naming both branches and which one is removed.
+- **D-177 — the audit's `branch` is REDEFINED, and `headMatchesRegistry` can now be `false` on a
+  `reapable` verdict.** The plan first specified an additive `worktreeBranch` beside an unchanged
+  `branch`; what shipped is the opposite shape, deliberately. `WsAudit.branch` — required, and the
+  only field any client renders — now means *the branch a reap would remove* (`$evbranch`: git's
+  worktree record when the eval reached it, the registry's name on the Phase-A refusals where
+  `REAP_BRANCH` is empty), and the registry's name moves beside it into the new optional
+  `registryBranch`, with ccd's own sentence in `drift`. The reason is the mixed-version window: an
+  older PWA against a newer ccd renders `branch` and knows nothing of any new field, so leaving
+  `branch` as the registry's name would have shown that build the name a reap would KEEP while it
+  deleted another. Redefining it makes the *old* client correct and the new one merely better
+  informed. `headMatchesRegistry` was previously false only on a refusal, so nothing rendered it; it
+  is now false for two different reasons (a measured disagreement, or a Phase-A refusal that never
+  read git's record), which is why the sheet keys its note on `drift` and not on that flag.
 - **D-178 — the PR poller stops asserting a phase it did not measure.** The report's diagnosis is
   right (`.prphase` said `no-commits` about a worktree holding 27 commits on another branch, because
   the poller reads the registry's `.branch`) and the obvious fix — switch the source to git's record
@@ -319,8 +329,12 @@ behaviour names the test that pins it.
 
 ## Task 5 — the wire and the sheet
 
-- [x] `cmd_ws_audit` emits `worktreeBranch` (git's) beside `branch` (the registry's); `parseWsAudit`
-      reads it with `optStr`; `WsAudit` gains the optional field.
+- [x] `cmd_ws_audit`'s `branch` becomes the branch a reap would remove, with the registry's name
+      beside it in a new `registryBranch` and ccd's own sentence in `drift`; `parseWsAudit` reads
+      both with `optStr`; `WsAudit` gains the two optional fields (D-177 records why this is not the
+      `worktreeBranch` shape this plan first specified). `WsTombstone` and `ReapResult` gain
+      `registryBranch` too — both are written by ccd, and `parseReap` launders its object through a
+      cast, so the declaration is the only thing that fixes the meaning.
 - [x] `ReapSheet` renders the drift note whenever `headMatchesRegistry === false`, naming both
       branches and which one is removed. The operator must see it before the tap, not after.
 - [x] Correct `SENTENCES['registry-branch-drift']` to describe the verb that still emits it.
