@@ -320,7 +320,7 @@ describe('none of the four verbs abort when the journal cannot be written (D7)',
       }
       expect.soft(r.status, `stderr: ${r.stderr}`).toBe(0);
       let out: Record<string, unknown> = {};
-      expect.soft(() => { out = JSON.parse(r.stdout); }, `stdout: ${r.stdout}`).not.toThrow();
+      expect.soft(() => { out = JSON.parse(String(r.stdout)); }, `stdout: ${r.stdout}`).not.toThrow();
       expect.soft(out['reaped'], `stdout: ${r.stdout}`).toBe('demo-quiet-basin');
       expect.soft(fs.existsSync(wt), 'the worktree was really removed').toBe(false);
       expect.soft(hr.git(main, 'branch', '--list', 'ws/quiet-basin'),
@@ -356,7 +356,7 @@ describe('none of the four verbs abort when the journal cannot be written (D7)',
       }
       expect.soft(r.status, `stderr: ${r.stderr}`).toBe(0);
       let out: Record<string, unknown> = {};
-      expect.soft(() => { out = JSON.parse(r.stdout); }, `stdout: ${r.stdout}`).not.toThrow();
+      expect.soft(() => { out = JSON.parse(String(r.stdout)); }, `stdout: ${r.stdout}`).not.toThrow();
       expect.soft(out['reaped'], `stdout: ${r.stdout}`).toBe('demo-quiet-basin');
       expect.soft(fs.existsSync(wt), 'the worktree was really removed').toBe(false);
       expect.soft(hr.git(main, 'branch', '--list', 'ws/quiet-basin'),
