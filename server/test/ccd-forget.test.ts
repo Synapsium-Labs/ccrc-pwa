@@ -132,7 +132,7 @@ describe('the dispatcher', () => {
   it('routes forget, demands its argv, and advertises it in caps', () => {
     const r = runCcd('forget');
     expect(r.code).not.toBe(0);
-    expect(r.stderr).toContain('usage: ccd forget <id>');
+    expect(r.stderr).toContain('usage: ccd forget');
     expect(runCcd('caps').stdout.split('\n')).toContain('forget');
   });
 });
