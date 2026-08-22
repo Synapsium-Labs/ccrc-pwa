@@ -533,7 +533,7 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # ANY-FIELD check now; see the note there.
   # ── THE BACKSTOP (D3) ────────────────────────────────────────────────────
   # HERE, AND NOT ONE LINE LOWER. Every destruction path on this box terminates
-  # in this function — ws-rm (ccd:3014), ws-reap (ccd:7715), ws-gc's dead-reg
+  # in this function — ws-rm (ccd:3028), ws-reap (ccd:7715), ws-gc's dead-reg
   # arm (ccd:8209), forget (ccd:10722) — and a destructive verb added LATER that
   # forgets to journal itself still leaves a record. A silent destruction has to
   # defeat two independent emit sites.
@@ -1480,7 +1480,7 @@ _lc_done()   { local a="${1-}" i="${2-}" t="${3-}"; shift 3 2>/dev/null || :
 _lc_fail() {   # act id tx token detail [k v]... — an act that STARTED and broke
   # Distinct from `_lc_refuse` by WHEN, not by severity: a refusal happens
   # before anything irreversible, a failure after. `cmd_ws_rm`'s
-  # `git worktree remove` die at ccd:2978 is a FAILURE — the session
+  # `git worktree remove` die at ccd:2992 is a FAILURE — the session
   # is already stopped when it fires — and calling it a refusal would say
   # nothing was touched, which is false.
   local a="${1-}" i="${2-}" t="${3-}" tok="${4-}" msg="${5-}"; shift 5 2>/dev/null || :
@@ -2838,16 +2838,16 @@ _ws_branch_elsewhere() {
 
 cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destroy.
   # FLAGS ARE STRIPPED BEFORE THE ARITY RULE, and that order is the correctness
-  # argument — `cmd_stop`'s own header (ccd:10717-10721) records what the other
+  # argument — `cmd_stop`'s own header (ccd:10731-10735) records what the other
   # order costs: with the flag left in argv the verb aims at a session that does
   # not exist while the real one keeps running.
   #
-  # A VALIDATED FLAG, NEVER A POSITIONAL. ccd:9881-9885 is the paid lesson: an
+  # A VALIDATED FLAG, NEVER A POSITIONAL. ccd:9895-9899 is the paid lesson: an
   # extra argv word on a prefix-whitelisted verb reached a bash arithmetic
   # context where a command substitution EXECUTES. This value reaches no `(( ))`,
   # no `$(( ))`, no `[[ x -ge y ]]` and no array subscript — it is written
   # verbatim into one journal field and parsed nowhere, `cmd_ws_hold`'s own
-  # contract (ccd:3471-3472) applied here.
+  # contract (ccd:3485-3486) applied here.
   #
   # AND IT CLOSES A HOLE ON THE WAY PAST: this verb had NO arity guard at all,
   # so `ccd ws-rm x y z` silently ignored `y z`. The residue is checked below.
@@ -2856,7 +2856,7 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
     case "$1" in
       # An explicit arity check, not a bare `shift 2`: ccd runs under
       # `set -uo pipefail` with NO `-e`, so a shift past the end of argv fails,
-      # shifts nothing, and this loop never terminates (ccd:10735-10737).
+      # shifts nothing, and this loop never terminates (ccd:10749-10751).
       #
       # A BARE `die` HERE, DELIBERATELY, and `ccd-refusal-scan.test.ts` names
       # this line in its SANCTIONED set: no `$id` exists yet, and a refusal
@@ -2864,14 +2864,28 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
       --reason)   [[ $# -ge 2 ]] || die "usage: ccd ws-rm [--reason <text>] <id>"
                   reason="$2"; shift 2 ;;
       --reason=*) reason="${1#--reason=}"; shift ;;
+      # F2 FIX (review round 1): CLOSED FLAG SET, NEVER SWALLOWED. Before this,
+      # an unrecognised `--foo` fell into the catch-all below, became a
+      # positional, and was refused only as an ARITY side-effect (or, alone,
+      # misrecorded as `no-such-session: --foo`) — a record that names the
+      # wrong defect. A `--`-prefixed token that is not one of the flags above
+      # refuses BY NAME. Ids never start with `--` (single-dash ids still fall
+      # through to the catch-all below, unaffected).
+      --*)        _lc_refuse destroy "$1" bad-args \
+                    "unrecognised flag: $1" verb ws-rm dec.reason "$reason" ;;
       *)          args+=("$1"); shift ;;
     esac
   done
   set -- "${args[@]}"    # bash >= 4.4 (the fleet host runs 5.2): an empty array
                          # here is not an unbound-variable error under `set -u`.
-  local id="${1:?usage: ccd ws-rm [--reason <text>] <id>}"
-  [[ $# -eq 1 ]] || _lc_refuse destroy "$id" bad-args \
-    "usage: ccd ws-rm [--reason <text>] <id>" dec.reason "$reason"
+  # F1 FIX (review round 1): the arity guard now fires BEFORE `id` is bound,
+  # so it can never be bypassed by an unbound-parameter death. `${1-}` never
+  # exits under `set -u` (unlike the `${1:?}` this replaces) — zero args and
+  # too-many args are now the SAME refused, journaled, `die`-through-`_lc_refuse`
+  # path, instead of zero args killing the process before any `_lc_*` runs.
+  [[ $# -eq 1 ]] || _lc_refuse destroy "${1-}" bad-args \
+    "usage: ccd ws-rm [--reason <text>] <id>" verb ws-rm dec.reason "$reason"
+  local id="${1-}"
   # REFUSED, NOT TRUNCATED, and measured in BYTES. A 900-byte note silently cut
   # to 512 reads as the operator's own words on the one record that outlives the
   # workspace; `_lc_dec_ok` counts bytes under `LC_ALL=C` so a 200-emoji reason
@@ -2968,7 +2982,7 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
   fi
 
   # ── R4-1 · THE ATTIC PIN, BEFORE ANYTHING IS TOUCHED ────────────────────
-  # `git worktree remove` at ccd:2975 deletes both $workdir and
+  # `git worktree remove` at ccd:2989 deletes both $workdir and
   # $main/.git/worktrees/<slug>/, and the latter holds the HEAD reflog.
   # `_ws_attic_pin`'s reflog read is guarded by `[[ -d "$workdir" ]]`, so a pin
   # taken after that call sees nothing and contributes only a pre-resolved tip.
@@ -2976,9 +2990,9 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
   # the near side of EVERY irreversible act, so the intent/done pair below
   # brackets a workspace whose commits are already referenced.
   #
-  # UNCONDITIONAL: it runs even when `git branch -d` later refuses at ccd:2992,
+  # UNCONDITIONAL: it runs even when `git branch -d` later refuses at ccd:3006,
   # because that is the case where the commits matter most, and even when
-  # `registered != 0` so ccd:2975 never runs at all.
+  # `registered != 0` so ccd:2989 never runs at all.
   #
   # `_ws_attic_pin` contains no `die`, which is what makes this `$( )` capture
   # safe under `ccd-die-containment.test.ts`. Nothing added here may die inside
@@ -3077,7 +3091,7 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
   # `purge` line and this `destroy`/`done` — and that redundancy is the design:
   # a silent destruction has to defeat two independent emit sites.
   #
-  # THREE STATES, THREE VALUES. `git branch -d` at ccd:2992 refuses an unmerged
+  # THREE STATES, THREE VALUES. `git branch -d` at ccd:3006 refuses an unmerged
   # branch and that refusal is wanted; an empty `bd` is OMITTED by the encoder,
   # which is how "there was no branch" stays distinct from "the branch is gone".
   # A two-valued expression answers `true` for a detached HEAD — a fabricated
@@ -4149,13 +4163,13 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   local workdir; workdir=$(_reg_get "$id" workdir)
   [[ -d "$workdir" ]] || die "worktree is gone: $workdir — see: ccd ws-attic --session $id"
   # ── R4-2 · SUPERSEDE, DO NOT ERASE ──────────────────────────────────────
-  # INLINE AND INSIDE THE FLOCK REGION (opened ccd:4046, closed ccd:4127), so
+  # INLINE AND INSIDE THE FLOCK REGION (opened ccd:4060, closed ccd:4141), so
   # the values recorded are the ones being erased: a concurrent `ws-reap` holds
   # the same `$REG/.reap-<id>.lock` and can change `.archived` underneath an
   # unserialised read.
   #
   # `_lc_done` returns 0 on every path, and that is not a nicety here:
-  # ccd:4096-4099 records that any new non-zero `return` between the
+  # ccd:4110-4113 records that any new non-zero `return` between the
   # acquisition and `exec {lfd}>&-` leaks this lock in the SOURCING shell for
   # ever, and ccd is sourced by itself and by its tests.
   #
@@ -4165,7 +4179,7 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   # deletes anyway.
   #
   # DISCLOSED RESIDUAL: the manifest is preserved as a BYTE TOTAL only. Read
-  # fresh with `stat` because nothing in ccd reads that field back (ccd:3899
+  # fresh with `stat` because nothing in ccd reads that field back (ccd:3913
   # says so verbatim), and left ABSENT rather than 0 when it cannot be measured
   # — a fabricated 0 would argue that nothing was lost.
   _lc_done restore "$id" "" verb ws-restore \
@@ -4222,9 +4236,9 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   # is real either way, which is what made the old placement unconditional too.
   exec {lfd}>&-
   # THE UNDO LANDED AND THE SESSION DID NOT COME BACK — `_lc_fail`, never
-  # `_lc_refuse`: the archive stamps are already gone at ccd:4082, so calling
+  # `_lc_refuse`: the archive stamps are already gone at ccd:4096, so calling
   # this a refusal would say nothing was touched, which is false. AFTER
-  # ccd:4127's close, so it sits on no path that still holds the descriptor.
+  # ccd:4141's close, so it sits on no path that still holds the descriptor.
   [[ "$rc" -eq 0 ]] || { _lc_fail restore "$id" "" spawn-failed \
       "the archive stamps were removed but $id did not come back up (spawn rc $rc)"
     return "$rc"; }
@@ -7771,7 +7785,7 @@ _ws_reap_locked() {   # token id — everything the reap lock serialises
     [[ "$REAP_VERDICT" == sensitive-ignored ]] && paths=$(_reap_paths_json)
     # ONE EMIT FOR ALL 35 `_reap_refuse` TOKENS, at the single point where
     # `REAP_VERDICT` becomes JSON. `_ws_reap_eval` never prints — it sets
-    # globals through `_reap_refuse` (ccd:5285) — so this is the only place the
+    # globals through `_reap_refuse` (ccd:5299) — so this is the only place the
     # verdict exists as a value, and journaling the 35 call sites individually
     # would be 35 chances to miss one.
     _lc_emit reap refused "$id" "" verb ws-reap refusal "$REAP_VERDICT" detail "$REAP_DETAIL"
@@ -11356,13 +11370,22 @@ cmd_forget() {   # <id> — remove a DEAD non-workspace session's registry entry
       --reason)   [[ $# -ge 2 ]] || die "usage: ccd forget [--reason <text>] <id>"
                   reason="$2"; shift 2 ;;
       --reason=*) reason="${1#--reason=}"; shift ;;
+      # F2 FIX (review round 1): same shape as cmd_ws_rm's copy above — an
+      # unrecognised `--`-prefixed token refuses BY NAME instead of falling
+      # into the positional catch-all and being misrecorded as an arity
+      # side-effect or a `no-such-session` for the flag's own text.
+      --*)        _lc_refuse forget "$1" bad-args \
+                    "unrecognised flag: $1" verb forget dec.reason "$reason" ;;
       *)          args+=("$1"); shift ;;
     esac
   done
   set -- "${args[@]}"
-  local id="${1:?usage: ccd forget [--reason <text>] <id>}"
-  [[ $# -eq 1 ]] || _lc_refuse forget "$id" bad-args \
-    "usage: ccd forget [--reason <text>] <id>" dec.reason "$reason"
+  # F1 FIX (review round 1): same shape as cmd_ws_rm's copy above — the arity
+  # guard fires before `id` is bound, so zero args refuses through the journal
+  # instead of dying on an unbound parameter before any `_lc_*` runs.
+  [[ $# -eq 1 ]] || _lc_refuse forget "${1-}" bad-args \
+    "usage: ccd forget [--reason <text>] <id>" verb forget dec.reason "$reason"
+  local id="${1-}"
   _lc_dec_ok "$reason" || _lc_refuse forget "$id" bad-args \
     "--reason is longer than $_LC_DEC_MAX bytes — nothing was removed"
   # The id is globbed against $REG by _reg_purge, so its shape is checked
