@@ -1480,7 +1480,7 @@ _lc_done()   { local a="${1-}" i="${2-}" t="${3-}"; shift 3 2>/dev/null || :
 _lc_fail() {   # act id tx token detail [k v]... — an act that STARTED and broke
   # Distinct from `_lc_refuse` by WHEN, not by severity: a refusal happens
   # before anything irreversible, a failure after. `cmd_ws_rm`'s
-  # `git worktree remove` die at ccd:2932 is a FAILURE — the session
+  # `git worktree remove` die at ccd:2936 is a FAILURE — the session
   # is already stopped when it fires — and calling it a refusal would say
   # nothing was touched, which is false.
   local a="${1-}" i="${2-}" t="${3-}" tok="${4-}" msg="${5-}"; shift 5 2>/dev/null || :
@@ -2838,12 +2838,14 @@ _ws_branch_elsewhere() {
 
 cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destroy.
   local id="${1:?usage: ccd ws-rm <id>}"
-  [[ -f "$REG/$id.uuid" ]] || die "no such session: $id"
+  [[ -f "$REG/$id.uuid" ]] || _lc_refuse destroy "$id" no-such-session "no such session: $id"
   local ws project workdir
   ws=$(_reg_get "$id" workspace); project=$(_reg_get "$id" project); workdir=$(_reg_get "$id" workdir)
   # The absence of a workspace field is what distinguishes a main checkout.
-  [[ -n "$ws" ]] || die "$id is not a workspace — refusing to remove a main checkout"
-  [[ -n "$project" && -n "$workdir" ]] || die "incomplete registry for '$id'"
+  [[ -n "$ws" ]] || _lc_refuse destroy "$id" not-a-workspace \
+    "$id is not a workspace — refusing to remove a main checkout"
+  [[ -n "$project" && -n "$workdir" ]] || _lc_refuse destroy "$id" incomplete-registry \
+    "incomplete registry for '$id'"
 
   # A hold is a declaration that a program is mid-flight here. Destroying the
   # workspace should take two deliberate acts — release, then remove — never
@@ -2853,7 +2855,8 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
   # it dies too; `cmd_ws_reap`'s copy of this rung answers in JSON on stdout
   # instead, for the reason recorded there (the PWA reads tokens, not stderr).
   if [[ -e "$REG/$id.hold" ]]; then
-    die "held: $(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>') — release first: ccd ws-release --session $id"
+    _lc_refuse destroy "$id" held \
+      "held: $(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>') — release first: ccd ws-release --session $id"
   fi
   local main="$PROJECTS_ROOT/$project"
 
@@ -2914,7 +2917,8 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
     derr=$(cat "$derrf" 2>/dev/null); rm -f "$derrf"
     { (( drc == 0 )) && [[ -z "$derr" ]]; } \
       || die "could not read $workdir${derr:+ ($derr)} — nothing was touched"
-    [[ -z "$dirty" ]] || die "worktree not removed (uncommitted changes?) — nothing was touched: $workdir"
+    [[ -z "$dirty" ]] || _lc_refuse destroy "$id" dirty-tree \
+      "worktree not removed (uncommitted changes?) — nothing was touched: $workdir"
     local nested
     nested=$(_ws_nested_checkouts "$workdir") \
       || die "could not scan $workdir for nested checkouts${_WS_NESTED_WHY:+ ($_WS_NESTED_WHY)} — nothing was touched"
@@ -2923,7 +2927,7 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
   fi
 
   # ── R4-1 · THE ATTIC PIN, BEFORE ANYTHING IS TOUCHED ────────────────────
-  # `git worktree remove` at ccd:2929 deletes both $workdir and
+  # `git worktree remove` at ccd:2933 deletes both $workdir and
   # $main/.git/worktrees/<slug>/, and the latter holds the HEAD reflog.
   # `_ws_attic_pin`'s reflog read is guarded by `[[ -d "$workdir" ]]`, so a pin
   # taken after that call sees nothing and contributes only a pre-resolved tip.
@@ -2931,9 +2935,9 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
   # the near side of EVERY irreversible act, so the intent/done pair below
   # brackets a workspace whose commits are already referenced.
   #
-  # UNCONDITIONAL: it runs even when `git branch -d` later refuses at ccd:2946,
+  # UNCONDITIONAL: it runs even when `git branch -d` later refuses at ccd:2950,
   # because that is the case where the commits matter most, and even when
-  # `registered != 0` so ccd:2929 never runs at all.
+  # `registered != 0` so ccd:2933 never runs at all.
   #
   # `_ws_attic_pin` contains no `die`, which is what makes this `$( )` capture
   # safe under `ccd-die-containment.test.ts`. Nothing added here may die inside
@@ -3031,7 +3035,7 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
   # `purge` line and this `destroy`/`done` — and that redundancy is the design:
   # a silent destruction has to defeat two independent emit sites.
   #
-  # THREE STATES, THREE VALUES. `git branch -d` at ccd:2946 refuses an unmerged
+  # THREE STATES, THREE VALUES. `git branch -d` at ccd:2950 refuses an unmerged
   # branch and that refusal is wanted; an empty `bd` is OMITTED by the encoder,
   # which is how "there was no branch" stays distinct from "the branch is gone".
   # A two-valued expression answers `true` for a detached HEAD — a fabricated
@@ -4103,13 +4107,13 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   local workdir; workdir=$(_reg_get "$id" workdir)
   [[ -d "$workdir" ]] || die "worktree is gone: $workdir — see: ccd ws-attic --session $id"
   # ── R4-2 · SUPERSEDE, DO NOT ERASE ──────────────────────────────────────
-  # INLINE AND INSIDE THE FLOCK REGION (opened ccd:4000, closed ccd:4081), so
+  # INLINE AND INSIDE THE FLOCK REGION (opened ccd:4004, closed ccd:4085), so
   # the values recorded are the ones being erased: a concurrent `ws-reap` holds
   # the same `$REG/.reap-<id>.lock` and can change `.archived` underneath an
   # unserialised read.
   #
   # `_lc_done` returns 0 on every path, and that is not a nicety here:
-  # ccd:4050-4053 records that any new non-zero `return` between the
+  # ccd:4054-4057 records that any new non-zero `return` between the
   # acquisition and `exec {lfd}>&-` leaks this lock in the SOURCING shell for
   # ever, and ccd is sourced by itself and by its tests.
   #
@@ -4119,7 +4123,7 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   # deletes anyway.
   #
   # DISCLOSED RESIDUAL: the manifest is preserved as a BYTE TOTAL only. Read
-  # fresh with `stat` because nothing in ccd reads that field back (ccd:3853
+  # fresh with `stat` because nothing in ccd reads that field back (ccd:3857
   # says so verbatim), and left ABSENT rather than 0 when it cannot be measured
   # — a fabricated 0 would argue that nothing was lost.
   _lc_done restore "$id" "" verb ws-restore \
@@ -4176,9 +4180,9 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   # is real either way, which is what made the old placement unconditional too.
   exec {lfd}>&-
   # THE UNDO LANDED AND THE SESSION DID NOT COME BACK — `_lc_fail`, never
-  # `_lc_refuse`: the archive stamps are already gone at ccd:4036, so calling
+  # `_lc_refuse`: the archive stamps are already gone at ccd:4040, so calling
   # this a refusal would say nothing was touched, which is false. AFTER
-  # ccd:4081's close, so it sits on no path that still holds the descriptor.
+  # ccd:4085's close, so it sits on no path that still holds the descriptor.
   [[ "$rc" -eq 0 ]] || { _lc_fail restore "$id" "" spawn-failed \
       "the archive stamps were removed but $id did not come back up (spawn rc $rc)"
     return "$rc"; }
@@ -7371,6 +7375,18 @@ cmd_ws_reap() {   # ccd ws-reap --expect <token> --session <id>
     # FUNCTION returns`): that one is on the path where the shell goes on to do
     # other things. This one stays so that "every path gives the descriptor
     # back" is a property of the function rather than of its callers.
+    #
+    # THE MEASURED HOLE, CLOSED. Twelve `$REG/.reap-<id>.lock` files exist on
+    # the live box and one holds a lock with no tombstone beside it: a reap was
+    # attempted, refused, and recorded nowhere at all.
+    #
+    # `_lc_emit` directly, NOT `_lc_refuse`: this path answers JSON on stdout
+    # at exit 0 and must keep doing exactly that (the PWA reads tokens, not
+    # stderr), whereas `_lc_refuse` dies. The token is an ARGUMENT, so it
+    # contributes nothing to `wsaudit.test.ts`'s scan; the literal one line
+    # below still does, which is why that test stays green with no edit.
+    _lc_emit reap refused "$id" "" verb ws-reap refusal in-progress \
+      detail "another ccd process is already reaping $id and still holds the lock"
     exec {lfd}>&-
     printf '{"refused":"in-progress","detail":%s,"paths":[]}\n' \
       "$(_json_str "another ccd process is already reaping $id and still holds the lock")"
@@ -7711,6 +7727,12 @@ _ws_reap_locked() {   # token id — everything the reap lock serialises
   if ! _ws_reap_eval "$id"; then
     local paths="[]"
     [[ "$REAP_VERDICT" == sensitive-ignored ]] && paths=$(_reap_paths_json)
+    # ONE EMIT FOR ALL 35 `_reap_refuse` TOKENS, at the single point where
+    # `REAP_VERDICT` becomes JSON. `_ws_reap_eval` never prints — it sets
+    # globals through `_reap_refuse` (ccd:5243) — so this is the only place the
+    # verdict exists as a value, and journaling the 35 call sites individually
+    # would be 35 chances to miss one.
+    _lc_emit reap refused "$id" "" verb ws-reap refusal "$REAP_VERDICT" detail "$REAP_DETAIL"
     printf '{"refused":%s,"detail":%s,"paths":%s}\n' \
       "$(_json_str "$REAP_VERDICT")" "$(_json_str "$REAP_DETAIL")" "$paths"
     return 0
@@ -11281,18 +11303,20 @@ cmd_forget() {   # <id> — remove a DEAD non-workspace session's registry entry
   # can be re-created any time by starting the session again; what cannot be
   # re-created is kept.
   local id="${1:?usage: ccd forget <id>}"
-  [[ $# -eq 1 ]] || die "usage: ccd forget <id>"
+  [[ $# -eq 1 ]] || _lc_refuse forget "$id" bad-args "usage: ccd forget <id>"
   # The id is globbed against $REG by _reg_purge, so its shape is checked
   # here the same way cmd_ws_hold checks its own.
-  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
-  [[ -f "$REG/$id.uuid" ]] || die "no such session: $id"
+  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || _lc_refuse forget "$id" bad-session-id "bad session id"
+  [[ -f "$REG/$id.uuid" ]] || _lc_refuse forget "$id" no-such-session "no such session: $id"
   local ws; ws=$(_reg_get "$id" workspace)
   [[ -z "$ws" ]] \
-    || die "$id is a workspace — its removal is audited and confirmed: use the workspace sheet (ws-audit/ws-reap), or ccd ws-rm"
+    || _lc_refuse forget "$id" is-a-workspace \
+         "$id is a workspace — its removal is audited and confirmed: use the workspace sheet (ws-audit/ws-reap), or ccd ws-rm"
   # A hold is a program's declaration that it is mid-flight here. Same rung,
   # same polarity as ws-rm: `-e` not `-f`, present-but-unreadable refuses.
   if [[ -e "$REG/$id.hold" ]]; then
-    die "held: $(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>') — release first: ccd ws-release --session $id"
+    _lc_refuse forget "$id" held \
+      "held: $(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>') — release first: ccd ws-release --session $id"
   fi
   # Deadness is a precondition, not an effect: forget is for a row whose
   # session is already gone. Stopping a live one is `ccd stop`'s job, and
@@ -11303,8 +11327,8 @@ cmd_forget() {   # <id> — remove a DEAD non-workspace session's registry entry
   # above warns about, by a route it did not consider. Same polarity as the
   # hold check: what cannot be read refuses (D-B8-12).
   case "$(_session_verdict "$id")" in
-    live)    die "$id is still running — stop it first: ccd stop $id" ;;
-    unknown) die "$id: cannot tell whether it is still running — the tmux server did not answer. Nothing was removed. Check with: tmux ls" ;;
+    live)    _lc_refuse forget "$id" session-live "$id is still running — stop it first: ccd stop $id" ;;
+    unknown) _lc_refuse forget "$id" session-verdict-unknown "$id: cannot tell whether it is still running — the tmux server did not answer. Nothing was removed. Check with: tmux ls" ;;
   esac
   # The unit outlives the tmux session: enabled + dead is exactly the state
   # systemd exists to reverse, and a purge that left it enabled would race a

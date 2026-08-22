@@ -641,7 +641,14 @@ describe('ws-rm', () => {
     // the tmux session and disabling the unit first leaves the uncommitted
     // files intact but the session dead and out of supervision — the worst of
     // both: the user loses the session AND still has to clean up by hand.
-    expect(calls()).toEqual([]);
+    //
+    // Task 24: the dirty-tree rung now goes through `_lc_refuse`, which
+    // records the refusal in the journal — and that emit's `_lc_obs` probes
+    // tmux for the pane it ran in (the same probe the success-path test above
+    // documents), so ONE read-only `tmux list-panes` call is expected here.
+    // Nothing is torn down: neither `_ws_unsupervise` nor `tmux kill-session`
+    // appears, which is what "nothing was touched" actually promises.
+    expect(calls()).toEqual(['tmux list-panes -a -F #{session_name} #{pane_pid}']);
   });
 
   it('refuses an untracked-only worktree — porcelain counts untracked files', () => {
@@ -652,7 +659,9 @@ describe('ws-rm', () => {
     fs.writeFileSync(path.join(wt, 'notes.md'), 'draft\n');
     expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`)).toThrow();
     expect(fs.existsSync(path.join(wt, 'notes.md'))).toBe(true);
-    expect(calls()).toEqual([]);
+    // Same as the dirty-tree case above: `_lc_refuse`'s journal emit probes
+    // tmux for pane context; nothing else runs.
+    expect(calls()).toEqual(['tmux list-panes -a -F #{session_name} #{pane_pid}']);
   });
 
   it('refuses an unknown id', () => {
