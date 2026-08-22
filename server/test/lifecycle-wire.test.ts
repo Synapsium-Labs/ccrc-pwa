@@ -29,6 +29,9 @@ const MEAS: LifecycleMeas = {
   project: 'ccrc-pwa', workspace: 'still-river', branch: 'ws/still-river',
   uuid: '72be9ee2-0000-4bcc-b60b-0cfc0dc3d199', wrapper: 'claude-corp',
   tip: 'a'.repeat(40), attic: 201, archivedAt: null, archivedReason: null, held: null,
+  workdir: '/home/you/worktrees/ccrc-pwa/still-river', base: 'main', old: null,
+  rc: 0, mode: 'resume', inUnit: 1, from: null, dropped: null, registered: 0,
+  state: null, bytes: null, resumed: null, tombstone: null,
 };
 const EVENT: LifecycleEvent = {
   uid: '1755000000123456789.4242.1', at: 1_755_000_000_123,
@@ -73,16 +76,21 @@ describe('LifecycleDec — declared, self-asserted', () => {
 });
 
 describe('LifecycleMeas — measured about the SUBJECT, before any destruction', () => {
-  it('carries exactly D2`s ten fields', () => {
+  it('carries exactly D2`s ten plus wave 2`s thirteen — twenty-three fields', () => {
     expect(Object.keys(MEAS).sort()).toEqual(
-      ['archivedAt', 'archivedReason', 'attic', 'branch', 'held', 'project',
-       'tip', 'uuid', 'workspace', 'wrapper'].sort());
+      ['archivedAt', 'archivedReason', 'attic', 'base', 'branch', 'bytes',
+       'dropped', 'from', 'held', 'inUnit', 'mode', 'old', 'project',
+       'rc', 'registered', 'resumed', 'state', 'tip', 'tombstone', 'uuid',
+       'workdir', 'workspace', 'wrapper'].sort());
   });
 
   it('every field is nullable — null means NOT MEASURED, never zero or empty', () => {
     const nothing: LifecycleMeas = {
       project: null, workspace: null, branch: null, uuid: null, wrapper: null,
       tip: null, attic: null, archivedAt: null, archivedReason: null, held: null,
+      workdir: null, base: null, old: null, rc: null, mode: null, inUnit: null,
+      from: null, dropped: null, registered: null, state: null, bytes: null,
+      resumed: null, tombstone: null,
     };
     expect(Object.values(nothing).every((v) => v === null)).toBe(true);
     // `attic: 0` is "the pin ran and created no refs"; `attic: null` is "no
@@ -90,18 +98,21 @@ describe('LifecycleMeas — measured about the SUBJECT, before any destruction',
     // null is a row that was never archived. Different facts, different values.
   });
 
-  it('is a CLOSED ten, and a `meas.*` key it does not model lives on in `raw`', () => {
-    // The ruling this wave makes for waves 2-4, in one place. ccd writes more
-    // `meas.<key>` pairs than these ten (`atticsrc`, `workdir`, `base`, `rc`,
-    // `mode`, `from`, `to`, `dropped`, `registered`, `bytes`, `state`, ...).
-    // They are NOT silently widened into this interface and they are NOT lost:
-    // `LifecycleEvent.raw` holds the line verbatim on every path, so an
-    // unmodelled key is re-projectable later without touching the fleet box —
-    // exactly the argument `obs.cgraw` already makes. Promoting one is a
-    // two-line edit HERE plus its reader; inventing it in journalparse.ts is
-    // not.
+  it('is a NAMED twenty-three, not an index signature — a 24th key is a compile error', () => {
+    // Task 21's ruling, replacing the wave-1 "closed ten, the rest lives in
+    // raw" draft: `reviveMeas` (wave 4) reads `meas.*` through THIS
+    // interface's own key list, so a key not modelled here is not merely
+    // deferred to `raw` — it is silently dropped from the mirror's typed
+    // shape. Widening with thirteen NAMED members (not an index signature)
+    // keeps the vocabulary closed: an emit ccd does not yet have is still a
+    // TS2739/TS2740 here, exactly like the original ten. The two keys a
+    // prior draft speculated on — `manifestBytes`, `atticsrc` — are
+    // deliberately NOT members: neither is emitted anywhere in `ccd/ccd`
+    // (verified by `ccd-lifecycle-contain.test.ts`, which derives ccd's
+    // side by scanning the file rather than a second hand-written list).
     expect(Object.keys(MEAS)).not.toContain('atticsrc');
-    expect(EVENT.raw.length, 'raw is what makes the closed ten affordable').toBeGreaterThan(0);
+    expect(Object.keys(MEAS)).not.toContain('manifestBytes');
+    expect(EVENT.raw.length, 'raw still holds the line verbatim on every path').toBeGreaterThan(0);
   });
 });
 

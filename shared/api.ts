@@ -3766,16 +3766,38 @@ export interface LifecycleDec {
  * that was never taken. `archivedReason: ''` is a blank reason;
  * `archivedReason: null` is a row that was never archived.
  *
- * THIS TEN IS CLOSED, AND THAT IS A RULING, NOT AN OVERSIGHT. ccd writes more
- * `meas.<key>` pairs than these — `atticsrc`, `workdir`, `base`, `old`, `new`,
- * `rc`, `mode`, `inUnit`, `from`, `to`, `prev`, `dropped`, `was`, `registered`,
- * `manifestBytes`, `bytes`, `resumed`, `tombstone`, `state`, `path`, `slug` —
- * and none of them is silently widened into this interface, nor lost:
- * `LifecycleEvent.raw` carries the line verbatim on EVERY path, so an
- * unmodelled key is re-projectable later without touching the fleet box. That
- * is the same argument `obs.cgraw` makes, and it is what keeps the modelled
- * shape a decision rather than an accumulation. Promoting a key is a two-line
- * edit here plus its reader; minting it in `journalparse.ts` is not.
+ * THIS TWENTY-THREE IS CLOSED, AND THAT IS A RULING, NOT AN OVERSIGHT —
+ * widened from the original ten in wave 2 (Task 21) because "closed ten, the
+ * rest lives on in `raw`" turned out to be the wrong shape for THIS field
+ * specifically: `LifecycleEvent.raw` is a per-event escape hatch, but wave
+ * 4's `reviveMeas` reads `meas.*` through this interface's OWN key list, and a
+ * key not on that list is not merely deferred to `raw` — it is silently
+ * DROPPED from the mirror's typed shape, with nothing anywhere reporting the
+ * loss. Measured at HEAD (`awk '/export interface LifecycleMeas/,/^}/'
+ * shared/api.ts` against `grep -oE "meas\.[a-zA-Z]+" ccd/ccd | sort -u`): ccd
+ * emits 22 distinct `meas.<key>` names; 13 of them — `base`, `bytes`,
+ * `dropped`, `from`, `inUnit`, `mode`, `old`, `rc`, `registered`, `resumed`,
+ * `state`, `tombstone`, `workdir` — were emitted but undeclared, i.e. silently
+ * lost at ingest. Those 13 are named below; the union with the original ten
+ * is 23. `tip` stays even though nothing currently emits it — a reader
+ * tolerating a key the writer does not yet produce is fine, the reverse is
+ * the defect this widening fixes.
+ *
+ * NAMED MEMBERS, NOT AN INDEX SIGNATURE — deliberately, and that is the other
+ * half of the ruling. An index signature would let any key through and
+ * destroy the closed vocabulary; this project's doctrine runs the other way
+ * (`_LC_ACTS` pinned set-equal to `LIFECYCLE_ACTS`, `single-definition.test.ts`
+ * failing the build on a second copy of an enumerated value). A 24th key
+ * ccd starts emitting is a compile error here AND a red
+ * `server/test/ccd-lifecycle-contain.test.ts`, which derives ccd's side by
+ * scanning `ccd/ccd` rather than hand-maintaining a second list — that is
+ * the point, not an inconvenience.
+ *
+ * Two keys a prior draft of this list speculated on — `manifestBytes` and
+ * `atticsrc` — are NOT members: neither is emitted anywhere in the shipped
+ * `ccd/ccd`, and this widening adds only keys actually observed on the wire.
+ * A future emit of either is exactly the "26th key" case above: a compile
+ * error and a red suite, not a silent pass-through.
  */
 export interface LifecycleMeas {
   readonly project: string | null;
@@ -3797,6 +3819,44 @@ export interface LifecycleMeas {
   readonly archivedReason: string | null;
   /** The `.hold` text, verbatim, or null. */
   readonly held: string | null;
+  /** The worktree path, as `_reg_get "$id" workdir` or the just-created path
+   *  read it back (`cmd_ws_create`, `cmd_ws_rename`, `ws-gc`, `ws-reap`). */
+  readonly workdir: string | null;
+  /** The base branch a new workspace was created from (`cmd_ws_create`). */
+  readonly base: string | null;
+  /** The name a rename REPLACED — `branch` carries what it became
+   *  (`cmd_ws_rename`, `ccd:3242`). */
+  readonly old: string | null;
+  /** The prompt's exit status on a re-spawn (`cmd_ensure`, `ccd:9334`).
+   *  Carried unconverted, like `archivedAt`. */
+  readonly rc: number | null;
+  /** The start mode `cmd_start` resolved before spawning. */
+  readonly mode: string | null;
+  /** `${CCD_IN_UNIT:-0}` — whether `cmd_ensure` ran inside the supervising
+   *  unit or as an outside request for one (`ccd:9806`). */
+  readonly inUnit: number | null;
+  /** The wrapper a swap moved AWAY from; `wrapper` carries the target
+   *  (`cmd_swap`, `ccd:10522`). */
+  readonly from: string | null;
+  /** How many `refs/ccrc/attic/<id>/` refs `--drop` destroyed this call —
+   *  `attic` is the pin count, this is the drop count. */
+  readonly dropped: number | null;
+  /** `_ws_wt_branch`'s exit status for the worktree being removed — decides
+   *  whether there is a git-side record to clean up (`cmd_ws_rm`'s intent). */
+  readonly registered: number | null;
+  /** A `ws-gc` sweep's classification of the row it is about to reclaim —
+   *  `dead-reg` or `orphan`, never anything else the encoder has seen. */
+  readonly state: string | null;
+  /** How many bytes `ws-reap` measured before destroying the worktree, or
+   *  `null` when `_ws_gc_bytes` did not return a plain integer. */
+  readonly bytes: number | null;
+  /** The reap PHASE (`children` | `worktree` | `branch` | `clips`) a resumed
+   *  `ws-reap` was interrupted at, read back from the registry's own
+   *  `.reaping` marker — not a boolean; an interrupted reap resumes from
+   *  wherever it stopped. */
+  readonly resumed: string | null;
+  /** The tombstone record's own path, as `_ws_tombstone` returned it. */
+  readonly tombstone: string | null;
 }
 
 /**
