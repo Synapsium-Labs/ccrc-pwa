@@ -523,6 +523,35 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # resume fork — where the token is not checked and Phase C, the merged-PR
   # proof, is deliberately not re-run. `_ws_slug_free` is therefore an
   # ANY-FIELD check now; see the note there.
+  # ── THE BACKSTOP (D3) ────────────────────────────────────────────────────
+  # HERE, AND NOT ONE LINE LOWER. Every destruction path on this box terminates
+  # in this function — ws-rm (ccd:2853), ws-reap (ccd:7548), ws-gc's dead-reg
+  # arm (ccd:8027), forget (ccd:10462) — and a destructive verb added LATER that
+  # forgets to journal itself still leaves a record. A silent destruction has to
+  # defeat two independent emit sites.
+  #
+  # BEFORE the loop below, because the loop is what makes `meas` unreadable:
+  # the loop unlinks every dot-free `$REG/<id>.<suffix>` except `archived` and
+  # `reaping`, so an emit placed after it can only report an id. Moving this
+  # line down is the mutant `ccd-lifecycle-purge.test.ts` measures.
+  #
+  # UNCONDITIONAL, and with NO `tx`: this is not half of a pair. It is the
+  # terminal fact — the registry entry ceased to exist — and it is worth writing
+  # even for a row that has nothing left, where the id alone is the record. No
+  # `verb` either: this function cannot see its caller, and guessing one would
+  # be the fabricated fact the design exists to refuse.
+  # `_lc_done` returns 0 on every path, so nothing here can gate the purge.
+  _lc_done purge "$1" "" \
+    meas.project        "$(_reg_get "$1" project)" \
+    meas.workspace      "$(_reg_get "$1" workspace)" \
+    meas.branch         "$(_reg_get "$1" branch)" \
+    meas.uuid           "$(_reg_get "$1" uuid)" \
+    meas.wrapper        "$(_reg_get "$1" wrapper)" \
+    meas.workdir        "$(_reg_get "$1" workdir)" \
+    meas.archivedAt     "$(_reg_get "$1" archived)" \
+    meas.archivedReason "$(_reg_get "$1" archivedreason)" \
+    meas.held           "$(_reg_get "$1" hold)"
+  # ─────────────────────────────────────────────────────────────────────────
   local id="$1" f suffix
   for f in "$REG/$id".*; do
     # `[[ -e "$f" ]]` for the unmatched-glob case: this file does not set
