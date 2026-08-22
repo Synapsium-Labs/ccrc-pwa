@@ -112,7 +112,7 @@ export function reviveObs(v: unknown): LifecycleObs | null {
     // THREE CONDITIONS, THREE VALUES, and the split is `corroboration`'s
     // input: `null` = no cgroup was read at all (-> 'unmeasured');
     // `'unknown'` = one was read and matched none of the four shapes
-    // (-> 'not-comparable'); a member = what was seen. Collapsing the first
+    // (-> `not-comparable`); a member = what was seen. Collapsing the first
     // two would make an unread /proc look like a disagreement.
     cg: cg === null ? null : isActorClass(cg) ? cg : 'unknown',
     // NEVER DROPPED (D2). `null` means the line carried none; `''` would be a
