@@ -25,11 +25,23 @@
 // So every assertion below goes through `declaredValues`, which collects EVERY
 // rule targeting the element and expands the shorthand, and asserts a
 // CONTRACT ("this axis scrolls", "this axis never scrolls") that any correct
-// spelling satisfies and no rule may contradict.
+// spelling satisfies and no rule in this stylesheet may contradict.
+//
+// D-161 honesty pass: that fix was measured on three mutants and narrowed the
+// hole rather than closing it — the re-review found two more shapes that put
+// the regression back with all five tests green, and both are now red. A
+// top-level `.shell-detail { overflow: hidden }` AFTER the @media block (the
+// contract was read from the block, not the file — see `values` below), and
+// `section.shell-detail { overflow: hidden }` INSIDE it (the reader compared
+// compound selectors by string prefix, so an element-qualified restatement —
+// which outranks the original on specificity from any position — read as a
+// stranger; cssRule.ts's `simples` is the fix). What is still NOT covered is
+// enumerated at `declaredValues` in cssRule.ts, and this file's claims are
+// scoped to it: no rule shape outside that list, and no other stylesheet.
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { atBlock, declaredValues, effectiveValue } from './cssRule';
+import { atBlock, declaredValues } from './cssRule';
 
 const shellCss = readFileSync(
   path.join(import.meta.dirname, '..', 'src', 'styles', 'shell.css'), 'utf8');
@@ -45,9 +57,10 @@ const BREAKPOINT = ((): number => {
   return Number(m![1]);
 })();
 
-/** The desktop half only. Both `.shell-detail` and `.shell-detail .chat` exist
- *  ONLY inside the breakpoint — asserting against the whole file would let a
- *  future mobile rule of the same name satisfy a desktop assertion. */
+/** The desktop half. Both `.shell-detail` and `.shell-detail .chat` get their
+ *  scroll rules ONLY inside the breakpoint, so this is where the assertion
+ *  "the pane really is declared scrollable on desktop" has to be made — a
+ *  future mobile-only `overflow-y: auto` must not satisfy it. */
 const desktop = atBlock(shellCss, `@media (min-width: ${BREAKPOINT}px)`);
 
 /** An axis with a scrollbar of its own. */
@@ -62,13 +75,30 @@ const SCROLLS = new Set(['auto', 'scroll']);
  *  do not. */
 const CONTAINS = new Set(['hidden', 'clip']);
 
-/** Every value any rule in `desktop` gives `sel` for `prop`, and the assertion
- *  that there is at least one — an empty list would make every `for` below
- *  vacuously true, which is how a deleted declaration passes. */
+/** Every value ANY rule in the whole stylesheet gives `sel` for `prop` — plus
+ *  the assertion that the desktop block is one of the places that sets it.
+ *
+ *  Two different questions, and the first fix round only asked one of them.
+ *  Scoped to `desktop`, an empty list makes every `for` below vacuously true,
+ *  which is how a deleted declaration passes — hence the non-empty assertion.
+ *  But scoping the CONTRACT there too was itself a bypass: a top-level
+ *  `.shell-detail { overflow: hidden }` appended AFTER the `@media` block is
+ *  the same specificity, later in source, and `@media` adds none, so it wins at
+ *  exactly the widths this file is about. Measured on the fix that closed the
+ *  three mutants above: that one appended rule left this file at 5 passed while
+ *  Chromium (1440px, the shipped sheet) reported `overflow-y: hidden`,
+ *  scrollHeight 3000 against clientHeight 300 — the D-161 regression, verbatim.
+ *
+ *  So: the FLOOR is read from the desktop block (it must be declared there),
+ *  and the CONTRACT is read over the file (no rule anywhere may contradict it).
+ *  Whole-file is safe for these three selectors because the only other rule
+ *  that targets any of them is the mobile `display: none`, which declares no
+ *  overflow and no sizing floor; cssRule.ts's {@link declaredValues} lists what
+ *  even a whole-file read cannot see. */
 const values = (sel: string, prop: string): string[] => {
-  const all = declaredValues(desktop, sel, prop);
-  expect(all, `nothing sets ${prop} on ${sel}`).not.toEqual([]);
-  return all;
+  const onDesktop = declaredValues(desktop, sel, prop);
+  expect(onDesktop, `nothing sets ${prop} on ${sel} inside the desktop block`).not.toEqual([]);
+  return declaredValues(shellCss, sel, prop);
 };
 
 describe('the desktop detail pane scrolls by default (D-161)', () => {
@@ -104,7 +134,10 @@ describe('the desktop detail pane scrolls by default (D-161)', () => {
         expect(CONTAINS.has(v), `${axis}: ${v} would be a second scrollbar`).toBe(true);
       }
     }
-    expect(effectiveValue(desktop, '.shell-detail .chat', 'height')).toBe('100%');
+    // Every declared value, not the winner: `effectiveValue` reads last-in-source,
+    // which is not the cascade (cssRule.ts states why), so a rule that raised
+    // this height from anywhere in the file would satisfy a winner-only read.
+    for (const v of values('.shell-detail .chat', 'height')) expect(v, 'height').toBe('100%');
   });
 
   it('the breakpoint is the SAME number in all three places it is written', () => {

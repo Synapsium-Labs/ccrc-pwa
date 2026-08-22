@@ -228,9 +228,41 @@ describe('rulesFor collects every rule that styles the element', () => {
     expect(declaredValues(grouped, '.pane', 'overflow-y')).toEqual(['hidden']);
   });
 
+  it('sees an ELEMENT-QUALIFIED restatement — `section.pane` is still this pane', () => {
+    // D-161 honesty pass. Compared as strings, `section.pane` does not START
+    // with `.pane`, so the reader that closed the three mutants above still
+    // read this one as a stranger — and it is the WORST shape of the lot: one
+    // specificity step up (0,1,1 against 0,1,0), so it wins from any position
+    // in the file, not just from later in it. Measured green in
+    // shell-css.test.ts before `simples` compared compounds as sets.
+    const qualified = '\n.pane { overflow-y: auto; }\nsection.pane { overflow-y: hidden; }\n';
+    expect(declaredValues(qualified, '.pane', 'overflow-y')).toEqual(['auto', 'hidden']);
+  });
+
+  it('sees a type qualifier on an ANCESTOR too, for the same reason', () => {
+    const qualified = `
+.pane .chat { overflow-y: auto; }
+div.shell section.pane > .chat { overflow-y: hidden; }
+`;
+    expect(declaredValues(qualified, '.pane .chat', 'overflow-y')).toEqual(['auto', 'hidden']);
+  });
+
   it('does NOT see a different class whose name merely begins the same', () => {
     expect(() => rulesFor('\n.pane-wide { overflow: hidden; }\n', '.pane'))
       .toThrow(/no rule targeting \.pane/);
+  });
+
+  it('does NOT see a BROADER subject — the documented residual gap, pinned', () => {
+    // Not a bug report: `declaredValues`'s own gap list says so, item 2, and
+    // this is the test that keeps the list honest. `*` and a bare type selector
+    // DO style the element in a browser; nothing in this repo's stylesheets
+    // writes one, which is the whole reason the reader is allowed to be this
+    // narrow. If that ever changes, this test is the thing that has to change
+    // with the docstring rather than the docstring quietly going stale.
+    for (const broad of ['*', 'section', ':where(.pane)']) {
+      expect(() => rulesFor(`\n${broad} { overflow: hidden; }\n`, '.pane'),
+        `${broad} is not counted a target`).toThrow(/no rule targeting/);
+    }
   });
 
   it('does NOT see a rule whose subject is a DESCENDANT of this element', () => {

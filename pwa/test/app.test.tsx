@@ -125,6 +125,10 @@ describe('App /runs route', () => {
 // ── the detail pane's scroll offset does not survive a route change (D-161) ──
 
 describe('a route change puts the detail pane back at the top (D-161)', () => {
+  /** THAT it lands, not WHEN: none of these three can tell a layout effect from
+   *  a passive one (`navigate` flushSync's both), which is why the ordering has
+   *  a file of its own — app-pane-reset-timing.test.tsx. */
+
   /** jsdom does NO LAYOUT, so nothing here is really scrollable: the prototype
    *  `scrollTop` is a hard 0 and assigning it is discarded. An own accessor
    *  pair on the node records what the shell WRITES, which is exactly the

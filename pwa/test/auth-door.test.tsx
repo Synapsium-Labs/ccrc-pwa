@@ -34,6 +34,14 @@
 //      enrolling and revoking through the screen's own buttons.
 //   6. ENROLMENT MUST BE POSSIBLE. A non-dismissible nag pointing at a button
 //      the destination hides is a trap.
+//
+// HONESTY PASS (the round after that one):
+//   7. `mode` WAS STILL A NEGATIVE LIST while the guard's docstring claimed
+//      positive evidence for it, so `mode: null` and `mode: 'wat'` both bought
+//      the nag with the suite green — the same failure class as 4, one field
+//      over, hidden behind prose that said it could not happen. Now a positive
+//      roster (`ARMED_MODES`), with the unreadable-mode fixtures and the
+//      `'locked-out'` control that keeps them from passing vacuously.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { COSE_ES256 } from '../../shared/api';
@@ -286,6 +294,56 @@ describe('an OLDER SERVER omitting a field never buys the nag (D-161 fix round)'
     render(<FleetScreen store={makeStore()} />);
     await settle();
     expect(screen.queryByRole('button', { name: NOTICE })).not.toBeInTheDocument();
+  });
+});
+
+// ── 2d. a mode this build cannot read is not a gate ─────────────────────────
+
+describe('an UNREADABLE mode never buys the nag (D-161 honesty pass)', () => {
+  // The guard's `mode` test used to be a NEGATIVE list — anything that was
+  // neither `undefined` nor `'off'` counted as armed — while the component's
+  // docstring claimed every field was read as positive evidence. So the two
+  // absent-field fixtures above passed, the docstring read as satisfied, and
+  // `mode: null` or a mode from a newer server still put a non-dismissible
+  // "add a passkey" on a box that may have no gate at all. The reachable source
+  // is the one that docstring already names: anything between us and the server
+  // answering its own 200, or a build newer than this bundle.
+  const settle = async (): Promise<void> => {
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+    await act(async () => {});
+  };
+
+  it.each([
+    // `null` is not `undefined`: `?? 'off'` and `=== undefined` are different
+    // questions, and JSON has both spellings of nothing.
+    ['null', null],
+    // A fourth mode from a server newer than this bundle. Silence is the only
+    // honest answer — this build cannot know whether that gate takes passkeys.
+    ['a mode this build has never heard of', 'device-bound'],
+    // Not pedantry: a proxy or a mock answering `{}`-shaped JSON can put any
+    // type here, and the field is `Partial<AuthStatus>` on this wire only
+    // because TypeScript cannot check what a `fetch` returns.
+    ['not even a string', 3],
+  ])('says nothing when mode is %s', async (_what, mode) => {
+    supportBrowser();
+    stubFetch({ authed: true, passkeysEnrolled: 0, mode });
+    render(<FleetScreen store={makeStore()} />);
+    await settle();
+    expect(screen.queryByRole('button', { name: NOTICE })).not.toBeInTheDocument();
+  });
+
+  it('DOES nag on a LOCKED-OUT box — that gate is armed, and a passkey is the way past it', async () => {
+    // The vacuity control for the three above (they must not be passing because
+    // nothing renders in this arrangement) AND the ruling itself: `'locked-out'`
+    // is `AuthStatus`'s third mode, it means armed with the login rate-limiter's
+    // window closed, and it is on the positive list. Enrolment rides the session
+    // cookie, not the limited login route, so on a box we are already signed in
+    // to the advice is actionable — and this is the box that most wants a second
+    // way in. A guard that only knew `'passphrase'` would go quiet exactly then.
+    supportBrowser();
+    stubFetch({ authed: true, passkeysEnrolled: 0, mode: 'locked-out' });
+    render(<FleetScreen store={makeStore()} />);
+    expect(await screen.findByRole('button', { name: NOTICE })).toBeInTheDocument();
   });
 });
 

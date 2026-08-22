@@ -71,10 +71,21 @@ export function App(): ReactNode {
   // screen's <h1> and its Back button above the fold. Measured: scrolled to
   // 2517, children replaced, still 2517.
   //
-  // A LAYOUT effect, not a passive one: this runs in the same commit that put
-  // the new screen in the pane, before the browser paints, so the operator
-  // never sees the new screen at the old offset. `popstate` (back/forward)
-  // goes through `usePath`, so it is covered by the same dependency.
+  // A LAYOUT effect, not a passive one: the reset runs INSIDE the commit that
+  // put the new screen in the pane, before any passive effect of that commit.
+  // MEASURED, in app-pane-reset-timing.test.tsx — a screen mounted into the
+  // pane reads the offset from its own `useEffect` and gets 0; the moment this
+  // becomes `useEffect` it reads 2517 instead, because passive effects run
+  // child-before-parent. None of app.test.tsx's twelve can see that swap:
+  // `navigate` wraps the path change in `flushSync`, which flushes passive
+  // effects too, so the whole-commit view of the two spellings is identical
+  // there. What is NOT measured is the last step — that the browser gets no
+  // chance to paint between the commit and the passive flush, which is the
+  // platform's definition of a layout effect. That one is REASONED: jsdom does
+  // no layout and paints nothing, so no test in this package can observe a
+  // frame, and a real-browser runner is not on this branch.
+  // `popstate` (back/forward) goes through `usePath`, so it is covered by the
+  // same dependency.
   //
   // THE SIDEBAR IS DELIBERATELY LEFT ALONE. `.shell-nav` has always been
   // scrollable, and its content does NOT swap per route — it is the same fleet

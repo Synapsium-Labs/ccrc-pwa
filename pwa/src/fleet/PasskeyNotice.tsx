@@ -24,24 +24,79 @@ import { navigate } from '../lib/router';
 import './fleet.css';
 
 /**
+ * The modes that mean THERE IS A GATE ON THIS BOX to add a passkey to — the
+ * POSITIVE list, and written as a `Record` over the union rather than as
+ * literals in an `if` so that a fourth `mode` cannot be added to `AuthStatus`
+ * without an author deciding here whether it nags. Measured, not assumed: with
+ * `| 'device-bound'` added to the union, `tsc --noEmit` fails on the object
+ * below with `TS2741: Property '"device-bound"' is missing in type
+ * '{ passphrase: true; 'locked-out': true; }'`. `AUTH_VERDICT_MAP`'s
+ * idiom (shared/api.ts) for its reason: a hand-written list of literals goes
+ * stale in silence, and the silence in this particular spot means "armed".
+ *
+ *   - `'passphrase'` — armed, a secret exists. The box this line is for.
+ *   - `'locked-out'` — armed, and the login rate-limiter's window is closed.
+ *     It nags too, deliberately: the gate has just refused somebody, we are
+ *     already in (the `authed` refusal below), and enrolment rides the session
+ *     cookie rather than the rate-limited login route — so the advice is both
+ *     true and actionable, and it is the box that most wants a second way in.
+ *   - `'off'` is the member of the union deliberately NOT here, and it is the
+ *     whole reason the list exists: `CCRC_AUTH` is off by default for every OSS
+ *     install, and on a dark box there is no lock for the advice to be about.
+ */
+const ARMED_MODES: Record<Exclude<AuthStatus['mode'], 'off'>, true> = {
+  passphrase: true,
+  'locked-out': true,
+};
+
+/** Is what the box said about its gate one of {@link ARMED_MODES}?
+ *
+ *  `unknown`, not `AuthStatus['mode']`, because the parameter's real domain is
+ *  "whatever came back from a `fetch`": `undefined` from an older server that
+ *  never had the field, `null` or a string this build has never heard of from
+ *  anything between us and it. The type says three values; the wire does not
+ *  promise three. `isAuthVerdict` (shared/api.ts) takes `unknown` for exactly
+ *  this reason, and for the same one it tests the CONSTANT for membership
+ *  rather than asserting the input is already a member. */
+function armedMode(mode: unknown): boolean {
+  return typeof mode === 'string' && Object.hasOwn(ARMED_MODES, mode);
+}
+
+/**
  * Exactly the condition the brief names, plus the one the destination screen
  * imposes: armed, signed in, nothing enrolled, and this browser can actually
  * enrol.
  *
- * ABSENCE IS NEVER PERMISSION. Every field of `AuthStatus` is optional on the
- * wire — the server MINIMIZES the body for a caller it does not know, and an
- * older server (or a proxy answering its own 200) may not send a field at all
- * — so each one is read as positive evidence and a missing field fails closed,
- * the same rule `raiseAuthLostFrom` holds one file over. Written as four
- * separate refusals rather than one `&&` chain because each has its own
- * reason, and because the two absences used to be a comment: both collapses
- * (`mode` absent treated as armed, `(passkeysEnrolled ?? 0) === 0`) passed the
- * whole suite green until the fixtures in auth-door.test.tsx were added.
+ * ABSENCE IS NEVER PERMISSION, AND NEITHER IS A VALUE WE CANNOT READ. Every
+ * field of `AuthStatus` is optional on the wire — the server MINIMIZES the body
+ * for a caller it does not know, and an older server (or a proxy answering its
+ * own 200) may not send a field at all — so each one is read as positive
+ * evidence and anything else fails closed, the same rule `raiseAuthLostFrom`
+ * holds one file over. Written as four separate refusals rather than one `&&`
+ * chain because each has its own reason.
  *
- *   - `mode` — `CCRC_AUTH` is off by default for every OSS install, and on a
- *     dark box there is no gate to add a passkey to: the advice would be about
- *     a lock that does not exist. An absent `mode` is treated exactly like
- *     `'off'`, which is what `checkAuth` does with the same field.
+ * That sentence is here on its third attempt, and the first two were both
+ * measured wrong, which is why the fixtures matter more than the prose:
+ *   - the two ABSENCES were only ever a comment — `mode` absent read as armed
+ *     and `(passkeysEnrolled ?? 0) === 0` both passed the whole suite green
+ *     until auth-door.test.tsx got a body with the field left out;
+ *   - then `mode` was still a NEGATIVE list (anything that was neither
+ *     `undefined` nor `'off'` counted as armed) while this docstring claimed
+ *     positive evidence for it. `{authed: true, passkeysEnrolled: 0, mode:
+ *     null}` and the same with `mode: 'wat'` both bought the nag, on a box that
+ *     may have no gate at all — the docstring was the defect's cover, not its
+ *     description. {@link armedMode} is the fix and the mode fixtures in
+ *     auth-door.test.tsx are what hold it.
+ *
+ *   - `mode` — must be positively armed ({@link ARMED_MODES}). Absent is
+ *     treated exactly like `'off'`, which is what `checkAuth` does with the
+ *     same field; unlike `checkAuth`, an UNRECOGNISED mode is also silence
+ *     here, and that divergence is deliberate rather than an oversight to be
+ *     tidied away. The two guards fail in opposite directions: `checkAuth`
+ *     erring toward "armed" puts up a login screen, which is recoverable and
+ *     self-clearing (the next authed status read calls `clearAuthLost`), while
+ *     this line erring toward "armed" is a NON-DISMISSIBLE nag with no way out
+ *     except distrusting it. So this one is the stricter of the two on purpose.
  *   - `authed` — a gate that is armed and has refused us is the login screen's
  *     business. An anonymous caller's `passkeysEnrolled: 0` is a minimized
  *     body, not evidence that no passkey exists.
@@ -55,7 +110,7 @@ import './fleet.css';
  */
 function nagWorthy(status: Partial<AuthStatus> | null, canEnrol: boolean): boolean {
   if (status === null) return false;
-  if (status.mode === undefined || status.mode === 'off') return false;
+  if (!armedMode(status.mode)) return false;
   if (status.authed !== true) return false;
   if (status.passkeysEnrolled !== 0) return false;
   return canEnrol;
