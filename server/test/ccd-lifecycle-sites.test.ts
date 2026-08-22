@@ -209,6 +209,12 @@ describe('workspace call sites', () => {
     h.sh(`_reg_set w uuid u; _reg_set w workspace w
       cmd_ws_hold --session w --reason 'program:build9 wave:2/6'`);
     const [e] = eventsOf(h.home, 'hold');
+    // FIX ROUND 1 (b): the same guard its three siblings (rename, archive,
+    // attic-drop) already carry — without it a broken emit surfaces as
+    // `TypeError: Cannot read properties of undefined (reading 'dec')` from
+    // inside lifecycleHelpers.ts's `decOf`, a helper-internal crash, rather
+    // than a clean assertion naming what actually happened.
+    expect(e, 'ws-hold wrote no line').toBeTruthy();
     expect(decOf(e!)['reason']).toBe('program:build9 wave:2/6');
   });
 
@@ -244,9 +250,14 @@ describe('workspace call sites', () => {
   });
 
   it('ws-attic --drop records HOW MANY refs it destroyed — a count only the loop knows', () => {
-    // Mutant: move the emit above the `while … done` loop -> this fails with
-    // `expected NaN to be greater than or equal to 2`, because `$n` is 0 before
-    // ccd:3164 and a fabricated zero on a destructive verb is a false record.
+    // Mutant, RUN (not merely predicted — see FIX ROUND 1): move the emit
+    // above the `while … done` loop, right after `local n=0 ref` -> this
+    // fails with `expected 0 to be greater than or equal to 2`, NOT `NaN`.
+    // `local n=0` initialises before the loop runs, so an emit placed there
+    // captures a REAL `"0"`, and `Number("0")` is `0` — the loop at ccd:4021
+    // is what turns that 0 into the true count of 2, and a fabricated zero on
+    // a destructive verb is a false record either way, but the failure text
+    // is the measured one above, not a guessed `NaN`.
     const repo = h.makeRepo('demo');
     h.git(repo, 'commit', '--allow-empty', '-m', 'a');
     const one = h.git(repo, 'rev-parse', 'HEAD').trim();
