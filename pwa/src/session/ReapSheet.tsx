@@ -306,16 +306,24 @@ export function ReapSheet({
 
                     Rendered from `drift` — ccd's own sentence — rather than
                     assembled here from the two names: the rule has one
-                    definition, on the box. `headMatchesRegistry` is the
-                    condition rather than a non-empty string, so a build whose
-                    ccd is too old to send the sentence still says SOMETHING
-                    about the disagreement it did report. */}
-                {!shown.headMatchesRegistry && (
-                  <span className="reap-note">
-                    {shown.drift !== null && shown.drift !== ''
-                      ? shown.drift
-                      : `git's worktree record and ccrc's registry name different branches${shown.registryBranch !== null ? ` (the registry says ${shown.registryBranch})` : ''} — ${shown.branch} is the one that would be removed.`}
-                  </span>
+                    definition, on the box.
+
+                    THE CONDITION IS THE SENTENCE, NOT `headMatchesRegistry`,
+                    and that is a correction rather than a shortcut. That flag
+                    is `REAP_WTHEAD === registry branch`, and `REAP_WTHEAD` is
+                    EMPTY on every refusal that never reached the worktree block
+                    — `no-such-session`, `not-archived`, `worktree-missing`,
+                    `detached-head`, `no-worktree-record` — so keying on it
+                    renders "these two records disagree" over five states in
+                    which nothing was compared at all. `drift` is non-empty only
+                    where ccd actually measured a disagreement, which is the
+                    same rule as everywhere else in this sheet: a field that was
+                    never measured says nothing rather than something plausible.
+                    An older ccd that sends no `drift` REFUSES on this state, so
+                    its own refusal sentence is what a reader sees — the
+                    information is not lost, it arrives by the older path. */}
+                {shown.drift !== null && shown.drift !== '' && (
+                  <span className="reap-note">{shown.drift}</span>
                 )}
               </dd>
 

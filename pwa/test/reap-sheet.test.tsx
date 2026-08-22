@@ -130,17 +130,38 @@ describe('the manifest', () => {
     expect(screen.getByRole('button', { name: /^Remove quiet-basin/ })).toBeInTheDocument();
   });
 
-  it('still says something when an older ccd reports the drift but not the sentence', async () => {
-    // Absence-permits, all the way to the pixel: `drift` is `null` from a ccd
-    // that predates it, and `headMatchesRegistry` — which that build DOES send
-    // — is the condition. A sheet that keyed on the sentence would go silent on
-    // exactly the mixed-version window the wire rules exist for.
+  it('says nothing about drift on a refusal that never compared the two records', async () => {
+    // THE FALSE-NOTE TRAP, pinned. `headMatchesRegistry` is
+    // `REAP_WTHEAD === registry branch`, and `REAP_WTHEAD` is EMPTY on every
+    // refusal that returns before the worktree block — `not-archived` here,
+    // plus `no-such-session`, `worktree-missing`, `detached-head`,
+    // `no-worktree-record`. Keying the note on that flag would assert "these
+    // two records disagree" over five states in which nothing was compared.
+    // ccd sends `drift: ''` for exactly that reason, and the sheet renders the
+    // sentence rather than inferring one.
+    auditBody = audit({
+      verdict: 'not-archived', token: undefined, drift: '', headMatchesRegistry: false,
+      sentence: 'Archive this workspace first.',
+    });
+    open();
+    expect(await screen.findByText('Archive this workspace first.')).toBeInTheDocument();
+    expect(screen.queryByText(/different branches/)).toBeNull();
+    expect(screen.queryByText(/left alone/)).toBeNull();
+    expect(screen.queryByText(/would be removed/)).toBeNull();
+  });
+
+  it('stays silent rather than guessing when an older ccd sends no sentence', async () => {
+    // Absence-permits, all the way to the pixel — and silence is the CORRECT
+    // absence here, not a gap. A ccd old enough to omit `drift` is one that
+    // still REFUSES `registry-branch-drift`, so its own refusal sentence
+    // carries the information down the older path; a note invented here would
+    // be a second definition of the rule, from a client that measured nothing.
     auditBody = audit({
       branch: 'feat/x', registryBranch: null, drift: null, headMatchesRegistry: false,
     });
     open();
-    expect(await screen.findByText(/name different branches/)).toBeInTheDocument();
-    expect(screen.getByText(/feat\/x is the one that would be removed/)).toBeInTheDocument();
+    expect(await screen.findByText(/feat\/x — merged in #42/)).toBeInTheDocument();
+    expect(screen.queryByText(/different branches/)).toBeNull();
   });
 
   it('renders no drift note when the two records agree', async () => {
