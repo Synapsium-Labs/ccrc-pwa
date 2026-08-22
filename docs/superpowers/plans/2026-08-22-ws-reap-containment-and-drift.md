@@ -389,6 +389,16 @@ refute it. Fifteen survived refutation; these are the ones that changed code.
   sheet described `ws/quiet-basin` while the journal, the tail and step (g) were all about `feat/x`.
   The resume-shaped arm now reads its branch from the journal, through the same decoder the tail and
   `_ws_reap_locked` already use.
+- **D-188 — the rewrite would have shipped its own false sentence.** `_gh_repo_slug` refuses
+  `no-remote` for an origin that is not a GitHub `OWNER/NAME`, and on the old ladder a branch with no
+  upstream took the contained arm and never reached it — so a project on a plain path, GitLab or a
+  self-hosted host refused `no-upstream` with a true detail. Routing every branch through rung 2 put
+  that class on `no-remote`, whose SENTENCE (the only thing the sheet renders) reads *"This project
+  has no `origin` remote"* about a repository ccd had fetched from three rungs earlier — the same
+  shape as the "was never pushed" this wave exists to remove. An origin that is not GitHub is not a
+  missing origin: it is a repository no PR can bind to, so it takes the empty-row arm, whose chooser
+  already picks its sentence from remote evidence. `no-remote` keeps one producer in that function,
+  C2, where the sentence is true.
 - **D-186 — three smaller ones, each measured.** `no-upstream` still said "never pushed" about a
   branch pushed with no `-u` (the tracking REF is a third witness beside `@{upstream}` and
   `branch.<name>.merge`); `_ws_branch_holders` swallowed a failed `git worktree list` and read as

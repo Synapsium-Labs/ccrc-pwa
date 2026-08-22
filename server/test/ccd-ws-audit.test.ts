@@ -1868,6 +1868,34 @@ describe('the contained rung — never pushed, nothing unique', () => {
     expect(refusal(wt).verdict).toBe('no-upstream');
   }, 30000);
 
+  it('does not tell a project with a NON-GITHUB origin that it has no origin', () => {
+    // `makeRepo`, not `makeGhRepo`: a plain local-path origin, which is what a
+    // self-hosted or GitLab project looks like to `_gh_repo_slug` — it wants
+    // OWNER/NAME and fails on anything else. On the old ladder a branch with no
+    // upstream took the contained arm and never called that helper, so this
+    // refused `no-upstream` with a true detail. Routing every branch through
+    // rung 2 put it on `_gh_repo_slug`'s `no-remote`, whose SENTENCE — the only
+    // thing the sheet renders — reads "This project has no `origin` remote"
+    // about a repository ccd had fetched from three rungs earlier.
+    //
+    // That is the same false-sentence class the whole wave exists to remove, so
+    // it gets the same answer: an origin that is not GitHub is not a missing
+    // origin, it is a repository no PR can bind to.
+    const main = h.makeRepo('demo');
+    h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
+    const wt = path.join(h.home, 'worktrees', 'demo', 'quiet-basin');
+    fs.writeFileSync(path.join(wt, 'f1.txt'), 'work origin never got\n');
+    h.git(wt, 'add', 'f1.txt');
+    h.git(wt, 'commit', '-m', 'unique work');
+    h.ghRows([]);
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    // The origin is real and readable — that is the point.
+    expect(h.git(main, 'config', '--get', 'remote.origin.url')).toContain('origins/demo.git');
+    const r = refusal(wt);
+    expect(r.verdict).toBe('no-upstream');
+    expect(r.verdict).not.toBe('no-remote');
+  }, 30000);
+
   it('refuses no-remote when the project has no origin at all', () => {
     const { wt, main } = containedNeverPushed();
     h.git(main, 'remote', 'remove', 'origin');

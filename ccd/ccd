@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=65db1e1f6b585ff82e1040a99be2c11df03918db66a2775bdb699a4893663e78
+# ccrc:generated 1 sha256=1a6295bf8147cc73ec20787f00593c4846b3928287aae47c4a6b400aa249c792
 # ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box, not on this file: `_rc_enabled` reads
@@ -5161,15 +5161,28 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   # pre-Phase-C refusal has always had), never a plausible value nobody
   # measured.
   if (( ! contained )); then
-  # `no-remote`, the same token C2 uses, and the detail is what tells them
-  # apart: C2 asked whether origin has a URL at all, and this asks whether that
-  # URL is a GitHub OWNER/NAME — a project on a plain path or a non-GitHub host
-  # passes the first and fails this, and "no origin remote" alone would be false
-  # about it. One token because the consequence is identical (no PR can be
-  # bound), one sentence per rung because the remedies are not.
-  repo=$(_gh_repo_slug "$main") || { _reap_refuse no-remote "origin for $project is not a GitHub OWNER/NAME remote, so no PR can be bound to $branch"; return 1; }
-  rows=$(_gh_pr_list "$repo")   || { _reap_refuse gh-unreadable "$rows"; return 1; }
-  row=$(printf '%s' "$rows" | _pr_py pick "$main" "$branch" "$baseShort" "$REAP_TIP")
+  # NOT `no-remote`, AND THE REASON IS THE ONE THIS WHOLE WAVE IS ABOUT. C2
+  # proved this project HAS an origin and C3 fetched from it, so refusing
+  # `no-remote` here would put "This project has no `origin` remote" — the
+  # sentence `wsaudit.ts` renders, and the sheet renders sentences, never
+  # details — on a repository ccd read from three rungs earlier. That is the
+  # same shape as the old "was never pushed" said of a pushed branch, and the
+  # rewrite would have introduced it: on the old ladder a branch with no
+  # upstream took the contained arm and never reached `_gh_repo_slug` at all,
+  # so a project on a plain path or a non-GitHub host refused `no-upstream`
+  # with a true detail. Measured on both trees with the same fixture.
+  #
+  # An origin that is not a GitHub OWNER/NAME is not a missing origin — it is a
+  # repository no PR can bind to, which is exactly the empty-row position
+  # below, whose chooser already picks its sentence from remote EVIDENCE rather
+  # than from the slug. So it takes that arm. `no-remote` keeps ONE producer in
+  # this function (C2), where the sentence is true.
+  if repo=$(_gh_repo_slug "$main"); then
+    rows=$(_gh_pr_list "$repo")   || { _reap_refuse gh-unreadable "$rows"; return 1; }
+    row=$(printf '%s' "$rows" | _pr_py pick "$main" "$branch" "$baseShort" "$REAP_TIP")
+  else
+    row=''
+  fi
   case "$row" in
     '')
       # BOTH RUNGS HAVE NOW FAILED, and the token names the strongest evidence
