@@ -2922,6 +2922,44 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
       || die "worktree not removed — nested checkouts live under it, and ccd deletes no repository it did not create: ${nested//$'\n'/, } — nothing was touched"
   fi
 
+  # ── R4-1 · THE ATTIC PIN, BEFORE ANYTHING IS TOUCHED ────────────────────
+  # `git worktree remove` at ccd:2053 deletes both $workdir and
+  # $main/.git/worktrees/<slug>/, and the latter holds the HEAD reflog.
+  # `_ws_attic_pin`'s reflog read is guarded by `[[ -d "$workdir" ]]`, so a pin
+  # taken after that call sees nothing and contributes only a pre-resolved tip.
+  # Placing it above `_ws_unsupervise` rather than merely above 2053 puts it on
+  # the near side of EVERY irreversible act, so the intent/done pair below
+  # brackets a workspace whose commits are already referenced.
+  #
+  # UNCONDITIONAL: it runs even when `git branch -d` later refuses at ccd:2066,
+  # because that is the case where the commits matter most, and even when
+  # `registered != 0` so ccd:2053 never runs at all.
+  #
+  # `_ws_attic_pin` contains no `die`, which is what makes this `$( )` capture
+  # safe under `ccd-die-containment.test.ts`. Nothing added here may die inside
+  # a capture.
+  local reg_branch; reg_branch=$(_reg_get "$id" branch)
+  local tip="" atticsrc=none attic=0
+  if [[ -d "$workdir" ]]; then
+    tip=$(git -C "$workdir" rev-parse HEAD 2>/dev/null) && atticsrc=worktree || tip=""
+    # THE ASYMMETRY, and it is a measurement rather than a fabricated zero:
+    # a workspace still on disk whose tip cannot be resolved is exactly what
+    # "refuses anything it might destroy" means. Directory already gone is the
+    # other case and it is handled below — refusing there would wedge cleanup
+    # on a workspace with nothing left to protect.
+    [[ -n "$tip" ]] \
+      || _lc_refuse destroy "$id" tip-unreadable \
+           "could not resolve a tip for $workdir — nothing was touched; the workspace is still on disk and its commits would be unreferenced"
+  elif [[ -n "$reg_branch" ]]; then
+    tip=$(git -C "$main" rev-parse --verify "refs/heads/$reg_branch" 2>/dev/null) \
+      && atticsrc=registry || tip=""
+  fi
+  if [[ -n "$tip" ]]; then
+    attic=$(_ws_attic_pin "$main" "$id" "$workdir" "$tip")
+    [[ "$attic" =~ ^[0-9]+$ ]] || attic=0
+  fi
+  # ─────────────────────────────────────────────────────────────────────────
+
   # THE PAIR. `tx` is a `local`, minted here and passed to both halves — there
   # is no global carrying it, and there must not be: the `LC_TIP=` idiom dies
   # under `set -u` on the first call in a process and appends a blank line
@@ -2930,7 +2968,8 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
   local lctx; lctx=$(_lc_tx)
   _lc_intent destroy "$id" "$lctx" verb ws-rm meas.project "$project" \
     meas.workspace "$ws" meas.branch "$branch" meas.workdir "$workdir" \
-    meas.registered "$registered"
+    meas.registered "$registered" meas.tip "$tip" meas.attic "$attic" \
+    meas.atticsrc "$atticsrc"
 
   _ws_unsupervise "$id"
   tmux kill-session -t "$(_tmux "$id")" 2>/dev/null || true
@@ -2952,7 +2991,9 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
            die "worktree record not cleared for $workdir — the session was stopped; git refused: unlock it (git -C $main worktree unlock $workdir) or clean the tree, then re-run — and if the directory is already gone, git -C $main worktree prune clears the record"; }
   fi
 
-  local reg_branch; reg_branch=$(_reg_get "$id" branch)
+  # DECLARED IN THE R4-1 BLOCK ABOVE NOW, not here: the attic pin needs it to
+  # resolve a tip from the registry when the worktree is gone, and a SECOND
+  # `local` in the same function re-declares and blanks it. One reader, one place.
   if [[ -n "$branch" ]]; then
     # git had a record, so the registry is a witness, never the decider: a
     # divergence means the branch was renamed outside ccd, and the name to
