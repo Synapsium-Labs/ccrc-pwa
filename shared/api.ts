@@ -3493,7 +3493,14 @@ export type LifecycleAct =
   | 'archive' | 'restore'
   | 'attic-drop'    // ws-attic --drop deleted pinned refs
   | 'reap'          // ws-reap
-  | 'gc'            // ws-gc --prune, as a run rather than a per-row destroy
+  | 'gc'            // RESERVED, and nothing emits it — `ws-gc --prune`'s
+                    // per-row removals go out as `destroy` with `verb ws-gc`
+                    // (ccd:8207, ccd:8320). A run-level line would need an
+                    // identity `_lc_emit` cannot express: it takes a session
+                    // id, and a prune RUN sweeps many. Kept rather than
+                    // removed because this vocabulary is wire-facing and
+                    // additive-only — a newer ccd emitting `gc` at an older
+                    // server is what absence-permits exists to survive.
   | 'spawn'         // _spawn_settle, CHANGE-ONLY (§2)
   | 'start' | 'ensure' | 'swap' | 'enable' | 'stop' | 'forget'
   | 'unknown';      // the reader's degrade. NEVER written by a ccd call site.
