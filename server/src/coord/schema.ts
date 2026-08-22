@@ -258,6 +258,29 @@ export const MIGRATIONS: readonly string[] = [
   // A SEPARATE MIGRATION for the reason migration 1 states in full: `db.ts` runs
   // `for (let v = current; v < COORD_SCHEMA_VERSION; v++)`, and the server's copy
   // is already at `user_version 2`.
+  //
+  // FIX ROUND 1 (Task 29 review, F1) AMENDS THIS MIGRATION IN PLACE, adding
+  // `badoutcome` below — which looks like exactly the mistake the paragraph
+  // above forbids, so the ruling and its premise are recorded here rather
+  // than only in a review thread. The "separate migration, never an
+  // amendment" rule protects a migration that has already RUN somewhere,
+  // because `db.ts`'s `for (let v = current; ...)` loop only ever executes
+  // `MIGRATIONS[v]` for `v >= current` — an edit to an already-applied
+  // migration index never re-runs against a database already past it, so an
+  // amendment there would silently diverge from what is actually on disk.
+  // THIS migration has not shipped: wave 4's server deploy is Task 43 and
+  // has not happened, `origin/main` (measured via `git merge-base --is-
+  // ancestor` against this branch's Task 27/28 commits, both NOT ancestors
+  // of `origin/main`) does not contain `MIGRATIONS[2]` at all — `schema.ts`
+  // on `origin/main` has exactly TWO migration entries, not three — so no
+  // server that has ever run has executed this file's `user_version 2 -> 3`
+  // step, and the live `~/.ccrc/coord.db` cannot be past `user_version 2`.
+  // Every database that HAS reached `user_version 3` is a test temp file
+  // created by this branch's own suites, which are rebuilt from `MIGRATIONS`
+  // fresh on every run and carry no state across them. Amending in place
+  // rather than adding `MIGRATIONS[3]` avoids a fourth table shape
+  // (`lifecycle_events` missing `badoutcome`, briefly, between versions 3
+  // and 4) that nothing would ever have actually run against.
   `
   CREATE TABLE lifecycle_events (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -274,6 +297,10 @@ export const MIGRATIONS: readonly string[] = [
                                    -- back through isLifecycleAct and never cast
     badact     TEXT,              -- the token that degraded to 'unknown'; NULL when none did
     outcome    TEXT NOT NULL,     -- LifecycleOutcome; same we-do-not-know rule
+    badoutcome TEXT,              -- badact's twin on the outcome side (FIX ROUND 1, F1): NULL
+                                   -- whenever outcome is not 'unknown'. Added by amending THIS
+                                   -- migration rather than a new one -- see the justification
+                                   -- above the CREATE TABLE, which records why that is safe here.
     verb       TEXT,
     sessionId  TEXT,              -- the SUBJECT of the act (ccd's wire field \`id\`), not the actor
     tx         TEXT,              -- pairs an \`intent\` with its outcome (D4). An intent with no
