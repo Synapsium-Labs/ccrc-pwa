@@ -315,13 +315,16 @@ export class FleetWatcher {
    *  an empty one — mirroring `lastRunsJson`'s own initial value, and the reason
    *  a HEALTHY fleet is a frame rather than a silence. */
   private lastDivergenceSweep = 0;
+  private lastDivergenceJson: string | null = null;
+  /** The seventh lane's clock — the journal mirror. `sweepLifecycle` below
+   *  carries the lane's own docstring; this is only the clock field, same
+   *  shape as `lastNameSweep`/`lastDivergenceSweep` above it. */
   private lastLifecycleSweep = 0;
   /** Built lazily on the first sweep that has a coordination database — the
    *  mirror holds the cursor, the error tally and the recorded-once gap names
    *  in memory, so there is exactly one instance per process and it must not
    *  be re-minted per tick. */
   private mirror: JournalMirror | null = null;
-  private lastDivergenceJson: string | null = null;
   /** `<project>/<name>` for the worktrees the PREVIOUS sweep found unclaimed —
    *  the census's one-interval debounce on `unregistered-worktree`, and the
    *  only cross-sweep memory this lane keeps. Empty at boot, so the first sweep
