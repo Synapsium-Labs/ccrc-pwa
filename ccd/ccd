@@ -10245,6 +10245,16 @@ cmd_ensure() {   # id — idempotent; used by systemd. arg is the id directly.
   # the emitter's own — and it is what tells a respawn from a human's
   # `ccd ensure`, through `obs.cg`: the systemd unit names the id in the cgroup
   # path, which is respawn provenance nothing on this box has today.
+  #
+  # NOT CHANGE-GATED, AND THAT IS A KNOWN, ACCEPTED DEPENDENCY ON A LIMIT THIS
+  # FILE DOES NOT SET (FIX ROUND 1 (d)). Unlike `_spawn_settle` one function up,
+  # this emit fires on EVERY invocation, in-unit or not — there is no rc/300s
+  # gate here. The volume that leaves unbounded is therefore bounded
+  # EXTERNALLY, by systemd's own `StartLimitIntervalSec`/`StartLimitBurst` on
+  # `claude-session@.service` (a crash-looped unit stops retrying, so
+  # `cmd_ensure` stops being re-entered), never by anything journal-side. A
+  # future reader retuning those systemd limits is also retuning this
+  # journal's write rate, and nothing here will warn them of that.
   _lc_done ensure "$id" "" meas.inUnit "${CCD_IN_UNIT:-0}"
   # Inside the unit (cmd_supervise sets CCD_IN_UNIT in its own process) this IS the spawn; anywhere
   # else it is a REQUEST for one, and the request goes through the unit so the session comes back
