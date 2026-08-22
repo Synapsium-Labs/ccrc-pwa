@@ -1038,6 +1038,26 @@ _lc_rotate() {   # live-path — mint a fresh generation when the live one is fu
   # even though rc stayed 0. The COMPOUND, not the bare `exec`, is what the
   # redirect must wrap — `2>/dev/null` on `{ …; }` applies to everything
   # inside it, `exec` included, the same way it would to any other command.
+  #
+  # THE GENERAL RULE (record it here ONCE, canonically, so the next person
+  # finds it rather than re-discovering it — this has now cost this plan two
+  # separate FIX ROUNDs): a trailing `2>/dev/null` on a simple command with
+  # MULTIPLE redirections does NOT suppress bash's own diagnostic for an
+  # earlier redirection that failed to open. Bash installs a simple command's
+  # redirections IN ORDER, left to right, as it encounters them — so when the
+  # FIRST one (`>>`, `>`, or `exec`'s own target) fails to open, bash reports
+  # the failure to whatever stderr is CURRENTLY active, which is the real one,
+  # because the LATER `2>/dev/null` redirect has not been installed yet. This
+  # is true of every BUILTIN that can appear with a second redirect after a
+  # failing first one — measured here for `exec`, and for the plain `:` and
+  # `printf` builtins at every other write site in this block (`_lc_live`'s
+  # mint, `_lc_rotate`'s mint, `_lc_err`'s counter write, `_lc_emit`'s event
+  # append) — and is NOT true of an EXTERNAL command's OWN stderr (`mkdir`,
+  # `mv`, `rm`, `cat`, `stat`), which a trailing `2>/dev/null` captures
+  # normally, because there bash's redirection setup is not itself what fails.
+  # The fix is always the same: wrap the WHOLE command in a compound
+  # `{ …; } 2>/dev/null`, so the redirect is installed and active BEFORE the
+  # inner command — and its own attempt to open ITS redirect — ever runs.
   { exec {lfd}>>"$lock"; } 2>/dev/null || return 0
   flock -n "$lfd" 2>/dev/null || { exec {lfd}>&-; return 0; }
 

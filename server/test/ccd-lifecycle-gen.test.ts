@@ -54,6 +54,39 @@ describe('_lc_live', () => {
     expect(h.sh('_lc_live; printf END')).toBe('END');
   });
 
+  // FIX ROUND 1 (task 15, follow-up). DISTINCT from the test directly above:
+  // that state is `mkdir -p` itself failing (no `.lifecycle` at all, blocked
+  // by a plain file in its place), which returns EARLY, before this
+  // function ever reaches its own mint attempt. This state is the one task
+  // 15's own Critical fix was actually found under: `.lifecycle` already
+  // EXISTS (so `mkdir -p` is a no-op and succeeds, and the glob loop over
+  // its contents needs only read+execute, which chmod 555 still grants),
+  // so `_lc_live` genuinely reaches `{ : >> "$newest"; } 2>/dev/null` and
+  // THAT specific open is what fails. Confirmed this test can fail: with
+  // the compound wrap at this site reverted to the bare
+  // `: >> "$newest" 2>/dev/null` form, this test goes RED with
+  // `ccd: line …: …/.lifecycle/journal-….ndjson: Permission denied` on
+  // `r.stderr` (task-15-report.md FIX ROUND 1 quotes the exact output).
+  // Raw `spawnSync`, not `h.sh` — `h.sh` only ever returns stdout, so a
+  // successful (rc 0) run's stderr is discarded before this test could see
+  // it either way, the same reason the sibling `_lc_rotate` leak test below
+  // uses `spawnSync` rather than the harness's own `sh`.
+  it('leaks nothing to stderr when the mint target cannot be created (unwritable .lifecycle, directory already present)', () => {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.chmodSync(dir, 0o555);
+    let r: ReturnType<typeof spawnSync>;
+    try {
+      const env = ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true });
+      r = spawnSync('bash', ['-c', `source "${CCD}"; _lc_live`],
+        { encoding: 'utf8', cwd: h.home, env });
+    } finally {
+      fs.chmodSync(dir, 0o755);   // restore so afterEach's own cleanup can remove the tree
+    }
+    expect.soft(r.status, `stderr: ${r.stderr}`).toBe(0);
+    expect.soft(r.stdout, 'the documented empty-string answer, not a half-formed name').toBe('');
+    expect.soft(r.stderr).toBe('');
+  });
+
   // Not in the task-14 brief's literal test file — required by the dispatch:
   // "ORDERING IS BY FILENAME, AND IT IS LENGTH-FIRST — NOT lexicographic."
   // `shared/api.ts`'s `compareGenerations` picks the 20-digit name as greater
@@ -172,6 +205,42 @@ describe('_lc_rotate', () => {
   // could see it either way.
   it('leaks nothing to stderr when the lock file cannot be opened (unwritable .lifecycle)', () => {
     const p = big(gen('1000000000000000000'));
+    fs.chmodSync(dir, 0o555);
+    let r: ReturnType<typeof spawnSync>;
+    try {
+      const env = ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true });
+      r = spawnSync('bash', ['-c', `source "${CCD}"; _lc_rotate "${p}"`],
+        { encoding: 'utf8', cwd: h.home, env });
+    } finally {
+      fs.chmodSync(dir, 0o755);   // restore so afterEach's own cleanup can remove the tree
+    }
+    expect.soft(r.status, `stderr: ${r.stderr}`).toBe(0);
+    expect.soft(r.stdout).toBe('');
+    expect.soft(r.stderr).toBe('');
+  });
+
+  // FIX ROUND 1 (task 15, follow-up) — DISTINCT reachable state from the
+  // test directly above. That test's state (`.lifecycle` unwritable AND
+  // `.rotate.lock` absent) never reaches the mint line at all: the `exec
+  // {lfd}>>"$lock"` open fails FIRST, on the lock file itself, and returns
+  // before this function ever measures whether to mint. This state
+  // pre-creates `.rotate.lock` (write-permitted) BEFORE stripping the
+  // directory's write bit, so opening that EXISTING file for append needs
+  // only EXECUTE (search) permission on the directory — which chmod 555
+  // still grants — not WRITE, and the flock step succeeds. Execution then
+  // reaches the mint attempt, where the NEW `journal-*.ndjson` name DOES
+  // need directory write to be CREATED, and fails. Verified independently
+  // with a bare bash probe before writing this test (quoted in
+  // task-15-report.md's FIX ROUND 1 section): opening an existing writable
+  // file inside a chmod-555 directory succeeds; creating a new file in that
+  // same directory fails with `Permission denied`. Confirmed this test can
+  // fail: with the compound wrap at this site reverted to the bare
+  // `: >> "$minted" 2>/dev/null` form, this test goes RED with
+  // `ccd: line …: …/.lifecycle/journal-….ndjson: Permission denied` on
+  // `r.stderr` (also quoted there).
+  it('leaks nothing to stderr when the mint target cannot be created (rotate lock already present, .lifecycle unwritable)', () => {
+    const p = big(gen('1000000000000000000'));
+    fs.writeFileSync(path.join(dir, LC_ROTATE_LOCK_NAME), '', { mode: 0o644 });
     fs.chmodSync(dir, 0o555);
     let r: ReturnType<typeof spawnSync>;
     try {
