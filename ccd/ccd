@@ -829,7 +829,19 @@ _lc_tx() {   # -> a correlation id for ONE intent/outcome pair, on stdout
 _lc_cgroup_read() {   # -> this process's `0::` cgroup path, verbatim, on stdout
   # Its own function so a test can plant a cgroup without a container. The
   # `0::` line is the unified-hierarchy one; on this box it is the only line.
-  sed -n 's/^0:://p' "/proc/$$/cgroup" 2>/dev/null | head -1
+  #
+  # FIX ROUND 2 (task 15) — THE GENERAL RULE, APPLIED TO PIPELINES: a
+  # redirect on ONE stage of a pipe protects only that stage. `sed … | head`
+  # gave `sed` its own `2>/dev/null` and left `head` with none, so a PATH
+  # missing `head` leaked `ccd: line …: head: command not found` straight to
+  # the real stderr. Measured with a PATH built from every OTHER binary this
+  # block needs but deliberately missing `head`:
+  # `ccd: line …: head: command not found` on real stderr, rc still 0. The
+  # fix wraps the WHOLE pipeline in one compound `{ …; } 2>/dev/null`, the
+  # same idiom `_lc_rotate`'s flock `exec` established for a builtin with
+  # multiple redirects — here for a different reason (a per-stage redirect
+  # does not cover its neighbour), same fix shape.
+  { sed -n 's/^0:://p' "/proc/$$/cgroup" | head -1; } 2>/dev/null
 }
 
 _lc_ppid_of() {   # pid -> its PPid, on stdout, or nothing. ALWAYS rc 0.
@@ -845,7 +857,14 @@ _lc_ppid_of() {   # pid -> its PPid, on stdout, or nothing. ALWAYS rc 0.
   # is not what this function documents or what its own callers assume;
   # `_lc_obs`'s ancestor walk at ccd:945 calls this once per hop and would be
   # the first production caller to meet a stale or reaped pid.
-  sed -n 's/^PPid:[[:space:]]*//p' "/proc/${1-}/status" 2>/dev/null | head -1
+  # FIX ROUND 2 (task 15) — same pipeline-redirect gap as `_lc_cgroup_read`
+  # above: `sed` had its own `2>/dev/null`, `head` had none, and a PATH
+  # missing `head` leaked `ccd: line …: head: command not found` to the real
+  # stderr. The compound wrap covers both stages with ONE redirect; the
+  # trailing `return 0` below is unaffected — `pipefail`'s rightmost-nonzero
+  # rule still applies INSIDE the braces exactly as it did on the bare pipe,
+  # and this function always answers 0 regardless either way.
+  { sed -n 's/^PPid:[[:space:]]*//p' "/proc/${1-}/status" | head -1; } 2>/dev/null
   return 0
 }
 
@@ -1108,13 +1127,32 @@ _lc_rotate() {   # live-path — mint a fresh generation when the live one is fu
     # this file's own idiom (ccd:4007, 4033, 1152, 6801) — a `local` variable
     # is never enough for an EXTERNAL command's collation, only for bash's
     # own builtin `[[ ]]` comparisons.
-    while IFS= read -r f; do
-      f="${f#*|}"
-      [[ -n "$f" && "$f" != "$live_now" && "$f" != "$minted" ]] && rm -f -- "$f"
-    done < <(
-      for f in "${gens[@]}"; do printf '%05d|%s\n' "${#f}" "$f"; done \
-        | LC_ALL=C sort | head -n $(( n - _LC_GEN_KEEP ))
-    )
+    # FIX ROUND 2 (task 15) — TWO gaps closed with one wrap. (1) Neither
+    # `sort` nor `head` in the generator pipe below carried a redirect at
+    # all, so a PATH missing either leaked `command not found` straight to
+    # the real stderr — the same per-stage-redirect gap as `_lc_cgroup_read`/
+    # `_lc_ppid_of` above, found here by this task's own sweep of the whole
+    # LC block rather than in the original review. (2) `rm -f -- "$f"`
+    # inside the loop body carried NO redirect either — `-f` only silences
+    # "no such file", not a genuine permission error, and a chmod-555
+    # `.lifecycle` mid-rotation (an ordinary operational state, not a
+    # contrived one) makes `rm` print its OWN `Permission denied` to real
+    # stderr. Measured directly: `rm -f -- file` inside a directory whose
+    # write bit was stripped printed `rm: cannot remove 'file': Permission
+    # denied` even with `-f`. Wrapping the WHOLE loop — generator, sort,
+    # head, and every `rm` the loop body can run — in one compound
+    # `{ …; } 2>/dev/null` closes both at once, rather than four separate
+    # per-command redirects that would only repeat the gap under a fifth
+    # command added here later.
+    {
+      while IFS= read -r f; do
+        f="${f#*|}"
+        [[ -n "$f" && "$f" != "$live_now" && "$f" != "$minted" ]] && rm -f -- "$f"
+      done < <(
+        for f in "${gens[@]}"; do printf '%05d|%s\n' "${#f}" "$f"; done \
+          | LC_ALL=C sort | head -n $(( n - _LC_GEN_KEEP ))
+      )
+    } 2>/dev/null
   fi
   # A CONTRACT, NOT HYGIENE: flock treats two open()s of one path in one
   # process as two strangers, and ccd is SOURCED, so a descriptor left open

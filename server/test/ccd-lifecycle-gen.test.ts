@@ -13,7 +13,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { LC_GEN_PREFIX, LC_GEN_SUFFIX, LC_ROTATE_LOCK_NAME } from '../../shared/api.js';
 import { makeCcdHarness, type CcdHarness, CCD, ghContainedEnv } from './ccdWsHelpers.js';
 import { generationsOf, lcDir } from './lifecycleHelpers.js';
@@ -249,6 +249,67 @@ describe('_lc_rotate', () => {
         { encoding: 'utf8', cwd: h.home, env });
     } finally {
       fs.chmodSync(dir, 0o755);   // restore so afterEach's own cleanup can remove the tree
+    }
+    expect.soft(r.status, `stderr: ${r.stderr}`).toBe(0);
+    expect.soft(r.stdout).toBe('');
+    expect.soft(r.stderr).toBe('');
+  });
+
+  // FIX ROUND 2 (task 15). Neither `sort` nor `head` in the prune
+  // generator pipe carried its OWN redirect, so a PATH genuinely missing
+  // `head` leaked `command not found` straight to real stderr — found by
+  // this task's own sweep of the whole LC block, not by the original
+  // review. Five generations (four old, one over-cap) so pruning genuinely
+  // triggers (`n=5 > _LC_GEN_KEEP=4`). The curated PATH follows
+  // `ccd-version.test.ts`'s `pathWithoutPython3` shape: symlinks to every
+  // OTHER binary this call chain needs, `head` deliberately omitted, so the
+  // absence is genuine rather than a function stub `command -v` would still
+  // see.
+  it('leaks nothing to stderr when head is genuinely absent from PATH during pruning', () => {
+    fs.mkdirSync(dir, { recursive: true });
+    for (const n of ['1', '2', '3', '4']) {
+      fs.writeFileSync(path.join(dir, gen(`${n}000000000000000000`)), 'x');
+    }
+    const p = big(gen('9000000000000000000'));
+    const noHead = path.join(h.home, 'no-head-bin');
+    fs.mkdirSync(noHead, { recursive: true });
+    for (const name of ['bash', 'mkdir', 'sed', 'cat', 'mv', 'rm', 'stat', 'flock', 'python3', 'date', 'sort']) {
+      const real = execFileSync('bash', ['-c', `command -v ${name}`], { encoding: 'utf8' }).trim();
+      fs.symlinkSync(real, path.join(noHead, name));
+    }
+    const baseEnv = ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true });
+    const env = { ...baseEnv, PATH: noHead };
+    const r = spawnSync('bash', ['-c', `source "${CCD}"; _lc_rotate "${p}"`],
+      { encoding: 'utf8', cwd: h.home, env });
+    expect.soft(r.status, `stderr: ${r.stderr}`).toBe(0);
+    expect.soft(r.stdout).toBe('');
+    expect.soft(r.stderr).toBe('');
+  });
+
+  // FIX ROUND 2 (task 15), found in the same sweep. `rm -f -- "$f"` inside
+  // the prune loop carried NO redirect at all — `-f` silences only "no such
+  // file", not a genuine permission error, and `rm` prints its OWN message
+  // for that. Pre-creates `.rotate.lock` (write-permitted) BEFORE stripping
+  // the directory write bit, the same shape as the mint-site test above:
+  // opening an EXISTING file needs only directory EXECUTE, so flock still
+  // succeeds and the loop genuinely reaches an `rm -f` that then hits a
+  // real EACCES removing a directory ENTRY (which needs directory WRITE,
+  // regardless of the file's own mode).
+  it('leaks nothing to stderr when rm -f hits a genuine permission error during pruning', () => {
+    fs.mkdirSync(dir, { recursive: true });
+    for (const n of ['1', '2', '3', '4']) {
+      fs.writeFileSync(path.join(dir, gen(`${n}000000000000000000`)), 'x');
+    }
+    const p = big(gen('9000000000000000000'));
+    fs.writeFileSync(path.join(dir, LC_ROTATE_LOCK_NAME), '', { mode: 0o644 });
+    fs.chmodSync(dir, 0o555);
+    let r: ReturnType<typeof spawnSync>;
+    try {
+      const env = ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true });
+      r = spawnSync('bash', ['-c', `source "${CCD}"; _lc_rotate "${p}"`],
+        { encoding: 'utf8', cwd: h.home, env });
+    } finally {
+      fs.chmodSync(dir, 0o755);
     }
     expect.soft(r.status, `stderr: ${r.stderr}`).toBe(0);
     expect.soft(r.stdout).toBe('');

@@ -7,7 +7,7 @@
 // strongest reading available.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { LIFECYCLE_ACTS, LIFECYCLE_OUTCOMES, LC_ACT_UNKNOWN, LC_OUTCOME_UNKNOWN } from '../../shared/api.js';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeCcdHarness, type CcdHarness, CCD, ghContainedEnv } from './ccdWsHelpers.js';
@@ -266,6 +266,35 @@ describe('_lc_obs — kernel-observed, memoised, never a decision', () => {
 
   it('never writes to stdout or stderr of its own accord', () => {
     expect(h.sh(`_lc_cgroup_read() { printf '%s' '/x'; }; _lc_obs 2>&1; printf END`)).toBe('END');
+  });
+
+  // FIX ROUND 2 (task 15). `_lc_cgroup_read`/`_lc_ppid_of`'s internal
+  // `sed … | head -1` gave `sed` its own `2>/dev/null` and left `head` with
+  // none — a per-stage redirect protects only that stage, so a PATH
+  // genuinely missing `head` leaked `ccd: line …: head: command not found`
+  // straight to the real stderr TWICE (once per function), rc still 0. The
+  // `pathWithoutPython3` idiom in `ccd-version.test.ts` is the precedent
+  // for a PATH proven genuinely absent a binary, not merely shadowed by a
+  // function stub (a shell FUNCTION named `head` would still answer
+  // `command -v head`, and this bug is about the binary being unreachable,
+  // not about a caller shadowing it) — `pathWithoutHead` below follows the
+  // same shape. Raw `spawnSync`, not `h.sh`, for the same reason every other
+  // stderr-silence test in this plan uses it: `h.sh` only ever returns
+  // stdout.
+  it('_lc_obs (and so _lc_emit) leaks nothing when head is genuinely absent from PATH', () => {
+    const dir = path.join(h.home, 'no-head-bin');
+    fs.mkdirSync(dir, { recursive: true });
+    for (const name of ['bash', 'mkdir', 'sed', 'cat', 'mv', 'rm', 'stat', 'flock', 'python3', 'date', 'sort']) {
+      const real = execFileSync('bash', ['-c', `command -v ${name}`], { encoding: 'utf8' }).trim();
+      fs.symlinkSync(real, path.join(dir, name));
+    }
+    const baseEnv = ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true });
+    const env = { ...baseEnv, PATH: dir };
+    const r = spawnSync('bash', ['-c', `source "${CCD}"; _lc_emit stop done sess ""`],
+      { encoding: 'utf8', cwd: h.home, env });
+    expect.soft(r.status, `stderr: ${r.stderr}`).toBe(0);
+    expect.soft(r.stdout).toBe('');
+    expect.soft(r.stderr).toBe('');
   });
 });
 
