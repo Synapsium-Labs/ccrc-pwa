@@ -140,7 +140,18 @@ describe('ws-reap — exactly TWO emits, not thirty-six', () => {
       _ws_reap_eval() { REAP_VERDICT=dirty-tree; REAP_DETAIL="uncommitted changes"; return 1; }
       _reap_paths_json() { echo '[]'; }
       _ws_reap_locked ${'a'.repeat(64)} s 2>/dev/null || true`);
-    expect(out).toContain('"refused":');
+    // FIX ROUND 1 (Task 24 fix round 1, F3): the EXACT token, not merely the
+    // key's presence. `toContain('"refused":')` alone is satisfied by a
+    // corrupted value too — measured: inserting `REAP_VERDICT=CLOBBERED` as
+    // `_lc_emit`'s first statement (it is a bare global, no `local`, and
+    // `_lc_emit` runs in-process, not a subshell, so the assignment leaks
+    // into every caller sharing that name) leaves stdout printing
+    // `"refused":"CLOBBERED"` while the journal — captured into `_lc_emit`'s
+    // OWN positional argument at the call site, before the clobber runs —
+    // still correctly holds `dirty-tree`. That divergence is exactly the
+    // defect this assertion now exists to catch: the token the PWA reads off
+    // stdout and the token the journal records must be the same word.
+    expect(out).toContain('"refused":"dirty-tree"');
     const r = refusalsOf(h.home);
     expect(r, 'one emit covers all 35 _reap_refuse tokens').toHaveLength(1);
     expect(r[0]).toEqual({ act: 'reap', token: 'dirty-tree' });

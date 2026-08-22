@@ -533,7 +533,7 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # ANY-FIELD check now; see the note there.
   # ── THE BACKSTOP (D3) ────────────────────────────────────────────────────
   # HERE, AND NOT ONE LINE LOWER. Every destruction path on this box terminates
-  # in this function — ws-rm (ccd:2968), ws-reap (ccd:7715), ws-gc's dead-reg
+  # in this function — ws-rm (ccd:2972), ws-reap (ccd:7715), ws-gc's dead-reg
   # arm (ccd:8209), forget (ccd:10722) — and a destructive verb added LATER that
   # forgets to journal itself still leaves a record. A silent destruction has to
   # defeat two independent emit sites.
@@ -2838,14 +2838,14 @@ _ws_branch_elsewhere() {
 
 cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destroy.
   local id="${1:?usage: ccd ws-rm <id>}"
-  [[ -f "$REG/$id.uuid" ]] || _lc_refuse destroy "$id" no-such-session "no such session: $id"
+  [[ -f "$REG/$id.uuid" ]] || _lc_refuse destroy "$id" no-such-session "no such session: $id" verb ws-rm
   local ws project workdir
   ws=$(_reg_get "$id" workspace); project=$(_reg_get "$id" project); workdir=$(_reg_get "$id" workdir)
   # The absence of a workspace field is what distinguishes a main checkout.
   [[ -n "$ws" ]] || _lc_refuse destroy "$id" not-a-workspace \
-    "$id is not a workspace — refusing to remove a main checkout"
+    "$id is not a workspace — refusing to remove a main checkout" verb ws-rm
   [[ -n "$project" && -n "$workdir" ]] || _lc_refuse destroy "$id" incomplete-registry \
-    "incomplete registry for '$id'"
+    "incomplete registry for '$id'" verb ws-rm
 
   # A hold is a declaration that a program is mid-flight here. Destroying the
   # workspace should take two deliberate acts — release, then remove — never
@@ -2856,7 +2856,7 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
   # instead, for the reason recorded there (the PWA reads tokens, not stderr).
   if [[ -e "$REG/$id.hold" ]]; then
     _lc_refuse destroy "$id" held \
-      "held: $(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>') — release first: ccd ws-release --session $id"
+      "held: $(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>') — release first: ccd ws-release --session $id" verb ws-rm
   fi
   local main="$PROJECTS_ROOT/$project"
 
@@ -2918,7 +2918,7 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
     { (( drc == 0 )) && [[ -z "$derr" ]]; } \
       || die "could not read $workdir${derr:+ ($derr)} — nothing was touched"
     [[ -z "$dirty" ]] || _lc_refuse destroy "$id" dirty-tree \
-      "worktree not removed (uncommitted changes?) — nothing was touched: $workdir"
+      "worktree not removed (uncommitted changes?) — nothing was touched: $workdir" verb ws-rm
     local nested
     nested=$(_ws_nested_checkouts "$workdir") \
       || die "could not scan $workdir for nested checkouts${_WS_NESTED_WHY:+ ($_WS_NESTED_WHY)} — nothing was touched"
@@ -2953,7 +2953,7 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
     # on a workspace with nothing left to protect.
     [[ -n "$tip" ]] \
       || _lc_refuse destroy "$id" tip-unreadable \
-           "could not resolve a tip for $workdir — nothing was touched; the workspace is still on disk and its commits would be unreferenced"
+           "could not resolve a tip for $workdir — nothing was touched; the workspace is still on disk and its commits would be unreferenced" verb ws-rm
   elif [[ -n "$reg_branch" ]]; then
     tip=$(git -C "$main" rev-parse --verify "refs/heads/$reg_branch" 2>/dev/null) \
       && atticsrc=registry || tip=""
