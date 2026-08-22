@@ -1013,6 +1013,14 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // this closes the gap between them and the wire contract PWA reads
   // (`pwa/src/lib/api.ts`'s `fleetHealth()`), rather than changing behavior.
   app.get('/api/fleet/health', async (): Promise<FleetHealth> => {
+    // Read ONCE, off the watcher, exactly the way `/api/fleet` reads
+    // `watcher?.currentPending()` — the mirror's cursor, error tally and
+    // recorded-once gap names live in memory ON IT, and no route may re-mint
+    // one. `undefined` when this box has no watcher or has not swept yet,
+    // which the wire renders as an ABSENT block: absence-permits, and a reader
+    // must treat it as `'unknown'`, never as `'ok'` and never as an empty
+    // history.
+    const lifecycle = watcher?.lifecycleHealth() ?? undefined;
     if (deps.cfg.fleetMode === 'remote' && deps.fleetState) {
       return {
         mode: 'remote',
@@ -1026,6 +1034,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         // scripts) — an absent stamp and a null one are the same condition,
         // exactly as `/health` treats them.
         build: buildAgreement(deps.fleetState.build, deps.build ?? null),
+        ...(lifecycle ? { lifecycle } : {}),
       };
     }
     // Local mode drives ccd on this same box, off this same roster: there is
@@ -1038,6 +1047,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return {
       mode: deps.cfg.fleetMode, connected: true, downSince: null,
       roster: 'unknown', build: 'unknown',
+      // BOTH ARMS. Local mode drives ccd on this same box and mirrors the same
+      // journal — there is no second box to disagree with, but there is still a
+      // journal, and a block that appeared only in remote mode would make the
+      // dev box permanently unable to see its own mirror stall.
+      ...(lifecycle ? { lifecycle } : {}),
     };
   });
 
