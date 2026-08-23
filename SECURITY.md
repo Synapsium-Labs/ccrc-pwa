@@ -44,10 +44,15 @@ That makes the following especially worth reporting:
   arming is an explicit operator step (`ccrc passwd` + `ccrc expose`). Reporting "the
   default install has no password" tells us something we say ourselves — but reporting a
   box that is *exposed* and still unauthenticated is very much a finding.
-- **Exposure always terminates TLS at a certificate you arranged.** `ccrc expose` takes
-  `duckdns` (a free public name) or `byo` (your own domain); there is no mode that skips
-  the certificate. A box reachable over plain HTTP is a misconfiguration, and reporting
-  one is welcome.
+- **Exposure always terminates TLS.** `ccrc expose` takes `duckdns` (a free public
+  name), `byo` (your own domain), or `ip` (no DNS and no third party at all). There is no
+  mode that skips the certificate; a box reachable over plain HTTP is a
+  misconfiguration, and reporting one is welcome.
+- **`ccrc expose ip` uses a locally-trusted CA**, so its certificate is not publicly
+  trusted and each device installs the printed root once. That is the stated trade for
+  needing no DNS. It also means **passkeys are unavailable in that mode** — WebAuthn
+  needs a domain — so the gate runs on passphrase login only. Both are documented
+  choices, not findings.
 
 ## Supported versions
 
