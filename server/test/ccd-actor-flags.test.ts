@@ -58,6 +58,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync, mkdirSync } from 'node:fs';
 import { makeCcdHarness, CCD, type CcdHarness } from './ccdWsHelpers.js';
+import { readJournal } from './lifecycleHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-actorflags-'); });
@@ -710,5 +711,77 @@ describe('ws-rename accepts the dec flags in any position', () => {
       refused: 'bad-args',
       detail: 'usage: ccd ws-rename --session <id> --branch <name>',
     });
+  });
+});
+
+/** The `dec` object of a journal line, narrowed by `typeof` rather than cast.
+ *  An unmodellable `dec` is `null` here — not a disagreement, and not a crash. */
+const decOf = (e: Record<string, unknown>): Record<string, unknown> | null => {
+  const d = e['dec'];
+  return d !== null && typeof d === 'object' ? (d as Record<string, unknown>) : null;
+};
+const lastDec = (): Record<string, unknown> | null => {
+  const decs = readJournal(h.home).map(decOf).filter((d): d is Record<string, unknown> => d !== null);
+  expect(decs.length, 'no journal line carried a dec at all').toBeGreaterThan(0);
+  return decs[decs.length - 1]!;
+};
+
+describe('the declared triple reaches the journal', () => {
+  const STUBS = `tmux() { return 1; };`;
+
+  it('records what the caller said on ws-hold, and the surface it said it from', () => {
+    const id = seedWorkspace();
+    h.sh(`${STUBS} cmd_ws_hold --session ${id} --reason 'program:x wave:1/4' --surface pwa --actor 'device:iPhone'`);
+    expect(lastDec()).toMatchObject({
+      surface: 'pwa', actor: 'device:iPhone', reason: 'program:x wave:1/4',
+    });
+  });
+
+  // MEASURED, NOT AS THE BRIEF DRAFTED IT (D-200 discipline): `cmd_ws_release`
+  // writes to the journal ONLY on its `-e "$REG/$id.hold"` arm — the comment
+  // right above that call site says why: "an idempotent no-op is not an act,
+  // and recording one would make the record disagree with what happened."
+  // Calling release on a never-held session (the brief's original snippet)
+  // takes the OTHER arm, which emits nothing at all, so `lastDec()`'s hard
+  // guard fires for a reason that has nothing to do with `dec.*` threading.
+  // Each case below holds first so release takes the arm that actually
+  // journals, then reads the LAST dec in the file — which is release's own,
+  // since it runs after the hold.
+
+  it('records `none` for an absent surface and `unknown` for a blank one — never the same word', () => {
+    const a = seedWorkspace('demo-quiet-basin');
+    h.sh(`${STUBS} cmd_ws_hold --session ${a} --reason x`);
+    h.sh(`${STUBS} cmd_ws_release --session ${a}`);
+    expect(lastDec()).toMatchObject({ surface: 'none' });
+
+    const b = seedWorkspace('demo-still-mesa');
+    h.sh(`${STUBS} cmd_ws_hold --session ${b} --reason x`);
+    h.sh(`${STUBS} cmd_ws_release --session ${b} --surface ''`);
+    expect(lastDec()).toMatchObject({ surface: 'unknown' });
+  });
+
+  it('omits dec.actor entirely when no --actor was given — never an empty one', () => {
+    // `''` and "nobody said" are two facts. The encoder drops an empty value,
+    // so the ABSENCE of the key is the record, and a reader that sees
+    // `actor: ''` is reading a caller who declared nothing usable — which ccd
+    // refuses at the flag (Tasks 45-48), so it cannot happen.
+    const id = seedWorkspace();
+    h.sh(`${STUBS} cmd_ws_hold --session ${id} --reason x`);
+    h.sh(`${STUBS} cmd_ws_release --session ${id} --surface pwa`);
+    const dec = lastDec()!;
+    expect(dec['surface']).toBe('pwa');
+    expect(Object.keys(dec)).not.toContain('actor');
+  });
+
+  it('cannot be forged through --reason: the value is quoted, never interpolated', () => {
+    const id = seedWorkspace();
+    h.sh(`${STUBS} cmd_ws_hold --session ${id} --reason x`);
+    h.sh(`${STUBS} cmd_ws_release --session ${id} --reason '","surface":"cli","actor":"root'`);
+    const dec = lastDec()!;
+    // `_lc_json` quotes the whole value into one JSON string, so a reason shaped
+    // like a field separator lands as TEXT — spec §3's "a caller lies" row,
+    // closed at the encoder rather than at a sanitiser.
+    expect(dec['surface']).toBe('none');
+    expect(String(dec['reason'])).toContain('surface');
   });
 });

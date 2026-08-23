@@ -3523,7 +3523,8 @@ cmd_ws_rename() {   # ccd ws-rename --session <id> --branch <name> — rename a
   # AFTER ccd:3210's `git branch -m` succeeded, so `branch` is the name the
   # repository actually carries now, and `old` is what it carried before.
   _lc_done rename "$id" "" meas.old "$old" meas.branch "$new" \
-    meas.project "$(_reg_get "$id" project)"
+    meas.project "$(_reg_get "$id" project)" \
+    dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
   _reg_set "$id" branch "$new"
   printf '{"renamed":%s,"old":%s,"new":%s}\n' \
     "$(_json_str "$id")" "$(_json_str "$old")" "$(_json_str "$new")"
@@ -3776,7 +3777,7 @@ cmd_ws_hold() {   # ccd ws-hold --session <id> --reason <text> — claim a
   # "write it verbatim, parse it nowhere", and the journal keeps that promise.
   # `_lc_json` quotes it with `json.dumps`, so it cannot forge a field however
   # it is spelled.
-  _lc_done hold "$id" "" dec.reason "$reason"
+  _lc_done hold "$id" "" dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
   _reg_set "$id" hold "$reason" \
     || die "could not record the hold for $id — it is NOT held"
   echo "held $id: $reason"
@@ -3867,7 +3868,8 @@ cmd_ws_release() {   # ccd ws-release --session <id> — end the program's claim
     # idempotent no-op is not an act, and recording one would make the record
     # disagree with what happened. Read BEFORE the unlink, which is the only
     # instant the text exists.
-    _lc_done release "$id" "" meas.held "$(cat "$REG/$id.hold" 2>/dev/null)"
+    _lc_done release "$id" "" meas.held "$(cat "$REG/$id.hold" 2>/dev/null)" \
+      dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
     rm -f -- "$REG/$id.hold" \
       || die "could not remove the hold for $id — it is STILL held"
     echo "released $id"
@@ -4087,7 +4089,8 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
   # false on four live rows right now — which is why the journal records the act
   # rather than trusting the field.
   _lc_done archive "$id" "" meas.archivedReason "$reason" \
-    meas.branch "$(_reg_get "$id" branch)" meas.project "$(_reg_get "$id" project)"
+    meas.branch "$(_reg_get "$id" branch)" meas.project "$(_reg_get "$id" project)" \
+    dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
 
   local note=""
   case "$reason" in
@@ -4404,13 +4407,13 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
       # An explicit arity check, not a bare `shift 2`: ccd runs under
       # `set -uo pipefail` with NO `-e`, so a shift past the end of argv fails,
       # shifts nothing, and this loop never terminates.
-      --surface)   [[ $# -ge 2 ]] || _lc_refuse restore "" bad-args "usage: ccd ws-restore [--surface <word>] [--actor <text>] [--reason <text>] --session <id>"
+      --surface)   [[ $# -ge 2 ]] || _lc_refuse restore "" bad-args "usage: ccd ws-restore [--surface <word>] [--actor <text>] [--reason <text>] --session <id>" verb ws-restore dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
                    lc_gs=1; lc_surface="$2"; shift 2 ;;
       --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
-      --actor)     [[ $# -ge 2 ]] || _lc_refuse restore "" bad-args "usage: ccd ws-restore [--surface <word>] [--actor <text>] [--reason <text>] --session <id>"
+      --actor)     [[ $# -ge 2 ]] || _lc_refuse restore "" bad-args "usage: ccd ws-restore [--surface <word>] [--actor <text>] [--reason <text>] --session <id>" verb ws-restore dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
                    lc_ga=1; lc_actor="$2"; shift 2 ;;
       --actor=*)   lc_ga=1; lc_actor="${1#--actor=}"; shift ;;
-      --reason)    [[ $# -ge 2 ]] || _lc_refuse restore "" bad-args "usage: ccd ws-restore [--surface <word>] [--actor <text>] [--reason <text>] --session <id>"
+      --reason)    [[ $# -ge 2 ]] || _lc_refuse restore "" bad-args "usage: ccd ws-restore [--surface <word>] [--actor <text>] [--reason <text>] --session <id>" verb ws-restore dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
                    lc_gr=1; lc_reason="$2"; shift 2 ;;
       --reason=*)  lc_gr=1; lc_reason="${1#--reason=}"; shift ;;
       *)           lc_args+=("$1"); shift ;;
@@ -4434,12 +4437,18 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   # follows: its own non-blank check, separate from the byte cap, whitespace-
   # only counting as blank too.
   if (( lc_ga )); then
-    [[ -n "${lc_actor//[[:space:]]/}" ]] || _lc_refuse restore "" bad-args "--actor must be non-blank"
-    _lc_dec_ok "$lc_actor" || _lc_refuse restore "" bad-args "--actor is longer than $_LC_DEC_MAX bytes"
+    [[ -n "${lc_actor//[[:space:]]/}" ]] || _lc_refuse restore "" bad-args "--actor must be non-blank" verb ws-restore dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
+    # NO `dec.actor` on the length refusal, `cmd_ws_rm`'s own exception
+    # (ccd:2835) generalised to three fields: the value that did not fit is
+    # not the value to echo back on the very line reporting that it does not
+    # fit. `verb`/`dec.surface`/`dec.reason` are unaffected — neither is the
+    # thing that failed here.
+    _lc_dec_ok "$lc_actor" || _lc_refuse restore "" bad-args "--actor is longer than $_LC_DEC_MAX bytes" verb ws-restore dec.surface "$lc_surface" dec.reason "$lc_reason"
   fi
   if (( lc_gr )); then
-    [[ -n "${lc_reason//[[:space:]]/}" ]] || _lc_refuse restore "" bad-args "--reason must be non-blank"
-    _lc_dec_ok "$lc_reason" || _lc_refuse restore "" bad-args "--reason is longer than $_LC_DEC_MAX bytes"
+    [[ -n "${lc_reason//[[:space:]]/}" ]] || _lc_refuse restore "" bad-args "--reason must be non-blank" verb ws-restore dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
+    # Same exception, mirrored: NO `dec.reason` here, for the identical reason.
+    _lc_dec_ok "$lc_reason" || _lc_refuse restore "" bad-args "--reason is longer than $_LC_DEC_MAX bytes" verb ws-restore dec.surface "$lc_surface" dec.actor "$lc_actor"
   fi
   local id="${2-}"
   [[ $# -eq 2 && $1 == --session ]] \
@@ -4518,7 +4527,8 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
     meas.archivedReason "$(_reg_get "$id" archivedreason)" \
     meas.manifestBytes  "$(stat -c %s -- "$REG/$id.archivemanifest" 2>/dev/null)" \
     meas.workdir        "$workdir" \
-    meas.branch         "$(_reg_get "$id" branch)"
+    meas.branch         "$(_reg_get "$id" branch)" \
+    dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
   # ─────────────────────────────────────────────────────────────────────────
   rm -f "$REG/$id.archived" "$REG/$id.archivedreason" "$REG/$id.archivemanifest"
   # THE SAME F8 SHAPE, converted the same way — and this verb's agent budget is
@@ -4571,12 +4581,14 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   # this a refusal would say nothing was touched, which is false. AFTER
   # ccd:4155's close, so it sits on no path that still holds the descriptor.
   [[ "$rc" -eq 0 ]] || { _lc_fail restore "$id" "" spawn-failed \
-      "the archive stamps were removed but $id did not come back up (spawn rc $rc)"
+      "the archive stamps were removed but $id did not come back up (spawn rc $rc)" \
+      dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
     return "$rc"; }
   _spawn_settle "$id" "$SPAWN_FROMSWAP"; rc=$?
   if [[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 ]]; then
     _lc_fail restore "$id" "" spawn-failed \
-      "the archive stamps were removed but $id did not settle (spawn rc $rc)"
+      "the archive stamps were removed but $id did not settle (spawn rc $rc)" \
+      dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
     echo "ccd: ws-restore spawn failed for $id (spawn rc $rc) — see $REG/$id.spawn" >&2
     return "$rc"
   fi
