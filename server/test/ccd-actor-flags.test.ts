@@ -220,7 +220,7 @@ describe('ws-archive accepts the dec flags in any position', () => {
 
   it('treats a blank --surface as a word it does not know, never as no flag', () => {
     // GAP FOUND BY THIS TASK: the brief's own text asserts `_lc_surface_norm
-    // ''` returns `unknown` — measured false (D-200): the bare helper answers
+    // ''` returns `unknown` — measured false (D-210): the bare helper answers
     // EMPTY for both "no argument" and an explicit blank (pinned already in
     // the `_lc_surface_norm` describe block above), which is exactly why
     // givenness has to be resolved in THIS flag loop, not by re-deriving it
@@ -304,7 +304,7 @@ describe('ws-restore takes the same three flags, and refuses through _lc_refuse'
   });
 
   it('refuses a blank --reason, naming the flag — the same non-blank check as --actor', () => {
-    // `_lc_dec_ok` is length-only (D-200, ccd:1527) and returns 0 for '', so
+    // `_lc_dec_ok` is length-only (D-210, ccd:1527) and returns 0 for '', so
     // it cannot be the blank guard on its own — this verb needs its OWN
     // non-blank check ahead of `_lc_dec_ok`, mirroring `--actor` above and
     // `cmd_ws_hold` (ccd:3568). Not in the brief's own step-2 sample, added
@@ -484,7 +484,7 @@ describe('ws-hold keeps ONE reason — its own', () => {
   });
 
   it('treats a blank --surface as a word it does not know, never as no flag', () => {
-    // The same givenness trap as `cmd_ws_archive`/`cmd_ws_restore` (D-200):
+    // The same givenness trap as `cmd_ws_archive`/`cmd_ws_restore` (D-210):
     // the bare `_lc_surface_norm` answers EMPTY for both "no argument" and an
     // explicit blank, so this loop resolves givenness itself with its own
     // `${lc_w:-unknown}` fallback. `cmd_ws_hold` has no manifest-building
@@ -687,7 +687,7 @@ describe('ws-rename accepts the dec flags in any position', () => {
 
   it('treats a blank --surface as a word it does not know, never as no flag', () => {
     // Same givenness trap as `cmd_ws_archive`/`cmd_ws_restore`/`cmd_ws_hold`/
-    // `cmd_ws_release` (D-200): the bare `_lc_surface_norm` answers EMPTY for
+    // `cmd_ws_release` (D-210): the bare `_lc_surface_norm` answers EMPTY for
     // both "no argument" and an explicit blank, so this loop resolves
     // givenness itself with its own `${lc_w:-unknown}` fallback — the fallback
     // this task's brief sample omitted (see the ccd comment on the fix).
@@ -737,7 +737,7 @@ describe('the declared triple reaches the journal', () => {
     });
   });
 
-  // MEASURED, NOT AS THE BRIEF DRAFTED IT (D-200 discipline): `cmd_ws_release`
+  // MEASURED, NOT AS THE BRIEF DRAFTED IT (D-210 discipline): `cmd_ws_release`
   // writes to the journal ONLY on its `-e "$REG/$id.hold"` arm — the comment
   // right above that call site says why: "an idempotent no-op is not an act,
   // and recording one would make the record disagree with what happened."

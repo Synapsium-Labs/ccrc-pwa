@@ -3202,7 +3202,7 @@ cmd_ws_rename() {   # ccd ws-rename --session <id> --branch <name> — rename a
     esac
   done
   set -- "${lc_args[@]}"
-  # `_lc_surface_norm ''` prints EMPTY, not `unknown` (ccd:1511-1524, D-200) —
+  # `_lc_surface_norm ''` prints EMPTY, not `unknown` (ccd:1511-1524, D-210) —
   # it cannot tell "no argument" from "an explicit blank" apart, so THIS loop is
   # where that distinction has to be made, before the encoder ever sees the
   # value. `lc_gs` already carries givenness; the `${lc_w:-unknown}` fallback
@@ -3212,12 +3212,12 @@ cmd_ws_rename() {   # ccd ws-rename --session <id> --branch <name> — rename a
   #
   # DIVERGES FROM THE BRIEF'S OWN STEP-3 SAMPLE, which read
   # `lc_surface=$(_lc_surface_norm "$lc_surface")` with no fallback: measured
-  # against D-200, that line leaves a declared-but-blank `--surface ''` as the
+  # against D-210, that line leaves a declared-but-blank `--surface ''` as the
   # literal empty string, which `_lc_json` backfills to `none` — "no flag was
-  # given at all", exactly the collapse D-200 exists to prevent. Same fix
+  # given at all", exactly the collapse D-210 exists to prevent. Same fix
   # Tasks 45-47 already carry for their own copies of this loop.
   if (( lc_gs )); then local lc_w; lc_w=$(_lc_surface_norm "$lc_surface"); lc_surface=${lc_w:-unknown}; fi
-  # `_lc_dec_ok` is LENGTH-ONLY (ccd:1527-1538, D-200) — `_lc_dec_ok ''` returns
+  # `_lc_dec_ok` is LENGTH-ONLY (ccd:1527-1538, D-210) — `_lc_dec_ok ''` returns
   # 0, so it is not a blank guard on its own. TWO SEPARATE CHECKS below, blank
   # then length — the same shape `cmd_ws_archive`/`cmd_ws_restore` use.
   #
@@ -3705,7 +3705,7 @@ cmd_ws_hold() {   # ccd ws-hold --session <id> --reason <text> — claim a
   # bash >= 4.4 (the fleet host runs 5.2, ccd:9393-9394): an empty array here
   # is not an unbound-variable error under `set -u`.
   set -- "${lc_args[@]}"
-  # `_lc_surface_norm ''` prints EMPTY, not `unknown` (ccd:1511-1524, D-200) —
+  # `_lc_surface_norm ''` prints EMPTY, not `unknown` (ccd:1511-1524, D-210) —
   # it cannot tell "no argument" from "an explicit blank" apart, so THIS loop
   # is where that distinction has to be made, before the encoder ever sees the
   # value. `lc_gs` already carries givenness; the `${lc_w:-unknown}` fallback
@@ -3713,7 +3713,7 @@ cmd_ws_hold() {   # ccd ws-hold --session <id> --reason <text> — claim a
   # than an empty string that `_lc_json` would backfill to `none` — the exact
   # given/no-flag collapse this verb must not produce.
   if (( lc_gs )); then local lc_w; lc_w=$(_lc_surface_norm "$lc_surface"); lc_surface=${lc_w:-unknown}; fi
-  # `_lc_dec_ok` is LENGTH-ONLY (`ccd:1527-1538`, D-200) — `_lc_dec_ok ''`
+  # `_lc_dec_ok` is LENGTH-ONLY (`ccd:1527-1538`, D-210) — `_lc_dec_ok ''`
   # returns 0, so it cannot be the blank guard on its own. A declared
   # `--actor` is refused when blank the same way this verb's own `--reason`
   # is refused just below (ccd:3568), and the same shape Task 45's
@@ -3833,7 +3833,7 @@ cmd_ws_release() {   # ccd ws-release --session <id> — end the program's claim
   # bash >= 4.4 (the fleet host runs 5.2, ccd:9393-9394): an empty array here
   # is not an unbound-variable error under `set -u`.
   set -- "${lc_args[@]}"
-  # `_lc_surface_norm ''` prints EMPTY, not `unknown` (ccd:1511-1524, D-200) —
+  # `_lc_surface_norm ''` prints EMPTY, not `unknown` (ccd:1511-1524, D-210) —
   # it cannot tell "no argument" from "an explicit blank" apart, so THIS loop
   # is where that distinction has to be made, before the encoder ever sees the
   # value. `lc_gs` already carries givenness; the `${w:-unknown}` fallback
@@ -3841,7 +3841,7 @@ cmd_ws_release() {   # ccd ws-release --session <id> — end the program's claim
   # than an empty string that `_lc_json` would backfill to `none` — the exact
   # given/no-flag collapse this verb must not produce.
   if (( lc_gs )); then local lc_w; lc_w=$(_lc_surface_norm "$lc_surface"); lc_surface=${lc_w:-unknown}; fi
-  # `_lc_dec_ok` is LENGTH-ONLY (`ccd:1527-1538`, D-200) — `_lc_dec_ok ''`
+  # `_lc_dec_ok` is LENGTH-ONLY (`ccd:1527-1538`, D-210) — `_lc_dec_ok ''`
   # returns 0, so it cannot be the blank guard on its own. A declared
   # `--actor`/`--reason` is refused when blank the same way `cmd_ws_hold`
   # refuses a blank `--reason` (ccd:3568): its own non-blank check, separate
@@ -3962,7 +3962,7 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
   # bash >= 4.4 (the fleet host runs 5.2, ccd:9393-9394): an empty array here
   # is not an unbound-variable error under `set -u`.
   set -- "${lc_args[@]}"
-  # `_lc_surface_norm ''` prints EMPTY, not `unknown` (ccd:1511-1524, D-200) —
+  # `_lc_surface_norm ''` prints EMPTY, not `unknown` (ccd:1511-1524, D-210) —
   # it cannot tell "no argument" from "an explicit blank" apart, so THIS loop
   # is where that distinction has to be made, before the encoder ever sees the
   # value. `lc_gs` already carries givenness; the `${w:-unknown}` fallback
@@ -3970,7 +3970,7 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
   # than an empty string that `_lc_json` would backfill to `none` — the exact
   # given/no-flag collapse this verb must not produce.
   if (( lc_gs )); then local lc_w; lc_w=$(_lc_surface_norm "$lc_surface"); lc_surface=${lc_w:-unknown}; fi
-  # `_lc_dec_ok` is LENGTH-ONLY (`ccd:1527-1538`, D-200) — `_lc_dec_ok ''`
+  # `_lc_dec_ok` is LENGTH-ONLY (`ccd:1527-1538`, D-210) — `_lc_dec_ok ''`
   # returns 0, so it cannot be the blank guard on its own. A declared
   # `--actor`/`--reason` is refused when blank the same way `cmd_ws_hold`
   # refuses a blank `--reason` (ccd:3568): its own non-blank check, separate
@@ -4430,7 +4430,7 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   # bash >= 4.4 (the fleet host runs 5.2, ccd:9393-9394): an empty array here
   # is not an unbound-variable error under `set -u`.
   set -- "${lc_args[@]}"
-  # `_lc_surface_norm ''` prints EMPTY, not `unknown` (ccd:1511-1524, D-200) —
+  # `_lc_surface_norm ''` prints EMPTY, not `unknown` (ccd:1511-1524, D-210) —
   # it cannot tell "no argument" from "an explicit blank" apart, so THIS loop
   # is where that distinction has to be made, before the encoder ever sees the
   # value. `lc_gs` already carries givenness; the `${lc_w:-unknown}` fallback
@@ -4438,7 +4438,7 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   # than an empty string that `_lc_json` would backfill to `none` — the exact
   # given/no-flag collapse this verb must not produce.
   if (( lc_gs )); then local lc_w; lc_w=$(_lc_surface_norm "$lc_surface"); lc_surface=${lc_w:-unknown}; fi
-  # `_lc_dec_ok` is LENGTH-ONLY (ccd:1527-1538, D-200) — `_lc_dec_ok ''`
+  # `_lc_dec_ok` is LENGTH-ONLY (ccd:1527-1538, D-210) — `_lc_dec_ok ''`
   # returns 0, so it cannot be the blank guard on its own. A declared
   # `--actor`/`--reason` is refused when blank the same way `cmd_ws_hold`
   # refuses a blank `--reason` (ccd:3568) and Task 45's `cmd_ws_archive`
