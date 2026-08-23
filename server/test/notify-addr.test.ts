@@ -1,20 +1,35 @@
-// `deploy/notify.sh`'s address-resolution chain, now TWO tiers: `CCRC_ADDR`
-// env > `~/.ccrc/ccrc.env`'s `CCRC_HOST`+`CCRC_PORT` > nothing at all.
+// `deploy/notify.sh`'s address-resolution chain, THREE tiers: `CCRC_ADDR` env
+// > `~/.ccrc/agent.env`'s `CCRC_SERVER_URL` > `~/.ccrc/ccrc.env`'s
+// `CCRC_HOST`+`CCRC_PORT` > nothing at all.
 //
-// The third tier — the reference fleet's own IP — is gone (D-199). It was
-// added "kept one generation so a hook shipped ahead of the config file cannot
-// go dark", and it outlived that generation: shipped publicly it is a
-// compiled-in address pointing at one operator's box, so on anyone else's
-// install it POSTs their fleet's activity to a stranger's machine.
+// The old bottom tier — the reference fleet's own IP, hardcoded — is gone
+// (D-199). It was added "kept one generation so a hook shipped ahead of the
+// config file cannot go dark", and it outlived that generation: shipped
+// publicly it is a compiled-in address pointing at one operator's box, so on
+// anyone else's install it POSTs their fleet's activity to a stranger's
+// machine.
 //
-// Two measured facts shaped the replacement. D-73 still holds — the reference
-// fleet host has NO `~/.ccrc/ccrc.env` — so removing the tier means that box
-// must be given `CCRC_ADDR` explicitly or it goes quiet. And on 2026-08-23 the
-// tier was ALREADY dead there: once the server moved to a loopback bind behind
-// its reverse proxy, `203.0.113.7:7788` answered 000 from the fleet host and
-// every swap notice had been silently dropped, because the curl ends
-// `|| true`. That is why `CCRC_ADDR` may now carry a scheme: a proxied box is
-// reachable at its front door, not at host:port.
+// The agent.env tier is why removing it does not go quiet. D-73 holds — the
+// FLEET host has no `~/.ccrc/ccrc.env` and is not missing one — so a chain
+// that ends at ccrc.env resolves nothing on the very box that fires this hook,
+// and "silence is the contract" would have quietly meant "silence, always".
+// `CCRC_SERVER_URL` is already in agent.env, written by `ccrc install --role
+// fleet` (ccd/ccrc:3051) and read by both coordination skills since #89, so
+// the box needs no provisioning at all.
+//
+// PRECEDENCE, stated because nothing else records it: agent.env is read BEFORE
+// ccrc.env. A combined single-box install carries both, and they name the same
+// server today, so the order is not load-bearing — but the fleet-role key is
+// the more specific answer to "where does this hook send", and a box that has
+// been given one deliberately should not be overridden by the server-role
+// file it happens to also carry.
+//
+// And on 2026-08-23 the hardcoded tier was ALREADY dead: once the server moved
+// to a loopback bind behind its reverse proxy, `<the old literal>:7788`
+// answered 000 from the fleet host and every swap notice had been silently
+// dropped, because the curl ends `|| true`. That is why an address may now
+// carry a scheme — a proxied box is reachable at its front door, not at
+// host:port.
 //
 // The env file is read the same way `_box_env_value` reads it
 // (ccd/ccrc:355-380) — grepped, never sourced, because it carries tokens — so
@@ -38,7 +53,7 @@
 // writing the fix, so the measurement is against the same test file the fix
 // is graded by, not an earlier draft missing the grep/tail/cut/tr symlinks.
 import { describe, it, expect } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import {
   existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync,
 } from 'node:fs';
@@ -83,15 +98,15 @@ const curlCalls = (home: string): string[] => {
   return existsSync(p) ? readFileSync(p, 'utf8').split('\n').filter(Boolean) : [];
 };
 
-/** `~/.ccrc/ccrc.env` — written as TEXT, same as `ccrc-doctor.test.ts`'s
- *  fixture, because half of what the reader has to get right is which lines
- *  it ignores (comments, blanks, unrelated keys, indentation). */
 /** `~/.ccrc/agent.env` — the FLEET box's config file, and the only one it has. */
 function writeAgentEnv(home: string, text: string): void {
   mkdirSync(path.join(home, '.ccrc'), { recursive: true });
   writeFileSync(path.join(home, '.ccrc', 'agent.env'), text);
 }
 
+/** `~/.ccrc/ccrc.env` — written as TEXT, same as `ccrc-doctor.test.ts`'s
+ *  fixture, because half of what the reader has to get right is which lines
+ *  it ignores (comments, blanks, unrelated keys, indentation). */
 function writeCcrcEnv(home: string, text: string): void {
   mkdirSync(path.join(home, '.ccrc'), { recursive: true });
   writeFileSync(path.join(home, '.ccrc', 'ccrc.env'), text);
@@ -110,7 +125,7 @@ const REAL_TOOLS = ['jq', 'grep', 'tail', 'cut', 'tr'];
  *  own env before `extraEnv` is applied, so neither can leak in from
  *  whatever happens to be set on the box running the suite; a test that wants
  *  to exercise the `CCRC_ADDR` override passes it back via `extraEnv`. */
-function runNotify(home: string, extraEnv: NodeJS.ProcessEnv = {}): void {
+function runNotify(home: string, extraEnv: NodeJS.ProcessEnv = {}): SpawnSyncReturns<string> {
   const bin = stubBinDir(home);
   for (const name of REAL_TOOLS) {
     if (!existsSync(path.join(bin, name))) symlinkSync(realPath(name), path.join(bin, name));
@@ -119,7 +134,7 @@ function runNotify(home: string, extraEnv: NodeJS.ProcessEnv = {}): void {
   delete env.CCRC_ADDR;
   delete env.CCRC_MAIL_TOKEN_FILE;
   Object.assign(env, extraEnv, { HOME: home, PATH: bin });
-  spawnSync(BASH, [notifyShPath, 'test message'], { env, encoding: 'utf8' });
+  return spawnSync(BASH, [notifyShPath, 'test message'], { env, encoding: 'utf8' });
 }
 
 describe('deploy/notify.sh address resolution', () => {
@@ -140,8 +155,13 @@ describe('deploy/notify.sh address resolution', () => {
     // contract: no address means no send.
     const home = mkTmp('ccrc-notify-addr-');
     stubCurl(home);
-    runNotify(home);
+    const r = runNotify(home);
     expect(curlCalls(home), 'a guessed address is worse than silence').toEqual([]);
+    // Silence and failure are different answers. ccd fires this hook as
+    // `>/dev/null 2>&1`, so a nonzero status is the ONLY way the caller could
+    // tell them apart — and `|| exit 1` here would make every unconfigured box
+    // look like a broken one.
+    expect(r.status, r.stderr).toBe(0);
   });
 
   it('a scheme-carrying CCRC_ADDR is used verbatim — the proxied-box case (D-199)', () => {
@@ -232,8 +252,9 @@ describe('deploy/notify.sh address resolution', () => {
     const home = mkTmp('ccrc-notify-addr-');
     stubCurl(home);
     writeCcrcEnv(home, 'CCRC_HOST=127.0.0.1\n');
-    runNotify(home);
+    const r = runNotify(home);
     expect(curlCalls(home)).toEqual([]);
+    expect(r.status, r.stderr).toBe(0);
   });
 
   it('an unreadable ccrc.env is treated as absent, not fatal — notify.sh must never throw', () => {
@@ -245,7 +266,32 @@ describe('deploy/notify.sh address resolution', () => {
     // own failing case rather than sharing one assertion with a different
     // intent.
     rmSync(path.join(home, '.ccrc'), { recursive: true, force: true });
-    runNotify(home);
+    const r = runNotify(home);
     expect(curlCalls(home)).toEqual([]);
+    expect(r.status, r.stderr).toBe(0);
+  });
+
+  it('an agent.env with no CCRC_SERVER_URL falls THROUGH to ccrc.env, not to silence', () => {
+    // The pre-`ccrc install --role fleet` shape: the file exists but predates
+    // the key. An empty value read out of a present file must not look like a
+    // resolved address, and must not short-circuit the tier below it.
+    const home = mkTmp('ccrc-notify-addr-');
+    stubCurl(home);
+    writeAgentEnv(home, '# provisioned before CCRC_SERVER_URL existed\nCCRC_AGENT_PORT=7789\n');
+    writeCcrcEnv(home, 'CCRC_HOST=127.0.0.1\nCCRC_PORT=7788\n');
+    const r = runNotify(home);
+    expect(curlCalls(home).join('\n'),
+      'a keyless agent.env swallowed the ccrc.env tier below it')
+      .toContain('http://127.0.0.1:7788/api/notify');
+    expect(r.status, r.stderr).toBe(0);
+  });
+
+  it('an agent.env with an EMPTY CCRC_SERVER_URL is silence, not a malformed URL', () => {
+    const home = mkTmp('ccrc-notify-addr-');
+    stubCurl(home);
+    writeAgentEnv(home, 'CCRC_SERVER_URL=\n');
+    const r = runNotify(home);
+    expect(curlCalls(home), 'an empty value must not become http:// with no host').toEqual([]);
+    expect(r.status, r.stderr).toBe(0);
   });
 });

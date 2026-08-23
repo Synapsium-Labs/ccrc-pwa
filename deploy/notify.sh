@@ -73,6 +73,7 @@ fi
 # which, on anyone else's install, is a POST of this fleet's activity to a
 # stranger's machine. Notify is best-effort by contract: a hook that cannot
 # resolve an address sends nothing rather than guessing one.
+# no address configured — notify is best-effort, silence is the contract
 [ -n "$ADDR" ] || exit 0
 # Only the BASE is resolved here; the path stays on the curl line below. Two
 # reasons, one of them measured: the endpoint being visible at the call site is
