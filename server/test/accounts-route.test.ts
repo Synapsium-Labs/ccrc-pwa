@@ -148,7 +148,7 @@ describe('GET /api/accounts', () => {
   // account nothing has ever run on has no row there at all.
   //
   // `claude2` carries a label that is NOT its id (`alt·max`, its real one in
-  // `deploy/accounts.migration.json`) — see `DEFAULT_TEST_ROSTER`. Every
+  // `server/test/fixtures/roster-five.json`) — see `DEFAULT_TEST_ROSTER`. Every
   // fixture account used to label itself with its own id, which made this
   // assertion unable to fail on the very confusion it exists to catch: a
   // handler emitting `a.id` into `label` passed it byte for byte, and `label`

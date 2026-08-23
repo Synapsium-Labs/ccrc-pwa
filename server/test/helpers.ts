@@ -27,7 +27,7 @@ import { mkTmp } from './tmpHelpers.js';
  * roster it hunts for copies of no longer exists in any source file it could
  * trust to read them from.
  *
- * KEEP IT IN STEP WITH `deploy/accounts.migration.json` — this fleet's five
+ * KEEP IT IN STEP WITH `server/test/fixtures/roster-five.json` — this fleet's five
  * real accounts: same ids, same declaration order, same config-dir suffixes,
  * home-able flags, hues and `exec` shapes — not with whatever any one test
  * happens to need. NOT with `deploy/accounts.default.json`, which is the
@@ -35,7 +35,7 @@ import { mkTmp } from './tmpHelpers.js';
  * paragraph). An earlier version of this comment named `accounts.default.json`
  * here and so contradicted itself two paragraphs up; that correction also
  * inverted the `label` claim it made, so here is the measured truth against
- * `deploy/accounts.migration.json`: `label` DIVERGES from the migration
+ * `server/test/fixtures/roster-five.json`: `label` DIVERGES from the migration
  * roster for three of the five accounts — `claude`, `claude-corp` and
  * `claude-dev0` all use their own id as the test label here, where
  * production's real label is `team·max`, `team·shared` and `lab·dev0`
@@ -73,7 +73,7 @@ export const DEFAULT_TEST_ROSTER = {
     {
       // The one account whose LABEL IS NOT ITS ID, deliberately (M9, final
       // review), and it is `alt·max` because that is genuinely this
-      // account's label in `deploy/accounts.migration.json`. Every other entry
+      // account's label in `server/test/fixtures/roster-five.json`. Every other entry
       // here labels itself with its own id, which made `label` and `id`
       // indistinguishable on the wire: `accounts-route.test.ts`'s roster
       // assertion would have passed just the same if the handler had emitted

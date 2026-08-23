@@ -313,7 +313,7 @@ describe('deploy.sh and ccrc read an env file the same way', () => {
 // ── the roster a stranger's first deploy seeds, permanently (D-197) ─────────
 //
 // `deploy.sh` used to default `CCRC_ACCOUNTS_JSON` to
-// `deploy/accounts.migration.json` — the REFERENCE FLEET's five accounts,
+// `server/test/fixtures/roster-five.json` — the REFERENCE FLEET's five accounts,
 // carrying that operator's own labels. Seeding is first-install-only and
 // never overwritten (stage-2a §5: `~/.ccrc/accounts.json` is user-owned
 // config), so anyone else's very first deploy wrote five accounts they had
