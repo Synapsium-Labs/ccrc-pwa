@@ -34,6 +34,48 @@ internal CA, vite PWA config.
 
 ---
 
+## Operator rulings recorded during execution (2026-08-23)
+
+- **R-A — the roster labels (§5/S4).** *Neutralise the shipped defaults; the live boxes
+  keep their real labels.* `~/.ccrc/accounts.json` is user-owned and no deploy overwrites
+  it, so the reference fleet's own UI is unaffected by the sweep — nothing has to be
+  migrated, and no operator loses a label they read every day. Task 5 therefore renames
+  only what SHIPS (fixtures, defaults, examples); it does not touch a live box.
+
+- **R-B — the repository (§9 step 1).** *A FRESH repo under `Synapsium-Labs`, not a
+  transfer.* A transfer carries `refs/pull/*` — 91 of them, pinned by GitHub forever and
+  untouched by any history rewrite — into the public repo. A fresh remote does not, which
+  is the whole point. History is pushed across intact; only the pull refs are left behind.
+  Consequences to carry into Task 11:
+  - No GitHub redirect from the old URL. Both boxes' `origin` re-point by hand, and every
+    external link to the old repo dies rather than forwarding.
+  - Commit messages contain 97 distinct `#NN` references and the docs corpus another 102.
+    In the new repo those auto-link to whatever `#NN` eventually exists THERE, which is a
+    different PR — misresolution, not a dead link. Keep the `example-org` repo alive
+    and private as the archive so the real ones stay readable, and say so in the checklist.
+  - `example-org` becomes sweepable immediately (Task 8 step 3 no longer waits on a
+    transfer): 8 files, plus `server/test/license.test.ts`'s own pin.
+
+- **R-C — the copyright string** stays `Synapsium Labs` (spaced) in notices, with
+  `Synapsium-Labs` (hyphenated) as the GitHub owner literal. Both are already shipped and
+  pinned; this records that the pairing is deliberate, not a typo one of them.
+
+## Deviations from the spec taken during execution
+
+- **§5's "refuse without `CCRC_ACCOUNTS_JSON`" is NOT what shipped.** The spec called for
+  removing the roster default; PR #96 landed the better cure first — keep a default but
+  make it neutral (`deploy/accounts.default.json`, one upstream `claude`) so a fresh box
+  still deploys without ceremony. A competing "no default, refuse" commit on
+  `feat/stage5-flip-prep` was dropped in favour of it. What the drop leaves behind is
+  pinned in `server/test/deploy-env-guard.test.ts`: the migration roster can never be the
+  fallback again, the resolution line must exist at all, and — the part neither cure had —
+  the default roster FILE is constrained to exactly one `claude`/`upstream` account,
+  because a permanent seed's hazard now lives in that file's contents rather than in a
+  shell default where a reviewer would see it change.
+
+
+---
+
 ### Task 1: The `topology-clean` ratchet suite
 
 **Files:**
