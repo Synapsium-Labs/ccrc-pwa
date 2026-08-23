@@ -610,7 +610,7 @@ describe('notify ingestion', () => {
     const sessionMsgs: SessionStreamMsg[] = [];
     bus.on('notice', (n) => notices.push(n.message));
     bus.on(`session:${ID}`, (m) => sessionMsgs.push(m));
-    const message = 'deploy finished on server-box';
+    const message = 'deploy finished on the server box';
     const res = await app.inject({ method: 'POST', url: '/api/notify', payload: { message } });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });

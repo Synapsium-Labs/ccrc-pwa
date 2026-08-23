@@ -250,8 +250,8 @@ describe('decodeB64url refuses everything Buffer.from would swallow', () => {
 // ── 2. the PSL hazard ───────────────────────────────────────────────────────
 
 describe('rpId is the registrable domain — never a public suffix, never derived', () => {
-  it('accepts the two shapes this project actually deploys', () => {
-    expect(rpIdProblem('tailnet-example.ts.net')).toBeNull();
+  it('accepts the shapes this project actually deploys — a registrable domain, and localhost', () => {
+    expect(rpIdProblem('mybox.example.com')).toBeNull();
     expect(rpIdProblem('mybox.duckdns.org')).toBeNull();
     expect(rpIdProblem('localhost')).toBeNull();
   });
@@ -265,13 +265,13 @@ describe('rpId is the registrable domain — never a public suffix, never derive
       expect(problem, suffix).not.toBeNull();
       expect(problem, suffix).toContain('PUBLIC SUFFIX');
     }
-    expect(rpIdProblem('ts.net')).toContain('tailnet-example.ts.net');
+    expect(rpIdProblem('ts.net')).toContain('mybox.duckdns.org');
   });
 
   it('refuses a single label that is not localhost — a bare TLD is a public suffix too', () => {
     expect(rpIdProblem('net')).toContain('single label');
     expect(rpIdProblem('com')).toContain('single label');
-    expect(rpIdProblem('server-box')).toContain('single label');
+    expect(rpIdProblem('myfleetbox')).toContain('single label');
   });
 
   it('refuses a URL, a port, a path or a scheme — an rpId is a bare domain', () => {
@@ -290,7 +290,9 @@ describe('rpId is the registrable domain — never a public suffix, never derive
     // routes, and an opaque SecurityError in the client with nothing in the
     // journal. That is the precise failure this function's docstring says it
     // exists to convert into a log line and a 501.
-    for (const ip of ['127.0.0.1', '192.168.1.5', '10.0.0.1', '203.0.113.7', '0.0.0.0']) {
+    // 100.100.1.1 keeps a CGNAT-range (tailnet-shaped) literal in the list —
+    // it is the one placeholder topology-clean's CGNAT class sanctions.
+    for (const ip of ['127.0.0.1', '192.168.1.5', '10.0.0.1', '100.100.1.1', '0.0.0.0']) {
       expect(rpIdProblem(ip), ip).toContain('IP address');
     }
     for (const ip of ['[::1]', '[fe80::1]', 'fe80::1', '::1']) {
@@ -305,7 +307,7 @@ describe('rpId is the registrable domain — never a public suffix, never derive
     // The shape test is deliberately not a strict address parser, so this is the
     // boundary it must not cross. A TLD is never all-digits and never holds a
     // colon, so no real registrable domain can collide with it.
-    for (const ok of ['tailnet-example.ts.net', 'mybox.duckdns.org', 'localhost', '1box.example',
+    for (const ok of ['mybox.example.com', 'mybox.duckdns.org', 'localhost', '1box.example',
       'box1.example', '192-168-1-5.example.com']) {
       const problem = rpIdProblem(ok);
       expect(problem === null || !problem.includes('IP address'), ok).toBe(true);
@@ -350,8 +352,8 @@ describe('rpId is the registrable domain — never a public suffix, never derive
 
 describe('origin is the full serialized origin, and must agree with rpId', () => {
   it('accepts a real https origin under its registrable domain', () => {
-    expect(originProblem('https://server-box.tailnet-example.ts.net', 'tailnet-example.ts.net')).toBeNull();
-    expect(originProblem('https://server-box.tailnet-example.ts.net:8443', 'tailnet-example.ts.net')).toBeNull();
+    expect(originProblem('https://fleet.mybox.example.com', 'mybox.example.com')).toBeNull();
+    expect(originProblem('https://fleet.mybox.example.com:8443', 'mybox.example.com')).toBeNull();
     expect(originProblem('http://localhost:7788', 'localhost')).toBeNull();
   });
 
@@ -362,7 +364,7 @@ describe('origin is the full serialized origin, and must agree with rpId', () =>
   });
 
   it('refuses plain http off loopback — WebAuthn needs a secure context', () => {
-    expect(originProblem('http://server-box.tailnet-example.ts.net', 'tailnet-example.ts.net')).toContain('secure context');
+    expect(originProblem('http://fleet.mybox.example.com', 'mybox.example.com')).toContain('secure context');
     // …and permits it ON loopback, which is a secure context by fiat.
     expect(originProblem('http://127.0.0.1:7788', '127.0.0.1')).toBeNull();
   });
@@ -377,7 +379,7 @@ describe('origin is the full serialized origin, and must agree with rpId', () =>
   });
 
   it('relyingPartyProblem reports the rpId first, then the origin', () => {
-    expect(relyingPartyProblem('ts.net', 'https://box.ts.net')).toContain('PUBLIC SUFFIX');
+    expect(relyingPartyProblem('duckdns.org', 'https://mybox.duckdns.org')).toContain('PUBLIC SUFFIX');
     expect(relyingPartyProblem('box.example', 'https://box.example/')).toContain('bare serialized origin');
     expect(relyingPartyProblem('localhost', 'http://localhost:7788')).toBeNull();
   });
@@ -1557,7 +1559,7 @@ describe('the passkey routes, end to end', () => {
   it('a MISCONFIGURED relying party disables passkeys and never publishes why', async () => {
     // The public-suffix typo, end to end: 501 on every ceremony, the reason in
     // the journal only — an unauthenticated caller learns nothing about the box.
-    const w = await openApp({ rpId: 'ts.net', origin: 'https://box.ts.net' }); app = w.app;
+    const w = await openApp({ rpId: 'duckdns.org', origin: 'https://mybox.duckdns.org' }); app = w.app;
     const cookie = await login(app);
     for (const [url, headers] of [
       ['/api/auth/passkey/assert/start', {}],
@@ -1565,7 +1567,7 @@ describe('the passkey routes, end to end', () => {
     ] as const) {
       const res = await app.inject({ method: 'POST', url, headers });
       expect(res.statusCode, url).toBe(501);
-      expect(res.body, url).not.toContain('ts.net');
+      expect(res.body, url).not.toContain('duckdns.org');
       expect(res.body, url).not.toContain('PUBLIC SUFFIX');
     }
     expect(warn!.mock.calls.flat().join(' ')).toContain('PUBLIC SUFFIX');
@@ -1675,10 +1677,12 @@ describe('originVerdict — the pure decision', () => {
 
   it('the SAME-SITE tailnet sibling is a mismatch — which is the whole point', () => {
     // `ts.net` is a public suffix, so every node on one tailnet shares a
-    // registrable domain and `SameSite=Lax` sends the cookie between them. Only
-    // this check refuses the sibling.
-    const box = 'https://server-box.tailnet-example.ts.net';
-    expect(originVerdict('https://other-box.tailnet-example.ts.net', box)).toBe('mismatch');
+    // registrable domain (`<other-box>.<tailnet>.ts.net` is SAME-SITE with
+    // `<this-box>.<tailnet>.ts.net`) and `SameSite=Lax` sends the cookie
+    // between them. Only this check refuses the sibling — which is a pure
+    // string comparison, so these fixture names stand in for the tailnet pair.
+    const box = 'https://mybox.example.com';
+    expect(originVerdict('https://other-box.example.com', box)).toBe('mismatch');
     expect(originVerdict(box, box)).toBe('ok');
   });
 
@@ -1766,7 +1770,7 @@ describe('the /ws/* upgrade is origin-bound', () => {
     const w = await openApp(); app = w.app;
     const cookie = await login(app);
     await expect(app.injectWS(url, {
-      headers: { cookie, origin: 'https://other-box.tailnet-example.ts.net' },
+      headers: { cookie, origin: 'https://other-box.example.com' },
     })).rejects.toThrow('Unexpected server response: 403');
     expect(warn!.mock.calls.flat().join(' ')).toContain('foreign origin');
     // …and never logs the cookie it just refused.
@@ -1826,9 +1830,11 @@ describe('a same-site sibling node cannot drive this box with the operator\'s co
     warn?.mockRestore(); warn = undefined;
   });
 
-  /** The tailnet sibling. `ts.net` is a public suffix, so this origin is
-   *  SAME-SITE with the box and `SameSite=Lax` sends `ccrc_session` to it. */
-  const SIBLING = 'https://other-box.tailnet-example.ts.net';
+  /** The tailnet sibling. On a real tailnet `<other-box>.<tailnet>.ts.net` is
+   *  SAME-SITE with the box (`ts.net` is a public suffix) and `SameSite=Lax`
+   *  sends `ccrc_session` to it; this fixture origin stands in for it — the
+   *  check is a string comparison, so any foreign origin exercises it. */
+  const SIBLING = 'https://other-box.example.com';
 
   /**
    * The routes MF-1 named — every one of them a POST that reads NO body and no
@@ -2137,7 +2143,7 @@ describe('assert/start spends the passkey budget', () => {
     // anonymous caller could make a mis-set box write unbounded log lines.
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
-      const w = await openApp({ rpId: 'ts.net', origin: 'https://box.ts.net' }); app = w.app;
+      const w = await openApp({ rpId: 'duckdns.org', origin: 'https://mybox.duckdns.org' }); app = w.app;
       const before = warn.mock.calls.length;
       for (let i = 0; i < 40; i++) {
         const res = await app.inject({ method: 'POST', url: '/api/auth/passkey/assert/start' });

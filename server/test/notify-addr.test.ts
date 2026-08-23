@@ -42,8 +42,10 @@
 // system PATH generally) is what keeps the fixture from also reaching a real
 // `curl`.
 //
-// Measured red-first against the ORIGINAL notify.sh (`curl … "${CCRC_ADDR:-
-// 203.0.113.7:7788}"`, no ccrc.env tier at all): the two tests exercising
+// Measured red-first against the ORIGINAL notify.sh (`curl …
+// "${CCRC_ADDR:-<the reference fleet's own IP, hardcoded>}"`, no ccrc.env tier
+// at all — the literal is not repeated here, which is the point): the two
+// tests exercising
 // the new middle tier ("reads CCRC_HOST/CCRC_PORT…" and "the LAST
 // CCRC_HOST/CCRC_PORT assignment wins…") failed, landing on the baked IP
 // instead — everything on the file was ignored. The other four passed

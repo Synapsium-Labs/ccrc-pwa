@@ -158,35 +158,35 @@ describe('deploy.sh: derive_health_urls — the gate probes the box, not this wo
     const home = mkTmp('deploy-health-exposed-');
     stubSsh(home, {
       'ccrc.env': 'CCRC_HOST=127.0.0.1\nCCRC_PORT=7788\n',
-      'exposure.env': 'CCRC_ORIGIN=https://ccrc-fixture.duckdns.org\nCCRC_RP_ID=ccrc-fixture.duckdns.org\n',
+      'exposure.env': 'CCRC_ORIGIN=https://fixture.duckdns.org\nCCRC_RP_ID=fixture.duckdns.org\n',
     });
     const r = derive(home);
-    expect(r.out).toContain('HEALTH_URL=https://ccrc-fixture.duckdns.org/health');
+    expect(r.out).toContain('HEALTH_URL=https://fixture.duckdns.org/health');
   });
 
   it('the IN-BOX probe stays local — it asks "is Fastify listening", not "does NAT hairpin"', () => {
     const home = mkTmp('deploy-health-inbox-');
     stubSsh(home, {
       'ccrc.env': 'CCRC_HOST=127.0.0.1\nCCRC_PORT=7788\n',
-      'exposure.env': 'CCRC_ORIGIN=https://ccrc-fixture.duckdns.org\n',
+      'exposure.env': 'CCRC_ORIGIN=https://fixture.duckdns.org\n',
     });
     expect(derive(home).out).toContain('BOX_HEALTH_URL=http://127.0.0.1:7788/health');
   });
 
   it('an UNEXPOSED box keeps the shape this gate has always had', () => {
     const home = mkTmp('deploy-health-plain-');
-    stubSsh(home, { 'ccrc.env': 'CCRC_HOST=100.64.0.1\nCCRC_PORT=7788\n' });
+    stubSsh(home, { 'ccrc.env': 'CCRC_HOST=203.0.113.7\nCCRC_PORT=7788\n' });
     const r = derive(home);
     expect(r.out).toContain('HEALTH_URL=http://box:7788/health');
     // …and in-box it asks the address the server really binds, not loopback.
-    expect(r.out).toContain('BOX_HEALTH_URL=http://100.64.0.1:7788/health');
+    expect(r.out).toContain('BOX_HEALTH_URL=http://203.0.113.7:7788/health');
   });
 
   it('reads CCRC_HOST the way systemd does — exposure.env is read second and wins', () => {
     const home = mkTmp('deploy-health-precedence-');
     stubSsh(home, {
-      'ccrc.env': 'CCRC_HOST=100.64.0.1\nCCRC_PORT=7788\n',
-      'exposure.env': 'CCRC_HOST=127.0.0.1\nCCRC_ORIGIN=https://ccrc-fixture.duckdns.org\n',
+      'ccrc.env': 'CCRC_HOST=203.0.113.7\nCCRC_PORT=7788\n',
+      'exposure.env': 'CCRC_HOST=127.0.0.1\nCCRC_ORIGIN=https://fixture.duckdns.org\n',
     });
     expect(derive(home).out).toContain('BOX_HEALTH_URL=http://127.0.0.1:7788/health');
   });
@@ -207,8 +207,8 @@ describe('deploy.sh: derive_health_urls — the gate probes the box, not this wo
 
   it('a trailing slash on the origin does not produce a doubled path', () => {
     const home = mkTmp('deploy-health-slash-');
-    stubSsh(home, { 'exposure.env': 'CCRC_ORIGIN=https://ccrc-fixture.duckdns.org/\n' });
-    expect(derive(home).out).toContain('HEALTH_URL=https://ccrc-fixture.duckdns.org/health');
+    stubSsh(home, { 'exposure.env': 'CCRC_ORIGIN=https://fixture.duckdns.org/\n' });
+    expect(derive(home).out).toContain('HEALTH_URL=https://fixture.duckdns.org/health');
   });
 });
 

@@ -4,7 +4,7 @@
 // Why this is a ccd verb at all, restated where it is tested: the server may
 // write only `~/.cc-clips` on the fleet host (`agent/src/whitelist.ts`) and
 // `FleetIO` has no unlink, so raising or clearing a registry marker from
-// `server-box` is not a mutation that exists server-side. `ws-hold`/`ws-release`
+// the server box is not a mutation that exists server-side. `ws-hold`/`ws-release`
 // were granted for the same reason and with the same argument, and this file is
 // `ccd-hold.test.ts`'s shape for the same class of verb.
 //

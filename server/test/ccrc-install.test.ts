@@ -1067,7 +1067,7 @@ describe('ccrc install: the files the operator owns', () => {
       // test in ccrc-doctor.test.ts; this test is about a file being kept, and
       // a fixture that was also secretly a broken-config fixture would fail for
       // the wrong reason.
-      'CCRC_AGENT_URL=ws://100.119.90.29:7789',
+      'CCRC_AGENT_URL=ws://198.51.100.7:7789',
       'CCRC_AGENT_TOKEN=not-a-real-token-but-it-is-mine',
       '',
     ].join('\n');

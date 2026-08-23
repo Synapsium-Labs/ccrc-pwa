@@ -92,7 +92,7 @@ describe('splitClipPaths', () => {
       'name      | five | seven',
       '--------- | ---- | -----',
       'claude2   |  12% |   44%',
-      'server-box |   3% |    9%',
+      'serverbox |   3% |    9%',
     ].join('\n');
     expect(splitClipPaths(raw)).toEqual({ paths: [], rest: raw });
   });

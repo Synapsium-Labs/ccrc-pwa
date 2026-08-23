@@ -5,7 +5,7 @@
 // "a second copy would drift" and by the time the integration review ran there
 // were three. So the guard is a test that reads the sources, in the suite that
 // already reaches outside its own package (`module-format.test.ts` walks
-// `shared/`, the ccd tests execute `../../ccrc-portability/ccd`). A
+// `shared/`, the ccd tests execute `../../ccd/ccd`). A
 // comment is a request; a red suite is a mechanism.
 //
 // These scan TEXT, deliberately, and that is a limitation worth stating: they
@@ -225,30 +225,27 @@ describe('extraction finding — one path to the ccd script', () => {
   const testDirs = [testDir, path.join(ccrcRoot, 'server', 'test-e2e')];
   const testFiles = testDirs.flatMap(sources);
 
-  // Matches any literal naming the script: the `../../../ccrc-portability/ccd`
-  // form, the path.join(..., `ccrc-portability`, `ccd`) form that
-  // wsaudit.test.ts used, the `../../ccd/ccd` form it becomes after the move,
-  // and the parts form an author could just as easily reach for post-move —
-  // two adjacent path.join arguments that both spell the four-letter script
-  // name, the same split style wsaudit.test.ts (one of the original seven)
-  // already used pre-move. That last shape needs its own case: relying on the
-  // pre-move `ccrc-portability` alternative alone would miss it, since
-  // that string stops existing the instant the extraction lands. All four
-  // shapes must be caught, or the guard stops working the moment the
-  // extraction lands.
+  // Matches any literal naming the script: the `../../ccd/ccd` form
+  // ccdWsHelpers.ts holds, and the parts form an author could just as easily
+  // reach for — two adjacent path.join arguments that both spell the
+  // four-letter script name, the same split style wsaudit.test.ts (one of the
+  // original seven) used before the extraction. Two further alternatives once
+  // matched the pre-extraction directory's spellings of the path; that
+  // directory has not existed since the Stage-1 extraction landed, and its
+  // name carries the old box's own name, which the `topology-clean` ratchet
+  // now forbids tree-wide — so the dead alternatives are gone and the ratchet
+  // itself is what stops that path shape returning (Stage 5, Task 4).
   //
-  // Anchored to these exact shapes rather than a bare 'ccrc-portability'
-  // or a bare quoted 'ccd' — this file's server/test tree also legitimately
-  // says "ccrc-portability" (extraction-manifest.test.ts's fixtures,
-  // ccd-ccclip.test.ts's OTHER script) and legitimately quotes 'ccd' for
-  // unrelated reasons (ccd-pr-state.test.ts's assertion label, remote-connect
-  // and remote-runner stubbing a binary literally named ccd). A looser regex
-  // over-matches this file's own comment too, describing the very literal it
-  // hunts for. Backticks above, not quotes, keep this comment from being a
-  // false positive of its own making — and this paragraph deliberately never
-  // writes the two script-name arguments themselves, quoted and adjacent, for
-  // the same reason.
-  const NAMES_CCD = /['"]\.\.\/\.\.\/\.\.\/ccrc-portability\/ccd['"]|'ccrc-portability',\s*'ccd'|['"]\.\.\/\.\.\/ccd\/ccd['"]|['"]ccd['"]\s*,\s*['"]ccd['"]/;
+  // Anchored to these exact shapes rather than a bare quoted 'ccd' — this
+  // file's server/test tree legitimately quotes 'ccd' for unrelated reasons
+  // (ccd-pr-state.test.ts's assertion label, remote-connect and remote-runner
+  // stubbing a binary literally named ccd). A looser regex over-matches this
+  // file's own comment too, describing the very literal it hunts for.
+  // Backticks above, not quotes, keep this comment from being a false
+  // positive of its own making — and this paragraph deliberately never writes
+  // the two script-name arguments themselves, quoted and adjacent, for the
+  // same reason.
+  const NAMES_CCD = /['"]\.\.\/\.\.\/ccd\/ccd['"]|['"]ccd['"]\s*,\s*['"]ccd['"]/;
 
   it('found the test tree it is scanning', () => {
     // A scan over an empty list passes everything. Each directory is checked
@@ -734,13 +731,7 @@ describe('one BuildInfo — the stamp shape and its field checks', () => {
 // remote-control flag), so the walk lives here rather than inside either — a
 // second copy of the scanner, in the file whose whole subject is second
 // copies, would be the joke this suite exists to prevent.
-// `install.sh` is a SHIPPED bash file at the repo root, and until Stage 5 it
-// sat outside this corpus entirely — so every "spelled once" rule below was
-// blind to the one script a stranger runs FIRST. It is listed explicitly
-// rather than by globbing the root, which would sweep up whatever else lands
-// there later.
 const bashRoots = [path.join(ccrcRoot, 'ccd'), path.join(ccrcRoot, 'deploy')];
-const bashExtra = [path.join(ccrcRoot, 'install.sh')].filter((f) => existsSync(f));
 const isBash = (p: string): boolean => {
   if (/\.(sh|bash)$/.test(p)) return true;
   if (/\.[A-Za-z0-9]+$/.test(p)) return false;   // .mjs/.service/.json/.conf …
@@ -755,6 +746,15 @@ const bashFiles = (dir: string): string[] => {
   }
   return out;
 };
+// `install.sh` is not under any bash ROOT — it sits at the repo top, because
+// that is where `curl … | bash` fetches it from. It was therefore outside this
+// corpus entirely, so every "spelled once" rule below had been blind to the
+// one script a stranger runs first. Folded in globally rather than per-rule:
+// the seven pre-existing rules (build.json's two readers, `.ccrc/remote-control`,
+// `.ccrc/exposure.env`, `.ccrc/Caddyfile`, `/etc/caddy/Caddyfile`, `ccrc-ddns`,
+// the `KillMode=process` sweep) all want to see it too. `.filter(existsSync)`
+// so a checkout without it fails the liveness row below, not every rule.
+const bashExtra = [path.join(ccrcRoot, 'install.sh')].filter((f) => existsSync(f));
 const BASH = [...bashRoots.flatMap(bashFiles), ...bashExtra];
 /** A bash line that is not a comment. Either path is discussed in prose all
  *  over these tools; only an actual line of shell is a reader or a writer. */
@@ -777,7 +777,8 @@ describe('one bash reader of ~/.ccrc/build.json', () => {
   // being prose.
   it('actually found the bash tools — a scan over an empty list passes everything', () => {
     for (const f of ['ccd/ccd', 'ccd/ccrc', 'ccd/ccrc-adopt', 'ccd/ccrc-doctor-checks',
-      'ccd/session-hook.sh', 'deploy/deploy.sh', 'deploy/verify-service.sh', 'install.sh']) {
+      'ccd/session-hook.sh', 'deploy/deploy.sh', 'deploy/verify-service.sh',
+      'install.sh']) {
       expect(BASH.map(rel)).toContain(f);
     }
   });
@@ -1031,40 +1032,6 @@ describe('one /etc/caddy/Caddyfile, spelled once through CCRC_CADDY_SYSTEM_FILE'
     expect(code.filter((l) => l.includes(NEEDLE))).toEqual([
       'CCRC_CADDY_SYSTEM_FILE="${CCRC_CADDY_SYSTEM_FILE:-/etc/caddy/Caddyfile}"',
     ]);
-  });
-});
-
-// — Stage 5, Task 2 (S1): the release owner —
-describe('the release owner is spelled in exactly two declarations, and nowhere else', () => {
-  // The plan asks for the owner "DEFINED once in install.sh". It is spelled
-  // TWICE by necessity, and the difference is worth stating rather than
-  // glossing: `install.sh` is the curl|bash BOOTSTRAP — it runs on a box with
-  // no ccrc yet and can source nothing — while `ccd/ccrc` is the installed
-  // tool that later self-updates. Neither can read the other's value at the
-  // moment it needs it without inventing a runtime file dependency for a
-  // constant that changes once in the project's life, and a missing file would
-  // then turn `ccrc update` into a refusal over a string.
-  //
-  // So the property enforced is the one the "define once" rule exists to buy:
-  // the two CANNOT DISAGREE (ccrc-update.test.ts pins them equal), the previous
-  // org appears nowhere in shipping code (license.test.ts), and — here — no
-  // THIRD spelling can appear in bash at all. A new toucher must extend this
-  // list by name, in a diff a reviewer reads.
-  const NEEDLE = 'Synapsium-Labs';
-
-  it('is touched by exactly the two bash files that bootstrap and self-update', () => {
-    expect(holdersOf(NEEDLE)).toEqual([
-      'ccd/ccrc',   // _upd_fetch — the installed tool updating itself
-      'install.sh', // the bootstrap, which runs before ccd/ccrc exists
-    ]);
-  });
-
-  it('each spells it once, as the declaration and not inline at a use site', () => {
-    for (const f of ['install.sh', path.join('ccd', 'ccrc')]) {
-      const lines = codeLines(path.join(ccrcRoot, f)).filter((l) => l.includes(NEEDLE));
-      expect(lines, `${f} spells the owner somewhere other than its declaration`)
-        .toEqual([`CCRC_RELEASE_OWNER="${NEEDLE}"`]);
-    }
   });
 });
 
@@ -1409,6 +1376,103 @@ describe('the supervisor sweep — both copies carry the KillMode=process prefli
       expect(guard, `${name} has no preflight at all`).toBeGreaterThan(-1);
       expect(guard, `${name}: the preflight does not precede the try-restart`)
         .toBeLessThan(restart);
+    }
+  });
+});
+
+// — Stage 5, Task 2: the release owner (S1) — the deliberate pair, held to two —
+describe('the release owner literal — two named assignments, and no third spelling', () => {
+  // Three suites now hold three different halves of one fact, and the split is
+  // deliberate:
+  //   - license.test.ts pins the VALUE — both lanes name the ruled owner, and
+  //     the previous org survives nowhere in shipping code;
+  //   - ccrc-update.test.ts pins the AGREEMENT — install.sh's owner/repo pair
+  //     and ccd/ccrc's are equal, so the two lanes download the same release;
+  //   - THIS pins the COUNT — those two assignments are the only spellings of
+  //     the org anywhere in shipped code, so a third copy (a hardcoded release
+  //     URL in a workflow, a `const OWNER` in the server, a literal in some
+  //     deploy script) is a red suite rather than a URL that keeps working
+  //     through GitHub's post-transfer redirect and dies the day the old org
+  //     name is recreated.
+  //
+  // TWO definitions, not one, and that is D-92's cross-file class rather than
+  // a drift — ccd/ccrc's own release-source header carries the argument:
+  // `install.sh --release` runs before any ccrc exists on the box, so it
+  // cannot read ccrc's pair, and `ccrc update` runs on boxes install.sh has
+  // long left. The stage-5 plan's Task 2 asked for "defined once, in
+  // install.sh"; the pin ships against the tree that exists, whose second
+  // definition is deliberate and separately held equal (D-191).
+  const DEFINES = /^CCRC_RELEASE_OWNER="/;
+
+  /** The org name every scan below hunts for: READ from the definition, never
+   *  restated here. A scanner that hand-spelled the owner would follow a
+   *  rename one commit late — this file's own disease, in the file that
+   *  exists to prevent it. */
+  const owner = (): string => {
+    const m = /^CCRC_RELEASE_OWNER="([^"]+)"$/m.exec(
+      readFileSync(path.join(ccrcRoot, 'install.sh'), 'utf8'));
+    expect(m, 'install.sh no longer spells CCRC_RELEASE_OWNER').not.toBeNull();
+    return m![1]!;
+  };
+
+  const OWNER = owner();
+
+  /** The two lanes, named once. The test below asserts the tree agrees with
+   *  this list; every later test DERIVES from it rather than restating it —
+   *  a hand-kept second copy of the holder list, inside the suite that exists
+   *  to forbid second copies, is the joke this file cannot afford. */
+  const HOLDERS = [
+    'ccd/ccrc',    // the box's lane — `ccrc update` downloads with it
+    'install.sh',  // the clone's lane — `install.sh --release` does too
+  ];
+
+  it('is assigned in exactly two bash files, and each is named here BY NAME', () => {
+    const holders = BASH
+      .filter((f) => codeLines(f).some((l) => DEFINES.test(l)))
+      .map(rel).sort();
+    expect(holders).toEqual(HOLDERS);
+  });
+
+  it('no other line of shipped bash spells the org — everything else derives', () => {
+    // Within the two holders, the assignment is the ONLY code line carrying
+    // the literal (the URL below each is built from `$CCRC_RELEASE_OWNER`);
+    // in every other bash file, no code line carries it at all. Prose may
+    // discuss the owner anywhere — only a line of shell is a copy.
+    for (const f of BASH) {
+      const lines = codeLines(f).filter((l) => l.includes(OWNER));
+      const want = DEFINES.test(lines[0] ?? '') && HOLDERS.includes(rel(f))
+        ? [`CCRC_RELEASE_OWNER="${OWNER}"`]
+        : [];
+      expect(lines, rel(f)).toEqual(want);
+    }
+  });
+
+  it('both lanes build their release URL through the variable, not a restatement', () => {
+    // Not merely "no second literal" — deleting the download would satisfy
+    // that. Each lane must still READ the variable it defines.
+    for (const f of HOLDERS) {
+      const uses = codeLines(path.join(ccrcRoot, f))
+        .filter((l) => l.includes('$CCRC_RELEASE_OWNER'));
+      expect(uses.length, `${f} never reads $CCRC_RELEASE_OWNER`).toBeGreaterThan(0);
+    }
+  });
+
+  it('the four TS roots never name the org — no server-side release identity', () => {
+    const holders = ALL.filter((f) => readFileSync(f, 'utf8').includes(OWNER)).map(rel);
+    expect(holders).toEqual([]);
+  });
+
+  it('the workflows never name the org — the release lane derives its repo from the checkout', () => {
+    // release.yml's `gh release create` writes to the repository the runner
+    // checked out — no owner argument anywhere, which is what lets the repo
+    // transfer orgs without touching a workflow. YAML comments are prose,
+    // same as bash's (`codeLines` treats both).
+    const wfDir = path.join(ccrcRoot, '.github', 'workflows');
+    const wfs = readdirSync(wfDir).filter((e) => /\.ya?ml$/.test(e));
+    expect(wfs.length, 'the workflow directory is empty — this scan sees nothing').toBeGreaterThan(0);
+    for (const wf of wfs) {
+      const hits = codeLines(path.join(wfDir, wf)).filter((l) => l.includes(OWNER));
+      expect(hits, `.github/workflows/${wf}`).toEqual([]);
     }
   });
 });

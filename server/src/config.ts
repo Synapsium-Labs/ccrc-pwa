@@ -117,10 +117,10 @@ export interface CcrcConfig {
    * IT IS CONFIGURED AND NEVER DERIVED, and that is the single most dangerous
    * line in this file to "simplify". The obvious derivation — take the request's
    * `Host` and strip a label — walks straight into the PUBLIC SUFFIX LIST: this
-   * fleet's own hostname is `server-box.tailnet-example.ts.net` and **`ts.net` is a
-   * public suffix**, as is `duckdns.org`, the other host shape this project
-   * documents. Stripping one label off `server-box.tailnet-example.ts.net` gives
-   * `tailnet-example.ts.net`, which is right; stripping two gives `ts.net`, which
+   * fleet's own hostname is a tailnet name, `<box>.<tailnet>.ts.net`, and
+   * **`ts.net` is a public suffix**, as is `duckdns.org`, the other host shape
+   * this project documents. Stripping one label off `<box>.<tailnet>.ts.net`
+   * gives `<tailnet>.ts.net`, which is right; stripping two gives `ts.net`, which
    * would scope the credential to EVERY tailnet on the internet, and a browser
    * would (correctly) refuse it — or, on a host shape where the suffix has one
    * label fewer, quietly widen it. There is no way to know how many labels to
@@ -330,7 +330,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
     fleetServerId: env.CCRC_FLEET_SERVER_ID ?? null,
     vapidPublic: env.CCRC_VAPID_PUBLIC ?? null,
     vapidPrivate: env.CCRC_VAPID_PRIVATE ?? null,
-    vapidSubject: env.CCRC_VAPID_SUBJECT ?? 'mailto:ccrc@server-box',
+    // A VAPID contact must PARSE, not resolve (RFC 8292 wants a URI, push
+    // services only log it) — and the old default named the reference server
+    // box. `localhost` parses everywhere and names nobody's machine (S5).
+    vapidSubject: env.CCRC_VAPID_SUBJECT ?? 'mailto:ccrc@localhost',
     // `defaultCoordDbPath`, not a second inline `path.join` — the same string
     // built twice, once tested and once not, is how a rename in one place
     // silently opens a different (or brand-new, empty) database in the other.

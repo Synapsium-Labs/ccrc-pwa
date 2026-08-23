@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccclip — push the Mac clipboard image into the server-box session you're attached to.
+# ccclip — push the Mac clipboard image into the fleet session you're attached to.
 # Grabs the clipboard PNG, ships it to the box, and `ccd clip` injects its path into the
 # currently-attached session's input box (you then add your question and hit Enter).
 # Normally fired by a global hotkey (Hammerspoon); can also be run directly.
@@ -7,9 +7,50 @@
 set -uo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"  # hotkey launchers have a minimal PATH
 
-BOX="you@198.51.100.7"
-SSH_KEY="$HOME/.ssh/your-key-a"
-CCD="/home/you/.local/bin/ccd"
+# The box, the key and the remote ccd path are YOURS, from ~/.ccrc/ccclip.env:
+#   BOX=user@host  SSH_KEY=/path/to/key  CCD=/path/to/ccd  (on the box)
+# The three literals that used to sit here were one operator's reference
+# fleet, promised gone in Stage 1 and removed at Stage 5 (spec §4). Grepped,
+# never sourced — the same rule every other ~/.ccrc reader follows: a config
+# file is data, not code. Last assignment wins (tail -n1), comments ignored.
+CCCLIP_ENV="$HOME/.ccrc/ccclip.env"
+
+# LEADING WHITESPACE AND QUOTES (D-200). Leading whitespace is tolerated on the key, and surrounding quotes are
+# stripped from the value, because BOTH are what a person writes. `BOX=
+# "you@host"` and an indented line are the two shapes an operator produces
+# from muscle memory, and the naive reader took the quotes literally into an
+# ssh destination and treated the indented line as ABSENT.
+#
+# Trailing/leading whitespace only — NOT the `tr -d '[:space:]'` every other
+# ~/.ccrc reader uses. Those read hosts, ports and tokens; this reads a
+# filesystem path, and `/Users/you/My Keys/id_ed25519` is a path a Mac
+# actually has.
+_clip_env() {
+  grep -E "^[[:space:]]*$1=" "$CCCLIP_ENV" 2>/dev/null | tail -n1 | cut -d= -f2- \
+    | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//; s/^"(.*)"$/\1/; s/^'"'"'(.*)'"'"'$/\1/'
+}
+
+# ABSENT and INCOMPLETE are different answers and get different sentences.
+# This runs under a Hammerspoon hotkey, where stderr goes nowhere — so the one
+# time the operator does run it by hand to find out why the hotkey died, the
+# message has to be the true one. "No ccclip.env" printed at a file that exists
+# and has all three keys sends them to write a file they already wrote.
+if [ ! -r "$CCCLIP_ENV" ]; then
+  echo "ccclip: no ~/.ccrc/ccclip.env — set BOX=, SSH_KEY=, CCD= there; ccclip carries no default box" >&2
+  exit 1
+fi
+BOX="$(_clip_env BOX)"
+SSH_KEY="$(_clip_env SSH_KEY)"
+CCD="$(_clip_env CCD)"
+_missing=""
+[ -n "$BOX" ]     || _missing="$_missing BOX"
+[ -n "$SSH_KEY" ] || _missing="$_missing SSH_KEY"
+[ -n "$CCD" ]     || _missing="$_missing CCD"
+if [ -n "$_missing" ]; then
+  echo "ccclip: ~/.ccrc/ccclip.env is missing a value for:$_missing" >&2
+  echo "ccclip: the file exists — check for a typo in the key name, or an empty value" >&2
+  exit 1
+fi
 
 command -v pngpaste >/dev/null 2>&1 || { echo "ccclip: pngpaste missing (brew install pngpaste)" >&2; exit 1; }
 

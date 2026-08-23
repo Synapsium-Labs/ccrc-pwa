@@ -800,7 +800,7 @@ describe('cookiePolicyProblem — the boot check that IS implementable', () => {
     // D-139's rule, applied here: a warning every operator sees on every boot is
     // one they learn to skim, and the warnings that matter lose by it. These two
     // are the shipped-correct deployments.
-    expect(cookiePolicyProblem('https://server-box.tailnet-example.ts.net:8443', true)).toBeNull();
+    expect(cookiePolicyProblem('https://mybox.example.com:8443', true)).toBeNull();
     expect(cookiePolicyProblem('http://localhost:7788', false)).toBeNull();
   });
 
@@ -820,7 +820,7 @@ describe('cookiePolicyProblem — the boot check that IS implementable', () => {
   });
 
   it('warns on https + the dev opt-out — the mirror, and a real downgrade', () => {
-    const problem = cookiePolicyProblem('https://server-box.tailnet-example.ts.net:8443', false);
+    const problem = cookiePolicyProblem('https://mybox.example.com:8443', false);
     expect(problem).not.toBeNull();
     expect(problem).toContain('CCRC_COOKIE_INSECURE');
     expect(problem).toContain('plain-http');
