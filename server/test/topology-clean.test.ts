@@ -24,7 +24,9 @@
 // Mutation ceremony (measured at ship, re-measured at Task 10): plant a
 // class's first `catches` token on a line of a TRACKED doc → exactly 1 red;
 // revert by editing. Ship measurement 2026-08-23: 1 red (public IPv4 planted
-// in README.md), suite green on revert.
+// in README.md), suite green on revert. Task 8 re-measure (scopes dropped,
+// operator-residue class added): 1 red (the residue class's first token
+// planted in README.md), 30/30 on revert.
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -87,9 +89,10 @@ interface ForbiddenClass {
   pattern: RegExp;
   /** why this class can never return */
   why: string;
-  /** files the class does not (yet) reach — sweep tasks land scoped
-   *  (`!file.startsWith('docs/')`) and Task 8 drops the scope. Absent means
-   *  the whole corpus. */
+  /** files the class does not (yet) reach — Tasks 3/4/5 landed scoped
+   *  (`!file.startsWith('docs/')`) and Task 8 dropped every scope; the field
+   *  stays for any future class that must land the same way. Absent means
+   *  the whole corpus, and at ship NO class carries one. */
   scope?: (file: string) => boolean;
   /** lines the class does not read at all — the narrowest escape there is,
    *  and each one is argued where it is written */
@@ -143,22 +146,34 @@ const DUCKDNS_PLACEHOLDERS = new Set(['mybox', 'otherbox', 'fixture', 'subdomain
 const TAILNET_RESIDUE: string[] = ['dGFpbDMzZjExYw==', 'Y2xhdWRlLXJj']
   .map((b) => Buffer.from(b, 'base64').toString('utf8'));
 
-/** The reference fleet's four ACCOUNT LABELS and its operator's employer, held
- *  the same way and for the same reason as TAILNET_RESIDUE: this suite is the
- *  one file in a public repo that must name what is banned, and a plaintext
- *  list here would be the most greppable copy of exactly what the sweep
- *  removed. The labels name an employer and a product; two of them are the
- *  strongest single fingerprint the roster carried. */
-const ROSTER_RESIDUE: string[] =
-  ['ZXhwb8K3bWF4', 'Z21haWzCt21heA==', 'ZXhwb8K3dGVhbQ==', 'c3luwrdkZXYw', 'ZXhwb3BsYXRmb3Jt']
-    .map((b) => Buffer.from(b, 'base64').toString('utf8'));
+/** The reference fleet's four real account labels plus its operator's old
+ *  employer name (Task 5, spec §5) — BASE64-ENCODED, the same residue idiom
+ *  as TAILNET_RESIDUE above and for the same reason: these are concrete
+ *  values no pattern can express without spelling them, and a suite that
+ *  spelled them verbatim would itself publish the strings it exists to hunt.
+ *  The fixture vocabulary that replaced them (`team·max`, `alt·max`,
+ *  `team·shared`, `lab·dev0`, and `orchard-api` for the project name) is
+ *  pinned in `passes` below so the class cannot silently widen into its own
+ *  replacements. */
+const ROSTER_RESIDUE: string[] = [
+  'ZXhwb8K3bWF4', 'Z21haWzCt21heA==', 'ZXhwb8K3dGVhbQ==', 'c3luwrdkZXYw', 'ZXhwb3BsYXRmb3Jt',
+].map((b) => Buffer.from(b, 'base64').toString('utf8'));
 
-/** Task 4's scope: the runtime tree — code, tests, executables, deploy and
- *  scripts — plus install.sh. The docs corpus (docs/, README.md, CLAUDE.md,
- *  scratch/, .github/) waits for Task 8, for D-193's reason: the gitignored
- *  operator file that keeps the real reach values must exist BEFORE the
- *  tree-wide sweep erases them, and scratch/ is pruned whole, not sanitised. */
-const RUNTIME_ROOTS = ['server/', 'agent/', 'pwa/', 'shared/', 'ccd/', 'deploy/', 'scripts/'];
+/** The residue no pattern can express (Task 8, spec §3): the operator's
+ *  username, the two SSH key names, the Hetzner volume id, the GitHub
+ *  handle and the pre-transfer owner org — BASE64-ENCODED for the same
+ *  reason as the two residue lists above: a suite that spelled them
+ *  verbatim would itself publish the strings it exists to hunt. Encoding
+ *  breaks casual greppability, while the values themselves are already
+ *  public-by-ruling in the retained commit-author history, so this is
+ *  noise-prevention, not secrecy. The owner-org token joins NOW rather
+ *  than post-transfer: PR #93 already flipped `CCRC_RELEASE_OWNER`, and
+ *  the tree measured zero occurrences at ship — the ban costs nothing and
+ *  a transfer-window reintroduction is exactly what it exists to catch. */
+const OPERATOR_RESIDUE: string[] = [
+  'bWZhc3RvdmV0cw==', 'b3BlbmNsYXctaGV0em5lcg==', 'b3BlbmNsYXctcmM=',
+  'SENfVm9sdW1lXzEwNTc1MTQ3MA==', 'MGJMb00=', 'RXhwb1BsYXRmb3JtLUx0ZA==',
+].map((b) => Buffer.from(b, 'base64').toString('utf8'));
 
 const FORBIDDEN: ForbiddenClass[] = [
   {
@@ -201,15 +216,11 @@ const FORBIDDEN: ForbiddenClass[] = [
     // above deliberately excludes this range; this class owns it.
     pattern: /\b100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}\b/g,
     why: 'a CGNAT 100.64/10 literal is a real tailnet box — fixtures speak 203.0.113.x, or the one documented placeholder',
-    // Task 3 lands SCOPED (D-193): the docs corpus is Task 8/9's sweep, which
-    // FIRST moves the real values into gitignored deploy/reference-fleet.md
-    // so operations lose nothing, and then drops this scope. The plan's own
-    // predicate said `!docs/` alone, but README.md, CLAUDE.md and scratch/
-    // sit outside docs/ while their sweep is owned by Tasks 8-9 — scrubbing
-    // them here would erase the operator's reach values before the file that
-    // keeps them exists (and pre-empt Task 8's prune of scratch/).
-    scope: (file) => !file.startsWith('docs/') && !file.startsWith('scratch/')
-      && file !== 'README.md' && file !== 'CLAUDE.md',
+    // Task 3 landed this class SCOPED to non-docs (D-193): the gitignored
+    // operator file that keeps the real reach values had to exist BEFORE the
+    // tree-wide sweep erased them. Task 8 wrote deploy/reference-fleet.md,
+    // swept the docs corpus, and dropped the scope — the class now reaches
+    // every tracked file, and no class below carries a scope any more.
     // The ONE sanctioned CGNAT literal (D-193): `_dr_ip4_global`'s whole
     // point is classifying this range, so ccrc-doctor.test.ts's CGNAT-arm
     // fixture cannot speak 203.0.113.x — the class admits exactly one
@@ -231,35 +242,30 @@ const FORBIDDEN: ForbiddenClass[] = [
     // Bare `ts.net` stays legal: it is the PUBLIC SUFFIX, load-bearing in
     // webauthn.ts's PUBLIC_SUFFIX_TRAPS and every PSL discussion.
     pattern: new RegExp(`[a-z0-9-]+\\.ts\\.net|${TAILNET_RESIDUE.join('|')}`, 'g'),
-    why: 'a tailnet DNS name or a reference-fleet host token locates somebody\'s real box — say mybox.example.com, or a role name',
-    // Task 4 lands SCOPED to the runtime tree; Task 8 drops the scope with
-    // the rest (see RUNTIME_ROOTS' docstring).
-    scope: (file) => RUNTIME_ROOTS.some((p) => file.startsWith(p)) || file === 'install.sh',
+    why: 'a tailnet DNS name or the reference fleet\'s own name tokens locate somebody\'s real box',
+    // Task 4 landed this class scoped to the runtime tree (D-193's reason,
+    // restated at the CGNAT class); Task 8 dropped the scope.
     catches: ['fixture-box.ts.net', TAILNET_RESIDUE[0]!, TAILNET_RESIDUE[1]!],
     passes: ['mybox.example.com', 'ts.net', '*.ts.net', '<tailnet>.ts.net',
       '<other-box>.<tailnet>.ts.net', 'tailscale.net'],
   },
   {
-    name: 'reference roster identity',
-    // The four labels the reference fleet's accounts actually carry, plus the
-    // operator's employer as it appears in fixture project names. These never
-    // reached the PWA from source — labels arrive at runtime from the
-    // user-owned `~/.ccrc/accounts.json`, which no deploy overwrites — so the
-    // sweep that cleared them changed fixtures, comments and one JSON file and
-    // touched no live box. That is exactly why they could sit here unnoticed:
-    // nothing broke while they did.
-    pattern: new RegExp(ROSTER_RESIDUE.join('|'), 'g'),
-    why: 'an account label or employer name identifies whose fleet this is — fixtures speak team·/alt·/lab· and orchard-api',
-    // Task 5 lands SCOPED like its two neighbours: the docs corpus, README,
-    // CLAUDE.md and scratch/ are Task 8/9's sweep, which moves the real values
-    // into gitignored deploy/reference-fleet.md first so operations keep them.
-    scope: (file) => !file.startsWith('docs/') && !file.startsWith('scratch/')
-      && file !== 'README.md' && file !== 'CLAUDE.md',
-    catches: [ROSTER_RESIDUE[0]!, ROSTER_RESIDUE[3]!, ROSTER_RESIDUE[4]!],
+    name: 'fleet account label',
+    // The reference fleet's four real account labels and the old employer
+    // name (ROSTER_RESIDUE — base64-argued above), case-insensitive: the
+    // employer token has appeared capitalised, hyphen-suffixed and inside
+    // project names, and every casing locates the same real organisation.
+    // A label names a person's or a company's account; fixtures speak the
+    // `team·…` vocabulary instead.
+    pattern: new RegExp(ROSTER_RESIDUE.join('|'), 'gi'),
+    why: 'a real account label or the old employer name ties the tree to one operator\'s fleet — fixtures speak team·…',
+    // Task 5 landed this class scoped exactly as Task 3's was (D-193's
+    // reason, restated at the CGNAT class); Task 8 dropped the scope.
+    catches: [...ROSTER_RESIDUE, ROSTER_RESIDUE[4]!.toUpperCase()],
     passes: ['team·max', 'alt·max', 'team·shared', 'lab·dev0', 'orchard-api',
-      // The `·` shape itself is not banned — it is the roster's own label
-      // format, and a fixture has to be able to exercise it.
-      'claude', 'gpt'],
+      // `gpt` keeps its literal roster id: ccd's Codex overflow lane is keyed
+      // on it, so it is a real identifier and not a name anyone chose.
+      'gpt', 'claude', 'claude-corp'],
   },
   {
     name: 'duckdns subdomain',
@@ -271,6 +277,22 @@ const FORBIDDEN: ForbiddenClass[] = [
     catches: ['realbox.duckdns.org'],
     passes: ['mybox.duckdns.org', 'otherbox.duckdns.org', 'fixture.duckdns.org',
       'subdomain.duckdns.org', 'www.duckdns.org', '<sub>.duckdns.org', '<name>.duckdns.org'],
+  },
+  {
+    name: 'operator residue',
+    // The six concrete tokens of OPERATOR_RESIDUE (base64-argued above),
+    // case-insensitive: the handle has appeared in repo slugs and the org
+    // token capitalised. Docs and fixtures speak the role vocabulary
+    // instead: `you@<server-host>`, `/home/you`, `/srv/projects`,
+    // `~/.ssh/<your-key>`, `example-org/example-repo`. The old monorepo
+    // name is NOT in this class — it survives in agent whitelist fixtures
+    // and hundreds of historical plan anchors, and names a repository, not
+    // a reachable box; the class bans what locates or logs into one.
+    pattern: new RegExp(OPERATOR_RESIDUE.join('|'), 'gi'),
+    why: 'the operator\'s username, key names, volume id, GitHub handle or the pre-transfer owner org ties the tree to the reference fleet — docs speak roles',
+    catches: [...OPERATOR_RESIDUE, OPERATOR_RESIDUE[0]!.toUpperCase()],
+    passes: ['you@<server-host>', '/home/you', '/srv/projects', '~/.ssh/<your-key>',
+      'example-org/example-repo', 'Synapsium-Labs', 'openclaw'],
   },
 ];
 
@@ -358,10 +380,11 @@ for (const cls of FORBIDDEN) {
       // the tree scan is neutered (the push deleted, an early return added)
       // while every pattern stays healthy. It also pins the work-list format
       // sweep tasks read.
-      // The synthetic file sits under server/ so it is inside EVERY class's
-      // scope — the exclusion-scoped classes (CGNAT) admit it and the
-      // inclusion-scoped ones (tailnet name) reach it, so a scope predicate
-      // cannot quietly blind this liveness row.
+      // The synthetic file sits under server/ so it stays inside any scope
+      // a class could carry — while Tasks 3/4/5 ran scoped, both the
+      // exclusion-scoped classes (CGNAT) and the inclusion-scoped one
+      // (tailnet name) reached it, so a scope predicate could not quietly
+      // blind this liveness row; no class is scoped since Task 8.
       const synthetic: CorpusFile[] = [
         { file: 'server/synthetic.md', lines: [`a line carrying ${cls.catches[0]} in prose`] },
       ];

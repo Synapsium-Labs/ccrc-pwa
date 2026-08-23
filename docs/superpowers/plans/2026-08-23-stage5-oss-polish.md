@@ -339,20 +339,27 @@ follow-up, deliberately not papered over.
 - Create: `deploy/reference-fleet.md` (GITIGNORED — the real addresses/user/key names
   move here verbatim so operations lose nothing)
 
-- [ ] **Step 1:** write `deploy/reference-fleet.md` from today's live values; add to
+- [x] **Step 1:** write `deploy/reference-fleet.md` from today's live values; add to
   `.gitignore`; `CLAUDE.md` two-box section rewrites to roles + the pointer sentence
   `real values: deploy/reference-fleet.md (gitignored)`. The 817-lines figure corrected
-  after Task 9 lands.
-- [ ] **Step 2 (red):** widen ALL ratchet classes to the full tree (drop the non-docs
+  after Task 9 lands. (Shipped; `git check-ignore` verified before the sweep began.)
+- [x] **Step 2 (red):** widen ALL ratchet classes to the full tree (drop the non-docs
   scopes from Tasks 3/4/5) → the red count is the corpus work-list, file by file:
   sanitise (role vocabulary above; transcripts keep shape, lose hostnames; D-N refs and
   plan anchors PRESERVED) or prune (scratch/ both files). Sweep to green in 3–5 commits
-  grouped by directory so review stays possible.
-- [ ] **Step 3:** base64 residue class joins the ratchet: the operator's username, the
+  grouped by directory so review stays possible. (Measured with Step 3's class in the
+  same red: 4 red tests, 687 `file:line` rows across 74 files — not the plan's ~35;
+  the widening commit lands LAST so every commit stays green — both D-200.)
+- [x] **Step 3:** base64 residue class joins the ratchet: the operator's username, the
   two SSH key names, the Hetzner volume id, the GitHub handle and (post-transfer) the
   old owner org — all six ride encoded in the suite (`OPERATOR_RESIDUE`), with the
-  why-comment from the spec §3. Red → sweep the stragglers → green.
-- [ ] **Step 4: Commit(s)** `docs(debrand): the corpus speaks roles (N/M) (D-<n>)`
+  why-comment from the spec §3. Red → sweep the stragglers → green. (272 of the 687
+  rows were this class's, 19 of them in runtime files no earlier task's scope reached;
+  the owner-org token joined NOW, not post-transfer — D-200. Mutation ceremony: its
+  first token planted in README.md → 1 red; reverted by edit → 30/30.)
+- [x] **Step 4: Commit(s)** `docs(debrand): the corpus speaks roles (N/M) (D-<n>)`
+  (five commits: reference-fleet+CLAUDE.md, scratch prune, plans 417 rows,
+  specs+research+README 246 rows, runtime stragglers + the widened suite.)
 
 ### Task 9: README restructure (S7)
 
@@ -492,7 +499,101 @@ list. **No transfer, no flip, no tag happens from this session.**
   post-move path, the adjacent-args form) are untouched and still pinned by its
   "exactly one file" test. Also under this number: `ccrc-adopt`'s example-label anchor
   drifted `:350`→`:457` (content matched; trusted the file per the global rule).
-- **D-204** (Task 7): three forced drifts in the ip arm. (1) The verb-behaviour tests
+- **D-196** (Task 5): five drifts between the plan and the shipped roster de-brand.
+  (1) The external account KEEPS the id `gpt` where the plan's Step 1 id list said
+  `claude-c`: ccd's shipped bash keys its Codex overflow lane on that literal roster
+  id (`_gpt_enabled() { _account_ok gpt; }`; `ccd ls` prints the lane footer only
+  behind `_is_valid_wrapper gpt` — a deliberate footer-skipped-not-relabelled design,
+  argued in ccd beside the footer), so renaming the fixture's external account would
+  silently un-cover the lane's tests or need the logic edits the step forbids — and
+  `gpt` names OpenAI's backend, not this fleet. Argued at the entry in `helpers.ts`.
+  (2) Step 1's red measured 21 files / 131 tests, not "~28 files"; green files
+  carrying old ids as their own roster-independent fixture strings keep them (ids are
+  not a ratchet class), with two swept for coherence because Step 3 names them
+  (`fleetws.test.ts`, `registry.test.ts` — whose sort-order expectations also swap:
+  `claude-a` < `claude-b` where `claude-corp` < `claude2` had held). pwa's
+  `TEST_ROSTER` likewise keeps its ids and renames only labels. (3) Step 3's sweep
+  list named three files; the measured red was 168 `file:line` rows across 30 files —
+  the pwa test corpus and src comments, six server label fixtures, `QA-CHECKLIST.md`,
+  `ccd/ccd` (provenance re-stamped) and `license.test.ts`, whose `OLD_ORG` hunt
+  literal now rides base64 (the residue idiom — the guard must not be the last
+  spelling of the org it hunts); the replacement vocabulary is
+  `team·max`/`team·alt`/`team·b`/`team·d` and `demo-app-ts`, pinned in the class's
+  `passes`. (4) The migration-JSON followers went beyond mechanical renames:
+  `gen-accounts.test.ts`'s D-69 pin lost its subject with the deleted file and is
+  retired with a tombstone comment (the no-`secretsFile` generated shape it
+  deliberately never blanket-forbade stays exercised by `claude-b`), and four suites'
+  migration-roster fixtures re-root on `DEFAULT_TEST_ROSTER` (`gen-wrappers`,
+  `ccrc-wrappers`, `ccrc-install` — serialised to file bytes — and
+  `wrapper-roster-fixture`'s round-trip matrix, where the fixture takes the deleted
+  shipped roster's seat). (5) Step 2's refusal gained a pin the plan did not name:
+  `agent/test/deploy-verify.test.ts` asserts the no-default `ACCOUNTS_JSON` line and
+  the absence of any `accounts.migration.json` reference (mutation-measured: default
+  re-planted → 1 red; reverted → 43/43 green), because a refusal message alone is a
+  request, not a mechanism.
+- **D-197** (Task 6): Step 3 said "document the knob" in deploy.sh's PWA build step, but
+  documentation alone would have shipped a live regression: spec §6 has the reference
+  box building its own PWA via deploy, and nothing in the deploy lane READ the knob — so
+  the reference box's next deploy would bake the clean default and the SPA fallback
+  would hijack its `/docs`/`/fleet` co-tenants' navigations. The step therefore also
+  WIRED it: `pwa_sw_denylist_value()` in deploy.sh (exported variable wins, else a LOCAL
+  read of the gitignored `deploy/ccrc.env` — never ssh, the box's copy may be a deploy
+  behind the file this run ships) feeds the vite build. The third env-file parser this
+  creates pays the established cost: it copies `_box_env_value`'s extraction rules and
+  `deploy-env-guard.test.ts` gained a describe holding it to them plus a wired-in pin on
+  the build line (measured red-first: 6 red / 24 green before the function existed,
+  30/30 after). One follower outside the task's file list: `agent/test/deploy-verify.test.ts`
+  pins the PWA build line VERBATIM at its two ordering assertions (measured 2 red against
+  the changed line), re-pinned to the wired literal with a note that the knob itself is
+  deploy-env-guard's to hold. The helper itself landed as `pwa/src/lib/sw-denylist.ts`
+  (the plan offered either home; a config-resident export would make every consumer
+  import the whole vite config).
+- **D-198** (Task 6, review fix-round): D-197's env-file lane shipped DEAD in the wired
+  shape. `pwa_sw_denylist_value` read `deploy/ccrc.env` relative, but the build line
+  expands it inside `(cd pwa && …)` — so the fallback read `pwa/deploy/ccrc.env`
+  (nonexistent) and its `2>/dev/null` ate the miss: a file-configured box's next deploy
+  would bake the clean default, the exact regression D-197 exists to prevent. All 30
+  greens held over it because every `readKnob` case ran at the harness root and the
+  wired-in pin was string-contains only. Three fixes: (1) the read anchors on
+  `$REPO_ROOT` (set at deploy.sh's own top; the harness preamble now models that state
+  with `REPO_ROOT="$PWD"`, so extracted functions see what the shipped script sees);
+  (2) `deploy-env-guard.test.ts` gained the wired-shape case — the function invoked
+  from inside a `pwa/` subdirectory — measured 1 red / 30 green against the relative
+  read, 31/31 after the anchor; (3) the vite side gained the same
+  wired-in-not-merely-defined pin the deploy side already carried:
+  `pwa/test/sw-denylist.test.ts` asserts the
+  `navigateFallbackDenylist: swDenylist(process.env.CCRC_SW_DENYLIST)` literal sits in
+  vite.config.ts, measured 1 red / 6 green against a reverted hardcoded array (which no
+  prior suite redded — the helper tests never read the config, and bare `/docs`/`/fleet`
+  tokens are outside topology-clean's forbidden classes), 7/7 after. The build line
+  itself is byte-identical throughout, so `agent/test/deploy-verify.test.ts`'s verbatim
+  pins stand unchanged (43/43).
+- **D-200** (Task 8): four drifts in the corpus sweep. (1) Scale: the plan's "~35 files
+  under docs/superpowers/" measured 687 red rows across 74 files tree-wide — 64 docs
+  files plus README.md, CLAUDE.md, scratch/ and 11 RUNTIME files; the runtime rows are
+  all the new residue class's (Tasks 3–5's scopes only ever gated the tailnet, roster
+  and CGNAT classes, and no class banned the username/key/volume/handle tokens until
+  this task, so `/home/<user>` clip fixtures, the volume-path whitelist fixtures and the
+  handle's PR-facts fixture had nothing to go red against). (2) Ordering: Steps 2–3's
+  red was measured once, against the working tree with the widened+extended suite
+  UNCOMMITTED, and the suite change lands in the LAST commit after the directory-grouped
+  sweeps — the plan's "widen → red → sweep in 3–5 commits" read literally would commit a
+  red ratchet bar mid-sequence, breaking bisect; red-first is a measurement discipline,
+  not a committed state. (3) The owner-org token joined the residue class NOW, not
+  "(post-transfer)": #93 already flipped `CCRC_RELEASE_OWNER`, the sweep left zero
+  in-tree spellings, and the gate was illusory anyway — dropping Task 5's class scope in
+  this same task already made the org's lowercase substring red corpus-wide, so
+  deferring the token would have banned nothing extra; a transfer-window reintroduction
+  is exactly what the class exists to catch. (4) Vocabulary the plan did not enumerate:
+  the three stage-5 docs (this plan, the spec, the decision brief) are hand-rewritten
+  rather than substituted — their sentences NAME the banned tokens as subject matter, so
+  they now say the tokens' roles; the old monorepo's project spellings become
+  `acme-platform-ts` (spec §1's neutral-name class) and the clip-fixture dirs
+  `claude2-demo-app-ts`; the employer-email transcript author becomes
+  `you@example.com`; the old monorepo name itself is deliberately NOT in the residue
+  class (argued in the suite at the class comment: it names a repository, not a
+  reachable box, and carries hundreds of load-bearing historical anchors).
+- **D-199** (Task 7): three forced drifts in the ip arm. (1) The verb-behaviour tests
   live in `server/test/ccrc-expose.test.ts`, not the plan's `ccrc-cli.test.ts`: both
   files pin the split in their own headers (cli owns DISCOVERABILITY — the usage line,
   which did gain the `ip (no domain at all` pin — and ccrc-expose owns what the verb
