@@ -20,7 +20,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyWebsocket from '@fastify/websocket';
 import { buildServer, type Deps } from '../src/server.js';
 import {
-  EXEMPT, SECRET_UNREAD, authVerdict, exemptKey, installGate, measureSecret, sessionVerdict,
+  EXEMPT, NO_SESSION, SECRET_UNREAD, authVerdict, exemptKey, installGate, measureSecret, sessionVerdict,
   type GateRequest,
 } from '../src/auth/gate.js';
 import { SESSION_COOKIE, serializeCookie } from '../src/auth/cookie.js';
@@ -940,7 +940,7 @@ describe('authVerdict — the decision, with no server around it', () => {
 
   it('the flag off allows everything, before anything else is read', () => {
     expect(authVerdict(req('GET', '/api/accounts'), { enabled: false, secret: SECRET_UNREAD, store }, 0))
-      .toEqual({ allow: true, verdict: 'ok', reason: 'flag-off' });
+      .toEqual({ allow: true, verdict: 'ok', reason: 'flag-off', device: null });
   });
 
   it('an unmeasured secret with the flag ON denies — nobody looked is not permission', () => {
@@ -948,7 +948,7 @@ describe('authVerdict — the decision, with no server around it', () => {
     // exists so that a future caller who forgets to measure is refused rather
     // than admitted.
     const d = authVerdict(req('GET', '/api/accounts'), { enabled: true, secret: SECRET_UNREAD, store }, 0);
-    expect(d).toEqual({ allow: false, verdict: 'unconfigured', reason: 'refused' });
+    expect(d).toEqual({ allow: false, verdict: 'unconfigured', reason: 'refused', device: null });
   });
 
   it('an absent and an unusable secret both deny, and stay distinct facts', () => {
@@ -994,7 +994,7 @@ describe('authVerdict — the decision, with no server around it', () => {
     // one line above the store call and so never reaches D-127's mapping.
     for (const cookie of [undefined, '', 'other=1', `${SESSION_COOKIE}=`]) {
       expect(authVerdict(req('GET', '/api/accounts', cookie), { enabled: true, secret: secretOk, store }, 0))
-        .toEqual({ allow: false, verdict: 'no-session', reason: 'refused' });
+        .toEqual({ allow: false, verdict: 'no-session', reason: 'refused', device: null });
     }
   });
 
@@ -1014,7 +1014,7 @@ describe('authVerdict — the decision, with no server around it', () => {
     // in the presented-but-unmatched path and is called "signed out". Imprecise,
     // and far cheaper than the alternative.
     const junk = authVerdict(req('GET', '/api/accounts', `${SESSION_COOKIE}=%E0%A4%A`), deps, 0);
-    expect(junk).toEqual({ allow: false, verdict: 'expired', reason: 'refused' });
+    expect(junk).toEqual({ allow: false, verdict: 'expired', reason: 'refused', device: null });
   });
 
   it('names WHY it allowed — three different facts, never one boolean', () => {
@@ -1045,15 +1045,80 @@ describe('authVerdict — the decision, with no server around it', () => {
     // credential question answers `'no-session'` for the very same request.
     expect(authVerdict(req('GET', '/health'), deps, 1_000).reason).toBe('exempt');
     expect(sessionVerdict(req('GET', '/health'), deps, 1_000))
-      .toEqual({ allow: false, verdict: 'no-session', reason: 'refused' });
+      .toEqual({ allow: false, verdict: 'no-session', reason: 'refused', device: null });
 
     // Exempt route, LIVE cookie: `'session'`, which is the only value that means
     // a credential verified.
     const withCookie = req('GET', '/health', `${SESSION_COOKIE}=${token}`);
-    expect(sessionVerdict(withCookie, deps, 1_000)).toEqual({ allow: true, verdict: 'ok', reason: 'session' });
+    expect(sessionVerdict(withCookie, deps, 1_000)).toEqual({ allow: true, verdict: 'ok', reason: 'session', device: 'probe' });
 
     // And it never invents the two shortcuts it exists to skip.
     expect(sessionVerdict(req('GET', '/health'), { ...deps, enabled: false }, 1_000).reason)
       .not.toBe('flag-off');
+  });
+});
+
+// ── wave 6: the device the gate measured ─────────────────────────────────
+
+describe('GateDecision.device — attribution, never a decision input', () => {
+  const req = (method: string, url: string | undefined, cookie?: string): GateRequest =>
+    ({ method, routeOptions: { url }, headers: cookie === undefined ? {} : { cookie } });
+  const secretOk = { kind: 'ok' as const, secret: { n: 2, r: 8, p: 1, saltB64: '', hashB64: '', generation: 3 } };
+
+  const liveStore = async (): Promise<SessionStore> => {
+    const s = new SessionStore(path.join(mkTmp('ccrc-auth-device-'), 'sessions.json'));
+    await s.load();
+    return s;
+  };
+
+  it('carries the session row`s own label on the one arm that verified a credential', async () => {
+    const store = await liveStore();
+    const { token } = await store.create('Mozilla/5.0 (iPhone)', 3, 1_000);
+    const deps = { enabled: true, secret: secretOk, store };
+    expect(sessionVerdict(req('GET', '/api/accounts', `${SESSION_COOKIE}=${token}`), deps, 1_000))
+      .toEqual({ allow: true, verdict: 'ok', reason: 'session', device: 'Mozilla/5.0 (iPhone)' });
+  });
+
+  it('is null on every arm that did NOT verify a credential', async () => {
+    // SEVEN construction sites, and each one must SAY it measured nothing
+    // rather than omit the field: an optional `device?` would let a site forget
+    // it, and a reader cannot tell a forgotten field from a measured absence —
+    // which is exactly what a genuinely deviceless allow already means.
+    const store = await liveStore();
+    const deps = { enabled: true, secret: secretOk, store };
+    expect(authVerdict(req('GET', '/api/accounts'), { ...deps, enabled: false }, 1_000))
+      .toEqual({ allow: true, verdict: 'ok', reason: 'flag-off', device: null });
+    expect(authVerdict(req('GET', '/health'), deps, 1_000))
+      .toEqual({ allow: true, verdict: 'ok', reason: 'exempt', device: null });
+    expect(sessionVerdict(req('GET', '/api/accounts'), { ...deps, secret: SECRET_UNREAD }, 1_000))
+      .toEqual({ allow: false, verdict: 'unconfigured', reason: 'refused', device: null });
+    expect(sessionVerdict(req('GET', '/api/accounts'), deps, 1_000))
+      .toEqual({ allow: false, verdict: 'no-session', reason: 'refused', device: null });
+    expect(sessionVerdict(req('GET', '/api/accounts', `${SESSION_COOKIE}=junk`), deps, 1_000))
+      .toEqual({ allow: false, verdict: 'expired', reason: 'refused', device: null });
+    expect(NO_SESSION)
+      .toEqual({ allow: false, verdict: 'no-session', reason: 'refused', device: null });
+  });
+
+  it('never becomes a decision input — allow and reason are unchanged by the label', async () => {
+    const store = await liveStore();
+    const deps = { enabled: true, secret: secretOk, store };
+    const a = await store.create('iPhone', 3, 1_000);
+    const b = await store.create('', 3, 1_000);
+    const da = sessionVerdict(req('GET', '/api/accounts', `${SESSION_COOKIE}=${a.token}`), deps, 1_000);
+    const db = sessionVerdict(req('GET', '/api/accounts', `${SESSION_COOKIE}=${b.token}`), deps, 1_000);
+    expect([da.allow, da.reason]).toEqual([db.allow, db.reason]);
+    expect(da.device).not.toBe(db.device);
+  });
+
+  it('verifyMeasured is the primitive and verify derives — one loop, not two lookups', async () => {
+    const store = await liveStore();
+    const { token } = await store.create('iPhone', 3, 1_000);
+    expect(store.verifyMeasured(token, 3, 1_000)).toEqual({ verdict: 'ok', label: 'iPhone' });
+    expect(store.verify(token, 3, 1_000)).toBe('ok');
+    // No row matched ⇒ nothing was measured. `null`, never `''`: an empty label
+    // is a row that logged in from a UA-less browser, which is a different fact.
+    expect(store.verifyMeasured('nope', 3, 1_000)).toEqual({ verdict: 'no-session', label: null });
+    expect(store.verifyMeasured(token, 4, 1_000)).toEqual({ verdict: 'expired', label: null });
   });
 });
