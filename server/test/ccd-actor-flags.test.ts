@@ -180,3 +180,89 @@ describe('the closed set is spelled exactly twice in ccd', () => {
       .toHaveLength(2);
   });
 });
+
+/** Stubs every irreversible thing `cmd_ws_archive` does, so these cases measure
+ *  ARGV PARSING and nothing else. `tmux` is stubbed for wave 2's `_lc_obs`
+ *  (HEAD AUDIT w23 M-A) — without it these snippets shell the live tmux.
+ *  MEASURED GAP: `seedWorkspace`'s own doc comment promises a row "complete
+ *  enough … to reach their own bodies", but it writes only registry fields —
+ *  it never creates `workdir` on disk, and `cmd_ws_archive` (ccd:3690s)
+ *  refuses with "worktree is gone" before its own body when the directory is
+ *  absent. `seedWorkspace`'s signature/semantics are the fixed interface
+ *  Tasks 46-49 build on, so the `mkdir -p` lives HERE, task-local, rather
+ *  than inside it. */
+const ARCHIVE_STUBS = `tmux() { return 1; }; _ws_unsupervise() { :; };
+  mkdir -p "$HOME/worktrees/demo/quiet-basin";
+  _ws_idle_ok() { return 0; }; _ws_status() { echo idle; }; _ws_archive_manifest() { echo '{}'; };`;
+
+describe('ws-archive accepts the dec flags in any position', () => {
+  it.each([
+    ['before the required flag', `--surface pwa --session ID`],
+    ['after the required flag',  `--session ID --surface pwa`],
+    ['in the --flag=value form', `--session ID --surface=pwa`],
+    ['with all three flags',     `--session ID --surface pwa --actor 'device:iPhone' --reason 'tidy'`],
+  ])('parses --surface %s', (_name, tail) => {
+    const id = seedWorkspace();
+    expect(shFail(`${ARCHIVE_STUBS} cmd_ws_archive ${tail.replace('ID', id)} >/dev/null`).code).toBe(0);
+  });
+
+  it('treats a blank --surface as a word it does not know, never as no flag', () => {
+    // GAP FOUND BY THIS TASK: the brief's own text asserts `_lc_surface_norm
+    // ''` returns `unknown` — measured false (D-200): the bare helper answers
+    // EMPTY for both "no argument" and an explicit blank (pinned already in
+    // the `_lc_surface_norm` describe block above), which is exactly why
+    // givenness has to be resolved in THIS flag loop, not by re-deriving it
+    // from the bare helper. So this probes `cmd_ws_archive`'s own
+    // function-local `lc_surface` instead of calling `_lc_surface_norm`
+    // directly: `_ws_archive_manifest` is dynamically scoped under bash, so a
+    // stub that runs where `cmd_ws_archive` calls it can see the caller's
+    // `local lc_surface` and echo it out. Task 49 has not wired an emit site
+    // yet, so this is the only way to observe the value this task computes.
+    // `--surface ''` is ACCEPTED (a caller may honestly not know its own
+    // surface) and normalises to `unknown`. What it must never do is
+    // normalise to `none`, which is the marker for "no flag was given at
+    // all".
+    const id = seedWorkspace();
+    expect(shFail(`${ARCHIVE_STUBS} cmd_ws_archive --session ${id} --surface '' >/dev/null`).code).toBe(0);
+    // A FRESH id: the call above already wrote `$REG/$id.archived`, and
+    // `cmd_ws_archive`'s own early-return for an already-archived session
+    // sits before `_ws_archive_manifest` is ever reached — a second call on
+    // the same id would never fire the probe below.
+    //
+    // The probe writes to a FILE, not stdout: `manifest=$(_ws_archive_manifest
+    // "$id")` captures every line the stub prints, so an extra echo on stdout
+    // becomes part of the manifest and fails ccd's own JSON parse.
+    const id2 = seedWorkspace('demo-quiet-basin-2');
+    const PROBE = `_ws_archive_manifest() { printf '%s' "$lc_surface" > "$HOME/probe-surface"; echo '{}'; };`;
+    h.sh(`${ARCHIVE_STUBS} ${PROBE} cmd_ws_archive --session ${id2} --surface ''`);
+    expect(readFileSync(`${h.home}/probe-surface`, 'utf8')).toBe('unknown');
+  });
+
+  it('refuses a --surface with no value rather than looping forever', () => {
+    // `shift 2` past the end of argv FAILS under `set -uo pipefail` with no
+    // `-e`: it shifts nothing and the loop never terminates (ccd:9610-9612 says
+    // so about `cmd_stop`'s identical loop).
+    const id = seedWorkspace();
+    const r = shFail(`${ARCHIVE_STUBS} cmd_ws_archive --session ${id} --surface`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('usage: ccd ws-archive');
+  });
+
+  it('refuses a blank --actor, and an over-long one, naming the flag', () => {
+    const id = seedWorkspace();
+    const blank = shFail(`${ARCHIVE_STUBS} cmd_ws_archive --session ${id} --actor ''`);
+    expect(blank.code).not.toBe(0);
+    expect(blank.stderr).toContain('--actor');
+    const long = shFail(
+      `${ARCHIVE_STUBS} cmd_ws_archive --session ${id} --actor "$(printf 'a%.0s' {1..513})"`);
+    expect(long.code).not.toBe(0);
+    expect(long.stderr).toContain('--actor');
+  });
+
+  it('still refuses extra positionals — the arity rule survives the strip', () => {
+    const id = seedWorkspace();
+    const r = shFail(`${ARCHIVE_STUBS} cmd_ws_archive --session ${id} extra`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('usage: ccd ws-archive --session <id>');
+  });
+});
