@@ -213,7 +213,7 @@ function sameBytes(a: Buffer, b: Buffer): boolean {
  *
  * **THE HAZARD.** `rpId` scopes a credential: a browser offers a passkey to any
  * origin whose host is `rpId` or a subdomain of it. Set it to a REGISTRABLE
- * DOMAIN (`tailnet-example.ts.net`, `<name>.duckdns.org`) and the credential is
+ * DOMAIN (`<tailnet>.ts.net`, `<name>.duckdns.org`) and the credential is
  * bound to this fleet. Set it to the PUBLIC SUFFIX one label up (`ts.net`,
  * `duckdns.org`) and — if a browser let you — the credential would be scoped to
  * every tailnet, or every duckdns user, on the internet. Browsers do enforce
@@ -278,7 +278,7 @@ export function rpIdProblem(rpId: string): string | null {
     return `CCRC_RP_ID ${JSON.stringify(rpId)} is an IP address, and WebAuthn requires a DOMAIN — ` +
       'a browser refuses to scope a credential to an address literal, with an opaque SecurityError ' +
       'and nothing on the server to explain it. Use the name this box is actually reached by ' +
-      '(e.g. "tailnet-example.ts.net" or "<name>.duckdns.org"), or "localhost" for local development — ' +
+      '(e.g. "mybox.example.com" or "<name>.duckdns.org"), or "localhost" for local development — ' +
       'and set CCRC_ORIGIN to a URL with that same host, not to the IP.';
   }
   if (/[^a-z0-9.-]/.test(rpId)) {
@@ -291,7 +291,7 @@ export function rpIdProblem(rpId: string): string | null {
   if (PUBLIC_SUFFIX_TRAPS.includes(rpId)) {
     return `CCRC_RP_ID ${JSON.stringify(rpId)} is a PUBLIC SUFFIX, not a registrable domain — a ` +
       'credential scoped to it would be offered to every box under it, and browsers refuse the ' +
-      'registration outright. Use the registrable domain (e.g. "tailnet-example.ts.net", not "ts.net")';
+      'registration outright. Use the registrable domain (e.g. "mybox.duckdns.org", not "duckdns.org")';
   }
   if (!rpId.includes('.') && rpId !== 'localhost') {
     return `CCRC_RP_ID ${JSON.stringify(rpId)} is a single label, which is either a top-level ` +
@@ -502,7 +502,7 @@ export class ChallengeStore {
  * silently rejects every enrolled key with the same opaque "signature did not
  * verify" a genuine attack would produce. Recorded, the mismatch is VISIBLE: the
  * server can say "this credential was enrolled for localhost and this box is now
- * tailnet-example.ts.net — re-enrol", which is a sentence an operator can act on.
+ * mybox.example.com — re-enrol", which is a sentence an operator can act on.
  *
  * It is also strictly SAFER, not merely friendlier. A credential is bound to the
  * relying party it was created for; re-pointing an old credential at a new rpId

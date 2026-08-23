@@ -4725,7 +4725,7 @@ describe('ccrc doctor: name', () => {
     expect(r.stdout).not.toMatch(/^(WARN|FAIL) name: /m);
   });
 
-  // Branch review, 2026-08-21: 100.64.0.0/10 is CGNAT (RFC 6598) — and
+  // Branch review, 2026-08-21: 100.64/10 is CGNAT (RFC 6598) — and
   // tailscale's own address range, i.e. THIS project's fleet topology.
   // Counting it as a global address sent every NAT'd tailscale box down the
   // mismatch-WARN arm ("propagation lag… this box's own public address is
@@ -4734,7 +4734,7 @@ describe('ccrc doctor: name', () => {
   it('a CGNAT 100.64/10 address (tailscale) is NOT a public address — the NAT arm PASSes', () => {
     const home = healthy('ccrc-doctor-name-cgnat-');
     writeFileSync(join(home, 'fixture-getent'), `198.51.100.9     ${EXPOSED_HOST}\n`);
-    writeFileSync(join(home, 'fixture-host-ips'), '203.0.113.7 10.0.0.5\n');
+    writeFileSync(join(home, 'fixture-host-ips'), '100.100.1.1 10.0.0.5\n');
     const r = runDoctor(home);
     expect(lineFor(r.stdout, 'name'), r.stdout).toMatch(/^PASS name: /);
     expect(r.stdout).not.toMatch(/^(WARN|FAIL) name: /m);
@@ -4822,7 +4822,7 @@ describe('ccrc doctor: caddyfile', () => {
     // touched, so it is now older — the exact state a re-exposed box sits in
     // until someone re-runs step 2.
     const src = join(home, '.ccrc', 'Caddyfile');
-    writeFileSync(src, 'newbox.duckdns.org {\n    reverse_proxy 127.0.0.1:7788\n}\n');
+    writeFileSync(src, 'otherbox.duckdns.org {\n    reverse_proxy 127.0.0.1:7788\n}\n');
     const later = new Date(Date.now() + 5000);
     utimesSync(src, later, later);
     const r = runDoctor(home);

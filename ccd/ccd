@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=1a6295bf8147cc73ec20787f00593c4846b3928287aae47c4a6b400aa249c792
-# ccd — durable, multi-account, self-healing Claude Code session manager for server-box.
+# ccrc:generated 1 sha256=8a1750382b93a25a6d518a6d58141797bed984599510f84b9fdc71f1fe43a2c6
+# ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box, not on this file: `_rc_enabled` reads
 # `~/.ccrc/remote-control` and a box that does not say `on` spawns plain panes.
@@ -10293,7 +10293,7 @@ cmd_menu() {   # interactive picker → attach. The universal entry point for an
   local files=("$REG"/*.uuid) ids=() f id i alive
   for f in "${files[@]}"; do ids+=("$(basename "$f" .uuid)"); done
   if [[ ${#ids[@]} -eq 0 ]]; then echo "no sessions yet — create one with: ccd start <wrapper> <project>"; return 1; fi
-  echo "── server-box sessions ──"
+  echo "── ccd sessions ──"
   for i in "${!ids[@]}"; do
     id="${ids[$i]}"; alive="dead"; _alive "$id" && alive="live"
     printf "  %2d) %-30s [%s]\n" "$((i + 1))" "$id" "$alive"

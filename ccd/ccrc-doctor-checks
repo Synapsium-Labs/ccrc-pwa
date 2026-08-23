@@ -1558,7 +1558,7 @@ _dr_ip4_global() {
     ''|*[!0-9.]*) return 1 ;;
     10.*|127.*|169.254.*|192.168.*) return 1 ;;
     172.1[6-9].*|172.2[0-9].*|172.3[01].*) return 1 ;;
-    # CGNAT 100.64.0.0/10 (RFC 6598) — tailscale's own address range, so on
+    # CGNAT 100.64/10 (RFC 6598) — tailscale's own address range, so on
     # this project's fleet topology a wildcard here is not hypothetical:
     # counting 100.x as global made _check_name WARN "propagation lag" forever
     # on every tailscale box behind NAT (branch review, 2026-08-21).

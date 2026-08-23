@@ -178,6 +178,17 @@ describe('loadConfig', () => {
     expect(cfg.projectsRoot).toBe('/data/projects');
   });
 
+  // Stage 5 (spec §4): a VAPID contact must PARSE, not resolve — and the old
+  // default named the reference server box. `localhost` parses everywhere and
+  // names nobody's machine.
+  it('vapidSubject defaults to mailto:ccrc@localhost, and the env override wins (S5)', () => {
+    const cfg = loadConfig({ CCRC_HOME: '/h', CCRC_ACCOUNTS: ROSTER_PATH });
+    expect(cfg.vapidSubject).toBe('mailto:ccrc@localhost');
+    expect(loadConfig({
+      CCRC_HOME: '/h', CCRC_ACCOUNTS: ROSTER_PATH, CCRC_VAPID_SUBJECT: 'mailto:you@mybox.example.com',
+    }).vapidSubject).toBe('mailto:you@mybox.example.com');
+  });
+
   // Stage 3b design D8 (docs/superpowers/specs/2026-08-21-stage3b-exposure-design.md):
   // a bare `CCRC_HOST=` line — exactly how an EnvironmentFile ships a
   // defaulted key — must fall back to loopback, never reach
@@ -218,13 +229,13 @@ describe('loadConfig', () => {
       CCRC_HOME: '/h',
       CCRC_ACCOUNTS: ROSTER_PATH,
       CCRC_FLEET: 'remote',
-      CCRC_AGENT_URL: 'wss://203.0.113.7:7789',
+      CCRC_AGENT_URL: 'wss://198.51.100.7:7789',
       CCRC_AGENT_TOKEN: 'secret-token',
       CCRC_HETZNER_TOKEN: 'hetzner-secret',
       CCRC_FLEET_SERVER_ID: '12345',
     });
     expect(cfg.fleetMode).toBe('remote');
-    expect(cfg.agentUrl).toBe('wss://203.0.113.7:7789');
+    expect(cfg.agentUrl).toBe('wss://198.51.100.7:7789');
     expect(cfg.agentToken).toBe('secret-token');
     expect(cfg.hetznerToken).toBe('hetzner-secret');
     expect(cfg.fleetServerId).toBe('12345');
@@ -308,12 +319,12 @@ describe('loadConfig', () => {
   it('takes CCRC_RP_ID / CCRC_ORIGIN / CCRC_PASSKEYS_PATH as written', () => {
     const cfg = loadConfig({
       CCRC_HOME: '/h', CCRC_ACCOUNTS: ROSTER_PATH,
-      CCRC_RP_ID: 'tailnet-example.ts.net',
-      CCRC_ORIGIN: 'https://server-box.tailnet-example.ts.net',
+      CCRC_RP_ID: 'mybox.example.com',
+      CCRC_ORIGIN: 'https://fleet.mybox.example.com',
       CCRC_PASSKEYS_PATH: '/elsewhere/keys.json',
     });
-    expect(cfg.rpId).toBe('tailnet-example.ts.net');
-    expect(cfg.origin).toBe('https://server-box.tailnet-example.ts.net');
+    expect(cfg.rpId).toBe('mybox.example.com');
+    expect(cfg.origin).toBe('https://fleet.mybox.example.com');
     expect(cfg.passkeysPath).toBe('/elsewhere/keys.json');
   });
 

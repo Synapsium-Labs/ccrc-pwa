@@ -523,12 +523,13 @@ cmd_version() {
 # anything: an address. There are exactly two places one can come from, and
 # NEITHER of them is a literal in this file.
 #
-#   1. `$CCRC_ADDR` — `deploy/notify.sh:35`'s own seam, which every fleet-host
-#      hook already honours. Its `${CCRC_ADDR:-203.0.113.7:7788}` DEFAULT is
-#      deliberately not copied here: that IP is one operator's tailnet address,
-#      baked into a tool this workstream exists to make shippable to other
-#      people, and a doctor that silently probed it on somebody else's box
-#      would be reporting on a machine they have never heard of.
+#   1. `$CCRC_ADDR` — `deploy/notify.sh`'s own seam, which every fleet-host
+#      hook already honours. notify.sh once carried one operator's tailnet
+#      address as a baked third-tier default; Stage 5 deleted it (a notify
+#      that cannot resolve an address now sends nothing), and the same rule
+#      was always in force here: a doctor that silently probed a baked
+#      address on somebody else's box would be reporting on a machine they
+#      have never heard of.
 #   2. `~/.ccrc/ccrc.env`'s `CCRC_HOST` + `CCRC_PORT` — the box's own machine
 #      config, and the same two values `ccrc.service` reads through
 #      `EnvironmentFile=` (deploy/ccrc.env.example).
@@ -3023,7 +3024,7 @@ _inst_agent_env() {
     || _ccrc_die "stdin is not a terminal, and --role fleet will not read the agent token from a pipe or a file. Under \`curl … | bash\` stdin is the INSTALLER SCRIPT, so a read here would take a line of shell as this fleet's bearer token. Run 'ccrc install --role fleet' from a terminal. Nothing was written to \$HOME/.ccrc/agent.env."
   local url="" token=""
   printf '%s\n' "$PROG: configuring this box as a FLEET host — two values land in \$HOME/.ccrc/agent.env (0600); the token is not echoed; Ctrl-C aborts" >&2
-  if ! IFS= read -rp "Server WS URL (where this fleet's ccrc server runs, e.g. ws://100.64.0.1:7788 or https://mybox.example.com): " url; then
+  if ! IFS= read -rp "Server WS URL (where this fleet's ccrc server runs, e.g. ws://203.0.113.7:7788 or https://mybox.example.com): " url; then
     printf '\n' >&2
     _ccrc_die "no server URL was entered — nothing was written"
   fi

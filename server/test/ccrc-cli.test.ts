@@ -639,7 +639,7 @@ describe('ccrc: the runner cannot reach the real server', () => {
     // hand `status` a live address and turn the test above red — a flake that
     // depends on the operator's shell rather than on the code.
     const before = process.env['CCRC_ADDR'];
-    process.env['CCRC_ADDR'] = '203.0.113.7:7788';   // a REAL address, deliberately
+    process.env['CCRC_ADDR'] = '203.0.113.7:7788';   // pure fixture — the tree carries no real address (S5)
     try {
       const home = mkTmp('ccrc-cli-ambient-addr-');
       expect(ccrcEnv(home)['CCRC_ADDR']).toBeUndefined();

@@ -118,6 +118,17 @@ describe('deploy.sh: the target is never guessed', () => {
     expect(script, 'a tailnet magic-DNS name').not.toMatch(/\.ts\.net\b/);
   });
 
+  it('defaults the ssh port to the standard 22, not to a reference-fleet port', () => {
+    // The one coordinate that is a NUMBER, so the shape-based scan above
+    // cannot see it: nothing in either suite pinned this, and 2222 — the
+    // reference fleet's port — could be put back with the tree still green.
+    // A wrong port here is not a silent misconfiguration either way: an env
+    // that names box and key but not port dials 22 on a box listening on
+    // 2222, and the deploy fails at connect with no hint that the PORT is
+    // what it got wrong.
+    expect(script).toContain('CCRC_SSH_PORT="${CCRC_SSH_PORT:-22}"');
+  });
+
   it('reads per-workstation coordinates from a file outside every checkout', () => {
     // Outside the repo on purpose: this box carries many worktrees of the same
     // repo, and a per-checkout file would be both duplicated and one careless

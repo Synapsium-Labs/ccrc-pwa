@@ -469,7 +469,7 @@ export function sessionVerdict(req: GateRequest, deps: GateDeps, now: number): G
  * ── THE ATTACK THIS CLOSES (deferred to Task 8 by the Task 5 review) ──
  *
  * CROSS-SITE WEBSOCKET HIJACKING. A page the operator visits can open
- * `new WebSocket('wss://server-box.tailnet-example.ts.net/ws/fleet')`, and the browser
+ * `new WebSocket('wss://<this-box>.<tailnet>.ts.net/ws/fleet')`, and the browser
  * attaches the session cookie to the handshake. There is no preflight on a
  * WebSocket upgrade and no same-origin policy on the socket that results, so a
  * successful hijack streams the whole fleet — every session, every statusline,
@@ -478,7 +478,7 @@ export function sessionVerdict(req: GateRequest, deps: GateDeps, now: number): G
  * …AND ITS TWIN, CROSS-SITE REQUEST FORGERY (D-128). The socket was only half
  * the surface, and the half that was left open was the WRITE half. The same
  * same-site page can auto-submit
- * `<form method=POST action="https://server-box…/api/fleet/reboot">`, and the
+ * `<form method=POST action="https://<this-box>…/api/fleet/reboot">`, and the
  * cookie rides that too. Three measured facts make it work, none of them
  * obvious:
  *
@@ -501,8 +501,8 @@ export function sessionVerdict(req: GateRequest, deps: GateDeps, now: number): G
  * WHY `SameSite=Lax` STOPS NEITHER, and it is one fact with two consequences.
  * Lax withholds a cookie on CROSS-SITE requests, and "site" means registrable
  * domain. **`ts.net` is on the Public Suffix List**, so the registrable domain
- * of every node on this tailnet is `tailnet-example.ts.net` — which makes
- * `other-box.tailnet-example.ts.net` and `server-box.tailnet-example.ts.net` SAME-SITE.
+ * of every node on one tailnet is `<tailnet>.ts.net` — which makes
+ * `<other-box>.<tailnet>.ts.net` and `<this-box>.<tailnet>.ts.net` SAME-SITE.
  * Lax sends the cookie between them happily. Any page served by any other node
  * on the tailnet — a colleague's dev server, a container someone ran, a
  * compromised device — reaches this box with the operator's credential
@@ -673,9 +673,9 @@ export function installGate(app: FastifyInstance, deps: InstallGateDeps): void {
      * ── THE COST, STATED (D-129) ──
      *
      * THIS REFUSES A PWA LOADED FROM ANY HOST ALIAS THAT IS NOT `CCRC_ORIGIN`.
-     * An operator who has armed the flag with `CCRC_ORIGIN=https://server-box.…`
-     * and then opens `http://203.0.113.7:7788` (the tailnet IP, which serves
-     * the same bundle) gets a console whose reads work and whose every write and
+     * An operator who has armed the flag with `CCRC_ORIGIN=https://mybox.…`
+     * and then opens `http://203.0.113.7:7788` (the box's bare address, which
+     * serves the same bundle) gets a console whose reads work and whose every write and
      * every socket is refused. That is a real cost and it is the intended one —
      * the box has ONE origin and says so — but it is the shape an operator will
      * meet before they meet an attacker, so the refusal names `CCRC_ORIGIN`
