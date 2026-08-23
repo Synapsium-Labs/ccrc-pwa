@@ -16,7 +16,7 @@
 - Suites run from the package dir: `cd infra/ccrc/{server,agent,pwa} && npx vitest run`. Single file: `npx vitest run test/x.test.ts`.
 - Baseline to preserve: **server 292, agent 84, pwa 270**. Typecheck (`npx tsc --noEmit`) clean in all three. Contrast gate `node infra/ccrc/pwa/design/contrast-check.mjs` → **ALL 78 PASS**.
 - No new runtime dependencies.
-- `bash -n infra/ccrc-portability/ccd` must pass after every ccd change.
+- `bash -n infra/<server-host>-portability/ccd` must pass after every ccd change.
 - Workspace slugs match `^[a-z0-9][a-z0-9-]{1,30}$` — **no dots** (tmux `-t` reads `session:window.pane`), **no slashes** (systemd instance names escape `/`).
 - ccd is sourced by tests (`source "${CCD}"`), so **every new top-level statement must be inside a function**. A bare command at file scope runs on import and breaks the harness.
 - Never write to the real `~/.cc-sessions` from a test. The harness sets `HOME` to a temp dir; all registry paths derive from it.
@@ -29,7 +29,7 @@
 This is what frees the id. Measured on the live registry, 2 of 9 sessions have no `.home` file, so `_home_for` falls back to parsing the id prefix — which is wrong for 3 of 9 ids today.
 
 **Files:**
-- Modify: `infra/ccrc-portability/ccd:449-466` (`cmd_start`)
+- Modify: `infra/<server-host>-portability/ccd:449-466` (`cmd_start`)
 - Test: `infra/ccrc/server/test/ccd-workspaces.test.ts` (create)
 
 **Interfaces:**
@@ -50,7 +50,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 
-const CCD = path.resolve(__dirname, '../../../ccrc-portability/ccd');
+const CCD = path.resolve(__dirname, '../../../<server-host>-portability/ccd');
 let home: string;
 
 const sh = (snippet: string): string =>
@@ -100,7 +100,7 @@ Expected: FAIL — `_ws_seed_home: command not found`
 
 - [ ] **Step 3: Write minimal implementation**
 
-In `infra/ccrc-portability/ccd`, add beside the other registry helpers (after `_reg_get`, around line 95):
+In `infra/<server-host>-portability/ccd`, add beside the other registry helpers (after `_reg_get`, around line 95):
 
 ```bash
 _ws_seed_home() {   # id wrapper — set home once; never clobber a deliberate choice
@@ -122,13 +122,13 @@ undo a home chosen by `ccd prefer`.
 Run: `cd infra/ccrc/server && npx vitest run test/ccd-workspaces.test.ts`
 Expected: PASS, 2 tests
 
-Run: `bash -n infra/ccrc-portability/ccd`
+Run: `bash -n infra/<server-host>-portability/ccd`
 Expected: no output
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add infra/ccrc-portability/ccd infra/ccrc/server/test/ccd-workspaces.test.ts
+git add infra/<server-host>-portability/ccd infra/ccrc/server/test/ccd-workspaces.test.ts
 git commit -m "feat(ccd): write home explicitly at session creation
 
 Frees the id from having to encode the account: _home_for's prefix
@@ -140,7 +140,7 @@ fallback is load-bearing for 2 of 9 live sessions and wrong for 3."
 ### Task 2: slug generation and validation
 
 **Files:**
-- Modify: `infra/ccrc-portability/ccd` (helpers, after `_ws_seed_home`)
+- Modify: `infra/<server-host>-portability/ccd` (helpers, after `_ws_seed_home`)
 - Test: `infra/ccrc/server/test/ccd-workspaces.test.ts`
 
 **Interfaces:**
@@ -236,12 +236,12 @@ production could not produce.
 Run: `cd infra/ccrc/server && npx vitest run test/ccd-workspaces.test.ts`
 Expected: PASS, 9 tests
 
-Run: `bash -n infra/ccrc-portability/ccd`
+Run: `bash -n infra/<server-host>-portability/ccd`
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add infra/ccrc-portability/ccd infra/ccrc/server/test/ccd-workspaces.test.ts
+git add infra/<server-host>-portability/ccd infra/ccrc/server/test/ccd-workspaces.test.ts
 git commit -m "feat(ccd): workspace slug generation and validation"
 ```
 
@@ -250,7 +250,7 @@ git commit -m "feat(ccd): workspace slug generation and validation"
 ### Task 3: `ccd ws-add`
 
 **Files:**
-- Modify: `infra/ccrc-portability/ccd` (new `cmd_ws_add`, dispatch case)
+- Modify: `infra/<server-host>-portability/ccd` (new `cmd_ws_add`, dispatch case)
 - Test: `infra/ccrc/server/test/ccd-workspaces.test.ts`
 
 **Interfaces:**
@@ -445,12 +445,12 @@ and extend the usage line to include `ws-add|ws-rm`.
 Run: `cd infra/ccrc/server && npx vitest run test/ccd-workspaces.test.ts`
 Expected: PASS, 15 tests
 
-Run: `bash -n infra/ccrc-portability/ccd`
+Run: `bash -n infra/<server-host>-portability/ccd`
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add infra/ccrc-portability/ccd infra/ccrc/server/test/ccd-workspaces.test.ts
+git add infra/<server-host>-portability/ccd infra/ccrc/server/test/ccd-workspaces.test.ts
 git commit -m "feat(ccd): ws-add creates a worktree, scaffolds it, and spawns a session"
 ```
 
@@ -459,7 +459,7 @@ git commit -m "feat(ccd): ws-add creates a worktree, scaffolds it, and spawns a 
 ### Task 4: `ccd ws-rm`
 
 **Files:**
-- Modify: `infra/ccrc-portability/ccd` (new `cmd_ws_rm`, dispatch case)
+- Modify: `infra/<server-host>-portability/ccd` (new `cmd_ws_rm`, dispatch case)
 - Test: `infra/ccrc/server/test/ccd-workspaces.test.ts`
 
 **Interfaces:**
@@ -566,12 +566,12 @@ entry survives and `ccd ensure <id>` brings the session back.
 Run: `cd infra/ccrc/server && npx vitest run test/ccd-workspaces.test.ts`
 Expected: PASS, 19 tests
 
-Run: `bash -n infra/ccrc-portability/ccd`
+Run: `bash -n infra/<server-host>-portability/ccd`
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add infra/ccrc-portability/ccd infra/ccrc/server/test/ccd-workspaces.test.ts
+git add infra/<server-host>-portability/ccd infra/ccrc/server/test/ccd-workspaces.test.ts
 git commit -m "feat(ccd): ws-rm tears down a workspace, refusing anything destructive"
 ```
 
@@ -1210,7 +1210,7 @@ Run: `cd infra/ccrc/pwa && npx vitest run && npx tsc --noEmit`
 Run: `cd infra/ccrc/server && npx vitest run && npx tsc --noEmit`
 Run: `cd infra/ccrc/agent && npx vitest run && npx tsc --noEmit`
 Run: `node infra/ccrc/pwa/design/contrast-check.mjs`
-Run: `bash -n infra/ccrc-portability/ccd`
+Run: `bash -n infra/<server-host>-portability/ccd`
 
 Expected: server ≥292+, agent 84, pwa ≥270+, three clean typechecks, ALL PASS,
 no bash syntax output.

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: superpowers:subagent-driven-development (orchestrated via Workflow tonight). Each task: TDD, run the suite, commit.
 
-**Goal:** ccrc server (stays on server-box) drives the cc fleet on a REMOTE host through a small authenticated agent — no SSH in the runtime path.
+**Goal:** ccrc server (stays on <server-host>) drives the cc fleet on a REMOTE host through a small authenticated agent — no SSH in the runtime path.
 
 **Architecture:** `infra/ccrc/agent` = WS service on the fleet host (tailnet iface + bearer token) exposing a whitelisted exec/file/tail/pty surface. Server side: a `RemoteFleet` providing the existing `Runner`/`SpawnPty` seams plus a new injected `FleetIO` fs-facade; `CCRC_FLEET=local|remote` picks implementations. Degraded mode: disk-cached fleet snapshot + Hetzner reboot action.
 

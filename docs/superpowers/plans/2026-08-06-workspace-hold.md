@@ -601,8 +601,8 @@ Do **not** merge; the orchestrator merges.
 
 This build ships `ccd/` — **agent first**, then server+PWA:
 
-1. `CCRC_SSH_KEY=~/.ssh/your-key-b bash deploy/deploy.sh agent you@198.51.100.7`
-2. `CCRC_SSH_KEY=~/.ssh/your-key-b bash deploy/deploy.sh`
+1. `CCRC_SSH_KEY=~/.ssh/<your-key> bash deploy/deploy.sh agent you@<fleet-host>`
+2. `CCRC_SSH_KEY=~/.ssh/<your-key> bash deploy/deploy.sh`
 
 The server's routes are `verbSupported`-gated, so a server deployed against a stale ccd refuses politely rather than failing — but the order above makes that window zero.
 

@@ -15,14 +15,14 @@
 - Repo `/srv/projects/OpenClawHetzner`, branch `ccrc/workspace-lifecycle`.
 - Suites run from the package dir: `cd infra/ccrc/{server,agent,pwa} && npx vitest run`. Single file: `npx vitest run test/x.test.ts`.
 - **Baseline to preserve: server 335, agent 86, pwa 313.** Typecheck (`npx tsc --noEmit`) clean in all three.
-- `bash -n infra/ccrc-portability/ccd` must pass after every ccd change.
+- `bash -n infra/<server-host>-portability/ccd` must pass after every ccd change.
 - No new runtime dependencies. `git`, `du`, `df`, `stat`, `numfmt` and `awk` are the only external binaries; all are already present on the host.
 - **`HOME` is the only isolation boundary.** `PROJECTS_ROOT` and `WORKTREES_ROOT` derive from `$HOME` and take no environment override — do not add one. A test that could point `git worktree remove` at a real repository is a failed test. `CCD_DISK_FLOOR_GB` is the single permitted override in this plan, because it can only make ccd refuse to act.
 - **The nine live sessions, `~/worktrees` and `/data/projects` must be untouched by any test run.** Verify after the suite, not just before.
 - `ws-gc` reports by default and acts only under `--prune`. Never the reverse.
 - A dirty worktree is never removed, at any flag, by any command in this plan.
 - ccd is `set -uo pipefail` and has **no `set -e`** — a failing `&&` chain does not exit the function. Write refusals as explicit `die` calls, never as a bare `cmd || die` at the end of a function where the next statement matters.
-- Every new ccd command must be added to **both** the `case` dispatch and the `usage:` line at `infra/ccrc-portability/ccd:849`.
+- Every new ccd command must be added to **both** the `case` dispatch and the `usage:` line at `infra/<server-host>-portability/ccd:849`.
 - Do not add anything to `infra/ccrc/agent/src/whitelist.ts`. `ws-rename` and `ws-gc` are not reachable from the server in this phase; widening the exec whitelist for an unused command widens the security boundary for no user.
 
 ## Measured facts this plan depends on
@@ -55,7 +55,7 @@ Two behaviours that surfaced in that run and are deliberate, not bugs:
 
 | file | responsibility | tasks |
 |---|---|---|
-| `infra/ccrc-portability/ccd` | all workspace lifecycle: branch creation, rename, disk floor, gc | 1, 3, 5, 6, 7 |
+| `infra/<server-host>-portability/ccd` | all workspace lifecycle: branch creation, rename, disk floor, gc | 1, 3, 5, 6, 7 |
 | `infra/ccrc/server/src/registry.ts` | read the new `branch` registry field | 2 |
 | `infra/ccrc/server/src/fleet.ts` | fall back to the registry branch when no pane capture has landed | 2 |
 | `infra/ccrc/server/test/ccdWsHelpers.ts` | **new** — the isolated-`HOME` ccd harness, shared by every ccd test file | 4 |
@@ -69,7 +69,7 @@ Two behaviours that surfaced in that run and are deliberate, not bugs:
 ### Task 1: The workspace branch is `ws/<slug>`, untracked, and recorded
 
 **Files:**
-- Modify: `infra/ccrc-portability/ccd:145-196` (`cmd_ws_add`)
+- Modify: `infra/<server-host>-portability/ccd:145-196` (`cmd_ws_add`)
 - Test: `infra/ccrc/server/test/ccd-workspaces.test.ts`
 
 **Interfaces:**
@@ -187,7 +187,7 @@ Expected: 30 passed (26 existing + 4 new).
 
 - [ ] **Step 6: Verify the existing ws-rm tests still pass and syntax is clean**
 
-Run: `bash -n infra/ccrc-portability/ccd && cd infra/ccrc/server && npx vitest run`
+Run: `bash -n infra/<server-host>-portability/ccd && cd infra/ccrc/server && npx vitest run`
 
 Expected: `bash -n` silent; 339 passed.
 
@@ -215,7 +215,7 @@ Restore `--no-track` and re-run. Expected: 30 passed.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add infra/ccrc-portability/ccd infra/ccrc/server/test/ccd-workspaces.test.ts
+git add infra/<server-host>-portability/ccd infra/ccrc/server/test/ccd-workspaces.test.ts
 git commit -m "fix(ccd): workspace branches are ws/<slug> with no upstream
 
 git's branch.autoSetupMerge made origin/main the upstream of every workspace
@@ -379,7 +379,7 @@ git commit -m "feat(ccrc): fleet falls back to the registry branch before a pane
 ### Task 3: A disk floor on `ws-add`
 
 **Files:**
-- Modify: `infra/ccrc-portability/ccd` — add `_ws_disk_free_gb` beside the other `_ws_*` helpers (after `_ws_least_loaded`, ccd:136-143), and a check in `cmd_ws_add`
+- Modify: `infra/<server-host>-portability/ccd` — add `_ws_disk_free_gb` beside the other `_ws_*` helpers (after `_ws_least_loaded`, ccd:136-143), and a check in `cmd_ws_add`
 - Test: `infra/ccrc/server/test/ccd-workspaces.test.ts`
 
 **Interfaces:**
@@ -451,7 +451,7 @@ Expected: FAIL — `_ws_disk_free_gb: command not found`, and `ws-add` happily c
 
 - [ ] **Step 3: Write the helper**
 
-Insert into `infra/ccrc-portability/ccd` immediately after `_ws_least_loaded` (which ends at ccd:143):
+Insert into `infra/<server-host>-portability/ccd` immediately after `_ws_least_loaded` (which ends at ccd:143):
 
 ```bash
 # CCD_DISK_FLOOR_GB is the one environment override ccd honours, because unlike
@@ -490,13 +490,13 @@ In `cmd_ws_add`, insert immediately after the `[[ -d "$main/.git" ]] || die` lin
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
-Run: `bash -n infra/ccrc-portability/ccd && cd infra/ccrc/server && npx vitest run test/ccd-workspaces.test.ts`
+Run: `bash -n infra/<server-host>-portability/ccd && cd infra/ccrc/server && npx vitest run test/ccd-workspaces.test.ts`
 Expected: 35 passed.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add infra/ccrc-portability/ccd infra/ccrc/server/test/ccd-workspaces.test.ts
+git add infra/<server-host>-portability/ccd infra/ccrc/server/test/ccd-workspaces.test.ts
 git commit -m "feat(ccd): ws-add refuses below a disk floor"
 ```
 
@@ -529,7 +529,7 @@ export const WS_ADD: string;
 
 **Context:** the isolated-`HOME` harness (temp `HOME`, wrapper stubs, `sh`, `reg`, `calls`, `makeRepo`) lives inside `ccd-workspaces.test.ts` today. Three more test files need it. This task moves it and rewires the existing file — **no production code changes, and the test count must not move**.
 
-**This task is pure refactor. If the ccd-workspaces test count changes, or `infra/ccrc-portability/ccd` appears in the diff, the task is wrong.**
+**This task is pure refactor. If the ccd-workspaces test count changes, or `infra/<server-host>-portability/ccd` appears in the diff, the task is wrong.**
 
 - [ ] **Step 1: Record the count to preserve**
 
@@ -550,7 +550,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 
-export const CCD = path.resolve(__dirname, '../../../ccrc-portability/ccd');
+export const CCD = path.resolve(__dirname, '../../../<server-host>-portability/ccd');
 
 /** ws-add spawns a session; tmux is not available under test, so stub _spawn and
  *  the systemd call. Everything else runs for real. `tmux` is shadowed too,
@@ -670,7 +670,7 @@ git commit -m "test(ccrc): extract the isolated-HOME ccd harness for reuse"
 ### Task 5: `ccd ws-rename`
 
 **Files:**
-- Modify: `infra/ccrc-portability/ccd` — add `_ws_branch_valid` and `cmd_ws_rename` after `cmd_ws_rm` (which ends at ccd:225), plus the dispatch and usage line at ccd:847-849
+- Modify: `infra/<server-host>-portability/ccd` — add `_ws_branch_valid` and `cmd_ws_rename` after `cmd_ws_rm` (which ends at ccd:225), plus the dispatch and usage line at ccd:847-849
 - Test: `infra/ccrc/server/test/ccd-ws-rename.test.ts` (new)
 
 **Interfaces:**
@@ -824,7 +824,7 @@ Expected: FAIL — `_ws_branch_valid: command not found`, `cmd_ws_rename: comman
 
 - [ ] **Step 3: Write the validator**
 
-Insert into `infra/ccrc-portability/ccd` after `cmd_ws_rm` (ccd:225):
+Insert into `infra/<server-host>-portability/ccd` after `cmd_ws_rm` (ccd:225):
 
 ```bash
 # ── renaming a workspace branch ────────────────────────────────────
@@ -900,13 +900,13 @@ and change the usage line to:
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
-Run: `bash -n infra/ccrc-portability/ccd && cd infra/ccrc/server && npx vitest run test/ccd-ws-rename.test.ts`
+Run: `bash -n infra/<server-host>-portability/ccd && cd infra/ccrc/server && npx vitest run test/ccd-ws-rename.test.ts`
 Expected: 16 passed.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add infra/ccrc-portability/ccd infra/ccrc/server/test/ccd-ws-rename.test.ts
+git add infra/<server-host>-portability/ccd infra/ccrc/server/test/ccd-ws-rename.test.ts
 git commit -m "feat(ccd): ws-rename renames a workspace branch before it is pushed"
 ```
 
@@ -915,7 +915,7 @@ git commit -m "feat(ccd): ws-rename renames a workspace branch before it is push
 ### Task 6: `ccd ws-gc` — the report
 
 **Files:**
-- Modify: `infra/ccrc-portability/ccd` — add the `_ws_gc_*` helpers and `cmd_ws_gc` after `cmd_ws_rename`, plus the dispatch and usage line
+- Modify: `infra/<server-host>-portability/ccd` — add the `_ws_gc_*` helpers and `cmd_ws_gc` after `cmd_ws_rename`, plus the dispatch and usage line
 - Test: `infra/ccrc/server/test/ccd-ws-gc.test.ts` (new)
 
 **Interfaces:**
@@ -1147,7 +1147,7 @@ Expected: FAIL — `_ws_gc_scan: command not found`, `cmd_ws_gc: command not fou
 
 - [ ] **Step 3: Write the measurement helpers**
 
-Insert into `infra/ccrc-portability/ccd` after `cmd_ws_rename`:
+Insert into `infra/<server-host>-portability/ccd` after `cmd_ws_rename`:
 
 ```bash
 # ── reclamation ────────────────────────────────────────────────────
@@ -1310,7 +1310,7 @@ and change the usage line to:
 
 - [ ] **Step 7: Run the tests to verify they pass**
 
-Run: `bash -n infra/ccrc-portability/ccd && cd infra/ccrc/server && npx vitest run test/ccd-ws-gc.test.ts`
+Run: `bash -n infra/<server-host>-portability/ccd && cd infra/ccrc/server && npx vitest run test/ccd-ws-gc.test.ts`
 Expected: 18 passed.
 
 - [ ] **Step 8: Run it against the real box, read the output, and check nothing changed**
@@ -1318,7 +1318,7 @@ Expected: 18 passed.
 ```bash
 git -C /srv/projects/OpenClawHetzner stash list > /tmp/before-gc.txt
 ls -la ~/worktrees ~/worktrees/* >> /tmp/before-gc.txt
-bash infra/ccrc-portability/ccd ws-gc
+bash infra/<server-host>-portability/ccd ws-gc
 ls -la ~/worktrees ~/worktrees/* > /tmp/after-gc.txt
 diff /tmp/before-gc.txt /tmp/after-gc.txt && echo "UNCHANGED"
 ```
@@ -1330,7 +1330,7 @@ Expected: the report lists `custom-tools/quiet-basin` as `tracked` (or `dirty`),
 - [ ] **Step 9: Commit**
 
 ```bash
-git add infra/ccrc-portability/ccd infra/ccrc/server/test/ccd-ws-gc.test.ts
+git add infra/<server-host>-portability/ccd infra/ccrc/server/test/ccd-ws-gc.test.ts
 git commit -m "feat(ccd): ws-gc reports every worktree on the box
 
 Reports only. 29G of abandoned agent worktrees accumulated here over six
@@ -1342,7 +1342,7 @@ weeks because no command existed that would have said so."
 ### Task 7: `ccd ws-gc --prune`
 
 **Files:**
-- Modify: `infra/ccrc-portability/ccd` — add `_ws_gc_merged` and `_ws_gc_prune_row`, extend `cmd_ws_gc`
+- Modify: `infra/<server-host>-portability/ccd` — add `_ws_gc_merged` and `_ws_gc_prune_row`, extend `cmd_ws_gc`
 - Test: `infra/ccrc/server/test/ccd-ws-gc.test.ts`
 
 **Interfaces:**
@@ -1492,7 +1492,7 @@ Expected: FAIL — `cmd_ws_gc` dies on `usage: ccd ws-gc` because it rejects eve
 
 - [ ] **Step 3: Write the merge test and the per-row action**
 
-Insert into `infra/ccrc-portability/ccd` between `_ws_gc_scan` and `cmd_ws_gc`:
+Insert into `infra/<server-host>-portability/ccd` between `_ws_gc_scan` and `cmd_ws_gc`:
 
 ```bash
 _ws_gc_merged() {   # main branch -> 0 when the branch tip is an ancestor of origin/HEAD
@@ -1590,7 +1590,7 @@ and append to the end of `cmd_ws_gc`, after the two `echo` lines that explain th
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
-Run: `bash -n infra/ccrc-portability/ccd && cd infra/ccrc/server && npx vitest run test/ccd-ws-gc.test.ts`
+Run: `bash -n infra/<server-host>-portability/ccd && cd infra/ccrc/server && npx vitest run test/ccd-ws-gc.test.ts`
 Expected: 29 passed (18 from Task 6 + 11 here). A later review-fix round adds one more regression test (anchoring the `reclaimed`/`declined` counts), taking this file to 30 — not reached by this task's steps alone.
 
 - [ ] **Step 6: Prove the dirty guard is load-bearing by mutation**
@@ -1623,7 +1623,7 @@ tmux ls | wc -l                      # nine live sessions still there
 - [ ] **Step 8: Commit**
 
 ```bash
-git add infra/ccrc-portability/ccd infra/ccrc/server/test/ccd-ws-gc.test.ts
+git add infra/<server-host>-portability/ccd infra/ccrc/server/test/ccd-ws-gc.test.ts
 git commit -m "feat(ccd): ws-gc --prune reclaims orphans, stale metadata and dead registry entries
 
 Never a dirty tree, never a foreign worktree, never an unmerged branch's

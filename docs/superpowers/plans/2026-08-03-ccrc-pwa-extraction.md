@@ -70,7 +70,7 @@ Task 3 is the first irreversible step. These must be settled before it runs:
 
 | Parameter | Value | Note |
 | --- | --- | --- |
-| `OWNER` | **confirm before Task 3** | `gh auth status` reports account `you`, a personal account. If the repo belongs to a company org, `gh` needs write access to that org first. Task 3 Step 1 verifies this and halts if it fails. |
+| `OWNER` | **confirm before Task 3** | `gh auth status` reports account `example-org`, a personal account. If the repo belongs to a company org, `gh` needs write access to that org first. Task 3 Step 1 verifies this and halts if it fails. |
 | `REPO` | `ccrc-pwa` | |
 | Visibility | `private` | Non-negotiable until spec 1 lands — the tree still contains the operator's tailnet name, box IPs, username, and home paths. |
 | Local path | `/srv/projects/ccrc-pwa` | Sibling of the monorepo, inside the projects root. |
@@ -176,14 +176,14 @@ function parse(out: string): Record<string, string> {
 }
 
 describe('monorepo layout', () => {
-  it('strips infra/ccrc/ and maps the four ccrc-portability files into ccd/', () => {
+  it('strips infra/ccrc/ and maps the four <server-host>-portability files into ccd/', () => {
     write('infra/ccrc/server/src/a.ts', 'A');
     write('infra/ccrc/pwa/src/b.tsx', 'B');
     write('infra/ccrc/README.md', 'R');
-    write('infra/ccrc-portability/ccd', 'CCD');
-    write('infra/ccrc-portability/tmux.conf', 'T');
-    write('infra/ccrc-portability/statusline-command.sh', 'S');
-    write('infra/ccrc-portability/claude-session@.service', 'U');
+    write('infra/<server-host>-portability/ccd', 'CCD');
+    write('infra/<server-host>-portability/tmux.conf', 'T');
+    write('infra/<server-host>-portability/statusline-command.sh', 'S');
+    write('infra/<server-host>-portability/claude-session@.service', 'U');
 
     const m = parse(run());
     expect(Object.keys(m).sort()).toEqual([
@@ -199,11 +199,11 @@ describe('monorepo layout', () => {
 
   it('excludes the operator tooling that stays behind', () => {
     write('infra/ccrc/server/src/a.ts', 'A');
-    write('infra/ccrc-portability/ccclip', 'X');
-    write('infra/ccrc-portability/cc', 'X');
-    write('infra/ccrc-portability/hammerspoon-init.lua', 'X');
-    write('infra/ccrc-portability/docserver-server.py', 'X');
-    write('infra/ccrc-portability/hardening.sh', 'X');
+    write('infra/<server-host>-portability/ccclip', 'X');
+    write('infra/<server-host>-portability/cc', 'X');
+    write('infra/<server-host>-portability/hammerspoon-init.lua', 'X');
+    write('infra/<server-host>-portability/docserver-server.py', 'X');
+    write('infra/<server-host>-portability/hardening.sh', 'X');
     write('infra/mac-account-swap/ccswap', 'X');
 
     expect(Object.keys(parse(run()))).toEqual(['server/src/a.ts']);
@@ -231,7 +231,7 @@ describe('standalone layout', () => {
 describe('the two layouts agree', () => {
   it('produces identical output for the same content in either shape', () => {
     write('infra/ccrc/server/src/a.ts', 'hello');
-    write('infra/ccrc-portability/ccd', 'bash');
+    write('infra/<server-host>-portability/ccd', 'bash');
     const mono = run();
 
     fs.rmSync(path.join(tmp, 'infra'), { recursive: true, force: true });
@@ -280,7 +280,7 @@ Create `infra/ccrc/scripts/extraction-manifest.sh`:
 # the move.
 #
 #   monorepo:   infra/ccrc/server/src/a.ts        -> server/src/a.ts
-#               infra/ccrc-portability/ccd   -> ccd/ccd
+#               infra/<server-host>-portability/ccd   -> ccd/ccd
 #   standalone: server/src/a.ts                   -> server/src/a.ts
 #
 # No `set -e`: this file follows ccd's convention, because `local x=$(cmd)`
@@ -297,7 +297,7 @@ done
 
 cd "$ROOT" || { echo "cannot enter $ROOT" >&2; exit 2; }
 
-# The four files that move out of ccrc-portability, and where they land.
+# The four files that move out of <server-host>-portability, and where they land.
 # Everything else in that directory is operator tooling that stays behind, so
 # this is an allowlist rather than a set of exclusions — a new file appearing
 # there must be considered deliberately, not swept along.
@@ -336,8 +336,8 @@ fi
       emit "$f" "${f#infra/ccrc/}"
     done
     for n in $PORTABILITY_FILES; do
-      [ -f "infra/ccrc-portability/$n" ] || continue
-      emit "infra/ccrc-portability/$n" "ccd/$n"
+      [ -f "infra/<server-host>-portability/$n" ] || continue
+      emit "infra/<server-host>-portability/$n" "ccd/$n"
     done
   else
     find server agent pwa shared deploy ccd scripts .github -type f 2>/dev/null \
@@ -480,12 +480,12 @@ describe('extraction finding — one path to the ccd script', () => {
   const testDir = path.join(ccrcRoot, 'server', 'test');
   const testFiles = sources(testDir);
 
-  // Matches any literal naming the script: the '../../../ccrc-portability/ccd'
-  // form, the path.join(..., 'ccrc-portability', 'ccd') form that
+  // Matches any literal naming the script: the '../../../<server-host>-portability/ccd'
+  // form, the path.join(..., '<server-host>-portability', 'ccd') form that
   // wsaudit.test.ts used, and the '../../ccd/ccd' form it becomes after the
   // move. All three must be caught, or the guard stops working the moment the
   // extraction lands.
-  const NAMES_CCD = /ccrc-portability|['"]\.\.\/\.\.\/ccd\/ccd['"]|['"]ccd['"]\s*\)/;
+  const NAMES_CCD = /<server-host>-portability|['"]\.\.\/\.\.\/ccd\/ccd['"]|['"]ccd['"]\s*\)/;
 
   it('found the test tree it is scanning', () => {
     // A scan over an empty list passes everything.
@@ -531,7 +531,7 @@ In each file, delete the local definition and import the shared one instead.
 line of the form:
 
 ```ts
-const CCD = path.resolve(__dirname, '../../../ccrc-portability/ccd');
+const CCD = path.resolve(__dirname, '../../../<server-host>-portability/ccd');
 ```
 
 Delete it and add `CCD` to the file's existing import from `./ccdWsHelpers.js`,
@@ -544,7 +544,7 @@ import { CCD } from './ccdWsHelpers.js';
 `ccd-ws-reap.test.ts:128` and `ccd-ws-audit.test.ts:266` use it inline:
 
 ```ts
-const src = fs.readFileSync(path.resolve(__dirname, '../../../ccrc-portability/ccd'), 'utf8');
+const src = fs.readFileSync(path.resolve(__dirname, '../../../<server-host>-portability/ccd'), 'utf8');
 ```
 
 becomes:
@@ -556,7 +556,7 @@ const src = fs.readFileSync(CCD, 'utf8');
 `wsaudit.test.ts:8` spells it in parts under a different name:
 
 ```ts
-const CCD_PATH = path.resolve(here, '..', '..', '..', 'ccrc-portability', 'ccd');
+const CCD_PATH = path.resolve(here, '..', '..', '..', '<server-host>-portability', 'ccd');
 ```
 
 Delete it, import `CCD`, and update both mentions: the read at **line 57**
@@ -599,7 +599,7 @@ A guard that passes when the thing it guards is broken is worse than no guard.
 cd /srv/projects/OpenClawHetzner/infra/ccrc/server
 cp test/ccd-clip.test.ts /tmp/ccd-clip.bak
 # Reintroduce a copy exactly as a future author would write it.
-sed -i "s|import { CCD } from './ccdWsHelpers.js';|const CCD = path.resolve(__dirname, '../../../ccrc-portability/ccd');|" test/ccd-clip.test.ts
+sed -i "s|import { CCD } from './ccdWsHelpers.js';|const CCD = path.resolve(__dirname, '../../../<server-host>-portability/ccd');|" test/ccd-clip.test.ts
 ./node_modules/.bin/vitest run test/single-definition.test.ts   # MUST FAIL
 cp /tmp/ccd-clip.bak test/ccd-clip.test.ts && rm /tmp/ccd-clip.bak
 sha256sum test/ccd-clip.test.ts    # confirm pristine restore
@@ -613,7 +613,7 @@ cd /srv/projects/OpenClawHetzner
 git add infra/ccrc/server/test/
 git commit -m "refactor(ccrc): one definition of the path to the ccd script
 
-Seven test files each spelled '../../../ccrc-portability/ccd', six of
+Seven test files each spelled '../../../<server-host>-portability/ccd', six of
 them independently of the CCD that ccdWsHelpers.ts already exported.
 
 Collapsed to that one export, guarded by single-definition.test.ts, which
@@ -646,7 +646,7 @@ silently.
 
 2. **Four-alternative regex, not three — and this one was forced, not
    chosen.** The plan's `NAMES_CCD` opens with a bare, unanchored
-   `ccrc-portability` alternative. That substring appears in this same
+   `<server-host>-portability` alternative. That substring appears in this same
    `server/test` tree for reasons that have nothing to do with the seven
    copies: `extraction-manifest.test.ts`'s own fixtures write it as a literal,
    and `ccd-ccclip.test.ts` names it while pointing at the *other* script,
@@ -695,7 +695,7 @@ the live fleet.
 - [ ] **Step 1: Confirm the target owner and verify write access**
 
 **Halt and ask the operator for `OWNER` before running this.** `gh auth status`
-reports account `you`; if the repo belongs to a company org, `gh` needs write
+reports account `example-org`; if the repo belongs to a company org, `gh` needs write
 access there first.
 
 ```bash
@@ -745,12 +745,12 @@ git log --oneline -1   # expect Task 2's commit
 cd /tmp/ccrc-extract
 git filter-repo --force \
   --path infra/ccrc/ \
-  --path infra/ccrc-portability/ccd \
-  --path infra/ccrc-portability/claude-session@.service \
-  --path infra/ccrc-portability/statusline-command.sh \
-  --path infra/ccrc-portability/tmux.conf \
+  --path infra/<server-host>-portability/ccd \
+  --path infra/<server-host>-portability/claude-session@.service \
+  --path infra/<server-host>-portability/statusline-command.sh \
+  --path infra/<server-host>-portability/tmux.conf \
   --path-rename infra/ccrc/: \
-  --path-rename infra/ccrc-portability/:ccd/
+  --path-rename infra/<server-host>-portability/:ccd/
 ```
 
 Then remove the one test that does not come across, so it never exists in the
@@ -813,7 +813,7 @@ In `/srv/projects/ccrc-pwa/server/test/ccdWsHelpers.ts`,
 line 10:
 
 ```ts
-export const CCD = path.resolve(__dirname, '../../../ccrc-portability/ccd');
+export const CCD = path.resolve(__dirname, '../../../<server-host>-portability/ccd');
 ```
 
 becomes:
@@ -1039,14 +1039,14 @@ Nothing new is built here. This task proves the five before it.
 > manifest of the tree **at the commit actually extracted**.
 >
 > Use `.extraction/manifest-at-extraction.txt`, and note both files live in the
-> **worktree** — `/mnt/srv-volume/ccrc-wt/extract/.extraction/` — not
+> **worktree** — `/srv/ccrc-wt/extract/.extraction/` — not
 > at the monorepo root. `manifest-before.txt` retains its value as the companion
 > to `suites-before.txt`; it is simply not the content-identity baseline.
 
 ```bash
 cd /srv/projects/ccrc-pwa
 bash scripts/extraction-manifest.sh > /tmp/manifest-after.txt
-diff /mnt/srv-volume/ccrc-wt/extract/.extraction/manifest-at-extraction.txt \
+diff /srv/ccrc-wt/extract/.extraction/manifest-at-extraction.txt \
      /tmp/manifest-after.txt
 ```
 
@@ -1085,7 +1085,7 @@ future extraction.
 
 ```bash
 sha256sum /srv/projects/ccrc-pwa/ccd/ccd
-sha256sum /srv/projects/OpenClawHetzner/infra/ccrc-portability/ccd
+sha256sum /srv/projects/OpenClawHetzner/infra/<server-host>-portability/ccd
 wc -l /srv/projects/ccrc-pwa/ccd/ccd   # expect 5439
 ```
 
@@ -1124,7 +1124,7 @@ The whole plan is supposed to have left the running system alone. Confirm it,
 rather than assuming it.
 
 ```bash
-ssh -p 2222 -i ~/.ssh/your-key-a you@198.51.100.7 \
+ssh -p 2222 -i ~/.ssh/<your-key> you@<fleet-host> \
   'ls ~/.cc-sessions/*.uuid 2>/dev/null | wc -l; ~/.local/bin/ccd caps | head -3'
 curl -fsS http://203.0.113.7:7788/health
 ```

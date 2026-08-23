@@ -62,7 +62,7 @@ known to have moved *while this plan was being written*:
   `test/project-card.test.tsx`, `test/session-line.test.tsx`,
   `test/fleet-css.test.ts`).
 - **`ccd` and the server's ccd tests** — the `ccrc/ws-rm-fix` merge grew
-  `infra/ccrc-portability/ccd` from 1181 lines to **1325**, shifting most of
+  `infra/<server-host>-portability/ccd` from 1181 lines to **1325**, shifting most of
   the file by +8 / +141 / +144 lines (`ws-add`'s base write moved 213 → 221; the
   dispatcher moved 1162-1180 → 1306-1324), and moved `makeRepo` in
   `infra/ccrc/server/test/ccdWsHelpers.ts` (62-74 → 72-84). That merge is also the
@@ -1303,7 +1303,7 @@ disclosure comment. Re-synced into the Step 4b block above.
 written, per this project's standing rule that the printed vitest figure is
 the authority, not the plan's prediction. Measured on the shipped tree:
 agent **131 tests / 9 files**, server **737 tests / 44 files** — both exit 0,
-`tsc --noEmit` clean, `bash -n infra/ccrc-portability/ccd` ok, pwa
+`tsc --noEmit` clean, `bash -n infra/<server-host>-portability/ccd` ok, pwa
 unchanged at 420/32. The baseline handed to this task was agent 125/9, server
 724/44; **one of the six extra agent tests is not this task's** — a second,
 independent commit (`gh` PATH containment, a Task 9 review follow-up) landed
@@ -1343,7 +1343,7 @@ real baseline). Measured after closing three mutation-sweep survivors
 `run` and `tmux`, a 15-entry exact-argv table, and one boolean-`draft`
 assertion for `prOpen`). Agent (131/9) and pwa (420/32) unchanged by this
 task. All exit 0; `tsc --noEmit` clean in agent and server;
-`bash -n infra/ccrc-portability/ccd` clean.
+`bash -n infra/<server-host>-portability/ccd` clean.
 
 **48. Three mutation-sweep survivors closed with new assertions, not
 disclosed.** A whole-diff sweep (31 literal-string mutants across
@@ -1898,7 +1898,7 @@ against 901/48 before this task began). Final: server 930/49 (901 + 29 in
 `pr-sweep.test.ts` — the brief's 14 plus deviation 73's fifteen), agent and
 pwa unchanged at 131/9 and 427/32 (neither package's files are in this
 task's Files list). All exit 0; `tsc --noEmit` clean in all three; `bash -n`
-clean on `ccrc-portability/ccd` (untouched by this task).
+clean on `<server-host>-portability/ccd` (untouched by this task).
 
 **76. Whole-diff mutation sweep, foreground, sha256-verified restore
 between every mutant (Task 14).** 51 planned literal-construct mutants
@@ -2031,7 +2031,7 @@ runtime backstop on both paths regardless of how an argv was built.
 
 **83. Reconciled counts (Task 13S).** Measured pre-task baseline at BASE
 `2a1f3f6`: agent 131/9, server 930/49, pwa 427/32, all exit 0, `tsc --noEmit`
-clean in all three, `bash -n infra/ccrc-portability/ccd` clean. Final:
+clean in all three, `bash -n infra/<server-host>-portability/ccd` clean. Final:
 server **933/50** (930 − 12 + 15, deviation 81), agent 131/9 and pwa 427/32
 unchanged — neither package has a file in this task's diff. All exit 0;
 `tsc --noEmit` clean in all three; `bash -n` clean. `tmux ls` = 11 sessions,
@@ -2264,7 +2264,7 @@ unchanged (neither package has a file in this task's diff); pwa **504/34**
 `pr-keycap-css.test.ts` 9 — plus 6 new tests in `header.test.tsx` and 2 in
 `test/contrast.test.ts`, all net of the brief's own verbatim 30 + 3 already
 folded into those two files' final counts). All exit 0; `tsc --noEmit` clean
-in all three; `bash -n infra/ccrc-portability/ccd` clean;
+in all three; `bash -n infra/<server-host>-portability/ccd` clean;
 `design/contrast-check.mjs` **ALL 94 PASS** (92 baseline + the 2 new
 `pr-merged / raised` pairs, dark and light). `tmux ls` = 11 sessions; a
 concurrent, independently-running server test invocation on this box left a
@@ -2375,7 +2375,7 @@ sweep's 20 closures, deviation 98): pwa **544/35** (525 + 19: 17 in
 and 2 in `header.test.tsx`). agent 131/9 and server 933/50 unchanged both
 times — neither package has a file in this task's diff. All exit 0; `tsc
 --noEmit` clean (pwa, all three checks); `bash -n
-infra/ccrc-portability/ccd` clean; `design/contrast-check.mjs` **ALL 94
+infra/<server-host>-portability/ccd` clean; `design/contrast-check.mjs` **ALL 94
 PASS** (this task added no colour). `tmux ls` = 11 sessions; no
 `/tmp/ccrc-*` residue.
 
@@ -2490,7 +2490,7 @@ in Step 4b). Second commit (the mutation-sweep closures, deviation 102): pwa
 `header.test.tsx`, 3 in `fleet-screen.test.tsx`). agent **131/9** and server
 **933/50** unchanged both times — neither package has a file in this task's
 diff. All exit 0; `tsc --noEmit` clean across all three packages (agent,
-server, pwa); `bash -n infra/ccrc-portability/ccd` clean;
+server, pwa); `bash -n infra/<server-host>-portability/ccd` clean;
 `design/contrast-check.mjs` **ALL 94 PASS** (this task added no colour).
 `tmux ls` = 11 sessions; no `/tmp/ccrc-*` residue at the end (the server
 suite's own `ccd ws-audit` fixture briefly creates
@@ -2625,7 +2625,7 @@ new required field breaks found exactly **one** site:
 `project-card.test.tsx`'s own `grp()` fixture. agent **131/9** and server
 **933/50** unchanged — neither package has a file in this task's diff
 (confirmed by re-running both). All exit 0; `tsc --noEmit` clean across all
-three packages; `bash -n infra/ccrc-portability/ccd` clean;
+three packages; `bash -n infra/<server-host>-portability/ccd` clean;
 `design/contrast-check.mjs` **ALL 94 PASS** (deviation 106's fix reuses an
 already-gated pair, so the gate's own pair count is unchanged). `tmux ls` =
 11 sessions; no `/tmp/ccrc-*` residue.
@@ -2764,7 +2764,7 @@ in server (`fleet-health.test.ts`, `fleetstate.test.ts`), confirmed
 complete by two clean full `tsc --noEmit` passes on pwa (whose `test/` IS
 typechecked) and by inspection on the two server ones (whose `test/` is
 not, per deviation 109). All exit 0; `tsc --noEmit` clean across all three
-packages; `bash -n infra/ccrc-portability/ccd` clean (the file itself
+packages; `bash -n infra/<server-host>-portability/ccd` clean (the file itself
 is untouched by this task); `design/contrast-check.mjs` **ALL 94 PASS**
 (this task introduced no new colour — `fleet.css`'s new rules reuse only
 `--ink-tertiary`/`--ink-secondary`/`--ink-primary`, already-gated tokens, so
@@ -4580,7 +4580,7 @@ The CLASS is real by a different trigger, and it reproduces. The `QuickConfirm` 
 a SIBLING of the outer `Sheet`, not a child, so closing the sheet does not close it.
 `SessionActionsSheet`'s reset-on-close effect sets `swapOpen = false` on every
 dismissal and `FleetScreen` keeps both mounted across it, so: session A's actions →
-Swap → pick `alt·max` → dismiss the actions sheet leaves "Move to alt·max?" on
+Swap → pick `team·alt` → dismiss the actions sheet leaves "Move to team·alt?" on
 screen with nothing under it, and it is still there when session B is tapped.
 `move()` reads the CURRENT `session`, so confirming a dialog raised for A then swaps
 B, with nothing on screen saying so. Same class as deviation 158's
@@ -5131,12 +5131,12 @@ like a code failure and is not. Every count in this document came from the local
 | `shared/api.ts` | `PrPhase`/`PrChecks`/`PrState`/`PrView`/`WsAudit`; `FleetSession.pr`, `.archivedAt` | 1, 12, 17 |
 | `server/src/registry.ts` | `base`, `prPhase`, `prNumber`, `prCheckedAt`, `archivedAt` on `SessionRecord` | 1 |
 | `server/src/fleet.ts` | thread `prStates`; persisted-PR fallback | 1 |
-| `ccrc-portability/ccd` | `caps`, `ws-archive`, `ws-restore`, `ws-attic` | 2 |
-| `ccrc-portability/ccd` | `pr-state` (one gh call per repo) | 3 |
-| `ccrc-portability/ccd` | `pr-open` (the one bounded write) | 4 |
-| `ccrc-portability/ccd` | `ws-audit` (manifest + token) | 5 |
-| `ccrc-portability/ccd` | `ws-reap` (proof ladder, attic, tombstone, resume) | 6 |
-| `ccrc-portability/ccd` | `ws-gc` learns `archived`/`reaping` | 7 |
+| `<server-host>-portability/ccd` | `caps`, `ws-archive`, `ws-restore`, `ws-attic` | 2 |
+| `<server-host>-portability/ccd` | `pr-state` (one gh call per repo) | 3 |
+| `<server-host>-portability/ccd` | `pr-open` (the one bounded write) | 4 |
+| `<server-host>-portability/ccd` | `ws-audit` (manifest + token) | 5 |
+| `<server-host>-portability/ccd` | `ws-reap` (proof ladder, attic, tombstone, resume) | 6 |
+| `<server-host>-portability/ccd` | `ws-gc` learns `archived`/`reaping` | 7 |
 | `server/src/server.ts`, `pwa/src/lib/api.ts`, `pwa/src/fleet/SessionActionsSheet.tsx` | retire `ws-rm` | 8 |
 | `agent/src/whitelist.ts` | argv-prefix matching, no `gh` key | 9 |
 | `agent/src/server.ts`, `shared/agent-protocol.ts`, `server/src/remote/client.ts`, `runner.ts` | `ready.ccdVerbs`, per-verb timeouts | 10 |
@@ -5564,7 +5564,7 @@ ws-archive can name the PR it archived for without a second gh call."
 ### Task 2: `ccd caps`, `ws-archive`, `ws-restore`, `ws-attic` — the lossless half
 
 **Files:**
-- Modify: `infra/ccrc-portability/ccd` — new helpers after `_ws_unsupervise`
+- Modify: `infra/<server-host>-portability/ccd` — new helpers after `_ws_unsupervise`
   (`ccd:109`); new `cmd_*` after `cmd_ws_rename`'s closing brace, above the
   `# ── reclamation ──` banner (`ccd:468`); new dispatch arms
   in the `case` block (`ccd:1306-1324`)
@@ -6368,7 +6368,7 @@ still pass untouched — nothing here changed `_ws_gc_scan`.
 - [ ] **Step 10: Commit**
 
 ```bash
-git add infra/ccrc-portability/ccd infra/ccrc/server/test/ccd-archive.test.ts
+git add infra/<server-host>-portability/ccd infra/ccrc/server/test/ccd-archive.test.ts
 git commit -m "feat(ccd): archive, restore and attic — the half that destroys nothing
 
 Merge has to be able to fold a workspace out of the live fleet without
@@ -6388,7 +6388,7 @@ symlink — a verb can pass the whitelist and not exist on the box."
 ### Task 3: `ccd pr-state` — one gh call per repo, and the local facts around it
 
 **Files:**
-- Modify: `infra/ccrc-portability/ccd` — helpers after `_ws_ignored_digest`
+- Modify: `infra/<server-host>-portability/ccd` — helpers after `_ws_ignored_digest`
   (Task 2); `cmd_pr_state` after `cmd_ws_attic`; `cmd_caps` list; dispatcher
 - Modify: `infra/ccrc/server/test/ccdWsHelpers.ts:18-26` (`CcdHarness`) and
   `:72-84` (`makeRepo`) — add `makeGhRepo`, the fixture every PR/audit/reap test
@@ -7494,7 +7494,7 @@ from being "cleaned up"; pasting an older copy loses them.
 - [ ] **Step 12: Commit**
 
 ```bash
-git add infra/ccrc-portability/ccd infra/ccrc/server/test/ccdWsHelpers.ts infra/ccrc/server/test/ccd-workspaces.test.ts infra/ccrc/server/test/ccdPrHelpers.ts infra/ccrc/server/test/ccd-pr-state.test.ts
+git add infra/<server-host>-portability/ccd infra/ccrc/server/test/ccdWsHelpers.ts infra/ccrc/server/test/ccd-workspaces.test.ts infra/ccrc/server/test/ccdPrHelpers.ts infra/ccrc/server/test/ccd-pr-state.test.ts
 git commit -m "feat(ccd): pr-state — one gh call per repo, bound by reachability
 
 --state all is mandatory: --state closed is a superset that includes
@@ -7517,7 +7517,7 @@ the persisted phase — that is what makes 'last checked 6m ago' honest."
 ### Task 4: `ccd pr-open` — the one bounded write
 
 **Files:**
-- Modify: `infra/ccrc-portability/ccd` — `cmd_pr_open` after `cmd_pr_state`;
+- Modify: `infra/<server-host>-portability/ccd` — `cmd_pr_open` after `cmd_pr_state`;
   `cmd_caps`; dispatcher
 - Test: **Create** `infra/ccrc/server/test/ccd-pr-open.test.ts`
 
@@ -8421,7 +8421,7 @@ authority.)
 - [ ] **Step 7: Commit**
 
 ```bash
-git add infra/ccrc-portability/ccd infra/ccrc/server/test/ccd-pr-open.test.ts
+git add infra/<server-host>-portability/ccd infra/ccrc/server/test/ccd-pr-open.test.ts
 git commit -m "feat(ccd): pr-open — one bounded write, no passthrough, no paths
 
 Prompt injection was the tempting alternative and is unsound here: every
@@ -8450,7 +8450,7 @@ name the registry's branch before we push it at all."
 ### Task 5: `ccd ws-audit` — the read-only manifest, the proof ladder, and the token
 
 **Files:**
-- Modify: `infra/ccrc-portability/ccd` — `_pr_py` gains a `pick` mode;
+- Modify: `infra/<server-host>-portability/ccd` — `_pr_py` gains a `pick` mode;
   new guard helpers and `cmd_ws_audit` after `cmd_pr_open`; `cmd_caps`; dispatcher
 - Test: **Create** `infra/ccrc/server/test/ccd-ws-audit.test.ts`
   (uses `makeGhRepo` — Task 3 Step 1 — and `CFG_DIR` from `ccdPrHelpers.ts`)
@@ -8522,7 +8522,7 @@ refused by the exclude rule ccd wrote; verified, exit 1).
 
 **Mergedness is never proven against an unfetched ref.** `ws-add` records
 `base=origin/main` with `--no-track` and nothing else in ccrc ever fetches:
-measured staleness on the live box is 24.0 days for `orchard-api`, with
+measured staleness on the live box is 24.0 days for `acme-platform-ts`, with
 six repos never fetched. A proof against a 24-day-old `origin/main` produces
 "this branch has 4 commits that are not in the merge" about commits that *are*
 the merge — byte-identical to the true warning, which trains users onto the
@@ -8830,7 +8830,7 @@ describe('the proof ladder', () => {
     // Verified in this worktree: `-- A B` exits 0 for ANY two shas (the
     // revisions become pathspecs) while `A B --` exits 1 correctly. A grep is
     // the only assertion that catches the wrong form being reintroduced.
-    const src = fs.readFileSync(path.resolve(__dirname, '../../../ccrc-portability/ccd'), 'utf8');
+    const src = fs.readFileSync(path.resolve(__dirname, '../../../<server-host>-portability/ccd'), 'utf8');
     expect(src).not.toMatch(/diff --quiet\s+--\s+"/);
     expect(src).toContain('diff --quiet "$M" "$tip" --');
   });
@@ -11133,7 +11133,7 @@ authority; this one is measured, not predicted.
 - [ ] **Step 9: Commit**
 
 ```bash
-git add infra/ccrc-portability/ccd infra/ccrc/server/test/ccd-ws-audit.test.ts
+git add infra/<server-host>-portability/ccd infra/ccrc/server/test/ccd-ws-audit.test.ts
 git commit -m "feat(ccd): ws-audit — the manifest, the proof ladder and the token
 
 git branch -d exits 1 on a squash merge while gh says MERGED, and both
@@ -11173,7 +11173,7 @@ about the DIRECTORY that Phase B reads and worktree remove destroys."
 ### Task 6: `ccd ws-reap` — the only destructive verb
 
 **Files:**
-- Modify: `infra/ccrc-portability/ccd` — `cmd_ws_reap` and its tail
+- Modify: `infra/<server-host>-portability/ccd` — `cmd_ws_reap` and its tail
   helpers after `cmd_ws_audit`; `cmd_caps`; dispatcher
 - Test: **Create** `infra/ccrc/server/test/ccd-ws-reap.test.ts`
   (uses `makeGhRepo` — Task 3 Step 1 — and `CFG_DIR` from `ccdPrHelpers.ts`)
@@ -11488,7 +11488,7 @@ describe('the proof ladder', () => {
     // Verified in this worktree: `-- A B` exits 0 for ANY two shas (the
     // revisions become pathspecs) while `A B --` exits 1 correctly. A grep is
     // the only assertion that catches the wrong form being reintroduced.
-    const src = fs.readFileSync(path.resolve(__dirname, '../../../ccrc-portability/ccd'), 'utf8');
+    const src = fs.readFileSync(path.resolve(__dirname, '../../../<server-host>-portability/ccd'), 'utf8');
     expect(src).not.toMatch(/diff --quiet\s+--\s+"/);
     expect(src).toContain('diff --quiet "$M" "$tip" --');
   });
@@ -13628,7 +13628,7 @@ authority in both directions.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add infra/ccrc-portability/ccd infra/ccrc/server/test/ccd-ws-reap.test.ts
+git add infra/<server-host>-portability/ccd infra/ccrc/server/test/ccd-ws-reap.test.ts
 git commit -m "feat(ccd): ws-reap — every guard on the box, at the instant of deletion
 
 The prior shape had the refusals as client render decisions behind a
@@ -13657,12 +13657,12 @@ release is a lock that hides the breadcrumb for ever."
 ### Task 7: `ws-gc` learns about archived and reaping workspaces
 
 **Files:**
-- Modify: `infra/ccrc-portability/ccd:505-545` (`_ws_gc_row`),
+- Modify: `infra/<server-host>-portability/ccd:505-545` (`_ws_gc_row`),
   `:547-588` (`_ws_gc_scan`), `:601-653` (`_ws_gc_prune_row`),
   `:172-176` (the `ws-add` disk-floor message)
 - Test: `infra/ccrc/server/test/ccd-ws-gc.test.ts`
 - Modify (deviation 35 — required scope extension assigned by the Task 6
-  gate): `infra/ccrc-portability/ccd` (`_ws_reap_tail`'s resume dispatch)
+  gate): `infra/<server-host>-portability/ccd` (`_ws_reap_tail`'s resume dispatch)
 - Test: `infra/ccrc/server/test/ccd-ws-reap.test.ts`
 
 **Interfaces:**
@@ -13902,7 +13902,7 @@ Extended beyond the brief's own text to cover deviation 35 (the Task 6 gate's
 scope extension) and to add `ccd-ws-reap.test.ts` to the file list:
 
 ```bash
-git add infra/ccrc-portability/ccd infra/ccrc/server/test/ccd-ws-gc.test.ts infra/ccrc/server/test/ccd-ws-reap.test.ts
+git add infra/<server-host>-portability/ccd infra/ccrc/server/test/ccd-ws-gc.test.ts infra/ccrc/server/test/ccd-ws-reap.test.ts
 git commit -m "fix(ccd): ws-gc declines archived and mid-reap workspaces; ws-reap fails closed on an unrecognised breadcrumb phase
 
 dead-reg's rm -f \$REG/<id>.* would have deleted an archived
@@ -18968,7 +18968,7 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
 const view = (over: Partial<PrView> = {}): PrView => ({
   pr: pr(),
   draft: { title: 'the work', body: '## Commits\n\n- aaaaaaa the work\n' },
-  facts: { branch: 'ws/quiet-basin', baseShort: 'main', repo: 'you/custom-tools', commits: 3, dirty: 0 },
+  facts: { branch: 'ws/quiet-basin', baseShort: 'main', repo: 'example-org/custom-tools', commits: 3, dirty: 0 },
   ...over,
 });
 
@@ -19027,7 +19027,7 @@ describe('none — the composer', () => {
 
   it('shows the facts line', async () => {
     open();
-    expect(await screen.findByText(/ws\/quiet-basin → main · you\/custom-tools · 3 commits/)).toBeInTheDocument();
+    expect(await screen.findByText(/ws\/quiet-basin → main · example-org\/custom-tools · 3 commits/)).toBeInTheDocument();
   });
 
   it('warns about an uncommitted tree without blocking', async () => {

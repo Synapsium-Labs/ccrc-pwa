@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build `ccrc-server` — the Node/TypeScript process on the server-box box that reads the ccd fleet's files, streams transcripts and dialogs over WebSockets, and drives sessions via tmux/ccd.
+**Goal:** Build `ccrc-server` — the Node/TypeScript process on the <server-host> box that reads the ccd fleet's files, streams transcripts and dialogs over WebSockets, and drives sessions via tmux/ccd.
 
 **Architecture:** One Fastify process, one port: REST + WebSockets + (later) static PWA. No database — the filesystem is the state. Every filesystem/exec dependency is injected (config `home` override + `Runner` interface) so the whole server is unit-testable on the Mac against fixtures; the real box is only needed in Plan 3.
 
@@ -218,7 +218,7 @@ describe('loadConfig', () => {
 
 describe('mungePath', () => {
   it('replaces / . _ with - (ccd cmd_swap rule)', () => {
-    expect(mungePath('/data/projects/orchard-api')).toBe('-data-projects-orchard-api');
+    expect(mungePath('/data/projects/acme-platform-ts')).toBe('-data-projects-acme-platform-ts');
     expect(mungePath('/data/projects/foo/.claude/worktrees/ui')).toBe('-data-projects-foo--claude-worktrees-ui');
     expect(mungePath('/a/b_c.d')).toBe('-a-b-c-d');
   });
@@ -440,15 +440,15 @@ describe('readRegistry', () => {
       uuid: 'a0b5791d-0000-0000-0000-000000000001', started: '1',
       pool: 'claude claude2', lastswap: '1784500000',
     });
-    seed(reg, 'claude-corp-orchard-api', {
-      wrapper: 'claude-corp', project: 'orchard-api',
-      workdir: '/data/projects/orchard-api', uuid: 'b'.repeat(36), started: '1',
+    seed(reg, 'claude-corp-acme-platform-ts', {
+      wrapper: 'claude-corp', project: 'acme-platform-ts',
+      workdir: '/data/projects/acme-platform-ts', uuid: 'b'.repeat(36), started: '1',
     });
     writeFileSync(path.join(reg, 'gpt-disabled'), '');   // noise: not a session file
     writeFileSync(path.join(reg, 'swap.log'), 'x');      // noise
 
     const out = await readRegistry(loadConfig({ CCRC_HOME: home }));
-    expect(out.map((s) => s.id)).toEqual(['claude-corp-orchard-api', 'claude2-MekWarLive']);
+    expect(out.map((s) => s.id)).toEqual(['claude-corp-acme-platform-ts', 'claude2-MekWarLive']);
     const mek = out[1];
     expect(mek.pool).toEqual(['claude', 'claude2']);
     expect(mek.lastswap).toBe(1784500000);
@@ -668,7 +668,7 @@ const seedSession = (home: string, id: string, wrapper: string, extra: Record<st
 
 describe('idHomeWrapper', () => {
   it('longest prefix wins', () => {
-    expect(idHomeWrapper('claude-corp-orchard-api')).toBe('claude-corp');
+    expect(idHomeWrapper('claude-corp-acme-platform-ts')).toBe('claude-corp');
     expect(idHomeWrapper('claude2-MekWarLive')).toBe('claude2');
     expect(idHomeWrapper('claude-synapsium-platform')).toBe('claude');
     expect(idHomeWrapper('gpt-foo')).toBe('gpt');
@@ -1158,13 +1158,13 @@ RestartSec=3
 WantedBy=default.target
 ```
 
-- `deploy/deploy.sh` (run from repo root on the Mac; box alias per existing infra: `ssh -p 2222 -i ~/.ssh/your-key-a you@203.0.113.7`):
+- `deploy/deploy.sh` (run from repo root on the Mac; box alias per existing infra: `ssh -p 2222 -i ~/.ssh/<your-key> you@<server-host>`):
 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
-BOX="${CCRC_BOX:-you@203.0.113.7}"
-SSH=(ssh -p 2222 -i "$HOME/.ssh/your-key-a")
+BOX="${CCRC_BOX:-you@<server-host>}"
+SSH=(ssh -p 2222 -i "$HOME/.ssh/<your-key>")
 rsync -az --delete -e "${SSH[*]}" --exclude node_modules --exclude dist \
   infra/ccrc/server infra/ccrc/shared infra/ccrc/deploy "$BOX":ccrc/
 "${SSH[@]}" "$BOX" 'cd ~/ccrc/server && npm ci && npm run build \

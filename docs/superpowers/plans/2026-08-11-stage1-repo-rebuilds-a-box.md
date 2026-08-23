@@ -19,7 +19,7 @@
 - Tests-first for every behavior change; `deploy.sh` structure changes are pinned by `agent/test/deploy-verify.test.ts` reading the script as text (house pattern).
 - Existing tests define compatibility: `server/test/health.test.ts`, `server/test/config.test.ts`, `agent/test/deploy-verify.test.ts` may be EDITED where this plan says so, never deleted.
 - Both remote command blocks in deploy.sh (`AGENT_CMD=`, `REMOTE_CMD=`) are single-quoted strings whose `&&` links existing tests split and order-check — additions must stay inside the quoting discipline (no nested single quotes; `$(…)`/`$VAR` expand remotely).
-- The live boxes: server = server-box (`you@203.0.113.7:2222`, key `~/.ssh/your-key-b`), fleet host = openclaw (self, `you@198.51.100.7:2222`). Deploys run from a clean worktree at `origin/main`.
+- The live boxes: server = <server-host> (`you@<server-host>:2222`, key `~/.ssh/<your-key>`), fleet host = openclaw (self, `you@<fleet-host>:2222`). Deploys run from a clean worktree at `origin/main`.
 
 ## File Structure
 
@@ -74,7 +74,7 @@ diff -u ccd/statusline-command.sh ~/.claude/statusline-command.sh
 ```
 Expected: exactly two `+` lines (no other drift since the investigation):
 ```
-+  "$HOME/.claude-dev0")     acct="${GREEN}lab·dev0${RESET}" ;;
++  "$HOME/.claude-dev0")     acct="${GREEN}team·d${RESET}" ;;
 +  "$HOME/.claude-dev0")     lbl="claude-dev0" ;;
 ```
 If ANY other lines differ, STOP and re-read the live file — repatriate whatever is actually there, not this plan's snapshot.
@@ -83,8 +83,8 @@ If ANY other lines differ, STOP and re-read the live file — repatriate whateve
 
 In `ccd/statusline-command.sh`, first case table (account label, after the `.claude-corp` line):
 ```bash
-  "$HOME/.claude-corp")     acct="${BLUE}team·shared${RESET}" ;;
-  "$HOME/.claude-dev0")     acct="${GREEN}lab·dev0${RESET}" ;;
+  "$HOME/.claude-corp")     acct="${BLUE}team·b${RESET}" ;;
+  "$HOME/.claude-dev0")     acct="${GREEN}team·d${RESET}" ;;
 ```
 Second case table (wrapper label, after the `.claude-corp` line):
 ```bash
@@ -1127,14 +1127,14 @@ git fetch origin && git merge --ff-only origin/main
 ```bash
 umask 077   # secrets must never land world/group-readable — deploy/ is inside
             # the agent's projectsRoot-whitelisted checkout (I5)
-# Server env: today's real values live in ~/.ccrc/remote.env ON server-box.
+# Server env: today's real values live in ~/.ccrc/remote.env ON <server-host>.
 # Capture, THEN assert — `>` truncates the destination BEFORE ssh even runs
 # and REGARDLESS of ssh's exit status, so a wrong key or a tailnet hiccup
 # used to leave an EMPTY file with no error (C1). Command substitution
 # propagates ssh's own exit status, and this shell's `set -e` (or your own
 # `|| exit 1`) aborts on it — do not pipe straight into `>` here.
-remote_env="$(ssh -p 2222 -i ~/.ssh/your-key-b you@203.0.113.7 'cat ~/.ccrc/remote.env')" \
-  || { echo "FAIL: could not read remote.env from server-box — aborting, nothing written"; exit 1; }
+remote_env="$(ssh -p 2222 -i ~/.ssh/<your-key> you@<server-host> 'cat ~/.ccrc/remote.env')" \
+  || { echo "FAIL: could not read remote.env from <server-host> — aborting, nothing written"; exit 1; }
 printf '%s\n' "$remote_env" > deploy/ccrc.env
 # Add what the baked unit used to provide and the new unit no longer does:
 printf 'CCRC_HOST=203.0.113.7\nCCRC_PORT=7788\nCCRC_PROJECTS_ROOT=/data/projects\n' >> deploy/ccrc.env
@@ -1148,7 +1148,7 @@ for v in CCRC_FLEET CCRC_AGENT_URL CCRC_AGENT_TOKEN CCRC_VAPID_PRIVATE CCRC_HETZ
     || { echo "FAIL: deploy/ccrc.env is missing $v — refusing to ship a partial config"; exit 1; }
 done
 # Agent env: append the projects root to the existing real agent.env.
-agent_env="$(ssh -p 2222 -i ~/.ssh/your-key-b you@198.51.100.7 'cat ~/.ccrc/agent.env')" \
+agent_env="$(ssh -p 2222 -i ~/.ssh/<your-key> you@<fleet-host> 'cat ~/.ccrc/agent.env')" \
   || { echo "FAIL: could not read agent.env from the fleet host — aborting, nothing written"; exit 1; }
 printf '%s\n' "$agent_env" > deploy/ccrc-agent.env
 printf 'CCRC_PROJECTS_ROOT=/srv/projects\n' >> deploy/ccrc-agent.env
@@ -1163,8 +1163,8 @@ empty, partial, or unignored.
 - [ ] **Step 3: Deploy the agent (fleet host first — verb-set rule), then the server**
 
 ```bash
-CCRC_SSH_KEY=~/.ssh/your-key-b bash deploy/deploy.sh agent you@198.51.100.7
-CCRC_SSH_KEY=~/.ssh/your-key-b bash deploy/deploy.sh
+CCRC_SSH_KEY=~/.ssh/<your-key> bash deploy/deploy.sh agent you@<fleet-host>
+CCRC_SSH_KEY=~/.ssh/<your-key> bash deploy/deploy.sh
 ```
 Expected: both end green, and each now ALSO prints/passes its identity
 assertion. The server deploy works while the old drop-in still exists: the
@@ -1175,7 +1175,7 @@ drop-in's `EnvironmentFile=%h/.ccrc/remote.env` and the unit's new
 - [ ] **Step 4: Retire the drop-in, restart, verify again**
 
 ```bash
-ssh -p 2222 -i ~/.ssh/your-key-b you@203.0.113.7 '
+ssh -p 2222 -i ~/.ssh/<your-key> you@<server-host> '
   export XDG_RUNTIME_DIR=/run/user/$(id -u) \
   && rm ~/.config/systemd/user/ccrc.service.d/remote.conf \
   && rmdir ~/.config/systemd/user/ccrc.service.d \
@@ -1199,7 +1199,7 @@ printf '%s' "$fleet_health" | grep -qF '"mode":"remote"' \
 # the SOLE on-box home of the VAPID keypair, the Hetzner token, the agent
 # URL/token and the fleet server id. A VAPID keypair cannot be regenerated
 # without invalidating every subscription in the live push-subs.json.
-ssh -p 2222 -i ~/.ssh/your-key-b you@203.0.113.7 \
+ssh -p 2222 -i ~/.ssh/<your-key> you@<server-host> \
   'mv ~/.ccrc/remote.env ~/.ccrc/remote.env.retired-$(date +%s)'
 ```
 
@@ -1243,5 +1243,5 @@ Update the spec's Status line (`docs/superpowers/specs/2026-08-11-ccrc-oss-singl
 
 - Spec stage-1 row: EnvironmentFile cutover (Task 3 + 9), unshipped artifacts (Tasks 1, 2), agent root (Task 4), build identity in /health + ccd version (Tasks 5–7), proof "build id equals what was shipped" (Task 8, asserted by the deploy itself; Task 9 exercises it against production).
 - The scratch-VM proof from the spec's stage table is deliberately deferred to stage 2's installer work: stage 1's deploy still assumes an existing box (rsync + npm on target). What stage 1 proves is the identity assertion and repo completeness on the REAL boxes — the strictly stronger claim available today. The spec's stage-2 proof ("fresh VM → install.sh") is where the scratch VM enters.
-- `CCRC_HOST` note: tailscale serve on server-box proxies to `203.0.113.7:7788` literally, so the live env file keeps that bind (Task 9 Step 2) — loopback-only is the fresh-install default, not a migration.
+- `CCRC_HOST` note: tailscale serve on <server-host> proxies to `203.0.113.7:7788` literally, so the live env file keeps that bind (Task 9 Step 2) — loopback-only is the fresh-install default, not a migration.
 - Not touched, deliberately: `/api/fleet/health` (three full-body `toEqual` pins), the `AgentReady` frame (`v` field's own docstring defers it; version-on-ready is stage 3+ per spec §3), `ccgpt-usage` drop-in (not ccrc's).

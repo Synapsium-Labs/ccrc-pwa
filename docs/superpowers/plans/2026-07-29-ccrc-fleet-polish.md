@@ -329,7 +329,7 @@ Append to `infra/ccrc/pwa/test/project-card.test.tsx`:
 describe('pinned account', () => {
   it('shows the account the project is pinned to', () => {
     render(<ProjectCard group={grp({ pin: 'claude-corp' })} onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.getByText('team·shared')).toBeInTheDocument();
+    expect(screen.getByText('team·b')).toBeInTheDocument();
   });
 
   it('says "mixed" when the sessions disagree rather than picking one', () => {
@@ -350,7 +350,7 @@ keeps compiling.
 - [ ] **Step 6: Run to verify it fails**
 
 Run: `cd infra/ccrc/pwa && npx vitest run test/project-card.test.tsx`
-Expected: FAIL — `Unable to find an element with the text: team·shared`.
+Expected: FAIL — `Unable to find an element with the text: team·b`.
 
 - [ ] **Step 7: Render the pin**
 
@@ -462,7 +462,7 @@ describe('away from home', () => {
   it('says so for assistive tech, which cannot see a colour', () => {
     render(<SessionLine session={s({ wrapper: 'claude2', home: 'claude' })}
                         onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.getByLabelText('running on alt·max, pinned to team·max')).toBeInTheDocument();
+    expect(screen.getByLabelText('running on team·alt, pinned to team·max')).toBeInTheDocument();
   });
 
   it('never marks a dead session — it is not running anywhere', () => {
@@ -542,7 +542,7 @@ describe('away note', () => {
   it('spells out the swap, which the line only marks', () => {
     render(<SessionActionsSheet session={sess({ wrapper: 'claude2', home: 'claude' })}
                                 open onClose={() => {}} />);
-    expect(screen.getByText(/Pinned to team·max, running on alt·max/)).toBeInTheDocument();
+    expect(screen.getByText(/Pinned to team·max, running on team·alt/)).toBeInTheDocument();
   });
 
   it('says nothing when the session is home', () => {
@@ -615,7 +615,7 @@ the rule the limit warning already follows."
 - Produces: nothing later tasks depend on.
 
 **Context, measured on the live page.** `.proj-card-add` is **151px of a 208px
-header — 41%** — because it renders `.proj-add-acct` = `alt·max · 99% free`.
+header — 41%** — because it renders `.proj-add-acct` = `team·alt · 99% free`.
 That string is identical on all nine cards (the projection is global — where the
 *next* workspace lands does not vary by project), and in the desktop sidebar
 (`clamp(300px, 25vw, 380px)`) it is sliced mid-character. The account and
@@ -642,7 +642,7 @@ describe('the + is icon-only', () => {
   it('keeps the account and headroom in the accessible name', () => {
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}}
                         onAddWorkspace={() => {}} projected={projected} />);
-    expect(screen.getByLabelText('New workspace on demo — alt·max, 91% free'))
+    expect(screen.getByLabelText('New workspace on demo — team·alt, 91% free'))
       .toBeInTheDocument();
   });
 
@@ -650,7 +650,7 @@ describe('the + is icon-only', () => {
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}}
                         onAddWorkspace={() => {}} projected={projected} />);
     expect(screen.getByLabelText(/New workspace on demo/))
-      .toHaveAttribute('title', 'New workspace on demo — alt·max, 91% free');
+      .toHaveAttribute('title', 'New workspace on demo — team·alt, 91% free');
   });
 
   it('falls back to the plain name before the accounts poll lands', () => {
@@ -1335,7 +1335,7 @@ it('does not offer a disabled account in the rendered picker', async () => {
   stubAccounts([acct({ wrapper: 'claude' }), acct({ wrapper: 'gpt', disabled: true })]);
   render(<SwapSheet session={{ id: 'demo', wrapper: 'claude', project: 'demo' }}
                     open onClose={() => {}} fleet={storeWith([])} />);
-  expect(await screen.findByText('alt·max')).toBeInTheDocument();  // picker rendered
+  expect(await screen.findByText('team·alt')).toBeInTheDocument();  // picker rendered
   expect(screen.queryByText('gpt')).not.toBeInTheDocument();
 });
 ```

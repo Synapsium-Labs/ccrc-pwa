@@ -26,9 +26,9 @@ internal CA, vite PWA config.
 - Neutral replacement vocabulary (use EXACTLY these): server box role name
   `<server-host>`, fleet box `<fleet-host>`, user `you@<server-host>`, home `/home/you`,
   projects root `/srv/projects`, documentation IPs `203.0.113.7` (server-ish),
-  `198.51.100.7` (fleet-ish), domain `mybox.example.com`, tailnet example
-  `yourbox.tailnet-example.ts.net` is FORBIDDEN (matches the `*.ts.net` ban) — use
-  `mybox.example.com` for rpId examples too.
+  `198.51.100.7` (fleet-ish), domain `mybox.example.com`. A made-up tailnet hostname
+  is FORBIDDEN as an example (any `<label>.ts` + `.net` name matches the class ban) — use
+  `mybox.example.com` for rpId examples too, and bracket forms for the shape.
 - The deviation ledger continues from main's highest landed D-number (check
   `git grep -oE 'D-[0-9]+' origin/main | sort -t- -k2 -n | tail -1` before allocating).
 
@@ -204,12 +204,14 @@ follow-up, deliberately not papered over.
 - [ ] **Step 5:** `config.ts:323` → `mailto:ccrc@localhost`; adjust its test pin.
   `ccrc-cli.test.ts:642`'s comment updates (the address it sets is now pure fixture —
   change the value to `203.0.113.7:7788`).
-- [ ] **Step 6: Ratchet** — add to `FORBIDDEN` in `topology-clean.test.ts` the class
-  `CGNAT tailnet IPs` `/\b100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}\b/`
-  **scoped to non-doc files first** (`!path.startsWith('docs/')`) → red count states the
-  remaining code/test occurrences; sweep them (fixtures → `100.64.0.1` is ALSO banned —
-  use `203.0.113.x`); green. (Docs join the class in Task 8.)
-- [ ] **Step 7: Commit** `feat(debrand): the shipped executables refuse rather than
+- [x] **Step 6: Ratchet** — add to `FORBIDDEN` in `topology-clean.test.ts` the class
+  `CGNAT tailnet IP` `/\b100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}\b/`
+  **scoped to non-doc files first** → red count states the
+  remaining code/test occurrences (measured: 18 across 9 files); sweep them (fixtures →
+  the range's own first address is ALSO banned — use `203.0.113.x`, except the one
+  sanctioned CGNAT placeholder, D-193); green. Scope and placeholder drifts: D-193. (Docs join the class
+  in Task 8.)
+- [x] **Step 7: Commit** `feat(debrand): the shipped executables refuse rather than
   remember the reference fleet (D-<n>)`
 
 ### Task 4: Runtime strings and dead tooling
@@ -223,11 +225,14 @@ follow-up, deliberately not papered over.
 - Tests: `server/test/auth-passkey.test.ts`, `auth-routes.test.ts`, `config.test.ts`
   (every pin quoting the old example strings re-pins to `mybox.example.com` forms)
 
-- [ ] **Step 1 (red):** add ratchet class `*.ts.net + tailnet-example + server-box` scoped to
+- [x] **Step 1 (red):** add ratchet class `*.ts.net` + the reference fleet's two bare
+  name tokens (the tailnet's DNS label, the server host's name) scoped to
   `server/ agent/ pwa/ shared/ ccd/ deploy/ scripts/ install.sh` (docs in Task 8) → the
-  red count IS the work-list.
-- [ ] **Step 2:** sweep: error/example strings → `mybox.example.com`; `ccrc-adopt:350`'s
-  `team·max` → `team·max`; `ccd/ccd` banner "server-box" → "the server box" (provenance
+  red count IS the work-list. (Measured 1 red test, 83 `file:line` rows across 12 files.
+  The two bare name tokens ride base64-encoded per spec §3's residue idiom, and the
+  liveness harness's synthetic corpus moved in-scope — D-195.)
+- [x] **Step 2:** sweep: error/example strings → `mybox.example.com`; `ccrc-adopt:350`'s
+  real first label → `team·max`; `ccd/ccd` banner's server-host name → "the server box" (provenance
   re-stamped in the same commit); both env examples' worked blocks → documentation
   addresses. Delete the two extraction-manifest files (its 4+11 tailnet mentions die with
   it; its migration completed at Stage 1).
@@ -250,10 +255,16 @@ follow-up, deliberately not papered over.
 
 - [ ] **Step 1 (red):** rename in `helpers.ts` → run the server suite → the red list IS
   the follower list; sweep it file by file (no logic edits, string renames only).
-- [ ] **Step 2:** deploy.sh refusal + delete the migration JSON; `ccrc-install`/
-  `ccrc-wrappers` suites green.
-- [ ] **Step 3: Ratchet** — add class: the four real labels (`team·max`, `alt·max`,
-  `team·shared`, `lab·dev0`) and `orchard` (scoped: non-docs) → sweep fixture/demo
+  (Measured 21 red files / 131 red tests; the external account keeps the id `gpt` —
+  the plan's `claude-c` — and green files keep their own old-id fixture strings: both
+  D-196.)
+- [x] **Step 2:** deploy.sh refusal + delete the migration JSON; `ccrc-install`/
+  `ccrc-wrappers` suites green. (The no-default line gained its own deploy-verify pin,
+  mutation-measured 1 red — D-196; four suites' migration-roster fixtures re-root on
+  `DEFAULT_TEST_ROSTER`, and gen-accounts' D-69 pin retired with its subject.)
+- [x] **Step 3: Ratchet** — add class: the four real account labels (now `team·max`,
+  `team·alt`, `team·b`, `team·d` in fixtures) and the old employer token, all
+  base64-ridden (scoped: non-docs) → sweep fixture/demo
   names in `fleetws.test.ts`, `registry.test.ts`, `pwa/design/mockup.html` → green.
 - [ ] **Step 4: Commit** `feat(debrand): the roster is fixtures' own, not this fleet's
   (D-<n>)`
@@ -337,9 +348,10 @@ follow-up, deliberately not papered over.
   sanitise (role vocabulary above; transcripts keep shape, lose hostnames; D-N refs and
   plan anchors PRESERVED) or prune (scratch/ both files). Sweep to green in 3–5 commits
   grouped by directory so review stays possible.
-- [ ] **Step 3:** base64 residue class joins the ratchet: username, `your-key-a`,
-  `your-key-b`, `srv-volume`, `you`, (post-transfer) `example-org` —
-  encoded, with the why-comment from the spec §3. Red → sweep the stragglers → green.
+- [ ] **Step 3:** base64 residue class joins the ratchet: the operator's username, the
+  two SSH key names, the Hetzner volume id, the GitHub handle and (post-transfer) the
+  old owner org — all six ride encoded in the suite (`OPERATOR_RESIDUE`), with the
+  why-comment from the spec §3. Red → sweep the stragglers → green.
 - [ ] **Step 4: Commit(s)** `docs(debrand): the corpus speaks roles (N/M) (D-<n>)`
 
 ### Task 9: README restructure (S7)
@@ -444,7 +456,7 @@ list. **No transfer, no flip, no tag happens from this session.**
   exist BEFORE `CLAUDE.md` loses the real reach values, and `scratch/` is pruned whole
   rather than sanitised. The shipped scope excludes all four roots and Task 8 still
   drops it entirely. (2) Vocabulary: the plan's sweep rule ("fixtures → `203.0.113.x`;
-  `100.64.0.1` is ALSO banned") cannot apply to `ccrc-doctor.test.ts`'s CGNAT-arm test —
+  the range's first address is ALSO banned") cannot apply to `ccrc-doctor.test.ts`'s CGNAT-arm test —
   that test exists to pin `_dr_ip4_global`'s classification of the 100.64/10 range, so
   its fixture must BE in the range. The class admits exactly one obviously-synthetic
   placeholder, `100.100.1.1` (argued in the suite next to the pattern); it also serves

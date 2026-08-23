@@ -462,7 +462,7 @@ describe('substrate chip — the console cannot see this session, and says so (s
 - [ ] **Full suites, foreground:** server, agent, pwa (`./node_modules/.bin/vitest run` in each). Known load-flakes list applies; re-run in isolation before calling a break.
 - [ ] **Adversarial review workflow** over the whole branch diff (the D-B8-13 review script shape: ≥4 lenses — bash correctness incl. `set -e`/subshell hazards in the new loop, wire/revive discipline, PWA a11y+gating completeness, test-integrity incl. "could the loop hang a suite") → fix confirmed findings.
 - [ ] **PR** with evidence; verify CI `headSha` == PR head; merge.
-- [ ] **Deploy AGENT-FIRST** (`CCRC_SSH_KEY=~/.ssh/your-key-b bash deploy/deploy.sh agent you@198.51.100.7`, then the server lane; `/health` sha gate; `fleet/health` agreed/agreed). The new supervise loop reaches each session only as its unit restarts — note in the PR that the fleet adopts it lazily; do NOT restart live units to force it.
+- [ ] **Deploy AGENT-FIRST** (`CCRC_SSH_KEY=~/.ssh/<your-key> bash deploy/deploy.sh agent you@<fleet-host>`, then the server lane; `/health` sha gate; `fleet/health` agreed/agreed). The new supervise loop reaches each session only as its unit restarts — note in the PR that the fleet adopts it lazily; do NOT restart live units to force it.
 
 ## Deviations found
 

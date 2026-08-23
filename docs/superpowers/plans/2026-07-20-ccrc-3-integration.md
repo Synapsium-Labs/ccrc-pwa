@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Deploy ccrc to the server-box box, verify it against real ccd sessions end-to-end (a dedicated `cctest` session), re-capture parser fixtures from live panes, and complete the mobile-device pass.
+**Goal:** Deploy ccrc to the <server-host> box, verify it against real ccd sessions end-to-end (a dedicated `cctest` session), re-capture parser fixtures from live panes, and complete the mobile-device pass.
 
 **Architecture:** No new components — this plan exercises Plans 1+2 output on the real box. E2E tests are a vitest suite in `server/test-e2e/` that runs from the Mac against `CCRC_BASE_URL` (skipped when the env var is absent, so `vitest run` stays green offline).
 
@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Box access: `ssh -p 2222 -i ~/.ssh/your-key-a you@203.0.113.7` (Tailscale). `~/.local/bin` is NOT on PATH over non-interactive SSH — always absolute `~/.local/bin/ccd`. `systemctl --user` needs `XDG_RUNTIME_DIR=/run/user/$(id -u)` exported.
+- Box access: `ssh -p 2222 -i ~/.ssh/<your-key> you@<server-host>` (Tailscale). `~/.local/bin` is NOT on PATH over non-interactive SSH — always absolute `~/.local/bin/ccd`. `systemctl --user` needs `XDG_RUNTIME_DIR=/run/user/$(id -u)` exported.
 - The server must be reachable at `http://203.0.113.7:7788` from the tailnet and **unreachable** on any other interface.
 - Never touch the six production sessions during e2e — all live testing goes through a dedicated `cctest` project session (`claude2-cctest` — gmail Max, the least-critical account). Stop it when done.
 - E2E suite: `server/test-e2e/*.e2e.test.ts`, guarded by `const BASE = process.env.CCRC_BASE_URL; describe.skipIf(!BASE)`.
@@ -36,7 +36,7 @@
 
 ### Task 2: notify.sh hook install + swap notice verify
 
-- [ ] **Step 1:** Install: `scp -P 2222 -i ~/.ssh/your-key-a infra/ccrc/deploy/notify.sh you@203.0.113.7:.cc-sessions/notify.sh` then `ssh ... 'chmod +x ~/.cc-sessions/notify.sh'`.
+- [ ] **Step 1:** Install: `scp -P 2222 -i ~/.ssh/<your-key> infra/ccrc/deploy/notify.sh you@<server-host>:.cc-sessions/notify.sh` then `ssh ... 'chmod +x ~/.cc-sessions/notify.sh'`.
 - [ ] **Step 2:** Verify manually: `ssh ... '~/.cc-sessions/notify.sh "cc swap: claude2-cctest moved claude2 -> claude (limits) — test"'` while `websocat ws://203.0.113.7:7788/ws/fleet` (or a tiny node script) is connected from the Mac. Expected: a `{"type":"notice",...}` frame arrives.
 - [ ] **Step 3: Commit** any fixes: `git commit -m "feat(ccrc): notify hook installed and verified"` (docs-only note if no code changed).
 
