@@ -360,3 +360,48 @@ describe('ws-restore takes the same three flags, and refuses through _lc_refuse'
     expect(bare, `wave-5 flag refusals must ride _lc_refuse:\n${bare.join('\n')}`).toEqual([]);
   });
 });
+
+/** Full success-path stubs for `cmd_ws_restore` — RESTORE_STUBS above never
+ *  reaches this far (every case there refuses before the reap lock).
+ *  `_spawn_start`/`_spawn_settle`/`_reg_claim` are the three
+ *  `ccd-ws-restore-supersede.test.ts` already stubs for a genuine restore
+ *  (its `STUB`, this file's `ccd-ws-restore-supersede.test.ts:21`); `tmux`
+ *  is a plain no-op rather than a failure since a real restore's
+ *  `_ws_supervise` call is itself stubbed to nothing below, so nothing here
+ *  reaches tmux either way. */
+const RESTORE_FULL_STUBS = `tmux() { :; }; _spawn_start() { SPAWN_FROMSWAP=0; };
+  _spawn_settle() { :; }; _reg_claim() { :; }; _ws_supervise() { :; };`;
+
+describe('ws-restore accepts the dec flags in any position — parity with ws-archive (Task 45)', () => {
+  // Coverage-parity fix (review round 1 on this task): the original suite
+  // above proved every REFUSAL shape but never that a well-formed call with
+  // the flags actually reaches a successful restore, in every position
+  // `cmd_ws_archive`'s own `it.each` covers (ccd-actor-flags.test.ts's
+  // `ws-archive accepts the dec flags in any position` block, above).
+  it.each([
+    ['before the required flag', `--surface pwa --session ID`],
+    ['after the required flag',  `--session ID --surface pwa`],
+    ['in the --flag=value form', `--session ID --surface=pwa`],
+    ['with all three flags',     `--session ID --surface pwa --actor 'device:iPhone' --reason 'tidy'`],
+  ])('parses --surface %s and restores', (_name, tail) => {
+    const id = seedWorkspace();
+    h.sh(`_reg_set ${id} archived 1787000000`);
+    const r = shFail(`${RESTORE_FULL_STUBS} cmd_ws_restore ${tail.replace('ID', id)} >/dev/null`);
+    expect(r.code, r.stderr).toBe(0);
+  });
+
+  it('still refuses extra positionals — the arity rule survives the strip', () => {
+    // Same shape as `cmd_ws_archive`'s own copy of this case (no wave-5 flag
+    // in the call — this is a REGRESSION check that the pre-existing exact-
+    // arity rule still runs, unmodified, on whatever `set --` leaves behind
+    // once wave-5's loop is done, not a guard on the loop's own logic).
+    // Confirmed not vacuous by mutation: widening the pre-existing
+    // `[[ $# -eq 2 && $1 == --session ]]` to `-ge 2` turns this red (`extra`
+    // then satisfies `-ge 2` and the call proceeds past arity instead of
+    // refusing with this sentence) — verified and reverted, not shipped.
+    const id = seedWorkspace();
+    const r = shFail(`${RESTORE_STUBS} cmd_ws_restore --session ${id} extra`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('usage: ccd ws-restore --session <id>');
+  });
+});
