@@ -380,9 +380,9 @@ follow-up, deliberately not papered over.
 
 ### Task 10: Final ratchet close + whole-branch review
 
-- [ ] **Step 1:** `topology-clean` now carries every class unscoped; mutation-measure
+- [x] **Step 1:** `topology-clean` now carries every class unscoped; mutation-measure
   once more (plant one token of each of 3 classes → 3 reds; revert by edit).
-- [ ] **Step 2:** all four packages' full suites FOREGROUND green; flakes re-run isolated.
+- [x] **Step 2:** all four packages' full suites FOREGROUND green; flakes re-run isolated.
 - [ ] **Step 3:** whole-branch review (fresh reviewer pass over the complete diff; the
   deviations ledger `## Deviations found` below gets every D-N allocated).
 - [ ] **Step 4:** PR `feat/stage5-oss-polish` → operator review → merge → deploy BOTH

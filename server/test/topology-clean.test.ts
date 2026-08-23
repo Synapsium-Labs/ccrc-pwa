@@ -26,7 +26,9 @@
 // revert by editing. Ship measurement 2026-08-23: 1 red (public IPv4 planted
 // in README.md), suite green on revert. Task 8 re-measure (scopes dropped,
 // operator-residue class added): 1 red (the residue class's first token
-// planted in README.md), 30/30 on revert.
+// planted in README.md), 30/30 on revert. Task 10 final close 2026-08-23:
+// one token each of 3 classes (public IPv4, CGNAT, duckdns) planted on one
+// README.md line → exactly 3 reds, one per class; 30/30 on revert.
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
