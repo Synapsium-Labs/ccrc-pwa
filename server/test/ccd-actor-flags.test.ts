@@ -277,3 +277,86 @@ describe('ws-archive accepts the dec flags in any position', () => {
     expect(r.stderr).toContain('usage: ccd ws-archive --session <id>');
   });
 });
+
+/** Stubs enough of `cmd_ws_restore` for the flag-parsing/refusal cases below,
+ *  none of which reach past the reap-lock acquisition (`ccd:4200`) — every
+ *  case here either refuses inside the wave-5 loop or refuses at the
+ *  pre-existing `no-such-session` check a few lines later, both well above
+ *  the lock. `flock` is stubbed because the real one needs a lock FILE this
+ *  harness has no reason to create for a case that never reaches it. */
+const RESTORE_STUBS = `tmux() { return 1; }; flock() { return 0; };
+  _ws_supervise() { :; }; _spawn() { :; };`;
+
+describe('ws-restore takes the same three flags, and refuses through _lc_refuse', () => {
+  it('refuses a valueless --surface with its OWN usage sentence', () => {
+    const id = seedWorkspace();
+    const r = shFail(`${RESTORE_STUBS} cmd_ws_restore --session ${id} --surface`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('usage: ccd ws-restore');
+  });
+
+  it('refuses a blank --actor, naming the flag', () => {
+    const id = seedWorkspace();
+    const r = shFail(`${RESTORE_STUBS} cmd_ws_restore --session ${id} --actor ''`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('--actor');
+  });
+
+  it('refuses a blank --reason, naming the flag — the same non-blank check as --actor', () => {
+    // `_lc_dec_ok` is length-only (D-200, ccd:1527) and returns 0 for '', so
+    // it cannot be the blank guard on its own — this verb needs its OWN
+    // non-blank check ahead of `_lc_dec_ok`, mirroring `--actor` above and
+    // `cmd_ws_hold` (ccd:3517). Not in the brief's own step-2 sample, added
+    // here because the brief's --actor check and this one are one guard
+    // copied twice; a mutant on one without a test on the other would ship a
+    // silent asymmetry between the two flags.
+    const id = seedWorkspace();
+    const r = shFail(`${RESTORE_STUBS} cmd_ws_restore --session ${id} --reason ''`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('--reason');
+  });
+
+  it('binds the real session id from CLEANED argv, not a flag value ahead of --session', () => {
+    // GAP FOUND BY THIS TASK, against the brief's own placement: unlike
+    // `cmd_ws_archive` (Task 45), whose `local id=$2` runs AFTER its arity
+    // check, `cmd_ws_restore`'s `local id="${2-}"` was ALREADY the first
+    // statement in this function's body before wave 5 touched it, and that
+    // one binding is reused through the bad-session-id/no-such-session checks
+    // a few lines below. The brief's literal instruction — insert "immediately
+    // above the arity refusal", read as between `local id="${2-}"` and the
+    // `[[ $# -eq 2 ... ]]` check — would have left `id` bound from RAW,
+    // flag-polluted argv: `--surface pwa --session <id>` would have captured
+    // `id=pwa` (the word AFTER `--surface`, since that is `$2` before the loop
+    // ever strips it) and then refused a legitimate restore as
+    // `no-such-session: pwa` once the flags were gone from argv. This task's
+    // block sits BEFORE `local id="${2-}"` instead, so the assignment reads
+    // the CLEANED `$2`.
+    //
+    // Mutant: move the wave-5 block back below `local id="${2-}"` (the
+    // brief's literal placement) — this assertion goes red, reporting
+    // `no such session: pwa` instead of naming the id that was actually
+    // asked for. See task-46-report.md.
+    const r = shFail(`${RESTORE_STUBS} cmd_ws_restore --surface pwa --session totally-bogus-id`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('no such session: totally-bogus-id');
+    expect(r.stderr).not.toContain('no such session: pwa');
+  });
+
+  it('adds NO bare `die "` to a body wave 3 scans', () => {
+    // The mechanism, not the instance: `ccd-refusal-scan.test.ts` slices
+    // `cmd_ws_restore` and requires every fatal refusal in it to go through
+    // `_lc_refuse`, so that a destroyed-or-refused act leaves a record. This
+    // assertion is the local half, so the failure names THIS task's block
+    // rather than arriving as a scanner red four files away.
+    const src = readFileSync(CCD, 'utf8');
+    const from = src.indexOf('\ncmd_ws_restore() {');
+    const to = src.indexOf('\ncmd_ws_attic() {', from);
+    expect(from, 'cmd_ws_restore was not found').toBeGreaterThan(-1);
+    expect(to, 'cmd_ws_attic was not found — the slice has no end').toBeGreaterThan(from);
+    const body = src.slice(from, to).split('\n');
+    expect(body.length, 'the slice collapsed').toBeGreaterThan(50);
+    const bare = body.filter((l) => /\bdie "/.test(l) && !/^\s*#/.test(l))
+      .filter((l) => l.includes('--surface') || l.includes('--actor') || l.includes('--reason'));
+    expect(bare, `wave-5 flag refusals must ride _lc_refuse:\n${bare.join('\n')}`).toEqual([]);
+  });
+});

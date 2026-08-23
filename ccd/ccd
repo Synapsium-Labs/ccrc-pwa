@@ -4182,6 +4182,76 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   # stale twice over: the numbers had drifted, and `cmd_ensure` now adopts a
   # live-but-unsupervised pane via `_resupervise_live`. It restores nothing on
   # THIS path regardless, because `_spawn` below has not run yet.)
+  #
+  # WAVE 5 — THE DEC FLAGS, stripped BEFORE `local id="${2-}"` below is ever
+  # bound and before the exact-arity rule, for the reason `cmd_ws_rm`'s F1 fix
+  # states at ccd:2822: an id bound from raw, flag-polluted argv is bound
+  # WRONG, not just early. Unlike `cmd_ws_archive` (Task 45), THIS verb reads
+  # `$2` into `id` on the very next line, and reuses that one binding through
+  # the arity/bad-session-id/no-such-session checks below — so
+  # `ccd ws-restore --surface pwa --session abc123` would otherwise capture
+  # `id=pwa` before this loop ever ran and refuse a legitimate restore as
+  # `no-such-session: pwa` once the flags were stripped out from under it.
+  # This loop's own `set --` is what makes the existing `local id="${2-}"`
+  # correct; nothing below this block changes.
+  #
+  # REFUSED THROUGH `_lc_refuse`, unlike Task 45's `cmd_ws_archive`:
+  # `ccd-refusal-scan.test.ts` (wave 3) slices `cmd_ws_restore`'s body and
+  # requires every fatal refusal in it to leave a journal line first. A bare
+  # `die` here would be a refusal on a destructive-adjacent verb that nothing
+  # can read afterwards, which is the hole D4 exists to close.
+  #
+  # `""` FOR THE ID, deliberately: this loop runs before ANY id is bound, so
+  # there is no session to name yet. An empty id is "no subject was
+  # measured", which is a different fact from a wrong one.
+  #
+  # `bad-args` IS THE TOKEN, the one this file already spells (`cmd_ws_rename`'s
+  # inline literals, and `wsaudit.ts`'s SENTENCES entry for it). Inventing
+  # `bad-surface` would need new copy in `SENTENCES` and would red
+  # `wsaudit.test.ts` in both directions.
+  local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 lc_args=()
+  while (( $# )); do
+    case "$1" in
+      # An explicit arity check, not a bare `shift 2`: ccd runs under
+      # `set -uo pipefail` with NO `-e`, so a shift past the end of argv fails,
+      # shifts nothing, and this loop never terminates.
+      --surface)   [[ $# -ge 2 ]] || _lc_refuse restore "" bad-args "usage: ccd ws-restore [--surface <word>] [--actor <text>] [--reason <text>] --session <id>"
+                   lc_gs=1; lc_surface="$2"; shift 2 ;;
+      --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
+      --actor)     [[ $# -ge 2 ]] || _lc_refuse restore "" bad-args "usage: ccd ws-restore [--surface <word>] [--actor <text>] [--reason <text>] --session <id>"
+                   lc_ga=1; lc_actor="$2"; shift 2 ;;
+      --actor=*)   lc_ga=1; lc_actor="${1#--actor=}"; shift ;;
+      --reason)    [[ $# -ge 2 ]] || _lc_refuse restore "" bad-args "usage: ccd ws-restore [--surface <word>] [--actor <text>] [--reason <text>] --session <id>"
+                   lc_gr=1; lc_reason="$2"; shift 2 ;;
+      --reason=*)  lc_gr=1; lc_reason="${1#--reason=}"; shift ;;
+      *)           lc_args+=("$1"); shift ;;
+    esac
+  done
+  # bash >= 4.4 (the fleet host runs 5.2, ccd:9393-9394): an empty array here
+  # is not an unbound-variable error under `set -u`.
+  set -- "${lc_args[@]}"
+  # `_lc_surface_norm ''` prints EMPTY, not `unknown` (ccd:1511-1524, D-200) —
+  # it cannot tell "no argument" from "an explicit blank" apart, so THIS loop
+  # is where that distinction has to be made, before the encoder ever sees the
+  # value. `lc_gs` already carries givenness; the `${lc_w:-unknown}` fallback
+  # below is what turns a declared-but-blank surface into `unknown` rather
+  # than an empty string that `_lc_json` would backfill to `none` — the exact
+  # given/no-flag collapse this verb must not produce.
+  if (( lc_gs )); then local lc_w; lc_w=$(_lc_surface_norm "$lc_surface"); lc_surface=${lc_w:-unknown}; fi
+  # `_lc_dec_ok` is LENGTH-ONLY (ccd:1527-1538, D-200) — `_lc_dec_ok ''`
+  # returns 0, so it cannot be the blank guard on its own. A declared
+  # `--actor`/`--reason` is refused when blank the same way `cmd_ws_hold`
+  # refuses a blank `--reason` (ccd:3517) and Task 45's `cmd_ws_archive`
+  # follows: its own non-blank check, separate from the byte cap, whitespace-
+  # only counting as blank too.
+  if (( lc_ga )); then
+    [[ -n "${lc_actor//[[:space:]]/}" ]] || _lc_refuse restore "" bad-args "--actor must be non-blank"
+    _lc_dec_ok "$lc_actor" || _lc_refuse restore "" bad-args "--actor is longer than $_LC_DEC_MAX bytes"
+  fi
+  if (( lc_gr )); then
+    [[ -n "${lc_reason//[[:space:]]/}" ]] || _lc_refuse restore "" bad-args "--reason must be non-blank"
+    _lc_dec_ok "$lc_reason" || _lc_refuse restore "" bad-args "--reason is longer than $_LC_DEC_MAX bytes"
+  fi
   local id="${2-}"
   [[ $# -eq 2 && $1 == --session ]] \
     || _lc_refuse restore "$id" bad-args "usage: ccd ws-restore --session <id>"
