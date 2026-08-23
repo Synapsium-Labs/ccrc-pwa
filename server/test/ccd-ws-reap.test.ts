@@ -368,7 +368,7 @@ describe('refusals are answers', () => {
     // `_json_str`'s one remaining failure is python3 not being RUNNABLE, and it
     // reports that on its exit status — which every one of the ~20
     // substitutions below swallows by construction, because they sit inside
-    // printf ARGUMENT LISTS. `cmd_ws_audit` (ccd:6345) and `_ws_manifest`
+    // printf ARGUMENT LISTS. `cmd_ws_audit` (ccd:6372) and `_ws_manifest`
     // (ccd:4054) each probe once up front for exactly that reason, and this is
     // the THIRD caller that builds a whole record: `_ws_tombstone` writes the
     // one document that outlives the workspace. Without the probe the resume
@@ -1857,7 +1857,7 @@ describe('partial failure and resume', () => {
  * after Phase A.
  *
  * `not-archived` is the refusal ccd already owns for "this workspace is not
- * staged for deletion" (`_ws_reap_eval`, ccd:5662-5663), and it is the one
+ * staged for deletion" (`_ws_reap_eval`, ccd:5689-5690), and it is the one
  * emitted here: the state IS not-archived, and re-using the token keeps
  * `wsaudit.ts`'s SENTENCES table complete without inventing a thirty-sixth
  * word for the same fact.

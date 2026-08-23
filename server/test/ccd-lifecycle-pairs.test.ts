@@ -179,7 +179,7 @@ describe('ws-gc --prune writes a pair per destroyed row', () => {
   });
 
   // FIX ROUND 1(b). `cmd_ws_gc --prune`'s row loop (`while … done <<< "$rows"`,
-  // ccd:8421-8428) is NOT a subshell, so a real run calls `_ws_gc_prune_row` —
+  // ccd:8448-8455) is NOT a subshell, so a real run calls `_ws_gc_prune_row` —
   // and therefore `_lc_tx` — more than once in ONE process. `_lc_tx`'s own
   // uniqueness rests on a fresh `$BASHPID` per `$(...)` fork plus a
   // nanosecond clock read (ccd:868-880), which is structurally safe, but this

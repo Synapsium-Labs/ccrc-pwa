@@ -40,7 +40,7 @@
 // with no blank guard. Measured: `_lc_dec_ok ''` and `_lc_dec_ok '   '` both
 // return 0 today. `cmd_ws_hold` (`ccd:3656`) has its OWN, separate
 // `[[ -n "${reason//[[:space:]]/}" ]] || die` guard that never routes through
-// `_lc_dec_ok` at all; `ws-rm`/`forget` (`ccd:2835`, `ccd:11181`) call ONLY
+// `_lc_dec_ok` at all; `ws-rm`/`forget` (`ccd:2835`, `ccd:11208`) call ONLY
 // `_lc_dec_ok`, so today `--reason ''` on either of those two verbs is
 // ACCEPTED, not refused. This is pinned below as what IS true — a future
 // change that adds a blank guard to `_lc_dec_ok` (or to each wave-5 verb,
@@ -252,7 +252,7 @@ describe('ws-archive accepts the dec flags in any position', () => {
 
   it('refuses a --surface with no value rather than looping forever', () => {
     // `shift 2` past the end of argv FAILS under `set -uo pipefail` with no
-    // `-e`: it shifts nothing and the loop never terminates (ccd:11101-11103 says
+    // `-e`: it shifts nothing and the loop never terminates (ccd:11154-11156 says
     // so about `cmd_stop`'s identical loop).
     const id = seedWorkspace();
     const r = shFail(`${ARCHIVE_STUBS} cmd_ws_archive --session ${id} --surface`);
@@ -280,7 +280,7 @@ describe('ws-archive accepts the dec flags in any position', () => {
 });
 
 /** Stubs enough of `cmd_ws_restore` for the flag-parsing/refusal cases below,
- *  none of which reach past the reap-lock acquisition (`ccd:4406`) — every
+ *  none of which reach past the reap-lock acquisition (`ccd:4455`) — every
  *  case here either refuses inside the wave-5 loop or refuses at the
  *  pre-existing `no-such-session` check a few lines later, both well above
  *  the lock. `flock` is stubbed because the real one needs a lock FILE this
@@ -868,7 +868,7 @@ describe("ws-restore's length/blank refusals hold for MULTIPLE offending fields,
     // The reverse combination, kept as a boundary check rather than a repeat
     // of the leak proof above: it already passes pre-fix, because `_lc_json`
     // drops any key whose value is the empty string ("AN EMPTY VALUE OMITS
-    // ITS KEY", ccd:1305) — a blank `lc_reason` was never something for a
+    // ITS KEY", ccd:1312) — a blank `lc_reason` was never something for a
     // sibling refusal to leak, only a NON-EMPTY unchecked value is. Kept so a
     // future change to that empty-omits rule cannot silently start leaking
     // this combination without a red test naming it.
@@ -879,6 +879,73 @@ describe("ws-restore's length/blank refusals hold for MULTIPLE offending fields,
     const dec = lastDec()!;
     expect(dec['surface']).toBe('pwa');
     expect(Object.keys(dec)).not.toContain('actor');
+    expect(Object.keys(dec)).not.toContain('reason');
+  });
+});
+
+// Operator escalation on F1 (final review, round 3): the two describes above
+// prove the property on the POST-LOOP validation ladder only. `cmd_ws_restore`
+// has a SECOND family of refusals that can carry a `dec.*` field —
+// the ARITY ("needs a value") refusals inside the flag-parsing loop itself
+// (`ccd:4324` onward) — and they were leaking too: `lc_actor`/`lc_reason`
+// hold whatever an EARLIER `--actor`/`--reason` occurrence already assigned,
+// UNVALIDATED, when a LATER flag's missing value triggers one of these mid-
+// loop. Measured pre-fix: `cmd_ws_restore --session <id> --actor <600B>
+// --reason` (no value after --reason) put the full 600-byte actor on the
+// arity refusal, `truncated` unset — the exact same leak class F1 closed on
+// the post-loop ladder, one arm over. Fixed the same way: each arm now
+// applies the identical non-blank-and-within-cap test before adding
+// `dec.actor`/`dec.reason`.
+describe("ws-restore's ARITY (\"needs a value\") refusals do not leak an already-captured unvalidated field", () => {
+  const STUBS = `tmux() { return 1; };`;
+  const OVER_CAP = 'a'.repeat(600);
+
+  it('over-cap --actor captured, then --reason with no value: the arity refusal omits dec.actor', () => {
+    const id = seedWorkspace();
+    const r = shFail(
+      `${STUBS} cmd_ws_restore --session ${id} --actor '${OVER_CAP}' --reason`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('usage: ccd ws-restore');
+    const dec = lastDec()!;
+    // THE LEAK THIS TEST WAS WRITTEN TO CATCH: pre-fix, `dec.actor` carried
+    // the full 600-byte over-cap string on this refusal, unexamined.
+    expect(Object.keys(dec)).not.toContain('actor');
+    expect(Object.keys(dec)).not.toContain('reason');
+  });
+
+  it('over-cap --reason captured, then --actor with no value: the arity refusal omits dec.reason', () => {
+    const id = seedWorkspace();
+    const r = shFail(
+      `${STUBS} cmd_ws_restore --session ${id} --reason '${OVER_CAP}' --actor`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('usage: ccd ws-restore');
+    const dec = lastDec()!;
+    expect(Object.keys(dec)).not.toContain('reason');
+    expect(Object.keys(dec)).not.toContain('actor');
+  });
+
+  it('BOTH already over cap, then a valueless --surface: the arity refusal carries neither', () => {
+    const id = seedWorkspace();
+    const r = shFail(
+      `${STUBS} cmd_ws_restore --session ${id} --actor '${OVER_CAP}' --reason '${OVER_CAP}' --surface`);
+    expect(r.code).not.toBe(0);
+    const dec = lastDec()!;
+    expect(Object.keys(dec)).not.toContain('actor');
+    expect(Object.keys(dec)).not.toContain('reason');
+    // `dec.surface` is unaffected by this fix (out of scope: surface carries
+    // no `_lc_dec_ok` cap in this function at all, so it cannot fail "its own
+    // cap" the way actor/reason can — see the final report for why this was
+    // deliberately left alone rather than folded into the same fix).
+    expect(dec).toHaveProperty('surface');
+  });
+
+  it('a VALID already-captured actor still reaches the arity refusal — omission is not a blanket strip', () => {
+    const id = seedWorkspace();
+    const r = shFail(
+      `${STUBS} cmd_ws_restore --session ${id} --actor good-actor --reason`);
+    expect(r.code).not.toBe(0);
+    const dec = lastDec()!;
+    expect(dec['actor']).toBe('good-actor');
     expect(Object.keys(dec)).not.toContain('reason');
   });
 });

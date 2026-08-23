@@ -466,7 +466,7 @@ describe('_lc_err', () => {
   it('restarts at 1 on a corrupt counter rather than reaching arithmetic', () => {
     // Mutant: delete the `[[ "$n" =~ ^[0-9]+$ ]] || n=0` rung -> `n=$(( n + 1 ))`
     // evaluates the FILE'S CONTENTS as arithmetic, where a command substitution
-    // inside an array subscript executes (ccd:8784-8787).
+    // inside an array subscript executes (ccd:1251-1252).
     const p = path.join(lcDir(h.home), 'errors');
     h.sh('_lc_err');
     fs.writeFileSync(p, 'a[$(touch $HOME/PWNED)]');

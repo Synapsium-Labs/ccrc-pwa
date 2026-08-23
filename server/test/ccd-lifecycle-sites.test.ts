@@ -73,7 +73,7 @@ describe('session call sites', () => {
     const stub = (rc: number): string => `_accept_first_run_prompts() { return ${rc}; }; _tmux() { echo t; };
       tmux() { :; }; date() { echo 1787000000; };`;
     h.sh(`${stub(0)} _spawn_settle sess 0`);
-    // `_spawn_settle` legitimately `return`s the prompt rc (ccd:9875) — a real,
+    // `_spawn_settle` legitimately `return`s the prompt rc (ccd:9902) — a real,
     // documented non-zero exit, not a bug — so a bash -c whose LAST command is
     // the rc=3 case must not let that become the harness's own exit code.
     h.sh(`${stub(3)} _spawn_settle sess 0 || true`);
@@ -115,8 +115,8 @@ describe('session call sites', () => {
   it('cmd_enable and cmd_start write TWO independent events, not one folded pair', () => {
     // The ruling: a re-entrant verb records two acts because two acts happened.
     // `wrapper` and `workdir` are seeded because cmd_start's ladder dies at
-    // ccd:10139 and ccd:10151 without them; `claude-corp` is in the harness's
-    // home-able roster, so `[[ -x "$WRAPPER_DIR/claude-corp" ]]` (ccd:10140) holds.
+    // ccd:10166 and ccd:10178 without them; `claude-corp` is in the harness's
+    // home-able roster, so `[[ -x "$WRAPPER_DIR/claude-corp" ]]` (ccd:10167) holds.
     h.sh(`_reg_set sess uuid u; _reg_set sess project demo
       _reg_set sess wrapper claude-corp; _reg_set sess workdir "$HOME"
       _supervised_start() { return 0; }; _reg_claim() { :; }; _spawn_settle() { :; }
@@ -265,8 +265,8 @@ describe('workspace call sites', () => {
     const two = h.git(repo, 'rev-parse', 'HEAD').trim();
     h.git(repo, 'update-ref', `refs/ccrc/attic/w/${one}`, one);
     h.git(repo, 'update-ref', `refs/ccrc/attic/w/${two}`, two);
-    // `_attic_project` reads the registry FIRST (ccd:4512-4519); with no row and
-    // no tombstone the verb dies `no such session` at ccd:4529.
+    // `_attic_project` reads the registry FIRST (ccd:4563-4571); with no row and
+    // no tombstone the verb dies `no such session` at ccd:4579.
     h.sh(`_reg_set w project demo; cmd_ws_attic --drop w`);
     const [e] = eventsOf(h.home, 'attic-drop');
     expect(e, 'ws-attic --drop wrote no line').toBeTruthy();

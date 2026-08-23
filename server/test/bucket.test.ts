@@ -75,7 +75,7 @@ describe('sessionBucket', () => {
   // `ws-archive` stops the session, so every cleanup candidate is also dead.
   // A REVIVED workspace falsifies that: `ccd start`/`ccd ensure` clear
   // `.stopped` and `.swapblocked` on a deliberate revival but NEVER
-  // `$REG/<id>.archived` (only `ws-restore` removes it, ccd:4445), so the
+  // `$REG/<id>.archived` (only `ws-restore` removes it, ccd:4498), so the
   // marker outlives the archive it describes and the row is bucketed
   // `cleanup` for ever — no matter how busy the pane is.
   //

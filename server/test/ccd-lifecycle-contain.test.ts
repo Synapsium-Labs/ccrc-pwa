@@ -1,7 +1,7 @@
 // D1's one rule, as a red suite. `$REG/swap.log` is the precedent AND the
 // counter-example: 141,762 B over 49 days with zero corruption from 13
 // concurrent `printf >>` sites, and ~30% of its lines untimestamped because
-// ccd:9009 and ccd:10905 redirect a CHILD'S stdout+stderr into it from inside a
+// ccd:9060 and ccd:10956 redirect a CHILD'S stdout+stderr into it from inside a
 // double-quoted `bash -c` string. That second shape is what this forbids.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -157,7 +157,7 @@ describe('the meas key vocabulary is ONE list', () => {
   // FIX ROUND 1 (Task 24 fix round 1): wave 3 supplied the missing evidence.
   // `cmd_ws_rm`'s attic pin now emits `meas.atticsrc` (`ccd:2983`) and
   // `cmd_ws_restore`'s R4-2 supersede now emits `meas.manifestBytes`
-  // (`ccd:4440`) — re-measuring the same scan at this HEAD finds TWENTY-FOUR
+  // (`ccd:4493`) — re-measuring the same scan at this HEAD finds TWENTY-FOUR
   // distinct names, and the union with L0's now-twelve is the brief's
   // TWENTY-FIVE.
   const all = new Set<string>(LIFECYCLE_MEAS_KEYS);
@@ -177,7 +177,7 @@ describe('the meas key vocabulary is ONE list', () => {
     // `manifestBytes`/`atticsrc` through wave 2 and all of wave 3's first
     // pass — a guard specifically against re-adding either "on the brief's
     // say-so" with no wire evidence. Wave 3's fix round supplied that
-    // evidence (`ccd:2983`, `ccd:4440`), so the two are now real members of
+    // evidence (`ccd:2983`, `ccd:4493`), so the two are now real members of
     // `LifecycleMeas` (see above) and this guard is INVERTED, not deleted:
     // deleting it would let a future edit quietly remove either emitter with
     // nothing noticing, which is exactly the drift class this whole describe

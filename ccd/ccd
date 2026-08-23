@@ -4417,13 +4417,40 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
       # An explicit arity check, not a bare `shift 2`: ccd runs under
       # `set -uo pipefail` with NO `-e`, so a shift past the end of argv fails,
       # shifts nothing, and this loop never terminates.
-      --surface)   [[ $# -ge 2 ]] || _lc_refuse restore "" bad-args "usage: ccd ws-restore [--surface <word>] [--actor <text>] [--reason <text>] --session <id>" verb ws-restore dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
+      # FIX ROUND 3 (operator escalation on F1's residual) — these three
+      # ARITY ("needs a value") refusals fire INSIDE the parsing loop, before
+      # the post-loop ladder below has validated anything. `lc_actor`/
+      # `lc_reason` can already hold an UNVALIDATED (blank or over-cap) value
+      # from an EARLIER `--actor`/`--reason` occurrence when a LATER flag's
+      # missing value triggers one of these — measured: `--actor <600B>
+      # --reason` (no value) put the full 600-byte actor on this refusal,
+      # unexamined, the same leak class F1 closed on the post-loop ladder,
+      # one arm over. Each arm below now applies the identical non-blank-
+      # and-within-cap test the post-loop ladder uses before adding
+      # `dec.actor`/`dec.reason` — a field that is not GIVEN is already ''
+      # here (blank, so excluded the same way) and needs no separate case.
+      --surface)   if [[ $# -lt 2 ]]; then
+                     local lc_ra=(dec.surface "$lc_surface")
+                     [[ -n "${lc_actor//[[:space:]]/}" ]] && _lc_dec_ok "$lc_actor" && lc_ra+=(dec.actor "$lc_actor")
+                     [[ -n "${lc_reason//[[:space:]]/}" ]] && _lc_dec_ok "$lc_reason" && lc_ra+=(dec.reason "$lc_reason")
+                     _lc_refuse restore "" bad-args "usage: ccd ws-restore [--surface <word>] [--actor <text>] [--reason <text>] --session <id>" verb ws-restore "${lc_ra[@]}"
+                   fi
                    lc_gs=1; lc_surface="$2"; shift 2 ;;
       --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
-      --actor)     [[ $# -ge 2 ]] || _lc_refuse restore "" bad-args "usage: ccd ws-restore [--surface <word>] [--actor <text>] [--reason <text>] --session <id>" verb ws-restore dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
+      --actor)     if [[ $# -lt 2 ]]; then
+                     local lc_ra=(dec.surface "$lc_surface")
+                     [[ -n "${lc_actor//[[:space:]]/}" ]] && _lc_dec_ok "$lc_actor" && lc_ra+=(dec.actor "$lc_actor")
+                     [[ -n "${lc_reason//[[:space:]]/}" ]] && _lc_dec_ok "$lc_reason" && lc_ra+=(dec.reason "$lc_reason")
+                     _lc_refuse restore "" bad-args "usage: ccd ws-restore [--surface <word>] [--actor <text>] [--reason <text>] --session <id>" verb ws-restore "${lc_ra[@]}"
+                   fi
                    lc_ga=1; lc_actor="$2"; shift 2 ;;
       --actor=*)   lc_ga=1; lc_actor="${1#--actor=}"; shift ;;
-      --reason)    [[ $# -ge 2 ]] || _lc_refuse restore "" bad-args "usage: ccd ws-restore [--surface <word>] [--actor <text>] [--reason <text>] --session <id>" verb ws-restore dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
+      --reason)    if [[ $# -lt 2 ]]; then
+                     local lc_ra=(dec.surface "$lc_surface")
+                     [[ -n "${lc_actor//[[:space:]]/}" ]] && _lc_dec_ok "$lc_actor" && lc_ra+=(dec.actor "$lc_actor")
+                     [[ -n "${lc_reason//[[:space:]]/}" ]] && _lc_dec_ok "$lc_reason" && lc_ra+=(dec.reason "$lc_reason")
+                     _lc_refuse restore "" bad-args "usage: ccd ws-restore [--surface <word>] [--actor <text>] [--reason <text>] --session <id>" verb ws-restore "${lc_ra[@]}"
+                   fi
                    lc_gr=1; lc_reason="$2"; shift 2 ;;
       --reason=*)  lc_gr=1; lc_reason="${1#--reason=}"; shift ;;
       *)           lc_args+=("$1"); shift ;;

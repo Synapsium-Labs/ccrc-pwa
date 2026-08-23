@@ -1,6 +1,6 @@
 // server/test/ccd-ws-restore-supersede.test.ts
 //
-// Today archive -> restore is a clean forgery of history: ccd:4445 unlinks
+// Today archive -> restore is a clean forgery of history: ccd:4498 unlinks
 // `.archived`, `.archivedreason` and `.archivemanifest` and nothing anywhere
 // records that they existed. Four rows on the live box are stamped `merged:#N`
 // while heartbeating right now, so the one field in the registry carrying a WHY
@@ -47,7 +47,7 @@ describe('ws-restore records what it is about to erase', () => {
   });
 
   it('THE MUTANT: an emit moved below the rm -f reads three files that are gone', () => {
-    // Mutant: move the `_lc_done restore` line below ccd:4445 -> this fails
+    // Mutant: move the `_lc_done restore` line below ccd:4498 -> this fails
     // with `expected undefined to be 'merged:#42'`.
     const id = archived();
     h.sh(`${STUB} cmd_ws_restore --session ${id} 2>/dev/null || true`);

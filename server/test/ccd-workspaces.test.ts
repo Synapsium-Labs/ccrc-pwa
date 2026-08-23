@@ -222,7 +222,7 @@ describe('ws-add', () => {
       .toBe(path.join(home, 'worktrees', 'demo', 'quiet-mesa'));
     expect(reg('demo-quiet-mesa', 'home')).not.toBeNull();
     // wrapper and uuid are what _spawn's own guard demands
-    // (`[[ -n "$wrapper" && -n "$workdir" && -n "$uuid" ]] || die ...`, ccd:9729).
+    // (`[[ -n "$wrapper" && -n "$workdir" && -n "$uuid" ]] || die ...`, ccd:9756).
     // _spawn is stubbed to a no-op under every ws-add test, so that guard never
     // runs here — these two assertions are what would catch a dropped
     // `_reg_set` for either field instead of a silent, worktree-already-created

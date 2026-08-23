@@ -87,7 +87,7 @@ describe('cmd_swap carries the transcript', () => {
   });
 
   it('a gpt -> Anthropic swap sanitizes the copy, and every carried name IS that file', () => {
-    // Unchanged contract (ccd:7044), re-pinned at the verb: the Codex lane
+    // Unchanged contract (ccd:10495), re-pinned at the verb: the Codex lane
     // writes EMPTY assistant text blocks, which the Anthropic API rejects on
     // the next turn. Ordering it before the hardlinks is what stops a sibling
     // name keeping the unsanitized inode.

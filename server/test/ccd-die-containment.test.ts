@@ -29,7 +29,7 @@ import { CCD } from './ccdWsHelpers.js';
 /** A `#` comment starts only where a `#` sits at the start of a word and
  *  outside quotes — `"$REG/$id.hold"` and `'#'` are not comments. `ccd/ccd`
  *  discusses this very hazard in ~40 comments (`fs=$(_spawn_start …)` appears
- *  verbatim at ccd:9682), so a scanner that reads comments as code answers
+ *  verbatim at ccd:9733), so a scanner that reads comments as code answers
  *  "dozens of offenders" and is useless. */
 function stripComment(line: string): string {
   let out = '';
@@ -275,7 +275,7 @@ _spawn()       { _spawn_start "$1" "$2" || return $?; }
   });
 
   it('does NOT read a COMMENT about the hazard as the hazard', () => {
-    // ccd:9682 says, in prose, `fs=$(_spawn_start …)`. A scanner that counts
+    // ccd:9733 says, in prose, `fs=$(_spawn_start …)`. A scanner that counts
     // that answers dozens of false offenders and gets deleted.
     const src = `${PRELUDE}
 _spawn_start() { die "incomplete registry"; }
@@ -324,7 +324,7 @@ describe('ccd/ccd', () => {
     expect(src.split('\n').length).toBeGreaterThan(8000);
     expect(functions(src).length).toBeGreaterThan(100);
     // `_spawn_start` is the D-B8-1 function and still carries its `die`
-    // (ccd:9729). `_spawn` and `_supervised_start` inherit it by call. Every
+    // (ccd:9756). `_spawn` and `_supervised_start` inherit it by call. Every
     // `cmd_*` verb that validates its argv dies directly. `_lc_refuse`
     // (task 16) is the lifecycle journal's own direct `die` caller — its own
     // docstring names this exact set as the reason it must never be wrapped

@@ -337,7 +337,7 @@ describe('_swap_carry_jsonl', () => {
   });
 
   it('leaves the transcript alone when sanitize is 0', () => {
-    // The contract is unchanged from ccd:7044 — only `gpt` -> Anthropic
+    // The contract is unchanged from ccd:10495 — only `gpt` -> Anthropic
     // rewrites anything. Kills "sanitize everything, it is harmless".
     const empty = '{"message":{"content":[{"type":"text","text":""}]}}';
     plant(SRC, '-data-projects-demo', `${empty}\n`);

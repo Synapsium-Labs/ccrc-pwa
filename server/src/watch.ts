@@ -94,7 +94,7 @@ const PROVENANCE_WINDOW_MS = 3_600_000;
  *  `registry-branch-drift` joins the set for the same "no title fixes it"
  *  reason as the worktree pair above: `cmd_ws_rename` now refuses when git's
  *  own worktree record disagrees with the registry's `branch` field — the
- *  corroboration `cmd_ws_reap` already requires (`ccd:5736`) — because
+ *  corroboration `cmd_ws_reap` already requires (`ccd:5763`) — because
  *  without it a hand `git branch -m` (which moves git's answer but never
  *  updates the registry) leaves this sweep's own condition 2 believing the
  *  branch is still at its born name while `ws-rename` would act on whatever
@@ -161,7 +161,7 @@ const MAIL_SWEEP_MS = 10_000;
  *  own `COMPACT_QUIET` (`ccd/ccd:142`), taken rather than re-derived: this is
  *  the same judgement about the same panes, and two numbers for one policy is
  *  two numbers to get out of step. Measured from `statusUpdatedAt`, which
- *  Claude Code ticks on every busy<->idle transition (`ccd/ccd:6697-6698`). */
+ *  Claude Code ticks on every busy<->idle transition (`ccd/ccd:6724-6725`). */
 const MAIL_QUIET_MS = 60_000;
 
 /** No session gets two injections inside this window, however much mail is
@@ -358,7 +358,7 @@ export class FleetWatcher {
    *  changes with the uuid.
    *
    *  THE SAME KEY CHANGE ALSO HAPPENS WITHOUT A REAP: `ccd`'s `_sync_uuid`
-   *  (`ccd:6417`) rewrites the registry's `uuid` field in place, on the SAME
+   *  (`ccd:9004`) rewrites the registry's `uuid` field in place, on the SAME
    *  live session, whenever Claude Code rotates its own session uuid (a
    *  `/clear`, a compaction) — no `ws-reap`/`ws-add` cycle required. So "a
    *  server restart earns one retry", above, is not the only way a pair earns

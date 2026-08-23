@@ -169,7 +169,7 @@ describe('ccd caps', () => {
     const src = fs.readFileSync(CCD, 'utf8');
     // Anchored on the dispatcher's own preamble, and the anchor's uniqueness is
     // asserted. `case "${1:-}" in` occurs TWICE — cmd_ws_gc's option parser
-    // (ccd:8852) comes first — so slicing from indexOf landed inside ws-gc, and
+    // (ccd:8879) comes first — so slicing from indexOf landed inside ws-gc, and
     // the arm regex missed ws-gc's arms only because they are indented four
     // spaces instead of two. That coincidence held the whole parity check up: one
     // re-indentation and this test would have compared the caps list against
@@ -286,7 +286,7 @@ describe('_ws_stash_count', () => {
     // The unnamed form is the COMMON one — a bare `git stash` — and every other
     // fixture in this file and in ccd-ws-audit.test.ts uses `stash push -m`,
     // which is why deleting the WIP arm left the suite green. What it would
-    // cost: `_ws_reap_eval` gates `stashes-present` on this count (ccd:6116),
+    // cost: `_ws_reap_eval` gates `stashes-present` on this count (ccd:6143),
     // so a workspace whose only stash was made with a bare `git stash` would
     // read 0, the §7 guard would not fire, and the reap would CAS-delete the
     // branch those stashes name.
@@ -961,7 +961,7 @@ describe('ws-archive refuses rather than record a manifest that lies', () => {
     // `status --porcelain` failed, worktreeBytes 0 because _ws_gc_bytes returned
     // '-' and the fallback zeroed it, ignoredDigest = sha256(''). Measured before
     // the fix: "archived demo-quiet-basin — worktree kept at …, nothing deleted",
-    // exit 0, marker set. ws-restore already refuses this shape (ccd:4417).
+    // exit 0, marker set. ws-restore already refuses this shape (ccd:4468).
     const r = shFail(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/worktree is gone/);
@@ -1168,7 +1168,7 @@ describe('ws-archive refuses rather than record a manifest that lies', () => {
     // the fix: the archived marker was set, exit 0, and the persisted record was
     //   {"id":,"branch":,"base":,"tip":,"dirty":0,…}
     // — not JSON at all, as the archive record. ccd's other python3 call site
-    // (ccd:10447) warns and continues; that is right for a best-effort transcript
+    // (ccd:10474) warns and continues; that is right for a best-effort transcript
     // sanitize and wrong for a record deletions are authorised from.
     const r = shFail(`${ARCH} cmd_ws_archive --session demo-quiet-basin`,
                      { PATH: `${stub}:${process.env.PATH ?? ''}` });
@@ -1281,8 +1281,8 @@ describe('ws-restore', () => {
     // assignment is a no-op and its deletion is invisible. The state it exists for
     // is an entry that never got one — ws-add is interrupted between `_spawn` and
     // `_reg_set started 1` — and the cost is not cosmetic: `cmd_ensure` and
-    // `cmd_start` read this flag to choose `new` over `resume` (ccd:10333,
-    // ccd:10181), so a restored session missing it gets re-spawned as a FRESH
+    // `cmd_start` read this flag to choose `new` over `resume` (ccd:10360,
+    // ccd:10208), so a restored session missing it gets re-spawned as a FRESH
     // session by the next supervise tick, discarding the transcript ws-restore
     // just resumed from.
     workspace('demo', 'quiet-basin');
@@ -1409,7 +1409,7 @@ describe('ws-attic', () => {
   it('rejects any mode word other than --session or --drop', () => {
     // The session has to EXIST for the mode word to be what is under test.
     // Without it `_attic_project` fails and the command dies at `no such
-    // session` (ccd:4529) before the case is reached, so the assertion cannot
+    // session` (ccd:4579) before the case is reached, so the assertion cannot
     // tell a rejected mode from a missing session: deleting the `*)` arm left
     // the whole 456-test suite green, while `ccd ws-attic --frobnicate <real
     // id>` then fell out of the case and exited 0 with no output — a mistyped

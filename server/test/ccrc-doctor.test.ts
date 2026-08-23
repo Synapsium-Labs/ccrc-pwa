@@ -701,7 +701,7 @@ function stubHostname(home: string): void {
 }
 
 /** `n` ccd sessions in the registry, as ccd itself counts them: one `<id>.uuid`
- *  file each (ccd:8499). */
+ *  file each (ccd:8526). */
 function writeSessions(home: string, n: number): void {
   const reg = join(home, '.cc-sessions');
   mkdirSync(reg, { recursive: true });
