@@ -433,13 +433,21 @@ describe('ws-hold keeps ONE reason — its own', () => {
   });
 
   it('does NOT strip --reason: the hold reason is still positional and still mandatory', () => {
-    // If the loop stripped `--reason`, the residue would be `--session <id>`,
-    // arity 2, the exact-arity guard would refuse a call that is correct, and
-    // it would be impossible to hold a workspace at all.
+    // Fix round 1 on this task's review: the brief's own sample call here
+    // never passed `--reason` at all, so this test refused identically with
+    // or without a `--reason` case arm in the strip loop — vacuous against
+    // the exact mutant it is paired with (reviewer measurement: 7 of 11
+    // sibling tests in this block went red under that mutant, this one did
+    // not). Fixed by making the call an actually-valid hold that INCLUDES
+    // `--reason`: if the loop had a `--reason` arm, it would strip both
+    // `--surface` and `--reason`+its value, leaving residue `--session <id>`
+    // alone — arity 2 — and the exact-arity guard would refuse a call that
+    // is really correct, making it impossible to hold a workspace with any
+    // wave-5 flag present at all. Under real code this call succeeds; under
+    // that mutant it refuses.
     const id = seedWorkspace();
-    const r = shFail(`${HOLD_STUBS} cmd_ws_hold --session ${id} --surface pwa`);
-    expect(r.code).not.toBe(0);
-    expect(r.stderr).toContain('usage: ccd ws-hold --session <id> --reason <text>');
+    const out = h.sh(`${HOLD_STUBS} cmd_ws_hold --session ${id} --reason 'program:x wave:1/4' --surface pwa`);
+    expect(out).toBe(`held ${id}: program:x wave:1/4`);
   });
 
   it('still refuses a whitespace-only hold reason — ccd:3568 is untouched', () => {
