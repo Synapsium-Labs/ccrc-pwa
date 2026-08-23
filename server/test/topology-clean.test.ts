@@ -29,7 +29,7 @@
 // planted in README.md), 30/30 on revert. Task 10 final close 2026-08-23:
 // one token each of 3 classes (public IPv4, CGNAT, duckdns) planted on one
 // README.md line → exactly 3 reds, one per class; 30/30 on revert.
-// Whole-branch review re-measure 2026-08-23 (D-202 case flags, D-203 path
+// Whole-branch review re-measure 2026-08-23 (D-206 case flags, D-207 path
 // corpus): with both gaps probed at once — a case-variant of each name class
 // planted in README.md AND a tracked file NAMED after the tailnet residue —
 // the pre-fix suite ran 30/30 GREEN (both blindnesses demonstrated), the
@@ -91,7 +91,7 @@ for (const file of trackedFiles) {
 }
 
 /** Every tracked PATH as its own one-line pseudo-file, fed through the same
- *  classes (D-203, whole-branch review): a tracked file NAMED after a
+ *  classes (D-207, whole-branch review): a tracked file NAMED after a
  *  forbidden token with clean contents evaded the contents-only walk — the
  *  name ships in every clone as loudly as the bytes do. No exclusion at all
  *  here: SELF and the binary extensions are skipped from CORPUS because their
@@ -260,7 +260,7 @@ const FORBIDDEN: ForbiddenClass[] = [
     // (`<tailnet>.ts.net`), which the `>` keeps out of the pattern's reach.
     // Bare `ts.net` stays legal: it is the PUBLIC SUFFIX, load-bearing in
     // webauthn.ts's PUBLIC_SUFFIX_TRAPS and every PSL discussion.
-    // Case-insensitive (D-202, whole-branch review): DNS is case-blind, so a
+    // Case-insensitive (D-206, whole-branch review): DNS is case-blind, so a
     // capitalised residue token or an upper-cased `.ts.net` name locates the
     // same real box — the roster/operator classes already carried `i`, and
     // this class landing without it admitted every casing but lowercase.
@@ -295,7 +295,7 @@ const FORBIDDEN: ForbiddenClass[] = [
     name: 'duckdns subdomain',
     // DuckDNS names are claimed by a person — any subdomain outside the
     // placeholder vocabulary is somebody's real, resolvable box.
-    // Case-insensitive (D-202, same reason as the tailnet class: DNS is
+    // Case-insensitive (D-206, same reason as the tailnet class: DNS is
     // case-blind). The `allowed` vocabulary stays EXACT-lowercase on purpose:
     // the docs speak the canonical placeholder spelling, so a case-variant
     // placeholder is a vocabulary drift the ratchet flags, not admits.
@@ -389,7 +389,7 @@ describe('the corpus this walks', () => {
   });
 
   it('the path corpus reaches even the files whose CONTENTS are excluded', () => {
-    // D-203: the content walk's two escapes (SELF, binary extensions) are
+    // D-207: the content walk's two escapes (SELF, binary extensions) are
     // byte-arguments, so the path corpus must cover MORE than CORPUS does —
     // this suite's own path included.
     const paths = PATH_CORPUS.map((c) => c.file);
@@ -433,7 +433,7 @@ for (const cls of FORBIDDEN) {
     });
 
     it('and no tracked path is NAMED after it', () => {
-      // D-203: the pseudo-line rides the same violationsOf machinery as the
+      // D-207: the pseudo-line rides the same violationsOf machinery as the
       // content scan, so the liveness rows above cover this walk too — a
       // neutered violationsOf reds them before it could quietly green this.
       expect(violationsOf(cls, PATH_CORPUS)).toEqual([]);

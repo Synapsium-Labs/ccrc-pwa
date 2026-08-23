@@ -85,8 +85,9 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   fails to boot, not degrades. If node-floor's absolute assertion (3) is red while (1–2) are green, **RAISE
   engines — never lower them to make it green.**
 - **Deploy** (mechanics in README "Deploy"): `bash deploy/deploy.sh` (server), `bash deploy/deploy.sh agent <host>`.
-  **Coordinates live in `~/.ccrc/deploy.env`** — machine-local, outside every checkout (this box:
-  `CCRC_BOX=you@203.0.113.7`, `CCRC_SSH_KEY=$HOME/.ssh/your-key-b`, `CCRC_SSH_PORT=22`). deploy.sh has
+  **Coordinates live in `~/.ccrc/deploy.env`** — machine-local, outside every checkout
+  (`CCRC_BOX`, `CCRC_SSH_KEY`, `CCRC_SSH_PORT`, and `CCRC_SW_DENYLIST` for a box with co-tenants; this
+  fleet's real values: `deploy/reference-fleet.md`, gitignored). deploy.sh has
   **no default target** and refuses with exit 2 rather than guessing; env vars override the file and
   `CCRC_DEPLOY_ENV` points at another. Pinned by `server/test/deploy-coordinates.test.ts` (5/5 red without the
   guard). The roster seed defaults to `deploy/accounts.default.json`, never the reference fleet's roster.
