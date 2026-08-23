@@ -1,80 +1,237 @@
-# ccrc — self-hosted remote control for the Claude Code fleet
+<div align="center">
 
-A mobile-first, installable PWA to view and drive the `ccd` fleet of Claude Code
-sessions on server-box, over Tailscale. Whether those sessions run as
-`--remote-control` panes is **per box**, from `~/.ccrc/remote-control` (one line,
-`on` or `off`; the reference fleet says `on`, a fresh `ccrc install` seeds
-`off`). It follows
-sessions across account swaps — the thing the official claude.ai app can't do —
-and the swap now carries the *conversation itself*: the transcript is located
-**by uuid**, globally unique, across every project directory under the source
-account, rather than by one guessed path. A swap that finds nothing to carry
-**refuses** rather than completing and losing the history. The PWA also still
-finds history a pre-fix swap stranded on another account, banked wherever a
-prior swap left it — a chat that had to look elsewhere says so, under a banner
-naming the account.
+# ccrc
 
-**Install URL (tailnet only):** `https://server-box.tailnet-example.ts.net:8443/`
-Add to home screen in Android Chrome / iOS Safari for the standalone app.
+**Self-hosted remote control for a fleet of Claude Code sessions.**
+Run it on your own box. Drive twenty agents from your phone.
 
-> ccrc lives on port **8443**, not 443 root. The `claude-docserver` owns 443
-> root — it serves every project's docs at `https://<host>/<project>/…`, and
-> those root-path URLs are referenced all over generated specs/plans. A PWA
-> can't share that path space (its SPA fallback would swallow every doc path
-> and serve index.html), so ccrc keeps its own port.
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](#license)
+[![Node](https://img.shields.io/badge/node-%E2%89%A522.13-339933.svg?logo=node.js&logoColor=white)](#requirements)
+[![Self-hosted](https://img.shields.io/badge/self--hosted-one%20box-8b5cf6.svg)](#quickstart)
+[![No telemetry](https://img.shields.io/badge/telemetry-none-64748b.svg)](#privacy)
+[![PWA](https://img.shields.io/badge/PWA-installable-f59e0b.svg)](#quickstart)
 
-## Architecture
+</div>
 
-- `server/` — Node ≥22.13.0 (`engines.node`; `node:sqlite` needs it unflagged,
-  and `server/test/node-floor.test.ts` pins both the declaration and the
-  import) + Fastify (TS ESM). One process, systemd user unit
-  `ccrc.service`, bound to the Tailscale address only (`CCRC_HOST:CCRC_PORT`,
-  default `127.0.0.1:7788`; the box runs `203.0.113.7:7788`). One SQLite
-  database, `~/.ccrc/coord.db`, opened with `node:sqlite` (`DatabaseSync`,
-  WAL, `user_version` migrations that refuse to start rather than open
-  empty) — holding runs, work items, mail and coordinator state. This
-  repeals "No database," deliberately and in writing: the deferral had an
-  owner and a named trigger
-  (`docs/superpowers/specs/2026-08-06-attention-ux-design.md:356-357`, "No
-  SQLite… belongs to Build 7, not here"), and Build 7 is that trigger
-  arriving. ccd's flat files — the registry, the hold, `.prhistory` — stay
-  the fleet's own authority; the database holds only what coordination adds
-  on top of them, never a replacement for them (see "Fleet coordination"
-  below). Everything else still reads ccd's flat files and shells out to
-  `ccd`/`tmux` directly through an injected `Runner`/`FleetIO` in **local**
-  fleet mode; in **remote** fleet mode the exact same seams are backed by a
-  WS client talking to `agent/` on the fleet host instead (see "Remote fleet
-  mode" below). Either way the whole thing is unit-testable off-box against
-  fixtures.
-- `agent/` — Node ≥22.13.0 (same `engines.node` floor as `server/`; the three
-  packages must agree — `node-floor.test.ts` — though `node:sqlite` itself is
-  server-only) WS service (TS ESM) that runs ON the fleet host and
-  exposes a small, whitelisted exec/file/tail/pty surface over a bearer-token
-  connection. Only needed for remote fleet mode; local mode never touches it.
-- `pwa/` — React + Vite installable PWA ("phosphor & ink" design). Builds into
-  `server/dist-pwa`, which the server serves at `/`.
-- `shared/` — `agent-protocol.ts` (server↔agent WS message types) and
-  `api.ts` (server↔PWA REST/WS types), imported by both `server/` and
-  `agent/`.
-- `ccd/` — the pieces that live on the **fleet host**: `ccd` itself, plus
-  `session-hook.sh` (the Claude Code hook that reports each session's state)
-  and `install-session-hooks.sh` (the idempotent installer that registers it
-  in every wrapper home). See "How a session's state is known" below.
-- `deploy/` — `ccrc.service` / `ccrc-agent.service` (systemd user units),
-  `ccrc.env.example` / `ccrc-agent.env.example` (env templates — copy to
-  `ccrc.env` / `ccrc-agent.env`, gitignored, to supply real tokens),
-  `notify.sh` (ccd swap hook → `/api/notify`, now firing on a swap **refusal**
-  as well as a landing), `deploy.sh`. A refusal's durable half is not the
-  notice — a banner raised with no socket open is gone, and the operator who
-  was not watching is the one who needs to know — it is the registry field
-  `$REG/<id>.swapblocked`, read back on every fleet poll and rendered on the
-  row until a later swap or a deliberate revive clears it.
+> Claude Code runs in a terminal, on a box, in a tmux pane. That is fine for one session.
+> It stops being fine at twenty — when you are away from the desk, when a session is
+> blocked on a question you could answer in four seconds, and when the account it runs on
+> hits its limit and the work has to move somewhere else.
+>
+> **ccrc is the console for that.** One installable web app, served by your own machine,
+> that sees every session, answers their questions, and moves a running conversation
+> between accounts without losing it.
 
-HTTPS is fronted by `tailscale serve` on port 8443 (a secure context is required
-for the service worker + WebAPK install). 443 root is the claude-docserver
-(project docs at `/<project>/…`) with mech-fleet-preview at `/fleet`; ccrc can't
-take 443 root without its SPA fallback swallowing every doc path, so it stays on
-its own port.
+## Why
+
+The official claude.ai app cannot follow a session across an account swap. ccrc can — and
+that is the feature the whole design is bent around.
+
+When a session's account runs out, ccrc relocates the **conversation itself**. The
+transcript is found **by uuid**, globally unique, across every project directory under the
+source account, rather than by one guessed path. A swap that finds nothing to carry
+**refuses** rather than completing and quietly losing your history. The PWA also finds
+history that an older, buggier swap stranded on another account — and the chat that had to
+look elsewhere says so, under a banner naming where it came from.
+
+Everything else in ccrc exists to serve one loop:
+
+```
+spec  →  plan  →  waves of subagents  →  per-PR review lenses  →  whole-branch pass
+```
+
+## What you get
+
+| | |
+|---|---|
+| **Follow a session across accounts** | The swap carries the conversation, located by uuid, and refuses rather than losing it. |
+| **Multi-wave programs** | Open a run, dispatch a wave, and the server tracks it — not a human holding state in their head. |
+| **Claims are re-measured, never believed** | A worker reporting "wave done" is checked against the workspace branch tip and `.prhistory`, from the git refs on disk. |
+| **Mail between sessions** | Delivered only into an idle turn boundary, so a nudge never lands mid-thought. The body lives in a durable store; what arrives is one line. |
+| **Hook-first session state** | Each session reports its own state through a Claude Code hook; scraping the tmux pane is the ranked fallback, not the source. |
+| **Answer from the lock screen** | A session asks a question; you get a push notification and answer it without opening a terminal. |
+| **Workspace holds** | A program declares a claim on a worktree. No timeout, no expiry — the reason string *is* the display, and four separate destructive paths refuse while it stands. |
+| **Two-phase workspace destruction** | Nothing irreversible happens on one tap, and every precondition is re-proved at the moment it matters. |
+| **Branch names the model already wrote** | The branch takes the name from the work, instead of asking you to invent one. |
+| **Accounts are runtime data** | A roster in `~/.ccrc/accounts.json` — usage and placement projected *before* you tap, not discovered after. |
+| **An optional session gate** | Passkeys or a passphrase, off by default, and it fails shut on every ambiguity rather than open. |
+| **One whitelisted socket** | Split across two boxes, the server never SSHes the fleet host. It drives it through a closed set of exec verbs, and nothing else. |
+
+## Quickstart
+
+One box, no TLS, no exposure — the default install:
+
+```bash
+git clone https://github.com/Synapsium-Labs/ccrc-pwa.git && cd ccrc
+bash install.sh
+```
+
+That builds the PWA and the server, then hands off to `ccrc install`, which seeds
+`~/.ccrc`, installs the systemd user units, and registers the session hook in every
+account home it finds. The server comes up on `127.0.0.1:7788`.
+
+Then:
+
+```bash
+ccrc doctor      # 26 checks: binaries, units, roster, hook registration, auth posture
+ccrc status      # what is running, where
+```
+
+Open `http://127.0.0.1:7788/` and add it to your home screen.
+
+> **Reaching it from your phone.** ccrc binds loopback and speaks plain HTTP on purpose —
+> a PWA needs a *secure context* to install, so something in front has to terminate TLS.
+> Bring your own reverse proxy, or let ccrc configure one:
+>
+> ```bash
+> ccrc expose duckdns   # a dynamic-DNS name + Caddy + an automatic certificate
+> ccrc expose byo       # you own the name and the proxy; ccrc just records the origin
+> ccrc expose status    # what is configured right now
+> ```
+>
+> Exposing the box to the internet without arming the session gate is the one mistake
+> worth being loud about. See [The session gate](#the-session-gate-ccrc_auth-off-by-default).
+
+<details>
+<summary><b>Installing from a release artifact instead of a checkout</b></summary>
+
+Release mode needs only `curl` — no clone, no toolchain, no build on the box. It fetches
+`SHA256SUMS` first, then the tarball, and runs `sha256sum -c` **before extracting a single
+file**:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/Synapsium-Labs/ccrc-pwa/main/install.sh
+bash install.sh --release
+```
+
+Anything after `--release` passes through to `ccrc install`, which is how `--role` rides:
+
+```bash
+bash install.sh --release --role fleet
+```
+
+**Status:** no release has been cut yet — there are no tags — so `--release` currently ends
+at curl's own 404. Build one locally with
+`bash deploy/build-release.sh --untagged --out release-out`.
+
+Note that `curl … | bash` (piping the script into a shell) does **not** work: read from
+stdin, `BASH_SOURCE` is unset and the script dies under `set -u` before its argument loop.
+Download it, or use `bash <(curl -fsSL …)`.
+
+</details>
+
+## Requirements
+
+- **Node ≥ 22.13.0** — not negotiable, and not a style choice: the coordination database
+  is `node:sqlite`, which is flagged below that. All three packages declare the same floor
+  and a test pins it.
+- **git**, **tmux**, **bash**, **curl**, **rsync**.
+- **`gh`** (the GitHub CLI, authenticated with `repo` scope) — PR state, review and merge
+  go through it.
+- **`jq`**, **`python3`**, **`flock`** — ccrc reads the box's small JSON files with the
+  first, the session hook and registry locking are the second and third.
+- **systemd user units**, with `loginctl enable-linger` set — without lingering your
+  sessions die with your last login.
+- **Claude Code**, installed and authenticated for at least one account.
+- Linux. The session layer is systemd + tmux; there is no macOS path.
+
+`ccrc doctor` checks all of this and tells you which one is missing, rather than failing
+somewhere further in.
+
+## How it works
+
+The default install is **one box**. The server is a single Fastify process that serves the
+PWA, reads the fleet's flat files directly, and shells out to `ccd` and `tmux`.
+
+```mermaid
+flowchart TB
+    B["Browser / installed PWA"]
+
+    subgraph BOX["one box — the default install"]
+      P["TLS-terminating reverse proxy<br/>optional; 'ccrc expose' configures Caddy"]
+      S["ccrc-server — Fastify, systemd user unit<br/>binds 127.0.0.1:7788, plain HTTP"]
+      D[("~/.ccrc/coord.db — node:sqlite, WAL<br/>~/.ccrc/state-cache.json")]
+      C["ccd + tmux"]
+      U["claude-session@ID.service<br/>ExecStart: ccd supervise ID"]
+      T["tmux session cc-ID<br/>Claude Code process"]
+      R[("~/.cc-sessions · ~/.cc-limits<br/>.prhistory · ~/.cc-clips")]
+    end
+
+    B -->|"HTTPS"| P
+    P -->|"HTTP to 127.0.0.1:7788"| S
+    B -.->|"plain HTTP on a loopback/dev box"| S
+    S -->|"serves the PWA bundle at / ; /api/* ; /ws/fleet, /ws/session, /ws/pty"| B
+    S -->|"child_process execFile — local fleet mode"| C
+    S -->|"node:fs reads"| R
+    S ---|"local disk"| D
+    C -->|"systemctl --user"| U
+    U -->|"supervises"| T
+    T -->|"session-hook.sh writes hookstate.json"| R
+```
+
+Sessions are not children of the server. Each one is its own systemd user unit running
+`ccd supervise`, which owns a tmux session — so the server can restart, or be replaced
+mid-deploy, without touching a running turn.
+
+<details>
+<summary><b>The optional two-box split</b></summary>
+
+Set `CCRC_FLEET=remote` and the same seams are backed by a WebSocket to an agent on the
+fleet host instead of local `execFile`. The server never SSHes that box.
+
+```mermaid
+flowchart LR
+    B["Browser / installed PWA"]
+
+    subgraph SH["server host — CCRC_FLEET=remote"]
+      S["ccrc-server<br/>127.0.0.1:7788"]
+      D[("~/.ccrc/coord.db<br/>~/.ccrc/state-cache.json")]
+    end
+
+    subgraph FH["fleet host"]
+      A["ccrc-agent<br/>listens on 7789, private iface only"]
+      C["ccd · tmux · claude-session@ID units"]
+      R[("~/.cc-sessions · ~/.cc-limits<br/>.prhistory · ~/.cc-clips")]
+    end
+
+    B -->|"HTTPS via a TLS-terminating proxy"| S
+    S ---|"local disk"| D
+    S -->|"ONE WebSocket — bearer token in the first frame"| A
+    A -->|"exec: only tmux and ccd, by argv prefix"| C
+    A -->|"reads whitelisted paths; writes ~/.cc-clips only"| R
+    C -->|"writes"| R
+```
+
+The agent's exec surface is a closed two-name set — `tmux` and `ccd` — matched on the bare
+command name and an argv **prefix**. There is no shell, and no way to add a third name from
+the server side.
+
+</details>
+
+### The pieces
+
+| Path | What it is |
+|---|---|
+| `server/` | Fastify (TS ESM), one systemd user unit. Owns `~/.ccrc/coord.db` — runs, work items, mail and coordinator state — via `node:sqlite` with WAL and migrations that refuse to start rather than open empty. |
+| `pwa/` | React + Vite installable PWA. Builds into `server/dist-pwa`, which the server serves at `/`. |
+| `agent/` | A small whitelisted exec/file/tail/pty surface over a bearer-token WebSocket. Needed only for the two-box split; local mode never touches it. |
+| `ccd/` | The bash session layer that lives on the fleet host: `ccd` itself, the Claude Code hook that reports each session's state, and its idempotent installer. |
+| `shared/` | The wire vocabulary — server↔agent and server↔PWA types — imported by both sides. |
+| `deploy/` | systemd units, env templates, and a convenience wrapper for pushing a working tree to an already-installed box. |
+
+ccd's flat files stay the fleet's own authority. The database holds only what coordination
+adds *on top* of them, and never replaces them — a lost `coord.db` reconstructs.
+
+## Privacy
+
+ccrc has no telemetry, no analytics, and no phone-home. It talks to your box, the Claude
+Code processes on it, and — only if you turn them on — the dynamic-DNS provider you chose
+for a name and a certificate. Your transcripts never leave the machine you installed it on.
+
+---
+
+The rest of this README is the reference: how each mechanism actually works, what the
+guarantees are, and where they stop. It is written for someone changing the code.
 
 ## How a session's state is known
 
@@ -551,10 +708,9 @@ bash ccd/ccrc-adopt                  # a HAND-BUILT box: rediscover its accounts
 ccrc wrappers                        # the other direction: roster → ~/.local/bin/<id>, writing only what ccrc marked as its own
 ```
 
-- `deploy/accounts.migration.json` (the default) is this fleet's five accounts
-  byte for byte; `deploy/accounts.default.json` is the single-`claude` roster a
-  fresh install should start from. `CCRC_ACCOUNTS_JSON` points the deploy at
-  either, or at a roster of your own — and the deploy validates that file
+- `deploy/accounts.default.json` is the roster a fresh install starts from: a
+  single account, no generated wrappers. `CCRC_ACCOUNTS_JSON` points the deploy
+  at a roster of your own — and the deploy validates that file
   **locally, before seeding it**, because a seeded roster is never overwritten
   again and a bad one would have to be deleted by hand over ssh.
 - `ccd/ccrc-adopt` goes the other direction — disk → roster — for a box built
@@ -840,7 +996,7 @@ installed the box and never rewritten after.
 | Lane | Seeds | Why that value |
 |---|---|---|
 | `ccrc install` (`_inst_rc`) | `off` | `--remote-control` publishes a session to claude.ai; a fresh single-box install has made no such claim and must not start because an installer defaulted it |
-| `deploy/deploy.sh agent` | `on` | the reference fleet host has run every session with the flag since before the flag existed — the file **describes** that box rather than deciding something new about it |
+| `deploy/deploy.sh agent` | `on` | a box that was already running every session with the flag; seeding `on` **describes** that box rather than deciding something new about it |
 
 `ccd`'s `_rc_enabled` is the only reader and the authority: first line,
 whitespace stripped, must be exactly `on`; **absent, unreadable, empty or
@@ -887,20 +1043,28 @@ systemctl --user restart ccrc.service
 
 > **`CCRC_RP_ID` and `CCRC_ORIGIN` must be set in the same edit that arms
 > `CCRC_AUTH`.** Their defaults are `localhost` and `http://localhost:<port>`;
-> armed with those on a box actually reached over the tailnet, **every
+> armed with those on a box actually reached under a real name, **every
 > non-exempt write and every `/ws/*` upgrade is refused** — a console that
 > loads, reads and cannot act — **and nothing warns at boot.** The pair is
 > internally coherent, so the boot check that catches a *disagreeing* pair
-> passes it, and a self-check that could catch it is not implementable behind
-> `tailscale serve` (the server cannot learn the hostname it is reached under).
+> passes it, and a self-check that could catch it is not implementable behind a
+> TLS-terminating proxy at all: the server never sees the hostname it was
+> reached under, the proxy is the only party that knows it, and a check that
+> tried to guess would have to fail shut on correctly-configured boxes too.
 > The only signals are one journal line per refusal and a `foreign-origin`
 > failure on every write.
 
-`CCRC_RP_ID` is the **registrable domain** (`tailnet-example.ts.net`,
-`<name>.duckdns.org`) — never a bare public suffix, and never derived by
-stripping labels off the hostname, because `ts.net` and `duckdns.org` are
-themselves public suffixes and nothing here carries a PSL to know how many
-labels to strip. A credential records the rpId it was enrolled under, so
+`CCRC_RP_ID` is the **registrable domain** the box is reached at — `example.com`
+for `ccrc.example.com` — never a bare public suffix, and never derived by
+stripping labels off the hostname. The trap is the normal case for a self-hosted
+box, not an exotic one: the dynamic-DNS and tunnel providers people reach a home
+server through are themselves on the Public Suffix List, so under a name like
+`<you>.duckdns.org` the registrable domain is the **whole** name — strip one more
+label and you have a suffix shared with every other tenant of that provider,
+which browsers refuse outright. Nothing here carries a PSL to know which is
+which, so the operator states the value rather than the server deriving it;
+`PUBLIC_SUFFIX_TRAPS` (`server/src/auth/webauthn.ts`) rejects the short list of
+traps it can actually hit, and that list is not a PSL and must not become one. A credential records the rpId it was enrolled under, so
 changing it makes existing passkeys fail **loudly** ("re-enrol"), which is the
 intended way for a rename to behave. Full key-by-key documentation, including
 the path overrides and the `Secure`-cookie opt-out, is in
@@ -1104,11 +1268,32 @@ bash deploy/deploy.sh                # server: build PWA here (freshness-gated) 
 bash deploy/deploy.sh agent <host>   # ccrc-agent: rsync → ship ccd + notify.sh (backed up) + session-hook.sh (installs it) → host npm ci + build → restart unit
 ```
 
-`CCRC_BOX` overrides the server's default target (`you@203.0.113.7`);
-the agent target's `<host>` defaults to `$CCRC_BOX` if omitted, but in
-practice the fleet host is a different box (see "Remote fleet mode" below).
-`CCRC_HEALTH_URL` overrides the server's post-deploy health-check URL
-(default `http://203.0.113.7:7788/health`).
+`deploy/deploy.sh` is a convenience wrapper for pushing a working tree onto a box
+that is **already installed** — it is not the installer; `install.sh` / `ccrc
+install` is the path a new box takes. It has **no default target**: a deploy that
+guessed would ship your working tree to someone else's machine, so it refuses
+with exit 2 until it knows where it is going.
+
+Put the coordinates in `~/.ccrc/deploy.env` — the deploying machine's own file,
+outside every checkout, so it survives worktrees and can never be committed:
+
+```bash
+# ~/.ccrc/deploy.env
+CCRC_BOX=user@fleet-host            # required
+CCRC_SSH_KEY=$HOME/.ssh/id_ed25519  # required
+CCRC_SSH_PORT=22                    # optional, default 22
+```
+
+```bash
+bash deploy/deploy.sh                        # the server box
+bash deploy/deploy.sh agent user@other-box   # the fleet host, when they differ
+```
+
+Anything set in the environment overrides the file, and `CCRC_DEPLOY_ENV` points
+at a different one. The post-deploy liveness check derives its URL from
+`$CCRC_BOX` as `http://<host>:7788/health`; `CCRC_HEALTH_URL` overrides it. The
+agent target's `<host>` defaults to `$CCRC_BOX`, but in a two-box fleet it is a
+different machine (see "Remote fleet mode" below).
 
 Both targets ship a local, gitignored env file to `~/.ccrc/` on the box first
 if one exists (`deploy/ccrc.env` / `ccrc-agent.env` — copy from
@@ -1168,11 +1353,11 @@ see "Fleet coordination" below.
 | Var | Where | Meaning |
 | --- | --- | --- |
 | `CCRC_FLEET` | server | `local` (default) or `remote`. |
-| `CCRC_AGENT_URL` | server | `ws://`/`wss://` URL of `ccrc-agent` on the fleet host, e.g. `ws://100.x.x.x:7789`. |
+| `CCRC_AGENT_URL` | server | `ws://`/`wss://` URL of `ccrc-agent` on the fleet host, including its path, e.g. `ws://fleet-host:7789/agent`. |
 | `CCRC_AGENT_TOKEN` | server + agent | Bearer token; must match on both sides. Generate with `openssl rand -hex 32`. |
 | `CCRC_HETZNER_TOKEN` | server | Hetzner Cloud API token — only used by the degraded-mode reboot action. Unset leaves that route disabled (`501`). |
 | `CCRC_FLEET_SERVER_ID` | server | Hetzner Cloud server ID of the fleet host — only used by the reboot action. |
-| `CCRC_AGENT_HOST` | agent | Bind interface, default `127.0.0.1`. Never `0.0.0.0` — bind the tailnet address explicitly instead. |
+| `CCRC_AGENT_HOST` | agent | Bind interface, default `127.0.0.1`. Never `0.0.0.0` — name the private-network address the server reaches it on, explicitly. |
 | `CCRC_AGENT_PORT` | agent | Listen port, default `7789`. |
 
 See `deploy/ccrc.env.example` and `deploy/ccrc-agent.env.example` for
@@ -1183,7 +1368,7 @@ copy-paste templates.
 `ccrc-agent` (`agent/`) is deliberately narrow — it is not a
 general remote-shell:
 
-- **Network**: binds a single interface (tailnet-only by convention; default
+- **Network**: binds a single interface (a private network between the two boxes, by convention; default
   `127.0.0.1`), never `0.0.0.0`. Every connection must send a valid `hello`
   frame with the bearer token within 3 s, or the socket is closed; a wrong
   token closes with code `4401`.
@@ -1320,8 +1505,9 @@ the last-known-good fleet snapshot instead of going blank:
   check remote-mode connectivity (`mode: 'local'` always reports
   `connected: true`).
 - `POST /api/fleet/reboot` fires a Hetzner Cloud reboot of the fleet host —
-  the PWA's confirm dialog names the collateral (it also restarts the
-  rp-llm services sharing that box). Guards: `409` if `mode !== 'remote'`,
+  the PWA's confirm dialog names the collateral, because a reboot takes down
+  everything else running on that box, not just the fleet. Guards: `409` if
+  `mode !== 'remote'`,
   `501` if `CCRC_HETZNER_TOKEN`/`CCRC_FLEET_SERVER_ID` aren't set, `502` on a
   Hetzner API error, `202` on success.
 
@@ -1330,15 +1516,16 @@ the last-known-good fleet snapshot instead of going blank:
 After `deploy.sh agent <host>` and flipping the server to `CCRC_FLEET=remote`:
 
 ```bash
-curl -fsS http://203.0.113.7:7788/api/fleet/health   # {"mode":"remote","connected":true,"downSince":null}
+# from the server box, where 7788 is loopback-bound:
+curl -fsS http://127.0.0.1:7788/api/fleet/health   # {"mode":"remote","connected":true,"downSince":null}
 ```
 
 Then kill/stop `ccrc-agent` on the fleet host and re-poll — `connected`
 should flip to `false`, `/api/fleet` should keep returning the last snapshot
 with `stale: true`, and the PWA banner should appear; restart `ccrc-agent`
 to restore `connected: true`. `CCRC_FLEET=remote` is not a hypothetical
-cutover — it is the live server's actual, standing configuration (see
-"Architecture" above), so this drill exercises the degraded-mode path a real
+cutover — `remote` is the two-box shape this section describes, so this drill
+exercises the degraded-mode path a real
 agent restart or network blip already produces, not a one-time migration.
 
 ## Fleet coordination
@@ -1510,16 +1697,18 @@ who a message claims to be from.
 
 ## Live end-to-end tests
 
-Drive a throwaway `claude2-cctest` session on the box through the public API:
+Drive a throwaway `cctest` session through ccrc's public API, run from the
+server box:
 
 ```bash
-CCRC_BASE_URL=http://203.0.113.7:7788 \
+CCRC_BASE_URL=http://127.0.0.1:7788 \
   npx vitest run --config vitest.e2e.config.ts        # in server/
 ```
 
-The suite is `CCRC_BASE_URL`-gated, so a bare `vitest run` stays hermetic.
-Reset cctest between runs: stop `claude-session@{claude2,claude}-cctest` and
-`rm ~/.cc-sessions/{claude2,claude}-cctest.*`.
+The suite is `CCRC_BASE_URL`-gated, so a bare `vitest run` stays hermetic. It
+needs two accounts in your roster — it starts a session on one and swaps it to
+the other. Reset between runs: stop the `claude-session@<wrapper>-cctest` unit
+for each wrapper the run touched and `rm ~/.cc-sessions/<wrapper>-cctest.*`.
 
 ## Pane-format fragility (re-capture after Claude Code upgrades)
 
@@ -1565,6 +1754,31 @@ Known real-format subtleties already encoded:
 
 Anything the parser can't handle degrades to `parsed:false` / the terminal
 drawer rather than crashing.
+
+## Contributing
+
+The tree is four packages, each `"type": "module"`, with no root runner — `cd` into the one
+you are changing:
+
+```bash
+cd server && npm ci && npm run test     # vitest, hermetic
+cd agent  && npm ci && npm run test
+cd pwa    && npm ci && npm run test
+```
+
+Run a single suite with `./node_modules/.bin/vitest run test/<name>.test.ts` from inside the
+package. A bare `npx vitest` resolves a global copy with no jsdom and will falsely report
+that there are no tests.
+
+Two conventions carry more weight here than style:
+
+- **A new guard ships with a test that goes red when the guard is deleted.** Measured before
+  and after, not asserted in a comment. A comment is a request; a red suite is a mechanism.
+- **No overloaded null at a seam.** Two conditions a caller handles differently must not
+  collapse to the same value — that is a defect, not a matter of taste.
+
+Design records live in `docs/superpowers/specs/`; the architecture rules the code is held to
+are in `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`.
 
 ## License
 

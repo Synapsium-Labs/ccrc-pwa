@@ -1479,7 +1479,11 @@ describe('the verification is actually wired into the deploy, and can observe a 
     // variable-resolution header (BOX -> TARGET/agent-host override ->
     // HEALTH_URL) and EXECUTE it for real — this proves the runtime
     // expansion, not merely that some substring exists in the file.
-    const start = deploySh.indexOf('BOX="${CCRC_BOX:-');
+    // The header no longer opens with a BOX default — deploy.sh refuses rather
+    // than guessing a target (server/test/deploy-coordinates.test.ts). It now
+    // opens at the per-workstation config load, which is the first line of the
+    // same variable-resolution header this test executes.
+    const start = deploySh.indexOf('CCRC_DEPLOY_ENV="${CCRC_DEPLOY_ENV:-');
     // D-169 split one assignment into a derivation: the gate now ASKS THE BOX
     // for its front door (an exposed box is bound to loopback and does not
     // answer on the address this used to probe — worse, the deploy that broke
@@ -1489,7 +1493,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
     // agent-host override must move HEALTH_URL, and CCRC_HEALTH_URL must win.
     const healthLine = /\[ -z "\$\{CCRC_HEALTH_URL:-\}" \] \|\| HEALTH_URL="\$CCRC_HEALTH_URL"\n/
       .exec(deploySh);
-    expect(start, 'BOX default assignment not found').toBeGreaterThan(-1);
+    expect(start, 'the coordinate-resolution header was not found').toBeGreaterThan(-1);
     expect(healthLine, 'the CCRC_HEALTH_URL override is gone').toBeTruthy();
     const targetOverrideAt = deploySh.indexOf('[ "$TARGET" = "agent" ]');
     expect(healthLine!.index!,
@@ -1507,7 +1511,14 @@ describe('the verification is actually wired into the deploy, and can observe a 
       const r = spawnSync('bash', ['-c', `${header}\nprintf '%s' "$HEALTH_URL"`, '_', ...args], {
         encoding: 'utf8',
         env: {
-          ...process.env, CCRC_BOX: '', CCRC_HEALTH_URL: '', ...env,
+          ...process.env, CCRC_BOX: '', CCRC_HEALTH_URL: '',
+          // deploy.sh now requires a key too, and SOURCES a per-workstation
+          // file. Point that at a path inside this test's own tmpdir: left to
+          // its default it would read the developer's real ~/.ccrc/deploy.env
+          // and the result would depend on whose machine ran the suite.
+          CCRC_SSH_KEY: '/dev/null',
+          CCRC_DEPLOY_ENV: join(bin, 'no-such-deploy.env'),
+          ...env,
           PATH: `${bin}:${process.env.PATH ?? ''}`,
         },
       });
@@ -1515,15 +1526,33 @@ describe('the verification is actually wired into the deploy, and can observe a 
       return r.stdout;
     };
 
-    expect(run([]), 'the no-override default must still hit the known server box')
-      .toBe('http://203.0.113.7:7788/health');
+    // There is deliberately no default target any more, so the no-override
+    // case is a refusal rather than a fallback address. Asserting the refusal
+    // keeps this test honest: the property below (an override MOVES
+    // HEALTH_URL) is only meaningful because there is nothing to fall back to.
+    {
+      const bin = mkTmp('deploy-health-refuse-');
+      writeFileSync(join(bin, 'ssh'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+      const r = spawnSync('bash', ['-c', `${header}\nprintf '%s' "$HEALTH_URL"`, '_'], {
+        encoding: 'utf8',
+        env: {
+          ...process.env, CCRC_BOX: '', CCRC_SSH_KEY: '', CCRC_HEALTH_URL: '',
+          CCRC_DEPLOY_ENV: join(bin, 'no-such-deploy.env'),
+          PATH: `${bin}:${process.env.PATH ?? ''}`,
+        },
+      });
+      expect(r.status, 'no coordinates must refuse, not fall back to some box').toBe(2);
+      expect(r.stderr).toMatch(/CCRC_BOX is not set/);
+    }
     expect(run([], { CCRC_BOX: 'user@10.0.0.9' }),
       'CCRC_BOX must move HEALTH_URL, not leave it pointed at the old box')
       .toBe('http://10.0.0.9:7788/health');
     expect(run(['agent', 'user@10.0.0.5']),
       "the agent target's host argument must also drive HEALTH_URL")
       .toBe('http://10.0.0.5:7788/health');
-    expect(run([], { CCRC_HEALTH_URL: 'http://example:9999/health' }),
+    // A target is still required — CCRC_HEALTH_URL says where to LOOK, not
+    // where to deploy — so this case names a box and then overrides the probe.
+    expect(run([], { CCRC_BOX: 'user@10.0.0.9', CCRC_HEALTH_URL: 'http://example:9999/health' }),
       'CCRC_HEALTH_URL must still override everything')
       .toBe('http://example:9999/health');
   });

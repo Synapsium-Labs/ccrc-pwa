@@ -5,20 +5,59 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-BOX="${CCRC_BOX:-you@203.0.113.7}"
-# The key is per-workstation, not per-fleet: the laptop calls it your-key-a,
-# openclaw itself calls it your-key-b. Overridable so a deploy can be driven from
-# whichever box you happen to be on, including the fleet host deploying to itself.
-CCRC_SSH_KEY="${CCRC_SSH_KEY:-$HOME/.ssh/your-key-a}"
-CCRC_SSH_PORT="${CCRC_SSH_PORT:-2222}"
-SSH=(ssh -p "$CCRC_SSH_PORT" -i "$CCRC_SSH_KEY")
-SCP=(scp -P "$CCRC_SSH_PORT" -i "$CCRC_SSH_KEY")
+# ── WHERE THIS DEPLOY IS GOING ───────────────────────────────────────────────
+# The coordinates are per-WORKSTATION, not per-fleet: the same repo gets
+# deployed from a laptop and from the fleet host itself, which reach the target
+# on different keys and sometimes different ports. So there are no literals
+# here and NO DEFAULTS to inherit by accident — a deploy that guessed its
+# target would ship this working tree to whoever the last committer deployed
+# to, which is exactly the bug a public repo makes into everyone's bug.
+#
+# Set them once per machine in ~/.ccrc/deploy.env — the deploying machine's own
+# file, outside every checkout, so it survives worktrees and can never be
+# committed — or pass them in the environment:
+#
+#     CCRC_BOX=user@host                 # required: the target
+#     CCRC_SSH_KEY=$HOME/.ssh/id_ed25519 # required: identity file
+#     CCRC_SSH_PORT=22                   # optional, default 22
+#
+CCRC_DEPLOY_ENV="${CCRC_DEPLOY_ENV:-$HOME/.ccrc/deploy.env}"
+# shellcheck source=/dev/null
+[ -r "$CCRC_DEPLOY_ENV" ] && . "$CCRC_DEPLOY_ENV"
+
+# Refuse, with the fix in the message, rather than guessing. Exit 2 = usage
+# error, the same contract `ccrc` states for its own verbs.
+# Takes the RESOLVED VALUE, not a variable name: the target can come from
+# `$CCRC_BOX` or from `deploy.sh agent <host>`, and only the resolution knows
+# which. Exit 2 = usage error, the contract `ccrc` states for its own verbs.
+_deploy_need() {
+  local value="$1" name="$2" what="$3" example="$4"
+  [ -n "$value" ] && return 0
+  echo "deploy: FAILED — \$$name is not set ($what)." >&2
+  echo "  Set it in $CCRC_DEPLOY_ENV, or pass it in the environment:" >&2
+  echo "      $name=$example bash deploy/deploy.sh" >&2
+  echo "  There is deliberately no default: a deploy that guessed its target" >&2
+  echo "  would ship this tree to someone else's box." >&2
+  exit 2
+}
 
 # Usage: deploy.sh [server|agent] [host]
-#   deploy.sh                 -> deploy server to $CCRC_BOX (default)
+#   deploy.sh                 -> deploy server to $CCRC_BOX
 #   deploy.sh agent <host>    -> deploy ccrc-agent to <host> (falls back to $CCRC_BOX if omitted)
+#
+# The target is RESOLVED BEFORE it is required, because `agent <host>` names
+# its box on the command line and must not also demand $CCRC_BOX — requiring
+# the file for a target the caller just typed is a refusal with nothing to fix.
 TARGET="${1:-server}"
+BOX="${CCRC_BOX:-}"
 [ "$TARGET" = "agent" ] && BOX="${2:-$BOX}"
+
+_deploy_need "$BOX"               CCRC_BOX     "the deploy target, user@host"           "user@fleet-host"
+_deploy_need "${CCRC_SSH_KEY:-}"  CCRC_SSH_KEY "the ssh identity file used to reach it" "\$HOME/.ssh/id_ed25519"
+
+CCRC_SSH_PORT="${CCRC_SSH_PORT:-22}"
+SSH=(ssh -p "$CCRC_SSH_PORT" -i "$CCRC_SSH_KEY")
+SCP=(scp -P "$CCRC_SSH_PORT" -i "$CCRC_SSH_KEY")
 
 # Derived from the RESOLVED $BOX — i.e. AFTER the agent-target override just
 # above, so it tracks $2 — never a literal. A literal here meant
@@ -27,9 +66,9 @@ TARGET="${1:-server}"
 # grep at the bottom of the server branch would pass WITHOUT EVER CONTACTING
 # THE TARGET (I4, final review). `${BOX#*@}` strips the `user@` prefix BOX
 # always carries. CCRC_HEALTH_URL remains the explicit override for a box
-# whose health route isn't at the tailnet-IP:7788 shape.
+# whose health route isn't at the `<host>:7788` shape.
 # ── D-169: the default probes an address an EXPOSED box stops answering on ─
-# The tailnet-IP:7788 shape is right for a plain box and wrong for every box
+# The `<host>:7788` shape is right for a plain box and wrong for every box
 # behind caddy: exposure means the server binds LOOPBACK and the public name
 # is the only way in. Measured 2026-08-22, and the failure is worse than a
 # false alarm — the deploy that broke the public path PASSED this gate,
@@ -318,12 +357,14 @@ ship_secret() {
 # That is the exact opposite rule to `install_atomic`, which is for ccrc-OWNED
 # files a deploy replaces wholesale — `~/.ccrc/accounts.sh`, the generated bash
 # projection of this file, goes through that path instead.
-#   deploy/accounts.migration.json — this fleet's five accounts, byte for byte,
-#     so the reference installation keeps its identity across the flip.
-#   deploy/accounts.default.json   — the single-`claude` roster a fresh,
-#     unrelated install should start from.
-# Point CCRC_ACCOUNTS_JSON at either, or at a roster of your own.
-ACCOUNTS_JSON="${CCRC_ACCOUNTS_JSON:-deploy/accounts.migration.json}"
+#   deploy/accounts.default.json — the seed a box with no roster starts from,
+#     and the DEFAULT here on purpose. Seeding is permanent (never overwritten),
+#     so the default has to be the roster that is right for a box we know
+#     nothing about; anything else silently installs one operator's account
+#     list onto a stranger's machine on their first deploy.
+# Point CCRC_ACCOUNTS_JSON at a roster of your own to seed something else — a
+# box that already has ~/.ccrc/accounts.json keeps it either way.
+ACCOUNTS_JSON="${CCRC_ACCOUNTS_JSON:-deploy/accounts.default.json}"
 
 # `node` ON THE DEPLOYING MACHINE is NEW as of this branch — no earlier deploy
 # needed a local interpreter at all (the remote build runs node on the BOX).
@@ -800,8 +841,10 @@ else
   # unit's `EnvironmentFile=-%h/.ccrc/ccrc.env` tolerates a missing file too
   # — so nothing stopped a deploy with neither from landing a unit with
   # NOTHING to configure it, and config.ts's `host` then defaults to
-  # 127.0.0.1. The live `tailscale serve` proxies to the tailnet IP
-  # LITERALLY, so a loopback bind takes the PWA dark on every device, and
+  # 127.0.0.1. A reverse proxy in front is configured to forward to one
+  # address and forwards there LITERALLY, so when that address is the box's
+  # own rather than loopback, a loopback bind takes the PWA dark on every
+  # device — and
   # verify-service.sh still passes (the PROCESS is up) — only the health curl
   # at the bottom of this branch would catch it, AFTER the unit is already
   # replaced and restarted. Refuse before touching anything (I2, final
