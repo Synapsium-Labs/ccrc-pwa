@@ -137,6 +137,31 @@ export function deviceActor(device: string | null): string {
 }
 
 /**
+ * The dec an UNATTENDED server lane declares — a sweep, a run close, a dispatch.
+ *
+ * `surface: 'agent'` is the least-wrong member of ccd's four-word closed set,
+ * and the residual is DISCLOSED rather than papered over: the word names the
+ * agent LANE, not the ccrc-agent process, so it cannot on its own tell the
+ * agent apart from the server's own timers. That is precisely why `actor` is
+ * NOT optional on `ActorFlags` — the actor is what makes `archiveMerged`'s
+ * timer and an operator's tap distinguishable — and why a fifth surface word is
+ * not the fix: spec §2 says `StopSurface` is unchanged, and widening a closed
+ * set that `ccd:619` also spells would be one enumeration in two languages
+ * drifting apart.
+ *
+ * `reason: null`: a sweep's reason is its name, and repeating it in a second
+ * field would be one fact in two places with nothing keeping them equal.
+ */
+export function sweepDec(
+  state: Pick<FleetState, 'ccdVerbs'> | undefined,
+  actor: string,
+): ActorFlags | null {
+  return capSupported(state, ACTOR_FLAGS_CAP)
+    ? { surface: 'agent', actor, reason: null }
+    : null;
+}
+
+/**
  * The ONLY place ccd argv is constructed. Every route builds its call through
  * this table, and `whitelist-subset.test.ts` enumerates the table against the
  * agent's EXEC_WHITELIST in both directions. An argv the enumeration cannot see

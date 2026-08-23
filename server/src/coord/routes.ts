@@ -3,7 +3,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Deps } from '../server.js';
 import type { Bus } from '../bus.js';
 import { measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
-import { CCD_ARGV, verbSupported } from '../ccdargv.js';
+import { CCD_ARGV, verbSupported, sweepDec } from '../ccdargv.js';
 import { tx } from './db.js';
 import { toRunSummary, type CoordStore } from './store.js';
 import { renderEnvelope } from './envelope.js';
@@ -792,7 +792,9 @@ export function registerCoordRoutes(
     // rather than `ws-add` (deviation D-1).
     if (typeof sessionId === 'string') {
       coord.setSession(opened.id, sessionId);
-      const argv = CCD_ARGV.wsHold(sessionId, holdReason(program, wave, waveOfVal, opened.id));
+      const argv = CCD_ARGV.wsHold(sessionId,
+        holdReason(program, wave, waveOfVal, opened.id),
+        sweepDec(deps.fleetState, `run:${opened.id} open`));
       if (!verbSupported(deps.fleetState, argv)) {
         return reply.code(501).send({ ok: false, error: 'unsupported' });
       }

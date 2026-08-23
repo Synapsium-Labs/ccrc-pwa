@@ -6,7 +6,7 @@ import { hasMenu, parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
 import { defaultCachePath, loadSnapshot, saveSnapshot } from './fleetstate.js';
 import { readTasks, taskProgress } from './tasks/read.js';
-import { CCD_ARGV, verbSupported } from './ccdargv.js';
+import { CCD_ARGV, verbSupported, sweepDec } from './ccdargv.js';
 import { isFullLine, parsePrLines, phaseFor, type CcdPrFailure } from './prstate.js';
 import { liveSessionStatus, readLiveState } from './livestate.js';
 import { readHookState, type HookState } from './hookstate.js';
@@ -1412,7 +1412,8 @@ export class FleetWatcher {
       // timer (`CAPS_REFRESH_MS`) — not the agent's, which has none —
       // requires a server restart in local mode (`localcaps.ts`, one probe
       // at boot, no timer).
-      if (!verbSupported(this.deps.fleetState, CCD_ARGV.wsRename(r.id, born))) continue;
+      if (!verbSupported(this.deps.fleetState,
+                         CCD_ARGV.wsRename(r.id, born, sweepDec(this.deps.fleetState, 'sweep:names')))) continue;
       const cfgDir = configDirFor(this.deps.cfg, identity.wrapper);
       if (!cfgDir) continue;
       // NO `foreign`: a derived branch name is written into the row with no
@@ -1448,7 +1449,8 @@ export class FleetWatcher {
       // accepted (a hand-run reap on a workspace whose first turn is still
       // landing is not a case worth a lock for, and the rename is a
       // `git branch -m` a reap would immediately make moot).
-      const res = await this.deps.queue.run(r.id, () => this.deps.runCcd(CCD_ARGV.wsRename(r.id, branch)));
+      const res = await this.deps.queue.run(r.id, () => this.deps.runCcd(
+        CCD_ARGV.wsRename(r.id, branch, sweepDec(this.deps.fleetState, 'sweep:names'))));
       if (!res.ok) {
         console.warn(`ccrc-server: ws-rename ${r.id} -> ${branch} failed: ${res.stderr.trim()}`);
         continue;
@@ -2506,7 +2508,7 @@ export class FleetWatcher {
         continue;
       }
       if (safety.verdict !== 'ok') continue;   // defers; the next sweep retries
-      const argv = CCD_ARGV.wsArchive(r.id);
+      const argv = CCD_ARGV.wsArchive(r.id, sweepDec(this.deps.fleetState, 'sweep:archive-merged'));
       // The same gate the `pr-state` sweep above and the `/archive` route
       // apply. Third instance of NF10's class, found in round 3: on a host
       // whose ccd predates `ws-archive` this call can only fail its usage
