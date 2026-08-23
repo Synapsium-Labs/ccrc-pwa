@@ -53,3 +53,7 @@ exposure.env*
 # its siblings), always removed in a finally block — this is a backstop
 # for an interrupted run, not the normal cleanup path.
 server/src/__boot_control_mutant__.ts
+
+# tsc's incremental cache — machine-local, and the committed copy had gone stale
+# (29 of its 62 recorded roots no longer existed).
+*.tsbuildinfo

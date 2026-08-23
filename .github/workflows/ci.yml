@@ -4,6 +4,17 @@
 # day it lands.
 name: ci
 
+# Least privilege, stated rather than inherited (2026-08-23). The default for
+# this repo already computes to read-only, and no job here needs more — CI only
+# reads the tree and runs suites. Declaring it means a later job that DOES want
+# write has to ask in the diff, where a reviewer sees it, instead of silently
+# receiving whatever the org default happens to be that week. Especially worth
+# fixing before the repo is public: `pull_request` (not `pull_request_target`)
+# already gives a fork's run a read-only token and no secrets, and this keeps
+# that true if the org default is ever loosened.
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main]
