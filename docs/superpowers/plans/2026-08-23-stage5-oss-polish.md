@@ -289,7 +289,7 @@ follow-up, deliberately not papered over.
   (existing keys untouched); Caddyfile block `https://<ip> { tls internal;
   reverse_proxy 127.0.0.1:<port> }`.
 
-- [ ] **Step 1 (red):** cli tests: `ccrc expose ip` writes exposure.env (mode ip, the
+- [x] **Step 1 (red):** cli tests: `ccrc expose ip` writes exposure.env (mode ip, the
   box's address measured via the existing `hostname -I` first-global helper, else
   refuses naming the reason), regenerates the Caddyfile with `tls internal`, prints the
   3-step sudo ceremony PLUS the trust ceremony (the printed text names the CA root's
@@ -298,14 +298,23 @@ follow-up, deliberately not papered over.
   passphrase-only sentence verbatim: `passkeys need a domain — on a bare IP the gate
   runs on passphrase login only`. Doctor tests: exposure PASSes mode ip; cert's
   untrusted-chain WARN names the trust ceremony as remedy.
-- [ ] **Step 2:** implement the arm (reuse `_exp_*` helpers; refuse `ip` + `CCRC_AUTH`
+  (Measured red: ccrc-expose 13, ccrc-cli 1, ccrc-doctor 4 — plus one deliberate
+  already-green regression pin, ip-mode-still-FAILs-when-nothing-answers. The
+  behaviour tests live in ccrc-expose.test.ts, cli keeps discoverability — D-199.)
+- [x] **Step 2:** implement the arm (reuse `_exp_*` helpers; refuse `ip` + `CCRC_AUTH`
   passkey-enrolled state? NO — enrolment simply stays hidden, the existing
   `enrolledRpIds` wire already handles absent rpId).
-- [ ] **Step 3:** doctor arms; both suites green; runbook note + `runbook-holds` union
-  updated if its pins touch step 11 text.
-- [ ] **Step 4:** README exposure section becomes the three-mode decision table
+  (`_dr_ip4_global` moved doctor-checks→ccrc to be reachable at expose time — D-199;
+  the CA-root path became `CCRC_CADDY_ROOT_CA`, spelled once, printed by the verb and
+  quoted by the cert remedy.)
+- [x] **Step 3:** doctor arms; both suites green; runbook note + `runbook-holds` union
+  updated if its pins touch step 11 text. (expose 58/58, cli 34/34, doctor 303/303;
+  runbook gained 11g and its pins stand unchanged, 22/22 — no union edit needed. The
+  cert WARN measures presence, not subject — D-199. `name` gained an ip-mode SKIP arm
+  so the BYO skip's "a BYO domain" sentence never lies about a box with no domain.)
+- [x] **Step 4:** README exposure section becomes the three-mode decision table
   (duckdns: zero-cost name / byo: your domain / ip: no third party at all).
-- [ ] **Step 5: Commit** `feat(expose): ip mode — HTTPS with nobody else involved
+- [x] **Step 5: Commit** `feat(expose): ip mode — HTTPS with nobody else involved
   (D-<n>)`
 
 ### Task 8: The docs corpus sweep + CLAUDE.md roles
@@ -369,4 +378,120 @@ list. **No transfer, no flip, no tag happens from this session.**
 
 ## Deviations found
 
+> **Reconciliation note (2026-08-23).** This section was written on a branch that
+> allocated **D-189…D-201** while `main` was concurrently taking **D-196…D-203** for
+> the same stage — the third ledger collision of the day, and the reason the
+> allocations section above now states the high-water mark explicitly. D-189…D-195
+> stand as written: those commits are on `main`. The entries for that branch's Task 5
+> and Task 6 are removed rather than renumbered — `main` carries a different cure for
+> each, reached independently, and a ledger entry for a commit nobody merged is a
+> record of nothing. Everything from Task 7 on is renumbered clear of `main`'s block,
+> starting at **D-204**.
+
+
 (allocated during the build; numbering continues from main's ledger)
+
+- **D-189** (Task 1): the duckdns placeholder set shipped as
+  `{mybox, otherbox, fixture, subdomain, www}`, not the plan's
+  `{mybox, otherbox, fixture, subdomain, <sub>}`. Three drifts between the plan's
+  enumeration and the tree: (1) bracket placeholders (`<sub>`, `<name>`) can never match
+  the class pattern — the `>` breaks adjacency with `.duckdns.org` — so listing `<sub>`
+  was dead weight; (2) `www` had to join: `www.duckdns.org` is DuckDNS's own update
+  endpoint, load-bearing in the shipped `deploy/systemd/ccrc-ddns.service` and pinned
+  verbatim by `ccrc-expose.test.ts` and the stage3b plan; (3) two fixture hostnames the
+  plan's set did not carry (`ccrc-fixture` ×7 in `deploy-env-guard.test.ts`, `newbox` ×1
+  in `ccrc-doctor.test.ts`) were renamed to already-allowed placeholder names rather than
+  widening the set. Also in this cluster: the plan's own Step 3 line spelled the
+  mutation token `1.2.3` + `.4` joined — which would have been the shipped suite's one
+  red — re-worded to spell it unmatchably, and "a new doc line" sharpened to "a TRACKED
+  doc line" (the walk is `git ls-files`; an untracked file is invisible to it).
+- **D-190** (Task 1): the session-id pattern shipped `session_01[A-Za-z0-9]{22,}` greedy
+  plus an equality `allowed`, not this plan's Step 1 `session_01[A-Za-z0-9]{22}` exact.
+  Forced: the committed EXAMPLE id carries 23 alnum after the prefix where a real id
+  carries 22, so an exact-22 match would extract the EXAMPLE's own first 22 characters —
+  a token that is NOT the whole example, fails the equality, and flags the tree's one
+  sanctioned fixture as a leak. Greedy makes the example match whole so the equality can
+  admit it; anything id-shaped and unsanctioned still scores. Same plan-vs-tree drift
+  class as D-189; rationale lives in the suite at `EXAMPLE_SESSION_ID`'s docstring.
+- **D-191** (Task 2): the owner pin shipped as "exactly TWO named assignments"
+  (`install.sh`, `ccd/ccrc`), not this plan's Step 2 "DEFINED once in `install.sh`".
+  Forced: #93 landed the pair deliberately (D-92's cross-file class, argued in
+  `ccd/ccrc`'s release-source header — `install.sh --release` runs before any ccrc
+  exists on the box, and `ccrc update` runs on boxes install.sh has long left), with
+  the two held equal by `ccrc-update.test.ts` and both VALUES pinned by
+  `license.test.ts`. A literal once-in-install.sh pin would red forever against that
+  shipped design. Step 2's skip clause ("if #93 already added an equivalent pin") was
+  weighed and does NOT apply: #93 pins value and agreement but nothing pins the COUNT
+  — so the new `single-definition.test.ts` describe closes exactly that gap (no third
+  assignment in bash, no spelling in the four TS roots, none in the workflows; the
+  hunted literal is READ from install.sh's definition, never restated in the scanner).
+- **D-192** (Task 2, review must-fix): SECURITY.md's fallback disclosure path shipped as
+  an issue-based private-channel handshake ("open an issue asking for a channel, no
+  details"), not this plan's Step 3 "maintainer contact". Forced: the shipped fallback
+  ("commit-author address on any recent commit", `git log -1 --format='%ae'`) resolves
+  to a GitHub noreply address that cannot receive mail — all 40 most-recent commits are
+  authored under it — and the only real addresses deeper in history are the OLD employer
+  identity Stage 5 exists to retire and a personal address never sanctioned for the repo.
+  No committable monitored mailbox exists in-tree, so the email half of the private path
+  was non-functional as written; the handshake keeps disclosure private without minting
+  an address the operator has not chosen. If the operator later publishes a monitored
+  security address, it slots into that sentence.
+- **D-193** (Task 3): the CGNAT ratchet class shipped with a wider doc-scope exclusion
+  and one admitted placeholder, both forced. (1) Scope: the plan's Step 6 predicate
+  `!path.startsWith('docs/')` alone would have pulled `README.md`, `CLAUDE.md` and
+  `scratch/` into THIS task's sweep — they sit outside `docs/` but their sweep is owned
+  by Tasks 8–9, and Task 8's ordering is load-bearing: `deploy/reference-fleet.md` must
+  exist BEFORE `CLAUDE.md` loses the real reach values, and `scratch/` is pruned whole
+  rather than sanitised. The shipped scope excludes all four roots and Task 8 still
+  drops it entirely. (2) Vocabulary: the plan's sweep rule ("fixtures → `203.0.113.x`;
+  `100.64.0.1` is ALSO banned") cannot apply to `ccrc-doctor.test.ts`'s CGNAT-arm test —
+  that test exists to pin `_dr_ip4_global`'s classification of the 100.64/10 range, so
+  its fixture must BE in the range. The class admits exactly one obviously-synthetic
+  placeholder, `100.100.1.1` (argued in the suite next to the pattern); it also serves
+  as `auth-passkey.test.ts`'s CGNAT-shaped rpId-refusal fixture, preserving that list's
+  range coverage.
+- **D-194** (Task 3): two counting drifts between the plan and the tree. (1)
+  `notify-addr.test.ts` carried THREE legacy-IP pins, not the plan's "two legacy-tier
+  tests": alongside the two the plan names (:124, :153), the unreadable-ccrc.env test
+  (:166) also asserted the baked address. All three re-pinned to the silence contract
+  (no curl, exit 0). (2) Step 5's "adjust its test pin" for `config.ts`'s
+  `vapidSubject` found NO existing pin — nothing in `config.test.ts` asserted the
+  default — so one was added red-first rather than adjusted, closing the gap the plan
+  assumed shut. Also under this number: the mailto anchor itself drifted `:323`→`:333`
+  (content matched; trusted the file per the plan's global rule).
+- **D-195** (Task 4): four drifts between the plan and the shipped sweep. (1) The plan's
+  replacement for `ccd/ccd`'s banner strings — "the server box" — named the wrong role:
+  ccd runs on the FLEET host (CLAUDE.md's two-box topology), so line 3 now says "the
+  fleet box" and the `cmd_menu` banner names the tool ("── ccd sessions ──") rather than
+  any box. (2) The class's two bare name tokens ride base64-encoded in the suite (spec
+  §3's residue idiom) instead of spelled: the suite is path-excluded from its own scan,
+  but a verbatim spelling would still publish the very strings it hunts; the tailnet-DNS
+  shape stays a plain pattern. (3) The liveness harness's synthetic corpus file moved
+  from the repo root into `server/` — this class is the ratchet's first
+  INCLUSION-scoped one, and a root-level synthetic path sat outside its scope, turning
+  the class's own scan-liveness row red against a healthy pattern; sited in-scope for
+  every class, the row means the same thing for all of them. (4)
+  `single-definition.test.ts` was not in the plan's Task 4 file list but carried seven
+  work-list rows: comments plus two dead `NAMES_CCD` alternatives matching the
+  pre-extraction directory's path spellings (that directory name embeds the old box's
+  name). The dead alternatives are deleted — the directory has not existed since the
+  Stage-1 extraction and the ratchet now forbids its name outright, so the protection
+  they gave is the ratchet's own — while the guard's two live alternatives (the
+  post-move path, the adjacent-args form) are untouched and still pinned by its
+  "exactly one file" test. Also under this number: `ccrc-adopt`'s example-label anchor
+  drifted `:350`→`:457` (content matched; trusted the file per the global rule).
+- **D-204** (Task 7): three forced drifts in the ip arm. (1) The verb-behaviour tests
+  live in `server/test/ccrc-expose.test.ts`, not the plan's `ccrc-cli.test.ts`: both
+  files pin the split in their own headers (cli owns DISCOVERABILITY — the usage line,
+  which did gain the `ip (no domain at all` pin — and ccrc-expose owns what the verb
+  DOES), and a plan file-list entry does not outrank the tree's standing ownership.
+  (2) The plan's "existing `hostname -I` first-global helper" (`_dr_ip4_global`) lived
+  in `ccrc-doctor-checks`, which `cmd_expose` never sources — the function MOVED to
+  `ccd/ccrc` (definition unchanged, still single-spelled; the checks table's standing
+  sourced-by-ccrc premise covers it, same as `_box_env_value`), with a pointer comment
+  left at its old home. (3) The spec §7 sentence "checking the certificate's presence
+  and subject": subject is NOT measured — caddy's internal leaf carries an EMPTY
+  subject (the address rides the SANs), so a subject pin would red exactly the box the
+  arm exists for; presence (a completed handshake + a parseable x509) is the
+  measurement, and the WARN text says whose CA it is from the mode, which is the fact
+  the file itself records.

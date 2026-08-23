@@ -1114,10 +1114,21 @@ refusal.
 ## Exposure: a public name and a real certificate (`ccrc expose`)
 
 A box goes public the same way its gate armed: dark by default, one operator
-verb, and nothing privileged ever run by ccrc. `ccrc expose duckdns` prompts
-for a DuckDNS subdomain and token (tty-only, echo off, never argv); `ccrc
-expose byo` prompts for your own origin and passkey rp id and leaves DNS to
-you. Either way the verb writes two ccrc-owned files and prints the rest:
+verb, and nothing privileged ever run by ccrc. Three arms, one decision —
+how much of the outside world you want involved:
+
+| mode | you bring | name | certificate | passkeys | third parties |
+|---|---|---|---|---|---|
+| `ccrc expose duckdns` | a free DuckDNS account | `<sub>.duckdns.org`, zero-cost — a ccrc timer keeps it pointed here | public ACME (automatic) | yes | DuckDNS + the ACME CA |
+| `ccrc expose byo` | your own domain | yours — DNS stays yours by contract | public ACME (automatic) | yes | your DNS host + the ACME CA |
+| `ccrc expose ip` | nothing | none — the box's bare global IPv4, measured by the verb itself | caddy's internal CA (`tls internal`) — each device trusts the printed root once | no — passkeys need a domain, so the gate runs on passphrase login only | **none at all** |
+
+`duckdns` prompts for a subdomain and token (tty-only, echo off, never argv);
+`byo` prompts for your own origin and passkey rp id; `ip` prompts for nothing
+but the caddy bind — the address is measured (`hostname -I`, first global
+IPv4), and a NAT'd box is refused rather than certified for an address it
+does not carry (a changed box IP is a re-run of the verb). Whichever arm, the
+verb writes two ccrc-owned files and prints the rest:
 
 - **`~/.ccrc/exposure.env`** (0600 — the DuckDNS token lives here, and is
   never printed: `ccrc expose status` and doctor report it as SET/NOT SET
@@ -1132,7 +1143,15 @@ you. Either way the verb writes two ccrc-owned files and prints the rest:
   HTTPS does the certificate through the standard ACME challenges
   (HTTP-01/TLS-ALPN-01) — which is why **a router forwarding ports 80 and 443
   to the box is a prerequisite** the verb states loudly and nothing on the box
-  can verify for you.
+  can verify for you. On the `ip` arm the block is
+  `https://<ip> { tls internal; reverse_proxy 127.0.0.1:<port> }` instead: no
+  ACME and no ports forwarded for issuance — caddy mints the certificate from
+  its own root, and the verb prints the **trust ceremony** (`sudo caddy trust`
+  on the box; installing
+  `/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt` on each
+  phone, iOS and Android steps included). Doctor's `cert` check holds a
+  standing WARN on this arm — the chain is not publicly trusted, by design —
+  and names that same ceremony as the remedy.
 
 Everything root-side is a printed three-step ceremony — install caddy from the
 distro, symlink or copy the Caddyfile to `/etc/caddy/Caddyfile`,
@@ -1152,7 +1171,9 @@ listens on loopback only.
 
 After exposing: restart the server so it reads the new origin, and **re-enrol
 every passkey** — passkeys are origin-bound, and a key enrolled at the old
-name fails loudly, with the login screen naming the old rp id. The full
+name fails loudly, with the login screen naming the old rp id. (On the `ip`
+arm there is nothing to re-enrol: passkeys need a domain — on a bare IP the
+gate runs on passphrase login only, and enrolment simply never appears.) The full
 choreography — prerequisites, the sudo ceremony, the expected doctor
 transcript, the phone proof — is step 11 of
 [`docs/superpowers/specs/2026-08-19-stage2-vm-gate-runbook.md`](docs/superpowers/specs/2026-08-19-stage2-vm-gate-runbook.md).

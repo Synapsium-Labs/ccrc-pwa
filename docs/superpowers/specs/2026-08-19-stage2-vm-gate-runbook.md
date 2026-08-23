@@ -461,7 +461,8 @@ legitimate end state.
   doctor detects its absence only indirectly, as certificate issuance failing loudly.
 - **A DuckDNS account** (free): sign in at duckdns.org, add a subdomain, and keep the token from
   that page at hand. (A domain of your own works too — `ccrc expose byo` prompts for the full
-  origin and the passkey rp id, installs no updater, and leaves DNS yours by contract.)
+  origin and the passkey rp id, installs no updater, and leaves DNS yours by contract. And no name
+  at all also works — `ccrc expose ip`, 11g below, needs neither this account nor any DNS.)
 - **Step 10 done on this box**: passphrase set, gate armed. Exposure without the gate is a
   driveable box on the public internet.
 
@@ -573,6 +574,32 @@ exposure by operator ceremony that predates this verb, and nothing in this repos
 migration (stage-3b spec, D8.2): moving it onto `ccrc expose` is a two-sided edit — rebind to
 loopback, and re-point or retire the out-of-repo serve config — done at its own terminal, by its
 operator, on its own schedule. This step documents that; it does not do it.
+
+#### 11g. No domain at all — `ccrc expose ip` (stage 5, S10)
+
+The third arm removes the last third party: no DuckDNS, no domain, no ACME CA. The box's own bare
+global IPv4 becomes the origin and caddy's **internal CA** signs the certificate (`tls internal` in
+the generated Caddyfile — self-signed via a local root, nothing leaves the box).
+
+```bash
+ccrc expose ip
+```
+
+The verb **measures the address itself** (`hostname -I`, first global IPv4 — the same classifier
+doctor's `name` check uses) and refuses on a box that has none: behind NAT or CGNAT the address a
+browser would reach is not on the box, so there is nothing true to certify — use `duckdns` or `byo`
+there. It writes the same two files as the other arms (mode and address recorded as
+`CCRC_EXPOSE_MODE=ip` / `CCRC_EXPOSE_ADDR=<ip>`, no `CCRC_RP_ID`), prints the same three-step root
+ceremony, and adds a **trust ceremony**: `sudo caddy trust` on the box itself, and installing the
+CA root — `/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt` — on each phone
+(printed with the iOS and Android steps). Until a device has done that once, its browser warns;
+after it, the padlock and Add to Home Screen work as at any public name.
+
+The honest constraints, which the verb prints: **passkeys need a domain — on a bare IP the gate
+runs on passphrase login only** (enrolment simply never appears — skip 11e's re-enrol step), and a
+changed box IP is a re-run of the verb. Doctor's `exposure` check PASSes mode ip; `cert`
+deliberately holds a standing WARN — the chain is not publicly trusted, and the remedy it names is
+this same trust ceremony; `name` SKIPs, there being no name.
 
 ### 12. The release round-trip — two boxes, two tags (stage 4)
 

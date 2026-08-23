@@ -177,6 +177,9 @@ describe('ccrc: dispatch and usage', () => {
     expect(r.stdout).toMatch(/^ {2}backup {4}/m);
     expect(r.stdout).toMatch(/^ {2}logs {6}/m);
     expect(r.stdout).toMatch(/^ {2}expose {4}give this box a public name/m);
+    // …and its `ip` arm (stage 5, S10) is discoverable from the same
+    // paragraph: no domain at all, caddy's internal CA, passphrase-only.
+    expect(r.stdout).toMatch(/ip \(no domain at all/);
     // …and the body explains it, including the half an operator gets wrong:
     // rotating expires SESSIONS and leaves enrolled passkeys working.
     expect(r.stdout).toMatch(/^ {2}passwd {4}set \(or rotate\) this box's PWA passphrase/m);

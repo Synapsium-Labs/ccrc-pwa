@@ -139,6 +139,14 @@ CCRC_CADDYFILE="$HOME/.ccrc/Caddyfile"
 # suite can point it at a fixture — nothing else may write an absolute /etc
 # path, and a test that needed root would simply not be written.
 CCRC_CADDY_SYSTEM_FILE="${CCRC_CADDY_SYSTEM_FILE:-/etc/caddy/Caddyfile}"
+# The INTERNAL CA's root certificate, where Debian's caddy package keeps it
+# (the caddy user's data dir) — what `expose ip`'s trust ceremony hands to
+# each device, once. A CONSTANT for `CCRC_CADDY_SYSTEM_FILE`'s reason: the
+# verb PRINTS this path and doctor's `cert` check names it as the WARN remedy
+# on mode ip, and a printer and a remedy that spelled it separately is the
+# drift D-166's comment names. ccrc never reads the file — it sits on the
+# root side of the boundary; the operator copies it to their phones.
+CCRC_CADDY_ROOT_CA="${CCRC_CADDY_ROOT_CA:-/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt}"
 
 # ── THE DDNS UNIT PAIR, WHICH THE duckdns ARM INSTALLS AND ENABLES ────────
 # `ccrc-ddns.service` + `ccrc-ddns.timer` — stage 3b, spec D4: a user timer
@@ -354,7 +362,10 @@ already running).
             and a Caddyfile for a loopback reverse proxy, then prints the
             three root steps ccrc will not run itself. Subcommands: duckdns
             (prompts for a subdomain and a token, tty only), byo (your own
-            domain — DNS is yours), status (what is configured; the token
+            domain — DNS is yours), ip (no domain at all: HTTPS on this
+            box's bare address through caddy's internal CA — each device
+            trusts the printed root once, and login is passphrase-only:
+            passkeys need a domain), status (what is configured; the token
             is reported SET/NOT SET, never printed)
 
   -h, --help   print this message and exit 0
@@ -2300,7 +2311,17 @@ cmd_passwd() {
 # ceremony and never run: `_inst_linger`'s degraded-step doctrine, verb-sized.
 # Doctor (Task 4) carries the not-yet-done ceremony as FAIL-with-remedy.
 #
-# ── STDIN MUST BE A TTY on the two prompting arms — `cmd_passwd`'s refusal ─
+# ── THE ip ARM (stage 5, S10) — HTTPS WITH NOBODY ELSE INVOLVED ───────────
+# No DNS service, no ACME, no domain: the box's first GLOBAL IPv4 (measured,
+# never typed — `hostname -I` walked through `_dr_ip4_global`, the name
+# check's own classifier) becomes the origin, and the Caddyfile says
+# `tls internal` so caddy's own CA signs the certificate. The landing block
+# gains a TRUST ceremony (each device installs the CA root once) and the
+# passkey truth: an rpId must be a DOMAIN (webauthn.ts refuses an address
+# literal), so no CCRC_RP_ID is written and the gate runs passphrase-only —
+# enrolment simply stays hidden, the `enrolledRpIds` wire already handles it.
+#
+# ── STDIN MUST BE A TTY on the prompting arms — `cmd_passwd`'s refusal ────
 # Same hazard, same sentence shape: under `curl … | bash` stdin IS THE SCRIPT,
 # and a `read` here would take a line of shell as this box's DuckDNS token.
 # The token itself follows `cmd_passwd`'s rules end to end: `read -rs` (never
@@ -2325,14 +2346,14 @@ cmd_expose() {
   [ $# -gt 0 ] && shift
   case "$sub" in
     -h|--help) usage; exit 0 ;;
-    duckdns|byo) ;;
+    duckdns|byo|ip) ;;
     status)
       [ $# -eq 0 ] || _ccrc_usage_die "$1"
       _exp_status
       return 0
       ;;
     '')
-      echo "$PROG: expose: missing subcommand (duckdns|byo|status)" >&2
+      echo "$PROG: expose: missing subcommand (duckdns|byo|ip|status)" >&2
       usage >&2
       exit 2
       ;;
@@ -2395,6 +2416,28 @@ cmd_expose() {
     host="$subdomain.duckdns.org"
     origin="https://$host"
     rpid="$host"
+  elif [ "$sub" = ip ]; then
+    printf '%s\n' "$PROG: exposing this box on its bare address — caddy's internal CA signs the certificate, and nobody else is involved (Ctrl-C aborts)" >&2
+    # The address is MEASURED, never asked: the one true answer is already on
+    # the box (`hostname -I`), and a typed address would be the only input of
+    # this verb no doctor check could re-measure. First GLOBAL IPv4, through
+    # the same classifier the name check compares DNS records with
+    # (`_dr_ip4_global`): private/CGNAT space is what a NAT'd box carries, and
+    # a certificate for an address browsers cannot reach is a config that lies
+    # from birth — so that box is refused, and pointed at the arms that DO
+    # work behind NAT. An absent or -I-less hostname folds into the same
+    # refusal deliberately: the refusal PRINTS what was measured, so "answered
+    # nothing" and "answered only private space" stay distinguishable to the
+    # operator without a second arm nothing else would share.
+    local hout="" hip=""
+    hout="$(hostname -I 2>/dev/null)" || hout=""
+    for hip in $hout; do
+      if _dr_ip4_global "$hip"; then host="$hip"; break; fi
+    done
+    [ -n "$host" ] \
+      || _ccrc_die "no global IPv4 to expose — hostname -I answered: ${hout:-nothing (is hostname installed?)}. Behind NAT or CGNAT the address browsers would reach is not on this box, so there is nothing true to certify; use a name instead: ccrc expose duckdns (zero-cost), or ccrc expose byo (your own domain). Nothing was written."
+    origin="https://$host"
+    rpid=""
   else
     printf '%s\n' "$PROG: exposing this box under your own name — the DNS record, and keeping it pointed here, are yours (Ctrl-C aborts)" >&2
     printf '%s\n' "$PROG: CCRC_RP_ID is the registrable domain a passkey is scoped to — it is configured and NEVER derived: how many labels to strip off a hostname takes the Public Suffix List (duckdns.org and ts.net are both public suffixes), so you state it (server/src/config.ts's own warning)" >&2
@@ -2459,14 +2502,14 @@ cmd_expose() {
 
   _exp_env_write "$sub" "$origin" "$rpid" "$host" "$token" "$bind"
   unset token
-  _exp_caddyfile "$host" "$bind"
+  _exp_caddyfile "$host" "$bind" "$sub"
   # AFTER the env write, deliberately: the ddns service's EnvironmentFile has
   # no leading '-', so a timer enabled before exposure.env existed would fire
   # a unit systemd refuses to start.
   if [ "$sub" = duckdns ]; then
     _exp_ddns_units
   fi
-  _exp_landing "$origin"
+  _exp_landing "$origin" "$sub"
 }
 
 # ── _exp_443_holders — who already owns :443, in the operator's words ─────
@@ -2481,6 +2524,29 @@ _exp_443_holders() {
     NR > 1 && $4 ~ /:443$/ { a[$4] = 1 }
     END { n = 0; for (k in a) { printf "%s%s", (n++ ? ", " : ""), k } }
   '
+}
+
+# A GLOBAL IPv4 — the only interface address worth exposing, or comparing a
+# public DNS record against. Private (RFC1918), loopback and link-local are
+# what a NAT'd box carries, and a "mismatch" against those would fail every
+# home box forever. IPv6 is deliberately not classified: the duckdns updater's
+# empty `ip=` writes an A record. Declared HERE and not in ccrc-doctor-checks
+# (its home until stage 5, Task 7) because it now has two callers on two
+# sides of that seam — doctor's `name` check and `cmd_expose`'s ip arm — and
+# the checks table already assumes ccrc is loaded first.
+_dr_ip4_global() {
+  case "$1" in
+    ''|*[!0-9.]*) return 1 ;;
+    10.*|127.*|169.254.*|192.168.*) return 1 ;;
+    172.1[6-9].*|172.2[0-9].*|172.3[01].*) return 1 ;;
+    # CGNAT 100.64/10 (RFC 6598) — tailscale's own address range, so on
+    # this project's fleet topology a wildcard here is not hypothetical:
+    # counting 100.x as global made _check_name WARN "propagation lag" forever
+    # on every tailscale box behind NAT (branch review, 2026-08-21).
+    100.6[4-9].*|100.[7-9][0-9].*|100.1[01][0-9].*|100.12[0-7].*) return 1 ;;
+    *.*.*.*) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 # ── _exp_ddns_units — the DuckDNS updater, installed and (best-effort) armed ─
@@ -2533,7 +2599,11 @@ _exp_env_write() {   # <arm> <origin> <rpid> <host> <token> <bind>
     {
       printf '%s\n' "# ccrc exposure config — regenerated by 'ccrc expose'; delete it to go dark."
       printf '%s\n' "CCRC_ORIGIN=$origin"
-      printf '%s\n' "CCRC_RP_ID=$rpid"
+      # OMITTED, never written empty, on the ip arm: an rpId must be a DOMAIN
+      # (webauthn.ts refuses an address literal), and config.ts reads the key
+      # with `||`, so a bare `CCRC_RP_ID=` line would be a key that decides
+      # nothing — the empty distinction the bind key's own comment bans.
+      [ -n "$rpid" ] && printf '%s\n' "CCRC_RP_ID=$rpid"
       # D-162. Written by this verb because it is a FACT ABOUT BEING EXPOSED,
       # not a preference: the box now answers from the public internet, and
       # the alternative to arming is publishing the fleet. It lives here
@@ -2542,6 +2612,14 @@ _exp_env_write() {   # <arm> <origin> <rpid> <host> <token> <bind>
       # ccrc.env from a workstation whose copy predated arming, which dropped
       # the key and took a public box dark with nothing to notice.
       printf '%s\n' "CCRC_AUTH=on"
+      # The ip arm's two facts (stage 5, S10), recorded so doctor and a re-run
+      # judge the same box the verb did: the MODE routes the exposure/cert/
+      # name checks down their ip arms, and the ADDR is what a changed box IP
+      # is diffed against (the remedy is a re-run of this verb).
+      if [ "$arm" = ip ]; then
+        printf '%s\n' "CCRC_EXPOSE_MODE=ip"
+        printf '%s\n' "CCRC_EXPOSE_ADDR=$host"
+      fi
       # Absent = every address, which is stock caddy's own default: writing a
       # bare `CCRC_CADDY_BIND=` would be a key that decides nothing, and
       # `_box_env_value`'s readers already treat empty as unset.
@@ -2573,17 +2651,24 @@ _exp_env_write() {   # <arm> <origin> <rpid> <host> <token> <bind>
 # when the file names no CCRC_PORT — the same pair of defaults
 # `cmd_install`'s landing block uses, for the same reason: hardcoding the
 # port would be right on a fresh box and a lie on every edited one.
-_exp_caddyfile() {   # <host> [bind]
-  local host="$1" bind="${2:-}" port="" dest="$CCRC_CADDYFILE" tmp
+_exp_caddyfile() {   # <host> [bind] [arm]
+  local host="$1" bind="${2:-}" arm="${3:-}" port="" dest="$CCRC_CADDYFILE" tmp site
   if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ]; then
     port="$(_box_env_value "$BOX_ENV_FILE" CCRC_PORT)"
   fi
   [ -n "$port" ] || port=7788
+  # The ip arm (stage 5, S10) states the scheme and adds `tls internal`, so
+  # the generated file READS as the contract it is: caddy's own CA signs the
+  # certificate, no ACME, nothing leaves the box. (Caddy would route a bare
+  # IP site address to its internal CA anyway — saying it is the point.)
+  site="$host"
+  [ "$arm" = ip ] && site="https://$host"
   tmp="$dest.tmp.$$"
   if ! {
     {
-      printf '%s\n' "$host {"
+      printf '%s\n' "$site {"
       [ -n "$bind" ] && printf '%s\n' "    bind $bind"
+      [ "$arm" = ip ] && printf '%s\n' "    tls internal"
       printf '%s\n' "    reverse_proxy 127.0.0.1:$port"
       printf '%s\n' "}"
     } > "$tmp" && chmod 644 "$tmp"
@@ -2619,13 +2704,14 @@ _exp_caddyfile() {   # <host> [bind]
 
 # ── _exp_landing — what this run did NOT do, said in exact commands ───────
 # The `_inst_linger` shape at verb scale: every privileged step is printed,
-# never run, and `sudo` appears in this transcript ONLY inside the numbered
-# remedy lines (ccrc-expose.test.ts greps for exactly that). The port-forward
+# never run, and `sudo` appears in this transcript ONLY inside the printed
+# remedy lines — the numbered steps, plus the ip arm's `caddy trust` line
+# (ccrc-expose.test.ts greps for exactly that, per arm). The port-forward
 # prerequisite is stated here because it is the one thing neither this verb
 # nor doctor can detect from inside the box (spec D1's consequence, "stated
 # loudly instead of papered over").
-_exp_landing() {   # <origin>
-  local origin="$1"
+_exp_landing() {   # <origin> [arm]
+  local origin="$1" arm="${2:-}"
   echo "expose: this run started NO system service — caddy binds ports 80/443 as root, and ccrc never escalates (the commands below are printed, not run). Three steps are yours:"
   echo "expose:   1. install caddy from your distro (Debian/Ubuntu: apt install caddy) — the stock binary; no plugins needed"
   # ── D-165: a COPY, and never the symlink this line used to lead with ────
@@ -2639,8 +2725,31 @@ _exp_landing() {   # <origin>
   # from whatever umask the operator's root shell happens to carry.
   echo "expose:   2. sudo install -m 0644 $CCRC_CADDYFILE $CCRC_CADDY_SYSTEM_FILE   (a COPY — do NOT symlink it: caddy runs as another user and cannot read inside your home. Re-run this line after every 'ccrc expose'; 'ccrc doctor' measures whether you did)"
   echo "expose:   3. sudo systemctl enable --now caddy"
-  echo "expose: prerequisite: your router must forward ports 80 and 443 to this box — stock caddy's certificate issuance (ACME HTTP-01/TLS-ALPN-01) fails loudly without it, and nothing inside the box can check it for you"
-  echo "expose: then restart the server so it reads the new origin: systemctl --user restart ccrc.service — and RE-ENROL every passkey (passkeys are origin-bound; the old ones will be refused by name)"
+  if [ "$arm" = ip ]; then
+    # ── the ip arm's landing (stage 5, S10) ─────────────────────────────
+    # The ACME port-forward sentence is the OTHER arms' prerequisite, and
+    # ACME is exactly what this arm does not do — its prerequisite is bare
+    # reachability. What replaces it is the TRUST ceremony: the certificate
+    # chain ends at caddy's own root, so each device must install that root
+    # once, and the ceremony names the file, this box's own command, and
+    # the two phone platforms at two lines each. The passkey sentence is
+    # said verbatim (the README and the runbook quote it): passkeys need a
+    # domain RP ID, so there is no re-enrol step to print here — there is
+    # nothing to enrol.
+    echo "expose: prerequisite: nothing outside this box — no DNS record and no ACME issuance (the certificate is caddy's own internal CA); just make sure :443 is reachable from your devices (open it in this box's firewall if one runs)"
+    echo "expose: the certificate is signed by caddy's INTERNAL CA — self-signed via a local root, nothing leaves the box — so each device must trust that root ONCE:"
+    echo "expose:   on this box: sudo caddy trust   (registers the root with this box's own trust store)"
+    echo "expose:   for phones, the root certificate file is $CCRC_CADDY_ROOT_CA — get that FILE onto the device"
+    echo "expose:   iOS: send root.crt to the phone (AirDrop, or mail it to yourself), install the downloaded profile: Settings > General > VPN & Device Management,"
+    echo "expose:        then trust it: Settings > General > About > Certificate Trust Settings — enable full trust for the root"
+    echo "expose:   Android: copy root.crt to the phone, then Settings > Security > Encryption & credentials > Install a certificate > CA certificate,"
+    echo "expose:        and pick the copied file (vendors move this menu — searching Settings for 'CA certificate' finds it)"
+    echo "expose: passkeys need a domain — on a bare IP the gate runs on passphrase login only (enrolment simply never appears; a changed box IP is a re-run of this verb)"
+    echo "expose: then restart the server so it reads the new origin: systemctl --user restart ccrc.service"
+  else
+    echo "expose: prerequisite: your router must forward ports 80 and 443 to this box — stock caddy's certificate issuance (ACME HTTP-01/TLS-ALPN-01) fails loudly without it, and nothing inside the box can check it for you"
+    echo "expose: then restart the server so it reads the new origin: systemctl --user restart ccrc.service — and RE-ENROL every passkey (passkeys are origin-bound; the old ones will be refused by name)"
+  fi
   echo "expose: once all of the above are done, $origin is this box — ccrc doctor measures each piece"
 }
 
@@ -2654,19 +2763,26 @@ _exp_status() {
     echo "expose: not configured — this box has no exposure file (run: ccrc expose duckdns, or ccrc expose byo)"
     return 0
   fi
-  local origin rpid token bind
+  local origin rpid token bind expmode
   origin="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_ORIGIN)"
   rpid="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_RP_ID)"
   token="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_DDNS_TOKEN)"
   bind="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_CADDY_BIND)"
-  echo "expose: configured — CCRC_ORIGIN=${origin:-(missing)} (rp id: ${rpid:-(missing)})"
+  expmode="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_EXPOSE_MODE)"
+  # On mode ip there IS no rp id, by design — `(rp id: (missing))` would be a
+  # fault costume on a box configured exactly as built (stage 5, S10).
+  if [ "$expmode" = ip ]; then
+    echo "expose: configured — CCRC_ORIGIN=${origin:-(missing)} (mode ip: no rp id — passkeys need a domain, so login is passphrase-only)"
+  else
+    echo "expose: configured — CCRC_ORIGIN=${origin:-(missing)} (rp id: ${rpid:-(missing)})"
+  fi
   # Absent is a real answer here, not a gap: no bind means caddy takes every
   # address, which is its own default and the right answer on most boxes.
   echo "expose: caddy binds ${bind:-every address (no CCRC_CADDY_BIND)}"
   if [ -n "$token" ]; then
     echo "expose: duckdns token: SET (never printed; it lives in $CCRC_EXPOSURE_FILE, 0600)"
   else
-    echo "expose: duckdns token: NOT SET (a byo domain, or an incomplete duckdns run)"
+    echo "expose: duckdns token: NOT SET (a byo or ip box, or an incomplete duckdns run)"
   fi
   return 0
 }

@@ -590,6 +590,9 @@ interface ExposureOpts {
   mode?: number;
   /** key names to leave out entirely — how a hand-edited half-file is made. */
   omit?: string[];
+  /** the ip arm's shape (stage 5, S10): origin `https://<addr>`, NO rp id,
+   *  no ddns trio, plus CCRC_EXPOSE_MODE=ip + CCRC_EXPOSE_ADDR. */
+  ip?: string;
 }
 
 /** `~/.ccrc/exposure.env`, in the shape `_exp_env_write` really writes it:
@@ -599,12 +602,19 @@ function writeExposureEnv(home: string, o: ExposureOpts = {}): void {
   const put = (k: string, v: string): void => {
     if (!(o.omit ?? []).includes(k)) lines.push(`${k}=${v}`);
   };
-  put('CCRC_ORIGIN', o.origin ?? `https://${EXPOSED_HOST}`);
-  put('CCRC_RP_ID', o.rpid ?? EXPOSED_HOST);
-  if (o.duckdns ?? true) {
-    put('CCRC_DDNS_PROVIDER', 'duckdns');
-    put('CCRC_DDNS_DOMAIN', o.domain ?? EXPOSED_HOST);
-    put('CCRC_DDNS_TOKEN', o.token ?? CANARY_TOKEN);
+  if (o.ip) {
+    put('CCRC_ORIGIN', o.origin ?? `https://${o.ip}`);
+    put('CCRC_AUTH', 'on');
+    put('CCRC_EXPOSE_MODE', 'ip');
+    put('CCRC_EXPOSE_ADDR', o.ip);
+  } else {
+    put('CCRC_ORIGIN', o.origin ?? `https://${EXPOSED_HOST}`);
+    put('CCRC_RP_ID', o.rpid ?? EXPOSED_HOST);
+    if (o.duckdns ?? true) {
+      put('CCRC_DDNS_PROVIDER', 'duckdns');
+      put('CCRC_DDNS_DOMAIN', o.domain ?? EXPOSED_HOST);
+      put('CCRC_DDNS_TOKEN', o.token ?? CANARY_TOKEN);
+    }
   }
   mkdirSync(join(home, '.ccrc'), { recursive: true });
   const p = join(home, '.ccrc', 'exposure.env');
@@ -4536,6 +4546,20 @@ describe('ccrc doctor: exposure', () => {
     expect(lines[i]).toContain('CCRC_RP_ID');
     expect(lines[i + 1]).toContain('ccrc expose');
   });
+
+  it('PASSes mode ip with no rp id at all — passphrase-only is the design, not a gap', () => {
+    // Stage 5, S10: `ccrc expose ip` writes no CCRC_RP_ID (an rpId must be a
+    // domain), so the missing-key FAIL above must not fire when the file says
+    // CCRC_EXPOSE_MODE=ip. The mutation this pins: drop the mode read and the
+    // check FAILs every ip box on the key its own verb refuses to write.
+    const home = healthy('ccrc-doctor-exposure-ip-');
+    writeExposureEnv(home, { ip: '203.0.113.7' });
+    const r = runDoctor(home);
+    const l = lineFor(r.stdout, 'exposure');
+    expect(l, r.stdout).toMatch(/^PASS exposure: /);
+    expect(l).toContain('https://203.0.113.7');
+    expect(l).toContain('mode ip');
+  });
 });
 
 describe('ccrc doctor: caddy', () => {
@@ -4672,6 +4696,50 @@ describe('ccrc doctor: cert', () => {
     expect(`${lines[i]}\n${lines[i + 1]}`).toContain('caddy check');
     expect(r.code).toBe(1);
   });
+
+  // ── mode ip (stage 5, S10): the chain is caddy's internal CA, by design ──
+  // The internal leaf renews every 12 hours, so the 14-day floor would cry
+  // renewal-failure forever on a box working exactly as built. The verdict is
+  // the honest one: served, and not publicly trusted until each device has
+  // done the trust ceremony once — WARN, never PASS-green and never FAIL.
+  it('WARNs on mode ip that the chain is not publicly trusted, naming the trust ceremony', () => {
+    const home = healthy('ccrc-doctor-cert-ip-');
+    writeExposureEnv(home, { ip: '203.0.113.7' });
+    // An internal-CA leaf: expiry hours out — under the public floor, and
+    // exactly what a HEALTHY ip box serves. The mutation this pins: route ip
+    // mode through the 14-day arm and this test reds on the renewal costume.
+    writeFileSync(join(home, 'fixture-cert-enddate'), `${endDateFixture(1)}\n`);
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN cert: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('not publicly trusted');
+    expect(lines[i]).not.toMatch(/renewal is failing/);
+    // The remedy IS the trust ceremony: this box's own command, and the root
+    // file a phone installs.
+    expect(lines[i + 1]).toContain('caddy trust');
+    expect(lines[i + 1]).toContain('/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt');
+    expect(r.code, 'a by-design WARN must not fail the run').toBe(0);
+  });
+
+  it('probes mode ip WITHOUT SNI — a servername is a HOSTNAME, and this box has none', () => {
+    const home = healthy('ccrc-doctor-cert-ip-sni-');
+    writeExposureEnv(home, { ip: '203.0.113.7' });
+    const r = runDoctor(home);
+    expect(lineFor(r.stdout, 'cert'), r.stdout).toMatch(/^WARN cert: /);
+    const calls = readFileSync(join(home, 'openssl-calls'), 'utf8');
+    expect(calls).toContain('-connect 127.0.0.1:443');
+    expect(calls).not.toContain('-servername');
+  });
+
+  it('mode ip still FAILs when nothing answers — the trust WARN sits AFTER presence, not instead of it', () => {
+    const home = healthy('ccrc-doctor-cert-ip-refused-');
+    writeExposureEnv(home, { ip: '203.0.113.7' });
+    writeFileSync(join(home, 'fixture-tls-refused'), '');
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^FAIL cert: /m);
+    expect(r.code).toBe(1);
+  });
 });
 
 describe('ccrc doctor: name', () => {
@@ -4690,6 +4758,19 @@ describe('ccrc doctor: name', () => {
     const l = skipLineFor(r.stdout, 'name');
     expect(l, r.stdout).toBeTruthy();
     expect(l).toContain('BYO');
+    expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) name: /m);
+  });
+
+  it('SKIPs on mode ip in its own words — a bare address HAS no name, and "BYO domain" would be a lie', () => {
+    // Stage 5, S10: without its own arm this box lands in the BYO skip above,
+    // whose sentence asserts a domain this box deliberately does not have.
+    const home = healthy('ccrc-doctor-name-ip-');
+    writeExposureEnv(home, { ip: '203.0.113.7' });
+    const r = runDoctor(home);
+    const l = skipLineFor(r.stdout, 'name');
+    expect(l, r.stdout).toBeTruthy();
+    expect(l).toContain('mode ip');
+    expect(l).not.toContain('BYO');
     expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) name: /m);
   });
 
