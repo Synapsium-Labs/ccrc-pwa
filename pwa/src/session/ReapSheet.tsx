@@ -281,10 +281,50 @@ export function ReapSheet({
                     PR this verdict deliberately binds none of, and a reader
                     who has learned that `#?` means "not scanned yet" would
                     read a completed proof as an incomplete one. The date
-                    tail is shared — it is the same fetch fact either way. */}
+                    tail is shared — it is the same fetch fact either way.
+
+                    IT NO LONGER SAYS "never pushed". `contained` is minted by
+                    the containment ladder's first rung — "origin's default
+                    branch holds every commit on this branch" — which is now
+                    asked of EVERY branch rather than only of branches with no
+                    upstream. A branch that was pushed and merged with a real
+                    merge commit reaches it, and so does one whose PR is still
+                    open while its commits have landed by another route; saying
+                    "never pushed" about either is the same class of false
+                    sentence the ladder itself was fixed for. */}
                 {shown.merge.proof === 'contained'
-                  ? `${shown.branch} — never pushed; origin already holds every commit on it (proof: contained), ${shown.merge.fetchedAt === null ? `merge ${NOT_SCANNED}` : days(shown.merge.fetchedAt)}`
+                  ? `${shown.branch} — origin already holds every commit on it (proof: contained), ${shown.merge.fetchedAt === null ? `merge ${NOT_SCANNED}` : days(shown.merge.fetchedAt)}`
                   : `${shown.branch} — merged in #${shown.pr.number ?? '?'} (proof: ${shown.merge.proof ?? 'none'}), ${shown.merge.fetchedAt === null ? `merge ${NOT_SCANNED}` : days(shown.merge.fetchedAt)}`}
+                {/* THE DRIFT NOTE, and it renders on a REAPABLE verdict as much
+                    as on a refusal — which is the whole reason it exists. ccd
+                    used to refuse a workspace whose registry entry and git's
+                    worktree record named different branches, so the operator
+                    met the disagreement as a wall. It now resolves it the way
+                    `ccd ws-rm` always has (git's record decides, the registry
+                    is a witness) and reaps, so the last moment anyone can see
+                    WHICH branch is about to go is this sheet, before the tap.
+
+                    Rendered from `drift` — ccd's own sentence — rather than
+                    assembled here from the two names: the rule has one
+                    definition, on the box.
+
+                    THE CONDITION IS THE SENTENCE, NOT `headMatchesRegistry`,
+                    and that is a correction rather than a shortcut. That flag
+                    is `REAP_WTHEAD === registry branch`, and `REAP_WTHEAD` is
+                    EMPTY on every refusal that never reached the worktree block
+                    — `no-such-session`, `not-archived`, `worktree-missing`,
+                    `detached-head`, `no-worktree-record` — so keying on it
+                    renders "these two records disagree" over five states in
+                    which nothing was compared at all. `drift` is non-empty only
+                    where ccd actually measured a disagreement, which is the
+                    same rule as everywhere else in this sheet: a field that was
+                    never measured says nothing rather than something plausible.
+                    An older ccd that sends no `drift` REFUSES on this state, so
+                    its own refusal sentence is what a reader sees — the
+                    information is not lost, it arrives by the older path. */}
+                {shown.drift !== null && shown.drift !== '' && (
+                  <span className="reap-note">{shown.drift}</span>
+                )}
               </dd>
 
               <dt>worktree</dt>

@@ -101,6 +101,52 @@ function rebaseMerged(): Built {
   return { main, wt, tip, merge };
 }
 
+/**
+ * THE CASE THE LADDER WAS UNREACHABLE FOR — a genuine squash merge whose remote
+ * head GitHub deleted, which is the DEFAULT on every repository this fleet
+ * works in ("Automatically delete head branches").
+ *
+ * The delete happens in the BARE repo, the way GitHub does it server-side, and
+ * the clone learns of it through a `--prune`. ccd's own fetches carry no
+ * `--prune` (`_ws_reap_eval`'s two, and `cmd_ws_add`'s), so ccd never creates
+ * this state itself — it INHERITS it from any other tool, from a
+ * `fetch.prune=true`, or from the operator. Measured on git 2.43 while writing
+ * this: a `git push origin --delete` reaches the same state with no prune at
+ * all, because git drops the remote-tracking ref as part of the delete-push.
+ *
+ * THE PRECONDITIONS ARE ASSERTED, NOT ASSUMED. A fixture whose whole point is
+ * "the upstream no longer resolves and the tip is not an ancestor" must fail
+ * loudly the day either stops being true, rather than quietly becoming a
+ * second copy of `squashMovedBase`.
+ */
+function squashRemoteHeadDeleted(): Built {
+  const b = squashMovedBase();
+  h.git(path.join(h.home, 'origins', 'demo.git'), 'branch', '-D', 'ws/quiet-basin');
+  h.git(b.main, 'fetch', '--prune', 'origin');
+  expect(upstreamResolves(b.main, 'ws/quiet-basin'),
+    'the fixture is about a branch whose upstream is GONE').toBe(false);
+  expect(containedByOriginHead(b.main, 'ws/quiet-basin'),
+    'a squash is never an ancestor — that is why the merge proof has to be reachable').toBe(false);
+  return b;
+}
+
+/** `$branch@{upstream}` resolving, asked exactly as `_ws_reap_eval` asks it.
+ *  `h.git` throws on a non-zero exit, and `--verify --quiet` exits 1 rather
+ *  than printing, so the throw IS the answer. */
+const upstreamResolves = (main: string, branch: string): boolean => {
+  try { h.git(main, 'rev-parse', '--verify', '--quiet', `${branch}@{upstream}`); return true; }
+  catch { return false; }
+};
+
+/** Rung 1's question, asked of the fixture so a test can say which rung it is
+ *  about. */
+const containedByOriginHead = (main: string, branch: string): boolean => {
+  try {
+    h.git(main, 'merge-base', '--is-ancestor', `refs/heads/${branch}`, 'refs/remotes/origin/HEAD');
+    return true;
+  } catch { return false; }
+};
+
 /** `pre` is sourced BEFORE the verb, which is the only way to fail one specific
  *  git read: every stub in this file shadows a function or a command rather than
  *  patching ccd. */
@@ -160,7 +206,56 @@ describe('the proof ladder', () => {
     expect(audit().merge.proof).toBe('tree');
   });
 
-  it('proves a TRUE merge via ancestor', () => {
+  it('proves a TRUE merge into a NON-DEFAULT base via ancestor', () => {
+    // THE RUNG'S OWN QUESTION, asked where it is the only one that answers it.
+    // `_ws_merge_proof`'s `ancestor` rung proves "the PR's MERGE COMMIT contains
+    // our tip"; the containment ladder's rung 1 proves "origin's DEFAULT branch
+    // contains our tip". Those are different propositions, and they are only
+    // distinguishable when the merge did not land on the default branch — a PR
+    // merged into `develop`, a release branch, a stacked base. Since rung 1 is
+    // asked first (D-173), the old fixture (`--no-ff` straight onto `main`,
+    // pushed) is now answered `contained` before this rung is reached, which
+    // made it a test of the ladder's ORDER rather than of the rung it names.
+    // Cut onto `develop`, the rung is reachable and this assertion means what
+    // it says. (`contained` for the default-branch shape is pinned separately,
+    // one test below.)
+    const main = h.makeGhRepo('demo');
+    h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
+    const wt = path.join(h.home, 'worktrees', 'demo', 'quiet-basin');
+    // The base branch, cut BEFORE the work and pushed, and recorded in the
+    // registry the way `cmd_ws_add` records `origin/HEAD` — `$baseShort` is
+    // what `_pr_py pick` matches against the row's `baseRefName`, so the two
+    // have to agree or no row binds at all.
+    h.git(main, 'branch', 'develop');
+    h.git(main, 'push', 'origin', 'develop');
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', 'demo-quiet-basin.base'), 'origin/develop\n');
+    fs.writeFileSync(path.join(wt, 'f.txt'), 'work\n');
+    h.git(wt, 'add', 'f.txt'); h.git(wt, 'commit', '-m', 'work');
+    const tip = h.git(wt, 'rev-parse', 'HEAD');
+    h.git(main, 'checkout', 'develop');
+    h.git(main, 'merge', '--no-ff', '-m', 'Merge PR #42', 'ws/quiet-basin');
+    const merge = h.git(main, 'rev-parse', 'HEAD');
+    h.git(main, 'push', 'origin', 'develop');
+    h.git(main, 'checkout', 'main');
+    h.git(wt, 'push', '-u', 'origin', 'ws/quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip, mergeCommit: { oid: merge }, baseRefName: 'develop' })]);
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    // origin/HEAD is still `main`, which never received the merge — so rung 1
+    // cannot answer and the merge proof is what does.
+    expect(containedByOriginHead(main, 'ws/quiet-basin')).toBe(false);
+    const a = audit();
+    expect(a.merge.proof).toBe('ancestor');
+    expect(a.pr.number).toBe(42);
+  });
+
+  it('a true merge onto the DEFAULT branch is proven by ancestry, and binds no PR (D-173)', () => {
+    // THE DISCLOSED COST of asking rung 1 first, pinned so it is a decision
+    // rather than a drift. This exact fixture used to answer `ancestor` with PR
+    // #42 bound; it now answers `contained` with the PR unbound, because
+    // origin's default branch demonstrably holds every commit and that is
+    // provable with no gh call at all. Nothing unique can be destroyed either
+    // way — the two proofs differ in what they COST and in what they RECORD,
+    // not in what they establish. Operator ruling, 2026-08-22.
     const main = h.makeGhRepo('demo');
     h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
     const wt = path.join(h.home, 'worktrees', 'demo', 'quiet-basin');
@@ -172,7 +267,16 @@ describe('the proof ladder', () => {
     h.git(main, 'push', 'origin', 'main'); h.git(wt, 'push', '-u', 'origin', 'ws/quiet-basin');
     h.ghRows([mergedRow({ headRefOid: tip, mergeCommit: { oid: merge } })]);
     h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
-    expect(audit().merge.proof).toBe('ancestor');
+    const a = audit();
+    expect(a.verdict).toBe('reapable');
+    expect(a.merge.proof).toBe('contained');
+    // The unbound shape, not a plausible value nobody measured.
+    expect(a.pr.number).toBeNull();
+    expect(a.pr.mergeCommit).toBe('');
+    // And the proof was free: rung 1 answered before gh was ever consulted.
+    // Filtered, because `ghCalls` also logs the shadowed `timeout` that wraps
+    // the fetch and the set-head — the assertion is about `gh pr list`.
+    expect(h.ghCalls().filter((c) => c.startsWith('pr list'))).toEqual([]);
   });
 
   it('proves a REBASE MERGE via cherry — the rung nothing else reaches', () => {
@@ -1164,25 +1268,76 @@ describe('identity refusals', () => {
     expect(refusal(wt).verdict).toBe('detached-head');
   });
 
-  it('refuses when git’s record and the registry name different branches, printing both', () => {
+  it('evaluates GIT’s branch when the two records disagree, and refuses in ITS name', () => {
     // Verified against git 2.43: `git checkout -b feat/x` inside a linked
     // worktree rewrites `$GIT_DIR/worktrees/<slug>/HEAD`, so `worktree list
-    // --porcelain` read from $main reports `branch refs/heads/feat/x`. The
-    // divergence this refuses is therefore between two RECORDS — ccrc's
-    // registry and git's registration — and both names go in the detail,
-    // because the remedy is to reconcile them and neither one is guessable
-    // from the other.
+    // --porcelain` read from $main reports `branch refs/heads/feat/x`.
+    //
+    // THIS USED TO REFUSE `registry-branch-drift` OUTRIGHT (D-175). Drift is
+    // the normal end state of a workspace that was archived and then reused,
+    // and refusing it stranded 2 of the 3 workspaces this wave is about while
+    // `ws-rm` — which resolves the same evidence the same way — removed them by
+    // hand. What must NOT change is which branch the answer is about: `feat/x`
+    // is what git has checked out, so `feat/x` is what every rung measures and
+    // what the refusal names. `ws/quiet-basin`, the registry's, is a witness:
+    // reported on the wire, never evaluated, never deleted.
     const { wt, tip } = squashMovedBase();
     h.sh(`cd "${wt}" && git checkout -q -b feat/x`);
     const a = refusal(wt);
-    expect(a.verdict).toBe('registry-branch-drift');
-    expect(a.detail).toContain('ws/quiet-basin');
+    // `feat/x` carries the squash's commits and has no PR of its own, so
+    // nothing proves it — the refusal is about the branch git actually has.
+    expect(a.verdict).toBe('no-upstream');
     expect(a.detail).toContain('feat/x');
-    // The corroboration is on the wire too, and it is FALSE here — the field
-    // exists so a reader can see the disagreement without parsing a sentence.
+    expect(a.detail).not.toContain('ws/quiet-basin');
+    // Both names on the wire, plus the sentence the sheet renders.
+    expect(a.branch).toBe('feat/x');
+    expect(a.registryBranch).toBe('ws/quiet-basin');
+    expect(a.drift).toContain('feat/x');
+    expect(a.drift).toContain('ws/quiet-basin');
     expect(a.headMatchesRegistry).toBe(false);
     expect(tip).toMatch(/^[0-9a-f]{40}$/);
   });
+
+  it('ALLOWS a drifted workspace whose git branch is provably contained (D-175)', () => {
+    // The other half, and the case that cost 3.6 G: the registry names a branch
+    // that has moved on, git names one whose every commit origin already holds.
+    // `ws-rm` accepts this; the sheet refused it. Now the ladder evaluates
+    // git's branch, proves it, and says so — while the registry-named branch is
+    // left standing, which the reap test asserts by looking for it afterwards.
+    const { main, wt } = squashMovedBase();
+    h.sh(`cd "${wt}" && git checkout -q -b feat/x origin/main`);
+    expect(containedByOriginHead(main, 'feat/x')).toBe(true);
+    const a = audit();
+    expect(a.verdict).toBe('reapable');
+    expect(a.merge.proof).toBe('contained');
+    expect(a.branch).toBe('feat/x');
+    expect(a.registryBranch).toBe('ws/quiet-basin');
+    expect(a.headMatchesRegistry).toBe(false);
+    // The note is the operator's warning, and it has to be legible BEFORE the
+    // tap: both names, and which one goes.
+    expect(a.drift).toContain('feat/x');
+    expect(a.drift).toContain('ws/quiet-basin');
+    expect(a.drift).toContain('left alone');
+    expect(a.token).toMatch(/^[0-9a-f]{64}$/);
+  }, 30000);
+
+  it('hashes BOTH names, so rewriting either one invalidates the consent', () => {
+    // The token is the consent boundary, and under drift it covers two
+    // different facts: input 2 is the registry's name, input 11 is git's. A
+    // change to EITHER must invalidate a token issued before it — hashing
+    // git's name twice (the natural mistake once `$branch` becomes git's
+    // answer) would leave a registry rewrite silently consented to.
+    const { wt } = squashMovedBase();
+    h.sh(`cd "${wt}" && git checkout -q -b feat/x origin/main`);
+    const first = audit().token;
+    expect(first).toMatch(/^[0-9a-f]{64}$/);
+    // Move ONLY the registry's name. Nothing git records has changed.
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', 'demo-quiet-basin.branch'), 'ws/renamed\n');
+    const second = audit();
+    expect(second.verdict).toBe('reapable');
+    expect(second.registryBranch).toBe('ws/renamed');
+    expect(second.token).not.toBe(first);
+  }, 30000);
 
   it('asks $main for the branch, so a stray git init cannot speak for us', () => {
     // THE case the unified read exists for, and it is written so it can fail:
@@ -1462,6 +1617,161 @@ describe('the fields a refusal never measured', () => {
  * against an unfetched ref — and proves against origin/HEAD, exactly the
  * definition `_ws_gc_merged` and the per-child ladder already use.
  */
+/**
+ * CONTAINMENT IS PROVEN FROM THE EVIDENCE, AND `@{upstream}` IS NOT EVIDENCE OF
+ * IT. The ladder used to pick its prover by asking whether the remote-tracking
+ * ref resolved: if it did, the PR bind and `_ws_merge_proof`; if it did not,
+ * strict ancestry and nothing else. GitHub deletes the head branch on merge, so
+ * a MERGED branch took the ancestry-only arm — which a squash can never satisfy
+ * — and answered `no-upstream`, a sentence that says "was never pushed" about a
+ * branch that was pushed, reviewed and merged. Three archived workspaces
+ * (~3.6 G) were stuck behind exactly this on 2026-08-22 and had to be removed
+ * by hand with `ws-rm`, which accepted all three: the UI and the CLI disagreed
+ * about identical evidence, and the UI was wrong.
+ *
+ * `_ws_merge_proof` — the `ancestor -> tree -> patch-id -> cherry` ladder — was
+ * already the prover for this. It was simply never called.
+ */
+describe('containment comes from the evidence, not from @{upstream}', () => {
+  it('proves a squash whose remote head GitHub deleted — the upstream is gone, the proof is not', () => {
+    squashRemoteHeadDeleted();
+    const a = audit();
+    expect(a.verdict).toBe('reapable');
+    // patch-id, not `contained`: rung 1 cannot hold for a squash, so this
+    // asserts the merge proof was REACHED rather than that some rung passed.
+    expect(a.merge.proof).toBe('patch-id');
+    expect(a.pr.number).toBe(42);
+    expect(a.token).toMatch(/^[0-9a-f]{64}$/);
+  }, 30000);
+
+  it('proves the same squash with the remote head still present — the fix did not move the failure', () => {
+    // The negative control for the fix itself. Same shape, upstream intact:
+    // this passed before the ladder changed and must still pass after, or the
+    // change traded one broken case for another.
+    const { main } = squashMovedBase();
+    expect(upstreamResolves(main, 'ws/quiet-basin')).toBe(true);
+    const a = audit();
+    expect(a.verdict).toBe('reapable');
+    expect(a.merge.proof).toBe('patch-id');
+    expect(a.pr.number).toBe(42);
+  }, 30000);
+
+  it('proves a merged squash whose upstream CONFIGURATION was removed (D-179)', () => {
+    // THIS TEST USED TO ASSERT THE DEFECT, under the title "refuses a branch
+    // with no upstream — never pushed is never proven", and it passed for
+    // exactly the wrong reason: it takes a genuinely merged squash with its
+    // merged PR row installed, removes the tracking CONFIG, and demanded a
+    // refusal — i.e. it pinned "a fact about a ref in this clone overrides four
+    // provers". Losing an upstream is not evidence about where the work is; the
+    // merge proof answers that question and now gets to.
+    //
+    // The half it was conflating — a branch with NO proof of any kind — keeps
+    // its own test ("still refuses no-upstream when the branch holds work
+    // origin lacks"), which is where that assertion belongs.
+    const { main } = squashMovedBase();
+    h.git(main, 'branch', '--unset-upstream', 'ws/quiet-basin');
+    expect(upstreamResolves(main, 'ws/quiet-basin')).toBe(false);
+    const a = audit();
+    expect(a.verdict).toBe('reapable');
+    expect(a.merge.proof).toBe('patch-id');
+  }, 30000);
+
+  it('an OPEN pull request no longer refuses a workspace origin already holds (D-174)', () => {
+    // THE SECOND DISCLOSED WIDENING, pinned in both directions so it is a
+    // decision rather than an accident. Rung 1 runs before the PR bind, so a
+    // workspace whose commits have all reached origin/HEAD is reapable even
+    // though its PR is still open. Nothing unique is destroyed — that is what
+    // the ancestry proof states — and reap deletes only the LOCAL branch, so
+    // the open PR and its remote head are untouched by it.
+    const main = h.makeGhRepo('demo');
+    h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
+    const wt = path.join(h.home, 'worktrees', 'demo', 'quiet-basin');
+    fs.writeFileSync(path.join(wt, 'f.txt'), 'work\n');
+    h.git(wt, 'add', 'f.txt'); h.git(wt, 'commit', '-m', 'work');
+    const tip = h.git(wt, 'rev-parse', 'HEAD');
+    h.git(wt, 'push', '-u', 'origin', 'ws/quiet-basin');
+    h.git(main, 'merge', '--ff-only', 'ws/quiet-basin');
+    h.git(main, 'push', 'origin', 'main');
+    h.ghRows([mergedRow({ headRefOid: tip, state: 'OPEN', mergedAt: null, mergeCommit: null })]);
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    const a = audit();
+    expect(a.verdict).toBe('reapable');
+    expect(a.merge.proof).toBe('contained');
+    expect(a.pr.number).toBeNull();
+  }, 30000);
+
+  it('...and an OPEN pull request whose work origin does NOT hold still refuses', () => {
+    // The other direction of D-174, and the one that matters: the widening is
+    // the ancestry PROOF, never the open PR. Take the proof away and the
+    // refusal is exactly the one it always was.
+    const { wt, tip } = squashMovedBase();
+    h.ghRows([mergedRow({ headRefOid: tip, state: 'OPEN', mergedAt: null, mergeCommit: null })]);
+    expect(refusal(wt).verdict).toBe('not-merged');
+  }, 30000);
+
+  it('names the branch the RESUME will remove, not the one it will keep', () => {
+    // The drift rung lives inside `if [[ -d "$workdir" ]]`, so once the
+    // worktree is gone — the ordinary state after a reap was interrupted at
+    // (f) — there is no git record left to ask and `$branch` stayed the
+    // REGISTRY's. On a drifted workspace that is the one branch the cleanup is
+    // NOT about: the sheet named `ws/quiet-basin` while the journal, the tail
+    // and step (g) were all about `feat/x`. Measured before the fix, end to
+    // end, with a real reap killed after (f).
+    const { main, wt } = squashMovedBase();
+    h.sh(`cd "${wt}" && git checkout -q -b feat/x origin/main`);
+    // The journal a killed run leaves behind, written by ccd itself at (b).
+    h.sh('_reg_set demo-quiet-basin reaping branch');
+    fs.mkdirSync(path.join(h.home, '.cc-sessions', '.reaped'), { recursive: true });
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', '.reaped', 'demo-quiet-basin.json'),
+      JSON.stringify({ id: 'demo-quiet-basin', project: 'demo', branch: 'feat/x',
+        registryBranch: 'ws/quiet-basin',
+        tip: h.git(main, 'rev-parse', 'refs/heads/feat/x') }));
+    h.git(main, 'worktree', 'remove', wt);
+    const a = audit();
+    expect(a.verdict).toBe('reap-interrupted');
+    expect(a.branch).toBe('feat/x');
+    expect(a.registryBranch).toBe('ws/quiet-basin');
+    expect(a.drift).toContain('feat/x');
+  }, 30000);
+
+  it('does not call a branch pushed WITHOUT -u "never pushed"', () => {
+    // The third witness. `@{upstream}` needs config AND a tracking ref;
+    // `branch.<name>.merge` is absent for `git push origin ws/x` with no `-u` —
+    // a push that leaves the branch on origin and configures nothing, which
+    // `cmd_ws_rename` already asks origin directly about for the same reason.
+    // Without the tracking-REF witness the refusal reads "was never pushed"
+    // about commits that are demonstrably on origin: the same false sentence
+    // the whole ladder was fixed for, one rung further down.
+    const { wt, main } = squashMovedBase();
+    h.git(main, 'branch', '--unset-upstream', 'ws/quiet-basin');
+    h.ghRows([]);
+    expect(upstreamResolves(main, 'ws/quiet-basin')).toBe(false);
+    expect(h.git(main, 'rev-parse', '--verify', 'refs/remotes/origin/ws/quiet-basin'))
+      .toMatch(/^[0-9a-f]{40}$/);
+    const r = refusal(wt);
+    expect(r.verdict).toBe('no-bound-pr');
+    expect(r.detail).not.toMatch(/never pushed/);
+  }, 30000);
+
+  it('refuses when the head is deleted and NO merged PR binds — a missing upstream proves nothing either way', () => {
+    // The other half of the same rule. Losing the upstream must not authorise
+    // anything on its own: with no PR to bind and no ancestry, there is no
+    // proof left, and the answer is still a refusal.
+    //
+    // `no-bound-pr`, NOT `no-upstream`, and the difference is the sentence an
+    // operator reads. This branch WAS pushed — `branch.<name>.merge` still says
+    // so, even though GitHub's delete took the tracking ref with it — so "was
+    // never pushed" would be false about it in exactly the way the old ladder's
+    // refusal was false. `no-upstream` is reserved for a branch with no remote
+    // evidence at all, which is what the never-pushed fixtures below assert.
+    const { wt } = squashRemoteHeadDeleted();
+    h.ghRows([]);
+    const r = refusal(wt);
+    expect(r.verdict).toBe('no-bound-pr');
+    expect(r.detail).not.toMatch(/never pushed/);
+  }, 30000);
+});
+
 describe('the contained rung — never pushed, nothing unique', () => {
   /** Work happened on the branch and reached origin/main by fast-forward; the
    *  branch itself was never pushed and no PR ever existed for it. */
@@ -1558,6 +1868,34 @@ describe('the contained rung — never pushed, nothing unique', () => {
     expect(refusal(wt).verdict).toBe('no-upstream');
   }, 30000);
 
+  it('does not tell a project with a NON-GITHUB origin that it has no origin', () => {
+    // `makeRepo`, not `makeGhRepo`: a plain local-path origin, which is what a
+    // self-hosted or GitLab project looks like to `_gh_repo_slug` — it wants
+    // OWNER/NAME and fails on anything else. On the old ladder a branch with no
+    // upstream took the contained arm and never called that helper, so this
+    // refused `no-upstream` with a true detail. Routing every branch through
+    // rung 2 put it on `_gh_repo_slug`'s `no-remote`, whose SENTENCE — the only
+    // thing the sheet renders — reads "This project has no `origin` remote"
+    // about a repository ccd had fetched from three rungs earlier.
+    //
+    // That is the same false-sentence class the whole wave exists to remove, so
+    // it gets the same answer: an origin that is not GitHub is not a missing
+    // origin, it is a repository no PR can bind to.
+    const main = h.makeRepo('demo');
+    h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
+    const wt = path.join(h.home, 'worktrees', 'demo', 'quiet-basin');
+    fs.writeFileSync(path.join(wt, 'f1.txt'), 'work origin never got\n');
+    h.git(wt, 'add', 'f1.txt');
+    h.git(wt, 'commit', '-m', 'unique work');
+    h.ghRows([]);
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    // The origin is real and readable — that is the point.
+    expect(h.git(main, 'config', '--get', 'remote.origin.url')).toContain('origins/demo.git');
+    const r = refusal(wt);
+    expect(r.verdict).toBe('no-upstream');
+    expect(r.verdict).not.toBe('no-remote');
+  }, 30000);
+
   it('refuses no-remote when the project has no origin at all', () => {
     const { wt, main } = containedNeverPushed();
     h.git(main, 'remote', 'remove', 'origin');
@@ -1581,12 +1919,6 @@ describe('the refusals the ladder reaches last', () => {
     const { wt } = squashMovedBase();
     expect(refusal(wt, '_ws_status() { echo busy; };').verdict).toBe('session-busy');
     expect(refusal(wt, '_ws_status() { return 1; };').verdict).toBe('status-unknown');
-  });
-
-  it('refuses a branch with no upstream — never pushed is never proven', () => {
-    const { wt, main } = squashMovedBase();
-    h.git(main, 'branch', '--unset-upstream', 'ws/quiet-basin');
-    expect(refusal(wt).verdict).toBe('no-upstream');
   });
 
   it('refuses a bound PR that is not merged', () => {
