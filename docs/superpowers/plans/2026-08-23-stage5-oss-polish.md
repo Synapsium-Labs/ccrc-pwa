@@ -608,3 +608,52 @@ list. **No transfer, no flip, no tag happens from this session.**
   arm exists for; presence (a completed handshake + a parseable x509) is the
   measurement, and the WARN text says whose CA it is from the mode, which is the fact
   the file itself records.
+- **D-201** (Task 9): five drifts in the README restructure. (1) The release one-liner
+  is clone-then-`bash install.sh --release`, not the spec §1 sentence's `curl … | bash`
+  shape: install.sh's line 16 reads `${BASH_SOURCE[0]}` under `set -u`, so a piped body
+  dies with `unbound variable` before parsing an argument (measured; the runbook's own
+  12b already documents "the clone is only a way of having install.sh"). The owner value
+  is quoted in the URL as prose — `single-definition`'s two-assignment count pin scans
+  shell, and its own comment sanctions prose ("only a line of shell is a copy"). (2) The
+  Step 1 anchor `:1194` had drifted: Task 8's sweep already left the remote-verify curl
+  and the e2e base URL speaking `203.0.113.7`; both now speak `<server-host>:7788`
+  bracket forms, per the global role vocabulary. (3) Three paragraphs still described
+  behaviour Tasks 3/5 removed — deploy.sh's "default target" and health-URL-default
+  sentences (both are refusals/derivations now) and the `deploy/accounts.migration.json`
+  bullet (file deleted in Task 5) — none was in those tasks' file lists (docs were
+  Tasks 8–9's), so their correction lands here. (4) The holds section moved VERBATIM to
+  become the last subsection of "Programs, runs and mail" (the plan said the middle
+  carries it but named no parent); `readme-holds` slices heading→next `##`, so the slice
+  is byte-identical. (5) CLAUDE.md:8's figure is "~1,650 lines", approximate on purpose —
+  an exact count goes stale on the next doc edit; the shape note beside it (install-first,
+  internals below the fold) is what a reader actually needs. Also under this number:
+  `typecheck-tests` reds when vitest runs from the box's `/data` symlinked logical cwd
+  (tsc emits `/data/...` program paths while `import.meta` speaks the canonical
+  `/mnt/...`); 9/9 from the canonical path — an environment artifact of this box's dual
+  root, not a suite or tree defect.
+- **D-202** (whole-branch review must-fix 1): the `tailnet name` and `duckdns subdomain`
+  classes carry the `i` flag the plan's pattern drafts lacked. DNS is case-blind, so a
+  capitalised residue token or an upper-cased name locates the same real box, and the
+  roster/operator residue classes already banned every casing — the two name classes
+  landing case-sensitive admitted everything but lowercase. Measured green-safe (zero
+  case variants in today's tree; the bracket and bare-suffix `passes` vocabulary is
+  untouched by the flag), and each class gains a case-variant liveness fixture. The
+  duckdns `allowed` vocabulary stays exact-lowercase deliberately: docs speak the
+  canonical placeholder spelling, so a case-variant placeholder is flagged drift.
+- **D-203** (whole-branch review must-fix 2): the ratchet scans tracked PATHS as well as
+  contents — every `git ls-files` path fed through the same classes as its own one-line
+  pseudo-file (`PATH_CORPUS`), because a tracked file NAMED after a forbidden token with
+  clean contents evaded the contents-only walk, and the name ships in every clone as
+  loudly as the bytes. The path corpus takes NO exclusion: the content walk's two
+  escapes (`SELF`, binary extensions) are byte-arguments, so even this suite's own path
+  is name-scanned, pinned by a corpus row. Measured green-safe against today's
+  `git ls-files`. Ceremony for both (2026-08-23): a case-variant of each name class
+  planted in README.md plus a tracked file named after the tailnet residue → pre-fix
+  suite 30/30 GREEN (both blindnesses demonstrated), fixed suite exactly 3 reds (one
+  per probe), 38/38 on revert. Under the same review: README's expose section said
+  "symlink or copy" the Caddyfile, contradicting D-165's copy-only ruling the verb and
+  three suites already pin — it now says copy, with the symlink named as the defect;
+  and the gitignored operator continuity file regains the two rows the sweep orphaned
+  (the Mac-side clip env triple, and the fleet host's server-address env for swap
+  notices, absent per the old D-73 measurement — a tree with no baked fallback sends
+  nothing until that file exists).

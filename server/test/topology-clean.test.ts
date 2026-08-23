@@ -29,6 +29,12 @@
 // planted in README.md), 30/30 on revert. Task 10 final close 2026-08-23:
 // one token each of 3 classes (public IPv4, CGNAT, duckdns) planted on one
 // README.md line → exactly 3 reds, one per class; 30/30 on revert.
+// Whole-branch review re-measure 2026-08-23 (D-202 case flags, D-203 path
+// corpus): with both gaps probed at once — a case-variant of each name class
+// planted in README.md AND a tracked file NAMED after the tailnet residue —
+// the pre-fix suite ran 30/30 GREEN (both blindnesses demonstrated), the
+// fixed suite exactly 3 reds (tailnet content, duckdns content, tailnet
+// path — one per probe), and 38/38 on revert.
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -60,10 +66,12 @@ const BINARY_EXT = new Set([
 // `git ls-files` from the repo root IS the corpus definition: every tracked
 // file, nothing registered by hand — a new file needs no wiring to be
 // scanned, which is what makes this a ratchet rather than a checklist.
-const trackedFiles: string[] = execFileSync('git', ['ls-files', '-z'], {
+const trackedPaths: string[] = execFileSync('git', ['ls-files', '-z'], {
   cwd: root, maxBuffer: 64 * 1024 * 1024,
 })
-  .toString('utf8').split('\0').filter(Boolean)
+  .toString('utf8').split('\0').filter(Boolean);
+
+const trackedFiles: string[] = trackedPaths
   .filter((f) => f !== SELF && !BINARY_EXT.has(path.extname(f)));
 
 interface CorpusFile { file: string; lines: string[] }
@@ -81,6 +89,15 @@ for (const file of trackedFiles) {
   }
   CORPUS.push({ file, lines: text.split('\n') });
 }
+
+/** Every tracked PATH as its own one-line pseudo-file, fed through the same
+ *  classes (D-203, whole-branch review): a tracked file NAMED after a
+ *  forbidden token with clean contents evaded the contents-only walk — the
+ *  name ships in every clone as loudly as the bytes do. No exclusion at all
+ *  here: SELF and the binary extensions are skipped from CORPUS because their
+ *  BYTES are forbidden-by-design or not text; their NAMES enjoy no such
+ *  license, so even this suite's own path is scanned. */
+const PATH_CORPUS: CorpusFile[] = trackedPaths.map((p) => ({ file: p, lines: [p] }));
 
 /** One forbidden class. Later stage-5 tasks APPEND to `FORBIDDEN` — the
  *  table is the ratchet's whole registration surface. */
@@ -243,11 +260,16 @@ const FORBIDDEN: ForbiddenClass[] = [
     // (`<tailnet>.ts.net`), which the `>` keeps out of the pattern's reach.
     // Bare `ts.net` stays legal: it is the PUBLIC SUFFIX, load-bearing in
     // webauthn.ts's PUBLIC_SUFFIX_TRAPS and every PSL discussion.
-    pattern: new RegExp(`[a-z0-9-]+\\.ts\\.net|${TAILNET_RESIDUE.join('|')}`, 'g'),
+    // Case-insensitive (D-202, whole-branch review): DNS is case-blind, so a
+    // capitalised residue token or an upper-cased `.ts.net` name locates the
+    // same real box — the roster/operator classes already carried `i`, and
+    // this class landing without it admitted every casing but lowercase.
+    pattern: new RegExp(`[a-z0-9-]+\\.ts\\.net|${TAILNET_RESIDUE.join('|')}`, 'gi'),
     why: 'a tailnet DNS name or the reference fleet\'s own name tokens locate somebody\'s real box',
     // Task 4 landed this class scoped to the runtime tree (D-193's reason,
     // restated at the CGNAT class); Task 8 dropped the scope.
-    catches: ['fixture-box.ts.net', TAILNET_RESIDUE[0]!, TAILNET_RESIDUE[1]!],
+    catches: ['fixture-box.ts.net', TAILNET_RESIDUE[0]!, TAILNET_RESIDUE[1]!,
+      'Fixture-Box.TS.NET', TAILNET_RESIDUE[1]!.toUpperCase()],
     passes: ['mybox.example.com', 'ts.net', '*.ts.net', '<tailnet>.ts.net',
       '<other-box>.<tailnet>.ts.net', 'tailscale.net'],
   },
@@ -273,10 +295,14 @@ const FORBIDDEN: ForbiddenClass[] = [
     name: 'duckdns subdomain',
     // DuckDNS names are claimed by a person — any subdomain outside the
     // placeholder vocabulary is somebody's real, resolvable box.
-    pattern: /[a-z0-9-]+\.duckdns\.org/g,
-    why: 'a duckdns subdomain resolves to somebody\'s real box — docs and fixtures speak mybox/otherbox/fixture/subdomain',
+    // Case-insensitive (D-202, same reason as the tailnet class: DNS is
+    // case-blind). The `allowed` vocabulary stays EXACT-lowercase on purpose:
+    // the docs speak the canonical placeholder spelling, so a case-variant
+    // placeholder is a vocabulary drift the ratchet flags, not admits.
+    pattern: /[a-z0-9-]+\.duckdns\.org/gi,
+    why: 'a duckdns subdomain outside the placeholder set resolves to somebody\'s real box',
     allowed: (token) => DUCKDNS_PLACEHOLDERS.has(token.replace(/\.duckdns\.org$/, '')),
-    catches: ['realbox.duckdns.org'],
+    catches: ['realbox.duckdns.org', 'RealBox.DuckDNS.org'],
     passes: ['mybox.duckdns.org', 'otherbox.duckdns.org', 'fixture.duckdns.org',
       'subdomain.duckdns.org', 'www.duckdns.org', '<sub>.duckdns.org', '<name>.duckdns.org'],
   },
@@ -361,6 +387,15 @@ describe('the corpus this walks', () => {
     // excludes is the file it lives in.
     expect(path.relative(root, fileURLToPath(import.meta.url))).toBe(SELF);
   });
+
+  it('the path corpus reaches even the files whose CONTENTS are excluded', () => {
+    // D-203: the content walk's two escapes (SELF, binary extensions) are
+    // byte-arguments, so the path corpus must cover MORE than CORPUS does —
+    // this suite's own path included.
+    const paths = PATH_CORPUS.map((c) => c.file);
+    expect(paths).toContain(SELF);
+    expect(paths.length).toBeGreaterThanOrEqual(CORPUS.length);
+  });
 });
 
 for (const cls of FORBIDDEN) {
@@ -395,6 +430,13 @@ for (const cls of FORBIDDEN) {
 
     it('nothing in the tree speaks it', () => {
       expect(violationsOf(cls)).toEqual([]);
+    });
+
+    it('and no tracked path is NAMED after it', () => {
+      // D-203: the pseudo-line rides the same violationsOf machinery as the
+      // content scan, so the liveness rows above cover this walk too — a
+      // neutered violationsOf reds them before it could quietly green this.
+      expect(violationsOf(cls, PATH_CORPUS)).toEqual([]);
     });
   });
 }
