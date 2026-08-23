@@ -37,6 +37,17 @@ const SECRET_FILES = [
   'deploy/exposure.env',
 ];
 
+/** The same names ANYWHERE (D-171). The rules were `deploy/…` globs — which is
+ *  where the files really live, and exactly why that was wrong: a pattern
+ *  carrying a slash matches one directory, so a copy at the repo root or under
+ *  any other package was publishable while the .gitignore looked like it had
+ *  the subject covered. Measured before the fix: `ccrc.env`, `server/ccrc.env`
+ *  and `deploy/sub/ccrc.env` were all NOT ignored. */
+const SECRET_NAMES_ANYWHERE = [
+  'ccrc.env', 'ccrc-agent.env', 'agent.env', 'ccrc-mail.token', 'exposure.env',
+];
+const PLACES = ['', 'server/', 'agent/', 'pwa/', 'deploy/sub/', 'a/b/c/'];
+
 /** What an operator's hands actually produce next to a file they are editing. */
 const VARIANTS = ['.bak', '.bak-1787398337', '.save', '.orig', '.tmp', '.2', '~'];
 
@@ -50,6 +61,17 @@ describe('.gitignore: a token file and every copy of it', () => {
     '%s is ignored — the backup is as dangerous as the original', (f) => {
       expect(ignored(f), `${f} would be publishable`).toBe(true);
     });
+
+  it.each(SECRET_NAMES_ANYWHERE.flatMap((n) => PLACES.map((d) => [`${d}${n}`] as const)))(
+    '%s is ignored — these names are never safe, wherever they sit', (f) => {
+      expect(ignored(f), `${f} would be publishable`).toBe(true);
+    });
+
+  it('local harness config is ignored by the REPO, not by one clone', () => {
+    // `.claude/` was excluded only via .git/info/exclude, which is per-clone
+    // and travels with nobody — so the protection vanished on the first fork.
+    expect(ignored('.claude/settings.json')).toBe(true);
+  });
 
   // The negations are load-bearing in the other direction: the .example files
   // carry placeholders, no secrets, and MUST stay tracked. Boot refuses the
