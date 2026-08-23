@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config';
+import { swDenylist } from './src/lib/sw-denylist.js';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
@@ -49,12 +50,17 @@ export default defineConfig({
         // Precache the app shell only: JS/CSS/HTML + icons + manifest. Server
         // state must never be cached — /api and /ws are explicitly
         // network-only (and navigations to them never fall back to the shell).
-        // /docs (docserver) and /fleet (rp-llm preview) are co-tenants at the
-        // root: deny-list them so the PWA's SPA fallback never hijacks their
-        // navigations — they must pass through to the network (tailscale serve).
+        //
+        // CO-TENANTS ARE A BUILD-TIME KNOB, not a built-in list. `/docs` (a
+        // docserver) and `/fleet` (a preview) are what the REFERENCE box puts
+        // behind the same proxy; a stranger's install has neither, and baking
+        // those paths in would ship one operator's reverse-proxy layout inside
+        // everybody's service worker. The box that has co-tenants sets
+        // CCRC_SW_DENYLIST in its own (gitignored) env — see
+        // deploy/ccrc.env.example.
         globPatterns: ['**/*.{js,css,html,png,svg,webmanifest}'],
         navigateFallback: '/index.html',
-        navigateFallbackDenylist: [/^\/api\//, /^\/ws\//, /^\/docs(\/|$)/, /^\/fleet(\/|$)/],
+        navigateFallbackDenylist: swDenylist(process.env['CCRC_SW_DENYLIST']),
         // Web Push handlers (push + notificationclick) live in public/push-sw.js
         // and are pulled into the generated worker.
         importScripts: ['/push-sw.js'],

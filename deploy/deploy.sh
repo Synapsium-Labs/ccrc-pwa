@@ -20,10 +20,24 @@ cd "$REPO_ROOT"
 #     CCRC_BOX=user@host                 # required: the target
 #     CCRC_SSH_KEY=$HOME/.ssh/id_ed25519 # required: identity file
 #     CCRC_SSH_PORT=22                   # optional, default 22
+#     CCRC_SW_DENYLIST=/docs,/fleet      # optional: paths on the box's origin
+#                                        # that are NOT ccrc (see below)
 #
 CCRC_DEPLOY_ENV="${CCRC_DEPLOY_ENV:-$HOME/.ccrc/deploy.env}"
 # shellcheck source=/dev/null
 [ -r "$CCRC_DEPLOY_ENV" ] && . "$CCRC_DEPLOY_ENV"
+
+# EXPORTED, and that is the whole point of the line. The PWA is built HERE, on
+# the deploying workstation (see the server lane's `cd pwa && npm run build`),
+# and `vite.config.ts` reads this out of `process.env` to decide which
+# navigations the service worker must leave alone. Sourcing deploy.env makes it
+# a shell variable; only exporting it reaches the build. Without the export an
+# operator sets the knob, sees no error, ships a worker that has never heard of
+# it, and their co-tenant at /docs starts answering with the ccrc shell on
+# client-side navigations only — which reads as an intermittent fault in the
+# OTHER application. `deploy-coordinates.test.ts` pins the export for that
+# reason.
+export CCRC_SW_DENYLIST="${CCRC_SW_DENYLIST:-}"
 
 # Refuse, with the fix in the message, rather than guessing. Exit 2 = usage
 # error, the same contract `ccrc` states for its own verbs.

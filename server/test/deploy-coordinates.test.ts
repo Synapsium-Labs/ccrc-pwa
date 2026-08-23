@@ -129,6 +129,16 @@ describe('deploy.sh: the target is never guessed', () => {
     expect(script).toContain('CCRC_SSH_PORT="${CCRC_SSH_PORT:-22}"');
   });
 
+  it('EXPORTS the service-worker denylist, or the knob is inert', () => {
+    // deploy.env is `.`-sourced, so its keys are shell variables. The PWA is
+    // built by a CHILD process (`cd pwa && npm run build`), which sees only
+    // exported ones. Set-but-not-exported is the worst shape available here:
+    // no error, a worker built without the paths, and a co-tenant that breaks
+    // on client-side navigation only — looking like a fault in the other app.
+    expect(script, 'CCRC_SW_DENYLIST is not exported — the PWA build cannot see it')
+      .toMatch(/^export CCRC_SW_DENYLIST=/m);
+  });
+
   it('reads per-workstation coordinates from a file outside every checkout', () => {
     // Outside the repo on purpose: this box carries many worktrees of the same
     // repo, and a per-checkout file would be both duplicated and one careless
