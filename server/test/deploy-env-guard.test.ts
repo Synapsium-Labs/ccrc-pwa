@@ -310,7 +310,7 @@ describe('deploy.sh and ccrc read an env file the same way', () => {
   });
 });
 
-// ── the roster a stranger's first deploy seeds, permanently (D-172) ─────────
+// ── the roster a stranger's first deploy seeds, permanently (D-197) ─────────
 //
 // `deploy.sh` used to default `CCRC_ACCOUNTS_JSON` to
 // `deploy/accounts.migration.json` — the REFERENCE FLEET's five accounts,

@@ -34,6 +34,35 @@ internal CA, vite PWA config.
 
 ---
 
+## Ledger allocations for this stage
+
+`origin/main`'s high-water at the time of writing is **D-188**. The Tasks 1/3/4 branch
+(`feat/stage5-oss-polish`) allocated **D-189…D-195** before it was pushed; that block is
+RESERVED even though it is not on `main` yet. This branch therefore starts at **D-196**.
+
+Two collisions were found and fixed while doing it, both of the kind CLAUDE.md warns about
+("check `origin/main` for landed D-numbers before allocating on a new branch"):
+
+- **D-171 was landed twice**, by PRs merged twenty minutes apart on 2026-08-23 — ws-reap's
+  "containment is no longer selected by `@{upstream}`" (#94, first) and this stage's
+  unanchored gitignore globs (#93, second). The later one renumbers: the gitignore
+  deviation is now **D-196**, at its three sites (`.gitignore`,
+  `server/test/gitignore-secrets.test.ts`, `server/test/install-coordinator-skill.test.ts`).
+- **D-172, D-173 and D-174 were re-used** by this branch while all three were already taken
+  on `main` by the same ws-reap plan — D-174 is pinned live by
+  `server/test/ccd-ws-audit.test.ts`. Renumbered to **D-197** (the roster-seed guard),
+  **D-198** (the owner-spelled-twice margin note) and **D-199** (the notify address chain).
+
+**Not fixed, and not this stage's to fix:** the ledger already carries older duplicate
+DEFINITIONS — `D-128` is defined by both `2026-08-20-regset-atomic-write.md` and
+`2026-08-20-stage3a-auth.md`, and a further ~11 numbers in the D-129…D-139 range are in the
+same state, residue of stage3a's descending renumber. A scanner over
+`^- \*\*D-N —` in the plans corpus would mechanise this, but it cannot ship green until
+those are reconciled, and pinning them in an exceptions list would be the same
+allowlist-shaped mistake this stage's Task 1 review already caught once. Recorded as
+follow-up, deliberately not papered over.
+
+
 ## Operator rulings recorded during execution (2026-08-23)
 
 - **R-A — the roster labels (§5/S4).** *Neutralise the shipped defaults; the live boxes
@@ -123,7 +152,7 @@ internal CA, vite PWA config.
   `Synapsium-Labs` (as an owner/org value) is DEFINED once in `install.sh` — a second
   definition elsewhere is red. Run; if #93 already added an equivalent pin, skip with a
   comment in the plan margin.
-  > **Margin (2026-08-23, D-173).** Taken with one stated deviation: the owner is spelled
+  > **Margin (2026-08-23, D-198).** Taken with one stated deviation: the owner is spelled
   > **twice**, not once, and the pin enforces *exactly two declarations and no third*.
   > `install.sh` is the `curl | bash` bootstrap — it runs on a box with no ccrc and can
   > source nothing — while `ccd/ccrc` is the installed tool that self-updates. Making

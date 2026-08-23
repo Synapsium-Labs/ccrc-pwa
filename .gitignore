@@ -21,7 +21,7 @@ agent/dist/
 # The `!` lines are why the glob is safe: the committed .example placeholders
 # carry no secrets and MUST stay tracked (boot refuses the unedited mail-token
 # placeholder by name, so its absence would be a different failure).
-# UNANCHORED on purpose (D-171). These were `deploy/…` globs, which is where the
+# UNANCHORED on purpose (D-196). These were `deploy/…` globs, which is where the
 # files actually live — and that is exactly why it was wrong: a pattern with a
 # slash matches ONE directory, so `ccrc.env` at the repo root, `server/ccrc.env`,
 # or a copy inside any subdirectory was publishable while looking covered. A

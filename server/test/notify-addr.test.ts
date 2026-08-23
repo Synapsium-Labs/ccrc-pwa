@@ -1,7 +1,7 @@
 // `deploy/notify.sh`'s address-resolution chain, now TWO tiers: `CCRC_ADDR`
 // env > `~/.ccrc/ccrc.env`'s `CCRC_HOST`+`CCRC_PORT` > nothing at all.
 //
-// The third tier — the reference fleet's own IP — is gone (D-174). It was
+// The third tier — the reference fleet's own IP — is gone (D-199). It was
 // added "kept one generation so a hook shipped ahead of the config file cannot
 // go dark", and it outlived that generation: shipped publicly it is a
 // compiled-in address pointing at one operator's box, so on anyone else's
@@ -131,7 +131,7 @@ describe('deploy/notify.sh address resolution', () => {
     expect(curlCalls(home).join('\n')).toContain('http://127.0.0.1:7788/api/notify');
   });
 
-  it('SENDS NOTHING when neither CCRC_ADDR nor ccrc.env resolves an address (D-174)', () => {
+  it('SENDS NOTHING when neither CCRC_ADDR nor ccrc.env resolves an address (D-199)', () => {
     // This used to fall back to the reference fleet's own IP, "kept one
     // generation so a hook shipped ahead of the config file cannot go dark".
     // It outlived that generation and became a compiled-in address pointing at
@@ -144,7 +144,7 @@ describe('deploy/notify.sh address resolution', () => {
     expect(curlCalls(home), 'a guessed address is worse than silence').toEqual([]);
   });
 
-  it('a scheme-carrying CCRC_ADDR is used verbatim — the proxied-box case (D-174)', () => {
+  it('a scheme-carrying CCRC_ADDR is used verbatim — the proxied-box case (D-199)', () => {
     // A box behind a reverse proxy binds the server to LOOPBACK, which is the
     // point of the proxy; `host:port` from another machine then reaches
     // nothing. Measured on the reference fleet 2026-08-23: after the server

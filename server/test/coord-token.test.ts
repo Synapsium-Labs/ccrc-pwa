@@ -182,7 +182,7 @@ describe('deploy/notify.sh carries the token the way the server expects it', () 
     // the start of ADDRESS resolution.
     //
     // The end marker used to be `curl -fsS`, which silently included whatever
-    // sat between the two blocks. When D-174 put `[ -n "$ADDR" ] || exit 0`
+    // sat between the two blocks. When D-199 put `[ -n "$ADDR" ] || exit 0`
     // there, the snippet began exiting before it could print — every case in
     // this describe went red for a reason that had nothing to do with tokens.
     // Ending at the address block says what the slice is actually for, and the

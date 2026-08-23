@@ -252,7 +252,7 @@ describe('the deploy ships the skill, agent-side — and PR I’s token lane is 
     // minted one"), so a raw filesystem check would fail on exactly the box
     // this project runs on. `git ls-files` is what "committed" means.
     // Ask GIT whether it is ignored, not .gitignore whether it contains a
-    // particular string (D-171). This asserted the literal `deploy/ccrc-mail.token`
+    // particular string (D-196). This asserted the literal `deploy/ccrc-mail.token`
     // and so went red when the rule was STRENGTHENED from a `deploy/…` glob —
     // which matches one directory — to an unanchored name that matches at any
     // depth. The property is "git will not add this file"; the spelling of the

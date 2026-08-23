@@ -35,7 +35,7 @@ fi
 # Address resolution: CCRC_ADDR env > ~/.ccrc/ccrc.env's CCRC_HOST+CCRC_PORT.
 # The env file is grepped, never sourced: it holds tokens (ccd/ccrc:355-380).
 #
-# CCRC_ADDR MAY CARRY A SCHEME (D-174), and on an exposed fleet it must. A box
+# CCRC_ADDR MAY CARRY A SCHEME (D-199), and on an exposed fleet it must. A box
 # put behind a reverse proxy binds the server to LOOPBACK — that is the point
 # of the proxy — at which point `host:port` from another machine reaches
 # nothing. Measured 2026-08-23: after the reference server moved to a loopback
@@ -66,7 +66,7 @@ if [ -z "$ADDR" ] && [ -r "$HOME/.ccrc/ccrc.env" ]; then
   [ -n "$_h" ] && [ -n "$_p" ] && ADDR="$_h:$_p"
 fi
 
-# No address configured is a SILENT NO-OP, deliberately (D-174). The legacy
+# No address configured is a SILENT NO-OP, deliberately (D-199). The legacy
 # third tier here was the reference fleet's own IP, kept "one generation" so a
 # hook shipped ahead of its config could not go dark; it outlived that
 # generation and became a compiled-in address pointing at one operator's box —
