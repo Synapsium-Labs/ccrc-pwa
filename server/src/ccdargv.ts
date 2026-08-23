@@ -252,19 +252,19 @@ export function verbSupported(
 
 /** The `ccd caps` token that says this box parses `--surface`/`--actor`/
  *  `--reason` on the five workspace verbs (wave 5). Spelled ONCE in
- *  `server/src`: `sweepDec` and `server.ts`'s `pwaDec` are meant to read it
- *  from here, because a capability token copied into two files is the drift
- *  shape `single-definition.test.ts` exists for. ccd's own `echo
- *  actor-flags-v1` and `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are
- *  the other two spellings, and a parity check keeps THOSE two equal
- *  (`ccd-archive.test.ts`'s `advertises exactly the verbs...` case) — but
- *  that check does not import this file, so THIS spelling is not yet party
- *  to it (measured by mutation: corrupting this literal fails only
- *  `capsupported.test.ts`'s own self-check, nothing cross-file). Until a
- *  consumer or a test reads `ACTOR_FLAGS_CAP` itself, drift between this
- *  constant and the other two would go undetected — RULE 8 applies:
- *  `single-definition.test.ts` has no hand-written finding for this
- *  vocabulary either. */
+ *  `server/src`: `server.ts`'s `pwaDec` reads it from here (wave 6), because a
+ *  capability token copied into two files is the drift shape
+ *  `single-definition.test.ts` exists for. ccd's own `echo actor-flags-v1` and
+ *  `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are the other two
+ *  spellings, and a parity check keeps THOSE two equal (`ccd-archive.test.ts`'s
+ *  `advertises exactly the verbs...` case) — that same test now also imports
+ *  THIS constant and asserts `KNOWN_CAPABILITY_TOKENS` contains it (wave 6),
+ *  closing the gap this docstring used to disclose: before that line existed,
+ *  corrupting this literal reddened only `capsupported.test.ts`'s own
+ *  self-check, nothing cross-file (measured by mutation). RULE 8 still
+ *  applies to `single-definition.test.ts` itself — it has no hand-written
+ *  finding for this vocabulary, so its own green run is not what proves the
+ *  parity; the `toContain` assertion above is. */
 export const ACTOR_FLAGS_CAP = 'actor-flags-v1';
 
 /**

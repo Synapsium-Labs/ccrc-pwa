@@ -650,3 +650,62 @@ describe('§1.7 — cutShort: one reader for both halves, three answers, one ado
     expect(cutShort(r(true, UNMEASURED))).not.toBe(UNMEASURED);
   });
 });
+
+describe('wave 6 — the dec flags are sent only to a ccd that says it parses them', () => {
+  // THE HEADLINE CASE. An old ccd meets `--surface pwa` inside
+  // `cmd_ws_archive`'s exact-arity guard; on the paths where it does not die,
+  // `runCcdOr502` renders exit 0 as `200 {ok:true}` for a call that recorded
+  // nothing. Guessing wrong here costs a SILENT SUCCESS, which is why
+  // `capSupported` refuses on no evidence.
+  it('an OLD ccd (no actor-flags-v1) receives the bare argv, byte for byte', async () => {
+    const { app, calls, cfg } = await makeApp({ ccdVerbs: ['ws-archive', 'ws-restore', 'ws-hold', 'ws-release'] });
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/archive`, payload: {} });
+    expect(res.statusCode).toBe(200);
+    expect(calls).toEqual([[cfg.ccdBin, 'ws-archive', '--session', ID]]);
+    await app.close();
+  });
+
+  it('NO EVIDENCE AT ALL is treated as an old ccd, never as a new one', async () => {
+    const { app, calls, cfg } = await makeApp({ ccdVerbs: null });
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/archive`, payload: {} });
+    expect(res.statusCode).toBe(200);
+    expect(calls).toEqual([[cfg.ccdBin, 'ws-archive', '--session', ID]]);
+    await app.close();
+  });
+
+  it('a NEW ccd receives --surface pwa and the device actor', async () => {
+    const { app, calls, cfg } = await makeApp({ ccdVerbs: ['ws-archive', 'actor-flags-v1'] });
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/archive`, payload: {} });
+    expect(res.statusCode).toBe(200);
+    // The gate is DARK in this harness (`CCRC_AUTH` unset), so `secretNow()` is
+    // SECRET_UNREAD, `sessionVerdict` refuses at the `kind !== 'ok'` arm, and
+    // its `device` is null — the record says `unmeasured` rather than naming a
+    // browser nobody saw.
+    expect(calls).toEqual([[cfg.ccdBin, 'ws-archive', '--session', ID,
+                            '--surface', 'pwa', '--actor', 'device:unmeasured']]);
+    await app.close();
+  });
+
+  it('hold keeps its own --reason first, and never grows a second one', async () => {
+    const { app, calls, cfg } = await makeApp({ ccdVerbs: ['ws-hold', 'actor-flags-v1'] });
+    const res = await app.inject({
+      method: 'POST', url: `/api/sessions/${ID}/hold`, payload: { reason: 'program:x wave:1/4' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(calls).toEqual([[cfg.ccdBin, 'ws-hold', '--session', ID, '--reason', 'program:x wave:1/4',
+                            '--surface', 'pwa', '--actor', 'device:unmeasured']]);
+    expect(calls[0]!.filter((t) => t === '--reason')).toHaveLength(1);
+    await app.close();
+  });
+
+  it('restore and release send the same pair', async () => {
+    const { app, calls, cfg } = await makeApp({ ccdVerbs: ['ws-restore', 'ws-release', 'actor-flags-v1'] });
+    await app.inject({ method: 'POST', url: `/api/sessions/${ID}/restore`, payload: {} });
+    await app.inject({ method: 'POST', url: `/api/sessions/${ID}/release`, payload: {} });
+    expect(calls).toEqual([
+      [cfg.ccdBin, 'ws-restore', '--session', ID, '--surface', 'pwa', '--actor', 'device:unmeasured'],
+      [cfg.ccdBin, 'ws-release', '--session', ID, '--surface', 'pwa', '--actor', 'device:unmeasured'],
+    ]);
+    await app.close();
+  });
+});

@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { makeCcdHarness, ghContainedEnv, harnessBin, CCD, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
 import { mungePath } from '../src/munge.js';
+import { ACTOR_FLAGS_CAP } from '../src/ccdargv.js';
 
 /** sha256 of the empty string — what a failed read used to be indistinguishable
  *  from, and what a genuinely empty ignored set still legitimately hashes to. */
@@ -153,6 +154,14 @@ describe('ccd caps', () => {
   const KNOWN_CAPABILITY_TOKENS = ['actor-flags-v1', 'lifecycle-v1', 'stop-surface'];
 
   it('advertises exactly the verbs the dispatcher implements, plus the known capability tokens', () => {
+    // The THIRD spelling of this token, closing the parity gap `ccdargv.ts`'s
+    // own docstring on `ACTOR_FLAGS_CAP` names: this list, the deployed
+    // `ccd`'s `echo actor-flags-v1`, and `ccdargv.ts`'s constant used to be
+    // able to drift from one another silently — corrupting the constant
+    // reddened only `capsupported.test.ts`'s own self-check, nothing
+    // cross-file. Importing the constant here is not a ring violation: ring
+    // discipline governs L0–L5 SOURCE, not a test importing its own target.
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(ACTOR_FLAGS_CAP);
     // The deployed ~/.local/bin/ccd is a COPY, not a symlink to the repo, so a
     // verb can pass the agent whitelist and still not exist on the box. This
     // list is what the agent reports; a list that drifts from the dispatcher
