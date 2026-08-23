@@ -987,3 +987,73 @@ describe('pr-state persists its fields atomically (registry-durability wave 2)',
     expect(names.filter((n) => n.endsWith('.uuid'))).toEqual(['demo-quiet-basin.uuid']);
   });
 });
+
+/**
+ * THE DEFECT THE REAP WAVE SURFACED (D-178). `swift-delta`'s `.prphase` read
+ * `no-commits` while its worktree held 27 commits — on a branch the registry
+ * had never heard of. Both halves were true and neither was about the same
+ * branch: the poller measured the REGISTRY's `branch`, which still resolved and
+ * was still level with its base, so `ahead=0` was a fact about a branch nobody
+ * was working in, and `no-commits` is the claim built from it.
+ *
+ * What it costs downstream is not cosmetic: `no-commits` hard-disables the
+ * PWA's "Open pull request" composer (only `none` renders it), it is in
+ * `verifyDone`'s regressed set, and the first poll of the mismatch retires the
+ * live `prnumber` into the append-only `.prhistory`.
+ */
+describe('a workspace whose worktree is parked on another branch', () => {
+  /** The shape that lies: the registry's branch resolves AND is level with its
+   *  base (so the old answer was `no-commits`, confidently), while git has the
+   *  worktree on another branch carrying real work. */
+  const parked = (): { id: string; main: string; wt: string } => {
+    const main = h.makeGhRepo('demo');
+    h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
+    const wt = path.join(h.home, 'worktrees', 'demo', 'quiet-basin');
+    h.sh(`cd "${wt}" && git checkout -q -b feat/x`);
+    fs.writeFileSync(path.join(wt, 'later.txt'), 'work the registry cannot see\n');
+    h.git(wt, 'add', 'later.txt');
+    h.git(wt, 'commit', '-m', 'work on the other branch');
+    return { id: 'demo-quiet-basin', main, wt };
+  };
+
+  it('says unknown/branch-drift rather than no-commits about a branch nobody is in', () => {
+    const { id, main } = parked();
+    // The precondition that made the old answer confident: the registry's
+    // branch is real and level with base.
+    expect(h.git(main, 'rev-parse', '--verify', 'refs/heads/ws/quiet-basin')).toMatch(/^[0-9a-f]{40}$/);
+    expect(h.git(main, 'rev-list', '--count', 'origin/main..refs/heads/ws/quiet-basin')).toBe('0');
+    const l = line(h.sh(`${GH_STUB} _pr_state_one ${id} "${main}" o/r '[]'`));
+    expect(l.id).toBe(id);
+    expect(l.phase).toBe('unknown');
+    expect(l.reason).toBe('branch-drift');
+  });
+
+  it('persists NOTHING on that answer — the last honest values stand', () => {
+    // The reason this is not "just switch the source". `_pr_state_one` writes
+    // three registry fields and appends to an irreversible lineage ledger; a
+    // poller that re-bound every drifted workspace to git's branch would clear
+    // `prnumber` and write one `.prhistory` line per workspace on the first
+    // sweep after deploy. Saying `unknown` writes nothing at all.
+    const { id, main } = parked();
+    h.sh(`_reg_set ${id} prphase merged; _reg_set ${id} prnumber 577; _reg_set ${id} prcheckedat 1786000000`);
+    const before = ['prphase', 'prnumber', 'prcheckedat'].map((f) => h.reg(id, f));
+    h.sh(`${GH_STUB} _pr_state_one ${id} "${main}" o/r '[]'`);
+    expect(['prphase', 'prnumber', 'prcheckedat'].map((f) => h.reg(id, f))).toEqual(before);
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', `${id}.prhistory`))).toBe(false);
+  });
+
+  it('leaves the RENAME shape alone — it was already saying it had not measured', () => {
+    // The negative control, and the reason the rung tests `tip` as well as the
+    // two names. `git branch -m` inside the worktree drifts the two records
+    // too, but there the registry's branch stops RESOLVING, so `tip` and
+    // `ahead` are already null and this function already says "unmeasured"
+    // rather than inventing a phase. Four cases in this file pin that shape;
+    // this asserts the new rung did not swallow them.
+    const { main, wt } = workspaceWithCommit('demo', 'quiet-basin');
+    h.sh(`cd "${wt}" && git branch -q -m ws/renamed`);
+    const l = line(h.sh(`${GH_STUB} _pr_state_one demo-quiet-basin "${main}" o/r '[]'`));
+    expect(l.reason).not.toBe('branch-drift');
+    expect(l.tip).toBeNull();
+    expect(l.ahead).toBeNull();
+  });
+});

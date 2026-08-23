@@ -437,6 +437,43 @@ describe('ws-rename', () => {
     expect(h.reg('demo-quiet-mesa', 'branch')).toBe('ws/quiet-mesa');
   });
 
+  // AND THE REFUSAL'S OWN REMEDY HAS TO BE EXECUTABLE. Three verbs now tell the
+  // operator to "run `ccd ws-rename` once by hand to re-corroborate the two" —
+  // this refusal, `ws-reap`'s drift note, and `pr-state`'s `branch-drift`
+  // answer. Measured before this rung existed: EVERY spelling of that command
+  // was refused, because the drift rung runs before `$new` is used for anything
+  // but a validity check. A remedy nobody can execute reads as a step the
+  // operator got wrong.
+  it('RECONCILES when the caller names the branch git already has', () => {
+    const wt = addOne();
+    h.git(mainDir(), 'branch', '-m', 'ws/quiet-mesa', 'renamed-by-hand');
+    // The invocation the refusal now names, and the only one this accepts.
+    expect(rename('demo-quiet-mesa', 'renamed-by-hand')).toEqual({
+      renamed: 'demo-quiet-mesa', old: 'ws/quiet-mesa', new: 'renamed-by-hand',
+      reconciled: true,
+    });
+    // A RECORD CORRECTION, not a rename: the registry now agrees with git, and
+    // no ref moved on either side.
+    expect(h.reg('demo-quiet-mesa', 'branch')).toBe('renamed-by-hand');
+    expect(h.sh(`_ws_wt_branch "${mainDir()}" "${wt}"`)).toBe('renamed-by-hand');
+    expect(branches('ws/quiet-mesa')).toBe('');
+    // And it is genuinely reconciled — the next ordinary rename now works.
+    expect(rename('demo-quiet-mesa', 'feat/real-name').renamed).toBe('demo-quiet-mesa');
+  });
+
+  it('still refuses every OTHER spelling while the two disagree', () => {
+    // The negative control: the reconcile is one exact invocation, not a
+    // general "trust git" mode. Naming the registry's stale branch, or a third
+    // name, still refuses — those would rename a branch a human chose on
+    // purpose, which is what the drift rung exists to stop.
+    addOne();
+    h.git(mainDir(), 'branch', '-m', 'ws/quiet-mesa', 'renamed-by-hand');
+    expect(rename('demo-quiet-mesa', 'ws/quiet-mesa').refused).toBe('registry-branch-drift');
+    expect(rename('demo-quiet-mesa', 'feat/real-name').refused).toBe('registry-branch-drift');
+    expect(h.reg('demo-quiet-mesa', 'branch')).toBe('ws/quiet-mesa');
+    expect(branches('renamed-by-hand')).not.toBe('');
+  });
+
   // Rung 1, stated against the record rather than against the directory: the
   // rename runs in $main, and git's own registration for the worktree must come
   // out of it naming the new branch — that is what ws-rm later reads.

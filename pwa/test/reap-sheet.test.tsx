@@ -6,7 +6,8 @@ import { ToastHost } from '../src/components/Toast';
 import { ReapSheet } from '../src/session/ReapSheet';
 
 const audit = (over: Partial<WsAudit> = {}): WsAudit => ({
-  id: 'demo-quiet-basin', branch: 'ws/quiet-basin', base: 'origin/main', workdir: '/home/u/worktrees/custom-tools/quiet-basin',
+  id: 'demo-quiet-basin', branch: 'ws/quiet-basin', registryBranch: 'ws/quiet-basin', drift: '',
+  base: 'origin/main', workdir: '/home/u/worktrees/custom-tools/quiet-basin',
   project: 'custom-tools', repo: 'o/r', exists: true, headMatchesRegistry: true, reaping: null,
   alive: true, started: true, unit: 'enabled',
   dirty: [], ignored: [
@@ -85,20 +86,98 @@ describe('the manifest', () => {
   });
 
   it('renders the contained verdict without claiming a PR nobody bound', async () => {
-    // The contained rung reaps a never-pushed branch with no PR anywhere, so
-    // "merged in #?" — the copy every other reapable audit gets — would claim
-    // a merge this verdict deliberately rests on no PR for. The line states
-    // the actual proof instead, and the Remove button still renders: this is
-    // a full reapable verdict, not a refusal.
+    // The contained rung reaps a branch with no PR bound, so "merged in #?" —
+    // the copy every other reapable audit gets — would claim a merge this
+    // verdict deliberately rests on no PR for. The line states the actual
+    // proof instead, and the Remove button still renders: this is a full
+    // reapable verdict, not a refusal.
+    //
+    // AND IT NO LONGER SAYS "never pushed". That clause was true while the
+    // rung only ran for branches with no upstream; the containment ladder now
+    // asks it of every branch, so a pushed-and-merged branch reaches it too and
+    // the old copy would assert something the sheet cannot know.
     auditBody = audit({
       pr: { number: null, url: '', mergeCommit: '', headRefOid: '' },
       merge: { proof: 'contained', fetchedAt: Math.floor(Date.now() / 1000) },
     });
     open();
     expect(await screen.findByText(
-      /ws\/quiet-basin — never pushed; origin already holds every commit on it \(proof: contained\), today/,
+      /ws\/quiet-basin — origin already holds every commit on it \(proof: contained\), today/,
     )).toBeInTheDocument();
+    expect(screen.queryByText(/never pushed/)).toBeNull();
     expect(screen.getByRole('button', { name: /^Remove quiet-basin/ })).toBeInTheDocument();
+  });
+
+  it('names BOTH branches when the two records disagree, on a reapable verdict', async () => {
+    // The operator has to see which branch is about to go. ccd used to refuse
+    // drift outright, so this state never reached a rendered sheet; it now
+    // resolves it (git's record decides) and reaps, which makes this sheet the
+    // last moment anyone can see the disagreement. The sentence is ccd's own —
+    // one definition of the rule, on the box — and the button still offers the
+    // removal, because a refusal is not what drift means any more.
+    auditBody = audit({
+      branch: 'feat/x', registryBranch: 'ws/quiet-basin', headMatchesRegistry: false,
+      drift: "the registry recorded ws/quiet-basin; git's worktree record for "
+        + '/home/u/worktrees/custom-tools/quiet-basin says feat/x — feat/x is the branch this '
+        + 'cleanup evaluates and removes, and ws/quiet-basin is left alone',
+      pr: { number: null, url: '', mergeCommit: '', headRefOid: '' },
+      merge: { proof: 'contained', fetchedAt: Math.floor(Date.now() / 1000) },
+    });
+    open();
+    expect(await screen.findByText(/feat\/x is the branch this cleanup evaluates and removes/))
+      .toBeInTheDocument();
+    expect(screen.getByText(/ws\/quiet-basin is left alone/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Remove quiet-basin/ })).toBeInTheDocument();
+  });
+
+  it('says nothing about drift on a refusal that never compared the two records', async () => {
+    // THE FALSE-NOTE TRAP, pinned. `headMatchesRegistry` is
+    // `REAP_WTHEAD === registry branch`, and `REAP_WTHEAD` is EMPTY on every
+    // refusal that returns before the worktree block — `not-archived` here,
+    // plus `no-such-session`, `worktree-missing`, `detached-head`,
+    // `no-worktree-record`. Keying the note on that flag would assert "these
+    // two records disagree" over five states in which nothing was compared.
+    // ccd sends `drift: ''` for exactly that reason, and the sheet renders the
+    // sentence rather than inferring one.
+    auditBody = audit({
+      verdict: 'not-archived', token: undefined, drift: '', headMatchesRegistry: false,
+      sentence: 'Archive this workspace first.',
+    });
+    open();
+    expect(await screen.findByText('Archive this workspace first.')).toBeInTheDocument();
+    expect(screen.queryByText(/different branches/)).toBeNull();
+    expect(screen.queryByText(/left alone/)).toBeNull();
+    expect(screen.queryByText(/would be removed/)).toBeNull();
+  });
+
+  it('stays silent rather than guessing when an older ccd sends no sentence', async () => {
+    // Absence-permits, all the way to the pixel — and silence is the CORRECT
+    // absence here, not a gap. A ccd old enough to omit `drift` is one that
+    // still REFUSES `registry-branch-drift`, so its own refusal sentence
+    // carries the information down the older path; a note invented here would
+    // be a second definition of the rule, from a client that measured nothing.
+    auditBody = audit({
+      branch: 'feat/x', registryBranch: null, drift: null, headMatchesRegistry: false,
+    });
+    open();
+    expect(await screen.findByText(/feat\/x — merged in #42/)).toBeInTheDocument();
+    expect(screen.queryByText(/different branches/)).toBeNull();
+  });
+
+  it('renders no drift NODE when the two records agree', async () => {
+    // The negative control, and it asserts the NODE rather than the text —
+    // which is what makes it a kill instead of a claim. `drift` is `''` when
+    // the records agree, so dropping the render condition emits an EMPTY
+    // `<span class="reap-note">` inside the branch row: no text changes, every
+    // text-matching assertion still passes, and the mutation survives. Counting
+    // the notes inside that row is what notices. (An earlier version of this
+    // test claimed to kill exactly that mutation while matching only text.)
+    open();
+    const dd = (await screen.findByText(/ws\/quiet-basin — merged in #42/)).closest('dd');
+    expect(dd).not.toBeNull();
+    expect(dd!.querySelectorAll('.reap-note')).toHaveLength(0);
+    expect(screen.queryByText(/different branches/)).toBeNull();
+    expect(screen.queryByText(/left alone/)).toBeNull();
   });
 
   it('shows the worktree path and size, and the uncommitted row', async () => {

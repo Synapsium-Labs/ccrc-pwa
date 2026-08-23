@@ -27,8 +27,25 @@ export const SENTENCES: Record<string, string> = {
   // one failure mode this map exists to prevent.
   'no-worktree-record': 'git has no record of this directory as a worktree of this project, so nothing here is ccrc’s to remove.',
   'detached-head': 'git has this worktree on a detached HEAD, so ccrc cannot tell which branch it belongs to.',
-  'registry-branch-drift': 'git has this worktree on a different branch than ccrc recorded. Nothing is removed while the two disagree.',
+  // ONE PRODUCER LEFT, and the sentence follows it. `ws-reap` stopped emitting
+  // this token: drift is the normal end state of a workspace that was archived
+  // and reused, `ccd ws-rm` has always resolved it (git's record decides, the
+  // registry witnesses), and refusing it made the sheet disagree with the CLI
+  // about identical evidence — three archived workspaces, ~3.6 G, removed by
+  // hand instead. Reap now carries the disagreement as `WsAudit.drift` and
+  // removes the branch git actually has. `ws-rename` still refuses, because a
+  // rename ACTS ON the name itself: renaming git's branch off a stale registry
+  // entry is how the two records drift further apart rather than closer.
+  'registry-branch-drift': 'git has this worktree on a different branch than ccrc recorded. Nothing is renamed while the two disagree — run `ccd ws-rename` once by hand to reconcile them.',
   'foreign-worktree': 'This worktree belongs to a different repository than the project it is registered under.',
+  // The parent's copy of `child-branch-elsewhere`, and it exists because
+  // `ws-reap` stopped refusing branch drift: the branch it removes is now
+  // whatever git has checked out here, and one `git switch
+  // --ignore-other-worktrees` is enough to make that a branch the project's own
+  // checkout is standing on. `update-ref -d` — the CAS this verb deletes with,
+  // because `git branch -d` refuses a squash merge — does not make the check
+  // `branch -d` makes, so ccd makes it.
+  'branch-elsewhere': 'This workspace is on a branch another checkout is also using. Removing it here would strand that checkout, so nothing is removed.',
   'dirty-tree': 'There are uncommitted or untracked changes here. Commit or move them first.',
   // A read that FAILED, not a tree that was clean. It gets its own sentence
   // rather than borrowing dirty-tree's, because "commit or move them first" is

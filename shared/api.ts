@@ -271,11 +271,16 @@ export type PrPhase =
 export type PrChecks = 'pass' | 'fail' | 'pending' | null;
 
 /**
- * Why a `PrState`'s phase is `unknown`. Every member but `merge-unproven` is a
- * FAILED READ; `merge-unproven` is the opposite — GitHub answered fine and said
- * MERGED, and a conjunct of the merge predicate did not hold, so ccrc declines
- * to call it merged. It exists because `error` renders as "GitHub could not be
- * read", which in that case is simply untrue.
+ * Why a `PrState`'s phase is `unknown`. Every member but `merge-unproven` and
+ * `branch-drift` is a FAILED READ; those two are the opposite — nothing failed.
+ * `merge-unproven`: GitHub answered fine and said MERGED, and a conjunct of the
+ * merge predicate did not hold, so ccrc declines to call it merged. It exists
+ * because `error` renders as "GitHub could not be read", which in that case is
+ * simply untrue. `branch-drift`: ccrc's registry and git's worktree record name
+ * different branches for one workspace, so "this workspace's branch" has two
+ * candidate answers and ccd measures neither — the poller BINDS a PR to a name
+ * and persists that binding, so picking a side would rewrite lineage rather
+ * than report a fact. Reconcile with `ccd ws-rename`.
  *
  * Integration finding 7. This vocabulary lived in FOUR places: this union
  * (inline in `PrState.reason`), the snapshot-revival list below, `prstate.ts`'s
@@ -293,7 +298,7 @@ export type PrChecks = 'pass' | 'fail' | 'pending' | null;
 export type PrReason =
   | 'timeout' | 'offline' | 'unauthenticated' | 'rate-limit'
   | 'no-remote' | 'unsupported' | 'agent-down' | 'error'
-  | 'merge-unproven';
+  | 'merge-unproven' | 'branch-drift';
 
 /**
  * The runtime list, derived from the type. `Record<PrReason, true>` is what
@@ -313,7 +318,7 @@ export type PrReason =
 const PR_REASON_MAP: Record<PrReason, true> = {
   timeout: true, offline: true, unauthenticated: true, 'rate-limit': true,
   'no-remote': true, unsupported: true, 'agent-down': true, error: true,
-  'merge-unproven': true,
+  'merge-unproven': true, 'branch-drift': true,
 };
 export const PR_REASONS: readonly PrReason[] = Object.keys(PR_REASON_MAP) as PrReason[];
 
@@ -523,8 +528,39 @@ export function isWsAuditUnit(v: unknown): v is WsAuditUnit {
  *  present ONLY when `verdict === 'reapable'`; the client sends it back as
  *  `expect`, and ccd re-proves the world state matches it. */
 export interface WsAudit {
-  id: string; branch: string; base: string; workdir: string; project: string; repo: string;
-  exists: boolean; headMatchesRegistry: boolean; reaping: string | null;
+  id: string;
+  /** THE BRANCH A REAP WOULD REMOVE — git's worktree record for this workspace
+   *  when git has one, which is what `_ws_reap_eval` evaluates and what step
+   *  (g) CAS-deletes. It is NOT necessarily the registry's `branch` field: an
+   *  operator who switches branch inside a workspace makes the two diverge, and
+   *  that is the normal end state of a workspace that was archived and reused.
+   *  ccd used to refuse that state outright; it now resolves it the way
+   *  `ccd ws-rm` always has (git decides, the registry witnesses), so this
+   *  field and `registryBranch` are two facts rather than one. */
+  branch: string;
+  /** The registry's own `branch` field — reported, never acted on. `null` from
+   *  an older ccd that did not emit it (absence-permits); equal to `branch`
+   *  whenever the two records agree, which is the ordinary case. */
+  registryBranch: string | null;
+  /** The one sentence naming both branches and which one goes, built on the box
+   *  where both names and the workdir are in hand. Empty string when the two
+   *  records agree, `null` from an older ccd. A client MUST NOT reassemble this
+   *  from the two names — that would be a second definition of the same rule. */
+  drift: string | null;
+  base: string; workdir: string; project: string; repo: string;
+  exists: boolean;
+  /** `REAP_WTHEAD === the registry's branch` — and it is FALSE for two
+   *  different reasons, which is why nothing should render off it alone.
+   *  Either the two records genuinely disagree (drift), or git's record was
+   *  never read at all: every Phase-A refusal that returns before the worktree
+   *  block leaves `REAP_WTHEAD` empty (`no-such-session`, `not-archived`,
+   *  `worktree-missing`, `detached-head`, `no-worktree-record`), as does the
+   *  resume-shaped path. `drift` is the field that separates them — non-empty
+   *  only where a disagreement was measured — and it is what the sheet renders.
+   *  It used to imply a refusal (drift was one); it no longer does, so a
+   *  `reapable` verdict can carry `false` here. */
+  headMatchesRegistry: boolean;
+  reaping: string | null;
   /* ── THE SESSION BEHIND THE WORKSPACE ──────────────────────────────────────
    * Computed by ccd BEFORE `_ws_reap_eval`'s early refusal, unlike everything
    * in the `null MEANS NOBODY LOOKED` block below — a `not-archived` verdict
@@ -673,7 +709,18 @@ export interface ReapResult {
    *  resume path, where the worktree was already removed by the interrupted
    *  run, it was 0 every time. Nothing in the PWA renders it today; the type
    *  is what stops a future reader folding it into a total. */
-  reaped?: string; branch?: string; pr?: number | null; proof?: string;
+  reaped?: string;
+  /** On a receipt this is the branch that was DELETED — git's worktree record,
+   *  which under drift is not the registry's name. */
+  branch?: string;
+  /** The registry's own branch, beside `branch`: the name this reap left alone.
+   *  `''` when the two agreed, ABSENT on every refusal receipt (those printfs
+   *  carry only `refused`/`detail`/`paths`) and from an older ccd — three
+   *  distinct facts, kept distinct. Declared for the same reason `bytes` is:
+   *  `parseReap` launders the object through a cast, so the type is the only
+   *  thing that stops a future reader inventing a meaning for it. */
+  registryBranch?: string;
+  pr?: number | null; proof?: string;
   tombstone?: string; attic?: number; bytes?: number | null; resumed?: string | null;
   refused?: string; detail?: string; paths?: string[];
   indeterminate?: boolean;
@@ -698,7 +745,23 @@ export interface ReapResult {
  *  (`refs/ccrc/attic/<id>/…`), read back from git rather than passed in so the
  *  list has one producer. */
 export interface WsTombstone {
-  id: string; project: string; workdir: string; branch: string; base: string; tip: string;
+  id: string; project: string; workdir: string;
+  /** THE BRANCH THIS CLEANUP DELETED — git's worktree record for the workspace,
+   *  the same fact as `WsAudit.branch`, and NOT the registry field this used to
+   *  read. The two differ whenever the operator switched branch inside the
+   *  workspace, and this document is what the RESUME path reads its branch back
+   *  out of before step (g) CAS-deletes that ref — so a consumer that treated
+   *  it as the registry's name would be describing a branch this cleanup went
+   *  out of its way to leave alone. */
+  branch: string;
+  /** The registry's own `branch` field, the witness beside `branch`: reported,
+   *  never acted on, still there after the reap. `''` when the two records
+   *  agreed. ABSENT from a tombstone written before this field existed — where
+   *  `branch` held the registry's name, which under the rung that then refused
+   *  every drift was equal to git's by construction, so the two readings agree
+   *  for every document that can lack it. */
+  registryBranch?: string;
+  base: string; tip: string;
   uuid: string; wrapper: string; mergeCommit: string; proof: string;
   pr: number | null; prUrl: string;
   /** Same shape and same producer as `WsAudit.ignored` — the manifest of what
@@ -1784,6 +1847,11 @@ export function reviveWsAudit(v: unknown, sentence: string): WsAudit {
   return {
     id: reqStr(o, 'id'),
     branch: reqStr(o, 'branch'),
+    // optStr, NOT reqStr, for the reason the `alive`/`started` block below
+    // states in full: an older ccd on the fleet host omits both, and a required
+    // read would throw away the whole sheet rather than one note.
+    registryBranch: optStr(o, 'registryBranch'),
+    drift: optStr(o, 'drift'),
     base: reqStr(o, 'base'),
     workdir: reqStr(o, 'workdir'),
     project: reqStr(o, 'project'),
