@@ -12,6 +12,9 @@ If private reporting is unavailable to you, open a public issue containing **onl
 words "security report, requesting private contact" and nothing about the finding itself,
 and a maintainer will open a private channel.
 
+This is a single-maintainer project. "Within a few days" is the truthful expectation for
+an acknowledgement, not a contractual one.
+
 ## What this project is, and why the surface is unusual
 
 ccrc drives **Claude Code sessions on real machines**. In its normal shape it runs shell
@@ -41,8 +44,10 @@ That makes the following especially worth reporting:
   arming is an explicit operator step (`ccrc passwd` + `ccrc expose`). Reporting "the
   default install has no password" tells us something we say ourselves — but reporting a
   box that is *exposed* and still unauthenticated is very much a finding.
-- **`ccrc expose ip` uses a locally-trusted CA**, so its certificate is not publicly
-  trusted; that is the stated trade for needing no DNS.
+- **Exposure always terminates TLS at a certificate you arranged.** `ccrc expose` takes
+  `duckdns` (a free public name) or `byo` (your own domain); there is no mode that skips
+  the certificate. A box reachable over plain HTTP is a misconfiguration, and reporting
+  one is welcome.
 
 ## Supported versions
 

@@ -67,6 +67,22 @@ describe('CONTRIBUTING.md', () => {
   it('says contributions are AGPL, matching the root LICENSE', () => {
     expect(read('CONTRIBUTING.md')).toMatch(/AGPL-3\.0/);
   });
+
+  it('states the hermetic-test rule, which is a SAFETY rule not a style one', () => {
+    // Imported from a parallel session's version of this file, which had it
+    // when mine did not. `ccd`'s suites drive real workspace operations and
+    // `HOME` is their only isolation boundary: a contributor who runs them
+    // against their own `$HOME` deletes their own work. Omitting this sentence
+    // costs somebody a working tree, so it is pinned rather than trusted.
+    const c = read('CONTRIBUTING.md');
+    expect(c).toMatch(/fixture HOMEs?/i);
+    expect(c).toMatch(/makeCcdHarness|ghContainedEnv/);
+  });
+
+  it('says main is protected, because the plan required saying it', () => {
+    const c = read('CONTRIBUTING.md');
+    expect(c).toMatch(/no direct pushes|`main` is protected/i);
+  });
 });
 
 describe('claims that go stale', () => {
@@ -123,6 +139,56 @@ describe('workflow and package posture', () => {
     for (const d of ['server', 'agent', 'pwa', 'shared']) {
       const pkg = JSON.parse(read(join(d, 'package.json'))) as { private?: boolean };
       expect(pkg.private, `${d}/package.json is publishable to npm`).toBe(true);
+    }
+  });
+});
+
+// ── a doc may not describe a command the CLI refuses ────────────────────────
+//
+// This exists because SECURITY.md shipped a bullet about `ccrc expose ip` — a
+// mode that was DESIGNED (plan Task 7) but never built. `ccd/ccrc`'s guard is
+// `duckdns|byo`, and the verb answers "expose: missing subcommand". A public
+// security policy describing a command the tool rejects is worse than saying
+// nothing: it tells a reader the DNS-free path exists and is safe.
+//
+// The verbs are read out of the shipped script, never re-listed here — a list
+// in a test is the same drift with a second home.
+describe('the docs only name commands ccrc actually has', () => {
+  const ccrc = (): string => read('ccd/ccrc');
+
+  /** The `{a|b|c}` set from the usage line ccrc prints for itself. */
+  function verbs(): Set<string> {
+    const m = /^usage: \$PROG \{([a-z|]+)\}$/m.exec(ccrc());
+    if (!m) throw new Error('ccd/ccrc no longer prints a usage line in the shape this test reads');
+    return new Set(m[1].split('|'));
+  }
+
+  /** The subcommand set `expose` refuses anything outside of. */
+  function exposeModes(): Set<string> {
+    const m = /expose: missing subcommand \(([a-z|]+)\)/.exec(ccrc());
+    if (!m) throw new Error('ccd/ccrc no longer states which expose subcommands exist');
+    return new Set(m[1].split('|'));
+  }
+
+  const DOCS = ['SECURITY.md', 'CONTRIBUTING.md'];
+
+  it('every `ccrc <verb>` in the public docs is a verb ccrc accepts', () => {
+    const known = verbs();
+    for (const doc of DOCS) {
+      for (const [, verb] of read(doc).matchAll(/`ccrc ([a-z-]+)/g)) {
+        expect(known, `${doc} names \`ccrc ${verb}\`, which ccrc's own usage line does not list`)
+          .toContain(verb);
+      }
+    }
+  });
+
+  it('every `ccrc expose <mode>` is a mode expose accepts', () => {
+    const known = exposeModes();
+    for (const doc of DOCS) {
+      for (const [, mode] of read(doc).matchAll(/`ccrc expose ([a-z-]+)/g)) {
+        expect(known, `${doc} names \`ccrc expose ${mode}\`, which the verb refuses`)
+          .toContain(mode);
+      }
     }
   });
 });

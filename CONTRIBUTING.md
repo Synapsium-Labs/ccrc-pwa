@@ -3,10 +3,14 @@
 Thanks for looking. A few things about this codebase are unusual enough that knowing them
 before you start will save you an afternoon.
 
-## The layout: four packages, no root runner
+Read `README.md` for what ccrc is, `CLAUDE.md` for the operational rules that are not
+obvious from the code, and `docs/superpowers/specs/` for why a subsystem has the shape it
+has — before changing it.
 
-There is **no root `package.json`**. Four packages, each `"type": "module"`, each run from
-inside its own directory:
+## The layout: four directories, three runnable, no root runner
+
+There is **no root `package.json`**. Three packages, each `"type": "module"`, each run
+from inside its own directory:
 
     cd server && npm ci && npm test
     cd agent  && npm ci && npm test
@@ -24,6 +28,12 @@ Run suites in the **foreground**. They are load-sensitive, and backgrounding one
 hang. A handful are known to flake under parallel load; re-run in isolation before
 concluding a break is real. CI on a quiet runner is the arbiter.
 
+**Tests are hermetic: fixture HOMEs only**, never the machine's own `$HOME` and never a
+live service. `ccd`'s suites in particular drive real workspace operations, and `HOME` is
+the one isolation boundary they rely on — pointed at your own, they delete your work. Copy
+the harness idioms from a neighbouring test (`makeCcdHarness`, `ghContainedEnv`) rather
+than assembling one.
+
 Node floor is `>=22.13.0`, identical across all three engines, and pinned by a test. The
 server imports `node:sqlite` unconditionally — below that floor it does not degrade, it
 fails to boot. If that test goes red, raise the floor; never lower it to make it green.
@@ -34,6 +44,15 @@ fails to boot. If that test goes red, raise the floor; never lower it to make it
 saying it matters — a test you have actually watched fail. The doctrine here is "a comment
 is a request; a red suite is a mechanism", and PRs routinely include the measured mutation
 table (delete the guard → N tests red). Please include yours.
+
+**Write the test first and watch it fail for the reason you expect.** A test written after
+the fact passes for whatever the code happens to do; one that has never been red has not
+been shown to measure anything.
+
+**A value with one meaning is spelled once.** Runtime lists derive from the type that
+defines them rather than being re-typed beside it, and `server/test/single-definition.test.ts`
+text-scans four roots and fails the build when a second copy appears. If you find yourself
+keeping two lists in agreement by hand, that is the defect.
 
 **Tests should measure behaviour, not the spelling of an implementation.** A test that
 asserts a config file *contains a particular string* breaks when the rule is strengthened;
@@ -59,10 +78,15 @@ preference.
 Small, focused PRs get read quickly. Large mechanical sweeps are fine but say so in the
 description, and keep the mechanical part separate from the judgement part.
 
+`main` is protected: every change lands by pull request, and there are no direct pushes —
+including by the maintainer.
+
 CI runs the three suites plus a PWA build on every pull request. Fork PRs run with a
 read-only token and no repository secrets.
 
+Found a security problem? Do not open an issue — see [`SECURITY.md`](SECURITY.md).
+
 ## Licence
 
-By contributing you agree that your contributions are licensed under the **AGPL-3.0**, the
+By contributing you agree that your contributions are licensed under the **AGPL-3.0-only**, the
 same licence as the project. See [`LICENSE`](LICENSE).
