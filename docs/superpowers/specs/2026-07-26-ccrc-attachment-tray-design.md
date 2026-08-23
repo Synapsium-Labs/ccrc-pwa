@@ -14,7 +14,7 @@ parallel-safe — see that spec's status note.
 Attaching a screenshot in the PWA is a side-channel poke at the remote terminal,
 not a composer action. `POST /api/sessions/:id/upload` saves the file and then
 runs `ccd clip`, which **types the saved path into the live tmux input box**
-(`server/src/clip.ts:23`; `infra/ccrc-portability/ccd:600`, in `cmd_clip`,
+(`server/src/clip.ts:23`; `infra/<server-host>-portability/ccd:600`, in `cmd_clip`,
 which starts at `:586` — that file is the canonical copy, `~/.local/bin/ccd` is
 the deployed one). The PWA keeps no state about it. Seven consequences, all
 user-visible:

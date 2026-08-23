@@ -161,7 +161,7 @@ here.
   bytes would be read — but the class is real and an atomic install removes it
   rather than shrinking it.
 - **`CCRC_SSH_KEY` defaults to a key that does not exist on openclaw**
-  (`your-key-a`; the fleet host calls it `your-key-b`), a difference
+  (`<your-key>`; the fleet host calls it `<your-key>`), a difference
   `deploy.sh:4-6` documents without acting on. Deploying from the fleet host fails
   at first contact with a bare `Permission denied (publickey)`.
 

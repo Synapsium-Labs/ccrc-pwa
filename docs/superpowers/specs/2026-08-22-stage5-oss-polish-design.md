@@ -25,14 +25,14 @@ toggle) stays an operator act.
   stays a bare resolver shim — no license field to invent, it publishes under the root
   LICENSE like every non-package file). No per-file headers — they would fight the
   design-rationale comment idiom that opens every file.
-- `install.sh`'s `CCRC_RELEASE_OWNER` default flips `example-org` → `Synapsium-Labs`
+- `install.sh`'s `CCRC_RELEASE_OWNER` default flips the employer org → `Synapsium-Labs`
   in the SAME commit the operator transfers the repo (GitHub redirects the old org URL, so
   ordering inside the flip window is forgiving, but the tree must never name two owners).
   Until that commit, the tree keeps working against the current org. README's
   `curl … | bash` one-liner and the release workflow's implicit owner ride the same value —
   the single-definition suite gains the pin: **the owner string is defined once**
   (`install.sh`), everything else derives or quotes it.
-- `ExpoPlatform`/`orchard` residue (70 occurrences, 23 files — `ccd/ccd`, `ccd/ccrc`,
+- The old employer token's residue, both casings (70 occurrences, 23 files — `ccd/ccd`, `ccd/ccrc`,
   fixture session names in `fleetws`/`registry` tests, `pwa/design/mockup.html`, docs):
   fixture and demo spellings become neutral project names (`acme-platform-ts` class);
   prose mentions in docs follow §8's corpus policy. The `ccd/ccd` commit re-stamps
@@ -48,12 +48,12 @@ leaves the sentence shaped like a secret.
 
 | Class | Scale at HEAD | Treatment |
 |---|---|---|
-| Tailnet IPs `203.0.113.7` / `198.51.100.7` (+ one `.29` fixture) | 85+18 hits, ~37 files | Shipped defaults DELETED (§4); tests re-fixture to doc IPs; docs per §8 |
-| Tailnet DNS `tailnet-example.ts.net`, host `server-box` | 42 hits/14 files; 246/47 | Runtime strings → `<your-box>.example.com` worked examples; docs per §8 |
-| Username `you`, `/home/you`, `/mnt/srv-volume` | 72/33 files; 42 files | Code+tests → neutral (`you@`, `/home/you`, `/srv/projects`); docs per §8 |
-| SSH reach recipe (port 2222, key names `openclaw-*`) | ~8 plan docs + `deploy.sh`, `ccclip` | Shipped defaults deleted (§4); docs per §8 |
-| Account roster labels (`expo-max`, `gmail-max`, …) | `accounts.migration.json` + 1736 refs | §5 roster de-brand |
-| Real GitHub handle `you`, private repo names | fixtures + docs | Fixtures → `example-org/example-repo`; docs per §8 |
+| The two tailnet IPs (server, fleet; + one fixture neighbour) | 85+18 hits, ~37 files | Shipped defaults DELETED (§4); tests re-fixture to doc IPs; docs per §8 |
+| Tailnet DNS name + the server host's name | 42 hits/14 files; 246/47 | Runtime strings → `<your-box>.example.com` worked examples; docs per §8 |
+| The operator's username, `/home/<user>`, the volume-id projects root | 72/33 files; 42 files | Code+tests → neutral (`you@`, `/home/you`, `/srv/projects`); docs per §8 |
+| SSH reach recipe (port 2222, the two key names) | ~8 plan docs + `deploy.sh`, `ccclip` | Shipped defaults deleted (§4); docs per §8 |
+| Account roster labels (the four real ones) | `accounts.migration.json` + 1736 refs | §5 roster de-brand |
+| Real GitHub handle, private repo names | fixtures + docs | Fixtures → `example-org/example-repo`; docs per §8 |
 | `scratch/2026-08-10-rollout-readiness-synthesis.md` | sharpest single disclosure (pre-auth surface map) | **PRUNE from the tree** (stale since 3a; its value is historical, it stays in private backup) |
 
 `CLAUDE.md` keeps its operational truth but speaks in ROLES; the real addresses, user and
@@ -88,10 +88,11 @@ Mutation-measure at ship: temporarily reintroduce one tailnet IP in a doc → 1 
 What #89/#90 already did (skills' `$CCRC_API`, deploy health probe) set the pattern:
 **config with a refusal, never a compiled-in fallback.**
 
-- `deploy/deploy.sh:8`: `BOX="${CCRC_BOX:-you@203.0.113.7}"` → refuse with
+- `deploy/deploy.sh:8`: `BOX="${CCRC_BOX:-you@<server-host>}"` (the baked default was
+  the reference server box) → refuse with
   instructions when `CCRC_BOX` unset (`deploy.sh: set CCRC_BOX=user@host — this script
-  deploys to the box YOU name, and no longer carries a default box`). Key default
-  `your-key-a` → refuse when `CCRC_SSH_KEY` unset; port default 2222 → standard 22
+  deploys to the box YOU name, and no longer carries a default box`). The baked key-name
+  default → refuse when `CCRC_SSH_KEY` unset; port default 2222 → standard 22
   (the reference boxes override per-workstation, exactly as they do today).
 - `deploy/notify.sh:45`: the legacy-IP third tier is DELETED — resolution becomes
   `CCRC_ADDR` env > `ccrc.env` greps > **silent no-op** (notify is best-effort by
@@ -100,10 +101,10 @@ What #89/#90 already did (skills' `$CCRC_API`, deploy health probe) set the patt
   `notify-addr.test.ts`'s two fallback tests re-pin to the new two-tier rule.
 - `ccd/ccclip:10-12`: hardcoded `BOX`/`SSH_KEY`/`CCD` → read from `~/.ccrc/ccclip.env`
   (grep idiom) with refusal; the three literals were promised gone in Stage 1.
-- `server/src/config.ts:323` `mailto:ccrc@server-box` → `mailto:ccrc@localhost` (a VAPID
+- `server/src/config.ts:323` `mailto:ccrc@<server-host>` → `mailto:ccrc@localhost` (a VAPID
   contact must parse, not resolve).
 - `server/src/auth/webauthn.ts:281,294`, `gate.ts`, `config.ts` error-string examples →
-  `<your-host>` forms; `ccrc-adopt:350`'s `team·max` example → neutral;
+  `<your-host>` forms; `ccrc-adopt:350`'s real-first-label example → neutral;
   `ccd/ccd` banner strings neutralised (provenance re-stamped);
   `deploy/ccrc.env.example` + `ccrc-agent.env.example` worked examples → documentation
   addresses; `scripts/extraction-manifest.sh` DELETED with its test suite (its migration

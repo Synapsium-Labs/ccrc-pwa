@@ -47,7 +47,7 @@ falsifies. Measured on the live registry:
 
 ```
 claude-rp-llm                    prefix says claude       actually on claude2
-claude-corp-orchard-api  prefix says claude-corp  actually on gpt
+claude-corp-acme-platform-ts  prefix says claude-corp  actually on gpt
 claude2-expoAI-assistant         prefix says claude2      actually on claude
 ```
 

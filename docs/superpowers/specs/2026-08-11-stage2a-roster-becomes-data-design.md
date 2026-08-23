@@ -62,7 +62,7 @@ by preference:
       "exec": { "kind": "upstream" },
       "homeAble": true,  "hue": "cyan",    "telemetry": "anthropic" },
 
-    { "id": "claude2", "label": "alt·max", "configDirSuffix": ".claude-personal",
+    { "id": "claude2", "label": "team·alt", "configDirSuffix": ".claude-personal",
       "exec": { "kind": "generated", "secretsFile": ".cc-secrets/claude2-oauth.env" },
       "homeAble": true,  "hue": "violet",  "telemetry": "anthropic" },
 
@@ -335,7 +335,7 @@ values.
 ### 10. The roster in two-box (remote) mode
 
 In `fleetMode: 'remote'` the server runs on one box and the accounts live on
-another — server-box has no Claude accounts at all, while openclaw has five. But
+another — <server-host> has no Claude accounts at all, while openclaw has five. But
 `GET /api/accounts` serves labels, hues and ordering, which are facts about the
 *fleet host*.
 

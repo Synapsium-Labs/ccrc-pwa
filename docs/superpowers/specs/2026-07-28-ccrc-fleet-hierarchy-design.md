@@ -239,7 +239,7 @@ never a guess, never a stale value presented as current. A per-branch failure is
 logged once per backoff window rather than once per poll, and it never blocks the
 fleet stream: the line renders exactly as it would for a branch with no PR.
 
-This matters because the fleet has three orgs (`example-org`, `you`,
+This matters because the fleet has three orgs (`example-corp`, `example-org`,
 `Synapsium-Labs`) behind one `gh` token. Access to all three was verified, but a
 token change or an org policy could silently remove one, and the failure mode
 must be a quiet absence rather than nine rows of wrong.

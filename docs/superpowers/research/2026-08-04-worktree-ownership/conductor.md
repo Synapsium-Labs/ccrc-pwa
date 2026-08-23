@@ -17,9 +17,9 @@ consequence it forces.
 
 ## Branch renaming is a NORMAL lifecycle event
 
-- Branch born `<gh-username>/<workspace-name>` (`you/buffalo-v2`), then the
+- Branch born `<gh-username>/<workspace-name>` (`example-org/buffalo-v2`), then the
   AGENT is instructed to rename it to match the work
-  (`you/explain-conductor-worktrees`). Reflog records it.
+  (`example-org/explain-conductor-worktrees`). Reflog records it.
 - Consequence for ccd: warm-meadow's "drift" is not an anomaly — it is how
   agent-driven work behaves. Adoption must RECONCILE renames (registry follows
   git's worktree record, updated at scan time), not refuse forever. Reap-time

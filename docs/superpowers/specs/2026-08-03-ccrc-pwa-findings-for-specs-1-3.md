@@ -96,7 +96,7 @@ the code where a red suite matters most.
 
 ## 4. Two repos now hold the same code, and they drift — spec 1/3 sequencing
 
-`infra/ccrc/` in this monorepo and `example-org/ccrc-pwa` contain the same
+`infra/ccrc/` in this monorepo and `example-corp/ccrc-pwa` contain the same
 product. The monorepo remains the live deploy source until spec 3.
 
 This drift is not theoretical: within an hour of the extraction, a review fix
@@ -109,7 +109,7 @@ running two copies in parallel indefinitely.
 
 ## 5. The repo is readable by 61 people — spec 1, operator-accepted
 
-`example-org` sets `default_repository_permission: read`, so all 61 org
+`example-corp` sets `default_repository_permission: read`, so all 61 org
 members can read `ccrc-pwa` despite `visibility: private` (0 direct
 collaborators, 0 outside — every one inherited). The tree currently carries the
 operator's tailnet name, box IPs, username, and home paths across **9 files, 20
@@ -141,7 +141,7 @@ concrete reason it matters rather than a tidiness argument.
 - **No `engines` field** in any of the four `package.json` files, despite Node
   ≥22 being a hard requirement documented only in prose. Spec 3's prereq check.
 - **`CCRC_SSH_KEY` defaults to a key that does not exist on the fleet host** —
-  `$HOME/.ssh/your-key-a`, where openclaw calls it `your-key-b`. The
+  `$HOME/.ssh/<your-key>`, where openclaw calls it `<your-key>`. The
   difference is documented in `deploy.sh:4-6` without being acted on, so a deploy
   driven from the fleet host fails at first contact with a bare
   `Permission denied (publickey)`. Spec 3: try both, and name both when neither

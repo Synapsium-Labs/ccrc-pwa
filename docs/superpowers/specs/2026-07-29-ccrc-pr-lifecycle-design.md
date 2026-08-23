@@ -2,7 +2,7 @@
 
 **Status:** decided. Implement as written.
 **Scope:** a PR control in the chat header, automatic **archiving** on merge, and **confirmed, non-automatic deletion** of an archived workspace.
-**Files:** `infra/ccrc/agent/src/whitelist.ts`, `infra/ccrc/agent/test/*`, `infra/ccrc/server/src/{server,watch,fleet,registry,ccdargv,prstate,wsaudit}.ts`, `infra/ccrc/server/test/*`, `infra/ccrc/shared/api.ts`, `infra/ccrc/pwa/src/session/{SessionHeader,PrKeycap,PrSheet,ReapSheet}.tsx`, `infra/ccrc/pwa/src/fleet/SessionActionsSheet.tsx`, `infra/ccrc-portability/ccd`.
+**Files:** `infra/ccrc/agent/src/whitelist.ts`, `infra/ccrc/agent/test/*`, `infra/ccrc/server/src/{server,watch,fleet,registry,ccdargv,prstate,wsaudit}.ts`, `infra/ccrc/server/test/*`, `infra/ccrc/shared/api.ts`, `infra/ccrc/pwa/src/session/{SessionHeader,PrKeycap,PrSheet,ReapSheet}.tsx`, `infra/ccrc/pwa/src/fleet/SessionActionsSheet.tsx`, `infra/<server-host>-portability/ccd`.
 
 ---
 
@@ -252,8 +252,8 @@ The sheet in `none` phase is a composer:
 
 - **Title:** a single-line editable input, prefilled. One field, one thumb height.
 - **Body:** a **read-only rendered preview**, scrollable. A multi-line editor in a bottom sheet is a bad surface, and the body is fully regenerable — prose edits happen on GitHub, one tap away via the sheet's own link.
-- **Facts line, always shown:** `ws/quiet-basin → main · you/custom-tools · 3 commits`. A dirty-tree line when applicable: *"2 files are not committed — they will not be in this PR."*
-- **Primary:** `QuickConfirm` labelled **Open pull request**, consequence sentence: *"Pushes `ws/quiet-basin` to `you/custom-tools` and opens a public pull request. Reviewers are notified. ccrc cannot undo this."* Secondary: **Open as draft**. Disabled while `status === 'busy'` and under `unauthenticated`.
+- **Facts line, always shown:** `ws/quiet-basin → main · example-org/custom-tools · 3 commits`. A dirty-tree line when applicable: *"2 files are not committed — they will not be in this PR."*
+- **Primary:** `QuickConfirm` labelled **Open pull request**, consequence sentence: *"Pushes `ws/quiet-basin` to `example-org/custom-tools` and opens a public pull request. Reviewers are notified. ccrc cannot undo this."* Secondary: **Open as draft**. Disabled while `status === 'busy'` and under `unauthenticated`.
 - The request goes through the existing per-session `KeyedQueue` (`server.ts:224`), so it serialises with every other write.
 
 **There is no merge button, in any state, ever.** Merging is the irreversible review decision and belongs on github.com where the diff is. The sheet says so: *"Merging happens on GitHub. When it merges, ccrc archives this workspace automatically."* This also keeps the write surface at exactly one additive verb.
@@ -425,7 +425,7 @@ git -C "$main" merge-base --is-ancestor -- "$H" "$tip"           # and is ours
 ```
 else `pr-head-not-ours`. This is what makes a recycled slug or a stranger's fork PR incapable of authorising a delete.
 
-Then, `M = mergeCommit.oid`, `Pm = M^1`, `tip = git rev-parse --verify refs/heads/$branch`, after `timeout 60 git -C "$main" fetch --quiet origin` (failure → `fetch-failed`, and `M` must exist locally afterwards → else `merge-commit-missing`). **Mergedness is never proven against an unfetched ref.** `ws-add` records `base=origin/main` and creates the branch `--no-track`, and nothing else in ccrc ever fetches — measured staleness on this box: `orchard-api` 24.0 days, six repos never fetched. A proof against a 24-day-old `origin/main` produces the sentence "this branch has 4 commits that are not in the merge" about commits that *are* the merge, which is byte-identical to the true warning and therefore trains users onto the unguarded door.
+Then, `M = mergeCommit.oid`, `Pm = M^1`, `tip = git rev-parse --verify refs/heads/$branch`, after `timeout 60 git -C "$main" fetch --quiet origin` (failure → `fetch-failed`, and `M` must exist locally afterwards → else `merge-commit-missing`). **Mergedness is never proven against an unfetched ref.** `ws-add` records `base=origin/main` and creates the branch `--no-track`, and nothing else in ccrc ever fetches — measured staleness on this box: `acme-platform-ts` 24.0 days, six repos never fetched. A proof against a 24-day-old `origin/main` produces the sentence "this branch has 4 commits that are not in the merge" about commits that *are* the merge, which is byte-identical to the true warning and therefore trains users onto the unguarded door.
 
 Ladder — **any one rung suffices**, and the passing rung is recorded in the tombstone and shown in the sheet. All four were measured in an isolated fixture:
 
@@ -567,4 +567,4 @@ Remove quiet-basin?                                    [ Remove quiet-basin · 1
 
 Agent suite green at 86 + additions, with `whitelist-noghosts.test.ts` failing loudly by design if a `gh` key is added. `server/test/whitelist-subset.test.ts` layers 1–3 green, including the static scan for inline argv literals and the superset assertion. `server/test/ccdPrHelpers.ts` (isolated-`HOME` bash harness modelled on `ccdWsHelpers.ts:16-28`, `gh()` stubbed as a shell function) covers, first and foremost, the **multi-commit squash with a moved base** — plus base-unmoved squash, true merge, rebase merge, the control case (squash + one real unmerged commit → `tree-differs`), dirty, untracked, ignored-only, sensitive-ignored, stashed, unpushed, detached, drifted, worktree-gone, breadcrumb-resume, `state-changed`, and gh timeout/401/`[]`. Every negative case asserts the worktree still exists afterwards.
 
-Suggested location once saved: `docs/superpowers/specs/2026-07-29-ccrc-pr-lifecycle.md` → [ccrc PR lifecycle](https://server-box.tailnet-example.ts.net/OpenClawHetzner/specs/2026-07-29-ccrc-pr-lifecycle.md)
+Suggested location once saved: `docs/superpowers/specs/2026-07-29-ccrc-pr-lifecycle.md` → [ccrc PR lifecycle](https://<server-host>.<tailnet>.ts.net/OpenClawHetzner/specs/2026-07-29-ccrc-pr-lifecycle.md)

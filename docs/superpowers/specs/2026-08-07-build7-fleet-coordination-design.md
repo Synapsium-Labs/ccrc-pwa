@@ -16,7 +16,7 @@ exactly this build's goals. Scoped from five read-only scouts against
 
 ## 0. Four measured facts that shaped everything
 
-1. **Two boxes.** The server (and therefore SQLite) lives on `server-box`;
+1. **Two boxes.** The server (and therefore SQLite) lives on `<server-host>`;
    ccd, the registry, tmux and every session live on `openclaw`. The agent
    link between them is **read-only for files** (writes: `.cc-clips` only) —
    the server mutates the registry only through whitelisted ccd verbs.
@@ -32,7 +32,7 @@ exactly this build's goals. Scoped from five read-only scouts against
    box→server ingress (`notify.sh`) carries zero identity while the server
    regex-routes its body to a session. The mail bus must not inherit that
    shape.
-4. **`node:sqlite` works on server-box today** (v22.22.3; `DatabaseSync`
+4. **`node:sqlite` works on <server-host> today** (v22.22.3; `DatabaseSync`
    create/insert/select proven live). Zero native deps; experimental status
    accepted with an escape hatch (better-sqlite3 builds on the boxes — the
    agent already compiles node-pty at deploy).

@@ -62,7 +62,7 @@ changes to the Discord bridge.
 
 ## Architecture
 
-Working name **ccrc**, repo home `infra/ccrc/`, deployed to the server-box box.
+Working name **ccrc**, repo home `infra/ccrc/`, deployed to the <server-host> box.
 
 Two pieces:
 

@@ -1,13 +1,13 @@
-# Making `example-org/ccrc-pwa` canonical — research
+# Making `example-corp/ccrc-pwa` canonical — research
 
 Gathered 2026-08-04, read-only. All paths absolute. No `ccd` verb was run; no
 tmux/systemd/registry state was modified.
 
 ## 0. A correction to the task framing (matters for every deploy statement below)
 
-The task brief said "server-box (this box)" and "openclaw (fleet host,
+The task brief said "<server-host> (this box)" and "openclaw (fleet host,
 198.51.100.7)". **This box is `openclaw`, 198.51.100.7** — `hostname` =
-`openclaw`, `tailscale ip -4` = `198.51.100.7`. `server-box` is
+`openclaw`, `tailscale ip -4` = `198.51.100.7`. `<server-host>` is
 **203.0.113.7**, a different machine.
 
 Measured tailnet (`tailscale status`):
@@ -15,7 +15,7 @@ Measured tailnet (`tailscale status`):
 | Host | Tailnet IP | Runs |
 | --- | --- | --- |
 | `openclaw` (this box, the monorepo checkout) | `198.51.100.7` | `ccrc-agent.service` (active running), the 16 `claude-session@*` units, `claude-docserver.service` |
-| `server-box` | `203.0.113.7` | `ccrc.service` (the server + PWA). Not verifiable from here without SSH — see gaps. |
+| `<server-host>` | `203.0.113.7` | `ccrc.service` (the server + PWA). Not verifiable from here without SSH — see gaps. |
 
 `systemctl --user cat ccrc` on this box returns **"No files found for
 ccrc.service"** — the server unit is not installed here. Only
@@ -26,7 +26,7 @@ transient `systemctl set-property` drop-ins under
 state — no deploy reproduces them, and a fresh install loses them.**
 
 So: the docserver and the fleet sessions and the agent are on `openclaw`; the
-ccrc *server*, and therefore the PWA people actually open, is on `server-box`.
+ccrc *server*, and therefore the PWA people actually open, is on `<server-host>`.
 
 ---
 
@@ -38,8 +38,8 @@ ccrc *server*, and therefore the PWA people actually open, is on `server-box`.
 (3,250 bytes, mode `100755`, last touched by `a501b12`).
 
 ```
-BOX="${CCRC_BOX:-you@203.0.113.7}"          # -> server-box
-CCRC_SSH_KEY="${CCRC_SSH_KEY:-$HOME/.ssh/your-key-a}"
+BOX="${CCRC_BOX:-you@<server-host>}"          # -> <server-host>
+CCRC_SSH_KEY="${CCRC_SSH_KEY:-$HOME/.ssh/<your-key>}"
 CCRC_SSH_PORT="${CCRC_SSH_PORT:-2222}"
 HEALTH_URL="${CCRC_HEALTH_URL:-http://203.0.113.7:7788/health}"
 ```
@@ -84,7 +84,7 @@ paths at lines **58, 59, 69, 99** (`bash infra/ccrc/deploy/deploy.sh`,
 
 - **It never builds the PWA.** Neither branch runs anything in `pwa/`. The
   server rsync uses `--exclude dist`, which is an exact-basename match and does
-  **not** exclude `dist-pwa/` — so the PWA that reaches `server-box` is whatever
+  **not** exclude `dist-pwa/` — so the PWA that reaches `<server-host>` is whatever
   `server/dist-pwa/` happened to contain on the deploying box.
   `infra/ccrc/server/dist-pwa/` on this box is dated **Aug 2 23:51**;
   `ccrc-pwa/server/dist-pwa/` is dated **Aug 3 13:04**. Both are gitignored
@@ -96,10 +96,10 @@ paths at lines **58, 59, 69, 99** (`bash infra/ccrc/deploy/deploy.sh`,
   comment in `notify.sh`. `ccd` is installed **by hand**: `~/.local/bin/ccd` is a
   *copy*, per the 2026-06-15 portability plan
   (`plans/2026-06-15-remote-claude-session-portability.md:27-28`:
-  `scp infra/ccrc-portability/ccd "$BOX":/home/you/.local/bin/ccd`
+  `scp infra/<server-host>-portability/ccd "$BOX":/home/you/.local/bin/ccd`
   then `chmod +x`). Measured today, all three are in sync:
   `sha256 2bc6287b5e8a882168118c6977e148547e4b2c18278011b616c8b9b23aa42f7d` for
-  `~/.local/bin/ccd`, `infra/ccrc-portability/ccd`, and `ccrc-pwa/ccd/ccd`.
+  `~/.local/bin/ccd`, `infra/<server-host>-portability/ccd`, and `ccrc-pwa/ccd/ccd`.
   This is the gap that let an installed ccd sit 4,258 lines behind main, and the
   one that finding 1 says spec 3's installer must close.
 - **Nothing deploys the docserver, the `claude-session@.service` template, the
@@ -133,11 +133,11 @@ touch it, but it is a fourth hand-installed artifact the spec-3 installer owes.
 `ccrc-pwa/pwa/vite.config.ts:68` → `outDir: '../server/dist-pwa'`.
 `ccrc-pwa/server/src/server.ts:60-66` walks up from the module to find a sibling
 `dist-pwa/`, and `:545-552` serves it at `/` via `@fastify/static` with an SPA
-fallback to `index.html`. So on `server-box` the served bundle is
+fallback to `index.html`. So on `<server-host>` the served bundle is
 `~/ccrc/server/dist-pwa/`, populated purely by rsync. Fronted by
-`tailscale serve` on **:8443** (`https://server-box.tailnet-example.ts.net:8443/`) —
+`tailscale serve` on **:8443** (`https://<server-host>.<tailnet>.ts.net:8443/`) —
 443 root belongs to `claude-docserver`. The `tailscale serve` config on
-`server-box` is **not visible from here** (see gaps).
+`<server-host>` is **not visible from here** (see gaps).
 
 ### What flipping the source to `/srv/projects/ccrc-pwa` touches
 
@@ -161,7 +161,7 @@ fallback to `index.html`. So on `server-box` the served bundle is
 ### `git ls-files -s` mode + path comparison
 
 Method: mono side = `git ls-files -s infra/ccrc` with the `infra/ccrc/` prefix
-stripped, plus `infra/ccrc-portability/{ccd,claude-session@.service,statusline-command.sh,tmux.conf}`
+stripped, plus `infra/<server-host>-portability/{ccd,claude-session@.service,statusline-command.sh,tmux.conf}`
 mapped to `ccd/<name>` (the `PORTABILITY_FILES` allowlist in
 `scripts/extraction-manifest.sh`). 304 mono entries vs 308 pwa entries.
 
@@ -177,7 +177,7 @@ Full path delta:
 | --- | --- | --- |
 | `.github/workflows/ci.yml` | pwa only | expected — the monorepo has no CI |
 | `.gitignore` | pwa only | expected — flat-layout ignore, added by `0485fb9` |
-| `ccd/claude-session@.service`, `ccd/statusline-command.sh`, `ccd/tmux.conf` | pwa only *by path* | **not a real delta** — blob-hash-identical to `infra/ccrc-portability/<name>` in mono (verified with `git rev-parse HEAD:<path>` on both sides; all four including `ccd/ccd` report SAME) |
+| `ccd/claude-session@.service`, `ccd/statusline-command.sh`, `ccd/tmux.conf` | pwa only *by path* | **not a real delta** — blob-hash-identical to `infra/<server-host>-portability/<name>` in mono (verified with `git rev-parse HEAD:<path>` on both sides; all four including `ccd/ccd` report SAME) |
 | `server/test/ccd-ccclip.test.ts` | mono only | **deliberate**, see below |
 
 Content diff of the whole mapped tree (`git archive HEAD infra/ccrc` vs the pwa
@@ -187,7 +187,7 @@ returns exactly **two** lines:
 - `Only in mono: server/test/ccd-ccclip.test.ts`
 - `ccdWsHelpers.ts differ` — one line, the permitted one:
   ```
-  < export const CCD = path.resolve(__dirname, '../../../ccrc-portability/ccd');
+  < export const CCD = path.resolve(__dirname, '../../../<server-host>-portability/ccd');
   > export const CCD = path.resolve(__dirname, '../../ccd/ccd');
   ```
 
@@ -198,7 +198,7 @@ lines" exactly.
 `scripts/extraction-manifest.sh` `is_excluded()` has
 `*/server/test/ccd-ccclip.test.ts) return 0` with the comment "the one test that
 stays with the Mac-side tool it exercises". `ccclip` is a macOS-side helper
-(`infra/ccrc-portability/ccclip`) and is *not* one of the four
+(`infra/<server-host>-portability/ccclip`) and is *not* one of the four
 `PORTABILITY_FILES`. **But `ccrc-pwa/ccd/ccd` still implements `ccd clip`**
 (grep hits `ccclip` in `ccrc-pwa/ccd/ccd`,
 `server/test/single-definition.test.ts`, `server/test/extraction-manifest.test.ts`),
@@ -214,14 +214,14 @@ excluded it from the *manifest* but it is still a tracked file in both repos.
 
 ### Commits since extraction — both directions
 
-**Monorepo** (`you/OpenClawHetzner`, HEAD `9f15625`, working tree clean;
+**Monorepo** (`example-org/OpenClawHetzner`, HEAD `9f15625`, working tree clean;
 note the session's opening git snapshot showing `5a943c5` was stale):
 
 - `d2c4ba0` is an ancestor of HEAD (verified).
-- `git log d2c4ba0..HEAD -- infra/ccrc infra/ccrc-portability` → **empty**.
+- `git log d2c4ba0..HEAD -- infra/ccrc infra/<server-host>-portability` → **empty**.
 - `git log d2c4ba0..HEAD` (all paths) → four commits, all docs/merge:
   `9a97db0` (plan defect corrections), `4a90d5f` (spec content-identity),
-  `6118ed6` (Merge PR #2 `you/ccrc-pwa-extraction`), `9f15625` (the findings
+  `6118ed6` (Merge PR #2 `example-org/ccrc-pwa-extraction`), `9f15625` (the findings
   doc).
 
 **→ Zero product drift has accumulated on the monorepo side since `d2c4ba0`.**
@@ -281,14 +281,14 @@ in the deletion path.** Relevant here because CI is about to become the gate: a
 red run that everyone learns to re-run is worse than no gate.
 
 **Finding 4 → the reason this task exists.** "`infra/ccrc/` in this monorepo and
-`example-org/ccrc-pwa` contain the same product... **Any ccrc change must
+`example-corp/ccrc-pwa` contain the same product... **Any ccrc change must
 land in both until `infra/ccrc/` is deleted.**" And the measured cost: "within an
 hour of the extraction, a review fix wave landed monorepo-only and had to be
 ported by hand, because the better test coverage had been added to the copy
 scheduled for deletion."
 
 **Finding 5 → spec 1 (de-personalisation), operator-accepted.**
-`example-org` sets `default_repository_permission: read`, so **all 61 org
+`example-corp` sets `default_repository_permission: read`, so **all 61 org
 members can read `ccrc-pwa`** despite `private` (0 direct, 0 outside
 collaborators — every reader inherited). ccrc has **no authentication** (spec 2),
 so the address *is* the guard. The tree carries the operator's tailnet name, box
@@ -296,9 +296,9 @@ IPs, username and home paths across **9 files / 20 hits**. Operator ruled
 2026-08-03 that the 61 are not a risk.
 
 I re-measured the personalisation spread today. Grepping
-`203.0.113.7|198.51.100.7|you|tailnet-example|/home/you` over
+`203.0.113.7|198.51.100.7|you|<tailnet>|/home/you` over
 `*.ts,*.tsx,*.sh,*.service,*.md,*.example` gives **exactly 20 hits**, matching
-the doc. Widening to include `server-box|openclaw` and `*.yml` gives **19 files**:
+the doc. Widening to include `<server-host>|openclaw` and `*.yml` gives **19 files**:
 
 `deploy/ccrc.service`, `deploy/deploy.sh`, `deploy/notify.sh`,
 `deploy/ccrc.env.example`, `README.md`, `scripts/extraction-manifest.sh`,
@@ -313,7 +313,7 @@ the doc. Widening to include `server-box|openclaw` and `*.yml` gives **19 files*
 The 9-file/20-hit figure is the **narrow** set (identifying strings only); the
 19-file set includes hostname mentions in prose and test fixtures. **Spec 1
 should size against 19, not 9** — otherwise "de-personalised" will still leave
-`server-box` and `openclaw` in half a dozen source files.
+`<server-host>` and `openclaw` in half a dozen source files.
 
 **Finding 6 → discharged in part by this research.** The `git ls-files -s`
 comparison it recommends as "cheap insurance" is done above: **no mode drift.**
@@ -346,7 +346,7 @@ any colleague access "until spec 1 lands". So:
 
 `/home/you/.claude-docserver/config.json` — 10 entries. **`ccrc-pwa` is
 NOT served.** Entries are `custom-tools`, `data-internal`, `expoAI-assistant`,
-`orchard-api`, `intake-platform`, `MekWarLive`, `OpenClawHetzner`,
+`acme-platform-ts`, `intake-platform`, `MekWarLive`, `OpenClawHetzner`,
 `rp-llm`, `synapsium-platform`, and one worktree entry
 `data-internal-clear-mesa` → `/home/you/worktrees/data-internal/clear-mesa`.
 No entry carries a `ref` override, so all serve the default `origin/main`.
@@ -376,7 +376,7 @@ Two caveats:
 The live docserver is `claude-docserver.service` (active), running
 `/home/you/.claude-docserver/venv/bin/python
 /home/you/.claude-docserver/server.py` on **this** box (openclaw) — note
-that the doc-link convention in CLAUDE.md names `server-box.tailnet-example.ts.net`
+that the doc-link convention in CLAUDE.md names `<server-host>.<tailnet>.ts.net`
 as the docserver host, which is the *other* box. Worth confirming which one the
 tailnet name actually resolves to before publishing links (see gaps).
 
@@ -403,7 +403,7 @@ these suites have only ever been run by hand, which is how an installed ccd sat
 4,258 lines behind main without anyone noticing. This is the mechanism that
 keeps the extraction honest."
 
-**Repo facts** (`gh api repos/example-org/ccrc-pwa`):
+**Repo facts** (`gh api repos/example-corp/ccrc-pwa`):
 
 | Field | Value |
 | --- | --- |
@@ -414,7 +414,7 @@ keeps the extraction honest."
 | `has_issues` | `true` |
 | id / size | `1321771345` / 1959 KB, `pushed_at` 2026-08-03T14:20:40Z |
 
-**Branch protection: none.** `gh api repos/example-org/ccrc-pwa/branches/main/protection`
+**Branch protection: none.** `gh api repos/example-corp/ccrc-pwa/branches/main/protection`
 → `404 {"message":"Branch not protected"}` — a real answer, not a permission
 failure. `gh api .../rulesets` → `[]`. So `main` today accepts direct pushes and
 force-pushes, and **CI is advisory: nothing blocks a merge on it.**
@@ -427,7 +427,7 @@ had a PR; all seven post-extraction commits went straight to `main`.
 (`de2a918`, the CI-introducing commit — fixed by the next one). CI is green on
 `main` today and takes ~5 minutes.
 
-Monorepo for contrast: `you/OpenClawHetzner`, private, default `main`, no CI.
+Monorepo for contrast: `example-org/OpenClawHetzner`, private, default `main`, no CI.
 Note the **owner mismatch** — the monorepo is on a personal account, ccrc-pwa is
 on the org. That is what makes the org's 61-reader default apply to one and not
 the other.
@@ -451,7 +451,7 @@ an instruction standing in for a mechanism.
 ### Recommendation — the smallest honest mechanism
 
 The rule to replace it is the inverse: **ccrc-pwa is canonical; `infra/ccrc/` and
-the four `infra/ccrc-portability/` files are a frozen mirror that must not
+the four `infra/<server-host>-portability/` files are a frozen mirror that must not
 change.** Three candidate mechanisms, in increasing cost:
 
 1. **README tombstone only** — `infra/ccrc/README.md` gains a header, the
@@ -464,7 +464,7 @@ change.** Three candidate mechanisms, in increasing cost:
    standing up a first workflow — but a freeze guard is about the cheapest
    possible one: ~15 lines, `pull_request` + `push`, `git diff --name-only` the
    base against HEAD and fail if anything under `infra/ccrc/` or the four
-   `infra/ccrc-portability/` files changed. It costs seconds, needs no
+   `infra/<server-host>-portability/` files changed. It costs seconds, needs no
    Node, no deps, no secrets.
 
 **Recommended: 1 + 3 together, and nothing more.**
@@ -485,7 +485,7 @@ change.** Three candidate mechanisms, in increasing cost:
   a PR workflow; confirm that is wanted before doing it, and if yes, also flip
   `delete_branch_on_merge` to `true`.
 
-One nuance the guard must handle: **`infra/ccrc-portability/` is only
+One nuance the guard must handle: **`infra/<server-host>-portability/` is only
 partly frozen.** Four of its thirteen files moved (`ccd`, `claude-session@.service`,
 `statusline-command.sh`, `tmux.conf`); the other nine (`cc`, `ccclip`,
 `cc-termux`, `cc-compact-restore.sh`, `docserver-server.py`,
@@ -535,7 +535,7 @@ touch a running session.
 **Phase B — flip the deploy source (the only step that touches live services)**
 
 8. Deploy the **agent** first, from ccrc-pwa, to this box:
-   `bash deploy/deploy.sh agent you@198.51.100.7`. `verify-service.sh`
+   `bash deploy/deploy.sh agent you@<fleet-host>`. `verify-service.sh`
    gates it on MainPID stability across a 5 s window.
 9. **Then** verify capabilities explicitly, because the agent caches `ccd caps`
    at boot (finding 1, and the standing memory note): confirm the agent's
@@ -543,9 +543,9 @@ touch a running session.
    `sha256 ~/.local/bin/ccd` still equals `2bc6287b5e8a…`. If ccd is ever
    reinstalled, restart the agent *after*, never before.
 10. Deploy the **server** from ccrc-pwa:
-    `bash deploy/deploy.sh` (→ `you@203.0.113.7`, health-checked).
+    `bash deploy/deploy.sh` (→ `you@<server-host>`, health-checked).
 11. Verify the served bundle actually changed — compare the hash of the
-    `assets/` entry in `~/ccrc/server/dist-pwa/index.html` on server-box against
+    `assets/` entry in `~/ccrc/server/dist-pwa/index.html` on <server-host> against
     the freshly built one. A green deploy is not evidence; this is the exact
     class of failure finding 1 documents three times.
 12. Confirm the fleet is untouched: 16 `claude-session@*` units still active,
@@ -554,11 +554,11 @@ touch a running session.
 **Phase C — freeze the monorepo copy (only after Phase B is proven)**
 
 13. Add `infra/ccrc/README.md` tombstone: canonical repo URL
-    `https://github.com/example-org/ccrc-pwa`, freeze date, "changes here
+    `https://github.com/example-corp/ccrc-pwa`, freeze date, "changes here
     are rejected by CI", deletion trigger = spec 3 landing.
 14. Add the monorepo's first workflow, `.github/workflows/ccrc-freeze.yml`:
     fail if `git diff --name-only` against the base touches `infra/ccrc/**` or
-    any of the four frozen `infra/ccrc-portability/` files. Leave the other
+    any of the four frozen `infra/<server-host>-portability/` files. Leave the other
     nine files in that directory unguarded.
 15. Add one line to the monorepo's `CLAUDE.md` pointing ccrc work at ccrc-pwa.
 16. Prove the guard: open a throwaway branch touching one byte under

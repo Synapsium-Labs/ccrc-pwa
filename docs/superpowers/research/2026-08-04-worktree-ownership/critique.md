@@ -8,8 +8,8 @@ New measurements taken for this pass (read-only, nothing outside the scratchpad 
 
 | fact | measured now | as stated to me |
 |---|---|---|
-| free disk on `/` (holds `/mnt/srv-volume`) | **48G avail**, 84% used | 51G |
-| `.claude/worktrees/` children | **38 dirs, ~26.3G** (expoAI 20G, custom-tools 5.0G, orchard-api 707M, intake-platform 613M, rp-llm 16M, MekWarLive 0) | 37 trees / 26 GB (breaker, ccd-map) |
+| free disk on `/` (holds `/srv`) | **48G avail**, 84% used | 51G |
+| `.claude/worktrees/` children | **38 dirs, ~26.3G** (expoAI 20G, custom-tools 5.0G, acme-platform-ts 707M, intake-platform 613M, rp-llm 16M, MekWarLive 0) | 37 trees / 26 GB (breaker, ccd-map) |
 | RAM | 30G total, **22G available, 5G of 7G swap in use** | — |
 | `ccrc-pwa/.git/info/exclude` | **no non-comment lines** — ccd has never written `.ccrc/` there | — |
 | `ccrc-pwa/.gitignore` | 14 lines; **no `.claude/worktrees/`, no `.worktrees/`, no `docs/`** | — |
@@ -173,7 +173,7 @@ a **source-side-only** change, which is why it is safe to do before spec 1/2/3."
 
 Phase B steps 8–11: deploy the **agent** to this box (restarts `ccrc-agent.service`, which the 16
 live sessions' PWA controls depend on, and which re-caches `ccd caps` at boot — the standing memory
-item), then deploy the **server** to `server-box` (restarts the process serving the PWA, and ships a
+item), then deploy the **server** to `<server-host>` (restarts the process serving the PWA, and ships a
 `dist-pwa` that is *currently a different bundle on the two checkouts*: `infra/ccrc/server/dist-pwa`
 Aug 2 23:51 vs `ccrc-pwa/server/dist-pwa` Aug 3 13:04).
 
@@ -194,7 +194,7 @@ to the fleet and to every guard in the corpus. Neither is written down.
 `surfaces.md`: "line refs … at HEAD `5a943c5`". `ccd-map` Verification: ccd read at committed state
 `281d625`. `migration.md`: "HEAD `9f15625`… note the session's opening git snapshot showing
 `5a943c5` was stale". They are reconcilable (`migration` measured `git log d2c4ba0..HEAD --
-infra/ccrc infra/ccrc-portability` = empty, so ccd and the ccrc tree are unchanged across all
+infra/ccrc infra/<server-host>-portability` = empty, so ccd and the ccrc tree are unchanged across all
 three) — but **no report states the reconciliation**, and `ccd-map` R2 already proves that ~25 of its
 own line cites are wrong by 5–90 lines. A spec that mixes line numbers from two reports at two HEADs
 without pinning one commit will address the wrong code.
@@ -302,8 +302,8 @@ Ranked by blast radius. `[U]` = user's/architect's call. `[M]` = answerable by m
 19. **[M] Do the two `dist-pwa` bundles differ, and would a flipped build reproduce the served one?**
     Measurable in a scratch copy **before** anything is deployed; `migration.md` step 11 currently
     proposes to measure it *after* restarting the live server.
-20. **[M] Does `server-box.tailnet-example.ts.net` resolve to `server-box` or to this box?**
-    `migration.md` §0 flags that the CLAUDE.md docserver convention names `server-box` while
+20. **[M] Does `<server-host>.<tailnet>.ts.net` resolve to `<server-host>` or to this box?**
+    `migration.md` §0 flags that the CLAUDE.md docserver convention names `<server-host>` while
     `claude-docserver.service` runs on **openclaw**, and leaves it in "gaps". Any doc link the
     migration prompt emits depends on the answer.
 21. **[M] Do `deploy/ccrc.env` and `ccrc-agent.env` exist anywhere current?** `ship_env` silently
@@ -329,7 +329,7 @@ Ranked by blast radius. `[U]` = user's/architect's call. `[M]` = answerable by m
 | M-G | fixture-test blast radius of a 14th fingerprint input | grep the sha fixtures in `ccd-ws-reap.test.ts` / `ccd-ws-audit.test.ts` |
 | M-H | the true manifest delta and the true archive-diff delta, each named to its command | run `scripts/extraction-manifest.sh` in both roots; diff. (Already partially done: standalone walks `.github`, so `ci.yml` is a manifest-only delta and `ccd-ccclip.test.ts` is excluded from both — C8) |
 | M-I | do the two `dist-pwa` bundles differ; does a flat-layout build reproduce the served one | build in a scratch copy, hash `index.html`'s asset entries |
-| M-J | `server-box.tailnet-example.ts.net` → which host | `tailscale status` / fetch a known doc title (never trust the 200) |
+| M-J | `<server-host>.<tailnet>.ts.net` → which host | `tailscale status` / fetch a known doc title (never trust the 200) |
 | M-K | presence/currency of `ccrc.env`, `ccrc-agent.env`, `~/.ccrc/agent.env` | `ls`, never `cat` |
 | M-L | headroom for a 17th session | `free`, per-session RSS |
 | M-M | the authoritative ccd commit + re-derived line numbers for `ccd:1350-1510` and `ccd:2600-2860` | re-read the file; `ccd-map` R2 proves this is mandatory |
@@ -351,7 +351,7 @@ Ranked by blast radius. `[U]` = user's/architect's call. `[M]` = answerable by m
 | U-I | **`ccclip` + its 149-line test: port or bury** (C8) | a deliberate coverage loss |
 | U-J | **Do specs/plans move into `ccrc-pwa/docs/superpowers/`** — and therefore the docserver entry and the link convention for this work | where the user wants to read them |
 | U-K | **`ccrc-pwa` PR workflow + required checks + `delete_branch_on_merge`** — and whether the known flake is fixed first | process change |
-| U-L | **The migration agent's permission envelope**: may `claude-ccrc-pwa` restart `ccrc-agent` on a host with 16 live sessions, deploy to `server-box`, edit `~/.claude-docserver/config.json`, run ccd verbs? And is it started through ccd (17th unit, C11) or outside the fleet? | authority, not fact — and **the migration prompt cannot be written responsibly without it** |
+| U-L | **The migration agent's permission envelope**: may `claude-ccrc-pwa` restart `ccrc-agent` on a host with 16 live sessions, deploy to `<server-host>`, edit `~/.claude-docserver/config.json`, run ccd verbs? And is it started through ccd (17th unit, C11) or outside the fleet? | authority, not fact — and **the migration prompt cannot be written responsibly without it** |
 | U-M | **Rollback**: is "deploy again from the monorepo" a supported recovery after the freeze, and is the previous `~/.local/bin/ccd` kept anywhere? | a commitment, and today there is no versioned copy of the installed ccd |
 
 ---

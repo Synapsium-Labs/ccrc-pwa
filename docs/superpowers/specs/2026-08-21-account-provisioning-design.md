@@ -662,7 +662,7 @@ an explicit home — that is what "pinning" is — and `_ws_seed_home` seeds one
 deliberate choice**.
 
 Measured on the live fleet: **22 sessions carry an explicit `home` file, and the id prefix routinely
-disagrees with it.** `claude2-expoAI-assistant` is homed on `claude`; `claude-corp-orchard-api`
+disagrees with it.** `claude2-expoAI-assistant` is homed on `claude`; `claude-corp-acme-platform-ts`
 is homed on `claude`; `claude-rp-llm` is homed on `claude2`. A session's home therefore cannot be
 inferred from its id, and removal splits into two sets that fail differently:
 
