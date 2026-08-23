@@ -3164,6 +3164,86 @@ cmd_ws_rename() {   # ccd ws-rename --session <id> --branch <name> — rename a
   _json_str probe >/dev/null 2>&1 \
     || die "python3 unavailable — cannot quote the rename answer safely"
 
+  # WAVE 5 — THE DEC FLAGS, STRIPPED HERE AND NOT ONE LINE EARLIER. Below the
+  # `_json_str` probe, because every refusal in this verb is a QUOTED JSON
+  # answer at exit 0 and an unquotable detail is a parse error rather than the
+  # refusal it actually was. Above the arity rule, because the rule is exact
+  # and a flag left in argv would refuse a correct call. A THIRD ARRANGEMENT
+  # from Tasks 45-47's two: `cmd_ws_archive` (Task 45) binds no `id` until
+  # AFTER its arity check, so its block could go almost anywhere above that
+  # check; `cmd_ws_restore` (Task 46) binds `id="${2-}"` as its very first
+  # statement, so its block had to precede that binding specifically. This verb
+  # binds neither `id` nor `new` until AFTER the arity check below (`local
+  # id=$2 new=$4`, ccd:3118 pre-wave-5) — so, unlike Task 46's case, there is no
+  # earlier binding this placement could land on the wrong side of.
+  #
+  # `break`, NOT a refusal in the loop body: a `return` inside the `while` would
+  # leave the remaining argv unread, and the answer this verb owes is one
+  # document. The first fault wins and the loop stops; `lc_bad` carries it out.
+  #
+  # THE TOKEN IS `bad-args`, THE ONE THIS VERB ALREADY SPELLS, and that is not
+  # tidiness: `server/test/wsaudit.test.ts:53-63` greps this file's raw text for
+  # `"refused":"<token>"` and holds the result set-equal to `wsaudit.ts`'s
+  # SENTENCES in both directions, so a `bad-surface` invented here is a red
+  # suite whose only fixes are new copy or a weakened mechanism.
+  local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 lc_args=() lc_bad=''
+  while (( $# )); do
+    case "$1" in
+      --surface)   if [[ $# -ge 2 ]]; then lc_gs=1; lc_surface="$2"; shift 2
+                   else lc_bad='--surface needs a value'; break; fi ;;
+      --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
+      --actor)     if [[ $# -ge 2 ]]; then lc_ga=1; lc_actor="$2"; shift 2
+                   else lc_bad='--actor needs a value'; break; fi ;;
+      --actor=*)   lc_ga=1; lc_actor="${1#--actor=}"; shift ;;
+      --reason)    if [[ $# -ge 2 ]]; then lc_gr=1; lc_reason="$2"; shift 2
+                   else lc_bad='--reason needs a value'; break; fi ;;
+      --reason=*)  lc_gr=1; lc_reason="${1#--reason=}"; shift ;;
+      *)           lc_args+=("$1"); shift ;;
+    esac
+  done
+  set -- "${lc_args[@]}"
+  # `_lc_surface_norm ''` prints EMPTY, not `unknown` (ccd:1511-1524, D-200) —
+  # it cannot tell "no argument" from "an explicit blank" apart, so THIS loop is
+  # where that distinction has to be made, before the encoder ever sees the
+  # value. `lc_gs` already carries givenness; the `${lc_w:-unknown}` fallback
+  # below is what turns a declared-but-blank surface into `unknown` rather than
+  # an empty string that `_lc_json` would backfill to `none` — the exact
+  # given/no-flag collapse this verb must not produce.
+  #
+  # DIVERGES FROM THE BRIEF'S OWN STEP-3 SAMPLE, which read
+  # `lc_surface=$(_lc_surface_norm "$lc_surface")` with no fallback: measured
+  # against D-200, that line leaves a declared-but-blank `--surface ''` as the
+  # literal empty string, which `_lc_json` backfills to `none` — "no flag was
+  # given at all", exactly the collapse D-200 exists to prevent. Same fix
+  # Tasks 45-47 already carry for their own copies of this loop.
+  if (( lc_gs )); then local lc_w; lc_w=$(_lc_surface_norm "$lc_surface"); lc_surface=${lc_w:-unknown}; fi
+  # `_lc_dec_ok` is LENGTH-ONLY (ccd:1527-1538, D-200) — `_lc_dec_ok ''` returns
+  # 0, so it is not a blank guard on its own. TWO SEPARATE CHECKS below, blank
+  # then length — the same shape `cmd_ws_archive`/`cmd_ws_restore` use.
+  #
+  # DIVERGES FROM THE BRIEF'S OWN STEP-3 SAMPLE, whose single
+  # `! _lc_dec_ok "$lc_actor"` test cannot fire on a blank value at all
+  # (`_lc_dec_ok ''` measures 0 bytes, which is `<= 512`): that line alone
+  # leaves a declared `--actor ''` UNREFUSED — the opposite of this task's own
+  # Step-1 test ("refuses a blank --actor as JSON at exit 0"). Same gap the
+  # brief's --reason sample repeats.
+  if [[ -z "$lc_bad" ]] && (( lc_ga )) && [[ -z "${lc_actor//[[:space:]]/}" ]]; then
+    lc_bad='--actor must be non-blank'
+  fi
+  if [[ -z "$lc_bad" ]] && (( lc_ga )) && ! _lc_dec_ok "$lc_actor"; then
+    lc_bad="--actor is longer than $_LC_DEC_MAX bytes"
+  fi
+  if [[ -z "$lc_bad" ]] && (( lc_gr )) && [[ -z "${lc_reason//[[:space:]]/}" ]]; then
+    lc_bad='--reason must be non-blank'
+  fi
+  if [[ -z "$lc_bad" ]] && (( lc_gr )) && ! _lc_dec_ok "$lc_reason"; then
+    lc_bad="--reason is longer than $_LC_DEC_MAX bytes"
+  fi
+  if [[ -n "$lc_bad" ]]; then
+    printf '{"refused":"bad-args","detail":%s,"paths":[]}\n' "$(_json_str "$lc_bad")"
+    return 0
+  fi
+
   # Exact arity and flag order, the shape `cmd_ws_hold` (ccd:1635) and
   # `cmd_ws_release` (ccd:1681) use. `[[ ]]` short-circuits, so `$1` is never
   # expanded when `$#` is 0 and `set -u` has nothing to complain about. The

@@ -565,3 +565,150 @@ describe('ws-release takes all three flags and stays idempotent', () => {
     expect(readFileSync(`${h.home}/probe-surface`, 'utf8')).toBe('unknown');
   });
 });
+
+/** Stubs enough of `cmd_ws_rename` to reach past the wave-5 loop into its own
+ *  identity guards without a real git repo: `_ws_branch_valid` always accepts
+ *  the new name, and `_ws_wt_branch` always answers as if git had a
+ *  registration for the path. `seedWorkspace`'s `workdir` is a bare directory
+ *  (no `.git`), so `_ws_common_dir` (real, unstubbed) fails to read either
+ *  side and this verb's identity guard refuses `worktree-foreign` — the first
+ *  refusal PAST the wave-5 loop and the arity/id/hold/registry checks above
+ *  it, which is exactly what proves the flags parsed rather than merely that
+ *  the call exited 0 (every refusal on this verb, wave-5's included, is a
+ *  JSON document AT exit 0 — unlike `code === 0`, the TOKEN says which guard
+ *  was reached). `ccd-ws-rename.test.ts` covers the real git identity guards
+ *  and the actual rename with `h.makeRepo`; this file stays argv-parsing-only,
+ *  matching `ARCHIVE_STUBS`/`RESTORE_STUBS` above. */
+const RENAME_STUBS = `tmux() { return 1; }; _ws_branch_valid() { return 0; };
+    _ws_wt_branch() { echo ws/quiet-basin; return 0; };`;
+
+describe('ws-rename answers flag refusals the way it answers every other refusal', () => {
+  it('refuses a valueless --surface as JSON at exit 0, never as a die', () => {
+    const id = seedWorkspace();
+    const r = shFail(`${RENAME_STUBS} cmd_ws_rename --session ${id} --branch ws/new --surface`);
+    expect(r.code).toBe(0);
+    const j = JSON.parse(r.stdout.trim()) as Record<string, unknown>;
+    expect(j).toMatchObject({ refused: 'bad-args', paths: [] });
+    expect(String(j['detail'])).toContain('--surface');
+  });
+
+  it('refuses a blank --actor as JSON at exit 0', () => {
+    const id = seedWorkspace();
+    const r = shFail(`${RENAME_STUBS} cmd_ws_rename --session ${id} --branch ws/new --actor ''`);
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.stdout.trim())).toMatchObject({ refused: 'bad-args' });
+  });
+
+  // Not in the brief's own Step-1 sample. Added because the brief's --actor
+  // case and this one are one guard copied twice (blank-then-length, once per
+  // flag): a mutant that deleted only `--reason`'s blank check would leave the
+  // --actor case above red and this one silently green, which is the exact
+  // asymmetry `ccd-actor-flags.test.ts:305-317`'s copy of this same pairing
+  // (Task 46, ws-restore) already calls out for its own two flags.
+  it('refuses a blank --reason as JSON at exit 0 — the same non-blank check as --actor', () => {
+    const id = seedWorkspace();
+    const r = shFail(`${RENAME_STUBS} cmd_ws_rename --session ${id} --branch ws/new --reason ''`);
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.stdout.trim())).toMatchObject({ refused: 'bad-args' });
+  });
+
+  it('refuses an over-long --reason as JSON at exit 0, and says the cap in bytes', () => {
+    const id = seedWorkspace();
+    const r = shFail(
+      `${RENAME_STUBS} cmd_ws_rename --session ${id} --branch ws/new --reason "$(printf 'a%.0s' {1..513})"`);
+    expect(r.code).toBe(0);
+    const j = JSON.parse(r.stdout.trim()) as Record<string, unknown>;
+    expect(j).toMatchObject({ refused: 'bad-args' });
+    expect(String(j['detail'])).toContain('512');
+  });
+
+  // Symmetry with --reason's own over-long case above, for the same reason the
+  // blank---reason case above pairs with blank---actor: one guard, copied
+  // twice, needs a test on each copy.
+  it('refuses an over-long --actor as JSON at exit 0, and says the cap in bytes', () => {
+    const id = seedWorkspace();
+    const r = shFail(
+      `${RENAME_STUBS} cmd_ws_rename --session ${id} --branch ws/new --actor "$(printf 'a%.0s' {1..513})"`);
+    expect(r.code).toBe(0);
+    const j = JSON.parse(r.stdout.trim()) as Record<string, unknown>;
+    expect(j).toMatchObject({ refused: 'bad-args' });
+    expect(String(j['detail'])).toContain('512');
+  });
+
+  it('adds NO new refusal token to ccd — the wsaudit scan sees exactly what it saw', () => {
+    // `server/test/wsaudit.test.ts:53-63` greps THIS FILE'S TEXT with four
+    // regexes and holds the result set-equal to `wsaudit.ts`'s SENTENCES, in
+    // both directions. A wave-5 token like `bad-surface` would need a sentence;
+    // reusing `bad-args` needs nothing. ccd's own note above the verb
+    // (`THE TOKENS ARE INLINE LITERALS`) records the same rule for the
+    // helper-vs-literal question.
+    const src = readFileSync(CCD, 'utf8');
+    const tokens = new Set<string>();
+    for (const m of src.matchAll(/_reap_refuse\s+([a-zA-Z][a-zA-Z0-9_-]*)\b/g)) tokens.add(m[1]!);
+    for (const m of src.matchAll(/"refused":"([a-zA-Z0-9-]+)"/g)) tokens.add(m[1]!);
+    for (const m of src.matchAll(/'!([a-zA-Z0-9-]+)/g)) tokens.add(m[1]!);
+    for (const m of src.matchAll(/"verdict":"([a-zA-Z0-9-]+)"/g)) {
+      if (m[1] !== 'reapable') tokens.add(m[1]!);
+    }
+    // The floor guards the scan itself: a refactor that hid every refusal
+    // behind one indirection would make this assertion vacuously true.
+    expect(tokens.size).toBeGreaterThan(30);
+    expect(tokens.has('bad-args')).toBe(true);
+    for (const invented of ['bad-surface', 'bad-actor', 'bad-flag', 'bad-dec']) {
+      expect(tokens.has(invented), `${invented} needs a SENTENCES entry — reuse bad-args`).toBe(false);
+    }
+  });
+});
+
+describe('ws-rename accepts the dec flags in any position', () => {
+  it.each([
+    ['before the required flags', `--surface pwa --session ID --branch ws/new`],
+    ['after the required flags',  `--session ID --branch ws/new --surface pwa`],
+    ['in the --flag=value form',  `--session ID --branch ws/new --surface=pwa`],
+    ['with all three flags',
+      `--session ID --branch ws/new --surface pwa --actor 'device:iPhone' --reason 'tidy'`],
+  ])('parses --surface %s', (_name, tail) => {
+    // Coverage-parity with `cmd_ws_archive`'s own `it.each` (Task 45). The
+    // assertion is the TOKEN, not the exit code: every path through this verb
+    // — wave-5's own refusal included — exits 0, so `code === 0` alone would
+    // stay green even if the strip left residue and every one of these calls
+    // fell through to `bad-args` at the pre-existing arity check.
+    // `worktree-foreign` is the first guard PAST wave-5's loop, the arity
+    // check, the id check, the hold check and the registry-completeness check
+    // — reaching it is what proves the flags were stripped and the required
+    // `--session`/`--branch` pair survived in the right order.
+    const id = seedWorkspace();
+    const r = shFail(`${RENAME_STUBS} cmd_ws_rename ${tail.replace('ID', id)}`);
+    expect(r.code, r.stderr).toBe(0);
+    const j = JSON.parse(r.stdout.trim()) as Record<string, unknown>;
+    expect(j, JSON.stringify(j)).toMatchObject({ refused: 'worktree-foreign' });
+  });
+
+  it('treats a blank --surface as a word it does not know, never as no flag', () => {
+    // Same givenness trap as `cmd_ws_archive`/`cmd_ws_restore`/`cmd_ws_hold`/
+    // `cmd_ws_release` (D-200): the bare `_lc_surface_norm` answers EMPTY for
+    // both "no argument" and an explicit blank, so this loop resolves
+    // givenness itself with its own `${lc_w:-unknown}` fallback — the fallback
+    // this task's brief sample omitted (see the ccd comment on the fix).
+    // `cmd_ws_rename` has no manifest-building helper the way `cmd_ws_archive`
+    // does, so the probe overrides `_ws_wt_branch` instead: it runs from
+    // inside `cmd_ws_rename` right after the wave-5 block, and bash's dynamic
+    // scoping lets it see the caller's own `local lc_surface`.
+    const id = seedWorkspace();
+    const PROBE = `tmux() { return 1; }; _ws_branch_valid() { return 0; };
+      _ws_wt_branch() { printf '%s' "$lc_surface" > "$HOME/probe-surface"; echo ws/quiet-basin; return 0; };`;
+    h.sh(`${PROBE} cmd_ws_rename --session ${id} --branch ws/new --surface ''`);
+    expect(readFileSync(`${h.home}/probe-surface`, 'utf8')).toBe('unknown');
+  });
+
+  it('still refuses extra positionals — the arity rule survives the strip', () => {
+    const id = seedWorkspace();
+    const r = shFail(`${RENAME_STUBS} cmd_ws_rename --session ${id} --branch ws/new extra`);
+    expect(r.code).toBe(0);
+    const j = JSON.parse(r.stdout.trim()) as Record<string, unknown>;
+    expect(j).toMatchObject({
+      refused: 'bad-args',
+      detail: 'usage: ccd ws-rename --session <id> --branch <name>',
+    });
+  });
+});
