@@ -21,8 +21,8 @@ import type { AuthVerdict } from '../../../shared/api.js';
  *    `randomBytes`, so there is no dictionary to slow and no salt to add — a plain
  *    `sha256` is the correct and complete choice. The raw token is returned ONCE
  *    from {@link create} and is never written to disk or logged.
- *  - {@link verify} hashes the presented token and `timingSafeEqual`s it against the
- *    stored hashes (length-check-FIRST, the `coord/token.ts:220-228` discipline —
+ *  - {@link verifyMeasured} hashes the presented token and `timingSafeEqual`s it
+ *    against the stored hashes (length-check-FIRST, the `coord/token.ts:220-228` discipline —
  *    equal-length sha256 always, but the guard stays live against a malformed
  *    stored hash rather than letting `timingSafeEqual` throw a RangeError).
  *

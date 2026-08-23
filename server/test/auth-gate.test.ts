@@ -1117,8 +1117,78 @@ describe('GateDecision.device — attribution, never a decision input', () => {
     expect(store.verifyMeasured(token, 3, 1_000)).toEqual({ verdict: 'ok', label: 'iPhone' });
     expect(store.verify(token, 3, 1_000)).toBe('ok');
     // No row matched ⇒ nothing was measured. `null`, never `''`: an empty label
-    // is a row that logged in from a UA-less browser, which is a different fact.
+    // is a row that WAS measured and reported nothing — a fact `SessionStore.create`
+    // accepts as-is (this test calls it directly with `''`). The login route never
+    // produces one in practice — `server.ts`'s `deviceLabel` substitutes
+    // `'unknown device'` for a missing/blank user-agent — but the store layer still
+    // keeps the two facts distinct rather than leaning on that route's behavior.
     expect(store.verifyMeasured('nope', 3, 1_000)).toEqual({ verdict: 'no-session', label: null });
     expect(store.verifyMeasured(token, 4, 1_000)).toEqual({ verdict: 'expired', label: null });
+  });
+});
+
+// ── fix round 1, item 1: attribution as a MECHANISM, not a 2-sample check ──
+//
+// The prior three tests prove "these 7 sites, these 2 labels" — a review
+// planted a mutant that denies when the device label contains `'Android'`
+// and it left `tsc` clean and the entire suite byte-identical. A sample-based
+// test can only be as good as its samples; this is a STRUCTURAL proof instead,
+// modelled on `auth-routes.test.ts`'s login-route slice and its
+// `trustProxy is settled` scan: read the actual SOURCE, slice out the
+// function that decides, strip its comments (this file's prose says
+// "device"/"label" constantly — only CODE may count), delete every
+// occurrence of the one SAFE write (`device: measured.label` / `label:
+// rec.label`, and their `null` twins), and assert nothing with that name is
+// left. Any future branch, comparison, or `.includes()` keyed on the label —
+// on ANY string, not just the two this file happens to sample — leaves a
+// stray `device`/`label` token behind and reds. Verified by replanting the
+// reviewer's own mutant (task-53-report.md records the measurement).
+describe('device/label never appear in a decision branch — a structural scan, not a sample', () => {
+  const gateSrc = readFileSync(path.resolve(__dirname, '../src/auth/gate.ts'), 'utf8');
+  const sessionsSrc = readFileSync(path.resolve(__dirname, '../src/auth/sessions.ts'), 'utf8');
+
+  // Comments in this file talk ABOUT device/label constantly; only code counts.
+  const stripComments = (s: string): string =>
+    s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+  it('authVerdict never mentions device outside its own two `device: null` literals', () => {
+    const at = gateSrc.indexOf('export function authVerdict(');
+    expect(at, 'authVerdict not found').toBeGreaterThan(0);
+    const end = gateSrc.indexOf('\n\n/**', at);
+    expect(end, 'end of authVerdict not found').toBeGreaterThan(at);
+    const body = stripComments(gateSrc.slice(at, end));
+    // Guard the guard: a slice gone empty (a rename, a moved function) would
+    // satisfy every assertion below by having nothing in it.
+    expect(body.length, 'the slice must not be empty').toBeGreaterThan(100);
+    const stripped = body.replace(/device:\s*null/g, '');
+    expect(stripped, 'authVerdict must not reference device outside its own literal')
+      .not.toMatch(/\bdevice\b/);
+  });
+
+  it('sessionVerdict never branches on device or the measured label — every mention is the one safe write', () => {
+    const at = gateSrc.indexOf("if (deps.secret.kind !== 'ok')");
+    expect(at, 'sessionVerdict body not found').toBeGreaterThan(0);
+    const end = gateSrc.indexOf('\n\n/**', at);
+    expect(end, 'end of sessionVerdict not found').toBeGreaterThan(at);
+    const body = stripComments(gateSrc.slice(at, end));
+    expect(body.length, 'the slice must not be empty').toBeGreaterThan(200);
+    const stripped = body.replace(/device:\s*(null|measured\.label)/g, '');
+    expect(stripped, 'sessionVerdict must not branch on device').not.toMatch(/\bdevice\b/);
+    // This is the assertion the D1/D2 mutants actually trip: `if
+    // (measured.label.includes('Android'))` or `if (measured.label === '')`
+    // both leave a `label` token here that the one safe pattern above did not
+    // consume, regardless of which string the branch was keyed on.
+    expect(stripped, 'sessionVerdict must not branch on the measured label').not.toMatch(/\blabel\b/);
+  });
+
+  it('verifyMeasured never lets the label decide the verdict — same proof, one layer down', () => {
+    const at = sessionsSrc.indexOf("const presented = Buffer.from(sha256hex(token), 'hex');");
+    expect(at, 'verifyMeasured body not found').toBeGreaterThan(0);
+    const end = sessionsSrc.indexOf('\n\n  /**', at);
+    expect(end, 'end of verifyMeasured not found').toBeGreaterThan(at);
+    const body = stripComments(sessionsSrc.slice(at, end));
+    expect(body.length, 'the slice must not be empty').toBeGreaterThan(100);
+    const stripped = body.replace(/label:\s*(null|rec\.label)/g, '');
+    expect(stripped, 'verifyMeasured must not branch on label').not.toMatch(/\blabel\b/);
   });
 });

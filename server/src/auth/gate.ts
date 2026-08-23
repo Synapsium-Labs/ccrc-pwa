@@ -370,8 +370,9 @@ export interface GateDeps {
   enabled: boolean;
   /** The measured secret ({@link measureSecret}), or {@link SECRET_UNREAD}. */
   secret: SecretState;
-  /** The session store. `verify` is SYNCHRONOUS and does no I/O (`sessions.ts`),
-   *  which is what lets the hottest path in the server stay pure. */
+  /** The session store. `verifyMeasured` — the method this file actually calls —
+   *  is SYNCHRONOUS and does no I/O (`sessions.ts`), which is what lets the
+   *  hottest path in the server stay pure. */
   store: SessionStore;
 }
 
@@ -405,8 +406,7 @@ export function authVerdict(req: GateRequest, deps: GateDeps, now: number): Gate
   const key = exemptKey(req.method, req.routeOptions.url);
   // `reason: 'exempt'`, NEVER `'session'`: this arm returns before the secret or
   // the cookie has been read, so it says nothing at all about who is calling —
-  // and `device: null` for the same reason — this arm returns before the cookie
-  // has been read.
+  // and `device: null` for the same reason.
   if (key !== null && EXEMPT.has(key)) return { allow: true, verdict: 'ok', reason: 'exempt', device: null };
 
   return sessionVerdict(req, deps, now);
