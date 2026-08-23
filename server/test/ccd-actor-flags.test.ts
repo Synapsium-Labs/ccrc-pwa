@@ -821,3 +821,64 @@ describe("ws-restore's length refusals omit ONLY the field that failed its own c
     expect(Object.keys(dec)).not.toContain('reason');
   });
 });
+
+// Final whole-branch review, F1: the two tests above each plant exactly ONE
+// offending field. The reviewer measured that the property does not hold for
+// TWO — with BOTH --actor and --reason over cap, the actor-length refusal
+// fires FIRST (actor is checked before reason in the ladder) and it echoes
+// `dec.reason` UNCHECKED, because that check has not run yet: a 513-byte
+// declared reason rides the record with no `truncated` marker, which is
+// exactly the over-cap declared value the omit-only-the-failed-field
+// exception exists to keep out. The blank-actor refusal leaks the same way.
+// Pre-fix, all three cases below observe the leak; the fix validates every
+// given field before emitting ANY refusal, so no sibling field can ride an
+// unrelated field's refusal line regardless of which check would have fired
+// first.
+describe("ws-restore's length/blank refusals hold for MULTIPLE offending fields, not just one", () => {
+  const STUBS = `tmux() { return 1; };`;
+  const OVER_CAP = 'a'.repeat(513);
+
+  it('both --actor and --reason over cap: NEITHER lands, only dec.surface does', () => {
+    const id = seedWorkspace();
+    const r = shFail(
+      `${STUBS} cmd_ws_restore --session ${id} --surface pwa --actor '${OVER_CAP}' --reason '${OVER_CAP}'`);
+    expect(r.code).not.toBe(0);
+    const dec = lastDec()!;
+    expect(dec['surface']).toBe('pwa');
+    expect(Object.keys(dec)).not.toContain('actor');
+    // THE LEAK THIS TEST WAS WRITTEN TO CATCH: pre-fix, the actor-length
+    // refusal fired before --reason was ever checked, so `dec.reason` carried
+    // the full 513-byte over-cap string, unexamined and unmarked.
+    expect(Object.keys(dec)).not.toContain('reason');
+  });
+
+  it('a blank --actor with an over-cap --reason: the reason never rides the blank-actor refusal', () => {
+    const id = seedWorkspace();
+    const r = shFail(
+      `${STUBS} cmd_ws_restore --session ${id} --surface pwa --actor '' --reason '${OVER_CAP}'`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('--actor');
+    const dec = lastDec()!;
+    expect(dec['surface']).toBe('pwa');
+    expect(Object.keys(dec)).not.toContain('actor');
+    expect(Object.keys(dec)).not.toContain('reason');
+  });
+
+  it('an over-cap --actor with a blank --reason: still refused, dec.actor still omitted', () => {
+    // The reverse combination, kept as a boundary check rather than a repeat
+    // of the leak proof above: it already passes pre-fix, because `_lc_json`
+    // drops any key whose value is the empty string ("AN EMPTY VALUE OMITS
+    // ITS KEY", ccd:1305) — a blank `lc_reason` was never something for a
+    // sibling refusal to leak, only a NON-EMPTY unchecked value is. Kept so a
+    // future change to that empty-omits rule cannot silently start leaking
+    // this combination without a red test naming it.
+    const id = seedWorkspace();
+    const r = shFail(
+      `${STUBS} cmd_ws_restore --session ${id} --surface pwa --actor '${OVER_CAP}' --reason ''`);
+    expect(r.code).not.toBe(0);
+    const dec = lastDec()!;
+    expect(dec['surface']).toBe('pwa');
+    expect(Object.keys(dec)).not.toContain('actor');
+    expect(Object.keys(dec)).not.toContain('reason');
+  });
+});

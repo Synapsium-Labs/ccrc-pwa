@@ -109,12 +109,20 @@ const decFlags = (dec: ActorFlags | null): readonly string[] =>
 /**
  * The session's own device label as an `--actor` value.
  *
- * TWO CONDITIONS, TWO WORDS. `null` means the gate measured no session at all
- * (a dark box, or an exempt route reached without a cookie) — `unmeasured`. A
- * UA-less browser that DID present a live session already carries
- * `'unknown device'` from `deviceLabel` and keeps it verbatim. Folding both
- * into one word would tell an operator "we do not know which browser" for a
- * call where we do not know there was a browser.
+ * TWO CONDITIONS, TWO WORDS, TWO NAMESPACES. `null` means the gate measured no
+ * session at all (a dark box, or an exempt route reached without a cookie) —
+ * the BARE word `unmeasured`, deliberately carrying NO `device:` prefix. A
+ * measured label always keeps that prefix (`device:<label>`), so the two can
+ * never collide byte-for-byte: `deviceActor('unmeasured')` returns
+ * `'device:unmeasured'`, a different string from `deviceActor(null)`'s bare
+ * `'unmeasured'`. Before this fix both arms returned `'device:unmeasured'`,
+ * so a browser presenting `User-Agent: unmeasured` — attacker-influenceable,
+ * since a UA header is client-chosen — was recorded byte-identically to "the
+ * gate measured no session at all", two conditions an operator reads
+ * differently (final review, F2). A UA-less browser that DID present a live
+ * session already carries `'unknown device'` from `deviceLabel` and keeps it
+ * verbatim. Folding both into one word would tell an operator "we do not know
+ * which browser" for a call where we do not know there was a browser.
  *
  * `\p{Cc}` flattens every control character and the label is re-truncated, both
  * belt and braces: `deviceLabel` already slices to 120 UTF-16 units, and ccd
@@ -132,7 +140,7 @@ const decFlags = (dec: ActorFlags | null): readonly string[] =>
  * rather than left for someone to rediscover.
  */
 export function deviceActor(device: string | null): string {
-  if (device === null) return 'device:unmeasured';
+  if (device === null) return 'unmeasured';
   return `device:${device.replace(/\p{Cc}/gu, ' ').slice(0, 120)}`;
 }
 

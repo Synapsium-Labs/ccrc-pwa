@@ -1146,6 +1146,7 @@ describe('GateDecision.device — attribution, never a decision input', () => {
 describe('device/label never appear in a decision branch — a structural scan, not a sample', () => {
   const gateSrc = readFileSync(path.resolve(__dirname, '../src/auth/gate.ts'), 'utf8');
   const sessionsSrc = readFileSync(path.resolve(__dirname, '../src/auth/sessions.ts'), 'utf8');
+  const serverSrc = readFileSync(path.join(srcRoot, 'server.ts'), 'utf8');
 
   // Comments in this file talk ABOUT device/label constantly; only code counts.
   const stripComments = (s: string): string =>
@@ -1190,5 +1191,62 @@ describe('device/label never appear in a decision branch — a structural scan, 
     expect(body.length, 'the slice must not be empty').toBeGreaterThan(100);
     const stripped = body.replace(/label:\s*(null|rec\.label)/g, '');
     expect(stripped, 'verifyMeasured must not branch on label').not.toMatch(/\blabel\b/);
+  });
+
+  // ── fix round 2 (final whole-branch review, F5a): the three scans above
+  // slice only `authVerdict`/`sessionVerdict`/`verifyMeasured` — the
+  // functions that CONSTRUCT a `GateDecision`. A decision keyed on
+  // `GateDecision.device` written anywhere ELSE — the `installGate` hook
+  // that RECEIVES the decision, or a route handler reading it back out —
+  // was outside every one of those slices and would pass all three
+  // unnoticed. This is the boundary the guard exists to close: the reviewer
+  // named it as the residual, not a hypothetical.
+  it('installGate never mentions device or label anywhere in its body — it only ever RECEIVES a decision, never constructs one', () => {
+    const at = gateSrc.indexOf('export function installGate(');
+    expect(at, 'installGate not found').toBeGreaterThan(0);
+    // installGate is the LAST function in gate.ts (verified by the file-level
+    // guard below), so there is no `\n\n/**` sentinel to slice against —
+    // the rest of the file IS the function body plus its closing brace.
+    const body = stripComments(gateSrc.slice(at));
+    expect(body.length, 'the slice must not be empty').toBeGreaterThan(200);
+    // Unlike the three functions above, installGate has NO safe write to
+    // strip out first: it never builds a `GateDecision`, only reads one
+    // (`decision.allow`, `decision.verdict`) — so `device`/`label` must not
+    // appear here under ANY spelling at all.
+    expect(body, 'installGate must not reference device').not.toMatch(/\bdevice\b/);
+    expect(body, 'installGate must not reference label').not.toMatch(/\blabel\b/);
+  });
+
+  it('installGate really is the last function in gate.ts — the guard above is not slicing past a boundary that moved', () => {
+    // Guards the guard above: if a function were added AFTER installGate,
+    // `gateSrc.slice(at)` would silently start covering it too (harmless)
+    // or, if installGate itself moved earlier, would silently stop covering
+    // part of its own body (not harmless) without either failing loudly.
+    // This assertion makes "installGate is last" a checked fact, not an
+    // assumption the slice above quietly depends on.
+    const at = gateSrc.indexOf('export function installGate(');
+    const nextFn = gateSrc.indexOf('\nexport function ', at + 1);
+    expect(nextFn, 'a function was added after installGate — update the scan above to bound its slice')
+      .toBe(-1);
+  });
+
+  it('pwaDec (server.ts) — the one ROUTE-LEVEL site reading .device — never branches on it, only hands it to deviceActor', () => {
+    // The other place `GateDecision.device` reaches outside gate.ts/sessions.ts
+    // at all: `pwaDec` reads `sessionAuth(req).device` to build the dec a
+    // human-driven route declares. A future mutant here (e.g. denying a
+    // route, or choosing a different `surface`, when the device label
+    // matches some string) would be exactly the same defect class the
+    // reviewer's `installGate` mutant demonstrated, one file over.
+    const at = serverSrc.indexOf('const pwaDec = (');
+    expect(at, 'pwaDec not found').toBeGreaterThan(0);
+    const end = serverSrc.indexOf('\n\n  /**', at);
+    expect(end, 'end of pwaDec not found').toBeGreaterThan(at);
+    const body = stripComments(serverSrc.slice(at, end));
+    expect(body.length, 'the slice must not be empty').toBeGreaterThan(50);
+    // The one safe write: `.device` is passed straight into `deviceActor(…)`
+    // and nowhere else — strip that call, then nothing named `device` may
+    // remain.
+    const stripped = body.replace(/deviceActor\(sessionAuth\(req\)\.device\)/g, '');
+    expect(stripped, 'pwaDec must not branch on device').not.toMatch(/\bdevice\b/);
   });
 });

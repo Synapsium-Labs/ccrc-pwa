@@ -682,7 +682,7 @@ describe('wave 6 — the dec flags are sent only to a ccd that says it parses th
     // its `device` is null — the record says `unmeasured` rather than naming a
     // browser nobody saw.
     expect(calls).toEqual([[cfg.ccdBin, 'ws-archive', '--session', ID,
-                            '--surface', 'pwa', '--actor', 'device:unmeasured']]);
+                            '--surface', 'pwa', '--actor', 'unmeasured']]);
     await app.close();
   });
 
@@ -693,7 +693,7 @@ describe('wave 6 — the dec flags are sent only to a ccd that says it parses th
     });
     expect(res.statusCode).toBe(200);
     expect(calls).toEqual([[cfg.ccdBin, 'ws-hold', '--session', ID, '--reason', 'program:x wave:1/4',
-                            '--surface', 'pwa', '--actor', 'device:unmeasured']]);
+                            '--surface', 'pwa', '--actor', 'unmeasured']]);
     expect(calls[0]!.filter((t) => t === '--reason')).toHaveLength(1);
     await app.close();
   });
@@ -703,8 +703,8 @@ describe('wave 6 — the dec flags are sent only to a ccd that says it parses th
     await app.inject({ method: 'POST', url: `/api/sessions/${ID}/restore`, payload: {} });
     await app.inject({ method: 'POST', url: `/api/sessions/${ID}/release`, payload: {} });
     expect(calls).toEqual([
-      [cfg.ccdBin, 'ws-restore', '--session', ID, '--surface', 'pwa', '--actor', 'device:unmeasured'],
-      [cfg.ccdBin, 'ws-release', '--session', ID, '--surface', 'pwa', '--actor', 'device:unmeasured'],
+      [cfg.ccdBin, 'ws-restore', '--session', ID, '--surface', 'pwa', '--actor', 'unmeasured'],
+      [cfg.ccdBin, 'ws-release', '--session', ID, '--surface', 'pwa', '--actor', 'unmeasured'],
     ]);
     await app.close();
   });

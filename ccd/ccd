@@ -4446,19 +4446,43 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   # refuses a blank `--reason` (ccd:3656) and Task 45's `cmd_ws_archive`
   # follows: its own non-blank check, separate from the byte cap, whitespace-
   # only counting as blank too.
+  # FIX ROUND 2 (final whole-branch review, F1) — VALIDATE BOTH FIELDS BEFORE
+  # EMITTING ANY REFUSAL. The prior shape (blank-then-length, actor-then-
+  # reason, refusing INSIDE each check) was order-dependent: with BOTH
+  # --actor and --reason over cap, the actor-length refusal fired before
+  # --reason was ever checked, so it carried `dec.reason` UNCHECKED — an
+  # over-cap declared value riding a SIBLING field's refusal line, exactly
+  # what the omit-only-the-failed-field exception exists to prevent
+  # (measured: a 513-byte `dec.reason`, `truncated` unset). The blank-actor
+  # refusal leaked the same unchecked reason. Fix: compute BOTH fields'
+  # validity first, into `lc_actor_bad`/`lc_reason_bad`, and emit exactly ONE
+  # refusal — actor's message wins ties, the same priority the old two-block
+  # shape gave it by running first — omitting `dec.actor`/`dec.reason`
+  # independently, keyed on whether THAT field is the one that failed, never
+  # on which refusal happened to fire first. `_lc_json` already drops any
+  # key whose value is empty (ccd:1305), so a field that was never GIVEN
+  # needs no special case here: `lc_dec_args` simply omits the flag, and the
+  # encoder's own rule covers a given-but-blank value that slipped through.
+  local lc_actor_bad='' lc_reason_bad=''
   if (( lc_ga )); then
-    [[ -n "${lc_actor//[[:space:]]/}" ]] || _lc_refuse restore "" bad-args "--actor must be non-blank" verb ws-restore dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
-    # NO `dec.actor` on the length refusal, `cmd_ws_rm`'s own exception
-    # (ccd:2835) generalised to three fields: the value that did not fit is
-    # not the value to echo back on the very line reporting that it does not
-    # fit. `verb`/`dec.surface`/`dec.reason` are unaffected — neither is the
-    # thing that failed here.
-    _lc_dec_ok "$lc_actor" || _lc_refuse restore "" bad-args "--actor is longer than $_LC_DEC_MAX bytes" verb ws-restore dec.surface "$lc_surface" dec.reason "$lc_reason"
+    if [[ -z "${lc_actor//[[:space:]]/}" ]]; then
+      lc_actor_bad='--actor must be non-blank'
+    elif ! _lc_dec_ok "$lc_actor"; then
+      lc_actor_bad="--actor is longer than $_LC_DEC_MAX bytes"
+    fi
   fi
   if (( lc_gr )); then
-    [[ -n "${lc_reason//[[:space:]]/}" ]] || _lc_refuse restore "" bad-args "--reason must be non-blank" verb ws-restore dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
-    # Same exception, mirrored: NO `dec.reason` here, for the identical reason.
-    _lc_dec_ok "$lc_reason" || _lc_refuse restore "" bad-args "--reason is longer than $_LC_DEC_MAX bytes" verb ws-restore dec.surface "$lc_surface" dec.actor "$lc_actor"
+    if [[ -z "${lc_reason//[[:space:]]/}" ]]; then
+      lc_reason_bad='--reason must be non-blank'
+    elif ! _lc_dec_ok "$lc_reason"; then
+      lc_reason_bad="--reason is longer than $_LC_DEC_MAX bytes"
+    fi
+  fi
+  if [[ -n "$lc_actor_bad" || -n "$lc_reason_bad" ]]; then
+    local lc_dec_args=(verb ws-restore dec.surface "$lc_surface")
+    [[ -z "$lc_actor_bad" ]]  && lc_dec_args+=(dec.actor "$lc_actor")
+    [[ -z "$lc_reason_bad" ]] && lc_dec_args+=(dec.reason "$lc_reason")
+    _lc_refuse restore "" bad-args "${lc_actor_bad:-$lc_reason_bad}" "${lc_dec_args[@]}"
   fi
   local id="${2-}"
   [[ $# -eq 2 && $1 == --session ]] \

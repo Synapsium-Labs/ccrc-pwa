@@ -124,7 +124,13 @@ describe('deviceActor', () => {
     // measures null. `unmeasured` and a UA-less browser's own `unknown device`
     // are two different facts and must not collapse — the "no overloaded null
     // at a seam" rule, at the seam that carries provenance.
-    expect(deviceActor(null)).toBe('device:unmeasured');
+    //
+    // BARE, no `device:` prefix (final review, F2): every MEASURED label
+    // keeps the prefix, so this arm's output can never collide with one.
+    // Pre-fix it returned `'device:unmeasured'`, byte-identical to what
+    // `deviceActor('unmeasured')` produces from an attacker-chosen
+    // `User-Agent: unmeasured` — see the guard describe block below.
+    expect(deviceActor(null)).toBe('unmeasured');
     expect(deviceActor('unknown device')).toBe('device:unknown device');
   });
 
@@ -135,5 +141,29 @@ describe('deviceActor', () => {
 
   it('flattens control characters, so no actor can carry a line break into NDJSON', () => {
     expect(deviceActor('a\nb\tc')).toBe('device:a b c');
+  });
+});
+
+// Final whole-branch review, F2: `deviceActor(null)` and
+// `deviceActor('unmeasured')` used to be byte-identical — the sentinel for
+// "no session was ever measured" lived in the SAME namespace as a genuine
+// (attacker-influenceable — a UA header is client-chosen) measured label
+// spelled the same word. A login with `User-Agent: unmeasured` was recorded
+// indistinguishably from "the gate measured nothing at all", two conditions
+// an operator reads differently, collapsed by an input the caller controls.
+// This is the exact structural check, not a two-sample smoke test: it reds
+// the instant the two arms become byte-identical again, for ANY reintroduced
+// collision shape, not just this one string.
+describe('deviceActor(null) can never collide with a measured label (F2)', () => {
+  it('the null arm and a measured "unmeasured" UA are never byte-identical', () => {
+    expect(deviceActor(null)).not.toBe(deviceActor('unmeasured'));
+  });
+
+  it('the null arm never carries the `device:` prefix a measured label always carries', () => {
+    // Restated as a structural property rather than one string: no future
+    // measured label — whatever word it carries — can ever equal the null
+    // arm, because the null arm is defined to sit outside the `device:`
+    // namespace entirely.
+    expect(deviceActor(null).startsWith('device:')).toBe(false);
   });
 });

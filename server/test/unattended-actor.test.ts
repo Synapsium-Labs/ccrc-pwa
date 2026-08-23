@@ -85,13 +85,23 @@ describe('every unattended ccd call site names itself', () => {
       .toEqual([]);
   });
 
-  it('found the call sites at all — a scan over nothing passes everything', () => {
+  it('found EXACTLY the ten pinned call sites — not a floor, an exact count (fix round 2, F5b)', () => {
+    // `toBeGreaterThanOrEqual(10)` was a floor, not a count: an eleventh
+    // unattended call site — a NEW verb call this file's `SITES` array below
+    // has no entry for — would satisfy `11 >= 10` silently, so a mislabelled
+    // eleventh site would evade this test AND the SITES pins below (neither
+    // scans for a site nobody told them to look for). `SITES.length` is the
+    // single source of truth for how many are pinned; this assertion is
+    // exact so the two can never drift apart without one of them going red.
     let n = 0;
     for (const f of FILES) {
       n += readFileSync(path.join(srcRoot, f), 'utf8').split('\n')
         .filter((l) => BUILDERS.test(l)).length;
     }
-    expect(n, 'the scan matched no unattended ccd call site at all').toBeGreaterThanOrEqual(10);
+    expect(n, 'the scan matched no unattended ccd call site at all').toBeGreaterThan(0);
+    expect(n, `the unattended call-site count drifted from SITES.length (${SITES.length}) — `
+      + 'a site was added or removed; update SITES to match before trusting this guard again')
+      .toBe(SITES.length);
   });
 });
 
@@ -135,11 +145,21 @@ const SITES: readonly Site[] = [
   { file: 'coord/close.ts', what: 'ordinary close, non-final/sibling-survivor hold branch',
     find: /const argv = CCD_ARGV\.wsHold\(run\.sessionId, nextReason, sweepDec\(deps\.fleetState, (`[^`]*`)\)\);/,
     label: '`run:${id} close`' },
+  // Fix round 2 (final whole-branch review, F5b): the two `find`s below used
+  // to be the bare `sweepDec(deps.fleetState, …)` pattern, unanchored to any
+  // surrounding call — `RegExp.exec` returns the FIRST match in the whole
+  // file, so a second `sweepDec(deps.fleetState, …)` call added anywhere
+  // earlier in either file (a mislabelled eleventh site, say) would make this
+  // pin silently start checking the WRONG call, its own textual position
+  // notwithstanding. Anchored now on the surrounding `CCD_ARGV.wsHold(...)`
+  // call, the same shape every `close.ts` entry above already uses — a
+  // foreign call captured here changes the surrounding text and reds against
+  // the hardcoded label below, exactly as a cross-site label swap would.
   { file: 'coord/dispatch.ts', what: 'dispatchRun hold, step 5',
-    find: /sweepDec\(deps\.fleetState, (`[^`]*`)\)\);/,
+    find: /const holdArgv = CCD_ARGV\.wsHold\(sessionId,\n\s+holdReason\(run\.program, run\.wave, run\.waveOf, run\.id\),\n\s+sweepDec\(deps\.fleetState, (`[^`]*`)\)\);/,
     label: '`run:${run.id} dispatch`' },
   { file: 'coord/routes.ts', what: 'open-then-hold, sessionId reclaim',
-    find: /sweepDec\(deps\.fleetState, (`[^`]*`)\)\);/,
+    find: /const argv = CCD_ARGV\.wsHold\(sessionId,\n\s+holdReason\(program, wave, waveOfVal, opened\.id\),\n\s+sweepDec\(deps\.fleetState, (`[^`]*`)\)\);/,
     label: '`run:${opened.id} open`' },
 ];
 

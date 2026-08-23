@@ -3889,13 +3889,26 @@ export interface LifecycleDec {
   readonly surface: DecSurface;
   /** `--actor`, free text, or null. Attribution, not authentication. */
   readonly actor: string | null;
-  /** `--reason`, <= `LC_REASON_MAX_BYTES` BYTES, or null — and ccd REFUSES a
-   *  longer one rather than truncating it, because a 900-byte reason recorded
-   *  as 512 reads as the operator's own words. Written verbatim, PARSED
-   *  NOWHERE — `cmd_ws_hold`'s standing rule for the same kind of value
-   *  (`ccd:3585`). It is free text off the wire, so it must never reach
-   *  an arithmetic context, an array subscript, an `eval` or an unquoted
-   *  expansion: `ccd:9910-9914` is the paid lesson. */
+  /** `--reason`, <= `LC_REASON_MAX_BYTES` BYTES, or null — on every FLAG-
+   *  CARRIED `--reason` (ws-rm/forget's own `--reason`; wave 5's on
+   *  rename/release/archive/restore) ccd REFUSES a longer one rather than
+   *  truncating it, because a 900-byte
+   *  reason recorded as 512 reads as the operator's own words. Written
+   *  verbatim, PARSED NOWHERE — `cmd_ws_hold`'s standing rule for the same
+   *  kind of value (`ccd:3585`). It is free text off the wire, so it must
+   *  never reach an arithmetic context, an array subscript, an `eval` or an
+   *  unquoted expansion: `ccd:9910-9914` is the paid lesson.
+   *
+   *  THE CAP IS NOT UNIFORM ACROSS EVERY WRITER OF THIS FIELD (final review,
+   *  F3, disclosed rather than fixed here): `cmd_ws_hold` journals its own
+   *  mandatory hold reason into this SAME field UNCAPPED — bound at
+   *  `ccd:3635`, blank-checked at `ccd:3657`, but never passed through
+   *  `_lc_dec_ok` before it lands at `ccd:3696`. A hold therefore accepts and
+   *  records a reason that `ws-release` would refuse verbatim as `--reason`.
+   *  Unifying the two (capping the hold reason, or truncating instead of
+   *  refusing) is a verb-contract change on a LIVE verb and is explicitly
+   *  OUT of this fix's scope — this docstring now states what is true of
+   *  every writer rather than what only the flag-carried ones guarantee. */
   readonly reason: string | null;
 }
 
