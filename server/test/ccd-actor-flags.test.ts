@@ -56,7 +56,7 @@
 // inside `_lc_surface_norm`/`_lc_dec_ok`/`_reg_set`, none of which reach
 // `_lc_obs`.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdirSync } from 'node:fs';
 import { makeCcdHarness, CCD, type CcdHarness } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
@@ -74,13 +74,30 @@ const shFail = (snippet: string): { code: number; stderr: string; stdout: string
 };
 
 /** A workspace row complete enough for the five verbs to get past `no such
- *  session` / `not a workspace` and reach their own bodies. */
+ *  session` / `not a workspace` and reach their own bodies — INCLUDING a real
+ *  directory at `workdir` on disk, not just registry fields: fix-round-1
+ *  finding 1 measured that `cmd_ws_archive` refuses "worktree is gone"
+ *  (ccd:3713) before its own body when the directory is absent, which the
+ *  doc comment above already promised callers would not have to work around
+ *  themselves.
+ *
+ *  `id` drives `workspace`/`workdir`/`branch`, not just the registry row
+ *  key (fix-round-1 finding 2): the id shape this file uses throughout is
+ *  `demo-<slug>`, so the slug is `id` with that fixed `demo-` prefix
+ *  stripped (or `id` itself, for a caller that passes something else). Two
+ *  different ids now seed two INDEPENDENT rows at two independent
+ *  directories — `seedWorkspace()` and `seedWorkspace('demo-quiet-basin-2')`
+ *  no longer alias one `workdir`, which they did before by accident of both
+ *  being hardcoded to the same literal path. */
 const seedWorkspace = (id = 'demo-quiet-basin'): string => {
+  const slug = id.startsWith('demo-') ? id.slice('demo-'.length) : id;
+  const workdir = `${h.home}/worktrees/demo/${slug}`;
+  mkdirSync(workdir, { recursive: true });
   h.sh(`_reg_set ${id} uuid 72be9ee2-0000-4bcc-b60b-0cfc0dc3d199
     _reg_set ${id} project demo
-    _reg_set ${id} workspace quiet-basin
-    _reg_set ${id} workdir ${h.home}/worktrees/demo/quiet-basin
-    _reg_set ${id} branch ws/quiet-basin
+    _reg_set ${id} workspace ${slug}
+    _reg_set ${id} workdir ${workdir}
+    _reg_set ${id} branch ws/${slug}
     _reg_set ${id} wrapper claude`);
   return id;
 };
@@ -184,15 +201,9 @@ describe('the closed set is spelled exactly twice in ccd', () => {
 /** Stubs every irreversible thing `cmd_ws_archive` does, so these cases measure
  *  ARGV PARSING and nothing else. `tmux` is stubbed for wave 2's `_lc_obs`
  *  (HEAD AUDIT w23 M-A) — without it these snippets shell the live tmux.
- *  MEASURED GAP: `seedWorkspace`'s own doc comment promises a row "complete
- *  enough … to reach their own bodies", but it writes only registry fields —
- *  it never creates `workdir` on disk, and `cmd_ws_archive` (ccd:3690s)
- *  refuses with "worktree is gone" before its own body when the directory is
- *  absent. `seedWorkspace`'s signature/semantics are the fixed interface
- *  Tasks 46-49 build on, so the `mkdir -p` lives HERE, task-local, rather
- *  than inside it. */
+ *  `seedWorkspace` itself now creates `workdir` on disk (fix-round-1 finding
+ *  1), so no task-local `mkdir -p` belongs here any more. */
 const ARCHIVE_STUBS = `tmux() { return 1; }; _ws_unsupervise() { :; };
-  mkdir -p "$HOME/worktrees/demo/quiet-basin";
   _ws_idle_ok() { return 0; }; _ws_status() { echo idle; }; _ws_archive_manifest() { echo '{}'; };`;
 
 describe('ws-archive accepts the dec flags in any position', () => {

@@ -3738,7 +3738,7 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
   # `--surface` at all are two different facts: nobody declared a surface
   # (`none`), versus a caller declared a word this ccd does not know
   # (`unknown`). Testing `[[ -n "$lc_surface" ]]` instead would collapse them,
-  # which is `ccd:618`'s `${2-ccd}` vs `${2:-ccd}` distinction broken in a new
+  # which is `ccd:650-663`'s `${2-ccd}` vs `${2:-ccd}` distinction broken in a new
   # place. Same for `--actor ''` and `--reason ''`, which are REFUSED rather
   # than silently read as absent — one policy, everywhere (AUDIT B5).
   local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 lc_args=()
