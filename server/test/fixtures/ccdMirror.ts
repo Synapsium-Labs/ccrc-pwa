@@ -27,7 +27,7 @@
 // and `wrapper-roster-fixture.test.ts`'s
 // statusline describe still needs it. This file goes only when something
 // else supplies BOTH of those — most likely Task 10's real
-// `deploy/accounts.migration.json` carrying real labels, at which point the
+// `server/test/fixtures/roster-five.json` carrying real labels, at which point the
 // four completeness describes and the statusline describe can probably read
 // it directly and this hand-derived side table stops earning its keep.
 //

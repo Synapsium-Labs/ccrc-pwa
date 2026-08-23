@@ -44,7 +44,7 @@ import { mkTmp } from './tmpHelpers.js';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ccrcRoot = path.resolve(here, '..', '..');
 const CLI = path.join(ccrcRoot, 'deploy', 'gen-accounts.mjs');
-const MIGRATION_ROSTER = path.join(ccrcRoot, 'deploy', 'accounts.migration.json');
+const MIGRATION_ROSTER = path.join(ccrcRoot, 'server', 'test', 'fixtures', 'roster-five.json');
 
 /** Runs the CLI exactly as `deploy.sh` does: a bare `node`, one path argv,
  *  output on stdout. No tsx, no loader, no build — if this ever needs one,
@@ -149,11 +149,20 @@ const EXHAUSTED_HUE_ROSTER = {
   ],
 };
 
-const SHIPPED = ['accounts.default.json', 'accounts.migration.json'] as const;
+// One of these ships and one does not, and the paths say which. `deploy/`
+// carries only the neutral single-account seed a fresh box gets; the
+// five-account roster is a TEST FIXTURE and lives with the tests, because
+// nothing installs it — it is here for the shapes a one-account roster cannot
+// exercise (generated execs, a secretsFile, a non-homeAble account, a label
+// that differs from its id).
+const ROSTERS = [
+  'deploy/accounts.default.json',
+  'server/test/fixtures/roster-five.json',
+] as const;
 
 describe('gen-accounts.mjs agrees with the TypeScript pipeline it cannot import', () => {
-  it.each(SHIPPED)('%s — the roster this repo actually ships parses and generates identically', (name) => {
-    const file = path.join(ccrcRoot, 'deploy', name);
+  it.each(ROSTERS)('%s — parses and generates identically through both paths', (name) => {
+    const file = path.join(ccrcRoot, name);
     const r = run([file]);
     expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
     // Read through the SAME file the CLI read, so this is a claim about the

@@ -108,7 +108,7 @@ const TREE_FILES = [
   // here because it is the realistic "the operator already has a roster" fixture
   // — a roster with `claude-corp` in it, so "generated FROM the installed
   // roster" is provable rather than merely plausible.
-  'deploy/accounts.migration.json',
+  'server/test/fixtures/roster-five.json',
   // `gen-accounts.mjs` imports the first three; `gen-wrappers.mjs` imports
   // `wrapper.mjs` and two of the same three. They were written dependency-free
   // for exactly this bare-`node` caller, so this is the complete transitive
@@ -677,7 +677,7 @@ const strays = (home: string): string[] => {
 };
 
 const DEFAULT_SEED = read(join(REPO, 'deploy', 'accounts.default.json'));
-const MIGRATION_ROSTER = read(join(REPO, 'deploy', 'accounts.migration.json'));
+const MIGRATION_ROSTER = read(join(REPO, 'server', 'test', 'fixtures', 'roster-five.json'));
 
 /** Turns a fixture tree into a REAL one-commit git repository, which is what
  *  `_inst_stamp` measures. A fake `.git` directory would not do: the step runs

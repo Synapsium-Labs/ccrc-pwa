@@ -54,7 +54,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const ccrcRoot = path.resolve(here, '..', '..');
 const CCD_DIR = path.join(ccrcRoot, 'ccd');
 const CCRC = path.join(CCD_DIR, 'ccrc');
-const MIGRATION_ROSTER = path.join(ccrcRoot, 'deploy', 'accounts.migration.json');
+const MIGRATION_ROSTER = path.join(ccrcRoot, 'server', 'test', 'fixtures', 'roster-five.json');
 
 interface RosterAccount {
   id: string;

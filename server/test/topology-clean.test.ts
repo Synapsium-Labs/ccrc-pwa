@@ -143,6 +143,16 @@ const DUCKDNS_PLACEHOLDERS = new Set(['mybox', 'otherbox', 'fixture', 'subdomain
 const TAILNET_RESIDUE: string[] = ['dGFpbDMzZjExYw==', 'Y2xhdWRlLXJj']
   .map((b) => Buffer.from(b, 'base64').toString('utf8'));
 
+/** The reference fleet's four ACCOUNT LABELS and its operator's employer, held
+ *  the same way and for the same reason as TAILNET_RESIDUE: this suite is the
+ *  one file in a public repo that must name what is banned, and a plaintext
+ *  list here would be the most greppable copy of exactly what the sweep
+ *  removed. The labels name an employer and a product; two of them are the
+ *  strongest single fingerprint the roster carried. */
+const ROSTER_RESIDUE: string[] =
+  ['ZXhwb8K3bWF4', 'Z21haWzCt21heA==', 'ZXhwb8K3dGVhbQ==', 'c3luwrdkZXYw', 'ZXhwb3BsYXRmb3Jt']
+    .map((b) => Buffer.from(b, 'base64').toString('utf8'));
+
 /** Task 4's scope: the runtime tree — code, tests, executables, deploy and
  *  scripts — plus install.sh. The docs corpus (docs/, README.md, CLAUDE.md,
  *  scratch/, .github/) waits for Task 8, for D-193's reason: the gitignored
@@ -228,6 +238,28 @@ const FORBIDDEN: ForbiddenClass[] = [
     catches: ['fixture-box.ts.net', TAILNET_RESIDUE[0]!, TAILNET_RESIDUE[1]!],
     passes: ['mybox.example.com', 'ts.net', '*.ts.net', '<tailnet>.ts.net',
       '<other-box>.<tailnet>.ts.net', 'tailscale.net'],
+  },
+  {
+    name: 'reference roster identity',
+    // The four labels the reference fleet's accounts actually carry, plus the
+    // operator's employer as it appears in fixture project names. These never
+    // reached the PWA from source — labels arrive at runtime from the
+    // user-owned `~/.ccrc/accounts.json`, which no deploy overwrites — so the
+    // sweep that cleared them changed fixtures, comments and one JSON file and
+    // touched no live box. That is exactly why they could sit here unnoticed:
+    // nothing broke while they did.
+    pattern: new RegExp(ROSTER_RESIDUE.join('|'), 'g'),
+    why: 'an account label or employer name identifies whose fleet this is — fixtures speak team·/alt·/lab· and orchard-api',
+    // Task 5 lands SCOPED like its two neighbours: the docs corpus, README,
+    // CLAUDE.md and scratch/ are Task 8/9's sweep, which moves the real values
+    // into gitignored deploy/reference-fleet.md first so operations keep them.
+    scope: (file) => !file.startsWith('docs/') && !file.startsWith('scratch/')
+      && file !== 'README.md' && file !== 'CLAUDE.md',
+    catches: [ROSTER_RESIDUE[0]!, ROSTER_RESIDUE[3]!, ROSTER_RESIDUE[4]!],
+    passes: ['team·max', 'alt·max', 'team·shared', 'lab·dev0', 'orchard-api',
+      // The `·` shape itself is not banned — it is the roster's own label
+      // format, and a fixture has to be able to exercise it.
+      'claude', 'gpt'],
   },
   {
     name: 'duckdns subdomain',

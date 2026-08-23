@@ -97,7 +97,7 @@
 // a fixture this file wrote, the guarantee gets its production-drift-detecting
 // strength back"). Task 10 put both real rosters in the repo and the
 // round-trip below now reads them OFF DISK — `deploy/accounts.default.json`,
-// what a fresh install ships, and `deploy/accounts.migration.json`, this
+// what a fresh install ships, and `server/test/fixtures/roster-five.json`, this
 // fleet's five real accounts byte for byte, which is what every box on it gets
 // seeded with. A typo in either one is now a red run here, not a crash-looping
 // deploy. The adversarial prefix-collision roster stays alongside them: the
@@ -287,7 +287,7 @@ describe('ccd _id_wrapper agrees with CCD_MIRROR.idPrefix, for the wrappers ccd 
 // Three rosters, and the last is the point. The first two are the rosters
 // this repo SHIPS, read straight off disk (Task 10) rather than transcribed
 // into a fixture: `deploy/accounts.default.json` is what a fresh install gets,
-// `deploy/accounts.migration.json` is this fleet's five real accounts, and
+// `server/test/fixtures/roster-five.json` is this fleet's five real accounts, and
 // `deploy/deploy.sh` seeds a box's `~/.ccrc/accounts.json` from one of them.
 // Reading them here is what makes a typo in either a red suite instead of a
 // crash-looping service — but neither PROVES the arm ordering, because no two
@@ -327,18 +327,19 @@ const PREFIX_COLLISION_ROSTER = {
   ],
 };
 
-/** A roster this repo actually ships, read off disk. Deliberately NOT a
- *  transcription: the whole value of these two cases is that the bytes under
- *  test are the bytes `deploy/deploy.sh` seeds a box with. */
-const shippedRoster = (name: string): unknown =>
-  JSON.parse(readFileSync(path.join(ccrcRoot, 'deploy', name), 'utf8')) as unknown;
+/** A committed roster, read off disk by repo-relative path. Deliberately NOT
+ *  a transcription: the value of these cases is that the bytes under test are
+ *  the committed bytes. One of the two is what `deploy/deploy.sh` seeds a box
+ *  with; the other is the five-account test fixture, which ships nowhere. */
+const committedRoster = (rel: string): unknown =>
+  JSON.parse(readFileSync(path.join(ccrcRoot, rel), 'utf8')) as unknown;
 
 describe('accounts.sh round-trip: the generated bash agrees with the server TypeScript, for real rosters', () => {
   it.each([
     ['the shipped fresh-install default (deploy/accounts.default.json)',
-      shippedRoster('accounts.default.json')],
-    ["the shipped migration roster (deploy/accounts.migration.json) — today's five real accounts",
-      shippedRoster('accounts.migration.json')],
+      committedRoster('deploy/accounts.default.json')],
+    ['the five-account test fixture (server/test/fixtures/roster-five.json) — every exec shape at once',
+      committedRoster('server/test/fixtures/roster-five.json')],
     ['adversarial (ids are strict prefixes of each other)', PREFIX_COLLISION_ROSTER],
   ] as const)('%s: _ccrc_cfg_dir and _ccrc_id_wrapper match configDirFor and idHomeWrapper for every account',
     (_label, spec) => {

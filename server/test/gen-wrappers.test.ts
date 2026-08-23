@@ -7,7 +7,7 @@
 // this file, like the CLI itself, never touches `$HOME/.local/bin` or
 // `$HOME/.ccrc`. Nothing here reads `process.env.HOME`.
 //
-// The migration roster (`deploy/accounts.migration.json`) is the fixture: 5
+// The migration roster (`server/test/fixtures/roster-five.json`) is the fixture: 5
 // accounts — 1 upstream (`claude`), 3 generated (`claude2`, `claude-corp`,
 // `claude-dev0`), 1 external (`gpt`). The 3 generated accounts are what gets
 // staged; `expectedBody(id)` computes the exact text the CLI should produce
@@ -29,7 +29,7 @@ import { mkTmp } from './tmpHelpers.js';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ccrcRoot = path.resolve(here, '..', '..');
 const CLI = path.join(ccrcRoot, 'deploy', 'gen-wrappers.mjs');
-const MIGRATION_ROSTER = path.join(ccrcRoot, 'deploy', 'accounts.migration.json');
+const MIGRATION_ROSTER = path.join(ccrcRoot, 'server', 'test', 'fixtures', 'roster-five.json');
 
 const migrationJson: { accounts: Array<{ id: string; configDirSuffix: string; exec: { kind: string; secretsFile?: string } }> } =
   JSON.parse(readFileSync(MIGRATION_ROSTER, 'utf8'));
