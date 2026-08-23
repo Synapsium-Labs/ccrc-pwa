@@ -47,6 +47,96 @@ export type CcdArgv = readonly string[] & { readonly [CcdArgvBrand]: true };
 const argv = (parts: readonly string[]): CcdArgv => Object.freeze(parts) as CcdArgv;
 
 /**
+ * The DECLARED half of a provenance record (spec D2's `dec`), as the three ccd
+ * flags carry it. Self-asserted by construction — ccd cannot authenticate a
+ * caller on a single-uid box and does not pretend to; the kernel-observed half
+ * (`obs`) is measured on the box and the two are COMPARED, never merged.
+ *
+ * THE PRODUCER SHAPE, and `LifecycleDec` (L0) is the RECORD shape it lands as.
+ * They differ in exactly two places and both differences are deliberate:
+ * `surface` here is `StopSurface` and NEVER `'none'` (absence is `dec: null`,
+ * which omits the flags entirely), while the record's is
+ * `DecSurface = StopSurface | 'none'`; and `actor` here is MANDATORY because
+ * `deviceActor`/`sweepDec` always measure one, while the record's is nullable
+ * because an older ccd may have written none. `capsupported.test.ts` pins the
+ * assignability so nobody "unifies" the two later.
+ *
+ * `reason: null` OMITS the flag. It is not `''`: ccd refuses a blank
+ * declaration (`_lc_dec_ok`), on the same argument `cmd_ws_hold` has always
+ * made about an empty hold reason — a flag that says nothing is a different
+ * fact from no flag, and collapsing them records "nobody said" for a caller
+ * that said something unusable.
+ */
+export interface ActorFlags {
+  readonly surface: StopSurface;
+  readonly actor: string;
+  readonly reason: string | null;
+}
+
+/**
+ * The flag tokens for a dec, or NOTHING for `null`.
+ *
+ * `null` is a real, deliberate choice and not "unset" — it is what a caller
+ * passes when the deployed ccd is not known to understand the flags
+ * (`capSupported(state, ACTOR_FLAGS_CAP)`), and it produces the argv that
+ * shipped before this wave, token for token. Exactly `stopId`'s
+ * `surface: null` contract, for exactly its reason (`ccdargv.ts:76-91`).
+ *
+ * MEASURED (task 52 verification): the check below is `dec === null ||
+ * dec === undefined` — not `dec === null` alone. This build's five threaded
+ * call sites in
+ * `server.ts`/`watch.ts`/`coord/close.ts`/`coord/dispatch.ts`/`coord/routes.ts`
+ * are threaded in Tasks 54-55, not here, so between this commit and theirs
+ * every one of them is still calling e.g. `wsArchive(id)` with the new third
+ * parameter simply absent. `tsc` catches that loudly (TS2554, disclosed and
+ * expected-red until Task 55) — but vitest's esbuild transform does not
+ * enforce arity, so at RUNTIME `dec` arrives as `undefined`, not `null`, and
+ * `dec === null` is false for it. Measured before this widening: 412 tests
+ * across 13 files failed, including an unhandled rejection
+ * (`TypeError: Cannot read properties of undefined (reading 'surface')`) from
+ * `FleetWatcher.sweepNames`'s `CCD_ARGV.wsRename` call. `undefined` here is
+ * not a caller's deliberate third state — nothing above ever constructs an
+ * `ActorFlags | undefined`, only `ActorFlags | null` — so treating it like
+ * `null` collapses no meaningful distinction; it is purely runtime tolerance
+ * for a call-arity gap the type checker already flags.
+ */
+const decFlags = (dec: ActorFlags | null): readonly string[] =>
+  dec === null || dec === undefined
+    ? []
+    : ['--surface', dec.surface, '--actor', dec.actor,
+       ...(dec.reason === null ? [] : ['--reason', dec.reason])];
+
+/**
+ * The session's own device label as an `--actor` value.
+ *
+ * TWO CONDITIONS, TWO WORDS. `null` means the gate measured no session at all
+ * (a dark box, or an exempt route reached without a cookie) — `unmeasured`. A
+ * UA-less browser that DID present a live session already carries
+ * `'unknown device'` from `deviceLabel` and keeps it verbatim. Folding both
+ * into one word would tell an operator "we do not know which browser" for a
+ * call where we do not know there was a browser.
+ *
+ * `\p{Cc}` flattens every control character and the label is re-truncated, both
+ * belt and braces: `deviceLabel` already slices to 120 UTF-16 units, and ccd
+ * quotes the value through `_lc_json` (which escapes a newline rather than
+ * breaking the line). A producer that can cheaply guarantee it never emits a
+ * line break into a line-oriented file should. 7 + 120*3 = 367 bytes worst
+ * case, inside ccd's 512-byte `--actor` cap. The unicode property escape is
+ * used rather than an explicit code-point range so this source file contains no
+ * control characters of its own.
+ *
+ * DISCLOSED RESIDUAL (AUDIT m5): `slice(0, 120)` counts UTF-16 units, so it can
+ * split a surrogate pair and leave a lone surrogate at the end. Harmless in
+ * both directions — `JSON.stringify` escapes it, and ccd's `_lc_json` decodes
+ * with `errors='replace'`, so it lands as U+FFFD — and it is written down here
+ * rather than left for someone to rediscover.
+ */
+export function deviceActor(device: string | null): string {
+  if (device === null) return 'device:unmeasured';
+  return `device:${device.replace(/\p{Cc}/gu, ' ').slice(0, 120)}`;
+}
+
+/**
  * The ONLY place ccd argv is constructed. Every route builds its call through
  * this table, and `whitelist-subset.test.ts` enumerates the table against the
  * agent's EXEC_WHITELIST in both directions. An argv the enumeration cannot see
@@ -103,19 +193,41 @@ export const CCD_ARGV = {
   prStateProject: (p: string)  => argv(['pr-state', '--project', p]),
   prOpen:    (id: string, t: string, b64: string, draft: boolean) =>
                argv(['pr-open', '--session', id, '--title', t, '--body-b64', b64, '--draft', draft ? 'true' : 'false']),
-  wsArchive: (id: string) => argv(['ws-archive', '--session', id]),
-  wsRestore: (id: string) => argv(['ws-restore', '--session', id]),
+  wsArchive: (id: string, dec: ActorFlags | null) =>
+               argv(['ws-archive', '--session', id, ...decFlags(dec)]),
+  wsRestore: (id: string, dec: ActorFlags | null) =>
+               argv(['ws-restore', '--session', id, ...decFlags(dec)]),
   wsAudit:   (id: string) => argv(['ws-audit', '--session', id]),
   wsReap:    (tok: string, id: string) => argv(['ws-reap', '--expect', tok, '--session', id]),
   wsAttic:   (id: string) => argv(['ws-attic', '--session', id]),
-  wsHold:    (id: string, reason: string) => argv(['ws-hold', '--session', id, '--reason', reason]),
-  wsRelease: (id: string) => argv(['ws-release', '--session', id]),
+  /** The dec flags ride AFTER `--reason`, and `--reason` is NOT one of them: on
+   *  `ws-hold` the hold reason IS the declared reason (ccd's `cmd_ws_hold` says
+   *  so in its own comment), so there is one reason on this verb, not two. The
+   *  `{ ...dec, reason: null }` is what enforces it here — a caller that passes
+   *  a dec carrying a reason gets it dropped, pinned in `capsupported.test.ts`.
+   *
+   *  MEASURED: the ternary must check `dec === undefined` too, not just
+   *  `dec === null` — `{ ...undefined, reason: null }` does NOT throw, it
+   *  evaluates to `{ reason: null }` (object spread of `undefined` is a
+   *  silent no-op, unlike array spread), so a not-yet-threaded caller passing
+   *  only two arguments fed `decFlags` a bogus dec with `surface`/`actor`
+   *  both `undefined` instead of routing to the omit-everything branch.
+   *  `decFlags` itself no longer throws on that (see its own docstring), but
+   *  it did emit `undefined` into the argv array — invalid input to the
+   *  exec seam. Reproduced via `run-routes.test.ts`'s dispatch suite
+   *  returning 500 instead of 200/502/409 before this fix. */
+  wsHold:    (id: string, reason: string, dec: ActorFlags | null) =>
+               argv(['ws-hold', '--session', id, '--reason', reason,
+                     ...decFlags(dec === null || dec === undefined ? dec : { ...dec, reason: null })]),
+  wsRelease: (id: string, dec: ActorFlags | null) =>
+               argv(['ws-release', '--session', id, ...decFlags(dec)]),
   /** The second ccd write with no human in the loop — after `wsArchive`, which
    *  `FleetWatcher.archiveMerged` already fires unattended on merge — and the
    *  first whose argv is derived from model output. `--branch` carries a name
    *  `_ws_branch_valid` has NOT seen yet: validation lives on the box, once,
    *  and the server learns its verdict from the `bad-branch` refusal token. */
-  wsRename:  (id: string, branch: string) => argv(['ws-rename', '--session', id, '--branch', branch]),
+  wsRename:  (id: string, branch: string, dec: ActorFlags | null) =>
+               argv(['ws-rename', '--session', id, '--branch', branch, ...decFlags(dec)]),
   /** The pause marker's writer (Build 4, spec §4.2). `state` is a two-member
    *  union rather than a string: `POST /api/coord/pause` takes a boolean, and
    *  the on|off vocabulary is ccd's — the mapping happens once, at the call

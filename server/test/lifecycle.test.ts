@@ -569,7 +569,7 @@ describe('ccdRunner — the one ccd capability Deps carries', () => {
 
   it('a FAILURE still carries stdout and stderr — the 502 body quotes stderr', async () => {
     const { run } = spy({ code: 1, stdout: 'partial\n', stderr: 'boom\n' });
-    expect(await ccdRunner(run, cfg)(CCD_ARGV.wsArchive(ID)))
+    expect(await ccdRunner(run, cfg)(CCD_ARGV.wsArchive(ID, null)))
       .toEqual({ ok: false, stdout: 'partial\n', stderr: 'boom\n',
                  killed: UNMEASURED, signal: UNMEASURED });
   });
