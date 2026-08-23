@@ -146,7 +146,7 @@ export function deviceActor(device: string | null): string {
  * NOT optional on `ActorFlags` — the actor is what makes `archiveMerged`'s
  * timer and an operator's tap distinguishable — and why a fifth surface word is
  * not the fix: spec §2 says `StopSurface` is unchanged, and widening a closed
- * set that `ccd:619` also spells would be one enumeration in two languages
+ * set that `ccd:1523` also spells would be one enumeration in two languages
  * drifting apart.
  *
  * `reason: null`: a sweep's reason is its name, and repeating it in a second

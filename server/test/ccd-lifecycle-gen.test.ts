@@ -192,7 +192,7 @@ describe('_lc_rotate', () => {
     const p = big(gen('1000000000000000000'));
     h.sh(`_lc_rotate "${p}"`);
     expect(fs.existsSync(path.join(dir, LC_ROTATE_LOCK_NAME)),
-      'unlinking a held lock is how two processes come to hold it on two inodes (ccd:6239-6242)').toBe(true);
+      'unlinking a held lock is how two processes come to hold it on two inodes (ccd:1094-1095)').toBe(true);
   });
 
   // FIX ROUND 1 (a) — CRITICAL. `exec {lfd}>>"$lock" 2>/dev/null` does NOT

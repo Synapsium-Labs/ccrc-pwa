@@ -574,7 +574,7 @@ describe('_lc_surface_norm and _lc_dec_ok — declaration, validated once', () =
   // pair at runtime so no such literal appears in this file's own text.
   const SAME = (w: string): [string, string] => [w, w];
   it.each([SAME('cli'), SAME('pwa'), SAME('agent'), SAME('ccd'), ['wharf', 'unknown']])(
-    'normalises %s to %s, exactly as ccd:619 does', (word, want) => {
+    'normalises %s to %s, exactly as ccd:1523 does', (word, want) => {
       expect(h.sh(`_lc_surface_norm ${word}`)).toBe(want);
     });
 

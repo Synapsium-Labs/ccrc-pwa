@@ -349,7 +349,7 @@ export function makeCcdHarness(prefix: string): CcdHarness {
      *  every PR verb answer `no-remote`. Three keys:
      *    - `url`      -> the https string `_gh_repo_slug` parses
      *    - `insteadOf`-> rewrites fetch AND push back to the local bare repo.
-     *      Without it `cmd_ws_add`'s `git fetch origin` (ccd:269) and
+     *      Without it `cmd_ws_add`'s `git fetch origin` (ccd:2596) and
      *      `_ws_reap_eval`'s mandatory fetch would both leave the box for the
      *      real github.com. `git config --get remote.origin.url` is NOT
      *      affected by insteadOf, which is the whole point.

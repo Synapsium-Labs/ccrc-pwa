@@ -1,6 +1,6 @@
 // server/test/ccd-reason-flag.test.ts
 //
-// ccd:8780-8791 is the paid lesson and it is quoted in full there: a second
+// ccd:9473-9476 is the paid lesson and it is quoted in full there: a second
 // POSITIONAL on `ensure` was threaded down to `(( … >= bound ))`, where bash
 // evaluates a variable's CONTENTS as arithmetic and a command substitution
 // inside an array subscript EXECUTES — i.e. any extra argv word a
@@ -55,7 +55,7 @@ describe('--reason on ws-rm', () => {
     // Mutant: strip after `local id="${1:?…}"` -> `$id` becomes the flag word,
     // `_reg_get` answers nothing, and the verb aims at a session that does not
     // exist while the real one keeps running. Same defect cmd_stop's own header
-    // (ccd:9592-9596) records for --surface.
+    // (ccd:11085) records for --surface.
     seed();
     h.sh(`${STUB} cmd_ws_rm --reason r demo-x 2>/dev/null || true`);
     expect(eventsOf(h.home, 'destroy')[0]?.['id']).toBe('demo-x');
@@ -64,7 +64,7 @@ describe('--reason on ws-rm', () => {
   it('does not loop for ever on a flag with no value', () => {
     // Under `set -uo pipefail` with NO `-e`, a `shift 2` past the end of argv
     // fails, shifts nothing, and the loop never terminates. The explicit
-    // `[[ $# -ge 2 ]]` is what stops that; ccd:9610-9612 states it.
+    // `[[ $# -ge 2 ]]` is what stops that; ccd:2805 states it.
     const r = fails(`${STUB} cmd_ws_rm --reason`);
     expect(r.code).not.toBe(0);
     expect(r.stderr).toContain('usage: ccd ws-rm');

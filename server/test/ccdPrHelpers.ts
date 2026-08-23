@@ -73,7 +73,7 @@ export function makePrHarness(prefix: string): PrHarness {
   };
 }
 
-/** `_cfg_dir` (ccd:1116-1123) as a lookup. Which wrapper `_ws_least_loaded`
+/** `_cfg_dir` (ccd:8942-8950) as a lookup. Which wrapper `_ws_least_loaded`
  *  happened to pick is what decides where Claude Code keeps that session's
  *  transcript, so every assertion about a transcript path reads the registry's
  *  `wrapper` field and comes through here — hardcoding `.claude` is right for

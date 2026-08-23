@@ -81,7 +81,7 @@ describe('rung 3 — an unrecognised word on EITHER side is NOT-COMPARABLE', () 
   });
 
   it('a surface word ccd itself rejected cannot disagree either', () => {
-    // `ccd:619` maps an out-of-set word to `unknown`. Something WAS declared;
+    // `ccd:1523` maps an out-of-set word to `unknown`. Something WAS declared;
     // it just cannot be lined up.
     expect(corroboration('pane', 'unknown')).toBe('not-comparable');
     expect(corroboration('agent', 'unknown')).toBe('not-comparable');

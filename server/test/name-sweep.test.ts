@@ -286,7 +286,7 @@ describe('the naming sweep', () => {
     expect(h.calls).toEqual([]);
   });
 
-  // Review finding 2: `ccd ws-archive` "DESTROYS NOTHING" (ccd:1711-1714) — an
+  // Review finding 2: `ccd ws-archive` "DESTROYS NOTHING" (ccd:3833) — an
   // archived row keeps `workspace`, keeps `branch = ws/<slug>`, keeps its
   // worktree and keeps its transcript, so without this guard the row is fully
   // in scope for conditions 2-4 and a server restart (`attemptedRenames` is
@@ -365,7 +365,7 @@ describe('the naming sweep', () => {
     expect(stats, 'nor even the cheaper stat the tail read is gated behind').toBe(statsAfterFirst);
   });
 
-  // `<project>-<slug>` is a SLUG, recycled by `ws-reap` (`ccd:950-951`), and
+  // `<project>-<slug>` is a SLUG, recycled by `ws-reap` (`ccd:2409`), and
   // neither `nameSweepRetired` nor `attemptedRenames` is ever pruned when a
   // row disappears — so a bare `<id>` key would let a REAPED workspace's
   // retirement silently shadow an unrelated later workspace that draws the

@@ -525,7 +525,7 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # free, `cmd_ws_add` re-uses it (it purges nothing first), and the brand-new
   # workspace is born wearing a stranger's `.archived`/`.reaping`. Measured on
   # that state: `ws-archive` answers `already archived` at exit 0 having
-  # stopped no session and written no manifest (ccd:1222 below), `_ws_reap_eval`
+  # stopped no session and written no manifest (ccd:3903 below), `_ws_reap_eval`
   # Phase A and `_ws_reap_tail` both PASS the archived gate on a workspace that
   # was never archived, and with `.reaping` present `_ws_reap_locked` takes the
   # resume fork — where the token is not checked and Phase C, the merged-PR
@@ -533,8 +533,8 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # ANY-FIELD check now; see the note there.
   # ── THE BACKSTOP (D3) ────────────────────────────────────────────────────
   # HERE, AND NOT ONE LINE LOWER. Every destruction path on this box terminates
-  # in this function — ws-rm (ccd:3038), ws-reap (ccd:7715), ws-gc's dead-reg
-  # arm (ccd:8209), forget (ccd:10722) — and a destructive verb added LATER that
+  # in this function — ws-rm (ccd:3038), ws-reap (ccd:8180), ws-gc's dead-reg
+  # arm (ccd:8674), forget (ccd:11217) — and a destructive verb added LATER that
   # forgets to journal itself still leaves a record. A silent destruction has to
   # defeat two independent emit sites.
   #
@@ -1463,7 +1463,7 @@ _lc_emit() {   # act outcome id tx [key value]... — THE ONE WRITER. Always 0.
 #
 # tx IS FOR ONE PAIR, NEVER FOR A CALL TREE. `cmd_enable` runs `cmd_start`
 # in-process (ccd:10361) and `_swap_refuse`'s `|| cmd_ensure`
-# fallback fires at ccd:10142; each writes its OWN independent
+# fallback fires at ccd:10848; each writes its OWN independent
 # event with its own tx, because two acts happened and the record says so
 # rather than folding one into the other.
 #
@@ -1518,7 +1518,7 @@ _lc_surface_norm() {   # word -> the DECLARED surface, or NOTHING when none was
   # `_ws_unsupervise`'s `ccd`. They are ccd acting on its own account, not a
   # caller's declaration, and laundering one into `dec.surface` is exactly the
   # default-as-declaration defect `none` exists to prevent. The closed set is
-  # ccd:619's, so the journal and the `.stopped` stamp agree by construction.
+  # ccd:1523's, so the journal and the `.stopped` stamp agree by construction.
   [[ -n "${1-}" ]] || { printf '%s' ''; return 0; }
   case "$1" in cli|pwa|agent|ccd) printf '%s' "$1" ;; *) printf '%s' unknown ;; esac
   return 0
@@ -2091,7 +2091,7 @@ if mode == 'state':
     # `{X, absent}` is not a new state to teach anyone: it is what a workspace
     # that never had a PR looks like, what a `merged` row with no `number`
     # field looks like, and `_reg_get`'s readers already treat a missing or
-    # non-numeric `prnumber` as null (ccd:1273, ccd:2650). The window is a
+    # non-numeric `prnumber` as null (ccd:1273, ccd:4170). The window is a
     # DEGRADED reading, never a false one, and the old window's was false.
     #
     # The unconditional `clear` also costs one unlink on the path where the
@@ -3716,7 +3716,7 @@ cmd_ws_hold() {   # ccd ws-hold --session <id> --reason <text> — claim a
   # `_lc_dec_ok` is LENGTH-ONLY (`ccd:1527-1538`, D-210) — `_lc_dec_ok ''`
   # returns 0, so it cannot be the blank guard on its own. A declared
   # `--actor` is refused when blank the same way this verb's own `--reason`
-  # is refused just below (ccd:3568), and the same shape Task 45's
+  # is refused just below (ccd:3656), and the same shape Task 45's
   # `cmd_ws_archive` and Task 46's `cmd_ws_restore` use.
   if (( lc_ga )); then
     [[ -n "${lc_actor//[[:space:]]/}" ]] || die "--actor must be non-blank"
@@ -3844,7 +3844,7 @@ cmd_ws_release() {   # ccd ws-release --session <id> — end the program's claim
   # `_lc_dec_ok` is LENGTH-ONLY (`ccd:1527-1538`, D-210) — `_lc_dec_ok ''`
   # returns 0, so it cannot be the blank guard on its own. A declared
   # `--actor`/`--reason` is refused when blank the same way `cmd_ws_hold`
-  # refuses a blank `--reason` (ccd:3568): its own non-blank check, separate
+  # refuses a blank `--reason` (ccd:3656): its own non-blank check, separate
   # from the byte cap, whitespace-only counting as blank too.
   if (( lc_ga )); then
     [[ -n "${lc_actor//[[:space:]]/}" ]] || die "--actor must be non-blank"
@@ -3973,7 +3973,7 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
   # `_lc_dec_ok` is LENGTH-ONLY (`ccd:1527-1538`, D-210) — `_lc_dec_ok ''`
   # returns 0, so it cannot be the blank guard on its own. A declared
   # `--actor`/`--reason` is refused when blank the same way `cmd_ws_hold`
-  # refuses a blank `--reason` (ccd:3568): its own non-blank check, separate
+  # refuses a blank `--reason` (ccd:3656): its own non-blank check, separate
   # from the byte cap, whitespace-only counting as blank too.
   if (( lc_ga )); then
     [[ -n "${lc_actor//[[:space:]]/}" ]] || die "--actor must be non-blank"
@@ -4275,9 +4275,11 @@ _ws_archive_manifest() {   # id -> one JSON object on stdout
   # record ws-reap later reads", and that the lineage therefore survives the
   # worktree. Neither is true, and the correction is the contract:
   #   - NOTHING IN ccd READS THIS MANIFEST BACK. `grep -n archivemanifest ccd`
-  #     is three sites: the field-name list, this write, and `ws-restore`'s
-  #     `rm -f`. `_ws_reap_eval` re-measures every fact it needs itself. The
-  #     only reader anywhere is `server/src/registry.ts`'s `manifestBytes`,
+  #     is four sites: the field-name list, this write, `ws-restore`'s own
+  #     `stat -c %s` of the file (for `meas.manifestBytes`, byte count only,
+  #     never the content), and its `rm -f`. `_ws_reap_eval` re-measures every
+  #     fact it needs itself. The only reader anywhere is
+  #     `server/src/registry.ts`'s `manifestBytes`,
   #     which extracts `worktreeBytes` and nothing else. This field's audience
   #     is a HUMAN reading an archived workspace's record.
   #   - IT DOES NOT SURVIVE A REAP. `_reg_purge` (ccd:100) unlinks every
@@ -4441,7 +4443,7 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   # `_lc_dec_ok` is LENGTH-ONLY (ccd:1527-1538, D-210) — `_lc_dec_ok ''`
   # returns 0, so it cannot be the blank guard on its own. A declared
   # `--actor`/`--reason` is refused when blank the same way `cmd_ws_hold`
-  # refuses a blank `--reason` (ccd:3568) and Task 45's `cmd_ws_archive`
+  # refuses a blank `--reason` (ccd:3656) and Task 45's `cmd_ws_archive`
   # follows: its own non-blank check, separate from the byte cap, whitespace-
   # only counting as blank too.
   if (( lc_ga )); then
@@ -4939,7 +4941,7 @@ cmd_pr_open() {   # ccd pr-open --session <id> --title <t> --body-b64 <b64> --dr
   main="$PROJECTS_ROOT/$project"
 
   # The registry NAMES the branch; git's own worktree record is what entitles us
-  # to push it. Read from $main and nowhere else (`_ws_wt_branch`, ccd:303-314),
+  # to push it. Read from $main and nowhere else (`_ws_wt_branch`, ccd:2767-2777),
   # the same three rungs cmd_ws_rm walks (ccd:380, :390, :402) and
   # _ws_reap_eval re-proves, in refusal form. TWO statements, deliberately:
   # `local wthead=$(...)` returns LOCAL's status, so `registered` would be 0 for
@@ -5811,7 +5813,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   # Registry FIRST, git's record second — and "second" is a veto, not a
   # fallback. This used to read "the reverse of ws-rm, which reads only the
   # worktree" — no longer true: ws-rm reads its branch from git's worktree
-  # record too (_ws_wt_branch, ccd:706-717), which survives the directory being
+  # record too (_ws_wt_branch, ccd:2767-2777), which survives the directory being
   # hand-deleted, so the specific mechanism that made ws/swift-harbor an orphan
   # invisible to ccd ls, the PWA and ws-gc alike is fixed there. Reap still
   # reads the registry first, for its own reasons: it needs `base` and `project`
@@ -5869,7 +5871,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
 
   if [[ -d "$workdir" ]]; then
     # THE branch question, asked of $main and of nothing else. `_ws_wt_branch`
-    # (ccd:706-717) reads `git -C "$main" worktree list --porcelain`, so the
+    # (ccd:2767-2777) reads `git -C "$main" worktree list --porcelain`, so the
     # answer is $main's own registration for this path; it cannot leave $main, it
     # survives the directory being gone, and it follows a rename whether ccd or
     # the user did it. NOT `git -C "$workdir" rev-parse --abbrev-ref HEAD`, which
@@ -5884,7 +5886,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
     # stranger's HEAD, and the file now has ONE rule instead of two: git's
     # worktree record is the authority, in ws-rm and here alike.
     #
-    # TWO statements, deliberately, exactly as cmd_ws_rm writes it (ccd:733-734):
+    # TWO statements, deliberately, exactly as cmd_ws_rm writes it (ccd:2863-2864):
     # `local x=$(cmd)` returns LOCAL's status, so a one-line form would read $?
     # from the declaration and `registered` would be 0 for every path, registered
     # or not — turning the no-record rung below into dead code. `wthead` is
@@ -6602,7 +6604,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   # §7's argv boundary, restated on THIS side of the split — because the split
   # is what can move a value out of the field that was anchored and into one
   # that was not. `_pr_py pick` checks `mergeCommit.oid` and `headRefOid`
-  # against `OID` (ccd:292) inside python, but `url` and `number` are
+  # against `OID` (ccd:1861) inside python, but `url` and `number` are
   # GitHub-sourced and unanchored, and all four come back joined with tabs. So a
   # PR whose `url` holds a TAB shifts every later field: measured with
   # `url: "https://x/\tinjected"`, the string `injected` became REAP_MERGE and
@@ -6719,7 +6721,7 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only about the WORKSPA
   [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
 
   # `_json_str`'s status, checked ONCE and up front — the same probe, for the
-  # same reason, as `_ws_manifest` (ccd:1109). Nineteen `_json_str` substitutions
+  # same reason, as `_ws_manifest` (ccd:4054). Nineteen `_json_str` substitutions
   # below sit inside printf ARGUMENT LISTS, where a failure is a swallowed status
   # and an empty argument, i.e. `"path":,` — a document that authorises deletions
   # and does not parse, at exit 0. Bytes can no longer fail the encode (see
@@ -7663,7 +7665,7 @@ cmd_ws_reap() {   # ccd ws-reap --expect <token> --session <id>
   [[ $id =~ ^[A-Za-z0-9._-]+$ ]]    || die "bad session id"
 
   # `_json_str`'s status, checked ONCE and up front — the same probe, for the
-  # same reason, as `cmd_ws_audit` (ccd:2153) and `_ws_manifest` (ccd:1109).
+  # same reason, as `cmd_ws_audit` (ccd:6345) and `_ws_manifest` (ccd:4054).
   # This is the THIRD caller that builds a whole record, and the record it
   # builds is the TOMBSTONE: the one document that outlives the workspace, and
   # the only thing left naming the transcript once step (i) has removed the
@@ -8137,7 +8139,7 @@ _ws_reap_locked() {   # token id — everything the reap lock serialises
     [[ "$REAP_VERDICT" == sensitive-ignored ]] && paths=$(_reap_paths_json)
     # ONE EMIT FOR ALL 35 `_reap_refuse` TOKENS, at the single point where
     # `REAP_VERDICT` becomes JSON. `_ws_reap_eval` never prints — it sets
-    # globals through `_reap_refuse` (ccd:5299) — so this is the only place the
+    # globals through `_reap_refuse` (ccd:5650) — so this is the only place the
     # verdict exists as a value, and journaling the 35 call sites individually
     # would be 35 chances to miss one.
     _lc_emit reap refused "$id" "" verb ws-reap refusal "$REAP_VERDICT" detail "$REAP_DETAIL"
@@ -8189,7 +8191,7 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
   [[ -n "$branch" ]] || branch=$(_reg_get "$id" branch)
   # THE RECEIPT IS A MEASUREMENT TOO — final-round tests review F2. This was
   # `|| bytes=0`, the last of the three identical `_ws_gc_bytes "$workdir"`
-  # lines to still fabricate (ccd:1503 archive manifest and ccd:3006 audit were
+  # lines to still fabricate (ccd:4169 archive manifest and ccd:6528 audit were
   # closed in earlier rounds), and it is the one printed AFTER the irreversible
   # delete: `{"reaped":…,"bytes":0}` states "this deletion reclaimed nothing"
   # on a `du` that never completed. On the RESUME path it is 0 EVERY time — the
@@ -8271,10 +8273,10 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
   # THE ARCHIVED MARKER IS RE-READ HERE, immediately before the first step that
   # writes anything — final-round destructive review, finding F5. `archived` is
   # the ONE precondition of this whole verb that another ccd verb can withdraw:
-  # `cmd_ws_restore` (ccd:1234) removes `$REG/$id.archived`, re-`_spawn`s the
+  # `cmd_ws_restore` (ccd:4445) removes `$REG/$id.archived`, re-`_spawn`s the
   # session and re-`_ws_supervise`s it, turning the workspace back into an
   # ordinary live one. Nothing re-read the marker after `_ws_reap_eval`'s Phase
-  # A (ccd:2055), and it is not one of `_ws_fingerprint`'s fourteen inputs, so
+  # A (ccd:5662), and it is not one of `_ws_fingerprint`'s fourteen inputs, so
   # the token cannot notice either.
   #
   # TWO REACHABLE SHAPES, both measured, and the sequential one is the one with
@@ -8297,7 +8299,7 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
   #     and covers the resume shape too, which no lock can.
   #
   # `not-archived` rather than a new token: the state IS not-archived, it is the
-  # word `_ws_reap_eval` already uses for it (ccd:2056), and `wsaudit.ts`'s
+  # word `_ws_reap_eval` already uses for it (ccd:5663), and `wsaudit.ts`'s
   # SENTENCES already carries the sentence. Placed ahead of (a)/(b)/(c) so a
   # refusal writes NOTHING — no attic pin, no tombstone, no breadcrumb.
   #
@@ -8344,7 +8346,7 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
     # what stands in front of this path — moved down beside the block that
     # actually runs them (below the children phase now, not above it), but
     # the reason is unchanged: `_ws_reap_eval` refuses `not-archived` unless
-    # `$REG/$id.archived` exists, and `cmd_ws_archive` (ccd:1063-1064) is what
+    # `$REG/$id.archived` exists, and `cmd_ws_archive` (ccd:4000) is what
     # writes it — after `_ws_unsupervise` and after `tmux kill-session`. So by
     # the time any breadcrumb can exist the unit is disabled and the pane is
     # gone, and re-running either would be a second call to an idempotent
@@ -9288,8 +9290,8 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
         # Rung 2 — `rev-parse --abbrev-ref` reports a detached HEAD as the
         # literal string `HEAD`. That is a SENTINEL, not a branch name, and the
         # old conjunct read it as "no branch, so no mergedness to prove".
-        # ws-reap refuses the same state outright (`detached-head`, ccd:2499)
-        # and cmd_ws_rm notes it (ccd:1115); the unattended sweep refuses and
+        # ws-reap refuses the same state outright (`detached-head`, ccd:5733)
+        # and cmd_ws_rm notes it (ccd:3019); the unattended sweep refuses and
         # moves on, which is this command's own polarity for the same fact.
         #
         # THE FIFTEENTH FORGERY, and this arm's own replacement sentence made
@@ -10759,9 +10761,9 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   # hides the attempt and tells the operator to do the thing they just did.
   rm -f "$REG/$id.stopped"
   # ONE EMIT, AT THE TOP, because this verb has FIVE exits — the supervised
-  # arm's (ccd:9606 `return "$rc"`, ccd:9608 `return 0`), the in-unit arm's
-  # (ccd:9617's `|| return $?`, ccd:9625 `return "$rc"`, and falling off the end
-  # at ccd:9627) — plus `_supervised_start`'s own unsupervised fallbacks. A line
+  # arm's (ccd:10220 `return "$rc"`, ccd:10222 `return 0`), the in-unit arm's
+  # (ccd:10231's `|| return $?`, ccd:10239 `return "$rc"`, and falling off the end
+  # at ccd:10241) — plus `_supervised_start`'s own unsupervised fallbacks. A line
   # per exit misses one. The OUTCOME is not asserted here: `_reg_claim`'s
   # `claim` line and `_spawn_settle`'s `spawn` line (with its rc) are the
   # measured downstream facts, and composing the record from independent
@@ -10872,11 +10874,11 @@ cmd_ensure() {   # id — idempotent; used by systemd. arg is the id directly.
   _lc_done ensure "$id" "" meas.inUnit "${CCD_IN_UNIT:-0}"
   # Inside the unit (cmd_supervise sets CCD_IN_UNIT in its own process) this IS the spawn; anywhere
   # else it is a REQUEST for one, and the request goes through the unit so the session comes back
-  # supervised. `cmd_swap`'s tail (ccd:7064) reaches this from inside a transient systemd-run unit
+  # supervised. `cmd_swap`'s tail (ccd:10903) reaches this from inside a transient systemd-run unit
   # and correctly takes the supervised branch — which is why the guard is not INVOCATION_ID.
   if [[ "${CCD_IN_UNIT:-}" != 1 ]]; then
     local rc; _supervised_start "$id"; rc=$?
-    # `started` stays unconditional (Task 4's invariant, ccd:7118) on this path too — see cmd_start's
+    # `started` stays unconditional (Task 4's invariant, ccd:10212) on this path too — see cmd_start's
     # matching comment for why the in-unit cmd_ensure setting it is not enough on its own.
     _reg_claim "$id"
     [[ "$rc" -eq 0 ]] || return "$rc"
@@ -11580,7 +11582,7 @@ cmd_swap() {   # [--force] id target-wrapper — move a session to another accou
   _swap_beat_stop "$beat"
   _reg_set "$id" wrapper "$target"
   _reg_set "$id" lastswap "$(date +%s)"
-  # `cmd_ensure` runs in this same process at ccd:10410, but only when
+  # `cmd_ensure` runs in this same process at ccd:11034, but only when
   # `systemctl --user start` FAILS — the `||` fallback — and it writes its own
   # line WHEN IT FIRES. Two acts, two events, two tx-free records: the same
   # ruling as `cmd_enable`. Without this one a reader would see an `ensure` it

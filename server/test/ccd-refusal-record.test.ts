@@ -134,7 +134,7 @@ describe('ws-reap — exactly TWO emits, not thirty-six', () => {
   });
 
   it('records the verdict at the ONE point where REAP_VERDICT becomes JSON', () => {
-    // `_ws_reap_locked` takes TOKEN FIRST (ccd:5943-5944: `local token="$1" id="$2"`).
+    // `_ws_reap_locked` takes TOKEN FIRST (ccd:7336-7337: `local token="$1" id="$2"`).
     const out = h.sh(`_reg_set s uuid u
       _json_str() { printf '"%s"' "$1"; }
       _ws_reap_eval() { REAP_VERDICT=dirty-tree; REAP_DETAIL="uncommitted changes"; return 1; }

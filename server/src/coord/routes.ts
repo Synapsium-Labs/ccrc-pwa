@@ -297,7 +297,7 @@ export function registerCoordRoutes(
    * Every session on the box can read every `.uuid` file and could present a
    * neighbour's pair. What it catches is a STALE sender — a session that was
    * `/clear`ed or compacted since it read its own uuid, which `_sync_uuid`
-   * rotates every 5s (`ccd/ccd:6425-6437`) — and an honest mistake.
+   * rotates every 5s (`ccd/ccd:10412-10421`) — and an honest mistake.
    *
    * The order below IS the design: a cheaper refusal must never be reached
    * after an expensive one.

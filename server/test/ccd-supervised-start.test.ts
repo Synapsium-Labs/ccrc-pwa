@@ -378,7 +378,7 @@ describe('the start waits on observables', () => {
   });
 
   it('attach revives a dead row through the unit and lands on a pane that exists', () => {
-    // ccd:7180 is `_alive || cmd_ensure` then `exec tmux attach` — delegating
+    // ccd:11258 is `_alive || cmd_ensure` then `exec tmux attach` — delegating
     // the spawn made that asynchronous, so without the wait the attach races a
     // pane that is not there yet.
     seed('claude2-demo');

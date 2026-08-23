@@ -95,8 +95,8 @@ describe('ws-rm pins the workspace into the attic before it destroys it', () => 
   it('REFUSES when the tip is unreadable and the directory is still there', () => {
     // ws-rm's contract is "refuses anything it might destroy". A workspace on
     // disk whose tip cannot be resolved is exactly that. The stub is narrowed to
-    // the ONE call this block makes: `_ws_common_dir` (ccd:1921-1926) also runs
-    // `rev-parse`, and a blanket stub kills it, so ccd:1996-1997 fires first
+    // the ONE call this block makes: `_ws_common_dir` (ccd:2748-2753) also runs
+    // `rev-parse`, and a blanket stub kills it, so ccd:2960-2962 fires first
     // with a different sentence and no journal line at all.
     fixture();
     let stderr = ''; let code = 0;
