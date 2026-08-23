@@ -178,11 +178,17 @@ describe('deploy/notify.sh carries the token the way the server expects it', () 
   describe('and extracts the IDENTICAL token `readMailToken` does, from the same bytes', () => {
     // Sliced straight out of the shipped script — never a hand-copied
     // duplicate of the shell logic, so this test cannot drift the way a
-    // re-typed snippet could. Bounded between the `TOKEN_FILE=` assignment
-    // and the `curl` invocation, which this suite must NEVER run (it would
-    // dial the real fleet host's address).
+    // re-typed snippet could. Bounded between the `TOKEN_FILE=` assignment and
+    // the start of ADDRESS resolution.
+    //
+    // The end marker used to be `curl -fsS`, which silently included whatever
+    // sat between the two blocks. When D-174 put `[ -n "$ADDR" ] || exit 0`
+    // there, the snippet began exiting before it could print — every case in
+    // this describe went red for a reason that had nothing to do with tokens.
+    // Ending at the address block says what the slice is actually for, and the
+    // curl is still never reached (this suite must never dial anything).
     const start = notifySh.indexOf('TOKEN_FILE=');
-    const end = notifySh.indexOf('curl -fsS');
+    const end = notifySh.indexOf('ADDR="${CCRC_ADDR:-}"');
     if (start === -1 || end === -1) {
       throw new Error('notify.sh token-extraction snippet not found — its shape changed under this test');
     }

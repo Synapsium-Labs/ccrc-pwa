@@ -1,11 +1,20 @@
-// `deploy/notify.sh`'s address-resolution chain: `CCRC_ADDR` env >
-// `~/.ccrc/ccrc.env`'s `CCRC_HOST`+`CCRC_PORT` > the reference fleet's legacy
-// IP. Spec §2 (docs/superpowers/specs/2026-08-11-ccrc-oss-single-dev-infra-
-// design.md): "notify.sh's existing `${CCRC_ADDR:-…}` seam gets its default
-// from the config file instead of a baked fallback IP." D-73 (Stage 2d task
-// brief, facts verified): the reference fleet host has NO `~/.ccrc/ccrc.env`
-// today, so the legacy-IP last resort is what actually fires there — this
-// suite pins that it still does, alongside the two new tiers.
+// `deploy/notify.sh`'s address-resolution chain, now TWO tiers: `CCRC_ADDR`
+// env > `~/.ccrc/ccrc.env`'s `CCRC_HOST`+`CCRC_PORT` > nothing at all.
+//
+// The third tier — the reference fleet's own IP — is gone (D-174). It was
+// added "kept one generation so a hook shipped ahead of the config file cannot
+// go dark", and it outlived that generation: shipped publicly it is a
+// compiled-in address pointing at one operator's box, so on anyone else's
+// install it POSTs their fleet's activity to a stranger's machine.
+//
+// Two measured facts shaped the replacement. D-73 still holds — the reference
+// fleet host has NO `~/.ccrc/ccrc.env` — so removing the tier means that box
+// must be given `CCRC_ADDR` explicitly or it goes quiet. And on 2026-08-23 the
+// tier was ALREADY dead there: once the server moved to a loopback bind behind
+// its reverse proxy, `203.0.113.7:7788` answered 000 from the fleet host and
+// every swap notice had been silently dropped, because the curl ends
+// `|| true`. That is why `CCRC_ADDR` may now carry a scheme: a proxied box is
+// reachable at its front door, not at host:port.
 //
 // The env file is read the same way `_box_env_value` reads it
 // (ccd/ccrc:355-380) — grepped, never sourced, because it carries tokens — so
@@ -77,6 +86,12 @@ const curlCalls = (home: string): string[] => {
 /** `~/.ccrc/ccrc.env` — written as TEXT, same as `ccrc-doctor.test.ts`'s
  *  fixture, because half of what the reader has to get right is which lines
  *  it ignores (comments, blanks, unrelated keys, indentation). */
+/** `~/.ccrc/agent.env` — the FLEET box's config file, and the only one it has. */
+function writeAgentEnv(home: string, text: string): void {
+  mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+  writeFileSync(path.join(home, '.ccrc', 'agent.env'), text);
+}
+
 function writeCcrcEnv(home: string, text: string): void {
   mkdirSync(path.join(home, '.ccrc'), { recursive: true });
   writeFileSync(path.join(home, '.ccrc', 'ccrc.env'), text);
@@ -116,11 +131,79 @@ describe('deploy/notify.sh address resolution', () => {
     expect(curlCalls(home).join('\n')).toContain('http://127.0.0.1:7788/api/notify');
   });
 
-  it("falls back to the reference fleet's legacy IP when neither CCRC_ADDR nor " +
-     'ccrc.env is present — D-73: what actually fires on the fleet host today', () => {
+  it('SENDS NOTHING when neither CCRC_ADDR nor ccrc.env resolves an address (D-174)', () => {
+    // This used to fall back to the reference fleet's own IP, "kept one
+    // generation so a hook shipped ahead of the config file cannot go dark".
+    // It outlived that generation and became a compiled-in address pointing at
+    // one operator's box — so on anyone else's install it was a POST of their
+    // fleet's activity to a stranger's machine. Notify is best-effort by
+    // contract: no address means no send.
     const home = mkTmp('ccrc-notify-addr-');
     stubCurl(home);
     runNotify(home);
+    expect(curlCalls(home), 'a guessed address is worse than silence').toEqual([]);
+  });
+
+  it('a scheme-carrying CCRC_ADDR is used verbatim — the proxied-box case (D-174)', () => {
+    // A box behind a reverse proxy binds the server to LOOPBACK, which is the
+    // point of the proxy; `host:port` from another machine then reaches
+    // nothing. Measured on the reference fleet 2026-08-23: after the server
+    // moved to a loopback bind, this hook's address answered 000 from the
+    // fleet host and every swap notice had been silently dropped, because the
+    // curl ends `|| true`.
+    const home = mkTmp('ccrc-notify-addr-scheme-');
+    stubCurl(home);
+    runNotify(home, { CCRC_ADDR: 'https://mybox.example.com' });
+    expect(curlCalls(home).join('\n')).toContain('https://mybox.example.com/api/notify');
+  });
+
+  it('a trailing slash on a scheme-carrying address does not double the path', () => {
+    const home = mkTmp('ccrc-notify-addr-slash-');
+    stubCurl(home);
+    runNotify(home, { CCRC_ADDR: 'https://mybox.example.com/' });
+    expect(curlCalls(home).join('\n')).toContain('https://mybox.example.com/api/notify');
+    expect(curlCalls(home).join('\n')).not.toContain('//api/notify');
+  });
+
+  it("reads CCRC_SERVER_URL from agent.env — the fleet box's own answer, already provisioned", () => {
+    // THE HOOK RUNS ON THE FLEET BOX, which by design has no ccrc.env at all
+    // (_check_config's D-86 note: its absence there is correct, not a gap). So
+    // the HOST+PORT tier can never fire there — and it could not express a
+    // proxied server anyway, since `host:port` cannot name a front door. The
+    // fleet box already learned the server's address once, in agent.env, for
+    // the coordination skills (#89). Reusing it means nothing new to provision.
+    const home = mkTmp('ccrc-notify-agentenv-');
+    stubCurl(home);
+    writeAgentEnv(home, 'CCRC_SERVER_URL=https://mybox.example.com\n');
+    runNotify(home);
+    expect(curlCalls(home).join('\n')).toContain('https://mybox.example.com/api/notify');
+  });
+
+  it.each([
+    ['wss://', 'wss://mybox.example.com', 'https://mybox.example.com/api/notify'],
+    ['ws://', 'ws://203.0.113.7:7788', 'http://203.0.113.7:7788/api/notify'],
+  ])('maps %s to http(s), the way the skills do', (_l, url, want) => {
+    // CCRC_SERVER_URL is documented as accepting ws://, wss://, http:// and
+    // https://. A hook that POSTed to a ws:// URL would fail silently.
+    const home = mkTmp('ccrc-notify-wsmap-');
+    stubCurl(home);
+    writeAgentEnv(home, `CCRC_SERVER_URL=${url}\n`);
+    runNotify(home);
+    expect(curlCalls(home).join('\n')).toContain(want);
+  });
+
+  it('CCRC_ADDR in the ENV still beats agent.env', () => {
+    const home = mkTmp('ccrc-notify-addr-prec-');
+    stubCurl(home);
+    writeAgentEnv(home, 'CCRC_SERVER_URL=https://from-file.example.com\n');
+    runNotify(home, { CCRC_ADDR: 'https://from-env.example.com' });
+    expect(curlCalls(home).join('\n')).toContain('https://from-env.example.com/api/notify');
+  });
+
+  it('a bare host:port keeps the plain-http shape it always had', () => {
+    const home = mkTmp('ccrc-notify-addr-bare-');
+    stubCurl(home);
+    runNotify(home, { CCRC_ADDR: '203.0.113.7:7788' });
     expect(curlCalls(home).join('\n')).toContain('http://203.0.113.7:7788/api/notify');
   });
 
@@ -145,12 +228,12 @@ describe('deploy/notify.sh address resolution', () => {
     expect(calls).not.toContain('stale.invalid');
   });
 
-  it('an incomplete ccrc.env (host with no port) does not half-apply — falls to the legacy IP', () => {
+  it('an incomplete ccrc.env (host with no port) does not half-apply — and sends nothing', () => {
     const home = mkTmp('ccrc-notify-addr-');
     stubCurl(home);
     writeCcrcEnv(home, 'CCRC_HOST=127.0.0.1\n');
     runNotify(home);
-    expect(curlCalls(home).join('\n')).toContain('http://203.0.113.7:7788/api/notify');
+    expect(curlCalls(home)).toEqual([]);
   });
 
   it('an unreadable ccrc.env is treated as absent, not fatal — notify.sh must never throw', () => {
@@ -163,6 +246,6 @@ describe('deploy/notify.sh address resolution', () => {
     // intent.
     rmSync(path.join(home, '.ccrc'), { recursive: true, force: true });
     runNotify(home);
-    expect(curlCalls(home).join('\n')).toContain('http://203.0.113.7:7788/api/notify');
+    expect(curlCalls(home)).toEqual([]);
   });
 });
