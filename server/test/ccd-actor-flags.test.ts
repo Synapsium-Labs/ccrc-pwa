@@ -785,3 +785,39 @@ describe('the declared triple reaches the journal', () => {
     expect(String(dec['reason'])).toContain('surface');
   });
 });
+
+// Fix round 1, finding MEDIUM: the omit-only-the-failed-field exception at
+// ccd:4350/ccd:4355 (`cmd_ws_restore`'s actor-length and reason-length
+// refusals) had ZERO coverage — the reviewer reintroduced `dec.actor` onto
+// the actor-length refusal and all 99 relevant tests stayed green. This
+// describe is the guard `_lc_json`'s cap-ladder comment alone could not be.
+describe("ws-restore's length refusals omit ONLY the field that failed its own cap", () => {
+  const STUBS = `tmux() { return 1; };`;
+  // `_LC_DEC_MAX` is 512 BYTES (ccd:823); 513 plain-ASCII characters is 513
+  // bytes, one over — the same shape the `_lc_dec_ok` describe above uses.
+  const OVER_CAP = 'a'.repeat(513);
+
+  it('an over-cap --actor is refused with NO dec.actor, but dec.surface and dec.reason still land', () => {
+    const id = seedWorkspace();
+    const r = shFail(`${STUBS} cmd_ws_restore --session ${id} --surface pwa --reason someReason --actor '${OVER_CAP}'`);
+    expect(r.code).not.toBe(0);
+    const dec = lastDec()!;
+    // The positive half first: omitting `dec.actor` must not have collapsed
+    // into omitting everything — the other two fields the caller declared
+    // still have to reach the record.
+    expect(dec['surface']).toBe('pwa');
+    expect(dec['reason']).toBe('someReason');
+    // The value that did not fit is the one field this line must not carry.
+    expect(Object.keys(dec)).not.toContain('actor');
+  });
+
+  it('an over-cap --reason is refused with NO dec.reason, but dec.surface and dec.actor still land', () => {
+    const id = seedWorkspace();
+    const r = shFail(`${STUBS} cmd_ws_restore --session ${id} --surface pwa --actor someone --reason '${OVER_CAP}'`);
+    expect(r.code).not.toBe(0);
+    const dec = lastDec()!;
+    expect(dec['surface']).toBe('pwa');
+    expect(dec['actor']).toBe('someone');
+    expect(Object.keys(dec)).not.toContain('reason');
+  });
+});
