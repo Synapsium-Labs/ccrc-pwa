@@ -138,6 +138,53 @@ export function verbSupported(
   return verbs.includes(argv[0] ?? '');
 }
 
+/** The `ccd caps` token that says this box parses `--surface`/`--actor`/
+ *  `--reason` on the five workspace verbs (wave 5). Spelled ONCE in
+ *  `server/src`: `sweepDec` and `server.ts`'s `pwaDec` are meant to read it
+ *  from here, because a capability token copied into two files is the drift
+ *  shape `single-definition.test.ts` exists for. ccd's own `echo
+ *  actor-flags-v1` and `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are
+ *  the other two spellings, and a parity check keeps THOSE two equal
+ *  (`ccd-archive.test.ts`'s `advertises exactly the verbs...` case) — but
+ *  that check does not import this file, so THIS spelling is not yet party
+ *  to it (measured by mutation: corrupting this literal fails only
+ *  `capsupported.test.ts`'s own self-check, nothing cross-file). Until a
+ *  consumer or a test reads `ACTOR_FLAGS_CAP` itself, drift between this
+ *  constant and the other two would go undetected — RULE 8 applies:
+ *  `single-definition.test.ts` has no hand-written finding for this
+ *  vocabulary either. */
+export const ACTOR_FLAGS_CAP = 'actor-flags-v1';
+
+/**
+ * Whether the DEPLOYED ccd advertised a CAPABILITY token — a verb-shaped string
+ * in the same `ccd caps` list `verbSupported` reads, naming a FLAG on an
+ * existing verb rather than a second dispatchable command.
+ *
+ * THE NO-EVIDENCE DEFAULT IS FALSE, and it is deliberately the opposite of
+ * `verbSupported`'s. That asymmetry is argued in full on
+ * {@link stopSurfaceSupported} below and is not restated here — what matters at
+ * this seam is that generalising the FUNCTION must not generalise the DEFAULT
+ * along with it. For a gated VERB, a wrong guess on no evidence costs a loud
+ * failure (ccd's own `die "usage: ..."`, a 502, never a lie). For a FLAG, a
+ * wrong guess costs a SILENT SUCCESS: an old ccd meets the flag inside an
+ * exact-arity guard, and on the paths where it does not die, `runCcdOr502`
+ * renders its exit 0 as `200 {ok:true}` for a call that recorded nothing. Same
+ * input, categorically different blast radius.
+ *
+ * This is sound only because local mode measures its OWN ccd at boot
+ * (`localcaps.ts`, `index.ts`) rather than leaving `ccdVerbs` permanently null
+ * there — otherwise a refusing default would kill the feature outright in the
+ * DEFAULT deployment mode.
+ */
+export function capSupported(
+  state: Pick<FleetState, 'ccdVerbs'> | undefined,
+  token: string,
+): boolean {
+  const verbs = state?.ccdVerbs ?? null;
+  if (verbs === null) return false;
+  return verbs.includes(token);
+}
+
 /**
  * Whether the deployed ccd understands `--surface` on `stop` (fix round 2,
  * task 14, Important #1). A CAPABILITY, not a verb — `stop` itself is
@@ -170,9 +217,16 @@ export function verbSupported(
  * that did nothing. Same "no evidence" input, categorically different
  * blast radius on the wrong guess: refusing costs a `cli` stamp instead of
  * `pwa`; permitting wrongly costs a control that lies about success. The
- * asymmetry is why this function does not delegate its null case to
- * `verbSupported` — it re-implements the same membership check with the
- * opposite default instead.
+ * asymmetry is why this function does not delegate to `verbSupported`. It
+ * delegates to {@link capSupported} instead (wave 6), which is that same
+ * membership check with this opposite default — one implementation of the
+ * refusing branch, not two, and `readme-holds.test.ts` pins BOTH halves so a
+ * quiet re-implementation here with the permitting default still reds.
+ *
+ * It stays a NAMED EXPORT rather than becoming a call site: `verb-gate.test.ts`
+ * text-searches a call site's enclosing function for `verbSupported(`, and
+ * inlining `capSupported(state, 'stop-surface')` at `stop`'s call sites would
+ * change what that scanner sees about a verb that is correctly ungated.
  *
  * This default is only sound because local mode ALSO now measures real
  * evidence at boot (`localcaps.ts`, `index.ts`) rather than leaving
@@ -181,7 +235,5 @@ export function verbSupported(
  * DEFAULT deployment mode (`deploy/ccrc.env.example`'s `CCRC_FLEET=local`).
  */
 export function stopSurfaceSupported(state: Pick<FleetState, 'ccdVerbs'> | undefined): boolean {
-  const verbs = state?.ccdVerbs ?? null;
-  if (verbs === null) return false;
-  return verbs.includes('stop-surface');
+  return capSupported(state, 'stop-surface');
 }

@@ -216,8 +216,15 @@ describe('README: the --surface bullet', () => {
     expect(bullet).toMatch(/opposite/i);
     expect(bullet).toMatch(/silent success/i);
     const ccdargv = readFileSync(path.join(root, 'server', 'src', 'ccdargv.ts'), 'utf8');
-    const fn = ccdargv.slice(ccdargv.indexOf('export function stopSurfaceSupported'));
-    expect(fn, 'the no-evidence branch must refuse, not permit').toMatch(/if \(verbs === null\) return false;/);
+    // WAVE 6: the refusing branch moved into `capSupported`, which
+    // `stopSurfaceSupported` now delegates to. BOTH halves are pinned, because
+    // either one alone goes green on a real regression: slicing only
+    // `capSupported` misses a `stopSurfaceSupported` that quietly stops
+    // delegating and re-implements the check with the permitting default.
+    const cap = ccdargv.slice(ccdargv.indexOf('export function capSupported'));
+    expect(cap, 'the no-evidence branch must refuse, not permit').toMatch(/if \(verbs === null\) return false;/);
+    expect(ccdargv, 'stopSurfaceSupported must delegate, not re-implement')
+      .toMatch(/return capSupported\(state, 'stop-surface'\);/);
   });
 
   it('states local mode measures its OWN ccd, not merely the remote one', () => {
