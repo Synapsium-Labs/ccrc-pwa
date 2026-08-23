@@ -11,19 +11,21 @@ spec → plan → subagent execution with per-PR review lenses + whole-branch pa
 `2026-08-10-architecture-ddd-clean-solid.md`, `2026-08-07-build7-fleet-coordination-design.md`).
 
 ## Two-box topology (the single most load-bearing fact)
-Two physical boxes; the live server runs `CCRC_FLEET=remote` as standing config.
-- **BOX 1 — `server-box` (server host):** `you@203.0.113.7`, HTTP :7788 bound to loopback. Runs the
+Two physical boxes; the live server runs `CCRC_FLEET=remote` as standing config. This section speaks ROLES —
+real values: `deploy/reference-fleet.md` (gitignored).
+- **BOX 1 — the server box (`<server-host>`):** `you@<server-host>`, HTTP :7788 bound to loopback. Runs the
   Fastify server (`server/`), serves the PWA at `/`, owns `~/.ccrc/coord.db` and `~/.ccrc/state-cache.json`.
-  **HTTPS is Caddy + DuckDNS (stage 3b), publicly reachable** — `ccrc expose [duckdns]` regenerates
+  **HTTPS is Caddy + DuckDNS (stage 3b), publicly reachable** — `ccrc expose [duckdns|byo|ip]` regenerates
   `~/.ccrc/Caddyfile` (REGENERATE class; nothing in this tree reads it back, Caddy does), installs the
-  `ccrc-ddns` service/timer, and writes `$CCRC_EXPOSURE_FILE` (0600) as the server unit's **second**
-  `EnvironmentFile`; Caddy's automatic HTTPS gets the cert (spec D1, HTTP-01) and the operator runs the three
-  printed root steps. **Arming is all three or nothing:** `CCRC_AUTH=on` + `CCRC_RP_ID` + `CCRC_ORIGIN` land in
-  that file together, or every non-exempt write and every `/ws/*` upgrade is refused with **no boot warning**.
-- **BOX 2 — fleet host:** runs `ccrc-agent` (`agent/`), `ccd`, tmux, and the flat-file registries
-  `~/.cc-sessions/`, `~/.cc-limits/`, `.prhistory`, `.cc-clips`. The five wrapper HOMEs live here. **~20 live
-  sessions** run here at any time (20 tmux sessions = 20 active `claude-session@*` units, 2026-08-22) — the
-  figure drifts upward; measure it, don't quote it.
+  `ccrc-ddns` service/timer for the duckdns arm, and writes `$CCRC_EXPOSURE_FILE` (0600) as the server unit's
+  **second** `EnvironmentFile`; Caddy's automatic HTTPS gets the cert (spec D1, HTTP-01) and the operator runs
+  the three printed root steps. **Arming is all three or nothing:** `CCRC_AUTH=on` + `CCRC_RP_ID` +
+  `CCRC_ORIGIN` land in that file together, or every non-exempt write and every `/ws/*` upgrade is refused with
+  **no boot warning**.
+- **BOX 2 — the fleet box (`<fleet-host>`):** runs `ccrc-agent` (`agent/`), `ccd`, tmux, and the flat-file
+  registries `~/.cc-sessions/`, `~/.cc-limits/`, `.prhistory`, `.cc-clips`. The five wrapper HOMEs live here.
+  **~20 live sessions** run here at any time (20 tmux sessions = 20 active `claude-session@*` units,
+  2026-08-22) — the figure drifts upward; measure it, don't quote it.
 - **Link:** ONE authenticated WebSocket (bearer token, agent :7789). The server **never SSHes the fleet box at
   runtime** — it drives the fleet only through whitelisted agent frames. `local` mode (default, dev) shells out
   to ccd/tmux on the server's own box and never touches the agent.
