@@ -1970,7 +1970,32 @@ export class CoordStore {
     const n = Number.isFinite(limit) && limit > 0 ? Math.min(Math.floor(limit), 1000) : 500;
     const rows = this.db.prepare(
       "SELECT sessionId AS id, at, json_extract(obsJson, '$.cg') AS obsClass, " +
-      "json_extract(decJson, '$.surface') AS decSurface FROM lifecycle_events " +
+      // `INDEXED BY lifecycle_by_at`, FORCED rather than left to the planner
+      // (Tasks 40/41 review, F1). Measured on an in-memory `node:sqlite` with
+      // 500,000 rows over 30 days (~1.5-2yr of growth at schema.ts's own ~90
+      // MB/year — this table is NEVER PRUNED): a bare `CREATE INDEX
+      // lifecycle_by_at ON lifecycle_events(at)`, with NO hint, is not enough
+      // -- SQLite still chose `SCAN lifecycle_events` (confirmed with and
+      // without `ANALYZE`), because the WHERE column (`at`) and the ORDER BY
+      // column (`id`) differ and the planner prefers the scan order that
+      // satisfies `ORDER BY id DESC` for free over paying for an explicit
+      // sort, even when that scan is the more expensive plan by orders of
+      // magnitude. `INDEXED BY` does not change what this query MEANS —
+      // `ORDER BY lifecycle_events.id DESC` below is untouched, byte for
+      // byte, so every existing behaviour (the alias-shadowing note two
+      // lines down included) still holds. It only forces the ACCESS PATH:
+      // seek the `at` index to the window's lower bound (`SEARCH … USING
+      // INDEX lifecycle_by_at (at>?)`), then sort ONLY the rows that
+      // survived the WHERE (bounded by the window, never by table size) into
+      // a temp b-tree for `id DESC` (`USE TEMP B-TREE FOR ORDER BY`).
+      // Verified array-order-IDENTICAL to the unindexed query, row for row,
+      // on three datasets: a realistic under-limit window, an out-of-order
+      // two-generation case built specifically to prove `at` and `id` order
+      // can diverge, and that same case pushed past the `limit` where a
+      // reshaped `ORDER BY at DESC` (the alternative considered and
+      // rejected) would have picked a DIFFERENT top-N.
+      "json_extract(decJson, '$.surface') AS decSurface " +
+      'FROM lifecycle_events INDEXED BY lifecycle_by_at ' +
       'WHERE sessionId IS NOT NULL AND obsJson IS NOT NULL AND decJson IS NOT NULL ' +
       // `lifecycle_events.id`, QUALIFIED: `id` is now an output alias for
       // `sessionId`, and SQLite resolves a bare `ORDER BY id` to the alias —

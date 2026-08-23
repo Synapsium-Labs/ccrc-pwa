@@ -1144,7 +1144,7 @@ export function spawnVerdict(rc: number | null): SpawnVerdict | null {
  * structurally cannot express, and the only reason this vocabulary exists beside
  * `SessionLifecycle` rather than inside it.
  *
- * THREE KINDS, and the four that were proposed and rejected are named here so
+ * FIVE KINDS, and the four that were proposed and rejected are named here so
  * nobody re-adds them: `dead-row` IS `lifecycle === 'orphan'` and strictly
  * broader (the shipped ladder splits that population three ways);
  * `unclaimed-session` was promoted to a `SessionLifecycle` member.

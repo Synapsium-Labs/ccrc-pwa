@@ -290,6 +290,26 @@ export const MIGRATIONS: readonly string[] = [
   // --is-ancestor` against `origin/main` says NO for both Task 27's commit
   // and Fix Round 1's `badoutcome` commit — so this migration still has not
   // shipped and the same reasoning applies again.
+  //
+  // FIX ROUND 3 (Tasks 40/41 review, F1) AMENDS THIS MIGRATION A THIRD TIME,
+  // adding `lifecycle_by_at` below. `CoordStore.recentProvenance` (Task 34)
+  // reads this table on the shared `FleetWatcher` tick every 60s (Task 41);
+  // measured on an in-memory `node:sqlite` with 500,000 rows over 30 days —
+  // ~1.5-2yr of growth at this migration's own stated ~90 MB/year, since the
+  // table is NEVER PRUNED — the query planned as `SCAN lifecycle_events`
+  // (same defect `runs_by_session` above already fixed once for `runs`):
+  // ~50ms/call regardless of window density, because nothing bounds the scan
+  // to the `at >= ?` predicate. `recentProvenance`'s own query now reads
+  // `FROM lifecycle_events INDEXED BY lifecycle_by_at` — see that method's
+  // comment for why a bare `CREATE INDEX` was not enough on its own (the
+  // planner prefers a free-ordering scan over an index seek plus an explicit
+  // sort, confirmed with and without `ANALYZE`) and for the array-order-
+  // identical proof that forcing the index changes nothing about what the
+  // query returns. The premise above was RE-VERIFIED for this round too:
+  // `origin/main`'s `schema.ts` still has exactly TWO migration entries, and
+  // `git merge-base --is-ancestor` against `origin/main` says NO for Task
+  // 27's commit, Fix Round 1's `badoutcome` commit, and Fix Round 2's CHECK
+  // constraint commit — so this migration still has not shipped.
   `
   CREATE TABLE lifecycle_events (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -347,6 +367,16 @@ export const MIGRATIONS: readonly string[] = [
   -- relies on for the same reason.
   CREATE INDEX lifecycle_by_session ON lifecycle_events(sessionId, id);
   CREATE INDEX lifecycle_by_tx      ON lifecycle_events(tx);
+  -- FIX ROUND 3 (Tasks 40/41 review, F1). \`recentProvenance\`'s window read
+  -- (\`at >= ?\`) has no help from either index above -- \`sessionId\` and \`tx\`
+  -- are both the wrong leading column -- so it planned as \`SCAN
+  -- lifecycle_events\`, an O(table size) cost on a table this migration's own
+  -- header says is NEVER PRUNED. \`recentProvenance\` reads this table with
+  -- \`INDEXED BY lifecycle_by_at\`, forcing the seek this index makes
+  -- possible -- see that method's own comment in coord/store.ts for why the
+  -- FORCE was necessary (a bare index here was not enough on its own) and
+  -- for the array-order-identical proof.
+  CREATE INDEX lifecycle_by_at      ON lifecycle_events(at);
 
   -- The cursor, and it is an OPTIMISATION, NEVER A CORRECTNESS INPUT (D6):
   -- advanced only inside the same tx() as the rows it covers, so it can never

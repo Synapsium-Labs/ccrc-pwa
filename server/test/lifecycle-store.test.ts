@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
+import { readFileSync } from 'node:fs';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { parseJournalLine, type JournalRow } from '../src/coord/journalparse.js';
@@ -287,5 +288,50 @@ describe('CoordStore.recentProvenance', () => {
       .run();
     expect(() => s.recentProvenance(200, 50)).not.toThrow();
     expect(s.recentProvenance(200, 50)).toEqual([]);
+  });
+
+  it('turns the window read from SCAN into SEARCH — the reason lifecycle_by_at exists (Tasks 40/41 review, F1)', () => {
+    // `lifecycle_events` is NEVER PRUNED (schema.ts's own header), so this
+    // read's cost must be bounded by the WINDOW, not by the table's whole
+    // history. A bare `CREATE INDEX` was measured NOT to be enough on its
+    // own — the planner prefers the scan order that satisfies `ORDER BY id
+    // DESC` for free over paying for an explicit sort of an index seek's
+    // results, even though that scan is the far more expensive plan on a
+    // large table — so `recentProvenance` reads `INDEXED BY lifecycle_by_at`
+    // to force the seek. Same idiom as `coord-db.test.ts`'s sibling pin for
+    // `runs_by_session`: this is the query text `recentProvenance` runs,
+    // copied here because the plan is not otherwise observable from outside
+    // the method — `SCAN lifecycle_events` reappearing here is exactly what
+    // deleting `INDEXED BY lifecycle_by_at` from the source produces.
+    const s = store();
+    const plan = (s.db.prepare(
+      "EXPLAIN QUERY PLAN SELECT sessionId AS id, at, json_extract(obsJson, '$.cg') AS obsClass, " +
+      "json_extract(decJson, '$.surface') AS decSurface " +
+      'FROM lifecycle_events INDEXED BY lifecycle_by_at ' +
+      'WHERE sessionId IS NOT NULL AND obsJson IS NOT NULL AND decJson IS NOT NULL ' +
+      'AND at IS NOT NULL AND at >= ? ORDER BY lifecycle_events.id DESC LIMIT ?',
+    ).all(0, 500) as { detail: string }[]).map((r) => r.detail).join(' | ');
+    expect(plan).toContain('lifecycle_by_at');
+    expect(plan).not.toContain('SCAN lifecycle_events');
+  });
+
+  it('recentProvenance\'s OWN shipped query text carries the hint — a plan check alone cannot catch it being dropped from source', () => {
+    // The test above proves the SCHEMA makes a hinted query seekable; it does
+    // NOT prove `recentProvenance` itself still asks for the hint, since that
+    // test hand-copies query text rather than calling through the method. A
+    // regression that quietly drops `INDEXED BY lifecycle_by_at` from
+    // store.ts (leaving the index and the plan-check test both green) would
+    // be invisible to it. Same source-text-pin idiom
+    // `divergence-sweep.test.ts` uses for `sweepDivergences`.
+    const src = readFileSync(path.join(__dirname, '..', 'src', 'coord', 'store.ts'), 'utf8');
+    const from = src.indexOf('  recentProvenance(sinceAt: number, limit: number): ProvenancePair[] {');
+    expect(from, 'recentProvenance was not found — this assertion would pass vacuously')
+      .toBeGreaterThan(-1);
+    const body = src.slice(from, src.indexOf('\n  }\n', from));
+    // The exact ACTIVE code fragment, quoted as it appears in the string
+    // concatenation — NOT a loose substring match, which would also match
+    // this method's own explanatory comment (which mentions the hint by name
+    // several times) and stay green even with the real clause deleted.
+    expect(body).toContain("'FROM lifecycle_events INDEXED BY lifecycle_by_at '");
   });
 });
