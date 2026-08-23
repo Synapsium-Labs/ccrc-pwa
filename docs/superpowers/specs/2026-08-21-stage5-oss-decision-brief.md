@@ -11,9 +11,9 @@ spec is written from the answers, **against the post-merge tree** — both #78 (
 
 **S1 — Org identity and copyright holder.** The AGPL notice needs a name, and the parent
 spec says "AGPL-3.0, **sole copyright holder**" — which sits oddly with the repo living
-under the `example-org` org. This decides three literals at once: the LICENSE
+under the operator's employer org. This decides three literals at once: the LICENSE
 copyright line, `install.sh`/`ccrc`'s `CCRC_RELEASE_OWNER` pair (the release-fetch URL),
-and the README's `curl … | bash` one-liner. Options: stay under example-org (copyright
+and the README's `curl … | bash` one-liner. Options: stay under the employer org (copyright
 the company), move to your personal account, or a new org. **No recommendation — this is a
 business/ownership call.**
 
@@ -45,9 +45,9 @@ files follow. The shipped install default (single `claude` account) is already c
 **S5 — Runtime de-branding sweep:** `ccd/ccclip`'s three unconditional literals (promised
 in Stage 1, never done); `deploy/notify.sh:45`'s IP fallback (the exact default
 `ccd/ccrc:378-389` refuses to copy, with reasons); the three skill files' hardcoded server
-address (becomes derived/config); `config.ts:323`'s `mailto:ccrc@server-box`;
-`ccd/ccd`'s "server-box" banner strings (one commit, provenance re-stamped);
-`ccrc-adopt:350`'s `team·max` example string; `scripts/extraction-manifest.sh` deleted;
+address (becomes derived/config); `config.ts:323`'s `mailto:ccrc@<server-host>`;
+`ccd/ccd`'s server-host-name banner strings (one commit, provenance re-stamped);
+`ccrc-adopt:350`'s real-first-label example string; `scripts/extraction-manifest.sh` deleted;
 `ccrc.env.example`'s worked examples get generic placeholders.
 
 **S6 — Service-worker denylist:** `/docs` and `/fleet` are one operator's co-tenants and

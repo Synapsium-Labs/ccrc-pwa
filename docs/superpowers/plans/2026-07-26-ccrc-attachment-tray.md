@@ -50,7 +50,7 @@ New `readB64` op so the clip route works in remote-fleet mode.
 - `session/ChatList.tsx`, `session/MessageBubble.tsx` — thumbnails, `id` threading.
 - `session/chat.css`, `styles/tokens.css`, `components/primitives.css`, `screens/SessionScreen.tsx` — tray styling and the toast offset.
 
-**Terminal** — `infra/ccrc-portability/ccd`
+**Terminal** — `infra/<server-host>-portability/ccd`
 `_clip_dest` helper so the Mac hotkey's naming is testable.
 
 ---
@@ -905,7 +905,7 @@ git commit -m "feat(ccrc): serve staged clips back for transcript thumbnails"
 ## Task 7: `ccd clip` — honest names for the terminal hotkey
 
 **Files:**
-- Modify: `infra/ccrc-portability/ccd` (`cmd_clip`, ~`:586-602`)
+- Modify: `infra/<server-host>-portability/ccd` (`cmd_clip`, ~`:586-602`)
 - Test: `infra/ccrc/server/test/ccd-clip.test.ts` (create)
 
 **Interfaces:**
@@ -925,7 +925,7 @@ import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 
-const CCD = path.resolve(__dirname, '../../../ccrc-portability/ccd');
+const CCD = path.resolve(__dirname, '../../../<server-host>-portability/ccd');
 const dest = (src: string): string =>
   execFileSync('bash', ['-c', `source "${CCD}"; _clip_dest /tmp/clips "${src}"`],
     { encoding: 'utf8' }).trim();
@@ -975,7 +975,7 @@ Run: `cd infra/ccrc/server && npx vitest run test/ccd-clip.test.ts` → PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add infra/ccrc-portability/ccd infra/ccrc/server/test/ccd-clip.test.ts
+git add infra/<server-host>-portability/ccd infra/ccrc/server/test/ccd-clip.test.ts
 git commit -m "fix(ccd): clips keep their real extension and stop overwriting each other"
 ```
 

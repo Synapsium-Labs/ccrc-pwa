@@ -80,7 +80,7 @@ function isHomeOrAncestorOfHome(root: string, home: string): boolean {
 /**
  * Refuses a projects root that would silently widen the READ whitelist onto
  * $HOME's own dotfiles. Before this task `projectsRoot` was a hardcoded
- * literal ('/srv/projects') that could never coincide
+ * literal (one operator's volume mount path) that could never coincide
  * with $HOME — structurally impossible. This task made it
  * operator-configurable via CCRC_PROJECTS_ROOT, and whitelist.ts's
  * `checkPath` grants reads under whatever root it's given with a plain
@@ -108,8 +108,8 @@ function assertProjectsRootIsSafe(root: string): void {
 /** Resolution order for the whitelist's projects root: explicit option
  *  (tests, embedders) > CCRC_PROJECTS_ROOT (production — set in
  *  ~/.ccrc/agent.env) > $HOME/projects (spec §2's cross-component default).
- *  The old export was one operator's literal Hetzner volume id
- *  ('/srv/projects'), compiled in with no override —
+ *  The old export was one operator's literal Hetzner volume mount path,
+ *  compiled in with no override —
  *  every OTHER machine's agent silently whitelisted a directory that does
  *  not exist. An empty env var counts as absent, never as a root of "".
  *  Throws (refuses to boot) if the resolved root is $HOME, an ancestor of

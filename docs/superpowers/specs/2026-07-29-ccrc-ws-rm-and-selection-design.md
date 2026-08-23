@@ -4,7 +4,7 @@ Both specs below are verified against the live code, not just reasoned about. Pa
 
 # PART 1 — `ccd ws-rm` orphans the branch when the worktree directory is gone
 
-**File:** `/srv/projects/OpenClawHetzner/infra/ccrc-portability/ccd` (`cmd_ws_rm`, lines 233–271)
+**File:** `/srv/projects/OpenClawHetzner/infra/<server-host>-portability/ccd` (`cmd_ws_rm`, lines 233–271)
 **Tests:** `/srv/projects/OpenClawHetzner/infra/ccrc/server/test/ccd-workspaces.test.ts` (`describe('ws-rm')`, line 295)
 
 ## 1. The defect, exactly
@@ -76,7 +76,7 @@ bash this section first proposed. Four rounds of adversarial review changed it,
 and §5a is the complete record of what changed and why; the section title means
 what it says, so re-applying either block verbatim is safe. The check that keeps
 that true is mechanical: extract the two fenced `bash` blocks from this section
-and require each to appear verbatim in `infra/ccrc-portability/ccd`. Run it
+and require each to appear verbatim in `infra/<server-host>-portability/ccd`. Run it
 after any edit to either side.
 
 ```bash

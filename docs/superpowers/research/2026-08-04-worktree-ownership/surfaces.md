@@ -16,7 +16,7 @@ All line refs are from a full read of each file, at HEAD `5a943c5`.
 | Only callers of archive/restore | `pwa/src/session/PrSheet.tsx:198-215` | inside `pr?.phase === 'merged'` ONLY: `Restore` (:201-204) when `archived`, `Archive now` (:210-213) when not |
 | Client methods | `pwa/src/lib/api.ts:162-163` | `archive: (id) => post('/api/sessions/<id>/archive')`, `restore: …/restore` — both return `void`, both throw `ApiError` |
 | Routes | `server/src/server.ts:464-478` (`/archive`), `:480-491` (`/restore`) | `isSafeSessionId` → `knownId` → build `CCD_ARGV.wsArchive/wsRestore` → `verbSupported` else `501 {ok:false,error:'unsupported'}` → `runCcdOr502` (502 `{ok:false,stderr}`) |
-| ccd side | `../ccrc-portability/ccd:1290-1350` (`cmd_ws_archive`), `:1512+` (`cmd_ws_restore`) | refusals: `not a workspace…`, `worktree is gone: …`, `status-unknown`, `session-busy`, manifest-untruthful. **`already archived` is exit 0**, so a double tap is not an error. Destroys nothing. |
+| ccd side | `../<server-host>-portability/ccd:1290-1350` (`cmd_ws_archive`), `:1512+` (`cmd_ws_restore`) | refusals: `not a workspace…`, `worktree is gone: …`, `status-unknown`, `session-busy`, manifest-untruthful. **`already archived` is exit 0**, so a double tap is not an error. Destroys nothing. |
 
 ### The refresh question — there is none to write
 

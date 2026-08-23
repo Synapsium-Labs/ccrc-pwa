@@ -25,7 +25,7 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
 const view = (over: Partial<PrView> = {}): PrView => ({
   pr: pr(),
   draft: { title: 'the work', body: '## Commits\n\n- aaaaaaa the work\n' },
-  facts: { branch: 'ws/quiet-basin', baseShort: 'main', repo: 'you/custom-tools', commits: 3, dirty: 0 },
+  facts: { branch: 'ws/quiet-basin', baseShort: 'main', repo: 'example-org/example-repo', commits: 3, dirty: 0 },
   ...over,
 });
 
@@ -125,7 +125,7 @@ describe('none — the composer', () => {
 
   it('shows the facts line', async () => {
     open();
-    expect(await screen.findByText(/ws\/quiet-basin → main · you\/custom-tools · 3 commits/)).toBeInTheDocument();
+    expect(await screen.findByText(/ws\/quiet-basin → main · example-org\/example-repo · 3 commits/)).toBeInTheDocument();
   });
 
   it('warns about an uncommitted tree without blocking', async () => {

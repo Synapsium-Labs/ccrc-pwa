@@ -99,7 +99,7 @@
 
 - [x] Registration (after first passphrase login, behind the session gate): server issues a challenge; client `navigator.credentials.create` with `attestation:'none'`; client sends `getPublicKey()` SPKI + `getAuthenticatorData()` + the client-parsed alg; server stores `{credentialId, spkiDer, rpId, origin, signCount, enrolledAt}` — rpId/origin from `CCRC_RP_ID`/`CCRC_ORIGIN` config, RECORDED per credential so a 3b rename fails loudly ("enrolled for localhost — re-enroll"). Trust caveat documented (attestation none + behind-session-gate + single-user).
 - [x] Assertion: challenge → `navigator.credentials.get` → server verifies `createVerify('SHA256').verify(createPublicKey({key:spkiDer,format:'der',type:'spki'}), authenticatorData ‖ sha256(clientDataJSON), derSignature)`; checks rpIdHash, origin (full `https://host:port`), UP/UV flags, challenge, signCount monotonic; mints a session on success. Rate-limited (looser than passphrase — free CPU oracle otherwise).
-- [x] The PSL hazard recorded: rpId is the registrable domain (`tailnet-example.ts.net` or `<name>.duckdns.org`, never a bare public suffix); configured, not derived by label-stripping.
+- [x] The PSL hazard recorded: rpId is the registrable domain (`<tailnet>.ts.net` or `<name>.duckdns.org`, never a bare public suffix); configured, not derived by label-stripping.
 - [x] Mutations: accept a signature over the wrong message (red); accept a stale signCount (red — replay); wrong-origin assertion (red). Commit `feat(auth): passkeys with node:crypto — no CBOR, no library, origin-bound`.
 
 ### Task 9: `ccrc passwd`, the hashing helper, the doctor check

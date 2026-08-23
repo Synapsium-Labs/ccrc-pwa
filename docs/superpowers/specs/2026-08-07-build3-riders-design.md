@@ -229,7 +229,7 @@ these deltas (all verified by scout):
 
 | # | Delta | Consequence for the plan |
 |---|---|---|
-| 1 | Repo layout: `infra/ccrc/*` and `infra/ccrc-portability/ccd` → `server/*`, `ccd/ccd` | wholesale re-path; every spec line anchor re-derived (ccd anchors drift ~170 lines, server anchors listed in the scout report) |
+| 1 | Repo layout: `infra/ccrc/*` and `infra/<server-host>-portability/ccd` → `server/*`, `ccd/ccd` | wholesale re-path; every spec line anchor re-derived (ccd anchors drift ~170 lines, server anchors listed in the scout report) |
 | 2 | `KeyedQueue` is still local to `buildServer` (`server/src/server.ts:312`); watcher built first (`index.ts:61,63`) | the hoist the spec requires is still to do; the queue join count is now **seven** call sites, not six (four in `inject/send.ts`, two in `server.ts`, plus the rename) |
 | 3 | Flag-parsing idiom for the reshaped `ws-rename`: copy `cmd_ws_hold` (`ccd/ccd:1461-1490`), the newest and cleanest | replaces the spec's older references |
 | 4 | Newest whitelist/argv entries are `ws-hold`/`ws-release` — the table shapes to extend are theirs | `EXEC_WHITELIST.ccd` + `REQUIRED_VERB_FLAG` + `CCD_ARGV` + `CCD_VERB_TIMEOUT_MS` |

@@ -22,7 +22,7 @@ other three build on.
 Three independent facts, each of which alone stops a colleague from running it:
 
 1. **The test suite escapes the package tree.** Eight files under
-   `infra/ccrc/server/test/` reference `../../../ccrc-portability/`,
+   `infra/ccrc/server/test/` reference `../../../<server-host>-portability/`,
    reaching out of `ccrc/` into a sibling directory to exec the real `ccd`
    bash script. Extracting `ccrc/` alone breaks its own tests.
 2. **The runtime assumes an un-shipped dependency.** `server/src/config.ts:38`
@@ -48,8 +48,8 @@ Each of these is real work that belongs to a later spec. None of it happens
 here, and a reviewer should reject this work if any of it appears:
 
 - **No de-personalisation.** `FleetHostBanner.tsx:6` keeps saying "rp-llm".
-  `README.md` keeps naming `server-box.tailnet-example.ts.net` and
-  `you@203.0.113.7`. `agent/src/server.ts:58` keeps
+  `README.md` keeps naming `<server-host>.<tailnet>.ts.net` and
+  `you@<server-host>`. `agent/src/server.ts:58` keeps
   `DEFAULT_PROJECTS_ROOT = '/srv/projects'`. → Spec 1.
 - **No account-model change.** The eight hardcoded wrapper sites stay
   hardcoded. → Spec 1.
@@ -59,7 +59,7 @@ here, and a reviewer should reject this work if any of it appears:
 - **No installer.** `deploy/deploy.sh` moves across unchanged and keeps
   rsync-ing to a hardcoded box. → Spec 3.
 - **No deletion from the monorepo.** `infra/ccrc/` and
-  `infra/ccrc-portability/` stay exactly as they are, and remain the
+  `infra/<server-host>-portability/` stay exactly as they are, and remain the
   source of truth for the live deployment throughout.
 - **No deploy cutover.** Nothing deploys from `ccrc-pwa` in this spec.
 
@@ -80,13 +80,13 @@ stays limited to the repo owner until then.
 | `infra/ccrc/shared/` | `shared/` |
 | `infra/ccrc/deploy/` | `deploy/` |
 | `infra/ccrc/README.md` | `README.md` |
-| `infra/ccrc-portability/ccd` | `ccd/ccd` |
-| `infra/ccrc-portability/claude-session@.service` | `ccd/claude-session@.service` |
-| `infra/ccrc-portability/statusline-command.sh` | `ccd/statusline-command.sh` |
-| `infra/ccrc-portability/tmux.conf` | `ccd/tmux.conf` |
+| `infra/<server-host>-portability/ccd` | `ccd/ccd` |
+| `infra/<server-host>-portability/claude-session@.service` | `ccd/claude-session@.service` |
+| `infra/<server-host>-portability/statusline-command.sh` | `ccd/statusline-command.sh` |
+| `infra/<server-host>-portability/tmux.conf` | `ccd/tmux.conf` |
 
 305 files: 300 under `infra/ccrc/{server,agent,pwa,shared,deploy}`, plus
-`infra/ccrc/README.md`, plus the four `ccrc-portability` files below.
+`infra/ccrc/README.md`, plus the four `<server-host>-portability` files below.
 Roughly 4.4 MB of source, excluding `node_modules` and build output.
 
 **Why each of the four `ccd/` files is not optional:**
@@ -187,7 +187,7 @@ contain a literal path to the `ccd` script.
 ### The one test that does not move
 
 `server/test/ccd-ccclip.test.ts` (149 lines) references
-`../../../ccrc-portability/ccclip` at line 30. It runs `ccclip` for real,
+`../../../<server-host>-portability/ccclip` at line 30. It runs `ccclip` for real,
 supplying `pngpaste`, `mktemp`, `scp`, and `ssh` as exported bash functions
 because the script replaces `PATH` outright at its line 8 — a stub directory
 would be discarded, whereas functions resolve before `PATH` and survive.
@@ -216,7 +216,7 @@ single best defence against that.
 
 Path rewriting happens as part of the filter so history is continuous across
 the move: a `git log --follow` on `ccd/ccd` reaches back through
-`infra/ccrc-portability/ccd`.
+`infra/<server-host>-portability/ccd`.
 
 ## Verification protocol
 
@@ -330,7 +330,7 @@ not put there is a missing dependency. It is an executable test, so it cannot
 be satisfied by a green signal that nobody measured.
 
 Monorepo cleanup — deleting `infra/ccrc/` and the moved
-`infra/ccrc-portability/` files — happens after spec 3, once `ccrc-pwa`'s
+`infra/<server-host>-portability/` files — happens after spec 3, once `ccrc-pwa`'s
 install path has been proven on the operator's own box.
 
 ## Appendix — measured baseline

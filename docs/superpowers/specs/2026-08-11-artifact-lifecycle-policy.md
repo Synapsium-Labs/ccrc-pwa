@@ -410,7 +410,7 @@ Every class the three scouts found, reconciled. `pattern` is the assignment from
 | 19 | `~/.cc-secrets/*` | declared | out of scope | **O** operator-permanent | n/a | none | 16K / 3 files (existence+size only, contents never read) |
 | 20 | `~/.cc-limits/<wrapper>.json` | declared | `statusline-command.sh:161-167`, tmp+rename overwrite | **X** singleton-overwrite | overwritten in place | none | bounded by wrapper count (4-5), not session count |
 
-### A.2 — Server box (server-box, 203.0.113.7; `/` 150G, 102G used, 43G free = 71%)
+### A.2 — Server box (<server-host>, 203.0.113.7; `/` 150G, 102G used, 43G free = 71%)
 
 | # | class | creator (file:line) | pattern | current deleter | gap vs policy | measured today |
 |---|---|---|---|---|---|---|

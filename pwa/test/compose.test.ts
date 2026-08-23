@@ -4,8 +4,8 @@
 import { describe, expect, it } from 'vitest';
 import { composePrompt, splitClipPaths, CLIP_PATH_RE } from '../../shared/api';
 
-const P1 = '/home/you/.cc-clips/claude2-OpenClawHetzner/clip-20260726-150340-a1b2.png';
-const P2 = '/home/you/.cc-clips/claude2-OpenClawHetzner/clip-20260726-150341-c3d4.jpg';
+const P1 = '/home/you/.cc-clips/claude2-demo-app-ts/clip-20260726-150340-a1b2.png';
+const P2 = '/home/you/.cc-clips/claude2-demo-app-ts/clip-20260726-150341-c3d4.jpg';
 
 describe('composePrompt', () => {
   it('puts each attachment on its own line above the text', () => {

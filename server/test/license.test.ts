@@ -127,7 +127,12 @@ describe('README states the notice, since no source file does', () => {
 });
 
 describe('the release owner (S1)', () => {
-  const OLD_ORG = 'example-org';
+  // BASE64, the same residue idiom `topology-clean.test.ts` uses and for the
+  // same reason: this assertion has to NAME the org it forbids, so spelling it
+  // verbatim would make the enforcing test the tree's last plaintext copy —
+  // and `topology-clean`'s operator-residue class, which bans exactly this
+  // token everywhere, would red on the file enforcing its absence.
+  const OLD_ORG = Buffer.from('RXhwb1BsYXRmb3JtLUx0ZA==', 'base64').toString('utf8');
   const OWNER = /^CCRC_RELEASE_OWNER="([^"]+)"$/m;
 
   it.each(['install.sh', 'ccd/ccrc'])('%s builds its release URL from the ruled owner', (f) => {

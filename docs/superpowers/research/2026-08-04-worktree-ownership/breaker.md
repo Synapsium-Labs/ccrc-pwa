@@ -1,7 +1,7 @@
 # Adversarial review — worktree adoption + child descent (D1–D5)
 
 Sources read (not summarised from memory):
-`/srv/projects/OpenClawHetzner/infra/ccrc-portability/ccd` (5,439 lines),
+`/srv/projects/OpenClawHetzner/infra/<server-host>-portability/ccd` (5,439 lines),
 `infra/ccrc/server/src/{lifecycle,fleet,registry,watch,wsaudit,server,ccdargv}.ts`,
 `infra/ccrc/agent/src/whitelist.ts`, `infra/ccrc/shared/api.ts`.
 
@@ -21,7 +21,7 @@ creates is the state that already exists:
 custom-tools/.gitignore:18  .worktrees/
 custom-tools/.gitignore:21  .claude/worktrees/
 rp-llm/.gitignore:59,63     .worktrees/ , .claude/worktrees/
-orchard-api:16      .claude/worktrees/
+acme-platform-ts:16      .claude/worktrees/
 intake-platform:17,20       .worktrees/ , .claude/worktrees/
 data-internal:42            .worktrees/
 synapsium-platform:45,51    .worktrees/ , .claude/*
@@ -139,12 +139,12 @@ overriding.
 
 ```
 data-internal 116   rp-llm 20   MekWarLive 7
-custom-tools 0   orchard-api 0   synapsium-platform 0   intake-platform 0   OpenClawHetzner 0
+custom-tools 0   acme-platform-ts 0   synapsium-platform 0   intake-platform 0   OpenClawHetzner 0
 ```
 
 So in `data-internal`, `rp-llm` and `MekWarLive` **every session that has ever had a child worktree
 becomes permanently un-reapable**, with a refusal whose remedy ("move them") means "delete your
-repository's committed migrations". Meanwhile in `custom-tools` / `orchard-api` /
+repository's committed migrations". Meanwhile in `custom-tools` / `acme-platform-ts` /
 `intake-platform` the guard does not fire — which is precisely why F1 is reachable there.
 
 The guard is inverted from its purpose: it refuses on the projects where deletion is *safe* and

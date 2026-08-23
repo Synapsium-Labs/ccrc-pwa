@@ -1292,11 +1292,18 @@ _check_exposure() {
       gaps+=("its mode is ${mode:-unreadable}, not 0600 — the DuckDNS token must never be world-readable")
     fi
   fi
-  local origin rpid
+  local origin rpid expmode
   origin="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_ORIGIN)"
   rpid="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_RP_ID)"
+  expmode="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_EXPOSE_MODE)"
   [ -n "$origin" ] || gaps+=("CCRC_ORIGIN is empty or absent")
-  [ -n "$rpid" ] || gaps+=("CCRC_RP_ID is empty or absent")
+  # No rp id is OWED on mode ip (stage 5, S10): an rpId must be a domain, so
+  # `ccrc expose ip` deliberately writes none and the gate runs passphrase-
+  # only — failing that box on the key its own verb refuses to write would
+  # make every ip exposure permanently red.
+  if [ "$expmode" != ip ]; then
+    [ -n "$rpid" ] || gaps+=("CCRC_RP_ID is empty or absent")
+  fi
   # ── D-167: exposed means BEHIND the proxy, and that is a bind, not a wish ─
   # Caddy proxies to 127.0.0.1:<port>. A server bound to one non-loopback
   # address answers caddy with nothing, and every public request becomes a
@@ -1341,7 +1348,11 @@ _check_exposure() {
       "re-run: ccrc expose duckdns (or: ccrc expose byo) — it rewrites $CCRC_EXPOSURE_FILE 0600 with both keys; the server reads the file as written, so a gap here is a box whose auth origin is half-set. A CCRC_HOST gap is the other file: set CCRC_HOST=127.0.0.1 in $BOX_ENV_FILE (or delete the line — that is the default) and restart: systemctl --user restart ccrc.service"
     return 1
   fi
-  _dr_pass exposure "configured — CCRC_ORIGIN=$origin (rp id: $rpid)$modesaid"
+  if [ "$expmode" = ip ]; then
+    _dr_pass exposure "configured — CCRC_ORIGIN=$origin (mode ip: no rp id — passphrase login only)$modesaid"
+  else
+    _dr_pass exposure "configured — CCRC_ORIGIN=$origin (rp id: $rpid)$modesaid"
+  fi
 }
 
 # ── caddy: the SYSTEM unit the D2 ceremony was supposed to arm ────────────
@@ -1445,18 +1456,19 @@ _check_caddyfile() {
 # knob exists: a wedged listener holding :443 without answering is precisely a
 # box this check will be run on.
 _check_cert() {
-  if [ -z "${CCRC_EXPOSURE_FILE:-}" ] || ! declare -F _box_env_value >/dev/null 2>&1; then
-    _dr_fail cert "ccrc's own exposure-file constant is not loaded, so the served certificate was never read" \
-      "this is a bug in ccrc, not a fact about your box — _check_cert reads CCRC_EXPOSURE_FILE through _box_env_value, both declared once in ccrc itself, and this check table was sourced by something that is not ccrc"
+  if [ -z "${CCRC_EXPOSURE_FILE:-}" ] || [ -z "${CCRC_CADDY_ROOT_CA:-}" ] || ! declare -F _box_env_value >/dev/null 2>&1; then
+    _dr_fail cert "ccrc's own exposure constants are not loaded, so the served certificate was never read" \
+      "this is a bug in ccrc, not a fact about your box — _check_cert reads CCRC_EXPOSURE_FILE (through _box_env_value) and CCRC_CADDY_ROOT_CA, all declared once in ccrc itself, and this check table was sourced by something that is not ccrc"
     return 1
   fi
   if [ ! -e "$CCRC_EXPOSURE_FILE" ]; then
     _dr_skip cert "no exposure configured (no $CCRC_EXPOSURE_FILE), so there is no certificate this box is supposed to be serving"
     return 3
   fi
-  local origin host
+  local origin host expmode
   origin="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_ORIGIN)"
   host="${origin#https://}"
+  expmode="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_EXPOSE_MODE)"
   if [ -z "$host" ] || [ "$host" = "$origin" ]; then
     # No https:// origin means no name to put in SNI. The exposure check owns
     # that finding (it FAILs on the missing key); a second verdict here would
@@ -1482,14 +1494,20 @@ _check_cert() {
       case " ${cert_cands[*]} " in *" $cip "*) ;; *) cert_cands+=("$cip") ;; esac
     done
   fi
+  # SNI carries the origin's HOST — except on mode ip (stage 5, S10), where
+  # the origin is a bare address and RFC 6066 says a server_name is a
+  # hostname, never a literal IP: the probe goes without the extension, the
+  # same shape a browser sends to https://<ip>.
+  local -a sni=()
+  [ "$expmode" = ip ] || sni=(-servername "$host")
   local pem="" rc=1 addr="" cert_timed_out=""
   for addr in "${cert_cands[@]}"; do
     if command -v timeout >/dev/null 2>&1; then
-      pem="$(timeout "$CCRC_DOCTOR_GH_TIMEOUT" openssl s_client -connect "$addr:443" -servername "$host" </dev/null 2>/dev/null)"; rc=$?
+      pem="$(timeout "$CCRC_DOCTOR_GH_TIMEOUT" openssl s_client -connect "$addr:443" ${sni[@]+"${sni[@]}"} </dev/null 2>/dev/null)"; rc=$?
     else
       # gh_auth's trade: a box without coreutils' `timeout` still gets an
       # answer, just without a deadline.
-      pem="$(openssl s_client -connect "$addr:443" -servername "$host" </dev/null 2>/dev/null)"; rc=$?
+      pem="$(openssl s_client -connect "$addr:443" ${sni[@]+"${sni[@]}"} </dev/null 2>/dev/null)"; rc=$?
     fi
     [ "$rc" -eq 124 ] && cert_timed_out="$addr"
     [ "$rc" -eq 0 ] && [ -n "$pem" ] && break
@@ -1513,6 +1531,20 @@ _check_cert() {
         "whatever holds :443 is probably not caddy — see the caddy check above, and look at what is listening: sudo ss -tlnp 'sport = :443'"
       return 1 ;;
   esac
+  # ── mode ip (stage 5, S10): the chain is caddy's INTERNAL CA, by design ──
+  # Presence is proven (a completed handshake and a parseable certificate —
+  # the leaf's subject is empty on an internal cert, the address rides the
+  # SANs, so presence IS the measurement), and the honest verdict is a
+  # standing WARN, never PASS-green and never FAIL: the chain is not publicly
+  # trusted until each device has done the trust ceremony once. The 14-day
+  # floor below is skipped deliberately — the internal leaf renews every 12
+  # HOURS, so the floor would cry "renewal is failing" forever on a box
+  # working exactly as built.
+  if [ "$expmode" = ip ]; then
+    _dr_warn cert "$addr:443 serves a certificate for $host from caddy's internal CA (mode ip) — the chain is not publicly trusted, by design: a local root signs it and nothing leaves the box" \
+      "the trust ceremony, once per device: on this box run 'sudo caddy trust'; for phones, install $CCRC_CADDY_ROOT_CA (iOS: Settings > General > VPN & Device Management, then General > About > Certificate Trust Settings; Android: Settings > Security > Encryption & credentials > Install a certificate > CA certificate)"
+    return 2
+  fi
   # GNU date turns openssl's own `notAfter=` spelling into an epoch; guarded
   # like every other external tool this file cannot do without. A cert that IS
   # being served but cannot be dated is a WARN, not a FAIL — nothing measured
@@ -1548,25 +1580,11 @@ _check_cert() {
 # at all — its interfaces hold RFC1918 space — and for it resolution alone is
 # the whole measurement, not a mismatch.
 
-# A GLOBAL IPv4 — the only interface address worth comparing a public DNS
-# record against. Private (RFC1918), loopback and link-local are what a NAT'd
-# box carries, and a "mismatch" against those would fail every home box
-# forever. IPv6 is deliberately not classified: the duckdns updater's empty
-# `ip=` writes an A record.
-_dr_ip4_global() {
-  case "$1" in
-    ''|*[!0-9.]*) return 1 ;;
-    10.*|127.*|169.254.*|192.168.*) return 1 ;;
-    172.1[6-9].*|172.2[0-9].*|172.3[01].*) return 1 ;;
-    # CGNAT 100.64/10 (RFC 6598) — tailscale's own address range, so on
-    # this project's fleet topology a wildcard here is not hypothetical:
-    # counting 100.x as global made _check_name WARN "propagation lag" forever
-    # on every tailscale box behind NAT (branch review, 2026-08-21).
-    100.6[4-9].*|100.[7-9][0-9].*|100.1[01][0-9].*|100.12[0-7].*) return 1 ;;
-    *.*.*.*) return 0 ;;
-    *) return 1 ;;
-  esac
-}
+# `_dr_ip4_global` — the global-IPv4 classifier `_check_name` compares DNS
+# records with — now lives in `ccd/ccrc` (stage 5, Task 7): `cmd_expose`'s ip
+# arm measures the box's own address through the same classifier, and this
+# table never runs without ccrc loaded first — sourced-by-ccrc is already its
+# standing premise (`_box_env_value`, and every check's own loaded-guard).
 
 _check_name() {
   if [ -z "${CCRC_EXPOSURE_FILE:-}" ] || [ -z "${CCRC_DDNS_UNIT:-}" ] || ! declare -F _box_env_value >/dev/null 2>&1; then
@@ -1576,6 +1594,13 @@ _check_name() {
   fi
   if [ ! -e "$CCRC_EXPOSURE_FILE" ]; then
     _dr_skip name "no exposure configured (no $CCRC_EXPOSURE_FILE), so there is no public name to resolve"
+    return 3
+  fi
+  # Mode ip (stage 5, S10) has NO name — that is the point of the arm. It has
+  # to be said in its own words: the BYO skip below asserts a domain, and a
+  # box exposed on its bare address deliberately does not have one.
+  if [ "$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_EXPOSE_MODE)" = ip ]; then
+    _dr_skip name "mode ip — this box is exposed on its bare address, so there is no DNS name to resolve (no third party involved is the design)"
     return 3
   fi
   local provider domain

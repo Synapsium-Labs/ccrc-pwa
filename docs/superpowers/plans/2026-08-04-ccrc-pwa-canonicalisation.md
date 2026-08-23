@@ -5,11 +5,11 @@
 > host **openclaw** (198.51.100.7) — the box that runs `ccrc-agent.service`,
 > `claude-docserver.service`, and all `claude-session@*` units including you.
 > The ccrc **server** (`ccrc.service`, port 7788) and the served PWA live on
-> **server-box** (203.0.113.7). Execute the phases IN ORDER; each has a
+> **<server-host>** (203.0.113.7). Execute the phases IN ORDER; each has a
 > "prove it" step whose expected output is stated. Where a step says
 > **CONFIRM**, ask the operator in your session and wait.
 
-**Goal:** make `example-org/ccrc-pwa` the canonical repo for all ccrc
+**Goal:** make `example-corp/ccrc-pwa` the canonical repo for all ccrc
 work; migrate the in-flight work; flip the deploy source; freeze and then
 clear the monorepo copy. Ratified decisions (2026-08-04): port the ccclip
 test; move the 26 ccrc docs here; enable branch protection; the worktree
@@ -94,17 +94,17 @@ for now; protection is not yet on)
      `server/dist-pwa/index.html`.
    - Rollback prep: in the monorepo `git tag pre-ccrc-freeze` (push the
      tag); on this box `cp ~/.local/bin/ccd ~/.local/bin/ccd.pre-flip`;
-     back up the agent's deployed dist dir; note the server-box server dist
+     back up the agent's deployed dist dir; note the <server-host> server dist
      backup as part of the deploy script's first flipped run.
 8. **CONFIRM with the operator, then deploy from THIS repo.** Order is
    load-bearing (the 113-second lesson — the agent caches `ccd caps` at
    boot): install ccd FIRST, then restart `ccrc-agent`, then the server on
-   server-box.
+   <server-host>.
 9. Prove it, all five, and report the outputs verbatim:
    - `~/.local/bin/ccd caps` lists the full verb set;
    - agent `/health` on :7789 ok AFTER its restart, and the PWA's session
      sheet no longer shows any "does not have this verb" state;
-   - server `/health` on server-box:7788 ok; served PWA bundle is the one
+   - server `/health` on <server-host>:7788 ok; served PWA bundle is the one
      built in step 6 (compare a content hash, not a timestamp);
    - a PR-state read through the PWA returns real state (known truth at
      writing: `data-internal-clear-mesa` → merged #157; re-verify against
@@ -121,15 +121,15 @@ for now; protection is not yet on)
     with a tombstone (canonical repo URL, the tag name, the date), and add a
     CI guard workflow (~15 lines) that FAILS any PR/push whose diff touches
     `infra/ccrc/**` or the four frozen portability files
-    (`infra/ccrc-portability/{ccd,claude-session@.service,statusline-command.sh,tmux.conf}`).
-    The other ten `ccrc-portability` files (ccclip, hammerspoon,
+    (`infra/<server-host>-portability/{ccd,claude-session@.service,statusline-command.sh,tmux.conf}`).
+    The other ten `<server-host>-portability` files (ccclip, hammerspoon,
     docserver, hardening, etc.) are NOT ccrc and stay live.
 11. **Prove the guard red once**: a scratch branch touching one guarded path
     must fail the check; then delete the scratch. A guard never seen red is
     the green-signal failure class this project keeps paying for.
 12. Docserver: add `{"label":"ccrc-pwa","root":"/srv/projects/ccrc-pwa"}`
     to `~/.claude-docserver/config.json` (hot-reloads on mtime). Prove it by
-    fetching `https://server-box.tailnet-example.ts.net/docs/ccrc-pwa/specs/2026-08-04-worktree-ownership-design.md`
+    fetching `https://<server-host>.<tailnet>.ts.net/docs/ccrc-pwa/specs/2026-08-04-worktree-ownership-design.md`
     and grepping the response for "Worktree ownership" — NEVER by status
     code (the SPA answers 200 for everything). If the tailnet name does not
     resolve from here, report which name does (`tailscale status`); the
@@ -140,7 +140,7 @@ for now; protection is not yet on)
 13. On a monorepo branch, delete: `infra/ccrc/` entirely; the four frozen
     portability files; the 26 moved docs. Update the two references outside
     those trees (`.gitignore`, `scratch/*` test helpers — grep
-    `infra/ccrc\|ccrc-portability` to catch strays). The CI guard from
+    `infra/ccrc\|<server-host>-portability` to catch strays). The CI guard from
     Phase D will fire on this PR by design — grant it the one documented
     exception (path-delete-only diff) or gate the guard's introduction to
     merge after this PR; state which you chose in the PR body.
@@ -162,9 +162,9 @@ for now; protection is not yet on)
 16. Enable branch protection on `ccrc-pwa` main via `gh api`: required
     status checks = the exact job names in `.github/workflows/ci.yml`
     (read them, don't guess), dismiss-stale off, enforce for admins on;
-    `gh api -X PATCH repos/example-org/ccrc-pwa -f delete_branch_on_merge=true`.
+    `gh api -X PATCH repos/example-corp/ccrc-pwa -f delete_branch_on_merge=true`.
     From this point every change here goes via PR — including yours.
-17. Prove it: `gh api repos/example-org/ccrc-pwa/branches/main/protection`
+17. Prove it: `gh api repos/example-corp/ccrc-pwa/branches/main/protection`
     returns the config (was 404 on 2026-08-04); a direct push to main is
     refused.
 
@@ -193,5 +193,5 @@ for now; protection is not yet on)
   neither walk — never cite the manifest as proof about those.
 - Modes: `git ls-files -s` comparison (was identical, 2026-08-04).
 - Commit window: `git -C <mono> log d2c4ba0..HEAD -- infra/ccrc
-  infra/ccrc-portability` — empty on 2026-08-04; if non-empty at
+  infra/<server-host>-portability` — empty on 2026-08-04; if non-empty at
   execution time, STOP and report the drift before any phase runs.

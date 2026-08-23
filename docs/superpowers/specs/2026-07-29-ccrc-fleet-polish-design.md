@@ -19,7 +19,7 @@ Captured from the live PWA at `203.0.113.7:7788` on 2026-07-29, phone viewport
 .proj-card-toggle 208 ×  44      (header row)
 .sess-line        367 ×  44      (one session)
 .proj-card-add    151 ×  44      ← 41% of the header's width
-.proj-add-acct    118 ×  17      "alt·max · 99% free"
+.proj-add-acct    118 ×  17      "team·alt · 99% free"
 .fleet-list             1158     document 1428
 ```
 
@@ -40,7 +40,7 @@ Nine sessions, `GET /api/fleet`, 2026-07-29:
 |---|---|---|---|---|---|
 | custom-tools | `custom-tools-9a` | `feat/mirror-heartbeats-to-da…` | null | claude-corp | claude-corp |
 | data-internal | `data-internal-7a` | `feat/surface-and-accounts-fi…` | null | claude-corp | claude-corp |
-| orchard-api | `frontend-ui-foundation-39` | `feat/company-enquiry` | null | claude | claude |
+| acme-platform-ts | `frontend-ui-foundation-39` | `feat/company-enquiry` | null | claude | claude |
 | intake-platform | `add-mcp-image-attachments` | `feat/board-phase-1` | null | claude-corp | claude-corp |
 | rp-llm | `rp-llm-98` | `main` | null | claude2 | claude2 |
 | synapsium-platform | `synapsium-platform-3a` | `main` | null | claude | claude |
@@ -167,14 +167,14 @@ least true.
 Two of the nine sessions are running in worktrees:
 
 ```
-frontend-ui-foundation-39   .../orchard-api/.claude/worktrees/frontend-ui-foundation
+frontend-ui-foundation-39   .../acme-platform-ts/.claude/worktrees/frontend-ui-foundation
 add-mcp-image-attachments   .../intake-platform/.claude/worktrees/board-phase-1
 ```
 
 Both have `workspace: null`, because ccrc derives `workspace` from ccd's
 `WORKTREES_ROOT` and these live under Claude Code's own `.claude/worktrees/`.
 So the fleet renders each as if it were the project's main checkout — the
-`orchard-api` card claims a lone main session that is really a feature
+`acme-platform-ts` card claims a lone main session that is really a feature
 worktree.
 
 **Not fixed in this pass, but recorded**: the label chain above already makes
@@ -213,7 +213,7 @@ elsewhere) fall through to `branch` exactly as today. No row ever loses a label.
 ### The header's projection clips in the desktop sidebar
 
 `.proj-card-add` is **151px of a 208px header** — 41% — and `.proj-add-acct`
-inside it renders `alt·max · 99% free`. In the desktop sidebar
+inside it renders `team·alt · 99% free`. In the desktop sidebar
 (`clamp(300px, 25vw, 380px)`) it runs past the pane edge and is sliced
 mid-character on every card.
 
@@ -223,7 +223,7 @@ The hierarchy work added a container query intended to fix this, but it drops
 
 ### The same string renders nine times
 
-`+ alt·max · 99% free` is identical on every card, because the projection is
+`+ team·alt · 99% free` is identical on every card, because the projection is
 global — it is where the *next* workspace would land, and that does not vary by
 project. Nine copies of one fact, at 118px of vertical each, is the loudest
 redundancy on the screen.
@@ -275,7 +275,7 @@ letter of "never hide the account chip" held; its purpose did not.
 
 ```
 ●  feat/mirror-heartbeats-to-datadog                    ···
-   working · 4/5 · team·shared
+   working · 4/5 · team·b
 ```
 
 Three grid children — lamp, label button, actions — with the meta cells in a

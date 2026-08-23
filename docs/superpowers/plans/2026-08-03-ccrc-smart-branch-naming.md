@@ -19,7 +19,7 @@
 - **The retry key is `<id>:<derived-branch>`** — the derived name, not the born slug. One attempt per (session, derived name), in memory, deliberately not durable.
 - **A refusal marks the pair attempted. An `unsupported` verb does NOT** — and the `verbSupported` check therefore runs **before** the stat probe is recorded, or a fleet that upgrades its ccd would skip the re-read of every transcript that had not changed since.
 - **A `ws-rename` refusal prints JSON on stdout and exits 0.** Only `ccd:1241` (`git branch -m … || die`) keeps a non-zero exit: it is a fault, not a refusal.
-- **`infra/ccrc/` is the live deploy source until spec 3.** Any change here also lands in `ccrc-pwa` (finding 4 of `2026-08-03-ccrc-pwa-findings-for-specs-1-3.md`). `infra/ccrc-portability/ccd` is not in that repo and is installed to `~/.local/bin/ccd` on the box by hand.
+- **`infra/ccrc/` is the live deploy source until spec 3.** Any change here also lands in `ccrc-pwa` (finding 4 of `2026-08-03-ccrc-pwa-findings-for-specs-1-3.md`). `infra/<server-host>-portability/ccd` is not in that repo and is installed to `~/.local/bin/ccd` on the box by hand.
 - **Mutation sweep the whole diff** — one literal mutant per added construct, full suite per mutant, sha256-verified restore between. Per `.superpowers/sdd/<plan>/CONSTRAINTS.md`.
 
 ---
@@ -28,7 +28,7 @@
 
 | file | responsibility | change |
 |---|---|---|
-| `infra/ccrc-portability/ccd` | `_ws_rename_refuse` + `cmd_ws_rename` (`:1153-1244`) | flags, exact arity, 13 refusal tokens, JSON success |
+| `infra/<server-host>-portability/ccd` | `_ws_rename_refuse` + `cmd_ws_rename` (`:1153-1244`) | flags, exact arity, 13 refusal tokens, JSON success |
 | `infra/ccrc/server/src/wsaudit.ts` | refusal-token → sentence map | +9 entries; `wsaudit.test.ts` enforces set equality against ccd's source |
 | `infra/ccrc/server/test/ccd-ws-rename.test.ts` | the verb's own suite (24 cases today) | rewrite the 19 `ws-rename` cases; +5 new |
 | `infra/ccrc/server/test/ccd-workspaces.test.ts` | `ws-rm` after a rename (`:479`) | the one positional caller left in the suite |
@@ -59,7 +59,7 @@ Seven test files gain one `KeyedQueue` import and one field each in Task 5; they
 ### Task 1: `ws-rename` joins ccd's new generation
 
 **Files:**
-- Modify: `infra/ccrc-portability/ccd:1153-1244` (`cmd_ws_rename`; `_ws_branch_valid` at `:1142-1151` is untouched, dispatch at `:5427` is untouched)
+- Modify: `infra/<server-host>-portability/ccd:1153-1244` (`cmd_ws_rename`; `_ws_branch_valid` at `:1142-1151` is untouched, dispatch at `:5427` is untouched)
 - Modify: `infra/ccrc/server/src/wsaudit.ts` (`SENTENCES`, `:17-98`)
 - Modify: `infra/ccrc/server/test/ccd-ws-rename.test.ts` (the `describe('ws-rename')` block; the `_ws_branch_valid` block is untouched)
 - Modify: `infra/ccrc/server/test/ccd-workspaces.test.ts:479`
@@ -591,7 +591,7 @@ Expected: PASS. `wsaudit.test.ts`'s `'the two sets are exactly equal'` is the on
 - [ ] **Step 8: Commit**
 
 ```bash
-git add infra/ccrc-portability/ccd infra/ccrc/server/src/wsaudit.ts infra/ccrc/server/test/ccd-ws-rename.test.ts infra/ccrc/server/test/ccd-workspaces.test.ts
+git add infra/<server-host>-portability/ccd infra/ccrc/server/src/wsaudit.ts infra/ccrc/server/test/ccd-ws-rename.test.ts infra/ccrc/server/test/ccd-workspaces.test.ts
 git commit -m "feat(ccd): ws-rename answers in JSON instead of dying on stderr
 
 Twelve prose refusals become twelve tokens on stdout at exit 0, plus a
@@ -2065,7 +2065,7 @@ Expected: clean. `server/test/typecheck-tests.test.ts` already covers `server/te
 
 - [ ] **Step 3: ccd is a shell script — lint it too**
 
-Run: `bash -n infra/ccrc-portability/ccd && shellcheck -S error infra/ccrc-portability/ccd || true`
+Run: `bash -n infra/<server-host>-portability/ccd && shellcheck -S error infra/<server-host>-portability/ccd || true`
 Expected: `bash -n` clean. shellcheck is advisory here (ccd predates it); a new *error* introduced by this diff is a finding.
 
 - [ ] **Step 4: Mutation sweep**

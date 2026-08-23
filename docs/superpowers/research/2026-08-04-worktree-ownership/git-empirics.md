@@ -730,7 +730,7 @@ original probe or this one.
 ### Design consequences checked against the real `ccd` (not just asserted)
 
 The report hedges its ccd consequences ("if it is `[ -n "$(git status --porcelain)" ]`").
-Re-opened `/srv/projects/OpenClawHetzner/infra/ccrc-portability/ccd`
+Re-opened `/srv/projects/OpenClawHetzner/infra/<server-host>-portability/ccd`
 (5439 lines) and grepped for every consumer:
 
 - **The dirty rung is exactly that shape.** `ccd:1078` `dirty=$(git -C "$workdir" status --porcelain 2>"$derrf")`, `ccd:1082` `[[ -z "$dirty" ]] || die "worktree not removed (uncommitted changes?)…"`. So E2's false positive is **real, not hypothetical**: any nested child worktree hard-blocks `ws-reap` on a healthy parent. E2's design consequence is **CONFIRMED against code**.

@@ -1512,7 +1512,7 @@ Ten registry rows, `.started` absent, `.hold` absent, no unit, live pane (pid 11
 
 1. **Only eight of the ten are frozen at spawn** (all mtime `2026-08-12 18:10:03.286368465`). `.prphase` and `.prcheckedat` are sweep-written and rewrite themselves every few minutes — I watched the mtime move 18:33:14 → 18:37:14 → 18:57:15. "Ten frozen rows" is not a usable detection signature.
 2. **The splash is still painted.** Not "idle at an empty prompt" — never advanced past first paint. `tmux capture-pane` shows `Claude Code v2.1.228` / `Fable 5 with xhigh effort · Claude API` / `~/worktrees/ccrc-pwa/swift-harbor` / `⚠ 2 MCP servers need authentication · run /mcp` after two days.
-3. **The statusline is missing three segments every healthy session carries.** swift-harbor: `👤 lab·dev0 │ 🤖 Fable 5 · xhigh │ ⎇ ws/swift-harbor │ 🎯 ccrc-pwa │ 💲 $0.0000`. Sibling `claude-ccrc-pwa`: `… │ ▓ ctx ███░░░░░ 35% │ 💲 $307.5516 │ +948 -67 │ ⏳ limits 5h ░░░░░ 1% · 7d ████░ 80%`. No `ctx`, no diff counts, no `limits` — a never-turned session is identifiable from one `capture-pane`, cheaper and earlier than any registry read.
+3. **The statusline is missing three segments every healthy session carries.** swift-harbor: `👤 team·d │ 🤖 Fable 5 · xhigh │ ⎇ ws/swift-harbor │ 🎯 ccrc-pwa │ 💲 $0.0000`. Sibling `claude-ccrc-pwa`: `… │ ▓ ctx ███░░░░░ 35% │ 💲 $307.5516 │ +948 -67 │ ⏳ limits 5h ░░░░░ 1% · 7d ████░ 80%`. No `ctx`, no diff counts, no `limits` — a never-turned session is identifiable from one `capture-pane`, cheaper and earlier than any registry read.
 
 The empty box's marker row is **measured** as `❯` + U+00A0: `od -c` on the captured row gives `342 235 257 302 240`. §4.6's premise about the empty box needs no experiment.
 
@@ -1533,7 +1533,7 @@ The empty box's marker row is **measured** as `❯` + U+00A0: `od -c` on the cap
 
 **"No `.hold`" understates it: there are zero holds fleet-wide,** across all 24 rows. No program currently claims any workspace. Absence of a hold on swift-harbor is not discriminating, and every "held" branch in this build is currently unexercised in production.
 
-**`claude-dev0` is right, but the operator never sees that string.** `~/.ccrc/accounts.json` maps it to the label **`lab·dev0`**, which is what the pane prints. Use the label wherever the spec describes what an operator will recognise. Separately, **the id prefix no longer implies the wrapper**: `claude2-expoAI-assistant` and `claude2-OpenClawHetzner` run on `claude`; `claude-corp-custom-tools` runs on `claude-dev0`. Any code or prose inferring an account from a session id is wrong on 3 of 24 rows today.
+**`claude-dev0` is right, but the operator never sees that string.** `~/.ccrc/accounts.json` maps it to the label **`team·d`**, which is what the pane prints. Use the label wherever the spec describes what an operator will recognise. Separately, **the id prefix no longer implies the wrapper**: `claude2-expoAI-assistant` and `claude2-OpenClawHetzner` run on `claude`; `claude-corp-custom-tools` runs on `claude-dev0`. Any code or prose inferring an account from a session id is wrong on 3 of 24 rows today.
 
 ### Registry `.branch` is stale — but less dangerously than one lens reported
 
@@ -1590,7 +1590,7 @@ One genuinely mixed-version path: `_dispatch_swap` runs `systemd-run … exec '$
 
 `SWEEP_CMD` (`deploy/deploy.sh:388-392`) runs `try-restart "claude-session@*"` then `verify-service.sh` per active unit, serially, aborting on the first failure. `verify-service.sh:60-61` sets `CCRC_VERIFY_SETTLE=3` and `CCRC_VERIFY_WINDOW=5`, so **8 s per unit × 18 = ~2.4 minutes** of verification on top of the restarts.
 
-Sessions survive: `KillMode=process` (`ccd/claude-session@.service:14`) plus `cmd_ensure`'s `_alive` early return (`ccd:7212-7219`) means the restarted supervisor attaches rather than respawns, and fires no SessionStart hooks. Evidence: tmux session `cc-claude-corp-orchard-api` was created 2026-08-09 19:28:04 and its supervisor's `ExecMainStartTimestamp` is 2026-08-12 20:04:41. Sharper still — the **tmux server itself** (pid 1569, started 2026-08-05 22:52:29, 12 s after boot) lives in `claude-session@claude-ccrc-pwa.service`'s cgroup and survived that unit's restart on 2026-08-14 13:22:30.
+Sessions survive: `KillMode=process` (`ccd/claude-session@.service:14`) plus `cmd_ensure`'s `_alive` early return (`ccd:7212-7219`) means the restarted supervisor attaches rather than respawns, and fires no SessionStart hooks. Evidence: tmux session `cc-claude-corp-acme-platform-ts` was created 2026-08-09 19:28:04 and its supervisor's `ExecMainStartTimestamp` is 2026-08-12 20:04:41. Sharper still — the **tmux server itself** (pid 1569, started 2026-08-05 22:52:29, 12 s after boot) lives in `claude-session@claude-ccrc-pwa.service`'s cgroup and survived that unit's restart on 2026-08-14 13:22:30.
 
 That last fact is the least-defended thing on the box. All 21 sessions are children of pid 1569, and 1569 sits in one session unit's cgroup. `KillMode=process` is the only thing between `try-restart 'claude-session@*'` and the death of the whole fleet's substrate — and **nothing pins it**: `grep -rn KillMode` returns the unit file, a comment in `deploy/deploy.sh:375`, and `agent/test/deploy-verify.test.ts:393`, which only *mentions* it in a comment. Meanwhile `deploy.sh:313` copies that unit file and `:364` `daemon-reload`s in the same run that sweeps, so a bad edit goes live and is exercised against 18 units with no window to notice. By this repo's own doctrine — "a comment is a request; a red suite is a mechanism" — that is not a guard.
 
@@ -1619,7 +1619,7 @@ Wave 1 changes `_spawn`, `cmd_ensure`'s ordering, adds `spawnstate` and a `ws-ad
 
 **Deploy (agent-first, human-run — every command mutates the live fleet):**
 
-5. `CCRC_SSH_KEY=$HOME/.ssh/your-key-b bash deploy/deploy.sh agent you@198.51.100.7`. **The host argument is not optional** — `deploy.sh:8,21` defaults `$BOX` to the *server* box, so a bare `deploy.sh agent` ships fleet artifacts to the wrong machine.
+5. `CCRC_SSH_KEY=$HOME/.ssh/<your-key> bash deploy/deploy.sh agent you@<fleet-host>`. **The host argument is not optional** — `deploy.sh:8,21` defaults `$BOX` to the *server* box, so a bare `deploy.sh agent` ships fleet artifacts to the wrong machine.
 6. Let the sweep run to completion: ~2.4 min of serial verification plus the restarts. A half-swept fleet is the mixed-version state this whole section is about.
 
 **Post-deploy verification (read-only, and required — the built-in gate cannot see any of it):**
@@ -1920,7 +1920,7 @@ Wave 4 must give the coordinator: `MailSummary.attempts`/`lastError` on `GET /ap
 | Live specimen | "`sweepPr` stamped `.prphase=no-commits` onto it at 06:59 on 2026-08-14… no longer invisible in one respect" | The `.prphase` inode's **birth is 2026-08-12 18:11:26 UTC — 83 s after workspace creation**, rewritten in place every sweep. It has been in `prStates` since minute two. Strike the "no longer" framing; the conclusion is unaffected. |
 | Live specimen | "ten registry rows" as a static signature | Ten, but only **eight** are frozen at spawn. `.prphase`/`.prcheckedat` mutate every few minutes, so "ten frozen rows" is not a detection signature. |
 | Live specimen | "a live tmux pane at an idle prompt" | Never advanced past first paint: the v2.1.228 splash and the MCP warning are still on screen after two days, and the statusline is missing `ctx`, diff counts and `limits`. Those absences detect it in one `capture-pane`. |
-| Live specimen | "on the `claude-dev0` lane" | Correct, but the operator sees the label **`lab·dev0`**. Also: the id prefix no longer implies the wrapper (3 of 24 rows). |
+| Live specimen | "on the `claude-dev0` lane" | Correct, but the operator sees the label **`team·d`**. Also: the id prefix no longer implies the wrapper (3 of 24 rows). |
 | Live specimen | "no `.hold`" | **Zero holds fleet-wide** across all 24 rows. Absence of a hold on swift-harbor is not discriminating. |
 | C1 | implies "fully-registered workspace with no session" does not exist | It exists today from another cause — 3 rows are `started=1`, tmux dead, no unit. Adopt-and-enable is the **wrong** repair for them. |
 | §1.4 | "`ExecRes` gains `killed?`/`signal?`" | **No type called `ExecRes` exists.** The sites are `ExecResult` (`server/src/exec.ts:3`), `asExecResult` (`server/src/remote/runner.ts:83-90`, which discards unknown fields), and `ccd()` (`lifecycle.ts:14`). Make `ExecResult.killed` **optional**; `CcdResult.killed` may be required. Also note `realRunner` passes no `timeout`, so `killed` is structurally false in `local` mode. |

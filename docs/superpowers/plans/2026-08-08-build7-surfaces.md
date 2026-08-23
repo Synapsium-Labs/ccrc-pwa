@@ -3051,8 +3051,8 @@ checkout --` and diffed clean.
 
 This ships fleet-host artifacts, so the order is not optional — and this time the agent arm also installs a skill and (if minted) a secret:
 
-1. `CCRC_SSH_KEY=~/.ssh/your-key-b bash deploy/deploy.sh agent you@198.51.100.7`
-2. `CCRC_SSH_KEY=~/.ssh/your-key-b bash deploy/deploy.sh`
+1. `CCRC_SSH_KEY=~/.ssh/<your-key> bash deploy/deploy.sh agent you@<fleet-host>`
+2. `CCRC_SSH_KEY=~/.ssh/<your-key> bash deploy/deploy.sh`
 
 - [ ] **Step 7: Verify the real thing**
 

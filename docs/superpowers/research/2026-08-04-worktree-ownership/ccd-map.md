@@ -1,6 +1,6 @@
 # ccd change-map — "worktree ownership": adoption, child worktrees, truthful archivedreason
 
-Target file: `/srv/projects/OpenClawHetzner/infra/ccrc-portability/ccd`
+Target file: `/srv/projects/OpenClawHetzner/infra/<server-host>-portability/ccd`
 (5,439 lines, single bash file). Every claim below carries a `ccd:LINE` cite.
 
 **Evidence labels used throughout**
@@ -693,7 +693,7 @@ untracked rather than ignored, and ccd counts untracked files (ccd:2735, ccd:107
 # Verification
 
 Adversarial pass, 2026-08-04. Method: every ccd cite re-opened against
-`/srv/projects/OpenClawHetzner/infra/ccrc-portability/ccd` at its committed
+`/srv/projects/OpenClawHetzner/infra/<server-host>-portability/ccd` at its committed
 state (`281d625`, 2026-08-02, working tree clean — so no drift excuse); the three load-bearing git
 measurements re-run from scratch on fresh fixtures (git 2.43.0, `GIT_CONFIG_GLOBAL=/dev/null`,
 no network, throwaway repos under `…/scratchpad/probes-verify/`, deleted after); consumer hunt
@@ -719,7 +719,7 @@ Read-only file check of every project under `/data/projects` that actually holds
 |---|---|---|
 | custom-tools | 1 | `.gitignore:21 .claude/worktrees/` **and** `.git/info/exclude:11 **/.claude/worktrees/` |
 | expoAI-assistant | 31 | `.gitignore:51 .claude/*` **and** `info/exclude:11` |
-| orchard-api | 1 | `.gitignore:16 .claude/worktrees/` **and** `info/exclude:11` |
+| acme-platform-ts | 1 | `.gitignore:16 .claude/worktrees/` **and** `info/exclude:11` |
 | intake-platform | 3 | `.gitignore:20 .claude/worktrees/` |
 | rp-llm | 2 | `.gitignore:63 .claude/worktrees/` |
 | MekWarLive | 0 | `.gitignore:120 .claude/*` **and** `info/exclude:12` |

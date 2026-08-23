@@ -35,6 +35,11 @@ exposure.env*
 .env*
 !*.example
 
+# The reference fleet's concrete values (addresses, user, key names) — the
+# Stage 5 sweep rewrote the tree to speak roles, and this operator-only file
+# is where the real values went so operations lose nothing (plan Task 8).
+deploy/reference-fleet.md
+
 # Local harness configuration. Was protected only by .git/info/exclude, which is
 # per-clone and travels with nobody — so the protection did not survive a fork.
 .claude/

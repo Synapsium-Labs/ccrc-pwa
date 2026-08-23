@@ -192,3 +192,44 @@ describe('the docs only name commands ccrc actually has', () => {
     }
   });
 });
+
+// ── the flip checklist agrees with the ruling that produced it ──────────────
+//
+// This exists because it already went wrong once. The checklist was written by
+// a parallel session as "Transfer ownership → the Synapsium-Labs org", which is
+// the opposite of operator ruling R-B (2026-08-23): a FRESH repo, precisely
+// BECAUSE a transfer carries `refs/pull/*` — 91 of them, pinned by GitHub
+// forever and untouched by any history rewrite. Getting this backwards is not a
+// wording slip; it is a one-way action that reintroduces the exact artefact the
+// ruling exists to avoid, and nobody would notice until after the fact.
+describe('the flip checklist', () => {
+  const CHECKLIST = 'docs/superpowers/plans/2026-08-23-stage5-flip-checklist.md';
+
+  it('exists where the plan says it does', () => {
+    expect(existsSync(join(REPO, CHECKLIST)), 'Task 11 produced no checklist').toBe(true);
+  });
+
+  it('says FRESH REPO, and says why', () => {
+    const c = read(CHECKLIST);
+    expect(c).toMatch(/fresh repo/i);
+    expect(c, 'the reason is the whole ruling — a transfer carries refs/pull/*')
+      .toMatch(/refs\/pull/);
+  });
+
+  it('does not instruct a transfer', () => {
+    // Prose may DISCUSS a transfer (the checklist explains why it was rejected).
+    // What must not survive is an instruction to perform one: GitHub's own
+    // control is "Transfer ownership", so that phrase as a step is the tell.
+    const c = read(CHECKLIST);
+    expect(c, 'the checklist still instructs the Transfer-ownership control')
+      .not.toMatch(/^\s*\d+\.\s+\*\*Transfer\b/m);
+    expect(c).not.toMatch(/Danger Zone[^\n]*Transfer ownership/);
+  });
+
+  it('carries the consequences a fresh remote has and a transfer would not', () => {
+    const c = read(CHECKLIST);
+    expect(c, 'no redirect from the old URL').toMatch(/redirect/i);
+    expect(c, 'the #NN references that will misresolve').toMatch(/misresolve|#NN/);
+    expect(c, 'branch protection does not come across').toMatch(/branch protection/i);
+  });
+});

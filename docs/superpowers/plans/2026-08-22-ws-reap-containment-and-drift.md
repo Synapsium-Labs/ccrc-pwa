@@ -472,8 +472,8 @@ The centre of mass is `ccd/`, so the fleet host ships first; the server reads wh
 `openclaw`, with the documented per-workstation overrides:
 
 ```bash
-CCRC_SSH_PORT=22 CCRC_SSH_KEY=$HOME/.ssh/your-key-b bash deploy/deploy.sh agent you@198.51.100.7
-CCRC_SSH_PORT=22 CCRC_SSH_KEY=$HOME/.ssh/your-key-b bash deploy/deploy.sh
+CCRC_SSH_PORT=22 CCRC_SSH_KEY=$HOME/.ssh/<your-key> bash deploy/deploy.sh agent you@<fleet-host>
+CCRC_SSH_PORT=22 CCRC_SSH_KEY=$HOME/.ssh/<your-key> bash deploy/deploy.sh
 ```
 
 The agent lane's gate is `ccd version`; the server lane's is `/health` reporting the shipped sha.

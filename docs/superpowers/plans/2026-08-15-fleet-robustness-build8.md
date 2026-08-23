@@ -10534,8 +10534,8 @@ are inline object literals in `pwa/test/lifecycle-ui.test.tsx`, and **they are i
   // `fleetSession` and `storeWith` are MODULE-PRIVATE in
   // `pwa/test/lifecycle-ui.test.tsx` — not exported, so they cannot be
   // imported. Reproduced here in the same shape (the roster is what makes the
-  // assertions readable: TEST_ROSTER resolves `claude` -> "alt·max" and
-  // `claude2` -> "team·shared"). Wave 1 adds `started`/`spawnState` to
+  // assertions readable: TEST_ROSTER resolves `claude` -> "team·alt" and
+  // `claude2` -> "team·b"). Wave 1 adds `started`/`spawnState` to
   // `FleetSession`; if this task lands after that wave, the compiler will name
   // them and they go in the literal below.
   const fakeSocket = () => ({ close: () => {}, send: () => {} }) as never;
@@ -10566,7 +10566,7 @@ are inline object literals in `pwa/test/lifecycle-ui.test.tsx`, and **they are i
       // The account it is on NOW and the account it goes BACK to are different
       // facts and the sheet must show both — before this task it showed only
       // the first, and the reader had no way to know the second existed.
-      expect(screen.getByText(/alt·max/)).toBeInTheDocument();      // home
+      expect(screen.getByText(/team·alt/)).toBeInTheDocument();      // home
       expect(screen.getByText(/temporary|returns/i)).toBeInTheDocument();
     });
 
@@ -10577,8 +10577,8 @@ are inline object literals in `pwa/test/lifecycle-ui.test.tsx`, and **they are i
       // irreversible-looking action that is in fact reversed for you.
       const s = fleetSession({ wrapper: 'claude', home: 'claude' });
       render(<SwapSheet session={s} open onClose={vi.fn()} fleet={storeWith([s])} />);
-      (await screen.findByRole('button', { name: /team·shared/ })).click();
-      expect(await screen.findByText(/back to alt·max/i)).toBeInTheDocument();
+      (await screen.findByRole('button', { name: /team·b/ })).click();
+      expect(await screen.findByText(/back to team·alt/i)).toBeInTheDocument();
     });
 
     it('does not claim a return when the session is already on its home account and stays there', () => {
@@ -10588,13 +10588,13 @@ are inline object literals in `pwa/test/lifecycle-ui.test.tsx`, and **they are i
       // it must name the account correctly rather than the current one.
       const s = fleetSession({ wrapper: 'claude', home: 'claude' });
       render(<SwapSheet session={s} open onClose={vi.fn()} fleet={storeWith([s])} />);
-      expect(screen.getByText(/home account is alt·max/i)).toBeInTheDocument();
+      expect(screen.getByText(/home account is team·alt/i)).toBeInTheDocument();
     });
 
     it('still lists every pickable target — honesty is not a restriction', () => {
       const s = fleetSession({ wrapper: 'claude', home: 'claude' });
       render(<SwapSheet session={s} open onClose={vi.fn()} fleet={storeWith([s])} />);
-      for (const label of ['team·shared', 'gpt']) {
+      for (const label of ['team·b', 'gpt']) {
         expect(screen.getByRole('button', { name: new RegExp(label) })).toBeInTheDocument();
       }
     });
@@ -13342,7 +13342,7 @@ line, then restore. Verify `git status` is clean. Record before/after counts.
 ```bash
 cd <worktree> && node <scratchpad>/restamp.mjs   # must print -> ccrc-unmodified
 git add ccd/ccd server/test/ccd-die-containment.test.ts server/test/ccdWsHelpers.ts
-git -c user.name="Mykyta Fastovets" -c user.email="m.fastovets@example.com" commit
+git -c user.name="Mykyta Fastovets" -c user.email="you@example.com" commit
 ```
 
 ---
@@ -13480,7 +13480,7 @@ confirm the structural case goes red. Report before/after counts; verify `git st
 ```bash
 cd <worktree> && node <scratchpad>/restamp.mjs   # must print -> ccrc-unmodified
 git add ccd/ccd server/test/ccd-arith-containment.test.ts
-git -c user.name="Mykyta Fastovets" -c user.email="m.fastovets@example.com" commit
+git -c user.name="Mykyta Fastovets" -c user.email="you@example.com" commit
 ```
 
 - [ ] **Step 8: pin `_spawn_start`'s failure mode, because the split installed a door (D-B8-4)**

@@ -315,7 +315,7 @@ is convention with a speed bump, named as exactly that.
 **Server gap, named honestly: this cannot be built server-side alone.** The
 server may write only `~/.cc-clips` on the fleet host
 (`agent/src/whitelist.ts:79-80`); `FleetIO` has no unlink at all. Creating or
-removing `$REG/coordinator-paused` from `server-box` requires a fleet-host
+removing `$REG/coordinator-paused` from `<server-host>` requires a fleet-host
 mutation that does not exist. The precedent is exact and recent: `ws-hold`/
 `ws-release` were granted as ccd verbs for the same reason and with the same
 argument — "registry-file writes/unlinks, non-destructive, and granting them
