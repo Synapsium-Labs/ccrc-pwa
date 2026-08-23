@@ -34,6 +34,77 @@ internal CA, vite PWA config.
 
 ---
 
+## Ledger allocations for this stage
+
+`origin/main`'s high-water at the time of writing is **D-188**. The Tasks 1/3/4 branch
+(`feat/stage5-oss-polish`) allocated **D-189…D-195** before it was pushed; that block is
+RESERVED even though it is not on `main` yet. This branch therefore starts at **D-196**.
+
+Two collisions were found and fixed while doing it, both of the kind CLAUDE.md warns about
+("check `origin/main` for landed D-numbers before allocating on a new branch"):
+
+- **D-171 was landed twice**, by PRs merged twenty minutes apart on 2026-08-23 — ws-reap's
+  "containment is no longer selected by `@{upstream}`" (#94, first) and this stage's
+  unanchored gitignore globs (#93, second). The later one renumbers: the gitignore
+  deviation is now **D-196**, at its three sites (`.gitignore`,
+  `server/test/gitignore-secrets.test.ts`, `server/test/install-coordinator-skill.test.ts`).
+- **D-172, D-173 and D-174 were re-used** by this branch while all three were already taken
+  on `main` by the same ws-reap plan — D-174 is pinned live by
+  `server/test/ccd-ws-audit.test.ts`. Renumbered to **D-197** (the roster-seed guard),
+  **D-198** (the owner-spelled-twice margin note) and **D-199** (the notify address chain).
+
+**Not fixed, and not this stage's to fix:** the ledger already carries older duplicate
+DEFINITIONS — `D-128` is defined by both `2026-08-20-regset-atomic-write.md` and
+`2026-08-20-stage3a-auth.md`, and a further ~11 numbers in the D-129…D-139 range are in the
+same state, residue of stage3a's descending renumber. A scanner over
+`^- \*\*D-N —` in the plans corpus would mechanise this, but it cannot ship green until
+those are reconciled, and pinning them in an exceptions list would be the same
+allowlist-shaped mistake this stage's Task 1 review already caught once. Recorded as
+follow-up, deliberately not papered over.
+
+
+## Operator rulings recorded during execution (2026-08-23)
+
+- **R-A — the roster labels (§5/S4).** *Neutralise the shipped defaults; the live boxes
+  keep their real labels.* `~/.ccrc/accounts.json` is user-owned and no deploy overwrites
+  it, so the reference fleet's own UI is unaffected by the sweep — nothing has to be
+  migrated, and no operator loses a label they read every day. Task 5 therefore renames
+  only what SHIPS (fixtures, defaults, examples); it does not touch a live box.
+
+- **R-B — the repository (§9 step 1).** *A FRESH repo under `Synapsium-Labs`, not a
+  transfer.* A transfer carries `refs/pull/*` — 91 of them, pinned by GitHub forever and
+  untouched by any history rewrite — into the public repo. A fresh remote does not, which
+  is the whole point. History is pushed across intact; only the pull refs are left behind.
+  Consequences to carry into Task 11:
+  - No GitHub redirect from the old URL. Both boxes' `origin` re-point by hand, and every
+    external link to the old repo dies rather than forwarding.
+  - Commit messages contain 97 distinct `#NN` references and the docs corpus another 102.
+    In the new repo those auto-link to whatever `#NN` eventually exists THERE, which is a
+    different PR — misresolution, not a dead link. Keep the `example-org` repo alive
+    and private as the archive so the real ones stay readable, and say so in the checklist.
+  - `example-org` becomes sweepable immediately (Task 8 step 3 no longer waits on a
+    transfer): 8 files, plus `server/test/license.test.ts`'s own pin.
+
+- **R-C — the copyright string** stays `Synapsium Labs` (spaced) in notices, with
+  `Synapsium-Labs` (hyphenated) as the GitHub owner literal. Both are already shipped and
+  pinned; this records that the pairing is deliberate, not a typo one of them.
+
+## Deviations from the spec taken during execution
+
+- **§5's "refuse without `CCRC_ACCOUNTS_JSON`" is NOT what shipped.** The spec called for
+  removing the roster default; PR #96 landed the better cure first — keep a default but
+  make it neutral (`deploy/accounts.default.json`, one upstream `claude`) so a fresh box
+  still deploys without ceremony. A competing "no default, refuse" commit on
+  `feat/stage5-flip-prep` was dropped in favour of it. What the drop leaves behind is
+  pinned in `server/test/deploy-env-guard.test.ts`: the migration roster can never be the
+  fallback again, the resolution line must exist at all, and — the part neither cure had —
+  the default roster FILE is constrained to exactly one `claude`/`upstream` account,
+  because a permanent seed's hazard now lives in that file's contents rather than in a
+  shell default where a reviewer would see it change.
+
+
+---
+
 ### Task 1: The `topology-clean` ratchet suite
 
 **Files:**
@@ -54,7 +125,8 @@ internal CA, vite PWA config.
 - [ ] **Step 2: Run** `./node_modules/.bin/vitest run test/topology-clean.test.ts` —
   expect PASS (these classes were cleared 2026-08-22). If red, the tree regressed since
   the scan: fix the regression first, in its own commit.
-- [ ] **Step 3: Mutation-measure the walker** — temporarily plant `1.2.3.4` in a new doc
+- [ ] **Step 3: Mutation-measure the walker** — temporarily plant a routable public IPv4
+  literal (not one of the RFC 5737 documentation ranges) in a new doc
   line, expect 1 red; revert (never `git checkout` a file with uncommitted work — revert
   by editing).
 - [ ] **Step 4: Commit** `test(topology): the ratchet lands — public-IP, session-id and
@@ -76,10 +148,27 @@ internal CA, vite PWA config.
   verbatim AGPL-3.0; the copyright notice `Copyright (C) 2026 Synapsium Labs` appears in
   README's licence section (add it if #93 left it out — its body argued notice-with-the-
   program); `CCRC_RELEASE_OWNER="Synapsium-Labs"`.
-- [ ] **Step 2:** Red-first: add to `single-definition.test.ts` the pin that the literal
+- [x] **Step 2:** Red-first: add to `single-definition.test.ts` the pin that the literal
   `Synapsium-Labs` (as an owner/org value) is DEFINED once in `install.sh` — a second
   definition elsewhere is red. Run; if #93 already added an equivalent pin, skip with a
   comment in the plan margin.
+  > **Margin (2026-08-23, D-198).** Taken with one stated deviation: the owner is spelled
+  > **twice**, not once, and the pin enforces *exactly two declarations and no third*.
+  > `install.sh` is the `curl | bash` bootstrap — it runs on a box with no ccrc and can
+  > source nothing — while `ccd/ccrc` is the installed tool that self-updates. Making
+  > either read the other would put a runtime file dependency under a constant that
+  > changes once in the project's life, and turn `ccrc update` into a refusal over a
+  > missing string. The property "define once" exists to buy is that they cannot
+  > disagree, and that is held three ways: `ccrc-update.test.ts` pins them equal,
+  > `license.test.ts` pins the previous org absent from shipping code, and this new pin
+  > forbids a third spelling in any bash file. Measured: a third spelling → 1 red; the
+  > owner inlined at a use site → 1 red.
+  >
+  > Also found and fixed while doing it: `install.sh` was **outside** the bash corpus
+  > `single-definition` scans (`bashRoots` was `ccd/` + `deploy/` only), so every
+  > "spelled once" rule in that file had been blind to the one script a stranger runs
+  > first. Adding it reds nothing that was passing — a strict improvement. Measured:
+  > removing it again → 2 red.
 - [ ] **Step 3:** `CONTRIBUTING.md` (one page: build/test commands per package, the
   mutation-table doctrine sentence, PR-only main) and `SECURITY.md` (private disclosure:
   the repo's Security tab / maintainer contact; no version matrix).

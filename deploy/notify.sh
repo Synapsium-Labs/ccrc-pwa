@@ -32,19 +32,61 @@ if [ -r "$TOKEN_FILE" ]; then
   tok="$(grep -v '^[[:space:]]*#' "$TOKEN_FILE" | grep -v '^[[:space:]]*$' | head -n1 | tr -d '[:space:]')"
 fi
 
-# Address resolution: CCRC_ADDR env > ~/.ccrc/ccrc.env's CCRC_HOST+CCRC_PORT >
-# the reference fleet's legacy IP (kept one generation so a hook shipped ahead
-# of the config file cannot go dark — same tolerance as the token above).
+# Address resolution: CCRC_ADDR env > ~/.ccrc/ccrc.env's CCRC_HOST+CCRC_PORT.
 # The env file is grepped, never sourced: it holds tokens (ccd/ccrc:355-380).
+#
+# CCRC_ADDR MAY CARRY A SCHEME (D-199), and on an exposed fleet it must. A box
+# put behind a reverse proxy binds the server to LOOPBACK — that is the point
+# of the proxy — at which point `host:port` from another machine reaches
+# nothing. Measured 2026-08-23: after the reference server moved to a loopback
+# bind, this hook's address answered `000` (connection refused) from the fleet
+# host, and because the curl below ends `|| true`, every swap notice had been
+# silently dropped with no error anywhere. An address with `://` is used
+# verbatim; a bare `host:port` keeps the plain-http shape it always had.
 ADDR="${CCRC_ADDR:-}"
+# THE FLEET HOST'S TIER, and the one that fixes the proxied case. This hook
+# runs on the FLEET box, which by design has no `~/.ccrc/ccrc.env` at all —
+# `_check_config`'s D-86 note is explicit that its absence there is correct,
+# not a gap. What that box does have is `agent.env`, and #89 already put the
+# server's address in it as `CCRC_SERVER_URL`, "the address the coordination
+# skills derive their HTTP API base from". Reusing it means the fleet box
+# learns where the server is exactly ONCE, and this hook stops being a second
+# thing to remember to provision. `ws(s)://` maps to `http(s)://` the same way
+# the skills map it.
+if [ -z "$ADDR" ] && [ -r "$HOME/.ccrc/agent.env" ]; then
+  ADDR="$(grep -E '^[[:space:]]*CCRC_SERVER_URL=' "$HOME/.ccrc/agent.env" | tail -n1 | cut -d= -f2- | tr -d '[:space:]')"
+  case "$ADDR" in
+    wss://*) ADDR="https://${ADDR#wss://}" ;;
+    ws://*)  ADDR="http://${ADDR#ws://}" ;;
+  esac
+fi
 if [ -z "$ADDR" ] && [ -r "$HOME/.ccrc/ccrc.env" ]; then
   _h="$(grep -E '^[[:space:]]*CCRC_HOST=' "$HOME/.ccrc/ccrc.env" | tail -n1 | cut -d= -f2- | tr -d '[:space:]')"
   _p="$(grep -E '^[[:space:]]*CCRC_PORT=' "$HOME/.ccrc/ccrc.env" | tail -n1 | cut -d= -f2- | tr -d '[:space:]')"
   [ -n "$_h" ] && [ -n "$_p" ] && ADDR="$_h:$_p"
 fi
-ADDR="${ADDR:-203.0.113.7:7788}"
 
-curl -fsS -m 5 -X POST "http://${ADDR}/api/notify" \
+# No address configured is a SILENT NO-OP, deliberately (D-199). The legacy
+# third tier here was the reference fleet's own IP, kept "one generation" so a
+# hook shipped ahead of its config could not go dark; it outlived that
+# generation and became a compiled-in address pointing at one operator's box —
+# which, on anyone else's install, is a POST of this fleet's activity to a
+# stranger's machine. Notify is best-effort by contract: a hook that cannot
+# resolve an address sends nothing rather than guessing one.
+# no address configured — notify is best-effort, silence is the contract
+[ -n "$ADDR" ] || exit 0
+# Only the BASE is resolved here; the path stays on the curl line below. Two
+# reasons, one of them measured: the endpoint being visible at the call site is
+# how a reader knows what this hook talks to, and `auth-passkey.test.ts`'s
+# consumer scan looks for a `/api/` path on a line that also says `curl` — a
+# URL fully assembled up here reads to it as "no consumer", which is exactly
+# the blind spot that scan exists to prevent. It caught this file mid-edit.
+case "$ADDR" in
+  *://*) BASE="${ADDR%/}" ;;
+  *)     BASE="http://${ADDR}" ;;
+esac
+
+curl -fsS -m 5 -X POST "$BASE/api/notify" \
   -H 'content-type: application/json' \
   ${tok:+-H "x-ccrc-mail-token: $tok"} \
   -d "$(jq -cn --arg m "$1" '{message:$m}')" >/dev/null 2>&1 || true

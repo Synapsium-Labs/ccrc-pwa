@@ -37,7 +37,7 @@ const SECRET_FILES = [
   'deploy/exposure.env',
 ];
 
-/** The same names ANYWHERE (D-171). The rules were `deploy/…` globs — which is
+/** The same names ANYWHERE (D-196). The rules were `deploy/…` globs — which is
  *  where the files really live, and exactly why that was wrong: a pattern
  *  carrying a slash matches one directory, so a copy at the repo root or under
  *  any other package was publishable while the .gitignore looked like it had

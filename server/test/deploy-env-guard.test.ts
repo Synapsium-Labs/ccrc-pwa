@@ -309,3 +309,57 @@ describe('deploy.sh and ccrc read an env file the same way', () => {
     expect(viaDeploy(home, 'CCRC_ORIGIN')).toBe('http://box:7788/health');
   });
 });
+
+// ── the roster a stranger's first deploy seeds, permanently (D-197) ─────────
+//
+// `deploy.sh` used to default `CCRC_ACCOUNTS_JSON` to
+// `deploy/accounts.migration.json` — the REFERENCE FLEET's five accounts,
+// carrying that operator's own labels. Seeding is first-install-only and
+// never overwritten (stage-2a §5: `~/.ccrc/accounts.json` is user-owned
+// config), so anyone else's very first deploy wrote five accounts they had
+// never heard of onto their box PERMANENTLY, removable only by hand over ssh.
+//
+// The cure that shipped (PR #96) keeps a default but makes it NEUTRAL:
+// `deploy/accounts.default.json`, a single upstream `claude`. That is the
+// better answer — `bash deploy/deploy.sh` works on a fresh box without
+// ceremony — but it moves the whole hazard into one file's CONTENTS. Nothing
+// stopped that file being edited back into somebody's real fleet, at which
+// point the original defect returns with no diff to deploy.sh to notice it.
+// So the assertions below pin BOTH halves: which file may be the default, and
+// what that file is allowed to contain.
+describe('deploy.sh: the seeded roster is neutral, or there is none', () => {
+  const src = (): string => readFileSync(DEPLOY_SH, 'utf8');
+
+  /** The default side of `ACCOUNTS_JSON="${CCRC_ACCOUNTS_JSON:-…}"`, or null
+   *  if deploy.sh no longer resolves the variable at all. */
+  function seedDefault(): string | null {
+    const m = /^ACCOUNTS_JSON="\$\{CCRC_ACCOUNTS_JSON:-([^}]*)\}"$/m.exec(src());
+    return m ? m[1] : null;
+  }
+
+  it('resolves CCRC_ACCOUNTS_JSON to either nothing or the neutral roster', () => {
+    const d = seedDefault();
+    expect(d, 'deploy.sh no longer resolves CCRC_ACCOUNTS_JSON — this guard is testing nothing').not.toBeNull();
+    expect(['', 'deploy/accounts.default.json']).toContain(d);
+  });
+
+  it('never falls back to a roster belonging to somebody', () => {
+    // The specific regression, by name, wherever it might be spelled: any
+    // expression that resolves the migration roster when nothing was named.
+    expect(src()).not.toMatch(/CCRC_ACCOUNTS_JSON:-[^}]*migration/);
+  });
+
+  it('the default roster is one upstream account — not a fleet', () => {
+    const d = seedDefault();
+    if (d === '') return; // no default: nothing is seeded, nothing to constrain
+    const roster = JSON.parse(readFileSync(join(REPO, d!), 'utf8')) as {
+      accounts: { id: string; exec: { kind: string } }[];
+    };
+    // Seeding is permanent. A default that grows past one generic account is
+    // one operator's fleet arriving on a stranger's box, which is the whole
+    // defect — restated as data instead of as a shell default.
+    expect(roster.accounts).toHaveLength(1);
+    expect(roster.accounts[0].id).toBe('claude');
+    expect(roster.accounts[0].exec.kind).toBe('upstream');
+  });
+});

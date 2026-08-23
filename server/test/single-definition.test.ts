@@ -15,7 +15,7 @@
 // bar is "a reasonable person adding a fourth copy in the ordinary way is
 // stopped before review", not "unforgeable".
 import { describe, it, expect } from 'vitest';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AUTH_VERDICTS, PR_REASONS, isPrReason } from '../../shared/api.js';
@@ -734,7 +734,13 @@ describe('one BuildInfo — the stamp shape and its field checks', () => {
 // remote-control flag), so the walk lives here rather than inside either — a
 // second copy of the scanner, in the file whose whole subject is second
 // copies, would be the joke this suite exists to prevent.
+// `install.sh` is a SHIPPED bash file at the repo root, and until Stage 5 it
+// sat outside this corpus entirely — so every "spelled once" rule below was
+// blind to the one script a stranger runs FIRST. It is listed explicitly
+// rather than by globbing the root, which would sweep up whatever else lands
+// there later.
 const bashRoots = [path.join(ccrcRoot, 'ccd'), path.join(ccrcRoot, 'deploy')];
+const bashExtra = [path.join(ccrcRoot, 'install.sh')].filter((f) => existsSync(f));
 const isBash = (p: string): boolean => {
   if (/\.(sh|bash)$/.test(p)) return true;
   if (/\.[A-Za-z0-9]+$/.test(p)) return false;   // .mjs/.service/.json/.conf …
@@ -749,7 +755,7 @@ const bashFiles = (dir: string): string[] => {
   }
   return out;
 };
-const BASH = bashRoots.flatMap(bashFiles);
+const BASH = [...bashRoots.flatMap(bashFiles), ...bashExtra];
 /** A bash line that is not a comment. Either path is discussed in prose all
  *  over these tools; only an actual line of shell is a reader or a writer. */
 const codeLines = (f: string): string[] =>
@@ -771,7 +777,7 @@ describe('one bash reader of ~/.ccrc/build.json', () => {
   // being prose.
   it('actually found the bash tools — a scan over an empty list passes everything', () => {
     for (const f of ['ccd/ccd', 'ccd/ccrc', 'ccd/ccrc-adopt', 'ccd/ccrc-doctor-checks',
-      'ccd/session-hook.sh', 'deploy/deploy.sh', 'deploy/verify-service.sh']) {
+      'ccd/session-hook.sh', 'deploy/deploy.sh', 'deploy/verify-service.sh', 'install.sh']) {
       expect(BASH.map(rel)).toContain(f);
     }
   });
@@ -1025,6 +1031,40 @@ describe('one /etc/caddy/Caddyfile, spelled once through CCRC_CADDY_SYSTEM_FILE'
     expect(code.filter((l) => l.includes(NEEDLE))).toEqual([
       'CCRC_CADDY_SYSTEM_FILE="${CCRC_CADDY_SYSTEM_FILE:-/etc/caddy/Caddyfile}"',
     ]);
+  });
+});
+
+// — Stage 5, Task 2 (S1): the release owner —
+describe('the release owner is spelled in exactly two declarations, and nowhere else', () => {
+  // The plan asks for the owner "DEFINED once in install.sh". It is spelled
+  // TWICE by necessity, and the difference is worth stating rather than
+  // glossing: `install.sh` is the curl|bash BOOTSTRAP — it runs on a box with
+  // no ccrc yet and can source nothing — while `ccd/ccrc` is the installed
+  // tool that later self-updates. Neither can read the other's value at the
+  // moment it needs it without inventing a runtime file dependency for a
+  // constant that changes once in the project's life, and a missing file would
+  // then turn `ccrc update` into a refusal over a string.
+  //
+  // So the property enforced is the one the "define once" rule exists to buy:
+  // the two CANNOT DISAGREE (ccrc-update.test.ts pins them equal), the previous
+  // org appears nowhere in shipping code (license.test.ts), and — here — no
+  // THIRD spelling can appear in bash at all. A new toucher must extend this
+  // list by name, in a diff a reviewer reads.
+  const NEEDLE = 'Synapsium-Labs';
+
+  it('is touched by exactly the two bash files that bootstrap and self-update', () => {
+    expect(holdersOf(NEEDLE)).toEqual([
+      'ccd/ccrc',   // _upd_fetch — the installed tool updating itself
+      'install.sh', // the bootstrap, which runs before ccd/ccrc exists
+    ]);
+  });
+
+  it('each spells it once, as the declaration and not inline at a use site', () => {
+    for (const f of ['install.sh', path.join('ccd', 'ccrc')]) {
+      const lines = codeLines(path.join(ccrcRoot, f)).filter((l) => l.includes(NEEDLE));
+      expect(lines, `${f} spells the owner somewhere other than its declaration`)
+        .toEqual([`CCRC_RELEASE_OWNER="${NEEDLE}"`]);
+    }
   });
 });
 
