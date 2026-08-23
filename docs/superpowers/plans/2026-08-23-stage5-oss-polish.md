@@ -54,7 +54,8 @@ internal CA, vite PWA config.
 - [ ] **Step 2: Run** `./node_modules/.bin/vitest run test/topology-clean.test.ts` —
   expect PASS (these classes were cleared 2026-08-22). If red, the tree regressed since
   the scan: fix the regression first, in its own commit.
-- [ ] **Step 3: Mutation-measure the walker** — temporarily plant `1.2.3.4` in a new doc
+- [ ] **Step 3: Mutation-measure the walker** — temporarily plant a routable public IPv4
+  literal (not one of the RFC 5737 documentation ranges) in a new doc
   line, expect 1 red; revert (never `git checkout` a file with uncommitted work — revert
   by editing).
 - [ ] **Step 4: Commit** `test(topology): the ratchet lands — public-IP, session-id and
@@ -76,10 +77,27 @@ internal CA, vite PWA config.
   verbatim AGPL-3.0; the copyright notice `Copyright (C) 2026 Synapsium Labs` appears in
   README's licence section (add it if #93 left it out — its body argued notice-with-the-
   program); `CCRC_RELEASE_OWNER="Synapsium-Labs"`.
-- [ ] **Step 2:** Red-first: add to `single-definition.test.ts` the pin that the literal
+- [x] **Step 2:** Red-first: add to `single-definition.test.ts` the pin that the literal
   `Synapsium-Labs` (as an owner/org value) is DEFINED once in `install.sh` — a second
   definition elsewhere is red. Run; if #93 already added an equivalent pin, skip with a
   comment in the plan margin.
+  > **Margin (2026-08-23, D-173).** Taken with one stated deviation: the owner is spelled
+  > **twice**, not once, and the pin enforces *exactly two declarations and no third*.
+  > `install.sh` is the `curl | bash` bootstrap — it runs on a box with no ccrc and can
+  > source nothing — while `ccd/ccrc` is the installed tool that self-updates. Making
+  > either read the other would put a runtime file dependency under a constant that
+  > changes once in the project's life, and turn `ccrc update` into a refusal over a
+  > missing string. The property "define once" exists to buy is that they cannot
+  > disagree, and that is held three ways: `ccrc-update.test.ts` pins them equal,
+  > `license.test.ts` pins the previous org absent from shipping code, and this new pin
+  > forbids a third spelling in any bash file. Measured: a third spelling → 1 red; the
+  > owner inlined at a use site → 1 red.
+  >
+  > Also found and fixed while doing it: `install.sh` was **outside** the bash corpus
+  > `single-definition` scans (`bashRoots` was `ccd/` + `deploy/` only), so every
+  > "spelled once" rule in that file had been blind to the one script a stranger runs
+  > first. Adding it reds nothing that was passing — a strict improvement. Measured:
+  > removing it again → 2 red.
 - [ ] **Step 3:** `CONTRIBUTING.md` (one page: build/test commands per package, the
   mutation-table doctrine sentence, PR-only main) and `SECURITY.md` (private disclosure:
   the repo's Security tab / maintainer contact; no version matrix).
