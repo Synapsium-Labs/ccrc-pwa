@@ -3600,6 +3600,14 @@ EOF
   # Verb-shaped so it needs no new parsing anywhere, exactly the argument that
   # put `stop-surface` on this channel.
   echo lifecycle-v1
+  # `actor-flags-v1` decides ONE server-side thing: whether to APPEND
+  # `--surface`/`--actor`/`--reason` to the five workspace verbs. The server
+  # answers FALSE on no evidence (`capSupported`, server/src/ccdargv.ts) because
+  # the wrong guess here is a SILENT SUCCESS — a ccd without this token meets
+  # the flags in an exact-arity guard, and where it does not die, `runCcdOr502`
+  # renders exit 0 as `200 {ok:true}` for a call that recorded nothing. Same
+  # argument, same polarity, as `stop-surface` above.
+  echo actor-flags-v1
 }
 
 cmd_version() {   # what THIS box runs, per the deploy's own stamp — never a guess.
