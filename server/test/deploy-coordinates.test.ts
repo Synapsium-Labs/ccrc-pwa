@@ -31,9 +31,9 @@ const script = readFileSync(DEPLOY, 'utf8');
  *  left to its default — so this test can never read the developer's real
  *  `~/.ccrc/deploy.env` and can never, on any machine, get far enough to open
  *  an ssh connection. */
-function run(env: Record<string, string> = {}): { code: number; stderr: string } {
+function run(env: Record<string, string> = {}, argv: string[] = []): { code: number; stderr: string } {
   try {
-    execFileSync('bash', [DEPLOY], {
+    execFileSync('bash', [DEPLOY, ...argv], {
       encoding: 'utf8',
       env: { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', ...env },
     });
@@ -76,11 +76,40 @@ describe('deploy.sh: the target is never guessed', () => {
     } finally { cleanup(); }
   });
 
+  it('accepts an agent target named on the command line, with no CCRC_BOX', () => {
+    // The guard has to run AFTER the target is resolved. A first cut required
+    // `$CCRC_BOX` before reading `deploy.sh agent <host>`, so naming the box on
+    // the command line still refused — a refusal with nothing for the caller to
+    // fix, since they had just supplied the very thing it asked for.
+    mk();
+    try {
+      const envFile = path.join(tmp, 'key-only.env');
+      writeFileSync(envFile, 'CCRC_SSH_KEY=/dev/null\n');
+      const r = run({ CCRC_DEPLOY_ENV: envFile }, ['agent', 'user@given-host']);
+      expect(r.stderr, 'the explicit agent host must satisfy the target guard')
+        .not.toMatch(/CCRC_BOX is not set/);
+    } finally { cleanup(); }
+  });
+
+  it('still refuses `agent` with no host and no CCRC_BOX', () => {
+    mk();
+    try {
+      const envFile = path.join(tmp, 'key-only2.env');
+      writeFileSync(envFile, 'CCRC_SSH_KEY=/dev/null\n');
+      const r = run({ CCRC_DEPLOY_ENV: envFile }, ['agent']);
+      expect(r.code).toBe(2);
+      expect(r.stderr).toMatch(/CCRC_BOX is not set/);
+    } finally { cleanup(); }
+  });
+
   it('carries no operator-specific coordinates as defaults', () => {
     // By SHAPE, not by the specific strings that were there — a different
     // operator's address re-introduced tomorrow fails this too.
     expect(script, 'a user@host literal as a default').not.toMatch(/CCRC_BOX:-\S+@\S+/);
-    expect(script, 'an ssh key path as a default').not.toMatch(/CCRC_SSH_KEY:-\S+/);
+    // `${CCRC_SSH_KEY:-}` — an EMPTY default — is how the script reads the var
+    // without tripping `set -u`. What must never come back is a non-empty one.
+    expect(script, 'an ssh key path as a default').not.toMatch(/CCRC_SSH_KEY:-[^}\s]/);
+    expect(script, 'a target as a default').not.toMatch(/CCRC_BOX:-[^}\s]/);
     // Loopback and the any-address are legitimate here — the script reasons
     // about bind addresses. A ROUTABLE literal is what must never appear.
     const routable = (script.match(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g) ?? [])

@@ -62,7 +62,7 @@ spec  →  plan  →  waves of subagents  →  per-PR review lenses  →  whole-
 One box, no TLS, no exposure — the default install:
 
 ```bash
-git clone https://github.com/Synapsium-Labs/ccrc.git && cd ccrc
+git clone https://github.com/Synapsium-Labs/ccrc-pwa.git && cd ccrc
 bash install.sh
 ```
 
@@ -100,7 +100,7 @@ Release mode needs only `curl` — no clone, no toolchain, no build on the box. 
 file**:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/Synapsium-Labs/ccrc/main/install.sh
+curl -fsSLO https://raw.githubusercontent.com/Synapsium-Labs/ccrc-pwa/main/install.sh
 bash install.sh --release
 ```
 

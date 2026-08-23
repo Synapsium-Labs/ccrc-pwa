@@ -27,9 +27,12 @@ CCRC_DEPLOY_ENV="${CCRC_DEPLOY_ENV:-$HOME/.ccrc/deploy.env}"
 
 # Refuse, with the fix in the message, rather than guessing. Exit 2 = usage
 # error, the same contract `ccrc` states for its own verbs.
+# Takes the RESOLVED VALUE, not a variable name: the target can come from
+# `$CCRC_BOX` or from `deploy.sh agent <host>`, and only the resolution knows
+# which. Exit 2 = usage error, the contract `ccrc` states for its own verbs.
 _deploy_need() {
-  local name="$1" what="$2" example="$3"
-  [ -n "${!name-}" ] && return 0
+  local value="$1" name="$2" what="$3" example="$4"
+  [ -n "$value" ] && return 0
   echo "deploy: FAILED — \$$name is not set ($what)." >&2
   echo "  Set it in $CCRC_DEPLOY_ENV, or pass it in the environment:" >&2
   echo "      $name=$example bash deploy/deploy.sh" >&2
@@ -37,19 +40,24 @@ _deploy_need() {
   echo "  would ship this tree to someone else's box." >&2
   exit 2
 }
-_deploy_need CCRC_BOX     "the deploy target, user@host"            "user@fleet-host"
-_deploy_need CCRC_SSH_KEY "the ssh identity file used to reach it"  "\$HOME/.ssh/id_ed25519"
 
-BOX="$CCRC_BOX"
+# Usage: deploy.sh [server|agent] [host]
+#   deploy.sh                 -> deploy server to $CCRC_BOX
+#   deploy.sh agent <host>    -> deploy ccrc-agent to <host> (falls back to $CCRC_BOX if omitted)
+#
+# The target is RESOLVED BEFORE it is required, because `agent <host>` names
+# its box on the command line and must not also demand $CCRC_BOX — requiring
+# the file for a target the caller just typed is a refusal with nothing to fix.
+TARGET="${1:-server}"
+BOX="${CCRC_BOX:-}"
+[ "$TARGET" = "agent" ] && BOX="${2:-$BOX}"
+
+_deploy_need "$BOX"               CCRC_BOX     "the deploy target, user@host"           "user@fleet-host"
+_deploy_need "${CCRC_SSH_KEY:-}"  CCRC_SSH_KEY "the ssh identity file used to reach it" "\$HOME/.ssh/id_ed25519"
+
 CCRC_SSH_PORT="${CCRC_SSH_PORT:-22}"
 SSH=(ssh -p "$CCRC_SSH_PORT" -i "$CCRC_SSH_KEY")
 SCP=(scp -P "$CCRC_SSH_PORT" -i "$CCRC_SSH_KEY")
-
-# Usage: deploy.sh [server|agent] [host]
-#   deploy.sh                 -> deploy server to $CCRC_BOX (default)
-#   deploy.sh agent <host>    -> deploy ccrc-agent to <host> (falls back to $CCRC_BOX if omitted)
-TARGET="${1:-server}"
-[ "$TARGET" = "agent" ] && BOX="${2:-$BOX}"
 
 # Derived from the RESOLVED $BOX — i.e. AFTER the agent-target override just
 # above, so it tracks $2 — never a literal. A literal here meant
