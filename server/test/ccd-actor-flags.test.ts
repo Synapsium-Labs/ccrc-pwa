@@ -38,7 +38,7 @@
 // ("0 iff it fits _LC_DEC_MAX *BYTES*. Prints nothing."), and its authoring
 // brief (task-16-brief.md line 26) specifies the same length-only contract,
 // with no blank guard. Measured: `_lc_dec_ok ''` and `_lc_dec_ok '   '` both
-// return 0 today. `cmd_ws_hold` (`ccd:3517`) has its OWN, separate
+// return 0 today. `cmd_ws_hold` (`ccd:3568`) has its OWN, separate
 // `[[ -n "${reason//[[:space:]]/}" ]] || die` guard that never routes through
 // `_lc_dec_ok` at all; `ws-rm`/`forget` (`ccd:2835`, `ccd:10844`) call ONLY
 // `_lc_dec_ok`, so today `--reason ''` on either of those two verbs is
@@ -306,7 +306,7 @@ describe('ws-restore takes the same three flags, and refuses through _lc_refuse'
     // `_lc_dec_ok` is length-only (D-200, ccd:1527) and returns 0 for '', so
     // it cannot be the blank guard on its own — this verb needs its OWN
     // non-blank check ahead of `_lc_dec_ok`, mirroring `--actor` above and
-    // `cmd_ws_hold` (ccd:3517). Not in the brief's own step-2 sample, added
+    // `cmd_ws_hold` (ccd:3568). Not in the brief's own step-2 sample, added
     // here because the brief's --actor check and this one are one guard
     // copied twice; a mutant on one without a test on the other would ship a
     // silent asymmetry between the two flags.
@@ -403,5 +403,157 @@ describe('ws-restore accepts the dec flags in any position — parity with ws-ar
     const r = shFail(`${RESTORE_STUBS} cmd_ws_restore --session ${id} extra`);
     expect(r.code).not.toBe(0);
     expect(r.stderr).toContain('usage: ccd ws-restore --session <id>');
+  });
+});
+
+/** Neither `cmd_ws_hold` nor `cmd_ws_release` touches tmux on any path these
+ *  cases reach; `tmux() { return 1; }` is belt-and-braces (RULE 9) and kept
+ *  because every other stub constant in this file carries the same shape. */
+describe('ws-hold keeps ONE reason — its own', () => {
+  const HOLD_STUBS = `tmux() { return 1; };`;
+
+  it.each([
+    ['before the required pair', `--surface pwa --session ID --reason 'program:x wave:1/4'`],
+    ['after the required pair',  `--session ID --reason 'program:x wave:1/4' --surface pwa`],
+    ['in the --flag=value form', `--session ID --surface=pwa --reason 'program:x wave:1/4'`],
+    ['with both flags',          `--surface pwa --session ID --actor 'device:iPhone' --reason 'program:x wave:1/4'`],
+  ])('parses --surface %s', (_name, tail) => {
+    // Coverage-parity with `cmd_ws_archive`'s own `it.each` (Task 45): both
+    // flag forms, before and after the required pair, and both flags at once.
+    const id = seedWorkspace();
+    const out = h.sh(`${HOLD_STUBS} cmd_ws_hold ${tail.replace('ID', id)}`);
+    expect(out).toBe(`held ${id}: program:x wave:1/4`);
+  });
+
+  it('accepts --surface/--actor around the existing --session/--reason pair', () => {
+    const id = seedWorkspace();
+    const out = h.sh(`${HOLD_STUBS} cmd_ws_hold --surface pwa --session ${id} --reason 'program:x wave:1/4' --actor 'device:iPhone'`);
+    expect(out).toBe(`held ${id}: program:x wave:1/4`);
+    expect(h.reg(id, 'hold')).toBe('program:x wave:1/4');
+  });
+
+  it('does NOT strip --reason: the hold reason is still positional and still mandatory', () => {
+    // If the loop stripped `--reason`, the residue would be `--session <id>`,
+    // arity 2, the exact-arity guard would refuse a call that is correct, and
+    // it would be impossible to hold a workspace at all.
+    const id = seedWorkspace();
+    const r = shFail(`${HOLD_STUBS} cmd_ws_hold --session ${id} --surface pwa`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('usage: ccd ws-hold --session <id> --reason <text>');
+  });
+
+  it('still refuses a whitespace-only hold reason — ccd:3568 is untouched', () => {
+    // Line re-measured against THIS task's own edit, not copied from the
+    // brief (its `ccd:2537` predates waves 2-3 and no longer points here —
+    // RULE 2).
+    const id = seedWorkspace();
+    const r = shFail(`${HOLD_STUBS} cmd_ws_hold --session ${id} --reason '   ' --actor 'device:iPhone'`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('empty reason');
+    expect(h.reg(id, 'hold')).toBeNull();
+  });
+
+  it('refuses a --actor with no value rather than looping forever', () => {
+    const id = seedWorkspace();
+    const r = shFail(`${HOLD_STUBS} cmd_ws_hold --session ${id} --reason 'program:x wave:1/4' --actor`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('usage: ccd ws-hold');
+  });
+
+  it('refuses a blank --actor, naming the flag', () => {
+    const id = seedWorkspace();
+    const r = shFail(`${HOLD_STUBS} cmd_ws_hold --session ${id} --reason 'program:x wave:1/4' --actor ''`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('--actor');
+  });
+
+  it('still refuses extra positionals — the arity rule survives the strip', () => {
+    const id = seedWorkspace();
+    const r = shFail(`${HOLD_STUBS} cmd_ws_hold --session ${id} --reason 'program:x wave:1/4' extra`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('usage: ccd ws-hold --session <id> --reason <text>');
+  });
+
+  it('treats a blank --surface as a word it does not know, never as no flag', () => {
+    // The same givenness trap as `cmd_ws_archive`/`cmd_ws_restore` (D-200):
+    // the bare `_lc_surface_norm` answers EMPTY for both "no argument" and an
+    // explicit blank, so this loop resolves givenness itself with its own
+    // `${lc_w:-unknown}` fallback. `cmd_ws_hold` has no manifest-building
+    // helper to hook the way `cmd_ws_archive` does, so the probe instead
+    // overrides `_lc_done` (called unconditionally, before `_reg_set`) —
+    // bash's dynamic scoping lets a function called from inside
+    // `cmd_ws_hold` see its caller's own `local lc_surface`. Task 49 has not
+    // wired a real emit site yet, so this is the only way to observe the
+    // value this task computes.
+    const id = seedWorkspace();
+    const PROBE = `_lc_done() { printf '%s' "$lc_surface" > "$HOME/probe-surface"; };`;
+    h.sh(`${HOLD_STUBS} ${PROBE} cmd_ws_hold --session ${id} --reason 'program:x wave:1/4' --surface ''`);
+    expect(readFileSync(`${h.home}/probe-surface`, 'utf8')).toBe('unknown');
+  });
+});
+
+describe('ws-release takes all three flags and stays idempotent', () => {
+  const REL_STUBS = `tmux() { return 1; };`;
+
+  it.each([
+    ['before the required flag', `--surface pwa --session ID`],
+    ['after the required flag',  `--session ID --surface pwa`],
+    ['in the --flag=value form', `--session ID --surface=pwa`],
+    ['with all three flags',     `--session ID --surface pwa --actor 'device:iPhone' --reason 'wave landed'`],
+  ])('parses --surface %s', (_name, tail) => {
+    // Coverage-parity with `cmd_ws_archive`'s own `it.each` (Task 45).
+    // `cmd_ws_release` is idempotent on an unheld id, so this only proves the
+    // flags parse — the held/not-held distinction is proven separately below.
+    const id = seedWorkspace();
+    expect(shFail(`${REL_STUBS} cmd_ws_release ${tail.replace('ID', id)} >/dev/null`).code).toBe(0);
+  });
+
+  it('releases with the flags, then releases again', () => {
+    const id = seedWorkspace();
+    h.sh(`${REL_STUBS} cmd_ws_hold --session ${id} --reason 'program:x wave:1/4'`);
+    const out = h.sh(`${REL_STUBS} cmd_ws_release --session ${id} --surface pwa --actor 'device:iPhone' --reason 'wave landed'`);
+    expect(out).toBe(`released ${id}`);
+    expect(h.reg(id, 'hold')).toBeNull();
+    expect(h.sh(`${REL_STUBS} cmd_ws_release --session ${id} --surface pwa`)).toContain(id);
+  });
+
+  it('refuses an over-long --reason rather than truncating it (B5)', () => {
+    const id = seedWorkspace();
+    const r = shFail(`${REL_STUBS} cmd_ws_release --session ${id} --reason "$(printf 'a%.0s' {1..513})"`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('--reason');
+    expect(r.stderr).toContain('512');
+  });
+
+  it('refuses a blank --actor, naming the flag', () => {
+    const id = seedWorkspace();
+    const r = shFail(`${REL_STUBS} cmd_ws_release --session ${id} --actor ''`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('--actor');
+  });
+
+  it('refuses a --surface with no value rather than looping forever', () => {
+    const id = seedWorkspace();
+    const r = shFail(`${REL_STUBS} cmd_ws_release --session ${id} --surface`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('usage: ccd ws-release');
+  });
+
+  it('still refuses extra positionals — the arity rule survives the strip', () => {
+    const id = seedWorkspace();
+    const r = shFail(`${REL_STUBS} cmd_ws_release --session ${id} extra`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('usage: ccd ws-release --session <id>');
+  });
+
+  it('treats a blank --surface as a word it does not know, never as no flag', () => {
+    // Same probe technique as `cmd_ws_hold`'s copy of this case, above:
+    // `_lc_done release` runs only inside the held branch, so this holds the
+    // workspace first to reach it.
+    const id = seedWorkspace();
+    h.sh(`${REL_STUBS} cmd_ws_hold --session ${id} --reason 'program:x wave:1/4'`);
+    const PROBE = `_lc_done() { printf '%s' "$lc_surface" > "$HOME/probe-surface"; };`;
+    h.sh(`${REL_STUBS} ${PROBE} cmd_ws_release --session ${id} --surface ''`);
+    expect(readFileSync(`${h.home}/probe-surface`, 'utf8')).toBe('unknown');
   });
 });

@@ -3586,9 +3586,60 @@ cmd_ws_hold() {   # ccd ws-hold --session <id> --reason <text> — claim a
   # finished one, so the claim is DECLARED, never inferred. Non-destructive and
   # idempotent: re-hold updates the reason. The reason string is the display
   # everywhere — write it verbatim, parse it nowhere.
+  # WAVE 5 — TWO FLAGS, NOT THREE, AND THAT IS THE DESIGN. `--reason` on this
+  # verb is already the HOLD's reason: mandatory, positional (`$4`), and the
+  # display on every ccrc surface. Stripping it here would leave the residue at
+  # arity 2, refuse every correct call, and make the workspace unholdable; and
+  # accepting a SECOND `--reason` would put two different reasons on one verb
+  # with nothing to say which one a reader is looking at. Spec D2's `dec.reason`
+  # is therefore this same string — one reason, one meaning.
+  #
+  # Stripped BEFORE the exact-arity rule, `cmd_stop`'s order — and before any
+  # positional binding, so a run like `ws-hold --surface pwa --session <id>
+  # --reason x` cannot bind `id` from the raw, flag-polluted argv the way
+  # Task 46 found `cmd_ws_restore` almost did.
+  local lc_surface=none lc_actor='' lc_gs=0 lc_ga=0 lc_args=()
+  while (( $# )); do
+    case "$1" in
+      # An explicit arity check, not a bare `shift 2`: ccd runs under
+      # `set -uo pipefail` with NO `-e`, so a shift past the end of argv fails,
+      # shifts nothing, and this loop never terminates.
+      --surface)   [[ $# -ge 2 ]] || die "usage: ccd ws-hold [--surface <word>] [--actor <text>] --session <id> --reason <text>"
+                   lc_gs=1; lc_surface="$2"; shift 2 ;;
+      --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
+      --actor)     [[ $# -ge 2 ]] || die "usage: ccd ws-hold [--surface <word>] [--actor <text>] --session <id> --reason <text>"
+                   lc_ga=1; lc_actor="$2"; shift 2 ;;
+      --actor=*)   lc_ga=1; lc_actor="${1#--actor=}"; shift ;;
+      *)           lc_args+=("$1"); shift ;;
+    esac
+  done
+  # bash >= 4.4 (the fleet host runs 5.2, ccd:9393-9394): an empty array here
+  # is not an unbound-variable error under `set -u`.
+  set -- "${lc_args[@]}"
+  # `_lc_surface_norm ''` prints EMPTY, not `unknown` (ccd:1511-1524, D-200) —
+  # it cannot tell "no argument" from "an explicit blank" apart, so THIS loop
+  # is where that distinction has to be made, before the encoder ever sees the
+  # value. `lc_gs` already carries givenness; the `${lc_w:-unknown}` fallback
+  # below is what turns a declared-but-blank surface into `unknown` rather
+  # than an empty string that `_lc_json` would backfill to `none` — the exact
+  # given/no-flag collapse this verb must not produce.
+  if (( lc_gs )); then local lc_w; lc_w=$(_lc_surface_norm "$lc_surface"); lc_surface=${lc_w:-unknown}; fi
+  # `_lc_dec_ok` is LENGTH-ONLY (`ccd:1527-1538`, D-200) — `_lc_dec_ok ''`
+  # returns 0, so it cannot be the blank guard on its own. A declared
+  # `--actor` is refused when blank the same way this verb's own `--reason`
+  # is refused just below (ccd:3568), and the same shape Task 45's
+  # `cmd_ws_archive` and Task 46's `cmd_ws_restore` use.
+  if (( lc_ga )); then
+    [[ -n "${lc_actor//[[:space:]]/}" ]] || die "--actor must be non-blank"
+    _lc_dec_ok "$lc_actor" || die "--actor is longer than $_LC_DEC_MAX bytes"
+  fi
   [[ $# -eq 4 && $1 == --session && $3 == --reason ]] \
     || die "usage: ccd ws-hold --session <id> --reason <text>"
   local id=$2 reason=$4
+  # `dec.reason` IS the hold reason — see the note above. Named separately so
+  # Task 49's emit site reads ONE variable on every verb rather than a special
+  # case here, and so a future editor cannot "add the missing --reason".
+  local lc_reason=$reason
   [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
   [[ -f "$REG/$id.uuid" ]]       || die "no such session: $id"
   # An empty reason is an orphan hold by construction — nobody could ever say
@@ -3656,6 +3707,64 @@ cmd_ws_release() {   # ccd ws-release --session <id> — end the program's claim
   # re-arm the auto-archive sweep: since Build 8 Wave 2, `archiveMerged` also
   # asks the server's coord.db whether an OPEN RUN still names this session,
   # and skips if one does — an absent hold is no longer sufficient. Idempotent.
+  # WAVE 5 — THE DEC FLAGS ARE STRIPPED BEFORE THE ARITY RULE, and that order
+  # is the whole correctness argument, exactly as `cmd_stop` states it in its
+  # own header (grep `FLAGS ARE STRIPPED BEFORE THE ARITY RULE`): this verb's
+  # guard is EXACT arity on `--session <id>`, so a flag left in argv is not a
+  # wider call, it is a REFUSED one — `ccd ws-release --session x --surface pwa`
+  # would die in the usage check while the server reads the non-zero as "the
+  # release failed on the box".
+  #
+  # THREE `given` FLAGS, not three value tests. `--surface ''` and no
+  # `--surface` at all are two different facts: nobody declared a surface
+  # (`none`), versus a caller declared a word this ccd does not know
+  # (`unknown`). Testing `[[ -n "$lc_surface" ]]` instead would collapse them,
+  # which is `ccd:650-663`'s `${2-ccd}` vs `${2:-ccd}` distinction broken in a new
+  # place. Same for `--actor ''` and `--reason ''`, which are REFUSED rather
+  # than silently read as absent — one policy, everywhere (AUDIT B5).
+  local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 lc_args=()
+  while (( $# )); do
+    case "$1" in
+      # An explicit arity check, not a bare `shift 2`: ccd runs under
+      # `set -uo pipefail` with NO `-e`, so a shift past the end of argv fails,
+      # shifts nothing, and this loop never terminates (`cmd_stop` carries the
+      # same three lines over the same hazard).
+      --surface)   [[ $# -ge 2 ]] || die "usage: ccd ws-release [--surface <word>] [--actor <text>] [--reason <text>] --session <id>"
+                   lc_gs=1; lc_surface="$2"; shift 2 ;;
+      --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
+      --actor)     [[ $# -ge 2 ]] || die "usage: ccd ws-release [--surface <word>] [--actor <text>] [--reason <text>] --session <id>"
+                   lc_ga=1; lc_actor="$2"; shift 2 ;;
+      --actor=*)   lc_ga=1; lc_actor="${1#--actor=}"; shift ;;
+      --reason)    [[ $# -ge 2 ]] || die "usage: ccd ws-release [--surface <word>] [--actor <text>] [--reason <text>] --session <id>"
+                   lc_gr=1; lc_reason="$2"; shift 2 ;;
+      --reason=*)  lc_gr=1; lc_reason="${1#--reason=}"; shift ;;
+      *)           lc_args+=("$1"); shift ;;
+    esac
+  done
+  # bash >= 4.4 (the fleet host runs 5.2, ccd:9393-9394): an empty array here
+  # is not an unbound-variable error under `set -u`.
+  set -- "${lc_args[@]}"
+  # `_lc_surface_norm ''` prints EMPTY, not `unknown` (ccd:1511-1524, D-200) —
+  # it cannot tell "no argument" from "an explicit blank" apart, so THIS loop
+  # is where that distinction has to be made, before the encoder ever sees the
+  # value. `lc_gs` already carries givenness; the `${w:-unknown}` fallback
+  # below is what turns a declared-but-blank surface into `unknown` rather
+  # than an empty string that `_lc_json` would backfill to `none` — the exact
+  # given/no-flag collapse this verb must not produce.
+  if (( lc_gs )); then local lc_w; lc_w=$(_lc_surface_norm "$lc_surface"); lc_surface=${lc_w:-unknown}; fi
+  # `_lc_dec_ok` is LENGTH-ONLY (`ccd:1527-1538`, D-200) — `_lc_dec_ok ''`
+  # returns 0, so it cannot be the blank guard on its own. A declared
+  # `--actor`/`--reason` is refused when blank the same way `cmd_ws_hold`
+  # refuses a blank `--reason` (ccd:3568): its own non-blank check, separate
+  # from the byte cap, whitespace-only counting as blank too.
+  if (( lc_ga )); then
+    [[ -n "${lc_actor//[[:space:]]/}" ]] || die "--actor must be non-blank"
+    _lc_dec_ok "$lc_actor" || die "--actor is longer than $_LC_DEC_MAX bytes"
+  fi
+  if (( lc_gr )); then
+    [[ -n "${lc_reason//[[:space:]]/}" ]] || die "--reason must be non-blank"
+    _lc_dec_ok "$lc_reason" || die "--reason is longer than $_LC_DEC_MAX bytes"
+  fi
   [[ $# -eq 2 && $1 == --session ]] || die "usage: ccd ws-release --session <id>"
   local id=$2
   [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
@@ -3774,7 +3883,7 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
   # `_lc_dec_ok` is LENGTH-ONLY (`ccd:1527-1538`, D-200) — `_lc_dec_ok ''`
   # returns 0, so it cannot be the blank guard on its own. A declared
   # `--actor`/`--reason` is refused when blank the same way `cmd_ws_hold`
-  # refuses a blank `--reason` (ccd:3517): its own non-blank check, separate
+  # refuses a blank `--reason` (ccd:3568): its own non-blank check, separate
   # from the byte cap, whitespace-only counting as blank too.
   if (( lc_ga )); then
     [[ -n "${lc_actor//[[:space:]]/}" ]] || die "--actor must be non-blank"
@@ -4241,7 +4350,7 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   # `_lc_dec_ok` is LENGTH-ONLY (ccd:1527-1538, D-200) — `_lc_dec_ok ''`
   # returns 0, so it cannot be the blank guard on its own. A declared
   # `--actor`/`--reason` is refused when blank the same way `cmd_ws_hold`
-  # refuses a blank `--reason` (ccd:3517) and Task 45's `cmd_ws_archive`
+  # refuses a blank `--reason` (ccd:3568) and Task 45's `cmd_ws_archive`
   # follows: its own non-blank check, separate from the byte cap, whitespace-
   # only counting as blank too.
   if (( lc_ga )); then
