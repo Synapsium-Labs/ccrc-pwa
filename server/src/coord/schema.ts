@@ -522,11 +522,14 @@ export const MIGRATIONS: readonly string[] = [
   CREATE UNIQUE INDEX claim_one_owner    ON claim_paths(project, path) WHERE live = 1;
   CREATE INDEX        claim_paths_by_claim ON claim_paths(claimId);
 
-  -- D13: the allocator's record. One row per issued number, forever. state:
-  -- allocated|landed|stale — 'landed' means the number appears in a plan in
-  -- the MAIN checkout (sweepLedgerReconcile, part B), the signal the bb47c9e
-  -- incident lacked; 'stale' (7 days, never landed) is reported and NEVER
-  -- reclaimed. Read back through the L0 guard, never a cast.
+  -- D13: the allocator's record. One row per issued number, forever. state
+  -- stores exactly TWO values, allocated|landed (DEVIATION_ALLOC_STATES,
+  -- shared/api.ts) — 'landed' means the number appears in a plan in the MAIN
+  -- checkout (sweepLedgerReconcile, part B), the signal the bb47c9e incident
+  -- lacked. 'stale' is NEVER WRITTEN here: a fact about a row and a clock is
+  -- derived by the reader (at + LEDGER_STALE_MS, 7 days never-landed),
+  -- reported and NEVER reclaimed. Read back through the L0 guard, never a
+  -- cast.
   CREATE TABLE ledger_alloc (
     project   TEXT NOT NULL,
     n         INTEGER NOT NULL,
