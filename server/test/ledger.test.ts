@@ -79,7 +79,10 @@ describe('floorFromScan', () => {
 
   it('does not misparse: D-TBD-<slug>, a legacy tail, and a 6-digit token all feed nothing', () => {
     const r = floorFromScan([
-      { path: 'p.md', text: 'D-42 is real; D-TBD-mirror-gap is a placeholder; D-123456 is garbage.' },
+      // Placeholder built by concatenation — dtbd.test.ts scans every tracked
+      // file for the concrete form, and this fixture must feed the parser the
+      // real string without landing the literal in the tree.
+      { path: 'p.md', text: 'D-42 is real; ' + 'D-TBD' + '-mirror-gap is a placeholder; D-123456 is garbage.' },
     ]);
     expect(r).toEqual({ floor: 42 + LEDGER_SEED_GAP, evidence: 'p.md names D-42', legacy: [] });
   });

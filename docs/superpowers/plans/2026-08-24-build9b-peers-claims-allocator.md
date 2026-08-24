@@ -3024,7 +3024,7 @@ side reds the fixture's compile.
 
     it('does not misparse: D-TBD-<slug>, a legacy tail, and a 6-digit token all feed nothing', () => {
       const r = floorFromScan([
-        { path: 'p.md', text: 'D-42 is real; D-TBD-mirror-gap is a placeholder; D-123456 is garbage.' },
+        { path: 'p.md', text: 'D-42 is real; ' + 'D-TBD' + '-mirror-gap is a placeholder; D-123456 is garbage.' },
       ]);
       expect(r).toEqual({ floor: 42 + LEDGER_SEED_GAP, evidence: 'p.md names D-42', legacy: [] });
     });
@@ -7858,7 +7858,7 @@ git commit -m "test(wave7): two D12 detectors — the substrate never enforces, 
 
 **Steps:**
 
-- [ ] Write `server/test/deviation-refs.test.ts` — WITH THE GRANDFATHER SETS EMPTY, deliberately,
+- [x] Write `server/test/deviation-refs.test.ts` — WITH THE GRANDFATHER SETS EMPTY, deliberately,
   so the first run is the measurement:
 
 ```ts
@@ -7951,7 +7951,7 @@ describe('the deviation-refs scanner (D13 — the bb47c9e shape)', () => {
 });
 ```
 
-- [ ] Run it, expect FAIL — and READ the failure, it is the measurement:
+- [x] Run it, expect FAIL — and READ the failure, it is the measurement:
   `./node_modules/.bin/vitest run test/deviation-refs.test.ts`. Expected red at `2d4a7ac7`:
   the collision list names D-1…D-8 (from `2026-08-07-smart-branch-naming.md`,
   `2026-08-08-build7-core.md`, `2026-08-08-build7-surfaces.md` — the per-plan-numbering era) and
@@ -7959,7 +7959,7 @@ describe('the deviation-refs scanner (D13 — the bb47c9e shape)', () => {
   `72, 128, 129, 130, 131, 132, 133, 134, 135, 137, 138, 139, 140, 141, 145, 171`. If `main`
   has moved and the red run's list differs, **the red run's own output is the measured set —
   copy it, not this paragraph.**
-- [ ] Fill the two sets from the red run:
+- [x] Fill the two sets from the red run:
 
 ```ts
 const LEGACY_PER_PLAN_LEDGERS: ReadonlySet<string> = new Set([
@@ -7975,13 +7975,13 @@ const GRANDFATHERED: ReadonlySet<number> = new Set([
 ]);
 ```
 
-- [ ] Run, expect PASS: `./node_modules/.bin/vitest run test/deviation-refs.test.ts`.
-- [ ] **Mutation ceremony (the bb47c9e mutant).** Append
+- [x] Run, expect PASS: `./node_modules/.bin/vitest run test/deviation-refs.test.ts`.
+- [x] **Mutation ceremony (the bb47c9e mutant).** Append
   `- **D-209 (mutant)** — subject alpha` to one non-legacy plan file and
   `- **D-209 (mutant)** — subject beta` to a different one. Run: expect 1 red naming `D-209`
   with both files and both subjects. Revert both files (`git checkout -- docs/superpowers/plans`),
   re-run, green.
-- [ ] Write `server/test/dtbd.test.ts`:
+- [x] Write `server/test/dtbd.test.ts`:
 
 ```ts
 // D-TBD placeholders never land (build 9 D13). A session that cannot reach
@@ -8024,15 +8024,15 @@ describe('no D-TBD placeholder lands (D13)', () => {
 });
 ```
 
-- [ ] Run, expect PASS: `./node_modules/.bin/vitest run test/dtbd.test.ts` (measured at
+- [x] Run, expect PASS: `./node_modules/.bin/vitest run test/dtbd.test.ts` (measured at
   `2d4a7ac7`: `git grep -I -E 'D-TBD-[a-z0-9]'` exits 1 — the tree is clean).
-- [ ] **Mutation ceremony.** Plant a CONCRETE placeholder in a tracked file — built by shell
+- [x] **Mutation ceremony.** Plant a CONCRETE placeholder in a tracked file — built by shell
   concatenation, so neither this plan document nor your terminal history carries the literal
   (the same self-match dodge the test uses):
   `printf '<!-- %s-probe: allocator was down -->\n' 'D-TBD' >> README.md` (no commit). Run:
   expect 1 red whose message carries `README.md` and the probe line. Revert
   (`git checkout -- README.md`), re-run, green.
-- [ ] Commit:
+- [x] Commit:
 
 ```bash
 git add server/test/deviation-refs.test.ts server/test/dtbd.test.ts
