@@ -4412,3 +4412,301 @@ export function compareGenerations(a: string, b: string): number {
   if (a.length !== b.length) return a.length - b.length;
   return a < b ? -1 : a > b ? 1 : 0;
 }
+
+/* ---------------------------------------------------------------------------
+ * PEERS, CLAIMS AND THE DEVIATION LEDGER — build 9, §1 (D9-D14). The fleet's
+ * PRESENT TENSE, beside the journal's past tense above.
+ *
+ * The journal answers "what happened"; this vocabulary answers "who is here,
+ * who holds what, and what number is free" — synchronously, at the moment of
+ * asking, not at merge (spec §0). Nothing here decides anything on its own:
+ * `peerDeliverable()` (server/src/peers.ts, L1) produces `PeerDeliverable`,
+ * `decideClaim()` (claims.ts) produces the conflict set, `decideAllocation()`
+ * (ledger.ts) produces the numbers, and the one compare-and-swap lives in
+ * coord.db's synchronous `tx()` (D11). L0 owns only the words.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Can mail reach this peer NOW, as decided by `peerDeliverable()` from the
+ * STRUCTURAL rungs of `sweepMail`'s own ladder — registry row measured, tmux
+ * verdict, pane pid, lifecycle not stopped/orphan/never-started (D9). The
+ * TRANSIENT rungs (cooldown, single-flight latch, unanswered ask, quiet
+ * window) stay in `sweepMail`: they are lane state, and reporting them here
+ * would tell a caller a BUSY peer is unreachable — the exact lie R2 forbids.
+ *
+ * THREE ANSWERS, NOT TWO. `'unknown'` is a registry this pass could not
+ * measure, and it is NOT `'no'` — doubt about a peer is not evidence against
+ * it, the same not-knowing-is-not-death ruling `renewClaims` applies to
+ * leases (D12). A `'no'` always carries its reason (`no:stopped`,
+ * `no:orphan`, ...); the template type cannot refuse an EMPTY reason, so
+ * `isPeerDeliverable` does — an unexplained no is the overloaded value this
+ * file's own seam rule forbids, not a shorter one.
+ *
+ * The reason suffix is OPEN on the wire, deliberately: a newer server naming
+ * a rung this build has not met still parses here (absence-permits, one
+ * reader). The PRODUCER is held to the ladder by
+ * `deliverability-parity.test.ts` (D9), never by this type.
+ */
+export type PeerDeliverable = 'yes' | 'unknown' | `no:${string}`;
+
+export function isPeerDeliverable(v: unknown): v is PeerDeliverable {
+  if (v === 'yes' || v === 'unknown') return true;
+  return typeof v === 'string' && v.startsWith('no:') && v.length > 'no:'.length;
+}
+
+/**
+ * One row of `GET /api/peers` (D9) — a same-project session as the route
+ * measured it THIS pass. The route reports; it never filters: `archivedAt`
+ * is the registry stamp VERBATIM and decides nothing, because a field that
+ * is silently false (four measured rows at design time) must not be
+ * laundered into a filter. `archivedStale` NAMES the contradiction —
+ * stamped archived, measured live — and the same predicate feeds
+ * `divergence.archived-but-live`; an adapter may not narrow a distinction
+ * it received.
+ *
+ * `lifecycle` is the row's OWN present tense (etiquette rule 3: read it,
+ * never the stamp) and is never null — `'unmeasurable'` is the honest word
+ * when the ladder could not run, and a route that measured nothing reports
+ * that word, not an absence. `intent` is the holder's most recently renewed
+ * live claim's stated intent — the REPLACEMENT (D12) for the ai-title
+ * signal `sweepNames` freezes on held rows: a branch name is written once,
+ * an intent can be written every ten minutes. Null = no live claim; one
+ * condition, not an overload.
+ */
+export interface PeerSummary {
+  readonly id: string;
+  /** From `$REG/<id>.uuid`; null = unmeasured, never "no uuid". */
+  readonly uuid: string | null;
+  readonly project: string | null;
+  /** The worktree slug; null for a project's main checkout —
+   *  `FleetSession.workspace`'s exact contract (:37). */
+  readonly workspace: string | null;
+  readonly branch: string | null;
+  readonly wrapper: string | null;
+  readonly lifecycle: SessionLifecycle;
+  readonly deliverable: PeerDeliverable;
+  /** Epoch SECONDS as the registry wrote it, verbatim, or null. DECIDES
+   *  NOTHING (D9). */
+  readonly archivedAt: number | null;
+  readonly archivedReason: string | null;
+  /** Stamped archived AND measured live this pass. */
+  readonly archivedStale: boolean;
+  /** The `.hold` text verbatim, or null — `FleetSession.held`'s contract. */
+  readonly held: string | null;
+  readonly intent: string | null;
+}
+
+/**
+ * The five rules, one per primitive — claims, discovery, history, mail, the
+ * ledger. THE PRIMARY HOME IS THE ROUTE RESPONSE (D17): a skill reaches a
+ * config dir only once its installer has run there (D-107), so a session
+ * that can discover peers is handed the rules in the same answer, installer
+ * or no installer — and this text cannot go stale relative to the route
+ * that serves it. Worker clause 11 and coordinator clause 10 SAY these
+ * rules in their own words; they do not define them.
+ *
+ * QUOTABLE IN BOTH SKILL STYLES, AND THAT IS A GUARD, NOT A PREFERENCE
+ * (D17, D-104): worker clauses are double-quoted bash literals — no `"`
+ * character may appear in a rule — and coordinator clauses are
+ * single-quoted — apostrophes must be curly, as `LC_REFUSAL_WORD`'s copy
+ * above already writes them. `peers-claims-l0.test.ts` holds both, so a
+ * rule edited into unquotability reds here before a skill wave trips on it.
+ */
+export const PEER_ETIQUETTE = [
+  'Claim before you edit: POST /api/claims names every path you will touch, all-or-nothing, and a 409 names the holder — the 409 is the address, not a rejection to work around.',
+  'Discovery is GET /api/peers?of=<your id> — the peers you cannot see from your own session list are the ones this route exists for.',
+  'History is GET /api/lifecycle. Read each row’s own lifecycle, never its archive stamp — the stamp is reported verbatim and decides nothing.',
+  'Peer mail is human-timescale: a busy peer reads it when it next idles, and losing a race is learned from the 409 you are already reading, never from mail.',
+  'Never invent a deviation number. POST /api/ledger/deviations allocates; a server you cannot reach is a mechanical blocker to report, not a licence to guess.',
+] as const;
+
+/**
+ * A claim's four states, AS A TABLE THE TYPE DERIVES FROM — the
+ * `MAIL_REJECT_CODES` as-const idiom (:3012) rather than the union-first
+ * `PR_REASON_MAP` one, because wave 7's migration generates the `claims`
+ * table's CHECK constraint from THIS array: the array is the single
+ * definition and the type follows it, so a reorder or a rename is a schema
+ * edit a reviewer can see.
+ *
+ * `'live'` is the only non-terminal state. The other three are three
+ * different ends a reader handles differently (no overloaded terminal):
+ * `'released'` — the holder said done, or its run's close did;
+ * `'lapsed'` — the lease ran out, `endedBy` says why (a holder measured
+ * gone is `'session-gone'`; the 8 h hard cap is what no measurement can
+ * extend); `'broken'` — the operator door, `POST /api/claims/:id/break`,
+ * the one claims route the claimant is not the one to walk through (D16).
+ * LAPSE, DO NOT DELETE (D12): an ended claim is a row with an end, and
+ * `GET /api/claims?all=1` shows "held by X until it died". A destroyed
+ * claim is destroyed history.
+ */
+export const CLAIM_STATES = ['live', 'released', 'lapsed', 'broken'] as const;
+export type ClaimState = (typeof CLAIM_STATES)[number];
+
+export function isClaimState(v: unknown): v is ClaimState {
+  return typeof v === 'string' && (CLAIM_STATES as readonly string[]).includes(v);
+}
+
+/**
+ * One claim as coord.db holds it and `GET /api/claims` reports it.
+ * ADVISORY, NEVER ENFORCING (D12) — nothing in ccd knows this row exists
+ * (`claims-advisory.test.ts` holds that at zero references), and its loss
+ * is FREE by construction: no flat file backs it, every lease is bounded,
+ * and the pre-feature state is "no claims". Sessions lose protection,
+ * never work.
+ *
+ * `paths` is the ALL-OR-NOTHING set as claimed: five paths, one conflict,
+ * zero acquired. `expiresAt` is the lease `renewClaims` renews while the
+ * holder measures RUNNING (registry unmeasurable reads as HELD — doubt is
+ * not death); `hardExpiresAt` is NEVER renewed, so doubt cannot hold
+ * forever. `endedBy` is display/forensic — `Divergence.detail`'s contract:
+ * written by the closer (`'session-gone'`, the run close, the break door),
+ * parsed back by nothing.
+ */
+export interface ClaimSummary {
+  /** coord.db's own row id — the `:id` of release and break. */
+  readonly id: number;
+  readonly project: string;
+  readonly paths: readonly string[];
+  readonly heldBy: string;
+  readonly heldByUuid: string | null;
+  /** <= `CLAIM_INTENT_MAX_BYTES`; re-POSTing the same paths re-writes it
+   *  AND renews the lease. Rendered on `PeerSummary`, the HotFilesStrip
+   *  and the session line — the signal that replaces the frozen ai-title
+   *  (D12). */
+  readonly intent: string;
+  readonly runId: number | null;
+  readonly state: ClaimState;
+  /** Epoch ms, the SERVER's clock — a claim exists only in coord.db, so
+   *  for once the server's clock IS the event's clock. */
+  readonly createdAt: number;
+  readonly renewedAt: number;
+  readonly expiresAt: number;
+  readonly hardExpiresAt: number;
+  readonly endedAt: number | null;
+  readonly endedBy: string | null;
+}
+
+/**
+ * One entry of the 409's conflict list — `POST /api/claims` refuses
+ * all-or-nothing and names EVERY conflicting path, not the first (D12).
+ *
+ * THE CONFLICT RESPONSE IS ITSELF AN ADDRESS: the measured conflict record
+ * proves awareness alone does not prevent a collision (spec §0, class 8),
+ * so the mechanism does not stop at telling you — it hands you the
+ * envelope. `mailHint` is pre-addressed to the holder; it is null exactly
+ * when `deliverable` answers `'no:<reason>'` — the hint degrades to
+ * "escalate to the operator", never to a silent send. An `'unknown'` peer
+ * keeps its envelope: doubt is not undeliverability (D9).
+ *
+ * `path` is what the REQUEST asked for; `claimedPath` is the standing
+ * claim's path it collided with. They differ under directory containment —
+ * `shared/api.ts` collides with a claim on `shared/` and vice versa, which
+ * no index can express and is why the in-transaction read is the CAS
+ * (D11).
+ */
+export interface ClaimConflict {
+  readonly path: string;
+  readonly claimedPath: string;
+  readonly claimId: number;
+  readonly heldBy: string;
+  readonly heldByUuid: string | null;
+  readonly intent: string;
+  readonly runId: number | null;
+  readonly expiresAt: number;
+  readonly deliverable: PeerDeliverable;
+  readonly mailHint: { readonly toId: string; readonly subject: string } | null;
+}
+
+/**
+ * The deviation ledger's two STORED states. `'stale'` is deliberately not
+ * here: a number allocated and never landed for `LEDGER_STALE_MS` is
+ * REPORTED, never marked — D13 says "marks allocated → landed" but only
+ * "reported" for stale, and D4's doctrine settles the difference: a fact
+ * about a row and a clock is DERIVED BY THE READER, never stored, so it
+ * cannot disagree with its own inputs, and a stale number that finally
+ * lands needs no un-marking transition nothing else has.
+ */
+export const DEVIATION_ALLOC_STATES = ['allocated', 'landed'] as const;
+export type DeviationAllocState = (typeof DEVIATION_ALLOC_STATES)[number];
+
+export function isDeviationAllocState(v: unknown): v is DeviationAllocState {
+  return typeof v === 'string' && (DEVIATION_ALLOC_STATES as readonly string[]).includes(v);
+}
+
+/**
+ * One allocated deviation number, as `GET /api/ledger` reports it. The row
+ * is AUTHORITATIVE with a flat-file ground truth (D8): appended to
+ * `~/.ccrc/ledger-alloc.log` FIRST, committed SECOND, recovered as
+ * `MAX(file, db)` — a number is skipped, never reissued. Gaps cost
+ * nothing (the ledger is prose, parsed by nothing); a reissue cost 394
+ * rewritten D-ref lines across 30 files under merge pressure.
+ *
+ * `'landed'` means the number appears in a plan in the MAIN checkout
+ * (`sweepLedgerReconcile`) — genuinely merged, the signal the incident
+ * lacked. `stale` is DERIVED at read time from `allocatedAt`, `state` and
+ * the clock, never stored (see `DEVIATION_ALLOC_STATES`); it rides the
+ * wire so a phone can see it without owning a clock policy.
+ */
+export interface DeviationAllocation {
+  readonly project: string;
+  /** The number itself — `PRIMARY KEY (project, n)` in the mirror, the
+   *  loud backstop if a refactor ever loses the transaction (D11). */
+  readonly n: number;
+  readonly title: string;
+  readonly allocatedTo: string;
+  readonly runId: number | null;
+  /** Epoch ms, the server's clock — like `ClaimSummary.createdAt`, the
+   *  allocator lives only on the server, so its clock is the event's. */
+  readonly allocatedAt: number;
+  readonly state: DeviationAllocState;
+  readonly landedAt: number | null;
+  /** The plan file reconcile found the number in, repo-relative; null
+   *  until landed. */
+  readonly landedIn: string | null;
+  readonly stale: boolean;
+}
+
+/* --- The present tense's numbers. ----------------------------------------
+ *
+ * All milliseconds unless the name says BYTES, and every one lives HERE and
+ * nowhere else — `single-definition.test.ts`'s standing rule. Unlike the
+ * journal's ceilings above, none of these has a bash twin: ccd never sees a
+ * claim, a quota or the ledger (D12's advisory ruling), so there is no twin
+ * test to keep in step. (The peer-mail pair, `PEER_MAIL_MAX_OUTSTANDING`
+ * and `PEER_MAIL_HOURLY`, landed with wave 0 beside the mail vocabulary
+ * above — same family, earlier commit.)
+ * ------------------------------------------------------------------------ */
+
+/** A claim's lease. Renewed by `renewClaims` on FleetWatcher's EXISTING
+ *  tick while the holder measures RUNNING; a holder measured gone lapses at
+ *  the standing expiry with `endedBy:'session-gone'`; a registry this pass
+ *  could not measure reads as HELD — doubt is not death, matching ccd's
+ *  four `-e` hold readers and `registry.ts`'s `HOLD_UNREADABLE` (D12).
+ *  There is no session-side heartbeat, deliberately: a protocol a model
+ *  must remember is a protocol that will be forgotten, and the failure is
+ *  a wedged module. */
+export const CLAIM_LEASE_MS = 45 * 60_000;
+
+/** The horizon no renewal moves (D12). Doubt cannot hold forever: every
+ *  claim must be periodically re-declared (re-POSTing the same paths renews
+ *  AND re-states intent), and eight hours outlasts any honest wave. */
+export const CLAIM_HARD_CAP_MS = 8 * 60 * 60_000;
+
+/** `intent`'s cap, BYTES — the same number and the same char-vs-byte care
+ *  as the journal's `LC_REASON_MAX_BYTES` above, and a SEPARATE constant on
+ *  purpose: that one is ccd's `--reason` contract with a bash twin, this
+ *  one is a server-only route contract, and tying them would let a ccd cap
+ *  change silently rewrite a route's refusal threshold. Policy is REFUSE,
+ *  never truncate, for `LC_REASON_MAX_BYTES`'s own stated reason. */
+export const CLAIM_INTENT_MAX_BYTES = 512;
+
+/** `floor = max(D-<n> found in the docs scan) + this` (D13). NOT
+ *  decoration: numbers allocated but not yet written into any plan are
+ *  invisible to the scan, and re-issuing one IS the measured failure.
+ *  Burning fifty integers costs nothing. */
+export const LEDGER_SEED_GAP = 50;
+
+/** An `'allocated'` row older than this and never landed is REPORTED stale
+ *  (derived, never stored — see `DEVIATION_ALLOC_STATES`) and NEVER
+ *  reclaimed (D13). */
+export const LEDGER_STALE_MS = 7 * 24 * 60 * 60_000;

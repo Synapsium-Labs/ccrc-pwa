@@ -1192,7 +1192,7 @@ review does not re-litigate them):
 
 #### Steps
 
-- [ ] **Step 1 — verify the ground (2 min).** From the repo root, confirm what 9a shipped and
+- [x] **Step 1 — verify the ground (2 min).** From the repo root, confirm what 9a shipped and
   what this task must not duplicate:
 
   ```bash
@@ -1218,7 +1218,7 @@ review does not re-litigate them):
     listed follow-up, not yours).
   - (d) hits in both → good, Step 4 is verify-only. Hits in neither → see Step 4's fallback arm.
 
-- [ ] **Step 2 — write the failing test (5 min).** Create `server/test/peers-claims-l0.test.ts`
+- [x] **Step 2 — write the failing test (5 min).** Create `server/test/peers-claims-l0.test.ts`
   with exactly this content:
 
   ```ts
@@ -1432,7 +1432,7 @@ review does not re-litigate them):
   });
   ```
 
-- [ ] **Step 3 — run it, expect FAIL (1 min).** From `server/`, foreground, generous timeout
+- [x] **Step 3 — run it, expect FAIL (1 min).** From `server/`, foreground, generous timeout
   (project rule: suites in the foreground, timeout ≥ 600000 ms):
 
   ```bash
@@ -1444,7 +1444,7 @@ review does not re-litigate them):
   (the first missing name wins; the exact name may differ if wave 0 declared the quota
   constants). This is the red that proves the test is wired to the real module, not a copy.
 
-- [ ] **Step 4 — the reject-code gate (2 min).** Re-run Step 1(d)'s grep. **Expected arm:**
+- [x] **Step 4 — the reject-code gate (2 min).** Re-run Step 1(d)'s grep. **Expected arm:**
   hits in both `shared/api.ts` (the declarations) and `server/src/coord/` (the emitters) —
   wave 0 landed them; do nothing, the membership test in Step 2 is now their standing pin.
   **Fallback arm** (zero hits — wave 0's section shipped without them, which means its own
@@ -1474,7 +1474,7 @@ review does not re-litigate them):
   and the emitters belong to one commit, and that commit is wave 0's. Do not commit this
   fallback edit from Task 5.
 
-- [ ] **Step 5 — write the implementation (5 min).** Append the following to `shared/api.ts`,
+- [x] **Step 5 — write the implementation (5 min).** Append the following to `shared/api.ts`,
   immediately after `compareGenerations`'s closing brace (current end of file, line 4386).
   Delete any declaration Step 1 found already landed (expected: none; possible: the two
   `PEER_MAIL_*` constants).
@@ -1787,7 +1787,7 @@ review does not re-litigate them):
   export const PEER_MAIL_HOURLY = 12;
   ```
 
-- [ ] **Step 6 — run, expect PASS (2 min).**
+- [x] **Step 6 — run, expect PASS (2 min).**
 
   ```bash
   cd server && ./node_modules/.bin/vitest run test/peers-claims-l0.test.ts
@@ -1796,7 +1796,7 @@ review does not re-litigate them):
   All tests green. If the reject-code membership test is the one red: you are in Step 4's
   fallback arm — stop and resolve wave 0 first.
 
-- [ ] **Step 7 — typecheck all three consumers (3 min).** The compile-time halves of this
+- [x] **Step 7 — typecheck all three consumers (3 min).** The compile-time halves of this
   task's guards (the `Record<ClaimState, true>` totality, the five-tuple, the interface
   literals) only bite under tsc, and the PWA is the consumer that makes "L0 imports nothing"
   load-bearing — it compiles `shared/*.ts` straight into the browser bundle, where a `node:*`
@@ -1810,7 +1810,7 @@ review does not re-litigate them):
 
   All three exit 0.
 
-- [ ] **Step 8 — regression trio (3 min).** The three standing suites that police this file's
+- [x] **Step 8 — regression trio (3 min).** The three standing suites that police this file's
   disciplines, foreground:
 
   ```bash
@@ -1820,7 +1820,7 @@ review does not re-litigate them):
   All green — no second copy of any enumerated value, the mail table still total in both
   directions, the journal's refusal words still disjoint from `SENTENCES`.
 
-- [ ] **Step 9 — commit (1 min).**
+- [x] **Step 9 — commit (1 min).**
 
   ```bash
   cd /path/to/ccrc-pwa && git add shared/api.ts server/test/peers-claims-l0.test.ts && git commit -m "shared(9b-wave1): peers, claims and the ledger get their words — the present tense lands dark
@@ -1828,7 +1828,7 @@ review does not re-litigate them):
   Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   ```
 
-- [ ] **Step 10 — mutation ceremony (8 min).** Spec §4's table names no L0-specific mutant, so
+- [x] **Step 10 — mutation ceremony (8 min).** Spec §4's table names no L0-specific mutant, so
   the ceremony covers the four guards this slice itself ships. Each mutant: plant, run, expect
   the EXACT red, revert with `git checkout -- shared/api.ts` (the commit in Step 9 makes the
   revert a one-liner). Record the before/after in the execution notes — measured, not asserted.
@@ -1853,7 +1853,7 @@ review does not re-litigate them):
   directions...`), and note that `test/typecheck-tests.test.ts` would additionally red with
   TS2741 on the test's `Record<ClaimState, true>`. Revert.
 
-- [ ] **Step 11 — final green + clean tree (2 min).**
+- [x] **Step 11 — final green + clean tree (2 min).**
 
   ```bash
   cd server && ./node_modules/.bin/vitest run test/peers-claims-l0.test.ts && git status --porcelain
