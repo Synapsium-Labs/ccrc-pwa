@@ -3,6 +3,8 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Deps } from '../server.js';
 import type { Bus } from '../bus.js';
 import { measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
+import { assembleFleet } from '../fleet.js';
+import { peerDeliverable, archiveContradicted } from './peers.js';
 import { CCD_ARGV, verbSupported, sweepDec } from '../ccdargv.js';
 import { tx } from './db.js';
 import { toRunSummary, type CoordStore } from './store.js';
@@ -16,8 +18,8 @@ import { settleItems, type SettleItemsOutcome } from './items.js';
 import { holdReason, queueSystemMail } from './rundefs.js';
 import {
   isRunState, isSendableMailKind, MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
-  MAIL_SUBJECT_MAX_BYTES, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, RUN_TRANSITIONS,
-  type LifecycleQueryResult, type MailRejectCode, type RunState,
+  MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, RUN_TRANSITIONS,
+  type LifecycleQueryResult, type MailRejectCode, type PeerSummary, type RunState,
   type RunSummary,
 } from '../../../shared/api.js';
 
@@ -1242,5 +1244,154 @@ export function registerCoordRoutes(
       gaps: deps.coord.lifecycleGaps(),
     };
     return out;
+  });
+
+  /**
+   * `GET /api/peers?project=<slug>` or `?of=<sessionId>` — exactly one (D9).
+   * Same-project discovery, the thing `ListAgents` structurally cannot do
+   * (ccrc's load balancer scatters a project across accounts, and an account
+   * IS a config dir).
+   *
+   * EXEMPT-BUT-AUTHENTICATED (D-149's pattern, ruled for this route by build 9
+   * D9): a fleet-host session asks "who else is on my project" COOKIELESS, and
+   * the PWA asks the same question with a cookie. Either credential, never
+   * neither; flag-aware, so a dark box is unchanged; auth precedes even the
+   * 501; the refusal carries the session's own `verdict`. All four properties
+   * are `GET /api/runs`'s and are pinned the same way.
+   *
+   * THE ROUTE DOES NOT FILTER ON `.archived` AT ALL, and there is no boolean
+   * called `addressable`: `archivedAt` rides verbatim and decides nothing (a
+   * field that is silently false must not be laundered into a filter — 4 of 8
+   * archived rows were live and heartbeating when measured), `archivedStale`
+   * NAMES the contradiction, and `deliverable` is decided by `peerDeliverable`
+   * (L1) from the STRUCTURAL rungs only — the transient rungs are sweepMail's
+   * lane state, and reporting them here would call a busy peer unreachable,
+   * the exact lie R2 forbids. `'unknown'` is not `'no'`.
+   *
+   * `projects[]` — every project measured this pass — replaces a
+   * `projectKnown` boolean: a typo'd project is this feature's central failure
+   * mode (a worker reads `[]` as "I am alone" and conflicts), and the obvious
+   * fix, one `io.stat` of the project dir, is built on the call the tree
+   * already knows lies (D-114: the agent's stat answers EACCES as
+   * `{missing:true}`).
+   *
+   * Each row is the L0 `PeerSummary` minus `archivedReason`, plus
+   * `claimedPaths` (additive wire, one reader per field): `readRegistry`
+   * parses no `.archivedreason`, so the honest choices at this seam are a new
+   * per-row read this route was not designed around, a `null` that would claim
+   * "never archived" beside a stamp saying otherwise (the overloaded-null the
+   * seam rule forbids), or omission — omission states nothing false.
+   * `claimedPaths` rides beside `intent` because both come off the same live
+   * claim rows and the session line renders both (D12 ruling 3).
+   */
+  app.get('/api/peers', async (req, reply) => {
+    if (deps.cfg.authEnabled) {
+      const session = sessionAuth(req);
+      if (session.reason !== 'session') {
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        if (token !== 'ok') {
+          return reply.code(401).send({
+            ok: false,
+            error: 'unauthenticated',
+            verdict: session.verdict,
+            detail: 'GET /api/peers takes a session cookie OR the box token ' +
+              `(${MAIL_TOKEN_HEADER}); a session reads it cookieless from the fleet host`,
+          });
+        }
+      }
+    }
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+
+    const q = req.query as { project?: unknown; of?: unknown };
+    const hasProject = typeof q.project === 'string' && q.project.trim() !== '';
+    const hasOf = typeof q.of === 'string' && q.of.trim() !== '';
+    if (hasProject === hasOf) {   // neither, or both
+      return reply.code(400).send({ ok: false, error: 'bad-request',
+        detail: 'exactly one of ?project= or ?of= — a peer list is scoped or it is nothing' });
+    }
+
+    // ONE listing, reused below for the presence ladder — the same
+    // fail-shut-on-unlistable idiom the mail ingress uses for this directory.
+    const names = await deps.io.readdir(deps.cfg.registryDir);
+    if (names === null) {
+      return reply.code(502).send({ ok: false, error: 'registry-unmeasurable',
+        detail: 'the registry directory could not be listed — transient, not a fact about any peer' });
+    }
+    // The records are read ONCE and handed to `assembleFleet` (its own
+    // `records` parameter's contract: every lane of one pass describes one
+    // observation) — this route needs them itself for `uuid`, which
+    // `FleetSession` does not carry.
+    const recs = await readRegistry(deps.io, deps.cfg);
+    const recById = new Map(recs.map((r) => [r.id, r]));
+    const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux,
+      undefined, undefined, undefined, undefined, undefined, undefined, recs);
+
+    let project: string;
+    let selfId: string | null = null;
+    if (hasOf) {
+      selfId = (q.of as string).trim();
+      const own = sessions.find((s) => s.id === selfId);
+      if (!own) {
+        if (names.includes(`${selfId}.uuid`)) {
+          return reply.code(502).send({ ok: false, error: 'registry-unmeasurable',
+            detail: `registry row for ${selfId} is listed but unreadable — transient, not absence` });
+        }
+        return reply.code(404).send({ ok: false, error: 'unknown-session',
+          detail: `no registry row for ${selfId}` });
+      }
+      project = own.project;
+    } else {
+      project = (q.project as string).trim();
+    }
+
+    // The claim table is the intent signal that REPLACES the frozen ai-title
+    // (D12 ruling 3): a branch name is written once, an intent can be written
+    // every ten minutes. `expiresAt > now` is derived by this reader (D4's
+    // doctrine) rather than trusted to the sweep's cadence: `claimsForProject`
+    // answers the stored word, and a lapsed-but-unswept row is not live.
+    const now = Date.now();
+    const live = coord.claimsForProject(project).filter((c) => c.expiresAt > now);
+    const byHolder = new Map<string, { intent: string; paths: string[] }>();
+    for (const c of live) {
+      const held = byHolder.get(c.heldBy) ?? { intent: c.intent, paths: [] };
+      held.intent = c.intent;   // rows come oldest-first: the newest live intent wins
+      held.paths.push(...c.paths);
+      byHolder.set(c.heldBy, held);
+    }
+
+    const peers: (Omit<PeerSummary, 'archivedReason'>
+      & { readonly claimedPaths: readonly string[] })[] = sessions
+      .filter((s) => s.project === project && s.id !== selfId)
+      .map((s) => {
+        const lifecycle = s.lifecycle ?? 'unmeasurable';
+        // Rungs 2-3 of the ladder (tmux verdict, pane pid) are already FOLDED
+        // into `lifecycle` at this seam — `sessionLifecycle`'s own input
+        // carries the pane verdict, so a dead pane with a stop stamp reads
+        // `stopped`, not `session-gone` — so they enter as pass-through values
+        // and the ladder decides on rungs 1 and 4, the two facts this pass
+        // measured separately. Registry presence mirrors the identity triple:
+        // a degraded row is `unmeasurable`, never absent (it is in the list).
+        const deliverable = peerDeliverable({
+          registry: s.unmeasured.length > 0 ? 'unmeasurable' : 'measured',
+          tmux: 'live', panePid: 0, lifecycle,
+        });
+        const rec = recById.get(s.id);
+        return {
+          id: s.id,
+          uuid: rec === undefined || rec.unmeasured.includes('uuid') ? null : rec.uuid,
+          project: s.project, wrapper: s.wrapper,
+          workspace: s.workspace, branch: s.branch,
+          lifecycle, deliverable,
+          archivedAt: s.archivedAt,
+          archivedStale: archiveContradicted(s.archivedAt, lifecycle),
+          held: s.held,
+          intent: byHolder.get(s.id)?.intent ?? null,
+          claimedPaths: byHolder.get(s.id)?.paths ?? [],
+        };
+      });
+
+    const projects = [...new Set(sessions.map((s) => s.project))].sort();
+    return reply.code(200).send({ ok: true, peers, projects, etiquette: PEER_ETIQUETTE });
   });
 }

@@ -60,7 +60,7 @@ const tokenHeader = { 'x-ccrc-mail-token': BOX_TOKEN };
  * and why the sweep below probes them with the box token instead: if the GATE
  * were refusing, presenting a token would change nothing.
  */
-const EXEMPT_BUT_AUTHENTICATED = new Set(['GET /api/lifecycle', 'GET /api/runs']);
+const EXEMPT_BUT_AUTHENTICATED = new Set(['GET /api/lifecycle', 'GET /api/runs', 'GET /api/peers']);
 
 // ── the scanner ──────────────────────────────────────────────────────────
 
@@ -191,11 +191,11 @@ describe('the scanner is looking at something', () => {
     // route is now a deliberate act that edits these three numbers, with a
     // reviewer looking at them.
     expect(scanRoutes('server.ts').length).toBe(45);
-    expect(scanRoutes('coord/routes.ts').length).toBe(14);
-    expect(ROUTES.length).toBe(59);
-    // …and the three partitions add up: 3 websockets + 56 HTTP.
+    expect(scanRoutes('coord/routes.ts').length).toBe(15);
+    expect(ROUTES.length).toBe(60);
+    // …and the three partitions add up: 3 websockets + 57 HTTP.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
-    expect(ROUTES.filter((r) => !isWs(r)).length).toBe(56);
+    expect(ROUTES.filter((r) => !isWs(r)).length).toBe(57);
   });
 
   it('found the specific registrations this file reasons about', () => {
@@ -347,16 +347,17 @@ describe('EXEMPT is complete in both directions', () => {
 
   it('exempts exactly the six classes the plan names — nothing has crept in', () => {
     // The whole set, spelled out, so that adding an exemption is a deliberate act
-    // that edits this list with a reviewer looking at it. 18 = /health + the 9
+    // that edits this list with a reviewer looking at it. 19 = /health + the 9
     // box-token lanes + /api/notify + login + status + the SPA shell + the two
-    // halves of the passkey door + GET /api/runs and GET /api/lifecycle (D-149's
-    // pattern, exempt-BUT-authenticated).
+    // halves of the passkey door + GET /api/runs, GET /api/lifecycle and
+    // GET /api/peers (D-149's pattern, exempt-BUT-authenticated).
     expect([...EXEMPT.keys()].sort()).toEqual([
       'GET /*',
       'GET /api/auth/status',
       'GET /api/lifecycle',
       'GET /api/mail',
       'GET /api/mail/:id',
+      'GET /api/peers',
       'GET /api/runs',
       'GET /health',
       'POST /api/auth/login',
@@ -384,7 +385,7 @@ describe('EXEMPT is complete in both directions', () => {
     expect(EXEMPT.has('POST /api/auth/passkey/register/finish')).toBe(false);
   });
 
-  it('the ELEVEN box-token lanes in EXEMPT are the eleven that really check the token', () => {
+  it('the TWELVE box-token lanes in EXEMPT are the twelve that really check the token', () => {
     // The claim "they are already guarded" is checked against the source, not
     // trusted: an exemption whose stated justification is a gate the route does
     // not actually have is the worst kind of hole.
@@ -397,19 +398,20 @@ describe('EXEMPT is complete in both directions', () => {
       const body = coord.slice(at, end);
       return /requireMailToken\(req/.test(body) || /checkMailToken\(/.test(body);
     }).map((h) => h.k);
-    // ELEVEN since build 9: GET /api/lifecycle joined GET /api/runs in the
-    // exempt-but-authenticated class, and it is the token half that puts both in
-    // this list. The scan reads the SOURCE rather than trusting the table, which
-    // is the whole point — an exemption whose stated justification is a gate the
-    // route does not actually have is the worst kind of hole.
+    // TWELVE since build 9b: GET /api/peers joined GET /api/runs and
+    // GET /api/lifecycle in the exempt-but-authenticated class, and it is the
+    // token half that puts all three in this list. The scan reads the SOURCE
+    // rather than trusting the table, which is the whole point — an exemption
+    // whose stated justification is a gate the route does not actually have is
+    // the worst kind of hole.
     expect(gated.sort()).toEqual([
-      'GET /api/lifecycle', 'GET /api/mail', 'GET /api/mail/:id', 'GET /api/runs',
+      'GET /api/lifecycle', 'GET /api/mail', 'GET /api/mail/:id', 'GET /api/peers', 'GET /api/runs',
       'POST /api/mail', 'POST /api/mail/:id/ack',
       'POST /api/runs', 'POST /api/runs/:id/advance', 'POST /api/runs/:id/close',
       'POST /api/runs/:id/dispatch', 'POST /api/runs/:id/items',
     ]);
     for (const k of gated) expect(EXEMPT.has(k), `${k} is box-token gated but not EXEMPT`).toBe(true);
-    // …and `/api/notify`, the eleventh, which lives in server.ts.
+    // …and `/api/notify`, the twelfth, which lives in server.ts.
     expect(server).toContain('checkMailToken(deps.mailToken');
     expect(EXEMPT.has('POST /api/notify')).toBe(true);
   });
@@ -427,7 +429,7 @@ describe('with the gate ARMED and no cookie', () => {
     // Guards the `it.each` below the same way the scanner meta-test guards the
     // scan: an EXEMPT table that had swallowed everything would leave nothing to
     // assert and report green. Exact rather than a floor, for the same reason —
-    // 59 scanned − 3 websockets − 17 exempt-and-scanned (18 EXEMPT entries less
+    // 60 scanned − 3 websockets − 18 exempt-and-scanned (19 EXEMPT entries less
     // `GET /*`, which no `app.get('…')` registers) = 39.
     expect(gated.length).toBe(39);
     expect(ROUTES.length - ROUTES.filter(isWs).length - gated.length).toBe(EXEMPT.size - 1);

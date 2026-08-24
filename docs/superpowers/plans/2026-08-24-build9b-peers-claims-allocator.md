@@ -6165,7 +6165,7 @@ Already in the tree (Build 7/9a, verified at `2d4a7ac7`): `requireMailToken` / `
 
 **Steps:**
 
-- [ ] Write the failing test, `server/test/peers-route.test.ts`:
+- [x] Write the failing test, `server/test/peers-route.test.ts`:
 
 ```ts
 // GET /api/peers — discovery reports the contradiction instead of resolving it
@@ -6382,10 +6382,10 @@ describe('GET /api/peers', () => {
 });
 ```
 
-- [ ] Run it, expect FAIL: `cd server && ./node_modules/.bin/vitest run test/peers-route.test.ts`
+- [x] Run it, expect FAIL: `cd server && ./node_modules/.bin/vitest run test/peers-route.test.ts`
   — every case answers 404 (route unregistered; on a checkout with a built `dist-pwa` the SPA
   fallback answers 200 text/html instead — either way `res.json()` assertions fail).
-- [ ] Add `CLAIM_REFUSE_CODES` to `shared/api.ts`, immediately after `isRunRefuseCode`
+- [x] Add `CLAIM_REFUSE_CODES` to `shared/api.ts`, immediately after `isRunRefuseCode`
   (line 3080):
 
 ```ts
@@ -6427,7 +6427,7 @@ export function isClaimRefuseCode(v: unknown): v is ClaimRefuseCode {
 }
 ```
 
-- [ ] Write the route. In `server/src/coord/routes.ts`: extend the imports —
+- [x] Write the route. In `server/src/coord/routes.ts`: extend the imports —
 
 ```ts
 import { assembleFleet } from '../fleet.js';
@@ -6555,7 +6555,7 @@ import { peerDeliverable, archiveContradicted, type PeerPresence } from './peers
   });
 ```
 
-- [ ] Add the `EXEMPT` entry in `server/src/auth/gate.ts` after the `GET /api/lifecycle` entry
+- [x] Add the `EXEMPT` entry in `server/src/auth/gate.ts` after the `GET /api/lifecycle` entry
   (line 196):
 
 ```ts
@@ -6567,11 +6567,11 @@ import { peerDeliverable, archiveContradicted, type PeerPresence } from './peers
     'tailnet that was not before'],
 ```
 
-- [ ] Run the new suite, expect the deliverable/etiquette cases green but `mail-routes.test.ts`
+- [x] Run the new suite, expect the deliverable/etiquette cases green but `mail-routes.test.ts`
   RED: `./node_modules/.bin/vitest run test/mail-routes.test.ts` fails with
   `unknown-session is not a declared MailRejectCode, RunRefuseCode or LifecycleGapReason` — the
   scanner caught the new vocabulary, which is the ceremony working.
-- [ ] Amend the scanner in `server/test/mail-routes.test.ts`: add `isClaimRefuseCode` to the
+- [x] Amend the scanner in `server/test/mail-routes.test.ts`: add `isClaimRefuseCode` to the
   import from `'../../shared/api.js'` (line 9), and extend the acceptance expression
   (line 435-444) with a fourth arm:
 
@@ -6587,7 +6587,7 @@ import { peerDeliverable, archiveContradicted, type PeerPresence } from './peers
         `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason or ClaimRefuseCode`).toBe(true);
 ```
 
-- [ ] Update the auth sweep's pins in `server/test/auth-gate.test.ts`:
+- [x] Update the auth sweep's pins in `server/test/auth-gate.test.ts`:
   - line 63: `const EXEMPT_BUT_AUTHENTICATED = new Set(['GET /api/lifecycle', 'GET /api/runs', 'GET /api/peers']);`
   - line 194: `expect(scanRoutes('coord/routes.ts').length).toBe(15);`
   - line 195: `expect(ROUTES.length).toBe(60);`
@@ -6598,7 +6598,7 @@ import { peerDeliverable, archiveContradicted, type PeerPresence } from './peers
   - the box-token-lane list (lines 405-410): insert `'GET /api/peers',` after
     `'GET /api/mail/:id',`; retitle the `it` from `the ELEVEN box-token lanes` to
     `the TWELVE box-token lanes` and fix the two `ELEVEN` prose mentions.
-- [ ] Append the corpus naming stub to `ccd/coordinator-skill/references/wave-lifecycle.md`
+- [x] Append the corpus naming stub to `ccd/coordinator-skill/references/wave-lifecycle.md`
   (end of file):
 
 ```md
@@ -6613,20 +6613,20 @@ route-parity suite binds each registration to this corpus from the commit that r
   `lifecycle`, never its archive stamp.
 ```
 
-- [ ] Run, expect PASS, all four suites:
+- [x] Run, expect PASS, all four suites:
   `./node_modules/.bin/vitest run test/peers-route.test.ts test/mail-routes.test.ts test/auth-gate.test.ts test/coordinator-skill.test.ts`
-- [ ] **Mutation ceremony (D9's laundering guard).** In the route, change the peers filter to
+- [x] **Mutation ceremony (D9's laundering guard).** In the route, change the peers filter to
   `.filter((s) => s.project === project && s.id !== selfId && s.archivedAt === null)` — the
   "obvious" filter D9 forbids. Run `test/peers-route.test.ts`: expect exactly 1 red
   (`reports the archived-but-live row`). Revert (`git checkout -- src/coord/routes.ts` is too
   broad mid-task — revert the one line by hand), re-run, green.
-- [ ] **Mutation ceremony (the contradiction is computed, not defaulted).** Change
+- [x] **Mutation ceremony (the contradiction is computed, not defaulted).** Change
   `archivedStale: archiveContradicted(s.archivedAt, deliverable)` to `archivedStale: false`.
   Expect the same test red on `archivedStale`. Revert, re-run, green.
-- [ ] Run the wider slice in the foreground:
+- [x] Run the wider slice in the foreground:
   `./node_modules/.bin/vitest run test/auth-wire.test.ts test/typecheck-tests.test.ts`
   (typecheck proves the L0 additions and route compile everywhere).
-- [ ] Commit:
+- [x] Commit:
 
 ```bash
 git add shared/api.ts server/src/coord/routes.ts server/src/auth/gate.ts \

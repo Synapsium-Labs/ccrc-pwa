@@ -194,6 +194,12 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     'field on ws-rm/ws-reap/ws-gc/forget. Gated, the one surface that outlives a destruction is ' +
     'unreachable from the box that performed it. The handler requires a live session OR a valid ' +
     'box token (coord/routes.ts), so nothing is published to the tailnet that was not before'],
+  ['GET /api/peers',
+    "EXEMPT-BUT-AUTHENTICATED (D-149's pattern, ruled by build 9 D9): a fleet-host session asks " +
+    '"who else is on my project" cookieless — same-project discovery is the feature, and the ' +
+    'fleet host has no cookie jar — while the PWA asks with a cookie. The handler requires a ' +
+    'live session OR a valid box token (coord/routes.ts), so nothing is published to the ' +
+    'tailnet that was not before'],
   ['POST /api/runs/:id/dispatch',
     'the coordinator dispatches a wave — box-token gated'],
   ['POST /api/runs/:id/close',

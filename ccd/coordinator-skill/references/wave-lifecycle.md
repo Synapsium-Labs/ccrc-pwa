@@ -471,3 +471,12 @@ Three families sit side by side on every row and they never merge. `obs` is what
 `dec` is what the caller declared, `meas` is what was measured about the workspace before anything
 was destroyed. When the first two disagree the census raises it as a divergence; nothing picks a
 winner. A `null` in `meas` means it was not measured, never that it was empty.
+
+## Build 9 — peers, claims, deviations (wave 7 surface)
+
+The protocol prose for these routes lands with the build-9 skill wave (coordinator clause 10,
+worker clause 11, `references/peer-protocol.md`). The lines here name the surface so the
+route-parity suite binds each registration to this corpus from the commit that registers it.
+
+- `GET /api/peers` — who else is on this project; read each row's own `deliverable` and
+  `lifecycle`, never its archive stamp.
