@@ -97,7 +97,9 @@ const isMainCheckoutOf = (s: FleetSession, project: string): boolean =>
  *  `cmd_start`'s collision test is `_alive "$(_id "$wrapper" "$project")"`
  *  (`ccd/ccd:7202-7203`) — keyed on the ID, which a swap does not move. On the
  *  live fleet 5 of 10 main checkouts already report a `wrapper` that differs
- *  from their own id prefix (`claude-rp-llm` reports `wrapper=claude2`), so a
+ *  from their own id prefix (an id reading `<wrapper>-<project>` whose registry
+ *  row reports a DIFFERENT wrapper — the count is the evidence, the particular
+ *  names were one fleet's and carried none of the argument), so a
  *  wrapper-scoped refusal MISSES a real collision: the row reports `Y`, the
  *  projection says `W`, no match, the operator taps Start, `ccd start W P`
  *  resolves `_id` to the live `W-P`, prints "already running" and exits 0 —

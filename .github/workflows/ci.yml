@@ -35,7 +35,15 @@ jobs:
       matrix:
         package: [server, agent, pwa]
     steps:
+      # `fetch-depth: 0`, not the default 1, because topology-clean.test.ts
+      # scans the commit RANGE this branch adds — not only the tip — and it
+      # needs `origin/main` present to resolve a base. At depth 1 that ref does
+      # not exist; the suite is written to go RED on a missing base rather than
+      # quietly measure nothing, so removing this line breaks CI loudly instead
+      # of disarming the history guard in silence.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:

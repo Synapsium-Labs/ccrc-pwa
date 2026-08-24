@@ -1907,6 +1907,11 @@ Two conventions carry more weight here than style:
 Design records live in `docs/superpowers/specs/`; the architecture rules the code is held to
 are in `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`.
 
+`CONTRIBUTING.md` covers the rest — the layout, the hermetic-test rule, the node floor and
+why raising it is the only safe direction. `CODE_OF_CONDUCT.md` and `SECURITY.md` state the
+conduct standard and the private channel for a vulnerability; a security problem is not an
+issue to open in public.
+
 ## License
 
 Copyright (C) 2026 Synapsium Labs.

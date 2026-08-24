@@ -1,7 +1,9 @@
 // FleetHostBanner — degraded-mode banner: hidden while the fleet is local or
 // the remote host is reachable; when unreachable it names how long and offers
-// a Reboot action gated behind a QuickConfirm whose copy names the collateral
-// (the fleet box also runs the rp-llm services).
+// a Reboot action gated behind a QuickConfirm whose copy names the collateral.
+// The copy states the property EVERY fleet host has — a reboot takes the whole
+// box down — rather than naming one fleet's co-tenant services, which on any
+// other box was a false claim about the reader's machine.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { FleetHealth } from '../../shared/api';
@@ -71,7 +73,7 @@ describe('FleetHostBanner', () => {
     expect(screen.queryByText(/different account rosters/i)).not.toBeInTheDocument();
   });
 
-  it('Reboot opens a confirm naming the rp-llm collateral, and only calls the API on confirm', async () => {
+  it('Reboot opens a confirm naming the whole-box collateral, and only calls the API on confirm', async () => {
     vi.spyOn(api, 'fleetHealth').mockResolvedValue(health());
     const reboot = vi.spyOn(api, 'rebootFleet').mockResolvedValue(undefined);
     render(<FleetHostBanner />);
@@ -79,7 +81,7 @@ describe('FleetHostBanner', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Reboot' }));
     expect(
-      screen.getByText(/Reboots the whole fleet box \(also restarts the rp-llm services on it\)/),
+      screen.getByText(/Reboots the whole fleet box — everything else running on it goes down too/),
     ).toBeInTheDocument();
     expect(reboot).not.toHaveBeenCalled();
 

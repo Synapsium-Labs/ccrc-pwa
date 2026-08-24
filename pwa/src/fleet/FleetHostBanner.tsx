@@ -4,7 +4,10 @@
 //
 //  - UNREACHABLE (red): the agent WS is down (server/src/remote/). Names how
 //    long, and offers a Hetzner reboot behind a QuickConfirm whose copy names
-//    the collateral — the fleet box also runs the rp-llm services.
+//    the collateral. The dialog says what is true of ANY fleet host — a reboot
+//    takes down every service on the box, not only the fleet — because it used
+//    to name the reference fleet's OWN co-tenant stack by product name, which
+//    on anybody else's box was simply a false statement about their machine.
 //  - ROSTER DIVERGENT (amber): the host is up, and its installed roster
 //    projection is not the one this server's roster produces
 //    (`rosterAgreement`, server/src/fleetstate.ts). No action button: the fix
@@ -95,7 +98,7 @@ export function FleetHostBanner(): ReactNode {
         open={confirmOpen}
         onClose={() => setConfirmOpen(false)}
         title="Reboot the fleet host?"
-        consequence="Reboots the whole fleet box (also restarts the rp-llm services on it)."
+        consequence="Reboots the whole fleet box — everything else running on it goes down too, not just the fleet."
         confirmLabel="Reboot the fleet host"
         onConfirm={reboot}
       />
