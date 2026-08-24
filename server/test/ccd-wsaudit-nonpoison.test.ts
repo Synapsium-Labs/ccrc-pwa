@@ -60,11 +60,22 @@ describe('the lifecycle block cannot poison wsaudit.test.ts\'s scan', () => {
     }
   });
 
-  it('leaves the whole-file token set at exactly the 54 that shipped before build 9', () => {
+  it('leaves the whole-file token set at exactly the 55 that shipped before build 9', () => {
     // Three independent claims about the same scan — STANDING RULE #1 —
     // softened from the brief's literal hard `expect`s so a first failure
     // does not hide the rest.
-    expect.soft(scan(src)).toHaveLength(54);
+    //
+    // RE-BASELINED 54 -> 55 at the Synapsium transplant, and re-DERIVED rather
+    // than nudged until green: Stage 5 added one token to `ccd/ccd` while this
+    // branch was out of tree, so the "before build 9" baseline moved for
+    // main's reason, not this build's. Measured at the transplant with the
+    // scan above run over both `origin/main:ccd/ccd` and `HEAD:ccd/ccd` —
+    // 55 and 55, with the set difference EMPTY IN BOTH DIRECTIONS. So the
+    // claim this `it` actually makes (build 9 harvests no new token) is
+    // unchanged and still true; only the constant it is measured against
+    // moved. A number changed to make a suite green without that measurement
+    // would have hidden exactly the defect this file exists to catch.
+    expect.soft(scan(src)).toHaveLength(55);
     expect.soft(scan(src)).toContain('in-progress');
     expect.soft(scan(src)).not.toContain('refusal');
   });
