@@ -2724,6 +2724,26 @@ export const MAIL_SUBJECT_MAX_BYTES = 200;
 export const MAIL_ARTIFACTS_MAX = 64;
 export const MAIL_ARTIFACT_PATH_MAX_BYTES = 4096;
 
+/**
+ * Peer-mail producer bounds (Build 9b wave 0, spec D10 hole 2) —
+ * `runId === null` traffic ONLY; run mail is bounded by its run's own
+ * lifecycle and is deliberately untouched (the dark-behavior pin in
+ * `server/test/mail-peer-quota.test.ts` holds that door shut). "Bound the
+ * producer, never the record": nothing in the tree DELETEs from `mail` or
+ * `mail_deliveries`, so the only sustainable cap is at the ingress. Three
+ * arms, two codes: same (fromId,toId,subject) outstanding → 409
+ * 'duplicate'; PEER_MAIL_MAX_OUTSTANDING outstanding per (fromId,toId)
+ * pair, or PEER_MAIL_HOURLY ACCEPTED sends per sender per hour → 429
+ * 'peer-quota'. "Outstanding" is `queued`/`delivered` unacked (an ack
+ * frees the slot); the hourly arm counts accepted rows regardless of
+ * delivery state (an ack does not refund the hour). L0 because both sides
+ * name them: the route enforces, and a peer client showing remaining
+ * headroom must not carry a second copy of a policy number
+ * (`MAIL_MAX_ATTEMPTS`'s own argument).
+ */
+export const PEER_MAIL_MAX_OUTSTANDING = 3;
+export const PEER_MAIL_HOURLY = 12;
+
 /** The info string on the fence `renderEnvelope` emits (`coord/envelope.ts`).
  *  ONE definition, here in L0, imported by the renderer — the grammar is
  *  minted server-side and parsed from the same constant, so the round-trip
@@ -3013,6 +3033,14 @@ export const MAIL_REJECT_CODES = [
   // ingress
   'unauthenticated', 'unknown-sender', 'stale-uuid', 'registry-unmeasurable',
   'unknown-recipient', 'unknown-run', 'oversize', 'bad-kind',
+  // ingress — peer-mail bounds (Build 9b wave 0, D10): `runId === null`
+  // traffic only; run mail is deliberately untouched and pinned dark
+  // (server/test/mail-peer-quota.test.ts). 'duplicate' is one word and so
+  // invisible to mail-routes.test.ts's kebab-token scan BY CONSTRUCTION
+  // (it matches only hyphenated tokens — same standing note that union's
+  // docstring already makes for 'paused'); the both-directions membership
+  // scan still covers it.
+  'duplicate', 'peer-quota',
   // delivery
   'undeliverable',
   // done-authority

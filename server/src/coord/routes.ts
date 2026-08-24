@@ -16,7 +16,8 @@ import { settleItems, type SettleItemsOutcome } from './items.js';
 import { holdReason, queueSystemMail } from './rundefs.js';
 import {
   isRunState, isSendableMailKind, MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
-  MAIL_SUBJECT_MAX_BYTES, RUN_TRANSITIONS, type LifecycleQueryResult, type MailRejectCode, type RunState,
+  MAIL_SUBJECT_MAX_BYTES, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, RUN_TRANSITIONS,
+  type LifecycleQueryResult, type MailRejectCode, type RunState,
   type RunSummary,
 } from '../../../shared/api.js';
 
@@ -511,6 +512,38 @@ export function registerCoordRoutes(
     if (resolvedToId === null) {
       return refuse(reply, 404, 'unknown-recipient', { fromId, fromUuid, toId, kind, subject, runId },
         "the 'coordinator' role has no single claimed active program to resolve to");
+    }
+
+    // 9: peer-mail bounds — `runId === null` ONLY (Build 9b wave 0, D10 hole
+    // 2). Run mail is bounded by its run's own lifecycle and stays
+    // byte-identical (the dark pin in mail-peer-quota.test.ts). Nothing ever
+    // DELETEs from mail/mail_deliveries — "bound the producer, never the
+    // record" — so the cap lives here at the door or nowhere.
+    //
+    // Placed LAST, deliberately bending this route's cheap-before-expensive
+    // rule, for two reasons: the pair and the dedupe are keyed on the
+    // RESOLVED recipient — the id mail_deliveries.toId actually joins on,
+    // which does not exist before check 8 and the role resolution above —
+    // and a quota verdict is only ever computed for a sender attribution has
+    // already proven current (checks 5.5/6): a stale-uuid request keeps
+    // getting its own 403, never a 429 charged against the id it presented.
+    //
+    // 'duplicate' first: the most specific refusal — "your message is
+    // already queued" tells the caller not to resend at all, where
+    // 'peer-quota' invites a retry later.
+    if (runId === null) {
+      if (coord.hasOutstandingPeerDuplicate(fromId, resolvedToId, subject)) {
+        return refuse(reply, 409, 'duplicate', { fromId, fromUuid, toId, kind, subject, runId },
+          `an outstanding peer mail from ${fromId} to ${resolvedToId} with this subject is already queued`);
+      }
+      if (coord.outstandingPeerCount(fromId, resolvedToId) >= PEER_MAIL_MAX_OUTSTANDING) {
+        return refuse(reply, 429, 'peer-quota', { fromId, fromUuid, toId, kind, subject, runId },
+          `${PEER_MAIL_MAX_OUTSTANDING} peer mails from ${fromId} to ${resolvedToId} are already outstanding`);
+      }
+      if (coord.peerMailInLastHour(fromId, Date.now()) >= PEER_MAIL_HOURLY) {
+        return refuse(reply, 429, 'peer-quota', { fromId, fromUuid, toId, kind, subject, runId },
+          `${fromId} has sent ${PEER_MAIL_HOURLY} peer mails in the last hour`);
+      }
     }
 
     // One tx: insert the mail row, insert the delivery row (so its own id

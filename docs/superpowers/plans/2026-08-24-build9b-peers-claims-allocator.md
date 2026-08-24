@@ -562,7 +562,7 @@ already queued" tells the caller not to resend at all, where `peer-quota` invite
 
 **Steps:**
 
-- [ ] Write the failing tests. Create `server/test/mail-peer-quota.test.ts`:
+- [x] Write the failing tests. Create `server/test/mail-peer-quota.test.ts`:
 
   ```ts
   // WAVE 0 (Build 9b) — the peer-mail door (spec D10 hole 2): for
@@ -694,7 +694,7 @@ already queued" tells the caller not to resend at all, where `peer-quota` invite
   });
   ```
 
-- [ ] Run it, expect FAIL at module load —
+- [x] Run it, expect FAIL at module load —
   `SyntaxError: The requested module '../../shared/api.js' does not provide an export named 'PEER_MAIL_HOURLY'`
   (the constants do not exist yet):
 
@@ -702,7 +702,7 @@ already queued" tells the caller not to resend at all, where `peer-quota` invite
   cd server && ./node_modules/.bin/vitest run test/mail-peer-quota.test.ts
   ```
 
-- [ ] Add the L0 pieces. In `shared/api.ts`, extend `MAIL_REJECT_CODES` (`:3012-3021`) — the
+- [x] Add the L0 pieces. In `shared/api.ts`, extend `MAIL_REJECT_CODES` (`:3012-3021`) — the
   ingress group, because a quota-refused message never becomes a `mail` row:
 
   ```ts
@@ -750,7 +750,7 @@ already queued" tells the caller not to resend at all, where `peer-quota` invite
   export const PEER_MAIL_HOURLY = 12;
   ```
 
-- [ ] Run again, expect FAIL differently — the file now loads; 4 failed, with the quota
+- [x] Run again, expect FAIL differently — the file now loads; 4 failed, with the quota
   assertions receiving `202` where `409`/`429` was demanded (the route does not check anything
   yet). This intermediate run is the proof the tests test the ROUTE, not the constants:
 
@@ -758,7 +758,7 @@ already queued" tells the caller not to resend at all, where `peer-quota` invite
   cd server && ./node_modules/.bin/vitest run test/mail-peer-quota.test.ts
   ```
 
-- [ ] Write the store methods. In `server/src/coord/store.ts`, directly after the (Task 1)
+- [x] Write the store methods. In `server/src/coord/store.ts`, directly after the (Task 1)
   `hasOutstandingMail` method's closing brace, insert:
 
   ```ts
@@ -804,7 +804,7 @@ already queued" tells the caller not to resend at all, where `peer-quota` invite
   }
   ```
 
-- [ ] Write the route check. In `server/src/coord/routes.ts`, first widen the shared import
+- [x] Write the route check. In `server/src/coord/routes.ts`, first widen the shared import
   (`:17-21`):
 
   ```ts
@@ -853,13 +853,13 @@ already queued" tells the caller not to resend at all, where `peer-quota` invite
     }
   ```
 
-- [ ] Run, expect PASS (4 passed):
+- [x] Run, expect PASS (4 passed):
 
   ```bash
   cd server && ./node_modules/.bin/vitest run test/mail-peer-quota.test.ts
   ```
 
-- [ ] Mutant ceremony, one per arm:
+- [x] Mutant ceremony, one per arm:
   1. In `peerMailInLastHour`, change `AND at > ?` to `AND 1=1` (the parameter still binds — SQLite
      tolerates an unused `?` only if removed, so also drop the `now - 3_600_000` argument to
      `.get(fromId)`). Run `test/mail-peer-quota.test.ts`: expect **1 failed** — the hourly test's
@@ -867,7 +867,7 @@ already queued" tells the caller not to resend at all, where `peer-quota` invite
   2. In the route's pair arm, change `>=` to `>`. Run: expect **1 failed** — the pair test's 4th
      send lands `202` where `429` was demanded. Revert; re-run; 4 passed.
 
-- [ ] Run the both-directions scanner — this is the suite that forces the L0 edit and the route
+- [x] Run the both-directions scanner — this is the suite that forces the L0 edit and the route
   emit into ONE commit (a declared code nobody emits is red in the forward direction):
 
   ```bash
@@ -878,7 +878,7 @@ already queued" tells the caller not to resend at all, where `peer-quota` invite
   `'duplicate'` is one word and invisible to that scan by construction — the membership scan
   covers it.)
 
-- [ ] Commit (one commit — shared + store + route + tests move together):
+- [x] Commit (one commit — shared + store + route + tests move together):
 
   ```bash
   cd <repo-root> && git add shared/api.ts server/src/coord/store.ts server/src/coord/routes.ts server/test/mail-peer-quota.test.ts && git commit -m "server(wave0): peer mail is bounded at the door — one of a kind, three a pair, twelve an hour

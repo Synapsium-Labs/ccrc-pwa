@@ -1212,6 +1212,47 @@ export class CoordStore {
     return row !== undefined;
   }
 
+  /** Whether an OUTSTANDING peer mail with this exact (fromId, toId, subject)
+   *  triple exists — the 409 'duplicate' probe (Build 9b wave 0, D10 hole 2).
+   *  `runId IS NULL` scopes it to the peer lane by construction; run mail has
+   *  its own dedupe (`hasOutstandingMail` above, via `queueSystemMail`) keyed
+   *  WITHOUT the sender, because the coordinator is its only sender. `toId`
+   *  here is the RESOLVED recipient — the id `mail_deliveries.toId` actually
+   *  carries — never the pre-resolution role. */
+  hasOutstandingPeerDuplicate(fromId: string, toId: string, subject: string): boolean {
+    const row = this.db.prepare(
+      'SELECT 1 AS x FROM mail m JOIN mail_deliveries d ON d.mailId = m.id ' +
+      'WHERE m.runId IS NULL AND m.fromId = ? AND d.toId = ? AND m.subject = ? ' +
+      `AND d.state IN ${OUTSTANDING_STATES_SQL} LIMIT 1`,
+    ).get(fromId, toId, subject);
+    return row !== undefined;
+  }
+
+  /** How many peer mails from `fromId` to `toId` are OUTSTANDING (`queued` or
+   *  `delivered`, unacked) — the pair arm of the 429 'peer-quota' bound. An
+   *  ack or a park frees the slot: the bound is on standing pressure against
+   *  one recipient, not on history (the hourly arm below is the one history
+   *  bound, and it deliberately uses a different denominator). */
+  outstandingPeerCount(fromId: string, toId: string): number {
+    return (this.db.prepare(
+      'SELECT COUNT(*) AS n FROM mail m JOIN mail_deliveries d ON d.mailId = m.id ' +
+      `WHERE m.runId IS NULL AND m.fromId = ? AND d.toId = ? AND d.state IN ${OUTSTANDING_STATES_SQL}`,
+    ).get(fromId, toId) as { n: number }).n;
+  }
+
+  /** How many peer mails `fromId` has had ACCEPTED in the sliding hour before
+   *  `now` — the per-sender arm of the 429 'peer-quota' bound. Counts `mail`
+   *  ROWS (inserts), not deliveries and not delivery state: a refusal inserts
+   *  no row and charges nothing; an ack does not refund the hour. `now` is
+   *  the caller's clock, passed in rather than read here — the same
+   *  policy-stays-with-the-caller reason `dueDeliveries`/`capsUsage` already
+   *  take theirs. */
+  peerMailInLastHour(fromId: string, now: number): number {
+    return (this.db.prepare(
+      'SELECT COUNT(*) AS n FROM mail WHERE runId IS NULL AND fromId = ? AND at > ?',
+    ).get(fromId, now - 3_600_000) as { n: number }).n;
+  }
+
   queueDelivery(mailId: number, toId: string, envelope: string): { id: number } {
     const res = this.db.prepare(
       'INSERT INTO mail_deliveries (mailId, toId, state, envelope) VALUES (?, ?, ?, ?)',
