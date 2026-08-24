@@ -86,6 +86,7 @@ Open `http://127.0.0.1:7788/` and add it to your home screen.
 > ```bash
 > ccrc expose duckdns   # a dynamic-DNS name + Caddy + an automatic certificate
 > ccrc expose byo       # you own the name and the proxy; ccrc just records the origin
+> ccrc expose ip        # no name at all: the box's bare IPv4 + a locally-trusted certificate
 > ccrc expose status    # what is configured right now
 > ```
 >
@@ -230,444 +231,334 @@ for a name and a certificate. Your transcripts never leave the machine you insta
 
 ---
 
-The rest of this README is the reference: how each mechanism actually works, what the
-guarantees are, and where they stop. It is written for someone changing the code.
+The rest of this README is the reference, ordered for an outside reader: install and
+expose first, operating the fleet in the middle, and — below a second fold — the
+internals, written for someone changing the code: how each mechanism actually works,
+what the guarantees are, and where they stop.
 
-## How a session's state is known
+## Install (single box)
 
-**Hooks first, the pane as a ranked fallback.** Claude Code fires hooks on its
-own lifecycle, so ccrc no longer has to infer what a session is doing from
-terminal text.
+From a **release artifact** — no build step on the box; the clone is only a
+way of having `install.sh`:
 
-`ccd/session-hook.sh` runs on the hot path of every tool call in every fleet
-session and writes `~/.cc-sessions/<id>.hookstate.json` atomically. Its contract
-is absolute: **exit 0 on every path**, write atomically or not at all, no
-network, no locks, no waiting — a hook that can slow or break a session is worse
-than no hook. It self-identifies from tmux (`cc-<id>`), so a non-fleet session
-exits silently. `install-session-hooks.sh` registers it in every wrapper home
-the account roster marks hooks-able — five today (`~/.claude`,
-`~/.claude-personal`, `~/.claude-corp`, `~/.claude-gpt`, `~/.claude-dev0`),
-sweeping its own managed entries and leaving anything else in `settings.json`
-untouched; every write is `jq`-gated and backed up to `~/ccrc-backups/<ts>/`.
+```bash
+git clone https://github.com/Synapsium-Labs/ccrc-pwa.git ccrc && cd ccrc && bash install.sh --release
+```
 
-The file carries one of three states — `working`, `waiting`, `done` — plus a
-structured **ask envelope** for a waiting session: either
-`{questions: [...]}` (an `AskUserQuestion`, copied verbatim from the tool call's
-own JSON) or `{approval: {tool, summary}}` (a permission prompt), and the
-subagents the hooks have seen start and stop.
+or from the **checkout** — builds the server and the PWA here, then installs
+the same way:
 
-`server/src/hookstate.ts` reads it and **fails to null** on anything it cannot
-vouch for: a missing file, over 64 KB, malformed JSON, an unrecognised state, a
-`sessionId` that no longer matches the registry's uuid for that session (so a
-restarted session cannot inherit its predecessor's state), or a write older than
-30 minutes. `null` therefore means *no fresh hook data* — never a fourth state.
+```bash
+git clone https://github.com/Synapsium-Labs/ccrc-pwa.git ccrc && cd ccrc
+bash install.sh
+```
 
-The pane scraper still runs, and still raises a dialog the hook never got a
-write for (an older Claude Code, a hook that failed to install). Neither source
-suppresses the other; the PWA prefers the envelope and falls back to the scrape.
+The owner in that URL is `CCRC_RELEASE_OWNER`'s value — defined once in
+`install.sh` and matched by `ccd/ccrc`, so `ccrc update` later downloads from
+the same place; `CCRC_RELEASE_BASE_URL` is the documented override that points
+both lanes at a mirror instead. **Status:** no release has been cut yet — there
+are no tags — so `--release` today ends at curl's own 404; build an artifact
+locally with `bash deploy/build-release.sh --untagged --out release-out`, or
+take the checkout lane.
 
-### The branch takes the name the model already wrote
+**What the box needs first.** `install.sh` itself refuses only on `node`;
+`rsync` and `diff` are `ccrc install`'s own refusals (below); the rest is
+measured, by name, by the `ccrc doctor` run the install ends with:
 
-A workspace is born `ws/soft-prairie` — two words from a random table, fixing
-the session id, the directory, the tmux session, the unit, the registry key and
-the branch. The name says nothing about the work. Claude Code, meanwhile, has
-already written one: every transcript carries an `ai-title` line generated from
-the first prompt, and until now nothing read it.
+- **node ≥ 22.13.0** — the `engines.node` floor all three packages agree on
+  (`node:sqlite` needs it unflagged, so an older node fails to boot, not
+  degrades)
+- **rsync** and **diff** — `ccrc install` places the tree with one and
+  compares config dirs with the other
+- a **systemd user session**, with lingering enabled — the one privileged
+  step the installer prints rather than runs
+- **tmux**, **git**, **jq**, **python3**, **flock** — the fleet substrate
+- **gh**, authenticated, if PR state/review/merge should work
+- **curl**, for `--release` mode
 
-`FleetWatcher`'s naming lane (10 s) renames the branch to that title, slugified:
-lowercase, non-alphanumeric runs collapsed to `-`, at most 40 characters cut
-back to a word boundary, prefixed `ws/`. It fires only while the branch is still
-exactly its born name — that comparison *is* the idempotence marker, so there is
-no new registry field and nothing to clean up on reap — and it reads the
-transcript behind a size+mtime gate, so a transcript with no title (nine of 609
-on this box) is not re-read forever.
+`install.sh` refuses first — `node` missing, or below the floor
+`server/package.json`'s `engines.node` declares (naming both versions) —
+otherwise it builds the server and the PWA (checkout mode; `--release`
+skips the build and hands off to the staged tree — "Releases" below) and
+hands off to `ccrc install`
+(`ccd/ccrc install`), which seeds the roster and `ccrc.env`, places the tree at
+`~/ccrc`, installs the systemd user units, converges the wrappers your roster
+declares (the seeded default roster declares one `upstream` account, so a
+fresh install writes none), and ends by running `ccrc doctor` — the install's
+own exit code is doctor's. **Green means the box
+is ready**; the PWA answers at `http://127.0.0.1:7788/`. Re-running either
+script converges rather than damaging an existing install. `rsync` and `diff`
+are hard by-name dependencies of `ccrc install` — `rsync` places the tree, and
+`diff` is what both skill installers compare a config dir against — with **no
+doctor check for either yet**; absent, each refuses naming the package rather
+than failing opaquely mid-copy, and a refused skill install is fatal to the
+whole verb. `cmp` is the third of the class and the mildest: its two call sites
+— `_inst_atomic` and `_inst_keep_aside` — leave the comparison unguarded on
+purpose, so a box without it rewrites identical bytes rather than refusing, the
+safe direction. (`_inst_tree_copy` compares with `diff -r -q`, not `cmp`, and
+degrades the same way; the refusal on a missing `diff` comes from the two skill
+installers it then runs.)
 
-**A branch that has been pushed is never renamed — checked two ways against
-origin; when origin is unreachable the rename proceeds with a warning.**
-`ccd ws-rename` refuses with `has-upstream` for a configured tracking upstream
-OR the old name showing up on origin directly, so a branch pushed by hand with
-no `-u` (no upstream is configured, but the name is on the remote) is caught
-the same as one pushed through `ccd pr-open`'s `--set-upstream`. Both probes
-ask only `origin`, and — refusing here would make ws-rename unusable offline
-for a branch that has never been pushed — both warn and proceed rather than
-refuse when it cannot be reached. `ccd ws-rename` also refuses `registry-branch-drift`
-when git's own record for the worktree disagrees with the registry's `branch`
-field, so a workspace hand-renamed with a bare `git branch -m` (bypassing this
-verb, and so never updating the registry) cannot have some *other* branch
-renamed out from under it by a sweep that still believes the registry's stale
-name. **It is the last verb that refuses on drift, and that is deliberate**:
-`ws-reap` used to refuse the same token and no longer does (it removes the
-branch git actually has checked out and reports the registry's as a note, the
-rule `ws-rm` has always applied), because drift is the ordinary end state of a
-workspace that was archived and then reused — refusing it stranded three
-archived workspaces, ~3.6 G, which then had to be removed by hand. A rename is
-different in kind: it ACTS ON the name, so renaming git's branch off a stale
-registry entry drives the two records further apart rather than reconciling
-them. The remedy the refusal names — run `ccd ws-rename` once by hand — is what
-puts them back in agreement. It refuses in
-JSON on stdout at exit 0 — fourteen named tokens, whose copy lives in
-`server/src/wsaudit.ts` — and the one REFUSAL path that keeps a non-zero exit
-is `git branch -m` itself failing, a fault rather than a refusal (the only
-other non-zero path is the python3-availability probe at the top of the
-function, also a fault, not a refusal). A refused workspace keeps its born
-name. Five of the fourteen refusals describe a fact about the workspace that a
-later title cannot change — `has-upstream`, `not-a-workspace`,
-`worktree-unregistered`, `worktree-foreign` and `registry-branch-drift`
-(`server/src/watch.ts`'s `PERMANENT_REFUSALS`; the last three ship their own
-remedy in the refusal detail — the first two a `git -C $main worktree add …`,
-the last a re-run of `ccd ws-rename` once the registry and git agree again —
-so "cannot stop being true" holds only in the sense that no title fixes it) —
-and those retire the session outright: no further attempt, on any title, until
-the server restarts — or until Claude Code rotates that session's own uuid (a
-`/clear`, a compaction), which `ccd`'s `_sync_uuid` mirrors into the registry
-and which earns a fresh incarnation just as a restart does, since retirement
-is keyed on `<id>#<uuid>` (`server/src/watch.ts`'s `attemptedRenames`
-docstring has the mechanism). `bad-branch` is a verdict on the *derived branch*, not the
-workspace, so it is deliberately not in that set — a title that changes can
-change it — even though `deriveBranch` never actually emits a name `ccd` would
-reject, so the refusal does not fire in practice. Every other refusal marks
-only that one `(session, derived name)` pair attempted, so a title that
-changes to a different slug still earns a fresh attempt on the next sweep.
+This is the **single-box** shape only: local fleet mode, localhost, no TLS, no
+agent (`ccrc-agent.service` is deliberately not installed — local mode never
+touches it). The two-box shape — a fleet box installed with `--role fleet`,
+the server box flipped to `CCRC_FLEET=remote` — is "Releases" below plus
+"Remote fleet mode"; runbook step 12 is its worked, boxed proof.
 
-The name types itself into the fleet line and the session header when it lands
-(`pwa/src/fleet/TypedLabel.tsx`); `prefers-reduced-motion` swaps it instantly.
-The workspace slug itself never changes — the archive list, the PR sheet and the
-cleanup confirmation all still name the directory on disk.
+The steps above are proven hermetically (fixture `$HOME`s, every suite in "Develop" below); the
+real-VM proof — an actual fresh box, a stopwatch, RC verifiably off — is the operator's stage gate
+and remains pending. `docs/superpowers/specs/2026-08-19-stage2-vm-gate-runbook.md` is its runbook.
 
-### The attention bucket
+## Exposure: a public name and a real certificate (`ccrc expose`)
 
-Every session on the fleet wire carries `bucket` and `bucketSince`, computed
-once by `sessionBucket` in **`shared/api.ts`** — not `server/src/bucket.ts`,
-which has never existed. It lives in `shared/` because it has TWO producers
-that must not be able to disagree: `assembleFleet` (`server/src/fleet.ts`,
-which passes all three arguments) and `reviveFleetSession` (same file as the
-ladder, which has no `hookEvent` to give and passes two). The fleet screen's
-sections, its counts and each row's own state word all read that one field, so
-they cannot disagree — before this there were three independent re-derivations
-that drifted.
+A box goes public the same way its session gate arms ("The session gate"
+below): dark by default, one operator verb, and nothing privileged ever run
+by ccrc. Three arms, one decision — how much of the outside world you want
+involved:
 
-The ladder tests, in order: `archivedAt` **on a row that is also `dead`**
-(→ `cleanup` when the PR is merged, else `archived`), then `dead`, then
-`attention` (a pending dialog, a waiting hook, or Claude Code's own
-`status: 'waiting'`), then `working`, then `done` (which requires hook
-evidence — a hookless busy→idle transition never proves a turn *finished*),
-then `idle`. **The archived rows come first deliberately**: `ws-archive` stops
-the session, so every cleanup candidate is also `dead`, and a dead-first
-ladder would leave the cleanup bucket permanently empty.
+| mode | you bring | name | certificate | passkeys | third parties |
+|---|---|---|---|---|---|
+| `ccrc expose duckdns` | a free DuckDNS account | `<sub>.duckdns.org`, zero-cost — a ccrc timer keeps it pointed here | public ACME (automatic) | yes | DuckDNS + the ACME CA |
+| `ccrc expose byo` | your own domain | yours — DNS stays yours by contract | public ACME (automatic) | yes | your DNS host + the ACME CA |
+| `ccrc expose ip` | nothing | none — the box's bare global IPv4, measured by the verb itself | caddy's internal CA (`tls internal`) — each device trusts the printed root once | no — passkeys need a domain, so the gate runs on passphrase login only | **none at all** |
 
-**That last sentence is the archived rungs' precondition, not just their
-excuse** (D-74). `ws-archive` kills the pane before it stamps, but `ccd start`
-/ `ccd ensure` clear `.stopped` and `.swapblocked` on a revival and leave
-`$REG/<id>.archived` standing — only `ws-restore` removes it. So a workspace
-archived on merge and revived for more work carried a marker that outranked
-every live rung below it, permanently. Measured on the live fleet 2026-08-17:
-5 of the box's 7 archive markers sat on sessions with a live tmux pane, 4
-mid-turn — a quarter of the fleet rendering the word `merged` while working,
-ranked below idle, counted out of its project's busy total, and with any
-pending question unreachable through the attention section. The bucket now
-answers *what this session is doing*; `archivedAt` still rides the wire
-untouched and still answers *what is staged on disk*, so `/archive`,
-`ws-attic` and the reap flow all find the workspace exactly as before.
+`duckdns` prompts for a subdomain and token (tty-only, echo off, never argv);
+`byo` prompts for your own origin and passkey rp id; `ip` prompts for nothing
+but the caddy bind — the address is measured (`hostname -I`, first global
+IPv4), and a NAT'd box is refused rather than certified for an address it
+does not carry (a changed box IP is a re-run of the verb). Whichever arm, the
+verb writes two ccrc-owned files and prints the rest:
 
-**Two observers decide `working`, and the fresher one wins** (D-75). `status`
-comes from Claude Code's `sessions/<pid>.json`; `hookState` comes from
-`session-hook.sh`. Both fail, in opposite directions. The live file *wedges* —
-a turn whose last tool call was a Bash ends without Claude Code writing the
-transition back, leaving `"status":"shell"` forever (measured twice on one
-day; one session held it 1h55m while its hook had written `done` 5.7s after
-the file's last write). The live file is also blind to a session waiting on
-subagents, and reads `idle` when it is missing, unreadable, or behind an
-unknown wrapper. So `sessionBucket` compares `hookUpdatedAt` against
-`statusUpdatedAt`: a newer hook `done` unseats a stale `busy` (except
-`SessionStart`'s synthetic write, which proves "never started", not
-"finished"), and a newer hook `working` raises a stale or absent `idle`.
-`status` itself is untouched by this — it stays frozen and hook-blind.
+- **`~/.ccrc/exposure.env`** (0600 — the DuckDNS token lives here, and is
+  never printed: `ccrc expose status` and doctor report it as SET/NOT SET
+  only). It carries `CCRC_ORIGIN` and `CCRC_RP_ID` (plus the DuckDNS trio on
+  that arm) and is read by `ccrc.service` as a **second `EnvironmentFile`
+  after `ccrc.env`** — systemd's later-file-wins, so exposure keys override a
+  hand-set placeholder without touching the seed-once `ccrc.env`. To keep the
+  two files from ever disagreeing, the verb refuses to run while `ccrc.env`
+  still sets either key itself, naming both files and which would win.
+- **`~/.ccrc/Caddyfile`**, regenerated whole on every run: the host and
+  `reverse_proxy 127.0.0.1:<CCRC_PORT>`, nothing else. Stock Caddy's automatic
+  HTTPS does the certificate through the standard ACME challenges
+  (HTTP-01/TLS-ALPN-01) — which is why **a router forwarding ports 80 and 443
+  to the box is a prerequisite** the verb states loudly and nothing on the box
+  can verify for you. On the `ip` arm the block is
+  `https://<ip> { tls internal; reverse_proxy 127.0.0.1:<port> }` instead: no
+  ACME and no ports forwarded for issuance — caddy mints the certificate from
+  its own root, and the verb prints the **trust ceremony** (`sudo caddy trust`
+  on the box; installing
+  `/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt` on each
+  phone, iOS and Android steps included). Doctor's `cert` check holds a
+  standing WARN on this arm — the chain is not publicly trusted, by design —
+  and names that same ceremony as the remedy.
 
-`bucketSince` is *derived* from evidence already on the record — never
-remembered by the watcher, which would reset on every deploy and paint the whole
-fleet as freshly-unseen several times a day.
+Everything root-side is a printed three-step ceremony — install caddy from the
+distro, copy the Caddyfile to `/etc/caddy/Caddyfile` (a copy, never a symlink:
+caddy runs as its own user and cannot read inside your home — D-165),
+`sudo systemctl enable --now caddy` — that ccrc never executes: the same
+degraded-step doctrine as the installer's linger step, at verb scale. On the
+DuckDNS arm the verb also installs a user timer (`ccrc-ddns.timer`) that
+re-points the record at this box every five minutes, reading the token from
+`exposure.env` at run time so the world-readable unit file never carries the
+0600 secret. Four doctor checks — `exposure`, `caddy`, `cert`, `name` —
+measure each piece, and all four SKIP on a box that never ran the verb:
+not-configured is a valid end state, not a fault.
 
-A session's **lifecycle** (`running`, `unsupervised`, `stopped`, `restarting`,
-`orphan`, `never-started`, `unmeasurable`) is a new optional FIELD and a
-qualifier beside the row, not a bucket — **never** a new `SessionBucket`
-member and never a change to the ladder above. The live `fleet` frame is cast
-from the wire, not revived, so an unknown bucket token would crash an
-already-deployed PWA where an unknown lifecycle token simply renders no
-qualifier.
+Users with their own proxy skip the Caddy step; the documented contract is
+"terminate TLS, forward to `localhost:$CCRC_PORT`" (set in ccrc.env at
+install; default 7788). ccrc itself never speaks TLS and
+listens on loopback only.
 
-`status` itself stays frozen and hook-blind; a test asserts it is identical with
-and without hook state present.
+After exposing: restart the server so it reads the new origin, and **re-enrol
+every passkey** — passkeys are origin-bound, and a key enrolled at the old
+name fails loudly, with the login screen naming the old rp id. (On the `ip`
+arm there is nothing to re-enrol: passkeys need a domain — on a bare IP the
+gate runs on passphrase login only, and enrolment simply never appears.) Then
+add the exposed origin to a phone's home screen — Android Chrome / iOS
+Safari — for the standalone, installable app. The full
+choreography — prerequisites, the sudo ceremony, the expected doctor
+transcript, the phone proof — is step 11 of
+[`docs/superpowers/specs/2026-08-19-stage2-vm-gate-runbook.md`](docs/superpowers/specs/2026-08-19-stage2-vm-gate-runbook.md).
 
-### What a row's lifecycle reads off the registry
+## Releases — install from an artifact, update, uninstall
 
-Four registry fields, each written by a single choke point so a stamp is
-never left half-true:
+Design: `docs/superpowers/specs/2026-08-21-stage4-release-design.md`. Runbook step 12 (same file
+as above) is the two-box worked proof of everything in this section.
 
-| Field | Shape | Written by |
-| --- | --- | --- |
-| `$REG/<id>.stopped` | `<epoch> <surface>` | `_ws_unsupervise` — the one choke point every stop path (`cmd_stop`, ws-rm, ws-archive, ws-reap, forget) routes through, so an archived workspace is never left reading `orphan` |
-| `$REG/<id>.supervised` | `<epoch>` | `cmd_supervise`, before it ever calls `cmd_ensure` (which can block up to ~15 minutes on a large resume) and again every 30s from the watch loop — and by `cmd_swap` **throughout** its carry, on the same 30s cadence, so a 188MB `cp -a` never leaves the row reading `orphan` mid-swap |
-| `$REG/<id>.swapblocked` | `<epoch> <reason>` | `_swap_refuse` — cleared by a completed swap, or by a deliberate `ccd start`/`ccd ensure` revival. **Not** by the refusal's own restart, and **not** by the supervisor re-entering its unit: neither is a human act, and both used to erase the record seconds after it was written |
-| `$REG/<id>.spawn` | `<epoch> <rc>` | `_spawn`, on EVERY verdict (0/2/3/4), success included — the one channel from a spawn inside the supervisor unit to a `ccd start` polling from another process |
+**The pipeline.** Pushing a tag `v*` runs `.github/workflows/release.yml`, which is deliberately
+thin: it runs `deploy/build-release.sh` (the testable core — runnable locally, refuses a dirty
+tree and refuses an untagged HEAD without `--untagged`) and uploads what the script built to the
+tag's GitHub Release: `ccrc-<tag>.tar.gz` plus `SHA256SUMS`. The tarball is the matched set —
+prebuilt `server/dist`, `server/dist-pwa`, `agent/dist`, the three `package.json`+lock pairs,
+`shared/`, `ccd/`, the deploy units and helpers, `install.sh` — with a `MANIFEST` of per-file
+sha256 digests and a shipped `build.json` that always carries the tag as `version`, so a
+release-installed box reports its identity (`ccrc version` prints a `version vX.Y.Z` line;
+`/health` emits a sibling `version` field; `buildAgreement` still compares sha+dirty only — the
+sha is the truth, the tag is the label).
 
-A heartbeat inside **120 seconds** is fresh; the supervisor re-stamps every
-**30 seconds**, so a live loop never drifts stale under its own steady
-state. Those four inputs — pane liveness, heartbeat freshness, the stop
-stamp, and whether the row was ever started — decide one of seven
-lifecycle states, evaluated in this order: `running` (alive, fresh
-heartbeat), `unsupervised` (alive, no fresh heartbeat — what a pre-fix `ccd
-start` minted: no auto-swap, no auto-compact, no uuid-sync, nothing to
-record its death), `stopped` (dead, a stop stamp present — checked BEFORE
-the heartbeat, so a stop taken inside the freshness window reads `stopped`
-immediately rather than `restarting`), `restarting` (dead, fresh heartbeat,
-no stop stamp — between `Restart=always` cycles, or mid-swap), `orphan`
-(dead, stale or absent heartbeat, a start on record — nothing is watching
-it), `never-started` (dead, no heartbeat, never started), and
-`unmeasurable` — a registry read that failed rather than came back empty,
-which wins over every other rung and is never laundered into `orphan`; ccd
-itself can never answer this one (it either reads `$REG` off local disk or
-the file is genuinely absent), so the bash twin's fixture rows for it are
-server-only, exempted by name, and the exemption is itself pinned.
+**Install from a release.** `bash install.sh --release [vX.Y.Z]` (default: latest) downloads the
+tarball and `SHA256SUMS`, verifies `sha256sum -c` **before extracting a single file**, extracts to
+a staging dir and hands off to the STAGED `ccrc install` — no build step on the box. Everything
+after `--release [tag]` passes through to that verb; `--role` rides here. Checkout mode
+(`bash install.sh` from a clone, as in "Install" above) is unchanged.
 
-`ccd ls`'s `ALIVE` column is now `STATE`, printing the lifecycle word
-instead of the one bit that used to say the same `no` for a deliberate stop,
-an unwatched death and a session that never existed.
+**Roles.** `ccrc install --role server|fleet|both` (default `both` = the single-box shape above;
+the role is recorded as `CCRC_ROLE` in `ccrc.env`'s first write). `--role fleet` is the fleet
+box's installer path: it prompts — tty-only, the token is never echoed — for the server's WS URL
+and the agent bearer token, writes `~/.ccrc/agent.env` (0600, seed-once), and installs and enables
+`ccrc-agent.service` instead of `ccrc.service`. Wiring the server box to it (`CCRC_FLEET=remote`,
+`CCRC_AGENT_URL`, `CCRC_AGENT_TOKEN`) is "Remote fleet mode" below.
 
-There is deliberately no reconciler daemon and no `ccd doctor`. The
-2026-08-11 incident's stop was itself deliberate — an operator killing a
-runaway swap — and an unattended process that tries to "fix" a fleet row is
-exactly the kind of component that could have fought that stop. Every
-lifecycle state above is read, never repaired automatically; reviving a row
-stays a human act (`ccd start <id>`), on purpose.
+**Update.** `ccrc update [--to vX.Y.Z]` — per box, explicit, never automatic, fleet-box-first
+across a two-box fleet (the server-box run WARNs loudly when `/api/fleet/health` says the fleet
+host is behind; it never refuses). Its spine, each step refusing loudly rather than degrading:
+fetch + verify (transport checksum, then the per-file `MANIFEST`); back up to
+`~/ccrc-backups/<ts>/` (coord.db via `VACUUM INTO`, dists, ccd, units — complete before any
+install write); re-run the install spine from the verified staged tree (role-aware, atomic,
+seed-once files untouched); the supervisor sweep — `try-restart` each `claude-session@*` unit onto
+the new ccd, **only** behind its mandatory `KillMode=process` preflight (a failed preflight
+refuses the sweep, loudly, never the update; panes and tmux are never touched); then the from→to
+report off the re-measured `build.json`. Rolling back is `--to <the older tag>`: it reinstalls
+that artifact set and **prints** the coord.db restore commands from the newest pre-update backup
+rather than auto-restoring (migrations are forward-only; an older server reads a newer coord.db).
+`ccrc doctor`'s `build` check compares the *running* server's `/health` sha against the stamp, and
+its `fleet` check's skew remedies name `ccrc update`, fleet box first.
 
-That human act has to actually work on the row it is offered for. An
-`unsupervised` row is a **live** pane, and all three revive verbs used to
-return before they could do anything about it — `ccd ensure` early-returns on
-"already alive", and `ccd start`/`ccd enable` issued `enable` without `--now`,
-which promises a start at next boot and supervises nothing now. So the PWA
-rendered "running unsupervised" beside a Restart button that answered success
-and changed nothing, on what is D2's entire population the day the fix ships.
-All three now adopt such a pane: `systemctl --user reset-failed` then
-`enable --now`, whose unit re-enters through `cmd_ensure`, finds the pane
-already there, and watches it — no second spawn, and no change at all for a
-row that is already `running`, which stays the cheap no-op it has always been.
+**The maintenance verbs.** `ccrc backup` runs update's backup step standalone (same set, same
+directory shape, pruned to the newest `CCRC_BACKUP_KEEP` timestamped dirs, default 10 — hand-made
+siblings are never touched). `ccrc logs [-f] [-n N]` is `journalctl --user` against this box's own
+unit (`ccrc.service`, or `ccrc-agent.service` when the recorded role is `fleet`). `ccrc uninstall`
+takes the box off ccrc and leaves reinstall safe: it refuses while live sessions exist (unless
+`--force`), removes the units, ccrc's managed settings.json hook entries (per-file backup;
+unmanaged entries survive byte-identically), marker-verified wrappers only, ccrc's own artifacts
+inside `~/.cc-sessions` file-by-file, `~/ccrc` and the installed executables — and preserves
+`~/.ccrc` whole, the registry rows and operator switches, worktrees and `~/ccrc-backups`, printing
+(never running) the keep-aside restore commands. `--purge` additionally removes `~/.ccrc` and the
+backups — never worktrees, never tmux state.
 
-### Workspace holds & programs
+## The session gate: `CCRC_AUTH` (off by default)
 
-A **hold** is a program's declared claim on a workspace — `ccd ws-hold
---session <id> --reason <text>` writes `$REG/<id>.hold`, and `ccd ws-release
---session <id>` removes it. No timeout, no expiry, ever: the claim lasts as
-long as the reason is true, and the reason string *is* the whole display —
-verbatim on the fleet chip, the actions sheet, and the held-merged push,
-parsed nowhere. Workspace-only (a main checkout has nothing to protect) and an
-archived workspace refuses (restore first). An empty *or whitespace-only*
-reason refuses in all three layers — the composer and `ccd ws-hold` share one
-sentence (`empty reason — say which program holds this`), while the route
-answers a bare 400 `bad-request`, which is what a non-PWA client sees.
+The PWA and its API can be put behind a **passphrase**, with optional
+**passkeys** on top. It is **off in the shipped default**, and that is the whole
+deploy story: with the flag off the gate's one `onRequest` hook is a
+passthrough, nothing reads a passphrase file, and the box behaves exactly as it
+did before the gate existed — so the mechanism ships to a live fleet before
+anyone decides to turn it on. A box that never arms it is a box anyone who can
+reach it can drive, which is the pre-existing posture, stated rather than
+implied.
 
-A hold has more consumers than any one paragraph used to admit: **four rungs in
-ccd** — `ws-rm` and `ws-reap` refuse, `ws-release` removes, and `forget` refuses
-— plus the archive sweep, plus every place the PWA renders the reason. All four
-ccd rungs test `-e`, so an *unreadable* hold refuses too.
+**A passphrase on its own changes nothing, and so does the flag on its own.**
+Arming is one operator act with two halves, and the order is: set the
+passphrase, then arm the flag.
 
-`archiveMerged`'s auto-archive gate is *merged **and unheld*** — `held === null`
-is the conjunct — so a workspace idle between two waves of the same program
-reads as claimed, not finished, and survives a sweep even after its PR merges.
-The hold is re-read from the registry at the archive decision point, not taken
-from the snapshot the sweep opened with, so a hold placed *during* a sweep still
-lands. **Since Build 8, an absent hold is no longer sufficient**: the sweep also
-asks the server's `coord.db` whether an OPEN RUN still names the session, and
-skips if one does. That is what makes release-then-crash and the
-archive-vs-hold race stop mattering — the sweep asks the authoritative
-question, not a file that cannot answer it. The reason string is still
-display-only and parsed back nowhere; it merely gained a `run:<id>` so a human
-reading `~/.cc-sessions` can tell whose claim it is.
+```bash
+ccrc passwd                       # prompts twice, echo off, 12-char floor,
+                                  # writes ~/.ccrc/auth.scrypt at 0600
+$EDITOR ~/.ccrc/ccrc.env          # CCRC_AUTH=on  +  CCRC_RP_ID  +  CCRC_ORIGIN
+systemctl --user restart ccrc.service
+```
 
-Destroying a workspace a program declared mid-flight takes two deliberate acts,
-never one — `ws-rm` dies with `held: <reason> — release first`, `ws-reap`
-answers `{"refused":"held"}`, and the cleanup sheet renders that as "A program
-has this workspace held — it is mid-flight, so nothing was removed." Release
-first, then clean up.
+> **`CCRC_RP_ID` and `CCRC_ORIGIN` must be set in the same edit that arms
+> `CCRC_AUTH`.** Their defaults are `localhost` and `http://localhost:<port>`;
+> armed with those on a box actually reached under a real name, **every
+> non-exempt write and every `/ws/*` upgrade is refused** — a console that
+> loads, reads and cannot act — **and nothing warns at boot.** The pair is
+> internally coherent, so the boot check that catches a *disagreeing* pair
+> passes it, and a self-check that could catch it is not implementable behind a
+> TLS-terminating proxy at all: the server never sees the hostname it was
+> reached under, the proxy is the only party that knows it, and a check that
+> tried to guess would have to fail shut on correctly-configured boxes too.
+> The only signals are one journal line per refusal and a `foreign-origin`
+> failure on every write.
 
-Unchanged: the bucket ladder and `ws-archive` itself. **Manual archive still
-works, and still means yes** — a merged-but-held workspace can be archived by
-hand from the PR sheet, which is why that sheet names the hold instead of
-promising a sweep that will never come. What changed is that the route now
-answers `409 run-open`, naming the runs, when a run still claims the workspace;
-the sheet renders that and offers **Archive anyway**, which sends `force`. The
-operator's own hands stay able to do it; they just have to mean it. See
-[`docs/superpowers/programs/TEMPLATE.md`](docs/superpowers/programs/TEMPLATE.md)
-for the wave-handoff ledger a program keeps beside its hold.
+`CCRC_RP_ID` is the **registrable domain** the box is reached at — `example.com`
+for `ccrc.example.com` — never a bare public suffix, and never derived by
+stripping labels off the hostname. The trap is the normal case for a self-hosted
+box, not an exotic one: the dynamic-DNS and tunnel providers people reach a home
+server through are themselves on the Public Suffix List, so under a name like
+`<you>.duckdns.org` the registrable domain is the **whole** name — strip one more
+label and you have a suffix shared with every other tenant of that provider,
+which browsers refuse outright. Nothing here carries a PSL to know which is
+which, so the operator states the value rather than the server deriving it;
+`PUBLIC_SUFFIX_TRAPS` (`server/src/auth/webauthn.ts`) rejects the short list of
+traps it can actually hit, and that list is not a PSL and must not become one. A credential records the rpId it was enrolled under, so
+changing it makes existing passkeys fail **loudly** ("re-enrol"), which is the
+intended way for a rename to behave. Full key-by-key documentation, including
+the path overrides and the `Secure`-cookie opt-out, is in
+[`deploy/ccrc.env.example`](deploy/ccrc.env.example); the step-by-step arming
+procedure and the operator runbooks (lost device, corrupt secret, disarming) are
+step 10 of
+[`docs/superpowers/specs/2026-08-19-stage2-vm-gate-runbook.md`](docs/superpowers/specs/2026-08-19-stage2-vm-gate-runbook.md).
 
-## Programs, runs and mail — the operator's view
+What is gated, and what is not: **everything except** `/health` (deploy's own
+liveness gate reads the shipped sha out of it), the ten machine lanes the fleet
+host posts to (nine box-token-gated coordination routes plus `/api/notify`,
+which still tolerates an absent token for one deploy generation — none of them
+has a cookie jar), the login and passkey-assertion doors themselves,
+`GET /api/auth/status` (with a minimized anonymous body), and `GET /*`, the
+static bundle a browser has to
+download before it can show a login screen. Enrolling a passkey is **not**
+exempt — it requires already being signed in, which is what makes
+`attestation: 'none'` safe.
 
-A **program** is a long-horizon effort with a slug and a markdown ledger
-(`docs/superpowers/programs/<slug>.md`, in the project's own repo, committed,
-and parsed by nothing). A **run** is one wave of it in one workspace. A
-**coordinator** is an ordinary fleet session running the `ccrc-coordinator`
-skill, placed by `_ws_least_loaded` like any other session, acting through the
-server's HTTP API and never raw `ccd`. See "Fleet coordination" below for the
-skill's contract, the run lifecycle, the mail bus and its box token, caps and
-pause, why `ws-reap` stays human-only, and the honest boundary — this section
-covers only what that one does not: the install lane, the PWA surfaces, the
-disaster-recovery drill, and the Build 4 dogfood runbook.
+**Ending a session** is Accounts → **This session** → **Sign out**: it revokes
+this browser's session server-side and leaves other devices signed in. Enrolled
+passkeys survive it, which is why it is not the lost-device procedure.
 
-**Both skills ship to every account's config dir — five today, not four.** The
-coordinator's protocol is one of a pair: its worker counterpart is the
-`ccrc-worker` skill (`ccd/worker-skill/SKILL.md`, ten clauses pinned by
-`server/test/worker-skill.test.ts`), which carries no `references/` of its own
-and points at the coordinator's — so it must land *beside* it, never instead of
-it, and never first. Skills resolve per `CLAUDE_CONFIG_DIR`, and a session's
-account drifts on swap — so `ccd/install-coordinator-skill.sh` and
-`ccd/install-worker-skill.sh` each install into *every* config dir
-the roster names (`~/.claude`, `~/.claude-personal`, `~/.claude-corp`,
-`~/.claude-gpt` and `~/.claude-dev0` on this fleet), the same list
-`install-session-hooks.sh` uses. There is no hooks-able subset — that concept
-existed only while the installers carried a hand-typed `homes=(…)` array; all
-three now `source` the generated `~/.ccrc/accounts.sh` and `continue` past any
-config dir that is absent, which is what makes "every account" the safe answer
-rather than a broader one. No list is trusted: `install-session-hooks.test.ts`,
-`install-coordinator-skill.test.ts` and `install-worker-skill.test.ts` each RUN
-their installer with no
-`--homes` argv against a fixture home holding a config dir per rostered
-account, and assert every one of them was touched (the older source-text pin in
-`wrapper-roster-fixture.test.ts` went away with the array it was reading).
-Installation happens on every agent deploy AND inside `ccrc install`'s own
-`_inst_skills` step, idempotently, backing up anything it
-replaces. That lane is what makes "place the coordinator — or a worker — like
-any other session" safe.
+**`ccrc passwd` invalidates sessions, not passkeys.** A rotation bumps the
+file's generation and every logged-in browser is expired at once with no
+restart; every enrolled authenticator keeps working, deliberately. For a lost
+device the order is therefore **revoke the passkey in the PWA (Accounts →
+Passkeys → Revoke) first, then rotate the passphrase**. `rm ~/.ccrc/passkeys.json`
+on a running server revokes nothing — the store is loaded once at boot and
+rewritten from memory on the next accepted assertion.
 
-**Three surfaces.** `/runs` is the board — runs grouped by program, with their
-own status words (a run is a lifecycle position, not an attention state, so it
-borrows none of the bucket vocabulary and nothing on it glows). `/mail` is the
-durable feed, reached from the ✉ beside the bell. Every session's own
-outstanding mail sits above the composer, one row above the task strip.
-Records land in the feed whether or not you were watching — only the *push*
-is presence-gated; a record of an agent-to-agent message is a fact about the
-fleet, and it is kept either way.
+**Two boot warnings worth knowing**, because each catches a misconfiguration
+that is otherwise silent: an `rpId`/`origin` pair that disagrees, is malformed,
+or is an IP literal (passkeys go 501, the passphrase door keeps working); and a
+cookie policy that contradicts the origin's scheme — an `http:` `CCRC_ORIGIN`
+with a `Secure` cookie, which produces a login that answers 204 and bounces
+straight back to the login screen with nothing failing anywhere, or an `https:`
+one with the dev opt-out left on.
 
-**If the database is lost**, a program is reconstructible from its ledger
-(committed to the project's own repo) plus the registry and `.prhistory` on
-the **fleet host** — `server/test/reconstruction-drill.test.ts` is that
-procedure, executed against fixtures, naming by name what it recovers and
-what it cannot.
+**`ccrc doctor`'s `auth` check** reports where a box actually stands: a PASS on
+an un-armed box (that is the shipped default, and a doctor that warned about it
+would train an operator to skim), a FAIL on an armed box with no passphrase
+file, and a FAIL on a passphrase file the server would refuse to boot on. It
+prints no byte of the file's contents, and neither does the server's own boot
+refusal.
 
-### The board's three controls, and the transcript that stops lying (Build 4)
+## The box decides `--remote-control`: `~/.ccrc/remote-control`
 
-**Three controls, all on `/runs`, all reached from a phone.**
+Per-box runtime config, under the same ownership rule as the account roster
+`~/.ccrc/accounts.json` ("Accounts" below): **one line**, `on` or `off`,
+created once by whichever lane installed the box and never rewritten after.
 
-1. **Pause / resume the fleet.** The banner at the top of `/runs` reads
-   `$REG/coordinator-paused` on the **fleet host** — the same file
-   `dispatchRun` refuses on — and its toggle writes it through
-   `POST /api/coord/pause` → `ccd coord-pause --state on|off`. Four states,
-   and it is never optimistic: a tap shows `pausing…`/`resuming…` and settles
-   only on the next `{type:'coord'}` frame, rendering `unconfirmed — check
-   /runs` if none arrives. Before the first frame it renders **nothing** —
-   an unmeasured marker must not read as "running".
-2. **Abandon a wedged run.** Two taps, naming the run and its workspace.
-   It **releases** the hold; it never archives, and there is no archive
-   control anywhere on the sheet. An abandon asserts nothing about PR
-   lineage — no fingerprint, no `.prhistory` fold, no `verifyDone` — because
-   the case it exists for is a run whose claim can no longer be measured.
-3. **Start a program.** Composition over existing routes, not a new one:
-   the projected account (`useProjectedHome`, the server's mirror of
-   `_ws_least_loaded`) is named *before* the tap, then `POST /api/sessions`
-   and one kickoff prompt. It never opens a run — the coordinator does that
-   itself — and it refuses outright when a live main checkout of that project
-   already exists, because `ccd start` is idempotent and would otherwise
-   inject a coordinator brief into a session that may be mid-task.
+| Lane | Seeds | Why that value |
+|---|---|---|
+| `ccrc install` (`_inst_rc`) | `off` | `--remote-control` publishes a session to claude.ai; a fresh single-box install has made no such claim and must not start because an installer defaulted it |
+| `deploy/deploy.sh agent` | `on` | a box that was already running every session with the flag; seeding `on` **describes** that box rather than deciding something new about it |
 
-**Rollout order is forced, and it is Build 7's:** ccd verb + agent whitelist +
-coordinator skill (fleet host) **first**, then the server, then the PWA. A PWA
-that ships before the verb renders a pause toggle that answers `501` for every
-tap. This is the standing "AGENT-FIRST" rule for anything touching `ccd/`.
+`ccd`'s `_rc_enabled` is the only reader and the authority: first line,
+whitespace stripped, must be exactly `on`; **absent, unreadable, empty or
+anything else is off**, because a garbled file must not half-enable a mode. That
+strictness includes a missing trailing newline (bash's `read` returns non-zero
+at EOF-before-delimiter), so `printf 'on' > ~/.ccrc/remote-control` reads as
+**off** — both writers end the line, and `ccrc doctor`'s **`rc`** check names
+that case as `PASS rc: off (unparseable …)` rather than reporting it as a
+deliberate `off`.
 
-**The work-item tally is the coordinator's write, and it is made after the
-server re-measured.** Items are declared once, at dispatch, on the dispatch
-body — the ledger is fixed there and `total` never grows. They are settled
-through `POST /api/runs/:id/items`, which the coordinator calls only **after**
-`verifyDone` has re-measured the workspace branch and answered ok: done-authority
-is a fingerprint, not a claim, and the mail bus never routes on subject text.
-A wave whose brief declared no items reads `—`, not `0/0` — an em dash is the
-honest rendering of "nothing was declared", and it is not a defect.
+`rc` is a check of its own, deliberately: it reads the flag file and nothing
+else — no `ccrc.env`, no unit files, no box role — so it answers on a **fleet
+host**, which has no `ccrc.env` at all and is the one box in the topology that
+runs `on`. It is always a PASS: the state is a fact about how the box is
+configured, not a defect, and this doctor's rule is that a WARN owes a remedy.
 
-**In the transcript.** Agent-to-agent mail now renders as a **mail card**
-attributed to its sender (`coordinator → this worker`, kind, subject, run and
-wave, artifact paths as paths). What was missing was never the message — it was
-always in the JSONL — but the attribution. The card is derived from whichever of
-the two lanes put it there: **today** the sweep types only a one-line nudge and
-the worker fetches the body with `GET /api/mail/:id`, so the envelope arrives as
-that call's `tool_result`; **before `43b2737`** the sweep typed the whole
-envelope into the input box, where it landed as a `user` turn and read as if the
-operator had typed it. Both render, so older transcripts keep working. A result
-the server truncated never becomes a card — a fragment cannot back the claim a
-card makes. And the card is a *rendering, never an authorization*: the transcript
-is a rank-3 source, so a session can put a fake envelope in front of itself;
-authoritative mail rows come from the database. The card offers **no ack and no
-reply**:
-ack is box-token gated and is the agent's own act. A question the agent is
-**blocked on right now** reads as live and carries one control, `Answer`, which
-only raises the answer sheet that already exists — it never sends. A question
-the session moved past, or died holding, reads *unanswered* rather than
-*waiting for you*. And a tool result the server truncated says so, in bytes; a
-server too old to report says nothing, which is never the same as saying the
-output was complete.
-
-### Dogfood: Build 4 is the first coordinated program
-
-By decision (spec §9), the first program run through the coordinator is Build 4,
-the transcript surface. Before starting it:
-
-1. The token is on both boxes: `ls -l ~/.cc-secrets/ccrc-mail.token` on the
-   fleet host and `~/.ccrc/mail.token` on the server, each `-rw-------`. Do not
-   `cat` either one.
-2. `ls ~/.claude*/skills/ccrc-{coordinator,worker}/SKILL.md` lists TWO paths per
-   rostered account config dir — ten today. Both skills are placed in every
-   home, by both lanes (`deploy.sh agent <host>` and `ccrc install`), for the
-   same reason: a session is placed with no pinned account, so a swap must
-   never land a coordinator — or a worker — on a home without its protocol.
-3. `~/.cc-sessions/coordinator-paused` does **not** exist, on the **fleet
-   host** — a dispatch reads it there and refuses `409 {refused:'paused'}`
-   with no PWA indicator, so checking on the wrong box is a silent no-op.
-4. The ledger exists and is committed: copy `docs/superpowers/programs/TEMPLATE.md`
-   to `docs/superpowers/programs/build4-transcript-surface.md`, fill the header
-   and wave 1, commit.
-5. Open the run, then dispatch. Watch `/runs`; read `/mail`.
-
-Success is a program that completes with human pauses only at review points,
-and an audit trail that reads true.
-
-## Attention, notifications and answering
-
-- **Unseen watermark** (`pwa/src/lib/seen.ts`): a session is unseen when it
-  entered a human-wanting bucket (`attention`, `done`, `cleanup`) after this
-  device last acknowledged it. Per-device in `localStorage` on purpose — ccrc
-  has no user accounts, so "seen" belongs to the person holding the phone.
-- **Push copy discipline** (`server/src/watch.ts`): project context appears in a
-  title only when more than one project is active, and nothing fires for a
-  session a client reports on screen. The PWA states that claim on every socket
-  open and refreshes it every 15 s; the server expires a claim it has not heard
-  for 45 s, so a phone that loses signal without a close frame goes back to
-  being notified rather than silently muted.
-- **Answering from the notification**: an ask push carries the question's first
-  two option labels as notification actions, and `pwa/public/push-sw.js` POSTs
-  the answer without opening the app. A button is offered *only* where the
-  answer route would accept it — an action that can only be refused costs a tap
-  and a wait to learn what the server already knew.
-- **Catch-up watermark**: `{epoch, seq}` as one atomic JSON value on both sides
-  (`server/src/notifylog.ts`, `pwa/src/lib/notifymark.ts`). A seq is meaningless
-  without the lifetime of the counter that produced it — written separately, a
-  death between the two writes forges a valid-looking pair and silently drops
-  real notifications. When the server cannot *prove* the client saw everything
-  it says `resync`, and the client then surfaces nothing retroactively.
-
-Three routes can act on a session, each with its own named refusals:
-
-| Route | What it does | Gate |
-| --- | --- | --- |
-| `POST /api/sessions/:id/dialog` | answers a **pane** menu by walking the `❯` marker | refuses a stale dialog id; never presses Enter unless the re-captured pane proves the marker landed |
-| `POST /api/sessions/:id/ask` | answers a **hook-reported** question by option index | re-reads the current envelope and refuses unless a content digest still matches, the pane still shows that exact menu, and the question is single |
-| `POST /api/sessions/:id/submit` | presses **one** Enter on a box that already holds text | refuses unless the box matches the text the caller expected; one Enter, never a retry loop |
+**Ordering, on a fleet host:** the flag must be seeded *before* a new `ccd`
+lands, because absent reads off and the gap between the two is a window in which
+a respawn strips `--remote-control` from a live session. `deploy.sh` seeds it in
+the same run, above its own installs, and `agent/test/deploy-verify.test.ts`
+pins that order.
 
 ## Accounts: usage, placement and the disabled marker
 
@@ -947,410 +838,37 @@ session out from under someone mid-login would be wrong; that screen is the
 one case `_accept_first_run_prompts`'s login check owns instead, by warning
 and stopping rather than swapping.
 
-## The PWA↔server protocol handshake (dormant)
+## Attention, notifications and answering
 
-Nothing in the system stamps a version today — no `git` sha ships, no
-`package.json` version key is read — and the one real skew window is a
-stale client: the service worker checks for updates every 15 minutes, so an
-open tab can hold pre-deploy JS against a post-deploy server. A synchronous
-`hello` frame closes that gap without doing anything yet:
+- **Unseen watermark** (`pwa/src/lib/seen.ts`): a session is unseen when it
+  entered a human-wanting bucket (`attention`, `done`, `cleanup`) after this
+  device last acknowledged it. Per-device in `localStorage` on purpose — ccrc
+  has no user accounts, so "seen" belongs to the person holding the phone.
+- **Push copy discipline** (`server/src/watch.ts`): project context appears in a
+  title only when more than one project is active, and nothing fires for a
+  session a client reports on screen. The PWA states that claim on every socket
+  open and refreshes it every 15 s; the server expires a claim it has not heard
+  for 45 s, so a phone that loses signal without a close frame goes back to
+  being notified rather than silently muted.
+- **Answering from the notification**: an ask push carries the question's first
+  two option labels as notification actions, and `pwa/public/push-sw.js` POSTs
+  the answer without opening the app. A button is offered *only* where the
+  answer route would accept it — an action that can only be refused costs a tap
+  and a wait to learn what the server already knew.
+- **Catch-up watermark**: `{epoch, seq}` as one atomic JSON value on both sides
+  (`server/src/notifylog.ts`, `pwa/src/lib/notifymark.ts`). A seq is meaningless
+  without the lifetime of the counter that produced it — written separately, a
+  death between the two writes forges a valid-looking pair and silently drops
+  real notifications. When the server cannot *prove* the client saw everything
+  it says `resync`, and the client then surfaces nothing retroactively.
 
-- `FLEET_PROTO` / `FLEET_PROTO_MIN` live once, in `shared/api.ts` beside
-  `PRESENCE_REFRESH_MS` — both currently `1`, with `MIN <= PROTO` pinned by a
-  test. **`FLEET_PROTO_MIN` is the kill-switch**: raise it above an old
-  build's `FLEET_PROTO` to block that build. It is dormant until then.
-- `/ws/fleet`'s first frame, sent synchronously before the async `fleet`
-  snapshot, is `{ type: 'hello', proto: FLEET_PROTO, min: FLEET_PROTO_MIN }`.
-- **Absence permits.** A connection that never sends `hello` — an older
-  server — never blocks the client; every already-deployed PWA already drops
-  an unrecognized fleet frame silently, which is the safe direction.
-  Blocking requires positive evidence: `hello.min` greater than the client's
-  own `FLEET_PROTO`.
-- Only the client self-blocks — the server never refuses a client; it has no
-  way to know a build is "too new" and nothing here gives it one.
-- A **later, compatible** `hello` on the same connection **clears** the
-  block — deliberately not a one-way latch, so a reconnect to a fixed server
-  unblocks a client that briefly saw a bad frame.
-- While blocked, `BlockScreen` renders as a sibling *above* `.app-shell`
-  (not inside it — a wire-protocol mismatch has no partial-functionality
-  story), copy: *"This app build is too old for the fleet server.
-  Updating…"* plus a manual Reload button. Becoming blocked also **acts**:
-  it triggers the service worker's update check immediately rather than
-  waiting for the 15-minute poll, so most clients self-heal without the
-  button ever being needed.
-- The session stream's reducer (`applySessionMsg`) gained a `default` arm
-  that returns state unchanged — an old client receiving a frame type it
-  doesn't know must shrug at it, not corrupt the store.
-- `AgentReady.v` (the separate server↔agent pair) stays **deliberately
-  unread** — declined, not forgotten: that pair already negotiates by
-  *capability* (`ccdVerbs` + `verbSupported`), which is finer-grained than a
-  bare generation number. `v` remains reserved for a future breaking
-  frame-shape change and gets a consumer only then.
+Three routes can act on a session, each with its own named refusals:
 
-## The box decides `--remote-control`: `~/.ccrc/remote-control`
-
-The other piece of per-box runtime config, and the same ownership rule as
-`accounts.json`: **one line**, `on` or `off`, created once by whichever lane
-installed the box and never rewritten after.
-
-| Lane | Seeds | Why that value |
-|---|---|---|
-| `ccrc install` (`_inst_rc`) | `off` | `--remote-control` publishes a session to claude.ai; a fresh single-box install has made no such claim and must not start because an installer defaulted it |
-| `deploy/deploy.sh agent` | `on` | a box that was already running every session with the flag; seeding `on` **describes** that box rather than deciding something new about it |
-
-`ccd`'s `_rc_enabled` is the only reader and the authority: first line,
-whitespace stripped, must be exactly `on`; **absent, unreadable, empty or
-anything else is off**, because a garbled file must not half-enable a mode. That
-strictness includes a missing trailing newline (bash's `read` returns non-zero
-at EOF-before-delimiter), so `printf 'on' > ~/.ccrc/remote-control` reads as
-**off** — both writers end the line, and `ccrc doctor`'s **`rc`** check names
-that case as `PASS rc: off (unparseable …)` rather than reporting it as a
-deliberate `off`.
-
-`rc` is a check of its own, deliberately: it reads the flag file and nothing
-else — no `ccrc.env`, no unit files, no box role — so it answers on a **fleet
-host**, which has no `ccrc.env` at all and is the one box in the topology that
-runs `on`. It is always a PASS: the state is a fact about how the box is
-configured, not a defect, and this doctor's rule is that a WARN owes a remedy.
-
-**Ordering, on a fleet host:** the flag must be seeded *before* a new `ccd`
-lands, because absent reads off and the gap between the two is a window in which
-a respawn strips `--remote-control` from a live session. `deploy.sh` seeds it in
-the same run, above its own installs, and `agent/test/deploy-verify.test.ts`
-pins that order.
-
-## The session gate: `CCRC_AUTH` (off by default)
-
-The PWA and its API can be put behind a **passphrase**, with optional
-**passkeys** on top. It is **off in the shipped default**, and that is the whole
-deploy story: with the flag off the gate's one `onRequest` hook is a
-passthrough, nothing reads a passphrase file, and the box behaves exactly as it
-did before the gate existed — so the mechanism ships to a live fleet before
-anyone decides to turn it on. A box that never arms it is a box anyone who can
-reach it can drive, which is the pre-existing posture, stated rather than
-implied.
-
-**A passphrase on its own changes nothing, and so does the flag on its own.**
-Arming is one operator act with two halves, and the order is: set the
-passphrase, then arm the flag.
-
-```bash
-ccrc passwd                       # prompts twice, echo off, 12-char floor,
-                                  # writes ~/.ccrc/auth.scrypt at 0600
-$EDITOR ~/.ccrc/ccrc.env          # CCRC_AUTH=on  +  CCRC_RP_ID  +  CCRC_ORIGIN
-systemctl --user restart ccrc.service
-```
-
-> **`CCRC_RP_ID` and `CCRC_ORIGIN` must be set in the same edit that arms
-> `CCRC_AUTH`.** Their defaults are `localhost` and `http://localhost:<port>`;
-> armed with those on a box actually reached under a real name, **every
-> non-exempt write and every `/ws/*` upgrade is refused** — a console that
-> loads, reads and cannot act — **and nothing warns at boot.** The pair is
-> internally coherent, so the boot check that catches a *disagreeing* pair
-> passes it, and a self-check that could catch it is not implementable behind a
-> TLS-terminating proxy at all: the server never sees the hostname it was
-> reached under, the proxy is the only party that knows it, and a check that
-> tried to guess would have to fail shut on correctly-configured boxes too.
-> The only signals are one journal line per refusal and a `foreign-origin`
-> failure on every write.
-
-`CCRC_RP_ID` is the **registrable domain** the box is reached at — `example.com`
-for `ccrc.example.com` — never a bare public suffix, and never derived by
-stripping labels off the hostname. The trap is the normal case for a self-hosted
-box, not an exotic one: the dynamic-DNS and tunnel providers people reach a home
-server through are themselves on the Public Suffix List, so under a name like
-`<you>.duckdns.org` the registrable domain is the **whole** name — strip one more
-label and you have a suffix shared with every other tenant of that provider,
-which browsers refuse outright. Nothing here carries a PSL to know which is
-which, so the operator states the value rather than the server deriving it;
-`PUBLIC_SUFFIX_TRAPS` (`server/src/auth/webauthn.ts`) rejects the short list of
-traps it can actually hit, and that list is not a PSL and must not become one. A credential records the rpId it was enrolled under, so
-changing it makes existing passkeys fail **loudly** ("re-enrol"), which is the
-intended way for a rename to behave. Full key-by-key documentation, including
-the path overrides and the `Secure`-cookie opt-out, is in
-[`deploy/ccrc.env.example`](deploy/ccrc.env.example); the step-by-step arming
-procedure and the operator runbooks (lost device, corrupt secret, disarming) are
-step 10 of
-[`docs/superpowers/specs/2026-08-19-stage2-vm-gate-runbook.md`](docs/superpowers/specs/2026-08-19-stage2-vm-gate-runbook.md).
-
-What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the ten machine lanes the fleet
-host posts to (nine box-token-gated coordination routes plus `/api/notify`,
-which still tolerates an absent token for one deploy generation — none of them
-has a cookie jar), the login and passkey-assertion doors themselves,
-`GET /api/auth/status` (with a minimized anonymous body), and `GET /*`, the
-static bundle a browser has to
-download before it can show a login screen. Enrolling a passkey is **not**
-exempt — it requires already being signed in, which is what makes
-`attestation: 'none'` safe.
-
-**Ending a session** is Accounts → **This session** → **Sign out**: it revokes
-this browser's session server-side and leaves other devices signed in. Enrolled
-passkeys survive it, which is why it is not the lost-device procedure.
-
-**`ccrc passwd` invalidates sessions, not passkeys.** A rotation bumps the
-file's generation and every logged-in browser is expired at once with no
-restart; every enrolled authenticator keeps working, deliberately. For a lost
-device the order is therefore **revoke the passkey in the PWA (Accounts →
-Passkeys → Revoke) first, then rotate the passphrase**. `rm ~/.ccrc/passkeys.json`
-on a running server revokes nothing — the store is loaded once at boot and
-rewritten from memory on the next accepted assertion.
-
-**Two boot warnings worth knowing**, because each catches a misconfiguration
-that is otherwise silent: an `rpId`/`origin` pair that disagrees, is malformed,
-or is an IP literal (passkeys go 501, the passphrase door keeps working); and a
-cookie policy that contradicts the origin's scheme — an `http:` `CCRC_ORIGIN`
-with a `Secure` cookie, which produces a login that answers 204 and bounces
-straight back to the login screen with nothing failing anywhere, or an `https:`
-one with the dev opt-out left on.
-
-**`ccrc doctor`'s `auth` check** reports where a box actually stands: a PASS on
-an un-armed box (that is the shipped default, and a doctor that warned about it
-would train an operator to skim), a FAIL on an armed box with no passphrase
-file, and a FAIL on a passphrase file the server would refuse to boot on. It
-prints no byte of the file's contents, and neither does the server's own boot
-refusal.
-
-## Exposure: a public name and a real certificate (`ccrc expose`)
-
-A box goes public the same way its gate armed: dark by default, one operator
-verb, and nothing privileged ever run by ccrc. Three arms, one decision —
-how much of the outside world you want involved:
-
-| mode | you bring | name | certificate | passkeys | third parties |
-|---|---|---|---|---|---|
-| `ccrc expose duckdns` | a free DuckDNS account | `<sub>.duckdns.org`, zero-cost — a ccrc timer keeps it pointed here | public ACME (automatic) | yes | DuckDNS + the ACME CA |
-| `ccrc expose byo` | your own domain | yours — DNS stays yours by contract | public ACME (automatic) | yes | your DNS host + the ACME CA |
-| `ccrc expose ip` | nothing | none — the box's bare global IPv4, measured by the verb itself | caddy's internal CA (`tls internal`) — each device trusts the printed root once | no — passkeys need a domain, so the gate runs on passphrase login only | **none at all** |
-
-`duckdns` prompts for a subdomain and token (tty-only, echo off, never argv);
-`byo` prompts for your own origin and passkey rp id; `ip` prompts for nothing
-but the caddy bind — the address is measured (`hostname -I`, first global
-IPv4), and a NAT'd box is refused rather than certified for an address it
-does not carry (a changed box IP is a re-run of the verb). Whichever arm, the
-verb writes two ccrc-owned files and prints the rest:
-
-- **`~/.ccrc/exposure.env`** (0600 — the DuckDNS token lives here, and is
-  never printed: `ccrc expose status` and doctor report it as SET/NOT SET
-  only). It carries `CCRC_ORIGIN` and `CCRC_RP_ID` (plus the DuckDNS trio on
-  that arm) and is read by `ccrc.service` as a **second `EnvironmentFile`
-  after `ccrc.env`** — systemd's later-file-wins, so exposure keys override a
-  hand-set placeholder without touching the seed-once `ccrc.env`. To keep the
-  two files from ever disagreeing, the verb refuses to run while `ccrc.env`
-  still sets either key itself, naming both files and which would win.
-- **`~/.ccrc/Caddyfile`**, regenerated whole on every run: the host and
-  `reverse_proxy 127.0.0.1:<CCRC_PORT>`, nothing else. Stock Caddy's automatic
-  HTTPS does the certificate through the standard ACME challenges
-  (HTTP-01/TLS-ALPN-01) — which is why **a router forwarding ports 80 and 443
-  to the box is a prerequisite** the verb states loudly and nothing on the box
-  can verify for you. On the `ip` arm the block is
-  `https://<ip> { tls internal; reverse_proxy 127.0.0.1:<port> }` instead: no
-  ACME and no ports forwarded for issuance — caddy mints the certificate from
-  its own root, and the verb prints the **trust ceremony** (`sudo caddy trust`
-  on the box; installing
-  `/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt` on each
-  phone, iOS and Android steps included). Doctor's `cert` check holds a
-  standing WARN on this arm — the chain is not publicly trusted, by design —
-  and names that same ceremony as the remedy.
-
-Everything root-side is a printed three-step ceremony — install caddy from the
-distro, symlink or copy the Caddyfile to `/etc/caddy/Caddyfile`,
-`sudo systemctl enable --now caddy` — that ccrc never executes: the same
-degraded-step doctrine as the installer's linger step, at verb scale. On the
-DuckDNS arm the verb also installs a user timer (`ccrc-ddns.timer`) that
-re-points the record at this box every five minutes, reading the token from
-`exposure.env` at run time so the world-readable unit file never carries the
-0600 secret. Four doctor checks — `exposure`, `caddy`, `cert`, `name` —
-measure each piece, and all four SKIP on a box that never ran the verb:
-not-configured is a valid end state, not a fault.
-
-Users with their own proxy skip the Caddy step; the documented contract is
-"terminate TLS, forward to `localhost:$CCRC_PORT`" (set in ccrc.env at
-install; default 7788, today's value). ccrc itself never speaks TLS and
-listens on loopback only.
-
-After exposing: restart the server so it reads the new origin, and **re-enrol
-every passkey** — passkeys are origin-bound, and a key enrolled at the old
-name fails loudly, with the login screen naming the old rp id. (On the `ip`
-arm there is nothing to re-enrol: passkeys need a domain — on a bare IP the
-gate runs on passphrase login only, and enrolment simply never appears.) The full
-choreography — prerequisites, the sudo ceremony, the expected doctor
-transcript, the phone proof — is step 11 of
-[`docs/superpowers/specs/2026-08-19-stage2-vm-gate-runbook.md`](docs/superpowers/specs/2026-08-19-stage2-vm-gate-runbook.md).
-
-## Install (single box)
-
-```bash
-git clone <this repo> ccrc && cd ccrc
-bash install.sh
-```
-
-`install.sh` refuses first — `node` missing, or below the floor
-`server/package.json`'s `engines.node` declares (naming both versions) —
-otherwise it builds the server and the PWA and hands off to `ccrc install`
-(`ccd/ccrc install`), which seeds the roster and `ccrc.env`, places the tree at
-`~/ccrc`, installs the systemd user units, converges the wrappers your roster
-declares (the seeded default roster declares one `upstream` account, so a
-fresh install writes none), and ends by running `ccrc doctor` — the install's
-own exit code is doctor's. **Green means the box
-is ready**; the PWA answers at `http://127.0.0.1:7788/`. Re-running either
-script converges rather than damaging an existing install. `rsync` and `diff`
-are hard by-name dependencies of `ccrc install` — `rsync` places the tree, and
-`diff` is what both skill installers compare a config dir against — with **no
-doctor check for either yet**; absent, each refuses naming the package rather
-than failing opaquely mid-copy, and a refused skill install is fatal to the
-whole verb. `cmp` is the third of the class and the mildest: its two call sites
-— `_inst_atomic` and `_inst_keep_aside` — leave the comparison unguarded on
-purpose, so a box without it rewrites identical bytes rather than refusing, the
-safe direction. (`_inst_tree_copy` compares with `diff -r -q`, not `cmp`, and
-degrades the same way; the refusal on a missing `diff` comes from the two skill
-installers it then runs.)
-
-This is the **single-box** shape only: local fleet mode, localhost, no TLS, no
-agent (`ccrc-agent.service` is deliberately not installed — local mode never
-touches it). The two-box shape — a fleet box installed with `--role fleet`,
-the server box flipped to `CCRC_FLEET=remote` — is "Releases" below plus
-"Remote fleet mode"; runbook step 12 is its worked, boxed proof.
-
-The steps above are proven hermetically (fixture `$HOME`s, every suite in "Develop" below); the
-real-VM proof — an actual fresh box, a stopwatch, RC verifiably off — is the operator's stage gate
-and remains pending. `docs/superpowers/specs/2026-08-19-stage2-vm-gate-runbook.md` is its runbook.
-
-## Releases — install from an artifact, update, uninstall
-
-Design: `docs/superpowers/specs/2026-08-21-stage4-release-design.md`. Runbook step 12 (same file
-as above) is the two-box worked proof of everything in this section.
-
-**The pipeline.** Pushing a tag `v*` runs `.github/workflows/release.yml`, which is deliberately
-thin: it runs `deploy/build-release.sh` (the testable core — runnable locally, refuses a dirty
-tree and refuses an untagged HEAD without `--untagged`) and uploads what the script built to the
-tag's GitHub Release: `ccrc-<tag>.tar.gz` plus `SHA256SUMS`. The tarball is the matched set —
-prebuilt `server/dist`, `server/dist-pwa`, `agent/dist`, the three `package.json`+lock pairs,
-`shared/`, `ccd/`, the deploy units and helpers, `install.sh` — with a `MANIFEST` of per-file
-sha256 digests and a shipped `build.json` that always carries the tag as `version`, so a
-release-installed box reports its identity (`ccrc version` prints a `version vX.Y.Z` line;
-`/health` emits a sibling `version` field; `buildAgreement` still compares sha+dirty only — the
-sha is the truth, the tag is the label).
-
-**Install from a release.** `bash install.sh --release [vX.Y.Z]` (default: latest) downloads the
-tarball and `SHA256SUMS`, verifies `sha256sum -c` **before extracting a single file**, extracts to
-a staging dir and hands off to the STAGED `ccrc install` — no build step on the box. Everything
-after `--release [tag]` passes through to that verb; `--role` rides here. Checkout mode
-(`bash install.sh` from a clone, as in "Install" above) is unchanged.
-
-**Roles.** `ccrc install --role server|fleet|both` (default `both` = the single-box shape above;
-the role is recorded as `CCRC_ROLE` in `ccrc.env`'s first write). `--role fleet` is the fleet
-box's installer path: it prompts — tty-only, the token is never echoed — for the server's WS URL
-and the agent bearer token, writes `~/.ccrc/agent.env` (0600, seed-once), and installs and enables
-`ccrc-agent.service` instead of `ccrc.service`. Wiring the server box to it (`CCRC_FLEET=remote`,
-`CCRC_AGENT_URL`, `CCRC_AGENT_TOKEN`) is "Remote fleet mode" below.
-
-**Update.** `ccrc update [--to vX.Y.Z]` — per box, explicit, never automatic, fleet-box-first
-across a two-box fleet (the server-box run WARNs loudly when `/api/fleet/health` says the fleet
-host is behind; it never refuses). Its spine, each step refusing loudly rather than degrading:
-fetch + verify (transport checksum, then the per-file `MANIFEST`); back up to
-`~/ccrc-backups/<ts>/` (coord.db via `VACUUM INTO`, dists, ccd, units — complete before any
-install write); re-run the install spine from the verified staged tree (role-aware, atomic,
-seed-once files untouched); the supervisor sweep — `try-restart` each `claude-session@*` unit onto
-the new ccd, **only** behind its mandatory `KillMode=process` preflight (a failed preflight
-refuses the sweep, loudly, never the update; panes and tmux are never touched); then the from→to
-report off the re-measured `build.json`. Rolling back is `--to <the older tag>`: it reinstalls
-that artifact set and **prints** the coord.db restore commands from the newest pre-update backup
-rather than auto-restoring (migrations are forward-only; an older server reads a newer coord.db).
-`ccrc doctor`'s `build` check compares the *running* server's `/health` sha against the stamp, and
-its `fleet` check's skew remedies name `ccrc update`, fleet box first.
-
-**The maintenance verbs.** `ccrc backup` runs update's backup step standalone (same set, same
-directory shape, pruned to the newest `CCRC_BACKUP_KEEP` timestamped dirs, default 10 — hand-made
-siblings are never touched). `ccrc logs [-f] [-n N]` is `journalctl --user` against this box's own
-unit (`ccrc.service`, or `ccrc-agent.service` when the recorded role is `fleet`). `ccrc uninstall`
-takes the box off ccrc and leaves reinstall safe: it refuses while live sessions exist (unless
-`--force`), removes the units, ccrc's managed settings.json hook entries (per-file backup;
-unmanaged entries survive byte-identically), marker-verified wrappers only, ccrc's own artifacts
-inside `~/.cc-sessions` file-by-file, `~/ccrc` and the installed executables — and preserves
-`~/.ccrc` whole, the registry rows and operator switches, worktrees and `~/ccrc-backups`, printing
-(never running) the keep-aside restore commands. `--purge` additionally removes `~/.ccrc` and the
-backups — never worktrees, never tmux state.
-
-## Develop
-
-```bash
-cd server && npm ci && npm run test      # unit tests, hermetic
-cd ../agent && npm ci && npm run test     # unit tests, hermetic
-cd ../pwa && npm ci && npm run test       # component tests
-```
-
-Run the server against a fixture home: `CCRC_HOME=<tree> npm run dev` in `server/`.
-
-## Deploy
-
-```bash
-bash deploy/deploy.sh                # server: build PWA here (freshness-gated) → rsync → box npm ci + build → restart unit → health check
-bash deploy/deploy.sh agent <host>   # ccrc-agent: rsync → ship ccd + notify.sh (backed up) + session-hook.sh (installs it) → host npm ci + build → restart unit
-```
-
-`deploy/deploy.sh` is a convenience wrapper for pushing a working tree onto a box
-that is **already installed** — it is not the installer; `install.sh` / `ccrc
-install` is the path a new box takes. It has **no default target**: a deploy that
-guessed would ship your working tree to someone else's machine, so it refuses
-with exit 2 until it knows where it is going.
-
-Put the coordinates in `~/.ccrc/deploy.env` — the deploying machine's own file,
-outside every checkout, so it survives worktrees and can never be committed:
-
-```bash
-# ~/.ccrc/deploy.env
-CCRC_BOX=user@fleet-host            # required
-CCRC_SSH_KEY=$HOME/.ssh/id_ed25519  # required
-CCRC_SSH_PORT=22                    # optional, default 22
-```
-
-```bash
-bash deploy/deploy.sh                        # the server box
-bash deploy/deploy.sh agent user@other-box   # the fleet host, when they differ
-```
-
-Anything set in the environment overrides the file, and `CCRC_DEPLOY_ENV` points
-at a different one. The post-deploy liveness check derives its URL from
-`$CCRC_BOX` as `http://<host>:7788/health`; `CCRC_HEALTH_URL` overrides it. The
-agent target's `<host>` defaults to `$CCRC_BOX`, but in a two-box fleet it is a
-different machine (see "Remote fleet mode" below).
-
-Both targets ship a local, gitignored env file to `~/.ccrc/` on the box first
-if one exists (`deploy/ccrc.env` / `ccrc-agent.env` — copy from
-the committed `*.env.example` templates and fill in real tokens; the real
-files are never committed). The service units use `/usr/bin/env node` (box
-node is in `/usr/local/bin`). Every run stamps its backups (previous ccd,
-notify.sh, served dist trees) into `~/ccrc-backups/<timestamp>/` on the
-target before overwriting anything — and a backup copy that *fails* aborts
-the deploy before `rsync --delete` can destroy the state it failed to save.
-The agent deploy installs `ccd` BEFORE restarting the agent — the agent
-caches `ccd caps` at boot, so the reverse order pins a stale verb set.
-
-**Ordering between the two targets.** A change that touches `ccd/` — the hook
-script in particular — must ship to the fleet host *before or with* the server,
-because the server reads what the hook writes. Shipping a server that expects a
-newer envelope shape to a fleet still running the old hook is how you get a
-confident UI over stale data. A server+PWA-only change has no such constraint.
-`ccd ws-rename` is the same rule with a sharper edge: the naming lane calls it
-unattended, and `ccd caps` has advertised the verb since long before it took
-flags — so a server deployed ahead of its ccd sees the verb gate pass and the
-call fail. One attempt per workspace, absorbed by the lane's retry guard, and
-zero if the agent ships first.
-
-**Restore** (manual, from the target box — pick the `<ts>` to roll back to):
-
-```bash
-# fleet host (agent target)
-cp -a ~/ccrc-backups/<ts>/ccd ~/.local/bin/ccd
-cp -a ~/ccrc-backups/<ts>/notify.sh ~/.cc-sessions/notify.sh
-cp -a ~/ccrc-backups/<ts>/session-hook.sh ~/.cc-sessions/session-hook.sh
-cp -a ~/ccrc-backups/<ts>/agent-dist/. ~/ccrc/agent/dist/
-systemctl --user restart ccrc-agent.service
-# server box
-cp -a ~/ccrc-backups/<ts>/dist-pwa/. ~/ccrc/server/dist-pwa/
-systemctl --user restart ccrc.service
-```
+| Route | What it does | Gate |
+| --- | --- | --- |
+| `POST /api/sessions/:id/dialog` | answers a **pane** menu by walking the `❯` marker | refuses a stale dialog id; never presses Enter unless the re-captured pane proves the marker landed |
+| `POST /api/sessions/:id/ask` | answers a **hook-reported** question by option index | re-reads the current envelope and refuses unless a content digest still matches, the pane still shows that exact menu, and the question is single |
+| `POST /api/sessions/:id/submit` | presses **one** Enter on a box that already holds text | refuses unless the box matches the text the caller expected; one Enter, never a retry loop |
 
 ## Remote fleet mode
 
@@ -1360,9 +878,9 @@ instead drives the fleet through `ccrc-agent` running on a separate fleet
 host, over a single authenticated WebSocket — the server never SSHes into
 the fleet box at runtime.
 
-**`remote` is what's actually deployed, and has been** — `GET
-/api/fleet/health` answers `{"mode":"remote"}` on the live server, not
-`local`. The consequence this whole build rests on: **the server and the
+**`remote` is not a hypothetical** — the reference deployment runs it as
+standing config, and `GET /api/fleet/health` answers `{"mode":"remote"}`
+there, not `local`. The consequence this whole build rests on: **the server and the
 fleet host are different boxes**, and the link between them is read-only for
 files except `.cc-clips` (every other mutation crosses it as a whitelisted
 `ccd`/`tmux` verb, never a raw write). The coordinator's dispatch/close
@@ -1549,6 +1067,190 @@ cutover — `remote` is the two-box shape this section describes, so this drill
 exercises the degraded-mode path a real
 agent restart or network blip already produces, not a one-time migration.
 
+## Programs, runs and mail — the operator's view
+
+A **program** is a long-horizon effort with a slug and a markdown ledger
+(`docs/superpowers/programs/<slug>.md`, in the project's own repo, committed,
+and parsed by nothing). A **run** is one wave of it in one workspace. A
+**coordinator** is an ordinary fleet session running the `ccrc-coordinator`
+skill, placed by `_ws_least_loaded` like any other session, acting through the
+server's HTTP API and never raw `ccd`. See "Fleet coordination" below for the
+skill's contract, the run lifecycle, the mail bus and its box token, caps and
+pause, why `ws-reap` stays human-only, and the honest boundary — this section
+covers only what that one does not: the install lane, the PWA surfaces, the
+disaster-recovery drill, and the Build 4 dogfood runbook.
+
+**Both skills ship to every rostered account's config dir.** The
+coordinator's protocol is one of a pair: its worker counterpart is the
+`ccrc-worker` skill (`ccd/worker-skill/SKILL.md`, ten clauses pinned by
+`server/test/worker-skill.test.ts`), which carries no `references/` of its own
+and points at the coordinator's — so it must land *beside* it, never instead of
+it, and never first. Skills resolve per `CLAUDE_CONFIG_DIR`, and a session's
+account drifts on swap — so `ccd/install-coordinator-skill.sh` and
+`ccd/install-worker-skill.sh` each install into *every* config dir
+the roster names, the same list
+`install-session-hooks.sh` uses. There is no hooks-able subset — that concept
+existed only while the installers carried a hand-typed `homes=(…)` array; all
+three now `source` the generated `~/.ccrc/accounts.sh` and `continue` past any
+config dir that is absent, which is what makes "every account" the safe answer
+rather than a broader one. No list is trusted: `install-session-hooks.test.ts`,
+`install-coordinator-skill.test.ts` and `install-worker-skill.test.ts` each RUN
+their installer with no
+`--homes` argv against a fixture home holding a config dir per rostered
+account, and assert every one of them was touched (the older source-text pin in
+`wrapper-roster-fixture.test.ts` went away with the array it was reading).
+Installation happens on every agent deploy AND inside `ccrc install`'s own
+`_inst_skills` step, idempotently, backing up anything it
+replaces. That lane is what makes "place the coordinator — or a worker — like
+any other session" safe.
+
+**Three surfaces.** `/runs` is the board — runs grouped by program, with their
+own status words (a run is a lifecycle position, not an attention state, so it
+borrows none of the bucket vocabulary and nothing on it glows). `/mail` is the
+durable feed, reached from the ✉ beside the bell. Every session's own
+outstanding mail sits above the composer, one row above the task strip.
+Records land in the feed whether or not you were watching — only the *push*
+is presence-gated; a record of an agent-to-agent message is a fact about the
+fleet, and it is kept either way.
+
+**If the database is lost**, a program is reconstructible from its ledger
+(committed to the project's own repo) plus the registry and `.prhistory` on
+the **fleet host** — `server/test/reconstruction-drill.test.ts` is that
+procedure, executed against fixtures, naming by name what it recovers and
+what it cannot.
+
+### The board's three controls, and the transcript that stops lying (Build 4)
+
+**Three controls, all on `/runs`, all reached from a phone.**
+
+1. **Pause / resume the fleet.** The banner at the top of `/runs` reads
+   `$REG/coordinator-paused` on the **fleet host** — the same file
+   `dispatchRun` refuses on — and its toggle writes it through
+   `POST /api/coord/pause` → `ccd coord-pause --state on|off`. Four states,
+   and it is never optimistic: a tap shows `pausing…`/`resuming…` and settles
+   only on the next `{type:'coord'}` frame, rendering `unconfirmed — check
+   /runs` if none arrives. Before the first frame it renders **nothing** —
+   an unmeasured marker must not read as "running".
+2. **Abandon a wedged run.** Two taps, naming the run and its workspace.
+   It **releases** the hold; it never archives, and there is no archive
+   control anywhere on the sheet. An abandon asserts nothing about PR
+   lineage — no fingerprint, no `.prhistory` fold, no `verifyDone` — because
+   the case it exists for is a run whose claim can no longer be measured.
+3. **Start a program.** Composition over existing routes, not a new one:
+   the projected account (`useProjectedHome`, the server's mirror of
+   `_ws_least_loaded`) is named *before* the tap, then `POST /api/sessions`
+   and one kickoff prompt. It never opens a run — the coordinator does that
+   itself — and it refuses outright when a live main checkout of that project
+   already exists, because `ccd start` is idempotent and would otherwise
+   inject a coordinator brief into a session that may be mid-task.
+
+**Rollout order is forced, and it is Build 7's:** ccd verb + agent whitelist +
+coordinator skill (fleet host) **first**, then the server, then the PWA. A PWA
+that ships before the verb renders a pause toggle that answers `501` for every
+tap. This is the standing "AGENT-FIRST" rule for anything touching `ccd/`.
+
+**The work-item tally is the coordinator's write, and it is made after the
+server re-measured.** Items are declared once, at dispatch, on the dispatch
+body — the ledger is fixed there and `total` never grows. They are settled
+through `POST /api/runs/:id/items`, which the coordinator calls only **after**
+`verifyDone` has re-measured the workspace branch and answered ok: done-authority
+is a fingerprint, not a claim, and the mail bus never routes on subject text.
+A wave whose brief declared no items reads `—`, not `0/0` — an em dash is the
+honest rendering of "nothing was declared", and it is not a defect.
+
+**In the transcript.** Agent-to-agent mail now renders as a **mail card**
+attributed to its sender (`coordinator → this worker`, kind, subject, run and
+wave, artifact paths as paths). What was missing was never the message — it was
+always in the JSONL — but the attribution. The card is derived from whichever of
+the two lanes put it there: **today** the sweep types only a one-line nudge and
+the worker fetches the body with `GET /api/mail/:id`, so the envelope arrives as
+that call's `tool_result`; **before `43b2737`** the sweep typed the whole
+envelope into the input box, where it landed as a `user` turn and read as if the
+operator had typed it. Both render, so older transcripts keep working. A result
+the server truncated never becomes a card — a fragment cannot back the claim a
+card makes. And the card is a *rendering, never an authorization*: the transcript
+is a rank-3 source, so a session can put a fake envelope in front of itself;
+authoritative mail rows come from the database. The card offers **no ack and no
+reply**:
+ack is box-token gated and is the agent's own act. A question the agent is
+**blocked on right now** reads as live and carries one control, `Answer`, which
+only raises the answer sheet that already exists — it never sends. A question
+the session moved past, or died holding, reads *unanswered* rather than
+*waiting for you*. And a tool result the server truncated says so, in bytes; a
+server too old to report says nothing, which is never the same as saying the
+output was complete.
+
+### Dogfood: Build 4 is the first coordinated program
+
+By decision (spec §9), the first program run through the coordinator is Build 4,
+the transcript surface. Before starting it:
+
+1. The token is on both boxes: `ls -l ~/.cc-secrets/ccrc-mail.token` on the
+   fleet host and `~/.ccrc/mail.token` on the server, each `-rw-------`. Do not
+   `cat` either one.
+2. `ls ~/.claude*/skills/ccrc-{coordinator,worker}/SKILL.md` lists TWO paths per
+   rostered account config dir. Both skills are placed in every
+   home, by both lanes (`deploy.sh agent <host>` and `ccrc install`), for the
+   same reason: a session is placed with no pinned account, so a swap must
+   never land a coordinator — or a worker — on a home without its protocol.
+3. `~/.cc-sessions/coordinator-paused` does **not** exist, on the **fleet
+   host** — a dispatch reads it there and refuses `409 {refused:'paused'}`
+   with no PWA indicator, so checking on the wrong box is a silent no-op.
+4. The ledger exists and is committed: copy `docs/superpowers/programs/TEMPLATE.md`
+   to `docs/superpowers/programs/build4-transcript-surface.md`, fill the header
+   and wave 1, commit.
+5. Open the run, then dispatch. Watch `/runs`; read `/mail`.
+
+Success is a program that completes with human pauses only at review points,
+and an audit trail that reads true.
+
+### Workspace holds & programs
+
+A **hold** is a program's declared claim on a workspace — `ccd ws-hold
+--session <id> --reason <text>` writes `$REG/<id>.hold`, and `ccd ws-release
+--session <id>` removes it. No timeout, no expiry, ever: the claim lasts as
+long as the reason is true, and the reason string *is* the whole display —
+verbatim on the fleet chip, the actions sheet, and the held-merged push,
+parsed nowhere. Workspace-only (a main checkout has nothing to protect) and an
+archived workspace refuses (restore first). An empty *or whitespace-only*
+reason refuses in all three layers — the composer and `ccd ws-hold` share one
+sentence (`empty reason — say which program holds this`), while the route
+answers a bare 400 `bad-request`, which is what a non-PWA client sees.
+
+A hold has more consumers than any one paragraph used to admit: **four rungs in
+ccd** — `ws-rm` and `ws-reap` refuse, `ws-release` removes, and `forget` refuses
+— plus the archive sweep, plus every place the PWA renders the reason. All four
+ccd rungs test `-e`, so an *unreadable* hold refuses too.
+
+`archiveMerged`'s auto-archive gate is *merged **and unheld*** — `held === null`
+is the conjunct — so a workspace idle between two waves of the same program
+reads as claimed, not finished, and survives a sweep even after its PR merges.
+The hold is re-read from the registry at the archive decision point, not taken
+from the snapshot the sweep opened with, so a hold placed *during* a sweep still
+lands. **Since Build 8, an absent hold is no longer sufficient**: the sweep also
+asks the server's `coord.db` whether an OPEN RUN still names the session, and
+skips if one does. That is what makes release-then-crash and the
+archive-vs-hold race stop mattering — the sweep asks the authoritative
+question, not a file that cannot answer it. The reason string is still
+display-only and parsed back nowhere; it merely gained a `run:<id>` so a human
+reading `~/.cc-sessions` can tell whose claim it is.
+
+Destroying a workspace a program declared mid-flight takes two deliberate acts,
+never one — `ws-rm` dies with `held: <reason> — release first`, `ws-reap`
+answers `{"refused":"held"}`, and the cleanup sheet renders that as "A program
+has this workspace held — it is mid-flight, so nothing was removed." Release
+first, then clean up.
+
+Unchanged: the bucket ladder and `ws-archive` itself. **Manual archive still
+works, and still means yes** — a merged-but-held workspace can be archived by
+hand from the PR sheet, which is why that sheet names the hold instead of
+promising a sweep that will never come. What changed is that the route now
+answers `409 run-open`, naming the runs, when a run still claims the workspace;
+the sheet renders that and offers **Archive anyway**, which sends `force`. The
+operator's own hands stay able to do it; they just have to mean it. See
+[`docs/superpowers/programs/TEMPLATE.md`](docs/superpowers/programs/TEMPLATE.md)
+for the wave-handoff ledger a program keeps beside its hold.
+
 ## Fleet coordination
 
 Build 7 turns a program into a live, server-observed thing: `~/.ccrc/coord.db`
@@ -1715,6 +1417,410 @@ server-side stops that. The single recorded chokepoint is a contract the
 coordinator's skill honors, not a wall the OS enforces — the same "identity
 is attribution, not authentication" stance the mail bus already states for
 who a message claims to be from.
+
+---
+
+*Everything below is the internals reference — the architecture and the
+mechanisms the operating sections above lean on. Nothing here is a
+prerequisite for installing or driving a box; it is where you spelunk when
+you need to reason about one.*
+
+## Architecture
+
+- `server/` — Node ≥22.13.0 (`engines.node`; `node:sqlite` needs it unflagged,
+  and `server/test/node-floor.test.ts` pins both the declaration and the
+  import) + Fastify (TS ESM). One process, systemd user unit
+  `ccrc.service`, bound to one interface only (`CCRC_HOST:CCRC_PORT`,
+  default `127.0.0.1:7788` — an exposed box keeps loopback and lets its
+  proxy front it). One SQLite
+  database, `~/.ccrc/coord.db`, opened with `node:sqlite` (`DatabaseSync`,
+  WAL, `user_version` migrations that refuse to start rather than open
+  empty) — holding runs, work items, mail and coordinator state. This
+  repeals "No database," deliberately and in writing: the deferral had an
+  owner and a named trigger
+  (`docs/superpowers/specs/2026-08-06-attention-ux-design.md:356-357`, "No
+  SQLite… belongs to Build 7, not here"), and Build 7 is that trigger
+  arriving. ccd's flat files — the registry, the hold, `.prhistory` — stay
+  the fleet's own authority; the database holds only what coordination adds
+  on top of them, never a replacement for them (see "Fleet coordination"
+  above). Everything else still reads ccd's flat files and shells out to
+  `ccd`/`tmux` directly through an injected `Runner`/`FleetIO` in **local**
+  fleet mode; in **remote** fleet mode the exact same seams are backed by a
+  WS client talking to `agent/` on the fleet host instead (see "Remote fleet
+  mode" above). Either way the whole thing is unit-testable off-box against
+  fixtures.
+- `agent/` — Node ≥22.13.0 (same `engines.node` floor as `server/`; the three
+  packages must agree — `node-floor.test.ts` — though `node:sqlite` itself is
+  server-only) WS service (TS ESM) that runs ON the fleet host and
+  exposes a small, whitelisted exec/file/tail/pty surface over a bearer-token
+  connection. Only needed for remote fleet mode; local mode never touches it.
+- `pwa/` — React + Vite installable PWA ("phosphor & ink" design). Builds into
+  `server/dist-pwa`, which the server serves at `/`.
+- `shared/` — `agent-protocol.ts` (server↔agent WS message types) and
+  `api.ts` (server↔PWA REST/WS types), imported by both `server/` and
+  `agent/`.
+- `ccd/` — the pieces that live on the **fleet host**: `ccd` itself, plus
+  `session-hook.sh` (the Claude Code hook that reports each session's state)
+  and `install-session-hooks.sh` (the idempotent installer that registers it
+  in every wrapper home). See "How a session's state is known" below.
+- `deploy/` — `ccrc.service` / `ccrc-agent.service` (systemd user units),
+  `ccrc.env.example` / `ccrc-agent.env.example` (env templates — copy to
+  `ccrc.env` / `ccrc-agent.env`, gitignored, to supply real tokens),
+  `notify.sh` (ccd swap hook → `/api/notify`, now firing on a swap **refusal**
+  as well as a landing), `deploy.sh`. A refusal's durable half is not the
+  notice — a banner raised with no socket open is gone, and the operator who
+  was not watching is the one who needs to know — it is the registry field
+  `$REG/<id>.swapblocked`, read back on every fleet poll and rendered on the
+  row until a later swap or a deliberate revive clears it.
+
+HTTPS is whatever fronts the box — `ccrc expose`'s Caddy, a tailnet's own
+serving layer, or a proxy you already run (a secure context is required for
+the service worker + install-to-home-screen); ccrc itself never speaks TLS.
+A proxy shared with co-tenant paths needs the PWA's service worker to leave
+those paths alone — that is the builder's `CCRC_SW_DENYLIST` knob, documented
+in `deploy/ccrc.env.example`; the built-in denylist covers only ccrc's own
+`/api/` and `/ws/`.
+
+## How a session's state is known
+
+**Hooks first, the pane as a ranked fallback.** Claude Code fires hooks on its
+own lifecycle, so ccrc no longer has to infer what a session is doing from
+terminal text.
+
+`ccd/session-hook.sh` runs on the hot path of every tool call in every fleet
+session and writes `~/.cc-sessions/<id>.hookstate.json` atomically. Its contract
+is absolute: **exit 0 on every path**, write atomically or not at all, no
+network, no locks, no waiting — a hook that can slow or break a session is worse
+than no hook. It self-identifies from tmux (`cc-<id>`), so a non-fleet session
+exits silently. `install-session-hooks.sh` registers it in every wrapper home
+the account roster names — each account's own config dir,
+`~/.claude<configDirSuffix>` —
+sweeping its own managed entries and leaving anything else in `settings.json`
+untouched; every write is `jq`-gated and backed up to `~/ccrc-backups/<ts>/`.
+
+The file carries one of three states — `working`, `waiting`, `done` — plus a
+structured **ask envelope** for a waiting session: either
+`{questions: [...]}` (an `AskUserQuestion`, copied verbatim from the tool call's
+own JSON) or `{approval: {tool, summary}}` (a permission prompt), and the
+subagents the hooks have seen start and stop.
+
+`server/src/hookstate.ts` reads it and **fails to null** on anything it cannot
+vouch for: a missing file, over 64 KB, malformed JSON, an unrecognised state, a
+`sessionId` that no longer matches the registry's uuid for that session (so a
+restarted session cannot inherit its predecessor's state), or a write older than
+30 minutes. `null` therefore means *no fresh hook data* — never a fourth state.
+
+The pane scraper still runs, and still raises a dialog the hook never got a
+write for (an older Claude Code, a hook that failed to install). Neither source
+suppresses the other; the PWA prefers the envelope and falls back to the scrape.
+
+### The branch takes the name the model already wrote
+
+A workspace is born `ws/soft-prairie` — two words from a random table, fixing
+the session id, the directory, the tmux session, the unit, the registry key and
+the branch. The name says nothing about the work. Claude Code, meanwhile, has
+already written one: every transcript carries an `ai-title` line generated from
+the first prompt, and until now nothing read it.
+
+`FleetWatcher`'s naming lane (10 s) renames the branch to that title, slugified:
+lowercase, non-alphanumeric runs collapsed to `-`, at most 40 characters cut
+back to a word boundary, prefixed `ws/`. It fires only while the branch is still
+exactly its born name — that comparison *is* the idempotence marker, so there is
+no new registry field and nothing to clean up on reap — and it reads the
+transcript behind a size+mtime gate, so a transcript with no title (nine of 609
+on this box) is not re-read forever.
+
+**A branch that has been pushed is never renamed — checked two ways against
+origin; when origin is unreachable the rename proceeds with a warning.**
+`ccd ws-rename` refuses with `has-upstream` for a configured tracking upstream
+OR the old name showing up on origin directly, so a branch pushed by hand with
+no `-u` (no upstream is configured, but the name is on the remote) is caught
+the same as one pushed through `ccd pr-open`'s `--set-upstream`. Both probes
+ask only `origin`, and — refusing here would make ws-rename unusable offline
+for a branch that has never been pushed — both warn and proceed rather than
+refuse when it cannot be reached. `ccd ws-rename` also refuses `registry-branch-drift`
+when git's own record for the worktree disagrees with the registry's `branch`
+field, so a workspace hand-renamed with a bare `git branch -m` (bypassing this
+verb, and so never updating the registry) cannot have some *other* branch
+renamed out from under it by a sweep that still believes the registry's stale
+name. **It is the last verb that refuses on drift, and that is deliberate**:
+`ws-reap` used to refuse the same token and no longer does (it removes the
+branch git actually has checked out and reports the registry's as a note, the
+rule `ws-rm` has always applied), because drift is the ordinary end state of a
+workspace that was archived and then reused — refusing it stranded three
+archived workspaces, ~3.6 G, which then had to be removed by hand. A rename is
+different in kind: it ACTS ON the name, so renaming git's branch off a stale
+registry entry drives the two records further apart rather than reconciling
+them. The remedy the refusal names — run `ccd ws-rename` once by hand — is what
+puts them back in agreement. It refuses in
+JSON on stdout at exit 0 — fourteen named tokens, whose copy lives in
+`server/src/wsaudit.ts` — and the one REFUSAL path that keeps a non-zero exit
+is `git branch -m` itself failing, a fault rather than a refusal (the only
+other non-zero path is the python3-availability probe at the top of the
+function, also a fault, not a refusal). A refused workspace keeps its born
+name. Five of the fourteen refusals describe a fact about the workspace that a
+later title cannot change — `has-upstream`, `not-a-workspace`,
+`worktree-unregistered`, `worktree-foreign` and `registry-branch-drift`
+(`server/src/watch.ts`'s `PERMANENT_REFUSALS`; the last three ship their own
+remedy in the refusal detail — the first two a `git -C $main worktree add …`,
+the last a re-run of `ccd ws-rename` once the registry and git agree again —
+so "cannot stop being true" holds only in the sense that no title fixes it) —
+and those retire the session outright: no further attempt, on any title, until
+the server restarts — or until Claude Code rotates that session's own uuid (a
+`/clear`, a compaction), which `ccd`'s `_sync_uuid` mirrors into the registry
+and which earns a fresh incarnation just as a restart does, since retirement
+is keyed on `<id>#<uuid>` (`server/src/watch.ts`'s `attemptedRenames`
+docstring has the mechanism). `bad-branch` is a verdict on the *derived branch*, not the
+workspace, so it is deliberately not in that set — a title that changes can
+change it — even though `deriveBranch` never actually emits a name `ccd` would
+reject, so the refusal does not fire in practice. Every other refusal marks
+only that one `(session, derived name)` pair attempted, so a title that
+changes to a different slug still earns a fresh attempt on the next sweep.
+
+The name types itself into the fleet line and the session header when it lands
+(`pwa/src/fleet/TypedLabel.tsx`); `prefers-reduced-motion` swaps it instantly.
+The workspace slug itself never changes — the archive list, the PR sheet and the
+cleanup confirmation all still name the directory on disk.
+
+### The attention bucket
+
+Every session on the fleet wire carries `bucket` and `bucketSince`, computed
+once by `sessionBucket` in **`shared/api.ts`** — not `server/src/bucket.ts`,
+which has never existed. It lives in `shared/` because it has TWO producers
+that must not be able to disagree: `assembleFleet` (`server/src/fleet.ts`,
+which passes all three arguments) and `reviveFleetSession` (same file as the
+ladder, which has no `hookEvent` to give and passes two). The fleet screen's
+sections, its counts and each row's own state word all read that one field, so
+they cannot disagree — before this there were three independent re-derivations
+that drifted.
+
+The ladder tests, in order: `archivedAt` **on a row that is also `dead`**
+(→ `cleanup` when the PR is merged, else `archived`), then `dead`, then
+`attention` (a pending dialog, a waiting hook, or Claude Code's own
+`status: 'waiting'`), then `working`, then `done` (which requires hook
+evidence — a hookless busy→idle transition never proves a turn *finished*),
+then `idle`. **The archived rows come first deliberately**: `ws-archive` stops
+the session, so every cleanup candidate is also `dead`, and a dead-first
+ladder would leave the cleanup bucket permanently empty.
+
+**That last sentence is the archived rungs' precondition, not just their
+excuse** (D-74). `ws-archive` kills the pane before it stamps, but `ccd start`
+/ `ccd ensure` clear `.stopped` and `.swapblocked` on a revival and leave
+`$REG/<id>.archived` standing — only `ws-restore` removes it. So a workspace
+archived on merge and revived for more work carried a marker that outranked
+every live rung below it, permanently. Measured on the live fleet 2026-08-17:
+5 of the box's 7 archive markers sat on sessions with a live tmux pane, 4
+mid-turn — a quarter of the fleet rendering the word `merged` while working,
+ranked below idle, counted out of its project's busy total, and with any
+pending question unreachable through the attention section. The bucket now
+answers *what this session is doing*; `archivedAt` still rides the wire
+untouched and still answers *what is staged on disk*, so `/archive`,
+`ws-attic` and the reap flow all find the workspace exactly as before.
+
+**Two observers decide `working`, and the fresher one wins** (D-75). `status`
+comes from Claude Code's `sessions/<pid>.json`; `hookState` comes from
+`session-hook.sh`. Both fail, in opposite directions. The live file *wedges* —
+a turn whose last tool call was a Bash ends without Claude Code writing the
+transition back, leaving `"status":"shell"` forever (measured twice on one
+day; one session held it 1h55m while its hook had written `done` 5.7s after
+the file's last write). The live file is also blind to a session waiting on
+subagents, and reads `idle` when it is missing, unreadable, or behind an
+unknown wrapper. So `sessionBucket` compares `hookUpdatedAt` against
+`statusUpdatedAt`: a newer hook `done` unseats a stale `busy` (except
+`SessionStart`'s synthetic write, which proves "never started", not
+"finished"), and a newer hook `working` raises a stale or absent `idle`.
+`status` itself is untouched by this — it stays frozen and hook-blind.
+
+`bucketSince` is *derived* from evidence already on the record — never
+remembered by the watcher, which would reset on every deploy and paint the whole
+fleet as freshly-unseen several times a day.
+
+A session's **lifecycle** (`running`, `unsupervised`, `stopped`, `restarting`,
+`orphan`, `never-started`, `unmeasurable`) is a new optional FIELD and a
+qualifier beside the row, not a bucket — **never** a new `SessionBucket`
+member and never a change to the ladder above. The live `fleet` frame is cast
+from the wire, not revived, so an unknown bucket token would crash an
+already-deployed PWA where an unknown lifecycle token simply renders no
+qualifier.
+
+`status` itself stays frozen and hook-blind; a test asserts it is identical with
+and without hook state present.
+
+### What a row's lifecycle reads off the registry
+
+Four registry fields, each written by a single choke point so a stamp is
+never left half-true:
+
+| Field | Shape | Written by |
+| --- | --- | --- |
+| `$REG/<id>.stopped` | `<epoch> <surface>` | `_ws_unsupervise` — the one choke point every stop path (`cmd_stop`, ws-rm, ws-archive, ws-reap, forget) routes through, so an archived workspace is never left reading `orphan` |
+| `$REG/<id>.supervised` | `<epoch>` | `cmd_supervise`, before it ever calls `cmd_ensure` (which can block up to ~15 minutes on a large resume) and again every 30s from the watch loop — and by `cmd_swap` **throughout** its carry, on the same 30s cadence, so a 188MB `cp -a` never leaves the row reading `orphan` mid-swap |
+| `$REG/<id>.swapblocked` | `<epoch> <reason>` | `_swap_refuse` — cleared by a completed swap, or by a deliberate `ccd start`/`ccd ensure` revival. **Not** by the refusal's own restart, and **not** by the supervisor re-entering its unit: neither is a human act, and both used to erase the record seconds after it was written |
+| `$REG/<id>.spawn` | `<epoch> <rc>` | `_spawn`, on EVERY verdict (0/2/3/4), success included — the one channel from a spawn inside the supervisor unit to a `ccd start` polling from another process |
+
+A heartbeat inside **120 seconds** is fresh; the supervisor re-stamps every
+**30 seconds**, so a live loop never drifts stale under its own steady
+state. Those four inputs — pane liveness, heartbeat freshness, the stop
+stamp, and whether the row was ever started — decide one of seven
+lifecycle states, evaluated in this order: `running` (alive, fresh
+heartbeat), `unsupervised` (alive, no fresh heartbeat — what a pre-fix `ccd
+start` minted: no auto-swap, no auto-compact, no uuid-sync, nothing to
+record its death), `stopped` (dead, a stop stamp present — checked BEFORE
+the heartbeat, so a stop taken inside the freshness window reads `stopped`
+immediately rather than `restarting`), `restarting` (dead, fresh heartbeat,
+no stop stamp — between `Restart=always` cycles, or mid-swap), `orphan`
+(dead, stale or absent heartbeat, a start on record — nothing is watching
+it), `never-started` (dead, no heartbeat, never started), and
+`unmeasurable` — a registry read that failed rather than came back empty,
+which wins over every other rung and is never laundered into `orphan`; ccd
+itself can never answer this one (it either reads `$REG` off local disk or
+the file is genuinely absent), so the bash twin's fixture rows for it are
+server-only, exempted by name, and the exemption is itself pinned.
+
+`ccd ls`'s `ALIVE` column is now `STATE`, printing the lifecycle word
+instead of the one bit that used to say the same `no` for a deliberate stop,
+an unwatched death and a session that never existed.
+
+There is deliberately no reconciler daemon and no `ccd doctor`. The
+2026-08-11 incident's stop was itself deliberate — an operator killing a
+runaway swap — and an unattended process that tries to "fix" a fleet row is
+exactly the kind of component that could have fought that stop. Every
+lifecycle state above is read, never repaired automatically; reviving a row
+stays a human act (`ccd start <id>`), on purpose.
+
+That human act has to actually work on the row it is offered for. An
+`unsupervised` row is a **live** pane, and all three revive verbs used to
+return before they could do anything about it — `ccd ensure` early-returns on
+"already alive", and `ccd start`/`ccd enable` issued `enable` without `--now`,
+which promises a start at next boot and supervises nothing now. So the PWA
+rendered "running unsupervised" beside a Restart button that answered success
+and changed nothing, on what is D2's entire population the day the fix ships.
+All three now adopt such a pane: `systemctl --user reset-failed` then
+`enable --now`, whose unit re-enters through `cmd_ensure`, finds the pane
+already there, and watches it — no second spawn, and no change at all for a
+row that is already `running`, which stays the cheap no-op it has always been.
+
+## The PWA↔server protocol handshake (dormant)
+
+Nothing in the system stamps a version today — no `git` sha ships, no
+`package.json` version key is read — and the one real skew window is a
+stale client: the service worker checks for updates every 15 minutes, so an
+open tab can hold pre-deploy JS against a post-deploy server. A synchronous
+`hello` frame closes that gap without doing anything yet:
+
+- `FLEET_PROTO` / `FLEET_PROTO_MIN` live once, in `shared/api.ts` beside
+  `PRESENCE_REFRESH_MS` — both currently `1`, with `MIN <= PROTO` pinned by a
+  test. **`FLEET_PROTO_MIN` is the kill-switch**: raise it above an old
+  build's `FLEET_PROTO` to block that build. It is dormant until then.
+- `/ws/fleet`'s first frame, sent synchronously before the async `fleet`
+  snapshot, is `{ type: 'hello', proto: FLEET_PROTO, min: FLEET_PROTO_MIN }`.
+- **Absence permits.** A connection that never sends `hello` — an older
+  server — never blocks the client; every already-deployed PWA already drops
+  an unrecognized fleet frame silently, which is the safe direction.
+  Blocking requires positive evidence: `hello.min` greater than the client's
+  own `FLEET_PROTO`.
+- Only the client self-blocks — the server never refuses a client; it has no
+  way to know a build is "too new" and nothing here gives it one.
+- A **later, compatible** `hello` on the same connection **clears** the
+  block — deliberately not a one-way latch, so a reconnect to a fixed server
+  unblocks a client that briefly saw a bad frame.
+- While blocked, `BlockScreen` renders as a sibling *above* `.app-shell`
+  (not inside it — a wire-protocol mismatch has no partial-functionality
+  story), copy: *"This app build is too old for the fleet server.
+  Updating…"* plus a manual Reload button. Becoming blocked also **acts**:
+  it triggers the service worker's update check immediately rather than
+  waiting for the 15-minute poll, so most clients self-heal without the
+  button ever being needed.
+- The session stream's reducer (`applySessionMsg`) gained a `default` arm
+  that returns state unchanged — an old client receiving a frame type it
+  doesn't know must shrug at it, not corrupt the store.
+- `AgentReady.v` (the separate server↔agent pair) stays **deliberately
+  unread** — declined, not forgotten: that pair already negotiates by
+  *capability* (`ccdVerbs` + `verbSupported`), which is finer-grained than a
+  bare generation number. `v` remains reserved for a future breaking
+  frame-shape change and gets a consumer only then.
+
+## Develop
+
+```bash
+cd server && npm ci && npm run test      # unit tests, hermetic
+cd ../agent && npm ci && npm run test     # unit tests, hermetic
+cd ../pwa && npm ci && npm run test       # component tests
+```
+
+Run the server against a fixture home: `CCRC_HOME=<tree> npm run dev` in `server/`.
+
+## Deploy
+
+```bash
+bash deploy/deploy.sh                # server: build PWA here (freshness-gated) → rsync → box npm ci + build → restart unit → health check
+bash deploy/deploy.sh agent <host>   # ccrc-agent: rsync → ship ccd + notify.sh (backed up) + session-hook.sh (installs it) → host npm ci + build → restart unit
+```
+
+`deploy/deploy.sh` is a convenience wrapper for pushing a working tree onto a box
+that is **already installed** — it is not the installer; `install.sh` / `ccrc
+install` is the path a new box takes. It has **no default target**: a deploy that
+guessed would ship your working tree to someone else's machine, so it refuses
+with exit 2 until it knows where it is going.
+
+Put the coordinates in `~/.ccrc/deploy.env` — the deploying machine's own file,
+outside every checkout, so it survives worktrees and can never be committed:
+
+```bash
+# ~/.ccrc/deploy.env
+CCRC_BOX=user@fleet-host            # required
+CCRC_SSH_KEY=$HOME/.ssh/id_ed25519  # required
+CCRC_SSH_PORT=22                    # optional, default 22
+```
+
+```bash
+bash deploy/deploy.sh                        # the server box
+bash deploy/deploy.sh agent user@other-box   # the fleet host, when they differ
+```
+
+Anything set in the environment overrides the file, and `CCRC_DEPLOY_ENV` points
+at a different one. The post-deploy health check derives its URL from the box
+itself — an exposed box is probed through its public origin, a plain one at
+`http://<host>:7788/health` — and `CCRC_HEALTH_URL` overrides both, for a box
+fronted by something ccrc did not configure. The agent target's `<host>`
+argument doubles as the box name and falls back to `$CCRC_BOX` if omitted, but
+in a two-box fleet it is a different machine (see "Remote fleet mode" above).
+
+Both targets ship a local, gitignored env file to `~/.ccrc/` on the box first
+if one exists (`deploy/ccrc.env` / `ccrc-agent.env` — copy from
+the committed `*.env.example` templates and fill in real tokens; the real
+files are never committed). The service units use `/usr/bin/env node` (box
+node is in `/usr/local/bin`). Every run stamps its backups (previous ccd,
+notify.sh, served dist trees) into `~/ccrc-backups/<timestamp>/` on the
+target before overwriting anything — and a backup copy that *fails* aborts
+the deploy before `rsync --delete` can destroy the state it failed to save.
+The agent deploy installs `ccd` BEFORE restarting the agent — the agent
+caches `ccd caps` at boot, so the reverse order pins a stale verb set.
+
+**Ordering between the two targets.** A change that touches `ccd/` — the hook
+script in particular — must ship to the fleet host *before or with* the server,
+because the server reads what the hook writes. Shipping a server that expects a
+newer envelope shape to a fleet still running the old hook is how you get a
+confident UI over stale data. A server+PWA-only change has no such constraint.
+`ccd ws-rename` is the same rule with a sharper edge: the naming lane calls it
+unattended, and `ccd caps` has advertised the verb since long before it took
+flags — so a server deployed ahead of its ccd sees the verb gate pass and the
+call fail. One attempt per workspace, absorbed by the lane's retry guard, and
+zero if the agent ships first.
+
+**Restore** (manual, from the target box — pick the `<ts>` to roll back to):
+
+```bash
+# fleet host (agent target)
+cp -a ~/ccrc-backups/<ts>/ccd ~/.local/bin/ccd
+cp -a ~/ccrc-backups/<ts>/notify.sh ~/.cc-sessions/notify.sh
+cp -a ~/ccrc-backups/<ts>/session-hook.sh ~/.cc-sessions/session-hook.sh
+cp -a ~/ccrc-backups/<ts>/agent-dist/. ~/ccrc/agent/dist/
+systemctl --user restart ccrc-agent.service
+# server box
+cp -a ~/ccrc-backups/<ts>/dist-pwa/. ~/ccrc/server/dist-pwa/
+systemctl --user restart ccrc.service
+```
 
 ## Live end-to-end tests
 
