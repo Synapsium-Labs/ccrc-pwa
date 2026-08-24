@@ -1042,8 +1042,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   });
 
   // Fleet-host reboot: guarded to remote mode with Hetzner creds configured.
-  // The fleet box is shared with the rp-llm stack — the PWA's confirm dialog
-  // names that collateral before this ever fires.
+  // A fleet host generally carries more than the fleet, so the PWA's confirm
+  // dialog names that collateral before this ever fires — stated as the
+  // property every box has rather than as the co-tenants of any one box.
   app.post('/api/fleet/reboot', async (req, reply) => {
     if (deps.cfg.fleetMode !== 'remote') return reply.code(409).send({ ok: false, error: 'not-remote' });
     const { hetznerToken, fleetServerId } = deps.cfg;
