@@ -3862,11 +3862,11 @@ CREATE TABLE ledger_floor (
 
 **Steps:**
 
-- [ ] Confirm the part-A dependencies landed before starting:
+- [x] Confirm the part-A dependencies landed before starting:
   `grep -n 'claim_one_owner' server/src/coord/schema.ts && grep -n 'export function decideClaim' server/src/claims.ts && grep -n 'CLAIM_LEASE_MS' shared/api.ts`
   — expect one hit each. If any is missing, STOP: this task builds on Wave 7 part A and Wave 1.
 
-- [ ] Write the failing test file `server/test/claims-store.test.ts`:
+- [x] Write the failing test file `server/test/claims-store.test.ts`:
 
 ```ts
 // Build 9 wave 7 (D11/D12): the claim CAS. THE IN-TRANSACTION READ IS THE CAS;
@@ -3917,10 +3917,10 @@ describe('CoordStore.claimAttempt', () => {
 });
 ```
 
-- [ ] Run it, expect FAIL: `cd server && ./node_modules/.bin/vitest run test/claims-store.test.ts`
+- [x] Run it, expect FAIL: `cd server && ./node_modules/.bin/vitest run test/claims-store.test.ts`
   — `TypeError: s.claimAttempt is not a function`.
 
-- [ ] Write the implementation. In `server/src/coord/store.ts`, extend the two import statements
+- [x] Write the implementation. In `server/src/coord/store.ts`, extend the two import statements
   (lines 1–14):
 
 ```ts
@@ -4061,9 +4061,9 @@ export type ClaimEndResult =
   (Note: `decideClaim` and the expiry pre-pass are NOT called yet — the next two red cycles add
   them, so their tests are genuinely red first.)
 
-- [ ] Run, expect PASS: `./node_modules/.bin/vitest run test/claims-store.test.ts`.
+- [x] Run, expect PASS: `./node_modules/.bin/vitest run test/claims-store.test.ts`.
 
-- [ ] Write the failing conflict tests — append to `server/test/claims-store.test.ts` inside the
+- [x] Write the failing conflict tests — append to `server/test/claims-store.test.ts` inside the
   `claimAttempt` describe:
 
 ```ts
@@ -4103,10 +4103,10 @@ export type ClaimEndResult =
   });
 ```
 
-- [ ] Run, expect FAIL: the conflict tests get `{ ok: true }` back (nothing refuses yet) —
+- [x] Run, expect FAIL: the conflict tests get `{ ok: true }` back (nothing refuses yet) —
   `expected { ok: true, … } to match { ok: false, why: 'conflict' }`.
 
-- [ ] Wire `decideClaim` in: in `claimAttempt`, insert between the `live` read and the
+- [x] Wire `decideClaim` in: in `claimAttempt`, insert between the `live` read and the
   `const out: ClaimSummary[] = [];` line:
 
 ```ts
@@ -4114,9 +4114,9 @@ export type ClaimEndResult =
       if (!decision.ok) return decision;
 ```
 
-- [ ] Run, expect PASS (all six tests).
+- [x] Run, expect PASS (all six tests).
 
-- [ ] Write the failing renew-on-re-POST tests — append inside the same describe:
+- [x] Write the failing renew-on-re-POST tests — append inside the same describe:
 
 ```ts
   it('re-POSTing the same path RENEWS and re-writes intent — one row, not two (D12 ruling 3)', () => {
@@ -4146,13 +4146,13 @@ export type ClaimEndResult =
   });
 ```
 
-- [ ] Run — these two SHOULD already PASS (the renew arm shipped with the first cycle). Confirm
+- [x] Run — these two SHOULD already PASS (the renew arm shipped with the first cycle). Confirm
   green, then prove they are not vacuous: temporarily change `MIN(?, hardExpiresAt)` to `?` in the
   renew UPDATE, run, expect the hard-cap test RED
   (`expected 1785328740000 + 2700000 to be 1785328800000`), revert, run, expect PASS. (This is the
   first mutant of this section's ceremony; Task 17 runs the full sweep.)
 
-- [ ] Write the failing release/break tests — append a new describe:
+- [x] Write the failing release/break tests — append a new describe:
 
 ```ts
 describe('CoordStore.claimRelease / claimBreak', () => {
@@ -4214,9 +4214,9 @@ describe('CoordStore.claimRelease / claimBreak', () => {
 });
 ```
 
-- [ ] Run, expect FAIL: `TypeError: s.claimRelease is not a function`.
+- [x] Run, expect FAIL: `TypeError: s.claimRelease is not a function`.
 
-- [ ] Write the implementation — append to the claims block in `store.ts`:
+- [x] Write the implementation — append to the claims block in `store.ts`:
 
 ```ts
   /** THE GUARD IS IN THE `WHERE`, not in the read above it — `setWorkItemState`'s
@@ -4249,9 +4249,9 @@ describe('CoordStore.claimRelease / claimBreak', () => {
   }
 ```
 
-- [ ] Run, expect PASS: `./node_modules/.bin/vitest run test/claims-store.test.ts`.
+- [x] Run, expect PASS: `./node_modules/.bin/vitest run test/claims-store.test.ts`.
 
-- [ ] Write the failing in-transaction expiry test — append inside the `claimAttempt` describe:
+- [x] Write the failing in-transaction expiry test — append inside the `claimAttempt` describe:
 
 ```ts
   it('EXPIRY RIDES EVERY ATTEMPT — a claim route never sees a stale row even with the watcher wedged', () => {
@@ -4278,10 +4278,10 @@ describe('CoordStore.claimRelease / claimBreak', () => {
   });
 ```
 
-- [ ] Run, expect FAIL: the second attempt answers `{ ok: false, why: 'conflict' }` — the stale
+- [x] Run, expect FAIL: the second attempt answers `{ ok: false, why: 'conflict' }` — the stale
   row still reads live.
 
-- [ ] Add the expiry pre-pass. In `store.ts`, append the private method to the claims block:
+- [x] Add the expiry pre-pass. In `store.ts`, append the private method to the claims block:
 
 ```ts
   /** Expire in the same transaction as every claim attempt — the
@@ -4303,11 +4303,11 @@ describe('CoordStore.claimRelease / claimBreak', () => {
   and make it the FIRST statement inside `claimAttempt`'s `tx` callback, above the `live` read,
   with this comment line: `// 1 — expire lapsed rows IN THE SAME TX, then read, then insert (D11).`
 
-- [ ] Run, expect PASS. Then run the neighbours that share this file:
+- [x] Run, expect PASS. Then run the neighbours that share this file:
   `./node_modules/.bin/vitest run test/coord-store.test.ts test/lifecycle-store.test.ts` — expect
   PASS (no existing method was touched).
 
-- [ ] Commit:
+- [x] Commit:
   `git add server/src/coord/store.ts server/test/claims-store.test.ts && git commit -m "server(w7): claims land as one transaction — the read is the CAS, the index is the backstop"`
 
 ---

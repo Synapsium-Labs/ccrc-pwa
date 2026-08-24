@@ -1,15 +1,20 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { tx } from './db.js';
+import { decideClaim, type ClaimRow } from './claims.js';
 import { CLEAR_REFUSED_STRANDS_TEXT } from './rundefs.js';
 import { reviveDec, reviveMeas, reviveObs, type JournalRow } from './journalparse.js';
 import {
-  isLifecycleAct, isLifecycleGapReason, isLifecycleOutcome,
+  CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS,
+  isClaimState, isLifecycleAct, isLifecycleGapReason, isLifecycleOutcome,
   isMailDeliveryState, isMailKind, isNotifyKind, isProgramState, isRunState, isWorkItemState,
   LC_ACT_UNKNOWN, LC_OUTCOME_UNKNOWN,
   RUN_TRANSITIONS,
-  type CoordCaps, type LifecycleGap, type LifecycleGapReason, type MailDeliveryState,
+  type ClaimConflict, type ClaimState, type ClaimSummary,
+  type CoordCaps, type DeviationAllocation, type LifecycleGap, type LifecycleGapReason,
+  type MailDeliveryState,
   type MailKind, type MailRejectCode, type MailSummary, type MirroredLifecycleEvent,
-  type NotifyEvent, type ProgramState, type RunItemTally, type RunState, type RunSummary,
+  type NotifyEvent, type PeerDeliverable, type ProgramState, type RunItemTally, type RunState,
+  type RunSummary,
   type WorkItemState,
 } from '../../../shared/api.js';
 
@@ -90,6 +95,27 @@ export type SettleItemsResult =
   | { ok: true; items: RunItemTally }
   | { ok: false; itemId: number; why: 'unknown-item' }
   | { ok: false; itemId: number; why: 'terminal'; state: WorkItemState };
+
+/** Build 9 wave 7 (D12). The failure arms are `decideClaim`'s own, verbatim —
+ *  the store adds nothing to a refusal and takes nothing from it (the payloads
+ *  pass through untouched; only the `ok`/`why` discriminant is the store's,
+ *  so this union reads like its `SetWorkItemResult` neighbours). */
+export type ClaimAttemptResult =
+  | { ok: true; claims: ClaimSummary[] }
+  | { ok: false; why: 'bad-path'; paths: readonly string[] }
+  | { ok: false; why: 'conflict'; conflicts: readonly ClaimConflict[] };
+
+/** Release and break share this shape — `setWorkItemState`'s refusal family:
+ *  a caller must be able to see that ITS call was not the one that landed.
+ *  `state` on the not-live arm is `null` for exactly ONE condition, a stored
+ *  token this build cannot model (a newer build's word — coord/db.ts rule 3:
+ *  a rollback must be able to READ, and reading is `isClaimState`, never a
+ *  cast; `ClaimState` has no designated we-do-not-know member to degrade to,
+ *  by the L0 pin). */
+export type ClaimEndResult =
+  | { ok: true; state: 'released' | 'broken' }
+  | { ok: false; why: 'unknown-claim' }
+  | { ok: false; why: 'not-live'; state: ClaimState | null };
 
 /** The raw row shape common to `run(id)` and `runs()` — named columns only
  *  (no `SELECT *` anywhere in this file), joined once against `programs` for
@@ -2087,5 +2113,240 @@ export class CoordStore {
         ? [{ id: r.id, at: r.at, obsClass: r.obsClass, decSurface: r.decSurface }]
         : []
     ));
+  }
+
+  /* ── claims (build 9 wave 7, D11/D12) ──────────────────────────────────── */
+
+  /** The column list, named ONCE — `SELECT *` is banned in this directory. */
+  private static readonly CLAIM_COLS =
+    'id, project, heldBy, heldByUuid, intent, runId, state, ' +
+    'createdAt, renewedAt, expiresAt, hardExpiresAt, endedAt, endedBy';
+
+  /** One raw row + its path set -> the typed shape. `state` goes through
+   *  `isClaimState`, never a cast — the same rule `hydrateRun`/`feedEvents`
+   *  hold. `ClaimState` has no designated we-do-not-know member (the L0 pin:
+   *  exactly four stored words), so a token a newer build wrote cannot be
+   *  modelled AS A SUMMARY at all — `null`, and the list readers drop the row
+   *  (`recentProvenance`'s rule: an unmodellable value is not a disagreement). */
+  private hydrateClaim(r: {
+    id: number; project: string; heldBy: string; heldByUuid: string | null;
+    intent: string; runId: number | null; state: string; createdAt: number;
+    renewedAt: number; expiresAt: number; hardExpiresAt: number;
+    endedAt: number | null; endedBy: string | null;
+  }, paths: readonly string[]): ClaimSummary | null {
+    if (!isClaimState(r.state)) return null;
+    return {
+      id: r.id, project: r.project, paths, heldBy: r.heldBy, heldByUuid: r.heldByUuid,
+      intent: r.intent, runId: r.runId, state: r.state,
+      createdAt: r.createdAt, renewedAt: r.renewedAt,
+      expiresAt: r.expiresAt, hardExpiresAt: r.hardExpiresAt,
+      endedAt: r.endedAt, endedBy: r.endedBy,
+    };
+  }
+
+  /** A claim's path set, fixed at insert — `claim_paths.live` mirrors the
+   *  parent's state, it never shrinks the set, so the read is by claimId
+   *  alone and an ended claim keeps answering "held ON WHAT until it died". */
+  private claimPaths(claimId: number): string[] {
+    return (this.db.prepare(
+      'SELECT path FROM claim_paths WHERE claimId = ? ORDER BY rowid',
+    ).all(claimId) as { path: string }[]).map((r) => r.path);
+  }
+
+  private claimRow(id: number): ClaimSummary {
+    const row = this.db.prepare(
+      `SELECT ${CoordStore.CLAIM_COLS} FROM claims WHERE id = ?`,
+    ).get(id) as Parameters<CoordStore['hydrateClaim']>[0] | undefined;
+    if (row === undefined) throw new Error(`claims row ${id} vanished inside its own transaction`);
+    const hydrated = this.hydrateClaim(row, this.claimPaths(id));
+    // A row THIS transaction wrote carries this build's own state word.
+    if (hydrated === null) throw new Error(`claims row ${id} unmodellable inside its own transaction`);
+    return hydrated;
+  }
+
+  /**
+   * Acquire (or renew) a set of path claims, as ONE transaction (D11) —
+   * the two mechanisms IN THIS ORDER, so a reviewer does not read either
+   * as redundant:
+   *
+   *  1. THE IN-TRANSACTION READ IS THE CAS. `tx()` is `BEGIN IMMEDIATE` and
+   *     `DatabaseSync` has no async surface, so nothing can interleave
+   *     between the read below and the inserts under it. `decideClaim` (L1)
+   *     owns the conflict rule — exact match AND directory-prefix containment
+   *     both ways (`shared` vs `shared/api.ts`), which no index can express.
+   *  2. THE PARTIAL UNIQUE INDEX `claim_one_owner` IS THE BACKSTOP: if a
+   *     future refactor ever loses the transaction, the failure is a LOUD
+   *     constraint violation, never a silent duplicate.
+   *
+   * All-or-nothing (D12): five paths, one conflict ⇒ zero acquired, and the
+   * refusal names EVERY conflicting path. A live claim this session already
+   * holds on the exact path is RENEWED — intent re-written, lease re-armed,
+   * never past the hard cap ("an intent can be written every ten minutes").
+   *
+   * `holderDeliverable` is the per-holder measurement the CALLER made
+   * (`peerDeliverable` over records the route already holds) — the store
+   * cannot measure the fleet, so when the caller did not either, the answer
+   * on every conflict is the honest `'unknown'` (D9: unknown is not no).
+   */
+  claimAttempt(input: {
+    project: string; paths: readonly string[]; sessionId: string; uuid: string;
+    runId: number | null; intent: string; now?: number;
+    holderDeliverable?: (sessionId: string) => PeerDeliverable;
+  }): ClaimAttemptResult {
+    const now = input.now ?? Date.now();
+    const deliverable = input.holderDeliverable ?? ((): PeerDeliverable => 'unknown');
+    return tx(this.db, () => {
+      // 1 — expire lapsed rows IN THE SAME TX, then read, then insert (D11).
+      this.expireLapsedInner(now);
+      const liveRows = this.db.prepare(
+        'SELECT id, heldBy, heldByUuid, intent, runId, expiresAt FROM claims ' +
+        "WHERE project = ? AND state = 'live' ORDER BY id",
+      ).all(input.project) as { id: number; heldBy: string; heldByUuid: string;
+                                intent: string; runId: number | null; expiresAt: number }[];
+      const livePaths = this.db.prepare(
+        'SELECT claimId, path FROM claim_paths WHERE project = ? AND live = 1 ORDER BY rowid',
+      ).all(input.project) as { claimId: number; path: string }[];
+      const pathsOf = new Map<number, string[]>();
+      for (const p of livePaths) {
+        const list = pathsOf.get(p.claimId);
+        if (list === undefined) pathsOf.set(p.claimId, [p.path]); else list.push(p.path);
+      }
+      // Object literals against the L1 interface — a `ClaimRow` member this
+      // file forgets, or invents, is a compile error (the reviveFleetSession
+      // mechanism, `decideClaim`'s own conflict literal holds it too).
+      const live: ClaimRow[] = liveRows.map((c) => ({
+        id: c.id, project: input.project, paths: pathsOf.get(c.id) ?? [],
+        heldBy: c.heldBy, heldByUuid: c.heldByUuid, intent: c.intent, runId: c.runId,
+        expiresAt: c.expiresAt, holderDeliverable: deliverable(c.heldBy),
+      }));
+      const decision = decideClaim(live, {
+        project: input.project, paths: input.paths, sessionId: input.sessionId,
+      });
+      if ('refused' in decision) {
+        return { ok: false as const, why: 'bad-path' as const, paths: decision.paths };
+      }
+      if ('conflict' in decision) {
+        return { ok: false as const, why: 'conflict' as const, conflicts: decision.conflict };
+      }
+      // decideClaim's ok arm carries the NORMALIZED, deduped set — the only
+      // spelling that may reach `claim_paths` (`normalizeClaimPath`, the
+      // schema's own comment on the column).
+      const paths = decision.paths;
+      // The holder's own live claims: a requested path an own claim already
+      // holds EXACTLY renews that whole claim (D12 ruling 3 — re-POSTing the
+      // same paths re-writes intent AND re-arms the lease); only the paths no
+      // own claim holds become a new row, so the backstop index never fires
+      // on a legitimate re-declaration.
+      const renewIds: number[] = [];
+      const fresh: string[] = [];
+      for (const p of paths) {
+        const own = live.find((c) => c.heldBy === input.sessionId && c.paths.includes(p));
+        if (own !== undefined) { if (!renewIds.includes(own.id)) renewIds.push(own.id); }
+        else fresh.push(p);
+      }
+      const out: ClaimSummary[] = [];
+      for (const id of renewIds) {
+        this.db.prepare(
+          'UPDATE claims SET heldByUuid = ?, runId = ?, intent = ?, renewedAt = ?, ' +
+          "expiresAt = MIN(?, hardExpiresAt) WHERE id = ? AND state = 'live'",
+        ).run(input.uuid, input.runId, input.intent, now, now + CLAIM_LEASE_MS, id);
+        out.push(this.claimRow(id));
+      }
+      if (fresh.length > 0) {
+        const res = this.db.prepare(
+          'INSERT INTO claims (project, heldBy, heldByUuid, intent, runId, state, ' +
+          'createdAt, renewedAt, expiresAt, hardExpiresAt) ' +
+          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ).run(input.project, input.sessionId, input.uuid, input.intent, input.runId,
+          'live', now, now, now + CLAIM_LEASE_MS, now + CLAIM_HARD_CAP_MS);
+        const claimId = Number(res.lastInsertRowid);
+        const ins = this.db.prepare(
+          'INSERT INTO claim_paths (claimId, project, path, live) VALUES (?, ?, ?, 1)');
+        for (const p of fresh) ins.run(claimId, input.project, p);
+        out.push(this.claimRow(claimId));
+      }
+      return { ok: true as const, claims: out };
+    });
+  }
+
+  /** THE GUARD IS IN THE `WHERE`, not in the read above it — `setWorkItemState`'s
+   *  exact shape and reason: `changes === 0` past a successful lookup means
+   *  exactly one thing, the row was not live. One `tx()` for the state word
+   *  AND the `claim_paths.live` mirror bit — the schema's own contract: the
+   *  bit is written in the SAME transaction as every `claims.state`
+   *  transition, or the partial index answers for a claim that no longer is. */
+  private endClaim(id: number, state: 'released' | 'broken', by: string,
+                   now: number): ClaimEndResult {
+    return tx(this.db, () => {
+      const row = this.db.prepare('SELECT state FROM claims WHERE id = ?').get(id) as
+        { state: string } | undefined;
+      if (!row) return { ok: false as const, why: 'unknown-claim' as const };
+      const res = this.db.prepare(
+        "UPDATE claims SET state = ?, endedAt = ?, endedBy = ? WHERE id = ? AND state = 'live'",
+      ).run(state, now, by, id);
+      if (Number(res.changes) === 0) {
+        return { ok: false as const, why: 'not-live' as const,
+                 state: isClaimState(row.state) ? row.state : null };
+      }
+      this.db.prepare('UPDATE claim_paths SET live = 0 WHERE claimId = ?').run(id);
+      return { ok: true as const, state };
+    });
+  }
+
+  /** Expire in the same transaction as every claim attempt — the
+   *  `feed_events` prune-on-write idiom (D12): a claim route never sees a
+   *  stale row even if the watcher is wedged. Hard cap FIRST, so a row past
+   *  both bounds records the harder word. LAPSE, NEVER DELETE. Each lane
+   *  flips the `claim_paths.live` mirror bit under the SAME predicate before
+   *  re-wording the parent — one transition, one transaction, or the partial
+   *  index answers for a claim that no longer is. */
+  private expireLapsedInner(now: number): void {
+    this.db.prepare(
+      'UPDATE claim_paths SET live = 0 WHERE claimId IN ' +
+      "(SELECT id FROM claims WHERE state = 'live' AND hardExpiresAt <= ?)",
+    ).run(now);
+    this.db.prepare(
+      "UPDATE claims SET state = 'lapsed', endedAt = ?, endedBy = 'hard-cap' " +
+      "WHERE state = 'live' AND hardExpiresAt <= ?",
+    ).run(now, now);
+    this.db.prepare(
+      'UPDATE claim_paths SET live = 0 WHERE claimId IN ' +
+      "(SELECT id FROM claims WHERE state = 'live' AND expiresAt <= ?)",
+    ).run(now);
+    this.db.prepare(
+      "UPDATE claims SET state = 'lapsed', endedAt = ?, endedBy = 'expired' " +
+      "WHERE state = 'live' AND expiresAt <= ?",
+    ).run(now, now);
+  }
+
+  claimRelease(id: number, by: string, now: number = Date.now()): ClaimEndResult {
+    return this.endClaim(id, 'released', by, now);
+  }
+
+  /** `POST /api/claims/:id/break` — a door the CLAIMANT is not the one to walk
+   *  through (the `abandon` shape). Same mechanics as release; a different
+   *  word, because "I am done" and "someone pried this open" are different
+   *  facts a `?all=1` reader needs to tell apart. */
+  claimBreak(id: number, by: string, now: number = Date.now()): ClaimEndResult {
+    return this.endClaim(id, 'broken', by, now);
+  }
+
+  activeClaims(): ClaimSummary[] {
+    const rows = this.db.prepare(
+      `SELECT ${CoordStore.CLAIM_COLS} FROM claims WHERE state = 'live' ORDER BY id`,
+    ).all() as Parameters<CoordStore['hydrateClaim']>[0][];
+    return rows.flatMap((r) => this.hydrateClaim(r, this.claimPaths(r.id)) ?? []);
+  }
+
+  /** `all` includes lapsed/released/broken rows — `?all=1`'s "held by X until
+   *  it died" (D12: a destroyed claim is destroyed history). */
+  claimsForProject(project: string, all = false): ClaimSummary[] {
+    const rows = (all
+      ? this.db.prepare(
+          `SELECT ${CoordStore.CLAIM_COLS} FROM claims WHERE project = ? ORDER BY id`)
+      : this.db.prepare(
+          `SELECT ${CoordStore.CLAIM_COLS} FROM claims WHERE project = ? AND state = 'live' ORDER BY id`)
+    ).all(project) as Parameters<CoordStore['hydrateClaim']>[0][];
+    return rows.flatMap((r) => this.hydrateClaim(r, this.claimPaths(r.id)) ?? []);
   }
 }

@@ -442,6 +442,12 @@ describe('the rejection table is total, in both directions', () => {
                               // deliberately absent from CLAIM_REFUSE_CODES and has no
                               // guard to pass through. If the allocator route later gives
                               // it a wire spelling, that task moves it out of this list.
+      'not-live',             // store.ts `ClaimEndResult`'s local refusal arm (Task 12) —
+                              // the `bad-count` shape exactly: a store-internal spelling
+                              // no wire carries. The claims routes (Task 19) map it to
+                              // 'claim-terminal' (CLAIM_REFUSE_CODES) before any caller
+                              // sees it, so admitting it through the guard would put a
+                              // never-wire word INTO the wire vocabulary to do it.
     ]);
     for (const m of sources().matchAll(/'([a-z]+(?:-[a-z]+)+)'/g)) {
       const tok = m[1]!;
