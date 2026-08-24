@@ -7621,7 +7621,7 @@ git commit -m "server(wave7): the allocator's door — a block at run-open, 409 
 
 **Steps:**
 
-- [ ] Write `server/test/claims-advisory.test.ts`:
+- [x] Write `server/test/claims-advisory.test.ts`:
 
 ```ts
 // Claims are ADVISORY, never enforcing — and that is a red suite, not a
@@ -7688,17 +7688,17 @@ describe('claims are advisory (D12)', () => {
 });
 ```
 
-- [ ] Run, expect PASS: `./node_modules/.bin/vitest run test/claims-advisory.test.ts`
+- [x] Run, expect PASS: `./node_modules/.bin/vitest run test/claims-advisory.test.ts`
   (a detector is born green on a correct tree; the mutants below are its red proof).
-- [ ] **Mutation ceremony (the substrate direction).** Append
+- [x] **Mutation ceremony (the substrate direction).** Append
   `# probe: curl -s http://127.0.0.1:7788/api/claims` as a comment line at the end of `ccd/ccd`
   (uncommitted; a committed edit would need the `markGenerated` re-stamp — this one is reverted).
   Run the suite: expect 1 red naming `ccd/ccd references /api/claims`. Revert:
   `git checkout -- ccd/ccd`. Re-run, green.
-- [ ] **Mutation ceremony (the server direction).** In `server/src/watch.ts`, add
+- [x] **Mutation ceremony (the server direction).** In `server/src/watch.ts`, add
   `void this.deps.coord?.activeClaims(null, Date.now());` anywhere inside `tick()`. Run the
   suite: expect 1 red naming `watch.ts`. Revert (`git checkout -- server/src/watch.ts`), green.
-- [ ] Write `server/test/claims-no-hold.test.ts`:
+- [x] Write `server/test/claims-no-hold.test.ts`:
 
 ```ts
 // D12 ruling 1, held by mechanism: a claim writes NOTHING to the registry —
@@ -7818,8 +7818,8 @@ describe('a claim writes nothing to the registry (D12 ruling 1)', () => {
 });
 ```
 
-- [ ] Run, expect PASS: `./node_modules/.bin/vitest run test/claims-no-hold.test.ts`.
-- [ ] **Mutation ceremony (THE one the spec names: "simplify" claims onto `ws-hold`).** In
+- [x] Run, expect PASS: `./node_modules/.bin/vitest run test/claims-no-hold.test.ts`.
+- [x] **Mutation ceremony (THE one the spec names: "simplify" claims onto `ws-hold`).** In
   `server/src/coord/routes.ts`, in `POST /api/claims` directly after the `r.ok` branch opens,
   insert:
 
@@ -7834,7 +7834,7 @@ describe('a claim writes nothing to the registry (D12 ruling 1)', () => {
   sweep froze, because the harness `ws-hold` wrote the real file). Revert the inserted lines,
   re-run, green. This measured pair is why assertion 3 exists: delete assertions 1 and 2 and the
   suite STILL reds this mutant.
-- [ ] Commit:
+- [x] Commit:
 
 ```bash
 git add server/test/claims-advisory.test.ts server/test/claims-no-hold.test.ts
