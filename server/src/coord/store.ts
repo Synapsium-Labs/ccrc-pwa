@@ -564,6 +564,12 @@ export class CoordStore {
       // wave, or — once a purged workspace slug is re-minted — an unrelated
       // program entirely) next satisfies `dueDeliveries`'s gate.
       this.cancelOutstandingDeliveries(input.runId);
+      // Build 9 D12: the run's claims are released in the SAME transaction as
+      // the close — after the final advance succeeded (a refused close
+      // releases nothing), beside the delivery cancellation it mirrors. The
+      // watcher's `divergence.claim-orphan` is the alarm for the close that
+      // never got here.
+      this.releaseClaimsForRun(input.runId, Date.now());
       // D-51's program-retirement check, run inside the SAME transaction:
       // the run just closed already reads as terminal to this COUNT, because
       // the write above is visible to a later read within one `tx()`.
@@ -2381,6 +2387,55 @@ export class CoordStore {
           `SELECT ${CoordStore.CLAIM_COLS} FROM claims WHERE project = ? AND state = 'live' ORDER BY id`)
     ).all(project) as Parameters<CoordStore['hydrateClaim']>[0][];
     return rows.flatMap((r) => this.hydrateClaim(r, this.claimPaths(r.id)) ?? []);
+  }
+
+  /** The watcher's renew write (D12: no session-side heartbeat — the SERVER
+   *  renews off records it already read). `MIN(?, hardExpiresAt)` is the 8 h
+   *  bound no renewal can move; the `state = 'live'` guard keeps a racing
+   *  lapse from being silently reopened. No `claim_paths` write: the state
+   *  word does not change, so the mirror bit already tells the truth. */
+  renewClaimRow(id: number, expiresAt: number, at: number): void {
+    this.db.prepare(
+      "UPDATE claims SET renewedAt = ?, expiresAt = MIN(?, hardExpiresAt) " +
+      "WHERE id = ? AND state = 'live'",
+    ).run(at, expiresAt, id);
+  }
+
+  /** LAPSE, NEVER DELETE (D12): the row survives with endedAt/endedBy, so
+   *  `?all=1` can answer "held by X until it died". A destroyed claim is
+   *  destroyed history. One `tx()` for the state word AND the
+   *  `claim_paths.live` mirror bit — the schema's own contract, `endClaim`'s
+   *  exact shape: the bit is written in the SAME transaction as every
+   *  `claims.state` transition, or the partial index answers for a claim
+   *  that no longer is. */
+  lapseClaimRow(id: number, endedBy: string, at: number): void {
+    tx(this.db, () => {
+      const res = this.db.prepare(
+        "UPDATE claims SET state = 'lapsed', endedAt = ?, endedBy = ? " +
+        "WHERE id = ? AND state = 'live'",
+      ).run(at, endedBy, id);
+      if (Number(res.changes) > 0) {
+        this.db.prepare('UPDATE claim_paths SET live = 0 WHERE claimId = ?').run(id);
+      }
+    });
+  }
+
+  /** Run close releases that run's claims IN THE CLOSE TRANSACTION (D12) —
+   *  called from `closeRun` only, after the final advance has succeeded,
+   *  beside the delivery cancellation it mirrors — and like that method it
+   *  takes no `tx()` of its own, because it runs inside `closeRun`'s. The
+   *  mirror-bit flip reads the parents through a subquery FIRST
+   *  (`expireLapsedInner`'s idiom — it must see them while they still read
+   *  live), then the parents take the released word. */
+  releaseClaimsForRun(runId: number, at: number): void {
+    this.db.prepare(
+      'UPDATE claim_paths SET live = 0 WHERE claimId IN ' +
+      "(SELECT id FROM claims WHERE runId = ? AND state = 'live')",
+    ).run(runId);
+    this.db.prepare(
+      "UPDATE claims SET state = 'released', endedAt = ?, endedBy = 'run-closed' " +
+      "WHERE runId = ? AND state = 'live'",
+    ).run(at, runId);
   }
 
   /* ── the deviation ledger (build 9 wave 7, D8/D13) ─────────────────────── */

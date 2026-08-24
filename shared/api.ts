@@ -1186,10 +1186,11 @@ export type DivergenceKind =
   | 'branch-drift'            // registry `.branch` != the worktree's own HEAD
   | 'claim-divergence'        // a hold with no open run, or an open run with no hold
   | 'provenance-mismatch'     // the kernel field contradicts the declared surface
-  | 'archived-but-live';      // a row stamped archived that is heartbeating now
+  | 'archived-but-live'       // a row stamped archived that is heartbeating now
+  | 'claim-orphan';           // a live path claim naming a run that is no longer open
 const DIVERGENCE_KIND_MAP: Record<DivergenceKind, true> = {
   'unregistered-worktree': true, 'branch-drift': true, 'claim-divergence': true,
-  'provenance-mismatch': true, 'archived-but-live': true,
+  'provenance-mismatch': true, 'archived-but-live': true, 'claim-orphan': true,
 };
 export const DIVERGENCE_KINDS: readonly DivergenceKind[] =
   Object.keys(DIVERGENCE_KIND_MAP) as DivergenceKind[];

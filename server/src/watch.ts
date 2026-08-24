@@ -14,7 +14,7 @@ import { sendPrompt } from './inject/send.js';
 import { askActions } from './askkey.js';
 import type { SessionRecord } from './registry.js';
 import type {
-  CoordStatus, LifecycleHealth, NotifyEvent, PrState, RunSummary, SessionStatus, TaskProgress,
+  CoordStatus, FleetSession, LifecycleHealth, NotifyEvent, PrState, RunSummary, SessionStatus, TaskProgress,
 } from '../../shared/api.js';
 import { MAIL_MAX_ATTEMPTS, UNCHECKED_PR } from '../../shared/api.js';
 import { JournalMirror } from './coord/mirror.js';
@@ -26,6 +26,7 @@ import { JournalMirror } from './coord/mirror.js';
 import { COORDINATOR_PAUSE_MARKER } from './coord/rundefs.js';
 import { readWorktreeRecords } from './coord/gitref.js';
 import { divergences, unclaimedWorktrees, type DivergenceInput } from './divergence.js';
+import { claimExpiry, type LivenessProbe } from './coord/claims.js';
 import type { ProvenancePair } from './coord/store.js';
 import type { PushPayload } from './push.js';
 import { deriveBranch } from './naming.js';
@@ -71,6 +72,12 @@ const DIVERGENCE_SWEEP_MS = 60_000;
  *  import it — that would be L3 importing L4 — so the staleness window is
  *  passed in from the one construction site below. */
 export const LC_SWEEP_MS = 5_000;
+
+/** Build 9 wave 7 (D12): the claim lease's lane. 60 s — a 45-minute lease
+ *  does not need the 2 s tick, and `sweepDivergences` already argues this
+ *  cadence. Renew and lapse each keep their own clock so neither starves the
+ *  other's first run. */
+const CLAIM_SWEEP_MS = 60_000;
 
 /** How far back the census weighs provenance pairs. One hour, not the whole
  *  table: a divergence the operator has already dealt with must stop being
@@ -326,6 +333,9 @@ export class FleetWatcher {
    *  carries the lane's own docstring; this is only the clock field, same
    *  shape as `lastNameSweep`/`lastDivergenceSweep` above it. */
   private lastLifecycleSweep = 0;
+  /** The claim lanes' clocks (build 9 wave 7, D12). */
+  private lastClaimRenew = 0;
+  private lastClaimLapse = 0;
   /** Built lazily (`mirrorFor` below) as soon as a coordination database
    *  exists — NOT only on the first sweep, since `lifecycleHealth()` must be
    *  able to ask it before any sweep has run. The mirror holds the cursor,
@@ -793,6 +803,18 @@ export class FleetWatcher {
       // permanently lose the real busy→idle edge the instant the row heals.
       for (const s of sessions) { if (!unmeasuredIds.has(s.id)) this.prevStatus.set(s.id, s.status); }
       this.activeProjects = projects;
+      // Build 9 wave 7: the claim lease rides THIS tick, on its own slower
+      // clocks — no new timer (D12), and the mail sweep below this block is
+      // untouched by name (D10: a second producer lands BESIDE the most
+      // load-bearing loop on the box, never inside it). Liveness comes off
+      // the SAME `sessions` this tick assembled. Wrapped like `pushNewMail`,
+      // for its reason: both walk straight into synchronous `node:sqlite`.
+      try {
+        this.renewClaims(sessions);
+        this.lapseClaims(sessions);
+      } catch (err) {
+        console.warn(`ccrc-server: claim sweep failed (${err instanceof Error ? err.message : String(err)}) — one bad sweep must not kill the poll`);
+      }
       this.primed = true;
       if (this.deps.cfg.fleetMode === 'remote' && this.deps.fleetState?.connected) {
         // C0.4: `connected` alone is not "this read was complete" — a
@@ -1603,18 +1625,29 @@ export class FleetWatcher {
       return;
     }
     let openRunSessionIds = new Set<string>();
+    let openRunIds = new Set<number>();
     try {
+      const openRuns = this.deps.coord?.runs() ?? [];
       openRunSessionIds = new Set(
-        (this.deps.coord?.runs() ?? [])
-          .map((r) => r.sessionId)
-          .filter((id): id is string => id !== null),
-      );
+        openRuns.map((r) => r.sessionId).filter((id): id is string => id !== null));
+      openRunIds = new Set(openRuns.map((r) => r.id));
     } catch (err) {
       // `coord.runs()` walks straight into synchronous `node:sqlite` — the same
       // fault every neighbouring lane already guards. A failed read skips the
       // census this pass rather than killing the poll.
       console.warn(`ccrc-server: sweepDivergences runs() failed (${err instanceof Error ? err.message : String(err)}) — one bad read must not kill the poll`);
       return;
+    }
+    // THE CLAIM ROWS, degrade-to-empty like `provenance` below: an absence can
+    // only suppress a claim-orphan finding, never manufacture one.
+    let liveClaims: DivergenceInput['liveClaims'] = [];
+    try {
+      liveClaims = (this.deps.coord?.activeClaims() ?? []).flatMap((c) =>
+        c.paths.map((p) => ({
+          id: c.id, sessionId: c.heldBy, project: c.project, path: p, runId: c.runId,
+        })));
+    } catch (err) {
+      console.warn(`ccrc-server: sweepDivergences activeClaims failed (${err instanceof Error ? err.message : String(err)}) — no claim findings this pass`);
     }
     // THE REGISTRY'S `.branch`, never the assembled `FleetSession.branch`:
     // `assembleFleet` computes `sl?.branch ?? r.branch` (fleet.ts) and the
@@ -1643,7 +1676,7 @@ export class FleetWatcher {
         // number sitting in scope.
         supervisedAt: r.supervisedAt,
       })),
-      worktrees, headBranch, openRunSessionIds,
+      worktrees, headBranch, openRunSessionIds, openRunIds, liveClaims,
       // THE REGISTRY'S OWN DIRECTORY LISTING — the evidence that a workspace
       // mid-`ws-add` is claimed before its row parses (see
       // `unclaimedWorktrees`), taken above AFTER git's records for the ordering
@@ -1722,6 +1755,79 @@ export class FleetWatcher {
     if (this.lastLifecycleSweep !== 0 && now - this.lastLifecycleSweep < LC_SWEEP_MS) return;
     this.lastLifecycleSweep = now;
     await this.mirrorFor(store).sweep();
+  }
+
+  /**
+   * Liveness for `claimExpiry`, off the rows THIS tick already assembled —
+   * no second registry read (the one-listing rule `sweepDivergences` states).
+   * `LivenessProbe` is `claims.ts`'s own port, declared by the consumer (L2).
+   *
+   * `Pick<…>` in the sweep signatures is deliberate: the sweeps read exactly
+   * three fields, and a test should not have to fabricate a whole
+   * `FleetSession` to exercise a lease.
+   */
+  private claimProbe(
+    sessions: readonly Pick<FleetSession, 'id' | 'status' | 'unmeasured'>[],
+  ): LivenessProbe {
+    const byId = new Map(sessions.map((s) => [s.id, s]));
+    return {
+      liveness: (id: string) => {
+        const s = byId.get(id);
+        if (s === undefined) return 'gone';                 // the fleet no longer lists it
+        if (s.unmeasured.length > 0) return 'unmeasurable'; // doubt reads as HELD (D12)
+        return s.status === 'dead' ? 'gone' : 'running';
+      },
+    };
+  }
+
+  /**
+   * D12: NO SESSION-SIDE HEARTBEAT — "a protocol a model must remember is a
+   * protocol that will be forgotten, and the failure is a wedged module."
+   * The server renews for a holder it can measure running (and for one it
+   * cannot measure at all — doubt reads as held), on the EXISTING tick.
+   * `claimExpiry` (L1) owns every decision; this method only applies the
+   * `renew` arm. Synchronous: `tick()` wraps the pair in the same try/catch
+   * `pushNewMail` earned, because both walk straight into `node:sqlite`.
+   *
+   * DOUBT RENEWS in this lane (the plan's cross-task ruling), and the fold
+   * below is why holding is not enough: the in-tx expiry pre-pass on every
+   * claim attempt reads only the clock, so a doubted holder whose stale
+   * lease merely STOOD would be lapsed by the next rival's attempt — the
+   * mass-expiry a fleet-box hiccup must not cause. The fold hands
+   * `claimExpiry` the renewing verdict rather than deciding here, so the
+   * hard cap still fells it first and a no-op renewal is still a hold; the
+   * lapse lane below keeps the honest verdict, which is where "doubt is not
+   * death" does its other half of the work.
+   */
+  renewClaims(sessions: readonly Pick<FleetSession, 'id' | 'status' | 'unmeasured'>[]): void {
+    const now = Date.now();
+    if (this.lastClaimRenew !== 0 && now - this.lastClaimRenew < CLAIM_SWEEP_MS) return;
+    this.lastClaimRenew = now;
+    const store = this.deps.coord;
+    if (!store) return;
+    const probe = this.claimProbe(sessions);
+    for (const c of store.activeClaims()) {
+      const v = probe.liveness(c.heldBy);
+      const d = claimExpiry(c, now, v === 'unmeasurable' ? 'running' : v);
+      if (d.act === 'renew') store.renewClaimRow(c.id, d.expiresAt, now);
+    }
+  }
+
+  /** The lapse half — `claimExpiry`'s `lapse` arm applied. A holder measured
+   *  gone lapses at the STANDING `expiresAt` with `endedBy:'session-gone'`;
+   *  the 8 h hard cap lapses whatever the liveness said. Rows survive —
+   *  `lapseClaimRow` lapses, never deletes. */
+  lapseClaims(sessions: readonly Pick<FleetSession, 'id' | 'status' | 'unmeasured'>[]): void {
+    const now = Date.now();
+    if (this.lastClaimLapse !== 0 && now - this.lastClaimLapse < CLAIM_SWEEP_MS) return;
+    this.lastClaimLapse = now;
+    const store = this.deps.coord;
+    if (!store) return;
+    const probe = this.claimProbe(sessions);
+    for (const c of store.activeClaims()) {
+      const d = claimExpiry(c, now, probe.liveness(c.heldBy));
+      if (d.act === 'lapse') store.lapseClaimRow(c.id, d.endedBy, now);
+    }
   }
 
   /**

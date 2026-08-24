@@ -437,6 +437,13 @@ describe('the rejection table is total, in both directions', () => {
                               // L0 slice ruled out. Allowlisted as fixed spellings instead;
                               // a THIRD endedBy value trips this scan and gets its own
                               // deliberate entry, which is the ceremony working.
+      'run-closed',           // …and here is that third value, deliberately (Task 15):
+                              // store.ts `releaseClaimsForRun`'s endedBy — the run close
+                              // releasing its own claims inside the close transaction
+                              // (Build 9 D12). Same family, same reasoning as the pair
+                              // above: stored forensics on a released claim, never a
+                              // refusal a caller switches on. A FOURTH value gets its
+                              // own entry too.
       'bad-count',            // ledger.ts `decideAllocation`'s local refusal arm. The plan
                               // ruled it NOT L0 ("no wire type carries it"), so it is
                               // deliberately absent from CLAIM_REFUSE_CODES and has no

@@ -4932,7 +4932,7 @@ describe('the allocator under fire', () => {
 
 **Steps:**
 
-- [ ] Write the failing store-writer tests — create `server/test/claim-sweep.test.ts`:
+- [x] Write the failing store-writer tests — create `server/test/claim-sweep.test.ts`:
 
 ```ts
 // D12: no session-side heartbeat. renewClaims/lapseClaims ride FleetWatcher's
@@ -5046,10 +5046,10 @@ describe('run close releases the claims — inside the close transaction', () =>
 });
 ```
 
-- [ ] Run, expect FAIL: `cd server && ./node_modules/.bin/vitest run test/claim-sweep.test.ts` —
+- [x] Run, expect FAIL: `cd server && ./node_modules/.bin/vitest run test/claim-sweep.test.ts` —
   `TypeError: h.coord.renewClaimRow is not a function`.
 
-- [ ] Write the store half. Append to the claims block in `server/src/coord/store.ts`:
+- [x] Write the store half. Append to the claims block in `server/src/coord/store.ts`:
 
 ```ts
   /** The watcher's renew write (D12: no session-side heartbeat — the SERVER
@@ -5095,11 +5095,11 @@ describe('run close releases the claims — inside the close transaction', () =>
       this.releaseClaimsForRun(input.runId, Date.now());
 ```
 
-- [ ] Run, expect PASS: `./node_modules/.bin/vitest run test/claim-sweep.test.ts`. Then
+- [x] Run, expect PASS: `./node_modules/.bin/vitest run test/claim-sweep.test.ts`. Then
   `./node_modules/.bin/vitest run test/coord-abandon.test.ts test/run-routes.test.ts` — expect
   PASS (`closeRun` gained a statement, no behaviour any existing test pins changed).
 
-- [ ] Write the failing watcher tests — append to `server/test/claim-sweep.test.ts`:
+- [x] Write the failing watcher tests — append to `server/test/claim-sweep.test.ts`:
 
 ```ts
 describe('renewClaims / lapseClaims on the FleetWatcher tick', () => {
@@ -5177,9 +5177,9 @@ describe('renewClaims / lapseClaims on the FleetWatcher tick', () => {
 });
 ```
 
-- [ ] Run, expect FAIL: `TypeError: h.watcher.renewClaims is not a function`.
+- [x] Run, expect FAIL: `TypeError: h.watcher.renewClaims is not a function`.
 
-- [ ] Write the watcher half. In `server/src/watch.ts`:
+- [x] Write the watcher half. In `server/src/watch.ts`:
 
   1. Add to the type-import block (lines 16–18): `FleetSession`.
   2. Add a new import after line 28: `import { claimExpiry, type LivenessProbe } from './claims.js';`
@@ -5283,9 +5283,9 @@ const CLAIM_SWEEP_MS = 60_000;
       }
 ```
 
-- [ ] Run, expect PASS: `./node_modules/.bin/vitest run test/claim-sweep.test.ts`.
+- [x] Run, expect PASS: `./node_modules/.bin/vitest run test/claim-sweep.test.ts`.
 
-- [ ] Write the failing `claim-orphan` classifier tests. In `server/test/divergence.test.ts`:
+- [x] Write the failing `claim-orphan` classifier tests. In `server/test/divergence.test.ts`:
   extend the `input()` helper (lines 28–39) with two new defaults, appended before the spread:
 
 ```ts
@@ -5329,12 +5329,12 @@ describe('claim-orphan — a live claim whose run is no longer open (build 9 D12
 });
 ```
 
-- [ ] Run, expect FAIL: `./node_modules/.bin/vitest run test/divergence.test.ts` — TypeScript-side
+- [x] Run, expect FAIL: `./node_modules/.bin/vitest run test/divergence.test.ts` — TypeScript-side
   the new fields are unknown, so at runtime the first new test fails with
   `expected [] to include an object matching { kind: 'claim-orphan' … }`, and the vocabulary test
   fails on the missing sixth member.
 
-- [ ] Implement the L0 + L1 halves. In `shared/api.ts` (lines 1184–1193):
+- [x] Implement the L0 + L1 halves. In `shared/api.ts` (lines 1184–1193):
 
 ```ts
 export type DivergenceKind =
@@ -5385,9 +5385,9 @@ const DIVERGENCE_KIND_MAP: Record<DivergenceKind, true> = {
   }
 ```
 
-- [ ] Run, expect PASS: `./node_modules/.bin/vitest run test/divergence.test.ts`.
+- [x] Run, expect PASS: `./node_modules/.bin/vitest run test/divergence.test.ts`.
 
-- [ ] Write the failing WIRING test — append to `server/test/claim-sweep.test.ts`:
+- [x] Write the failing WIRING test — append to `server/test/claim-sweep.test.ts`:
 
 ```ts
 describe('sweepDivergences feeds claim-orphan from what it already read', () => {
@@ -5426,12 +5426,12 @@ describe('sweepDivergences feeds claim-orphan from what it already read', () => 
 });
 ```
 
-- [ ] Run, expect FAIL: TypeScript aside, `divergences()` now requires `liveClaims`/`openRunIds`
+- [x] Run, expect FAIL: TypeScript aside, `divergences()` now requires `liveClaims`/`openRunIds`
   and `sweepDivergences` does not supply them — the suite fails at runtime with
   `TypeError: Cannot read properties of undefined (reading …)` from arm 6 (or, if the tsc-side
   `typecheck-tests` suite is run, TS2345 on `classifierInput`).
 
-- [ ] Wire `sweepDivergences`. In `server/src/watch.ts`, replace the `openRunSessionIds` block
+- [x] Wire `sweepDivergences`. In `server/src/watch.ts`, replace the `openRunSessionIds` block
   (lines 1605–1618) with:
 
 ```ts
@@ -5464,19 +5464,19 @@ describe('sweepDivergences feeds claim-orphan from what it already read', () => 
   and add `openRunIds, liveClaims,` to the `classifierInput` object literal (beside
   `worktrees, headBranch, openRunSessionIds,` at line 1646).
 
-- [ ] Run, expect PASS:
+- [x] Run, expect PASS:
   `./node_modules/.bin/vitest run test/claim-sweep.test.ts test/divergence.test.ts test/divergence-sweep.test.ts`.
 
-- [ ] **Verify `sweepMail` is untouched (the D10 no-edit assertion):**
+- [x] **Verify `sweepMail` is untouched (the D10 no-edit assertion):**
   `git diff $(git merge-base HEAD origin/main) -- server/src/watch.ts | grep -c 'sweepMail'`
   — expect `0`. If any hunk names `sweepMail`, STOP and remove the edit: a second producer lands
   BESIDE the most load-bearing loop on the box, never inside it.
 
-- [ ] Run the load-sensitive neighbours in the foreground:
+- [x] Run the load-sensitive neighbours in the foreground:
   `./node_modules/.bin/vitest run test/mail-sweep.test.ts test/hold-gate.test.ts` — expect PASS
   (re-run in isolation before calling a real break, per the known-flakes rule).
 
-- [ ] Commit:
+- [x] Commit:
   `git add shared/api.ts server/src/divergence.ts server/src/coord/store.ts server/src/watch.ts server/test/claim-sweep.test.ts server/test/divergence.test.ts && git commit -m "server(w7): the lease rides the tick — renew on measured life, lapse at the standing expiry"`
 
 ---
