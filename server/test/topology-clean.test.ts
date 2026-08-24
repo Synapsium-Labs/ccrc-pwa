@@ -35,9 +35,16 @@
 // the pre-fix suite ran 30/30 GREEN (both blindnesses demonstrated), the
 // fixed suite exactly 3 reds (tailnet content, duckdns content, tailnet
 // path — one per probe), and 38/38 on revert.
+// D-208 range ceremony 2026-08-24: a public IPv4 planted in README.md by one
+// commit and REMOVED by the next — tip clean, history dirty, the exact state
+// the tip walk cannot see. The pre-guard suite ran 39/39 GREEN on it (the
+// blindness, measured rather than argued); the guarded suite ran exactly 1 red,
+// `README.md:1831: 1.2.3.4` on the public-IPv4 RANGE row, with all 47 other
+// rows — every tip row included — still green; 48/48 on revert.
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -98,6 +105,104 @@ for (const file of trackedFiles) {
  *  BYTES are forbidden-by-design or not text; their NAMES enjoy no such
  *  license, so even this suite's own path is scanned. */
 const PATH_CORPUS: CorpusFile[] = trackedPaths.map((p) => ({ file: p, lines: [p] }));
+
+/** ─── THE PUBLISHED HISTORY, NOT JUST THE TIP (D-208) ────────────────────────
+ *
+ *  Everything above walks `git ls-files`: the TIP. That is the tree as it
+ *  stands, and it is NOT the whole of what a push publishes. A commit that
+ *  introduces a forbidden token and a later commit that removes it leave the
+ *  tip clean and the BLOB permanent — reachable from the commit that added it
+ *  forever, and on GitHub from `refs/pull/N/head` and the PR's own commits
+ *  view even after the branch is deleted and even after a SQUASH merge. So the
+ *  tip scan can be green while the artifact this repo publishes is not.
+ *
+ *  Measured, which is why this is a row and not a comment asking for one: on
+ *  2026-08-24 a finished 128-commit branch ran this suite 30/30 GREEN with 13
+ *  of its own commits carrying residue in intermediate states — 326
+ *  occurrences of one class in the first commit alone. The tip was genuinely
+ *  clean, the history was not, and nothing in the tree could tell anybody. The
+ *  repo had gone public that morning; the remedy for a published leak is
+ *  another `filter-repo` over every ref, and this project has run two.
+ *
+ *  The same classes, then, over every blob the range INTRODUCES. */
+
+/** The base this branch is measured against. `origin/main` is the answer in a
+ *  clone and in CI; `$CCRC_HISTORY_BASE` overrides it where the base is
+ *  elsewhere. This returns null rather than guessing, and the row below turns
+ *  that null RED: a guard that quietly measures nothing is the exact failure
+ *  mode this file argues against, and a shallow `actions/checkout` (the
+ *  default, depth 1, where `origin/main` does not exist) is precisely how it
+ *  would happen. CI therefore carries `fetch-depth: 0`, and deleting it makes
+ *  this suite red instead of making it vacuous. */
+function resolveBase(cwd: string): string | null {
+  const candidates = [process.env.CCRC_HISTORY_BASE, 'origin/main', 'main']
+    .filter((r): r is string => Boolean(r));
+  for (const ref of candidates) {
+    try {
+      execFileSync('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`],
+        { cwd, stdio: 'pipe' });
+      return ref;
+    } catch { /* try the next candidate */ }
+  }
+  return null;
+}
+
+/** Every blob introduced by `range`, as a pseudo-file keyed on the path git
+ *  records for it. Intermediate states are the POINT: a blob is published by
+ *  the commit that adds it, not by surviving to the tip.
+ *
+ *  `file` is the bare path, deliberately NOT decorated with the blob sha —
+ *  every class's `scope` and `skipLine` predicate matches on it (the
+ *  `package-lock.json` line skip, a `docs/` scope), and a decorated label
+ *  would stop those matching and manufacture false positives the tip walk does
+ *  not have. One path therefore appears once per version, which is correct. To
+ *  find the commit behind a row: `git rev-list --objects <range> | grep <path>`.
+ *
+ *  SELF is excluded for the tip walk's reason plus one more: a HISTORICAL copy
+ *  of this suite carries the same `catches` fixtures, so a range touching this
+ *  file would score its own liveness tokens. */
+function rangeCorpus(cwd: string, range: string): CorpusFile[] {
+  const listed = execFileSync('git', ['rev-list', '--objects', range],
+    { cwd, maxBuffer: 256 * 1024 * 1024 }).toString('utf8');
+  const pathOf = new Map<string, string>();
+  for (const line of listed.split('\n')) {
+    const sp = line.indexOf(' ');
+    if (sp > 0) pathOf.set(line.slice(0, sp), line.slice(sp + 1));
+  }
+  if (pathOf.size === 0) return [];
+
+  const checked = execFileSync('git', ['cat-file', '--batch-check'],
+    { cwd, input: `${[...pathOf.keys()].join('\n')}\n`, maxBuffer: 64 * 1024 * 1024 })
+    .toString('utf8');
+  const blobs: string[] = [];
+  for (const line of checked.split('\n')) {
+    const [sha, type] = line.split(' ');
+    if (type !== 'blob') continue;
+    const p = pathOf.get(sha);
+    if (!p || p === SELF || BINARY_EXT.has(path.extname(p))) continue;
+    blobs.push(sha);
+  }
+  if (blobs.length === 0) return [];
+
+  const buf = execFileSync('git', ['cat-file', '--batch'],
+    { cwd, input: `${blobs.join('\n')}\n`, maxBuffer: 512 * 1024 * 1024 });
+  const out: CorpusFile[] = [];
+  let pos = 0;
+  for (const sha of blobs) {
+    const nl = buf.indexOf(0x0a, pos);
+    if (nl < 0) break;
+    const size = Number(buf.subarray(pos, nl).toString('utf8').split(' ')[2]);
+    if (!Number.isFinite(size)) break;
+    const body = buf.subarray(nl + 1, nl + 1 + size);
+    pos = nl + 1 + size + 1;
+    out.push({ file: pathOf.get(sha) as string, lines: body.toString('utf8').split('\n') });
+  }
+  return out;
+}
+
+const HISTORY_BASE: string | null = resolveBase(root);
+const HISTORY_CORPUS: CorpusFile[] =
+  HISTORY_BASE ? rangeCorpus(root, `${HISTORY_BASE}..HEAD`) : [];
 
 /** One forbidden class. Later stage-5 tasks APPEND to `FORBIDDEN` — the
  *  table is the ratchet's whole registration surface. */
@@ -398,6 +503,64 @@ describe('the corpus this walks', () => {
   });
 });
 
+describe('the published history, not just the tip', () => {
+  it('resolved a base to measure against — a missing one is RED, never vacuous', () => {
+    expect(HISTORY_BASE,
+      'no $CCRC_HISTORY_BASE, origin/main or main resolved: a shallow checkout cannot guard history, and this refuses to report a range nobody measured')
+      .not.toBeNull();
+  });
+
+  it('demonstrates the blindness it closes — a clean tip over a dirty history', () => {
+    // The guard on the guard, and the only row that proves the two walks are
+    // DIFFERENT. A throwaway repo whose final tree is clean and whose middle
+    // commit is not: the tip walk passes it, the range walk must not. If these
+    // two ever agree, this file has stopped measuring anything.
+    //
+    // Fixture HOME discipline: git runs with both config scopes pointed at
+    // /dev/null and identity supplied per-process, so this can neither read
+    // nor write the developer's real git config.
+    const tmp = mkdtempSync(path.join(tmpdir(), 'ccrc-hist-'));
+    try {
+      const env = {
+        ...process.env,
+        GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null',
+        GIT_AUTHOR_NAME: 'fixture', GIT_AUTHOR_EMAIL: 'fixture@example.com',
+        GIT_COMMITTER_NAME: 'fixture', GIT_COMMITTER_EMAIL: 'fixture@example.com',
+      };
+      const git = (...args: string[]): void => {
+        execFileSync('git', args, { cwd: tmp, stdio: 'pipe', env });
+      };
+      const stage = (body: string): void => {
+        writeFileSync(path.join(tmp, 'f.md'), body);
+        git('add', '-A');
+      };
+      git('init', '-q', '-b', 'main');
+      stage('nothing here\n');
+      git('commit', '-qm', 'base');
+      const planted = FORBIDDEN[0].catches[0];
+      stage(`a line carrying ${planted} in prose\n`);
+      git('commit', '-qm', 'dirty middle');
+      stage('nothing here again\n');
+      git('commit', '-qm', 'clean tip');
+
+      // The tip walk over that repo: blind, by construction.
+      const tip: CorpusFile[] = [{
+        file: 'f.md',
+        lines: readFileSync(path.join(tmp, 'f.md'), 'utf8').split('\n'),
+      }];
+      expect(violationsOf(FORBIDDEN[0], tip),
+        'the tip walk should see nothing here — that blindness IS the gap').toEqual([]);
+
+      // The range walk over the same three commits: not blind.
+      const found = violationsOf(FORBIDDEN[0], rangeCorpus(tmp, 'main~2..main'));
+      expect(found.length, `the range walk missed the planted ${planted}`).toBeGreaterThan(0);
+      expect(found.join('\n')).toContain(planted);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
 for (const cls of FORBIDDEN) {
   describe(`forbidden class: ${cls.name}`, () => {
     it(`the pattern is alive — it scores each synthetic token (${cls.why})`, () => {
@@ -430,6 +593,13 @@ for (const cls of FORBIDDEN) {
 
     it('nothing in the tree speaks it', () => {
       expect(violationsOf(cls)).toEqual([]);
+    });
+
+    it('and nothing this branch ADDS speaks it, at any commit in the range', () => {
+      // D-208: the rows above pass over a branch whose MIDDLE commits are
+      // dirty. This one reads every blob `<base>..HEAD` introduces, so a token
+      // added and later removed still reds the branch that would publish it.
+      expect(violationsOf(cls, HISTORY_CORPUS)).toEqual([]);
     });
 
     it('and no tracked path is NAMED after it', () => {
