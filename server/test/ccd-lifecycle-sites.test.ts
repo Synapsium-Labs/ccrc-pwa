@@ -50,14 +50,14 @@ describe('session call sites', () => {
   });
 
   it('_reg_claim writes one claim line', () => {
-    h.sh('_reg_set sess wrapper claude-corp; _reg_claim sess');
+    h.sh('_reg_set sess wrapper claude-b; _reg_claim sess');
     // `toEqual(['claim'])` already pins the journal at exactly one line — the
     // hard guard the two claims below dereference against — so the two
     // independent diagnostic claims (FIX ROUND 1 (c)) are `expect.soft`:
     // either can fail without hiding the other.
     expect(actsOf(h.home)).toEqual(['claim']);
     expect.soft(readJournal(h.home)[0]!['id']).toBe('sess');
-    expect.soft(measOf(readJournal(h.home)[0]!)['wrapper']).toBe('claude-corp');
+    expect.soft(measOf(readJournal(h.home)[0]!)['wrapper']).toBe('claude-b');
   });
 
   it('_spawn_settle is CHANGE-ONLY — an unchanged rc inside 300s writes nothing', () => {
@@ -115,10 +115,10 @@ describe('session call sites', () => {
   it('cmd_enable and cmd_start write TWO independent events, not one folded pair', () => {
     // The ruling: a re-entrant verb records two acts because two acts happened.
     // `wrapper` and `workdir` are seeded because cmd_start's ladder dies at
-    // ccd:10166 and ccd:10178 without them; `claude-corp` is in the harness's
-    // home-able roster, so `[[ -x "$WRAPPER_DIR/claude-corp" ]]` (ccd:10167) holds.
+    // ccd:10166 and ccd:10178 without them; `claude-b` is in the harness's
+    // home-able roster, so `[[ -x "$WRAPPER_DIR/claude-b" ]]` (ccd:10167) holds.
     h.sh(`_reg_set sess uuid u; _reg_set sess project demo
-      _reg_set sess wrapper claude-corp; _reg_set sess workdir "$HOME"
+      _reg_set sess wrapper claude-b; _reg_set sess workdir "$HOME"
       _supervised_start() { return 0; }; _reg_claim() { :; }; _spawn_settle() { :; }
       _spawn_start() { SPAWN_FROMSWAP=0; }; _alive() { return 1; }
       cmd_enable sess`);
@@ -148,7 +148,7 @@ describe('session call sites', () => {
     // recorded in `h.tmuxCalls()` (never the `ccd-calls` log some other
     // fixtures in this repo read through a local `tmux()` shell function).
     h.sh(`_reg_set sess uuid u; _reg_set sess project demo
-      _reg_set sess wrapper claude-corp; _reg_set sess workdir "$HOME"
+      _reg_set sess wrapper claude-b; _reg_set sess workdir "$HOME"
       _supervised_start() { return 0; }; _reg_claim() { :; }; _spawn_settle() { :; }
       _spawn_start() { SPAWN_FROMSWAP=0; }; _alive() { return 1; }
       cmd_enable sess`);

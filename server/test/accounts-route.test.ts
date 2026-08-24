@@ -51,7 +51,7 @@ describe('GET /api/accounts', () => {
       // history, the seven 93 is current.
       claude: { five: 55, seven: 93, ts: t - 120, fiveResetAt: t - 60, sevenResetAt: t + 200000 },
       // Nothing has rolled over; the zero here was really measured.
-      claude2: { five: 0, seven: 12, ts: t - 60, fiveResetAt: t + 9000, sevenResetAt: t + 400000 },
+      'claude-a': { five: 0, seven: 12, ts: t - 60, fiveResetAt: t + 9000, sevenResetAt: t + 400000 },
     });
 
     const accounts = await getAccounts(home);
@@ -62,14 +62,14 @@ describe('GET /api/accounts', () => {
       fiveResetAt: t - 60, sevenResetAt: t + 200000,
       fiveRolledOver: true, sevenRolledOver: false, disabled: false,
     });
-    expect(byWrapper['claude2']).toEqual({
-      wrapper: 'claude2', five: 0, seven: 12, ts: t - 60,
+    expect(byWrapper['claude-a']).toEqual({
+      wrapper: 'claude-a', five: 0, seven: 12, ts: t - 60,
       fiveResetAt: t + 9000, sevenResetAt: t + 400000,
       fiveRolledOver: false, sevenRolledOver: false, disabled: false,
     });
     // The whole point: two accounts both reading five=0, told apart only by
     // the flag. If the map drops it, these two become indistinguishable.
-    expect(byWrapper['claude'].fiveRolledOver).not.toBe(byWrapper['claude2'].fiveRolledOver);
+    expect(byWrapper['claude'].fiveRolledOver).not.toBe(byWrapper['claude-a'].fiveRolledOver);
   });
 
   it('reports a rolled-over 7d window too', async () => {
@@ -89,12 +89,12 @@ describe('GET /api/accounts', () => {
     const fresh = (five: number, seven: number) =>
       ({ five, seven, ts: t - 60, fiveResetAt: t + 9000, sevenResetAt: t + 400000 });
     const home = seedLimits({
-      claude: fresh(80, 40), claude2: fresh(5, 3), 'claude-corp': fresh(90, 95),
-      'claude-dev0': fresh(85, 45),
+      claude: fresh(80, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(90, 95),
+      'claude-d': fresh(85, 45),
     });
 
     const { projected } = await getPayload(home);
-    expect(projected).toEqual({ wrapper: 'claude2', score: 5 });
+    expect(projected).toEqual({ wrapper: 'claude-a', score: 5 });
   });
 
   it('projects an exhausted account rather than hiding it', async () => {
@@ -104,23 +104,23 @@ describe('GET /api/accounts', () => {
     const pinned = (five: number, seven: number) =>
       ({ five, seven, ts: t - 60, fiveResetAt: t + 9000, sevenResetAt: t + 400000 });
     const home = seedLimits({
-      claude: pinned(100, 100), claude2: pinned(99, 100), 'claude-corp': pinned(98, 99),
-      'claude-dev0': pinned(100, 100),
+      claude: pinned(100, 100), 'claude-a': pinned(99, 100), 'claude-b': pinned(98, 99),
+      'claude-d': pinned(100, 100),
     });
 
     const { projected } = await getPayload(home);
-    expect(projected).toEqual({ wrapper: 'claude-corp', score: 99 });
+    expect(projected).toEqual({ wrapper: 'claude-b', score: 99 });
   });
 
-  it('orders accounts claude, claude2, claude-corp, gpt, claude-dev0', async () => {
+  it('orders accounts claude, claude-a, claude-b, gpt, claude-d', async () => {
     const t = now();
     const body = { five: 1, seven: 1, ts: t - 60, fiveResetAt: t + 9000, sevenResetAt: t + 400000 };
     const home = seedLimits({
-      gpt: body, 'claude-corp': body, claude2: body, claude: body, 'claude-dev0': body,
+      gpt: body, 'claude-b': body, 'claude-a': body, claude: body, 'claude-d': body,
     });
 
     const accounts = await getAccounts(home);
-    expect(accounts.map((a) => a.wrapper)).toEqual(['claude', 'claude2', 'claude-corp', 'gpt', 'claude-dev0']);
+    expect(accounts.map((a) => a.wrapper)).toEqual(['claude', 'claude-a', 'claude-b', 'gpt', 'claude-d']);
   });
 
   // `rank()`'s unknown-wrapper fallback (`i < 0 ? 99`), which is load-bearing
@@ -133,13 +133,13 @@ describe('GET /api/accounts', () => {
   it('sorts a wrapper the roster does not have last, rather than dropping it', async () => {
     const t = now();
     const body = { five: 1, seven: 1, ts: t - 60, fiveResetAt: t + 9000, sevenResetAt: t + 400000 };
-    const home = seedLimits({ zzz: body, 'claude-dev0': body, ghost: body, claude: body });
+    const home = seedLimits({ zzz: body, 'claude-d': body, ghost: body, claude: body });
 
     const accounts = await getAccounts(home);
-    // Roster order first (claude, then claude-dev0), then the two unrostered
+    // Roster order first (claude, then claude-d), then the two unrostered
     // names — which tie at rank 99 and fall back to alphabetical, so the order
     // among them is defined rather than whatever readdir returned.
-    expect(accounts.map((a) => a.wrapper)).toEqual(['claude', 'claude-dev0', 'ghost', 'zzz']);
+    expect(accounts.map((a) => a.wrapper)).toEqual(['claude', 'claude-d', 'ghost', 'zzz']);
   });
 
   // The fourth field of the wire contract (Stage 2a): the roster itself. Without
@@ -147,12 +147,11 @@ describe('GET /api/accounts', () => {
   // mentioned — `accounts` above is built from `.cc-limits/*.json`, so an
   // account nothing has ever run on has no row there at all.
   //
-  // `claude2` carries a label that is NOT its id (`alt·max`, its real one in
-  // `server/test/fixtures/roster-five.json`) — see `DEFAULT_TEST_ROSTER`. Every
-  // fixture account used to label itself with its own id, which made this
-  // assertion unable to fail on the very confusion it exists to catch: a
-  // handler emitting `a.id` into `label` passed it byte for byte, and `label`
-  // is what the PWA actually renders.
+  // `claude-b` carries a label that is NOT its id (`team·b`) — see
+  // `DEFAULT_TEST_ROSTER`. Every fixture account used to label itself with
+  // its own id, which made this assertion unable to fail on the very
+  // confusion it exists to catch: a handler emitting `a.id` into `label`
+  // passed it byte for byte, and `label` is what the PWA actually renders.
   it('carries the roster, including accounts telemetry has never mentioned', async () => {
     const home = seedLimits({ claude: { five: 2, seven: 3 } });
     const { accounts, roster } = await getPayload(home);
@@ -160,10 +159,10 @@ describe('GET /api/accounts', () => {
     expect(accounts.map((a) => a.wrapper)).toEqual(['claude']);
     expect(roster).toEqual([
       { id: 'claude', label: 'claude', hue: 'cyan', homeAble: true },
-      { id: 'claude2', label: 'alt·max', hue: 'violet', homeAble: true },
-      { id: 'claude-corp', label: 'claude-corp', hue: 'blue', homeAble: true },
+      { id: 'claude-a', label: 'claude-a', hue: 'violet', homeAble: true },
+      { id: 'claude-b', label: 'team·b', hue: 'blue', homeAble: true },
       { id: 'gpt', label: 'gpt', hue: 'magenta', homeAble: false },
-      { id: 'claude-dev0', label: 'claude-dev0', hue: 'green', homeAble: true },
+      { id: 'claude-d', label: 'claude-d', hue: 'green', homeAble: true },
     ]);
   });
 

@@ -19,7 +19,7 @@ import { KeyedQueue } from '../src/inject/queue.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 
-const ID = 'claude2-MekWarLive';
+const ID = 'claude-a-MekWarLive';
 
 const seedSession = (home: string, id: string, wrapper: string) => {
   const reg = path.join(home, '.cc-sessions');
@@ -39,10 +39,10 @@ async function makeApp(
   const home = mkTmp('ccrc-');
   seedRoster(home);
   const resolvedPanes = typeof panes === 'function' ? panes(home) : panes;
-  seedSession(home, ID, 'claude2');
+  seedSession(home, ID, 'claude-a');
   const PANE_PID = 4242;
   if (opts.status) {
-    const sdir = path.join(home, '.claude-personal', 'sessions');
+    const sdir = path.join(home, '.claude-a', 'sessions');
     mkdirSync(sdir, { recursive: true });
     writeFileSync(path.join(sdir, `${PANE_PID}.json`), JSON.stringify({
       pid: PANE_PID, sessionId: '1'.repeat(36), cwd: `/data/projects/${ID}`,
@@ -117,7 +117,7 @@ describe('write routes', () => {
   it('POST prompt succeeds — no 404 — when the live session\'s own workdir field is unreadable', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
-    seedSession(home, ID, 'claude2');
+    seedSession(home, ID, 'claude-a');
     const PANE_PID = 4242;
     const panes = ['scrollback\n❯ \n', 'scrollback\n❯ hello\n', 'scrollback\n❯ \n'];
     let capIdx = 0;
@@ -152,7 +152,7 @@ describe('write routes', () => {
   it('POST prompt still 404s a truly unregistered id under the same unreadable-field IO', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
-    seedSession(home, ID, 'claude2');
+    seedSession(home, ID, 'claude-a');
     const workdirUnreadableIO = unreadableField(ID, 'workdir');
     const cfg = loadConfig({ CCRC_HOME: home });
     const run: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
@@ -530,7 +530,7 @@ describe('upload route id handling', () => {
   it('404s an unknown but well-formed session', async () => {
     const { app } = await makeApp([null]);
     const res = await app.inject({
-      method: 'POST', url: '/api/sessions/claude2-NoSuchProject/upload', payload: png(),
+      method: 'POST', url: '/api/sessions/claude-a-NoSuchProject/upload', payload: png(),
     });
     expect(res.statusCode).toBe(404);
     expect(res.json().error).toBe('unknown-session');
@@ -581,7 +581,7 @@ describe('clip route', () => {
   it('404s a well-formed clip name under an unknown session', async () => {
     const { app } = await makeApp([null]);
     const res = await app.inject({
-      method: 'GET', url: '/api/sessions/claude2-NoSuchProject/clip/clip-20260726-150340-a1b2.png',
+      method: 'GET', url: '/api/sessions/claude-a-NoSuchProject/clip/clip-20260726-150340-a1b2.png',
     });
     expect(res.statusCode).toBe(404);
     expect(res.json().error).toBe('unknown-session');
@@ -595,7 +595,7 @@ describe('notify ingestion', () => {
     const sessionMsgs: SessionStreamMsg[] = [];
     bus.on('notice', (n) => notices.push(n.message));
     bus.on(`session:${ID}`, (m) => sessionMsgs.push(m));
-    const message = `cc swap: ${ID} moved claude2 -> claude (limits) — reopen it on claude.ai under the claude account`;
+    const message = `cc swap: ${ID} moved claude-a -> claude (limits) — reopen it on claude.ai under the claude account`;
     const res = await app.inject({ method: 'POST', url: '/api/notify', payload: { message } });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
@@ -644,7 +644,7 @@ describe('POST /api/sessions/:id/stop', () => {
      'identity could not be measured', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
-    seedSession(home, ID, 'claude2');
+    seedSession(home, ID, 'claude-a');
     const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
     const cfg = loadConfig({ CCRC_HOME: home });
     const app = await buildServer(
@@ -691,7 +691,7 @@ describe('POST /api/sessions/:id/stop', () => {
      'cannot be listed at all', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
-    seedSession(home, ID, 'claude2');
+    seedSession(home, ID, 'claude-a');
     const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
     const cfg = loadConfig({ CCRC_HOME: home });
     const unlistable: FleetIO = { ...localIO, readdir: async () => null };
@@ -708,7 +708,7 @@ describe('POST /api/sessions/:id/stop', () => {
   it('stops normally (200) when the row is fully measured', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
-    seedSession(home, ID, 'claude2');
+    seedSession(home, ID, 'claude-a');
     const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
     const cfg = loadConfig({ CCRC_HOME: home });
     const app = await buildServer(
@@ -746,7 +746,7 @@ describe('POST /api/sessions/:id/hold and /release', () => {
   it('501s when the deployed ccd has neither verb, and shells out to nothing', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
-    seedSession(home, ID, 'claude2');
+    seedSession(home, ID, 'claude-a');
     const calls: string[][] = [];
     const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { code: 0, stdout: '', stderr: '' }; };
     const deps = { ...testDeps(home, run), fleetState: { connected: true, downSince: null, ccdVerbs: ['start'], rosterFp: null, build: null } };
@@ -764,7 +764,7 @@ describe('POST /api/sessions/:id/hold and /release', () => {
   it('200s and runs ccd ws-hold/ws-release --session, the reason passed through verbatim', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
-    seedSession(home, ID, 'claude2');
+    seedSession(home, ID, 'claude-a');
     const calls: string[][] = [];
     const run: Runner = async (cmd, args) => {
       calls.push([cmd, ...args]);
@@ -880,7 +880,7 @@ describe('POST /api/sessions/:id/archive — and an open run', () => {
   const seededHome = (id: string): string => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
-    seedSession(home, id, 'claude2');
+    seedSession(home, id, 'claude-a');
     return home;
   };
   const recording = (calls: string[][]): Runner => async (_cmd, args) => {

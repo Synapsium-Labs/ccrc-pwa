@@ -488,7 +488,7 @@ describe('a chat that had to look elsewhere says so', () => {
       file: '/home/rc/.claude/projects/-data-projects-x/b7001948.jsonl',
       foreignAccount: 'claude2', searchComplete: true, events: [someEvent],
     });
-    expect(screen.getByText(/Stranded history — read from alt·max/)).toBeInTheDocument();
+    expect(screen.getByText(/Stranded history — read from team·alt/)).toBeInTheDocument();
     expect(screen.queryByText('No messages yet')).not.toBeInTheDocument();
   });
 
@@ -612,7 +612,7 @@ describe('a chat that had to look elsewhere says so', () => {
       file: '/home/rc/.claude/projects/-data-projects-x/b7001948.jsonl',
       foreignAccount: 'claude2', searchComplete: true, events: [someEvent],
     });
-    expect(screen.getByText(/Stranded history — read from alt·max/)).toBeInTheDocument();
+    expect(screen.getByText(/Stranded history — read from team·alt/)).toBeInTheDocument();
 
     act(() => { store.getState().apply({ type: 'rotated', uuid: 'fresh-uuid' }); });
     expect(screen.queryByText(/Stranded history/)).not.toBeInTheDocument();

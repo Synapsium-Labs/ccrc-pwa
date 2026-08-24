@@ -95,15 +95,16 @@
 // THE ROUND-TRIP IS NOW THE EXCEPTION, and this paragraph used to say so as a
 // promise rather than a fact ("the day a test here reads THAT file instead of
 // a fixture this file wrote, the guarantee gets its production-drift-detecting
-// strength back"). Task 10 put both real rosters in the repo and the
-// round-trip below now reads them OFF DISK — `deploy/accounts.default.json`,
-// what a fresh install ships, and `server/test/fixtures/roster-five.json`, this
-// fleet's five real accounts byte for byte, which is what every box on it gets
-// seeded with. A typo in either one is now a red run here, not a crash-looping
-// deploy. The adversarial prefix-collision roster stays alongside them: the
-// shipped rosters are what ccrc DEPLOYS, the adversarial one is what actually
-// exercises the length-descending arm order, and neither substitutes for the
-// other.
+// strength back"). Task 10 put the shipped roster in the repo and the
+// round-trip below reads it OFF DISK — `deploy/accounts.default.json`, what a
+// fresh install ships. (It used to read a second shipped roster, the
+// reference fleet's five real accounts; that file left the tree with the
+// stage-5 de-brand, spec §5/D-202, and `DEFAULT_TEST_ROSTER` — the five-account
+// fixture — holds that seat in the matrix now.) A typo in the shipped file is
+// a red run here, not a crash-looping deploy. The adversarial
+// prefix-collision roster stays alongside them: the shipped roster is what
+// ccrc DEPLOYS, the adversarial one is what actually exercises the
+// length-descending arm order, and neither substitutes for the other.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
@@ -111,7 +112,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CCD_MIRROR, CCD_MIRROR_NAMES } from './fixtures/ccdMirror.js';
 import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
-import { seedRoster } from './helpers.js';
+import { DEFAULT_TEST_ROSTER, seedRoster } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { loadConfig, configDirFor } from '../src/config.js';
 import { idHomeWrapper } from '../src/fleet.js';
@@ -203,7 +204,7 @@ describe('ccd _cfg_dir agrees with CCD_MIRROR.configDirSuffix', () => {
 
   it("ccd -> roster: _cfg_dir's own case-arm set is exactly the mirror's ccd-valid set", () => {
     // Every arm in `_cfg_dir`'s case statement is a BARE wrapper name
-    // (`claude)`, `claude2)`, ... — never a `-*)` glob, that's `_id_wrapper`'s
+    // (`claude)`, `claude-a)`, ... — never a `-*)` glob, that's `_id_wrapper`'s
     // shape below — so the pattern word IS the wrapper name directly.
     // Anchored to a whole trimmed line (`declare -f` puts one case arm per
     // line) so this can never also match an `echo "$HOME/..."` body line.
@@ -250,21 +251,21 @@ describe('ccd _id_wrapper agrees with CCD_MIRROR.idPrefix, for the wrappers ccd 
   });
 
   // The bash-side twin of the exact bug `idHomeWrapper` (server/src/fleet.ts)
-  // guards against. `claude-dev0-` is a strict extension of `claude-`, and a
+  // guards against. `claude-d-` is a strict extension of `claude-`, and a
   // bash `case` takes the FIRST arm that matches, not the longest — so the
-  // `claude-dev0-*)` arm only works while it sits ABOVE `claude-*)`. Move it
+  // `claude-d-*)` arm only works while it sits ABOVE `claude-*)`. Move it
   // below and every dev0 id silently comes back `claude`, re-attributing a
   // whole account's sessions with no error anywhere.
   //
-  // This case used to assert the opposite (ccd was silent on claude-dev0, and
+  // This case used to assert the opposite (ccd was silent on claude-d, and
   // an id under that prefix resolved to `claude`) and was written to go red
   // the day ccd learned the account. That day has come: dev0 is home-able and
-  // ccd-valid, so ccd mints `claude-dev0-*` ids for real and this pins the
+  // ccd-valid, so ccd mints `claude-d-*` ids for real and this pins the
   // ARM ORDER that keeps them attributed correctly.
-  it('matches claude-dev0-* before the shorter claude-*, never attributing a dev0 id to claude', () => {
-    expect(CCD_MIRROR['claude-dev0']!.ccdValid).toBe(true);
-    const id = `${CCD_MIRROR['claude-dev0']!.idPrefix}fixture-slug`;
-    expect(h.sh(`_id_wrapper '${id}'`)).toBe('claude-dev0');
+  it('matches claude-d-* before the shorter claude-*, never attributing a dev0 id to claude', () => {
+    expect(CCD_MIRROR['claude-d']!.ccdValid).toBe(true);
+    const id = `${CCD_MIRROR['claude-d']!.idPrefix}fixture-slug`;
+    expect(h.sh(`_id_wrapper '${id}'`)).toBe('claude-d');
   });
 });
 
@@ -284,22 +285,21 @@ describe('ccd _id_wrapper agrees with CCD_MIRROR.idPrefix, for the wrappers ccd 
 // below needs `CCD_MIRROR.label`, a concept with no TypeScript twin to
 // cross-check against. Three different properties; none subsumes another.
 //
-// Three rosters, and the last is the point. The first two are the rosters
-// this repo SHIPS, read straight off disk (Task 10) rather than transcribed
-// into a fixture: `deploy/accounts.default.json` is what a fresh install gets,
-// `server/test/fixtures/roster-five.json` is this fleet's five real accounts, and
-// `deploy/deploy.sh` seeds a box's `~/.ccrc/accounts.json` from one of them.
-// Reading them here is what makes a typo in either a red suite instead of a
-// crash-looping service — but neither PROVES the arm ordering, because no two
-// ids in either roster share a prefix, so a `case` statement with the WRONG
-// arm order (alphabetical, insertion order, anything but length-descending)
-// still answers every probe correctly on both, by accident.
-// `PREFIX_COLLISION_ROSTER`, below, is built to fail that accident: `a`,
+// Three rosters, and the last is the point. The first is the roster this
+// repo SHIPS, read straight off disk (Task 10) rather than transcribed into
+// a fixture: `deploy/accounts.default.json` is what a fresh install gets, and
+// `deploy/deploy.sh` seeds a box's `~/.ccrc/accounts.json` from the roster
+// the operator points it at. Reading it here is what makes a typo in it a
+// red suite instead of a crash-looping service. The second is
+// `DEFAULT_TEST_ROSTER`, the five-account fixture (every exec kind, a
+// non-home-able member — and, since the stage-5 rename, ids where `claude`
+// is a strict prefix of its three tied-length siblings). Neither is BUILT
+// to prove the arm ordering; `PREFIX_COLLISION_ROSTER`, below, is: `a`,
 // `a-b` and `a-b-c` are each a strict textual prefix of the next, so an arm
 // placed above a longer one that should have sorted first (bash's `case`
 // takes the FIRST match, never the longest) mis-resolves a `a-b-c-…` id to
 // `a` and this test goes red. It is the adversarial fixture, not the
-// production-shaped one, that actually PROVES the length-descending
+// production-shaped ones, that actually PROVES the length-descending
 // ordering `shared/generate.mjs` documents, rather than trusting the
 // comment.
 //
@@ -327,19 +327,17 @@ const PREFIX_COLLISION_ROSTER = {
   ],
 };
 
-/** A committed roster, read off disk by repo-relative path. Deliberately NOT
- *  a transcription: the value of these cases is that the bytes under test are
- *  the committed bytes. One of the two is what `deploy/deploy.sh` seeds a box
- *  with; the other is the five-account test fixture, which ships nowhere. */
-const committedRoster = (rel: string): unknown =>
-  JSON.parse(readFileSync(path.join(ccrcRoot, rel), 'utf8')) as unknown;
+/** A roster this repo actually ships, read off disk. Deliberately NOT a
+ *  transcription: the whole value of that case is that the bytes under
+ *  test are the bytes `deploy/deploy.sh` can seed a box with. */
+const shippedRoster = (name: string): unknown =>
+  JSON.parse(readFileSync(path.join(ccrcRoot, 'deploy', name), 'utf8')) as unknown;
 
 describe('accounts.sh round-trip: the generated bash agrees with the server TypeScript, for real rosters', () => {
   it.each([
     ['the shipped fresh-install default (deploy/accounts.default.json)',
-      committedRoster('deploy/accounts.default.json')],
-    ['the five-account test fixture (server/test/fixtures/roster-five.json) — every exec shape at once',
-      committedRoster('server/test/fixtures/roster-five.json')],
+      shippedRoster('accounts.default.json')],
+    ['the five-account test default roster (DEFAULT_TEST_ROSTER)', DEFAULT_TEST_ROSTER],
     ['adversarial (ids are strict prefixes of each other)', PREFIX_COLLISION_ROSTER],
   ] as const)('%s: _ccrc_cfg_dir and _ccrc_id_wrapper match configDirFor and idHomeWrapper for every account',
     (_label, spec) => {

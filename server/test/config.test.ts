@@ -23,9 +23,9 @@ describe('loadConfig', () => {
     expect(cfg.registryDir).toBe('/fake/home/.cc-sessions');
     expect(cfg.limitsDir).toBe('/fake/home/.cc-limits');
     expect(cfg.ccdBin).toBe('/fake/home/.local/bin/ccd');
-    expect(configDirFor(cfg, 'claude2')).toBe('/fake/home/.claude-personal');
+    expect(configDirFor(cfg, 'claude-a')).toBe('/fake/home/.claude-a');
     expect(configDirFor(cfg, 'gpt')).toBe('/fake/home/.claude-gpt');
-    expect(configDirFor(cfg, 'claude-dev0')).toBe('/fake/home/.claude-dev0');
+    expect(configDirFor(cfg, 'claude-d')).toBe('/fake/home/.claude-d');
     expect(cfg.host).toBe('127.0.0.1');
     expect(cfg.port).toBe(7788);
   });
@@ -35,13 +35,13 @@ describe('loadConfig', () => {
     seedRoster(home);
     const cfg = loadConfig({ CCRC_HOME: home });
     expect(cfg.roster.accounts.map((a) => a.id))
-      .toEqual(['claude', 'claude2', 'claude-corp', 'gpt', 'claude-dev0']);
+      .toEqual(['claude', 'claude-a', 'claude-b', 'gpt', 'claude-d']);
     expect(cfg.accountsPath).toBe(path.join(home, '.ccrc', 'accounts.json'));
     expect(configDirFor(cfg, 'claude')).toBe(path.join(home, '.claude'));
   });
 
   // The postmortem `configDirFor`'s own docstring names, applied here at the
-  // level `loadConfig`'s caller actually sees it: `claude-dev0` was missing
+  // level `loadConfig`'s caller actually sees it: `claude-d` was missing
   // from the map `configDirFor` reads, for its entire life, because that map
   // used to be a hand-typed literal kept BESIDE the roster rather than
   // derived FROM it (`resolve()` in `sessionws.ts` returned null; the client
@@ -347,8 +347,8 @@ describe('loadConfig', () => {
 describe('configDirFor — the ONE place a wrapper becomes a directory', () => {
   it('joins a known wrapper\'s configDirSuffix onto the given home', () => {
     const cfg = loadConfig({ CCRC_HOME: '/fake/home', CCRC_ACCOUNTS: ROSTER_PATH });
-    expect(configDirFor(cfg, 'claude2')).toBe('/fake/home/.claude-personal');
-    expect(configDirFor(cfg, 'claude-dev0')).toBe('/fake/home/.claude-dev0');
+    expect(configDirFor(cfg, 'claude-a')).toBe('/fake/home/.claude-a');
+    expect(configDirFor(cfg, 'claude-d')).toBe('/fake/home/.claude-d');
   });
 
   // `SessionRecord.wrapper` is an untrusted string read off disk (registry
@@ -372,13 +372,13 @@ describe('DEFAULT_TEST_ROSTER', () => {
   // scanner reads its own hunt list out of it.
   it('mirrors the five production accounts, in roster declaration order', () => {
     expect(DEFAULT_TEST_ROSTER.accounts.map((a) => a.id))
-      .toEqual(['claude', 'claude2', 'claude-corp', 'gpt', 'claude-dev0']);
+      .toEqual(['claude', 'claude-a', 'claude-b', 'gpt', 'claude-d']);
   });
 });
 
 describe('mungePath', () => {
   it('replaces / . _ with - (ccd cmd_swap rule)', () => {
-    expect(mungePath('/data/projects/orchard-api')).toBe('-data-projects-orchard-api');
+    expect(mungePath('/data/projects/demo-app-ts')).toBe('-data-projects-demo-app-ts');
     expect(mungePath('/data/projects/foo/.claude/worktrees/ui')).toBe('-data-projects-foo--claude-worktrees-ui');
     expect(mungePath('/a/b_c.d')).toBe('-a-b-c-d');
   });

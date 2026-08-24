@@ -26,25 +26,25 @@ describe('readRegistry', () => {
 
   it('reads sessions enumerated by *.uuid with optional fields', async () => {
     const reg = path.join(home, '.cc-sessions');
-    seed(reg, 'claude2-MekWarLive', {
-      wrapper: 'claude2', project: 'MekWarLive', workdir: '/data/projects/MekWarLive',
+    seed(reg, 'claude-a-MekWarLive', {
+      wrapper: 'claude-a', project: 'MekWarLive', workdir: '/data/projects/MekWarLive',
       uuid: 'a0b5791d-0000-0000-0000-000000000001', started: '1',
-      pool: 'claude claude2', lastswap: '1784500000',
+      pool: 'claude claude-a', lastswap: '1784500000',
     });
-    seed(reg, 'claude-corp-orchard-api', {
-      wrapper: 'claude-corp', project: 'orchard-api',
-      workdir: '/data/projects/orchard-api', uuid: 'b'.repeat(36), started: '1',
+    seed(reg, 'claude-b-demo-app-ts', {
+      wrapper: 'claude-b', project: 'demo-app-ts',
+      workdir: '/data/projects/demo-app-ts', uuid: 'b'.repeat(36), started: '1',
     });
     writeFileSync(path.join(reg, 'gpt-disabled'), '');   // noise: not a session file
     writeFileSync(path.join(reg, 'swap.log'), 'x');      // noise
 
     const out = await readRegistry(localIO, loadConfig({ CCRC_HOME: home }));
-    expect(out.map((s) => s.id)).toEqual(['claude-corp-orchard-api', 'claude2-MekWarLive']);
-    const mek = out[1];
-    expect(mek.pool).toEqual(['claude', 'claude2']);
+    expect(out.map((s) => s.id)).toEqual(['claude-a-MekWarLive', 'claude-b-demo-app-ts']);
+    const mek = out[0];
+    expect(mek.pool).toEqual(['claude', 'claude-a']);
     expect(mek.lastswap).toBe(1784500000);
-    expect(out[0].pool).toBeNull();
-    expect(out[0].home).toBeNull();
+    expect(out[1].pool).toBeNull();
+    expect(out[1].home).toBeNull();
   });
 
   it('returns [] when registry dir missing', async () => {
@@ -374,7 +374,7 @@ describe('the measured read reaching the registry ladder (Task 5)', () => {
     it('walks every migrated field and matches the pre-migration answer, field by field', async () => {
       seed(reg, 'demo-quiet-basin', {
         wrapper: 'claude', project: 'demo', workdir: '/w', uuid: 'e'.repeat(36), started: '1',
-        home: 'home1', pool: 'claude claude2', lastswap: '1784500000', workspace: 'quiet-basin',
+        home: 'home1', pool: 'claude claude-a', lastswap: '1784500000', workspace: 'quiet-basin',
         branch: 'ws/quiet-basin', base: 'origin/main', prphase: 'merged', prnumber: '42',
         prcheckedat: '1785300000000', archived: '1785300123',
         archivemanifest: '{"worktreeBytes":123}',
@@ -438,7 +438,7 @@ describe('workspace on the wire', () => {
   it('reads the workspace field when present', async () => {
     const reg = path.join(home, '.cc-sessions');
     seed(reg, 'demo-quiet-mesa', {
-      wrapper: 'claude2', project: 'demo', workdir: '/w/demo/quiet-mesa',
+      wrapper: 'claude-a', project: 'demo', workdir: '/w/demo/quiet-mesa',
       uuid: 'a'.repeat(36), workspace: 'quiet-mesa',
     });
     const [rec] = await readRegistry(localIO, loadConfig({ CCRC_HOME: home }));
@@ -447,8 +447,8 @@ describe('workspace on the wire', () => {
 
   it('leaves workspace null for a legacy main-checkout session', async () => {
     const reg = path.join(home, '.cc-sessions');
-    seed(reg, 'claude2-demo', {
-      wrapper: 'claude2', project: 'demo', workdir: '/p/demo', uuid: 'b'.repeat(36),
+    seed(reg, 'claude-a-demo', {
+      wrapper: 'claude-a', project: 'demo', workdir: '/p/demo', uuid: 'b'.repeat(36),
     });
     const [rec] = await readRegistry(localIO, loadConfig({ CCRC_HOME: home }));
     expect(rec.workspace).toBeNull();
@@ -539,22 +539,22 @@ describe('readSessionRecord', () => {
 
   it('reads the same record readRegistry would, for one id among several', async () => {
     const reg = path.join(home, '.cc-sessions');
-    seed(reg, 'claude2-MekWarLive', {
-      wrapper: 'claude2', project: 'MekWarLive', workdir: '/data/projects/MekWarLive',
+    seed(reg, 'claude-a-MekWarLive', {
+      wrapper: 'claude-a', project: 'MekWarLive', workdir: '/data/projects/MekWarLive',
       uuid: 'a0b5791d-0000-0000-0000-000000000001', started: '1',
-      pool: 'claude claude2', lastswap: '1784500000',
+      pool: 'claude claude-a', lastswap: '1784500000',
     });
-    seed(reg, 'claude-corp-orchard-api', {
-      wrapper: 'claude-corp', project: 'orchard-api',
-      workdir: '/data/projects/orchard-api', uuid: 'b'.repeat(36), started: '1',
+    seed(reg, 'claude-b-demo-app-ts', {
+      wrapper: 'claude-b', project: 'demo-app-ts',
+      workdir: '/data/projects/demo-app-ts', uuid: 'b'.repeat(36), started: '1',
     });
     const cfg = loadConfig({ CCRC_HOME: home });
 
     const whole = await readRegistry(localIO, cfg);
-    const single = await readSessionRecord(localIO, cfg, 'claude2-MekWarLive');
+    const single = await readSessionRecord(localIO, cfg, 'claude-a-MekWarLive');
 
-    expect(single).toEqual({ found: true, record: whole.find((r) => r.id === 'claude2-MekWarLive') });
-    expect(single.found && single.record.pool).toEqual(['claude', 'claude2']);
+    expect(single).toEqual({ found: true, record: whole.find((r) => r.id === 'claude-a-MekWarLive') });
+    expect(single.found && single.record.pool).toEqual(['claude', 'claude-a']);
     expect(single.found && single.record.lastswap).toBe(1784500000);
   });
 
@@ -565,8 +565,8 @@ describe('readSessionRecord', () => {
       ...localIO,
       readFileMeasured: async (p) => { fieldReads++; return localIO.readFileMeasured(p); },
     };
-    seed(reg, 'claude2-MekWarLive', {
-      wrapper: 'claude2', project: 'MekWarLive', workdir: '/data/projects/MekWarLive',
+    seed(reg, 'claude-a-MekWarLive', {
+      wrapper: 'claude-a', project: 'MekWarLive', workdir: '/data/projects/MekWarLive',
       uuid: 'a'.repeat(36),
     });
     const cfg = loadConfig({ CCRC_HOME: home });
@@ -595,12 +595,12 @@ describe('readSessionRecord', () => {
 
   it('costs exactly one readdir plus the one id\'s 22 field reads — never a per-session Promise.all for a sibling', async () => {
     const reg = path.join(home, '.cc-sessions');
-    seed(reg, 'claude2-MekWarLive', {
-      wrapper: 'claude2', project: 'MekWarLive', workdir: '/data/projects/MekWarLive', uuid: 'a'.repeat(36),
+    seed(reg, 'claude-a-MekWarLive', {
+      wrapper: 'claude-a', project: 'MekWarLive', workdir: '/data/projects/MekWarLive', uuid: 'a'.repeat(36),
     });
-    seed(reg, 'claude-corp-orchard-api', {
-      wrapper: 'claude-corp', project: 'orchard-api',
-      workdir: '/data/projects/orchard-api', uuid: 'b'.repeat(36),
+    seed(reg, 'claude-b-demo-app-ts', {
+      wrapper: 'claude-b', project: 'demo-app-ts',
+      workdir: '/data/projects/demo-app-ts', uuid: 'b'.repeat(36),
     });
     let readdirCalls = 0;
     let fieldReads: string[] = [];
@@ -611,7 +611,7 @@ describe('readSessionRecord', () => {
     };
     const cfg = loadConfig({ CCRC_HOME: home });
 
-    await readSessionRecord(countingIO, cfg, 'claude2-MekWarLive');
+    await readSessionRecord(countingIO, cfg, 'claude-a-MekWarLive');
 
     expect(readdirCalls).toBe(1);
     // 17 + D3's four stamps (stopped, supervised, swapblocked, spawn) + the
@@ -619,7 +619,7 @@ describe('readSessionRecord', () => {
     // number is pinned rather than derived because it IS the remote-mode cost:
     // one round trip each, per session, per 2-second tick.
     expect(fieldReads).toHaveLength(22);
-    expect(fieldReads.every((p) => p.includes('claude2-MekWarLive'))).toBe(true);
+    expect(fieldReads.every((p) => p.includes('claude-a-MekWarLive'))).toBe(true);
   });
 
   it('re-confirms a still-unreadable hold with one second listing, same as readRegistry', async () => {

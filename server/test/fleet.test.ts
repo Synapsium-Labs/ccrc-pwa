@@ -27,21 +27,21 @@ describe('idHomeWrapper', () => {
   const roster = parseRoster(DEFAULT_TEST_ROSTER);
 
   it('longest prefix wins', () => {
-    expect(idHomeWrapper(roster, 'claude-corp-orchard-api')).toBe('claude-corp');
-    expect(idHomeWrapper(roster, 'claude2-MekWarLive')).toBe('claude2');
+    expect(idHomeWrapper(roster, 'claude-b-demo-app-ts')).toBe('claude-b');
+    expect(idHomeWrapper(roster, 'claude-a-MekWarLive')).toBe('claude-a');
     expect(idHomeWrapper(roster, 'claude-synapsium-platform')).toBe('claude');
     expect(idHomeWrapper(roster, 'gpt-foo')).toBe('gpt');
   });
 
-  // Not prophylactic: `claude-dev0-*` ids exist in the registry today. The old
+  // Not prophylactic: `claude-d-*` ids exist in the registry today. The old
   // prefix list (a hand-typed, unordered array) never even MENTIONED
-  // `claude-dev0`, so `claude-dev0-quiet-basin` fell through to the bare
+  // `claude-d`, so `claude-d-quiet-basin` fell through to the bare
   // `'claude-'` branch — this assertion was GREEN with the WRONG answer before
   // the fix (confirmed against the exact pre-fix source: it returned
-  // `'claude'`). `roster.byIdLengthDesc` is what keeps it right: `claude-dev0`
+  // `'claude'`). `roster.byIdLengthDesc` is what keeps it right: `claude-d`
   // (11 chars) is tried before `claude` (6).
-  it('resolves claude-dev0 sessions to claude-dev0, not to claude', () => {
-    expect(idHomeWrapper(roster, 'claude-dev0-quiet-basin')).toBe('claude-dev0');
+  it('resolves claude-d sessions to claude-d, not to claude', () => {
+    expect(idHomeWrapper(roster, 'claude-d-quiet-basin')).toBe('claude-d');
   });
 
   // The ordering property, isolated from the production names that happen to
@@ -52,9 +52,9 @@ describe('idHomeWrapper', () => {
   it('resolves the longer id when one account id is a prefix of another', () => {
     const r = parseRoster({ version: 1, accounts: [
       { id: 'claude', label: 'c', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
-      { id: 'claude-dev0', label: 'd', configDirSuffix: '.claude-dev0', exec: { kind: 'generated' }, homeAble: true, hue: 'violet', telemetry: 'anthropic' },
+      { id: 'claude-d', label: 'd', configDirSuffix: '.claude-d', exec: { kind: 'generated' }, homeAble: true, hue: 'violet', telemetry: 'anthropic' },
     ] });
-    expect(idHomeWrapper(r, 'claude-dev0-quiet-basin')).toBe('claude-dev0');
+    expect(idHomeWrapper(r, 'claude-d-quiet-basin')).toBe('claude-d');
     expect(idHomeWrapper(r, 'claude-quiet-basin')).toBe('claude');
     // The fallback branch, which no test covered before: an id with no account
     // prefix at all — a main checkout's id is the bare project name. It answers
@@ -79,29 +79,29 @@ describe('assembleFleet', () => {
   it('joins registry, live state, limits, and tmux aliveness', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
-    seedSession(home, 'claude2-MekWarLive', 'claude2');
+    seedSession(home, 'claude-a-MekWarLive', 'claude-a');
     seedSession(home, 'claude-dead-proj', 'claude');
-    mkdirSync(path.join(home, '.claude-personal', 'sessions'), { recursive: true });
-    writeFileSync(path.join(home, '.claude-personal', 'sessions', '40613.json'), JSON.stringify({
+    mkdirSync(path.join(home, '.claude-a', 'sessions'), { recursive: true });
+    writeFileSync(path.join(home, '.claude-a', 'sessions', '40613.json'), JSON.stringify({
       pid: 40613, sessionId: '1'.repeat(36), cwd: '/data/projects/MekWarLive',
       name: 'mekwar-a1', status: 'busy', statusUpdatedAt: 1784582728369, version: '2.1.210',
     }));
     mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
     const now = 1784600000;
-    writeFileSync(path.join(home, '.cc-limits', 'claude2.json'), JSON.stringify({ five: 55, seven: 70, ts: now - 60 }));
+    writeFileSync(path.join(home, '.cc-limits', 'claude-a.json'), JSON.stringify({ five: 55, seven: 70, ts: now - 60 }));
 
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: args.includes('cc-claude2-MekWarLive') ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { code: args.includes('cc-claude-a-MekWarLive') ? 0 : 1, stdout: '', stderr: '' };
       if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
       return { code: 0, stdout: '', stderr: '' };
     };
 
     const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), now);
-    const mek = fleet.find((s) => s.id === 'claude2-MekWarLive')!;
+    const mek = fleet.find((s) => s.id === 'claude-a-MekWarLive')!;
     expect(mek.status).toBe('busy');
     expect(mek.name).toBe('mekwar-a1');
     expect(mek.limits).toEqual({ five: 55, seven: 70 });
-    expect(mek.home).toBe('claude2');
+    expect(mek.home).toBe('claude-a');
     const dead = fleet.find((s) => s.id === 'claude-dead-proj')!;
     expect(dead.status).toBe('dead');
     expect(dead.name).toBeNull();
@@ -211,10 +211,10 @@ describe('derived session handles', () => {
   const build = async (live: Record<string, unknown>) => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
-    seedSession(home, 'claude2-MekWarLive', 'claude2');
-    mkdirSync(path.join(home, '.claude-personal', 'sessions'), { recursive: true });
+    seedSession(home, 'claude-a-MekWarLive', 'claude-a');
+    mkdirSync(path.join(home, '.claude-a', 'sessions'), { recursive: true });
     writeFileSync(
-      path.join(home, '.claude-personal', 'sessions', '40613.json'),
+      path.join(home, '.claude-a', 'sessions', '40613.json'),
       JSON.stringify({ pid: 40613, sessionId: '1'.repeat(36), cwd: '/d', status: 'idle', ...live }),
     );
     const run: Runner = async (_cmd, args) => {
@@ -223,7 +223,7 @@ describe('derived session handles', () => {
       return { code: 0, stdout: '', stderr: '' };
     };
     const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run));
-    return fleet.find((s) => s.id === 'claude2-MekWarLive')!;
+    return fleet.find((s) => s.id === 'claude-a-MekWarLive')!;
   };
 
   it('drops a name Claude Code declares derived', async () => {
@@ -521,21 +521,21 @@ describe('hook state on the wire', () => {
   it('status is IDENTICAL with and without a hookstate for the same fixture — status is frozen against hook data', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
-    seedSession(home, 'claude2-MekWarLive', 'claude2');
-    mkdirSync(path.join(home, '.claude-personal', 'sessions'), { recursive: true });
-    writeFileSync(path.join(home, '.claude-personal', 'sessions', '40613.json'), JSON.stringify({
+    seedSession(home, 'claude-a-MekWarLive', 'claude-a');
+    mkdirSync(path.join(home, '.claude-a', 'sessions'), { recursive: true });
+    writeFileSync(path.join(home, '.claude-a', 'sessions', '40613.json'), JSON.stringify({
       pid: 40613, sessionId: '1'.repeat(36), cwd: '/data/projects/MekWarLive',
       name: 'mekwar-a1', status: 'busy', statusUpdatedAt: 1784582728369, version: '2.1.210',
     }));
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: args.includes('cc-claude2-MekWarLive') ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { code: args.includes('cc-claude-a-MekWarLive') ? 0 : 1, stdout: '', stderr: '' };
       if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
       return { code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
 
     const withoutHook = await assembleFleet(localIO, cfg, new Tmux(run), 1784600000);
-    const hookStates = new Map<string, HookState>([['claude2-MekWarLive', mkHookState({ state: 'done' })]]);
+    const hookStates = new Map<string, HookState>([['claude-a-MekWarLive', mkHookState({ state: 'done' })]]);
     const withHook = await assembleFleet(
       localIO, cfg, new Tmux(run), 1784600000, undefined, undefined, undefined, undefined, hookStates,
     );
@@ -545,14 +545,14 @@ describe('hook state on the wire', () => {
     // idle status to busy, or demoting this already-busy one) is the exact
     // regression this fixture exists to catch. `done` above cannot pin that:
     // it shares no vocabulary with anything status-adjacent.
-    const waitingHookStates = new Map<string, HookState>([['claude2-MekWarLive', mkHookState({ state: 'waiting' })]]);
+    const waitingHookStates = new Map<string, HookState>([['claude-a-MekWarLive', mkHookState({ state: 'waiting' })]]);
     const withWaitingHook = await assembleFleet(
       localIO, cfg, new Tmux(run), 1784600000, undefined, undefined, undefined, undefined, waitingHookStates,
     );
 
-    const before = withoutHook.find((x) => x.id === 'claude2-MekWarLive')!;
-    const after = withHook.find((x) => x.id === 'claude2-MekWarLive')!;
-    const afterWaiting = withWaitingHook.find((x) => x.id === 'claude2-MekWarLive')!;
+    const before = withoutHook.find((x) => x.id === 'claude-a-MekWarLive')!;
+    const after = withHook.find((x) => x.id === 'claude-a-MekWarLive')!;
+    const afterWaiting = withWaitingHook.find((x) => x.id === 'claude-a-MekWarLive')!;
     expect(before.status).toBe('busy');
     expect(after.status).toBe(before.status);
     expect(afterWaiting.status).toBe(before.status);

@@ -152,7 +152,7 @@ describe('sessionBucket', () => {
   //     call was a Bash ends without Claude Code ever writing the transition
   //     back, so the file stays on `"status":"shell"` (which
   //     `liveSessionStatus` reads as busy, correctly, for every value but
-  //     `idle`). `claude-corp-data-internal` held that wedge for 1h48m while
+  //     `idle`). `claude-b-data-internal` held that wedge for 1h48m while
   //     its hook had written `done` 5.7s after the file's last write;
   //     `expoAI-assistant-warm-mesa` reproduced it during the same sampling
   //     run. Those rows read `working` for ever.
@@ -277,17 +277,17 @@ describe('sessionBucket', () => {
     const reg = path.join(home, '.cc-sessions');
     mkdirSync(reg, { recursive: true });
     const fields = {
-      wrapper: 'claude2', project: 'claude2-MekWarLive', workdir: '/data/projects/MekWarLive',
+      wrapper: 'claude-a', project: 'claude-a-MekWarLive', workdir: '/data/projects/MekWarLive',
       uuid: '1'.repeat(36), started: '1',
     };
-    for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `claude2-MekWarLive.${k}`), v);
-    mkdirSync(path.join(home, '.claude-personal', 'sessions'), { recursive: true });
-    writeFileSync(path.join(home, '.claude-personal', 'sessions', '40613.json'), JSON.stringify({
+    for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `claude-a-MekWarLive.${k}`), v);
+    mkdirSync(path.join(home, '.claude-a', 'sessions'), { recursive: true });
+    writeFileSync(path.join(home, '.claude-a', 'sessions', '40613.json'), JSON.stringify({
       pid: 40613, sessionId: '1'.repeat(36), cwd: '/data/projects/MekWarLive',
       name: 'mekwar-a1', status: 'busy', statusUpdatedAt: 1784582728369, version: '2.1.210',
     }));
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: args.includes('cc-claude2-MekWarLive') ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { code: args.includes('cc-claude-a-MekWarLive') ? 0 : 1, stdout: '', stderr: '' };
       if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
       return { code: 0, stdout: '', stderr: '' };
     };
@@ -295,14 +295,14 @@ describe('sessionBucket', () => {
 
     const withoutHook = await assembleFleet(localIO, cfg, new Tmux(run), 1784600000);
     const waitingHookStates = new Map<string, HookState>([
-      ['claude2-MekWarLive', { state: 'waiting', updatedAt: 1784600000000, event: null, ask: null, subagents: [], interrupted: false }],
+      ['claude-a-MekWarLive', { state: 'waiting', updatedAt: 1784600000000, event: null, ask: null, subagents: [], interrupted: false }],
     ]);
     const withWaitingHook = await assembleFleet(
       localIO, cfg, new Tmux(run), 1784600000, undefined, undefined, undefined, undefined, waitingHookStates,
     );
 
-    const before = withoutHook.find((x) => x.id === 'claude2-MekWarLive')!;
-    const afterWaiting = withWaitingHook.find((x) => x.id === 'claude2-MekWarLive')!;
+    const before = withoutHook.find((x) => x.id === 'claude-a-MekWarLive')!;
+    const afterWaiting = withWaitingHook.find((x) => x.id === 'claude-a-MekWarLive')!;
 
     // status stays frozen — the field this task must not move.
     expect(afterWaiting.status).toBe(before.status);
@@ -348,7 +348,7 @@ describe('sessionBucket', () => {
     const reg = path.join(home, '.cc-sessions');
     mkdirSync(reg, { recursive: true });
     const fields: Record<string, string> = {
-      wrapper: 'claude2', project: 'demo', workdir: '/data/projects/demo',
+      wrapper: 'claude-a', project: 'demo', workdir: '/data/projects/demo',
       workspace: 'calm-mesa', uuid: '2'.repeat(36), started: '1',
       // The archive that really happened, days ago…
       archived: '1786431390', archivedreason: 'merged:#28',
@@ -357,8 +357,8 @@ describe('sessionBucket', () => {
     for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `demo-calm-mesa.${k}`), v);
     // …and the revival that followed it, which clears `.stopped` but leaves
     // `.archived` standing (ccd's `cmd_ensure`, `rm -f "$REG/$id.stopped"`).
-    mkdirSync(path.join(home, '.claude-personal', 'sessions'), { recursive: true });
-    writeFileSync(path.join(home, '.claude-personal', 'sessions', '9001.json'), JSON.stringify({
+    mkdirSync(path.join(home, '.claude-a', 'sessions'), { recursive: true });
+    writeFileSync(path.join(home, '.claude-a', 'sessions', '9001.json'), JSON.stringify({
       pid: 9001, sessionId: '2'.repeat(36), cwd: '/data/projects/demo',
       name: 'calm-mesa', status: 'busy', statusUpdatedAt: 1786973261696, version: '2.1.233',
     }));
@@ -392,12 +392,12 @@ describe('sessionBucket', () => {
     const reg = path.join(home, '.cc-sessions');
     mkdirSync(reg, { recursive: true });
     const fields: Record<string, string> = {
-      wrapper: 'claude2', project: 'demo', workdir: '/data/projects/demo',
+      wrapper: 'claude-a', project: 'demo', workdir: '/data/projects/demo',
       uuid: '4'.repeat(36), started: '1',
     };
     for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `demo-blocked.${k}`), v);
-    mkdirSync(path.join(home, '.claude-personal', 'sessions'), { recursive: true });
-    writeFileSync(path.join(home, '.claude-personal', 'sessions', '7007.json'), JSON.stringify({
+    mkdirSync(path.join(home, '.claude-a', 'sessions'), { recursive: true });
+    writeFileSync(path.join(home, '.claude-a', 'sessions', '7007.json'), JSON.stringify({
       pid: 7007, sessionId: '4'.repeat(36), cwd: '/data/projects/demo',
       name: 'blocked', status: 'waiting', waitingFor: 'sandbox request',
       statusUpdatedAt: 1786973261696, version: '2.1.233',
@@ -428,12 +428,12 @@ describe('sessionBucket', () => {
     const reg = path.join(home, '.cc-sessions');
     mkdirSync(reg, { recursive: true });
     const fields: Record<string, string> = {
-      wrapper: 'claude2', project: 'demo', workdir: '/data/projects/demo',
+      wrapper: 'claude-a', project: 'demo', workdir: '/data/projects/demo',
       uuid: '5'.repeat(36), started: '1',
     };
     for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `demo-mute.${k}`), v);
-    mkdirSync(path.join(home, '.claude-personal', 'sessions'), { recursive: true });
-    writeFileSync(path.join(home, '.claude-personal', 'sessions', '7008.json'), JSON.stringify({
+    mkdirSync(path.join(home, '.claude-a', 'sessions'), { recursive: true });
+    writeFileSync(path.join(home, '.claude-a', 'sessions', '7008.json'), JSON.stringify({
       pid: 7008, sessionId: '5'.repeat(36), cwd: '/data/projects/demo',
       status: 'waiting', statusUpdatedAt: 1786973261696, version: '2.1.233',
     }));
@@ -471,29 +471,29 @@ describe('sessionBucket', () => {
     const reg = path.join(home, '.cc-sessions');
     mkdirSync(reg, { recursive: true });
     const fields = {
-      wrapper: 'claude2', project: 'claude2-MekWarLive', workdir: '/data/projects/MekWarLive',
+      wrapper: 'claude-a', project: 'claude-a-MekWarLive', workdir: '/data/projects/MekWarLive',
       uuid: '1'.repeat(36), started: '1',
     };
-    for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `claude2-MekWarLive.${k}`), v);
-    mkdirSync(path.join(home, '.claude-personal', 'sessions'), { recursive: true });
-    writeFileSync(path.join(home, '.claude-personal', 'sessions', '40613.json'), JSON.stringify({
+    for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `claude-a-MekWarLive.${k}`), v);
+    mkdirSync(path.join(home, '.claude-a', 'sessions'), { recursive: true });
+    writeFileSync(path.join(home, '.claude-a', 'sessions', '40613.json'), JSON.stringify({
       pid: 40613, sessionId: '1'.repeat(36), cwd: '/data/projects/MekWarLive',
       name: 'mekwar-a1', status: 'idle', statusUpdatedAt: 1784582728369, version: '2.1.210',
     }));
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: args.includes('cc-claude2-MekWarLive') ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { code: args.includes('cc-claude-a-MekWarLive') ? 0 : 1, stdout: '', stderr: '' };
       if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
       return { code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const sessionStartDone = new Map<string, HookState>([
-      ['claude2-MekWarLive',
+      ['claude-a-MekWarLive',
         { state: 'done', updatedAt: 1784600000000, event: 'SessionStart', ask: null, subagents: [], interrupted: false }],
     ]);
     const fleet = await assembleFleet(
       localIO, cfg, new Tmux(run), 1784600000, undefined, undefined, undefined, undefined, sessionStartDone,
     );
-    const s = fleet.find((x) => x.id === 'claude2-MekWarLive')!;
+    const s = fleet.find((x) => x.id === 'claude-a-MekWarLive')!;
     // The raw hook field is unchanged — the mail delivery gate still reads it.
     expect(s.hookState).toBe('done');
     // The bucket — what the PWA sections/badges on — is not.

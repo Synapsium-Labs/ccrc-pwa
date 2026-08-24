@@ -154,7 +154,7 @@ describe('away note', () => {
     act(() => { fleet.setState({ roster: TEST_ROSTER }); });
     render(<SessionActionsSheet session={s({ wrapper: 'claude2', home: 'claude' })}
                                 open onClose={() => {}} onReap={() => {}} fleet={fleet} />);
-    expect(screen.getByText(/Pinned to team·max, running on alt·max/)).toBeInTheDocument();
+    expect(screen.getByText(/Pinned to team·max, running on team·alt/)).toBeInTheDocument();
   });
 
   it('says nothing when the session is home', () => {

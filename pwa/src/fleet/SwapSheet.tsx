@@ -244,8 +244,8 @@ export function SwapSheet({
   // four `useState` hooks above it) sets `swapOpen = false` whenever the
   // actions sheet is dismissed, and FleetScreen keeps both components MOUNTED
   // across that close (its findings 2 and 3). So: open session A's actions ->
-  // Swap -> pick alt·max -> dismiss the actions sheet. `open` goes false, the
-  // sheet closes, and "Move to alt·max?" is left on screen with nothing under
+  // Swap -> pick team·alt -> dismiss the actions sheet. `open` goes false, the
+  // sheet closes, and "Move to team·alt?" is left on screen with nothing under
   // it. Tap session B and the confirm is still there — and `move()` closes over
   // the CURRENT `session`, so confirming a dialog raised for A now swaps B.
   //

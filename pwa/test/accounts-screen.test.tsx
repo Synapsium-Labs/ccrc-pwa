@@ -88,8 +88,8 @@ describe('AccountsScreen — every account, never hidden', () => {
     stubAccounts([acct({ wrapper: 'claude', five: 12, seven: 4 })]);
     render(<AccountsScreen />);
     expect(await screen.findByText('team·max')).toBeInTheDocument();
-    expect(screen.getByText('alt·max')).toBeInTheDocument();
-    expect(screen.getByText('team·shared')).toBeInTheDocument();
+    expect(screen.getByText('team·alt')).toBeInTheDocument();
+    expect(screen.getByText('team·b')).toBeInTheDocument();
     expect(screen.getByText('gpt')).toBeInTheDocument();
   });
 
@@ -99,7 +99,7 @@ describe('AccountsScreen — every account, never hidden', () => {
       acct({ wrapper: 'claude2', five: null, seven: null, ts: null, disabled: true }),
     ]);
     render(<AccountsScreen />);
-    expect(await screen.findByText('alt·max')).toBeInTheDocument();
+    expect(await screen.findByText('team·alt')).toBeInTheDocument();
     expect(screen.getByText(/disabled on the fleet host/i)).toBeInTheDocument();
     // The enabled account carries no such note.
     const claudeRow = screen.getByText('team·max').closest('[data-disabled]');
@@ -149,7 +149,7 @@ describe('AccountsScreen — the %/reset/— three-way (accounts-strip.test.tsx\
     expect(within(claudeRow).getByText('reset')).toBeInTheDocument();  // rolled-over 5h
     expect(within(claudeRow).getByText('57%')).toBeInTheDocument();    // measured 7d
 
-    const claude2Row = screen.getByText('alt·max').closest('[data-disabled]') as HTMLElement;
+    const claude2Row = screen.getByText('team·alt').closest('[data-disabled]') as HTMLElement;
     expect(within(claude2Row).getByText('0%')).toBeInTheDocument();   // really-measured-at-zero 5h
     expect(within(claude2Row).getByText('—')).toBeInTheDocument();    // never-measured 7d
   });
@@ -228,7 +228,7 @@ describe('AccountsScreen — the projection line', () => {
   it('falls back to naming the four HOME_ABLE lanes individually — never "all accounts" — when every one is disabled', async () => {
     stubAccounts([acct({ wrapper: 'claude', disabled: true })], null);
     render(<AccountsScreen />);
-    expect(await screen.findByText('Next workspace: team·max, alt·max, team·shared and lab·dev0 all disabled — nothing can take it'))
+    expect(await screen.findByText('Next workspace: team·max, team·alt, team·b and team·d all disabled — nothing can take it'))
       .toBeInTheDocument();
   });
 });

@@ -9,10 +9,13 @@
 // over whatever `RosterWire[]` a caller hands them — production gets that
 // array off `GET /api/accounts`'s wire; a test gets it from here.
 //
-// Ids, labels and `homeAble` are transcribed from the deleted
-// `PRODUCTION_ROSTER` verbatim (same five accounts, same jargon-free labels).
-// Hues match `server/test/helpers.ts`'s `DEFAULT_TEST_ROSTER` — the server
-// suite's own root copy of this same roster shape — rather than inventing a
+// Ids and `homeAble` are transcribed from the deleted `PRODUCTION_ROSTER`;
+// the labels are the neutral `team·…` fixture vocabulary (stage-5 de-brand,
+// spec §5/D-202 — the real fleet's labels are ratcheted out of the tree by
+// `server/test/topology-clean.test.ts`, and every label here except `gpt`'s
+// stays ≠ its id so label/id confusions keep failing). Hues match
+// `server/test/helpers.ts`'s `DEFAULT_TEST_ROSTER` — the server suite's own
+// root copy of this same roster shape — rather than inventing a
 // second assignment: `claude-dev0` gets `green`, the concrete case this
 // task's SessionScreen/SwapSheet fix exists for (its `colorVar` used to be
 // the non-hue `--ink-tertiary`, and a wrapper whose token wasn't an
@@ -21,10 +24,10 @@ import type { RosterWire } from '../../shared/api';
 
 export const TEST_ROSTER: RosterWire[] = [
   { id: 'claude', label: 'team·max', hue: 'cyan', homeAble: true },
-  { id: 'claude2', label: 'alt·max', hue: 'violet', homeAble: true },
-  { id: 'claude-corp', label: 'team·shared', hue: 'blue', homeAble: true },
+  { id: 'claude2', label: 'team·alt', hue: 'violet', homeAble: true },
+  { id: 'claude-corp', label: 'team·b', hue: 'blue', homeAble: true },
   // Opt-in only: a lane a session reaches solely by being sent there on
   // purpose, never one ccd's `_ws_least_loaded` chooses on its own.
   { id: 'gpt', label: 'gpt', hue: 'magenta', homeAble: false },
-  { id: 'claude-dev0', label: 'lab·dev0', hue: 'green', homeAble: true },
+  { id: 'claude-dev0', label: 'team·d', hue: 'green', homeAble: true },
 ];

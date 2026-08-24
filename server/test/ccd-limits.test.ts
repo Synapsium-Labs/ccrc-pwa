@@ -32,7 +32,7 @@ beforeEach(() => {
   // _avail requires the wrapper binary to exist and be executable.
   const bin = path.join(home, '.local', 'bin');
   fs.mkdirSync(bin, { recursive: true });
-  for (const w of ['claude', 'claude2', 'claude-corp']) {
+  for (const w of ['claude', 'claude-a', 'claude-b']) {
     fs.writeFileSync(path.join(bin, w), '#!/bin/sh\n', { mode: 0o755 });
   }
 });
@@ -202,8 +202,8 @@ describe('the account that was stranded on 2026-07-27', () => {
     const t = now();
     // claude: 20h-old sample, 7d window reset 14h ago -> read as 98 before the fix.
     writeLimits('claude.json', json({ five: 10, seven: 98, ts: t - 72000, fiveResetAt: t - 72000, sevenResetAt: t - 50000 }));
-    writeLimits('claude2.json', json({ five: 0, seven: 93, ts: t - 60, fiveResetAt: t + 17000, sevenResetAt: t + 105000 }));
-    writeLimits('claude-corp.json', json({ five: 9, seven: 57, ts: t - 60, fiveResetAt: t + 17000, sevenResetAt: t + 260000 }));
+    writeLimits('claude-a.json', json({ five: 0, seven: 93, ts: t - 60, fiveResetAt: t + 17000, sevenResetAt: t + 105000 }));
+    writeLimits('claude-b.json', json({ five: 9, seven: 57, ts: t - 60, fiveResetAt: t + 17000, sevenResetAt: t + 260000 }));
     // Registry for a session whose HOME is claude but which sits on gpt.
     const reg = path.join(home, '.cc-sessions');
     fs.mkdirSync(reg, { recursive: true });
@@ -223,20 +223,20 @@ describe('the account that was stranded on 2026-07-27', () => {
 });
 
 describe('_swap_target force arg: gates the two "stay" shortcuts only', () => {
-  // Verifier reproduction: a 429-while-away session (wrapper=claude2, home=claude) with home
+  // Verifier reproduction: a 429-while-away session (wrapper=claude-a, home=claude) with home
   // recovered (five=50, under SWAP_CEILING) must rescue straight home under force, not fall
-  // through to the must-leave candidate loop and land on some third lane (claude-corp, five=0,
+  // through to the must-leave candidate loop and land on some third lane (claude-b, five=0,
   // would otherwise look like the least-loaded pick).
   it('forced away-from-home call still returns home when home has recovered', () => {
     writeLimits('claude.json', json({ five: 50, seven: 0, ts: now() }));
-    writeLimits('claude-corp.json', json({ five: 0, seven: 0, ts: now() }));
-    expect(sh('_swap_target claude-demo claude2 claude 1')).toBe('claude');
+    writeLimits('claude-b.json', json({ five: 0, seven: 0, ts: now() }));
+    expect(sh('_swap_target claude-demo claude-a claude 1')).toBe('claude');
   });
 
   it('leaves the unforced away-from-home call unchanged (same fixture, no force arg)', () => {
     writeLimits('claude.json', json({ five: 50, seven: 0, ts: now() }));
-    writeLimits('claude-corp.json', json({ five: 0, seven: 0, ts: now() }));
-    expect(sh('_swap_target claude-demo claude2 claude')).toBe('claude');
+    writeLimits('claude-b.json', json({ five: 0, seven: 0, ts: now() }));
+    expect(sh('_swap_target claude-demo claude-a claude')).toBe('claude');
   });
 
   // The Critical force exists for: a hard-blocked session must not read "cur/home is fine: stay"
@@ -249,8 +249,8 @@ describe('_swap_target force arg: gates the two "stay" shortcuts only', () => {
 
   it('bypasses the "cur still works" shortcut: forced call leaves a fine cur for the pool', () => {
     writeLimits('claude.json', json({ five: 99, seven: 0, ts: now() }));   // home: at the ceiling
-    writeLimits('claude2.json', json({ five: 5, seven: 0, ts: now() }));   // cur: fine
-    expect(sh('_swap_target claude-demo claude2 claude')).toBe('');        // unforced: stays on cur
-    expect(sh('_swap_target claude-demo claude2 claude 1')).not.toBe(''); // forced: leaves anyway
+    writeLimits('claude-a.json', json({ five: 5, seven: 0, ts: now() }));   // cur: fine
+    expect(sh('_swap_target claude-demo claude-a claude')).toBe('');        // unforced: stays on cur
+    expect(sh('_swap_target claude-demo claude-a claude 1')).not.toBe(''); // forced: leaves anyway
   });
 });

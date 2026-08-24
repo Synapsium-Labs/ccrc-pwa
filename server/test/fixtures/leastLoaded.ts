@@ -42,77 +42,77 @@ export function leastLoadedCases(now: number): LeastLoadedCase[] {
   return [
     {
       name: 'plain',
-      files: { claude: fresh(80, 40), claude2: fresh(5, 3), 'claude-corp': fresh(90, 95), 'claude-dev0': fresh(85, 45) },
-      expect: { wrapper: 'claude2', score: 5 },
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(90, 95), 'claude-d': fresh(85, 45) },
+      expect: { wrapper: 'claude-a', score: 5 },
       why: 'the cheapest account wins, not the first one listed',
     },
     {
       name: 'seven-dominates',
-      files: { claude: fresh(10, 90), claude2: fresh(50, 50), 'claude-corp': fresh(60, 20), 'claude-dev0': fresh(70, 70) },
-      expect: { wrapper: 'claude2', score: 50 },
+      files: { claude: fresh(10, 90), 'claude-a': fresh(50, 50), 'claude-b': fresh(60, 20), 'claude-d': fresh(70, 70) },
+      expect: { wrapper: 'claude-a', score: 50 },
       why: 'score is max(5h, 7d) — a free 5h window over an exhausted week is not headroom',
     },
     {
       name: 'all-pinned',
-      files: { claude: fresh(100, 100), claude2: fresh(99, 100), 'claude-corp': fresh(98, 99), 'claude-dev0': fresh(100, 100) },
-      expect: { wrapper: 'claude-corp', score: 99 },
+      files: { claude: fresh(100, 100), 'claude-a': fresh(99, 100), 'claude-b': fresh(98, 99), 'claude-d': fresh(100, 100) },
+      expect: { wrapper: 'claude-b', score: 99 },
       why: '_ws_least_loaded does NOT apply _avail/SWAP_CEILING: it returns the minimum '
         + 'even when every account is pinned. The headroom display is what warns the user',
     },
     {
-      // THE placement magnet, in both languages. `claude-corp` and
-      // `claude-dev0` have no telemetry file at all; before Task 6 both sides
-      // scored them 0 and handed the workspace to `claude-corp`, beating two
+      // THE placement magnet, in both languages. `claude-b` and
+      // `claude-d` have no telemetry file at all; before Task 6 both sides
+      // scored them 0 and handed the workspace to `claude-b`, beating two
       // accounts that had honestly reported 70 and 60. The account nobody could
       // see was simply the emptiest-looking one.
       name: 'missing-file',
-      files: { claude: fresh(70, 70), claude2: fresh(60, 60) },
-      expect: { wrapper: 'claude2', score: 60 },
+      files: { claude: fresh(70, 70), 'claude-a': fresh(60, 60) },
+      expect: { wrapper: 'claude-a', score: 60 },
       why: 'no telemetry file at all reads as unknown, and unknown ranks BELOW every '
         + 'measured account — the cheapest MEASURED account wins, not the one nobody '
         + 'has ever measured',
     },
     {
       name: 'tie',
-      files: { claude: fresh(50, 50), claude2: fresh(50, 50), 'claude-corp': fresh(50, 50), 'claude-dev0': fresh(50, 50) },
+      files: { claude: fresh(50, 50), 'claude-a': fresh(50, 50), 'claude-b': fresh(50, 50), 'claude-d': fresh(50, 50) },
       expect: { wrapper: 'claude', score: 50 },
       why: 'a tie goes to the earlier wrapper — bash compares strictly less-than',
     },
     {
       name: 'gpt-is-cheapest',
       files: {
-        claude: fresh(70, 70), claude2: fresh(75, 75), 'claude-corp': fresh(60, 60),
-        'claude-dev0': fresh(65, 65),
+        claude: fresh(70, 70), 'claude-a': fresh(75, 75), 'claude-b': fresh(60, 60),
+        'claude-d': fresh(65, 65),
         gpt: c({ five: null, seven: 0, ts: now - 60, fiveResetAt: null, sevenResetAt: now + 400000 }),
       },
-      expect: { wrapper: 'claude-corp', score: 60 },
+      expect: { wrapper: 'claude-b', score: 60 },
       why: 'gpt is not home-able, so it is an opt-in lane a session reaches only by having it '
         + 'as HOME (ccd\'s roster header) and it is absent from CCRC_HOME_ABLE, the array '
         + '_ws_least_loaded iterates — it must never win, however free it looks',
     },
     {
       name: 'disabled-lane-skipped',
-      files: { claude: fresh(50, 40), claude2: fresh(5, 3), 'claude-corp': fresh(90, 95), 'claude-dev0': fresh(60, 60) },
-      disabled: ['claude2'],
+      files: { claude: fresh(50, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(90, 95), 'claude-d': fresh(60, 60) },
+      disabled: ['claude-a'],
       expect: { wrapper: 'claude', score: 50 },
-      why: 'claude2 is cheapest but declared off — the runner-up wins, not the '
+      why: 'claude-a is cheapest but declared off — the runner-up wins, not the '
         + 'account nobody can actually place a session on',
     },
     {
       name: 'all-disabled',
-      files: { claude: fresh(50, 40), claude2: fresh(5, 3), 'claude-corp': fresh(90, 95), 'claude-dev0': fresh(60, 60) },
-      disabled: ['claude', 'claude2', 'claude-corp', 'claude-dev0'],
+      files: { claude: fresh(50, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(90, 95), 'claude-d': fresh(60, 60) },
+      disabled: ['claude', 'claude-a', 'claude-b', 'claude-d'],
       expect: null,
       why: 'every home-able lane declared off: nothing is placeable, and both '
         + 'sides must admit it rather than name an account that cannot take work',
     },
     {
       name: 'disabled-lane-no-telemetry',
-      // claude2 is markered off but has NEVER written a limits file — a fresh
-      // `touch claude2-disabled`, or a lane that's never had a session on it.
-      // No `claude2` key in `files` at all (an absent file, not an empty one).
-      files: { claude: fresh(50, 40), 'claude-corp': fresh(90, 95), 'claude-dev0': fresh(60, 60) },
-      disabled: ['claude2'],
+      // claude-a is markered off but has NEVER written a limits file — a fresh
+      // `touch claude-a-disabled`, or a lane that's never had a session on it.
+      // No `claude-a` key in `files` at all (an absent file, not an empty one).
+      files: { claude: fresh(50, 40), 'claude-b': fresh(90, 95), 'claude-d': fresh(60, 60) },
+      disabled: ['claude-a'],
       expect: { wrapper: 'claude', score: 50 },
       why: 'a markered lane with no telemetry file is still excluded — absent-from-map '
         + 'must not be mistaken for unknown-and-therefore-free, or the account that has '
@@ -123,7 +123,7 @@ export function leastLoadedCases(now: number): LeastLoadedCase[] {
       // Fresh box, or every lane markered before any of them ever wrote a
       // limits file: `.cc-limits` is empty, `disabled` names all three anyway.
       files: {},
-      disabled: ['claude', 'claude2', 'claude-corp', 'claude-dev0'],
+      disabled: ['claude', 'claude-a', 'claude-b', 'claude-d'],
       expect: null,
       why: 'no telemetry anywhere AND every lane declared off: still null, not the '
         + 'empty-directory tie-goes-to-claude case — declared-off overrides unknown-is-free',
@@ -133,9 +133,9 @@ export function leastLoadedCases(now: number): LeastLoadedCase[] {
       files: {
         // claude reads 98 on a week that already reset — the 2026-07-27 shape.
         claude: c({ five: 10, seven: 98, ts: now - 72000, fiveResetAt: now - 72000, sevenResetAt: now - 50000 }),
-        claude2: fresh(10, 10),
-        'claude-corp': fresh(40, 40),
-        'claude-dev0': fresh(20, 20),
+        'claude-a': fresh(10, 10),
+        'claude-b': fresh(40, 40),
+        'claude-d': fresh(20, 20),
       },
       expect: { wrapper: 'claude', score: 0 },
       why: 'both sides apply the rollover rule before scoring, so a reset window frees '

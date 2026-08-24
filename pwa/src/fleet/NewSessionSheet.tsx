@@ -3,7 +3,7 @@
 // Step 2: pick the project — searchable list from api.projects, with
 // registry projects first, most recently active on top. The confirm row
 // narrates the action in plain language ("Start OpenClawHetzner on
-// alt·max") and posts api.createSession; success closes the sheet (the
+// team·alt") and posts api.createSession; success closes the sheet (the
 // new card arrives over /ws/fleet), failure toasts ccd's stderr and leaves
 // every choice in place.
 import { useEffect, useState } from 'react';

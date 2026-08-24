@@ -49,12 +49,12 @@ import { fileURLToPath } from 'node:url';
 import { generateWrapperBody } from '../../shared/wrapper.mjs';
 import { markGenerated } from '../../shared/mark.mjs';
 import { mkTmp } from './tmpHelpers.js';
+import { DEFAULT_TEST_ROSTER } from './helpers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ccrcRoot = path.resolve(here, '..', '..');
 const CCD_DIR = path.join(ccrcRoot, 'ccd');
 const CCRC = path.join(CCD_DIR, 'ccrc');
-const MIGRATION_ROSTER = path.join(ccrcRoot, 'server', 'test', 'fixtures', 'roster-five.json');
 
 interface RosterAccount {
   id: string;
@@ -67,11 +67,11 @@ interface RosterAccount {
 }
 interface Roster { version: number; accounts: RosterAccount[] }
 
-const MIGRATION: Roster = JSON.parse(readFileSync(MIGRATION_ROSTER, 'utf8')) as Roster;
-/** The migration roster's three `generated` accounts — the only ids this verb
+const FIXTURE: Roster = JSON.parse(JSON.stringify(DEFAULT_TEST_ROSTER)) as Roster;
+/** The test roster's three `generated` accounts — the only ids this verb
  *  may ever write. `claude` (upstream) and `gpt` (external) are the two it may
  *  never touch, under any flag. */
-const GENERATED_IDS = ['claude2', 'claude-corp', 'claude-dev0'] as const;
+const GENERATED_IDS = ['claude-a', 'claude-b', 'claude-d'] as const;
 const UPSTREAM_ID = 'claude';
 const EXTERNAL_ID = 'gpt';
 
@@ -103,7 +103,7 @@ const rosterPathOf = (home: string): string => join(home, '.ccrc', 'accounts.jso
 function makeHome(prefix: string, opts: { roster?: Roster; bin?: boolean } = {}): string {
   const home = mkTmp(prefix);
   mkdirSync(join(home, '.ccrc'), { recursive: true });
-  writeFileSync(rosterPathOf(home), `${JSON.stringify(opts.roster ?? MIGRATION, null, 2)}\n`);
+  writeFileSync(rosterPathOf(home), `${JSON.stringify(opts.roster ?? FIXTURE, null, 2)}\n`);
   if (opts.bin !== false) mkdirSync(binOf(home), { recursive: true });
   return home;
 }
@@ -210,7 +210,7 @@ describe('ccrc wrappers: a fresh box', () => {
 
     for (const id of GENERATED_IDS) {
       const p = join(binOf(home), id);
-      expect(readFileSync(p, 'utf8')).toBe(bodyFor(MIGRATION, id));
+      expect(readFileSync(p, 'utf8')).toBe(bodyFor(FIXTURE, id));
       expect(statSync(p).mode & 0o777).toBe(0o755);
       expect(r.stdout).toMatch(new RegExp(`^WRITE ${id}: `, 'm'));
     }
@@ -250,51 +250,51 @@ describe('ccrc wrappers: a file ccrc wrote', () => {
   it('rewrites its own wrapper when the roster changes, and keeps the old text as a backup', () => {
     const home = makeHome('ccrc-wrappers-rewrite-');
     expect(runWrappers(home).code).toBe(0);
-    const old = readFileSync(join(binOf(home), 'claude2'), 'utf8');
+    const old = readFileSync(join(binOf(home), 'claude-a'), 'utf8');
 
-    const changed = clone(MIGRATION);
-    const acct = changed.accounts.find((a) => a.id === 'claude2');
+    const changed = clone(FIXTURE);
+    const acct = changed.accounts.find((a) => a.id === 'claude-a');
     if (!acct) throw new Error('fixture bug');
-    acct.configDirSuffix = '.claude-personal-moved';
+    acct.configDirSuffix = '.claude-a-moved';
     putRoster(home, changed);
 
     const r = runWrappers(home);
     expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
-    expect(readFileSync(join(binOf(home), 'claude2'), 'utf8')).toBe(bodyFor(changed, 'claude2'));
-    const backups = backupsFor(home, 'claude2');
+    expect(readFileSync(join(binOf(home), 'claude-a'), 'utf8')).toBe(bodyFor(changed, 'claude-a'));
+    const backups = backupsFor(home, 'claude-a');
     expect(backups).toHaveLength(1);
     expect(readFileSync(join(binOf(home), backups[0] ?? ''), 'utf8')).toBe(old);
     // The backup name carries a "." so it can never match WRAPPER_ID_RE —
     // neither `ccrc adopt` nor `ccrc doctor` will ever read it as an account.
-    expect(backups[0]).toMatch(/^claude2\.pre-ccrc-\d{8}T\d{6}Z$/);
+    expect(backups[0]).toMatch(/^claude-a\.pre-ccrc-\d{8}T\d{6}Z$/);
   });
 
   it('refuses a wrapper of its own that has been hand-edited, and leaves it byte for byte', () => {
     const home = makeHome('ccrc-wrappers-edited-');
     expect(runWrappers(home).code).toBe(0);
-    const p = join(binOf(home), 'claude2');
+    const p = join(binOf(home), 'claude-a');
     const edited = `${readFileSync(p, 'utf8')}# an operator added this line\n`;
     writeFileSync(p, edited);
 
     const r = runWrappers(home);
     expect(r.code).toBe(1);
     expect(readFileSync(p, 'utf8')).toBe(edited);
-    expect(r.stdout).toMatch(/^REFUSE claude2: /m);
-    expect(remedyAfter(r.stdout, /^REFUSE claude2: /)).toMatch(/^ {2}remedy: /);
-    expect(backupsFor(home, 'claude2')).toEqual([]);
+    expect(r.stdout).toMatch(/^REFUSE claude-a: /m);
+    expect(remedyAfter(r.stdout, /^REFUSE claude-a: /)).toMatch(/^ {2}remedy: /);
+    expect(backupsFor(home, 'claude-a')).toEqual([]);
   });
 
   it('--force rewrites a hand-edited wrapper, and the backup holds the edit', () => {
     const home = makeHome('ccrc-wrappers-edited-force-');
     expect(runWrappers(home).code).toBe(0);
-    const p = join(binOf(home), 'claude2');
+    const p = join(binOf(home), 'claude-a');
     const edited = `${readFileSync(p, 'utf8')}# an operator added this line\n`;
     writeFileSync(p, edited);
 
     const r = runWrappers(home, ['--force']);
     expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
-    expect(readFileSync(p, 'utf8')).toBe(bodyFor(MIGRATION, 'claude2'));
-    const backups = backupsFor(home, 'claude2');
+    expect(readFileSync(p, 'utf8')).toBe(bodyFor(FIXTURE, 'claude-a'));
+    const backups = backupsFor(home, 'claude-a');
     expect(backups).toHaveLength(1);
     expect(readFileSync(join(binOf(home), backups[0] ?? ''), 'utf8')).toBe(edited);
   });
@@ -311,19 +311,19 @@ describe('ccrc wrappers: a file ccrc wrote', () => {
       // so this is the assertion that stands in for it.
       const home = makeHome('ccrc-wrappers-readonly-');
       expect(runWrappers(home).code).toBe(0);
-      const changed = clone(MIGRATION);
-      const acct = changed.accounts.find((a) => a.id === 'claude2');
+      const changed = clone(FIXTURE);
+      const acct = changed.accounts.find((a) => a.id === 'claude-a');
       if (!acct) throw new Error('fixture bug');
-      acct.configDirSuffix = '.claude-personal-moved';
+      acct.configDirSuffix = '.claude-a-moved';
       putRoster(home, changed);
-      const p = join(binOf(home), 'claude2');
+      const p = join(binOf(home), 'claude-a');
       chmodSync(p, 0o444);
 
       const r = runWrappers(home);
       expect(r.code, `stderr:\n${r.stderr}\nstdout:\n${r.stdout}`).toBe(0);
-      expect(readFileSync(p, 'utf8')).toBe(bodyFor(changed, 'claude2'));
+      expect(readFileSync(p, 'utf8')).toBe(bodyFor(changed, 'claude-a'));
       expect(statSync(p).mode & 0o777).toBe(0o755);
-      // And the temp file is gone — a `.claude2.tmp.<pid>` left on PATH is a
+      // And the temp file is gone — a `.claude-a.tmp.<pid>` left on PATH is a
       // stray executable, which is the very thing `install_atomic`'s trailing
       // sweep exists for.
       expect(binEntries(home).filter((n) => n.includes('.tmp.'))).toEqual([]);
@@ -331,41 +331,41 @@ describe('ccrc wrappers: a file ccrc wrote', () => {
 });
 
 describe('ccrc wrappers: a file ccrc did NOT write', () => {
-  /** A hand-written wrapper for claude2 saying exactly what ccrc would say. */
+  /** A hand-written wrapper for claude-a saying exactly what ccrc would say. */
   const equivalentText = handWritten({
-    suffix: '.claude-personal',
-    secrets: '.cc-secrets/claude2-oauth.env',
+    suffix: '.claude-a',
+    secrets: '.cc-secrets/claude-a-oauth.env',
     note: 'hand-written in 2024, and still correct',
   });
   /** ...and one that says something else. */
   const divergentText = handWritten({
     suffix: '.claude-somewhere-else',
-    secrets: '.cc-secrets/claude2-oauth.env',
+    secrets: '.cc-secrets/claude-a-oauth.env',
     note: 'hand-written, and pointing at a different config dir on purpose',
   });
 
   it('refuses an equivalent foreign wrapper by default, and says it is adoptable', () => {
     const home = makeHome('ccrc-wrappers-foreign-eq-');
-    const p = join(binOf(home), 'claude2');
+    const p = join(binOf(home), 'claude-a');
     writeFileSync(p, equivalentText, { mode: 0o755 });
 
     const r = runWrappers(home);
     expect(r.code).toBe(1);
     expect(readFileSync(p, 'utf8')).toBe(equivalentText);
-    expect(r.stdout).toMatch(/^REFUSE claude2: /m);
-    expect(remedyAfter(r.stdout, /^REFUSE claude2: /)).toMatch(/--adopt/);
-    expect(backupsFor(home, 'claude2')).toEqual([]);
+    expect(r.stdout).toMatch(/^REFUSE claude-a: /m);
+    expect(remedyAfter(r.stdout, /^REFUSE claude-a: /)).toMatch(/--adopt/);
+    expect(backupsFor(home, 'claude-a')).toEqual([]);
   });
 
   it('--adopt takes over an equivalent foreign wrapper, backing up the hand-written original', () => {
     const home = makeHome('ccrc-wrappers-foreign-adopt-');
-    const p = join(binOf(home), 'claude2');
+    const p = join(binOf(home), 'claude-a');
     writeFileSync(p, equivalentText, { mode: 0o755 });
 
     const r = runWrappers(home, ['--adopt']);
     expect(r.code, `stderr:\n${r.stderr}\nstdout:\n${r.stdout}`).toBe(0);
-    expect(readFileSync(p, 'utf8')).toBe(bodyFor(MIGRATION, 'claude2'));
-    const backups = backupsFor(home, 'claude2');
+    expect(readFileSync(p, 'utf8')).toBe(bodyFor(FIXTURE, 'claude-a'));
+    const backups = backupsFor(home, 'claude-a');
     expect(backups).toHaveLength(1);
     expect(readFileSync(join(binOf(home), backups[0] ?? ''), 'utf8')).toBe(equivalentText);
   });
@@ -373,13 +373,13 @@ describe('ccrc wrappers: a file ccrc did NOT write', () => {
   it('refuses a NON-equivalent foreign wrapper with --adopt too — adopt is not a clobber', () => {
     for (const args of [[], ['--adopt']]) {
       const home = makeHome(`ccrc-wrappers-foreign-ne-${args.length}-`);
-      const p = join(binOf(home), 'claude2');
+      const p = join(binOf(home), 'claude-a');
       writeFileSync(p, divergentText, { mode: 0o755 });
 
       const r = runWrappers(home, args);
       expect(r.code, `args=${JSON.stringify(args)} stderr:\n${r.stderr}`).toBe(1);
       expect(readFileSync(p, 'utf8')).toBe(divergentText);
-      expect(backupsFor(home, 'claude2')).toEqual([]);
+      expect(backupsFor(home, 'claude-a')).toEqual([]);
     }
   });
 
@@ -390,11 +390,11 @@ describe('ccrc wrappers: a file ccrc did NOT write', () => {
     // anywhere in the run's output, because an operator scanning a refusal for
     // the next thing to type does not read which line it came from.
     const home = makeHome('ccrc-wrappers-foreign-noforce-');
-    writeFileSync(join(binOf(home), 'claude2'), divergentText, { mode: 0o755 });
+    writeFileSync(join(binOf(home), 'claude-a'), divergentText, { mode: 0o755 });
 
     const r = runWrappers(home);
     expect(r.code).toBe(1);
-    const remedy = remedyAfter(r.stdout, /^REFUSE claude2: /);
+    const remedy = remedyAfter(r.stdout, /^REFUSE claude-a: /);
     expect(remedy).toMatch(/^ {2}remedy: /);
     expect(remedy).not.toMatch(/--force/);
     expect(remedy).toMatch(/external/);
@@ -410,14 +410,14 @@ describe('ccrc wrappers: a file ccrc did NOT write', () => {
       // the admission that there were none. Skipped as root, which reads
       // anything — same reason as the sibling case in gen-wrappers.test.ts.
       const home = makeHome('ccrc-wrappers-unreadable-');
-      const p = join(binOf(home), 'claude2');
-      writeFileSync(p, handWritten({ suffix: '.claude-personal', note: 'unreadable' }));
+      const p = join(binOf(home), 'claude-a');
+      writeFileSync(p, handWritten({ suffix: '.claude-a', note: 'unreadable' }));
       chmodSync(p, 0o000);
 
       const r = runWrappers(home);
       expect(r.code).toBe(1);
-      expect(r.stdout).toMatch(/^REFUSE claude2: /m);
-      const remedy = remedyAfter(r.stdout, /^REFUSE claude2: /);
+      expect(r.stdout).toMatch(/^REFUSE claude-a: /m);
+      const remedy = remedyAfter(r.stdout, /^REFUSE claude-a: /);
       expect(remedy).toMatch(/^ {2}remedy: /);
       // Its OWN remedy, not the catch-all's: deleting the `unreadable` arm
       // drops it into the "this verb does not know that classification" branch,
@@ -425,10 +425,10 @@ describe('ccrc wrappers: a file ccrc did NOT write', () => {
       // stay green through exactly that deletion.
       expect(remedy).toMatch(/No flag overrides this one/);
       expect(remedy).not.toMatch(/bug in ccrc/);
-      expect(backupsFor(home, 'claude2')).toEqual([]);
+      expect(backupsFor(home, 'claude-a')).toEqual([]);
       chmodSync(p, 0o600);
       expect(readFileSync(p, 'utf8'))
-        .toBe(handWritten({ suffix: '.claude-personal', note: 'unreadable' }));
+        .toBe(handWritten({ suffix: '.claude-a', note: 'unreadable' }));
     });
 
   it.skipIf(process.getuid?.() === 0)(
@@ -439,30 +439,30 @@ describe('ccrc wrappers: a file ccrc did NOT write', () => {
       // DOES honour --force: that fold would destroy a root-owned or mode-000
       // file ccrc had promised never to judge.
       const home = makeHome('ccrc-wrappers-unreadable-force-');
-      const p = join(binOf(home), 'claude2');
-      const text = handWritten({ suffix: '.claude-personal', note: 'unreadable' });
+      const p = join(binOf(home), 'claude-a');
+      const text = handWritten({ suffix: '.claude-a', note: 'unreadable' });
       writeFileSync(p, text);
       chmodSync(p, 0o000);
 
       const r = runWrappers(home, ['--force', '--adopt']);
       expect(r.code, `stdout:\n${r.stdout}`).toBe(1);
-      expect(r.stdout).toMatch(/^REFUSE claude2: /m);
-      expect(backupsFor(home, 'claude2')).toEqual([]);
+      expect(r.stdout).toMatch(/^REFUSE claude-a: /m);
+      expect(backupsFor(home, 'claude-a')).toEqual([]);
       chmodSync(p, 0o600);
       expect(readFileSync(p, 'utf8')).toBe(text);
     });
 
   it('never clobbers a bespoke launcher sitting under a generated account\'s id', () => {
     const home = makeHome('ccrc-wrappers-bespoke-');
-    const p = join(binOf(home), 'claude2');
-    const text = bespokeLauncher('.claude-personal');
+    const p = join(binOf(home), 'claude-a');
+    const text = bespokeLauncher('.claude-a');
     expect(text.split('\n').length).toBeGreaterThanOrEqual(40);
     writeFileSync(p, text, { mode: 0o755 });
 
     const r = runWrappers(home);
     expect(r.code).toBe(1);
     expect(readFileSync(p, 'utf8')).toBe(text);
-    expect(backupsFor(home, 'claude2')).toEqual([]);
+    expect(backupsFor(home, 'claude-a')).toEqual([]);
     expect(r.stdout).not.toMatch(/--force/);
   });
 
@@ -475,8 +475,8 @@ describe('ccrc wrappers: a file ccrc did NOT write', () => {
   // `no`. Until D-156 that landed in the same arm as "a wrapper that says
   // something else", which honours `--force` — so one flag under a mis-edited
   // roster overwrote it with a two-line wrapper ending
-  // `exec "$HOME/.local/bin/claude" "$@"` — itself — while claude2,
-  // claude-corp and claude-dev0 all exec that same path. A fleet-wide exec
+  // `exec "$HOME/.local/bin/claude" "$@"` — itself — while claude-a,
+  // claude-b and claude-d all exec that same path. A fleet-wide exec
   // loop, from one flag.
   //
   // Until 2026-08-20 the only thing preventing that was the file's SIZE: at
@@ -514,20 +514,20 @@ describe('ccrc wrappers: a file ccrc did NOT write', () => {
   // capability was live and unpinned. Both mutants restored afterwards.
   it('refuses a foreign file it cannot parse AS A WRAPPER, under --force --adopt too (D-156)', () => {
     const home = makeHome('ccrc-wrappers-foreign-unparseable-');
-    const p = join(binOf(home), 'claude2');
+    const p = join(binOf(home), 'claude-a');
     writeFileSync(p, UPSTREAM_LAUNCHER, { mode: 0o755 });
 
     const r = runWrappers(home, ['--force', '--adopt']);
     expect(r.code, `stdout:\n${r.stdout}`).toBe(1);
     expect(readFileSync(p, 'utf8')).toBe(UPSTREAM_LAUNCHER);
-    expect(backupsFor(home, 'claude2')).toEqual([]);
-    expect(r.stdout).toMatch(/^REFUSE claude2: /m);
+    expect(backupsFor(home, 'claude-a')).toEqual([]);
+    expect(r.stdout).toMatch(/^REFUSE claude-a: /m);
     // ITS OWN sentence, not the shared foreign one and not the catch-all's:
     // folding this arm back into the `dok = ok` arm restores the defect, and a
     // bare exit-1 assertion would stay green straight through that fold.
     expect(r.stdout).toMatch(/cannot parse it as a wrapper at all/);
     expect(r.stdout).not.toMatch(/which this verb does not know/);
-    const remedy = remedyAfter(r.stdout, /^REFUSE claude2: /);
+    const remedy = remedyAfter(r.stdout, /^REFUSE claude-a: /);
     expect(remedy).toMatch(/^ {2}remedy: /);
     expect(remedy).toMatch(/No flag overrides this one\./);
     expect(remedy).not.toMatch(/--force/);
@@ -541,29 +541,29 @@ describe('ccrc wrappers: a file ccrc did NOT write', () => {
     // Without this case, "refuse everything foreign" passes the two cases
     // around it and silently removes a capability the README documents.
     const home = makeHome('ccrc-wrappers-foreign-ne-force-');
-    const p = join(binOf(home), 'claude2');
+    const p = join(binOf(home), 'claude-a');
     writeFileSync(p, divergentText, { mode: 0o755 });
 
     const r = runWrappers(home, ['--force']);
     expect(r.code, `stdout:\n${r.stdout}\nstderr:\n${r.stderr}`).toBe(0);
-    expect(readFileSync(p, 'utf8')).toBe(bodyFor(MIGRATION, 'claude2'));
-    const backups = backupsFor(home, 'claude2');
+    expect(readFileSync(p, 'utf8')).toBe(bodyFor(FIXTURE, 'claude-a'));
+    const backups = backupsFor(home, 'claude-a');
     expect(backups).toHaveLength(1);
     expect(readFileSync(join(binOf(home), backups[0] ?? ''), 'utf8')).toBe(divergentText);
-    expect(r.stdout).toMatch(/^REWRITE claude2: /m);
+    expect(r.stdout).toMatch(/^REWRITE claude-a: /m);
   });
 
   it('MUTATION: the parse gate is what stops --force clobbering an unparseable launcher (D-156)', () => {
     // Written as "did it write?" rather than "did it refuse?" so it cannot be
     // satisfied by any refusal that happens to arrive for a different reason.
     const home = makeHome('ccrc-wrappers-foreign-dok-mutation-');
-    const p = join(binOf(home), 'claude2');
+    const p = join(binOf(home), 'claude-a');
     writeFileSync(p, UPSTREAM_LAUNCHER, { mode: 0o755 });
 
     const r = runWrappers(home, ['--force']);
-    expect(r.stdout).not.toMatch(/^REWRITE claude2: /m);
+    expect(r.stdout).not.toMatch(/^REWRITE claude-a: /m);
     expect(readFileSync(p, 'utf8')).toBe(UPSTREAM_LAUNCHER);
-    expect(binEntries(home).filter((n) => n.startsWith('claude2.'))).toEqual([]);
+    expect(binEntries(home).filter((n) => n.startsWith('claude-a.'))).toEqual([]);
   });
 });
 
@@ -622,14 +622,14 @@ describe('ccrc wrappers: the witness lock (D-156)', () => {
     '',
   ].join('\n');
 
-  /** MIGRATION with the upstream moved off `claude` — the mis-edit. `claude`
+  /** FIXTURE with the upstream moved off `claude` — the mis-edit. `claude`
    *  becomes a generated account (so it gets a `wrapper` record and is written)
-   *  and `claude2` becomes the upstream. parseRoster still sees exactly one. */
+   *  and `claude-a` becomes the upstream. parseRoster still sees exactly one. */
   function misEdited(): Roster {
-    const r = clone(MIGRATION);
+    const r = clone(FIXTURE);
     for (const a of r.accounts) {
       if (a.id === 'claude') a.exec = { kind: 'generated' };
-      if (a.id === 'claude2') a.exec = { kind: 'upstream' };
+      if (a.id === 'claude-a') a.exec = { kind: 'upstream' };
     }
     return r;
   }
@@ -702,7 +702,7 @@ describe('ccrc wrappers: the witness lock (D-156)', () => {
     symlinkSync('ccgpt', join(bin, 'gpt'));
     writeFileSync(join(bin, 'ccd'), `#!/usr/bin/env bash\n${'# filler\n'.repeat(90000)}`, { mode: 0o755 });
     writeFileSync(join(bin, 'bigblob'), Buffer.alloc(2 * 1024 * 1024, 0x41), { mode: 0o755 });
-    writeFileSync(join(bin, 'claude2.bak-20260805-181306'), readFileSync(join(bin, 'claude2')));
+    writeFileSync(join(bin, 'claude-a.bak-20260805-181306'), readFileSync(join(bin, 'claude-a')));
 
     const before = binEntries(home);
     const mt = Object.fromEntries(before.map((n) => [n, statSync(join(bin, n)).mtimeMs]));
@@ -722,7 +722,7 @@ describe('ccrc wrappers: the witness lock (D-156)', () => {
 
   it('MUTATION: without the lock the box stops terminating — so the assertion is that it exits', () => {
     // The measured failure is not a lost file, it is a box that never exits:
-    // claude2/claude-corp/claude-dev0 all end `exec "$HOME/.local/bin/claude"`,
+    // claude-a/claude-b/claude-d all end `exec "$HOME/.local/bin/claude"`,
     // so a generated wrapper written AT `claude` closes an exec loop across
     // every lane at once. A byte-equality assertion would go green for the
     // wrong reason; this runs the thing.
@@ -751,7 +751,7 @@ describe('ccrc wrappers: the witness lock (D-156)', () => {
       const r = runWrappers(home, ['--force']);
       expect(r.code, r.stdout).toBe(1);
       for (const id of GENERATED_IDS) expect(r.stdout).toMatch(new RegExp(`^REFUSE ${id}: `, 'm'));
-      expect(remedyAfter(r.stdout, /^REFUSE claude2: /)).toMatch(/No flag overrides this one/);
+      expect(remedyAfter(r.stdout, /^REFUSE claude-a: /)).toMatch(/No flag overrides this one/);
 
       chmodSync(mystery, 0o644);
       expect(runWrappers(home).code).toBe(0);
@@ -764,12 +764,12 @@ describe('ccrc wrappers: the witness lock (D-156)', () => {
       // own table verdict, and the table's voice is the right one — its remedy
       // is pinned elsewhere in this file.
       const home = seededBox('ccrc-wrappers-witness-unreadable-target-');
-      const p = join(binOf(home), 'claude2');
+      const p = join(binOf(home), 'claude-a');
       chmodSync(p, 0o000);
 
       const r = runWrappers(home);
       expect(r.code).toBe(1);
-      const remedy = remedyAfter(r.stdout, /^REFUSE claude2: /);
+      const remedy = remedyAfter(r.stdout, /^REFUSE claude-a: /);
       expect(remedy).toMatch(/No flag overrides this one/);
       expect(remedy).not.toMatch(/so it cannot tell/);
       chmodSync(p, 0o600);
@@ -829,30 +829,30 @@ describe('ccrc wrappers: an oversize candidate (D-81)', () => {
   }
 
   for (const args of [[], ['--adopt'], ['--force'], ['--force', '--adopt']]) {
-    it(`refuses claude2 with ${args.length === 0 ? 'no flags' : args.join(' ')} — no flag overrides an oversize file`, () => {
+    it(`refuses claude-a with ${args.length === 0 ? 'no flags' : args.join(' ')} — no flag overrides an oversize file`, () => {
       const home = makeHome(`ccrc-wrappers-oversize-${args.join('') || 'none'}-`);
-      makeOversizeCandidate(home, 'claude2');
+      makeOversizeCandidate(home, 'claude-a');
 
       const r = runWrappers(home, args);
       expect(r.code, `stdout:\n${r.stdout}\nstderr:\n${r.stderr}`).toBe(1);
-      expect(r.stdout).toMatch(/^REFUSE claude2: /m);
+      expect(r.stdout).toMatch(/^REFUSE claude-a: /m);
       // ITS OWN sentence, not the catch-all's: deleting the `oversize` arm
       // drops it into "$gen classified it as \"oversize\", which this verb
       // does not know" — which refuses too, so a bare exit-1 assertion would
       // stay green through exactly that deletion.
       expect(r.stdout).toMatch(/over 1 MiB/);
       expect(r.stdout).not.toMatch(/which this verb does not know/);
-      const remedy = remedyAfter(r.stdout, /^REFUSE claude2: /);
+      const remedy = remedyAfter(r.stdout, /^REFUSE claude-a: /);
       expect(remedy).toMatch(/^ {2}remedy: /);
       expect(remedy).not.toMatch(/bug in ccrc/);
-      // Both escape hatches, named: move the big file aside (if claude2
+      // Both escape hatches, named: move the big file aside (if claude-a
       // should be generated), or declare it upstream (if it IS the upstream
       // binary this fixture is standing in for).
       expect(remedy).toMatch(/move.*aside/);
       expect(remedy).toMatch(/"upstream"/);
-      expect(backupsFor(home, 'claude2')).toEqual([]);
+      expect(backupsFor(home, 'claude-a')).toEqual([]);
       // Left byte for byte — still sparse, still over the threshold.
-      expect(statSync(join(binOf(home), 'claude2')).size).toBeGreaterThan(1024 * 1024);
+      expect(statSync(join(binOf(home), 'claude-a')).size).toBeGreaterThan(1024 * 1024);
     });
   }
 
@@ -863,11 +863,11 @@ describe('ccrc wrappers: an oversize candidate (D-81)', () => {
     // scanning refusals for the next thing to type must never find --force
     // beside a file this verb has just said is categorically not a wrapper.
     const home = makeHome('ccrc-wrappers-oversize-noforce-');
-    makeOversizeCandidate(home, 'claude2');
+    makeOversizeCandidate(home, 'claude-a');
 
     const r = runWrappers(home, ['--force']);
     expect(r.code).toBe(1);
-    const remedy = remedyAfter(r.stdout, /^REFUSE claude2: /);
+    const remedy = remedyAfter(r.stdout, /^REFUSE claude-a: /);
     expect(remedy).toMatch(/^ {2}remedy: /);
     expect(remedy).not.toMatch(/--force/);
     expect(r.stdout).not.toMatch(/--force/);
@@ -881,14 +881,14 @@ describe('ccrc wrappers: an oversize candidate (D-81)', () => {
     // the manifest, so it belongs to the action pass and must not abort
     // siblings that are perfectly fine to write.
     const home = makeHome('ccrc-wrappers-oversize-siblings-');
-    makeOversizeCandidate(home, 'claude2');
+    makeOversizeCandidate(home, 'claude-a');
 
     const r = runWrappers(home);
     expect(r.code).toBe(1);
-    expect(readFileSync(join(binOf(home), 'claude-corp'), 'utf8')).toBe(bodyFor(MIGRATION, 'claude-corp'));
-    expect(readFileSync(join(binOf(home), 'claude-dev0'), 'utf8')).toBe(bodyFor(MIGRATION, 'claude-dev0'));
-    expect(r.stdout).toMatch(/^WRITE claude-corp: /m);
-    expect(r.stdout).toMatch(/^WRITE claude-dev0: /m);
+    expect(readFileSync(join(binOf(home), 'claude-b'), 'utf8')).toBe(bodyFor(FIXTURE, 'claude-b'));
+    expect(readFileSync(join(binOf(home), 'claude-d'), 'utf8')).toBe(bodyFor(FIXTURE, 'claude-d'));
+    expect(r.stdout).toMatch(/^WRITE claude-b: /m);
+    expect(r.stdout).toMatch(/^WRITE claude-d: /m);
   });
 });
 
@@ -934,14 +934,14 @@ describe('ccrc wrappers: --dry-run', () => {
   it('still refuses — a dry run reports the same verdicts, it does not soften them', () => {
     const home = makeHome('ccrc-wrappers-dry-refuse-');
     expect(runWrappers(home).code).toBe(0);
-    const p = join(binOf(home), 'claude2');
+    const p = join(binOf(home), 'claude-a');
     const edited = `${readFileSync(p, 'utf8')}# an operator added this line\n`;
     writeFileSync(p, edited);
 
     const r = runWrappers(home, ['--dry-run']);
     expect(r.code).toBe(1);
     expect(readFileSync(p, 'utf8')).toBe(edited);
-    expect(backupsFor(home, 'claude2')).toEqual([]);
+    expect(backupsFor(home, 'claude-a')).toEqual([]);
   });
 
   it('creates no directories on a box that has none — not even ~/.local', () => {
@@ -965,7 +965,7 @@ describe('ccrc wrappers: --dry-run', () => {
 
   it('leaves a stray temp file alone — a dry run removes nothing either', () => {
     const home = makeHome('ccrc-wrappers-dry-stray-');
-    const stray = join(binOf(home), '.claude2.tmp.999');
+    const stray = join(binOf(home), '.claude-a.tmp.999');
     writeFileSync(stray, 'half a wrapper', { mode: 0o755 });
     const r = runWrappers(home, ['--dry-run']);
     expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
@@ -976,18 +976,18 @@ describe('ccrc wrappers: --dry-run', () => {
   it('would not write a backup either', () => {
     const home = makeHome('ccrc-wrappers-dry-backup-');
     expect(runWrappers(home).code).toBe(0);
-    const changed = clone(MIGRATION);
-    const acct = changed.accounts.find((a) => a.id === 'claude2');
+    const changed = clone(FIXTURE);
+    const acct = changed.accounts.find((a) => a.id === 'claude-a');
     if (!acct) throw new Error('fixture bug');
-    acct.configDirSuffix = '.claude-personal-moved';
+    acct.configDirSuffix = '.claude-a-moved';
     putRoster(home, changed);
-    const before = readFileSync(join(binOf(home), 'claude2'), 'utf8');
+    const before = readFileSync(join(binOf(home), 'claude-a'), 'utf8');
 
     const r = runWrappers(home, ['--dry-run']);
     expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
-    expect(r.stdout).toMatch(/^WOULD-REWRITE claude2: /m);
-    expect(readFileSync(join(binOf(home), 'claude2'), 'utf8')).toBe(before);
-    expect(backupsFor(home, 'claude2')).toEqual([]);
+    expect(r.stdout).toMatch(/^WOULD-REWRITE claude-a: /m);
+    expect(readFileSync(join(binOf(home), 'claude-a'), 'utf8')).toBe(before);
+    expect(backupsFor(home, 'claude-a')).toEqual([]);
   });
 });
 
@@ -1001,7 +1001,7 @@ describe('ccrc wrappers: its own litter', () => {
     // finding — this is the stray-executable half.
     const home = makeHome('ccrc-wrappers-sweep-');
     expect(runWrappers(home).code).toBe(0);          // converge first
-    const stray = join(binOf(home), '.claude2.tmp.4242');
+    const stray = join(binOf(home), '.claude-a.tmp.4242');
     writeFileSync(stray, 'half a wrapper, from a run that was killed', { mode: 0o755 });
 
     // The account is CONVERGED on this run, so a sweep that only ran after a
@@ -1009,7 +1009,7 @@ describe('ccrc wrappers: its own litter', () => {
     const r = runWrappers(home);
     expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
     expect(existsSync(stray)).toBe(false);
-    expect(r.stdout).toMatch(/^SWEPT claude2: /m);
+    expect(r.stdout).toMatch(/^SWEPT claude-a: /m);
     expect(binEntries(home)).toEqual([...GENERATED_IDS].sort());
   });
 
@@ -1019,7 +1019,7 @@ describe('ccrc wrappers: its own litter', () => {
     // whose name merely looks temp-ish.
     const home = makeHome('ccrc-wrappers-sweep-scope-');
     const notOurs = join(binOf(home), '.something-else.tmp.1');
-    const alsoNotOurs = join(binOf(home), '.claude2.tmp');   // no pid suffix
+    const alsoNotOurs = join(binOf(home), '.claude-a.tmp');   // no pid suffix
     writeFileSync(notOurs, 'somebody else\'s file');
     writeFileSync(alsoNotOurs, 'somebody else\'s file');
 
@@ -1070,7 +1070,7 @@ describe('ccrc wrappers: a manifest it cannot trust', () => {
     // manifest truncated in transit is LOUD. Without that assertion a
     // half-delivered manifest converges half a box and reports success.
     const cli = kitWith(
-      'process.stdout.write("summary\\t5\\t3\\t1\\t1\\nwrapper\\tclaude2\\tabsent\\tno\\n");\n',
+      'process.stdout.write("summary\\t5\\t3\\t1\\t1\\nwrapper\\tclaude-a\\tabsent\\tno\\n");\n',
     );
     const home = makeHome('ccrc-wrappers-truncated-');
     const r = runWrappers(home, [], cli);
@@ -1090,20 +1090,20 @@ describe('ccrc wrappers: a manifest it cannot trust', () => {
     // The id off the manifest becomes a FILENAME under ~/.local/bin, and the
     // gate is on the ID rather than on the path it would produce — which is
     // what makes it hold for a traversing id as well as for this one. A
-    // `claude2.bak` is the concrete, measured shape: `.bak-<date>` siblings are
+    // `claude-a.bak` is the concrete, measured shape: `.bak-<date>` siblings are
     // exactly what a real box accumulates and what WRAPPER_ID_RE exists to keep
     // out of the account namespace (`ccd/ccrc-wrapper-shape:63-67`). The stub
     // STAGES the file, so without the gate this verb really would install it.
     const cli = kitWith(
       'import { writeFileSync } from "node:fs";\nimport { join } from "node:path";\n'
-      + 'writeFileSync(join(process.argv[4], "claude2.bak"), "#!/usr/bin/env bash\\nexport CLAUDE_CONFIG_DIR=\\"$HOME/.x\\"\\nexec \\"$HOME/.local/bin/claude\\" \\"$@\\"\\n");\n'
-      + 'process.stdout.write("summary\\t1\\t1\\t0\\t0\\nwrapper\\tclaude2.bak\\tabsent\\tno\\n");\n',
+      + 'writeFileSync(join(process.argv[4], "claude-a.bak"), "#!/usr/bin/env bash\\nexport CLAUDE_CONFIG_DIR=\\"$HOME/.x\\"\\nexec \\"$HOME/.local/bin/claude\\" \\"$@\\"\\n");\n'
+      + 'process.stdout.write("summary\\t1\\t1\\t0\\t0\\nwrapper\\tclaude-a.bak\\tabsent\\tno\\n");\n',
     );
     const home = makeHome('ccrc-wrappers-badid-');
     const r = runWrappers(home, ['--force'], cli);
     expect(r.code).toBe(1);
     expect(binEntries(home)).toEqual([]);
-    expect(r.stderr).toMatch(/claude2\.bak/);
+    expect(r.stderr).toMatch(/claude-a\.bak/);
   });
 
   it('refuses to install a wrapper that would exec itself — the upstream account\'s own shape', () => {
@@ -1176,17 +1176,17 @@ describe('ccrc wrappers: a manifest it cannot trust', () => {
   });
 
   it('a bad record aborts before the FIRST write — "nothing was written" is true, not reassuring', () => {
-    // Two records: a perfectly good `claude2` and an illegal `claude2.bak`.
+    // Two records: a perfectly good `claude-a` and an illegal `claude-a.bak`.
     // The validation used to live inside the action loop, so this manifest
-    // printed `WRITE claude2 …` and then `… and nothing was written` two lines
+    // printed `WRITE claude-a …` and then `… and nothing was written` two lines
     // later. Every earlier stub carried one record, which is exactly why the
     // falsity was invisible.
-    const good = bodyFor(MIGRATION, 'claude2');
+    const good = bodyFor(FIXTURE, 'claude-a');
     const cli = kitWith(
       'import { writeFileSync } from "node:fs";\nimport { join } from "node:path";\n'
-      + `writeFileSync(join(process.argv[4], "claude2"), ${JSON.stringify(good)});\n`
-      + `writeFileSync(join(process.argv[4], "claude2.bak"), ${JSON.stringify(good)});\n`
-      + 'process.stdout.write("summary\\t2\\t2\\t0\\t0\\nwrapper\\tclaude2\\tabsent\\tno\\nwrapper\\tclaude2.bak\\tabsent\\tno\\n");\n',
+      + `writeFileSync(join(process.argv[4], "claude-a"), ${JSON.stringify(good)});\n`
+      + `writeFileSync(join(process.argv[4], "claude-a.bak"), ${JSON.stringify(good)});\n`
+      + 'process.stdout.write("summary\\t2\\t2\\t0\\t0\\nwrapper\\tclaude-a\\tabsent\\tno\\nwrapper\\tclaude-a.bak\\tabsent\\tno\\n");\n',
     );
     const home = makeHome('ccrc-wrappers-abort-before-write-');
     const r = runWrappers(home, [], cli);
@@ -1199,7 +1199,7 @@ describe('ccrc wrappers: a manifest it cannot trust', () => {
   it('passes the generator\'s own refusal through instead of re-wording it', () => {
     // An invalid roster's `remedy:` line is the useful message, and it is
     // node's. Swallowing node's stderr would replace a fix with a shrug.
-    const broken = clone(MIGRATION);
+    const broken = clone(FIXTURE);
     broken.accounts.push({
       ...(broken.accounts[0] as RosterAccount),
       id: 'claude-second', label: 'second·upstream', configDirSuffix: '.claude-second', hue: 'amber',

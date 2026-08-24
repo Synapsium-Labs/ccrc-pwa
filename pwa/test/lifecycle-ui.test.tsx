@@ -122,7 +122,7 @@ describe('NewSessionSheet', () => {
     vi.spyOn(api, 'projects').mockResolvedValue(PROJECTS);
     render(<NewSessionSheet open onClose={vi.fn()} fleet={makeFleet()} />);
 
-    for (const label of ['team·max', 'alt·max', 'team·shared', 'gpt', 'lab·dev0']) {
+    for (const label of ['team·max', 'team·alt', 'team·b', 'gpt', 'team·d']) {
       expect(screen.getByRole('button', { name: new RegExp(label) })).toBeInTheDocument();
     }
     // Live limits ride the rows that have a session on that account…
@@ -145,7 +145,7 @@ describe('NewSessionSheet', () => {
       </>,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /alt·max/ }));
+    fireEvent.click(screen.getByRole('button', { name: /team·alt/ }));
 
     // Step 2: the project list arrives; the confirm sits disarmed until a
     // project is chosen.
@@ -153,7 +153,7 @@ describe('NewSessionSheet', () => {
     expect(screen.getByRole('button', { name: /Choose a project/i })).toBeDisabled();
 
     fireEvent.click(projRow);
-    const confirm = screen.getByRole('button', { name: 'Start OpenClawHetzner on alt·max' });
+    const confirm = screen.getByRole('button', { name: 'Start OpenClawHetzner on team·alt' });
     expect(confirm).toBeEnabled();
 
     fireEvent.click(confirm);
@@ -171,7 +171,7 @@ describe('NewSessionSheet', () => {
       <NewSessionSheet open onClose={vi.fn()} fleet={makeFleet()} />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /alt·max/ }));
+    fireEvent.click(screen.getByRole('button', { name: /team·alt/ }));
     await screen.findByRole('button', { name: /OpenClawHetzner/ });
 
     const names = [...container.ownerDocument.querySelectorAll('.proj-name')].map(
@@ -194,9 +194,9 @@ describe('NewSessionSheet', () => {
       </>,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /alt·max/ }));
+    fireEvent.click(screen.getByRole('button', { name: /team·alt/ }));
     fireEvent.click(await screen.findByRole('button', { name: /OpenClawHetzner/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Start OpenClawHetzner on alt·max' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Start OpenClawHetzner on team·alt' }));
 
     expect(await screen.findByText(/no such wrapper/)).toBeInTheDocument();
     expect(onClose).not.toHaveBeenCalled();
@@ -209,7 +209,7 @@ describe('NewSessionSheet', () => {
     vi.spyOn(api, 'projects').mockResolvedValue(PROJECTS);
     render(<NewSessionSheet open onClose={vi.fn()} fleet={makeFleet()} />);
 
-    expect(await screen.findByRole('button', { name: /alt·max/ })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /team·alt/ })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /gpt/i })).not.toBeInTheDocument();
   });
 });
@@ -242,7 +242,7 @@ describe('NewSessionSheet — a five-minute wait says so', () => {
     const clickStart = async () => {
       await act(async () => {
         fireEvent.click(
-          screen.getByRole('button', { name: 'Start OpenClawHetzner on alt·max' }),
+          screen.getByRole('button', { name: 'Start OpenClawHetzner on team·alt' }),
         );
       });
     };
@@ -250,7 +250,7 @@ describe('NewSessionSheet — a five-minute wait says so', () => {
       clickStart,
       start: async () => {
         await act(async () => {});          // the project list lands
-        fireEvent.click(screen.getByRole('button', { name: /alt·max/ }));
+        fireEvent.click(screen.getByRole('button', { name: /team·alt/ }));
         await act(async () => {});
         fireEvent.click(screen.getByRole('button', { name: /OpenClawHetzner/ }));
         await clickStart();
@@ -342,11 +342,11 @@ describe('SwapSheet', () => {
 
     // The current account never appears as a move target.
     expect(screen.queryByText('team·max')).not.toBeInTheDocument();
-    for (const label of ['alt·max', 'team·shared', 'gpt']) {
+    for (const label of ['team·alt', 'team·b', 'gpt']) {
       expect(screen.getByRole('button', { name: new RegExp(label) })).toBeInTheDocument();
     }
     // claude2 (8/22) is the least loaded of the accounts with known limits.
-    expect(screen.getByRole('button', { name: /alt·max/ })).toHaveTextContent('suggested');
+    expect(screen.getByRole('button', { name: /team·alt/ })).toHaveTextContent('suggested');
   });
 
   it('confirming the move posts the target wrapper', async () => {
@@ -359,12 +359,12 @@ describe('SwapSheet', () => {
       </>,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /alt·max/ }));
+    fireEvent.click(screen.getByRole('button', { name: /team·alt/ }));
     // W3 §3.4 extended this sentence: the restart is still the headline, and
     // the move's TEMPORARINESS is now stated at the moment of commitment.
     expect(
       screen.getByText(
-        'The session restarts under alt·max. Anyone attached is briefly disconnected. ' +
+        'The session restarts under team·alt. Anyone attached is briefly disconnected. ' +
         'This is temporary — ccrc moves it back to team·max once team·max has room.',
       ),
     ).toBeInTheDocument();
@@ -405,8 +405,8 @@ describe('SwapSheet', () => {
           <ToastHost />
         </>,
       );
-      fireEvent.click(screen.getByRole('button', { name: /alt·max/ }));
-      expect(screen.getByText(/The session restarts under alt·max/)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /team·alt/ }));
+      expect(screen.getByText(/The session restarts under team·alt/)).toBeInTheDocument();
       // The parent closes the sheet while the confirm is up — what the actions
       // sheet's own reset-on-close effect does on every dismissal.
       rerender(
@@ -432,7 +432,7 @@ describe('SwapSheet', () => {
           <ToastHost />
         </>,
       );
-      fireEvent.click(screen.getByRole('button', { name: /alt·max/ }));
+      fireEvent.click(screen.getByRole('button', { name: /team·alt/ }));
       rerender(
         <>
           <SwapSheet session={A} open={false} onClose={() => {}} fleet={fleet} />
@@ -469,8 +469,8 @@ describe('SwapSheet', () => {
           <ToastHost />
         </>,
       );
-      fireEvent.click(screen.getByRole('button', { name: /alt·max/ }));
-      expect(screen.getByText(/The session restarts under alt·max/)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /team·alt/ }));
+      expect(screen.getByText(/The session restarts under team·alt/)).toBeInTheDocument();
       rerender(
         <>
           <SwapSheet session={B} open onClose={() => {}} fleet={fleet} />
@@ -496,8 +496,8 @@ describe('SwapSheet', () => {
           <ToastHost />
         </>,
       );
-      fireEvent.click(screen.getByRole('button', { name: /alt·max/ }));
-      expect(screen.getByText(/The session restarts under alt·max/)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /team·alt/ }));
+      expect(screen.getByText(/The session restarts under team·alt/)).toBeInTheDocument();
     });
   });
 
@@ -518,10 +518,10 @@ describe('SwapSheet', () => {
       fleetSession({ id: 'claude-corp:b', wrapper: 'claude-corp', limits: { five: null, seven: null } }),
     ]);
     render(<SwapSheet session={fleetSession()} open onClose={vi.fn()} fleet={fleet} />);
-    expect(screen.getByRole('button', { name: /team·shared/ })).not.toHaveTextContent('suggested');
-    expect(screen.getByRole('button', { name: /alt·max/ })).toHaveTextContent('suggested');
+    expect(screen.getByRole('button', { name: /team·b/ })).not.toHaveTextContent('suggested');
+    expect(screen.getByRole('button', { name: /team·alt/ })).toHaveTextContent('suggested');
     // And it still says so where the reader can see it, rather than 0%.
-    expect(screen.getByRole('button', { name: /team·shared/ })).toHaveTextContent('—');
+    expect(screen.getByRole('button', { name: /team·b/ })).toHaveTextContent('—');
   });
 
   it('never suggests on a HALF-read account either — max() of one known window is a lower bound', () => {
@@ -534,8 +534,8 @@ describe('SwapSheet', () => {
       fleetSession({ id: 'claude-corp:b', wrapper: 'claude-corp', limits: { five: 3, seven: null } }),
     ]);
     render(<SwapSheet session={fleetSession()} open onClose={vi.fn()} fleet={fleet} />);
-    expect(screen.getByRole('button', { name: /team·shared/ })).not.toHaveTextContent('suggested');
-    expect(screen.getByRole('button', { name: /alt·max/ })).toHaveTextContent('suggested');
+    expect(screen.getByRole('button', { name: /team·b/ })).not.toHaveTextContent('suggested');
+    expect(screen.getByRole('button', { name: /team·alt/ })).toHaveTextContent('suggested');
   });
 
   it('suggests nobody at all when no account has both windows read', () => {
@@ -548,7 +548,7 @@ describe('SwapSheet', () => {
     expect(screen.queryByText('suggested')).not.toBeInTheDocument();
     // Every target is still offered and still tappable — not scoring is not
     // hiding.
-    for (const label of ['alt·max', 'team·shared', 'gpt']) {
+    for (const label of ['team·alt', 'team·b', 'gpt']) {
       expect(screen.getByRole('button', { name: new RegExp(label) })).toBeInTheDocument();
     }
   });
@@ -567,7 +567,7 @@ describe('SwapSheet', () => {
     stubAccounts([acct({ wrapper: 'claude' }), acct({ wrapper: 'gpt', disabled: true })]);
     render(<SwapSheet session={{ id: 'demo', wrapper: 'claude', project: 'demo', home: 'claude' }}
                       open onClose={() => {}} fleet={storeWith([])} />);
-    expect(await screen.findByText('alt·max')).toBeInTheDocument();  // picker rendered
+    expect(await screen.findByText('team·alt')).toBeInTheDocument();  // picker rendered
     expect(screen.queryByText('gpt')).not.toBeInTheDocument();
   });
 
@@ -635,7 +635,7 @@ describe('SessionScreen overflow menu', () => {
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
     fireEvent.click(screen.getByRole('button', { name: 'Move to another account' }));
     // The swap sheet lists target accounts, current excluded.
-    expect(screen.getByRole('button', { name: /alt·max/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /team·alt/ })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /team·max/ })).not.toBeInTheDocument();
   });
 

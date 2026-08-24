@@ -40,7 +40,7 @@ beforeEach(() => {
   fs.mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
   const bin = path.join(home, '.local', 'bin');
   fs.mkdirSync(bin, { recursive: true });
-  for (const w of ['claude', 'claude2', 'claude-corp', 'gpt', 'claude-dev0']) {
+  for (const w of ['claude', 'claude-a', 'claude-b', 'gpt', 'claude-d']) {
     fs.writeFileSync(path.join(bin, w), '#!/bin/sh\n', { mode: 0o755 });
   }
 });
@@ -139,8 +139,8 @@ describe('projectHome ranks unmeasured below measured', () => {
     // The bug, in one line: before Task 6 this returned `{ wrapper: 'b',
     // score: 0 }` — b has no telemetry row at all, and `?? 0` made "nobody has
     // ever looked" indistinguishable from "measured empty". Confirmed against
-    // the live tree, where {claude:5, claude2:6, claude-corp:7} projected onto
-    // claude-dev0 at 0.
+    // the live tree, where {claude:5, 'claude-a':6, claude-b:7} projected onto
+    // claude-d at 0.
     expect(projectHome(r, { a: L(5, 5) })).toEqual({ wrapper: 'a', score: 5 });
   });
 

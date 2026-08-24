@@ -16,15 +16,15 @@ describe('readLimits', () => {
     mkdirSync(dir, { recursive: true });
     const now = 1784600000;
     writeFileSync(path.join(dir, 'claude.json'), JSON.stringify({ five: 42, seven: 61, ts: now - 60, fiveResetAt: now + 3600, sevenResetAt: now + 86400 }));
-    writeFileSync(path.join(dir, 'claude2.json'), JSON.stringify({ five: 99, seven: 80, ts: now - 20000 }));  // 5h window rolled
-    writeFileSync(path.join(dir, 'claude-corp.json'), JSON.stringify({ five: 94, seven: 94, ts: now - 700000 })); // both rolled
+    writeFileSync(path.join(dir, 'claude-a.json'), JSON.stringify({ five: 99, seven: 80, ts: now - 20000 }));  // 5h window rolled
+    writeFileSync(path.join(dir, 'claude-b.json'), JSON.stringify({ five: 94, seven: 94, ts: now - 700000 })); // both rolled
     writeFileSync(path.join(dir, 'gpt.json'), 'not json');
 
     const l = await readLimits(localIO, loadConfig({ CCRC_HOME: home }), now);
     expect(l['claude']).toEqual({ five: 42, seven: 61, ts: now - 60, fiveResetAt: now + 3600, sevenResetAt: now + 86400, fiveRolledOver: false, sevenRolledOver: false, disabled: false });
-    expect(l['claude2'].five).toBe(0);
-    expect(l['claude2'].seven).toBe(80);
-    expect(l['claude-corp']).toMatchObject({ five: 0, seven: 0 });
+    expect(l['claude-a'].five).toBe(0);
+    expect(l['claude-a'].seven).toBe(80);
+    expect(l['claude-b']).toMatchObject({ five: 0, seven: 0 });
     expect(l['gpt']).toEqual({ five: null, seven: null, ts: null, fiveResetAt: null, sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false, disabled: false });
   });
 });
@@ -100,15 +100,15 @@ describe('disabled lanes', () => {
 
 describe('disabled-marker backfill is bounded to known wrappers', () => {
   it('surfaces a known wrapper disabled before it ever wrote telemetry', async () => {
-    // No claude2.json at all — the loop over `.cc-limits/*.json` would never
-    // visit claude2, so this row exists only because the backfill added it.
+    // No claude-a.json at all — the loop over `.cc-limits/*.json` would never
+    // visit claude-a, so this row exists only because the backfill added it.
     const home = mkTmp('ccrc-');
     seedRoster(home);
     mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
-    writeFileSync(path.join(home, '.cc-sessions', 'claude2-disabled'), '');
+    writeFileSync(path.join(home, '.cc-sessions', 'claude-a-disabled'), '');
     const l = await readLimits(localIO, loadConfig({ CCRC_HOME: home }));
-    expect(l['claude2']).toEqual({
+    expect(l['claude-a']).toEqual({
       five: null, seven: null, ts: null, fiveResetAt: null, sevenResetAt: null,
       fiveRolledOver: false, sevenRolledOver: false, disabled: true,
     });

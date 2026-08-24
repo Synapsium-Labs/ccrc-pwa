@@ -182,11 +182,11 @@ describe('the callers M6 actually lied through', () => {
 
   it('ccd start does the same — and both still report success on a healthy spawn', () => {
     h.sh(`mkdir -p "$HOME/projects/demo" "$HOME/projects/demo2"`);
-    const bad = shFail(`${TMUX} rm -f "$HOME/pane-up"; CCD_IN_UNIT=1; cmd_start claude2 demo`,
+    const bad = shFail(`${TMUX} rm -f "$HOME/pane-up"; CCD_IN_UNIT=1; cmd_start claude-a demo`,
       { PANE_TEXT: '', SPAWN_MAKES_PANE: '0' });
     expect(bad.code).toBe(3);
-    expect(bad.stdout).not.toContain('started claude2-demo');
-    expect(bad.stderr).toContain('start failed for claude2-demo (spawn rc 3)');
+    expect(bad.stdout).not.toContain('started claude-a-demo');
+    expect(bad.stderr).toContain('start failed for claude-a-demo (spawn rc 3)');
     // Positive control: without it, "never print a success line" passes. A
     // FRESH id (demo2, not demo) — not a corrected "(resume)" string — because
     // pinning "(new)" against the SAME id would pin a state that cannot occur
@@ -196,20 +196,20 @@ describe('the callers M6 actually lied through', () => {
     // still-under-discussion "started stays 1 on failure" policy — decoupling
     // that later should not turn a correct fix into an apparent regression
     // here. A fresh project sidesteps both.
-    const good = h.sh(`${TMUX} rm -f "$HOME/pane-up"; CCD_IN_UNIT=1; cmd_start claude2 demo2`,
+    const good = h.sh(`${TMUX} rm -f "$HOME/pane-up"; CCD_IN_UNIT=1; cmd_start claude-a demo2`,
       { PANE_TEXT: '? for shortcuts' });
-    expect(good).toContain('started claude2-demo2 (new)');
+    expect(good).toContain('started claude-a-demo2 (new)');
   });
 
   it('ccd start treats rc 4 (window expired) the same as rc 3', () => {
     h.sh(`mkdir -p "$HOME/projects/demo4"`);
     const bad = shFail(
-      `${TMUX} rm -f "$HOME/pane-up"; SPAWN_GATE_TRIES=2; CCD_IN_UNIT=1; cmd_start claude2 demo4`,
+      `${TMUX} rm -f "$HOME/pane-up"; SPAWN_GATE_TRIES=2; CCD_IN_UNIT=1; cmd_start claude-a demo4`,
       { PANE_TEXT: 'a pane with nothing this function recognises' },
     );
     expect(bad.code).toBe(4);
-    expect(bad.stdout).not.toContain('started claude2-demo4');
-    expect(bad.stderr).toContain('start failed for claude2-demo4 (spawn rc 4)');
+    expect(bad.stdout).not.toContain('started claude-a-demo4');
+    expect(bad.stderr).toContain('start failed for claude-a-demo4 (spawn rc 4)');
   });
 });
 
@@ -240,15 +240,15 @@ describe('rc 5 survives the caller, not just the classifier', () => {
 
   it('ccd start exits 5, prints no success line, and names the rc on stderr', () => {
     h.sh(`mkdir -p "$HOME/projects/demo5"`);
-    const bad = shFail(`${TMUX} rm -f "$HOME/pane-up"; CCD_IN_UNIT=1; cmd_start claude2 demo5`,
+    const bad = shFail(`${TMUX} rm -f "$HOME/pane-up"; CCD_IN_UNIT=1; cmd_start claude-a demo5`,
       { PANE_TEXT: HARD_BLOCK });
     expect(bad.code).toBe(5);
-    expect(bad.stdout).not.toContain('started claude2-demo5');
-    expect(bad.stderr).toContain('start failed for claude2-demo5 (spawn rc 5)');
+    expect(bad.stdout).not.toContain('started claude-a-demo5');
+    expect(bad.stderr).toContain('start failed for claude-a-demo5 (spawn rc 5)');
     // The operator-facing half: rc 5 says waiting cannot fix it, so the message
     // must not read like rc 4's "try again".
     expect(bad.stderr).toContain('hard-blocked at startup');
-    expect(h.reg('claude2-demo5', 'spawn')).toMatch(/^\d{10} 5$/);
+    expect(h.reg('claude-a-demo5', 'spawn')).toMatch(/^\d{10} 5$/);
   });
 
   it('ccd ensure does the same — the second of the four sites', () => {

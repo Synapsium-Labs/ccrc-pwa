@@ -44,7 +44,6 @@ import { mkTmp } from './tmpHelpers.js';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ccrcRoot = path.resolve(here, '..', '..');
 const CLI = path.join(ccrcRoot, 'deploy', 'gen-accounts.mjs');
-const MIGRATION_ROSTER = path.join(ccrcRoot, 'server', 'test', 'fixtures', 'roster-five.json');
 
 /** Runs the CLI exactly as `deploy.sh` does: a bare `node`, one path argv,
  *  output on stdout. No tsx, no loader, no build — if this ever needs one,
@@ -149,20 +148,11 @@ const EXHAUSTED_HUE_ROSTER = {
   ],
 };
 
-// One of these ships and one does not, and the paths say which. `deploy/`
-// carries only the neutral single-account seed a fresh box gets; the
-// five-account roster is a TEST FIXTURE and lives with the tests, because
-// nothing installs it — it is here for the shapes a one-account roster cannot
-// exercise (generated execs, a secretsFile, a non-homeAble account, a label
-// that differs from its id).
-const ROSTERS = [
-  'deploy/accounts.default.json',
-  'server/test/fixtures/roster-five.json',
-] as const;
+const SHIPPED = ['accounts.default.json'] as const;
 
 describe('gen-accounts.mjs agrees with the TypeScript pipeline it cannot import', () => {
-  it.each(ROSTERS)('%s — parses and generates identically through both paths', (name) => {
-    const file = path.join(ccrcRoot, name);
+  it.each(SHIPPED)('%s — the roster this repo actually ships parses and generates identically', (name) => {
+    const file = path.join(ccrcRoot, 'deploy', name);
     const r = run([file]);
     expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
     // Read through the SAME file the CLI read, so this is a claim about the
@@ -172,7 +162,7 @@ describe('gen-accounts.mjs agrees with the TypeScript pipeline it cannot import'
   });
 
   it.each([
-    ["today's five production accounts", DEFAULT_TEST_ROSTER],
+    ["the five-account test default roster", DEFAULT_TEST_ROSTER],
     ['a roster with no explicit hues', HUELESS_ROSTER],
     ['a roster mixing explicit and auto-assigned hues', MIXED_HUE_ROSTER],
     ['seven hueless accounts against six hues', OVERFLOW_HUE_ROSTER],
@@ -191,35 +181,29 @@ describe('gen-accounts.mjs agrees with the TypeScript pipeline it cannot import'
     expect(lines[1]).toMatch(/^# ccrc:generated 1 sha256=[0-9a-f]{64}$/);
   });
 
-  // D-69: the fleet host's `claude-corp` wrapper sources
-  // `.cc-secrets/claude-corp-oauth.env`, but the shipped roster declared its
-  // `exec` as `{"kind":"generated"}` with no `secretsFile` at all — its two
-  // siblings (`claude2`, `claude-dev0`) both declare theirs correctly.
-  // `exec.secretsFile` has no runtime consumer today, which is why nothing
-  // noticed; the risk is the NEXT one — a wrapper generator reading this
-  // roster would write a `claude-corp` launcher with no auth line. Named to
-  // `claude-corp` specifically, not a blanket "every generated account must
-  // have one": `shared/roster.ts`'s `ExecSpec` docstring and `ccd/ccrc-adopt`
-  // both treat `secretsFile` as legitimately optional on a `generated`
-  // account (adopt emits `{"kind":"generated"}` with no `secretsFile` when
-  // the wrapper it inspected has no secrets line) — so a blanket assertion
-  // would be a false requirement, not a stronger guard.
-  it("claude-corp declares the secretsFile its wrapper has always sourced (D-69)", () => {
-    const roster = JSON.parse(readFileSync(MIGRATION_ROSTER, 'utf8'));
-    const corp = roster.accounts.find((a: any) => a.id === 'claude-corp');
-    expect(corp.exec.secretsFile).toBe('.cc-secrets/claude-corp-oauth.env');
-  });
+  // D-69's guard used to sit here: the shipped migration roster
+  // (`deploy/accounts.migration.json`) once declared its third generated
+  // account with no `secretsFile`, so a wrapper generator reading it would
+  // have written a launcher with no auth line, and a test pinned the
+  // corrected declaration against the committed file. That roster left the
+  // tree with the stage-5 de-brand (spec §5, D-202) — an operator's real
+  // roster is theirs, not this repo's — so the guard's subject is gone and
+  // the guard went with it. The general rule it deliberately did NOT assert
+  // still stands: `secretsFile` is legitimately optional on a `generated`
+  // account (`shared/roster.ts`'s `ExecSpec` docstring, `ccd/ccrc-adopt`),
+  // and `DEFAULT_TEST_ROSTER` keeps one such account (`claude-b`) so the
+  // no-secrets shape stays exercised everywhere the fixture is used.
 });
 
 describe('rosterFromJson is importable, and carries the fields the wrapper writer needs', () => {
   it('returns execKind and secretsFile per account', async () => {
     const { rosterFromJson } = await import('../../shared/roster-json.mjs');
-    const r = rosterFromJson(JSON.parse(readFileSync(MIGRATION_ROSTER, 'utf8')));
+    const r = rosterFromJson(DEFAULT_TEST_ROSTER);
     const byId = new Map(r.accounts.map((a) => [a.id, a]));
     expect(byId.get('claude')?.execKind).toBe('upstream');
     expect(byId.get('claude')?.secretsFile).toBeUndefined();
-    expect(byId.get('claude2')?.execKind).toBe('generated');
-    expect(byId.get('claude2')?.secretsFile).toBe('.cc-secrets/claude2-oauth.env');
+    expect(byId.get('claude-a')?.execKind).toBe('generated');
+    expect(byId.get('claude-a')?.secretsFile).toBe('.cc-secrets/claude-a-oauth.env');
     expect(byId.get('gpt')?.execKind).toBe('external');
     expect(r.upstreamId).toBe('claude');
   });

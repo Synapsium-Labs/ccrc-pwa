@@ -79,9 +79,9 @@ export function makePrHarness(prefix: string): PrHarness {
  *  `wrapper` field and comes through here — hardcoding `.claude` is right for
  *  exactly one of the four wrappers and silently wrong for the other three. */
 export const CFG_DIR: Record<string, string> = {
-  claude: '.claude', claude2: '.claude-personal',
-  'claude-corp': '.claude-corp', gpt: '.claude-gpt',
-  'claude-dev0': '.claude-dev0',
+  claude: '.claude', 'claude-a': '.claude-a',
+  'claude-b': '.claude-b', gpt: '.claude-gpt',
+  'claude-d': '.claude-d',
 };
 
 /** A gh row for a PR on `head`, merged into `base` by `mergeOid`, whose head

@@ -33,7 +33,7 @@ const EMPTY_TEXT = '{"message":{"content":[{"type":"text","text":""}]}}';
 const SWAP = 'systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; }; '
   + 'tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; }; sleep() { :; };';
 
-const runSwap = (target = 'claude-dev0'): string =>
+const runSwap = (target = 'claude-d'): string =>
   h.sh(`${SWAP} cmd_swap ${ID} ${target}`, { TMUX: '' });
 
 /** The registry row cmd_swap reads. Returns `mdir` — the munge of the resolved
@@ -65,7 +65,7 @@ const sidecar = (cfg: string, pdir: string, rel: string, body: string): string =
 
 /** A path inside the DESTINATION account's project dir. */
 const dstAt = (pdir: string, rel: string): string =>
-  path.join(h.home, '.claude-dev0', 'projects', pdir, rel);
+  path.join(h.home, '.claude-d', 'projects', pdir, rel);
 
 const swapLog = (): string => {
   const p = path.join(h.home, '.cc-sessions', 'swap.log');
@@ -79,11 +79,11 @@ describe('cmd_swap carries the transcript', () => {
     // completed anyway with a warning nobody read.
     const mdir = seed('claude');
     plant('.claude', '-w-quiet-mesa', 'HISTORY\n');
-    expect(runSwap()).toContain('swapped claude-demo: claude -> claude-dev0');
+    expect(runSwap()).toContain('swapped claude-demo: claude -> claude-d');
     expect(fs.readFileSync(dstAt('-w-quiet-mesa', `${UUID}.jsonl`), 'utf8')).toBe('HISTORY\n');
     // …and the slot the resumed process reads first is covered too.
     expect(fs.readFileSync(dstAt(mdir, `${UUID}.jsonl`), 'utf8')).toBe('HISTORY\n');
-    expect(h.reg(ID, 'wrapper')).toBe('claude-dev0');
+    expect(h.reg(ID, 'wrapper')).toBe('claude-d');
   });
 
   it('a gpt -> Anthropic swap sanitizes the copy, and every carried name IS that file', () => {
@@ -161,7 +161,7 @@ describe('cmd_swap carries the sidecars', () => {
     const mdir = seed('claude');
     plant('.claude', mdir, 'HISTORY\n');
     sidecar('.claude', mdir, 'tool-results/r.json', 'SOURCE\n');
-    sidecar('.claude-dev0', mdir, 'tool-results/r.json', 'ALREADY THERE\n');
+    sidecar('.claude-d', mdir, 'tool-results/r.json', 'ALREADY THERE\n');
     runSwap();
     expect(fs.readFileSync(dstAt(mdir, path.join(UUID, 'tool-results/r.json')), 'utf8'))
       .toBe('ALREADY THERE\n');
@@ -182,7 +182,7 @@ describe('cmd_swap carries the sidecars', () => {
     plant('.claude', mdir, 'HISTORY\n');
     sidecar('.claude', mdir, 'tool-results/r.json', 'RESULT\n');
     const CP_STUB = 'cp() { if [[ "$1" == "-al" ]]; then mkdir -p "$3"; return 1; fi; command cp "$@"; };';
-    h.sh(`${SWAP} ${CP_STUB} cmd_swap ${ID} claude-dev0`, { TMUX: '' });
+    h.sh(`${SWAP} ${CP_STUB} cmd_swap ${ID} claude-d`, { TMUX: '' });
     const real = dstAt(mdir, path.join(UUID, 'tool-results/r.json'));
     expect(fs.existsSync(real), 'the file must land at the real mirrored path, not nested').toBe(true);
     expect(fs.readFileSync(real, 'utf8')).toBe('RESULT\n');
@@ -202,7 +202,7 @@ describe('cmd_swap keeps carrying the task list', () => {
     fs.mkdirSync(tasks, { recursive: true });
     fs.writeFileSync(path.join(tasks, 'plan.json'), 'PLAN\n');
     runSwap();
-    expect(fs.readFileSync(path.join(h.home, '.claude-dev0', 'tasks', UUID, 'plan.json'), 'utf8'))
+    expect(fs.readFileSync(path.join(h.home, '.claude-d', 'tasks', UUID, 'plan.json'), 'utf8'))
       .toBe('PLAN\n');
     expect(fs.readFileSync(path.join(tasks, 'plan.json'), 'utf8'),
       'copy, don\'t move: a reverted swap still needs the old lane\'s copy').toBe('PLAN\n');
@@ -247,7 +247,7 @@ describe('the detached self-swap answers for its own dispatch', () => {
 
   const selfSwap = (runRc: number): { code: number; stdout: string; stderr: string } => {
     try {
-      return { code: 0, stdout: h.sh(`${SELF(runRc)} cmd_swap ${ID} claude-dev0`, { TMUX: '/tmp/x,1,0' }), stderr: '' };
+      return { code: 0, stdout: h.sh(`${SELF(runRc)} cmd_swap ${ID} claude-d`, { TMUX: '/tmp/x,1,0' }), stderr: '' };
     } catch (e) {
       const err = e as { status?: number; stdout?: Buffer; stderr?: Buffer };
       return { code: err.status ?? 1, stdout: String(err.stdout ?? ''), stderr: String(err.stderr ?? '') };
@@ -261,7 +261,7 @@ describe('the detached self-swap answers for its own dispatch', () => {
     expect(r.code).not.toBe(0);
     expect(r.stdout, 'a failed dispatch printed the success line').not.toContain('detached:');
     expect(r.stderr).toContain(`could not detach the swap of ${ID}`);
-    expect(swapLog()).toContain(`detach FAILED for ${ID}: claude -> claude-dev0`);
+    expect(swapLog()).toContain(`detach FAILED for ${ID}: claude -> claude-d`);
     // Nothing was torn down and nothing moved — the session is untouched, which
     // is why this arm reports through an rc instead of through `swapblocked`.
     expect(h.calls().some((c) => c.includes('kill-session'))).toBe(false);
@@ -277,7 +277,7 @@ describe('the detached self-swap answers for its own dispatch', () => {
     plant('.claude', mdir, 'HISTORY\n');
     const r = selfSwap(0);
     expect(r.code).toBe(0);
-    expect(r.stdout).toContain(`detached: ${ID} will restart under claude-dev0`);
+    expect(r.stdout).toContain(`detached: ${ID} will restart under claude-d`);
     expect(swapLog()).not.toContain('detach FAILED');
   });
 });
@@ -310,7 +310,7 @@ describe('the swap heartbeats WHILE it carries, not just around the carry', () =
       ( command sleep 2; _reg_get ${ID} supervised > "$HOME/beat-a"
         command sleep 3; _reg_get ${ID} supervised > "$HOME/beat-b" ) &
       sampler=$!
-      cmd_swap ${ID} claude-dev0 >/dev/null
+      cmd_swap ${ID} claude-d >/dev/null
       wait $sampler
       done=$(_reg_get ${ID} supervised)
       command sleep 3
@@ -404,7 +404,7 @@ describe('the swap heartbeats WHILE it carries, not just around the carry', () =
     // an operator, and a heartbeat under it would say "something is watching
     // this" for the next two hours.
     const out = h.sh(`${BEAT_ALIVE} cp() { return 1; }
-      cmd_swap ${ID} claude-dev0 >/dev/null 2>&1; rc=$?
+      cmd_swap ${ID} claude-d >/dev/null 2>&1; rc=$?
       echo "rc=$rc stampers_left=$(jobs -pr | wc -l)"
       jobs -pr | xargs -r kill -9 2>/dev/null; true`, { TMUX: '' });
     expect(out).toBe('rc=1 stampers_left=0');

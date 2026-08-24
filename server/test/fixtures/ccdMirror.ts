@@ -1,7 +1,7 @@
-// The five production accounts as ccd's BASH still hard-codes them today —
-// DERIVED from `DEFAULT_TEST_ROSTER` (server/test/helpers.ts) for every field
-// that roster already carries, plus a small side table for the three concepts
-// ccd has and the roster does not.
+// The five test-roster accounts as ccd's BASH answers for them — DERIVED
+// from `DEFAULT_TEST_ROSTER` (server/test/helpers.ts) for every field that
+// roster already carries, plus a small side table for the concepts ccd has
+// and the roster does not.
 //
 // ON ITS LAST READER, BUT STAYING — an earlier version of this comment said
 // Task 9 would delete it outright once its last reader grew a round-trip.
@@ -22,14 +22,14 @@
 // replace those four. `label` has no substitute anywhere: it is ccd's
 // human-facing display string, and the test roster does not carry it — four of
 // its five accounts label themselves with their own id, and the remaining one
-// (`claude2`) carries a real label purely so the wire assertion in
+// (`claude-b`) carries a display label purely so the wire assertion in
 // `accounts-route.test.ts` can tell `label` from `id`; see `CCD_SIDE` below —
 // and `wrapper-roster-fixture.test.ts`'s
 // statusline describe still needs it. This file goes only when something
-// else supplies BOTH of those — most likely Task 10's real
-// `server/test/fixtures/roster-five.json` carrying real labels, at which point the
-// four completeness describes and the statusline describe can probably read
-// it directly and this hand-derived side table stops earning its keep.
+// else supplies BOTH of those — a shipped roster carrying display labels for
+// every account, at which point the four completeness describes and the
+// statusline describe can probably read it directly and this hand-derived
+// side table stops earning its keep.
 //
 // WHY IT IS DERIVED AND NOT WRITTEN OUT. The first version of this file
 // restated the ids, config-dir suffixes and home-able flags that
@@ -86,10 +86,10 @@ export interface CcdMirrorAccount {
  *  files, which is the failure mode a fixture like this has. */
 const CCD_SIDE: Record<string, { label: string; ccdValid: boolean }> = {
   claude: { label: 'team·max', ccdValid: true },
-  claude2: { label: 'alt·max', ccdValid: true },
-  'claude-corp': { label: 'team·shared', ccdValid: true },
+  'claude-a': { label: 'team·alt', ccdValid: true },
+  'claude-b': { label: 'team·b', ccdValid: true },
   gpt: { label: 'gpt', ccdValid: true },
-  'claude-dev0': { label: 'lab·dev0', ccdValid: true },
+  'claude-d': { label: 'team·d', ccdValid: true },
 };
 
 function buildMirror(): Record<string, CcdMirrorAccount> {
