@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=ef51df6bdd3a7403de7d87993c2ef1697f038123fcbabddb9e98c3795612b31f
+# ccrc:generated 1 sha256=c6695147c2e1987d98a801ec3e332bffe53192ba279292862d205bf774a06ad7
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box, not on this file: `_rc_enabled` reads
@@ -5193,6 +5193,60 @@ _ws_sensitive_noise() {   # path -> 0 when a secret-shaped name is vendored/temp
   return 1
 }
 
+# THE PACKAGE-MANAGER EXEMPTION, and it is this guard's OWN DEFINITION applied
+# rather than a softening of it. The guard refuses on names that are
+# secret-shaped, in no commit, and CANNOT BE RECOVERED -- and that third clause
+# is simply false inside an installed dependency tree. Every byte of
+# `site-packages` comes back from `requirements.txt`, every byte of
+# `node_modules` from the lockfile. A reinstallable file is not an
+# unrecoverable secret, so refusing on one protects nothing and costs the
+# operator the whole workspace.
+#
+# WHY F3's EXTENSION FILTER STRUCTURALLY CANNOT REACH THESE. `_ws_sensitive_noise`
+# drops a match whose basename ends in a source/compiled/template extension,
+# which cannot catch either shape a real venv produces: certifi's `cacert.pem`
+# -- a PUBLIC CA trust bundle, shipped identically in every install -- ends in
+# `.pem`, the very suffix that flagged it, and botocore's `data/secretsmanager`
+# is an API-model DIRECTORY with no extension at all. Measured on one 557 MB
+# `.venv`: four hits, all four under `site-packages`, refusing a section 7
+# no-override guard with nothing an operator could pass to get past it. F3's own
+# note records 4 of 15 projects still refusing after the extension pass -- this
+# is that residue, and no length of extension list reaches it.
+#
+# NARROW AND ENUMERATED, the same discipline `_WS_SENSITIVE_NOISE_EXT` states:
+# only segments that are unambiguously a package manager's install root.
+# `vendor` is DELIBERATELY ABSENT -- Go and composer both use it, but so does
+# any project that simply has a folder of that name, and on doubt a name stays
+# sensitive.
+#
+# Matched as a PATH SEGMENT, never a substring: the operand is padded to
+# `/a/b/c/` and tested for `*/site-packages/*`, so a directory called
+# `my-site-packages-notes` holding a real `deploy.pem` is untouched.
+#
+# COUNTED, NEVER SILENCED. Both call sites route this through the same
+# `REAP_SENSITIVE_FILTERED` arm F3 uses, so an over-broad segment shows up in
+# `ccd ws-audit` output instead of becoming a silent hole.
+_WS_VENDOR_SEGMENTS=( site-packages dist-packages node_modules )
+
+_ws_sensitive_vendored() {   # path -> 0 when it sits INSIDE a package-manager tree
+  # THE DIRECTORY CHAIN, NOT THE WHOLE PATH. `inside a tree` is the claim, so
+  # the final component is dropped before the test: a path that merely IS a
+  # segment (`node_modules`, `site-packages`) is not inside one, and a bare
+  # name has no chain at all. Unreachable via the two live call sites today --
+  # neither segment name matches _WS_SENSITIVE_GLOBS, so the filter is never
+  # asked about them -- but this helper states a property, and the prune
+  # follow-up in the inside-scan would consume it directly.
+  local d="${1%/}" seg
+  case "$d" in
+    */*) d="/${d%/*}/" ;;
+    *)   d="/" ;;
+  esac
+  for seg in "${_WS_VENDOR_SEGMENTS[@]}"; do
+    [[ "$d" == *"/$seg/"* ]] && return 0
+  done
+  return 1
+}
+
 # ── D1: the nested-checkout guard ──────────────────────────────────────────
 # A registered child, a plain `git init`, a clone, a linked-worktree pointer
 # file: every one of them is a `.git` entry at depth ≥ 2. `git worktree list`
@@ -5678,7 +5732,7 @@ _ws_collect_ignored() {   # workdir — fills REAP_IGNORED (`sensitive\tbytes\tp
       # NOISE is counted, not silenced: `_ws_sensitive_noise` is the F3
       # refinement (see its own comment) and every name it drops still moves
       # `REAP_SENSITIVE_FILTERED`, so "excluded" never means "invisible".
-      if _ws_sensitive_noise "$p"; then
+      if _ws_sensitive_noise "$p" || _ws_sensitive_vendored "$p"; then
         REAP_SENSITIVE_FILTERED=$(( REAP_SENSITIVE_FILTERED + 1 ))
       else
         sens=1; REAP_SENSITIVE+=("$p")
@@ -5697,7 +5751,7 @@ _ws_collect_ignored() {   # workdir — fills REAP_IGNORED (`sensitive\tbytes\tp
       # directory can hold both a generated `.js.map` (noise) and a real
       # `.env` (not), and the entry must read sensitive on the second alone.
       for ih in "${_WS_INSIDE_HITS[@]}"; do
-        if _ws_sensitive_noise "$ih"; then
+        if _ws_sensitive_noise "$ih" || _ws_sensitive_vendored "$ih"; then
           REAP_SENSITIVE_FILTERED=$(( REAP_SENSITIVE_FILTERED + 1 ))
         else
           sens=1; REAP_SENSITIVE+=("$ih")

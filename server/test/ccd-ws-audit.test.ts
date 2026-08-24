@@ -857,6 +857,73 @@ describe('local-loss refusals', () => {
     expect(a.sensitiveFiltered).toBe(4);
   });
 
+  // THE PACKAGE-MANAGER EXEMPTION (`_ws_sensitive_vendored`). F3's extension
+  // filter is STRUCTURALLY unable to reach the two shapes a real dependency
+  // tree produces, and this is the residue F3's own note counts: 4 of 15
+  // projects still refusing after it. certifi ships `cacert.pem` -- a PUBLIC
+  // CA trust bundle -- whose `.pem` IS the suffix that flagged it, and botocore
+  // ships an API-model DIRECTORY literally called `secretsmanager`. Neither
+  // ends in a source/compiled/template extension, so no length of
+  // `_WS_SENSITIVE_NOISE_EXT` reaches them. The exemption is justified by the
+  // guard's own premise instead: a `site-packages` file is reinstallable from
+  // `requirements.txt`, so "cannot be recovered" is false for it.
+  it('filters secret-shaped names inside a package-manager tree, but a real secret beside it still refuses', () => {
+    const { wt } = squashMovedBase(['.venv/']);
+    const sp = path.join(wt, '.venv', 'lib', 'python3.12', 'site-packages');
+    fs.mkdirSync(path.join(sp, 'certifi'), { recursive: true });
+    fs.mkdirSync(path.join(sp, 'botocore', 'data', 'secretsmanager'), { recursive: true });
+    fs.writeFileSync(path.join(sp, 'certifi', 'cacert.pem'), 'CA\n');
+    fs.writeFileSync(path.join(sp, 'botocore', 'cacert.pem'), 'CA\n');
+    // The real secret sits in the SAME collapsed entry, one level ABOVE the
+    // package tree: the exemption is scoped to the tree, never to the entry
+    // that happens to contain one.
+    fs.writeFileSync(path.join(wt, '.venv', '.env'), 'SECRET_API_KEY=1\n');
+    const a = refusal(wt);
+    expect(a.verdict).toBe('sensitive-ignored');
+    expect(a.sensitive).toEqual(['.venv/.env']);
+    // 2 x cacert.pem plus the extensionless `secretsmanager` DIRECTORY, which
+    // `-name 'secrets*'` matches exactly as it matches a file.
+    expect(a.sensitiveFiltered).toBe(3);
+  });
+
+  // The case that motivated the exemption, end to end: a venv as the only
+  // ignored entry read `sensitive-ignored` on a section 7 no-override guard,
+  // so the workspace could not be reaped at all and there was nothing to pass.
+  it('reads reapable when a venv is the only ignored entry', () => {
+    const { wt } = squashMovedBase(['.venv/']);
+    const sp = path.join(wt, '.venv', 'lib', 'python3.12', 'site-packages');
+    fs.mkdirSync(path.join(sp, 'pip', '_vendor', 'certifi'), { recursive: true });
+    fs.mkdirSync(path.join(sp, 'botocore', 'data', 'secretsmanager'), { recursive: true });
+    fs.writeFileSync(path.join(sp, 'pip', '_vendor', 'certifi', 'cacert.pem'), 'CA\n');
+    fs.writeFileSync(path.join(sp, 'botocore', 'cacert.pem'), 'CA\n');
+    expect(fs.existsSync(wt)).toBe(true);
+    const a = audit();
+    expect(a.verdict).toBe('reapable');
+    expect(a.token).toMatch(/^[0-9a-f]{64}$/);
+    expect(a.sensitive).toEqual([]);
+    expect(a.sensitiveFiltered).toBe(3);
+  });
+
+  // THE NARROWNESS IS THE GUARD. `vendor` is a package root for Go and for
+  // composer AND an ordinary folder name everywhere else, so it is deliberately
+  // NOT in `_WS_VENDOR_SEGMENTS`; and the test is a path SEGMENT rather than a
+  // substring, so a directory whose name merely CONTAINS one is not a package
+  // tree either. Both would be silent holes in a section 7 guard.
+  it('does not exempt a generic `vendor` dir, nor a name that merely contains a segment', () => {
+    const { wt } = squashMovedBase(['build/']);
+    fs.mkdirSync(path.join(wt, 'build', 'vendor'), { recursive: true });
+    fs.mkdirSync(path.join(wt, 'build', 'my-site-packages-notes'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'build', 'vendor', 'deploy.pem'), 'KEY\n');
+    fs.writeFileSync(path.join(wt, 'build', 'my-site-packages-notes', 'prod.pem'), 'KEY\n');
+    const a = refusal(wt);
+    expect(a.verdict).toBe('sensitive-ignored');
+    expect([...a.sensitive].sort()).toEqual([
+      'build/my-site-packages-notes/prod.pem',
+      'build/vendor/deploy.pem',
+    ]);
+    expect(a.sensitiveFiltered).toBe(0);
+  });
+
   it('filters a top-level .env.example as noise while a real top-level .env still refuses — and both stay LISTED', () => {
     const { wt } = squashMovedBase(['.env.example', '.env']);
     fs.writeFileSync(path.join(wt, '.env.example'), 'KEY=\n');
