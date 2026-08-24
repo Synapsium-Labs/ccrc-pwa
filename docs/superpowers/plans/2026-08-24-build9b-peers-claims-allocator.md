@@ -8472,7 +8472,7 @@ measure that mutant explicitly.
 
 **Steps:**
 
-- [ ] **Write the failing test edits first.** In `server/test/coordinator-skill.test.ts`,
+- [x] **Write the failing test edits first.** In `server/test/coordinator-skill.test.ts`,
   make five edits. (1) Line 33, `allSkillText` gains the new reference:
 
   ```ts
@@ -8564,7 +8564,7 @@ measure that mutant explicitly.
   });
   ```
 
-- [ ] **Reconcile the `EXEMPT` set to its final four members.** Wave 7's route tasks kept
+- [x] **Reconcile the `EXEMPT` set to its final four members.** Wave 7's route tasks kept
   the parity suite green at their own commits (either by naming the new routes in
   `wave-lifecycle.md`, the 9a Task-38 precedent, or by parking bridge entries in
   `EXEMPT` marked `BRIDGE`). Run `grep -n "BRIDGE\|/api/claims\|/api/peers\|/api/ledger"
@@ -8590,13 +8590,13 @@ measure that mutant explicitly.
   `peer-protocol.md`, which is the real fix. If the set still reads
   `new Set(['undeliverable'])`, it is already correct; leave it.
 
-- [ ] **Run, expect FAIL.** `cd server && ./node_modules/.bin/vitest run
+- [x] **Run, expect FAIL.** `cd server && ./node_modules/.bin/vitest run
   test/coordinator-skill.test.ts` (foreground, timeout ≥600000). Expected reds, all from
   the edits above: `refs('peer-protocol.md')` throws `ENOENT` at module load (the file
   does not exist yet) — the whole suite errors, which is the honest red for a corpus file
   that is not there.
 
-- [ ] **Append clause 10 to `ccd/coordinator-skill/SKILL.md`.** Two edits. At line 52,
+- [x] **Append clause 10 to `ccd/coordinator-skill/SKILL.md`.** Two edits. At line 52,
   change `These nine sentences are the boundary` to `These ten sentences are the
   boundary`. After the clause-9 line (line 63), append (CURLY apostrophes — `program’s`,
   `session’s`):
@@ -8605,7 +8605,7 @@ measure that mutant explicitly.
   10. This session allocates the program’s deviation block once, at run-open — `POST /api/ledger/deviations` — and names the block in every brief; a worker never calls the allocator mid-wave. Before splitting a wave across workers it reads `GET /api/claims?project=<project>`, and a wave that dispatches two workers onto overlapping claims is a defect in this session’s ledger, not in the workers.
   ```
 
-- [ ] **Write `ccd/coordinator-skill/references/peer-protocol.md`** — complete content
+- [x] **Write `ccd/coordinator-skill/references/peer-protocol.md`** — complete content
   (note: every `GET /api/…` / `POST /api/…` token in prose below is a registered route,
   spelled fastify-style with `:id`; the curl URLs use shell variables so the harvest
   regex never sees a half-path; the five destructive verbs appear nowhere in this file,
@@ -8752,31 +8752,31 @@ measure that mutant explicitly.
   allocator exists to delete.
   ```
 
-- [ ] **Run, expect PASS.** `cd server && ./node_modules/.bin/vitest run
+- [x] **Run, expect PASS.** `cd server && ./node_modules/.bin/vitest run
   test/coordinator-skill.test.ts` — all green, including the pre-existing parity tests:
   `names no route the server does not register` (every route the new corpus names is
   registered by wave 7) and `names every coordinator-domain route the server registers`
   (the six namable new routes are all named; `EXEMPT` covers the seventh).
 
-- [ ] **Mutation 1 — delete the clause.** Remove the clause-10 line from
+- [x] **Mutation 1 — delete the clause.** Remove the clause-10 line from
   `ccd/coordinator-skill/SKILL.md`. Run the suite: expect exactly 1 red
   (`carries all ten clauses verbatim`, "missing contract clause: This session allocates
   the program’s…"). Restore the line.
 
-- [ ] **Mutation 2 — the apostrophe byte.** In SKILL.md's clause 10 replace `program’s`
+- [x] **Mutation 2 — the apostrophe byte.** In SKILL.md's clause 10 replace `program’s`
   with `program's` (straight). Run: expect the same 1 red — a paraphrase fails exactly as
   a deletion does, D-104's constraint measured. Restore.
 
-- [ ] **Mutation 3 — the curl footgun.** In `peer-protocol.md`, change the first shape's
+- [x] **Mutation 3 — the curl footgun.** In `peer-protocol.md`, change the first shape's
   `curl -sS` to `curl -fsS`. Run: expect 1 red (`teaches the capture idiom and never
   curl -f`). Restore.
 
-- [ ] **Run the neighbours the corpus edit could touch.** `cd server &&
+- [x] **Run the neighbours the corpus edit could touch.** `cd server &&
   ./node_modules/.bin/vitest run test/coordinator-skill.test.ts test/worker-skill.test.ts
   test/wsaudit.test.ts` — all green, `wsaudit.test.ts` with no edit (its own standing
   assertion).
 
-- [ ] **Commit.**
+- [x] **Commit.**
 
   ```bash
   git add ccd/coordinator-skill/SKILL.md ccd/coordinator-skill/references/peer-protocol.md server/test/coordinator-skill.test.ts

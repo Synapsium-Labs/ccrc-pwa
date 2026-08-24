@@ -1,6 +1,6 @@
 // The coordinator skill is prose a model follows unsupervised against a fleet
 // it can destroy. These are the properties a review cannot hold in place:
-// nine contract clauses, the routes it names, the refusal codes it promises,
+// ten contract clauses, the routes it names, the refusal codes it promises,
 // the envelope it quotes and the template it ships. `wsaudit.test.ts` already
 // established the idiom — harvest tokens out of a source and require the
 // copy to match it in both directions.
@@ -30,7 +30,7 @@ const skillDir = path.join(root, 'ccd/coordinator-skill');
 const skill = readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8');
 const refs = (name: string): string =>
   readFileSync(path.join(skillDir, 'references', name), 'utf8');
-const allSkillText = [skill, refs('wave-lifecycle.md'), refs('mail-envelope.md')].join('\n');
+const allSkillText = [skill, refs('wave-lifecycle.md'), refs('mail-envelope.md'), refs('peer-protocol.md')].join('\n');
 /** SKILL.md + wave-lifecycle.md ONLY — the route-linkage scan's own corpus,
  *  deliberately excluding `mail-envelope.md`. That file's only route-shaped
  *  text is the worked example's `ack: POST /api/mail/<id>/ack` line, and the
@@ -40,8 +40,12 @@ const allSkillText = [skill, refs('wave-lifecycle.md'), refs('mail-envelope.md')
  *  worked example naming a destructive verb would be exactly as licensing as
  *  prose naming one), pulling it OUT of just the route harvest so a real
  *  numeric id never reads as a route this skill "names" and fails the
- *  literal-match check no server route can ever satisfy. */
-const routeSkillText = [skill, refs('wave-lifecycle.md')].join('\n');
+ *  literal-match check no server route can ever satisfy.
+ *  `peer-protocol.md` (Build 9 wave 8) IS in this corpus: its curl shapes
+ *  and headings name real registered routes, so both parity directions
+ *  cover it — the reference cannot name a ghost route, and the routes it
+ *  is the documented home for cannot silently lose their one mention. */
+const routeSkillText = [skill, refs('wave-lifecycle.md'), refs('peer-protocol.md')].join('\n');
 
 /** Every .ts under server/src, read once — the linkage test's corpus. */
 const serverSources = (): string => {
@@ -57,7 +61,7 @@ const serverSources = (): string => {
   return out.join('\n');
 };
 
-// The nine clauses, verbatim. Kept as a literal array rather than a regex per
+// The ten clauses, verbatim. Kept as a literal array rather than a regex per
 // clause: the point is that the SENTENCE is the contract, so a paraphrase must
 // fail exactly as a deletion does.
 //
@@ -79,10 +83,11 @@ const CONTRACT = [
   'This session does not poll in a loop. After a dispatch it ends its turn; mail wakes it.',
   'One coordinator per program. If `POST /api/runs` answers `claimed-by-another`, stop — another coordinator owns this program.',
   'This session never sends `/clear` to a worker directly, by any route, at any wave. `POST /api/runs/:id/dispatch` is the one writer of that step.',
+  'This session allocates the program’s deviation block once, at run-open — `POST /api/ledger/deviations` — and names the block in every brief; a worker never calls the allocator mid-wave. Before splitting a wave across workers it reads `GET /api/claims?project=<project>`, and a wave that dispatches two workers onto overlapping claims is a defect in this session’s ledger, not in the workers.',
 ];
 
 describe('the coordinator skill: its contract', () => {
-  it('carries all nine clauses verbatim', () => {
+  it('carries all ten clauses verbatim', () => {
     for (const clause of CONTRACT) {
       expect(skill, `missing contract clause: ${clause.slice(0, 48)}…`).toContain(clause);
     }
@@ -267,17 +272,12 @@ describe('the coordinator skill: linkage', () => {
     // entirely, by `MailRejectCode`'s own docstring) that only ever shows up
     // as a `MailSummary.state`/`rejectCode` value, never as a refusal a
     // coordinator's own API call receives — nothing in the skill's protocol
-    // needs to name it as a call outcome.
-    //
-    // 'duplicate' and 'peer-quota' are a WAVE-0 BRIDGE (Build 9b): check 9
-    // (`routes.ts`) fences both behind `runId === null`, and every mail call
-    // this corpus teaches carries a runId — so until wave 8 lands the peer
-    // lane in the skills, neither is an outcome a coordinator's own call can
-    // receive. Their documented home is wave 8's `peer-protocol.md`; the
-    // Task 25 executor DELETES both entries in the same commit that creates
-    // that reference, and its foot-of-file describe re-pins them as declared.
+    // needs to name it as a call outcome. ('duplicate' and 'peer-quota' were
+    // parked here as a wave-0 bridge; wave 8's `peer-protocol.md` is their
+    // documented home, so the census now finds them in the corpus — the
+    // foot-of-file describe re-pins both as declared.)
     const NOT_A_CALL_REFUSAL: ReadonlySet<string> =
-      new Set(['undeliverable', 'duplicate', 'peer-quota']);
+      new Set(['undeliverable']);
     for (const code of MAIL_REJECT_CODES) {
       if (NOT_A_CALL_REFUSAL.has(code)) continue;
       expect(allSkillText, `${code} is a real MailRejectCode but is named nowhere in the skill`)
@@ -739,6 +739,7 @@ describe('the server address is config, never a literal (operator ruling 2026-08
     ['wave-lifecycle.md', refs('wave-lifecycle.md')],
     ['mail-envelope.md', refs('mail-envelope.md')],
     ['ledger-template.md', refs('ledger-template.md')],
+    ['peer-protocol.md', refs('peer-protocol.md')],
   ];
 
   it('no skill file carries a numeric server-host literal', () => {
@@ -757,5 +758,65 @@ describe('the server address is config, never a literal (operator ruling 2026-08
       expect(text, `${name} SKILL.md must say an empty derivation is a stop, not a guess`)
         .toMatch(/empty[^.]*stop|stop[^.]*empty/i);
     }
+  });
+});
+
+// ── Build 9 wave 8: the peer protocol (spec D9-D13, D17) ───────────────────
+//
+// The FIRST copy of the etiquette rides the route response itself
+// (`PEER_ETIQUETTE`, L0) — D-107's lesson: a skill reaches a config dir only
+// once its installer has run there. This reference is the long form, and
+// these pins hold the parts a coordinator or worker will actually act on:
+// the capture idiom, the 409-as-address reading, and losing a race.
+describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
+  const pp = (): string => refs('peer-protocol.md');
+
+  it('teaches the capture idiom and never curl -f', () => {
+    // Same rule SKILL.md's own "How to call the API" states: `-f` throws the
+    // response body away, and the body is the whole protocol — the 409 this
+    // file exists to teach the reading of arrives as a 4xx JSON body.
+    expect(pp()).toContain("-w '\\n%{http_code}'");
+    expect(pp()).not.toMatch(/curl -f/);
+  });
+
+  it('carries no second copy of the token pipeline or the address derivation', () => {
+    // Single definition: both live in SKILL.md's "How to call the API" and
+    // are pinned there against notify.sh/extractToken. A third copy here is
+    // a third thing to rot; the reference points instead.
+    expect(pp()).toContain('How to call the API');
+    expect(pp()).not.toContain('CCRC_SERVER_URL');
+    expect(pp()).not.toContain("grep -v '^[[:space:]]*#'");
+  });
+
+  it('reads the 409 as an address — every conflicting path, the intent, the mailHint', () => {
+    expect(pp()).toContain('mailHint');
+    expect(pp()).toContain('EVERY conflicting path');
+    expect(pp()).toMatch(/ADDRESS, not a rejection slip/);
+  });
+
+  it('teaches losing a race as the mechanism working, with the uncontested-paths step', () => {
+    expect(pp()).toContain('Losing a race is the mechanism working');
+    expect(pp()).toMatch(/uncontested/);
+    expect(pp()).toContain('Never edit the contested path anyway');
+  });
+
+  it('explains the two peer-lane mail codes the census requires', () => {
+    // `mentions every declared MailRejectCode` above iterates the L0 list —
+    // once wave 1 added `duplicate`/`peer-quota`, THIS file became their
+    // documented home (they are peer-lane codes; the coordinator's own mail
+    // always carries a runId and never meets either).
+    for (const code of ['duplicate', 'peer-quota'] as const) {
+      expect((MAIL_REJECT_CODES as readonly string[]).includes(code),
+        `${code} should be a declared MailRejectCode since wave 1`).toBe(true);
+      expect(pp()).toContain(code);
+    }
+  });
+
+  it('never names the break door — a door the claimant is not the one to walk through', () => {
+    // D16's accounting: `POST /api/claims/:id/break` is EXEMPT (the
+    // `/api/runs/:id/abandon` shape) and stays unnamed in EVERY corpus file.
+    // EXEMPT alone only permits the omission; this is what FORBIDS the
+    // mention.
+    expect(allSkillText).not.toContain('/api/claims/:id/break');
   });
 });
