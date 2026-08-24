@@ -2278,7 +2278,7 @@ single home on `claims.state`.
 
 **Steps:**
 
-- [ ] 1. Write the failing test, `server/test/claims.test.ts`:
+- [x] 1. Write the failing test, `server/test/claims.test.ts`:
 
   ```ts
   // Wave 7's pure half of the claim: the decision, with no database in the
@@ -2441,11 +2441,11 @@ single home on `claims.state`.
   });
   ```
 
-- [ ] 2. Run it, expect FAIL with
+- [x] 2. Run it, expect FAIL with
   `Error: Failed to load ../src/coord/claims.js` (the module does not exist):
   `cd server && ./node_modules/.bin/vitest run test/claims.test.ts`
 
-- [ ] 3. Write the implementation, `server/src/coord/claims.ts`:
+- [x] 3. Write the implementation, `server/src/coord/claims.ts`:
 
   ```ts
   import { CLAIM_LEASE_MS, type ClaimConflict, type PeerDeliverable } from '../../../shared/api.js';
@@ -2640,12 +2640,12 @@ single home on `claims.state`.
   }
   ```
 
-- [ ] 4. Run, expect PASS: `./node_modules/.bin/vitest run test/claims.test.ts`.
+- [x] 4. Run, expect PASS: `./node_modules/.bin/vitest run test/claims.test.ts`.
 
-- [ ] 5. Run the ring scan, which must stay green with no edit:
+- [x] 5. Run the ring scan, which must stay green with no edit:
   `./node_modules/.bin/vitest run test/single-definition.test.ts test/typecheck-tests.test.ts`.
 
-- [ ] 6. Commit:
+- [x] 6. Commit:
 
   ```bash
   cd server && git add src/coord/claims.ts test/claims.test.ts
