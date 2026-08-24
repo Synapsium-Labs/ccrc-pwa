@@ -3106,6 +3106,43 @@ export function isRunRefuseCode(v: unknown): v is RunRefuseCode {
   return typeof v === 'string' && (RUN_REFUSE_CODES as readonly string[]).includes(v);
 }
 
+/**
+ * Build 9's synchronous coordination refusals — the peers/claims/ledger routes'
+ * own vocabulary (`coord/routes.ts`), a FIFTH union through
+ * `mail-routes.test.ts`'s kebab scanner, checked together with the other four
+ * and never merged: a claim refusal is not a mail rejection (nothing is
+ * recorded or replayed — the 4xx lands in the live caller's hand,
+ * synchronously, which is D10's whole bargain), not a run refusal, and not a
+ * gap reason. Admitted through this exported guard rather than the scanner's
+ * `NOT_CODES` allowlist, for the reason the `LifecycleGapReason` entry there
+ * states: a guard accepts a member added later and still rejects a typo'd one.
+ *
+ *   unknown-session — GET /api/peers?of= names no registry row. Absence is
+ *                     measured against the directory LISTING; an unlistable
+ *                     registry is `registry-unmeasurable`, never this (D-37)
+ *   claim-conflict  — POST /api/claims lost the race; the 409 names EVERY
+ *                     conflicting path and hands each holder's address (D12)
+ *   bad-path        — a claim on '.' or '' or a path that escapes the repo;
+ *                     claiming the whole repo IS the module wedge
+ *   unknown-claim   — release/break: no such claim id
+ *   not-owner       — release: the claim is live and not yours; heldBy names who
+ *   claim-terminal  — release/break: the row already ended; state rides along.
+ *                     Lapse-don't-delete (D12) is why this arm exists at all
+ *   not-seeded      — the allocator refuses before sweepLedgerFloor has scanned
+ *                     the project (D13: fail shut, never mint from a guess)
+ *
+ * Producers land across wave 7 (Tasks 18-20); `claims-envelope.test.ts` pins
+ * the producer direction once all seven exist.
+ */
+export const CLAIM_REFUSE_CODES = [
+  'unknown-session', 'claim-conflict', 'bad-path', 'unknown-claim', 'not-owner',
+  'claim-terminal', 'not-seeded',
+] as const;
+export type ClaimRefuseCode = (typeof CLAIM_REFUSE_CODES)[number];
+export function isClaimRefuseCode(v: unknown): v is ClaimRefuseCode {
+  return typeof v === 'string' && (CLAIM_REFUSE_CODES as readonly string[]).includes(v);
+}
+
 /** Work-item counts for one run. `items`, never `tasks` (D-7). */
 export interface RunItemTally { done: number; total: number }
 

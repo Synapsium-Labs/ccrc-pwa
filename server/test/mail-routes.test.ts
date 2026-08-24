@@ -6,7 +6,7 @@ import { readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
-import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason } from '../../shared/api.js';
+import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason, isClaimRefuseCode, isSessionLifecycle } from '../../shared/api.js';
 import { buildServer } from '../src/server.js';
 import type { Deps } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -428,6 +428,20 @@ describe('the rejection table is total, in both directions', () => {
                               // maps it to a status and no client switches on it. Listed
                               // rather than merged, for the reason stated above — three
                               // vocabularies sharing one scanner stay three.
+      'session-gone',         // claims.ts `claimExpiry`'s `endedBy` values (Build 9 D12) —
+      'hard-cap',             // stored forensics on a lapsed claim, never a refusal a
+                              // caller switches on. `ClaimSummary.endedBy` is deliberately
+                              // `string | null` in shared/api.ts ("display/forensic" — its
+                              // own docstring), so there is no union to admit them through:
+                              // an exported guard here would invent the very vocabulary the
+                              // L0 slice ruled out. Allowlisted as fixed spellings instead;
+                              // a THIRD endedBy value trips this scan and gets its own
+                              // deliberate entry, which is the ceremony working.
+      'bad-count',            // ledger.ts `decideAllocation`'s local refusal arm. The plan
+                              // ruled it NOT L0 ("no wire type carries it"), so it is
+                              // deliberately absent from CLAIM_REFUSE_CODES and has no
+                              // guard to pass through. If the allocator route later gives
+                              // it a wire spelling, that task moves it out of this list.
     ]);
     for (const m of sources().matchAll(/'([a-z]+(?:-[a-z]+)+)'/g)) {
       const tok = m[1]!;
@@ -441,8 +455,20 @@ describe('the rejection table is total, in both directions', () => {
         // guard rather than added to `NOT_CODES`, and that difference is the point: an
         // allowlist entry would accept exactly one spelling for ever, whereas the guard
         // accepts a gap reason added later and still rejects a typo'd one.
-        || isLifecycleGapReason(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode or LifecycleGapReason`).toBe(true);
+        || isLifecycleGapReason(tok)
+        // BUILD 9 WAVE 7 — the FIFTH union, checked together and never merged
+        // (the standing rule stated at `enter-ignored` above). The claims and
+        // ledger routes refuse synchronously to a live caller — nothing is
+        // recorded, nothing replays — so their codes are neither mail
+        // rejections nor run refusals. Admitted through the exported guard,
+        // not NOT_CODES, so a member added later is accepted and a typo is not.
+        || isClaimRefuseCode(tok)
+        // BUILD 9 WAVE 7 — `peers.ts` lives in `server/src/coord` and spells
+        // `'never-started'` as a `SessionLifecycle` record key, the exact way
+        // `mirrorplan.ts` brought `'rotated-away'` here. Same remedy, same
+        // reason: the exported guard, never an allowlist pin per member.
+        || isSessionLifecycle(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode or SessionLifecycle`).toBe(true);
     }
   });
 });

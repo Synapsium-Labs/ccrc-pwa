@@ -81,6 +81,25 @@ that allocates by sweep.
   store.ts's new terminality docstring slightly overstates ("every mail_deliveries
   writer is guarded" — `setDeliveryEnvelope` writes only the envelope column and
   carries no guard, deliberately outside D10 holes 3/4).
+- **D-213** (Tasks 7–9 → 18, found at the wave-7A phase checkpoint): the plan put
+  `mail-routes.test.ts`'s kebab-census widening in Task 18, but the census window
+  opens at Task 7's commit — `claims.ts`/`peers.ts`/`ledger.ts` already spell
+  `'bad-path'`, `'session-gone'`/`'hard-cap'`, `'never-started'` and `'bad-count'`
+  in `server/src/coord`, so the census was red across the whole 7A phase (caught
+  only by the checkpoint's full-suite run; no per-task sweep in Tasks 7–11 lists
+  mail-routes). Remedied at the checkpoint, not deferred to Task 18: the
+  `CLAIM_REFUSE_CODES` declaration slice and the `isClaimRefuseCode` scanner arm
+  were pulled forward verbatim from Task 18's text, plus two dispositions the plan
+  never made because it never routed these vocabularies through the scanner at
+  all — the `endedBy` forensic pair and `bad-count` (plan-ruled "Not L0") into
+  `NOT_CODES` with stated reasons, `'never-started'` admitted through
+  `isSessionLifecycle` (the `rotated-away` precedent, a SIXTH arm the plan's
+  four-union assertion message did not foresee). Task 18's executor: the
+  declaration, the import and the scanner arm are ALREADY LANDED — treat those
+  steps as done, keep the landed six-union assertion message (governance: landed
+  spelling wins), and land Task 18's own membership pins as written. Bisect: the
+  census is red from Task 7's commit (9207881b) to this checkpoint commit —
+  accepted rather than history-rewritten, same ruling as D-212.
 
 ## Cross-task signature governance
 
