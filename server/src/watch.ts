@@ -27,6 +27,10 @@ import { COORDINATOR_PAUSE_MARKER } from './coord/rundefs.js';
 import { readWorktreeRecords } from './coord/gitref.js';
 import { divergences, unclaimedWorktrees, type DivergenceInput } from './divergence.js';
 import { claimExpiry, type LivenessProbe } from './coord/claims.js';
+// `floorFromScan` owns the seed arithmetic (max + LEDGER_SEED_GAP) and the
+// evidence string alike — the sweep below only feeds it files and applies
+// its answer, so LEDGER_SEED_GAP itself is not imported here.
+import { floorFromScan } from './coord/ledger.js';
 import type { ProvenancePair } from './coord/store.js';
 import type { PushPayload } from './push.js';
 import { deriveBranch } from './naming.js';
@@ -78,6 +82,15 @@ export const LC_SWEEP_MS = 5_000;
  *  cadence. Renew and lapse each keep their own clock so neither starves the
  *  other's first run. */
 const CLAIM_SWEEP_MS = 60_000;
+
+/** D13's two ledger lanes. The floor scan reads every plan and spec of every
+ *  registry-named project, so it runs HOURLY; reconcile reads only the plans
+ *  of projects with open allocations, every 15 MINUTES, because `landed` is
+ *  the signal a coordinator watches for. */
+const LEDGER_FLOOR_SWEEP_MS = 3_600_000;
+const LEDGER_RECONCILE_SWEEP_MS = 900_000;
+/** Allocated, never landed, older than this: REPORTED, never reclaimed (D13). */
+const LEDGER_STALE_MS = 7 * 24 * 3_600_000;
 
 /** How far back the census weighs provenance pairs. One hour, not the whole
  *  table: a divergence the operator has already dealt with must stop being
@@ -336,6 +349,13 @@ export class FleetWatcher {
   /** The claim lanes' clocks (build 9 wave 7, D12). */
   private lastClaimRenew = 0;
   private lastClaimLapse = 0;
+  /** The ledger lanes' clocks (build 9 wave 7, D13). */
+  private lastLedgerFloor = 0;
+  private lastLedgerReconcile = 0;
+  /** The stale set last reported, as JSON — one warn per CHANGING set, the
+   *  `lastDivergenceJson` idiom, so a standing stale number is not a log
+   *  line every 15 minutes forever. */
+  private lastStaleReport: string | null = null;
   /** Built lazily (`mirrorFor` below) as soon as a coordination database
    *  exists — NOT only on the first sweep, since `lifecycleHealth()` must be
    *  able to ask it before any sweep has run. The mirror holds the cursor,
@@ -815,6 +835,10 @@ export class FleetWatcher {
       } catch (err) {
         console.warn(`ccrc-server: claim sweep failed (${err instanceof Error ? err.message : String(err)}) — one bad sweep must not kill the poll`);
       }
+      // NEVER awaited, same reasoning as `sweepDivergences`: each is a
+      // handful of io reads per PROJECT, on an hourly / 15-minute clock.
+      void this.sweepLedgerFloor(records).catch(() => { /* one bad sweep must not kill the poll */ });
+      void this.sweepLedgerReconcile().catch(() => { /* one bad sweep must not kill the poll */ });
       this.primed = true;
       if (this.deps.cfg.fleetMode === 'remote' && this.deps.fleetState?.connected) {
         // C0.4: `connected` alone is not "this read was complete" — a
@@ -1827,6 +1851,111 @@ export class FleetWatcher {
     for (const c of store.activeClaims()) {
       const d = claimExpiry(c, now, probe.liveness(c.heldBy));
       if (d.act === 'lapse') store.lapseClaimRow(c.id, d.endedBy, now);
+    }
+  }
+
+  /**
+   * `docs/superpowers/<dirs>/*.md` of one project's MAIN checkout, through
+   * the already-granted `io.readdir`/`io.readFile` (D13 — zero new grants,
+   * zero new frames). POSIX joins by template, matching every other fleet
+   * path this file builds. Names are SORTED before reading — `floorFromScan`
+   * breaks a max tie by first-file-wins, and its own docstring hands the
+   * determinism duty to this caller.
+   *
+   * A dir whose `readdir` answers null contributes NOTHING — `absent` and
+   * `unreadable` collapse in that call (D-114), and here BOTH are the safe
+   * direction: a floor that fails to seed leaves allocation refusing
+   * (`not-seeded`), and a partial scan can only ever UNDER-seed inside the
+   * 50-number gap, which the next successful sweep raises. `null` return =
+   * NEITHER dir listed — the caller seeds nothing at all.
+   */
+  private async readLedgerDocs(
+    project: string, dirs: readonly string[],
+  ): Promise<{ path: string; text: string }[] | null> {
+    const out: { path: string; text: string }[] = [];
+    let listedAny = false;
+    for (const d of dirs) {
+      const dir = `${this.deps.cfg.projectsRoot}/${project}/docs/superpowers/${d}`;
+      const names = await this.deps.io.readdir(dir);
+      if (names === null) continue;
+      listedAny = true;
+      for (const n of [...names].sort()) {
+        if (!n.endsWith('.md')) continue;
+        const text = await this.deps.io.readFile(`${dir}/${n}`);
+        if (text === null) continue;
+        out.push({ path: `docs/superpowers/${d}/${n}`, text });
+      }
+    }
+    return listedAny ? out : null;
+  }
+
+  /**
+   * D13: the allocator SELF-SEEDS. Hourly, per registry-named project (the
+   * same bound `sweepDivergences` states: the fleet's active projects, never
+   * every checkout on the box): floor = max(D-<n>) + LEDGER_SEED_GAP, and
+   * THE FLOOR ONLY EVER RISES — `raiseLedgerFloor`'s conflict arm is the
+   * mechanism. `floorFromScan` owns the gap arithmetic and the evidence
+   * string; this lane only applies them. The 50-number gap is not
+   * decoration: numbers allocated but not yet written into any plan are
+   * invisible to this scan, and re-issuing one IS the bb47c9e failure.
+   *
+   * PUBLIC for the reason `sweepDivergences` is: `tick()` dispatches it with
+   * `void`, so a test that awaits `tick()` has not awaited this.
+   */
+  async sweepLedgerFloor(records: SessionRecord[]): Promise<void> {
+    const now = Date.now();
+    if (this.lastLedgerFloor !== 0 && now - this.lastLedgerFloor < LEDGER_FLOOR_SWEEP_MS) return;
+    this.lastLedgerFloor = now;
+    const store = this.deps.coord;
+    if (!store) return;
+    for (const project of [...new Set(records.map((r) => r.project))]) {
+      const files = await this.readLedgerDocs(project, ['plans', 'specs']);
+      if (files === null) continue;
+      const scan = floorFromScan(files);
+      if (scan === null) continue;      // no global D-ref anywhere: nothing to seed, fail shut
+      store.raiseLedgerFloor(project, scan.floor, scan.evidence, now);
+    }
+  }
+
+  /**
+   * D13: allocated -> landed when the number appears in a PLAN of the main
+   * checkout — so `landed` genuinely means merged, the signal the bb47c9e
+   * incident lacked while the authoritative record sat on an unmerged ref
+   * for 15 hours. A number 7 days old and never landed is REPORTED (once per
+   * changing set) and NEVER reclaimed.
+   */
+  async sweepLedgerReconcile(): Promise<void> {
+    const now = Date.now();
+    if (this.lastLedgerReconcile !== 0 &&
+        now - this.lastLedgerReconcile < LEDGER_RECONCILE_SWEEP_MS) return;
+    this.lastLedgerReconcile = now;
+    const store = this.deps.coord;
+    if (!store) return;
+    const open = store.openAllocations();
+    if (open.length > 0) {
+      const byProject = new Map<string, typeof open>();
+      for (const a of open) {
+        const list = byProject.get(a.project);
+        if (list === undefined) byProject.set(a.project, [a]); else list.push(a);
+      }
+      for (const [project, rows] of byProject) {
+        const files = await this.readLedgerDocs(project, ['plans']);
+        if (files === null) continue;
+        for (const a of rows) {
+          const re = new RegExp(`\\bD-${a.n}\\b`);
+          const hit = files.find((f) => re.test(f.text));
+          if (hit !== undefined) store.markLanded(project, a.n, hit.path, now);
+        }
+      }
+    }
+    const stale = store.staleAllocations(now - LEDGER_STALE_MS);
+    const json = JSON.stringify(stale.map((s) => [s.project, s.n]));
+    if (stale.length > 0 && json !== this.lastStaleReport) {
+      this.lastStaleReport = json;
+      console.warn(
+        `ccrc-server: ${stale.length} allocated deviation number(s) never landed in a plan ` +
+        'after 7 days: ' + stale.map((s) => `${s.project} D-${s.n}`).join(', ') +
+        ' — reported, never reclaimed (D13)');
     }
   }
 

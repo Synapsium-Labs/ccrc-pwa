@@ -5505,7 +5505,7 @@ describe('sweepDivergences feeds claim-orphan from what it already read', () => 
 
 **Steps:**
 
-- [ ] Write the failing test file `server/test/ledger-sweep.test.ts`:
+- [x] Write the failing test file `server/test/ledger-sweep.test.ts`:
 
 ```ts
 // D13: the allocator self-seeds from docs/superpowers/{plans,specs}/*.md of
@@ -5679,10 +5679,10 @@ describe('sweepLedgerReconcile', () => {
 });
 ```
 
-- [ ] Run, expect FAIL: `cd server && ./node_modules/.bin/vitest run test/ledger-sweep.test.ts` —
+- [x] Run, expect FAIL: `cd server && ./node_modules/.bin/vitest run test/ledger-sweep.test.ts` —
   `TypeError: h.watcher.sweepLedgerFloor is not a function`.
 
-- [ ] Write the implementation. In `server/src/watch.ts`:
+- [x] Write the implementation. In `server/src/watch.ts`:
 
   1. Add `LEDGER_SEED_GAP` to the value import from `'../../shared/api.js'` (line 19) and add
      `import { floorFromScan } from './ledger.js';` beside the Task-15 `./claims.js` import.
@@ -5827,12 +5827,12 @@ const LEDGER_STALE_MS = 7 * 24 * 3_600_000;
       void this.sweepLedgerReconcile().catch(() => { /* one bad sweep must not kill the poll */ });
 ```
 
-- [ ] Run, expect PASS: `./node_modules/.bin/vitest run test/ledger-sweep.test.ts`.
+- [x] Run, expect PASS: `./node_modules/.bin/vitest run test/ledger-sweep.test.ts`.
 
-- [ ] Run the tick's own suites to prove the wiring broke nothing:
+- [x] Run the tick's own suites to prove the wiring broke nothing:
   `./node_modules/.bin/vitest run test/hold-gate.test.ts test/divergence-sweep.test.ts test/lifecycle-sweep.test.ts` — expect PASS.
 
-- [ ] Commit:
+- [x] Commit:
   `git add server/src/watch.ts server/test/ledger-sweep.test.ts && git commit -m "server(w7): the floor self-seeds hourly and only rises; landed means merged"`
 
 ---
