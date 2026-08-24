@@ -275,8 +275,8 @@ describe('_auto_swap_check (wiring): lost auth on a session sitting on its HOME 
     h.sh('_reg_set claude-demo wrapper claude; _reg_set claude-demo home claude');
     h.sh(`${AUTO_SWAP_STUB} _auto_swap_check claude-demo`,
       { PANE_TEXT: 'Invalid API key · Please run /login' });
-    expect(dispatchCalls()).toContain('DISPATCHED claude-demo claude2');
-    expect(swapLog()).toContain('auto-rescue claude-demo: claude (blocked) -> claude2');
+    expect(dispatchCalls()).toContain('DISPATCHED claude-demo claude-a');
+    expect(swapLog()).toContain('auto-rescue claude-demo: claude (blocked) -> claude-a');
   });
 
   it('positive control: a pressure-driven rescue (429, telemetry agrees home is bad) still fires', () => {
@@ -285,7 +285,7 @@ describe('_auto_swap_check (wiring): lost auth on a session sitting on its HOME 
     h.sh('_reg_set claude-demo wrapper claude; _reg_set claude-demo home claude');
     h.sh(`${AUTO_SWAP_STUB} _auto_swap_check claude-demo`,
       { PANE_TEXT: 'API Error: 429 Too Many Requests' });
-    expect(dispatchCalls()).toContain('DISPATCHED claude-demo claude2');
+    expect(dispatchCalls()).toContain('DISPATCHED claude-demo claude-a');
   });
 
   it('does NOT evacuate a healthy pane on a telemetry-free home (force is driven by the classifier, not by missing telemetry alone)', () => {

@@ -1391,7 +1391,8 @@ _ccrc_foreign_remedy() {
 #     summary line. Only the default `foreign` arm refused such a file, and that
 #     is generic foreign protection, not protection of an external ACCOUNT.
 #   - An earlier round reported `gpt` as saved by lock 4. It was not: it was
-#     saved by ROSTER ORDER. `server/test/fixtures/roster-five.json` lists `claude`
+#     saved by ROSTER ORDER. The five-account fixture roster it was measured
+#     against (since replaced by the in-memory DEFAULT_TEST_ROSTER) listed `claude`
 #     first, so the run aborted at record #1 before `gpt` was reached. A roster
 #     listing `gpt` first loses `gpt` and keeps `claude`. An accident of
 #     ordering is not a lock.

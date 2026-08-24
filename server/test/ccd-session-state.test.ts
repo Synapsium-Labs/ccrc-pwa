@@ -117,7 +117,7 @@ describe('_ws_unsupervise records a deliberate stop', () => {
     // process and never gets the chance. That case is fixed at the verb level
     // instead (cmd_start/cmd_ensure, tested below), on attempt rather than
     // success.
-    h.sh(`_reg_set ${ID} wrapper claude2
+    h.sh(`_reg_set ${ID} wrapper claude-a
       _reg_set ${ID} workdir "$HOME"
       _reg_set ${ID} uuid b7001948-0000-4c2f-9a1b-0cfc0dc3d199`);
     h.sh(`systemctl() { :; }; _ws_unsupervise ${ID} agent`);
@@ -146,7 +146,7 @@ describe('a failed revival still clears .stopped, at the verb level', () => {
     h.sh(`_reg_set ${ID} uuid b7001948-0000-4c2f-9a1b-0cfc0dc3d199
       _reg_set ${ID} project demo
       _reg_set ${ID} workdir "$HOME"
-      _reg_set ${ID} wrapper claude2
+      _reg_set ${ID} wrapper claude-a
       _reg_set ${ID} started 1`);
     h.sh(`systemctl() { :; }; _ws_unsupervise ${ID} pwa`);
   };
@@ -193,8 +193,8 @@ describe('cmd_stop', () => {
   });
 
   it('still recomputes <wrapper>-<project> for the legacy two-argument form, flag and all', () => {
-    expect(h.sh(`${STOP} cmd_stop claude2 demo --surface pwa`)).toBe('stopped claude2-demo');
-    expect(h.reg('claude2-demo', 'stopped')).toMatch(/^\d{10} pwa$/);
+    expect(h.sh(`${STOP} cmd_stop claude-a demo --surface pwa`)).toBe('stopped claude-a-demo');
+    expect(h.reg('claude-a-demo', 'stopped')).toMatch(/^\d{10} pwa$/);
   });
 
   it('records `cli` when nobody declared a surface', () => {
@@ -296,19 +296,19 @@ describe('the supervisor heartbeat', () => {
     h.sh(`_reg_set ${ID} uuid b7001948-0000-4c2f-9a1b-0cfc0dc3d199
       _reg_set ${ID} project demo
       _reg_set ${ID} workdir "$HOME/projects/demo"
-      _reg_set ${ID} wrapper claude-dev0
+      _reg_set ${ID} wrapper claude-d
       _reg_set ${ID} started 1`);
     // A real transcript where the post-D1 locator will find it, so the swap
     // carries rather than refusing (§2.4).
     h.sh(`wd=$(readlink -f "$HOME/projects/demo"); mdir=$(echo "$wd" | tr '/._' '---')
-      mkdir -p "$HOME/.claude-dev0/projects/$mdir"
-      printf '{"type":"message"}\\n' > "$HOME/.claude-dev0/projects/$mdir/b7001948-0000-4c2f-9a1b-0cfc0dc3d199.jsonl"`);
+      mkdir -p "$HOME/.claude-d/projects/$mdir"
+      printf '{"type":"message"}\\n' > "$HOME/.claude-d/projects/$mdir/b7001948-0000-4c2f-9a1b-0cfc0dc3d199.jsonl"`);
     run(`CCD_SWAP_DETACHED=1
       _alive() { return 1; }; tmux() { :; }; cmd_ensure() { :; }; sleep() { :; };
       _swap_carry_jsonl() { echo "mid-carry:$(_session_state ${ID})" >> "$HOME/ccd-calls"; return 0; };
       systemctl() { [[ "$*" == *"start claude-session@"* ]] \
         && echo "start:$(_session_state ${ID})" >> "$HOME/ccd-calls"; return 0; };
-      cmd_swap ${ID} claude2`);
+      cmd_swap ${ID} claude-a`);
     expect(h.calls()).toContain('mid-carry:restarting');
     expect(h.calls()).toContain('start:restarting');
   });
@@ -418,23 +418,23 @@ describe('ccd ls', () => {
     // is NOT this task's to touch, and that is asserted here rather than
     // hoped for.
     h.sh(`_reg_set ${ID} uuid u
-      _reg_set ${ID} wrapper claude-dev0
+      _reg_set ${ID} wrapper claude-d
       _reg_set ${ID} workdir /data/projects/demo
       _reg_set ${ID} started 1`);
     const out = run(`_alive() { return 1; }; cmd_ls`).stdout;
     expect(out).toContain('STATE');
     expect(out).not.toContain('ALIVE');
-    expect(out).toMatch(new RegExp(`${ID}\\s+claude-dev0\\s+orphan\\s+/data/projects/demo`));
+    expect(out).toMatch(new RegExp(`${ID}\\s+claude-d\\s+orphan\\s+/data/projects/demo`));
     expect(out).toContain('gpt overflow lane: not installed  —  0 session(s) currently on it');
   });
 
   it('prints the same word for a stopped row that _session_state does', () => {
     h.sh(`_reg_set ${ID} uuid u
-      _reg_set ${ID} wrapper claude-dev0
+      _reg_set ${ID} wrapper claude-d
       _reg_set ${ID} workdir /data/projects/demo
       _reg_set ${ID} started 1`);
     h.sh(`systemctl() { :; }; _ws_unsupervise ${ID} pwa`);
     const out = run(`_alive() { return 1; }; cmd_ls`).stdout;
-    expect(out).toMatch(new RegExp(`${ID}\\s+claude-dev0\\s+stopped\\s+`));
+    expect(out).toMatch(new RegExp(`${ID}\\s+claude-d\\s+stopped\\s+`));
   });
 });

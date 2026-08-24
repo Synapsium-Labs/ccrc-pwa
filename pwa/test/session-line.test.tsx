@@ -234,7 +234,7 @@ describe('away from home', () => {
   it('says so for assistive tech, which cannot see a colour', () => {
     render(<SessionLine session={s({ wrapper: 'claude2', home: 'claude' })}
                         onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER} />);
-    expect(screen.getByLabelText('running on alt·max, pinned to team·max')).toBeInTheDocument();
+    expect(screen.getByLabelText('running on team·alt, pinned to team·max')).toBeInTheDocument();
   });
 
   it('never marks a dead session — it is not running anywhere', () => {

@@ -20,7 +20,7 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 //
 // THE LABELS BELOW ARE READ OFF `TEST_ROSTER`, not off the plan, which named a
 // different pair: the fixture resolves `claude` -> "team·max", `claude2` ->
-// "alt·max" and `claude-corp` -> "team·shared". `home` is an ACCOUNT ID (it is
+// "team·alt" and `claude-corp` -> "team·b". `home` is an ACCOUNT ID (it is
 // `r.home ?? idHomeWrapper(...)` in `server/src/fleet.ts`), which is the whole
 // reason it can be turned into a label at all.
 const fakeSocket = () => ({ close: () => {}, send: () => {} }) as never;
@@ -57,7 +57,7 @@ describe('SwapSheet says the move is temporary and names the home account', () =
     // so a bare `getByText(/team·max/)` would match two elements and pass for
     // the wrong reason.
     const copy = screen.getByText(/Its home account is/i);
-    expect(copy.textContent).toContain('alt·max');   // where it is now
+    expect(copy.textContent).toContain('team·alt');   // where it is now
     expect(copy.textContent).toContain('team·max');    // home
     expect(copy.textContent).toMatch(/temporary|returns/i);
   });
@@ -69,7 +69,7 @@ describe('SwapSheet says the move is temporary and names the home account', () =
     // irreversible-looking action that is in fact reversed for you.
     const s = fleetSession({ wrapper: 'claude', home: 'claude' });
     render(<SwapSheet session={s} open onClose={vi.fn()} fleet={storeWith([s])} />);
-    fireEvent.click(await screen.findByRole('button', { name: /team·shared/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /team·b/ }));
     expect(await screen.findByText(/back to team·max/i)).toBeInTheDocument();
   });
 
@@ -80,7 +80,7 @@ describe('SwapSheet says the move is temporary and names the home account', () =
     // the one it returns to — precisely backwards, in the case that matters.
     const s = fleetSession({ wrapper: 'claude2', home: 'claude-corp' });
     render(<SwapSheet session={s} open onClose={vi.fn()} fleet={storeWith([s])} />);
-    expect(screen.getByText(/home account is team·shared/i)).toBeInTheDocument();
+    expect(screen.getByText(/home account is team·b/i)).toBeInTheDocument();
   });
 
   // `SessionScreen` renders this sheet for a session that is NOT in the live
@@ -106,7 +106,7 @@ describe('SwapSheet says the move is temporary and names the home account', () =
     it('carries the same admission into the consequence', async () => {
       const s = { id: 'demo', wrapper: 'claude', project: 'demo', home: null };
       render(<SwapSheet session={s} open onClose={vi.fn()} fleet={storeWith([])} />);
-      fireEvent.click(await screen.findByRole('button', { name: /team·shared/ }));
+      fireEvent.click(await screen.findByRole('button', { name: /team·b/ }));
       const c = await screen.findByText(/back to its home account/i);
       expect(c.textContent).toMatch(/temporary/i);
     });
@@ -115,7 +115,7 @@ describe('SwapSheet says the move is temporary and names the home account', () =
   it('still lists every pickable target — honesty is not a restriction', () => {
     const s = fleetSession({ wrapper: 'claude', home: 'claude' });
     render(<SwapSheet session={s} open onClose={vi.fn()} fleet={storeWith([s])} />);
-    for (const label of ['alt·max', 'team·shared', 'gpt']) {
+    for (const label of ['team·alt', 'team·b', 'gpt']) {
       expect(screen.getByRole('button', { name: new RegExp(label) })).toBeInTheDocument();
     }
   });
@@ -177,7 +177,7 @@ describe('SwapSheet does not promise a held session an automatic return', () => 
   it('says it in the CONSEQUENCE too, where the tap actually happens', async () => {
     const s = fleetSession({ wrapper: 'claude2', home: 'claude', held: HOLD });
     render(<SwapSheet session={s} open onClose={vi.fn()} fleet={storeWith([s])} />);
-    fireEvent.click(await screen.findByRole('button', { name: /team·shared/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /team·b/ }));
     // A bare /held/i matches the sheet copy too — it is still mounted under
     // the confirm — so query the phrase only the consequence uses.
     const c = await screen.findByText(/does not move a held session back/i);
@@ -204,7 +204,7 @@ describe('SwapSheet does not promise a held session an automatic return', () => 
     it('carries the same hedge into the consequence', async () => {
       const s = { id: 'demo', wrapper: 'claude', project: 'demo', home: 'claude' };
       render(<SwapSheet session={s} open onClose={vi.fn()} fleet={storeWith([])} />);
-      fireEvent.click(await screen.findByRole('button', { name: /team·shared/ }));
+      fireEvent.click(await screen.findByRole('button', { name: /team·b/ }));
       const c = await screen.findByText(/moves it back to team·max once/i);
       expect(c.textContent).toMatch(/but a program hold defers that/i);
       expect(c.textContent).toMatch(/was not measured from here/i);

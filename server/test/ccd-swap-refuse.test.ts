@@ -51,7 +51,7 @@ const REAL_ENSURE_STUBS = `
  *  a target, headroom, and a dispatch that LOGS instead of running systemd-run. */
 const AUTO_TICK_STUBS = `
   tmux() { case "\${1:-}" in capture-pane) echo "API Error: 429 Too Many Requests";; esac; return 0; };
-  _swap_target() { echo claude2; }; _avail() { return 0; };
+  _swap_target() { echo claude-a; }; _avail() { return 0; };
   _dispatch_swap() { echo "dispatch $1 -> $2" >> "$HOME/ccd-calls"; };
 `;
 
@@ -116,7 +116,7 @@ describe('a swap that cannot carry the conversation', () => {
     // glob is a read, so it costs nothing above the teardown.
     const id = seed();
     plantNotify();
-    const r = shFail(`${SWAP_STUBS} cmd_swap ${id} claude2`);
+    const r = shFail(`${SWAP_STUBS} cmd_swap ${id} claude-a`);
     expect(r.code).not.toBe(0);
     expect(r.stderr).toContain(`refusing to swap ${id}`);
     expect(h.calls().join('\n')).not.toContain(`stop claude-session@${id}`);
@@ -129,11 +129,11 @@ describe('a swap that cannot carry the conversation', () => {
     // self-swap path has already returned 0 to a caller it then kills.
     const id = seed();
     plantNotify();
-    shFail(`${SWAP_STUBS} cmd_swap ${id} claude2`);
+    shFail(`${SWAP_STUBS} cmd_swap ${id} claude-a`);
     expect(h.reg(id, 'swapblocked'))
       .toMatch(new RegExp(`^\\d{10} no transcript found for ${UUID_A} under claude$`));
     expect(notices()).toContain(`cc swap BLOCKED: ${id} stays on claude`);
-    expect(swapLog()).toContain(`swap-refused ${id}: claude -> claude2`);
+    expect(swapLog()).toContain(`swap-refused ${id}: claude -> claude-a`);
   });
 
   it('does NOT write lastswap — a refusal must not read as a swap landing', () => {
@@ -142,7 +142,7 @@ describe('a swap that cannot carry the conversation', () => {
     // from summary", which auto-compacts — a refusal that stamped lastswap
     // would compact the very history it refused in order to protect.
     const id = seed();
-    shFail(`${SWAP_STUBS} cmd_swap ${id} claude2`);
+    shFail(`${SWAP_STUBS} cmd_swap ${id} claude-a`);
     expect(h.reg(id, 'lastswap')).toBeNull();
   });
 
@@ -156,7 +156,7 @@ describe('a swap that cannot carry the conversation', () => {
     // must not read as a swap landing and auto-compact.
     const id = seed();
     h.sh(`_reg_set ${id} lastswap "$(date +%s)"`);   // what _auto_swap_check already did
-    shFail(`${SWAP_STUBS} cmd_swap ${id} claude2`);
+    shFail(`${SWAP_STUBS} cmd_swap ${id} claude-a`);
     expect(h.reg(id, 'lastswap')).toBeNull();
     const fromswap = h.sh(`
       fromswap=0
@@ -178,7 +178,7 @@ describe('a swap that cannot carry the conversation', () => {
     plantNotify();
     const rotate = `tmux() { [[ "\${1:-}" == kill-session ]] && _reg_set ${id} uuid ${UUID_B};
       echo "tmux $*" >> "$HOME/ccd-calls"; return 0; };`;
-    const r = shFail(`${SWAP_STUBS} ${rotate} cmd_swap ${id} claude2`);
+    const r = shFail(`${SWAP_STUBS} ${rotate} cmd_swap ${id} claude-a`);
     expect(r.code).not.toBe(0);
     expect(h.reg(id, 'swapblocked'))
       .toContain(`no transcript found for ${UUID_B} under claude after flush`);
@@ -210,7 +210,7 @@ describe('a swap that cannot carry the conversation', () => {
     const id = seed(UUID_A);
     plantTranscript('.claude', '-x-projects-demo', UUID_A);
     const noUnit = `systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; return 1; };`;
-    shFail(`${REAL_ENSURE_STUBS} ${noUnit} ${deadRotate(id)} cmd_swap ${id} claude2`);
+    shFail(`${REAL_ENSURE_STUBS} ${noUnit} ${deadRotate(id)} cmd_swap ${id} claude-a`);
     expect(h.calls().join('\n'), 'the real cmd_ensure did not run — this test is stubbed hollow')
       .toContain(`_spawn_start ${id}`);
     expect(h.reg(id, 'swapblocked'),
@@ -227,7 +227,7 @@ describe('a swap that cannot carry the conversation', () => {
     // crash-looped row left the session down.
     const id = seed(UUID_A);
     plantTranscript('.claude', '-x-projects-demo', UUID_A);
-    shFail(`${SWAP_STUBS} ${deadRotate(id)} cmd_swap ${id} claude2`);
+    shFail(`${SWAP_STUBS} ${deadRotate(id)} cmd_swap ${id} claude-a`);
     const sys = h.calls().filter((c) => c.startsWith('systemctl '));
     expect(sys).toEqual([
       `systemctl --user stop claude-session@${id}`,
@@ -245,7 +245,7 @@ describe('a swap that cannot carry the conversation', () => {
     // "deliberate revival" §2.4 says supersedes a refusal.
     const id = seed(UUID_A);
     plantTranscript('.claude', '-x-projects-demo', UUID_A);
-    shFail(`${SWAP_STUBS} ${deadRotate(id)} cmd_swap ${id} claude2`);
+    shFail(`${SWAP_STUBS} ${deadRotate(id)} cmd_swap ${id} claude-a`);
     const blocked = h.reg(id, 'swapblocked');
     expect(blocked).toContain('no transcript found');
     // What the unit does next, in its own process.
@@ -278,7 +278,7 @@ describe('a swap that cannot carry the conversation', () => {
     const id = seed(UUID_A);
     plantTranscript('.claude', '-x-projects-demo', UUID_A);
     const noUnit = `systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; return 1; };`;
-    shFail(`${REAL_ENSURE_STUBS} ${noUnit} ${deadRotate(id)} cmd_swap ${id} claude2`);
+    shFail(`${REAL_ENSURE_STUBS} ${noUnit} ${deadRotate(id)} cmd_swap ${id} claude-a`);
     expect(h.reg(id, 'swapblocked')).toContain('no transcript found');
     h.sh(`${AUTO_TICK_STUBS} for i in 1 2 3 4 5 6 7 8 9 10; do
       rm -f "$HOME/.cc-sessions/${id}.lastswap"; _auto_swap_check ${id}; done`);
@@ -291,9 +291,9 @@ describe('a swap that cannot carry the conversation', () => {
     const id = seed(UUID_A);
     plantTranscript('.claude', '-x-projects-demo', UUID_A);
     fs.writeFileSync(path.join(h.home, '.cc-sessions', `${id}.swapblocked`), '1754000000 stale');
-    h.sh(`${SWAP_STUBS} cmd_swap ${id} claude2`);
+    h.sh(`${SWAP_STUBS} cmd_swap ${id} claude-a`);
     expect(h.reg(id, 'swapblocked')).toBeNull();
-    expect(h.reg(id, 'wrapper')).toBe('claude2');
+    expect(h.reg(id, 'wrapper')).toBe('claude-a');
   });
 
   it('refuses a PARTIAL carry that missed mdir, and says which slot failed', () => {
@@ -309,12 +309,12 @@ describe('a swap that cannot carry the conversation', () => {
     plantTranscript('.claude', '-x-projects-demo', UUID_A);
     plantTranscript('.claude', '-y-projects-demo', UUID_A);
     const mdir = fs.realpathSync(path.join(h.home, 'projects', 'demo')).replace(/[/._]/g, '-');
-    const locked = path.join(h.home, '.claude-personal', 'projects', mdir);
+    const locked = path.join(h.home, '.claude-a', 'projects', mdir);
     fs.mkdirSync(locked, { recursive: true });
     fs.chmodSync(locked, 0o500);
     try {
       plantNotify();
-      const r = shFail(`${SWAP_STUBS} cmd_swap ${id} claude2`);
+      const r = shFail(`${SWAP_STUBS} cmd_swap ${id} claude-a`);
       expect(r.code).not.toBe(0);
       expect(r.stdout, 'a partial carry printed a success line').not.toContain('swapped');
       expect(h.reg(id, 'wrapper')).toBe('claude');
@@ -337,7 +337,7 @@ describe('a swap that cannot carry the conversation', () => {
     const id = seed(UUID_A);
     plantTranscript('.claude', '-x-projects-demo', UUID_A);
     const copyFails = `cp() { return 1; };`;
-    shFail(`${SWAP_STUBS} ${copyFails} cmd_swap ${id} claude2`);
+    shFail(`${SWAP_STUBS} ${copyFails} cmd_swap ${id} claude-a`);
     expect(h.reg(id, 'swapblocked'))
       .toContain(`transcript found for ${UUID_A} under claude but every copy failed`);
   });
@@ -348,9 +348,9 @@ describe('ccd swap --force', () => {
     // The operator has looked and decided there is genuinely nothing to carry.
     const id = seed();
     plantNotify();
-    const out = h.sh(`${SWAP_STUBS} cmd_swap --force ${id} claude2`);
-    expect(out).toContain(`swapped ${id}: claude -> claude2`);
-    expect(h.reg(id, 'wrapper')).toBe('claude2');
+    const out = h.sh(`${SWAP_STUBS} cmd_swap --force ${id} claude-a`);
+    expect(out).toContain(`swapped ${id}: claude -> claude-a`);
+    expect(h.reg(id, 'wrapper')).toBe('claude-a');
     expect(h.reg(id, 'lastswap')).toMatch(/^\d{10}$/);
     expect(h.reg(id, 'swapblocked'), 'a forced swap is not a blocked one').toBeNull();
   });
@@ -361,12 +361,12 @@ describe('ccd swap --force', () => {
     // "--force". Second lock: _is_valid_wrapper rejects the literal, so even
     // past the stripper (`--`) it cannot land in the target slot.
     const a = seed(UUID_A, 'claude-demo');
-    h.sh(`${SWAP_STUBS} cmd_swap --force ${a} claude2`);
-    expect(h.reg(a, 'wrapper')).toBe('claude2');
+    h.sh(`${SWAP_STUBS} cmd_swap --force ${a} claude-a`);
+    expect(h.reg(a, 'wrapper')).toBe('claude-a');
 
     const b = seed(UUID_A, 'claude-demo2');
-    h.sh(`${SWAP_STUBS} cmd_swap ${b} claude2 --force`);
-    expect(h.reg(b, 'wrapper')).toBe('claude2');
+    h.sh(`${SWAP_STUBS} cmd_swap ${b} claude-a --force`);
+    expect(h.reg(b, 'wrapper')).toBe('claude-a');
 
     const c = seed(UUID_A, 'claude-demo3');
     expect(shFail(`${SWAP_STUBS} cmd_swap ${c} --force`).code).not.toBe(0);
@@ -405,7 +405,7 @@ describe('_auto_swap_check and a refused session', () => {
 
     stamp(1801);
     h.sh(`${DATE_STUB} ${AUTO_STUBS} _auto_swap_check ${id}`);
-    expect(h.calls().join('\n')).toContain(`dispatch ${id} -> claude2`);
+    expect(h.calls().join('\n')).toContain(`dispatch ${id} -> claude-a`);
   });
 
   it('a garbage stamp does not gate and does not emit an unbound-variable line', () => {
@@ -417,7 +417,7 @@ describe('_auto_swap_check and a refused session', () => {
     const r = shFail(`${AUTO_STUBS} _auto_swap_check ${id}`);
     expect(r.code).toBe(0);
     expect(r.stderr).not.toContain('unbound variable');
-    expect(h.calls().join('\n')).toContain(`dispatch ${id} -> claude2`);
+    expect(h.calls().join('\n')).toContain(`dispatch ${id} -> claude-a`);
   });
 });
 

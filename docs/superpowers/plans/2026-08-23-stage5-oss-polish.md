@@ -549,6 +549,17 @@ list. **No transfer, no flip, no tag happens from this session.**
   a generated exec, a secretsFile, a non-`homeAble` account and a label differing from
   its id. `deploy/` should ship what an installer needs, and nothing installs five
   accounts.
+  > **Addendum (2026-08-24, post-flip follow-up, operator-instructed).** The SERVER
+  > fixtures are now id-decoupled after all: `DEFAULT_TEST_ROSTER` in
+  > `server/test/helpers.ts` speaks `claude`/`claude-a`/`claude-b`/`claude-d` (labels
+  > self-named except `claude-b`'s `team·b`, the one label≠id discriminator; `gpt`
+  > keeps its literal id — ccd's Codex overflow lane is keyed on it), and
+  > `roster-five.json` is deleted: the in-memory roster carries every shape it
+  > existed for (generated exec, secretsFile, non-`homeAble`, label≠id). The PWA
+  > fixtures keep the transcribed wrapper ids deliberately — renaming them is a
+  > branch-wide refactor through hue tokens and non-fixture tests for no leak-surface
+  > gain (the ids name wrappers, not people) — but their labels speak `team·…`. This
+  > is the parallel branch's Task 5, reviewed there, ported onto main's tree.
 - **D-203** (Task 6): `CCRC_SW_DENYLIST` is read from `process.env` and EXPORTED by
   deploy.sh out of `~/.ccrc/deploy.env`, rather than read from a file at build time. The
   PWA is built on the deploying workstation and `deploy.env` is `.`-sourced, so a key set

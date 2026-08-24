@@ -43,30 +43,30 @@ describe('_account_ok', () => {
   });
 
   it('fails when the wrapper is not executable', () => {
-    fs.chmodSync(path.join(home, '.local', 'bin', 'claude2'), 0o644);
-    expect(ok('_account_ok claude2')).toBe(false);
+    fs.chmodSync(path.join(home, '.local', 'bin', 'claude-a'), 0o644);
+    expect(ok('_account_ok claude-a')).toBe(false);
   });
 });
 
 describe('_ws_least_loaded skips excluded lanes', () => {
   it('skips disabled lanes even when their score is best', () => {
     writeLimits('claude', 90, 90);       // worst score, but the only enabled lane
-    writeLimits('claude2', 5, 5);
-    writeLimits('claude-corp', 5, 5);
-    writeLimits('claude-dev0', 5, 5);
-    disable('claude2');
-    disable('claude-corp');
-    disable('claude-dev0');
+    writeLimits('claude-a', 5, 5);
+    writeLimits('claude-b', 5, 5);
+    writeLimits('claude-d', 5, 5);
+    disable('claude-a');
+    disable('claude-b');
+    disable('claude-d');
     expect(sh('_ws_least_loaded')).toBe('claude');
   });
 
   it('skips a lane with no executable', () => {
     writeLimits('claude', 50, 50);
-    writeLimits('claude2', 5, 5);        // best score, but no executable
-    writeLimits('claude-corp', 40, 40);
-    writeLimits('claude-dev0', 60, 60);
-    fs.rmSync(path.join(home, '.local', 'bin', 'claude2'));
-    expect(sh('_ws_least_loaded')).toBe('claude-corp');
+    writeLimits('claude-a', 5, 5);        // best score, but no executable
+    writeLimits('claude-b', 40, 40);
+    writeLimits('claude-d', 60, 60);
+    fs.rmSync(path.join(home, '.local', 'bin', 'claude-a'));
+    expect(sh('_ws_least_loaded')).toBe('claude-b');
   });
 });
 
@@ -84,19 +84,19 @@ describe('_swap_target: disabled excludes a lane as a DESTINATION, never evacuat
   });
 
   it('registry home disabled, current wrapper fine -> stays put (empty stdout)', () => {
-    // cur (claude2) and home (claude) differ; claude carries no telemetry so
+    // cur (claude-a) and home (claude) differ; claude carries no telemetry so
     // the OLD `_avail "$home"` alone would call it free and route back onto it.
     disable('claude');
-    expect(sh('_swap_target claude-demo claude2 claude')).toBe('');
+    expect(sh('_swap_target claude-demo claude-a claude')).toBe('');
   });
 
   it('the must-leave candidate loop skips a disabled lane even at the best score', () => {
     writeLimits('claude', 99, 99);       // cur==home, over SWAP_CEILING: must leave
-    writeLimits('claude-corp', 5, 5);    // best score, but disabled
-    writeLimits('claude2', 50, 50);      // worse score, the only eligible candidate
-    writeLimits('claude-dev0', 60, 60);  // worse still, so claude2 remains the pick
-    disable('claude-corp');
-    expect(sh('_swap_target claude-demo claude claude')).toBe('claude2');
+    writeLimits('claude-b', 5, 5);    // best score, but disabled
+    writeLimits('claude-a', 50, 50);      // worse score, the only eligible candidate
+    writeLimits('claude-d', 60, 60);  // worse still, so claude-a remains the pick
+    disable('claude-b');
+    expect(sh('_swap_target claude-demo claude claude')).toBe('claude-a');
   });
 
   it('the must-leave candidate loop ranks an UNMEASURED candidate last, not first', () => {
@@ -108,11 +108,11 @@ describe('_swap_target: disabled excludes a lane as a DESTINATION, never evacuat
     // everything at or above SWAP_CEILING (98), so a measured candidate that
     // reaches the ranking line always outranks an unmeasured one.
     writeLimits('claude', 99, 99);       // cur==home, over SWAP_CEILING: must leave
-    writeLimits('claude2', 50, 50);      // measured, and the worst measured score here
-    writeLimits('claude-dev0', 60, 60);  // measured, worse still
-    // claude-corp: NO limits file at all. Wholly unmeasured, and the old
+    writeLimits('claude-a', 50, 50);      // measured, and the worst measured score here
+    writeLimits('claude-d', 60, 60);  // measured, worse still
+    // claude-b: NO limits file at all. Wholly unmeasured, and the old
     // `:=0` made it the pick.
-    expect(sh('_swap_target claude-demo claude claude')).toBe('claude2');
+    expect(sh('_swap_target claude-demo claude claude')).toBe('claude-a');
   });
 
   it('...but an unmeasured candidate stays ELIGIBLE when it is all there is', () => {
@@ -121,19 +121,19 @@ describe('_swap_target: disabled excludes a lane as a DESTINATION, never evacuat
     // has an all-unmeasured fallback. A rescue that answered "" here would
     // strand the session on the account it cannot stay on.
     writeLimits('claude', 99, 99);   // cur==home, over the ceiling: must leave
-    // claude2 / claude-corp / claude-dev0: no telemetry whatsoever.
+    // claude-a / claude-b / claude-d: no telemetry whatsoever.
     // First in roster declaration order wins the 100-way tie, same tie-break
     // as _ws_least_loaded and projectHome.
-    expect(sh('_swap_target claude-demo claude claude')).toBe('claude2');
+    expect(sh('_swap_target claude-demo claude claude')).toBe('claude-a');
   });
 
   it('the must-leave candidate loop still skips a candidate over the rate ceiling', () => {
     // _account_ok gates existence+enablement only; it must not swallow the
     // pre-existing pressure gate (_avail) the loop already had.
     writeLimits('claude', 99, 99);       // cur==home, over SWAP_CEILING: must leave
-    writeLimits('claude2', 99, 99);      // account_ok is fine, but also over the ceiling
-    writeLimits('claude-dev0', 99, 99);  // likewise over the ceiling, so no lane qualifies
-    disable('claude-corp');              // excluded a different way, to isolate the avail check
+    writeLimits('claude-a', 99, 99);      // account_ok is fine, but also over the ceiling
+    writeLimits('claude-d', 99, 99);  // likewise over the ceiling, so no lane qualifies
+    disable('claude-b');              // excluded a different way, to isolate the avail check
     // No candidate qualifies, so the function's own exit code is non-zero
     // (the trailing `[[ -n "$best" ]] && echo` never runs) — `|| true` is the
     // house idiom for capturing that empty stdout without throwing.
@@ -162,7 +162,7 @@ describe('_gpt_enabled re-expressed as _account_ok gpt', () => {
 describe('cmd_ws_add preflight — all-excluded refuses before anything exists', () => {
   it('dies and creates no worktree, no branch, no registry entry', () => {
     makeRepo('demo');
-    disable('claude'); disable('claude2'); disable('claude-corp'); disable('claude-dev0');
+    disable('claude'); disable('claude-a'); disable('claude-b'); disable('claude-d');
     expect(() => sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`)).toThrow();
     expect(fs.existsSync(path.join(home, 'worktrees', 'demo', 'quiet-mesa'))).toBe(false);
     expect(reg('demo-quiet-mesa', 'uuid')).toBeNull();
@@ -176,8 +176,8 @@ describe('cmd_ws_add preflight — all-excluded refuses before anything exists',
 
   it('names each wrapper with its reason — disabled and missing both appear', () => {
     makeRepo('demo');
-    disable('claude'); disable('claude-corp'); disable('claude-dev0');
-    fs.rmSync(path.join(home, '.local', 'bin', 'claude2'));
+    disable('claude'); disable('claude-b'); disable('claude-d');
+    fs.rmSync(path.join(home, '.local', 'bin', 'claude-a'));
     let stderr = '';
     try {
       sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
@@ -185,22 +185,22 @@ describe('cmd_ws_add preflight — all-excluded refuses before anything exists',
       stderr = String((e as { stderr?: string }).stderr ?? '');
     }
     expect(stderr).toContain('claude:disabled');
-    expect(stderr).toContain('claude2:missing');
-    expect(stderr).toContain('claude-corp:disabled');
-    expect(stderr).toContain('claude-dev0:disabled');
+    expect(stderr).toContain('claude-a:missing');
+    expect(stderr).toContain('claude-b:disabled');
+    expect(stderr).toContain('claude-d:disabled');
     expect(stderr).toContain('nothing was touched');
   });
 
   it('one enabled lane still succeeds and lands on it, even at the worst score', () => {
     // Pressure alone never refuses (the all-pinned fixture rule stands):
-    // claude-corp is the only _account_ok lane, despite scoring worst.
+    // claude-b is the only _account_ok lane, despite scoring worst.
     makeRepo('demo');
     writeLimits('claude', 5, 5);
-    writeLimits('claude2', 5, 5);
-    writeLimits('claude-corp', 90, 90);
-    writeLimits('claude-dev0', 5, 5);
-    disable('claude'); disable('claude2'); disable('claude-dev0');
+    writeLimits('claude-a', 5, 5);
+    writeLimits('claude-b', 90, 90);
+    writeLimits('claude-d', 5, 5);
+    disable('claude'); disable('claude-a'); disable('claude-d');
     sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
-    expect(reg('demo-quiet-mesa', 'wrapper')).toBe('claude-corp');
+    expect(reg('demo-quiet-mesa', 'wrapper')).toBe('claude-b');
   });
 });

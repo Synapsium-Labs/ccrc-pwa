@@ -137,7 +137,7 @@ describe('FleetScreen', () => {
     expect(screen.getByText('OpenClawHetzner')).toBeInTheDocument();
     expect(screen.getByText('mekwarlive')).toBeInTheDocument();
     expect(screen.getAllByText('team·max').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('alt·max').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('team·alt').length).toBeGreaterThan(0);
 
     // Status is dot + word, never dot alone. SessionLine (unlike the SessionCard
     // it replaces) carries no relative timestamp — that's cut, not moved.
@@ -308,12 +308,12 @@ describe('FleetScreen', () => {
     seed(store, {
       conn: 'open',
       sessions: [session()],
-      notices: [{ id: 1, message: 'OpenClawHetzner moved to alt·max' }],
+      notices: [{ id: 1, message: 'OpenClawHetzner moved to team·alt' }],
     });
 
-    expect(screen.getByText('OpenClawHetzner moved to alt·max')).toBeInTheDocument();
+    expect(screen.getByText('OpenClawHetzner moved to team·alt')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
-    expect(screen.queryByText('OpenClawHetzner moved to alt·max')).not.toBeInTheDocument();
+    expect(screen.queryByText('OpenClawHetzner moved to team·alt')).not.toBeInTheDocument();
   });
 
   it('creates a workspace on the tapped project', async () => {

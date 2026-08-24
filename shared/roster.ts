@@ -196,7 +196,7 @@ const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
 
 /** C0 controls plus DEL — everything a one-line status bar cannot survive.
  *  Deliberately NOT a whitelist of "printable" characters: real labels are
- *  `team·max` and `alt·max`, so anything narrower than "no control bytes"
+ *  `team·max` and `team·alt`, so anything narrower than "no control bytes"
  *  would reject the roster this repo actually ships. */
 const LABEL_UNSAFE_RE = /[\u0000-\u001f\u007f]/;
 

@@ -47,9 +47,9 @@ describe('parseRoster', () => {
   it('accepts the punctuation real labels are made of, banning only control characters', () => {
     const r = parseRoster({ version: 1, accounts: [
       { id: 'a', label: 'team·max', configDirSuffix: '.a', exec: { kind: 'upstream' }, homeAble: true, telemetry: 'anthropic' },
-      { id: 'b', label: 'lab·dev0 🚀 — "quoted"', configDirSuffix: '.b', exec: { kind: 'generated' }, homeAble: true, telemetry: 'anthropic' },
+      { id: 'b', label: 'team·d 🚀 — "quoted"', configDirSuffix: '.b', exec: { kind: 'generated' }, homeAble: true, telemetry: 'anthropic' },
     ] });
-    expect(r.accounts.map((a) => a.label)).toEqual(['team·max', 'lab·dev0 🚀 — "quoted"']);
+    expect(r.accounts.map((a) => a.label)).toEqual(['team·max', 'team·d 🚀 — "quoted"']);
   });
 
   it('orders byIdLengthDesc longest-first so a prefix id never wins over a longer one', () => {

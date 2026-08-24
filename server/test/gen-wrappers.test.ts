@@ -7,9 +7,9 @@
 // this file, like the CLI itself, never touches `$HOME/.local/bin` or
 // `$HOME/.ccrc`. Nothing here reads `process.env.HOME`.
 //
-// The migration roster (`server/test/fixtures/roster-five.json`) is the fixture: 5
-// accounts — 1 upstream (`claude`), 3 generated (`claude2`, `claude-corp`,
-// `claude-dev0`), 1 external (`gpt`). The 3 generated accounts are what gets
+// The test default roster (`DEFAULT_TEST_ROSTER`, server/test/helpers.ts) is
+// the fixture: 5 accounts — 1 upstream (`claude`), 3 generated (`claude-a`,
+// `claude-b`, `claude-d`), 1 external (`gpt`). The 3 generated accounts are what gets
 // staged; `expectedBody(id)` computes the exact text the CLI should produce
 // for one of them, in-process, through the same `generateWrapperBody` +
 // `markGenerated` pipeline the CLI itself composes — so a test asserting text
@@ -25,16 +25,16 @@ import { fileURLToPath } from 'node:url';
 import { generateWrapperBody } from '../../shared/wrapper.mjs';
 import { markGenerated } from '../../shared/mark.mjs';
 import { mkTmp } from './tmpHelpers.js';
+import { DEFAULT_TEST_ROSTER } from './helpers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ccrcRoot = path.resolve(here, '..', '..');
 const CLI = path.join(ccrcRoot, 'deploy', 'gen-wrappers.mjs');
-const MIGRATION_ROSTER = path.join(ccrcRoot, 'server', 'test', 'fixtures', 'roster-five.json');
 
-const migrationJson: { accounts: Array<{ id: string; configDirSuffix: string; exec: { kind: string; secretsFile?: string } }> } =
-  JSON.parse(readFileSync(MIGRATION_ROSTER, 'utf8'));
+const fixtureJson: { accounts: Array<{ id: string; configDirSuffix: string; exec: { kind: string; secretsFile?: string } }> } =
+  DEFAULT_TEST_ROSTER;
 const UPSTREAM_ID = 'claude';
-const GENERATED_IDS = ['claude2', 'claude-corp', 'claude-dev0'];
+const GENERATED_IDS = ['claude-a', 'claude-b', 'claude-d'];
 
 /** Runs the CLI exactly as Task 6's bash will: a bare `node`, three path
  *  args, nothing on stdin. */
@@ -53,12 +53,12 @@ function fixture(json: unknown): { rosterFile: string; binDir: string; stagingDi
   return { rosterFile, binDir, stagingDir };
 }
 
-/** The exact marked text the CLI must produce for one of the migration
+/** The exact marked text the CLI must produce for one of the test
  *  roster's generated accounts, computed the same way the CLI computes it —
  *  through the real emitter and the real marker, not a hand-typed literal. */
 function expectedBody(id: string): string {
-  const acct = migrationJson.accounts.find((a) => a.id === id);
-  if (!acct) throw new Error(`fixture bug: ${id} is not in the migration roster`);
+  const acct = fixtureJson.accounts.find((a) => a.id === id);
+  if (!acct) throw new Error(`fixture bug: ${id} is not in the test roster`);
   return markGenerated(generateWrapperBody(
     { id: acct.id, configDirSuffix: acct.configDirSuffix, execKind: acct.exec.kind, secretsFile: acct.exec.secretsFile },
     UPSTREAM_ID,
@@ -67,7 +67,7 @@ function expectedBody(id: string): string {
 
 describe('gen-wrappers.mjs', () => {
   it('a fresh box: 3 generated accounts are absent, each gets staged at mode 0755', () => {
-    const { rosterFile, binDir, stagingDir } = fixture(migrationJson);
+    const { rosterFile, binDir, stagingDir } = fixture(fixtureJson);
     const r = run([rosterFile, binDir, stagingDir]);
     expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
 
@@ -92,7 +92,7 @@ describe('gen-wrappers.mjs', () => {
   });
 
   it('a converged box: pre-staged text on disk reads back ccrc-unmodified/yes for every account', () => {
-    const { rosterFile, binDir, stagingDir } = fixture(migrationJson);
+    const { rosterFile, binDir, stagingDir } = fixture(fixtureJson);
     for (const id of GENERATED_IDS) writeFileSync(path.join(binDir, id), expectedBody(id));
     const r = run([rosterFile, binDir, stagingDir]);
     expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
@@ -106,47 +106,47 @@ describe('gen-wrappers.mjs', () => {
   });
 
   it('a roster change: a marked wrapper generated for a DIFFERENT suffix reads back ccrc-unmodified/no', () => {
-    const { rosterFile, binDir, stagingDir } = fixture(migrationJson);
+    const { rosterFile, binDir, stagingDir } = fixture(fixtureJson);
     const stale = markGenerated(generateWrapperBody(
-      { id: 'claude2', configDirSuffix: '.some-other-dir', execKind: 'generated' }, UPSTREAM_ID,
+      { id: 'claude-a', configDirSuffix: '.some-other-dir', execKind: 'generated' }, UPSTREAM_ID,
     ));
-    writeFileSync(path.join(binDir, 'claude2'), stale);
+    writeFileSync(path.join(binDir, 'claude-a'), stale);
     const r = run([rosterFile, binDir, stagingDir]);
     expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
-    const line = r.stdout.split('\n').find((l) => l.startsWith('wrapper\tclaude2\t'));
-    expect(line).toBe('wrapper\tclaude2\tccrc-unmodified\tno');
+    const line = r.stdout.split('\n').find((l) => l.startsWith('wrapper\tclaude-a\t'));
+    expect(line).toBe('wrapper\tclaude-a\tccrc-unmodified\tno');
   });
 
   it('a hand-edited ccrc file reads back ccrc-edited/no', () => {
-    const { rosterFile, binDir, stagingDir } = fixture(migrationJson);
-    writeFileSync(path.join(binDir, 'claude2'), `${expectedBody('claude2')}# a human added this line\n`);
+    const { rosterFile, binDir, stagingDir } = fixture(fixtureJson);
+    writeFileSync(path.join(binDir, 'claude-a'), `${expectedBody('claude-a')}# a human added this line\n`);
     const r = run([rosterFile, binDir, stagingDir]);
     expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
-    const line = r.stdout.split('\n').find((l) => l.startsWith('wrapper\tclaude2\t'));
-    expect(line).toBe('wrapper\tclaude2\tccrc-edited\tno');
+    const line = r.stdout.split('\n').find((l) => l.startsWith('wrapper\tclaude-a\t'));
+    expect(line).toBe('wrapper\tclaude-a\tccrc-edited\tno');
   });
 
   it('a hand-written file carrying no marker reads back foreign/no', () => {
-    const { rosterFile, binDir, stagingDir } = fixture(migrationJson);
-    writeFileSync(path.join(binDir, 'claude2'), '#!/usr/bin/env bash\necho hi\n');
+    const { rosterFile, binDir, stagingDir } = fixture(fixtureJson);
+    writeFileSync(path.join(binDir, 'claude-a'), '#!/usr/bin/env bash\necho hi\n');
     const r = run([rosterFile, binDir, stagingDir]);
     expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
-    const line = r.stdout.split('\n').find((l) => l.startsWith('wrapper\tclaude2\t'));
-    expect(line).toBe('wrapper\tclaude2\tforeign\tno');
+    const line = r.stdout.split('\n').find((l) => l.startsWith('wrapper\tclaude-a\t'));
+    expect(line).toBe('wrapper\tclaude-a\tforeign\tno');
   });
 
   // root reads anything, so a 0o000 file is not unreadable to it — this box's
   // suite always runs unprivileged, but the guard is cheap and matches the
   // idiom the rest of this suite already uses (config.test.ts, coord-token.test.ts, …).
   it.skipIf(process.getuid?.() === 0)('an unreadable file reads back unreadable/no', () => {
-    const { rosterFile, binDir, stagingDir } = fixture(migrationJson);
-    const f = path.join(binDir, 'claude2');
-    writeFileSync(f, expectedBody('claude2'));
+    const { rosterFile, binDir, stagingDir } = fixture(fixtureJson);
+    const f = path.join(binDir, 'claude-a');
+    writeFileSync(f, expectedBody('claude-a'));
     chmodSync(f, 0o000);
     const r = run([rosterFile, binDir, stagingDir]);
     expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
-    const line = r.stdout.split('\n').find((l) => l.startsWith('wrapper\tclaude2\t'));
-    expect(line).toBe('wrapper\tclaude2\tunreadable\tno');
+    const line = r.stdout.split('\n').find((l) => l.startsWith('wrapper\tclaude-a\t'));
+    expect(line).toBe('wrapper\tclaude-a\tunreadable\tno');
   });
 
   // A directory is not a missing file — `classify` must not collapse the two.
@@ -155,12 +155,12 @@ describe('gen-wrappers.mjs', () => {
   // different real-world shape (a stale directory left at a wrapper's path,
   // rather than a permission problem on a file).
   it('a directory at bin/<id> reads back unreadable/no, not absent — a directory is not a missing file', () => {
-    const { rosterFile, binDir, stagingDir } = fixture(migrationJson);
-    mkdirSync(path.join(binDir, 'claude2'));
+    const { rosterFile, binDir, stagingDir } = fixture(fixtureJson);
+    mkdirSync(path.join(binDir, 'claude-a'));
     const r = run([rosterFile, binDir, stagingDir]);
     expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
-    const line = r.stdout.split('\n').find((l) => l.startsWith('wrapper\tclaude2\t'));
-    expect(line).toBe('wrapper\tclaude2\tunreadable\tno');
+    const line = r.stdout.split('\n').find((l) => l.startsWith('wrapper\tclaude-a\t'));
+    expect(line).toBe('wrapper\tclaude-a\tunreadable\tno');
   });
 
   // D-81: a >512 MiB candidate used to reach `readFileSync` and THROW past
@@ -172,8 +172,8 @@ describe('gen-wrappers.mjs', () => {
   // pins the classify() OUTCOME, not the "never read a candidate whole"
   // property — `bigblob` above already pins that one, for the orphan scan.
   it('an oversize file (over 1 MiB) reads back oversize/no, never unreadable (D-81)', () => {
-    const { rosterFile, binDir, stagingDir } = fixture(migrationJson);
-    const p = path.join(binDir, 'claude2');
+    const { rosterFile, binDir, stagingDir } = fixture(fixtureJson);
+    const p = path.join(binDir, 'claude-a');
     const fd = openSync(p, 'w');
     try {
       ftruncateSync(fd, 1024 * 1024 + 1); // OVERSIZE_BYTES + 1, sparse
@@ -182,8 +182,8 @@ describe('gen-wrappers.mjs', () => {
     }
     const r = run([rosterFile, binDir, stagingDir]);
     expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
-    const line = r.stdout.split('\n').find((l) => l.startsWith('wrapper\tclaude2\t'));
-    expect(line).toBe('wrapper\tclaude2\toversize\tno');
+    const line = r.stdout.split('\n').find((l) => l.startsWith('wrapper\tclaude-a\t'));
+    expect(line).toBe('wrapper\tclaude-a\toversize\tno');
   });
 
   // Regression: nothing pinned this before D-81 touched the same catch
@@ -191,12 +191,12 @@ describe('gen-wrappers.mjs', () => {
   // missing file — so it must read back `absent`, not `unreadable` and not
   // `oversize`.
   it('a dangling symlink at bin/<id> reads back absent, not unreadable', () => {
-    const { rosterFile, binDir, stagingDir } = fixture(migrationJson);
-    symlinkSync(path.join(binDir, 'does-not-exist'), path.join(binDir, 'claude2'));
+    const { rosterFile, binDir, stagingDir } = fixture(fixtureJson);
+    symlinkSync(path.join(binDir, 'does-not-exist'), path.join(binDir, 'claude-a'));
     const r = run([rosterFile, binDir, stagingDir]);
     expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
-    const line = r.stdout.split('\n').find((l) => l.startsWith('wrapper\tclaude2\t'));
-    expect(line).toBe('wrapper\tclaude2\tabsent\tno');
+    const line = r.stdout.split('\n').find((l) => l.startsWith('wrapper\tclaude-a\t'));
+    expect(line).toBe('wrapper\tclaude-a\tabsent\tno');
   });
 
   // `equal` is a byte-for-byte comparison, not a trimmed one — a mutation
@@ -204,16 +204,16 @@ describe('gen-wrappers.mjs', () => {
   // this file (none of them differ from the staged text by whitespace alone)
   // and needed this one added to catch it.
   it('equal is byte-for-byte: a file differing from staged only by a trailing blank line is NOT equal', () => {
-    const { rosterFile, binDir, stagingDir } = fixture(migrationJson);
-    writeFileSync(path.join(binDir, 'claude2'), `${expectedBody('claude2')}\n`);
+    const { rosterFile, binDir, stagingDir } = fixture(fixtureJson);
+    writeFileSync(path.join(binDir, 'claude-a'), `${expectedBody('claude-a')}\n`);
     const r = run([rosterFile, binDir, stagingDir]);
     expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
-    const line = r.stdout.split('\n').find((l) => l.startsWith('wrapper\tclaude2\t'));
+    const line = r.stdout.split('\n').find((l) => l.startsWith('wrapper\tclaude-a\t'));
     expect(line?.split('\t')[3]).toBe('no');
   });
 
   it('an orphan: a marked, generated-shape file with no roster entry is reported and left on disk', () => {
-    const { rosterFile, binDir, stagingDir } = fixture(migrationJson);
+    const { rosterFile, binDir, stagingDir } = fixture(fixtureJson);
     const leftoverText = markGenerated(generateWrapperBody(
       { id: 'leftover', configDirSuffix: '.leftover', execKind: 'generated' }, UPSTREAM_ID,
     ));
@@ -225,7 +225,7 @@ describe('gen-wrappers.mjs', () => {
   });
 
   it('not an orphan: an UNMARKED file produces no orphan record — ccrc only claims what it marked', () => {
-    const { rosterFile, binDir, stagingDir } = fixture(migrationJson);
+    const { rosterFile, binDir, stagingDir } = fixture(fixtureJson);
     writeFileSync(path.join(binDir, 'somethingelse'), '#!/usr/bin/env bash\necho hi\n');
     const r = run([rosterFile, binDir, stagingDir]);
     expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
@@ -245,7 +245,7 @@ describe('gen-wrappers.mjs', () => {
     // account; the file left there still carries ccrc's marker from before
     // the operator's edit — the exact state `ccrc-edited` -> "set external"
     // leaves on disk.
-    const { rosterFile, binDir, stagingDir } = fixture(migrationJson);
+    const { rosterFile, binDir, stagingDir } = fixture(fixtureJson);
     const externalText = markGenerated(generateWrapperBody(
       { id: 'gpt', configDirSuffix: '.gpt', execKind: 'generated' }, UPSTREAM_ID,
     ));
@@ -271,7 +271,7 @@ describe('gen-wrappers.mjs', () => {
     // $HOME/.local/bin/ccd by hand` — printed by every install, four lines
     // above that same transcript's "next: add your first session with: ccd
     // menu".
-    const { rosterFile, binDir, stagingDir } = fixture(migrationJson);
+    const { rosterFile, binDir, stagingDir } = fixture(fixtureJson);
     // Marked the way the real ones are. `ccd`'s marker is over its own bytes;
     // any marked script is the same five-for-five shape as far as this scan is
     // concerned, and using the real 570 KB `ccd` here would test file size.
@@ -307,7 +307,7 @@ describe('gen-wrappers.mjs', () => {
   // question from whether it is the behaviour today — this test is about the
   // second one.
   it('a symlink in the bin dir is invisible to orphan detection, even when it targets marked text', () => {
-    const { rosterFile, binDir, stagingDir } = fixture(migrationJson);
+    const { rosterFile, binDir, stagingDir } = fixture(fixtureJson);
     // Not `ID_RE`-shaped (leading underscore), so its own name could never be
     // an orphan candidate either — isolating this case to the symlink
     // question alone.
@@ -350,7 +350,7 @@ describe('gen-wrappers.mjs', () => {
     // this case buys is the regression the reviewer asked for by name: the
     // 304 MB upstream binary sitting in the bin dir as a regular file must not
     // make `ccrc wrappers` fall over, and it must not become an orphan record.
-    const { rosterFile, binDir, stagingDir } = fixture(migrationJson);
+    const { rosterFile, binDir, stagingDir } = fixture(fixtureJson);
     const blob = path.join(binDir, 'bigblob');
     const fd = openSync(blob, 'w');
     try {
@@ -373,7 +373,7 @@ describe('gen-wrappers.mjs', () => {
     // because nothing this pipeline writes into the bin dir lacks a shebang
     // (`generateWrapperBody` always emits one), so a file that does was not
     // ccrc's to claim. Remove the gate and this file becomes an orphan record.
-    const { rosterFile, binDir, stagingDir } = fixture(migrationJson);
+    const { rosterFile, binDir, stagingDir } = fixture(fixtureJson);
     writeFileSync(path.join(binDir, 'noshebang'), markGenerated('echo not a script\n'));
     const r = run([rosterFile, binDir, stagingDir]);
     expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
@@ -386,7 +386,7 @@ describe('gen-wrappers.mjs', () => {
     // wire — see this file's header and `cmd_wrappers`'s. Walked out of
     // `roster.accounts` independently of the `wrapper` filter, so a bug in one
     // does not corrupt both identically.
-    const { rosterFile, binDir, stagingDir } = fixture(migrationJson);
+    const { rosterFile, binDir, stagingDir } = fixture(fixtureJson);
     const r = run([rosterFile, binDir, stagingDir]);
     expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
     const protectedLines = r.stdout.trim().split('\n').filter((l) => l.startsWith('protected\t'));
@@ -400,7 +400,7 @@ describe('gen-wrappers.mjs', () => {
   });
 
   it('upstream and external accounts are never staged', () => {
-    const { rosterFile, binDir, stagingDir } = fixture(migrationJson);
+    const { rosterFile, binDir, stagingDir } = fixture(fixtureJson);
     const r = run([rosterFile, binDir, stagingDir]);
     expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
     const staged = new Set(readdirSync(stagingDir));
@@ -412,7 +412,7 @@ describe('gen-wrappers.mjs', () => {
       version: 1,
       accounts: [
         { id: 'claude', label: 'Claude', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
-        { id: 'claude2', label: 'Claude2', configDirSuffix: '.claude2', exec: { kind: 'upstream' }, homeAble: true, hue: 'violet', telemetry: 'anthropic' },
+        { id: 'claude-a', label: 'Claude2', configDirSuffix: '.claude-a', exec: { kind: 'upstream' }, homeAble: true, hue: 'violet', telemetry: 'anthropic' },
       ],
     };
     const { rosterFile, binDir, stagingDir } = fixture(twoUpstream);
@@ -424,7 +424,7 @@ describe('gen-wrappers.mjs', () => {
   });
 
   it.skipIf(process.getuid?.() === 0)('an unwritable staging dir: exit 1, empty stdout', () => {
-    const { rosterFile, binDir, stagingDir } = fixture(migrationJson);
+    const { rosterFile, binDir, stagingDir } = fixture(fixtureJson);
     chmodSync(stagingDir, 0o555);
     try {
       const r = run([rosterFile, binDir, stagingDir]);
@@ -436,7 +436,7 @@ describe('gen-wrappers.mjs', () => {
   });
 
   it('usage: no args or four args exits 2, with no stdout', () => {
-    const { rosterFile, binDir, stagingDir } = fixture(migrationJson);
+    const { rosterFile, binDir, stagingDir } = fixture(fixtureJson);
     for (const args of [[], [rosterFile, binDir, stagingDir, 'extra']]) {
       const r = run(args);
       expect(r.code, JSON.stringify(args)).toBe(2);
@@ -446,7 +446,7 @@ describe('gen-wrappers.mjs', () => {
   });
 
   it('the manifest has no empty fields — the property that makes IFS=$\'\\t\' read safe in Task 6', () => {
-    const { rosterFile, binDir, stagingDir } = fixture(migrationJson);
+    const { rosterFile, binDir, stagingDir } = fixture(fixtureJson);
     const r = run([rosterFile, binDir, stagingDir]);
     expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
     const lines = r.stdout.trim().split('\n');

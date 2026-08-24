@@ -22,7 +22,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
 import { degradedReadIO, unreadableField } from './ioDoubles.js';
 
-const ID = 'claude2-MekWarLive';
+const ID = 'claude-a-MekWarLive';
 const UUID_A = 'a'.repeat(36);
 const UUID_B = 'b'.repeat(36);
 const WORKDIR = '/data/projects/MekWarLive';
@@ -43,17 +43,17 @@ const userLine = (uuid: string, text: string): string =>
 const seed = (home: string): void => {
   const reg = path.join(home, '.cc-sessions');
   mkdirSync(reg, { recursive: true });
-  const fields = { wrapper: 'claude2', project: 'MekWarLive', workdir: WORKDIR, uuid: UUID_A, started: '1' };
+  const fields = { wrapper: 'claude-a', project: 'MekWarLive', workdir: WORKDIR, uuid: UUID_A, started: '1' };
   for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${ID}.${k}`), v);
 
-  const sess = path.join(home, '.claude-personal', 'sessions');
+  const sess = path.join(home, '.claude-a', 'sessions');
   mkdirSync(sess, { recursive: true });
   writeFileSync(path.join(sess, `${PID}.json`), JSON.stringify({
     pid: PID, sessionId: UUID_A, cwd: WORKDIR, name: 'mekwar-a1',
     status: 'idle', statusUpdatedAt: 1784582728369, version: '2.1.210',
   }));
 
-  const tdir = path.join(home, '.claude-personal', 'projects', MUNGED);
+  const tdir = path.join(home, '.claude-a', 'projects', MUNGED);
   mkdirSync(tdir, { recursive: true });
   writeFileSync(path.join(tdir, `${UUID_A}.jsonl`), userLine('u1', 'one') + userLine('u2', 'two'));
 };
@@ -242,7 +242,7 @@ const streamWith = async (opts: {
   const home = mkTmp('ccrc-ask-');
   seedRoster(home);
   seed(home);
-  const file = path.join(home, '.claude-personal', 'projects', MUNGED, `${UUID_A}.jsonl`);
+  const file = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_A}.jsonl`);
   // Scripted content for one poll. Rewriting identical bytes would bump mtime and
   // read as transcript growth — which is exactly what the read-skip memo keys on —
   // so a step that doesn't change the script is a genuine no-op on disk.
@@ -602,8 +602,8 @@ describe('session WS', () => {
     home = mkTmp('ccrc-sws-');
     seedRoster(home);
     seed(home);
-    fileA = path.join(home, '.claude-personal', 'projects', MUNGED, `${UUID_A}.jsonl`);
-    fileB = path.join(home, '.claude-personal', 'projects', MUNGED, `${UUID_B}.jsonl`);
+    fileA = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_A}.jsonl`);
+    fileB = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_B}.jsonl`);
 
     const run: Runner = async (_cmd, args) => {
       if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
@@ -834,16 +834,16 @@ describe('foreignConfigDirs (spec §5.2)', () => {
   it('lists every OTHER account in roster order, and never the session\'s own', () => {
     // Kills two mutants: one that includes the own account (rung 6 would then
     // shadow rung 5 on a tie) and one that hand-types the account list instead
-    // of reading the roster — which is how `claude-dev0`, the account holding
+    // of reading the roster — which is how `claude-d`, the account holding
     // the incident's recovered transcript, would silently drop out.
     const home = mkTmp('ccrc-foreign-');
     seedRoster(home);
     const cfg = loadConfig({ CCRC_HOME: home });
-    const others = foreignConfigDirs(cfg, 'claude2');
-    expect(others.map((o) => o.account)).not.toContain('claude2');
-    expect(others.map((o) => o.account)).toContain('claude-dev0');
+    const others = foreignConfigDirs(cfg, 'claude-a');
+    expect(others.map((o) => o.account)).not.toContain('claude-a');
+    expect(others.map((o) => o.account)).toContain('claude-d');
     expect(others.map((o) => o.account)).toEqual(
-      cfg.roster.accounts.map((a) => a.id).filter((id) => id !== 'claude2'));
+      cfg.roster.accounts.map((a) => a.id).filter((id) => id !== 'claude-a'));
     expect(others.every((o) => o.configDir === configDirFor(cfg, o.account))).toBe(true);
   });
 });
@@ -865,8 +865,8 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
     const home = mkTmp('ccrc-repoint-');
     seedRoster(home);
     seed(home);
-    const exact = path.join(home, '.claude-personal', 'projects', MUNGED, `${UUID_A}.jsonl`);
-    const glob = path.join(home, '.claude-personal', 'projects', '-elsewhere', `${UUID_A}.jsonl`);
+    const exact = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_A}.jsonl`);
+    const glob = path.join(home, '.claude-a', 'projects', '-elsewhere', `${UUID_A}.jsonl`);
     rmSync(exact);
     mkdirSync(path.dirname(glob), { recursive: true });
     writeFileSync(glob, userLine('g1', 'stranded'));
@@ -916,7 +916,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
     const home = mkTmp('ccrc-repoint-sideways-');
     seedRoster(home);
     seed(home);
-    const projects = path.join(home, '.claude-personal', 'projects');
+    const projects = path.join(home, '.claude-a', 'projects');
     rmSync(path.join(projects, MUNGED, `${UUID_A}.jsonl`));   // no exact address: rung 5 is the answer
     const globA = path.join(projects, '-elsewhere-a', `${UUID_A}.jsonl`);
     const globB = path.join(projects, '-elsewhere-b', `${UUID_A}.jsonl`);
@@ -978,8 +978,8 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
     const home = mkTmp('ccrc-foreignframe-');
     seedRoster(home);
     seed(home);
-    rmSync(path.join(home, '.claude-personal', 'projects', MUNGED, `${UUID_A}.jsonl`));
-    const held = path.join(home, '.claude-corp', 'projects', '-stranded', `${UUID_A}.jsonl`);
+    rmSync(path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_A}.jsonl`));
+    const held = path.join(home, '.claude-b', 'projects', '-stranded', `${UUID_A}.jsonl`);
     mkdirSync(path.dirname(held), { recursive: true });
     writeFileSync(held, userLine('f1', 'another account holds this'));
 
@@ -990,7 +990,7 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
       await stream.start();
       const backlog = frames.find((f) => f.type === 'backlog');
       expect(backlog.file).toBe(held);
-      expect(backlog.foreignAccount).toBe('claude-corp');
+      expect(backlog.foreignAccount).toBe('claude-b');
       expect(backlog.searchComplete).toBe(true);
     } finally {
       stream.stop();
@@ -1011,8 +1011,8 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
     const home2 = mkTmp('ccrc-foreignframe-');
     seedRoster(home2);
     seed(home2);
-    rmSync(path.join(home2, '.claude-personal', 'projects', MUNGED, `${UUID_A}.jsonl`));
-    const cfgDir2 = path.join(home2, '.claude-personal');
+    rmSync(path.join(home2, '.claude-a', 'projects', MUNGED, `${UUID_A}.jsonl`));
+    const cfgDir2 = path.join(home2, '.claude-a');
     const unmeasurableOwnAccountIO: FleetIO = {
       ...localIO,
       readdir: async (p) => (p === path.join(cfgDir2, 'projects') ? null : localIO.readdir(p)),
@@ -1155,7 +1155,7 @@ describe('registry ladder: a mid-stream degrade never interrupts the open tail (
     const home = mkTmp('ccrc-sws-ladder-');
     seedRoster(home);
     seed(home);
-    const fileA = path.join(home, '.claude-personal', 'projects', MUNGED, `${UUID_A}.jsonl`);
+    const fileA = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_A}.jsonl`);
     let degrade = false;
     const io = degradedReadIO((p) => degrade && p.endsWith(`${ID}.uuid`));
     const run: Runner = async (_cmd, args) => {
@@ -1193,7 +1193,7 @@ describe('registry ladder: a mid-stream degrade never interrupts the open tail (
 
 /**
  * THE SYMLINK-MUNGE MISMATCH, pinned at the stream level — the exact shape of
- * `claude-corp-data-internal` in production. Claude Code munges its PHYSICAL
+ * `claude-b-data-internal` in production. Claude Code munges its PHYSICAL
  * cwd; the registry keeps the path ccd wrote; when the workdir traverses a
  * symlink and the session is DEAD (no live cwd to paper over it), the chat
  * used to look under the registry munge and render "Can't find this session's
@@ -1211,12 +1211,12 @@ describe('session WS — dead session behind a symlinked workdir', () => {
     const reg = path.join(home, '.cc-sessions');
     mkdirSync(reg, { recursive: true });
     const fields = {
-      wrapper: 'claude2', project: 'MekWarLive',
+      wrapper: 'claude-a', project: 'MekWarLive',
       workdir: path.join(home, 'data-link', 'projects', 'MekWarLive'),
       uuid: UUID_A, started: '1',
     };
     for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${ID}.${k}`), v);
-    const physFile = path.join(home, '.claude-personal', 'projects',
+    const physFile = path.join(home, '.claude-a', 'projects',
       volumeDir.replace(/[/._]/g, '-'), `${UUID_A}.jsonl`);
     mkdirSync(path.dirname(physFile), { recursive: true });
     writeFileSync(physFile, userLine('u1', 'one'));

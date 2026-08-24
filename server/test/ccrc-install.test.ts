@@ -53,6 +53,7 @@ import {
 import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
+import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -101,14 +102,14 @@ const TREE_FILES = [
   // in a checkout and at `~/ccrc/deploy` on a deployed box.
   'deploy/gen-accounts.mjs',
   'deploy/gen-wrappers.mjs',
-  // The roster SEED `_inst_roster` places on a box that has none…
+  // The roster SEED `_inst_roster` places on a box that has none. The
+  // realistic "the operator already has a roster" fixture is no repo file any
+  // more — the shipped five-account migration roster left the tree with the
+  // stage-5 de-brand (spec §5, D-202) — so FIVE_ACCOUNT_ROSTER below serialises
+  // `DEFAULT_TEST_ROSTER` instead: a roster with `claude-b` in it, so
+  // "generated FROM the installed roster" stays provable rather than merely
+  // plausible.
   'deploy/accounts.default.json',
-  // …and the five-account roster this fleet really runs, which ships beside it
-  // (deploy.sh:196-206). It is not a seed candidate for a single box; it is
-  // here because it is the realistic "the operator already has a roster" fixture
-  // — a roster with `claude-corp` in it, so "generated FROM the installed
-  // roster" is provable rather than merely plausible.
-  'server/test/fixtures/roster-five.json',
   // `gen-accounts.mjs` imports the first three; `gen-wrappers.mjs` imports
   // `wrapper.mjs` and two of the same three. They were written dependency-free
   // for exactly this bare-`node` caller, so this is the complete transitive
@@ -677,7 +678,11 @@ const strays = (home: string): string[] => {
 };
 
 const DEFAULT_SEED = read(join(REPO, 'deploy', 'accounts.default.json'));
-const MIGRATION_ROSTER = read(join(REPO, 'server', 'test', 'fixtures', 'roster-five.json'));
+/** The five-account test roster as file bytes — the "operator already has a
+ *  roster" fixture. Serialised from `DEFAULT_TEST_ROSTER` (the root copy)
+ *  rather than read from a shipped file: the shipped migration roster this
+ *  used to read left the tree with the stage-5 de-brand (spec §5, D-202). */
+const FIVE_ACCOUNT_ROSTER = `${JSON.stringify(DEFAULT_TEST_ROSTER, null, 2)}\n`;
 
 /** Turns a fixture tree into a REAL one-commit git repository, which is what
  *  `_inst_stamp` measures. A fake `.git` directory would not do: the step runs
@@ -1027,13 +1032,13 @@ describe('ccrc install: the files the operator owns', () => {
   // `accounts.json` and `ccrc.env` are created once and never overwritten.
   // Everything in this describe is one half of that.
   it('keeps a roster the box already had, and generates accounts.sh FROM IT', () => {
-    // The five-account roster this fleet really runs. `claude-corp` appears in
+    // The five-account test roster. `claude-b` appears in
     // it and in nothing the seed could produce, so its presence in the
     // generated bash is proof the generator read the INSTALLED roster rather
     // than the shipped default — the local translation of deploy's
     // read-the-box's-copy-back rule.
     const home = freshBox('ccrc-install-kept-roster-');
-    preexisting(home, 'accounts.json', MIGRATION_ROSTER);
+    preexisting(home, 'accounts.json', FIVE_ACCOUNT_ROSTER);
     // `gpt` is that roster's EXTERNAL account — somebody else's hand-written
     // launcher, which no ccrc verb ever writes. On the reference box it is 142
     // lines of bash; here it only has to exist, because doctor's `wrappers`
@@ -1045,8 +1050,8 @@ describe('ccrc install: the files the operator owns', () => {
       { mode: 0o755 });
     const r = runInstall(home);
     expect(r.code, r.stderr).toBe(0);
-    expect(read(dotCcrc(home, 'accounts.json'))).toBe(MIGRATION_ROSTER);
-    expect(read(dotCcrc(home, 'accounts.sh'))).toContain('claude-corp');
+    expect(read(dotCcrc(home, 'accounts.json'))).toBe(FIVE_ACCOUNT_ROSTER);
+    expect(read(dotCcrc(home, 'accounts.sh'))).toContain('claude-b');
     expect(r.stdout).toMatch(/^install: roster: kept \(user-owned, never overwritten\)$/m);
   });
 
@@ -1202,11 +1207,11 @@ describe('ccrc install: a box with no node', () => {
     // The roster here is the five-account one this fleet really runs, and it is
     // perfectly valid.
     const home = freshBox('ccrc-install-no-node-seeded-');
-    preexisting(home, 'accounts.json', MIGRATION_ROSTER);
+    preexisting(home, 'accounts.json', FIVE_ACCOUNT_ROSTER);
     const r = runInstall(home, ['install'], { PATH: pathWithout(home, 'node') });
     expect(r.code).toBe(1);
     expect(r.stderr).not.toMatch(/move it aside/);
-    expect(read(dotCcrc(home, 'accounts.json'))).toBe(MIGRATION_ROSTER);
+    expect(read(dotCcrc(home, 'accounts.json'))).toBe(FIVE_ACCOUNT_ROSTER);
     expect(existsSync(dotCcrc(home, 'accounts.sh'))).toBe(false);
     expect(existsSync(dotCcrc(home, 'ccrc.env'))).toBe(false);
   });
@@ -1274,7 +1279,7 @@ describe('ccrc install: re-running converges', () => {
     const home = freshBox('ccrc-install-regenerate-');
     expect(runInstall(home).code).toBe(0);
     const before = mtime(dotCcrc(home, 'accounts.sh'));
-    writeFileSync(dotCcrc(home, 'accounts.json'), MIGRATION_ROSTER);
+    writeFileSync(dotCcrc(home, 'accounts.json'), FIVE_ACCOUNT_ROSTER);
     // The external account that roster declares — see the kept-roster test
     // above: doctor's `wrappers` check runs at the end of this install too, and
     // an `external` account with no executable is a FAIL nobody here is asking
@@ -1283,7 +1288,7 @@ describe('ccrc install: re-running converges', () => {
       '#!/usr/bin/env bash\nexec /usr/bin/env gpt "$@"\n', { mode: 0o755 });
     const r = runInstall(home);
     expect(r.code, r.stderr).toBe(0);
-    expect(read(dotCcrc(home, 'accounts.sh'))).toContain('claude-corp');
+    expect(read(dotCcrc(home, 'accounts.sh'))).toContain('claude-b');
     expect(mtime(dotCcrc(home, 'accounts.sh'))).not.toBe(before);
     expect(r.stdout).toMatch(/^install: accounts\.sh: generated from \$HOME\/\.ccrc\/accounts\.json$/m);
   });
@@ -2101,14 +2106,14 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
     // default one's single dir is created by `_inst_files` anyway and would
     // make this assertion pass with the step deleted.
     const home = freshBox('ccrc-install-dirs-');
-    preexisting(home, 'accounts.json', MIGRATION_ROSTER);
+    preexisting(home, 'accounts.json', FIVE_ACCOUNT_ROSTER);
     writeFileSync(join(home, '.local', 'bin', 'gpt'),
       '#!/usr/bin/env bash\nexec /usr/bin/env gpt "$@"\n', { mode: 0o755 });
     const r = runInstall(home);
     expect(r.code, r.stderr).toBe(0);
     expect(r.stdout).toMatch(
       /^install: dirs: config directory in place for 5 account\(s\) named by \$HOME\/\.ccrc\/accounts\.sh$/m);
-    for (const d of ['.claude', '.claude-personal', '.claude-corp', '.claude-gpt', '.claude-dev0']) {
+    for (const d of ['.claude', '.claude-a', '.claude-b', '.claude-gpt', '.claude-d']) {
       expect(existsSync(join(home, d)), `${d} was never created`).toBe(true);
       // …and the hooks installer, run from the INSTALLED path right after,
       // found each one and converged its settings.json.
@@ -2177,20 +2182,20 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
     // install that reports success over a box whose wrappers it could not
     // converge, which is the state `ccrc wrappers` exists to make impossible.
     const home = freshBox('ccrc-install-wrappers-refused-');
-    preexisting(home, 'accounts.json', MIGRATION_ROSTER);
+    preexisting(home, 'accounts.json', FIVE_ACCOUNT_ROSTER);
     writeFileSync(join(home, '.local', 'bin', 'gpt'),
       '#!/usr/bin/env bash\nexec /usr/bin/env gpt "$@"\n', { mode: 0o755 });
     // A file at a GENERATED account's path that ccrc did not write: neither
     // ccrc-unmodified nor equivalent, so no flag this step passes can rewrite
     // it.
-    writeFileSync(join(home, '.local', 'bin', 'claude-corp'),
+    writeFileSync(join(home, '.local', 'bin', 'claude-b'),
       '#!/bin/sh\n# mine, and not ccrc\'s\nexec /usr/bin/env claude "$@"\n', { mode: 0o755 });
     const r = runInstall(home);
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/^ccrc: wrapper convergence refused — read the lines above$/m);
     // The converger's own account-level refusal is what "the lines above" means,
     // and it is still on stdout rather than re-worded into the die.
-    expect(r.stdout).toMatch(/^REFUSE claude-corp: /m);
+    expect(r.stdout).toMatch(/^REFUSE claude-b: /m);
     // …and it did not run doctor over a box it had just refused to finish.
     expect(r.stdout).not.toMatch(/^summary: \d+ checks/m);
   });
@@ -2214,12 +2219,12 @@ describe('ccrc install: both skills reach every rostered account', () => {
   // ever touched the first home.
   const skillBox = ((): { home: string; r: Result } => {
     const home = freshBox('ccrc-install-skills-');
-    preexisting(home, 'accounts.json', MIGRATION_ROSTER);
+    preexisting(home, 'accounts.json', FIVE_ACCOUNT_ROSTER);
     writeFileSync(join(home, '.local', 'bin', 'gpt'),
       '#!/usr/bin/env bash\nexec /usr/bin/env gpt "$@"\n', { mode: 0o755 });
     return { home, r: runInstall(home) };
   })();
-  const ROSTER_DIRS = ['.claude', '.claude-personal', '.claude-corp', '.claude-gpt', '.claude-dev0'];
+  const ROSTER_DIRS = ['.claude', '.claude-a', '.claude-b', '.claude-gpt', '.claude-d'];
 
   it('the run this describe measures succeeded, and says what it did in one line', () => {
     expect(skillBox.r.code, skillBox.r.stderr).toBe(0);

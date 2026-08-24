@@ -121,8 +121,8 @@ describe('the roster travels with the snapshot (fix round 1, finding 3)', () => 
         roster: [
           TEST_ROSTER[0],
           null, // the shape a `null` array entry takes — `.id` on it would throw
-          { id: 'claude2', label: 'alt·max', hue: 'not-a-real-hue', homeAble: true },
-          { id: 'claude-corp', label: 'team·shared', homeAble: true }, // missing hue
+          { id: 'claude2', label: 'team·alt', hue: 'not-a-real-hue', homeAble: true },
+          { id: 'claude-corp', label: 'team·b', homeAble: true }, // missing hue
           'not an object',
         ],
       }),

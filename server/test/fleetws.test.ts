@@ -75,7 +75,7 @@ describe('fleet REST + WS', () => {
   beforeEach(() => {
     home = mkTmp('ccrc-');
     seedRoster(home);
-    seedSession(home, 'claude2-MekWarLive', 'claude2');
+    seedSession(home, 'claude-a-MekWarLive', 'claude-a');
   });
 
   afterEach(async () => {
@@ -89,7 +89,7 @@ describe('fleet REST + WS', () => {
     const res = await app.inject({ method: 'GET', url: '/api/fleet' });
     expect(res.statusCode).toBe(200);
     const body = res.json() as { sessions: Array<{ id: string; status: string }> };
-    expect(body.sessions.map((s) => s.id)).toEqual(['claude2-MekWarLive']);
+    expect(body.sessions.map((s) => s.id)).toEqual(['claude-a-MekWarLive']);
     expect(body.sessions[0]!.status).toBe('dead');
   });
 
@@ -118,26 +118,26 @@ describe('fleet REST + WS', () => {
 
     const snapshot = await next();
     expect(snapshot.type).toBe('fleet');
-    expect(snapshot.sessions.map((s: { id: string }) => s.id)).toEqual(['claude2-MekWarLive']);
+    expect(snapshot.sessions.map((s: { id: string }) => s.id)).toEqual(['claude-a-MekWarLive']);
 
     // Build 4: the cold start's LAST frame — this watcher has ticked, so it has
     // measured the markers and says so. Consumed here rather than ignored,
     // because the frames after it are what this test is actually about.
     expect((await next()).type).toBe('coord');
 
-    seedSession(home, 'claude-corp-orchard-api', 'claude-corp');
+    seedSession(home, 'claude-b-demo-app-ts', 'claude-b');
     await watcher.tick(); // registry changed -> emits
     const pushed = await next();
     expect(pushed.type).toBe('fleet');
     expect(pushed.sessions.map((s: { id: string }) => s.id)).toEqual([
-      'claude-corp-orchard-api',
-      'claude2-MekWarLive',
+      'claude-a-MekWarLive',
+      'claude-b-demo-app-ts',
     ]);
 
     await watcher.tick(); // no change -> must NOT emit; next message must be the notice below
-    bus.emit('notice', { message: 'cc swap: claude2-MekWarLive moved claude2 -> claude' });
+    bus.emit('notice', { message: 'cc swap: claude-a-MekWarLive moved claude-a -> claude' });
     const notice = await next();
-    expect(notice).toEqual({ type: 'notice', message: 'cc swap: claude2-MekWarLive moved claude2 -> claude' });
+    expect(notice).toEqual({ type: 'notice', message: 'cc swap: claude-a-MekWarLive moved claude-a -> claude' });
 
     ws.close();
   });
@@ -174,7 +174,7 @@ describe('fleet REST + WS', () => {
 
     const snapshot = await next();
     expect(snapshot.type).toBe('fleet');
-    const s = snapshot.sessions.find((x: { id: string }) => x.id === 'claude2-MekWarLive');
+    const s = snapshot.sessions.find((x: { id: string }) => x.id === 'claude-a-MekWarLive');
     // The bug: this was `false` — the initial push omitted pendingDialogs, so the
     // "needs you" marker never showed on the fleet overview for a pre-existing dialog.
     expect(s.dialogPending).toBe(true);
@@ -191,7 +191,7 @@ describe('fleet REST + WS', () => {
     await watcher.tick();
 
     const snap = await loadSnapshot(cachePath);
-    expect(snap?.sessions.map((s) => s.id)).toEqual(['claude2-MekWarLive']);
+    expect(snap?.sessions.map((s) => s.id)).toEqual(['claude-a-MekWarLive']);
     rmSync(cacheDir, { recursive: true, force: true });
   });
 
@@ -220,7 +220,7 @@ describe('fleet REST + WS', () => {
   it('a connected-but-degraded tick does not clobber a fuller last-known-good snapshot', async () => {
     const cacheDir = mkTmp('ccrc-cache-');
     const cachePath = path.join(cacheDir, 'state-cache.json');
-    seedSession(home, 'claude-corp-orchard-api', 'claude-corp');
+    seedSession(home, 'claude-b-demo-app-ts', 'claude-b');
     const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
     const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
     const watcher = new FleetWatcher(deps, new Bus());
@@ -228,21 +228,21 @@ describe('fleet REST + WS', () => {
     await watcher.tick(); // both sessions readable — writes a 2-row cache
     let snap = await loadSnapshot(cachePath);
     expect(snap?.sessions.map((s) => s.id).sort()).toEqual(
-      ['claude-corp-orchard-api', 'claude2-MekWarLive'].sort(),
+      ['claude-b-demo-app-ts', 'claude-a-MekWarLive'].sort(),
     );
 
     // One session's own `workdir` field goes unreadable — the exact shape a
     // partial/degraded read produces (registry.ts's "incomplete registry
     // entry" — readRegistry drops the row whole) — while `connected` stays
     // true throughout.
-    rmSync(path.join(home, '.cc-sessions', 'claude-corp-orchard-api.workdir'));
+    rmSync(path.join(home, '.cc-sessions', 'claude-b-demo-app-ts.workdir'));
     await watcher.tick(); // assembles only 1 row now
 
     snap = await loadSnapshot(cachePath);
     // The fuller 2-row snapshot survives; a 1-row assembly must never
     // clobber it.
     expect(snap?.sessions.map((s) => s.id).sort()).toEqual(
-      ['claude-corp-orchard-api', 'claude2-MekWarLive'].sort(),
+      ['claude-b-demo-app-ts', 'claude-a-MekWarLive'].sort(),
     );
     rmSync(cacheDir, { recursive: true, force: true });
   });
@@ -257,7 +257,7 @@ describe('fleet REST + WS', () => {
     await watcher.tick(); // 1 row
     expect((await loadSnapshot(cachePath))?.sessions).toHaveLength(1);
 
-    seedSession(home, 'claude-corp-orchard-api', 'claude-corp');
+    seedSession(home, 'claude-b-demo-app-ts', 'claude-b');
     await watcher.tick(); // 2 rows — a growth, not a shrink
 
     expect((await loadSnapshot(cachePath))?.sessions).toHaveLength(2);
@@ -313,7 +313,7 @@ describe('fleet REST + WS', () => {
     it('a genuine purge is allowed through immediately, and the cache keeps updating on every tick afterwards', async () => {
       const cacheDir = mkTmp('ccrc-cache-');
       const cachePath = path.join(cacheDir, 'state-cache.json');
-      seedSession(home, 'claude-corp-orchard-api', 'claude-corp');
+      seedSession(home, 'claude-b-demo-app-ts', 'claude-b');
       const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
       const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
       const watcher = new FleetWatcher(deps, new Bus());
@@ -321,16 +321,16 @@ describe('fleet REST + WS', () => {
       await watcher.tick(); // both sessions readable — writes a 2-row cache
       let snap = await loadSnapshot(cachePath);
       expect(snap?.sessions.map((s) => s.id).sort()).toEqual(
-        ['claude-corp-orchard-api', 'claude2-MekWarLive'].sort(),
+        ['claude-b-demo-app-ts', 'claude-a-MekWarLive'].sort(),
       );
       const firstSavedAt = snap!.savedAt;
 
-      purgeRegistryEntry('claude-corp-orchard-api');
+      purgeRegistryEntry('claude-b-demo-app-ts');
       await new Promise((r) => setTimeout(r, 3)); // guarantee Date.now() moves
 
       await watcher.tick(); // 1 row now — confirmed absent from the listing, not just unreadable
       snap = await loadSnapshot(cachePath);
-      expect(snap?.sessions.map((s) => s.id)).toEqual(['claude2-MekWarLive']);
+      expect(snap?.sessions.map((s) => s.id)).toEqual(['claude-a-MekWarLive']);
       expect(snap!.savedAt).toBeGreaterThan(firstSavedAt);
       const secondSavedAt = snap!.savedAt;
 
@@ -348,7 +348,7 @@ describe('fleet REST + WS', () => {
     it('reproduces the reported freeze scenario and proves it now heals: 5 healthy ticks after a purge all keep the cache at the true, current size', async () => {
       const cacheDir = mkTmp('ccrc-cache-');
       const cachePath = path.join(cacheDir, 'state-cache.json');
-      seedSession(home, 'claude-corp-orchard-api', 'claude-corp');
+      seedSession(home, 'claude-b-demo-app-ts', 'claude-b');
       const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
       const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
       const watcher = new FleetWatcher(deps, new Bus());
@@ -356,7 +356,7 @@ describe('fleet REST + WS', () => {
       await watcher.tick();
       expect((await loadSnapshot(cachePath))?.sessions).toHaveLength(2);
 
-      purgeRegistryEntry('claude-corp-orchard-api');
+      purgeRegistryEntry('claude-b-demo-app-ts');
 
       // On the OLD guard (`sessions.length >= prior.sessions.length` alone,
       // re-read from disk every tick) every one of these 5 ticks would still
@@ -366,7 +366,7 @@ describe('fleet REST + WS', () => {
       for (let i = 0; i < 5; i++) {
         await watcher.tick();
         const snap = await loadSnapshot(cachePath);
-        expect(snap?.sessions.map((s) => s.id)).toEqual(['claude2-MekWarLive']);
+        expect(snap?.sessions.map((s) => s.id)).toEqual(['claude-a-MekWarLive']);
       }
 
       rmSync(cacheDir, { recursive: true, force: true });
@@ -376,7 +376,7 @@ describe('fleet REST + WS', () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       const cacheDir = mkTmp('ccrc-cache-');
       const cachePath = path.join(cacheDir, 'state-cache.json');
-      seedSession(home, 'claude-corp-orchard-api', 'claude-corp');
+      seedSession(home, 'claude-b-demo-app-ts', 'claude-b');
       const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
       const deps: Deps = { ...testDeps(home), cfg, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
       const watcher = new FleetWatcher(deps, new Bus());
@@ -387,7 +387,7 @@ describe('fleet REST + WS', () => {
       // Only ONE field goes unreadable — `.uuid` (and every sibling field)
       // stays listed, so the registry directory itself still names this id:
       // a read failure, never a purge.
-      rmSync(path.join(home, '.cc-sessions', 'claude-corp-orchard-api.workdir'));
+      rmSync(path.join(home, '.cc-sessions', 'claude-b-demo-app-ts.workdir'));
 
       await watcher.tick();
       await watcher.tick();
@@ -395,7 +395,7 @@ describe('fleet REST + WS', () => {
 
       const snap = await loadSnapshot(cachePath);
       expect(snap?.sessions.map((s) => s.id).sort()).toEqual(
-        ['claude-corp-orchard-api', 'claude2-MekWarLive'].sort(),
+        ['claude-b-demo-app-ts', 'claude-a-MekWarLive'].sort(),
       );
       // Warned once across all three refused ticks, not once per tick — the
       // freeze must be visible in the logs, but not spammed forever.
@@ -435,13 +435,13 @@ describe('fleet REST + WS', () => {
       const cacheDir = mkTmp('ccrc-cache-');
       const cachePath = path.join(cacheDir, 'state-cache.json');
       const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
-      const { io, setDegraded } = degradableIO('claude2-MekWarLive', 'workdir');
+      const { io, setDegraded } = degradableIO('claude-a-MekWarLive', 'workdir');
       const deps: Deps = { ...testDeps(home), cfg, io, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
       const watcher = new FleetWatcher(deps, new Bus());
 
       await watcher.tick(); // clean read — writes a 1-row cache
       let snap = await loadSnapshot(cachePath);
-      expect(snap?.sessions.map((s) => s.id)).toEqual(['claude2-MekWarLive']);
+      expect(snap?.sessions.map((s) => s.id)).toEqual(['claude-a-MekWarLive']);
       expect(snap?.sessions[0]?.unmeasured).toEqual([]);
       const firstSavedAt = snap!.savedAt;
 
@@ -454,7 +454,7 @@ describe('fleet REST + WS', () => {
       // The write was SKIPPED: the cache is still the pre-degrade snapshot,
       // byte for byte (same savedAt), never a fresh write of the guess.
       expect(snap?.savedAt).toBe(firstSavedAt);
-      expect(snap?.sessions.map((s) => s.id)).toEqual(['claude2-MekWarLive']);
+      expect(snap?.sessions.map((s) => s.id)).toEqual(['claude-a-MekWarLive']);
 
       const skipWarnings = warnSpy.mock.calls.filter(
         ([msg]) => typeof msg === 'string' && msg.includes('snapshot write skipped') && msg.includes('unmeasured identity field'),
@@ -470,7 +470,7 @@ describe('fleet REST + WS', () => {
       const cacheDir = mkTmp('ccrc-cache-');
       const cachePath = path.join(cacheDir, 'state-cache.json');
       const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
-      const { io, setDegraded } = degradableIO('claude2-MekWarLive', 'workdir');
+      const { io, setDegraded } = degradableIO('claude-a-MekWarLive', 'workdir');
       const deps: Deps = { ...testDeps(home), cfg, io, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
       const watcher = new FleetWatcher(deps, new Bus());
 
@@ -506,7 +506,7 @@ describe('fleet REST + WS', () => {
       const cacheDir = mkTmp('ccrc-cache-');
       const cachePath = path.join(cacheDir, 'state-cache.json');
       const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
-      const { io, setDegraded } = degradableIO('claude2-MekWarLive', 'workdir');
+      const { io, setDegraded } = degradableIO('claude-a-MekWarLive', 'workdir');
       setDegraded(true);
       const deps: Deps = { ...testDeps(home), cfg, io, fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, stateCachePath: cachePath };
       const watcher = new FleetWatcher(deps, new Bus());

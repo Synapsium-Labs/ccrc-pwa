@@ -115,7 +115,7 @@ describe('the + button', () => {
 describe('pinned account', () => {
   it('shows the account the project is pinned to', () => {
     render(<ProjectCard group={grp({ pin: 'claude-corp' })} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER} />);
-    expect(screen.getByText('team·shared')).toBeInTheDocument();
+    expect(screen.getByText('team·b')).toBeInTheDocument();
   });
 
   it('says "mixed" when the sessions disagree rather than picking one', () => {
@@ -144,7 +144,7 @@ describe('the + is icon-only', () => {
   it('keeps the account and headroom in the accessible name', () => {
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}}
                         onAddWorkspace={() => {}} projected={projected} roster={TEST_ROSTER} />);
-    expect(screen.getByLabelText('New workspace on demo — alt·max, 91% free'))
+    expect(screen.getByLabelText('New workspace on demo — team·alt, 91% free'))
       .toBeInTheDocument();
   });
 
@@ -152,7 +152,7 @@ describe('the + is icon-only', () => {
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}}
                         onAddWorkspace={() => {}} projected={projected} roster={TEST_ROSTER} />);
     expect(screen.getByLabelText(/New workspace on demo/))
-      .toHaveAttribute('title', 'New workspace on demo — alt·max, 91% free');
+      .toHaveAttribute('title', 'New workspace on demo — team·alt, 91% free');
   });
 
   // `null` is the server's OWN answer (every home-able lane disabled) — a
@@ -163,7 +163,7 @@ describe('the + is icon-only', () => {
   it('names the four HOME_ABLE lanes individually when the server projects nothing — never "all accounts" (gpt is never consulted for this fact but renders as an account row on the same screen)', () => {
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}}
                         onAddWorkspace={() => {}} projected={null} roster={TEST_ROSTER} />);
-    expect(screen.getByLabelText('New workspace on demo — team·max, alt·max, team·shared and lab·dev0 all disabled'))
+    expect(screen.getByLabelText('New workspace on demo — team·max, team·alt, team·b and team·d all disabled'))
       .toBeInTheDocument();
   });
 });

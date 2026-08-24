@@ -4,7 +4,7 @@
  *
  * Two defects, one verb. `<wrapper> <project>` recomputes `<wrapper>-<project>`,
  * but a session keeps its birth id across every swap, so an operator reading
- * `claude-dev0` off the board and typing it back mints a SECOND row. And the
+ * `claude-d` off the board and typing it back mints a SECOND row. And the
  * unconditional `_reg_set wrapper` then pointed the ORIGINAL row at an account
  * whose config dir does not hold its transcript — the 21:32 incident's own
  * mechanism, reachable from a keyboard.
@@ -37,8 +37,8 @@ const run = (snippet: string): { code: number; stdout: string; stderr: string } 
   return { code: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 };
 
-/** A registry row exactly as the incident left it: the id says `claude2`, the
- *  `wrapper` field says `claude-dev0`, because auto-swap moved it. */
+/** A registry row exactly as the incident left it: the id says `claude-a`, the
+ *  `wrapper` field says `claude-d`, because auto-swap moved it. */
 const seedRow = (id: string, wrapper: string, project: string): void => {
   fs.mkdirSync(path.join(h.home, 'projects', project), { recursive: true });
   h.sh(`_reg_set ${id} uuid b7001948-0000-4c2f-9a1b-0cfc0dc3d199
@@ -52,14 +52,14 @@ describe('ccd start — the one-argument id form', () => {
   it('starts the id it was given whole, without re-deriving one', () => {
     // Kills the mutant that still runs `_id "$1" "$2"` on a single argument:
     // that starts `<id>-` (or dies), never the row the operator named.
-    seedRow('claude2-expoAI-assistant', 'claude-dev0', 'expoAI-assistant');
-    const r = run(`${STUBS} cmd_start claude2-expoAI-assistant`);
+    seedRow('claude-a-expoAI-assistant', 'claude-d', 'expoAI-assistant');
+    const r = run(`${STUBS} cmd_start claude-a-expoAI-assistant`);
     expect(r.code).toBe(0);
-    expect(h.calls()).toEqual(['supervised_start claude2-expoAI-assistant']);
-    expect(r.stdout).toContain('started claude2-expoAI-assistant (resume)');
+    expect(h.calls()).toEqual(['supervised_start claude-a-expoAI-assistant']);
+    expect(r.stdout).toContain('started claude-a-expoAI-assistant (resume)');
     // A workspace id (`<project>-<slug>`, no wrapper prefix) is the case the
     // two-argument form cannot express at all.
-    expect(h.reg('claude2-expoAI-assistant', 'wrapper')).toBe('claude-dev0');
+    expect(h.reg('claude-a-expoAI-assistant', 'wrapper')).toBe('claude-d');
   });
 
   it('refuses a single argument it has no row for, and says how to create one', () => {
@@ -89,25 +89,25 @@ describe('ccd start — the one-argument id form', () => {
 
 describe('ccd start — the registry account wins over the argument', () => {
   it('leaves wrapper alone and warns when the two-argument form disagrees', () => {
-    // THE INCIDENT, exactly: auto-swap moved claude2-expoAI-assistant to
-    // claude-dev0; the operator typed the account off the board back in; the
+    // THE INCIDENT, exactly: auto-swap moved claude-a-expoAI-assistant to
+    // claude-d; the operator typed the account off the board back in; the
     // unconditional `_reg_set wrapper` pointed the row at a config dir that
     // does not hold the transcript. Kills the mutant that keeps the write.
-    seedRow('claude2-expoAI-assistant', 'claude-dev0', 'expoAI-assistant');
-    const r = run(`${STUBS} cmd_start claude2 expoAI-assistant`);
+    seedRow('claude-a-expoAI-assistant', 'claude-d', 'expoAI-assistant');
+    const r = run(`${STUBS} cmd_start claude-a expoAI-assistant`);
     expect(r.code).toBe(0);
-    expect(h.reg('claude2-expoAI-assistant', 'wrapper')).toBe('claude-dev0');
-    expect(r.stderr).toContain('lives on claude-dev0, not claude2');
-    expect(r.stderr).toContain('ccd swap claude2-expoAI-assistant claude2');
+    expect(h.reg('claude-a-expoAI-assistant', 'wrapper')).toBe('claude-d');
+    expect(r.stderr).toContain('lives on claude-d, not claude-a');
+    expect(r.stderr).toContain('ccd swap claude-a-expoAI-assistant claude-a');
     // And it really started — a refusal here would strand the row.
-    expect(h.calls()).toEqual(['supervised_start claude2-expoAI-assistant']);
+    expect(h.calls()).toEqual(['supervised_start claude-a-expoAI-assistant']);
   });
 
   it('does not warn when the argument agrees with the row', () => {
     // Kills the mutant that warns unconditionally, which teaches the operator
     // to ignore the one warning that matters.
-    seedRow('claude2-expoAI-assistant', 'claude2', 'expoAI-assistant');
-    const r = run(`${STUBS} cmd_start claude2 expoAI-assistant`);
+    seedRow('claude-a-expoAI-assistant', 'claude-a', 'expoAI-assistant');
+    const r = run(`${STUBS} cmd_start claude-a expoAI-assistant`);
     expect(r.code).toBe(0);
     expect(r.stderr).not.toContain('warn');
   });
@@ -117,28 +117,28 @@ describe('ccd start — the registry account wins over the argument', () => {
     // names is the one that lands. Kills an over-eager "registry always wins"
     // that would leave a new row with no wrapper at all.
     fs.mkdirSync(path.join(h.home, 'projects', 'demo'), { recursive: true });
-    const r = run(`${STUBS} cmd_start claude-corp demo`);
+    const r = run(`${STUBS} cmd_start claude-b demo`);
     expect(r.code).toBe(0);
-    expect(h.reg('claude-corp-demo', 'wrapper')).toBe('claude-corp');
-    expect(h.reg('claude-corp-demo', 'workdir')).toBe(path.join(h.home, 'projects', 'demo'));
-    expect(h.reg('claude-corp-demo', 'started')).toBe('1');
-    expect(r.stdout).toContain('started claude-corp-demo (new)');
+    expect(h.reg('claude-b-demo', 'wrapper')).toBe('claude-b');
+    expect(h.reg('claude-b-demo', 'workdir')).toBe(path.join(h.home, 'projects', 'demo'));
+    expect(h.reg('claude-b-demo', 'started')).toBe('1');
+    expect(r.stdout).toContain('started claude-b-demo (new)');
   });
 
   it('honours an explicit workdir on the creating form', () => {
     fs.mkdirSync(path.join(h.home, 'elsewhere'), { recursive: true });
-    const r = run(`${STUBS} cmd_start claude-corp demo "$HOME/elsewhere"`);
+    const r = run(`${STUBS} cmd_start claude-b demo "$HOME/elsewhere"`);
     expect(r.code).toBe(0);
-    expect(h.reg('claude-corp-demo', 'workdir')).toBe(path.join(h.home, 'elsewhere'));
+    expect(h.reg('claude-b-demo', 'workdir')).toBe(path.join(h.home, 'elsewhere'));
   });
 });
 
 describe('ccd enable', () => {
   it('takes the id form too — after §3.1 the two verbs are one act', () => {
-    seedRow('claude2-expoAI-assistant', 'claude-dev0', 'expoAI-assistant');
-    const r = run(`${STUBS} cmd_enable claude2-expoAI-assistant`);
+    seedRow('claude-a-expoAI-assistant', 'claude-d', 'expoAI-assistant');
+    const r = run(`${STUBS} cmd_enable claude-a-expoAI-assistant`);
     expect(r.code).toBe(0);
-    expect(h.calls()).toEqual(['supervised_start claude2-expoAI-assistant']);
+    expect(h.calls()).toEqual(['supervised_start claude-a-expoAI-assistant']);
   });
 
   it('keeps its own usage line rather than borrowing start\'s', () => {
@@ -248,7 +248,7 @@ describe('an UNCLAIMED live pane is adopted, not ignored', () => {
     h.sh(`_reg_set ${id} uuid b7001948-0000-4c2f-9a1b-0cfc0dc3d199
       _reg_set ${id} project ${project}
       _reg_set ${id} workdir "$HOME/projects/${project}"
-      _reg_set ${id} wrapper claude2
+      _reg_set ${id} wrapper claude-a
       printf '%s' "$(( $(date +%s) - 5 ))" > "$REG/${id}.supervised"`);
   };
 

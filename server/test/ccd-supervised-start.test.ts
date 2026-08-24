@@ -116,13 +116,13 @@ describe('stop then start leaves the unit ENABLED', () => {
     // units, and a failed unit refuses to start until its failure is cleared,
     // so without that link the verb advertised as "what revives it" would not.
     h.sh(`mkdir -p "$HOME/projects/demo"`);
-    const out = h.sh(`${UNIT} cmd_stop claude2-demo; cmd_start claude2 demo`);
+    const out = h.sh(`${UNIT} cmd_stop claude-a-demo; cmd_start claude-a demo`);
     expect(sysCalls()).toEqual([
-      'systemctl --user disable --now claude-session@claude2-demo',
-      'systemctl --user reset-failed claude-session@claude2-demo',
-      'systemctl --user enable --now claude-session@claude2-demo',
+      'systemctl --user disable --now claude-session@claude-a-demo',
+      'systemctl --user reset-failed claude-session@claude-a-demo',
+      'systemctl --user enable --now claude-session@claude-a-demo',
     ]);
-    expect(out).toContain('started claude2-demo');
+    expect(out).toContain('started claude-a-demo');
     // The verb did not spawn anything itself — the unit did.
     expect(h.calls().some((c) => c.startsWith('tmux new-session'))).toBe(false);
   });
@@ -133,12 +133,12 @@ describe('stop then start leaves the unit ENABLED', () => {
     // no route builds. A leftover second `enable --now` in cmd_enable would be
     // a redundant systemd round-trip on every create.
     h.sh(`mkdir -p "$HOME/projects/demo"`);
-    const out = h.sh(`${UNIT} cmd_enable claude2 demo`);
+    const out = h.sh(`${UNIT} cmd_enable claude-a demo`);
     expect(sysCalls()).toEqual([
-      'systemctl --user reset-failed claude-session@claude2-demo',
-      'systemctl --user enable --now claude-session@claude2-demo',
+      'systemctl --user reset-failed claude-session@claude-a-demo',
+      'systemctl --user enable --now claude-session@claude-a-demo',
     ]);
-    expect(out).toContain('enabled boot-persistence for claude2-demo');
+    expect(out).toContain('enabled boot-persistence for claude-a-demo');
   });
 });
 
@@ -172,13 +172,13 @@ describe('cmd_enable reconciles a session that is already alive', () => {
     // `ccd start` minted reads `unsupervised`. `--now` is what actually adopts
     // it, and `reset-failed` must precede it for §3.3's reason.
     h.sh(`mkdir -p "$HOME/projects/demo"`);
-    const out = h.sh(`${UNIT} : > "$HOME/pane-up"; cmd_enable claude2 demo`);
+    const out = h.sh(`${UNIT} : > "$HOME/pane-up"; cmd_enable claude-a demo`);
     expect(sysCalls()).toEqual([
-      'systemctl --user reset-failed claude-session@claude2-demo',
-      'systemctl --user enable --now claude-session@claude2-demo',
+      'systemctl --user reset-failed claude-session@claude-a-demo',
+      'systemctl --user enable --now claude-session@claude-a-demo',
     ]);
-    expect(out).toContain('re-supervised claude2-demo');
-    expect(out).toContain('enabled boot-persistence for claude2-demo');
+    expect(out).toContain('re-supervised claude-a-demo');
+    expect(out).toContain('enabled boot-persistence for claude-a-demo');
     // The adoption is not a second spawn: the unit re-enters through
     // `cmd_ensure`, which finds the pane and returns.
     expect(h.calls().some((c) => c.startsWith('tmux new-session'))).toBe(false);
@@ -190,12 +190,12 @@ describe('cmd_enable reconciles a session that is already alive', () => {
     // plain `ccd start` benefits identically — recovering an unsupervised row
     // does not require remembering to type `enable`.
     h.sh(`mkdir -p "$HOME/projects/demo"`);
-    const out = h.sh(`${UNIT} : > "$HOME/pane-up"; cmd_start claude2 demo`);
+    const out = h.sh(`${UNIT} : > "$HOME/pane-up"; cmd_start claude-a demo`);
     expect(sysCalls()).toEqual([
-      'systemctl --user reset-failed claude-session@claude2-demo',
-      'systemctl --user enable --now claude-session@claude2-demo',
+      'systemctl --user reset-failed claude-session@claude-a-demo',
+      'systemctl --user enable --now claude-session@claude-a-demo',
     ]);
-    expect(out).toContain('already running: claude2-demo');
+    expect(out).toContain('already running: claude-a-demo');
   });
 
   it('a live pane that IS being watched costs one idempotent enable and no --now', () => {
@@ -205,10 +205,10 @@ describe('cmd_enable reconciles a session that is already alive', () => {
     // be a restart request against a unit that is already running the session.
     h.sh(`mkdir -p "$HOME/projects/demo"`);
     h.sh(`${UNIT} : > "$HOME/pane-up"`);
-    beat('claude2-demo');
-    const out = h.sh(`${UNIT} : > "$HOME/pane-up"; cmd_start claude2 demo`);
-    expect(sysCalls()).toEqual(['systemctl --user enable claude-session@claude2-demo']);
-    expect(out).toContain('already running: claude2-demo');
+    beat('claude-a-demo');
+    const out = h.sh(`${UNIT} : > "$HOME/pane-up"; cmd_start claude-a demo`);
+    expect(sysCalls()).toEqual(['systemctl --user enable claude-session@claude-a-demo']);
+    expect(out).toContain('already running: claude-a-demo');
     expect(out).not.toContain('re-supervised');
   });
 });
@@ -314,12 +314,12 @@ describe('ccd ensure revives a live-but-unsupervised session', () => {
     // moments earlier. Not alive at the start of this call, so it takes the
     // fresh-start branch, never the alive one.
     h.sh(`mkdir -p "$HOME/projects/demo"`);
-    const out = h.sh(`${UNIT} cmd_start claude2 demo`);
+    const out = h.sh(`${UNIT} cmd_start claude-a demo`);
     expect(sysCalls()).toEqual([
-      'systemctl --user reset-failed claude-session@claude2-demo',
-      'systemctl --user enable --now claude-session@claude2-demo',
+      'systemctl --user reset-failed claude-session@claude-a-demo',
+      'systemctl --user enable --now claude-session@claude-a-demo',
     ]);
-    expect(out).toContain('started claude2-demo');
+    expect(out).toContain('started claude-a-demo');
   });
 });
 
@@ -381,12 +381,12 @@ describe('the start waits on observables', () => {
     // ccd:7180 is `_alive || cmd_ensure` then `exec tmux attach` — delegating
     // the spawn made that asynchronous, so without the wait the attach races a
     // pane that is not there yet.
-    seed('claude2-demo');
-    const r = runCcd('attach', 'claude2', 'demo');
+    seed('claude-a-demo');
+    const r = runCcd('attach', 'claude-a', 'demo');
     expect(r.code).toBe(0);
     const calls = h.calls();
-    const enableAt = calls.indexOf('systemctl --user enable --now claude-session@claude2-demo');
-    const attachAt = calls.indexOf('tmux attach -t cc-claude2-demo');
+    const enableAt = calls.indexOf('systemctl --user enable --now claude-session@claude-a-demo');
+    const attachAt = calls.indexOf('tmux attach -t cc-claude-a-demo');
     expect(enableAt).toBeGreaterThan(-1);
     expect(attachAt).toBeGreaterThan(enableAt);
   });

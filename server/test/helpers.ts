@@ -13,37 +13,31 @@ import { mkTmp } from './tmpHelpers.js';
 /**
  * The TEST default roster — deliberately NOT the single-`claude` roster a
  * fresh install ships (`deploy/accounts.default.json`, Task 10 of the
- * stage-2a plan). Over twenty files under `server/test/` exercise `claude2`,
- * `claude-corp`, `claude-dev0` and `gpt` by id (`dialog.test.ts` resolves
- * `configDirFor(cfg, 'claude2')` and expects a real path back, for example),
- * so the test default has to mirror today's five production accounts
- * exactly — transcribed from `shared/api.ts`'s `ACCOUNTS` literal, in its
- * declaration order, before Task 6 deleted it.
+ * stage-2a plan). Over twenty files under `server/test/` exercise the other
+ * four accounts by id (`dialog.test.ts` resolves `configDirFor(cfg,
+ * 'claude-a')` and expects a real path back, for example), so the test
+ * default has to be a five-account roster with every `exec` kind, a
+ * non-home-able member, and ids that collide the way real ones do.
  *
- * That literal is gone, so this is the ROOT copy of the production account
- * names in TypeScript, and deliberately so: it is TEST data, under a directory
- * the roster-drift scanner (`single-definition.test.ts`) does not scan — and
- * that scanner now reads its own list of wrapper names FROM here, because the
- * roster it hunts for copies of no longer exists in any source file it could
- * trust to read them from.
+ * THE ROSTER IS FIXTURES' OWN, NOT ANY FLEET'S (Stage 5, spec §5). It used
+ * to be a byte-for-byte mirror of the reference fleet's five real accounts
+ * (`deploy/accounts.migration.json`, deleted in the same task that renamed
+ * these entries), which put one operator's wrapper names and account labels
+ * at the root of every suite. What the tests ever actually consumed was the
+ * SHAPE — one `upstream`, three `generated` (two with a `secretsFile`, one
+ * without), one `external`/non-home-able/`telemetry:'none'`; hues spanning
+ * five of the six; ids where a shorter one is a strict prefix of longer
+ * ones — so the shape stayed and the names went neutral (`gpt` excepted,
+ * see its entry). `claude` is a strict prefix of its three renamed siblings
+ * and those three tie on length, which exercises `byIdLengthDesc`'s
+ * tie-break (id ascending) harder than the old names did.
  *
- * KEEP IT IN STEP WITH `server/test/fixtures/roster-five.json` — this fleet's five
- * real accounts: same ids, same declaration order, same config-dir suffixes,
- * home-able flags, hues and `exec` shapes — not with whatever any one test
- * happens to need. NOT with `deploy/accounts.default.json`, which is the
- * single-`claude` fresh-install roster this fixture is deliberately NOT (first
- * paragraph). An earlier version of this comment named `accounts.default.json`
- * here and so contradicted itself two paragraphs up; that correction also
- * inverted the `label` claim it made, so here is the measured truth against
- * `server/test/fixtures/roster-five.json`: `label` DIVERGES from the migration
- * roster for three of the five accounts — `claude`, `claude-corp` and
- * `claude-dev0` all use their own id as the test label here, where
- * production's real label is `team·max`, `team·shared` and `lab·dev0`
- * respectively. It MATCHES for the other two, `claude2` (`alt·max`) and
- * `gpt` (`gpt`). `claude2` is the one worth a second look — see the note on
- * it below — not because it diverges, but for the opposite reason: it is the
- * only entry here whose label is NOT its own id, and that is what lets it
- * agree with production instead of by coincidence.
+ * This is also the ROOT copy of the account names in TypeScript, and
+ * deliberately so: it is TEST data, under a directory the roster-drift
+ * scanner (`single-definition.test.ts`) does not scan — and that scanner
+ * reads its own list of wrapper names FROM here, because the roster it hunts
+ * for copies of no longer exists in any source file it could trust to read
+ * them from.
  *
  * ROOT, AND THE ONLY OTHER COPY IS DERIVED FROM IT.
  * `test/fixtures/ccdMirror.ts` DERIVES its ids, config dirs and home-able
@@ -71,29 +65,34 @@ export const DEFAULT_TEST_ROSTER = {
       exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic',
     },
     {
-      // The one account whose LABEL IS NOT ITS ID, deliberately (M9, final
-      // review), and it is `alt·max` because that is genuinely this
-      // account's label in `server/test/fixtures/roster-five.json`. Every other entry
-      // here labels itself with its own id, which made `label` and `id`
-      // indistinguishable on the wire: `accounts-route.test.ts`'s roster
-      // assertion would have passed just the same if the handler had emitted
-      // `a.id` for `label`, and the PWA renders `label`. One discriminating
-      // row is enough to make that assertion able to fail.
-      id: 'claude2', label: 'alt·max', configDirSuffix: '.claude-personal',
-      exec: { kind: 'generated', secretsFile: '.cc-secrets/claude2-oauth.env' },
+      id: 'claude-a', label: 'claude-a', configDirSuffix: '.claude-a',
+      exec: { kind: 'generated', secretsFile: '.cc-secrets/claude-a-oauth.env' },
       homeAble: true, hue: 'violet', telemetry: 'anthropic',
     },
     {
-      id: 'claude-corp', label: 'claude-corp', configDirSuffix: '.claude-corp',
+      // The one account whose LABEL IS NOT ITS ID, deliberately (M9, final
+      // review of the stage-2a plan). Every other entry here labels itself
+      // with its own id, which made `label` and `id` indistinguishable on
+      // the wire: `accounts-route.test.ts`'s roster assertion would have
+      // passed just the same if the handler had emitted `a.id` for `label`,
+      // and the PWA renders `label`. One discriminating row is enough to
+      // make that assertion able to fail.
+      id: 'claude-b', label: 'team·b', configDirSuffix: '.claude-b',
       exec: { kind: 'generated' }, homeAble: true, hue: 'blue', telemetry: 'anthropic',
     },
     {
+      // `gpt` KEEPS its name through the stage-5 de-brand (D-202): it names
+      // OpenAI's backend, not this fleet — and ccd's shipped bash keys its
+      // Codex overflow lane on this literal roster id (`_gpt_enabled() {
+      // _account_ok gpt; }`; `ccd ls` prints its footer only behind
+      // `_is_valid_wrapper gpt`). Rename it here and every gpt-lane test
+      // goes dark: the footer is skipped, not relabelled.
       id: 'gpt', label: 'gpt', configDirSuffix: '.claude-gpt',
       exec: { kind: 'external' }, homeAble: false, hue: 'magenta', telemetry: 'none',
     },
     {
-      id: 'claude-dev0', label: 'claude-dev0', configDirSuffix: '.claude-dev0',
-      exec: { kind: 'generated', secretsFile: '.cc-secrets/claude-dev0-oauth.env' },
+      id: 'claude-d', label: 'claude-d', configDirSuffix: '.claude-d',
+      exec: { kind: 'generated', secretsFile: '.cc-secrets/claude-d-oauth.env' },
       homeAble: true, hue: 'green', telemetry: 'anthropic',
     },
   ],

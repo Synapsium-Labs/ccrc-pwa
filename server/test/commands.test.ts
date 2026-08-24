@@ -31,14 +31,14 @@ describe('GET /api/sessions/:id/commands', () => {
     seedRoster(home);
     const reg = path.join(home, '.cc-sessions');
     mkdirSync(reg, { recursive: true });
-    const id = 'claude2-rp-llm';
+    const id = 'claude-a-rp-llm';
     const workdir = '/data/projects/rp-llm';
     const uuid = '9'.repeat(36);
-    for (const [k, v] of Object.entries({ wrapper: 'claude2', project: 'rp-llm', workdir, uuid, started: '1' })) {
+    for (const [k, v] of Object.entries({ wrapper: 'claude-a', project: 'rp-llm', workdir, uuid, started: '1' })) {
       writeFileSync(path.join(reg, `${id}.${k}`), v);
     }
     const munged = workdir.replace(/[/._]/g, '-');
-    const tdir = path.join(home, '.claude-personal', 'projects', munged);
+    const tdir = path.join(home, '.claude-a', 'projects', munged);
     mkdirSync(tdir, { recursive: true });
     const skillListing = { attachment: { type: 'skill_listing', content: '- superpowers:writing-plans: Use when you have a spec.\n- graphify: Turn input into a graph.' } };
     writeFileSync(path.join(tdir, `${uuid}.jsonl`), JSON.stringify(skillListing) + '\n');
@@ -69,18 +69,18 @@ describe('GET /api/sessions/:id/commands', () => {
     seedRoster(home);
     const reg = path.join(home, '.cc-sessions');
     mkdirSync(reg, { recursive: true });
-    const id = 'claude2-rp-llm';
+    const id = 'claude-a-rp-llm';
     const workdir = '/data/projects/rp-llm';
     const uuid = '8'.repeat(36);
-    for (const [k, v] of Object.entries({ wrapper: 'claude2', project: 'rp-llm', workdir, uuid, started: '1' })) {
+    for (const [k, v] of Object.entries({ wrapper: 'claude-a', project: 'rp-llm', workdir, uuid, started: '1' })) {
       writeFileSync(path.join(reg, `${id}.${k}`), v);
     }
-    // Own account (claude2): the projects root exists but holds nothing for
+    // Own account (claude-a): the projects root exists but holds nothing for
     // this uuid — a genuine, COMPLETE miss, not an unmeasurable one.
-    mkdirSync(path.join(home, '.claude-personal', 'projects'), { recursive: true });
-    // A DIFFERENT account (claude-corp) holds a transcript for the SAME uuid,
+    mkdirSync(path.join(home, '.claude-a', 'projects'), { recursive: true });
+    // A DIFFERENT account (claude-b) holds a transcript for the SAME uuid,
     // with a real skill listing — findable only via rung 6 (foreign glob).
-    const foreignDir = path.join(home, '.claude-corp', 'projects', '-stranded');
+    const foreignDir = path.join(home, '.claude-b', 'projects', '-stranded');
     mkdirSync(foreignDir, { recursive: true });
     const skillListing = { attachment: { type: 'skill_listing', content: '- graphify: Turn input into a graph.' } };
     writeFileSync(path.join(foreignDir, `${uuid}.jsonl`), JSON.stringify(skillListing) + '\n');
@@ -116,16 +116,16 @@ describe('GET /api/sessions/:id/commands', () => {
     seedRoster(home);
     const reg = path.join(home, '.cc-sessions');
     mkdirSync(reg, { recursive: true });
-    const id = 'claude2-rp-llm-pin';
+    const id = 'claude-a-rp-llm-pin';
     const registryWorkdir = '/data/projects/rp-llm';
     const liveCwd = '/data/projects/rp-llm-worktree'; // moved — e.g. into a worktree
     const uuid = '7'.repeat(36);
     const pid = 5551;
     for (const [k, v] of Object.entries(
-      { wrapper: 'claude2', project: 'rp-llm', workdir: registryWorkdir, uuid, started: '1' })) {
+      { wrapper: 'claude-a', project: 'rp-llm', workdir: registryWorkdir, uuid, started: '1' })) {
       writeFileSync(path.join(reg, `${id}.${k}`), v);
     }
-    const cfgDir = path.join(home, '.claude-personal');
+    const cfgDir = path.join(home, '.claude-a');
     mkdirSync(path.join(cfgDir, 'sessions'), { recursive: true });
     writeFileSync(path.join(cfgDir, 'sessions', `${pid}.json`), JSON.stringify({
       pid, sessionId: uuid, cwd: liveCwd, name: 'rp-llm', status: 'idle', statusUpdatedAt: 1, version: '2.1.210',

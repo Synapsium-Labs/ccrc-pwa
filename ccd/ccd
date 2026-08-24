@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=108ba19b89956e2d67be9a09e801634444e7679e8cc1917c07db23594702973a
+# ccrc:generated 1 sha256=346afdbbd260b0add7d77e62586c71c0f65c905820f97f26f3bfb8cc80fe9ea2
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box, not on this file: `_rc_enabled` reads
@@ -8088,8 +8088,8 @@ _default_pool() {   # id -> wrappers this session may auto-swap between.
   # Free swapping across ALL home-able accounts (explicit user decision 2026-07-03).
   # An account that is NOT home-able is not a general overflow target (user
   # decision 2026-07-26, made about `gpt` when gpt was the only such account):
-  # only a session whose HOME is that account may rotate onto it — today that is
-  # orchard-api on gpt alone. Everything else stays on the home-able
+  # only a session whose HOME is that account may rotate onto it — a project
+  # deliberately homed on gpt, nothing else. Everything else stays on the home-able
   # accounts, so no project silently lands on the Codex lane with its 272k
   # window and unofficial-client risk.
   # Narrow per session with a space-separated list in the registry `pool` field.

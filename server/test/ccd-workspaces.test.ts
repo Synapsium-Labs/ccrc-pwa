@@ -40,16 +40,16 @@ describe('home is explicit at creation', () => {
   it('writes home when cmd_start registers a new session', () => {
     fs.mkdirSync(path.join(home, 'projects', 'demo'), { recursive: true });
     // _spawn needs tmux; register only, then assert the field.
-    sh(`_reg_set claude2-demo wrapper claude2
-        _reg_set claude2-demo project demo
-        _ws_seed_home claude2-demo claude2`);
-    expect(reg('claude2-demo', 'home')).toBe('claude2');
+    sh(`_reg_set claude-a-demo wrapper claude-a
+        _reg_set claude-a-demo project demo
+        _ws_seed_home claude-a-demo claude-a`);
+    expect(reg('claude-a-demo', 'home')).toBe('claude-a');
   });
 
   it('does not overwrite a home that was already chosen', () => {
-    sh(`_reg_set claude2-demo home claude-corp
-        _ws_seed_home claude2-demo claude2`);
-    expect(reg('claude2-demo', 'home')).toBe('claude-corp');
+    sh(`_reg_set claude-a-demo home claude-b
+        _ws_seed_home claude-a-demo claude-a`);
+    expect(reg('claude-a-demo', 'home')).toBe('claude-b');
   });
 });
 
@@ -420,10 +420,10 @@ describe('_ws_least_loaded', () => {
       fs.writeFileSync(path.join(home, '.cc-limits', `${wrapper}.json`),
         JSON.stringify({ five, seven, ts: t }));
     writeLimits('claude', 80, 40);       // score 80 — worst
-    writeLimits('claude2', 5, 3);        // score 5 — cheapest
-    writeLimits('claude-corp', 90, 95);  // score 95 — worst of all
-    writeLimits('claude-dev0', 70, 70);  // score 70 — priced, so it cannot win by silence
-    expect(sh('_ws_least_loaded')).toBe('claude2');
+    writeLimits('claude-a', 5, 3);        // score 5 — cheapest
+    writeLimits('claude-b', 90, 95);  // score 95 — worst of all
+    writeLimits('claude-d', 70, 70);  // score 70 — priced, so it cannot win by silence
+    expect(sh('_ws_least_loaded')).toBe('claude-a');
   });
 });
 
@@ -539,10 +539,10 @@ describe('cmd_stop', () => {
   });
 
   it('still recomputes <wrapper>-<project> for the legacy two-argument form', () => {
-    expect(sh(`${STOP} cmd_stop claude2 demo`)).toBe('stopped claude2-demo');
+    expect(sh(`${STOP} cmd_stop claude-a demo`)).toBe('stopped claude-a-demo');
     expect(calls()).toEqual([
-      'systemctl --user disable --now claude-session@claude2-demo',
-      'tmux kill-session -t cc-claude2-demo',
+      'systemctl --user disable --now claude-session@claude-a-demo',
+      'tmux kill-session -t cc-claude-a-demo',
     ]);
   });
 });
@@ -604,12 +604,12 @@ describe('ws-rm', () => {
   });
 
   it('refuses to remove a session that is not a workspace', () => {
-    sh(`_reg_set claude2-demo wrapper claude2
-        _reg_set claude2-demo project demo
-        _reg_set claude2-demo workdir ${path.join(home, 'projects', 'demo')}
-        _reg_set claude2-demo uuid abc`);
-    expect(() => sh(`${RM} cmd_ws_rm claude2-demo`)).toThrow();
-    expect(reg('claude2-demo', 'uuid')).toBe('abc');
+    sh(`_reg_set claude-a-demo wrapper claude-a
+        _reg_set claude-a-demo project demo
+        _reg_set claude-a-demo workdir ${path.join(home, 'projects', 'demo')}
+        _reg_set claude-a-demo uuid abc`);
+    expect(() => sh(`${RM} cmd_ws_rm claude-a-demo`)).toThrow();
+    expect(reg('claude-a-demo', 'uuid')).toBe('abc');
   });
 
   it('refuses a dirty worktree BEFORE it tears anything down', () => {

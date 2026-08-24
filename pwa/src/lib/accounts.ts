@@ -37,7 +37,7 @@ function entryFor(roster: readonly RosterWire[], wrapper: string): RosterWire | 
   return roster.find((a) => a.id === wrapper);
 }
 
-/** Human label for an account, e.g. 'claude2' → 'alt·max'. Unknown wrappers
+/** Human label for an account, e.g. 'claude2' → 'team·alt'. Unknown wrappers
  *  fall back to the raw name — never hide an account the server reports,
  *  including in the window before the roster has arrived at all. */
 export function accountLabel(roster: readonly RosterWire[], wrapper: string): string {
@@ -65,7 +65,7 @@ export function accountColorVar(roster: readonly RosterWire[], wrapper: string):
   return hue === undefined ? '--ink-tertiary' : `--acct-${hue}`;
 }
 
-/** "team·max, alt·max and team·shared" — the HOME_ABLE accounts by their
+/** "team·max, team·alt and team·b" — the HOME_ABLE accounts by their
  *  human labels, joined for the one-line "nothing can take a new workspace"
  *  message (AccountsScreen's projection line, ProjectCard's addLabel).
  *
