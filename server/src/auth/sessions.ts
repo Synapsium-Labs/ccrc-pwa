@@ -21,8 +21,8 @@ import type { AuthVerdict } from '../../../shared/api.js';
  *    `randomBytes`, so there is no dictionary to slow and no salt to add — a plain
  *    `sha256` is the correct and complete choice. The raw token is returned ONCE
  *    from {@link create} and is never written to disk or logged.
- *  - {@link verify} hashes the presented token and `timingSafeEqual`s it against the
- *    stored hashes (length-check-FIRST, the `coord/token.ts:220-228` discipline —
+ *  - {@link verifyMeasured} hashes the presented token and `timingSafeEqual`s it
+ *    against the stored hashes (length-check-FIRST, the `coord/token.ts:220-228` discipline —
  *    equal-length sha256 always, but the guard stays live against a malformed
  *    stored hash rather than letting `timingSafeEqual` throw a RangeError).
  *
@@ -224,6 +224,43 @@ export class SessionStore {
   }
 
   /**
+   * {@link verify}'s answer PLUS the matched row's device label — one loop, one
+   * read, exactly as before. `readFileMeasured`/`readFile` in `server/src/io.ts`
+   * is the same shape and the same argument: the RICHER answer is the primitive
+   * and the narrow one derives from it, so there is never a SECOND lookup and
+   * never two readers of the same rows that could disagree.
+   *
+   * `label` is `null` for every non-`'ok'` verdict, and that is not a stand-in
+   * for the empty string: no row was matched, so nothing was measured. Still
+   * SYNCHRONOUS and still no I/O — the property that lets the hottest path in
+   * the server stay pure (`gate.ts`'s `GateDeps`).
+   *
+   * NOT A DECISION INPUT, here or anywhere downstream. The label is
+   * attacker-controlled text (`server.ts`'s `deviceLabel` truncates a
+   * user-agent) and it exists to be RECORDED, never to be compared.
+   */
+  verifyMeasured(
+    token: string, currentGeneration: number, now: number,
+  ): { verdict: AuthVerdict; label: string | null } {
+    const presented = Buffer.from(sha256hex(token), 'hex');
+    for (const rec of this.records) {
+      const stored = Buffer.from(rec.idHash, 'hex');
+      // length-check FIRST (coord/token.ts:220-228): equal-length sha256 always,
+      // but a garbled stored hash of the wrong length would make
+      // `timingSafeEqual` throw a RangeError rather than answering "no". Skip
+      // such a row, do not crash.
+      if (stored.length !== presented.length) continue;
+      if (!timingSafeEqual(stored, presented)) continue;
+      if (rec.generation !== currentGeneration) return { verdict: 'expired', label: null };
+      if (isExpired(rec, now)) return { verdict: 'expired', label: null };
+      rec.lastSeenAt = now;
+      this.dirty = true;
+      return { verdict: 'ok', label: rec.label };
+    }
+    return { verdict: 'no-session', label: null };
+  }
+
+  /**
    * The gate's per-request question: is `token` a live session at `currentGeneration`
    * as of `now`?
    *
@@ -241,23 +278,12 @@ export class SessionStore {
    * Expired/stale-generation rows are LEFT in place for the sweep to reclaim; they
    * are inert (they never verify `'ok'`), so there is nothing to race on removing
    * them synchronously here.
+   *
+   * Derives from {@link verifyMeasured} since wave 6 — same loop, same effects,
+   * the verdict half.
    */
   verify(token: string, currentGeneration: number, now: number): AuthVerdict {
-    const presented = Buffer.from(sha256hex(token), 'hex');
-    for (const rec of this.records) {
-      const stored = Buffer.from(rec.idHash, 'hex');
-      // length-check FIRST (coord/token.ts:220-228): equal-length sha256 always, but
-      // a garbled stored hash of the wrong length would make `timingSafeEqual` throw
-      // a RangeError rather than answering "no". Skip such a row, do not crash.
-      if (stored.length !== presented.length) continue;
-      if (!timingSafeEqual(stored, presented)) continue;
-      if (rec.generation !== currentGeneration) return 'expired';
-      if (isExpired(rec, now)) return 'expired';
-      rec.lastSeenAt = now;
-      this.dirty = true;
-      return 'ok';
-    }
-    return 'no-session';
+    return this.verifyMeasured(token, currentGeneration, now).verdict;
   }
 
   /** Log out ONE session — the ordinary logout. A no-op (and no write) if the token

@@ -66,7 +66,7 @@ describe('ws-rename', () => {
    *  throws on a non-zero exit, so reading refusals THROUGH it is also the
    *  assertion that `git branch -m` failing is the one REFUSAL path that keeps
    *  a non-zero exit. It is not the only non-zero path in the function: the
-   *  `_json_str probe` at the top (ccd:1379-1380) is a FAULT for the same
+   *  `_json_str probe` at the top (ccd:3105) is a FAULT for the same
    *  reason, and on a python3-less box every refusal case below would throw at
    *  the probe before ever reaching its own printf — this harness runs with
    *  python3 present, which is what keeps that case from being vacuous here. */
@@ -273,7 +273,7 @@ describe('ws-rename', () => {
 
   // `git branch -m` failing is the one REFUSAL path that keeps a non-zero exit
   // — the only other non-zero path in the function is the `_json_str probe` at
-  // the top (ccd:1379-1380), also a fault rather than a verdict on the request.
+  // the top (ccd:3105), also a fault rather than a verdict on the request.
   // This one: nothing about the request was wrong, so it is a fault and not a
   // refusal — the caller must not read it as a REFUSAL ANSWER (no token, no
   // refusalSentence), but the pair IS still marked attempted, like every other

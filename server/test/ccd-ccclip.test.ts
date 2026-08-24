@@ -59,7 +59,7 @@ const runCcclip = (...args: string[]): { code: number; stdout: string; stderr: s
     'BASH_FUNC_mktemp%%': '() { local f="$HOME/ccclip-local-$RANDOM"; : > "$f"; printf "%s\\n" "$f"; }',
     'BASH_FUNC_scp%%': '() { printf "%s\\n" "${@: -1}" >> "$HOME/scp-dest"; }',
     'BASH_FUNC_ssh%%': '() { printf "%s" "${@: -1}" > "$HOME/ssh-cmd"; }',
-  }, { systemd: true });
+  }, { systemd: true, tmux: true });
   try {
     const stdout = execFileSync('bash', [CCCLIP, ...args], { encoding: 'utf8', env });
     return { code: 0, stdout, stderr: '' };
@@ -274,7 +274,7 @@ describe('ccclip does not orphan its incoming file on the box', () => {
       try {
         execFileSync('bash', ['-c', `${stub}\n${script}`],
           { encoding: 'utf8',
-            env: ghContainedEnv(home, { PATH: process.env['PATH'], HOME: home }, { systemd: true }) });
+            env: ghContainedEnv(home, { PATH: process.env['PATH'], HOME: home }, { systemd: true, tmux: true }) });
       } catch (e) { code = (e as { status: number }).status; }
       expect(code, `${name}: the verb's own exit status must survive the cleanup`).toBe(wantCode);
       expect(fs.existsSync(local), `${name}: the incoming file was left on the box`).toBe(false);

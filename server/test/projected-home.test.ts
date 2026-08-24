@@ -2,7 +2,7 @@
 // current headroom" BEFORE the tap, because "a workspace that silently lands on
 // an exhausted account presents as a stalled session with no explanation".
 //
-// The routing rule itself is `_ws_least_loaded` (ccd:132-140) — bash, and the
+// The routing rule itself is `_ws_least_loaded` (ccd:2451) — bash, and the
 // authority: it is what actually writes `home`. `projectHome` only PREDICTS it
 // for the display. Two implementations of one rule drift, so this file drives
 // BOTH over identical fixtures and demands they agree on the wrapper AND the

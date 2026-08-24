@@ -33,7 +33,7 @@ const shStatus = (snippet: string, env: NodeJS.ProcessEnv = {}): { status: numbe
   try {
     const out = execFileSync('bash', ['-c', `source "${CCD}"; exec 2>&1; ${snippet}`],
       { encoding: 'utf8', cwd: h.home,
-        env: ghContainedEnv(h.home, { ...process.env, HOME: h.home, ...env }, { systemd: true }) });
+        env: ghContainedEnv(h.home, { ...process.env, HOME: h.home, ...env }, { systemd: true, tmux: true }) });
     return { status: 0, out };
   } catch (e) {
     const err = e as { status?: number | null; stdout?: string; stderr?: string };

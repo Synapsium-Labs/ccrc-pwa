@@ -119,7 +119,7 @@ describe('prhistory — the one chokepoint', () => {
   // it cannot discriminate ccd's own MALFORMED policy from the reader's
   // deliberate divergence from it, even though the reader's docstring cited
   // this file for exactly that. This ledger puts a GOOD row (#577) ahead of
-  // the bad one: ccd's list comprehension (`ccd/ccd:2046`) raises on the bad
+  // the bad one: ccd's list comprehension (`ccd/ccd:4234`) raises on the bad
   // line, the one `try` around the WHOLE comprehension (`:2060-2061`)
   // discards every row it built — the good one included — down to `[]`,
   // which is the only shape that tells whole-file discard apart from

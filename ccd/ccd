@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=346afdbbd260b0add7d77e62586c71c0f65c905820f97f26f3bfb8cc80fe9ea2
+# ccrc:generated 1 sha256=c0046e20022bfc2996cbd23c243d447819098150d94a19d4c6166a9f54d3bfc2
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box, not on this file: `_rc_enabled` reads
@@ -454,7 +454,15 @@ _reg_get() { cat "$REG/$1.$2" 2>/dev/null; }                # id field
 # one eraser is `_reg_purge`, which unlinks EVERY field for an id (forget, reap,
 # dead-reg) — that destroys the identity, it does not un-claim it. Deliberate,
 # and what `_spawn_start`'s --resume -> --session-id fallback exists to pay for.
-_reg_claim() { _reg_set "$1" started 1; }                   # id
+_reg_claim() {   # id — THE ONE WRITER of `started`, and now of its record
+  # Its name is a trap (§0): this is an idempotent flag, not a compare-and-swap.
+  # The journal line is what makes a re-claim distinguishable from a first one.
+  # It adds NO second writer of `started` — `ccd-reg-claim.test.ts`'s "exactly
+  # one `_reg_set … started` line" must still find exactly one.
+  _lc_done claim "$1" "" meas.wrapper "$(_reg_get "$1" wrapper)" \
+    meas.project "$(_reg_get "$1" project)"
+  _reg_set "$1" started 1
+}
 _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # final-review-destructive finding F3. The THREE call sites that used to spell
   # this `rm -f "$REG/$id".*` directly were an unanchored glob: `$id.*`
@@ -517,12 +525,41 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # free, `cmd_ws_add` re-uses it (it purges nothing first), and the brand-new
   # workspace is born wearing a stranger's `.archived`/`.reaping`. Measured on
   # that state: `ws-archive` answers `already archived` at exit 0 having
-  # stopped no session and written no manifest (ccd:1222 below), `_ws_reap_eval`
+  # stopped no session and written no manifest (ccd:3903 below), `_ws_reap_eval`
   # Phase A and `_ws_reap_tail` both PASS the archived gate on a workspace that
   # was never archived, and with `.reaping` present `_ws_reap_locked` takes the
   # resume fork — where the token is not checked and Phase C, the merged-PR
   # proof, is deliberately not re-run. `_ws_slug_free` is therefore an
   # ANY-FIELD check now; see the note there.
+  # ── THE BACKSTOP (D3) ────────────────────────────────────────────────────
+  # HERE, AND NOT ONE LINE LOWER. Every destruction path on this box terminates
+  # in this function — ws-rm (ccd:3038), ws-reap (ccd:8180), ws-gc's dead-reg
+  # arm (ccd:8674), forget (ccd:11217) — and a destructive verb added LATER that
+  # forgets to journal itself still leaves a record. A silent destruction has to
+  # defeat two independent emit sites.
+  #
+  # BEFORE the loop below, because the loop is what makes `meas` unreadable:
+  # the loop unlinks every dot-free `$REG/<id>.<suffix>` except `archived` and
+  # `reaping`, so an emit placed after it can only report an id. Moving this
+  # line down is the mutant `ccd-lifecycle-purge.test.ts` measures.
+  #
+  # UNCONDITIONAL, and with NO `tx`: this is not half of a pair. It is the
+  # terminal fact — the registry entry ceased to exist — and it is worth writing
+  # even for a row that has nothing left, where the id alone is the record. No
+  # `verb` either: this function cannot see its caller, and guessing one would
+  # be the fabricated fact the design exists to refuse.
+  # `_lc_done` returns 0 on every path, so nothing here can gate the purge.
+  _lc_done purge "$1" "" \
+    meas.project        "$(_reg_get "$1" project)" \
+    meas.workspace      "$(_reg_get "$1" workspace)" \
+    meas.branch         "$(_reg_get "$1" branch)" \
+    meas.uuid           "$(_reg_get "$1" uuid)" \
+    meas.wrapper        "$(_reg_get "$1" wrapper)" \
+    meas.workdir        "$(_reg_get "$1" workdir)" \
+    meas.archivedAt     "$(_reg_get "$1" archived)" \
+    meas.archivedReason "$(_reg_get "$1" archivedreason)" \
+    meas.held           "$(_reg_get "$1" hold)"
+  # ─────────────────────────────────────────────────────────────────────────
   local id="$1" f suffix
   for f in "$REG/$id".*; do
     # `[[ -e "$f" ]]` for the unmatched-glob case: this file does not set
@@ -589,6 +626,9 @@ _ws_seed_home() {   # id wrapper — set home once; never clobber a deliberate c
 # so the test harness can stub them — sourcing ccd and calling cmd_ws_add under
 # vitest would otherwise enable a REAL claude-session@<id> unit on the host.
 _ws_supervise()   { rm -f "$REG/$1.stopped"                                   # supervision supersedes an earlier stop
+                    # POSITIONAL, and there is no `$id` in this function: it is
+                    # a one-liner with no `local`, so the emit must say `$1`.
+                    _lc_done supervise "$1" "" meas.wrapper "$(_reg_get "$1" wrapper)"
                     systemctl --user enable  --now "claude-session@$1" 2>/dev/null \
                       || echo "warn: could not enable unit claude-session@$1" >&2; }
 
@@ -615,13 +655,24 @@ _ws_unsupervise() {   # id [surface] — disable the unit AND RECORD THAT SOMEBO
   # call sites, which pass no second argument at all) and leaves an explicit
   # empty string to fall into the `case`'s `*` arm below, same as any other
   # non-member word.
-  local id="$1" surface="${2-ccd}"
+  # `$3` IS THE DECLARATION, `$2` IS THE STAMP. The stamp defaults to `ccd`
+  # because the four internal callers ARE ccd acting on its own account, and L0
+  # forbids ccd's own defaults from reaching `dec.surface`: a default laundered
+  # into a declaration is exactly what `none` exists to prevent. `cmd_stop` is
+  # the one caller with something declared to pass, and it passes it here.
+  local id="$1" surface="${2-ccd}" declared="${3-}"
   case "$surface" in cli|pwa|agent|ccd) ;; *) surface=unknown ;; esac
   # Through `_reg_set` (wave 2): the two words are one value, so the join moves
   # to the call site and the bytes on disk are unchanged. `_session_state` reads
   # this field to tell a deliberate stop from an orphan — a half-written stamp
   # is a session reclassified.
   _reg_set "$id" stopped "$(date +%s) $surface"
+  # THE CHOKE POINT'S ERASURE OF THE VERB IS REPAIRED UPWARD, HERE. The stamp
+  # keeps one field for two words and names a software PATH, never a human;
+  # this line carries the same act into a record `_reg_purge` cannot reach.
+  # `_lc_surface_norm` answers EMPTY when nothing was declared, and the encoder
+  # omits an empty value, so an internal call reads `dec.surface:"none"`.
+  _lc_done unsupervise "$id" "" dec.surface "$(_lc_surface_norm "$declared")"
   rm -f "$REG/$id.supervised"
   # A silent failure here used to be observable at cmd_stop's own inlined call
   # (the message this replaced); routing all five call sites through one
@@ -726,6 +777,767 @@ _json_str() {   # value -> a JSON string literal (quote/backslash/control safe)
 sys.stdout.write(json.dumps(sys.stdin.buffer.read().decode("utf-8", "replace")))'
 }
 
+# ── lifecycle journal ──────────────────────────────────────────── LC-BEGIN ──
+# THE APPEND-ONLY RECORD `_reg_purge` CANNOT REACH.
+#
+# `$REG/.lifecycle/` is a dot-prefixed DIRECTORY, and that is the whole reason
+# the feature is possible: `_reg_purge`'s suffix filter globs `$REG/<id>.*` and
+# ids never begin with a dot, so no per-session field can hold a destruction
+# record but a dotted directory is untouchable. Precedent already load-bearing:
+# `$REG/.reaped/` has had zero deleters in this file since Aug 6.
+#
+# THE INVENTORY AT ccd:1536 IS AMENDED IN THIS SAME COMMIT — it counted seven
+# dot-prefixed artifacts and this block adds an eighth. That comment counts
+# DIRECTORIES, not their contents (`.reaped/` is one entry, its tombstones are
+# not counted), so `.lifecycle/`'s generations, `errors` and `.rotate.lock` are
+# counted WITH it. An inventory a future writer copies is exactly the defect
+# `_reg_purge`'s own header records having shipped once.
+#
+# EVERY FUNCTION HERE RETURNS 0 ON EVERY PATH except `_lc_refuse`, which emits
+# and then `die`s so refusal and death cannot drift. The journal is best-effort
+# and NEVER gates an act: the disk condition that makes an append fail is
+# exactly the condition in which `ws-rm`/`ws-gc --prune`/`ws-reap` are the
+# recovery tools. One unrecorded destruction is a gap in a record; a fleet that
+# cannot clean up is an outage. A failed append bumps `.lifecycle/errors`.
+#
+# THE WRAPPERS BIND THEIR POSITIONALS WITH `${1-}`, NOT `$1`. ccd runs
+# `set -uo pipefail`: a function reading an unset positional EXITS THE SHELL, it
+# does not return. With 21 hand-written call sites, one dropped `""` would turn
+# a destructive verb into a mid-verb abort — the precise failure "the journal
+# never gates an act" exists to prevent, arriving through the journal itself.
+#
+# `_lc_refuse` therefore enters `ccd-die-containment.test.ts`'s can-die set:
+# it must never be wrapped in `$( )`. `_lc_emit`/`_lc_obs`/`_lc_live`/
+# `_lc_rotate`/`_lc_tx`/`_lc_json`/`_lc_err`/`_lc_surface_norm`/`_lc_dec_ok`
+# are die-free and safe to capture.
+#
+# NO CARRY GLOBALS. `tip`, `attic` and `tx` are ARGUMENTS. The `LC_TIP=` idiom
+# dies under `set -u` on the first call in a process and appends a blank line
+# nobody notices. `_LC_SEQ` and `_LC_OBS` are the two exceptions and both are
+# initialised HERE at file scope — the `_REG_SET_SEQ` precedent (ccd:434) — so
+# `set -u` can never reach an unset read. They carry no event payload.
+_LC_DIR="$REG/.lifecycle"
+_LC_LINE_MAX=2048                # twin of L0's LC_LINE_MAX      (BYTES)
+_LC_GEN_MAX_BYTES=4194304        # twin of L0's LC_GEN_MAX_BYTES — 4 MiB
+_LC_GEN_KEEP=4                   # twin of L0's LC_GEN_KEEP — ~a year at ~35 KB/day
+_LC_DEC_MAX=512                  # twin of L0's LC_REASON_MAX_BYTES — BYTES, not characters;
+                                 # `_lc_dec_ok` below measures under `LC_ALL=C`
+_LC_OBS_TMUX_DEADLINE_S=2        # bound on `_lc_obs`'s ONE `tmux list-panes -a`. Runs ONCE PER
+                                 # CCD PROCESS, fleet-wide (the memo guard sees to that) — a STALL
+                                 # BUDGET, not a generous per-lookup allowance like
+                                 # `SUBSTRATE_PROBE_DEADLINE_S`'s 8s. A healthy answer is
+                                 # milliseconds; 2s tolerates scheduler contention on a busy box
+                                 # without turning a wedged tmux server into a fleet-wide hang once
+                                 # wave 3/4 wires this into the hot path.
+_LC_SEQ=0
+_LC_OBS=""
+
+# THE CLOSED VOCABULARY, and its twin lives in `shared/api.ts` as
+# `LIFECYCLE_ACTS`. `server/test/ccd-lifecycle-emit.test.ts` reads THIS array by
+# running it and asserts set equality against L0 in both directions. `unknown`
+# is DELIBERATELY ABSENT here and present in L0: it is the READER's degrade, not
+# a call site's choice. `_lc_emit` maps an unrecognised act to `unknown` plus a
+# `badact` field, which is what makes the equality hold by construction rather
+# than by everyone remembering.
+_LC_ACTS=(archive attic-drop claim create destroy enable ensure forget gc
+          hold purge reap release rename restore spawn start stop supervise
+          swap unsupervise)
+# The vocabulary is the set of ACCEPTABLE INPUTS; the degrade word is the
+# OUTPUT `_lc_emit` produces when an input is not in that set — the same rule
+# the acts array above follows. `unknown` stays OUT of this array for the same
+# reason it stays out of that one: if a caller could pass `unknown` and have it
+# accepted as a legitimate outcome, "the outcome genuinely was unknown" and
+# "the caller passed a token we could not recognise" collapse into one value,
+# and `badoutcome` — which exists to preserve the raw token — becomes
+# unreachable for that input.
+_LC_OUTCOMES=(intent done refused failed)
+
+_lc_now_ns() {   # -> exactly 19 ASCII digits of epoch nanoseconds, on stdout
+  # THREE RUNGS, because `%N` is not portable and its failure is silent and
+  # poisonous: busybox `date` emits the literal `N`, which makes a generation
+  # FILENAME that sorts wrong for ever (the greatest name is the live one) and
+  # a `uid` that collides. The only sub-second precedent in this file is
+  # ccd:3383's `+%s%3N`, milliseconds, error-suppressed for the same reason.
+  local ns
+  ns=$(date +%s%N 2>/dev/null)
+  [[ "$ns" =~ ^[0-9]{19}$ ]] || ns="$(date +%s 2>/dev/null)000000000"
+  [[ "$ns" =~ ^[0-9]{19}$ ]] || ns=0000000000000000000
+  printf '%s' "$ns"
+}
+
+_lc_tx() {   # -> a correlation id for ONE intent/outcome pair, on stdout
+  # Callers hold it in a `local` and pass it to both halves. It is minted here
+  # rather than returned by `_lc_intent` so that the emit itself never runs in a
+  # subshell — `_lc_obs`'s memo and `_LC_SEQ` are both lost across `$( )`, and
+  # `_lc_obs` reads /proc and shells `tmux list-panes`.
+  #
+  # UNIQUENESS, honestly: called as `$(_lc_tx)` this runs in a SUBSHELL, so
+  # `_LC_SEQ` is 1 every time and the guarantee rests on `$BASHPID` (a subshell
+  # pid, distinct from the parent's, so a tx can never collide with an event
+  # uid) plus a nanosecond clock read one fork apart.
+  _LC_SEQ=$(( _LC_SEQ + 1 ))
+  printf '%s.%s.%s' "$(_lc_now_ns)" "$BASHPID" "$_LC_SEQ"
+}
+
+_lc_cgroup_read() {   # -> this process's `0::` cgroup path, verbatim, on stdout
+  # Its own function so a test can plant a cgroup without a container. The
+  # `0::` line is the unified-hierarchy one; on this box it is the only line.
+  #
+  # FIX ROUND 2 (task 15) — THE GENERAL RULE, APPLIED TO PIPELINES: a
+  # redirect on ONE stage of a pipe protects only that stage. `sed … | head`
+  # gave `sed` its own `2>/dev/null` and left `head` with none, so a PATH
+  # missing `head` leaked `ccd: line …: head: command not found` straight to
+  # the real stderr. Measured with a PATH built from every OTHER binary this
+  # block needs but deliberately missing `head`:
+  # `ccd: line …: head: command not found` on real stderr, rc still 0. The
+  # fix wraps the WHOLE pipeline in one compound `{ …; } 2>/dev/null`, the
+  # same idiom `_lc_rotate`'s flock `exec` established for a builtin with
+  # multiple redirects — here for a different reason (a per-stage redirect
+  # does not cover its neighbour), same fix shape.
+  { sed -n 's/^0:://p' "/proc/$$/cgroup" | head -1; } 2>/dev/null
+}
+
+_lc_ppid_of() {   # pid -> its PPid, on stdout, or nothing. ALWAYS rc 0.
+  # `/proc/<pid>/status`'s `PPid:` line, NEVER `stat` field 4: `comm` is field 2
+  # and can contain spaces AND parentheses, so every positional read of `stat`
+  # is wrong for a process someone named `foo) 1 2 3 (bar`.
+  #
+  # THE TRAILING `return 0` IS LOAD-BEARING, not decoration: under this file's
+  # `pipefail`, a gone/unreadable pid makes `sed` fail (rc 2) while `head`
+  # still succeeds on its empty input, and pipefail keeps the RIGHTMOST
+  # non-zero — `sed`'s 2, not `head`'s 0 — as the pipeline's own status.
+  # Measured: `_lc_ppid_of 999999999` answered rc 2 without this line, which
+  # is not what this function documents or what its own callers assume;
+  # `_lc_obs`'s ancestor walk at ccd:945 calls this once per hop and would be
+  # the first production caller to meet a stale or reaped pid.
+  # FIX ROUND 2 (task 15) — same pipeline-redirect gap as `_lc_cgroup_read`
+  # above: `sed` had its own `2>/dev/null`, `head` had none, and a PATH
+  # missing `head` leaked `ccd: line …: head: command not found` to the real
+  # stderr. The compound wrap covers both stages with ONE redirect; the
+  # trailing `return 0` below is unaffected — `pipefail`'s rightmost-nonzero
+  # rule still applies INSIDE the braces exactly as it did on the bare pipe,
+  # and this function always answers 0 regardless either way.
+  { sed -n 's/^PPid:[[:space:]]*//p' "/proc/${1-}/status" | head -1; } 2>/dev/null
+  return 0
+}
+
+_lc_obs_json() {   # cg cgraw pid ppid pane paneWhy tty ssh -> one JSON object
+  # THE SECOND AND LAST python3 ENCODER IN THIS BLOCK. `_lc_json` builds an
+  # EVENT, once per line; this builds the obs FRAGMENT, once per process. A
+  # THIRD encoder in this block is a defect — it is how `"pane":,` gets written
+  # by a printf argument list that swallowed `_json_str`'s status (ccd:711-713).
+  LC_ALL=C.UTF-8 python3 -c '
+import json, sys
+k = ["cg", "cgraw", "pid", "ppid", "pane", "paneWhy", "tty", "ssh"]
+o = dict(zip(k, sys.argv[1:9]))
+for n in ("pid", "ppid"):
+    o[n] = int(o[n]) if o[n].isdigit() else None
+o["pane"] = o["pane"] or None
+o["tty"] = o["tty"] == "true"
+# `ssh` IS THE CONNECTION STRING, not a boolean: L0 types it `string | null`,
+# and folding it to true/false throws away the only address the record sees.
+o["ssh"] = o["ssh"] or None
+sys.stdout.write(json.dumps(o, ensure_ascii=True, allow_nan=False, separators=(",", ":")))
+' "$@"
+}
+
+_lc_obs() {   # populate _LC_OBS once per process. Prints NOTHING. Always 0.
+  # THE UNFORGEABLE FAMILY. `dec` is what a caller SAID; this is what the kernel
+  # says. Nothing here computes a single "who" — `corroboration()` in L0 relates
+  # the two and a disagreement is a fact the operator sees, never a silently
+  # picked winner. A double fork makes a caller ANONYMOUS (ppid 1), never
+  # someone else.
+  [[ -z "$_LC_OBS" ]] || return 0
+
+  local cgraw cg pid ppid pane panewhy tty ssh panes p depth sname spid rc
+  pid=$$
+  cgraw=$(_lc_cgroup_read)
+  # ORDER IS PRECEDENCE, and the innermost fact wins. A pane started by the
+  # supervisor sits inside BOTH cgroups; the scope it is RUNNING in is the
+  # observed fact, the unit that started it is provenance the path still
+  # carries verbatim in `cgraw`.
+  case "$cgraw" in
+    */ccrc-agent.service*)        cg=agent ;;
+    */tmux-spawn-*.scope*)        cg=pane ;;
+    */claude-session@*.service*)  cg=supervisor ;;
+    */session-*.scope*)           cg=login ;;
+    *)                            cg=unknown ;;
+  esac
+  ppid=$(_lc_ppid_of "$pid"); [[ "$ppid" =~ ^[0-9]+$ ]] || ppid=""
+
+  # THE PANE IS AN INTERSECTION, and its absence gets a REASON. A bare null
+  # would fold "no tmux on this box", "tmux did not answer", "no ancestor is
+  # a pane" AND "tmux did not answer IN TIME" into one value a reader cannot
+  # act on — the overloaded null at a seam this repo bans by name. A stall is
+  # its own fourth condition, not a slower `not-listed`: an operator facing a
+  # wedged tmux server (restart it) needs a different action than one facing a
+  # tmux that answered "no" cleanly (nothing to fix).
+  pane=""; panewhy=no-ancestor
+  if ! command -v tmux >/dev/null 2>&1; then
+    panewhy=no-tmux
+  else
+    # BASH-LEVEL SUBPROCESS, not a bare `timeout tmux …`: `timeout` EXECS its
+    # argv, which is invisible to a shell FUNCTION named `tmux` — the same
+    # function-vs-binary split `_session_probe` documents (ccd:340-343) — so a
+    # stub `tmux() { sleep 30; }` would sail straight past a bare
+    # `timeout tmux …` and defeat the guard this exists to add. `declare -f
+    # tmux` serializes any function definition into the child `bash -c`
+    # script, so the SAME thing runs there — function stub or the real
+    # binary either way — as a genuine, killable subprocess. A blank first
+    # line rather than `; tmux …`: a leading bare `;` is itself a syntax
+    # error when the substitution is empty (the ordinary case: a real tmux on
+    # PATH, no stub).
+    #
+    # UNBOUNDED WAS THE BUG: a wedged tmux socket, contention, or a D-state
+    # process previously blocked this call FOREVER — measured: a `sleep 30`
+    # stub left `_lc_obs` unreturned past an outer `timeout -s KILL 3`, i.e.
+    # SIGKILLed rather than answering — which breaks "never gate the act it
+    # observes" the moment wave 3/4 wires this into the hot path.
+    panes=$(timeout "$_LC_OBS_TMUX_DEADLINE_S" bash -c "$(declare -f tmux 2>/dev/null)
+tmux list-panes -a -F '#{session_name} #{pane_pid}'" 2>/dev/null)
+    rc=$?
+    # rc 124 is `timeout`'s own SIGTERM; 137 is what a caller sees if an OUTER
+    # kill reached this whole invocation before `timeout` itself could report
+    # — both mean "tmux did not answer IN TIME", so both get the SAME distinct
+    # reason, never folded into `not-listed`'s "tmux answered no".
+    if (( rc == 124 )) || (( rc == 137 )); then
+      panewhy=timed-out
+    elif (( rc != 0 )); then
+      panewhy=not-listed
+    else
+      p="$pid"; depth=0
+      # The regex runs FIRST and every arithmetic test is downstream of it: `p`
+      # comes off /proc, and bash evaluates a variable's CONTENTS as arithmetic
+      # (ccd:8784-8787 is the paid lesson). `depth` bounds a /proc that lies.
+      while [[ "$p" =~ ^[0-9]+$ ]] && (( p > 1 )) && (( depth < 16 )); do
+        while IFS=' ' read -r sname spid; do
+          [[ "$spid" == "$p" ]] && { pane="$sname"; break; }
+        done <<< "$panes"
+        [[ -n "$pane" ]] && { panewhy=ok; break; }
+        p=$(_lc_ppid_of "$p")
+        depth=$(( depth + 1 ))
+      done
+    fi
+  fi
+
+  tty=false; [[ -t 0 ]] && tty=true
+  ssh="${SSH_CONNECTION-}"
+
+  # ONE fork for the whole fragment, MEMOISED — not eight `_json_str`
+  # substitutions, each of which swallows its own status inside a printf
+  # argument list (ccd:711-713) and prints `"pane":,` when the interpreter is
+  # gone. NO python3 means the four bytes `null`: not measured is a different
+  # fact from measured-as-empty, and `null` is also non-empty, so the memo holds
+  # and this whole function does not re-run on every event.
+  _LC_OBS=$(_lc_obs_json "$cg" "$cgraw" "$pid" "$ppid" "$pane" "$panewhy" "$tty" "$ssh" 2>/dev/null) \
+    || _LC_OBS=null
+  [[ -n "$_LC_OBS" ]] || _LC_OBS=null
+  return 0
+}
+
+_lc_live() {   # -> the generation to append to, on stdout. Mints one if none.
+  # THE GREATEST NAME IS THE LIVE ONE, and "greatest" is LENGTH-FIRST, the
+  # same rule L0's `compareGenerations` (shared/api.ts) makes a single reader
+  # for: comparing LENGTH before content, so a 20-digit name is greater than
+  # ANY 19-digit name regardless of what its digits say. `_lc_now_ns` mints
+  # fixed-width 19-digit names, so this never bites production — but a bare
+  # `[[ "$a" > "$b" ]]` is lexicographic, and lexicographically
+  # "9999999999999999999" (19 nines) sorts AFTER "10000000000000000000" (20
+  # digits) at the very first byte, exactly backwards from L0. `${#f}` is
+  # compared first for that reason, string `>` only as the equal-length
+  # tiebreak — which for equal-length digit strings IS numeric order.
+  local f newest="" LC_ALL=C
+  mkdir -p -- "$_LC_DIR" 2>/dev/null || { printf '%s' ''; return 0; }
+  for f in "$_LC_DIR"/journal-*.ndjson; do
+    [[ -f "$f" ]] || continue                      # unmatched glob stays literal: no nullglob here
+    if [[ -z "$newest" ]] \
+      || (( ${#f} > ${#newest} )) \
+      || { (( ${#f} == ${#newest} )) && [[ "$f" > "$newest" ]]; }; then
+      newest="$f"
+    fi
+  done
+  if [[ -z "$newest" ]]; then
+    newest="$_LC_DIR/journal-$(_lc_now_ns).ndjson"
+    # `>>`, never `>`: the create form that CANNOT truncate, even if two
+    # processes reach it at once.
+    #
+    # FIX ROUND 2 (task 15): a bare `: >> "$newest" 2>/dev/null` does NOT
+    # suppress bash's own redirect-setup diagnostic — the `>>` open is
+    # attempted and fails BEFORE the trailing `2>/dev/null` is installed,
+    # the same class `_lc_rotate`'s flock `exec` already fixed two FIX
+    # ROUNDs ago (see below) but this sibling site was missed. Measured: an
+    # existing `.lifecycle` at chmod 555 leaked
+    # `ccd: line …: …/journal-….ndjson: Permission denied` to the caller's
+    # stderr even though `_lc_emit`'s own rc stayed 0 — a Critical against
+    # `_lc_emit`'s "prints nothing on stdout or stderr" contract, since this
+    # is the path a caller with an unwritable-but-present `.lifecycle`
+    # reaches on every event. The COMPOUND, not the bare `:`, is what the
+    # redirect must wrap.
+    { : >> "$newest"; } 2>/dev/null || { printf '%s' ''; return 0; }
+  fi
+  printf '%s' "$newest"
+}
+
+_lc_rotate() {   # live-path — mint a fresh generation when the live one is full
+  # MINT-A-GREATER-NAME, NEVER TRUNCATE: the full generation is neither renamed
+  # nor rewritten, and a new, greater name appears beside it. A truncate would
+  # shrink a file the mirror is reading, and `agent/src/tail.ts:53-58` hands its
+  # reader a RESET it must model; the whole point of putting the generation in
+  # the NAME is that a rotation is a new name appearing rather than an old file
+  # getting smaller. Retention is a CEILING, not a schedule: 4 x 4 MiB at the
+  # measured ~35 KB/day is about a year.
+  #
+  # DIE-FREE AND REFUSAL-FREE, unlike every other flock site in this file
+  # (all of which `die` when `flock` is unavailable or contested). D7 forbids
+  # the journal from gating an act, so a missing or contested lock SKIPS the
+  # rotation and lets the generation grow past its cap. `.rotate.lock` is
+  # NEVER unlinked — unlinking a lock file while another process holds it is
+  # exactly how two processes come to hold "the lock" on two different inodes.
+  local live="${1-}" sz lock lfd f n live_now minted="" gens=()
+  [[ -n "$live" && -f "$live" ]] || return 0
+  sz=$(stat -c %s -- "$live" 2>/dev/null)
+  [[ "$sz" =~ ^[0-9]+$ ]] || return 0              # regex BEFORE the arithmetic, always
+  (( sz >= _LC_GEN_MAX_BYTES )) || return 0
+
+  command -v flock >/dev/null 2>&1 || return 0
+  lock="$_LC_DIR/.rotate.lock"
+  # FIX ROUND 1 (a): a BARE `exec {lfd}>>"$lock" 2>/dev/null` does not
+  # suppress bash's own diagnostic for a failed exec-redirection — the
+  # message is emitted while the shell is SETTING UP the redirection, before
+  # the redirect it names is installed, so it reaches the real stderr rather
+  # than the one about to be redirected. Measured: a `.lifecycle` at chmod
+  # 555 leaked `ccd: line …: …/.rotate.lock: Permission denied` to stderr
+  # even though rc stayed 0. The COMPOUND, not the bare `exec`, is what the
+  # redirect must wrap — `2>/dev/null` on `{ …; }` applies to everything
+  # inside it, `exec` included, the same way it would to any other command.
+  #
+  # THE GENERAL RULE (record it here ONCE, canonically, so the next person
+  # finds it rather than re-discovering it — this has now cost this plan two
+  # separate FIX ROUNDs): a trailing `2>/dev/null` on a simple command with
+  # MULTIPLE redirections does NOT suppress bash's own diagnostic for an
+  # earlier redirection that failed to open. Bash installs a simple command's
+  # redirections IN ORDER, left to right, as it encounters them — so when the
+  # FIRST one (`>>`, `>`, or `exec`'s own target) fails to open, bash reports
+  # the failure to whatever stderr is CURRENTLY active, which is the real one,
+  # because the LATER `2>/dev/null` redirect has not been installed yet. This
+  # is true of every BUILTIN that can appear with a second redirect after a
+  # failing first one — measured here for `exec`, and for the plain `:` and
+  # `printf` builtins at every other write site in this block (`_lc_live`'s
+  # mint, `_lc_rotate`'s mint, `_lc_err`'s counter write, `_lc_emit`'s event
+  # append) — and is NOT true of an EXTERNAL command's OWN stderr (`mkdir`,
+  # `mv`, `rm`, `cat`, `stat`), which a trailing `2>/dev/null` captures
+  # normally, because there bash's redirection setup is not itself what fails.
+  # The fix is always the same: wrap the WHOLE command in a compound
+  # `{ …; } 2>/dev/null`, so the redirect is installed and active BEFORE the
+  # inner command — and its own attempt to open ITS redirect — ever runs.
+  { exec {lfd}>>"$lock"; } 2>/dev/null || return 0
+  flock -n "$lfd" 2>/dev/null || { exec {lfd}>&-; return 0; }
+
+  # FIX ROUND 1 (b): re-measuring `$live`'s OWN size here, as this used to,
+  # is a structural no-op — rotation never truncates `$live` (mint-a-
+  # greater-name, never truncate), so its size answers "over cap" FOREVER
+  # after the very first rotation, and can never tell a SECOND rotator that
+  # a first one already acted. Measured with two real concurrent processes
+  # racing this function against one over-cap `$live`: 8 of 10 runs (a
+  # 15ms stagger between launches) minted TWO generations from one over-cap
+  # event, not one. The question under the lock is "has someone ELSE
+  # already rotated `$live` away", and `_lc_live` answers it directly: if
+  # its CURRENT greatest name is still `$live` itself, nobody has, and this
+  # call should mint. `_lc_live` only mints when NO generation exists at
+  # all — `$live` is itself already a generation on disk at this point (the
+  # `-f "$live"` check at the top of this function), so that branch can
+  # never trigger from here.
+  if [[ "$(_lc_live)" == "$live" ]]; then
+    minted="$_LC_DIR/journal-$(_lc_now_ns).ndjson"
+    # FIX ROUND 2 (task 15): same sibling bug as `_lc_live`'s mint above —
+    # the COMPOUND, not the bare `:`, must wrap the redirect for
+    # `2>/dev/null` to suppress bash's own diagnostic rather than the
+    # external command's.
+    { : >> "$minted"; } 2>/dev/null || minted=""
+  fi
+
+  for f in "$_LC_DIR"/journal-*.ndjson; do [[ -f "$f" ]] && gens+=("$f"); done
+  n=${#gens[@]}                                    # bash 5.2: an empty array under set -u is fine
+  if (( n > _LC_GEN_KEEP )); then
+    # THE LIVE ONE IS NEVER PRUNED, and the guard is not decoration. TWO
+    # NAMES are protected, not one: `minted`, THIS CALL's own fresh name,
+    # captured directly rather than re-derived — a future-dated name already
+    # on disk (impossible today; `_lc_now_ns` is monotonic, but not enforced)
+    # would make `minted` the SECOND-smallest by content, and re-deriving via
+    # `_lc_live` would answer the OLD future-dated name instead, so the prune
+    # would eat the mint it just made and rotation would never converge:
+    # `_lc_live` picks the full generation again on the very next event. And
+    # `live_now`, re-read rather than assumed: another ccd may have minted a
+    # greater one than this call's `minted` between the two.
+    live_now=$(_lc_live)
+    # LENGTH-FIRST, NOT A BARE `LC_ALL=C sort`: sorting the filenames plain
+    # is lexicographic and disagrees with L0's `compareGenerations` across a
+    # digit-length boundary. Each name is prefixed with its own zero-padded
+    # LENGTH before sorting, so the sort compares length first and content
+    # only as the tiebreak — one ordering claim, expressed once, agreeing
+    # with `_lc_live` and with L0 by construction rather than by two authors
+    # remembering the same rule. `LC_ALL=C` on the `sort` invocation itself,
+    # this file's own idiom (ccd:4007, 4033, 1152, 6801) — a `local` variable
+    # is never enough for an EXTERNAL command's collation, only for bash's
+    # own builtin `[[ ]]` comparisons.
+    # FIX ROUND 2 (task 15) — TWO gaps closed with one wrap. (1) Neither
+    # `sort` nor `head` in the generator pipe below carried a redirect at
+    # all, so a PATH missing either leaked `command not found` straight to
+    # the real stderr — the same per-stage-redirect gap as `_lc_cgroup_read`/
+    # `_lc_ppid_of` above, found here by this task's own sweep of the whole
+    # LC block rather than in the original review. (2) `rm -f -- "$f"`
+    # inside the loop body carried NO redirect either — `-f` only silences
+    # "no such file", not a genuine permission error, and a chmod-555
+    # `.lifecycle` mid-rotation (an ordinary operational state, not a
+    # contrived one) makes `rm` print its OWN `Permission denied` to real
+    # stderr. Measured directly: `rm -f -- file` inside a directory whose
+    # write bit was stripped printed `rm: cannot remove 'file': Permission
+    # denied` even with `-f`. Wrapping the WHOLE loop — generator, sort,
+    # head, and every `rm` the loop body can run — in one compound
+    # `{ …; } 2>/dev/null` closes both at once, rather than four separate
+    # per-command redirects that would only repeat the gap under a fifth
+    # command added here later.
+    {
+      while IFS= read -r f; do
+        f="${f#*|}"
+        [[ -n "$f" && "$f" != "$live_now" && "$f" != "$minted" ]] && rm -f -- "$f"
+      done < <(
+        for f in "${gens[@]}"; do printf '%05d|%s\n' "${#f}" "$f"; done \
+          | LC_ALL=C sort | head -n $(( n - _LC_GEN_KEEP ))
+      )
+    } 2>/dev/null
+  fi
+  # A CONTRACT, NOT HYGIENE: flock treats two open()s of one path in one
+  # process as two strangers, and ccd is SOURCED, so a descriptor left open
+  # here refuses the NEXT rotation in the same shell.
+  exec {lfd}>&-
+  return 0
+}
+
+_lc_err() {   # bump the counted errors file. Prints nothing. Always 0.
+  # IT MINTS THE DIRECTORY ITSELF, and that is the one place besides `_lc_live`
+  # that does: this counter exists for exactly the states in which the journal
+  # could not be written, and half of those are "the directory was not there".
+  # A counter that needs the journal's own directory to already exist records
+  # nothing on the path it was written for.
+  #
+  # Temp+rename, `_reg_set`'s idiom (ccd:435-441), because a half-written
+  # counter is a counter. Surfaced by the server as `lifecycle.writeErrors`,
+  # which together with `lifecycle.newestAt` is what makes a silently-stopped
+  # journal visible rather than indistinguishable from a quiet fleet.
+  #
+  # A KNOWN, ACCEPTED LOSS UNDER CONCURRENCY — RECORDED, NOT MERELY MEASURED
+  # ONCE (task 15 FIX ROUND 2). Temp+rename is READ-MODIFY-WRITE, not atomic
+  # increment: two concurrent callers can both read the same "$n", both
+  # compute the same "n + 1", and the SECOND rename simply overwrites the
+  # first — last-writer-wins, not last-writer-adds. Measured directly, 30
+  # truly-concurrent `_lc_err` calls (real separate processes, launched
+  # together, not staggered): the counter settled at 14-16 across repeated
+  # runs, roughly half the true count. This is ACCEPTED: `errors` is a
+  # diagnostics-only counter surfaced as `lifecycle.writeErrors`, never the
+  # journal itself, and the operator ruling is that temp+rename cannot do
+  # meaningfully better here without a lock this best-effort path is not
+  # allowed to take (D7: the journal, and everything in this block, must
+  # never gate or serialise the act it is recording). The consequence a
+  # reader MUST carry: `errors` is a FLOOR, a lower bound on how many
+  # appends failed, never an exact count. Treating it as exact is the
+  # mistake this comment exists to stop before it is made.
+  local n tmp
+  mkdir -p -- "$_LC_DIR" 2>/dev/null || return 0
+  n=$(cat "$_LC_DIR/errors" 2>/dev/null)
+  # THE REGEX IS THE GUARD, not a tidiness check: the next line is an
+  # ARITHMETIC context over bytes off disk, and bash evaluates a variable's
+  # contents there — a command substitution inside an array subscript EXECUTES.
+  [[ "$n" =~ ^[0-9]+$ ]] || n=0
+  n=$(( n + 1 ))
+  tmp="$_LC_DIR/.errors.$BASHPID.tmp"
+  # FIX ROUND 1 (task 15, found by this task's own operator-mandated
+  # unwritable-$_LC_DIR proof): a bare `printf … > "$tmp" 2>/dev/null` does
+  # NOT suppress bash's own redirect-setup diagnostic for `printf`, a
+  # BUILTIN — the `>` open is attempted and fails before the trailing
+  # `2>/dev/null` is installed, the exact class `_lc_rotate`'s flock `exec`
+  # fix already records (ccd:1019-1028) and two sibling `_lc_live`/
+  # `_lc_rotate` mint sites needed the same fix for (FIX ROUND 2, above).
+  # Measured: a chmod-555 `.lifecycle` leaked
+  # `ccd: line …: …/.errors.<pid>.tmp: Permission denied` to the caller's
+  # stderr even with rc 0 — a Critical against `_lc_err`'s own "prints
+  # nothing" contract. `mv`/`rm` below are EXTERNAL commands, so their own
+  # `2>/dev/null` already captures normally; only the builtin `printf`
+  # needed the compound wrap.
+  { printf '%s\n' "$n" > "$tmp"; } 2>/dev/null && mv -fT -- "$tmp" "$_LC_DIR/errors" 2>/dev/null
+  rm -f -- "$tmp" 2>/dev/null
+  return 0
+}
+
+_lc_json() {   # cap uid ns act outcome id tx badact badoutcome obsjson [k v]...
+  # THE SINGLE-FORK EVENT ENCODER, taking fields as argv. The alternative —
+  # eight `$(_json_str …)` substitutions inside a printf argument list — is the
+  # defect ccd:711-713 records: a bare `$(_json_str …)` swallows its own status
+  # by construction, so a missing interpreter prints `"reason":,` and an
+  # unparseable line lands in the record. Here a failed interpreter is a
+  # NON-ZERO return with empty stdout and the caller writes nothing at all,
+  # which is a gap the errors counter records rather than a corrupt line the
+  # mirror has to model.
+  #
+  # The only OTHER python3 encoder in this block is `_lc_obs_json`, which builds
+  # the obs FRAGMENT once per process. A third is a defect.
+  #
+  # NO `_json_str probe … || die` up front, unlike `_ws_manifest` and
+  # `cmd_ws_audit`: D7 forbids this path from dying, and the caller's own
+  # non-zero branch already covers the same condition.
+  LC_ALL=C.UTF-8 python3 -c '
+import json, sys
+a = sys.argv[1:]
+cap = int(a[0])
+uid, ns, act, outcome, sid, tx, badact, badoutcome, obs = a[1:10]
+rest = a[10:]
+
+# `at` IS MILLISECONDS — L0 types LifecycleEvent.at that way and the mirror
+# stores it that way. Both it and `atNs` come from ONE clock read, so the two
+# can never disagree about one event.
+ev = {"v": 1, "uid": uid, "atNs": ns, "at": int(ns[:13]), "act": act,
+      "outcome": outcome, "id": sid}
+if tx: ev["tx"] = tx
+try:
+    ev["obs"] = json.loads(obs) if obs else None
+except ValueError:
+    ev["obs"] = None
+
+# THE KEY NAMESPACE. Dotted keys name their family; FOUR names are top-level;
+# anything else is DROPPED AND NAMED. That last rule is `badact`s own idiom
+# applied to keys — a key we saw and could not model is a different fact from a
+# key that was never passed — and it is what lets this encoder be TOTAL without
+# quietly inventing a home for a typo.
+#
+# AN EMPTY VALUE OMITS ITS KEY. Disclosed, and it is not an overloaded null:
+# every meas value ccd passes is a `_reg_get` (which cats a missing file to
+# empty) or a git ref read, so "measured as empty" and "not measured" are ONE
+# condition at this seam, not two a caller handles differently.
+#
+# FIX ROUND 2 (task 15): `badact` is DELIBERATELY ABSENT from TOP, even
+# though it is a genuine top-level field on the wire — it is set ONLY below,
+# by the ENCODER itself, never by a callers key/value pair. `badact` exists
+# to say that L0 never heard of this act, and that is a fact only this
+# function can know; a caller passing a literal `badact` key is meaningless
+# by construction, indistinguishable on the wire from the genuine degrade if
+# it were allowed through here. Measured: with `badact` in TOP,
+# `_lc_emit stop done sess badact forged-not-real` — a perfectly VALID act —
+# wrote `badact:forged-not-real`, forging the exact signal a reader uses to
+# decide that ccds own vocabulary is stale. `badoutcome` was NEVER in TOP and
+# the identical probe against it correctly fell through to
+# `badkey:badoutcome` — proof this was a TOP-membership bug, not a design
+# question. A stray `badact` key now takes the same path every other
+# unmodelled key does: `badkey`.
+TOP = ("detail", "refusal", "verb", "branchDeleted")
+dec, meas = {}, {}
+for i in range(0, len(rest) - 1, 2):
+    k, v = rest[i], rest[i + 1]
+    if v == "":
+        continue
+    if k.startswith("dec."):
+        dec[k[4:]] = v
+    elif k.startswith("meas."):
+        meas[k[5:]] = v
+    elif k in TOP:
+        ev[k] = v
+    elif "badkey" not in ev:
+        ev["badkey"] = k
+dec.setdefault("surface", "none")
+ev["dec"] = dec
+ev["meas"] = meas or None
+# The ENCODER computes these two, after the loop, so they always win over a
+# caller that passed `badact` as a key.
+if badact:     ev["badact"] = badact
+if badoutcome: ev["badoutcome"] = badoutcome
+
+def line(o):
+    return json.dumps(o, ensure_ascii=True, allow_nan=False, separators=(",", ":"))
+
+# THE CAP IS ENFORCED BY DROPPING IN A FIXED ORDER, AND BY SAYING SO. A line
+# silently cut at 2048 bytes is a line that does not parse; `truncated` is what
+# makes the loss a row rather than a silence. `refusal` and `detail` are NOT in
+# the ladder: an over-cap refusal that dropped its own token would be an
+# untyped `outcome:"refused"`, which is the one thing the record exists to say.
+for drop in (None, "reason", "cgraw", "meas"):
+    if drop == "reason":
+        ev["dec"].pop("reason", None); ev["truncated"] = True
+    elif drop == "cgraw" and isinstance(ev.get("obs"), dict):
+        ev["obs"].pop("cgraw", None); ev["truncated"] = True
+    elif drop == "meas":
+        ev["meas"] = None; ev["truncated"] = True
+    s = line(ev)
+    # FIX ROUND 2 (task 15): THE BYTE MEASUREMENT IS CURRENTLY UNDETECTABLE
+    # AS A DISTINCT CHOICE, and that is worth writing down rather than
+    # leaving implicit. `line()` calls `json.dumps(…, ensure_ascii=True)`,
+    # which guarantees pure-ASCII output for every possible input — every
+    # non-ASCII character comes out as a `\uXXXX` escape, all ASCII bytes —
+    # so `len(s.encode("utf-8")) == len(s)` always, for any event this
+    # encoder can build. A mutant that swapped the byte measurement for a
+    # bare `len(s)` would NOT be caught by any test today; verified: 2048
+    # bytes untruncated, 2049 truncated, both figures identical whether
+    # measured in bytes or characters at `ensure_ascii=True`. The byte
+    # measurement is still the CORRECT choice — `LC_LINE_MAX` is a wire
+    # BYTE cap, matching L0s and the append writes bytes, not characters —
+    # and it becomes LOAD-BEARING, not merely correct, the moment
+    # `ensure_ascii` is ever changed to `False`: a non-ASCII `dec.reason` or
+    # `detail` would then encode to MORE bytes than characters, and a bare
+    # `len(s)` would silently pass lines over the real 2048-byte cap.
+    if len(s.encode("utf-8")) <= cap:
+        sys.stdout.write(s); raise SystemExit(0)
+
+# THE LAST RESORT CARRIES THE JOINABLE MINIMUM. `tx` and `dec.surface` and the
+# refusal token are what a reader needs to pair an intent with its outcome and
+# to know what was refused; dropping them here loses the record at exactly the
+# moment its payload was interesting.
+fb = {"v": 1, "uid": uid, "atNs": ns, "at": int(ns[:13]), "act": act,
+      "outcome": outcome, "id": sid,
+      "dec": {"surface": ev["dec"].get("surface", "none")}, "truncated": True}
+if tx: fb["tx"] = tx
+if ev.get("refusal"): fb["refusal"] = ev["refusal"]
+sys.stdout.write(line(fb))
+' "$@"
+}
+
+_lc_emit() {   # act outcome id tx [key value]... — THE ONE WRITER. Always 0.
+  # NOTHING BUT THIS FUNCTION WRITES INTO `.lifecycle/` (and `_lc_err`/
+  # `_lc_live`/`_lc_rotate`, which only it calls). That is scanned by
+  # `ccd-lifecycle-contain.test.ts`, and it is the one defect of `swap.log` this
+  # design does not copy: ccd:7568 and ccd:9423 redirect a CHILD'S stdout and
+  # stderr into that log, which is why ~30% of its lines are untimestamped and
+  # unstructured. No `bash -c` or `systemd-run` string in this file may name
+  # `.lifecycle`.
+  #
+  # PRINTS NOTHING on stdout or stderr. Several call sites sit inside functions
+  # whose stdout IS the record (`cmd_ws_rename`'s printf, `_ws_gc_prune_row`'s
+  # rows, `_ws_reap_tail`'s receipt); one stray byte corrupts a document a
+  # consumer parses.
+  local act="${1-}" outcome="${2-}" id="${3-}" tx="${4-}"
+  shift 4 2>/dev/null || { _lc_err; return 0; }
+
+  local a badact="" badoutcome="" found=0
+  for a in "${_LC_ACTS[@]}"; do [[ "$a" == "$act" ]] && { found=1; break; }; done
+  (( found )) || { badact="$act"; act=unknown; }
+  found=0
+  for a in "${_LC_OUTCOMES[@]}"; do [[ "$a" == "$outcome" ]] && { found=1; break; }; done
+  (( found )) || { badoutcome="$outcome"; outcome=unknown; }
+
+  _lc_obs
+  # The seq increments in THIS frame — a function is not a subshell — so it is
+  # genuinely monotonic per process. Only the `date` read forks.
+  _LC_SEQ=$(( _LC_SEQ + 1 ))
+  local ns; ns=$(_lc_now_ns)
+  local uid="$ns.$BASHPID.$_LC_SEQ"
+
+  local live; live=$(_lc_live)
+  [[ -n "$live" ]] || { _lc_err; return 0; }
+
+  local line
+  line=$(_lc_json "$_LC_LINE_MAX" "$uid" "$ns" "$act" "$outcome" "$id" "$tx" \
+                  "$badact" "$badoutcome" "$_LC_OBS" "$@" 2>/dev/null) \
+    || { _lc_err; return 0; }
+  [[ -n "$line" ]] || { _lc_err; return 0; }
+
+  # ONE `printf … >>` per event. On Linux an O_APPEND write to a regular file is
+  # serialised under the inode lock, so concurrent writers cannot interleave —
+  # measured, not assumed: `$REG/swap.log` is 13 concurrent write sites over 49
+  # days with zero corruption.
+  #
+  # FIX ROUND 3 (task 15, same proof as FIX ROUNDs 1-2 above): `printf` is a
+  # BUILTIN, so a bare `>> "$live" 2>/dev/null` leaks bash's own
+  # redirect-setup diagnostic to the caller's stderr when `$live` exists but
+  # is unwritable (its generation file present, its permissions stripped —
+  # a live-not-a-mint failure `_lc_live`'s own return-empty guard cannot
+  # catch, because `_lc_live` never attempts to WRITE an existing
+  # generation). Measured: `ccd: line …: …/journal-….ndjson: Permission
+  # denied` on the caller's real stderr with rc 0 — a Critical against
+  # `_lc_emit`'s own contract. The COMPOUND wraps the redirect, not the bare
+  # builtin.
+  { printf '%s\n' "$line" >> "$live"; } 2>/dev/null || { _lc_err; return 0; }
+  _lc_rotate "$live"
+  return 0
+}
+
+# THE FOUR CALLER-FACING SHAPES. `tx` is an ARGUMENT on all of them: a caller
+# that pairs an intent with an outcome mints one with `_lc_tx` into a `local`
+# and passes it twice. There is no global to carry it, deliberately.
+#
+# tx IS FOR ONE PAIR, NEVER FOR A CALL TREE. `cmd_enable` runs `cmd_start`
+# in-process (ccd:10361) and `_swap_refuse`'s `|| cmd_ensure`
+# fallback fires at ccd:10848; each writes its OWN independent
+# event with its own tx, because two acts happened and the record says so
+# rather than folding one into the other.
+#
+# EVERY POSITIONAL IS BOUND `${N-}`, NOT `$N`. ccd runs `set -uo pipefail`, and
+# a function that reads an unset positional EXITS THE SHELL rather than
+# returning. With 21 hand-written call sites one dropped `""` would abort a
+# destructive verb mid-teardown — through the journal, which exists precisely to
+# gate nothing. `shift N 2>/dev/null || :` for the same reason.
+_lc_intent() { local a="${1-}" i="${2-}" t="${3-}"; shift 3 2>/dev/null || :
+               _lc_emit "$a" intent "$i" "$t" "$@"; }
+_lc_done()   { local a="${1-}" i="${2-}" t="${3-}"; shift 3 2>/dev/null || :
+               _lc_emit "$a" done   "$i" "$t" "$@"; }
+
+_lc_fail() {   # act id tx token detail [k v]... — an act that STARTED and broke
+  # Distinct from `_lc_refuse` by WHEN, not by severity: a refusal happens
+  # before anything irreversible, a failure after. `cmd_ws_rm`'s
+  # `git worktree remove` die at ccd:3002 is a FAILURE — the session
+  # is already stopped when it fires — and calling it a refusal would say
+  # nothing was touched, which is false.
+  local a="${1-}" i="${2-}" t="${3-}" tok="${4-}" msg="${5-}"; shift 5 2>/dev/null || :
+  _lc_emit "$a" failed "$i" "$t" refusal "$tok" detail "$msg" "$@"
+}
+
+_lc_refuse() {   # act id token detail [k v]... — EMITS, THEN DIES. Never returns.
+  # Refusal and death cannot drift because they are one call. Call sites live
+  # ONLY inside the destructive verbs, never inside `die` itself — putting it
+  # there would fabricate a refusal record for every usage error on every verb
+  # in the file.
+  #
+  # THIS FUNCTION IS IN `ccd-die-containment.test.ts`'s CAN-DIE SET (that suite
+  # derives the set by call-graph reachability, so there is no list to edit). It
+  # must never be wrapped in `$( )`: the capture demotes a fatal to rc 1 and the
+  # verb carries on destroying.
+  #
+  # The field is `refusal`, never `refused`, and the token is an ARGUMENT
+  # rather than a format-string literal — both so `ccd-wsaudit-nonpoison.test.ts`'s
+  # four-shape scan over this whole block's text cannot see it. That guard's
+  # own docstring is the precedent for why the spelling matters, not a
+  # specific ccd line.
+  local a="${1-}" i="${2-}" tok="${3-}" msg="${4-}"; shift 4 2>/dev/null || :
+  _lc_emit "$a" refused "$i" "" refusal "$tok" detail "$msg" "$@"
+  die "$msg"
+}
+
+_lc_surface_norm() {   # word -> the DECLARED surface, or NOTHING when none was
+  # THREE STATES, THREE ANSWERS, and the empty one is the whole point: "no flag
+  # was passed" is a different fact from "a word this build does not model".
+  # The encoder omits an empty value, so an undeclared surface reads `none`;
+  # `unknown` is reserved for a word that arrived and was not recognised.
+  #
+  # ccd's OWN DEFAULTS MUST NEVER REACH THIS FIELD — `cmd_stop`'s `cli`,
+  # `_ws_unsupervise`'s `ccd`. They are ccd acting on its own account, not a
+  # caller's declaration, and laundering one into `dec.surface` is exactly the
+  # default-as-declaration defect `none` exists to prevent. The closed set is
+  # ccd:1523's, so the journal and the `.stopped` stamp agree by construction.
+  [[ -n "${1-}" ]] || { printf '%s' ''; return 0; }
+  case "$1" in cli|pwa|agent|ccd) printf '%s' "$1" ;; *) printf '%s' unknown ;; esac
+  return 0
+}
+
+_lc_dec_ok() {   # text -> 0 iff it fits _LC_DEC_MAX *BYTES*. Prints nothing.
+  # BYTES, NOT CHARACTERS, and `local LC_ALL=C` is what makes `${#1}` count
+  # them — restored on return, because `local` shadows the caller's value for
+  # this frame only. A 200-emoji reason is 200 characters and 800 bytes; with a
+  # character cap it would pass one surface and be refused by the next, which
+  # is one value with two meanings at a provenance seam.
+  #
+  # THE POLICY IS REFUSE, NEVER TRUNCATE. A 900-byte reason silently recorded
+  # as 512 reads as the operator's own words, and the record is the one
+  # artefact that outlives the workspace.
+  local LC_ALL=C
+  (( ${#1} <= _LC_DEC_MAX ))
+}
+# ── end lifecycle journal ────────────────────────────────────────── LC-END ──
 _ws_status() {   # id -> busy|idle on stdout; NON-ZERO when it cannot be read.
   # Fails closed twice over, and both halves are load-bearing.
   #
@@ -1279,7 +2091,7 @@ if mode == 'state':
     # `{X, absent}` is not a new state to teach anyone: it is what a workspace
     # that never had a PR looks like, what a `merged` row with no `number`
     # field looks like, and `_reg_get`'s readers already treat a missing or
-    # non-numeric `prnumber` as null (ccd:1273, ccd:2650). The window is a
+    # non-numeric `prnumber` as null (ccd:1273, ccd:4170). The window is a
     # DEGRADED reading, never a false one, and the old window's was false.
     #
     # The unconditional `clear` also costs one unlink on the path where the
@@ -1533,9 +2345,13 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # lock" on two different inodes — reopening the double compare-and-set this
 # branch's lock migration closed.
 #
-# NOT reachable this way, and this set IS the boundary — seven dot-prefixed
-# artifacts live under `$REG`; the four above are reachable, these three are
-# not: `$REG/.reaped/` (a directory, not a `.reaped.<suffix>` file — no id's
+# NOT reachable this way, and this set IS the boundary — EIGHT dot-prefixed
+# artifacts live under `$REG`; the four above are reachable, these four are
+# not: `$REG/.lifecycle/` (the lifecycle journal — a dotted DIRECTORY for
+# exactly this reason; see the LC-BEGIN block, and note that its generations,
+# `errors` and `.rotate.lock` are counted WITH it, as `.reaped/`'s tombstones
+# are counted with `.reaped/`); `$REG/.reaped/` (a directory, not a
+# `.reaped.<suffix>` file — no id's
 # purge glob matches a bare directory, and `rm -f` cannot take one
 # regardless); `_reg_set`'s own tmps; and session-hook.sh's
 # `.$id.$$.hookstate.tmp` — the last two ARE candidate glob matches when
@@ -1864,6 +2680,17 @@ cmd_ws_add() {   # project [slug] — new worktree + session for an existing pro
   # rc=0 with the success line printed over a spawn whose tmux session had
   # vanished).
   local rc
+  # BEFORE the spawn, because `_spawn_start` can `return` and the fact worth
+  # recording is that this workspace came into existence — the registry has no
+  # creation timestamp anywhere (§0), and `.spawn` is the LAST respawn.
+  #
+  # THE NAMES ARE THIS FUNCTION'S OWN, measured against its local set: the slug
+  # is `$slug` and the wrapper is `$hw` (`_ws_least_loaded`'s pick, used again
+  # at ccd:2691). There is no `$ws` and no `$wrapper` here, and under
+  # `set -uo pipefail` naming one would EXIT the shell between the lock and the
+  # spawn, with the worktree already on disk.
+  _lc_done create "$id" "" meas.project "$project" meas.workspace "$slug" \
+    meas.branch "$branch" meas.base "$base" meas.workdir "$wt" meas.wrapper "$hw"
   _spawn_start "$id" new || return $?
   _reg_claim "$id"
   _ws_supervise "$id"
@@ -2010,13 +2837,70 @@ _ws_branch_elsewhere() {
 }
 
 cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destroy.
-  local id="${1:?usage: ccd ws-rm <id>}"
-  [[ -f "$REG/$id.uuid" ]] || die "no such session: $id"
+  # FLAGS ARE STRIPPED BEFORE THE ARITY RULE, and that order is the correctness
+  # argument — `cmd_stop`'s own header (ccd:10746-10750) records what the other
+  # order costs: with the flag left in argv the verb aims at a session that does
+  # not exist while the real one keeps running.
+  #
+  # A VALIDATED FLAG, NEVER A POSITIONAL. ccd:9910-9914 is the paid lesson: an
+  # extra argv word on a prefix-whitelisted verb reached a bash arithmetic
+  # context where a command substitution EXECUTES. This value reaches no `(( ))`,
+  # no `$(( ))`, no `[[ x -ge y ]]` and no array subscript — it is written
+  # verbatim into one journal field and parsed nowhere, `cmd_ws_hold`'s own
+  # contract (ccd:3495-3496) applied here.
+  #
+  # AND IT CLOSES A HOLE ON THE WAY PAST: this verb had NO arity guard at all,
+  # so `ccd ws-rm x y z` silently ignored `y z`. The residue is checked below.
+  local reason="" args=()
+  while (( $# )); do
+    case "$1" in
+      # An explicit arity check, not a bare `shift 2`: ccd runs under
+      # `set -uo pipefail` with NO `-e`, so a shift past the end of argv fails,
+      # shifts nothing, and this loop never terminates (ccd:10764-10766).
+      #
+      # A BARE `die` HERE, DELIBERATELY, and `ccd-refusal-scan.test.ts` names
+      # this line in its SANCTIONED set: no `$id` exists yet, and a refusal
+      # record whose subject is empty says less than the usage line does.
+      --reason)   [[ $# -ge 2 ]] || die "usage: ccd ws-rm [--reason <text>] <id>"
+                  reason="$2"; shift 2 ;;
+      --reason=*) reason="${1#--reason=}"; shift ;;
+      # F2 FIX (review round 1): CLOSED FLAG SET, NEVER SWALLOWED. Before this,
+      # an unrecognised `--foo` fell into the catch-all below, became a
+      # positional, and was refused only as an ARITY side-effect (or, alone,
+      # misrecorded as `no-such-session: --foo`) — a record that names the
+      # wrong defect. A `--`-prefixed token that is not one of the flags above
+      # refuses BY NAME. Ids never start with `--` (single-dash ids still fall
+      # through to the catch-all below, unaffected).
+      --*)        _lc_refuse destroy "$1" bad-args \
+                    "unrecognised flag: $1" verb ws-rm dec.reason "$reason" ;;
+      *)          args+=("$1"); shift ;;
+    esac
+  done
+  set -- "${args[@]}"    # bash >= 4.4 (the fleet host runs 5.2): an empty array
+                         # here is not an unbound-variable error under `set -u`.
+  # F1 FIX (review round 1): the arity guard now fires BEFORE `id` is bound,
+  # so it can never be bypassed by an unbound-parameter death. `${1-}` never
+  # exits under `set -u` (unlike the `${1:?}` this replaces) — zero args and
+  # too-many args are now the SAME refused, journaled, `die`-through-`_lc_refuse`
+  # path, instead of zero args killing the process before any `_lc_*` runs.
+  [[ $# -eq 1 ]] || _lc_refuse destroy "${1-}" bad-args \
+    "usage: ccd ws-rm [--reason <text>] <id>" verb ws-rm dec.reason "$reason"
+  local id="${1-}"
+  # REFUSED, NOT TRUNCATED, and measured in BYTES. A 900-byte note silently cut
+  # to 512 reads as the operator's own words on the one record that outlives the
+  # workspace; `_lc_dec_ok` counts bytes under `LC_ALL=C` so a 200-emoji reason
+  # cannot pass here and be refused by the next surface. The refusal itself
+  # carries NO `dec.reason` — the value is the thing that did not fit.
+  _lc_dec_ok "$reason" || _lc_refuse destroy "$id" bad-args \
+    "--reason is longer than $_LC_DEC_MAX bytes — nothing was touched"
+  [[ -f "$REG/$id.uuid" ]] || _lc_refuse destroy "$id" no-such-session "no such session: $id" verb ws-rm dec.reason "$reason"
   local ws project workdir
   ws=$(_reg_get "$id" workspace); project=$(_reg_get "$id" project); workdir=$(_reg_get "$id" workdir)
   # The absence of a workspace field is what distinguishes a main checkout.
-  [[ -n "$ws" ]] || die "$id is not a workspace — refusing to remove a main checkout"
-  [[ -n "$project" && -n "$workdir" ]] || die "incomplete registry for '$id'"
+  [[ -n "$ws" ]] || _lc_refuse destroy "$id" not-a-workspace \
+    "$id is not a workspace — refusing to remove a main checkout" verb ws-rm dec.reason "$reason"
+  [[ -n "$project" && -n "$workdir" ]] || _lc_refuse destroy "$id" incomplete-registry \
+    "incomplete registry for '$id'" verb ws-rm dec.reason "$reason"
 
   # A hold is a declaration that a program is mid-flight here. Destroying the
   # workspace should take two deliberate acts — release, then remove — never
@@ -2026,7 +2910,8 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
   # it dies too; `cmd_ws_reap`'s copy of this rung answers in JSON on stdout
   # instead, for the reason recorded there (the PWA reads tokens, not stderr).
   if [[ -e "$REG/$id.hold" ]]; then
-    die "held: $(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>') — release first: ccd ws-release --session $id"
+    _lc_refuse destroy "$id" held \
+      "held: $(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>') — release first: ccd ws-release --session $id" verb ws-rm dec.reason "$reason"
   fi
   local main="$PROJECTS_ROOT/$project"
 
@@ -2053,7 +2938,9 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
     local wd_common main_common
     wd_common=$(_ws_common_dir "$workdir"); main_common=$(_ws_common_dir "$main")
     (( registered == 0 )) && [[ -n "$main_common" && "$wd_common" == "$main_common" ]] \
-      || die "$workdir is not a worktree of $main — nothing was touched; move or delete the directory by hand, then re-run (with it gone, ccd clears the leftover record itself; \`git worktree prune\` will not, while the directory is there)"
+      || _lc_refuse destroy "$id" foreign-worktree \
+           "$workdir is not a worktree of $main — nothing was touched; move or delete the directory by hand, then re-run (with it gone, ccd clears the leftover record itself; \`git worktree prune\` will not, while the directory is there)" \
+           dec.reason "$reason"
     # --porcelain counts untracked files, which is what `git worktree remove`
     # itself objects to. Doing this after the kill would leave the uncommitted
     # work intact but the session dead and out of supervision — and the refusal
@@ -2082,18 +2969,77 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
     # through by a translated warning. Two statements and a scratch file rather
     # than a pipeline, because `local x=$(cmd)` returns local's status.
     local dirty derrf derr drc
-    derrf=$(mktemp) || die "could not make a scratch file to read $workdir — nothing was touched"
+    derrf=$(mktemp) || _lc_refuse destroy "$id" scratch-unwritable \
+      "could not make a scratch file to read $workdir — nothing was touched" \
+      dec.reason "$reason"
     dirty=$(git -C "$workdir" status --porcelain 2>"$derrf"); drc=$?
     derr=$(cat "$derrf" 2>/dev/null); rm -f "$derrf"
     { (( drc == 0 )) && [[ -z "$derr" ]]; } \
-      || die "could not read $workdir${derr:+ ($derr)} — nothing was touched"
-    [[ -z "$dirty" ]] || die "worktree not removed (uncommitted changes?) — nothing was touched: $workdir"
+      || _lc_refuse destroy "$id" tree-unreadable \
+           "could not read $workdir${derr:+ ($derr)} — nothing was touched" \
+           dec.reason "$reason"
+    [[ -z "$dirty" ]] || _lc_refuse destroy "$id" dirty-tree \
+      "worktree not removed (uncommitted changes?) — nothing was touched: $workdir" verb ws-rm dec.reason "$reason"
     local nested
     nested=$(_ws_nested_checkouts "$workdir") \
-      || die "could not scan $workdir for nested checkouts${_WS_NESTED_WHY:+ ($_WS_NESTED_WHY)} — nothing was touched"
+      || _lc_refuse destroy "$id" tree-unreadable \
+           "could not scan $workdir for nested checkouts${_WS_NESTED_WHY:+ ($_WS_NESTED_WHY)} — nothing was touched" \
+           dec.reason "$reason"
     [[ -z "$nested" ]] \
-      || die "worktree not removed — nested checkouts live under it, and ccd deletes no repository it did not create: ${nested//$'\n'/, } — nothing was touched"
+      || _lc_refuse destroy "$id" nested-checkouts-present \
+           "worktree not removed — nested checkouts live under it, and ccd deletes no repository it did not create: ${nested//$'\n'/, } — nothing was touched" \
+           dec.reason "$reason"
   fi
+
+  # ── R4-1 · THE ATTIC PIN, BEFORE ANYTHING IS TOUCHED ────────────────────
+  # `git worktree remove` at ccd:2999 deletes both $workdir and
+  # $main/.git/worktrees/<slug>/, and the latter holds the HEAD reflog.
+  # `_ws_attic_pin`'s reflog read is guarded by `[[ -d "$workdir" ]]`, so a pin
+  # taken after that call sees nothing and contributes only a pre-resolved tip.
+  # Placing it above `_ws_unsupervise` rather than merely above 2929 puts it on
+  # the near side of EVERY irreversible act, so the intent/done pair below
+  # brackets a workspace whose commits are already referenced.
+  #
+  # UNCONDITIONAL: it runs even when `git branch -d` later refuses at ccd:3016,
+  # because that is the case where the commits matter most, and even when
+  # `registered != 0` so ccd:2999 never runs at all.
+  #
+  # `_ws_attic_pin` contains no `die`, which is what makes this `$( )` capture
+  # safe under `ccd-die-containment.test.ts`. Nothing added here may die inside
+  # a capture.
+  local reg_branch; reg_branch=$(_reg_get "$id" branch)
+  local tip="" atticsrc=none attic=0
+  if [[ -d "$workdir" ]]; then
+    tip=$(git -C "$workdir" rev-parse HEAD 2>/dev/null) && atticsrc=worktree || tip=""
+    # THE ASYMMETRY, and it is a measurement rather than a fabricated zero:
+    # a workspace still on disk whose tip cannot be resolved is exactly what
+    # "refuses anything it might destroy" means. Directory already gone is the
+    # other case and it is handled below — refusing there would wedge cleanup
+    # on a workspace with nothing left to protect.
+    [[ -n "$tip" ]] \
+      || _lc_refuse destroy "$id" tip-unreadable \
+           "could not resolve a tip for $workdir — nothing was touched; the workspace is still on disk and its commits would be unreferenced" verb ws-rm dec.reason "$reason"
+  elif [[ -n "$reg_branch" ]]; then
+    tip=$(git -C "$main" rev-parse --verify "refs/heads/$reg_branch" 2>/dev/null) \
+      && atticsrc=registry || tip=""
+  fi
+  if [[ -n "$tip" ]]; then
+    attic=$(_ws_attic_pin "$main" "$id" "$workdir" "$tip")
+    [[ "$attic" =~ ^[0-9]+$ ]] || attic=0
+  fi
+  # ─────────────────────────────────────────────────────────────────────────
+
+  # THE PAIR. `tx` is a `local`, minted here and passed to both halves — there
+  # is no global carrying it, and there must not be: the `LC_TIP=` idiom dies
+  # under `set -u` on the first call in a process and appends a blank line
+  # nobody notices. Everything above this point is the refuse-first ladder, so
+  # the intent sits exactly on the boundary of the irreversible.
+  local lctx; lctx=$(_lc_tx)
+  _lc_intent destroy "$id" "$lctx" verb ws-rm dec.reason "$reason" \
+    meas.project "$project" \
+    meas.workspace "$ws" meas.branch "$branch" meas.workdir "$workdir" \
+    meas.registered "$registered" meas.tip "$tip" meas.attic "$attic" \
+    meas.atticsrc "$atticsrc"
 
   _ws_unsupervise "$id"
   tmux kill-session -t "$(_tmux "$id")" 2>/dev/null || true
@@ -2110,10 +3056,14 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
     # that case and not offered as a general remedy — the "directory is there
     # but is not ours" case refuses above, before anything is torn down.
     git -C "$main" worktree remove "$workdir" \
-      || die "worktree record not cleared for $workdir — the session was stopped; git refused: unlock it (git -C $main worktree unlock $workdir) or clean the tree, then re-run — and if the directory is already gone, git -C $main worktree prune clears the record"
+      || { _lc_fail destroy "$id" "$lctx" worktree-remove-failed \
+             "git refused to clear the worktree record for $workdir"
+           die "worktree record not cleared for $workdir — the session was stopped; git refused: unlock it (git -C $main worktree unlock $workdir) or clean the tree, then re-run — and if the directory is already gone, git -C $main worktree prune clears the record"; }
   fi
 
-  local reg_branch; reg_branch=$(_reg_get "$id" branch)
+  # DECLARED IN THE R4-1 BLOCK ABOVE NOW, not here: the attic pin needs it to
+  # resolve a tip from the registry when the worktree is gone, and a SECOND
+  # `local` in the same function re-declares and blanks it. One reader, one place.
   if [[ -n "$branch" ]]; then
     # git had a record, so the registry is a witness, never the decider: a
     # divergence means the branch was renamed outside ccd, and the name to
@@ -2145,6 +3095,23 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
   fi
 
   _reg_purge "$id"                                                          # finding F3
+
+  # AFTER `_reg_purge`, so the `done` line sits after the terminal act. Note
+  # this workspace now has TWO records for one removal — the D3 backstop's
+  # `purge` line and this `destroy`/`done` — and that redundancy is the design:
+  # a silent destruction has to defeat two independent emit sites.
+  #
+  # THREE STATES, THREE VALUES. `git branch -d` at ccd:3016 refuses an unmerged
+  # branch and that refusal is wanted; an empty `bd` is OMITTED by the encoder,
+  # which is how "there was no branch" stays distinct from "the branch is gone".
+  # A two-valued expression answers `true` for a detached HEAD — a fabricated
+  # fact on the one record that outlives the workspace.
+  local bd=""
+  if [[ -n "$branch" ]]; then
+    if git -C "$main" show-ref --verify --quiet "refs/heads/$branch" 2>/dev/null
+    then bd=false; else bd=true; fi
+  fi
+  _lc_done destroy "$id" "$lctx" verb ws-rm dec.reason "$reason" meas.branch "$branch" branchDeleted "$bd"
   echo "removed workspace $id"
 }
 
@@ -2196,6 +3163,86 @@ cmd_ws_rename() {   # ccd ws-rename --session <id> --branch <name> — rename a
   # the verb cannot answer at all.
   _json_str probe >/dev/null 2>&1 \
     || die "python3 unavailable — cannot quote the rename answer safely"
+
+  # WAVE 5 — THE DEC FLAGS, STRIPPED HERE AND NOT ONE LINE EARLIER. Below the
+  # `_json_str` probe, because every refusal in this verb is a QUOTED JSON
+  # answer at exit 0 and an unquotable detail is a parse error rather than the
+  # refusal it actually was. Above the arity rule, because the rule is exact
+  # and a flag left in argv would refuse a correct call. A THIRD ARRANGEMENT
+  # from Tasks 45-47's two: `cmd_ws_archive` (Task 45) binds no `id` until
+  # AFTER its arity check, so its block could go almost anywhere above that
+  # check; `cmd_ws_restore` (Task 46) binds `id="${2-}"` as its very first
+  # statement, so its block had to precede that binding specifically. This verb
+  # binds neither `id` nor `new` until AFTER the arity check below (`local
+  # id=$2 new=$4`, ccd:3118 pre-wave-5) — so, unlike Task 46's case, there is no
+  # earlier binding this placement could land on the wrong side of.
+  #
+  # `break`, NOT a refusal in the loop body: a `return` inside the `while` would
+  # leave the remaining argv unread, and the answer this verb owes is one
+  # document. The first fault wins and the loop stops; `lc_bad` carries it out.
+  #
+  # THE TOKEN IS `bad-args`, THE ONE THIS VERB ALREADY SPELLS, and that is not
+  # tidiness: `server/test/wsaudit.test.ts:53-63` greps this file's raw text for
+  # `"refused":"<token>"` and holds the result set-equal to `wsaudit.ts`'s
+  # SENTENCES in both directions, so a `bad-surface` invented here is a red
+  # suite whose only fixes are new copy or a weakened mechanism.
+  local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 lc_args=() lc_bad=''
+  while (( $# )); do
+    case "$1" in
+      --surface)   if [[ $# -ge 2 ]]; then lc_gs=1; lc_surface="$2"; shift 2
+                   else lc_bad='--surface needs a value'; break; fi ;;
+      --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
+      --actor)     if [[ $# -ge 2 ]]; then lc_ga=1; lc_actor="$2"; shift 2
+                   else lc_bad='--actor needs a value'; break; fi ;;
+      --actor=*)   lc_ga=1; lc_actor="${1#--actor=}"; shift ;;
+      --reason)    if [[ $# -ge 2 ]]; then lc_gr=1; lc_reason="$2"; shift 2
+                   else lc_bad='--reason needs a value'; break; fi ;;
+      --reason=*)  lc_gr=1; lc_reason="${1#--reason=}"; shift ;;
+      *)           lc_args+=("$1"); shift ;;
+    esac
+  done
+  set -- "${lc_args[@]}"
+  # `_lc_surface_norm ''` prints EMPTY, not `unknown` (ccd:1511-1524, D-210) —
+  # it cannot tell "no argument" from "an explicit blank" apart, so THIS loop is
+  # where that distinction has to be made, before the encoder ever sees the
+  # value. `lc_gs` already carries givenness; the `${lc_w:-unknown}` fallback
+  # below is what turns a declared-but-blank surface into `unknown` rather than
+  # an empty string that `_lc_json` would backfill to `none` — the exact
+  # given/no-flag collapse this verb must not produce.
+  #
+  # DIVERGES FROM THE BRIEF'S OWN STEP-3 SAMPLE, which read
+  # `lc_surface=$(_lc_surface_norm "$lc_surface")` with no fallback: measured
+  # against D-210, that line leaves a declared-but-blank `--surface ''` as the
+  # literal empty string, which `_lc_json` backfills to `none` — "no flag was
+  # given at all", exactly the collapse D-210 exists to prevent. Same fix
+  # Tasks 45-47 already carry for their own copies of this loop.
+  if (( lc_gs )); then local lc_w; lc_w=$(_lc_surface_norm "$lc_surface"); lc_surface=${lc_w:-unknown}; fi
+  # `_lc_dec_ok` is LENGTH-ONLY (ccd:1527-1538, D-210) — `_lc_dec_ok ''` returns
+  # 0, so it is not a blank guard on its own. TWO SEPARATE CHECKS below, blank
+  # then length — the same shape `cmd_ws_archive`/`cmd_ws_restore` use.
+  #
+  # DIVERGES FROM THE BRIEF'S OWN STEP-3 SAMPLE, whose single
+  # `! _lc_dec_ok "$lc_actor"` test cannot fire on a blank value at all
+  # (`_lc_dec_ok ''` measures 0 bytes, which is `<= 512`): that line alone
+  # leaves a declared `--actor ''` UNREFUSED — the opposite of this task's own
+  # Step-1 test ("refuses a blank --actor as JSON at exit 0"). Same gap the
+  # brief's --reason sample repeats.
+  if [[ -z "$lc_bad" ]] && (( lc_ga )) && [[ -z "${lc_actor//[[:space:]]/}" ]]; then
+    lc_bad='--actor must be non-blank'
+  fi
+  if [[ -z "$lc_bad" ]] && (( lc_ga )) && ! _lc_dec_ok "$lc_actor"; then
+    lc_bad="--actor is longer than $_LC_DEC_MAX bytes"
+  fi
+  if [[ -z "$lc_bad" ]] && (( lc_gr )) && [[ -z "${lc_reason//[[:space:]]/}" ]]; then
+    lc_bad='--reason must be non-blank'
+  fi
+  if [[ -z "$lc_bad" ]] && (( lc_gr )) && ! _lc_dec_ok "$lc_reason"; then
+    lc_bad="--reason is longer than $_LC_DEC_MAX bytes"
+  fi
+  if [[ -n "$lc_bad" ]]; then
+    printf '{"refused":"bad-args","detail":%s,"paths":[]}\n' "$(_json_str "$lc_bad")"
+    return 0
+  fi
 
   # Exact arity and flag order, the shape `cmd_ws_hold` (ccd:1635) and
   # `cmd_ws_release` (ccd:1681) use. `[[ ]]` short-circuits, so `$1` is never
@@ -2473,6 +3520,11 @@ cmd_ws_rename() {   # ccd ws-rename --session <id> --branch <name> — rename a
   # definition — it is answering the first prompt. A busy guard would refuse the
   # only moment automatic naming ever fires.
   git -C "$main" branch -m "$old" "$new" || die "rename failed: $old -> $new"
+  # AFTER ccd:3210's `git branch -m` succeeded, so `branch` is the name the
+  # repository actually carries now, and `old` is what it carried before.
+  _lc_done rename "$id" "" meas.old "$old" meas.branch "$new" \
+    meas.project "$(_reg_get "$id" project)" \
+    dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
   _reg_set "$id" branch "$new"
   printf '{"renamed":%s,"old":%s,"new":%s}\n' \
     "$(_json_str "$id")" "$(_json_str "$old")" "$(_json_str "$new")"
@@ -2536,9 +3588,26 @@ EOF
   # existing `/^[a-z][a-z-]*$/` filter unchanged. Names the FLAG `cmd_stop`
   # has carried since D3 (spec §4.1): `ccd stop [--surface <word>] <id>`.
   # `server/test/ccd-archive.test.ts`'s caps<->dispatcher parity check knows
-  # this one token by name and requires it to stay exactly one token — a
-  # third one added here without updating that list fails loudly there.
+  # these tokens by name (`KNOWN_CAPABILITY_TOKENS`, that file's line 153) and
+  # holds the advertised set EXACTLY equal to it — a token added here without
+  # updating that list fails loudly there, in BOTH directions: :175 sees it as
+  # a phantom verb, :180 sees the list short one.
   echo stop-surface
+  # `lifecycle-v1` says THIS copy of ccd writes `$REG/.lifecycle/`. It gates a
+  # SERVER DECISION — sweep at all — not a file: absent means the mirror never
+  # sweeps and every surface says "this box's ccd does not write the lifecycle
+  # journal", because an old ccd's silence must not read as a quiet fleet.
+  # Verb-shaped so it needs no new parsing anywhere, exactly the argument that
+  # put `stop-surface` on this channel.
+  echo lifecycle-v1
+  # `actor-flags-v1` decides ONE server-side thing: whether to APPEND
+  # `--surface`/`--actor`/`--reason` to the five workspace verbs. The server
+  # answers FALSE on no evidence (`capSupported`, server/src/ccdargv.ts) because
+  # the wrong guess here is a SILENT SUCCESS — a ccd without this token meets
+  # the flags in an exact-arity guard, and where it does not die, `runCcdOr502`
+  # renders exit 0 as `200 {ok:true}` for a call that recorded nothing. Same
+  # argument, same polarity, as `stop-surface` above.
+  echo actor-flags-v1
 }
 
 cmd_version() {   # what THIS box runs, per the deploy's own stamp — never a guess.
@@ -2606,9 +3675,60 @@ cmd_ws_hold() {   # ccd ws-hold --session <id> --reason <text> — claim a
   # finished one, so the claim is DECLARED, never inferred. Non-destructive and
   # idempotent: re-hold updates the reason. The reason string is the display
   # everywhere — write it verbatim, parse it nowhere.
+  # WAVE 5 — TWO FLAGS, NOT THREE, AND THAT IS THE DESIGN. `--reason` on this
+  # verb is already the HOLD's reason: mandatory, positional (`$4`), and the
+  # display on every ccrc surface. Stripping it here would leave the residue at
+  # arity 2, refuse every correct call, and make the workspace unholdable; and
+  # accepting a SECOND `--reason` would put two different reasons on one verb
+  # with nothing to say which one a reader is looking at. Spec D2's `dec.reason`
+  # is therefore this same string — one reason, one meaning.
+  #
+  # Stripped BEFORE the exact-arity rule, `cmd_stop`'s order — and before any
+  # positional binding, so a run like `ws-hold --surface pwa --session <id>
+  # --reason x` cannot bind `id` from the raw, flag-polluted argv the way
+  # Task 46 found `cmd_ws_restore` almost did.
+  local lc_surface=none lc_actor='' lc_gs=0 lc_ga=0 lc_args=()
+  while (( $# )); do
+    case "$1" in
+      # An explicit arity check, not a bare `shift 2`: ccd runs under
+      # `set -uo pipefail` with NO `-e`, so a shift past the end of argv fails,
+      # shifts nothing, and this loop never terminates.
+      --surface)   [[ $# -ge 2 ]] || die "usage: ccd ws-hold [--surface <word>] [--actor <text>] --session <id> --reason <text>"
+                   lc_gs=1; lc_surface="$2"; shift 2 ;;
+      --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
+      --actor)     [[ $# -ge 2 ]] || die "usage: ccd ws-hold [--surface <word>] [--actor <text>] --session <id> --reason <text>"
+                   lc_ga=1; lc_actor="$2"; shift 2 ;;
+      --actor=*)   lc_ga=1; lc_actor="${1#--actor=}"; shift ;;
+      *)           lc_args+=("$1"); shift ;;
+    esac
+  done
+  # bash >= 4.4 (the fleet host runs 5.2, ccd:9393-9394): an empty array here
+  # is not an unbound-variable error under `set -u`.
+  set -- "${lc_args[@]}"
+  # `_lc_surface_norm ''` prints EMPTY, not `unknown` (ccd:1511-1524, D-210) —
+  # it cannot tell "no argument" from "an explicit blank" apart, so THIS loop
+  # is where that distinction has to be made, before the encoder ever sees the
+  # value. `lc_gs` already carries givenness; the `${lc_w:-unknown}` fallback
+  # below is what turns a declared-but-blank surface into `unknown` rather
+  # than an empty string that `_lc_json` would backfill to `none` — the exact
+  # given/no-flag collapse this verb must not produce.
+  if (( lc_gs )); then local lc_w; lc_w=$(_lc_surface_norm "$lc_surface"); lc_surface=${lc_w:-unknown}; fi
+  # `_lc_dec_ok` is LENGTH-ONLY (`ccd:1527-1538`, D-210) — `_lc_dec_ok ''`
+  # returns 0, so it cannot be the blank guard on its own. A declared
+  # `--actor` is refused when blank the same way this verb's own `--reason`
+  # is refused just below (ccd:3656), and the same shape Task 45's
+  # `cmd_ws_archive` and Task 46's `cmd_ws_restore` use.
+  if (( lc_ga )); then
+    [[ -n "${lc_actor//[[:space:]]/}" ]] || die "--actor must be non-blank"
+    _lc_dec_ok "$lc_actor" || die "--actor is longer than $_LC_DEC_MAX bytes"
+  fi
   [[ $# -eq 4 && $1 == --session && $3 == --reason ]] \
     || die "usage: ccd ws-hold --session <id> --reason <text>"
   local id=$2 reason=$4
+  # `dec.reason` IS the hold reason — see the note above. Named separately so
+  # Task 49's emit site reads ONE variable on every verb rather than a special
+  # case here, and so a future editor cannot "add the missing --reason".
+  local lc_reason=$reason
   [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
   [[ -f "$REG/$id.uuid" ]]       || die "no such session: $id"
   # An empty reason is an orphan hold by construction — nobody could ever say
@@ -2661,6 +3781,11 @@ cmd_ws_hold() {   # ccd ws-hold --session <id> --reason <text> — claim a
   # root, a directory does — and it is `mv -fT`'s `-T` that keeps THAT case a
   # refusal too: a bare `mv -f` would move the tmp inside the directory and
   # exit 0.
+  # The reason is DECLARED (`dec`), never measured: ccd:3352-3353's contract is
+  # "write it verbatim, parse it nowhere", and the journal keeps that promise.
+  # `_lc_json` quotes it with `json.dumps`, so it cannot forge a field however
+  # it is spelled.
+  _lc_done hold "$id" "" dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
   _reg_set "$id" hold "$reason" \
     || die "could not record the hold for $id — it is NOT held"
   echo "held $id: $reason"
@@ -2671,6 +3796,64 @@ cmd_ws_release() {   # ccd ws-release --session <id> — end the program's claim
   # re-arm the auto-archive sweep: since Build 8 Wave 2, `archiveMerged` also
   # asks the server's coord.db whether an OPEN RUN still names this session,
   # and skips if one does — an absent hold is no longer sufficient. Idempotent.
+  # WAVE 5 — THE DEC FLAGS ARE STRIPPED BEFORE THE ARITY RULE, and that order
+  # is the whole correctness argument, exactly as `cmd_stop` states it in its
+  # own header (grep `FLAGS ARE STRIPPED BEFORE THE ARITY RULE`): this verb's
+  # guard is EXACT arity on `--session <id>`, so a flag left in argv is not a
+  # wider call, it is a REFUSED one — `ccd ws-release --session x --surface pwa`
+  # would die in the usage check while the server reads the non-zero as "the
+  # release failed on the box".
+  #
+  # THREE `given` FLAGS, not three value tests. `--surface ''` and no
+  # `--surface` at all are two different facts: nobody declared a surface
+  # (`none`), versus a caller declared a word this ccd does not know
+  # (`unknown`). Testing `[[ -n "$lc_surface" ]]` instead would collapse them,
+  # which is `ccd:650-663`'s `${2-ccd}` vs `${2:-ccd}` distinction broken in a new
+  # place. Same for `--actor ''` and `--reason ''`, which are REFUSED rather
+  # than silently read as absent — one policy, everywhere (AUDIT B5).
+  local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 lc_args=()
+  while (( $# )); do
+    case "$1" in
+      # An explicit arity check, not a bare `shift 2`: ccd runs under
+      # `set -uo pipefail` with NO `-e`, so a shift past the end of argv fails,
+      # shifts nothing, and this loop never terminates (`cmd_stop` carries the
+      # same three lines over the same hazard).
+      --surface)   [[ $# -ge 2 ]] || die "usage: ccd ws-release [--surface <word>] [--actor <text>] [--reason <text>] --session <id>"
+                   lc_gs=1; lc_surface="$2"; shift 2 ;;
+      --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
+      --actor)     [[ $# -ge 2 ]] || die "usage: ccd ws-release [--surface <word>] [--actor <text>] [--reason <text>] --session <id>"
+                   lc_ga=1; lc_actor="$2"; shift 2 ;;
+      --actor=*)   lc_ga=1; lc_actor="${1#--actor=}"; shift ;;
+      --reason)    [[ $# -ge 2 ]] || die "usage: ccd ws-release [--surface <word>] [--actor <text>] [--reason <text>] --session <id>"
+                   lc_gr=1; lc_reason="$2"; shift 2 ;;
+      --reason=*)  lc_gr=1; lc_reason="${1#--reason=}"; shift ;;
+      *)           lc_args+=("$1"); shift ;;
+    esac
+  done
+  # bash >= 4.4 (the fleet host runs 5.2, ccd:9393-9394): an empty array here
+  # is not an unbound-variable error under `set -u`.
+  set -- "${lc_args[@]}"
+  # `_lc_surface_norm ''` prints EMPTY, not `unknown` (ccd:1511-1524, D-210) —
+  # it cannot tell "no argument" from "an explicit blank" apart, so THIS loop
+  # is where that distinction has to be made, before the encoder ever sees the
+  # value. `lc_gs` already carries givenness; the `${w:-unknown}` fallback
+  # below is what turns a declared-but-blank surface into `unknown` rather
+  # than an empty string that `_lc_json` would backfill to `none` — the exact
+  # given/no-flag collapse this verb must not produce.
+  if (( lc_gs )); then local lc_w; lc_w=$(_lc_surface_norm "$lc_surface"); lc_surface=${lc_w:-unknown}; fi
+  # `_lc_dec_ok` is LENGTH-ONLY (`ccd:1527-1538`, D-210) — `_lc_dec_ok ''`
+  # returns 0, so it cannot be the blank guard on its own. A declared
+  # `--actor`/`--reason` is refused when blank the same way `cmd_ws_hold`
+  # refuses a blank `--reason` (ccd:3656): its own non-blank check, separate
+  # from the byte cap, whitespace-only counting as blank too.
+  if (( lc_ga )); then
+    [[ -n "${lc_actor//[[:space:]]/}" ]] || die "--actor must be non-blank"
+    _lc_dec_ok "$lc_actor" || die "--actor is longer than $_LC_DEC_MAX bytes"
+  fi
+  if (( lc_gr )); then
+    [[ -n "${lc_reason//[[:space:]]/}" ]] || die "--reason must be non-blank"
+    _lc_dec_ok "$lc_reason" || die "--reason is longer than $_LC_DEC_MAX bytes"
+  fi
   [[ $# -eq 2 && $1 == --session ]] || die "usage: ccd ws-release --session <id>"
   local id=$2
   [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
@@ -2689,6 +3872,12 @@ cmd_ws_release() {   # ccd ws-release --session <id> — end the program's claim
     # claim is gone while `archiveMerged` keeps deferring and `ws-rm`/`ws-reap`
     # keep refusing. Fail-shut in the safe direction, but a lie either way, and
     # the sibling verb's own guard is the standard this file set.
+    # INSIDE the `-e` arm (ccd:3431), so a `not held` answer writes nothing: an
+    # idempotent no-op is not an act, and recording one would make the record
+    # disagree with what happened. Read BEFORE the unlink, which is the only
+    # instant the text exists.
+    _lc_done release "$id" "" meas.held "$(cat "$REG/$id.hold" 2>/dev/null)" \
+      dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
     rm -f -- "$REG/$id.hold" \
       || die "could not remove the hold for $id — it is STILL held"
     echo "released $id"
@@ -2736,6 +3925,64 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
   # out of the live fleet. DESTROYS NOTHING: no worktree remove, no branch -d,
   # no rm of the registry. Its one cost is the tmux pane (scrollback and any
   # in-flight turn), which is why it demands an affirmative idle.
+  # WAVE 5 — THE DEC FLAGS ARE STRIPPED BEFORE THE ARITY RULE, and that order
+  # is the whole correctness argument, exactly as `cmd_stop` states it in its
+  # own header (grep `FLAGS ARE STRIPPED BEFORE THE ARITY RULE`): this verb's
+  # guard is EXACT arity on `--session <id>`, so a flag left in argv is not a
+  # wider call, it is a REFUSED one — `ccd ws-archive --session x --surface pwa`
+  # would die in the usage check while the server reads the non-zero as "the
+  # archive failed on the box".
+  #
+  # THREE `given` FLAGS, not three value tests. `--surface ''` and no
+  # `--surface` at all are two different facts: nobody declared a surface
+  # (`none`), versus a caller declared a word this ccd does not know
+  # (`unknown`). Testing `[[ -n "$lc_surface" ]]` instead would collapse them,
+  # which is `ccd:650-663`'s `${2-ccd}` vs `${2:-ccd}` distinction broken in a new
+  # place. Same for `--actor ''` and `--reason ''`, which are REFUSED rather
+  # than silently read as absent — one policy, everywhere (AUDIT B5).
+  local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 lc_args=()
+  while (( $# )); do
+    case "$1" in
+      # An explicit arity check, not a bare `shift 2`: ccd runs under
+      # `set -uo pipefail` with NO `-e`, so a shift past the end of argv fails,
+      # shifts nothing, and this loop never terminates (`cmd_stop` carries the
+      # same three lines over the same hazard).
+      --surface)   [[ $# -ge 2 ]] || die "usage: ccd ws-archive [--surface <word>] [--actor <text>] [--reason <text>] --session <id>"
+                   lc_gs=1; lc_surface="$2"; shift 2 ;;
+      --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
+      --actor)     [[ $# -ge 2 ]] || die "usage: ccd ws-archive [--surface <word>] [--actor <text>] [--reason <text>] --session <id>"
+                   lc_ga=1; lc_actor="$2"; shift 2 ;;
+      --actor=*)   lc_ga=1; lc_actor="${1#--actor=}"; shift ;;
+      --reason)    [[ $# -ge 2 ]] || die "usage: ccd ws-archive [--surface <word>] [--actor <text>] [--reason <text>] --session <id>"
+                   lc_gr=1; lc_reason="$2"; shift 2 ;;
+      --reason=*)  lc_gr=1; lc_reason="${1#--reason=}"; shift ;;
+      *)           lc_args+=("$1"); shift ;;
+    esac
+  done
+  # bash >= 4.4 (the fleet host runs 5.2, ccd:9393-9394): an empty array here
+  # is not an unbound-variable error under `set -u`.
+  set -- "${lc_args[@]}"
+  # `_lc_surface_norm ''` prints EMPTY, not `unknown` (ccd:1511-1524, D-210) —
+  # it cannot tell "no argument" from "an explicit blank" apart, so THIS loop
+  # is where that distinction has to be made, before the encoder ever sees the
+  # value. `lc_gs` already carries givenness; the `${w:-unknown}` fallback
+  # below is what turns a declared-but-blank surface into `unknown` rather
+  # than an empty string that `_lc_json` would backfill to `none` — the exact
+  # given/no-flag collapse this verb must not produce.
+  if (( lc_gs )); then local lc_w; lc_w=$(_lc_surface_norm "$lc_surface"); lc_surface=${lc_w:-unknown}; fi
+  # `_lc_dec_ok` is LENGTH-ONLY (`ccd:1527-1538`, D-210) — `_lc_dec_ok ''`
+  # returns 0, so it cannot be the blank guard on its own. A declared
+  # `--actor`/`--reason` is refused when blank the same way `cmd_ws_hold`
+  # refuses a blank `--reason` (ccd:3656): its own non-blank check, separate
+  # from the byte cap, whitespace-only counting as blank too.
+  if (( lc_ga )); then
+    [[ -n "${lc_actor//[[:space:]]/}" ]] || die "--actor must be non-blank"
+    _lc_dec_ok "$lc_actor" || die "--actor is longer than $_LC_DEC_MAX bytes"
+  fi
+  if (( lc_gr )); then
+    [[ -n "${lc_reason//[[:space:]]/}" ]] || die "--reason must be non-blank"
+    _lc_dec_ok "$lc_reason" || die "--reason is longer than $_LC_DEC_MAX bytes"
+  fi
   [[ $# -eq 2 && $1 == --session ]] || die "usage: ccd ws-archive --session <id>"
   local id=$2
   [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
@@ -2844,6 +4091,14 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
   else reason="manual"; fi
   _reg_set "$id" archived "$(date +%s)"
   _reg_set "$id" archivedreason "$reason"
+  # AFTER both markers, so `reason` is the value that actually landed. It is one
+  # of exactly three words (ccd:3600-3602): merged:#N | empty | manual.
+  # `.archived` is the one registry field carrying a WHY, and it is measurably
+  # false on four live rows right now — which is why the journal records the act
+  # rather than trusting the field.
+  _lc_done archive "$id" "" meas.archivedReason "$reason" \
+    meas.branch "$(_reg_get "$id" branch)" meas.project "$(_reg_get "$id" project)" \
+    dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
 
   local note=""
   case "$reason" in
@@ -3020,9 +4275,11 @@ _ws_archive_manifest() {   # id -> one JSON object on stdout
   # record ws-reap later reads", and that the lineage therefore survives the
   # worktree. Neither is true, and the correction is the contract:
   #   - NOTHING IN ccd READS THIS MANIFEST BACK. `grep -n archivemanifest ccd`
-  #     is three sites: the field-name list, this write, and `ws-restore`'s
-  #     `rm -f`. `_ws_reap_eval` re-measures every fact it needs itself. The
-  #     only reader anywhere is `server/src/registry.ts`'s `manifestBytes`,
+  #     is four sites: the field-name list, this write, `ws-restore`'s own
+  #     `stat -c %s` of the file (for `meas.manifestBytes`, byte count only,
+  #     never the content), and its `rm -f`. `_ws_reap_eval` re-measures every
+  #     fact it needs itself. The only reader anywhere is
+  #     `server/src/registry.ts`'s `manifestBytes`,
   #     which extracts `worktreeBytes` and nothing else. This field's audience
   #     is a HUMAN reading an archived workspace's record.
   #   - IT DOES NOT SURVIVE A REAP. `_reg_purge` (ccd:100) unlinks every
@@ -3127,10 +4384,138 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   # stale twice over: the numbers had drifted, and `cmd_ensure` now adopts a
   # live-but-unsupervised pane via `_resupervise_live`. It restores nothing on
   # THIS path regardless, because `_spawn` below has not run yet.)
-  [[ $# -eq 2 && $1 == --session ]] || die "usage: ccd ws-restore --session <id>"
-  local id=$2
-  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
-  [[ -f "$REG/$id.uuid" ]]       || die "no such session: $id"
+  #
+  # WAVE 5 — THE DEC FLAGS, stripped BEFORE `local id="${2-}"` below is ever
+  # bound and before the exact-arity rule, for the reason `cmd_ws_rm`'s F1 fix
+  # states at ccd:2822: an id bound from raw, flag-polluted argv is bound
+  # WRONG, not just early. Unlike `cmd_ws_archive` (Task 45), THIS verb reads
+  # `$2` into `id` on the very next line, and reuses that one binding through
+  # the arity/bad-session-id/no-such-session checks below — so
+  # `ccd ws-restore --surface pwa --session abc123` would otherwise capture
+  # `id=pwa` before this loop ever ran and refuse a legitimate restore as
+  # `no-such-session: pwa` once the flags were stripped out from under it.
+  # This loop's own `set --` is what makes the existing `local id="${2-}"`
+  # correct; nothing below this block changes.
+  #
+  # REFUSED THROUGH `_lc_refuse`, unlike Task 45's `cmd_ws_archive`:
+  # `ccd-refusal-scan.test.ts` (wave 3) slices `cmd_ws_restore`'s body and
+  # requires every fatal refusal in it to leave a journal line first. A bare
+  # `die` here would be a refusal on a destructive-adjacent verb that nothing
+  # can read afterwards, which is the hole D4 exists to close.
+  #
+  # `""` FOR THE ID, deliberately: this loop runs before ANY id is bound, so
+  # there is no session to name yet. An empty id is "no subject was
+  # measured", which is a different fact from a wrong one.
+  #
+  # `bad-args` IS THE TOKEN, the one this file already spells (`cmd_ws_rename`'s
+  # inline literals, and `wsaudit.ts`'s SENTENCES entry for it). Inventing
+  # `bad-surface` would need new copy in `SENTENCES` and would red
+  # `wsaudit.test.ts` in both directions.
+  local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 lc_args=()
+  while (( $# )); do
+    case "$1" in
+      # An explicit arity check, not a bare `shift 2`: ccd runs under
+      # `set -uo pipefail` with NO `-e`, so a shift past the end of argv fails,
+      # shifts nothing, and this loop never terminates.
+      # FIX ROUND 3 (operator escalation on F1's residual) — these three
+      # ARITY ("needs a value") refusals fire INSIDE the parsing loop, before
+      # the post-loop ladder below has validated anything. `lc_actor`/
+      # `lc_reason` can already hold an UNVALIDATED (blank or over-cap) value
+      # from an EARLIER `--actor`/`--reason` occurrence when a LATER flag's
+      # missing value triggers one of these — measured: `--actor <600B>
+      # --reason` (no value) put the full 600-byte actor on this refusal,
+      # unexamined, the same leak class F1 closed on the post-loop ladder,
+      # one arm over. Each arm below now applies the identical non-blank-
+      # and-within-cap test the post-loop ladder uses before adding
+      # `dec.actor`/`dec.reason` — a field that is not GIVEN is already ''
+      # here (blank, so excluded the same way) and needs no separate case.
+      --surface)   if [[ $# -lt 2 ]]; then
+                     local lc_ra=(dec.surface "$lc_surface")
+                     [[ -n "${lc_actor//[[:space:]]/}" ]] && _lc_dec_ok "$lc_actor" && lc_ra+=(dec.actor "$lc_actor")
+                     [[ -n "${lc_reason//[[:space:]]/}" ]] && _lc_dec_ok "$lc_reason" && lc_ra+=(dec.reason "$lc_reason")
+                     _lc_refuse restore "" bad-args "usage: ccd ws-restore [--surface <word>] [--actor <text>] [--reason <text>] --session <id>" verb ws-restore "${lc_ra[@]}"
+                   fi
+                   lc_gs=1; lc_surface="$2"; shift 2 ;;
+      --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
+      --actor)     if [[ $# -lt 2 ]]; then
+                     local lc_ra=(dec.surface "$lc_surface")
+                     [[ -n "${lc_actor//[[:space:]]/}" ]] && _lc_dec_ok "$lc_actor" && lc_ra+=(dec.actor "$lc_actor")
+                     [[ -n "${lc_reason//[[:space:]]/}" ]] && _lc_dec_ok "$lc_reason" && lc_ra+=(dec.reason "$lc_reason")
+                     _lc_refuse restore "" bad-args "usage: ccd ws-restore [--surface <word>] [--actor <text>] [--reason <text>] --session <id>" verb ws-restore "${lc_ra[@]}"
+                   fi
+                   lc_ga=1; lc_actor="$2"; shift 2 ;;
+      --actor=*)   lc_ga=1; lc_actor="${1#--actor=}"; shift ;;
+      --reason)    if [[ $# -lt 2 ]]; then
+                     local lc_ra=(dec.surface "$lc_surface")
+                     [[ -n "${lc_actor//[[:space:]]/}" ]] && _lc_dec_ok "$lc_actor" && lc_ra+=(dec.actor "$lc_actor")
+                     [[ -n "${lc_reason//[[:space:]]/}" ]] && _lc_dec_ok "$lc_reason" && lc_ra+=(dec.reason "$lc_reason")
+                     _lc_refuse restore "" bad-args "usage: ccd ws-restore [--surface <word>] [--actor <text>] [--reason <text>] --session <id>" verb ws-restore "${lc_ra[@]}"
+                   fi
+                   lc_gr=1; lc_reason="$2"; shift 2 ;;
+      --reason=*)  lc_gr=1; lc_reason="${1#--reason=}"; shift ;;
+      *)           lc_args+=("$1"); shift ;;
+    esac
+  done
+  # bash >= 4.4 (the fleet host runs 5.2, ccd:9393-9394): an empty array here
+  # is not an unbound-variable error under `set -u`.
+  set -- "${lc_args[@]}"
+  # `_lc_surface_norm ''` prints EMPTY, not `unknown` (ccd:1511-1524, D-210) —
+  # it cannot tell "no argument" from "an explicit blank" apart, so THIS loop
+  # is where that distinction has to be made, before the encoder ever sees the
+  # value. `lc_gs` already carries givenness; the `${lc_w:-unknown}` fallback
+  # below is what turns a declared-but-blank surface into `unknown` rather
+  # than an empty string that `_lc_json` would backfill to `none` — the exact
+  # given/no-flag collapse this verb must not produce.
+  if (( lc_gs )); then local lc_w; lc_w=$(_lc_surface_norm "$lc_surface"); lc_surface=${lc_w:-unknown}; fi
+  # `_lc_dec_ok` is LENGTH-ONLY (ccd:1527-1538, D-210) — `_lc_dec_ok ''`
+  # returns 0, so it cannot be the blank guard on its own. A declared
+  # `--actor`/`--reason` is refused when blank the same way `cmd_ws_hold`
+  # refuses a blank `--reason` (ccd:3656) and Task 45's `cmd_ws_archive`
+  # follows: its own non-blank check, separate from the byte cap, whitespace-
+  # only counting as blank too.
+  # FIX ROUND 2 (final whole-branch review, F1) — VALIDATE BOTH FIELDS BEFORE
+  # EMITTING ANY REFUSAL. The prior shape (blank-then-length, actor-then-
+  # reason, refusing INSIDE each check) was order-dependent: with BOTH
+  # --actor and --reason over cap, the actor-length refusal fired before
+  # --reason was ever checked, so it carried `dec.reason` UNCHECKED — an
+  # over-cap declared value riding a SIBLING field's refusal line, exactly
+  # what the omit-only-the-failed-field exception exists to prevent
+  # (measured: a 513-byte `dec.reason`, `truncated` unset). The blank-actor
+  # refusal leaked the same unchecked reason. Fix: compute BOTH fields'
+  # validity first, into `lc_actor_bad`/`lc_reason_bad`, and emit exactly ONE
+  # refusal — actor's message wins ties, the same priority the old two-block
+  # shape gave it by running first — omitting `dec.actor`/`dec.reason`
+  # independently, keyed on whether THAT field is the one that failed, never
+  # on which refusal happened to fire first. `_lc_json` already drops any
+  # key whose value is empty (ccd:1305), so a field that was never GIVEN
+  # needs no special case here: `lc_dec_args` simply omits the flag, and the
+  # encoder's own rule covers a given-but-blank value that slipped through.
+  local lc_actor_bad='' lc_reason_bad=''
+  if (( lc_ga )); then
+    if [[ -z "${lc_actor//[[:space:]]/}" ]]; then
+      lc_actor_bad='--actor must be non-blank'
+    elif ! _lc_dec_ok "$lc_actor"; then
+      lc_actor_bad="--actor is longer than $_LC_DEC_MAX bytes"
+    fi
+  fi
+  if (( lc_gr )); then
+    if [[ -z "${lc_reason//[[:space:]]/}" ]]; then
+      lc_reason_bad='--reason must be non-blank'
+    elif ! _lc_dec_ok "$lc_reason"; then
+      lc_reason_bad="--reason is longer than $_LC_DEC_MAX bytes"
+    fi
+  fi
+  if [[ -n "$lc_actor_bad" || -n "$lc_reason_bad" ]]; then
+    local lc_dec_args=(verb ws-restore dec.surface "$lc_surface")
+    [[ -z "$lc_actor_bad" ]]  && lc_dec_args+=(dec.actor "$lc_actor")
+    [[ -z "$lc_reason_bad" ]] && lc_dec_args+=(dec.reason "$lc_reason")
+    _lc_refuse restore "" bad-args "${lc_actor_bad:-$lc_reason_bad}" "${lc_dec_args[@]}"
+  fi
+  local id="${2-}"
+  [[ $# -eq 2 && $1 == --session ]] \
+    || _lc_refuse restore "$id" bad-args "usage: ccd ws-restore --session <id>"
+  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || _lc_refuse restore "$id" bad-session-id "bad session id"
+  [[ -f "$REG/$id.uuid" ]]       || _lc_refuse restore "$id" no-such-session "no such session: $id"
 
   # SERIALISED WITH `ws-reap`, ON WS-REAP'S OWN LOCK — final-round destructive
   # review, finding F5. These two verbs are the only pair in the design that
@@ -3164,17 +4549,48 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   # `workdir` — the two facts a concurrent reap can change — are read UNDER the
   # lock rather than in front of it.
   command -v flock >/dev/null 2>&1 \
-    || die "flock (util-linux) is unavailable — refusing to restore unserialised against ws-reap"
+    || _lc_refuse restore "$id" flock-unavailable \
+         "flock (util-linux) is unavailable — refusing to restore unserialised against ws-reap"
   local lock="$REG/.reap-$id.lock" lfd
-  exec {lfd}>>"$lock" || die "cannot open the reap lock at $lock"
+  exec {lfd}>>"$lock" || _lc_refuse restore "$id" lock-unopenable "cannot open the reap lock at $lock"
   flock -n "$lfd" || {
     exec {lfd}>&-
-    die "another ccd process is reaping $id and still holds the lock — refusing to restore mid-cleanup"
+    _lc_refuse restore "$id" in-progress \
+      "another ccd process is reaping $id and still holds the lock — refusing to restore mid-cleanup"
   }
 
-  [[ -f "$REG/$id.archived" ]]   || die "not archived: $id"
+  [[ -f "$REG/$id.archived" ]]   || _lc_refuse restore "$id" not-archived "not archived: $id"
   local workdir; workdir=$(_reg_get "$id" workdir)
-  [[ -d "$workdir" ]] || die "worktree is gone: $workdir — see: ccd ws-attic --session $id"
+  [[ -d "$workdir" ]] || _lc_refuse restore "$id" worktree-missing \
+    "worktree is gone: $workdir — see: ccd ws-attic --session $id"
+  # ── R4-2 · SUPERSEDE, DO NOT ERASE ──────────────────────────────────────
+  # INLINE AND INSIDE THE FLOCK REGION (opened ccd:4072, closed ccd:4155), so
+  # the values recorded are the ones being erased: a concurrent `ws-reap` holds
+  # the same `$REG/.reap-<id>.lock` and can change `.archived` underneath an
+  # unserialised read.
+  #
+  # `_lc_done` returns 0 on every path, and that is not a nicety here:
+  # ccd:4124-4127 records that any new non-zero `return` between the
+  # acquisition and `exec {lfd}>&-` leaks this lock in the SOURCING shell for
+  # ever, and ccd is sourced by itself and by its tests.
+  #
+  # NO NEW REGISTRY FIELD. A 25th per-session field costs a `SessionRecord`
+  # field, a `reviveFleetSession` literal change and 24 extra agent round-trips
+  # per 2 s tick, for a fact the journal already carries and `_reg_purge`
+  # deletes anyway.
+  #
+  # DISCLOSED RESIDUAL: the manifest is preserved as a BYTE TOTAL only. Read
+  # fresh with `stat` because nothing in ccd reads that field back (ccd:3923
+  # says so verbatim), and left ABSENT rather than 0 when it cannot be measured
+  # — a fabricated 0 would argue that nothing was lost.
+  _lc_done restore "$id" "" verb ws-restore \
+    meas.archivedAt     "$(_reg_get "$id" archived)" \
+    meas.archivedReason "$(_reg_get "$id" archivedreason)" \
+    meas.manifestBytes  "$(stat -c %s -- "$REG/$id.archivemanifest" 2>/dev/null)" \
+    meas.workdir        "$workdir" \
+    meas.branch         "$(_reg_get "$id" branch)" \
+    dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
+  # ─────────────────────────────────────────────────────────────────────────
   rm -f "$REG/$id.archived" "$REG/$id.archivedreason" "$REG/$id.archivemanifest"
   # THE SAME F8 SHAPE, converted the same way — and this verb's agent budget is
   # CCD_VERB_TIMEOUT_MS['ws-restore'] = 60s, FIVE TIMES TIGHTER than the ws-add
@@ -3221,9 +4637,19 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   # Given back regardless of the spawn's fate — the undo (archive stamps gone)
   # is real either way, which is what made the old placement unconditional too.
   exec {lfd}>&-
-  [[ "$rc" -eq 0 ]] || return "$rc"
+  # THE UNDO LANDED AND THE SESSION DID NOT COME BACK — `_lc_fail`, never
+  # `_lc_refuse`: the archive stamps are already gone at ccd:4110, so calling
+  # this a refusal would say nothing was touched, which is false. AFTER
+  # ccd:4155's close, so it sits on no path that still holds the descriptor.
+  [[ "$rc" -eq 0 ]] || { _lc_fail restore "$id" "" spawn-failed \
+      "the archive stamps were removed but $id did not come back up (spawn rc $rc)" \
+      dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
+    return "$rc"; }
   _spawn_settle "$id" "$SPAWN_FROMSWAP"; rc=$?
   if [[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 ]]; then
+    _lc_fail restore "$id" "" spawn-failed \
+      "the archive stamps were removed but $id did not settle (spawn rc $rc)" \
+      dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
     echo "ccd: ws-restore spawn failed for $id (spawn rc $rc) — see $REG/$id.spawn" >&2
     return "$rc"
   fi
@@ -3258,6 +4684,11 @@ cmd_ws_attic() {   # ccd ws-attic --session <id>   |   ccd ws-attic --drop <id>
         [[ -n "$ref" ]] || continue
         git -C "$main" update-ref -d "$ref" && n=$(( n + 1 ))
       done < <(git -C "$main" for-each-ref --format='%(refname)' "refs/ccrc/attic/$id/" 2>/dev/null)
+      # AFTER the loop, and that is not style: `$n` is the destroyed count and
+      # it does not exist until ccd:4021 has run. An emit above the loop can
+      # only report zero, which on a destructive verb is a fabricated
+      # measurement — the class this file names by number.
+      _lc_done attic-drop "$id" "" meas.dropped "$n" meas.project "$project"
       echo "dropped $n attic ref$( (( n == 1 )) || echo s ) for $id"
       ;;
     *) die "usage: ccd ws-attic --session <id> | ccd ws-attic --drop <id>" ;;
@@ -3561,7 +4992,7 @@ cmd_pr_open() {   # ccd pr-open --session <id> --title <t> --body-b64 <b64> --dr
   main="$PROJECTS_ROOT/$project"
 
   # The registry NAMES the branch; git's own worktree record is what entitles us
-  # to push it. Read from $main and nowhere else (`_ws_wt_branch`, ccd:303-314),
+  # to push it. Read from $main and nowhere else (`_ws_wt_branch`, ccd:2767-2777),
   # the same three rungs cmd_ws_rm walks (ccd:380, :390, :402) and
   # _ws_reap_eval re-proves, in refusal form. TWO statements, deliberately:
   # `local wthead=$(...)` returns LOCAL's status, so `registered` would be 0 for
@@ -4433,7 +5864,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   # Registry FIRST, git's record second — and "second" is a veto, not a
   # fallback. This used to read "the reverse of ws-rm, which reads only the
   # worktree" — no longer true: ws-rm reads its branch from git's worktree
-  # record too (_ws_wt_branch, ccd:706-717), which survives the directory being
+  # record too (_ws_wt_branch, ccd:2767-2777), which survives the directory being
   # hand-deleted, so the specific mechanism that made ws/swift-harbor an orphan
   # invisible to ccd ls, the PWA and ws-gc alike is fixed there. Reap still
   # reads the registry first, for its own reasons: it needs `base` and `project`
@@ -4491,7 +5922,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
 
   if [[ -d "$workdir" ]]; then
     # THE branch question, asked of $main and of nothing else. `_ws_wt_branch`
-    # (ccd:706-717) reads `git -C "$main" worktree list --porcelain`, so the
+    # (ccd:2767-2777) reads `git -C "$main" worktree list --porcelain`, so the
     # answer is $main's own registration for this path; it cannot leave $main, it
     # survives the directory being gone, and it follows a rename whether ccd or
     # the user did it. NOT `git -C "$workdir" rev-parse --abbrev-ref HEAD`, which
@@ -4506,7 +5937,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
     # stranger's HEAD, and the file now has ONE rule instead of two: git's
     # worktree record is the authority, in ws-rm and here alike.
     #
-    # TWO statements, deliberately, exactly as cmd_ws_rm writes it (ccd:733-734):
+    # TWO statements, deliberately, exactly as cmd_ws_rm writes it (ccd:2863-2864):
     # `local x=$(cmd)` returns LOCAL's status, so a one-line form would read $?
     # from the declaration and `registered` would be 0 for every path, registered
     # or not — turning the no-record rung below into dead code. `wthead` is
@@ -5224,7 +6655,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   # §7's argv boundary, restated on THIS side of the split — because the split
   # is what can move a value out of the field that was anchored and into one
   # that was not. `_pr_py pick` checks `mergeCommit.oid` and `headRefOid`
-  # against `OID` (ccd:292) inside python, but `url` and `number` are
+  # against `OID` (ccd:1861) inside python, but `url` and `number` are
   # GitHub-sourced and unanchored, and all four come back joined with tabs. So a
   # PR whose `url` holds a TAB shifts every later field: measured with
   # `url: "https://x/\tinjected"`, the string `injected` became REAP_MERGE and
@@ -5341,7 +6772,7 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only about the WORKSPA
   [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
 
   # `_json_str`'s status, checked ONCE and up front — the same probe, for the
-  # same reason, as `_ws_manifest` (ccd:1109). Nineteen `_json_str` substitutions
+  # same reason, as `_ws_manifest` (ccd:4054). Nineteen `_json_str` substitutions
   # below sit inside printf ARGUMENT LISTS, where a failure is a swallowed status
   # and an empty argument, i.e. `"path":,` — a document that authorises deletions
   # and does not parse, at exit 0. Bytes can no longer fail the encode (see
@@ -6117,15 +7548,15 @@ _ws_tombstone_reclip() {   # id clipsjson -> rewrites an EXISTING tombstone's
   # Measured: a 3 MB clip pasted after the tombstone was written was
   # destroyed on resume, and the tombstone still named only the first one.
   # The tokenless resume is disclosed and defensible (the tombstone IS the
-  # consent record, ccd:2916-2933); the undisclosed half this closes is that
+  # consent record, ccd:2922-2943); the undisclosed half this closes is that
   # the record has to cover what THIS run destroys, not what the original
   # run saw.
   #
   # Only the `clips` field moves. `ignored`/`attic`/`reflog`/`pr`/`proof` etc.
   # keep whatever the ORIGINAL evaluated run measured — re-deriving them here
-  # would need Phase C re-run (deliberately not, ccd:2929-2931) and Phase B's
+  # would need Phase C re-run (deliberately not, ccd:2939-2941) and Phase B's
   # full ignored-set walk (the resume only re-proves dirty/sensitive-ignored
-  # as REFUSALS, ccd:3057-3068 — it never rebuilds `ignored[]` as a document).
+  # as REFUSALS, ccd:3067-3078 — it never rebuilds `ignored[]` as a document).
   # `clips` is the one field this resume both re-measures AND is about to
   # destroy, so it is the one field this rewrites.
   #
@@ -6136,7 +7567,7 @@ _ws_tombstone_reclip() {   # id clipsjson -> rewrites an EXISTING tombstone's
   # compact style (no spaces) — without it a round-trip through python's
   # default `json.dump` changes every byte in the file even when `clips`
   # itself did not change, which would silently break
-  # `_ws_reap_tail`'s own promise (ccd:3055-3061, the ORIGINAL wording this
+  # `_ws_reap_tail`'s own promise (ccd:3065-3071, the ORIGINAL wording this
   # finding narrows rather than removes) that an unrelated resume leaves the
   # journal alone.
   #
@@ -6285,7 +7716,7 @@ cmd_ws_reap() {   # ccd ws-reap --expect <token> --session <id>
   [[ $id =~ ^[A-Za-z0-9._-]+$ ]]    || die "bad session id"
 
   # `_json_str`'s status, checked ONCE and up front — the same probe, for the
-  # same reason, as `cmd_ws_audit` (ccd:2153) and `_ws_manifest` (ccd:1109).
+  # same reason, as `cmd_ws_audit` (ccd:6345) and `_ws_manifest` (ccd:4054).
   # This is the THIRD caller that builds a whole record, and the record it
   # builds is the TOMBSTONE: the one document that outlives the workspace, and
   # the only thing left naming the transcript once step (i) has removed the
@@ -6388,9 +7819,10 @@ cmd_ws_reap() {   # ccd ws-reap --expect <token> --session <id>
   # rather than emptying PATH, because every stub in that file spells its own
   # passthrough `command git`.
   command -v flock >/dev/null 2>&1 \
-    || die "flock (util-linux) is unavailable — refusing to run the destructive verb unserialised"
+    || _lc_refuse reap "$id" flock-unavailable \
+         "flock (util-linux) is unavailable — refusing to run the destructive verb unserialised"
   exec {lfd}>>"$lock" \
-    || die "cannot open the reap lock at $lock"
+    || _lc_refuse reap "$id" lock-unopenable "cannot open the reap lock at $lock"
   flock -n "$lfd" || {
     # Close OUR descriptor and touch nothing else: the winner's lock lives on
     # its own description and no path operation here can reach it. (Under the
@@ -6404,6 +7836,18 @@ cmd_ws_reap() {   # ccd ws-reap --expect <token> --session <id>
     # FUNCTION returns`): that one is on the path where the shell goes on to do
     # other things. This one stays so that "every path gives the descriptor
     # back" is a property of the function rather than of its callers.
+    #
+    # THE MEASURED HOLE, CLOSED. Twelve `$REG/.reap-<id>.lock` files exist on
+    # the live box and one holds a lock with no tombstone beside it: a reap was
+    # attempted, refused, and recorded nowhere at all.
+    #
+    # `_lc_emit` directly, NOT `_lc_refuse`: this path answers JSON on stdout
+    # at exit 0 and must keep doing exactly that (the PWA reads tokens, not
+    # stderr), whereas `_lc_refuse` dies. The token is an ARGUMENT, so it
+    # contributes nothing to `wsaudit.test.ts`'s scan; the literal one line
+    # below still does, which is why that test stays green with no edit.
+    _lc_emit reap refused "$id" "" verb ws-reap refusal in-progress \
+      detail "another ccd process is already reaping $id and still holds the lock"
     exec {lfd}>&-
     printf '{"refused":"in-progress","detail":%s,"paths":[]}\n' \
       "$(_json_str "another ccd process is already reaping $id and still holds the lock")"
@@ -6744,6 +8188,12 @@ _ws_reap_locked() {   # token id — everything the reap lock serialises
   if ! _ws_reap_eval "$id"; then
     local paths="[]"
     [[ "$REAP_VERDICT" == sensitive-ignored ]] && paths=$(_reap_paths_json)
+    # ONE EMIT FOR ALL 35 `_reap_refuse` TOKENS, at the single point where
+    # `REAP_VERDICT` becomes JSON. `_ws_reap_eval` never prints — it sets
+    # globals through `_reap_refuse` (ccd:5650) — so this is the only place the
+    # verdict exists as a value, and journaling the 35 call sites individually
+    # would be 35 chances to miss one.
+    _lc_emit reap refused "$id" "" verb ws-reap refusal "$REAP_VERDICT" detail "$REAP_DETAIL"
     printf '{"refused":%s,"detail":%s,"paths":%s}\n' \
       "$(_json_str "$REAP_VERDICT")" "$(_json_str "$REAP_DETAIL")" "$paths"
     return 0
@@ -6792,7 +8242,7 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
   [[ -n "$branch" ]] || branch=$(_reg_get "$id" branch)
   # THE RECEIPT IS A MEASUREMENT TOO — final-round tests review F2. This was
   # `|| bytes=0`, the last of the three identical `_ws_gc_bytes "$workdir"`
-  # lines to still fabricate (ccd:1503 archive manifest and ccd:3006 audit were
+  # lines to still fabricate (ccd:4169 archive manifest and ccd:6528 audit were
   # closed in earlier rounds), and it is the one printed AFTER the irreversible
   # delete: `{"reaped":…,"bytes":0}` states "this deletion reclaimed nothing"
   # on a `du` that never completed. On the RESUME path it is 0 EVERY time — the
@@ -6805,6 +8255,15 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
   # to leave it. A receipt is the record a human reaches for when they want to
   # know what a delete cost, and it may not answer with a number nobody took.
   bytes=$(_ws_gc_bytes "$workdir"); [[ "$bytes" =~ ^[0-9]+$ ]] || bytes=null
+
+  # THE PAIR, opened after the last measurement and before every destructive
+  # step in this function. `resumed` is on the line because an interrupted reap
+  # that resumes writes a SECOND intent — two attempts, two records, which is
+  # exactly what the 12 orphaned `.reap-<id>.lock` files could not say.
+  local lctx; lctx=$(_lc_tx)
+  _lc_intent reap "$id" "$lctx" verb ws-reap meas.project "$project" \
+    meas.workdir "$workdir" meas.branch "$branch" meas.bytes "$bytes" \
+    meas.resumed "$resumed"
 
   # A breadcrumb holding anything ccd did not write is not a phase this can
   # reason about, so it gets the stricter reading, not the looser one — the
@@ -6865,10 +8324,10 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
   # THE ARCHIVED MARKER IS RE-READ HERE, immediately before the first step that
   # writes anything — final-round destructive review, finding F5. `archived` is
   # the ONE precondition of this whole verb that another ccd verb can withdraw:
-  # `cmd_ws_restore` (ccd:1234) removes `$REG/$id.archived`, re-`_spawn`s the
+  # `cmd_ws_restore` (ccd:4445) removes `$REG/$id.archived`, re-`_spawn`s the
   # session and re-`_ws_supervise`s it, turning the workspace back into an
   # ordinary live one. Nothing re-read the marker after `_ws_reap_eval`'s Phase
-  # A (ccd:2055), and it is not one of `_ws_fingerprint`'s fourteen inputs, so
+  # A (ccd:5662), and it is not one of `_ws_fingerprint`'s fourteen inputs, so
   # the token cannot notice either.
   #
   # TWO REACHABLE SHAPES, both measured, and the sequential one is the one with
@@ -6891,7 +8350,7 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
   #     and covers the resume shape too, which no lock can.
   #
   # `not-archived` rather than a new token: the state IS not-archived, it is the
-  # word `_ws_reap_eval` already uses for it (ccd:2056), and `wsaudit.ts`'s
+  # word `_ws_reap_eval` already uses for it (ccd:5663), and `wsaudit.ts`'s
   # SENTENCES already carries the sentence. Placed ahead of (a)/(b)/(c) so a
   # refusal writes NOTHING — no attic pin, no tombstone, no breadcrumb.
   #
@@ -6938,7 +8397,7 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
     # what stands in front of this path — moved down beside the block that
     # actually runs them (below the children phase now, not above it), but
     # the reason is unchanged: `_ws_reap_eval` refuses `not-archived` unless
-    # `$REG/$id.archived` exists, and `cmd_ws_archive` (ccd:1063-1064) is what
+    # `$REG/$id.archived` exists, and `cmd_ws_archive` (ccd:4000) is what
     # writes it — after `_ws_unsupervise` and after `tmux kill-session`. So by
     # the time any breadcrumb can exist the unit is disabled and the pane is
     # gone, and re-running either would be a second call to an idempotent
@@ -7325,6 +8784,14 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
   fi
 
   _reg_purge "$id"                                                         # (i) LAST, finding F3
+  # `WsTombstone` stays reap's, and this line names it so `GET /api/lifecycle`
+  # can join the two through the already-whitelisted `$REG/.reaped/` read —
+  # the tombstone's first CONSUMER. No `_ws_tombstone` call is added to any
+  # other verb: it dereferences seven `REAP_*` globals set only inside
+  # `_ws_reap_eval`, so under `set -uo pipefail` the subshell dies and the
+  # promised record is silently absent.
+  _lc_done reap "$id" "$lctx" verb ws-reap meas.branch "$branch" \
+    meas.tombstone "$tomb" meas.attic "${attic:-0}" meas.bytes "$bytes"
   # MUTATION SURVIVOR, disclosed: `${attic:-0}` is removable with the suite
   # green, because both arms above assign `attic` and neither can leave it
   # unset. It is `set -u` insurance on the ONE printf that reports a completed
@@ -7810,7 +9277,15 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
       # to a temporarily-missing worktree; pruning it here would foreclose that.
       _gc_declined "$project/$slug is foreign metadata — ccd removes only what it created" ;;
     dead-reg)
+      # A `local` inside this arm, and the calls are NOT wrapped in `$( )`:
+      # ccd:7480-7486 records that a subshell here puts `_gc_reclaimed`'s
+      # increment out of reach and the footer reads 0 for every run. `_lc_*`
+      # prints nothing, so no capture is needed and none is taken.
+      local lctx; lctx=$(_lc_tx)
+      _lc_intent destroy "$project-$slug" "$lctx" verb ws-gc \
+        meas.project "$project" meas.workspace "$slug" meas.state dead-reg
       _reg_purge "$project-$slug"                                          # finding F3
+      _lc_done destroy "$project-$slug" "$lctx" verb ws-gc
       _gc_reclaimed "dead registry entry $project-$slug" ;;
     reg-broken)
       # `_ws_gc_scan` deliberately reconstructed NOTHING for this row (see
@@ -7866,8 +9341,8 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
         # Rung 2 — `rev-parse --abbrev-ref` reports a detached HEAD as the
         # literal string `HEAD`. That is a SENTINEL, not a branch name, and the
         # old conjunct read it as "no branch, so no mergedness to prove".
-        # ws-reap refuses the same state outright (`detached-head`, ccd:2499)
-        # and cmd_ws_rm notes it (ccd:1115); the unattended sweep refuses and
+        # ws-reap refuses the same state outright (`detached-head`, ccd:5733)
+        # and cmd_ws_rm notes it (ccd:3019); the unattended sweep refuses and
         # moves on, which is this command's own polarity for the same fact.
         #
         # THE FIFTEENTH FORGERY, and this arm's own replacement sentence made
@@ -7919,6 +9394,10 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
       if [[ -n "$nested" ]]; then
         _gc_declined "$p holds nested checkouts — ccd removes only what it created"; return 0
       fi
+      local lctx; lctx=$(_lc_tx)
+      _lc_intent destroy "$project-$slug" "$lctx" verb ws-gc \
+        meas.project "$project" meas.workspace "$slug" meas.state orphan \
+        meas.workdir "$p" meas.branch "$branch"
       if git -C "$main" worktree remove "$p" 2>/dev/null; then
         _gc_reclaimed "removed orphan worktree $p"
         # No -D: git refuses an unmerged branch and that refusal is wanted.
@@ -7941,7 +9420,20 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
         if git -C "$main" branch -d "$branch" >/dev/null 2>&1; then
           _gc_reclaimed "deleted merged branch $branch"
         fi
+        # `git branch -d` above has NO else — a refused delete is silent
+        # in the report. The `done` line therefore measures it rather than
+        # inheriting the report's silence, and omits the key entirely when
+        # there was no branch.
+        local bd=""
+        if [[ -n "$branch" ]]; then
+          if git -C "$main" show-ref --verify --quiet "refs/heads/$branch" 2>/dev/null
+          then bd=false; else bd=true; fi
+        fi
+        _lc_done destroy "$project-$slug" "$lctx" verb ws-gc \
+          meas.workdir "$p" meas.branch "$branch" branchDeleted "$bd"
       else
+        _lc_fail destroy "$project-$slug" "$lctx" worktree-remove-failed \
+          "git refused to remove $p"
         _gc_declined "git refused to remove $p"
       fi ;;
     archived)
@@ -8088,8 +9580,8 @@ _default_pool() {   # id -> wrappers this session may auto-swap between.
   # Free swapping across ALL home-able accounts (explicit user decision 2026-07-03).
   # An account that is NOT home-able is not a general overflow target (user
   # decision 2026-07-26, made about `gpt` when gpt was the only such account):
-  # only a session whose HOME is that account may rotate onto it — a project
-  # deliberately homed on gpt, nothing else. Everything else stays on the home-able
+  # only a session whose HOME is that account may rotate onto it —
+  # a project deliberately homed on gpt, nothing else. Everything else stays on the home-able
   # accounts, so no project silently lands on the Codex lane with its 272k
   # window and unofficial-client risk.
   # Narrow per session with a space-separated list in the registry `pool` field.
@@ -8944,7 +10436,23 @@ _spawn_settle() {   # id fromswap — the BLOCKING half: gate loop, fact, warnin
   # polls. KEEP THE FIELD AND ITS `<epoch-seconds> <rc>` ENCODING: the timestamp is load-bearing,
   # because _supervised_start compares `at >= since` to tell THIS attempt's failure from the
   # previous one's, and a bare word field would destroy that.
-  _reg_set "$id" spawn "$(date +%s) $prompt_rc"
+  # CHANGE-ONLY, AND IT MUST BE READ BEFORE THE WRITE BELOW. `_reg_set` is a
+  # truncating writer, so this is the last instant the PREVIOUS epoch and rc
+  # exist anywhere. Restart=always means this function runs on every supervisor
+  # cycle for 18 sessions; a line per cycle is the whole disk budget for no
+  # forensic gain, and a spawn whose rc has not changed inside five minutes is
+  # not news.
+  local _lc_prev _lc_prev_at _lc_prev_rc _lc_now
+  _lc_prev=$(_reg_get "$id" spawn)
+  _lc_prev_at="${_lc_prev%% *}"; _lc_prev_rc="${_lc_prev##* }"
+  _lc_now=$(date +%s)
+  # Regex before every arithmetic test: `_lc_prev_at` is bytes off disk.
+  if [[ "$_lc_prev_rc" != "$prompt_rc" ]] \
+     || ! [[ "$_lc_prev_at" =~ ^[0-9]+$ ]] \
+     || (( _lc_now - _lc_prev_at > 300 )); then
+    _lc_done spawn "$id" "" meas.rc "$prompt_rc" meas.wrapper "$wrapper"
+  fi
+  _reg_set "$id" spawn "$_lc_now $prompt_rc"
   case "$prompt_rc" in
     # A revival supersedes an earlier deliberate stop (§4.1). `rm -f` on an absent file is a no-op,
     # so this is correct whether or not the .stopped stamp itself has landed yet.
@@ -9303,6 +10811,15 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   # someone tried and it didn't come up — instead of a stale `stopped` that
   # hides the attempt and tells the operator to do the thing they just did.
   rm -f "$REG/$id.stopped"
+  # ONE EMIT, AT THE TOP, because this verb has FIVE exits — the supervised
+  # arm's (ccd:10220 `return "$rc"`, ccd:10222 `return 0`), the in-unit arm's
+  # (ccd:10231's `|| return $?`, ccd:10239 `return "$rc"`, and falling off the end
+  # at ccd:10241) — plus `_supervised_start`'s own unsupervised fallbacks. A line
+  # per exit misses one. The OUTCOME is not asserted here: `_reg_claim`'s
+  # `claim` line and `_spawn_settle`'s `spawn` line (with its rc) are the
+  # measured downstream facts, and composing the record from independent
+  # measurements is the point.
+  _lc_done start "$id" "" meas.mode "$mode" meas.wrapper "$(_reg_get "$id" wrapper)"
   if [[ "${CCD_IN_UNIT:-}" != 1 ]]; then
     local rc; _supervised_start "$id"; rc=$?
     # `started` stays unconditional here too (Task 4's own invariant, restated below): a
@@ -9390,13 +10907,29 @@ cmd_ensure() {   # id — idempotent; used by systemd. arg is the id directly.
   # unconditionally — `ensure` is `POST /api/sessions/:id/ensure`'s actual
   # revive route, so this is the case the spec sentence was written for.
   rm -f "$REG/$id.stopped"
+  # The Restart=always hot path, which is exactly why `_spawn_settle`'s
+  # change-only rule exists one function up. This line is cheap — no fork beyond
+  # the emitter's own — and it is what tells a respawn from a human's
+  # `ccd ensure`, through `obs.cg`: the systemd unit names the id in the cgroup
+  # path, which is respawn provenance nothing on this box has today.
+  #
+  # NOT CHANGE-GATED, AND THAT IS A KNOWN, ACCEPTED DEPENDENCY ON A LIMIT THIS
+  # FILE DOES NOT SET (FIX ROUND 1 (d)). Unlike `_spawn_settle` one function up,
+  # this emit fires on EVERY invocation, in-unit or not — there is no rc/300s
+  # gate here. The volume that leaves unbounded is therefore bounded
+  # EXTERNALLY, by systemd's own `StartLimitIntervalSec`/`StartLimitBurst` on
+  # `claude-session@.service` (a crash-looped unit stops retrying, so
+  # `cmd_ensure` stops being re-entered), never by anything journal-side. A
+  # future reader retuning those systemd limits is also retuning this
+  # journal's write rate, and nothing here will warn them of that.
+  _lc_done ensure "$id" "" meas.inUnit "${CCD_IN_UNIT:-0}"
   # Inside the unit (cmd_supervise sets CCD_IN_UNIT in its own process) this IS the spawn; anywhere
   # else it is a REQUEST for one, and the request goes through the unit so the session comes back
-  # supervised. `cmd_swap`'s tail (ccd:7064) reaches this from inside a transient systemd-run unit
+  # supervised. `cmd_swap`'s tail (ccd:10903) reaches this from inside a transient systemd-run unit
   # and correctly takes the supervised branch — which is why the guard is not INVOCATION_ID.
   if [[ "${CCD_IN_UNIT:-}" != 1 ]]; then
     local rc; _supervised_start "$id"; rc=$?
-    # `started` stays unconditional (Task 4's invariant, ccd:7118) on this path too — see cmd_start's
+    # `started` stays unconditional (Task 4's invariant, ccd:10212) on this path too — see cmd_start's
     # matching comment for why the in-unit cmd_ensure setting it is not enough on its own.
     _reg_claim "$id"
     [[ "$rc" -eq 0 ]] || return "$rc"
@@ -10100,6 +11633,12 @@ cmd_swap() {   # [--force] id target-wrapper — move a session to another accou
   _swap_beat_stop "$beat"
   _reg_set "$id" wrapper "$target"
   _reg_set "$id" lastswap "$(date +%s)"
+  # `cmd_ensure` runs in this same process at ccd:11034, but only when
+  # `systemctl --user start` FAILS — the `||` fallback — and it writes its own
+  # line WHEN IT FIRES. Two acts, two events, two tx-free records: the same
+  # ruling as `cmd_enable`. Without this one a reader would see an `ensure` it
+  # could not attribute.
+  _lc_done swap "$id" "" meas.from "$cur" meas.wrapper "$target" meas.uuid "$uuid"
   rm -f "$REG/$id.swapblocked"   # a completed swap supersedes an earlier refusal: a
                                  # banner left standing on a row that just worked teaches
                                  # the operator to ignore banners.
@@ -10144,6 +11683,11 @@ cmd_enable() {   # <id>  |  <wrapper> <project> [workdir]
   # a raw argument — so this line names the row cmd_start actually touched,
   # even on the two-argument form once the registry's wrapper has won.
   local id; if [[ $# -ge 2 ]]; then id=$(_id "$1" "$2"); else id="$1"; fi
+  # TWO EVENTS, NOT ONE. `cmd_start` runs in THIS process and writes its own
+  # `start` line; this one records that boot-persistence was asked for. No
+  # shared tx: tx is for one intent/outcome PAIR, never for a call tree, and
+  # folding these would report one act where two happened.
+  _lc_done enable "$id" ""
   cmd_start "$@" || return $?
   echo "enabled boot-persistence for $id"
 }
@@ -10164,15 +11708,15 @@ cmd_stop() {   # [--surface <word>] <id>  |  [--surface <word>] <wrapper> <proje
   # cmd_stop's OWN default is `cli`, not _ws_unsupervise's `ccd`: a session
   # shelling `ccd stop` from its own Bash tool passes no flag, and `cli` is
   # exactly what that looks like from the box.
-  local surface=cli args=()
+  local surface=cli declared="" args=()
   while (( $# )); do
     case "$1" in
       # An explicit arity check, not a bare `shift 2`: ccd runs under
       # `set -uo pipefail` with NO `-e`, so a shift past the end of argv fails,
       # shifts nothing, and this loop never terminates.
       --surface)   [[ $# -ge 2 ]] || die "usage: ccd stop [--surface <word>] <id> | ccd stop [--surface <word>] <wrapper> <project>"
-                   surface="$2"; shift 2 ;;
-      --surface=*) surface="${1#--surface=}"; shift ;;
+                   surface="$2"; declared="$2"; shift 2 ;;
+      --surface=*) surface="${1#--surface=}"; declared="$surface"; shift ;;
       *)           args+=("$1"); shift ;;
     esac
   done
@@ -10195,7 +11739,12 @@ cmd_stop() {   # [--surface <word>] <id>  |  [--surface <word>] <wrapper> <proje
   # no record, which is how a deliberate stop became indistinguishable from a
   # crash (§4.1). The pane kill stays HERE rather than moving inward, because
   # every other call site already runs these two as a pair.
-  _ws_unsupervise "$id" "$surface"
+  # The ONLY call site with a DECLARATION to carry, which is why it is the only
+  # one that passes a third argument. `$surface` (defaulted to `cli`) is still
+  # the stamp's word; `$declared` is empty unless a flag actually arrived, and
+  # the journal keeps the two apart.
+  _lc_done stop "$id" "" dec.surface "$(_lc_surface_norm "$declared")"
+  _ws_unsupervise "$id" "$surface" "$declared"
   tmux kill-session -t "$(_tmux "$id")" 2>/dev/null || true
   echo "stopped $id"
 }
@@ -10214,19 +11763,49 @@ cmd_forget() {   # <id> — remove a DEAD non-workspace session's registry entry
   # business destroying anything it would first have to enumerate. The row
   # can be re-created any time by starting the session again; what cannot be
   # re-created is kept.
-  local id="${1:?usage: ccd forget <id>}"
-  [[ $# -eq 1 ]] || die "usage: ccd forget <id>"
+  # Same order, same argument, same cap as `cmd_ws_rm` above. The exact-arity
+  # guard is RE-ASSERTED on the residue rather than removed: this verb is
+  # granted to the agent as the bare `['forget']` prefix (agent/src/whitelist.ts),
+  # where "tokens after the prefix are unconstrained", so the arity rule is the
+  # only thing bounding what a caller can put here.
+  local reason="" args=()
+  while (( $# )); do
+    case "$1" in
+      # SANCTIONED bare `die` — no `$id` is bound yet. See cmd_ws_rm's copy.
+      --reason)   [[ $# -ge 2 ]] || die "usage: ccd forget [--reason <text>] <id>"
+                  reason="$2"; shift 2 ;;
+      --reason=*) reason="${1#--reason=}"; shift ;;
+      # F2 FIX (review round 1): same shape as cmd_ws_rm's copy above — an
+      # unrecognised `--`-prefixed token refuses BY NAME instead of falling
+      # into the positional catch-all and being misrecorded as an arity
+      # side-effect or a `no-such-session` for the flag's own text.
+      --*)        _lc_refuse forget "$1" bad-args \
+                    "unrecognised flag: $1" verb forget dec.reason "$reason" ;;
+      *)          args+=("$1"); shift ;;
+    esac
+  done
+  set -- "${args[@]}"
+  # F1 FIX (review round 1): same shape as cmd_ws_rm's copy above — the arity
+  # guard fires before `id` is bound, so zero args refuses through the journal
+  # instead of dying on an unbound parameter before any `_lc_*` runs.
+  [[ $# -eq 1 ]] || _lc_refuse forget "${1-}" bad-args \
+    "usage: ccd forget [--reason <text>] <id>" verb forget dec.reason "$reason"
+  local id="${1-}"
+  _lc_dec_ok "$reason" || _lc_refuse forget "$id" bad-args \
+    "--reason is longer than $_LC_DEC_MAX bytes — nothing was removed"
   # The id is globbed against $REG by _reg_purge, so its shape is checked
   # here the same way cmd_ws_hold checks its own.
-  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
-  [[ -f "$REG/$id.uuid" ]] || die "no such session: $id"
+  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || _lc_refuse forget "$id" bad-session-id "bad session id" dec.reason "$reason"
+  [[ -f "$REG/$id.uuid" ]] || _lc_refuse forget "$id" no-such-session "no such session: $id" dec.reason "$reason"
   local ws; ws=$(_reg_get "$id" workspace)
   [[ -z "$ws" ]] \
-    || die "$id is a workspace — its removal is audited and confirmed: use the workspace sheet (ws-audit/ws-reap), or ccd ws-rm"
+    || _lc_refuse forget "$id" is-a-workspace \
+         "$id is a workspace — its removal is audited and confirmed: use the workspace sheet (ws-audit/ws-reap), or ccd ws-rm" dec.reason "$reason"
   # A hold is a program's declaration that it is mid-flight here. Same rung,
   # same polarity as ws-rm: `-e` not `-f`, present-but-unreadable refuses.
   if [[ -e "$REG/$id.hold" ]]; then
-    die "held: $(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>') — release first: ccd ws-release --session $id"
+    _lc_refuse forget "$id" held \
+      "held: $(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>') — release first: ccd ws-release --session $id" dec.reason "$reason"
   fi
   # Deadness is a precondition, not an effect: forget is for a row whose
   # session is already gone. Stopping a live one is `ccd stop`'s job, and
@@ -10237,15 +11816,19 @@ cmd_forget() {   # <id> — remove a DEAD non-workspace session's registry entry
   # above warns about, by a route it did not consider. Same polarity as the
   # hold check: what cannot be read refuses (D-B8-12).
   case "$(_session_verdict "$id")" in
-    live)    die "$id is still running — stop it first: ccd stop $id" ;;
-    unknown) die "$id: cannot tell whether it is still running — the tmux server did not answer. Nothing was removed. Check with: tmux ls" ;;
+    live)    _lc_refuse forget "$id" session-live "$id is still running — stop it first: ccd stop $id" dec.reason "$reason" ;;
+    unknown) _lc_refuse forget "$id" session-verdict-unknown "$id: cannot tell whether it is still running — the tmux server did not answer. Nothing was removed. Check with: tmux ls" dec.reason "$reason" ;;
   esac
   # The unit outlives the tmux session: enabled + dead is exactly the state
   # systemd exists to reverse, and a purge that left it enabled would race a
   # resurrection writing fresh registry files behind it.
+  local lctx; lctx=$(_lc_tx)
+  _lc_intent forget "$id" "$lctx" verb forget dec.reason "$reason" meas.wrapper "$(_reg_get "$id" wrapper)" \
+    meas.project "$(_reg_get "$id" project)" meas.uuid "$(_reg_get "$id" uuid)"
   _ws_unsupervise "$id"
   tmux kill-session -t "$(_tmux "$id")" 2>/dev/null || true
   _reg_purge "$id"
+  _lc_done forget "$id" "$lctx" verb forget dec.reason "$reason"
   echo "forgot $id — registry entry removed; the transcript and any pasted images are kept"
 }
 

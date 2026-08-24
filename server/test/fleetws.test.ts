@@ -301,7 +301,7 @@ describe('fleet REST + WS', () => {
   // mark and refuses to write forever, silently.
   describe('the shrink guard tells a genuine purge from a partial read (C0.4-followup)', () => {
     const purgeRegistryEntry = (id: string) => {
-      // `_reg_purge`'s own shape (ccd:110): every "$REG/$id.<field>" file for
+      // `_reg_purge`'s own shape (ccd:466): every "$REG/$id.<field>" file for
       // the id is unlinked, the `.uuid` included — not just one field going
       // unreadable the way a mid-sweep hiccup would leave it.
       const reg = path.join(home, '.cc-sessions');

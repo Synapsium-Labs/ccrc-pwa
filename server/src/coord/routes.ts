@@ -3,7 +3,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Deps } from '../server.js';
 import type { Bus } from '../bus.js';
 import { measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
-import { CCD_ARGV, verbSupported } from '../ccdargv.js';
+import { CCD_ARGV, verbSupported, sweepDec } from '../ccdargv.js';
 import { tx } from './db.js';
 import { toRunSummary, type CoordStore } from './store.js';
 import { renderEnvelope } from './envelope.js';
@@ -16,7 +16,7 @@ import { settleItems, type SettleItemsOutcome } from './items.js';
 import { holdReason, queueSystemMail } from './rundefs.js';
 import {
   isRunState, isSendableMailKind, MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
-  MAIL_SUBJECT_MAX_BYTES, RUN_TRANSITIONS, type MailRejectCode, type RunState,
+  MAIL_SUBJECT_MAX_BYTES, RUN_TRANSITIONS, type LifecycleQueryResult, type MailRejectCode, type RunState,
   type RunSummary,
 } from '../../../shared/api.js';
 
@@ -297,7 +297,7 @@ export function registerCoordRoutes(
    * Every session on the box can read every `.uuid` file and could present a
    * neighbour's pair. What it catches is a STALE sender — a session that was
    * `/clear`ed or compacted since it read its own uuid, which `_sync_uuid`
-   * rotates every 5s (`ccd/ccd:6425-6437`) — and an honest mistake.
+   * rotates every 5s (`ccd/ccd:9004`, cadence at `ccd/ccd:10472`) — and an honest mistake.
    *
    * The order below IS the design: a cheaper refusal must never be reached
    * after an expensive one.
@@ -792,7 +792,9 @@ export function registerCoordRoutes(
     // rather than `ws-add` (deviation D-1).
     if (typeof sessionId === 'string') {
       coord.setSession(opened.id, sessionId);
-      const argv = CCD_ARGV.wsHold(sessionId, holdReason(program, wave, waveOfVal, opened.id));
+      const argv = CCD_ARGV.wsHold(sessionId,
+        holdReason(program, wave, waveOfVal, opened.id),
+        sweepDec(deps.fleetState, `run:${opened.id} open`));
       if (!verbSupported(deps.fleetState, argv)) {
         return reply.code(501).send({ ok: false, error: 'unsupported' });
       }
@@ -1147,5 +1149,65 @@ export function registerCoordRoutes(
     const q = req.query as { limit?: string };
     const limit = Number(q.limit);
     return { events: deps.coord.feedEvents(limit) };
+  });
+
+  /**
+   * `GET /api/lifecycle?session=<id>&limit=<n>` — one session's past tense,
+   * oldest-first, plus the mirror's own holes.
+   *
+   * EXEMPT-BUT-AUTHENTICATED (D-149's pattern, ruled for this route by D16),
+   * and the reason is `GET /api/runs`'s exactly: A WORKER MUST BE ABLE TO ASK
+   * "WHAT HAPPENED TO MY WORKSPACE" WITHOUT A BROWSER. It runs on the fleet
+   * host with no cookie jar, and the answer it needs is about a workspace that
+   * may no longer exist — `_reg_purge` (`ccd:458-556`) has already deleted
+   * every per-session field by then, which is the whole reason the journal is
+   * a dot-prefixed DIRECTORY. Gated, an armed box answers `401 no-session` and
+   * the one surface that survives a destruction is unreachable from the box
+   * that performed it.
+   *
+   * AUTHENTICATE BEFORE ANSWERING ANYTHING, INCLUDING `501 not-configured` —
+   * on a gated route the hook would have refused before the handler ran, so
+   * keeping that order here is by hand. A `501` tells an anonymous tailnet
+   * caller whether this box runs coordination at all.
+   *
+   * EITHER CREDENTIAL, NEVER NEITHER; flag-aware, so a dark box is unchanged;
+   * and the refusal carries the session's own `verdict` so the PWA's one login
+   * screen keeps working and D-127's expired-vs-no-session survives. All four
+   * properties are `GET /api/runs`'s and are pinned the same way.
+   *
+   * NAMED IN `ccd/coordinator-skill/references/wave-lifecycle.md`, because
+   * `coordinator-skill.test.ts` requires every route registered in this file
+   * to be named in that corpus minus its own EXEMPT set — and that parity test
+   * is this program's rollout-ordering mechanism, not an inconvenience.
+   */
+  app.get('/api/lifecycle', async (req, reply) => {
+    if (deps.cfg.authEnabled) {
+      const session = sessionAuth(req);
+      if (session.reason !== 'session') {
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        if (token !== 'ok') {
+          return reply.code(401).send({
+            ok: false,
+            error: 'unauthenticated',
+            verdict: session.verdict,
+            detail: 'GET /api/lifecycle takes a session cookie OR the box token ' +
+              `(${MAIL_TOKEN_HEADER}); a worker reads it cookieless from the fleet host`,
+          });
+        }
+      }
+    }
+    if (!deps.coord) return notConfigured(reply);
+    const q = req.query as { session?: string; limit?: string };
+    // Clamping is `CoordStore`'s own job, not repeated here — the same division
+    // of labour `GET /api/feed`'s `limit` and `GET /api/runs`'s `closed` use.
+    // `Number(undefined)` is `NaN` on purpose: `lifecycleFor`'s
+    // `Number.isFinite` guard answers that with the page maximum, so an absent
+    // `limit` and a garbage one take the same honest path. Do not "fix" this
+    // into `?? undefined`.
+    const out: LifecycleQueryResult = {
+      events: deps.coord.lifecycleFor({ sessionId: q.session ?? null, limit: Number(q.limit) }),
+      gaps: deps.coord.lifecycleGaps(),
+    };
+    return out;
   });
 }

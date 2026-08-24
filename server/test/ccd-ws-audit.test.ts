@@ -947,7 +947,7 @@ describe('local-loss refusals', () => {
     // The one failure `_json_str` has left once bytes cannot fail it, and the
     // reason its status is checked ONCE, up front, rather than at fifteen
     // `$(_json_str …)` sites inside printf argument lists where the status is
-    // swallowed by construction. `_ws_manifest` (ccd:1066) already probes for
+    // swallowed by construction. `_ws_manifest` (ccd:4054) already probes for
     // exactly this and says why: a best-effort transcript sanitize may warn and
     // continue, a record that authorises deletions may not.
     //
@@ -1940,7 +1940,7 @@ describe('the refusals the ladder reaches last', () => {
     // §7: no GitHub-sourced string is ever placed in an argv, and the plan
     // calls that boundary "not a formality". `_pr_py pick` anchors
     // `mergeCommit.oid` and `headRefOid` with `OID` (`^[0-9a-f]{7,40}$`,
-    // ccd:292) but NOT `url` or `number`, and hands all four back joined with
+    // ccd:1861) but NOT `url` or `number`, and hands all four back joined with
     // tabs — so a `url` holding a TAB shifts the fields and `REAP_MERGE`
     // becomes whatever followed it. Measured: with `url: 'https://x/\tinjected'`
     // the string `injected` reached `git cat-file -e "injected^{commit}"`,
@@ -2237,7 +2237,7 @@ describe('the dispatcher', () => {
   const runCcd = (...args: string[]): { code: number; stdout: string; stderr: string } => {
     const opts = {
       encoding: 'utf8' as const, cwd: h.home,
-      env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true }),
+      env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }),
     };
     try { return { code: 0, stdout: execFileSync('bash', [CCD, ...args], opts).trim(), stderr: '' }; }
     catch (e) {

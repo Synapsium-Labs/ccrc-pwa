@@ -20,6 +20,16 @@ const HOME_ABLE_WRAPPERS: readonly string[] =
 
 export const CCD = path.resolve(__dirname, '../../ccd/ccd');
 
+/** How many lines BACK of source `ccd-workspaces.test.ts`'s bash-spawn scan
+ *  reads to find a call site's `ghContainedEnv(...)` and its opts — single-
+ *  sourced here so `ccd-harness-containment.test.ts`'s own self-check (the
+ *  SYSTEMD-OPT-OUT marker must stay within this many lines of the spawn
+ *  lines it exempts) can never drift from the number the scan itself uses.
+ *  Two conditions the scan cannot currently tell apart — "this call site
+ *  really lacks containment" and "the marker fell out of the window" — must
+ *  not silently start disagreeing about where the window ends. */
+export const SCAN_LOOKBACK_LINES = 12;
+
 /**
  * Writes `<home>/.ccrc/accounts.sh` — the generated roster `ccd` sources on the
  * line after it defines `die`, and the FIRST thing any fixture home needs,
@@ -143,6 +153,13 @@ export interface ContainOpts {
    *  that goes through the harness, and `ccd-workspaces.test.ts`'s source scan
    *  is what says so for the call sites that build their own env. */
   systemd?: boolean;
+  /** Plant the `tmux` poison. ASK FOR THIS IF THE SNIPPET CAN REACH `_lc_obs`,
+   *  which is every ccd path once wave 2 lands: `_lc_obs` runs
+   *  `tmux list-panes -a` and neither `HOME` nor `TMUX_TMPDIR` is isolated by
+   *  this harness, so the uncontained call reads the operator's LIVE server.
+   *  Same create-if-absent shape as systemd, for the same displaceability
+   *  reason, and a bash FUNCTION stub still wins over both. */
+  tmux?: boolean;
 }
 
 export function ghContainedEnv(
@@ -157,7 +174,7 @@ export function ghContainedEnv(
   // consumer it hurts, because the damage shows up as a wrong ANSWER in a file
   // that never mentioned systemd (see the header). Opt-in makes the widening
   // land at the call site, where the reviewer of that call site can see it.
-  if (!opts.systemd) return { ...env, PATH: `${bin}:${env['PATH'] ?? ''}` };
+  if (!opts.systemd && !opts.tmux) return { ...env, PATH: `${bin}:${env['PATH'] ?? ''}` };
   // THE SECOND STRUCTURAL BOUNDARY for the ccd runners, and the reason it is a
   // poison rather than an absence: `_have_systemctl` is `command -v systemctl`,
   // so REMOVING systemctl would send every ccd test down `_supervised_start`'s
@@ -188,10 +205,16 @@ export function ghContainedEnv(
   // against a refusal-only stub. A test that makes it SUCCEED is the negative
   // control. Steering the rc keeps the containment structural: the stub still
   // records, and a real `systemd-run` is unreachable at every value.
-  for (const [name, log, rc] of [
-    ['systemctl', 'systemctl-calls', 'rc=97'],
-    ['systemd-run', 'systemd-run-calls', 'rc=${SYSTEMD_RUN_RC:-97}'],
+  for (const [name, log, rc, want] of [
+    ['systemctl', 'systemctl-calls', 'rc=97', !!opts.systemd],
+    ['systemd-run', 'systemd-run-calls', 'rc=${SYSTEMD_RUN_RC:-97}', !!opts.systemd],
+    // `_lc_obs`'s only shelled read. It must EXIST and REFUSE rather than be
+    // absent: `_lc_obs` branches on `command -v tmux`, so removing tmux would
+    // send every lifecycle test down the `no-tmux` arm silently — a different
+    // answer, reached by a different path, with nothing saying so.
+    ['tmux', 'tmux-calls', 'rc=${TMUX_STUB_RC:-97}', !!opts.tmux],
   ] as const) {
+    if (!want) continue;
     const p = path.join(bin, name);
     if (fs.existsSync(p)) continue;
     fs.writeFileSync(p,
@@ -231,6 +254,8 @@ export interface CcdHarness {
   systemctlCalls(): string[];
   /** Every argv the contained `systemd-run` saw (`_tmux_server_ensure`). */
   systemdRunCalls(): string[];
+  /** Every argv the contained `tmux` saw (`_lc_obs`'s `list-panes`). */
+  tmuxCalls(): string[];
   makeRepo(name: string): string;
   /** Like `makeRepo`, but with an origin `ccd`'s `_gh_repo_slug` resolves to
    *  `<slug>` — required by every pr-state/pr-open/ws-audit/ws-reap test. */
@@ -264,7 +289,7 @@ export function makeCcdHarness(prefix: string): CcdHarness {
   // every `sh()` below: that is what makes "every test that can reach
   // `_supervised_start` is contained" a property of the harness rather than a
   // rule each ccd test file remembers.
-  ghContainedEnv(home, {}, { systemd: true });
+  ghContainedEnv(home, {}, { systemd: true, tmux: true });
 
   const gitEnv = (): NodeJS.ProcessEnv => ({
     ...process.env, HOME: home,
@@ -306,7 +331,7 @@ export function makeCcdHarness(prefix: string): CcdHarness {
     sh: (snippet, env = {}) =>
       execFileSync('bash', ['-c', `source "${CCD}"; ${snippet}`],
         { encoding: 'utf8', cwd: home,
-          env: ghContainedEnv(home, { ...process.env, HOME: home, ...env }, { systemd: true }) }).trim(),
+          env: ghContainedEnv(home, { ...process.env, HOME: home, ...env }, { systemd: true, tmux: true }) }).trim(),
     reg: (id, field) => {
       const p = path.join(home, '.cc-sessions', `${id}.${field}`);
       return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').trim() : null;
@@ -315,6 +340,7 @@ export function makeCcdHarness(prefix: string): CcdHarness {
     ghPoison: () => ghPoisonAt(home),
     systemctlCalls: () => readLines(path.join(home, 'systemctl-calls')),
     systemdRunCalls: () => readLines(path.join(home, 'systemd-run-calls')),
+    tmuxCalls: () => readLines(path.join(home, 'tmux-calls')),
     makeRepo: makeRepoAt,
     /** A repo that reads as GitHub and behaves as a local bare repo.
      *
@@ -323,7 +349,7 @@ export function makeCcdHarness(prefix: string): CcdHarness {
      *  every PR verb answer `no-remote`. Three keys:
      *    - `url`      -> the https string `_gh_repo_slug` parses
      *    - `insteadOf`-> rewrites fetch AND push back to the local bare repo.
-     *      Without it `cmd_ws_add`'s `git fetch origin` (ccd:269) and
+     *      Without it `cmd_ws_add`'s `git fetch origin` (ccd:2596) and
      *      `_ws_reap_eval`'s mandatory fetch would both leave the box for the
      *      real github.com. `git config --get remote.origin.url` is NOT
      *      affected by insteadOf, which is the whole point.

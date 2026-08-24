@@ -20,7 +20,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyWebsocket from '@fastify/websocket';
 import { buildServer, type Deps } from '../src/server.js';
 import {
-  EXEMPT, SECRET_UNREAD, authVerdict, exemptKey, installGate, measureSecret, sessionVerdict,
+  EXEMPT, NO_SESSION, SECRET_UNREAD, authVerdict, exemptKey, installGate, measureSecret, sessionVerdict,
   type GateRequest,
 } from '../src/auth/gate.js';
 import { SESSION_COOKIE, serializeCookie } from '../src/auth/cookie.js';
@@ -60,7 +60,7 @@ const tokenHeader = { 'x-ccrc-mail-token': BOX_TOKEN };
  * and why the sweep below probes them with the box token instead: if the GATE
  * were refusing, presenting a token would change nothing.
  */
-const EXEMPT_BUT_AUTHENTICATED = new Set(['GET /api/runs']);
+const EXEMPT_BUT_AUTHENTICATED = new Set(['GET /api/lifecycle', 'GET /api/runs']);
 
 // ── the scanner ──────────────────────────────────────────────────────────
 
@@ -191,11 +191,11 @@ describe('the scanner is looking at something', () => {
     // route is now a deliberate act that edits these three numbers, with a
     // reviewer looking at them.
     expect(scanRoutes('server.ts').length).toBe(45);
-    expect(scanRoutes('coord/routes.ts').length).toBe(13);
-    expect(ROUTES.length).toBe(58);
-    // …and the three partitions add up: 3 websockets + 55 HTTP.
+    expect(scanRoutes('coord/routes.ts').length).toBe(14);
+    expect(ROUTES.length).toBe(59);
+    // …and the three partitions add up: 3 websockets + 56 HTTP.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
-    expect(ROUTES.filter((r) => !isWs(r)).length).toBe(55);
+    expect(ROUTES.filter((r) => !isWs(r)).length).toBe(56);
   });
 
   it('found the specific registrations this file reasons about', () => {
@@ -306,7 +306,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 58 scanned + the static wildcard when the bundle is built.
+    // 59 scanned + the static wildcard when the bundle is built.
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
     // And the reconstruction really joins the tree back up, rather than reading
     // leaf segments: these two only exist if the depth walk works.
@@ -347,12 +347,14 @@ describe('EXEMPT is complete in both directions', () => {
 
   it('exempts exactly the six classes the plan names — nothing has crept in', () => {
     // The whole set, spelled out, so that adding an exemption is a deliberate act
-    // that edits this list with a reviewer looking at it. 17 = /health + the 9
+    // that edits this list with a reviewer looking at it. 18 = /health + the 9
     // box-token lanes + /api/notify + login + status + the SPA shell + the two
-    // halves of the passkey door + GET /api/runs (D-149, exempt-BUT-authenticated).
+    // halves of the passkey door + GET /api/runs and GET /api/lifecycle (D-149's
+    // pattern, exempt-BUT-authenticated).
     expect([...EXEMPT.keys()].sort()).toEqual([
       'GET /*',
       'GET /api/auth/status',
+      'GET /api/lifecycle',
       'GET /api/mail',
       'GET /api/mail/:id',
       'GET /api/runs',
@@ -382,7 +384,7 @@ describe('EXEMPT is complete in both directions', () => {
     expect(EXEMPT.has('POST /api/auth/passkey/register/finish')).toBe(false);
   });
 
-  it('the TEN box-token lanes in EXEMPT are the ten that really check the token', () => {
+  it('the ELEVEN box-token lanes in EXEMPT are the eleven that really check the token', () => {
     // The claim "they are already guarded" is checked against the source, not
     // trusted: an exemption whose stated justification is a gate the route does
     // not actually have is the worst kind of hole.
@@ -395,19 +397,19 @@ describe('EXEMPT is complete in both directions', () => {
       const body = coord.slice(at, end);
       return /requireMailToken\(req/.test(body) || /checkMailToken\(/.test(body);
     }).map((h) => h.k);
-    // TEN since D-149: `GET /api/runs` accepts a live session OR the box token,
-    // and it is the token half that puts it in this list. The scan reads the
-    // SOURCE rather than trusting the table, which is the whole point — an
-    // exemption whose stated justification is a gate the route does not actually
-    // have is the worst kind of hole.
+    // ELEVEN since build 9: GET /api/lifecycle joined GET /api/runs in the
+    // exempt-but-authenticated class, and it is the token half that puts both in
+    // this list. The scan reads the SOURCE rather than trusting the table, which
+    // is the whole point — an exemption whose stated justification is a gate the
+    // route does not actually have is the worst kind of hole.
     expect(gated.sort()).toEqual([
-      'GET /api/mail', 'GET /api/mail/:id', 'GET /api/runs',
+      'GET /api/lifecycle', 'GET /api/mail', 'GET /api/mail/:id', 'GET /api/runs',
       'POST /api/mail', 'POST /api/mail/:id/ack',
       'POST /api/runs', 'POST /api/runs/:id/advance', 'POST /api/runs/:id/close',
       'POST /api/runs/:id/dispatch', 'POST /api/runs/:id/items',
     ]);
     for (const k of gated) expect(EXEMPT.has(k), `${k} is box-token gated but not EXEMPT`).toBe(true);
-    // …and `/api/notify`, the tenth, which lives in server.ts.
+    // …and `/api/notify`, the eleventh, which lives in server.ts.
     expect(server).toContain('checkMailToken(deps.mailToken');
     expect(EXEMPT.has('POST /api/notify')).toBe(true);
   });
@@ -425,7 +427,7 @@ describe('with the gate ARMED and no cookie', () => {
     // Guards the `it.each` below the same way the scanner meta-test guards the
     // scan: an EXEMPT table that had swallowed everything would leave nothing to
     // assert and report green. Exact rather than a floor, for the same reason —
-    // 58 scanned − 3 websockets − 16 exempt-and-scanned (17 EXEMPT entries less
+    // 59 scanned − 3 websockets − 17 exempt-and-scanned (18 EXEMPT entries less
     // `GET /*`, which no `app.get('…')` registers) = 39.
     expect(gated.length).toBe(39);
     expect(ROUTES.length - ROUTES.filter(isWs).length - gated.length).toBe(EXEMPT.size - 1);
@@ -938,7 +940,7 @@ describe('authVerdict — the decision, with no server around it', () => {
 
   it('the flag off allows everything, before anything else is read', () => {
     expect(authVerdict(req('GET', '/api/accounts'), { enabled: false, secret: SECRET_UNREAD, store }, 0))
-      .toEqual({ allow: true, verdict: 'ok', reason: 'flag-off' });
+      .toEqual({ allow: true, verdict: 'ok', reason: 'flag-off', device: null });
   });
 
   it('an unmeasured secret with the flag ON denies — nobody looked is not permission', () => {
@@ -946,7 +948,7 @@ describe('authVerdict — the decision, with no server around it', () => {
     // exists so that a future caller who forgets to measure is refused rather
     // than admitted.
     const d = authVerdict(req('GET', '/api/accounts'), { enabled: true, secret: SECRET_UNREAD, store }, 0);
-    expect(d).toEqual({ allow: false, verdict: 'unconfigured', reason: 'refused' });
+    expect(d).toEqual({ allow: false, verdict: 'unconfigured', reason: 'refused', device: null });
   });
 
   it('an absent and an unusable secret both deny, and stay distinct facts', () => {
@@ -992,7 +994,7 @@ describe('authVerdict — the decision, with no server around it', () => {
     // one line above the store call and so never reaches D-127's mapping.
     for (const cookie of [undefined, '', 'other=1', `${SESSION_COOKIE}=`]) {
       expect(authVerdict(req('GET', '/api/accounts', cookie), { enabled: true, secret: secretOk, store }, 0))
-        .toEqual({ allow: false, verdict: 'no-session', reason: 'refused' });
+        .toEqual({ allow: false, verdict: 'no-session', reason: 'refused', device: null });
     }
   });
 
@@ -1012,7 +1014,7 @@ describe('authVerdict — the decision, with no server around it', () => {
     // in the presented-but-unmatched path and is called "signed out". Imprecise,
     // and far cheaper than the alternative.
     const junk = authVerdict(req('GET', '/api/accounts', `${SESSION_COOKIE}=%E0%A4%A`), deps, 0);
-    expect(junk).toEqual({ allow: false, verdict: 'expired', reason: 'refused' });
+    expect(junk).toEqual({ allow: false, verdict: 'expired', reason: 'refused', device: null });
   });
 
   it('names WHY it allowed — three different facts, never one boolean', () => {
@@ -1043,15 +1045,208 @@ describe('authVerdict — the decision, with no server around it', () => {
     // credential question answers `'no-session'` for the very same request.
     expect(authVerdict(req('GET', '/health'), deps, 1_000).reason).toBe('exempt');
     expect(sessionVerdict(req('GET', '/health'), deps, 1_000))
-      .toEqual({ allow: false, verdict: 'no-session', reason: 'refused' });
+      .toEqual({ allow: false, verdict: 'no-session', reason: 'refused', device: null });
 
     // Exempt route, LIVE cookie: `'session'`, which is the only value that means
     // a credential verified.
     const withCookie = req('GET', '/health', `${SESSION_COOKIE}=${token}`);
-    expect(sessionVerdict(withCookie, deps, 1_000)).toEqual({ allow: true, verdict: 'ok', reason: 'session' });
+    expect(sessionVerdict(withCookie, deps, 1_000)).toEqual({ allow: true, verdict: 'ok', reason: 'session', device: 'probe' });
 
     // And it never invents the two shortcuts it exists to skip.
     expect(sessionVerdict(req('GET', '/health'), { ...deps, enabled: false }, 1_000).reason)
       .not.toBe('flag-off');
+  });
+});
+
+// ── wave 6: the device the gate measured ─────────────────────────────────
+
+describe('GateDecision.device — attribution, never a decision input', () => {
+  const req = (method: string, url: string | undefined, cookie?: string): GateRequest =>
+    ({ method, routeOptions: { url }, headers: cookie === undefined ? {} : { cookie } });
+  const secretOk = { kind: 'ok' as const, secret: { n: 2, r: 8, p: 1, saltB64: '', hashB64: '', generation: 3 } };
+
+  const liveStore = async (): Promise<SessionStore> => {
+    const s = new SessionStore(path.join(mkTmp('ccrc-auth-device-'), 'sessions.json'));
+    await s.load();
+    return s;
+  };
+
+  it('carries the session row`s own label on the one arm that verified a credential', async () => {
+    const store = await liveStore();
+    const { token } = await store.create('Mozilla/5.0 (iPhone)', 3, 1_000);
+    const deps = { enabled: true, secret: secretOk, store };
+    expect(sessionVerdict(req('GET', '/api/accounts', `${SESSION_COOKIE}=${token}`), deps, 1_000))
+      .toEqual({ allow: true, verdict: 'ok', reason: 'session', device: 'Mozilla/5.0 (iPhone)' });
+  });
+
+  it('is null on every arm that did NOT verify a credential', async () => {
+    // SEVEN construction sites, and each one must SAY it measured nothing
+    // rather than omit the field: an optional `device?` would let a site forget
+    // it, and a reader cannot tell a forgotten field from a measured absence —
+    // which is exactly what a genuinely deviceless allow already means.
+    const store = await liveStore();
+    const deps = { enabled: true, secret: secretOk, store };
+    expect(authVerdict(req('GET', '/api/accounts'), { ...deps, enabled: false }, 1_000))
+      .toEqual({ allow: true, verdict: 'ok', reason: 'flag-off', device: null });
+    expect(authVerdict(req('GET', '/health'), deps, 1_000))
+      .toEqual({ allow: true, verdict: 'ok', reason: 'exempt', device: null });
+    expect(sessionVerdict(req('GET', '/api/accounts'), { ...deps, secret: SECRET_UNREAD }, 1_000))
+      .toEqual({ allow: false, verdict: 'unconfigured', reason: 'refused', device: null });
+    expect(sessionVerdict(req('GET', '/api/accounts'), deps, 1_000))
+      .toEqual({ allow: false, verdict: 'no-session', reason: 'refused', device: null });
+    expect(sessionVerdict(req('GET', '/api/accounts', `${SESSION_COOKIE}=junk`), deps, 1_000))
+      .toEqual({ allow: false, verdict: 'expired', reason: 'refused', device: null });
+    expect(NO_SESSION)
+      .toEqual({ allow: false, verdict: 'no-session', reason: 'refused', device: null });
+  });
+
+  it('never becomes a decision input — allow and reason are unchanged by the label', async () => {
+    const store = await liveStore();
+    const deps = { enabled: true, secret: secretOk, store };
+    const a = await store.create('iPhone', 3, 1_000);
+    const b = await store.create('', 3, 1_000);
+    const da = sessionVerdict(req('GET', '/api/accounts', `${SESSION_COOKIE}=${a.token}`), deps, 1_000);
+    const db = sessionVerdict(req('GET', '/api/accounts', `${SESSION_COOKIE}=${b.token}`), deps, 1_000);
+    expect([da.allow, da.reason]).toEqual([db.allow, db.reason]);
+    expect(da.device).not.toBe(db.device);
+  });
+
+  it('verifyMeasured is the primitive and verify derives — one loop, not two lookups', async () => {
+    const store = await liveStore();
+    const { token } = await store.create('iPhone', 3, 1_000);
+    expect(store.verifyMeasured(token, 3, 1_000)).toEqual({ verdict: 'ok', label: 'iPhone' });
+    expect(store.verify(token, 3, 1_000)).toBe('ok');
+    // No row matched ⇒ nothing was measured. `null`, never `''`: an empty label
+    // is a row that WAS measured and reported nothing — a fact `SessionStore.create`
+    // accepts as-is (this test calls it directly with `''`). The login route never
+    // produces one in practice — `server.ts`'s `deviceLabel` substitutes
+    // `'unknown device'` for a missing/blank user-agent — but the store layer still
+    // keeps the two facts distinct rather than leaning on that route's behavior.
+    expect(store.verifyMeasured('nope', 3, 1_000)).toEqual({ verdict: 'no-session', label: null });
+    expect(store.verifyMeasured(token, 4, 1_000)).toEqual({ verdict: 'expired', label: null });
+  });
+});
+
+// ── fix round 1, item 1: attribution as a MECHANISM, not a 2-sample check ──
+//
+// The prior three tests prove "these 7 sites, these 2 labels" — a review
+// planted a mutant that denies when the device label contains `'Android'`
+// and it left `tsc` clean and the entire suite byte-identical. A sample-based
+// test can only be as good as its samples; this is a STRUCTURAL proof instead,
+// modelled on `auth-routes.test.ts`'s login-route slice and its
+// `trustProxy is settled` scan: read the actual SOURCE, slice out the
+// function that decides, strip its comments (this file's prose says
+// "device"/"label" constantly — only CODE may count), delete every
+// occurrence of the one SAFE write (`device: measured.label` / `label:
+// rec.label`, and their `null` twins), and assert nothing with that name is
+// left. Any future branch, comparison, or `.includes()` keyed on the label —
+// on ANY string, not just the two this file happens to sample — leaves a
+// stray `device`/`label` token behind and reds. Verified by replanting the
+// reviewer's own mutant (task-53-report.md records the measurement).
+describe('device/label never appear in a decision branch — a structural scan, not a sample', () => {
+  const gateSrc = readFileSync(path.resolve(__dirname, '../src/auth/gate.ts'), 'utf8');
+  const sessionsSrc = readFileSync(path.resolve(__dirname, '../src/auth/sessions.ts'), 'utf8');
+  const serverSrc = readFileSync(path.join(srcRoot, 'server.ts'), 'utf8');
+
+  // Comments in this file talk ABOUT device/label constantly; only code counts.
+  const stripComments = (s: string): string =>
+    s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+  it('authVerdict never mentions device outside its own two `device: null` literals', () => {
+    const at = gateSrc.indexOf('export function authVerdict(');
+    expect(at, 'authVerdict not found').toBeGreaterThan(0);
+    const end = gateSrc.indexOf('\n\n/**', at);
+    expect(end, 'end of authVerdict not found').toBeGreaterThan(at);
+    const body = stripComments(gateSrc.slice(at, end));
+    // Guard the guard: a slice gone empty (a rename, a moved function) would
+    // satisfy every assertion below by having nothing in it.
+    expect(body.length, 'the slice must not be empty').toBeGreaterThan(100);
+    const stripped = body.replace(/device:\s*null/g, '');
+    expect(stripped, 'authVerdict must not reference device outside its own literal')
+      .not.toMatch(/\bdevice\b/);
+  });
+
+  it('sessionVerdict never branches on device or the measured label — every mention is the one safe write', () => {
+    const at = gateSrc.indexOf("if (deps.secret.kind !== 'ok')");
+    expect(at, 'sessionVerdict body not found').toBeGreaterThan(0);
+    const end = gateSrc.indexOf('\n\n/**', at);
+    expect(end, 'end of sessionVerdict not found').toBeGreaterThan(at);
+    const body = stripComments(gateSrc.slice(at, end));
+    expect(body.length, 'the slice must not be empty').toBeGreaterThan(200);
+    const stripped = body.replace(/device:\s*(null|measured\.label)/g, '');
+    expect(stripped, 'sessionVerdict must not branch on device').not.toMatch(/\bdevice\b/);
+    // This is the assertion the D1/D2 mutants actually trip: `if
+    // (measured.label.includes('Android'))` or `if (measured.label === '')`
+    // both leave a `label` token here that the one safe pattern above did not
+    // consume, regardless of which string the branch was keyed on.
+    expect(stripped, 'sessionVerdict must not branch on the measured label').not.toMatch(/\blabel\b/);
+  });
+
+  it('verifyMeasured never lets the label decide the verdict — same proof, one layer down', () => {
+    const at = sessionsSrc.indexOf("const presented = Buffer.from(sha256hex(token), 'hex');");
+    expect(at, 'verifyMeasured body not found').toBeGreaterThan(0);
+    const end = sessionsSrc.indexOf('\n\n  /**', at);
+    expect(end, 'end of verifyMeasured not found').toBeGreaterThan(at);
+    const body = stripComments(sessionsSrc.slice(at, end));
+    expect(body.length, 'the slice must not be empty').toBeGreaterThan(100);
+    const stripped = body.replace(/label:\s*(null|rec\.label)/g, '');
+    expect(stripped, 'verifyMeasured must not branch on label').not.toMatch(/\blabel\b/);
+  });
+
+  // ── fix round 2 (final whole-branch review, F5a): the three scans above
+  // slice only `authVerdict`/`sessionVerdict`/`verifyMeasured` — the
+  // functions that CONSTRUCT a `GateDecision`. A decision keyed on
+  // `GateDecision.device` written anywhere ELSE — the `installGate` hook
+  // that RECEIVES the decision, or a route handler reading it back out —
+  // was outside every one of those slices and would pass all three
+  // unnoticed. This is the boundary the guard exists to close: the reviewer
+  // named it as the residual, not a hypothetical.
+  it('installGate never mentions device or label anywhere in its body — it only ever RECEIVES a decision, never constructs one', () => {
+    const at = gateSrc.indexOf('export function installGate(');
+    expect(at, 'installGate not found').toBeGreaterThan(0);
+    // installGate is the LAST function in gate.ts (verified by the file-level
+    // guard below), so there is no `\n\n/**` sentinel to slice against —
+    // the rest of the file IS the function body plus its closing brace.
+    const body = stripComments(gateSrc.slice(at));
+    expect(body.length, 'the slice must not be empty').toBeGreaterThan(200);
+    // Unlike the three functions above, installGate has NO safe write to
+    // strip out first: it never builds a `GateDecision`, only reads one
+    // (`decision.allow`, `decision.verdict`) — so `device`/`label` must not
+    // appear here under ANY spelling at all.
+    expect(body, 'installGate must not reference device').not.toMatch(/\bdevice\b/);
+    expect(body, 'installGate must not reference label').not.toMatch(/\blabel\b/);
+  });
+
+  it('installGate really is the last function in gate.ts — the guard above is not slicing past a boundary that moved', () => {
+    // Guards the guard above: if a function were added AFTER installGate,
+    // `gateSrc.slice(at)` would silently start covering it too (harmless)
+    // or, if installGate itself moved earlier, would silently stop covering
+    // part of its own body (not harmless) without either failing loudly.
+    // This assertion makes "installGate is last" a checked fact, not an
+    // assumption the slice above quietly depends on.
+    const at = gateSrc.indexOf('export function installGate(');
+    const nextFn = gateSrc.indexOf('\nexport function ', at + 1);
+    expect(nextFn, 'a function was added after installGate — update the scan above to bound its slice')
+      .toBe(-1);
+  });
+
+  it('pwaDec (server.ts) — the one ROUTE-LEVEL site reading .device — never branches on it, only hands it to deviceActor', () => {
+    // The other place `GateDecision.device` reaches outside gate.ts/sessions.ts
+    // at all: `pwaDec` reads `sessionAuth(req).device` to build the dec a
+    // human-driven route declares. A future mutant here (e.g. denying a
+    // route, or choosing a different `surface`, when the device label
+    // matches some string) would be exactly the same defect class the
+    // reviewer's `installGate` mutant demonstrated, one file over.
+    const at = serverSrc.indexOf('const pwaDec = (');
+    expect(at, 'pwaDec not found').toBeGreaterThan(0);
+    const end = serverSrc.indexOf('\n\n  /**', at);
+    expect(end, 'end of pwaDec not found').toBeGreaterThan(at);
+    const body = stripComments(serverSrc.slice(at, end));
+    expect(body.length, 'the slice must not be empty').toBeGreaterThan(50);
+    // The one safe write: `.device` is passed straight into `deviceActor(…)`
+    // and nowhere else — strip that call, then nothing named `device` may
+    // remain.
+    const stripped = body.replace(/deviceActor\(sessionAuth\(req\)\.device\)/g, '');
+    expect(stripped, 'pwaDec must not branch on device').not.toMatch(/\bdevice\b/);
   });
 });

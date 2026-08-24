@@ -456,3 +456,18 @@ Releasing a hold by hand no longer re-arms the sweep on its own.
 When the claim really is released, the ordinary sweep archives the workspace on
 its own clock and its manifest carries the whole PR lineage. You do not reap, ever (clause 3); cleanup is the operator's ceremony
 in the PWA.
+
+## What happened to a workspace that is gone
+
+`GET /api/lifecycle?session=<id>` — the provenance journal, oldest-first, with the mirror's own
+gaps beside it. It takes a session cookie or the box token, so it reads cookieless from the fleet
+host the same way `GET /api/runs` does.
+
+Read it when a workspace has been removed and you need to answer who did it, why, and what was
+lost. It is the only surface that survives a removal: every per-session registry field is deleted
+by the cleanup itself, and the journal is written where that deletion cannot reach.
+
+Three families sit side by side on every row and they never merge. `obs` is what the kernel saw,
+`dec` is what the caller declared, `meas` is what was measured about the workspace before anything
+was destroyed. When the first two disagree the census raises it as a divergence; nothing picks a
+winner. A `null` in `meas` means it was not measured, never that it was empty.

@@ -368,8 +368,8 @@ describe('refusals are answers', () => {
     // `_json_str`'s one remaining failure is python3 not being RUNNABLE, and it
     // reports that on its exit status — which every one of the ~20
     // substitutions below swallows by construction, because they sit inside
-    // printf ARGUMENT LISTS. `cmd_ws_audit` (ccd:2153) and `_ws_manifest`
-    // (ccd:1109) each probe once up front for exactly that reason, and this is
+    // printf ARGUMENT LISTS. `cmd_ws_audit` (ccd:6372) and `_ws_manifest`
+    // (ccd:4054) each probe once up front for exactly that reason, and this is
     // the THIRD caller that builds a whole record: `_ws_tombstone` writes the
     // one document that outlives the workspace. Without the probe the resume
     // path — the one path that reaches the destructive tail without ever
@@ -706,7 +706,7 @@ describe('destruction order', () => {
   it('removes the worktree, CAS-deletes the branch, and clears the registry LAST', () => {
     const { wt, main } = ready();
     const tok = tokenOf();
-    // COUNTED, not `toContain`. `cmd_ws_archive` (ccd:1064) kills the same pane
+    // COUNTED, not `toContain`. `cmd_ws_archive` (ccd:3958) kills the same pane
     // with the same argv, and `ready()` runs it — so the line is already in the
     // log before the reap starts and a `toContain` passes with (e) deleted.
     // Measured: the mutation sweep reported that assertion's mutant SURVIVED,
@@ -720,6 +720,8 @@ describe('destruction order', () => {
     expect(h.git(main, 'branch', '--list', 'ws/quiet-basin')).toBe('');
     expect(h.reg('demo-quiet-basin', 'uuid')).toBeNull();
     expect(h.reg('demo-quiet-basin', 'reaping')).toBeNull();
+    // Subset match, deliberately — the exact-sequence guard for the tmux
+    // probe `_reg_purge`'s backstop adds lives in `ccd-lifecycle-purge.test.ts`.
     expect(h.calls()).toContain('unsupervise demo-quiet-basin');
     // (e), which is not (d): the unit and the pane are two different things to
     // stop, and leaving the pane alive holds the deleted directory open as some
@@ -1361,7 +1363,7 @@ describe('partial failure and resume', () => {
     // while the tombstone reported it cleaned up, and the only exit was a
     // hand-run ccd ws-rm — which, with the worktree and its record already gone,
     // refuses to touch the branch and hands you a `branch -D` to run yourself
-    // (ccd:402-407). Correct of it, and still a wedge: the resume path is what
+    // (ccd:3017). Correct of it, and still a wedge: the resume path is what
     // finishes the job.
     const { wt, main } = ready();
     const tok = tokenOf();
@@ -1855,7 +1857,7 @@ describe('partial failure and resume', () => {
  * after Phase A.
  *
  * `not-archived` is the refusal ccd already owns for "this workspace is not
- * staged for deletion" (`_ws_reap_eval`, ccd:2055-2056), and it is the one
+ * staged for deletion" (`_ws_reap_eval`, ccd:5689-5690), and it is the one
  * emitted here: the state IS not-archived, and re-using the token keeps
  * `wsaudit.ts`'s SENTENCES table complete without inventing a thirty-sixth
  * word for the same fact.

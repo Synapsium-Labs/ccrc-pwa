@@ -2,7 +2,7 @@ import type { FleetIO } from '../io.js';
 import type { CcrcConfig } from '../config.js';
 import type { FleetState } from '../fleetstate.js';
 import type { Deps } from '../server.js';
-import { CCD_ARGV, verbSupported } from '../ccdargv.js';
+import { CCD_ARGV, verbSupported, sweepDec } from '../ccdargv.js';
 import { readPrHistory } from './prhistory.js';
 import { verifyDone, type DoneClaim } from './fingerprint.js';
 import { type AdvanceResult, type CoordStore, type OpenSibling } from './store.js';
@@ -179,8 +179,9 @@ export async function closeRun(
       // (`release` already absorbs `survivor === null`).
       const argv = survivor !== null && !release
         ? CCD_ARGV.wsHold(run.sessionId,
-            holdReason(survivor.program, survivor.wave, survivor.waveOf, survivor.id))
-        : CCD_ARGV.wsRelease(run.sessionId);
+            holdReason(survivor.program, survivor.wave, survivor.waveOf, survivor.id),
+            sweepDec(deps.fleetState, `run:${id} close`))
+        : CCD_ARGV.wsRelease(run.sessionId, sweepDec(deps.fleetState, `run:${id} close`));
       if (!verbSupported(deps.fleetState, argv)) return { ok: false, kind: 'unsupported' };
       const res = await deps.runCcd(argv);
       if (!res.ok) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
@@ -281,12 +282,12 @@ export async function closeRun(
   const safe = releaseIsSafe(siblings);
   let released = false;
   if (state === 'failed' && archive && safe) {
-    const argv = CCD_ARGV.wsArchive(run.sessionId);
+    const argv = CCD_ARGV.wsArchive(run.sessionId, sweepDec(deps.fleetState, `run:${id} close`));
     if (!verbSupported(deps.fleetState, argv)) return { ok: false, kind: 'unsupported' };
     const res = await deps.runCcd(argv);
     if (!res.ok) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
   } else if (final && safe) {
-    const argv = CCD_ARGV.wsRelease(run.sessionId);
+    const argv = CCD_ARGV.wsRelease(run.sessionId, sweepDec(deps.fleetState, `run:${id} close`));
     if (!verbSupported(deps.fleetState, argv)) return { ok: false, kind: 'unsupported' };
     const res = await deps.runCcd(argv);
     if (!res.ok) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
@@ -304,7 +305,7 @@ export async function closeRun(
     const nextReason = survivor === null
       ? holdReason(run.program, run.wave + 1, run.waveOf, null)
       : holdReason(survivor.program, survivor.wave, survivor.waveOf, survivor.id);
-    const argv = CCD_ARGV.wsHold(run.sessionId, nextReason);
+    const argv = CCD_ARGV.wsHold(run.sessionId, nextReason, sweepDec(deps.fleetState, `run:${id} close`));
     if (!verbSupported(deps.fleetState, argv)) return { ok: false, kind: 'unsupported' };
     const res = await deps.runCcd(argv);
     if (!res.ok) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };

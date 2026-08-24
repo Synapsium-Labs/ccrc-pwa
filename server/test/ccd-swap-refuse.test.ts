@@ -7,7 +7,7 @@
  * The exit code is the weakest channel and these tests barely lean on it. The
  * common invocation is from inside the session being swapped, where cmd_swap
  * detaches a transient unit and returns 0 to a caller that the swap then kills
- * (ccd:7022-7028) — so the refusal is asserted where it actually survives:
+ * (ccd:7049-7055) — so the refusal is asserted where it actually survives:
  * the `swapblocked` registry field, the notify.sh banner, and swap.log.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -111,7 +111,7 @@ const swapLog = (): string =>
 
 describe('a swap that cannot carry the conversation', () => {
   it('refuses BEFORE anything is torn down, and the session stays where it is', () => {
-    // Kills the pre-fix order (stop -> kill -> sleep -> look, ccd:7034-7037),
+    // Kills the pre-fix order (stop -> kill -> sleep -> look, ccd:7061-7064),
     // which turned a miss into a session that was dead AND historyless. The
     // glob is a read, so it costs nothing above the teardown.
     const id = seed();
@@ -137,7 +137,7 @@ describe('a swap that cannot carry the conversation', () => {
   });
 
   it('does NOT write lastswap — a refusal must not read as a swap landing', () => {
-    // _spawn (ccd:6905-6910) treats a spawn within 300s of `lastswap` as the
+    // _spawn (ccd:6932-6937) treats a spawn within 300s of `lastswap` as the
     // swap ARRIVING, and answers the big-transcript resume gate with "resume
     // from summary", which auto-compacts — a refusal that stamped lastswap
     // would compact the very history it refused in order to protect.
@@ -152,7 +152,7 @@ describe('a swap that cannot carry the conversation', () => {
     // rescue arm and the return-home arm), so by the time this detached `cmd_swap`
     // decides to refuse, `lastswap` is already fresh — "never write it" is not
     // enough on THIS path, unlike the manual one. Replays _spawn's own fromswap
-    // computation (ccd:6915-6917) verbatim: with a stale/absent lastswap, a resume
+    // computation (ccd:6942-6944) verbatim: with a stale/absent lastswap, a resume
     // must not read as a swap landing and auto-compact.
     const id = seed();
     h.sh(`_reg_set ${id} lastswap "$(date +%s)"`);   // what _auto_swap_check already did
