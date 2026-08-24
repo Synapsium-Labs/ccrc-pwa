@@ -3458,7 +3458,7 @@ Task 8's direct probes, and this table stays coherent. The parity relation, per 
 
 **Steps:**
 
-- [ ] 1. Append the property suites to `server/test/claims.test.ts` (after the last describe):
+- [x] 1. Append the property suites to `server/test/claims.test.ts` (after the last describe):
 
   ```ts
   describe('D12 properties: all-or-nothing, and the 409 names EVERY conflicting path', () => {
@@ -3509,11 +3509,11 @@ Task 8's direct probes, and this table stays coherent. The parity relation, per 
   });
   ```
 
-- [ ] 2. Run, expect PASS (these are properties the Task 7 implementation already satisfies —
+- [x] 2. Run, expect PASS (these are properties the Task 7 implementation already satisfies —
   written now, they are the tripwires the ceremonies below prove live):
   `cd server && ./node_modules/.bin/vitest run test/claims.test.ts`
 
-- [ ] 3. Append the reissue-property suite to `server/test/ledger.test.ts`:
+- [x] 3. Append the reissue-property suite to `server/test/ledger.test.ts`:
 
   ```ts
   describe('D13 property: a block is contiguous, above the floor, above ALL history', () => {
@@ -3532,39 +3532,39 @@ Task 8's direct probes, and this table stays coherent. The parity relation, per 
 
   Run, expect PASS: `./node_modules/.bin/vitest run test/ledger.test.ts`.
 
-- [ ] 4. Mutation ceremony A — *all-or-nothing dies loudly*. Plant in
+- [x] 4. Mutation ceremony A — *all-or-nothing dies loudly*. Plant in
   `server/src/coord/claims.ts`: change `if (conflicts.length > 0) return { conflict: conflicts };`
   to `if (conflicts.length > 0) return { conflict: [conflicts[0]!] };` (report only the first —
   the "partial 409" mutant). Run `./node_modules/.bin/vitest run test/claims.test.ts`: expect
   EXACTLY ONE red — "two conflicting paths against two different holders — BOTH named". Revert.
 
-- [ ] 5. Mutation ceremony B — *containment is load-bearing*. Plant: change `pathsOverlap`'s body
+- [x] 5. Mutation ceremony B — *containment is load-bearing*. Plant: change `pathsOverlap`'s body
   to `return a === b;` (exact match only). Run the same suite: expect EXACTLY FOUR red — "a
   directory contains its file…", "reports a containment conflict", "reports the reverse containment
   too", and "two conflicting paths against two different holders" (its `shared/api.ts`-vs-`shared`
   half vanishes). "a NAME prefix is not a DIRECTORY prefix" stays green — it asserts `false`, which
   the mutant still answers — and that asymmetry is why the count is measured, not guessed. Revert.
 
-- [ ] 6. Mutation ceremony C — *doubt is not death* (the D12 mutant that matters most). Plant in
+- [x] 6. Mutation ceremony C — *doubt is not death* (the D12 mutant that matters most). Plant in
   `claimExpiry`: change `case 'unmeasurable': return { act: 'hold' };` to fall through to the
   `'gone'` arm (`case 'unmeasurable': case 'gone': return now >= row.expiresAt ? … : …;` — treat
   unmeasurable as gone). Run: expect EXACTLY ONE red — "an UNMEASURABLE holder is HELD, even past
   its lease". This mutant is the fleet-box-hiccup mass-expiry; one red test is what stands between
   it and production. Revert.
 
-- [ ] 7. Mutation ceremony D — *the hard cap is never extended*. Plant: change
+- [x] 7. Mutation ceremony D — *the hard cap is never extended*. Plant: change
   `const next = Math.min(now + CLAIM_LEASE_MS, row.hardExpiresAt);` to
   `const next = now + CLAIM_LEASE_MS;`. Run: expect EXACTLY TWO red — "a renewal CLAMPS at
   hardExpiresAt" and "a renewal that would not move the lease is a hold" (the unclamped `next`
   now clears an `expiresAt` already sitting at the cap). Revert.
 
-- [ ] 8. Mutation ceremony E — *unknown is not no*. Plant in `server/src/coord/peers.ts`: change
+- [x] 8. Mutation ceremony E — *unknown is not no*. Plant in `server/src/coord/peers.ts`: change
   `if (p.registry === 'unmeasurable') return 'unknown';` to `return 'no:not-in-registry';`. Run
   `./node_modules/.bin/vitest run test/peers.test.ts test/deliverability-parity.test.ts`: expect
   EXACTLY TWO red — Task 8's rung-1 unknown test and the parity row "a registry row listed but
   unreadable is unknown". Revert.
 
-- [ ] 9. Mutation ceremony F — *a legacy tail never seeds the floor*. Plant in
+- [x] 9. Mutation ceremony F — *a legacy tail never seeds the floor*. Plant in
   `server/src/coord/ledger.ts`: inside the legacy loop, after the `legacy.add(m[0]);` line, add
 
   ```ts
@@ -3576,7 +3576,7 @@ Task 8's direct probes, and this table stays coherent. The parity relation, per 
   legacy…never feeds the floor" (floor jumps to 450) and "a tree with ONLY legacy refs is NOT a
   seed". Revert.
 
-- [ ] 10. Run the whole section's suites foreground, one last measured green:
+- [x] 10. Run the whole section's suites foreground, one last measured green:
 
   ```bash
   cd server && ./node_modules/.bin/vitest run \
@@ -3589,7 +3589,7 @@ Task 8's direct probes, and this table stays coherent. The parity relation, per 
   before calling anything broken — they are on the known-flake list, and CI on the quiet box is the
   arbiter.)
 
-- [ ] 11. Commit:
+- [x] 11. Commit:
 
   ```bash
   cd server && git add test/claims.test.ts test/ledger.test.ts

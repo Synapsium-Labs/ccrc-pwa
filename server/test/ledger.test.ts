@@ -84,3 +84,16 @@ describe('floorFromScan', () => {
     expect(r).toEqual({ floor: 42 + LEDGER_SEED_GAP, evidence: 'p.md names D-42', legacy: [] });
   });
 });
+
+describe('D13 property: a block is contiguous, above the floor, above ALL history', () => {
+  it('every issued block is gap-free and strictly increasing', () => {
+    const d = decideAllocation({ floor: 260 }, 271, 5);
+    if (!('ok' in d)) throw new Error('expected ok');
+    expect(d.numbers).toEqual([272, 273, 274, 275, 276]);
+    for (let i = 1; i < d.numbers.length; i++) {
+      expect(d.numbers[i]! - d.numbers[i - 1]!).toBe(1);
+    }
+    expect(Math.min(...d.numbers)).toBeGreaterThan(271);
+    expect(Math.min(...d.numbers)).toBeGreaterThanOrEqual(260);
+  });
+});

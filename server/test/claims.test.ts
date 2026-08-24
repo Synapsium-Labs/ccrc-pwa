@@ -168,3 +168,50 @@ describe("claimExpiry: D12's decision table", () => {
     }
   });
 });
+
+describe('D12 properties: all-or-nothing, and the 409 names EVERY conflicting path', () => {
+  it('five paths, one conflict — ZERO acquired', () => {
+    const d = decideClaim(
+      [row({ paths: ['server/src/coord/dispatch.ts'] })],
+      { project: 'demo', sessionId: 'demo-brisk-ridge',
+        paths: ['pwa/src/App.tsx', 'shared/roster.ts', 'agent/src/tail.ts',
+                'server/src/coord/dispatch.ts', 'docs/README-notes.md'] },
+    );
+    // The ok arm carries the paths to insert; its absence IS "zero acquired".
+    expect('ok' in d).toBe(false);
+    if (!('conflict' in d)) throw new Error('expected conflict');
+    expect(d.conflict.map((c) => c.path)).toEqual(['server/src/coord/dispatch.ts']);
+  });
+
+  it('two conflicting paths against two different holders — BOTH named, each with its own address', () => {
+    const d = decideClaim(
+      [
+        row({ id: 1, heldBy: 'demo-quiet-mesa', paths: ['shared'] }),
+        row({ id: 2, heldBy: 'demo-plain-harbor', paths: ['ccd/ccd'] }),
+      ],
+      { project: 'demo', sessionId: 'demo-brisk-ridge',
+        paths: ['shared/api.ts', 'ccd/ccd', 'pwa/src/App.tsx'] },
+    );
+    if (!('conflict' in d)) throw new Error('expected conflict');
+    const byPath = new Map(d.conflict.map((c) => [c.path, c.heldBy]));
+    expect([...byPath.keys()].sort()).toEqual(['ccd/ccd', 'shared/api.ts']);
+    expect(byPath.get('shared/api.ts')).toBe('demo-quiet-mesa');
+    expect(byPath.get('ccd/ccd')).toBe('demo-plain-harbor');
+  });
+
+  it('one requested path overlapping TWO of a holder\'s own paths is ONE address, not two', () => {
+    const d = decideClaim(
+      [row({ paths: ['shared', 'shared/api.ts'] })],
+      { project: 'demo', sessionId: 'demo-brisk-ridge', paths: ['shared'] },
+    );
+    if (!('conflict' in d)) throw new Error('expected conflict');
+    expect(d.conflict).toHaveLength(1);
+    expect(d.conflict[0]!.claimId).toBe(7);
+  });
+
+  it('a duplicated request path is deduped, not double-granted and not double-conflicted', () => {
+    expect(decideClaim([], {
+      project: 'demo', sessionId: 'demo-brisk-ridge', paths: ['shared/', 'shared'],
+    })).toEqual({ ok: true, paths: ['shared'] });
+  });
+});
