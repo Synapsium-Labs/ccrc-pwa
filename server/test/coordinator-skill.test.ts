@@ -197,6 +197,13 @@ describe('the coordinator skill: linkage', () => {
       // (`POST /api/runs/:id/close`) is the one it is told about.
       'POST /api/coord/pause',
       'POST /api/runs/:id/abandon',
+      // BUILD 9 (D16) — the abandon-door shape, third instance. Breaking a
+      // claim is the operator's release valve for a wedge left by a dead or
+      // stuck holder; naming it in the corpus would be an invitation the
+      // skills' own contract forbids (a coordinator that breaks a worker's
+      // claim has stopped coordinating). The claimant's own door is
+      // POST /api/claims/:id/release, which IS named.
+      'POST /api/claims/:id/break',
     ]);
     const named = skillRoutes();
     for (const r of registeredCoordRoutes()) {

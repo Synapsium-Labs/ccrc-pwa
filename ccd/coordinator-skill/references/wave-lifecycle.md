@@ -480,3 +480,7 @@ route-parity suite binds each registration to this corpus from the commit that r
 
 - `GET /api/peers` — who else is on this project; read each row's own `deliverable` and
   `lifecycle`, never its archive stamp.
+- `POST /api/claims` — claim every path the wave will touch, before splitting the work; a 409
+  names every holder and hands each address.
+- `POST /api/claims/:id/release` — release on the final merge, with the claimant's own attribution.
+- `GET /api/claims` — the live claim table for a project (`?all=1` includes ended rows).

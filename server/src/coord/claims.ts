@@ -81,8 +81,14 @@ export function pathsOverlap(a: string, b: string): boolean {
  *  'no:<reason>' degrades the hint to NULL — the L0 contract's spelling of
  *  "escalate to the operator" (`ClaimConflict.mailHint`'s docstring), NEVER
  *  a silent send: the measured reason still rides `deliverable` beside it.
- *  'unknown' still gets the envelope, because unknown is not no (D9). */
-function claimMailHint(
+ *  'unknown' still gets the envelope, because unknown is not no (D9).
+ *  EXPORTED for exactly one other caller: the claim route's conflict arm
+ *  measures each holder AFTER the store's decision (two reads per losing
+ *  attempt, none per winning one) and re-derives the hint from the measured
+ *  deliverable through THIS function — a second spelling of the degradation
+ *  rule at the route would be the two-implementations drift this file's
+ *  whole stance exists to prevent. */
+export function claimMailHint(
   path: string, heldBy: string, deliverable: PeerDeliverable,
 ): ClaimConflict['mailHint'] {
   if (deliverable.startsWith('no:')) return null;

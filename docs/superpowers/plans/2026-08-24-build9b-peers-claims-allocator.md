@@ -6677,7 +6677,7 @@ git commit -m "server(wave7): GET /api/peers — discovery reports the contradic
 
 **Steps:**
 
-- [ ] Write the failing test, `server/test/claims-routes.test.ts`:
+- [x] Write the failing test, `server/test/claims-routes.test.ts`:
 
 ```ts
 // The claims routes (build 9 D11/D12). The CAS is coord.db's own synchronous
@@ -6938,9 +6938,9 @@ describe('release and break', () => {
 ```
 
   (The `claim`/`release`/`brk`/`list` helpers sit at module scope above the describes, as shown.)
-- [ ] Run it, expect FAIL: `./node_modules/.bin/vitest run test/claims-routes.test.ts` — 404s
+- [x] Run it, expect FAIL: `./node_modules/.bin/vitest run test/claims-routes.test.ts` — 404s
   (routes unregistered).
-- [ ] Add the three caps to `shared/api.ts`, directly below the `isClaimRefuseCode` block from
+- [x] Add the three caps to `shared/api.ts`, directly below the `isClaimRefuseCode` block from
   Task 18:
 
 ```ts
@@ -6954,7 +6954,7 @@ export const CLAIM_PATH_MAX_BYTES = 512;
 export const CLAIM_INTENT_MAX_BYTES = 512;
 ```
 
-- [ ] Write the implementation in `server/src/coord/routes.ts`. Extend the shared-api import
+- [x] Write the implementation in `server/src/coord/routes.ts`. Extend the shared-api import
   with `CLAIM_PATHS_MAX, CLAIM_PATH_MAX_BYTES, CLAIM_INTENT_MAX_BYTES, type ClaimConflict,
   type ClaimMailHint`; import `type ClaimEndOutcome` from `./store.js`. Add two module
   functions after `sendSettleItemsOutcome` (line 191):
@@ -7245,8 +7245,8 @@ function conflictMailHint(project: string, p: string, holder: string,
   });
 ```
 
-- [ ] Run, expect PASS: `./node_modules/.bin/vitest run test/claims-routes.test.ts`.
-- [ ] `gate.ts`: add three `EXEMPT` entries, sorted into the map beside their siblings —
+- [x] Run, expect PASS: `./node_modules/.bin/vitest run test/claims-routes.test.ts`.
+- [x] `gate.ts`: add three `EXEMPT` entries, sorted into the map beside their siblings —
 
 ```ts
   ['GET /api/claims',
@@ -7264,7 +7264,7 @@ function conflictMailHint(project: string, p: string, holder: string,
   and extend the NOT-EXEMPT prose paragraph (lines 155-161) so its route list reads
   `POST /api/coord/pause`, `POST /api/runs/:id/abandon` **and `POST /api/claims/:id/break`** —
   same argument, third door.
-- [ ] `server/test/coord-pause-route.test.ts`: line 168 becomes
+- [x] `server/test/coord-pause-route.test.ts`: line 168 becomes
 
 ```ts
   const UNGATED = new Set(['/api/coord/pause', '/api/runs/:id/abandon', '/api/claims/:id/break']);
@@ -7281,7 +7281,7 @@ function conflictMailHint(project: string, p: string, holder: string,
   write surface of this file — a claim `coord-pause-route.test.ts`'s `UNGATED` set holds to
   exactly these three names, in both directions." (Its Honesty-clause sentences stay verbatim —
   `coord-pause-route.test.ts:264-272` pins them.)
-- [ ] `server/test/coordinator-skill.test.ts`: the parity `EXEMPT` set (lines 184-200) gains,
+- [x] `server/test/coordinator-skill.test.ts`: the parity `EXEMPT` set (lines 184-200) gains,
   under the BUILD 4 pair and with its own comment:
 
 ```ts
@@ -7294,7 +7294,7 @@ function conflictMailHint(project: string, p: string, holder: string,
       'POST /api/claims/:id/break',
 ```
 
-- [ ] Append three naming-stub lines to the wave-lifecycle.md section Task 18 created:
+- [x] Append three naming-stub lines to the wave-lifecycle.md section Task 18 created:
 
 ```md
 - `POST /api/claims` — claim every path the wave will touch, before splitting the work; a 409
@@ -7303,7 +7303,7 @@ function conflictMailHint(project: string, p: string, holder: string,
 - `GET /api/claims` — the live claim table for a project (`?all=1` includes ended rows).
 ```
 
-- [ ] `server/test/auth-gate.test.ts`: line 194 → `toBe(19)`; line 195 → `toBe(64)`; line 198 →
+- [x] `server/test/auth-gate.test.ts`: line 194 → `toBe(19)`; line 195 → `toBe(64)`; line 198 →
   `toBe(61)`; line 63 gains `'GET /api/claims'`; the snapshot list gains
   `'GET /api/claims',` (after `'GET /api/auth/status',`), `'POST /api/claims',` and
   `'POST /api/claims/:id/release',` (after `'POST /api/auth/passkey/assert/start',`), comment
@@ -7311,18 +7311,18 @@ function conflictMailHint(project: string, p: string, holder: string,
   and `'POST /api/claims/:id/release',` in sort position (title `TWELVE` → `FIFTEEN`); line 432
   → `expect(gated.length).toBe(40);` with its comment noting the one new gated non-exempt route
   is `POST /api/claims/:id/break` (64 − 3 − 21 = 40).
-- [ ] Run, expect PASS:
+- [x] Run, expect PASS:
   `./node_modules/.bin/vitest run test/claims-routes.test.ts test/coord-pause-route.test.ts test/coordinator-skill.test.ts test/auth-gate.test.ts test/mail-routes.test.ts`
-- [ ] **Mutation ceremony (the UNGATED docstring is load-bearing).** Delete the break route's
+- [x] **Mutation ceremony (the UNGATED docstring is load-bearing).** Delete the break route's
   entire docstring. Run `test/coord-pause-route.test.ts`: expect 1 red
   (`/api/claims/:id/break names its reason at the call site`). Restore, re-run, green.
-- [ ] **Mutation ceremony (all-or-nothing).** In `acquireClaims`' caller you cannot reach the
+- [x] **Mutation ceremony (all-or-nothing).** In `acquireClaims`' caller you cannot reach the
   store's tx, so mutate at the seam this task OWNS: in the conflict arm, before building
   `conflicts`, insert `coord.acquireClaims({ project: project.trim(), paths: paths.filter((p) =>
   !r.conflicts.some((c) => c.path === p)), byId, byUuid, intent, runId, now: Date.now() });`
   (the "acquire what you can" mutant). Run `test/claims-routes.test.ts`: expect 1 red
   (`all-or-nothing … ZERO acquired`). Revert the line, re-run, green.
-- [ ] Commit:
+- [x] Commit:
 
 ```bash
 git add shared/api.ts server/src/coord/routes.ts server/src/auth/gate.ts \

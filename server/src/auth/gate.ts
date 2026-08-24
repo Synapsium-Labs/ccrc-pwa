@@ -152,13 +152,16 @@ import type { SessionStore } from './sessions.js';
  *    passphrase — so a forged registration is an operator enrolling a key they
  *    control, i.e. exactly what enrolling a key is. (`webauthn.ts`'s module
  *    docstring states the same argument from the crypto side.)
- *  - `POST /api/coord/pause` and `POST /api/runs/:id/abandon` — `coord/routes.ts`
- *    leaves these off the BOX-TOKEN gate on purpose (D-B4-9: the coordinator
- *    holds that token, and a pause it can lift is not a pause). That argument is
- *    about the box token specifically and does not transfer: they are the
- *    OPERATOR's doors, the operator is the one holding a session, and a session
- *    cookie is precisely the credential the coordinator does not have. Gating
- *    them here strengthens D-B4-9 rather than reversing it.
+ *  - `POST /api/coord/pause`, `POST /api/runs/:id/abandon` and
+ *    `POST /api/claims/:id/break` — `coord/routes.ts` leaves these off the
+ *    BOX-TOKEN gate on purpose (D-B4-9: the coordinator holds that token, and a
+ *    pause it can lift is not a pause; build 9 D12 applies the same argument to
+ *    the claim-break door, the third instance — the sessions that hold claims
+ *    hold that token too). That argument is about the box token specifically and
+ *    does not transfer: they are the OPERATOR's doors, the operator is the one
+ *    holding a session, and a session cookie is precisely the credential the
+ *    coordinator does not have. Gating them here strengthens D-B4-9 rather than
+ *    reversing it.
  */
 export const EXEMPT: ReadonlyMap<string, string> = new Map([
   ['GET /health',
@@ -200,6 +203,10 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     'fleet host has no cookie jar — while the PWA asks with a cookie. The handler requires a ' +
     'live session OR a valid box token (coord/routes.ts), so nothing is published to the ' +
     'tailnet that was not before'],
+  ['GET /api/claims',
+    "EXEMPT-BUT-AUTHENTICATED (D-149's pattern): the coordinator asks it cookieless before " +
+    "splitting work (clause 10), and the PWA's HotFilesStrip reads it with a cookie. The " +
+    'handler requires a live session OR a valid box token (coord/routes.ts)'],
   ['POST /api/runs/:id/dispatch',
     'the coordinator dispatches a wave — box-token gated'],
   ['POST /api/runs/:id/close',
@@ -208,6 +215,12 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     'the coordinator advances a run — box-token gated'],
   ['POST /api/runs/:id/items',
     'the coordinator settles the wave ledger — box-token gated'],
+  ['POST /api/claims',
+    'a session claims the paths it is about to edit — box-token gated, attribution checked ' +
+    'against the registry exactly as the mail ingress checks its sender'],
+  ['POST /api/claims/:id/release',
+    'the claimant releases on the final merge — box-token gated, same attribution as the claim; ' +
+    'the ownership check is the route\'s own, against the live claim table'],
 
   ['POST /api/auth/login',
     'the door — a gate that gated its own login route would be a box nobody can enter'],

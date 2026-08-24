@@ -4738,6 +4738,16 @@ export const CLAIM_HARD_CAP_MS = 8 * 60 * 60_000;
  *  never truncate, for `LC_REASON_MAX_BYTES`'s own stated reason. */
 export const CLAIM_INTENT_MAX_BYTES = 512;
 
+/** `POST /api/claims`' remaining wire caps — BYTES where the name says
+ *  bytes, the `MAIL_BODY_MAX_BYTES` char-vs-byte care, and the same
+ *  refuse-never-truncate policy as `CLAIM_INTENT_MAX_BYTES` directly above:
+ *  a trimmed path is a DIFFERENT path, and a claim on a path the caller did
+ *  not name is worse than a 413. Thirty-two entries outlasts any honest
+ *  wave's hot-file set; a bigger one is a claim on the module wedge by
+ *  another spelling. */
+export const CLAIM_PATHS_MAX = 32;
+export const CLAIM_PATH_MAX_BYTES = 512;
+
 /** `floor = max(D-<n> found in the docs scan) + this` (D13). NOT
  *  decoration: numbers allocated but not yet written into any plan are
  *  invisible to the scan, and re-issuing one IS the measured failure.

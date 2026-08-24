@@ -5,9 +5,10 @@ import type { Bus } from '../bus.js';
 import { measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
 import { assembleFleet } from '../fleet.js';
 import { peerDeliverable, archiveContradicted } from './peers.js';
+import { claimMailHint } from './claims.js';
 import { CCD_ARGV, verbSupported, sweepDec } from '../ccdargv.js';
 import { tx } from './db.js';
-import { toRunSummary, type CoordStore } from './store.js';
+import { toRunSummary, type ClaimEndResult, type CoordStore } from './store.js';
 import { renderEnvelope } from './envelope.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './token.js';
 import { NO_SESSION, type GateDecision } from '../auth/gate.js';
@@ -17,10 +18,11 @@ import { closeRun, type CloseOutcome, type CloseRunDeps } from './close.js';
 import { settleItems, type SettleItemsOutcome } from './items.js';
 import { holdReason, queueSystemMail } from './rundefs.js';
 import {
+  CLAIM_INTENT_MAX_BYTES, CLAIM_PATHS_MAX, CLAIM_PATH_MAX_BYTES,
   isRunState, isSendableMailKind, MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
   MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, RUN_TRANSITIONS,
-  type LifecycleQueryResult, type MailRejectCode, type PeerSummary, type RunState,
-  type RunSummary,
+  type ClaimConflict, type LifecycleQueryResult, type MailRejectCode, type PeerDeliverable,
+  type PeerSummary, type RunState, type RunSummary,
 } from '../../../shared/api.js';
 
 /**
@@ -193,6 +195,28 @@ function sendSettleItemsOutcome(reply: FastifyReply, r: SettleItemsOutcome) {
   }
 }
 
+/** `claimRelease`/`claimBreak`'s typed result union -> HTTP status + body.
+ *  Same discipline and the same totality guard as the three maps above (see
+ *  `sendDispatchOutcome`'s docstring for the measurement that made `default:
+ *  never` the house rule). The store's `'not-live'` arm goes on the wire as
+ *  `claim-terminal`, carrying the row's own state — lapse-don't-delete (D12)
+ *  means "already ended" is a fact with a name, not a 404. The `not-owner`
+ *  refusal is NOT here: the landed `ClaimEndResult` has no such arm (the
+ *  store stamps `endedBy` from its caller and checks nothing), so the release
+ *  route decides ownership itself, before the store is asked to end anything. */
+function sendClaimEndOutcome(reply: FastifyReply, r: ClaimEndResult) {
+  if (r.ok) return reply.code(200).send({ ok: true, state: r.state });
+  switch (r.why) {
+    case 'unknown-claim': return reply.code(404).send({ ok: false, error: 'unknown-claim' });
+    case 'not-live':
+      return reply.code(409).send({ ok: false, error: 'claim-terminal', state: r.state });
+    default: {
+      const _exhaustive: never = r;
+      return reply.code(500).send({ ok: false, error: 'internal', why: (_exhaustive as { why: string }).why });
+    }
+  }
+}
+
 /**
  * The coordination routes. Registered from `buildServer` rather than declared
  * there, because `server.ts` is already the file whose whole discipline is not
@@ -271,6 +295,49 @@ export function registerCoordRoutes(
         : 'wrong box token';
     reply.code(401).send({ ok: false, error: 'unauthenticated', detail });
     return false;
+  };
+
+  /**
+   * The claim lanes' attribution gate — the mail ingress's checks 5/5.5/6 with
+   * the SAME transient-vs-terminal split (D-37), factored because both claim
+   * writes are new in this build and share it exactly. NOT `refuse()`: a claim
+   * refusal is answered synchronously to a live caller and replayed by
+   * nothing, so there is no delivery lane needing a recorded rejection to
+   * explain itself — the claims table itself is the record of every
+   * acquisition that happened.
+   */
+  const requireAttribution = async (
+    reply: FastifyReply, whoId: string, whoUuid: string,
+  ): Promise<boolean> => {
+    const names = await deps.io.readdir(deps.cfg.registryDir);
+    if (names === null) {
+      reply.code(502).send({ ok: false, error: 'registry-unmeasurable',
+        detail: 'the registry directory could not be listed — transient, not a fact about the claimant' });
+      return false;
+    }
+    const registry = await readRegistry(deps.io, deps.cfg);
+    const row = registry.find((r) => r.id === whoId);
+    if (!row) {
+      if (names.includes(`${whoId}.uuid`)) {
+        reply.code(502).send({ ok: false, error: 'registry-unmeasurable',
+          detail: `registry row for ${whoId} is listed but unreadable — transient, not a fact about the claimant` });
+        return false;
+      }
+      reply.code(403).send({ ok: false, error: 'unknown-sender', detail: `no registry row for ${whoId}` });
+      return false;
+    }
+    const identity = measuredIdentity(row);
+    if (identity === null) {
+      reply.code(502).send({ ok: false, error: 'registry-unmeasurable',
+        detail: `registry row for ${whoId} is listed but its identity could not be measured — transient` });
+      return false;
+    }
+    if (identity.uuid !== whoUuid) {
+      reply.code(403).send({ ok: false, error: 'stale-uuid',
+        detail: 'byUuid does not match the registry — stale claimant; re-read your own .uuid' });
+      return false;
+    }
+    return true;
   };
 
   /** One refusal, recorded and answered. The record is the point: spec:147-148
@@ -1052,13 +1119,13 @@ export function registerCoordRoutes(
   });
 
   /**
-   * `POST /api/coord/pause` — the OPERATOR's door, and one of the TWO routes in
-   * this file that are UNGATED: deliberately NOT behind `requireMailToken`
-   * (D-B4-9). The other is `POST /api/runs/:id/abandon` above, added by this
-   * same build and ungated for this same reason. Between them they are the
-   * WHOLE unauthenticated write surface of this file — a claim `coord-pause-
-   * route.test.ts`'s `UNGATED` set holds to exactly these two names, in both
-   * directions.
+   * `POST /api/coord/pause` — the OPERATOR's door, and one of the THREE routes
+   * in this file that are UNGATED: deliberately NOT behind `requireMailToken`
+   * (D-B4-9). The others are `POST /api/runs/:id/abandon` above and
+   * `POST /api/claims/:id/break` (build 9 D12 — the same abandon-door shape).
+   * Among them they are the WHOLE unauthenticated write surface of this file —
+   * a claim `coord-pause-route.test.ts`'s `UNGATED` set holds to exactly these
+   * three names, in both directions.
    *
    * The box token authenticates the FLEET HOST (build7:136-143) and the
    * coordinator holds it by design. `$REG/coordinator-paused` exists precisely
@@ -1393,5 +1460,243 @@ export function registerCoordRoutes(
 
     const projects = [...new Set(sessions.map((s) => s.project))].sort();
     return reply.code(200).send({ ok: true, peers, projects, etiquette: PEER_ETIQUETTE });
+  });
+
+  /**
+   * `POST /api/claims` — advisory, all-or-nothing, and the conflict response
+   * is an address (D12).
+   *
+   * THE CAS IS `claimAttempt`'s OWN SYNCHRONOUS `tx()` (D11): expiry of lapsed
+   * rows, the conflict read (exact match AND directory-prefix containment,
+   * which no index can express) and the insert run in ONE transaction, and
+   * `DatabaseSync` has no async surface, so the whole thing runs without
+   * yielding the event loop — "do not wrap it async" is not a style preference
+   * here, it is the reason this is correct. The partial unique index
+   * `claim_one_owner` is the BACKSTOP, in that order: lose the transaction in
+   * a refactor and the failure is a loud constraint violation, never a
+   * duplicate. No `coordMutex`: the mutex exists for routes whose precondition
+   * read and commit are separated by fleet-act awaits, and this route has none
+   * between them — the deliverable measurement below happens strictly AFTER
+   * the decision, on the losing arm only.
+   *
+   * A claim writes NOTHING to the registry — no `.hold`, no run, no verb, no
+   * grant (D12 ruling 1; `claims-no-hold.test.ts` exercises the real
+   * `sweepNames` to hold that). Re-POSTing the same paths RENEWS and
+   * re-writes `intent`, which is the naming signal that replaces the frozen
+   * ai-title.
+   */
+  app.post('/api/claims', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    if (!requireMailToken(req, reply, 'POST /api/claims')) return;
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const { byId, byUuid, project, intent } = body;
+    const pathsRaw = body['paths'];
+    const runIdRaw = body['runId'];
+    if (typeof byId !== 'string' || typeof byUuid !== 'string' ||
+        typeof project !== 'string' || project.trim() === '' ||
+        typeof intent !== 'string' || intent.trim() === '' ||
+        !Array.isArray(pathsRaw) || pathsRaw.length === 0 ||
+        !pathsRaw.every((p) => typeof p === 'string' && p !== '')) {
+      return reply.code(400).send({ ok: false, error: 'bad-request',
+        detail: 'byId/byUuid/project/intent strings, paths a non-empty array of non-empty strings' });
+    }
+    const paths = pathsRaw as string[];
+    let runId: number | null;
+    if (runIdRaw === undefined || runIdRaw === null) {
+      runId = null;
+    } else if (typeof runIdRaw === 'number' && Number.isInteger(runIdRaw)) {
+      runId = runIdRaw;
+    } else {
+      return reply.code(400).send({ ok: false, error: 'bad-request',
+        detail: 'runId must be an integer when given' });
+    }
+
+    if (paths.length > CLAIM_PATHS_MAX) {
+      return reply.code(413).send({ ok: false, error: 'oversize', limit: CLAIM_PATHS_MAX,
+        detail: `paths exceeds ${CLAIM_PATHS_MAX} entries` });
+    }
+    if (paths.some((p) => Buffer.byteLength(p, 'utf8') > CLAIM_PATH_MAX_BYTES)) {
+      return reply.code(413).send({ ok: false, error: 'oversize', limit: CLAIM_PATH_MAX_BYTES,
+        detail: `a path exceeds ${CLAIM_PATH_MAX_BYTES} bytes` });
+    }
+    if (Buffer.byteLength(intent, 'utf8') > CLAIM_INTENT_MAX_BYTES) {
+      return reply.code(413).send({ ok: false, error: 'oversize', limit: CLAIM_INTENT_MAX_BYTES,
+        detail: `intent exceeds ${CLAIM_INTENT_MAX_BYTES} bytes — it renders on PeerSummary, it is not a spec` });
+    }
+
+    if (!(await requireAttribution(reply, byId, byUuid))) return;
+
+    if (runId !== null && coord.run(runId) === null) {
+      return reply.code(404).send({ ok: false, error: 'unknown-run', detail: `no run ${runId}` });
+    }
+
+    const r = coord.claimAttempt({ project: project.trim(), paths, sessionId: byId,
+      uuid: byUuid, intent, runId, now: Date.now() });
+    if (r.ok) {
+      // The store's ok arm is the rows themselves; the wire summary is DERIVED
+      // from them, one reader: `renewed` is true exactly when some row's lease
+      // was re-armed after its creation, and the two horizons are the earliest
+      // across the batch — the only bound that is true of everything acquired.
+      return reply.code(200).send({
+        ok: true, ids: r.claims.map((c) => c.id),
+        expiresAt: Math.min(...r.claims.map((c) => c.expiresAt)),
+        hardExpiresAt: Math.min(...r.claims.map((c) => c.hardExpiresAt)),
+        renewed: r.claims.some((c) => c.renewedAt > c.createdAt),
+      });
+    }
+    switch (r.why) {
+      case 'bad-path':
+        return reply.code(400).send({ ok: false, error: 'bad-path', paths: r.paths,
+          detail: "claiming '.' or the whole repo IS the module wedge — name the paths" });
+      case 'conflict': {
+        // Measurement happens ONLY here, after the sync decision: two reads
+        // per losing attempt, none per winning one. The presence ladder is the
+        // peers route's exactly, and the store's at-rest 'unknown' on each
+        // conflict row is REPLACED by what was measured — with the mailHint
+        // re-derived through the L1's own `claimMailHint`, so the degradation
+        // rule (no:<reason> -> null, never a silent send) has one spelling.
+        const names = await deps.io.readdir(deps.cfg.registryDir);
+        const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux);
+        const deliverableOf = (id: string): PeerDeliverable => {
+          const row = sessions.find((s) => s.id === id);
+          if (row) {
+            return peerDeliverable({
+              registry: row.unmeasured.length > 0 ? 'unmeasurable' : 'measured',
+              tmux: 'live', panePid: 0, lifecycle: row.lifecycle ?? 'unmeasurable',
+            });
+          }
+          if (names === null) {
+            return peerDeliverable({ registry: 'unmeasurable', tmux: 'unknown',
+              panePid: null, lifecycle: 'unmeasurable' });
+          }
+          return peerDeliverable({
+            registry: names.includes(`${id}.uuid`) ? 'unmeasurable' : 'absent',
+            tmux: 'unknown', panePid: null, lifecycle: 'unmeasurable',
+          });
+        };
+        const conflicts: ClaimConflict[] = r.conflicts.map((c) => {
+          const deliverable = deliverableOf(c.heldBy);
+          return { ...c, deliverable,
+            mailHint: claimMailHint(c.path, c.heldBy, deliverable) };
+        });
+        return reply.code(409).send({ ok: false, error: 'claim-conflict', conflicts });
+      }
+      default: {
+        const _exhaustive: never = r;
+        return reply.code(500).send({ ok: false, error: 'internal',
+          why: (_exhaustive as { why: string }).why });
+      }
+    }
+  });
+
+  /**
+   * `POST /api/claims/:id/release` — the claimant lets go on the final merge.
+   * Box token + the same attribution as the claim; the OWNER check is this
+   * route's, against the live table, because the landed `ClaimEndResult` has
+   * no `not-owner` arm — the store stamps `endedBy` from its caller and
+   * checks nothing, so the check lives here or nowhere (`not-owner` names the
+   * holder). A second release is `claim-terminal`, never idempotent-200: the
+   * row already carries an `endedBy`, and overwriting who ended a claim would
+   * be the `ws-restore` forgery in miniature.
+   */
+  app.post('/api/claims/:id/release', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    if (!requireMailToken(req, reply, 'POST /api/claims/:id/release')) return;
+
+    const body = (req.body ?? {}) as { byId?: unknown; byUuid?: unknown };
+    if (typeof body.byId !== 'string' || typeof body.byUuid !== 'string') {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    const { id: idParam } = req.params as { id: string };
+    const id = Number(idParam);
+    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+
+    if (!(await requireAttribution(reply, body.byId, body.byUuid))) return;
+    // Ownership, decided on the LIVE table before the store ends anything: a
+    // terminal row falls through to the store, whose answer is the honest
+    // `claim-terminal`/`unknown-claim` — `not-owner` is only ever said about
+    // a claim that is still someone's.
+    const live = coord.activeClaims().find((c) => c.id === id);
+    if (live !== undefined && live.heldBy !== body.byId) {
+      return reply.code(403).send({ ok: false, error: 'not-owner', heldBy: live.heldBy });
+    }
+    return sendClaimEndOutcome(reply, coord.claimRelease(id, body.byId, Date.now()));
+  });
+
+  /**
+   * `POST /api/claims/:id/break` — the OPERATOR's door, the THIRD route in
+   * this file that is UNGATED: deliberately NOT behind `requireMailToken`, the
+   * `POST /api/runs/:id/abandon` shape (D-B4-9's argument, applied by build 9
+   * D12/D16). The box token authenticates the fleet host, and the sessions
+   * that hold claims live there and hold that token — a session wedged behind
+   * a dead holder's claim must not find the release valve behind the same key
+   * the holder used to take it. So this rides the PWA's session-gated surface:
+   * with `CCRC_AUTH` armed it sits behind the session gate like abandon and
+   * pause, and the operator with a phone is the one who can walk through it.
+   *
+   * THE REQUEST BODY IS NEVER READ (the D-B4-7 rule, verbatim): `endedBy:
+   * 'operator'` is a literal at THIS call site, so a caller cannot send a
+   * field that forges who broke the claim. It is also UNNAMED in both skill
+   * corpora — `coordinator-skill.test.ts`'s parity EXEMPT set carries it
+   * beside `POST /api/runs/:id/abandon`, because naming it would be an
+   * invitation the skills' own contract forbids: a coordinator that breaks a
+   * worker's claim has stopped coordinating, and a worker that breaks a
+   * peer's has stopped being a peer. Breaking destroys no history — the row
+   * survives as `state:'broken'`, which is the lapse-don't-delete rule doing
+   * its job.
+   */
+  app.post('/api/claims/:id/break', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const { id: idParam } = req.params as { id: string };
+    const id = Number(idParam);
+    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    return sendClaimEndOutcome(reply, deps.coord.claimBreak(id, 'operator', Date.now()));
+  });
+
+  /**
+   * `GET /api/claims?project=&all=1` — the claim table, EXEMPT-BUT-
+   * AUTHENTICATED (D-149's pattern): the coordinator asks it COOKIELESS before
+   * splitting work (clause 10 — "a wave that dispatches two workers onto
+   * overlapping claims is a defect in the ledger"), and the PWA's
+   * HotFilesStrip reads it with a cookie. Default is LIVE claims only, with
+   * `expiresAt > now` derived by THIS reader (D4's doctrine, the peers
+   * route's own idiom) — a lapsed-but-unswept row is not live; `?all=1` opts
+   * into history VERBATIM, stored word and all — `"held by X until it died"`
+   * is an answer lapse-don't-delete exists to keep. `project` optional:
+   * absent means every project, which is the HotFilesStrip's whole-fleet
+   * read (live rows only — the landed store keeps no all-projects history
+   * read, so `all=1` without a project answers the live table too rather
+   * than inventing a refusal).
+   */
+  app.get('/api/claims', async (req, reply) => {
+    if (deps.cfg.authEnabled) {
+      const session = sessionAuth(req);
+      if (session.reason !== 'session') {
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        if (token !== 'ok') {
+          return reply.code(401).send({
+            ok: false,
+            error: 'unauthenticated',
+            verdict: session.verdict,
+            detail: 'GET /api/claims takes a session cookie OR the box token ' +
+              `(${MAIL_TOKEN_HEADER}); the coordinator reads it cookieless from the fleet host`,
+          });
+        }
+      }
+    }
+    if (!deps.coord) return notConfigured(reply);
+    const q = req.query as { project?: unknown; all?: unknown };
+    const project = typeof q.project === 'string' && q.project.trim() !== ''
+      ? q.project.trim() : null;
+    const all = q.all === '1' || q.all === 'true';
+    const now = Date.now();
+    const claims = project !== null
+      ? (all ? deps.coord.claimsForProject(project, true)
+             : deps.coord.claimsForProject(project).filter((c) => c.expiresAt > now))
+      : deps.coord.activeClaims().filter((c) => c.expiresAt > now);
+    return reply.code(200).send({ ok: true, claims });
   });
 }
