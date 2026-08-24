@@ -419,6 +419,139 @@ export const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX lifecycle_gaps_by_at ON lifecycle_gaps(at);
   `,
+
+  // ── 4: user_version 3 -> 4 ────────────────────────────────────────────────
+  // Build 9 wave 7 (§1 D8/D11/D12/D13): hot-file claims and the deviation
+  // ledger — the two coordination primitives that are "a query against the
+  // mirror plus one compare-and-swap that only the box with a database can
+  // perform" (the spec's spine, sentence for sentence).
+  //
+  // A SEPARATE MIGRATION, for the reason migrations 2 and 3 each restate:
+  // db.ts runs `for (let v = current; v < COORD_SCHEMA_VERSION; v++)`, and
+  // MIGRATIONS[2] is on origin/main — a live server may already sit at
+  // user_version 3, so an amendment to any earlier index would silently
+  // diverge from what is actually on disk.
+  //
+  // D8'S RULING ON `claims`, WRITTEN WHERE THE TABLE IS BORN so nobody later
+  // files it as a doctrine violation: claims are AUTHORITATIVE in coord.db,
+  // AND THEIR LOSS IS FREE BY CONSTRUCTION. There is no flat file to
+  // re-measure, and manufacturing one would require widening the agent's
+  // write whitelist beyond `.cc-clips` — the one structural guarantee keeping
+  // the agent from corrupting the files it reads — and would re-open the
+  // naming-sweep trap (D12) the moment anyone reached for ws-hold. Losing
+  // coord.db expires every claim at once, which is exactly the pre-feature
+  // state: sessions lose PROTECTION, never WORK, and re-claim on their next
+  // attempt. The lease (CLAIM_LEASE_MS 45 min, CLAIM_HARD_CAP_MS 8 h) is what
+  // earns that reading — it is why claims got a lease before they got a table.
+  //
+  // D8'S RULING ON `ledger_alloc`: authoritative, WITH a flat-file ground
+  // truth so the re-measurement doctrine holds without a special case. Every
+  // allocation is appended to ~/.ccrc/ledger-alloc.log FIRST and committed
+  // here SECOND (ledgerlog.ts, wave 7 part B); recovery takes MAX(file, db),
+  // so a number is SKIPPED, NEVER REISSUED. A gap costs nothing — the ledger
+  // is prose, parsed by nothing; a reissue cost 394 rewritten D-ref lines
+  // across 30 files under merge pressure (bb47c9e).
+  //
+  // D11, AND THE ORDER IS THE RULING — stated here so a reviewer does not
+  // assume one mechanism makes the other redundant:
+  //   1. The in-transaction read IS the compare-and-swap. POST /api/claims
+  //      (part B) expires lapsed rows, reads ALL live conflicting paths —
+  //      exact match AND directory-prefix containment, which no index can
+  //      express — then inserts, inside one tx(). Sound because there is one
+  //      server process and DatabaseSync has no async surface: the whole
+  //      transaction runs without yielding the event loop.
+  //   2. `claim_one_owner` below and ledger_alloc's PRIMARY KEY (project, n)
+  //      are the BACKSTOP: if a future refactor ever loses the transaction,
+  //      the failure is a loud constraint violation, never a duplicate.
+  `
+  CREATE TABLE claims (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    project       TEXT NOT NULL,
+    heldBy        TEXT NOT NULL,        -- the claiming SESSION id. Attribution, not authentication
+    heldByUuid    TEXT NOT NULL,        -- the same uuid check POST /api/mail ingress already makes
+    intent        TEXT NOT NULL,        -- what the holder says it is doing. <= 512 BYTES, refused
+                                        -- over-cap at the route (part B) — the LC_REASON_MAX_BYTES
+                                        -- policy: refuse, never shorten. Free text, parsed nowhere;
+                                        -- re-POSTing the same paths rewrites it, which is D12
+                                        -- ruling 3: the signal sweepNames freezes is REPLACED here
+    runId         INTEGER REFERENCES runs(id),  -- null for a claim outside any run; run close
+                                        -- releases this run's claims in the close transaction
+    state         TEXT NOT NULL,        -- live|released|lapsed|broken (CLAIM_STATES); read back
+                                        -- through isClaimState, never a cast — the same
+                                        -- we-do-not-know rule as every enum column in this file
+    createdAt     INTEGER NOT NULL,
+    renewedAt     INTEGER NOT NULL,
+    expiresAt     INTEGER NOT NULL,     -- the lease. Renewed by measurement (claimExpiry, D12),
+                                        -- never by a session-side heartbeat
+    hardExpiresAt INTEGER NOT NULL,     -- createdAt + CLAIM_HARD_CAP_MS. NEVER extended: doubt can
+                                        -- hold a claim, but not forever
+    endedAt       INTEGER,              -- LAPSE, DO NOT DELETE (D12): an ended claim keeps its row,
+    endedBy       TEXT                  -- so "held by X until it died" stays answerable
+  );
+  CREATE INDEX claims_by_state   ON claims(state);          -- the renew/lapse sweep reads live rows
+  CREATE INDEX claims_by_project ON claims(project, state); -- GET /api/claims?project= — the
+                                                            -- coordinator asks before splitting work
+  CREATE INDEX claims_by_run     ON claims(runId);          -- run close releases by runId — the
+                                                            -- runs_by_session precedent, one wave on
+
+  -- PATHS ARE A CHILD TABLE, NOT A JSON COLUMN ON claims, and the choice is
+  -- single-definition: the path set must be queryable per (project, path) for
+  -- the CAS read and constrainable for the backstop index, and a JSON copy
+  -- beside this table would be two homes for one fact. A claim's paths are a
+  -- SET, acquired all-or-nothing (D12) — the route inserts every row or none,
+  -- inside the same tx() as the conflict read.
+  --
+  -- \`live\` mirrors exactly ONE BIT of the parent's state — the partial-index
+  -- predicate's input, which SQLite cannot evaluate across a join. Written in
+  -- the SAME tx() as every claims.state transition (store.ts, part B, whose
+  -- suite carries the desync mutant). Not a second authority: the four-word
+  -- vocabulary keeps its single home on claims.state. Ending a claim flips
+  -- live to 0 and deletes nothing — path history outlives the claim exactly
+  -- as the claim row outlives its lease.
+  CREATE TABLE claim_paths (
+    claimId INTEGER NOT NULL REFERENCES claims(id),
+    project TEXT NOT NULL,
+    path    TEXT NOT NULL,              -- normalized by claims.ts (normalizeClaimPath): relative,
+                                        -- no trailing slash, no dot segments. '.' and '' are
+                                        -- refused upstream — claiming the whole repo IS the wedge
+    live    INTEGER NOT NULL DEFAULT 1
+  );
+  -- THE D11 BACKSTOP. Deliberately UNABLE to express the directory-prefix
+  -- containment rule (shared/ vs shared/api.ts) — that is the in-transaction
+  -- read's job, and this index exists so losing that read is loud, not silent.
+  CREATE UNIQUE INDEX claim_one_owner    ON claim_paths(project, path) WHERE live = 1;
+  CREATE INDEX        claim_paths_by_claim ON claim_paths(claimId);
+
+  -- D13: the allocator's record. One row per issued number, forever. state:
+  -- allocated|landed|stale — 'landed' means the number appears in a plan in
+  -- the MAIN checkout (sweepLedgerReconcile, part B), the signal the bb47c9e
+  -- incident lacked; 'stale' (7 days, never landed) is reported and NEVER
+  -- reclaimed. Read back through the L0 guard, never a cast.
+  CREATE TABLE ledger_alloc (
+    project   TEXT NOT NULL,
+    n         INTEGER NOT NULL,
+    title     TEXT NOT NULL,
+    claimedBy TEXT NOT NULL,
+    at        INTEGER NOT NULL,
+    state     TEXT NOT NULL,
+    PRIMARY KEY (project, n)
+  );
+
+  -- D13: the self-seeded floor. THE FLOOR ONLY EVER RISES (store method, part
+  -- B, enforced there and mutant-tested there); until a row exists here,
+  -- allocation answers 409 not-seeded — openCoordDb's own "refuse to start
+  -- rather than open empty" rule, one level up. floor = max(D-n seen in
+  -- docs/superpowers/{plans,specs}) + LEDGER_SEED_GAP, because numbers
+  -- allocated but not yet written into any plan are invisible to the scan,
+  -- and re-issuing one IS the bb47c9e failure. evidence names the file and
+  -- the number the seed was measured from.
+  CREATE TABLE ledger_floor (
+    project  TEXT PRIMARY KEY,
+    floor    INTEGER NOT NULL,
+    evidence TEXT NOT NULL,
+    at       INTEGER NOT NULL
+  );
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

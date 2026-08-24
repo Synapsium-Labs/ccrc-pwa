@@ -1980,7 +1980,7 @@ single home on `claims.state`.
 
 **Steps:**
 
-- [ ] 1. Write the failing test. Append to `server/test/coord-db.test.ts` (after line 427, the
+- [x] 1. Write the failing test. Append to `server/test/coord-db.test.ts` (after line 427, the
   closing `});` of the migration-2 describe — the file currently ends at line 428):
 
   ```ts
@@ -2065,14 +2065,14 @@ single home on `claims.state`.
   });
   ```
 
-- [ ] 2. Run it, expect FAIL:
+- [x] 2. Run it, expect FAIL:
   `cd server && ./node_modules/.bin/vitest run test/coord-db.test.ts`
   The new describe's first test fails with `expected 3 to be 4` (openCoordDb finds nothing past
   migration index 2), and the four table tests fail with `no such table: claims` /
   `no such table: ledger_alloc` / `no such table: ledger_floor`. Every pre-existing test stays
   green — nothing has changed yet.
 
-- [ ] 3. Write the migration. In `server/src/coord/schema.ts`, insert between line 421's closing
+- [x] 3. Write the migration. In `server/src/coord/schema.ts`, insert between line 421's closing
   `` `, `` and line 422's `];`:
 
   ```ts
@@ -2210,11 +2210,11 @@ single home on `claims.state`.
   `,
   ```
 
-- [ ] 4. Run the suite again: `./node_modules/.bin/vitest run test/coord-db.test.ts`. The NEW
+- [x] 4. Run the suite again: `./node_modules/.bin/vitest run test/coord-db.test.ts`. The NEW
   describe is green; exactly three OLD assertions are now red — :330 (`expected 4 to be 3`), :331
   (`expected 4 to be 3`), :376 (`expected 4 to be 3`). That red is the proof the pins were live.
 
-- [ ] 5. Re-derive the pins (never nudge blindly — each one's premise is "the version openCoordDb
+- [x] 5. Re-derive the pins (never nudge blindly — each one's premise is "the version openCoordDb
   reaches", which is now 4):
   - :330 `.toBe(3)` → `.toBe(4)`
   - :331 `expect(COORD_SCHEMA_VERSION).toBe(3);` → `expect(COORD_SCHEMA_VERSION).toBe(4);`
@@ -2222,23 +2222,23 @@ single home on `claims.state`.
   - :271–272's comment `// Isolated from openCoordDb deliberately. MIGRATIONS.length === 3 since`
     → `// Isolated from openCoordDb deliberately. MIGRATIONS.length === 4 since`
 
-- [ ] 6. Run, expect PASS: `./node_modules/.bin/vitest run test/coord-db.test.ts` — all green.
+- [x] 6. Run, expect PASS: `./node_modules/.bin/vitest run test/coord-db.test.ts` — all green.
 
-- [ ] 7. Mutation ceremony 1 — the partial predicate is load-bearing. In the new migration, change
+- [x] 7. Mutation ceremony 1 — the partial predicate is load-bearing. In the new migration, change
   `WHERE live = 1` on `claim_one_owner` to nothing (a full unique index). Run the suite: expect
   EXACTLY ONE red — "a LAPSED claim frees its paths…" (`UNIQUE constraint failed` where a re-claim
   must succeed). Revert.
 
-- [ ] 8. Mutation ceremony 2 — the backstop key is load-bearing. Change
+- [x] 8. Mutation ceremony 2 — the backstop key is load-bearing. Change
   `PRIMARY KEY (project, n)` on `ledger_alloc` to `PRIMARY KEY (project, n, at)`. Run: expect
   EXACTLY ONE red — "ledger_alloc: PRIMARY KEY (project, n)…" (the duplicate insert no longer
   throws). Revert.
 
-- [ ] 9. Run the neighboring standing guards, which must stay green WITH NO EDIT — that is itself an
+- [x] 9. Run the neighboring standing guards, which must stay green WITH NO EDIT — that is itself an
   assertion of this task: `./node_modules/.bin/vitest run test/single-definition.test.ts
   test/lifecycle-replay.test.ts test/coord-store.test.ts`.
 
-- [ ] 10. Commit:
+- [x] 10. Commit:
 
   ```bash
   cd server && git add src/coord/schema.ts test/coord-db.test.ts
