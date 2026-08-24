@@ -8056,7 +8056,7 @@ git commit -m "test(wave7): the ledger's scanners — collisions grandfathered b
 
 **Steps:**
 
-- [ ] Write the test:
+- [x] Write the test:
 
 ```ts
 // Route-parity's ground truth (build 9 D17). `coordinator-skill.test.ts:158`
@@ -8144,20 +8144,20 @@ describe('all coordination routes live in coord/routes.ts (D17)', () => {
 });
 ```
 
-- [ ] Run, expect PASS: `./node_modules/.bin/vitest run test/coord-routes-single-file.test.ts`.
-- [ ] **Mutation ceremony (the stray registration).** In `server/src/server.ts`, add
+- [x] Run, expect PASS: `./node_modules/.bin/vitest run test/coord-routes-single-file.test.ts`.
+- [x] **Mutation ceremony (the stray registration).** In `server/src/server.ts`, add
   `app.post('/api/claims/echo', async () => ({ ok: true }));` anywhere inside `buildServer`.
   Run: expect 1 red (`no file but coord/routes.ts…`). Revert
   (`git checkout -- server/src/server.ts`), green.
-- [ ] **Mutation ceremony (the DELETE).** In `server/src/coord/routes.ts`, add
+- [x] **Mutation ceremony (the DELETE).** In `server/src/coord/routes.ts`, add
   `app.delete('/api/claims/:id', async () => ({ ok: true }));` at the end of
   `registerCoordRoutes`. Run: expect at least 1 red (`get and post ONLY`). Revert the line,
   green.
-- [ ] **Mutation ceremony (the floor).** Comment out the `GET /api/ledger` registration. Run:
+- [x] **Mutation ceremony (the floor).** Comment out the `GET /api/ledger` registration. Run:
   expect the coverage-floor test red (`GET /api/ledger was not found`), and note
   `test/auth-gate.test.ts` and `test/coordinator-skill.test.ts` red too — three independent
   detectors on one deletion is the intended overlap. Revert, green.
-- [ ] Commit:
+- [x] Commit:
 
 ```bash
 git add server/test/coord-routes-single-file.test.ts
