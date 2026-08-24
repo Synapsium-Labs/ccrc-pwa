@@ -8183,7 +8183,7 @@ git commit -m "test(wave7): one file registers the coordination surface, and onl
 
 **Steps:**
 
-- [ ] Write the test:
+- [x] Write the test:
 
 ```ts
 // Wave 7's cross-cutting suite: the 409 envelope is not decoration — this
@@ -8362,25 +8362,25 @@ describe('ClaimRefuseCode, producer direction', () => {
 });
 ```
 
-- [ ] Run it, expect PASS on a tree where Tasks 18-20 and Wave 0 landed; if the two Wave 0 cases
+- [x] Run it, expect PASS on a tree where Tasks 18-20 and Wave 0 landed; if the two Wave 0 cases
   FAIL with 202 where 409/429 is expected, STOP — Wave 0's quotas are missing or regressed, and
   this suite has just done its job early (do not weaken the assertions; fix the Wave 0 seam).
   `./node_modules/.bin/vitest run test/claims-envelope.test.ts`
-- [ ] **Totality ceremony (the `default: never` guards are compile-time, prove it).** In
+- [x] **Totality ceremony (the `default: never` guards are compile-time, prove it).** In
   `server/src/coord/store.ts`, add a fourth failure arm to `ClaimEndOutcome`:
   `| { ok: false; kind: 'probe-arm' }`. Run `./node_modules/.bin/tsc --noEmit` from `server/`:
   expect a compile error in `coord/routes.ts` at `sendClaimEndOutcome`'s
   `const _exhaustive: never = r` (TS2322 — the new member is not handled), which is exactly the
   promise: a union member added tomorrow cannot reach a request unmapped. Revert the arm,
   re-run tsc, clean.
-- [ ] Same ceremony for the acquire map: add `| { ok: false; kind: 'probe-arm' }` to
+- [x] Same ceremony for the acquire map: add `| { ok: false; kind: 'probe-arm' }` to
   `AcquireClaimsResult`, expect the same TS2322 in the `POST /api/claims` switch's default arm,
   revert, clean.
-- [ ] Run the full server suite in the foreground once, `cd server && npm run test`
+- [x] Run the full server suite in the foreground once, `cd server && npm run test`
   (timeout ≥ 600000 ms) — the wave-7 route surface touches auth-gate, coordinator-skill,
   coord-pause, mail-routes and the four new suites, and this is the checkpoint that all of them
   agree. Re-run any of the five known load flakes in isolation before calling a failure real.
-- [ ] Commit:
+- [x] Commit:
 
 ```bash
 git add server/test/claims-envelope.test.ts
