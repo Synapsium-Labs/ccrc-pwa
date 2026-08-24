@@ -133,6 +133,21 @@ describe('renewClaims / lapseClaims on the FleetWatcher tick', () => {
     expect(h.coord.activeClaims()[0]!.expiresAt).toBe(NOW + CLAIM_LEASE_MS + 1 + CLAIM_LEASE_MS);
   });
 
+  it('DOUBT, END TO END: an unmeasurable holder rides through lease expiry AND the next attempt', () => {
+    // The composed property the two halves guarantee together: the sweep
+    // renews on doubt (D12), so a later claim attempt's in-tx expiry finds a
+    // fresh lease and the doubted holder still wins the conflict.
+    const h = fixture();
+    h.claim();
+    at(NOW + CLAIM_LEASE_MS + 1);
+    h.watcher.renewClaims([{ id: 'demo-quiet-basin', status: 'idle', unmeasured: ['uuid'] }]);
+    const rival = h.coord.claimAttempt({
+      project: 'demo', paths: ['server/src/io.ts'], sessionId: 'demo-calm-mesa',
+      uuid: 'u-2', runId: null, intent: 'rival', now: NOW + CLAIM_LEASE_MS + 2,
+    });
+    expect(rival).toMatchObject({ ok: false, why: 'conflict' });
+  });
+
   it("a GONE holder lapses at the STANDING expiresAt — 'session-gone', not at once", () => {
     const h = fixture();
     h.claim();

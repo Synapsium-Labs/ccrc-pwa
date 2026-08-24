@@ -5857,7 +5857,7 @@ the full ceremony table.
 
 **Steps:**
 
-- [ ] Append to `server/test/claims-store.test.ts`:
+- [x] Append to `server/test/claims-store.test.ts`:
 
 ```ts
 describe('LAPSE, NOT DELETE — the invariant, pinned against the raw table', () => {
@@ -5880,11 +5880,11 @@ describe('LAPSE, NOT DELETE — the invariant, pinned against the raw table', ()
 });
 ```
 
-- [ ] Run, expect PASS (the invariant shipped in Task 12; this pins it against the raw table so a
+- [x] Run, expect PASS (the invariant shipped in Task 12; this pins it against the raw table so a
   future "tidy the lapsed rows away" edit cannot pass): 
   `cd server && ./node_modules/.bin/vitest run test/claims-store.test.ts`.
 
-- [ ] Append to `server/test/claim-sweep.test.ts`, inside the renew/lapse describe:
+- [x] Append to `server/test/claim-sweep.test.ts`, inside the renew/lapse describe:
 
 ```ts
   it('DOUBT, END TO END: an unmeasurable holder rides through lease expiry AND the next attempt', () => {
@@ -5903,9 +5903,9 @@ describe('LAPSE, NOT DELETE — the invariant, pinned against the raw table', ()
   });
 ```
 
-- [ ] Run, expect PASS: `./node_modules/.bin/vitest run test/claim-sweep.test.ts`.
+- [x] Run, expect PASS: `./node_modules/.bin/vitest run test/claim-sweep.test.ts`.
 
-- [ ] **The mutation sweep.** For each row: plant the mutant, run the named suite
+- [x] **The mutation sweep.** For each row: plant the mutant, run the named suite
   (`./node_modules/.bin/vitest run test/<file>` from `server/`, foreground), confirm EXACTLY the
   expected reds, revert, re-run, confirm green. Do them one at a time — two live mutants make the
   red counts unattributable.
@@ -5925,19 +5925,19 @@ describe('LAPSE, NOT DELETE — the invariant, pinned against the raw table', ()
   | 11 | `watch.ts` `sweepLedgerReconcile`: change `` `\\bD-${a.n}\\b` `` to `` `D-${a.n}` `` | `ledger-sweep.test.ts` | "D-261 does not land D-2611" (1) |
   | 12 | `store.ts` `markLanded`: drop `AND state = 'allocated'` | `ledger-store.test.ts` | "markLanded stamps … once" (re-stamp assertion) (1) |
 
-- [ ] Full-section regression, foreground, timeout ≥ 600000 ms:
+- [x] Full-section regression, foreground, timeout ≥ 600000 ms:
   `./node_modules/.bin/vitest run test/claims-store.test.ts test/claim-sweep.test.ts test/ledgerlog.test.ts test/ledger-store.test.ts test/ledger-race.test.ts test/ledger-sweep.test.ts test/divergence.test.ts test/divergence-sweep.test.ts test/coord-store.test.ts test/single-definition.test.ts test/coordinator-skill.test.ts`
   — expect PASS. (`single-definition` proves no constant grew a second copy;
   `coordinator-skill` proves this section registered no route.)
 
-- [ ] Typecheck: `npm run test -- --run test/typecheck-tests.test.ts` — if this suite flakes under
+- [x] Typecheck: `npm run test -- --run test/typecheck-tests.test.ts` — if this suite flakes under
   load, re-run in isolation before calling it broken (known load flake).
 
-- [ ] Full server suite in the foreground: `cd server && npm run test`. Known load flakes
+- [x] Full server suite in the foreground: `cd server && npm run test`. Known load flakes
   (`ccd-ws-gc`, `pr-sweep`, `session-hook`, `typecheck-tests`, `ccd-session-state`) re-run in
   isolation before being called breaks; CI on the quiet box is the arbiter.
 
-- [ ] Commit (body records mutant row 8's finding):
+- [x] Commit (body records mutant row 8's finding):
   `git add server/test/claims-store.test.ts server/test/claim-sweep.test.ts && git commit -m "test(w7): a lapsed claim is history, not absence — and every guard meets its mutant"`
 # Build 9b — Section 5: Wave 7 part C — the seven routes, and the detector suites (Tasks 18–24)
 

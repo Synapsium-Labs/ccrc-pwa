@@ -203,3 +203,22 @@ describe('CoordStore.claimRelease / claimBreak', () => {
     ).run()).toThrow(/UNIQUE|claim_one_owner/i);
   });
 });
+
+describe('LAPSE, NOT DELETE — the invariant, pinned against the raw table', () => {
+  it('no path through expiry ever removes a row: count(*) is monotonic', () => {
+    const s = store();
+    attempt(s);                                             // row 1
+    attempt(s, { sessionId: 'demo-calm-mesa', uuid: 'u-2',  // row 1 lapses, row 2 lands
+                 now: NOW + CLAIM_HARD_CAP_MS + 1 });
+    const count = (): number =>
+      (s.db.prepare('SELECT count(*) AS c FROM claims').get() as { c: number }).c;
+    expect(count()).toBe(2);
+    const all = s.claimsForProject('demo', true);
+    expect(all[0]).toMatchObject({ state: 'lapsed', endedBy: 'hard-cap',
+      endedAt: NOW + CLAIM_HARD_CAP_MS + 1 });
+    // and `?all=1` still answers "held by X until it died": the holder,
+    // the intent and the lease bounds all survive the lapse
+    expect(all[0]).toMatchObject({ heldBy: 'demo-quiet-basin',
+      intent: 'measured-read seam', createdAt: NOW });
+  });
+});
