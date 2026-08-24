@@ -1351,33 +1351,62 @@ export class CoordStore {
   }
 
   /**
-   * `mail_deliveries.replayCount + 1`, returning the new value (review
-   * finding 20). Called by the sweep AFTER `markDelivered`, and ONLY when
-   * the row it read was already `delivered` before this send — i.e. this
-   * send was a REPLAY, not the first delivery. Kept independent of
-   * `attempts` (`MAIL_MAX_ATTEMPTS`'s own docstring: SEND FAILURES only) on
-   * purpose: without a separate counter, spec:174-177's replay-until-ack has
-   * no ceiling at all once a delivery succeeds even once — `MAIL_COOLDOWN_MS`
-   * only SPACES the injections, it was never a bound on their number, and a
-   * delivery that keeps succeeding can never fail its way into
-   * `MAIL_MAX_ATTEMPTS`. This is the ceiling that lets a delivery no one
-   * ever acks eventually reach `rejected('undeliverable')` — the spec's own
-   * terminal state, otherwise structurally unreachable for exactly the
-   * deliveries that succeed.
+   * `mail_deliveries.replayCount + 1`, answered as a STATE (review finding
+   * 20; union — Build 9b wave 0, D10 hole 4). Called by the sweep AFTER
+   * `markDelivered`, and ONLY when the row it read was already `delivered`
+   * before this send — i.e. this send was a REPLAY, not the first delivery.
+   * Kept independent of `attempts` (`MAIL_MAX_ATTEMPTS`'s own docstring:
+   * SEND FAILURES only) on purpose: without a separate counter,
+   * spec:174-177's replay-until-ack has no ceiling at all once a delivery
+   * succeeds even once — `MAIL_COOLDOWN_MS` only SPACES the injections, it
+   * was never a bound on their number, and a delivery that keeps succeeding
+   * can never fail its way into `MAIL_MAX_ATTEMPTS`. This is the ceiling
+   * that lets a delivery no one ever acks eventually reach
+   * `rejected('undeliverable')` — the spec's own terminal state, otherwise
+   * structurally unreachable for exactly the deliveries that succeed.
+   *
+   * `AND state NOT IN ('acked','rejected')` — the same guard every other
+   * writer of this table carries (`markDelivered`/`backOff`/`rejectDelivery`
+   * above and below), closing the same seconds-to-half-a-minute window in
+   * which an ack or a park lands from a separate code path between the
+   * sweep's read and this write. And the RETURN is a union, not a bare
+   * number, because the guard alone would hand the caller the row's
+   * unchanged count — a value that reads as "not yet at the ceiling" for a
+   * row already parked: two conditions, one value, at a seam (D10: "the
+   * union is the fix; the guard alone is not"). `{state:'terminal'}` also
+   * answers for a row that does not exist at all — collapsed deliberately
+   * and stated here rather than papered over: nothing in this tree DELETEs
+   * from `mail_deliveries` (D10's own measurement — "bound the producer,
+   * never the record"), and the single caller's handling of the two is
+   * identical (skip the ceiling check), so the collapse is of two conditions
+   * no caller distinguishes.
    */
-  bumpReplayCount(id: number): number {
-    this.db.prepare('UPDATE mail_deliveries SET replayCount = replayCount + 1 WHERE id = ?').run(id);
-    return (this.db.prepare('SELECT replayCount FROM mail_deliveries WHERE id = ?')
-      .get(id) as { replayCount: number }).replayCount;
+  bumpReplayCount(id: number): { state: 'counted'; replayCount: number } | { state: 'terminal' } {
+    const res = this.db.prepare(
+      "UPDATE mail_deliveries SET replayCount = replayCount + 1 WHERE id = ? AND state NOT IN ('acked','rejected')",
+    ).run(id);
+    if (res.changes === 0) return { state: 'terminal' };
+    return {
+      state: 'counted',
+      replayCount: (this.db.prepare('SELECT replayCount FROM mail_deliveries WHERE id = ?')
+        .get(id) as { replayCount: number }).replayCount,
+    };
   }
 
   /** The `UserPromptSubmit` edge (`hookstate.ts:23-34`). Deliberately does
    *  NOT touch `deliveredAt` — a REPLAY re-dates the clock through its own
    *  fresh `markDelivered` call, and `dueDeliveries`'s `MAX(...)` above is
    *  what combines the two rather than either writer clobbering the other's
-   *  column. */
+   *  column. `AND state NOT IN ('acked','rejected')` (Build 9b wave 0, D10
+   *  hole 3): shielded until now only by its caller's query filter
+   *  (`deliveredUnacked()` selects `delivered` rows) — a filter is a
+   *  courtesy of one caller, a guard is a property of the row; the same
+   *  ack-or-park-lands-mid-window race every sibling writer here already
+   *  guards against. */
   markIngested(id: number, at: number): void {
-    this.db.prepare('UPDATE mail_deliveries SET ingestedAt = ? WHERE id = ?').run(at, id);
+    this.db.prepare(
+      "UPDATE mail_deliveries SET ingestedAt = ? WHERE id = ? AND state NOT IN ('acked','rejected')",
+    ).run(at, id);
   }
 
   /** false when already acked, absent, or PARKED — an ack is idempotent, but

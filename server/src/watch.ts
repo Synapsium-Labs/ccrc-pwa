@@ -2152,8 +2152,13 @@ export class FleetWatcher {
           // docstring for why `attempts` cannot serve this role). The FIRST
           // delivery (`d.deliveredAt === null`) never counts here.
           if (d.deliveredAt !== null) {
-            const replays = store.bumpReplayCount(d.id);
-            if (replays >= MAIL_REPLAY_MAX_ATTEMPTS) {
+            // `{state:'terminal'}` — an ack or a park landed on this row from
+            // a separate code path while this send was in flight (D10). The
+            // row is decided; there is no count to weigh against the ceiling,
+            // and re-parking a terminal row is exactly what rejectDelivery's
+            // own guard exists to refuse.
+            const bumped = store.bumpReplayCount(d.id);
+            if (bumped.state === 'counted' && bumped.replayCount >= MAIL_REPLAY_MAX_ATTEMPTS) {
               store.rejectDelivery(d.id, 'undeliverable', MAIL_REPLAY_CEILING_ERROR);
             }
           }

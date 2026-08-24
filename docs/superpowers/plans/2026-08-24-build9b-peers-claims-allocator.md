@@ -294,7 +294,7 @@ and updated in this task.
 
 **Steps:**
 
-- [ ] Find EVERY caller before changing the return type (the union makes each one a compile
+- [x] Find EVERY caller before changing the return type (the union makes each one a compile
   error until updated — that is the point):
 
   ```bash
@@ -307,7 +307,7 @@ and updated in this task.
   void return is unchanged, so no edit there). If the grep shows anything else, update it in the
   same pattern as the `watch.ts` edit below.
 
-- [ ] Write the failing tests. Append to `server/test/mail-hardening.test.ts` (inside the file,
+- [x] Write the failing tests. Append to `server/test/mail-hardening.test.ts` (inside the file,
   after the Task 1 describe; the imports and helpers at the top are already there):
 
   ```ts
@@ -380,7 +380,7 @@ and updated in this task.
   });
   ```
 
-- [ ] Run it, expect FAIL — 4 failed, 3 passed (the two Task 1 tests and
+- [x] Run it, expect FAIL — 4 failed, 3 passed (the two Task 1 tests and
   `markIngested still stamps a live delivered row` pass; both markIngested-guard tests fail with
   `expected { ingestedAt: 1000000000100 } to deeply equal { ingestedAt: null }`; both
   bumpReplayCount tests fail because the method returns a bare `1`, and the terminal test
@@ -391,7 +391,7 @@ and updated in this task.
   cd server && ./node_modules/.bin/vitest run test/mail-hardening.test.ts
   ```
 
-- [ ] Write the implementation, both store methods AND the `watch.ts` caller in one edit pass
+- [x] Write the implementation, both store methods AND the `watch.ts` caller in one edit pass
   (the union does not compile against the old caller — that is by design; do not commit between).
   In `server/src/coord/store.ts` replace `:1345-1364` (the `bumpReplayCount` docstring and
   method) with:
@@ -477,13 +477,13 @@ and updated in this task.
           }
   ```
 
-- [ ] Run, expect PASS (7 passed):
+- [x] Run, expect PASS (7 passed):
 
   ```bash
   cd server && ./node_modules/.bin/vitest run test/mail-hardening.test.ts
   ```
 
-- [ ] Mutant ceremony, one per guard:
+- [x] Mutant ceremony, one per guard:
   1. In `markIngested`, delete `AND state NOT IN ('acked','rejected')`. Run
      `test/mail-hardening.test.ts`: expect **2 failed** (the parked and acked markIngested tests).
      Revert; re-run; 7 passed.
@@ -492,7 +492,7 @@ and updated in this task.
      so the method answers `{state:'counted',replayCount:1}` and the counter assertion also breaks
      inside the same test). Revert; re-run; 7 passed.
 
-- [ ] Regression sweep — the sweep lane's own suites must not notice the union (behavior for live
+- [x] Regression sweep — the sweep lane's own suites must not notice the union (behavior for live
   rows is unchanged; only the shape moved):
 
   ```bash
@@ -502,7 +502,7 @@ and updated in this task.
 
   All green (isolation rule for `typecheck-tests` as in Task 1).
 
-- [ ] Commit:
+- [x] Commit:
 
   ```bash
   cd <repo-root> && git add server/src/coord/store.ts server/src/watch.ts server/test/mail-hardening.test.ts && git commit -m "server(wave0): terminal deliveries refuse the late edge; bumpReplayCount answers a state, never a bare count

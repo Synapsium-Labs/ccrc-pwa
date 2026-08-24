@@ -39,3 +39,71 @@ describe('hasOutstandingMail: the runId IS ? arm (D10 hole 1)', () => {
     expect(s.hasOutstandingMail(null, 'demo-quiet-mesa', 'wave-brief')).toBe(false);
   });
 });
+
+describe('terminality guards: markIngested and bumpReplayCount (D10 holes 3/4)', () => {
+  const now = 1_000_000_000_000;
+
+  /** One mail, one delivery, driven to `delivered` — the state both
+   *  writers under test are only ever legitimately called in. */
+  const deliveredRow = (s: CoordStore): { id: number } => {
+    const r = openRun(s);
+    const m = s.insertMail({ fromId: 'coordinator', fromUuid: 'coordinator',
+                             toId: 'demo-quiet-mesa', runId: r.id, kind: 'status',
+                             subject: 'wave-brief', body: 'go', artifacts: [] });
+    const d = s.queueDelivery(m.id, 'demo-quiet-mesa', '<mail>go</mail>');
+    s.markDelivered(d.id, now);
+    return d;
+  };
+
+  it('markIngested leaves a PARKED row alone — the edge is not for a delivery already decided', () => {
+    const s = store();
+    const d = deliveredRow(s);
+    s.rejectDelivery(d.id, 'undeliverable', 'parked at the ceiling');
+    s.markIngested(d.id, now + 100);
+    expect(s.db.prepare('SELECT ingestedAt FROM mail_deliveries WHERE id = ?').get(d.id))
+      .toEqual({ ingestedAt: null });
+  });
+
+  it('markIngested leaves an ACKED row alone', () => {
+    const s = store();
+    const d = deliveredRow(s);
+    expect(s.markAcked(d.id, now + 1)).toBe(true);
+    s.markIngested(d.id, now + 100);
+    expect(s.db.prepare('SELECT ingestedAt FROM mail_deliveries WHERE id = ?').get(d.id))
+      .toEqual({ ingestedAt: null });
+  });
+
+  it('markIngested still stamps a live delivered row', () => {
+    const s = store();
+    const d = deliveredRow(s);
+    s.markIngested(d.id, now + 100);
+    expect(s.db.prepare('SELECT ingestedAt FROM mail_deliveries WHERE id = ?').get(d.id))
+      .toEqual({ ingestedAt: now + 100 });
+  });
+
+  it('bumpReplayCount counts a live replay, as a state and a number', () => {
+    const s = store();
+    const d = deliveredRow(s);
+    expect(s.bumpReplayCount(d.id)).toEqual({ state: 'counted', replayCount: 1 });
+    expect(s.bumpReplayCount(d.id)).toEqual({ state: 'counted', replayCount: 2 });
+  });
+
+  it('bumpReplayCount answers {state:"terminal"} for a parked or acked row and leaves the counter alone', () => {
+    // The union is the fix, not the guard (D10): a guard that still
+    // returned a bare unchanged number would read as "not yet at the
+    // ceiling" for a row already parked — two conditions, one value, at a
+    // seam.
+    const s = store();
+    const parked = deliveredRow(s);
+    s.rejectDelivery(parked.id, 'undeliverable', 'parked at the ceiling');
+    expect(s.bumpReplayCount(parked.id)).toEqual({ state: 'terminal' });
+    expect(s.db.prepare('SELECT replayCount FROM mail_deliveries WHERE id = ?').get(parked.id))
+      .toEqual({ replayCount: 0 });
+
+    const acked = deliveredRow(s);
+    expect(s.markAcked(acked.id, now + 1)).toBe(true);
+    expect(s.bumpReplayCount(acked.id)).toEqual({ state: 'terminal' });
+    expect(s.db.prepare('SELECT replayCount FROM mail_deliveries WHERE id = ?').get(acked.id))
+      .toEqual({ replayCount: 0 });
+  });
+});
