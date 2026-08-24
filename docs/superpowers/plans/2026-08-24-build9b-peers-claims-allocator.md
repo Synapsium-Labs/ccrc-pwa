@@ -4779,7 +4779,7 @@ export type AllocateResult =
 
 **Steps:**
 
-- [ ] Write the test file `server/test/ledger-race.test.ts`:
+- [x] Write the test file `server/test/ledger-race.test.ts`:
 
 ```ts
 // Spec §3/§4: "Two sessions race the allocator — serialised by BEGIN
@@ -4863,13 +4863,13 @@ describe('the allocator under fire', () => {
 });
 ```
 
-- [ ] Run, expect PASS on the first and third tests and FAIL on the second — the trigger test
+- [x] Run, expect PASS on the first and third tests and FAIL on the second — the trigger test
   fails with `expected [] to deeply equal []`? No: it fails earlier, because `allocateDeviations`
   as shipped in Task 13 already wraps the batch in `tx()`, so ALL three assertions pass. **Expected
   first result: 3/3 PASS.** This task's red evidence is the mutation ceremony below — the tests are
   written against an already-correct implementation, so the ceremony is what proves they can fail.
 
-- [ ] **Mutation ceremony, mutant 1 — lose the transaction.** In `server/src/coord/store.ts`,
+- [x] **Mutation ceremony, mutant 1 — lose the transaction.** In `server/src/coord/store.ts`,
   `allocateDeviations`: replace `return tx(this.db, () => {` with
   `return ((): AllocateResult => {` and the closing `});` of that call with `})();`. Run
   `./node_modules/.bin/vitest run test/ledger-race.test.ts` — expect exactly 1 FAIL: "A MID-BATCH
@@ -4878,17 +4878,17 @@ describe('the allocator under fire', () => {
   is committed, so it is: re-apply the two lines by hand or `git diff` to confirm only those two
   lines changed, then revert them). Run again, expect 3/3 PASS.
 
-- [ ] **Mutation ceremony, mutant 2 — lose the PRIMARY KEY.** In `server/src/coord/schema.ts`'s
+- [x] **Mutation ceremony, mutant 2 — lose the PRIMARY KEY.** In `server/src/coord/schema.ts`'s
   `MIGRATIONS[3]` entry, replace the line `PRIMARY KEY (project, n)` with `CHECK (n > 0)` (keeps
   the DDL parseable, loses the constraint). Run the suite — expect exactly 1 FAIL: "THE BACKSTOP IS
   THE REAL PRIMARY KEY" (`expected [Function] to throw an error`). Revert, run, expect 3/3 PASS.
   (Migration edits are safe to mutate here because every database this suite opens is a fresh tmp
   file rebuilt from `MIGRATIONS`; the live server DB never sees the mutant.)
 
-- [ ] Run the neighbours: `./node_modules/.bin/vitest run test/ledger-store.test.ts test/coord-db.test.ts`
+- [x] Run the neighbours: `./node_modules/.bin/vitest run test/ledger-store.test.ts test/coord-db.test.ts`
   — expect PASS.
 
-- [ ] Commit:
+- [x] Commit:
   `git add server/test/ledger-race.test.ts && git commit -m "test(w7): twenty racers, twenty contiguous numbers — and the backstop stays loud"`
 
 ---
