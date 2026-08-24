@@ -7358,7 +7358,7 @@ git commit -m "server(wave7): the claims door — all-or-nothing CAS, a 409 that
 
 **Steps:**
 
-- [ ] Write the failing test, `server/test/ledger-routes.test.ts`:
+- [x] Write the failing test, `server/test/ledger-routes.test.ts`:
 
 ```ts
 // The allocator's door (build 9 D13): self-seeds by sweep, then fails shut —
@@ -7456,8 +7456,8 @@ describe('the ledger routes', () => {
 });
 ```
 
-- [ ] Run it, expect FAIL: `./node_modules/.bin/vitest run test/ledger-routes.test.ts` — 404s.
-- [ ] Write the two routes in `server/src/coord/routes.ts`, after `GET /api/claims`:
+- [x] Run it, expect FAIL: `./node_modules/.bin/vitest run test/ledger-routes.test.ts` — 404s.
+- [x] Write the two routes in `server/src/coord/routes.ts`, after `GET /api/claims`:
 
 ```ts
   /**
@@ -7531,8 +7531,8 @@ describe('the ledger routes', () => {
   });
 ```
 
-- [ ] Run, expect PASS: `./node_modules/.bin/vitest run test/ledger-routes.test.ts`.
-- [ ] `gate.ts`: two `EXEMPT` entries —
+- [x] Run, expect PASS: `./node_modules/.bin/vitest run test/ledger-routes.test.ts`.
+- [x] `gate.ts`: two `EXEMPT` entries —
 
 ```ts
   ['POST /api/ledger/deviations',
@@ -7544,7 +7544,7 @@ describe('the ledger routes', () => {
     'box-token gated (requireMailToken), the GET /api/mail convention: no attribution to check'],
 ```
 
-- [ ] Two naming-stub lines in wave-lifecycle.md's Build 9 section:
+- [x] Two naming-stub lines in wave-lifecycle.md's Build 9 section:
 
 ```md
 - `POST /api/ledger/deviations` — allocate the program's D-number block at run-open; never
@@ -7552,7 +7552,7 @@ describe('the ledger routes', () => {
 - `GET /api/ledger` — the allocation record and the floor for a project.
 ```
 
-- [ ] `server/test/auth-gate.test.ts`: line 194 → `toBe(21)`; line 195 → `toBe(66)`; line 198 →
+- [x] `server/test/auth-gate.test.ts`: line 194 → `toBe(21)`; line 195 → `toBe(66)`; line 198 →
   `toBe(63)`; the snapshot list gains `'GET /api/ledger',` (after `'GET /api/claims',`) and
   `'POST /api/ledger/deviations',` (after `'POST /api/claims/:id/release',`) — final list, all
   24 entries in sorted order:
@@ -7589,12 +7589,12 @@ describe('the ledger routes', () => {
   (comment arithmetic → 24); the box-token-lane list gains `'GET /api/ledger',` and
   `'POST /api/ledger/deviations',` in sort position (title `FIFTEEN` → `SEVENTEEN`); `gated`
   stays 40 (66 − 3 − 23) — update the comment's arithmetic only.
-- [ ] Run, expect PASS:
+- [x] Run, expect PASS:
   `./node_modules/.bin/vitest run test/ledger-routes.test.ts test/auth-gate.test.ts test/coordinator-skill.test.ts test/mail-routes.test.ts`
-- [ ] **Mutation ceremony (fails shut, not open).** In the route, replace the `not-seeded` arm's
+- [x] **Mutation ceremony (fails shut, not open).** In the route, replace the `not-seeded` arm's
   `409` with `reply.code(201).send({ ok: true, numbers: [], floor: 0 })` (the "helpful" mutant).
   Run `test/ledger-routes.test.ts`: expect 1 red (`refuses 409 not-seeded`). Revert, green.
-- [ ] Commit:
+- [x] Commit:
 
 ```bash
 git add server/src/coord/routes.ts server/src/auth/gate.ts server/test/ledger-routes.test.ts \

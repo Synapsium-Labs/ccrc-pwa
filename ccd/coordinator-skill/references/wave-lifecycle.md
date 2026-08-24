@@ -484,3 +484,6 @@ route-parity suite binds each registration to this corpus from the commit that r
   names every holder and hands each address.
 - `POST /api/claims/:id/release` — release on the final merge, with the claimant's own attribution.
 - `GET /api/claims` — the live claim table for a project (`?all=1` includes ended rows).
+- `POST /api/ledger/deviations` — allocate the program's D-number block at run-open; never
+  invent a number, and never reuse one.
+- `GET /api/ledger` — the allocation record and the floor for a project.

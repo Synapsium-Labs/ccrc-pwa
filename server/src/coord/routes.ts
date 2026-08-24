@@ -8,6 +8,8 @@ import { peerDeliverable, archiveContradicted } from './peers.js';
 import { claimMailHint } from './claims.js';
 import { CCD_ARGV, verbSupported, sweepDec } from '../ccdargv.js';
 import { tx } from './db.js';
+import { LEDGER_ALLOC_MAX } from './ledger.js';
+import { LedgerLog, defaultLedgerLogPath } from './ledgerlog.js';
 import { toRunSummary, type ClaimEndResult, type CoordStore } from './store.js';
 import { renderEnvelope } from './envelope.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './token.js';
@@ -19,7 +21,7 @@ import { settleItems, type SettleItemsOutcome } from './items.js';
 import { holdReason, queueSystemMail } from './rundefs.js';
 import {
   CLAIM_INTENT_MAX_BYTES, CLAIM_PATHS_MAX, CLAIM_PATH_MAX_BYTES,
-  isRunState, isSendableMailKind, MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
+  isRunState, isSendableMailKind, LEDGER_STALE_MS, MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
   MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, RUN_TRANSITIONS,
   type ClaimConflict, type LifecycleQueryResult, type MailRejectCode, type PeerDeliverable,
   type PeerSummary, type RunState, type RunSummary,
@@ -261,6 +263,15 @@ export function registerCoordRoutes(
   // One instance for this server (see `CoordMutex`'s own docstring) —
   // serialises the WRITE routes' bodies below: open, dispatch, close, advance.
   const coordMutex = new CoordMutex();
+
+  // The process's ONE `LedgerLog` (the parts-B handoff): the file half of the
+  // allocator's MAX(file, db) recovery, held here and handed into
+  // `allocateDeviations` per call — `log` is a parameter of that store
+  // method, not a constructor field, for the same reason `dueDeliveries`
+  // takes `replayMs` from its caller. Rooted at `cfg.home`, never a bare
+  // `defaultLedgerLogPath()`, so a fixture-homed test server appends beside
+  // its own coord.db instead of into the live home's ledger.
+  const ledgerLog = new LedgerLog(defaultLedgerLogPath(deps.cfg.home));
 
   /**
    * The box-token gate (fix, review findings 3/10/27): `POST /api/runs`,
@@ -1698,5 +1709,122 @@ export function registerCoordRoutes(
              : deps.coord.claimsForProject(project).filter((c) => c.expiresAt > now))
       : deps.coord.activeClaims().filter((c) => c.expiresAt > now);
     return reply.code(200).send({ ok: true, claims });
+  });
+
+  /**
+   * `POST /api/ledger/deviations` — the allocator (D13). Box-token gated: the
+   * coordinator allocates the program's whole block AT RUN-OPEN (clause 10),
+   * so a wave in flight never calls this; a worker that cannot reach it MUST
+   * NOT invent a number (inventing is the root cause — bb47c9e, 30 files, 394
+   * D-ref lines rewritten under merge pressure) and writes `D-TBD-<slug>`,
+   * which `dtbd.test.ts` turns into a red suite on any diff that tries to
+   * land one.
+   *
+   * The append-to-file-FIRST, commit-SECOND ordering lives inside
+   * `allocateDeviations` (`ledgerlog.ts`): recovery is MAX(file, db), so a
+   * number is SKIPPED, never reissued — a gap costs nothing (the ledger is
+   * prose, parsed by nothing); a reissue costs the incident. Until
+   * `sweepLedgerFloor` has seeded the project, allocation answers
+   * `409 not-seeded` — `openCoordDb`'s "refuse to start rather than open
+   * empty", one level up. No `coordMutex`: the decision and the commit are one
+   * synchronous store call with no await between them; the PRIMARY KEY
+   * (project, n) backstop firing under a future refactor that loses that
+   * transaction is retried 3x in-request (spec §3) and then thrown loudly.
+   *
+   * The wire `floor` is the NEXT FREE number — the landed `AllocatedBlock`
+   * carries the SEEDED floor, which allocation never moves (the next block
+   * derives from MAX(file, db)), so this route derives next-free from the
+   * block it just minted: the numbers are contiguous, so it is the last + 1.
+   */
+  app.post('/api/ledger/deviations', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    if (!requireMailToken(req, reply, 'POST /api/ledger/deviations')) return;
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const { project, count, title, byId } = body;
+    if (typeof project !== 'string' || project.trim() === '' ||
+        typeof count !== 'number' ||
+        typeof title !== 'string' || title.trim() === '' ||
+        !(byId === undefined || typeof byId === 'string')) {
+      return reply.code(400).send({ ok: false, error: 'bad-request',
+        detail: 'project/title strings, count a number, byId a string when given' });
+    }
+
+    // 3x in-request retry on a THROWN constraint violation (spec §3): the
+    // PRIMARY KEY (project, n) backstop is loud by design, and a transient
+    // loser re-reads MAX(file, db) on the next attempt and lands on fresh
+    // numbers. Anything still throwing after three attempts propagates as
+    // the 500 it is — an unreadable ledger log is in that class deliberately
+    // (`maxAllocated` throws rather than reading an unreadable file as
+    // empty, because "empty" is exactly the reissue the file prevents).
+    const allocate = () => {
+      for (let attempt = 1; ; attempt++) {
+        try {
+          return coord.allocateDeviations({ project: project.trim(), count,
+            title: title.trim(), allocatedTo: byId ?? '', runId: null,
+            now: Date.now() }, ledgerLog);
+        } catch (err) {
+          if (attempt >= 3) throw err;
+        }
+      }
+    };
+    const r = allocate();
+    if (r.ok) {
+      const numbers = [...r.allocation.numbers];
+      return reply.code(201).send({ ok: true, numbers,
+        floor: numbers[numbers.length - 1]! + 1 });
+    }
+    switch (r.why) {
+      case 'not-seeded':
+        return reply.code(409).send({ ok: false, error: 'not-seeded',
+          detail: `no floor for ${project.trim()} — sweepLedgerFloor has not scanned it yet; ` +
+            'the allocator fails shut rather than minting from a guess (D13)' });
+      case 'bad-count':
+        return reply.code(400).send({ ok: false, error: 'bad-request',
+          detail: `count is an integer 1..${LEDGER_ALLOC_MAX} — a bigger block is likelier ` +
+            'a caller bug than a program (decideAllocation, ledger.ts)' });
+      default: {
+        const _exhaustive: never = r;
+        return reply.code(500).send({ ok: false, error: 'internal',
+          why: (_exhaustive as { why: string }).why });
+      }
+    }
+  });
+
+  /**
+   * `GET /api/ledger?project=` — the allocation record and the floor, read
+   * cookieless from the fleet host (box token, the `GET /api/mail` convention:
+   * a read with no attribution to check). Per-project, REQUIRED: `ledger_alloc`
+   * is `PRIMARY KEY (project, n)` and a floor is meaningless across projects.
+   * `floor: null` is "not seeded", a different fact from 0 — no overloaded
+   * value at the seam. On a seeded project the floor answered is the NEXT
+   * FREE number — the seeded floor walked past the issued rows, what the next
+   * POST would mint from this table (the file's half of MAX(file, db) only
+   * diverges after a crash between append and commit, and the next POST
+   * re-measures it regardless). `stale` is DERIVED here, per row, from
+   * `allocatedAt`, `state` and this read's clock (`LEDGER_STALE_MS`) — never
+   * stored, `DEVIATION_ALLOC_STATES`'s own D4 argument — so a phone can see
+   * it without owning a clock policy.
+   */
+  app.get('/api/ledger', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    if (!requireMailToken(req, reply, 'GET /api/ledger')) return;
+    const q = req.query as { project?: unknown };
+    if (typeof q.project !== 'string' || q.project.trim() === '') {
+      return reply.code(400).send({ ok: false, error: 'bad-request',
+        detail: 'the ledger is per-project — ?project= is required' });
+    }
+    const project = q.project.trim();
+    const now = Date.now();
+    const floorRow = deps.coord.ledgerFloor(project);
+    const rows = deps.coord.ledgerAllocations(project);
+    const maxN = rows.reduce((m, a) => Math.max(m, a.n), 0);
+    return reply.code(200).send({
+      ok: true,
+      floor: floorRow === null ? null : Math.max(floorRow.floor, maxN + 1),
+      allocations: rows.map((a) => ({ ...a,
+        stale: a.state === 'allocated' && a.allocatedAt <= now - LEDGER_STALE_MS })),
+    });
   });
 }

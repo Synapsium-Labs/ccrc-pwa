@@ -221,6 +221,13 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
   ['POST /api/claims/:id/release',
     'the claimant releases on the final merge — box-token gated, same attribution as the claim; ' +
     'the ownership check is the route\'s own, against the live claim table'],
+  ['POST /api/ledger/deviations',
+    'the coordinator allocates a D-number block at run-open — box-token gated; a session that ' +
+    'cannot reach the allocator must not invent a number, so the allocator must be reachable ' +
+    'from the fleet host (build 9 D13, the bb47c9e failure)'],
+  ['GET /api/ledger',
+    "the allocation record and a project's floor, read cookieless from the fleet host — " +
+    'box-token gated (requireMailToken), the GET /api/mail convention: no attribution to check'],
 
   ['POST /api/auth/login',
     'the door — a gate that gated its own login route would be a box nobody can enter'],
