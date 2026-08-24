@@ -14,8 +14,10 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
+import { LEDGER_STALE_MS } from '../../shared/api.js';
 import { buildServer, type Deps } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
+import { LedgerLog } from '../src/coord/ledgerlog.js';
 import { CoordStore } from '../src/coord/store.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -91,6 +93,29 @@ describe('the ledger routes', () => {
     // An unseeded project answers null, not 0 — 0 is a floor, not an absence.
     expect(((await ledger(app, '?project=other')).json() as { floor: number | null }).floor)
       .toBeNull();
+  });
+
+  it('derives stale per row from this read\'s clock — an allocation older than LEDGER_STALE_MS answers true', async () => {
+    const w = await openApp(); app = w.app;
+    w.coord.raiseLedgerFloor('demo', 261, 'seeded', Date.now());
+    // Backdated through the store (the route stamps its own Date.now()), into
+    // the SAME fixture-homed log the route appends to — n 261, a week-and-a-
+    // minute cold, still state 'allocated'.
+    const r = w.coord.allocateDeviations({ project: 'demo', count: 1, title: 'gone cold',
+      allocatedTo: 'demo-coordinator', runId: null,
+      now: Date.now() - LEDGER_STALE_MS - 60_000 },
+      new LedgerLog(path.join(w.home, '.ccrc', 'ledger-alloc.log')));
+    expect(r.ok).toBe(true);
+    await alloc(app, { project: 'demo', count: 1, title: 'fresh block' });
+
+    const body = (await ledger(app, '?project=demo')).json() as
+      { allocations: { n: number; stale: boolean }[] };
+    // DERIVED, not stored: the cold row answers true, the fresh row false —
+    // a route hardcoding either constant reds one of the two.
+    expect(body.allocations).toMatchObject([
+      { n: 261, state: 'allocated', stale: true },
+      { n: 262, state: 'allocated', stale: false },
+    ]);
   });
 
   it('validates the body, and both routes fail shut without the box token', async () => {
