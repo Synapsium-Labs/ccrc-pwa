@@ -139,7 +139,7 @@ arms, so the fix is still **one** query, one reader; the signature widens to `nu
 
 **Steps:**
 
-- [ ] Confirm the caller set before touching anything (one caller in `src`, none pass null today):
+- [x] Confirm the caller set before touching anything (one caller in `src`, none pass null today):
 
   ```bash
   cd <repo-root> && grep -rn "hasOutstandingMail" server/src server/test --include="*.ts"
@@ -149,7 +149,7 @@ arms, so the fix is still **one** query, one reader; the signature widens to `nu
   `server/src/coord/rundefs.ts:139`. If any other caller has appeared since this plan was written,
   read it before proceeding — it inherits the widened signature.
 
-- [ ] Write the failing test. Create `server/test/mail-hardening.test.ts`:
+- [x] Write the failing test. Create `server/test/mail-hardening.test.ts`:
 
   ```ts
   // WAVE 0 (Build 9b) — mail hardening before any second producer exists
@@ -195,7 +195,7 @@ arms, so the fix is still **one** query, one reader; the signature widens to `nu
   });
   ```
 
-- [ ] Run it, expect FAIL — 1 failed, 1 passed; the failing assertion is
+- [x] Run it, expect FAIL — 1 failed, 1 passed; the failing assertion is
   `expected false to be true` on the peer-mail arm (the second test passes today: the number arm
   already works and the null arm already answers false, for the wrong reason — `NULL = NULL` is
   NULL — which the mutant step below is for):
@@ -204,7 +204,7 @@ arms, so the fix is still **one** query, one reader; the signature widens to `nu
   cd server && ./node_modules/.bin/vitest run test/mail-hardening.test.ts
   ```
 
-- [ ] Write the implementation. In `server/src/coord/store.ts`, replace the whole
+- [x] Write the implementation. In `server/src/coord/store.ts`, replace the whole
   docstring-plus-method at `:1191-1205`:
 
   ```ts
@@ -233,18 +233,18 @@ arms, so the fix is still **one** query, one reader; the signature widens to `nu
   }
   ```
 
-- [ ] Run, expect PASS (2 passed):
+- [x] Run, expect PASS (2 passed):
 
   ```bash
   cd server && ./node_modules/.bin/vitest run test/mail-hardening.test.ts
   ```
 
-- [ ] Mutant ceremony — the guard's own red. Plant the mutant: in the SQL just written, change
+- [x] Mutant ceremony — the guard's own red. Plant the mutant: in the SQL just written, change
   `m.runId IS ?` back to `m.runId = ?`. Run `test/mail-hardening.test.ts`: expect **1 failed**
   (the peer-mail arm; the run-mail test stays green — which is precisely why the peer test had to
   exist). Revert the mutant. Run again: 2 passed.
 
-- [ ] Regression sweep over the neighbors the widened signature touches:
+- [x] Regression sweep over the neighbors the widened signature touches:
 
   ```bash
   cd server && ./node_modules/.bin/vitest run test/coord-store.test.ts test/run-routes.test.ts
@@ -254,7 +254,7 @@ arms, so the fix is still **one** query, one reader; the signature widens to `nu
   All green (`typecheck-tests` is a listed load flake — if red, re-run it alone before reading it
   as real).
 
-- [ ] Commit:
+- [x] Commit:
 
   ```bash
   cd <repo-root> && git add server/src/coord/store.ts server/test/mail-hardening.test.ts && git commit -m "server(wave0): hasOutstandingMail speaks IS — the peer-mail dedupe guard can finally fire

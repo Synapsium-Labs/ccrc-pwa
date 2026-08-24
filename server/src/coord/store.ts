@@ -1195,11 +1195,19 @@ export class CoordStore {
    *  retry, with no dedupe and no rate limit. `subject` alone identifies
    *  "the same fact restated" for the two system-mail subjects this build
    *  ever sends on a retry loop (`wave-brief`, `wave-done-rejected`) —
-   *  `queueSystemMail`'s own call sites are the only callers. */
-  hasOutstandingMail(runId: number, toId: string, subject: string): boolean {
+   *  `queueSystemMail`'s own call sites are the only run-mail callers.
+   *
+   *  `m.runId IS ?`, not `= ?` (Build 9b wave 0, D10 hole 1): `runId` is
+   *  nullable — peer mail is `runId:null` by definition — and a bound NULL
+   *  under `=` equals nothing, so for exactly the traffic Wave 7 adds a
+   *  second producer for, the dedupe guard structurally could not fire.
+   *  SQLite's `IS` is null-safe on both arms, so a number still matches its
+   *  own rows and ONLY a null matches the null ones: one query, one reader,
+   *  no second method. */
+  hasOutstandingMail(runId: number | null, toId: string, subject: string): boolean {
     const row = this.db.prepare(
       'SELECT 1 AS x FROM mail m JOIN mail_deliveries d ON d.mailId = m.id ' +
-      `WHERE m.runId = ? AND d.toId = ? AND m.subject = ? AND d.state IN ${OUTSTANDING_STATES_SQL} LIMIT 1`,
+      `WHERE m.runId IS ? AND d.toId = ? AND m.subject = ? AND d.state IN ${OUTSTANDING_STATES_SQL} LIMIT 1`,
     ).get(runId, toId, subject);
     return row !== undefined;
   }
