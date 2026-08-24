@@ -1476,6 +1476,9 @@ describe('the release owner literal — two named assignments, and no third spel
       const hits = codeLines(path.join(wfDir, wf)).filter((l) => l.includes(OWNER));
       expect(hits, `.github/workflows/${wf}`).toEqual([]);
     }
+  });
+});
+
 describe('Build 9 nouns — the lifecycle journal vocabulary', () => {
   const oneDefinition = (decl: RegExp, name: string): void => {
     const hits = ALL.filter((f) => decl.test(readFileSync(f, 'utf8')));
