@@ -52,9 +52,35 @@ index is the backstop, in that order).
 allocates from **D-211** — verify at execution time by sweeping EVERY remote ref
 (`for r in $(git for-each-ref --format='%(refname)' refs/remotes/origin); do git grep
 -oh 'D-[0-9]\{1,4\}' "$r" -- . 2>/dev/null; done | sed 's/D-//' | sort -n | tail -1`),
-never `origin/main` alone. Once Task 20 lands and the floor seeds, allocation goes
-through `POST /api/ledger/deviations` and hand-allocation stops — this plan is the
-last one that allocates by sweep.
+never `origin/main` alone — and FILTER the result: this plan's own test fixtures
+(D-261, D-400, D-999, D-1234, D-2611) and its prose mentions match the naive regex,
+which is itself a demonstration of why D13's allocator exists. Real allocations are
+contiguous from the ledger's history; a lone number far above the run is a fixture.
+Once Task 20 lands and the floor seeds, allocation goes through
+`POST /api/ledger/deviations` and hand-allocation stops — this plan is the last one
+that allocates by sweep.
+
+## Deviations found
+
+(numbering continues from the global ledger; D-210 was build 9a's lane)
+
+- **D-211** (Task 3): the plan's red-first step predicted a `SyntaxError` when the
+  test imports a not-yet-exported name; vitest instead yields `undefined` for a
+  missing named import, so the red manifested as assertion failures rather than a
+  load error. Red-first semantics preserved (the suite was demonstrably red before
+  the implementation); recorded because the plan's "Expected: FAIL with" lines for
+  ESM-import reds should say failed-assertions, not SyntaxError — later tasks'
+  executors should read them that way.
+- **D-212** (Tasks 3–4): `MAIL_REJECT_CODES`' census in `coordinator-skill.test.ts`
+  went red at Task 3's commit (the census names `duplicate`/`peer-quota` before any
+  skill corpus documents them) and was bridged in Task 4 via a `NOT_A_CALL_REFUSAL`
+  parking entry that Task 25 deletes when the corpus prose lands. One intermediate
+  commit (2839ca29) is bisect-red on that single suite — a consequence of the plan's
+  own sweep ordering (Task 3's sweep list omitted coordinator-skill), accepted
+  rather than history-rewritten. Also under this number: the reviewer's note that
+  store.ts's new terminality docstring slightly overstates ("every mail_deliveries
+  writer is guarded" — `setDeliveryEnvelope` writes only the envelope column and
+  carries no guard, deliberately outside D10 holes 3/4).
 
 ## Cross-task signature governance
 
