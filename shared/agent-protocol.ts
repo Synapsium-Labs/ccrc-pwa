@@ -63,7 +63,7 @@ export interface AgentHello { t: 'hello'; token: string }
 export interface AgentReady { t: 'ready'; v: 1; ccdVerbs?: string[]; rosterFp?: string; build?: BuildInfo }
 
 /** `ccd caps` output -> the list both readers keep: one token per non-empty
- *  line shaped like a bash identifier (`/^[a-z][a-z-]*$/`) — verbs AND
+ *  line shaped like a bash identifier (`/^[a-z][a-z0-9-]*$/`) — verbs AND
  *  capability tokens alike (`stop-surface` is deliberately chosen to match
  *  this exact shape, task 14 fix round 2, so it needs no second parser).
  *  SINGLE DEFINITION (fix round 3, task 14, Important #3): the agent (which
@@ -83,7 +83,7 @@ export interface AgentReady { t: 'ready'; v: 1; ccdVerbs?: string[]; rosterFp?: 
  *  `.filter(...)` call and fails if it appears anywhere but this file, or
  *  if either real reader stops importing it. */
 export function parseCcdCaps(stdout: string): string[] {
-  return stdout.split('\n').map((l) => l.trim()).filter((l) => /^[a-z][a-z-]*$/.test(l));
+  return stdout.split('\n').map((l) => l.trim()).filter((l) => /^[a-z][a-z0-9-]*$/.test(l));
 }
 export interface ExecReq   { t: 'req'; id: number; op: 'exec'; cmd: string; args: string[]; timeoutMs?: number }
 export interface ReadReq   { t: 'req'; id: number; op: 'read'; path: string }

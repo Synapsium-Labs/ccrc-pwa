@@ -53,7 +53,13 @@ describe('caps op', () => {
   // Fix round 2 (task 14 follow-up, item 1): proof that the AGENT-SIDE reader
   // needs no code change to carry `ccd`'s new `stop-surface` capability
   // token. This test changes nothing in `src/` — it exists to show the
-  // EXISTING `readCcdVerbs` regex (`/^[a-z][a-z-]*$/`) already accepts a
+  // EXISTING `readCcdVerbs` regex (`/^[a-z][a-z0-9-]*$/`) already accepts a
+  // NOTE: this proves the claim for `stop-surface` ONLY, and the claim was
+  // over-generalised once already — `lifecycle-v1`/`actor-flags-v1` were
+  // dropped by this filter for weeks because it had no digit class and no
+  // test crossed a digit-bearing token through it. `server/test/
+  // caps-token-shape.test.ts` covers the whole advertised set; this case
+  // stays as the agent-side end-to-end proof, not as the general argument.
   // verb-SHAPED capability token and passes it through the real WS `caps` op
   // unmodified, exactly like any other line `cmd_caps` prints. That is the
   // whole point of choosing this shape: zero new agent-side parsing, zero
