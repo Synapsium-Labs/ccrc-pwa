@@ -488,7 +488,8 @@ describe('coord.db: migration 3 — claims and the deviation ledger', () => {
   it('ledger_alloc: PRIMARY KEY (project, n) — a number exists once per project, ever', () => {
     const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
     const ins = db.prepare(
-      'INSERT INTO ledger_alloc (project, n, title, claimedBy, at, state) VALUES (?, ?, ?, ?, ?, ?)');
+      'INSERT INTO ledger_alloc (project, n, title, allocatedTo, allocatedAt, state) ' +
+      'VALUES (?, ?, ?, ?, ?, ?)');
     ins.run('demo', 211, 'first subject', 'demo-quiet-mesa', 1, 'allocated');
     expect(() => ins.run('demo', 211, 'second subject', 'demo-brisk-ridge', 2, 'allocated'))
       .toThrow(/UNIQUE constraint failed/);
@@ -499,7 +500,8 @@ describe('coord.db: migration 3 — claims and the deviation ledger', () => {
 
   it('ledger_floor: one row per project — the floor is a single value, not a history', () => {
     const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
-    const ins = db.prepare('INSERT INTO ledger_floor (project, floor, evidence, at) VALUES (?, ?, ?, ?)');
+    const ins = db.prepare(
+      'INSERT INTO ledger_floor (project, floor, evidence, updatedAt) VALUES (?, ?, ?, ?)');
     ins.run('demo', 260, 'docs/superpowers/plans/example.md names D-210', 1);
     expect(() => ins.run('demo', 261, 'a second seed', 2)).toThrow(/UNIQUE constraint failed/);
     db.close();

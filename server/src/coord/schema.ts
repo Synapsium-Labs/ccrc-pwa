@@ -452,6 +452,22 @@ export const MIGRATIONS: readonly string[] = [
   // is prose, parsed by nothing; a reissue cost 394 rewritten D-ref lines
   // across 30 files under merge pressure (bb47c9e).
   //
+  // TASK 13 (part B, the allocator's store half) AMENDS THIS MIGRATION IN
+  // PLACE: `ledger_alloc` gains `runId`/`landedAt`/`landedIn` and takes the
+  // L0 row's own field names (`allocatedTo`/`allocatedAt` —
+  // `DeviationAllocation`, shared/api.ts), `ledger_floor`'s stamp becomes
+  // `updatedAt`. That looks like exactly the mistake the paragraph above
+  // forbids, so migration 2's ruling is RE-VERIFIED rather than assumed:
+  // `git merge-base --is-ancestor` says this migration's Task-6 commit is
+  // NOT an ancestor of `origin/main`, whose `schema.ts` still tops out at
+  // `MIGRATIONS[2]` — no server that has ever run has executed this file's
+  // `user_version 3 -> 4` step, and every database past it is a test temp
+  // file rebuilt fresh from `MIGRATIONS` on every run. The columns were born
+  // under one drafting section's spelling while the defining task's landed
+  // shape already carried nine fields; per the plan's cross-task signature
+  // governance the consumer adapts to the landed definition — and here the
+  // TABLE is the consumer.
+  //
   // D11, AND THE ORDER IS THE RULING — stated here so a reviewer does not
   // assume one mechanism makes the other redundant:
   //   1. The in-transaction read IS the compare-and-swap. POST /api/claims
@@ -527,16 +543,20 @@ export const MIGRATIONS: readonly string[] = [
   -- shared/api.ts) — 'landed' means the number appears in a plan in the MAIN
   -- checkout (sweepLedgerReconcile, part B), the signal the bb47c9e incident
   -- lacked. 'stale' is NEVER WRITTEN here: a fact about a row and a clock is
-  -- derived by the reader (at + LEDGER_STALE_MS, 7 days never-landed),
-  -- reported and NEVER reclaimed. Read back through the L0 guard, never a
-  -- cast.
+  -- derived by the reader (allocatedAt + LEDGER_STALE_MS, 7 days
+  -- never-landed), reported and NEVER reclaimed. Read back through the L0
+  -- guard, never a cast.
   CREATE TABLE ledger_alloc (
-    project   TEXT NOT NULL,
-    n         INTEGER NOT NULL,
-    title     TEXT NOT NULL,
-    claimedBy TEXT NOT NULL,
-    at        INTEGER NOT NULL,
-    state     TEXT NOT NULL,
+    project     TEXT NOT NULL,
+    n           INTEGER NOT NULL,
+    title       TEXT NOT NULL,
+    allocatedTo TEXT NOT NULL,          -- the requesting SESSION id. Attribution, not
+                                        -- authentication — the claims-table stance, one table up
+    runId       INTEGER,                -- null for an allocation outside any run
+    allocatedAt INTEGER NOT NULL,
+    state       TEXT NOT NULL,
+    landedAt    INTEGER,                -- markLanded's stamp — landed is terminal, never re-stamped
+    landedIn    TEXT,                   -- the plan file reconcile found the number in, repo-relative
     PRIMARY KEY (project, n)
   );
 
@@ -549,10 +569,10 @@ export const MIGRATIONS: readonly string[] = [
   -- and re-issuing one IS the bb47c9e failure. evidence names the file and
   -- the number the seed was measured from.
   CREATE TABLE ledger_floor (
-    project  TEXT PRIMARY KEY,
-    floor    INTEGER NOT NULL,
-    evidence TEXT NOT NULL,
-    at       INTEGER NOT NULL
+    project   TEXT PRIMARY KEY,
+    floor     INTEGER NOT NULL,
+    evidence  TEXT NOT NULL,
+    updatedAt INTEGER NOT NULL
   );
   `,
 ];

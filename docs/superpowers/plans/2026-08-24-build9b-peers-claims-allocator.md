@@ -4356,7 +4356,7 @@ describe('CoordStore.claimRelease / claimBreak', () => {
 
 **Steps:**
 
-- [ ] Write the failing test file `server/test/ledgerlog.test.ts`:
+- [x] Write the failing test file `server/test/ledgerlog.test.ts`:
 
 ```ts
 // D8/D13: ledger_alloc is AUTHORITATIVE WITH A FLAT-FILE GROUND TRUTH — every
@@ -4415,10 +4415,10 @@ describe('LedgerLog', () => {
 });
 ```
 
-- [ ] Run, expect FAIL: `cd server && ./node_modules/.bin/vitest run test/ledgerlog.test.ts` —
+- [x] Run, expect FAIL: `cd server && ./node_modules/.bin/vitest run test/ledgerlog.test.ts` —
   `Cannot find module '../src/coord/ledgerlog.js'` (esbuild resolve error).
 
-- [ ] Write the implementation, `server/src/coord/ledgerlog.ts`:
+- [x] Write the implementation, `server/src/coord/ledgerlog.ts`:
 
 ```ts
 import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
@@ -4503,9 +4503,9 @@ export class LedgerLog {
 }
 ```
 
-- [ ] Run, expect PASS: `./node_modules/.bin/vitest run test/ledgerlog.test.ts`.
+- [x] Run, expect PASS: `./node_modules/.bin/vitest run test/ledgerlog.test.ts`.
 
-- [ ] Write the failing store tests, `server/test/ledger-store.test.ts`:
+- [x] Write the failing store tests, `server/test/ledger-store.test.ts`:
 
 ```ts
 // D13: the allocator self-seeds, then fails shut — and D8: the FILE FIRST,
@@ -4597,9 +4597,9 @@ describe('CoordStore.allocateDeviations', () => {
 });
 ```
 
-- [ ] Run, expect FAIL: `TypeError: s.raiseLedgerFloor is not a function`.
+- [x] Run, expect FAIL: `TypeError: s.raiseLedgerFloor is not a function`.
 
-- [ ] Write the implementation. In `store.ts`, add the imports:
+- [x] Write the implementation. In `store.ts`, add the imports:
 
 ```ts
 import { decideAllocation } from '../ledger.js';
@@ -4755,10 +4755,10 @@ export type AllocateResult =
   }
 ```
 
-- [ ] Run, expect PASS:
+- [x] Run, expect PASS:
   `./node_modules/.bin/vitest run test/ledger-store.test.ts test/ledgerlog.test.ts`.
 
-- [ ] Commit:
+- [x] Commit:
   `git add server/src/coord/ledgerlog.ts server/src/coord/store.ts server/test/ledgerlog.test.ts server/test/ledger-store.test.ts && git commit -m "server(w7): the allocator writes the file first, the database second"`
 
 ---

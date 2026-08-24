@@ -1,16 +1,19 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { tx } from './db.js';
 import { decideClaim, type ClaimRow } from './claims.js';
+import { decideAllocation } from './ledger.js';
+import type { LedgerLog } from './ledgerlog.js';
 import { CLEAR_REFUSED_STRANDS_TEXT } from './rundefs.js';
 import { reviveDec, reviveMeas, reviveObs, type JournalRow } from './journalparse.js';
 import {
   CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS,
-  isClaimState, isLifecycleAct, isLifecycleGapReason, isLifecycleOutcome,
+  isClaimState, isDeviationAllocState, isLifecycleAct, isLifecycleGapReason, isLifecycleOutcome,
   isMailDeliveryState, isMailKind, isNotifyKind, isProgramState, isRunState, isWorkItemState,
   LC_ACT_UNKNOWN, LC_OUTCOME_UNKNOWN,
   RUN_TRANSITIONS,
   type ClaimConflict, type ClaimState, type ClaimSummary,
-  type CoordCaps, type DeviationAllocation, type LifecycleGap, type LifecycleGapReason,
+  type CoordCaps, type DeviationAllocation, type DeviationAllocState,
+  type LifecycleGap, type LifecycleGapReason,
   type MailDeliveryState,
   type MailKind, type MailRejectCode, type MailSummary, type MirroredLifecycleEvent,
   type NotifyEvent, type PeerDeliverable, type ProgramState, type RunItemTally, type RunState,
@@ -116,6 +119,36 @@ export type ClaimEndResult =
   | { ok: true; state: 'released' | 'broken' }
   | { ok: false; why: 'unknown-claim' }
   | { ok: false; why: 'not-live'; state: ClaimState | null };
+
+/** One `ledger_alloc` row on the way OUT — the L0 wire row's own fields
+ *  (`DeviationAllocation`) minus `stale`, which is DERIVED by the READER
+ *  from a clock this store does not own (`allocatedAt + LEDGER_STALE_MS`,
+ *  the watcher's and the route's policy, never stored) — and with `state`
+ *  read through the same we-do-not-know rule as every enum column in this
+ *  file: `DeviationAllocState` has no designated unknown member (the L0 pin
+ *  stores exactly two words), so the store's row widens it rather than
+ *  degrading a token a newer build wrote to a guess. */
+export interface LedgerRow extends Omit<DeviationAllocation, 'state' | 'stale'> {
+  state: DeviationAllocState | 'unknown';
+}
+
+/** The ok payload of `allocateDeviations` — one allocated BLOCK. The L0
+ *  wire row is one row PER NUMBER; the allocator decides per BLOCK
+ *  (contiguous `numbers` from one floor read), so the ok arm carries the
+ *  block's shared identity plus the numbers, not N copies of a row. */
+export interface AllocatedBlock extends Pick<DeviationAllocation,
+  'project' | 'title' | 'allocatedTo' | 'runId' | 'allocatedAt'> {
+  numbers: readonly number[];
+  floor: number;
+}
+
+/** The failure arms are `decideAllocation`'s own (`ledger.js`), re-keyed to
+ *  this file's `ok`/`why` house shape — the `ClaimAttemptResult` stance: the
+ *  store adds nothing to a refusal and takes nothing from it. */
+export type AllocateResult =
+  | { ok: true; allocation: AllocatedBlock }
+  | { ok: false; why: 'not-seeded' }
+  | { ok: false; why: 'bad-count' };
 
 /** The raw row shape common to `run(id)` and `runs()` — named columns only
  *  (no `SELECT *` anywhere in this file), joined once against `programs` for
@@ -2348,5 +2381,134 @@ export class CoordStore {
           `SELECT ${CoordStore.CLAIM_COLS} FROM claims WHERE project = ? AND state = 'live' ORDER BY id`)
     ).all(project) as Parameters<CoordStore['hydrateClaim']>[0][];
     return rows.flatMap((r) => this.hydrateClaim(r, this.claimPaths(r.id)) ?? []);
+  }
+
+  /* ── the deviation ledger (build 9 wave 7, D8/D13) ─────────────────────── */
+
+  ledgerFloor(project: string): { floor: number; evidence: string; updatedAt: number } | null {
+    const row = this.db.prepare(
+      'SELECT floor, evidence, updatedAt FROM ledger_floor WHERE project = ?',
+    ).get(project) as { floor: number; evidence: string; updatedAt: number } | undefined;
+    return row ?? null;
+  }
+
+  /** THE FLOOR ONLY EVER RISES (D13) — the conflict arm's WHERE clause is the
+   *  mechanism, not caller discipline: a lower scan later (a plan deleted, a
+   *  worktree's partial docs) can never walk allocation backward into numbers
+   *  already handed out. */
+  raiseLedgerFloor(project: string, floor: number, evidence: string, at: number): void {
+    this.db.prepare(
+      'INSERT INTO ledger_floor (project, floor, evidence, updatedAt) VALUES (?, ?, ?, ?) ' +
+      'ON CONFLICT(project) DO UPDATE SET floor = excluded.floor, ' +
+      'evidence = excluded.evidence, updatedAt = excluded.updatedAt ' +
+      'WHERE excluded.floor > ledger_floor.floor',
+    ).run(project, floor, evidence, at);
+  }
+
+  /**
+   * Allocate `count` contiguous deviation numbers, as ONE transaction — and
+   * the ORDER inside it is the design (D8):
+   *
+   *   THE FILE FIRST, THE COMMIT SECOND. `log.append` runs before the
+   *   INSERTs, inside the same synchronous flow, so a crash — or the
+   *   `PRIMARY KEY (project, n)` backstop firing under a future refactor
+   *   that loses this transaction — leaves numbers in the file that the
+   *   database never committed. Recovery is MAX(file, db): those numbers
+   *   are SKIPPED, NEVER REISSUED. Gaps cost nothing; a reissue is the
+   *   bb47c9e incident (394 D-ref lines rewritten under merge pressure).
+   *
+   * Fails shut until seeded (`409 not-seeded` at the route) — `openCoordDb`'s
+   * own "refuse to start rather than open empty", one level up. The route
+   * owns the 3× in-request retry on a thrown constraint violation.
+   *
+   * `log` is a PARAMETER, not a constructor field: the route holds the
+   * process's one `LedgerLog` (`defaultLedgerLogPath()`), and tests hand in
+   * fixture-homed ones — the same reason `dueDeliveries` takes `replayMs`
+   * from its caller instead of owning policy here.
+   */
+  allocateDeviations(input: {
+    project: string; count: number; title: string; allocatedTo: string;
+    runId: number | null; now?: number;
+  }, log: LedgerLog): AllocateResult {
+    const now = input.now ?? Date.now();
+    return tx(this.db, () => {
+      const floorRow = this.ledgerFloor(input.project);
+      const dbMax = (this.db.prepare(
+        'SELECT MAX(n) AS m FROM ledger_alloc WHERE project = ?',
+      ).get(input.project) as { m: number | null }).m;
+      const fileMax = log.maxAllocated(input.project);
+      // `decideAllocation` (L1) only compares — the store MEASURES maxIssued,
+      // and the file's half is what makes recovery MAX(file, db).
+      const maxIssued = dbMax === null ? fileMax
+        : fileMax === null ? dbMax : Math.max(dbMax, fileMax);
+      const d = decideAllocation(floorRow, maxIssued, input.count);
+      if (!('ok' in d)) return { ok: false as const, why: d.refused };
+      log.append(d.numbers.map((n) => ({
+        project: input.project, n, title: input.title,
+        allocatedTo: input.allocatedTo, at: now,
+      })));
+      for (const n of d.numbers) {
+        this.db.prepare(
+          'INSERT INTO ledger_alloc (project, n, title, allocatedTo, runId, allocatedAt, state) ' +
+          "VALUES (?, ?, ?, ?, ?, ?, 'allocated')",
+        ).run(input.project, n, input.title, input.allocatedTo, input.runId, now);
+      }
+      return {
+        ok: true as const,
+        allocation: {
+          project: input.project, numbers: d.numbers, floor: d.floor,
+          title: input.title, allocatedTo: input.allocatedTo,
+          runId: input.runId, allocatedAt: now,
+        },
+      };
+    });
+  }
+
+  private static readonly LEDGER_COLS =
+    'project, n, title, allocatedTo, runId, allocatedAt, state, landedAt, landedIn';
+
+  private hydrateLedger(r: {
+    project: string; n: number; title: string; allocatedTo: string; runId: number | null;
+    allocatedAt: number; state: string; landedAt: number | null; landedIn: string | null;
+  }): LedgerRow {
+    // "Read back through the L0 guard, never a cast" — the schema's own rule.
+    return { ...r, state: isDeviationAllocState(r.state) ? r.state : 'unknown' };
+  }
+
+  ledgerAllocations(project: string): LedgerRow[] {
+    const rows = this.db.prepare(
+      `SELECT ${CoordStore.LEDGER_COLS} FROM ledger_alloc WHERE project = ? ORDER BY n`,
+    ).all(project) as Parameters<CoordStore['hydrateLedger']>[0][];
+    return rows.map((r) => this.hydrateLedger(r));
+  }
+
+  /** Every not-yet-landed allocation across every project — what
+   *  `sweepLedgerReconcile` walks. */
+  openAllocations(): LedgerRow[] {
+    const rows = this.db.prepare(
+      `SELECT ${CoordStore.LEDGER_COLS} FROM ledger_alloc WHERE state = 'allocated' ` +
+      'ORDER BY project, n',
+    ).all() as Parameters<CoordStore['hydrateLedger']>[0][];
+    return rows.map((r) => this.hydrateLedger(r));
+  }
+
+  /** allocated -> landed, once — `landed` genuinely means "in a merged plan"
+   *  (D13), so the guard keeps a re-scan from re-stamping the date. */
+  markLanded(project: string, n: number, landedIn: string, at: number): void {
+    this.db.prepare(
+      "UPDATE ledger_alloc SET state = 'landed', landedAt = ?, landedIn = ? " +
+      "WHERE project = ? AND n = ? AND state = 'allocated'",
+    ).run(at, landedIn, project, n);
+  }
+
+  /** Allocated at or before `cutoff`, never landed — REPORTED, never
+   *  reclaimed (D13). The cutoff is the CALLER's (the watcher owns the
+   *  7-day policy), the `dueDeliveries(replayMs)` pattern. */
+  staleAllocations(cutoff: number): LedgerRow[] {
+    const rows = this.db.prepare(
+      `SELECT ${CoordStore.LEDGER_COLS} FROM ledger_alloc ` +
+      "WHERE state = 'allocated' AND allocatedAt <= ? ORDER BY project, n",
+    ).all(cutoff) as Parameters<CoordStore['hydrateLedger']>[0][];
+    return rows.map((r) => this.hydrateLedger(r));
   }
 }
