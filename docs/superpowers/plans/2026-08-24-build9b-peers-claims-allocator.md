@@ -908,7 +908,7 @@ closes the wave with the full targeted verification sweep.
 
 **Steps:**
 
-- [ ] Write the failing-by-mutant tests (they PASS against Task 3's tree — that is the point of a
+- [x] Write the failing-by-mutant tests (they PASS against Task 3's tree — that is the point of a
   dark pin; the mutant step below is their red). Append to `server/test/mail-peer-quota.test.ts`:
 
   ```ts
@@ -981,14 +981,14 @@ closes the wave with the full targeted verification sweep.
   });
   ```
 
-- [ ] Run, expect PASS (7 passed — Task 3's four plus these three; a dark pin passing on the
+- [x] Run, expect PASS (7 passed — Task 3's four plus these three; a dark pin passing on the
   honest tree is the pin working, not the pin missing):
 
   ```bash
   cd server && ./node_modules/.bin/vitest run test/mail-peer-quota.test.ts
   ```
 
-- [ ] Mutant ceremony — the fence's own red, both directions:
+- [x] Mutant ceremony — the fence's own red, both directions:
   1. In `routes.ts` check 9, change `if (runId === null) {` to `if (true) {` (the bounds now
      police everything). Run `test/mail-peer-quota.test.ts`: expect **1 failed** — the
      full-peer-ledger test's run mail lands `409` where `202` was demanded (the duplicate arm read
@@ -1000,7 +1000,7 @@ closes the wave with the full targeted verification sweep.
      expect **1 failed** — the reverse-bleed test's final peer send lands `429` (12 run rows just
      charged the peer hour). Revert; re-run; 7 passed.
 
-- [ ] Close the wave with the full targeted sweep — everything wave 0 touched, foreground,
+- [x] Close the wave with the full targeted sweep — everything wave 0 touched, foreground,
   generous timeout:
 
   ```bash
@@ -1013,13 +1013,13 @@ closes the wave with the full targeted verification sweep.
   the diff is wrong, not the test. Known load flakes re-run in isolation before being read as
   real.)
 
-- [ ] Full-package confirmation (the wave's exit gate; foreground, `timeout ≥ 600000ms`):
+- [x] Full-package confirmation (the wave's exit gate; foreground, `timeout ≥ 600000ms`):
 
   ```bash
   cd server && npm run test
   ```
 
-- [ ] Commit:
+- [x] Commit:
 
   ```bash
   cd <repo-root> && git add server/test/mail-peer-quota.test.ts && git commit -m "test(wave0): the bounds are pinned dark — run mail passes byte-identical, thirteen times over

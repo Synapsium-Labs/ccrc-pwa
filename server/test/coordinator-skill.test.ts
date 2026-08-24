@@ -261,7 +261,16 @@ describe('the coordinator skill: linkage', () => {
     // as a `MailSummary.state`/`rejectCode` value, never as a refusal a
     // coordinator's own API call receives — nothing in the skill's protocol
     // needs to name it as a call outcome.
-    const NOT_A_CALL_REFUSAL: ReadonlySet<string> = new Set(['undeliverable']);
+    //
+    // 'duplicate' and 'peer-quota' are a WAVE-0 BRIDGE (Build 9b): check 9
+    // (`routes.ts`) fences both behind `runId === null`, and every mail call
+    // this corpus teaches carries a runId — so until wave 8 lands the peer
+    // lane in the skills, neither is an outcome a coordinator's own call can
+    // receive. Their documented home is wave 8's `peer-protocol.md`; the
+    // Task 25 executor DELETES both entries in the same commit that creates
+    // that reference, and its foot-of-file describe re-pins them as declared.
+    const NOT_A_CALL_REFUSAL: ReadonlySet<string> =
+      new Set(['undeliverable', 'duplicate', 'peer-quota']);
     for (const code of MAIL_REJECT_CODES) {
       if (NOT_A_CALL_REFUSAL.has(code)) continue;
       expect(allSkillText, `${code} is a real MailRejectCode but is named nowhere in the skill`)

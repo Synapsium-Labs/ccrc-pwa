@@ -125,3 +125,71 @@ describe('POST /api/mail — peer-mail bounds (runId === null only)', () => {
     expect(w.coord.rejections().map((r) => r.code)).toContain('duplicate');
   });
 });
+
+describe('run mail is DARK — the bounds structurally cannot touch runId-carrying traffic (D10)', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  const openRun = (coord: CoordStore) =>
+    coord.openRun({ program: 'build9b', title: 'Wave 0 dark pin', project: 'demo',
+                    wave: 1, waveOf: 1, claimedBy: 'demo-coordinator' }) as { id: number };
+
+  it('13 identical run mails — one pair, one subject, one hour — are all accepted, none recorded', async () => {
+    const home = mkTmp('ccrc-peerq-');
+    seed(home, 'demo-quiet-mesa'); seed(home, 'demo-calm-ridge');
+    const w = await withMail(home); app = w.app;
+    const r = openRun(w.coord);
+    // ONE loop that violates ALL THREE peer bounds at once — the same
+    // triple every time (duplicate), far past 3 outstanding to one pair,
+    // past 12 in the hour — and every send is accepted with the same body
+    // the route answered before this wave existed. 13 = PEER_MAIL_HOURLY+1
+    // so the loop provably crosses the widest bound, not just the pair.
+    for (let i = 0; i < PEER_MAIL_HOURLY + 1; i++) {
+      const res = await send(app, { ...PEER, runId: r.id, kind: 'status', subject: 'wave-brief' });
+      expect(res.statusCode).toBe(202);
+      expect(res.json()).toMatchObject({ ok: true, id: expect.any(Number) });
+    }
+    expect(w.coord.rejections()).toEqual([]);          // no refusal was even RECORDED
+    expect(w.coord.dueDeliveries(Date.now(), 0).length).toBe(PEER_MAIL_HOURLY + 1);
+  });
+
+  it('a FULL peer ledger does not shadow run mail — same pair, same subject, cap already spent', async () => {
+    // THE mutant catcher for `if (runId === null)` itself. The store
+    // probes are ALSO scoped `runId IS NULL`, so bare run mails sail
+    // through even a leaked fence (their own rows never count) — the test
+    // above cannot see that mutant. What a leaked fence DOES break is
+    // this: a sender whose peer ledger is already full sending a RUN mail
+    // through the same pair with the same subject — every peer bound
+    // would refuse it, reading the standing peer rows.
+    const home = mkTmp('ccrc-peerq-');
+    seed(home, 'demo-quiet-mesa'); seed(home, 'demo-calm-ridge');
+    const w = await withMail(home); app = w.app;
+    // Spend the pair cap and leave 'peer q' outstanding.
+    expect((await send(app, PEER)).statusCode).toBe(202);
+    for (let i = 1; i < PEER_MAIL_MAX_OUTSTANDING; i++) {
+      expect((await send(app, { ...PEER, subject: `q ${i}` })).statusCode).toBe(202);
+    }
+    // A run mail across the same pair, SAME subject as an outstanding peer
+    // mail: with the fence honest this is 202; with the fence leaked, the
+    // duplicate arm answers 409 off the peer row.
+    const r = openRun(w.coord);
+    const res = await send(app, { ...PEER, runId: r.id, kind: 'status' });
+    expect(res.statusCode).toBe(202);
+    expect(w.coord.rejections()).toEqual([]);
+  });
+
+  it('run traffic never charges the peer hourly budget — 12 run mails, then a peer mail still passes', async () => {
+    const home = mkTmp('ccrc-peerq-');
+    seed(home, 'demo-quiet-mesa'); seed(home, 'demo-calm-ridge');
+    const w = await withMail(home); app = w.app;
+    const r = openRun(w.coord);
+    for (let i = 0; i < PEER_MAIL_HOURLY; i++) {
+      expect((await send(app, { ...PEER, runId: r.id, kind: 'status', subject: `run ${i}` }))
+        .statusCode).toBe(202);
+    }
+    // The sender's peer-hour stands at 0 — `peerMailInLastHour` counts
+    // `runId IS NULL` rows only. If run rows bled into it, this send would
+    // be the "13th" and 429.
+    expect((await send(app, PEER)).statusCode).toBe(202);
+  });
+});
