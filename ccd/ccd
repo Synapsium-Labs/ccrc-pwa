@@ -5228,10 +5228,21 @@ _ws_sensitive_noise() {   # path -> 0 when a secret-shaped name is vendored/temp
 # `ccd ws-audit` output instead of becoming a silent hole.
 _WS_VENDOR_SEGMENTS=( site-packages dist-packages node_modules )
 
-_ws_sensitive_vendored() {   # path -> 0 when it sits inside a package-manager tree
-  local p="/${1#/}/" seg
+_ws_sensitive_vendored() {   # path -> 0 when it sits INSIDE a package-manager tree
+  # THE DIRECTORY CHAIN, NOT THE WHOLE PATH. `inside a tree` is the claim, so
+  # the final component is dropped before the test: a path that merely IS a
+  # segment (`node_modules`, `site-packages`) is not inside one, and a bare
+  # name has no chain at all. Unreachable via the two live call sites today --
+  # neither segment name matches _WS_SENSITIVE_GLOBS, so the filter is never
+  # asked about them -- but this helper states a property, and the prune
+  # follow-up in the inside-scan would consume it directly.
+  local d="${1%/}" seg
+  case "$d" in
+    */*) d="/${d%/*}/" ;;
+    *)   d="/" ;;
+  esac
   for seg in "${_WS_VENDOR_SEGMENTS[@]}"; do
-    [[ "$p" == *"/$seg/"* ]] && return 0
+    [[ "$d" == *"/$seg/"* ]] && return 0
   done
   return 1
 }

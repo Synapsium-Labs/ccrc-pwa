@@ -552,6 +552,49 @@ describe('refusals are answers', () => {
     for (const line of ask(yes)) expect(line, `${line} must be secret-shaped`).toMatch(/ yes yes$/);
     for (const line of ask(no)) expect(line, `${line} must NOT be secret-shaped`).toMatch(/ no no$/);
   });
+
+  it('scopes the package-manager exemption to paths INSIDE a tree, by segment', () => {
+    // The exemption's entire safety argument is its narrowness, and narrowness
+    // is not something the end-to-end audit fixtures can enumerate -- each one
+    // costs a whole worktree. These are the boundaries in one place: inside a
+    // tree is exempt; a directory whose name merely CONTAINS a segment is not;
+    // `vendor` is deliberately not a segment at all (Go and composer use it,
+    // and so does every project that just has a folder by that name); and a
+    // path that IS a segment is not INSIDE one.
+    const inside = [
+      '.venv/lib/python3.12/site-packages/certifi/cacert.pem',
+      '.venv/lib/python3.12/site-packages/botocore/data/secretsmanager',
+      '.venv/lib/python3.12/site-packages/pip/_vendor/certifi/cacert.pem',
+      'node_modules/foo/test/fixtures/server.pem',
+      'a/b/node_modules/c/.env',
+      'usr/lib/python3/dist-packages/x/credentials.json',
+    ];
+    const outside = [
+      'build/vendor/deploy.pem',
+      'build/my-site-packages-notes/prod.pem',
+      'deploy/site-packages-old/secrets.txt',
+      'notsite-packages/x.pem',
+      'my-node_modules-backup/id_rsa',
+      'site-packages',
+      'node_modules',
+      '.env',
+      'build/.env',
+    ];
+    const ask = (paths: string[]): Record<string, string> => {
+      const out: Record<string, string> = {};
+      for (const line of h.sh(
+        `for p in ${paths.map((x) => `'${x}'`).join(' ')}; do `
+        + `v=no; _ws_sensitive_vendored "$p" && v=yes; echo "VS $p $v"; done`,
+      ).split('\n')) {
+        const m = line.match(/^VS (.+) (yes|no)$/);
+        if (m) out[m[1]] = m[2];
+      }
+      return out;
+    };
+    const got = ask([...inside, ...outside]);
+    for (const q of inside) expect(got[q], `${q} must be exempt: it is inside a package tree`).toBe('yes');
+    for (const q of outside) expect(got[q], `${q} must NOT be exempt`).toBe('no');
+  });
 });
 
 describe('destruction order', () => {
