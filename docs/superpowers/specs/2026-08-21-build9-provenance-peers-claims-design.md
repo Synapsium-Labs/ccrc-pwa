@@ -11,7 +11,7 @@ Three operator requirements arrived together and turned out to share one substra
 
 This document settles the design. It was written from three read-only investigations of the live boxes
 (16 agents) and a four-architect design panel scored by three adversarial judges. Every fact below marked
-*measured* was re-measured on `openclaw` and `server-box` on 2026-08-21.
+*measured* was re-measured on `<fleet-host>` and `<server-host>` on 2026-08-21.
 
 **The spine.** *Every act a session or a human takes on the fleet leaves an append-only line that
 `_reg_purge` cannot reach; the server mirrors those lines into `coord.db` by polling; and every new

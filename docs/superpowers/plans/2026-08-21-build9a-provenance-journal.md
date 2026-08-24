@@ -5981,7 +5981,7 @@ cd /home/you/worktrees/ccrc-pwa/still-river && git add server/test/ccd-lifecycle
 - [ ] **Step 7: AGENT-FIRST DEPLOY.** Wave 2 touches `ccd/`, so the fleet host ships before the server —
   and the server ships nothing this wave, because wave 2 is DARK: the journal fills and nothing reads it.
   `<fleet-host>` is BOX 2, the box that runs `ccd-agent`, `ccd`, tmux and `~/.cc-sessions/`; it is not
-  `server-box`, which is the server host.
+  `<server-host>`, which is the server host.
 
 ```bash
 cd /home/you/worktrees/ccrc-pwa/still-river && bash deploy/deploy.sh agent <fleet-host>
@@ -7537,7 +7537,7 @@ cd /home/you/worktrees/ccrc-pwa/still-river && node --input-type=module -e "impo
 
 - [ ] **Step 11: AGENT-FIRST DEPLOY.** Wave 3 touches `ccd/` and nothing else; the server ships nothing.
   `<fleet-host>` is BOX 2 — the box running `ccd-agent`, `ccd`, tmux and `~/.cc-sessions/` — not
-  `server-box`.
+  `<server-host>`.
 
 ```bash
 cd /home/you/worktrees/ccrc-pwa/still-river && bash deploy/deploy.sh agent <fleet-host>
@@ -11511,13 +11511,13 @@ Spec §2 says the only agent-side delta in this whole build is a **test**, and �
 
 - [ ] **Step 9: Confirm the mirror woke up.**
   ```bash
-  curl -s -H "x-ccrc-mail-token: $(cat ~/.ccrc/mail.token)" http://203.0.113.7:7788/api/fleet/health | head -c 400
+  curl -s -H "x-ccrc-mail-token: $(cat ~/.ccrc/mail.token)" http://<server-host>:7788/api/fleet/health | head -c 400
   ```
   Expected: a `lifecycle` block with `"state":"ok"` and a non-zero `rows` — waves 2-3 have been filling the journal dark. `"state":"unavailable"` means the fleet host is running a ccd that predates wave 2: deploy the AGENT lane again, not the server. `"state":"unknown"` immediately after a restart is correct and clears on the first sweep. A non-zero `gaps` is worth reading before anything else — `GET /api/lifecycle` returns them beside the events.
 
 - [ ] **Step 10: Verify the read surface answers from the fleet host, cookieless** — the property D16 exists for.
   ```bash
-  ssh "$CCRC_BOX" 'curl -s -H "x-ccrc-mail-token: $(cat ~/.cc-secrets/ccrc-mail.token)" "http://203.0.113.7:7788/api/lifecycle?limit=5" | head -c 600'
+  ssh "$CCRC_BOX" 'curl -s -H "x-ccrc-mail-token: $(cat ~/.cc-secrets/ccrc-mail.token)" "http://<server-host>:7788/api/lifecycle?limit=5" | head -c 600'
   ```
   Expected: a `{"events":[…],"gaps":[…]}` body. A `401` here means the EXEMPT entry did not ship; a `501` means the server box has no `coord.db`, which it does.
 
@@ -13942,7 +13942,7 @@ a hand-written null."
 
 **Files:** none.
 
-**Interfaces:** *Consumes:* everything above. *Produces:* waves 5 and 6 live on `server-box`, and the
+**Interfaces:** *Consumes:* everything above. *Produces:* waves 5 and 6 live on `<server-host>`, and the
 **wave-6 exit criterion** measured on the real box: *a `ws-hold` driven from the PWA produces a journal
 line whose `dec.surface` is `pwa`* (AUDIT **M10** — the criterion is about the RECORD, not the argv, and
 Task 49 is what makes it true).
@@ -13979,7 +13979,7 @@ cd /home/you/worktrees/ccrc-pwa/still-river && bash deploy/deploy.sh
 - [ ] **Step 4: verify the shipped sha through `/health`** — the server lane's own final gate.
 
 ```bash
-curl -sS http://203.0.113.7:7788/health
+curl -sS http://<server-host>:7788/health
 ```
 Expected: an `ok` body whose build sha matches the sha the deploy printed on its final line.
 
@@ -13989,7 +13989,7 @@ release it, then read the record back:
 
 ```bash
 curl -sS -H "x-ccrc-mail-token: $(cat ~/.ccrc/mail.token)" \
-  'http://203.0.113.7:7788/api/lifecycle?limit=10' | head -c 2000
+  'http://<server-host>:7788/api/lifecycle?limit=10' | head -c 2000
 ```
 Expected: a `hold` event whose `dec` reads
 `{"surface":"pwa","actor":"device:<the browser that logged in>"}` — **`surface: "pwa"` is the criterion**.
