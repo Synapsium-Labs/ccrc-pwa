@@ -3159,7 +3159,7 @@ Task 8's direct probes, and this table stays coherent. The parity relation, per 
 
 **Steps:**
 
-- [ ] 1. Write the fixture module, `server/test/deliverabilityFixture.ts`:
+- [x] 1. Write the fixture module, `server/test/deliverabilityFixture.ts`:
 
   ```ts
   /**
@@ -3253,7 +3253,7 @@ Task 8's direct probes, and this table stays coherent. The parity relation, per 
   }
   ```
 
-- [ ] 2. Write the failing parity test, `server/test/deliverability-parity.test.ts`:
+- [x] 2. Write the failing parity test, `server/test/deliverability-parity.test.ts`:
 
   ```ts
   // D9's single-definition mechanism: `sweepMail` is NOT refactored to call
@@ -3411,7 +3411,7 @@ Task 8's direct probes, and this table stays coherent. The parity relation, per 
   });
   ```
 
-- [ ] 3. Run it, expect FAIL: with Task 8 landed the pure arm passes, but if run before Task 8 the
+- [x] 3. Run it, expect FAIL: with Task 8 landed the pure arm passes, but if run before Task 8 the
   import fails — this task requires Task 8. The genuinely red case to verify here: temporarily
   reorder two rungs in `peerDeliverable` (swap the registry and tmux `if`s) and confirm the
   "answers IN ORDER" unit test (Task 8) plus the absent-registry parity row go red — then restore.
@@ -3419,7 +3419,7 @@ Task 8's direct probes, and this table stays coherent. The parity relation, per 
   — expect PASS on first complete run (this suite is born green by construction; its red exists in
   the mutation ceremony below, which is the §4 requirement "the two ladders drift").
 
-- [ ] 4. Mutation ceremony — spec §4, "Deliverability single-definition / the two ladders drift".
+- [x] 4. Mutation ceremony — spec §4, "Deliverability single-definition / the two ladders drift".
   Plant: in `server/src/coord/peers.ts`, delete the line
   `if (p.panePid === null) return 'no:no-pane';`. Run BOTH suites:
   `./node_modules/.bin/vitest run test/deliverability-parity.test.ts test/peers.test.ts`.
@@ -3427,12 +3427,12 @@ Task 8's direct probes, and this table stays coherent. The parity relation, per 
   drifts to `'yes'` while the real sweep does not send — the equivalence assertion fires) and Task
   8's rung-3 unit test. Revert the mutant; both suites green again.
 
-- [ ] 5. Full-file check, foreground:
+- [x] 5. Full-file check, foreground:
   `./node_modules/.bin/vitest run test/deliverability-parity.test.ts test/mail-sweep.test.ts` —
   `mail-sweep.test.ts` green WITH NO EDIT is this task's own assertion that `sweepMail` was not
   touched.
 
-- [ ] 6. Commit:
+- [x] 6. Commit:
 
   ```bash
   cd server && git add test/deliverabilityFixture.ts test/deliverability-parity.test.ts
