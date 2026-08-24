@@ -39,7 +39,7 @@ const shFail = (snippet: string): { code: number; stderr: string; stdout: string
 const runCcd = (...args: string[]): { code: number; stdout: string; stderr: string } => {
   const opts = {
     encoding: 'utf8' as const, cwd: h.home,
-    env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true }),
+    env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }),
   };
   try { return { code: 0, stdout: execFileSync('bash', [CCD, ...args], opts).trim(), stderr: '' }; }
   catch (e) {
@@ -98,7 +98,7 @@ describe('ccd coord-pause', () => {
 
   it('refuses when $REG is not a directory — the marker has nowhere to live', () => {
     // Deleting the directory does NOT produce this state: ccd runs
-    // `mkdir -p "$REG"` at source time (ccd:41), so it is back before any verb
+    // `mkdir -p "$REG"` at source time (ccd:43), so it is back before any verb
     // runs. A FILE at the path is the state the guard actually answers — that
     // `mkdir -p` is unchecked, so it fails silently and leaves `-d` false — and
     // it discriminates for any uid, root included.

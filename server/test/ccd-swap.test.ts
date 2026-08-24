@@ -87,7 +87,7 @@ describe('cmd_swap carries the transcript', () => {
   });
 
   it('a gpt -> Anthropic swap sanitizes the copy, and every carried name IS that file', () => {
-    // Unchanged contract (ccd:7044), re-pinned at the verb: the Codex lane
+    // Unchanged contract (ccd:10495), re-pinned at the verb: the Codex lane
     // writes EMPTY assistant text blocks, which the Anthropic API rejects on
     // the next turn. Ordering it before the hardlinks is what stops a sibling
     // name keeping the unsanitized inode.
@@ -218,6 +218,10 @@ describe('cmd_swap keeps carrying the task list', () => {
     expect(h.calls()).toEqual([
       'systemctl --user stop claude-session@claude-demo',
       'tmux kill-session -t cc-claude-demo',
+      // cmd_swap's own `_lc_done` (task 18) is the first `_lc_emit` in this
+      // process — it sits right after the registry flip, before the restart —
+      // so `_lc_obs`'s once-per-process `tmux list-panes` probe fires here.
+      'tmux list-panes -a -F #{session_name} #{pane_pid}',
       'systemctl --user start claude-session@claude-demo',
     ]);
   });

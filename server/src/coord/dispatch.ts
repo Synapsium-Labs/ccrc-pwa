@@ -7,7 +7,7 @@ import { cutShort } from '../lifecycle.js';
 import type { KeyedQueue } from '../inject/queue.js';
 import { measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
 import { readHookState } from '../hookstate.js';
-import { CCD_ARGV, verbSupported } from '../ccdargv.js';
+import { CCD_ARGV, verbSupported, sweepDec } from '../ccdargv.js';
 import { sendPrompt } from '../inject/send.js';
 import { type AdvanceResult, type CoordStore } from './store.js';
 import { COORDINATOR_PAUSE_MARKER, MAIL_DISABLED_MARKER, clearRefusedDetail, holdReason, queueSystemMail } from './rundefs.js';
@@ -417,7 +417,9 @@ export async function dispatchRun(
 
   // 5: hold, behind `verbSupported` — the standing convention reason string,
   // DISPLAY-ONLY and never parsed back.
-  const holdArgv = CCD_ARGV.wsHold(sessionId, holdReason(run.program, run.wave, run.waveOf, run.id));
+  const holdArgv = CCD_ARGV.wsHold(sessionId,
+    holdReason(run.program, run.wave, run.waveOf, run.id),
+    sweepDec(deps.fleetState, `run:${run.id} dispatch`));
   if (!verbSupported(deps.fleetState, holdArgv)) {
     return { ok: false, kind: 'unsupported' };
   }

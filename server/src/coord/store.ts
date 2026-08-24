@@ -1,15 +1,19 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { tx } from './db.js';
 import { CLEAR_REFUSED_STRANDS_TEXT } from './rundefs.js';
+import { reviveDec, reviveMeas, reviveObs, type JournalRow } from './journalparse.js';
 import {
+  isLifecycleAct, isLifecycleGapReason, isLifecycleOutcome,
   isMailDeliveryState, isMailKind, isNotifyKind, isProgramState, isRunState, isWorkItemState,
+  LC_ACT_UNKNOWN, LC_OUTCOME_UNKNOWN,
   RUN_TRANSITIONS,
-  type CoordCaps, type MailDeliveryState, type MailKind, type MailRejectCode, type MailSummary,
+  type CoordCaps, type LifecycleGap, type LifecycleGapReason, type MailDeliveryState,
+  type MailKind, type MailRejectCode, type MailSummary, type MirroredLifecycleEvent,
   type NotifyEvent, type ProgramState, type RunItemTally, type RunState, type RunSummary,
   type WorkItemState,
 } from '../../../shared/api.js';
 
-/** One entry in `$REG/<id>.prhistory` (ccd/ccd:855-858). Re-declared as a TYPE
+/** One entry in `$REG/<id>.prhistory` (ccd/ccd:2252-2253). Re-declared as a TYPE
  *  here rather than parsed twice: `coord/prhistory.ts` owns the reader. */
 export interface PrLineageEntry { pr: number; branch: string; phase: string; recordedAt: number }
 
@@ -224,6 +228,44 @@ interface MailRowDb {
  *  shared with `outstandingMailFor`. */
 const clampMailLimit = (limit: number): number =>
   Number.isFinite(limit) && limit > 0 ? Math.min(Math.floor(limit), 500) : 100;
+
+/** One row of `lifecycle_generations`. `retired` is a boolean here and an
+ *  INTEGER in the column — the narrowing happens once, in
+ *  `journalGenerations`, so no caller ever sees SQLite's 0/1. */
+export interface JournalGeneration {
+  gen: string; firstSeenAt: number; lastSweepAt: number;
+  cursor: number; size: number; retired: boolean;
+}
+
+/**
+ * One `(observed class, declared surface)` pair off a lifecycle row — the only
+ * type that crosses the L1/L3 seam carrying two of the three identity
+ * families, and the one place their two legitimate spellings are reconciled.
+ *
+ * THE WIRE/JOURNAL FIELDS ARE `obs.cg` AND `dec.surface`; the DERIVED PAIR is
+ * `obsClass`/`decSurface`, matching `corroboration(obsClass, decSurface)`'s own
+ * parameter names. Both spellings are correct at their own layer; this
+ * docstring is what stops a later reader "fixing" either one. Likewise `id`:
+ * the COLUMN is `sessionId` (because `id` is `lifecycle_events`' autoincrement
+ * key) and the SQL below aliases it back.
+ *
+ * Both strings are RAW. Narrowing them is `corroboration`'s job and
+ * `divergence.ts`'s call, and this type must not pre-empt it by claiming they
+ * are members of anything.
+ */
+export interface ProvenancePair {
+  readonly id: string;
+  readonly at: number | null;
+  readonly obsClass: string;
+  readonly decSurface: string;
+}
+
+/** JSON text out of a column back to `unknown`, or null. Never throws: a
+ *  column this process wrote can still be a column an older build wrote. */
+const jsonOrNull = (s: string | null): unknown => {
+  if (s === null) return null;
+  try { return JSON.parse(s); } catch { return null; }
+};
 
 /**
  * Every read and every write of the coordination database, in one class, and
@@ -1618,7 +1660,7 @@ export class CoordStore {
    *    approximation of "whatever `foldPrLineage` would have stored at THAT
    *    close" when the close-time snapshots themselves were lost with the
    *    database. A wave that has not closed gets `[]`, and that is NOT a
-   *    stand-in: nothing has folded into it yet (`ccd/ccd:2018-2035`'s
+   *    stand-in: nothing has folded into it yet (`ccd/ccd:1957-1963`'s
    *    three-answer ladder).
    *
    * A THIRD rule (deviation D-11, found in Task 3 review — the plan's own
@@ -1698,5 +1740,274 @@ export class CoordStore {
       }
       return ids.map((id) => this.run(id)!);
     });
+  }
+
+  /* ── the lifecycle journal mirror (build 9) ────────────────────────────── */
+
+  /**
+   * Every generation this mirror has ever seen, retired ones included — the
+   * retired rows are what make "this generation was rotated away with N bytes
+   * undrained" answerable a year later.
+   */
+  journalGenerations(): JournalGeneration[] {
+    const rows = this.db.prepare(
+      'SELECT gen, firstSeenAt, lastSweepAt, cursor, size, retired ' +
+      'FROM lifecycle_generations ORDER BY gen',
+    ).all() as (Omit<JournalGeneration, 'retired'> & { retired: number })[];
+    return rows.map((r) => ({ ...r, retired: r.retired !== 0 }));
+  }
+
+  /**
+   * ONE TRANSACTION FOR THE ROWS AND THE CURSOR, and that is the whole of D6's
+   * "the cursor is an optimisation, never a correctness input": it is advanced
+   * only inside the same `tx()` as the rows it covers, so it can never move
+   * past uncommitted data. A cursor hoisted out of here — even one line above
+   * the loop, in its own transaction — is the mutant `lifecycle-store.test.ts`
+   * exists to kill.
+   *
+   * `INSERT OR IGNORE` against the two partial unique indexes is what makes
+   * idempotency INTRINSIC rather than positional: a parsed line dedupes on its
+   * own `uid`, and a uid-less one on its bytes within its generation. Neither
+   * is a function of where in the file the line happened to sit, so re-reading
+   * a generation from offset 0 is always no-op-or-catch-up.
+   *
+   * Returns how many rows actually LANDED — the caller logs nothing on 0,
+   * which is the ordinary answer for a sweep that only advanced a cursor.
+   *
+   * `badoutcome` rides alongside `badact` in the column list — added to
+   * `MIGRATIONS[2]` and `JournalRow` by a fix round after this brief was
+   * written, because ccd writes it today and `LifecycleEvent.badoutcome`
+   * already requires it on every `MirroredLifecycleEvent`. Dropping it here
+   * would silently lie on every row where ccd wrote one.
+   */
+  ingestJournal(input: {
+    readonly gen: string;
+    readonly rows: readonly JournalRow[];
+    readonly cursor: number;
+    readonly size: number;
+    readonly at: number;
+  }): number {
+    return tx(this.db, () => {
+      const ins = this.db.prepare(
+        'INSERT OR IGNORE INTO lifecycle_events ' +
+        '(uid, gen, at, ingestedAt, act, badact, outcome, badoutcome, verb, sessionId, tx, refusal, ' +
+        'detail, truncated, obsJson, decJson, measJson, raw) ' +
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      );
+      let inserted = 0;
+      for (const r of input.rows) {
+        const res = ins.run(
+          r.uid, input.gen, r.at, input.at, r.act, r.badact, r.outcome, r.badoutcome, r.verb,
+          r.sessionId, r.tx, r.refusal, r.detail, r.truncated ? 1 : 0,
+          r.obs === null ? null : JSON.stringify(r.obs),
+          r.dec === null ? null : JSON.stringify(r.dec),
+          r.meas === null ? null : JSON.stringify(r.meas),
+          r.raw,
+        );
+        inserted += Number(res.changes);
+      }
+      this.db.prepare(
+        'INSERT INTO lifecycle_generations (gen, firstSeenAt, lastSweepAt, cursor, size, retired) ' +
+        'VALUES (?, ?, ?, ?, ?, 0) ' +
+        'ON CONFLICT(gen) DO UPDATE SET lastSweepAt = excluded.lastSweepAt, ' +
+        'cursor = excluded.cursor, size = excluded.size, retired = 0',
+      ).run(input.gen, input.at, input.at, input.cursor, input.size);
+      return inserted;
+    });
+  }
+
+  /** A hole in the mirror, recorded rather than skipped (D6). Never pruned:
+   *  the gap outlives the generation it is about, which is the only reason it
+   *  is worth writing down.
+   *
+   *  `lostFrom`/`lostTo` are taken AS GIVEN, never constructed here: the
+   *  coupling invariant (both null, or both numbers) is `mirrorplan.ts`'s
+   *  private `coupledLoss` helper's job, at the one call site that builds a
+   *  `PlannedGap`. This method is a pure write of whatever pair its caller
+   *  already produced, so it does not re-derive — and cannot drift from —
+   *  that invariant. */
+  recordGap(g: {
+    readonly at: number; readonly gen: string; readonly reason: LifecycleGapReason;
+    readonly detail: string; readonly lostFrom: number | null; readonly lostTo: number | null;
+  }): void {
+    this.db.prepare(
+      'INSERT INTO lifecycle_gaps (at, gen, reason, detail, lostFrom, lostTo) ' +
+      'VALUES (?, ?, ?, ?, ?, ?)',
+    ).run(g.at, g.gen, g.reason, g.detail, g.lostFrom, g.lostTo);
+  }
+
+  /** RETIRE, NEVER DELETE. A retired generation's cursor and size are the
+   *  evidence behind its gap row; destroying them would destroy the record of
+   *  what was lost, which is the same mistake `ws-restore` made until wave 3. */
+  retireGeneration(gen: string, at: number): void {
+    this.db.prepare(
+      'UPDATE lifecycle_generations SET retired = 1, lastSweepAt = ? WHERE gen = ?',
+    ).run(at, gen);
+  }
+
+  /** Bounded like `FEED_RETENTION` is, and for the same reason: a route that
+   *  can be asked for the whole table is a route that can be asked for 90 MB. */
+  static readonly LIFECYCLE_PAGE_MAX = 500;
+
+  /** The column list, named ONCE. `SELECT *` is banned in this directory —
+   *  naming every column is exactly what makes "an older build ignores unknown
+   *  columns" true rather than aspirational. Includes `badoutcome`, added to
+   *  the schema by a fix round after this brief was written — omitting it
+   *  here would silently drop the outcome-side degrade token on every read. */
+  private static readonly LC_COLS =
+    'id, uid, gen, at, ingestedAt, act, badact, outcome, badoutcome, verb, sessionId, tx, refusal, ' +
+    'detail, truncated, obsJson, decJson, measJson, raw';
+
+  /**
+   * One session's past tense, oldest-first, newest-`limit` window.
+   *
+   * ORDERED BY THIS TABLE'S OWN `id`, NEVER BY `at`. `at` is CCD's clock and is
+   * nullable; `id` is monotonic across a generation rotation. `feed_events`
+   * already relies on the identical argument for `GET /api/feed`.
+   */
+  lifecycleFor(q: { readonly sessionId?: string | null; readonly limit?: number }): MirroredLifecycleEvent[] {
+    const raw = q.limit ?? CoordStore.LIFECYCLE_PAGE_MAX;
+    const n = Number.isFinite(raw) && raw > 0
+      ? Math.min(Math.floor(raw), CoordStore.LIFECYCLE_PAGE_MAX)
+      : CoordStore.LIFECYCLE_PAGE_MAX;
+    const c = CoordStore.LC_COLS;
+    const rows = (q.sessionId
+      ? this.db.prepare(
+          `SELECT ${c} FROM (SELECT ${c} FROM lifecycle_events WHERE sessionId = ? ` +
+          'ORDER BY id DESC LIMIT ?) ORDER BY id ASC',
+        ).all(q.sessionId, n)
+      : this.db.prepare(
+          `SELECT ${c} FROM (SELECT ${c} FROM lifecycle_events ORDER BY id DESC LIMIT ?) ` +
+          'ORDER BY id ASC',
+        ).all(n)) as {
+          uid: string | null; gen: string; at: number | null; ingestedAt: number;
+          act: string; badact: string | null; outcome: string; badoutcome: string | null;
+          verb: string | null; sessionId: string | null; tx: string | null;
+          refusal: string | null; detail: string | null; truncated: number;
+          obsJson: string | null; decJson: string | null; measJson: string | null; raw: string;
+        }[];
+    return rows.map((r) => ({
+      uid: r.uid, gen: r.gen, at: r.at, ingestedAt: r.ingestedAt,
+      // Through the guards, never a cast — the same discipline `feedEvents`
+      // gives `kind` and `programs()` gives `state`. A token a NEWER build
+      // wrote lands somewhere honest, and `raw` still carries the bytes.
+      act: isLifecycleAct(r.act) ? r.act : LC_ACT_UNKNOWN,
+      badact: r.badact,
+      outcome: isLifecycleOutcome(r.outcome) ? r.outcome : LC_OUTCOME_UNKNOWN,
+      // `badact`'s twin. Same shape as `badact` above: a free-text echo of
+      // whatever ccd (or this build's own degrade) wrote, never re-narrowed
+      // here — narrowing already happened once, on the way in.
+      badoutcome: r.badoutcome,
+      verb: r.verb,
+      // The COLUMN is `sessionId`; the WIRE event is `id`. One rename,
+      // declared in `journalparse.ts` and undone here — see `ProvenancePair`.
+      id: r.sessionId,
+      tx: r.tx, refusal: r.refusal, detail: r.detail,
+      truncated: r.truncated !== 0,
+      // The SAME revivers the parser used on the way in: one definition, both
+      // directions, and each returns a literal so a family gaining a field is
+      // a compile error rather than a silently-dropped one.
+      obs: reviveObs(jsonOrNull(r.obsJson)),
+      dec: reviveDec(jsonOrNull(r.decJson)),
+      meas: reviveMeas(jsonOrNull(r.measJson)),
+      raw: r.raw,
+    }));
+  }
+
+  /** The holes, newest-first — a timeline with a hole in it says so. */
+  lifecycleGaps(limit = 100): LifecycleGap[] {
+    const n = Number.isFinite(limit) && limit > 0
+      ? Math.min(Math.floor(limit), CoordStore.LIFECYCLE_PAGE_MAX)
+      : 100;
+    const rows = this.db.prepare(
+      'SELECT at, gen, reason, detail, lostFrom, lostTo FROM lifecycle_gaps ORDER BY id DESC LIMIT ?',
+    ).all(n) as {
+      at: number; gen: string; reason: string; detail: string;
+      lostFrom: number | null; lostTo: number | null;
+    }[];
+    return rows.map((r) => ({
+      at: r.at, gen: r.gen,
+      reason: isLifecycleGapReason(r.reason) ? r.reason : 'unknown',
+      detail: r.detail, lostFrom: r.lostFrom, lostTo: r.lostTo,
+    }));
+  }
+
+  /** What `/api/fleet/health` reports so the operator sees the growth coming
+   *  (D8). `oldestAt` IS the reconstruction horizon: below it the mirror holds
+   *  history the flat file no longer does. `AS n` and not `AS rows` — `ROWS`
+   *  is a SQLite window-frame keyword and only parses here as a fallback
+   *  identifier. */
+  lifecycleStats(): {
+    rows: number; oldestAt: number | null; newestAt: number | null;
+    generations: number; gaps: number;
+  } {
+    const e = this.db.prepare(
+      'SELECT count(*) AS n, MIN(at) AS oldestAt, MAX(at) AS newestAt FROM lifecycle_events',
+    ).get() as { n: number; oldestAt: number | null; newestAt: number | null };
+    const g = this.db.prepare('SELECT count(*) AS c FROM lifecycle_generations').get() as { c: number };
+    const p = this.db.prepare('SELECT count(*) AS c FROM lifecycle_gaps').get() as { c: number };
+    return { rows: e.n, oldestAt: e.oldestAt, newestAt: e.newestAt, generations: g.c, gaps: p.c };
+  }
+
+  /**
+   * The pairs `divergence.provenance-mismatch` weighs — rows carrying BOTH a
+   * kernel-observed actor class and a declared surface. NOTHING IS DECIDED
+   * HERE: `corroboration()` (L0) is the only function allowed to relate the
+   * families, and `divergence.ts` is where it is called. This is a read.
+   *
+   * `json_extract` rather than a second column pair: the families ride as JSON
+   * precisely because they never merge, and two more columns would be two more
+   * places for a newer ccd's field to be dropped.
+   *
+   * MAPPED, NOT CAST. `json_extract` answers whatever the JSON held — a
+   * number, a boolean, a null — and `as unknown as ProvenancePair[]` would
+   * launder that past the only narrowing door there is. A row whose class or
+   * surface is not a string cannot be modelled AS A PAIR, and an unmodellable
+   * value is not a disagreement, so it is dropped here rather than raised
+   * downstream.
+   */
+  recentProvenance(sinceAt: number, limit: number): ProvenancePair[] {
+    const n = Number.isFinite(limit) && limit > 0 ? Math.min(Math.floor(limit), 1000) : 500;
+    const rows = this.db.prepare(
+      "SELECT sessionId AS id, at, json_extract(obsJson, '$.cg') AS obsClass, " +
+      // `INDEXED BY lifecycle_by_at`, FORCED rather than left to the planner
+      // (Tasks 40/41 review, F1). Measured on an in-memory `node:sqlite` with
+      // 500,000 rows over 30 days (~1.5-2yr of growth at schema.ts's own ~90
+      // MB/year — this table is NEVER PRUNED): a bare `CREATE INDEX
+      // lifecycle_by_at ON lifecycle_events(at)`, with NO hint, is not enough
+      // -- SQLite still chose `SCAN lifecycle_events` (confirmed with and
+      // without `ANALYZE`), because the WHERE column (`at`) and the ORDER BY
+      // column (`id`) differ and the planner prefers the scan order that
+      // satisfies `ORDER BY id DESC` for free over paying for an explicit
+      // sort, even when that scan is the more expensive plan by orders of
+      // magnitude. `INDEXED BY` does not change what this query MEANS —
+      // `ORDER BY lifecycle_events.id DESC` below is untouched, byte for
+      // byte, so every existing behaviour (the alias-shadowing note two
+      // lines down included) still holds. It only forces the ACCESS PATH:
+      // seek the `at` index to the window's lower bound (`SEARCH … USING
+      // INDEX lifecycle_by_at (at>?)`), then sort ONLY the rows that
+      // survived the WHERE (bounded by the window, never by table size) into
+      // a temp b-tree for `id DESC` (`USE TEMP B-TREE FOR ORDER BY`).
+      // Verified array-order-IDENTICAL to the unindexed query, row for row,
+      // on three datasets: a realistic under-limit window, an out-of-order
+      // two-generation case built specifically to prove `at` and `id` order
+      // can diverge, and that same case pushed past the `limit` where a
+      // reshaped `ORDER BY at DESC` (the alternative considered and
+      // rejected) would have picked a DIFFERENT top-N.
+      "json_extract(decJson, '$.surface') AS decSurface " +
+      'FROM lifecycle_events INDEXED BY lifecycle_by_at ' +
+      'WHERE sessionId IS NOT NULL AND obsJson IS NOT NULL AND decJson IS NOT NULL ' +
+      // `lifecycle_events.id`, QUALIFIED: `id` is now an output alias for
+      // `sessionId`, and SQLite resolves a bare `ORDER BY id` to the alias —
+      // which would order this window by session name instead of by arrival.
+      'AND at IS NOT NULL AND at >= ? ORDER BY lifecycle_events.id DESC LIMIT ?',
+    ).all(sinceAt, n) as {
+      id: string; at: number | null; obsClass: unknown; decSurface: unknown;
+    }[];
+    return rows.flatMap((r) => (
+      typeof r.obsClass === 'string' && typeof r.decSurface === 'string'
+        ? [{ id: r.id, at: r.at, obsClass: r.obsClass, decSurface: r.decSurface }]
+        : []
+    ));
   }
 }

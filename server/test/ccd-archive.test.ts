@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { makeCcdHarness, ghContainedEnv, harnessBin, CCD, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
 import { mungePath } from '../src/munge.js';
+import { ACTOR_FLAGS_CAP } from '../src/ccdargv.js';
 
 /** sha256 of the empty string — what a failed read used to be indistinguishable
  *  from, and what a genuinely empty ignored set still legitimately hashes to. */
@@ -72,7 +73,7 @@ const runCcd = (...args: string[]): { code: number; stdout: string; stderr: stri
     // the poisoned `gh`: it is prepended, and the tmux/systemctl stubs below
     // it are still found.
     env: ghContainedEnv(h.home,
-      { ...process.env, HOME: h.home, PATH: `${stub}:${process.env.PATH ?? ''}` }, { systemd: true }),
+      { ...process.env, HOME: h.home, PATH: `${stub}:${process.env.PATH ?? ''}` }, { systemd: true, tmux: true }),
   };
   try { return { code: 0, stdout: execFileSync('bash', [CCD, ...args], opts).trim(), stderr: '' }; }
   catch (e) {
@@ -150,9 +151,17 @@ describe('ccd caps', () => {
   // still fail loudly on anything ELSE that drifts: a THIRD capability token
   // added without updating this list is exactly as much a silent hole as an
   // undispatched verb would be.
-  const KNOWN_CAPABILITY_TOKENS = ['stop-surface'];
+  const KNOWN_CAPABILITY_TOKENS = ['actor-flags-v1', 'lifecycle-v1', 'stop-surface'];
 
   it('advertises exactly the verbs the dispatcher implements, plus the known capability tokens', () => {
+    // The THIRD spelling of this token, closing the parity gap `ccdargv.ts`'s
+    // own docstring on `ACTOR_FLAGS_CAP` names: this list, the deployed
+    // `ccd`'s `echo actor-flags-v1`, and `ccdargv.ts`'s constant used to be
+    // able to drift from one another silently — corrupting the constant
+    // reddened only `capsupported.test.ts`'s own self-check, nothing
+    // cross-file. Importing the constant here is not a ring violation: ring
+    // discipline governs L0–L5 SOURCE, not a test importing its own target.
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(ACTOR_FLAGS_CAP);
     // The deployed ~/.local/bin/ccd is a COPY, not a symlink to the repo, so a
     // verb can pass the agent whitelist and still not exist on the box. This
     // list is what the agent reports; a list that drifts from the dispatcher
@@ -160,7 +169,7 @@ describe('ccd caps', () => {
     const src = fs.readFileSync(CCD, 'utf8');
     // Anchored on the dispatcher's own preamble, and the anchor's uniqueness is
     // asserted. `case "${1:-}" in` occurs TWICE — cmd_ws_gc's option parser
-    // (ccd:995) comes first — so slicing from indexOf landed inside ws-gc, and
+    // (ccd:8879) comes first — so slicing from indexOf landed inside ws-gc, and
     // the arm regex missed ws-gc's arms only because they are indented four
     // spaces instead of two. That coincidence held the whole parity check up: one
     // re-indentation and this test would have compared the caps list against
@@ -277,7 +286,7 @@ describe('_ws_stash_count', () => {
     // The unnamed form is the COMMON one — a bare `git stash` — and every other
     // fixture in this file and in ccd-ws-audit.test.ts uses `stash push -m`,
     // which is why deleting the WIP arm left the suite green. What it would
-    // cost: `_ws_reap_eval` gates `stashes-present` on this count (ccd:2357),
+    // cost: `_ws_reap_eval` gates `stashes-present` on this count (ccd:6143),
     // so a workspace whose only stash was made with a bare `git stash` would
     // read 0, the §7 guard would not fire, and the reap would CAS-delete the
     // branch those stashes name.
@@ -952,7 +961,7 @@ describe('ws-archive refuses rather than record a manifest that lies', () => {
     // `status --porcelain` failed, worktreeBytes 0 because _ws_gc_bytes returned
     // '-' and the fallback zeroed it, ignoredDigest = sha256(''). Measured before
     // the fix: "archived demo-quiet-basin — worktree kept at …, nothing deleted",
-    // exit 0, marker set. ws-restore already refuses this shape (ccd:613).
+    // exit 0, marker set. ws-restore already refuses this shape (ccd:4468).
     const r = shFail(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/worktree is gone/);
@@ -1159,7 +1168,7 @@ describe('ws-archive refuses rather than record a manifest that lies', () => {
     // the fix: the archived marker was set, exit 0, and the persisted record was
     //   {"id":,"branch":,"base":,"tip":,"dirty":0,…}
     // — not JSON at all, as the archive record. ccd's other python3 call site
-    // (ccd:1287) warns and continues; that is right for a best-effort transcript
+    // (ccd:10474) warns and continues; that is right for a best-effort transcript
     // sanitize and wrong for a record deletions are authorised from.
     const r = shFail(`${ARCH} cmd_ws_archive --session demo-quiet-basin`,
                      { PATH: `${stub}:${process.env.PATH ?? ''}` });
@@ -1187,7 +1196,7 @@ describe('ws-archive records branch drift instead of refusing forever', () => {
   it('archives a branch renamed by hand, naming both records and no tip', () => {
     const wt = workspace('demo', 'quiet-basin');
     // `_ws_wt_branch`'s contract is that it FOLLOWS a rename, ccd's or the
-    // user's (ccd:377-383). The registry's name is now the one that resolves to
+    // user's (ccd:4067-4069). The registry's name is now the one that resolves to
     // nothing, which is a fact about the world: `"tip":null`, and ws-reap refuses
     // it as `branch-missing` at the instant of deletion.
     h.git(wt, 'branch', '-m', 'feature/renamed-by-hand');
@@ -1272,8 +1281,8 @@ describe('ws-restore', () => {
     // assignment is a no-op and its deletion is invisible. The state it exists for
     // is an entry that never got one — ws-add is interrupted between `_spawn` and
     // `_reg_set started 1` — and the cost is not cosmetic: `cmd_ensure` and
-    // `cmd_start` read this flag to choose `new` over `resume` (ccd:1431,
-    // ccd:1440), so a restored session missing it gets re-spawned as a FRESH
+    // `cmd_start` read this flag to choose `new` over `resume` (ccd:10360,
+    // ccd:10208), so a restored session missing it gets re-spawned as a FRESH
     // session by the next supervise tick, discarding the transcript ws-restore
     // just resumed from.
     workspace('demo', 'quiet-basin');
@@ -1400,7 +1409,7 @@ describe('ws-attic', () => {
   it('rejects any mode word other than --session or --drop', () => {
     // The session has to EXIST for the mode word to be what is under test.
     // Without it `_attic_project` fails and the command dies at `no such
-    // session` (ccd:634) before the case is reached, so the assertion cannot
+    // session` (ccd:4579) before the case is reached, so the assertion cannot
     // tell a rejected mode from a missing session: deleting the `*)` arm left
     // the whole 456-test suite green, while `ccd ws-attic --frobnicate <real
     // id>` then fell out of the case and exited 0 with no output — a mistyped

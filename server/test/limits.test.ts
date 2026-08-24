@@ -116,7 +116,7 @@ describe('disabled-marker backfill is bounded to known wrappers', () => {
 
   // The wire-contract defect: the registry dir is shared with markers that are
   // NOT accounts. ccd ships `autocompact-disabled` there (a fleet-wide
-  // proactive-/compact kill switch, ccd:22) — before this fix, the backfill
+  // proactive-/compact kill switch, ccd:41) — before this fix, the backfill
   // iterated every `*-disabled` filename with no filter, so this file alone
   // fabricated a `{"wrapper":"autocompact",...,disabled:true}` row that GET
   // /api/accounts served and the accounts screen would render as a phantom

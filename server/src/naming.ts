@@ -15,7 +15,7 @@ export const SLUG_MAX = 40;
 
 /**
  * `null` when the title has nothing alphanumeric in it — not an empty string.
- * `ws/${''}` is `ws/`, and ccd's own `_ws_branch_valid` (`ccd/ccd:1337-1347`)
+ * `ws/${''}` is `ws/`, and ccd's own `_ws_branch_valid` (`ccd/ccd:3063-3071`)
  * DOES refuse a name that starts or ends with a slash, so the box would answer
  * `bad-branch` rather than ever create that ref — but sending the call anyway
  * would still burn the one-attempt-per-(id, derived-branch) retry budget on a
@@ -24,7 +24,7 @@ export const SLUG_MAX = 40;
  * slugifies to the empty string ... is not a rename — no call is made."
  *
  * The character class is a subset of what ccd's `_ws_branch_valid`
- * (`ccd/ccd:1337-1347`) permits, on purpose — but this is NOT a second copy of
+ * (`ccd/ccd:3063-3071`) permits, on purpose — but this is NOT a second copy of
  * that rule. The rule has one definition, on the box; this only avoids sending
  * names that are certain to be refused, and the verdict still comes back as
  * `bad-branch`.

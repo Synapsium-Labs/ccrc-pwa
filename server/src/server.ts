@@ -21,7 +21,8 @@ import { buildAgreement, defaultCachePath, loadSnapshot, rosterAgreement, type F
 // include list and the ESM-emit invariant honest.
 import { generateAccountsSh } from '../../shared/generate.mjs';
 import { bodyDigest } from '../../shared/mark.mjs';
-import { CCD_ARGV, stopSurfaceSupported, verbSupported, type CcdArgv } from './ccdargv.js';
+import { ACTOR_FLAGS_CAP, CCD_ARGV, capSupported, deviceActor, stopSurfaceSupported, verbSupported,
+         type ActorFlags, type CcdArgv } from './ccdargv.js';
 import { parsePrLines, prView, unknownView } from './prstate.js';
 import { parseAudit, parseReap } from './wsaudit.js';
 import { readTasks } from './tasks/read.js';
@@ -440,6 +441,27 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const sessionAuth = (req: FastifyRequest): GateDecision => sessionVerdict(req, {
     enabled: deps.cfg.authEnabled, secret: secretNow(), store: authStore,
   }, Date.now());
+
+  /**
+   * The dec a HUMAN-DRIVEN route declares, or `null` when the deployed ccd is
+   * not known to parse the flags (`capSupported`, false on no evidence).
+   *
+   * `surface: 'pwa'` because that is what this lane looks like from the box —
+   * the same word `POST /api/sessions/:id/stop` already sends, and it is a
+   * DECLARATION rather than an authentication either way (`StopSurface`'s own
+   * docstring). `actor` comes from what the GATE MEASURED (`sessionAuth(req)`),
+   * never from `deviceLabel(req)`: the request's own `user-agent` is a claim,
+   * the session row's label is a claim that was presented with a live
+   * credential, and only the second is worth recording as provenance.
+   * `reason: null` because these routes take no reason on the wire and
+   * inventing one would put a sentence the operator never wrote into a
+   * provenance record; `--reason` exists on ccd for the CLI callers wave 5
+   * serves. Nothing about the REQUEST BODY changes, so the PWA is untouched.
+   */
+  const pwaDec = (req: FastifyRequest): ActorFlags | null =>
+    capSupported(deps.fleetState, ACTOR_FLAGS_CAP)
+      ? { surface: 'pwa', actor: deviceActor(sessionAuth(req).device), reason: null }
+      : null;
 
   /**
    * `POST /api/auth/login` — one of the two EXEMPT auth routes (`gate.ts`'s
@@ -1013,6 +1035,14 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // this closes the gap between them and the wire contract PWA reads
   // (`pwa/src/lib/api.ts`'s `fleetHealth()`), rather than changing behavior.
   app.get('/api/fleet/health', async (): Promise<FleetHealth> => {
+    // Read ONCE, off the watcher, exactly the way `/api/fleet` reads
+    // `watcher?.currentPending()` — the mirror's cursor, error tally and
+    // recorded-once gap names live in memory ON IT, and no route may re-mint
+    // one. `undefined` when this box has no watcher or has not swept yet,
+    // which the wire renders as an ABSENT block: absence-permits, and a reader
+    // must treat it as `'unknown'`, never as `'ok'` and never as an empty
+    // history.
+    const lifecycle = watcher?.lifecycleHealth() ?? undefined;
     if (deps.cfg.fleetMode === 'remote' && deps.fleetState) {
       return {
         mode: 'remote',
@@ -1026,6 +1056,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         // scripts) — an absent stamp and a null one are the same condition,
         // exactly as `/health` treats them.
         build: buildAgreement(deps.fleetState.build, deps.build ?? null),
+        ...(lifecycle ? { lifecycle } : {}),
       };
     }
     // Local mode drives ccd on this same box, off this same roster: there is
@@ -1038,6 +1069,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return {
       mode: deps.cfg.fleetMode, connected: true, downSince: null,
       roster: 'unknown', build: 'unknown',
+      // BOTH ARMS. Local mode drives ccd on this same box and mirrors the same
+      // journal — there is no second box to disagree with, but there is still a
+      // journal, and a block that appeared only in remote mode would make the
+      // dev box permanently unable to see its own mirror stall.
+      ...(lifecycle ? { lifecycle } : {}),
     };
   });
 
@@ -1720,7 +1756,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       const runs = deps.coord?.openRunsForSession(id) ?? [];
       if (runs.length > 0) return reply.code(409).send({ ok: false, error: 'run-open', runs });
     }
-    const argv = CCD_ARGV.wsArchive(id);
+    const argv = CCD_ARGV.wsArchive(id, pwaDec(req));
     // `ws-archive` is the SAME verb generation as `ws-audit` and `ws-reap` —
     // all four were added by this branch and all four sit consecutively in
     // `ccd caps` — so a fleet host on an older ccd dies in the verb's own
@@ -1737,7 +1773,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const { id } = req.params as { id: string };
     if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    const argv = CCD_ARGV.wsRestore(id);
+    const argv = CCD_ARGV.wsRestore(id, pwaDec(req));
     // Same generation, same skew, same answer as `/archive` above.
     if (!verbSupported(deps.fleetState, argv)) {
       return reply.code(501).send({ ok: false, error: 'unsupported' });
@@ -1782,7 +1818,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (typeof body.reason !== 'string' || body.reason.trim() === '') {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
-    const argv = CCD_ARGV.wsHold(id, body.reason);
+    const argv = CCD_ARGV.wsHold(id, body.reason, pwaDec(req));
     // Same verb generation and same skew answer as `/archive`/`/restore`
     // above — ws-hold/ws-release ship in the same branch that added them.
     if (!verbSupported(deps.fleetState, argv)) {
@@ -1795,7 +1831,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const { id } = req.params as { id: string };
     if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    const argv = CCD_ARGV.wsRelease(id);
+    const argv = CCD_ARGV.wsRelease(id, pwaDec(req));
     // Same generation, same skew, same answer as `/hold` above.
     if (!verbSupported(deps.fleetState, argv)) {
       return reply.code(501).send({ ok: false, error: 'unsupported' });

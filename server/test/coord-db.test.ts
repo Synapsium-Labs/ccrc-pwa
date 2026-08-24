@@ -268,7 +268,7 @@ describe('openCoordDb', () => {
 });
 
 describe('describeMigrationProgress', () => {
-  // Isolated from `openCoordDb` deliberately. `MIGRATIONS.length === 2` since
+  // Isolated from `openCoordDb` deliberately. `MIGRATIONS.length === 3` since
   // Wave 2 added `runs_by_session`, so the "earlier migrations already
   // committed" branch IS reachable through `openCoordDb` (a fresh v0 file
   // migrating 0→2 can fail on iteration 1 with iteration 0 committed) — but
@@ -327,8 +327,8 @@ describe('coord.db: migration 1 — runs_by_session', () => {
     raw.close();
 
     const db = openCoordDb(p);
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(2);
-    expect(COORD_SCHEMA_VERSION).toBe(2);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(3);
+    expect(COORD_SCHEMA_VERSION).toBe(3);
     const names = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as
       { name: string }[]).map((r) => r.name);
     expect(names).toContain('runs_by_session');
@@ -361,5 +361,67 @@ describe('coord.db: migration 1 — runs_by_session', () => {
     // And the replacement says what is true now, so a future author is not
     // left to rediscover it.
     expect(src).toMatch(/already at `user_version 1`|already at user_version 1/);
+  });
+});
+
+describe('coord.db: migration 2 — the lifecycle journal mirror', () => {
+  it('reaches a database ALREADY at user_version 2 — it cannot be an amendment to MIGRATIONS[0] or [1]', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => { raw.exec(MIGRATIONS[0]!); raw.exec(MIGRATIONS[1]!); raw.exec('PRAGMA user_version = 2'); });
+    raw.close();
+
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(3);
+    const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as
+      { name: string }[]).map((r) => r.name).sort();
+    expect(tables).toEqual(expect.arrayContaining([
+      'lifecycle_events', 'lifecycle_gaps', 'lifecycle_generations',
+    ]));
+    db.close();
+  });
+
+  it('makes `uid` unique, and dedupes a uid-less line on (gen, raw) instead', () => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const ins = db.prepare(
+      'INSERT OR IGNORE INTO lifecycle_events (uid, gen, at, ingestedAt, act, outcome, raw) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?)',
+    );
+    ins.run('1.2.3', '1755780000000000000', 1, 9, 'unknown', 'unknown', '{"uid":"1.2.3"}');
+    ins.run('1.2.3', '1755780000000000000', 1, 9, 'unknown', 'unknown', '{"uid":"1.2.3"}');
+    ins.run(null, '1755780000000000000', null, 9, 'unknown', 'unknown', 'not json');
+    ins.run(null, '1755780000000000000', null, 9, 'unknown', 'unknown', 'not json');
+    ins.run(null, '1755780000000000001', null, 9, 'unknown', 'unknown', 'not json');
+    expect((db.prepare('SELECT count(*) AS c FROM lifecycle_events').get() as { c: number }).c).toBe(3);
+    db.close();
+  });
+
+  it('lets two DIFFERENT uid-less lines coexist in one generation — the dedupe is on the bytes, not on a position', () => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const ins = db.prepare(
+      'INSERT OR IGNORE INTO lifecycle_events (uid, gen, at, ingestedAt, act, outcome, raw) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?)',
+    );
+    ins.run(null, 'g', null, 9, 'unknown', 'unknown', 'garbage a');
+    ins.run(null, 'g', null, 9, 'unknown', 'unknown', 'garbage b');
+    expect((db.prepare('SELECT count(*) AS c FROM lifecycle_events').get() as { c: number }).c).toBe(2);
+    db.close();
+  });
+
+  it('carries `detail` and `truncated` as their own columns — a dropped field is not a silence', () => {
+    // `truncated` is what `_lc_json` writes when it shed fields to fit
+    // LC_LINE_MAX. Without the column, "the family was not on the line" and
+    // "the family was dropped to fit" collapse to one NULL — an overloaded
+    // value at the one seam this whole record exists to keep honest.
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    db.prepare(
+      'INSERT INTO lifecycle_events (uid, gen, at, ingestedAt, act, outcome, detail, truncated, raw) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run('t.1', 'g', 1, 9, 'unknown', 'unknown', 'a sentence for a person', 1, '{}');
+    const row = db.prepare('SELECT detail, truncated FROM lifecycle_events').get() as
+      { detail: string | null; truncated: number };
+    expect(row).toEqual({ detail: 'a sentence for a person', truncated: 1 });
+    db.close();
   });
 });

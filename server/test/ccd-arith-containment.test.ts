@@ -83,7 +83,7 @@ describe('arithmetic-injection containment (D-B8-3): no swept site evaluates a t
   it('_dispatch_swap does not evaluate a payload sitting in SWAP_JITTER', () => {
     const h = makeCcdHarness('arith-jitter');
     // MEASURED, and it corrects the plan's table: this site is NOT reachable
-    // from the environment. `ccd:54` is a bare `SWAP_JITTER=120`, not
+    // from the environment. `ccd:56` is a bare `SWAP_JITTER=120`, not
     // `${SWAP_JITTER:-120}`, so sourcing ccd overwrites whatever the caller
     // exported — the operand is always ccd's own literal. Passing the payload
     // as env therefore proves nothing, and a test written that way is green

@@ -6,7 +6,7 @@ import { readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
-import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, isRunRefuseCode } from '../../shared/api.js';
+import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason } from '../../shared/api.js';
 import { buildServer } from '../src/server.js';
 import type { Deps } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -432,8 +432,17 @@ describe('the rejection table is total, in both directions', () => {
     for (const m of sources().matchAll(/'([a-z]+(?:-[a-z]+)+)'/g)) {
       const tok = m[1]!;
       if (NOT_CODES.has(tok)) continue;
-      expect((MAIL_REJECT_CODES as readonly string[]).includes(tok) || isRunRefuseCode(tok),
-        `${tok} is not a declared MailRejectCode or RunRefuseCode`).toBe(true);
+      expect((MAIL_REJECT_CODES as readonly string[]).includes(tok)
+        || isRunRefuseCode(tok)
+        // BUILD 9a WAVE 4 — a FOURTH union, checked together and never merged, for
+        // the reason the `enter-ignored` note above already states. `LifecycleGapReason`
+        // reaches this scanner because `mirrorplan.ts` lives in `server/src/coord` and
+        // `'rotated-away'` is one of its members. It is admitted through its own exported
+        // guard rather than added to `NOT_CODES`, and that difference is the point: an
+        // allowlist entry would accept exactly one spelling for ever, whereas the guard
+        // accepts a gap reason added later and still rejects a typo'd one.
+        || isLifecycleGapReason(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode or LifecycleGapReason`).toBe(true);
     }
   });
 });

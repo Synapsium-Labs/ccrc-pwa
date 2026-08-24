@@ -10,7 +10,12 @@ import { CCD_ARGV, verbSupported } from '../src/ccdargv.js';
 
 /** One representative call per entry. Every entry MUST appear: the exhaustive
  *  assertion below is what stops a new route hiding behind an untested one. */
-const SAMPLES: Record<keyof typeof CCD_ARGV, string[]> = {
+// `unknown[]`, not `string[]`, since wave 6: `wsArchive` and its four siblings
+// take an `ActorFlags | null` argument, so a sample is no longer all-strings.
+// The call site below already casts through `unknown[]`; this widens the
+// declaration to match what the table accepts. EXPECTED stays `string[]` — an
+// argv is still tokens.
+const SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   start: ['claude', 'demo'],
   // `enable` is a SEPARATE entry, not a parameter of `start`: POST /api/sessions
   // picks between the two words (`POST /api/sessions` in `server.ts`) and the agent grants them
@@ -25,14 +30,18 @@ const SAMPLES: Record<keyof typeof CCD_ARGV, string[]> = {
   prStateSession: ['demo-quiet-basin'],
   prStateProject: ['demo'],
   prOpen: ['demo-quiet-basin', 'the work', 'Ym9keQ==', 'false'],
-  wsArchive: ['demo-quiet-basin'],
-  wsRestore: ['demo-quiet-basin'],
+  wsArchive: ['demo-quiet-basin', null],
+  wsRestore: ['demo-quiet-basin', null],
   wsAudit: ['demo-quiet-basin'],
   wsReap: ['a'.repeat(64), 'demo-quiet-basin'],
   wsAttic: ['demo-quiet-basin'],
-  wsHold: ['demo-quiet-basin', 'program:agent-evals wave:1/4'],
-  wsRelease: ['demo-quiet-basin'],
-  wsRename: ['demo-quiet-basin', 'ws/brainstorm-helix-and-slide-notes'],
+  // The one sample that carries a dec, so layer 2's `isExecAllowed` check
+  // actually proves the FLAGGED shape is reachable under the granted
+  // `['ws-hold','--session']` prefix rather than only the bare one.
+  wsHold: ['demo-quiet-basin', 'program:agent-evals wave:1/4',
+           { surface: 'pwa', actor: 'device:iPhone', reason: null }],
+  wsRelease: ['demo-quiet-basin', null],
+  wsRename: ['demo-quiet-basin', 'ws/brainstorm-helix-and-slide-notes', null],
   coordPause: ['on'],
 };
 
@@ -179,7 +188,7 @@ describe('layer 3 — the list never drifts wider than the code', () => {
     expect(rn[0]).toEqual(['ws-rename', '--session']);
     expect(isExecAllowed('ccd', ['ws-rename', 'demo-quiet-basin', 'ws/x'])).toBe(false);
     expect(isExecAllowed('ccd', ['ws-rename'])).toBe(false);
-    expect(isExecAllowed('ccd', [...CCD_ARGV.wsRename('demo-quiet-basin', 'ws/x')])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.wsRename('demo-quiet-basin', 'ws/x', null)])).toBe(true);
   });
 
   // Fix round 1 (task 14 follow-up): the drift pin above caught `stopId`/
@@ -295,8 +304,8 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     prStateSession: ['pr-state', '--session', 'demo-quiet-basin'],
     prStateProject: ['pr-state', '--project', 'demo'],
     // SAMPLES.prOpen's fourth element is the STRING 'false' (SAMPLES is typed
-    // string[] and the call site casts through `unknown[]`), which is truthy
-    // at runtime — so this sample actually exercises the `draft: true` arm.
+    // unknown[] since wave 6, and the call site casts through `unknown[]`), which
+    // is truthy at runtime — so this sample actually exercises the `draft: true` arm.
     // The real boolean-vs-boolean mapping is pinned unambiguously below.
     prOpen: ['pr-open', '--session', 'demo-quiet-basin', '--title', 'the work', '--body-b64', 'Ym9keQ==', '--draft', 'true'],
     wsArchive: ['ws-archive', '--session', 'demo-quiet-basin'],
@@ -304,7 +313,8 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     wsAudit: ['ws-audit', '--session', 'demo-quiet-basin'],
     wsReap: ['ws-reap', '--expect', 'a'.repeat(64), '--session', 'demo-quiet-basin'],
     wsAttic: ['ws-attic', '--session', 'demo-quiet-basin'],
-    wsHold: ['ws-hold', '--session', 'demo-quiet-basin', '--reason', 'program:agent-evals wave:1/4'],
+    wsHold: ['ws-hold', '--session', 'demo-quiet-basin', '--reason', 'program:agent-evals wave:1/4',
+             '--surface', 'pwa', '--actor', 'device:iPhone'],
     wsRelease: ['ws-release', '--session', 'demo-quiet-basin'],
     wsRename: ['ws-rename', '--session', 'demo-quiet-basin', '--branch', 'ws/brainstorm-helix-and-slide-notes'],
     coordPause: ['coord-pause', '--state', 'on'],

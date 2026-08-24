@@ -18,7 +18,9 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { AUTH_VERDICTS, PR_REASONS, isPrReason } from '../../shared/api.js';
+import {
+  AUTH_VERDICTS, PR_REASONS, isPrReason, LIFECYCLE_ACTS, LC_ACT_UNKNOWN,
+} from '../../shared/api.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -1474,5 +1476,121 @@ describe('the release owner literal — two named assignments, and no third spel
       const hits = codeLines(path.join(wfDir, wf)).filter((l) => l.includes(OWNER));
       expect(hits, `.github/workflows/${wf}`).toEqual([]);
     }
+  });
+});
+
+describe('Build 9 nouns — the lifecycle journal vocabulary', () => {
+  const oneDefinition = (decl: RegExp, name: string): void => {
+    const hits = ALL.filter((f) => decl.test(readFileSync(f, 'utf8')));
+    expect(hits.map(rel), name).toEqual(['shared/api.ts']);
+  };
+
+  it('defines each type and its derived list exactly once, in shared/', () => {
+    oneDefinition(/^\s*export type LifecycleAct\b/m, 'LifecycleAct');
+    oneDefinition(/^\s*export const LIFECYCLE_ACTS\b/m, 'LIFECYCLE_ACTS');
+    oneDefinition(/^\s*export const LC_ACT_UNKNOWN\b/m, 'LC_ACT_UNKNOWN');
+    oneDefinition(/^\s*export type LifecycleOutcome\b/m, 'LifecycleOutcome');
+    oneDefinition(/^\s*export const LIFECYCLE_OUTCOMES\b/m, 'LIFECYCLE_OUTCOMES');
+    oneDefinition(/^\s*export const LC_OUTCOME_UNKNOWN\b/m, 'LC_OUTCOME_UNKNOWN');
+    oneDefinition(/^\s*export type ActorClass\b/m, 'ActorClass');
+    oneDefinition(/^\s*export const ACTOR_CLASSES\b/m, 'ACTOR_CLASSES');
+    oneDefinition(/^\s*export type Corroboration\b/m, 'Corroboration');
+    oneDefinition(/^\s*export function corroboration\b/m, 'corroboration');
+    oneDefinition(/^\s*export type LcRefusalToken\b/m, 'LcRefusalToken');
+    oneDefinition(/^\s*export const LC_REFUSAL_WORD\b/m, 'LC_REFUSAL_WORD');
+    oneDefinition(/^\s*export interface LifecycleEvent\b/m, 'LifecycleEvent');
+    oneDefinition(/^\s*export interface MirroredLifecycleEvent\b/m, 'MirroredLifecycleEvent');
+    oneDefinition(/^\s*export function compareGenerations\b/m, 'compareGenerations');
+  });
+
+  it('DERIVES every runtime list from its total map — never a hand-written array', () => {
+    // The `PR_REASONS`/`SPAWN_VERDICTS`/`DIVERGENCE_KINDS` guard, applied to
+    // the five new vocabularies. A member added to a union with no key in its
+    // map is TS2739; a key the union does not have is TS2353. A
+    // `readonly X[]` literal beside the type gives neither, and accepts a typo.
+    const api = readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8');
+    for (const [list, map] of [
+      ['LIFECYCLE_ACTS', 'LIFECYCLE_ACT_MAP'],
+      ['LIFECYCLE_OUTCOMES', 'LIFECYCLE_OUTCOME_MAP'],
+      ['ACTOR_CLASSES', 'ACTOR_CLASS_MAP'],
+      ['CORROBORATIONS', 'CORROBORATION_MAP'],
+      // The refusal list derives from the EXPORTED rendering map itself —
+      // there is no private twin, and there must not be one: see the third
+      // `it` below.
+      ['LC_REFUSAL_TOKENS', 'LC_REFUSAL_WORD'],
+    ] as const) {
+      expect.soft(api, `${list} must derive from ${map}`)
+        .toMatch(new RegExp(`export const ${list}[^=]*=\\s*\\n?\\s*Object\\.keys\\(${map}\\)`));
+      expect.soft(api, `${list} is a hand-written array`)
+        .not.toMatch(new RegExp(`export const ${list}[^=]*=\\s*\\[`));
+    }
+  });
+
+  it('keeps the NARROWING maps module-private, and the RENDERING map exported', () => {
+    // `STOP_SURFACES`' argument (:1140-1148), one level in: with the map
+    // unexported, `LIFECYCLE_ACT_MAP[raw]` cannot be written in another file
+    // at all, so `isLifecycleAct` is the only narrowing route.
+    //
+    // LC_REFUSAL_WORD IS THE EXCEPTION, AND THE EXCEPTION IS THE RULE READ
+    // CORRECTLY: it renders a token for a person, it narrows nothing, the
+    // PWA types its own renderer against it, and `isLcRefusalToken` is still
+    // the only door. `SENTENCES` (`wsaudit.ts:17`) is the precedent. A
+    // private `LC_REFUSAL_WORD_MAP` twin aliased to an export would be a
+    // second name for one value, declared only to satisfy a guard written
+    // for the other case — so this test forbids it in BOTH directions.
+    const api = readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8');
+    for (const m of ['LIFECYCLE_ACT_MAP', 'LIFECYCLE_OUTCOME_MAP', 'ACTOR_CLASS_MAP',
+      'CORROBORATION_MAP', 'DEC_CORROBORATES']) {
+      expect.soft(api, `${m} must not be exported`)
+        .not.toMatch(new RegExp(`^\\s*export const ${m}\\b`, 'm'));
+      expect.soft(api, `${m} must exist`).toMatch(new RegExp(`^\\s*const ${m}\\b`, 'm'));
+    }
+    expect(api, 'LC_REFUSAL_WORD is the renderer and is exported directly')
+      .toMatch(/^\s*export const LC_REFUSAL_WORD\b/m);
+    expect(api, 'no LC_REFUSAL_WORD_MAP alias — one value, one name')
+      .not.toMatch(/LC_REFUSAL_WORD_MAP/);
+  });
+
+  it('enumerates the act vocabulary only where the compiler enforces exhaustiveness', () => {
+    // The rule, stated as the assertion: a file may list the WHOLE act
+    // vocabulary only if a `Record<LifecycleAct, …>` over it makes a missing
+    // member a compile error. One file qualifies today — `shared/api.ts` (the
+    // union and `LIFECYCLE_ACT_MAP`). `pwa/src/lib/journalWords.ts` joins it
+    // in wave 9, and ONLY because it types its map `Record<LifecycleAct,
+    // string>`; add it to this list then, not before.
+    //
+    // Membership is tested per token in ANY form, quoted or as an object key,
+    // the way the `PrReason` scan above does — a quoted-literals-only scan
+    // would exclude a map written with unquoted keys by accident rather than
+    // by rule.
+    const enumerates = (src: string): boolean =>
+      LIFECYCLE_ACTS.every((a) => new RegExp(`(?:'${a}'|(?<![\\w'-])${a}\\s*:)`).test(src));
+    const holders = ALL.filter((f) => enumerates(readFileSync(f, 'utf8'))).map(rel).sort();
+    expect(holders).toEqual(['shared/api.ts']);
+  });
+
+  it('and the act scan is looking at something — guards the guard', () => {
+    // A `LIFECYCLE_ACTS` that had gone empty would make `every` vacuously true
+    // for EVERY file, turning the assertion above into a list of all 200-odd
+    // sources — loud, but for the wrong reason. This fails first, and
+    // specifically. Measured when written: the highest-scoring NON-holder is
+    // `pwa/src/lib/api.ts` at 8 of 22, so the margin is 14 tokens.
+    const enumerates = (src: string): boolean =>
+      LIFECYCLE_ACTS.every((a) => new RegExp(`(?:'${a}'|(?<![\\w'-])${a}\\s*:)`).test(src));
+    expect(LIFECYCLE_ACTS.length).toBe(22);
+    expect(LIFECYCLE_ACTS).toContain(LC_ACT_UNKNOWN);
+    expect(enumerates(readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8'))).toBe(true);
+    expect(enumerates(readFileSync(path.join(ccrcRoot, 'pwa/src/lib/api.ts'), 'utf8'))).toBe(false);
+  });
+
+  it('LC_REFUSAL_WORD has exactly one holder — the second copy is the whole failure mode', () => {
+    const tokens = ['scratch-unwritable', 'tip-unreadable', 'bad-session-id',
+      'flock-unavailable', 'lock-unopenable', 'is-a-workspace',
+      'session-live', 'session-verdict-unknown', 'spawn-failed'];
+    const enumerates = (src: string): boolean =>
+      tokens.every((t) => src.includes(`'${t}'`));
+    expect(ALL.filter((f) => enumerates(readFileSync(f, 'utf8'))).map(rel))
+      .toEqual(['shared/api.ts']);
+    expect(tokens.length, 'guards the guard — an empty list passes everything').toBe(9);
   });
 });

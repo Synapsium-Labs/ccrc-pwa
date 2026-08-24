@@ -81,7 +81,7 @@ export interface SessionRecord {
    *  `reviveFleetSession` — widening it would reject every persisted
    *  snapshot. This field is server-side only and reaches no wire field. */
   branchEvidence: BranchEvidence;
-  /** `origin/main` — what ws-add recorded as this branch's base (ccd:221).
+  /** `origin/main` — what ws-add recorded as this branch's base (ccd:2633).
    *  Never re-derived: a proof against a base the workspace was not cut from
    *  is a proof about a different question. */
   base: string | null;

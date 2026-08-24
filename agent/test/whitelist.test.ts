@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { canonicalize, checkPath, isExecAllowed } from '../src/whitelist.js';
+import { LC_DIR_NAME, LC_ERRORS_NAME, LC_GEN_PREFIX, LC_GEN_SUFFIX } from '../../shared/api.js';
 // critic2, gates 3 related sub-item: the three `rmSync` calls this replaces sat
 // AFTER their assertions, so a failing assertion threw past them and the
 // directory leaked — on precisely the runs a mutation sweep produces. `mkTmp`
@@ -89,6 +90,31 @@ describe('whitelist.checkPath', () => {
     await expect(checkPath(undefined as unknown as string, cfg, 'read')).resolves.toBeNull();
     await expect(checkPath(42 as unknown as string, cfg, 'read')).resolves.toBeNull();
     await expect(checkPath(null as unknown as string, cfg, 'write')).resolves.toBeNull();
+  });
+
+  it('the lifecycle journal is READ-allowed and WRITE-forbidden — the agent cannot corrupt the log it reads', async () => {
+    // Build 9 spec §2/§4. The server mirrors `$HOME/.cc-sessions/.lifecycle/`
+    // over the agent's EXISTING read grant — `.cc-sessions` is read-whitelisted
+    // (`whitelist.ts:84`) and `canonicalize` walks up to the longest existing
+    // prefix, so the path resolves before the directory exists. The whole
+    // agent-side delta of this build is this test: zero new grants, zero new
+    // frames, zero new capabilities.
+    seed();
+    const cfg = { home, projectsRoot };
+    const lc = path.join(home, '.cc-sessions', LC_DIR_NAME);
+    const journal = path.join(lc, `${LC_GEN_PREFIX}1755780000000000000${LC_GEN_SUFFIX}`);
+    const errors = path.join(lc, LC_ERRORS_NAME);
+
+    for (const p of [lc, journal, errors]) {
+      expect(await checkPath(p, cfg, 'read'), `${p} must be readable`).not.toBeNull();
+      // THE HALF THAT MATTERS. The write arm is `.cc-clips` and nothing else
+      // (`whitelist.ts:79-80`), so the agent is STRUCTURALLY incapable of
+      // truncating, appending to or rotating the record it serves — which is
+      // what makes "a shrink is a truncation ccd did" a sound inference on
+      // the server side, and it is a property of the whitelist rather than of
+      // anyone's restraint.
+      expect(await checkPath(p, cfg, 'write'), `${p} must NOT be writable`).toBeNull();
+    }
   });
 });
 

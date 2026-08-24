@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { buildServer, type Deps } from '../src/server.js';
 import { loadConfig } from '../src/config.js';
@@ -14,6 +14,13 @@ import { generateAccountsSh } from '../../shared/generate.mjs';
 import { bodyDigest } from '../../shared/mark.mjs';
 import type { FleetSession } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
+import { Bus } from '../src/bus.js';
+import { FleetWatcher } from '../src/watch.js';
+import { CoordStore } from '../src/coord/store.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { LC_CAP_TOKEN } from '../src/coord/mirrorplan.js';
+import { genFile } from './lifecycleHelpers.js';
+import { LC_ACT_UNKNOWN, LC_DIR_NAME, LIFECYCLE_ACTS } from '../../shared/api.js';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -244,5 +251,83 @@ describe('POST /api/fleet/reboot', () => {
     expect(res.statusCode).toBe(502);
     expect(res.json()).toEqual({ ok: false, error: 'hetzner-error' });
     await app.close();
+  });
+});
+
+describe('/api/fleet/health: the lifecycle block (build 9)', () => {
+  const AN_ACT = LIFECYCLE_ACTS.find((a) => a !== LC_ACT_UNKNOWN)!;
+  const G1 = '1755780000000000000';
+
+  it('reports the mirror once the watcher has swept', async () => {
+    const home = mkTmp('ccrc-fh-lc-');
+    const deps = testDeps(home);
+    const dir = path.join(deps.cfg.registryDir, LC_DIR_NAME);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, genFile(G1)),
+      `${JSON.stringify({ uid: 'a.1', at: 100, act: AN_ACT, outcome: 'done', id: 'demo' })}\n`);
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const full = { ...deps, coord,
+      fleetState: { connected: true, downSince: null, ccdVerbs: ['ws-rm', LC_CAP_TOKEN] } } as never;
+    const bus = new Bus();
+    const watcher = new FleetWatcher(full, bus);
+    const app = await buildServer(full, bus, watcher);
+    try {
+      await watcher.sweepLifecycle();
+      const body = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as
+        { lifecycle?: { state: string; rows: number; horizon: number | null; gaps: number } };
+      expect(body.lifecycle).toMatchObject({ state: 'ok', rows: 1, horizon: 100, gaps: 0 });
+    } finally { await app.close(); }
+  });
+
+  it('OMITS the block entirely when there is no watcher — absent reads as `unknown`, never as `ok`', async () => {
+    const app = await buildServer(testDeps(mkTmp('ccrc-fh-lc-')));
+    try {
+      const body = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as
+        Record<string, unknown>;
+      expect('lifecycle' in body && body['lifecycle'] !== undefined).toBe(false);
+    } finally { await app.close(); }
+  });
+
+  // Fix round 1: the collapse flagged in the Task 38/39 review. `null` used to
+  // mean BOTH "no coordination database" AND "database present, no sweep yet"
+  // — two conditions a caller would handle differently, folded into one value.
+  // The three cases below prove they are now distinguishable OVER THE WIRE,
+  // not merely in `lifecycleHealth()`'s return type.
+
+  it('has a watcher but NO coordination database — the block is absent, same as no watcher at all', async () => {
+    const deps = testDeps(mkTmp('ccrc-fh-lc-'));
+    const bus = new Bus();
+    const watcher = new FleetWatcher(deps, bus);
+    const app = await buildServer(deps, bus, watcher);
+    try {
+      const body = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as
+        Record<string, unknown>;
+      const present = 'lifecycle' in body && body['lifecycle'] !== undefined;
+      expect(present, 'no Deps.coord means no block, watcher or not').toBe(false);
+    } finally { await app.close(); }
+  });
+
+  it('has a coordination database but has NOT swept yet — the block is present, as `unknown`, never absent', async () => {
+    const home = mkTmp('ccrc-fh-lc-');
+    const deps = testDeps(home);
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const full = { ...deps, coord,
+      fleetState: { connected: true, downSince: null, ccdVerbs: ['ws-rm', LC_CAP_TOKEN] } } as never;
+    const bus = new Bus();
+    const watcher = new FleetWatcher(full, bus);
+    const app = await buildServer(full, bus, watcher);
+    try {
+      // Deliberately NOT calling `watcher.sweepLifecycle()` — that omission is
+      // the entire point of this case.
+      const body = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as
+        { lifecycle?: { state: string; rows: number; horizon: number | null; gaps: number;
+                         lastOk: number | null } };
+      expect(body.lifecycle, 'a database with no sweep yet must still report a block').toBeDefined();
+      const lc = body.lifecycle!;   // HARD guard above already stopped the test if absent.
+      expect.soft(lc.state, 'state').toBe('unknown');
+      expect.soft(lc.lastOk, 'lastOk').toBeNull();
+      expect.soft(lc.rows, 'rows').toBe(0);
+      expect.soft(lc.gaps, 'gaps').toBe(0);
+    } finally { await app.close(); }
   });
 });

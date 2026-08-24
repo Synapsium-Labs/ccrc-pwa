@@ -98,7 +98,7 @@ const runCcd = (...args: string[]): { code: number; stdout: string; stderr: stri
   const opts = {
     encoding: 'utf8' as const, cwd: h.home,
     env: ghContainedEnv(h.home,
-      { ...process.env, HOME: h.home, PATH: `${stub}:${process.env.PATH ?? ''}` }, { systemd: true }),
+      { ...process.env, HOME: h.home, PATH: `${stub}:${process.env.PATH ?? ''}` }, { systemd: true, tmux: true }),
   };
   try { return { code: 0, stdout: execFileSync('bash', [CCD, ...args], opts).trim(), stderr: '' }; }
   catch (e) {
@@ -378,7 +378,7 @@ describe('the start waits on observables', () => {
   });
 
   it('attach revives a dead row through the unit and lands on a pane that exists', () => {
-    // ccd:7180 is `_alive || cmd_ensure` then `exec tmux attach` — delegating
+    // ccd:11309-11310 is `_alive || cmd_ensure` then `exec tmux attach` — delegating
     // the spawn made that asynchronous, so without the wait the attach races a
     // pane that is not there yet.
     seed('claude2-demo');

@@ -25,7 +25,7 @@ const runCcd = (...args: string[]): { code: number; stdout: string; stderr: stri
       code: 0, stderr: '',
       stdout: execFileSync('bash', [CCD, ...args], {
         encoding: 'utf8', cwd: h.home,
-        env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true }),
+        env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }),
       }),
     };
   } catch (e) {
@@ -61,7 +61,7 @@ function pathWithoutPython3(home: string): string {
 }
 
 const runCcdNoPython3 = (...args: string[]): { code: number; stdout: string; stderr: string } => {
-  const env = ghContainedEnv(h.home, { HOME: h.home, PATH: pathWithoutPython3(h.home) }, { systemd: true });
+  const env = ghContainedEnv(h.home, { HOME: h.home, PATH: pathWithoutPython3(h.home) }, { systemd: true, tmux: true });
   // ccd's own default (`: "${XDG_RUNTIME_DIR:=/run/user/$(id -u)}"`) would
   // otherwise need `id`, which the curated PATH above deliberately omits.
   env['XDG_RUNTIME_DIR'] = '/tmp';

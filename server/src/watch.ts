@@ -6,7 +6,7 @@ import { hasMenu, parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
 import { defaultCachePath, loadSnapshot, saveSnapshot } from './fleetstate.js';
 import { readTasks, taskProgress } from './tasks/read.js';
-import { CCD_ARGV, verbSupported } from './ccdargv.js';
+import { CCD_ARGV, verbSupported, sweepDec } from './ccdargv.js';
 import { isFullLine, parsePrLines, phaseFor, type CcdPrFailure } from './prstate.js';
 import { liveSessionStatus, readLiveState } from './livestate.js';
 import { readHookState, type HookState } from './hookstate.js';
@@ -14,9 +14,10 @@ import { sendPrompt } from './inject/send.js';
 import { askActions } from './askkey.js';
 import type { SessionRecord } from './registry.js';
 import type {
-  CoordStatus, NotifyEvent, PrState, RunSummary, SessionStatus, TaskProgress,
+  CoordStatus, LifecycleHealth, NotifyEvent, PrState, RunSummary, SessionStatus, TaskProgress,
 } from '../../shared/api.js';
 import { MAIL_MAX_ATTEMPTS, UNCHECKED_PR } from '../../shared/api.js';
+import { JournalMirror } from './coord/mirror.js';
 // The pause marker's ONE definition in the tree. `MAIL_DISABLED_MARKER` is
 // NOT imported beside it: this file holds its own module-local literal
 // (`sweepMail` already uses it), a second `const` of that name in one scope is
@@ -25,11 +26,12 @@ import { MAIL_MAX_ATTEMPTS, UNCHECKED_PR } from '../../shared/api.js';
 import { COORDINATOR_PAUSE_MARKER } from './coord/rundefs.js';
 import { readWorktreeRecords } from './coord/gitref.js';
 import { divergences, unclaimedWorktrees, type DivergenceInput } from './divergence.js';
+import type { ProvenancePair } from './coord/store.js';
 import type { PushPayload } from './push.js';
 import { deriveBranch } from './naming.js';
 import { TranscriptResolver } from './transcript/resolve.js';
 import { readAiTitle } from './transcript/title.js';
-import { MAIL_REPLAY_CEILING_ERROR, toRunSummary } from './coord/store.js';
+import { MAIL_REPLAY_CEILING_ERROR, toRunSummary, type CoordStore } from './coord/store.js';
 import { renderMailNudge } from './coord/envelope.js';
 import { configDirFor } from './config.js';
 
@@ -59,6 +61,22 @@ const NAME_SWEEP_MS = 10_000;
  *  not per pane. */
 const DIVERGENCE_SWEEP_MS = 60_000;
 
+/** The journal mirror's lane, and it is fast for the one reason the census's is
+ *  slow: a sweep is ONE `readdir` plus one `readFileFrom` per live generation,
+ *  and a destruction's `intent`/outcome pair should be visible while the
+ *  operator is still looking at the screen. DECLARED HERE, beside its five
+ *  siblings, and deliberately NOT in `shared/api.ts`: it has no bash twin and
+ *  no wire meaning, and one sweep interval in L0 would be a second home for a
+ *  class of value that already has one. EXPORTED because `mirror.ts` cannot
+ *  import it — that would be L3 importing L4 — so the staleness window is
+ *  passed in from the one construction site below. */
+export const LC_SWEEP_MS = 5_000;
+
+/** How far back the census weighs provenance pairs. One hour, not the whole
+ *  table: a divergence the operator has already dealt with must stop being
+ *  reported, and the durable record is `GET /api/lifecycle`. */
+const PROVENANCE_WINDOW_MS = 3_600_000;
+
 /** Refusal tokens (of ccd's fourteen, `spec:252-266` — the spec's own table
  *  predates the ninth and the fourteenth, `spec:49` is the unrelated `ws/`-
  *  prefix paragraph) that cannot stop being true: a branch, once pushed, is
@@ -76,7 +94,7 @@ const DIVERGENCE_SWEEP_MS = 60_000;
  *  `registry-branch-drift` joins the set for the same "no title fixes it"
  *  reason as the worktree pair above: `cmd_ws_rename` now refuses when git's
  *  own worktree record disagrees with the registry's `branch` field — the
- *  corroboration `cmd_ws_reap` already requires (`ccd:3381`) — because
+ *  corroboration `cmd_ws_reap` already requires (`ccd:5763`) — because
  *  without it a hand `git branch -m` (which moves git's answer but never
  *  updates the registry) leaves this sweep's own condition 2 believing the
  *  branch is still at its born name while `ws-rename` would act on whatever
@@ -93,7 +111,7 @@ const DIVERGENCE_SWEEP_MS = 60_000;
  *  — `attemptedRenames`'s per-(incarnation, derived-branch) key is already the
  *  correct guard for a name-dependent refusal. Today the arm is dead code:
  *  `deriveBranch` only ever emits `ws/[a-z0-9]+(-[a-z0-9]+)*`, a subset
- *  `_ws_branch_valid` (`ccd/ccd:1337-1347`) always accepts, so `bad-branch`
+ *  `_ws_branch_valid` (`ccd/ccd:3063-3071`) always accepts, so `bad-branch`
  *  never actually reaches this lane — see `naming.ts:26-30`.
  *
  *  `held` (Wave 3 §3.1's `ws-rename` rung) is DELIBERATELY ABSENT and must
@@ -140,10 +158,10 @@ const PR_SWEEP_STUCK_MS = PR_BACKOFF_MAX_MS;
 const MAIL_SWEEP_MS = 10_000;
 
 /** How long a session must have been idle before it is interruptible. ccd's
- *  own `COMPACT_QUIET` (`ccd/ccd:45`), taken rather than re-derived: this is
+ *  own `COMPACT_QUIET` (`ccd/ccd:142`), taken rather than re-derived: this is
  *  the same judgement about the same panes, and two numbers for one policy is
  *  two numbers to get out of step. Measured from `statusUpdatedAt`, which
- *  Claude Code ticks on every busy<->idle transition (`ccd/ccd:6697-6698`). */
+ *  Claude Code ticks on every busy<->idle transition (`ccd/ccd:6724-6725`). */
 const MAIL_QUIET_MS = 60_000;
 
 /** No session gets two injections inside this window, however much mail is
@@ -207,7 +225,7 @@ const MAIL_BACKOFF_MAX_MS = PR_BACKOFF_MAX_MS;
 const MAIL_REPLAY_MAX_ATTEMPTS = 20;
 
 /** The fleet kill-switch, `$REG/mail-disabled` — ccd's `-disabled` family
- *  (`ccd/ccd:20-22`, `_lane_enabled` at `:53`), which the operator already
+ *  (`ccd/ccd:40-41`, `_lane_enabled` at `:248`), which the operator already
  *  knows how to use: `touch` to stop, `rm` to resume. Read by LISTING the
  *  registry directory, never by reading the file — and that stays true even
  *  though `FleetIO` no longer has to collapse "unreadable" into "absent":
@@ -304,6 +322,16 @@ export class FleetWatcher {
    *  a HEALTHY fleet is a frame rather than a silence. */
   private lastDivergenceSweep = 0;
   private lastDivergenceJson: string | null = null;
+  /** The seventh lane's clock — the journal mirror. `sweepLifecycle` below
+   *  carries the lane's own docstring; this is only the clock field, same
+   *  shape as `lastNameSweep`/`lastDivergenceSweep` above it. */
+  private lastLifecycleSweep = 0;
+  /** Built lazily (`mirrorFor` below) as soon as a coordination database
+   *  exists — NOT only on the first sweep, since `lifecycleHealth()` must be
+   *  able to ask it before any sweep has run. The mirror holds the cursor,
+   *  the error tally and the recorded-once gap names in memory, so there is
+   *  exactly one instance per process and it must not be re-minted per tick. */
+  private mirror: JournalMirror | null = null;
   /** `<project>/<name>` for the worktrees the PREVIOUS sweep found unclaimed —
    *  the census's one-interval debounce on `unregistered-worktree`, and the
    *  only cross-sweep memory this lane keeps. Empty at boot, so the first sweep
@@ -321,7 +349,7 @@ export class FleetWatcher {
    *  to be forgotten.
    *
    *  KEYED ON `<id>#<uuid>`, not `<id>` alone: `<project>-<slug>` is a SLUG,
-   *  recycled by `ws-reap` (`ccd:950-951`), and nothing in this map is ever
+   *  recycled by `ws-reap` (`ccd:2409`), and nothing in this map is ever
    *  pruned when a row disappears — so a bare `<id>` key would let a reaped
    *  workspace's stale pairs shadow an unrelated LATER workspace that drew the
    *  same recycled slug. `r.uuid` is minted fresh by every `ws-add`, so the
@@ -330,7 +358,7 @@ export class FleetWatcher {
    *  changes with the uuid.
    *
    *  THE SAME KEY CHANGE ALSO HAPPENS WITHOUT A REAP: `ccd`'s `_sync_uuid`
-   *  (`ccd:6417`) rewrites the registry's `uuid` field in place, on the SAME
+   *  (`ccd:9004`) rewrites the registry's `uuid` field in place, on the SAME
    *  live session, whenever Claude Code rotates its own session uuid (a
    *  `/clear`, a compaction) — no `ws-reap`/`ws-add` cycle required. So "a
    *  server restart earns one retry", above, is not the only way a pair earns
@@ -663,6 +691,11 @@ export class FleetWatcher {
       // (`inject/send.ts:26-36,115,126`). Awaiting it would put the dialog
       // detector and the busy->idle push behind a mail delivery.
       void this.sweepMail().catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, same reasoning as `sweepDivergences` above: in remote
+      // mode this is one agent-WS `readdir` plus one `readFileFrom` per live
+      // generation per sweep. Awaiting it would put the dialog detector and
+      // the busy->idle push behind a journal read.
+      void this.sweepLifecycle().catch(() => { /* one bad sweep must not kill the poll */ });
       // `records` PASSED IN, never re-read here: `assembleFleet` would
       // otherwise take its OWN read (`records ?? await readRegistry(...)`),
       // a SEPARATE whole-fleet sweep a few hundred ms after the one above —
@@ -1258,7 +1291,7 @@ export class FleetWatcher {
    * design:
    *
    *   1. it is a workspace, not a main checkout, and not archived — `ccd
-   *      ws-archive` "DESTROYS NOTHING" (`ccd:1711`), so an archived row keeps
+   *      ws-archive` "DESTROYS NOTHING" (`ccd:3833`), so an archived row keeps
    *      `workspace`, `branch = ws/<slug>`, its worktree and its transcript,
    *      fully in scope for conditions 2-4 unless excluded here; same guard,
    *      same shape, as the write right below this one in the file
@@ -1280,7 +1313,7 @@ export class FleetWatcher {
    *      uuid too.
    *
    * KNOWN GAP IN CONDITION 3, accepted and not engineered around: `ccd caps`
-   * has advertised `ws-rename` since long before it took flags (`ccd:1628`), so
+   * has advertised `ws-rename` since long before it took flags (`ccd:3482`), so
    * a fleet on an older ccd passes the verb gate. The old body binds the verb's
    * two arguments positionally — `local id="${1:?usage: …}"; local
    * new="${2:?…}"` — and this argv is `['ws-rename', '--session', <id>,
@@ -1354,7 +1387,7 @@ export class FleetWatcher {
       // whole test and must not grow an emptiness clause.
       if (r.held !== null || (this.deps.coord?.openRunsForSession(r.id).length ?? 0) > 0) continue;
       // Keyed by id AND uuid, not id alone: `<project>-<slug>` is a SLUG,
-      // recycled by ws-reap (`ccd:950-951`'s "144 per project, recycled") —
+      // recycled by ws-reap (`ccd:2409`'s "144 per project, recycled") —
       // `_ws_slug_free` only ever checks live registry rows, which `_reg_purge`
       // deletes on reap, so nothing stops a later `ws-add` drawing the same
       // slug for an unrelated workspace. `identity.uuid` is the Claude Code
@@ -1379,7 +1412,8 @@ export class FleetWatcher {
       // timer (`CAPS_REFRESH_MS`) — not the agent's, which has none —
       // requires a server restart in local mode (`localcaps.ts`, one probe
       // at boot, no timer).
-      if (!verbSupported(this.deps.fleetState, CCD_ARGV.wsRename(r.id, born))) continue;
+      if (!verbSupported(this.deps.fleetState,
+                         CCD_ARGV.wsRename(r.id, born, sweepDec(this.deps.fleetState, 'sweep:names')))) continue;
       const cfgDir = configDirFor(this.deps.cfg, identity.wrapper);
       if (!cfgDir) continue;
       // NO `foreign`: a derived branch name is written into the row with no
@@ -1415,7 +1449,8 @@ export class FleetWatcher {
       // accepted (a hand-run reap on a workspace whose first turn is still
       // landing is not a case worth a lock for, and the rename is a
       // `git branch -m` a reap would immediately make moot).
-      const res = await this.deps.queue.run(r.id, () => this.deps.runCcd(CCD_ARGV.wsRename(r.id, branch)));
+      const res = await this.deps.queue.run(r.id, () => this.deps.runCcd(
+        CCD_ARGV.wsRename(r.id, branch, sweepDec(this.deps.fleetState, 'sweep:names'))));
       if (!res.ok) {
         console.warn(`ccrc-server: ws-rename ${r.id} -> ${branch} failed: ${res.stderr.trim()}`);
         continue;
@@ -1588,10 +1623,25 @@ export class FleetWatcher {
     // done-fingerprint trusts, and the field a rename moves, is this one — which
     // is exactly why this method takes `records`, the same reason `sweepNames`
     // reads the registry itself.
+    // EMPTY ON REFUSAL, never stale: an absence is not a disagreement, and the
+    // same one-bad-read-must-not-kill-the-poll rule the `runs()` arm above
+    // states — except this one DEGRADES rather than returning, because the
+    // other four kinds are unaffected by a mirror this lane could not read.
+    let provenance: ProvenancePair[] = [];
+    try {
+      provenance = this.deps.coord?.recentProvenance(now - PROVENANCE_WINDOW_MS, 500) ?? [];
+    } catch (err) {
+      console.warn(`ccrc-server: sweepDivergences recentProvenance failed (${err instanceof Error ? err.message : String(err)}) — no provenance findings this pass`);
+    }
     const classifierInput = {
       records: records.map((r) => ({
         id: r.id, project: r.project, workspace: r.workspace, workdir: r.workdir,
         branch: r.branch, held: r.held, archivedAt: r.archivedAt,
+        // OFF THE RECORDS THIS SWEEP WAS HANDED, never a second read. The tick
+        // already measured `.supervised` for every row (`registry.ts:185`), and
+        // a re-read here would be a whole-fleet field sweep a minute for a
+        // number sitting in scope.
+        supervisedAt: r.supervisedAt,
       })),
       worktrees, headBranch, openRunSessionIds,
       // THE REGISTRY'S OWN DIRECTORY LISTING — the evidence that a workspace
@@ -1599,6 +1649,16 @@ export class FleetWatcher {
       // `unclaimedWorktrees`), taken above AFTER git's records for the ordering
       // reason stated there.
       registryNames,
+      // THE CLOCK, HANDED IN. `divergence.ts` is pure and reads no clock of its
+      // own, so the census and the ladder cannot drift against each other by
+      // reading two different `Date.now()`s.
+      nowMs: now,
+      // THE PAIRS, NOT THE VERDICT. `corroboration` is L0's and is called in
+      // `divergence.ts`; this lane only reads rows. Bounded to the last hour so
+      // a standing disagreement is re-reported while it stands and drops off
+      // once the session has been restarted honestly — the census is a list of
+      // things to look at now, not an archive (that is `GET /api/lifecycle`).
+      provenance,
     };
     const found = divergences({
       ...classifierInput, unclaimedLastSweep: this.lastUnclaimedWorktrees,
@@ -1615,6 +1675,68 @@ export class FleetWatcher {
     if (json === this.lastDivergenceJson) return;
     this.lastDivergenceJson = json;
     this.bus.emit('divergence', found);
+  }
+
+  /**
+   * Built as soon as a coordination database exists, not only on the first
+   * SWEEP — `lifecycleHealth()` below needs one to ask before any sweep has
+   * run, so the ONLY condition left absent is "no coordination database",
+   * never "database present but not swept yet" (fix round 1: those two must
+   * not collapse to the same `null`, the seam-overload rule). Construction
+   * itself is side-effect-free (`JournalMirror`'s constructor only assigns
+   * its deps); the filesystem and the clock are touched by `sweep()`, not by
+   * this. One instance per process, same as before — `??=` still guards a
+   * second store existing across two calls in the same tick.
+   */
+  private mirrorFor(store: CoordStore): JournalMirror {
+    this.mirror ??= new JournalMirror({
+      io: this.deps.io,
+      registryDir: this.deps.cfg.registryDir,
+      store,
+      ccdVerbs: () => this.deps.fleetState?.ccdVerbs ?? null,
+      now: () => Date.now(),
+      // THREE INTERVALS. One missed sweep is not an alarm, three is — and the
+      // multiplication happens HERE, at the one construction site, because
+      // `mirror.ts` is L3 and may not import this module.
+      staleAfterMs: LC_SWEEP_MS * 3,
+    });
+    return this.mirror;
+  }
+
+  /**
+   * Mirror `$REG/.lifecycle/` into `coord.db` (build 9 §1 D5).
+   *
+   * ON THE EXISTING TICK, WITH NO NEW TIMER. Its own clock, like
+   * `sweepDivergences` and `sweepNames`: `!== 0` so the FIRST sweep runs
+   * immediately after a restart instead of waiting `LC_SWEEP_MS`, which is the
+   * shape those two already ship.
+   *
+   * PUBLIC so a test can await it. `sweepMail` is not touched by this wave, by
+   * name (D9): a second producer lands BESIDE the most load-bearing loop on
+   * the box, never inside it.
+   */
+  async sweepLifecycle(): Promise<void> {
+    const store = this.deps.coord;
+    if (!store) return;
+    const now = Date.now();
+    if (this.lastLifecycleSweep !== 0 && now - this.lastLifecycleSweep < LC_SWEEP_MS) return;
+    this.lastLifecycleSweep = now;
+    await this.mirrorFor(store).sweep();
+  }
+
+  /**
+   * `null` ONLY when this box runs no coordination database — `/api/fleet/health`
+   * renders that as an ABSENT block. A database with no sweep yet is no longer
+   * folded into the same `null`: the mirror exists as soon as the store does
+   * (`mirrorFor` above), and its own `health()` answers truthfully with
+   * `state: 'unknown'`, `lastOk: null` (`mirrorplan.ts`'s `lifecycleState`,
+   * `lastOkAt === null` arm) — real evidence of "no evidence yet", not a
+   * second meaning stuffed into this method's own `null`.
+   */
+  lifecycleHealth(): LifecycleHealth | null {
+    const store = this.deps.coord;
+    if (!store) return null;
+    return this.mirrorFor(store).health();
   }
 
   /**
@@ -2386,7 +2508,7 @@ export class FleetWatcher {
         continue;
       }
       if (safety.verdict !== 'ok') continue;   // defers; the next sweep retries
-      const argv = CCD_ARGV.wsArchive(r.id);
+      const argv = CCD_ARGV.wsArchive(r.id, sweepDec(this.deps.fleetState, 'sweep:archive-merged'));
       // The same gate the `pr-state` sweep above and the `/archive` route
       // apply. Third instance of NF10's class, found in round 3: on a host
       // whose ccd predates `ws-archive` this call can only fail its usage

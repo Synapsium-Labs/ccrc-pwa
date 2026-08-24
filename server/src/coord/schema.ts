@@ -231,6 +231,194 @@ export const MIGRATIONS: readonly string[] = [
   `
   CREATE INDEX runs_by_session ON runs(sessionId);
   `,
+
+  // ── 3: user_version 2 -> 3 ────────────────────────────────────────────────
+  // The lifecycle journal mirror (build 9 §1 D1/D6/D8). `$REG/.lifecycle/
+  // journal-<19-digit-epochNs>.ndjson` is APPEND-ONLY on the fleet host and is
+  // the one record `_reg_purge` (ccd:458-556) cannot reach; these three tables
+  // are the server's copy of it.
+  //
+  // RE-MEASUREMENT, PROVABLY — the D8 ruling, written here rather than in a
+  // plan so nobody later files it as a doctrine violation. `parseJournalLine`
+  // is pure and total: no clock, no lookup, no registry, no other row. The
+  // ONLY server-owned value in `lifecycle_events` is `ingestedAt`, and it is
+  // never read as an event time. `raw` holds the line VERBATIM, so the
+  // reconstruction drill (`server/test/lifecycle-replay.test.ts`) is BYTE
+  // EQUALITY rather than resemblance, and a field a NEWER ccd writes that this
+  // build cannot model is not lost — a later build re-projects it out of `raw`
+  // without re-reading the fleet box.
+  //
+  // NEVER PRUNED, unlike `feed_events`. `feed_events` prunes to 2000 because it
+  // backs a UI ring; this table IS the record — bound the producer (`_lc_rotate`
+  // caps the journal at LC_GEN_KEEP x LC_GEN_MAX_BYTES), never the record.
+  // ~90 MB/year on the SERVER box, inside the `VACUUM INTO` snapshot
+  // `deploy.sh` already takes. Row count and byte size are reported through
+  // `/api/fleet/health` so the operator sees it coming.
+  //
+  // A SEPARATE MIGRATION for the reason migration 1 states in full: `db.ts` runs
+  // `for (let v = current; v < COORD_SCHEMA_VERSION; v++)`, and the server's copy
+  // is already at `user_version 2`.
+  //
+  // FIX ROUND 1 (Task 29 review, F1) AMENDS THIS MIGRATION IN PLACE, adding
+  // `badoutcome` below — which looks like exactly the mistake the paragraph
+  // above forbids, so the ruling and its premise are recorded here rather
+  // than only in a review thread. The "separate migration, never an
+  // amendment" rule protects a migration that has already RUN somewhere,
+  // because `db.ts`'s `for (let v = current; ...)` loop only ever executes
+  // `MIGRATIONS[v]` for `v >= current` — an edit to an already-applied
+  // migration index never re-runs against a database already past it, so an
+  // amendment there would silently diverge from what is actually on disk.
+  // THIS migration has not shipped: wave 4's server deploy is Task 43 and
+  // has not happened, `origin/main` (measured via `git merge-base --is-
+  // ancestor` against this branch's Task 27/28 commits, both NOT ancestors
+  // of `origin/main`) does not contain `MIGRATIONS[2]` at all — `schema.ts`
+  // on `origin/main` has exactly TWO migration entries, not three — so no
+  // server that has ever run has executed this file's `user_version 2 -> 3`
+  // step, and the live `~/.ccrc/coord.db` cannot be past `user_version 2`.
+  // Every database that HAS reached `user_version 3` is a test temp file
+  // created by this branch's own suites, which are rebuilt from `MIGRATIONS`
+  // fresh on every run and carry no state across them. Amending in place
+  // rather than adding `MIGRATIONS[3]` avoids a fourth table shape
+  // (`lifecycle_events` missing `badoutcome`, briefly, between versions 3
+  // and 4) that nothing would ever have actually run against.
+  //
+  // FIX ROUND 2 (Tasks 33/34 review, F2) AMENDS THIS MIGRATION AGAIN, adding
+  // the CHECK constraint on `lifecycle_gaps` below. The premise above was
+  // RE-VERIFIED for this round, not assumed: `origin/main`'s `schema.ts`
+  // still has exactly TWO migration entries (no `lifecycle_events`,
+  // `lifecycle_gaps` or `badoutcome` anywhere in it), and `git merge-base
+  // --is-ancestor` against `origin/main` says NO for both Task 27's commit
+  // and Fix Round 1's `badoutcome` commit — so this migration still has not
+  // shipped and the same reasoning applies again.
+  //
+  // FIX ROUND 3 (Tasks 40/41 review, F1) AMENDS THIS MIGRATION A THIRD TIME,
+  // adding `lifecycle_by_at` below. `CoordStore.recentProvenance` (Task 34)
+  // reads this table on the shared `FleetWatcher` tick every 60s (Task 41);
+  // measured on an in-memory `node:sqlite` with 500,000 rows over 30 days —
+  // ~1.5-2yr of growth at this migration's own stated ~90 MB/year, since the
+  // table is NEVER PRUNED — the query planned as `SCAN lifecycle_events`
+  // (same defect `runs_by_session` above already fixed once for `runs`):
+  // ~50ms/call regardless of window density, because nothing bounds the scan
+  // to the `at >= ?` predicate. `recentProvenance`'s own query now reads
+  // `FROM lifecycle_events INDEXED BY lifecycle_by_at` — see that method's
+  // comment for why a bare `CREATE INDEX` was not enough on its own (the
+  // planner prefers a free-ordering scan over an index seek plus an explicit
+  // sort, confirmed with and without `ANALYZE`) and for the array-order-
+  // identical proof that forcing the index changes nothing about what the
+  // query returns. The premise above was RE-VERIFIED for this round too:
+  // `origin/main`'s `schema.ts` still has exactly TWO migration entries, and
+  // `git merge-base --is-ancestor` against `origin/main` says NO for Task
+  // 27's commit, Fix Round 1's `badoutcome` commit, and Fix Round 2's CHECK
+  // constraint commit — so this migration still has not shipped.
+  `
+  CREATE TABLE lifecycle_events (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    -- <epochNs>.<BASHPID>.<seq> (D6). INTRINSIC identity, not positional:
+    -- (gen, startOffset) was rejected because an offset is not a function of
+    -- the bytes when the consumer does not own the tail, and a shifted offset
+    -- silently collides under OR IGNORE. NULL only when the line carried none.
+    uid        TEXT,
+    gen        TEXT NOT NULL,     -- the 19 digits from the FILENAME, never a header line
+    at         INTEGER,           -- CCD's clock, epoch ms, off the line. NULL = the line carried
+                                   -- no readable \`at\`. NEVER 0 -- 0 is a date, not an absence
+    ingestedAt INTEGER NOT NULL,  -- THE SERVER'S clock. Never read as an event time (D8)
+    act        TEXT NOT NULL,     -- LifecycleAct; 'unknown' is its we-do-not-know member, read
+                                   -- back through isLifecycleAct and never cast
+    badact     TEXT,              -- the token that degraded to 'unknown'; NULL when none did
+    outcome    TEXT NOT NULL,     -- LifecycleOutcome; same we-do-not-know rule
+    badoutcome TEXT,              -- badact's twin on the outcome side (FIX ROUND 1, F1): NULL
+                                   -- whenever outcome is not 'unknown'. Added by amending THIS
+                                   -- migration rather than a new one -- see the justification
+                                   -- above the CREATE TABLE, which records why that is safe here.
+    verb       TEXT,
+    sessionId  TEXT,              -- the SUBJECT of the act (ccd's wire field \`id\`), not the actor
+    tx         TEXT,              -- pairs an \`intent\` with its outcome (D4). An intent with no
+                                   -- sibling is a process that died mid-destroy -- DERIVED by the
+                                   -- reader, never stored as a flag
+    refusal    TEXT,              -- D15: spelled \`refusal\`, NEVER \`refused\`. \`wsaudit.test.ts\`
+                                   -- greps ccd for /"refused":"([a-z0-9-]+)"/ and holds the result
+                                   -- set-equal to wsaudit.ts's SENTENCES; that test must stay green
+                                   -- with NO edit, and this spelling is half of why it does
+    detail     TEXT,              -- ccd's one line for a person. DISPLAY-ONLY -- nothing parses it
+    truncated  INTEGER NOT NULL DEFAULT 0,
+                                  -- the line said \`"truncated":true\`: \`_lc_json\` shed fields to fit
+                                  -- LC_LINE_MAX. Its own column because otherwise "the family was
+                                  -- not on the line" and "the family was dropped to fit" collapse
+                                  -- to one NULL, and a reader cannot tell absence from loss
+    obsJson    TEXT,              -- the three families that NEVER merge (D2), as validated JSON.
+    decJson    TEXT,              -- NULL = the family was not on the line; '{}' would mean it was
+    measJson   TEXT,              -- there and empty, which is a different fact. These hold what
+                                  -- THIS build could model; anything a newer ccd wrote that it
+                                  -- could not is still in \`raw\`, verbatim, and re-projectable
+    raw        TEXT NOT NULL      -- the line VERBATIM. D8's drill is byte equality
+  );
+  -- TWO PARTIAL UNIQUE INDEXES, and the split is the design. A parsed line
+  -- dedupes on its own \`uid\`. A line with NO usable uid dedupes on its BYTES
+  -- within its generation, because generations are immutably named and a
+  -- byte offset is exactly the positional identity D6 rejects.
+  -- DISCLOSED RESIDUAL: two BYTE-IDENTICAL unparseable lines in one generation
+  -- collapse to one row. The alternatives are a positional key (rejected above)
+  -- or a content hash, which would put \`node:crypto\` inside a pure L1 parser.
+  CREATE UNIQUE INDEX lifecycle_uid     ON lifecycle_events(uid)      WHERE uid IS NOT NULL;
+  CREATE UNIQUE INDEX lifecycle_raw_uid ON lifecycle_events(gen, raw) WHERE uid IS NULL;
+  -- \`GET /api/lifecycle?session=\` is the whole read surface. Ordered by this
+  -- table's own id, never by \`at\`: \`at\` is CCD's clock and is nullable, and id
+  -- is monotonic across a generation rotation the way \`feed_events\` already
+  -- relies on for the same reason.
+  CREATE INDEX lifecycle_by_session ON lifecycle_events(sessionId, id);
+  CREATE INDEX lifecycle_by_tx      ON lifecycle_events(tx);
+  -- FIX ROUND 3 (Tasks 40/41 review, F1). \`recentProvenance\`'s window read
+  -- (\`at >= ?\`) has no help from either index above -- \`sessionId\` and \`tx\`
+  -- are both the wrong leading column -- so it planned as \`SCAN
+  -- lifecycle_events\`, an O(table size) cost on a table this migration's own
+  -- header says is NEVER PRUNED. \`recentProvenance\` reads this table with
+  -- \`INDEXED BY lifecycle_by_at\`, forcing the seek this index makes
+  -- possible -- see that method's own comment in coord/store.ts for why the
+  -- FORCE was necessary (a bare index here was not enough on its own) and
+  -- for the array-order-identical proof.
+  CREATE INDEX lifecycle_by_at      ON lifecycle_events(at);
+
+  -- The cursor, and it is an OPTIMISATION, NEVER A CORRECTNESS INPUT (D6):
+  -- advanced only inside the same tx() as the rows it covers, so it can never
+  -- move past uncommitted data, and re-reading a generation from offset 0 is
+  -- always no-op-or-catch-up.
+  CREATE TABLE lifecycle_generations (
+    gen         TEXT PRIMARY KEY,
+    firstSeenAt INTEGER NOT NULL,
+    lastSweepAt INTEGER NOT NULL,
+    cursor      INTEGER NOT NULL,  -- BYTE offset just past the last COMPLETE line ingested
+    size        INTEGER NOT NULL,  -- the size the last successful read reported. READ BACK, not
+                                   -- decoration: a file truncated to a length still AHEAD of the
+                                   -- cursor is invisible to a cursor test and visible to this one
+    retired     INTEGER NOT NULL DEFAULT 0
+  );
+
+  -- Gaps are RECORDED, never silently skipped (D6). A byte we saw and could
+  -- not model is a different fact from a byte that was never there.
+  CREATE TABLE lifecycle_gaps (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    at       INTEGER NOT NULL,   -- the server's clock
+    gen      TEXT NOT NULL,
+    reason   TEXT NOT NULL,      -- rotated-away|shrank|unknown; read back through isLifecycleGapReason
+    detail   TEXT NOT NULL,      -- DISPLAY-ONLY -- nothing parses it back
+    lostFrom INTEGER,            -- the byte range known lost. NULL where it could not be bounded
+    lostTo   INTEGER,
+    -- COUPLED, AS A STORAGE CONSTRAINT rather than caller discipline (Fix
+    -- Round 2, F2): \`lostFrom\`/\`lostTo\` are either both NULL or both set,
+    -- and a \`reason\` of 'unknown' always carries a null pair -- there is no
+    -- bounded range for a hole the mirror could not place at all. This is
+    -- the same invariant \`mirrorplan.ts\`'s private \`coupledLoss\` enforces
+    -- at its one call site (still the ONLY producer of a LifecycleGap pair
+    -- anywhere in server/src or shared/), restated here so it is a MECHANISM
+    -- rather than a fact resting on every future writer remembering to route
+    -- through an unexported helper in another file. Only a one-directional
+    -- implication on 'unknown' -- a NON-'unknown' reason MAY still carry a
+    -- null pair (\`coupledLoss\`'s own \`bounded === null\` branch), so this
+    -- does not assert the converse.
+    CHECK ((lostFrom IS NULL) = (lostTo IS NULL) AND (reason <> 'unknown' OR lostFrom IS NULL))
+  );
+  CREATE INDEX lifecycle_gaps_by_at ON lifecycle_gaps(at);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

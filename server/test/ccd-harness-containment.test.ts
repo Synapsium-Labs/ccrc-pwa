@@ -14,7 +14,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  makeCcdHarness, harnessBin, ghContainedEnv, WS_ADD, type ContainOpts, type CcdHarness,
+  makeCcdHarness, harnessBin, ghContainedEnv, WS_ADD, SCAN_LOOKBACK_LINES, type ContainOpts, type CcdHarness,
 } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -101,16 +101,28 @@ describe('the harness contains systemctl structurally', () => {
 describe('ghContainedEnv contains gh always, systemd only when asked', () => {
   /** The two spawn lines below are one mechanism, and they sit together because
    *  the source scan in `ccd-workspaces.test.ts` reads the lines AROUND a bash
-   *  spawn: an env assembled inside each `it` would be invisible to it.
+   *  spawn: an env assembled inside each `it` would be invisible to it — which
+   *  is also why the marker below sits at the END of this comment rather than
+   *  the top: the scan's window looks back only `SCAN_LOOKBACK_LINES`
+   *  (`ccdWsHelpers.ts`) lines from the spawn it reads — see the self-check
+   *  `it` below the tmux tests, which pins that distance directly.
    *
    *  `BASH` is bash resolved under the REAL PATH, once — every spawn here hands
    *  the child a fixture-only PATH, and libuv resolves the executable against
    *  the CHILD's env, so bare `bash` would be ENOENT. Same trick
    *  `ccrc-doctor.test.ts` uses, for the same reason.
    *
-   *  SYSTEMD-OPT-OUT IS THE ASSERTION — the marker that scan's systemd clause
-   *  exempts by, and this is the only call site in the suite that has earned it:
-   *  it runs NO ccd. It measures the OPTION, and half of what follows asserts
+   *  This call site runs NO ccd at all — the only one in the suite that
+   *  doesn't — and that ONE condition logically ENTAILS both of the scan's
+   *  exemptions below, systemd's and tmux's, rather than being two conditions
+   *  collapsing into one token: a site that runs no ccd can need neither
+   *  poison. That is also the boundary: a future call site needing exactly
+   *  ONE exemption (a test parameterizing `tmux` while holding `systemd`
+   *  fixed at `true`, so it DOES run ccd) has not earned "runs no ccd" and
+   *  must mint its own marker, not reuse this one.
+   *
+   *  SYSTEMD-OPT-OUT IS THE ASSERTION is that marker, read by both scan
+   *  clauses. It measures the OPTION, and half of what follows asserts
    *  nothing unless it runs with the option OFF. `gh` is exempt from nothing,
    *  here or anywhere, and is asserted below like every other call site. */
   const BASH = execFileSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).trim();
@@ -169,5 +181,95 @@ describe('ghContainedEnv contains gh always, systemd only when asked', () => {
     // control rather than dead code behind a refusal-only stub.
     expect(run(home, bin, 'systemd-run --user true', { systemd: true }, { SYSTEMD_RUN_RC: '0' })).toBe('rc=0');
     expect(run(home, bin, 'systemd-run --user true', { systemd: true })).toBe('rc=97');
+  });
+
+  // ── THE TMUX HALF (Task 11b), symmetric to the three systemd tests above ──
+  // and covering exactly the mechanics Task 11's reviewer proved by hand in
+  // scratch tests that were then deleted: create-if-absent, the opt-in itself
+  // in both directions, and TMUX_STUB_RC steering the poison to succeed. "A
+  // comment is a request; a red suite is a mechanism" — this is the mechanism.
+  it('leaves a non-asking consumer\'s OWN tmux answering, on its own PATH', () => {
+    // Mirrors the systemd opt-out test above, one poison over: a consumer
+    // that never asks for `{ tmux: true }` keeps whatever it planted on its
+    // own PATH, because the harness never wrote a tmux poison for it to lose
+    // to.
+    const { home, bin } = consumer('ccrc-contain-tmux-optout-');
+    fs.writeFileSync(path.join(bin, 'tmux'), '#!/bin/sh\necho "mine: $*"\nexit 0\n', { mode: 0o755 });
+    expect(run(home, bin, 'command -v tmux')).toBe(`${path.join(bin, 'tmux')}\nrc=0`);
+    expect(run(home, bin, 'tmux list-panes -a')).toBe('mine: list-panes -a\nrc=0');
+    // Not merely "the poison lost the race": it was never written, same as
+    // the systemd case above.
+    expect(fs.existsSync(path.join(harnessBin(home), 'tmux'))).toBe(false);
+  });
+
+  it('plants the tmux poison when a caller DOES ask, over that same PATH', () => {
+    // The positive control on the tmux OPTION itself, and the steering test
+    // the coordinator asked for by name: TMUX_STUB_RC is to `_lc_obs`'s
+    // `tmux list-panes -a` what SYSTEMD_RUN_RC is to `_tmux_server_ensure`'s
+    // `systemd-run` — the one way a test may make the stub SUCCEED, so the
+    // "tmux present and answering" branch is reachable as a positive control
+    // rather than dead code behind a refusal-only stub.
+    const { home, bin } = consumer('ccrc-contain-tmux-optin-');
+    fs.writeFileSync(path.join(bin, 'tmux'), '#!/bin/sh\necho "mine: $*"\nexit 0\n', { mode: 0o755 });
+    expect(run(home, bin, 'command -v tmux', { tmux: true }))
+      .toBe(`${path.join(harnessBin(home), 'tmux')}\nrc=0`);
+    expect(run(home, bin, 'tmux list-panes -a', { tmux: true })).toBe('rc=97');
+    expect(fs.readFileSync(path.join(home, 'tmux-calls'), 'utf8').trim()).toBe('list-panes -a');
+    expect(run(home, bin, 'tmux list-panes -a', { tmux: true }, { TMUX_STUB_RC: '0' })).toBe('rc=0');
+    expect(run(home, bin, 'tmux list-panes -a', { tmux: true })).toBe('rc=97');
+  });
+
+  it('create-if-absent for tmux too: a caller-owned stub planted in harnessBin() KEEPS winning', () => {
+    // Symmetric to `describe('the harness contains systemctl structurally')`'s
+    // "lets a test that needs a FUNCTIONAL systemctl win, and KEEPS letting
+    // it" above, but through THIS describe's own `run()`/`BASH` idiom instead
+    // of `h.sh()`, and in the SAME directory `{ tmux: true }` would write its
+    // poison into (`harnessBin()`), not `consumer()`'s separate stub-bin —
+    // the create-if-absent guard only answers WITHIN harnessBin, so a stub
+    // outside it would not be testing this at all. `run()` calls
+    // `ghContainedEnv` fresh on every invocation, same as `h.sh()` does, so
+    // the SECOND call is the assertion: a re-plant would silently replace
+    // what the first call built.
+    const home = mkTmp('ccrc-contain-tmux-createabsent-');
+    const bin = harnessBin(home);
+    fs.writeFileSync(path.join(bin, 'tmux'),
+      '#!/bin/sh\necho "mine: $*" >> "$HOME/ccd-calls"\nexit 0\n', { mode: 0o755 });
+    expect(run(home, bin, 'tmux list-panes -a', { tmux: true })).toBe('rc=0');
+    expect(run(home, bin, 'tmux list-panes -a', { tmux: true })).toBe('rc=0');
+    // The poison's own log file must not exist: if the poison had ever run,
+    // even once, it would have created it.
+    expect(fs.existsSync(path.join(home, 'tmux-calls'))).toBe(false);
+  });
+
+  it('keeps the SYSTEMD-OPT-OUT marker within the scan\'s lookback window of every spawn it exempts', () => {
+    // Fix Round 2's self-check. Fix Round 1 pushed the marker out of the
+    // scan's window with a comment-only edit, and the failure that produced
+    // was a LIE about the cause: "runs ccd without asking for tmux
+    // containment", when the real defect was "the marker fell out of
+    // range" — two conditions a reader must handle differently,
+    // collapsed to one message. This asserts the real invariant, at the
+    // site a future comment edit would break it, with a message that names
+    // the actual problem instead.
+    const src = fs.readFileSync(path.join(__dirname, 'ccd-harness-containment.test.ts'), 'utf8').split('\n');
+    const markerLine = src.findIndex((ln) => ln.includes('SYSTEMD-OPT-OUT IS THE ASSERTION'));
+    expect(markerLine, 'the marker text itself is missing from this file').toBeGreaterThanOrEqual(0);
+    // The SAME match `ccd-workspaces.test.ts`'s scan uses to find a bash-spawn
+    // call site — duplicated here rather than exported, per the "no new
+    // abstractions" bound on this fix: this exists to find the ACTUAL spawn
+    // lines in THIS file, not to become a second scan.
+    const spawnLines = src
+      .map((ln, i) => (/(?:execFileSync|spawnSync)\((?:'bash'|BASH)[,)]/.test(ln) ? i : -1))
+      .filter((i) => i >= 0);
+    expect(spawnLines.length, 'no bash-spawn call site found in this file to check the marker against')
+      .toBeGreaterThanOrEqual(2);
+    for (const spawnLine of spawnLines) {
+      const distance = spawnLine - markerLine;
+      expect.soft(distance,
+        `the marker sits ${distance} lines before the spawn at ` +
+        `ccd-harness-containment.test.ts:${spawnLine + 1} — that is outside ` +
+        `SCAN_LOOKBACK_LINES (${SCAN_LOOKBACK_LINES}), so the scan would misreport this call site as ` +
+        `LACKING CONTAINMENT rather than as "the marker fell out of the window"`)
+        .toBeLessThanOrEqual(SCAN_LOOKBACK_LINES);
+    }
   });
 });

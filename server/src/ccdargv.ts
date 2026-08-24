@@ -47,6 +47,129 @@ export type CcdArgv = readonly string[] & { readonly [CcdArgvBrand]: true };
 const argv = (parts: readonly string[]): CcdArgv => Object.freeze(parts) as CcdArgv;
 
 /**
+ * The DECLARED half of a provenance record (spec D2's `dec`), as the three ccd
+ * flags carry it. Self-asserted by construction — ccd cannot authenticate a
+ * caller on a single-uid box and does not pretend to; the kernel-observed half
+ * (`obs`) is measured on the box and the two are COMPARED, never merged.
+ *
+ * THE PRODUCER SHAPE, and `LifecycleDec` (L0) is the RECORD shape it lands as.
+ * They differ in exactly two places and both differences are deliberate:
+ * `surface` here is `StopSurface` and NEVER `'none'` (absence is `dec: null`,
+ * which omits the flags entirely), while the record's is
+ * `DecSurface = StopSurface | 'none'`; and `actor` here is MANDATORY because
+ * `deviceActor`/`sweepDec` always measure one, while the record's is nullable
+ * because an older ccd may have written none. `capsupported.test.ts` pins the
+ * assignability so nobody "unifies" the two later.
+ *
+ * `reason: null` OMITS the flag. It is not `''`: ccd refuses a blank
+ * declaration (`_lc_dec_ok`), on the same argument `cmd_ws_hold` has always
+ * made about an empty hold reason — a flag that says nothing is a different
+ * fact from no flag, and collapsing them records "nobody said" for a caller
+ * that said something unusable.
+ */
+export interface ActorFlags {
+  readonly surface: StopSurface;
+  readonly actor: string;
+  readonly reason: string | null;
+}
+
+/**
+ * The flag tokens for a dec, or NOTHING for `null`.
+ *
+ * `null` is a real, deliberate choice and not "unset" — it is what a caller
+ * passes when the deployed ccd is not known to understand the flags
+ * (`capSupported(state, ACTOR_FLAGS_CAP)`), and it produces the argv that
+ * shipped before this wave, token for token. Exactly `stopId`'s
+ * `surface: null` contract, for exactly its reason (`ccdargv.ts:76-91`).
+ *
+ * MEASURED (task 52 verification): the check below is `dec === null ||
+ * dec === undefined` — not `dec === null` alone. This build's five threaded
+ * call sites in
+ * `server.ts`/`watch.ts`/`coord/close.ts`/`coord/dispatch.ts`/`coord/routes.ts`
+ * are threaded in Tasks 54-55, not here, so between this commit and theirs
+ * every one of them is still calling e.g. `wsArchive(id)` with the new third
+ * parameter simply absent. `tsc` catches that loudly (TS2554, disclosed and
+ * expected-red until Task 55) — but vitest's esbuild transform does not
+ * enforce arity, so at RUNTIME `dec` arrives as `undefined`, not `null`, and
+ * `dec === null` is false for it. Measured before this widening: 412 tests
+ * across 13 files failed, including an unhandled rejection
+ * (`TypeError: Cannot read properties of undefined (reading 'surface')`) from
+ * `FleetWatcher.sweepNames`'s `CCD_ARGV.wsRename` call. `undefined` here is
+ * not a caller's deliberate third state — nothing above ever constructs an
+ * `ActorFlags | undefined`, only `ActorFlags | null` — so treating it like
+ * `null` collapses no meaningful distinction; it is purely runtime tolerance
+ * for a call-arity gap the type checker already flags.
+ */
+const decFlags = (dec: ActorFlags | null): readonly string[] =>
+  dec === null || dec === undefined
+    ? []
+    : ['--surface', dec.surface, '--actor', dec.actor,
+       ...(dec.reason === null ? [] : ['--reason', dec.reason])];
+
+/**
+ * The session's own device label as an `--actor` value.
+ *
+ * TWO CONDITIONS, TWO WORDS, TWO NAMESPACES. `null` means the gate measured no
+ * session at all (a dark box, or an exempt route reached without a cookie) —
+ * the BARE word `unmeasured`, deliberately carrying NO `device:` prefix. A
+ * measured label always keeps that prefix (`device:<label>`), so the two can
+ * never collide byte-for-byte: `deviceActor('unmeasured')` returns
+ * `'device:unmeasured'`, a different string from `deviceActor(null)`'s bare
+ * `'unmeasured'`. Before this fix both arms returned `'device:unmeasured'`,
+ * so a browser presenting `User-Agent: unmeasured` — attacker-influenceable,
+ * since a UA header is client-chosen — was recorded byte-identically to "the
+ * gate measured no session at all", two conditions an operator reads
+ * differently (final review, F2). A UA-less browser that DID present a live
+ * session already carries `'unknown device'` from `deviceLabel` and keeps it
+ * verbatim. Folding both into one word would tell an operator "we do not know
+ * which browser" for a call where we do not know there was a browser.
+ *
+ * `\p{Cc}` flattens every control character and the label is re-truncated, both
+ * belt and braces: `deviceLabel` already slices to 120 UTF-16 units, and ccd
+ * quotes the value through `_lc_json` (which escapes a newline rather than
+ * breaking the line). A producer that can cheaply guarantee it never emits a
+ * line break into a line-oriented file should. 7 + 120*3 = 367 bytes worst
+ * case, inside ccd's 512-byte `--actor` cap. The unicode property escape is
+ * used rather than an explicit code-point range so this source file contains no
+ * control characters of its own.
+ *
+ * DISCLOSED RESIDUAL (AUDIT m5): `slice(0, 120)` counts UTF-16 units, so it can
+ * split a surrogate pair and leave a lone surrogate at the end. Harmless in
+ * both directions — `JSON.stringify` escapes it, and ccd's `_lc_json` decodes
+ * with `errors='replace'`, so it lands as U+FFFD — and it is written down here
+ * rather than left for someone to rediscover.
+ */
+export function deviceActor(device: string | null): string {
+  if (device === null) return 'unmeasured';
+  return `device:${device.replace(/\p{Cc}/gu, ' ').slice(0, 120)}`;
+}
+
+/**
+ * The dec an UNATTENDED server lane declares — a sweep, a run close, a dispatch.
+ *
+ * `surface: 'agent'` is the least-wrong member of ccd's four-word closed set,
+ * and the residual is DISCLOSED rather than papered over: the word names the
+ * agent LANE, not the ccrc-agent process, so it cannot on its own tell the
+ * agent apart from the server's own timers. That is precisely why `actor` is
+ * NOT optional on `ActorFlags` — the actor is what makes `archiveMerged`'s
+ * timer and an operator's tap distinguishable — and why a fifth surface word is
+ * not the fix: spec §2 says `StopSurface` is unchanged, and widening a closed
+ * set that `ccd:1523` also spells would be one enumeration in two languages
+ * drifting apart.
+ *
+ * `reason: null`: a sweep's reason is its name, and repeating it in a second
+ * field would be one fact in two places with nothing keeping them equal.
+ */
+export function sweepDec(
+  state: Pick<FleetState, 'ccdVerbs'> | undefined,
+  actor: string,
+): ActorFlags | null {
+  return capSupported(state, ACTOR_FLAGS_CAP)
+    ? { surface: 'agent', actor, reason: null }
+    : null;
+}
+
+/**
  * The ONLY place ccd argv is constructed. Every route builds its call through
  * this table, and `whitelist-subset.test.ts` enumerates the table against the
  * agent's EXEC_WHITELIST in both directions. An argv the enumeration cannot see
@@ -103,19 +226,41 @@ export const CCD_ARGV = {
   prStateProject: (p: string)  => argv(['pr-state', '--project', p]),
   prOpen:    (id: string, t: string, b64: string, draft: boolean) =>
                argv(['pr-open', '--session', id, '--title', t, '--body-b64', b64, '--draft', draft ? 'true' : 'false']),
-  wsArchive: (id: string) => argv(['ws-archive', '--session', id]),
-  wsRestore: (id: string) => argv(['ws-restore', '--session', id]),
+  wsArchive: (id: string, dec: ActorFlags | null) =>
+               argv(['ws-archive', '--session', id, ...decFlags(dec)]),
+  wsRestore: (id: string, dec: ActorFlags | null) =>
+               argv(['ws-restore', '--session', id, ...decFlags(dec)]),
   wsAudit:   (id: string) => argv(['ws-audit', '--session', id]),
   wsReap:    (tok: string, id: string) => argv(['ws-reap', '--expect', tok, '--session', id]),
   wsAttic:   (id: string) => argv(['ws-attic', '--session', id]),
-  wsHold:    (id: string, reason: string) => argv(['ws-hold', '--session', id, '--reason', reason]),
-  wsRelease: (id: string) => argv(['ws-release', '--session', id]),
+  /** The dec flags ride AFTER `--reason`, and `--reason` is NOT one of them: on
+   *  `ws-hold` the hold reason IS the declared reason (ccd's `cmd_ws_hold` says
+   *  so in its own comment), so there is one reason on this verb, not two. The
+   *  `{ ...dec, reason: null }` is what enforces it here — a caller that passes
+   *  a dec carrying a reason gets it dropped, pinned in `capsupported.test.ts`.
+   *
+   *  MEASURED: the ternary must check `dec === undefined` too, not just
+   *  `dec === null` — `{ ...undefined, reason: null }` does NOT throw, it
+   *  evaluates to `{ reason: null }` (object spread of `undefined` is a
+   *  silent no-op, unlike array spread), so a not-yet-threaded caller passing
+   *  only two arguments fed `decFlags` a bogus dec with `surface`/`actor`
+   *  both `undefined` instead of routing to the omit-everything branch.
+   *  `decFlags` itself no longer throws on that (see its own docstring), but
+   *  it did emit `undefined` into the argv array — invalid input to the
+   *  exec seam. Reproduced via `run-routes.test.ts`'s dispatch suite
+   *  returning 500 instead of 200/502/409 before this fix. */
+  wsHold:    (id: string, reason: string, dec: ActorFlags | null) =>
+               argv(['ws-hold', '--session', id, '--reason', reason,
+                     ...decFlags(dec === null || dec === undefined ? dec : { ...dec, reason: null })]),
+  wsRelease: (id: string, dec: ActorFlags | null) =>
+               argv(['ws-release', '--session', id, ...decFlags(dec)]),
   /** The second ccd write with no human in the loop — after `wsArchive`, which
    *  `FleetWatcher.archiveMerged` already fires unattended on merge — and the
    *  first whose argv is derived from model output. `--branch` carries a name
    *  `_ws_branch_valid` has NOT seen yet: validation lives on the box, once,
    *  and the server learns its verdict from the `bad-branch` refusal token. */
-  wsRename:  (id: string, branch: string) => argv(['ws-rename', '--session', id, '--branch', branch]),
+  wsRename:  (id: string, branch: string, dec: ActorFlags | null) =>
+               argv(['ws-rename', '--session', id, '--branch', branch, ...decFlags(dec)]),
   /** The pause marker's writer (Build 4, spec §4.2). `state` is a two-member
    *  union rather than a string: `POST /api/coord/pause` takes a boolean, and
    *  the on|off vocabulary is ccd's — the mapping happens once, at the call
@@ -136,6 +281,53 @@ export function verbSupported(
   const verbs = state?.ccdVerbs ?? null;
   if (verbs === null) return true;
   return verbs.includes(argv[0] ?? '');
+}
+
+/** The `ccd caps` token that says this box parses `--surface`/`--actor`/
+ *  `--reason` on the five workspace verbs (wave 5). Spelled ONCE in
+ *  `server/src`: `server.ts`'s `pwaDec` reads it from here (wave 6), because a
+ *  capability token copied into two files is the drift shape
+ *  `single-definition.test.ts` exists for. ccd's own `echo actor-flags-v1` and
+ *  `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are the other two
+ *  spellings, and a parity check keeps THOSE two equal (`ccd-archive.test.ts`'s
+ *  `advertises exactly the verbs...` case) — that same test now also imports
+ *  THIS constant and asserts `KNOWN_CAPABILITY_TOKENS` contains it (wave 6),
+ *  closing the gap this docstring used to disclose: before that line existed,
+ *  corrupting this literal reddened only `capsupported.test.ts`'s own
+ *  self-check, nothing cross-file (measured by mutation). RULE 8 still
+ *  applies to `single-definition.test.ts` itself — it has no hand-written
+ *  finding for this vocabulary, so its own green run is not what proves the
+ *  parity; the `toContain` assertion above is. */
+export const ACTOR_FLAGS_CAP = 'actor-flags-v1';
+
+/**
+ * Whether the DEPLOYED ccd advertised a CAPABILITY token — a verb-shaped string
+ * in the same `ccd caps` list `verbSupported` reads, naming a FLAG on an
+ * existing verb rather than a second dispatchable command.
+ *
+ * THE NO-EVIDENCE DEFAULT IS FALSE, and it is deliberately the opposite of
+ * `verbSupported`'s. That asymmetry is argued in full on
+ * {@link stopSurfaceSupported} below and is not restated here — what matters at
+ * this seam is that generalising the FUNCTION must not generalise the DEFAULT
+ * along with it. For a gated VERB, a wrong guess on no evidence costs a loud
+ * failure (ccd's own `die "usage: ..."`, a 502, never a lie). For a FLAG, a
+ * wrong guess costs a SILENT SUCCESS: an old ccd meets the flag inside an
+ * exact-arity guard, and on the paths where it does not die, `runCcdOr502`
+ * renders its exit 0 as `200 {ok:true}` for a call that recorded nothing. Same
+ * input, categorically different blast radius.
+ *
+ * This is sound only because local mode measures its OWN ccd at boot
+ * (`localcaps.ts`, `index.ts`) rather than leaving `ccdVerbs` permanently null
+ * there — otherwise a refusing default would kill the feature outright in the
+ * DEFAULT deployment mode.
+ */
+export function capSupported(
+  state: Pick<FleetState, 'ccdVerbs'> | undefined,
+  token: string,
+): boolean {
+  const verbs = state?.ccdVerbs ?? null;
+  if (verbs === null) return false;
+  return verbs.includes(token);
 }
 
 /**
@@ -170,9 +362,16 @@ export function verbSupported(
  * that did nothing. Same "no evidence" input, categorically different
  * blast radius on the wrong guess: refusing costs a `cli` stamp instead of
  * `pwa`; permitting wrongly costs a control that lies about success. The
- * asymmetry is why this function does not delegate its null case to
- * `verbSupported` — it re-implements the same membership check with the
- * opposite default instead.
+ * asymmetry is why this function does not delegate to `verbSupported`. It
+ * delegates to {@link capSupported} instead (wave 6), which is that same
+ * membership check with this opposite default — one implementation of the
+ * refusing branch, not two, and `readme-holds.test.ts` pins BOTH halves so a
+ * quiet re-implementation here with the permitting default still reds.
+ *
+ * It stays a NAMED EXPORT rather than becoming a call site: `verb-gate.test.ts`
+ * text-searches a call site's enclosing function for `verbSupported(`, and
+ * inlining `capSupported(state, 'stop-surface')` at `stop`'s call sites would
+ * change what that scanner sees about a verb that is correctly ungated.
  *
  * This default is only sound because local mode ALSO now measures real
  * evidence at boot (`localcaps.ts`, `index.ts`) rather than leaving
@@ -181,7 +380,5 @@ export function verbSupported(
  * DEFAULT deployment mode (`deploy/ccrc.env.example`'s `CCRC_FLEET=local`).
  */
 export function stopSurfaceSupported(state: Pick<FleetState, 'ccdVerbs'> | undefined): boolean {
-  const verbs = state?.ccdVerbs ?? null;
-  if (verbs === null) return false;
-  return verbs.includes('stop-surface');
+  return capSupported(state, 'stop-surface');
 }

@@ -193,7 +193,7 @@ describe('GET /api/accounts', () => {
 
   // Wire-contract defect: `.cc-sessions` holds `-disabled` markers that name
   // no account at all — ccd ships `autocompact-disabled` there (a fleet-wide
-  // proactive-/compact kill switch, ccd:22). Before the readLimits fix, this
+  // proactive-/compact kill switch, ccd:41). Before the readLimits fix, this
   // file alone fabricated a phantom `{"wrapper":"autocompact",...}` row, and
   // the accounts screen (which deliberately renders every disabled lane it is
   // told about) would have shown a fake "autocompact" account.

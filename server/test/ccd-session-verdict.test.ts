@@ -12,7 +12,7 @@
  * ask", and the callers that matter want the opposite answer for each:
  *
  *   `_ws_status` returned `idle` when it could not ask — and `idle` is what
- *   `ws-archive` (ccd:2258) and `ws-reap` (ccd:4488) gate on, so an unreachable
+ *   `ws-archive` (ccd:3915) and `ws-reap` (ccd:6311) gate on, so an unreachable
  *   tmux server made every live session look reapable. The function already had
  *   a way to say so: its contract is "NON-ZERO when it cannot be read", which
  *   routes to `status-unknown` and refuses. The `_alive` branch was the one path

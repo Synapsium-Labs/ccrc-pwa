@@ -5,7 +5,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
-import { makeCcdHarness, ghContainedEnv, CCD, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, ghContainedEnv, CCD, WS_ADD, SCAN_LOOKBACK_LINES, type CcdHarness } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 let home: string;
@@ -222,7 +222,7 @@ describe('ws-add', () => {
       .toBe(path.join(home, 'worktrees', 'demo', 'quiet-mesa'));
     expect(reg('demo-quiet-mesa', 'home')).not.toBeNull();
     // wrapper and uuid are what _spawn's own guard demands
-    // (`[[ -n "$wrapper" && -n "$workdir" && -n "$uuid" ]] || die ...`, ccd:497-503).
+    // (`[[ -n "$wrapper" && -n "$workdir" && -n "$uuid" ]] || die ...`, ccd:9756).
     // _spawn is stubbed to a no-op under every ws-add test, so that guard never
     // runs here — these two assertions are what would catch a dropped
     // `_reg_set` for either field instead of a silent, worktree-already-created
@@ -463,7 +463,7 @@ describe('disk floor', () => {
       execFileSync('bash', ['-c', `source "${CCD}"; ${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`],
         { encoding: 'utf8',
           env: ghContainedEnv(home, { ...process.env, HOME: home, CCD_DISK_FLOOR_GB: '999999' },
-            { systemd: true }) });
+            { systemd: true, tmux: true }) });
     } catch (e) {
       stderr = String((e as { stderr?: string }).stderr ?? '');
     }
@@ -533,6 +533,10 @@ describe('cmd_stop', () => {
   it('takes a workspace id whole rather than reversing it into a wrapper', () => {
     expect(sh(`${STOP} cmd_stop rp-llm-quiet-mesa`)).toBe('stopped rp-llm-quiet-mesa');
     expect(calls()).toEqual([
+      // cmd_stop's own `_lc_done` (task 18) is the first `_lc_emit` in this
+      // process, so `_lc_obs`'s once-per-process `tmux list-panes` probe fires
+      // before the disable/kill pair.
+      'tmux list-panes -a -F #{session_name} #{pane_pid}',
       'systemctl --user disable --now claude-session@rp-llm-quiet-mesa',
       'tmux kill-session -t cc-rp-llm-quiet-mesa',
     ]);
@@ -541,6 +545,7 @@ describe('cmd_stop', () => {
   it('still recomputes <wrapper>-<project> for the legacy two-argument form', () => {
     expect(sh(`${STOP} cmd_stop claude2 demo`)).toBe('stopped claude2-demo');
     expect(calls()).toEqual([
+      'tmux list-panes -a -F #{session_name} #{pane_pid}',
       'systemctl --user disable --now claude-session@claude2-demo',
       'tmux kill-session -t cc-claude2-demo',
     ]);
@@ -580,6 +585,16 @@ describe('ws-rm', () => {
     // The kill went to the stub — i.e. it was intercepted, not merely aimed at
     // a name no live session happens to use.
     expect(calls()).toEqual([
+      // D4 (task 20): `_lc_intent`'s call, immediately before
+      // `_ws_unsupervise`, is now the FIRST `_lc_*` emit this verb makes —
+      // earlier than D3's `_reg_purge` backstop below — so `_lc_obs`'s pane
+      // probe (memoized once per process; still the ONLY extra call a whole
+      // `ws-rm` run adds) fires HERE, before either teardown call, not after
+      // them. Not a mock artifact: this is `_lc_obs` asking tmux which pane
+      // this destruction ran in, the unforgeable half of the journal record
+      // `ccd-lifecycle-purge.test.ts` and `ccd-lifecycle-pairs.test.ts` both
+      // prove gets written.
+      'tmux list-panes -a -F #{session_name} #{pane_pid}',
       'unsupervise demo-quiet-mesa',
       'tmux kill-session -t cc-demo-quiet-mesa',
     ]);
@@ -626,7 +641,14 @@ describe('ws-rm', () => {
     // the tmux session and disabling the unit first leaves the uncommitted
     // files intact but the session dead and out of supervision — the worst of
     // both: the user loses the session AND still has to clean up by hand.
-    expect(calls()).toEqual([]);
+    //
+    // Task 24: the dirty-tree rung now goes through `_lc_refuse`, which
+    // records the refusal in the journal — and that emit's `_lc_obs` probes
+    // tmux for the pane it ran in (the same probe the success-path test above
+    // documents), so ONE read-only `tmux list-panes` call is expected here.
+    // Nothing is torn down: neither `_ws_unsupervise` nor `tmux kill-session`
+    // appears, which is what "nothing was touched" actually promises.
+    expect(calls()).toEqual(['tmux list-panes -a -F #{session_name} #{pane_pid}']);
   });
 
   it('refuses an untracked-only worktree — porcelain counts untracked files', () => {
@@ -637,7 +659,9 @@ describe('ws-rm', () => {
     fs.writeFileSync(path.join(wt, 'notes.md'), 'draft\n');
     expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`)).toThrow();
     expect(fs.existsSync(path.join(wt, 'notes.md'))).toBe(true);
-    expect(calls()).toEqual([]);
+    // Same as the dirty-tree case above: `_lc_refuse`'s journal emit probes
+    // tmux for pane context; nothing else runs.
+    expect(calls()).toEqual(['tmux list-panes -a -F #{session_name} #{pane_pid}']);
   });
 
   it('refuses an unknown id', () => {
@@ -739,7 +763,11 @@ describe('ws-rm', () => {
     expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`)).toThrow();
     expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
     expect(fs.existsSync(wt)).toBe(true);
-    expect(calls()).toEqual([]);
+    // Task 26: this rung now goes through `_lc_refuse`, which records the
+    // refusal in the journal — and that emit's `_lc_obs` probes tmux for the
+    // pane it ran in (same probe the dirty-tree case above documents), so ONE
+    // read-only `tmux list-panes` call is expected here.
+    expect(calls()).toEqual(['tmux list-panes -a -F #{session_name} #{pane_pid}']);
   });
 
   // The `|| die` on the dirty read is load-bearing and nothing was failing when
@@ -753,7 +781,11 @@ describe('ws-rm', () => {
     const wt = addOne();
     fs.writeFileSync(path.join(main(), '.git', 'worktrees', 'quiet-mesa', 'index'), 'GARBAGE');
     expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`)).toThrow(/could not read/);
-    expect(calls()).toEqual([]);
+    // Task 26: this rung now goes through `_lc_refuse`, which records the
+    // refusal in the journal — and that emit's `_lc_obs` probes tmux for the
+    // pane it ran in (same probe the dirty-tree case above documents), so ONE
+    // read-only `tmux list-panes` call is expected here.
+    expect(calls()).toEqual(['tmux list-panes -a -F #{session_name} #{pane_pid}']);
     expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
     expect(fs.existsSync(wt)).toBe(true);
     expect(branches('ws/quiet-mesa')).not.toBe('');
@@ -791,7 +823,11 @@ describe('ws-rm', () => {
       expect(probe, probe).toContain('Permission denied');
 
       expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`)).toThrow(/could not read/);
-      expect(calls(), 'REFUSE FIRST: neither the unit nor the pane may be touched').toEqual([]);
+      // Task 26: this rung now goes through `_lc_refuse`, which records the
+      // refusal in the journal — and that emit's `_lc_obs` probes tmux for the
+      // pane it ran in (same probe the dirty-tree case above documents), so ONE
+      // read-only `tmux list-panes` call is expected here.
+      expect(calls(), 'REFUSE FIRST: neither the unit nor the pane may be touched').toEqual(['tmux list-panes -a -F #{session_name} #{pane_pid}']);
       expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
       expect(fs.existsSync(wt)).toBe(true);
       expect(branches('ws/quiet-mesa')).not.toBe('');
@@ -830,7 +866,11 @@ describe('ws-rm', () => {
     execFileSync('git', ['-C', wt, 'commit', '-m', 'someone else lives here'], { env: gitEnv() });
 
     expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`)).toThrow();
-    expect(calls()).toEqual([]);
+    // Task 26: this rung now goes through `_lc_refuse`, which records the
+    // refusal in the journal — and that emit's `_lc_obs` probes tmux for the
+    // pane it ran in (same probe the dirty-tree case above documents), so ONE
+    // read-only `tmux list-panes` call is expected here.
+    expect(calls()).toEqual(['tmux list-panes -a -F #{session_name} #{pane_pid}']);
     expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
     expect(fs.existsSync(path.join(wt, 'PRECIOUS'))).toBe(true);
     expect(branches('ws/quiet-mesa')).not.toBe('');
@@ -843,7 +883,11 @@ describe('ws-rm', () => {
       'worktree', 'add', '-b', 'ws/borrowed', wt], { env: gitEnv() });
 
     expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`)).toThrow();
-    expect(calls()).toEqual([]);
+    // Task 26: this rung now goes through `_lc_refuse`, which records the
+    // refusal in the journal — and that emit's `_lc_obs` probes tmux for the
+    // pane it ran in (same probe the dirty-tree case above documents), so ONE
+    // read-only `tmux list-panes` call is expected here.
+    expect(calls()).toEqual(['tmux list-panes -a -F #{session_name} #{pane_pid}']);
     expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
     expect(fs.existsSync(wt)).toBe(true);
     expect(execFileSync('git', ['-C', path.join(home, 'projects', 'other'),
@@ -857,7 +901,12 @@ describe('ws-rm', () => {
     execFileSync('git', ['init', '-b', 'main', wt], { env: gitEnv() });
     expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`)).toThrow();
     expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`)).toThrow();
-    expect(calls()).toEqual([]);
+    // Task 26: two refusals, two processes — `_lc_obs` memoizes only WITHIN a
+    // process, so each `cmd_ws_rm` invocation probes tmux independently.
+    expect(calls()).toEqual([
+      'tmux list-panes -a -F #{session_name} #{pane_pid}',
+      'tmux list-panes -a -F #{session_name} #{pane_pid}',
+    ]);
     expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
   });
 
@@ -879,6 +928,16 @@ describe('ws-rm', () => {
     expect(reg('demo-quiet-mesa', 'uuid')).toBeNull();
     expect(branches('ws/quiet-mesa')).toBe('');
     expect(calls()).toEqual([
+      // D4 (task 20): `_lc_intent`'s call, immediately before
+      // `_ws_unsupervise`, is now the FIRST `_lc_*` emit this verb makes —
+      // earlier than D3's `_reg_purge` backstop below — so `_lc_obs`'s pane
+      // probe (memoized once per process; still the ONLY extra call a whole
+      // `ws-rm` run adds) fires HERE, before either teardown call, not after
+      // them. Not a mock artifact: this is `_lc_obs` asking tmux which pane
+      // this destruction ran in, the unforgeable half of the journal record
+      // `ccd-lifecycle-purge.test.ts` and `ccd-lifecycle-pairs.test.ts` both
+      // prove gets written.
+      'tmux list-panes -a -F #{session_name} #{pane_pid}',
       'unsupervise demo-quiet-mesa',
       'tmux kill-session -t cc-demo-quiet-mesa',
     ]);
@@ -900,7 +959,11 @@ describe('ws-rm', () => {
     fs.mkdirSync(path.join(decoy, '.git'), { recursive: true });
 
     expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`, { CDPATH: decoy })).toThrow();
-    expect(calls()).toEqual([]);
+    // Task 26: this rung now goes through `_lc_refuse`, which records the
+    // refusal in the journal — and that emit's `_lc_obs` probes tmux for the
+    // pane it ran in (same probe the dirty-tree case above documents), so ONE
+    // read-only `tmux list-panes` call is expected here.
+    expect(calls()).toEqual(['tmux list-panes -a -F #{session_name} #{pane_pid}']);
     expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
     expect(fs.existsSync(path.join(wt, 'PRECIOUS'))).toBe(true);
     expect(branches('ws/quiet-mesa')).not.toBe('');
@@ -926,6 +989,16 @@ describe('ws-rm', () => {
     expect(reg('demo-quiet-mesa', 'uuid')).toBeNull();
     expect(branches('ws/quiet-mesa')).toBe('');
     expect(calls()).toEqual([
+      // D4 (task 20): `_lc_intent`'s call, immediately before
+      // `_ws_unsupervise`, is now the FIRST `_lc_*` emit this verb makes —
+      // earlier than D3's `_reg_purge` backstop below — so `_lc_obs`'s pane
+      // probe (memoized once per process; still the ONLY extra call a whole
+      // `ws-rm` run adds) fires HERE, before either teardown call, not after
+      // them. Not a mock artifact: this is `_lc_obs` asking tmux which pane
+      // this destruction ran in, the unforgeable half of the journal record
+      // `ccd-lifecycle-purge.test.ts` and `ccd-lifecycle-pairs.test.ts` both
+      // prove gets written.
+      'tmux list-panes -a -F #{session_name} #{pane_pid}',
       'unsupervise demo-quiet-mesa',
       'tmux kill-session -t cc-demo-quiet-mesa',
     ]);
@@ -948,6 +1021,16 @@ describe('ws-rm', () => {
     expect(reg('demo-quiet-mesa', 'uuid')).toBeNull();
     expect(branches('ws/quiet-mesa')).toBe('');
     expect(calls()).toEqual([
+      // D4 (task 20): `_lc_intent`'s call, immediately before
+      // `_ws_unsupervise`, is now the FIRST `_lc_*` emit this verb makes —
+      // earlier than D3's `_reg_purge` backstop below — so `_lc_obs`'s pane
+      // probe (memoized once per process; still the ONLY extra call a whole
+      // `ws-rm` run adds) fires HERE, before either teardown call, not after
+      // them. Not a mock artifact: this is `_lc_obs` asking tmux which pane
+      // this destruction ran in, the unforgeable half of the journal record
+      // `ccd-lifecycle-purge.test.ts` and `ccd-lifecycle-pairs.test.ts` both
+      // prove gets written.
+      'tmux list-panes -a -F #{session_name} #{pane_pid}',
       'unsupervise demo-quiet-mesa',
       'tmux kill-session -t cc-demo-quiet-mesa',
     ]);
@@ -961,7 +1044,11 @@ describe('ws-rm', () => {
     execFileSync('git', ['-C', wt, 'commit', '-m', 'someone else lives here'], { env: gitEnv() });
 
     expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`, CHATTY_CD)).toThrow();
-    expect(calls()).toEqual([]);
+    // Task 26: this rung now goes through `_lc_refuse`, which records the
+    // refusal in the journal — and that emit's `_lc_obs` probes tmux for the
+    // pane it ran in (same probe the dirty-tree case above documents), so ONE
+    // read-only `tmux list-panes` call is expected here.
+    expect(calls()).toEqual(['tmux list-panes -a -F #{session_name} #{pane_pid}']);
     expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
     expect(fs.existsSync(path.join(wt, 'PRECIOUS'))).toBe(true);
     expect(branches('ws/quiet-mesa')).not.toBe('');
@@ -1042,7 +1129,7 @@ describe('gh containment is the harness\'s, not the caller\'s', () => {
     expect(h.ghPoison()[0]).toContain('pr list --repo o/r');
   });
 
-  it('routes EVERY bash call site in every ccd test file through BOTH poisons', () => {
+  it('routes EVERY bash call site in every ccd test file through ALL THREE poisons', () => {
     // A behavioural test can only pin the call sites that exist today, and the
     // failure mode this whole boundary exists for is the one written tomorrow:
     // four sites already built their own env (`ccd-limits` and `ccd-clip`
@@ -1057,6 +1144,10 @@ describe('gh containment is the harness\'s, not the caller\'s', () => {
     // about the fifteen call sites that happened to be edited on the day. This
     // is where a sixteenth one is caught. The behavioural half lives in
     // `ccd-harness-containment.test.ts`; this half is the coverage.
+    //
+    // THE THIRD CLAUSE IS THE TMUX ONE (Task 11b), added the same way and for
+    // the same reason once `ContainOpts.tmux` became a second opt-in poison:
+    // see the clause itself, below the systemd one, for the detail.
     const dir = __dirname;
     const files = fs.readdirSync(dir).filter((f) => /^ccd.*\.ts$/.test(f));
     expect(files.length).toBeGreaterThanOrEqual(7);
@@ -1073,16 +1164,31 @@ describe('gh containment is the harness\'s, not the caller\'s', () => {
         if (!/(?:execFileSync|spawnSync)\((?:'bash'|BASH)[,)]/.test(ln)) return;
         // Either side of the call: `ccd-archive`'s `runCcd` builds its `opts`
         // object several lines above the spawn.
-        const window = src.slice(Math.max(0, i - 12), i + 8).join('\n');
-        expect(window, `${f}:${i + 1} spawns bash without ghContainedEnv`).toContain('ghContainedEnv(');
+        const window = src.slice(Math.max(0, i - SCAN_LOOKBACK_LINES), i + 8).join('\n');
+        expect.soft(window, `${f}:${i + 1} spawns bash without ghContainedEnv`).toContain('ghContainedEnv(');
         // ONE deliberate exception, and it has to say so in the source it is
         // read from: the negative control that proves the opt-in is real must
         // spawn bash with the systemd poison ABSENT. `gh` is asserted above for
         // it like everything else — opting out of one boundary is not a way out
         // of the other.
         if (window.includes('SYSTEMD-OPT-OUT IS THE ASSERTION')) return;
-        expect(window, `${f}:${i + 1} runs ccd without asking for systemd containment`)
-          .toContain('{ systemd: true }');
+        // Substring, not the exact `{ systemd: true }` literal: `ccdWsHelpers.ts`'s
+        // own two call sites now ask `{ systemd: true, tmux: true }` (wave 2's
+        // tmux poison), and the invariant this scan checks is "did this call
+        // site ask for systemd containment", not "does it ask for ONLY that".
+        expect.soft(window, `${f}:${i + 1} runs ccd without asking for systemd containment`)
+          .toContain('systemd: true');
+        // THE THIRD CLAUSE IS THE TMUX ONE, symmetric to the systemd clause
+        // above and for the identical reason: `ContainOpts.tmux` is opt-in
+        // too (Task 11b), and once `_lc_obs` lands and shells
+        // `tmux list-panes -a` on every ccd lifecycle emit, "every call site
+        // is contained" would otherwise be a claim about only the systemd
+        // half of the option. The SYSTEMD-OPT-OUT return above already
+        // covers this clause as well — the one call site exempted from
+        // asking for systemd runs no ccd at all, so it never needed to ask
+        // for tmux either.
+        expect.soft(window, `${f}:${i + 1} runs ccd without asking for tmux containment`)
+          .toContain('tmux: true');
         asked++;
       });
     }

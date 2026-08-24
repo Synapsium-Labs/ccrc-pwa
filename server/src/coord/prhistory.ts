@@ -9,11 +9,11 @@ export type PrHistoryRead =
 /**
  * `$REG/<id>.prhistory` — the FIRST server-side reader of this file. It is
  * appended by ccd at exactly one chokepoint, the `prnumber` replacement inside
- * `_pr_py` (`ccd/ccd:849-859`), which is the only line in ccd that ever
+ * `_pr_py` (`ccd/ccd:2256`), which is the only line in ccd that ever
  * replaces a persisted `prnumber` and therefore the only place PR lineage can
  * be recorded at all.
  *
- * ONLY THE OUTER TWO RUNGS OF THE LADDER ARE ccd'S OWN (`ccd/ccd:2013-2035`):
+ * ONLY THE OUTER TWO RUNGS OF THE LADDER ARE ccd'S OWN (`ccd/ccd:4229-4232`):
  *   - ABSENT      -> `[]`, and it is a MEASURED answer: this workspace has
  *                    retired no PR.
  *   - UNREADABLE  -> REFUSAL. A `chmod 000` ledger answering `[]` would put
@@ -21,7 +21,7 @@ export type PrHistoryRead =
  *                    closes a run — the SIXTEENTH FORGERY's exact shape.
  *
  * THE MIDDLE RUNG IS A DELIBERATE DIVERGENCE, not a port. ccd's own MALFORMED
- * handling (`ccd/ccd:2020-2022`, `:2046`, `:2060-2061`) is WHOLE-FILE: one line
+ * handling (`ccd/ccd:4234`, `:4245-4246`, `:4248-4249`) is WHOLE-FILE: one line
  * `json.loads` cannot parse raises inside a single list comprehension over
  * every line, which the one `try` around it catches, discarding EVERY row —
  * good ones included — down to `[]`; this repo's own `ccd-prhistory.test.ts:126`

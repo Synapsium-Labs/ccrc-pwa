@@ -15,6 +15,9 @@ import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { parseJournalLine } from '../src/coord/journalparse.js';
+import { ACTOR_CLASSES, corroboration, LC_ACT_UNKNOWN, LIFECYCLE_ACTS } from '../../shared/api.js';
+import type { Divergence } from '../../shared/api.js';
 
 /** The repo root, for the one source-text assertion below. */
 const ccrcRoot = path.resolve(__dirname, '../..');
@@ -612,5 +615,74 @@ describe('readWorktreeRecords', () => {
       // guard, empty, and unreadable all read the same. They no longer are.
       expect(await readWorktreeRecords(localIO, root, 'y')).toEqual(escapedRecord);
     });
+  });
+});
+
+describe('sweepDivergences feeds the build-9 arms from what it has already read', () => {
+  const AN_ACT = LIFECYCLE_ACTS.find((a) => a !== LC_ACT_UNKNOWN)!;
+  const SURFACES = ['cli', 'pwa', 'agent', 'ccd', 'unknown', 'none'] as const;
+  const DISAGREES = ACTOR_CLASSES.flatMap((c) => SURFACES.map((s) => [c, s] as const))
+    .find(([c, s]) => corroboration(c, s) === 'disagrees')!;
+
+  it('takes the provenance pairs from the mirror, bounded to the recent window', async () => {
+    const h = await watcherFixture();
+    h.plantRecord('demo-quiet-basin');
+    const now = Date.now();
+    h.coord!.ingestJournal({
+      gen: '1755780000000000000', cursor: 200, size: 200, at: now,
+      rows: [parseJournalLine(JSON.stringify({
+        uid: 'a.1', at: now - 1000, act: AN_ACT, outcome: 'done', id: 'demo-quiet-basin',
+        obs: { cg: DISAGREES[0] }, dec: { surface: DISAGREES[1] },
+      }))],
+    });
+    const seen: Divergence[][] = [];
+    h.bus.on('divergence', (d: Divergence[]) => seen.push(d));
+    await sweep(h);
+    expect(seen.at(-1)!.map((d) => d.kind)).toContain('provenance-mismatch');
+  });
+
+  it('leaves a pair OUTSIDE the window alone — the census is a list of things to look at now', async () => {
+    const h = await watcherFixture();
+    h.plantRecord('demo-quiet-basin');
+    const now = Date.now();
+    h.coord!.ingestJournal({
+      gen: '1755780000000000000', cursor: 200, size: 200, at: now,
+      rows: [parseJournalLine(JSON.stringify({
+        uid: 'a.1', at: now - 7_200_000, act: AN_ACT, outcome: 'done', id: 'demo-quiet-basin',
+        obs: { cg: DISAGREES[0] }, dec: { surface: DISAGREES[1] },
+      }))],
+    });
+    const seen: Divergence[][] = [];
+    h.bus.on('divergence', (d: Divergence[]) => seen.push(d));
+    await sweep(h);
+    expect(seen.at(-1) ?? []).not.toContainEqual(
+      expect.objectContaining({ kind: 'provenance-mismatch' }));
+  });
+
+  it('reads the heartbeat off the SAME records the tick already measured — no second registry read', () => {
+    // The lane takes one registry listing per sweep interval and no more; a
+    // `supervisedAt` re-read here would be a whole-fleet field read a minute.
+    // The slice ends on the method's OWN two-space closing brace (`:1618`),
+    // not on the next member, so it cannot silently widen.
+    const src = readFileSync(path.join(ccrcRoot, 'server/src/watch.ts'), 'utf8');
+    const from = src.indexOf('  async sweepDivergences(');
+    expect(from, 'sweepDivergences was not found — this assertion would pass vacuously')
+      .toBeGreaterThan(-1);
+    const body = src.slice(from, src.indexOf('\n  }\n', from));
+    expect(body.length, 'the slice collapsed — this assertion would pass vacuously')
+      .toBeGreaterThan(2000);
+    expect(body).toContain('supervisedAt: r.supervisedAt');
+    expect(body.match(/readRegistry\(/g) ?? []).toHaveLength(0);
+  });
+
+  it('supplies an EMPTY provenance list when the coordination database refuses, never a stale one', async () => {
+    const h = await watcherFixture();
+    h.plantRecord('demo-quiet-basin');
+    h.coord!.db.exec('DROP TABLE lifecycle_events');
+    const seen: Divergence[][] = [];
+    h.bus.on('divergence', (d: Divergence[]) => seen.push(d));
+    await expect(sweep(h)).resolves.toBeUndefined();
+    expect(seen.at(-1) ?? []).not.toContainEqual(
+      expect.objectContaining({ kind: 'provenance-mismatch' }));
   });
 });

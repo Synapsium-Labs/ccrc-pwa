@@ -30,7 +30,7 @@ import { mkTmp } from './tmpHelpers.js';
  *  argument always ends with, and the scan now covers this idiom too. */
 function sourceCcd(home: string): { code: number; stderr: string } {
   const r = spawnSync('bash', ['-c', `source "${CCD}"`], {
-    encoding: 'utf8', env: ghContainedEnv(home, { ...process.env, HOME: home }, { systemd: true }),
+    encoding: 'utf8', env: ghContainedEnv(home, { ...process.env, HOME: home }, { systemd: true, tmux: true }),
   });
   return { code: r.status ?? -1, stderr: r.stderr ?? '' };
 }

@@ -186,6 +186,14 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     '`unknown-run` recovery — so a gated one wedges the coordinator out of its own run at exactly ' +
     'the two moments it cannot diagnose itself. The handler requires a live session OR a valid box ' +
     'token (coord/routes.ts), so nothing is published to the tailnet that was published before'],
+  ['GET /api/lifecycle',
+    "EXEMPT-BUT-AUTHENTICATED (D-149's pattern, ruled for this route by build 9 D16), the same " +
+    'shape as `GET /api/runs` directly above and for a sharper reason: a WORKER asks this route ' +
+    'what happened to its own workspace, cookieless, from the fleet host — and the workspace it ' +
+    'is asking about may already be gone, since `_reg_purge` deletes every per-session registry ' +
+    'field on ws-rm/ws-reap/ws-gc/forget. Gated, the one surface that outlives a destruction is ' +
+    'unreachable from the box that performed it. The handler requires a live session OR a valid ' +
+    'box token (coord/routes.ts), so nothing is published to the tailnet that was not before'],
   ['POST /api/runs/:id/dispatch',
     'the coordinator dispatches a wave — box-token gated'],
   ['POST /api/runs/:id/close',
@@ -325,10 +333,23 @@ export type GateAllowReason = 'flag-off' | 'exempt' | 'session';
  * (`'no-session'`) and from "run `ccrc passwd`" (`'unconfigured'`); that
  * distinction is the entire reason `AuthVerdict` is a union and not a boolean
  * (`shared/api.ts`).
+ *
+ * `device` is ATTRIBUTION, never authentication and never an input to `allow`.
+ * It is the matched session row's own label — the browser that logged in — and
+ * it is `null` on every arm that did not verify a credential, including the two
+ * allows that are true for reasons other than a session. NON-OPTIONAL on both
+ * arms deliberately: `device?` would let a construction site forget the field,
+ * and a reader cannot tell a forgotten field from a measured absence. Its one
+ * consumer is `ccdargv.ts`'s `deviceActor`, which turns it into the `--actor` a
+ * workspace verb records — which is exactly why it must never widen into a
+ * decision: an attacker-controlled user-agent that could change what a route
+ * ALLOWS would be a hole, while one that changes what a route RECORDS is the
+ * feature (spec D2: `dec` is self-asserted, and `corroboration()` is what
+ * catches a lie).
  */
 export type GateDecision =
-  | { allow: true; verdict: 'ok'; reason: GateAllowReason }
-  | { allow: false; verdict: AuthVerdict; reason: 'refused' };
+  | { allow: true; verdict: 'ok'; reason: GateAllowReason; device: string | null }
+  | { allow: false; verdict: AuthVerdict; reason: 'refused'; device: string | null };
 
 /**
  * THE DENYING DECISION, named — the `SECRET_UNREAD` idiom for the other axis.
@@ -340,7 +361,7 @@ export type GateDecision =
  * `mail-routes.test.ts` scans every quoted kebab token and requires it to be a
  * declared reject code — a guard worth not weakening with an exception.
  */
-export const NO_SESSION: GateDecision = { allow: false, verdict: 'no-session', reason: 'refused' };
+export const NO_SESSION: GateDecision = { allow: false, verdict: 'no-session', reason: 'refused', device: null };
 
 /** Everything {@link authVerdict} is allowed to consult. All three are VALUES,
  *  already measured by the caller — there is no port here to reach through. */
@@ -349,8 +370,9 @@ export interface GateDeps {
   enabled: boolean;
   /** The measured secret ({@link measureSecret}), or {@link SECRET_UNREAD}. */
   secret: SecretState;
-  /** The session store. `verify` is SYNCHRONOUS and does no I/O (`sessions.ts`),
-   *  which is what lets the hottest path in the server stay pure. */
+  /** The session store. `verifyMeasured` — the method this file actually calls —
+   *  is SYNCHRONOUS and does no I/O (`sessions.ts`), which is what lets the
+   *  hottest path in the server stay pure. */
   store: SessionStore;
 }
 
@@ -379,12 +401,13 @@ export interface GateDeps {
  *     through into the open branch.
  */
 export function authVerdict(req: GateRequest, deps: GateDeps, now: number): GateDecision {
-  if (!deps.enabled) return { allow: true, verdict: 'ok', reason: 'flag-off' };
+  if (!deps.enabled) return { allow: true, verdict: 'ok', reason: 'flag-off', device: null };
 
   const key = exemptKey(req.method, req.routeOptions.url);
   // `reason: 'exempt'`, NEVER `'session'`: this arm returns before the secret or
-  // the cookie has been read, so it says nothing at all about who is calling.
-  if (key !== null && EXEMPT.has(key)) return { allow: true, verdict: 'ok', reason: 'exempt' };
+  // the cookie has been read, so it says nothing at all about who is calling —
+  // and `device: null` for the same reason.
+  if (key !== null && EXEMPT.has(key)) return { allow: true, verdict: 'ok', reason: 'exempt', device: null };
 
   return sessionVerdict(req, deps, now);
 }
@@ -405,16 +428,17 @@ export function authVerdict(req: GateRequest, deps: GateDeps, now: number): Gate
 export function sessionVerdict(req: GateRequest, deps: GateDeps, now: number): GateDecision {
   if (deps.secret.kind !== 'ok') {
     // D-39, inverted. Do not turn this into an allow. See the module docstring.
-    return { allow: false, verdict: 'unconfigured', reason: 'refused' };
+    return { allow: false, verdict: 'unconfigured', reason: 'refused', device: null };
   }
 
   const token = parseCookies(req.headers.cookie).get(SESSION_COOKIE);
   // THE NO-COOKIE ARM. Everything below it knows a cookie WAS presented, and
   // that difference is the whole of D-127 — see the note on the return.
-  if (token === undefined || token === '') return { allow: false, verdict: 'no-session', reason: 'refused' };
+  if (token === undefined || token === '') return { allow: false, verdict: 'no-session', reason: 'refused', device: null };
 
-  const verdict = deps.store.verify(token, deps.secret.secret.generation, now);
-  if (verdict === 'ok') return { allow: true, verdict, reason: 'session' };
+  const measured = deps.store.verifyMeasured(token, deps.secret.secret.generation, now);
+  const verdict = measured.verdict;
+  if (verdict === 'ok') return { allow: true, verdict, reason: 'session', device: measured.label };
   /**
    * D-127. A cookie was PRESENTED and matched nothing, so this is `'expired'` —
    * NOT the `'no-session'` the store answered.
@@ -458,6 +482,9 @@ export function sessionVerdict(req: GateRequest, deps: GateDeps, now: number): G
     allow: false,
     verdict: verdict === 'no-session' ? 'expired' : verdict,
     reason: 'refused',
+    // A cookie that matched nothing measured no row, so there is no device —
+    // and saying so is not the same as saying `''`.
+    device: null,
   };
 }
 

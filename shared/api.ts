@@ -623,7 +623,7 @@ export interface WsAudit {
    *
    *  `bytes` is `number | null` and the `null` is the POINT (cross-lane seam
    *  round, the thirteenth measurement forgery). `_ws_clip_manifest`
-   *  (ccd:3106/3109) answered a failed `du`/`stat` with `0` for as long as this
+   *  (ccd:6935/6917) answered a failed `du`/`stat` with `0` for as long as this
    *  field was typed `number`, and that is not a coincidence: a producer that
    *  must emit a `number` has exactly two options for an unreadable clip, and
    *  one of them compiles. Typing the absence is what stops the next person
@@ -666,7 +666,7 @@ export interface WsAudit {
   /** `commitsAheadOfBase` is `null` when `$base` did not resolve, `$branch` was
    *  empty, or the `rev-list` failed — final-round destructive review F2, the
    *  last surviving `|| x=0` in ccd. 0 is the claim "this branch is level with
-   *  base", which is what `_pr_state_one` (ccd:1650) already refuses to
+   *  base", which is what `_pr_state_one` (ccd:4656) already refuses to
    *  fabricate for the identical figure on the PR sheet. */
   stashes: number | null; worktreeBytes: number | null; commitsAheadOfBase: number | null;
   pr: { number: number | null; url: string; mergeCommit: string; headRefOid: string };
@@ -731,7 +731,7 @@ export interface ReapResult {
  *
  *  DECLARED HERE THOUGH NOTHING IMPORTS IT YET, which is the point and is the
  *  cross-lane seam pass's residual #1 closed: `clips[].bytes: null` reaches
- *  `_ws_tombstone` (ccd:3199) and is round-tripped by `_ws_tombstone_reclip`
+ *  `_ws_tombstone` (ccd:6973) and is round-tripped by `_ws_tombstone_reclip`
  *  through `python3 json` on every resume, both JSON-transparent and both
  *  exercised — but the tombstone had NO declared type at all, so the one
  *  document that survives the delete was the only place on this branch where
@@ -885,9 +885,9 @@ export type BucketInput = Pick<
  * their justification (D-74). They are entered on `archivedAt !== null` AND
  * `status === 'dead'`, because a live pane is proof the marker has outlived
  * what it describes: `cmd_ws_archive` kills the session before it stamps
- * (`ccd:2178-2185`), but `ccd start`/`ccd ensure` clear `.stopped` and
+ * (`ccd:3958`), but `ccd start`/`ccd ensure` clear `.stopped` and
  * `.swapblocked` on a deliberate revival and leave `$REG/<id>.archived`
- * standing — only `ws-restore` removes it (`ccd:2513`). So a workspace
+ * standing — only `ws-restore` removes it (`ccd:4498`). So a workspace
  * archived on merge and later revived for more work carried a marker that
  * outranked every live rung below, for ever. MEASURED on the live fleet
  * 2026-08-17: 5 of the 7 archive markers on the box sat on sessions with a
@@ -1144,7 +1144,7 @@ export function spawnVerdict(rc: number | null): SpawnVerdict | null {
  * structurally cannot express, and the only reason this vocabulary exists beside
  * `SessionLifecycle` rather than inside it.
  *
- * THREE KINDS, and the four that were proposed and rejected are named here so
+ * FIVE KINDS, and the four that were proposed and rejected are named here so
  * nobody re-adds them: `dead-row` IS `lifecycle === 'orphan'` and strictly
  * broader (the shipped ladder splits that population three ways);
  * `unclaimed-session` was promoted to a `SessionLifecycle` member.
@@ -1163,13 +1163,33 @@ export function spawnVerdict(rc: number | null): SpawnVerdict | null {
  * form — `orphan` means "a registry row with no pane" in one half of this repo
  * and "a worktree with no registry row", the exact opposite, in the other.
  * Naming this kind explicitly defuses it.
+ *
+ * `provenance-mismatch` (build 9 D2). `corroboration()` is the ONE pure
+ * function allowed to relate the three identity families, and a `disagrees` is
+ * a fact the operator sees, never a silently picked winner. ccd cannot refuse
+ * on identity — single UNIX user, attribution not authentication — and does
+ * not pretend to, so the record IS the mechanism. NOT a boolean on the event
+ * row: a disagreement is about the pair, and the census is where pairs are
+ * weighed.
+ *
+ * `archived-but-live` (build 9 D9). Four rows measured on the live box are
+ * stamped `merged:#N` and heartbeating. `.archived` is cleared only by
+ * ws-restore and `_reg_purge`, never by start/ensure, so the one registry
+ * field carrying a WHY is false on half the rows that have it — and a field
+ * that is silently false reads as authoritative, which is worse than absence.
+ * This kind names the contradiction with ZERO ccd semantic change. It does not
+ * clear the stamp: clearing it destroys the archive record exactly as
+ * `ws-restore` did until wave 3.
  */
 export type DivergenceKind =
   | 'unregistered-worktree'   // git records a worktree no registry row claims
   | 'branch-drift'            // registry `.branch` != the worktree's own HEAD
-  | 'claim-divergence';       // a hold with no open run, or an open run with no hold
+  | 'claim-divergence'        // a hold with no open run, or an open run with no hold
+  | 'provenance-mismatch'     // the kernel field contradicts the declared surface
+  | 'archived-but-live';      // a row stamped archived that is heartbeating now
 const DIVERGENCE_KIND_MAP: Record<DivergenceKind, true> = {
   'unregistered-worktree': true, 'branch-drift': true, 'claim-divergence': true,
+  'provenance-mismatch': true, 'archived-but-live': true,
 };
 export const DIVERGENCE_KINDS: readonly DivergenceKind[] =
   Object.keys(DIVERGENCE_KIND_MAP) as DivergenceKind[];
@@ -1923,6 +1943,13 @@ export interface FleetHealth {
    * server's response omits it, and absent reads as `'unknown'`.
    */
   build?: BuildAgreement;
+  /**
+   * The lifecycle journal mirror (build 9). Optional for the same
+   * absence-permits reason `roster` and `build` are — an older server's
+   * response omits it, and a reader must treat an absent block as
+   * `state: 'unknown'`, never as `'ok'` and never as an empty history.
+   */
+  lifecycle?: LifecycleHealth;
 }
 
 /**
@@ -1945,6 +1972,112 @@ export interface FleetHealth {
  * sentence it is reading.
  */
 export type BuildAgreement = 'agreed' | 'skewed' | 'unknown';
+
+/* ---------------------------------------------------------------------------
+ * The lifecycle JOURNAL's MIRROR — build 9's provenance record, server side.
+ *
+ * DISAMBIGUATION, said out loud because the name is already taken twice in
+ * this file: `SessionLifecycle`/`sessionLifecycle()` classify why a REGISTRY
+ * ROW is not alive, and `LifecycleField`/`LifecycleInput` are that ladder's
+ * inputs. NOTHING below is related to them. These types describe
+ * `$REG/.lifecycle/journal-<epochNs>.ndjson` — an append-only file `_reg_purge`
+ * cannot reach — and its mirror in `coord.db`.
+ *
+ * `LifecycleEvent`, `MirroredLifecycleEvent` and `LC_OUTCOME_UNKNOWN` already
+ * live above (wave 1, Task 4) — not restated here, so there is one home for
+ * each rather than a second copy under this banner.
+ * ------------------------------------------------------------------------- */
+
+/** Why the mirror could not read bytes it knows existed. RECORDED, never
+ *  silently skipped (spec D6): a byte we saw and could not model is a
+ *  different fact from a byte that was never there.
+ *
+ *  `rotated-away` — a generation stopped being listed while undrained.
+ *  `shrank` — an immutably-named generation got smaller, i.e. a truncation;
+ *             the cursor resets to 0 and the whole file is re-read, and `uid`
+ *             dedupes what comes back. Only genuinely-lost bytes are lost.
+ *  `unknown` — the we-do-not-know member. `lifecycle_gaps.reason` IS a column
+ *             read back, so a token a newer build wrote lands here rather than
+ *             being switched on and rendered as nothing. It is also what a
+ *             name that LOOKS like a generation but cannot be ORDERED gets
+ *             (`looksLikeGenerationFile` true, `parseLifecycleGeneration`
+ *             null) — the mirror saw a file it could not place in the
+ *             sequence, which is a hole and not an absence. */
+export type LifecycleGapReason = 'rotated-away' | 'shrank' | 'unknown';
+const LIFECYCLE_GAP_REASON_MAP: Record<LifecycleGapReason, true> = {
+  'rotated-away': true, shrank: true, unknown: true,
+};
+export const LIFECYCLE_GAP_REASONS: readonly LifecycleGapReason[] =
+  Object.keys(LIFECYCLE_GAP_REASON_MAP) as LifecycleGapReason[];
+/** The only way to narrow an untrusted string to a `LifecycleGapReason` — the
+ *  CONSTANT is cast, never the input, exactly as `isDivergenceKind` above. */
+export function isLifecycleGapReason(v: unknown): v is LifecycleGapReason {
+  return typeof v === 'string' && (LIFECYCLE_GAP_REASONS as readonly string[]).includes(v);
+}
+
+/** One recorded hole in the mirror. `lostFrom`/`lostTo` are BYTE offsets in
+ *  the named generation and are `null` together when the range could not be
+ *  bounded — never 0, which would claim a measured empty loss. */
+export interface LifecycleGap {
+  readonly at: number;
+  readonly gen: string;
+  readonly reason: LifecycleGapReason;
+  /** One actionable line. DISPLAY-ONLY — nothing parses it back. */
+  readonly detail: string;
+  readonly lostFrom: number | null;
+  readonly lostTo: number | null;
+}
+
+/**
+ * Whether the journal is being mirrored, and it is FOUR states rather than a
+ * boolean for the reason `roster`/`build` above are three: a second
+ * disagreement between the same two boxes gets its own word.
+ *
+ *   `ok`          — a sweep succeeded recently.
+ *   `stale`       — no sweep has succeeded inside the staleness window. A
+ *                   silently-stopped mirror must be distinguishable from a
+ *                   quiet fleet, which is the whole point of reporting it.
+ *   `unavailable` — the fleet host's ccd advertised its caps and
+ *                   `lifecycle-v1` was NOT among them. A MEASURED ABSENCE,
+ *                   never an empty history.
+ *   `unknown`     — nothing has been measured (no caps evidence yet, or no
+ *                   sweep has run). Not `ok`, and not `unavailable` either.
+ */
+export type LifecycleHealthState = 'ok' | 'stale' | 'unavailable' | 'unknown';
+const LIFECYCLE_HEALTH_STATE_MAP: Record<LifecycleHealthState, true> = {
+  ok: true, stale: true, unavailable: true, unknown: true,
+};
+export const LIFECYCLE_HEALTH_STATES: readonly LifecycleHealthState[] =
+  Object.keys(LIFECYCLE_HEALTH_STATE_MAP) as LifecycleHealthState[];
+export function isLifecycleHealthState(v: unknown): v is LifecycleHealthState {
+  return typeof v === 'string' && (LIFECYCLE_HEALTH_STATES as readonly string[]).includes(v);
+}
+
+/** The `/api/fleet/health` block. `horizon`/`newestAt` are CCD's clock (event
+ *  times); `lastOk` is THE SERVER'S (when a sweep last succeeded) — two clocks,
+ *  two fields, never one. `writeErrors` is `$REG/.lifecycle/errors` as last
+ *  measured: `null` = never measured, `0` = measured zero. */
+export interface LifecycleHealth {
+  readonly state: LifecycleHealthState;
+  readonly newestAt: number | null;
+  /** The oldest event still mirrored — the reconstruction window's floor
+   *  (spec D8: `LC_TOTAL_MAX_BYTES` is roughly one year). Beyond it the mirror
+   *  holds history the file no longer does. */
+  readonly horizon: number | null;
+  readonly rows: number;
+  readonly generations: number;
+  readonly gaps: number;
+  readonly writeErrors: number | null;
+  readonly lastOk: number | null;
+}
+
+/** `GET /api/lifecycle` — one session's past tense, oldest-first. `gaps` rides
+ *  alongside the events deliberately: a timeline with a hole in it must say so
+ *  in the same answer, not in a second call nobody makes. */
+export interface LifecycleQueryResult {
+  readonly events: readonly MirroredLifecycleEvent[];
+  readonly gaps: readonly LifecycleGap[];
+}
 
 /**
  * "An account" (the operator's word) and "a wrapper" (ccd's word) are the same
@@ -2862,7 +2995,7 @@ export const WORK_ITEM_MAX = 32;
  *  - DONE-AUTHORITY (spec:127-132): the claim is rejected, the run is unchanged.
  *
  * `tip-unmeasurable`/`pr-unmeasurable` exist because NOT KNOWING IS NOT `[]` —
- * ccd's own three-answer ladder (`ccd/ccd:2018-2035`). A fact the server could
+ * ccd's own three-answer ladder (`ccd/ccd:1957-1963`). A fact the server could
  * not re-measure must never read as a fact that matched. `registry-unmeasurable`
  * (D-37) is the INGRESS member of the same family: a `readRegistry` that could
  * not list its directory, or that dropped a listed row for an unreadable
@@ -3434,4 +3567,820 @@ export interface PasskeyListResponse {
   /** True iff the file EXISTS and could not be read or parsed. `credentials` is
    *  then empty for a reason that is not "there are none". */
   storeUnreadable: boolean;
+}
+
+/* ---------------------------------------------------------------------------
+ * THE LIFECYCLE JOURNAL — build 9, §1 (D1-D7). The fleet's PAST TENSE.
+ *
+ * Every act a session or a human takes on the fleet leaves an append-only
+ * NDJSON line in `$REG/.lifecycle/`, a dot-prefixed DIRECTORY that `_reg_purge`
+ * (`ccd:458-556`) structurally cannot reach — its suffix filter globs
+ * `$REG/<id>.*` and ids never begin with a dot. That is what makes a
+ * destruction record possible at all: a new registry FIELD would be destroyed
+ * by the loop the day it was added.
+ *
+ * NAME COLLISION, SAID OUT LOUD SO THE NEXT READER DOES NOT CONFLATE THEM.
+ * `SessionLifecycle` / `sessionLifecycle()` / `LifecycleField` /
+ * `LifecycleInput` (:963-1260 above) classify a registry row AS IT IS NOW —
+ * WHY a session is not alive. Everything below is what was DONE, by whom, and
+ * with what result. Two different lifecycles, two different questions. The
+ * journal half is prefixed `LC_` / `Lifecycle{Act,Outcome,Obs,Dec,Meas,Event}`
+ * and lives here, at the far end of the file, rather than beside them.
+ *
+ * Nothing here decides anything about the fleet. ccd cannot refuse on identity
+ * — single UNIX user, attribution not authentication — and this vocabulary does
+ * not pretend otherwise. The record IS the mechanism.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Every act ccd can journal. ONE WORD PER OPERATOR-VISIBLE ACT, named for the
+ * verb a person would say and not for the bash function that implements it:
+ * `destroy`, because `ws-rm` and `ws-gc --prune` both destroy a workspace and
+ * a reader asking "what destroyed this" must not have to know which ran. The
+ * verb itself travels separately, in `LifecycleEvent.verb`.
+ *
+ * `unknown` IS THE READER'S DEGRADE, NEVER A CALL SITE'S CHOICE (D6). A line
+ * naming an act this build does not model is ingested as `unknown`, with the
+ * token preserved in `LifecycleEvent.badact` and the bytes in `raw`: a byte we
+ * saw and could not model is a different fact from a byte that was never
+ * there, and both differ from a row we dropped. So ccd's own `_LC_ACTS` holds
+ * this list MINUS `unknown` — set-equal in both directions, pinned by
+ * `server/test/lifecycle-vocabulary.test.ts`, which EXECUTES the bash array
+ * rather than grepping for it.
+ *
+ * Adding an act is a two-line edit here (union member + map key) and a
+ * `_LC_ACTS` entry in ccd. `Record<LifecycleAct, true>` makes forgetting the
+ * map a TS2739 and an extra key a TS2353; the cross-language test makes
+ * forgetting ccd a red suite. A hand-written `readonly LifecycleAct[]` gives
+ * neither, which is why `LIFECYCLE_ACTS` is derived below.
+ */
+export type LifecycleAct =
+  | 'create'        // ws-add minted a workspace
+  | 'claim'         // _reg_claim wrote `started`
+  | 'purge'         // _reg_purge is about to unlink the row (the D3 backstop)
+  | 'supervise'     // _ws_supervise enabled the unit
+  | 'unsupervise'   // _ws_unsupervise disabled it and stamped `.stopped`
+  | 'destroy'       // ws-rm / ws-gc --prune removed a workspace
+  | 'rename'        // ws-rename moved the branch
+  | 'hold' | 'release'
+  | 'archive' | 'restore'
+  | 'attic-drop'    // ws-attic --drop deleted pinned refs
+  | 'reap'          // ws-reap
+  | 'gc'            // RESERVED, and nothing emits it — `ws-gc --prune`'s
+                    // per-row removals go out as `destroy` with `verb ws-gc`
+                    // (ccd:8699, ccd:8812). A run-level line would need an
+                    // identity `_lc_emit` cannot express: it takes a session
+                    // id, and a prune RUN sweeps many. Kept rather than
+                    // removed because this vocabulary is wire-facing and
+                    // additive-only — a newer ccd emitting `gc` at an older
+                    // server is what absence-permits exists to survive.
+  | 'spawn'         // _spawn_settle, CHANGE-ONLY (§2)
+  | 'start' | 'ensure' | 'swap' | 'enable' | 'stop' | 'forget'
+  | 'unknown';      // the reader's degrade. NEVER written by a ccd call site.
+
+/** Derived from the type, never restated beside it — `PR_REASON_MAP`'s idiom
+ *  (:299) and its exact guarantee. Module-private: only the derived list and
+ *  the guard are exported, so `LIFECYCLE_ACTS.includes(raw as LifecycleAct)`
+ *  — asserting the very thing the check asks — has no shorter route than
+ *  `isLifecycleAct`. */
+const LIFECYCLE_ACT_MAP: Record<LifecycleAct, true> = {
+  create: true, claim: true, purge: true, supervise: true, unsupervise: true,
+  destroy: true, rename: true, hold: true, release: true, archive: true, restore: true,
+  'attic-drop': true, reap: true, gc: true, spawn: true, start: true, ensure: true,
+  swap: true, enable: true, stop: true, forget: true,
+  unknown: true,
+};
+export const LIFECYCLE_ACTS: readonly LifecycleAct[] =
+  Object.keys(LIFECYCLE_ACT_MAP) as LifecycleAct[];
+
+/** The one act ccd may never name at a call site. Exported so every filter
+ *  that excludes the degrade filters by THIS, not by a literal a later edit
+ *  could quietly point at the wrong member — the improvement on
+ *  `SESSION_LIFECYCLES.filter((s) => s !== 'unmeasurable')`, which spells its
+ *  exclusion inline in two suites. */
+export const LC_ACT_UNKNOWN: LifecycleAct = 'unknown';
+
+/** The only way to narrow an untrusted string to a `LifecycleAct`. The
+ *  parameter is `unknown` so nothing can be smuggled in by claiming it is
+ *  already an act, and the CONSTANT is cast rather than the input. */
+export function isLifecycleAct(v: unknown): v is LifecycleAct {
+  return typeof v === 'string' && (LIFECYCLE_ACTS as readonly string[]).includes(v);
+}
+
+/**
+ * What happened to the act. D4: the destructive verbs (`ws-rm`, `ws-reap`,
+ * `ws-gc --prune`, `forget`) write one `intent` line BEFORE the irreversible
+ * act and one outcome line after, sharing a `tx`.
+ *
+ * THERE IS DELIBERATELY NO `orphaned` MEMBER. "An `intent` with a `failed`
+ * sibling is a half-destroyed workspace; an `intent` with no sibling at all is
+ * a process that died mid-destroy" is a fact about a PAIR of rows, DERIVED BY
+ * THE READER and never stored — a writer cannot know it, and storing it would
+ * give the reader two sources for one fact.
+ *
+ * `_lc_obs` gathers the `obs` block once per process and emits nothing, so it
+ * contributes no outcome — there is NO `observed` member. If wave 2 finds it
+ * must emit, adding one here is the same two-line edit as an act.
+ */
+export type LifecycleOutcome =
+  | 'intent'    // said before the irreversible act
+  | 'done'      // it happened
+  | 'refused'   // ccd declined; `LifecycleEvent.refusal` carries the token
+  | 'failed'    // it was attempted past the point of no return and did not finish
+  | 'unknown';  // the reader's degrade, exactly as `LifecycleAct.unknown`
+
+const LIFECYCLE_OUTCOME_MAP: Record<LifecycleOutcome, true> = {
+  intent: true, done: true, refused: true, failed: true, unknown: true,
+};
+export const LIFECYCLE_OUTCOMES: readonly LifecycleOutcome[] =
+  Object.keys(LIFECYCLE_OUTCOME_MAP) as LifecycleOutcome[];
+
+/** The outcome side's degrade, named once for the same reason `LC_ACT_UNKNOWN`
+ *  is: `journalparse.ts`'s `isLifecycleOutcome(raw) ? raw : LC_OUTCOME_UNKNOWN`
+ *  and ccd's `_LC_OUTCOMES` (this list minus this member) must not each spell
+ *  it inline. Both halves of the vocabulary have a degrade; both name it. */
+export const LC_OUTCOME_UNKNOWN: LifecycleOutcome = 'unknown';
+
+export function isLifecycleOutcome(v: unknown): v is LifecycleOutcome {
+  return typeof v === 'string' && (LIFECYCLE_OUTCOMES as readonly string[]).includes(v);
+}
+
+/**
+ * What the KERNEL says about the process that ran ccd, resolved from
+ * `/proc/self/cgroup`'s `0::` path (D2). Unforgeable by env — the systemd unit
+ * names the session id in the path, which is respawn provenance nothing on
+ * this box has today.
+ *
+ *   `app.slice/ccrc-agent.service`           -> agent
+ *   `app.slice/tmux-spawn-<uuid>.scope`      -> pane
+ *   `app.slice/claude-session@<id>.service`  -> supervisor
+ *   `user.slice/session-N.scope`             -> login
+ *
+ * TWO SPELLINGS, ONE FACT, AND THE MAPPING IS WRITTEN DOWN HERE SO NOBODY
+ * "FIXES" EITHER: on the WIRE this value is `LifecycleObs.cg` (ccd writes
+ * `obs.cg`, spec-mandated); as a DERIVED PAIR crossing the L1/L3 seams it is
+ * `obsClass`, matching this file's `corroboration(obsClass, decSurface)`
+ * parameter names and `ProvenancePair` in `server/src/coord/store.ts`. Same
+ * for `LifecycleDec.surface` <-> `decSurface`. Wire names are short because a
+ * million lines carry them; seam names are explicit because a reader of one
+ * call site has no object to look at.
+ *
+ * `unknown` means the path WAS read and matched none of the four. It is not
+ * the same condition as "no cgroup was read at all", which the wire spells
+ * `obs.cg === null` — two conditions a caller handles differently, so two
+ * values (`corroboration` answers `not-comparable` for the first and
+ * `unmeasured` for the second).
+ *
+ * A double fork makes a caller ANONYMOUS (`ppid 1`), never someone else. The
+ * raw path travels beside this in `obs.cgraw` and is never dropped, so a fifth
+ * shape this build cannot name is still recoverable from the record.
+ */
+export type ActorClass = 'agent' | 'pane' | 'supervisor' | 'login' | 'unknown';
+const ACTOR_CLASS_MAP: Record<ActorClass, true> = {
+  agent: true, pane: true, supervisor: true, login: true, unknown: true,
+};
+export const ACTOR_CLASSES: readonly ActorClass[] =
+  Object.keys(ACTOR_CLASS_MAP) as ActorClass[];
+
+export function isActorClass(v: unknown): v is ActorClass {
+  return typeof v === 'string' && (ACTOR_CLASSES as readonly string[]).includes(v);
+}
+
+/**
+ * What the CALLER said (D2, wire `dec.surface`, seam `decSurface`): ccd's own
+ * closed set (`ccd:1523`) plus `'none'`, which is what the journal writes when
+ * no `--surface` flag was passed at all.
+ *
+ * `StopSurface` IS UNCHANGED (spec §2) — no fifth surface word. `'none'` is a
+ * journal-only member, and it is a MEASUREMENT of absence rather than a
+ * default: `cmd_stop` defaults its own `surface` to `cli` (`ccd:11151`) and
+ * `_ws_unsupervise` defaults its second parameter to `ccd` (`ccd:650-663`,
+ * `${2-ccd}` and not `${2:-ccd}`), and NEITHER of those internal defaults may
+ * reach this field. Journaling a default as a declaration would manufacture
+ * corroboration out of silence, which is the one thing this family exists to
+ * prevent.
+ */
+export type DecSurface = StopSurface | 'none';
+
+/** Derived from `isStopSurface` (:1146) rather than restating its list — the
+ *  list is module-private there precisely so there is one door. */
+export function isDecSurface(v: unknown): v is DecSurface {
+  return v === 'none' || isStopSurface(v);
+}
+
+/** What `corroboration()` can answer. Four words, because there are four
+ *  conditions and a reader handles each differently: only `disagrees` raises
+ *  `divergence.provenance-mismatch`. */
+export type Corroboration = 'agrees' | 'disagrees' | 'not-comparable' | 'unmeasured';
+const CORROBORATION_MAP: Record<Corroboration, true> = {
+  agrees: true, disagrees: true, 'not-comparable': true, unmeasured: true,
+};
+export const CORROBORATIONS: readonly Corroboration[] =
+  Object.keys(CORROBORATION_MAP) as Corroboration[];
+
+export function isCorroboration(v: unknown): v is Corroboration {
+  return typeof v === 'string' && (CORROBORATIONS as readonly string[]).includes(v);
+}
+
+/**
+ * Which declared surfaces the observed host CORROBORATES. Total over
+ * `ActorClass` so a sixth class is a TS2739 here rather than a silent
+ * `undefined.includes`.
+ *
+ * `supervisor` and `unknown` map to the empty list, and the two empties are
+ * not the same statement: `unknown` is unreachable (rung 3 of the ladder
+ * catches it first, and the ladder's own test pins that), while `supervisor`
+ * is genuinely reachable and genuinely disagrees with every declaration — the
+ * supervisor passes no flags, so a declaration arriving from
+ * `claude-session@<id>.service` is a fact worth showing an operator.
+ */
+const DEC_CORROBORATES: Record<ActorClass, readonly DecSurface[]> = {
+  agent: ['pwa', 'agent'],   // PWA -> server -> agent -> ccd, and the agent itself
+  pane: ['cli'],             // a session shelling ccd from its own Bash tool
+  login: ['cli'],            // a human at an ssh shell
+  supervisor: [],
+  unknown: [],
+};
+
+/**
+ * The ONE function permitted to relate the `obs` and `dec` families (D2).
+ * PURE, and deliberately clock-free — inputs only, no `fs`, no timers — for
+ * the reasons `sessionLifecycle` states at :1242.
+ *
+ * THE PARAMETER NAMES ARE THE SEAM SPELLING and are load-bearing: callers hand
+ * it `obsClass` / `decSurface` (`ProvenancePair`), which are the same two
+ * facts the wire spells `obs.cg` / `dec.surface`. Both arguments must be
+ * NARROWED, never cast: `isActorClass` and `isDecSurface` are the only doors,
+ * and a value that passes neither is not a disagreement — it is a value this
+ * build cannot model, which a caller drops rather than reports.
+ *
+ * IT REPORTS, IT NEVER DECIDES. A `disagrees` raises
+ * `divergence.provenance-mismatch` for a human to read; it refuses nothing and
+ * picks no winner. ccd cannot authenticate a caller on a single-uid box and
+ * this does not pretend to — "a disagreement is a fact the operator sees,
+ * never a silently picked winner".
+ *
+ * The ladder's ORDER is the design. Each rung exists because collapsing it
+ * into the table below would turn "we cannot compare these" into "you lied":
+ *   1. no observation at all       -> unmeasured
+ *   2. no declaration at all       -> unmeasured
+ *   3. a word one side cannot name -> not-comparable
+ *   4. `ccd` names a LAYER, not a host (ccd re-entering itself: `cmd_swap`'s
+ *      `|| cmd_ensure "$id"` fallback at `ccd:11061`, `cmd_enable`'s
+ *      `cmd_start "$@"` at `ccd:11105`), so it corroborates nothing about who
+ *      was at the keyboard
+ *                                  -> not-comparable
+ *   5. the table                   -> agrees | disagrees
+ */
+export function corroboration(obsClass: ActorClass | null, decSurface: DecSurface): Corroboration {
+  if (obsClass === null) return 'unmeasured';
+  if (decSurface === 'none') return 'unmeasured';
+  if (obsClass === 'unknown' || decSurface === 'unknown') return 'not-comparable';
+  if (decSurface === 'ccd') return 'not-comparable';
+  return DEC_CORROBORATES[obsClass].includes(decSurface) ? 'agrees' : 'disagrees';
+}
+
+/**
+ * D2 — kernel-observed. Unforgeable by env: read from `/proc`, not from
+ * argv or the environment. A double fork makes a caller ANONYMOUS
+ * (`ppid 1`), never someone else.
+ */
+export interface LifecycleObs {
+  /** The `0::` path, classified. `null` = no cgroup was read at all;
+   *  `'unknown'` = it was read and matched none of the four shapes. The seam
+   *  spelling of this same fact is `obsClass` — see `ActorClass`'s docstring. */
+  readonly cg: ActorClass | null;
+  /** The `0::` path VERBATIM, and it is never dropped even when `cg` names it.
+   *  A fifth cgroup shape a later build learns to classify is re-projectable
+   *  from this without touching the fleet box — which is what makes the mirror
+   *  a re-measurement rather than an authority (D8). */
+  readonly cgraw: string | null;
+  readonly pid: number | null;
+  /** From `/proc/<pid>/status`'s `PPid:` line, NEVER `stat` field 4 — `comm`
+   *  can contain spaces, so field-4 parsing is wrong for any process whose
+   *  name has one. */
+  readonly ppid: number | null;
+  /** The tmux `session_name` owning an ancestor pid, from
+   *  `tmux list-panes -a -F '#{session_name} #{pane_pid}'` intersected with
+   *  the ppid ancestry. `null` when no pane owns this process. */
+  readonly pane: string | null;
+  /** ccd's own word for HOW the `pane` answer was reached, so a null `pane` is
+   *  not overloaded across "no ancestor is a pane", "tmux did not answer" and
+   *  "the caller double-forked itself anonymous". DISPLAY-ONLY — nothing
+   *  parses it back, exactly as `Divergence.detail` (:1128). */
+  readonly paneWhy: string | null;
+  /** `[[ -t 0 ]]` — a human was at a terminal. */
+  readonly tty: boolean | null;
+  /** `$SSH_CONNECTION` verbatim, or null. Environment, so self-asserted in
+   *  principle; kept in `obs` because it is read the same way and at the same
+   *  moment as the rest, and `corroboration()` does not consult it. */
+  readonly ssh: string | null;
+}
+
+/**
+ * D2 — declared. SELF-ASSERTED, and the wire says so by keeping it in its own
+ * object: `--surface pwa` means only that the caller said so
+ * (`ccd:658-661`'s own words about the same field).
+ */
+export interface LifecycleDec {
+  /** `'none'` when NO flag was passed. ccd's internal defaults — `cmd_stop`'s
+   *  `cli` (`ccd:11151`), `_ws_unsupervise`'s `ccd` (`ccd:663`) — must never
+   *  reach this field. Seam spelling: `decSurface`. */
+  readonly surface: DecSurface;
+  /** `--actor`, free text, or null. Attribution, not authentication. */
+  readonly actor: string | null;
+  /** `--reason`, <= `LC_REASON_MAX_BYTES` BYTES, or null — on every FLAG-
+   *  CARRIED `--reason` (ws-rm/forget's own `--reason`; wave 5's on
+   *  rename/release/archive/restore) ccd REFUSES a longer one rather than
+   *  truncating it, because a 900-byte
+   *  reason recorded as 512 reads as the operator's own words. Written
+   *  verbatim, PARSED NOWHERE — `cmd_ws_hold`'s standing rule for the same
+   *  kind of value (`ccd:3585`). It is free text off the wire, so it must
+   *  never reach an arithmetic context, an array subscript, an `eval` or an
+   *  unquoted expansion: `ccd:9937-9941` is the paid lesson.
+   *
+   *  THE CAP IS NOT UNIFORM ACROSS EVERY WRITER OF THIS FIELD (final review,
+   *  F3, disclosed rather than fixed here): `cmd_ws_hold` journals its own
+   *  mandatory hold reason into this SAME field UNCAPPED — bound at
+   *  `ccd:3635`, blank-checked at `ccd:3657`, but never passed through
+   *  `_lc_dec_ok` before it lands at `ccd:3696`. A hold therefore accepts and
+   *  records a reason that `ws-release` would refuse verbatim as `--reason`.
+   *  Unifying the two (capping the hold reason, or truncating instead of
+   *  refusing) is a verb-contract change on a LIVE verb and is explicitly
+   *  OUT of this fix's scope — this docstring now states what is true of
+   *  every writer rather than what only the flag-carried ones guarantee. */
+  readonly reason: string | null;
+}
+
+/**
+ * D2 — measured about the SUBJECT, read BEFORE any destruction. Every field is
+ * nullable and `null` MEANS NOT MEASURED — never zero, never empty string.
+ * `attic: 0` is a pin that ran and created no refs; `attic: null` is a pin
+ * that was never taken. `archivedReason: ''` is a blank reason;
+ * `archivedReason: null` is a row that was never archived.
+ *
+ * THIS TWENTY-FIVE IS CLOSED, AND THAT IS A RULING, NOT AN OVERSIGHT —
+ * widened from the original ten in wave 2 (Task 21) because "closed ten, the
+ * rest lives on in `raw`" turned out to be the wrong shape for THIS field
+ * specifically: `LifecycleEvent.raw` is a per-event escape hatch, but wave
+ * 4's `reviveMeas` reads `meas.*` through this interface's OWN key list, and a
+ * key not on that list is not merely deferred to `raw` — it is silently
+ * DROPPED from the mirror's typed shape, with nothing anywhere reporting the
+ * loss. Measured at wave 2 HEAD (`awk '/export interface LifecycleMeas/,/^}/'
+ * shared/api.ts` against `grep -oE "meas\.[a-zA-Z]+" ccd/ccd | sort -u`): ccd
+ * emitted 22 distinct `meas.<key>` names; 13 of them — `base`, `bytes`,
+ * `dropped`, `from`, `inUnit`, `mode`, `old`, `rc`, `registered`, `resumed`,
+ * `state`, `tombstone`, `workdir` — were emitted but undeclared, i.e. silently
+ * lost at ingest. Those 13 were named then; the union with the original ten
+ * was 23. `tip` stays even though nothing currently emits it — a reader
+ * tolerating a key the writer does not yet produce is fine, the reverse is
+ * the defect this widening fixes.
+ *
+ * NAMED MEMBERS, NOT AN INDEX SIGNATURE — deliberately, and that is the other
+ * half of the ruling. An index signature would let any key through and
+ * destroy the closed vocabulary; this project's doctrine runs the other way
+ * (`_LC_ACTS` pinned set-equal to `LIFECYCLE_ACTS`, `single-definition.test.ts`
+ * failing the build on a second copy of an enumerated value). A 26th key
+ * ccd starts emitting is a compile error here AND a red
+ * `server/test/ccd-lifecycle-contain.test.ts`, which derives ccd's side by
+ * scanning `ccd/ccd` rather than hand-maintaining a second list — that is
+ * the point, not an inconvenience.
+ *
+ * `manifestBytes` and `atticsrc` — RESTORED, wave 3 (Task 24 fix round 1).
+ * Wave 2 (Task 21) speculated on both, found neither emitted anywhere in the
+ * shipped `ccd/ccd` at that HEAD, and removed them as dead members — a guard
+ * (`ccd-lifecycle-contain.test.ts`'s "never invents an emit" case, now
+ * inverted, see there) was pinned specifically to stop either being re-added
+ * "on the brief's say-so" without the wire evidence to back it. Wave 3
+ * supplied that evidence: `cmd_ws_rm`'s attic pin now emits `meas.atticsrc`
+ * (`ccd:2983`) and `cmd_ws_restore`'s supersede now emits
+ * `meas.manifestBytes` (`ccd:4493`), so the union returns to the plan's
+ * original 25.
+ */
+export interface LifecycleMeas {
+  readonly project: string | null;
+  readonly workspace: string | null;
+  readonly branch: string | null;
+  readonly uuid: string | null;
+  readonly wrapper: string | null;
+  /** The tip commit as resolved before the act. */
+  readonly tip: string | null;
+  /** How many `refs/ccrc/attic/<id>/` refs `_ws_attic_pin` created. */
+  readonly attic: number | null;
+  /** Where the attic pin's tip came from — `worktree` (read live off
+   *  `$workdir`'s HEAD), `registry` (the worktree was already gone; read off
+   *  the registry's own `branch` field instead), or `none` (neither had one
+   *  to pin). `cmd_ws_rm`'s attic pin (`ccd:2983`); the local starts `none`
+   *  and only ever moves to `worktree` or `registry` (`ccd:2952,2954,2965`). */
+  readonly atticsrc: 'worktree' | 'registry' | 'none' | null;
+  /** Epoch SECONDS as `_reg_set "$id" archived "$(date +%s)"` wrote it
+   *  (`ccd:4000`) — the registry's own unit, carried unconverted so the record
+   *  is what the file said. */
+  readonly archivedAt: number | null;
+  /** `merged:#N | empty | manual` as `ccd:4001` wrote it, or null when the row
+   *  carries no reason. Not proven present by any guard — absent is a
+   *  legitimate state. */
+  readonly archivedReason: string | null;
+  /** The byte total of the `.archivemanifest` file `ws-restore` is about to
+   *  remove, read fresh with `stat` right before the removal (`cmd_ws_restore`
+   *  R4-2 supersede, `ccd:4493`) — null when `stat` could not measure it
+   *  (missing or unreadable), never a fabricated 0. Nothing in ccd reads the
+   *  manifest back; this byte count is the one thing preserved of it. */
+  readonly manifestBytes: number | null;
+  /** The `.hold` text, verbatim, or null. */
+  readonly held: string | null;
+  /** The worktree path, as `_reg_get "$id" workdir` or the just-created path
+   *  read it back (`cmd_ws_create`, `cmd_ws_rename`, `ws-gc`, `ws-reap`). */
+  readonly workdir: string | null;
+  /** The base branch a new workspace was created from (`cmd_ws_create`). */
+  readonly base: string | null;
+  /** The name a rename REPLACED — `branch` carries what it became
+   *  (`cmd_ws_rename`, `ccd:3291`). */
+  readonly old: string | null;
+  /** The prompt's exit status on a re-spawn (`cmd_ensure`, `ccd:9867`).
+   *  Carried unconverted, like `archivedAt`. */
+  readonly rc: number | null;
+  /** The start mode `cmd_start` resolved before spawning. */
+  readonly mode: string | null;
+  /** `${CCD_IN_UNIT:-0}` — whether `cmd_ensure` ran inside the supervising
+   *  unit or as an outside request for one (`ccd:10339`). */
+  readonly inUnit: number | null;
+  /** The wrapper a swap moved AWAY from; `wrapper` carries the target
+   *  (`cmd_swap`, `ccd:11055`). */
+  readonly from: string | null;
+  /** How many `refs/ccrc/attic/<id>/` refs `--drop` destroyed this call —
+   *  `attic` is the pin count, this is the drop count. */
+  readonly dropped: number | null;
+  /** `_ws_wt_branch`'s exit status for the worktree being removed — decides
+   *  whether there is a git-side record to clean up (`cmd_ws_rm`'s intent). */
+  readonly registered: number | null;
+  /** A `ws-gc` sweep's classification of the row it is about to reclaim —
+   *  `dead-reg` or `orphan`, never anything else the encoder has seen. */
+  readonly state: string | null;
+  /** How many bytes `ws-reap` measured before destroying the worktree, or
+   *  `null` when `_ws_gc_bytes` did not return a plain integer. */
+  readonly bytes: number | null;
+  /** The reap PHASE (`children` | `worktree` | `branch` | `clips`) a resumed
+   *  `ws-reap` was interrupted at, read back from the registry's own
+   *  `.reaping` marker — not a boolean; an interrupted reap resumes from
+   *  wherever it stopped. */
+  readonly resumed: string | null;
+  /** The tombstone record's own path, as `_ws_tombstone` returned it. */
+  readonly tombstone: string | null;
+}
+
+/** Derived from the interface, never restated beside it — `LIFECYCLE_ACT_MAP`'s
+ *  exact idiom (:3418), and the fix for the same defect it already prevents
+ *  for acts: a hand-written `readonly string[]` of key names drifts silently
+ *  from the interface it claims to describe (measured — FIX ROUND 1, task 21
+ *  review: `ccd-lifecycle-contain.test.ts` shipped with a hand-listed
+ *  `DECLARED` array that happened to agree with this interface today but
+ *  nothing enforced that forward). `Record<keyof LifecycleMeas, true>` makes
+ *  a member added to the interface without a map entry a TS2741/TS2739, and
+ *  an extra map key with no interface member a TS2353 — the same two-sided
+ *  compile-time guarantee `LIFECYCLE_ACT_MAP` gives acts. Module-private:
+ *  only the derived array is exported, so a consumer reads the list, never
+ *  the map. */
+const LIFECYCLE_MEAS_KEY_MAP: Record<keyof LifecycleMeas, true> = {
+  project: true, workspace: true, branch: true, uuid: true, wrapper: true,
+  tip: true, attic: true, atticsrc: true, archivedAt: true,
+  archivedReason: true, manifestBytes: true, held: true,
+  workdir: true, base: true, old: true, rc: true, mode: true, inUnit: true,
+  from: true, dropped: true, registered: true, state: true, bytes: true,
+  resumed: true, tombstone: true,
+};
+/** The one list `server/test/ccd-lifecycle-contain.test.ts` checks ccd's
+ *  emitted keys against — imported, not re-typed, so the two sides cannot
+ *  independently drift the way a second hand-written copy would let them. */
+export const LIFECYCLE_MEAS_KEYS: readonly (keyof LifecycleMeas)[] =
+  Object.keys(LIFECYCLE_MEAS_KEY_MAP) as (keyof LifecycleMeas)[];
+
+/**
+ * One journal line. NDJSON, UTF-8, LF-terminated, <= `LC_LINE_MAX` bytes, one
+ * `printf '%s\n' "$line" >> "$f"` per event — an `O_APPEND` write to a regular
+ * file on Linux is serialised under the inode lock, so concurrent writers
+ * cannot interleave. The precedent is measured, not assumed: `$REG/swap.log`,
+ * 13 concurrent write sites over 49 days, zero corruption.
+ *
+ * THE THREE IDENTITY FAMILIES ARE THREE FIELDS AND THEY NEVER MERGE (operator
+ * ruling R3). There is no `who`. `corroboration(obs.cg, dec.surface)` is the
+ * only sanctioned relation between two of them, and it reports rather than
+ * resolves.
+ *
+ * THIS IS THE LINE, NOT THE ROW. `gen` and `ingestedAt` are the MIRROR's own
+ * facts and live on `MirroredLifecycleEvent` below; no ccd emit carries
+ * either. Two wire fields ccd writes are deliberately NOT modelled here and
+ * are read by `parseJournalLine` without being carried: `v` (the envelope's
+ * version — the wire is additive-only, so a version is not a fact about the
+ * act) and `atNs` (the same clock read `uid`'s prefix already holds). Both
+ * survive in `raw`.
+ *
+ * There is no `reviveLifecycleEvent` here on purpose: parsing a line is
+ * `parseJournalLine` in `server/src/coord/journalparse.ts`, which D8 requires
+ * to be PURE and TOTAL (no clock, no lookup, no registry, no other row) —
+ * that is what makes `lifecycle_events` a re-measurement rather than an
+ * authority, and what makes replay from offset 0 idempotent.
+ */
+export interface LifecycleEvent {
+  /** `<epochNs>.<BASHPID>.<seq>` — INTRINSIC, not positional (D6). `UNIQUE`
+   *  in the mirror, inserted `OR IGNORE`, so re-reading a generation from
+   *  offset 0 is always no-op-or-catch-up and a truncation is recoverable
+   *  rather than fatal.
+   *
+   *  NULL WHEN THE LINE CARRIED NONE, and that is not a widening for
+   *  convenience: an unparseable line is INSERTED rather than dropped (a byte
+   *  we saw and could not model is a different fact from a byte that was never
+   *  there), and such a row has no uid to carry. `lifecycle_raw_uid` dedupes
+   *  it on its bytes within its generation instead. */
+  readonly uid: string | null;
+  /** Epoch MILLISECONDS, ccd's clock. Derived from the SAME clock read as
+   *  `uid`'s nanosecond prefix, so the two can never disagree about one event.
+   *  Never the server's clock: `MirroredLifecycleEvent.ingestedAt` is a
+   *  separate, explicitly server-owned value and is never read as an event
+   *  time. NULL = the line carried no readable `at`; NEVER 0, which is a date
+   *  and not an absence. */
+  readonly at: number | null;
+  readonly act: LifecycleAct;
+  /** The act token ccd wrote when this build cannot name it; null whenever
+   *  `act` is not `LC_ACT_UNKNOWN`. The two are never both set. */
+  readonly badact: string | null;
+  readonly outcome: LifecycleOutcome;
+  /** `badact`'s twin on the outcome side; null whenever `outcome` is not
+   *  `LC_OUTCOME_UNKNOWN`. Both halves of the vocabulary degrade the same way
+   *  and keep the token, so neither sends a reader to `raw` for it. */
+  readonly badoutcome: string | null;
+  /** The SUBJECT session id, or null for an act about no single row. Spelled
+   *  `id` here and on every seam; the mirror's COLUMN is `sessionId`, which is
+   *  the one sanctioned rename and is `JournalRow`'s business, not this
+   *  type's. */
+  readonly id: string | null;
+  /** Pairs an `intent` with its outcome (D4). Null for a single-shot act. An
+   *  intent with no sibling at all is a process that died mid-destroy —
+   *  DERIVED BY THE READER over the pair, never stored as an outcome. */
+  readonly tx: string | null;
+  /** The ccd verb that ran (`ws-rm`, `ws-gc`, `forget`, ...). */
+  readonly verb: string | null;
+  /** The refusal token when `outcome === 'refused'`.
+   *
+   *  SPELLED `refusal`, NEVER `refused`, AND THAT IS LOAD-BEARING (D15).
+   *  `server/test/wsaudit.test.ts:57` greps ccd's raw text — comments included
+   *  — with /"refused":"([a-zA-Z0-9-]+)"/ and holds the result set-equal in
+   *  both directions to `wsaudit.ts`'s SENTENCES. An emitter whose format
+   *  string spelled `"refused":"%s"` would inject tokens into that scan and
+   *  red it; that suite must stay green WITH NO EDIT, which is itself an
+   *  assertion of this program. Journal-only tokens get their word from
+   *  `LC_REFUSAL_WORD` below instead. */
+  readonly refusal: string | null;
+  /** One line for a person. DISPLAY-ONLY — nothing parses it back. */
+  readonly detail: string | null;
+  /** The emitter hit `LC_LINE_MAX` and dropped fields to fit — `dec.reason`,
+   *  then `obs.cgraw`, then `meas`, in that order. FALSE when the wire says
+   *  nothing, because absence-permits.
+   *
+   *  MODELLED RATHER THAN INFERRED, and that is the point: without it a
+   *  `meas: null` from truncation and a `meas: null` from "nothing was
+   *  measured" would be one value for two conditions a reader handles
+   *  differently. `refusal` and `detail` are never in the drop set — a refusal
+   *  whose token was dropped would be an untyped refusal. */
+  readonly truncated: boolean;
+  readonly obs: LifecycleObs | null;
+  readonly dec: LifecycleDec | null;
+  readonly meas: LifecycleMeas | null;
+  /** The line VERBATIM, on EVERY path — parsed, degraded and unparseable
+   *  alike. A byte we saw and could not model is a different fact from a byte
+   *  that was never there; keeping all of them is what makes wave 4's replay
+   *  drill byte EQUALITY rather than resemblance, and what lets an unmodelled
+   *  `meas.*` key or a future wire field be re-projected without touching the
+   *  fleet box. */
+  readonly raw: string;
+}
+
+/**
+ * A journal line AS THE MIRROR HOLDS IT.
+ *
+ * `gen` (which generation FILE it was read from) and `ingestedAt` (the
+ * SERVER's clock, at insert) are facts about the READING, not about the act —
+ * no ccd emit carries either, and neither may travel as though it did. They
+ * live here so `LifecycleEvent` stays exactly what a line says, and so the
+ * replay drill can exclude `ingestedAt` by name and still compare everything
+ * else byte for byte.
+ *
+ * One-way: every `MirroredLifecycleEvent` IS a `LifecycleEvent`; the reverse
+ * is a TS2739, which is the compile error that stops a reader inventing a
+ * generation for a line that came off the wire.
+ */
+export interface MirroredLifecycleEvent extends LifecycleEvent {
+  /** The generation's epoch-nanosecond digits — `parseLifecycleGeneration`'s
+   *  answer for the file this line was read from. */
+  readonly gen: string;
+  /** Epoch milliseconds, the SERVER's clock, at insert. Never an event time. */
+  readonly ingestedAt: number;
+}
+
+/**
+ * Refusal tokens that live ONLY in the journal — the ones `_lc_refuse` /
+ * `_lc_fail` write and no `"refused":"…"` JSON on ccd's stdout ever carries.
+ *
+ * DELIBERATELY DISJOINT FROM `wsaudit.ts`'s SENTENCES, and the disjointness is
+ * a red suite (`server/test/lifecycle-refusal-word.test.ts`). D15's ruling:
+ * `wsaudit.test.ts` holds SENTENCES set-equal IN BOTH DIRECTIONS to the tokens
+ * its four regexes grep out of ccd's source, and a `_lc_refuse` call changes
+ * no stdout and no exit contract — so it contributes no token to that scan. An
+ * entry there for a journal-only token would red the stale-copy direction, and
+ * the only fixes would be deleting copy or weakening an approved mechanism
+ * (`ccd:2121-2128` records that argument being had once already).
+ * `wsaudit.test.ts` must stay green WITH NO EDIT; that is itself an assertion
+ * of this program. The shared rungs — `held`, `dirty-tree`, `no-such-session`,
+ * `foreign-worktree`, `tree-unreadable`, `nested-checkouts-present`,
+ * `in-progress` and the rest of the 54 — keep their single home over there.
+ *
+ * THE CONTRACT WAVE 3 HONOURS, AND WHAT ENFORCES IT: every token wave 3 hands
+ * `_lc_refuse` / `_lc_fail` is a member of this union OR already a SENTENCES
+ * key, and wave 3's own cross-language scan over `ccd/ccd` asserts it in both
+ * directions with a coverage floor. It cannot live here — it would be red
+ * until wave 3 lands. Adding a tenth token is a two-line edit;
+ * `Record<LcRefusalToken, string>` makes forgetting its word a TS2739.
+ */
+export type LcRefusalToken =
+  | 'scratch-unwritable'       // ws-rm could not make the scratch file it reads $workdir with
+  | 'tip-unreadable'           // ws-rm could not resolve a tip while the worktree is STILL THERE
+  | 'bad-session-id'           // ws-restore / forget: the id is not a shape ccrc mints
+  | 'flock-unavailable'        // no util-linux flock — a destructive verb refuses to run unserialised
+  | 'lock-unopenable'          // the reap lock could not be opened
+  | 'is-a-workspace'           // forget, aimed at a workspace: use the audited path
+  | 'session-live'             // forget, on a running session
+  | 'session-verdict-unknown'  // tmux did not answer: fail-shut, nothing removed
+  | 'spawn-failed';            // _lc_fail: the undo landed, the session did not come back
+
+/**
+ * The word for each. DECLARED ONCE AND EXPORTED — there is no module-private
+ * `…_MAP` twin, on purpose. The "total maps stay module-private" rule exists
+ * for NARROWING maps, where an exported map gives a second route past the
+ * guard (`LIFECYCLE_ACT_MAP[raw]`); this is a RENDERING map, the PWA types its
+ * own `Record<LcRefusalToken, …>` renderer against it, and `isLcRefusalToken`
+ * is still the only narrowing door. `SENTENCES` (`wsaudit.ts:17`) is the
+ * precedent and is exported directly for exactly this reason. An alias
+ * declared only to satisfy a guard written for the other case would be a
+ * second name for one value.
+ */
+export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
+  'scratch-unwritable':
+    'ccrc could not make a scratch file to read this worktree, so it proved nothing about what removing it would delete. Nothing was touched.',
+  'tip-unreadable':
+    'ccrc could not resolve this workspace’s tip commit while its worktree is still here, so it could not pin the commits before deleting them. Nothing was touched.',
+  'bad-session-id':
+    'That is not a shape a ccrc session id can have, so nothing was looked up and nothing was touched.',
+  'flock-unavailable':
+    'This box has no flock, so ccrc refused to run a destructive verb without serialising it against a concurrent cleanup.',
+  'lock-unopenable':
+    'ccrc could not open the cleanup lock for this session, so it refused to act unserialised.',
+  'is-a-workspace':
+    'This is a workspace, and removing one is audited and confirmed. Use the workspace sheet, or ccd ws-rm.',
+  'session-live':
+    'This session is still running. Stop it first, then try again.',
+  'session-verdict-unknown':
+    'tmux did not answer, so ccrc cannot tell whether this session is still running. Nothing was removed.',
+  'spawn-failed':
+    'The undo landed, but the session did not come back up. The workspace and its branch are intact.',
+};
+
+/** Derived from the map — the `PR_REASON_MAP` idiom, so a member added to the
+ *  union is a TS2739 rather than a runtime list one short. */
+export const LC_REFUSAL_TOKENS: readonly LcRefusalToken[] =
+  Object.keys(LC_REFUSAL_WORD) as LcRefusalToken[];
+
+export function isLcRefusalToken(v: unknown): v is LcRefusalToken {
+  return typeof v === 'string' && (LC_REFUSAL_TOKENS as readonly string[]).includes(v);
+}
+
+/**
+ * The word for a journal refusal token, or `null`.
+ *
+ * NULL IS A POSITIVE ANSWER — "this token is not mine, ask
+ * `refusalSentence()`" — and never an error. L0 imports nothing, so it cannot
+ * fall through to `wsaudit.ts` itself; the caller composes
+ * `lcRefusalWord(t) ?? refusalSentence(t)`. Two maps, one lookup order, no
+ * token with copy in both.
+ */
+export function lcRefusalWord(token: string): string | null {
+  return isLcRefusalToken(token) ? LC_REFUSAL_WORD[token] : null;
+}
+
+/* --- The journal's names and ceilings. -----------------------------------
+ *
+ * Every name here has a bash twin in ccd, and the numbers are bound to their
+ * twins by `server/test/lifecycle-constants-twin.test.ts`. `LC_SWEEP_MS` is
+ * deliberately NOT here: it is a server tick-gate with no bash twin and no
+ * wire meaning, and its siblings (`TASK_SWEEP_MS`, `NAME_SWEEP_MS`,
+ * `DIVERGENCE_SWEEP_MS`, `MAIL_SWEEP_MS`) all live in `server/src/watch.ts`.
+ * One sweep interval in L0 would be a second home for one class of value.
+ * ------------------------------------------------------------------------ */
+
+/** `$REG/.lifecycle/`. A DOT-PREFIXED DIRECTORY, and that is the whole
+ *  feature: `_reg_purge`'s suffix filter (`ccd:527-536`) globs `$REG/<id>.*`
+ *  and ids never begin with a dot, so no id's purge glob matches it — and
+ *  `rm -f` cannot take a directory regardless. Precedent already load-bearing:
+ *  `$REG/.reaped/` has survived since Aug 6 with zero deleters in 9,815 lines.
+ *  ccd's `$REG` inventory comment (`ccd:1536`) today says SEVEN dot-prefixed
+ *  artifacts live there; wave 2 amends it to EIGHT — not nine, because
+ *  `.rotate.lock` and the generations live INSIDE `.lifecycle/` and are
+ *  counted with it exactly as `.reaped/`'s contents are. An inventory a future
+ *  reader trusts and a future writer copies is exactly the defect
+ *  `_reg_purge`'s own header records having shipped once. */
+export const LC_DIR_NAME = '.lifecycle';
+
+/** `journal-<epochNs>.ndjson`. THE GENERATION IS IN THE FILENAME (D1): a
+ *  `readdir` alone tells the mirror the whole generation set with no second
+ *  read; a rotation is "a new name appeared", never "the same file got
+ *  smaller"; and a shrink on an immutably-named generation is unambiguously a
+ *  truncation rather than an ambiguity to guess at. */
+export const LC_GEN_PREFIX = 'journal-';
+export const LC_GEN_SUFFIX = '.ndjson';
+
+/** The counted write-failure file (D7), temp+rename. Surfaced as
+ *  `lifecycle.writeErrors` in the fleet health payload, because a silently
+ *  stopped journal must not be indistinguishable from a quiet fleet. */
+export const LC_ERRORS_NAME = 'errors';
+
+/** `_lc_rotate`'s lock. NEVER UNLINKED, not even as cleanup — "unlinking a
+ *  lock file while another process holds it is exactly how two processes come
+ *  to hold the lock on two different inodes" (`ccd:1094-1095`), and all four
+ *  of ccd's existing lock paths already follow that rule. */
+export const LC_ROTATE_LOCK_NAME = '.rotate.lock';
+
+/** Bytes, not characters — the same char-vs-byte care `MAIL_BODY_MAX_BYTES`
+ *  (:2498) and `hookstate.ts:128-135` already take. One event per line, LF
+ *  terminated. Over-length lines are not truncated silently: the emitter drops
+ *  named fields in a stated order and sets `LifecycleEvent.truncated`. */
+export const LC_LINE_MAX = 2048;
+
+/** `--reason`'s cap. BYTES, and the policy is REFUSE — an over-cap reason is
+ *  declined at the surface that received it, never shortened to fit. A
+ *  900-byte reason recorded as 512 reads as the operator's own words, which is
+ *  the overloaded-value defect at the one seam whose whole job is to record
+ *  what a person said. Free text off the wire: written verbatim, parsed
+ *  nowhere. ccd's twin is `_LC_DEC_MAX=512` (wave 3), measured with
+ *  `LC_ALL=C` so `${#s}` counts bytes; the two are held equal by
+ *  `server/test/lifecycle-constants-twin.test.ts`. */
+export const LC_REASON_MAX_BYTES = 512;
+
+/** Rotation: 4 MiB per generation, 4 generations. Measured sizing — ~100 acts
+ *  a day at ~350 B is ~35 KB/day, so one generation is about three months and
+ *  four about a year. RETENTION IS A CEILING, NOT A SCHEDULE, which is the
+ *  answer to "is the flat file really still ground truth". Rotation MINTS A
+ *  GREATER NAME and never truncates: `agent/src/tail.ts:53-58` treats a shrink
+ *  as a reset and hands its reader an `onReset(size)` it must model, so a
+ *  truncating rotation would turn every ordinary roll into a reset. */
+export const LC_GEN_MAX_BYTES = 4 * 1024 * 1024;
+export const LC_GEN_KEEP = 4;
+
+/** The hard ceiling, DERIVED — 16 MiB is not a second number to keep in step
+ *  with the two above. A hand-maintained constant beside a computed pair is
+ *  how the pair goes out of step, and the failure is silent. */
+export const LC_TOTAL_MAX_BYTES = LC_GEN_MAX_BYTES * LC_GEN_KEEP;
+
+/** `_spawn_settle` emits CHANGE-ONLY — a differing rc, or this long since this
+ *  id's last `spawn` line. Without the rule, `Restart=always` across 18
+ *  sessions is the whole disk budget. ccd's twin carries 300, in SECONDS;
+ *  wave 2 names it and adds its row to the twin test. */
+export const LC_SPAWN_QUIET_MS = 300_000;
+
+/**
+ * "Is this a generation file at all?" — prefix and suffix only.
+ *
+ * Deliberately a SEPARATE question from `parseLifecycleGeneration`, because a
+ * generation whose name cannot be ordered (a `date +%N` that did not expand
+ * would mint `journal-1755000000N.ndjson`) is a file FULL OF REAL EVENTS, not
+ * a stray. Collapsing the two into one null would make the mirror ignore it
+ * silently; kept apart, `looksLike && !parse` is a gap the reader records.
+ */
+export function looksLikeGenerationFile(name: string): boolean {
+  return name.startsWith(LC_GEN_PREFIX) && name.endsWith(LC_GEN_SUFFIX)
+    && name.length > LC_GEN_PREFIX.length + LC_GEN_SUFFIX.length;
+}
+
+/** The generation's epoch-nanosecond digits, or null when the name cannot be
+ *  ordered. Bounded at 25 digits so a pathological name is refused rather than
+ *  compared. */
+export function parseLifecycleGeneration(name: string): string | null {
+  if (!looksLikeGenerationFile(name)) return null;
+  const mid = name.slice(LC_GEN_PREFIX.length, name.length - LC_GEN_SUFFIX.length);
+  return /^[0-9]{1,25}$/.test(mid) ? mid : null;
+}
+
+/**
+ * Orders two parsed generation strings; "greatest name is live" (D1), made a
+ * single reader so nobody hand-rolls it — and so nobody reaches for a bare
+ * `.sort()` on the filenames, which is the bug below in disguise.
+ *
+ * BY LENGTH FIRST, and that is the whole point: plain lexicographic compare
+ * puts a 20-digit name BEFORE a 19-digit one, so a clock that crossed a digit
+ * boundary would make the live generation read as an old one and the mirror
+ * would ingest a stale file forever. Equal lengths compare lexicographically,
+ * which for digit strings IS numerically — and stays exact past
+ * `Number.MAX_SAFE_INTEGER`, which a 19-digit nanosecond epoch is.
+ */
+export function compareGenerations(a: string, b: string): number {
+  if (a.length !== b.length) return a.length - b.length;
+  return a < b ? -1 : a > b ? 1 : 0;
 }

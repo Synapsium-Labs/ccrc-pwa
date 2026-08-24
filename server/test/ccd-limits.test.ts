@@ -20,7 +20,7 @@ const sh = (snippet: string): string =>
     // `ghContainedEnv` is the harness's gh boundary, applied here too: this
     // file predates `makeCcdHarness` and builds its own HOME, and containment
     // that holds in one harness and not the one beside it is not containment.
-    { encoding: 'utf8', env: ghContainedEnv(home, { ...process.env, HOME: home }, { systemd: true }) }).trim();
+    { encoding: 'utf8', env: ghContainedEnv(home, { ...process.env, HOME: home }, { systemd: true, tmux: true }) }).trim();
 
 beforeEach(() => {
   home = mkTmp('ccrc-ccd-limits-');

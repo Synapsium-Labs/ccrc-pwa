@@ -1,0 +1,337 @@
+import { describe, it, expect } from 'vitest';
+import path from 'node:path';
+import { readFileSync } from 'node:fs';
+import { openCoordDb } from '../src/coord/db.js';
+import { CoordStore } from '../src/coord/store.js';
+import { parseJournalLine, type JournalRow } from '../src/coord/journalparse.js';
+import { mkTmp } from './tmpHelpers.js';
+import { LIFECYCLE_ACTS, LC_ACT_UNKNOWN } from '../../shared/api.js';
+
+const store = (): CoordStore =>
+  new CoordStore(openCoordDb(path.join(mkTmp('ccrc-lc-'), '.ccrc', 'coord.db')));
+
+const AN_ACT = LIFECYCLE_ACTS.find((a) => a !== LC_ACT_UNKNOWN)!;
+const GEN = '1755780000000000000';
+
+const row = (uid: string, over: Record<string, unknown> = {}): JournalRow =>
+  parseJournalLine(JSON.stringify({
+    uid, at: 1_755_780_000_123, act: AN_ACT, outcome: 'done',
+    verb: 'ws-rm', id: 'demo-quiet-basin', ...over,
+  }));
+
+describe('CoordStore.ingestJournal', () => {
+  it('inserts the rows and advances the cursor, and reports how many landed', () => {
+    const s = store();
+    const n = s.ingestJournal({ gen: GEN, rows: [row('a.1.1'), row('a.1.2')], cursor: 220, size: 220, at: 9 });
+    expect(n).toBe(2);
+    expect(s.journalGenerations()).toEqual([
+      { gen: GEN, firstSeenAt: 9, lastSweepAt: 9, cursor: 220, size: 220, retired: false },
+    ]);
+  });
+
+  it('is idempotent on the UID — a replay is no-op-or-catch-up (D6)', () => {
+    const s = store();
+    s.ingestJournal({ gen: GEN, rows: [row('a.1.1')], cursor: 110, size: 110, at: 9 });
+    const again = s.ingestJournal({ gen: GEN, rows: [row('a.1.1'), row('a.1.2')], cursor: 220, size: 220, at: 11 });
+    expect(again).toBe(1);
+    expect((s.db.prepare('SELECT count(*) AS c FROM lifecycle_events').get() as { c: number }).c).toBe(2);
+  });
+
+  it('re-ingests from offset 0 without duplicating anything — the cursor is an OPTIMISATION', () => {
+    const s = store();
+    const rows = [row('a.1.1'), row('a.1.2')];
+    s.ingestJournal({ gen: GEN, rows, cursor: 220, size: 220, at: 9 });
+    expect(s.ingestJournal({ gen: GEN, rows, cursor: 220, size: 220, at: 12 })).toBe(0);
+    expect((s.db.prepare('SELECT count(*) AS c FROM lifecycle_events').get() as { c: number }).c).toBe(2);
+  });
+
+  it('THE CURSOR NEVER ADVANCES PAST UNCOMMITTED ROWS', () => {
+    // Both halves in ONE tx(). Force a bind failure half way through the row
+    // loop and assert that NEITHER the rows NOR the cursor landed. The shipped
+    // rollback behaviour is already pinned at `coord-db.test.ts:255-266`.
+    const s = store();
+    s.ingestJournal({ gen: GEN, rows: [row('a.1.1')], cursor: 110, size: 110, at: 9 });
+    const poison = { ...row('a.1.2'), raw: (Symbol('unbindable') as unknown as string) };
+    expect(() => s.ingestJournal({
+      gen: GEN, rows: [row('a.1.2'), poison], cursor: 330, size: 330, at: 11,
+    })).toThrow();
+    expect((s.db.prepare('SELECT count(*) AS c FROM lifecycle_events').get() as { c: number }).c).toBe(1);
+    expect(s.journalGenerations()[0]!.cursor, 'the cursor moved past rows that never committed').toBe(110);
+  });
+
+  it('inserts an UNPARSEABLE line rather than dropping it, with `raw` verbatim', () => {
+    const s = store();
+    const junk = 'ws-rm demo-quiet-basin   # not json at all';
+    s.ingestJournal({ gen: GEN, rows: [parseJournalLine(junk)], cursor: 42, size: 42, at: 9 });
+    const got = s.db.prepare('SELECT act, uid, raw FROM lifecycle_events').all() as
+      { act: string; uid: string | null; raw: string }[];
+    expect(got).toEqual([{ act: LC_ACT_UNKNOWN, uid: null, raw: junk }]);
+  });
+
+  it('stores `detail` and `truncated` so a dropped family is not read as an absent one', () => {
+    const s = store();
+    s.ingestJournal({
+      gen: GEN, cursor: 110, size: 110, at: 9,
+      rows: [row('a.1.1', { detail: 'held: program:build8 wave:2/4', truncated: true })],
+    });
+    const got = s.db.prepare('SELECT detail, truncated FROM lifecycle_events').get() as
+      { detail: string | null; truncated: number };
+    expect(got).toEqual({ detail: 'held: program:build8 wave:2/4', truncated: 1 });
+  });
+
+  // Not in the brief: F1 added `badoutcome` to `MIGRATIONS[2]` and
+  // `JournalRow` after the brief was written (ccd already writes it, and
+  // `LifecycleEvent.badoutcome` requires it). Prove the write side actually
+  // persists it rather than silently dropping the column.
+  it('persists `badoutcome`, `badact`\'s twin on the outcome side, verbatim', () => {
+    const s = store();
+    s.ingestJournal({
+      gen: GEN, cursor: 110, size: 110, at: 9,
+      rows: [row('a.1.1', { outcome: 'quarantined' })],
+    });
+    const got = s.db.prepare('SELECT outcome, badoutcome FROM lifecycle_events').get() as
+      { outcome: string; badoutcome: string | null };
+    expect(got).toEqual({ outcome: 'unknown', badoutcome: 'quarantined' });
+  });
+
+  it('leaves `badoutcome` NULL for a row whose outcome this build knows', () => {
+    const s = store();
+    s.ingestJournal({ gen: GEN, rows: [row('a.1.1')], cursor: 110, size: 110, at: 9 });
+    const got = s.db.prepare('SELECT outcome, badoutcome FROM lifecycle_events').get() as
+      { outcome: string; badoutcome: string | null };
+    expect(got).toEqual({ outcome: 'done', badoutcome: null });
+  });
+});
+
+describe('CoordStore.recordGap / retireGeneration', () => {
+  it('records a gap and retires the generation, leaving the row behind', () => {
+    const s = store();
+    s.ingestJournal({ gen: GEN, rows: [row('a.1.1')], cursor: 110, size: 4096, at: 9 });
+    s.recordGap({ at: 20, gen: GEN, reason: 'rotated-away',
+                  detail: 'undrained', lostFrom: 110, lostTo: 4096 });
+    s.retireGeneration(GEN, 20);
+    expect(s.journalGenerations()[0]!.retired).toBe(true);
+    // RETIRE, NEVER DELETE: the cursor and size are the evidence behind the gap.
+    expect(s.journalGenerations()[0]).toMatchObject({ cursor: 110, size: 4096 });
+    const gaps = s.db.prepare('SELECT gen, reason, lostFrom, lostTo FROM lifecycle_gaps').all();
+    expect(gaps).toEqual([{ gen: GEN, reason: 'rotated-away', lostFrom: 110, lostTo: 4096 }]);
+  });
+});
+
+// F2 (coordinator fix round 1): the `LifecycleGap` pairing invariant
+// (`mirrorplan.ts`'s private `coupledLoss`) was a caller-discipline-only rule
+// until now — nothing in the store or the schema caught a violated row. These
+// hit the CHECK constraint directly with a raw INSERT, bypassing
+// `recordGap` entirely, because the guarantee this proves is that SQLite
+// itself refuses the row — not that `recordGap`'s own callers happen to be
+// well-behaved.
+describe('lifecycle_gaps CHECK constraint (F2)', () => {
+  const insertGap = (
+    s: CoordStore,
+    g: { reason: string; lostFrom: number | null; lostTo: number | null },
+  ): void => {
+    s.db.prepare(
+      'INSERT INTO lifecycle_gaps (at, gen, reason, detail, lostFrom, lostTo) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run(1, GEN, g.reason, 'd', g.lostFrom, g.lostTo);
+  };
+
+  it('rejects a mismatched pair — lostFrom set, lostTo null', () => {
+    const s = store();
+    expect(() => insertGap(s, { reason: 'shrank', lostFrom: 10, lostTo: null }))
+      .toThrow(/CHECK constraint failed/);
+  });
+
+  it('rejects a mismatched pair — lostFrom null, lostTo set', () => {
+    const s = store();
+    expect(() => insertGap(s, { reason: 'shrank', lostFrom: null, lostTo: 10 }))
+      .toThrow(/CHECK constraint failed/);
+  });
+
+  it("rejects reason:'unknown' carrying a non-null pair", () => {
+    const s = store();
+    expect(() => insertGap(s, { reason: 'unknown', lostFrom: 0, lostTo: 10 }))
+      .toThrow(/CHECK constraint failed/);
+  });
+
+  it('accepts every legitimate combination, including a non-unknown reason with a null pair', () => {
+    const s = store();
+    expect(() => insertGap(s, { reason: 'unknown', lostFrom: null, lostTo: null })).not.toThrow();
+    expect(() => insertGap(s, { reason: 'rotated-away', lostFrom: 100, lostTo: 4096 })).not.toThrow();
+    // Allowed by design: `coupledLoss`'s `bounded === null` branch can hand a
+    // non-'unknown' reason a null pair too (an unbounded range on a reason
+    // that isn't itself the we-do-not-know one) — the CHECK is a
+    // one-directional implication on 'unknown', not a biconditional.
+    expect(() => insertGap(s, { reason: 'rotated-away', lostFrom: null, lostTo: null })).not.toThrow();
+    expect(() => insertGap(s, { reason: 'shrank', lostFrom: 0, lostTo: 500 })).not.toThrow();
+  });
+});
+
+describe('CoordStore.lifecycleFor', () => {
+  it("answers one session's timeline oldest-first, and nobody else's", () => {
+    const s = store();
+    s.ingestJournal({ gen: GEN, rows: [
+      row('a.1', { id: 'demo-quiet-basin', at: 100 }),
+      row('a.2', { id: 'other-session',    at: 110 }),
+      row('a.3', { id: 'demo-quiet-basin', at: 120 }),
+    ], cursor: 300, size: 300, at: 9 });
+    const got = s.lifecycleFor({ sessionId: 'demo-quiet-basin', limit: 50 });
+    expect(got.map((e) => e.uid)).toEqual(['a.1', 'a.3']);
+    expect(got[0]!.id).toBe('demo-quiet-basin');   // the row says sessionId, the wire says id
+    expect(got[0]!.ingestedAt).toBe(9);
+    expect(got[0]!.gen).toBe(GEN);
+    expect(got[0]!.truncated).toBe(false);
+  });
+
+  it('keeps the NEWEST n when limited, still returned oldest-first', () => {
+    const s = store();
+    s.ingestJournal({ gen: GEN, rows: ['a.1', 'a.2', 'a.3', 'a.4'].map((u) => row(u)),
+                      cursor: 400, size: 400, at: 9 });
+    expect(s.lifecycleFor({ limit: 2 }).map((e) => e.uid)).toEqual(['a.3', 'a.4']);
+  });
+
+  it('clamps a limit it was never going to honour, and survives a NaN', () => {
+    const s = store();
+    s.ingestJournal({ gen: GEN, rows: [row('a.1')], cursor: 110, size: 110, at: 9 });
+    expect(s.lifecycleFor({ limit: 99_999 })).toHaveLength(1);
+    expect(s.lifecycleFor({ limit: Number.NaN })).toHaveLength(1);
+  });
+
+  it('reads an act token this build does not know as `unknown`, never as a raw string', () => {
+    const s = store();
+    s.ingestJournal({ gen: GEN, rows: [row('a.1')], cursor: 110, size: 110, at: 9 });
+    s.db.prepare('UPDATE lifecycle_events SET act = ?, outcome = ? WHERE uid = ?')
+      .run('quarantine', 'partially', 'a.1');
+    const e = s.lifecycleFor({ limit: 10 })[0]!;
+    expect(e.act).toBe(LC_ACT_UNKNOWN);
+    expect(e.outcome).toBe('unknown');
+    expect(e.raw).toContain('"uid":"a.1"');   // the bytes survive the degrade
+  });
+
+  it('revives the three families as three objects, or null where the line carried none', () => {
+    const s = store();
+    s.ingestJournal({ gen: GEN, rows: [row('a.1', {
+      obs: { cg: 'supervisor', cgraw: '0::/x', pid: 7 },
+      dec: { surface: 'pwa', actor: 'nobody', reason: 'r' },
+    })], cursor: 110, size: 110, at: 9 });
+    const e = s.lifecycleFor({ limit: 10 })[0]!;
+    expect(e.obs).toMatchObject({ cg: 'supervisor', cgraw: '0::/x', pid: 7, ppid: null });
+    expect(e.dec).toMatchObject({ surface: 'pwa', actor: 'nobody' });
+    expect(e.meas).toBeNull();
+  });
+
+  // Not in the brief: prove `badoutcome` round-trips through the read side
+  // too, both when it is set (a degraded outcome) and when it is null (a
+  // known one) — `MirroredLifecycleEvent extends LifecycleEvent` requires
+  // the field on every returned row, so a reader that invents `null` for a
+  // row where ccd actually wrote a token would silently lie.
+  it("carries `badoutcome` through — the degrade's own token, or null for a known outcome", () => {
+    const s = store();
+    s.ingestJournal({ gen: GEN, rows: [
+      row('a.1', { outcome: 'quarantined' }),
+      row('a.2', {}),
+    ], cursor: 220, size: 220, at: 9 });
+    const [degraded, known] = s.lifecycleFor({ limit: 10 });
+    expect(degraded, 'the degraded-outcome row exists at all').toBeDefined();
+    expect(known, 'the known-outcome row exists at all').toBeDefined();
+    expect.soft(degraded!.outcome, 'degraded outcome').toBe('unknown');
+    expect.soft(degraded!.badoutcome, 'degraded badoutcome').toBe('quarantined');
+    expect.soft(known!.outcome, 'known outcome').toBe('done');
+    expect.soft(known!.badoutcome, 'known badoutcome').toBeNull();
+  });
+});
+
+describe('CoordStore.lifecycleStats and lifecycleGaps', () => {
+  it('reports the horizon, the newest event, and the counts', () => {
+    const s = store();
+    s.ingestJournal({ gen: GEN, rows: [row('a.1', { at: 100 }), row('a.2', { at: 300 })],
+                      cursor: 220, size: 220, at: 9 });
+    s.recordGap({ at: 20, gen: GEN, reason: 'shrank', detail: 'truncated',
+                  lostFrom: 0, lostTo: 100 });
+    expect(s.lifecycleStats()).toEqual({
+      rows: 2, oldestAt: 100, newestAt: 300, generations: 1, gaps: 1,
+    });
+    expect(s.lifecycleGaps(10)).toEqual([{
+      at: 20, gen: GEN, reason: 'shrank', detail: 'truncated', lostFrom: 0, lostTo: 100,
+    }]);
+  });
+
+  it('reads a gap reason this build does not know as `unknown`', () => {
+    const s = store();
+    s.recordGap({ at: 20, gen: GEN, reason: 'shrank', detail: 'd', lostFrom: null, lostTo: null });
+    s.db.prepare('UPDATE lifecycle_gaps SET reason = ?').run('vacuumed');
+    expect(s.lifecycleGaps(10)[0]!.reason).toBe('unknown');
+  });
+});
+
+describe('CoordStore.recentProvenance', () => {
+  it('returns only rows carrying BOTH an observed class and a declared surface', () => {
+    const s = store();
+    s.ingestJournal({ gen: GEN, rows: [
+      row('a.1', { at: 500, obs: { cg: 'pane' }, dec: { surface: 'agent' } }),
+      row('a.2', { at: 500, obs: { cg: 'pane' } }),                    // no dec
+      row('a.3', { at: 500, dec: { surface: 'agent' } }),              // no obs
+      row('a.4', { at: 100, obs: { cg: 'pane' }, dec: { surface: 'agent' } }),  // too old
+    ], cursor: 400, size: 400, at: 9 });
+    expect(s.recentProvenance(200, 50)).toEqual([
+      { id: 'demo-quiet-basin', at: 500, obsClass: 'pane', decSurface: 'agent' },
+    ]);
+  });
+
+  it('DROPS a row whose class or surface is not even a string — unmodellable is not a disagreement', () => {
+    // A newer ccd writing `"cg": 7`, or a hand-edited row. `json_extract`
+    // answers whatever the JSON held, and an adapter that cast it would hand
+    // `corroboration` a value it cannot narrow — the "an adapter may not
+    // narrow a distinction it received" rule, inverted.
+    const s = store();
+    s.ingestJournal({ gen: GEN, rows: [row('b.1', { at: 500 })], cursor: 110, size: 110, at: 9 });
+    s.db.prepare("UPDATE lifecycle_events SET obsJson = '{\"cg\":7}', decJson = '{\"surface\":\"cli\"}'")
+      .run();
+    expect(() => s.recentProvenance(200, 50)).not.toThrow();
+    expect(s.recentProvenance(200, 50)).toEqual([]);
+  });
+
+  it('turns the window read from SCAN into SEARCH — the reason lifecycle_by_at exists (Tasks 40/41 review, F1)', () => {
+    // `lifecycle_events` is NEVER PRUNED (schema.ts's own header), so this
+    // read's cost must be bounded by the WINDOW, not by the table's whole
+    // history. A bare `CREATE INDEX` was measured NOT to be enough on its
+    // own — the planner prefers the scan order that satisfies `ORDER BY id
+    // DESC` for free over paying for an explicit sort of an index seek's
+    // results, even though that scan is the far more expensive plan on a
+    // large table — so `recentProvenance` reads `INDEXED BY lifecycle_by_at`
+    // to force the seek. Same idiom as `coord-db.test.ts`'s sibling pin for
+    // `runs_by_session`: this is the query text `recentProvenance` runs,
+    // copied here because the plan is not otherwise observable from outside
+    // the method — `SCAN lifecycle_events` reappearing here is exactly what
+    // deleting `INDEXED BY lifecycle_by_at` from the source produces.
+    const s = store();
+    const plan = (s.db.prepare(
+      "EXPLAIN QUERY PLAN SELECT sessionId AS id, at, json_extract(obsJson, '$.cg') AS obsClass, " +
+      "json_extract(decJson, '$.surface') AS decSurface " +
+      'FROM lifecycle_events INDEXED BY lifecycle_by_at ' +
+      'WHERE sessionId IS NOT NULL AND obsJson IS NOT NULL AND decJson IS NOT NULL ' +
+      'AND at IS NOT NULL AND at >= ? ORDER BY lifecycle_events.id DESC LIMIT ?',
+    ).all(0, 500) as { detail: string }[]).map((r) => r.detail).join(' | ');
+    expect(plan).toContain('lifecycle_by_at');
+    expect(plan).not.toContain('SCAN lifecycle_events');
+  });
+
+  it('recentProvenance\'s OWN shipped query text carries the hint — a plan check alone cannot catch it being dropped from source', () => {
+    // The test above proves the SCHEMA makes a hinted query seekable; it does
+    // NOT prove `recentProvenance` itself still asks for the hint, since that
+    // test hand-copies query text rather than calling through the method. A
+    // regression that quietly drops `INDEXED BY lifecycle_by_at` from
+    // store.ts (leaving the index and the plan-check test both green) would
+    // be invisible to it. Same source-text-pin idiom
+    // `divergence-sweep.test.ts` uses for `sweepDivergences`.
+    const src = readFileSync(path.join(__dirname, '..', 'src', 'coord', 'store.ts'), 'utf8');
+    const from = src.indexOf('  recentProvenance(sinceAt: number, limit: number): ProvenancePair[] {');
+    expect(from, 'recentProvenance was not found — this assertion would pass vacuously')
+      .toBeGreaterThan(-1);
+    const body = src.slice(from, src.indexOf('\n  }\n', from));
+    // The exact ACTIVE code fragment, quoted as it appears in the string
+    // concatenation — NOT a loose substring match, which would also match
+    // this method's own explanatory comment (which mentions the hint by name
+    // several times) and stay green even with the real clause deleted.
+    expect(body).toContain("'FROM lifecycle_events INDEXED BY lifecycle_by_at '");
+  });
+});

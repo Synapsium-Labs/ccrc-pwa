@@ -15,6 +15,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, WS_ADD, ghContainedEnv, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { refusalsOf } from './lifecycleHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-forget-'); });
@@ -75,6 +76,8 @@ describe('ccd forget', () => {
     const id = deadWrapperSession();
     h.sh(`${DEAD} cmd_forget ${id}`);
     const calls = fs.readFileSync(path.join(h.home, 'ccd-calls'), 'utf8');
+    // Subset match, deliberately — the exact-sequence guard for the tmux
+    // probe `_reg_purge`'s backstop adds lives in `ccd-lifecycle-purge.test.ts`.
     expect(calls).toContain(`unsupervise ${id}`);
   });
 
@@ -118,7 +121,7 @@ describe('the dispatcher', () => {
         code: 0, stderr: '',
         stdout: execFileSync('bash', [CCD, ...args], {
           encoding: 'utf8', cwd: h.home,
-          env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true }),
+          env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }),
         }),
       };
     } catch (e) {
@@ -128,9 +131,17 @@ describe('the dispatcher', () => {
   };
 
   it('routes forget, demands its argv, and advertises it in caps', () => {
+    // STRENGTHENED (review round 1, F1): the old `expect(code).not.toBe(0)` +
+    // substring check could not tell exit 127 (bash's own unbound-parameter
+    // death, no `ccd:` prefix, zero journal records — the pre-fix defect)
+    // apart from exit 1 through `_lc_refuse`'s `die`. Pinning all three closes
+    // that hole: a regression back to `${1:?}` binding `id` before the arity
+    // check goes red here even though a loose substring check would not
+    // notice.
     const r = runCcd('forget');
-    expect(r.code).not.toBe(0);
-    expect(r.stderr).toContain('usage: ccd forget <id>');
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('ccd: usage: ccd forget');
+    expect(refusalsOf(h.home)).toEqual([{ act: 'forget', token: 'bad-args' }]);
     expect(runCcd('caps').stdout.split('\n')).toContain('forget');
   });
 });
