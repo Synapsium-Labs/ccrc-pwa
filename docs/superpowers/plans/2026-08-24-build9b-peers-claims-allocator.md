@@ -2679,7 +2679,7 @@ side reds the fixture's compile.
 
 **Steps:**
 
-- [ ] 1. Write the failing test, `server/test/peers.test.ts`:
+- [x] 1. Write the failing test, `server/test/peers.test.ts`:
 
   ```ts
   // D9's ladder, pure: the STRUCTURAL rungs of sweepMail's own gate — registry
@@ -2775,10 +2775,10 @@ side reds the fixture's compile.
   });
   ```
 
-- [ ] 2. Run it, expect FAIL with `Failed to load ../src/coord/peers.js`:
+- [x] 2. Run it, expect FAIL with `Failed to load ../src/coord/peers.js`:
   `cd server && ./node_modules/.bin/vitest run test/peers.test.ts`
 
-- [ ] 3. Write the implementation, `server/src/coord/peers.ts`:
+- [x] 3. Write the implementation, `server/src/coord/peers.ts`:
 
   ```ts
   import type { PeerDeliverable, SessionLifecycle } from '../../../shared/api.js';
@@ -2870,12 +2870,12 @@ side reds the fixture's compile.
   }
   ```
 
-- [ ] 4. Run, expect PASS: `./node_modules/.bin/vitest run test/peers.test.ts`.
+- [x] 4. Run, expect PASS: `./node_modules/.bin/vitest run test/peers.test.ts`.
 
-- [ ] 5. Run the ring scan and typecheck, green with no edit:
+- [x] 5. Run the ring scan and typecheck, green with no edit:
   `./node_modules/.bin/vitest run test/single-definition.test.ts test/typecheck-tests.test.ts`.
 
-- [ ] 6. Commit:
+- [x] 6. Commit:
 
   ```bash
   cd server && git add src/coord/peers.ts test/peers.test.ts
