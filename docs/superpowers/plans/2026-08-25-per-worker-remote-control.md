@@ -242,11 +242,11 @@ it("the PWA's ordinary workspace-add stays box-default — no --no-rc anywhere i
   (the pin moves with it), `README.md:531-563` (the per-box section gains the
   per-worker paragraph), `CLAUDE.md` (the header parenthetical)
 
-- [ ] **Step 1: read the pinned sentence.** `ccd/worker-skill/SKILL.md:67` and its
+- [x] **Step 1: read the pinned sentence.** `ccd/worker-skill/SKILL.md:67` and its
   verbatim pin at `worker-skill.test.ts:59` — the sentence the worker-skill plan
   (`2026-08-20-worker-skill.md:171`) designated for revision when #37 lands.
 
-- [ ] **Step 2: revise BOTH together** (test first — update the pin's literal, watch
+- [x] **Step 2: revise BOTH together** (test first — update the pin's literal, watch
   it red against the unedited corpus, then edit the corpus to match). New sentence,
   straight apostrophes, no `"` character, same clause position and surrounding
   prose untouched:
@@ -258,7 +258,7 @@ it("the PWA's ordinary workspace-add stays box-default — no --no-rc anywhere i
   non-dispatched session. Keep the sentence in the skill's own register; the
   exact words are the implementer's, the pin makes them permanent.
 
-- [ ] **Step 3: README + CLAUDE.md.** In README's "The box decides
+- [x] **Step 3: README + CLAUDE.md.** In README's "The box decides
   `--remote-control`" section: add one paragraph — the box decides for ordinary
   sessions; a dispatched program worker is declared `--no-rc` at `ws-add` by the
   dispatch path (registry field `rc`, absent = follow the box), per the
@@ -266,12 +266,12 @@ it("the PWA's ordinary workspace-add stays box-default — no --no-rc anywhere i
   `(--remote-control or not — per box, ~/.ccrc/remote-control; dispatched
   workers per session, ruling 2026-08-13)`.
 
-- [ ] **Step 4: suites.** `cd server && ./node_modules/.bin/vitest run test/worker-skill.test.ts test/coordinator-skill.test.ts test/topology-clean.test.ts test/single-definition.test.ts` — green; the skill installers re-run at deploy (no installer edit here — no references/ change).
+- [x] **Step 4: suites.** `cd server && ./node_modules/.bin/vitest run test/worker-skill.test.ts test/coordinator-skill.test.ts test/topology-clean.test.ts test/single-definition.test.ts` — green; the skill installers re-run at deploy (no installer edit here — no references/ change).
 
-- [ ] **Step 5: mutation.** Restore the old sentence in SKILL.md only → the pin
+- [x] **Step 5: mutation.** Restore the old sentence in SKILL.md only → the pin
   reds. Revert, state the count.
 
-- [ ] **Step 6: commit.**
+- [x] **Step 6: commit.**
 
 ## Deviations found
 
