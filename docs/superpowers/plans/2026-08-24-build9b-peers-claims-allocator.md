@@ -7275,8 +7275,8 @@ function conflictMailHint(project: string, p: string, holder: string,
   /**
    * `POST /api/claims/:id/break` — the OPERATOR's door, the THIRD route in
    * this file that is UNGATED: deliberately NOT behind `requireMailToken`, the
-   * `POST /api/runs/:id/abandon` shape (D-282's argument, applied by build 9
-   * D12/D16). The box token authenticates the fleet host, and the sessions
+   * `POST /api/runs/:id/abandon` shape (the D-282 (was D-B4-9) argument,
+   * applied by build 9 D12/D16). The box token authenticates the fleet host, and the sessions
    * that hold claims live there and hold that token — a session wedged behind
    * a dead holder's claim must not find the release valve behind the same key
    * the holder used to take it. So this rides the PWA's session-gated surface:
