@@ -360,11 +360,18 @@ export const SPAWN_STALL_MS = 360_000;
     completed — a workspace may exist*, distinctly from the in-flight case (assert both
     directions: the stalled text present, the "dispatching" text absent).
   Freeze time in the test (the suite's existing fake-timer idiom) so the boundary is exact,
-  and pin the boundary at `SPAWN_STALL_MS` itself, not a rounded neighbour.
+  and pin the boundary at `SPAWN_STALL_MS` itself, not a rounded neighbour. **The frozen
+  instant must NOT sit on a whole second** — the row derives its own seconds from a
+  millisecond tick, and a whole-second `now` makes that derivation a no-op, so every claim
+  about millisecond fidelity becomes untestable (measured, review round: flooring the row's
+  clock passed all 47).
 
 - [x] **Step 3: implement** the three branches in `RunRow`, reading `SPAWN_STALL_MS` from
   `shared/api.js` (never a local literal). Keep the existing cells' text byte-identical for
-  every other state — this task adds a branch, it does not restyle the board.
+  every other state — this task adds a branch, it does not restyle the board. **The board's
+  TICK is part of the branch, not a detail left at its old value:** a readout rendered to the
+  second on a 30 s tick is the same "board that never moves" §Design complains about, so the
+  cadence follows the content the way `SessionHeader`/`ToolCard` already do it.
 
 - [x] **Step 4: green.** The new suite plus the full `pwa` package
   (`cd pwa && ./node_modules/.bin/vitest run`) — it is fast, and a screen edit can move
@@ -375,6 +382,26 @@ export const SPAWN_STALL_MS = 360_000;
   test reds.
 
 - [x] **Step 6: commit.**
+
+- [x] **Step 7 (review fix round):** the two must-fixes off Task 3's review. Both were real
+  against the tree; neither was refuted.
+  1. **An unpinned refactor, measured.** The `nowSec` → `nowMs` prop migration was the
+     largest non-additive edit in the diff, justified at length in the commit body and in
+     three code comments as what makes the `SPAWN_STALL_MS` boundary measurable to the
+     millisecond — and nothing measured it: `FROZEN` was an exact whole second, so flooring
+     the row's clock was a no-op for every case. Planting
+     `dispatchWindow(run, nowSec * 1000)` passed 47/47. Fixed with ONE token —
+     `FROZEN = 1_800_000_000_499` — after which the same probe reds 2 and the unmutated
+     suite stays green. The reason the remainder is there is written on the constant, so the
+     next reader cannot round it off, and Step 2 above is corrected in place.
+  2. **Tick vs precision, and the build's own premise.** `useNow(30_000)` stood while the new
+     cell rendered `formatElapsed` to the SECOND: `⟳ dispatching… 0:12` sat still for half a
+     minute and then jumped to `0:42`, and the wedge arrived up to 30 s after
+     `SPAWN_STALL_MS`. The cadence now follows the content — `useNow(anyDispatchPending(active)
+     ? 1_000 : 30_000)`, the `SessionHeader`/`ToolCard` idiom — through a helper that asks
+     `dispatchWindow` rather than restating its conditions, so there is still exactly one
+     definition of a dispatch window. Pinned in both directions, including that a `dispatched`
+     row's surviving stamp does NOT buy a fast tick.
 
 ### Task 4: children nest under the programme that owns them
 

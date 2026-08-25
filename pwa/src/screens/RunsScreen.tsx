@@ -34,7 +34,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { type FleetSession, type RunSummary, unmeasuredFields } from '../../../shared/api';
-import { RUN_GLYPH, RUN_WORD, dispatchWindow, isRunClosed, itemTallyLabel, programWave, runClosedAt, runItems, runState, runsByProgram } from '../fleet/runWords';
+import { RUN_GLYPH, RUN_WORD, anyDispatchPending, dispatchWindow, isRunClosed, itemTallyLabel, programWave, runClosedAt, runItems, runState, runsByProgram } from '../fleet/runWords';
 import { AbandonSheet } from '../fleet/AbandonSheet';
 import { CoordBanner } from '../fleet/CoordBanner';
 import { StartProgramSheet } from '../fleet/StartProgramSheet';
@@ -76,7 +76,9 @@ function RunRow({
    *  `nowSec` below; it does not receive one. The dispatch window's boundary
    *  is `SPAWN_STALL_MS` — a millisecond constant — so a tick already floored
    *  to seconds upstream could not state which side of it a row is on, by up
-   *  to 999 ms. One clock, in the unit every wire timestamp already uses. */
+   *  to 999 ms — which is a claim a red suite holds, not this comment: the
+   *  suite's `FROZEN` carries a sub-second remainder precisely so flooring
+   *  here reds. One clock, in the unit every wire timestamp already uses. */
   nowMs: number;
   /** The run's session, as the live fleet snapshot currently has it — or
    *  `null` when there is none (no session, or the fleet frame hasn't named
@@ -214,12 +216,6 @@ export function RunsScreen({
   // claim about the program's whole history that a failed read has no
   // standing to make.
   const [coldState, setColdState] = useState<'loading' | 'ok' | 'error'>('loading');
-  // Task 3: the tick stays in MILLISECONDS all the way to the row, which
-  // derives its own seconds for `formatAge`. The dispatch window's boundary is
-  // `SPAWN_STALL_MS`, a millisecond constant, and flooring here first would
-  // have made it unmeasurable by up to 999 ms — a boundary stated in one unit
-  // and tested in a coarser one is a boundary nothing can pin.
-  const now = useNow(30_000);
 
   // Task 12, spec §4.3: which run's AbandonSheet is open, or `null`. ONE
   // sheet at screen level, reused across rows — the same shape
@@ -328,6 +324,33 @@ export function RunsScreen({
   // answer first. `state` is the same line `CoordStore.runs()` itself draws.
   const active = (runsFrameSeen ? live : cold ?? live)
     .filter((r) => !isRunClosed(r));
+  // The tick, and it is deliberately declared HERE rather than up with the
+  // other hooks: it reads `active`, which is the list it has to describe.
+  //
+  // MILLISECONDS all the way to the row, which derives its own seconds for
+  // `formatAge`. The dispatch window's boundary is `SPAWN_STALL_MS`, a
+  // millisecond constant, and flooring here first would make it unmeasurable
+  // by up to 999 of them (`runs-screen.test.tsx`'s `FROZEN` carries a
+  // sub-second remainder so that claim is held by a red suite, not by this
+  // comment).
+  //
+  // The CADENCE follows the content, the idiom `SessionHeader`
+  // (`working ? 1_000 : 30_000`) and `ToolCard` (`useNow(1_000, running)`)
+  // already use. 30 s was right while every readout on this board was
+  // minute-granular; the dispatch window is not — it renders `formatElapsed`
+  // to the second and flips phase on a millisecond threshold, so at 30 s the
+  // operator watched `⟳ dispatching… 0:12` hold still for half a minute and
+  // then jump to `0:42`, and the wedge landed up to 30 s after the runner had
+  // certainly given up. §Design's own complaint about the state this build
+  // fixes is "a board that never moves"; rendering a clock the tick cannot
+  // honour would have kept it.
+  //
+  // `anyDispatchPending` and not an inline condition, because the answer must
+  // stay `dispatchWindow`'s alone — and it can be asked before a tick exists
+  // (that half of the answer is clock-independent; the helper's docstring has
+  // the reasoning). `finished` is not consulted: it holds closed runs by
+  // construction, and `dispatchWindow` answers `none` for every closed state.
+  const now = useNow(anyDispatchPending(active) ? 1_000 : 30_000);
   // FINISHED reads ONLY `cold` — never `live`, which cannot carry a closed
   // run by construction (see the file header). Reading it from the same
   // `runs` slice `active` used (the pre-fix shape) meant the Finished group

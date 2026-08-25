@@ -95,8 +95,9 @@ describe('the run board', () => {
     // cadence for data that changes on human timescales; this reads it once
     // and lets the socket carry updates." `toHaveBeenCalledTimes(1)` above
     // proves the FIRST call is unconditional but says nothing about a SECOND
-    // one arriving later on a timer. `useNow(30_000)` legitimately runs its
-    // own unrelated `setInterval` for the relative-time readout, so a bare
+    // one arriving later on a timer. `useNow` legitimately runs its own
+    // unrelated `setInterval` for the relative-time readout — at whichever
+    // cadence the board's dispatch-window gate picked — so a bare
     // "setInterval was never called" spy is a false positive on the REAL
     // component — this drives fake time forward with
     // `advanceTimersByTimeAsync` (which also flushes the promise microtask
@@ -555,8 +556,21 @@ describe('the program-start door mounts on /runs (Task 13, spec §4.4)', () => {
 /** A fixed wall clock. The `in-flight`/`stalled` boundary is `SPAWN_STALL_MS`
  *  EXACTLY, so a test that let real time run could not state which side of it
  *  a case is on — the assertion would be true by a margin, not by the
- *  constant. */
-const FROZEN = 1_800_000_000_000;
+ *  constant.
+ *
+ *  THE `499` IS LOAD-BEARING — do not round it. `RunsScreen` carries the tick
+ *  to the row in MILLISECONDS and derives its own `nowSec` there, rather than
+ *  flooring once upstream, and its own comments justify that at length: a
+ *  boundary stated in milliseconds cannot be measured by a clock already
+ *  floored to seconds, by up to 999 of them. On a whole-second `FROZEN` that
+ *  claim was untestable and untested — flooring the clock inside the row was a
+ *  no-op for every case here, so planting
+ *  `dispatchWindow(run, nowSec * 1000)` in place of `dispatchWindow(run,
+ *  nowMs)` passed all 47 (measured, review round). With a sub-second
+ *  remainder the same probe reds twice — the wedge lands 499 ms late and the
+ *  in-flight clock reads `0:41` for a 42-second spawn — so the millisecond
+ *  path is now held by a mechanism instead of by three comments. */
+const FROZEN = 1_800_000_000_499;
 
 /** Runs `body` with `Date.now()` pinned at `FROZEN`. The timers are always
  *  restored, including on a failing assertion — a suite that leaks fake timers
@@ -701,6 +715,96 @@ describe('the run board renders the dispatch window — and the wedge (Task 3)',
       expect(cell()).toHaveAttribute('data-phase', 'in-flight');
       expect(screen.queryByText(/never completed/i)).toBeNull();
     });
+  });
+
+  // -------------------------------------------------------------------------
+  // The tick, review round. §Design's complaint about the state this build
+  // exists to fix is "three fault-shaped words for an entirely normal event,
+  // and A BOARD THAT NEVER MOVES" — so a dispatch window rendered to the
+  // second on a board that re-renders every 30 s only moves the complaint. The
+  // operator would watch `⟳ dispatching… 0:12` sit motionless for half a
+  // minute and then jump to `0:42`, and the wedge would arrive up to 30 s
+  // after `SPAWN_STALL_MS` had actually passed. The cadence has to follow what
+  // the row renders.
+  // -------------------------------------------------------------------------
+
+  /** `atFrozenClock`'s async twin, for the cases that ADVANCE the clock rather
+   *  than only read it: `advanceTimersByTimeAsync` flushes the promise
+   *  microtask queue between ticks, which a React state update fired from an
+   *  interval needs before the DOM reflects it. */
+  const fromFrozenClock = async (body: () => Promise<void>): Promise<void> => {
+    vi.useFakeTimers({ now: FROZEN });
+    try { await body(); } finally { vi.useRealTimers(); }
+  };
+
+  /** Every interval the board asks the timer for during one mount, in ms.
+   *  The interval IS the instrument here because there is nothing else to
+   *  watch: when no row is inside a dispatch window, NOTHING on this board is
+   *  second-granular (`formatAge` rounds everything under two minutes to "just
+   *  now"), so no readout can report the cadence. `useNow` is the only
+   *  `setInterval` in this screen's whole tree — measured across `pwa/src`:
+   *  `CoordBanner`, `AbandonSheet` and `StartProgramSheet` run none, and this
+   *  store never connects — so every recorded call is the tick.
+   *
+   *  `mockRestore()` BEFORE `useRealTimers()`, deliberately: the spy wraps the
+   *  FAKE `setInterval`, and unwinding in the other order would hand the
+   *  global back the fake after the fake clock had already been uninstalled —
+   *  a leaked timer that hangs the next FILE, not this one. */
+  const cadenceOf = (mount: () => void): number[] => {
+    vi.useFakeTimers({ now: FROZEN });
+    const spy = vi.spyOn(globalThis, 'setInterval');
+    try {
+      mount();
+      return spy.mock.calls.map((c) => Number(c[1]));
+    } finally {
+      spy.mockRestore();
+      vi.useRealTimers();
+      cleanup();
+    }
+  };
+
+  it('moves the in-flight clock every second — the readout the operator watches actually advances', async () => {
+    await fromFrozenClock(async () => {
+      planned({ dispatchStartedAt: FROZEN - 42_000 });
+      expect(cell()?.textContent).toContain('0:42');
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+      expect(cell()?.textContent).toContain('0:43');
+    });
+  });
+
+  it('renders the wedge within a second of SPAWN_STALL_MS, not up to thirty after it', async () => {
+    await fromFrozenClock(async () => {
+      // One second short of the threshold at mount, past it after one tick.
+      // At the board's old standing cadence the row keeps claiming the spawn
+      // is in flight for the rest of the half-minute — the operator is told a
+      // dispatch is progressing that the runner has already given up on.
+      planned({ dispatchStartedAt: FROZEN - (SPAWN_STALL_MS - 1_000) });
+      expect(cell()).toHaveAttribute('data-phase', 'in-flight');
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+      expect(cell()).toHaveAttribute('data-phase', 'stalled');
+    });
+  });
+
+  it('asks for the slow cadence when no row is spawning — both directions, or it is not a gate', () => {
+    // The same rule the `└─` bracket gets one task over: an affordance that is
+    // always on is not a gate. A board with nothing spawning has nothing
+    // second-granular to say, and paying a re-render a second to say it would
+    // be the cost without the reason.
+    expect(cadenceOf(() => planned({ dispatchStartedAt: null }))).toEqual([30_000]);
+    expect(cadenceOf(() => board({ state: 'working' }))).toEqual([30_000]);
+    // The stamp SURVIVES success — §Design: a measurement, never cleared — so
+    // a gate that read the FIELD instead of asking `dispatchWindow` would tick
+    // once a second for every run the fleet has ever dispatched, forever, on a
+    // board with nothing to narrate. Which is why the gate asks the same
+    // function the row does.
+    expect(cadenceOf(() => board({
+      state: 'dispatched', dispatchStartedAt: FROZEN - 42_000, dispatchedAt: FROZEN - 1_000,
+    }))).toEqual([30_000]);
+    expect(cadenceOf(() => planned({ dispatchStartedAt: FROZEN - 42_000 }))).toEqual([1_000]);
+    // The wedge keeps the fast tick: its own elapsed span is still rendered to
+    // the second (the title `dispatch.ts`'s wedge carries), and the row is
+    // still `planned` — the window has not closed, it has gone bad.
+    expect(cadenceOf(() => planned({ dispatchStartedAt: FROZEN - SPAWN_STALL_MS }))).toEqual([1_000]);
   });
 
   it('says nothing about dispatching once the run reaches `dispatched`, though the stamp survives on the row', () => {
