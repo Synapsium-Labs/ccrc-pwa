@@ -11446,7 +11446,7 @@ Spec §2 says the only agent-side delta in this whole build is a **test**, and �
 **Interfaces:**
 - Consumes: everything Tasks 27-42 shipped.
 - Produces: a green server suite, a green agent suite with zero agent-source edits, and a live `/api/fleet/health` reporting `lifecycle.state === 'ok'`.
-- **AGENT-FIRST.** Task 38 edits `ccd/coordinator-skill/references/wave-lifecycle.md`, and anything under `ccd/` ships to the fleet host BEFORE the server. `deploy.sh agent <host>` falls back to `$CCRC_BOX` when the host argument is omitted (`deploy/deploy.sh:19`), so the two commands below name it that way rather than carrying a literal.
+- **AGENT-FIRST.** Task 38 edits `ccd/coordinator-skill/references/wave-lifecycle.md`, and anything under `ccd/` ships to the fleet host BEFORE the server. `$CCRC_BOX` is the SERVER box (BOX 1) and the agent lane never falls back to it: `deploy.sh agent` takes its target from the host argument, else `$CCRC_AGENT_BOX` (`deploy/deploy.sh:87`), and refuses with exit 2 when neither names one — the old `${2:-$CCRC_BOX}` fallback shipped the agent onto the server box (measured live, 2026-08-25). So the two commands below name `$CCRC_AGENT_BOX` — the fleet host (BOX 2), set in `~/.ccrc/deploy.env` — rather than carrying a literal.
 
 - [ ] **Step 1: Typecheck the source.**
   ```bash
@@ -11500,7 +11500,7 @@ Spec §2 says the only agent-side delta in this whole build is a **test**, and �
 
 - [ ] **Step 7: Deploy the fleet host FIRST.** `ccd/coordinator-skill/references/wave-lifecycle.md` changed, and anything under `ccd/` is agent-first by contract.
   ```bash
-  bash deploy/deploy.sh agent "$CCRC_BOX"
+  bash deploy/deploy.sh agent "$CCRC_AGENT_BOX"
   ```
 
 - [ ] **Step 8: Deploy the server.**
@@ -11517,7 +11517,7 @@ Spec §2 says the only agent-side delta in this whole build is a **test**, and �
 
 - [ ] **Step 10: Verify the read surface answers from the fleet host, cookieless** — the property D16 exists for.
   ```bash
-  ssh "$CCRC_BOX" 'curl -s -H "x-ccrc-mail-token: $(cat ~/.cc-secrets/ccrc-mail.token)" "http://<server-host>:7788/api/lifecycle?limit=5" | head -c 600'
+  ssh "$CCRC_AGENT_BOX" 'curl -s -H "x-ccrc-mail-token: $(cat ~/.cc-secrets/ccrc-mail.token)" "http://<server-host>:7788/api/lifecycle?limit=5" | head -c 600'
   ```
   Expected: a `{"events":[…],"gaps":[…]}` body. A `401` here means the EXEMPT entry did not ship; a `501` means the server box has no `coord.db`, which it does.
 
@@ -11781,8 +11781,8 @@ character count that depends on who launched vitest."
 ### Task 45: the flag loop on `ws-archive`
 
 **AGENT-FIRST.** This task edits `ccd/`, so nothing it produces reaches the fleet until Task 50's
-`bash deploy/deploy.sh agent "$CCRC_BOX"`. No server change may ship before that deploy (Task 56 states
-the ordering as a hard gate).
+`bash deploy/deploy.sh agent "$CCRC_AGENT_BOX"`. No server change may ship before that deploy (Task 56
+states the ordering as a hard gate).
 
 **Files:**
 - Modify `/home/you/worktrees/ccrc-pwa/still-river/ccd/ccd` — insert inside `cmd_ws_archive`,
@@ -12733,11 +12733,12 @@ Run `npm run test` in the FOREGROUND with a timeout of at least 600000 ms. On a 
 - [ ] **Step 9: deploy to the fleet host, and verify the token is live.**
 
 ```bash
-cd /home/you/worktrees/ccrc-pwa/still-river && bash deploy/deploy.sh agent "$CCRC_BOX"
-ssh "$CCRC_BOX" '~/.local/bin/ccd caps' | grep -x 'actor-flags-v1'
+cd /home/you/worktrees/ccrc-pwa/still-river && bash deploy/deploy.sh agent "$CCRC_AGENT_BOX"
+ssh "$CCRC_AGENT_BOX" '~/.local/bin/ccd caps' | grep -x 'actor-flags-v1'
 ```
-`$CCRC_BOX` is the fleet host (BOX 2) as named in `deploy/ccrc.env`; `deploy/deploy.sh:17-20` falls back
-to it when the host argument is omitted. Expected output: `actor-flags-v1`.
+`$CCRC_AGENT_BOX` is the fleet host (BOX 2) as named in `~/.ccrc/deploy.env`; `$CCRC_BOX` is the SERVER
+box, and `deploy.sh agent` never falls back to it — the target is the host argument, else
+`$CCRC_AGENT_BOX` (`deploy/deploy.sh:87`), else a refusal with exit 2. Expected output: `actor-flags-v1`.
 **If it is absent, do not start wave 6** — `capSupported` would correctly answer false and every wave-6
 task would ship a no-op.
 
@@ -13964,7 +13965,7 @@ is the only entry on CLAUDE.md's flake list this group touches.
 - [ ] **Step 2: confirm the agent lane is already ahead of the server.**
 
 ```bash
-ssh "$CCRC_BOX" '~/.local/bin/ccd caps' | grep -x 'actor-flags-v1'
+ssh "$CCRC_AGENT_BOX" '~/.local/bin/ccd caps' | grep -x 'actor-flags-v1'
 ```
 Expected: `actor-flags-v1`, from Task 50's deploy. **If it is absent, STOP** — deploying the server first
 would send flags the box refuses, which is the exact ordering CLAUDE.md's agent-first rule exists to

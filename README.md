@@ -1782,6 +1782,8 @@ outside every checkout, so it survives worktrees and can never be committed:
 CCRC_BOX=user@fleet-host            # required
 CCRC_SSH_KEY=$HOME/.ssh/id_ed25519  # required
 CCRC_SSH_PORT=22                    # optional, default 22
+CCRC_AGENT_BOX=user@other-box       # optional: the agent lane's target when
+                                    # `deploy.sh agent` names no host
 ```
 
 ```bash
@@ -1793,9 +1795,12 @@ Anything set in the environment overrides the file, and `CCRC_DEPLOY_ENV` points
 at a different one. The post-deploy health check derives its URL from the box
 itself — an exposed box is probed through its public origin, a plain one at
 `http://<host>:7788/health` — and `CCRC_HEALTH_URL` overrides both, for a box
-fronted by something ccrc did not configure. The agent target's `<host>`
-argument doubles as the box name and falls back to `$CCRC_BOX` if omitted, but
-in a two-box fleet it is a different machine (see "Remote fleet mode" above).
+fronted by something ccrc did not configure. The agent target takes its box
+from the `<host>` argument, or from `CCRC_AGENT_BOX` when that is omitted — it
+**never** falls back to `$CCRC_BOX`, which in a two-box fleet is the *server*
+box (see "Remote fleet mode" above), and refuses with exit 2 when neither is
+set. A single-box install says so explicitly: set `CCRC_AGENT_BOX` to the same
+`user@host` as `CCRC_BOX`, or pass the host.
 
 Both targets ship a local, gitignored env file to `~/.ccrc/` on the box first
 if one exists (`deploy/ccrc.env` / `ccrc-agent.env` — copy from

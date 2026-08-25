@@ -20,6 +20,11 @@ cd "$REPO_ROOT"
 #     CCRC_BOX=user@host                 # required: the target
 #     CCRC_SSH_KEY=$HOME/.ssh/id_ed25519 # required: identity file
 #     CCRC_SSH_PORT=22                   # optional, default 22
+#     CCRC_AGENT_BOX=user@fleet-host     # optional: the agent lane's target
+#                                        # when `deploy.sh agent` names no host
+#                                        # — NEVER defaulted from CCRC_BOX; a
+#                                        # single-box install sets it to the
+#                                        # same user@host as CCRC_BOX
 #     CCRC_SW_DENYLIST=/docs,/fleet      # optional: paths on the box's origin
 #                                        # that are NOT ccrc (see below)
 #
@@ -57,14 +62,41 @@ _deploy_need() {
 
 # Usage: deploy.sh [server|agent] [host]
 #   deploy.sh                 -> deploy server to $CCRC_BOX
-#   deploy.sh agent <host>    -> deploy ccrc-agent to <host> (falls back to $CCRC_BOX if omitted)
+#   deploy.sh agent <host>    -> deploy ccrc-agent to <host> ($CCRC_AGENT_BOX
+#                                when omitted; NEVER $CCRC_BOX)
 #
 # The target is RESOLVED BEFORE it is required, because `agent <host>` names
 # its box on the command line and must not also demand $CCRC_BOX — requiring
 # the file for a target the caller just typed is a refusal with nothing to fix.
 TARGET="${1:-server}"
 BOX="${CCRC_BOX:-}"
-[ "$TARGET" = "agent" ] && BOX="${2:-$BOX}"
+# THE AGENT LANE NEVER FALLS BACK TO $CCRC_BOX. On a two-box fleet $CCRC_BOX
+# is the SERVER box, and the `${2:-$BOX}` fallback this replaces committed
+# exactly the guess the refusal below forbids: `deploy.sh agent` with no host
+# rsynced the agent tree onto the server box and enabled ccrc-agent.service
+# there (measured live, 2026-08-25). The agent's target is $2, or
+# $CCRC_AGENT_BOX — a key an operator set with the agent in mind — or exit 2.
+#
+# REVERSED operands (the literal first), on purpose, and this comment
+# deliberately does not spell the test either way: agent/test/deploy-verify
+# locates both this override and the agent BRANCH far below by the FIRST
+# occurrence of each one's exact spelling, so neither form may appear in prose
+# before its code — a shadowed probe "proves" orderings the shell never runs,
+# the trap this file records twice already.
+if [ agent = "$TARGET" ]; then
+  BOX="${2:-${CCRC_AGENT_BOX:-}}"
+  if [ -z "$BOX" ]; then
+    echo "deploy: FAILED — \$CCRC_AGENT_BOX is not set and no <host> was given (the agent lane's target)." >&2
+    echo "  Name the fleet host on the command line, or set it in $CCRC_DEPLOY_ENV or the environment:" >&2
+    echo "      bash deploy/deploy.sh agent user@fleet-host" >&2
+    echo "      CCRC_AGENT_BOX=user@fleet-host" >&2
+    echo "  There is deliberately no default, and NO fallback to \$CCRC_BOX — on a two-box" >&2
+    echo "  fleet that is the SERVER box: a deploy that guessed its target" >&2
+    echo "  would ship this tree to someone else's box. A single-box install (server and" >&2
+    echo "  fleet on one machine) says so explicitly: set CCRC_AGENT_BOX to the same user@host, or pass it." >&2
+    exit 2
+  fi
+fi
 
 _deploy_need "$BOX"               CCRC_BOX     "the deploy target, user@host"           "user@fleet-host"
 _deploy_need "${CCRC_SSH_KEY:-}"  CCRC_SSH_KEY "the ssh identity file used to reach it" "\$HOME/.ssh/id_ed25519"

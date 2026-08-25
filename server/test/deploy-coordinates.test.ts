@@ -16,7 +16,7 @@
 // fails here.
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, chmodSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -91,14 +91,14 @@ describe('deploy.sh: the target is never guessed', () => {
     } finally { cleanup(); }
   });
 
-  it('still refuses `agent` with no host and no CCRC_BOX', () => {
+  it('still refuses `agent` with no host — naming CCRC_AGENT_BOX, the agent lane\'s own key', () => {
     mk();
     try {
       const envFile = path.join(tmp, 'key-only2.env');
       writeFileSync(envFile, 'CCRC_SSH_KEY=/dev/null\n');
       const r = run({ CCRC_DEPLOY_ENV: envFile }, ['agent']);
       expect(r.code).toBe(2);
-      expect(r.stderr).toMatch(/CCRC_BOX is not set/);
+      expect(r.stderr).toMatch(/CCRC_AGENT_BOX is not set/);
     } finally { cleanup(); }
   });
 
@@ -144,6 +144,101 @@ describe('deploy.sh: the target is never guessed', () => {
     // repo, and a per-checkout file would be both duplicated and one careless
     // `git add -A` from being committed.
     expect(script).toMatch(/CCRC_DEPLOY_ENV:-\$HOME\/\.ccrc\/deploy\.env/);
+  });
+});
+
+// ── The agent lane never guesses $CCRC_BOX ─────────────────────────────────
+// The defect these pin against bit live on 2026-08-25: `deploy.sh agent` with
+// no host fell back to `${2:-$BOX}`, and on a two-box fleet $CCRC_BOX is the
+// SERVER box — so the agent tree was rsynced onto the server and
+// ccrc-agent.service enabled there, by exactly the guess the script's own
+// refusal prose forbids. The agent's target is $2, or $CCRC_AGENT_BOX, or a
+// refusal — never $CCRC_BOX.
+//
+// Where a test must SEE the resolved target rather than just an exit code, a
+// poisoned ssh/scp pair on PATH records every invocation to $SSH_LOG and
+// exits 255 — so the run gets exactly far enough to name its box and no
+// deploy ever leaves the machine.
+describe('deploy.sh: the agent lane never guesses CCRC_BOX', () => {
+  let tmp: string;
+  const mk = (): string => (tmp = mkdtempSync(path.join(tmpdir(), 'ccrc-deploy-agent-')));
+  const cleanup = (): void => { if (tmp) rmSync(tmp, { recursive: true, force: true }); };
+
+  function fakeSsh(dir: string): { PATH: string; SSH_LOG: string } {
+    const bin = path.join(dir, 'bin');
+    mkdirSync(bin, { recursive: true });
+    const log = path.join(dir, 'ssh.log');
+    for (const name of ['ssh', 'scp']) {
+      const f = path.join(bin, name);
+      writeFileSync(f, '#!/usr/bin/env bash\nprintf \'%s\\n\' "$*" >> "$SSH_LOG"\nexit 255\n');
+      chmodSync(f, 0o755);
+    }
+    return { PATH: `${bin}:${process.env.PATH ?? ''}`, SSH_LOG: log };
+  }
+
+  it('refuses `agent` with CCRC_BOX set but no host and no CCRC_AGENT_BOX — touching nothing', () => {
+    mk();
+    try {
+      const envFile = path.join(tmp, 'server-only.env');
+      writeFileSync(envFile, 'CCRC_BOX=user@server-box\nCCRC_SSH_KEY=/dev/null\n');
+      const { PATH, SSH_LOG } = fakeSsh(tmp);
+      const r = run({ CCRC_DEPLOY_ENV: envFile, PATH, SSH_LOG }, ['agent']);
+      expect(r.code).toBe(2);
+      expect(r.stderr).toMatch(/CCRC_AGENT_BOX is not set/);
+      // Both remedies, in the refusal's own words: the positional host and the
+      // deploy-env key.
+      expect(r.stderr).toContain('deploy.sh agent user@fleet-host');
+      expect(r.stderr).toContain('CCRC_AGENT_BOX=user@fleet-host');
+      // The doctrine sentence the old fallback violated.
+      expect(r.stderr).toMatch(/someone else's box/);
+      // And NOTHING was attempted against $CCRC_BOX — the refusal precedes
+      // every ssh, including derive_health_urls' probe.
+      expect(existsSync(SSH_LOG), 'the refusal must precede any contact with $CCRC_BOX').toBe(false);
+    } finally { cleanup(); }
+  });
+
+  it('`agent user@host` still targets the named host, not CCRC_BOX', () => {
+    mk();
+    try {
+      const envFile = path.join(tmp, 'both.env');
+      writeFileSync(envFile, 'CCRC_BOX=user@server-box\nCCRC_SSH_KEY=/dev/null\n');
+      const { PATH, SSH_LOG } = fakeSsh(tmp);
+      const r = run({ CCRC_DEPLOY_ENV: envFile, PATH, SSH_LOG }, ['agent', 'user@given-host']);
+      expect(r.code, 'a named host is not a usage error').not.toBe(2);
+      const log = readFileSync(SSH_LOG, 'utf8');
+      expect(log).toContain('user@given-host');
+      expect(log).not.toContain('user@server-box');
+    } finally { cleanup(); }
+  });
+
+  it('CCRC_AGENT_BOX with no host argument targets that box', () => {
+    mk();
+    try {
+      const envFile = path.join(tmp, 'key-only.env');
+      writeFileSync(envFile, 'CCRC_SSH_KEY=/dev/null\n');
+      const { PATH, SSH_LOG } = fakeSsh(tmp);
+      const r = run({ CCRC_DEPLOY_ENV: envFile, PATH, SSH_LOG, CCRC_AGENT_BOX: 'user@env-host' }, ['agent']);
+      expect(r.code, 'CCRC_AGENT_BOX satisfies the agent target guard').not.toBe(2);
+      const log = readFileSync(SSH_LOG, 'utf8');
+      expect(log).toContain('user@env-host');
+    } finally { cleanup(); }
+  });
+
+  it('the command-line host wins over CCRC_AGENT_BOX', () => {
+    mk();
+    try {
+      const envFile = path.join(tmp, 'key-only2.env');
+      writeFileSync(envFile, 'CCRC_SSH_KEY=/dev/null\n');
+      const { PATH, SSH_LOG } = fakeSsh(tmp);
+      const r = run(
+        { CCRC_DEPLOY_ENV: envFile, PATH, SSH_LOG, CCRC_AGENT_BOX: 'user@env-host' },
+        ['agent', 'user@given-host'],
+      );
+      expect(r.code).not.toBe(2);
+      const log = readFileSync(SSH_LOG, 'utf8');
+      expect(log).toContain('user@given-host');
+      expect(log).not.toContain('user@env-host');
+    } finally { cleanup(); }
   });
 });
 
