@@ -555,6 +555,41 @@ coordinator that asked for it.
 
 - [x] **Step 4: commit.**
 
+- [x] **Step 5 (review fix round):** the two must-fixes off Task 5's review. The
+  first was real exactly as written; the second's CONCLUSION is taken and its
+  stated MECHANISM is refuted, both measured.
+  1. **Two of `spawnChip`'s three conditions reached the new surface with no red
+     behind them.** Measured on the shipped tree: deleting the `unstarted` arm
+     reds 1/142 and deleting the dead-row exemption reds 1/142 — both in
+     `session-line` ALONE, with `runs-screen` green at 59/59 through either. The
+     five new board pins all vary `spawnState`, so neither condition was
+     measured on the board at all.
+  2. **The `unstarted` arm was also a BEHAVIOUR Step 1 did not ask for**, and it
+     is scoped OUT rather than kept: Step 1 says the board renders the linked
+     session's `spawnState` "when it is not `null`", the arm fires when it IS
+     null, and `unstarted` is one of the three fault-shaped words §Design opens
+     by complaining about. **The review's mechanism for it is refuted.** The
+     settle window does not begin when `ws-add` returns: `cmd_ws_add` runs
+     `_spawn_start` → `_reg_claim` (THE ONE WRITER of `started`) →
+     `_ws_supervise` → `_spawn_settle` (`ccd/ccd:2708`), so the whole
+     `SPAWN_SETTLE_S` block happens INSIDE the verb, while the run is still
+     `planned` with no `sessionId` — which is precisely what Task 3's
+     `⟳ dispatching…` cell already covers, with no hand-off gap between them. By
+     the first instant a run row can look its session up the claim is written,
+     and `started` is monotone within a row. What would actually reach the arm
+     there is the OTHER condition `FleetSession.started === false` carries:
+     `server/src/registry.ts` maps the field as
+     `startedRead.ok && startedRead.content === '1'`, so a `.started` listed and
+     UNREADABLE this pass arrives as `false`, and the evidence that separates
+     the two (`lifecycleUnmeasured`) is spent on `lifecycle` server-side and
+     never reaches the wire. Resolved by SCOPING, not by muting: `spawnWords.ts`
+     exports the narrow question by name (`spawnVerdictChip` — the recorded
+     verdict, dead exemption and §1.7 degrade included) and keeps the wide one
+     (`spawnChip` = that plus the `unstarted` fallback) for the fleet row, over
+     ONE shared `silentAboutSpawn` predicate rather than two copies of
+     `status === 'dead'`. Four new pins in `runs-screen.test.tsx` hold it in
+     both directions, including the divergence itself.
+
 ## Deviations found
 
 (minted through `POST /api/ledger/deviations` at close — executors nominate prose-only)

@@ -4,6 +4,7 @@ import { act, cleanup, render, screen, fireEvent } from '@testing-library/react'
 import { RUN_STATES, SPAWN_STALL_MS, type FleetSession, type RunSummary } from '../../shared/api';
 import { RunsScreen } from '../src/screens/RunsScreen';
 import { RUN_ORDER, RUN_WORD, dispatchWindow, itemTallyLabel, programWave, resumeNote, runItems } from '../src/fleet/runWords';
+import { spawnChip, spawnVerdictChip } from '../src/fleet/spawnWords';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
@@ -881,6 +882,75 @@ describe('the run row renders its session’s spawn verdict (Task 5)', () => {
     act(() => { store.setState({ runs: [r({ sessionId: null, state: 'planned' })], runsFrameSeen: true }); });
     render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
     expect(chip()).toBeNull();
+  });
+
+  // ── The scoping, and the two conditions the first round left unmeasured ──
+  //
+  // Task 5's Step 1 asks this board for the linked session's `spawnState`
+  // "WHEN IT IS NOT `null`". `spawnChip` answers a wider question than that —
+  // it is the FLEET ROW's question, and its `unstarted` fallback fires when
+  // `spawnState` IS null — so the board asks the narrower one by name
+  // (`spawnVerdictChip`). The three pins below are what makes that a mechanism:
+  // the fallback's ABSENCE here, the verdict's survival beside it, and the dead
+  // exemption measured on THIS surface rather than borrowed from the other one.
+
+  it('says nothing for a row that has not claimed — `unstarted` is not a VERDICT, and this board asks for one', () => {
+    // WHY THE BOARD DIVERGES, in the order the argument has to be made.
+    //
+    // 1. §Design opens by naming `unstarted` as one of the three fault-shaped
+    //    words an ordinary spawn currently spends four minutes wearing. A build
+    //    whose premise is "stop saying that" must not propagate it to a second
+    //    surface.
+    // 2. On THIS surface the word cannot even be true the way it is on the
+    //    fleet screen. `cmd_ws_add` writes the claim (`_reg_claim`, ccd:2708)
+    //    BEFORE the settle it then blocks in, and a run learns its `sessionId`
+    //    only from the registry diff AFTER `ws-add` returns
+    //    (`dispatch.ts`, the fresh-spawn arm) — so at the first instant a run
+    //    row can look a session up, `started` is already `1`, and it is
+    //    monotone within a row (`_reg_claim`'s header: nothing in that file
+    //    clears it; only `_reg_purge` does, and that destroys the identity).
+    // 3. What actually reaches this arm is the OTHER condition `started ===
+    //    false` carries. `server/src/registry.ts` maps it as
+    //    `startedRead.ok && startedRead.content === '1'`, so a `.started` that
+    //    was listed and could not be READ this pass arrives as `false` — and
+    //    `FleetSession` does not carry the evidence that would tell the two
+    //    apart (`lifecycleUnmeasured` is spent on `lifecycle` server-side and
+    //    goes no further; `unmeasured` is identity fields only). Rendering that
+    //    as "unstarted" states a fact about a worker that is running fine.
+    //    `sessionLifecycle` already refuses exactly this inference in this
+    //    repo's own words — "an UNREADABLE `started` cannot be mistaken for an
+    //    absent one" — and it is the same seam.
+    withSession({ spawnState: null, started: false });
+    expect(chip()).toBeNull();
+  });
+
+  it('still renders a RECORDED verdict on a row that never claimed — the scoping drops the fallback, not the verdict', () => {
+    // The other direction, and the one that makes the pin above a scoping
+    // rather than a mute button: `started === false` is not itself a reason to
+    // go quiet. A spawn that recorded `blocked` says `blocked` here whatever
+    // the claim marker reads.
+    withSession({ spawnState: 'blocked', started: false });
+    expect(chip()?.textContent).toBe('blocked');
+  });
+
+  it('never renders a chip on a dead row — the exemption measured on THIS surface, not borrowed', () => {
+    // The dead exemption is `spawnWords.ts`'s, shared by both surfaces, and
+    // until now only `session-line.test.tsx` measured it: deleting it left
+    // this suite entirely green. Nothing is running, so how the last spawn
+    // ended describes work that no longer exists.
+    withSession({ spawnState: 'blocked', status: 'dead' });
+    expect(chip()).toBeNull();
+  });
+
+  it('the two surfaces diverge on ONE named question, and both halves are stated here', () => {
+    // The divergence is deliberate, so it is pinned in both directions rather
+    // than left as a difference someone tidies away. The fleet row keeps the
+    // fallback (`swift-harbor` — a real workspace whose only signal is the
+    // absent claim, and the fleet screen is where an operator goes looking for
+    // one); the board does not.
+    const shape = sess({ spawnState: null, started: false });
+    expect(spawnChip(shape)).toEqual({ word: 'unstarted', data: 'unstarted' });
+    expect(spawnVerdictChip(shape)).toBeNull();
   });
 });
 

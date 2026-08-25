@@ -35,7 +35,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { type FleetSession, type RunSummary, unmeasuredFields } from '../../../shared/api';
 import { DISPATCH_GLYPH, RUN_GLYPH, RUN_WORD, anyDispatchPending, dispatchWindow, isRunClosed, itemTallyLabel, programWave, resumeNote, runClosedAt, runItems, runState, runsByProgram } from '../fleet/runWords';
-import { spawnChip } from '../fleet/spawnWords';
+import { spawnVerdictChip } from '../fleet/spawnWords';
 import { AbandonSheet } from '../fleet/AbandonSheet';
 import { CoordBanner } from '../fleet/CoordBanner';
 import { StartProgramSheet } from '../fleet/StartProgramSheet';
@@ -119,10 +119,18 @@ function RunRow({
   // surface. A row with no session says nothing: there is no pane to have a
   // last spawn.
   //
+  // `spawnVerdictChip`, NOT `spawnChip`: the two are one arm apart and the
+  // board asks the narrower one BY NAME, never by re-deriving a condition here.
+  // The wider one adds `unstarted` for a session that recorded no verdict — a
+  // word §Design opens by complaining about, which on this surface would be
+  // reporting an UNREADABLE `.started` as a claim that was never made (the full
+  // argument, with the ccd and registry anchors, is on `spawnChip`'s docstring;
+  // both halves are pinned in `runs-screen.test.tsx`).
+  //
   // The resume is the run's OWN fact and has ridden `RunSummary` since Build 4
   // with nothing in `pwa/src` ever rendering it. `resumeNote` decides; this
   // picks no words.
-  const verdict = session === null ? null : spawnChip(session);
+  const verdict = session === null ? null : spawnVerdictChip(session);
   const resume = resumeNote(run, nowSec);
   const body = (
     <>

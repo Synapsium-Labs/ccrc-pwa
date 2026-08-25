@@ -14,6 +14,14 @@
 // This is NOT the L0 vocabulary. `SPAWN_VERDICTS` (`shared/api.ts`) is the
 // state space; this is one presentation of it, and the two are deliberately
 // different lists — `ready` has a member there and no word here.
+//
+// TWO EXPORTED QUESTIONS, ONE TABLE, and the difference between them is the
+// whole reason they are named rather than parameterised. `spawnVerdictChip` is
+// "what did the last spawn RECORD" — the run board's question.  `spawnChip` is
+// "what should a fleet ROW say about its spawn", which is wider by exactly one
+// arm: the `unstarted` fallback for a shape that records no verdict at all.
+// Each function's docstring argues its own scope; the run board's half was
+// decided in Task 5's review round and is measured in both suites.
 import type { FleetSession, SpawnVerdict } from '../../../shared/api';
 
 /** The verdict's DISPLAYED word, or `null` for a verdict with nothing to say.
@@ -60,23 +68,27 @@ function unnameableVerdict(v: unknown): string {
  *  is the correct degrade direction. */
 export interface SpawnChip { word: string; data: string }
 
+/** A DEAD row is silent about its last spawn, on every surface. Nothing is
+ *  running, so how the last spawn ended describes work that no longer exists —
+ *  the same exemption `critical` and the subagent list already take.
+ *
+ *  It is a NAMED predicate rather than `status === 'dead'` written twice below,
+ *  because both questions this file answers ask it and one of them is now asked
+ *  from a second surface: two copies of one exemption is how a row goes quiet on
+ *  the fleet screen and loud on the run board for the identical session. */
+function silentAboutSpawn(session: FleetSession): boolean {
+  return session.status === 'dead';
+}
+
 /**
- * ONE chip for one session, or `null` for a session with nothing to say about
- * its last spawn.
+ * THE RECORDED VERDICT's chip — what `$REG/<id>.spawn` last said, in this
+ * build's words — or `null` when the session has recorded nothing worth
+ * saying. This is the narrower of the two questions, and the one the RUN BOARD
+ * asks: a run row wants to know how its worker's last spawn ENDED.
  *
- * THE RULE IS NOT "chip on anything not ready": `null` satisfies "not ready",
- * and `null` is what every healthy live session carries, so that rule would
- * light a warning on every row in the fleet. A session with NO spawn stamp at
- * all is real (`swift-harbor`, measured) and `started === false` is the only
- * signal that shape emits, which is why the second arm is not optional.
- *
- * Both fields read DEFENSIVELY (`?? null`, `!== false`): the live `fleet` frame
- * is CAST, not revived (`stores/fleet.ts`'s `asFleetMsg` validates frames, not
- * members), so an older server's row lacks the keys at runtime.
- *
- * A DEAD row is silent. Nothing is running, so how the last spawn ended
- * describes work that no longer exists — the same exemption `critical` and the
- * subagent list already take.
+ * `spawnState` reads DEFENSIVELY (`?? null`): the live `fleet` frame is CAST,
+ * not revived (`stores/fleet.ts`'s `asFleetMsg` validates frames, not members),
+ * so an older server's row lacks the key at runtime.
  *
  * THE TABLE LOOKUP IS `Object.hasOwn`, NOT `?? null` (§1.7, and the defect it
  * fixed): `SPAWN_WORD[v] ?? null` was reached by exactly one input — a verdict a
@@ -91,18 +103,62 @@ export interface SpawnChip { word: string; data: string }
  * SERVER could not name ccd's rc, one layer in from "this CLIENT cannot name
  * the server's word".
  */
-export function spawnChip(session: FleetSession): SpawnChip | null {
-  if (session.status === 'dead') return null;
+export function spawnVerdictChip(session: FleetSession): SpawnChip | null {
+  if (silentAboutSpawn(session)) return null;
   const spawnState = session.spawnState ?? null;
+  if (spawnState === null) return null;
   const word: string | null =
-    spawnState === null
-      ? null
-      // The cast is the honest one: TS believes this lookup is total, and the
-      // whole point is that at runtime it is not.
-      : Object.hasOwn(SPAWN_WORD, spawnState as string)
-        ? (SPAWN_WORD as Record<string, string | null>)[spawnState as string] ?? null
-        : unnameableVerdict(spawnState);
-  if (word !== null) return { word, data: spawnState as string };
+    // The cast is the honest one: TS believes this lookup is total, and the
+    // whole point is that at runtime it is not.
+    Object.hasOwn(SPAWN_WORD, spawnState as string)
+      ? (SPAWN_WORD as Record<string, string | null>)[spawnState as string] ?? null
+      : unnameableVerdict(spawnState);
+  return word === null ? null : { word, data: spawnState as string };
+}
+
+/**
+ * THE FLEET ROW's question, which is wider: "what should this row say about its
+ * spawn", including the shape that records no verdict at all.
+ *
+ * THE RULE IS NOT "chip on anything not ready": `null` satisfies "not ready",
+ * and `null` is what every healthy live session carries, so that rule would
+ * light a warning on every row in the fleet. A session with NO spawn stamp at
+ * all is real (`swift-harbor`, measured) and `started === false` is the only
+ * signal that shape emits, which is why the second arm is not optional — on the
+ * FLEET SCREEN, which is where an operator goes looking for a workspace nothing
+ * accounts for.
+ *
+ * `started` reads DEFENSIVELY (`!== false`) for the same cast-frame reason
+ * `spawnVerdictChip` gives: an older server's row lacks the key, and `undefined`
+ * must not fire this arm.
+ *
+ * WHY THE RUN BOARD DOES NOT ASK THIS ONE (Task 5 review round, measured):
+ *  - §Design opens by naming `unstarted` as one of the three fault-shaped words
+ *    an ordinary spawn currently spends up to four minutes wearing. Propagating
+ *    it to a second surface works against the build that renders that window.
+ *  - It could not be TRUE there in the way it is here. `cmd_ws_add` writes the
+ *    claim (`_reg_claim`, `ccd/ccd:2708`) BEFORE the settle it then blocks in,
+ *    and a run learns its `sessionId` only from the registry diff AFTER
+ *    `ws-add` returns (`coord/dispatch.ts`, the fresh-spawn arm) — so at the
+ *    first instant a run row can look a session up the claim is already
+ *    written, and `started` is monotone within a row (`_reg_claim`'s header:
+ *    nothing in that file clears it; only `_reg_purge` does, and that destroys
+ *    the identity).
+ *  - What would actually reach it there is the OTHER condition `started ===
+ *    false` carries. `server/src/registry.ts` maps the field as
+ *    `startedRead.ok && startedRead.content === '1'`, so a `.started` listed
+ *    and UNREADABLE this pass arrives as `false`, and `FleetSession` carries
+ *    nothing to tell the two apart (`lifecycleUnmeasured` is spent on
+ *    `lifecycle` server-side; `unmeasured` is identity fields only). This
+ *    file's `unstarted` therefore already states one condition where the wire
+ *    holds two — `sessionLifecycle` refuses that same inference in this repo's
+ *    own words, "an UNREADABLE `started` cannot be mistaken for an absent one"
+ *    — and the fix is a wire fact, not a second surface repeating the guess.
+ */
+export function spawnChip(session: FleetSession): SpawnChip | null {
+  if (silentAboutSpawn(session)) return null;
+  const verdict = spawnVerdictChip(session);
+  if (verdict !== null) return verdict;
   if (session.started === false) return { word: 'unstarted', data: 'unstarted' };
   return null;
 }
