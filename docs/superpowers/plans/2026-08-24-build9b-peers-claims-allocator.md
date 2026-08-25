@@ -8808,7 +8808,7 @@ measure that mutant explicitly.
 
 **Steps:**
 
-- [ ] **Write the failing test edits first.** In `server/test/worker-skill.test.ts`:
+- [x] **Write the failing test edits first.** In `server/test/worker-skill.test.ts`:
   (1) `CONTRACT` gains an eleventh entry after clause 10 — DOUBLE-quoted, straight
   apostrophes, no `"` character inside the clause:
 
@@ -8828,12 +8828,12 @@ measure that mutant explicitly.
         '../ccrc-coordinator/references/peer-protocol.md']) {
   ```
 
-- [ ] **Run, expect FAIL.** `cd server && ./node_modules/.bin/vitest run
+- [x] **Run, expect FAIL.** `cd server && ./node_modules/.bin/vitest run
   test/worker-skill.test.ts` — 2 reds: `carries all eleven clauses verbatim` (missing
   clause 11) and `carries no references of its own` (the skill points at no
   `../ccrc-coordinator/references/peer-protocol.md`).
 
-- [ ] **Edit `ccd/worker-skill/SKILL.md`.** Four edits, all additive to pinned content.
+- [x] **Edit `ccd/worker-skill/SKILL.md`.** Four edits, all additive to pinned content.
   (1) Line 49: `These ten clauses are the boundary` → `These eleven clauses are the
   boundary`. (2) Line 53 (inside the D-104 editing note): `these ten lines are pinned
   verbatim` → `these eleven lines are pinned verbatim`. (3) After the clause-10 line
@@ -8864,28 +8864,28 @@ measure that mutant explicitly.
   advances or closes a run.
   ```
 
-- [ ] **Run, expect PASS.** `cd server && ./node_modules/.bin/vitest run
+- [x] **Run, expect PASS.** `cd server && ./node_modules/.bin/vitest run
   test/worker-skill.test.ts` — all green, including the destructive-verb census (clause
   11 names none of the five) and the frontmatter shape test (untouched).
 
-- [ ] **Mutation 1 — delete the clause.** Remove the clause-11 line from SKILL.md. Run:
+- [x] **Mutation 1 — delete the clause.** Remove the clause-11 line from SKILL.md. Run:
   expect exactly 1 red (`carries all eleven clauses verbatim`). Restore.
 
-- [ ] **Mutation 2 — the apostrophe byte, the other direction.** In SKILL.md's clause 11
+- [x] **Mutation 2 — the apostrophe byte, the other direction.** In SKILL.md's clause 11
   replace `response's` with `response’s` (curly). Run: expect the same 1 red — the
   worker file's constraint is the mirror image of the coordinator's, measured. Restore.
 
-- [ ] **Mutation 3 — the references trap.** `mkdir ccd/worker-skill/references && touch
+- [x] **Mutation 3 — the references trap.** `mkdir ccd/worker-skill/references && touch
   ccd/worker-skill/references/x.md`. Run: expect 1 red (`carries no references of its
   own` — `readdirSync(skillDir).sort()` is no longer `['SKILL.md']`). This wave adds a
   reference FILE to the coordinator's tree, so re-proving the worker's no-references pin
   still bites is the point, not ceremony. `rm -r ccd/worker-skill/references`.
 
-- [ ] **Run the pair plus the coordinator suite** (it reads the worker skill for four of
+- [x] **Run the pair plus the coordinator suite** (it reads the worker skill for four of
   its own pins): `cd server && ./node_modules/.bin/vitest run test/worker-skill.test.ts
   test/coordinator-skill.test.ts` — green.
 
-- [ ] **Commit.**
+- [x] **Commit.**
 
   ```bash
   git add ccd/worker-skill/SKILL.md server/test/worker-skill.test.ts

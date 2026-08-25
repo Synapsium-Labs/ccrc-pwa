@@ -46,10 +46,10 @@ infer your own id from the brief's text. The pane is the source.
 
 ## The contract
 
-These ten clauses are the boundary between "a wave worker" and "an agent with
+These eleven clauses are the boundary between "a wave worker" and "an agent with
 a shell on the fleet host". They are not advice.
 
-**Editing note (D-104):** these ten lines are pinned verbatim by
+**Editing note (D-104):** these eleven lines are pinned verbatim by
 `server/test/worker-skill.test.ts`, whose clause literals are double-quoted.
 Keep every apostrophe STRAIGHT — a curly one is a different byte and reds the
 pin without looking like an edit — and keep double-quote characters out of a
@@ -65,6 +65,7 @@ clause, where they would have to be escaped on the other side.
 8. Never run `ws-rm`, `ws-reap`, `ws-gc`, `ws-archive` or `ws-restore`. This workspace's lifecycle belongs to ccd and to the human, at any wave, for any reason.
 9. A done-claim's fingerprint is measured ONCE and sent ONCE: `handoffCommit` must equal the branch tip you measured, and `prPhase` must be one of the eight enum words (`unchecked`, `none`, `no-commits`, `open`, `draft`, `merged`, `closed`, `unknown`). After `wave-done` you stop pushing — a new commit under your own claim makes it stale — and a rejected claim is never re-asserted without new commits and a fresh measurement.
 10. Remote control is the BOX's setting, not yours: `~/.ccrc/remote-control` decides whether this box's panes run with it, and you never write that file. The per-worker ruling (orchestrator task #37) is still open, so there is no per-session form of this flag to reach for.
+11. Claim before you edit: `POST /api/claims` with every path this wave touches, all-or-nothing. A 409 is an answer, not an obstacle — it names the holder, and the holder IS the address: mail them through the response's own `mailHint` instead of editing anyway. Discovery is `GET /api/peers?of=<your id>`, history is `GET /api/lifecycle`, and each row's own lifecycle is what to read — never its archive stamp, which is silently false on some live rows. Peer mail is human-timescale: a busy peer answers when it next idles, so send once and work what is uncontested. Never invent a deviation number — the coordinator allocated this program's block at run-open, and a number you cannot get is `D-TBD-<slug>` plus a report, never a guess.
 
 **Clause 2 is the one that decides whether this wave can close at all.** The
 ordinary per-PR convention elsewhere in this codebase — "cut a fresh
@@ -82,10 +83,13 @@ The tool gets answered.
 
 ## How to call the API
 
-You use exactly two routes plus their reads: `POST /api/mail` to send, and
-`GET /api/mail` / `GET /api/mail/:id` / `POST /api/mail/:id/ack` to read and
-acknowledge. The run routes belong to the coordinator; a worker never advances
-or closes a run.
+Your mail surface is `POST /api/mail` to send, and `GET /api/mail` /
+`GET /api/mail/:id` / `POST /api/mail/:id/ack` to read and acknowledge.
+Build 9 adds the peer surface clause 11 names — claims, peers, lifecycle —
+whose long form and curl shapes live in
+`../ccrc-coordinator/references/peer-protocol.md`, installed beside the two
+references below. The run routes belong to the coordinator; a worker never
+advances or closes a run.
 
 **Read `../ccrc-coordinator/references/wave-lifecycle.md` §3 and
 `../ccrc-coordinator/references/mail-envelope.md` before your first mail.**
