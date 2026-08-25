@@ -1554,10 +1554,11 @@ describe('Build 9 nouns — the lifecycle journal vocabulary', () => {
   it('enumerates the act vocabulary only where the compiler enforces exhaustiveness', () => {
     // The rule, stated as the assertion: a file may list the WHOLE act
     // vocabulary only if a `Record<LifecycleAct, …>` over it makes a missing
-    // member a compile error. One file qualifies today — `shared/api.ts` (the
-    // union and `LIFECYCLE_ACT_MAP`). `pwa/src/lib/journalWords.ts` joins it
-    // in wave 9, and ONLY because it types its map `Record<LifecycleAct,
-    // string>`; add it to this list then, not before.
+    // member a compile error. Two files qualify: `shared/api.ts` (the union
+    // and `LIFECYCLE_ACT_MAP`) and — since wave 9 landed it, at
+    // `pwa/src/session/journalWords.ts` rather than the `pwa/src/lib/` this
+    // comment once predicted (D-215) — `journalWords.ts`, ONLY because it
+    // types `ACT_WORD` as `Record<LifecycleAct, string>`.
     //
     // Membership is tested per token in ANY form, quoted or as an object key,
     // the way the `PrReason` scan above does — a quoted-literals-only scan
@@ -1566,7 +1567,7 @@ describe('Build 9 nouns — the lifecycle journal vocabulary', () => {
     const enumerates = (src: string): boolean =>
       LIFECYCLE_ACTS.every((a) => new RegExp(`(?:'${a}'|(?<![\\w'-])${a}\\s*:)`).test(src));
     const holders = ALL.filter((f) => enumerates(readFileSync(f, 'utf8'))).map(rel).sort();
-    expect(holders).toEqual(['shared/api.ts']);
+    expect(holders).toEqual(['pwa/src/session/journalWords.ts', 'shared/api.ts']);
   });
 
   it('and the act scan is looking at something — guards the guard', () => {

@@ -53,10 +53,13 @@ fi
 # (`deploy/deploy.sh`'s `rsync -az --delete`, interrupted; SKILL.md sorts
 # before `references/`) does not fail closed, it REPLACES a good install with
 # the fragment, exit 0, no stderr. SKILL.md's own text points a live
-# coordinator at all three of these by name ("Read it before the first
-# dispatch of a program") — every one of them missing is exactly the
+# coordinator at the first three of these by name ("Read it before the first
+# dispatch of a program"), and the WORKER skill points across at the fourth
+# (`../ccrc-coordinator/references/peer-protocol.md` — Build 9 wave 8, D-214:
+# it ships here because a skill's references install as one unit and the
+# worker ships none of its own) — every one of them missing is exactly the
 # half-installed shape the comment above already says is worse than none.
-REQUIRED_REFS=(ledger-template.md mail-envelope.md wave-lifecycle.md)
+REQUIRED_REFS=(ledger-template.md mail-envelope.md peer-protocol.md wave-lifecycle.md)
 [[ -f "$SRC/SKILL.md" ]] || { echo "install-coordinator-skill: no SKILL.md under $SRC — refusing" >&2; exit 1; }
 for ref in "${REQUIRED_REFS[@]}"; do
   [[ -f "$SRC/references/$ref" ]] \

@@ -100,6 +100,22 @@ that allocates by sweep.
   spelling wins), and land Task 18's own membership pins as written. Bisect: the
   census is red from Task 7's commit (9207881b) to this checkpoint commit —
   accepted rather than history-rewritten, same ruling as D-212.
+- **D-214** (Task 25, found at the phase-3 checkpoint): the plan had Task 25 create
+  `ccd/coordinator-skill/references/peer-protocol.md` but never mentioned
+  `install-coordinator-skill.sh`'s `REQUIRED_REFS` fail-closed gate, whose
+  agreement with the real directory `wrapper-roster-fixture.test.ts` (I8) pins in
+  both directions — so the pin went red at Task 25's commit and stayed red through
+  the phase (no per-task sweep in Tasks 25–29 lists that suite). Fixed at the
+  checkpoint: `peer-protocol.md` added to `REQUIRED_REFS`, comment extended to say
+  the WORKER skill is what points at the fourth file across the skill boundary.
+- **D-215** (Task 28, found at the phase-3 checkpoint): `single-definition`'s
+  act-vocabulary holder pin had pre-planned wave 9's arrival ("add it to this list
+  then, not before") but spelled the future path `pwa/src/lib/journalWords.ts`;
+  the plan landed `pwa/src/session/journalWords.ts` and carried no step to update
+  the pin, so it went red at Task 28's commit. Fixed at the checkpoint: the landed
+  path added to the expected holders, the guard's comment corrected. Bisect for
+  both entries: red on one suite each from their task's commit to the checkpoint
+  commit — accepted, same ruling as D-212/D-213.
 
 ## Cross-task signature governance
 
