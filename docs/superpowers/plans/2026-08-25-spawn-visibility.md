@@ -63,6 +63,23 @@ journal records every dispatched spawn as *declared: nothing / unmeasured*. Thre
 (`capSupported(state, ACTOR_FLAGS_CAP)`) — makes the journal answer "the dispatch path did
 this". Fixed at the source, in the same slice, so the board and the journal agree.
 
+> **AMENDED BY MEASUREMENT (2026-08-25, Task 2's review round). The paragraph above is
+> WRONG, and it is kept rather than deleted because it is the premise that has to stop being
+> believed.** `actor-flags-v1` is not "this box takes the flags"; `cmd_caps` scopes it in its
+> own words to *"whether to APPEND `--surface`/`--actor`/`--reason` to the FIVE WORKSPACE
+> VERBS"* — archive, restore, hold, release, rename. `ws-add` MINTS a workspace rather than
+> acting on one and is not among them: `cmd_ws_add` consumes an exact-string `--no-rc`, binds
+> `slug="${2:-}"`, and has no flag loop at all, so the dec's first token lands in the slug and
+> the verb dies at `_ws_slug_valid` — before a worktree, a registry row or a pane exists.
+> Threaded, every wave-1 dispatch on this fleet would refuse, the registry diff would find
+> zero candidates, and the run would sit at `planned` with `dispatchStartedAt` set: **the
+> exact wedge this build exists to render, manufactured by the build that renders it.**
+> Attribution here is therefore not three lines — it needs `cmd_ws_add` to grow a parser AND
+> its `create` act to emit the dec (`_lc_done create` passes `meas.*` only), behind a NEW
+> capability token, since every deployed box already advertises `actor-flags-v1` with a
+> `ws-add` that cannot parse one. That is a `ccd/` change and an AGENT-FIRST deploy, so it is
+> the orchestrator's decision, not this slice's.
+
 **Deliberately NOT in this slice:** per-phase spawn progress (worktree → seeded → pane →
 claimed → settling). It needs `$REG/<id>.setup` to gain a server reader, a pre-pane age
 anchor the fleet wire does not carry, and a new `SessionLifecycle` rung — an L0 change with
@@ -82,9 +99,13 @@ if the operator wants more than "it is coming, 42 s in".
 - Every guard ships with a mutation-measured red, count stated in the commit body.
 - Deviations are nominated prose-only in commit bodies; the orchestrator mints numbers
   through `POST /api/ledger/deviations` (the allocator is live — never hand-sweep).
-- No ccd change is expected in this slice (Build 9a already accepts the actor flags Task 2
-  passes). If a task finds it must touch `ccd/`, STOP and report — that changes the deploy
-  ordering to AGENT-FIRST and is a decision for the orchestrator.
+- No ccd change is expected in this slice. ~~(Build 9a already accepts the actor flags Task 2
+  passes.)~~ **That parenthesis was an assertion, never a measurement, and it was false —
+  Build 9a accepts them on the five WORKSPACE verbs, and `ws-add` is not one.** The
+  constraint itself stands and is what Task 2's review round enforced: if a task finds it
+  must touch `ccd/`, STOP and report — that changes the deploy ordering to AGENT-FIRST and is
+  a decision for the orchestrator. A capability token is evidence about the verbs it NAMES;
+  read `cmd_caps`'s docstring before believing one covers a sixth.
 
 ## Wave order
 
@@ -223,29 +244,39 @@ export const SPAWN_STALL_MS = 360_000;
   plus the runs-route/store suite for the new wire field
 
 **Interfaces:**
-- Consumes: `decFlags` (`ccdargv.ts:103`), `sweepDec` (`:163`, already gates on
-  `capSupported(state, ACTOR_FLAGS_CAP)`), the `wsHold` precedent (`:260`).
-- Produces: `wsAddWorker(p: string, dec: ActorFlags | null)`.
+- Consumes: ~~`decFlags` (`ccdargv.ts:103`), `sweepDec` (`:163`, already gates on
+  `capSupported(state, ACTOR_FLAGS_CAP)`), the `wsHold` precedent (`:260`)~~ — struck with
+  Steps 2–4; `wsHold` is not a precedent for `ws-add`, which is the whole finding.
+- Produces: ~~`wsAddWorker(p: string, dec: ActorFlags | null)`~~ → `wsAddWorker(p: string)`,
+  unchanged, plus `server/test/ccdargv-dec-parity.test.ts` (the builder↔verb crossing) and
+  `RunSummary.claimedBy` from Step 5, which is what actually ships from this task.
 
 - [x] **Step 1: read the precedent.** `ccdargv.ts:60-110` (the dec doc block), `:163-170`
   (`sweepDec`), `:238-262` (`wsArchive`/`wsRestore`/`wsHold`'s exact flag placement), and how
   `dispatch.ts` already obtains the fleet state it passes to `sweepDec` for its `ws-hold`
   call (`dispatch.ts:425-432`) — reuse THAT value; do not measure a second one.
 
-- [x] **Step 2: red-first.** Extend the argv pin: a fresh-spawn dispatch on a
+- [x] ~~**Step 2: red-first.** Extend the argv pin: a fresh-spawn dispatch on a
   caps-supporting fixture composes `['ws-add','--no-rc',<project>, ...decFlags]` with the
   dec's reason naming this run (`run:<id> dispatch`), and on a fixture whose caps do NOT
   support actor flags composes exactly `['ws-add','--no-rc',<project>]` — the absence-permits
-  half, which is what keeps an older ccd working. Expect RED.
+  half, which is what keeps an older ccd working. Expect RED.~~
 
-- [x] **Step 3: implement.** `wsAddWorker: (p: string, dec: ActorFlags | null) => argv(['ws-add', '--no-rc', p, ...decFlags(dec)])`,
-  and at the call site pass `sweepDec(<the same fleet state ws-hold uses>, \`run:${run.id} dispatch\`)`.
-  Keep `--no-rc` in its leading position (ccd's parse contract) — the dec flags go last, as
-  every other builder places them.
+- [x] ~~**Step 3: implement.** `wsAddWorker: (p: string, dec: ActorFlags | null) => argv(['ws-add', '--no-rc', p, ...decFlags(dec)])`,
+  and at the call site pass `sweepDec(<the same fleet state ws-hold uses>, \`run:${run.id} dispatch\`)`.~~
 
-- [x] **Step 4: green + mutation.** Run the argv suite, `whitelist-subset.test.ts`,
-  `test/verb-gate.test.ts`, `typecheck-tests`. Mutation: drop the `...decFlags(dec)` spread →
-  the caps-supporting pin reds; revert, state the count.
+  **STEPS 2–3 ARE STRUCK, NOT DONE — they dictate a fleet-breaking argv, and a re-execution
+  that follows them reproduces it.** `cmd_ws_add` parses no flags (§Design's amendment says
+  why). The corrected step is: `wsAddWorker: (p: string) => argv(['ws-add', '--no-rc', p])`,
+  unchanged from Build 9a, with its docstring carrying the measurement so the next reader does
+  not re-derive the wrong conclusion from `actor-flags-v1`'s name. The verb-side work — a flag
+  parser on `cmd_ws_add`, a dec on its `create` emit, and a capability token of its own — is
+  an AGENT-FIRST `ccd/` change and is REPORTED, not taken.
+
+- [x] ~~**Step 4: green + mutation.** Mutation: drop the `...decFlags(dec)` spread →
+  the caps-supporting pin reds; revert, state the count.~~ Struck with Step 3. The pin that
+  survives is its inverse, in `run-routes.test.ts`: the argv is INVARIANT in the capability
+  list — bare on a box advertising `actor-flags-v1` and bare on one that never did.
 
 - [x] **Step 5: the ownership edge reaches the wire.** `runs.claimedBy` — the one
   coordinator's session id, the column `resolveCoordinator` and the `claimed-by-another`
@@ -270,6 +301,38 @@ export const SPAWN_STALL_MS = 360_000;
 
 - [x] **Step 6: commit** (one commit for both halves is fine — they are one sentence about
   attribution: who caused the spawn, and who owns the run — but say both in the body).
+
+- [x] **Step 7 (review fix round):** five must-fixes off Task 2's review. Halves 1 and 2 of
+  the shipped commit are treated differently: the OWNERSHIP half (`RunSummary.claimedBy`)
+  survives untouched — no finding against it — while the ATTRIBUTION half is reverted whole.
+  1. **FLEET-BREAKING, confirmed against the tree and against the real binary.** The composed
+     argv kills every fresh-spawn dispatch on a caps-advertising box (`ccd/ccd`'s `cmd_ws_add`
+     shifts an exact-string `--no-rc` and then binds `slug="${2:-}"`; `_ws_slug_valid` refuses
+     `--surface`). Reverted: `wsAddWorker` takes a project and nothing else, and
+     `dispatch.ts` passes one argument. The finding was right on every particular.
+  2. **The Global Constraint was triggered and not honoured** — the work needed a `ccd/`
+     change, so the correct move was STOP AND REPORT. Done here: the ccd side is described,
+     not written, and §Design + the constraint bullet are corrected in place so the false
+     premise cannot license this twice.
+  3. **The ccd side needs TWO things, not one** — a parser on `cmd_ws_add` AND a dec on its
+     `_lc_done create` emit (which passes `meas.*` only, so a parsed flag would still record
+     `declared: nothing`) — behind a NEW capability token, never `actor-flags-v1`, which
+     every deployed box already advertises with a `ws-add` that cannot parse a dec. Recorded
+     on `wsAddWorker`'s docstring and in §Design; NOT implemented (orchestrator's call).
+  4. **The real gap, and the only thing this round ADDS:** nothing crossed "CCD_ARGV builders
+     that append a dec" against "ccd verbs that parse one", so 223 green files could not see
+     it — `whitelist-subset` checks the agent's PREFIX grant (trailing tokens unconstrained),
+     `run-routes` checks tokens against a runner DOUBLE, `unattended-actor` scans a hand-kept
+     name list. New suite `server/test/ccdargv-dec-parity.test.ts`: it DERIVES the
+     dec-appending verbs from `ccdargv.ts` itself and runs each one's verb through the REAL
+     ccd in a fixture HOME, control-vs-probe, asserting the refusal is byte-identical with
+     and without the dec. `ws-add` is its negative control, measured rather than asserted.
+     `unattended-actor.test.ts`'s widened `BUILDERS` regex — which cemented the broken shape
+     as pinned-correct — is reverted, with the reason written where the name-list lives.
+  5. **`run:${run.id} dispatch` twice** — dissolved by must-fix 1: measured back to ONE
+     occurrence (`dispatch.ts`, the ws-hold at step 5). If attribution is ever pursued, the
+     second site must be DERIVED (`rundefs.ts`'s `holdReason` idiom), not typed; the
+     instruction now sits at the call site where the second copy would be written.
 
 ### Task 3: the run board renders the window — and the wedge
 

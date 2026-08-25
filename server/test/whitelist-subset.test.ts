@@ -30,11 +30,12 @@ const SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   // Same bare `['ws-add']` grant, second builder: the dispatch path's
   // worker-declaring form. Its sample proves the FLAGGED shape crosses the
   // existing prefix with no widening — tokens after the prefix are
-  // unconstrained, the same rule that carries `stop --surface`. Since T2 it
-  // CARRIES A DEC, for `wsHold`'s reason two entries down: a bare sample would
-  // leave layer 2 proving only the unflagged shape reachable, which is not the
-  // shape the dispatch path actually sends on a caps-advertising box.
-  wsAddWorker: ['demo', { surface: 'agent', actor: 'run:7 dispatch', reason: null }],
+  // unconstrained, the same rule that carries `stop --surface`. NO DEC, and
+  // the agent's own gate is why this file cannot be the place that says so:
+  // trailing tokens are unconstrained here, so the flagged shape T2 briefly
+  // sent crossed this layer green while real ccd refused it as an invalid
+  // slug. `ccdargv-dec-parity.test.ts` is the guard that measures that.
+  wsAddWorker: ['demo'],
   prStateSession: ['demo-quiet-basin'],
   prStateProject: ['demo'],
   prOpen: ['demo-quiet-basin', 'the work', 'Ym9keQ==', 'false'],
@@ -311,11 +312,10 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     wsAdd: ['ws-add', 'demo'],
     // LEADING flag, then the project — ccd's `cmd_ws_add` shifts `--no-rc`
     // before its positionals, so token order here is parse-load-bearing the
-    // same way `prOpen`'s is. The dec rides LAST, after the positional, where
-    // every other builder places it: `--no-rc` keeps its leading position and
-    // the declaration is appended, so ccd's shift-then-positionals parse is
-    // untouched by attribution.
-    wsAddWorker: ['ws-add', '--no-rc', 'demo', '--surface', 'agent', '--actor', 'run:7 dispatch'],
+    // same way `prOpen`'s is. Exactly three tokens: `cmd_ws_add` binds
+    // `slug="${2:-}"` straight after the project with no flag loop, so a
+    // fourth token is a SLUG, whatever it looks like.
+    wsAddWorker: ['ws-add', '--no-rc', 'demo'],
     prStateSession: ['pr-state', '--session', 'demo-quiet-basin'],
     prStateProject: ['pr-state', '--project', 'demo'],
     // SAMPLES.prOpen's fourth element is the STRING 'false' (SAMPLES is typed

@@ -43,14 +43,18 @@ import { mkTmp } from './tmpHelpers.js';
 const srcRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../src');
 const NEW = { ccdVerbs: [ACTOR_FLAGS_CAP] };
 const FILES = ['watch.ts', 'coord/close.ts', 'coord/dispatch.ts', 'coord/routes.ts'];
-// `wsAddWorker` joined the list in T2 (spawn visibility). It is not one of the
-// five WORKSPACE verbs wave 6 threaded — it mints a workspace rather than
-// acting on one — but it is unmistakably an unattended lane with something to
-// declare: the ONE `ws-add` in the tree that no operator asked for, fired by
-// the dispatch path on the coordinator's behalf. Leaving it out of this scan
-// would have let it keep recording `declared: nothing` while this file's own
-// title claimed every unattended call site names itself.
-const BUILDERS = /CCD_ARGV\.(wsAddWorker|wsArchive|wsRestore|wsHold|wsRelease|wsRename)\(/;
+// THE FIVE WORKSPACE VERBS, and that boundary is ccd's, not this file's:
+// `cmd_caps`'s own docstring says `actor-flags-v1` "decides ONE server-side
+// thing: whether to APPEND `--surface`/`--actor`/`--reason` to the FIVE
+// WORKSPACE VERBS". `wsAddWorker` is deliberately NOT here, and its absence is
+// a measurement rather than an omission — T2 (spawn visibility) added it, and
+// its review found that `cmd_ws_add` has no flag parser at all, so the dec it
+// composed died as an invalid slug on every caps-advertising box. See that
+// builder's own docstring in `ccdargv.ts`, and `ccdargv-dec-parity.test.ts`,
+// which derives the dec-appending builders from `CCD_ARGV` itself and runs
+// each one's verb through the real ccd — the crossing THIS scan cannot make,
+// because a name-list can only ever see the names somebody typed into it.
+const BUILDERS = /CCD_ARGV\.(wsArchive|wsRestore|wsHold|wsRelease|wsRename)\(/;
 
 describe('sweepDec', () => {
   it('declares the agent lane and names the sweep', () => {
@@ -92,7 +96,7 @@ describe('every unattended ccd call site names itself', () => {
       .toEqual([]);
   });
 
-  it('found EXACTLY the pinned call sites — not a floor, an exact count (fix round 2, F5b)', () => {
+  it('found EXACTLY the ten pinned call sites — not a floor, an exact count (fix round 2, F5b)', () => {
     // `toBeGreaterThanOrEqual(10)` was a floor, not a count: an eleventh
     // unattended call site — a NEW verb call this file's `SITES` array below
     // has no entry for — would satisfy `11 >= 10` silently, so a mislabelled
@@ -113,10 +117,7 @@ describe('every unattended ccd call site names itself', () => {
 });
 
 /**
- * Eleven sites (ten, until T2's `ws-add` joined them), five distinct labels —
- * the new site shares `dispatchRun`'s own `` `run:${run.id} dispatch` ``, which
- * is correct: one dispatch, two ccd acts, one lane. Each site is identified by
- * the code AROUND
+ * Ten sites, five distinct labels, each site identified by the code AROUND
  * the label rather than by the label itself — so a mutation that swaps two
  * valid labels between two valid sites cannot hide by also moving the
  * anchor. `close.ts`'s five sites share one identical label
@@ -165,9 +166,6 @@ const SITES: readonly Site[] = [
   // call, the same shape every `close.ts` entry above already uses — a
   // foreign call captured here changes the surrounding text and reds against
   // the hardcoded label below, exactly as a cross-site label swap would.
-  { file: 'coord/dispatch.ts', what: 'dispatchRun fresh spawn, the ws-add that mints the workspace',
-    find: /const argv = CCD_ARGV\.wsAddWorker\(run\.project,\n\s+sweepDec\(deps\.fleetState, (`[^`]*`)\)\);/,
-    label: '`run:${run.id} dispatch`' },
   { file: 'coord/dispatch.ts', what: 'dispatchRun hold, step 5',
     find: /const holdArgv = CCD_ARGV\.wsHold\(sessionId,\n\s+holdReason\(run\.program, run\.wave, run\.waveOf, run\.id\),\n\s+sweepDec\(deps\.fleetState, (`[^`]*`)\)\);/,
     label: '`run:${run.id} dispatch`' },

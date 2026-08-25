@@ -239,14 +239,21 @@ export async function dispatchRun(
     // creation (the 2026-08-13 ruling, task #37). The PWA's ordinary
     // workspace-add keeps `wsAdd` and the box's own RC default.
     //
-    // And it declares WHO (spawn visibility, T2). Same `sweepDec` on the same
-    // `deps.fleetState` the hold at step 5 already passes — read once, spent
-    // twice, never measured a second time — so the journal's `create` row and
-    // the `hold` row that follows it carry one identical actor and read as one
-    // act by one lane. Without it Build 9a recorded this spawn as `declared:
-    // nothing`, indistinguishable from an operator's own add.
-    const argv = CCD_ARGV.wsAddWorker(run.project,
-      sweepDec(deps.fleetState, `run:${run.id} dispatch`));
+    // AND IT DECLARES NOTHING, deliberately. T2 passed `sweepDec` here so the
+    // journal's `create` row would name this run the way the `hold` at step 5
+    // already does; its review measured the real `cmd_ws_add` and found no flag
+    // parser — the dec's first token binds as the SLUG and the verb dies at
+    // `_ws_slug_valid`, so on a caps-advertising box every wave-1 spawn would
+    // refuse before creating anything, the registry diff below would find zero
+    // candidates, and this run would sit at `planned` with `dispatchStartedAt`
+    // set: the exact wedge this build exists to RENDER, manufactured by it.
+    // The full argument, and the two ccd changes attribution would need, live
+    // on `wsAddWorker`'s own docstring. When it is pursued, the actor string is
+    // not to be TYPED here: `` `run:${run.id} dispatch` `` is spelled once, at
+    // the hold in step 5, and a second copy is one drift away from splitting
+    // one lane into two actors — derive it the way `rundefs.ts`'s `holdReason`
+    // single-sources the hold string.
+    const argv = CCD_ARGV.wsAddWorker(run.project);
     // BEFORE the call, never after: this is the only moment the run can say
     // "a dispatch is in flight" — the id does not exist yet, and a stamp
     // written once `runCcd` resolves would be null for the entire window it
