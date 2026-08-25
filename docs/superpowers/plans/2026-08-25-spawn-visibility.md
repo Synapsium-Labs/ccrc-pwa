@@ -523,24 +523,37 @@ coordinator that asked for it.
   `FleetSession`, `:316`), `pwa/src/fleet/SessionLine.tsx` (`.sess-held`, `:414-418`)
 - Test: the runs-screen and fleet-line suites (extend)
 
-- [ ] **Step 1: red-first, three small pins.**
+- [x] **Step 1: red-first, three small pins.**
   - `RunRow` renders the linked session's `spawnState` when it is not `null` (today the row
     reads only `unmeasured` off a `FleetSession` it already holds).
   - A wave-N≥2 row renders `resumed`/`clearedAt` — `RunSummary.resumed` has shipped since
     Build 4 and nothing in `pwa/src` has ever rendered it.
-  - `.sess-held` becomes a tap target that navigates to the runs screen (the hold string
+  - `.sess-held` becomes a tap target that navigates to the runs screen. ~~(the hold string
     already names the run: `program:<slug> wave:N/M run:<id>`, `rundefs.ts:90-93`). Parse the
     run id from the hold string in ONE place with a pinned helper — a regex inlined in a
     component is the second copy this repo forbids — and when the string does not match,
-    render exactly today's non-interactive text (absence permits; never a dead tap).
+    render exactly today's non-interactive text (absence permits; never a dead tap).~~
+    **THE PARSE IS STRUCK, MEASURED, and a re-execution that follows it reds a shipped
+    guard.** `rundefs.ts`'s `holdReason` docstring keeps that string DISPLAY-ONLY and
+    `run-routes.test.ts`'s "the reason names its run, and NOTHING in the tree parses one
+    back" enforces it by SCANNING `server/src` AND `pwa/src` — a helper that read the id out
+    of the reason with a digit capture, planted in `pwa/src`, reds it 1/1 (and so does a
+    comment that merely spells the regex; the scan strips line comments only). **The
+    BEHAVIOUR stands unchanged** — a door when there is somewhere to go, today's inert text
+    otherwise, never a dead tap — and it is decided from the run rows the PWA already holds
+    (`runForSession`, `RunSummary.sessionId`), i.e. from the same `coord.db` the server
+    answers from, which is what `holdReason` says run-awareness must come from. Strictly
+    more honest than the parse as well: a hold outliving its closed run parses to a run id
+    the board cannot show, and answers `null` here.
 
-- [ ] **Step 2: implement, keeping every existing rendering byte-identical** where the new
+- [x] **Step 2: implement, keeping every existing rendering byte-identical** where the new
   data is absent.
 
-- [ ] **Step 3: green + mutation.** Full `pwa` suite. Mutation: make the hold-parse helper
-  return a run id for a non-matching string → the never-a-dead-tap test reds; revert, count.
+- [x] **Step 3: green + mutation.** Full `pwa` suite. Mutation: ~~make the hold-parse helper
+  return a run id for a non-matching string~~ → make `runForSession` answer for a session no
+  run names → the never-a-dead-tap test reds; revert, count.
 
-- [ ] **Step 4: commit.**
+- [x] **Step 4: commit.**
 
 ## Deviations found
 

@@ -427,7 +427,17 @@ describe('the nesting bracket', () => {
     // asserting whatever the nested row happens to do.
     const held = sess({ id: 'demo-still-cove', workspace: 'still-cove', held: 'program:build9b wave:1/3 run:10' });
     const g = grp({ sessions: [sess(), held] });
-    const flat = render(<ProjectCard group={g} runs={[]} nowMs={FROZEN} onOpen={() => {}} onActions={() => {}} />);
+    // THE CONTROL CARRIES A RUN TOO (Task 5). It used to be `runs={[]}`, which
+    // stopped being a matched control the moment a run naming this session
+    // started deciding something about the row — the hold reason's door. The
+    // two renders would then have differed in the RUN DATA as well as in the
+    // nesting, and this pin would have reported that difference as if nesting
+    // had caused it. `orphaned` names the same worker as `childRun` and a
+    // parent that is NOT on this card, so `nestFleet`'s rule 3 keeps the row at
+    // top level (measured just below, in its own case) while everything the row
+    // reads off a run stays identical. Nesting is then the only variable left.
+    const orphaned = runFor({ id: 11, sessionId: 'demo-still-cove', claimedBy: 'other-project-coordinator' });
+    const flat = render(<ProjectCard group={g} runs={[orphaned]} nowMs={FROZEN} onOpen={() => {}} onActions={() => {}} />);
     const before = flat.container.querySelectorAll('.sess-line')[1]?.outerHTML;
     cleanup();
     const { container } = render(
@@ -520,5 +530,56 @@ describe('the pending child — a spawn the operator can watch arrive', () => {
                    onOpen={() => {}} onActions={() => {}} />);
     expect(container.querySelector('.proj-pending')).not.toBeNull();
     expect(container.querySelector('.proj-nest')).toBeNull();
+  });
+});
+
+// ── Task 5: the hold reason becomes a door, and the card decides ───────────
+//
+// `SessionLine` renders two forms of one cell and picks neither: whether there
+// is anywhere to send the tap is a question about this project's ACTIVE runs,
+// which this card already holds (Task 4 threaded them down for the tree) and
+// the row does not. It is answered from the run rows themselves — never by
+// reading the run id out of the hold string, which `rundefs.ts` keeps
+// display-only and `run-routes.test.ts` scans `pwa/src` to enforce.
+describe('the held cell opens the run board when a run is actually on it (Task 5)', () => {
+  const heldWorker = sess({
+    id: 'demo-still-cove', workspace: 'still-cove', held: 'program:build9b wave:1/3 run:10',
+  });
+  const cell = (): HTMLElement | null => document.querySelector('.sess-held');
+
+  it('is a door when an active run on this card names the session', () => {
+    render(<ProjectCard group={grp({ sessions: [heldWorker] })} runs={[childRun]} nowMs={FROZEN}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(cell()?.tagName).toBe('BUTTON');
+  });
+
+  it('leads to /runs, and not into the session underneath it', () => {
+    const onOpen = vi.fn();
+    history.pushState(null, '', '/');
+    render(<ProjectCard group={grp({ sessions: [heldWorker] })} runs={[childRun]} nowMs={FROZEN}
+                        onOpen={onOpen} onActions={() => {}} />);
+    fireEvent.click(cell()!);
+    expect(location.pathname).toBe('/runs');
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it('is today’s inert text when no run on this card names the session — never a dead tap', () => {
+    // A hand hold (`ccd ws-hold` with no programme behind it), a hold left
+    // behind by a run that has already closed, or a coordinator's own claim on
+    // a card whose runs have not landed yet. All three read the same way: the
+    // board has no row to show, so there is no door.
+    render(<ProjectCard group={grp({ sessions: [heldWorker] })} runs={[]} nowMs={FROZEN}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(cell()?.tagName).toBe('SPAN');
+    expect(document.querySelector('button.sess-held')).toBeNull();
+  });
+
+  it('opens no door for a run that names a DIFFERENT session on the same card', () => {
+    // The edge is `run.sessionId === session.id` and nothing looser. A card
+    // carrying one run and two held rows must not light both.
+    const other = sess({ id: 'demo-far-ridge', workspace: 'far-ridge', held: 'program:build9b wave:1/3 run:10' });
+    render(<ProjectCard group={grp({ sessions: [other] })} runs={[childRun]} nowMs={FROZEN}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(cell()?.tagName).toBe('SPAN');
   });
 });

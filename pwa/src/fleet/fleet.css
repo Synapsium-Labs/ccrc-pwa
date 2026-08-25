@@ -1204,6 +1204,49 @@
   color: var(--ink-tertiary);
 }
 
+/* Task 5: the hold reason, when a run backs it, is a DOOR onto /runs. The
+   element becomes a <button>; the cell must not. Everything below either
+   undoes a UA button default (so the two forms are indistinguishable to the
+   eye — `session-line.test.tsx` pins that the text and title are identical)
+   or buys the tap floor.
+
+   THE FLOOR IS PADDING PLUS A CANCELLING NEGATIVE MARGIN, deliberately NOT
+   `.sess-subagents`' `::before` overlay, and the difference is the cell's
+   width. That formula insets LEFT and RIGHT by `(100% - var(--tap-min)) / 2`
+   — negative on a narrow chip, which is what grows it — but `.sess-held` is
+   the row's one WIDE, shrinkable cell, where the same arithmetic is POSITIVE
+   and would shrink the target to 44px centred, making the ends of a long hold
+   string untappable. This cell needs no horizontal growth at all, only
+   vertical, and its own `overflow: hidden` above would have clipped an
+   absolutely-positioned overlay back to the 15px line anyway (the same
+   pointer-event clipping `.sess-meta`'s `overflow: clip` fix documents). A
+   grown border box is not clipped by its own overflow, so the padding
+   version needs no exception.
+
+   --sp-6 (24px, WCAG 2.2 SC 2.5.8), not --tap-min: a 44px-tall target here
+   would reach ~14px up over `.sess-open`'s whole line box, so taps on the
+   workspace name would open the run board instead — a WRONG control, worse
+   than a near-miss. `.sess-open` is positioned with `z-index: 1` for exactly
+   this overlap and keeps winning the strip they share. */
+button.sess-held {
+  padding: calc((var(--sp-6) - var(--text-xs) * var(--leading-tight)) / 2) 0;
+  margin: calc((var(--text-xs) * var(--leading-tight) - var(--sp-6)) / 2) 0;
+  background: none;
+  border: 0;
+  /* `font: inherit` then the family again: the shorthand is what strips the UA
+     button font, and it also outranks `.sess-held`'s own `font-family`
+     declaration above (0,1,1 beats 0,1,0), so the mono face has to be restated
+     here or the cell silently changes typeface the moment it becomes a door.
+     `color` is deliberately NOT restated — `.sess-held` above and
+     `.sess-line--active .sess-held` (0,2,0, which still outranks this rule)
+     both keep answering for it, and a copy here would be one more place to
+     forget. */
+  font: inherit;
+  font-family: var(--font-mono);
+  text-align: left;
+  cursor: pointer;
+}
+
 .sess-acct {
   font-family: var(--font-mono);
   white-space: nowrap;
@@ -1898,6 +1941,15 @@
   color: var(--ink-secondary);
 }
 .run-row .run-dispatch-glyph { color: var(--ink-tertiary); }
+/* Task 5 (spawn visibility): the resume D-1 has always recorded. Grouped with
+   `.run-tally`/`.run-when`'s ink rather than given one of its own — a resumed
+   wave is a fact about how this run started, not an alarm, and the branch that
+   IS worth a second look is told apart by its WORDS ("resumed, not cleared"),
+   the board's standing two-cue rule, never by a hue. Self-grounded under
+   `.run-row` exactly as its neighbours are; no new token pair. */
+.run-row .run-resumed {
+  font-size: var(--text-2xs); color: var(--ink-tertiary);
+}
 /* Task 12, spec §4.3, D-287: a SIBLING of `.run-open` inside `.run-row`'s
    own `<li>`, never a descendant of it — see RunsScreen.tsx's own comment on
    why a nested button is the defect this shape avoids. Self-grounded via

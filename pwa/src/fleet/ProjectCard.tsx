@@ -16,10 +16,11 @@ import { Fragment } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetSession, ProjectedHome, RosterWire, RunSummary } from '../../../shared/api';
 import { accountColorVar, accountLabel, homeAbleLabelList } from '../lib/accounts';
+import { navigate } from '../lib/router';
 import { formatElapsed } from './formatReset';
 import type { FleetGroup } from './groupFleet';
 import { nestFleet, type FleetRow } from './nestFleet';
-import { DISPATCH_GLYPH, dispatchWindow } from './runWords';
+import { DISPATCH_GLYPH, dispatchWindow, runForSession } from './runWords';
 import { SessionLine } from './SessionLine';
 import './fleet.css';
 
@@ -183,6 +184,19 @@ export function ProjectCard({
   const rows = nestFleet(group.sessions, runs);
   const rowKey = (row: FleetRow): string =>
     row.kind === 'session' ? row.session.id : `spawn:${row.run.id}`;
+  // Task 5: the hold reason's door, decided HERE because this is the level that
+  // holds the runs. `runForSession` answers off the run rows — never by reading
+  // the id out of the hold string, which stays display-only (its docstring
+  // carries the measurement). `null` when the board has no row for this
+  // session, and `SessionLine` renders exactly the inert cell it always did for
+  // that, so a hand hold and a hold outliving its run both read as text.
+  //
+  // `/runs` unfocused, because there is no per-run route to focus
+  // (`ArchiveConflictSheet`'s own note names that as the first of the three
+  // things such a link would need). The board groups by programme and the cell
+  // names the programme, so the operator lands looking at the right group.
+  const openRunFor = (session: FleetSession): (() => void) | null =>
+    runForSession(runs, session.id) === null ? null : () => navigate('/runs');
   const rowBody = (row: FleetRow): ReactNode =>
     row.kind === 'session' ? (
       <SessionLine
@@ -191,6 +205,7 @@ export function ProjectCard({
         selected={row.session.id === selectedId}
         onActions={onActions}
         roster={roster}
+        onOpenRun={openRunFor(row.session)}
       />
     ) : (
       <PendingSpawn run={row.run} nowMs={nowMs} />
@@ -313,7 +328,7 @@ export function ProjectCard({
           {archivedOpen && (
             <div className="proj-archived-body">
               {group.archived.map((s) => (
-                <SessionLine key={s.id} session={s} onOpen={onOpen} selected={s.id === selectedId} onActions={onActions} roster={roster} />
+                <SessionLine key={s.id} session={s} onOpen={onOpen} selected={s.id === selectedId} onActions={onActions} roster={roster} onOpenRun={openRunFor(s)} />
               ))}
             </div>
           )}

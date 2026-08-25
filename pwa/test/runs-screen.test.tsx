@@ -3,7 +3,7 @@ import { StrictMode } from 'react';
 import { act, cleanup, render, screen, fireEvent } from '@testing-library/react';
 import { RUN_STATES, SPAWN_STALL_MS, type FleetSession, type RunSummary } from '../../shared/api';
 import { RunsScreen } from '../src/screens/RunsScreen';
-import { RUN_ORDER, RUN_WORD, dispatchWindow, itemTallyLabel, programWave, runItems } from '../src/fleet/runWords';
+import { RUN_ORDER, RUN_WORD, dispatchWindow, itemTallyLabel, programWave, resumeNote, runItems } from '../src/fleet/runWords';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
@@ -818,5 +818,112 @@ describe('the run board renders the dispatch window — and the wedge (Task 3)',
       expect(screen.queryByText(/dispatching/i)).toBeNull();
       expect(screen.getByText(RUN_WORD.dispatched)).toBeInTheDocument();
     });
+  });
+});
+
+// ── Task 5: the facts that already ship, finally read ──────────────────────
+//
+// Nothing below is a new WIRE fact. `FleetSession.spawnState` has ridden the
+// fleet frame since §1.6b and `RunSummary.resumed`/`clearedAt` since Build 4 —
+// and this board, which already holds the whole `FleetSession` for every row it
+// links (it looks one up by `sessionId` for the degrade note), rendered neither.
+// The gap was never measurement; it was reading.
+
+describe('the run row renders its session’s spawn verdict (Task 5)', () => {
+  /** Mounts the board with one run and the session it links to. */
+  const withSession = (over: Partial<FleetSession>): void => {
+    const store = makeStore();
+    act(() => { store.setState({ runs: [r()], runsFrameSeen: true, sessions: [sess(over)] }); });
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+  };
+  const chip = (): HTMLElement | null => document.querySelector('.sess-spawn');
+
+  it('renders the verdict with SessionLine’s own class and word — one vocabulary, two surfaces', () => {
+    // `.sess-spawn`, not a second `.run-…` class for the identical meaning:
+    // the same reuse this row already makes of `.sess-unmeasured`, and the
+    // reason RunsScreen.tsx gives for it. The WORD comes from the one table
+    // (`spawnWords.ts`), so the two surfaces cannot drift into two names for
+    // one verdict.
+    withSession({ spawnState: 'blocked' });
+    expect(chip()?.textContent).toBe('blocked');
+    expect(chip()).toHaveAttribute('data-spawn', 'blocked');
+  });
+
+  it('says nothing for a healthy spawn — `ready` goes THROUGH the table, it is not special-cased', () => {
+    // `SPAWN_WORD` is typed `string | null` precisely so a member can be
+    // SILENT; a row whose last spawn was clean has nothing to qualify.
+    withSession({ spawnState: 'ready' });
+    expect(chip()).toBeNull();
+  });
+
+  it('says nothing for the shape every healthy live session actually carries — the no-regression baseline', () => {
+    // All eighteen live sessions carry `spawnState: null` with
+    // `started: true`. A rule of "chip on anything not ready" would light a
+    // warning on every row on the board; this is the half that keeps it dark.
+    withSession({ spawnState: null, started: true });
+    expect(chip()).toBeNull();
+  });
+
+  it('shows a verdict this build cannot NAME as itself, prefixed — never as silence', () => {
+    // §1.7's render-seam rule, and the reason it has to hold on this surface
+    // too: the two deploy lanes have no version handshake, so a newer agent's
+    // verdict reaching an older bundle is a real window. Hiding an unknown
+    // verdict is strictly worse than showing an ugly one.
+    withSession({ spawnState: 'quarantined' as FleetSession['spawnState'] });
+    expect(chip()?.textContent).toBe('? quarantined');
+  });
+
+  it('says nothing at all for a run whose session the fleet frame has not named', () => {
+    // The `planned` row's ordinary shape: no session id yet, so no session to
+    // read a verdict off. A chip here would be a claim about a pane that does
+    // not exist.
+    const store = makeStore();
+    act(() => { store.setState({ runs: [r({ sessionId: null, state: 'planned' })], runsFrameSeen: true }); });
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    expect(chip()).toBeNull();
+  });
+});
+
+describe('the run row renders the resume it has always carried (D-1, Task 5)', () => {
+  const board2 = (over: Partial<RunSummary>): void => {
+    const store = makeStore();
+    act(() => { store.setState({ runs: [r(over)], runsFrameSeen: true }); });
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+  };
+  const cellR = (): HTMLElement | null => document.querySelector('.run-resumed');
+
+  it('says nothing for a wave that spawned fresh — the no-regression baseline', () => {
+    board2({ resumed: false, clearedAt: null });
+    expect(cellR()).toBeNull();
+  });
+
+  it('says the wave was resumed, and that the /clear landed', () => {
+    // D-1: wave >= 2 cannot spawn fresh into an existing workspace, so the
+    // dispatch route resumes the pane and injects `/clear` through the send
+    // path. `clearedAt` is the PROOF the second step ran.
+    board2({ resumed: true, clearedAt: Date.now() - 120_000 });
+    expect(cellR()?.textContent).toBe('resumed');
+    expect(cellR()).toHaveAttribute('data-cleared', 'true');
+  });
+
+  it('says something DIFFERENT when the resume has no proof its context was cleared', () => {
+    // The two must not collapse into one word. A resumed pane whose `/clear`
+    // never landed is carrying the previous wave's context into this one —
+    // which is the entire reason D-1 injects it — and that is the operator's
+    // problem, not a rendering detail.
+    board2({ resumed: true, clearedAt: null });
+    expect(cellR()).not.toBeNull();
+    expect(cellR()?.textContent).not.toBe('resumed');
+    expect(cellR()?.textContent).toMatch(/not cleared/i);
+    expect(cellR()).toHaveAttribute('data-cleared', 'false');
+  });
+
+  it('degrades a row that reached it without the key at all to silence, never to a half-sentence', () => {
+    // The same tolerance `runItems`/`runClosedAt`/`dispatchWindow` already
+    // carry, for the same measured reason: nothing between the wire and this
+    // renderer validates a row's members.
+    const older = { ...r() } as Partial<RunSummary>;
+    delete older.resumed;
+    expect(resumeNote(older as RunSummary, 0)).toBeNull();
   });
 });

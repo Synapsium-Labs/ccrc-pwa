@@ -34,7 +34,8 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { type FleetSession, type RunSummary, unmeasuredFields } from '../../../shared/api';
-import { DISPATCH_GLYPH, RUN_GLYPH, RUN_WORD, anyDispatchPending, dispatchWindow, isRunClosed, itemTallyLabel, programWave, runClosedAt, runItems, runState, runsByProgram } from '../fleet/runWords';
+import { DISPATCH_GLYPH, RUN_GLYPH, RUN_WORD, anyDispatchPending, dispatchWindow, isRunClosed, itemTallyLabel, programWave, resumeNote, runClosedAt, runItems, runState, runsByProgram } from '../fleet/runWords';
+import { spawnChip } from '../fleet/spawnWords';
 import { AbandonSheet } from '../fleet/AbandonSheet';
 import { CoordBanner } from '../fleet/CoordBanner';
 import { StartProgramSheet } from '../fleet/StartProgramSheet';
@@ -110,6 +111,19 @@ function RunRow({
   // byte-identically to how it read before the column existed, which is the
   // no-regression half of this branch.
   const spawn = dispatchWindow(run, nowMs);
+  // Task 5, both of them facts this board already held and did not read.
+  //
+  // The spawn verdict comes off the SESSION this row links to — the same
+  // `FleetSession` the degrade note above is read from — through the one table
+  // (`spawnWords.ts`), which is where it moved when this became its second
+  // surface. A row with no session says nothing: there is no pane to have a
+  // last spawn.
+  //
+  // The resume is the run's OWN fact and has ridden `RunSummary` since Build 4
+  // with nothing in `pwa/src` ever rendering it. `resumeNote` decides; this
+  // picks no words.
+  const verdict = session === null ? null : spawnChip(session);
+  const resume = resumeNote(run, nowSec);
   const body = (
     <>
       <span className="run-glyph" aria-hidden="true">{RUN_GLYPH[state]}</span>
@@ -143,6 +157,25 @@ function RunRow({
         >
           <span className="run-dispatch-glyph" aria-hidden="true">{DISPATCH_GLYPH.stalled}</span>
           {'dispatch never completed — a workspace may exist'}
+        </span>
+      )}
+      {/* The linked session's spawn verdict, in `SessionLine`'s own class and
+          `SessionLine`'s own word — the identical reuse this row already makes
+          of `.sess-unmeasured` next door, and for the identical reason: a
+          second `.run-…` class for one meaning is two vocabularies over one
+          field. `.sess-line` and `.run-row` both sit on `--bg-surface`, so the
+          chip's ink brings no new contrast pair with it. */}
+      {verdict !== null && (
+        <span className="sess-spawn" data-spawn={verdict.data} title={`last spawn: ${verdict.data}`}>
+          {verdict.word}
+        </span>
+      )}
+      {/* D-1, finally on screen. `data-cleared` carries the half the word
+          alone cannot: the two branches are two different facts, and a test
+          that could only read the string would be pinning prose. */}
+      {resume !== null && (
+        <span className="run-resumed" data-cleared={String(resume.cleared)} title={resume.title}>
+          {resume.word}
         </span>
       )}
       {degradedFields.length > 0 && (

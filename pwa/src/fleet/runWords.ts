@@ -7,6 +7,7 @@
 // Two cues per row, always: the word is the fact and the glyph is the shape, so
 // no state has to be read out of colour (StatusDot.tsx's own discipline).
 import { SPAWN_STALL_MS, isRunState, type RunItemTally, type RunState, type RunSummary } from '../../../shared/api';
+import { formatAge } from './formatReset';
 
 export const RUN_WORD: Record<RunState, string> = {
   planned: 'planned',
@@ -191,6 +192,81 @@ export function anyDispatchPending(
   runs: readonly { state: RunState; dispatchStartedAt?: number | null }[],
 ): boolean {
   return runs.some(isDispatchPending);
+}
+
+/** The run — if any — that this list says is being worked in that session
+ *  (Task 5). One reader, so the fleet card's hold-reason door and anything that
+ *  follows it ask the same question the same way.
+ *
+ *  THE ANSWER COMES FROM THE RUN ROWS, NEVER FROM THE HOLD STRING. The hold
+ *  text on a session already spells `program:<slug> wave:N/M run:<id>` and it is
+ *  tempting to read the id back out of it — `rundefs.ts`'s `holdReason` calls
+ *  that out as DISPLAY-ONLY and `run-routes.test.ts` scans both `server/src` and
+ *  `pwa/src` for a parser and fails the build on one — including one written in
+ *  a COMMENT, which is why this note describes the regex instead of spelling it
+ *  (measured on this branch: a helper that read the id out of the reason with a
+ *  digit capture, dropped into `pwa/src`, reds that pin, and so did the first
+ *  draft of this very docstring). The `runs` frame is the
+ *  same `coord.db` the server itself answers from, so this is the cheaper source
+ *  as well as the sanctioned one — and it is strictly more honest, because a
+ *  hold left behind by a closed run parses to a run id the board cannot show,
+ *  while this answers `null` for it.
+ *
+ *  Callers pass the ACTIVE runs they already hold, so `null` means "the board
+ *  has no row for this session" — exactly the question a door needs answered,
+ *  and not the same as "this session has never had a run". */
+export function runForSession(
+  runs: readonly RunSummary[], sessionId: string,
+): RunSummary | null {
+  return runs.find((r) => r.sessionId === sessionId) ?? null;
+}
+
+/** What the board says about a wave that RESUMED its session rather than
+ *  spawning one (Task 5). Two shapes, never one, because they are two
+ *  different facts about the same run:
+ *    • `cleared: true`  — the resume happened and the `/clear` landed;
+ *    • `cleared: false` — the resume happened and NOTHING proves the context
+ *      was cleared, so this wave may be carrying the previous wave's context.
+ *
+ *  D-1 is the whole reason there is anything to say: no ccd verb can spawn
+ *  fresh into an existing workspace, so wave N>=2 resumes the pane and the
+ *  dispatch route injects `/clear` through the send path afterwards.
+ *  `clearedAt` is the PROOF the second step ran — and a run where the first
+ *  step succeeded and the second did not is precisely the row an operator
+ *  needs to look at, so collapsing the pair into one word ("resumed") would
+ *  render the interesting case and the ordinary one identically.
+ *
+ *  `run.wave >= 2` is deliberately NOT the condition. `resumed` is the fact the
+ *  server WROTE at dispatch; the wave number is what caused it. Reading the
+ *  cause instead of the record is a renderer re-deriving a decision it was
+ *  handed — and it would be wrong for any future path that resumes a wave 1.
+ *
+ *  Tolerant on both fields, the same idiom `runItems`/`runClosedAt`/
+ *  `dispatchWindow` already carry and for the same measured reason: nothing
+ *  between the wire and this renderer validates a row's members, so a row from
+ *  an older build arrives with the key MISSING and `undefined` must degrade to
+ *  silence, never to half a sentence. */
+export interface ResumeNote { word: string; cleared: boolean; title: string }
+
+export function resumeNote(
+  run: { wave: number; resumed?: boolean; clearedAt?: number | null },
+  nowSec: number,
+): ResumeNote | null {
+  if (run.resumed !== true) return null;
+  const clearedAt = run.clearedAt ?? null;
+  return clearedAt === null
+    ? {
+        word: 'resumed, not cleared',
+        cleared: false,
+        title: `wave ${run.wave} resumed its session (D-1) and nothing recorded the /clear landing — `
+          + 'this wave may be carrying the previous one’s context',
+      }
+    : {
+        word: 'resumed',
+        cleared: true,
+        title: `wave ${run.wave} resumed its session (D-1); the /clear landed `
+          + `${formatAge(nowSec - Math.floor(clearedAt / 1000))}`,
+      };
 }
 
 /** Board order: the ones that can move first, the ones that are over last.
