@@ -180,8 +180,43 @@ describe('renderMailNudge', () => {
     expect(nudge).toContain('x-ccrc-mail-token');
   });
 
-  it('is short — well under a kilobyte, the whole point of a "tiny" nudge', () => {
+  // Live incident 2026-08-25 (a MekWarLive worker): this nudge is the ONLY
+  // protocol text guaranteed CURRENT in a recipient's pane — a skill loaded
+  // into a session's context goes stale across deploys, and a peer-mail
+  // recipient may have no skill loaded at all. The old line named the routes
+  // and the token PATH but not the server ADDRESS (the worker guessed a wrong
+  // host) nor the EXTRACTION rule (`cat` sends the token file's `#`-comment
+  // preamble as the header value — not a legal header, so every call answers
+  // a socket-level 400 before any route runs; `coord/token.ts`'s
+  // `extractToken` is the documented shape). The next three tests pin the two
+  // teachings that close those failure modes.
+  it('derives the API base the way the skills do — CCRC_SERVER_URL in ~/.ccrc/agent.env, ws->http/wss->https — so a protocol-less reader never guesses a host', () => {
     const nudge = renderMailNudge('demo-coordinator');
-    expect(nudge.length).toBeLessThan(300);
+    expect(nudge).toContain('CCRC_SERVER_URL');
+    expect(nudge).toContain('~/.ccrc/agent.env');
+    expect(nudge).toContain('ws->http');
+    expect(nudge).toContain('wss->https');
+  });
+
+  it('states the extraction rule — the one non-#, non-blank line, stripped — and says never cat', () => {
+    const nudge = renderMailNudge('demo-coordinator');
+    expect(nudge).toContain('non-#');
+    expect(nudge).toContain('non-blank');
+    expect(nudge.toLowerCase()).toContain('never cat');
+  });
+
+  // NEGATIVE: the address is DERIVED, never BAKED. A literal http(s)://host
+  // in this line would go stale the day the server is re-exposed under a new
+  // name (`ccrc expose` regenerates the exposure at will) — and unlike a
+  // skill, nothing redeploys a stored envelope. No scheme://, ever.
+  it('bakes no literal URL — no http(s):// or ws(s):// anywhere in the line', () => {
+    const nudge = renderMailNudge('demo-coordinator');
+    expect(nudge).not.toMatch(/https?:\/\//);
+    expect(nudge).not.toMatch(/wss?:\/\//);
+  });
+
+  it('is short — still well under a kilobyte, the whole point of a "tiny" nudge', () => {
+    const nudge = renderMailNudge('demo-coordinator');
+    expect(nudge.length).toBeLessThan(600);
   });
 });

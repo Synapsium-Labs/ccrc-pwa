@@ -119,10 +119,28 @@ export function renderEnvelope(m: EnvelopeInput): string {
  *  never runs and there is nothing for the pane to wrap between rows. See
  *  `inject/send.ts`'s own `ECHO_NEEDLE`/`ECHO_NEEDLE`-sized head comment for
  *  why the constant 24-char prefix is what makes the echo/submit checks
- *  trivial regardless of terminal width. */
+ *  trivial regardless of terminal width.
+ *
+ *  SELF-SUFFICIENT BY INCIDENT (2026-08-25, a live MekWarLive worker): this
+ *  line is the ONLY protocol text guaranteed CURRENT in the recipient's pane
+ *  — a skill loaded into a session goes stale across deploys, and a peer-mail
+ *  recipient may have no skill loaded at all. The old line named the routes
+ *  and the token PATH but not the server ADDRESS (the worker guessed a wrong
+ *  host) nor the EXTRACTION rule (it `cat`ed the token file — a `#`-comment
+ *  preamble above ONE value line, `coord/token.ts`'s `extractToken` — into
+ *  the header, an illegal value that 400s at the socket before any route
+ *  runs). So the nudge now teaches both, the same way the skill corpora do:
+ *  the API base is DERIVED from `CCRC_SERVER_URL` in `~/.ccrc/agent.env`
+ *  (ws->http, wss->https) — NEVER a baked host, which would go stale the day
+ *  `ccrc expose` re-exposes the server, and nothing redeploys a stored
+ *  envelope — and the token is the one non-#, non-blank line of the file,
+ *  whitespace-stripped, never cat. No token VALUE, no secret of any kind,
+ *  ever belongs in this line. */
 export function renderMailNudge(toId: string): string {
   return `ccrc-mail: you have new mail. List (GET /api/mail?to=${toId}); per row use its ` +
     `deliveryId, NOT id: GET /api/mail/<deliveryId>, ack POST /api/mail/<deliveryId>/ack ` +
     `body {"fromId":"${toId}","fromUuid":"<your uuid>"}. ` +
-    `Token: ~/.cc-secrets/ccrc-mail.token, header x-ccrc-mail-token.`;
+    `API base: CCRC_SERVER_URL in ~/.ccrc/agent.env (ws->http, wss->https), never a guessed host. ` +
+    `Token (header x-ccrc-mail-token): the one non-#, non-blank line of ` +
+    `~/.cc-secrets/ccrc-mail.token, whitespace-stripped, never cat (comment preamble).`;
 }
