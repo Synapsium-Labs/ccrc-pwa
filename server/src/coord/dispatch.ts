@@ -239,6 +239,11 @@ export async function dispatchRun(
     // creation (the 2026-08-13 ruling, task #37). The PWA's ordinary
     // workspace-add keeps `wsAdd` and the box's own RC default.
     const argv = CCD_ARGV.wsAddWorker(run.project);
+    // BEFORE the call, never after: this is the only moment the run can say
+    // "a dispatch is in flight" — the id does not exist yet, and a stamp
+    // written once `runCcd` resolves would be null for the entire window it
+    // exists to describe. Nothing clears it; `state` ends the render.
+    coord.markDispatchStarted(id, Date.now());
     const res = await deps.runCcd(argv);
     // §1.5: NO EARLY RETURN HERE ANY MORE. `!res.ok` used to short-circuit on
     // this line, before the diff below — see the gate after `winner`.

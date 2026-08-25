@@ -94,7 +94,8 @@ const run = (over: Partial<RunSummary> = {}): RunSummary => ({
   wave: 3, waveOf: 4, project: 'ccrc-pwa',
   sessionId: 'ccrc-pwa-clear-cove', workspace: 'clear-cove', branch: 'ws/clear-cove',
   state: 'working', resumed: false, clearedAt: null,
-  openedAt: Date.now() - 1_000_000, dispatchedAt: Date.now() - 900_000, closedAt: null,
+  openedAt: Date.now() - 1_000_000, dispatchStartedAt: null,
+  dispatchedAt: Date.now() - 900_000, closedAt: null,
   handoffCommit: null, items: { done: 3, total: 7 }, unreadMail: 0, ...over,
 });
 

@@ -69,7 +69,8 @@ const runFor = (sessionId: string, id: number, program: string,
   id, program, programTitle: 'Fleet controls', wave, waveOf, project: 'demo',
   sessionId, workspace: sessionId, branch: `ws/${sessionId}`,
   state: 'working', resumed: false, clearedAt: null,
-  openedAt: 1785300000000, dispatchedAt: 1785300000000, closedAt: null,
+  openedAt: 1785300000000, dispatchStartedAt: null,
+  dispatchedAt: 1785300000000, closedAt: null,
   handoffCommit: null, items: { done: 0, total: 0 }, unreadMail: 0,
 });
 

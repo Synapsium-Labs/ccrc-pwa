@@ -251,6 +251,9 @@ describe('the reconstruction drill', () => {
     // never literally appear.
     const UNRECOVERABLE = [
       'dispatchedAt', 'closedAt',        // wall-clock instants; the ledger keeps order, not time
+      'dispatchStartedAt',               // the same class, and MORE so: it measures a window that
+                                         // ended before any artifact was written — a dispatch that
+                                         // never completed leaves no ledger line at all
       'resumed', 'clearedAt',            // the /clear proof (D-1); no artifact stamps it
       'openedAt',                        // same class of wall-clock instant as dispatchedAt/closedAt
       'handoffCommit',                   // the worker's claimed commit sha; nothing persists it outside the DB
@@ -269,16 +272,17 @@ describe('the reconstruction drill', () => {
     const RUN_SUMMARY_KEYS: Record<keyof RunSummary, true> = {
       id: true, program: true, programTitle: true, wave: true, waveOf: true,
       project: true, sessionId: true, workspace: true, branch: true, state: true,
-      resumed: true, clearedAt: true, openedAt: true, dispatchedAt: true,
+      resumed: true, clearedAt: true, openedAt: true, dispatchStartedAt: true,
+      dispatchedAt: true,
       closedAt: true, handoffCommit: true, items: true, unreadMail: true,
     };
-    expect(Object.keys(RUN_SUMMARY_KEYS).length).toBe(18);
+    expect(Object.keys(RUN_SUMMARY_KEYS).length).toBe(19);
 
     const r = reconstruct(fx);
     for (const field of UNRECOVERABLE) {
       expect(Object.keys(r), `${field} was reconstructed after all`).not.toContain(field);
     }
-    expect(UNRECOVERABLE.length).toBe(12);
+    expect(UNRECOVERABLE.length).toBe(13);
   });
 
   it('refuses to invent a program when the ledger is missing', () => {

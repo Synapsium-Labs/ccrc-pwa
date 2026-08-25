@@ -575,6 +575,54 @@ export const MIGRATIONS: readonly string[] = [
     updatedAt INTEGER NOT NULL
   );
   `,
+
+  // ── 5: user_version 4 -> 5 ────────────────────────────────────────────────
+  // `runs.dispatchStartedAt` — WHEN THIS RUN'S DISPATCH BEGAN. One column, and
+  // the smallest honest thing that closes the dispatch window.
+  //
+  // WHAT IT MEANS. Stamped immediately BEFORE the `ws-add` that mints a fresh
+  // workspace (`coord/dispatch.ts`), which is the one moment the run knows a
+  // dispatch is in flight AND the session id does not exist yet — the server
+  // learns that id by REGISTRY DIFF, after the call returns, so until then
+  // nothing CAN name the row. For the whole of that stretch the console
+  // previously showed, in order, nothing at all, then a `dead` row qualified
+  // "never started", then "unclaimed — a live pane with no claim": three
+  // fault-shaped words for an entirely normal event, beside a run board sitting
+  // on `planned`.
+  //
+  // A MEASUREMENT, NEVER A MODE FLAG, AND SO NOTHING EVER CLEARS IT. `state`
+  // moving to `dispatched` is what ends the "dispatching" rendering; this
+  // timestamp then STAYS, as forensic material — `dispatchedAt -
+  // dispatchStartedAt` is how long the spawn actually took, which a flag
+  // cleared on success would have destroyed. A retry overwrites it with the new
+  // attempt's start, which is the honest answer to "when did the dispatch that
+  // is running now begin". One writer (`CoordStore.markDispatchStarted`), one
+  // reader per consumer; there is no second writer to drift.
+  //
+  // AND IT NAMES THE WEDGE. `dispatch.ts`'s own comment on the refusal path
+  // says it: "a run stuck in `planned` beside an unexplained new workspace is a
+  // state no verb names, which is the class this build is judged on." With this
+  // column, `planned` + a `dispatchStartedAt` older than `SPAWN_STALL_MS`
+  // (shared/api.ts — a RENDERING threshold, deliberately not a copy of the
+  // `ws-add` verb TIMEOUT) IS that state, rendered, for the first time.
+  //
+  // NOT A NEW RunState, deliberately: `RUN_STATES` and `RUN_TRANSITIONS` are
+  // untouched and the coordinator skill's clauses say nothing new. `planned`
+  // was overloaded — "opened, nobody has dispatched" and "dispatch in flight"
+  // — and one nullable integer separates them without touching the machine.
+  //
+  // ADDITIVE, AND A SEPARATE MIGRATION, for the reason migrations 2, 3 and 4
+  // each restate in turn: `db.ts` runs `for (let v = current; v <
+  // COORD_SCHEMA_VERSION; v++)`, so an edit to an already-applied entry never
+  // runs again against a file already past it. MIGRATIONS[0..3] are FROZEN.
+  // NULLABLE WITH NO DEFAULT is the whole contract on the read side: NULL means
+  // "no dispatch has ever started for this run", and a default would collapse
+  // that into "one started at the epoch" — the overloaded-null defect at the
+  // one seam this column exists to keep honest. `ALTER TABLE ... ADD COLUMN` is
+  // the only statement here; nothing is rebuilt, renamed or repurposed.
+  `
+  ALTER TABLE runs ADD COLUMN dispatchStartedAt INTEGER;
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

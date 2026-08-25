@@ -3168,6 +3168,25 @@ export interface RunSummary {
   resumed: boolean;
   clearedAt: number | null;
   openedAt: number;
+  /** When THIS run's dispatch began — stamped immediately before the `ws-add`
+   *  that mints the workspace, which is the one moment a dispatch is in flight
+   *  and `sessionId` is still null (the server learns the id by registry diff,
+   *  after the call returns, so until then nothing can name the row).
+   *
+   *  ABSENT (`null`) MEANS NO DISPATCH HAS EVER STARTED for this run — the
+   *  ordinary state of a wave N+1 opened but not yet dispatched, and never a
+   *  stand-in for a value that could not be read.
+   *
+   *  NEVER CLEARED. `state` moving to `dispatched` is what stops a renderer
+   *  saying "dispatching"; this stays, and `dispatchedAt - dispatchStartedAt`
+   *  is then how long the spawn actually took. A retry overwrites it with the
+   *  new attempt's start.
+   *
+   *  AND IT NAMES THE WEDGE: a run still `planned` carrying a
+   *  `dispatchStartedAt` older than `SPAWN_STALL_MS` is a dispatch that never
+   *  completed — very likely beside a workspace nothing claimed. That state
+   *  previously had no name at all. */
+  dispatchStartedAt: number | null;
   dispatchedAt: number | null;
   closedAt: number | null;
   handoffCommit: string | null;
@@ -3175,6 +3194,18 @@ export interface RunSummary {
   /** Unacked mail addressed to this run's session. */
   unreadMail: number;
 }
+
+/** How long a `planned` run may carry a `dispatchStartedAt` before the
+ *  console calls the dispatch stalled. Deliberately >= the `ws-add` verb
+ *  ceiling (`CCD_VERB_TIMEOUT_MS`, server-side) rather than a copy of it:
+ *  that number is a TIMEOUT — what the runner enforces, and the point at
+ *  which the call is killed — and this one is a RENDERING threshold, which
+ *  must not fire until the timeout has certainly elapsed. Two different
+ *  questions, so two different names; neither is derived from the other, and
+ *  `single-definition` sees one of each. Widening the verb ceiling therefore
+ *  does NOT silently move what the console calls stalled — that is a
+ *  deliberate edit here, made with this paragraph's inequality in hand. */
+export const SPAWN_STALL_MS = 360_000;
 
 /** One mail row, for the feed and the session strip (both PR J). */
 export interface MailSummary {

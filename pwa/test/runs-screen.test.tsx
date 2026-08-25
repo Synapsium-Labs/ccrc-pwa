@@ -13,12 +13,19 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 // (it's `waveOf`), there is no `holdReason` at all (never rides the wire —
 // see RunsScreen.tsx's own header comment), and `items` carries only
 // `{done,total}` — no `failed`/`blocked` columns exist anywhere.
+//
+// `dispatchStartedAt` DEFAULTS TO NULL ON PURPOSE, and it is not laziness: null
+// is what an older build's row carries and what a run nobody has dispatched
+// carries, so this default IS the no-regression baseline — every case below
+// must keep rendering exactly as it did before the column existed. A case about
+// the dispatch window sets it explicitly through `over`.
 const r = (over: Partial<RunSummary> = {}): RunSummary => ({
   id: 3, program: 'build4-transcript-surface', programTitle: 'Build 4: transcript surface',
   wave: 3, waveOf: 4, project: 'ccrc-pwa',
   sessionId: 'ccrc-pwa-clear-cove', workspace: 'clear-cove', branch: 'ws/clear-cove',
   state: 'working', resumed: false, clearedAt: null,
-  openedAt: Date.now() - 1_000_000, dispatchedAt: Date.now() - 900_000, closedAt: null,
+  openedAt: Date.now() - 1_000_000, dispatchStartedAt: null,
+  dispatchedAt: Date.now() - 900_000, closedAt: null,
   handoffCommit: null, items: { done: 3, total: 7 }, unreadMail: 0, ...over,
 });
 

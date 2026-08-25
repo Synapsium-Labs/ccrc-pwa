@@ -118,17 +118,17 @@ are unchanged.
 - Consumes: `MIGRATIONS` (`schema.ts`), `toRunSummary` (`store.ts:62`, a spread — a new
   `RunRow` field reaches the wire automatically once `hydrateRun` reads it).
 
-- [ ] **Step 1: read before writing.** `schema.ts`'s `MIGRATIONS` tail (the three existing
+- [x] **Step 1: read before writing.** `schema.ts`'s `MIGRATIONS` tail (the three existing
   entries and their FROZEN notes, esp. the Build 9b entry's shape), `store.ts`'s `RunRow`
   type + `hydrateRun` + `toRunSummary` (`:62-65`), the `runs` DDL (`schema.ts:65-86`), and
   `dispatch.ts:226-250` (the BEFORE read, the `wsAddWorker` call at `:243`).
 
-- [ ] **Step 2: red-first — the migration.** In `coord-db.test.ts`, beside its existing
+- [x] **Step 2: red-first — the migration.** In `coord-db.test.ts`, beside its existing
   migration pins: a fresh database has `dispatchStartedAt` on `runs` (read `pragma
   table_info(runs)`), it is nullable with no default, and `COORD_SCHEMA_VERSION` derives to
   5. Run the suite; expect RED.
 
-- [ ] **Step 3: red-first — the writer.** In the dispatch suite: a fresh-spawn dispatch
+- [x] **Step 3: red-first — the writer.** In the dispatch suite: a fresh-spawn dispatch
   stamps `dispatchStartedAt` **before** the `ws-add` call — assert it by having the fixture
   runner READ the row when it is invoked (the runner is a test double; capture
   `coord.run(id).dispatchStartedAt` at call time), not merely after the fact. That ordering
@@ -137,7 +137,7 @@ are unchanged.
   succeeds (assert it survives on the `dispatched` row), and a second dispatch attempt
   overwrites it with the later time. Expect RED.
 
-- [ ] **Step 4: implement.**
+- [x] **Step 4: implement.**
   - `schema.ts`: append `MIGRATIONS[4]` = `ALTER TABLE runs ADD COLUMN dispatchStartedAt
     INTEGER;` with a comment block in the file's voice: what the column means (when THIS
     run's dispatch began), that it is a measurement never cleared, that `state` is what stops
@@ -180,18 +180,18 @@ are unchanged.
 export const SPAWN_STALL_MS = 360_000;
 ```
 
-- [ ] **Step 5: green.** Run the two suites above plus `test/coord-store.test.ts`,
+- [x] **Step 5: green.** Run the two suites above plus `test/coord-store.test.ts`,
   `test/single-definition.test.ts`, `test/typecheck-tests.test.ts` (isolate it if it reds
   under load — D-224), `test/topology-clean.test.ts`.
 
-- [ ] **Step 6: mutation ceremonies, each planted alone, measured, reverted:**
+- [x] **Step 6: mutation ceremonies, each planted alone, measured, reverted:**
   1. Move the `markDispatchStarted` call to AFTER `await deps.runCcd(argv)` → the ordering
      test reds (state the count).
   2. Clear the column in the dispatch tx (`dispatchStartedAt = NULL`) → the survives-success
      test reds.
   3. Drop the column from `MIGRATIONS[4]` → the migration pin reds.
 
-- [ ] **Step 7: commit** with measured counts in the body.
+- [x] **Step 7: commit** with measured counts in the body.
 
 ### Task 2: the journal learns who spawned the worker — and the wire learns who owns the run
 

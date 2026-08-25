@@ -157,13 +157,15 @@ interface RunRowDb {
   id: number; program: string; programTitle: string; wave: number; waveOf: number | null;
   project: string; sessionId: string | null; workspace: string | null; branch: string | null;
   state: string; resumed: number; clearedAt: number | null; openedAt: number;
-  dispatchedAt: number | null; closedAt: number | null; handoffCommit: string | null;
+  dispatchStartedAt: number | null; dispatchedAt: number | null; closedAt: number | null;
+  handoffCommit: string | null;
   prLineage: string | null;
 }
 
 const RUN_ROW_COLUMNS =
   'r.id, r.program, p.title AS programTitle, r.wave, r.waveOf, r.project, r.sessionId, ' +
-  'r.workspace, r.branch, r.state, r.resumed, r.clearedAt, r.openedAt, r.dispatchedAt, r.closedAt, ' +
+  'r.workspace, r.branch, r.state, r.resumed, r.clearedAt, r.openedAt, r.dispatchStartedAt, ' +
+  'r.dispatchedAt, r.closedAt, ' +
   'r.handoffCommit, r.prLineage';
 
 /**
@@ -699,6 +701,24 @@ export class CoordStore {
     return row !== undefined;
   }
 
+  /** Stamped immediately BEFORE the `ws-add` that mints a fresh workspace —
+   *  the one moment the run knows a dispatch is in flight and the session id
+   *  does not exist yet (the server learns that id by registry diff, after the
+   *  call returns). A MEASUREMENT, not a mode flag: nothing clears it, `state`
+   *  moving to `dispatched` is what ends the "dispatching" render, and
+   *  `dispatchedAt - dispatchStartedAt` is then how long the spawn took. A
+   *  retry overwrites it with the new attempt's start, which is the honest
+   *  answer to "when did the dispatch that is running now begin".
+   *
+   *  `setSession`/`setClearedAt`/`setHandoffCommit`'s single-column `UPDATE`,
+   *  and deliberately touching NOTHING else — least of all `state`, which is a
+   *  separate write with its own `run_events` attribution. Takes `at` rather
+   *  than reading a clock, on `markDispatched`'s precedent: the caller owns the
+   *  moment being recorded. */
+  markDispatchStarted(runId: number, at: number): void {
+    this.db.prepare('UPDATE runs SET dispatchStartedAt = ? WHERE id = ?').run(at, runId);
+  }
+
   /** Dispatch's write: the workspace a run landed in, and whether it was a
    *  fresh spawn or D-1's resume+`/clear`. Does NOT itself advance `state` —
    *  the caller (Task 9's dispatch route) calls `advance` separately, so the
@@ -904,6 +924,11 @@ export class CoordStore {
       // did for a run that has not resumed-and-cleared: "nothing has
       // cleared anything," never a stand-in for a missing column.
       clearedAt: row.clearedAt,
+      // A real column too (`runs.dispatchStartedAt`, migration 5), read
+      // straight through on `clearedAt`'s idiom directly above. NULL keeps its
+      // one meaning: no dispatch has ever started for this run — never a
+      // stand-in for a column this build could not read.
+      dispatchStartedAt: row.dispatchStartedAt,
       openedAt: row.openedAt, dispatchedAt: row.dispatchedAt, closedAt: row.closedAt,
       handoffCommit: row.handoffCommit,
       items: this.itemTally(row.id),
