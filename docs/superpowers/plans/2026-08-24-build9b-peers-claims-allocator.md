@@ -8917,7 +8917,7 @@ measure that mutant explicitly.
 
 **Steps:**
 
-- [ ] **Assert the prefix is byte-identical to 9a's.** From the repo root:
+- [x] **Assert the prefix is byte-identical to 9a's.** From the repo root:
 
   ```bash
   git diff origin/main -- server/src/coord/dispatch.ts
@@ -8934,7 +8934,7 @@ measure that mutant explicitly.
 
   Expect `102` — the number `wave-lifecycle.md`'s stated ceiling subtracts.
 
-- [ ] **Run the two arithmetic pins, expect PASS with no edit.** `cd server &&
+- [x] **Run the two arithmetic pins, expect PASS with no edit.** `cd server &&
   ./node_modules/.bin/vitest run test/coordinator-skill.test.ts test/worker-skill.test.ts`
   — in particular `derives the stated ceiling from the two constants` (cap = 8192,
   prefix = 102, ceiling = 8090) and `is the name the dispatch kickoff prefix tells every
@@ -8942,7 +8942,7 @@ measure that mutant explicitly.
   D17 table's "Zero bytes" row executed as a checkpoint, and it guards against wave 8's
   most tempting mistake: teaching the new etiquette by growing the prefix.
 
-- [ ] **No commit.** This task produces no diff by design; note the two green suite runs
+- [x] **No commit.** This task produces no diff by design; note the two green suite runs
   in the execution log and move on.
 
 ---
