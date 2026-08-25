@@ -2,9 +2,10 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** While a programme orchestrator spawns a child workspace, the console says so —
-and when that spawn never completes, the console says that too, instead of leaving a
-`planned` run beside an unexplained workspace.
+**Goal:** While a programme orchestrator spawns a child workspace, the console says so; the
+children it owns nest under it with an `└─` bracket instead of scattering through the list;
+and when a spawn never completes, the console says that too, instead of leaving a `planned`
+run beside an unexplained workspace.
 
 **Architecture:** One honest new fact (`runs.dispatchStartedAt`, additive, no state-machine
 change) is written immediately before the `ws-add` that mints the workspace, and read by the
@@ -87,10 +88,16 @@ if the operator wants more than "it is coming, 42 s in".
 
 ## Wave order
 
-Task 1 (the fact) precedes everything. Task 2 (attribution) is independent of the PWA and can
-land any time after 1. Tasks 3–5 (PWA) consume Task 1's landed wire field; 3 before 4 (4
-reuses 3's elapsed-time helper), 5 independent. Tree wins for anchors, this plan's SEMANTICS
-win for behavior.
+Task 1 (the fact) precedes everything. Task 2 (attribution + the ownership edge) is
+server-side and must land before Task 4, which renders that edge. Tasks 3–5 (PWA) consume
+Tasks 1–2's landed wire fields; 3 before 4 (4 reuses 3's elapsed-time helper), 5 independent.
+Tree wins for anchors, this plan's SEMANTICS win for behavior.
+
+**The nesting requirement arrived mid-execution** (operator, 2026-08-25, while Task 1 was in
+flight) and was folded in rather than deferred: Task 2 gained the `claimedBy` wire field it
+needs, and Task 4 — originally a loose "pending line on the project card" — became the
+nesting task, which subsumes it (the pending line is now a pending CHILD). Tasks 1, 3 and 5
+are unchanged.
 
 ---
 
@@ -186,13 +193,15 @@ export const SPAWN_STALL_MS = 360_000;
 
 - [ ] **Step 7: commit** with measured counts in the body.
 
-### Task 2: the journal learns who spawned the worker
+### Task 2: the journal learns who spawned the worker — and the wire learns who owns the run
 
 **Files:**
 - Modify: `server/src/ccdargv.ts` (`wsAddWorker` takes a dec), `server/src/coord/dispatch.ts`
-  (pass one)
+  (pass one), `shared/api.ts` (`RunSummary.claimedBy`), `server/src/coord/store.ts`
+  (`RunRowDb` + `hydrateRun` carry it)
 - Test: the suite pinning `wsAddWorker`'s argv (`run-routes.test.ts` per Task 2 of the
-  per-worker-RC plan) and `whitelist-subset.test.ts` (exhaustive over `keyof typeof CCD_ARGV`)
+  per-worker-RC plan) and `whitelist-subset.test.ts` (exhaustive over `keyof typeof CCD_ARGV`);
+  plus the runs-route/store suite for the new wire field
 
 **Interfaces:**
 - Consumes: `decFlags` (`ccdargv.ts:103`), `sweepDec` (`:163`, already gates on
@@ -219,7 +228,29 @@ export const SPAWN_STALL_MS = 360_000;
   `test/verb-gate.test.ts`, `typecheck-tests`. Mutation: drop the `...decFlags(dec)` spread →
   the caps-supporting pin reds; revert, state the count.
 
-- [ ] **Step 5: commit.**
+- [ ] **Step 5: the ownership edge reaches the wire.** `runs.claimedBy` — the one
+  coordinator's session id, the column `resolveCoordinator` and the `claimed-by-another`
+  refusal already turn on (`schema.ts:75`) — is read server-side ONLY: `RunRow extends
+  RunSummary` adds nothing but `prLineage`, and `shared/api.ts` has no `claimedBy` at all, so
+  the PWA cannot see which session owns a run. Task 4 renders exactly that edge (a worker
+  nests under the coordinator that dispatched it), so the field ships here, where its
+  neighbours are.
+  - Red-first: pin that `GET /api/runs` and the `runs` frame both carry `claimedBy` for a run
+    opened by a known coordinator, and that it is `null`-safe for a row that somehow lacks
+    one (absence permits — an older database row, a hand-inserted fixture).
+  - Implement: add `claimedBy: string | null` to `RunSummary` with a docstring saying what it
+    is (the ONE coordinator's tmux-derived session id, fixed at `POST /api/runs`, never
+    rewritten by any route — which is why a fresh coordinator in a different workspace gets
+    `claimed-by-another` forever) and that the PWA reads it as the programme-ownership edge;
+    add it to `RunRowDb` and `hydrateRun` following the neighbouring TEXT-nullable columns'
+    exact idiom. `toRunSummary` is a spread, so nothing there changes.
+  - Green: the runs-route suite, `coord-store.test.ts`, `typecheck-tests`,
+    `single-definition.test.ts`.
+  - Mutation: drop `claimedBy` from `hydrateRun`'s SELECT/mapping → the wire pin reds; state
+    the count.
+
+- [ ] **Step 6: commit** (one commit for both halves is fine — they are one sentence about
+  attribution: who caused the spawn, and who owns the run — but say both in the body).
 
 ### Task 3: the run board renders the window — and the wedge
 
@@ -263,11 +294,39 @@ export const SPAWN_STALL_MS = 360_000;
 
 - [ ] **Step 6: commit.**
 
-### Task 4: the fleet screen stops leaving the operator to guess
+### Task 4: children nest under the programme that owns them
+
+**Operator requirement, verbatim (2026-08-25):** *"I'd like to basically see nesting via L
+bracket under the programme owner for any child workspaces"*, sketched as:
+
+```
+MAIN OPERATOR
+└─ child 1
+└─ child 2
+└─ child 3
+```
+
+The edge is `run.claimedBy` (the coordinator's session id — the parent) → `run.sessionId`
+(the worker's session id — the child), read off the `runs` frame, which is **active-only by
+construction** (`watch.ts:931,963-976`) so the tree shows the programme structure that is
+live right now and forgets it when the programme closes. A dispatch still in flight (Task 1's
+`planned` + `dispatchStartedAt`) has no `sessionId` yet and renders as a pending child of the
+same parent — which is the whole point: the operator watches the child appear under the
+coordinator that asked for it.
 
 **Files:**
-- Modify: `pwa/src/screens/FleetScreen.tsx` and/or `pwa/src/fleet/ProjectCard.tsx`
-- Test: the fleet-screen suite (extend)
+- Modify: `pwa/src/fleet/ProjectCard.tsx` (the row list), `pwa/src/fleet/sortFleet.ts` (or a
+  new sibling helper — read it first and follow its shape), `pwa/src/screens/FleetScreen.tsx`
+  (pass the runs data down if it does not already)
+- Test: the fleet-screen/project-card suite (extend) plus a unit suite for the grouping
+  helper
+
+**Interfaces:**
+- Consumes: `RunSummary.claimedBy` + `.sessionId` + `.state` + `.dispatchStartedAt`
+  (Tasks 1–2, landed), `FleetSession.id`, Task 3's elapsed-time helper.
+- Produces: a PURE grouping helper (name it in the file's own idiom) taking
+  `(sessions, runs)` and returning the display order with a depth per row — the component
+  renders, it does not decide.
 
 - [ ] **Step 1: establish whether the runs data is in hand.** `RunsScreen` consumes the
   `runs` frame; determine whether `FleetScreen`/`ProjectCard` can read the same store value
@@ -275,22 +334,57 @@ export const SPAWN_STALL_MS = 360_000;
   runs frame is NOT available to the fleet tree, wire it through the existing store — still
   no server change — and say so in the commit body.
 
-- [ ] **Step 2: red-first.** In a project card whose project has a run with
-  `state === 'planned'` and a fresh `dispatchStartedAt`, a pending line renders naming the
-  programme and the elapsed time (reuse Task 3's helper), e.g. `⟳ spawning a worker ·
-  <program> · 0:42`. Assert it is ABSENT when no such run exists, and ABSENT once the run
-  reaches `dispatched` (by then the real session row carries the hold, and two rows for one
-  spawn would be worse than none). Expect RED.
+- [ ] **Step 2: red-first — the grouping helper, as a pure unit suite.** These five rules ARE
+  the task; each gets its own test, and each is a rule a reviewer can reject on its own:
+  1. **The happy shape.** Coordinator `C` owns two active runs naming workers `W1`, `W2`
+     (both sessions present in the same project): the order is `C`, `W1`, `W2`, with depth
+     `0, 1, 1`, and `W1`/`W2` appear exactly once — never also at top level.
+  2. **Deterministic child order.** Children sort by the run's `wave` ascending, then run
+     `id` ascending — NOT by the top-level session sort. Two children from the same wave keep
+     run-id order. (State it in the helper's docstring: the tree is programme order, not
+     status order, because a child's position is a fact about the programme, not about how
+     busy it is.)
+  3. **An orphan is never bracketed.** A child whose parent session is absent from this
+     project's list (a coordinator on another project, archived, or simply not measured)
+     renders at TOP level, depth 0, exactly as today. Absence permits: no dangling `└─`
+     pointing at nothing.
+  4. **One level only, and the tie-break is stated.** A session that is BOTH a child of one
+     run and the parent of another renders at TOP level with its own children beneath it —
+     never nested itself. Rationale to put in the docstring: nesting it would either hide its
+     children or demand a second level, and the operator asked for one bracket, not a tree.
+     Pin this with a three-session fixture.
+  5. **The pending child.** A run with `state === 'planned'` and a non-null
+     `dispatchStartedAt` renders as a child of its `claimedBy` with no session id — after the
+     settled children, carrying the elapsed time (`⟳ spawning a worker · <program> · 0:42`
+     via Task 3's helper). It disappears the moment the run reaches `dispatched` (by then the
+     real session row is its own child, and two rows for one spawn is worse than none). If
+     the parent is absent, the pending line renders at top level rather than vanishing — the
+     operator still needs to know a spawn is happening.
+  Run the unit suite; expect RED (no helper yet).
 
-- [ ] **Step 3: implement.** The pending line is not a fake session row — it must not be
-  tappable, must not enter the sort order of real sessions, and must carry no session id.
-  Place it where the card's own affordances live (read the card's structure first).
+- [ ] **Step 3: red-first — the rendering.** In the card suite: a nested row renders the `└─`
+  bracket and its indent; a top-level row renders neither (assert BOTH directions — a bracket
+  that is always present is not a bracket). The pending child is NOT tappable and carries no
+  session id. Every existing row affordance (tap target, chips, the held string) is unchanged
+  on a nested row — nesting changes position and prefix, nothing else.
 
-- [ ] **Step 4: green + mutation.** Full `pwa` suite. Mutation: drop the
-  `state === 'planned'` half of the condition → the disappears-once-dispatched test reds;
-  revert, count stated.
+- [ ] **Step 4: implement.** The helper is pure and lives beside `sortFleet`; the component
+  maps over its output and renders depth as the bracket + indent. Top-level ordering keeps
+  today's `sortFleet` result exactly — a child is REMOVED from that order and re-inserted
+  under its parent, never re-sorting the parents. Use the same `└─` character in one place
+  (a named constant, not a literal repeated per branch).
 
-- [ ] **Step 5: commit.**
+- [ ] **Step 5: green.** The two new suites plus the whole `pwa` package.
+
+- [ ] **Step 6: mutation ceremonies, each planted alone, measured, reverted:**
+  1. Drop the "remove from top level" step (children rendered under the parent AND in the
+     ordinary list) → the appears-exactly-once test reds.
+  2. Let an orphan keep its bracket → rule 3's test reds.
+  3. Nest a session that is itself a parent → rule 4's test reds.
+  4. Drop the `state === 'planned'` half of the pending condition → the
+     disappears-once-dispatched test reds.
+
+- [ ] **Step 7: commit.**
 
 ### Task 5: render the facts that already ship
 
