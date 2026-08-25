@@ -8984,7 +8984,7 @@ measure that mutant explicitly.
 
 **Steps:**
 
-- [ ] **Write the failing word-map test.** Create `pwa/test/journal-words.test.ts`:
+- [x] **Write the failing word-map test.** Create `pwa/test/journal-words.test.ts`:
 
   ```ts
   import { describe, expect, it } from 'vitest';
@@ -9051,11 +9051,11 @@ measure that mutant explicitly.
   });
   ```
 
-- [ ] **Run, expect FAIL.** `cd pwa && ./node_modules/.bin/vitest run
+- [x] **Run, expect FAIL.** `cd pwa && ./node_modules/.bin/vitest run
   test/journal-words.test.ts` — module-load error: `../src/session/journalWords` does not
   exist.
 
-- [ ] **Write `pwa/src/session/journalWords.ts`:**
+- [x] **Write `pwa/src/session/journalWords.ts`:**
 
   ```ts
   // The journal's rendering vocabulary — the PWA word for each LifecycleAct
@@ -9150,16 +9150,16 @@ measure that mutant explicitly.
   }
   ```
 
-- [ ] **Run, expect PASS.** `cd pwa && ./node_modules/.bin/vitest run
+- [x] **Run, expect PASS.** `cd pwa && ./node_modules/.bin/vitest run
   test/journal-words.test.ts`.
 
-- [ ] **Mutation — the totality twin.** Delete the line `reap: 'reaped',` from
+- [x] **Mutation — the totality twin.** Delete the line `reap: 'reaped',` from
   `ACT_WORD`. Run the suite: expect 1 red (`no word for act reap`) — the runtime twin
   fires where the transpiler would not. Then run `cd pwa && npx tsc --noEmit
   2>&1 | head -5`: expect a TS2739 naming `reap` — both guards measured. Restore the
   line.
 
-- [ ] **Write the failing fetcher tests.** Append to `pwa/test/api.test.ts` (after the
+- [x] **Write the failing fetcher tests.** Append to `pwa/test/api.test.ts` (after the
   `api client` describe's closing brace; `jsonResponse` and the imports at the top of the
   file are already in scope — extend the import line with nothing, the new tests use
   `createApi` and `vi` which are already imported):
@@ -9190,10 +9190,10 @@ measure that mutant explicitly.
   });
   ```
 
-- [ ] **Run, expect FAIL.** `cd pwa && ./node_modules/.bin/vitest run test/api.test.ts` —
+- [x] **Run, expect FAIL.** `cd pwa && ./node_modules/.bin/vitest run test/api.test.ts` —
   2 reds: `api.lifecycle is not a function`, `api.claims is not a function`.
 
-- [ ] **Add the fetchers to `pwa/src/lib/api.ts`.** Extend the type-import on line 5 with
+- [x] **Add the fetchers to `pwa/src/lib/api.ts`.** Extend the type-import on line 5 with
   `ClaimSummary` and `LifecycleQueryResult` (alphabetical position in the existing list):
 
   ```ts
@@ -9224,10 +9224,10 @@ measure that mutant explicitly.
           opts?.all === true ? '/api/claims?all=1' : '/api/claims'),
   ```
 
-- [ ] **Run, expect PASS.** `cd pwa && ./node_modules/.bin/vitest run test/api.test.ts
+- [x] **Run, expect PASS.** `cd pwa && ./node_modules/.bin/vitest run test/api.test.ts
   test/journal-words.test.ts`.
 
-- [ ] **Commit.**
+- [x] **Commit.**
 
   ```bash
   git add pwa/src/session/journalWords.ts pwa/test/journal-words.test.ts pwa/src/lib/api.ts pwa/test/api.test.ts
