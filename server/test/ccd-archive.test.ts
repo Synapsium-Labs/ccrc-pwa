@@ -332,7 +332,13 @@ describe('_transcript_path', () => {
     // guarantee is that it matches mungePath. `tr './_' '---'` has to agree on
     // all three characters, so the fixture path carries all three — a real
     // workspace path has only slashes, and would let `tr '/' '-'` pass.
-    const odd = '/tmp/proj.dir/some_thing/v1.2';
+    // THE ROOT IS RESOLVED FIRST, because `_ws_realpath` resolves the existing
+    // prefix of a workdir — deliberately. On macOS `/tmp` is a symlink to
+    // `/private/tmp`, so a literal `/tmp/...` here would compare ccd's
+    // resolved answer against an unresolved expectation and fail on that
+    // platform alone, for a reason that has nothing to do with the munge.
+    // `realpathSync` is a no-op wherever the root is not a symlink.
+    const odd = `${fs.realpathSync('/tmp')}/proj.dir/some_thing/v1.2`;
     h.sh(`_reg_set fake wrapper claude; _reg_set fake workdir '${odd}'; _reg_set fake uuid u-1`);
     expect(h.sh('_transcript_path fake'))
       .toBe(path.join(h.home, '.claude', 'projects', mungePath(odd), 'u-1.jsonl'));
@@ -513,7 +519,10 @@ describe('_ws_ignored_digest', () => {
     // stdout as though it were a measurement. The shape check is what makes the
     // manifest's `ignoredDigest` a digest or nothing.
     const wt = workspace('demo', 'quiet-basin');
-    const r = shFail(`sha256sum() { echo "not-a-digest"; }; _ws_ignored_digest "${wt}"`);
+    // `_plat_sha256`, not `sha256sum`: that binary does not exist on macOS —
+    // the shim runs `shasum -a 256` there — so shadowing the tool left this
+    // fixture inert on one platform. The seam both go through is the shim.
+    const r = shFail(`_plat_sha256() { echo "not-a-digest"; }; _ws_ignored_digest "${wt}"`);
     expect(r.code).not.toBe(0);
     expect(r.stdout).toBe('');
   });
@@ -889,7 +898,13 @@ describe('ws-archive', () => {
     // touching the directory itself: $workdir still exists and is still
     // readable, only the measurement fails. `_ws_gc_bytes` then answers '-',
     // which the manifest must record as JSON `null`, never a fabricated 0.
-    h.sh(`${ARCH} du() { return 1; }; cmd_ws_archive --session demo-quiet-basin`);
+    // SHADOWS THE SEAM ccd ACTUALLY CALLS. It used to shadow `du`, which is
+    // GNU-only (`-sb`) and is therefore not what ccd runs on macOS at all —
+    // the stub was simply bypassed there, and this test measured the real
+    // filesystem instead of the failure it planted. `_plat_bytes` is the one
+    // function both platforms go through, so shadowing it pins the caller's
+    // behaviour rather than one platform's tool.
+    h.sh(`${ARCH} _plat_bytes() { return 1; }; cmd_ws_archive --session demo-quiet-basin`);
     const m = JSON.parse(h.reg('demo-quiet-basin', 'archivemanifest')!) as Record<string, unknown>;
     expect(m.worktreeBytes).toBeNull();
   });
@@ -899,7 +914,8 @@ describe('ws-archive', () => {
     // A successful `du` that genuinely answers 0 (rc 0, numeric output) must
     // not be conflated with a failed read: 0 is a measurement, and this is
     // the other half of that rule — a real zero must survive as 0.
-    h.sh(`${ARCH} du() { printf '0\\tx\\n'; }; cmd_ws_archive --session demo-quiet-basin`);
+    // The shim's contract is a bare integer on stdout, rc 0 — a genuine zero.
+    h.sh(`${ARCH} _plat_bytes() { printf '0\\n'; }; cmd_ws_archive --session demo-quiet-basin`);
     const m = JSON.parse(h.reg('demo-quiet-basin', 'archivemanifest')!) as Record<string, unknown>;
     expect(m.worktreeBytes).toBe(0);
   });

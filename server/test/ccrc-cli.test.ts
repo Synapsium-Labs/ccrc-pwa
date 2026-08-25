@@ -85,6 +85,11 @@ function ccrcEnv(home: string): NodeJS.ProcessEnv {
   // suite reaches no system directory at all; this one now cannot reach these
   // three binaries either.
   poison('systemctl', 'ccrc tests must never query this box\'s real systemd');
+  // THE OTHER MANAGER, and containing it matters MORE than containing
+  // systemctl: launchctl's per-user domain is keyed on the UID, so no `$HOME`
+  // isolates it — an unpoisoned call would query, and could mutate, the
+  // developer's own live session.
+  poison('launchctl', 'ccrc tests must never query this box\'s real launchd');
   // The verbs read their own environment, and this runner inherits the ambient
   // one wholesale. An operator (or a parent agent) with CCRC_ADDR exported
   // would hand `status` a real address and turn the "leaves the box alone" test
@@ -661,8 +666,19 @@ describe('ccrc: the runner cannot reach the real server', () => {
     // from touching it differently.
     const home = mkTmp('ccrc-cli-systemctl-');
     const r = runCcrcRaw(home, ['status']);
-    expect(poisonLog(home, 'systemctl').join('\n')).toContain('--user is-active ccrc.service');
-    expect(poisonLog(home, 'systemctl').join('\n')).toContain('--user is-active ccrc-agent.service');
+    // Each platform's own manager, asked about the same two units. The
+    // property is that the POISON was the thing queried — the vocabulary is
+    // incidental.
+    const mgr = process.platform === 'darwin' ? 'launchctl' : 'systemctl';
+    const log = poisonLog(home, mgr).join('\n');
+    if (process.platform === 'darwin') {
+      expect(log).toContain('print gui/');
+      expect(log).toContain('app.ccrc.ccrc');
+      expect(log).toContain('app.ccrc.ccrc-agent');
+    } else {
+      expect(log).toContain('--user is-active ccrc.service');
+      expect(log).toContain('--user is-active ccrc-agent.service');
+    }
     // The poison exits 97 saying nothing on stdout, so both units read as
     // "unknown" — and status says unknown rather than inventing a role.
     expect(r.stdout).toMatch(/role: +unknown/);

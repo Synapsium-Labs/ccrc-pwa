@@ -437,13 +437,7 @@ _check_tmux_skew() {
   fi
 
   local server rc
-  if command -v timeout >/dev/null 2>&1; then
-    server="$(timeout "$CCRC_DOCTOR_GH_TIMEOUT" tmux display-message -p '#{version}' 2>/dev/null)"; rc=$?
-  else
-    # The same trade gh_auth makes: a box without coreutils' `timeout` still
-    # gets an answer, just without a deadline.
-    server="$(tmux display-message -p '#{version}' 2>/dev/null)"; rc=$?
-  fi
+  server="$(_plat_timeout "$CCRC_DOCTOR_GH_TIMEOUT" tmux display-message -p '#{version}' 2>/dev/null)"; rc=$?
   if [ "$rc" -eq 124 ]; then
     # NOT the "no server" sentence below: a server that holds the socket
     # without answering and a socket nobody holds are two different facts
@@ -517,13 +511,7 @@ _check_gh_auth() {
   # names (`gh auth refresh -h github.com -s repo` is scoped to github.com;
   # the check that approved it should be too).
   local out rc
-  if command -v timeout >/dev/null 2>&1; then
-    out="$(timeout "$CCRC_DOCTOR_GH_TIMEOUT" gh auth status --hostname github.com 2>&1)"; rc=$?
-  else
-    # A box without coreutils' `timeout` still gets an answer; it just gets it
-    # without a deadline. Silently skipping the check would be the worse trade.
-    out="$(gh auth status --hostname github.com 2>&1)"; rc=$?
-  fi
+    out="$(_plat_timeout "$CCRC_DOCTOR_GH_TIMEOUT" gh auth status --hostname github.com 2>&1)"; rc=$?
 
   if [ "$rc" -eq 124 ]; then
     _dr_fail gh_auth "gh auth status did not answer within ${CCRC_DOCTOR_GH_TIMEOUT}s" \
@@ -611,6 +599,24 @@ _check_git_email() {
 # name lookup to fail) and remedied by UID too, so the remedy is a command an
 # operator can paste verbatim.
 _check_linger() {
+  # macOS HAS NO LINGER, AND NO WAY TO GET ONE. `loginctl enable-linger` makes
+  # a user's units run with nobody logged in; a LaunchAgent runs inside the
+  # GUI login session and stops at logout. The only thing on this platform
+  # that survives a logout is a LaunchDAEMON — root-owned, in
+  # /Library/LaunchDaemons, running as a different user with a different
+  # keychain — which is a posture nobody asked for and `ccrc install`
+  # deliberately does not choose.
+  #
+  # SO THIS IS A WARN, NOT A FAIL, and the distinction is the whole point of
+  # this arm: a FAIL says "fix this", and there is nothing to fix. The
+  # operator's box is correctly installed and has one guarantee less than a
+  # Linux fleet host does. The remedy names the two settings that come closest
+  # to the missing guarantee rather than a command that does not exist.
+  if [ "${CCD_OS:-linux}" = darwin ]; then
+    _dr_warn linger "not a macOS concept — a LaunchAgent runs in your login session, so this box's server and its sessions stop at logout and start again at login. A Linux fleet host keeps them running with nobody logged in; this box cannot" \
+      "for an always-on box: stay logged in, and turn off sleep (System Settings > Lock Screen, and 'Prevent automatic sleeping' in Energy/Battery)"
+    return 2
+  fi
   if ! command -v loginctl >/dev/null 2>&1; then
     _dr_fail linger "loginctl is not on PATH — this box has no logind, but every ccd session is a systemd --user unit" \
       "install/enable systemd-logind, or do not run a fleet on this box"
@@ -714,7 +720,31 @@ _check_path() {
 # `ccrc-wrapper-shape` gives about `WRAPPER_BIN_DIR`: two checks comparing
 # their own copies of a path is the same drift in miniature, and here it would
 # be worse than a drift — the two would disagree about what role the box is.
-CCRC_UNIT_DIR="$HOME/.config/systemd/user"
+# ONE SPELLING PER BOX, chosen the same way every other platform arm in this
+# tree is. The comment above explains why this is one variable and not two
+# copies; macOS keeps user agents in ~/Library/LaunchAgents, and adding the
+# arm here rather than at the four read sites keeps that property.
+if [ "${CCD_OS:-linux}" = darwin ]; then
+  CCRC_UNIT_DIR="$HOME/Library/LaunchAgents"
+else
+  CCRC_UNIT_DIR="$HOME/.config/systemd/user"
+fi
+
+# THE FILE A UNIT IS ON DISK. systemd's unit name IS its filename; launchd's
+# is a label plus `.plist`, and the translation already exists in `_svc_label`
+# — which this file can call, because `ccrc` sources the platform block before
+# it sources this one. Spelled once here so the checks below keep reading in
+# systemd's vocabulary, which is the vocabulary their messages are written in.
+_dr_unit_file() {   # <unit> -> the filename to look for under $CCRC_UNIT_DIR
+  if [ "${CCD_OS:-linux}" = darwin ]; then printf '%s.plist' "$(_svc_label "$1")"; else printf '%s' "$1"; fi
+}
+# THE REMEDY VERB. Every "restart it" line in this file used to end in
+# `systemctl --user restart ccrc.service`; on macOS that is a command not
+# found, which turns a remedy into a second dead end.
+# ONE DEFINITION, in the platform block `ccrc` sources before this file — this
+# is the same question `_svc_restart_hint` answers, and two copies of a remedy
+# string is how the two come to name different commands.
+_dr_restart_hint() { _svc_restart_hint "$1"; }
 
 _check_services() {
   local dir="$CCRC_UNIT_DIR" u st rc=0
@@ -723,8 +753,13 @@ _check_services() {
   # (every ccd session is one, CLAUDE.md) and those are long-lived by design and
   # none of doctor's business.
   local -a known=(ccrc.service ccrc-agent.service ccd-cap-scopes.timer)
+  # ON DISK BY THE PLATFORM'S NAME, reported by systemd's. `_dr_unit_file` is
+  # the one translation; keeping `installed` in unit vocabulary is what lets
+  # every message below read the same on both platforms. ccd-cap-scopes has no
+  # macOS counterpart at all (it caps cgroup scopes) and `_inst_units` does not
+  # install one, so it is simply never found there — a skip, not a failure.
   for u in "${known[@]}"; do
-    [ -f "$dir/$u" ] && installed+=("$u")
+    [ -f "$dir/$(_dr_unit_file "$u")" ] && installed+=("$u")
   done
 
   if [ "${#installed[@]}" -eq 0 ]; then
@@ -735,24 +770,30 @@ _check_services() {
     return 3
   fi
 
-  if ! command -v systemctl >/dev/null 2>&1; then
-    _dr_fail services "systemctl is not on PATH, but this box has unit files in $dir (${installed[*]}) — so nothing could be asked whether they are running" \
-      "install/enable systemd — every ccd session is a systemd --user unit too (see the 'linger' check above); or remove the unit files nothing on this box can start"
+  if ! _have_systemctl; then
+    local _mgr=systemctl; [ "${CCD_OS:-linux}" = darwin ] && _mgr=launchctl
+    _dr_fail services "$_mgr is not on PATH, but this box has job files in $dir (${installed[*]}) — so nothing could be asked whether they are running" \
+      "install/enable this box's service manager — every ccd session is one of its jobs too (see the 'linger' check above); or remove the job files nothing on this box can start"
     return 1
   fi
   # Defaulted exactly as `ccrc`'s `_box_units` and `ccd:93-95` default them, and
   # for the same reason: without these two, `systemctl --user` cannot find the
   # bus from a non-interactive SSH context, every unit answers empty, and this
   # check reports a healthy box's units as stopped.
-  : "${XDG_RUNTIME_DIR:=/run/user/$UID}"; export XDG_RUNTIME_DIR
-  : "${DBUS_SESSION_BUS_ADDRESS:=unix:path=${XDG_RUNTIME_DIR}/bus}"; export DBUS_SESSION_BUS_ADDRESS
+  # LINUX-ONLY BY CONSTRUCTION: launchctl needs no session bus, and exporting
+  # a /run/user path on macOS would invent a directory for the benefit of
+  # nothing.
+  if [ "${CCD_OS:-linux}" != darwin ]; then
+    : "${XDG_RUNTIME_DIR:=/run/user/$UID}"; export XDG_RUNTIME_DIR
+    : "${DBUS_SESSION_BUS_ADDRESS:=unix:path=${XDG_RUNTIME_DIR}/bus}"; export DBUS_SESSION_BUS_ADDRESS
+  fi
 
   for u in "${installed[@]}"; do
     # systemd's own word is quoted back (`failed`, `activating`, `inactive`),
     # because "failed" and "inactive" send an operator to two different places.
     # An EMPTY answer is a unit systemd would not talk about at all, which is
     # neither — hence `${st:-not active}` rather than a default of "inactive".
-    st="$(systemctl --user is-active "$u" 2>/dev/null)"
+    st="$(_svc_is_active "$u")"
     if [ "$st" = active ]; then
       ok+=("$u is active")
       continue
@@ -830,7 +871,7 @@ _check_config() {
     # what `_check_services` above already reads. Both halves are required:
     # "no ccrc.service" alone is also a dev checkout that has installed nothing,
     # and for that box the defaults sentence below is correct.
-    if [ ! -f "$CCRC_UNIT_DIR/ccrc.service" ] && [ -f "$CCRC_UNIT_DIR/ccrc-agent.service" ]; then
+    if [ ! -f "$CCRC_UNIT_DIR/$(_dr_unit_file ccrc.service)" ] && [ -f "$CCRC_UNIT_DIR/$(_dr_unit_file ccrc-agent.service)" ]; then
       _dr_skip config "no $BOX_ENV_FILE, and this box's units are the fleet role's ($CCRC_UNIT_DIR has ccrc-agent.service and no ccrc.service) — the server's config file does not live here, so there is nothing to measure"
       return 3
     fi
@@ -960,7 +1001,7 @@ _check_auth() {
   # both halves are required, exactly as `_check_config` requires them: "no
   # ccrc.service" alone is also a dev checkout, and a dev checkout DOES run a
   # server.
-  if [ ! -f "$CCRC_UNIT_DIR/ccrc.service" ] && [ -f "$CCRC_UNIT_DIR/ccrc-agent.service" ]; then
+  if [ ! -f "$CCRC_UNIT_DIR/$(_dr_unit_file ccrc.service)" ] && [ -f "$CCRC_UNIT_DIR/$(_dr_unit_file ccrc-agent.service)" ]; then
     _dr_skip auth "this box's units are the fleet role's ($CCRC_UNIT_DIR has ccrc-agent.service and no ccrc.service) — the PWA's session gate belongs to the server box, and nothing here reads a passphrase file"
     return 3
   fi
@@ -1285,7 +1326,7 @@ _check_exposure() {
   # With it absent the keys are still measured — a box missing coreutils must
   # not lose the half of this check that needs only bash.
   if command -v stat >/dev/null 2>&1; then
-    mode="$(stat -c%a -- "$CCRC_EXPOSURE_FILE" 2>/dev/null)" || mode=""
+    mode="$(_plat_mode -- "$CCRC_EXPOSURE_FILE" 2>/dev/null)" || mode=""
     if [ "$mode" = 600 ]; then
       modesaid=", mode 0600"
     else
@@ -1345,7 +1386,7 @@ _check_exposure() {
   esac
   if [ "${#gaps[@]}" -gt 0 ]; then
     _dr_fail exposure "$CCRC_EXPOSURE_FILE is present but $(_dr_join ${gaps[@]+"${gaps[@]}"})" \
-      "re-run: ccrc expose duckdns (or: ccrc expose byo) — it rewrites $CCRC_EXPOSURE_FILE 0600 with both keys; the server reads the file as written, so a gap here is a box whose auth origin is half-set. A CCRC_HOST gap is the other file: set CCRC_HOST=127.0.0.1 in $BOX_ENV_FILE (or delete the line — that is the default) and restart: systemctl --user restart ccrc.service"
+      "re-run: ccrc expose duckdns (or: ccrc expose byo) — it rewrites $CCRC_EXPOSURE_FILE 0600 with both keys; the server reads the file as written, so a gap here is a box whose auth origin is half-set. A CCRC_HOST gap is the other file: set CCRC_HOST=127.0.0.1 in $BOX_ENV_FILE (or delete the line — that is the default) and restart: $(_dr_restart_hint ccrc.service)"
     return 1
   fi
   if [ "$expmode" = ip ]; then
@@ -1502,13 +1543,7 @@ _check_cert() {
   [ "$expmode" = ip ] || sni=(-servername "$host")
   local pem="" rc=1 addr="" cert_timed_out=""
   for addr in "${cert_cands[@]}"; do
-    if command -v timeout >/dev/null 2>&1; then
-      pem="$(timeout "$CCRC_DOCTOR_GH_TIMEOUT" openssl s_client -connect "$addr:443" ${sni[@]+"${sni[@]}"} </dev/null 2>/dev/null)"; rc=$?
-    else
-      # gh_auth's trade: a box without coreutils' `timeout` still gets an
-      # answer, just without a deadline.
-      pem="$(openssl s_client -connect "$addr:443" ${sni[@]+"${sni[@]}"} </dev/null 2>/dev/null)"; rc=$?
-    fi
+      pem="$(_plat_timeout "$CCRC_DOCTOR_GH_TIMEOUT" openssl s_client -connect "$addr:443" ${sni[@]+"${sni[@]}"} </dev/null 2>/dev/null)"; rc=$?
     [ "$rc" -eq 124 ] && cert_timed_out="$addr"
     [ "$rc" -eq 0 ] && [ -n "$pem" ] && break
   done
@@ -1551,7 +1586,7 @@ _check_cert() {
   # says it is bad, and the remedy is the by-hand form of this same probe.
   local end_s now_s days
   if ! command -v date >/dev/null 2>&1 \
-     || ! end_s="$(date -d "${enddate#notAfter=}" +%s 2>/dev/null)" \
+     || ! end_s="$(_plat_date_to_epoch "${enddate#notAfter=}")" \
      || ! now_s="$(date +%s 2>/dev/null)"; then
     _dr_warn cert "a certificate is served for $host but its expiry (\"${enddate#notAfter=}\") could not be turned into a date on this box" \
       "check it by hand: openssl s_client -connect $addr:443 -servername $host </dev/null | openssl x509 -noout -enddate"
@@ -2263,7 +2298,7 @@ _check_wrappers() {
         # unboundedness this gate exists to close.
         if command -v stat >/dev/null 2>&1; then
           local wr_sz=""
-          wr_sz="$(stat -c%s -- "$bin/$id" 2>/dev/null)" || wr_sz=""
+          wr_sz="$(_plat_size -- "$bin/$id" 2>/dev/null)" || wr_sz=""
           if [[ "$wr_sz" =~ ^[0-9]+$ ]] && [ "$wr_sz" -gt "$WRAPPER_OVERSIZE_BYTES" ]; then
             wr_hard+=("$id's \$HOME/.local/bin/$id is over 1 MiB — too big to be the generated shape, and never read")
             continue
@@ -2504,7 +2539,7 @@ _check_build() {
   }
   if [ "$running" = unstamped ]; then
     _dr_fail build "the server at $addr reports NO build stamp while this box's $BOX_STAMP_FILE names ${stamped:0:12} — the running process predates the stamp on disk" \
-      "restart it onto the installed build: systemctl --user restart ccrc.service"
+      "restart it onto the installed build: $(_dr_restart_hint ccrc.service)"
     return 1
   fi
   if [ "$running" = "$stamped" ]; then
@@ -2512,7 +2547,7 @@ _check_build() {
     return 0
   fi
   _dr_fail build "the running server at $addr reports a DIFFERENT sha than $BOX_STAMP_FILE (${stamped:0:12} is installed) — the process is still on the build it booted with" \
-    "restart it onto the installed build: systemctl --user restart ccrc.service"
+    "restart it onto the installed build: $(_dr_restart_hint ccrc.service)"
   return 1
 }
 

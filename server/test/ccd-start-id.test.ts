@@ -18,6 +18,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, ghContainedEnv, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { asManagerCalls } from './platformFixtures.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-start-id-'); });
@@ -55,7 +56,7 @@ describe('ccd start — the one-argument id form', () => {
     seedRow('claude-a-expoAI-assistant', 'claude-d', 'expoAI-assistant');
     const r = run(`${STUBS} cmd_start claude-a-expoAI-assistant`);
     expect(r.code).toBe(0);
-    expect(h.calls()).toEqual(['supervised_start claude-a-expoAI-assistant']);
+    expect(asManagerCalls(h.calls())).toEqual(['supervised_start claude-a-expoAI-assistant']);
     expect(r.stdout).toContain('started claude-a-expoAI-assistant (resume)');
     // A workspace id (`<project>-<slug>`, no wrapper prefix) is the case the
     // two-argument form cannot express at all.
@@ -69,7 +70,7 @@ describe('ccd start — the one-argument id form', () => {
     expect(r.code).not.toBe(0);
     expect(r.stderr).toContain("no registry for 'never-seen-this'");
     expect(r.stderr).toContain('ccd start <wrapper> <project> [workdir]');
-    expect(h.calls()).toEqual([]);
+    expect(asManagerCalls(h.calls())).toEqual([]);
   });
 
   it('refuses an empty argv with a usage line naming both forms', () => {
@@ -100,7 +101,7 @@ describe('ccd start — the registry account wins over the argument', () => {
     expect(r.stderr).toContain('lives on claude-d, not claude-a');
     expect(r.stderr).toContain('ccd swap claude-a-expoAI-assistant claude-a');
     // And it really started — a refusal here would strand the row.
-    expect(h.calls()).toEqual(['supervised_start claude-a-expoAI-assistant']);
+    expect(asManagerCalls(h.calls())).toEqual(['supervised_start claude-a-expoAI-assistant']);
   });
 
   it('does not warn when the argument agrees with the row', () => {
@@ -138,7 +139,7 @@ describe('ccd enable', () => {
     seedRow('claude-a-expoAI-assistant', 'claude-d', 'expoAI-assistant');
     const r = run(`${STUBS} cmd_enable claude-a-expoAI-assistant`);
     expect(r.code).toBe(0);
-    expect(h.calls()).toEqual(['supervised_start claude-a-expoAI-assistant']);
+    expect(asManagerCalls(h.calls())).toEqual(['supervised_start claude-a-expoAI-assistant']);
   });
 
   it('keeps its own usage line rather than borrowing start\'s', () => {
@@ -170,7 +171,7 @@ describe('cmd_start / cmd_ensure: the in-unit branch takes the split form', () =
   const HALVES = `_spawn_start() { echo "spawn_start $1 $2" >> "$HOME/ccd-calls"; SPAWN_FROMSWAP=0; };
     _spawn_settle() { echo "spawn_settle $1 $2 started=[$(_reg_get "$1" started)]" >> "$HOME/ccd-calls"; return 0; };
     _alive() { return 1; }; _resupervise_live() { return 1; };
-    tmux() { :; }; systemctl() { :; }; sleep() { :; };`;
+    tmux() { :; }; systemctl() { :; }; launchctl() { :; }; sleep() { :; };`;
 
   const seedMinimal = (id: string): void => {
     h.sh(`_reg_set ${id} wrapper claude
@@ -181,7 +182,7 @@ describe('cmd_start / cmd_ensure: the in-unit branch takes the split form', () =
   it('cmd_start claims BETWEEN the halves in-unit', () => {
     seedMinimal('claude-demo');
     h.sh(`CCD_IN_UNIT=1; ${HALVES} cmd_start claude-demo; :`);
-    expect(h.calls()).toEqual([
+    expect(asManagerCalls(h.calls())).toEqual([
       'spawn_start claude-demo new',
       'spawn_settle claude-demo 0 started=[1]',
     ]);
@@ -201,7 +202,7 @@ describe('cmd_start / cmd_ensure: the in-unit branch takes the split form', () =
   it('cmd_ensure claims BETWEEN the halves in-unit, and does NOT supervise', () => {
     seedMinimal('claude-demo');
     h.sh(`CCD_IN_UNIT=1; ${HALVES} cmd_ensure claude-demo; :`);
-    expect(h.calls()).toEqual([
+    expect(asManagerCalls(h.calls())).toEqual([
       'spawn_start claude-demo new',
       'spawn_settle claude-demo 0 started=[1]',
     ]);
@@ -254,7 +255,8 @@ describe('an UNCLAIMED live pane is adopted, not ignored', () => {
 
   const ALIVE = `_alive() { return 0; }; `
     + `_have_systemctl() { return 0; }; `
-    + `systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; return 0; };`;
+    + `systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; return 0; }; `
+    + `launchctl() { echo "launchctl $*" >> "$HOME/ccd-calls"; return 0; };`;
 
   it('writes the claim — the repair `unclaimed` names is a CLAIM, not a process', () => {
     seedUnclaimed('demo-quiet-basin', 'demo');
@@ -267,7 +269,7 @@ describe('an UNCLAIMED live pane is adopted, not ignored', () => {
     seedUnclaimed('demo-quiet-basin', 'demo');
     const r = run(`${ALIVE} cmd_ensure demo-quiet-basin`);
     expect(r.code).toBe(0);
-    expect(h.calls()).toContain('systemctl --user enable --now claude-session@demo-quiet-basin');
+    expect(asManagerCalls(h.calls())).toContain('systemctl --user enable --now claude-session@demo-quiet-basin');
     expect(h.reg('demo-quiet-basin', 'started')).toBe('1');
     // NO SPAWN. The pane is alive; adopting it must not mint a second one.
     expect(h.calls().filter((c) => c.startsWith('spawn'))).toEqual([]);
@@ -280,14 +282,14 @@ describe('an UNCLAIMED live pane is adopted, not ignored', () => {
     seedUnclaimed('demo-quiet-lake', 'demo');
     h.sh(`printf 1 > "$REG/demo-quiet-lake.started"`);
     h.sh(`${ALIVE} _resupervise_live demo-quiet-lake >/dev/null; :`);
-    expect(h.calls()).toEqual([]);
+    expect(asManagerCalls(h.calls())).toEqual([]);
   });
 
   it('an `unsupervised` row still adopts — PR #50’s own population is untouched', () => {
     seedUnclaimed('demo-warm-mesa', 'demo');
     h.sh(`printf 1 > "$REG/demo-warm-mesa.started"; rm -f "$REG/demo-warm-mesa.supervised"`);
     h.sh(`${ALIVE} _resupervise_live demo-warm-mesa >/dev/null; :`);
-    expect(h.calls()).toContain('systemctl --user enable --now claude-session@demo-warm-mesa');
+    expect(asManagerCalls(h.calls())).toContain('systemctl --user enable --now claude-session@demo-warm-mesa');
   });
 
   it('the gate names both words, and the claim is on the unclaimed branch only', () => {

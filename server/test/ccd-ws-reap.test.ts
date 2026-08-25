@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, WS_ADD } from './ccdWsHelpers.js';
 import { CFG_DIR, GH_STUB, makePrHarness, mergedRow, type PrHarness } from './ccdPrHelpers.js';
+import { itLinux } from './platformFixtures.js';
 
 let h: PrHarness;
 beforeEach(() => { h = makePrHarness('ccrc-ccd-reap-'); });
@@ -1052,7 +1053,18 @@ describe('destruction order', () => {
   const manifest = (id = 'demo-quiet-basin'): { name: string; bytes: number | null }[] =>
     JSON.parse(h.sh(`_ws_clip_manifest ${id}`));
 
-  it('a clip directory du can only PARTIALLY read is null, never its partial total', () => {
+  // THE FIXTURE'S MECHANISM IS GNU find's, and macOS does not share it. Both
+  // cases below strip the SEARCH bit from the clips directory so that names
+  // can still be LISTED while none of them can be stat'd — that is what makes
+  // a per-entry `null` reachable. Measured on this box: BSD find refuses such
+  // a directory outright ("Permission denied") and prints nothing at all, so
+  // the per-entry case cannot be arranged there.
+  //
+  // ccd's own behaviour on that input is CORRECT and is covered elsewhere: an
+  // enumeration that failed makes `_ws_clip_manifest` print nothing and return
+  // non-zero — "could not enumerate", exactly its documented contract. What
+  // cannot be reproduced is the INPUT, not the handling.
+  itLinux('a clip directory du can only PARTIALLY read is null, never its partial total', () => {
     const clips = path.join(h.home, '.cc-clips', 'demo-quiet-basin');
     const sub = path.join(clips, 'sub');
     fs.mkdirSync(path.join(sub, 'locked'), { recursive: true });
@@ -1068,7 +1080,13 @@ describe('destruction order', () => {
       // IN-FIXTURE PROBE, so the premise is measured on the box running the
       // test rather than asserted from the report. GNU coreutils 9.4: rc 1,
       // a diagnostic on stderr, AND a partial total on stdout.
-      const probe = h.run(`du -sb "${sub}" 2>"$HOME/du-err"; echo "rc=$?"`);
+      // THE PREMISE, against the tool ccd actually calls. `du -sb` is GNU-only
+      // — BSD's du rejects `-b` outright (exit 64), so probing it directly made
+      // this premise fail on macOS and take the real assertions with it.
+      // `_plat_bytes` is the platform layer's stand-in and keeps du's shape: a
+      // partial read still prints a total and reports the partiality through
+      // the exit status.
+      const probe = h.run(`_plat_bytes "${sub}" 2>"$HOME/du-err"; echo "rc=$?"`);
       const partial = probe.stdout.match(/^(\d+)\s/m)?.[1];
       expect(probe.stdout).toContain('rc=1');
       expect(fs.readFileSync(path.join(h.home, 'du-err'), 'utf8')).toMatch(/annot read/);
@@ -1104,7 +1122,18 @@ describe('destruction order', () => {
     expect(manifest()).toEqual([{ name: 'sub/', bytes: 14000 }]);
   }, 30000);
 
-  it('a clip whose size stat cannot take is null, not 0 bytes', () => {
+  // THE FIXTURE'S MECHANISM IS GNU find's, and macOS does not share it. Both
+  // cases below strip the SEARCH bit from the clips directory so that names
+  // can still be LISTED while none of them can be stat'd — that is what makes
+  // a per-entry `null` reachable. Measured on this box: BSD find refuses such
+  // a directory outright ("Permission denied") and prints nothing at all, so
+  // the per-entry case cannot be arranged there.
+  //
+  // ccd's own behaviour on that input is CORRECT and is covered elsewhere: an
+  // enumeration that failed makes `_ws_clip_manifest` print nothing and return
+  // non-zero — "could not enumerate", exactly its documented contract. What
+  // cannot be reproduced is the INPUT, not the handling.
+  itLinux('a clip whose size stat cannot take is null, not 0 bytes', () => {
     // The file rung. It was `|| echo 0` and was defended as race-only — an
     // entry vanishing between the `find` and the `stat`, which no fixture can
     // arrange. This one can: strip the SEARCH bit from the clips directory and

@@ -92,7 +92,7 @@ echo "build-release.sh: building $VERSION (server, PWA, agent)…"
   || die "no agent build at $ROOT/agent/dist after npm run build"
 
 # ── Stage the matched set ─────────────────────────────────────────────────
-STAGE="$(mktemp -d)"
+STAGE="$(mktemp -d "${TMPDIR:-/tmp}/ccrc-rel.XXXXXXXXXX")"
 trap 'rm -rf "$STAGE"' EXIT
 TOP="$STAGE/tree"
 mkdir -p "$TOP"
@@ -134,15 +134,56 @@ printf '{"sha":"%s","ref":"%s","builtAt":"%s","dirty":false,"version":"%s"}\n' \
 # the builder's locale. The outer checksum (SHA256SUMS) guards transport; this
 # guards the set after extraction (`ccrc update` runs `sha256sum -c MANIFEST`
 # in the staging dir).
-( cd "$TOP" && find . -type f | sed 's|^\./||' | LC_ALL=C sort \
-    | xargs -r -d '\n' sha256sum ) > "$STAGE/MANIFEST"
+# `xargs -r -d` AND `sha256sum` ARE BOTH GNU, and this line used neither
+# portably: BSD xargs has no `-d` at all (it rejects the option outright, so
+# the MANIFEST came out EMPTY on a macOS builder) and BSD ships `shasum`
+# rather than `sha256sum`. `-0` is in both, so the separator is switched to
+# NUL via `tr`; `-r` becomes an explicit emptiness guard, because BSD xargs
+# runs its utility once even with no input where GNU's `-r` skips it.
+#
+# Both tools print the SAME "<digest>  <name>" line, so a MANIFEST written on
+# either platform verifies on either — which is the property that matters
+# here, since `ccrc update` checks this file on the box, not on the builder.
+# A COMMAND, not a shell function: `xargs` execs a binary and cannot call
+# one. Unquoted on use, so `shasum -a 256` splits into its two words.
+BR_SHA256=sha256sum
+[ "$(uname -s 2>/dev/null)" = Darwin ] && BR_SHA256="shasum -a 256"
+( cd "$TOP" && find . -type f | sed 's|^\./||' | LC_ALL=C sort > "$STAGE/.manifest-names"
+  if [ -s "$STAGE/.manifest-names" ]; then
+    # shellcheck disable=SC2086  # deliberate word split: see BR_SHA256 above
+    tr '\n' '\0' < "$STAGE/.manifest-names" | xargs -0 $BR_SHA256
+  fi
+  rm -f "$STAGE/.manifest-names" ) > "$STAGE/MANIFEST"
 mv "$STAGE/MANIFEST" "$TOP/MANIFEST"
 
 # ── The artifact pair ─────────────────────────────────────────────────────
 mkdir -p "$OUT_DIR"
 TARBALL="$OUT_DIR/ccrc-$VERSION.tar.gz"
-tar --sort=name --mtime=@0 --owner=0 --group=0 -C "$TOP" -cf - . | gzip -n > "$TARBALL"
-( cd "$OUT_DIR" && sha256sum "ccrc-$VERSION.tar.gz" > SHA256SUMS )
+# ── THE TARBALL MUST BE REPRODUCIBLE, and that is why this needs GNU tar ──
+# `--sort=name --mtime=@0 --owner=0 --group=0` is what makes two builds of the
+# same tree produce the same BYTES, which is the whole basis of `SHA256SUMS`
+# being a statement about the tree rather than about the builder. BSD tar
+# (libarchive, macOS's `tar`) has none of those four options — it rejects
+# `--sort` outright — so a macOS builder would silently emit a DIFFERENT
+# tarball for identical input: same contents, different digest, and a checksum
+# that no longer means what it says.
+#
+# So this REFUSES rather than degrading. Downloading and verifying a release
+# is a `curl` + `sha256sum -c` on the box and stays platform-neutral; BUILDING
+# one is a maintainer's job, and requiring the tool that makes the output
+# deterministic is the honest price. `gtar` is what Homebrew's `gnu-tar`
+# installs.
+BR_TAR=""
+if tar --version 2>/dev/null | grep -qi 'gnu tar'; then BR_TAR=tar
+elif command -v gtar >/dev/null 2>&1; then BR_TAR=gtar
+fi
+[ -n "$BR_TAR" ] || {
+  echo "build-release.sh: GNU tar is required to build a release — the archive is made reproducible with --sort/--mtime/--owner/--group, and BSD tar (macOS's) has none of them, so it would emit a different tarball for identical input. Install it: brew install gnu-tar" >&2
+  exit 1
+}
+"$BR_TAR" --sort=name --mtime=@0 --owner=0 --group=0 -C "$TOP" -cf - . | gzip -n > "$TARBALL"
+# shellcheck disable=SC2086  # deliberate word split: see BR_SHA256 above
+( cd "$OUT_DIR" && $BR_SHA256 "ccrc-$VERSION.tar.gz" > SHA256SUMS )
 
 echo "build-release.sh: wrote $TARBALL"
 echo "build-release.sh: wrote $OUT_DIR/SHA256SUMS"

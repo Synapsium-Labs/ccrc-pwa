@@ -44,6 +44,7 @@ import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
+import { itLinux } from './platformFixtures.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -152,6 +153,29 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
       `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/${name}-poison"\n`
       + `echo "${says}" >&2\nexit 97\n`);
   poison('journalctl', 'ccrc tests must never read this box\'s real journal');
+  // macOS's service manager, contained the same way systemctl is. Without it
+  // `_inst_enable`'s Darwin arm reaches the platform layer's guard, which
+  // (correctly) refuses to drive the developer's REAL launchd from a sandbox
+  // HOME — and the staged install dies for a reason that has nothing to do
+  // with updating.
+  plant('launchctl', [
+    '#!/bin/sh',
+    'printf \'%s\\n\' "$*" >> "$HOME/launchctl-calls"',
+    'case "$1" in',
+    '  bootstrap) [ -f "$3" ] || { echo "fixture launchctl: no job file: $3" >&2; exit 1; };',
+    '             printf \'%s\\n\' "${3##*/}" >> "$HOME/launchctl-loaded"; exit 0 ;;',
+    '  bootout|enable|disable|kickstart) exit 0 ;;',
+    '  print)',
+    '    lbl="${2##*/}"',
+    '    if [ -f "$HOME/launchctl-loaded" ] && grep -q "^$lbl.plist$" "$HOME/launchctl-loaded"; then',
+    '      echo "	state = running"; exit 0',
+    '    fi',
+    '    exit 113 ;;',
+    '  *) echo "fixture launchctl: unexpected argv: $*" >&2; exit 90 ;;',
+    'esac',
+  ].join('\n') + '\n');
+  plant('plutil', '#!/bin/sh\nexit 0\n');
+
   plant('systemctl', [
     '#!/bin/sh',
     'printf \'%s\\n\' "$*" >> "$HOME/systemctl-calls"',
@@ -246,6 +270,18 @@ function plantOldBox(home: string, opts: { version?: string } = {}): void {
   mkdirSync(units, { recursive: true });
   writeFileSync(join(units, 'ccrc.service'), '[Unit]\nDescription=old ccrc.service\n');
   writeFileSync(join(units, 'claude-session@.service'), '[Unit]\nDescription=old supervisor unit\n');
+  // The same "this box already had one" fixture, in launchd's spelling. A box
+  // whose job files are systemd units is not a macOS box, and the backup step
+  // reads whichever directory THIS platform installs into — so a fixture that
+  // plants only the Linux pair leaves the Darwin arm with nothing to copy and
+  // the assertion measuring the fixture rather than the code.
+  if (process.platform === 'darwin') {
+    const agents = join(home, 'Library', 'LaunchAgents');
+    mkdirSync(agents, { recursive: true });
+    writeFileSync(join(agents, 'app.ccrc.ccrc.plist'),
+      '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>'
+      + '<key>Label</key><string>app.ccrc.ccrc</string></dict></plist>\n');
+  }
   if (opts.version !== undefined) {
     mkdirSync(join(home, '.ccrc'), { recursive: true });
     writeFileSync(join(home, '.ccrc', 'build.json'),
@@ -275,7 +311,15 @@ const sha256 = (p: string): string =>
 function writeManifest(tree: string): void {
   const tmp = `${tree}.MANIFEST.tmp`;
   const r = spawnSync('bash', ['-c',
-    'cd "$1" && find . -type f | sed \'s|^\\./||\' | LC_ALL=C sort | xargs -r -d \'\\n\' sha256sum > "$2"',
+    // PORTABLE ON PURPOSE, and it mirrors `deploy/build-release.sh`'s own
+    // line: `xargs -d` and `sha256sum` are both GNU — BSD xargs rejects `-d`
+    // outright, which made this fixture fail on macOS with an error naming
+    // neither the tree nor the test. `-0` exists in both, `tr` supplies the
+    // NUL, and the digest tool is chosen by platform. Both print the same
+    // "<digest>  <name>" line, so the MANIFEST is identical either way.
+    'sha=sha256sum; [ "$(uname -s)" = Darwin ] && sha="shasum -a 256";'
+    + ' cd "$1" && find . -type f | sed \'s|^\\./||\' | LC_ALL=C sort'
+    + ' | tr \'\\n\' \'\\0\' | xargs -0 $sha > "$2"',
     '--', tree, tmp], { encoding: 'utf8' });
   if (r.status !== 0) throw new Error(`fixture MANIFEST failed: ${r.stderr}`);
   renameSync(tmp, join(tree, 'MANIFEST'));
@@ -515,9 +559,16 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     // … the old ccd, byte for byte …
     expect(readFileSync(join(backup, 'ccd'), 'utf8'))
       .toBe(readFileSync(join(home, '.local', 'bin', 'ccd'), 'utf8'));
-    // … the units, and the dists.
-    expect(existsSync(join(backup, 'ccrc.service'))).toBe(true);
-    expect(existsSync(join(backup, 'claude-session@.service'))).toBe(true);
+    // … the job files this box actually has, and the dists. The NAMES are
+    // per-platform (systemd units vs launchd plists) and so is the set:
+    // launchd has no template unit, because there is nothing to instantiate —
+    // `ccd` writes one plist per session at enable time.
+    if (process.platform === 'darwin') {
+      expect(existsSync(join(backup, 'app.ccrc.ccrc.plist'))).toBe(true);
+    } else {
+      expect(existsSync(join(backup, 'ccrc.service'))).toBe(true);
+      expect(existsSync(join(backup, 'claude-session@.service'))).toBe(true);
+    }
     expect(existsSync(join(backup, 'server-dist', 'old.js'))).toBe(true);
     expect(existsSync(join(backup, 'agent-dist', 'old.js'))).toBe(true);
   });
@@ -541,7 +592,9 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     expect(r.stdout).toMatch(/^update: rollback: /m);
     expect(r.stdout).toContain('NOT restored');
     expect(r.stdout).toContain(`cp ${backup}/coord.db`);
-    expect(r.stdout).toContain('systemctl --user stop ccrc.service');
+    // The rollback lines name this platform's own stop verb.
+    expect(r.stdout).toContain(process.platform === 'darwin'
+      ? 'launchctl bootout' : 'systemctl --user stop ccrc.service');
     // The live db was read (VACUUM INTO) and never written.
     expect(readFileSync(join(home, '.ccrc', 'coord.db')).equals(dbBytes),
       'update wrote the live coord.db').toBe(true);
@@ -614,7 +667,7 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
     'claude-session@alpha.service loaded active running fixture supervisor\n'
     + 'claude-session@beta.service loaded active running fixture supervisor\n';
 
-  it('with KillMode=process resolving per unit, the sweep runs: preflight, try-restart, the failed warn query, the active verify query — in that argv order', () => {
+  itLinux('with KillMode=process resolving per unit, the sweep runs: preflight, try-restart, the failed warn query, the active verify query — in that argv order', () => {
     const home = freshUpdateBox('ccrc-update-sweep-');
     plantOldBox(home, { version: 'v1.0.0' });
     plantKillModeDropIn(home);
@@ -646,7 +699,7 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
     expect(r.stdout).not.toMatch(/DEGRADED/);
   });
 
-  it('with the drop-in ABSENT the sweep is REFUSED — loud, naming the drop-in — and the update still exits 0 with a degraded line', () => {
+  itLinux('with the drop-in ABSENT the sweep is REFUSED — loud, naming the drop-in — and the update still exits 0 with a degraded line', () => {
     const home = freshUpdateBox('ccrc-update-sweep-refused-');
     plantOldBox(home, { version: 'v1.0.0' });
     writeFileSync(join(home, 'fixture-sweep-units'), UNIT_LINES);

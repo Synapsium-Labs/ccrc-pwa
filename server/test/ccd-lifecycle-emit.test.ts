@@ -252,7 +252,7 @@ describe('_lc_obs — kernel-observed, memoised, never a decision', () => {
       _lc_cgroup_read() { printf '%s' '/x'; }
       tmux() { echo tmuxcall >> "$HOME/obs-calls"; echo "none 999999"; }
       _lc_obs; _lc_obs; _lc_obs
-      wc -l < "$HOME/obs-calls"`);
+      wc -l < "$HOME/obs-calls" | tr -d ' '`);
     expect(Number(out.trim())).toBe(1);
   });
 

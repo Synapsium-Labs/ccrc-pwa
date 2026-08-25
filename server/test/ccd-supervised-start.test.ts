@@ -14,6 +14,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, ghContainedEnv, harnessBin, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { describeLinux, describeDarwin } from './platformFixtures.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-supstart-'); });
@@ -25,6 +26,15 @@ const UNIT = `sleep() { :; };
     case "$*" in
       "--user enable --now "*)  : > "$HOME/pane-up" ;;
       "--user disable --now "*) rm -f "$HOME/pane-up" ;;
+    esac
+    return 0
+  };
+  launchctl() {
+    echo "launchctl $*" >> "$HOME/ccd-calls"
+    case "$1" in
+      bootstrap|kickstart) : > "$HOME/pane-up" ;;
+      bootout)             rm -f "$HOME/pane-up" ;;
+      print)               [[ -e "$HOME/pane-up" ]] && echo "	state = running" ;;
     esac
     return 0
   };
@@ -107,7 +117,7 @@ const runCcd = (...args: string[]): { code: number; stdout: string; stderr: stri
   }
 };
 
-describe('stop then start leaves the unit ENABLED', () => {
+describeLinux('stop then start leaves the unit ENABLED', () => {
   it('emits exactly disable --now, reset-failed, enable --now — never a bare `start`', () => {
     // THE defect, in one sequence. A `systemctl --user start` here would bring
     // the pane back with the unit still disabled — supervised until the next
@@ -142,7 +152,7 @@ describe('stop then start leaves the unit ENABLED', () => {
   });
 });
 
-describe('cmd_enable reconciles a session that is already alive', () => {
+describeLinux('cmd_enable reconciles a session that is already alive', () => {
   /** A live pane the supervisor IS watching: `_session_state` reads `running`,
    *  which is the row the alive branch must stay cheap for.
    *
@@ -213,7 +223,7 @@ describe('cmd_enable reconciles a session that is already alive', () => {
   });
 });
 
-describe('ccd ensure revives a live-but-unsupervised session', () => {
+describeLinux('ccd ensure revives a live-but-unsupervised session', () => {
   // THE ccd HALF OF A PWA FINDING (final review). `POST /api/sessions/:id/ensure`
   // is the Restart button's actual route, and `cmd_ensure`'s `if _alive; then
   // echo "alive: $id"; return 0; fi` ran BEFORE every side effect — so on the
@@ -323,7 +333,7 @@ describe('ccd ensure revives a live-but-unsupervised session', () => {
   });
 });
 
-describe('the recursion guard is an in-process variable', () => {
+describeLinux('the recursion guard is an in-process variable', () => {
   it('an ensure INSIDE the unit spawns directly and issues no systemctl at all', () => {
     // If ensure re-entered `systemctl start` on its own unit, the supervisor
     // would be asking systemd to start the thing systemd is currently starting.
@@ -346,7 +356,7 @@ describe('the recursion guard is an in-process variable', () => {
   });
 });
 
-describe('the start waits on observables', () => {
+describeLinux('the start waits on observables', () => {
   it('reports the unit\'s own verdict, read from the registry rather than guessed', () => {
     // Task 4's $REG/<id>.spawn is the only channel from a spawn inside the
     // supervisor to a `ccd start` in another process. Here the "unit" spawns
@@ -440,13 +450,13 @@ describe('the start waits on observables', () => {
   });
 });
 
-describe('when systemd is not there, the start still happens and says so', () => {
+describeLinux('when systemd is not there, the start still happens and says so', () => {
   it('falls back to a direct spawn and warns that nothing is watching', () => {
     // §3.1: a start that cannot be supervised is still better than no start; a
     // start that is SILENTLY unsupervised is the defect. _have_systemctl is its
     // own function for the reason _ws_supervise is: a test can stub it.
     seed('myid');
-    const out = h.sh(`${UNIT} _have_systemctl() { return 1; }; rm -f "$HOME/pane-up"; cmd_ensure myid 2>&1`);
+    const out = h.sh(`${UNIT} _have_systemctl() { return 1; }; launchctl() { return 1; }; rm -f "$HOME/pane-up"; cmd_ensure myid 2>&1`);
     expect(out).toContain('systemctl not found — starting myid UNSUPERVISED');
     expect(h.calls().some((c) => c.startsWith('tmux new-session'))).toBe(true);
     expect(sysCalls()).toEqual([]);
@@ -541,5 +551,58 @@ describe('_supervised_start\'s fallbacks take the split form', () => {
     const body = h.sh('type _supervised_start');
     expect(body).not.toMatch(/\$\(\s*_spawn_start/);
     expect(body).toContain('SPAWN_FROMSWAP');
+  });
+});
+
+
+// ── THE SAME LIFECYCLE, ON LAUNCHD ──────────────────────────────────────
+// The describes above pin systemd's own argv — `--user disable --now`,
+// `reset-failed`, `--user enable --now` — and that is a LINUX property, not a
+// portable one. It is not translatable either, and the reason is worth
+// stating rather than papering over: `reset-failed` has no launchctl call at
+// ALL on macOS. `_svc_reset_failed` removes the stamp `cmd_supervise` writes
+// when it gives up, so there is nothing in an argv log to assert. Normalising
+// the two vocabularies into one would therefore have to invent an event that
+// does not happen — a test that passes by pretending.
+//
+// So macOS asserts what macOS actually has: the plist, the stamp, and the
+// bootstrap. Same three questions the Linux tests ask — is it installed, is
+// its failure cleared, was it started — answered against this platform's
+// observables.
+describeDarwin('the same lifecycle, in launchd terms', () => {
+  it('writes the session plist and bootstraps it — the `enable --now` pair', () => {
+    h.sh(`mkdir -p "$HOME/projects/demo"`);
+    h.sh(`${UNIT} cmd_start claude-a demo`);
+    expect(h.calls().filter((c) => c.startsWith('launchctl ')).join('\n'),
+      'nothing was bootstrapped').toMatch(/^launchctl bootstrap /m);
+    expect(fs.existsSync(path.join(h.home, 'Library', 'LaunchAgents',
+      'app.ccrc.session.claude-a-demo.plist')),
+    'no job file was written for the session').toBe(true);
+  });
+
+  it('boots the job OUT before it starts it again — the `disable --now` half', () => {
+    h.sh(`mkdir -p "$HOME/projects/demo"`);
+    h.sh(`${UNIT} cmd_stop claude-a-demo`);
+    expect(h.calls().filter((c) => c.startsWith('launchctl ')).join('\n'))
+      .toMatch(/^launchctl bootout /m);
+  });
+
+  it('clears a FAILED session by removing the stamp, which is what `reset-failed` means here', () => {
+    // launchd has no failed state that blocks a restart, so the state — and
+    // therefore the clearing of it — is ours. `_svc_is_active` reads this
+    // stamp, so removing it is exactly the transition `systemctl reset-failed`
+    // performs on the other platform.
+    const stamp = path.join(h.home, '.cc-sessions', 'demo-quiet-basin.svcfailed');
+    fs.mkdirSync(path.dirname(stamp), { recursive: true });
+    fs.writeFileSync(stamp, '1');
+    h.sh(`${UNIT} _svc_reset_failed claude-session@demo-quiet-basin`);
+    expect(fs.existsSync(stamp), 'the failure stamp survived a reset').toBe(false);
+  });
+
+  it('reports `failed` from that stamp, since launchd cannot express it', () => {
+    const stamp = path.join(h.home, '.cc-sessions', 'demo-quiet-basin.svcfailed');
+    fs.mkdirSync(path.dirname(stamp), { recursive: true });
+    fs.writeFileSync(stamp, '1');
+    expect(h.sh(`${UNIT} _svc_is_active claude-session@demo-quiet-basin`)).toBe('failed');
   });
 });

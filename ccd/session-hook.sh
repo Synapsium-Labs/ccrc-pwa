@@ -8,6 +8,32 @@
 # the agent (whitelist: .cc-sessions is readable; nothing here needs a
 # grant). Non-fleet sessions (no tmux, foreign session name) exit silently.
 set -uo pipefail
+
+# ── epoch milliseconds, on two userlands ────────────────────────────────
+# `date +%s%3N` is GNU. BSD's date has no `%N`: it prints the literal letter,
+# so the format answers `17876553263N` — not a number, which the `--argjson
+# updatedAt` below rejects. `jq` then fails, the `|| exit 0` swallows it, and
+# THE HOOK WRITES NOTHING. That is the worst shape this file can fail in: the
+# server reads a session's state from this file, so every session on the box
+# would read as unsupervised while looking perfectly healthy from the inside.
+#
+# `EPOCHREALTIME` is a bash builtin — no fork, no coreutils, same answer on
+# both platforms (measured against `date +%s%3N` on Linux, to the
+# millisecond). The separator is taken as either `.` or `,` because that field
+# is formatted with the locale's decimal point.
+#
+# This is a LOCAL copy of ccd's `_plat_epoch_ms`, and deliberately so: this
+# file is installed on its own into ~/.cc-sessions and runs as Claude Code's
+# hook, with no ccd around to source.
+_hook_epoch_ms() {
+  if [ -n "${EPOCHREALTIME:-}" ]; then
+    local s="${EPOCHREALTIME%%[.,]*}" f="${EPOCHREALTIME#*[.,]}"
+    f="${f}000"; printf '%s%s' "$s" "${f:0:3}"
+    return 0
+  fi
+  date +%s%3N
+}
+
 [[ -n "${HOME:-}" ]] || exit 0
 REG="$HOME/.cc-sessions"
 
@@ -105,7 +131,7 @@ prev_state=$(jq -r '.state // empty' "$f" 2>/dev/null) || prev_state=""
 
 if [[ "$event" == SubagentStart || "$event" == SubagentStop ]]; then
   name=$(jq -r '.agent_name // .subagent_name // .agent_type // "subagent"' <<<"$payload" 2>/dev/null) || name="subagent"
-  now=$(date +%s%3N)
+  now=$(_hook_epoch_ms)
   if [[ "$event" == SubagentStart ]]; then
     subs=$(jq -c --arg n "$name" --argjson t "$now" \
       '(. + [{name:$n, startedAt:$t}]) | .[-32:]' <<<"$subs" 2>/dev/null) || subs="[]"
@@ -127,7 +153,7 @@ fi
 out=$(jq -cn \
   --argjson v 1 --arg state "$state" --arg event "$event" \
   --arg sessionId "${CLAUDE_CODE_SESSION_ID:-}" --argjson pid "${CLAUDE_PID:-0}" \
-  --argjson updatedAt "$(date +%s%3N)" --argjson interrupted "$interrupted" \
+  --argjson updatedAt "$(_hook_epoch_ms)" --argjson interrupted "$interrupted" \
   --argjson ask "$ask_json" --argjson subagents "$subs" \
   '{v:$v, state:$state, event:$event, sessionId:$sessionId, pid:$pid,
     updatedAt:$updatedAt, ask:$ask, subagents:$subagents}

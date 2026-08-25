@@ -16,7 +16,7 @@
 // fails here.
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -46,7 +46,10 @@ function run(env: Record<string, string> = {}, argv: string[] = []): { code: num
 
 describe('deploy.sh: the target is never guessed', () => {
   let tmp: string;
-  const mk = (): string => (tmp = mkdtempSync(path.join(tmpdir(), 'ccrc-deploy-')));
+// RESOLVED — see tmpHelpers' mkTmp: on macOS the temp root lives under a
+// symlink (/var -> /private/var), and ccd resolves paths deliberately, so an
+// unresolved fixture path compares two spellings of one directory.
+  const mk = (): string => (tmp = realpathSync(mkdtempSync(path.join(tmpdir(), 'ccrc-deploy-'))));
   const cleanup = (): void => { if (tmp) rmSync(tmp, { recursive: true, force: true }); };
 
   it('refuses with exit 2 when CCRC_BOX is unset, naming the fix', () => {
