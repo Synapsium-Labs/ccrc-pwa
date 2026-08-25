@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=91bdea22d654b215bb3e7d0a1deb58c52ff53859239b1076bc925f7bb8a1fb75
+# ccrc:generated 1 sha256=91f629cde252f9bccc736aa5305171de8cd15d012e34ffe62df038efbfd98e52
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box, not on this file: `_rc_enabled` reads
@@ -2531,8 +2531,14 @@ _ws_disk_free_gb() {   # dir -> whole GiB available on the filesystem holding it
   echo $(( kb / 1024 / 1024 ))
 }
 
-cmd_ws_add() {   # project [slug] — new worktree + session for an existing project
-  local project="${1:?usage: ccd ws-add <project> [slug]}" slug="${2:-}"
+cmd_ws_add() {   # [--no-rc] project [slug] — new worktree + session for an existing project
+  # PER-WORKER RC (task #37, ruling 2026-08-13): the dispatch path declares a
+  # spawn a dispatched worker AT CREATION — the only moment the fact is known
+  # (hold is written later and released mid-program). Exact-string match, no
+  # value parsing: nothing user-controlled reaches the flag.
+  local norc=0
+  [[ "${1:-}" == "--no-rc" ]] && { norc=1; shift; }
+  local project="${1:?usage: ccd ws-add [--no-rc] <project> [slug]}" slug="${2:-}"
   _ws_project_valid "$project" \
     || die "invalid project '$project' — allowed chars: A-Za-z0-9 . _ -, and no LEADING dot (a dot-leading id aliases ccd's own hidden registry files — see _ws_project_valid)"
   local main="$PROJECTS_ROOT/$project"
@@ -2633,6 +2639,11 @@ cmd_ws_add() {   # project [slug] — new worktree + session for an existing pro
   _reg_set "$id" workspace "$slug"; _reg_set "$id" base "$base"
   _reg_set "$id" branch "$branch"
   _ws_seed_home "$id" "$hw"
+  # PER-WORKER RC: stamped before the first spawn so _spawn_start's consult
+  # already sees it; survives swap and every Restart=always respawn; dies at
+  # reap via _reg_purge's shape match. Absent = follow the box (D-99's
+  # fail-safe direction, per session).
+  (( norc )) && _reg_set "$id" rc off
 
   # GIVEN BACK HERE, before the setup hook and long before the settle, for the
   # reason cmd_ws_reap states at its own close: `flock` treats two `open()`s of
@@ -10415,7 +10426,15 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # string exactly as `$sidflag`'s alternatives do — the flag is absent, not
   # passed empty, and `--remote-control` with an empty operand is not a thing
   # the wrapper accepts.
-  rcflag=""; _rc_enabled && rcflag="--remote-control '$id'"
+  #
+  # PER-SESSION OVERRIDE (task #37, ruling 2026-08-13): a row stamped `rc=off`
+  # at creation — `ccd ws-add --no-rc`, the dispatch path's spelling of "this
+  # pane is a dispatched worker" — never gets the flag, whatever the box says.
+  # Only the EXACT string `off` suppresses: the writer is ccd itself, so an
+  # absent or garbled field follows the box (D-99's fail-safe direction, per
+  # session) — never "strip RC from a session nobody marked".
+  rcflag=""
+  _rc_enabled && [[ "$(_reg_get "$id" rc)" != "off" ]] && rcflag="--remote-control '$id'"
   # COLORTERM=truecolor so Claude Code emits 24-bit colour (it otherwise quantises
   # to 256, collapsing its palette). tmux passes it through to the terminal-drawer
   # xterm once the server has the RGB terminal-feature (see hardening/tmux.conf).

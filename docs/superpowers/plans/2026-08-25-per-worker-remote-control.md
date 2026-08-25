@@ -95,7 +95,7 @@ landed spellings — tree wins for anchors, this plan's SEMANTICS win for behavi
   `_rc_enabled && [[ "$(_reg_get "$id" rc)" != "off" ]]`.
 - Consumes: `_reg_set`/`_reg_get` (existing), `_rc_enabled` (`ccd/ccd:222`).
 
-- [ ] **Step 1: red-first — the suppression truth table.** Append to
+- [x] **Step 1: red-first — the suppression truth table.** Append to
   `server/test/ccd-rc-flag.test.ts` (inside its existing harness idiom — read the
   file's existing `on`-flag fixtures and reuse their helpers):
 
@@ -120,7 +120,7 @@ describe('the per-session rc field (the 2026-08-13 ruling, task #37)', () => {
   `cd server && ./node_modules/.bin/vitest run test/ccd-rc-flag.test.ts` —
   expect the new tests RED (the field does not exist).
 
-- [ ] **Step 2: red-first — ws-add writes the field.** In the same suite or
+- [x] **Step 2: red-first — ws-add writes the field.** In the same suite or
   `ccd-spawn-split.test.ts` (whichever already exercises `cmd_ws_add` end-to-end
   in a fixture HOME — read both and pick the one with the cheaper harness):
 
@@ -134,7 +134,7 @@ it('ws-add --no-rc stamps rc=off before the first spawn, and a plain ws-add stam
 
   Expect RED (unknown flag `--no-rc` dies in cmd_ws_add's positional parse).
 
-- [ ] **Step 3: implement.** Three edits to `ccd/ccd`:
+- [x] **Step 3: implement.** Three edits to `ccd/ccd`:
 
   (a) `cmd_ws_add` head — parse the leading flag before the positionals:
 
@@ -174,22 +174,22 @@ cmd_ws_add() {   # [--no-rc] project [slug] — new worktree + session for an ex
   Then re-stamp provenance: `node -e "import('./shared/mark.mjs').then(m => m.markGenerated('ccd/ccd'))"`
   (read `shared/mark.mjs` for the exact call if this spelling drifted).
 
-- [ ] **Step 4: green.** Re-run both suites plus the neighbours:
+- [x] **Step 4: green.** Re-run both suites plus the neighbours:
   `cd server && ./node_modules/.bin/vitest run test/ccd-rc-flag.test.ts test/ccd-spawn-split.test.ts test/ccd-workspaces.test.ts test/single-definition.test.ts` — all green.
 
-- [ ] **Step 5: persistence across respawn.** One more test (same harness):
+- [x] **Step 5: persistence across respawn.** One more test (same harness):
   after `ws-add --no-rc`, kill the captured spawn state and re-drive the spawn
   path (`ccd ensure <id>` in the fixture, or the harness's respawn idiom) —
   the recomposed command STILL omits the flag. This is the test that makes the
   registry-field choice load-bearing (a caller-argv design cannot pass it).
 
-- [ ] **Step 6: mutation ceremonies, each planted alone, measured, reverted:**
+- [x] **Step 6: mutation ceremonies, each planted alone, measured, reverted:**
   1. Delete the `[[ ... != "off" ]]` clause from the consult → the suppression
      test reds (expect exactly its reds, state the count).
   2. Delete the `(( norc )) && _reg_set` line → the ws-add stamping test reds.
   3. Flip the consult to `== "off"` → the absent-follows-box and garbled tests red.
 
-- [ ] **Step 7: commit** with the measured counts in the body.
+- [x] **Step 7: commit** with the measured counts in the body.
 
 ### Task 2: server — the dispatch path declares its workers
 

@@ -30,7 +30,7 @@
 // FIXTURE HOMES ONLY (`makeCcdHarness`): ccd is the live fleet's supervisor and
 // HOME is its single isolation boundary.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { CCD, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 
@@ -318,5 +318,104 @@ describe('the ready-marker set keeps ALL FIVE alternatives, `/rc active` include
       'shift\\+tab to cycle',
       '← for agents',
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The per-session rc field (the 2026-08-13 ruling, task #37).
+// ---------------------------------------------------------------------------
+
+describe('the per-session rc field (the 2026-08-13 ruling, task #37)', () => {
+  /** The `ccd-spawn-split.test.ts` spawn substrate, in shape: `new-session`
+   *  raises `$HOME/pane-up`, everything is recorded into `$HOME/ccd-calls`,
+   *  `sleep` costs nothing. Its own copy for the same reason `SPAWN_STUB`
+   *  above is one: the two files model different tmux substrates over time,
+   *  and a shared stub would make each file's fixture the other's
+   *  constraint. */
+  const TMUX = `sleep() { :; };
+    tmux() {
+      echo "tmux $*" >> "$HOME/ccd-calls"
+      case "$1" in
+        new-session)  : > "$HOME/pane-up" ;;
+        kill-session) rm -f "$HOME/pane-up" ;;
+        has-session)  [[ -e "$HOME/pane-up" ]] ;;
+        capture-pane) printf '%s' "\${PANE_TEXT:-? for shortcuts}" ;;
+      esac
+    };`;
+
+  /** A tmux whose `--resume` new-session leaves no pane but whose
+   *  `--session-id` one does — the substrate that makes `_spawn_start` emit
+   *  BOTH of its spawn lines, so the retry's argv is pinned on its own. */
+  const RESUME_DIES = `sleep() { :; };
+    tmux() {
+      echo "tmux $*" >> "$HOME/ccd-calls"
+      case "$1" in
+        new-session)  case "$*" in *--session-id*) : > "$HOME/pane-up" ;; esac ;;
+        has-session)  [[ -e "$HOME/pane-up" ]] ;;
+        list-sessions) return 0 ;;
+      esac
+    };`;
+
+  const newSessions = (): string[] =>
+    h.calls().filter((c) => c.startsWith('tmux new-session'));
+
+  const seed = (id: string): void => {
+    h.sh(`_reg_set ${id} wrapper claude
+          _reg_set ${id} workdir '${h.home}'
+          _reg_set ${id} uuid deadbeef-0000-4000-8000-000000000000`);
+  };
+
+  it('rc=off suppresses the flag even when the box says on — BOTH spawn lines', () => {
+    // Box flag on, registry field off -> neither the primary nor the retry
+    // carries --remote-control. The field is per SESSION: the box's own
+    // verdict is untouched, only this row opts out.
+    seed('myid');
+    flag('on\n');
+    h.sh('_reg_set myid rc off');
+    h.sh(`${TMUX} rm -f "$HOME/pane-up"; _spawn_start myid new`);
+    let news = newSessions();
+    expect(news).toHaveLength(1);
+    expect(news[0]).not.toContain('--remote-control');
+    // The suppression is not a broken spawn: the uuid and permission flag
+    // still ride the line.
+    expect(news[0]).toContain("--session-id 'deadbeef-0000-4000-8000-000000000000'");
+    expect(news[0]).toContain('--dangerously-skip-permissions');
+    // The RETRY line, separately — it is the hand-copied second composition
+    // an editor updates the primary of and forgets. Fresh call record, then
+    // the substrate whose `--resume` dies.
+    rmSync(path.join(h.home, 'ccd-calls'));
+    h.sh(`${RESUME_DIES} rm -f "$HOME/pane-up"; _spawn_start myid resume 2>/dev/null`);
+    news = newSessions();
+    expect(news).toHaveLength(2);
+    expect(news[0]).not.toContain('--remote-control');
+    expect(news[1]).not.toContain('--remote-control');
+  });
+
+  it('an absent rc field follows the box — on stays on', () => {
+    // Absence permits (the design's fail-safe direction, per session): a row
+    // nobody marked behaves exactly as before the field existed.
+    seed('myid');
+    flag('on\n');
+    h.sh(`${TMUX} rm -f "$HOME/pane-up"; _spawn_start myid new`);
+    const news = newSessions();
+    expect(news).toHaveLength(1);
+    expect(news[0]).toContain("--remote-control 'myid'");
+  });
+
+  it('a garbled rc field follows the box — only the exact string off suppresses', () => {
+    // Written RAW, not through `_reg_set`: the writer under suspicion is a
+    // stray tool or a hand edit. NOTE the consult reads through `$( )`, which
+    // strips trailing newlines — so a plain `off\n` is equivalent to `off`
+    // and DOES suppress; the two shapes below are the ones that must not.
+    // The writer is ccd itself; an unknown value means "behave as before",
+    // never "strip RC from a session nobody marked".
+    seed('myid');
+    flag('on\n');
+    writeFileSync(path.join(h.home, '.cc-sessions', 'myid.rc'), 'OFF\n');
+    h.sh(`${TMUX} rm -f "$HOME/pane-up"; _spawn_start myid new`);
+    expect(newSessions().at(-1)).toContain("--remote-control 'myid'");
+    writeFileSync(path.join(h.home, '.cc-sessions', 'myid.rc'), 'off extra');
+    h.sh(`${TMUX} rm -f "$HOME/pane-up"; _spawn_start myid new`);
+    expect(newSessions().at(-1)).toContain("--remote-control 'myid'");
   });
 });
