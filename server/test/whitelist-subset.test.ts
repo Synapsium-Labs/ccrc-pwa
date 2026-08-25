@@ -27,6 +27,11 @@ const SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   forget: ['claude-corp-demo'],
   swap: ['demo-quiet-basin', 'claude2'],
   wsAdd: ['demo'],
+  // Same bare `['ws-add']` grant, second builder: the dispatch path's
+  // worker-declaring form. Its sample proves the FLAGGED shape crosses the
+  // existing prefix with no widening — tokens after the prefix are
+  // unconstrained, the same rule that carries `stop --surface`.
+  wsAddWorker: ['demo'],
   prStateSession: ['demo-quiet-basin'],
   prStateProject: ['demo'],
   prOpen: ['demo-quiet-basin', 'the work', 'Ym9keQ==', 'false'],
@@ -301,6 +306,10 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     forget: ['forget', 'claude-corp-demo'],
     swap: ['swap', 'demo-quiet-basin', 'claude2'],
     wsAdd: ['ws-add', 'demo'],
+    // LEADING flag, then the project — ccd's `cmd_ws_add` shifts `--no-rc`
+    // before its positionals, so token order here is parse-load-bearing the
+    // same way `prOpen`'s is.
+    wsAddWorker: ['ws-add', '--no-rc', 'demo'],
     prStateSession: ['pr-state', '--session', 'demo-quiet-basin'],
     prStateProject: ['pr-state', '--project', 'demo'],
     // SAMPLES.prOpen's fourth element is the STRING 'false' (SAMPLES is typed

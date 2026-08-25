@@ -202,7 +202,7 @@ cmd_ws_add() {   # [--no-rc] project [slug] — new worktree + session for an ex
 - Consumes: Task 1's landed `--no-rc` (leading-flag position).
 - Produces: `CCD_ARGV.wsAddWorker: (p: string) => CcdArgv` = `['ws-add', '--no-rc', p]`.
 
-- [ ] **Step 1: red-first.** In the dispatch suite, pin the composed argv:
+- [x] **Step 1: red-first.** In the dispatch suite, pin the composed argv:
 
 ```ts
 it('a wave-1 fresh spawn declares the worker: ws-add carries --no-rc, in the leading position ccd parses', async () => {
@@ -217,7 +217,7 @@ it("the PWA's ordinary workspace-add stays box-default — no --no-rc anywhere i
 
   Expect the first RED (dispatch still composes plain `wsAdd`).
 
-- [ ] **Step 2: implement.** In `ccdargv.ts`, beside `wsAdd`:
+- [x] **Step 2: implement.** In `ccdargv.ts`, beside `wsAdd`:
 
 ```ts
   /** The dispatch path's ws-add: a dispatched program worker spawns WITHOUT
@@ -229,11 +229,11 @@ it("the PWA's ordinary workspace-add stays box-default — no --no-rc anywhere i
 
   In `dispatch.ts:237`: `const argv = CCD_ARGV.wsAddWorker(run.project);`
 
-- [ ] **Step 3: green + mutation.** Run the dispatch suite and
+- [x] **Step 3: green + mutation.** Run the dispatch suite and
   `test/typecheck-tests.test.ts`. Mutation: revert the dispatch call site to
   `wsAdd` → exactly the wave-1 pin reds; restore, state the count.
 
-- [ ] **Step 4: commit.**
+- [x] **Step 4: commit.**
 
 ### Task 3: the corpus and the docs stop describing the old world
 

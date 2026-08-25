@@ -327,11 +327,43 @@ describe('POST /api/runs/:id/dispatch', () => {
     const res = await postDispatch(app, opened.id);
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ ok: true, sessionId: 'demo-fresh1', resumed: false, clearedAt: null });
-    expect(calls.some((c) => c[0] === 'ws-add' && c[1] === PROJECT)).toBe(true);
+    // Position-agnostic on purpose: the exact worker argv (leading `--no-rc`,
+    // then the project) is pinned by its own test below — this one is about
+    // the registry-diff id learning, not the flag.
+    expect(calls.some((c) => c[0] === 'ws-add' && c.includes(PROJECT))).toBe(true);
     expect(calls.some((c) => c[0] === 'ensure')).toBe(false);
     const row = w.coord.run(opened.id);
     expect(row).toMatchObject({ sessionId: 'demo-fresh1', workspace: 'demo-fresh1', branch: 'ws/demo-fresh1',
       resumed: false, clearedAt: null, state: 'dispatched' });
+  });
+
+  // Per-worker RC (the 2026-08-13 ruling, task #37): the dispatch path is the
+  // ONE call site that knows a spawn is a dispatched worker, so it — and only
+  // it — composes `--no-rc`. Exact argv, token for token: ccd's parse contract
+  // is a LEADING flag (`cmd_ws_add` shifts it before the positionals), so a
+  // trailing `--no-rc` would arrive as the slug and name the worktree after
+  // the flag.
+  it('a wave-1 fresh spawn declares the worker: ws-add carries --no-rc, in the leading position ccd parses', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-fresh1'] });
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    const res = await postDispatch(app, opened.id);
+    expect(res.statusCode).toBe(200);
+    expect(calls.filter((c) => c[0] === 'ws-add')).toEqual([['ws-add', '--no-rc', PROJECT]]);
+  });
+
+  it('the PWA\'s ordinary workspace-add stays box-default — no --no-rc anywhere in its argv', async () => {
+    // The other half of the same pin: only the dispatch path declares a
+    // worker. An operator's add from the PWA follows the box flag, so its
+    // argv must stay exactly two tokens — `--no-rc` anywhere in it would
+    // strip RC from a session nobody marked.
+    const home = mkTmp('ccrc-runs-');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const res = await app.inject({ method: 'POST', url: `/api/projects/${PROJECT}/workspaces` });
+    expect(res.statusCode).toBe(200);
+    expect(calls.filter((c) => c[0] === 'ws-add')).toEqual([['ws-add', PROJECT]]);
   });
 
   it('the 200 body CARRIES adopted and spawnState — the coordinator sees nothing but this JSON', async () => {
