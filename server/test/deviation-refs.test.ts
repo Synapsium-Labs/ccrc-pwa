@@ -37,8 +37,12 @@ const GRANDFATHERED: ReadonlySet<number> = new Set([
 // Both ledger-entry heading forms in use: `### D-12 (bug) — subject` (plan
 // ledgers through build 7) and `- **D-108 (2026-08-20)** — subject` (the
 // bullet form since). Prose REFS (`see D-108`) match neither — this scans
-// entries, the lines that DEFINE a number.
-const ENTRY = /^(?:#{2,4} |- \*\*)D-(\d+)\b[^—\n]*—\s*(.+)$/;
+// entries, the lines that DEFINE a number. A dotted SUB-entry (`- **D-310.1**
+// — finding`) cites its parent, it does not define it: excluded by the
+// lookahead. The exclusion is pinned by the tree itself — the wave-10
+// reconciliation gave the substrate plan's sub-findings a global parent, so
+// deleting the lookahead reds the collision scan below against real docs.
+const ENTRY = /^(?:#{2,4} |- \*\*)D-(\d+)\b(?!\.\d)[^—\n]*—\s*(.+)$/;
 
 interface Entry { file: string; n: number; subject: string }
 
@@ -144,5 +148,85 @@ describe('the floor seed reads THIS tree (D13 — fixtures must not poison it)',
       `a tracked file names a global D-ref above the ledger high-water D-${highWater} ` +
       `(${scan!.evidence}) — spell a fixture SPLIT ('D-' + '9876'), never contiguous, ` +
       `or the first live seed lands there forever`).toBe(highWater + LEDGER_SEED_GAP);
+  });
+});
+
+describe('one deviation namespace — no bare legacy ref survives (9b W10, D14)', () => {
+  // The reconciliation record (docs/superpowers/specs/
+  // 2026-08-21-deviation-namespace-reconciliation.md) renamed every legacy
+  // build-scoped ref into the global sequence, preserving each original as
+  // an alias: `D-<n> (was <legacy>)` on first occurrence per file, bare
+  // `D-<n>` after. This scanner is the ratchet that keeps the old namespace
+  // from growing back: a ref immediately preceded by `was ` is an alias and
+  // is licensed; any other spelling is a defect, named file-by-file below.
+  //
+  // The corpus is `git ls-files` from the repo root — the topology-clean
+  // idiom: every tracked file, nothing registered by hand, so a new file
+  // needs no wiring to be scanned. The liveness fixtures are assembled by
+  // concatenation so this suite's own bytes carry no bare legacy form and
+  // need no self-exclusion.
+  const BARE = /(?<!was )\bD-B\d+-\d+\b/g;
+  const ALIAS = /\bwas (D-B\d+-\d+)\b/g;
+
+  interface LegacyCorpus { files: number; bare: Map<string, string[]>; aliasIds: Set<string> }
+  let corpus: LegacyCorpus | null = null;
+  const load = async (): Promise<LegacyCorpus> => {
+    if (corpus) return corpus;
+    const { execFileSync } = await import('node:child_process');
+    const { readFileSync } = await import('node:fs');
+    const path = (await import('node:path')).default;
+    const { fileURLToPath } = await import('node:url');
+    const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+    const binary = new Set(['.png', '.jpg', '.jpeg', '.gif', '.ico', '.webp', '.avif',
+      '.woff', '.woff2', '.ttf', '.otf', '.db', '.sqlite', '.pdf', '.zip', '.gz', '.tgz', '.wasm']);
+    const tracked = execFileSync('git', ['ls-files', '-z'], { cwd: root, maxBuffer: 64 * 1024 * 1024 })
+      .toString('utf8').split('\0').filter(Boolean)
+      .filter((f) => !binary.has(path.extname(f)));
+    const bare = new Map<string, string[]>();
+    const aliasIds = new Set<string>();
+    let files = 0;
+    for (const f of tracked) {
+      let text: string;
+      try { text = readFileSync(path.join(root, f), 'utf8'); } catch { continue; }
+      if (text.includes('\0')) continue;
+      files += 1;
+      const hits = [...text.matchAll(BARE)].map((m) => m[0]);
+      if (hits.length > 0) bare.set(f, hits);
+      for (const m of text.matchAll(ALIAS)) aliasIds.add(m[1]);
+    }
+    corpus = { files, bare, aliasIds };
+    return corpus;
+  };
+
+  it('finds zero bare legacy refs anywhere git ls-files reaches', async () => {
+    const c = await load();
+    expect(Object.fromEntries(c.bare)).toEqual({});
+  });
+
+  it('is looking at the real tree — guards the guard', async () => {
+    // 707 tracked files measured at reconciliation; the floor has margin so
+    // ordinary growth or pruning never touches it, while a broken walk (a
+    // wrong cwd, a filter eating everything) reds loudly and specifically
+    // instead of letting the tree scan above pass over nothing.
+    const c = await load();
+    expect(c.files).toBeGreaterThan(600);
+  });
+
+  it('sees the alias corpus the reconciliation left behind', async () => {
+    // 37 distinct legacy ids were reconciled (23 in the build-4 family, 14
+    // in the build-8 family); the mapping table alone pins every one in
+    // `was `-guarded form, so this set can only grow — and only if a further
+    // legacy family is ever reconciled. If this reds at a small number while
+    // the tree scan stays green, ALIAS has drifted from BARE: the scan has
+    // gone vacuous, the tree is not clean.
+    const c = await load();
+    expect(c.aliasIds.size).toBeGreaterThanOrEqual(37);
+  });
+
+  it('the predicates themselves are live — fixtures assembled to not self-trip', async () => {
+    const legacy = ['D-B4', '9'].join('-'); // a real reconciled id, in two pieces
+    expect([...`see ${legacy} for the ruling`.matchAll(BARE)].length).toBe(1);
+    expect([...`see D-${999} (was ${legacy})`.matchAll(BARE)].length).toBe(0);
+    expect([...`(was ${legacy})`.matchAll(ALIAS)][0]?.[1]).toBe(legacy);
   });
 });

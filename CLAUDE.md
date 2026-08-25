@@ -137,7 +137,7 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   the call site, never table-looked-up). Exec surface is closed: `EXEC_COMMANDS = ['tmux','ccd']`.
 - **Box token gates every coordination WRITE** (`/api/mail*`, `/api/runs*`) — header `x-ccrc-mail-token`, `401`
   on missing — **except TWO deliberately ungated operator doors: `POST /api/coord/pause` and `POST
-  /api/runs/:id/abandon`** (D-B4-9: the coordinator holds the box token, so gating a wedged run's release valve
+  /api/runs/:id/abandon`** (D-282 (was D-B4-9): the coordinator holds the box token, so gating a wedged run's release valve
   behind that key leaves the wedge no door). `coord-pause-route.test.ts`'s `UNGATED` set pins the pair in both
   directions, and with `CCRC_AUTH` armed both still sit behind the session gate. Don't assume — read the guards.
 - **Mail delivery is idle-gated, reference-based, never awaited:** what lands in a session is a one-line nudge;

@@ -269,7 +269,7 @@ describe('the run board’s abandon control (Task 12, spec §4.3)', () => {
     expect(screen.queryByText(/a release destroys nothing/i)).not.toBeInTheDocument();
   });
 
-  // D-B4-14: the fix round's own anchor — `RunsScreen.tsx:118-122` used to
+  // D-287 (was D-B4-14): the fix round's own anchor — `RunsScreen.tsx:118-122` used to
   // wrap the whole row body in `<button className="run-open">`, and a
   // `<button>` inside a `<button>` is invalid HTML and unreachable to a
   // screen reader. The abandon control must be a SIBLING, never nested.

@@ -615,7 +615,7 @@ describe('readSessionRecord', () => {
 
     expect(readdirCalls).toBe(1);
     // 17 + D3's four stamps (stopped, supervised, swapblocked, spawn) + the
-    // substrate marker (D-B8-14) — the substrate file joined the sweep. The
+    // substrate marker (D-310 (was D-B8-14)) — the substrate file joined the sweep. The
     // number is pinned rather than derived because it IS the remote-mode cost:
     // one round trip each, per session, per 2-second tick.
     expect(fieldReads).toHaveLength(22);
@@ -802,7 +802,7 @@ describe('readRegistryMeasured / RegistryRead', () => {
     expect(await readRegistry(localIO, cfg)).toEqual([]);
   });
 
-  // BUILD 4, D-B4-10. `watch.ts`'s `emitCoord` needs a NON-session fact out of
+  // BUILD 4, D-283 (was D-B4-10). `watch.ts`'s `emitCoord` needs a NON-session fact out of
   // this same directory — `coordinator-paused` and `mail-disabled`, neither of
   // which is a `*.uuid` and so neither of which survives into `records`. A
   // second `readdir` for that would be a second clock for one fact, and the two
@@ -1118,7 +1118,7 @@ describe('the lifecycle stamps (D3)', () => {
   });
 });
 
-// D-B8-14, spec §2 (docs/superpowers/specs/2026-08-19-substrate-unreachable-design.md):
+// D-310, spec §2 (docs/superpowers/specs/2026-08-19-substrate-unreachable-design.md):
 // `$REG/<id>.substrate` is a supervisor's own "I could not reach tmux" record —
 // `<epoch-seconds> <verbatim reason>`, written by `_substrate_mark` on every
 // unknown tick, removed by `_substrate_clear` on the first live one. The
@@ -1143,7 +1143,7 @@ describe('SessionRecord.substrate — presence from the LISTING, never from a no
     (await readRegistry(io, loadConfig({ CCRC_HOME: home })))[0]!;
 
   it('absent file -> null; well-formed "<epoch> <text>" -> {at, text}', async () => {
-    // The overwhelming majority of rows, and every row a pre-D-B8-14 ccd ever
+    // The overwhelming majority of rows, and every row a pre-D-310 ccd ever
     // wrote: no marker at all. Absence is absence — the one shape that reads
     // as "no fault recorded".
     expect((await read()).substrate).toBeNull();

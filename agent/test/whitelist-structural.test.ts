@@ -91,7 +91,7 @@ const EXPECTED: Record<string, { what: string; codes: string[] }> = {
   'g6-ws-reap-wrong-flag.ts':     { what: "the same grant with a plausible WRONG token (--session)", codes: ['TS2322'] },
   'g7-ws-rm-readmitted.ts':       { what: 'the unguarded legacy delete, re-admitted', codes: ['TS2322'] },
   'g8-empty-prefix.ts':           { what: 'an empty prefix — the widest grant expressible, as the smallest diff', codes: ['TS2322'] },
-  // BUILD 4, D-B4-10's sibling finding: a two-token grant is only two tokens
+  // BUILD 4, D-283 (was D-B4-10)'s sibling finding: a two-token grant is only two tokens
   // wide while its verb is ENROLLED in `REQUIRED_VERB_FLAG`. `isExecAllowed` is
   // prefix-matching, so an unenrolled `['coord-pause']` still admits
   // `ccd coord-pause <anything…>` and every subset test stays green.

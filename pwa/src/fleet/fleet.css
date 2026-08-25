@@ -1795,7 +1795,7 @@
 .run-row .run-open {
   display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-2);
   /* Task 12 review, Minor 3 (fix round 1): NOT `width: 100%` — `.run-row`
-     grew a SIBLING (`.run-abandon`, D-B4-14, below), and `.run-open` claiming
+     grew a SIBLING (`.run-abandon`, D-287 (was D-B4-14), below), and `.run-open` claiming
      the row's full width forced that sibling onto its own flex line on
      EVERY row, roughly doubling every row's height on the primary board.
      `flex: 1 1 auto` + `min-width: 0` lets `.run-open` take the free space
@@ -1813,7 +1813,7 @@
 .run-row .run-tally, .run-row .run-when {
   font-size: var(--text-2xs); font-variant-numeric: tabular-nums; color: var(--ink-tertiary);
 }
-/* Task 12, spec §4.3, D-B4-14: a SIBLING of `.run-open` inside `.run-row`'s
+/* Task 12, spec §4.3, D-287: a SIBLING of `.run-open` inside `.run-row`'s
    own `<li>`, never a descendant of it — see RunsScreen.tsx's own comment on
    why a nested button is the defect this shape avoids. Self-grounded via
    `.run-row` (above, background+color both set), same nested idiom as
@@ -1934,7 +1934,7 @@
 
 /* ------------------------------------------------------------------ *
  *  Start-a-program sheet — the run board's own door onto a new       *
- *  program (Task 13, spec §4.4, D-B4-18/19). Composition, not a      *
+ *  program (Task 13, spec §4.4, D-291 (was D-B4-18)/19). Composition, not a      *
  *  compound route — see StartProgramSheet.tsx's own header. Opening  *
  *  a program is a decision, not a living pane: no --glow, no         *
  *  animation, no box-shadow anywhere under .program-start-*, same    *
@@ -1986,7 +1986,7 @@
   color: var(--ink-tertiary);
 }
 /* `--ink-secondary` on `--bg-surface` — 8.67:1 DARK / 7.41:1 LIGHT: the
-   D-B4-18 timeout copy is deliberately NOT the refusal red below — the
+   D-291 timeout copy is deliberately NOT the refusal red below — the
    create almost certainly succeeded, the board just hasn't shown it yet, and
    colouring "likely fine" the same as "refused" would be the false claim
    this copy exists to avoid. */
@@ -2006,8 +2006,8 @@
 /* `--status-dead-text` on `--bg-surface` — the identical pre-measured pair
    `.coord-banner .coord-error`/`.abandon-sheet .abandon-error` already use
    (6.80:1 DARK / 5.73:1 LIGHT), reused rather than a fifth rule re-deriving
-   the same ratio. Three genuine refusals share this register: D-B4-19 (a
-   session already running), D-B4-11 (nothing placeable) and an ordinary
+   the same ratio. Three genuine refusals share this register: D-292 (was D-B4-19) (a
+   session already running), D-284 (was D-B4-11) (nothing placeable) and an ordinary
    create failure. */
 .program-start-sheet .program-start-existing,
 .program-start-sheet .program-start-refuse,

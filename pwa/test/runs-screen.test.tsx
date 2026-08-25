@@ -157,7 +157,7 @@ describe('the run board', () => {
   });
 
   it('renders an em dash, never 0/0, for a run that declared no ledger', () => {
-    // Spec §3.3 / D-B4-15: a wave that declared no ledger must not read as a
+    // Spec §3.3 / D-288 (was D-B4-15): a wave that declared no ledger must not read as a
     // wave that has done nothing — `summarize()`'s own rule ("drop zero-count
     // clauses rather than print `0 X`") applied to the one place it was not.
     const store = makeStore();
@@ -491,7 +491,7 @@ describe('the coord banner mounts on /runs (Task 11, spec §4.2)', () => {
 // stays green because nothing else renders `RunsScreen` with a run and looks
 // for it. This pins the row control on a REAL row, in the file that already
 // owns every other row-level assertion (`.run-open`, the tally, the glyph).
-describe('the abandon control mounts on every run row (Task 12, spec §4.3, D-B4-14)', () => {
+describe('the abandon control mounts on every run row (Task 12, spec §4.3, D-287 (was D-B4-14))', () => {
   it('renders .run-abandon as a sibling of .run-open, not nested inside it', () => {
     const store = makeStore();
     act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });

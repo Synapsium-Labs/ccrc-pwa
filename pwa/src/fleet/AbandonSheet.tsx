@@ -1,5 +1,5 @@
 // The abandon sheet — the run board's release valve for a wedged run (spec
-// §4.3, Task 12). Two taps: the row's own `.run-abandon` control (D-B4-14,
+// §4.3, Task 12). Two taps: the row's own `.run-abandon` control (D-287 (was D-B4-14),
 // RunsScreen.tsx) opens this sheet, and THIS sheet's own confirm button is
 // the second tap that actually sends `POST /api/runs/:id/abandon`.
 //
@@ -35,7 +35,7 @@ import './fleet.css';
  *  catch-all for a refusal this build has never heard of (a `RunRefuseCode`
  *  under `refused`, or any other shape), the same "never a blank cell"
  *  discipline `runWords.ts`'s own `RUN_WORD.unknown` already uses one file
- *  over. Deliberately NOT keyed on every `RunRefuseCode` member: D-B4-1/2
+ *  over. Deliberately NOT keyed on every `RunRefuseCode` member: D-274 (was D-B4-1) and D-275 (was D-B4-2)
  *  make `not-dispatched`, `prhistory-unreadable` and the five `verifyDone`
  *  codes structurally unreachable on THIS route (pinned server-side,
  *  `coord-abandon.test.ts`) — adding members for them here would be

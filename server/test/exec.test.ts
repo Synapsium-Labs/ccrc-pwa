@@ -32,14 +32,14 @@ describe('Tmux', () => {
   });
 });
 
-/** D-B8-13: the server twin of ccd's `_session_verdict` (D-B8-12). `has-session`
+/** D-309 (was D-B8-13): the server twin of ccd's `_session_verdict` (D-308 (was D-B8-12)). `has-session`
  *  answers three different questions with one exit status, and `hasSession`
  *  collapsed all three into one boolean — the exact narrowing the architecture
  *  doc's highest-yield rule forbids an adapter, in the adapter. The polarity is
  *  the whole design: recognise the ONE message that means death, call everything
  *  else unknown. The fixture rows are shared with the bash suite
  *  (`ccd-session-verdict.test.ts`) so the twins cannot drift apart. */
-describe('classifyHasSession — three answers, not one boolean (D-B8-13)', () => {
+describe('classifyHasSession — three answers, not one boolean (D-309)', () => {
   it('live: has-session succeeded', () => {
     expect(classifyHasSession({ code: 0, stdout: '', stderr: '' })).toEqual({ verdict: 'live' });
   });
@@ -50,7 +50,7 @@ describe('classifyHasSession — three answers, not one boolean (D-B8-13)', () =
       expect(v.verdict).toBe(row.expected);
       // The message IS the diagnosis (substrate-unreachable spec §2): an
       // unknown must carry it verbatim, because narrowing it here would repeat
-      // the mistake D-B8-12 removed one layer down.
+      // the mistake D-308 removed one layer down.
       if (v.verdict === 'unknown') expect(v.detail).toBe(row.message);
     });
   }

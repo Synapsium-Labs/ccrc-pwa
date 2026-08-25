@@ -47,7 +47,7 @@ describe('install-session-hooks', () => {
   // turns this red on the SessionStart iteration alone ("expected false to
   // be true // SessionStart") — session-hook.sh:62-73 handles the event
   // (the F1 fix), but a fresh box's converger never registered it. Restored
-  // after confirming the red. Main found the same gap independently (D-B8-10)
+  // after confirming the red. Main found the same gap independently (D-306 (was D-B8-10))
   // and made the pairing a mechanism: the derived-set test below fails on any
   // divergence between EVENTS_JSON and the hook's own case arms.
   it('registers the ten measured events and preserves existing entries byte-identically', () => {
@@ -64,7 +64,7 @@ describe('install-session-hooks', () => {
     expect(pre.matcher).toBe('*');
     // Every pre-existing entry survives exactly. SessionStart carries foreign
     // entries (restore.sh under matcher 'compact', the code-usage upload) AND
-    // now a managed one: D-B8-10 wired the arm that had never run. The foreign
+    // now a managed one: D-306 wired the arm that had never run. The foreign
     // entries must come through untouched and in order, with ours appended —
     // and exactly ONE of ours (the length pin catches a double-append).
     expect(s.hooks.SessionStart.slice(0, EXISTING.hooks.SessionStart.length))
@@ -199,7 +199,7 @@ describe('install-session-hooks.sh default homes are the roster, behaviourally',
   });
 });
 
-// D-B8-10. The set of events session-hook.sh HANDLES was enumerated twice — as
+// D-306. The set of events session-hook.sh HANDLES was enumerated twice — as
 // `case` arms in the hook, and as EVENTS_JSON in the installer — with nothing
 // tying them together. They drifted: the hook grew a SessionStart arm (F1) that
 // the installer never wired, so on the live fleet that arm was dead code for
@@ -210,7 +210,7 @@ describe('install-session-hooks.sh default homes are the roster, behaviourally',
 // This is the mechanism, not a comment: it derives the expected set from the
 // hook's own case arms and measures what the installer actually writes, so
 // adding an arm without wiring it (or wiring one that does not exist) is red.
-describe('installer wiring cannot drift from the hook it installs (D-B8-10)', () => {
+describe('installer wiring cannot drift from the hook it installs (D-306)', () => {
   const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 
   /** Every event session-hook.sh dispatches on, read from its `case` block. */

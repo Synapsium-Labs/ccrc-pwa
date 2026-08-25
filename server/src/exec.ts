@@ -72,7 +72,7 @@ export const realRunner: Runner = (cmd, args) =>
 
 const target = (id: string) => `cc-${id}`;
 
-/** D-B8-13: the server twin of ccd's `_session_verdict` (D-B8-12). `tmux
+/** D-309 (was D-B8-13): the server twin of ccd's `_session_verdict` (D-308 (was D-B8-12)). `tmux
  *  has-session` answers three different questions with one exit status —
  *  session gone, server unreachable, client cut short — and only the first is
  *  evidence a session died. `detail` exists ONLY on `unknown`, because there it
@@ -83,7 +83,7 @@ export type SessionVerdict =
   | { verdict: 'gone' }
   | { verdict: 'unknown'; detail: string };
 
-/** THE POLARITY IS THE WHOLE DESIGN (D-B8-12, and its bash twin is the
+/** THE POLARITY IS THE WHOLE DESIGN (D-308, and its bash twin is the
  *  contract: `_session_verdict`, ccd/ccd — the shared fixture
  *  `test/sessionVerdictFixture.ts` keeps the two agreeing). Recognise the ONE
  *  message that means death; call everything else unknown. Never a list of
@@ -117,7 +117,7 @@ export class Tmux {
   /** Derived, exactly like bash `_alive`: true only for `live`. A caller that
    *  handles `gone` differently from `unknown` must use `sessionVerdict`
    *  instead — this boolean is for the sites whose collapse is deliberate and
-   *  documented in place (D-B8-13). */
+   *  documented in place (D-309). */
   async hasSession(id: string): Promise<boolean> {
     return (await this.sessionVerdict(id)).verdict === 'live';
   }

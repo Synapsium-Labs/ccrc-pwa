@@ -161,7 +161,7 @@ describe('§1.6b — the spawn verdict reaches the wire off the SHIPPED `spawn` 
   });
 });
 
-describe('the substrate axis reaches the wire — projected, not re-read (D-B8-14, spec §3)', () => {
+describe('the substrate axis reaches the wire — projected, not re-read (D-310 (was D-B8-14), spec §3)', () => {
   it('projects a seeded marker as {at: seconds*1000, text} — conversion at THIS seam only', async () => {
     // The exact-MS assertion is this task's mutation tooth: drop the `* 1000`
     // and the stamp is off by three orders of magnitude. Same seam, same

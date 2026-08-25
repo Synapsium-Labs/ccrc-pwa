@@ -6,7 +6,7 @@ const TOOL_INPUT_MAX = 4_000;
 /**
  * Cut to the cap, and REPORT WHAT WAS CUT (Build 4 Task 16).
  *
- * The cap is a CHARACTER cap and the report is in BYTES, on purpose (D-B4-12).
+ * The cap is a CHARACTER cap and the report is in BYTES, on purpose (D-285 (was D-B4-12)).
  * The cap stays a character cap because changing it changes what every
  * existing transcript renders; the report is bytes because a byte count is the
  * number an operator can compare against the file on disk, and because

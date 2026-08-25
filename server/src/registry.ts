@@ -127,7 +127,7 @@ export interface SessionRecord {
    *  `_reg_set` renames rather than truncates. */
   held: string | null;
   /** `$REG/<id>.substrate` — a supervisor's own "I could not reach tmux"
-   *  record (D-B8-14, spec §2): `<epoch-seconds> <verbatim reason>`, written
+   *  record (D-310 (was D-B8-14), spec §2): `<epoch-seconds> <verbatim reason>`, written
    *  by `_substrate_mark` on every unknown probe tick, removed by
    *  `_substrate_clear` on the first live one. Epoch SECONDS, registry-native
    *  like `stopped`/`supervisedAt` — `fleet.ts` is the one place it becomes
@@ -313,7 +313,7 @@ export const SWAP_BLOCKED_NO_REASON = '<swap refusal recorded no reason>';
  * ruling applied to the marker, with the same polarity stakes: the consumers
  * are the PWA's destructive-affordance gates, and a misread that read as "no
  * fault recorded" would re-enable Restart/Reap against a session nobody can
- * see (D-B8-14, spec §2). Fail-shut, never null.
+ * see (D-310, spec §2). Fail-shut, never null.
  */
 export const SUBSTRATE_UNREADABLE = '<substrate marker unreadable>';
 
@@ -707,7 +707,7 @@ async function buildRecord(
     held: holdRead.ok
       ? (holdRead.content === '' ? HOLD_NO_REASON : holdRead.content)
       : (holdRead.reason === 'absent' ? null : (holdListed ? HOLD_UNREADABLE : null)),
-    // The `.hold` ladder, applied to the supervisor's fault record (D-B8-14,
+    // The `.hold` ladder, applied to the supervisor's fault record (D-310,
     // spec §2): presence from the LISTING, never from a non-null read — "no
     // fault recorded" re-enables every destructive affordance downstream, so
     // it must never be the misreading of "the marker would not read". Content
@@ -772,7 +772,7 @@ async function buildRecord(
  *  ([] on unlistable) kept for pure-display call sites that have no refusal
  *  to make either way.
  *
- *  `names` (Build 4, D-B4-10) is the RAW listing this read derived its records
+ *  `names` (Build 4, D-283 (was D-B4-10)) is the RAW listing this read derived its records
  *  from, carried rather than re-read. It exists for the one caller that needs a
  *  NON-session fact out of the same directory — `watch.ts`'s `emitCoord`, which
  *  reports `$REG/coordinator-paused` and `$REG/mail-disabled` to the wire. A
@@ -843,7 +843,7 @@ export async function readRegistryMeasured(io: FleetIO, cfg: CcrcConfig): Promis
         if (identityUnconfirmed.has(rec.id) && !again.includes(`${rec.id}.uuid`)) retired.add(rec.id);
       }
       // `names`, not `again`: the FIRST listing is the one every caller shares
-      // (D-B4-10). `again` answers a different question, on some calls only.
+      // (D-283). `again` answers a different question, on some calls only.
       if (retired.size > 0) return { listed: true, records: out.filter((r) => !retired.has(r.id)), names };
     }
   }

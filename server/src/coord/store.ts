@@ -472,7 +472,7 @@ export class CoordStore {
   }
 
   /**
-   * The WHOLE dispatch commit, as ONE transaction (D-B4-4). Before this, the
+   * The WHOLE dispatch commit, as ONE transaction (D-277 (was D-B4-4)). Before this, the
    * dispatch route ran `markDispatched`, `setClearedAt` and `advance` as three
    * independent `tx()`s — the identical split `closeRun` below was created to
    * close (review finding 25). The work items make it load-bearing rather than
@@ -535,7 +535,7 @@ export class CoordStore {
     handoffCommit: string | null; program: string; viaClosing: boolean;
   }): AdvanceResult {
     return tx(this.db, () => {
-      // `viaClosing: false` is the ABANDON of a `planned` run (D-B4-8).
+      // `viaClosing: false` is the ABANDON of a `planned` run (D-281 (was D-B4-8)).
       // `RUN_TRANSITIONS.planned` has a `failed` edge and deliberately no
       // `closing` one (`shared/api.ts`'s own docstring), and that table is NOT
       // edited here — clients read it as a refusal vocabulary. So the hop is
@@ -543,7 +543,7 @@ export class CoordStore {
       // transaction (the handoff write, the delivery cancellation, the
       // program-retirement check) is unchanged and still one commit.
       //
-      // No default, for the D-B4-6 reason applied to this parameter: a default
+      // No default, for the D-279 (was D-B4-6) reason applied to this parameter: a default
       // is exactly how the abandon path would silently take the ordinary hop
       // and 409 on every wedged `planned` run.
       if (input.viaClosing) {
@@ -991,7 +991,7 @@ export class CoordStore {
    *  this method DIRECTLY — `settleItems` below refuses earlier, so only a
    *  direct call can discriminate this clause).
    *
-   *  RUN-SCOPED (D-B4-5): `unknown-item` is spec §3.2's "an item id that is not
+   *  RUN-SCOPED (D-278 (was D-B4-5)): `unknown-item` is spec §3.2's "an item id that is not
    *  THIS RUN's", so `runId` is part of both statements and an item of another
    *  run is unknown here, never moved. */
   private static readonly TERMINAL_SQL = `('${TERMINAL_ITEM_STATES.join("','")}')`;
@@ -1012,8 +1012,8 @@ export class CoordStore {
   }
 
   /**
-   * The settle batch, as ONE transaction (D-B4-16) — the third member of the
-   * family `dispatchRun` and `closeRun` already belong to (D-B4-4, review
+   * The settle batch, as ONE transaction (D-289 (was D-B4-16)) — the third member of the
+   * family `dispatchRun` and `closeRun` already belong to (D-277, review
    * finding 25), and here for the same reason plus one more: spec §3.2
    * requires that "a body naming one bad id settles nothing", because
    * "partial success on a ledger write is how tallies drift".
@@ -1021,7 +1021,7 @@ export class CoordStore {
    * WHY THE PRE-PASS AND NOT A THROW. `tx` rolls back on a throw and only on a
    * throw (`db.ts`), so an in-flight refusal would otherwise need a private
    * sentinel class to travel out — in an L1 file that has no business holding
-   * this handle at all (D-B4-16). It does not need one HERE: `tx` takes the
+   * this handle at all (D-289). It does not need one HERE: `tx` takes the
    * write lock at `BEGIN IMMEDIATE` and `DatabaseSync` never yields the event
    * loop mid-transaction (`db.ts`'s own `tx` docstring: "no route, sweep or
    * socket can interleave inside one"), so a read taken in the pre-pass cannot

@@ -308,7 +308,7 @@ describe('coordPause (Task 11, spec §4.2)', () => {
 // — the one the production sheet's default prop value actually calls — needs
 // its own pin here, same idiom as `coordPause` just above (`archive`/
 // `restore`'s own "no body" idiom too: the server route reads no body at
-// all, D-B4-7).
+// all, D-280 (was D-B4-7)).
 describe('abandonRun (Task 12, spec §4.3)', () => {
   it('POSTs to /api/runs/:id/abandon with no body', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true, id: 3, state: 'failed' }));

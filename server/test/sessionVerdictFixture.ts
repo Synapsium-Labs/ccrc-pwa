@@ -4,9 +4,9 @@
  * and `classifyHasSession` (TS, driven by `exec.test.ts`) are tested against.
  * Two hand-written lists is exactly the drift the architecture doc's
  * cross-language fixture-test idiom exists to stop (`sessionLifecycleFixture.ts`
- * is the same mechanism over the lifecycle ladder, and D-B8-13 is the deviation
+ * is the same mechanism over the lifecycle ladder, and D-309 (was D-B8-13) is the deviation
  * that made the twins twins: the server's `Tmux.hasSession` carried the same
- * collapse D-B8-12 removed from ccd, one seam over).
+ * collapse D-308 (was D-B8-12) removed from ccd, one seam over).
  *
  * Rows are stated in the one vocabulary both sides share: the MESSAGE the tmux
  * client printed on stderr when `has-session` exited non-zero. The TS side has
@@ -15,7 +15,7 @@
  * one of them must answer `unknown`, so they extend this table's polarity
  * rather than escaping it.
  *
- * THE POLARITY IS THE WHOLE DESIGN (D-B8-12): recognise the ONE message that
+ * THE POLARITY IS THE WHOLE DESIGN (D-308): recognise the ONE message that
  * means death, call everything else unknown. Adding a row with
  * `expected: 'gone'` for any message other than tmux's own "can't find
  * session" is the mistake this table exists to make loud.
@@ -56,7 +56,7 @@ export const VERDICT_MESSAGE_ROWS: readonly VerdictFixtureRow[] = [
     message: 'some error nobody has written yet',
     expected: 'unknown',
   },
-  // NEAR-MISS TRAPS (adversarial review of D-B8-13, confirmed finding): every
+  // NEAR-MISS TRAPS (adversarial review of D-309, confirmed finding): every
   // row above is vocabulary-disjoint from the death message, so a BROADENED
   // matcher — `includes('session')`, a case-insensitive compare — survived the
   // whole table in BOTH suites while being the destructive fail-open

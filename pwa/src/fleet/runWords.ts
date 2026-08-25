@@ -51,7 +51,7 @@ export const runState = (run: { state: RunState }): RunState =>
 export const runItems = (run: { items?: RunItemTally }): RunItemTally =>
   run.items ?? { done: 0, total: 0 };
 
-/** The tally's WORDS (spec §3.3, D-B4-15). `total === 0` renders an em dash,
+/** The tally's WORDS (spec §3.3, D-288 (was D-B4-15)). `total === 0` renders an em dash,
  *  never `0/0`: a wave that declared no ledger must not read as a wave that
  *  has done nothing. This is `summarize()`'s own rule — "drop zero-count
  *  clauses rather than print `0 X`" (`MailStrip.tsx:32-41`) — applied to the

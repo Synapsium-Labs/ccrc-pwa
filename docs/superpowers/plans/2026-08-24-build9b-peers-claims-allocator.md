@@ -3023,7 +3023,7 @@ side reds the fixture's compile.
 2. *Legacy forms never feed the floor.* `floorFromScan` RECOGNIZES `D-B<k>-<m>` (so a scan cannot
    misparse one, and so the D14 reconciliation wave can enumerate what remains) but the floor
    derives from the GLOBAL `D-<n>` form alone: a legacy number lives in a different namespace, and
-   seeding the global sequence from `D-B4-400`'s 400 would burn 400 numbers on a token that will be
+   seeding the global sequence from a legacy `D-B<k>-<m>` with m = 400 would burn 400 numbers on a token that will be
    RENAMED by the reconciliation anyway (D14 allocates each legacy ref a fresh global number through
    the allocator itself). A tree carrying ONLY legacy refs answers `null` — not seeded — because a
    floor invented from the wrong namespace is a collision deferred, and D13's rule is fail shut.
@@ -3094,17 +3094,17 @@ side reds the fixture's compile.
 
     it('recognizes the legacy D-B<k>-<m> form and reports it — but it NEVER feeds the floor (D14)', () => {
       const r = floorFromScan([
-        { path: 'p.md', text: 'D-210 stands; D-B4-400 is legacy and its 400 is another namespace.' },
+        { path: 'p.md', text: 'D-210 stands; D-B4-' + '400 is legacy and its 400 is another namespace.' },
       ]);
       expect(r).toEqual({
         floor: 210 + LEDGER_SEED_GAP,
         evidence: 'p.md names D-210',
-        legacy: ['D-B4-400'],
+        legacy: ['D-B4-' + '400'],
       });
     });
 
     it('a tree with ONLY legacy refs is NOT a seed — fail shut, not guess (D13/D14)', () => {
-      expect(floorFromScan([{ path: 'p.md', text: 'only D-B4-9 and D-B8-13 here' }])).toBeNull();
+      expect(floorFromScan([{ path: 'p.md', text: `only ${['D-B4', '9'].join('-')} and ${['D-B8', '13'].join('-')} here` }])).toBeNull();
     });
 
     it('an empty scan is null, and null is not a floor of 50', () => {
@@ -3186,7 +3186,7 @@ side reds the fixture's compile.
   }
 
   // The two forms, and they CANNOT cross-match: after 'D-' the global form
-  // requires a digit, so 'D-B4-400' contributes nothing to GLOBAL_RE (the
+  // requires a digit, so 'D-B4-' + '400' contributes nothing to GLOBAL_RE (the
   // 'B' blocks it) and the plain global token ('D-' + '400', split so this
   // comment stays out of the tree's own floor scan) contains no 'B' for
   // LEGACY_RE. Global is
@@ -7275,15 +7275,15 @@ function conflictMailHint(project: string, p: string, holder: string,
   /**
    * `POST /api/claims/:id/break` — the OPERATOR's door, the THIRD route in
    * this file that is UNGATED: deliberately NOT behind `requireMailToken`, the
-   * `POST /api/runs/:id/abandon` shape (D-B4-9's argument, applied by build 9
-   * D12/D16). The box token authenticates the fleet host, and the sessions
+   * `POST /api/runs/:id/abandon` shape (the D-282 (was D-B4-9) argument,
+   * applied by build 9 D12/D16). The box token authenticates the fleet host, and the sessions
    * that hold claims live there and hold that token — a session wedged behind
    * a dead holder's claim must not find the release valve behind the same key
    * the holder used to take it. So this rides the PWA's session-gated surface:
    * with `CCRC_AUTH` armed it sits behind the session gate like abandon and
    * pause, and the operator with a phone is the one who can walk through it.
    *
-   * THE REQUEST BODY IS NEVER READ (the D-B4-7 rule, verbatim): `endedBy:
+   * THE REQUEST BODY IS NEVER READ (the D-280 (was D-B4-7) rule, verbatim): `endedBy:
    * 'operator'` is constructed by the store, so a caller cannot send a field
    * that forges who broke the claim. It is also UNNAMED in both skill corpora
    * — `coordinator-skill.test.ts`'s parity EXEMPT set carries it beside
@@ -10016,14 +10016,14 @@ names). The script's output **is** the work-list, committed as evidence.
   which `reconcile-rewrite.mjs` (Tasks 31–32) parses as its only input; the `BARE`/`ALIAS` predicate
   pair reused verbatim by Tasks 31 and 32.
 
-- [ ] **Step 1: STOP — confirm the quiet window with the operator, and wait for the answer.**
+- [x] **Step 1: STOP — confirm the quiet window with the operator, and wait for the answer.**
   Ask, in so many words: *"Wave 10 rewrites D-ref lines across ~71 tracked files and will conflict
   with ANY in-flight branch. It needs the operator-announced quiet window the spec requires: no wave
   dispatched, no worker mid-flight, no unmerged branch that touches docs or sources, and none started
   until I announce the wave closed. Confirm the window is open now?"* Do **not** proceed on silence,
   on a stale earlier yes, or on your own reading of the fleet — this confirmation is the operator's
   to give, and the spec's *"Do not schedule it concurrently with a wave"* is a ruling, not advice.
-- [ ] **Step 2: Verify the tree and the coordinator agree the fleet is quiet.**
+- [x] **Step 2: Verify the tree and the coordinator agree the fleet is quiet.**
   ```bash
   cd /home/you/worktrees/ccrc-pwa/still-river \
     && git fetch --all --quiet \
@@ -10038,7 +10038,7 @@ names). The script's output **is** the work-list, committed as evidence.
   Every run in the answer must read a terminal state. An open run, or an unexplained unmerged branch,
   means the window is not real — go back to Step 1. (The token is used, never printed — existence
   checks by `ls` only.)
-- [ ] **Step 3: Verify Wave 7 is deployed and the allocator is seeded.**
+- [x] **Step 3: Verify Wave 7 is deployed and the allocator is seeded.**
   ```bash
   curl -sS -H "x-ccrc-mail-token: $(cat ~/.ccrc/mail.token)" http://127.0.0.1:7788/api/ledger
   ```
@@ -10048,7 +10048,7 @@ names). The script's output **is** the work-list, committed as evidence.
   `FleetWatcher`'s existing tick, gated hourly) and re-check; if it stays unseeded past the hour,
   stop and investigate Wave 7 rather than proceeding. **Until seeded, allocation answers 409 by
   design** — "refuse to start rather than open empty", one level up.
-- [ ] **Step 4: Sweep EVERY remote ref for global D-numbers and confirm the floor clears them.**
+- [x] **Step 4: Sweep EVERY remote ref for global D-numbers and confirm the floor clears them.**
   The 50-number seed gap exists because numbers on unmerged refs are invisible to the scan; the quiet
   window should mean there are none, and this measures it instead of assuming it:
   ```bash
@@ -10061,7 +10061,7 @@ names). The script's output **is** the work-list, committed as evidence.
   `LEDGER_SEED_GAP` assumption is broken on some ref — stop and ask the operator; do not allocate
   over it. (Drafting-day note: the plan-wide ledger baseline was D-211 free; the floor will sit well
   above whatever this prints, or something is wrong.)
-- [ ] **Step 5: Confirm the allocator's request grammar against the landed handler.**
+- [x] **Step 5: Confirm the allocator's request grammar against the landed handler.**
   ```bash
   cd /home/you/worktrees/ccrc-pwa/still-river \
     && grep -n "api/ledger/deviations" server/src/coord/routes.ts
@@ -10071,7 +10071,7 @@ names). The script's output **is** the work-list, committed as evidence.
   `numbers: number[]`, exactly the interface contract Wave 7 wrote against. If the landed names
   differ, that is a Wave 7 defect against the contract — stop and reconcile it there; do **not**
   fork the grammar inside this wave's script.
-- [ ] **Step 6: Write the enumeration/allocation script.** Create
+- [x] **Step 6: Write the enumeration/allocation script.** Create
   `/home/you/worktrees/ccrc-pwa/still-river/reconcile-enum.mjs`:
   ````js
   #!/usr/bin/env node
@@ -10203,7 +10203,7 @@ names). The script's output **is** the work-list, committed as evidence.
   writeFileSync(path.join(root, DOC), doc);
   console.log(`wrote ${DOC}: ${ids.length} mapping rows`);
   ````
-- [ ] **Step 7: Write the rewrite script** (authored now so Appendix B ships with the record; first
+- [x] **Step 7: Write the rewrite script** (authored now so Appendix B ships with the record; first
   run is Task 31). Create `/home/you/worktrees/ccrc-pwa/still-river/reconcile-rewrite.mjs`:
   ````js
   #!/usr/bin/env node
@@ -10267,7 +10267,7 @@ names). The script's output **is** the work-list, committed as evidence.
   }
   console.log(`${filesChanged} files changed, ${refs} refs rewritten`);
   ````
-- [ ] **Step 8: Dry-run the enumeration and read the work-list against the expectation.**
+- [x] **Step 8: Dry-run the enumeration and read the work-list against the expectation.**
   ```bash
   cd /home/you/worktrees/ccrc-pwa/still-river && node reconcile-enum.mjs --dry
   ```
@@ -10280,7 +10280,7 @@ names). The script's output **is** the work-list, committed as evidence.
   metavariable form), commit that correction on this wave's branch, and re-run the dry run until the
   list is exactly the two families. A *missing* id relative to this baseline just means a ref was
   deleted with its file since drafting — fine, the list is the measurement.
-- [ ] **Step 9: Run the allocation and write the record.**
+- [x] **Step 9: Run the allocation and write the record.**
   ```bash
   cd /home/you/worktrees/ccrc-pwa/still-river && node reconcile-enum.mjs
   ```
@@ -10290,7 +10290,7 @@ names). The script's output **is** the work-list, committed as evidence.
   `wrote docs/superpowers/specs/2026-08-21-deviation-namespace-reconciliation.md: 37 mapping rows`.
   If the process dies mid-run, just re-run: `reconcile-alloc.partial` resumes it without
   re-allocating.
-- [ ] **Step 10: Embed both scripts as appendices of the record** (four-backtick fences, because the
+- [x] **Step 10: Embed both scripts as appendices of the record** (four-backtick fences, because the
   scripts themselves contain triple-backtick strings):
   ```bash
   cd /home/you/worktrees/ccrc-pwa/still-river \
@@ -10301,7 +10301,7 @@ names). The script's output **is** the work-list, committed as evidence.
          printf '````\n'; } \
        >> docs/superpowers/specs/2026-08-21-deviation-namespace-reconciliation.md
   ```
-- [ ] **Step 11: Prove the record itself is invisible to the predicate.** Re-run the dry run:
+- [x] **Step 11: Prove the record itself is invisible to the predicate.** Re-run the dry run:
   ```bash
   cd /home/you/worktrees/ccrc-pwa/still-river && node reconcile-enum.mjs --dry
   ```
@@ -10310,7 +10310,7 @@ names). The script's output **is** the work-list, committed as evidence.
   same file count). Every legacy spelling in the record is `was `-guarded and every regex in the
   appendices spells digits as `\d`, so the doc adds nothing. If the counts moved, the record leaked
   a bare form — fix the record generation, not the predicate.
-- [ ] **Step 12: Commit the record** (the transient scripts and the resume file stay untracked and
+- [x] **Step 12: Commit the record** (the transient scripts and the resume file stay untracked and
   uncommitted — Appendices A/B carry their bytes):
   ```bash
   cd /home/you/worktrees/ccrc-pwa/still-river \
@@ -10359,17 +10359,17 @@ enumerator's.
 - Produces: a `docs/superpowers/` tree in which every legacy spelling is alias-form — the state Task
   32's scanner will pin tree-wide.
 
-- [ ] **Step 1: Re-confirm the window is still open.** One line to the operator: *"Starting the
+- [x] **Step 1: Re-confirm the window is still open.** One line to the operator: *"Starting the
   docs half of the sweep — still quiet?"* Proceed only on yes. (The enumeration and allocation in
   Task 30 may have taken real time; the window is the operator's clock, not this branch's.)
-- [ ] **Step 2: Run the docs-scoped rewrite.**
+- [x] **Step 2: Run the docs-scoped rewrite.**
   ```bash
   cd /home/you/worktrees/ccrc-pwa/still-river && node reconcile-rewrite.mjs docs/superpowers
   ```
   Expect `8 files changed, 209 refs rewritten` (drafting-day baseline; the script's printed count is
   the truth, and it must reconcile with the work-list's docs rows). A throw naming an unmapped ref
   means the tree moved after Task 30 — re-run Task 30 Step 8 and extend the record before retrying.
-- [ ] **Step 3: Hand-review the diff for composite shorthands the mechanical rewrite cannot know
+- [x] **Step 3: Hand-review the diff for composite shorthands the mechanical rewrite cannot know
   about.** A line citing two members as one token — the shape `…-3/6`, meaning members 3 and 6 —
   rewrites its first member and strands the `/6`:
   ```bash
@@ -10379,19 +10379,19 @@ enumerator's.
   For each hit, rewrite by hand so **both** refs are named: `D-<n_a> (was <legacy-a>) and D-<n_b>
   (was <legacy-b>)`, numbers from the mapping table, the `was `-guarded spelling for each. Then skim
   `git diff --stat docs/` — 8 files (plus this plan if applicable), nothing else.
-- [ ] **Step 4: Confirm the docs half is clean under the predicate.**
+- [x] **Step 4: Confirm the docs half is clean under the predicate.**
   ```bash
   cd /home/you/worktrees/ccrc-pwa/still-river \
     && grep -rP '(?<!was )\bD-B\d+-\d+\b' docs/superpowers/ || echo CLEAN
   ```
   Expect `CLEAN`.
-- [ ] **Step 5: Update the record's status line.**
+- [x] **Step 5: Update the record's status line.**
   ```bash
   cd /home/you/worktrees/ccrc-pwa/still-river \
     && sed -i 's/^\*\*Status:\*\*.*$/**Status:** docs rewritten (Task 31); the source sweep is pending (Task 32)./' \
          docs/superpowers/specs/2026-08-21-deviation-namespace-reconciliation.md
   ```
-- [ ] **Step 6: Run every suite that reads these documents or ratchets the whole tracked tree.**
+- [x] **Step 6: Run every suite that reads these documents or ratchets the whole tracked tree.**
   ```bash
   cd /home/you/worktrees/ccrc-pwa/still-river/server \
     && ./node_modules/.bin/vitest run test/deviation-refs.test.ts test/coord-pause-route.test.ts \
@@ -10405,7 +10405,7 @@ enumerator's.
   and the alias contains the original byte-for-byte, so it stays green with no edit (it reads
   `routes.ts`, untouched until Task 32, anyway). `topology-clean` and `source-bytes` walk every
   tracked file — the alias introduces no forbidden token and no control byte.
-- [ ] **Step 7: Commit.**
+- [x] **Step 7: Commit.**
   ```bash
   cd /home/you/worktrees/ccrc-pwa/still-river \
     && git add docs/superpowers/ \
@@ -10454,7 +10454,7 @@ touches the allocator's own reading of the tree.
 - Produces: the standing scanner describe `'one deviation namespace — no bare legacy ref survives
   (9b W10, D14)'` in `server/test/deviation-refs.test.ts`. No source symbol — a guard only.
 
-- [ ] **Step 1: Write the failing scanner.** Append to `server/test/deviation-refs.test.ts` (at end
+- [x] **Step 1: Write the failing scanner.** Append to `server/test/deviation-refs.test.ts` (at end
   of file; the block imports everything it needs dynamically, so no top-of-file edit):
   ```ts
 
@@ -10538,7 +10538,7 @@ touches the allocator's own reading of the tree.
     });
   });
   ```
-- [ ] **Step 2: Run it, expect exactly one red.**
+- [x] **Step 2: Run it, expect exactly one red.**
   ```bash
   cd /home/you/worktrees/ccrc-pwa/still-river/server \
     && ./node_modules/.bin/vitest run test/deviation-refs.test.ts
@@ -10548,13 +10548,13 @@ touches the allocator's own reading of the tree.
   cleaned). The other three must already PASS: the corpus floor is real today, and Task 31's docs
   sweep plus the mapping table put the alias corpus at ≥37 before this task began. Wave 7's existing
   describes in this file must be untouched and green.
-- [ ] **Step 3: Run the unscoped rewrite — the final sweep.**
+- [x] **Step 3: Run the unscoped rewrite — the final sweep.**
   ```bash
   cd /home/you/worktrees/ccrc-pwa/still-river && node reconcile-rewrite.mjs
   ```
   Expect `63 files changed, 198 refs rewritten` (drafting-day baseline; docs are idempotently in
   scope and already clean, so they contribute zero). The count must reconcile with Step 2's red.
-- [ ] **Step 4: Hand-review the source diff for composite shorthands**, exactly as in Task 31 Step 3
+- [x] **Step 4: Hand-review the source diff for composite shorthands**, exactly as in Task 31 Step 3
   (the known drafting-day instance is a two-member `…-3/6` citation in
   `server/test/coord-decide.test.ts:224`):
   ```bash
@@ -10565,7 +10565,7 @@ touches the allocator's own reading of the tree.
   Expand each by hand: `D-<n_a> (was <legacy-a>) and D-<n_b> (was <legacy-b>)`, numbers from the
   mapping table. Then skim `git diff --stat` — the work-list's source files plus
   `server/test/deviation-refs.test.ts`, nothing else.
-- [ ] **Step 5: Re-stamp ccd/ccd's provenance marker** — its comment sites changed, so the line-2
+- [x] **Step 5: Re-stamp ccd/ccd's provenance marker** — its comment sites changed, so the line-2
   hash is now stale, and a stale marker makes every freshly deployed ccd read `ccrc-edited` forever
   (`ownership.test.ts`'s own words: the re-stamp is a gate, not a convention):
   ```bash
@@ -10576,7 +10576,7 @@ touches the allocator's own reading of the tree.
     && cd server && ./node_modules/.bin/vitest run test/ownership.test.ts
   ```
   Expect `ownership.test.ts` green — `verifies as ccrc-unmodified` in particular.
-- [ ] **Step 6: Run the scanner, expect PASS — all four its.**
+- [x] **Step 6: Run the scanner, expect PASS — all four its.**
   ```bash
   cd /home/you/worktrees/ccrc-pwa/still-river/server \
     && ./node_modules/.bin/vitest run test/deviation-refs.test.ts
@@ -10587,7 +10587,7 @@ touches the allocator's own reading of the tree.
     && git ls-files -z | xargs -0 grep -lP '(?<!was )\bD-B\d+-\d+\b' 2>/dev/null || echo CLEAN
   ```
   Expect `CLEAN`.
-- [ ] **Step 7: Finalize the record's status line, delete the transients, and commit the assertion
+- [x] **Step 7: Finalize the record's status line, delete the transients, and commit the assertion
   WITH the final sweep** (the wave brief's ruling: neither stands without the other):
   ```bash
   cd /home/you/worktrees/ccrc-pwa/still-river \
@@ -10611,7 +10611,7 @@ touches the allocator's own reading of the tree.
   ```
   (Mutants follow the commit, deliberately: they plant into and revert tracked files, which is only
   safe against a clean tree — before this commit, a `git restore` would have eaten sweep edits.)
-- [ ] **Step 8: Measure mutant 1 of 3 — plant a bare legacy ref.** The planted string is assembled
+- [x] **Step 8: Measure mutant 1 of 3 — plant a bare legacy ref.** The planted string is assembled
   by `printf` so this plan's own bytes stay clean:
   ```bash
   cd /home/you/worktrees/ccrc-pwa/still-river \
@@ -10624,19 +10624,19 @@ touches the allocator's own reading of the tree.
   Mutant: one bare legacy ref anywhere in the tree -> `finds zero bare legacy refs` fails, naming
   `server/src/coord/store.ts` and the planted id. The `sed -i '$d'` removes exactly the appended
   line; `git diff --stat` must end empty.
-- [ ] **Step 9: Measure mutant 2 of 3 — starve the corpus.** In the appended describe, change
+- [x] **Step 9: Measure mutant 2 of 3 — starve the corpus.** In the appended describe, change
   `{ cwd: root, maxBuffer: 64 * 1024 * 1024 }` to
   `{ cwd: path.join(root, 'server', 'test'), maxBuffer: 64 * 1024 * 1024 }`, run the Step 6 vitest
   command, revert the edit.
   Mutant: the walk sees a subtree instead of the tree -> `is looking at the real tree` fails
   (a few hundred files at most against the 600 floor), and `sees the alias corpus` fails with it —
   the vacuous-walk failure is loud and specific, never a quiet green.
-- [ ] **Step 10: Measure mutant 3 of 3 — drift the alias regex.** In the appended describe, change
+- [x] **Step 10: Measure mutant 3 of 3 — drift the alias regex.** In the appended describe, change
   `ALIAS`'s `\bwas ` to `\bwass `, run the Step 6 vitest command, revert the edit.
   Mutant: ALIAS no longer matches what BARE excuses -> `sees the alias corpus` fails at 0 **while
   the tree scan stays green** — exactly the drift this third assertion exists to catch. After the
   revert, `git status` must show a clean tree.
-- [ ] **Step 11: The full-suite gate — all three packages, foreground, timeout ≥600000ms each.**
+- [x] **Step 11: The full-suite gate — all three packages, foreground, timeout ≥600000ms each.**
   ```bash
   cd /home/you/worktrees/ccrc-pwa/still-river/server && npm run test
   cd /home/you/worktrees/ccrc-pwa/still-river/agent  && npm run test
@@ -10647,7 +10647,7 @@ touches the allocator's own reading of the tree.
   `shared/api.ts` docstrings), so this gate is the wave's proof, not a formality. Known load flakes
   (`ccd-ws-gc`, `pr-sweep`, `session-hook`, `typecheck-tests`, `ccd-session-state`): re-run IN
   ISOLATION before calling a real break; CI on the quiet box is the arbiter.
-- [ ] **Step 12: Wave close — merge inside the window, deploy agent-first, verify `landed`, release
+- [x] **Step 12: Wave close — merge inside the window, deploy agent-first, verify `landed`, release
   the window.** In order, each a stop point:
   1. Push the branch, open the PR, and merge it **within the quiet window** (`main` is protected —
      PRs only). The window is not over until the merge is in, because any branch cut before it

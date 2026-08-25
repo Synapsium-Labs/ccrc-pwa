@@ -15,7 +15,7 @@
 //
 // A bare `coord-pause` is not a narrower grant. It permits every positional
 // form the verb might ever grow, for a route the PWA reaches with no token of
-// any kind (D-B4-9).
+// any kind (D-282 (was D-B4-9)).
 import type { ExecWhitelist, LawfulGrants } from '../../../src/whitelist.js';
 
 const table = {

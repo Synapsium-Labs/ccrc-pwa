@@ -6,7 +6,7 @@
 // `api.projects`, `api.createSession`, `api.prompt` — plus `useProjectedHome`
 // for the account name, composed here and nowhere else.
 //
-// D-B4-18/19 (`docs/superpowers/plans/2026-08-11-build4-conversation-and-
+// D-291 (was D-B4-18) and D-292 (was D-B4-19) (`docs/superpowers/plans/2026-08-11-build4-conversation-and-
 // controls.md`'s Deviations section) are both load-bearing for this file and
 // are why it is not the simple "create, then prompt the id it returns" shape
 // the brief's own interface list reads as:
@@ -67,7 +67,7 @@ export const kickoff = (slug: string, title: string): string =>
   `Its ledger is \`${ledgerPath(slug)}\`.\n` +
   `Run the ccrc-coordinator skill and open the run for wave 1.`;
 
-/** D-B4-18: how long the sheet waits for the freshly created session to
+/** D-291: how long the sheet waits for the freshly created session to
  *  appear in a `/ws/fleet` snapshot before giving up. Tied to the fleet
  *  watcher's own 2 s tick (`server/src/watch.ts`'s `intervalMs`) plus a
  *  generous margin — the same reasoning `coordWords.ts`'s `COORD_CONFIRM_MS`
@@ -85,11 +85,11 @@ export const START_PROGRAM_WAIT_MS = 20_000;
  *  two-field match hits live workers on a box in its normal state.
  *  `FleetSession.workspace` is server-reported and documented "null for a
  *  project's main checkout" (`shared/api.ts:35-37`), so this costs NO id
- *  arithmetic and D-B4-18's "never recompute the id" holds unchanged. */
+ *  arithmetic and D-291's "never recompute the id" holds unchanged. */
 const isMainCheckoutOf = (s: FleetSession, project: string): boolean =>
   s.project === project && s.workspace === null;
 
-/** D-B4-19's arm: "is a live main checkout already running in this project?"
+/** D-292 (was D-B4-19)'s arm: "is a live main checkout already running in this project?"
  *
  *  WRAPPER-INDEPENDENT, and that is a correction, not an oversight (re-review
  *  of the C1 fix). `cmd_swap` rewrites the registry's `wrapper` field and
@@ -108,7 +108,7 @@ const isMainCheckoutOf = (s: FleetSession, project: string): boolean =>
  *  that never started. A dead end, reachable on half this fleet's projects.
  *
  *  This arm cannot ask the exact question (`_alive(_id(W,P))`) without
- *  recomputing the id, which D-B4-18 forbids. So it asks the WIDER one and
+ *  recomputing the id, which D-291 forbids. So it asks the WIDER one and
  *  accepts over-refusing: when the live main checkout is one `cmd_start` would
  *  NOT have collided with, this still refuses, and the copy says why in terms
  *  that are true either way (a second coordinator in one project is its own
@@ -129,7 +129,7 @@ function liveMainCheckoutIn(
   return sessions.find((s) => isMainCheckoutOf(s, project) && s.status !== 'dead') ?? null;
 }
 
-/** D-B4-18's arm: "has the session I just asked for appeared yet?"
+/** D-291's arm: "has the session I just asked for appeared yet?"
  *
  *  WRAPPER-SCOPED, deliberately, and NOT to be widened to match the refusal
  *  above. This one ACTS — it sends the coordinator kickoff and navigates — so
@@ -137,7 +137,7 @@ function liveMainCheckoutIn(
  *  one at the wrapper it passed to `createSession`. Dropping `s.wrapper ===
  *  wrapper` here would let a DIFFERENT live main checkout in the same project
  *  (someone else's, or a swapped one) collect this sheet's kickoff: verbatim
- *  the hijack D-B4-19 exists to prevent, arriving through the wait instead.
+ *  the hijack D-292 exists to prevent, arriving through the wait instead.
  *
  *  LIVENESS + FRESHNESS, both required (coordinator review B-2). An earlier
  *  version of this docstring argued for NO liveness conjunct, on the grounds
@@ -275,7 +275,7 @@ export function StartProgramSheet({
   // mounted UNCONDITIONALLY at RunsScreen level and `open` only toggles the
   // Sheet's own visibility — the component keeps running underneath, the
   // same shape ReapSheet/AbandonSheet's own fix rounds already litigated. It
-  // holds async state across the D-B4-18 wait, so closing mid-flight must
+  // holds async state across the D-291 wait, so closing mid-flight must
   // retire everything outstanding: `gen` is bumped so a create/prompt/match
   // that resolves AFTER a close cannot write into whatever the sheet shows
   // next, the timer is cleared so it cannot fire into a retired attempt, and
@@ -285,12 +285,12 @@ export function StartProgramSheet({
   const gen = useRef(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const waitRef = useRef<{ mine: number; wrapper: string; project: string; slug: string; title: string; preLive: ReadonlySet<string> } | null>(null);
-  // Review fix round 1, Important 2: the D-B4-18 timeout and the D-B4-19
+  // Review fix round 1, Important 2: the D-291 timeout and the D-292
   // collision refusal INTERACT — neither ruling could see this alone. A
   // timeout does not mean the create failed; it means the board hasn't
   // shown it YET. If the session then lands a moment later, `existing`
   // (below) finds it — and without this ref, the sheet would render the
-  // D-B4-19 refusal ("…is already running… may be mid-task") for the
+  // D-292 refusal ("…is already running… may be mid-task") for the
   // session it JUST started itself, which is neither running anyone else's
   // work nor true. `myAttemptRef` outlives the timeout (unlike `waitRef`,
   // which `finish()` still nulls the instant a match is found, so a second
@@ -357,7 +357,7 @@ export function StartProgramSheet({
   // rebuilt by the accounts poll every 20 s, which would clear an honest
   // timeout on a tick rather than on a change. `waitRef` is deliberately NOT
   // touched here: the wait keeps watching for the session it really did start
-  // (D-B4-18, review fix round 1 Important 2) — only this SENTENCE, which has
+  // (D-291, review fix round 1 Important 2) — only this SENTENCE, which has
   // stopped being true of what is on screen, is withdrawn.
   useEffect(() => {
     setTimedOut(false);
@@ -396,7 +396,7 @@ export function StartProgramSheet({
     if (found !== null) finish(found, w);
   };
 
-  // D-B4-18: the reactive half of the bounded wait. `sessions` is replaced
+  // D-291: the reactive half of the bounded wait. `sessions` is replaced
   // wholesale on every `/ws/fleet` frame (`stores/fleet.ts`), so this fires
   // on every fleet tick while a wait is outstanding — the moment the new
   // session's row appears, `checkForMatch` finds it.
@@ -409,7 +409,7 @@ export function StartProgramSheet({
   const filtered =
     list === null ? [] : needle === '' ? list : list.filter((p) => p.name.toLowerCase().includes(needle));
 
-  // D-B4-19: recomputed on every render from the reactive store selector —
+  // D-292: recomputed on every render from the reactive store selector —
   // "whenever the target changes" (a different project picked, or the
   // projection itself moving) falls out of React's own render cycle rather
   // than a second piece of state tracking the same fact.
@@ -417,7 +417,7 @@ export function StartProgramSheet({
   // wrapper-scoped refusal misses a real `cmd_start` collision on any session
   // that has been swapped. `projected != null` is still required, but only
   // because there is no point refusing a start that has no wrapper to place
-  // with in the first place (the D-B4-11 arm below handles saying so).
+  // with in the first place (the D-284 (was D-B4-11) arm below handles saying so).
   const existing =
     project !== null && projected != null
       ? liveMainCheckoutIn(sessions, project.name)
@@ -434,7 +434,7 @@ export function StartProgramSheet({
 
   const start = async (): Promise<void> => {
     if (starting || slug.trim() === '' || title.trim() === '' || project === null) return;
-    if (projected == null) return; // undefined (no answer yet) or null (D-B4-11) — no wrapper to place with
+    if (projected == null) return; // undefined (no answer yet) or null (D-284) — no wrapper to place with
     if (existing !== null) return; // defensive: the confirm button is not rendered in this case at all
 
     const wrapper = projected.wrapper;
@@ -456,7 +456,7 @@ export function StartProgramSheet({
     // `_accept_first_run_prompts`/`_inject_spawn_effort`. So a frame carrying
     // the new session arrives MANY SECONDS before `createSession` resolves.
     // Armed after the await, `isOwnAttempt` was false for that entire window
-    // and the D-B4-19 refusal rendered INSTEAD of the confirm fragment: the
+    // and the D-292 refusal rendered INSTEAD of the confirm fragment: the
     // "Starting…" indicator vanished and the operator was told not to start a
     // program they were already starting. Acting on that copy (closing the
     // sheet) bumps `gen`, the post-await guard below returns, `waitRef` is
@@ -567,12 +567,12 @@ export function StartProgramSheet({
 
         {project !== null && (
           existing !== null && !isOwnAttempt ? (
-            // D-B4-19: refuses BEFORE the tap — no confirm button rendered
+            // D-292: refuses BEFORE the tap — no confirm button rendered
             // at all, not merely a disabled one, so there is no control here
             // that could hijack the running session. `!isOwnAttempt` (review
             // fix round 1, Important 2): a session that matches THIS sheet's
             // own last attempt is not a collision to refuse — it is the
-            // create finally showing up, possibly after a D-B4-18 timeout
+            // create finally showing up, possibly after a D-291 timeout
             // already told the operator "not shown yet". Falling through to
             // the ordinary branch below lets `timedOut`/`checkForMatch`
             // finish the job instead of lying that it belongs to someone
@@ -593,7 +593,7 @@ export function StartProgramSheet({
                 + 'mid-task, or leave the project running two coordinators.'}
             </p>
           ) : projected === null ? (
-            // D-B4-11: the server's own "nothing is placeable" — refuse with
+            // D-284: the server's own "nothing is placeable" — refuse with
             // copy rather than guessing a wrapper.
             <p className="program-start-refuse">
               Nothing is placeable — every home-able account is disabled.
@@ -642,7 +642,7 @@ export function StartProgramSheet({
                   with no feedback: the same dead-tap class review round 1
                   fixed for the placement-pending case, reopened by the
                   suppression. Reachable whenever `prompt()` is slow after a
-                  D-B4-18 timeout has already set `starting` back to false. */}
+                  D-291 timeout has already set `starting` back to false. */}
               <button
                 type="button"
                 className="program-start-go"

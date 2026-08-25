@@ -57,7 +57,7 @@ describe('_session_verdict — three answers, not one boolean', () => {
   });
 
   // The message rows are SHARED with the TS twin (`classifyHasSession`,
-  // exec.test.ts) via the fixture — D-B8-13's whole mechanism: two
+  // exec.test.ts) via the fixture — D-309 (was D-B8-13)'s whole mechanism: two
   // implementations of one contract cannot drift once one table drives both.
   // Nothing here may be rewritten into a list of failures: a tmux upgrade may
   // reword or add errors, and `unknown` refuses where `gone` destroys.

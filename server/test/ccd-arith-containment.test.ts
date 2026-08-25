@@ -1,4 +1,4 @@
-// D-B8-3 — arithmetic injection, swept and pinned.
+// D-299 (was D-B8-3) — arithmetic injection, swept and pinned.
 //
 // The class, stated once. Bash evaluates a variable's CONTENTS as an
 // arithmetic expression, and a command substitution inside an array subscript
@@ -28,7 +28,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { CCD, makeCcdHarness } from './ccdWsHelpers.js';
 
-describe('arithmetic-injection containment (D-B8-3): no swept site evaluates a torn field', () => {
+describe('arithmetic-injection containment (D-299): no swept site evaluates a torn field', () => {
   it('_auto_swap_check does not evaluate a payload planted in lastswap', () => {
     const h = makeCcdHarness('arith-swap');
     // A torn or hand-edited `lastswap` is the threat model — not a wire caller.
@@ -157,7 +157,7 @@ describe('_pane_ctx_pct is the one sanitiser the compact arithmetic depends on (
   });
 });
 
-describe("_spawn_start's only failure mode is die (Step 8, D-B8-4)", () => {
+describe("_spawn_start's only failure mode is die (Step 8, D-300 (was D-B8-4))", () => {
   it('has no bare non-zero return — the split installed a door and this keeps it shut', () => {
     const h = makeCcdHarness('arith-spawnret');
     // Tasks 7/8 made every caller `_spawn_start "$id" <mode> || return $?`.

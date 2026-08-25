@@ -71,7 +71,7 @@ case "$event" in
     # session that just finished a `Stop` — so SessionStart writes `done`
     # too, the same idle the delivery gate already knows how to read.
     #
-    # D-B8-10: this arm shipped UNWIRED — install-session-hooks.sh's event list
+    # D-306 (was D-B8-10): this arm shipped UNWIRED — install-session-hooks.sh's event list
     # omitted SessionStart — so F1 was never actually fixed on the fleet, and
     # nothing re-stamped state when a supervisor resumed a session. Measured on
     # the 2026-08-19 reboot: 12 of 17 live sessions still carried hookstate

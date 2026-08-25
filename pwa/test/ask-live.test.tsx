@@ -120,7 +120,7 @@ describe('the ask card is a three-state axis', () => {
   it('askState itself is total and result-first, tested where it is written', () => {
     // The axis is exported and pinned DIRECTLY as well as through the card,
     // so a later refactor that moves the derivation cannot carry the coverage
-    // away with it — the lesson D-B4-20 recorded, applied here pre-emptively.
+    // away with it — the lesson D-293 (was D-B4-20) recorded, applied here pre-emptively.
     expect(askState(undefined, true)).toBe('awaiting');
     expect(askState(undefined, false)).toBe('unanswered');
     expect(askState(askResult(ANSWERED) as ToolResultEvent, true)).toBe('answered');
@@ -163,7 +163,7 @@ describe('Answer opens the one answer path, and does nothing else', () => {
   });
 
   it('Answer un-dismisses a sheet the reader had waved away', () => {
-    // D-B4-13: `DialogSheet`'s `dismissedKey` is component-local, so without
+    // D-286 (was D-B4-13): `DialogSheet`'s `dismissedKey` is component-local, so without
     // the `raise` nonce a transcript control could not reopen a sheet the
     // reader had scrim-tapped away. One nonce, cleared into `dismissedKey:
     // null` by an effect — no store change, and no second answer path.

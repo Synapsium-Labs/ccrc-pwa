@@ -32,7 +32,7 @@ Every task's requirements implicitly include this section.
 - **Mutation-table discipline.** Every guard ships with a test that goes RED when the guard is deleted or mutated, measured before and after — not asserted in a comment. For a guard whose only failure mode is *firing wrongly*, the mutant makes it fire.
 - **Ring discipline** (`docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`): ring membership is a property of a file's IMPORTS, not its path. L0 `shared/` imports nothing; L1 policy is pure; L3 adapters **may not narrow a distinction they received**; L4 owns fastify/sockets/timers but does not DECIDE. **No overloaded null at a seam** — two conditions a caller handles differently must not collapse to one value.
 - **AGENT-FIRST.** Any task touching `ccd/`, `session-hook.sh`, or `ccd/coordinator-skill/` ships to the fleet host before the server.
-- **No new argv positional on any verb the agent whitelists, and no arithmetic on a value that arrived from outside.** `agent/src/whitelist.ts` matches a PREFIX — its own docstring: *"tokens after the prefix are unconstrained"* — so every extra token a granted verb (`start`, `enable`, `ensure`, `stop`, `swap`, `ws-add`, `forget`, …) accepts is attacker-supplied by construction, whether or not a call site emits one today. Bash evaluates a variable's *contents* as an arithmetic expression, and a command substitution inside an array subscript **executes**: `bound='REG[$(cmd)]'` in `(( … >= bound ))` runs `cmd` as the fleet user before the arithmetic errors. **This shipped once, in Task 5 — see D-B8-3 and `73bc0fe`.** Therefore: (1) per-caller tuning travels in a dynamically-scoped `local`, never argv — the `CCD_IN_UNIT` / `CCD_SETTLE_BOUND` idiom; a `local` is neither exported nor an argv token, so it is not addressable from the wire. (2) **One reader** per such variable, validated at the read (`[[ "$x" =~ ^[0-9]{1,5}$ ]] || x=$DEFAULT`), degrading to the production default — never to zero, never to "no bound". (3) Arithmetic contexts include **`[[ x -eq|-ne|-lt|-le|-gt|-ge y ]]` and array subscripts**, not just `(( ))`/`$(( ))`; a `-n` test is NOT a guard, only a `=~ ^[0-9]+$` placed first *inside the same `[[ ]]`* is. (4) Any new positional on a whitelisted verb ships with a fixture-HOME test passing a `REG[$(touch "$HOME/PWNED")]`-shaped payload and asserting the file does not appear, plus a structural assertion that the function consumes no such positional.
+- **No new argv positional on any verb the agent whitelists, and no arithmetic on a value that arrived from outside.** `agent/src/whitelist.ts` matches a PREFIX — its own docstring: *"tokens after the prefix are unconstrained"* — so every extra token a granted verb (`start`, `enable`, `ensure`, `stop`, `swap`, `ws-add`, `forget`, …) accepts is attacker-supplied by construction, whether or not a call site emits one today. Bash evaluates a variable's *contents* as an arithmetic expression, and a command substitution inside an array subscript **executes**: `bound='REG[$(cmd)]'` in `(( … >= bound ))` runs `cmd` as the fleet user before the arithmetic errors. **This shipped once, in Task 5 — see D-299 (was D-B8-3) and `73bc0fe`.** Therefore: (1) per-caller tuning travels in a dynamically-scoped `local`, never argv — the `CCD_IN_UNIT` / `CCD_SETTLE_BOUND` idiom; a `local` is neither exported nor an argv token, so it is not addressable from the wire. (2) **One reader** per such variable, validated at the read (`[[ "$x" =~ ^[0-9]{1,5}$ ]] || x=$DEFAULT`), degrading to the production default — never to zero, never to "no bound". (3) Arithmetic contexts include **`[[ x -eq|-ne|-lt|-le|-gt|-ge y ]]` and array subscripts**, not just `(( ))`/`$(( ))`; a `-n` test is NOT a guard, only a `=~ ^[0-9]+$` placed first *inside the same `[[ ]]`* is. (4) Any new positional on a whitelisted verb ships with a fixture-HOME test passing a `REG[$(touch "$HOME/PWNED")]`-shaped payload and asserting the file does not appear, plus a structural assertion that the function consumes no such positional.
 - **No `git push` and no `gh` in any task step.** Branch, commit, and stop.
 
 ---
@@ -1311,7 +1311,7 @@ check is last precisely because those banners live in restored scrollback."
 
 ---
 
-### Calling `_spawn_start` — READ THIS BEFORE TASKS 7 AND 8 (D-B8-1)
+### Calling `_spawn_start` — READ THIS BEFORE TASKS 7 AND 8 (D-297 (was D-B8-1))
 
 **`_spawn_start` returns `fromswap` in the global `SPAWN_FROMSWAP`, never on stdout. Every call site
 has exactly this shape:**
@@ -7109,7 +7109,7 @@ Abandon arm — replace the `if (run.sessionId !== null) { … }` block and the 
     // workspace. RELEASE ONLY WHEN NOTHING ELSE CLAIMS IT — otherwise HAND
     // THE CLAIM OVER by re-holding with the surviving run's own reason. The
     // abandoned run still transitions either way; the workspace stays
-    // claimed. Never `wsArchive` on this arm (D-B4-7).
+    // claimed. Never `wsArchive` on this arm (D-280 (was D-B4-7)).
     let released = false;
     if (run.sessionId !== null) {
       const siblings = siblingsOf(run.sessionId);
@@ -13234,12 +13234,12 @@ Wave 4: nothing here touches `agent/`.
   render `undefined`.
 - **`FLEET_PROTO` stays 1.** Every wire change here is additive and absence-permitting.
 
-### Task 16: the `die`-inside-`$( )` class gets a sweep and a mechanical guard (D-B8-2)
+### Task 16: the `die`-inside-`$( )` class gets a sweep and a mechanical guard (D-298 (was D-B8-2))
 
-**This task exists because of D-B8-1, and it is the difference between fixing an instance and closing a
+**This task exists because of D-297, and it is the difference between fixing an instance and closing a
 class.** `die` is `echo …; exit 1`. Inside a command substitution, `exit` kills only the subshell — so
 **every** `x=$(_helper …)` where `_helper` can reach `die` silently demotes a fatal error to a value the
-caller probably does not check. D-B8-1 was one instance, found by review. Nothing prevents the next one.
+caller probably does not check. D-297 was one instance, found by review. Nothing prevents the next one.
 
 The shape is mechanically greppable, which is what makes a guard possible rather than a request.
 
@@ -13282,7 +13282,7 @@ import { CCD } from './ccdWsHelpers.js';
 
 /** Helpers that can reach `die` on some path — derived in Step 1, listed once here.
  *  A command substitution around ANY of these demotes a process-fatal error to a
- *  return code the caller almost certainly does not check (D-B8-1). */
+ *  return code the caller almost certainly does not check (D-297). */
 const CAN_DIE = [
   // filled from Step 1's sweep, e.g. '_spawn_start', '_id', …
 ];
@@ -13299,7 +13299,7 @@ describe('die is never demoted by a command substitution', () => {
     });
     expect(offenders,
       'a `die` inside $( ) kills only the subshell, so a fatal error becomes a return code — ' +
-      'and rc 1 is in no ccd caller\'s failure set. See D-B8-1.')
+      'and rc 1 is in no ccd caller\'s failure set. See D-297.')
       .toEqual([]);
   });
 });
@@ -13312,11 +13312,11 @@ cd <worktree>/server && ./node_modules/.bin/vitest run test/ccd-die-containment.
 ```
 
 Expected: FAIL, listing each demoting site the sweep found. **If it passes on the first run, the
-`CAN_DIE` list is wrong — go back to Step 1**, because D-B8-1 proves at least one such shape existed.
+`CAN_DIE` list is wrong — go back to Step 1**, because D-297 proves at least one such shape existed.
 (If Task 3's fix genuinely removed the only one, prove that by reverting `9ca06ae` in the working
 tree, watching this test go red, and restoring — then say so in the commit message.)
 
-- [ ] **Step 4: Fix each site the same way D-B8-1 was fixed**
+- [ ] **Step 4: Fix each site the same way D-297 was fixed**
 
 Prefer the structural fix: **return the value through a documented global and drop the substitution**,
 so the hazard is unrepresentable. Patching each call site with `|| exit $?` is a rule every future
@@ -13349,10 +13349,10 @@ git -c user.name="Mykyta Fastovets" -c user.email="you@example.com" commit
 
 ## Deviations found
 
-Numbered `D-B8-N`, global and monotonic across project history (Build 4 ended at `D-B4-23`). Source
+Numbered `D-B8-N`, global and monotonic across project history (Build 4 ended at `D-296 (was D-B4-23)`). Source
 files carry `D-B8-N` refs in comments; **read them as authoritative history and do not delete them.**
 
-**D-B8-1 — the `_spawn` split demoted a process-fatal error to a success line.** Task 3 gave
+**D-297 — the `_spawn` split demoted a process-fatal error to a success line.** Task 3 gave
 `_spawn_start` an stdout channel for `fromswap`, so the composition called it as
 `fs=$(_spawn_start "$1" "$2")`. `_spawn_start` retains `die "incomplete registry for '$id'"`, and
 `exit 1` inside `$( )` kills only the subshell — so the fatal became `return 1`, which is in no
@@ -13375,15 +13375,15 @@ fail for the reason it names is worse than no test, because it is counted as cov
 demotion happens at the **call site**, not in the function — so a test that calls `_spawn_start`
 plainly can never see it. The pin has to measure the composition.
 
-**D-B8-2 — the class behind D-B8-1 is unswept.** `die` inside `$( )` is silently non-fatal
+**D-298 — the class behind D-297 is unswept.** `die` inside `$( )` is silently non-fatal
 *everywhere* in `ccd/ccd`, not only at the one site review happened to catch. Task 16 sweeps the
 population and lands a text-scan guard so a new demotion is a red suite rather than a future
 incident. Recorded as a deviation because the plan as written closed an instance and left the class
 open — which is the exact failure this build's own goal statement names.
 
-### Task 17: the arithmetic-injection class gets swept and guarded (D-B8-3)
+### Task 17: the arithmetic-injection class gets swept and guarded (D-299)
 
-**D-B8-1 and D-B8-3 are the same lesson twice: an instance was fixed and the class was left open.** This
+**D-297 and D-299 are the same lesson twice: an instance was fixed and the class was left open.** This
 task closes the arithmetic one. It is deliberately scoped to *normalise a known population and pin it*,
 not to audit the file.
 
@@ -13483,7 +13483,7 @@ git add ccd/ccd server/test/ccd-arith-containment.test.ts
 git -c user.name="Mykyta Fastovets" -c user.email="you@example.com" commit
 ```
 
-- [ ] **Step 8: pin `_spawn_start`'s failure mode, because the split installed a door (D-B8-4)**
+- [ ] **Step 8: pin `_spawn_start`'s failure mode, because the split installed a door (D-300 (was D-B8-4))**
 
 Tasks 7/8 made every caller `_spawn_start "$id" <mode> || return $?`. That early return **skips
 `_reg_claim`** — and, at `cmd_ws_add`/`cmd_ws_restore`, `_ws_supervise` too — which the pre-split
@@ -13514,7 +13514,7 @@ authoritative sanitiser is the right shape; an unnamed dependency on it is not.
 
 ---
 
-**D-B8-3 — Task 5 turned a whitelisted verb's argv into arbitrary code execution.** Threading the
+**D-299 — Task 5 turned a whitelisted verb's argv into arbitrary code execution.** Threading the
 settle bound as a second positional on `cmd_ensure` put an unvalidated caller string into
 `(( $(date +%s) - t0 >= bound ))`. `agent/src/whitelist.ts` grants `['ensure']` and its own docstring
 states that *"tokens after the prefix are unconstrained"*, so `ccd ensure <id> 'REG[$(cmd)]'` executed
@@ -13541,7 +13541,7 @@ own regex for "the bound is not keyed off `fromswap`" was **unsatisfiable** agai
 bash's `type` deparse renders the whole `local` list on one line. A test that cannot pass for the right
 reason is as bad as one that cannot fail for the wrong one.
 
-**D-B8-4 — the split installed a door that re-opens F8, and it is currently unreachable.** Tasks 7/8
+**D-300 — the split installed a door that re-opens F8, and it is currently unreachable.** Tasks 7/8
 made every caller `_spawn_start "$id" <mode> || return $?`. That early return skips `_reg_claim` (and
 `_ws_supervise` where the verb has one) — the very writes Wave 1 exists to move earlier. It is
 unobservable only because `_spawn_start` has no `return` of its own: every failure is a `die`, and the
@@ -13561,7 +13561,7 @@ routes both outcomes through a single close and the comment now states the real 
 observable only from the sourcing shell, which is also the production shape — a fresh-bash probe would
 have shown it free, so the test asks the same shell.
 
-**D-B8-5 — four guards were decorated, not pinned, and one hid a standing false positive.** Review
+**D-301 (was D-B8-5) — four guards were decorated, not pinned, and one hid a standing false positive.** Review
 mutation-proved each: deleting `readWorktreeRecords`'s path-escape guard left the suite green; the
 "`_spawn_start` still dies" test wrapped the call in `( )`, so it passed whether the guard was fatal or
 not; the achromatic CSS override was, verbatim, "a comment, not a mechanism"; and `divergence.test.ts`'s
@@ -13582,7 +13582,7 @@ same admin name, and a `startsWith` test cannot tell them apart.
 defect is no longer writable. That is the shape to copy the next time a test encodes an assumption
 instead of measuring one: make the bad fixture impossible rather than adding another case.
 
-**D-B8-6 — the census sweep re-opened the race it had just closed, through ordering.** `registryNames`
+**D-302 (was D-B8-6) — the census sweep re-opened the race it had just closed, through ordering.** `registryNames`
 was snapshotted at the top of the tick while `readWorktreeRecords` ran three awaited lanes later, so a
 workspace whose `_reg_set` landed between the two reads had a worktree record and no registry name —
 the mid-`ws-add` false positive fixed two commits earlier, arriving by ordering rather than by
@@ -13598,7 +13598,7 @@ kind whose repair deletes worktrees.
 is the safe direction. And `.uuid` is the **fourth** field `cmd_ws_add` writes, which is why adopting
 ws-gc's `.uuid`-alone test would have re-opened the very false alarm this entry records.
 
-**D-B8-7 — §1.7's substrate placement was a no-op, and the reboot is what proved it.** The design ran
+**D-303 (was D-B8-7) — §1.7's substrate placement was a no-op, and the reboot is what proved it.** The design ran
 `systemd-run --user --scope --collect --unit=ccrc-tmux-server tmux start-server` as its own step ahead
 of `_spawn_start`'s `new-session`. **A tmux server with no sessions exits immediately**, so the server
 that scope started died at once, the scope collected, and the very next `tmux new-session` created a
@@ -13642,7 +13642,7 @@ criterion is also tightened — the cgroup leaf must **be** `ccrc-tmux-server.sc
 `claude-session@*` unit", because the server moved *between* session units and the weaker test would
 have scored that as progress.
 
-**D-B8-8 — the SWAP_JITTER row of Task 17's own table named the wrong source.** The table listed
+**D-304 (was D-B8-8) — the SWAP_JITTER row of Task 17's own table named the wrong source.** The table listed
 `_dispatch_swap`'s `SWAP_JITTER` operand as arriving from the **environment**. It does not: `ccd:54` is
 a bare `SWAP_JITTER=120`, not `${SWAP_JITTER:-120}`, so sourcing ccd overwrites whatever a caller
 exported and the operand is always ccd's own literal. The payload test written per the plan — pass the
@@ -13660,8 +13660,8 @@ knob tunable is a red suite pointing at the guard that then starts carrying real
 consequences — one removes a row from the table, the other means the row was never measured at all.
 Distinguish them by probing the site in isolation before believing either.
 
-**D-B8-9 — the substrate fix was necessary and not sufficient: it lost a race at boot.** The reboot
-that was to verify `_tmux_new_session` (D-B8-7) instead disproved it a second time. The server came
+**D-305 (was D-B8-9) — the substrate fix was necessary and not sufficient: it lost a race at boot.** The reboot
+that was to verify `_tmux_new_session` (D-303) instead disproved it a second time. The server came
 back in `claude-session@claude-synapsium-platform.service`; `ccrc-tmux-server.scope` was absent.
 
 The journal is unambiguous. At 22:41:46 **fifteen** supervisors logged `Failed to start transient scope
@@ -13672,7 +13672,7 @@ bare `tmux new-session`, one of those created the server in its own cgroup, and 
 `new-session` then merely CONNECTED to that server, leaving its scope holding a client that exited at
 once — which `--collect` reaped.
 
-**The assumption that failed, recorded because it was written down as reasoning:** D-B8-7's fix argued
+**The assumption that failed, recorded because it was written down as reasoning:** D-303's fix argued
 that a loser's bare fallback "simply attaches to the server the first one already placed". Losing the
 unit-name race says nothing about who reaches `new-session` first. **systemd serialises the NAME, not
 the WORK.** An ordering was inferred from a mechanism that does not provide one, and no test could
@@ -13689,12 +13689,12 @@ both failures, drove exactly one caller. The defect only exists when there are s
 now runs eight concurrent callers through a tmux stub with real shared state — `list-sessions` answers
 from a file `new-session` creates — and counts creates: **1** with the lock, **8** with the acquire
 removed. *A concurrency defect cannot be caught by a suite whose every case is sequential, however
-carefully each case is argued.* Both D-B8-7 failures share that root: the suite could not express the
+carefully each case is argued.* Both D-303 failures share that root: the suite could not express the
 condition under which the mechanism actually runs.
 
-### D-B8-10 — the F1 fix was written, tested, and shipped, but never *wired*; `working` outlived its process
+### D-306 (was D-B8-10) — the F1 fix was written, tested, and shipped, but never *wired*; `working` outlived its process
 
-**Found** 2026-08-19, verifying the D-B8-9 reboot. The reboot was a free natural experiment: every
+**Found** 2026-08-19, verifying the D-305 reboot. The reboot was a free natural experiment: every
 process on the box provably restarted at 08:58:25, so any hookstate written earlier belongs to a
 process that no longer exists. Twelve of seventeen live sessions carried hookstate older than the
 boot. Two of them read `state: "working"` — `claude2-OpenClawHetzner` (stamped 18 minutes before the
@@ -13738,18 +13738,18 @@ block out of `session-hook.sh`, runs the installer for real, and asserts the eve
 exactly the events handled. Measured: removing `SessionStart` from `EVENTS_JSON` → **2 red**; deleting
 the compact gate → **1 red**; restored → **32 passed**.
 
-**The transferable lesson is about where a seam hides.** D-B8-9's lesson was test *shape* — a
+**The transferable lesson is about where a seam hides.** D-305's lesson was test *shape* — a
 concurrency defect needs concurrent callers. This one is adjacent and distinct: both sides of this
 seam were tested, thoroughly, in isolation, and the defect lived in the agreement between them that
 neither test could see. *A list enumerated twice is a seam, and a seam with a test on each side is
 still untested.* The one artifact that would have caught it is the one now added — a test that derives
 one copy from the other.
 
-### D-B8-11 — placing the tmux server moved the whole fleet out of its memory ceiling
+### D-307 (was D-B8-11) — placing the tmux server moved the whole fleet out of its memory ceiling
 
-**Found by asking whether tmux is the right mechanism at all**, on 2026-08-19, ~6h after D-B8-9 was
+**Found by asking whether tmux is the right mechanism at all**, on 2026-08-19, ~6h after D-305 was
 verified. The audit was a design question; the answer came from measuring the live box, and what the
-measurement actually found was a regression that D-B8-9's own verification could not have seen,
+measurement actually found was a regression that D-305's own verification could not have seen,
 because it asked only "is the server in `ccrc-tmux-server.scope`?" and the answer was yes.
 
 Ubuntu's tmux (3.4, linked against `libsystemd`) mints a transient `tmux-spawn-<uuid>.scope` for every
@@ -13791,24 +13791,24 @@ the *unescaped* `app-claude-session.slice`, the realistic typo that makes system
 the drop-in → **1 red**; restored → **17 passed**.
 
 Two comments were corrected rather than deleted. `deploy.sh`'s sweep refusal asserted "that server
-sits in a claude-session@ cgroup", which stopped being true at D-B8-7 — it now says the guard is for
+sits in a claude-session@ cgroup", which stopped being true at D-303 — it now says the guard is for
 the documented *fallback* placement, and says explicitly not to delete it because a healthy box makes
 it look unnecessary. `ccd-cap-scopes`' layout note gains the second relocation, since its own text had
 predicted exactly this ("this stays correct if ccd ever moves sessions into a different slice again").
 
-**The transferable lesson is about the shape of a fix's blast radius.** D-B8-9's lesson was test shape;
-D-B8-10's was that a list enumerated twice is an untested seam. This one: *a fix that relocates a
+**The transferable lesson is about the shape of a fix's blast radius.** D-305's lesson was test shape;
+D-306's was that a list enumerated twice is an untested seam. This one: *a fix that relocates a
 process relocates everything the process's children inherit, and cgroup membership is inherited
 sideways through a dependency that documents none of it* — `man tmux` has no entry for systemd, scope,
 slice or cgroup. The verification criterion was correct and passed. It measured the thing the fix set
 out to change, and nothing about what else moved with it. **When a change moves something, ask what
 was standing downstream of where it used to be.**
 
-### D-B8-12 — `_alive` answered a question it had not managed to ask, and two destructive verbs believed it
+### D-308 (was D-B8-12) — `_alive` answered a question it had not managed to ask, and two destructive verbs believed it
 
 Surfaced by the adversarial pass over the "is tmux the right mechanism" audit (2026-08-19). The audit
 itself concluded *keep tmux, keep the shared server*; the operational lens then pointed at a line
-neither the audit nor D-B8-11 had looked at.
+neither the audit nor D-307 had looked at.
 
 `_alive() { tmux has-session -t … 2>/dev/null; }` collapsed three conditions into one boolean, and
 every failure among them is rc=1. Measured on an isolated socket, same box, same day:
@@ -13862,19 +13862,19 @@ a false *dead* with a false *alive*, so it needs a distinct `substrate-unreachab
 through `shared/api.ts`, the server and the PWA. Specified separately; the operator has declined the
 host-side mitigation (tmux stays unpinned, unattended upgrades stay on), so the code must carry it.
 
-**The transferable lesson.** D-B8-10: a list enumerated twice is an untested seam. D-B8-11: a fix that
+**The transferable lesson.** D-306: a list enumerated twice is an untested seam. D-307: a fix that
 moves a process moves what its children inherit. This one: *a predicate that cannot express "I don't
 know" will be believed by callers that needed to hear it* — and the tell is already in the codebase,
 because `_ws_status` had the three-valued contract and one of its own branches wasn't using it.
 **When a helper returns a boolean, ask what it does when it fails to measure.**
 
-### D-B8-13 — the server's `Tmux.hasSession` was D-B8-12's collapse, unfixed, one seam over
+### D-309 (was D-B8-13) — the server's `Tmux.hasSession` was D-B8-12's collapse, unfixed, one seam over
 
 **Found:** 2026-08-19, by the adversarial pass over the substrate-unreachable spec's open questions; the
 dominant finding was not in the spec at all. **Fixed:** 2026-08-20. **Scope:** `server/src/exec.ts`,
 `server/src/watch.ts` (two callers), documented deferrals at `fleet.ts`/`sessionws.ts`.
 
-D-B8-12 gave ccd an honest three-valued `_session_verdict` and stopped two destructive verbs from
+D-308 gave ccd an honest three-valued `_session_verdict` and stopped two destructive verbs from
 believing silence. The server side of the same seam was untouched: `Tmux.hasSession` reduced the whole
 `ExecResult` — `stderr`, `killed`, `signal`, everything the runner had carefully carried across the
 agent WebSocket — to `code === 0`. An adapter narrowing a distinction it received, in the exact adapter
@@ -13882,7 +13882,7 @@ class the architecture doc's highest-yield rule names. Two of its six callers we
 
 - **`archiveSafety` (`watch.ts`) failed OPEN on a destructive path.** Its tmux arm answered
   `{verdict: 'ok'}` — the answer its caller archives on — when tmux could not be asked, with the same
-  `// no pane: nothing is running` comment as ccd's `_ws_status` before D-B8-12, while the function's
+  `// no pane: nothing is running` comment as ccd's `_ws_status` before D-308, while the function's
   four other cannot-tell branches all said `unknown`. Now: `gone` alone is 'ok'; `unknown` refuses,
   carrying `held`.
 - **The mail sweep's bare `continue`** treated "recipient's pane is gone" and "tmux did not answer" as
@@ -13907,11 +13907,11 @@ it) is a product judgement — a new `SessionStatus` crosses the wire and every 
 to the substrate-unreachable spec, not to a guard.
 
 **The transferable lesson.** A fix to one implementation of a two-implementation contract is half a
-fix, and the halves drift unless a fixture binds them. D-B8-12's own ledger entry said "the polarity is
+fix, and the halves drift unless a fixture binds them. D-308's own ledger entry said "the polarity is
 the whole design" — and the polarity existed in one language. **When you fix a collapse on one side of
 a seam, grep for its twin on the other side before closing the deviation.**
 
-### D-B8-14 — the supervise loop stops treating silence as death, and the fault gets a face
+### D-310 (was D-B8-14) — the supervise loop stops treating silence as death, and the fault gets a face
 
 **Shipped:** 2026-08-20, `feat/substrate-unreachable`, implementing the substrate-unreachable spec v2
 (operator-approved same day). Ten plan tasks executed by a serial implementer+reviewer workflow (20

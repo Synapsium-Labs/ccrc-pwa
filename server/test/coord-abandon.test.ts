@@ -3,7 +3,7 @@
 //
 // It calls the SAME L1 decision function as `POST .../close` (`closeRun`), as
 // ONE contiguous arm entered before any of the ordinary close's own body
-// validation (D-B4-17). Most of this file asserts ABSENCES — no fingerprint, no
+// validation (D-290 (was D-B4-17)). Most of this file asserts ABSENCES — no fingerprint, no
 // `.prhistory` read, no `verifyDone`, no `ws-archive`, no `not-dispatched` —
 // and each of those is true because the call is absent from the arm, not
 // because a flag skipped it. A later edit that folds any of them back in fails
@@ -124,7 +124,7 @@ describe('POST /api/runs/:id/abandon', () => {
     // Nothing to release: a `planned` run that never dispatched holds no
     // workspace, so the ccd call is ABSENT, not merely tolerated-if-it-fails.
     expect(calls).toEqual([]);
-    // …and no `closing` hop was invented on the way (D-B4-8): the table's own
+    // …and no `closing` hop was invented on the way (D-281 (was D-B4-8)): the table's own
     // `planned → failed` edge was used, and `RUN_TRANSITIONS` is untouched.
     expect(w.coord.runEvents(id).map((e) => [e.fromState, e.toState]))
       .toEqual([['planned', 'failed']]);
@@ -236,7 +236,7 @@ describe('POST /api/runs/:id/abandon', () => {
 
     await postAbandon(app, id);
     // An abandon carries no claim, so there is nothing to write — exactly what
-    // the existing `HANDOFF_SHA` guard would have produced anyway (D-B4-1).
+    // the existing `HANDOFF_SHA` guard would have produced anyway (D-274 (was D-B4-1)).
     expect(w.coord.run(id)!.handoffCommit).toBeNull();
   });
 
@@ -266,7 +266,7 @@ describe('POST /api/runs/:id/abandon', () => {
     const id = wedged(w.coord, home, 'dispatched', `${PROJECT}-noarchive`);
 
     // The body a caller WISHES were honoured — a close-shaped one, carrying the
-    // one flag that destroys a worktree. D-B4-7: the route constructs
+    // one flag that destroys a worktree. D-280 (was D-B4-7): the route constructs
     // `{intent:'abandon'}` itself, so this is not a field that exists here.
     const res = await postAbandon(app, id, {
       intent: 'abandon', archive: true, state: 'failed', final: true,
@@ -312,7 +312,7 @@ describe('POST /api/runs/:id/abandon', () => {
     const sessionId = `${PROJECT}-badledger`;
     // A ledger that CANNOT be read: the ordinary close refuses on exactly this
     // (`prhistory-unreadable`), which would disable the abandon in precisely
-    // the broken-box case it exists for (D-B4-2).
+    // the broken-box case it exists for (D-275 (was D-B4-2)).
     const reads: string[] = [];
     const io: FleetIO = {
       ...localIO,

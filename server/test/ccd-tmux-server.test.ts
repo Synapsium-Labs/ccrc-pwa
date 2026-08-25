@@ -106,15 +106,15 @@ describe('_tmux_new_session', () => {
   });
 });
 
-describe('the placement must land in the fleet slice, or the ceiling stops applying (D-B8-11)', () => {
-  // D-B8-7 gave the tmux server a scope of its own and, in doing so, moved the
+describe('the placement must land in the fleet slice, or the ceiling stops applying (D-307 (was D-B8-11))', () => {
+  // D-303 (was D-B8-7) gave the tmux server a scope of its own and, in doing so, moved the
   // whole fleet's workload out of the cgroup the memory ceiling is attached to.
   // Ubuntu's tmux is built with systemd support: it mints a transient
   // `tmux-spawn-<uuid>.scope` per pane and derives that scope's SLICE from its
   // own placement, so the panes go wherever the server went. `systemd-run`
   // defaults a user scope to `app.slice`; the ceiling lives one level in.
   //
-  // Measured on the fleet host 2026-08-19, after the reboot that verified D-B8-9:
+  // Measured on the fleet host 2026-08-19, after the reboot that verified D-305 (was D-B8-9):
   //
   //   app-claude\x2dsession.slice     66 MB   cap 20G/24G   <- only the supervise loops
   //   app.slice                     17.6 GB   cap infinity  <- all 17 panes
@@ -131,7 +131,7 @@ describe('the placement must land in the fleet slice, or the ceiling stops apply
   // The slice is named ABSOLUTELY rather than inherited from the caller. Every
   // caller's cgroup is a different answer — `cmd_supervise`'s unit, an
   // interactive shell, a transient `systemd-run` from the auto-swap — and
-  // "wherever the creator happened to be" is the exact defect D-B8-7 removed.
+  // "wherever the creator happened to be" is the exact defect D-303 removed.
 
   /** The slice carrying the aggregate ceiling, DERIVED from the drop-in the
    *  deploy installs rather than typed a second time here. systemd escapes a
@@ -172,7 +172,7 @@ describe('the placement must land in the fleet slice, or the ceiling stops apply
   });
 });
 
-describe('the boot race — 17 supervisors, one server (D-B8-7, second attempt)', () => {
+describe('the boot race — 17 supervisors, one server (D-303, second attempt)', () => {
   // WHAT ACTUALLY HAPPENED, measured on the fleet host after the second reboot.
   // All 17 units start in the same second, all see no server, all call
   // `systemd-run --scope --unit=ccrc-tmux-server`. One wins the unit name; the

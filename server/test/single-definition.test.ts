@@ -390,7 +390,7 @@ describe('Build 7 nouns', () => {
     }
   });
 
-  // D-B4-16: no L1 file holds a database handle. `architecture:78-81` puts
+  // D-289 (was D-B4-16): no L1 file holds a database handle. `architecture:78-81` puts
   // `store.ts`/`coord/db.ts` at L3 and allows L1 to import L2 as TYPES only,
   // with "no `node:sqlite`" — so every multi-row all-or-nothing commit in this
   // build (`dispatchRun`, `settleItems`, `closeRun`) lands as a `CoordStore`

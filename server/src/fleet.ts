@@ -120,7 +120,7 @@ export async function liveStatus(io: FleetIO, cfg: CcrcConfig, tmux: Tmux, id: s
   // plainly busy one. `!read.found` (genuinely absent, or the whole
   // directory unlistable) is still 'dead': there is no pane to ask about
   // either way, the same answer this gave before the ladder existed.
-  // D-B8-13: `hasSession` here deliberately collapses `unknown` into 'dead' —
+  // D-309 (was D-B8-13): `hasSession` here deliberately collapses `unknown` into 'dead' —
   // which this route turns into a REFUSED interrupt, the safe direction this
   // function's own comment above already argues for. Splitting the pair for
   // the operator's view is the substrate-unreachable spec's job (a state word
@@ -201,7 +201,7 @@ export async function assembleFleet(
 ): Promise<FleetSession[]> {
   const [recs, limits] = await Promise.all([records ?? readRegistry(io, cfg), readLimits(io, cfg, now)]);
   return Promise.all(recs.map(async (r): Promise<FleetSession> => {
-    // D-B8-13: `hasSession` here deliberately collapses `unknown` into `alive
+    // D-309: `hasSession` here deliberately collapses `unknown` into `alive
     // = false`, so a substrate fault reads 'dead' in the PWA — a false dead,
     // with the ungated Restart button under it. Known, and deferred BY DECISION
     // to the substrate-unreachable spec: what the fleet view shows for

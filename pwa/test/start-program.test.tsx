@@ -3,18 +3,18 @@
 // exists, run once to confirm it fails for the right reason, then again once
 // the implementation lands.
 //
-// D-B4-18/19 (`docs/superpowers/plans/2026-08-11-build4-conversation-and-
+// D-291 (was D-B4-18) and D-292 (was D-B4-19) (`docs/superpowers/plans/2026-08-11-build4-conversation-and-
 // controls.md`'s Deviations section) are both pinned here, alongside the
 // brief's own eleven cases. The sheet cannot know the new session's id from
 // `createSession`'s own response (`{ok:true}`, no id — `server/src/
 // server.ts:593-596`), so it matches on fields a `/ws/fleet` frame reports,
 // never on a recomputed id — and the two arms match on DIFFERENT fields:
 //
-//   * D-B4-18's WAIT ("has the session I asked for appeared?") is
+//   * D-291's WAIT ("has the session I asked for appeared?") is
 //     wrapper-scoped — `wrapper` + `project` + `workspace === null`, no
 //     liveness — and bounded by `START_PROGRAM_WAIT_MS`. It ACTS (kickoff +
 //     navigate), so it must not resolve onto anyone else's session.
-//   * D-B4-19's REFUSAL ("is a live main checkout already running here?") is
+//   * D-292 (was D-B4-19)'s REFUSAL ("is a live main checkout already running here?") is
 //     wrapper-INDEPENDENT — `project` + `workspace === null` + alive.
 //     `cmd_swap` rewrites a session's `wrapper` and keeps its id
 //     (`ccd/ccd:7307`) while `cmd_start` collides on the id, so a
@@ -207,7 +207,7 @@ describe('StartProgramSheet', () => {
     expect(await screen.findByRole('button', { name: /start build9-demo on claude2/i })).toBeInTheDocument();
   });
 
-  it('refuses with copy when the projection is null: nothing is placeable (D-B4-11)', async () => {
+  it('refuses with copy when the projection is null: nothing is placeable (D-284 (was D-B4-11))', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [], projected: null, roster: [] });
     render(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
@@ -255,7 +255,7 @@ describe('StartProgramSheet', () => {
     expect(screen.queryByRole('button', { name: /^starting…$/i })).toBeNull();
   });
 
-  it('navigates to the new session on success — matched by wrapper+project once a LATER fleet frame shows it (D-B4-18)', async () => {
+  it('navigates to the new session on success — matched by wrapper+project once a LATER fleet frame shows it (D-291)', async () => {
     history.pushState(null, '', '/runs');
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const prompt = vi.fn().mockResolvedValue(undefined);
@@ -483,8 +483,8 @@ describe('StartProgramSheet', () => {
     expect(await screen.findByText('ccd: start: workdir missing')).toBeInTheDocument();
   });
 
-  // — D-B4-18: the bounded wait times out honestly —
-  it('renders honest "not shown yet" copy after the bounded wait — never framed as failure, never navigates (D-B4-18)', async () => {
+  // — D-291: the bounded wait times out honestly —
+  it('renders honest "not shown yet" copy after the bounded wait — never framed as failure, never navigates (D-291)', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const createSession = vi.fn().mockResolvedValue(undefined);
     const prompt = vi.fn().mockResolvedValue(undefined);
@@ -515,12 +515,12 @@ describe('StartProgramSheet', () => {
     expect(screen.getByRole('button', { name: /^start build9-demo/i })).not.toBeDisabled();
   });
 
-  // Review fix round 1, Important 2: D-B4-18's timeout and D-B4-19's
+  // Review fix round 1, Important 2: D-291's timeout and D-292's
   // collision refusal INTERACT, which neither ruling could see alone. A
   // session that lands after the timeout is the create THIS sheet just
   // asked for — not someone else's mid-task work — and the kickoff must
   // still be sent, not silently abandoned.
-  it('a session that lands AFTER the D-B4-18 timeout is never shown as someone else\'s "mid-task" collision — and still gets its kickoff (Important 2)', async () => {
+  it('a session that lands AFTER the D-291 timeout is never shown as someone else\'s "mid-task" collision — and still gets its kickoff (Important 2)', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const createSession = vi.fn().mockResolvedValue(undefined);
     const prompt = vi.fn().mockResolvedValue(undefined);
@@ -536,7 +536,7 @@ describe('StartProgramSheet', () => {
     try {
       fireEvent.click(go);
       await act(async () => { await vi.advanceTimersByTimeAsync(0); });
-      // Past the bounded wait, exactly like the D-B4-18 test above.
+      // Past the bounded wait, exactly like the D-291 test above.
       await act(async () => { await vi.advanceTimersByTimeAsync(START_PROGRAM_WAIT_MS + 1_000); });
       expect(screen.getByText(/board just hasn't shown it yet/i)).toBeInTheDocument();
 
@@ -560,13 +560,13 @@ describe('StartProgramSheet', () => {
     await waitFor(() => expect(location.pathname).toBe('/s/claude-ccrc-pwa'));
   });
 
-  // — D-B4-19: refuses before the tap when the target already exists —
+  // — D-292: refuses before the tap when the target already exists —
   // Retitled (re-review): this said "for that wrapper+project", which the
   // refusal arm has not matched on since the C1-swap correction — it passes
   // only because the fixture happens to use the projected wrapper. What it
   // actually pins is the arm's SHAPE: a live main checkout in the chosen
   // project withholds the confirm button entirely, rather than disabling one.
-  it('refuses before the tap when a live main checkout already exists in that project — no confirm button at all (D-B4-19)', async () => {
+  it('refuses before the tap when a live main checkout already exists in that project — no confirm button at all (D-292)', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const store = makeStore();
     act(() => { store.setState({ sessions: [sess({ id: 'claude-ccrc-pwa', wrapper: 'claude', project: 'ccrc-pwa' })] }); });
@@ -579,7 +579,7 @@ describe('StartProgramSheet', () => {
     expect(screen.queryByRole('button', { name: /^start/i })).toBeNull();
   });
 
-  it('re-evaluates the collision when the chosen project changes (D-B4-19)', async () => {
+  it('re-evaluates the collision when the chosen project changes (D-292)', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const store = makeStore();
     act(() => { store.setState({ sessions: [sess({ id: 'claude-alpha', wrapper: 'claude', project: 'alpha' })] }); });
@@ -604,14 +604,14 @@ describe('StartProgramSheet', () => {
   // and `useProjectedHome`'s wrapper is the server's own mirror of that same
   // `_ws_least_loaded` (`server/src/limits.ts:96`) — so the projected wrapper
   // is exactly the wrapper workspaces cluster on, and on a box running ~11
-  // sessions the D-B4-19 refusal fired for the fleet's NORMAL state, with no
+  // sessions the D-292 refusal fired for the fleet's NORMAL state, with no
   // path forward from the phone. It was also false on the facts: the id
   // `_id()` would compute for the projection is the MAIN checkout's, a
   // different, not-alive id `cmd_start` would have spawned correctly.
   //
   // `FleetSession.workspace` is server-reported and documented as "null for a
   // project's main checkout" (`shared/api.ts:35-37`), so it separates the two
-  // with NO id arithmetic — D-B4-18's "never recompute the id" still holds. —
+  // with NO id arithmetic — D-291's "never recompute the id" still holds. —
   it('does NOT refuse for a WORKSPACE session on the projected wrapper — only a main checkout is what cmd_start would collide with (C1)', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const store = makeStore();
@@ -650,7 +650,7 @@ describe('StartProgramSheet', () => {
     expect(screen.queryByText(/already running/i)).toBeNull();
   });
 
-  // REPLACES the old "D-B4-18's own match carries NO liveness conjunct" test
+  // REPLACES the old "D-291's own match carries NO liveness conjunct" test
   // (coordinator review B-2). That test pinned a rule that was WRONG, and its
   // stated reason — "excluding a dead row would time out a wait on a session
   // that really did start" — conflated "not resolving on this tick" with
@@ -811,7 +811,7 @@ describe('StartProgramSheet', () => {
 
   it('re-arms nothing when the create FAILS — a genuine refusal is not suppressed by a dead attempt (B-1)', async () => {
     // The other side of arming before the await: the ref must not stay armed
-    // on a create that never happened, or it would suppress the D-B4-19
+    // on a create that never happened, or it would suppress the D-292
     // refusal for a session this sheet did not start.
     vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
     const createSession = vi.fn().mockRejectedValue(new ApiError(502, { ok: false, stderr: 'ccd: start: boom' }));
@@ -1048,7 +1048,7 @@ describe('StartProgramSheet', () => {
   // `start()` returns immediately on `existing !== null`. A permanently inert
   // control with no feedback, the same dead-tap class review round 1 fixed
   // for the placement-pending case. Reachable whenever `prompt()` is slow
-  // after a D-B4-18 timeout has already put `starting` back to false.
+  // after a D-291 timeout has already put `starting` back to false.
   it('never leaves an ENABLED Start while its own started session is being opened — no dead tap (B-3)', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
     const prompt = vi.fn(() => new Promise<void>(() => {})); // hangs — finish() is mid-flight
@@ -1118,7 +1118,7 @@ describe('StartProgramSheet', () => {
   });
 
   // — Lesson 5 (Task 12's own review, applied here ahead of time): the sheet
-  // holds async state across the D-B4-18 wait, and is mounted unconditionally
+  // holds async state across the D-291 wait, and is mounted unconditionally
   // — a close mid-wait must retire the attempt, not let a later match write
   // into whatever the sheet shows next. —
   it('a superseded attempt (sheet closed mid-wait) cannot navigate when a later matching session appears', async () => {

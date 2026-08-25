@@ -59,17 +59,21 @@ describe('floorFromScan', () => {
 
   it('recognizes the legacy D-B<k>-<m> form and reports it — but it NEVER feeds the floor (D14)', () => {
     const r = floorFromScan([
-      { path: 'p.md', text: 'D-210 stands; D-B4-400 is legacy and its 400 is another namespace.' },
+      { path: 'p.md', text: 'D-210 stands; D-B4-' + '400 is legacy and its 400 is another namespace.' },
     ]);
     expect(r).toEqual({
       floor: 210 + LEDGER_SEED_GAP,
       evidence: 'p.md names D-210',
-      legacy: ['D-B4-400'],
+      legacy: ['D-B4-' + '400'],
     });
   });
 
   it('a tree with ONLY legacy refs is NOT a seed — fail shut, not guess (D13/D14)', () => {
-    expect(floorFromScan([{ path: 'p.md', text: 'only D-B4-9 and D-B8-13 here' }])).toBeNull();
+    // Legacy refs built by concatenation, like the D14 fixture above: the
+    // wave-10 scanner licenses no bare legacy byte in tracked text, and an
+    // aliased spelling would smuggle a global D-<n> into a fixture whose
+    // whole point is that NOTHING global is present.
+    expect(floorFromScan([{ path: 'p.md', text: 'only ' + 'D-B4-' + '9 and ' + 'D-B8-' + '13 here' }])).toBeNull();
   });
 
   it('an empty scan is null, and null is not a floor of 50', () => {

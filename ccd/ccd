@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=c6695147c2e1987d98a801ec3e332bffe53192ba279292862d205bf774a06ad7
+# ccrc:generated 1 sha256=91bdea22d654b215bb3e7d0a1deb58c52ff53859239b1076bc925f7bb8a1fb75
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box, not on this file: `_rc_enabled` reads
@@ -331,7 +331,7 @@ _tmux()  { echo "cc-$1"; }                                  # id -> tmux name
 # rewords its errors therefore degrades this to "refuses too often", never to
 # "reaps a live session".
 #
-# The probe form (D-B8-14) exists because the supervisor needs BOTH the verdict
+# The probe form (D-310 (was D-B8-14)) exists because the supervisor needs BOTH the verdict
 # and tmux's own words for the substrate marker, and a `$( )` caller would eat
 # the second fact with the subshell. Same classifier, same polarity — the probe
 # IS the one classifier now; `_session_verdict` merely re-derives from it.
@@ -363,7 +363,7 @@ _session_verdict() {   # id -> live|gone|unknown on stdout; always rc 0 (derived
 # Unchanged in meaning for its eleven other callers: true for `live` only, so
 # `unknown` still reads as "not alive" everywhere that has not been taught the
 # difference. The two callers where that collapse was destructive — `_ws_status`
-# and `cmd_forget` — ask `_session_verdict` directly (D-B8-12).
+# and `cmd_forget` — ask `_session_verdict` directly (D-308 (was D-B8-12)).
 _alive() { [[ "$(_session_verdict "$1")" == live ]]; }
 # ATOMIC BY RENAME (registry-durability wave 2). The old body was
 # `printf '%s' "$3" > "$REG/$1.$2"` — truncate-then-write IN PLACE, so any
@@ -1564,7 +1564,7 @@ _ws_status() {   # id -> busy|idle on stdout; NON-ZERO when it cannot be read.
   # answer is the non-zero this function's own contract reserves for it —
   # `ws-archive` turns it into `status-unknown` and `ws-reap` into a refusal.
   # Answering `idle` instead presented every live session as reapable for as
-  # long as the substrate was unreachable (D-B8-12).
+  # long as the substrate was unreachable (D-308).
   case "$(_session_verdict "$id")" in
     gone)    echo idle; return 0 ;;   # no pane at all: nothing is running
     unknown) return 1 ;;              # could not ask — say so, do not guess
@@ -10303,7 +10303,7 @@ _tmux_new_session() {   # argv for `tmux new-session` -> runs it, PLACING the se
   # specifically, and the single-box OSS story is a box with neither.
   if ! tmux list-sessions >/dev/null 2>&1 && command -v systemd-run >/dev/null 2>&1; then
     # --slice IS NOT OPTIONAL, and it is the correction to this mechanism's
-    # own first version (D-B8-11). A user scope with no `--slice` defaults to
+    # own first version (D-307 (was D-B8-11)). A user scope with no `--slice` defaults to
     # `app.slice`; the fleet's aggregate memory ceiling
     # (deploy/systemd/app-claude-session.slice.d/limits.conf, MemoryHigh=20G /
     # MemoryMax=24G) hangs one level in, on `app-claude\x2dsession.slice`.
@@ -10314,7 +10314,7 @@ _tmux_new_session() {   # argv for `tmux new-session` -> runs it, PLACING the se
     # carried the whole fleet's memory out of its ceiling.
     #
     # Measured on the fleet host 2026-08-19, after the reboot that verified
-    # D-B8-9: `app-claude\x2dsession.slice` held 66 MB under a 24G cap — the
+    # D-305 (was D-B8-9): `app-claude\x2dsession.slice` held 66 MB under a 24G cap — the
     # supervise loops and nothing else — while `app.slice` held 17.6 GB
     # uncapped. Proved causal the same day on an isolated socket: a server
     # started inside the slice mints its pane scopes in that same slice.
@@ -10342,7 +10342,7 @@ _tmux_new_session() {   # argv for `tmux new-session` -> runs it, PLACING the se
     tmux new-session "$@"
     rc=$?
   fi
-  # SINGLE EXIT for the fd, deliberately — D-B8-4 recorded the cost of an early
+  # SINGLE EXIT for the fd, deliberately — D-300 (was D-B8-4) recorded the cost of an early
   # `return` skipping a close: ccd is SOURCED, and `flock` treats two `open()`s
   # of one file in a process as strangers, so a leaked fd is a lock nothing
   # releases. `die` is exempt only because exiting closes it.
@@ -11078,7 +11078,7 @@ cmd_supervise() {   # systemd ExecStart: ensure then block until the session die
   # Re-stamped every 30s from the 5-second tick this loop already runs, so the
   # 120-second freshness window never expires under a live supervisor.
   #
-  # VERDICT-DRIVEN, not boolean (D-B8-14): the old `while _alive` collapsed
+  # VERDICT-DRIVEN, not boolean (D-310): the old `while _alive` collapsed
   # `gone` and `unknown` into one exit, so a wedged or version-skewed tmux
   # read as seventeen simultaneous deaths — every supervisor exited, systemd
   # restarted each one into `cmd_ensure`, and the fleet churned against a
@@ -11087,7 +11087,7 @@ cmd_supervise() {   # systemd ExecStart: ensure then block until the session die
   while :; do
     _session_probe "$id"
     case "$PROBE_VERDICT" in
-      gone) break ;;   # the ONLY exit — a session tmux itself pronounced dead (D-B8-14)
+      gone) break ;;   # the ONLY exit — a session tmux itself pronounced dead (D-310)
       live)
         [[ -e "$REG/$id.substrate" ]] && _substrate_clear "$id"
         unknown_run=0; tick=5
@@ -11876,7 +11876,7 @@ cmd_forget() {   # <id> — remove a DEAD non-workspace session's registry entry
   # when the tmux server never answered, so an unreachable substrate let this
   # purge the row of a RUNNING session — the "cleanup into a kill" the comment
   # above warns about, by a route it did not consider. Same polarity as the
-  # hold check: what cannot be read refuses (D-B8-12).
+  # hold check: what cannot be read refuses (D-308).
   case "$(_session_verdict "$id")" in
     live)    _lc_refuse forget "$id" session-live "$id is still running — stop it first: ccd stop $id" dec.reason "$reason" ;;
     unknown) _lc_refuse forget "$id" session-verdict-unknown "$id: cannot tell whether it is still running — the tmux server did not answer. Nothing was removed. Check with: tmux ls" dec.reason "$reason" ;;

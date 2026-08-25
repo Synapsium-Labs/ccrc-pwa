@@ -155,13 +155,13 @@ import type { SessionStore } from './sessions.js';
  *    docstring states the same argument from the crypto side.)
  *  - `POST /api/coord/pause`, `POST /api/runs/:id/abandon` and
  *    `POST /api/claims/:id/break` — `coord/routes.ts` leaves these off the
- *    BOX-TOKEN gate on purpose (D-B4-9: the coordinator holds that token, and a
+ *    BOX-TOKEN gate on purpose (D-282 (was D-B4-9): the coordinator holds that token, and a
  *    pause it can lift is not a pause; build 9 D12 applies the same argument to
  *    the claim-break door, the third instance — the sessions that hold claims
  *    hold that token too). That argument is about the box token specifically and
  *    does not transfer: they are the OPERATOR's doors, the operator is the one
  *    holding a session, and a session cookie is precisely the credential the
- *    coordinator does not have. Gating them here strengthens D-B4-9 rather than
+ *    coordinator does not have. Gating them here strengthens D-282 rather than
  *    reversing it.
  */
 export const EXEMPT: ReadonlyMap<string, string> = new Map([

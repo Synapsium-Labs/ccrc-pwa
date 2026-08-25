@@ -788,13 +788,13 @@ describe('archiveSafety — an unconfigured wrapper is UNKNOWN, never a silent o
   });
 });
 
-describe('archiveSafety — the tmux arm answers three ways, and silence REFUSES (D-B8-13)', () => {
+describe('archiveSafety — the tmux arm answers three ways, and silence REFUSES (D-309 (was D-B8-13))', () => {
   it('a tmux that DID NOT ANSWER is unknown, never ok — silence is not proof there is nothing to destroy', async () => {
-    // D-B8-12's fail-shut polarity, carried to the server seam it was missing
+    // D-308 (was D-B8-12)'s fail-shut polarity, carried to the server seam it was missing
     // from. This function's four other cannot-tell branches all answer
     // 'unknown'; the tmux branch was the one that answered 'ok' — on the one
     // reading whose caller ARCHIVES on that answer, with the same comment and
-    // the same defect as ccd's `_ws_status` before D-B8-12. The fixture plants
+    // the same defect as ccd's `_ws_status` before D-308. The fixture plants
     // an idle live-state so BOTH ways of losing the guard die here: reverting
     // to the boolean (`!hasSession` -> 'ok') answers 'ok' directly, and letting
     // `unknown` fall through to the pid/live reads resolves a concrete 'ok'

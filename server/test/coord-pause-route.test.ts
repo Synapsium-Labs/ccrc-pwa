@@ -1,6 +1,6 @@
 // `POST /api/coord/pause` — the operator's door onto `$REG/coordinator-paused`,
 // and one of the THREE write routes in `coord/routes.ts` deliberately not behind
-// `requireMailToken` (D-B4-9). The others are `POST /api/runs/:id/abandon` (same
+// `requireMailToken` (D-282 (was D-B4-9)). The others are `POST /api/runs/:id/abandon` (same
 // build, same reason) and `POST /api/claims/:id/break` (build 9 D12, the same
 // abandon-door shape); the `UNGATED` set below is the whole list, and the
 // scanner holds it to exactly those three.
@@ -150,7 +150,7 @@ describe('POST /api/coord/pause', () => {
   });
 });
 
-// D-B4-9. The gate is a property of the FILE, not of the routes anyone
+// D-282. The gate is a property of the FILE, not of the routes anyone
 // remembers to check: `MAIL_REJECT_CODES`-excludes-`undeliverable` is the same
 // idiom — an exclusion written down by name, rather than a scanner quietly
 // narrowed until it passes.
@@ -252,7 +252,7 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
     expect(doc.length, `${route} carries no docstring`).toBeGreaterThan(600);
     expect(doc, 'says what it is NOT behind').toContain('requireMailToken');
     expect(doc, 'says it is ungated, in the word the reader greps for').toContain('UNGATED');
-    expect(doc, 'names the deviation that carries the ruling').toContain('D-B4-9');
+    expect(doc, 'names the deviation that carries the ruling').toContain('D-282');
     expect(doc, "names the caller the box token would have handed the other side of")
       .toMatch(/coordinator/i);
   });

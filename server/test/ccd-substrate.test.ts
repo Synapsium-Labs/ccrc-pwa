@@ -1,6 +1,6 @@
 /**
  * The substrate marker — `$REG/<id>.substrate`, the supervisor's decision
- * record for "I could not reach tmux" (spec §2, D-B8-14).
+ * record for "I could not reach tmux" (spec §2, D-310 (was D-B8-14)).
  *
  * One writer per file: the row's own supervisor. The fleet-wide statement
  * ("tmux itself is down") is DERIVED by the reader from the set of markers,

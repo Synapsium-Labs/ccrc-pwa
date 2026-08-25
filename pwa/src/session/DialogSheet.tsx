@@ -142,7 +142,7 @@ export interface DialogSheetProps {
   /** Unparsed dialogs escalate here (TerminalDrawer once Task 12 lands). */
   onOpenTerminal?: () => void;
   /**
-   * A NONCE, not a flag (D-B4-13). `dismissedKey` below is component-local
+   * A NONCE, not a flag (D-286 (was D-B4-13)). `dismissedKey` below is component-local
    * state, so a control outside this component — the transcript's `Answer`,
    * Build 4 Task 18 — had no way to re-open a sheet the reader had waved
    * away. Bumping this clears the dismissal and nothing else: no store change
@@ -186,7 +186,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
     setAnswering(null);
   }, [dialogId]);
 
-  // D-B4-13: the transcript asked for this sheet back. Clearing the dismissal
+  // D-286: the transcript asked for this sheet back. Clearing the dismissal
   // is the WHOLE effect — the sheet then opens on exactly the envelope the
   // store still holds, through the same `open` computation as always, so the
   // raise cannot conjure a sheet for a question that is no longer live.

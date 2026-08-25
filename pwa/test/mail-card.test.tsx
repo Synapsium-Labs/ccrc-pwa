@@ -257,7 +257,7 @@ describe('MailCard', () => {
   });
 });
 
-// — W-1 / D-B4-23: the LIVE lane —
+// — W-1 / D-296 (was D-B4-23): the LIVE lane —
 //
 // The spec's measured fact expired mid-program. `sweepMail` no longer types
 // the envelope into the pane (43b2737, an ancestor of this wave's own base);

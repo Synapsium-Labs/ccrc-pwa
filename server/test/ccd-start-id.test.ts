@@ -164,7 +164,7 @@ describe('cmd_start / cmd_ensure: the in-unit branch takes the split form', () =
    *  separates the split form from the old spawn-then-claim.
    *
    *  `_spawn_start` sets the GLOBAL and prints nothing — an `echo 0` stub would
-   *  model exactly the shape D-B8-1 exists to keep out. `_spawn_settle` records
+   *  model exactly the shape D-297 (was D-B8-1) exists to keep out. `_spawn_settle` records
    *  its fromswap argument; it takes no third one, because the settle bound
    *  rides `CCD_SETTLE_BOUND` and `$3` under `set -u` would be fatal. */
   const HALVES = `_spawn_start() { echo "spawn_start $1 $2" >> "$HOME/ccd-calls"; SPAWN_FROMSWAP=0; };
@@ -225,13 +225,13 @@ describe('cmd_start / cmd_ensure: the in-unit branch takes the split form', () =
     // Task 5's bound rides `CCD_SETTLE_BOUND`, a dynamically-scoped `local`.
     // A third positional here would be `cmd_ensure`'s second, and `cmd_ensure`
     // is whitelisted by prefix — an argv word that reaches `(( ))` is arbitrary
-    // code as the fleet user (D-B8-3, 73bc0fe).
+    // code as the fleet user (D-299 (was D-B8-3), 73bc0fe).
     const t = h.sh('type cmd_ensure');
     expect(t).toContain('_spawn_settle "$id" "$SPAWN_FROMSWAP"');
     expect(t).not.toMatch(/_spawn_settle "\$id" "\$SPAWN_FROMSWAP" /);
   });
 
-  it('neither in-unit branch wraps _spawn_start in a command substitution (D-B8-1)', () => {
+  it('neither in-unit branch wraps _spawn_start in a command substitution (D-297)', () => {
     for (const fn of ['cmd_start', 'cmd_ensure']) {
       const body = h.sh(`type ${fn}`);
       expect(body, fn).not.toMatch(/\$\(\s*_spawn_start/);

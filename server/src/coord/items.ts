@@ -9,7 +9,7 @@ import {
  * narrow deps in, typed union out. The all-or-nothing COMMIT belongs to the
  * ring that owns `DatabaseSync`'s synchrony invariant (`architecture:141-142`),
  * so this file validates and maps and `CoordStore.settleItems` commits
- * (D-B4-16) — the same split `dispatchRun`/`CoordStore.dispatchRun` and
+ * (D-289 (was D-B4-16)) — the same split `dispatchRun`/`CoordStore.dispatchRun` and
  * `closeRun`/`CoordStore.closeRun` already draw, reached here for the third
  * time rather than reasoned out afresh.
  *

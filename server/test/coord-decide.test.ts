@@ -221,7 +221,7 @@ describe('closeRun, called directly — a failing ws-release leaves the run retr
     const abandon = { fingerprint: { branchTip: 'x', prNumber: null, prPhase: 'open', handoffCommit: 'x' },
       final: true, state: 'failed' };
     const closeDeps: CloseRunDeps = { coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd, fleetState: undefined };
-    // `causedBy` is a required parameter with no default (Build 4, D-B4-3/6):
+    // `causedBy` is a required parameter with no default (Build 4, D-276 (was D-B4-3) and D-279 (was D-B4-6)):
     // this is the COORDINATOR's own close, and it says so.
     const refused = await closeRun(closeDeps, opened.id, abandon, 'coordinator');
     expect(refused).toMatchObject({ ok: false, kind: 'fleetFailed', stderr: 'ws-release failed' });

@@ -61,7 +61,7 @@ const runCcd = (...args: string[]): { code: number; stdout: string; stderr: stri
   // "can't find session" means the session is gone, and a bare exit 1 means
   // "the tmux server did not answer" — under which `_ws_status` correctly
   // refuses instead of reporting idle. This harness models a box with no
-  // session, not a box with no tmux server, so it says so (D-B8-12).
+  // session, not a box with no tmux server, so it says so (D-308 (was D-B8-12)).
   fs.writeFileSync(path.join(stub, 'tmux'),
     '#!/bin/sh\necho "tmux $*" >> "$HOME/ccd-calls"\n'
     + '[ "$1" = has-session ] && echo "can\'t find session: $3" >&2\nexit 1\n', { mode: 0o755 });

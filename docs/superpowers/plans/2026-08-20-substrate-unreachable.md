@@ -13,7 +13,7 @@
 - **Wire discipline:** additive-only; `FLEET_PROTO` stays 1 (`fleet-protocol.test.ts` must stay green untouched). Absence-permits through ONE reader.
 - **Timebase:** registry stamps are epoch SECONDS; the wire is epoch MS (`archivedAt` is the sole exception). Conversion happens in `fleet.ts` only, like `stoppedBy` (`fleet.ts:370`).
 - **Never a masking state:** `SessionLifecycle`, `SessionStatus`, `SessionBucket` gain no member. The axis rides beside them (spec §3; M10 discipline).
-- **Fail-shut polarity (D-B8-12/13):** only tmux's own `can't find session` means death; everything else refuses. No new classifier — `_session_verdict` is the one bash classifier, `classifyHasSession` the one TS classifier.
+- **Fail-shut polarity (D-308 (was D-B8-12) and D-309 (was D-B8-13)):** only tmux's own `can't find session` means death; everything else refuses. No new classifier — `_session_verdict` is the one bash classifier, `classifyHasSession` the one TS classifier.
 - **Marker text is never empty** — a killed probe gets a synthesized reason.
 - **Every commit touching `ccd/ccd` re-stamps the provenance marker in that commit** (command in Task 1, from `ownership.test.ts:131-138`).
 - **Suites:** `./node_modules/.bin/vitest run <file>` from inside the package, foreground, timeout ≥600000ms. NEVER bare `npx vitest`.
@@ -118,7 +118,7 @@ node --input-type=module -e "import { readFileSync, writeFileSync } from 'node:f
 
 - [ ] **Step 5: Run** `test/ccd-session-verdict.test.ts` (all green, fixture rows still driving the classifier) and `test/ownership.test.ts` (marker). Also run `test/ccd-session-state.test.ts` — its `_alive` stubs must be unaffected (they shadow `_alive`, which no longer matters for the classifier path only if a test shadows `_session_verdict`/`_session_probe`; verify no red).
 - [ ] **Step 6: Mutation table** (edit, run the suite, restore, record counts): (a) deadline deleted (call tmux bare in the binary branch) → wedge test red; (b) rc-124 synthesized reason deleted → wedge test red (empty detail); (c) `_session_verdict` re-implemented standalone (not via probe) → one-classifier test red.
-- [ ] **Step 7: Commit** `feat(ccd): _session_probe — the verdict plus its diagnosis, deadline-bounded (D-B8-14)`.
+- [ ] **Step 7: Commit** `feat(ccd): _session_probe — the verdict plus its diagnosis, deadline-bounded (D-310 (was D-B8-14))`.
 
 ---
 
@@ -191,7 +191,7 @@ Add `substrate` to `_reg_purge`'s field inventory comment (`ccd:379-401`) so a p
 
 - [ ] **Step 4: Re-stamp the marker** (Task 1 Step 4 command). **Step 5: Run** the new suite + `ownership.test.ts` → green.
 - [ ] **Step 6: Mutation:** (a) skew suffix on every write → second-write test red; (b) empty-reason guard deleted → never-empty test red.
-- [ ] **Step 7: Commit** `feat(ccd): the substrate marker — one writer, epoch + verbatim reason (D-B8-14)`.
+- [ ] **Step 7: Commit** `feat(ccd): the substrate marker — one writer, epoch + verbatim reason (D-310)`.
 
 ---
 
@@ -268,7 +268,7 @@ Replace the loop body (`ccd:8613-8619`; keep the surrounding comment, extend it)
   while :; do
     _session_probe "$id"
     case "$PROBE_VERDICT" in
-      gone) break ;;   # the ONLY exit — a session tmux itself pronounced dead (D-B8-14)
+      gone) break ;;   # the ONLY exit — a session tmux itself pronounced dead (D-310)
       live)
         [[ -e "$REG/$id.substrate" ]] && _substrate_clear "$id"
         unknown_run=0; tick=5
@@ -293,9 +293,9 @@ Replace the loop body (`ccd:8613-8619`; keep the surrounding comment, extend it)
   done
 ```
 
-- [ ] **Step 4: Re-stamp; run** the new suite + `ccd-session-state.test.ts` + `ccd-supervised-start.test.ts` + `ownership.test.ts`. `ccd-session-state.test.ts:236-262` stubs `_alive` to drive this loop — the loop no longer calls `_alive`, so those stubs go dark: REWRITE those two tests to stub `_session_probe` instead (loud, like D-B8-12's 231; the `_session_state` table still stubs `_alive` legitimately — `_session_state` keeps calling it).
+- [ ] **Step 4: Re-stamp; run** the new suite + `ccd-session-state.test.ts` + `ccd-supervised-start.test.ts` + `ownership.test.ts`. `ccd-session-state.test.ts:236-262` stubs `_alive` to drive this loop — the loop no longer calls `_alive`, so those stubs go dark: REWRITE those two tests to stub `_session_probe` instead (loud, like D-308's 231; the `_session_state` table still stubs `_alive` legitimately — `_session_state` keeps calling it).
 - [ ] **Step 5: Mutation:** (a) every-tick stamp on unknown removed → stamp-count test red; (b) `unknown` exits (old world) → non-exit test red; (c) backoff deleted → sleeps test red; (d) marker clear on live deleted → clear test red; (e) helpers not skipped → skip test red. Record counts.
-- [ ] **Step 6: Commit** `feat(ccd): cmd_supervise stops treating silence as death (D-B8-14)`.
+- [ ] **Step 6: Commit** `feat(ccd): cmd_supervise stops treating silence as death (D-310)`.
 
 ---
 
@@ -338,7 +338,7 @@ substrate: substrateRaw === null
 (If `packedStamp`'s exact return shape differs, follow it — the contract is: numeric leading stamp → `at`, remainder → `text`, and a stampless string lands whole in `text` with `at: 0`.) Update the 21→22 pin and every "21"/"~505" prose site listed above.
 - [ ] **Step 4: Run** the full server suite (`./node_modules/.bin/vitest run`) — `SessionRecord` is server-internal, so the only fallout is server-test fixtures that build complete `SessionRecord` literals; add `substrate: null` to each until `typecheck-tests` and the suite are green. (`FleetSession` is untouched until Task 5, so nothing outside `server/` moves.)
 - [ ] **Step 5: Mutation:** unreadable-arm → null (fail-open) → red; listing check removed → red.
-- [ ] **Step 6: Commit** `feat(server): the registry reads the supervisor's substrate record (D-B8-14)`.
+- [ ] **Step 6: Commit** `feat(server): the registry reads the supervisor's substrate record (D-310)`.
 
 ---### Task 5: The wire — `FleetSession.substrate`, revived and helpered (shared)
 
@@ -354,7 +354,7 @@ substrate: substrateRaw === null
 - [ ] **Step 3: Implement** interface field (doc comment: the axis, spec §3, M10 — "a new FIELD, not a new status/bucket/lifecycle member"), `reviveSubstrate`, the literal line, and `substrateFault`.
 - [ ] **Step 4: Run** `fleetstate.test.ts` + `typecheck-tests.test.ts` green (fix any remaining server-test FleetSession literals with `substrate: null`).
 - [ ] **Step 5: Mutation:** revive line dropped from the literal → compile error (state it, no runtime mutation needed); `substrateFault` empty-text guard dropped → helper test red.
-- [ ] **Step 6: Commit** `feat(shared): the substrate axis rides the wire — additive, revived, one reader (D-B8-14)`.
+- [ ] **Step 6: Commit** `feat(shared): the substrate axis rides the wire — additive, revived, one reader (D-310)`.
 
 ---
 
@@ -370,7 +370,7 @@ substrate: substrateRaw === null
 - [ ] **Step 1: Failing tests**, cloning `fleet-lifecycle.test.ts:102-110`: a seeded `.substrate` file reaches the session as `{at: seconds*1000, text}`; a row without one ships `substrate: null` and NEVER undefined (`Object.keys` arrayContaining); the field **moves neither `status` nor `bucket`** (the M10 pin, copied verbatim in spirit).
 - [ ] **Step 2: Run → FAIL.** **Step 3: Implement** the one literal line. **Step 4: Green.**
 - [ ] **Step 5: Mutation:** seconds→MS conversion dropped → red (assert the exact MS value).
-- [ ] **Step 6: Commit** `feat(server): assembleFleet ships the substrate axis (D-B8-14)`.
+- [ ] **Step 6: Commit** `feat(server): assembleFleet ships the substrate axis (D-310)`.
 
 ---
 
@@ -405,7 +405,7 @@ describe('substrate chip — the console cannot see this session, and says so (s
 - [ ] **Step 3: Implement** the chip after the unmeasured block (same register — grey, generic words `unreachable tmux`, `data-substrate="true"`, reason verbatim in `title`, never parsed); CSS clone of `.sess-unmeasured` (`:1124-1132`) + join the `.sess-line--active` achromatic group AND its `fleet-css.test.ts` membership list.
 - [ ] **Step 4: Green** (`session-line.test.tsx`, `fleet-css.test.ts`, full pwa suite).
 - [ ] **Step 5: Mutation:** chip reads `session.substrate.text` directly (not via `substrateFault`) → the missing-key test red.
-- [ ] **Step 6: Commit** `feat(pwa): the substrate chip — a row the console cannot see says so (D-B8-14)`.
+- [ ] **Step 6: Commit** `feat(pwa): the substrate chip — a row the console cannot see says so (D-310)`.
 
 ---
 
@@ -422,7 +422,7 @@ describe('substrate chip — the console cannot see this session, and says so (s
 - [ ] **Step 1: Failing tests:** for each control, render with `s({ substrate: { at: 1, text: 'x' } })` → `expect(getByRole('button', {name: …})).toBeDisabled()` + title contains `'x'` + `fireEvent.click` does NOT call the api spy (the `header.test.tsx:99-105` idiom); one control asserted enabled again on `substrate: null`.
 - [ ] **Step 2: RED. Step 3: implement. Step 4: GREEN** (+ full pwa suite).
 - [ ] **Step 5: Mutation:** one gate dropped (Restart) → its test red — measure each control's test actually kills its own gate, not a neighbour's.
-- [ ] **Step 6: Commit** `feat(pwa): destructive affordances refuse a session nobody can see (D-B8-14)`.
+- [ ] **Step 6: Commit** `feat(pwa): destructive affordances refuse a session nobody can see (D-310)`.
 
 ---
 
@@ -440,7 +440,7 @@ describe('substrate chip — the console cannot see this session, and says so (s
 - [ ] **Step 1: Failing tests** (CoordBanner harness idiom): all-running-faulted → banner once, naming the text; one running row unfaulted → NO banner (chips only); zero running rows → no banner; rows lacking the key → no throw.
 - [ ] **Step 2: RED. Step 3: implement. Step 4: GREEN.**
 - [ ] **Step 5: Mutation:** condition loosened to `some` → partial-case test red.
-- [ ] **Step 6: Commit** `feat(pwa): one substrate fault is one banner, derived from the rows (D-B8-14)`.
+- [ ] **Step 6: Commit** `feat(pwa): one substrate fault is one banner, derived from the rows (D-310)`.
 
 ---
 
@@ -452,42 +452,42 @@ describe('substrate chip — the console cannot see this session, and says so (s
 
 **Interfaces:**
 - Produces: table entry `tmux_skew`; `_check_tmux_skew`: client from `tmux -V`, server from `timeout "${CCRC_DOCTOR_GH_TIMEOUT}" tmux display-message -p '#{version}'` (this file's knobs ARE `: "${X:=N}"` env-overridable — the opposite of ccd, deliberately); PASS names both versions (a PASS must name a measurement); versions differ → WARN with remedy "a tmux upgrade landed under the running server — restart the tmux server at the next quiet moment or the next new client will be refused"; no server running → SKIP (nothing to skew against); tmux absent → SKIP (`_check_tmux` already FAILs).
-- [ ] Steps: RED tests (the `ccrc-doctor.test.ts` per-check idiom; the MISSING/ORPHAN scan at `:604-618` enforces the table/function pairing; the healthy-box sweep at `:620-626` needs the check to SKIP cleanly with no server) → implement → GREEN → mutation (equal-versions forced → WARN test red) → commit `feat(doctor): tmux client/server skew check (D-B8-14)`.
+- [ ] Steps: RED tests (the `ccrc-doctor.test.ts` per-check idiom; the MISSING/ORPHAN scan at `:604-618` enforces the table/function pairing; the healthy-box sweep at `:620-626` needs the check to SKIP cleanly with no server) → implement → GREEN → mutation (equal-versions forced → WARN test red) → commit `feat(doctor): tmux client/server skew check (D-310)`.
 
 ---
 
 ### Task 11: Ledger, suites, review, ship
 
-- [ ] **D-B8-14 ledger entry** in `docs/superpowers/plans/2026-08-15-fleet-robustness-build8.md`: what shipped, the mutation tables from every task, the loud-fallout counts (rewritten supervise-loop stubs, the PWA fixture wave), the `.substrate` field joining `_reg_purge`'s inventory.
+- [ ] **D-310 ledger entry** in `docs/superpowers/plans/2026-08-15-fleet-robustness-build8.md`: what shipped, the mutation tables from every task, the loud-fallout counts (rewritten supervise-loop stubs, the PWA fixture wave), the `.substrate` field joining `_reg_purge`'s inventory.
 - [ ] **Full suites, foreground:** server, agent, pwa (`./node_modules/.bin/vitest run` in each). Known load-flakes list applies; re-run in isolation before calling a break.
-- [ ] **Adversarial review workflow** over the whole branch diff (the D-B8-13 review script shape: ≥4 lenses — bash correctness incl. `set -e`/subshell hazards in the new loop, wire/revive discipline, PWA a11y+gating completeness, test-integrity incl. "could the loop hang a suite") → fix confirmed findings.
+- [ ] **Adversarial review workflow** over the whole branch diff (the D-309 (was D-B8-13) review script shape: ≥4 lenses — bash correctness incl. `set -e`/subshell hazards in the new loop, wire/revive discipline, PWA a11y+gating completeness, test-integrity incl. "could the loop hang a suite") → fix confirmed findings.
 - [ ] **PR** with evidence; verify CI `headSha` == PR head; merge.
 - [ ] **Deploy AGENT-FIRST** (`CCRC_SSH_KEY=~/.ssh/<your-key> bash deploy/deploy.sh agent you@<fleet-host>`, then the server lane; `/health` sha gate; `fleet/health` agreed/agreed). The new supervise loop reaches each session only as its unit restarts — note in the PR that the fleet adopts it lazily; do NOT restart live units to force it.
 
 ## Deviations found
 
-*(the global ledger entry, with the full mutation tables and the review findings, is D-B8-14 in
+*(the global ledger entry, with the full mutation tables and the review findings, is D-310 in
 `2026-08-15-fleet-robustness-build8.md`.)*
 
-- **D-B8-14.1** — Task 2's marker refreshed per tick as this plan specified; the branch review
+- **D-310.1** — Task 2's marker refreshed per tick as this plan specified; the branch review
   confirmed that shape destroys the onset epoch and the skew record. First write wins now
   (`_substrate_mark` early-returns on an existing file), and the task's pin was rewritten from
   "refresh, no second suffix" to byte-identical persistence under a moved clock.
-- **D-B8-14.2** — `cmd_supervise` gained a PRE-FLIGHT probe this plan did not have: `cmd_ensure` is
+- **D-310.2** — `cmd_supervise` gained a PRE-FLIGHT probe this plan did not have: `cmd_ensure` is
   skipped when the substrate does not answer, because its spawn path (`tmux list-sessions` /
   `new-session`) carries no deadline and a supervisor (re)started mid-wedge hung before the loop
   could mark. Every supervise-loop test sequence carries one leading element for it.
-- **D-B8-14.3** — Task 9's banner population (`lifecycle === 'running'`) was wrong on the wire:
+- **D-310.3** — Task 9's banner population (`lifecycle === 'running'`) was wrong on the wire:
   during the fault every faulted row classifies `restarting` (the server's own probes read
   unknown). The population is now watched = running OR restarting, and the fixtures are wire-true.
-- **D-B8-14.4** — Task 8's inventory missed two doors: SessionHeader's Move (swap) item and
+- **D-310.4** — Task 8's inventory missed two doors: SessionHeader's Move (swap) item and
   PrSheet's Archive-now/Clean-up. Both gated with the same derived fault and named reason.
-- **D-B8-14.5** — Task 10's fixture reached the HOST's tmux from the install suite's doctor tail;
+- **D-310.5** — Task 10's fixture reached the HOST's tmux from the install suite's doctor tail;
   `healthyDoctorBox` now plants a 9.9/9.9 version stub and `tmux` joined `FIXTURE_BINS`.
-- **D-B8-14.6** — line anchors in Tasks 2-4 had drifted by the time their implementers arrived
+- **D-310.6** — line anchors in Tasks 2-4 had drifted by the time their implementers arrived
   (`_reg_claim` at ccd:382 not :357; the loop at ccd:8655 not :8613; six count-prose sites not
   five); the code was followed per the anchors-are-snapshots rule.
-- **D-B8-14.7** — the plan's `seq`/stub sketches carried two bash syntax errors (unquoted
+- **D-310.7** — the plan's `seq`/stub sketches carried two bash syntax errors (unquoted
   space-bearing array elements; a function's closing brace followed by a word) and one
   wrong-shaped runner return (`r.status` vs the harness's `{code}`); fixed in place by the
   implementers, noted here because the plan is otherwise executable verbatim.

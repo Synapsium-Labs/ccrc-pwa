@@ -17,11 +17,11 @@ each cut from main after the previous merged.
 | 1 | Coordination: the writer (Tasks 1–5) | #38 (merged) | done — code merged via ordinary PR; run 1 closed state:failed as BOOKKEEPING (F5: its fingerprint could never measure the feature branch). The work is on main. |
 | 2 | Fleet Mutation + run-control substrate (Tasks 6–10) | #44 (merged) | **done** — run 3 on amber-harbor, 8/8, handoff `4f539b35` (main `c8fd87f`). Run 2 was abandoned first (F9); D-1's first production outing (resumed:true + /clear) is in that history. |
 | 3 | PWA: the console's hands (Tasks 11–14 — banner, abandon sheet, start-program sheet) | #47 (merged) | **done** — run 4 on brisk-harbor, 9/9, handoff `902faf3` (main `45fe77c`). One BLOCKING review finding fixed before merge. |
-| 4 | Session Conversation: the transcript (Tasks 15–19 — envelope parser, mail ChatItem, ask card) | #48 (merged) | **done** — run 5 on brisk-harbor, handoff `8fd1130` (main `90523c4`), closed `final:true`. Two review rounds: D-B4-23 (an expired spec fact) and one ledger correction. |
+| 4 | Session Conversation: the transcript (Tasks 15–19 — envelope parser, mail ChatItem, ask card) | #48 (merged) | **done** — run 5 on brisk-harbor, handoff `8fd1130` (main `90523c4`), closed `final:true`. Two review rounds: D-296 (was D-B4-23) (an expired spec fact) and one ledger correction. |
 
 ## Decisions & deviations
 
-- The plan carries D-B4-1..D-B4-17 measured against main@40a41db; the plan-review's four
+- The plan carries D-274 (was D-B4-1)..D-290 (was D-B4-17) measured against main@40a41db; the plan-review's four
   blocking findings were fixed before the plan merged (d0c44df). Workers follow the plan's
   deviations, not the spec's original text, where they differ.
 - Wave 2 is agent-first at rollout (ccd + whitelist before server), stated in its brief.
@@ -215,7 +215,7 @@ ZERO runtime or security defects — the whitelist grant + `REQUIRED_VERB_FLAG` 
 ungated routes, the abandon arm's four negative pins and the coord frame all survived.
 
 The two confirmed were both test-strength/honesty, and the major one is worth remembering:
-the pin that was supposed to keep the D-B4-9 ungated-route ARGUMENT load-bearing sliced a
+the pin that was supposed to keep the D-282 (was D-B4-9) ungated-route ARGUMENT load-bearing sliced a
 2000-BYTE window backwards from the route, which overshot the docstring by 437 bytes into the
 PREVIOUS route's body — so both its assertions were satisfied by unrelated code and deleting
 the whole pause docstring left the suite GREEN. The same disease the worker had already caught
@@ -243,7 +243,7 @@ then the server; both at c8fd87f):
 - THE KILL-SWITCH BITES: dispatch while paused -> `{ok:false,refused:"paused"}` and NO
   workspace was created — it refuses at step 1, ahead of caps and ahead of any fleet act.
 - Unpause clears the marker; a second unpause is idempotent.
-- `POST /api/runs/2/abandon` (no body — D-B4-7) -> `{ok:true,id:2,state:"failed"}`, clearing
+- `POST /api/runs/2/abandon` (no body — D-280 (was D-B4-7)) -> `{ok:true,id:2,state:"failed"}`, clearing
   the run-2 wedge WITH THE ROUTE THIS WAVE SHIPPED. The program was blocked by a missing
   feature, built it, and used it to unblock itself.
 
@@ -326,7 +326,7 @@ the PR was still wrong.**
 
 A 4-lens adversarial review (14 agents, each finding handed to an independent agent prompted to
 REFUTE it) filed 10 findings — 8 refuted, 2 confirmed, and both were the same defect, recorded
-as **D-B4-23** below. The fix was reviewed again by a 3-lens pass (11 agents): 6 filed, 5 refuted,
+as **D-296** below. The fix was reviewed again by a 3-lens pass (11 agents): 6 filed, 5 refuted,
 1 confirmed — a one-word arithmetic error the correcting commit had itself introduced into the
 plan's deviation ledger ("the last five" enumerating six). Sent back rather than merged past,
 because it was a false statement about the ledger shipped by the commit whose job was correcting
@@ -340,13 +340,13 @@ red. A guard whose only failure mode is firing wrongly is pinned by mutating it,
 it — which is exactly what the doctrine says ("deleted/mutated"), and a deletion-only reading of
 it would have scored a live guard as dead and invited its removal.
 
-**Three pins that could not fail were found in this wave alone** (D-B4-21, D-B4-22, and M-16
+**Three pins that could not fail were found in this wave alone** (D-294 (was D-B4-21), D-295 (was D-B4-22), and M-16
 during the review round), and every one was found by APPLYING a mutant — none by reading the
 test. M-16 is the sharpest: "still files the fetch as a tool card — the result is not stolen"
 asserted only that a `.toolcard` element existed, and a tool card renders whether or not its
 result ever arrived. Fixed to assert on the state dot.
 
-## D-B4-23 — THE DEFECT WAS THE SPEC'S OWN MEASURED FACT, EXPIRED BY THIS PROGRAM'S OWN FIX
+## D-296 — THE DEFECT WAS THE SPEC'S OWN MEASURED FACT, EXPIRED BY THIS PROGRAM'S OWN FIX
 
 The finding this program should be remembered for.
 
@@ -376,7 +376,7 @@ today's lane AND correct the false claims — which is what shipped.
 ## PROGRAM CLOSED 2026-08-13
 
 Four waves, five runs (run 2 abandoned under F9), four PRs (#38, #44, #47, #48), two workspaces
-(`amber-harbor`, `brisk-harbor`), 23 deviations (D-B4-1..23) of which six were found during
+(`amber-harbor`, `brisk-harbor`), 23 deviations (D-274..23) of which six were found during
 execution. Run 5 closed `final:true`; with no open run the server retired the program.
 
 **What held:** the coordination core. After wave 2 shipped its own controls, runs, mail, the
