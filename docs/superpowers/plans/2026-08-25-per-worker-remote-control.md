@@ -277,3 +277,14 @@ it("the PWA's ordinary workspace-add stays box-default — no --no-rc anywhere i
 
 (minted through `POST /api/ledger/deviations` at close — the allocator is the
 namespace's only writer now; executors nominate prose-only in commit bodies)
+
+- **D-360** (execution, class) — the plan's execution drifts, nominated in the
+  three commit bodies and minted as one number through the live allocator (its
+  first organic allocation; the 201 moved the floor to 361): the scouted ccd
+  anchors (`:2534`/`:2694`/`:10418`) had drifted a few lines and the tree won;
+  the plan's re-stamp one-liner mis-stated `markGenerated`'s contract (it takes
+  the BODY TEXT and returns the marked text, never a path); Task 2's exact-argv
+  pin lives in `run-routes` beside a relaxed positional assertion, and
+  `whitelist-subset.test.ts` — exhaustive over `keyof typeof CCD_ARGV`, a file
+  the plan never named — was the compile-time discovery lane for the new
+  builder.
