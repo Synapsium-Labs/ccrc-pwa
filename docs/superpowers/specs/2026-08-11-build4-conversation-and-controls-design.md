@@ -373,7 +373,7 @@ It calls the **same L1 decision function** `closeRun` (`coord/close.ts`) —
 architecture increment 4's "deciding split from acting" is not duplicated for a
 second caller. Three small, named changes inside it:
 
-- **D-B4-1 — an abandon carries no fingerprint.** Today `closeRun` demands a
+- **D-274 (was D-B4-1) — an abandon carries no fingerprint.** Today `closeRun` demands a
   shape-valid `{branchTip, prNumber, prPhase, handoffCommit}` and a boolean
   `final` *before* the D-49 branch that skips re-measuring it
   (`close.ts:143-160`). An operator abandoning a wedged run has no such claim
@@ -381,13 +381,13 @@ second caller. Three small, named changes inside it:
   variant — `{intent:'abandon'}` — validated as its own shape; `handoffCommit`
   is written `null`, exactly as the existing `HANDOFF_SHA` guard would have
   produced.
-- **D-B4-2 — an abandon skips the `.prhistory` fold.** Today an unreadable
+- **D-275 (was D-B4-2) — an abandon skips the `.prhistory` fold.** Today an unreadable
   ledger refuses the close (`prhistory-unreadable`, `close.ts:161-166`) — which
   would disable the abandon in precisely the broken-box case it exists for. An
   abandon asserts nothing about PR lineage, the same reasoning D-49 already
   uses for skipping `verifyDone`. `prLineage` stays unfolded and the run record
   says so.
-- **D-B4-3 — `causedBy` becomes a parameter.** `closeRun` hardcodes
+- **D-276 (was D-B4-3) — `causedBy` becomes a parameter.** `closeRun` hardcodes
   `causedBy: 'coordinator'` (`close.ts:171`). An operator abandon must record
   `'operator'`, which the schema has always allowed (`schema.ts:96`).
 
@@ -423,7 +423,7 @@ workspace is the whole ceremony here, because a release destroys nothing.
 closed"*); `409 not-dispatched` is **not** reachable on this path any more and
 its absence is pinned by test; `501 unsupported`; `502 {stderr}` from the
 release. `prhistory-unreadable` and the five `verifyDone` codes are
-structurally unreachable here (D-B4-1/2) — also pinned, so a later edit that
+structurally unreachable here (D-274 (was D-B4-1) and D-275 (was D-B4-2)) — also pinned, so a later edit that
 re-introduces them fails a test rather than a phone.
 
 ### 4.4 Control 3 — open a program
@@ -548,7 +548,7 @@ tally reads `—`; §3.4).
 **Wave 2 — Fleet Mutation + Coordination: the run-control substrate.** The
 `coord-pause` verb in `ccd`, the whitelist grant, `CCD_ARGV.coordPause`,
 `POST /api/coord/pause`, the `{type:'coord'}` frame and its emit,
-`POST /api/runs/:id/abandon` with D-B4-1/2/3 and the `planned` path. Fleet host
+`POST /api/runs/:id/abandon` with D-274 (was D-B4-1), D-275 (was D-B4-2), D-276 (was D-B4-3) and the `planned` path. Fleet host
 + server + `shared/`. **Deployed agent-first**, which makes it the wave that
 exercises the coordinator's real rollout discipline.
 

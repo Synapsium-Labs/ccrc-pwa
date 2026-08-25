@@ -85,7 +85,7 @@ Definition at `ccd/ccd:368`. Callers, by field:
 | `hold` | `2334` | **exit status is load-bearing**: `|| die "…it is NOT held"` |
 | `archived`/`archivedreason` | `2509`, `2510` | |
 | `reaping` | `6138`, `6382`, `6461`, `6500` | ordering contract, see `_reg_purge` |
-| `lastswap`/`lastcompact` | `7582`, `7616`, `7661`, `9291` | read by guarded arithmetic (D-B8-3) |
+| `lastswap`/`lastcompact` | `7582`, `7616`, `7661`, `9291` | read by guarded arithmetic (D-299 (was D-B8-3)) |
 | `spawn` | `8143` | |
 | `supervised` | `8631`, `8690`, `8701`, `9025`, `9206`, `9296` | **the heartbeat — every ~30 s per session** |
 | `swapblocked` | `9072` | |

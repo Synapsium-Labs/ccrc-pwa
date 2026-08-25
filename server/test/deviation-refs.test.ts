@@ -37,8 +37,12 @@ const GRANDFATHERED: ReadonlySet<number> = new Set([
 // Both ledger-entry heading forms in use: `### D-12 (bug) — subject` (plan
 // ledgers through build 7) and `- **D-108 (2026-08-20)** — subject` (the
 // bullet form since). Prose REFS (`see D-108`) match neither — this scans
-// entries, the lines that DEFINE a number.
-const ENTRY = /^(?:#{2,4} |- \*\*)D-(\d+)\b[^—\n]*—\s*(.+)$/;
+// entries, the lines that DEFINE a number. A dotted SUB-entry (`- **D-310.1**
+// — finding`) cites its parent, it does not define it: excluded by the
+// lookahead. The exclusion is pinned by the tree itself — the wave-10
+// reconciliation gave the substrate plan's sub-findings a global parent, so
+// deleting the lookahead reds the collision scan below against real docs.
+const ENTRY = /^(?:#{2,4} |- \*\*)D-(\d+)\b(?!\.\d)[^—\n]*—\s*(.+)$/;
 
 interface Entry { file: string; n: number; subject: string }
 

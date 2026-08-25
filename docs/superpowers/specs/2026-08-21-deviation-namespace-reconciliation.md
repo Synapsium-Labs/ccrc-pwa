@@ -1,6 +1,6 @@
 # One deviation namespace — the reconciliation record
 
-**Status:** enumerated and allocated (Task 30); the rewrite is pending.
+**Status:** docs rewritten (Task 31); the source sweep is pending (Task 32).
 
 Spec: `docs/superpowers/specs/2026-08-21-build9-provenance-peers-claims-design.md`, §1 D14.
 Executed 2026-08-25, in an operator-announced quiet window,

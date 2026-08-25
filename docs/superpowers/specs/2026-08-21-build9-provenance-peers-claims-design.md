@@ -378,7 +378,7 @@ a red suite on any diff that tries to land one.
 
 ### D14 — One deviation namespace (operator ruling)
 
-The legacy build-scoped forms (`D-B4-9`, `D-B8-13`) are **reconciled into the single global sequence**
+The legacy build-scoped forms (`D-282 (was D-B4-9)`, `D-309 (was D-B8-13)`) are **reconciled into the single global sequence**
 rather than frozen as a second namespace.
 
 **This must not destroy history.** `CLAUDE.md` is explicit that D-refs in source comments are authoritative

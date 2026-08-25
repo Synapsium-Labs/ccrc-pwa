@@ -3104,7 +3104,7 @@ side reds the fixture's compile.
     });
 
     it('a tree with ONLY legacy refs is NOT a seed — fail shut, not guess (D13/D14)', () => {
-      expect(floorFromScan([{ path: 'p.md', text: 'only D-B4-9 and D-B8-13 here' }])).toBeNull();
+      expect(floorFromScan([{ path: 'p.md', text: `only ${['D-B4', '9'].join('-')} and ${['D-B8', '13'].join('-')} here` }])).toBeNull();
     });
 
     it('an empty scan is null, and null is not a floor of 50', () => {
@@ -7275,7 +7275,7 @@ function conflictMailHint(project: string, p: string, holder: string,
   /**
    * `POST /api/claims/:id/break` — the OPERATOR's door, the THIRD route in
    * this file that is UNGATED: deliberately NOT behind `requireMailToken`, the
-   * `POST /api/runs/:id/abandon` shape (D-B4-9's argument, applied by build 9
+   * `POST /api/runs/:id/abandon` shape (D-282's argument, applied by build 9
    * D12/D16). The box token authenticates the fleet host, and the sessions
    * that hold claims live there and hold that token — a session wedged behind
    * a dead holder's claim must not find the release valve behind the same key
@@ -7283,7 +7283,7 @@ function conflictMailHint(project: string, p: string, holder: string,
    * with `CCRC_AUTH` armed it sits behind the session gate like abandon and
    * pause, and the operator with a phone is the one who can walk through it.
    *
-   * THE REQUEST BODY IS NEVER READ (the D-B4-7 rule, verbatim): `endedBy:
+   * THE REQUEST BODY IS NEVER READ (the D-280 (was D-B4-7) rule, verbatim): `endedBy:
    * 'operator'` is constructed by the store, so a caller cannot send a field
    * that forges who broke the claim. It is also UNNAMED in both skill corpora
    * — `coordinator-skill.test.ts`'s parity EXEMPT set carries it beside
@@ -10359,17 +10359,17 @@ enumerator's.
 - Produces: a `docs/superpowers/` tree in which every legacy spelling is alias-form — the state Task
   32's scanner will pin tree-wide.
 
-- [ ] **Step 1: Re-confirm the window is still open.** One line to the operator: *"Starting the
+- [x] **Step 1: Re-confirm the window is still open.** One line to the operator: *"Starting the
   docs half of the sweep — still quiet?"* Proceed only on yes. (The enumeration and allocation in
   Task 30 may have taken real time; the window is the operator's clock, not this branch's.)
-- [ ] **Step 2: Run the docs-scoped rewrite.**
+- [x] **Step 2: Run the docs-scoped rewrite.**
   ```bash
   cd /home/you/worktrees/ccrc-pwa/still-river && node reconcile-rewrite.mjs docs/superpowers
   ```
   Expect `8 files changed, 209 refs rewritten` (drafting-day baseline; the script's printed count is
   the truth, and it must reconcile with the work-list's docs rows). A throw naming an unmapped ref
   means the tree moved after Task 30 — re-run Task 30 Step 8 and extend the record before retrying.
-- [ ] **Step 3: Hand-review the diff for composite shorthands the mechanical rewrite cannot know
+- [x] **Step 3: Hand-review the diff for composite shorthands the mechanical rewrite cannot know
   about.** A line citing two members as one token — the shape `…-3/6`, meaning members 3 and 6 —
   rewrites its first member and strands the `/6`:
   ```bash
@@ -10379,19 +10379,19 @@ enumerator's.
   For each hit, rewrite by hand so **both** refs are named: `D-<n_a> (was <legacy-a>) and D-<n_b>
   (was <legacy-b>)`, numbers from the mapping table, the `was `-guarded spelling for each. Then skim
   `git diff --stat docs/` — 8 files (plus this plan if applicable), nothing else.
-- [ ] **Step 4: Confirm the docs half is clean under the predicate.**
+- [x] **Step 4: Confirm the docs half is clean under the predicate.**
   ```bash
   cd /home/you/worktrees/ccrc-pwa/still-river \
     && grep -rP '(?<!was )\bD-B\d+-\d+\b' docs/superpowers/ || echo CLEAN
   ```
   Expect `CLEAN`.
-- [ ] **Step 5: Update the record's status line.**
+- [x] **Step 5: Update the record's status line.**
   ```bash
   cd /home/you/worktrees/ccrc-pwa/still-river \
     && sed -i 's/^\*\*Status:\*\*.*$/**Status:** docs rewritten (Task 31); the source sweep is pending (Task 32)./' \
          docs/superpowers/specs/2026-08-21-deviation-namespace-reconciliation.md
   ```
-- [ ] **Step 6: Run every suite that reads these documents or ratchets the whole tracked tree.**
+- [x] **Step 6: Run every suite that reads these documents or ratchets the whole tracked tree.**
   ```bash
   cd /home/you/worktrees/ccrc-pwa/still-river/server \
     && ./node_modules/.bin/vitest run test/deviation-refs.test.ts test/coord-pause-route.test.ts \
@@ -10405,7 +10405,7 @@ enumerator's.
   and the alias contains the original byte-for-byte, so it stays green with no edit (it reads
   `routes.ts`, untouched until Task 32, anyway). `topology-clean` and `source-bytes` walk every
   tracked file — the alias introduces no forbidden token and no control byte.
-- [ ] **Step 7: Commit.**
+- [x] **Step 7: Commit.**
   ```bash
   cd /home/you/worktrees/ccrc-pwa/still-river \
     && git add docs/superpowers/ \

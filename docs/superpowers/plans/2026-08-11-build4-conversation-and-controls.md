@@ -18,45 +18,45 @@
 
 ## Deviations found
 
-Twenty-three. Three are the spec's own (D-B4-1/2/3, restated here so an executor never has to leave this file); fourteen were found while measuring the tree against the spec — three of those (D-B4-10 restated, D-B4-16, D-B4-17) by a blocking review of this plan's own first draft, which had credited two mechanisms that cannot kill their mutants, written a `coord` emitter against a variable that is not in scope on a path it can never reach, and put a transaction in a ring that holds no database handle anywhere else in the tree. The last six were found DURING EXECUTION and are dated by their wave: D-B4-18/19/20 in wave 3 (the start-a-program sheet's match, and the reversal of a rule a test had pinned), D-B4-21/22 in wave 4, and D-B4-23 in wave 4's coordinator review — where the defect was the SPEC'S OWN MEASURED FACT, expired by a fix shipped earlier in this same program.
+Twenty-three. Three are the spec's own (D-274 (was D-B4-1), D-275 (was D-B4-2) and D-276 (was D-B4-3), restated here so an executor never has to leave this file); fourteen were found while measuring the tree against the spec — three of those (D-283 (was D-B4-10) restated, D-289 (was D-B4-16), D-290 (was D-B4-17)) by a blocking review of this plan's own first draft, which had credited two mechanisms that cannot kill their mutants, written a `coord` emitter against a variable that is not in scope on a path it can never reach, and put a transaction in a ring that holds no database handle anywhere else in the tree. The last six were found DURING EXECUTION and are dated by their wave: D-291 (was D-B4-18), D-292 (was D-B4-19) and D-293 (was D-B4-20) in wave 3 (the start-a-program sheet's match, and the reversal of a rule a test had pinned), D-294 (was D-B4-21) and D-295 (was D-B4-22) in wave 4, and D-296 (was D-B4-23) in wave 4's coordinator review — where the defect was the SPEC'S OWN MEASURED FACT, expired by a fix shipped earlier in this same program.
 
-### D-B4-1 (spec) — an abandon carries no fingerprint
+### D-274 (spec) — an abandon carries no fingerprint
 
-`closeRun` (`coord/close.ts:85-94`) demands a shape-valid `{branchTip, prNumber, prPhase, handoffCommit}` and a boolean `final` **before** D-49's branch that skips re-measuring it. An operator abandoning a wedged run has no such claim. `CloseRunBody` gains an explicit `{intent:'abandon'}` variant, validated as its own shape; `handoffCommit` is written `null`, which is exactly what the existing `HANDOFF_SHA` guard (`rundefs.ts:31`) would have produced anyway. **How** it skips that block is D-B4-17.
+`closeRun` (`coord/close.ts:85-94`) demands a shape-valid `{branchTip, prNumber, prPhase, handoffCommit}` and a boolean `final` **before** D-49's branch that skips re-measuring it. An operator abandoning a wedged run has no such claim. `CloseRunBody` gains an explicit `{intent:'abandon'}` variant, validated as its own shape; `handoffCommit` is written `null`, which is exactly what the existing `HANDOFF_SHA` guard (`rundefs.ts:31`) would have produced anyway. **How** it skips that block is D-290.
 
-### D-B4-2 (spec) — an abandon skips the `.prhistory` fold
+### D-275 (was D-B4-2) (spec) — an abandon skips the `.prhistory` fold
 
 `close.ts:125-129` refuses the close on an unreadable ledger (`prhistory-unreadable`) — which would disable the abandon in precisely the broken-box case it exists for. An abandon asserts nothing about PR lineage, the same reasoning D-49 already uses for skipping `verifyDone`. `prLineage` stays unfolded.
 
-### D-B4-3 (spec) — `causedBy` becomes a parameter
+### D-276 (was D-B4-3) (spec) — `causedBy` becomes a parameter
 
 `close.ts:171` hardcodes `causedBy: 'coordinator'`. An operator abandon records `'operator'`, which `coord/schema.ts:96` has always allowed.
 
-### D-B4-4 — "the same transaction as `markDispatched`/`advance`" does not exist yet
+### D-277 (was D-B4-4) — "the same transaction as `markDispatched`/`advance`" does not exist yet
 
 Spec §3.1 says items are inserted "in the same transaction as `markDispatched`/`advance`, after the transition commits". Measured: `dispatch.ts:286-290` runs `coord.markDispatched(...)`, then `coord.setClearedAt(...)`, then `coord.advance(...)` — **three independent transactions** (`advance` wraps itself in `tx`, `store.ts:252-254`). **Adaptation:** fold all four writes into one `CoordStore.dispatchRun(...)`, mirroring `CoordStore.closeRun` (`store.ts:305-334`), which was created for the identical reason (review finding 25). `advanceInner` is already split out for exactly this (`store.ts:256-263`: "`DatabaseSync`'s transactions do not nest… a caller that needs atomicity across more than one state write must call THIS").
 
-### D-B4-5 — `setWorkItemState` cannot express `unknown-item`
+### D-278 (was D-B4-5) — `setWorkItemState` cannot express `unknown-item`
 
 Spec §3.2 defines `unknown-item` as "an item id that is not **this run's**". Today's signature is `setWorkItemState(id, state, claimedBy)` (`store.ts:629`) — no `runId`, so a settle body could move another run's item. **Adaptation:** the signature becomes `(runId, id, state, claimedBy)`. Its only existing caller is `server/test/coord-store.test.ts` (spec fact 4: "called **only** from" there), which is updated in the same task.
 
-### D-B4-6 — `closeRun`'s `causedBy` parameter gets no default
+### D-279 (was D-B4-6) — `closeRun`'s `causedBy` parameter gets no default
 
 A default is exactly how the operator arm would silently record `'coordinator'`. Both call sites pass it explicitly.
 
-### D-B4-7 — the abandon route never reads `req.body`
+### D-280 (was D-B4-7) — the abandon route never reads `req.body`
 
 Spec §4.3: "The abandon route does not accept the flag at all." Validating `archive` away is weaker than never reading it. **Adaptation:** the route calls `closeRun(deps, id, { intent: 'abandon' }, 'operator')` with a body it constructs itself; `req.body` is not referenced. "The phone can never archive" becomes structural rather than a validation anyone can loosen. `closeRun` still validates the abandon shape for its own contract, pinned by a direct unit test.
 
-### D-B4-8 — `planned → failed` needs a store affordance, and `RUN_TRANSITIONS` is not edited
+### D-281 (was D-B4-8) — `planned → failed` needs a store affordance, and `RUN_TRANSITIONS` is not edited
 
 `RUN_TRANSITIONS.planned = ['dispatched','failed']` (`shared/api.ts:1741`) — the `failed` edge is already there; there is no `closing` edge, deliberately (`shared/api.ts:1720-1739`). `CoordStore.closeRun` hardcodes the `closing` hop (`store.ts:310-311`). **Adaptation:** it gains a required `viaClosing: boolean`; `close.ts` decides (`run.state === 'planned'` → `false`). The table is untouched — clients read it as a refusal vocabulary.
 
-### D-B4-9 — `POST /api/coord/pause` is the first ungated route in `coord/routes.ts`
+### D-282 (was D-B4-9) — `POST /api/coord/pause` is the first ungated route in `coord/routes.ts`
 
 Every write route in that file carries `requireMailToken` (`routes.ts:200-211`), and spec §4.1 rules the box token is deliberately the **wrong key** here (it would hand the coordinator its own unpause). Splitting the file is rejected by the architecture doc (`architecture:143-144`). **Adaptation:** the route lives in `coord/routes.ts` with its reason written at the call site, and `run-routes.test.ts` gains a source scanner asserting every `app.post('/api/runs`/`/api/mail` handler is preceded by a `requireMailToken` line, **excluding `/api/coord/pause` and `/api/runs/:id/abandon` by name** — the `MAIL_REJECT_CODES`-excludes-`undeliverable` idiom (`architecture:64-68`).
 
-### D-B4-10 (restated after review) — the tick's `readdir` exists, but the tick does not hand it out, and the emit must run BEFORE the fail-shut return
+### D-283 (restated after review) — the tick's `readdir` exists, but the tick does not hand it out, and the emit must run BEFORE the fail-shut return
 
 The intent stands: `watch.ts`'s tick already reads the registry directory once and shares it between lanes (`watch.ts:496`), `dispatchRun` fails shut on an unlistable one (`dispatch.ts:106-109`), and a second `readdir` for the banner would be a second clock for one fact. Two measured facts make it more than the one-line change the first draft assumed:
 
@@ -65,45 +65,45 @@ The intent stands: `watch.ts`'s tick already reads the registry directory once a
 
 **Adaptation:** `RegistryRead`'s `listed: true` arm gains `names: readonly string[]` — the raw listing the records were derived from, carried rather than re-read. The widening is additive on one arm; `readRegistryMeasured` is shared by `sweepPr` (`watch.ts:1017`), `sweepNames` (`:1075`), `sweepMail` (`:1403`) and `readRegistry` (`registry.ts:412`), and none of them changes. `tick()` then calls `this.emitCoord(registryRead.listed ? registryRead.names : null)` on the line **after** the read and **before** the `!listed` return, so both arms report. The FIRST listing is what is carried, deliberately: the second listing (`registry.ts:400-408`) exists to resolve a per-row reap race, runs on some ticks only, and hanging the markers' clock on it would make the banner's cadence depend on whether an unrelated session happened to be mid-reap. `server/src/registry.ts` and `server/test/registry.test.ts` are therefore wave-2 files and appear in the File Structure table and the wave-2 brief.
 
-### D-B4-11 — `POST /api/sessions` requires a `wrapper`
+### D-284 (was D-B4-11) — `POST /api/sessions` requires a `wrapper`
 
 `api.createSession` takes `{wrapper, project, workdir?}` (`pwa/src/lib/api.ts:194`) — there is no server-side least-loaded placement on that route. **Adaptation:** the start-a-program sheet reads the projection through `useProjectedHome()` (`pwa/src/fleet/useProjectedHome.ts`), which carries `limits.ts`'s own mirror of `_ws_least_loaded`, and names the account **before** the tap. `projected === null` (every home-able lane disabled) refuses with copy rather than guessing a wrapper; `undefined` (no answer yet) renders the in-flight state.
 
-### D-B4-12 — `truncatedBytes` is computed in `parse.ts`, not `shared/`
+### D-285 (was D-B4-12) — `truncatedBytes` is computed in `parse.ts`, not `shared/`
 
 L0 imports nothing, "not even `node:*`" (`architecture:75-76`), so no `Buffer` there. The caps are CHARACTER caps today (`transcript/parse.ts:3-6`); the field is named for BYTES because a byte count is what an operator can compare against a file. Both stay: the cap is unchanged (changing it changes what every existing transcript renders), and the report is `Buffer.byteLength(whole) - Buffer.byteLength(kept)`. Said at the call site.
 
-### D-B4-13 — `DialogSheet`'s `dismissedKey` is component-local
+### D-286 (was D-B4-13) — `DialogSheet`'s `dismissedKey` is component-local
 
 `DialogSheet.tsx:160` holds it in `useState`, so a transcript control cannot raise a dismissed sheet. **Adaptation:** a `raise?: number` nonce prop, cleared into `dismissedKey: null` by an effect. No store change, no second answer path — the sheet stays the one hardened sender (spec §2.3, "One control, one meaning").
 
-### D-B4-14 — the abandon control cannot nest inside `RunRow`'s button
+### D-287 (was D-B4-14) — the abandon control cannot nest inside `RunRow`'s button
 
 `RunsScreen.tsx:118-122` wraps the whole row body in a `<button className="run-open">`. A nested button is invalid HTML and unreachable to a screen reader. **Adaptation:** the abandon control is a **sibling** inside the `<li>`, and a test asserts no `button` is a descendant of another.
 
-### D-B4-15 — the em dash needs a home
+### D-288 (was D-B4-15) — the em dash needs a home
 
 Spec §3.3's `total === 0` rule stated at the one call site (`RunsScreen.tsx:97`) is a rule with no home. **Adaptation:** `itemTallyLabel(items)` joins `runItems` in `pwa/src/fleet/runWords.ts`, where the tolerant-read idiom already lives.
 
-### D-B4-16 (found in review) — the settle batch commits in the store, not in L1
+### D-289 (found in review) — the settle batch commits in the store, not in L1
 
-The first draft opened a transaction inside `server/src/coord/items.ts` (`tx(coord.db, …)`) while declaring that file "L1 (architecture increment 4)". Measured against the tree, no L1 decision function does this: `dispatch.ts`, `close.ts`, `fingerprint.ts`, `prhistory.ts` and `gitref.ts` import neither `./db.js` nor `node:sqlite`; `tx` is imported by `store.ts` (L3), `rundefs.ts` and `routes.ts` only. `architecture:78-81` puts `store.ts`/`coord/db.ts` at L3 and allows L1 to import L2 *as types only*, with "no `node:sqlite`". The inconsistency was also internal to this plan: D-B4-4 folds the dispatch batch into `CoordStore.dispatchRun` and argues the case explicitly, and Task 9 extends `CoordStore.closeRun` with `viaClosing` rather than reaching around it — two identical rulings on the same class of problem (an all-or-nothing multi-row commit), then a third that went the other way.
+The first draft opened a transaction inside `server/src/coord/items.ts` (`tx(coord.db, …)`) while declaring that file "L1 (architecture increment 4)". Measured against the tree, no L1 decision function does this: `dispatch.ts`, `close.ts`, `fingerprint.ts`, `prhistory.ts` and `gitref.ts` import neither `./db.js` nor `node:sqlite`; `tx` is imported by `store.ts` (L3), `rundefs.ts` and `routes.ts` only. `architecture:78-81` puts `store.ts`/`coord/db.ts` at L3 and allows L1 to import L2 *as types only*, with "no `node:sqlite`". The inconsistency was also internal to this plan: D-277 folds the dispatch batch into `CoordStore.dispatchRun` and argues the case explicitly, and Task 9 extends `CoordStore.closeRun` with `viaClosing` rather than reaching around it — two identical rulings on the same class of problem (an all-or-nothing multi-row commit), then a third that went the other way.
 
 **Adaptation:** `CoordStore.settleItems(runId, items)` owns the transaction and returns a typed batch result; `items.ts` stays a pure validate-and-map decision with `coord` as its only dep. The all-or-nothing property is carried by a **pre-pass inside the one transaction** rather than by a thrown sentinel: `tx` takes the write lock at `BEGIN IMMEDIATE` and `DatabaseSync` never yields the event loop mid-transaction (`db.ts:235-240`: "a whole transaction runs without yielding the event loop, so no route, sweep or socket can interleave inside one"), so nothing can slip between the pre-pass and the writes. A refusal therefore returns **before any write happens**, no rollback is needed, and the draft's `SettleAbort` sentinel — a private class whose only job was to smuggle a typed refusal out through `tx`'s throw-to-rollback contract — is deleted rather than relocated.
 
-### D-B4-17 (found in review) — the abandon is one contiguous arm of `closeRun`, not five interleaved conditionals
+### D-290 (found in review) — the abandon is one contiguous arm of `closeRun`, not five interleaved conditionals
 
 `closeRun` rejects any body without a shape-valid fingerprint and a boolean `final` at `close.ts:85-94`, then dereferences `fp` at `:95-102` (`fp.branchTip`, `fp.prNumber as number|null`, `fp.prPhase`, `fp.handoffCommit`) and reads the claim again at `:171` (`HANDOFF_SHA.test(claim.handoffCommit)`). An abandon carries none of that. The first draft's skip list named `not-dispatched` (`:64-68`), the transition precondition (`:81-83`), `verifyDone`, `.prhistory` and the fleet act — and never mentioned `:85-102` at all, so an executor following it literally ships a route that answers `bad-request` for every abandon; deleting only the `return` leaves `:95-102` throwing a TypeError on `fp`. It also instructed the insertion point as "before the existing fingerprint validation" while two of its own bullets needed `abandon` in scope twenty lines earlier, and its snippet redeclared `const b` in the same scope (TS2451).
 
 **Adaptation:** `abandon` is derived at `:63a`, immediately after `if (!run) return`, together with a hoisted `const b` (the duplicate at `:85` is removed). The abandon then runs as ONE contiguous arm that returns: its own transition precondition, its own conditional `ws-release`, its own commit. `:85-102` is not reached on that path at all, so `handoffCommit`/`final`/`state`/`archive` are `null`/`false`/`'failed'`/`false` **by construction** rather than by four skipped guards — and "never calls `verifyDone`", "never reads `.prhistory`", "cannot reach `wsArchive`" are true because none of those calls exists inside the arm. It also keeps the compiler honest about `run.sessionId`: the ordinary path's `not-dispatched` guard is untouched and still narrows it to `string` for `verifyDone` and the three fleet-act arms, while the abandon arm narrows it inside its own `if (run.sessionId !== null)`. Cost, named: ~14 lines of transition/fleet-act/commit shape appear twice inside one function. That is the price of the property, and it is cheaper than the alternative this review round measured. The spec's §4.3 requirement is unchanged and still met — the abandon route calls the **same L1 function** `closeRun`, and `sendCloseOutcome` is not duplicated.
 
-### D-B4-18 — the new session's id is not in the create response; matched by server-reported facts, not recomputed
+### D-291 — the new session's id is not in the create response; matched by server-reported facts, not recomputed
 
 `POST /api/sessions`'s success response is the literal `{ok:true}` (`server/src/server.ts:593-596`, `runCcdOr502`) — no id. `ccd` derives the id as `${wrapper}-${project}` (`ccd/ccd:185`, `_id()`) and only echoes it to stdout (`ccd/ccd:7192-7210`, `cmd_start`'s own `echo "started $id …"`), which that route discards. The obvious fix — compute `${wrapper}-${project}` in the PWA — was measured and rejected: it would be a second implementation of a rule ccd owns, the exact drift `useProjectedHome.ts`'s own docstring already refuses for the placement rule one door over ("Two implementations of one rule drift; that is what they do.").
 
 **Adaptation:** after `createSession` resolves, `StartProgramSheet` waits for the new session to appear in a `/ws/fleet` snapshot and matches it on `FleetSession.wrapper`/`.project`/`.workspace` (`shared/api.ts:33-37`, all three server-reported), never on a recomputed id. The wait is bounded at `START_PROGRAM_WAIT_MS` (20 s — the fleet watcher's own 2 s tick, `server/src/watch.ts:424`'s `intervalMs`, plus a generous margin for a cold process spawn, the same reasoning `coordWords.ts`'s `COORD_CONFIRM_MS` states for the pause toggle's own bounded wait, sized up because this one waits on tmux + a wrapper CLI cold start rather than a marker-file flip). A miss renders honest "started, not shown yet" copy — never framed as failure, never navigating to a guessed id — and the wait is generation-guarded (`gen.current`) so a sheet closed mid-wait cannot have a later match write into whatever it shows next.
 
-### D-B4-19 — `cmd_start` is idempotent, so a blind kickoff can hijack a session mid-task
+### D-292 (was D-B4-19) — `cmd_start` is idempotent, so a blind kickoff can hijack a session mid-task
 
 `cmd_start` (`ccd/ccd:7192-7210`) is a no-op for an already-running `${wrapper}-${project}` — it prints `already running: $id …` and returns 0 rather than refusing. A sheet that always posted `POST /api/sessions/:id/prompt` after `createSession` resolved would, for that case, inject a coordinator brief into a session that may be mid-task, with the operator never told anything unusual happened.
 
@@ -111,15 +111,15 @@ The first draft opened a transaction inside `server/src/coord/items.ts` (`tx(coo
 
 **Corrected again, re-review of the C1 fix — the REFUSAL is wrapper-independent; `cmd_swap` keeps the id while moving the wrapper.** The C1 fix left both arms matching on `wrapper`, which is only sound while a session's registry `wrapper` still agrees with the `_id()` its own id encodes. It does not: `cmd_swap` ends with `_reg_set "$id" wrapper "$target"` (`ccd/ccd:7307`) — the wrapper field moves, **the id does not** — while `cmd_start`'s collision test is `_alive "$(_id "$wrapper" "$project")"` (`ccd/ccd:7202-7203`), keyed on the id. Measured on the live fleet: **5 of 10 main checkouts report a `wrapper` that differs from their own id prefix** (`claude-rp-llm` reports `wrapper=claude2`). The residual defect that leaves is a dead end, not a hijack: session `W-P` exists but has been swapped to `Y`; the projection says `W`; the wrapper-scoped refusal looks for `wrapper===W`, the row reports `Y`, so it misses; the operator taps Start; `ccd start W P` resolves `_id` to the live `W-P`, prints `already running` and **exits 0**, so the HTTP call succeeds; the wrapper-scoped wait then never matches either, and the sheet ends on *"Started — the board just hasn't shown it yet"* for a program that never started. Reachable on half this fleet's projects.
 
-**Fix:** the refusal arm drops `wrapper` entirely — `project` + `workspace === null` + `status !== 'dead'`. Its question is genuinely wrapper-independent ("is a live main checkout already running in this project?"), which is what `cmd_start` collides with however the row's wrapper field has since been rewritten. It cannot ask the exact question (`_alive(_id(W,P))`) without recomputing the id, which D-B4-18 forbids, so it asks the wider one and **accepts over-refusing**: when the live main checkout is one `cmd_start` would not have collided with, this still refuses. Safe, because this arm renders no confirm button and never acts — refusing more is conservative, and the arm that ACTS (`startedSessionFor`) stays wrapper-scoped, so no widening here can send a kickoff anywhere. The **copy was corrected with it**: it names the session (never the account — the matched row's wrapper may not be the projected one) and covers both outcomes, *"would either send the kickoff into that session, which may be mid-task, or leave the project running two coordinators"*, because the arm cannot tell them apart without the id.
+**Fix:** the refusal arm drops `wrapper` entirely — `project` + `workspace === null` + `status !== 'dead'`. Its question is genuinely wrapper-independent ("is a live main checkout already running in this project?"), which is what `cmd_start` collides with however the row's wrapper field has since been rewritten. It cannot ask the exact question (`_alive(_id(W,P))`) without recomputing the id, which D-291 forbids, so it asks the wider one and **accepts over-refusing**: when the live main checkout is one `cmd_start` would not have collided with, this still refuses. Safe, because this arm renders no confirm button and never acts — refusing more is conservative, and the arm that ACTS (`startedSessionFor`) stays wrapper-scoped, so no widening here can send a kickoff anywhere. The **copy was corrected with it**: it names the session (never the account — the matched row's wrapper may not be the projected one) and covers both outcomes, *"would either send the kickoff into that session, which may be mid-task, or leave the project running two coordinators"*, because the arm cannot tell them apart without the id.
 
 **`isOwnAttempt` moved with it, to `project` alone.** `myAttemptRef` used to hold and compare `wrapper`+`project`, coherent only while the refusal was itself wrapper-scoped. Left as it was, a session this sheet started at `W` and that a swap then reported at `Y` would fail the ownership test and be refused as someone else's — the review fix round 1 (Important 2) defect exactly, resurrected through the swap path. Still bounded: non-null only after a `createSession` for **this** project succeeded in the sheet's current lifetime, cleared on close, overwritten by a newer attempt, and compared on `project`, so switching project drops the suppression on the same render (pinned). And the suppression can only ever hide a warning — the acting arm is unaffected.
 
-**Superseded, whole-branch review (C1) — the match is `wrapper` + `project` + `workspace === null`, and liveness is ASYMMETRIC between the two arms.** (The `workspace`/liveness half stands; the `wrapper` half is corrected above.) Both arms shipped matching on `wrapper`+`project` alone, which is not the session `cmd_start` would collide with. `cmd_ws_add` writes `_reg_set "$id" project "$project"` and `_reg_set "$id" wrapper "$hw"` with `$hw = _ws_least_loaded` (`ccd/ccd:1164+`) onto every WORKSPACE row, and `useProjectedHome`'s wrapper comes from `projectHome` (`server/src/limits.ts:96`), the server's mirror of that same `_ws_least_loaded` — so the projected wrapper is exactly the wrapper workspaces cluster on. Measured against the live registry: workspace `ccrc-pwa-brisk-harbor` reports `project=ccrc-pwa`, `wrapper=claude2`, `workspace=brisk-harbor`, while the coordinator `claude-ccrc-pwa` reports `workspace` absent (null on the wire). Two consequences, one dominant: (1) on a box running ~11 sessions the D-B4-19 refusal fired for the fleet's NORMAL state, rendering *"…is already running… may be mid-task"* with no confirm button and no path forward from the phone — and false on the facts, since `_id('claude2','ccrc-pwa')` is a different id that is not alive and that `cmd_start` would have spawned correctly; (2) race-gated hijack — with no match at tap time the refusal does not fire, `createSession` spawns, a concurrent `ccd ws-add` lands the workspace row on the same wrapper, and the next frame carries both, where `.find()` decides by ARRAY ORDER: a workspace row first sends the coordinator kickoff to a live WORKER, verbatim the harm D-B4-19 exists to prevent.
+**Superseded, whole-branch review (C1) — the match is `wrapper` + `project` + `workspace === null`, and liveness is ASYMMETRIC between the two arms.** (The `workspace`/liveness half stands; the `wrapper` half is corrected above.) Both arms shipped matching on `wrapper`+`project` alone, which is not the session `cmd_start` would collide with. `cmd_ws_add` writes `_reg_set "$id" project "$project"` and `_reg_set "$id" wrapper "$hw"` with `$hw = _ws_least_loaded` (`ccd/ccd:1164+`) onto every WORKSPACE row, and `useProjectedHome`'s wrapper comes from `projectHome` (`server/src/limits.ts:96`), the server's mirror of that same `_ws_least_loaded` — so the projected wrapper is exactly the wrapper workspaces cluster on. Measured against the live registry: workspace `ccrc-pwa-brisk-harbor` reports `project=ccrc-pwa`, `wrapper=claude2`, `workspace=brisk-harbor`, while the coordinator `claude-ccrc-pwa` reports `workspace` absent (null on the wire). Two consequences, one dominant: (1) on a box running ~11 sessions the D-292 refusal fired for the fleet's NORMAL state, rendering *"…is already running… may be mid-task"* with no confirm button and no path forward from the phone — and false on the facts, since `_id('claude2','ccrc-pwa')` is a different id that is not alive and that `cmd_start` would have spawned correctly; (2) race-gated hijack — with no match at tap time the refusal does not fire, `createSession` spawns, a concurrent `ccd ws-add` lands the workspace row on the same wrapper, and the next frame carries both, where `.find()` decides by ARRAY ORDER: a workspace row first sends the coordinator kickoff to a live WORKER, verbatim the harm D-292 exists to prevent.
 
-**Fix:** `FleetSession.workspace` is server-reported and documented as "null for a project's main checkout" (`shared/api.ts:35-37`), so `s.workspace === null` separates a `_id(wrapper,project)` session from a `$project-$slug` one with **no id arithmetic** — D-B4-18's "never recompute the id" holds unchanged. That conjunct is shared by both arms (`isMainCheckoutOf`); everything else about them differs, so they are **two named functions, not one predicate with a flag**:
+**Fix:** `FleetSession.workspace` is server-reported and documented as "null for a project's main checkout" (`shared/api.ts:35-37`), so `s.workspace === null` separates a `_id(wrapper,project)` session from a `$project-$slug` one with **no id arithmetic** — D-291's "never recompute the id" holds unchanged. That conjunct is shared by both arms (`isMainCheckoutOf`); everything else about them differs, so they are **two named functions, not one predicate with a flag**:
 
-- **D-B4-18's wait — `startedSessionFor`: wrapper-scoped, ALIVE, and FRESH.** It asks "has the session I just asked for appeared?" and it ACTS (kickoff + navigate), so it must resolve only onto the session this sheet created, at the wrapper it passed to `createSession`.
+- **D-291's wait — `startedSessionFor`: wrapper-scoped, ALIVE, and FRESH.** It asks "has the session I just asked for appeared?" and it ACTS (kickoff + navigate), so it must resolve only onto the session this sheet created, at the wrapper it passed to `createSession`.
 
   **Corrected, coordinator review B-2 — this arm shipped with no liveness conjunct, on reasoning that was wrong.** The original argument was: "`cmd_start` writes the registry fields before tmux is necessarily up, so for a beat the new session is reported `dead`; excluding it would time out a wait on a session that really did start." That **conflates "not resolving on this tick" with "timing out"**. `checkForMatch` re-runs on every later `/ws/fleet` frame and the wait is bounded at `START_PROGRAM_WAIT_MS`, so excluding a dead row costs nothing — the row resolves the moment it is reported alive. The reasoning is corrected here rather than preserved, because it was load-bearing for a rule that let the kickoff reach a DEAD session.
 
@@ -128,29 +128,29 @@ The first draft opened a transaction inside `server/src/coord/items.ts` (`tx(coo
   **Fix:** `status !== 'dead'` **and** a freshness discriminator `!preLive.has(s.id)`, where `preLive` is the set of ids alive in a snapshot taken from `fleet.getState()` immediately BEFORE the create. The rule is "this row became live as a result of my create". Freshness is deliberately **not** "an id I had not seen": a dead row with the same id that `cmd_start` revives is a legitimate resolution (the refusal skips dead rows, so Start is offered, and `ccd start` respawns exactly that id), and it is absent from `preLive` by construction because `preLive` holds only ids that were *alive*.
 
   `preLive` is unreachable through the component — `start()` refuses to run while `existing !== null`, and `existing` is any live main checkout in the project, so no tap can produce a snapshot already holding a live matching row. Measured: deleting that conjunct alone left the whole integration suite green. `startedSessionFor` is therefore **exported and unit-tested directly**, rather than shipping a guard no test can see.
-- **D-B4-19's refusal — `liveMainCheckoutIn`, wrapper-INDEPENDENT, alive-only.** See D-B4-19's own entry below for the wrapper question (`cmd_swap`). `status !== 'dead'` is here and only here: `cmd_start`'s idempotency test is `_alive` (tmux has-session), and without the mirror a dead-but-unreaped row refuses the sheet forever with copy false on every clause, while `ws-reap` is human-only-at-a-terminal by contract — no way out from the phone.
+- **D-292's refusal — `liveMainCheckoutIn`, wrapper-INDEPENDENT, alive-only.** See D-292's own entry below for the wrapper question (`cmd_swap`). `status !== 'dead'` is here and only here: `cmd_start`'s idempotency test is `_alive` (tmux has-session), and without the mirror a dead-but-unreaped row refuses the sheet forever with copy false on every clause, while `ws-reap` is human-only-at-a-terminal by contract — no way out from the phone.
 
 Each arm's conjuncts are pinned **on that arm**, individually — measured by deleting one conjunct from one function at a time, never from the shared `isMainCheckoutOf`. The wait's `project`, `workspace === null`, `wrapper` and `status !== 'dead'` each have their own named killer through the component; its `preLive` freshness conjunct is not reachable that way and is killed by `startedSessionFor`'s own unit test. The refusal's `workspace === null` and `status !== 'dead'` each have one, as does its wrapper-INDEPENDENCE (re-adding a wrapper filter is red); its `project` conjunct is covered by two refusal-side tests rather than a dedicated one. This precision is the correction of an earlier, FALSE claim in this same entry that "every conjunct is red in both directions" — written while three of the wait's own conjuncts were reachable only through the shared helper, so a per-arm deletion left the suite green. The lesson that keeps recurring here: **a conjunct is covered only when a test fails on deleting it at the site it is written**, and extracting or sharing a predicate does not carry that coverage with it.
 
-**Scoped, review fix round 1 (Important 2) — this arm does not fire on the sheet's own attempt.** D-B4-18's timeout and this refusal interact: `existing` cannot by itself tell "someone else's session is in the way" apart from "the session I just started has arrived a moment after the timeout fired" — both are `existing !== null`. Before this fix, a cold spawn that landed after `START_PROGRAM_WAIT_MS` rendered *"…is already running… may be mid-task"* for the session the sheet itself had just asked for — false on both counts, and the kickoff (`waitRef` had been nulled by the timeout) was never sent, leaving the operator holding an un-briefed session under a warning telling them not to start one. **Fix:** `myAttemptRef` (a ref, not tied to `waitRef`'s own bounded lifecycle) remembers the `wrapper`+`project` of the sheet's own last successful `createSession` — **narrowed to `project` alone by the swap correction above, which see** — cleared only on close or a newer attempt; `isOwnAttempt` compares it against `existing` and suppresses this arm when they match. `waitRef` itself is no longer nulled at timeout either — only the busy UI stands down; the wait keeps watching every later `/ws/fleet` frame, so a session that lands late still gets its kickoff and still navigates, exactly as if the timeout had never fired.
+**Scoped, review fix round 1 (Important 2) — this arm does not fire on the sheet's own attempt.** D-291's timeout and this refusal interact: `existing` cannot by itself tell "someone else's session is in the way" apart from "the session I just started has arrived a moment after the timeout fired" — both are `existing !== null`. Before this fix, a cold spawn that landed after `START_PROGRAM_WAIT_MS` rendered *"…is already running… may be mid-task"* for the session the sheet itself had just asked for — false on both counts, and the kickoff (`waitRef` had been nulled by the timeout) was never sent, leaving the operator holding an un-briefed session under a warning telling them not to start one. **Fix:** `myAttemptRef` (a ref, not tied to `waitRef`'s own bounded lifecycle) remembers the `wrapper`+`project` of the sheet's own last successful `createSession` — **narrowed to `project` alone by the swap correction above, which see** — cleared only on close or a newer attempt; `isOwnAttempt` compares it against `existing` and suppresses this arm when they match. `waitRef` itself is no longer nulled at timeout either — only the busy UI stands down; the wait keeps watching every later `/ws/fleet` frame, so a session that lands late still gets its kickoff and still navigates, exactly as if the timeout had never fired.
 
-### D-B4-20 — a PINNED rule reversed: the wait arm's "no liveness conjunct" was wrong
+### D-293 (was D-B4-20) — a PINNED rule reversed: the wait arm's "no liveness conjunct" was wrong
 
-`startedSessionFor` (`pwa/src/fleet/StartProgramSheet.tsx:144`) shipped **deliberately** without a liveness conjunct, and that choice was not an oversight — it was argued in the function's own docstring, recorded under D-B4-18, and **pinned by a test** (`pwa/test/start-program.test.tsx`, *"D-B4-18's own match carries NO liveness conjunct — a row written before tmux is up still resolves the wait"*). Its stated reason: `cmd_start` writes the registry fields before tmux is necessarily up, so for a beat the new session is reported `dead`, and excluding it "would time out a wait on a session that really did start".
+`startedSessionFor` (`pwa/src/fleet/StartProgramSheet.tsx:144`) shipped **deliberately** without a liveness conjunct, and that choice was not an oversight — it was argued in the function's own docstring, recorded under D-291, and **pinned by a test** (`pwa/test/start-program.test.tsx`, *"D-291's own match carries NO liveness conjunct — a row written before tmux is up still resolves the wait"*). Its stated reason: `cmd_start` writes the registry fields before tmux is necessarily up, so for a beat the new session is reported `dead`, and excluding it "would time out a wait on a session that really did start".
 
 **The reason was false, and the pin made it durable.** It conflates *not resolving on this tick* with *timing out*. `checkForMatch` re-runs on every later `/ws/fleet` frame and the wait is bounded at `START_PROGRAM_WAIT_MS`, so excluding a dead row costs nothing — the row resolves the moment it is reported alive. Because project + wrapper + `workspace === null` is **not a unique key** (`cmd_swap` moves the wrapper and keeps the id, `ccd/ccd:7307`), the missing conjunct let `.find()` return a dead swapped row that sorts before the freshly spawned one, sending the coordinator kickoff to a **dead session** while the session that actually started never got its brief.
 
-**Adaptation:** the wait arm gains `status !== 'dead'` **and** a freshness discriminator — alive now, and either absent from a pre-create snapshot of live ids or present in it but dead ("became live as a result of my create"). Freshness is deliberately *not* "an id I had not seen": a dead row `cmd_start` revives keeps its id and is a legitimate resolution. The pinning test was **replaced, not deleted** — it also carried the arm's `wrapper` coverage, so the replacement pins the corrected rule *and* still fails if `wrapper` is dropped. `startedSessionFor` is exported and unit-tested because the freshness conjunct is unreachable through the component. Full reasoning, the `cmd_swap` non-uniqueness and the sort-order chain live in D-B4-18/19 above; this entry exists so the reversal is discoverable from the index rather than only from inside the entry it corrects.
+**Adaptation:** the wait arm gains `status !== 'dead'` **and** a freshness discriminator — alive now, and either absent from a pre-create snapshot of live ids or present in it but dead ("became live as a result of my create"). Freshness is deliberately *not* "an id I had not seen": a dead row `cmd_start` revives keeps its id and is a legitimate resolution. The pinning test was **replaced, not deleted** — it also carried the arm's `wrapper` coverage, so the replacement pins the corrected rule *and* still fails if `wrapper` is dropped. `startedSessionFor` is exported and unit-tested because the freshness conjunct is unreachable through the component. Full reasoning, the `cmd_swap` non-uniqueness and the sort-order chain live in D-291 (was D-B4-18) and D-292 (was D-B4-19) above; this entry exists so the reversal is discoverable from the index rather than only from inside the entry it corrects.
 
 **Trail:** raised by the implementer while applying the coordinator's review (which had ordered liveness on reasoning of its own that was also wrong about the freshness rule), and **accepted explicitly by the coordinator in review** — both the reversal and the corrected freshness definition. The general lesson, which cost two rounds here: **a test pinning a rule makes the rule durable, not correct** — when a pinned rule is found wrong, the pin is the thing that must be re-argued first, and replaced rather than removed if it also covers something else.
 
-### D-B4-21 (wave 4) — the fence has a SECOND holder, and it is recorded as a gap rather than fixed
+### D-294 (wave 4) — the fence has a SECOND holder, and it is recorded as a gap rather than fixed
 
 Task 15 Step 4 specifies the `single-definition` guard as "`'ccrc-mail'` appears as a literal in exactly one source file … and that file is `shared/api.ts`". Measured: it appears in two. `server/src/inject/send.ts`'s `isMailResidue` tests a DRAFT for a stranded envelope opener with `draft.startsWith('```') && draft.includes('ccrc-mail')` — a genuine second spelling of the same fact, and one that would drift with the fence exactly as the guard fears.
 
 **Adaptation:** the guard ships as a NAMED LIST (`['server/src/inject/send.ts', 'shared/api.ts']`) with the exclusion written down and its reason at the assertion — the `MAIL_REJECT_CODES`-excludes-`undeliverable` idiom this very file already uses for `'mail-disabled'` one describe up. It is NOT fixed here, and that is the brief's own instruction rather than a preference: wave 4's dispatched brief forbids touching `inject/send.ts` by name (it is the hardened send path; this wave has no business inside it). Any NEW holder still fails, so the guard is a mechanism and not a comment. **The gap is real and is stated as such:** whoever next has a reason to edit that file should import `MAIL_ENVELOPE_FENCE` there and shorten the list to `shared/api.ts` alone.
 
-### D-B4-22 (wave 4) — two of this wave's own pins could not fail, and were found by applying the mutants rather than by reading them
+### D-295 (was D-B4-22) (wave 4) — two of this wave's own pins could not fail, and were found by applying the mutants rather than by reading them
 
 Task 19's mutation sweep is what caught both; neither was visible by inspection, and both had passed a full green suite.
 
@@ -159,7 +159,7 @@ Task 19's mutation sweep is what caught both; neither was visible by inspection,
 
 **The lesson is the program's own standing one, earned a fourth time:** a pin that cannot fail is worse than no pin, because it is counted. Neither of these was a careless test — both read correctly and both named the right rule. What separated them from working pins was only that nobody had run the mutant. Every guard in this wave was subsequently applied-and-watched: eleven mutants, each observed RED at a named test and GREEN again after restore.
 
-### D-B4-23 (wave 4, coordinator review W-1) — THE SPEC'S MEASURED FACT EXPIRED MID-PROGRAM, and the mail card had no live producer
+### D-296 (wave 4, coordinator review W-1) — THE SPEC'S MEASURED FACT EXPIRED MID-PROGRAM, and the mail card had no live producer
 
 Spec §2.1's fact 2 — the fact the whole of Task 17 is built on — was measured on 2026-08-11: `sweepMail` typed the rendered envelope into the recipient's pane through `sendPrompt`, so it landed in the JSONL as a **`user` turn**, and "there is no missing mail *event* — there is a missing **attribution**." Task 17 implemented exactly that, gating `buildChatItems` on `e.kind === 'user'`.
 
@@ -176,14 +176,14 @@ Three shipped claims were false as written and are corrected: `ChatList.tsx`'s "
 - **Two fetches of one delivery render TWO cards.** Stated as a decision: the card answers "what was said, and *when*, relative to what the session did next", and two fetches are two things the session did. De-duplicating would need cross-item state keyed on envelope id — the reconciliation problem spec §2.2 refused a second frame over — and would break the derived-from-one-event property that lets the revival discipline stay unchanged. Keyed `mail-${toolId}`, a namespace the tool card's own key cannot collide with.
 - **Authenticity is unchanged and is not overclaimed.** The aperture is wider — a `tool_result` is command output, so `cat`-ing a file whose whole content is an envelope renders a card — so the rank-3 caveat is restated at the new function rather than inherited silently. Measured for scale: twelve `tool_result`s in this worker's own transcript carry the characters `ccrc-mail` (greps, file reads, the README) and the whole-turn rule refuses every one.
 
-**A THIRD pin that could not fail was found by this round's sweep** (M-16), and it belongs with D-B4-22's two rather than in a footnote: "still files the fetch itself as a tool card — the result is not stolen" asserted only that a `.toolcard` element EXISTED. A tool card renders whether or not its result ever arrived, so a mutant that skipped `tool.result = e` for envelope-bearing results — leaving the fetch spinning forever — passed it, and passed every other assertion in the file. Fixed by asserting on the state dot (`--run` vs `--ok`), which is the thing that actually differs. **Three for three now: every pin in this wave that could not fail was found by applying a mutant, and none by reading.**
+**A THIRD pin that could not fail was found by this round's sweep** (M-16), and it belongs with D-295's two rather than in a footnote: "still files the fetch itself as a tool card — the result is not stolen" asserted only that a `.toolcard` element EXISTED. A tool card renders whether or not its result ever arrived, so a mutant that skipped `tool.result = e` for envelope-bearing results — leaving the fetch spinning forever — passed it, and passed every other assertion in the file. Fixed by asserting on the state dot (`--run` vs `--ok`), which is the thing that actually differs. **Three for three now: every pin in this wave that could not fail was found by applying a mutant, and none by reading.**
 
 ---
 
 ## Global Constraints (from the spec, verbatim where quoted)
 
 - **"No new session frame. No new `ChatEvent` kind."** Both were the obvious designs and both are refused (spec §2.2). The `{type:'mail'}` session frame stays exactly what Build 7 Task 6 built: *outstanding* mail for `MailStrip`, replaced wholesale. `applySessionMsg`'s `satisfies never` default arm (`pwa/src/stores/session.ts`) must be untouched at the end of this build — a test asserts it.
-- **The only wire additions are the ones in the spec's table**, plus D-B4-10's one additive field on `RegistryRead`'s `listed:true` arm (a server-internal type, not a wire type). **No `FLEET_PROTO` bump** — additive frames are the one-way new-writer/old-reader rule this repo already states (`shared/api.ts:560-566`, and `:1416-1419`'s own precedent).
+- **The only wire additions are the ones in the spec's table**, plus D-283's one additive field on `RegistryRead`'s `listed:true` arm (a server-internal type, not a wire type). **No `FLEET_PROTO` bump** — additive frames are the one-way new-writer/old-reader rule this repo already states (`shared/api.ts:560-566`, and `:1416-1419`'s own precedent).
 - **Three documented states for `truncatedBytes`**: absent = *this server did not report*; `0` = not truncated; `>0` = this many bytes were cut. An old server can only produce "absent", which renders **no cue** — never a false claim of completeness.
 - **`parseMailEnvelope` returns a typed union, never a bare null**: `{ok:true, envelope}` | `{ok:false, why:'not-mail'}` | `{ok:false, why:'malformed', at}`. The two refusals render identically today; that is a deliberate choice with a test pinning that `malformed` never renders as a mail card. Collapsing them would be the overloaded null the architecture doc bans (`architecture:99-100`).
 - **The PWA holds no rule the server does not also hold.** The fence has ONE definition, in `shared/`; `coord/envelope.ts` imports it. A round-trip test proves `parse(render(x))`.
@@ -192,9 +192,9 @@ Three shipped claims were false as written and are corrected: `ChatList.tsx`'s "
 - **Done-authority is a fingerprint, not a claim.** `POST /api/runs/:id/items` is the coordinator's write, made **after** `verifyDone` re-measures. The mail bus never routes on `subject` text.
 - **One enforcement point, no transition table.** Work items have one invariant — `done`/`failed`/`abandoned` are terminal — and it gets one home, carried in the `UPDATE`'s own `WHERE` clause (`architecture:145-147` rejects a `MAIL_DELIVERY_TRANSITIONS`-shaped answer for exactly this reason).
 - **A batch is all-or-nothing.** "Partial success on a ledger write is how tallies drift."
-- **No L1 file holds a database handle** (`architecture:78-81`, and D-B4-16). Every multi-row all-or-nothing commit in this build lands as a `CoordStore` method — `dispatchRun`, `settleItems`, `closeRun` — and `single-definition.test.ts` gains the scanner that says so: no file under `server/src/coord/` other than `store.ts`, `rundefs.ts` and `routes.ts` imports `./db.js` or `node:sqlite`.
+- **No L1 file holds a database handle** (`architecture:78-81`, and D-289). Every multi-row all-or-nothing commit in this build lands as a `CoordStore` method — `dispatchRun`, `settleItems`, `closeRun` — and `single-definition.test.ts` gains the scanner that says so: no file under `server/src/coord/` other than `store.ts`, `rundefs.ts` and `routes.ts` imports `./db.js` or `node:sqlite`.
 - **A grant that names a flag is enrolled in `REQUIRED_VERB_FLAG`.** The ladder is `CCD_ARGV` entry → `EXEC_WHITELIST` prefix → `REQUIRED_VERB_FLAG` when the prefix is more than one token → a `test/types/bypasses` fixture. `isExecAllowed` is prefix-matching and says so in its own comment ("tokens after the prefix are unconstrained"), so an *unenrolled* two-token prefix enforces nothing: `['coord-pause']` would still admit `['coord-pause','--state','on']` and every subset test would stay green.
-- **The `coord` frame is emitted on EVERY tick outcome, including the one that fails shut** (D-B4-10). An emitter that only runs on the healthy path cannot report the state it exists to report.
+- **The `coord` frame is emitted on EVERY tick outcome, including the one that fails shut** (D-283). An emitter that only runs on the healthy path cannot report the state it exists to report.
 - **Operator controls ride the PWA's existing unauthenticated surface** and the box token is deliberately the wrong key for them (spec §4.1). The tailnet stays the perimeter. Honesty clause, restated in the register of Build 7's own spec: on a single-uid box any session can `rm` the marker directly; this adds a recorded chokepoint and a speed bump, and names it as exactly that.
 - **`RUN_TRANSITIONS` is not modified.** Clients read that table as a refusal vocabulary; changing it changes what every deployed client believes.
 - **No-glow governance, extended.** `.mail-*` is a record and goes still. `.ask-*` may carry the live cue **only** in `awaiting`. A stylesheet test bans `--glow`/`animation`/`box-shadow` everywhere else under those prefixes, with the one exception named BY NAME.
@@ -212,13 +212,13 @@ Three shipped claims were false as written and are corrected: `ChatList.tsx`'s "
 | file | responsibility | change | wave |
 |---|---|---|---|
 | `shared/api.ts` | the ubiquitous language | `+WORK_ITEM_TITLE_MAX`/`WORK_ITEM_MAX`; `RunRefuseCode` `+unknown-item`/`+item-terminal`; `+MarkerState`/`isMarkerState`/`CoordStatus`; `FleetMsg` `+{type:'coord'}`; `+MAIL_ENVELOPE_FENCE`/`MailEnvelope`/`MailEnvelopeParse`/`parseMailEnvelope`; `ChatEvent` `+truncatedBytes?` | 1,2,4 |
-| `server/src/coord/store.ts` | rows and transitions | `+dispatchRun` (one tx); `setWorkItemState` typed + run-scoped; `+TERMINAL_ITEM_STATES`; `+settleItems` (the batch tx, D-B4-16); `closeRun` `+viaClosing`; `+workItems(runId)` | 1,2 |
+| `server/src/coord/store.ts` | rows and transitions | `+dispatchRun` (one tx); `setWorkItemState` typed + run-scoped; `+TERMINAL_ITEM_STATES`; `+settleItems` (the batch tx, D-289); `closeRun` `+viaClosing`; `+workItems(runId)` | 1,2 |
 | `server/src/coord/dispatch.ts` | the dispatch decision (L1) | `+items` validation; step 6 becomes one `coord.dispatchRun` call | 1 |
 | `server/src/coord/items.ts` | **new** — the settle decision (L1), validate-and-map only | create | 1 |
-| `server/src/coord/close.ts` | the close decision (L1) | `+intent:'abandon'` arm, D-B4-1/2/3/8/17 | 2 |
+| `server/src/coord/close.ts` | the close decision (L1) | `+intent:'abandon'` arm, D-274 (was D-B4-1), D-275 (was D-B4-2), D-276 (was D-B4-3), D-281 (was D-B4-8), D-290 (was D-B4-17) | 2 |
 | `server/src/coord/routes.ts` | union→status maps + the token gate | `+POST /api/runs/:id/items`, `+POST /api/runs/:id/abandon`, `+POST /api/coord/pause` | 1,2 |
 | `server/src/coord/envelope.ts` | the fenced envelope | imports `MAIL_ENVELOPE_FENCE` (one definition) | 4 |
-| `server/src/registry.ts` | the fleet read | `RegistryRead.listed:true` `+names` (D-B4-10) | 2 |
+| `server/src/registry.ts` | the fleet read | `RegistryRead.listed:true` `+names` (D-283) | 2 |
 | `server/src/ccdargv.ts` | the argv table | `+coordPause(state)` | 2 |
 | `server/src/watch.ts` | the lanes | `+emitCoord()` + `currentCoord()`, called on BOTH arms of the tick's registry read | 2 |
 | `server/src/bus.ts` | the typed bus | `+'coord'` overloads | 2 |
@@ -241,7 +241,7 @@ Three shipped claims were false as written and are corrected: `ChatList.tsx`'s "
 | `pwa/src/session/MailCard.tsx` | **new** — the attributed mail card | create | 4 |
 | `pwa/src/session/ChatList.tsx` | the render model | `ChatItem` `+{kind:'mail'}`; `buildChatItems` derives it; `askPending`/`onAnswer` props | 4 |
 | `pwa/src/session/ToolCard.tsx` | the ask card | three-state axis + the `Answer` control | 4 |
-| `pwa/src/session/DialogSheet.tsx` | the one answer path | `+raise?: number` (D-B4-13) | 4 |
+| `pwa/src/session/DialogSheet.tsx` | the one answer path | `+raise?: number` (D-286) | 4 |
 | `pwa/src/screens/SessionScreen.tsx` | the session surface | holds the raise nonce, threads `askPending` | 4 |
 | `pwa/src/session/chat.css` | conversation styling | `.mail-card-*`, `.ask-*` | 4 |
 | `pwa/src/fleet/fleet.css` | board styling | `.coord-*`, `.run-abandon`, `.program-start-*` | 3 |
@@ -301,7 +301,7 @@ Spec §3.1. `POST /api/runs/:id/dispatch` gains `items?: string[]`. **The brief 
 export const WORK_ITEM_TITLE_MAX = 200;   // UTF-8 BYTES, like MAIL_SUBJECT_MAX_BYTES
 export const WORK_ITEM_MAX = 32;
 
-// server/src/coord/store.ts — mirrors closeRun's shape and its reason (D-B4-4)
+// server/src/coord/store.ts — mirrors closeRun's shape and its reason (D-277)
 dispatchRun(input: {
   runId: number; sessionId: string; workspace: string | null; branch: string | null;
   resumed: boolean; clearedAt: number | null; items: readonly string[]; detail?: string;
@@ -322,7 +322,7 @@ describe('POST /api/runs/:id/dispatch — the declared ledger', () => {
   it('refuses bad-request on a non-array, a non-string entry, or an empty/whitespace title', …);
   it(`refuses bad-request past WORK_ITEM_MAX entries`, …);
   it('refuses bad-request on a title over WORK_ITEM_TITLE_MAX BYTES, measured in utf-8', …);
-  it('leaves NO work_items rows behind when the transition is refused', …);   // D-B4-4
+  it('leaves NO work_items rows behind when the transition is refused', …);   // D-277
   it('leaves NO work_items rows behind when the hold fails 502 before the commit', …);
   it('needs no dedupe key: RUN_TRANSITIONS.dispatched has no self-edge, so a second dispatch 409s', …);
 });
@@ -337,7 +337,7 @@ Run: `cd server && ./node_modules/.bin/vitest run test/run-routes.test.ts` (`tim
 
 ```ts
   /**
-   * The WHOLE dispatch commit, as ONE transaction (D-B4-4). Before this, the
+   * The WHOLE dispatch commit, as ONE transaction (D-277). Before this, the
    * dispatch route ran `markDispatched`, `setClearedAt` and `advance` as three
    * independent `tx()`s — the identical split `closeRun` above was created to
    * close (review finding 25). The work items make it load-bearing rather than
@@ -402,7 +402,7 @@ git commit -m "feat(server): a wave declares its ledger at dispatch, and the who
 
 ### Task 2: `setWorkItemState` stops returning `void`, and the batch gets its commit
 
-Spec §3.2, and `architecture:25-30` names this exact defect shape for `markDelivered`. Per `architecture:145-147` work items get **one enforcement point, not a transition table** — and per D-B4-16 the all-or-nothing batch commits **here**, in the ring that owns `DatabaseSync`'s synchrony invariant, not in the L1 decision function that will call it.
+Spec §3.2, and `architecture:25-30` names this exact defect shape for `markDelivered`. Per `architecture:145-147` work items get **one enforcement point, not a transition table** — and per D-289 the all-or-nothing batch commits **here**, in the ring that owns `DatabaseSync`'s synchrony invariant, not in the L1 decision function that will call it.
 
 **Files:**
 - Modify: `server/src/coord/store.ts` (`:629-631`, and beside `itemTally` `:633-639`)
@@ -439,7 +439,7 @@ workItems(runId: number): { id: number; title: string; state: WorkItemState; cla
 describe('setWorkItemState — one terminality point', () => {
   it('settles a pending item and answers ok', …);
   it('settles a CLAIMED item — only done/failed/abandoned are terminal', …);
-  it('answers unknown-item for an id that belongs to ANOTHER run', …);      // D-B4-5
+  it('answers unknown-item for an id that belongs to ANOTHER run', …);      // D-278
   it('answers unknown-item for an id no run has', …);
   it('refuses to move a settled item, and names the state it is already in', …);  // mutant A
   it('leaves a refused row EXACTLY as it was — same state, same claimedBy', …);   // mutant B
@@ -495,12 +495,12 @@ Run: `cd server && ./node_modules/.bin/vitest run test/coord-store.test.ts` (`ti
   }
 ```
 
-- [ ] **Step 4: Write the batch commit** (D-B4-16), beside it:
+- [ ] **Step 4: Write the batch commit** (D-289), beside it:
 
 ```ts
   /**
    * The settle batch, as ONE transaction — the third member of the family
-   * `dispatchRun` and `closeRun` already belong to (D-B4-4, review finding 25),
+   * `dispatchRun` and `closeRun` already belong to (D-277, review finding 25),
    * and here for the same reason plus one more: spec §3.2 requires that "a body
    * naming one bad id settles nothing", because "partial success on a ledger
    * write is how tallies drift".
@@ -508,7 +508,7 @@ Run: `cd server && ./node_modules/.bin/vitest run test/coord-store.test.ts` (`ti
    * WHY THE PRE-PASS AND NOT A THROW. `tx` rolls back on a throw and only on a
    * throw (`db.ts:241-253`), so an in-flight refusal used to need a private
    * sentinel class to travel out — in an L1 file that has no business holding
-   * this handle at all (D-B4-16). It does not need one HERE: `tx` takes the
+   * this handle at all (D-289). It does not need one HERE: `tx` takes the
    * write lock at `BEGIN IMMEDIATE` and `DatabaseSync` never yields the event
    * loop mid-transaction (`db.ts:235-240`: "no route, sweep or socket can
    * interleave inside one"), so a read taken in the pre-pass cannot be
@@ -613,7 +613,7 @@ describe('POST /api/runs/:id/items', () => {
 });
 
 describe('items.ts is a decision, not an adapter', () => {
-  it('imports neither ./db.js nor node:sqlite, and never names `coord.db`', …);   // D-B4-16
+  it('imports neither ./db.js nor node:sqlite, and never names `coord.db`', …);   // D-289
 });
 ```
 
@@ -622,14 +622,14 @@ Run: `cd server && ./node_modules/.bin/vitest run test/coord-items.test.ts` (`ti
 
 - [ ] **Step 3: Add the two refusal codes** to `RunRefuseCode` **and** `RUN_REFUSE_CODE_MAP` (both, or the compile fails — that is the point of the map, `shared/api.ts:1877-1889`). Correct the docstring's "Ten codes exist below today; the next new one would be the eleventh" sentence to twelve/thirteenth.
 
-- [ ] **Step 4: Write `server/src/coord/items.ts`** — validate, map, delegate. **No `tx`, no `coord.db`, no sentinel** (D-B4-16):
+- [ ] **Step 4: Write `server/src/coord/items.ts`** — validate, map, delegate. **No `tx`, no `coord.db`, no sentinel** (D-289):
 
 ```ts
 /** L1 (architecture increment 4). No `reply`, no `node:sqlite`, no `tx` —
  *  narrow deps in, typed union out. The all-or-nothing COMMIT belongs to the
  *  ring that owns `DatabaseSync`'s synchrony invariant (`architecture:141-142`),
  *  so this file validates and maps and `CoordStore.settleItems` commits
- *  (D-B4-16) — the same split `dispatchRun`/`CoordStore.dispatchRun` and
+ *  (D-289) — the same split `dispatchRun`/`CoordStore.dispatchRun` and
  *  `closeRun`/`CoordStore.closeRun` already draw, reached here for the third
  *  time rather than reasoned out afresh.
  *
@@ -730,7 +730,7 @@ export const itemTallyLabel = (items: RunItemTally): string =>
 - [ ] **Step 2: Run both and watch them fail**
 Run: `cd pwa && ./node_modules/.bin/vitest run test/runs-screen.test.tsx` and `cd server && ./node_modules/.bin/vitest run test/coordinator-skill.test.ts` (`timeout: 600000`) → FAIL.
 
-- [ ] **Step 3: Add `itemTallyLabel`** to `runWords.ts` beside `runItems`, with the docstring naming D-B4-15 and `MailStrip.tsx:32-41`. `RunsScreen.tsx:97` becomes `<span className="run-tally">{itemTallyLabel(items)}</span>`.
+- [ ] **Step 3: Add `itemTallyLabel`** to `runWords.ts` beside `runItems`, with the docstring naming D-288 and `MailStrip.tsx:32-41`. `RunsScreen.tsx:97` becomes `<span className="run-tally">{itemTallyLabel(items)}</span>`.
 
 - [ ] **Step 4: Update the skill.** SKILL.md's lifecycle step 2 gains: the dispatch body is `{"brief": "...", "items": ["<title>", …]}`, at most 32 titles of at most 200 bytes, and *the brief is prose the server never reads — the items are the machine-readable half of the same wave plan, and they must agree*. Step 4 gains: **after** `POST /api/runs/:id/advance` answers `ok`, `POST /api/runs/:id/items` with `{"items":[{"id":<n>,"state":"done"}]}`. `wave-lifecycle.md` §2's refusal table gains `bad-request` for a malformed `items`; a new §4 subsection carries `unknown-item` (404) / `item-terminal` (409) with "stop and report — a tally that moved backwards is a lie on the console".
 
@@ -750,7 +750,7 @@ git commit -m "feat: a wave with no declared ledger reads as a dash, and the coo
 - [ ] **Step 1: Extend `server/test/single-definition.test.ts`** — under the existing "Build 7 nouns" block (`:261`):
   - `WORK_ITEM_TITLE_MAX`/`WORK_ITEM_MAX` are defined exactly once, in `shared/`;
   - the terminal trio is spelled once: `TERMINAL_ITEM_STATES` is the only place under the four roots where `'done'`, `'failed'` and `'abandoned'` appear as one adjacent list, and no source file contains a hand-written `('done','failed','abandoned')` SQL literal (the shipped one is built by `join`, so the scanner sees no literal at all);
-  - **the ring guard** (D-B4-16): every file under `server/src/coord/` except `store.ts`, `rundefs.ts` and `routes.ts` imports neither `./db.js` nor `node:sqlite`, and none of them contains the token `.db` on a `coord`/`store` receiver. Scanner-coverage pin: the walk must visit ≥ 6 files, or a moved directory silently deletes the guard (`architecture:104-105`).
+  - **the ring guard** (D-289): every file under `server/src/coord/` except `store.ts`, `rundefs.ts` and `routes.ts` imports neither `./db.js` nor `node:sqlite`, and none of them contains the token `.db` on a `coord`/`store` receiver. Scanner-coverage pin: the walk must visit ≥ 6 files, or a moved directory silently deletes the guard (`architecture:104-105`).
 
 - [ ] **Step 2: Mutation sweep the wave's diff.** One literal mutant per added construct, full server suite per mutant, sha256-verified restore between. The table this wave must produce, each row naming the test that kills it:
 
@@ -900,7 +900,7 @@ it('answers 502 with ccd\'s stderr when the verb fails on the box', …);
 it('answers 400 on a body that is not {paused:boolean}', …);
 it('answers WITHOUT the box token — deliberately (spec §4.1), and says so at the call site', …);
 it('answers even with NO coordination database: a pause is a fleet-host file, not a run', …);
-it('is the ONLY route in coord/routes.ts that skips requireMailToken', …);   // the source scanner, D-B4-9
+it('is the ONLY route in coord/routes.ts that skips requireMailToken', …);   // the source scanner, D-282
 ```
 
 `agent/test/whitelist-structural.test.ts`, in the runtime-audit describe (copy `:278-294`'s `ws-reap` cases exactly):
@@ -935,7 +935,7 @@ Run: `cd server && ./node_modules/.bin/vitest run test/coord-pause-route.test.ts
  *  confirmation token here, it is the whole argument surface. A one-token
  *  `['coord-pause']` grant would permit `ccd coord-pause <anything…>` — every
  *  positional form the verb might ever grow — for a route the PWA reaches with
- *  NO token of any kind (D-B4-9). Enrolment is what makes dropping `--state`
+ *  NO token of any kind (D-282). Enrolment is what makes dropping `--state`
  *  a compile error on `LAWFUL_EXEC_WHITELIST` and a boot refusal, instead of a
  *  green diff: `isExecAllowed` is prefix-matching ("tokens after the prefix are
  *  unconstrained"), so no subset test can tell the two grants apart. */
@@ -962,7 +962,7 @@ Correct the audit's own message, which is now read by a non-destructive verb (`:
 ```ts
   /**
    * `POST /api/coord/pause` — the OPERATOR's door, and the ONE route in this
-   * file that is deliberately NOT behind `requireMailToken` (D-B4-9).
+   * file that is deliberately NOT behind `requireMailToken` (D-282).
    *
    * The box token authenticates the FLEET HOST (build7:136-143) and the
    * coordinator holds it by design. `$REG/coordinator-paused` exists precisely
@@ -1011,7 +1011,7 @@ git commit -m "feat: the pause marker reaches the phone — one verb, one enroll
 
 ### Task 8: `MarkerState` and the `{type:'coord'}` frame — off the tick's own listing, on both arms
 
-Spec §4.2, "Reading the state back". `unmeasurable` is not decoration: `dispatchRun` treats an unlistable registry as a pause it cannot rule out and **fails shut** (`dispatch.ts:106-109`). The wire must be able to say the same thing — which means the emitter must run on the tick that fails shut (D-B4-10), and the tick must hand it the listing it already took.
+Spec §4.2, "Reading the state back". `unmeasurable` is not decoration: `dispatchRun` treats an unlistable registry as a pause it cannot rule out and **fails shut** (`dispatch.ts:106-109`). The wire must be able to say the same thing — which means the emitter must run on the tick that fails shut (D-283), and the tick must hand it the listing it already took.
 
 **Files:**
 - Modify: `shared/api.ts` (`FleetMsg` `:1412-1419`)
@@ -1029,7 +1029,7 @@ export function isMarkerState(v: unknown): v is MarkerState;
 export interface CoordStatus { pause: MarkerState; mail: MarkerState }
 // FleetMsg += { type: 'coord'; coord: CoordStatus }
 
-// server/src/registry.ts — ADDITIVE on ONE arm (D-B4-10)
+// server/src/registry.ts — ADDITIVE on ONE arm (D-283)
 export type RegistryRead =
   | { listed: true; records: SessionRecord[]; names: readonly string[] }
   | { listed: false };
@@ -1067,12 +1067,12 @@ Run: `cd server && ./node_modules/.bin/vitest run test/fleetws.test.ts test/regi
 
 - [ ] **Step 3: Add the wire types**, with the docstring stating: one `MarkerState` covers both markers because they are one concept read one way, from the single `readdir` the fleet lane already performs; `unmeasurable` exists because "not knowing is not `[]`" and because the phone must not render "running" for a state the server would refuse to dispatch in.
 
-- [ ] **Step 4: Widen `RegistryRead`** (D-B4-10) — one field, one arm:
+- [ ] **Step 4: Widen `RegistryRead`** (D-283) — one field, one arm:
 
 ```ts
 /** … existing docstring …
  *
- *  `names` (Build 4, D-B4-10) is the RAW listing this read derived its records
+ *  `names` (Build 4, D-283) is the RAW listing this read derived its records
  *  from, carried rather than re-read. It exists for the one caller that needs a
  *  NON-session fact out of the same directory — `watch.ts`'s `emitCoord`, which
  *  reports `$REG/coordinator-paused` and `$REG/mail-disabled` to the wire. A
@@ -1092,7 +1092,7 @@ Both `return { listed: true, … }` sites (`registry.ts:406`, `:409`) carry `nam
 
 ```ts
       const registryRead = await readRegistryMeasured(this.deps.io, this.deps.cfg);
-      // BEFORE the fail-shut return below, and on BOTH arms (D-B4-10). An
+      // BEFORE the fail-shut return below, and on BOTH arms (D-283). An
       // unlistable registry is not "nothing is set": it is the exact state
       // `dispatchRun` FAILS SHUT on (`dispatch.ts:106-109`), so it must reach
       // the wire as `unmeasurable` on the same tick it happens. Placed beside
@@ -1110,7 +1110,7 @@ and the emitter itself, beside `emitRuns`:
 ```ts
   /** The `{type:'coord'}` frame (spec §4.2). Derived from the SAME registry
    *  listing this tick already performed — carried out of `readRegistryMeasured`
-   *  on `RegistryRead.names` rather than taken again (D-B4-10).
+   *  on `RegistryRead.names` rather than taken again (D-283).
    *
    *  `null` names is an UNLISTABLE directory, not an empty one, and rides the
    *  wire as `unmeasurable`.
@@ -1151,7 +1151,7 @@ git commit -m "feat(server): the pause and kill-switch markers reach the wire of
 
 ### Task 9: `POST /api/runs/:id/abandon` — a wedged run can be let go
 
-Spec §4.3. It calls the **same L1 decision function** `closeRun` — architecture increment 4's "deciding split from acting" is not duplicated for a second caller. Per D-B4-17 the abandon is one contiguous arm inside that function, entered before any of the ordinary close's own body validation.
+Spec §4.3. It calls the **same L1 decision function** `closeRun` — architecture increment 4's "deciding split from acting" is not duplicated for a second caller. Per D-290 the abandon is one contiguous arm inside that function, entered before any of the ordinary close's own body validation.
 
 **Files:**
 - Modify: `server/src/coord/close.ts`, `server/src/coord/store.ts` (`closeRun` `:305-334`), `server/src/coord/routes.ts`
@@ -1166,11 +1166,11 @@ export interface CloseRunBody {
 }
 export async function closeRun(
   deps: CloseRunDeps, id: number, body: unknown,
-  causedBy: 'coordinator' | 'operator',        // D-B4-3/6 — no default
+  causedBy: 'coordinator' | 'operator',        // D-276 (was D-B4-3) and D-279 (was D-B4-6) — no default
 ): Promise<CloseOutcome>;
 
 // CoordStore
-closeRun(input: { …; viaClosing: boolean }): AdvanceResult;   // D-B4-8
+closeRun(input: { …; viaClosing: boolean }): AdvanceResult;   // D-281
 ```
 
 - [ ] **Step 1: Write the failing test** — `server/test/coord-abandon.test.ts`, one case per row of the spec's wedged-shape table plus the negative pins:
@@ -1208,10 +1208,10 @@ describe('closeRun\'s abandon arm, called directly', () => {
 - [ ] **Step 2: Run it and watch it fail**
 Run: `cd server && ./node_modules/.bin/vitest run test/coord-abandon.test.ts` (`timeout: 600000`) → FAIL.
 
-- [ ] **Step 3: Teach `CoordStore.closeRun` the direct edge** (D-B4-8) — `store.ts:310-311`:
+- [ ] **Step 3: Teach `CoordStore.closeRun` the direct edge** (D-281) — `store.ts:310-311`:
 
 ```ts
-      // `viaClosing: false` is the ABANDON of a `planned` run (D-B4-8).
+      // `viaClosing: false` is the ABANDON of a `planned` run (D-281).
       // `RUN_TRANSITIONS.planned` has a `failed` edge and deliberately no
       // `closing` one (`shared/api.ts:1720-1739`), and that table is NOT
       // edited here — clients read it as a refusal vocabulary. So the hop is
@@ -1224,9 +1224,9 @@ Run: `cd server && ./node_modules/.bin/vitest run test/coord-abandon.test.ts` (`
       }
 ```
 
-Both existing call sites pass `viaClosing` explicitly — no default (the D-B4-6 argument, applied to the second parameter this build adds).
+Both existing call sites pass `viaClosing` explicitly — no default (the D-279 argument, applied to the second parameter this build adds).
 
-- [ ] **Step 4: Add the abandon arm to `closeRun`** (`close.ts`). **Order matters and is the whole point** (D-46/D-48/D-B4-17). Replace `close.ts:60-63`'s head with the following, and **delete the now-duplicate `const b` at `:85`** — the ordinary path uses the hoisted one:
+- [ ] **Step 4: Add the abandon arm to `closeRun`** (`close.ts`). **Order matters and is the whole point** (D-46/D-48/D-290). Replace `close.ts:60-63`'s head with the following, and **delete the now-duplicate `const b` at `:85`** — the ordinary path uses the hoisted one:
 
 ```ts
 export async function closeRun(deps: CloseRunDeps, id: number, body: unknown,
@@ -1251,7 +1251,7 @@ export async function closeRun(deps: CloseRunDeps, id: number, body: unknown,
 
   if (abandon) {
     /**
-     * THE OPERATOR ABANDON, as ONE contiguous arm (D-B4-17). It returns; it
+     * THE OPERATOR ABANDON, as ONE contiguous arm (D-290). It returns; it
      * never falls through into the ordinary close below.
      *
      * What is skipped is skipped BY CONSTRUCTION, not by four flags threaded
@@ -1262,13 +1262,13 @@ export async function closeRun(deps: CloseRunDeps, id: number, body: unknown,
      *   - the fingerprint validation and its derivations (`:85-102`): an
      *     abandon carries no claim, so `handoffCommit`/`final`/`state`/`archive`
      *     are `null`/`false`/`'failed'`/`false` here and are not read from a
-     *     body at all (D-B4-1);
+     *     body at all (D-274);
      *   - `verifyDone` (step 1): D-49's own reasoning, reached from a second
      *     door — there is no done-claim to re-measure;
-     *   - the `.prhistory` fold (step 2, D-B4-2): an unreadable ledger must not
+     *   - the `.prhistory` fold (step 2, D-275): an unreadable ledger must not
      *     disable the control that exists for a broken box;
      *   - `wsArchive` (step 3): a release destroys nothing and this arm has no
-     *     archive branch to reach (D-B4-7 closes the other half at the route).
+     *     archive branch to reach (D-280 closes the other half at the route).
      * Each of those is pinned by a negative test in `coord-abandon.test.ts`,
      * and each is true because the call is absent, not because a guard skipped
      * it.
@@ -1298,9 +1298,9 @@ export async function closeRun(deps: CloseRunDeps, id: number, body: unknown,
     …unchanged `not-dispatched` refusal (`:64-68`)…
 ```
 
-The ordinary tail below is otherwise **untouched**, with exactly two edits: `causedBy` replaces the hardcoded `'coordinator'` in the `coord.closeRun({…})` call (`:172`, D-B4-3), and that same call gains `viaClosing: true` (D-B4-8). `HANDOFF_SHA.test(claim.handoffCommit)` at `:171` is reached only on the ordinary path, where `claim` exists.
+The ordinary tail below is otherwise **untouched**, with exactly two edits: `causedBy` replaces the hardcoded `'coordinator'` in the `coord.closeRun({…})` call (`:172`, D-276), and that same call gains `viaClosing: true` (D-281). `HANDOFF_SHA.test(claim.handoffCommit)` at `:171` is reached only on the ordinary path, where `claim` exists.
 
-- [ ] **Step 5: Wire the route** (ungated, operator surface), constructing its own body (D-B4-7):
+- [ ] **Step 5: Wire the route** (ungated, operator surface), constructing its own body (D-280):
 
 ```ts
   /**
@@ -1309,7 +1309,7 @@ The ordinary tail below is otherwise **untouched**, with exactly two edits: `cau
    * union→status map (`sendCloseOutcome`): increment 4's split is not
    * duplicated for a second caller.
    *
-   * THE REQUEST BODY IS NEVER READ (D-B4-7). `{intent:'abandon'}` is
+   * THE REQUEST BODY IS NEVER READ (D-280). `{intent:'abandon'}` is
    * constructed here, so `archive` is not a field a caller can send — "the
    * phone can abandon; the phone can never archive" is structural rather than
    * a validation a later edit can loosen. Destruction keeps its existing
@@ -1329,7 +1329,7 @@ The ordinary tail below is otherwise **untouched**, with exactly two edits: `cau
   });
 ```
 
-Update the existing close route's call (`routes.ts:757`) to pass `'coordinator'` explicitly, and extend the D-B4-9 gate scanner's exclusion list to name `/api/runs/:id/abandon` too, with its reason.
+Update the existing close route's call (`routes.ts:757`) to pass `'coordinator'` explicitly, and extend the D-282 gate scanner's exclusion list to name `/api/runs/:id/abandon` too, with its reason.
 
 - [ ] **Step 6: Run the gates**
 Run: `cd server && ./node_modules/.bin/vitest run test/coord-abandon.test.ts test/run-routes.test.ts test/coord-decide.test.ts test/coord-store.test.ts test/mail-sweep.test.ts` (`timeout: 600000`) → PASS.
@@ -1461,7 +1461,7 @@ it('renders 409 bad-transition as "this run already closed", using `from`', …)
 it('renders 404 as "that run is gone — the board will catch up"', …);
 it('renders 501 as "the fleet host needs the newer ccd"', …);
 it('renders a 502\'s stderr verbatim and leaves the sheet open to retry', …);
-it('the run row never nests a button inside a button', …);            // D-B4-14
+it('the run row never nests a button inside a button', …);            // D-287
 it('an inert row (no session) still offers abandon — that is the wedge it exists for', …);
 ```
 
@@ -1469,7 +1469,7 @@ it('an inert row (no session) still offers abandon — that is the wedge it exis
 
 - [ ] **Step 3: Write the sheet** on `Sheet`, not `QuickConfirm` — it needs per-refusal copy and must stay open on failure, which `QuickConfirm`'s close-on-confirm shape forbids. `ABANDON_COPY` is a total `Record`, its `unknown` member covering a refusal this build has never heard of.
 
-- [ ] **Step 4: Add the row control** as a **sibling** of `.run-open` inside the `<li>` (D-B4-14), `aria-label={`Abandon run ${run.id}`}`, `var(--tap-min)`.
+- [ ] **Step 4: Add the row control** as a **sibling** of `.run-open` inside the `<li>` (D-287), `aria-label={`Abandon run ${run.id}`}`, `var(--tap-min)`.
 
 - [ ] **Step 5: Refresh on success** — call the screen's existing `loadCold()` so the run moves into Finished; the live frame's own vanish-diff (`RunsScreen.tsx:208-220`) also fires, and both landing is harmless because they feed separate slices.
 
@@ -1498,7 +1498,7 @@ Spec §4.4. `POST /api/runs` is the coordinator's own route and demands a live c
 ```ts
 it('collects slug, title and project, and refuses an empty slug', …);
 it('names the account it will place into BEFORE the tap (the projection, not a guess)', …);
-it('refuses with copy when the projection is null: nothing is placeable', …);   // D-B4-11
+it('refuses with copy when the projection is null: nothing is placeable', …);   // D-284
 it('renders the in-flight state on the session create — the one long call', …);
 it('navigates to the new session on success', …);
 it('says in one line that the run row arrives later, from the coordinator', …);
@@ -1660,7 +1660,7 @@ const truncate = (s: string, max: number): { text: string; truncatedBytes: numbe
 
 - [ ] **Step 2: Run both and watch them fail.** → FAIL.
 
-- [ ] **Step 3: Add the field**, with the three-state docstring verbatim from the spec, plus D-B4-12's char-cap/byte-report note at the `truncate` call site.
+- [ ] **Step 3: Add the field**, with the three-state docstring verbatim from the spec, plus D-285's char-cap/byte-report note at the `truncate` call site.
 
 - [ ] **Step 4: Render the cue** in `GenericToolCard`'s expanded body (`ToolCard.tsx:244-263`) and in `AskOutcome`'s well, through one small helper so the sentence has one home. Still, no glow: a truncation note is a record.
 
@@ -1745,7 +1745,7 @@ Spec §2.3's table. The ask card needs **no** new `ChatItem` kind. `Answer` does
 ```ts
 export type AskState = 'awaiting' | 'unanswered' | 'answered';
 export interface ChatListProps { …; askPending?: boolean; onAnswer?: () => void }
-export interface DialogSheetProps { …; raise?: number }   // D-B4-13
+export interface DialogSheetProps { …; raise?: number }   // D-286
 export const ASK_WORD: Record<AskState, string>;
 export const ASK_GLYPH: Record<AskState, string>;
 ```
@@ -1758,7 +1758,7 @@ it('unanswered: no tool_result and NO live envelope → word and glyph, and NO c
 it('a dead session does not beg forever: the row reads unanswered, never "waiting for you"', …);
 it('answered/declined renders exactly as it does today', …);
 it('Answer does not POST anything — it raises the sheet', …);           // negative pin
-it('Answer un-dismisses a sheet the reader had waved away', …);          // D-B4-13
+it('Answer un-dismisses a sheet the reader had waved away', …);          // D-286
 it('the live cue is permitted ONLY in awaiting: .ask-live is the one glow-bearing rule', …);
 it('the control clears var(--tap-min)', …);
 it('dialogs stay screen-hosted — no dialog control is rendered in the transcript', …);
@@ -1768,7 +1768,7 @@ it('dialogs stay screen-hosted — no dialog control is rendered in the transcri
 
 - [ ] **Step 3: Derive the axis** in `AskCard` from the two sources at once (`result` and `askPending`), through total `Record` tables — never a raw index, `runWords.ts`'s stated rule one directory over. `Answer` is a plain `<button>` calling `onAnswer`, nothing else; its `title` says it opens the answer sheet.
 
-- [ ] **Step 4: Thread the two props** — `SessionScreen` computes `askPending = ask !== null || dialog !== null` and holds `const [raise, setRaise] = useState(0)`; `ChatList`/`ChatListInner`/`ChatItemView`/`ToolCard` pass both down, following `onRetry`/`onDiscard`'s existing drill exactly. `DialogSheet` gains `raise?: number` and `useEffect(() => { if (raise) setDismissedKey(null); }, [raise])`, with D-B4-13's reasoning at the prop.
+- [ ] **Step 4: Thread the two props** — `SessionScreen` computes `askPending = ask !== null || dialog !== null` and holds `const [raise, setRaise] = useState(0)`; `ChatList`/`ChatListInner`/`ChatItemView`/`ToolCard` pass both down, following `onRetry`/`onDiscard`'s existing drill exactly. `DialogSheet` gains `raise?: number` and `useEffect(() => { if (raise) setDismissedKey(null); }, [raise])`, with D-286's reasoning at the prop.
 
 - [ ] **Step 5: Style.** `.ask-live` is the one rule permitted a live cue and is named BY NAME in the no-glow scan's exclusion, with its own comment — the `MAIL_REJECT_CODES`-excludes-`undeliverable` idiom. `.ask-answer` and every other `.ask-*`/`.mail-card-*` rule go still.
 
@@ -1808,9 +1808,9 @@ git commit -m "feat(pwa): a question the agent is blocked on stops rendering as 
 | §3.2 the settle route, one terminality point, refusals, all-or-nothing | Tasks 2, 3 |
 | §3.3 the tally's meaning, em dash, two-cue discipline | Task 4 |
 | §3.4 edges (closing leaves items, `blockedBy` unused, wave 1 reads `—`) | Tasks 3, 5 |
-| §4.1 the authorization ruling and its honesty clause | Task 7 (D-B4-9) |
+| §4.1 the authorization ruling and its honesty clause | Task 7 (D-282) |
 | §4.2 the verb, the grant **and its enrolment**, the argv, the route, the frame, the client rules | Tasks 6, 7, 8, 11 |
-| §4.3 abandon: D-B4-1/2/3/17, the `planned` table, never archive, the refusals | Tasks 9, 12 |
+| §4.3 abandon: D-274 (was D-B4-1), D-275 (was D-B4-2), D-276 (was D-B4-3), D-290 (was D-B4-17), the `planned` table, never archive, the refusals | Tasks 9, 12 |
 | §4.4 start-a-program as composition; ledger not validated; pause warning | Task 13 |
 | §5 non-goals | none added: no thinking blocks, no history route, no terminal fidelity, no `ai-title`, no second answer path, no PWA compose/ack, no `blockedBy` semantics, no `RUN_TRANSITIONS` edit, no new PWA auth |
 | §6 testing, rollout, failure modes, design gates | Tasks 5, 10, 14, 19 |
@@ -1836,15 +1836,15 @@ Overlaps, named so a merge conflict is expected rather than discovered: `shared/
 **Wave 1 brief sketch** (≈2.4 KB — fits the 8 KB cap with room for the ledger excerpt):
 
 > Program `build4`, wave 1 of 4 — **Coordination: the writer.** Commit on THIS WORKSPACE'S OWN branch — never create or switch to a separate feature branch (`ws-add` already put you on it; the done-fingerprint re-measures that exact branch, and nothing else). Read `docs/superpowers/plans/2026-08-11-build4-conversation-and-controls.md` on `main`, Global Constraints and Tasks 1–5, and `docs/superpowers/specs/2026-08-11-build4-conversation-and-controls-design.md` §3 for the why. Implement Tasks 1–5 in order, red-first, committing at each task's own commit step.
-> Deliver: `items?: string[]` on the dispatch body (validated ≤32 entries, ≤200 UTF-8 bytes each, `bad-request` otherwise); `CoordStore.dispatchRun` folding `markDispatched`/`setClearedAt`/`advance`/the item INSERTs into ONE transaction (D-B4-4); `setWorkItemState` returning a typed result with the terminality guard in the `UPDATE`'s own `WHERE` and scoped to the run (D-B4-5); `CoordStore.settleItems` — the all-or-nothing batch, in ONE `tx`, refusing in a pre-pass BEFORE any write so no sentinel is needed (D-B4-16); `POST /api/runs/:id/items` (box-token gated; `coord/items.ts` is a pure validate-and-map L1 decision that imports neither `./db.js` nor `node:sqlite`; refusals `unknown-item` 404 / `item-terminal` 409, both entered in `RUN_REFUSE_CODE_MAP`); `itemTallyLabel` rendering an em dash at `total === 0`; the coordinator skill documenting `items` at dispatch and the settle call **after** `POST .../advance` answers ok.
+> Deliver: `items?: string[]` on the dispatch body (validated ≤32 entries, ≤200 UTF-8 bytes each, `bad-request` otherwise); `CoordStore.dispatchRun` folding `markDispatched`/`setClearedAt`/`advance`/the item INSERTs into ONE transaction (D-277); `setWorkItemState` returning a typed result with the terminality guard in the `UPDATE`'s own `WHERE` and scoped to the run (D-278); `CoordStore.settleItems` — the all-or-nothing batch, in ONE `tx`, refusing in a pre-pass BEFORE any write so no sentinel is needed (D-289); `POST /api/runs/:id/items` (box-token gated; `coord/items.ts` is a pure validate-and-map L1 decision that imports neither `./db.js` nor `node:sqlite`; refusals `unknown-item` 404 / `item-terminal` 409, both entered in `RUN_REFUSE_CODE_MAP`); `itemTallyLabel` rendering an em dash at `total === 0`; the coordinator skill documenting `items` at dispatch and the settle call **after** `POST .../advance` answers ok.
 > Do not: teach the mail bus to route on `subject`; add an item to a dispatched run; touch `RUN_TRANSITIONS`; write `blockedBy` or `doneFingerprint`; parse the brief; open a transaction outside `CoordStore`.
 > Gates: full server and pwa suites foreground, real counts; the Task 5 mutation table with every row killed by a named test (the `WHERE`-guard rows are killed by DIRECT `setWorkItemState` calls — `settleItems` refuses earlier and cannot discriminate them); `single-definition` extended with the terminal-trio guard and the L1-holds-no-handle scanner.
 > Handoff: your last commit is the handoff. Mail `wave-done` with `handoffCommit === branchTip` and the fingerprint. This wave's own tally will read `—` — that is expected (spec §3.4), not a defect.
 
 **Wave 2 brief sketch** (≈2.9 KB):
 
-> Program `build4`, wave 2 of 4 — **Fleet Mutation + Coordination: the run-control substrate.** Commit on THIS WORKSPACE'S OWN branch — never a separate feature branch (same rule as wave 1's brief; the done-fingerprint only ever re-measures the workspace branch). Plan doc as above, Tasks 6–10; spec §4.1–§4.3. Read D-B4-10 and D-B4-17 before writing any code: both are corrections to an earlier draft that did not compile.
-> Deliver: `ccd coord-pause --state on|off` (touch/rm `$REG/coordinator-paused`, idempotent, `die` on either failed write — `cmd_ws_hold`/`cmd_ws_release` are the shape); the verb in `cmd_caps`, the dispatch arm, the usage line; `['coord-pause','--state']` in `EXEC_WHITELIST.ccd` **and `'coord-pause': '--state'` in `REQUIRED_VERB_FLAG`** — the grant without the enrolment enforces nothing (`isExecAllowed` is prefix-matching), so also add `agent/test/types/bypasses/g9-coord-pause-without-state.ts` + its `EXPECTED` entry + the runtime-audit case; `CCD_ARGV.coordPause` (+ its `SAMPLES` entry); `POST /api/coord/pause` — **ungated, deliberately** (D-B4-9), with the source-scanner test naming it as an exclusion; `RegistryRead.listed:true` gains `names` and `tick()` calls `emitCoord(...)` **above** the `!listed` early return so an unlistable registry reports `unmeasurable` on the tick it happens (D-B4-10); `MarkerState`/`CoordStatus`/`{type:'coord'}`, byte-equality guarded, cold-started after `runs`; `POST /api/runs/:id/abandon` calling the SAME `closeRun` with the abandon as ONE contiguous arm derived immediately after `if (!run) return` and returning from inside it (D-B4-17) — D-B4-1 (no fingerprint; `:85-102` is not on that path), D-B4-2 (no `.prhistory`), D-B4-3 (`causedBy:'operator'`, no default), D-B4-8 (`viaClosing:false` for `planned → failed`), D-B4-7 (the route never reads `req.body`).
+> Program `build4`, wave 2 of 4 — **Fleet Mutation + Coordination: the run-control substrate.** Commit on THIS WORKSPACE'S OWN branch — never a separate feature branch (same rule as wave 1's brief; the done-fingerprint only ever re-measures the workspace branch). Plan doc as above, Tasks 6–10; spec §4.1–§4.3. Read D-283 and D-290 before writing any code: both are corrections to an earlier draft that did not compile.
+> Deliver: `ccd coord-pause --state on|off` (touch/rm `$REG/coordinator-paused`, idempotent, `die` on either failed write — `cmd_ws_hold`/`cmd_ws_release` are the shape); the verb in `cmd_caps`, the dispatch arm, the usage line; `['coord-pause','--state']` in `EXEC_WHITELIST.ccd` **and `'coord-pause': '--state'` in `REQUIRED_VERB_FLAG`** — the grant without the enrolment enforces nothing (`isExecAllowed` is prefix-matching), so also add `agent/test/types/bypasses/g9-coord-pause-without-state.ts` + its `EXPECTED` entry + the runtime-audit case; `CCD_ARGV.coordPause` (+ its `SAMPLES` entry); `POST /api/coord/pause` — **ungated, deliberately** (D-282), with the source-scanner test naming it as an exclusion; `RegistryRead.listed:true` gains `names` and `tick()` calls `emitCoord(...)` **above** the `!listed` early return so an unlistable registry reports `unmeasurable` on the tick it happens (D-283); `MarkerState`/`CoordStatus`/`{type:'coord'}`, byte-equality guarded, cold-started after `runs`; `POST /api/runs/:id/abandon` calling the SAME `closeRun` with the abandon as ONE contiguous arm derived immediately after `if (!run) return` and returning from inside it (D-290) — D-274 (no fingerprint; `:85-102` is not on that path), D-275 (no `.prhistory`), D-276 (`causedBy:'operator'`, no default), D-281 (`viaClosing:false` for `planned → failed`), D-280 (the route never reads `req.body`).
 > Do not: edit `RUN_TRANSITIONS`; add a second ccd verb; import `MAIL_DISABLED_MARKER` into `watch.ts` (it already has its own, deliberately — `rundefs.ts:33-44`); let the abandon path reach `wsArchive`, `verifyDone`, `prhistory-unreadable` or the fingerprint validation — all four are pinned by negative tests.
 > Rollout: this wave is **agent-first**. Say so in the wave-done mail: `ccd` + whitelist to the fleet host before the server, or the route 502s `forbidden` for every tap.
 > Gates: server + **agent** + pwa suites foreground; Task 10's mutation table, whose two whitelist rows are killed by the module-load `auditExecWhitelist()` throw and by `g9`'s TS2322 — not by `whitelist-subset`'s assertions, which cannot see a narrowed prefix.
@@ -1852,13 +1852,13 @@ Overlaps, named so a merge conflict is expected rather than discovered: `shared/
 **Wave 3 brief sketch** (≈2.0 KB):
 
 > Program `build4`, wave 3 of 4 — **PWA: the console's hands.** Commit on THIS WORKSPACE'S OWN branch — never a separate feature branch. Plan Tasks 11–14; spec §4.2's client rules, §4.3, §4.4. Wave 2's wire is on `main`; consume it, author nothing server-side.
-> Deliver: `coord`/`coordFrameSeen` on the fleet store with a shape-checked `coord` arm; `coordWords.ts`'s two parallel tables and the total `markerState` door; `CoordBanner` on `/runs` only — renders **nothing** before the first frame, two cues always, `pausing…`/`resuming…` with **no optimism**, settling only on the next frame and rendering `unconfirmed — check /runs` after `COORD_CONFIRM_MS`, with 501 and 502 copy; `AbandonSheet` — two taps, naming the run and its workspace, per-refusal copy from a total map, **no archive control anywhere**, and the row control as a sibling of `.run-open` (D-B4-14); `StartProgramSheet` composing `api.projects` + `useProjectedHome` + `createSession` + `prompt`, warning-not-blocking when `coord.pause` is `set`, refusing when the projection is `null` (D-B4-11), and never calling `POST /api/runs`.
+> Deliver: `coord`/`coordFrameSeen` on the fleet store with a shape-checked `coord` arm; `coordWords.ts`'s two parallel tables and the total `markerState` door; `CoordBanner` on `/runs` only — renders **nothing** before the first frame, two cues always, `pausing…`/`resuming…` with **no optimism**, settling only on the next frame and rendering `unconfirmed — check /runs` after `COORD_CONFIRM_MS`, with 501 and 502 copy; `AbandonSheet` — two taps, naming the run and its workspace, per-refusal copy from a total map, **no archive control anywhere**, and the row control as a sibling of `.run-open` (D-287); `StartProgramSheet` composing `api.projects` + `useProjectedHome` + `createSession` + `prompt`, warning-not-blocking when `coord.pause` is `set`, refusing when the projection is `null` (D-284), and never calling `POST /api/runs`.
 > Do not: add a server route; poll for the run row; claim the ledger exists.
 > Gates: design gates as tests — one stylesheet block per surface, tap floor scraped AND rendered, no-glow over `.coord-*`/`.run-abandon`/`.program-start-*`, the door still renders at zero runs, contrast green.
 
 **Wave 4 brief sketch** (≈2.1 KB):
 
 > Program `build4`, wave 4 of 4 — **Session Conversation: the transcript.** Commit on THIS WORKSPACE'S OWN branch — never a separate feature branch. Plan Tasks 15–19; spec §2 in full.
-> Deliver: `MAIL_ENVELOPE_FENCE` + `parseMailEnvelope` in `shared/` returning `{ok:true}` | `not-mail` | `malformed`+`at` — never a bare null — with `coord/envelope.ts` importing the constant so the fence has ONE definition and a round-trip test proving `parse(render(x))` across the artifact-bearing, artifact-free, run-less, long-fence and empty-body shapes; `truncatedBytes?: number` on `tool_use`/`tool_result` with the three documented states, computed in `parse.ts` (D-B4-12) and rendered as a cue only at `>0`; the single `{kind:'mail'}` `ChatItem`, DERIVED at render time from the event already in the store (nothing minted into `s.events`, so the revival discipline needs no new clause), rendering a card with no ack and no reply; the ask card's three-state axis with `Answer` raising the existing sheet through a `raise` nonce (D-B4-13) and never sending anything itself.
+> Deliver: `MAIL_ENVELOPE_FENCE` + `parseMailEnvelope` in `shared/` returning `{ok:true}` | `not-mail` | `malformed`+`at` — never a bare null — with `coord/envelope.ts` importing the constant so the fence has ONE definition and a round-trip test proving `parse(render(x))` across the artifact-bearing, artifact-free, run-less, long-fence and empty-body shapes; `truncatedBytes?: number` on `tool_use`/`tool_result` with the three documented states, computed in `parse.ts` (D-285) and rendered as a cue only at `>0`; the single `{kind:'mail'}` `ChatItem`, DERIVED at render time from the event already in the store (nothing minted into `s.events`, so the revival discipline needs no new clause), rendering a card with no ack and no reply; the ask card's three-state axis with `Answer` raising the existing sheet through a `raise` nonce (D-286) and never sending anything itself.
 > Do not: add a session frame or a `ChatEvent` kind; touch `inject/ask.ts` or `inject/send.ts`; add a second way to answer; render a `malformed` envelope as a card; give a live cue to anything but `.ask-live`.
 > Gates: Task 19's negative pins and mutation table; `applySessionMsg`'s `satisfies never` arm untouched; `FLEET_PROTO` unchanged; the README operator section; then the final close with `final: true`.

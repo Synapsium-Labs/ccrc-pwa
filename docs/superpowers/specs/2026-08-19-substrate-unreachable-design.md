@@ -1,14 +1,14 @@
 # `substrate-unreachable` — surviving a tmux the fleet cannot talk to
 
 **Status:** design **v2**, awaiting operator review.
-**Motivating deviations:** D-B8-12, D-B8-13 (`docs/superpowers/plans/2026-08-15-fleet-robustness-build8.md`).
+**Motivating deviations:** D-308 (was D-B8-12), D-309 (was D-B8-13) (`docs/superpowers/plans/2026-08-15-fleet-robustness-build8.md`).
 **Decided out of scope by the operator (2026-08-19):** pinning tmux. Unattended upgrades stay on and
 `tmux` stays unheld, so the code carries the whole mitigation rather than the host preventing the event.
 
 **What changed since v1:** all three of v1's open questions were answered — two of them *against* v1's
 own proposals — by an adversarial review plus live measurement (2026-08-19/20), and the review's
 dominant finding was not in the spec at all: the server's `Tmux.hasSession` carried the identical
-collapse. That half has since **shipped** (D-B8-13, PR #66): `classifyHasSession` →
+collapse. That half has since **shipped** (D-309, PR #66): `classifyHasSession` →
 `live|gone|unknown` with the message table in a shared fixture driving both the bash and TS twins,
 `archiveSafety` failing shut, the mail sweep distinguishing gone from unknown. This spec is the
 remaining half: the supervise loop, the registry marker, the wire axis, and the PWA.
@@ -16,7 +16,7 @@ remaining half: the supervise loop, the registry marker, the wire axis, and the 
 ## The problem, stated as a sequence
 
 `cmd_supervise`'s loop is `while _alive "$id"; do …; done` followed by `exit 1` (`ccd:8613-8622`).
-D-B8-12 gave `_alive` an honest three-valued source (`_session_verdict`, `ccd:328` → `live|gone|unknown`)
+D-308 gave `_alive` an honest three-valued source (`_session_verdict`, `ccd:328` → `live|gone|unknown`)
 and fixed the destructive callers, but deliberately left `_alive` collapsing `unknown` into "not
 alive" for its other callers — including this loop. So today:
 
@@ -77,7 +77,7 @@ unhandled. They ship together or the design does not work.
   magnitude of headroom). A probe killed by its deadline is verdict `unknown` with a **synthesized**
   reason — `tmux did not answer within 8s` — because `timeout` kills the child before tmux prints
   anything, and an empty marker reason is the one shape a maintainer can do nothing with (the same
-  rule D-B8-13's classifier already enforces server-side: `detail` is never empty).
+  rule D-309's classifier already enforces server-side: `detail` is never empty).
 - **Backoff:** on consecutive `unknown`, the tick interval rises 5 s → 30 s (after three consecutive
   `unknown` ticks) and holds at 30 s until the first `live`/`gone`.
 - **The heartbeat arithmetic is part of the contract, not an implementation detail.** The loop stamps
@@ -186,7 +186,7 @@ Three requirements, in priority order:
 
 **Destructive affordances are disabled while the axis is set.** Restart, stop, swap, archive on a row
 whose `substrate` is non-null are offers to act on a session nobody can see — the same fail-shut
-polarity D-B8-12/13 applied at every seam below, carried to the surface the operator actually touches.
+polarity D-308 (was D-B8-12) and D-309 (was D-B8-13) applied at every seam below, carried to the surface the operator actually touches.
 This is also what retires the standing "false dead + ungated Restart button" hazard without a new
 status word: the row may still say dead; the *button* is what must not fire.
 
@@ -239,7 +239,7 @@ path is exercised — but not a substitute for the path existing.
 
 It does not touch `_alive`'s remaining callers beyond the supervise loop, and it does not touch the
 server's three deliberate collapses (`fleet.ts` ×2, `sessionws.ts`) except by giving the PWA the axis
-they were deferred *for* — each carries a D-B8-13 deferral comment (the `fleet.ts` pair names this
+they were deferred *for* — each carries a D-309 deferral comment (the `fleet.ts` pair names this
 spec; `sessionws.ts` defers through "see fleet.ts"), and §3/§4 are the discharge of that debt.
 
 ## Remaining operator decisions
