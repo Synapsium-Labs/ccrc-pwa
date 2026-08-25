@@ -9,10 +9,14 @@
 // collide, so a stale entry cannot quietly mask a new one.
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
+import { execSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { floorFromScan } from '../src/coord/ledger.js';
+import { LEDGER_SEED_GAP } from '../../shared/api.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+const ROOT = path.resolve(here, '..', '..');
 const PLANS = path.resolve(here, '..', '..', 'docs', 'superpowers', 'plans');
 
 /** Plans that predate the one-global-namespace rule and numbered per plan —
@@ -85,5 +89,60 @@ describe('the deviation-refs scanner (D13 — the bb47c9e shape)', () => {
     for (const f of LEGACY_PER_PLAN_LEDGERS) {
       expect(all.has(f), `${f} is grandfathered but gone — remove its entry`).toBe(true);
     }
+  });
+});
+
+// D13's other exposure: `sweepLedgerFloor` feeds docs/superpowers/{plans,specs}
+// of each registry project to `floorFromScan`, and THIS repo is one of those
+// projects — its own tracked docs are live seed input on the fleet. A fixture
+// ref written contiguously (a 'D-' + '<n>' token with n far above the ledger)
+// anywhere the scan can see would seed the first live floor thousands of
+// numbers high, PERMANENTLY: the floor only ever rises. Fixture refs are
+// therefore spelled split in tracked text — `D-${2611}` in test source,
+// prefix-less numbers in plan prose — and this scan is the refusal that keeps
+// it that way. It runs the REAL floorFromScan over the WHOLE tracked tree
+// (163 ms measured, so no need to scope down to the sweep's own {plans,specs}
+// classes — the wider net also guards test/source fixtures, which poison the
+// hand-allocation grep the ledger convention prescribes).
+describe('the floor seed reads THIS tree (D13 — fixtures must not poison it)', () => {
+  const trackedFiles = (): { path: string; text: string }[] =>
+    execSync('git ls-files -z', { cwd: ROOT, maxBuffer: 1 << 22 })
+      .toString('utf8').split('\0').filter(Boolean).sort()
+      .map((f) => ({ path: f, text: readFileSync(path.join(ROOT, f), 'utf8') }));
+
+  // Definition-SHAPED line prefixes, deliberately looser than ENTRY: the
+  // build-9b ledger spells its entries `- **D-211** (Task 3): …` — colon, no
+  // em-dash — which ENTRY cannot see (a collision-scan blindness noted where
+  // this suite landed, not fixed here). For a MAX the prefix alone is enough:
+  // it reads the number a heading/bullet line DEFINES, whatever its subject
+  // punctuation.
+  const DEFINED = /^(?:#{2,4} |- \*\*)D-(\d+)\b/;
+  const definedMax = (): number => {
+    let max = 0;
+    for (const f of readdirSync(PLANS).filter((n) => n.endsWith('.md'))) {
+      if (LEGACY_PER_PLAN_LEDGERS.has(f)) continue;
+      for (const line of readFileSync(path.join(PLANS, f), 'utf8').split('\n')) {
+        const m = DEFINED.exec(line);
+        if (m) max = Math.max(max, Number(m[1]!));
+      }
+    }
+    return max;
+  };
+
+  it('floorFromScan over the real tracked tree seeds from the ledger high-water, not a fixture', () => {
+    // The expectation is DERIVED, not hand-kept: the high-water is the max n
+    // across the plans' own Deviations definition lines (`definedMax`), so
+    // this pin moves with each allocation on its own. The floor assertion
+    // therefore also insists every tracked ref is LEDGERED — a source ref to
+    // an allocated-but-unentered number reds here until its entry lands,
+    // which is the direction the ledger discipline points anyway.
+    const highWater = definedMax();
+    expect(highWater, 'the definition-derived high-water went vacuous').toBeGreaterThanOrEqual(215);
+    const scan = floorFromScan(trackedFiles());
+    expect(scan, 'the tree seeds — an empty scan here means the docs moved').not.toBeNull();
+    expect(scan!.floor,
+      `a tracked file names a global D-ref above the ledger high-water D-${highWater} ` +
+      `(${scan!.evidence}) — spell a fixture SPLIT ('D-' + '9876'), never contiguous, ` +
+      `or the first live seed lands there forever`).toBe(highWater + LEDGER_SEED_GAP);
   });
 });

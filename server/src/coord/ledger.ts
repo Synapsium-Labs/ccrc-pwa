@@ -64,7 +64,9 @@ export interface LedgerFloorScan {
 
 // The two forms, and they CANNOT cross-match: after 'D-' the global form
 // requires a digit, so 'D-B4-400' contributes nothing to GLOBAL_RE (the
-// 'B' blocks it) and 'D-400' contains no 'B' for LEGACY_RE. Global is
+// 'B' blocks it) and the plain global token — 'D-' + '400', spelled split
+// here because deviation-refs.test.ts scans this repo's own tracked text
+// with GLOBAL_RE — contains no 'B' for LEGACY_RE. Global is
 // bounded at 5 digits WITH a trailing \b, so a 6-digit token matches at NO
 // length (every prefix ends digit-before-digit) rather than truncating.
 const GLOBAL_RE = /\bD-(\d{1,5})\b/g;

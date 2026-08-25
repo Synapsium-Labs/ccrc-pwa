@@ -53,9 +53,14 @@ allocates from **D-211** — verify at execution time by sweeping EVERY remote r
 (`for r in $(git for-each-ref --format='%(refname)' refs/remotes/origin); do git grep
 -oh 'D-[0-9]\{1,4\}' "$r" -- . 2>/dev/null; done | sed 's/D-//' | sort -n | tail -1`),
 never `origin/main` alone — and FILTER the result: this plan's own test fixtures
-(D-261, D-400, D-999, D-1234, D-2611) and its prose mentions match the naive regex,
+(261, 400, 999, 1234, 2611 — written here WITHOUT their prefix, because this very
+sentence is inside a file the live floor sweep scans) would match the naive regex,
 which is itself a demonstration of why D13's allocator exists. Real allocations are
 contiguous from the ledger's history; a lone number far above the run is a fixture.
+Post-review, every fixture in tracked text is spelled split (`'D-' + '2611'` /
+`` `D-${2611}` ``) and `deviation-refs.test.ts` pins the whole tracked tree's
+`floorFromScan` max to the ledger's own high-water, so a contiguous fixture reds
+at the diff instead of poisoning the first live seed.
 Once Task 20 lands and the floor seeds, allocation goes through
 `POST /api/ledger/deviations` and hand-allocation stops — this plan is the last one
 that allocates by sweep.
@@ -3113,7 +3118,9 @@ side reds the fixture's compile.
 
   // The two forms, and they CANNOT cross-match: after 'D-' the global form
   // requires a digit, so 'D-B4-400' contributes nothing to GLOBAL_RE (the
-  // 'B' blocks it) and 'D-400' contains no 'B' for LEGACY_RE. Global is
+  // 'B' blocks it) and the plain global token ('D-' + '400', split so this
+  // comment stays out of the tree's own floor scan) contains no 'B' for
+  // LEGACY_RE. Global is
   // bounded at 5 digits WITH a trailing \b, so a 6-digit token matches at NO
   // length (every prefix ends digit-before-digit) rather than truncating.
   const GLOBAL_RE = /\bD-(\d{1,5})\b/g;
@@ -5644,7 +5651,7 @@ describe('sweepLedgerReconcile', () => {
   it('allocated -> landed when the number appears in a PLAN of the main checkout', async () => {
     const h = fixture();
     await seedAndAllocate(h, 2);                          // 261, 262
-    h.plantDoc('demo', 'plans', '2026-08-24-plan.md', '### D-261 — the seam, landed');
+    h.plantDoc('demo', 'plans', '2026-08-24-plan.md', `### D-${261} — the seam, landed`);
     at(NOW + 1000);
     await h.watcher.sweepLedgerReconcile();
     const rows = h.coord.ledgerAllocations('demo');
@@ -5653,10 +5660,10 @@ describe('sweepLedgerReconcile', () => {
     expect(rows[1]).toMatchObject({ n: 262, state: 'allocated' });
   });
 
-  it('D-261 does not land D-2611 — the boundary is a word boundary', async () => {
+  it(`D-${261} does not land D-${2611} — the boundary is a word boundary`, async () => {
     const h = fixture();
     await seedAndAllocate(h, 1);                          // 261
-    h.plantDoc('demo', 'plans', 'p.md', 'only D-2611 appears here');
+    h.plantDoc('demo', 'plans', 'p.md', `only D-${2611} appears here`);
     at(NOW + 1000);
     await h.watcher.sweepLedgerReconcile();
     expect(h.coord.ledgerAllocations('demo')[0]!.state).toBe('allocated');
@@ -5668,7 +5675,7 @@ describe('sweepLedgerReconcile', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     at(NOW + 8 * 24 * 3_600_000);
     await h.watcher.sweepLedgerReconcile();
-    expect(warn.mock.calls.flat().join('\n')).toContain('D-261');
+    expect(warn.mock.calls.flat().join('\n')).toContain(`D-${261}`);
     expect(h.coord.ledgerAllocations('demo')[0]!.state).toBe('allocated');   // never reclaimed
     const callsAfterFirst = warn.mock.calls.length;
     at(NOW + 8 * 24 * 3_600_000 + 16 * 60_000);
@@ -5681,7 +5688,7 @@ describe('sweepLedgerReconcile', () => {
     await seedAndAllocate(h, 1);
     at(NOW + 1000);
     await h.watcher.sweepLedgerReconcile();
-    h.plantDoc('demo', 'plans', 'p.md', 'D-261');
+    h.plantDoc('demo', 'plans', 'p.md', `D-${261}`);
     at(NOW + 5 * 60_000);
     await h.watcher.sweepLedgerReconcile();               // inside the interval
     expect(h.coord.ledgerAllocations('demo')[0]!.state).toBe('allocated');
@@ -5938,7 +5945,7 @@ describe('LAPSE, NOT DELETE — the invariant, pinned against the raw table', ()
   | 8 | `watch.ts` `renewClaims`: delete the `if (this.lastClaimRenew !== 0 …) return;` gate — no, the gate deletion widens behaviour no test forbids; instead delete the `this.lastClaimRenew = now;` stamp | `claim-sweep.test.ts` | none red — RECORD THIS: the clocks are pinned in the lapse lane only ("own clock" test); the renew stamp is covered by the same shape, and a stamp-less renew lane costs reads, not correctness. Note it in the commit body rather than adding a test that pins cost |
   | 9 | `watch.ts` `sweepLedgerFloor`: change `scan.max + LEDGER_SEED_GAP` to `scan.max` | `ledger-sweep.test.ts` | the seeding test (floor 211 ≠ 261) (1) |
   | 10 | `store.ts` `raiseLedgerFloor`: drop the `WHERE excluded.floor > ledger_floor.floor` clause | `ledger-store.test.ts` + `ledger-sweep.test.ts` | "the floor only ever RISES" in both (2) |
-  | 11 | `watch.ts` `sweepLedgerReconcile`: change `` `\\bD-${a.n}\\b` `` to `` `D-${a.n}` `` | `ledger-sweep.test.ts` | "D-261 does not land D-2611" (1) |
+  | 11 | `watch.ts` `sweepLedgerReconcile`: change `` `\\bD-${a.n}\\b` `` to `` `D-${a.n}` `` | `ledger-sweep.test.ts` | the word-boundary test (261 does not land 2611) (1) |
   | 12 | `store.ts` `markLanded`: drop `AND state = 'allocated'` | `ledger-store.test.ts` | "markLanded stamps … once" (re-stamp assertion) (1) |
 
 - [x] Full-section regression, foreground, timeout ≥ 600000 ms:
@@ -10457,7 +10464,7 @@ touches the allocator's own reading of the tree.
     it('the predicates themselves are live — fixtures assembled to not self-trip', async () => {
       const legacy = ['D-B4', '9'].join('-'); // a real reconciled id, in two pieces
       expect([...`see ${legacy} for the ruling`.matchAll(BARE)].length).toBe(1);
-      expect([...`see D-999 (was ${legacy})`.matchAll(BARE)].length).toBe(0);
+      expect([...`see D-${999} (was ${legacy})`.matchAll(BARE)].length).toBe(0);
       expect([...`(was ${legacy})`.matchAll(ALIAS)][0]?.[1]).toBe(legacy);
     });
   });

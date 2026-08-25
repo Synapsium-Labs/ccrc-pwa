@@ -2,6 +2,12 @@
 // the MAIN checkout, hourly, through the already-granted io reads; the floor
 // only ever rises; reconcile marks allocated -> landed off the plans dir
 // every 15 minutes; stale numbers are REPORTED, never reclaimed.
+//
+// Fixture refs above the real ledger are spelled SPLIT (`D-${2611}`) on
+// purpose — never contiguous. deviation-refs.test.ts runs the real
+// floorFromScan over this repo's own tracked tree (this project is itself a
+// fleet project the sweep scans), and a contiguous big ref here would poison
+// the first live floor seed, permanently: the floor only rises.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import path from 'node:path';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -122,7 +128,7 @@ describe('sweepLedgerReconcile', () => {
   it('allocated -> landed when the number appears in a PLAN of the main checkout', async () => {
     const h = fixture();
     await seedAndAllocate(h, 2);                          // 261, 262
-    h.plantDoc('demo', 'plans', '2026-08-24-plan.md', '### D-261 — the seam, landed');
+    h.plantDoc('demo', 'plans', '2026-08-24-plan.md', `### D-${261} — the seam, landed`);
     at(NOW + 1000);
     await h.watcher.sweepLedgerReconcile();
     const rows = h.coord.ledgerAllocations('demo');
@@ -131,10 +137,10 @@ describe('sweepLedgerReconcile', () => {
     expect(rows[1]).toMatchObject({ n: 262, state: 'allocated' });
   });
 
-  it('D-261 does not land D-2611 — the boundary is a word boundary', async () => {
+  it(`D-${261} does not land D-${2611} — the boundary is a word boundary`, async () => {
     const h = fixture();
     await seedAndAllocate(h, 1);                          // 261
-    h.plantDoc('demo', 'plans', 'p.md', 'only D-2611 appears here');
+    h.plantDoc('demo', 'plans', 'p.md', `only D-${2611} appears here`);
     at(NOW + 1000);
     await h.watcher.sweepLedgerReconcile();
     expect(h.coord.ledgerAllocations('demo')[0]!.state).toBe('allocated');
@@ -146,7 +152,7 @@ describe('sweepLedgerReconcile', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     at(NOW + 8 * 24 * 3_600_000);
     await h.watcher.sweepLedgerReconcile();
-    expect(warn.mock.calls.flat().join('\n')).toContain('D-261');
+    expect(warn.mock.calls.flat().join('\n')).toContain(`D-${261}`);
     expect(h.coord.ledgerAllocations('demo')[0]!.state).toBe('allocated');   // never reclaimed
     const callsAfterFirst = warn.mock.calls.length;
     at(NOW + 8 * 24 * 3_600_000 + 16 * 60_000);
@@ -159,7 +165,7 @@ describe('sweepLedgerReconcile', () => {
     await seedAndAllocate(h, 1);
     at(NOW + 1000);
     await h.watcher.sweepLedgerReconcile();
-    h.plantDoc('demo', 'plans', 'p.md', 'D-261');
+    h.plantDoc('demo', 'plans', 'p.md', `D-${261}`);
     at(NOW + 5 * 60_000);
     await h.watcher.sweepLedgerReconcile();               // inside the interval
     expect(h.coord.ledgerAllocations('demo')[0]!.state).toBe('allocated');
