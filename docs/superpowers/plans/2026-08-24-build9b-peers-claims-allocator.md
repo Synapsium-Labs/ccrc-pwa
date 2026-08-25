@@ -9269,7 +9269,7 @@ measure that mutant explicitly.
 
 **Steps:**
 
-- [ ] **Write the failing HistoryTab test.** Create `pwa/test/history-tab.test.tsx`:
+- [x] **Write the failing HistoryTab test.** Create `pwa/test/history-tab.test.tsx`:
 
   ```tsx
   import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -9388,11 +9388,11 @@ measure that mutant explicitly.
   });
   ```
 
-- [ ] **Run, expect FAIL.** `cd pwa && ./node_modules/.bin/vitest run
+- [x] **Run, expect FAIL.** `cd pwa && ./node_modules/.bin/vitest run
   test/history-tab.test.tsx` — module-load error: `../src/session/HistoryTab` does not
   exist.
 
-- [ ] **Write `pwa/src/session/HistoryTab.tsx`:**
+- [x] **Write `pwa/src/session/HistoryTab.tsx`:**
 
   ```tsx
   // HistoryTab — one session's past tense (Build 9 spec §2 pwa): the
@@ -9524,7 +9524,7 @@ measure that mutant explicitly.
   }
   ```
 
-- [ ] **Wire the header and the screen.** In `pwa/src/session/SessionHeader.tsx`:
+- [x] **Wire the header and the screen.** In `pwa/src/session/SessionHeader.tsx`:
   (1) `SessionHeaderProps` gains, after `onStopSession` (line 42):
 
   ```ts
@@ -9556,7 +9556,7 @@ measure that mutant explicitly.
         <HistoryTab id={id} open={historyOpen} onClose={() => setHistoryOpen(false)} />
   ```
 
-- [ ] **Add the history CSS.** Append to `pwa/src/session/chat.css`:
+- [x] **Add the history CSS.** Append to `pwa/src/session/chat.css`:
 
   ```css
   /* ── HistoryTab (Build 9 wave 9) ─────────────────────────────────────────
@@ -9581,14 +9581,14 @@ measure that mutant explicitly.
   .history-loading, .history-empty, .history-error { color: var(--ink-secondary); padding: var(--sp-3) 0; }
   ```
 
-- [ ] **Run, expect PASS.** `cd pwa && ./node_modules/.bin/vitest run
+- [x] **Run, expect PASS.** `cd pwa && ./node_modules/.bin/vitest run
   test/history-tab.test.tsx`.
 
-- [ ] **Mutation — the colour hook.** In `HistoryTab.tsx`, remove `data-corr={corr}` from
+- [x] **Mutation — the colour hook.** In `HistoryTab.tsx`, remove `data-corr={corr}` from
   the `.history-corr` span. Run: expect 1 red (`gives disagrees its own colour hook`).
   Restore.
 
-- [ ] **Commit the history half.**
+- [x] **Commit the history half.**
 
   ```bash
   git add pwa/src/session/HistoryTab.tsx pwa/test/history-tab.test.tsx pwa/src/session/SessionHeader.tsx pwa/src/screens/SessionScreen.tsx pwa/src/session/chat.css
@@ -9600,7 +9600,7 @@ measure that mutant explicitly.
   1 red."
   ```
 
-- [ ] **Write the failing HotFilesStrip test.** Create `pwa/test/hot-files-strip.test.tsx`:
+- [x] **Write the failing HotFilesStrip test.** Create `pwa/test/hot-files-strip.test.tsx`:
 
   ```tsx
   import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -9667,11 +9667,11 @@ measure that mutant explicitly.
   });
   ```
 
-- [ ] **Run, expect FAIL.** `cd pwa && ./node_modules/.bin/vitest run
+- [x] **Run, expect FAIL.** `cd pwa && ./node_modules/.bin/vitest run
   test/hot-files-strip.test.tsx` — module-load error: `../src/fleet/HotFilesStrip` does
   not exist.
 
-- [ ] **Write `pwa/src/fleet/HotFilesStrip.tsx`:**
+- [x] **Write `pwa/src/fleet/HotFilesStrip.tsx`:**
 
   ```tsx
   // Hot files — the fleet's ACTIVE claims, each with its holder's stated
@@ -9771,7 +9771,7 @@ measure that mutant explicitly.
   }
   ```
 
-- [ ] **Mount it and add the CSS.** In `pwa/src/screens/FleetScreen.tsx`: import beside
+- [x] **Mount it and add the CSS.** In `pwa/src/screens/FleetScreen.tsx`: import beside
   the other fleet imports (after line 16, `import { PasskeyNotice } …`):
   `import { HotFilesStrip } from '../fleet/HotFilesStrip';` — and mount directly after
   the `fleet-runs-row` button's closing tag (line 342):
@@ -9814,14 +9814,14 @@ measure that mutant explicitly.
   .hotfiles-path { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-secondary); word-break: break-word; }
   ```
 
-- [ ] **Run, expect PASS.** `cd pwa && ./node_modules/.bin/vitest run
+- [x] **Run, expect PASS.** `cd pwa && ./node_modules/.bin/vitest run
   test/hot-files-strip.test.tsx`.
 
-- [ ] **Mutation — the live filter.** In `HotFilesStrip.tsx`, change
+- [x] **Mutation — the live filter.** In `HotFilesStrip.tsx`, change
   `c.state === 'live'` to `c.state !== 'released'`. Run: expect 1 red (`shows only LIVE
   claims` — the lapsed row and the future token both leak back in). Restore.
 
-- [ ] **Whole-package check.** `cd pwa && ./node_modules/.bin/vitest run` (foreground,
+- [x] **Whole-package check.** `cd pwa && ./node_modules/.bin/vitest run` (foreground,
   timeout ≥600000) and `cd pwa && npx tsc --noEmit` — both green. The full run covers
   the screens this task edited (`fleet-screen.test.tsx`, `lifecycle-ui.test.tsx`,
   `mail-strip.test.tsx`'s SessionScreen integration); `lifecycle-ui.test.tsx` drives
@@ -9830,7 +9830,7 @@ measure that mutant explicitly.
   caller is the likely shape (every `SessionHeader` render site must now pass
   `onOpenHistory`).
 
-- [ ] **Commit the fleet half.**
+- [x] **Commit the fleet half.**
 
   ```bash
   git add pwa/src/fleet/HotFilesStrip.tsx pwa/test/hot-files-strip.test.tsx pwa/src/screens/FleetScreen.tsx pwa/src/fleet/fleet.css

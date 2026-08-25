@@ -14,6 +14,7 @@ import { SubstrateBanner } from '../fleet/SubstrateBanner';
 import { MailBadge } from '../fleet/MailBadge';
 import { NotificationBell } from '../fleet/NotificationBell';
 import { PasskeyNotice } from '../fleet/PasskeyNotice';
+import { HotFilesStrip } from '../fleet/HotFilesStrip';
 import { groupFleet } from '../fleet/groupFleet';
 import { ProjectCard } from '../fleet/ProjectCard';
 import { SessionActionsSheet } from '../fleet/SessionActionsSheet';
@@ -340,6 +341,10 @@ export function FleetScreen({
       >
         Runs · {runsLabel}
       </button>
+
+      {/* Build 9's contested-files signal (D12 ruling 3) — renders itself or
+          nothing, so it mounts unconditionally, the AccountsStrip rule. */}
+      <HotFilesStrip />
 
       {sessions.length === 0 && conn !== 'open' ? (
         <div className="fleet-list" data-loading="true">
