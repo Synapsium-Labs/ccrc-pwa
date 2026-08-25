@@ -1353,14 +1353,17 @@ export function registerCoordRoutes(
    * already knows lies (D-114: the agent's stat answers EACCES as
    * `{missing:true}`).
    *
-   * Each row is the L0 `PeerSummary` minus `archivedReason`, plus
-   * `claimedPaths` (additive wire, one reader per field): `readRegistry`
-   * parses no `.archivedreason`, so the honest choices at this seam are a new
-   * per-row read this route was not designed around, a `null` that would claim
-   * "never archived" beside a stamp saying otherwise (the overloaded-null the
-   * seam rule forbids), or omission — omission states nothing false.
-   * `claimedPaths` rides beside `intent` because both come off the same live
-   * claim rows and the session line renders both (D12 ruling 3).
+   * Each row is the L0 `PeerSummary` plus `claimedPaths` (additive wire, one
+   * reader per field). No row carries an `archivedReason`, and the type no
+   * longer declares one: `readRegistry` parses no `.archivedreason`, so the
+   * honest choices at this seam were a new per-row read this route was not
+   * designed around, a `null` that would claim "never archived" beside a
+   * stamp saying otherwise (the overloaded-null the seam rule forbids), or no
+   * field — and a declaration the producer never sends invites exactly that
+   * null reading, so the declaration went too (the reason lives where it is
+   * measured, `LifecycleMeas.archivedReason`). `claimedPaths` rides beside
+   * `intent` because both come off the same live claim rows and the session
+   * line renders both (D12 ruling 3).
    */
   app.get('/api/peers', async (req, reply) => {
     if (deps.cfg.authEnabled) {
@@ -1430,15 +1433,28 @@ export function registerCoordRoutes(
     // answers the stored word, and a lapsed-but-unswept row is not live.
     const now = Date.now();
     const live = coord.claimsForProject(project).filter((c) => c.expiresAt > now);
-    const byHolder = new Map<string, { intent: string; paths: string[] }>();
+    // The fold picks each holder's intent by max(renewedAt), NEVER by row id:
+    // a renewal UPDATEs in place (id unchanged, `renewedAt` moves), so an old
+    // row renewed a second ago outranks a young row nobody has touched — and
+    // the L0 contract (PeerSummary) says the intent is the most recently
+    // RENEWED live claim's. `renewedAt` is total by construction (the insert
+    // stamps it `createdAt`; every renewal moves it — `claimAttempt`,
+    // `renewClaimRow`), so it already IS `renewedAt ?? createdAt`. Ties fall
+    // to the later row (`>=` over id-ordered rows) — moot for intent, since
+    // one POST writes one intent into every row it renews or mints. The paths
+    // still aggregate EVERY live claim; only the intent picks one.
+    const byHolder = new Map<string, { intent: string; at: number; paths: string[] }>();
     for (const c of live) {
-      const held = byHolder.get(c.heldBy) ?? { intent: c.intent, paths: [] };
-      held.intent = c.intent;   // rows come oldest-first: the newest live intent wins
-      held.paths.push(...c.paths);
-      byHolder.set(c.heldBy, held);
+      const held = byHolder.get(c.heldBy);
+      if (held === undefined) {
+        byHolder.set(c.heldBy, { intent: c.intent, at: c.renewedAt, paths: [...c.paths] });
+      } else {
+        if (c.renewedAt >= held.at) { held.intent = c.intent; held.at = c.renewedAt; }
+        held.paths.push(...c.paths);
+      }
     }
 
-    const peers: (Omit<PeerSummary, 'archivedReason'>
+    const peers: (PeerSummary
       & { readonly claimedPaths: readonly string[] })[] = sessions
       .filter((s) => s.project === project && s.id !== selfId)
       .map((s) => {

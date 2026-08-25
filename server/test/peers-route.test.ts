@@ -188,6 +188,36 @@ describe('GET /api/peers', () => {
     expect(byId.get('demo-still-pond')?.intent).toBeNull();
   });
 
+  it('intent is the MOST RECENTLY RENEWED live claim, not the newest row (D12 ruling 3)', async () => {
+    const home = mkTmp('ccrc-peers-');
+    seed(home, 'demo-quiet-mesa', UUID_A);
+    const w = await openApp(home, tmuxRunner()); app = w.app;
+    const t0 = Date.now();
+    // Claim A: the OLDER row.
+    const a = w.coord.claimAttempt({ project: 'demo', paths: ['server/src/io.ts'],
+      sessionId: 'demo-quiet-mesa', uuid: UUID_A, intent: 'measuring the read seam',
+      runId: null, now: t0 });
+    expect(a.ok).toBe(true);
+    // Claim B: a NEWER row (higher id), never renewed after this.
+    const b = w.coord.claimAttempt({ project: 'demo', paths: ['shared/api.ts'],
+      sessionId: 'demo-quiet-mesa', uuid: UUID_A, intent: 'sketching the wire',
+      runId: null, now: t0 + 1_000 });
+    expect(b.ok).toBe(true);
+    // Renewal UPDATEs claim A IN PLACE: id unchanged, intent re-written,
+    // renewedAt moves PAST claim B's. Row id therefore cannot stand in for
+    // recency — the L0 contract (PeerSummary docstring) says the intent is
+    // the most recently RENEWED live claim's, and that is A's now.
+    const r = w.coord.claimAttempt({ project: 'demo', paths: ['server/src/io.ts'],
+      sessionId: 'demo-quiet-mesa', uuid: UUID_A, intent: 'hardening the read seam',
+      runId: null, now: t0 + 2_000 });
+    expect(r.ok).toBe(true);
+
+    const p = rows(await peers(app, '?project=demo')).find((x) => x.id === 'demo-quiet-mesa')!;
+    expect(p.intent).toBe('hardening the read seam');   // claim A's, renewed last — never row B's
+    // The paths still aggregate EVERY live claim; only the intent picks one.
+    expect(p.claimedPaths.sort()).toEqual(['server/src/io.ts', 'shared/api.ts']);
+  });
+
   it('ARMED: anon is 401 with a verdict; the box token passes; auth precedes even the 501', async () => {
     const home = mkTmp('ccrc-peers-');
     const base = testDeps(home, tmuxRunner());

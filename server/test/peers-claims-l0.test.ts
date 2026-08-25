@@ -167,7 +167,7 @@ describe('the wire shapes compile as declared (typecheck-tests carries the real 
       id: 'ccrc-pwa-quiet-river', uuid: null, project: 'ccrc-pwa',
       workspace: 'quiet-river', branch: 'feat/mirror-lens', wrapper: null,
       lifecycle: 'running', deliverable: 'yes',
-      archivedAt: null, archivedReason: null, archivedStale: false,
+      archivedAt: null, archivedStale: false,
       held: null, intent: null,
     };
     expect(peer.deliverable).toBe('yes');

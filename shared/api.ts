@@ -4498,9 +4498,9 @@ export function isPeerDeliverable(v: unknown): v is PeerDeliverable {
  * is the registry stamp VERBATIM and decides nothing, because a field that
  * is silently false (four measured rows at design time) must not be
  * laundered into a filter. `archivedStale` NAMES the contradiction —
- * stamped archived, measured live — and the same predicate feeds
- * `divergence.archived-but-live`; an adapter may not narrow a distinction
- * it received.
+ * stamped archived, measured live — the same lie `divergence.archived-but-live`
+ * names from the supervisor heartbeat, by a different measurement; an
+ * adapter may not narrow a distinction it received.
  *
  * `lifecycle` is the row's OWN present tense (etiquette rule 3: read it,
  * never the stamp) and is never null — `'unmeasurable'` is the honest word
@@ -4524,9 +4524,12 @@ export interface PeerSummary {
   readonly lifecycle: SessionLifecycle;
   readonly deliverable: PeerDeliverable;
   /** Epoch SECONDS as the registry wrote it, verbatim, or null. DECIDES
-   *  NOTHING (D9). */
+   *  NOTHING (D9). No `archivedReason` rides beside it, deliberately:
+   *  `readRegistry` parses no `.archivedreason`, so no producer exists, and
+   *  a declared-but-never-sent field invites reading its absence as "never
+   *  archived" — the overloaded null the seam rule forbids. The reason
+   *  lives where it is measured: `LifecycleMeas.archivedReason`. */
   readonly archivedAt: number | null;
-  readonly archivedReason: string | null;
   /** Stamped archived AND measured live this pass. */
   readonly archivedStale: boolean;
   /** The `.hold` text verbatim, or null — `FleetSession.held`'s contract. */

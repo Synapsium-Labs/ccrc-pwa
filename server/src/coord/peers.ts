@@ -75,9 +75,15 @@ const ARCHIVE_CONTRADICTS: Record<SessionLifecycle, boolean> = {
  * D9: the route does NOT filter on `.archived` and there is no boolean
  * called `addressable` — `archivedAt` is reported verbatim and decides
  * nothing. This predicate NAMES the contradiction (`archivedStale` on
- * `PeerSummary`, part B) and the same answer feeds
- * `divergence.archived-but-live` — the four measured rows go from silently
- * false to loudly flagged with zero ccd semantic change.
+ * `PeerSummary`) for `GET /api/peers`, its ONE consumer.
+ * `divergence.archived-but-live` names the SAME lie from DIFFERENT
+ * evidence, deliberately: the census reads registry stamps only and takes
+ * the fresh supervisor heartbeat as its proof ("the heartbeat is the
+ * evidence, not tmux" — divergence.ts arm 5, landed build 9a), while this
+ * predicate takes the measured `lifecycle` the peers route has already
+ * paid for. Two measurements of one contradiction — wiring this predicate
+ * into the census would hand it a tmux dependency its input deliberately
+ * lacks, so the plan's one-predicate-both-consumers line stays prose.
  */
 export function archiveContradicted(
   archivedAt: number | null,
