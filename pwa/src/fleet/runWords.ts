@@ -6,7 +6,7 @@
 //
 // Two cues per row, always: the word is the fact and the glyph is the shape, so
 // no state has to be read out of colour (StatusDot.tsx's own discipline).
-import { isRunState, type RunItemTally, type RunState, type RunSummary } from '../../../shared/api';
+import { SPAWN_STALL_MS, isRunState, type RunItemTally, type RunState, type RunSummary } from '../../../shared/api';
 
 export const RUN_WORD: Record<RunState, string> = {
   planned: 'planned',
@@ -95,6 +95,61 @@ export const isRunClosed = (run: { state: RunState }): boolean => {
   const s = runState(run);
   return s === 'done' || s === 'failed';
 };
+
+/** The dispatch window's three-way answer (Task 3, spawn visibility).
+ *
+ *  `planned` is OVERLOADED — it means both "opened, nobody has dispatched" and
+ *  "a dispatch is in flight" — and until `dispatchStartedAt` shipped, nothing
+ *  on the wire could tell the two apart. Inferring the difference here from
+ *  circumstantial evidence (a `planned` run beside an unheld new workspace)
+ *  would be an adapter narrowing a distinction it was never handed; reading
+ *  the one fact that says so is not.
+ *
+ *  Three answers, because there are three conditions and a renderer must not
+ *  be the place they are separated:
+ *    • `none` — nothing to say about a spawn. Either no fresh-spawn dispatch
+ *      has started (the field's own two conditions: nobody dispatched, or
+ *      every dispatch was a wave N>=2 resume), or the run has already MOVED
+ *      OFF `planned`, which is what ends the rendering. §Design: the stamp is
+ *      a measurement and is never cleared, so a window keyed on the timestamp
+ *      alone would leave every run in the fleet's history claiming forever to
+ *      be spawning.
+ *    • `in-flight` — a dispatch began, less than `SPAWN_STALL_MS` ago.
+ *    • `stalled` — a dispatch began at least `SPAWN_STALL_MS` ago and the run
+ *      is still `planned`. That is `dispatch.ts`'s own "a run stuck in
+ *      `planned` beside an unexplained new workspace is a state no verb
+ *      names", and it now has one.
+ *
+ *  `elapsedMs` rides ON the answer rather than being recomputed by the caller:
+ *  a renderer that re-derives `now - startedAt` is a SECOND reader of the same
+ *  nullable field, needing a `!` to do it, and that is precisely where a
+ *  missing key becomes a `NaN` on screen.
+ *
+ *  Tolerant on `dispatchStartedAt` for the same measured reason `runItems` and
+ *  `runClosedAt` are tolerant: neither the live `{type:'runs'}` frame nor
+ *  `api.runs()` shape-validates a row, so a row minted by a build older than
+ *  the column arrives with the key MISSING, and `undefined !== null` is true —
+ *  a bare null-check would call that a dispatch in flight and render `NaN` as
+ *  its clock. `Math.max(0, …)` for the mirror case: the stamp is the server's
+ *  clock read against the phone's, and ordinary skew must read as "it just
+ *  began", never as a negative duration. */
+export type DispatchWindow =
+  | { phase: 'none' }
+  | { phase: 'in-flight'; elapsedMs: number }
+  | { phase: 'stalled'; elapsedMs: number };
+
+export function dispatchWindow(
+  run: { state: RunState; dispatchStartedAt?: number | null },
+  nowMs: number,
+): DispatchWindow {
+  if (runState(run) !== 'planned') return { phase: 'none' };
+  const startedAt = run.dispatchStartedAt ?? null;
+  if (startedAt === null) return { phase: 'none' };
+  const elapsedMs = Math.max(0, nowMs - startedAt);
+  return elapsedMs >= SPAWN_STALL_MS
+    ? { phase: 'stalled', elapsedMs }
+    : { phase: 'in-flight', elapsedMs };
+}
 
 /** Board order: the ones that can move first, the ones that are over last.
  *  One constant, shared by the grouping and the sort, so the two cannot drift —

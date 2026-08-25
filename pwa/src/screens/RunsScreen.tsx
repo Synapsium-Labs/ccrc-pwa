@@ -34,11 +34,11 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { type FleetSession, type RunSummary, unmeasuredFields } from '../../../shared/api';
-import { RUN_GLYPH, RUN_WORD, isRunClosed, itemTallyLabel, programWave, runClosedAt, runItems, runState, runsByProgram } from '../fleet/runWords';
+import { RUN_GLYPH, RUN_WORD, dispatchWindow, isRunClosed, itemTallyLabel, programWave, runClosedAt, runItems, runState, runsByProgram } from '../fleet/runWords';
 import { AbandonSheet } from '../fleet/AbandonSheet';
 import { CoordBanner } from '../fleet/CoordBanner';
 import { StartProgramSheet } from '../fleet/StartProgramSheet';
-import { formatAge } from '../fleet/formatReset';
+import { formatAge, formatElapsed } from '../fleet/formatReset';
 import { api } from '../lib/api';
 import { navigate } from '../lib/router';
 import { useNow } from '../lib/useNow';
@@ -67,12 +67,17 @@ const loadRunsDefault = (): Promise<{ runs: RunSummary[] }> => api.runs(true);
 
 function RunRow({
   run,
-  nowSec,
+  nowMs,
   session,
   onAbandon,
 }: {
   run: RunSummary;
-  nowSec: number;
+  /** The shared tick, in MILLISECONDS (Task 3). The row derives its own
+   *  `nowSec` below; it does not receive one. The dispatch window's boundary
+   *  is `SPAWN_STALL_MS` — a millisecond constant — so a tick already floored
+   *  to seconds upstream could not state which side of it a row is on, by up
+   *  to 999 ms. One clock, in the unit every wire timestamp already uses. */
+  nowMs: number;
   /** The run's session, as the live fleet snapshot currently has it — or
    *  `null` when there is none (no session, or the fleet frame hasn't named
    *  it yet). Looked up by the caller so this component stays a pure
@@ -95,6 +100,14 @@ function RunRow({
   // one rather than throwing mid-render.
   const state = runState(run);
   const items = runItems(run);
+  const nowSec = Math.floor(nowMs / 1000);
+  // Task 3, the dispatch window. The DECISION is `dispatchWindow`'s (three
+  // conditions, one place); this component only picks the words. `none` is
+  // both "no fresh-spawn dispatch has started" and "the run has moved off
+  // `planned`" — either way there is no spawn to narrate, and the row renders
+  // byte-identically to how it read before the column existed, which is the
+  // no-regression half of this branch.
+  const spawn = dispatchWindow(run, nowMs);
   const body = (
     <>
       <span className="run-glyph" aria-hidden="true">{RUN_GLYPH[state]}</span>
@@ -104,6 +117,28 @@ function RunRow({
       <span className="run-when">
         {run.dispatchedAt === null ? '—' : formatAge(nowSec - Math.floor(run.dispatchedAt / 1000))}
       </span>
+      {/* Two cues on both branches — a word and a glyph — the same rule every
+          other state cell on this board follows: nothing here may be read out
+          of colour alone. The in-flight line is an ordinary progress
+          statement; the stalled one is the state `dispatch.ts` says "no verb
+          names", and it is deliberately worded as what the OPERATOR now has
+          to deal with (a workspace may exist) rather than as an error code. */}
+      {spawn.phase === 'in-flight' && (
+        <span className="run-dispatch" data-phase="in-flight">
+          <span className="run-dispatch-glyph" aria-hidden="true">⟳</span>
+          {'dispatching… '}{formatElapsed(spawn.elapsedMs)}
+        </span>
+      )}
+      {spawn.phase === 'stalled' && (
+        <span
+          className="run-dispatch"
+          data-phase="stalled"
+          title={`the dispatch began ${formatElapsed(spawn.elapsedMs)} ago and the run is still planned`}
+        >
+          <span className="run-dispatch-glyph" aria-hidden="true">⚠</span>
+          {'dispatch never completed — a workspace may exist'}
+        </span>
+      )}
       {degradedFields.length > 0 && (
         <span
           className="sess-unmeasured"
@@ -137,6 +172,15 @@ function RunRow({
   // A run with no session has nothing to open. An inert row says that; a
   // button that navigates to a session that does not exist says something
   // false.
+  //
+  // Task 3: `data-inert` is about the TAP and nothing else, and it stays
+  // exactly as it was — the in-flight row is the ONE row that is inert and
+  // has something to say, and the two are not in tension. `body` renders
+  // inside the inert `<li>` just as it does inside `.run-open`, and nothing
+  // in `fleet.css` selects `[data-inert]` at all (measured), so no rule dims
+  // or hides what the row now says while the spawn is under way. Making the
+  // row tappable to let the affordance through would have traded a true
+  // sentence for a dead tap onto a session id that does not exist yet.
   return run.sessionId === null
     ? <li className="run-row" data-inert="true">{body}{abandonButton}</li>
     : (
@@ -170,8 +214,12 @@ export function RunsScreen({
   // claim about the program's whole history that a failed read has no
   // standing to make.
   const [coldState, setColdState] = useState<'loading' | 'ok' | 'error'>('loading');
+  // Task 3: the tick stays in MILLISECONDS all the way to the row, which
+  // derives its own seconds for `formatAge`. The dispatch window's boundary is
+  // `SPAWN_STALL_MS`, a millisecond constant, and flooring here first would
+  // have made it unmeasurable by up to 999 ms — a boundary stated in one unit
+  // and tested in a coarser one is a boundary nothing can pin.
   const now = useNow(30_000);
-  const nowSec = Math.floor(now / 1000);
 
   // Task 12, spec §4.3: which run's AbandonSheet is open, or `null`. ONE
   // sheet at screen level, reused across rows — the same shape
@@ -312,7 +360,7 @@ export function RunsScreen({
     <RunRow
       key={run.id}
       run={run}
-      nowSec={nowSec}
+      nowMs={now}
       session={run.sessionId === null ? null : sessionById.get(run.sessionId) ?? null}
       onAbandon={setAbandonTarget}
     />

@@ -12,6 +12,37 @@ export function formatReset(resetAt: number | null, nowSec: number): string {
   return `${m}m`;
 }
 
+/** A stopwatch reading for a span that is still running — `0:42`, `4:07`,
+ *  `1:02:03` — from a span in MILLISECONDS.
+ *
+ *  A third time format here, deliberately, rather than a fourth idiom
+ *  somewhere else: `formatReset` counts DOWN to a future moment and
+ *  `formatAge` rounds a settled past to a coarse ago-phrase, which collapses
+ *  everything under two minutes into "just now". The dispatch window is
+ *  exactly the span that lives inside that collapse — an operator watching a
+ *  spawn wants "42 seconds and climbing", and "just now" for four straight
+ *  minutes is the same silence the window exists to end.
+ *
+ *  Milliseconds in, because the fields it measures (`dispatchStartedAt`,
+ *  `dispatchedAt`) are millisecond epochs and the threshold it is rendered
+ *  beside (`SPAWN_STALL_MS`) is a millisecond constant: converting to seconds
+ *  first would make a boundary stated in milliseconds unmeasurable by up to
+ *  999 of them.
+ *
+ *  The partial second is FLOORED, never rounded — the clock states time that
+ *  has actually passed. A negative span is clamped to zero rather than
+ *  rendered: `dispatchStartedAt` is stamped by the server's clock and
+ *  subtracted from the phone's, so a few seconds of ordinary skew must read as
+ *  "it just began", not as `-0:03`. */
+export function formatElapsed(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const mm = h > 0 ? String(m).padStart(2, '0') : String(m);
+  return `${h > 0 ? `${h}:` : ''}${mm}:${String(s).padStart(2, '0')}`;
+}
+
 /** AccountsScreen's freshness line, from an age in seconds (nowSec - ts):
  *  "2h ago", "3d ago", "just now" under two minutes, or "—" when `ts` itself
  *  is null — no telemetry has ever landed for this account, which is a

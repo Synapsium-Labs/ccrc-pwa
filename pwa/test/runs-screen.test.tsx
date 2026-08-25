@@ -1,9 +1,9 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { StrictMode } from 'react';
 import { act, cleanup, render, screen, fireEvent } from '@testing-library/react';
-import { RUN_STATES, type FleetSession, type RunSummary } from '../../shared/api';
+import { RUN_STATES, SPAWN_STALL_MS, type FleetSession, type RunSummary } from '../../shared/api';
 import { RunsScreen } from '../src/screens/RunsScreen';
-import { RUN_ORDER, RUN_WORD, itemTallyLabel, programWave, runItems } from '../src/fleet/runWords';
+import { RUN_ORDER, RUN_WORD, dispatchWindow, itemTallyLabel, programWave, runItems } from '../src/fleet/runWords';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
@@ -538,5 +538,181 @@ describe('the program-start door mounts on /runs (Task 13, spec §4.4)', () => {
     render(<RunsScreen store={makeStore()} loadRuns={async () => ({ runs: [] })} />);
     fireEvent.click(await screen.findByRole('button', { name: /start a program/i }));
     expect(await screen.findByText(/the coordinator picks up from there/i)).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 3 (spawn visibility): the dispatch window, and the wedge.
+//
+// The measured gap this pins closed: from dispatch acceptance to a usable
+// pane, the run board sat on `planned` and never moved, while the fleet screen
+// showed the same event as three fault-shaped words in sequence. `planned` is
+// overloaded — it means BOTH "opened, nobody has dispatched" and "a dispatch is
+// in flight" — and `dispatchStartedAt` (Task 1) is the fact that separates
+// them. This half of the build is what reads it.
+// ---------------------------------------------------------------------------
+
+/** A fixed wall clock. The `in-flight`/`stalled` boundary is `SPAWN_STALL_MS`
+ *  EXACTLY, so a test that let real time run could not state which side of it
+ *  a case is on — the assertion would be true by a margin, not by the
+ *  constant. */
+const FROZEN = 1_800_000_000_000;
+
+/** Runs `body` with `Date.now()` pinned at `FROZEN`. The timers are always
+ *  restored, including on a failing assertion — a suite that leaks fake timers
+ *  hangs the NEXT file, not this one, and that is the hardest kind of flake to
+ *  attribute. */
+function atFrozenClock(body: () => void): void {
+  vi.useFakeTimers({ now: FROZEN });
+  try { body(); } finally { vi.useRealTimers(); }
+}
+
+describe('dispatchWindow — the three-way answer, decided once and away from the renderer (Task 3)', () => {
+  it('is `none` for a planned run nobody has fresh-spawn dispatched', () => {
+    // The no-regression baseline: an ordinary wave N+1 row, opened and
+    // waiting. `null` here is one of TWO honest conditions (the other being a
+    // resume-only run — `shared/api.ts`'s own docstring names both), and
+    // neither of them is a dispatch in flight.
+    expect(dispatchWindow(r({ state: 'planned', dispatchStartedAt: null }), FROZEN))
+      .toEqual({ phase: 'none' });
+  });
+
+  it('is `in-flight` below the threshold, carrying the elapsed span itself', () => {
+    // The span rides on the answer rather than being recomputed by the caller:
+    // a renderer that re-derives `now - startedAt` is a second reader of the
+    // same nullable field, and the `!` it needs to do so is exactly where the
+    // NaN gets in.
+    expect(dispatchWindow(r({ state: 'planned', dispatchStartedAt: FROZEN - 42_000 }), FROZEN))
+      .toEqual({ phase: 'in-flight', elapsedMs: 42_000 });
+  });
+
+  it('is `stalled` AT SPAWN_STALL_MS exactly — the boundary is the constant, not a rounded neighbour', () => {
+    // One millisecond either side, measured against the shared constant. The
+    // threshold is deliberately >= the `ws-add` verb ceiling, so at this point
+    // the runner has certainly given up: the console is not guessing early.
+    expect(dispatchWindow(r({ state: 'planned', dispatchStartedAt: FROZEN - (SPAWN_STALL_MS - 1) }), FROZEN).phase)
+      .toBe('in-flight');
+    expect(dispatchWindow(r({ state: 'planned', dispatchStartedAt: FROZEN - SPAWN_STALL_MS }), FROZEN))
+      .toEqual({ phase: 'stalled', elapsedMs: SPAWN_STALL_MS });
+  });
+
+  it('is `none` once the state has moved off `planned`, however old the stamp — STATE ends the render, not the field', () => {
+    // §Design: "Success moves `state` to `dispatched`, which is what stops the
+    // 'dispatching' rendering; the timestamp stays as forensic material." A
+    // window keyed on the timestamp alone would leave every dispatched run in
+    // the fleet's history claiming to be spawning, forever.
+    for (const state of ['dispatched', 'working', 'awaiting-review', 'done', 'failed'] as const) {
+      expect(dispatchWindow(r({ state, dispatchStartedAt: FROZEN - 1_000 }), FROZEN), state)
+        .toEqual({ phase: 'none' });
+    }
+  });
+
+  it('degrades a row that reached it without the key at all to `none`, never to a NaN clock', () => {
+    // The same tolerance `runItems`/`runClosedAt` already carry, for the same
+    // measured reason: neither the live `{type:'runs'}` frame nor
+    // `api.runs()` shape-validates a row, so a row minted by a build older
+    // than the column arrives with the key MISSING. `undefined !== null` is
+    // true, so a bare null-check would call that a dispatch in flight and
+    // render `NaN` as its elapsed clock.
+    const older = { ...r({ state: 'planned' }) } as Partial<RunSummary>;
+    delete older.dispatchStartedAt;
+    expect(dispatchWindow(older as RunSummary, FROZEN)).toEqual({ phase: 'none' });
+  });
+
+  it('clamps a stamp from the future to a zero-length window rather than reading it as stalled', () => {
+    // Server clock ahead of the phone's: the span is negative, and a raw
+    // `>= SPAWN_STALL_MS` comparison would answer `in-flight` correctly by
+    // luck while handing the renderer a negative clock.
+    expect(dispatchWindow(r({ state: 'planned', dispatchStartedAt: FROZEN + 5_000 }), FROZEN))
+      .toEqual({ phase: 'in-flight', elapsedMs: 0 });
+  });
+});
+
+describe('the run board renders the dispatch window — and the wedge (Task 3)', () => {
+  /** Mounts the board with one run on the live frame. */
+  const board = (over: Partial<RunSummary>): void => {
+    const store = makeStore();
+    act(() => { store.setState({ runs: [r({ ...over })], runsFrameSeen: true }); });
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+  };
+  /** A run in the shape a `planned` one actually reaches the wire in: no
+   *  session id (the server learns it by registry diff, AFTER `ws-add`
+   *  returns) and no `dispatchedAt` (nothing has completed). The default
+   *  fixture is a `working` row and carries both, so spelling them out here is
+   *  what keeps these cases about the dispatch window rather than about a
+   *  half-real row. */
+  const planned = (over: Partial<RunSummary>): void =>
+    board({ state: 'planned', sessionId: null, dispatchedAt: null, ...over });
+  const cell = (): HTMLElement | null => document.querySelector('.run-dispatch');
+
+  it('renders NO dispatch affordance for a planned run nobody has dispatched — exactly as the board read before the column existed', () => {
+    atFrozenClock(() => {
+      planned({ dispatchStartedAt: null });
+      expect(cell()).toBeNull();
+      expect(screen.queryByText(/dispatching/i)).toBeNull();
+      expect(screen.queryByText(/never completed/i)).toBeNull();
+      // Every other cell still says what it said: the branch is additive.
+      expect(screen.getByText(RUN_WORD.planned)).toBeInTheDocument();
+      expect(document.querySelector('.run-when')?.textContent).toBe('—');
+    });
+  });
+
+  it('says ⟳ dispatching… with a live elapsed clock while the spawn is in flight', () => {
+    atFrozenClock(() => {
+      planned({ dispatchStartedAt: FROZEN - 42_000 });
+      expect(cell()?.textContent).toContain('dispatching…');
+      expect(cell()?.textContent).toContain('0:42');
+      expect(cell()).toHaveAttribute('data-phase', 'in-flight');
+      // Two cues, the board's standing rule: a word AND a glyph, so the state
+      // is never read out of colour alone.
+      expect(cell()?.querySelector('[aria-hidden="true"]')).not.toBeNull();
+      expect(screen.queryByText(/never completed/i)).toBeNull();
+    });
+  });
+
+  it('keeps the row inert for NAVIGATION while the affordance renders — there is still no session to open', () => {
+    atFrozenClock(() => {
+      planned({ dispatchStartedAt: FROZEN - 42_000 });
+      // Inertness is about the TAP, not about the text. A button that
+      // navigates to a session id that does not exist yet says something
+      // false; the row saying a spawn is under way says something true, and
+      // the two are not the same claim.
+      expect(document.querySelector('.run-row')).toHaveAttribute('data-inert', 'true');
+      expect(screen.queryByRole('button', { name: /clear-cove/i })).toBeNull();
+      expect(cell()).not.toBeNull();
+    });
+  });
+
+  it('renders the wedge — dispatch never completed — once the threshold has passed, and stops saying dispatching', () => {
+    atFrozenClock(() => {
+      planned({ dispatchStartedAt: FROZEN - SPAWN_STALL_MS });
+      // `dispatch.ts`'s own words for this class: "a run stuck in `planned`
+      // beside an unexplained new workspace is a state no verb names". It has
+      // a name on screen now, and it is not the in-flight one.
+      expect(cell()?.textContent).toMatch(/never completed/i);
+      expect(cell()).toHaveAttribute('data-phase', 'stalled');
+      expect(screen.queryByText(/dispatching/i)).toBeNull();
+    });
+  });
+
+  it('is one millisecond short of the wedge at SPAWN_STALL_MS - 1 — the rendered boundary IS the constant', () => {
+    atFrozenClock(() => {
+      planned({ dispatchStartedAt: FROZEN - (SPAWN_STALL_MS - 1) });
+      expect(cell()).toHaveAttribute('data-phase', 'in-flight');
+      expect(screen.queryByText(/never completed/i)).toBeNull();
+    });
+  });
+
+  it('says nothing about dispatching once the run reaches `dispatched`, though the stamp survives on the row', () => {
+    atFrozenClock(() => {
+      // The forensic half of §Design, rendered: `dispatchedAt -
+      // dispatchStartedAt` stays readable on the row for as long as the run
+      // exists, and the board still stops narrating the spawn the instant it
+      // succeeded.
+      board({ state: 'dispatched', dispatchStartedAt: FROZEN - 42_000, dispatchedAt: FROZEN - 1_000 });
+      expect(cell()).toBeNull();
+      expect(screen.queryByText(/dispatching/i)).toBeNull();
+      expect(screen.getByText(RUN_WORD.dispatched)).toBeInTheDocument();
+    });
   });
 });

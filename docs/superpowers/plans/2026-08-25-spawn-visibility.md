@@ -346,10 +346,10 @@ export const SPAWN_STALL_MS = 360_000;
 - Produces: an exported elapsed-time helper Task 4 reuses — put it where the PWA's other
   small pure helpers live (read the neighbours; do NOT invent a new directory).
 
-- [ ] **Step 1: read** `RunsScreen.tsx:90-145` in full (the glyph/state/label/tally/when
+- [x] **Step 1: read** `RunsScreen.tsx:90-145` in full (the glyph/state/label/tally/when
   cells, `data-inert` at `:140-141`) and one existing pwa screen test for the harness idiom.
 
-- [ ] **Step 2: red-first.** Three cases on a `planned` run row:
+- [x] **Step 2: red-first.** Three cases on a `planned` run row:
   - `dispatchStartedAt === null` → renders exactly as today (the no-regression pin; assert
     the "dispatching" text is ABSENT).
   - `dispatchStartedAt` set, age < `SPAWN_STALL_MS` → renders a dispatching affordance with
@@ -362,19 +362,19 @@ export const SPAWN_STALL_MS = 360_000;
   Freeze time in the test (the suite's existing fake-timer idiom) so the boundary is exact,
   and pin the boundary at `SPAWN_STALL_MS` itself, not a rounded neighbour.
 
-- [ ] **Step 3: implement** the three branches in `RunRow`, reading `SPAWN_STALL_MS` from
+- [x] **Step 3: implement** the three branches in `RunRow`, reading `SPAWN_STALL_MS` from
   `shared/api.js` (never a local literal). Keep the existing cells' text byte-identical for
   every other state — this task adds a branch, it does not restyle the board.
 
-- [ ] **Step 4: green.** The new suite plus the full `pwa` package
+- [x] **Step 4: green.** The new suite plus the full `pwa` package
   (`cd pwa && ./node_modules/.bin/vitest run`) — it is fast, and a screen edit can move
   unrelated snapshots.
 
-- [ ] **Step 5: mutation.** Replace `SPAWN_STALL_MS` with a hardcoded literal that differs →
+- [x] **Step 5: mutation.** Replace `SPAWN_STALL_MS` with a hardcoded literal that differs →
   the boundary test reds; revert, count stated. Then: delete the stalled branch → the wedge
   test reds.
 
-- [ ] **Step 6: commit.**
+- [x] **Step 6: commit.**
 
 ### Task 4: children nest under the programme that owns them
 

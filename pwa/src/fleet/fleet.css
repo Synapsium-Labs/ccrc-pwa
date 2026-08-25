@@ -1813,6 +1813,24 @@
 .run-row .run-tally, .run-row .run-when {
   font-size: var(--text-2xs); font-variant-numeric: tabular-nums; color: var(--ink-tertiary);
 }
+/* Task 3 (spawn visibility): the dispatch window and the wedge. Scoped under
+   `.run-row` — self-grounded above, background+color both set — so the
+   named-ancestor route grounds it exactly as `.run-row .run-glyph`/
+   `.run-row .run-state` are grounded a couple of rules up; no new ground, no
+   new token pair. `--ink-secondary`, the same ink `.run-state` already takes
+   against this fill: a spawn in flight is an ordinary event, not an alarm,
+   and the wedge is told apart by its WORDS and its glyph (two cues, the
+   board's standing rule) rather than by a hue nothing else on this screen
+   uses. A run row is a record of a lifecycle position, not a living pane, so
+   this gets no --glow/animation/box-shadow either — the same "runs are not
+   living panes" rule `.run-row .run-abandon` below is held to. */
+.run-row .run-dispatch {
+  display: inline-flex; align-items: baseline; gap: var(--sp-1);
+  min-width: 0;
+  font-size: var(--text-2xs); font-variant-numeric: tabular-nums;
+  color: var(--ink-secondary);
+}
+.run-row .run-dispatch-glyph { color: var(--ink-tertiary); }
 /* Task 12, spec §4.3, D-287: a SIBLING of `.run-open` inside `.run-row`'s
    own `<li>`, never a descendant of it — see RunsScreen.tsx's own comment on
    why a nested button is the defect this shape avoids. Self-grounded via
