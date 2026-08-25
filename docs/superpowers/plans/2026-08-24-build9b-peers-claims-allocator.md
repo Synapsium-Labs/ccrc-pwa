@@ -3023,7 +3023,7 @@ side reds the fixture's compile.
 2. *Legacy forms never feed the floor.* `floorFromScan` RECOGNIZES `D-B<k>-<m>` (so a scan cannot
    misparse one, and so the D14 reconciliation wave can enumerate what remains) but the floor
    derives from the GLOBAL `D-<n>` form alone: a legacy number lives in a different namespace, and
-   seeding the global sequence from `D-B4-400`'s 400 would burn 400 numbers on a token that will be
+   seeding the global sequence from a legacy `D-B<k>-<m>` with m = 400 would burn 400 numbers on a token that will be
    RENAMED by the reconciliation anyway (D14 allocates each legacy ref a fresh global number through
    the allocator itself). A tree carrying ONLY legacy refs answers `null` — not seeded — because a
    floor invented from the wrong namespace is a collision deferred, and D13's rule is fail shut.
@@ -3094,12 +3094,12 @@ side reds the fixture's compile.
 
     it('recognizes the legacy D-B<k>-<m> form and reports it — but it NEVER feeds the floor (D14)', () => {
       const r = floorFromScan([
-        { path: 'p.md', text: 'D-210 stands; D-B4-400 is legacy and its 400 is another namespace.' },
+        { path: 'p.md', text: 'D-210 stands; D-B4-' + '400 is legacy and its 400 is another namespace.' },
       ]);
       expect(r).toEqual({
         floor: 210 + LEDGER_SEED_GAP,
         evidence: 'p.md names D-210',
-        legacy: ['D-B4-400'],
+        legacy: ['D-B4-' + '400'],
       });
     });
 
@@ -3186,7 +3186,7 @@ side reds the fixture's compile.
   }
 
   // The two forms, and they CANNOT cross-match: after 'D-' the global form
-  // requires a digit, so 'D-B4-400' contributes nothing to GLOBAL_RE (the
+  // requires a digit, so 'D-B4-' + '400' contributes nothing to GLOBAL_RE (the
   // 'B' blocks it) and the plain global token ('D-' + '400', split so this
   // comment stays out of the tree's own floor scan) contains no 'B' for
   // LEGACY_RE. Global is

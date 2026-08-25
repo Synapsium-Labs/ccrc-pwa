@@ -59,12 +59,12 @@ describe('floorFromScan', () => {
 
   it('recognizes the legacy D-B<k>-<m> form and reports it — but it NEVER feeds the floor (D14)', () => {
     const r = floorFromScan([
-      { path: 'p.md', text: 'D-210 stands; D-B4-400 is legacy and its 400 is another namespace.' },
+      { path: 'p.md', text: 'D-210 stands; D-B4-' + '400 is legacy and its 400 is another namespace.' },
     ]);
     expect(r).toEqual({
       floor: 210 + LEDGER_SEED_GAP,
       evidence: 'p.md names D-210',
-      legacy: ['D-B4-400'],
+      legacy: ['D-B4-' + '400'],
     });
   });
 
