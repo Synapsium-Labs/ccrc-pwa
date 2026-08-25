@@ -1495,7 +1495,12 @@ describe('the verification is actually wired into the deploy, and can observe a 
       .exec(deploySh);
     expect(start, 'the coordinate-resolution header was not found').toBeGreaterThan(-1);
     expect(healthLine, 'the CCRC_HEALTH_URL override is gone').toBeTruthy();
-    const targetOverrideAt = deploySh.indexOf('[ "$TARGET" = "agent" ]');
+    // The override's operands are REVERSED (`[ agent = "$TARGET" ]`) so that
+    // this file's OTHER probes — which locate the agent BRANCH by the first
+    // occurrence of the `if [ "$TARGET" = "agent" ]` spelling — cannot be
+    // shadowed by the override sitting above it.
+    const targetOverrideAt = deploySh.indexOf('[ agent = "$TARGET" ]');
+    expect(targetOverrideAt, 'the agent-target BOX override was not found').toBeGreaterThan(-1);
     expect(healthLine!.index!,
       'HEALTH_URL must be resolved AFTER the agent-target BOX override, not before')
       .toBeGreaterThan(targetOverrideAt);

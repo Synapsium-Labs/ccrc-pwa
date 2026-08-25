@@ -87,9 +87,11 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   engines — never lower them to make it green.**
 - **Deploy** (mechanics in README "Deploy"): `bash deploy/deploy.sh` (server), `bash deploy/deploy.sh agent <host>`.
   **Coordinates live in `~/.ccrc/deploy.env`** — machine-local, outside every checkout
-  (`CCRC_BOX`, `CCRC_SSH_KEY`, `CCRC_SSH_PORT`, and `CCRC_SW_DENYLIST` for a box with co-tenants; this
+  (`CCRC_BOX`, `CCRC_SSH_KEY`, `CCRC_SSH_PORT`, `CCRC_AGENT_BOX` for the agent lane when no `<host>` is
+  passed, and `CCRC_SW_DENYLIST` for a box with co-tenants; this
   fleet's real values: `deploy/reference-fleet.md`, gitignored). deploy.sh has
-  **no default target** and refuses with exit 2 rather than guessing; env vars override the file and
+  **no default target** and refuses with exit 2 rather than guessing — the agent lane **never** falls back
+  to `CCRC_BOX` (the SERVER box on a two-box fleet); env vars override the file and
   `CCRC_DEPLOY_ENV` points at another. Pinned by `server/test/deploy-coordinates.test.ts` (5/5 red without the
   guard). The roster seed defaults to `deploy/accounts.default.json`, never the reference fleet's roster.
   The one rule that shapes your own work: a change touching `ccd/`, `session-hook.sh`, or `ccd/coordinator-skill/`
