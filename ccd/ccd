@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=91f629cde252f9bccc736aa5305171de8cd15d012e34ffe62df038efbfd98e52
+# ccrc:generated 1 sha256=95fca551c80438dcc51a4fb12b65c2c2216293da3a2de331c2bb4e6efb0539e3
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
-# The RC flag is CONDITIONAL on the box, not on this file: `_rc_enabled` reads
-# `~/.ccrc/remote-control` and a box that does not say `on` spawns plain panes.
+# The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
+# reads `~/.ccrc/remote-control` and a box that does not say `on` spawns plain panes;
+# a row stamped `rc=off` (`ws-add --no-rc` — a dispatched worker, task #37) spawns
+# plain even on an `on` box.
 set -uo pipefail
 
 REG="$HOME/.cc-sessions"
@@ -487,8 +489,8 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # The dot-free claim, measured against every registry file a session has
   # today: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
   # `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`, `pool`,
-  # `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `reaping`,
-  # `setup`, `spawn`, `started`, `stopped`, `substrate`, `supervised`,
+  # `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `rc`,
+  # `reaping`, `setup`, `spawn`, `started`, `stopped`, `substrate`, `supervised`,
   # `swapblocked`, `uuid`, `workdir`, `workspace`, `wrapper`. That is a WIDER
   # set than `_reg_set`/`_reg_get`: the inventory
   # that stood here named only the shell-written fields and so silently dropped
