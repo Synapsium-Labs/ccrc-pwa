@@ -10016,14 +10016,14 @@ names). The script's output **is** the work-list, committed as evidence.
   which `reconcile-rewrite.mjs` (Tasks 31–32) parses as its only input; the `BARE`/`ALIAS` predicate
   pair reused verbatim by Tasks 31 and 32.
 
-- [ ] **Step 1: STOP — confirm the quiet window with the operator, and wait for the answer.**
+- [x] **Step 1: STOP — confirm the quiet window with the operator, and wait for the answer.**
   Ask, in so many words: *"Wave 10 rewrites D-ref lines across ~71 tracked files and will conflict
   with ANY in-flight branch. It needs the operator-announced quiet window the spec requires: no wave
   dispatched, no worker mid-flight, no unmerged branch that touches docs or sources, and none started
   until I announce the wave closed. Confirm the window is open now?"* Do **not** proceed on silence,
   on a stale earlier yes, or on your own reading of the fleet — this confirmation is the operator's
   to give, and the spec's *"Do not schedule it concurrently with a wave"* is a ruling, not advice.
-- [ ] **Step 2: Verify the tree and the coordinator agree the fleet is quiet.**
+- [x] **Step 2: Verify the tree and the coordinator agree the fleet is quiet.**
   ```bash
   cd /home/you/worktrees/ccrc-pwa/still-river \
     && git fetch --all --quiet \
@@ -10038,7 +10038,7 @@ names). The script's output **is** the work-list, committed as evidence.
   Every run in the answer must read a terminal state. An open run, or an unexplained unmerged branch,
   means the window is not real — go back to Step 1. (The token is used, never printed — existence
   checks by `ls` only.)
-- [ ] **Step 3: Verify Wave 7 is deployed and the allocator is seeded.**
+- [x] **Step 3: Verify Wave 7 is deployed and the allocator is seeded.**
   ```bash
   curl -sS -H "x-ccrc-mail-token: $(cat ~/.ccrc/mail.token)" http://127.0.0.1:7788/api/ledger
   ```
@@ -10048,7 +10048,7 @@ names). The script's output **is** the work-list, committed as evidence.
   `FleetWatcher`'s existing tick, gated hourly) and re-check; if it stays unseeded past the hour,
   stop and investigate Wave 7 rather than proceeding. **Until seeded, allocation answers 409 by
   design** — "refuse to start rather than open empty", one level up.
-- [ ] **Step 4: Sweep EVERY remote ref for global D-numbers and confirm the floor clears them.**
+- [x] **Step 4: Sweep EVERY remote ref for global D-numbers and confirm the floor clears them.**
   The 50-number seed gap exists because numbers on unmerged refs are invisible to the scan; the quiet
   window should mean there are none, and this measures it instead of assuming it:
   ```bash
@@ -10061,7 +10061,7 @@ names). The script's output **is** the work-list, committed as evidence.
   `LEDGER_SEED_GAP` assumption is broken on some ref — stop and ask the operator; do not allocate
   over it. (Drafting-day note: the plan-wide ledger baseline was D-211 free; the floor will sit well
   above whatever this prints, or something is wrong.)
-- [ ] **Step 5: Confirm the allocator's request grammar against the landed handler.**
+- [x] **Step 5: Confirm the allocator's request grammar against the landed handler.**
   ```bash
   cd /home/you/worktrees/ccrc-pwa/still-river \
     && grep -n "api/ledger/deviations" server/src/coord/routes.ts
@@ -10071,7 +10071,7 @@ names). The script's output **is** the work-list, committed as evidence.
   `numbers: number[]`, exactly the interface contract Wave 7 wrote against. If the landed names
   differ, that is a Wave 7 defect against the contract — stop and reconcile it there; do **not**
   fork the grammar inside this wave's script.
-- [ ] **Step 6: Write the enumeration/allocation script.** Create
+- [x] **Step 6: Write the enumeration/allocation script.** Create
   `/home/you/worktrees/ccrc-pwa/still-river/reconcile-enum.mjs`:
   ````js
   #!/usr/bin/env node
@@ -10203,7 +10203,7 @@ names). The script's output **is** the work-list, committed as evidence.
   writeFileSync(path.join(root, DOC), doc);
   console.log(`wrote ${DOC}: ${ids.length} mapping rows`);
   ````
-- [ ] **Step 7: Write the rewrite script** (authored now so Appendix B ships with the record; first
+- [x] **Step 7: Write the rewrite script** (authored now so Appendix B ships with the record; first
   run is Task 31). Create `/home/you/worktrees/ccrc-pwa/still-river/reconcile-rewrite.mjs`:
   ````js
   #!/usr/bin/env node
@@ -10267,7 +10267,7 @@ names). The script's output **is** the work-list, committed as evidence.
   }
   console.log(`${filesChanged} files changed, ${refs} refs rewritten`);
   ````
-- [ ] **Step 8: Dry-run the enumeration and read the work-list against the expectation.**
+- [x] **Step 8: Dry-run the enumeration and read the work-list against the expectation.**
   ```bash
   cd /home/you/worktrees/ccrc-pwa/still-river && node reconcile-enum.mjs --dry
   ```
@@ -10280,7 +10280,7 @@ names). The script's output **is** the work-list, committed as evidence.
   metavariable form), commit that correction on this wave's branch, and re-run the dry run until the
   list is exactly the two families. A *missing* id relative to this baseline just means a ref was
   deleted with its file since drafting — fine, the list is the measurement.
-- [ ] **Step 9: Run the allocation and write the record.**
+- [x] **Step 9: Run the allocation and write the record.**
   ```bash
   cd /home/you/worktrees/ccrc-pwa/still-river && node reconcile-enum.mjs
   ```
@@ -10290,7 +10290,7 @@ names). The script's output **is** the work-list, committed as evidence.
   `wrote docs/superpowers/specs/2026-08-21-deviation-namespace-reconciliation.md: 37 mapping rows`.
   If the process dies mid-run, just re-run: `reconcile-alloc.partial` resumes it without
   re-allocating.
-- [ ] **Step 10: Embed both scripts as appendices of the record** (four-backtick fences, because the
+- [x] **Step 10: Embed both scripts as appendices of the record** (four-backtick fences, because the
   scripts themselves contain triple-backtick strings):
   ```bash
   cd /home/you/worktrees/ccrc-pwa/still-river \
@@ -10301,7 +10301,7 @@ names). The script's output **is** the work-list, committed as evidence.
          printf '````\n'; } \
        >> docs/superpowers/specs/2026-08-21-deviation-namespace-reconciliation.md
   ```
-- [ ] **Step 11: Prove the record itself is invisible to the predicate.** Re-run the dry run:
+- [x] **Step 11: Prove the record itself is invisible to the predicate.** Re-run the dry run:
   ```bash
   cd /home/you/worktrees/ccrc-pwa/still-river && node reconcile-enum.mjs --dry
   ```
@@ -10310,7 +10310,7 @@ names). The script's output **is** the work-list, committed as evidence.
   same file count). Every legacy spelling in the record is `was `-guarded and every regex in the
   appendices spells digits as `\d`, so the doc adds nothing. If the counts moved, the record leaked
   a bare form — fix the record generation, not the predicate.
-- [ ] **Step 12: Commit the record** (the transient scripts and the resume file stay untracked and
+- [x] **Step 12: Commit the record** (the transient scripts and the resume file stay untracked and
   uncommitted — Appendices A/B carry their bytes):
   ```bash
   cd /home/you/worktrees/ccrc-pwa/still-river \
