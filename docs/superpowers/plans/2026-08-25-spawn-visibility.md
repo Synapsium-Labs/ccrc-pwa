@@ -495,6 +495,27 @@ coordinator that asked for it.
 
 - [x] **Step 7: commit.**
 
+- [x] **Step 8 (review fix round):** the one must-fix off Task 4's review, real
+  against the tree and not refuted.
+  1. **The tick gate shipped entirely unmeasured** — at the exact point the
+     commit body made it load-bearing ("no timer at all when nothing is
+     spawning"). Dropping the second argument to a bare `useNow(1_000)` left the
+     whole `pwa` package GREEN — 74 files / 1900 tests — so a permanent
+     one-second re-render loop over every session row could ship in silence:
+     this repo's own doctrine ("a comment is a request; a red suite is a
+     mechanism") broken where it was being cited, with the identical gate
+     already pinned one file over (`runs-screen.test.tsx`, "asks for the slow
+     cadence when no row is spawning — both directions, or it is not a gate").
+     Fixed with that pin's twin in `fleet-screen.test.tsx`, reusing its
+     `cadenceOf` spy harness and its mockRestore-before-useRealTimers note. ONE
+     ADAPTATION, written onto the harness rather than left implicit:
+     FleetScreen's tree is NOT single-interval — `useProjectedHome`,
+     `AccountsStrip`, `FleetHostBanner` and `HotFilesStrip` all start pollers on
+     the same mount — so the instrument is the PRESENCE of `1_000` among the
+     recorded intervals, not whole-array equality. The `dispatched`-with-a-
+     surviving-stamp case is pinned because it is the one a gate reading the
+     FIELD instead of asking `dispatchWindow` would fail.
+
 ### Task 5: render the facts that already ship
 
 **Files:**
