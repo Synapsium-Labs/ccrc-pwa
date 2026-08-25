@@ -43,7 +43,14 @@ import { mkTmp } from './tmpHelpers.js';
 const srcRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../src');
 const NEW = { ccdVerbs: [ACTOR_FLAGS_CAP] };
 const FILES = ['watch.ts', 'coord/close.ts', 'coord/dispatch.ts', 'coord/routes.ts'];
-const BUILDERS = /CCD_ARGV\.(wsArchive|wsRestore|wsHold|wsRelease|wsRename)\(/;
+// `wsAddWorker` joined the list in T2 (spawn visibility). It is not one of the
+// five WORKSPACE verbs wave 6 threaded — it mints a workspace rather than
+// acting on one — but it is unmistakably an unattended lane with something to
+// declare: the ONE `ws-add` in the tree that no operator asked for, fired by
+// the dispatch path on the coordinator's behalf. Leaving it out of this scan
+// would have let it keep recording `declared: nothing` while this file's own
+// title claimed every unattended call site names itself.
+const BUILDERS = /CCD_ARGV\.(wsAddWorker|wsArchive|wsRestore|wsHold|wsRelease|wsRename)\(/;
 
 describe('sweepDec', () => {
   it('declares the agent lane and names the sweep', () => {
@@ -85,7 +92,7 @@ describe('every unattended ccd call site names itself', () => {
       .toEqual([]);
   });
 
-  it('found EXACTLY the ten pinned call sites — not a floor, an exact count (fix round 2, F5b)', () => {
+  it('found EXACTLY the pinned call sites — not a floor, an exact count (fix round 2, F5b)', () => {
     // `toBeGreaterThanOrEqual(10)` was a floor, not a count: an eleventh
     // unattended call site — a NEW verb call this file's `SITES` array below
     // has no entry for — would satisfy `11 >= 10` silently, so a mislabelled
@@ -106,7 +113,10 @@ describe('every unattended ccd call site names itself', () => {
 });
 
 /**
- * Ten sites, five distinct labels, each site identified by the code AROUND
+ * Eleven sites (ten, until T2's `ws-add` joined them), five distinct labels —
+ * the new site shares `dispatchRun`'s own `` `run:${run.id} dispatch` ``, which
+ * is correct: one dispatch, two ccd acts, one lane. Each site is identified by
+ * the code AROUND
  * the label rather than by the label itself — so a mutation that swaps two
  * valid labels between two valid sites cannot hide by also moving the
  * anchor. `close.ts`'s five sites share one identical label
@@ -155,6 +165,9 @@ const SITES: readonly Site[] = [
   // call, the same shape every `close.ts` entry above already uses — a
   // foreign call captured here changes the surrounding text and reds against
   // the hardcoded label below, exactly as a cross-site label swap would.
+  { file: 'coord/dispatch.ts', what: 'dispatchRun fresh spawn, the ws-add that mints the workspace',
+    find: /const argv = CCD_ARGV\.wsAddWorker\(run\.project,\n\s+sweepDec\(deps\.fleetState, (`[^`]*`)\)\);/,
+    label: '`run:${run.id} dispatch`' },
   { file: 'coord/dispatch.ts', what: 'dispatchRun hold, step 5',
     find: /const holdArgv = CCD_ARGV\.wsHold\(sessionId,\n\s+holdReason\(run\.program, run\.wave, run\.waveOf, run\.id\),\n\s+sweepDec\(deps\.fleetState, (`[^`]*`)\)\);/,
     label: '`run:${run.id} dispatch`' },

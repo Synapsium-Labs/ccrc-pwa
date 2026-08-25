@@ -227,27 +227,27 @@ export const SPAWN_STALL_MS = 360_000;
   `capSupported(state, ACTOR_FLAGS_CAP)`), the `wsHold` precedent (`:260`).
 - Produces: `wsAddWorker(p: string, dec: ActorFlags | null)`.
 
-- [ ] **Step 1: read the precedent.** `ccdargv.ts:60-110` (the dec doc block), `:163-170`
+- [x] **Step 1: read the precedent.** `ccdargv.ts:60-110` (the dec doc block), `:163-170`
   (`sweepDec`), `:238-262` (`wsArchive`/`wsRestore`/`wsHold`'s exact flag placement), and how
   `dispatch.ts` already obtains the fleet state it passes to `sweepDec` for its `ws-hold`
   call (`dispatch.ts:425-432`) — reuse THAT value; do not measure a second one.
 
-- [ ] **Step 2: red-first.** Extend the argv pin: a fresh-spawn dispatch on a
+- [x] **Step 2: red-first.** Extend the argv pin: a fresh-spawn dispatch on a
   caps-supporting fixture composes `['ws-add','--no-rc',<project>, ...decFlags]` with the
   dec's reason naming this run (`run:<id> dispatch`), and on a fixture whose caps do NOT
   support actor flags composes exactly `['ws-add','--no-rc',<project>]` — the absence-permits
   half, which is what keeps an older ccd working. Expect RED.
 
-- [ ] **Step 3: implement.** `wsAddWorker: (p: string, dec: ActorFlags | null) => argv(['ws-add', '--no-rc', p, ...decFlags(dec)])`,
+- [x] **Step 3: implement.** `wsAddWorker: (p: string, dec: ActorFlags | null) => argv(['ws-add', '--no-rc', p, ...decFlags(dec)])`,
   and at the call site pass `sweepDec(<the same fleet state ws-hold uses>, \`run:${run.id} dispatch\`)`.
   Keep `--no-rc` in its leading position (ccd's parse contract) — the dec flags go last, as
   every other builder places them.
 
-- [ ] **Step 4: green + mutation.** Run the argv suite, `whitelist-subset.test.ts`,
+- [x] **Step 4: green + mutation.** Run the argv suite, `whitelist-subset.test.ts`,
   `test/verb-gate.test.ts`, `typecheck-tests`. Mutation: drop the `...decFlags(dec)` spread →
   the caps-supporting pin reds; revert, state the count.
 
-- [ ] **Step 5: the ownership edge reaches the wire.** `runs.claimedBy` — the one
+- [x] **Step 5: the ownership edge reaches the wire.** `runs.claimedBy` — the one
   coordinator's session id, the column `resolveCoordinator` and the `claimed-by-another`
   refusal already turn on (`schema.ts:75`) — is read server-side ONLY: `RunRow extends
   RunSummary` adds nothing but `prLineage`, and `shared/api.ts` has no `claimedBy` at all, so
@@ -268,7 +268,7 @@ export const SPAWN_STALL_MS = 360_000;
   - Mutation: drop `claimedBy` from `hydrateRun`'s SELECT/mapping → the wire pin reds; state
     the count.
 
-- [ ] **Step 6: commit** (one commit for both halves is fine — they are one sentence about
+- [x] **Step 6: commit** (one commit for both halves is fine — they are one sentence about
   attribution: who caused the spawn, and who owns the run — but say both in the body).
 
 ### Task 3: the run board renders the window — and the wedge

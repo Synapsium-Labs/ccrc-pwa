@@ -3161,6 +3161,29 @@ export interface RunSummary {
   workspace: string | null;
   branch: string | null;
   state: RunState;
+  /** The ONE coordinator that owns this run: the tmux-derived session id of
+   *  the session that opened it, fixed at `POST /api/runs` and rewritten by no
+   *  route afterwards. That immutability is the mechanism behind the
+   *  `claimed-by-another` refusal — a second coordinator, in a fresh
+   *  workspace, naming a programme this one already claimed is refused
+   *  FOREVER, because nothing lowers this flag; recovering from it means
+   *  reaching the original session or opening a new programme, never
+   *  reassigning the run.
+   *
+   *  THE PWA READS IT AS THE PROGRAMME-OWNERSHIP EDGE: this field (the
+   *  parent) paired with `sessionId` (the child, the worker this run
+   *  dispatched) is what lets the fleet tree nest a worker under the
+   *  coordinator that asked for it, instead of scattering both through one
+   *  flat list. Server-side it is older than that use — `resolveCoordinator`
+   *  reads it to address `toId:'coordinator'` mail — and this field is a
+   *  READ of that same column, never a second copy of the decision.
+   *
+   *  `null` means no owner was recorded — a row from a database written
+   *  before the column had a writer, or a hand-inserted recovery row. Absence
+   *  permits: a renderer brackets nothing under a `null`, which is the honest
+   *  answer, where a fabricated owner would nest a run under a coordinator
+   *  that never claimed it. */
+  claimedBy: string | null;
   /** Deviation D-1: wave >= 2 resumes its session (no ccd verb can spawn
    *  fresh into an existing workspace) and the dispatch route then injects
    *  /clear through the send path, so the context is fresh even though the

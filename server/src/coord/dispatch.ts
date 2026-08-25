@@ -238,7 +238,15 @@ export async function dispatchRun(
     // spawn is a dispatched program worker, so it declares `--no-rc` at
     // creation (the 2026-08-13 ruling, task #37). The PWA's ordinary
     // workspace-add keeps `wsAdd` and the box's own RC default.
-    const argv = CCD_ARGV.wsAddWorker(run.project);
+    //
+    // And it declares WHO (spawn visibility, T2). Same `sweepDec` on the same
+    // `deps.fleetState` the hold at step 5 already passes — read once, spent
+    // twice, never measured a second time — so the journal's `create` row and
+    // the `hold` row that follows it carry one identical actor and read as one
+    // act by one lane. Without it Build 9a recorded this spawn as `declared:
+    // nothing`, indistinguishable from an operator's own add.
+    const argv = CCD_ARGV.wsAddWorker(run.project,
+      sweepDec(deps.fleetState, `run:${run.id} dispatch`));
     // BEFORE the call, never after: this is the only moment the run can say
     // "a dispatch is in flight" — the id does not exist yet, and a stamp
     // written once `runCcd` resolves would be null for the entire window it

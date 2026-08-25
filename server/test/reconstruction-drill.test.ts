@@ -257,6 +257,11 @@ describe('the reconstruction drill', () => {
       'resumed', 'clearedAt',            // the /clear proof (D-1); no artifact stamps it
       'openedAt',                        // same class of wall-clock instant as dispatchedAt/closedAt
       'handoffCommit',                   // the worker's claimed commit sha; nothing persists it outside the DB
+      'claimedBy',                       // the COORDINATOR's session id. The ledger header names the
+                                         // programme's WORKSPACE and the hold names its wave — neither
+                                         // names the session that opened the run, and the registry has no
+                                         // field for it at all. So a DB loss forgets who owned the
+                                         // programme, and the recovery is a human saying so, not a parse.
       'programTitle',                    // TEMPLATE.md's header carries a slug only, no title line
       'unreadMail',                      // a live count over acked/queued mail; the DB alone tracks delivery state
       'work item ids and their blockedBy DAG',
@@ -272,17 +277,18 @@ describe('the reconstruction drill', () => {
     const RUN_SUMMARY_KEYS: Record<keyof RunSummary, true> = {
       id: true, program: true, programTitle: true, wave: true, waveOf: true,
       project: true, sessionId: true, workspace: true, branch: true, state: true,
+      claimedBy: true,
       resumed: true, clearedAt: true, openedAt: true, dispatchStartedAt: true,
       dispatchedAt: true,
       closedAt: true, handoffCommit: true, items: true, unreadMail: true,
     };
-    expect(Object.keys(RUN_SUMMARY_KEYS).length).toBe(19);
+    expect(Object.keys(RUN_SUMMARY_KEYS).length).toBe(20);
 
     const r = reconstruct(fx);
     for (const field of UNRECOVERABLE) {
       expect(Object.keys(r), `${field} was reconstructed after all`).not.toContain(field);
     }
-    expect(UNRECOVERABLE.length).toBe(13);
+    expect(UNRECOVERABLE.length).toBe(14);
   });
 
   it('refuses to invent a program when the ledger is missing', () => {

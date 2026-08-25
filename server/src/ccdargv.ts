@@ -228,8 +228,20 @@ export const CCD_ARGV = {
    *  spawn and released mid-program). Leading-flag position is ccd's parse
    *  contract: `cmd_ws_add` shifts `--no-rc` before the positionals, so a
    *  trailing flag would be read as the slug. The PWA's ordinary add stays
-   *  `wsAdd` and the box default. */
-  wsAddWorker: (p: string) => argv(['ws-add', '--no-rc', p]),
+   *  `wsAdd` and the box default.
+   *
+   *  AND IT DECLARES (spawn visibility, T2). This is the ONE `ws-add` in the
+   *  tree no operator asked for — the dispatch path firing on a coordinator's
+   *  behalf — so it is an unattended lane in exactly `wsArchive`'s sense, and
+   *  until now it passed nothing: Build 9a's journal recorded every dispatched
+   *  spawn as `declared: nothing / unmeasured`, byte-identical to a human
+   *  tapping Add on the fleet screen. The dec goes LAST, after the positional,
+   *  where every other builder here places it — `--no-rc` keeps the leading
+   *  slot ccd parses, and attribution is appended behind the project, so the
+   *  shift-then-positionals contract is untouched. `null` still yields the
+   *  bare argv token for token, which is what an older ccd (no
+   *  `actor-flags-v1`) must keep receiving. */
+  wsAddWorker: (p: string, dec: ActorFlags | null) => argv(['ws-add', '--no-rc', p, ...decFlags(dec)]),
   prStateSession: (id: string) => argv(['pr-state', '--session', id]),
   prStateProject: (p: string)  => argv(['pr-state', '--project', p]),
   prOpen:    (id: string, t: string, b64: string, draft: boolean) =>

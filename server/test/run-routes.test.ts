@@ -17,6 +17,7 @@ import { localIO, type FleetIO } from '../src/io.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { degradedReadIO, unreadableField } from './ioDoubles.js';
+import { ACTOR_FLAGS_CAP } from '../src/ccdargv.js';
 import { holdReason } from '../src/coord/rundefs.js';
 import { WORKER_KICKOFF_PREFIX } from '../src/coord/dispatch.js';
 import { MAIL_BODY_MAX_BYTES, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX } from '../../shared/api.js';
@@ -350,6 +351,57 @@ describe('POST /api/runs/:id/dispatch', () => {
     const opened = (await postOpen(app)).json() as { id: number };
     const res = await postDispatch(app, opened.id);
     expect(res.statusCode).toBe(200);
+    expect(calls.filter((c) => c[0] === 'ws-add')).toEqual([['ws-add', '--no-rc', PROJECT]]);
+  });
+
+  // T2 — the journal learns who spawned the worker. Build 9a taught ccd to
+  // record a DECLARED actor on the workspace verbs, and `wsAddWorker` was the
+  // one unattended builder still passing nothing: every dispatched spawn
+  // landed in the lifecycle journal as `declared: nothing / unmeasured`,
+  // indistinguishable from an operator's own `ws-add` from the PWA. The two
+  // tests below are the two halves of that fix, and they must BOTH hold —
+  // one alone would let the flags become unconditional (breaking every ccd
+  // older than `actor-flags-v1`) or vanish (recording nothing again).
+  it('a fresh spawn on an actor-flags box DECLARES the dispatch: ws-add carries the dec, naming this run', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-fresh-dec'] });
+    // `ws-hold` rides along in the verb list for the reason
+    // `unattended-actor.test.ts` measured on the sibling call: `verbSupported`
+    // gates the hold on the VERB, independently of `sweepDec`'s own
+    // `capSupported` gate on the FLAG token, and an unsupported hold refuses
+    // the dispatch before this argv is ever read back.
+    const w = await openApp(home, run, {
+      fleetState: { connected: true, downSince: null,
+                    ccdVerbs: ['ws-add', 'ensure', 'ws-hold', ACTOR_FLAGS_CAP],
+                    rosterFp: null, build: null },
+    });
+    app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    expect((await postDispatch(app, opened.id)).statusCode).toBe(200);
+    // Token for token: `--no-rc` keeps ccd's parse-load-bearing LEADING
+    // position, the project stays the sole positional, and the declaration is
+    // appended last — the placement every other dec-carrying builder uses.
+    expect(calls.filter((c) => c[0] === 'ws-add')).toEqual([
+      ['ws-add', '--no-rc', PROJECT, '--surface', 'agent', '--actor', `run:${opened.id} dispatch`],
+    ]);
+  });
+
+  it('a fresh spawn on a ccd that never advertised actor-flags sends the BARE argv, byte for byte', async () => {
+    // Absence permits, and this is the half that keeps an older fleet host
+    // working: `sweepDec` answers `null` with no capability evidence, and
+    // `decFlags(null)` contributes no tokens at all. An unconditional dec here
+    // would meet an old `cmd_ws_add`'s positional arity and name a worktree
+    // after the flag — the exact shape `stopId`'s own docstring records paying
+    // for once already.
+    const home = mkTmp('ccrc-runs-');
+    const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-fresh-nodec'] });
+    const w = await openApp(home, run, {
+      fleetState: { connected: true, downSince: null, ccdVerbs: ['ws-add', 'ensure', 'ws-hold'],
+                    rosterFp: null, build: null },
+    });
+    app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    expect((await postDispatch(app, opened.id)).statusCode).toBe(200);
     expect(calls.filter((c) => c[0] === 'ws-add')).toEqual([['ws-add', '--no-rc', PROJECT]]);
   });
 
@@ -1195,6 +1247,46 @@ describe('GET /api/runs', () => {
     expect((await getRuns(app)).json()).toEqual({ runs: [] });
     const withClosed = (await getRuns(app, true)).json() as { runs: { id: number }[] };
     expect(withClosed.runs.map((r) => r.id)).toContain(opened.id);
+  });
+
+  // T2's second half: the PROGRAMME-OWNERSHIP EDGE reaches the wire. `runs.
+  // claimedBy` has been a column since Build 4 and is read server-side only —
+  // `openRun`'s one-coordinator guard and `resolveCoordinator` both turn on it
+  // — so the PWA could see which SESSION a run named but never which session
+  // OWNED it. That edge (coordinator -> worker) is the whole of T4's nesting,
+  // and a client that cannot read it would have to guess the parent from
+  // programme slug collisions, which is the seam-level guessing the
+  // conventions forbid.
+  it('carries claimedBy — the coordinator that owns the run, not merely the worker it named', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home, { wsAddCreates: ['demo-owned'] });
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    await postDispatch(app, opened.id);
+    const { runs } = (await getRuns(app)).json() as { runs: Record<string, unknown>[] };
+    // BOTH ends of the edge on one row: who owns it, and who does the work.
+    expect(runs[0]).toMatchObject({ id: opened.id, claimedBy: CLAIMED_BY, sessionId: 'demo-owned' });
+  });
+
+  it('answers claimedBy null for a row that has none, rather than inventing an owner', async () => {
+    // Absence permits. A row can lack one — a database written before the
+    // column had a writer, or a hand-inserted recovery row — and the honest
+    // wire answer is `null`: no owner was recorded. A renderer reads that as
+    // "do not bracket this row under anything", which is exactly right; a
+    // fabricated owner would nest a run under a coordinator that never
+    // claimed it.
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    w.coord.db.prepare('UPDATE runs SET claimedBy = NULL WHERE id = ?').run(opened.id);
+    const { runs } = (await getRuns(app)).json() as { runs: Record<string, unknown>[] };
+    expect(runs[0]).toMatchObject({ id: opened.id });
+    expect(runs[0]!.claimedBy).toBeNull();
+    // And the property is PRESENT, not merely absent-and-undefined — the
+    // difference a `toMatchObject` on `null` cannot see, and the one a client
+    // reading `'claimedBy' in run` would trip over.
+    expect(Object.keys(runs[0]!)).toContain('claimedBy');
   });
 
   it('answers 501 not-configured without a coordination store', async () => {

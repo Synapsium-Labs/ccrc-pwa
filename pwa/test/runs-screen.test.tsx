@@ -19,11 +19,16 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 // carries, so this default IS the no-regression baseline — every case below
 // must keep rendering exactly as it did before the column existed. A case about
 // the dispatch window sets it explicitly through `over`.
+//
+// `claimedBy` names a coordinator that is deliberately NOT one of the sessions
+// any fixture in this file puts in the fleet — the ownership edge is real data
+// on the row, and no case here is about rendering the edge, so the parent stays
+// absent and every row keeps its top-level position.
 const r = (over: Partial<RunSummary> = {}): RunSummary => ({
   id: 3, program: 'build4-transcript-surface', programTitle: 'Build 4: transcript surface',
   wave: 3, waveOf: 4, project: 'ccrc-pwa',
   sessionId: 'ccrc-pwa-clear-cove', workspace: 'clear-cove', branch: 'ws/clear-cove',
-  state: 'working', resumed: false, clearedAt: null,
+  state: 'working', claimedBy: 'ccrc-pwa-coordinator', resumed: false, clearedAt: null,
   openedAt: Date.now() - 1_000_000, dispatchStartedAt: null,
   dispatchedAt: Date.now() - 900_000, closedAt: null,
   handoffCommit: null, items: { done: 3, total: 7 }, unreadMail: 0, ...over,

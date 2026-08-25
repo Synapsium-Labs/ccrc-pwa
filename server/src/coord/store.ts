@@ -156,7 +156,8 @@ export type AllocateResult =
 interface RunRowDb {
   id: number; program: string; programTitle: string; wave: number; waveOf: number | null;
   project: string; sessionId: string | null; workspace: string | null; branch: string | null;
-  state: string; resumed: number; clearedAt: number | null; openedAt: number;
+  state: string; claimedBy: string | null;
+  resumed: number; clearedAt: number | null; openedAt: number;
   dispatchStartedAt: number | null; dispatchedAt: number | null; closedAt: number | null;
   handoffCommit: string | null;
   prLineage: string | null;
@@ -164,7 +165,8 @@ interface RunRowDb {
 
 const RUN_ROW_COLUMNS =
   'r.id, r.program, p.title AS programTitle, r.wave, r.waveOf, r.project, r.sessionId, ' +
-  'r.workspace, r.branch, r.state, r.resumed, r.clearedAt, r.openedAt, r.dispatchStartedAt, ' +
+  'r.workspace, r.branch, r.state, r.claimedBy, ' +
+  'r.resumed, r.clearedAt, r.openedAt, r.dispatchStartedAt, ' +
   'r.dispatchedAt, r.closedAt, ' +
   'r.handoffCommit, r.prLineage';
 
@@ -921,6 +923,14 @@ export class CoordStore {
       wave: row.wave, waveOf: row.waveOf, project: row.project,
       sessionId: row.sessionId, workspace: row.workspace, branch: row.branch,
       state: isRunState(row.state) ? row.state : 'unknown',
+      // `runs.claimedBy` — TEXT, nullable — read straight through on
+      // `sessionId`/`workspace`/`branch`'s idiom two lines up, with no guard
+      // of its own: it is a free-form tmux-derived session id, not an enum, so
+      // there is no vocabulary to read it through. NULL means no owner was
+      // recorded (an older row, a hand-inserted recovery row), never a value
+      // this build could not read; `RunSummary.claimedBy` says what a reader
+      // does with that.
+      claimedBy: row.claimedBy,
       resumed: row.resumed !== 0,
       // A real column (`runs.clearedAt`), read straight through — not a
       // placeholder. `setClearedAt` is Task 9's dispatch route's own write
