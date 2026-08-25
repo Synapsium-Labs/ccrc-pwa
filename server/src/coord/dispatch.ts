@@ -234,7 +234,11 @@ export async function dispatchRun(
     // `ambiguous-dispatch` below, never silently misbound).
     const before = await readRegistry(deps.io, deps.cfg);
     const beforeIds = new Set(before.map((r) => r.id));
-    const argv = CCD_ARGV.wsAdd(run.project);
+    // `wsAddWorker`, not `wsAdd`: this is the one call site that knows the
+    // spawn is a dispatched program worker, so it declares `--no-rc` at
+    // creation (the 2026-08-13 ruling, task #37). The PWA's ordinary
+    // workspace-add keeps `wsAdd` and the box's own RC default.
+    const argv = CCD_ARGV.wsAddWorker(run.project);
     const res = await deps.runCcd(argv);
     // §1.5: NO EARLY RETURN HERE ANY MORE. `!res.ok` used to short-circuit on
     // this line, before the diff below — see the gate after `winner`.

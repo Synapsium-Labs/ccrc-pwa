@@ -128,6 +128,15 @@ describe('the tests-inclusive projects really do cover the directory', () => {
           walk(abs);
           continue;
         }
+        // `__`-prefixed entries are TRANSIENT mutants written by a parallel
+        // suite (`boot.test.ts` writes `server/src/__boot_control_mutant__.ts`
+        // for ~15s, removed in its `finally`). Same guard, same reason, as
+        // `single-definition.test.ts`'s `sources` and `run-routes.test.ts`'s
+        // `sourcesUnder` — without it this census is the one suite in the
+        // repo that reds on the window, which is exactly the "typecheck-tests
+        // load flake" every full-suite run kept re-diagnosing (it was never
+        // load: it was this race, and it finally fired on the quiet CI box).
+        if (e.name.startsWith('__')) continue;
         if (e.name.endsWith('.ts') && !e.name.endsWith('.d.ts')) out.push(abs);
       }
     };

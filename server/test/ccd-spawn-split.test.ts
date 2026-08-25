@@ -738,3 +738,62 @@ describe('_spawn_start: --remote-control only when the box says on', () => {
     expect(composedCommand(news[1])).toBe(expectedCommand(`--session-id '${UUID}'`, true));
   });
 });
+
+// ---------------------------------------------------------------------------
+// The per-session rc field (the 2026-08-13 ruling, task #37): `ws-add --no-rc`
+// stamps `rc=off` at creation — the only moment "this pane is a dispatched
+// worker" is known — and the row keeps it through every respawn.
+// ---------------------------------------------------------------------------
+
+describe('ws-add --no-rc — the per-session rc field', () => {
+  /** The box flag, ON for every case here: the field's whole job is to
+   *  suppress a flag the box would otherwise grant. Same writer shape as the
+   *  Stage 2e describe above. */
+  const flag = (body: string): void => {
+    fs.writeFileSync(path.join(h.home, '.ccrc', 'remote-control'), body);
+  };
+
+  it('ws-add --no-rc stamps rc=off before the first spawn, and a plain ws-add stamps nothing', () => {
+    h.makeRepo('demo'); h.makeRepo('demo2');
+    flag('on\n');
+    // The dispatch path's spelling. The stamp must precede the first spawn:
+    // the captured new-session line lacking the flag IS that ordering,
+    // measured — a stamp written after `_spawn_start` would leave it on.
+    h.sh(`${WS_ADD_REAL_SPAWN} CCD_WS_SLUG=quiet-mesa cmd_ws_add --no-rc demo; :`);
+    expect(h.reg('demo-quiet-mesa', 'rc')).toBe('off');
+    const mesa = newSessions().find((c) => c.includes('-s cc-demo-quiet-mesa '));
+    expect(mesa).toBeDefined();
+    expect(mesa).not.toContain('--remote-control');
+    // A PLAIN ws-add on the same box: no field at all — absence permits, and
+    // the box's own verdict still governs every non-dispatched session.
+    h.sh(`${WS_ADD_REAL_SPAWN} CCD_WS_SLUG=quiet-lake cmd_ws_add demo2; :`);
+    expect(h.reg('demo2-quiet-lake', 'rc')).toBeNull();
+    const lake = newSessions().find((c) => c.includes('-s cc-demo2-quiet-lake '));
+    expect(lake).toContain("--remote-control 'demo2-quiet-lake'");
+  });
+
+  it('the field survives a respawn — cmd_ensure recomposes WITHOUT the flag, with no caller argv', () => {
+    // THE TEST THAT MAKES THE REGISTRY-FIELD CHOICE LOAD-BEARING. The respawn
+    // paths have no caller: `claude-session@<id>`'s ExecStart is `ccd
+    // supervise %i`, and cmd_ensure takes exactly one positional as a stated
+    // security boundary. A caller-argv design cannot pass this test — after
+    // the kill below, the registry row is the ONLY place the fact survives.
+    h.makeRepo('demo');
+    flag('on\n');
+    h.sh(`${WS_ADD_REAL_SPAWN} CCD_WS_SLUG=quiet-mesa cmd_ws_add --no-rc demo; :`);
+    // Kill the pane and the call record: what remains is exactly what a
+    // Restart=always cycle starts from.
+    fs.rmSync(path.join(h.home, 'pane-up'), { force: true });
+    fs.rmSync(path.join(h.home, 'ccd-calls'));
+    // CCD_IN_UNIT=1 selects the direct spawn path (the argv-surface describe's
+    // idiom): the supervised branch would hand off to a unit and spawn nothing
+    // in this process.
+    h.sh(`${WS_ADD_REAL_SPAWN} CCD_IN_UNIT=1; cmd_ensure demo-quiet-mesa; :`);
+    const news = newSessions();
+    expect(news).toHaveLength(1);
+    expect(news[0]).not.toContain('--remote-control');
+    // And it is the claimed row's ordinary revival otherwise — mode=resume,
+    // not a stripped-down spawn.
+    expect(news[0]).toContain('--resume');
+  });
+});

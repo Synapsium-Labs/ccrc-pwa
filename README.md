@@ -548,6 +548,17 @@ at EOF-before-delimiter), so `printf 'on' > ~/.ccrc/remote-control` reads as
 that case as `PASS rc: off (unparseable …)` rather than reporting it as a
 deliberate `off`.
 
+The box decides for **ordinary** sessions only. A dispatched program worker is
+declared `--no-rc` at `ws-add` by the server's dispatch path (the 2026-08-13
+ruling, orchestrator task #37): `ccd ws-add --no-rc` stamps the per-session
+registry field `rc` as `off`, and `_spawn_start`'s consult then strips
+`--remote-control` from that session's every spawn — across swap and every
+`Restart=always` cycle — no matter what the box flag says. Absent, or anything
+but the exact string `off`, follows the box: the field can only ever suppress,
+never enable, and it dies with the row at reap. The PWA's ordinary
+workspace-add composes no flag and stays box-default, and the doctor's `rc`
+check keeps reporting the box flag alone.
+
 `rc` is a check of its own, deliberately: it reads the flag file and nothing
 else — no `ccrc.env`, no unit files, no box role — so it answers on a **fleet
 host**, which has no `ccrc.env` at all and is the one box in the topology that

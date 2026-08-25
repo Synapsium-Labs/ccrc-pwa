@@ -222,6 +222,14 @@ export const CCD_ARGV = {
   forget:    (id: string) => argv(['forget', id]),
   swap:      (id: string, w: string) => argv(['swap', id, w]),
   wsAdd:     (p: string) => argv(['ws-add', p]),
+  /** The dispatch path's ws-add: a dispatched program worker spawns WITHOUT
+   *  --remote-control (the 2026-08-13 ruling, task #37) — declared at
+   *  creation, the only moment worker-ness is known (`hold` is written after
+   *  spawn and released mid-program). Leading-flag position is ccd's parse
+   *  contract: `cmd_ws_add` shifts `--no-rc` before the positionals, so a
+   *  trailing flag would be read as the slug. The PWA's ordinary add stays
+   *  `wsAdd` and the box default. */
+  wsAddWorker: (p: string) => argv(['ws-add', '--no-rc', p]),
   prStateSession: (id: string) => argv(['pr-state', '--session', id]),
   prStateProject: (p: string)  => argv(['pr-state', '--project', p]),
   prOpen:    (id: string, t: string, b64: string, draft: boolean) =>
