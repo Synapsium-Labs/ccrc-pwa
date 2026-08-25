@@ -69,14 +69,14 @@ that allocates by sweep.
 
 (numbering continues from the global ledger; D-210 was build 9a's lane)
 
-- **D-211** (Task 3): the plan's red-first step predicted a `SyntaxError` when the
+- **D-211** (Task 3) — the plan's red-first step predicted a `SyntaxError` when the
   test imports a not-yet-exported name; vitest instead yields `undefined` for a
   missing named import, so the red manifested as assertion failures rather than a
   load error. Red-first semantics preserved (the suite was demonstrably red before
   the implementation); recorded because the plan's "Expected: FAIL with" lines for
   ESM-import reds should say failed-assertions, not SyntaxError — later tasks'
   executors should read them that way.
-- **D-212** (Tasks 3–4): `MAIL_REJECT_CODES`' census in `coordinator-skill.test.ts`
+- **D-212** (Tasks 3–4) — `MAIL_REJECT_CODES`' census in `coordinator-skill.test.ts`
   went red at Task 3's commit (the census names `duplicate`/`peer-quota` before any
   skill corpus documents them) and was bridged in Task 4 via a `NOT_A_CALL_REFUSAL`
   parking entry that Task 25 deletes when the corpus prose lands. One intermediate
@@ -86,7 +86,7 @@ that allocates by sweep.
   store.ts's new terminality docstring slightly overstates ("every mail_deliveries
   writer is guarded" — `setDeliveryEnvelope` writes only the envelope column and
   carries no guard, deliberately outside D10 holes 3/4).
-- **D-213** (Tasks 7–9 → 18, found at the wave-7A phase checkpoint): the plan put
+- **D-213** (Tasks 7–9 → 18, found at the wave-7A phase checkpoint) — the plan put
   `mail-routes.test.ts`'s kebab-census widening in Task 18, but the census window
   opens at Task 7's commit — `claims.ts`/`peers.ts`/`ledger.ts` already spell
   `'bad-path'`, `'session-gone'`/`'hard-cap'`, `'never-started'` and `'bad-count'`
@@ -105,7 +105,7 @@ that allocates by sweep.
   spelling wins), and land Task 18's own membership pins as written. Bisect: the
   census is red from Task 7's commit (9207881b) to this checkpoint commit —
   accepted rather than history-rewritten, same ruling as D-212.
-- **D-214** (Task 25, found at the phase-3 checkpoint): the plan had Task 25 create
+- **D-214** (Task 25, found at the phase-3 checkpoint) — the plan had Task 25 create
   `ccd/coordinator-skill/references/peer-protocol.md` but never mentioned
   `install-coordinator-skill.sh`'s `REQUIRED_REFS` fail-closed gate, whose
   agreement with the real directory `wrapper-roster-fixture.test.ts` (I8) pins in
@@ -113,7 +113,7 @@ that allocates by sweep.
   the phase (no per-task sweep in Tasks 25–29 lists that suite). Fixed at the
   checkpoint: `peer-protocol.md` added to `REQUIRED_REFS`, comment extended to say
   the WORKER skill is what points at the fourth file across the skill boundary.
-- **D-215** (Task 28, found at the phase-3 checkpoint): `single-definition`'s
+- **D-215** (Task 28, found at the phase-3 checkpoint) — `single-definition`'s
   act-vocabulary holder pin had pre-planned wave 9's arrival ("add it to this list
   then, not before") but spelled the future path `pwa/src/lib/journalWords.ts`;
   the plan landed `pwa/src/session/journalWords.ts` and carried no step to update
@@ -121,6 +121,75 @@ that allocates by sweep.
   path added to the expected holders, the guard's comment corrected. Bisect for
   both entries: red on one suite each from their task's commit to the checkpoint
   commit — accepted, same ruling as D-212/D-213.
+
+The entries below were numbered at the whole-branch checkpoint from the drift
+census over every commit body on the branch (the executors nominated prose-only,
+per governance; the orchestrator numbers). Classes are one entry each — the
+instances are named inside.
+
+- **D-216** (waves 0–7, class) — anchor drift: the plan's cited line numbers
+  staled as earlier tasks moved the tree, every time resolved tree-wins with
+  semantics intact. Instances: Task 2's `bumpReplayCount`/`markIngested` region
+  (shifted by Task 1), Task 4's `rejections()` (stale by 78 lines), Task 5's L0
+  append point (moved to EOF), Task 6's item-3 anchor, Task 20's auth-gate line
+  numbers, Task 17's row-9 plant site (relocated to `floorFromScan`).
+- **D-217** (class) — plan-drafted code defective as written, repaired at
+  execution with semantics kept: Task 5's mutant B (a bare straight apostrophe
+  inside a single-quoted literal is a parse error — planted semantically), Task
+  6's migration draft (unescaped backticks in the SQL template literal), Task
+  16's own-clock harness (its trigger polluted the read tally it measured), Task
+  28's fetcher tests (one mocked single-read `Response` reused across calls),
+  Task 29's expand test (`getByText` against two matches throws).
+- **D-218** (class) — ceremony predictions corrected by measurement, every
+  ceremony still red-capable: Task 5 mutant C reds TS6133 not the predicted
+  module-resolution error (the vitest one-import-line pin, not the bundler, is
+  the load-bearing L0 guard); Task 5 mutant D reds 3 not 2 (`isClaimState`'s
+  near-misses also fire — guard stronger than counted); Task 10's rung swap reds
+  1 not 2; Task 17 row 6 measures 0 as literally planted (semantic plant used);
+  Task 23's prescribed comment-out floor mutant is invisible to all three regex
+  detectors (executed as deletion instead).
+- **D-219** (class) — the plan's own text violated its own scanners: Task 15's
+  verbatim comment would trip the task's grep-for-zero gate; Task 22's dtbd
+  expect-PASS ran red off Task 8's fixture and the plan's own code block; Task
+  25's reference prose spelled the forbidden `curl -f` form its own pin refuses;
+  and the class's sharpest member, the tracked word-boundary fixtures feeding
+  `floorFromScan`'s live seed (~2,450 numbers high) — respelled split and pinned
+  by the whole-tree self-scan in b3a6a79f.
+- **D-220** (class) — accepted in-branch windows, the D-212 disposition
+  (bisect-visible, not history-rewritten): `GET /api/claims?all=1` without a
+  project silently answered live rows against the PWA's and peer-protocol.md's
+  history promise (516bf8e4 → d6aacdd0); `watch.ts` carried a private
+  `LEDGER_STALE_MS` shadowing the L0 export (first visible in c886a9cc →
+  f313b74a, now guarded two-directionally by `single-definition`).
+- **D-221** (Task 21) — the plan's claims-advisory detector was vacuous as
+  drafted against the landed tree (`watch.ts` had joined the detector's ALLOWED
+  set): a four-token count pin was invented at execution to keep the
+  server-direction ceremony red-capable — guard-design drift beyond what
+  signature governance covers.
+- **D-222** (cluster 3, cee612d7) — two contract narrowings: `archiveContradicted`'s
+  docstring-promised second consumer (divergence `archived-but-live`) was never
+  given a task step and `DivergenceInput` carries no lifecycle to feed it — the
+  promise is cut to the one real consumer; `PeerSummary.archivedReason` was
+  declared in L0 but never producible (`readRegistry` parses no such field) and
+  is removed from the type.
+- **D-223** (this checkpoint) — `deviation-refs`' ENTRY grammar requires an
+  em-dash subject, so this section's original colon-form entries were invisible
+  to the collision scanner (max visible entry was 188). Resolved by respelling
+  the entry heads to the em-dash form the scanner already speaks — not by
+  widening the grammar — in this commit; `definedMax`'s looser DEFINED prefix
+  was already sighted on both forms, so the floor self-scan's derived
+  expectation is unaffected.
+- **D-224** (environment) — `typecheck-tests` fails 2/9 when run from the
+  `/data/projects/ccrc-pwa` symlink cwd (tsc's path-mix breaks the coverage
+  comparison wholesale) and passes 9/9 from the canonical `/mnt` cwd.
+  Pre-existing, environmental, distinct from the known load flake; run the
+  suite from the canonical cwd.
+
+Declined without numbers, deliberately: Task 27's docs-only commit carrying its
+checkbox ticks against the task's own "No commit" clause (a plan
+self-inconsistency with no effect on the tree); and the landed-spelling
+adaptations across Tasks 7–29, which the Cross-task signature governance clause
+below itself rules prose-only.
 
 ## Cross-task signature governance
 
