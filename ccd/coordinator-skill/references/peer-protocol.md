@@ -43,18 +43,22 @@ mode.
 
     resp=$(curl -sS -w '\n%{http_code}' -X POST "$CCRC_API/api/claims" \
       -H "x-ccrc-mail-token: $TOKEN" -H 'content-type: application/json' \
-      -d "{\"fromId\":\"$id\",\"fromUuid\":\"$uuid\",\"project\":\"$project\",
+      -d "{\"byId\":\"$id\",\"byUuid\":\"$uuid\",\"project\":\"$project\",
     \"paths\":[\"server/src/coord/store.ts\"],
     \"intent\":\"wave 3: store methods for the mirror reads\",
     \"runId\":$runid}")
     code="${resp##*$'\n'}"
     body="${resp%$'\n'*}"
 
-All-or-nothing: five paths, one conflict, ZERO acquired. Claims are ADVISORY
+`byId`/`byUuid` here, NOT the mail ingress's `fromId`/`fromUuid` — a claim
+is attributed, not sent, and the route 400s the wrong spelling. All-or-
+nothing: five paths, one conflict, ZERO acquired. Claims are ADVISORY
 — nothing on the box enforces one; what a claim buys is a synchronous answer
 at the moment of asking instead of a merge conflict at the end of the wave.
-Claiming `.` or an empty path is refused `bad-path` — claiming the whole
-repo IS the module wedge. Re-POST the same paths at any moment to renew the
+Claiming `.` is refused `bad-path` — the store's own decision: claiming the
+whole repo IS the module wedge. An empty path (or an empty `paths` array)
+never reaches that decision — the route's shape validation refuses it
+`bad-request` first, like any malformed body. Re-POST the same paths at any moment to renew the
 lease and rewrite `intent` (the intent is what the fleet screen renders, so
 keep it current — a branch name is written once; an intent can be written
 every ten minutes). The lease (`CLAIM_LEASE_MS`, 45 min) renews itself off
@@ -66,7 +70,7 @@ Release is `POST /api/claims/:id/release` when a claim is done early:
 
     resp=$(curl -sS -w '\n%{http_code}' -X POST "$CCRC_API/api/claims/$claim/release" \
       -H "x-ccrc-mail-token: $TOKEN" -H 'content-type: application/json' \
-      -d "{\"fromId\":\"$id\",\"fromUuid\":\"$uuid\"}")
+      -d "{\"byId\":\"$id\",\"byUuid\":\"$uuid\"}")
 
 A run's close releases that run's claims itself, and a dead session's claims
 lapse inside the lease — so a forgotten release costs minutes, never a
@@ -79,8 +83,8 @@ EVERY conflicting path (never just the first), and carries the holder's
 identity (`heldBy`, `heldByUuid`), the holder's stated `intent`, its `runId`, the
 standing `expiresAt`, the holder's `deliverable`, and a pre-addressed
 `mailHint` — the envelope to send, already filled in. When `deliverable` is
-`no:<reason>`, the hint degrades to "escalate to the operator": never a
-silent send at a peer measured unreachable.
+`no:<reason>`, `mailHint` is `null` — escalate to the operator instead:
+never a silent send at a peer measured unreachable.
 
 ## Losing a race gracefully
 
@@ -114,9 +118,10 @@ before splitting a wave (clause 10); `all=1` includes ended rows, because
 and never deleted. `GET /api/lifecycle?session=<id>` is a workspace's past
 tense, and it answers for a workspace that no longer exists — read each
 row's own lifecycle families (`obs`/`dec`/`meas`), never the registry's
-archive stamp, which is measured false on live rows. `GET /api/ledger`
-lists every deviation allocation with its state (`allocated`, `landed`)
-and its derived `stale` flag — reported at read time, never stored.
+archive stamp, which is measured false on live rows. `GET /api/ledger?project=<slug>`
+(per-project, required) lists every deviation allocation with its state
+(`allocated`, `landed`) and its derived `stale` flag — reported at read
+time, never stored.
 
 ## The allocator — `POST /api/ledger/deviations`
 

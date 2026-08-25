@@ -4458,7 +4458,7 @@ export function compareGenerations(a: string, b: string): number {
  * The journal answers "what happened"; this vocabulary answers "who is here,
  * who holds what, and what number is free" — synchronously, at the moment of
  * asking, not at merge (spec §0). Nothing here decides anything on its own:
- * `peerDeliverable()` (server/src/peers.ts, L1) produces `PeerDeliverable`,
+ * `peerDeliverable()` (server/src/coord/peers.ts, L1) produces `PeerDeliverable`,
  * `decideClaim()` (claims.ts) produces the conflict set, `decideAllocation()`
  * (ledger.ts) produces the numbers, and the one compare-and-swap lives in
  * coord.db's synchronous `tx()` (D11). L0 owns only the words.
@@ -4561,10 +4561,13 @@ export const PEER_ETIQUETTE = [
 /**
  * A claim's four states, AS A TABLE THE TYPE DERIVES FROM — the
  * `MAIL_REJECT_CODES` as-const idiom (:3012) rather than the union-first
- * `PR_REASON_MAP` one, because wave 7's migration generates the `claims`
- * table's CHECK constraint from THIS array: the array is the single
- * definition and the type follows it, so a reorder or a rename is a schema
- * edit a reviewer can see.
+ * `PR_REASON_MAP` one. The landed migration puts NO CHECK constraint on
+ * `claims.state` (MIGRATIONS[3] declares the column bare `TEXT NOT NULL`):
+ * the vocabulary is enforced by the WRITERS — every state the store writes
+ * is a literal from this set — and read back through `isClaimState`, never
+ * a cast, with the suites pinning both. The array stays the single
+ * definition and the type follows it, so a reorder or a rename is still an
+ * edit a reviewer sees in one place.
  *
  * `'live'` is the only non-terminal state. The other three are three
  * different ends a reader handles differently (no overloaded terminal):

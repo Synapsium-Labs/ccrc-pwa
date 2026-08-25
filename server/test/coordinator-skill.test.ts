@@ -794,6 +794,32 @@ describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
     expect(pp()).toMatch(/ADDRESS, not a rejection slip/);
   });
 
+  it('teaches byId/byUuid on the claim curls — the mail lane\'s fromId/fromUuid 400s there (fix, post-9b review)', () => {
+    // The landed routes destructure `byId`/`byUuid` (`POST /api/claims`,
+    // `POST /api/claims/:id/release`, routes.ts) and answer 400 bad-request
+    // to anything else; `fromId`/`fromUuid` is the MAIL ingress's shape. The
+    // pre-fix reference taught the mail spelling in both claim curl bodies,
+    // walking every reader into a 400. Positive: both example bodies carry
+    // the escaped-JSON `byId`/`byUuid` spelling. Negative: no curl body in
+    // this file spells `fromId`/`fromUuid` (prose may CONTRAST the two lanes
+    // in backticks; the escaped `\"` spelling only ever appears inside a -d
+    // body, so it is the exact regression surface).
+    expect(pp()).toContain('\\"byId\\":\\"$id\\"');
+    expect(pp()).toContain('\\"byUuid\\":\\"$uuid\\"');
+    expect(pp()).not.toContain('\\"fromId\\"');
+    expect(pp()).not.toContain('\\"fromUuid\\"');
+  });
+
+  it('tells the truth about which layer refuses a bad claim path (fix, post-9b review)', () => {
+    // An empty path never reaches the store: route shape validation answers
+    // 400 bad-request first (`routes.ts` POST /api/claims). `bad-path` is
+    // the STORE's decision, said about `.`/whole-repo claims. The pre-fix
+    // text folded both into `bad-path`, teaching a refusal code the empty
+    // path can never actually receive.
+    expect(pp()).toMatch(/empty path[\s\S]{0,200}`bad-request`/);
+    expect(pp()).not.toMatch(/empty path is refused `bad-path`/);
+  });
+
   it('teaches losing a race as the mechanism working, with the uncontested-paths step', () => {
     expect(pp()).toContain('Losing a race is the mechanism working');
     expect(pp()).toMatch(/uncontested/);

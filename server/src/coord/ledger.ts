@@ -28,8 +28,14 @@ export type AllocationDecision =
  * plan scan, and re-issuing one IS the bb47c9e failure; the caller
  * measures, this function only compares.
  *
- * bad-count is checked before not-seeded so the worst-case caller learns
- * both defects in one round trip, not one per retry.
+ * bad-count is checked before not-seeded, and the order MASKS, not
+ * combines: a caller with both defects learns bad-count alone, then
+ * not-seeded on the retry — one per round trip. That is the point. Shape
+ * is the caller's own defect, fixable this instant with no data consulted;
+ * not-seeded is a wait-for-the-sweep condition, so answering it first
+ * would park a caller whose request could never have been served anyway.
+ * `not-seeded` is only ever said about a request that was otherwise
+ * servable.
  */
 export function decideAllocation(
   floorRow: { readonly floor: number } | null,

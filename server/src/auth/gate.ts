@@ -72,12 +72,13 @@ import type { SessionStore } from './sessions.js';
  *     the moment the operator arms the flag. It publishes an `ok` and a build
  *     stamp and nothing about the fleet.
  *
- *  2. The NINE box-token machine lanes plus `/api/notify` — the fleet host's
- *     ingress. These callers are `curl` inside a Claude Code session and ccd's
- *     `notify.sh`; they have no cookie jar and never will. All ten CHECK the box
- *     token (`checkMailToken`), and the mail pair records every refusal — but
- *     "checks" is not "requires" for one of them, and the difference is worth
- *     stating rather than rounding off: the nine coordination lanes refuse every
+ *  2. The SEVENTEEN box-token machine lanes plus `/api/notify` — the fleet
+ *     host's ingress. These callers are `curl` inside a Claude Code session and
+ *     ccd's `notify.sh`; they have no cookie jar and never will. All eighteen
+ *     CHECK the box token (`checkMailToken`), and the mail pair records every
+ *     refusal — but "checks" is not "requires" for one of them, and the
+ *     difference is worth stating rather than rounding off: the seventeen
+ *     coordination lanes refuse every
  *     verdict but `'ok'`, while `/api/notify` still passes `'legacy'` (no token
  *     presented) and `'unconfigured'` (this box was never given one) THROUGH, by
  *     the operator's one-deploy-generation rollout ruling. So `/api/notify` is
@@ -86,7 +87,7 @@ import type { SessionStore } from './sessions.js';
  *     `coord/token.ts:207`, "REMOVE `/api/notify`'S `'legacy'` TOLERANCE ONE
  *     DEPLOY AFTER THIS SHIPS" — and this exemption inherits its lifetime: the
  *     day the tolerance goes, this entry is a plain box-token lane like the
- *     other nine. Session-gating it instead is not the fix, because the caller
+ *     other seventeen. Session-gating it instead is not the fix, because the caller
  *     genuinely has no cookie; the fix is the removal already scheduled.
  *
  *  3. `POST /api/auth/login` and `GET /api/auth/status` — the door, and the sign
@@ -640,7 +641,7 @@ export function originVerdict(origin: unknown, expected: string): OriginVerdict 
  * clause. Checking reads would additionally refuse `<img>`/`<link>` style
  * same-site loads of the SPA shell for no gain.
  *
- * EXEMPT ROUTES ARE SKIPPED, and it costs nothing: the nine box-token machine
+ * EXEMPT ROUTES ARE SKIPPED, and it costs nothing: the seventeen box-token machine
  * lanes plus `/api/notify` are `curl` inside a Claude Code session (no `Origin`
  * at all, hence `'absent'`, hence permitted even if they were checked), and
  * their real guard is a header a cross-site page cannot add without triggering a
