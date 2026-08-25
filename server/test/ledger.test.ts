@@ -69,7 +69,11 @@ describe('floorFromScan', () => {
   });
 
   it('a tree with ONLY legacy refs is NOT a seed — fail shut, not guess (D13/D14)', () => {
-    expect(floorFromScan([{ path: 'p.md', text: 'only D-282 (was D-B4-9) and D-309 (was D-B8-13) here' }])).toBeNull();
+    // Legacy refs built by concatenation, like the D14 fixture above: the
+    // wave-10 scanner licenses no bare legacy byte in tracked text, and an
+    // aliased spelling would smuggle a global D-<n> into a fixture whose
+    // whole point is that NOTHING global is present.
+    expect(floorFromScan([{ path: 'p.md', text: 'only ' + 'D-B4-' + '9 and ' + 'D-B8-' + '13 here' }])).toBeNull();
   });
 
   it('an empty scan is null, and null is not a floor of 50', () => {
