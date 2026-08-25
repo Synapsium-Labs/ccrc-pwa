@@ -3168,19 +3168,29 @@ export interface RunSummary {
   resumed: boolean;
   clearedAt: number | null;
   openedAt: number;
-  /** When THIS run's dispatch began — stamped immediately before the `ws-add`
-   *  that mints the workspace, which is the one moment a dispatch is in flight
-   *  and `sessionId` is still null (the server learns the id by registry diff,
-   *  after the call returns, so until then nothing can name the row).
+  /** When THIS run's FRESH-SPAWN dispatch began — stamped immediately before
+   *  the `ws-add` that mints the workspace, which is the one moment a dispatch
+   *  is in flight and `sessionId` is still null (the server learns the id by
+   *  registry diff, after the call returns, so until then nothing can name the
+   *  row).
    *
-   *  ABSENT (`null`) MEANS NO DISPATCH HAS EVER STARTED for this run — the
-   *  ordinary state of a wave N+1 opened but not yet dispatched, and never a
-   *  stand-in for a value that could not be read.
+   *  ABSENT (`null`) MEANS NO FRESH-SPAWN DISPATCH HAS STARTED for this run,
+   *  and that is TWO named conditions, not one — never a stand-in for a value
+   *  that could not be read:
+   *    • nobody has dispatched it at all — the ordinary state of a wave N+1
+   *      opened and waiting; and
+   *    • every dispatch it has had was a wave N>=2 RESUME (D-1: `ensure` into
+   *      the existing workspace), which mints no workspace and stamps nothing.
+   *  The scope is deliberate: a resume already knows its `sessionId` before the
+   *  call, so the console has a row to point at from the first frame and needs
+   *  no stamp to say a dispatch is happening. `state` — not this field — is
+   *  what answers "has this run been dispatched", on every path.
    *
    *  NEVER CLEARED. `state` moving to `dispatched` is what stops a renderer
    *  saying "dispatching"; this stays, and `dispatchedAt - dispatchStartedAt`
-   *  is then how long the spawn actually took. A retry overwrites it with the
-   *  new attempt's start.
+   *  is then how long the spawn actually took — available for a fresh spawn,
+   *  and NOT for a resume, which sets `dispatchedAt` over a null start. A
+   *  retry overwrites it with the new attempt's start.
    *
    *  AND IT NAMES THE WEDGE: a run still `planned` carrying a
    *  `dispatchStartedAt` older than `SPAWN_STALL_MS` is a dispatch that never

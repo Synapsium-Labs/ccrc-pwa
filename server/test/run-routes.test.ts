@@ -11,7 +11,7 @@ import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
 import type { Deps } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
-import { CoordStore } from '../src/coord/store.js';
+import { CoordStore, toRunSummary } from '../src/coord/store.js';
 import type { Runner } from '../src/exec.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { testDeps } from './helpers.js';
@@ -574,6 +574,49 @@ describe('POST /api/runs/:id/dispatch', () => {
     expect(row?.clearedAt).toEqual(expect.any(Number));
     expect(row?.workspace).toBe('demo-existing');
     expect(row?.branch).toBe('ws/demo-existing');
+  });
+
+  it('a RESUMED dispatch leaves dispatchStartedAt null — the column measures the SPAWN, and a resume ' +
+     'mints no workspace (the scope is deliberate, not an oversight)', async () => {
+    // THE SCOPE OF `dispatchStartedAt`, PINNED SO IT IS DELIBERATE RATHER THAN
+    // DISCOVERED. `markDispatchStarted` is called on ONE path — the fresh-spawn
+    // arm, immediately before the `ws-add` (`dispatch.ts`) — and the D-1 resume
+    // arm above (`CCD_ARGV.ensure` + `runCcd`) never calls it. That is correct
+    // and not an omission: the column exists to describe the window in which a
+    // workspace is being MINTED and no session id exists yet, and a resume has
+    // neither half of that — `run.sessionId` is already known before the call,
+    // so the console has a row to point at from the first frame and needs no
+    // stamp to say so.
+    //
+    // WHICH MAKES NULL CARRY A NAMED SECOND CONDITION, and the docstrings on
+    // `RunSummary.dispatchStartedAt` (shared/api.ts), `hydrateRun` (store.ts)
+    // and MIGRATIONS[4] (schema.ts) each say so in as many words: null means no
+    // FRESH-SPAWN dispatch has started — nobody dispatched this run, OR every
+    // dispatch it has had was a resume. The consequence a reader must be able
+    // to derive from those words alone is asserted here: on this row
+    // `dispatchedAt` is set and `dispatchStartedAt` is not, so the
+    // `dispatchedAt - dispatchStartedAt` spawn duration those docstrings
+    // promise is available for wave-1 fresh spawns and NOT for a resume.
+    //
+    // Stamp the resume arm too and this goes red — which is the point: making
+    // the column mean "any dispatch began" is a scope change, and it must cost
+    // a test, not pass unnoticed.
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing-resume');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app,
+      { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing-resume' })).json() as { id: number };
+    expect(w.coord.run(opened.id)?.dispatchStartedAt).toBeNull();   // nothing has dispatched it yet
+    expect((await postDispatch(app, opened.id)).json()).toMatchObject({ ok: true, resumed: true });
+    const row = w.coord.run(opened.id)!;
+    expect(row.state).toBe('dispatched');                 // it WAS dispatched …
+    expect(row.dispatchedAt).toEqual(expect.any(Number));
+    expect(row.dispatchStartedAt).toBeNull();             // … and no spawn window was measured
+    // And the wire says the same thing — the PWA reads this exact pair, so a
+    // renderer that treats a null start as "never dispatched" is reading the
+    // wrong field: `state` is what answers that, on every path.
+    expect(toRunSummary(row).dispatchStartedAt).toBeNull();
   });
 
   it('leaves clearedAt null when the injected /clear is refused (dialog open) — dispatch still lands, ' +

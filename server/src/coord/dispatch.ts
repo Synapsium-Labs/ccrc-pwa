@@ -342,6 +342,14 @@ export async function dispatchRun(
     // Wave N>=2: resume the SAME workspace (deviation D-1 — no ccd verb can
     // spawn fresh into an existing one), then discard the resumed context
     // with an injected `/clear` through `sendPrompt`'s full proof discipline.
+    //
+    // AND NO `markDispatchStarted` HERE, deliberately — the arm above stamps,
+    // this one does not. That column measures the window in which a workspace
+    // is being MINTED and no session id exists yet, and a resume has neither
+    // half: `run.sessionId` is known before the call, so the console already
+    // has a row to point at. Adding the stamp here widens what NULL means and
+    // reds `run-routes.test.ts`'s resume-scope pin, which is the intended
+    // cost — do it only as a decided scope change, never as a tidy-up.
     sessionId = run.sessionId;
     const argv = CCD_ARGV.ensure(sessionId);
     const res = await deps.runCcd(argv);

@@ -590,6 +590,16 @@ export const MIGRATIONS: readonly string[] = [
   // fault-shaped words for an entirely normal event, beside a run board sitting
   // on `planned`.
   //
+  // THE FRESH-SPAWN ARM ONLY, DELIBERATELY. `dispatch.ts`'s other arm — the
+  // wave N>=2 resume (D-1: `ensure` into the workspace the run already owns) —
+  // stamps nothing, because it has neither half of the window this column
+  // describes: no workspace is being minted and `sessionId` is known before the
+  // call, so the console has a row to point at from the first frame. The cost
+  // is that NULL carries two conditions, and both are named wherever it is read
+  // (`RunSummary.dispatchStartedAt`, `hydrateRun`) rather than left to be
+  // discovered: nobody dispatched this run, or every dispatch was a resume.
+  // `state` is what answers "was this dispatched" on both arms.
+  //
   // A MEASUREMENT, NEVER A MODE FLAG, AND SO NOTHING EVER CLEARS IT. `state`
   // moving to `dispatched` is what ends the "dispatching" rendering; this
   // timestamp then STAYS, as forensic material — `dispatchedAt -
@@ -616,10 +626,11 @@ export const MIGRATIONS: readonly string[] = [
   // COORD_SCHEMA_VERSION; v++)`, so an edit to an already-applied entry never
   // runs again against a file already past it. MIGRATIONS[0..3] are FROZEN.
   // NULLABLE WITH NO DEFAULT is the whole contract on the read side: NULL means
-  // "no dispatch has ever started for this run", and a default would collapse
-  // that into "one started at the epoch" — the overloaded-null defect at the
-  // one seam this column exists to keep honest. `ALTER TABLE ... ADD COLUMN` is
-  // the only statement here; nothing is rebuilt, renamed or repurposed.
+  // "no fresh-spawn dispatch has started for this run" (both of the conditions
+  // named above), and a default would collapse that into "one started at the
+  // epoch" — the overloaded-null defect at the one seam this column exists to
+  // keep honest. `ALTER TABLE ... ADD COLUMN` is the only statement here;
+  // nothing is rebuilt, renamed or repurposed.
   `
   ALTER TABLE runs ADD COLUMN dispatchStartedAt INTEGER;
   `,

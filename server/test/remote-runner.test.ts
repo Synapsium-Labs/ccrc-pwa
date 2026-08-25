@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import type { RunningAgent } from '../../agent/src/server.js';
 import type { ConnectedFleet, FleetClient } from '../src/remote/client.js';
 import { createRunner } from '../src/remote/runner.js';
+import { SPAWN_STALL_MS } from '../../shared/api.js';
 import { bootAgent, connectToAgent, makeFixture, type RemoteFixture } from './remoteHelpers.js';
 
 describe('remote Runner — exec over the agent WS', () => {
@@ -123,6 +124,41 @@ describe('per-verb timeouts', () => {
     seen.length = 0;
     await createRunner(client)('/home/u/.local/bin/ccd', []);
     expect(seen[0]).toBe(90_000);
+  });
+
+  it('SPAWN_STALL_MS >= the `ws-add` budget this runner actually enforces — the console never calls a ' +
+     'dispatch stalled while the runner is still legitimately waiting', async () => {
+    // THE INEQUALITY BECOMES A MECHANISM. `SPAWN_STALL_MS` (shared/api.ts) is a
+    // RENDERING threshold and the number above is a TIMEOUT — two different
+    // questions, deliberately two constants, neither derived from the other
+    // (`single-definition` sees one of each and would refuse a copy). But
+    // "deliberately >= the ceiling" lived only in prose, in two files, and a
+    // comment is a request: widen the `ws-add` row past 360 s and the console
+    // would start rendering *dispatch never completed — a workspace may exist*
+    // over a spawn the runner is still waiting on.
+    //
+    // PRECISELY WHAT THIS ADDS, since the row above is not nothing: that row
+    // pins the EXACT budget, so a widening does already cost a test — but the
+    // intended maintenance move is to update the row to the new number, and at
+    // that moment nothing anywhere mentions the threshold. This line is what
+    // speaks up then. The exact-value row makes the CHANGE visible; this makes
+    // the RELATIONSHIP load-bearing, which is the half that was prose.
+    //
+    // MEASURED, NOT RE-STATED. The budget is read back through the same
+    // `createRunner` seam the table above uses rather than by exporting
+    // `CCD_VERB_TIMEOUT_MS` or `timeoutMsFor` — those are module-private on
+    // purpose, and this asserts the number that reaches the wire, which is what
+    // the runner enforces and therefore the only number the inequality is about.
+    // Deleting the `ws-add` row keeps this green, correctly: the fall-through is
+    // 90 s, further BELOW the threshold, and the render still waits past it.
+    //
+    // `ws-add` ONLY, and the omission is deliberate: `ensure` shares the 300 s
+    // budget but is the D-1 RESUME verb, which mints no workspace and stamps no
+    // `dispatchStartedAt` at all (`run-routes.test.ts` pins that scope), so its
+    // ceiling can never move what this threshold renders.
+    seen.length = 0;
+    await createRunner(client)('/home/u/.local/bin/ccd', ['ws-add', 'ccrc-pwa']);
+    expect(SPAWN_STALL_MS).toBeGreaterThanOrEqual(seen[0]);
   });
 });
 

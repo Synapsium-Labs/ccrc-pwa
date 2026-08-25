@@ -163,9 +163,14 @@ are unchanged.
   writer first and follow it exactly.)
   - `dispatch.ts`: call `deps.coord.markDispatchStarted(run.id, Date.now())` on the line
     before `const res = await deps.runCcd(argv);`, with a one-line comment saying why it is
-    before and not after.
+    before and not after. **The fresh-spawn arm ONLY** — the wave N>=2 resume arm (D-1,
+    `CCD_ARGV.ensure`) does not stamp, and the `else` branch says so in a comment.
   - `shared/api.ts`: add `dispatchStartedAt: number | null` to `RunSummary` (docstring: what
-    it measures, that absence means no dispatch has ever started for this run, and that a
+    it measures, that absence means no FRESH-SPAWN dispatch has started — **two named
+    conditions, and both must be written down: nobody dispatched this run, OR every dispatch
+    was a resume**, since the writer is scoped to the `ws-add`; that `state`, not this field,
+    answers "was it dispatched"; that the `dispatchedAt - dispatchStartedAt` arithmetic is
+    therefore available for a fresh spawn and not a resume; and that a
     `planned` run carrying one older than `SPAWN_STALL_MS` is a dispatch that never
     completed), and declare in the L0 constants block:
 
@@ -192,6 +197,20 @@ export const SPAWN_STALL_MS = 360_000;
   3. Drop the column from `MIGRATIONS[4]` → the migration pin reds.
 
 - [x] **Step 7: commit** with measured counts in the body.
+
+- [x] **Step 8 (review fix round):** the two must-fixes off Task 1's review.
+  1. The NULL docstring was false on the resume path in all three copies (`shared/api.ts`,
+     `store.ts`'s `hydrateRun`, `MIGRATIONS[4]`) — Step 4 above dictated the wording while
+     §Design scoped the writer to the `ws-add`, so NULL silently carried a second condition.
+     **Resolved by fixing the WORDS, not the writer** — the scope stays fresh-spawn-only —
+     plus a pin in `run-routes.test.ts` that a resumed dispatch leaves it null, so widening
+     the scope costs a test. Step 4's own text is corrected above so a re-execution cannot
+     reproduce it.
+  2. `SPAWN_STALL_MS >= CCD_VERB_TIMEOUT_MS['ws-add']` lived only in prose across two files.
+     **Mechanized here rather than deferred to Task 3** (whose ceremony pins only the
+     single-definition half): `remote-runner.test.ts` measures the budget through the
+     existing `createRunner` seam the per-verb table already uses and asserts the floor — no
+     new export, and it pins the number that actually reaches the wire.
 
 ### Task 2: the journal learns who spawned the worker — and the wire learns who owns the run
 

@@ -710,6 +710,12 @@ export class CoordStore {
    *  retry overwrites it with the new attempt's start, which is the honest
    *  answer to "when did the dispatch that is running now begin".
    *
+   *  ONE CALL SITE, AND IT IS THE FRESH-SPAWN ARM: the wave N>=2 resume (D-1)
+   *  deliberately does not call this, so NULL means "no fresh-spawn dispatch
+   *  has started" and not "nothing has been dispatched" — see
+   *  `RunSummary.dispatchStartedAt`, which names both conditions, and the pin
+   *  in `run-routes.test.ts` that makes the scope cost a test to change.
+   *
    *  `setSession`/`setClearedAt`/`setHandoffCommit`'s single-column `UPDATE`,
    *  and deliberately touching NOTHING else — least of all `state`, which is a
    *  separate write with its own `run_events` attribution. Takes `at` rather
@@ -925,8 +931,11 @@ export class CoordStore {
       // cleared anything," never a stand-in for a missing column.
       clearedAt: row.clearedAt,
       // A real column too (`runs.dispatchStartedAt`, migration 5), read
-      // straight through on `clearedAt`'s idiom directly above. NULL keeps its
-      // one meaning: no dispatch has ever started for this run — never a
+      // straight through on `clearedAt`'s idiom directly above. NULL means no
+      // FRESH-SPAWN dispatch has started — which is two named conditions, not
+      // one: nobody has dispatched this run, OR every dispatch it has had was a
+      // wave N>=2 resume (D-1), which mints no workspace and stamps nothing.
+      // Both are stated on `RunSummary.dispatchStartedAt`; neither is ever a
       // stand-in for a column this build could not read.
       dispatchStartedAt: row.dispatchStartedAt,
       openedAt: row.openedAt, dispatchedAt: row.dispatchedAt, closedAt: row.closedAt,
