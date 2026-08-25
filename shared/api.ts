@@ -4761,3 +4761,15 @@ export const LEDGER_SEED_GAP = 50;
  *  (derived, never stored — see `DEVIATION_ALLOC_STATES`) and NEVER
  *  reclaimed (D13). */
 export const LEDGER_STALE_MS = 7 * 24 * 60 * 60_000;
+
+/** `title`'s cap, BYTES — `MAIL_SUBJECT_MAX_BYTES`'s number and its
+ *  char-vs-byte care, and a SEPARATE constant for `CLAIM_INTENT_MAX_BYTES`'s
+ *  stated reason: tying two seams' caps together lets a change to one
+ *  silently rewrite the other's refusal threshold. What earns a one-line
+ *  title its own cap is the MULTIPLIER behind it: `LedgerLog.append` writes
+ *  one line PER ALLOCATED NUMBER, each carrying the full title, into an
+ *  append-only file nothing ever deletes from — so an uncapped title rides
+ *  out up to `LEDGER_ALLOC_MAX` times per request (`coord/ledger.ts`).
+ *  Policy is REFUSE, never truncate: a trimmed title is a different sentence
+ *  in the durable record. */
+export const LEDGER_TITLE_MAX_BYTES = 200;

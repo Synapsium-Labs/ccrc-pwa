@@ -11,10 +11,10 @@
 // the route — the landed `AllocatedBlock.floor` carries the seeded floor,
 // which allocation never moves.
 import { describe, it, expect, afterEach } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
-import { LEDGER_STALE_MS } from '../../shared/api.js';
+import { LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES } from '../../shared/api.js';
 import { buildServer, type Deps } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { LedgerLog } from '../src/coord/ledgerlog.js';
@@ -116,6 +116,35 @@ describe('the ledger routes', () => {
       { n: 261, state: 'allocated', stale: true },
       { n: 262, state: 'allocated', stale: false },
     ]);
+  });
+
+  it('refuses an over-cap title 413 oversize and allocates NOTHING — the log writes it once per number', async () => {
+    const w = await openApp(); app = w.app;
+    w.coord.raiseLedgerFloor('demo', 261, 'seeded', Date.now());
+
+    // BYTES, not chars: 67 three-byte characters is 201 bytes — over the cap
+    // while comfortably under it as a character count, the same char-vs-byte
+    // care the mail body cap pins. The multiplier is why the title is the one
+    // capped field here: LedgerLog.append repeats it on one line PER allocated
+    // number, up to LEDGER_ALLOC_MAX lines from a single box-token request.
+    const over = '€'.repeat(Math.floor(LEDGER_TITLE_MAX_BYTES / 3) + 1);
+    const res = await alloc(app, { project: 'demo', count: 100, title: over });
+    expect(res.statusCode).toBe(413);
+    expect(res.json()).toMatchObject({ ok: false, error: 'oversize',
+      limit: LEDGER_TITLE_MAX_BYTES });
+
+    // The TABLE, not just the response: nothing was minted on the refusal
+    // path — the store answers no rows, and the append-only log's file was
+    // never even created.
+    expect(((await ledger(app, '?project=demo')).json() as { allocations: unknown[] })
+      .allocations).toEqual([]);
+    expect(existsSync(path.join(w.home, '.ccrc', 'ledger-alloc.log'))).toBe(false);
+
+    // Exactly AT the cap still allocates — the boundary is >, matching the
+    // intent cap's arm in POST /api/claims.
+    const at = await alloc(app, { project: 'demo', count: 1,
+      title: 'x'.repeat(LEDGER_TITLE_MAX_BYTES) });
+    expect(at.statusCode).toBe(201);
   });
 
   it('validates the body, and both routes fail shut without the box token', async () => {

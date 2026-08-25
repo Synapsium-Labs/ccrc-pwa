@@ -16,7 +16,7 @@ import type { SessionRecord } from './registry.js';
 import type {
   CoordStatus, FleetSession, LifecycleHealth, NotifyEvent, PrState, RunSummary, SessionStatus, TaskProgress,
 } from '../../shared/api.js';
-import { MAIL_MAX_ATTEMPTS, UNCHECKED_PR } from '../../shared/api.js';
+import { LEDGER_STALE_MS, MAIL_MAX_ATTEMPTS, UNCHECKED_PR } from '../../shared/api.js';
 import { JournalMirror } from './coord/mirror.js';
 // The pause marker's ONE definition in the tree. `MAIL_DISABLED_MARKER` is
 // NOT imported beside it: this file holds its own module-local literal
@@ -89,8 +89,6 @@ const CLAIM_SWEEP_MS = 60_000;
  *  the signal a coordinator watches for. */
 const LEDGER_FLOOR_SWEEP_MS = 3_600_000;
 const LEDGER_RECONCILE_SWEEP_MS = 900_000;
-/** Allocated, never landed, older than this: REPORTED, never reclaimed (D13). */
-const LEDGER_STALE_MS = 7 * 24 * 3_600_000;
 
 /** How far back the census weighs provenance pairs. One hour, not the whole
  *  table: a divergence the operator has already dealt with must stop being

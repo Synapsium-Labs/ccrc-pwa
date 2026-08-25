@@ -21,7 +21,7 @@ import { settleItems, type SettleItemsOutcome } from './items.js';
 import { holdReason, queueSystemMail } from './rundefs.js';
 import {
   CLAIM_INTENT_MAX_BYTES, CLAIM_PATHS_MAX, CLAIM_PATH_MAX_BYTES,
-  isRunState, isSendableMailKind, LEDGER_STALE_MS, MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
+  isRunState, isSendableMailKind, LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
   MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, RUN_TRANSITIONS,
   type ClaimConflict, type LifecycleQueryResult, type MailRejectCode, type PeerDeliverable,
   type PeerSummary, type RunState, type RunSummary,
@@ -1749,6 +1749,16 @@ export function registerCoordRoutes(
         !(byId === undefined || typeof byId === 'string')) {
       return reply.code(400).send({ ok: false, error: 'bad-request',
         detail: 'project/title strings, count a number, byId a string when given' });
+    }
+    // The one field the allocator writes ONCE PER NUMBER: `LedgerLog.append`
+    // repeats the full title on every line of the block, so an uncapped title
+    // multiplies by count (<= LEDGER_ALLOC_MAX) into an append-only file
+    // nothing deletes from. UTF-8 BYTES, measured before the trim the store
+    // call applies, and the same 413 arm as the claims intent cap — refuse,
+    // never truncate.
+    if (Buffer.byteLength(title, 'utf8') > LEDGER_TITLE_MAX_BYTES) {
+      return reply.code(413).send({ ok: false, error: 'oversize', limit: LEDGER_TITLE_MAX_BYTES,
+        detail: `title exceeds ${LEDGER_TITLE_MAX_BYTES} bytes — the log writes it once per allocated number` });
     }
 
     // 3x in-request retry on a THROWN constraint violation (spec §3): the

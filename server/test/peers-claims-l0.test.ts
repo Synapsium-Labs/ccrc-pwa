@@ -27,7 +27,7 @@ import {
   PEER_ETIQUETTE,
   DEVIATION_ALLOC_STATES, isDeviationAllocState,
   CLAIM_LEASE_MS, CLAIM_HARD_CAP_MS, CLAIM_INTENT_MAX_BYTES,
-  LEDGER_SEED_GAP, LEDGER_STALE_MS,
+  LEDGER_SEED_GAP, LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES,
   PEER_MAIL_MAX_OUTSTANDING, PEER_MAIL_HOURLY,
   MAIL_REJECT_CODES,
 } from '../../shared/api.js';
@@ -131,9 +131,13 @@ describe('the numbers are the spec numbers, and the lease sits under the cap', (
     expect(CLAIM_INTENT_MAX_BYTES).toBe(512);
   });
 
-  it('ledger: a 50-number seed gap, staleness at 7 days', () => {
+  it('ledger: a 50-number seed gap, staleness at 7 days, the title one subject line', () => {
     expect(LEDGER_SEED_GAP).toBe(50);
     expect(LEDGER_STALE_MS).toBe(7 * 24 * 60 * 60_000);
+    // The mail subject's number ON PURPOSE, but a separate constant: the log
+    // repeats the title once per allocated number, so this cap's real bound
+    // is title x LEDGER_ALLOC_MAX per request (fix round, cluster 2).
+    expect(LEDGER_TITLE_MAX_BYTES).toBe(200);
   });
 
   it('peer mail: 3 outstanding per pair, 12 per sender-hour', () => {
