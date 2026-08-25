@@ -592,4 +592,49 @@ coordinator that asked for it.
 
 ## Deviations found
 
-(minted through `POST /api/ledger/deviations` at close — executors nominate prose-only)
+(minted through `POST /api/ledger/deviations` at close — executors nominate prose-only;
+this batch took 410–413, floor 414)
+
+- **D-410** (Task 2, the near-miss) — the attribution rider was built on a false premise and
+  would have broken every wave-1 spawn on the live fleet. `capSupported(state,
+  ACTOR_FLAGS_CAP)` was read as "this box takes the flags"; ccd says two lines from the token
+  that the capability decides whether to append `--surface`/`--actor`/`--reason` to the
+  **five workspace verbs** (archive, restore, hold, release, rename). `ws-add` MINTS a
+  workspace rather than acting on one and was never among them: `cmd_ws_add` consumes an
+  exact-string `--no-rc` then binds `project="$1"`, `slug="${2:-}"`, so
+  `ws-add --no-rc <project> --surface agent --actor '…'` dies at `invalid slug '--surface'`,
+  before the worktree, the registry row and the pane. Every dispatch would have refused, the
+  registry diff would have found zero candidates, and the run would have sat at `planned`
+  with `dispatchStartedAt` set — the exact wedge this plan exists to RENDER, manufactured by
+  the commit that renders it. The attribution half is reverted whole; the ownership half
+  (`claimedBy`) stands. Journal attribution for dispatched spawns now needs a ccd slice
+  (`cmd_ws_add` gains `cmd_ws_hold`'s flag loop) and is AGENT-FIRST — deliberately NOT folded
+  into this branch, per the plan's own STOP-and-report constraint, which is what caught it.
+- **D-411** (Task 2, the mechanism that was missing) — nothing in the tree crossed the argv
+  builders that DECLARE flags against the ccd verbs that PARSE them, so a composed argv the
+  fleet binary refuses was invisible to all three layers that inspect argv, each correct
+  about its own half. Closed by `server/test/ccdargv-dec-parity.test.ts`: the dec-appending
+  verbs are DERIVED from the table (a new one cannot join unmeasured), every one is probed
+  against the real ccd binary in a fixture HOME to prove the flags are parsed rather than
+  bound as positionals, and `ws-add` is kept as a measured negative control.
+- **D-412** (Tasks 1, 3, 4 — guards that passed for the wrong reason, found by review and
+  measured before and after) — (a) three docstrings said a null `dispatchStartedAt` meant "no
+  dispatch has ever started"; a resumed wave N≥2 run (D-1's `ensure` arm, which never stamps)
+  also leaves it null, so one value carried two conditions at a seam — fixed in the WORDS,
+  keeping the writer fresh-spawn-only. (b) `runs-screen`'s frozen clock was an exact whole
+  second, so a seconds→milliseconds refactor was defended by three comments and held by
+  nothing (probe: 47 passed, 0 red); the constant now carries a sub-second remainder. (c) the
+  fleet screen's re-render gate was unmeasured — a permanent 1 s full-screen tick could ship
+  with zero red lines (probe: 74 files / 1900 tests, 0 red).
+- **D-413** (Tasks 3 and 5 — plan steps struck by measurement) — two dictated steps were
+  false against the tree and are corrected in the plan in place so a re-execution cannot
+  reproduce them: Task 3's "the row is no longer `data-inert`" (nothing suppresses the
+  affordance — `data-inert` has no rule in `fleet.css` and no other reader, so changing it
+  would have traded a true sentence for a dead tap onto a session id that does not exist
+  yet), and Task 5's "parse the run id out of the hold reason" (`run-routes.test.ts` scans
+  `pwa/src` and forbids exactly that — measured 1/1 red; the behaviour is delivered from the
+  run rows instead). Also nominated here, not fixed: `FleetSession.started` is an overloaded
+  value at a seam — `false` means either "no claim was ever written" or "`.started` was
+  listed and unreadable this pass" — and the evidence that separates them
+  (`lifecycleUnmeasured`) exists but is consumed by `sessionLifecycle` and never shipped, so
+  every other reader of the bare boolean cannot tell the two apart.
