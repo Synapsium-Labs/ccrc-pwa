@@ -437,13 +437,13 @@ coordinator that asked for it.
   `(sessions, runs)` and returning the display order with a depth per row — the component
   renders, it does not decide.
 
-- [ ] **Step 1: establish whether the runs data is in hand.** `RunsScreen` consumes the
+- [x] **Step 1: establish whether the runs data is in hand.** `RunsScreen` consumes the
   `runs` frame; determine whether `FleetScreen`/`ProjectCard` can read the same store value
   (find the store/hook that holds frames). If it can, this task is PWA-only as scoped. If the
   runs frame is NOT available to the fleet tree, wire it through the existing store — still
   no server change — and say so in the commit body.
 
-- [ ] **Step 2: red-first — the grouping helper, as a pure unit suite.** These five rules ARE
+- [x] **Step 2: red-first — the grouping helper, as a pure unit suite.** These five rules ARE
   the task; each gets its own test, and each is a rule a reviewer can reject on its own:
   1. **The happy shape.** Coordinator `C` owns two active runs naming workers `W1`, `W2`
      (both sessions present in the same project): the order is `C`, `W1`, `W2`, with depth
@@ -471,21 +471,21 @@ coordinator that asked for it.
      operator still needs to know a spawn is happening.
   Run the unit suite; expect RED (no helper yet).
 
-- [ ] **Step 3: red-first — the rendering.** In the card suite: a nested row renders the `└─`
+- [x] **Step 3: red-first — the rendering.** In the card suite: a nested row renders the `└─`
   bracket and its indent; a top-level row renders neither (assert BOTH directions — a bracket
   that is always present is not a bracket). The pending child is NOT tappable and carries no
   session id. Every existing row affordance (tap target, chips, the held string) is unchanged
   on a nested row — nesting changes position and prefix, nothing else.
 
-- [ ] **Step 4: implement.** The helper is pure and lives beside `sortFleet`; the component
+- [x] **Step 4: implement.** The helper is pure and lives beside `sortFleet`; the component
   maps over its output and renders depth as the bracket + indent. Top-level ordering keeps
   today's `sortFleet` result exactly — a child is REMOVED from that order and re-inserted
   under its parent, never re-sorting the parents. Use the same `└─` character in one place
   (a named constant, not a literal repeated per branch).
 
-- [ ] **Step 5: green.** The two new suites plus the whole `pwa` package.
+- [x] **Step 5: green.** The two new suites plus the whole `pwa` package.
 
-- [ ] **Step 6: mutation ceremonies, each planted alone, measured, reverted:**
+- [x] **Step 6: mutation ceremonies, each planted alone, measured, reverted:**
   1. Drop the "remove from top level" step (children rendered under the parent AND in the
      ordinary list) → the appears-exactly-once test reds.
   2. Let an orphan keep its bracket → rule 3's test reds.
@@ -493,7 +493,7 @@ coordinator that asked for it.
   4. Drop the `state === 'planned'` half of the pending condition → the
      disappears-once-dispatched test reds.
 
-- [ ] **Step 7: commit.**
+- [x] **Step 7: commit.**
 
 ### Task 5: render the facts that already ship
 

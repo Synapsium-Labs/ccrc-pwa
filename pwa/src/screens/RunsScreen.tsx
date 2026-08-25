@@ -34,7 +34,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { type FleetSession, type RunSummary, unmeasuredFields } from '../../../shared/api';
-import { RUN_GLYPH, RUN_WORD, anyDispatchPending, dispatchWindow, isRunClosed, itemTallyLabel, programWave, runClosedAt, runItems, runState, runsByProgram } from '../fleet/runWords';
+import { DISPATCH_GLYPH, RUN_GLYPH, RUN_WORD, anyDispatchPending, dispatchWindow, isRunClosed, itemTallyLabel, programWave, runClosedAt, runItems, runState, runsByProgram } from '../fleet/runWords';
 import { AbandonSheet } from '../fleet/AbandonSheet';
 import { CoordBanner } from '../fleet/CoordBanner';
 import { StartProgramSheet } from '../fleet/StartProgramSheet';
@@ -127,7 +127,11 @@ function RunRow({
           to deal with (a workspace may exist) rather than as an error code. */}
       {spawn.phase === 'in-flight' && (
         <span className="run-dispatch" data-phase="in-flight">
-          <span className="run-dispatch-glyph" aria-hidden="true">⟳</span>
+          {/* The glyph comes from `DISPATCH_GLYPH` (Task 4), not a literal:
+              the fleet card draws the same window now, and two surfaces
+              spelling one vocabulary twice is the drift this repo's tables
+              exist to prevent. */}
+          <span className="run-dispatch-glyph" aria-hidden="true">{DISPATCH_GLYPH['in-flight']}</span>
           {'dispatching… '}{formatElapsed(spawn.elapsedMs)}
         </span>
       )}
@@ -137,7 +141,7 @@ function RunRow({
           data-phase="stalled"
           title={`the dispatch began ${formatElapsed(spawn.elapsedMs)} ago and the run is still planned`}
         >
-          <span className="run-dispatch-glyph" aria-hidden="true">⚠</span>
+          <span className="run-dispatch-glyph" aria-hidden="true">{DISPATCH_GLYPH.stalled}</span>
           {'dispatch never completed — a workspace may exist'}
         </span>
       )}

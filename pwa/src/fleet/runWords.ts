@@ -151,23 +151,46 @@ export function dispatchWindow(
     : { phase: 'in-flight', elapsedMs };
 }
 
-/** Is ANY of these rows inside a dispatch window at all? The board asks this to
- *  pick its TICK RATE — and a hook must choose that BEFORE the tick it produces
- *  exists, so the question is not allowed to need one. It doesn't: the
- *  `none`/not-`none` half of `dispatchWindow`'s answer turns on
- *  `state === 'planned'` and a non-null stamp and NOTHING else — only the
- *  `in-flight`/`stalled` split reads the clock — so every clock gives the same
- *  answer here, and this one asks with the epoch.
+/** The two phases that RENDER, as a glyph each — the board's standing
+ *  two-cue rule (a word AND a glyph, so no state is read out of colour
+ *  alone), single-sourced now that two surfaces draw the same window: the run
+ *  board's own row (`RunsScreen`) and the fleet card's pending child
+ *  (`ProjectCard`, Task 4). `Exclude<…,'none'>` rather than a hand-typed pair
+ *  of keys, so a third phase joining `DispatchWindow` is a compile error here
+ *  instead of a cell that silently renders nothing. */
+export const DISPATCH_GLYPH: Record<Exclude<DispatchWindow['phase'], 'none'>, string> = {
+  'in-flight': '⟳',
+  stalled: '⚠',
+};
+
+/** Is THIS row inside a dispatch window at all — i.e. is there a spawn to
+ *  narrate? Clock-free by construction: the `none`/not-`none` half of
+ *  `dispatchWindow`'s answer turns on `state === 'planned'` and a non-null
+ *  stamp and NOTHING else — only the `in-flight`/`stalled` split reads the
+ *  clock — so every clock gives the same answer, and this one asks with the
+ *  epoch.
  *
  *  Routed THROUGH `dispatchWindow` rather than re-testing its two conditions,
  *  so there stays exactly one place that decides what a dispatch window is: a
  *  hand-copied `state === 'planned' && stamp != null` here would be the second
  *  copy this repo forbids, and it would drift the day a third condition joined
- *  the first two. */
+ *  the first two. `nestFleet` (Task 4) asks it per run, to decide whether a
+ *  programme has a pending CHILD; the board asks the plural form below to pick
+ *  a tick rate. */
+export function isDispatchPending(
+  run: { state: RunState; dispatchStartedAt?: number | null },
+): boolean {
+  return dispatchWindow(run, 0).phase !== 'none';
+}
+
+/** Is ANY of these rows inside a dispatch window at all? The board asks this to
+ *  pick its TICK RATE — and a hook must choose that BEFORE the tick it produces
+ *  exists, so the question is not allowed to need one. It isn't:
+ *  `isDispatchPending` above is clock-free, and this is its `some`. */
 export function anyDispatchPending(
   runs: readonly { state: RunState; dispatchStartedAt?: number | null }[],
 ): boolean {
-  return runs.some((run) => dispatchWindow(run, 0).phase !== 'none');
+  return runs.some(isDispatchPending);
 }
 
 /** Board order: the ones that can move first, the ones that are over last.

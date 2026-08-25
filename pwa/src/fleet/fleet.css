@@ -1480,6 +1480,73 @@
   flex-direction: column;
 }
 
+/* Task 4 — the programme tree. ONE level: `nestFleet` never emits a depth
+   above 1 (its rule 4 keeps a session that is both child and parent at the
+   top), so there is no indent scale here and no rule keyed on a depth this
+   card cannot produce. A row is a flex ROW — bracket, then the row itself
+   taking the rest — which leaves .sess-line's own 44px tap floor and its
+   internal layout untouched: nesting changes position and prefix, nothing
+   else. */
+.proj-nest {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+.proj-nest > .sess-line,
+.proj-nest > .proj-pending {
+  flex: 1;
+  min-width: 0;
+}
+/* Ink-tertiary, the register .proj-card-pin[data-mixed] and
+   .proj-archived-toggle already use on this ground: the bracket is the
+   quietest thing on the row by design — it draws an edge the two rows either
+   side already name. */
+.proj-nest-bracket {
+  flex: none;
+  align-self: center;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink-tertiary);
+}
+
+/* The child that does not exist yet. NOT a tap surface and never a --glow: a
+   spawn in flight is a state, not a living pane, and there is no session to
+   open — the same call RunsScreen makes when it leaves the in-flight run row
+   inert. It still clears the row height the settled rows keep, so a spawn
+   arriving does not make the card jump. */
+.proj-pending {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-height: var(--tap-min);
+  min-width: 0;
+  font-size: var(--text-xs);
+  color: var(--ink-secondary);
+}
+.proj-pending-glyph { flex: none; color: var(--ink-tertiary); }
+.proj-pending-meta {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  overflow: clip;
+  overflow-clip-margin: 12px;
+}
+/* Middot between whichever cells render, the .sess-meta rule one screen up —
+   same separator, so the phantom row punctuates like the real ones. */
+.proj-pending-meta > *:not(:first-child)::before {
+  content: '·';
+  margin: 0 var(--sp-1);
+  color: var(--ink-tertiary);
+}
+.proj-pending-program { color: var(--ink-tertiary); }
+.proj-pending-elapsed {
+  flex: none;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-tertiary);
+}
+
 .proj-archived { border-top: 1px solid var(--edge-subtle); margin-top: var(--sp-1); }
 .proj-archived-toggle {
   display: flex; align-items: center; gap: var(--sp-1);

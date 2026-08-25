@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { FleetSession } from '../../shared/api';
+import type { FleetSession, RunSummary } from '../../shared/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { api } from '../src/lib/api';
 import { ack, FEED_ACK_KEY, loadAcks, resetAcks } from '../src/lib/seen';
@@ -1186,5 +1186,101 @@ describe('a chip never names rows that are not on the screen', () => {
     const chip = screen.getByText('Attention').closest('.bucket-head') as HTMLElement;
     expect(within(chip).queryByLabelText(/unseen/)).not.toBeInTheDocument();
     expect(within(chip).queryByRole('button', { name: /mark all/i })).not.toBeInTheDocument();
+  });
+});
+
+// ── Task 4: the programme tree reaches the fleet card ───────────────────────
+//
+// `nestFleet` decides the shape (nestFleet.test.ts) and `ProjectCard` draws it
+// (project-card.test.tsx). What is left, and only measurable here, is the WIRE:
+// the `runs` frame this screen already reads for its footer count has to reach
+// the cards, scoped to each card's own project, with a tick that follows the
+// content the way `SessionHeader`/`ToolCard` do it. Without this, both suites
+// above stay green over a screen that renders a flat list forever.
+
+const RUN_FROZEN = 1_800_000_000_499;
+
+const runRow = (over: Partial<RunSummary> = {}): RunSummary => ({
+  id: 1, program: 'build9b', programTitle: 'Build 9b', wave: 1, waveOf: 3,
+  project: 'OpenClawHetzner', sessionId: null, workspace: null, branch: null,
+  state: 'dispatched', claimedBy: 'claude:OpenClawHetzner', resumed: false, clearedAt: null,
+  openedAt: RUN_FROZEN - 1_000_000, dispatchStartedAt: null, dispatchedAt: null,
+  closedAt: null, handoffCommit: null, items: { done: 0, total: 0 },
+  unreadMail: 0, ...over,
+});
+
+describe('the programme tree on the fleet screen', () => {
+  it('brackets a worker under the coordinator that owns its run', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      sessions: [
+        session({ id: 'claude:OpenClawHetzner', workspace: 'quiet-mesa' }),
+        session({ id: 'claude:worker', workspace: 'still-cove' }),
+      ],
+      runs: [runRow({ id: 10, sessionId: 'claude:worker' })],
+      runsFrameSeen: true,
+    });
+    const nested = document.querySelectorAll('.proj-nest');
+    expect(nested).toHaveLength(1);
+    expect(nested[0]?.querySelector('.sess-label')?.textContent).toBe('still-cove');
+  });
+
+  it('scopes each card to its OWN project’s runs — a bracket never crosses cards', () => {
+    // The run names a coordinator on a different project. Both sessions are on
+    // screen, so a screen that handed every card every run would draw an edge
+    // between two cards; the tree is per card, and the child stays flat.
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      sessions: [
+        session({ id: 'claude:coord', project: 'alpha', workspace: 'quiet-mesa' }),
+        session({ id: 'claude:worker', project: 'beta', workspace: 'still-cove' }),
+      ],
+      runs: [runRow({ id: 10, project: 'beta', sessionId: 'claude:worker', claimedBy: 'claude:coord' })],
+      runsFrameSeen: true,
+    });
+    expect(document.querySelector('.proj-nest')).toBeNull();
+    expect(screen.getByText('still-cove')).toBeInTheDocument();
+  });
+
+  it('renders a spawn in flight as a pending child, and ticks its clock every second', () => {
+    // The cadence follows the CONTENT (`SessionHeader`/`ToolCard`'s idiom): a
+    // readout rendered to the second on a 30s tick is the "board that never
+    // moves" this build exists to end, one screen over.
+    vi.useFakeTimers({ now: RUN_FROZEN });
+    try {
+      const store = makeStore();
+      render(<FleetScreen store={store} />);
+      seed(store, {
+        conn: 'open',
+        sessions: [session({ id: 'claude:OpenClawHetzner', workspace: 'quiet-mesa' })],
+        runs: [runRow({ id: 12, wave: 2, state: 'planned', dispatchStartedAt: RUN_FROZEN - 42_000 })],
+        runsFrameSeen: true,
+      });
+      expect(screen.getByText('spawning a worker')).toBeInTheDocument();
+      expect(screen.getByText('0:42')).toBeInTheDocument();
+      act(() => { vi.advanceTimersByTime(3_000); });
+      expect(screen.getByText('0:45')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not render a pending child for a dispatched run whose stamp merely survived', () => {
+    // §Design: the stamp is a MEASUREMENT and is never cleared, so `state` is
+    // the whole of what ends this row. A card that keyed on the timestamp
+    // alone would claim every worker on the fleet is still being spawned.
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      sessions: [session({ id: 'claude:OpenClawHetzner', workspace: 'quiet-mesa' })],
+      runs: [runRow({ id: 12, state: 'dispatched', dispatchStartedAt: Date.now() - 42_000 })],
+      runsFrameSeen: true,
+    });
+    expect(document.querySelector('.proj-pending')).toBeNull();
   });
 });
