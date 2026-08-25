@@ -40,9 +40,9 @@
 # NAME (layout-independent, always worked), while detection was addressed by
 # PATH (layout-dependent, always failed). Only detection needed fixing.
 #
-# 2026-08-19 (D-B8-11) — THE LAYOUT MOVED AGAIN, exactly as that paragraph
+# 2026-08-19 (D-307 (was D-B8-11)) — THE LAYOUT MOVED AGAIN, exactly as that paragraph
 # anticipated, and this script did not notice because it stopped depending on
-# the layout. D-B8-7 gave the tmux server its own `ccrc-tmux-server.scope`;
+# the layout. D-303 (was D-B8-7) gave the tmux server its own `ccrc-tmux-server.scope`;
 # `systemd-run` defaults a user scope to `app.slice`, and tmux derives each
 # pane scope's slice from its own, so all seventeen panes moved from
 # `app-claude\x2dsession.slice` (capped 20G/24G in aggregate) to a bare,

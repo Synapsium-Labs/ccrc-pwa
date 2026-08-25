@@ -628,7 +628,7 @@ export class FleetWatcher {
       // states for this exact read: "a failed second listing proves nothing
       // and changes nothing".
       const registryRead = await readRegistryMeasured(this.deps.io, this.deps.cfg);
-      // BEFORE the fail-shut return below, and on BOTH arms (D-B4-10). An
+      // BEFORE the fail-shut return below, and on BOTH arms (D-283 (was D-B4-10)). An
       // unlistable registry is not "nothing is set": it is the exact state
       // `dispatchRun` FAILS SHUT on (`dispatch.ts:106-109`), so it must reach
       // the wire as `unmeasurable` on the same tick it happens. Placed beside
@@ -977,7 +977,7 @@ export class FleetWatcher {
 
   /** The `{type:'coord'}` frame (spec §4.2). Derived from the SAME registry
    *  listing this tick already performed — carried out of `readRegistryMeasured`
-   *  on `RegistryRead.names` rather than taken again (D-B4-10).
+   *  on `RegistryRead.names` rather than taken again (D-283).
    *
    *  `null` names is an UNLISTABLE directory, not an empty one, and rides the
    *  wire as `unmeasurable` — the state `dispatchRun` fails shut on.
@@ -1615,7 +1615,7 @@ export class FleetWatcher {
     }
     // THE CLAIM EVIDENCE, READ AFTER THE WORKTREE EVIDENCE IT IS WEIGHED
     // AGAINST — and that ordering is the whole reason this is a second listing
-    // rather than the one `tick()` already took (D-B4-10's "one listing,
+    // rather than the one `tick()` already took (D-283's "one listing,
     // shared"). ccd writes in a fixed order: `git worktree add` first, then the
     // registry field by field. So a listing taken BEFORE these git records —
     // which is what being handed `registryRead.names` from the top of the tick
@@ -1631,7 +1631,7 @@ export class FleetWatcher {
     //
     // Cost is ONE readdir per sweep interval (60 s), not per tick — the lane
     // clock above has already returned on every other call by the time this
-    // line runs. D-B4-10 was about the per-tick whole-fleet read, ~21 field
+    // line runs. D-283 was about the per-tick whole-fleet read, ~21 field
     // reads per session in remote mode; this is one round trip a minute.
     const registryNames = await this.deps.io.readdir(this.deps.cfg.registryDir);
     if (registryNames === null) {
@@ -2285,7 +2285,7 @@ export class FleetWatcher {
           }
           continue;
         }
-        // D-B8-13: `gone` — tmux itself said the recipient's pane does not
+        // D-309 (was D-B8-13): `gone` — tmux itself said the recipient's pane does not
         // exist — stays the ordinary silent gate, exactly like busy or
         // on-cooldown: the mail waits for the session to come back, nothing
         // recorded, retried next sweep. `unknown` — tmux DID NOT ANSWER — must
@@ -2639,12 +2639,12 @@ export class FleetWatcher {
     const identity = measuredIdentity(rec);
     if (identity === null) return { verdict: 'unknown', held: null };
     const held = rec.held;
-    // D-B8-13: three answers, not one boolean. `gone` — tmux itself said the
+    // D-309: three answers, not one boolean. `gone` — tmux itself said the
     // session does not exist — is the only reading that may mean "no pane:
     // nothing is running". `unknown` (unreachable server, cut-short client)
     // REFUSES, like every other cannot-tell branch of this function already
     // did; this arm was the one that answered 'ok' on a question it had not
-    // managed to ask, the same defect D-B8-12 fixed in ccd's `_ws_status`,
+    // managed to ask, the same defect D-308 (was D-B8-12) fixed in ccd's `_ws_status`,
     // on the same destructive caller class.
     const sv = await this.deps.tmux.sessionVerdict(id);
     if (sv.verdict === 'gone') return { verdict: 'ok', held };

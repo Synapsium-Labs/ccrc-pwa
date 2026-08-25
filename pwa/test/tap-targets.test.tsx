@@ -369,7 +369,7 @@ describe('.mail-strip-head — the session mail strip’s door to its rows', () 
   });
 });
 
-// — Build 4, Task 12: the run row's own abandon control (spec §4.3, D-B4-14) —
+// — Build 4, Task 12: the run row's own abandon control (spec §4.3, D-287 (was D-B4-14)) —
 
 describe('.run-abandon — the wedge release, a sibling of .run-open', () => {
   it('is at least one tap tall AND wide, off the shared token', () => {
@@ -382,7 +382,7 @@ describe('.run-abandon — the wedge release, a sibling of .run-open', () => {
     render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
     expect(screen.getByRole('button', { name: /abandon run 3/i })).toHaveClass('run-abandon');
   });
-  // D-B4-14's own reason for existing: an inert row (no session, so no
+  // D-287's own reason for existing: an inert row (no session, so no
   // .run-open) still gets the control — that IS the wedge shape.
   it('is present on an inert row too, where .run-open is absent', () => {
     const store = makeStore();

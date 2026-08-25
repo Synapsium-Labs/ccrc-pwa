@@ -811,7 +811,7 @@ if [ "$TARGET" = "agent" ]; then
   # was written to tolerate hid the bug for the case it was written to serve.
   #
   # THE KillMode GUARD SURVIVES THE PLACEMENT FIX, and a reader who checks the
-  # box will need this. Since D-B8-7 the server normally sits in
+  # box will need this. Since D-303 (was D-B8-7) the server normally sits in
   # `ccrc-tmux-server.scope`, not in any `claude-session@` cgroup, so the
   # refusal above reads stale — but `_tmux_new_session` places the server only
   # when `systemd-run` is available and accepts, and its documented degraded

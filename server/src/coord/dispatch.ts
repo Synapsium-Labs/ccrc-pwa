@@ -426,7 +426,7 @@ export async function dispatchRun(
   const holdRes = await deps.runCcd(holdArgv);
   if (!holdRes.ok) return { ok: false, kind: 'fleetFailed', stderr: holdRes.stderr };
 
-  // 6: ONE call, and one transaction (D-B4-4). The dispatch write, the
+  // 6: ONE call, and one transaction (D-277 (was D-B4-4)). The dispatch write, the
   // `clearedAt` stamp, the transition and the declared ledger's INSERTs used
   // to be three independent `tx()`s plus (as of spec §3.1) a fourth batch of
   // statements after them — the same split `CoordStore.closeRun` was created

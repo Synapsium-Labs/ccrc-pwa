@@ -216,7 +216,7 @@ describe('items.ts is a decision, not an adapter', () => {
   const src = readFileSync(path.join(here, '..', 'src', 'coord', 'items.ts'), 'utf8');
 
   it('imports neither ./db.js nor node:sqlite, and never names `coord.db`', () => {
-    // D-B4-16: the all-or-nothing COMMIT belongs to the ring that owns
+    // D-289 (was D-B4-16): the all-or-nothing COMMIT belongs to the ring that owns
     // `DatabaseSync`'s synchrony invariant. `architecture:78-81` puts
     // `store.ts`/`coord/db.ts` at L3 and allows L1 to import L2 as types
     // only, with "no `node:sqlite`" — every other L1 decision file in this

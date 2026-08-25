@@ -10454,7 +10454,7 @@ touches the allocator's own reading of the tree.
 - Produces: the standing scanner describe `'one deviation namespace — no bare legacy ref survives
   (9b W10, D14)'` in `server/test/deviation-refs.test.ts`. No source symbol — a guard only.
 
-- [ ] **Step 1: Write the failing scanner.** Append to `server/test/deviation-refs.test.ts` (at end
+- [x] **Step 1: Write the failing scanner.** Append to `server/test/deviation-refs.test.ts` (at end
   of file; the block imports everything it needs dynamically, so no top-of-file edit):
   ```ts
 
@@ -10538,7 +10538,7 @@ touches the allocator's own reading of the tree.
     });
   });
   ```
-- [ ] **Step 2: Run it, expect exactly one red.**
+- [x] **Step 2: Run it, expect exactly one red.**
   ```bash
   cd /home/you/worktrees/ccrc-pwa/still-river/server \
     && ./node_modules/.bin/vitest run test/deviation-refs.test.ts
@@ -10548,13 +10548,13 @@ touches the allocator's own reading of the tree.
   cleaned). The other three must already PASS: the corpus floor is real today, and Task 31's docs
   sweep plus the mapping table put the alias corpus at ≥37 before this task began. Wave 7's existing
   describes in this file must be untouched and green.
-- [ ] **Step 3: Run the unscoped rewrite — the final sweep.**
+- [x] **Step 3: Run the unscoped rewrite — the final sweep.**
   ```bash
   cd /home/you/worktrees/ccrc-pwa/still-river && node reconcile-rewrite.mjs
   ```
   Expect `63 files changed, 198 refs rewritten` (drafting-day baseline; docs are idempotently in
   scope and already clean, so they contribute zero). The count must reconcile with Step 2's red.
-- [ ] **Step 4: Hand-review the source diff for composite shorthands**, exactly as in Task 31 Step 3
+- [x] **Step 4: Hand-review the source diff for composite shorthands**, exactly as in Task 31 Step 3
   (the known drafting-day instance is a two-member `…-3/6` citation in
   `server/test/coord-decide.test.ts:224`):
   ```bash
@@ -10565,7 +10565,7 @@ touches the allocator's own reading of the tree.
   Expand each by hand: `D-<n_a> (was <legacy-a>) and D-<n_b> (was <legacy-b>)`, numbers from the
   mapping table. Then skim `git diff --stat` — the work-list's source files plus
   `server/test/deviation-refs.test.ts`, nothing else.
-- [ ] **Step 5: Re-stamp ccd/ccd's provenance marker** — its comment sites changed, so the line-2
+- [x] **Step 5: Re-stamp ccd/ccd's provenance marker** — its comment sites changed, so the line-2
   hash is now stale, and a stale marker makes every freshly deployed ccd read `ccrc-edited` forever
   (`ownership.test.ts`'s own words: the re-stamp is a gate, not a convention):
   ```bash
@@ -10576,7 +10576,7 @@ touches the allocator's own reading of the tree.
     && cd server && ./node_modules/.bin/vitest run test/ownership.test.ts
   ```
   Expect `ownership.test.ts` green — `verifies as ccrc-unmodified` in particular.
-- [ ] **Step 6: Run the scanner, expect PASS — all four its.**
+- [x] **Step 6: Run the scanner, expect PASS — all four its.**
   ```bash
   cd /home/you/worktrees/ccrc-pwa/still-river/server \
     && ./node_modules/.bin/vitest run test/deviation-refs.test.ts
@@ -10587,7 +10587,7 @@ touches the allocator's own reading of the tree.
     && git ls-files -z | xargs -0 grep -lP '(?<!was )\bD-B\d+-\d+\b' 2>/dev/null || echo CLEAN
   ```
   Expect `CLEAN`.
-- [ ] **Step 7: Finalize the record's status line, delete the transients, and commit the assertion
+- [x] **Step 7: Finalize the record's status line, delete the transients, and commit the assertion
   WITH the final sweep** (the wave brief's ruling: neither stands without the other):
   ```bash
   cd /home/you/worktrees/ccrc-pwa/still-river \

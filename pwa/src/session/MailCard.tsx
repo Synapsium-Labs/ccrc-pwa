@@ -1,6 +1,6 @@
 // Mail card — agent-to-agent mail, attributed to whoever actually sent it.
 //
-// Spec §2.1/§2.3, Build 4 Task 17, corrected by W-1 / D-B4-23.
+// Spec §2.1/§2.3, Build 4 Task 17, corrected by W-1 / D-296 (was D-B4-23).
 //
 // Delivered mail has always reached the transcript on its own; what was
 // missing was never the EVENT, only the ATTRIBUTION, and this card is that

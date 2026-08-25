@@ -64,7 +64,7 @@ export type CloseOutcome =
  *  two precondition checks, D-48's own ordering fix), never trusted off a
  *  TypeScript annotation the JSON parse cannot enforce. */
 export interface CloseRunBody {
-  /** `'abandon'` | absent (D-B4-1). The operator variant, validated as its OWN
+  /** `'abandon'` | absent (D-274 (was D-B4-1)). The operator variant, validated as its OWN
    *  shape below — an abandon that also carries close fields is refused rather
    *  than half-honoured. */
   intent?: unknown;
@@ -83,7 +83,7 @@ export interface CloseRunBody {
  * never wedged terminal). The fleet act is a RELEASE (deviation D-5), never
  * an autonomous archive.
  *
- * `causedBy` is a PARAMETER with no default (D-B4-3/6): the coordinator's own
+ * `causedBy` is a PARAMETER with no default (D-276 (was D-B4-3) and D-279 (was D-B4-6)): the coordinator's own
  * close records `'coordinator'` and the operator's abandon records
  * `'operator'`, and a default is exactly how the second would silently record
  * the first. Both call sites pass it explicitly.
@@ -124,7 +124,7 @@ export async function closeRun(
 
   if (abandon) {
     /**
-     * THE OPERATOR ABANDON, as ONE contiguous arm (D-B4-17). It returns; it
+     * THE OPERATOR ABANDON, as ONE contiguous arm (D-290 (was D-B4-17)). It returns; it
      * never falls through into the ordinary close below.
      *
      * What is skipped is skipped BY CONSTRUCTION, not by four flags threaded
@@ -135,13 +135,13 @@ export async function closeRun(
      *   - the fingerprint validation and its derivations: an abandon carries
      *     no claim, so `handoffCommit`/`final`/`state`/`archive` are
      *     `null`/`false`/`'failed'`/`false` here and are not read from a body
-     *     at all (D-B4-1);
+     *     at all (D-274);
      *   - `verifyDone` (step 1): D-49's own reasoning, reached from a second
      *     door — there is no done-claim to re-measure;
-     *   - the `.prhistory` fold (step 2, D-B4-2): an unreadable ledger must
+     *   - the `.prhistory` fold (step 2, D-275 (was D-B4-2)): an unreadable ledger must
      *     not disable the control that exists for a broken box;
      *   - `wsArchive` (step 3): a release destroys nothing and this arm has no
-     *     archive branch to reach (D-B4-7 closes the other half at the route).
+     *     archive branch to reach (D-280 (was D-B4-7) closes the other half at the route).
      * Each of those is pinned by a negative test in `coord-abandon.test.ts`,
      * and each is true because the call is ABSENT, not because a guard skipped
      * it.
@@ -158,7 +158,7 @@ export async function closeRun(
     // workspace. RELEASE ONLY WHEN NOTHING ELSE CLAIMS IT — otherwise HAND
     // THE CLAIM OVER by re-holding with the surviving run's own reason. The
     // abandoned run still transitions either way; the workspace stays
-    // claimed. Never `wsArchive` on this arm (D-B4-7).
+    // claimed. Never `wsArchive` on this arm (D-280).
     let released = false;
     if (run.sessionId !== null) {
       const siblings = siblingsOf(run.sessionId);
@@ -330,7 +330,7 @@ export async function closeRun(
   const closed = coord.closeRun({
     runId: id, finalState: state, causedBy, handoffCommit, program: run.program,
     // The ordinary close always takes the `closing` hop it always took — the
-    // only path that skips it is the abandon arm above (D-B4-8).
+    // only path that skips it is the abandon arm above (D-281 (was D-B4-8)).
     viaClosing: true,
   });
   if (!closed.ok) return { ok: false, kind: 'advanceFailed', adv: closed };

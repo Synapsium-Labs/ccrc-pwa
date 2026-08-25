@@ -2300,7 +2300,7 @@ export interface SlashCommand {
  * - **`0`** — not truncated. The whole payload is here.
  * - **`>0`** — this many BYTES were cut off the end.
  *
- * Computed in `server/src/transcript/parse.ts`, not here (D-B4-12): L0 imports
+ * Computed in `server/src/transcript/parse.ts`, not here (D-285 (was D-B4-12)): L0 imports
  * nothing, "not even `node:*`", so there is no `Buffer` in this file. The caps
  * upstream are CHARACTER caps and this report is in BYTES, deliberately — a
  * byte count is what an operator can compare against a file on disk.
@@ -2924,7 +2924,7 @@ export function parseMailEnvelope(text: string): MailEnvelopeParse {
 }
 
 /**
- * The same envelope, as a FETCH returns it — the live lane (W-1 / D-B4-23).
+ * The same envelope, as a FETCH returns it — the live lane (W-1 / D-296 (was D-B4-23)).
  *
  * WHY THIS EXISTS: spec §2.1's fact 2 measured a lane that typed the whole
  * envelope into the recipient's pane, where it landed in the JSONL as a `user`

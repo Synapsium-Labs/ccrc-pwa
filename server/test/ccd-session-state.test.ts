@@ -246,7 +246,7 @@ describe('the supervisor heartbeat', () => {
     // the fleet is doing the most work. The stub reads the stamp from inside
     // ensure, so "after" cannot pass.
     //
-    // REWRITTEN for D-B8-14: the watch loop asks `_session_probe`, not
+    // REWRITTEN for D-310 (was D-B8-14): the watch loop asks `_session_probe`, not
     // `_alive`, so the old `_alive() { return 1; }` stub went dark — the loop
     // would probe the REAL substrate, read the silence as `unknown`, and spin
     // for ever (unknown refuses to exit by design). The stub now speaks the
@@ -264,7 +264,7 @@ describe('the supervisor heartbeat', () => {
     // LIVE SESSION after two minutes. Eight simulated ticks cross the 30s
     // beat exactly once: entry stamp + one loop stamp = 2.
     //
-    // REWRITTEN for D-B8-14, same reason as above: the counter now drives
+    // REWRITTEN for D-310, same reason as above: the counter now drives
     // `_session_probe` — eight `live` answers, then `gone`, the only exit.
     h.sh(`_reg_set ${ID} uuid u`);
     run(`n=0; _session_probe() { n=$((n+1)); PROBE_DETAIL="";

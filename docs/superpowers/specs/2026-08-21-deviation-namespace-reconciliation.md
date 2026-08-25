@@ -1,6 +1,6 @@
 # One deviation namespace — the reconciliation record
 
-**Status:** docs rewritten (Task 31); the source sweep is pending (Task 32).
+**Status:** complete — the standing scanner in server/test/deviation-refs.test.ts holds the ratchet.
 
 Spec: `docs/superpowers/specs/2026-08-21-build9-provenance-peers-claims-design.md`, §1 D14.
 Executed 2026-08-25, in an operator-announced quiet window,

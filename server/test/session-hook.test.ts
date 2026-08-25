@@ -103,7 +103,7 @@ describe('event → state mapping', () => {
     expect(s.updatedAt).toBeGreaterThan(0);
   });
 
-  // D-B8-10. The F1 arm above was never WIRED (install-session-hooks.sh's event
+  // D-306 (was D-B8-10). The F1 arm above was never WIRED (install-session-hooks.sh's event
   // list omitted SessionStart), so it had never run on the fleet. Wiring it
   // exposes the case its unconditional `done` gets wrong: this harness fires
   // SessionStart with `source: 'compact'` in the MIDDLE of a turn — that is how
@@ -111,7 +111,7 @@ describe('event → state mapping', () => {
   // gate that an actively-thinking session is idle, which is precisely the
   // mid-thought injection the gate exists to prevent. PreCompact/PostCompact
   // already own the compaction transition; SessionStart(compact) must be inert.
-  it('SessionStart(compact) is inert — it must not stamp done over a working turn (D-B8-10)', () => {
+  it('SessionStart(compact) is inert — it must not stamp done over a working turn (D-306)', () => {
     run({ hook_event_name: 'PreCompact' });
     expect(readState().state).toBe('working');
     run({ hook_event_name: 'SessionStart', source: 'compact' });
@@ -124,7 +124,7 @@ describe('event → state mapping', () => {
   // `state: 'working'` forever, because only Stop clears it and no Stop ever
   // fires for a process that was destroyed. Resume is a real idle boundary —
   // the session is sitting at its prompt — so it must re-stamp `done`.
-  it('SessionStart(resume) clears a stale working left by a killed turn (D-B8-10)', () => {
+  it('SessionStart(resume) clears a stale working left by a killed turn (D-306)', () => {
     run({ hook_event_name: 'UserPromptSubmit' });
     expect(readState().state).toBe('working');
     run({ hook_event_name: 'SessionStart', source: 'resume' });

@@ -33,7 +33,7 @@ export type ChatItem =
    *  row.
    *
    *  `event` is the PROVENANCE, and it is a union because there are two doors
-   *  (W-1 / D-B4-23): a `user` turn is the LEGACY lane (mail typed into the
+   *  (W-1 / D-296 (was D-B4-23)): a `user` turn is the LEGACY lane (mail typed into the
    *  pane, before 43b2737), and a `tool_result` is the LIVE one (the worker's
    *  own `GET /api/mail/:id`). Which door a card came through is a real
    *  question about it, so the item carries the answer rather than discarding
@@ -72,7 +72,7 @@ export function buildChatItems(
       const tool = toolByToolId.get(e.toolId);
       if (tool) tool.result = e; // orphan results (use before backlog) are dropped
 
-      // THE LIVE MAIL LANE (W-1 / D-B4-23). Spec §2.1's fact 2 measured a
+      // THE LIVE MAIL LANE (W-1 / D-296). Spec §2.1's fact 2 measured a
       // delivery lane that typed the whole envelope into the recipient's pane;
       // 43b2737 — shipped mid-program, before this wave's base — replaced it
       // with a one-line nudge, so an envelope now reaches a transcript only as
@@ -135,7 +135,7 @@ export function buildChatItems(
         // ordinary bubble below, which is spec §2.4's stated degradation:
         // never a half-populated card.
         //
-        // THE LEGACY LANE (corrected, W-1 / D-B4-23). This arm used to claim
+        // THE LEGACY LANE (corrected, W-1 / D-296). This arm used to claim
         // that "the delivery lane types the envelope into the recipient's
         // INPUT BOX, so delivered mail can only ever arrive as a user turn".
         // That was true when spec §2.1 measured it and false by the time this

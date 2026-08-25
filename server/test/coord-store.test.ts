@@ -246,7 +246,7 @@ describe('setWorkItemState — one terminality point', () => {
   });
 
   it('answers unknown-item for an id that belongs to ANOTHER run', () => {
-    // D-B4-5: the signature is run-scoped, so a settle body can never move
+    // D-278 (was D-B4-5): the signature is run-scoped, so a settle body can never move
     // another run's item.
     const s = store();
     const mine = openRun(s) as { id: number };

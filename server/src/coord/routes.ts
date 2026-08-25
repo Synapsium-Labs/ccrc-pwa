@@ -978,7 +978,7 @@ export function registerCoordRoutes(
    * union→status map (`sendCloseOutcome`): increment 4's split is not
    * duplicated for a second caller.
    *
-   * THE REQUEST BODY IS NEVER READ (D-B4-7). `{intent:'abandon'}` is
+   * THE REQUEST BODY IS NEVER READ (D-280 (was D-B4-7)). `{intent:'abandon'}` is
    * constructed here, so `archive` is not a field a caller can send — "the
    * phone can abandon; the phone can never archive" is structural rather than
    * a validation a later edit can loosen. Destruction keeps its existing
@@ -986,7 +986,7 @@ export function registerCoordRoutes(
    * the two-tap confirm in the sheet is the whole ceremony here.
    *
    * UNGATED — deliberately NOT behind `requireMailToken`, for
-   * `POST /api/coord/pause`'s own reason (D-B4-9 and spec §4.1): the box token
+   * `POST /api/coord/pause`'s own reason (D-282 (was D-B4-9) and spec §4.1): the box token
    * authenticates the fleet host and the coordinator holds it, so gating the
    * release valve for a run wedged BY a stuck coordinator behind that same
    * coordinator's key would leave the wedge with no door at all. The act names
@@ -1101,7 +1101,7 @@ export function registerCoordRoutes(
    * the ledger it declared at dispatch. THE DECISION is `items.ts`'s
    * `settleItems` (architecture increment 4), which validates and maps; the
    * all-or-nothing COMMIT is `CoordStore.settleItems`, in the ring that holds
-   * the database handle (D-B4-16). This route is the union->status map.
+   * the database handle (D-289 (was D-B4-16)). This route is the union->status map.
    *
    * Box-token gated like every other coordination write route. It is the
    * COORDINATOR's write, made AFTER `POST .../advance` (or `/close`)
@@ -1132,7 +1132,7 @@ export function registerCoordRoutes(
   /**
    * `POST /api/coord/pause` — the OPERATOR's door, and one of the THREE routes
    * in this file that are UNGATED: deliberately NOT behind `requireMailToken`
-   * (D-B4-9). The others are `POST /api/runs/:id/abandon` above and
+   * (D-282). The others are `POST /api/runs/:id/abandon` above and
    * `POST /api/claims/:id/break` (build 9 D12 — the same abandon-door shape).
    * Among them they are the WHOLE unauthenticated write surface of this file —
    * a claim `coord-pause-route.test.ts`'s `UNGATED` set holds to exactly these
@@ -1656,7 +1656,7 @@ export function registerCoordRoutes(
   /**
    * `POST /api/claims/:id/break` — the OPERATOR's door, the THIRD route in
    * this file that is UNGATED: deliberately NOT behind `requireMailToken`, the
-   * `POST /api/runs/:id/abandon` shape (D-B4-9's argument, applied by build 9
+   * `POST /api/runs/:id/abandon` shape (D-282's argument, applied by build 9
    * D12/D16). The box token authenticates the fleet host, and the sessions
    * that hold claims live there and hold that token — a session wedged behind
    * a dead holder's claim must not find the release valve behind the same key
@@ -1664,7 +1664,7 @@ export function registerCoordRoutes(
    * with `CCRC_AUTH` armed it sits behind the session gate like abandon and
    * pause, and the operator with a phone is the one who can walk through it.
    *
-   * THE REQUEST BODY IS NEVER READ (the D-B4-7 rule, verbatim): `endedBy:
+   * THE REQUEST BODY IS NEVER READ (the D-280 rule, verbatim): `endedBy:
    * 'operator'` is a literal at THIS call site, so a caller cannot send a
    * field that forges who broke the claim. It is also UNNAMED in both skill
    * corpora — `coordinator-skill.test.ts`'s parity EXEMPT set carries it

@@ -193,7 +193,7 @@ const harness = (opts: { hasSession?: boolean; substrate?: string; panes?: (stri
   const run: Runner = async (_cmd, args) => {
     calls.push([...args]);
     if (args[0] === 'has-session') {
-      // D-B8-13: `hasSession: false` means the session is PROVEN gone, so the
+      // D-309 (was D-B8-13): `hasSession: false` means the session is PROVEN gone, so the
       // stub says so the way the real binary does — a bare rc=1 with silent
       // stderr now means `unknown`, which is `substrate`'s job to simulate.
       if (opts.substrate !== undefined) return { code: 1, stdout: '', stderr: `${opts.substrate}\n` };
@@ -1285,7 +1285,7 @@ describe('sweepMail: a dead recipient eventually parks (review finding 30)', () 
   });
 });
 
-describe('sweepMail: a tmux that did not answer is not a silent skip (D-B8-13)', () => {
+describe('sweepMail: a tmux that did not answer is not a silent skip (D-309)', () => {
   it('backs off with a greppable substrate reason, never accruing an attempt and never parking', async () => {
     // The bare `continue` treated "tmux said the session is gone" and "tmux
     // did not answer" as the same fact, four lines below a registry read that

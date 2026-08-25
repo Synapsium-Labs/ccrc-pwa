@@ -78,7 +78,7 @@ function RunRow({
    *  it yet). Looked up by the caller so this component stays a pure
    *  renderer of the one row it owns. */
   session: FleetSession | null;
-  /** Opens the AbandonSheet for this row (Task 12, spec §4.3, D-B4-14). */
+  /** Opens the AbandonSheet for this row (Task 12, spec §4.3, D-287 (was D-B4-14)). */
   onAbandon: (run: RunSummary) => void;
 }): ReactNode {
   // The registry ladder's degrade note, same idiom as `SessionLine.tsx`'s own
@@ -115,7 +115,7 @@ function RunRow({
       )}
     </>
   );
-  // The abandon control, D-B4-14: a SIBLING of `.run-open` inside the `<li>`,
+  // The abandon control, D-287: a SIBLING of `.run-open` inside the `<li>`,
   // never nested inside it — `RunsScreen.tsx:118-122` (pre-fix) wrapped the
   // whole row body in `<button className="run-open">`, and a `<button>`
   // inside a `<button>` is invalid HTML and unreachable to a screen reader.

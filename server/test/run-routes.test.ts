@@ -1647,7 +1647,7 @@ describe('GET /api/mail?to= (review findings 1/15)', () => {
 });
 
 // ── Build 4, Task 1: the dispatch body declares the ledger ──────────────────
-// Spec §3.1 and D-B4-4. The BRIEF stays opaque prose parsed by nothing; the
+// Spec §3.1 and D-277 (was D-B4-4). The BRIEF stays opaque prose parsed by nothing; the
 // coordinator declares the item titles beside it, as a structured field, and
 // the whole dispatch commit — `markDispatched`, `setClearedAt`, the transition
 // and the item INSERTs — becomes ONE transaction.
@@ -1760,7 +1760,7 @@ describe('POST /api/runs/:id/dispatch — the declared ledger (spec §3.1)', () 
   });
 
   it('leaves NO work_items rows behind when the transition is refused', async () => {
-    // D-B4-4, at the store: the items are inserted AFTER the transition and
+    // D-277, at the store: the items are inserted AFTER the transition and
     // inside its own transaction, so a refused `advanceInner` returns before
     // any INSERT runs. Driven through `CoordStore.dispatchRun` directly
     // because the route can no longer reach this arm — `dispatchRun`'s own

@@ -43,7 +43,7 @@ const UNIT = `sleep() { :; };
  *  startup observable without leaving a `while` running under the test.
  *
  *  `has-session` SAYS tmux's own death sentence rather than failing silently:
- *  since D-B8-14 the watch loop is verdict-driven, and a bare rc 1 with no
+ *  since D-310 (was D-B8-14) the watch loop is verdict-driven, and a bare rc 1 with no
  *  message classifies `unknown` — which refuses to exit by design, so the old
  *  silent stub would hang this suite's `cmd_supervise` case under an
  *  execFileSync with no timeout. Boolean callers (`_alive`) are unmoved:
@@ -486,7 +486,7 @@ describe('_supervised_start\'s fallbacks take the split form', () => {
    *  and calls both either way. Only "what was written before the blocking half
    *  began" separates the split form from the old spawn-then-claim.
    *
-   *  `_spawn_start` answers in the GLOBAL and prints nothing (D-B8-1): an
+   *  `_spawn_start` answers in the GLOBAL and prints nothing (D-297 (was D-B8-1)): an
    *  `echo 0` stub would model the shape this build exists to keep out, and
    *  would leak `0` onto the caller's stdout. */
   const HALVES = `_spawn_start() { echo "spawn_start $1 $2" >> "$HOME/ccd-calls"; SPAWN_FROMSWAP=0; };
@@ -535,7 +535,7 @@ describe('_supervised_start\'s fallbacks take the split form', () => {
     expect(h.reg('claude-demo', 'started')).toBe('1');
   });
 
-  it('neither fallback wraps _spawn_start in a command substitution (D-B8-1)', () => {
+  it('neither fallback wraps _spawn_start in a command substitution (D-297)', () => {
     // `$(_spawn_start …)` demotes its `die` to rc 1, which is in no caller's
     // failure set. Structural, because the behavioural pin lives one file over.
     const body = h.sh('type _supervised_start');

@@ -77,7 +77,7 @@ export function SessionScreen({
   const kbInset = useKeyboardInsets();
   const [restarting, setRestarting] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
-  // D-B4-13's nonce. Bumped by the transcript's one `Answer` control; read by
+  // D-286 (was D-B4-13)'s nonce. Bumped by the transcript's one `Answer` control; read by
   // `DialogSheet` to clear a dismissal the reader had made. It carries no
   // answer and cannot send — raising the sheet is the entire contract.
   const [raise, setRaise] = useState(0);

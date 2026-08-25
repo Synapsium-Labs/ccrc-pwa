@@ -1,10 +1,10 @@
-// D-B8-2 — the class behind D-B8-1, swept and mechanised.
+// D-298 (was D-B8-2) — the class behind D-297 (was D-B8-1), swept and mechanised.
 //
 // `die` is `echo …; exit 1` (ccd:148). Inside a command substitution `exit`
 // kills only the SUBSHELL, so a process-fatal error arrives at the caller as
 // a return code — and rc 1 is in no ccd caller's failure set (`cmd_ws_add`,
 // `cmd_start` and `cmd_ensure` all ask `[[ "$rc" -eq 3 || "$rc" -eq 4 ]]`).
-// D-B8-1 was one instance of that, found by review; nothing prevented the
+// D-297 was one instance of that, found by review; nothing prevented the
 // next one. This is the mechanism that does.
 //
 // TWO DELIBERATE DEPARTURES FROM THE PLAN'S SKETCH, both recorded in the
@@ -19,7 +19,7 @@
 //      against the real file can only ever pass today — the classic test that
 //      counts as coverage while being incapable of failing. So the scanner is
 //      a pure function pinned FIRST against synthetic sources carrying the
-//      exact D-B8-1 shape (and against sources that must NOT trip it), and
+//      exact D-297 shape (and against sources that must NOT trip it), and
 //      only then pointed at `ccd/ccd`. Break the scanner and the positive
 //      controls go red whatever `ccd/ccd` happens to contain.
 import { describe, it, expect } from 'vitest';
@@ -218,7 +218,7 @@ export function demotionSites(src: string): string[] {
 describe('the scanner itself', () => {
   const PRELUDE = 'die() { echo "ccd: $*" >&2; exit 1; }\n';
 
-  it('finds the exact D-B8-1 shape', () => {
+  it('finds the exact D-297 shape', () => {
     // Verbatim reconstruction of the demotion at ad6396d: `_spawn_start`
     // dies, `_spawn` reads it through a substitution, so the fatal becomes
     // rc 1 and the caller sails past it.
@@ -323,7 +323,7 @@ describe('ccd/ccd', () => {
     const fatal = canDie(src);
     expect(src.split('\n').length).toBeGreaterThan(8000);
     expect(functions(src).length).toBeGreaterThan(100);
-    // `_spawn_start` is the D-B8-1 function and still carries its `die`
+    // `_spawn_start` is the D-297 function and still carries its `die`
     // (ccd:9756). `_spawn` and `_supervised_start` inherit it by call. Every
     // `cmd_*` verb that validates its argv dies directly. `_lc_refuse`
     // (task 16) is the lifecycle journal's own direct `die` caller — its own
@@ -354,7 +354,7 @@ describe('ccd/ccd', () => {
     expect(demotionSites(src),
       'a `die` inside $( ) kills only the subshell, so a process-fatal error becomes a return ' +
       'code — and rc 1 is in no ccd caller\'s failure set (they test rc 3 and rc 4). Fix it the ' +
-      'way D-B8-1 was fixed: return the value through a documented global and drop the ' +
+      'way D-297 was fixed: return the value through a documented global and drop the ' +
       'substitution, so the hazard is unrepresentable. `|| exit $?` at each call site is a rule ' +
       'every future caller must remember, which is what this guard exists to replace.')
       .toEqual([]);

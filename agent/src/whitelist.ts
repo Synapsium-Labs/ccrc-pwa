@@ -228,7 +228,7 @@ export type ExecWhitelist = Record<ExecCommand, readonly (readonly string[])[]>;
  * not a confirmation token here, it is the whole argument surface. A one-token
  * `['coord-pause']` grant would permit `ccd coord-pause <anything…>` — every
  * positional form the verb might ever grow — for a route the PWA reaches with
- * NO token of any kind (D-B4-9). Enrolment is what makes dropping `--state` a
+ * NO token of any kind (D-282 (was D-B4-9)). Enrolment is what makes dropping `--state` a
  * compile error on `LAWFUL_EXEC_WHITELIST` and a boot refusal, instead of a
  * green diff: `isExecAllowed` is prefix-matching ("tokens after the prefix are
  * unconstrained"), so no subset test can tell the two grants apart.
@@ -359,7 +359,7 @@ export const EXEC_WHITELIST = {
     // `REQUIRED_VERB_FLAG` above. `--state` is not a confirmation token, it is
     // the verb's whole argument surface, and a one-token grant would permit
     // every positional form it might ever grow — reached from a route that
-    // carries no token of any kind (D-B4-9).
+    // carries no token of any kind (D-282).
     ['coord-pause', '--state'],
     // Unattended caller (FleetWatcher's naming sweep): the flag is what keeps
     // this grant two tokens wide instead of one, and REQUIRED_VERB_FLAG is what

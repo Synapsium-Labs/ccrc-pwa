@@ -150,7 +150,7 @@ describe('parseTranscriptLine', () => {
 // were cut. An old server can only ever produce "absent", which renders no cue
 // — never a false claim of completeness.
 //
-// The caps are CHARACTER caps and the report is in BYTES (D-B4-12), because a
+// The caps are CHARACTER caps and the report is in BYTES (D-285 (was D-B4-12)), because a
 // byte count is what an operator can compare against a file on disk. These
 // tests pin that difference directly: a multi-byte tail must report MORE bytes
 // than characters cut, which is the assertion a `s.length - max` mutant fails.
