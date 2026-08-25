@@ -19,7 +19,8 @@ import { groupFleet } from '../fleet/groupFleet';
 import { ProjectCard } from '../fleet/ProjectCard';
 import { SessionActionsSheet } from '../fleet/SessionActionsSheet';
 import { BUCKET_ORDER } from '../fleet/sortFleet';
-import { isRunClosed } from '../fleet/runWords';
+import { anyDispatchPending, isRunClosed } from '../fleet/runWords';
+import { useNow } from '../lib/useNow';
 import { useFolded } from '../fleet/foldState';
 import { useProjectedHome } from '../fleet/useProjectedHome';
 import { api, apiErrorText } from '../lib/api';
@@ -169,8 +170,27 @@ export function FleetScreen({
   // label included, while /runs one tap away could be showing three runs
   // this row had simply not heard about yet.
   const runsFrameSeen = useStore((s) => s.runsFrameSeen);
-  const activeRuns = useStore((s) => s.runs).filter((r) => !isRunClosed(r)).length;
-  const runsLabel = !runsFrameSeen ? '—' : activeRuns > 0 ? `${activeRuns} active` : 'none active';
+  // ONE filtered list, two readers (Task 4): the footer's count and the
+  // programme tree the cards draw. The frame is active-only by construction
+  // anyway — `watch.ts`'s emitter calls `coord.runs()` with no options — so
+  // `isRunClosed` is the belt this row has always worn, and keeping one list
+  // means the number in the footer and the edges in the cards can never
+  // describe two different sets of runs.
+  const activeRuns = useStore((s) => s.runs).filter((r) => !isRunClosed(r));
+  const runsLabel =
+    !runsFrameSeen ? '—' : activeRuns.length > 0 ? `${activeRuns.length} active` : 'none active';
+  // Task 4's clock, for the pending child's elapsed readout — and the CADENCE
+  // FOLLOWS THE CONTENT, the `SessionHeader`/`ToolCard` idiom `RunsScreen`
+  // already adopted for the same window: a second-granular readout on a
+  // half-minute tick is the "board that never moves" §Design complains about.
+  // `active: false` when nothing is spawning, so this screen runs NO timer at
+  // all in the ordinary case — which is how it has always behaved, and a
+  // permanent interval under twenty session rows is not a change anyone asked
+  // for. `anyDispatchPending` rather than an inline condition, so what counts
+  // as a dispatch window stays `dispatchWindow`'s single answer; it is asked
+  // of `activeRuns` and not of the per-card slices, because the tick is one
+  // fact about the screen.
+  const nowMs = useNow(1_000, anyDispatchPending(activeRuns));
   // Fold state persists across navigation (foldState.ts) — useState here would
   // re-expand every project on the way back from a session.
   const [folded, toggleFold] = useFolded();
@@ -460,6 +480,16 @@ export function FleetScreen({
                 onToggle={toggleFold}
                 onActions={openActionsFor}
                 roster={roster}
+                /* Task 4: THIS card's own runs. Scoped here rather than inside
+                   the card because "which card does a run belong on" is a
+                   question about the run's `project`, and a card handed one
+                   session list cannot answer it — an all-archived project's
+                   list is empty and still has a spawn to show. A run whose
+                   coordinator lives on another project therefore reaches only
+                   the worker's card, where `nestFleet`'s rule 3 leaves it
+                   unbracketed: a `└─` never crosses two cards. */
+                runs={activeRuns.filter((r) => r.project === g.project)}
+                nowMs={nowMs}
                 /* INVERTED against the project fold on purpose: foldState
                    stores what is COLLAPSED, so absence means open — right for
                    a project, wrong for an archive fold that must start

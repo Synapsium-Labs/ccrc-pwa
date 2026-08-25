@@ -3161,6 +3161,29 @@ export interface RunSummary {
   workspace: string | null;
   branch: string | null;
   state: RunState;
+  /** The ONE coordinator that owns this run: the tmux-derived session id of
+   *  the session that opened it, fixed at `POST /api/runs` and rewritten by no
+   *  route afterwards. That immutability is the mechanism behind the
+   *  `claimed-by-another` refusal — a second coordinator, in a fresh
+   *  workspace, naming a programme this one already claimed is refused
+   *  FOREVER, because nothing lowers this flag; recovering from it means
+   *  reaching the original session or opening a new programme, never
+   *  reassigning the run.
+   *
+   *  THE PWA READS IT AS THE PROGRAMME-OWNERSHIP EDGE: this field (the
+   *  parent) paired with `sessionId` (the child, the worker this run
+   *  dispatched) is what lets the fleet tree nest a worker under the
+   *  coordinator that asked for it, instead of scattering both through one
+   *  flat list. Server-side it is older than that use — `resolveCoordinator`
+   *  reads it to address `toId:'coordinator'` mail — and this field is a
+   *  READ of that same column, never a second copy of the decision.
+   *
+   *  `null` means no owner was recorded — a row from a database written
+   *  before the column had a writer, or a hand-inserted recovery row. Absence
+   *  permits: a renderer brackets nothing under a `null`, which is the honest
+   *  answer, where a fabricated owner would nest a run under a coordinator
+   *  that never claimed it. */
+  claimedBy: string | null;
   /** Deviation D-1: wave >= 2 resumes its session (no ccd verb can spawn
    *  fresh into an existing workspace) and the dispatch route then injects
    *  /clear through the send path, so the context is fresh even though the
@@ -3168,6 +3191,35 @@ export interface RunSummary {
   resumed: boolean;
   clearedAt: number | null;
   openedAt: number;
+  /** When THIS run's FRESH-SPAWN dispatch began — stamped immediately before
+   *  the `ws-add` that mints the workspace, which is the one moment a dispatch
+   *  is in flight and `sessionId` is still null (the server learns the id by
+   *  registry diff, after the call returns, so until then nothing can name the
+   *  row).
+   *
+   *  ABSENT (`null`) MEANS NO FRESH-SPAWN DISPATCH HAS STARTED for this run,
+   *  and that is TWO named conditions, not one — never a stand-in for a value
+   *  that could not be read:
+   *    • nobody has dispatched it at all — the ordinary state of a wave N+1
+   *      opened and waiting; and
+   *    • every dispatch it has had was a wave N>=2 RESUME (D-1: `ensure` into
+   *      the existing workspace), which mints no workspace and stamps nothing.
+   *  The scope is deliberate: a resume already knows its `sessionId` before the
+   *  call, so the console has a row to point at from the first frame and needs
+   *  no stamp to say a dispatch is happening. `state` — not this field — is
+   *  what answers "has this run been dispatched", on every path.
+   *
+   *  NEVER CLEARED. `state` moving to `dispatched` is what stops a renderer
+   *  saying "dispatching"; this stays, and `dispatchedAt - dispatchStartedAt`
+   *  is then how long the spawn actually took — available for a fresh spawn,
+   *  and NOT for a resume, which sets `dispatchedAt` over a null start. A
+   *  retry overwrites it with the new attempt's start.
+   *
+   *  AND IT NAMES THE WEDGE: a run still `planned` carrying a
+   *  `dispatchStartedAt` older than `SPAWN_STALL_MS` is a dispatch that never
+   *  completed — very likely beside a workspace nothing claimed. That state
+   *  previously had no name at all. */
+  dispatchStartedAt: number | null;
   dispatchedAt: number | null;
   closedAt: number | null;
   handoffCommit: string | null;
@@ -3175,6 +3227,18 @@ export interface RunSummary {
   /** Unacked mail addressed to this run's session. */
   unreadMail: number;
 }
+
+/** How long a `planned` run may carry a `dispatchStartedAt` before the
+ *  console calls the dispatch stalled. Deliberately >= the `ws-add` verb
+ *  ceiling (`CCD_VERB_TIMEOUT_MS`, server-side) rather than a copy of it:
+ *  that number is a TIMEOUT — what the runner enforces, and the point at
+ *  which the call is killed — and this one is a RENDERING threshold, which
+ *  must not fire until the timeout has certainly elapsed. Two different
+ *  questions, so two different names; neither is derived from the other, and
+ *  `single-definition` sees one of each. Widening the verb ceiling therefore
+ *  does NOT silently move what the console calls stalled — that is a
+ *  deliberate edit here, made with this paragraph's inequality in hand. */
+export const SPAWN_STALL_MS = 360_000;
 
 /** One mail row, for the feed and the session strip (both PR J). */
 export interface MailSummary {

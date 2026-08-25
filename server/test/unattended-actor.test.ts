@@ -43,6 +43,17 @@ import { mkTmp } from './tmpHelpers.js';
 const srcRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../src');
 const NEW = { ccdVerbs: [ACTOR_FLAGS_CAP] };
 const FILES = ['watch.ts', 'coord/close.ts', 'coord/dispatch.ts', 'coord/routes.ts'];
+// THE FIVE WORKSPACE VERBS, and that boundary is ccd's, not this file's:
+// `cmd_caps`'s own docstring says `actor-flags-v1` "decides ONE server-side
+// thing: whether to APPEND `--surface`/`--actor`/`--reason` to the FIVE
+// WORKSPACE VERBS". `wsAddWorker` is deliberately NOT here, and its absence is
+// a measurement rather than an omission — T2 (spawn visibility) added it, and
+// its review found that `cmd_ws_add` has no flag parser at all, so the dec it
+// composed died as an invalid slug on every caps-advertising box. See that
+// builder's own docstring in `ccdargv.ts`, and `ccdargv-dec-parity.test.ts`,
+// which derives the dec-appending builders from `CCD_ARGV` itself and runs
+// each one's verb through the real ccd — the crossing THIS scan cannot make,
+// because a name-list can only ever see the names somebody typed into it.
 const BUILDERS = /CCD_ARGV\.(wsArchive|wsRestore|wsHold|wsRelease|wsRename)\(/;
 
 describe('sweepDec', () => {

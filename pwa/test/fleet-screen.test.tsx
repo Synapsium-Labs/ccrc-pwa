@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { FleetSession } from '../../shared/api';
+import { SPAWN_STALL_MS, type FleetSession, type RunSummary } from '../../shared/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { api } from '../src/lib/api';
 import { ack, FEED_ACK_KEY, loadAcks, resetAcks } from '../src/lib/seen';
@@ -1186,5 +1186,181 @@ describe('a chip never names rows that are not on the screen', () => {
     const chip = screen.getByText('Attention').closest('.bucket-head') as HTMLElement;
     expect(within(chip).queryByLabelText(/unseen/)).not.toBeInTheDocument();
     expect(within(chip).queryByRole('button', { name: /mark all/i })).not.toBeInTheDocument();
+  });
+});
+
+// ── Task 4: the programme tree reaches the fleet card ───────────────────────
+//
+// `nestFleet` decides the shape (nestFleet.test.ts) and `ProjectCard` draws it
+// (project-card.test.tsx). What is left, and only measurable here, is the WIRE:
+// the `runs` frame this screen already reads for its footer count has to reach
+// the cards, scoped to each card's own project, with a tick that follows the
+// content the way `SessionHeader`/`ToolCard` do it. Without this, both suites
+// above stay green over a screen that renders a flat list forever.
+
+const RUN_FROZEN = 1_800_000_000_499;
+
+const runRow = (over: Partial<RunSummary> = {}): RunSummary => ({
+  id: 1, program: 'build9b', programTitle: 'Build 9b', wave: 1, waveOf: 3,
+  project: 'OpenClawHetzner', sessionId: null, workspace: null, branch: null,
+  state: 'dispatched', claimedBy: 'claude:OpenClawHetzner', resumed: false, clearedAt: null,
+  openedAt: RUN_FROZEN - 1_000_000, dispatchStartedAt: null, dispatchedAt: null,
+  closedAt: null, handoffCommit: null, items: { done: 0, total: 0 },
+  unreadMail: 0, ...over,
+});
+
+describe('the programme tree on the fleet screen', () => {
+  it('brackets a worker under the coordinator that owns its run', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      sessions: [
+        session({ id: 'claude:OpenClawHetzner', workspace: 'quiet-mesa' }),
+        session({ id: 'claude:worker', workspace: 'still-cove' }),
+      ],
+      runs: [runRow({ id: 10, sessionId: 'claude:worker' })],
+      runsFrameSeen: true,
+    });
+    const nested = document.querySelectorAll('.proj-nest');
+    expect(nested).toHaveLength(1);
+    expect(nested[0]?.querySelector('.sess-label')?.textContent).toBe('still-cove');
+  });
+
+  it('scopes each card to its OWN project’s runs — a bracket never crosses cards', () => {
+    // The run names a coordinator on a different project. Both sessions are on
+    // screen, so a screen that handed every card every run would draw an edge
+    // between two cards; the tree is per card, and the child stays flat.
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      sessions: [
+        session({ id: 'claude:coord', project: 'alpha', workspace: 'quiet-mesa' }),
+        session({ id: 'claude:worker', project: 'beta', workspace: 'still-cove' }),
+      ],
+      runs: [runRow({ id: 10, project: 'beta', sessionId: 'claude:worker', claimedBy: 'claude:coord' })],
+      runsFrameSeen: true,
+    });
+    expect(document.querySelector('.proj-nest')).toBeNull();
+    expect(screen.getByText('still-cove')).toBeInTheDocument();
+  });
+
+  it('renders a spawn in flight as a pending child, and ticks its clock every second', () => {
+    // The cadence follows the CONTENT (`SessionHeader`/`ToolCard`'s idiom): a
+    // readout rendered to the second on a 30s tick is the "board that never
+    // moves" this build exists to end, one screen over.
+    vi.useFakeTimers({ now: RUN_FROZEN });
+    try {
+      const store = makeStore();
+      render(<FleetScreen store={store} />);
+      seed(store, {
+        conn: 'open',
+        sessions: [session({ id: 'claude:OpenClawHetzner', workspace: 'quiet-mesa' })],
+        runs: [runRow({ id: 12, wave: 2, state: 'planned', dispatchStartedAt: RUN_FROZEN - 42_000 })],
+        runsFrameSeen: true,
+      });
+      expect(screen.getByText('spawning a worker')).toBeInTheDocument();
+      expect(screen.getByText('0:42')).toBeInTheDocument();
+      act(() => { vi.advanceTimersByTime(3_000); });
+      expect(screen.getByText('0:45')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // ── the tick is a GATE, and nothing was measuring it ──────────────────────
+  //
+  // This screen asks `useNow(1_000, anyDispatchPending(activeRuns))`, and the
+  // second argument is the whole claim: NO timer at all in the ordinary case,
+  // which is how the fleet screen has always behaved and what keeps a
+  // twenty-row list off a permanent one-second re-render loop. Nothing
+  // measured it — dropping the gate to a bare `useNow(1_000)` left the full
+  // package GREEN, 74 files / 1900 tests (measured, Task 4's review round), so
+  // a standing interval could ship in silence. The pin below is the twin of
+  // `runs-screen.test.tsx`'s "asks for the slow cadence when no row is
+  // spawning", and it is here for the reason stated there: an affordance that
+  // is always on is not a gate.
+
+  /** Every interval FleetScreen's tree asks the timer for during one mount,
+   *  in ms.
+   *
+   *  THE ADAPTATION against the runs-screen twin, which asserts on the whole
+   *  recorded array: that tree is single-interval, and this one is not.
+   *  `useProjectedHome` (20_000), `AccountsStrip` (20_000 for its poll and
+   *  30_000 for its own `useNow`), `FleetHostBanner` (15_000 + 30_000) and
+   *  `HotFilesStrip` (30_000) all start polling from this screen's mount, and
+   *  none of them is what this gate decides — so the instrument is the
+   *  PRESENCE of `1_000` among the recorded intervals, not their sequence.
+   *  Measured across `pwa/src`: no other timer in this tree has a 1_000 ms
+   *  period (the nearest neighbour is `TypedLabel`'s 28 ms typing timer), so a
+   *  recorded 1_000 is `useNow`'s and nobody else's.
+   *
+   *  `mockRestore()` BEFORE `useRealTimers()`, deliberately — the note travels
+   *  with the harness: the spy wraps the FAKE `setInterval`, and unwinding the
+   *  other way round hands the global back the fake after the fake clock has
+   *  already been uninstalled, leaking a timer into the NEXT file rather than
+   *  failing in this one. */
+  const ticksOf = (mount: () => void): number[] => {
+    vi.useFakeTimers({ now: RUN_FROZEN });
+    const spy = vi.spyOn(globalThis, 'setInterval');
+    try {
+      mount();
+      return spy.mock.calls.map((c) => Number(c[1]));
+    } finally {
+      spy.mockRestore();
+      vi.useRealTimers();
+      cleanup();
+    }
+  };
+
+  /** One mount of the screen with these runs on the single card's project —
+   *  the same seed the cases above use, minus the assertions. */
+  const withRuns = (runs: RunSummary[]) => (): void => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      sessions: [session({ id: 'claude:OpenClawHetzner', workspace: 'quiet-mesa' })],
+      runs,
+      runsFrameSeen: true,
+    });
+  };
+
+  it('asks for the one-second tick only while something is spawning — both directions, or it is not a gate', () => {
+    expect(ticksOf(withRuns([]))).not.toContain(1_000);
+    expect(ticksOf(withRuns([runRow({ id: 12, state: 'planned', dispatchStartedAt: null })])))
+      .not.toContain(1_000);
+    // The case a gate reading the FIELD instead of asking `dispatchWindow`
+    // would fail: the stamp SURVIVES success (§Design — a measurement, never
+    // cleared), so such a gate would tick once a second for every run this
+    // fleet has ever dispatched, forever, over a card with nothing to narrate.
+    expect(ticksOf(withRuns([runRow({
+      id: 12, state: 'dispatched', dispatchStartedAt: RUN_FROZEN - 42_000, dispatchedAt: RUN_FROZEN - 1_000,
+    })]))).not.toContain(1_000);
+    // And the direction that pays for the timer: a spawn in flight is a
+    // second-granular readout, so the card gets a second-granular clock.
+    expect(ticksOf(withRuns([runRow({ id: 12, state: 'planned', dispatchStartedAt: RUN_FROZEN - 42_000 })])))
+      .toContain(1_000);
+    // The wedge keeps it too — the pending child still renders its own elapsed
+    // span to the second and the run is still `planned`: the window has not
+    // closed, it has gone bad.
+    expect(ticksOf(withRuns([runRow({ id: 12, state: 'planned', dispatchStartedAt: RUN_FROZEN - SPAWN_STALL_MS })])))
+      .toContain(1_000);
+  });
+
+  it('does not render a pending child for a dispatched run whose stamp merely survived', () => {
+    // §Design: the stamp is a MEASUREMENT and is never cleared, so `state` is
+    // the whole of what ends this row. A card that keyed on the timestamp
+    // alone would claim every worker on the fleet is still being spawned.
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      sessions: [session({ id: 'claude:OpenClawHetzner', workspace: 'quiet-mesa' })],
+      runs: [runRow({ id: 12, state: 'dispatched', dispatchStartedAt: Date.now() - 42_000 })],
+      runsFrameSeen: true,
+    });
+    expect(document.querySelector('.proj-pending')).toBeNull();
   });
 });

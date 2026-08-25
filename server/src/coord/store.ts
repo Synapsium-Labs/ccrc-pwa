@@ -156,14 +156,18 @@ export type AllocateResult =
 interface RunRowDb {
   id: number; program: string; programTitle: string; wave: number; waveOf: number | null;
   project: string; sessionId: string | null; workspace: string | null; branch: string | null;
-  state: string; resumed: number; clearedAt: number | null; openedAt: number;
-  dispatchedAt: number | null; closedAt: number | null; handoffCommit: string | null;
+  state: string; claimedBy: string | null;
+  resumed: number; clearedAt: number | null; openedAt: number;
+  dispatchStartedAt: number | null; dispatchedAt: number | null; closedAt: number | null;
+  handoffCommit: string | null;
   prLineage: string | null;
 }
 
 const RUN_ROW_COLUMNS =
   'r.id, r.program, p.title AS programTitle, r.wave, r.waveOf, r.project, r.sessionId, ' +
-  'r.workspace, r.branch, r.state, r.resumed, r.clearedAt, r.openedAt, r.dispatchedAt, r.closedAt, ' +
+  'r.workspace, r.branch, r.state, r.claimedBy, ' +
+  'r.resumed, r.clearedAt, r.openedAt, r.dispatchStartedAt, ' +
+  'r.dispatchedAt, r.closedAt, ' +
   'r.handoffCommit, r.prLineage';
 
 /**
@@ -699,6 +703,30 @@ export class CoordStore {
     return row !== undefined;
   }
 
+  /** Stamped immediately BEFORE the `ws-add` that mints a fresh workspace —
+   *  the one moment the run knows a dispatch is in flight and the session id
+   *  does not exist yet (the server learns that id by registry diff, after the
+   *  call returns). A MEASUREMENT, not a mode flag: nothing clears it, `state`
+   *  moving to `dispatched` is what ends the "dispatching" render, and
+   *  `dispatchedAt - dispatchStartedAt` is then how long the spawn took. A
+   *  retry overwrites it with the new attempt's start, which is the honest
+   *  answer to "when did the dispatch that is running now begin".
+   *
+   *  ONE CALL SITE, AND IT IS THE FRESH-SPAWN ARM: the wave N>=2 resume (D-1)
+   *  deliberately does not call this, so NULL means "no fresh-spawn dispatch
+   *  has started" and not "nothing has been dispatched" — see
+   *  `RunSummary.dispatchStartedAt`, which names both conditions, and the pin
+   *  in `run-routes.test.ts` that makes the scope cost a test to change.
+   *
+   *  `setSession`/`setClearedAt`/`setHandoffCommit`'s single-column `UPDATE`,
+   *  and deliberately touching NOTHING else — least of all `state`, which is a
+   *  separate write with its own `run_events` attribution. Takes `at` rather
+   *  than reading a clock, on `markDispatched`'s precedent: the caller owns the
+   *  moment being recorded. */
+  markDispatchStarted(runId: number, at: number): void {
+    this.db.prepare('UPDATE runs SET dispatchStartedAt = ? WHERE id = ?').run(at, runId);
+  }
+
   /** Dispatch's write: the workspace a run landed in, and whether it was a
    *  fresh spawn or D-1's resume+`/clear`. Does NOT itself advance `state` —
    *  the caller (Task 9's dispatch route) calls `advance` separately, so the
@@ -895,6 +923,14 @@ export class CoordStore {
       wave: row.wave, waveOf: row.waveOf, project: row.project,
       sessionId: row.sessionId, workspace: row.workspace, branch: row.branch,
       state: isRunState(row.state) ? row.state : 'unknown',
+      // `runs.claimedBy` — TEXT, nullable — read straight through on
+      // `sessionId`/`workspace`/`branch`'s idiom two lines up, with no guard
+      // of its own: it is a free-form tmux-derived session id, not an enum, so
+      // there is no vocabulary to read it through. NULL means no owner was
+      // recorded (an older row, a hand-inserted recovery row), never a value
+      // this build could not read; `RunSummary.claimedBy` says what a reader
+      // does with that.
+      claimedBy: row.claimedBy,
       resumed: row.resumed !== 0,
       // A real column (`runs.clearedAt`), read straight through — not a
       // placeholder. `setClearedAt` is Task 9's dispatch route's own write
@@ -904,6 +940,14 @@ export class CoordStore {
       // did for a run that has not resumed-and-cleared: "nothing has
       // cleared anything," never a stand-in for a missing column.
       clearedAt: row.clearedAt,
+      // A real column too (`runs.dispatchStartedAt`, migration 5), read
+      // straight through on `clearedAt`'s idiom directly above. NULL means no
+      // FRESH-SPAWN dispatch has started — which is two named conditions, not
+      // one: nobody has dispatched this run, OR every dispatch it has had was a
+      // wave N>=2 resume (D-1), which mints no workspace and stamps nothing.
+      // Both are stated on `RunSummary.dispatchStartedAt`; neither is ever a
+      // stand-in for a column this build could not read.
+      dispatchStartedAt: row.dispatchStartedAt,
       openedAt: row.openedAt, dispatchedAt: row.dispatchedAt, closedAt: row.closedAt,
       handoffCommit: row.handoffCommit,
       items: this.itemTally(row.id),

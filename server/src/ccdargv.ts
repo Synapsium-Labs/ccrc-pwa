@@ -228,7 +228,32 @@ export const CCD_ARGV = {
    *  spawn and released mid-program). Leading-flag position is ccd's parse
    *  contract: `cmd_ws_add` shifts `--no-rc` before the positionals, so a
    *  trailing flag would be read as the slug. The PWA's ordinary add stays
-   *  `wsAdd` and the box default. */
+   *  `wsAdd` and the box default.
+   *
+   *  AND IT DECLARES NOTHING, WHICH IS NOT AN OVERSIGHT (spawn visibility, T2,
+   *  reverted in its review round). This is the ONE `ws-add` in the tree no
+   *  operator asked for, so it reads as an unattended lane in `wsArchive`'s
+   *  sense and Build 9a's journal records every dispatched spawn as
+   *  `declared: nothing / unmeasured` — indistinguishable from a human tapping
+   *  Add. T2 appended `...decFlags(dec)` here on the belief that
+   *  `actor-flags-v1` means "this box takes the flags". IT DOES NOT.
+   *  `cmd_caps`'s own words: that token "decides ONE server-side thing:
+   *  whether to APPEND `--surface`/`--actor`/`--reason` to the FIVE WORKSPACE
+   *  VERBS" — archive, restore, hold, release, rename. `ws-add` MINTS a
+   *  workspace rather than acting on one, and `cmd_ws_add` has no flag loop at
+   *  all: it consumes an exact-string `--no-rc`, binds `project="$1"` and
+   *  `slug="${2:-}"`, so a dec's first token lands in the SLUG and the verb
+   *  dies at `_ws_slug_valid` before a worktree, a registry row or a pane
+   *  exists. Measured against the real binary, not argued:
+   *  `ccdargv-dec-parity.test.ts` runs it in a fixture HOME.
+   *
+   *  So attribution here needs TWO things ccd does not have yet — a flag parser
+   *  on `cmd_ws_add`, and its `create` act actually EMITTING the dec (`_lc_done
+   *  create` passes `meas.*` only, so a parsed flag would still record
+   *  `declared: nothing`) — plus a capability token of its own, because every
+   *  box already deployed advertises `actor-flags-v1` with a `ws-add` that
+   *  cannot parse a dec. That is a ccd change, which flips the deploy to
+   *  AGENT-FIRST, and is the orchestrator's call to make. */
   wsAddWorker: (p: string) => argv(['ws-add', '--no-rc', p]),
   prStateSession: (id: string) => argv(['pr-state', '--session', id]),
   prStateProject: (p: string)  => argv(['pr-state', '--project', p]),

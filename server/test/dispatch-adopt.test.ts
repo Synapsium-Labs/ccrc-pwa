@@ -19,11 +19,11 @@
 // neither" (an older agent, the transport catch path) became `UNMEASURED` rather
 // than collapsing into `false`: three answers, one of which — and only one —
 // adopts. Every one of the three is pinned below.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
-import { CoordStore } from '../src/coord/store.js';
+import { CoordStore, toRunSummary } from '../src/coord/store.js';
 import { dispatchRun, type DispatchRunDeps } from '../src/coord/dispatch.js';
 import type { CcdResult } from '../src/lifecycle.js';
 import { UNMEASURED } from '../src/exec.js';
@@ -31,7 +31,7 @@ import type { CcdArgv } from '../src/ccdargv.js';
 import type { CcrcConfig } from '../src/config.js';
 import { readRegistry } from '../src/registry.js';
 import { localIO } from '../src/io.js';
-import { SPAWN_NOT_RECORDED, isSpawnVerdict } from '../../shared/api.js';
+import { SPAWN_NOT_RECORDED, isSpawnVerdict, type RunSummary } from '../../shared/api.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -76,6 +76,12 @@ interface HarnessCfg {
    *  `readRegistryMeasured` answers `listed: false`. This is the ONE knob that
    *  needs an `io` override rather than a file on disk. */
   afterListed?: boolean;
+  /** Called at the instant the `ws-add` double is entered — BEFORE it seeds a
+   *  thing and before it answers. The only vantage point from inside a test on
+   *  the one moment `dispatchStartedAt` exists to describe: the dispatch is in
+   *  flight and no session id exists yet. A timestamp asserted only after the
+   *  spawn returns would pass while being invisible for exactly that window. */
+  onWsAdd?: () => void;
 }
 
 const harness = async (cfg: HarnessCfg) => {
@@ -95,6 +101,7 @@ const harness = async (cfg: HarnessCfg) => {
     calls.push([...argv]);
     if (argv[0] === 'ws-add') {
       sawWsAdd = true;
+      cfg.onWsAdd?.();
       // The workspace appears NOW, after BEFORE was read — which is exactly
       // what a killed `ws-add` leaves: the pane and the row exist, the caller
       // never saw a success.
@@ -377,5 +384,129 @@ describe('§1.2 — the OTHER polarity: a ws-add that FAILED CLEANLY inside its 
     expect(row?.started).toBe(true);
     expect(row?.held).toBeNull();
     expect(row?.spawn?.rc).toBe(4);
+  });
+});
+
+// T1. The dispatch window — acceptance to a usable pane — is the one stretch in
+// which a run knows something the console cannot see: the `ws-add` is running,
+// and the session id it will mint does not exist yet (the server learns it by
+// REGISTRY DIFF, so nothing can name the row until after the call returns).
+// `planned` alone cannot say it: that word means both "opened, nobody has
+// dispatched" and "dispatch in flight", and inferring the difference at the far
+// end from a `planned` run beside a `never-started` unheld row is exactly the
+// seam-level guessing the conventions forbid. So one fact moves.
+//
+// EVERY TEST BELOW TURNS ON *WHEN* THE STAMP HAPPENS, not merely that it does.
+// A `dispatchStartedAt` written after `runCcd` resolves would satisfy an
+// after-the-fact assertion and still be null for the entire window it exists to
+// describe — so the ordering is measured from INSIDE the `ws-add` double, which
+// is the one vantage point a test has on that window.
+describe('T1 — `dispatchStartedAt`: the run says a dispatch is in flight', () => {
+  // A fixed epoch, `lifecycle-sweep.test.ts`'s idiom: `toFake: ['Date']` only,
+  // so `fs` and the microtask queue behave and an `await` still resolves.
+  const NOW = 1_756_000_000_000;
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('is null on a run nothing has ever dispatched — absence is its own answer', async () => {
+    // The absence-permits baseline. `null` means "no dispatch has ever started
+    // for this run", and it must not be confused with a zero or a default: an
+    // open run that nobody has dispatched is the ordinary state of wave N+1.
+    const h = await harness({ ccd: { ok: true, stderr: '' } });
+    expect(h.coord.run(h.runId)?.dispatchStartedAt).toBeNull();
+  });
+
+  it('is stamped BEFORE the ws-add — visible DURING the window, not after it', async () => {
+    let h!: Awaited<ReturnType<typeof harness>>;
+    // Read at the instant the `ws-add` double is entered. `sessionId` rides
+    // along because the two facts together ARE the window: a dispatch whose
+    // start is known and whose session is not.
+    const seen: { at: number | null; sessionId: string | null }[] = [];
+    h = await harness({
+      ccd: { ok: true, killed: false, stderr: '' },
+      after: [{ id: 'demo-quiet-basin', held: null }],
+      onWsAdd: () => {
+        const r = h.coord.run(h.runId)!;
+        seen.push({ at: r.dispatchStartedAt, sessionId: r.sessionId });
+      },
+    });
+    expect(await h.dispatch()).toMatchObject({ ok: true });
+    expect(seen).toEqual([{ at: NOW, sessionId: null }]);
+  });
+
+  it('is NEVER cleared: it survives onto the `dispatched` row, and the pair measures the spawn', async () => {
+    let h!: Awaited<ReturnType<typeof harness>>;
+    h = await harness({
+      ccd: { ok: true, killed: false, stderr: '' },
+      after: [{ id: 'demo-quiet-basin', held: null }],
+      // The spawn takes 42 s of wall clock. Nothing else in this harness moves
+      // the clock, so the two stamps can only differ by what this line does.
+      onWsAdd: () => { vi.setSystemTime(NOW + 42_000); },
+    });
+    expect(await h.dispatch()).toMatchObject({ ok: true });
+
+    const row = h.coord.run(h.runId)!;
+    // `state` is what ends the "dispatching" render — NOT a cleared column.
+    expect(row.state).toBe('dispatched');
+    expect(row.dispatchStartedAt).toBe(NOW);
+    // And that is the whole reason to keep it: the difference is how long the
+    // spawn actually took, forensic material a mode flag would have destroyed.
+    expect(row.dispatchedAt! - row.dispatchStartedAt!).toBe(42_000);
+  });
+
+  it('survives a REFUSED dispatch too — the run stays `planned` carrying the start of the attempt that failed', async () => {
+    // `planned` + a `dispatchStartedAt` older than the stall threshold IS the
+    // state `dispatch.ts`'s own comment says no verb names: "a run stuck in
+    // `planned` beside an unexplained new workspace". The column is what makes
+    // it sayable, so it must outlive the refusal that creates it.
+    const h = await harness({
+      ccd: { ok: false, killed: false, signal: null, stderr: 'ccd: no wrapper has capacity' },
+      after: [],
+    });
+    expect(await h.dispatch()).toMatchObject({ ok: false, kind: 'fleetFailed' });
+    const row = h.coord.run(h.runId)!;
+    expect(row.state).toBe('planned');
+    expect(row.sessionId).toBeNull();
+    expect(row.dispatchStartedAt).toBe(NOW);
+  });
+
+  it('a retry OVERWRITES it with the new attempt\'s start — never the first attempt\'s', async () => {
+    let h!: Awaited<ReturnType<typeof harness>>;
+    const seen: (number | null)[] = [];
+    // Mutated between the two calls: `runCcd` reads these fields at CALL time,
+    // so one harness can play a failed attempt and then a successful retry.
+    const cfg: HarnessCfg = {
+      ccd: { ok: false, killed: false, signal: null, stderr: 'ccd: no wrapper has capacity' },
+      after: [],
+      onWsAdd: () => { seen.push(h.coord.run(h.runId)!.dispatchStartedAt); },
+    };
+    h = await harness(cfg);
+
+    expect(await h.dispatch()).toMatchObject({ ok: false, kind: 'fleetFailed' });
+    expect(h.coord.run(h.runId)?.dispatchStartedAt).toBe(NOW);
+
+    vi.setSystemTime(NOW + 90_000);
+    cfg.ccd = { ok: true, killed: false, stderr: '' };
+    cfg.after = [{ id: 'demo-quiet-basin', held: null }];
+    expect(await h.dispatch()).toMatchObject({ ok: true });
+
+    // The SECOND attempt saw its own start, not the first one's — "when did the
+    // dispatch that is running now begin" is the only question this answers.
+    expect(seen).toEqual([NOW, NOW + 90_000]);
+    expect(h.coord.run(h.runId)?.dispatchStartedAt).toBe(NOW + 90_000);
+  });
+
+  it('reaches the WIRE — `toRunSummary` carries it, so the PWA is not left inferring the window', async () => {
+    let h!: Awaited<ReturnType<typeof harness>>;
+    h = await harness({
+      ccd: { ok: true, killed: false, stderr: '' },
+      after: [{ id: 'demo-quiet-basin', held: null }],
+    });
+    await h.dispatch();
+    // `toRunSummary` is a spread that strips `prLineage` and nothing else, so
+    // this asserts the field is on `RunSummary` rather than server-internal.
+    const wire: RunSummary = toRunSummary(h.coord.run(h.runId)!);
+    expect(wire.dispatchStartedAt).toBe(NOW);
+    expect(h.coord.runs().map((r) => toRunSummary(r).dispatchStartedAt)).toEqual([NOW]);
   });
 });

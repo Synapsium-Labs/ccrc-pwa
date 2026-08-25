@@ -12,12 +12,60 @@
 // Fold state is passed IN, never owned here: FleetScreen holds it (foldState.ts)
 // so it survives navigation, and a pure card is what lets a test assert folding
 // without touching localStorage.
+import { Fragment } from 'react';
 import type { ReactNode } from 'react';
-import type { FleetSession, ProjectedHome, RosterWire } from '../../../shared/api';
+import type { FleetSession, ProjectedHome, RosterWire, RunSummary } from '../../../shared/api';
 import { accountColorVar, accountLabel, homeAbleLabelList } from '../lib/accounts';
+import { navigate } from '../lib/router';
+import { formatElapsed } from './formatReset';
 import type { FleetGroup } from './groupFleet';
+import { nestFleet, type FleetRow } from './nestFleet';
+import { DISPATCH_GLYPH, dispatchWindow, runForSession } from './runWords';
 import { SessionLine } from './SessionLine';
 import './fleet.css';
+
+/** The nesting prefix, spelled ONCE (Task 4). Both branches that can draw a
+ *  child — a settled session row and a spawn that has none yet — read it from
+ *  here, so the tree cannot end up drawn with two different glyphs, and
+ *  project-card.test.tsx asserts against the constant rather than a literal it
+ *  would have to keep in step by hand. */
+export const NEST_BRACKET = '└─';
+
+/** The line for a child that does not exist yet: a run whose `ws-add` is in
+ *  flight, or one whose dispatch never came back.
+ *
+ *  The DECISION that this row belongs here at all is `nestFleet`'s, and the
+ *  three-way phase is `dispatchWindow`'s (Task 3) — this picks words, the same
+ *  division `RunsScreen`'s own row already follows. Two cues on both branches,
+ *  a word and a glyph, so neither is read out of colour.
+ *
+ *  The two sentences are this SURFACE's own, not copies of the board's. On
+ *  /runs the row IS the run, so it says "dispatching…"; on the fleet card it is
+ *  a phantom child under the coordinator that asked for it, so it says what is
+ *  being spawned. And the wedge stops at "spawn never completed" here rather
+ *  than adding the board's "a workspace may exist" — this card is the list of
+ *  workspaces, so if one exists the operator is already looking at it. */
+function PendingSpawn({ run, nowMs }: { run: RunSummary; nowMs: number }): ReactNode {
+  const spawn = dispatchWindow(run, nowMs);
+  // Unreachable by construction — `nestFleet` emits this row only for a run
+  // `dispatchWindow` has already answered non-`none` for, and THAT half of its
+  // answer never reads the clock (`isDispatchPending`'s docstring). Handled
+  // rather than asserted away with a `!`: a renderer that insists on a shape
+  // it was handed is exactly where a NaN clock gets in.
+  if (spawn.phase === 'none') return null;
+  return (
+    <div className="proj-pending" data-phase={spawn.phase}>
+      <span className="proj-pending-glyph" aria-hidden="true">{DISPATCH_GLYPH[spawn.phase]}</span>
+      <span className="proj-pending-meta">
+        <span className="proj-pending-word">
+          {spawn.phase === 'stalled' ? 'spawn never completed' : 'spawning a worker'}
+        </span>
+        <span className="proj-pending-program">{run.program}</span>
+        <span className="proj-pending-elapsed">{formatElapsed(spawn.elapsedMs)}</span>
+      </span>
+    </div>
+  );
+}
 
 export function ProjectCard({
   group,
@@ -31,6 +79,8 @@ export function ProjectCard({
   onActions,
   archivedOpen = false,
   roster = [],
+  runs = [],
+  nowMs = Date.now(),
 }: {
   group: FleetGroup;
   onOpen: (id: string) => void;
@@ -65,6 +115,19 @@ export function ProjectCard({
    *  first poll lands degrades to the same raw-name/neutral-ink fallback
    *  `accountLabel`/`accountColorVar` already carry for an unknown wrapper. */
   roster?: readonly RosterWire[];
+  /** THIS project's ACTIVE runs (Task 4) — the programme edges the body's tree
+   *  is drawn from, scoped and filtered by `FleetScreen`, which owns the store
+   *  read. Defaults to `[]` so a card rendered before any `{type:'runs'}` frame
+   *  has landed — or by a test that is not about the tree — renders the flat
+   *  list it always did. */
+  runs?: readonly RunSummary[];
+  /** The shared tick, in MILLISECONDS, for the pending child's elapsed clock.
+   *  This card is pure and controlled (fold state, roster and projection all
+   *  arrive the same way), so the CADENCE belongs to `FleetScreen`, which runs
+   *  it only while a spawn is actually in flight. The default reads the clock
+   *  at render: honest, and it simply stops advancing until the next render —
+   *  which is the correct degrade for a card nobody is ticking. */
+  nowMs?: number;
 }): ReactNode {
   // Headroom, not load: "91% free" is the question being asked ("can this
   // workspace actually run?"), and the answer stays legible when the score is
@@ -112,6 +175,41 @@ export function ProjectCard({
   // while folded. This is the only place the card itself reads selectedId.
   const holdsSelection =
     collapsed && selectedId !== null && group.sessions.some((s) => s.id === selectedId);
+
+  // Task 4. The tree's SHAPE is decided once, away from here (`nestFleet`, five
+  // rules, one unit suite); this component maps over the answer and draws a
+  // depth as a bracket plus an indent. Top-level order is `group.sessions`
+  // verbatim — a child is lifted out of it and put back under its parent, and
+  // nothing else moves.
+  const rows = nestFleet(group.sessions, runs);
+  const rowKey = (row: FleetRow): string =>
+    row.kind === 'session' ? row.session.id : `spawn:${row.run.id}`;
+  // Task 5: the hold reason's door, decided HERE because this is the level that
+  // holds the runs. `runForSession` answers off the run rows — never by reading
+  // the id out of the hold string, which stays display-only (its docstring
+  // carries the measurement). `null` when the board has no row for this
+  // session, and `SessionLine` renders exactly the inert cell it always did for
+  // that, so a hand hold and a hold outliving its run both read as text.
+  //
+  // `/runs` unfocused, because there is no per-run route to focus
+  // (`ArchiveConflictSheet`'s own note names that as the first of the three
+  // things such a link would need). The board groups by programme and the cell
+  // names the programme, so the operator lands looking at the right group.
+  const openRunFor = (session: FleetSession): (() => void) | null =>
+    runForSession(runs, session.id) === null ? null : () => navigate('/runs');
+  const rowBody = (row: FleetRow): ReactNode =>
+    row.kind === 'session' ? (
+      <SessionLine
+        session={row.session}
+        onOpen={onOpen}
+        selected={row.session.id === selectedId}
+        onActions={onActions}
+        roster={roster}
+        onOpenRun={openRunFor(row.session)}
+      />
+    ) : (
+      <PendingSpawn run={row.run} nowMs={nowMs} />
+    );
 
   return (
     <section
@@ -189,16 +287,26 @@ export function ProjectCard({
 
       {!collapsed && (
         <div className="proj-card-body">
-          {group.sessions.map((s) => (
-            <SessionLine
-              key={s.id}
-              session={s}
-              onOpen={onOpen}
-              selected={s.id === selectedId}
-              onActions={onActions}
-              roster={roster}
-            />
-          ))}
+          {/* A depth-0 row renders EXACTLY as it did before this task — no
+              wrapper, no prefix. The bracket is not decoration that happens to
+              be invisible at the top level: a prefix on every row would say
+              nothing, which is the whole reason the card can afford one at
+              all. `aria-hidden` on the glyph because it is the picture of an
+              edge, not a fact the row does not already carry. */}
+          {rows.map((row) =>
+            row.depth === 0 ? (
+              // A Fragment, never a wrapper element: the top-level row's DOM
+              // has to stay byte-identical to the one that shipped before this
+              // task, and `.proj-card-body`'s column flex lays out its
+              // children directly.
+              <Fragment key={rowKey(row)}>{rowBody(row)}</Fragment>
+            ) : (
+              <div key={rowKey(row)} className="proj-nest" data-depth={row.depth}>
+                <span className="proj-nest-bracket" aria-hidden="true">{NEST_BRACKET}</span>
+                {rowBody(row)}
+              </div>
+            ),
+          )}
         </div>
       )}
 
@@ -220,7 +328,7 @@ export function ProjectCard({
           {archivedOpen && (
             <div className="proj-archived-body">
               {group.archived.map((s) => (
-                <SessionLine key={s.id} session={s} onOpen={onOpen} selected={s.id === selectedId} onActions={onActions} roster={roster} />
+                <SessionLine key={s.id} session={s} onOpen={onOpen} selected={s.id === selectedId} onActions={onActions} roster={roster} onOpenRun={openRunFor(s)} />
               ))}
             </div>
           )}

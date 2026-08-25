@@ -11,12 +11,13 @@ import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
 import type { Deps } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
-import { CoordStore } from '../src/coord/store.js';
+import { CoordStore, toRunSummary } from '../src/coord/store.js';
 import type { Runner } from '../src/exec.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { degradedReadIO, unreadableField } from './ioDoubles.js';
+import { ACTOR_FLAGS_CAP } from '../src/ccdargv.js';
 import { holdReason } from '../src/coord/rundefs.js';
 import { WORKER_KICKOFF_PREFIX } from '../src/coord/dispatch.js';
 import { MAIL_BODY_MAX_BYTES, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX } from '../../shared/api.js';
@@ -353,6 +354,52 @@ describe('POST /api/runs/:id/dispatch', () => {
     expect(calls.filter((c) => c[0] === 'ws-add')).toEqual([['ws-add', '--no-rc', PROJECT]]);
   });
 
+  // T2's attribution half, INVERTED by its review round, and the inversion is
+  // the pin. `actor-flags-v1` is not a promise that this box takes the flags
+  // anywhere — `cmd_caps` scopes it to the FIVE WORKSPACE VERBS, and `ws-add`
+  // is not one: `cmd_ws_add` has no flag loop, binds `slug="${2:-}"`, and dies
+  // at `_ws_slug_valid` on the dec's first token, before a worktree or a
+  // registry row exists. So the argv this route sends must NOT vary with the
+  // capability list at all, and both halves of that are asserted here.
+  // `ccdargv-dec-parity.test.ts` is where the ccd side of it is MEASURED; this
+  // is where the route is held to it.
+  it('a fresh spawn on an actor-flags box still sends the BARE argv — the token does not reach ws-add', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-fresh-dec'] });
+    // `ws-hold` rides along in the verb list for the reason
+    // `unattended-actor.test.ts` measured on the sibling call: `verbSupported`
+    // gates the hold on the VERB, independently of `sweepDec`'s own
+    // `capSupported` gate on the FLAG token, and an unsupported hold refuses
+    // the dispatch before this argv is ever read back.
+    const w = await openApp(home, run, {
+      fleetState: { connected: true, downSince: null,
+                    ccdVerbs: ['ws-add', 'ensure', 'ws-hold', ACTOR_FLAGS_CAP],
+                    rosterFp: null, build: null },
+    });
+    app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    expect((await postDispatch(app, opened.id)).statusCode).toBe(200);
+    expect(calls.filter((c) => c[0] === 'ws-add')).toEqual([['ws-add', '--no-rc', PROJECT]]);
+  });
+
+  it('...and sends the same three tokens on a ccd that never advertised actor-flags', async () => {
+    // The other direction. Together the pair says the argv is INVARIANT in the
+    // capability list, which is a stronger statement than either alone: a
+    // future `...decFlags(sweepDec(…))` here would red the first test and leave
+    // this one green, naming the caps-advertising box — the fleet's own shape —
+    // as the one that broke.
+    const home = mkTmp('ccrc-runs-');
+    const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-fresh-nodec'] });
+    const w = await openApp(home, run, {
+      fleetState: { connected: true, downSince: null, ccdVerbs: ['ws-add', 'ensure', 'ws-hold'],
+                    rosterFp: null, build: null },
+    });
+    app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    expect((await postDispatch(app, opened.id)).statusCode).toBe(200);
+    expect(calls.filter((c) => c[0] === 'ws-add')).toEqual([['ws-add', '--no-rc', PROJECT]]);
+  });
+
   it('the PWA\'s ordinary workspace-add stays box-default — no --no-rc anywhere in its argv', async () => {
     // The other half of the same pin: only the dispatch path declares a
     // worker. An operator's add from the PWA follows the box flag, so its
@@ -574,6 +621,49 @@ describe('POST /api/runs/:id/dispatch', () => {
     expect(row?.clearedAt).toEqual(expect.any(Number));
     expect(row?.workspace).toBe('demo-existing');
     expect(row?.branch).toBe('ws/demo-existing');
+  });
+
+  it('a RESUMED dispatch leaves dispatchStartedAt null — the column measures the SPAWN, and a resume ' +
+     'mints no workspace (the scope is deliberate, not an oversight)', async () => {
+    // THE SCOPE OF `dispatchStartedAt`, PINNED SO IT IS DELIBERATE RATHER THAN
+    // DISCOVERED. `markDispatchStarted` is called on ONE path — the fresh-spawn
+    // arm, immediately before the `ws-add` (`dispatch.ts`) — and the D-1 resume
+    // arm above (`CCD_ARGV.ensure` + `runCcd`) never calls it. That is correct
+    // and not an omission: the column exists to describe the window in which a
+    // workspace is being MINTED and no session id exists yet, and a resume has
+    // neither half of that — `run.sessionId` is already known before the call,
+    // so the console has a row to point at from the first frame and needs no
+    // stamp to say so.
+    //
+    // WHICH MAKES NULL CARRY A NAMED SECOND CONDITION, and the docstrings on
+    // `RunSummary.dispatchStartedAt` (shared/api.ts), `hydrateRun` (store.ts)
+    // and MIGRATIONS[4] (schema.ts) each say so in as many words: null means no
+    // FRESH-SPAWN dispatch has started — nobody dispatched this run, OR every
+    // dispatch it has had was a resume. The consequence a reader must be able
+    // to derive from those words alone is asserted here: on this row
+    // `dispatchedAt` is set and `dispatchStartedAt` is not, so the
+    // `dispatchedAt - dispatchStartedAt` spawn duration those docstrings
+    // promise is available for wave-1 fresh spawns and NOT for a resume.
+    //
+    // Stamp the resume arm too and this goes red — which is the point: making
+    // the column mean "any dispatch began" is a scope change, and it must cost
+    // a test, not pass unnoticed.
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing-resume');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app,
+      { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing-resume' })).json() as { id: number };
+    expect(w.coord.run(opened.id)?.dispatchStartedAt).toBeNull();   // nothing has dispatched it yet
+    expect((await postDispatch(app, opened.id)).json()).toMatchObject({ ok: true, resumed: true });
+    const row = w.coord.run(opened.id)!;
+    expect(row.state).toBe('dispatched');                 // it WAS dispatched …
+    expect(row.dispatchedAt).toEqual(expect.any(Number));
+    expect(row.dispatchStartedAt).toBeNull();             // … and no spawn window was measured
+    // And the wire says the same thing — the PWA reads this exact pair, so a
+    // renderer that treats a null start as "never dispatched" is reading the
+    // wrong field: `state` is what answers that, on every path.
+    expect(toRunSummary(row).dispatchStartedAt).toBeNull();
   });
 
   it('leaves clearedAt null when the injected /clear is refused (dialog open) — dispatch still lands, ' +
@@ -1152,6 +1242,46 @@ describe('GET /api/runs', () => {
     expect((await getRuns(app)).json()).toEqual({ runs: [] });
     const withClosed = (await getRuns(app, true)).json() as { runs: { id: number }[] };
     expect(withClosed.runs.map((r) => r.id)).toContain(opened.id);
+  });
+
+  // T2's second half: the PROGRAMME-OWNERSHIP EDGE reaches the wire. `runs.
+  // claimedBy` has been a column since Build 4 and is read server-side only —
+  // `openRun`'s one-coordinator guard and `resolveCoordinator` both turn on it
+  // — so the PWA could see which SESSION a run named but never which session
+  // OWNED it. That edge (coordinator -> worker) is the whole of T4's nesting,
+  // and a client that cannot read it would have to guess the parent from
+  // programme slug collisions, which is the seam-level guessing the
+  // conventions forbid.
+  it('carries claimedBy — the coordinator that owns the run, not merely the worker it named', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home, { wsAddCreates: ['demo-owned'] });
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    await postDispatch(app, opened.id);
+    const { runs } = (await getRuns(app)).json() as { runs: Record<string, unknown>[] };
+    // BOTH ends of the edge on one row: who owns it, and who does the work.
+    expect(runs[0]).toMatchObject({ id: opened.id, claimedBy: CLAIMED_BY, sessionId: 'demo-owned' });
+  });
+
+  it('answers claimedBy null for a row that has none, rather than inventing an owner', async () => {
+    // Absence permits. A row can lack one — a database written before the
+    // column had a writer, or a hand-inserted recovery row — and the honest
+    // wire answer is `null`: no owner was recorded. A renderer reads that as
+    // "do not bracket this row under anything", which is exactly right; a
+    // fabricated owner would nest a run under a coordinator that never
+    // claimed it.
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    w.coord.db.prepare('UPDATE runs SET claimedBy = NULL WHERE id = ?').run(opened.id);
+    const { runs } = (await getRuns(app)).json() as { runs: Record<string, unknown>[] };
+    expect(runs[0]).toMatchObject({ id: opened.id });
+    expect(runs[0]!.claimedBy).toBeNull();
+    // And the property is PRESENT, not merely absent-and-undefined — the
+    // difference a `toMatchObject` on `null` cannot see, and the one a client
+    // reading `'claimedBy' in run` would trip over.
+    expect(Object.keys(runs[0]!)).toContain('claimedBy');
   });
 
   it('answers 501 not-configured without a coordination store', async () => {

@@ -327,8 +327,8 @@ describe('coord.db: migration 1 — runs_by_session', () => {
     raw.close();
 
     const db = openCoordDb(p);
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(4);
-    expect(COORD_SCHEMA_VERSION).toBe(4);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(5);
+    expect(COORD_SCHEMA_VERSION).toBe(5);
     const names = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as
       { name: string }[]).map((r) => r.name);
     expect(names).toContain('runs_by_session');
@@ -373,7 +373,7 @@ describe('coord.db: migration 2 — the lifecycle journal mirror', () => {
     raw.close();
 
     const db = openCoordDb(p);
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(4);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(5);
     const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as
       { name: string }[]).map((r) => r.name).sort();
     expect(tables).toEqual(expect.arrayContaining([
@@ -441,7 +441,7 @@ describe('coord.db: migration 3 — claims and the deviation ledger', () => {
     raw.close();
 
     const db = openCoordDb(p);
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(4);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(5);
     const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as
       { name: string }[]).map((r) => r.name);
     expect(tables).toEqual(expect.arrayContaining([
@@ -504,6 +504,73 @@ describe('coord.db: migration 3 — claims and the deviation ledger', () => {
       'INSERT INTO ledger_floor (project, floor, evidence, updatedAt) VALUES (?, ?, ?, ?)');
     ins.run('demo', 260, 'docs/superpowers/plans/example.md names D-210', 1);
     expect(() => ins.run('demo', 261, 'a second seed', 2)).toThrow(/UNIQUE constraint failed/);
+    db.close();
+  });
+});
+
+describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
+  /** One `runs` column as the database itself describes it. `PRAGMA
+   *  table_info` is the only reader that can tell "nullable with no default"
+   *  from "the DDL happens to have written nothing there yet" — the whole
+   *  distinction this column rests on. */
+  interface ColumnInfo { name: string; type: string; notnull: number; dflt_value: unknown }
+  const runsColumn = (db: DatabaseSync, name: string): ColumnInfo | undefined =>
+    (db.prepare('PRAGMA table_info(runs)').all() as unknown as ColumnInfo[])
+      .find((c) => c.name === name);
+
+  it('gives a fresh database the column, nullable and with no default', () => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const col = runsColumn(db, 'dispatchStartedAt');
+    expect(col).toBeDefined();
+    expect(col!.type).toBe('INTEGER');
+    // NULLABLE WITH NO DEFAULT, and both halves are load-bearing. `NOT NULL`
+    // would force every existing row to carry a number that never measured
+    // anything, and a DEFAULT would make "no dispatch has ever started for
+    // this run" indistinguishable from "one started at the epoch" — the
+    // overloaded-null defect at the one seam the column exists to keep honest.
+    expect(col!.notnull).toBe(0);
+    expect(col!.dflt_value).toBeNull();
+    db.close();
+  });
+
+  it('reaches a database ALREADY at user_version 4 — it cannot be an amendment to any earlier migration', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    // Build the file exactly as a Build-9b server leaves it: migrations 0-3,
+    // user_version 4. `db.ts`'s loop starts at `current`, so anything amended
+    // INTO an earlier entry can never run against this file again.
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      raw.exec(MIGRATIONS[0]!); raw.exec(MIGRATIONS[1]!); raw.exec(MIGRATIONS[2]!);
+      raw.exec(MIGRATIONS[3]!);
+      raw.exec('PRAGMA user_version = 4');
+    });
+    raw.close();
+
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(5);
+    expect(runsColumn(db, 'dispatchStartedAt')).toBeDefined();
+    db.close();
+  });
+
+  it('COORD_SCHEMA_VERSION derives to 5 — never hand-edited beside a growing array', () => {
+    expect(COORD_SCHEMA_VERSION).toBe(5);
+    expect(MIGRATIONS.length).toBe(5);
+  });
+
+  it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
+    // The additive-only rule (this file's header, spec:77) as a mechanism
+    // rather than a request: migration 4 may only ADD. A future author who
+    // reaches for a rebuild-the-table migration — SQLite's usual answer to a
+    // column change — trips this rather than discovering it on a live file.
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const names = (db.prepare('PRAGMA table_info(runs)').all() as unknown as ColumnInfo[])
+      .map((c) => c.name);
+    expect(names).toEqual(expect.arrayContaining([
+      'id', 'program', 'wave', 'waveOf', 'project', 'sessionId', 'workspace', 'branch',
+      'state', 'claimedBy', 'resumed', 'clearedAt', 'openedAt', 'dispatchedAt', 'closedAt',
+      'handoffCommit', 'prLineage', 'dispatchStartedAt',
+    ]));
     db.close();
   });
 });

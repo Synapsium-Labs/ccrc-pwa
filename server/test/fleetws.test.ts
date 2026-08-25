@@ -601,6 +601,40 @@ describe('fleet REST + WS', () => {
       ws.close();
     });
 
+    // T2 (spawn visibility): the frame carries the programme-ownership edge.
+    // `GET /api/runs` and this frame are two deliveries of ONE shape
+    // (`toRunSummary`, shared by the route and `emitRuns`), and the fleet tree
+    // reads the SOCKET, not the route — so pinning only the route would leave
+    // the surface T4 actually renders unpinned.
+    it('carries claimedBy — the coordinator that owns each run, on the socket the fleet tree reads', async () => {
+      const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+      const opened = coord.openRun({
+        program: 'build7', title: 'Fleet coordination', project: 'ccrc-pwa',
+        wave: 1, waveOf: 3, claimedBy: 'ccrc-pwa-coordinator',
+      }) as { id: number };
+      const deps = { ...testDeps(home), coord };
+      const bus = new Bus();
+      const watcher = new FleetWatcher(deps, bus);
+      app = await buildServer(deps, bus, watcher);
+      await watcher.tick();
+
+      await app.listen({ host: '127.0.0.1', port: 0 });
+      const addr = app.server.address();
+      const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
+      const next = collect(ws, { dropDivergence: true });
+      await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject); });
+
+      expect((await next()).type).toBe('hello');
+      expect((await next()).type).toBe('fleet');
+      const runs = await next();
+      expect(runs.type).toBe('runs');
+      expect(runs.runs.map((r: { id: number; claimedBy: string | null }) => [r.id, r.claimedBy]))
+        .toEqual([[opened.id, 'ccrc-pwa-coordinator']]);
+
+      ws.close();
+    });
+
     it('drops the frame from the broadcast when the JSON is unchanged', async () => {
       const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
       coord.openRun({

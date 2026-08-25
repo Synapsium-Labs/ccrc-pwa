@@ -34,11 +34,12 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { type FleetSession, type RunSummary, unmeasuredFields } from '../../../shared/api';
-import { RUN_GLYPH, RUN_WORD, isRunClosed, itemTallyLabel, programWave, runClosedAt, runItems, runState, runsByProgram } from '../fleet/runWords';
+import { DISPATCH_GLYPH, RUN_GLYPH, RUN_WORD, anyDispatchPending, dispatchWindow, isRunClosed, itemTallyLabel, programWave, resumeNote, runClosedAt, runItems, runState, runsByProgram } from '../fleet/runWords';
+import { spawnVerdictChip } from '../fleet/spawnWords';
 import { AbandonSheet } from '../fleet/AbandonSheet';
 import { CoordBanner } from '../fleet/CoordBanner';
 import { StartProgramSheet } from '../fleet/StartProgramSheet';
-import { formatAge } from '../fleet/formatReset';
+import { formatAge, formatElapsed } from '../fleet/formatReset';
 import { api } from '../lib/api';
 import { navigate } from '../lib/router';
 import { useNow } from '../lib/useNow';
@@ -67,12 +68,19 @@ const loadRunsDefault = (): Promise<{ runs: RunSummary[] }> => api.runs(true);
 
 function RunRow({
   run,
-  nowSec,
+  nowMs,
   session,
   onAbandon,
 }: {
   run: RunSummary;
-  nowSec: number;
+  /** The shared tick, in MILLISECONDS (Task 3). The row derives its own
+   *  `nowSec` below; it does not receive one. The dispatch window's boundary
+   *  is `SPAWN_STALL_MS` — a millisecond constant — so a tick already floored
+   *  to seconds upstream could not state which side of it a row is on, by up
+   *  to 999 ms — which is a claim a red suite holds, not this comment: the
+   *  suite's `FROZEN` carries a sub-second remainder precisely so flooring
+   *  here reds. One clock, in the unit every wire timestamp already uses. */
+  nowMs: number;
   /** The run's session, as the live fleet snapshot currently has it — or
    *  `null` when there is none (no session, or the fleet frame hasn't named
    *  it yet). Looked up by the caller so this component stays a pure
@@ -95,6 +103,35 @@ function RunRow({
   // one rather than throwing mid-render.
   const state = runState(run);
   const items = runItems(run);
+  const nowSec = Math.floor(nowMs / 1000);
+  // Task 3, the dispatch window. The DECISION is `dispatchWindow`'s (three
+  // conditions, one place); this component only picks the words. `none` is
+  // both "no fresh-spawn dispatch has started" and "the run has moved off
+  // `planned`" — either way there is no spawn to narrate, and the row renders
+  // byte-identically to how it read before the column existed, which is the
+  // no-regression half of this branch.
+  const spawn = dispatchWindow(run, nowMs);
+  // Task 5, both of them facts this board already held and did not read.
+  //
+  // The spawn verdict comes off the SESSION this row links to — the same
+  // `FleetSession` the degrade note above is read from — through the one table
+  // (`spawnWords.ts`), which is where it moved when this became its second
+  // surface. A row with no session says nothing: there is no pane to have a
+  // last spawn.
+  //
+  // `spawnVerdictChip`, NOT `spawnChip`: the two are one arm apart and the
+  // board asks the narrower one BY NAME, never by re-deriving a condition here.
+  // The wider one adds `unstarted` for a session that recorded no verdict — a
+  // word §Design opens by complaining about, which on this surface would be
+  // reporting an UNREADABLE `.started` as a claim that was never made (the full
+  // argument, with the ccd and registry anchors, is on `spawnChip`'s docstring;
+  // both halves are pinned in `runs-screen.test.tsx`).
+  //
+  // The resume is the run's OWN fact and has ridden `RunSummary` since Build 4
+  // with nothing in `pwa/src` ever rendering it. `resumeNote` decides; this
+  // picks no words.
+  const verdict = session === null ? null : spawnVerdictChip(session);
+  const resume = resumeNote(run, nowSec);
   const body = (
     <>
       <span className="run-glyph" aria-hidden="true">{RUN_GLYPH[state]}</span>
@@ -104,6 +141,51 @@ function RunRow({
       <span className="run-when">
         {run.dispatchedAt === null ? '—' : formatAge(nowSec - Math.floor(run.dispatchedAt / 1000))}
       </span>
+      {/* Two cues on both branches — a word and a glyph — the same rule every
+          other state cell on this board follows: nothing here may be read out
+          of colour alone. The in-flight line is an ordinary progress
+          statement; the stalled one is the state `dispatch.ts` says "no verb
+          names", and it is deliberately worded as what the OPERATOR now has
+          to deal with (a workspace may exist) rather than as an error code. */}
+      {spawn.phase === 'in-flight' && (
+        <span className="run-dispatch" data-phase="in-flight">
+          {/* The glyph comes from `DISPATCH_GLYPH` (Task 4), not a literal:
+              the fleet card draws the same window now, and two surfaces
+              spelling one vocabulary twice is the drift this repo's tables
+              exist to prevent. */}
+          <span className="run-dispatch-glyph" aria-hidden="true">{DISPATCH_GLYPH['in-flight']}</span>
+          {'dispatching… '}{formatElapsed(spawn.elapsedMs)}
+        </span>
+      )}
+      {spawn.phase === 'stalled' && (
+        <span
+          className="run-dispatch"
+          data-phase="stalled"
+          title={`the dispatch began ${formatElapsed(spawn.elapsedMs)} ago and the run is still planned`}
+        >
+          <span className="run-dispatch-glyph" aria-hidden="true">{DISPATCH_GLYPH.stalled}</span>
+          {'dispatch never completed — a workspace may exist'}
+        </span>
+      )}
+      {/* The linked session's spawn verdict, in `SessionLine`'s own class and
+          `SessionLine`'s own word — the identical reuse this row already makes
+          of `.sess-unmeasured` next door, and for the identical reason: a
+          second `.run-…` class for one meaning is two vocabularies over one
+          field. `.sess-line` and `.run-row` both sit on `--bg-surface`, so the
+          chip's ink brings no new contrast pair with it. */}
+      {verdict !== null && (
+        <span className="sess-spawn" data-spawn={verdict.data} title={`last spawn: ${verdict.data}`}>
+          {verdict.word}
+        </span>
+      )}
+      {/* D-1, finally on screen. `data-cleared` carries the half the word
+          alone cannot: the two branches are two different facts, and a test
+          that could only read the string would be pinning prose. */}
+      {resume !== null && (
+        <span className="run-resumed" data-cleared={String(resume.cleared)} title={resume.title}>
+          {resume.word}
+        </span>
+      )}
       {degradedFields.length > 0 && (
         <span
           className="sess-unmeasured"
@@ -137,6 +219,15 @@ function RunRow({
   // A run with no session has nothing to open. An inert row says that; a
   // button that navigates to a session that does not exist says something
   // false.
+  //
+  // Task 3: `data-inert` is about the TAP and nothing else, and it stays
+  // exactly as it was — the in-flight row is the ONE row that is inert and
+  // has something to say, and the two are not in tension. `body` renders
+  // inside the inert `<li>` just as it does inside `.run-open`, and nothing
+  // in `fleet.css` selects `[data-inert]` at all (measured), so no rule dims
+  // or hides what the row now says while the spawn is under way. Making the
+  // row tappable to let the affordance through would have traded a true
+  // sentence for a dead tap onto a session id that does not exist yet.
   return run.sessionId === null
     ? <li className="run-row" data-inert="true">{body}{abandonButton}</li>
     : (
@@ -170,8 +261,6 @@ export function RunsScreen({
   // claim about the program's whole history that a failed read has no
   // standing to make.
   const [coldState, setColdState] = useState<'loading' | 'ok' | 'error'>('loading');
-  const now = useNow(30_000);
-  const nowSec = Math.floor(now / 1000);
 
   // Task 12, spec §4.3: which run's AbandonSheet is open, or `null`. ONE
   // sheet at screen level, reused across rows — the same shape
@@ -280,6 +369,33 @@ export function RunsScreen({
   // answer first. `state` is the same line `CoordStore.runs()` itself draws.
   const active = (runsFrameSeen ? live : cold ?? live)
     .filter((r) => !isRunClosed(r));
+  // The tick, and it is deliberately declared HERE rather than up with the
+  // other hooks: it reads `active`, which is the list it has to describe.
+  //
+  // MILLISECONDS all the way to the row, which derives its own seconds for
+  // `formatAge`. The dispatch window's boundary is `SPAWN_STALL_MS`, a
+  // millisecond constant, and flooring here first would make it unmeasurable
+  // by up to 999 of them (`runs-screen.test.tsx`'s `FROZEN` carries a
+  // sub-second remainder so that claim is held by a red suite, not by this
+  // comment).
+  //
+  // The CADENCE follows the content, the idiom `SessionHeader`
+  // (`working ? 1_000 : 30_000`) and `ToolCard` (`useNow(1_000, running)`)
+  // already use. 30 s was right while every readout on this board was
+  // minute-granular; the dispatch window is not — it renders `formatElapsed`
+  // to the second and flips phase on a millisecond threshold, so at 30 s the
+  // operator watched `⟳ dispatching… 0:12` hold still for half a minute and
+  // then jump to `0:42`, and the wedge landed up to 30 s after the runner had
+  // certainly given up. §Design's own complaint about the state this build
+  // fixes is "a board that never moves"; rendering a clock the tick cannot
+  // honour would have kept it.
+  //
+  // `anyDispatchPending` and not an inline condition, because the answer must
+  // stay `dispatchWindow`'s alone — and it can be asked before a tick exists
+  // (that half of the answer is clock-independent; the helper's docstring has
+  // the reasoning). `finished` is not consulted: it holds closed runs by
+  // construction, and `dispatchWindow` answers `none` for every closed state.
+  const now = useNow(anyDispatchPending(active) ? 1_000 : 30_000);
   // FINISHED reads ONLY `cold` — never `live`, which cannot carry a closed
   // run by construction (see the file header). Reading it from the same
   // `runs` slice `active` used (the pre-fix shape) meant the Finished group
@@ -312,7 +428,7 @@ export function RunsScreen({
     <RunRow
       key={run.id}
       run={run}
-      nowSec={nowSec}
+      nowMs={now}
       session={run.sessionId === null ? null : sessionById.get(run.sessionId) ?? null}
       onAbandon={setAbandonTarget}
     />

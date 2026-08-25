@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatAge, formatReset } from '../src/fleet/formatReset';
+import { formatAge, formatElapsed, formatReset } from '../src/fleet/formatReset';
 
 describe('formatReset', () => {
   const now = 1_000_000;
@@ -31,5 +31,42 @@ describe('formatAge', () => {
   });
   it('is "—" when nothing has ever been reported', () => {
     expect(formatAge(null)).toBe('—');
+  });
+});
+
+// Task 3 (spawn visibility): the dispatch window's own readout. A THIRD
+// time-format here rather than a fourth idiom somewhere else — `formatReset`
+// counts DOWN to a future moment, `formatAge` rounds a settled past to a
+// coarse ago-phrase ("just now" for anything under two minutes), and neither
+// can say "42 seconds and climbing", which is the only thing an operator
+// watching a spawn actually wants. A stopwatch reading is its own question.
+describe('formatElapsed', () => {
+  it('reads as a stopwatch: m:ss under the hour, seconds always two digits', () => {
+    expect(formatElapsed(42_000)).toBe('0:42');
+    expect(formatElapsed(247_000)).toBe('4:07');
+    expect(formatElapsed(0)).toBe('0:00');
+    expect(formatElapsed(9_000)).toBe('0:09');
+  });
+
+  it('grows an hours field rather than counting past 59 minutes', () => {
+    // A wedged dispatch is rendered by its own branch, not by this helper, but
+    // Task 4's pending child carries the same clock and nothing bounds how
+    // long an operator leaves one on screen. `62:03` would read as a number,
+    // not a duration.
+    expect(formatElapsed(3_723_000)).toBe('1:02:03');
+    expect(formatElapsed(3_600_000)).toBe('1:00:00');
+  });
+
+  it('floors the partial second rather than rounding it up', () => {
+    // The row must never read `0:43` while `dispatchStartedAt` is 42.9s old:
+    // the elapsed clock is a measurement of a span that has actually passed.
+    expect(formatElapsed(42_999)).toBe('0:42');
+  });
+
+  it('clamps a negative span to zero — clock skew is not a negative duration', () => {
+    // `dispatchStartedAt` is stamped by the SERVER's clock and subtracted from
+    // the PHONE's. A few seconds of skew is ordinary and must render as
+    // "the spawn just began", never as `-0:03` or `NaN`.
+    expect(formatElapsed(-3_000)).toBe('0:00');
   });
 });

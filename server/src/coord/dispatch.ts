@@ -238,7 +238,27 @@ export async function dispatchRun(
     // spawn is a dispatched program worker, so it declares `--no-rc` at
     // creation (the 2026-08-13 ruling, task #37). The PWA's ordinary
     // workspace-add keeps `wsAdd` and the box's own RC default.
+    //
+    // AND IT DECLARES NOTHING, deliberately. T2 passed `sweepDec` here so the
+    // journal's `create` row would name this run the way the `hold` at step 5
+    // already does; its review measured the real `cmd_ws_add` and found no flag
+    // parser — the dec's first token binds as the SLUG and the verb dies at
+    // `_ws_slug_valid`, so on a caps-advertising box every wave-1 spawn would
+    // refuse before creating anything, the registry diff below would find zero
+    // candidates, and this run would sit at `planned` with `dispatchStartedAt`
+    // set: the exact wedge this build exists to RENDER, manufactured by it.
+    // The full argument, and the two ccd changes attribution would need, live
+    // on `wsAddWorker`'s own docstring. When it is pursued, the actor string is
+    // not to be TYPED here: `` `run:${run.id} dispatch` `` is spelled once, at
+    // the hold in step 5, and a second copy is one drift away from splitting
+    // one lane into two actors — derive it the way `rundefs.ts`'s `holdReason`
+    // single-sources the hold string.
     const argv = CCD_ARGV.wsAddWorker(run.project);
+    // BEFORE the call, never after: this is the only moment the run can say
+    // "a dispatch is in flight" — the id does not exist yet, and a stamp
+    // written once `runCcd` resolves would be null for the entire window it
+    // exists to describe. Nothing clears it; `state` ends the render.
+    coord.markDispatchStarted(id, Date.now());
     const res = await deps.runCcd(argv);
     // §1.5: NO EARLY RETURN HERE ANY MORE. `!res.ok` used to short-circuit on
     // this line, before the diff below — see the gate after `winner`.
@@ -337,6 +357,14 @@ export async function dispatchRun(
     // Wave N>=2: resume the SAME workspace (deviation D-1 — no ccd verb can
     // spawn fresh into an existing one), then discard the resumed context
     // with an injected `/clear` through `sendPrompt`'s full proof discipline.
+    //
+    // AND NO `markDispatchStarted` HERE, deliberately — the arm above stamps,
+    // this one does not. That column measures the window in which a workspace
+    // is being MINTED and no session id exists yet, and a resume has neither
+    // half: `run.sessionId` is known before the call, so the console already
+    // has a row to point at. Adding the stamp here widens what NULL means and
+    // reds `run-routes.test.ts`'s resume-scope pin, which is the intended
+    // cost — do it only as a decided scope change, never as a tidy-up.
     sessionId = run.sessionId;
     const argv = CCD_ARGV.ensure(sessionId);
     const res = await deps.runCcd(argv);

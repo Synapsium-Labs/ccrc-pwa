@@ -1,9 +1,10 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { StrictMode } from 'react';
 import { act, cleanup, render, screen, fireEvent } from '@testing-library/react';
-import { RUN_STATES, type FleetSession, type RunSummary } from '../../shared/api';
+import { RUN_STATES, SPAWN_STALL_MS, type FleetSession, type RunSummary } from '../../shared/api';
 import { RunsScreen } from '../src/screens/RunsScreen';
-import { RUN_ORDER, RUN_WORD, itemTallyLabel, programWave, runItems } from '../src/fleet/runWords';
+import { RUN_ORDER, RUN_WORD, dispatchWindow, itemTallyLabel, programWave, resumeNote, runItems } from '../src/fleet/runWords';
+import { spawnChip, spawnVerdictChip } from '../src/fleet/spawnWords';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
@@ -13,12 +14,24 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 // (it's `waveOf`), there is no `holdReason` at all (never rides the wire —
 // see RunsScreen.tsx's own header comment), and `items` carries only
 // `{done,total}` — no `failed`/`blocked` columns exist anywhere.
+//
+// `dispatchStartedAt` DEFAULTS TO NULL ON PURPOSE, and it is not laziness: null
+// is what an older build's row carries and what a run nobody has dispatched
+// carries, so this default IS the no-regression baseline — every case below
+// must keep rendering exactly as it did before the column existed. A case about
+// the dispatch window sets it explicitly through `over`.
+//
+// `claimedBy` names a coordinator that is deliberately NOT one of the sessions
+// any fixture in this file puts in the fleet — the ownership edge is real data
+// on the row, and no case here is about rendering the edge, so the parent stays
+// absent and every row keeps its top-level position.
 const r = (over: Partial<RunSummary> = {}): RunSummary => ({
   id: 3, program: 'build4-transcript-surface', programTitle: 'Build 4: transcript surface',
   wave: 3, waveOf: 4, project: 'ccrc-pwa',
   sessionId: 'ccrc-pwa-clear-cove', workspace: 'clear-cove', branch: 'ws/clear-cove',
-  state: 'working', resumed: false, clearedAt: null,
-  openedAt: Date.now() - 1_000_000, dispatchedAt: Date.now() - 900_000, closedAt: null,
+  state: 'working', claimedBy: 'ccrc-pwa-coordinator', resumed: false, clearedAt: null,
+  openedAt: Date.now() - 1_000_000, dispatchStartedAt: null,
+  dispatchedAt: Date.now() - 900_000, closedAt: null,
   handoffCommit: null, items: { done: 3, total: 7 }, unreadMail: 0, ...over,
 });
 
@@ -83,8 +96,9 @@ describe('the run board', () => {
     // cadence for data that changes on human timescales; this reads it once
     // and lets the socket carry updates." `toHaveBeenCalledTimes(1)` above
     // proves the FIRST call is unconditional but says nothing about a SECOND
-    // one arriving later on a timer. `useNow(30_000)` legitimately runs its
-    // own unrelated `setInterval` for the relative-time readout, so a bare
+    // one arriving later on a timer. `useNow` legitimately runs its own
+    // unrelated `setInterval` for the relative-time readout — at whichever
+    // cadence the board's dispatch-window gate picked — so a bare
     // "setInterval was never called" spy is a false positive on the REAL
     // component — this drives fake time forward with
     // `advanceTimersByTimeAsync` (which also flushes the promise microtask
@@ -526,5 +540,460 @@ describe('the program-start door mounts on /runs (Task 13, spec §4.4)', () => {
     render(<RunsScreen store={makeStore()} loadRuns={async () => ({ runs: [] })} />);
     fireEvent.click(await screen.findByRole('button', { name: /start a program/i }));
     expect(await screen.findByText(/the coordinator picks up from there/i)).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 3 (spawn visibility): the dispatch window, and the wedge.
+//
+// The measured gap this pins closed: from dispatch acceptance to a usable
+// pane, the run board sat on `planned` and never moved, while the fleet screen
+// showed the same event as three fault-shaped words in sequence. `planned` is
+// overloaded — it means BOTH "opened, nobody has dispatched" and "a dispatch is
+// in flight" — and `dispatchStartedAt` (Task 1) is the fact that separates
+// them. This half of the build is what reads it.
+// ---------------------------------------------------------------------------
+
+/** A fixed wall clock. The `in-flight`/`stalled` boundary is `SPAWN_STALL_MS`
+ *  EXACTLY, so a test that let real time run could not state which side of it
+ *  a case is on — the assertion would be true by a margin, not by the
+ *  constant.
+ *
+ *  THE `499` IS LOAD-BEARING — do not round it. `RunsScreen` carries the tick
+ *  to the row in MILLISECONDS and derives its own `nowSec` there, rather than
+ *  flooring once upstream, and its own comments justify that at length: a
+ *  boundary stated in milliseconds cannot be measured by a clock already
+ *  floored to seconds, by up to 999 of them. On a whole-second `FROZEN` that
+ *  claim was untestable and untested — flooring the clock inside the row was a
+ *  no-op for every case here, so planting
+ *  `dispatchWindow(run, nowSec * 1000)` in place of `dispatchWindow(run,
+ *  nowMs)` passed all 47 (measured, review round). With a sub-second
+ *  remainder the same probe reds twice — the wedge lands 499 ms late and the
+ *  in-flight clock reads `0:41` for a 42-second spawn — so the millisecond
+ *  path is now held by a mechanism instead of by three comments. */
+const FROZEN = 1_800_000_000_499;
+
+/** Runs `body` with `Date.now()` pinned at `FROZEN`. The timers are always
+ *  restored, including on a failing assertion — a suite that leaks fake timers
+ *  hangs the NEXT file, not this one, and that is the hardest kind of flake to
+ *  attribute. */
+function atFrozenClock(body: () => void): void {
+  vi.useFakeTimers({ now: FROZEN });
+  try { body(); } finally { vi.useRealTimers(); }
+}
+
+describe('dispatchWindow — the three-way answer, decided once and away from the renderer (Task 3)', () => {
+  it('is `none` for a planned run nobody has fresh-spawn dispatched', () => {
+    // The no-regression baseline: an ordinary wave N+1 row, opened and
+    // waiting. `null` here is one of TWO honest conditions (the other being a
+    // resume-only run — `shared/api.ts`'s own docstring names both), and
+    // neither of them is a dispatch in flight.
+    expect(dispatchWindow(r({ state: 'planned', dispatchStartedAt: null }), FROZEN))
+      .toEqual({ phase: 'none' });
+  });
+
+  it('is `in-flight` below the threshold, carrying the elapsed span itself', () => {
+    // The span rides on the answer rather than being recomputed by the caller:
+    // a renderer that re-derives `now - startedAt` is a second reader of the
+    // same nullable field, and the `!` it needs to do so is exactly where the
+    // NaN gets in.
+    expect(dispatchWindow(r({ state: 'planned', dispatchStartedAt: FROZEN - 42_000 }), FROZEN))
+      .toEqual({ phase: 'in-flight', elapsedMs: 42_000 });
+  });
+
+  it('is `stalled` AT SPAWN_STALL_MS exactly — the boundary is the constant, not a rounded neighbour', () => {
+    // One millisecond either side, measured against the shared constant. The
+    // threshold is deliberately >= the `ws-add` verb ceiling, so at this point
+    // the runner has certainly given up: the console is not guessing early.
+    expect(dispatchWindow(r({ state: 'planned', dispatchStartedAt: FROZEN - (SPAWN_STALL_MS - 1) }), FROZEN).phase)
+      .toBe('in-flight');
+    expect(dispatchWindow(r({ state: 'planned', dispatchStartedAt: FROZEN - SPAWN_STALL_MS }), FROZEN))
+      .toEqual({ phase: 'stalled', elapsedMs: SPAWN_STALL_MS });
+  });
+
+  it('is `none` once the state has moved off `planned`, however old the stamp — STATE ends the render, not the field', () => {
+    // §Design: "Success moves `state` to `dispatched`, which is what stops the
+    // 'dispatching' rendering; the timestamp stays as forensic material." A
+    // window keyed on the timestamp alone would leave every dispatched run in
+    // the fleet's history claiming to be spawning, forever.
+    for (const state of ['dispatched', 'working', 'awaiting-review', 'done', 'failed'] as const) {
+      expect(dispatchWindow(r({ state, dispatchStartedAt: FROZEN - 1_000 }), FROZEN), state)
+        .toEqual({ phase: 'none' });
+    }
+  });
+
+  it('degrades a row that reached it without the key at all to `none`, never to a NaN clock', () => {
+    // The same tolerance `runItems`/`runClosedAt` already carry, for the same
+    // measured reason: neither the live `{type:'runs'}` frame nor
+    // `api.runs()` shape-validates a row, so a row minted by a build older
+    // than the column arrives with the key MISSING. `undefined !== null` is
+    // true, so a bare null-check would call that a dispatch in flight and
+    // render `NaN` as its elapsed clock.
+    const older = { ...r({ state: 'planned' }) } as Partial<RunSummary>;
+    delete older.dispatchStartedAt;
+    expect(dispatchWindow(older as RunSummary, FROZEN)).toEqual({ phase: 'none' });
+  });
+
+  it('clamps a stamp from the future to a zero-length window rather than reading it as stalled', () => {
+    // Server clock ahead of the phone's: the span is negative, and a raw
+    // `>= SPAWN_STALL_MS` comparison would answer `in-flight` correctly by
+    // luck while handing the renderer a negative clock.
+    expect(dispatchWindow(r({ state: 'planned', dispatchStartedAt: FROZEN + 5_000 }), FROZEN))
+      .toEqual({ phase: 'in-flight', elapsedMs: 0 });
+  });
+});
+
+describe('the run board renders the dispatch window — and the wedge (Task 3)', () => {
+  /** Mounts the board with one run on the live frame. */
+  const board = (over: Partial<RunSummary>): void => {
+    const store = makeStore();
+    act(() => { store.setState({ runs: [r({ ...over })], runsFrameSeen: true }); });
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+  };
+  /** A run in the shape a `planned` one actually reaches the wire in: no
+   *  session id (the server learns it by registry diff, AFTER `ws-add`
+   *  returns) and no `dispatchedAt` (nothing has completed). The default
+   *  fixture is a `working` row and carries both, so spelling them out here is
+   *  what keeps these cases about the dispatch window rather than about a
+   *  half-real row. */
+  const planned = (over: Partial<RunSummary>): void =>
+    board({ state: 'planned', sessionId: null, dispatchedAt: null, ...over });
+  const cell = (): HTMLElement | null => document.querySelector('.run-dispatch');
+
+  it('renders NO dispatch affordance for a planned run nobody has dispatched — exactly as the board read before the column existed', () => {
+    atFrozenClock(() => {
+      planned({ dispatchStartedAt: null });
+      expect(cell()).toBeNull();
+      expect(screen.queryByText(/dispatching/i)).toBeNull();
+      expect(screen.queryByText(/never completed/i)).toBeNull();
+      // Every other cell still says what it said: the branch is additive.
+      expect(screen.getByText(RUN_WORD.planned)).toBeInTheDocument();
+      expect(document.querySelector('.run-when')?.textContent).toBe('—');
+    });
+  });
+
+  it('says ⟳ dispatching… with a live elapsed clock while the spawn is in flight', () => {
+    atFrozenClock(() => {
+      planned({ dispatchStartedAt: FROZEN - 42_000 });
+      expect(cell()?.textContent).toContain('dispatching…');
+      expect(cell()?.textContent).toContain('0:42');
+      expect(cell()).toHaveAttribute('data-phase', 'in-flight');
+      // Two cues, the board's standing rule: a word AND a glyph, so the state
+      // is never read out of colour alone.
+      expect(cell()?.querySelector('[aria-hidden="true"]')).not.toBeNull();
+      expect(screen.queryByText(/never completed/i)).toBeNull();
+    });
+  });
+
+  it('keeps the row inert for NAVIGATION while the affordance renders — there is still no session to open', () => {
+    atFrozenClock(() => {
+      planned({ dispatchStartedAt: FROZEN - 42_000 });
+      // Inertness is about the TAP, not about the text. A button that
+      // navigates to a session id that does not exist yet says something
+      // false; the row saying a spawn is under way says something true, and
+      // the two are not the same claim.
+      expect(document.querySelector('.run-row')).toHaveAttribute('data-inert', 'true');
+      expect(screen.queryByRole('button', { name: /clear-cove/i })).toBeNull();
+      expect(cell()).not.toBeNull();
+    });
+  });
+
+  it('renders the wedge — dispatch never completed — once the threshold has passed, and stops saying dispatching', () => {
+    atFrozenClock(() => {
+      planned({ dispatchStartedAt: FROZEN - SPAWN_STALL_MS });
+      // `dispatch.ts`'s own words for this class: "a run stuck in `planned`
+      // beside an unexplained new workspace is a state no verb names". It has
+      // a name on screen now, and it is not the in-flight one.
+      expect(cell()?.textContent).toMatch(/never completed/i);
+      expect(cell()).toHaveAttribute('data-phase', 'stalled');
+      expect(screen.queryByText(/dispatching/i)).toBeNull();
+    });
+  });
+
+  it('is one millisecond short of the wedge at SPAWN_STALL_MS - 1 — the rendered boundary IS the constant', () => {
+    atFrozenClock(() => {
+      planned({ dispatchStartedAt: FROZEN - (SPAWN_STALL_MS - 1) });
+      expect(cell()).toHaveAttribute('data-phase', 'in-flight');
+      expect(screen.queryByText(/never completed/i)).toBeNull();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // The tick, review round. §Design's complaint about the state this build
+  // exists to fix is "three fault-shaped words for an entirely normal event,
+  // and A BOARD THAT NEVER MOVES" — so a dispatch window rendered to the
+  // second on a board that re-renders every 30 s only moves the complaint. The
+  // operator would watch `⟳ dispatching… 0:12` sit motionless for half a
+  // minute and then jump to `0:42`, and the wedge would arrive up to 30 s
+  // after `SPAWN_STALL_MS` had actually passed. The cadence has to follow what
+  // the row renders.
+  // -------------------------------------------------------------------------
+
+  /** `atFrozenClock`'s async twin, for the cases that ADVANCE the clock rather
+   *  than only read it: `advanceTimersByTimeAsync` flushes the promise
+   *  microtask queue between ticks, which a React state update fired from an
+   *  interval needs before the DOM reflects it. */
+  const fromFrozenClock = async (body: () => Promise<void>): Promise<void> => {
+    vi.useFakeTimers({ now: FROZEN });
+    try { await body(); } finally { vi.useRealTimers(); }
+  };
+
+  /** Every interval the board asks the timer for during one mount, in ms.
+   *  The interval IS the instrument here because there is nothing else to
+   *  watch: when no row is inside a dispatch window, NOTHING on this board is
+   *  second-granular (`formatAge` rounds everything under two minutes to "just
+   *  now"), so no readout can report the cadence. `useNow` is the only
+   *  `setInterval` in this screen's whole tree — measured across `pwa/src`:
+   *  `CoordBanner`, `AbandonSheet` and `StartProgramSheet` run none, and this
+   *  store never connects — so every recorded call is the tick.
+   *
+   *  `mockRestore()` BEFORE `useRealTimers()`, deliberately: the spy wraps the
+   *  FAKE `setInterval`, and unwinding in the other order would hand the
+   *  global back the fake after the fake clock had already been uninstalled —
+   *  a leaked timer that hangs the next FILE, not this one. */
+  const cadenceOf = (mount: () => void): number[] => {
+    vi.useFakeTimers({ now: FROZEN });
+    const spy = vi.spyOn(globalThis, 'setInterval');
+    try {
+      mount();
+      return spy.mock.calls.map((c) => Number(c[1]));
+    } finally {
+      spy.mockRestore();
+      vi.useRealTimers();
+      cleanup();
+    }
+  };
+
+  it('moves the in-flight clock every second — the readout the operator watches actually advances', async () => {
+    await fromFrozenClock(async () => {
+      planned({ dispatchStartedAt: FROZEN - 42_000 });
+      expect(cell()?.textContent).toContain('0:42');
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+      expect(cell()?.textContent).toContain('0:43');
+    });
+  });
+
+  it('renders the wedge within a second of SPAWN_STALL_MS, not up to thirty after it', async () => {
+    await fromFrozenClock(async () => {
+      // One second short of the threshold at mount, past it after one tick.
+      // At the board's old standing cadence the row keeps claiming the spawn
+      // is in flight for the rest of the half-minute — the operator is told a
+      // dispatch is progressing that the runner has already given up on.
+      planned({ dispatchStartedAt: FROZEN - (SPAWN_STALL_MS - 1_000) });
+      expect(cell()).toHaveAttribute('data-phase', 'in-flight');
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+      expect(cell()).toHaveAttribute('data-phase', 'stalled');
+    });
+  });
+
+  it('asks for the slow cadence when no row is spawning — both directions, or it is not a gate', () => {
+    // The same rule the `└─` bracket gets one task over: an affordance that is
+    // always on is not a gate. A board with nothing spawning has nothing
+    // second-granular to say, and paying a re-render a second to say it would
+    // be the cost without the reason.
+    expect(cadenceOf(() => planned({ dispatchStartedAt: null }))).toEqual([30_000]);
+    expect(cadenceOf(() => board({ state: 'working' }))).toEqual([30_000]);
+    // The stamp SURVIVES success — §Design: a measurement, never cleared — so
+    // a gate that read the FIELD instead of asking `dispatchWindow` would tick
+    // once a second for every run the fleet has ever dispatched, forever, on a
+    // board with nothing to narrate. Which is why the gate asks the same
+    // function the row does.
+    expect(cadenceOf(() => board({
+      state: 'dispatched', dispatchStartedAt: FROZEN - 42_000, dispatchedAt: FROZEN - 1_000,
+    }))).toEqual([30_000]);
+    expect(cadenceOf(() => planned({ dispatchStartedAt: FROZEN - 42_000 }))).toEqual([1_000]);
+    // The wedge keeps the fast tick: its own elapsed span is still rendered to
+    // the second (the title `dispatch.ts`'s wedge carries), and the row is
+    // still `planned` — the window has not closed, it has gone bad.
+    expect(cadenceOf(() => planned({ dispatchStartedAt: FROZEN - SPAWN_STALL_MS }))).toEqual([1_000]);
+  });
+
+  it('says nothing about dispatching once the run reaches `dispatched`, though the stamp survives on the row', () => {
+    atFrozenClock(() => {
+      // The forensic half of §Design, rendered: `dispatchedAt -
+      // dispatchStartedAt` stays readable on the row for as long as the run
+      // exists, and the board still stops narrating the spawn the instant it
+      // succeeded.
+      board({ state: 'dispatched', dispatchStartedAt: FROZEN - 42_000, dispatchedAt: FROZEN - 1_000 });
+      expect(cell()).toBeNull();
+      expect(screen.queryByText(/dispatching/i)).toBeNull();
+      expect(screen.getByText(RUN_WORD.dispatched)).toBeInTheDocument();
+    });
+  });
+});
+
+// ── Task 5: the facts that already ship, finally read ──────────────────────
+//
+// Nothing below is a new WIRE fact. `FleetSession.spawnState` has ridden the
+// fleet frame since §1.6b and `RunSummary.resumed`/`clearedAt` since Build 4 —
+// and this board, which already holds the whole `FleetSession` for every row it
+// links (it looks one up by `sessionId` for the degrade note), rendered neither.
+// The gap was never measurement; it was reading.
+
+describe('the run row renders its session’s spawn verdict (Task 5)', () => {
+  /** Mounts the board with one run and the session it links to. */
+  const withSession = (over: Partial<FleetSession>): void => {
+    const store = makeStore();
+    act(() => { store.setState({ runs: [r()], runsFrameSeen: true, sessions: [sess(over)] }); });
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+  };
+  const chip = (): HTMLElement | null => document.querySelector('.sess-spawn');
+
+  it('renders the verdict with SessionLine’s own class and word — one vocabulary, two surfaces', () => {
+    // `.sess-spawn`, not a second `.run-…` class for the identical meaning:
+    // the same reuse this row already makes of `.sess-unmeasured`, and the
+    // reason RunsScreen.tsx gives for it. The WORD comes from the one table
+    // (`spawnWords.ts`), so the two surfaces cannot drift into two names for
+    // one verdict.
+    withSession({ spawnState: 'blocked' });
+    expect(chip()?.textContent).toBe('blocked');
+    expect(chip()).toHaveAttribute('data-spawn', 'blocked');
+  });
+
+  it('says nothing for a healthy spawn — `ready` goes THROUGH the table, it is not special-cased', () => {
+    // `SPAWN_WORD` is typed `string | null` precisely so a member can be
+    // SILENT; a row whose last spawn was clean has nothing to qualify.
+    withSession({ spawnState: 'ready' });
+    expect(chip()).toBeNull();
+  });
+
+  it('says nothing for the shape every healthy live session actually carries — the no-regression baseline', () => {
+    // All eighteen live sessions carry `spawnState: null` with
+    // `started: true`. A rule of "chip on anything not ready" would light a
+    // warning on every row on the board; this is the half that keeps it dark.
+    withSession({ spawnState: null, started: true });
+    expect(chip()).toBeNull();
+  });
+
+  it('shows a verdict this build cannot NAME as itself, prefixed — never as silence', () => {
+    // §1.7's render-seam rule, and the reason it has to hold on this surface
+    // too: the two deploy lanes have no version handshake, so a newer agent's
+    // verdict reaching an older bundle is a real window. Hiding an unknown
+    // verdict is strictly worse than showing an ugly one.
+    withSession({ spawnState: 'quarantined' as FleetSession['spawnState'] });
+    expect(chip()?.textContent).toBe('? quarantined');
+  });
+
+  it('says nothing at all for a run whose session the fleet frame has not named', () => {
+    // The `planned` row's ordinary shape: no session id yet, so no session to
+    // read a verdict off. A chip here would be a claim about a pane that does
+    // not exist.
+    const store = makeStore();
+    act(() => { store.setState({ runs: [r({ sessionId: null, state: 'planned' })], runsFrameSeen: true }); });
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    expect(chip()).toBeNull();
+  });
+
+  // ── The scoping, and the two conditions the first round left unmeasured ──
+  //
+  // Task 5's Step 1 asks this board for the linked session's `spawnState`
+  // "WHEN IT IS NOT `null`". `spawnChip` answers a wider question than that —
+  // it is the FLEET ROW's question, and its `unstarted` fallback fires when
+  // `spawnState` IS null — so the board asks the narrower one by name
+  // (`spawnVerdictChip`). The three pins below are what makes that a mechanism:
+  // the fallback's ABSENCE here, the verdict's survival beside it, and the dead
+  // exemption measured on THIS surface rather than borrowed from the other one.
+
+  it('says nothing for a row that has not claimed — `unstarted` is not a VERDICT, and this board asks for one', () => {
+    // WHY THE BOARD DIVERGES, in the order the argument has to be made.
+    //
+    // 1. §Design opens by naming `unstarted` as one of the three fault-shaped
+    //    words an ordinary spawn currently spends four minutes wearing. A build
+    //    whose premise is "stop saying that" must not propagate it to a second
+    //    surface.
+    // 2. On THIS surface the word cannot even be true the way it is on the
+    //    fleet screen. `cmd_ws_add` writes the claim (`_reg_claim`, ccd:2708)
+    //    BEFORE the settle it then blocks in, and a run learns its `sessionId`
+    //    only from the registry diff AFTER `ws-add` returns
+    //    (`dispatch.ts`, the fresh-spawn arm) — so at the first instant a run
+    //    row can look a session up, `started` is already `1`, and it is
+    //    monotone within a row (`_reg_claim`'s header: nothing in that file
+    //    clears it; only `_reg_purge` does, and that destroys the identity).
+    // 3. What actually reaches this arm is the OTHER condition `started ===
+    //    false` carries. `server/src/registry.ts` maps it as
+    //    `startedRead.ok && startedRead.content === '1'`, so a `.started` that
+    //    was listed and could not be READ this pass arrives as `false` — and
+    //    `FleetSession` does not carry the evidence that would tell the two
+    //    apart (`lifecycleUnmeasured` is spent on `lifecycle` server-side and
+    //    goes no further; `unmeasured` is identity fields only). Rendering that
+    //    as "unstarted" states a fact about a worker that is running fine.
+    //    `sessionLifecycle` already refuses exactly this inference in this
+    //    repo's own words — "an UNREADABLE `started` cannot be mistaken for an
+    //    absent one" — and it is the same seam.
+    withSession({ spawnState: null, started: false });
+    expect(chip()).toBeNull();
+  });
+
+  it('still renders a RECORDED verdict on a row that never claimed — the scoping drops the fallback, not the verdict', () => {
+    // The other direction, and the one that makes the pin above a scoping
+    // rather than a mute button: `started === false` is not itself a reason to
+    // go quiet. A spawn that recorded `blocked` says `blocked` here whatever
+    // the claim marker reads.
+    withSession({ spawnState: 'blocked', started: false });
+    expect(chip()?.textContent).toBe('blocked');
+  });
+
+  it('never renders a chip on a dead row — the exemption measured on THIS surface, not borrowed', () => {
+    // The dead exemption is `spawnWords.ts`'s, shared by both surfaces, and
+    // until now only `session-line.test.tsx` measured it: deleting it left
+    // this suite entirely green. Nothing is running, so how the last spawn
+    // ended describes work that no longer exists.
+    withSession({ spawnState: 'blocked', status: 'dead' });
+    expect(chip()).toBeNull();
+  });
+
+  it('the two surfaces diverge on ONE named question, and both halves are stated here', () => {
+    // The divergence is deliberate, so it is pinned in both directions rather
+    // than left as a difference someone tidies away. The fleet row keeps the
+    // fallback (`swift-harbor` — a real workspace whose only signal is the
+    // absent claim, and the fleet screen is where an operator goes looking for
+    // one); the board does not.
+    const shape = sess({ spawnState: null, started: false });
+    expect(spawnChip(shape)).toEqual({ word: 'unstarted', data: 'unstarted' });
+    expect(spawnVerdictChip(shape)).toBeNull();
+  });
+});
+
+describe('the run row renders the resume it has always carried (D-1, Task 5)', () => {
+  const board2 = (over: Partial<RunSummary>): void => {
+    const store = makeStore();
+    act(() => { store.setState({ runs: [r(over)], runsFrameSeen: true }); });
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+  };
+  const cellR = (): HTMLElement | null => document.querySelector('.run-resumed');
+
+  it('says nothing for a wave that spawned fresh — the no-regression baseline', () => {
+    board2({ resumed: false, clearedAt: null });
+    expect(cellR()).toBeNull();
+  });
+
+  it('says the wave was resumed, and that the /clear landed', () => {
+    // D-1: wave >= 2 cannot spawn fresh into an existing workspace, so the
+    // dispatch route resumes the pane and injects `/clear` through the send
+    // path. `clearedAt` is the PROOF the second step ran.
+    board2({ resumed: true, clearedAt: Date.now() - 120_000 });
+    expect(cellR()?.textContent).toBe('resumed');
+    expect(cellR()).toHaveAttribute('data-cleared', 'true');
+  });
+
+  it('says something DIFFERENT when the resume has no proof its context was cleared', () => {
+    // The two must not collapse into one word. A resumed pane whose `/clear`
+    // never landed is carrying the previous wave's context into this one —
+    // which is the entire reason D-1 injects it — and that is the operator's
+    // problem, not a rendering detail.
+    board2({ resumed: true, clearedAt: null });
+    expect(cellR()).not.toBeNull();
+    expect(cellR()?.textContent).not.toBe('resumed');
+    expect(cellR()?.textContent).toMatch(/not cleared/i);
+    expect(cellR()).toHaveAttribute('data-cleared', 'false');
+  });
+
+  it('degrades a row that reached it without the key at all to silence, never to a half-sentence', () => {
+    // The same tolerance `runItems`/`runClosedAt`/`dispatchWindow` already
+    // carry, for the same measured reason: nothing between the wire and this
+    // renderer validates a row's members.
+    const older = { ...r() } as Partial<RunSummary>;
+    delete older.resumed;
+    expect(resumeNote(older as RunSummary, 0)).toBeNull();
   });
 });

@@ -6,7 +6,8 @@
 //
 // Two cues per row, always: the word is the fact and the glyph is the shape, so
 // no state has to be read out of colour (StatusDot.tsx's own discipline).
-import { isRunState, type RunItemTally, type RunState, type RunSummary } from '../../../shared/api';
+import { SPAWN_STALL_MS, isRunState, type RunItemTally, type RunState, type RunSummary } from '../../../shared/api';
+import { formatAge } from './formatReset';
 
 export const RUN_WORD: Record<RunState, string> = {
   planned: 'planned',
@@ -95,6 +96,178 @@ export const isRunClosed = (run: { state: RunState }): boolean => {
   const s = runState(run);
   return s === 'done' || s === 'failed';
 };
+
+/** The dispatch window's three-way answer (Task 3, spawn visibility).
+ *
+ *  `planned` is OVERLOADED — it means both "opened, nobody has dispatched" and
+ *  "a dispatch is in flight" — and until `dispatchStartedAt` shipped, nothing
+ *  on the wire could tell the two apart. Inferring the difference here from
+ *  circumstantial evidence (a `planned` run beside an unheld new workspace)
+ *  would be an adapter narrowing a distinction it was never handed; reading
+ *  the one fact that says so is not.
+ *
+ *  Three answers, because there are three conditions and a renderer must not
+ *  be the place they are separated:
+ *    • `none` — nothing to say about a spawn. Either no fresh-spawn dispatch
+ *      has started (the field's own two conditions: nobody dispatched, or
+ *      every dispatch was a wave N>=2 resume), or the run has already MOVED
+ *      OFF `planned`, which is what ends the rendering. §Design: the stamp is
+ *      a measurement and is never cleared, so a window keyed on the timestamp
+ *      alone would leave every run in the fleet's history claiming forever to
+ *      be spawning.
+ *    • `in-flight` — a dispatch began, less than `SPAWN_STALL_MS` ago.
+ *    • `stalled` — a dispatch began at least `SPAWN_STALL_MS` ago and the run
+ *      is still `planned`. That is `dispatch.ts`'s own "a run stuck in
+ *      `planned` beside an unexplained new workspace is a state no verb
+ *      names", and it now has one.
+ *
+ *  `elapsedMs` rides ON the answer rather than being recomputed by the caller:
+ *  a renderer that re-derives `now - startedAt` is a SECOND reader of the same
+ *  nullable field, needing a `!` to do it, and that is precisely where a
+ *  missing key becomes a `NaN` on screen.
+ *
+ *  Tolerant on `dispatchStartedAt` for the same measured reason `runItems` and
+ *  `runClosedAt` are tolerant: neither the live `{type:'runs'}` frame nor
+ *  `api.runs()` shape-validates a row, so a row minted by a build older than
+ *  the column arrives with the key MISSING, and `undefined !== null` is true —
+ *  a bare null-check would call that a dispatch in flight and render `NaN` as
+ *  its clock. `Math.max(0, …)` for the mirror case: the stamp is the server's
+ *  clock read against the phone's, and ordinary skew must read as "it just
+ *  began", never as a negative duration. */
+export type DispatchWindow =
+  | { phase: 'none' }
+  | { phase: 'in-flight'; elapsedMs: number }
+  | { phase: 'stalled'; elapsedMs: number };
+
+export function dispatchWindow(
+  run: { state: RunState; dispatchStartedAt?: number | null },
+  nowMs: number,
+): DispatchWindow {
+  if (runState(run) !== 'planned') return { phase: 'none' };
+  const startedAt = run.dispatchStartedAt ?? null;
+  if (startedAt === null) return { phase: 'none' };
+  const elapsedMs = Math.max(0, nowMs - startedAt);
+  return elapsedMs >= SPAWN_STALL_MS
+    ? { phase: 'stalled', elapsedMs }
+    : { phase: 'in-flight', elapsedMs };
+}
+
+/** The two phases that RENDER, as a glyph each — the board's standing
+ *  two-cue rule (a word AND a glyph, so no state is read out of colour
+ *  alone), single-sourced now that two surfaces draw the same window: the run
+ *  board's own row (`RunsScreen`) and the fleet card's pending child
+ *  (`ProjectCard`, Task 4). `Exclude<…,'none'>` rather than a hand-typed pair
+ *  of keys, so a third phase joining `DispatchWindow` is a compile error here
+ *  instead of a cell that silently renders nothing. */
+export const DISPATCH_GLYPH: Record<Exclude<DispatchWindow['phase'], 'none'>, string> = {
+  'in-flight': '⟳',
+  stalled: '⚠',
+};
+
+/** Is THIS row inside a dispatch window at all — i.e. is there a spawn to
+ *  narrate? Clock-free by construction: the `none`/not-`none` half of
+ *  `dispatchWindow`'s answer turns on `state === 'planned'` and a non-null
+ *  stamp and NOTHING else — only the `in-flight`/`stalled` split reads the
+ *  clock — so every clock gives the same answer, and this one asks with the
+ *  epoch.
+ *
+ *  Routed THROUGH `dispatchWindow` rather than re-testing its two conditions,
+ *  so there stays exactly one place that decides what a dispatch window is: a
+ *  hand-copied `state === 'planned' && stamp != null` here would be the second
+ *  copy this repo forbids, and it would drift the day a third condition joined
+ *  the first two. `nestFleet` (Task 4) asks it per run, to decide whether a
+ *  programme has a pending CHILD; the board asks the plural form below to pick
+ *  a tick rate. */
+export function isDispatchPending(
+  run: { state: RunState; dispatchStartedAt?: number | null },
+): boolean {
+  return dispatchWindow(run, 0).phase !== 'none';
+}
+
+/** Is ANY of these rows inside a dispatch window at all? The board asks this to
+ *  pick its TICK RATE — and a hook must choose that BEFORE the tick it produces
+ *  exists, so the question is not allowed to need one. It isn't:
+ *  `isDispatchPending` above is clock-free, and this is its `some`. */
+export function anyDispatchPending(
+  runs: readonly { state: RunState; dispatchStartedAt?: number | null }[],
+): boolean {
+  return runs.some(isDispatchPending);
+}
+
+/** The run — if any — that this list says is being worked in that session
+ *  (Task 5). One reader, so the fleet card's hold-reason door and anything that
+ *  follows it ask the same question the same way.
+ *
+ *  THE ANSWER COMES FROM THE RUN ROWS, NEVER FROM THE HOLD STRING. The hold
+ *  text on a session already spells `program:<slug> wave:N/M run:<id>` and it is
+ *  tempting to read the id back out of it — `rundefs.ts`'s `holdReason` calls
+ *  that out as DISPLAY-ONLY and `run-routes.test.ts` scans both `server/src` and
+ *  `pwa/src` for a parser and fails the build on one — including one written in
+ *  a COMMENT, which is why this note describes the regex instead of spelling it
+ *  (measured on this branch: a helper that read the id out of the reason with a
+ *  digit capture, dropped into `pwa/src`, reds that pin, and so did the first
+ *  draft of this very docstring). The `runs` frame is the
+ *  same `coord.db` the server itself answers from, so this is the cheaper source
+ *  as well as the sanctioned one — and it is strictly more honest, because a
+ *  hold left behind by a closed run parses to a run id the board cannot show,
+ *  while this answers `null` for it.
+ *
+ *  Callers pass the ACTIVE runs they already hold, so `null` means "the board
+ *  has no row for this session" — exactly the question a door needs answered,
+ *  and not the same as "this session has never had a run". */
+export function runForSession(
+  runs: readonly RunSummary[], sessionId: string,
+): RunSummary | null {
+  return runs.find((r) => r.sessionId === sessionId) ?? null;
+}
+
+/** What the board says about a wave that RESUMED its session rather than
+ *  spawning one (Task 5). Two shapes, never one, because they are two
+ *  different facts about the same run:
+ *    • `cleared: true`  — the resume happened and the `/clear` landed;
+ *    • `cleared: false` — the resume happened and NOTHING proves the context
+ *      was cleared, so this wave may be carrying the previous wave's context.
+ *
+ *  D-1 is the whole reason there is anything to say: no ccd verb can spawn
+ *  fresh into an existing workspace, so wave N>=2 resumes the pane and the
+ *  dispatch route injects `/clear` through the send path afterwards.
+ *  `clearedAt` is the PROOF the second step ran — and a run where the first
+ *  step succeeded and the second did not is precisely the row an operator
+ *  needs to look at, so collapsing the pair into one word ("resumed") would
+ *  render the interesting case and the ordinary one identically.
+ *
+ *  `run.wave >= 2` is deliberately NOT the condition. `resumed` is the fact the
+ *  server WROTE at dispatch; the wave number is what caused it. Reading the
+ *  cause instead of the record is a renderer re-deriving a decision it was
+ *  handed — and it would be wrong for any future path that resumes a wave 1.
+ *
+ *  Tolerant on both fields, the same idiom `runItems`/`runClosedAt`/
+ *  `dispatchWindow` already carry and for the same measured reason: nothing
+ *  between the wire and this renderer validates a row's members, so a row from
+ *  an older build arrives with the key MISSING and `undefined` must degrade to
+ *  silence, never to half a sentence. */
+export interface ResumeNote { word: string; cleared: boolean; title: string }
+
+export function resumeNote(
+  run: { wave: number; resumed?: boolean; clearedAt?: number | null },
+  nowSec: number,
+): ResumeNote | null {
+  if (run.resumed !== true) return null;
+  const clearedAt = run.clearedAt ?? null;
+  return clearedAt === null
+    ? {
+        word: 'resumed, not cleared',
+        cleared: false,
+        title: `wave ${run.wave} resumed its session (D-1) and nothing recorded the /clear landing — `
+          + 'this wave may be carrying the previous one’s context',
+      }
+    : {
+        word: 'resumed',
+        cleared: true,
+        title: `wave ${run.wave} resumed its session (D-1); the /clear landed `
+          + `${formatAge(nowSec - Math.floor(clearedAt / 1000))}`,
+      };
+}
 
 /** Board order: the ones that can move first, the ones that are over last.
  *  One constant, shared by the grouping and the sort, so the two cannot drift —

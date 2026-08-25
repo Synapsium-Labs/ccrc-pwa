@@ -227,6 +227,53 @@ describe('fleet density and alignment', () => {
     });
   });
 
+  // Task 5: the hold reason becomes a door onto /runs, so the row's second
+  // row-level button lands in the same 44px surface whose click forwarder
+  // NAVIGATES — the finding above, on a different cell.
+  describe('the hold reason’s door is a real target', () => {
+    it('buys its floor with padding a negative margin cancels, not with an overlay', () => {
+      const rule = ruleFor('button.sess-held');
+      // WCAG 2.2 SC 2.5.8's 24px, off the token — never a bare literal, and
+      // never --tap-min: a 44px-tall target here reaches ~14px up over
+      // `.sess-open`'s whole line box, so taps on the workspace name would
+      // open the run board instead. A wrong control is worse than a near-miss.
+      const decls = norm(stripComments(rule));
+      expect(decls).toContain('var(--sp-6)');
+      expect(decls).not.toContain('44px');
+      expect(decls).not.toContain('var(--tap-min)');
+      // The visible box must not grow: `.sess-meta` is a flex row, so real
+      // padding there raises the whole line and throws `.sess-lamp`'s centring
+      // formula out on every row in the fleet. The negative margin is what
+      // gives the padding back to the layout.
+      expect(declValue(rule, 'padding')).toContain('var(--sp-6)');
+      expect(declValue(rule, 'margin')).toContain('var(--sp-6)');
+      expect(declValue(rule, 'margin')?.startsWith('calc(')).toBe(true);
+      // DELIBERATELY NOT the `.sess-subagents::before` overlay: that formula's
+      // left/right insets are `(100% - var(--tap-min)) / 2`, negative on a
+      // narrow chip and POSITIVE on this one — the row's single wide,
+      // shrinkable cell — where it would shrink the target to 44px centred and
+      // leave the ends of a long hold string untappable. `.sess-held`'s own
+      // `overflow: hidden` would have clipped such an overlay back to the
+      // 15px line as well, pointer events included.
+      expect(() => ruleFor('button.sess-held::before')).toThrow();
+      expect(() => ruleFor('button.sess-held::after')).toThrow();
+    });
+
+    it('undoes the UA button chrome so the two forms of the cell read alike', () => {
+      const rule = ruleFor('button.sess-held');
+      expect(declValue(rule, 'background')).toBe('none');
+      expect(declValue(rule, 'border')).toBe('0');
+      // `font: inherit` outranks `.sess-held`'s own `font-family` (0,1,1 beats
+      // 0,1,0), so the mono face has to be restated after it or the cell
+      // silently changes typeface the moment it becomes a door.
+      expect(declaredValues(css, 'button.sess-held', 'font-family')).toContain('var(--font-mono)');
+      // `color` is deliberately NOT restated here — `.sess-held` answers for
+      // it, and `.sess-line--active .sess-held` (0,2,0) still outranks this
+      // rule on the selected slab. A copy would be one more place to forget.
+      expect(declaredValues(css, 'button.sess-held', 'color')).toEqual([]);
+    });
+  });
+
   // The ack control's own floor. `padding: var(--sp-1) 0` around an 11px line
   // measured ~19px — under WCAG 2.2's 24px — on a control whose action cannot
   // be undone.

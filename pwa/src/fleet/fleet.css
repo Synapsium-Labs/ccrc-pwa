@@ -1204,6 +1204,49 @@
   color: var(--ink-tertiary);
 }
 
+/* Task 5: the hold reason, when a run backs it, is a DOOR onto /runs. The
+   element becomes a <button>; the cell must not. Everything below either
+   undoes a UA button default (so the two forms are indistinguishable to the
+   eye — `session-line.test.tsx` pins that the text and title are identical)
+   or buys the tap floor.
+
+   THE FLOOR IS PADDING PLUS A CANCELLING NEGATIVE MARGIN, deliberately NOT
+   `.sess-subagents`' `::before` overlay, and the difference is the cell's
+   width. That formula insets LEFT and RIGHT by `(100% - var(--tap-min)) / 2`
+   — negative on a narrow chip, which is what grows it — but `.sess-held` is
+   the row's one WIDE, shrinkable cell, where the same arithmetic is POSITIVE
+   and would shrink the target to 44px centred, making the ends of a long hold
+   string untappable. This cell needs no horizontal growth at all, only
+   vertical, and its own `overflow: hidden` above would have clipped an
+   absolutely-positioned overlay back to the 15px line anyway (the same
+   pointer-event clipping `.sess-meta`'s `overflow: clip` fix documents). A
+   grown border box is not clipped by its own overflow, so the padding
+   version needs no exception.
+
+   --sp-6 (24px, WCAG 2.2 SC 2.5.8), not --tap-min: a 44px-tall target here
+   would reach ~14px up over `.sess-open`'s whole line box, so taps on the
+   workspace name would open the run board instead — a WRONG control, worse
+   than a near-miss. `.sess-open` is positioned with `z-index: 1` for exactly
+   this overlap and keeps winning the strip they share. */
+button.sess-held {
+  padding: calc((var(--sp-6) - var(--text-xs) * var(--leading-tight)) / 2) 0;
+  margin: calc((var(--text-xs) * var(--leading-tight) - var(--sp-6)) / 2) 0;
+  background: none;
+  border: 0;
+  /* `font: inherit` then the family again: the shorthand is what strips the UA
+     button font, and it also outranks `.sess-held`'s own `font-family`
+     declaration above (0,1,1 beats 0,1,0), so the mono face has to be restated
+     here or the cell silently changes typeface the moment it becomes a door.
+     `color` is deliberately NOT restated — `.sess-held` above and
+     `.sess-line--active .sess-held` (0,2,0, which still outranks this rule)
+     both keep answering for it, and a copy here would be one more place to
+     forget. */
+  font: inherit;
+  font-family: var(--font-mono);
+  text-align: left;
+  cursor: pointer;
+}
+
 .sess-acct {
   font-family: var(--font-mono);
   white-space: nowrap;
@@ -1478,6 +1521,73 @@
 .proj-card-body {
   display: flex;
   flex-direction: column;
+}
+
+/* Task 4 — the programme tree. ONE level: `nestFleet` never emits a depth
+   above 1 (its rule 4 keeps a session that is both child and parent at the
+   top), so there is no indent scale here and no rule keyed on a depth this
+   card cannot produce. A row is a flex ROW — bracket, then the row itself
+   taking the rest — which leaves .sess-line's own 44px tap floor and its
+   internal layout untouched: nesting changes position and prefix, nothing
+   else. */
+.proj-nest {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+.proj-nest > .sess-line,
+.proj-nest > .proj-pending {
+  flex: 1;
+  min-width: 0;
+}
+/* Ink-tertiary, the register .proj-card-pin[data-mixed] and
+   .proj-archived-toggle already use on this ground: the bracket is the
+   quietest thing on the row by design — it draws an edge the two rows either
+   side already name. */
+.proj-nest-bracket {
+  flex: none;
+  align-self: center;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink-tertiary);
+}
+
+/* The child that does not exist yet. NOT a tap surface and never a --glow: a
+   spawn in flight is a state, not a living pane, and there is no session to
+   open — the same call RunsScreen makes when it leaves the in-flight run row
+   inert. It still clears the row height the settled rows keep, so a spawn
+   arriving does not make the card jump. */
+.proj-pending {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-height: var(--tap-min);
+  min-width: 0;
+  font-size: var(--text-xs);
+  color: var(--ink-secondary);
+}
+.proj-pending-glyph { flex: none; color: var(--ink-tertiary); }
+.proj-pending-meta {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  overflow: clip;
+  overflow-clip-margin: 12px;
+}
+/* Middot between whichever cells render, the .sess-meta rule one screen up —
+   same separator, so the phantom row punctuates like the real ones. */
+.proj-pending-meta > *:not(:first-child)::before {
+  content: '·';
+  margin: 0 var(--sp-1);
+  color: var(--ink-tertiary);
+}
+.proj-pending-program { color: var(--ink-tertiary); }
+.proj-pending-elapsed {
+  flex: none;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-tertiary);
 }
 
 .proj-archived { border-top: 1px solid var(--edge-subtle); margin-top: var(--sp-1); }
@@ -1812,6 +1922,33 @@
 .run-ws { font-size: var(--text-sm); }
 .run-row .run-tally, .run-row .run-when {
   font-size: var(--text-2xs); font-variant-numeric: tabular-nums; color: var(--ink-tertiary);
+}
+/* Task 3 (spawn visibility): the dispatch window and the wedge. Scoped under
+   `.run-row` — self-grounded above, background+color both set — so the
+   named-ancestor route grounds it exactly as `.run-row .run-glyph`/
+   `.run-row .run-state` are grounded a couple of rules up; no new ground, no
+   new token pair. `--ink-secondary`, the same ink `.run-state` already takes
+   against this fill: a spawn in flight is an ordinary event, not an alarm,
+   and the wedge is told apart by its WORDS and its glyph (two cues, the
+   board's standing rule) rather than by a hue nothing else on this screen
+   uses. A run row is a record of a lifecycle position, not a living pane, so
+   this gets no --glow/animation/box-shadow either — the same "runs are not
+   living panes" rule `.run-row .run-abandon` below is held to. */
+.run-row .run-dispatch {
+  display: inline-flex; align-items: baseline; gap: var(--sp-1);
+  min-width: 0;
+  font-size: var(--text-2xs); font-variant-numeric: tabular-nums;
+  color: var(--ink-secondary);
+}
+.run-row .run-dispatch-glyph { color: var(--ink-tertiary); }
+/* Task 5 (spawn visibility): the resume D-1 has always recorded. Grouped with
+   `.run-tally`/`.run-when`'s ink rather than given one of its own — a resumed
+   wave is a fact about how this run started, not an alarm, and the branch that
+   IS worth a second look is told apart by its WORDS ("resumed, not cleared"),
+   the board's standing two-cue rule, never by a hue. Self-grounded under
+   `.run-row` exactly as its neighbours are; no new token pair. */
+.run-row .run-resumed {
+  font-size: var(--text-2xs); color: var(--ink-tertiary);
 }
 /* Task 12, spec §4.3, D-287: a SIBLING of `.run-open` inside `.run-row`'s
    own `<li>`, never a descendant of it — see RunsScreen.tsx's own comment on

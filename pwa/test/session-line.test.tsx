@@ -816,3 +816,71 @@ describe('the spawn chip (§1.6b)', () => {
     expect(chip()).toBeNull();
   });
 });
+
+// ── Task 5: the hold reason becomes a door ─────────────────────────────────
+//
+// The cell has said `program:<slug> wave:N/M run:<id>` since Wave 2 and has
+// been unreachable text the whole time: the operator reads that a programme
+// owns this workspace and then has to find /runs by hand from the fleet
+// footer. The DECISION about whether there is anywhere to go is the CALLER's
+// (`ProjectCard`, which holds this project's active runs) — this component
+// only renders the two forms, and `onOpenRun === null` is the one that has to
+// stay byte-identical to what shipped.
+describe('the held cell is a door only when there is somewhere to go (Task 5)', () => {
+  const heldOf = (): HTMLElement | null => document.querySelector('.sess-held');
+
+  it('is inert text with no handler — exactly the cell that shipped', () => {
+    render(<SessionLine session={s({ held: 'program:x wave:2/4' })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(heldOf()?.tagName).toBe('SPAN');
+    expect(document.querySelector('button.sess-held')).toBeNull();
+  });
+
+  it('is a real button when the caller hands it a run to open', () => {
+    render(<SessionLine session={s({ held: 'program:x wave:2/4' })} onOpenRun={() => {}}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(heldOf()?.tagName).toBe('BUTTON');
+  });
+
+  it('renders the SAME text and title in both forms — the door changes the element, not the fact', () => {
+    // The reason string is the display (`shared/api.ts`'s `FleetSession.held`):
+    // verbatim, never parsed, `title` carrying the full text past the cell's
+    // own ellipsis. A door that also reworded the cell would be two changes
+    // wearing one commit.
+    const held = 'program:build9b wave:1/3 run:10';
+    const inert = render(<SessionLine session={s({ held })} onOpen={() => {}} onActions={() => {}} />);
+    const before = inert.container.querySelector('.sess-held');
+    const text = before?.textContent;
+    const title = before?.getAttribute('title');
+    cleanup();
+    render(<SessionLine session={s({ held })} onOpenRun={() => {}}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(heldOf()?.textContent).toBe(text);
+    expect(heldOf()).toHaveAttribute('title', title!);
+    expect(heldOf()).toHaveAttribute('data-held', 'true');
+  });
+
+  it('opens the run and NOT the session — the row’s own tap must not fire underneath it', async () => {
+    // `.sess-body`'s click forwarder stands down on `closest('button')`, which
+    // is why this cell had to become a real `<button>` rather than a span with
+    // a handler: the forwarder is what would otherwise navigate to the session
+    // on the same tap, and the operator would land somewhere they did not ask
+    // for roughly half the time.
+    const onOpenRun = vi.fn();
+    const onOpen = vi.fn();
+    render(<SessionLine session={s({ held: 'program:x wave:2/4' })} onOpenRun={onOpenRun}
+                        onOpen={onOpen} onActions={() => {}} />);
+    await userEvent.click(heldOf()!);
+    expect(onOpenRun).toHaveBeenCalledTimes(1);
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it('renders no cell at all for an unheld session, whatever the caller passes', () => {
+    // The run only decides whether the cell is a DOOR. Whether there is a cell
+    // at all is still `held !== null`, and a session nobody has claimed has
+    // nothing to say here.
+    render(<SessionLine session={s({ held: null })} onOpenRun={() => {}}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(heldOf()).toBeNull();
+  });
+});

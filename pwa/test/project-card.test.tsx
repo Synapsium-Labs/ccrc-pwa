@@ -2,9 +2,10 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { FleetSession } from '../../shared/api';
+import type { FleetSession, RunSummary } from '../../shared/api';
+import { SPAWN_STALL_MS } from '../../shared/api';
 import { groupFleet, type FleetGroup } from '../src/fleet/groupFleet';
-import { ProjectCard } from '../src/fleet/ProjectCard';
+import { NEST_BRACKET, ProjectCard } from '../src/fleet/ProjectCard';
 import { TEST_ROSTER } from './rosterFixture';
 
 // vitest runs without globals, so RTL's auto-cleanup never registers itself —
@@ -356,5 +357,229 @@ describe('the archived sub-fold', () => {
       <ProjectCard group={g} selectedId="demo-quiet-basin" archivedOpen
                    onOpen={() => {}} onActions={() => {}} />);
     expect(container.querySelector('.proj-archived-body .sess-line--active')).not.toBeNull();
+  });
+});
+
+// ── Task 4: children nest under the programme that owns them ────────────────
+//
+// The operator's own words (2026-08-25): "I'd like to basically see nesting via
+// L bracket under the programme owner for any child workspaces". The DECISION
+// is `nestFleet`'s — pinned rule by rule in nestFleet.test.ts — and everything
+// below is about what the card DRAWS for one: a bracket where there is a
+// parent, nothing where there is not, and a line for the child that does not
+// exist yet.
+
+/** A fixed wall clock, carrying a sub-second remainder for the same reason
+ *  runs-screen.test.tsx's own `FROZEN` does: the dispatch window's boundary is
+ *  `SPAWN_STALL_MS`, a MILLISECOND constant, so a whole-second instant would
+ *  make flooring the clock anywhere on the path a no-op and every claim about
+ *  millisecond fidelity untestable. Passed in as `nowMs` rather than faked,
+ *  because this component is pure and controlled — the tick belongs to
+ *  FleetScreen, which is where it is pinned. */
+const FROZEN = 1_800_000_000_499;
+
+const runFor = (over: Partial<RunSummary> = {}): RunSummary => ({
+  id: 1, program: 'build9b', programTitle: 'Build 9b', wave: 1, waveOf: 3,
+  project: 'demo', sessionId: null, workspace: null, branch: null,
+  state: 'dispatched', claimedBy: 'demo-quiet-mesa', resumed: false, clearedAt: null,
+  openedAt: FROZEN - 1_000_000, dispatchStartedAt: null, dispatchedAt: null,
+  closedAt: null, handoffCommit: null, items: { done: 0, total: 0 },
+  unreadMail: 0, ...over,
+});
+
+const worker = sess({ id: 'demo-still-cove', workspace: 'still-cove' });
+/** `coord` is the default fixture session (`demo-quiet-mesa`), which every
+ *  `runFor` above already names as `claimedBy` — so a group of the two is a
+ *  real parent/child pair with nothing else to arrange. */
+const pair = grp({ sessions: [sess(), worker] });
+const childRun = runFor({ id: 10, sessionId: 'demo-still-cove' });
+
+describe('the nesting bracket', () => {
+  it('brackets and indents a child row', () => {
+    const { container } = render(
+      <ProjectCard group={pair} runs={[childRun]} nowMs={FROZEN}
+                   onOpen={() => {}} onActions={() => {}} />);
+    const nested = container.querySelectorAll('.proj-nest');
+    expect(nested).toHaveLength(1);
+    expect(nested[0]).toHaveAttribute('data-depth', '1');
+    expect(nested[0]?.querySelector('.proj-nest-bracket')?.textContent).toBe(NEST_BRACKET);
+    // The bracketed row is the WORKER, not the coordinator.
+    expect(nested[0]?.querySelector('.sess-label')?.textContent).toBe('still-cove');
+  });
+
+  it('renders neither bracket nor indent on a top-level row — a bracket that is always there is not a bracket', () => {
+    // BOTH directions, and this is the half a decorative prefix passes by
+    // accident: with no run to draw an edge from, the card is byte-identical
+    // to the one that shipped before this task.
+    const { container } = render(
+      <ProjectCard group={pair} runs={[]} nowMs={FROZEN}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.proj-nest')).toBeNull();
+    expect(container.querySelector('.proj-nest-bracket')).toBeNull();
+    expect(screen.queryByText(NEST_BRACKET)).toBeNull();
+    expect(container.querySelectorAll('.sess-line')).toHaveLength(2);
+  });
+
+  it('leaves every affordance on a nested row exactly as it is on a top-level one', () => {
+    // Nesting changes POSITION and PREFIX, nothing else: the row keeps its own
+    // tap surface, its actions control, its chips and its held string. Rendered
+    // twice — bracketed and not — and compared, so this cannot pass by
+    // asserting whatever the nested row happens to do.
+    const held = sess({ id: 'demo-still-cove', workspace: 'still-cove', held: 'program:build9b wave:1/3 run:10' });
+    const g = grp({ sessions: [sess(), held] });
+    // THE CONTROL CARRIES A RUN TOO (Task 5). It used to be `runs={[]}`, which
+    // stopped being a matched control the moment a run naming this session
+    // started deciding something about the row — the hold reason's door. The
+    // two renders would then have differed in the RUN DATA as well as in the
+    // nesting, and this pin would have reported that difference as if nesting
+    // had caused it. `orphaned` names the same worker as `childRun` and a
+    // parent that is NOT on this card, so `nestFleet`'s rule 3 keeps the row at
+    // top level (measured just below, in its own case) while everything the row
+    // reads off a run stays identical. Nesting is then the only variable left.
+    const orphaned = runFor({ id: 11, sessionId: 'demo-still-cove', claimedBy: 'other-project-coordinator' });
+    const flat = render(<ProjectCard group={g} runs={[orphaned]} nowMs={FROZEN} onOpen={() => {}} onActions={() => {}} />);
+    const before = flat.container.querySelectorAll('.sess-line')[1]?.outerHTML;
+    cleanup();
+    const { container } = render(
+      <ProjectCard group={g} runs={[childRun]} nowMs={FROZEN} onOpen={() => {}} onActions={() => {}} />);
+    const after = container.querySelector('.proj-nest > .sess-line')?.outerHTML;
+    expect(after).toBe(before);
+  });
+
+  it('still opens a nested row when it is tapped', () => {
+    const onOpen = vi.fn();
+    render(<ProjectCard group={pair} runs={[childRun]} nowMs={FROZEN}
+                        onOpen={onOpen} onActions={() => {}} />);
+    fireEvent.click(screen.getByText('still-cove'));
+    expect(onOpen).toHaveBeenCalledWith('demo-still-cove');
+  });
+
+  it('hides the whole tree along with the rest of the card when collapsed', () => {
+    const { container } = render(
+      <ProjectCard collapsed group={pair} runs={[childRun]} nowMs={FROZEN}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.proj-nest')).toBeNull();
+    expect(screen.queryByText('still-cove')).not.toBeInTheDocument();
+  });
+});
+
+describe('the pending child — a spawn the operator can watch arrive', () => {
+  const spawning = (over: Partial<RunSummary> = {}): RunSummary =>
+    runFor({ id: 12, wave: 2, state: 'planned', sessionId: null,
+             dispatchStartedAt: FROZEN - 42_000, ...over });
+
+  it('renders under the coordinator that asked for it, with the programme and a live elapsed clock', () => {
+    const { container } = render(
+      <ProjectCard group={grp()} runs={[spawning()]} nowMs={FROZEN}
+                   onOpen={() => {}} onActions={() => {}} />);
+    const row = container.querySelector('.proj-pending');
+    expect(row).not.toBeNull();
+    expect(row?.getAttribute('data-phase')).toBe('in-flight');
+    expect(screen.getByText('spawning a worker')).toBeInTheDocument();
+    expect(screen.getByText('build9b')).toBeInTheDocument();
+    // 42 seconds, not 41: the stamp is 42_000 ms before a `now` that carries a
+    // 499 ms remainder, so a clock floored to seconds anywhere on this path
+    // reads one second short.
+    expect(screen.getByText('0:42')).toBeInTheDocument();
+    // Two cues, the standing rule: a word AND a glyph.
+    expect(row?.querySelector('.proj-pending-glyph')?.textContent).toBe('⟳');
+    // It is a CHILD — bracketed under the coordinator, at depth 1.
+    expect(container.querySelector('.proj-nest[data-depth="1"] .proj-pending')).not.toBeNull();
+  });
+
+  it('is not tappable and carries no session id — there is no session to open', () => {
+    const onOpen = vi.fn();
+    const { container } = render(
+      <ProjectCard group={grp()} runs={[spawning()]} nowMs={FROZEN}
+                   onOpen={onOpen} onActions={() => {}} />);
+    const row = container.querySelector('.proj-pending')!;
+    expect(row.querySelector('button')).toBeNull();
+    expect(row.querySelector('.sess-line')).toBeNull();
+    fireEvent.click(row);
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it('says the wedge once the threshold has passed, and stops saying it is spawning', () => {
+    // `dispatch.ts`'s own "a run stuck in `planned` beside an unexplained new
+    // workspace is a state no verb names" — rendered on the fleet card for the
+    // first time. BOTH directions: the wedge present, the in-flight sentence
+    // gone.
+    const { container } = render(
+      <ProjectCard group={grp()} runs={[spawning({ dispatchStartedAt: FROZEN - SPAWN_STALL_MS })]}
+                   nowMs={FROZEN} onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.proj-pending')?.getAttribute('data-phase')).toBe('stalled');
+    expect(screen.getByText('spawn never completed')).toBeInTheDocument();
+    expect(screen.queryByText('spawning a worker')).toBeNull();
+    expect(container.querySelector('.proj-pending-glyph')?.textContent).toBe('⚠');
+  });
+
+  it('renders nothing at all for a planned run nobody has dispatched', () => {
+    // The no-regression pin, and the reason the STAMP is the signal: a wave N+1
+    // opened and waiting, and every wave N>=2 resume, carry no stamp and have
+    // no spawn to narrate.
+    const { container } = render(
+      <ProjectCard group={grp()} runs={[spawning({ dispatchStartedAt: null })]} nowMs={FROZEN}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.proj-pending')).toBeNull();
+    expect(screen.queryByText('spawning a worker')).toBeNull();
+  });
+
+  it('renders at top level, unbracketed, when the coordinator is not on this card', () => {
+    const { container } = render(
+      <ProjectCard group={grp()} runs={[spawning({ claimedBy: 'other-project-coord' })]} nowMs={FROZEN}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.proj-pending')).not.toBeNull();
+    expect(container.querySelector('.proj-nest')).toBeNull();
+  });
+});
+
+// ── Task 5: the hold reason becomes a door, and the card decides ───────────
+//
+// `SessionLine` renders two forms of one cell and picks neither: whether there
+// is anywhere to send the tap is a question about this project's ACTIVE runs,
+// which this card already holds (Task 4 threaded them down for the tree) and
+// the row does not. It is answered from the run rows themselves — never by
+// reading the run id out of the hold string, which `rundefs.ts` keeps
+// display-only and `run-routes.test.ts` scans `pwa/src` to enforce.
+describe('the held cell opens the run board when a run is actually on it (Task 5)', () => {
+  const heldWorker = sess({
+    id: 'demo-still-cove', workspace: 'still-cove', held: 'program:build9b wave:1/3 run:10',
+  });
+  const cell = (): HTMLElement | null => document.querySelector('.sess-held');
+
+  it('is a door when an active run on this card names the session', () => {
+    render(<ProjectCard group={grp({ sessions: [heldWorker] })} runs={[childRun]} nowMs={FROZEN}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(cell()?.tagName).toBe('BUTTON');
+  });
+
+  it('leads to /runs, and not into the session underneath it', () => {
+    const onOpen = vi.fn();
+    history.pushState(null, '', '/');
+    render(<ProjectCard group={grp({ sessions: [heldWorker] })} runs={[childRun]} nowMs={FROZEN}
+                        onOpen={onOpen} onActions={() => {}} />);
+    fireEvent.click(cell()!);
+    expect(location.pathname).toBe('/runs');
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it('is today’s inert text when no run on this card names the session — never a dead tap', () => {
+    // A hand hold (`ccd ws-hold` with no programme behind it), a hold left
+    // behind by a run that has already closed, or a coordinator's own claim on
+    // a card whose runs have not landed yet. All three read the same way: the
+    // board has no row to show, so there is no door.
+    render(<ProjectCard group={grp({ sessions: [heldWorker] })} runs={[]} nowMs={FROZEN}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(cell()?.tagName).toBe('SPAN');
+    expect(document.querySelector('button.sess-held')).toBeNull();
+  });
+
+  it('opens no door for a run that names a DIFFERENT session on the same card', () => {
+    // The edge is `run.sessionId === session.id` and nothing looser. A card
+    // carrying one run and two held rows must not light both.
+    const other = sess({ id: 'demo-far-ridge', workspace: 'far-ridge', held: 'program:build9b wave:1/3 run:10' });
+    render(<ProjectCard group={grp({ sessions: [other] })} runs={[childRun]} nowMs={FROZEN}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(cell()?.tagName).toBe('SPAN');
   });
 });
