@@ -40,6 +40,8 @@ export interface SessionHeaderProps {
   onMoveAccount: () => void;
   /** Overflow menu: "Stop session" — opens the stop QuickConfirm. */
   onStopSession: () => void;
+  /** Overflow menu: "History" — opens the lifecycle journal tab. */
+  onOpenHistory: () => void;
   /** `PrSheet`'s merged phase "Clean up…" hands off here — Task 17 mounts
    *  `ReapSheet` off it. A no-op until then. */
   onReapWorkspace: () => void;
@@ -85,6 +87,7 @@ export function SessionHeader({
   onChangeEffort,
   onMoveAccount,
   onStopSession,
+  onOpenHistory,
   onReapWorkspace,
   fallback,
   roster = [],
@@ -337,6 +340,12 @@ export function SessionHeader({
             <span className="menu-label">Change effort</span>
             <span className="menu-hint" aria-hidden="true">
               /effort
+            </span>
+          </button>
+          <button type="button" className="menu-item" onClick={() => menuAct(onOpenHistory)}>
+            <span className="menu-label">History</span>
+            <span className="menu-hint" aria-hidden="true">
+              journal
             </span>
           </button>
           <button

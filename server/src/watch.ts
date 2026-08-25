@@ -14,9 +14,9 @@ import { sendPrompt } from './inject/send.js';
 import { askActions } from './askkey.js';
 import type { SessionRecord } from './registry.js';
 import type {
-  CoordStatus, LifecycleHealth, NotifyEvent, PrState, RunSummary, SessionStatus, TaskProgress,
+  CoordStatus, FleetSession, LifecycleHealth, NotifyEvent, PrState, RunSummary, SessionStatus, TaskProgress,
 } from '../../shared/api.js';
-import { MAIL_MAX_ATTEMPTS, UNCHECKED_PR } from '../../shared/api.js';
+import { LEDGER_STALE_MS, MAIL_MAX_ATTEMPTS, UNCHECKED_PR } from '../../shared/api.js';
 import { JournalMirror } from './coord/mirror.js';
 // The pause marker's ONE definition in the tree. `MAIL_DISABLED_MARKER` is
 // NOT imported beside it: this file holds its own module-local literal
@@ -26,6 +26,11 @@ import { JournalMirror } from './coord/mirror.js';
 import { COORDINATOR_PAUSE_MARKER } from './coord/rundefs.js';
 import { readWorktreeRecords } from './coord/gitref.js';
 import { divergences, unclaimedWorktrees, type DivergenceInput } from './divergence.js';
+import { claimExpiry, type LivenessProbe } from './coord/claims.js';
+// `floorFromScan` owns the seed arithmetic (max + LEDGER_SEED_GAP) and the
+// evidence string alike — the sweep below only feeds it files and applies
+// its answer, so LEDGER_SEED_GAP itself is not imported here.
+import { floorFromScan } from './coord/ledger.js';
 import type { ProvenancePair } from './coord/store.js';
 import type { PushPayload } from './push.js';
 import { deriveBranch } from './naming.js';
@@ -71,6 +76,19 @@ const DIVERGENCE_SWEEP_MS = 60_000;
  *  import it — that would be L3 importing L4 — so the staleness window is
  *  passed in from the one construction site below. */
 export const LC_SWEEP_MS = 5_000;
+
+/** Build 9 wave 7 (D12): the claim lease's lane. 60 s — a 45-minute lease
+ *  does not need the 2 s tick, and `sweepDivergences` already argues this
+ *  cadence. Renew and lapse each keep their own clock so neither starves the
+ *  other's first run. */
+const CLAIM_SWEEP_MS = 60_000;
+
+/** D13's two ledger lanes. The floor scan reads every plan and spec of every
+ *  registry-named project, so it runs HOURLY; reconcile reads only the plans
+ *  of projects with open allocations, every 15 MINUTES, because `landed` is
+ *  the signal a coordinator watches for. */
+const LEDGER_FLOOR_SWEEP_MS = 3_600_000;
+const LEDGER_RECONCILE_SWEEP_MS = 900_000;
 
 /** How far back the census weighs provenance pairs. One hour, not the whole
  *  table: a divergence the operator has already dealt with must stop being
@@ -326,6 +344,16 @@ export class FleetWatcher {
    *  carries the lane's own docstring; this is only the clock field, same
    *  shape as `lastNameSweep`/`lastDivergenceSweep` above it. */
   private lastLifecycleSweep = 0;
+  /** The claim lanes' clocks (build 9 wave 7, D12). */
+  private lastClaimRenew = 0;
+  private lastClaimLapse = 0;
+  /** The ledger lanes' clocks (build 9 wave 7, D13). */
+  private lastLedgerFloor = 0;
+  private lastLedgerReconcile = 0;
+  /** The stale set last reported, as JSON — one warn per CHANGING set, the
+   *  `lastDivergenceJson` idiom, so a standing stale number is not a log
+   *  line every 15 minutes forever. */
+  private lastStaleReport: string | null = null;
   /** Built lazily (`mirrorFor` below) as soon as a coordination database
    *  exists — NOT only on the first sweep, since `lifecycleHealth()` must be
    *  able to ask it before any sweep has run. The mirror holds the cursor,
@@ -793,6 +821,22 @@ export class FleetWatcher {
       // permanently lose the real busy→idle edge the instant the row heals.
       for (const s of sessions) { if (!unmeasuredIds.has(s.id)) this.prevStatus.set(s.id, s.status); }
       this.activeProjects = projects;
+      // Build 9 wave 7: the claim lease rides THIS tick, on its own slower
+      // clocks — no new timer (D12), and the mail sweep below this block is
+      // untouched by name (D10: a second producer lands BESIDE the most
+      // load-bearing loop on the box, never inside it). Liveness comes off
+      // the SAME `sessions` this tick assembled. Wrapped like `pushNewMail`,
+      // for its reason: both walk straight into synchronous `node:sqlite`.
+      try {
+        this.renewClaims(sessions);
+        this.lapseClaims(sessions);
+      } catch (err) {
+        console.warn(`ccrc-server: claim sweep failed (${err instanceof Error ? err.message : String(err)}) — one bad sweep must not kill the poll`);
+      }
+      // NEVER awaited, same reasoning as `sweepDivergences`: each is a
+      // handful of io reads per PROJECT, on an hourly / 15-minute clock.
+      void this.sweepLedgerFloor(records).catch(() => { /* one bad sweep must not kill the poll */ });
+      void this.sweepLedgerReconcile().catch(() => { /* one bad sweep must not kill the poll */ });
       this.primed = true;
       if (this.deps.cfg.fleetMode === 'remote' && this.deps.fleetState?.connected) {
         // C0.4: `connected` alone is not "this read was complete" — a
@@ -1603,18 +1647,29 @@ export class FleetWatcher {
       return;
     }
     let openRunSessionIds = new Set<string>();
+    let openRunIds = new Set<number>();
     try {
+      const openRuns = this.deps.coord?.runs() ?? [];
       openRunSessionIds = new Set(
-        (this.deps.coord?.runs() ?? [])
-          .map((r) => r.sessionId)
-          .filter((id): id is string => id !== null),
-      );
+        openRuns.map((r) => r.sessionId).filter((id): id is string => id !== null));
+      openRunIds = new Set(openRuns.map((r) => r.id));
     } catch (err) {
       // `coord.runs()` walks straight into synchronous `node:sqlite` — the same
       // fault every neighbouring lane already guards. A failed read skips the
       // census this pass rather than killing the poll.
       console.warn(`ccrc-server: sweepDivergences runs() failed (${err instanceof Error ? err.message : String(err)}) — one bad read must not kill the poll`);
       return;
+    }
+    // THE CLAIM ROWS, degrade-to-empty like `provenance` below: an absence can
+    // only suppress a claim-orphan finding, never manufacture one.
+    let liveClaims: DivergenceInput['liveClaims'] = [];
+    try {
+      liveClaims = (this.deps.coord?.activeClaims() ?? []).flatMap((c) =>
+        c.paths.map((p) => ({
+          id: c.id, sessionId: c.heldBy, project: c.project, path: p, runId: c.runId,
+        })));
+    } catch (err) {
+      console.warn(`ccrc-server: sweepDivergences activeClaims failed (${err instanceof Error ? err.message : String(err)}) — no claim findings this pass`);
     }
     // THE REGISTRY'S `.branch`, never the assembled `FleetSession.branch`:
     // `assembleFleet` computes `sl?.branch ?? r.branch` (fleet.ts) and the
@@ -1643,7 +1698,7 @@ export class FleetWatcher {
         // number sitting in scope.
         supervisedAt: r.supervisedAt,
       })),
-      worktrees, headBranch, openRunSessionIds,
+      worktrees, headBranch, openRunSessionIds, openRunIds, liveClaims,
       // THE REGISTRY'S OWN DIRECTORY LISTING — the evidence that a workspace
       // mid-`ws-add` is claimed before its row parses (see
       // `unclaimedWorktrees`), taken above AFTER git's records for the ordering
@@ -1722,6 +1777,184 @@ export class FleetWatcher {
     if (this.lastLifecycleSweep !== 0 && now - this.lastLifecycleSweep < LC_SWEEP_MS) return;
     this.lastLifecycleSweep = now;
     await this.mirrorFor(store).sweep();
+  }
+
+  /**
+   * Liveness for `claimExpiry`, off the rows THIS tick already assembled —
+   * no second registry read (the one-listing rule `sweepDivergences` states).
+   * `LivenessProbe` is `claims.ts`'s own port, declared by the consumer (L2).
+   *
+   * `Pick<…>` in the sweep signatures is deliberate: the sweeps read exactly
+   * three fields, and a test should not have to fabricate a whole
+   * `FleetSession` to exercise a lease.
+   */
+  private claimProbe(
+    sessions: readonly Pick<FleetSession, 'id' | 'status' | 'unmeasured'>[],
+  ): LivenessProbe {
+    const byId = new Map(sessions.map((s) => [s.id, s]));
+    return {
+      liveness: (id: string) => {
+        const s = byId.get(id);
+        if (s === undefined) return 'gone';                 // the fleet no longer lists it
+        if (s.unmeasured.length > 0) return 'unmeasurable'; // doubt reads as HELD (D12)
+        return s.status === 'dead' ? 'gone' : 'running';
+      },
+    };
+  }
+
+  /**
+   * D12: NO SESSION-SIDE HEARTBEAT — "a protocol a model must remember is a
+   * protocol that will be forgotten, and the failure is a wedged module."
+   * The server renews for a holder it can measure running (and for one it
+   * cannot measure at all — doubt reads as held), on the EXISTING tick.
+   * `claimExpiry` (L1) owns every decision; this method only applies the
+   * `renew` arm. Synchronous: `tick()` wraps the pair in the same try/catch
+   * `pushNewMail` earned, because both walk straight into `node:sqlite`.
+   *
+   * DOUBT RENEWS in this lane (the plan's cross-task ruling), and the fold
+   * below is why holding is not enough: the in-tx expiry pre-pass on every
+   * claim attempt reads only the clock, so a doubted holder whose stale
+   * lease merely STOOD would be lapsed by the next rival's attempt — the
+   * mass-expiry a fleet-box hiccup must not cause. The fold hands
+   * `claimExpiry` the renewing verdict rather than deciding here, so the
+   * hard cap still fells it first and a no-op renewal is still a hold; the
+   * lapse lane below keeps the honest verdict, which is where "doubt is not
+   * death" does its other half of the work.
+   */
+  renewClaims(sessions: readonly Pick<FleetSession, 'id' | 'status' | 'unmeasured'>[]): void {
+    const now = Date.now();
+    if (this.lastClaimRenew !== 0 && now - this.lastClaimRenew < CLAIM_SWEEP_MS) return;
+    this.lastClaimRenew = now;
+    const store = this.deps.coord;
+    if (!store) return;
+    const probe = this.claimProbe(sessions);
+    for (const c of store.activeClaims()) {
+      const v = probe.liveness(c.heldBy);
+      const d = claimExpiry(c, now, v === 'unmeasurable' ? 'running' : v);
+      if (d.act === 'renew') store.renewClaimRow(c.id, d.expiresAt, now);
+    }
+  }
+
+  /** The lapse half — `claimExpiry`'s `lapse` arm applied. A holder measured
+   *  gone lapses at the STANDING `expiresAt` with `endedBy:'session-gone'`;
+   *  the 8 h hard cap lapses whatever the liveness said. Rows survive —
+   *  `lapseClaimRow` lapses, never deletes. */
+  lapseClaims(sessions: readonly Pick<FleetSession, 'id' | 'status' | 'unmeasured'>[]): void {
+    const now = Date.now();
+    if (this.lastClaimLapse !== 0 && now - this.lastClaimLapse < CLAIM_SWEEP_MS) return;
+    this.lastClaimLapse = now;
+    const store = this.deps.coord;
+    if (!store) return;
+    const probe = this.claimProbe(sessions);
+    for (const c of store.activeClaims()) {
+      const d = claimExpiry(c, now, probe.liveness(c.heldBy));
+      if (d.act === 'lapse') store.lapseClaimRow(c.id, d.endedBy, now);
+    }
+  }
+
+  /**
+   * `docs/superpowers/<dirs>/*.md` of one project's MAIN checkout, through
+   * the already-granted `io.readdir`/`io.readFile` (D13 — zero new grants,
+   * zero new frames). POSIX joins by template, matching every other fleet
+   * path this file builds. Names are SORTED before reading — `floorFromScan`
+   * breaks a max tie by first-file-wins, and its own docstring hands the
+   * determinism duty to this caller.
+   *
+   * A dir whose `readdir` answers null contributes NOTHING — `absent` and
+   * `unreadable` collapse in that call (D-114), and here BOTH are the safe
+   * direction: a floor that fails to seed leaves allocation refusing
+   * (`not-seeded`), and a partial scan can only ever UNDER-seed inside the
+   * 50-number gap, which the next successful sweep raises. `null` return =
+   * NEITHER dir listed — the caller seeds nothing at all.
+   */
+  private async readLedgerDocs(
+    project: string, dirs: readonly string[],
+  ): Promise<{ path: string; text: string }[] | null> {
+    const out: { path: string; text: string }[] = [];
+    let listedAny = false;
+    for (const d of dirs) {
+      const dir = `${this.deps.cfg.projectsRoot}/${project}/docs/superpowers/${d}`;
+      const names = await this.deps.io.readdir(dir);
+      if (names === null) continue;
+      listedAny = true;
+      for (const n of [...names].sort()) {
+        if (!n.endsWith('.md')) continue;
+        const text = await this.deps.io.readFile(`${dir}/${n}`);
+        if (text === null) continue;
+        out.push({ path: `docs/superpowers/${d}/${n}`, text });
+      }
+    }
+    return listedAny ? out : null;
+  }
+
+  /**
+   * D13: the allocator SELF-SEEDS. Hourly, per registry-named project (the
+   * same bound `sweepDivergences` states: the fleet's active projects, never
+   * every checkout on the box): floor = max(D-<n>) + LEDGER_SEED_GAP, and
+   * THE FLOOR ONLY EVER RISES — `raiseLedgerFloor`'s conflict arm is the
+   * mechanism. `floorFromScan` owns the gap arithmetic and the evidence
+   * string; this lane only applies them. The 50-number gap is not
+   * decoration: numbers allocated but not yet written into any plan are
+   * invisible to this scan, and re-issuing one IS the bb47c9e failure.
+   *
+   * PUBLIC for the reason `sweepDivergences` is: `tick()` dispatches it with
+   * `void`, so a test that awaits `tick()` has not awaited this.
+   */
+  async sweepLedgerFloor(records: SessionRecord[]): Promise<void> {
+    const now = Date.now();
+    if (this.lastLedgerFloor !== 0 && now - this.lastLedgerFloor < LEDGER_FLOOR_SWEEP_MS) return;
+    this.lastLedgerFloor = now;
+    const store = this.deps.coord;
+    if (!store) return;
+    for (const project of [...new Set(records.map((r) => r.project))]) {
+      const files = await this.readLedgerDocs(project, ['plans', 'specs']);
+      if (files === null) continue;
+      const scan = floorFromScan(files);
+      if (scan === null) continue;      // no global D-ref anywhere: nothing to seed, fail shut
+      store.raiseLedgerFloor(project, scan.floor, scan.evidence, now);
+    }
+  }
+
+  /**
+   * D13: allocated -> landed when the number appears in a PLAN of the main
+   * checkout — so `landed` genuinely means merged, the signal the bb47c9e
+   * incident lacked while the authoritative record sat on an unmerged ref
+   * for 15 hours. A number 7 days old and never landed is REPORTED (once per
+   * changing set) and NEVER reclaimed.
+   */
+  async sweepLedgerReconcile(): Promise<void> {
+    const now = Date.now();
+    if (this.lastLedgerReconcile !== 0 &&
+        now - this.lastLedgerReconcile < LEDGER_RECONCILE_SWEEP_MS) return;
+    this.lastLedgerReconcile = now;
+    const store = this.deps.coord;
+    if (!store) return;
+    const open = store.openAllocations();
+    if (open.length > 0) {
+      const byProject = new Map<string, typeof open>();
+      for (const a of open) {
+        const list = byProject.get(a.project);
+        if (list === undefined) byProject.set(a.project, [a]); else list.push(a);
+      }
+      for (const [project, rows] of byProject) {
+        const files = await this.readLedgerDocs(project, ['plans']);
+        if (files === null) continue;
+        for (const a of rows) {
+          const re = new RegExp(`\\bD-${a.n}\\b`);
+          const hit = files.find((f) => re.test(f.text));
+          if (hit !== undefined) store.markLanded(project, a.n, hit.path, now);
+        }
+      }
+    }
+    const stale = store.staleAllocations(now - LEDGER_STALE_MS);
+    const json = JSON.stringify(stale.map((s) => [s.project, s.n]));
+    if (stale.length > 0 && json !== this.lastStaleReport) {
+      this.lastStaleReport = json;
+      console.warn(
+        `ccrc-server: ${stale.length} allocated deviation number(s) never landed in a plan ` +
+        'after 7 days: ' + stale.map((s) => `${s.project} D-${s.n}`).join(', ') +
+        ' — reported, never reclaimed (D13)');
+    }
   }
 
   /**
@@ -2152,8 +2385,13 @@ export class FleetWatcher {
           // docstring for why `attempts` cannot serve this role). The FIRST
           // delivery (`d.deliveredAt === null`) never counts here.
           if (d.deliveredAt !== null) {
-            const replays = store.bumpReplayCount(d.id);
-            if (replays >= MAIL_REPLAY_MAX_ATTEMPTS) {
+            // `{state:'terminal'}` — an ack or a park landed on this row from
+            // a separate code path while this send was in flight (D10). The
+            // row is decided; there is no count to weigh against the ceiling,
+            // and re-parking a terminal row is exactly what rejectDelivery's
+            // own guard exists to refuse.
+            const bumped = store.bumpReplayCount(d.id);
+            if (bumped.state === 'counted' && bumped.replayCount >= MAIL_REPLAY_MAX_ATTEMPTS) {
               store.rejectDelivery(d.id, 'undeliverable', MAIL_REPLAY_CEILING_ERROR);
             }
           }

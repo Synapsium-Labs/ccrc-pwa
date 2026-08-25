@@ -25,6 +25,7 @@ import { MailStrip } from '../session/MailStrip';
 import { PickSheet } from '../session/PickSheet';
 import { ReapSheet } from '../session/ReapSheet';
 import { SessionHeader } from '../session/SessionHeader';
+import { HistoryTab } from '../session/HistoryTab';
 import { TaskStrip } from '../session/TaskStrip';
 import { TerminalDrawer } from '../session/TerminalDrawer';
 import { modelOptions, effortOptions } from '../lib/models';
@@ -85,6 +86,7 @@ export function SessionScreen({
   const [stopOpen, setStopOpen] = useState(false);
   const [picker, setPicker] = useState<'model' | 'effort' | null>(null);
   const [reapOpen, setReapOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const composerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -260,6 +262,7 @@ export function SessionScreen({
         onChangeEffort={changeEffort}
         onMoveAccount={() => setSwapOpen(true)}
         onStopSession={() => setStopOpen(true)}
+        onOpenHistory={() => setHistoryOpen(true)}
         onReapWorkspace={() => setReapOpen(true)}
         fallback={{ title: project, wrapper }}
       />
@@ -426,6 +429,7 @@ export function SessionScreen({
         onConfirm={() => void stopSession()}
       />
       <TerminalDrawer id={id} open={terminalOpen} onClose={() => setTerminalOpen(false)} />
+      <HistoryTab id={id} open={historyOpen} onClose={() => setHistoryOpen(false)} />
       <ReapSheet
         session={live}
         open={reapOpen}

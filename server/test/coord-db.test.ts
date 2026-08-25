@@ -268,7 +268,7 @@ describe('openCoordDb', () => {
 });
 
 describe('describeMigrationProgress', () => {
-  // Isolated from `openCoordDb` deliberately. `MIGRATIONS.length === 3` since
+  // Isolated from `openCoordDb` deliberately. `MIGRATIONS.length === 4` since
   // Wave 2 added `runs_by_session`, so the "earlier migrations already
   // committed" branch IS reachable through `openCoordDb` (a fresh v0 file
   // migrating 0→2 can fail on iteration 1 with iteration 0 committed) — but
@@ -327,8 +327,8 @@ describe('coord.db: migration 1 — runs_by_session', () => {
     raw.close();
 
     const db = openCoordDb(p);
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(3);
-    expect(COORD_SCHEMA_VERSION).toBe(3);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(4);
+    expect(COORD_SCHEMA_VERSION).toBe(4);
     const names = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as
       { name: string }[]).map((r) => r.name);
     expect(names).toContain('runs_by_session');
@@ -373,7 +373,7 @@ describe('coord.db: migration 2 — the lifecycle journal mirror', () => {
     raw.close();
 
     const db = openCoordDb(p);
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(3);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(4);
     const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as
       { name: string }[]).map((r) => r.name).sort();
     expect(tables).toEqual(expect.arrayContaining([
@@ -422,6 +422,88 @@ describe('coord.db: migration 2 — the lifecycle journal mirror', () => {
     const row = db.prepare('SELECT detail, truncated FROM lifecycle_events').get() as
       { detail: string | null; truncated: number };
     expect(row).toEqual({ detail: 'a sentence for a person', truncated: 1 });
+    db.close();
+  });
+});
+
+describe('coord.db: migration 3 — claims and the deviation ledger', () => {
+  it('reaches a database ALREADY at user_version 3 — it cannot be an amendment to any earlier index', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    // Build the file exactly as a Build-9a server leaves it: migrations 0-2,
+    // user_version 3. `db.ts`'s loop starts at `current`, so anything amended
+    // INTO an earlier index can never run against this file again.
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      raw.exec(MIGRATIONS[0]!); raw.exec(MIGRATIONS[1]!); raw.exec(MIGRATIONS[2]!);
+      raw.exec('PRAGMA user_version = 3');
+    });
+    raw.close();
+
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(4);
+    const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as
+      { name: string }[]).map((r) => r.name);
+    expect(tables).toEqual(expect.arrayContaining([
+      'claims', 'claim_paths', 'ledger_alloc', 'ledger_floor',
+    ]));
+    db.close();
+  });
+
+  // Parent rows for every claim_paths insert below — foreign_keys is ON.
+  const seedClaim = (db: DatabaseSync, id: number, project = 'demo'): void => {
+    db.prepare(
+      'INSERT INTO claims (id, project, heldBy, heldByUuid, intent, runId, state, ' +
+      'createdAt, renewedAt, expiresAt, hardExpiresAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run(id, project, `demo-holder-${id}`, 'u'.repeat(36), 'testing the schema', null, 'live',
+      1, 1, 2, 3);
+  };
+
+  it('claim_one_owner: one LIVE owner per (project, path) — the D11 backstop is a loud constraint', () => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    seedClaim(db, 1); seedClaim(db, 2); seedClaim(db, 3, 'other');
+    const ins = db.prepare('INSERT INTO claim_paths (claimId, project, path, live) VALUES (?, ?, ?, ?)');
+    ins.run(1, 'demo', 'shared/api.ts', 1);
+    expect(() => ins.run(2, 'demo', 'shared/api.ts', 1)).toThrow(/UNIQUE constraint failed/);
+    // A DIFFERENT project's identical path is not a collision — the index is per (project, path).
+    ins.run(3, 'other', 'shared/api.ts', 1);
+    db.close();
+  });
+
+  it('a LAPSED claim frees its paths without deleting them — lapse, do not delete (D12)', () => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    seedClaim(db, 1); seedClaim(db, 2);
+    const ins = db.prepare('INSERT INTO claim_paths (claimId, project, path, live) VALUES (?, ?, ?, ?)');
+    ins.run(1, 'demo', 'ccd/ccd', 1);
+    tx(db, () => {
+      db.prepare("UPDATE claims SET state = 'lapsed', endedAt = 9, endedBy = 'session-gone' WHERE id = 1").run();
+      db.prepare('UPDATE claim_paths SET live = 0 WHERE claimId = 1').run();
+    });
+    ins.run(2, 'demo', 'ccd/ccd', 1);   // the path is claimable again...
+    // ...and the dead claim's path row SURVIVED — destroyed claim history is destroyed history.
+    expect((db.prepare('SELECT count(*) AS c FROM claim_paths').get() as { c: number }).c).toBe(2);
+    db.close();
+  });
+
+  it('ledger_alloc: PRIMARY KEY (project, n) — a number exists once per project, ever', () => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const ins = db.prepare(
+      'INSERT INTO ledger_alloc (project, n, title, allocatedTo, allocatedAt, state) ' +
+      'VALUES (?, ?, ?, ?, ?, ?)');
+    ins.run('demo', 211, 'first subject', 'demo-quiet-mesa', 1, 'allocated');
+    expect(() => ins.run('demo', 211, 'second subject', 'demo-brisk-ridge', 2, 'allocated'))
+      .toThrow(/UNIQUE constraint failed/);
+    // Namespaces are per project: another project owns its own 211.
+    ins.run('other', 211, 'another project entirely', 'demo-plain-harbor', 3, 'allocated');
+    db.close();
+  });
+
+  it('ledger_floor: one row per project — the floor is a single value, not a history', () => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const ins = db.prepare(
+      'INSERT INTO ledger_floor (project, floor, evidence, updatedAt) VALUES (?, ?, ?, ?)');
+    ins.run('demo', 260, 'docs/superpowers/plans/example.md names D-210', 1);
+    expect(() => ins.run('demo', 261, 'a second seed', 2)).toThrow(/UNIQUE constraint failed/);
     db.close();
   });
 });

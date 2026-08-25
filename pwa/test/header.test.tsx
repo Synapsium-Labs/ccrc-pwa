@@ -82,6 +82,7 @@ const props = (over: Partial<SessionHeaderProps> = {}): SessionHeaderProps => ({
   onChangeEffort: vi.fn(),
   onMoveAccount: vi.fn(),
   onStopSession: vi.fn(),
+  onOpenHistory: vi.fn(),
   onReapWorkspace: vi.fn(),
   roster: TEST_ROSTER,
   ...over,

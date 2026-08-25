@@ -31,7 +31,7 @@ const skill = readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8');
  *  first. */
 const frontmatter = skill.slice(4, skill.indexOf('\n---', 4));
 
-// The ten clauses, verbatim. Every entry is DOUBLE-quoted on purpose: clause 1
+// The eleven clauses, verbatim. Every entry is DOUBLE-quoted on purpose: clause 1
 // quotes `tmux display-message -p '#S'` and clause 3 quotes `toId:'coordinator'`
 // — both carry single quotes, and the sibling suite's single-quoted style would
 // need escaping exactly where a copy-paste from SKILL.md is most useful.
@@ -57,6 +57,7 @@ const CONTRACT = [
   "Never run `ws-rm`, `ws-reap`, `ws-gc`, `ws-archive` or `ws-restore`. This workspace's lifecycle belongs to ccd and to the human, at any wave, for any reason.",
   "A done-claim's fingerprint is measured ONCE and sent ONCE: `handoffCommit` must equal the branch tip you measured, and `prPhase` must be one of the eight enum words (`unchecked`, `none`, `no-commits`, `open`, `draft`, `merged`, `closed`, `unknown`). After `wave-done` you stop pushing — a new commit under your own claim makes it stale — and a rejected claim is never re-asserted without new commits and a fresh measurement.",
   "Remote control is the BOX's setting, not yours: `~/.ccrc/remote-control` decides whether this box's panes run with it, and you never write that file. The per-worker ruling (orchestrator task #37) is still open, so there is no per-session form of this flag to reach for.",
+  "Claim before you edit: `POST /api/claims` with every path this wave touches, all-or-nothing. A 409 is an answer, not an obstacle — it names the holder, and the holder IS the address: mail them through the response's own `mailHint` instead of editing anyway. Discovery is `GET /api/peers?of=<your id>`, history is `GET /api/lifecycle`, and each row's own lifecycle is what to read — never its archive stamp, which is silently false on some live rows. Peer mail is human-timescale: a busy peer answers when it next idles, so send once and work what is uncontested. Never invent a deviation number — the coordinator allocated this program's block at run-open, and a number you cannot get is `D-TBD-<slug>` plus a report, never a guess.",
 ];
 
 /** The forbidding clause, by its own index — named once so a re-ordering of the
@@ -64,7 +65,7 @@ const CONTRACT = [
 const FORBIDS = CONTRACT[7]!;
 
 describe('the worker skill: its contract', () => {
-  it('carries all ten clauses verbatim', () => {
+  it('carries all eleven clauses verbatim', () => {
     for (const clause of CONTRACT) {
       expect(skill, `missing contract clause: ${clause.slice(0, 48)}…`).toContain(clause);
     }
@@ -97,7 +98,8 @@ describe('the worker skill: its contract', () => {
     // And the pointer it uses instead is a real relative path from
     // `<config dir>/skills/ccrc-worker/` to the coordinator's own tree.
     for (const ref of ['../ccrc-coordinator/references/wave-lifecycle.md',
-      '../ccrc-coordinator/references/mail-envelope.md']) {
+      '../ccrc-coordinator/references/mail-envelope.md',
+      '../ccrc-coordinator/references/peer-protocol.md']) {
       expect(skill, `the skill points at no ${ref}`).toContain(ref);
       expect(readFileSync(path.join(root, 'ccd/coordinator-skill',
         ref.replace('../ccrc-coordinator/', '')), 'utf8').length,

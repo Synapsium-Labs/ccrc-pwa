@@ -93,6 +93,18 @@ export interface DivergenceInput {
     readonly obsClass: string;
     readonly decSurface: string;
   }[];
+  /**
+   * Live path claims off the coordination store, carried as ROWS and decided
+   * here — the same L1 stance as `provenance` above. EMPTY WHEN THE STORE
+   * REFUSES: an absence can only suppress this finding, never manufacture one.
+   */
+  readonly liveClaims: readonly {
+    readonly id: number; readonly sessionId: string; readonly project: string;
+    readonly path: string; readonly runId: number | null;
+  }[];
+  /** Ids of every OPEN run — the same `runs()` read `openRunSessionIds`
+   *  already comes from, carried as a set so this module stays pure. */
+  readonly openRunIds: ReadonlySet<number>;
 }
 
 const key = (project: string, name: string): string => `${project}/${name}`;
@@ -363,6 +375,20 @@ export function divergences(input: DivergenceInput): Divergence[] {
     out.push({
       kind: 'archived-but-live', id: r.id, path: r.workdir,
       detail: `stamped archived, and the supervisor heartbeat is ${Math.round(age / 1000)}s old`,
+    });
+  }
+
+  // 6 — a live claim whose run is no longer open (build 9 D12). Run close
+  // releases the run's claims inside the close transaction, so a survivor is
+  // a close that never finished. Refcounting is a query, not a counter — "a
+  // counter you can increment twice is a counter you can leak; a query over
+  // rows cannot" — and this is that query's alarm. A claim naming NO run is
+  // a supported shape (an ad-hoc claim), never a leak.
+  for (const c of input.liveClaims) {
+    if (c.runId === null || input.openRunIds.has(c.runId)) continue;
+    out.push({
+      kind: 'claim-orphan', id: c.sessionId, path: null,
+      detail: `a live claim on ${c.project}/${c.path} names run ${c.runId}, which is no longer open — its close should have released it`,
     });
   }
 

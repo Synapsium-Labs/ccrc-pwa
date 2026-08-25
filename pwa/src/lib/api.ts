@@ -2,7 +2,7 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
-import type { AccountsResponse, CatchUp, FleetHealth, FleetSession, LoginRequest, NotifyEvent, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, PrView, ReapResult, RunSummary, SlashCommand, StagedClip, WsAudit } from '../../../shared/api';
+import type { AccountsResponse, CatchUp, ClaimSummary, FleetHealth, FleetSession, LifecycleQueryResult, LoginRequest, NotifyEvent, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, PrView, ReapResult, RunSummary, SlashCommand, StagedClip, WsAudit } from '../../../shared/api';
 import { raiseAuthLostFrom } from './auth';
 
 export class ApiError extends Error {
@@ -460,6 +460,25 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  construction (notifymark.ts advances the mark at receipt); this is the
      *  read that still has bodies after a deploy. */
     feed: (limit = 100) => getJson<{ events: NotifyEvent[] }>(`/api/feed?limit=${limit}`),
+    /** `GET /api/lifecycle?session=<id>` — one session's past tense from the
+     *  provenance mirror, oldest-first, `gaps` riding in the same answer (a
+     *  timeline with a hole in it must say so, not hide it in a second call
+     *  nobody makes). Cookie-authenticated from here; the same route takes
+     *  the box token for a cookieless worker (Build 9 D16) — nothing this
+     *  client needs to know about. */
+    lifecycle: (session: string, limit?: number): Promise<LifecycleQueryResult> =>
+      getJson<LifecycleQueryResult>(
+        `/api/lifecycle?session=${encodeURIComponent(session)}` +
+          (limit === undefined ? '' : `&limit=${limit}`)),
+    /** `GET /api/claims` — the fleet's hot-file claims (Build 9 D12:
+     *  ADVISORY, never enforcing — this client renders them and offers no
+     *  way to release or break one; release is the holding session's own
+     *  door, and the break door is the operator's, deliberately unnamed).
+     *  `all` includes ended rows — "held by X until it died" is an answer,
+     *  which is why a lapsed claim is a row and not a deletion. */
+    claims: (opts?: { all?: boolean }): Promise<{ claims: ClaimSummary[] }> =>
+      getJson<{ claims: ClaimSummary[] }>(
+        opts?.all === true ? '/api/claims?all=1' : '/api/claims'),
     interrupt: (id: string) => post(`${sid(id)}/interrupt`),
     /** `POST /api/coord/pause` (spec §4.2) — request `{paused}`, response
      *  `{ok:true, requested}` on success (the field is `requested`, never

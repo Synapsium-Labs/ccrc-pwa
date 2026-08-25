@@ -34,6 +34,8 @@ const input = (over: Partial<DivergenceInput> = {}): DivergenceInput => ({
   unclaimedLastSweep: new Set<string>(),
   nowMs: NOW,
   provenance: [],
+  liveClaims: [],
+  openRunIds: new Set<number>(),
   ...over,
 });
 
@@ -303,6 +305,8 @@ describe('divergences — the original three kinds, individually', () => {
       unclaimedLastSweep: new Set(['demo/nobody']),
       nowMs: NOW,
       provenance: [],
+      liveClaims: [],
+      openRunIds: new Set<number>(),
     });
     expect(out.map((d) => d.kind).sort()).toEqual(
       ['branch-drift', 'claim-divergence', 'unregistered-worktree']);
@@ -310,9 +314,9 @@ describe('divergences — the original three kinds, individually', () => {
 });
 
 describe('the vocabulary', () => {
-  it('is exactly five kinds — dead-row/unsupervised/not-boot-persistent are still DELETED', () => {
+  it('is exactly six kinds — dead-row/unsupervised/not-boot-persistent are still DELETED', () => {
     expect([...DIVERGENCE_KINDS].sort()).toEqual(
-      ['archived-but-live', 'branch-drift', 'claim-divergence',
+      ['archived-but-live', 'branch-drift', 'claim-divergence', 'claim-orphan',
        'provenance-mismatch', 'unregistered-worktree']);
     // `dead-row` IS `lifecycle === 'orphan'` and strictly broader; the other two
     // would cost one `ws-audit` exec per session per sweep (see the type's own
@@ -434,5 +438,28 @@ describe('divergences — archived-but-live', () => {
 
   it('says nothing about a live row that was never archived', () => {
     expect(divergences(input({ records: [rec({ supervisedAt: NOW - 1000 })] }))).toEqual([]);
+  });
+});
+
+describe('claim-orphan — a live claim whose run is no longer open (build 9 D12)', () => {
+  const aClaim = (over: Partial<DivergenceInput['liveClaims'][number]> = {}) => ({
+    id: 1, sessionId: 'demo-quiet-basin', project: 'demo',
+    path: 'server/src/io.ts', runId: 7 as number | null, ...over,
+  });
+
+  it('names a live claim naming a run the open set does not hold', () => {
+    const out = divergences(input({ liveClaims: [aClaim()], openRunIds: new Set<number>() }));
+    expect(out).toContainEqual({ kind: 'claim-orphan', id: 'demo-quiet-basin',
+      path: null, detail: expect.stringContaining('run 7') });
+  });
+
+  it('a claim whose run IS open raises nothing', () => {
+    expect(divergences(input({ liveClaims: [aClaim()], openRunIds: new Set([7]) })))
+      .not.toContainEqual(expect.objectContaining({ kind: 'claim-orphan' }));
+  });
+
+  it('a run-less claim is a SUPPORTED shape, not a leak', () => {
+    expect(divergences(input({ liveClaims: [aClaim({ runId: null })] })))
+      .not.toContainEqual(expect.objectContaining({ kind: 'claim-orphan' }));
   });
 });

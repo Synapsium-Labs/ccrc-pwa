@@ -60,6 +60,32 @@ describe('api client', () => {
   });
 });
 
+describe('the Build 9 read fetchers', () => {
+  it('lifecycle GETs /api/lifecycle with the session encoded and limit only when given', async () => {
+    // A fresh Response per call — these tests make several calls through one
+    // mock, and a Response body reads once.
+    const fetchImpl = vi.fn().mockImplementation(async () => jsonResponse(200, { events: [], gaps: [] }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+    await api.lifecycle('claude:a b');
+    expect(fetchImpl.mock.calls[0]![0]).toBe('/api/lifecycle?session=claude%3Aa%20b');
+    await api.lifecycle('x', 50);
+    expect(fetchImpl.mock.calls[1]![0]).toBe('/api/lifecycle?session=x&limit=50');
+  });
+
+  it('claims GETs the live set by default and ?all=1 only on request', async () => {
+    const fetchImpl = vi.fn().mockImplementation(async () => jsonResponse(200, { claims: [] }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+    await api.claims();
+    expect(fetchImpl.mock.calls[0]![0]).toBe('/api/claims');
+    await api.claims({ all: true });
+    expect(fetchImpl.mock.calls[1]![0]).toBe('/api/claims?all=1');
+    // `all: false` and an absent opts send the byte-identical request — the
+    // `archive({force})` rule one screen over.
+    await api.claims({ all: false });
+    expect(fetchImpl.mock.calls[2]![0]).toBe('/api/claims');
+  });
+});
+
 // PR-I reconciliation item 5: `GET /api/runs` defaults to active-only
 // (`includeClosed: false`), and the archive view is `?closed=1`. Without a
 // parameter on the client method there is no data path to the archive at

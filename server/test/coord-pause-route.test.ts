@@ -1,8 +1,9 @@
 // `POST /api/coord/pause` — the operator's door onto `$REG/coordinator-paused`,
-// and one of the TWO write routes in `coord/routes.ts` deliberately not behind
-// `requireMailToken` (D-B4-9). The other is `POST /api/runs/:id/abandon`, added
-// by the same build for the same reason; the `UNGATED` set below is the whole
-// list, and the scanner holds it to exactly those two.
+// and one of the THREE write routes in `coord/routes.ts` deliberately not behind
+// `requireMailToken` (D-B4-9). The others are `POST /api/runs/:id/abandon` (same
+// build, same reason) and `POST /api/claims/:id/break` (build 9 D12, the same
+// abandon-door shape); the `UNGATED` set below is the whole list, and the
+// scanner holds it to exactly those three.
 //
 // The authorization ruling is spec §4.1 and it is the whole reason this file
 // asserts an ABSENCE: the box token authenticates the FLEET HOST, the
@@ -164,8 +165,11 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
    *  pause marker exists so the coordinator cannot unpause itself.
    *  `/api/runs/:id/abandon`: the same door, for the same reason — a run wedged
    *  because its coordinator is stuck cannot be released by a key that
-   *  coordinator holds. */
-  const UNGATED = new Set(['/api/coord/pause', '/api/runs/:id/abandon']);
+   *  coordinator holds.
+   *  `/api/claims/:id/break`: the sessions that hold claims hold the box token;
+   *  a wedge's release valve must not be behind the wedger's own key — build 9
+   *  D12. */
+  const UNGATED = new Set(['/api/coord/pause', '/api/runs/:id/abandon', '/api/claims/:id/break']);
 
   /** Each `app.post` handler's own text, from its route line to the next
    *  handler in the file. */

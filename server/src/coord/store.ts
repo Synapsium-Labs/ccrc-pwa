@@ -1,15 +1,23 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { tx } from './db.js';
+import { decideClaim, type ClaimRow } from './claims.js';
+import { decideAllocation } from './ledger.js';
+import type { LedgerLog } from './ledgerlog.js';
 import { CLEAR_REFUSED_STRANDS_TEXT } from './rundefs.js';
 import { reviveDec, reviveMeas, reviveObs, type JournalRow } from './journalparse.js';
 import {
-  isLifecycleAct, isLifecycleGapReason, isLifecycleOutcome,
+  CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS,
+  isClaimState, isDeviationAllocState, isLifecycleAct, isLifecycleGapReason, isLifecycleOutcome,
   isMailDeliveryState, isMailKind, isNotifyKind, isProgramState, isRunState, isWorkItemState,
   LC_ACT_UNKNOWN, LC_OUTCOME_UNKNOWN,
   RUN_TRANSITIONS,
-  type CoordCaps, type LifecycleGap, type LifecycleGapReason, type MailDeliveryState,
+  type ClaimConflict, type ClaimState, type ClaimSummary,
+  type CoordCaps, type DeviationAllocation, type DeviationAllocState,
+  type LifecycleGap, type LifecycleGapReason,
+  type MailDeliveryState,
   type MailKind, type MailRejectCode, type MailSummary, type MirroredLifecycleEvent,
-  type NotifyEvent, type ProgramState, type RunItemTally, type RunState, type RunSummary,
+  type NotifyEvent, type PeerDeliverable, type ProgramState, type RunItemTally, type RunState,
+  type RunSummary,
   type WorkItemState,
 } from '../../../shared/api.js';
 
@@ -90,6 +98,57 @@ export type SettleItemsResult =
   | { ok: true; items: RunItemTally }
   | { ok: false; itemId: number; why: 'unknown-item' }
   | { ok: false; itemId: number; why: 'terminal'; state: WorkItemState };
+
+/** Build 9 wave 7 (D12). The failure arms are `decideClaim`'s own, verbatim —
+ *  the store adds nothing to a refusal and takes nothing from it (the payloads
+ *  pass through untouched; only the `ok`/`why` discriminant is the store's,
+ *  so this union reads like its `SetWorkItemResult` neighbours). */
+export type ClaimAttemptResult =
+  | { ok: true; claims: ClaimSummary[] }
+  | { ok: false; why: 'bad-path'; paths: readonly string[] }
+  | { ok: false; why: 'conflict'; conflicts: readonly ClaimConflict[] };
+
+/** Release and break share this shape — `setWorkItemState`'s refusal family:
+ *  a caller must be able to see that ITS call was not the one that landed.
+ *  `state` on the not-live arm is `null` for exactly ONE condition, a stored
+ *  token this build cannot model (a newer build's word — coord/db.ts rule 3:
+ *  a rollback must be able to READ, and reading is `isClaimState`, never a
+ *  cast; `ClaimState` has no designated we-do-not-know member to degrade to,
+ *  by the L0 pin). */
+export type ClaimEndResult =
+  | { ok: true; state: 'released' | 'broken' }
+  | { ok: false; why: 'unknown-claim' }
+  | { ok: false; why: 'not-live'; state: ClaimState | null };
+
+/** One `ledger_alloc` row on the way OUT — the L0 wire row's own fields
+ *  (`DeviationAllocation`) minus `stale`, which is DERIVED by the READER
+ *  from a clock this store does not own (`allocatedAt + LEDGER_STALE_MS`,
+ *  the watcher's and the route's policy, never stored) — and with `state`
+ *  read through the same we-do-not-know rule as every enum column in this
+ *  file: `DeviationAllocState` has no designated unknown member (the L0 pin
+ *  stores exactly two words), so the store's row widens it rather than
+ *  degrading a token a newer build wrote to a guess. */
+export interface LedgerRow extends Omit<DeviationAllocation, 'state' | 'stale'> {
+  state: DeviationAllocState | 'unknown';
+}
+
+/** The ok payload of `allocateDeviations` — one allocated BLOCK. The L0
+ *  wire row is one row PER NUMBER; the allocator decides per BLOCK
+ *  (contiguous `numbers` from one floor read), so the ok arm carries the
+ *  block's shared identity plus the numbers, not N copies of a row. */
+export interface AllocatedBlock extends Pick<DeviationAllocation,
+  'project' | 'title' | 'allocatedTo' | 'runId' | 'allocatedAt'> {
+  numbers: readonly number[];
+  floor: number;
+}
+
+/** The failure arms are `decideAllocation`'s own (`ledger.js`), re-keyed to
+ *  this file's `ok`/`why` house shape — the `ClaimAttemptResult` stance: the
+ *  store adds nothing to a refusal and takes nothing from it. */
+export type AllocateResult =
+  | { ok: true; allocation: AllocatedBlock }
+  | { ok: false; why: 'not-seeded' }
+  | { ok: false; why: 'bad-count' };
 
 /** The raw row shape common to `run(id)` and `runs()` — named columns only
  *  (no `SELECT *` anywhere in this file), joined once against `programs` for
@@ -505,6 +564,12 @@ export class CoordStore {
       // wave, or — once a purged workspace slug is re-minted — an unrelated
       // program entirely) next satisfies `dueDeliveries`'s gate.
       this.cancelOutstandingDeliveries(input.runId);
+      // Build 9 D12: the run's claims are released in the SAME transaction as
+      // the close — after the final advance succeeded (a refused close
+      // releases nothing), beside the delivery cancellation it mirrors. The
+      // watcher's `divergence.claim-orphan` is the alarm for the close that
+      // never got here.
+      this.releaseClaimsForRun(input.runId, Date.now());
       // D-51's program-retirement check, run inside the SAME transaction:
       // the run just closed already reads as terminal to this COUNT, because
       // the write above is visible to a later read within one `tx()`.
@@ -1195,13 +1260,62 @@ export class CoordStore {
    *  retry, with no dedupe and no rate limit. `subject` alone identifies
    *  "the same fact restated" for the two system-mail subjects this build
    *  ever sends on a retry loop (`wave-brief`, `wave-done-rejected`) —
-   *  `queueSystemMail`'s own call sites are the only callers. */
-  hasOutstandingMail(runId: number, toId: string, subject: string): boolean {
+   *  `queueSystemMail`'s own call sites are the only run-mail callers.
+   *
+   *  `m.runId IS ?`, not `= ?` (Build 9b wave 0, D10 hole 1): `runId` is
+   *  nullable — peer mail is `runId:null` by definition — and a bound NULL
+   *  under `=` equals nothing, so for exactly the traffic Wave 7 adds a
+   *  second producer for, the dedupe guard structurally could not fire.
+   *  SQLite's `IS` is null-safe on both arms, so a number still matches its
+   *  own rows and ONLY a null matches the null ones: one query, one reader,
+   *  no second method. */
+  hasOutstandingMail(runId: number | null, toId: string, subject: string): boolean {
     const row = this.db.prepare(
       'SELECT 1 AS x FROM mail m JOIN mail_deliveries d ON d.mailId = m.id ' +
-      `WHERE m.runId = ? AND d.toId = ? AND m.subject = ? AND d.state IN ${OUTSTANDING_STATES_SQL} LIMIT 1`,
+      `WHERE m.runId IS ? AND d.toId = ? AND m.subject = ? AND d.state IN ${OUTSTANDING_STATES_SQL} LIMIT 1`,
     ).get(runId, toId, subject);
     return row !== undefined;
+  }
+
+  /** Whether an OUTSTANDING peer mail with this exact (fromId, toId, subject)
+   *  triple exists — the 409 'duplicate' probe (Build 9b wave 0, D10 hole 2).
+   *  `runId IS NULL` scopes it to the peer lane by construction; run mail has
+   *  its own dedupe (`hasOutstandingMail` above, via `queueSystemMail`) keyed
+   *  WITHOUT the sender, because the coordinator is its only sender. `toId`
+   *  here is the RESOLVED recipient — the id `mail_deliveries.toId` actually
+   *  carries — never the pre-resolution role. */
+  hasOutstandingPeerDuplicate(fromId: string, toId: string, subject: string): boolean {
+    const row = this.db.prepare(
+      'SELECT 1 AS x FROM mail m JOIN mail_deliveries d ON d.mailId = m.id ' +
+      'WHERE m.runId IS NULL AND m.fromId = ? AND d.toId = ? AND m.subject = ? ' +
+      `AND d.state IN ${OUTSTANDING_STATES_SQL} LIMIT 1`,
+    ).get(fromId, toId, subject);
+    return row !== undefined;
+  }
+
+  /** How many peer mails from `fromId` to `toId` are OUTSTANDING (`queued` or
+   *  `delivered`, unacked) — the pair arm of the 429 'peer-quota' bound. An
+   *  ack or a park frees the slot: the bound is on standing pressure against
+   *  one recipient, not on history (the hourly arm below is the one history
+   *  bound, and it deliberately uses a different denominator). */
+  outstandingPeerCount(fromId: string, toId: string): number {
+    return (this.db.prepare(
+      'SELECT COUNT(*) AS n FROM mail m JOIN mail_deliveries d ON d.mailId = m.id ' +
+      `WHERE m.runId IS NULL AND m.fromId = ? AND d.toId = ? AND d.state IN ${OUTSTANDING_STATES_SQL}`,
+    ).get(fromId, toId) as { n: number }).n;
+  }
+
+  /** How many peer mails `fromId` has had ACCEPTED in the sliding hour before
+   *  `now` — the per-sender arm of the 429 'peer-quota' bound. Counts `mail`
+   *  ROWS (inserts), not deliveries and not delivery state: a refusal inserts
+   *  no row and charges nothing; an ack does not refund the hour. `now` is
+   *  the caller's clock, passed in rather than read here — the same
+   *  policy-stays-with-the-caller reason `dueDeliveries`/`capsUsage` already
+   *  take theirs. */
+  peerMailInLastHour(fromId: string, now: number): number {
+    return (this.db.prepare(
+      'SELECT COUNT(*) AS n FROM mail WHERE runId IS NULL AND fromId = ? AND at > ?',
+    ).get(fromId, now - 3_600_000) as { n: number }).n;
   }
 
   queueDelivery(mailId: number, toId: string, envelope: string): { id: number } {
@@ -1343,33 +1457,62 @@ export class CoordStore {
   }
 
   /**
-   * `mail_deliveries.replayCount + 1`, returning the new value (review
-   * finding 20). Called by the sweep AFTER `markDelivered`, and ONLY when
-   * the row it read was already `delivered` before this send — i.e. this
-   * send was a REPLAY, not the first delivery. Kept independent of
-   * `attempts` (`MAIL_MAX_ATTEMPTS`'s own docstring: SEND FAILURES only) on
-   * purpose: without a separate counter, spec:174-177's replay-until-ack has
-   * no ceiling at all once a delivery succeeds even once — `MAIL_COOLDOWN_MS`
-   * only SPACES the injections, it was never a bound on their number, and a
-   * delivery that keeps succeeding can never fail its way into
-   * `MAIL_MAX_ATTEMPTS`. This is the ceiling that lets a delivery no one
-   * ever acks eventually reach `rejected('undeliverable')` — the spec's own
-   * terminal state, otherwise structurally unreachable for exactly the
-   * deliveries that succeed.
+   * `mail_deliveries.replayCount + 1`, answered as a STATE (review finding
+   * 20; union — Build 9b wave 0, D10 hole 4). Called by the sweep AFTER
+   * `markDelivered`, and ONLY when the row it read was already `delivered`
+   * before this send — i.e. this send was a REPLAY, not the first delivery.
+   * Kept independent of `attempts` (`MAIL_MAX_ATTEMPTS`'s own docstring:
+   * SEND FAILURES only) on purpose: without a separate counter,
+   * spec:174-177's replay-until-ack has no ceiling at all once a delivery
+   * succeeds even once — `MAIL_COOLDOWN_MS` only SPACES the injections, it
+   * was never a bound on their number, and a delivery that keeps succeeding
+   * can never fail its way into `MAIL_MAX_ATTEMPTS`. This is the ceiling
+   * that lets a delivery no one ever acks eventually reach
+   * `rejected('undeliverable')` — the spec's own terminal state, otherwise
+   * structurally unreachable for exactly the deliveries that succeed.
+   *
+   * `AND state NOT IN ('acked','rejected')` — the same guard every other
+   * writer of this table carries (`markDelivered`/`backOff`/`rejectDelivery`
+   * above and below), closing the same seconds-to-half-a-minute window in
+   * which an ack or a park lands from a separate code path between the
+   * sweep's read and this write. And the RETURN is a union, not a bare
+   * number, because the guard alone would hand the caller the row's
+   * unchanged count — a value that reads as "not yet at the ceiling" for a
+   * row already parked: two conditions, one value, at a seam (D10: "the
+   * union is the fix; the guard alone is not"). `{state:'terminal'}` also
+   * answers for a row that does not exist at all — collapsed deliberately
+   * and stated here rather than papered over: nothing in this tree DELETEs
+   * from `mail_deliveries` (D10's own measurement — "bound the producer,
+   * never the record"), and the single caller's handling of the two is
+   * identical (skip the ceiling check), so the collapse is of two conditions
+   * no caller distinguishes.
    */
-  bumpReplayCount(id: number): number {
-    this.db.prepare('UPDATE mail_deliveries SET replayCount = replayCount + 1 WHERE id = ?').run(id);
-    return (this.db.prepare('SELECT replayCount FROM mail_deliveries WHERE id = ?')
-      .get(id) as { replayCount: number }).replayCount;
+  bumpReplayCount(id: number): { state: 'counted'; replayCount: number } | { state: 'terminal' } {
+    const res = this.db.prepare(
+      "UPDATE mail_deliveries SET replayCount = replayCount + 1 WHERE id = ? AND state NOT IN ('acked','rejected')",
+    ).run(id);
+    if (res.changes === 0) return { state: 'terminal' };
+    return {
+      state: 'counted',
+      replayCount: (this.db.prepare('SELECT replayCount FROM mail_deliveries WHERE id = ?')
+        .get(id) as { replayCount: number }).replayCount,
+    };
   }
 
   /** The `UserPromptSubmit` edge (`hookstate.ts:23-34`). Deliberately does
    *  NOT touch `deliveredAt` — a REPLAY re-dates the clock through its own
    *  fresh `markDelivered` call, and `dueDeliveries`'s `MAX(...)` above is
    *  what combines the two rather than either writer clobbering the other's
-   *  column. */
+   *  column. `AND state NOT IN ('acked','rejected')` (Build 9b wave 0, D10
+   *  hole 3): shielded until now only by its caller's query filter
+   *  (`deliveredUnacked()` selects `delivered` rows) — a filter is a
+   *  courtesy of one caller, a guard is a property of the row; the same
+   *  ack-or-park-lands-mid-window race every sibling writer here already
+   *  guards against. */
   markIngested(id: number, at: number): void {
-    this.db.prepare('UPDATE mail_deliveries SET ingestedAt = ? WHERE id = ?').run(at, id);
+    this.db.prepare(
+      "UPDATE mail_deliveries SET ingestedAt = ? WHERE id = ? AND state NOT IN ('acked','rejected')",
+    ).run(at, id);
   }
 
   /** false when already acked, absent, or PARKED — an ack is idempotent, but
@@ -2009,5 +2152,428 @@ export class CoordStore {
         ? [{ id: r.id, at: r.at, obsClass: r.obsClass, decSurface: r.decSurface }]
         : []
     ));
+  }
+
+  /* ── claims (build 9 wave 7, D11/D12) ──────────────────────────────────── */
+
+  /** The column list, named ONCE — `SELECT *` is banned in this directory. */
+  private static readonly CLAIM_COLS =
+    'id, project, heldBy, heldByUuid, intent, runId, state, ' +
+    'createdAt, renewedAt, expiresAt, hardExpiresAt, endedAt, endedBy';
+
+  /** One raw row + its path set -> the typed shape. `state` goes through
+   *  `isClaimState`, never a cast — the same rule `hydrateRun`/`feedEvents`
+   *  hold. `ClaimState` has no designated we-do-not-know member (the L0 pin:
+   *  exactly four stored words), so a token a newer build wrote cannot be
+   *  modelled AS A SUMMARY at all — `null`, and the list readers drop the row
+   *  (`recentProvenance`'s rule: an unmodellable value is not a disagreement). */
+  private hydrateClaim(r: {
+    id: number; project: string; heldBy: string; heldByUuid: string | null;
+    intent: string; runId: number | null; state: string; createdAt: number;
+    renewedAt: number; expiresAt: number; hardExpiresAt: number;
+    endedAt: number | null; endedBy: string | null;
+  }, paths: readonly string[]): ClaimSummary | null {
+    if (!isClaimState(r.state)) return null;
+    return {
+      id: r.id, project: r.project, paths, heldBy: r.heldBy, heldByUuid: r.heldByUuid,
+      intent: r.intent, runId: r.runId, state: r.state,
+      createdAt: r.createdAt, renewedAt: r.renewedAt,
+      expiresAt: r.expiresAt, hardExpiresAt: r.hardExpiresAt,
+      endedAt: r.endedAt, endedBy: r.endedBy,
+    };
+  }
+
+  /** A claim's path set, fixed at insert — `claim_paths.live` mirrors the
+   *  parent's state, it never shrinks the set, so the read is by claimId
+   *  alone and an ended claim keeps answering "held ON WHAT until it died". */
+  private claimPaths(claimId: number): string[] {
+    return (this.db.prepare(
+      'SELECT path FROM claim_paths WHERE claimId = ? ORDER BY rowid',
+    ).all(claimId) as { path: string }[]).map((r) => r.path);
+  }
+
+  private claimRow(id: number): ClaimSummary {
+    const row = this.db.prepare(
+      `SELECT ${CoordStore.CLAIM_COLS} FROM claims WHERE id = ?`,
+    ).get(id) as Parameters<CoordStore['hydrateClaim']>[0] | undefined;
+    if (row === undefined) throw new Error(`claims row ${id} vanished inside its own transaction`);
+    const hydrated = this.hydrateClaim(row, this.claimPaths(id));
+    // A row THIS transaction wrote carries this build's own state word.
+    if (hydrated === null) throw new Error(`claims row ${id} unmodellable inside its own transaction`);
+    return hydrated;
+  }
+
+  /**
+   * Acquire (or renew) a set of path claims, as ONE transaction (D11) —
+   * the two mechanisms IN THIS ORDER, so a reviewer does not read either
+   * as redundant:
+   *
+   *  1. THE IN-TRANSACTION READ IS THE CAS. `tx()` is `BEGIN IMMEDIATE` and
+   *     `DatabaseSync` has no async surface, so nothing can interleave
+   *     between the read below and the inserts under it. `decideClaim` (L1)
+   *     owns the conflict rule — exact match AND directory-prefix containment
+   *     both ways (`shared` vs `shared/api.ts`), which no index can express.
+   *  2. THE PARTIAL UNIQUE INDEX `claim_one_owner` IS THE BACKSTOP: if a
+   *     future refactor ever loses the transaction, the failure is a LOUD
+   *     constraint violation, never a silent duplicate.
+   *
+   * All-or-nothing (D12): five paths, one conflict ⇒ zero acquired, and the
+   * refusal names EVERY conflicting path. A live claim this session already
+   * holds on the exact path is RENEWED — intent re-written, lease re-armed,
+   * never past the hard cap ("an intent can be written every ten minutes").
+   *
+   * `holderDeliverable` is the per-holder measurement the CALLER made
+   * (`peerDeliverable` over records the route already holds) — the store
+   * cannot measure the fleet, so when the caller did not either, the answer
+   * on every conflict is the honest `'unknown'` (D9: unknown is not no).
+   */
+  claimAttempt(input: {
+    project: string; paths: readonly string[]; sessionId: string; uuid: string;
+    runId: number | null; intent: string; now?: number;
+    holderDeliverable?: (sessionId: string) => PeerDeliverable;
+  }): ClaimAttemptResult {
+    const now = input.now ?? Date.now();
+    const deliverable = input.holderDeliverable ?? ((): PeerDeliverable => 'unknown');
+    return tx(this.db, () => {
+      // 1 — expire lapsed rows IN THE SAME TX, then read, then insert (D11).
+      this.expireLapsedInner(now);
+      const liveRows = this.db.prepare(
+        'SELECT id, heldBy, heldByUuid, intent, runId, expiresAt FROM claims ' +
+        "WHERE project = ? AND state = 'live' ORDER BY id",
+      ).all(input.project) as { id: number; heldBy: string; heldByUuid: string;
+                                intent: string; runId: number | null; expiresAt: number }[];
+      const livePaths = this.db.prepare(
+        'SELECT claimId, path FROM claim_paths WHERE project = ? AND live = 1 ORDER BY rowid',
+      ).all(input.project) as { claimId: number; path: string }[];
+      const pathsOf = new Map<number, string[]>();
+      for (const p of livePaths) {
+        const list = pathsOf.get(p.claimId);
+        if (list === undefined) pathsOf.set(p.claimId, [p.path]); else list.push(p.path);
+      }
+      // Object literals against the L1 interface — a `ClaimRow` member this
+      // file forgets, or invents, is a compile error (the reviveFleetSession
+      // mechanism, `decideClaim`'s own conflict literal holds it too).
+      const live: ClaimRow[] = liveRows.map((c) => ({
+        id: c.id, project: input.project, paths: pathsOf.get(c.id) ?? [],
+        heldBy: c.heldBy, heldByUuid: c.heldByUuid, intent: c.intent, runId: c.runId,
+        expiresAt: c.expiresAt, holderDeliverable: deliverable(c.heldBy),
+      }));
+      const decision = decideClaim(live, {
+        project: input.project, paths: input.paths, sessionId: input.sessionId,
+      });
+      if ('refused' in decision) {
+        return { ok: false as const, why: 'bad-path' as const, paths: decision.paths };
+      }
+      if ('conflict' in decision) {
+        return { ok: false as const, why: 'conflict' as const, conflicts: decision.conflict };
+      }
+      // decideClaim's ok arm carries the NORMALIZED, deduped set — the only
+      // spelling that may reach `claim_paths` (`normalizeClaimPath`, the
+      // schema's own comment on the column).
+      const paths = decision.paths;
+      // The holder's own live claims: a requested path an own claim already
+      // holds EXACTLY renews that whole claim (D12 ruling 3 — re-POSTing the
+      // same paths re-writes intent AND re-arms the lease); only the paths no
+      // own claim holds become a new row, so the backstop index never fires
+      // on a legitimate re-declaration.
+      const renewIds: number[] = [];
+      const fresh: string[] = [];
+      for (const p of paths) {
+        const own = live.find((c) => c.heldBy === input.sessionId && c.paths.includes(p));
+        if (own !== undefined) { if (!renewIds.includes(own.id)) renewIds.push(own.id); }
+        else fresh.push(p);
+      }
+      const out: ClaimSummary[] = [];
+      for (const id of renewIds) {
+        this.db.prepare(
+          'UPDATE claims SET heldByUuid = ?, runId = ?, intent = ?, renewedAt = ?, ' +
+          "expiresAt = MIN(?, hardExpiresAt) WHERE id = ? AND state = 'live'",
+        ).run(input.uuid, input.runId, input.intent, now, now + CLAIM_LEASE_MS, id);
+        out.push(this.claimRow(id));
+      }
+      if (fresh.length > 0) {
+        const res = this.db.prepare(
+          'INSERT INTO claims (project, heldBy, heldByUuid, intent, runId, state, ' +
+          'createdAt, renewedAt, expiresAt, hardExpiresAt) ' +
+          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ).run(input.project, input.sessionId, input.uuid, input.intent, input.runId,
+          'live', now, now, now + CLAIM_LEASE_MS, now + CLAIM_HARD_CAP_MS);
+        const claimId = Number(res.lastInsertRowid);
+        const ins = this.db.prepare(
+          'INSERT INTO claim_paths (claimId, project, path, live) VALUES (?, ?, ?, 1)');
+        for (const p of fresh) ins.run(claimId, input.project, p);
+        out.push(this.claimRow(claimId));
+      }
+      return { ok: true as const, claims: out };
+    });
+  }
+
+  /** THE GUARD IS IN THE `WHERE`, not in the read above it — `setWorkItemState`'s
+   *  exact shape and reason: `changes === 0` past a successful lookup means
+   *  exactly one thing, the row was not live. One `tx()` for the state word
+   *  AND the `claim_paths.live` mirror bit — the schema's own contract: the
+   *  bit is written in the SAME transaction as every `claims.state`
+   *  transition, or the partial index answers for a claim that no longer is. */
+  private endClaim(id: number, state: 'released' | 'broken', by: string,
+                   now: number): ClaimEndResult {
+    return tx(this.db, () => {
+      const row = this.db.prepare('SELECT state FROM claims WHERE id = ?').get(id) as
+        { state: string } | undefined;
+      if (!row) return { ok: false as const, why: 'unknown-claim' as const };
+      const res = this.db.prepare(
+        "UPDATE claims SET state = ?, endedAt = ?, endedBy = ? WHERE id = ? AND state = 'live'",
+      ).run(state, now, by, id);
+      if (Number(res.changes) === 0) {
+        return { ok: false as const, why: 'not-live' as const,
+                 state: isClaimState(row.state) ? row.state : null };
+      }
+      this.db.prepare('UPDATE claim_paths SET live = 0 WHERE claimId = ?').run(id);
+      return { ok: true as const, state };
+    });
+  }
+
+  /** Expire in the same transaction as every claim attempt — the
+   *  `feed_events` prune-on-write idiom (D12): a claim route never sees a
+   *  stale row even if the watcher is wedged. Hard cap FIRST, so a row past
+   *  both bounds records the harder word. LAPSE, NEVER DELETE. Each lane
+   *  flips the `claim_paths.live` mirror bit under the SAME predicate before
+   *  re-wording the parent — one transition, one transaction, or the partial
+   *  index answers for a claim that no longer is. */
+  private expireLapsedInner(now: number): void {
+    this.db.prepare(
+      'UPDATE claim_paths SET live = 0 WHERE claimId IN ' +
+      "(SELECT id FROM claims WHERE state = 'live' AND hardExpiresAt <= ?)",
+    ).run(now);
+    this.db.prepare(
+      "UPDATE claims SET state = 'lapsed', endedAt = ?, endedBy = 'hard-cap' " +
+      "WHERE state = 'live' AND hardExpiresAt <= ?",
+    ).run(now, now);
+    this.db.prepare(
+      'UPDATE claim_paths SET live = 0 WHERE claimId IN ' +
+      "(SELECT id FROM claims WHERE state = 'live' AND expiresAt <= ?)",
+    ).run(now);
+    this.db.prepare(
+      "UPDATE claims SET state = 'lapsed', endedAt = ?, endedBy = 'expired' " +
+      "WHERE state = 'live' AND expiresAt <= ?",
+    ).run(now, now);
+  }
+
+  claimRelease(id: number, by: string, now: number = Date.now()): ClaimEndResult {
+    return this.endClaim(id, 'released', by, now);
+  }
+
+  /** `POST /api/claims/:id/break` — a door the CLAIMANT is not the one to walk
+   *  through (the `abandon` shape). Same mechanics as release; a different
+   *  word, because "I am done" and "someone pried this open" are different
+   *  facts a `?all=1` reader needs to tell apart. */
+  claimBreak(id: number, by: string, now: number = Date.now()): ClaimEndResult {
+    return this.endClaim(id, 'broken', by, now);
+  }
+
+  activeClaims(): ClaimSummary[] {
+    const rows = this.db.prepare(
+      `SELECT ${CoordStore.CLAIM_COLS} FROM claims WHERE state = 'live' ORDER BY id`,
+    ).all() as Parameters<CoordStore['hydrateClaim']>[0][];
+    return rows.flatMap((r) => this.hydrateClaim(r, this.claimPaths(r.id)) ?? []);
+  }
+
+  /** The no-project `?all=1` arm: every project's rows, ended included — the
+   *  same verbatim read `claimsForProject(project, true)` gives one project,
+   *  for the PWA's whole-fleet history call (`api.claims({all:true})`). */
+  allClaims(): ClaimSummary[] {
+    const rows = this.db.prepare(
+      `SELECT ${CoordStore.CLAIM_COLS} FROM claims ORDER BY id`,
+    ).all() as Parameters<CoordStore['hydrateClaim']>[0][];
+    return rows.flatMap((r) => this.hydrateClaim(r, this.claimPaths(r.id)) ?? []);
+  }
+
+  /** `all` includes lapsed/released/broken rows — `?all=1`'s "held by X until
+   *  it died" (D12: a destroyed claim is destroyed history). */
+  claimsForProject(project: string, all = false): ClaimSummary[] {
+    const rows = (all
+      ? this.db.prepare(
+          `SELECT ${CoordStore.CLAIM_COLS} FROM claims WHERE project = ? ORDER BY id`)
+      : this.db.prepare(
+          `SELECT ${CoordStore.CLAIM_COLS} FROM claims WHERE project = ? AND state = 'live' ORDER BY id`)
+    ).all(project) as Parameters<CoordStore['hydrateClaim']>[0][];
+    return rows.flatMap((r) => this.hydrateClaim(r, this.claimPaths(r.id)) ?? []);
+  }
+
+  /** The watcher's renew write (D12: no session-side heartbeat — the SERVER
+   *  renews off records it already read). `MIN(?, hardExpiresAt)` is the 8 h
+   *  bound no renewal can move; the `state = 'live'` guard keeps a racing
+   *  lapse from being silently reopened. No `claim_paths` write: the state
+   *  word does not change, so the mirror bit already tells the truth. */
+  renewClaimRow(id: number, expiresAt: number, at: number): void {
+    this.db.prepare(
+      "UPDATE claims SET renewedAt = ?, expiresAt = MIN(?, hardExpiresAt) " +
+      "WHERE id = ? AND state = 'live'",
+    ).run(at, expiresAt, id);
+  }
+
+  /** LAPSE, NEVER DELETE (D12): the row survives with endedAt/endedBy, so
+   *  `?all=1` can answer "held by X until it died". A destroyed claim is
+   *  destroyed history. One `tx()` for the state word AND the
+   *  `claim_paths.live` mirror bit — the schema's own contract, `endClaim`'s
+   *  exact shape: the bit is written in the SAME transaction as every
+   *  `claims.state` transition, or the partial index answers for a claim
+   *  that no longer is. */
+  lapseClaimRow(id: number, endedBy: string, at: number): void {
+    tx(this.db, () => {
+      const res = this.db.prepare(
+        "UPDATE claims SET state = 'lapsed', endedAt = ?, endedBy = ? " +
+        "WHERE id = ? AND state = 'live'",
+      ).run(at, endedBy, id);
+      if (Number(res.changes) > 0) {
+        this.db.prepare('UPDATE claim_paths SET live = 0 WHERE claimId = ?').run(id);
+      }
+    });
+  }
+
+  /** Run close releases that run's claims IN THE CLOSE TRANSACTION (D12) —
+   *  called from `closeRun` only, after the final advance has succeeded,
+   *  beside the delivery cancellation it mirrors — and like that method it
+   *  takes no `tx()` of its own, because it runs inside `closeRun`'s. The
+   *  mirror-bit flip reads the parents through a subquery FIRST
+   *  (`expireLapsedInner`'s idiom — it must see them while they still read
+   *  live), then the parents take the released word. */
+  releaseClaimsForRun(runId: number, at: number): void {
+    this.db.prepare(
+      'UPDATE claim_paths SET live = 0 WHERE claimId IN ' +
+      "(SELECT id FROM claims WHERE runId = ? AND state = 'live')",
+    ).run(runId);
+    this.db.prepare(
+      "UPDATE claims SET state = 'released', endedAt = ?, endedBy = 'run-closed' " +
+      "WHERE runId = ? AND state = 'live'",
+    ).run(at, runId);
+  }
+
+  /* ── the deviation ledger (build 9 wave 7, D8/D13) ─────────────────────── */
+
+  ledgerFloor(project: string): { floor: number; evidence: string; updatedAt: number } | null {
+    const row = this.db.prepare(
+      'SELECT floor, evidence, updatedAt FROM ledger_floor WHERE project = ?',
+    ).get(project) as { floor: number; evidence: string; updatedAt: number } | undefined;
+    return row ?? null;
+  }
+
+  /** THE FLOOR ONLY EVER RISES (D13) — the conflict arm's WHERE clause is the
+   *  mechanism, not caller discipline: a lower scan later (a plan deleted, a
+   *  worktree's partial docs) can never walk allocation backward into numbers
+   *  already handed out. */
+  raiseLedgerFloor(project: string, floor: number, evidence: string, at: number): void {
+    this.db.prepare(
+      'INSERT INTO ledger_floor (project, floor, evidence, updatedAt) VALUES (?, ?, ?, ?) ' +
+      'ON CONFLICT(project) DO UPDATE SET floor = excluded.floor, ' +
+      'evidence = excluded.evidence, updatedAt = excluded.updatedAt ' +
+      'WHERE excluded.floor > ledger_floor.floor',
+    ).run(project, floor, evidence, at);
+  }
+
+  /**
+   * Allocate `count` contiguous deviation numbers, as ONE transaction — and
+   * the ORDER inside it is the design (D8):
+   *
+   *   THE FILE FIRST, THE COMMIT SECOND. `log.append` runs before the
+   *   INSERTs, inside the same synchronous flow, so a crash — or the
+   *   `PRIMARY KEY (project, n)` backstop firing under a future refactor
+   *   that loses this transaction — leaves numbers in the file that the
+   *   database never committed. Recovery is MAX(file, db): those numbers
+   *   are SKIPPED, NEVER REISSUED. Gaps cost nothing; a reissue is the
+   *   bb47c9e incident (394 D-ref lines rewritten under merge pressure).
+   *
+   * Fails shut until seeded (`409 not-seeded` at the route) — `openCoordDb`'s
+   * own "refuse to start rather than open empty", one level up. The route
+   * owns the 3× in-request retry on a thrown constraint violation.
+   *
+   * `log` is a PARAMETER, not a constructor field: the route holds the
+   * process's one `LedgerLog` (`defaultLedgerLogPath()`), and tests hand in
+   * fixture-homed ones — the same reason `dueDeliveries` takes `replayMs`
+   * from its caller instead of owning policy here.
+   */
+  allocateDeviations(input: {
+    project: string; count: number; title: string; allocatedTo: string;
+    runId: number | null; now?: number;
+  }, log: LedgerLog): AllocateResult {
+    const now = input.now ?? Date.now();
+    return tx(this.db, () => {
+      const floorRow = this.ledgerFloor(input.project);
+      const dbMax = (this.db.prepare(
+        'SELECT MAX(n) AS m FROM ledger_alloc WHERE project = ?',
+      ).get(input.project) as { m: number | null }).m;
+      const fileMax = log.maxAllocated(input.project);
+      // `decideAllocation` (L1) only compares — the store MEASURES maxIssued,
+      // and the file's half is what makes recovery MAX(file, db).
+      const maxIssued = dbMax === null ? fileMax
+        : fileMax === null ? dbMax : Math.max(dbMax, fileMax);
+      const d = decideAllocation(floorRow, maxIssued, input.count);
+      if (!('ok' in d)) return { ok: false as const, why: d.refused };
+      log.append(d.numbers.map((n) => ({
+        project: input.project, n, title: input.title,
+        allocatedTo: input.allocatedTo, at: now,
+      })));
+      for (const n of d.numbers) {
+        this.db.prepare(
+          'INSERT INTO ledger_alloc (project, n, title, allocatedTo, runId, allocatedAt, state) ' +
+          "VALUES (?, ?, ?, ?, ?, ?, 'allocated')",
+        ).run(input.project, n, input.title, input.allocatedTo, input.runId, now);
+      }
+      return {
+        ok: true as const,
+        allocation: {
+          project: input.project, numbers: d.numbers, floor: d.floor,
+          title: input.title, allocatedTo: input.allocatedTo,
+          runId: input.runId, allocatedAt: now,
+        },
+      };
+    });
+  }
+
+  private static readonly LEDGER_COLS =
+    'project, n, title, allocatedTo, runId, allocatedAt, state, landedAt, landedIn';
+
+  private hydrateLedger(r: {
+    project: string; n: number; title: string; allocatedTo: string; runId: number | null;
+    allocatedAt: number; state: string; landedAt: number | null; landedIn: string | null;
+  }): LedgerRow {
+    // "Read back through the L0 guard, never a cast" — the schema's own rule.
+    return { ...r, state: isDeviationAllocState(r.state) ? r.state : 'unknown' };
+  }
+
+  ledgerAllocations(project: string): LedgerRow[] {
+    const rows = this.db.prepare(
+      `SELECT ${CoordStore.LEDGER_COLS} FROM ledger_alloc WHERE project = ? ORDER BY n`,
+    ).all(project) as Parameters<CoordStore['hydrateLedger']>[0][];
+    return rows.map((r) => this.hydrateLedger(r));
+  }
+
+  /** Every not-yet-landed allocation across every project — what
+   *  `sweepLedgerReconcile` walks. */
+  openAllocations(): LedgerRow[] {
+    const rows = this.db.prepare(
+      `SELECT ${CoordStore.LEDGER_COLS} FROM ledger_alloc WHERE state = 'allocated' ` +
+      'ORDER BY project, n',
+    ).all() as Parameters<CoordStore['hydrateLedger']>[0][];
+    return rows.map((r) => this.hydrateLedger(r));
+  }
+
+  /** allocated -> landed, once — `landed` genuinely means "in a merged plan"
+   *  (D13), so the guard keeps a re-scan from re-stamping the date. */
+  markLanded(project: string, n: number, landedIn: string, at: number): void {
+    this.db.prepare(
+      "UPDATE ledger_alloc SET state = 'landed', landedAt = ?, landedIn = ? " +
+      "WHERE project = ? AND n = ? AND state = 'allocated'",
+    ).run(at, landedIn, project, n);
+  }
+
+  /** Allocated at or before `cutoff`, never landed — REPORTED, never
+   *  reclaimed (D13). The cutoff is the CALLER's (the watcher owns the
+   *  7-day policy), the `dueDeliveries(replayMs)` pattern. */
+  staleAllocations(cutoff: number): LedgerRow[] {
+    const rows = this.db.prepare(
+      `SELECT ${CoordStore.LEDGER_COLS} FROM ledger_alloc ` +
+      "WHERE state = 'allocated' AND allocatedAt <= ? ORDER BY project, n",
+    ).all(cutoff) as Parameters<CoordStore['hydrateLedger']>[0][];
+    return rows.map((r) => this.hydrateLedger(r));
   }
 }

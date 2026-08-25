@@ -2031,3 +2031,31 @@
 }
 .program-start-go:active:not(:disabled) { transform: scale(0.98); }
 .program-start-go:disabled { cursor: default; }
+
+/* ── Hot files (Build 9 wave 9) ──────────────────────────────────────────
+   The live claims, intent first. MailStrip's chrome, fleet-side. */
+.hotfiles {
+  margin: 0 var(--sp-4) var(--sp-2);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  background: var(--bg-surface);
+  color: var(--ink-primary);
+  overflow: hidden;
+}
+.hotfiles-head {
+  display: flex; align-items: center; gap: var(--sp-2); width: 100%;
+  padding: var(--sp-2) var(--sp-3); background: none; border: 0;
+  color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.hotfiles-headline { flex: 1; }
+.hotfiles-chevron { color: var(--ink-tertiary); }
+.hotfiles-rows { list-style: none; margin: 0; padding: 0 var(--sp-3) var(--sp-2); }
+.hotfiles-row {
+  display: flex; flex-wrap: wrap; gap: var(--sp-2);
+  padding: var(--sp-1) 0; border-top: 1px solid var(--edge-subtle);
+}
+.hotfiles-holder { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-secondary); }
+.hotfiles-expiry { margin-left: auto; color: var(--ink-tertiary); font-size: var(--text-xs); }
+.hotfiles-intent { flex-basis: 100%; color: var(--ink-primary); }
+.hotfiles-paths { list-style: none; margin: 0; padding: 0; flex-basis: 100%; }
+.hotfiles-path { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-secondary); word-break: break-word; }
