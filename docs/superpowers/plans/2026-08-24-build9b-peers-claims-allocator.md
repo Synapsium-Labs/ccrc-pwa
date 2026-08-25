@@ -10611,7 +10611,7 @@ touches the allocator's own reading of the tree.
   ```
   (Mutants follow the commit, deliberately: they plant into and revert tracked files, which is only
   safe against a clean tree — before this commit, a `git restore` would have eaten sweep edits.)
-- [ ] **Step 8: Measure mutant 1 of 3 — plant a bare legacy ref.** The planted string is assembled
+- [x] **Step 8: Measure mutant 1 of 3 — plant a bare legacy ref.** The planted string is assembled
   by `printf` so this plan's own bytes stay clean:
   ```bash
   cd /home/you/worktrees/ccrc-pwa/still-river \
@@ -10624,19 +10624,19 @@ touches the allocator's own reading of the tree.
   Mutant: one bare legacy ref anywhere in the tree -> `finds zero bare legacy refs` fails, naming
   `server/src/coord/store.ts` and the planted id. The `sed -i '$d'` removes exactly the appended
   line; `git diff --stat` must end empty.
-- [ ] **Step 9: Measure mutant 2 of 3 — starve the corpus.** In the appended describe, change
+- [x] **Step 9: Measure mutant 2 of 3 — starve the corpus.** In the appended describe, change
   `{ cwd: root, maxBuffer: 64 * 1024 * 1024 }` to
   `{ cwd: path.join(root, 'server', 'test'), maxBuffer: 64 * 1024 * 1024 }`, run the Step 6 vitest
   command, revert the edit.
   Mutant: the walk sees a subtree instead of the tree -> `is looking at the real tree` fails
   (a few hundred files at most against the 600 floor), and `sees the alias corpus` fails with it —
   the vacuous-walk failure is loud and specific, never a quiet green.
-- [ ] **Step 10: Measure mutant 3 of 3 — drift the alias regex.** In the appended describe, change
+- [x] **Step 10: Measure mutant 3 of 3 — drift the alias regex.** In the appended describe, change
   `ALIAS`'s `\bwas ` to `\bwass `, run the Step 6 vitest command, revert the edit.
   Mutant: ALIAS no longer matches what BARE excuses -> `sees the alias corpus` fails at 0 **while
   the tree scan stays green** — exactly the drift this third assertion exists to catch. After the
   revert, `git status` must show a clean tree.
-- [ ] **Step 11: The full-suite gate — all three packages, foreground, timeout ≥600000ms each.**
+- [x] **Step 11: The full-suite gate — all three packages, foreground, timeout ≥600000ms each.**
   ```bash
   cd /home/you/worktrees/ccrc-pwa/still-river/server && npm run test
   cd /home/you/worktrees/ccrc-pwa/still-river/agent  && npm run test
@@ -10647,7 +10647,7 @@ touches the allocator's own reading of the tree.
   `shared/api.ts` docstrings), so this gate is the wave's proof, not a formality. Known load flakes
   (`ccd-ws-gc`, `pr-sweep`, `session-hook`, `typecheck-tests`, `ccd-session-state`): re-run IN
   ISOLATION before calling a real break; CI on the quiet box is the arbiter.
-- [ ] **Step 12: Wave close — merge inside the window, deploy agent-first, verify `landed`, release
+- [x] **Step 12: Wave close — merge inside the window, deploy agent-first, verify `landed`, release
   the window.** In order, each a stop point:
   1. Push the branch, open the PR, and merge it **within the quiet window** (`main` is protected —
      PRs only). The window is not over until the merge is in, because any branch cut before it
