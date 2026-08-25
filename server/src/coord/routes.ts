@@ -1694,9 +1694,10 @@ export function registerCoordRoutes(
    * into history VERBATIM, stored word and all — `"held by X until it died"`
    * is an answer lapse-don't-delete exists to keep. `project` optional:
    * absent means every project, which is the HotFilesStrip's whole-fleet
-   * read (live rows only — the landed store keeps no all-projects history
-   * read, so `all=1` without a project answers the live table too rather
-   * than inventing a refusal).
+   * read (live rows only) — and the PWA's `claims({all:true})` history call
+   * rides the same door, so `all=1` without a project answers EVERY
+   * project's rows verbatim (`allClaims`), ended included: the same read
+   * the project arm's `all` gives one project.
    */
   app.get('/api/claims', async (req, reply) => {
     if (deps.cfg.authEnabled) {
@@ -1723,7 +1724,8 @@ export function registerCoordRoutes(
     const claims = project !== null
       ? (all ? deps.coord.claimsForProject(project, true)
              : deps.coord.claimsForProject(project).filter((c) => c.expiresAt > now))
-      : deps.coord.activeClaims().filter((c) => c.expiresAt > now);
+      : (all ? deps.coord.allClaims()
+             : deps.coord.activeClaims().filter((c) => c.expiresAt > now));
     return reply.code(200).send({ ok: true, claims });
   });
 

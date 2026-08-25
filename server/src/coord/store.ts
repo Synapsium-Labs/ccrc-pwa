@@ -2377,6 +2377,16 @@ export class CoordStore {
     return rows.flatMap((r) => this.hydrateClaim(r, this.claimPaths(r.id)) ?? []);
   }
 
+  /** The no-project `?all=1` arm: every project's rows, ended included — the
+   *  same verbatim read `claimsForProject(project, true)` gives one project,
+   *  for the PWA's whole-fleet history call (`api.claims({all:true})`). */
+  allClaims(): ClaimSummary[] {
+    const rows = this.db.prepare(
+      `SELECT ${CoordStore.CLAIM_COLS} FROM claims ORDER BY id`,
+    ).all() as Parameters<CoordStore['hydrateClaim']>[0][];
+    return rows.flatMap((r) => this.hydrateClaim(r, this.claimPaths(r.id)) ?? []);
+  }
+
   /** `all` includes lapsed/released/broken rows — `?all=1`'s "held by X until
    *  it died" (D12: a destroyed claim is destroyed history). */
   claimsForProject(project: string, all = false): ClaimSummary[] {

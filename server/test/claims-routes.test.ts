@@ -218,6 +218,44 @@ describe('POST /api/claims', () => {
   });
 });
 
+describe('GET /api/claims', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  it('all=1 WITHOUT project is history across projects — the ended row is in the answer, verbatim', async () => {
+    const home = mkTmp('ccrc-claims-');
+    seed(home, A.byId, UUID_A);
+    const otherId = 'other-calm-ridge';
+    const otherUuid = 'd'.repeat(36);
+    seed(home, otherId, otherUuid, { project: 'other', workdir: `/w/other/${otherId}` });
+    const w = await openApp(home); app = w.app;
+
+    // demo: acquired then released — a row only history can answer.
+    const acq = await claim(app, { ...A, project: 'demo', paths: ['shared/api.ts'],
+      intent: 'was rewiring' });
+    expect(acq.statusCode).toBe(200);
+    const id = (acq.json() as { ids: number[] }).ids[0]!;
+    expect((await release(app, id, { ...A })).statusCode).toBe(200);
+    // other: still live — the SAME read must carry both projects.
+    expect((await claim(app, { byId: otherId, byUuid: otherUuid, project: 'other',
+      paths: ['ccd/ccd'], intent: 'still at it' })).statusCode).toBe(200);
+
+    // The PWA's history call (`api.claims({all:true})` -> '/api/claims?all=1',
+    // no project): ended rows included, same per-row shape as the project arm.
+    const hist = (await list(app, '?all=1')).json() as
+      { claims: { id: number; project: string; state: string; endedBy: string | null }[] };
+    expect(hist.claims.find((c) => c.id === id),
+      'lapse-don\'t-delete reaches the no-project reader too').toMatchObject(
+      { project: 'demo', state: 'released', endedBy: A.byId });
+    expect(hist.claims.find((c) => c.project === 'other')?.state).toBe('live');
+
+    // The default (no all) stays live-only — byte-identical to before.
+    const live = (await list(app, '')).json() as { claims: { id: number }[] };
+    expect(live.claims.find((c) => c.id === id)).toBeUndefined();
+    expect(live.claims).toHaveLength(1);
+  });
+});
+
 describe('release and break', () => {
   let app: FastifyInstance | undefined;
   afterEach(async () => { if (app) await app.close(); app = undefined; });
