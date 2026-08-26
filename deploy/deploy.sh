@@ -616,6 +616,12 @@ if [ "$TARGET" = "agent" ]; then
   # All executables go through install_atomic — see its comment for why a
   # plain scp over these exact files is a live correctness bug.
   install_atomic ccd/ccd .local/bin/ccd 755
+  # The coordination client, beside ccd because the fleet host is where sessions
+  # run and a session-side client on the server box is a copy nobody invokes. A
+  # plain install_atomic and NOT a shim: it sources nothing, so one file is the
+  # whole program (pinned — `ccrc-api-ship.test.ts`, and the shim's own header
+  # above for what changes the day that stops being true).
+  install_atomic ccd/ccrc-api .local/bin/ccrc-api 755
   install_atomic deploy/notify.sh .cc-sessions/notify.sh 755
   # session-hook.sh + its installer ship every deploy too — the installer is
   # idempotent (it backs up settings.json itself before touching it) and
