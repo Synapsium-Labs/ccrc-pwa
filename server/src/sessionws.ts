@@ -347,10 +347,22 @@ export class SessionStream {
    *  client last saw. An empty list is a legitimate value — it's how the strip
    *  learns a plan was cleared — but the opening no-tasks read is swallowed by
    *  the initial `lastTasksJson === null` case below, so sessions that never
-   *  keep a task list never send a frame at all. */
+   *  keep a task list never send a frame at all.
+   *
+   *  `read.unmeasured` (D-115) is deliberately NOT carried onto the wire here,
+   *  and this is the one of `readTasks`' three call sites where the count has
+   *  nothing to spend itself on. The `tasks` frame is ROWS — `TaskStrip`
+   *  renders one line per `TaskItem` and tallies "2 running · 1 left · 4 ✓"
+   *  from them — and a file whose bytes never arrived has no subject, no
+   *  status and no activeForm, so there is no row to send and no honest count
+   *  to fold into a summary built out of rows. The surface that DOES show a
+   *  denominator is the fleet card's `done/total`, and that one comes from
+   *  `taskProgress` in `watch.ts`, where the count lands. The frame stays
+   *  exactly as wide as it was: additive-only means a new field is allowed,
+   *  not that an unrendered one earns its place. */
   private async checkTasks(cfgDir: string, uuid: string): Promise<void> {
     if (this.stopped) return;
-    const tasks = await readTasks(this.deps.io, cfgDir, uuid);
+    const { tasks } = await readTasks(this.deps.io, cfgDir, uuid);
     if (this.stopped) return;
     const json = JSON.stringify(tasks);
     if (json === this.lastTasksJson) return;

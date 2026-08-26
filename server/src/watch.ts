@@ -1293,6 +1293,20 @@ export class FleetWatcher {
         }
         const cfgDir = configDirFor(this.deps.cfg, r.wrapper);
         if (!cfgDir) return;
+        // THE call site the widened `readTasks` was widened for (D-115): this
+        // is what fills the fleet card's `done/total`, so this is where a task
+        // file the box could not read has to land in the denominator rather
+        // than leaving the tally altogether and reading `2/2` over a plan with
+        // work still in it. The whole read goes into `taskProgress` — the
+        // count is not this caller's to interpret, and passing the pair rather
+        // than unpacking it is what keeps the one rule ("unmeasured is total,
+        // never done") in one place.
+        //
+        // One consequence in the safe direction: a session whose EVERY task
+        // file is unreadable now sets a `0/N` row here where it used to set
+        // nothing at all, because `taskProgress` no longer reads an empty
+        // `tasks` as "no plan" on its own. That is a row saying "N to do,
+        // none measurably done", which is what this sweep actually knows.
         const p = taskProgress(await readTasks(this.deps.io, cfgDir, r.uuid));
         if (p) next.set(r.id, p);
       }),

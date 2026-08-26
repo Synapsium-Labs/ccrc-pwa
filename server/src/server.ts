@@ -1667,10 +1667,20 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // ── PR lifecycle ────────────────────────────────────────────────
   // Every one of these calls isSafeSessionId FIRST: the deleted workspace
   // route did not, and an id is about to become part of an argv.
+  // `.tasks` only, and `readTasks`' `unmeasured` count dropped on the floor
+  // deliberately (D-115): the sole consumer is `draftPr`'s "## Plan" checklist,
+  // which prints `- [ ] <subject>` per task into a PR BODY. A file whose bytes
+  // never came back has no subject to print, and a "- [ ] (1 task unreadable)"
+  // line would put this server's fs trouble into a durable artifact other
+  // people read as the author's own words. The count belongs on the fleet
+  // card's `done/total`, where `watch.ts` spends it. `null` here still means
+  // something else entirely — no registry record or no config dir for the
+  // wrapper, i.e. no task list could be looked for at all — and `draftPr`
+  // treats that as "print no Plan section", same as an empty list.
   const prTasks = async (id: string): Promise<TaskItem[] | null> => {
     const rec = (await readRegistry(deps.io, deps.cfg)).find((r) => r.id === id);
     const cfgDir = rec ? configDirFor(deps.cfg, rec.wrapper) : undefined;
-    return rec && cfgDir ? readTasks(deps.io, cfgDir, rec.uuid) : null;
+    return rec && cfgDir ? (await readTasks(deps.io, cfgDir, rec.uuid)).tasks : null;
   };
 
   app.get('/api/sessions/:id/pr', async (req, reply) => {
