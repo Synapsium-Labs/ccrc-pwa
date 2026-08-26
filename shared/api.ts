@@ -3080,9 +3080,23 @@ export type MailRejectCode = (typeof MAIL_REJECT_CODES)[number];
  * union has never seen is not caught here. The one runtime check on the
  * PRODUCER side is `mail-routes.test.ts`'s kebab-token scanner, and it
  * cannot see a single-word code by construction (it matches only hyphenated
- * tokens) — `paused`, a member of this very union, is invisible to it. Twelve
- * codes exist below today; the next new one would be the thirteenth, not the
- * ninth.
+ * tokens) — `paused`, a member of this very union, is invisible to it.
+ * Thirteen codes exist below today; the next new one would be the
+ * fourteenth, not the ninth.
+ *
+ * `hookstate-unmeasurable` is `worker-busy`'s twin at the same gate and the
+ * distinction between them is the whole of D-115: `worker-busy` asserts a
+ * MEASUREMENT — the session's hookstate was read and says it is mid-turn —
+ * while this one asserts that no measurement happened at all, because the
+ * file could not be read (`hookstate.ts`'s `HookStateRead`). They are
+ * separate codes rather than one because the recovery differs: a coordinator
+ * waits out a `worker-busy` and the turn ends on its own, but waiting out an
+ * unreadable registry file changes nothing on the fleet. Emphatically NOT
+ * `registry-unmeasurable`, whose own recovery rule ("never a blind retry — it
+ * can ORPHAN a workspace `ccd ws-add` already spawned", `coordinator-skill/
+ * references/wave-lifecycle.md` §2) is about a refusal that lands AFTER a
+ * spawn; this one lands after a RESUME, with nothing minted and nothing to
+ * strand.
  *
  * The last two are the ledger's (Build 4, spec §3.2): `unknown-item` — "an
  * item id that is not THIS RUN's", 404 — and `item-terminal` — the item
@@ -3090,12 +3104,13 @@ export type MailRejectCode = (typeof MAIL_REJECT_CODES)[number];
  */
 export type RunRefuseCode =
   | 'claimed-by-another' | 'paused' | 'mail-disabled' | 'cap-concurrency' | 'cap-daily'
-  | 'ambiguous-dispatch' | 'worker-busy' | 'not-dispatched' | 'prhistory-unreadable'
-  | 'bad-transition' | 'unknown-item' | 'item-terminal';
+  | 'ambiguous-dispatch' | 'worker-busy' | 'hookstate-unmeasurable' | 'not-dispatched'
+  | 'prhistory-unreadable' | 'bad-transition' | 'unknown-item' | 'item-terminal';
 
 const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'claimed-by-another': true, paused: true, 'mail-disabled': true, 'cap-concurrency': true,
-  'cap-daily': true, 'ambiguous-dispatch': true, 'worker-busy': true, 'not-dispatched': true,
+  'cap-daily': true, 'ambiguous-dispatch': true, 'worker-busy': true,
+  'hookstate-unmeasurable': true, 'not-dispatched': true,
   'prhistory-unreadable': true, 'bad-transition': true, 'unknown-item': true, 'item-terminal': true,
 };
 export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE_CODE_MAP) as RunRefuseCode[];

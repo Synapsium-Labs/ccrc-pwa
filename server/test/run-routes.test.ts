@@ -1446,12 +1446,65 @@ describe('dispatch refuses to /clear a session it can observe is mid-turn (revie
     expect(w.coord.run(opened.id)?.state).toBe('planned');   // dispatch never landed
   });
 
-  it('still proceeds when no hookstate file exists at all — unreadable/absent is not proof of busy', async () => {
+  // Renamed (D-115): this case only ever seeded an ABSENT file, and the old
+  // title's "unreadable/absent" claimed a second condition it never exercised
+  // — the exact conflation the gate itself made one function call away. The
+  // unreadable half is now its own case, and it refuses.
+  it('still proceeds when no hookstate file exists at all — an ABSENT file is not proof of busy', async () => {
     const home = mkTmp('ccrc-runs-');
     seed(home, 'demo-busy2');   // no hookstate file written
     const { run, calls } = makeRunner(home);
     const w = await openApp(home, run); app = w.app;
     const opened = (await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-busy2' }))
+      .json() as { id: number };
+    const res = await postDispatch(app, opened.id);
+    expect(res.statusCode).toBe(200);
+    expect(calls.some((c) => c[0] === 'send-keys')).toBe(true);
+  });
+
+  // D-115's first consumer, and the only one of its three that ends in a
+  // KEYSTROKE. Before this, `readHookState` folded "the file is there and I
+  // could not read it" into the same `null` as "there is no file", the gate
+  // read that `null` as not-busy, and `/clear` went into a pane that may have
+  // been mid-turn — discarding a real context on a read that measured
+  // nothing. The fixture makes that concrete: the hookstate on disk says
+  // `working`, and only its READ is degraded.
+  it('an UNMEASURABLE hookstate refuses the dispatch instead of clearing a maybe-mid-turn session', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-busy3');
+    seedHookState(home, 'demo-busy3', { state: 'working' });
+    const { run, calls } = makeRunner(home);
+    // ONE file degraded, and it is not a registry field: the row beside it
+    // reads clean, so `readRegistryMeasured`'s own refusal cannot be what
+    // answers here and `registry-unmeasurable` is off the table by
+    // construction. `unreadableField` rather than a chmod: the listed-but-
+    // its-bytes-never-came-back shape is what a remote fleet actually
+    // produces (a dropped agent-WS round trip), and it is real under a root
+    // runner, which `chmod 000` is not (D-116).
+    const w = await openApp(home, run, { io: unreadableField('demo-busy3', 'hookstate.json') });
+    app = w.app;
+    const opened = (await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-busy3' }))
+      .json() as { id: number };
+    const res = await postDispatch(app, opened.id);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ ok: false, refused: 'hookstate-unmeasurable' });
+    // The POINT of the guard, not merely its return value: no `/clear` left
+    // the server, and nothing on the run row claims one did.
+    expect(calls.some((c) => c[0] === 'send-keys')).toBe(false);
+    expect(w.coord.run(opened.id)?.state).toBe('planned');   // dispatch never landed
+    expect(w.coord.run(opened.id)?.clearedAt).toBeNull();
+  });
+
+  it('a hookstate that reads DONE still proceeds — the refusal is about the read, not about caution', async () => {
+    // The positive control that separates this fix from "the gate now refuses
+    // whenever it is unsure". A file that was read, and says the last turn
+    // ended, still clears and dispatches exactly as before.
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-busy4');
+    seedHookState(home, 'demo-busy4', { state: 'done' });
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-busy4' }))
       .json() as { id: number };
     const res = await postDispatch(app, opened.id);
     expect(res.statusCode).toBe(200);

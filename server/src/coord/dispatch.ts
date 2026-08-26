@@ -6,7 +6,7 @@ import type { Deps } from '../server.js';
 import { cutShort } from '../lifecycle.js';
 import type { KeyedQueue } from '../inject/queue.js';
 import { measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
-import { readHookState } from '../hookstate.js';
+import { readHookStateMeasured } from '../hookstate.js';
 import { CCD_ARGV, verbSupported, sweepDec } from '../ccdargv.js';
 import { sendPrompt } from '../inject/send.js';
 import { type AdvanceResult, type CoordStore } from './store.js';
@@ -77,7 +77,7 @@ export type DispatchOutcome =
   | { ok: false; kind: 'oversize'; limit: number; detail: string }
   | { ok: false; kind: 'refused';
       code: Extract<RunRefuseCode, 'paused' | 'mail-disabled' | 'cap-concurrency' | 'cap-daily' |
-        'ambiguous-dispatch' | 'worker-busy'>;
+        'ambiguous-dispatch' | 'worker-busy' | 'hookstate-unmeasurable'>;
       limit?: number; running?: number; used?: number; candidates?: number }
   /** `stderr` is PRESENT exactly when the ccd call in the same dispatch ALSO
    *  failed, and it is then ccd's own words. Two things went wrong on the
@@ -407,9 +407,11 @@ export async function dispatchRun(
     // call site rather than only in the spec: an unmeasured value
     // persisted by `markDispatched` STOPS being a transient read and
     // BECOMES a fact the run row carries forever; and a degraded
-    // `record.uuid` (`''`) fed to `readHookState` below looks up a
-    // hookstate file that matches no real one, reading back `null` —
-    // which the busy gate treats as "not busy" — silently turning a
+    // `record.uuid` (`''`) fed to `readHookStateMeasured` below looks up a
+    // hookstate file that matches no real one, reading back `no-state`
+    // (`null`, before D-115 gave that answer a name) — which the busy gate
+    // still treats as "not busy", correctly, because it IS a measurement of
+    // an identity that does not match — silently turning a
     // FAIL-SHUT busy gate FAIL-OPEN on a session this read simply could
     // not measure, not one this read proved idle.
     //
@@ -447,16 +449,37 @@ export async function dispatchRun(
     // empty" is not "nothing is pending", and a `clearedAt` stamped from
     // `sendPrompt`'s return alone would assert a measurement the server
     // never made. This reads the SAME hookstate the mail lane's own gate
-    // reads; when it is present and says the session is still working, the
-    // dispatch is refused OUTRIGHT rather than risking exactly that false
-    // record. An UNREADABLE/absent hookstate (no prior turn, or a session
-    // whose harness has not written one yet — the ordinary shape for a
-    // workspace this fresh) is not, by itself, proof of busy-ness and is
-    // left to proceed, same as it always has.
+    // reads.
+    //
+    // TWO CASES, and D-115 is what happens when they are one (this is the
+    // arm of that deviation that ends in a KEYSTROKE, which is why it is
+    // fixed first):
+    //
+    //  - The read HAPPENED and the file does not describe a live turn —
+    //    absent, stale, from a previous process, `done` (`no-state`, or an
+    //    `ok` state of `done`). That is the ordinary shape for a workspace
+    //    this fresh, or one whose last turn ended, and it proceeds exactly
+    //    as it always has.
+    //  - The read did NOT happen (`unmeasured`): the file is there and this
+    //    box could not read it, so nothing was measured about this session
+    //    at all. It could say `working`. Proceeding here would send `/clear`
+    //    into a possibly mid-turn pane and discard a real context on the
+    //    strength of a read that answered nothing — a FAIL-SHUT gate turned
+    //    FAIL-OPEN by a permission bit. It refuses, with its own code:
+    //    `worker-busy` would assert the measurement this branch is defined
+    //    by not having, and a coordinator reading it would settle in to wait
+    //    out a turn that may not exist.
+    //
+    // `readHookStateMeasured`, not `readHookState`, is the whole mechanism —
+    // the folded form cannot express the second case, which is why the gate
+    // read it wrong for as long as it did.
     const hs = recordIdentity
-      ? await readHookState(deps.io, deps.cfg.registryDir, sessionId, recordIdentity.uuid, Date.now())
+      ? await readHookStateMeasured(deps.io, deps.cfg.registryDir, sessionId, recordIdentity.uuid, Date.now())
       : null;
-    if (hs !== null && hs.state !== 'done') {
+    if (hs !== null && !hs.ok && hs.reason === 'unmeasured') {
+      return { ok: false, kind: 'refused', code: 'hookstate-unmeasurable' };
+    }
+    if (hs !== null && hs.ok && hs.state.state !== 'done') {
       return { ok: false, kind: 'refused', code: 'worker-busy' };
     }
     const clearRes = await sendPrompt({ tmux: deps.tmux, queue: deps.queue }, sessionId, '/clear');
