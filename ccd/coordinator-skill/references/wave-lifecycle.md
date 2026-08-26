@@ -371,7 +371,7 @@ paraphrase it into your own words.
 
 ### 4b — Settle the work items, AFTER the advance answers `ok`
 
-`POST /api/runs/:id/items`
+`GET /api/runs/:id/items` / `POST /api/runs/:id/items`
 `{"items":[{"id":<item id>,"state":"done","claimedBy":"<worker id>"}, …]}`
 → `{"ok":true,"id":<run id>,"items":{"done":<n>,"total":<n>}}` — the fresh
 tally, which is what the board renders.

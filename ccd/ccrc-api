@@ -70,6 +70,12 @@ declare -A ROUTES=(
   [runs.advance]='POST|/api/runs/{id}/advance|yes|-'
   [runs.close]='POST|/api/runs/{id}/close|yes|-'
   [runs.items]='POST|/api/runs/{id}/items|yes|-'
+  # The READ half of the row above, and it exists because the write half was
+  # unusable without it: settling needs item IDs, and until this route shipped
+  # nothing published them — `runs list` carries only {done,total}. A live
+  # coordinator reached the settle call with four titles and no ids, guessed 1,
+  # and was refused `unknown-item`.
+  [runs.items-list]='GET|/api/runs/{id}/items|yes|-'
   [mail.list]='GET|/api/mail|no|to'
   [mail.send]='POST|/api/mail|no|-'
   # `fetch` and `ack` take the DELIVERY id, never the mail row's own id — two

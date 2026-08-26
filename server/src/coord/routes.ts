@@ -1249,6 +1249,58 @@ export function registerCoordRoutes(
   });
 
   /**
+   * `GET /api/runs/:id/items` — the wave's declared ledger, with the item IDs.
+   *
+   * NET-NEW, and it closes a hole that made its own sibling unusable. Settling
+   * is `POST /api/runs/:id/items` with `{"items":[{"id":<n>,"state":"done"}]}`
+   * — it has always required IDs, and until this route existed NOTHING
+   * published them. `GET /api/runs` projects `RunItemTally`, which is
+   * `{done,total}` and nothing else; the dispatch response never carried them;
+   * `CoordStore.workItems` had the rows all along and no route asked. So a
+   * coordinator that did everything right reached the settle call holding four
+   * titles and no ids, guessed `1`, and was refused `unknown-item` — which is
+   * exactly what happened on a live programme, and the reason it stopped there
+   * (correctly, rather than guessing again) is the only reason the tally was
+   * not quietly wrong instead. (D-842.)
+   *
+   * Same dual-auth shape as `GET /api/runs` above and for the same reason: the
+   * coordinator reads it cookieless from the fleet host with the box token,
+   * while the PWA reads it with a session. Read-only, so it takes no mutex.
+   */
+  app.get('/api/runs/:id/items', async (req, reply) => {
+    // Authenticate before answering anything, including `501 not-configured` —
+    // `GET /api/runs`'s own comment argues this at length; the same argument
+    // applies unchanged here.
+    if (deps.cfg.authEnabled) {
+      const session = sessionAuth(req);
+      if (session.reason !== 'session') {
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        if (token !== 'ok') {
+          return reply.code(401).send({
+            ok: false,
+            error: 'unauthenticated',
+            verdict: session.verdict,
+            detail: 'GET /api/runs/:id/items takes a session cookie OR the box token ' +
+              `(${MAIL_TOKEN_HEADER}); the coordinator skill reads it cookieless from the fleet host`,
+          });
+        }
+      }
+    }
+    if (!deps.coord) return notConfigured(reply);
+    const { id: idParam } = req.params as { id: string };
+    const id = Number(idParam);
+    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    // An unknown run and a run with no declared ledger are DIFFERENT answers a
+    // caller acts on differently: the first means the id is wrong, the second
+    // means this wave declared none (the board renders `—`, not `0/0`). They
+    // must not both come back as an empty array.
+    if (deps.coord.run(id) === null) {
+      return reply.code(404).send({ ok: false, error: 'unknown-run' });
+    }
+    return { ok: true, items: deps.coord.workItems(id) };
+  });
+
+  /**
    * `GET /api/feed?limit=<n>` (Task 10, orchestrator-added scope: PR J
    * interface 5) — the durable archive behind `NotifyLog`'s in-memory ring,
    * oldest-first. Survives both a ring eviction (the ring keeps only the

@@ -233,3 +233,74 @@ describe('items.ts is a decision, not an adapter', () => {
     expect(src).not.toMatch(/runCcd|verifyDone|CCD_ARGV/);
   });
 });
+
+// The READ half. It is a separate describe because it closes a hole rather than
+// covering a feature: settling has ALWAYS required item ids, and until this
+// route shipped nothing published them. `GET /api/runs` projects
+// `RunItemTally` — `{done,total}` and nothing else — the dispatch response
+// never carried them, and `CoordStore.workItems` had the rows the whole time
+// with no route asking. A live coordinator reached the settle call holding four
+// titles and no ids, guessed `1`, and was refused `unknown-item`. It stopped
+// there rather than guessing again, which is the only reason the console tally
+// was not quietly wrong instead of merely stuck.
+describe('GET /api/runs/:id/items — the ids the settle has always required', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { await app?.close(); app = undefined; });
+
+  const getItems = (a: FastifyInstance, id: number, token: string | null = TOKEN) =>
+    a.inject({ method: 'GET', url: `/api/runs/${id}/items`,
+      headers: token === null ? {} : { 'x-ccrc-mail-token': token } });
+
+  it('returns every declared item with the id the settle route keys on', async () => {
+    const home = mkTmp('coord-items-get-');
+    const o = await open(home); app = o.app;
+    const { runId, ids } = runWith(o.coord, ['first thing', 'second thing', 'third thing']);
+    const res = await getItems(app, runId);
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { ok: boolean; items: { id: number; title: string; state: string }[] };
+    expect(body.ok).toBe(true);
+    expect(body.items.map((i) => i.id)).toEqual(ids);
+    expect(body.items.map((i) => i.title)).toEqual(['first thing', 'second thing', 'third thing']);
+    expect(body.items.every((i) => i.state === 'pending')).toBe(true);
+  });
+
+  it('round-trips: every id it returns is one the settle route accepts', async () => {
+    // The property that makes this route worth having, and the one a shape
+    // assertion alone would not prove. Read the ids, settle them, read again.
+    const home = mkTmp('coord-items-roundtrip-');
+    const o = await open(home); app = o.app;
+    const { runId } = runWith(o.coord, ['a', 'b']);
+    const read = (await getItems(app, runId)).json() as { items: { id: number }[] };
+    const settle = await postItems(app, runId,
+      { items: read.items.map((i) => ({ id: i.id, state: 'done' })) });
+    expect(settle.statusCode).toBe(200);
+    const after = (await getItems(app, runId)).json() as { items: { state: string }[] };
+    expect(after.items.map((i) => i.state)).toEqual(['done', 'done']);
+  });
+
+  it('separates an unknown run from a run that declared no ledger', async () => {
+    // Two conditions a caller acts on differently — "your id is wrong" versus
+    // "this wave declared none", which the board renders as `—` rather than
+    // `0/0`. Collapsing both to an empty array is the overloaded-null shape
+    // this codebase bans by name.
+    const home = mkTmp('coord-items-absent-');
+    const o = await open(home); app = o.app;
+    const { runId } = runWith(o.coord, []);
+    const declaredNone = await getItems(app, runId);
+    expect(declaredNone.statusCode).toBe(200);
+    expect((declaredNone.json() as { items: unknown[] }).items).toEqual([]);
+
+    const unknown = await getItems(app, runId + 999);
+    expect(unknown.statusCode).toBe(404);
+    expect((unknown.json() as { error: string }).error).toBe('unknown-run');
+  });
+
+  it('refuses a non-integer id as bad-request, never as unknown-run', async () => {
+    const home = mkTmp('coord-items-badid-');
+    const o = await open(home); app = o.app;
+    const res = await app.inject({ method: 'GET', url: '/api/runs/not-a-number/items',
+      headers: { 'x-ccrc-mail-token': TOKEN } });
+    expect(res.statusCode).toBe(400);
+    expect((res.json() as { error: string }).error).toBe('bad-request');
+  });
+});

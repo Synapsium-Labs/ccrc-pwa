@@ -190,6 +190,14 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     '`unknown-run` recovery — so a gated one wedges the coordinator out of its own run at exactly ' +
     'the two moments it cannot diagnose itself. The handler requires a live session OR a valid box ' +
     'token (coord/routes.ts), so nothing is published to the tailnet that was published before'],
+  ['GET /api/runs/:id/items',
+    "EXEMPT-BUT-AUTHENTICATED (D-149's pattern), the same shape as `GET /api/runs` above and for " +
+    'the same caller: the coordinator reads its own wave ledger COOKIELESS from the fleet host. ' +
+    'It has to — settling the ledger (`POST` on this same path) keys on item IDS, and this route ' +
+    'is the only thing that publishes them; `GET /api/runs` carries the tally and no ids. Gated, ' +
+    'a coordinator can declare a ledger it can never settle, which is exactly the state one live ' +
+    'programme reached. The handler requires a live session OR a valid box token ' +
+    '(coord/routes.ts), so nothing is published to the tailnet that was not before'],
   ['GET /api/lifecycle',
     "EXEMPT-BUT-AUTHENTICATED (D-149's pattern, ruled for this route by build 9 D16), the same " +
     'shape as `GET /api/runs` directly above and for a sharper reason: a WORKER asks this route ' +

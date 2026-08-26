@@ -112,6 +112,7 @@ describe('the closed route table', () => {
     [['runs', 'advance', '12'], 'POST', '/api/runs/12/advance'],
     [['runs', 'close', '12'], 'POST', '/api/runs/12/close'],
     [['runs', 'items', '12'], 'POST', '/api/runs/12/items'],
+    [['runs', 'items-list', '12'], 'GET', '/api/runs/12/items'],
     [['mail', 'list'], 'GET', '/api/mail'],
     [['mail', 'send'], 'POST', '/api/mail'],
     [['mail', 'fetch', '7'], 'GET', '/api/mail/7'],
@@ -142,13 +143,20 @@ describe('the closed route table', () => {
     // sets AGREE. A new row is now red until it is exercised.
     const src = fs.readFileSync(CCRC_API, 'utf8');
     const table = src.slice(src.indexOf('declare -A ROUTES=('));
-    const keys = [...table.slice(0, table.indexOf('\n)')).matchAll(/^\s*\[([a-z.]+)\]=/gm)].map((m) => m[1]!);
+    // The class allows a HYPHEN: `runs items-list` is the first two-word verb,
+    // and a `[a-z.]+` class silently DROPPED it (D-843) — this caught that,
+    // which is the whole reason it reads the client instead of counting ROWS.
+    const keys = [...table.slice(0, table.indexOf('\n)')).matchAll(/^\s*\[([a-z.-]+)\]=/gm)].map((m) => m[1]!);
     expect(keys.sort()).toEqual(ROWS.map(([a]) => `${a[0]}.${a[1]}`).sort());
     // Stated separately so the number itself is a claim someone has to edit.
     // D-688: `POST /api/coord/pause` was inferred from routes.ts rather than
     // measured from the callers, and coordinator clause 4 forbids a session
     // from touching that file at all. Its absence is a decision.
-    expect(keys).toHaveLength(17);
+    //
+    // Eighteen since `runs items-list` landed. That row is NOT a widening of
+    // the surface by imitation — it is the READ half of `runs items`, which
+    // was unusable without it: settling needs ids and nothing published them.
+    expect(keys).toHaveLength(18);
   });
 
   it('has no verb that reaches the pause door', async () => {

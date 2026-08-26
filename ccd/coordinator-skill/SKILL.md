@@ -257,6 +257,11 @@ not after.
    Once — and only once —
    that advance answers `ok`, settle the wave's work items:
    `POST /api/runs/:id/items` with `{"items":[{"id":<n>,"state":"done"}]}`.
+   **Read the ids first — do not guess them.** `GET /api/runs/:id/items`
+   (`ccrc-api runs items-list <run>`) is the only thing that publishes them:
+   `GET /api/runs` carries the TALLY (`{done,total}`) and no ids, and the
+   dispatch response never carried them either. A coordinator that guessed `1`
+   was refused `unknown-item` and was right to stop rather than guess twice.
    That ordering IS the authorisation: the server's own re-measurement is what
    makes the claim a fact (clause 6), and settling straight off the mail would
    put `5/5` on the console for a wave nothing verified.
