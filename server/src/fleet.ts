@@ -4,7 +4,7 @@ import type { FleetIO } from './io.js';
 import { readRegistry, readSessionRecord } from './registry.js';
 import type { SessionRecord } from './registry.js';
 import { readLimits } from './limits.js';
-import { liveSessionStatus, readLiveState } from './livestate.js';
+import { liveSessionStatus, readLiveState, readLiveStateMeasured } from './livestate.js';
 import type { Statusline } from './pane/statusline.js';
 import type { HookState } from './hookstate.js';
 import type { FleetSession, LifecycleInput, PrState, SessionStatus, TaskProgress } from '../../shared/api.js';
@@ -134,6 +134,18 @@ export async function liveStatus(io: FleetIO, cfg: CcrcConfig, tmux: Tmux, id: s
   // TOWARD refusing an interrupt rather than granting one on a guess.
   const cfgDir = configDirFor(cfg, rec.wrapper);
   if (!pid || !cfgDir) return 'idle';
+  // THE FOLDED READ, KEPT ON PURPOSE — do not "finish" D-115 here.
+  // `assembleFleet` below takes `readLiveStateMeasured` and paints an
+  // unreadable live file `busy`; this function must keep answering `'idle'`
+  // for it, and the two are not drift. A card DISPLAYS, so its reassuring
+  // word is the dangerous one; this function's sole consumer is
+  // `POST /api/sessions/:id/interrupt`'s `… === 'busy'` check, which REFUSES
+  // on anything else — so here `'idle'` is what withholds the keystroke, and
+  // "fail toward busy" would GRANT an interrupt on a read that measured
+  // nothing, inverting D-115's own intent one line from its remedy. Same
+  // direction the `!cfgDir` fallback above already argues for, on the same
+  // grounds. `fleet.test.ts` pins this answer beside `assembleFleet`'s
+  // opposite one, on ONE fixture, so the asymmetry reads as a decision.
   const live = await readLiveState(io, cfgDir, pid);
   return live ? liveSessionStatus(live.status) : 'idle';
 }
@@ -221,8 +233,19 @@ export async function assembleFleet(
       const pid = await tmux.panePid(r.id);
       const cfgDir = configDirFor(cfg, r.wrapper);
       if (pid && cfgDir) {
-        const live = await readLiveState(io, cfgDir, pid);
-        if (live) {
+        // D-115: `readLiveStateMeasured`, not `readLiveState`. The folded read
+        // answered ONE null for four conditions, and this block spent it as
+        // "leave `status` at the `alive` default" — which is `'idle'`. So a
+        // pane whose `<pid>.json` this box could not read (EACCES; in remote
+        // mode one dropped agent-WS round trip) painted `idle · 1m ago` on the
+        // fleet card while its own terminal showed the spinner. That is the
+        // exact symptom `liveSessionStatus`'s own docstring argues against one
+        // file over — "a status we don't recognise is far likelier to be new
+        // work than new rest" — reached by a path that never got as far as a
+        // status word.
+        const read = await readLiveStateMeasured(io, cfgDir, pid);
+        if (read.ok) {
+          const live = read.state;
           status = liveSessionStatus(live.status);
           // A derived name is Claude Code's session handle (`openclawhetzner-42`
           // — cwd basename plus a counter), never a description of the work, so
@@ -239,6 +262,29 @@ export async function assembleFleet(
           // distinction surviving the collapse rather than dying in it.
           liveWaiting = live.status === 'waiting';
           liveWaitingFor = live.waitingFor;
+        } else if (read.reason === 'unmeasured') {
+          // `busy` is this SURFACE's fail-shut direction, and only this
+          // surface's: a card is read as permission to walk away, so the
+          // reassuring word is the dangerous one here. `liveStatus` two
+          // functions up answers `'idle'` on this identical failure ON
+          // PURPOSE — its sole consumer is the interrupt route's
+          // `… === 'busy'`, which REFUSES on idle, so "fail toward busy"
+          // there would GRANT interrupts on a read that measured nothing.
+          // Both are failing away from the act that cannot be taken back;
+          // `fleet.test.ts` pins the pair together on ONE fixture so the
+          // asymmetry cannot be mistaken for drift and quietly "fixed".
+          //
+          // `status` ALONE moves. `name`, `statusUpdatedAt`, `version`,
+          // `liveWaiting` and `liveWaitingFor` stay at their defaults,
+          // because an unmeasured read has no fields to report and inventing
+          // them is the same defect one field over — `statusUpdatedAt` in
+          // particular renders as the `· 1m ago` beside the word, so a
+          // fabricated one would put a fresh timestamp under a status nobody
+          // measured. `no-state` — absent, half-written, or naming no session
+          // — is untouched and still leaves the whole block at `idle`: that
+          // is a real measurement of a pane that has published nothing yet,
+          // the ordinary shape in the seconds after `ccd ws-add`.
+          status = 'busy';
         }
       }
     }

@@ -829,6 +829,7 @@ const mkLadderDeps = (home: string, io: FleetIO): Deps => {
 const pollTimer = (s: SessionStream): unknown => (s as unknown as { poll: unknown }).poll;
 const streamUuid = (s: SessionStream): string | null => (s as unknown as { uuid: string | null }).uuid;
 const streamTailer = (s: SessionStream): unknown => (s as unknown as { tailer: unknown }).tailer;
+const streamStatus = (s: SessionStream): string | null => (s as unknown as { status: string | null }).status;
 
 describe('foreignConfigDirs (spec §5.2)', () => {
   it('lists every OTHER account in roster order, and never the session\'s own', () => {
@@ -1142,6 +1143,72 @@ describe('registry ladder: resolve() three-way, degrade-and-heal vs refuse (Task
       expect(streamUuid(stream)).toBe(uuidBefore);       // untouched
       expect(streamTailer(stream)).toBe(tailerBefore);   // SAME instance — never torn down/rebuilt
       expect(frames).toEqual([]);                          // no rotated, no status, nothing guessed
+    } finally {
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+// D-115's third consumer, the chat half. `resolve()` reads the same live
+// status file `assembleFleet` does, through the same folded `readLiveState`,
+// and read the same `null` as "leave `status` at the alive default" —
+// `'idle'`. So the chat header over an open transcript said `idle` for a
+// session whose `<pid>.json` this box never managed to read. `fleet.ts` and
+// this file must agree: they are two renderings of one measurement, and a
+// fleet card reading `busy` beside a chat header reading `idle` for the same
+// session in the same second is worse than either answer alone.
+describe('chat header: an unmeasured live status file is not a session at rest (D-115)', () => {
+  const LIVE = path.join('sessions', `${PID}.json`);
+
+  it('flips the header to busy when the live file stops being readable, and back on the tick that heals', async () => {
+    const home = mkTmp('ccrc-live-hdr-');
+    seedRoster(home);
+    seed(home);   // the live file this fixture writes says status: 'idle'
+    let broken = false;
+    const io = degradedReadIO((p) => broken && p.endsWith(LIVE));
+    const deps = mkLadderDeps(home, io);
+    const frames: { type: string; status?: string; statusUpdatedAt?: number | null }[] = [];
+    const stream = new SessionStream(deps, new Bus(), ID,
+      (m) => frames.push(m as { type: string; status?: string; statusUpdatedAt?: number | null }));
+    try {
+      await stream.start();          // clean resolve: the file reads 'idle'
+      frames.length = 0;
+
+      broken = true;                 // listed, and its bytes never come back
+      await (stream as unknown as { tick: () => Promise<void> }).tick();
+      const flip = frames.filter((f) => f.type === 'status');
+      expect(flip).toHaveLength(1);
+      expect(flip[0]!.status).toBe('busy');
+      // Nothing invented alongside it: an unmeasured read carries no
+      // timestamp, and the header renders this one as the `· 1m ago` beside
+      // the word.
+      expect(flip[0]!.statusUpdatedAt).toBeNull();
+
+      frames.length = 0;
+      broken = false;                // heals — the file was idle all along
+      await (stream as unknown as { tick: () => Promise<void> }).tick();
+      const back = frames.filter((f) => f.type === 'status');
+      expect(back).toHaveLength(1);
+      expect(back[0]!.status).toBe('idle');
+      expect(back[0]!.statusUpdatedAt).toBe(1784582728369);
+    } finally {
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('… and an ABSENT live file still resolves idle — the positive control', async () => {
+    // Same separation the fleet suite draws: this fix must not turn every
+    // pane with no published `<pid>.json` into a busy header.
+    const home = mkTmp('ccrc-live-hdr-');
+    seedRoster(home);
+    seed(home);
+    rmSync(path.join(home, '.claude-a', LIVE));
+    const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, () => {});
+    try {
+      await stream.start();
+      expect(streamStatus(stream)).toBe('idle');
     } finally {
       stream.stop();
       rmSync(home, { recursive: true, force: true });

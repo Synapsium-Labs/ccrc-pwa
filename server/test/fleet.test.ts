@@ -11,7 +11,7 @@ import type { PrState } from '../../shared/api.js';
 import { parseRoster } from '../../shared/roster.js';
 import { mkTmp } from './tmpHelpers.js';
 import { DEFAULT_TEST_ROSTER, seedRoster } from './helpers.js';
-import { unreadableField } from './ioDoubles.js';
+import { degradedReadIO, unreadableField } from './ioDoubles.js';
 
 const seedSession = (home: string, id: string, wrapper: string, extra: Record<string, string> = {}) => {
   const reg = path.join(home, '.cc-sessions');
@@ -160,6 +160,91 @@ describe('liveStatus', () => {
     };
     const unreadableWrapper = unreadableField('claude-quiet-mesa', 'wrapper');
     const status = await liveStatus(unreadableWrapper, loadConfig({ CCRC_HOME: home }), new Tmux(run), 'claude-quiet-mesa');
+    expect(status).toBe('idle');
+  });
+});
+
+// D-115's third consumer, the display half. `readLiveState` folded "the file
+// is there and I could not read it" into the same `null` as "there is no file
+// yet", and `assembleFleet` reads that `null` as "leave `status` at the
+// `alive` default" — which is `'idle'`. So a session whose `<pid>.json` this
+// box could not read painted `idle · 1m ago` on the fleet card while its own
+// pane showed the spinner: rest asserted on the strength of a permission bit,
+// or of one dropped agent-WS round trip in remote mode.
+//
+// THE ASYMMETRY WITH `liveStatus` DIRECTLY ABOVE IS DELIBERATE, and the third
+// case here pins it so the next reader finds the reason beside the pin rather
+// than in a plan. Same failure, opposite answer, and both are fail-shut:
+// `assembleFleet` DISPLAYS, so its dangerous direction is the reassuring one
+// (`idle`); `liveStatus`'s sole consumer is the interrupt route
+// (`server.ts`'s `… === 'busy'`), which REFUSES on anything but `busy`, so
+// there the reassuring word is the safe one and "fail toward busy" would GRANT
+// interrupts on a read that measured nothing. The two surfaces are not
+// inconsistent — they are each failing away from the act that cannot be taken
+// back.
+describe('assembleFleet: an unmeasured live status file is not a session at rest (D-115)', () => {
+  const ID = 'claude-quiet-mesa';
+  const PID = 4242;
+  const LIVE = path.join('sessions', `${PID}.json`);
+
+  /** An alive pane whose live file says the session is IDLE — so a card that
+   *  reads `busy` below can only have come from the guard, never from the
+   *  file's own contents. */
+  const setup = (withLive = true): { home: string; run: Runner } => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, ID, 'claude');
+    const cfgDir = path.join(home, '.claude');
+    mkdirSync(path.join(cfgDir, 'sessions'), { recursive: true });
+    if (withLive) {
+      writeFileSync(path.join(cfgDir, 'sessions', `${PID}.json`), JSON.stringify({
+        pid: PID, sessionId: '1'.repeat(36), cwd: `/data/projects/${ID}`,
+        name: 'quiet-mesa-1', status: 'idle', statusUpdatedAt: 1784600000000, version: '2.1.233',
+      }));
+    }
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    return { home, run };
+  };
+
+  it('paints an unreadable live file busy, and invents none of the fields that file was carrying', async () => {
+    const { home, run } = setup();
+    const io = degradedReadIO((p) => p.endsWith(LIVE));
+    const fleet = await assembleFleet(io, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000);
+    const s = fleet.find((x) => x.id === ID)!;
+    expect(s.status).toBe('busy');
+    // An unmeasured read has no fields to report. Carrying a `statusUpdatedAt`
+    // or a `version` through this arm would be the same defect one field over
+    // — and `statusUpdatedAt` in particular is what the card renders as the
+    // `· 1m ago` beside the word, so a fabricated one would put a fresh
+    // timestamp under a status nobody measured.
+    expect(s.statusUpdatedAt).toBeNull();
+    expect(s.version).toBeNull();
+    expect(s.name).toBeNull();
+    expect(s.dialogPending).toBe(false);
+  });
+
+  it('… and an ABSENT live file still paints idle — the ordinary shape in the seconds after ws-add', async () => {
+    // The positive control, and it is not decoration: it separates this fix
+    // from "the fleet now paints every quiet session busy". A fresh workspace
+    // whose pane has not published a `<pid>.json` yet is the single most
+    // common shape on this fleet, and it must keep reading idle.
+    const { home, run } = setup(false);
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000);
+    expect(fleet.find((x) => x.id === ID)!.status).toBe('idle');
+  });
+
+  it('liveStatus is NOT changed by this: the SAME unreadable file still answers idle, so the interrupt route still refuses', async () => {
+    // The deliberate asymmetry, on one fixture so the two answers cannot be
+    // read as a coincidence of two different setups. `liveStatus`'s `'idle'`
+    // is the PROTECTIVE answer — its only consumer refuses on it — and its
+    // three pins above are untouched by this task.
+    const { home, run } = setup();
+    const io = degradedReadIO((p) => p.endsWith(LIVE));
+    const status = await liveStatus(io, loadConfig({ CCRC_HOME: home }), new Tmux(run), ID);
     expect(status).toBe('idle');
   });
 });

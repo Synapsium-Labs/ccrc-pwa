@@ -2,7 +2,7 @@ import type { Deps } from './server.js';
 import type { Bus, Notice } from './bus.js';
 import { configDirFor, type CcrcConfig } from './config.js';
 import { measuredIdentity, readSessionRecord } from './registry.js';
-import { liveSessionStatus, readLiveState } from './livestate.js';
+import { liveSessionStatus, readLiveStateMeasured } from './livestate.js';
 import {
   rungRank, TranscriptResolver, type TranscriptResolution,
 } from './transcript/resolve.js';
@@ -498,11 +498,33 @@ export class SessionStream {
       status = 'idle';
       const pid = await this.deps.tmux.panePid(this.id);
       if (pid) {
-        const live = await readLiveState(this.deps.io, cfgDir, pid);
-        if (live) {
-          if (live.cwd) cwd = live.cwd;
-          status = liveSessionStatus(live.status);
-          statusUpdatedAt = live.statusUpdatedAt;
+        // D-115, the chat half of the same fix `assembleFleet` takes (see its
+        // block in fleet.ts for the full argument). The folded read answered
+        // ONE null for four conditions and this block spent it as "leave
+        // `status` at the `alive` default" — `'idle'` — so the header over an
+        // open transcript said the session was at rest when the truth was
+        // that its `<pid>.json` could not be read at all.
+        //
+        // MIRRORED RATHER THAN INVENTED HERE: these two surfaces are two
+        // renderings of one measurement, and a fleet card reading `busy`
+        // beside a chat header reading `idle` for the same session in the
+        // same second is worse than either answer on its own — the operator
+        // has no way to tell which one to believe.
+        const read = await readLiveStateMeasured(this.deps.io, cfgDir, pid);
+        if (read.ok) {
+          if (read.state.cwd) cwd = read.state.cwd;
+          status = liveSessionStatus(read.state.status);
+          statusUpdatedAt = read.state.statusUpdatedAt;
+        } else if (read.reason === 'unmeasured') {
+          // `status` ALONE moves. `cwd` stays at the registry's `workdir` and
+          // `statusUpdatedAt` stays null: an unmeasured read has no fields to
+          // report, and `statusUpdatedAt` is what the header renders as the
+          // `· 1m ago` beside the word — a fabricated one would put a fresh
+          // timestamp under a status nobody measured. `no-state` (absent,
+          // half-written, naming no session) still leaves this at `idle`,
+          // which is the ordinary shape for a pane that has published
+          // nothing yet.
+          status = 'busy';
         }
       }
     }

@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { liveSessionStatus, readLiveState } from '../src/livestate.js';
+import { liveSessionStatus, readLiveState, readLiveStateMeasured } from '../src/livestate.js';
 import { localIO } from '../src/io.js';
 import { mkTmp } from './tmpHelpers.js';
+import { degradedReadIO } from './ioDoubles.js';
 
 /** Write `<configDir>/sessions/<pid>.json` and hand back the configDir. */
 function seedLive(raw: unknown, pid = 4242): { configDir: string; pid: number } {
@@ -117,5 +118,101 @@ describe('readLiveState', () => {
     const live = await readLiveState(localIO, configDir, pid);
     expect(live?.status).toBe('waiting');   // the status still stands
     expect(live?.waitingFor).toBeNull();    // only the unparseable reason is dropped
+  });
+});
+
+
+// D-115's third consumer, at the reader that feeds it. `readLiveState`
+// answers `null` for four conditions and three of them are MEASUREMENTS —
+// the file is genuinely absent, its bytes are not JSON, or the record names
+// no `sessionId` — every one meaning the same actionable thing: this pane has
+// published nothing about itself yet. The fourth is not a measurement at all:
+// the READ failed, the file is still sitting there, and it may say `busy`.
+//
+// Folding the fourth into the other three is what let `assembleFleet` and the
+// chat header paint `idle · 1m ago` over a session this box never managed to
+// look at — a card that says "at rest" on the strength of a permission bit.
+// `fleet.test.ts` pins both surfaces, and pins the ONE consumer that keeps
+// reading `idle` from this same failure on purpose (`liveStatus`, where
+// `idle` REFUSES an interrupt).
+describe('readLiveStateMeasured — the distinction readLiveState folds', () => {
+  it('a parseable file is the ok arm, carrying the state itself', async () => {
+    const { configDir, pid } = seedLive(base);
+    const r = await readLiveStateMeasured(localIO, configDir, pid);
+    expect(r.ok).toBe(true);
+    expect(r.ok && r.state.status).toBe('busy');
+    expect(r.ok && r.state.version).toBe('2.1.233');
+  });
+
+  it('an ABSENT live file is no-state, not unmeasured — the ordinary shape before a pane first publishes', async () => {
+    const { configDir } = seedLive(base);
+    expect(await readLiveStateMeasured(localIO, configDir, 9999))
+      .toEqual({ ok: false, reason: 'no-state' });
+  });
+
+  // The listed-but-its-bytes-never-came-back shape, through the tree's own
+  // `FleetIO` double rather than the filesystem — so this case is REAL under
+  // every runner, including the root one the chmod twin below has to skip. It
+  // is also the shape the remote fleet actually produces: one dropped
+  // agent-WS round trip on a file that is certainly there (`ioDoubles.ts`).
+  it('an UNREADABLE live file is unmeasured — the arm the null had nowhere to put', async () => {
+    const { configDir, pid } = seedLive(base);
+    const io = degradedReadIO((p) => p.endsWith(path.join('sessions', `${pid}.json`)));
+    expect(await readLiveStateMeasured(io, configDir, pid))
+      .toEqual({ ok: false, reason: 'unmeasured' });
+  });
+
+  // …and the same thing against a real EACCES, which is what the local fleet
+  // produces. Skipped as root (D-116): `chmod 000` denies root nothing, so an
+  // unguarded case would quietly assert the OPPOSITE of its own name there.
+  it.skipIf(process.getuid?.() === 0)(
+    'a real EACCES (chmod 000) is unmeasured too — not the absent arm',
+    async () => {
+      const { configDir, pid } = seedLive(base);
+      const file = path.join(configDir, 'sessions', `${pid}.json`);
+      chmodSync(file, 0o000);
+      try {
+        expect(await readLiveStateMeasured(localIO, configDir, pid))
+          .toEqual({ ok: false, reason: 'unmeasured' });
+      } finally {
+        chmodSync(file, 0o644);   // let the fixture cleanup remove it without fighting perms
+      }
+    },
+  );
+
+  it('a half-written file and a record with no sessionId are no-state too — the fold this type KEEPS', async () => {
+    // Both are files this reader successfully looked at and rejected, and no
+    // consumer branches between them: a `<pid>.json` caught mid-write is the
+    // same "nothing published yet" a missing one is, one poll tick from
+    // healing. Splitting them would be a wider type, not a finer measurement
+    // (`limits.ts:126`/`commands.ts:73` are the tree's own precedent for
+    // leaving an indifferent fold alone).
+    const truncated = path.join(mkTmp('ccrc-live-'), '.claude');
+    mkdirSync(path.join(truncated, 'sessions'), { recursive: true });
+    writeFileSync(path.join(truncated, 'sessions', '4242.json'), '{"pid":4242,"sessionId":"3');
+    expect(await readLiveStateMeasured(localIO, truncated, 4242))
+      .toEqual({ ok: false, reason: 'no-state' });
+
+    const { sessionId: _omitted, ...noSessionId } = base;
+    const anon = seedLive(noSessionId);
+    expect(await readLiveStateMeasured(localIO, anon.configDir, anon.pid))
+      .toEqual({ ok: false, reason: 'no-state' });
+  });
+
+  it('readLiveState still folds all of them, so its four indifferent callers are untouched', async () => {
+    // The derivation, measured rather than assumed: the three fixtures the
+    // cases above tell apart read back as one `null` through the legacy form.
+    // This is the pin that keeps this task a WIDENING and not a change —
+    // `liveStatus`, `commands.ts`'s cwd lookup and both of `watch.ts`'s
+    // already-fail-shut gates go on seeing exactly what they saw before.
+    const absent = seedLive(base);
+    expect(await readLiveState(localIO, absent.configDir, 9999)).toBeNull();
+
+    const anon = seedLive({ ...base, sessionId: 17 });
+    expect(await readLiveState(localIO, anon.configDir, anon.pid)).toBeNull();
+
+    const degraded = seedLive(base);
+    const io = degradedReadIO((p) => p.endsWith(path.join('sessions', `${degraded.pid}.json`)));
+    expect(await readLiveState(io, degraded.configDir, degraded.pid)).toBeNull();
   });
 });
