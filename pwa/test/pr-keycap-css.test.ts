@@ -74,6 +74,18 @@ describe('the PR keycap CSS', () => {
     expect(rule(".keycap--pr[data-checks='pending'] .pr-dot")).toContain('color: var(--status-attention)');
   });
 
+  it('colours the dot for the three VERDICTS only — never for an unread rollup', () => {
+    // D-637. `PrChecks` has a fourth non-null member, `unmeasured`, and the keycap
+    // does put it on `data-checks` (pr-keycap.test.tsx pins that). What these
+    // three rules do is OVERRIDE the phase colour with a checks verdict, and
+    // an unmeasured rollup has no verdict to override it with: the dot must
+    // keep whatever the phase said, and the `?` glyph carries the axis. So the
+    // absence of an `unmeasured` rule here is a decision, and this reads the
+    // whole file rather than one selector so that adding one breaks it.
+    const keyed = [...chatCss.matchAll(/data-checks=['"]?([a-z-]+)/g)].map((m) => m[1]);
+    expect([...new Set(keyed)].sort()).toEqual(['fail', 'pass', 'pending']);
+  });
+
   it('keeps --pr-merged and --pr-dim as ALIASES, not a second hardcoded colour', () => {
     // A literal hex here would need its own light-theme override to clear the
     // 3:1 contrast floor (see tokens.css's comment); aliasing an

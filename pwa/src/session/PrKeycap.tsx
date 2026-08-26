@@ -41,9 +41,24 @@ export function prLegend(pr: PrState): string {
 }
 
 /** Status is never colour-only: this glyph rides beside the dot, and the sheet
- *  repeats it as a text line. */
+ *  repeats it as a text line.
+ *
+ *  `unmeasured` gets a glyph of its own and NOT the absence of one, for the
+ *  same reason `[data-phase='unchecked']` is dashed rather than plain: the
+ *  glyph is missing when `checks` is `null` — GitHub answered and this PR has
+ *  no checks — so reusing that blank would render "we could not read the
+ *  rollup" identically to "there is nothing to read". It is the only member
+ *  that is not a verdict, so it is the only one drawn as a question.
+ *
+ *  It deliberately has no `[data-checks='unmeasured'] .pr-dot` colour rule
+ *  next door in `chat.css`: the three that do exist OVERRIDE the phase colour
+ *  with a checks verdict, and an unmeasured rollup has no verdict to override
+ *  it with. The dot keeps whatever the phase said and this glyph says the
+ *  console could not re-measure the checks — an axis beside the state, not a
+ *  takeover of it, which is `.sess-unmeasured`'s contract in `SessionLine`.
+ *  (D-637.) */
 const CHECK_GLYPH: Record<Exclude<PrChecks, null>, string> = {
-  pass: '✓', fail: '✕', pending: '▲',
+  pass: '✓', fail: '✕', pending: '▲', unmeasured: '?',
 };
 
 /** Integration finding 7: the fourth site of the reason vocabulary, and the
@@ -192,11 +207,13 @@ const CHECK_PHRASE: Record<'none' | Exclude<PrChecks, null>, string> = {
  *  such block.
  *
  *  MUTATION SURVIVOR, disclosed, on `pr.checks ?? 'none'` (same shape as this
- *  file's other one): `PrChecks` is `'pass' | 'fail' | 'pending' | null`, four
- *  values of which exactly one is falsy and it is `null`, so `??` and `||` act
- *  on identical inputs and no distinguishing call can exist. Kept as `??`
- *  because the intent is "no checks were reported", not "the report looks
- *  empty". */
+ *  file's other one): every member of `PrChecks` except `null` is a non-empty
+ *  string, so `null` is the union's ONLY falsy value and `??` and `||` act on
+ *  identical inputs — no distinguishing call can exist. Stated as a property
+ *  of the union rather than as a list of its members, because the list has
+ *  already grown once (`unmeasured`, D-637) and a restatement of it here
+ *  would be a second definition that drifts. Kept as `??` because the intent
+ *  is "no checks were reported", not "the report looks empty". */
 export function checkPhrase(pr: PrState): string {
   return `${CHECK_PHRASE[pr.checks ?? 'none']}.`;
 }

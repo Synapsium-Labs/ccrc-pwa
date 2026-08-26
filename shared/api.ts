@@ -1457,7 +1457,20 @@ const reqBool = (o: RawObj, k: string): boolean => {
 // `readonly PrPhase[]` needs `raw as PrPhase` on the value being checked, which
 // asserts the very thing the check is asking. Cast the CONSTANT, never the input.
 const STATUSES: readonly string[] = ['busy', 'idle', 'dead'];
-const CHECKS: readonly string[] = ['pass', 'fail', 'pending'];
+// DERIVED, not restated — `PR_REASONS`' idiom above, and for a reason this
+// list learned the hard way. It shipped as a hand-written `['pass', 'fail',
+// 'pending']` and then `PrChecks` grew `unmeasured`, which the server began
+// WRITING (a rollup GitHub answered with a 504 is not a verdict) while this
+// validator still refused it — and refusal here is not a degraded field, it
+// throws `MalformedSnapshot` and discards the WHOLE snapshot. A state cache
+// written by this build would have been rejected by this build on its next
+// boot. The `Record` makes the next member a compile error at this line
+// instead. Cast the CONSTANT, never the input: `Object.keys` already answers
+// `string[]`, so there is no cast left to get wrong. (D-638.)
+const CHECKS_MAP: Record<Exclude<PrChecks, null>, true> = {
+  pass: true, fail: true, pending: true, unmeasured: true,
+};
+const CHECKS: readonly string[] = Object.keys(CHECKS_MAP);
 // Same shape as CHECKS, not PR_PHASES: `hookState` is already nullable and
 // null already has a specific meaning ("no fresh hook data"), so an
 // unrecognised token has nowhere honest to degrade to — landing it on null
