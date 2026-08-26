@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=95fca551c80438dcc51a4fb12b65c2c2216293da3a2de331c2bb4e6efb0539e3
+# ccrc:generated 1 sha256=72fb105f7bd7b5d9043509b077454acc90c122bf19f64d9b6d35d63f14b0f96f
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -2533,14 +2533,74 @@ _ws_disk_free_gb() {   # dir -> whole GiB available on the filesystem holding it
   echo $(( kb / 1024 / 1024 ))
 }
 
-cmd_ws_add() {   # [--no-rc] project [slug] — new worktree + session for an existing project
+cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] — new worktree + session for an existing project
+  # PER-WORKER RC and the DECLARED ACTOR, both stripped before any positional
+  # binds — `cmd_ws_hold`'s shape (ccd:3711) and its reason: a run like
+  # `ws-add --no-rc <project> --surface agent --actor '…'` must not bind
+  # `project` from a flag-polluted argv.
+  #
+  # D-410 IS WHY THIS LOOP EXISTS. `--no-rc` used to be consumed by an
+  # exact-string match at position 1 and nothing else was parsed at all, so
+  # the composed dispatch argv put `--surface` in the SLUG and the verb died
+  # at `_ws_slug_valid` — before the worktree, the registry row and the pane.
+  # Every dispatched spawn on a caps-advertising box would have refused, and
+  # the `create` row of every spawn that did land read *declared: nothing*.
+  # (`actor-flags-v1` never meant "this box takes the flags on every verb":
+  # it governs the FIVE WORKSPACE VERBS, and `ws-add` MINTS a workspace
+  # rather than acting on one — which is why the parse had to be written
+  # here rather than inherited.)
+  #
   # PER-WORKER RC (task #37, ruling 2026-08-13): the dispatch path declares a
   # spawn a dispatched worker AT CREATION — the only moment the fact is known
   # (hold is written later and released mid-program). Exact-string match, no
-  # value parsing: nothing user-controlled reaches the flag.
-  local norc=0
-  [[ "${1:-}" == "--no-rc" ]] && { norc=1; shift; }
-  local project="${1:?usage: ccd ws-add [--no-rc] <project> [slug]}" slug="${2:-}"
+  # value parsing: nothing user-controlled reaches that flag. Folding it into
+  # the loop is what makes it POSITIONLESS like the other two; the four
+  # pre-existing call forms are unchanged, because `_ws_slug_valid` requires a
+  # leading `[a-z0-9]` and no legitimate slug can begin with `-`.
+  #
+  # TWO DEC FLAGS, NOT THREE. `--reason` is deliberately absent: this verb has
+  # no reason of its own to collide with, and the dispatch path's reason rides
+  # `--actor` (`run:<id> dispatch`). Same ruling as `cmd_ws_hold`'s at
+  # ccd:3699-3705, for the same reason — never put a second string on a verb
+  # with nothing to say which one a reader is looking at.
+  local norc=0 lc_surface=none lc_actor='' lc_gs=0 lc_ga=0 lc_args=()
+  while (( $# )); do
+    case "$1" in
+      --no-rc)     norc=1; shift ;;
+      # An explicit arity check, never a bare `shift 2`: ccd runs under
+      # `set -uo pipefail` with NO `-e`, so a shift past the end of argv
+      # fails, shifts nothing, and this loop never terminates.
+      --surface)   [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--surface <word>] [--actor <text>] <project> [slug]"
+                   lc_gs=1; lc_surface="$2"; shift 2 ;;
+      --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
+      --actor)     [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--surface <word>] [--actor <text>] <project> [slug]"
+                   lc_ga=1; lc_actor="$2"; shift 2 ;;
+      --actor=*)   lc_ga=1; lc_actor="${1#--actor=}"; shift ;;
+      *)           lc_args+=("$1"); shift ;;
+    esac
+  done
+  # bash >= 4.4 (the fleet host runs 5.2, ccd:9393-9394): an empty array here
+  # is not an unbound-variable error under `set -u`.
+  set -- "${lc_args[@]}"
+  # `_lc_surface_norm ''` prints EMPTY, not `unknown` (ccd:1511-1524, D-210) —
+  # it cannot tell "no argument" from "an explicit blank" apart, so THIS loop
+  # is where that distinction has to be made. `lc_gs` carries givenness and the
+  # `${lc_w:-unknown}` fallback turns a declared-but-blank surface into
+  # `unknown` rather than an empty string the encoder would backfill to `none`.
+  if (( lc_gs )); then local lc_w; lc_w=$(_lc_surface_norm "$lc_surface"); lc_surface=${lc_w:-unknown}; fi
+  # `_lc_dec_ok` is LENGTH-ONLY (ccd:1527-1538, D-210) — `_lc_dec_ok ''`
+  # returns 0, so it cannot be the blank guard on its own. A declared `--actor`
+  # is refused when blank the same way `cmd_ws_hold` refuses one, and here the
+  # refusal still lands where nothing has been created yet.
+  if (( lc_ga )); then
+    [[ -n "${lc_actor//[[:space:]]/}" ]] || die "--actor must be non-blank"
+    _lc_dec_ok "$lc_actor" || die "--actor is longer than $_LC_DEC_MAX bytes"
+  fi
+  # BOUND AFTER THE LOOP, NEVER BEFORE IT — this line sat ABOVE the strip in the
+  # first cut of this task and `ws-add --no-rc <project>` bound `project` to
+  # `--no-rc`, reproducing D-410 one flag to the left. `ccd-spawn-split.test.ts`
+  # caught it, unedited, which is what that gate is for.
+  local project="${1:?usage: ccd ws-add [--no-rc] [--surface <word>] [--actor <text>] <project> [slug]}" slug="${2:-}"
   _ws_project_valid "$project" \
     || die "invalid project '$project' — allowed chars: A-Za-z0-9 . _ -, and no LEADING dot (a dot-leading id aliases ccd's own hidden registry files — see _ws_project_valid)"
   local main="$PROJECTS_ROOT/$project"
@@ -2702,7 +2762,17 @@ cmd_ws_add() {   # [--no-rc] project [slug] — new worktree + session for an ex
   # at ccd:2691). There is no `$ws` and no `$wrapper` here, and under
   # `set -uo pipefail` naming one would EXIT the shell between the lock and the
   # spawn, with the worktree already on disk.
-  _lc_done create "$id" "" meas.project "$project" meas.workspace "$slug" \
+  #
+  # THE DEC PAIRS ARE APPENDED ONLY WHEN THEY WERE DECLARED (D-410). Parsing
+  # the flags without threading them here would be ceremony: this row is the
+  # journal's whole record of a spawn's origin, and until the loop above
+  # existed every dispatched spawn wrote it as *declared: nothing*.
+  # `lc_gs`/`lc_ga` — givenness, not content — is what decides, so an
+  # undeclared call emits EXACTLY the row it emitted before this task.
+  local lc_dec=()
+  (( lc_gs )) && lc_dec+=(dec.surface "$lc_surface")
+  (( lc_ga )) && lc_dec+=(dec.actor "$lc_actor")
+  _lc_done create "$id" "" "${lc_dec[@]}" meas.project "$project" meas.workspace "$slug" \
     meas.branch "$branch" meas.base "$base" meas.workdir "$wt" meas.wrapper "$hw"
   _spawn_start "$id" new || return $?
   _reg_claim "$id"
