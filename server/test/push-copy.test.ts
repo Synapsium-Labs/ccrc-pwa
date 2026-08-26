@@ -122,7 +122,7 @@ function watcher(opts: {
    *  mid-fixture (a row LISTED but unreadable), the same shape every other
    *  registry-ladder test in this tree uses. */
   io?: FleetIO;
-}): { tick: () => Promise<void>; markIdle: (id: string) => void; home: string; coord?: CoordStore } {
+}): { tick: () => Promise<void>; markIdle: (id: string) => void; markBusy: (id: string) => void; home: string; coord?: CoordStore } {
   const home = mkTmp('ccrc-');
   const info = seedSessions(home, opts.sessions);
   const coord = opts.coord ? new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db'))) : undefined;
@@ -143,6 +143,14 @@ function watcher(opts: {
       const s = info.get(id);
       if (!s) throw new Error(`push-copy.test.ts: no seeded session "${id}"`);
       writeLiveStatus(s, id, 'idle');
+    },
+    // The mirror of `markIdle`, for a test that needs to drive a session back
+    // to work and then finish it again — a REAL busy→idle edge, after some
+    // earlier tick has already been asked not to invent one.
+    markBusy: (id: string) => {
+      const s = info.get(id);
+      if (!s) throw new Error(`push-copy.test.ts: no seeded session "${id}"`);
+      writeLiveStatus(s, id, 'busy');
     },
   };
 }
@@ -369,6 +377,79 @@ describe('a degraded row must never fire the busy→idle "✓ Finished" push (bl
     // proving the suppression above did not simply wedge this row shut.
     readsThisTick = 0;
     armed = false;
+    w.markIdle('cc-a');
+    await w.tick();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.title).toBe('✓ Finished');
+  });
+});
+
+/** The same `FleetIO` shape as `toggleableIO`, aimed one layer down: the LIVE
+ *  STATUS FILE rather than a registry field. `<cfgDir>/sessions/<pid>.json` is
+ *  the file `assembleFleet` reads to learn busy-vs-idle, and the only one this
+ *  double ever degrades. */
+function toggleableLiveIO(): { io: FleetIO; degrade: () => void; heal: () => void } {
+  let bad = false;
+  const io = degradedReadIO((p) => bad
+    && p.includes(`${path.sep}sessions${path.sep}`) && p.endsWith('.json'));
+  return { io, degrade: () => { bad = true; }, heal: () => { bad = false; } };
+}
+
+// D-115 REGRESSION, found by the review round's own refutation probe.
+//
+// The describe above pins the rule for rows the REGISTRY ladder degrades.
+// Task 3 of this branch created a SECOND way a row's status stops being a
+// measurement — `assembleFleet` now paints an unreadable `<pid>.json` as
+// `busy` rather than leaving it at the `alive` default of 'idle' — and that
+// second route reached the push loop looking exactly like a measurement.
+//
+// `unmeasuredIds` (`watch.ts:749`) is derived from `FleetSession.unmeasured`,
+// which is typed `IdentityField[]` and means, precisely, "which of the
+// identity TRIPLE this assembly could not measure". An unreadable live-status
+// file degrades none of the three, so the new `busy` was not in that set — it
+// flowed straight into the busy→idle edge AND into `prevStatus`.
+//
+// The consequence is a push that asserts a turn completed when none did:
+// a GENUINELY IDLE session whose `<pid>.json` blips unreadable for one tick
+// reads idle → busy(guessed) → idle, and the heal tick fires
+// "✓ Finished — back to idle" at a session that never started.
+//
+// MEASURED before the fix: this fixture pushed exactly that. The fix does not
+// touch the guard — the guard was right — it feeds it: the row now DECLARES
+// that its status word is not a measurement, and `unmeasuredIds` is the union
+// of the two routes. Note what is NOT done: the marker does not go into
+// `unmeasured`, because `measuredIdentity` gates on `unmeasured.length === 0`
+// and a non-identity entry there would make every such row's identity read as
+// unmeasurable fleet-wide.
+describe('an unreadable live-status file must never fire the busy→idle "✓ Finished" push (D-115)', () => {
+  it('suppresses the false edge on a genuinely idle session, and still fires the real one', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const { io, degrade, heal } = toggleableLiveIO();
+    const w = watcher({ push, sessions: ['ccrc-pwa/cc-a'], io });
+
+    // The session is genuinely IDLE and stays idle for this whole block.
+    // Nothing about it changes; only what a tick can measure about it does.
+    w.markIdle('cc-a');
+    await w.tick();                    // priming tick — prevStatus: idle
+    expect(sent, 'priming must never push').toEqual([]);
+
+    degrade();
+    await w.tick();                    // the blip: status is painted `busy`
+    expect(sent, 'a guessed busy is not a turn starting').toEqual([]);
+
+    heal();
+    await w.tick();                    // the heal: status measures idle again
+    expect(sent,
+      'idle → unreadable → idle fired a "Finished" push for a turn that never happened')
+      .toEqual([]);
+
+    // The positive control, and the reason the fix suppresses `prevStatus`
+    // rather than the push alone: a REAL edge on the same session must still
+    // land. If the suppression had merely skipped the push while letting
+    // `prevStatus` absorb the guess, this would silently push nothing.
+    w.markBusy('cc-a');
+    await w.tick();
     w.markIdle('cc-a');
     await w.tick();
     expect(sent).toHaveLength(1);

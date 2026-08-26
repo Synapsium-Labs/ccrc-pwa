@@ -746,7 +746,17 @@ export class FleetWatcher {
       // (`''`) makes `configDirFor` answer `undefined`, so `assembleFleet`
       // never reaches `readLiveState` and `status` freezes at the `alive`
       // default of `'idle'` — a session that may be plainly mid-turn.
-      const unmeasuredIds = new Set(sessions.filter((s) => s.unmeasured.length > 0).map((s) => s.id));
+      // THE UNION OF BOTH ROUTES (D-115). `s.unmeasured` names a degraded
+      // identity triple, which freezes `status` at the `alive` default of
+      // 'idle'; `s.statusUnmeasured` names an unreadable live-status file,
+      // which `assembleFleet` paints 'busy'. Opposite words, one fact — this
+      // tick did not measure this session's status — and the rule below wants
+      // that fact, not either spelling of it. Missing the second route is what
+      // fired a "✓ Finished" push at a session that never started a turn
+      // (`push-copy.test.ts`, "an unreadable live-status file must never…").
+      const unmeasuredIds = new Set(sessions
+        .filter((s) => s.unmeasured.length > 0 || s.statusUnmeasured)
+        .map((s) => s.id));
       // The whole fleet is in scope right here, which is exactly what
       // `pushOne`'s copy rule needs and `detectDialogs`/`sweepPr` below don't
       // have on their own clocks — see `activeProjects`'s own comment.

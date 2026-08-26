@@ -121,6 +121,29 @@ export interface FleetSession {
    *  states for an empty frame: absent evidence proves nothing, and a guess
    *  persisted as fact defeats the one thing a last-known-good cache is for. */
   unmeasured: readonly IdentityField[];
+  /** True when this assembly could not measure this session's LIVE STATUS —
+   *  `<cfgDir>/sessions/<pid>.json` was there and its bytes never came back —
+   *  so the `status` word above is this surface's fail-shut guess (`busy`,
+   *  see `fleet.ts`'s `assembleFleet`) rather than a reading.
+   *
+   *  A SECOND FIELD, NOT AN ENTRY IN `unmeasured` ABOVE (D-115). That array is
+   *  typed `IdentityField[]` and means precisely "which of the identity TRIPLE
+   *  this assembly could not measure"; `measuredIdentity` gates on its being
+   *  EMPTY, so a non-identity marker pushed into it would make every such
+   *  row's identity read as unmeasurable fleet-wide — a much larger lie than
+   *  the one it would be fixing. The two facts are genuinely different: a
+   *  degraded uuid/wrapper/workdir means the lookup never happened, while this
+   *  means the lookup happened and the file would not answer.
+   *
+   *  The consumer this exists for is `watch.ts`'s `unmeasuredIds`, which is
+   *  the UNION of the two routes: a row whose status is a guess must never
+   *  fire the busy→idle "✓ Finished" push and must never overwrite
+   *  `prevStatus`, whichever way the status stopped being a measurement.
+   *  Absent on an older peer's frame → `false`, which is the honest tolerant
+   *  reading: an older build had no way to guess, so its status word was
+   *  always either measured or frozen at a default `unmeasured` already
+   *  covers. */
+  statusUnmeasured: boolean;
   /**
    * WHY this row is not alive — spec §4.3's classification, computed by
    * `sessionLifecycle` in `fleet.ts` from the pane plus three registry stamps.
@@ -1694,6 +1717,7 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       askSummary: optStr(o, 'askSummary'),
       subagents: optSubagents(o, 'subagents'),
       unmeasured: optUnmeasured(o, 'unmeasured'),
+      statusUnmeasured: optBool(o, 'statusUnmeasured', false),
       // `lifecycleRaw` is already narrowed to `SessionLifecycle | null` by the
       // guard above — no cast.
       lifecycle: lifecycleRaw,

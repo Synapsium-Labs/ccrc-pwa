@@ -228,6 +228,11 @@ export async function assembleFleet(
     // and an empty-but-waiting file is `''` — which is why the flag beside it
     // is separate, rather than this field doing double duty as both.
     let liveWaiting = false, liveWaitingFor: string | null = null;
+    // D-115: whether `status` below is a READING or this surface's fail-shut
+    // guess. Declared rather than inferred — `watch.ts` cannot tell the two
+    // apart from the word `busy` alone, and it must (see `statusUnmeasured`'s
+    // own docstring in `shared/api.ts`).
+    let statusUnmeasured = false;
     if (alive) {
       status = 'idle';
       const pid = await tmux.panePid(r.id);
@@ -285,6 +290,12 @@ export async function assembleFleet(
           // is a real measurement of a pane that has published nothing yet,
           // the ordinary shape in the seconds after `ccd ws-add`.
           status = 'busy';
+          // And SAY SO. Painting `busy` without this makes the guess
+          // indistinguishable from a measurement one hop downstream, where
+          // `watch.ts`'s busy→idle edge turns it into a push asserting a turn
+          // completed — for a session that, on the idle→blip→idle path, never
+          // started one.
+          statusUnmeasured = true;
         }
       }
     }
@@ -385,6 +396,7 @@ export async function assembleFleet(
       // SessionLine.tsx) and the offline/state-cache snapshots (Task 2) can
       // tell a degraded row from a measured one too.
       unmeasured: r.unmeasured,
+      statusUnmeasured,
       // §4.4: a NEW FIELD, never a new `SessionStatus`/`SessionBucket` member
       // (M10 — an unknown bucket reaches `RANK[bucket]` as a NaN comparator and
       // `DOT[status].cls` THROWS in an already-deployed PWA). The bucket ladder
