@@ -1284,6 +1284,17 @@ _check_exposure() {
   # `stat` guarded exactly like `_check_wrappers`' size gate: never assumed.
   # With it absent the keys are still measured — a box missing coreutils must
   # not lose the half of this check that needs only bash.
+  #
+  # NO `-L` HERE, DELIBERATELY — and this is the opposite call to the one the
+  # size gate makes (D-160), so it is written down rather than left to look
+  # like the same oversight. That gate follows the link because it is bounding
+  # a READ, and the bytes it will read are the target's. This measures whether
+  # a SECRET is protected. On a symlink `stat -c%a` answers the link's own mode
+  # (777), which fails this check — and failing is the right answer, because a
+  # world-writable name pointing at the DuckDNS token is a finding whether or
+  # not the bytes behind it happen to be 0600. Adding `-L` would make a
+  # symlinked secret pass silently. A false FAIL here costs a sentence; a false
+  # PASS costs the token.
   if command -v stat >/dev/null 2>&1; then
     mode="$(stat -c%a -- "$CCRC_EXPOSURE_FILE" 2>/dev/null)" || mode=""
     if [ "$mode" = 600 ]; then
@@ -2261,9 +2272,17 @@ _check_wrappers() {
         # (a sparse file; zero-padding in a real binary) makes it consume the
         # WHOLE file hunting for `n` non-null bytes, reintroducing exactly the
         # unboundedness this gate exists to close.
+        # `-L` (D-160): FOLLOW the link. Without it `stat -c%s` answers the
+        # length of the target-path STRING for a symlink — measured live on the
+        # fleet box, `stat -c%s gpt` = 33 while the file behind it was 7.8 KB —
+        # so a wrapper symlinked to a huge file passed this gate and was then
+        # `mapfile`d whole below, reintroducing exactly the unbounded read this
+        # gate exists to close, through the one shape it could not see.
+        # `ccd/ccrc-adopt`'s scans have always spelled it `stat -L -c%s`; this
+        # one did not, and nothing said so until a test asked.
         if command -v stat >/dev/null 2>&1; then
           local wr_sz=""
-          wr_sz="$(stat -c%s -- "$bin/$id" 2>/dev/null)" || wr_sz=""
+          wr_sz="$(stat -L -c%s -- "$bin/$id" 2>/dev/null)" || wr_sz=""
           if [[ "$wr_sz" =~ ^[0-9]+$ ]] && [ "$wr_sz" -gt "$WRAPPER_OVERSIZE_BYTES" ]; then
             wr_hard+=("$id's \$HOME/.local/bin/$id is over 1 MiB — too big to be the generated shape, and never read")
             continue

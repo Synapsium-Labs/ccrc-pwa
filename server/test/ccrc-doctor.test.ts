@@ -2699,6 +2699,50 @@ describe('ccrc doctor: wrappers', () => {
     expect(r.stdout).not.toMatch(/not the generated shape/);
   });
 
+  // D-160, recorded on 2026-08-21 and fixed here. The gate above measured the
+  // LINK, not the target: `stat -c%s` without `-L` answers the length of the
+  // target-path STRING for a symlink. Measured live on the fleet box at the
+  // time: `stat -c%s gpt` = 33 while the `ccgpt` behind it is 7.8 KB.
+  //
+  // So a wrapper that is a symlink to a huge file sailed through the size gate
+  // and was then `mapfile`d whole by `_wrap_parse_shape` — reintroducing
+  // exactly the unbounded read D-81 added the gate to close, through the one
+  // shape the gate could not see. `ccd/ccrc-adopt`'s own scans have always used
+  // `stat -L`; this one did not, and nothing said so.
+  //
+  // Symlinked wrappers are not hypothetical here: `~/.local/bin` is where the
+  // upstream launcher and every account wrapper live side by side, and linking
+  // one to another is the ordinary way a box gets a second name for a binary.
+  it('measures a symlinked wrapper by its TARGET, not the link (D-160)', () => {
+    const home = healthy('ccrc-doctor-wrappers-symlink-oversize-');
+    linkReal(home, 'stat');
+    // The oversize file lives OUTSIDE bin/, so the only thing the scan can see
+    // in `~/.local/bin` is the link — which is the whole point. A copy in bin/
+    // would be found by the plain `stat` too and prove nothing.
+    const target = join(home, 'big-wrapper');
+    const fd = openSync(target, 'w');
+    try {
+      const header = '#!/usr/bin/env bash\nexport CLAUDE_CONFIG_DIR="$HOME/.acct-a"\n';
+      writeSync(fd, header, 0, 'utf8');
+      ftruncateSync(fd, 1024 * 1024 + header.length + 1); // over 1 MiB, sparse
+    } finally {
+      closeSync(fd);
+    }
+    chmodSync(target, 0o755);
+    symlinkSync(target, join(binDir(home), 'acct-a'));
+    writeRoster(home, [{ id: 'acct-a', configDirSuffix: '.acct-a', exec: { kind: 'generated' } }]);
+    const r = runDoctor(home);
+    expect(r.code).toBe(1);
+    // Same pin as the plain-file case above, and for the same reason: without
+    // the gate `_wrap_parse_shape` also answers `no`, so only the SENTENCE
+    // distinguishes "refused after measuring" from "refused after reading it
+    // all". A link whose target-path string is short enough would otherwise
+    // reach the generic wording.
+    expect(r.stdout).toMatch(/FAIL wrappers: acct-a's \$HOME\/\.local\/bin\/acct-a is over 1 MiB/);
+    expect(r.stdout).toMatch(/never read/);
+    expect(r.stdout).not.toMatch(/not the generated shape/);
+  });
+
   it('a roster that does not parse is its own answer, not "no roster"', () => {
     const home = healthy('ccrc-doctor-wrappers-badjson-');
     writeFileSync(join(home, '.ccrc', 'accounts.json'), 'not json at all');
