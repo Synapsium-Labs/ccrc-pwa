@@ -71,6 +71,15 @@ Task 1 (ccd) then Task 2 (server). Task 2's parity probe cannot pass until Task 
 exists, which is the ordering made mechanical. The orchestrator deploys AGENT-FIRST after
 both land.
 
+**READ THAT AS ONE RELEASE, NOT TWO: Task 1's tip is RED and must not merge or deploy
+alone.** `server/test/ccdargv-dec-parity.test.ts` carries a `ws-add` NEGATIVE CONTROL that
+asserts the OLD refusal, so Task 1 SUCCEEDING is what fails it. Full server package,
+foreground, at Task 1's tip: `Test Files 1 failed | 223 passed (224); Tests 1 failed |
+5597 passed | 3 skipped (5601)`, the one failure being `expected '' to match /invalid slug
+'--surface'/`. Task 2 Step 2 converts that control into a positive probe — until it lands
+beside Task 1, the merge and the AGENT-FIRST deploy stay gated. Nominated as a deviation
+below, with the artefacts the fixture now writes.
+
 ---
 
 ### Task 1: `cmd_ws_add` parses the flags, and the `create` row carries them
@@ -172,6 +181,22 @@ both land.
   3. Emit `dec.actor` unconditionally (blank when undeclared) → the absence test reds.
   4. Move the loop AFTER the positional binding → the composed-order test reds.
 
+  MEASURED — each planted ALONE against the real ccd in a fixture HOME and reverted between
+  plants; baselines `ccd-lifecycle-sites` 29/29, `ccd-spawn-split` 50/50, `ccd-rc-flag`
+  19/19:
+  1. Both `--actor` arms deleted → `ccd-lifecycle-sites` **6 failed / 23 passed**.
+  2. `[[ $# -ge 2 ]]` dropped from the `--surface` arm → **1 failed / 28 passed**, and the
+     failure is an ABORT rather than the hang this step allowed for:
+     `ccd: line 2580: $2: unbound variable`, rc 1 (deviation below).
+  3. **NO RED** — the prediction that failed. 29/29, and 209/209 across all eight
+     journal-reading suites, even under the stronger form that makes BOTH pairs
+     unconditional. Not unguarded but JOINTLY guarded: drop the `(( lc_gs ))` normalisation
+     guard as well and the undeclared row reads `surface: 'unknown'` — 1 failed / 28 passed
+     (deviation below).
+  4. The positional binding moved back above the loop → `ccd-lifecycle-sites` **6 failed /
+     23 passed** AND `ccd-spawn-split` **2 failed / 48 passed**, while `ccd-rc-flag` stays
+     19/19 — so the spawn-split pin is the one that catches D-410 one flag to the left.
+
 - [x] **Step 7: commit** with measured counts.
 
 ### Task 2: the dispatch path declares itself again
@@ -253,4 +278,8 @@ both land.
   `invalid slug '--surface'` and no artefacts. Task 2 Step 2 converts that control into a
   positive probe, which is the plan's design. Consequence for the orchestrator: **the merge
   and the AGENT-FIRST deploy are gated on Task 2 landing with it** — Task 1's tip is not a
-  shippable point, and the plan's Wave order should be read as one release, not two.
+  shippable point, and the plan's Wave order should be read as one release, not two. That
+  gate now sits in Wave order itself rather than only here, because a reader planning the
+  deploy reads the top of the plan and not its ledger tail. Re-measured at the review tip:
+  the package numbers and the failing assertion are byte-identical to the ones above, so
+  neither review round moved them.
