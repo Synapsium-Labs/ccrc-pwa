@@ -218,6 +218,37 @@ export async function dispatchRun(
   // clean `ws-add`.
   let adopted = false; let adoptedSpawn: SpawnVerdict | null = null;
 
+  // ONE MEASUREMENT, SPENT TWICE — the dispatch's own dec, hoisted above the
+  // fresh-spawn branch because BOTH of this function's ccd writes are the same
+  // act by the same lane on the same run's behalf: the `ws-add` that mints the
+  // workspace (wave 1 only) and the `ws-hold` at step 5 that claims it. Read
+  // once here rather than composed at each site, for the reason D-410's review
+  // gave when it deleted the second copy: `` `run:${run.id} dispatch` `` typed
+  // twice is one drift away from splitting one lane into two actors in the
+  // journal, and nothing would have kept the two literals equal. The single
+  // read also means `deps.fleetState` cannot be consulted at two different
+  // moments and answer differently.
+  //
+  // AND THE MOMENT IT SETTLES ON IS THE EARLIER ONE — a trade, not a pure win,
+  // stated here because the line above reads like one. `state.ccdVerbs` is
+  // MUTATED IN PLACE beneath us: `remote/client.ts`'s `onReady` rewrites it on
+  // every agent re-handshake (and writes `null` for a ready frame carrying no
+  // usable list), and `refreshcaps.ts`'s 60s lane overwrites it with whatever
+  // the fleet host now advertises. The hold at step 5 spends this value some
+  // seven awaits later — the `ws-add`, two registry reads, a hook read, the
+  // `/clear` — so if caps REGRESS across that window (a reconnect to a
+  // downgraded ccd, a ready frame with no `ccdVerbs`) the hold ships
+  // `--surface`/`--actor` where the fresh `sweepDec` this hoist replaced would
+  // have omitted them, at the cost `capSupported`'s no-evidence-FALSE default
+  // is argued for in `ccdargv.ts`. Nothing below catches it, and the asymmetry
+  // is three lines from the spend: `verbSupported(deps.fleetState, holdArgv)`
+  // re-reads the SAME field FRESH there, and by its own opposite default
+  // answers TRUE on `null`. Accepted deliberately — one actor across the two
+  // rows of one act outweighs a flag pair a regressed box refuses, and the
+  // regression is a deploy-window event — but it is a staleness, not the
+  // absence of one.
+  const dispatchDec = sweepDec(deps.fleetState, `run:${run.id} dispatch`);
+
   if (run.sessionId === null) {
     // 3/4: fresh spawn — wave 1. Learn the new id by REGISTRY DIFF, never
     // by parsing ccd's own echoed sentence (`workspace <id> on <wrapper> —
@@ -239,21 +270,15 @@ export async function dispatchRun(
     // creation (the 2026-08-13 ruling, task #37). The PWA's ordinary
     // workspace-add keeps `wsAdd` and the box's own RC default.
     //
-    // AND IT DECLARES NOTHING, deliberately. T2 passed `sweepDec` here so the
-    // journal's `create` row would name this run the way the `hold` at step 5
-    // already does; its review measured the real `cmd_ws_add` and found no flag
-    // parser — the dec's first token binds as the SLUG and the verb dies at
-    // `_ws_slug_valid`, so on a caps-advertising box every wave-1 spawn would
-    // refuse before creating anything, the registry diff below would find zero
-    // candidates, and this run would sit at `planned` with `dispatchStartedAt`
-    // set: the exact wedge this build exists to RENDER, manufactured by it.
-    // The full argument, and the two ccd changes attribution would need, live
-    // on `wsAddWorker`'s own docstring. When it is pursued, the actor string is
-    // not to be TYPED here: `` `run:${run.id} dispatch` `` is spelled once, at
-    // the hold in step 5, and a second copy is one drift away from splitting
-    // one lane into two actors — derive it the way `rundefs.ts`'s `holdReason`
-    // single-sources the hold string.
-    const argv = CCD_ARGV.wsAddWorker(run.project);
+    // AND IT DECLARES WHO (D-410's remedy, re-landed against a ccd that can
+    // read it). The same `dispatchDec` the hold at step 5 spends, so the
+    // journal's `create` row and the `hold` row that follows carry one
+    // identical actor and read as one act by one lane. Without it Build 9a
+    // recorded this spawn as `declared: nothing`, indistinguishable from an
+    // operator's own add. `null` — an older ccd, no `actor-flags-v1` — composes
+    // the bare argv that shipped before, token for token; the residual that
+    // makes THIS change AGENT-FIRST is stated on `wsAddWorker`'s docstring.
+    const argv = CCD_ARGV.wsAddWorker(run.project, dispatchDec);
     // BEFORE the call, never after: this is the only moment the run can say
     // "a dispatch is in flight" — the id does not exist yet, and a stamp
     // written once `runCcd` resolves would be null for the entire window it
@@ -448,10 +473,12 @@ export async function dispatchRun(
   }
 
   // 5: hold, behind `verbSupported` — the standing convention reason string,
-  // DISPLAY-ONLY and never parsed back.
+  // DISPLAY-ONLY and never parsed back. `dispatchDec` rather than a second
+  // `sweepDec` call: see its declaration above, where the one measurement this
+  // function takes is explained.
   const holdArgv = CCD_ARGV.wsHold(sessionId,
     holdReason(run.program, run.wave, run.waveOf, run.id),
-    sweepDec(deps.fleetState, `run:${run.id} dispatch`));
+    dispatchDec);
   if (!verbSupported(deps.fleetState, holdArgv)) {
     return { ok: false, kind: 'unsupported' };
   }

@@ -80,6 +80,12 @@ foreground, at Task 1's tip: `Test Files 1 failed | 223 passed (224); Tests 1 fa
 beside Task 1, the merge and the AGENT-FIRST deploy stay gated. Nominated as a deviation
 below, with the artefacts the fixture now writes.
 
+**GATE SATISFIED (Task 2 landed).** The tip now runs the full server package green —
+**224 files / 5599 passed + 3 skipped (5602)**, zero failures — so the merge this paragraph
+gated is unblocked. The DEPLOY half is not, and does not become so by anything in the tree:
+`actor-flags-v1` was deliberately not re-minted, so it now advertises two facts that ship
+separately and only ORDER keeps a box safe. Deploy `ccd` to the fleet host first.
+
 ---
 
 ### Task 1: `cmd_ws_add` parses the flags, and the `create` row carries them
@@ -207,34 +213,154 @@ below, with the artefacts the fixture now writes.
   real probe), plus the argv pins in `server/test/run-routes.test.ts` and
   `server/test/whitelist-subset.test.ts`
 
-- [ ] **Step 1: read what was reverted.** `git show 83fbdd0a` — the revert commit carries the
+- [x] **Step 1: read what was reverted.** `git show 83fbdd0a` — the revert commit carries the
   exact shape and the reasoning; re-land it against a ccd that now parses. Read
   `ccdargv-dec-parity.test.ts` in full: it DERIVES the dec-appending verbs from the builder
   table and requires a probe per verb, so adding the dec to `wsAddWorker` moves `ws-add` into
   the derived set automatically and the suite will demand its probe.
 
-- [ ] **Step 2: red-first.** The parity suite's `ws-add` negative control ("is NOT in the
+- [x] **Step 2: red-first.** MEASURED across all three test files at once —
+  **4 failed / 152 passed (156)**: the derived-set equality (`ws-add` missing from the set),
+  the converted positive control (`expected { surface: 'none' } to deeply equal
+  { surface: 'agent', actor: 'probe:dec parity' }` — the real binary's own `create` row),
+  `run-routes`'s caps-box argv, and `whitelist-subset`'s exact argv. The `ws-add` LOOP probe
+  does not exist yet at this point and cannot: it is generated FROM the derived set, which is
+  the mechanism proving itself. The parity suite's `ws-add` negative control ("is NOT in the
   derived set", "real ccd binds the dec's first token as the SLUG") becomes a positive probe
   in the same shape as the other five: real ccd in a fixture HOME refuses IDENTICALLY with
   and without the dec — the flags are parsed, not bound. Expect RED until Step 3 lands (and
   confirm the derived-set test reds too — that is the mechanism proving itself).
 
-- [ ] **Step 3: implement.** `wsAddWorker: (p: string, dec: ActorFlags | null) => argv(['ws-add', '--no-rc', p, ...decFlags(dec)])`
+- [x] **Step 3: implement.** `wsAddWorker: (p: string, dec: ActorFlags | null) => argv(['ws-add', '--no-rc', p, ...decFlags(dec)])`
   with a docstring naming D-410 and stating that ccd's parse landed in the same programme.
   At the call site pass the dec the `ws-hold` call already measures — reuse that value, do
   not take a second measurement.
 
-- [ ] **Step 4: green.** The parity suite, `run-routes`, `whitelist-subset`, `verb-gate`,
+- [x] **Step 4: green.** The parity suite, `run-routes`, `whitelist-subset`, `verb-gate`,
   `unattended-actor`, `typecheck-tests`, plus the full server package.
 
-- [ ] **Step 5: mutation.** Drop the `...decFlags(dec)` spread → the caps-supporting argv pin
+- [x] **Step 5: mutation.** Drop the `...decFlags(dec)` spread → the caps-supporting argv pin
   reds AND the derived-set membership test reds (two mechanisms, state both counts).
 
-- [ ] **Step 6: commit.**
+  MEASURED — five ceremonies, each planted ALONE against the real ccd in a fixture HOME and
+  reverted between plants; baseline for the four argv suites (`ccdargv-dec-parity`,
+  `run-routes`, `whitelist-subset`, `unattended-actor`) 173/173:
+  1. `...decFlags(dec)` dropped from the BUILDER → **5 failed / 167 passed (172)**, FOUR
+     files. Both mechanisms this step named — the derived-set equality and `run-routes`'s
+     caps-box argv pin — plus the parity file's positive control, `whitelist-subset`'s
+     exact argv, and `unattended-actor`'s same-actor assertion (`the dispatched ws-add
+     declares nothing …: expected -1 to be greater than -1`). The total is 172, not 173:
+     `ws-add` leaves the DERIVED SET, so its own probe stops being generated. That is the
+     anti-whitelist clause working in the other direction, and it is why the equality is
+     asserted separately from the probe.
+
+     CORRECTED AT REVIEW, and the correction is the point. This ceremony was first
+     recorded as **4 failed / 168 passed (172), three files** — measured before ceremony
+     2's remediation existed. That remediation (`unattended-actor`'s `ws-add`-beside-
+     `ws-hold` same-actor assertion) guards the BUILDER as well as the call site, so it
+     reds under this plant too, and ceremony 1 was never re-run after it landed. Direction
+     is favourable — one more guard than claimed, not fewer — but a number presented as a
+     measurement must be one. Re-measured on the shipped tree, plant alone, reverted:
+     baseline 173/173, planted 5 failed / 167 passed (172), four files.
+  2. `null` at the CALL SITE, builder intact → **1 failed / 172 passed** as first written:
+     one mechanism, not two (deviation below). A second was added — `unattended-actor`'s
+     runtime test now reads the `ws-add` argv beside the `ws-hold` one and demands the same
+     actor — and the same plant re-measured gives **2 failed / 171 passed**, two files.
+  3. The PRE-D-410 ccd restored under the shipped server (`git show 3500bb22:ccd/ccd`, the
+     tree the defect was found in) → parity **2 failed / 8 passed (10)**: the `ws-add` probe
+     (`expected 1 to be 3` — the declared arm dies rc 1 where the control reaches rc 3) and
+     the positive control. The five workspace verbs stay green, as they must.
+  4. The hoist removed — two `sweepDec` calls, the literal typed twice →
+     **1 failed / 109 passed**: `unattended-actor`'s SITES anchor, which reports the anchor
+     as moved rather than the label as wrong. The pin this task rewrote still bites.
+  5. The DRIFT the hoist exists to prevent — a second, DIFFERENT literal at the `ws-add`
+     (`` `run:${run.id} spawn` ``) → **2 failed / 171 passed**: `run-routes`'s exact argv and
+     `unattended-actor`'s same-actor assertion (`expected 'run:3 spawn' to be
+     'run:3 dispatch'`).
+
+- [x] **Step 6: commit.** Full server package, foreground: **224 files / 5599 passed + 3
+  skipped (5602)**, zero failures — the RED that Task 1's tip carried is closed.
 
 ## Deviations found
 
 (minted through `POST /api/ledger/deviations` at close — executors nominate prose-only)
+
+- **NOMINATED (Task 2): `ws-add` could not take "the same shape as the other five", and the
+  shape the plan named would have been BLIND.** Step 2 says the negative control becomes "a
+  positive probe in the same shape as the other five" — five verbs pointed at
+  `--session __no-such-session__`, refusing byte-identically with and without the dec. Point
+  `ws-add` at an ABSENT PROJECT the same way and both arms die
+  `ccd: not a git repo: <home>/projects/__no-such-session__` at rc 1, byte-identical, WITH
+  the flag loop and WITHOUT it: `cmd_ws_add` validates the project (`ccd:2611-2614`) a dozen
+  lines before anything looks at the slug, so the refusal happens upstream of the entire
+  question. MEASURED, both ways, against the pre-D-410 ccd restored on disk: the REAL-project
+  probe reds (parity **2 failed / 8 passed**, the loop probe among them), while the
+  absent-project probe leaves that same loop case GREEN (**1 failed / 9 passed** — the one
+  failure is the separate positive control, not the probe). A probe that passes against the
+  tree the defect was found in is worse than no probe, because it reads like a measurement.
+  So `ws-add`'s entry names a REAL project, `PROBES` gained a `setup` hook and a per-verb
+  `reached` witness, and the loop's third assertion — "the control really got somewhere" —
+  stopped being one sentence about absent sessions. For `ws-add` it is the registry: exactly
+  one row, named `<project>-<slug>` with a slug `_ws_slug_valid` would accept, read BEFORE
+  the second arm runs.
+
+- **NOMINATED (Task 2): the mutation this step named is not the mutation a future edit will
+  make, and the call site had one guard where the builder had five.** Step 5 predicts that
+  dropping `...decFlags(dec)` reds two mechanisms; it reds five tests in four files (four in
+  three as first measured — see ceremony 1's correction above), well past the promise. But that is a mutation of the BUILDER. The likelier future edit is at the CALL
+  SITE — `wsAddWorker(run.project, null)`, the shape the revert commit itself left behind —
+  and measured, that was caught by exactly ONE test (`run-routes`'s caps-box argv pin):
+  **1 failed / 172 passed**. The parity suite cannot see it (it composes its own argv, so it
+  measures the builder), and `unattended-actor`'s `null` scan reads the five WORKSPACE
+  builders only. A second mechanism was added rather than the gap merely recorded:
+  `unattended-actor`'s runtime test now reads the `ws-add` argv beside the `ws-hold` one and
+  requires the SAME actor — against the hold's own measured value, not against the template a
+  second time, so two hardcoded expectations cannot agree with each other while the code has
+  split into two measurements. Re-measured: **2 failed / 171 passed**, two files.
+
+- **NOMINATED (Task 2): `unattended-actor.test.ts`'s arithmetic cannot represent a dec that is
+  measured once and spent twice, so `wsAddWorker` stays outside its scan.** That file counts
+  lines matching `BUILDERS` and binds the count to `SITES.length` exactly, and each `SITES`
+  entry captures a label LITERAL typed at its own call. Step 3's "reuse that value, do not
+  take a second measurement" produces one `sweepDec` line feeding two calls — so adding
+  `wsAddWorker` to `BUILDERS` would give ELEVEN builder lines against TEN pinnable labels, and
+  the only way to make that arithmetic close is two `SITES` entries sharing one anchor, which
+  would assert two labels where there is one. Left out deliberately; the absence is now
+  explained in the file as a statement about the mechanism rather than about the builder, and
+  the call site is guarded at runtime instead (the two reds above). The residual is small but
+  real: a file whose title says "every unattended ccd call site names itself" does not, in
+  fact, scan this one. It is the same class as the standing nomination on that file — it
+  derives builders that DECLARE, not builders that are UNATTENDED.
+
+- **DISCLOSED (Task 2), not a deviation — the plan took this decision knowingly, and nothing
+  in the tree measures it.** No capability token was minted for `cmd_ws_add`'s parse (Global
+  Constraints: no new ccd verb, no new grant), so `actor-flags-v1` now advertises two facts
+  that ship in two deploys. A box carrying the OLD `cmd_ws_add` under a NEW server refuses
+  every dispatched spawn — D-410 exactly. What prevents that is the AGENT-FIRST deploy order
+  and nothing else: no test asserts it, no doctor check reads it, and `deploy.sh` has no
+  cross-target version check (its own coordinates file documents that it does not look at the
+  other lane). The reverse order is safe by absence — a new ccd under an old server never
+  receives the flags. Written at `wsAddWorker`'s docstring, where a reader composing the argv
+  meets it, and in `ccdargv-dec-parity.test.ts`'s header.
+
+- **DISCLOSED (Task 2), not a deviation — the hoist Step 3 mandates buys its single actor
+  with a STALENESS, and the commit body advertised only the win.** "Reuse that value, do not
+  take a second measurement" is right and the reuse ships, but the moment it settles on is the
+  EARLIER one. `dispatchDec` is read at `dispatchRun`'s entry and spent at the step-5 hold
+  seven awaits later (the `ws-add`, two registry reads, a hook read, the `/clear`), while
+  `state.ccdVerbs` is MUTATED IN PLACE underneath — `remote/client.ts`'s `onReady` on every
+  agent re-handshake (writing `null` for a frame carrying no usable list) and
+  `refreshcaps.ts`'s 60s lane. If caps REGRESS across that window the hold ships
+  `--surface`/`--actor` where the fresh `sweepDec` this hoist replaced would have omitted
+  them, at exactly the cost `capSupported`'s no-evidence-FALSE default exists to avoid. The
+  asymmetry sits three lines from the spend and nothing reconciles it:
+  `verbSupported(deps.fleetState, holdArgv)` re-reads the SAME field FRESH and, by its own
+  opposite default, answers TRUE on `null`. Accepted — one actor across the two rows of one
+  act outweighs a flag pair a regressed box refuses, and the regression is a deploy-window
+  event — but the first commit body claimed `deps.fleetState` "cannot be consulted at two
+  moments and answer differently" without saying which moment won. Now written at the
+  declaration itself, where the next reader of the hoist meets it. Unmeasured by
+  construction: no fixture can hold a re-handshake open across a real dispatch's awaits.
 
 - **NOMINATED (Task 1): the emit-site givenness conditional is DELIBERATELY UNPINNED, and no
   fixture can pin it.** Step 6's ceremony 3 predicted that emitting `dec.actor`

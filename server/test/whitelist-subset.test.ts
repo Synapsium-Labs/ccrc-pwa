@@ -30,12 +30,18 @@ const SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   // Same bare `['ws-add']` grant, second builder: the dispatch path's
   // worker-declaring form. Its sample proves the FLAGGED shape crosses the
   // existing prefix with no widening — tokens after the prefix are
-  // unconstrained, the same rule that carries `stop --surface`. NO DEC, and
-  // the agent's own gate is why this file cannot be the place that says so:
-  // trailing tokens are unconstrained here, so the flagged shape T2 briefly
-  // sent crossed this layer green while real ccd refused it as an invalid
-  // slug. `ccdargv-dec-parity.test.ts` is the guard that measures that.
-  wsAddWorker: ['demo'],
+  // unconstrained, the same rule that carries `stop --surface`. It CARRIES A
+  // DEC, for `wsHold`'s reason two entries down: a bare sample would leave
+  // layer 2 proving only the unflagged shape reachable, which is not the shape
+  // the dispatch path sends on a caps-advertising box.
+  //
+  // AND THIS FILE STILL CANNOT BE THE PLACE THAT VALIDATES IT (D-410): trailing
+  // tokens are unconstrained by the agent's prefix grant, so the flagged shape
+  // crosses this layer green whether or not the fleet binary can read it — it
+  // did, for a whole commit, while real ccd refused it as an invalid slug.
+  // `ccdargv-dec-parity.test.ts` runs the real binary; this layer only says the
+  // tokens reach it.
+  wsAddWorker: ['demo', { surface: 'agent', actor: 'run:7 dispatch', reason: null }],
   prStateSession: ['demo-quiet-basin'],
   prStateProject: ['demo'],
   prOpen: ['demo-quiet-basin', 'the work', 'Ym9keQ==', 'false'],
@@ -312,10 +318,14 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     wsAdd: ['ws-add', 'demo'],
     // LEADING flag, then the project — ccd's `cmd_ws_add` shifts `--no-rc`
     // before its positionals, so token order here is parse-load-bearing the
-    // same way `prOpen`'s is. Exactly three tokens: `cmd_ws_add` binds
-    // `slug="${2:-}"` straight after the project with no flag loop, so a
-    // fourth token is a SLUG, whatever it looks like.
-    wsAddWorker: ['ws-add', '--no-rc', 'demo'],
+    // same way `prOpen`'s is. The dec rides LAST, after the positional, where
+    // every other builder places it: `--no-rc` keeps its leading position and
+    // the declaration is appended, so the shift-then-positionals reading is
+    // untouched by attribution. Until D-410's remedy a fourth token here was a
+    // SLUG whatever it looked like — `cmd_ws_add` bound `slug="${2:-}"` with no
+    // flag loop at all; it has one now, and `ccd-lifecycle-sites.test.ts` runs
+    // every one of these four forms through the real binary.
+    wsAddWorker: ['ws-add', '--no-rc', 'demo', '--surface', 'agent', '--actor', 'run:7 dispatch'],
     prStateSession: ['pr-state', '--session', 'demo-quiet-basin'],
     prStateProject: ['pr-state', '--project', 'demo'],
     // SAMPLES.prOpen's fourth element is the STRING 'false' (SAMPLES is typed
