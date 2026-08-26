@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=7bb29b8c42d7bb08f911ee1268526162a6e4053a72f9a9b4087eca83aafef23c
+# ccrc:generated 1 sha256=17c90f90205a487f850eb0b48043f384cb92ebe295ebce14a1748aa6890a7e2c
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -337,7 +337,19 @@ _tmux()  { echo "cc-$1"; }                                  # id -> tmux name
 # and tmux's own words for the substrate marker, and a `$( )` caller would eat
 # the second fact with the subshell. Same classifier, same polarity — the probe
 # IS the one classifier now; `_session_verdict` merely re-derives from it.
-_session_probe() {   # id -> PROBE_VERDICT=live|gone|unknown, PROBE_DETAIL (unknown only); rc 0
+_session_probe() {   # id -> PROBE_VERDICT=live|gone|unknown, PROBE_DETAIL (unknown only),
+                     #       PROBE_SUBSTRATE=present|absent|unmeasured; rc 0
+  # PROBE_SUBSTRATE IS NOT A FOURTH VERDICT, AND MUST NEVER BECOME ONE. It answers a
+  # DIFFERENT question from PROBE_VERDICT — "is there a tmux server at all", not "is this
+  # session alive" — and exactly one caller reads it: `cmd_supervise`'s pre-flight, which
+  # needs to tell a server that is definitively ABSENT (nothing to block on; `new-session`
+  # will create one) from a server that is merely SILENT (the wedge, where
+  # `_tmux_new_session` blocks forever with no deadline). Every other caller — `_alive`,
+  # `_ws_status`, `cmd_forget`, `ws-archive`, `ws-reap` — reads PROBE_VERDICT only, and
+  # for them `no server running` must stay `unknown`: `unknown` refuses, `gone` DESTROYS
+  # (D-308/D-309, and `sessionVerdictFixture.ts`'s own "the mistake this table exists to
+  # make loud"). Mapping absent->gone would present every live session as reapable during
+  # a cold start. The distinction is declared here and spent in one place.
   # Direct call, never $( ) — the whole point is returning TWO facts without a subshell
   # eating them. The deadline applies ONLY when tmux is a real executable: `timeout` execs
   # its argv, so a test's `tmux() { … }` function stub would be invisible behind it — and a
@@ -348,16 +360,43 @@ _session_probe() {   # id -> PROBE_VERDICT=live|gone|unknown, PROBE_DETAIL (unkn
   else
     out=$(timeout "$SUBSTRATE_PROBE_DEADLINE_S" tmux has-session -t "$(_tmux "$1")" 2>&1); rc=$?
   fi
-  if (( rc == 0 )); then PROBE_VERDICT=live; PROBE_DETAIL=""; return 0; fi
+  if (( rc == 0 )); then PROBE_VERDICT=live; PROBE_DETAIL=""; PROBE_SUBSTRATE=present; return 0; fi
   # rc 124 is timeout's own kill: tmux printed nothing, so the reason is SYNTHESIZED —
   # an empty marker reason is the one shape a maintainer can do nothing with (spec §1).
   if (( rc == 124 )) && [[ -z "$out" ]]; then
-    PROBE_VERDICT=unknown; PROBE_DETAIL="tmux did not answer within ${SUBSTRATE_PROBE_DEADLINE_S}s"; return 0
+    PROBE_VERDICT=unknown; PROBE_DETAIL="tmux did not answer within ${SUBSTRATE_PROBE_DEADLINE_S}s"
+    # SILENCE IS THE WEDGE — the one shape `cmd_supervise` must not walk into.
+    PROBE_SUBSTRATE=unmeasured; return 0
   fi
   case "$out" in
-    *"can't find session"*) PROBE_VERDICT=gone;    PROBE_DETAIL="" ;;
+    *"can't find session"*) PROBE_VERDICT=gone;    PROBE_DETAIL=""; PROBE_SUBSTRATE=present ;;
     *)                      PROBE_VERDICT=unknown; PROBE_DETAIL="${out:-tmux exited $rc with no message}" ;;
   esac
+  # SECOND, INDEPENDENT CLASSIFICATION — deliberately a separate `case`, so that
+  # broadening one can never silently broaden the other. The verdict case above
+  # recognises the ONE message that means death; this one recognises the two that mean
+  # "there is no server", and BOTH were measured on tmux 3.4:
+  #
+  #   no server running on /tmp/tmux-1000/default            socket present, nobody serving
+  #   error connecting to /tmp/tmux-1000/x (No such file …)  no socket at all (cold boot)
+  #
+  # The errno is part of the second pattern and is NOT optional. `error connecting to …
+  # (Permission denied)` and `(Connection refused)` are the same prefix and are NOT
+  # evidence of absence — a server may well be there — so they must fall through to
+  # `unmeasured` and refuse, exactly as an unrecognised message does. Matching the bare
+  # prefix would turn a permissions fault into "no server, go create one".
+  # GATED ON THE VERDICT, never on `PROBE_SUBSTRATE` being unset: these are GLOBALS that
+  # outlive the call, so a "only if empty" guard would carry the PREVIOUS probe's answer
+  # into this one. Every path out of this function assigns exactly once — rc 0 and the
+  # rc-124 branch above both return having done so, the `gone` arm sets `present`, and
+  # this covers the remaining one.
+  if [[ "$PROBE_VERDICT" == unknown ]]; then
+    case "$out" in
+      *"no server running"*)                                PROBE_SUBSTRATE=absent ;;
+      *"error connecting to"*"No such file or directory"*)  PROBE_SUBSTRATE=absent ;;
+      *)                                                    PROBE_SUBSTRATE=unmeasured ;;
+    esac
+  fi
 }
 _session_verdict() {   # id -> live|gone|unknown on stdout; always rc 0 (derived; one classifier)
   _session_probe "$1"; echo "$PROBE_VERDICT"
@@ -11182,8 +11221,36 @@ cmd_supervise() {   # systemd ExecStart: ensure then block until the session die
   # marks, stamps, and probes its way to live (pane survived the fault) or gone (exit 1;
   # the NEXT supervise run ensures normally against a healed substrate). `live`/`gone`
   # take ensure exactly as before: alive short-circuits it, gone is the cold start.
+  #
+  # AND THE COLD-START ESCAPE (D-514, incident 2026-08-26). `unknown` alone held the whole fleet
+  # down for 4.5 hours with all 18 units reporting `active`: after an OOM killed the tmux
+  # server, every probe answered `no server running`, which is `unknown`, so ensure was
+  # skipped and the loop below — whose `unknown` arm has no exit — spun on backoff
+  # forever. Recovery then required a human running a BARE `tmux new-session`, which
+  # bypasses `_tmux_new_session` and so births the server in the caller's cgroup instead
+  # of ccrc-tmux-server.scope, leaving every pane uncapped: the aggregate ceiling covered
+  # nothing, and the next OOM killed the supervision layer rather than the offenders.
+  # Trap -> manual bootstrap -> uncapped panes -> OOM -> trap.
+  #
+  # `_tmux_new_session`'s own comment assumed this could not happen — "it self-heals
+  # whenever the server is next created" holds only while ccd is the creator, and the
+  # trap is exactly what made a human the creator.
+  #
+  # An ABSENT server is safe to ensure into and a SILENT one is not, which is the whole
+  # reason `PROBE_SUBSTRATE` exists: absence is fast and definitive, and there is no
+  # socket for `_tmux_new_session`'s deadline-less `new-session` to block on — it creates
+  # one, in the right scope. The wedge stays excluded, so the hang this pre-flight was
+  # written for is still refused. Nothing else in the tree reads PROBE_SUBSTRATE, so
+  # `ws-reap`/`ws-archive`/`cmd_forget` are untouched: for them `no server running` is
+  # still `unknown`, still refuses.
   _session_probe "$id"
-  if [[ "$PROBE_VERDICT" != unknown ]]; then
+  # D-515 — `${PROBE_SUBSTRATE:-}`, NOT `$PROBE_SUBSTRATE`: `_session_probe` is STUBBED WHOLESALE
+  # by several suites (ccd-substrate.test.ts's `seq` double drives this loop through a
+  # scripted verdict sequence), and those stubs set PROBE_VERDICT/PROBE_DETAIL only. Under
+  # `set -u` a bare reference aborts the supervisor; unset must simply mean "no claim
+  # about the substrate", which falls back to the pre-2026-08-26 behaviour. A pre-flight
+  # that dies on an older double is a worse failure than the trap it is fixing.
+  if [[ "$PROBE_VERDICT" != unknown || "${PROBE_SUBSTRATE:-}" == absent ]]; then
     cmd_ensure "$id"
   fi
   # Re-stamped every 30s from the 5-second tick this loop already runs, so the
