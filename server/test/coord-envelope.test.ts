@@ -159,11 +159,11 @@ describe('renderMailNudge', () => {
     expect(a.slice(0, 24)).toBe(b.slice(0, 24));
   });
 
-  it('embeds toId — the listing endpoint it points at, not one delivery', () => {
+  it('embeds toId — the listing verb it points at, not one delivery', () => {
     const nudge = renderMailNudge('demo-quiet-mesa');
-    expect(nudge).toContain('GET /api/mail?to=demo-quiet-mesa');
+    expect(nudge).toContain('mail list --to demo-quiet-mesa');
     // ID-AGNOSTIC by design: no per-delivery id anywhere in the nudge — it
-    // points at the LISTING endpoint so one nudge drains all outstanding mail.
+    // points at the LISTING verb so one nudge drains all outstanding mail.
     expect(nudge).not.toMatch(/\bid: \d+/);
   });
 
@@ -173,20 +173,57 @@ describe('renderMailNudge', () => {
   // every mail resolves to exactly one delivery. Both `GET /api/mail/:id` and
   // `POST /api/mail/:id/ack` key on the DELIVERY id, so the nudge must send
   // the worker to `deliveryId`, never bare `id`, and say so explicitly.
-  it('names the full read+ack protocol using deliveryId, NOT id — with the token location', () => {
+  it('names the full read+ack protocol using deliveryId, NOT id', () => {
     const nudge = renderMailNudge('demo-coordinator');
-    expect(nudge).toContain('GET /api/mail?to=demo-coordinator');
+    expect(nudge).toContain('mail list --to demo-coordinator');
     expect(nudge).toContain('deliveryId');
     expect(nudge).toContain('NOT id');
-    expect(nudge).toContain('GET /api/mail/<deliveryId>');
-    expect(nudge).toContain('POST /api/mail/<deliveryId>/ack');
-    expect(nudge).not.toContain('/api/mail/<id>');
-    expect(nudge).not.toContain('/api/mail/<id>/ack');
-    expect(nudge).toContain('~/.cc-secrets/ccrc-mail.token');
-    expect(nudge).toContain('x-ccrc-mail-token');
+    expect(nudge).toContain('mail fetch <deliveryId>');
+    expect(nudge).toContain('mail ack <deliveryId>');
+    expect(nudge).not.toContain('mail fetch <id>');
+    expect(nudge).not.toContain('mail ack <id>');
   });
 
-  // Live incident 2026-08-25 (a MekWarLive worker): this nudge is the ONLY
+  // THE THIRD LIVE WEDGE this line has caused, and the reason it names a client
+  // rather than routes. A repo may legitimately deny `Bash(curl:*)`; one does.
+  // Its worker got this nudge every ten minutes for hours and refused every one
+  // — correctly, because raw HTTP was the only thing the nudge taught it. The
+  // sibling `renderEnvelope` was converted in D-738 and THIS function, twelve
+  // lines below it, was missed in the same change.
+  it('teaches the client, never curl or a raw route — the nudge must work in a repo that denies curl', () => {
+    const nudge = renderMailNudge('demo-coordinator');
+    // curl may be NAMED (the line says it works where curl is denied) but never
+    // USED: no invocation, and no bare HTTP method + path for a reader to copy.
+    // An earlier draft of this test built its own matcher out of the nudge it
+    // was checking, which made it a tautology that could not fail. Deleted.
+    expect(nudge).not.toMatch(/\bcurl\s+-/);
+    expect(nudge).not.toMatch(/\b(GET|POST|PUT|DELETE)\s+\/api\//);
+    expect(nudge).toContain('~/.local/bin/ccrc-api');
+  });
+
+  // RELOCATED, not dropped. These two teachings used to live in this line
+  // because the reader had to perform them. The client performs them now, so a
+  // second copy here would be a second thing to rot — and the nudge must say
+  // plainly that the reader is responsible for neither, or a stale reader will
+  // go looking for the token anyway.
+  it('hands the reader no token job at all, and says so', () => {
+    const nudge = renderMailNudge('demo-coordinator');
+    expect(nudge).not.toContain('~/.cc-secrets/ccrc-mail.token');
+    expect(nudge).not.toContain('x-ccrc-mail-token');
+    expect(nudge).toMatch(/reads the box token itself/);
+    expect(nudge).toMatch(/handle neither/);
+  });
+
+  it('invokes the client by explicit path — ~/.local/bin is not on the unit PATH', () => {
+    // Measured 2026-08-26: the `claude-session@` units run with systemd's
+    // default PATH, so a bare `ccrc-api` would teach a call that cannot run.
+    const nudge = renderMailNudge('demo-coordinator');
+    expect(nudge).toContain('~/.local/bin/ccrc-api mail list');
+    expect(nudge).toMatch(/not on this unit's PATH/);
+  });
+
+  // Live incident 2026-08-25 (a worker on one of the fleet's projects): this
+  // nudge is the ONLY
   // protocol text guaranteed CURRENT in a recipient's pane — a skill loaded
   // into a session's context goes stale across deploys, and a peer-mail
   // recipient may have no skill loaded at all. The old line named the routes
@@ -196,19 +233,15 @@ describe('renderMailNudge', () => {
   // a socket-level 400 before any route runs; `coord/token.ts`'s
   // `extractToken` is the documented shape). The next three tests pin the two
   // teachings that close those failure modes.
-  it('derives the API base the way the skills do — CCRC_SERVER_URL in ~/.ccrc/agent.env, ws->http/wss->https — so a protocol-less reader never guesses a host', () => {
+  it('carries no second copy of the address derivation — the client owns it', () => {
+    // The live lesson that put the derivation here is unchanged: a worker once
+    // GUESSED a host. What changed is who performs it. `ccrc-api` refuses
+    // `no-server-url` rather than falling back (pinned in ccrc-api.test.ts), so
+    // repeating the recipe here would be a second spelling to drift.
     const nudge = renderMailNudge('demo-coordinator');
-    expect(nudge).toContain('CCRC_SERVER_URL');
-    expect(nudge).toContain('~/.ccrc/agent.env');
-    expect(nudge).toContain('ws->http');
-    expect(nudge).toContain('wss->https');
-  });
-
-  it('states the extraction rule — the one non-#, non-blank line, stripped — and says never cat', () => {
-    const nudge = renderMailNudge('demo-coordinator');
-    expect(nudge).toContain('non-#');
-    expect(nudge).toContain('non-blank');
-    expect(nudge.toLowerCase()).toContain('never cat');
+    expect(nudge).not.toContain('CCRC_SERVER_URL');
+    expect(nudge).not.toContain('~/.ccrc/agent.env');
+    expect(nudge).toMatch(/resolves the server address/);
   });
 
   // NEGATIVE: the address is DERIVED, never BAKED. A literal http(s)://host
