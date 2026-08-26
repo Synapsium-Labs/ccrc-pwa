@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, WS_ADD, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 import { actsOf, readJournal, eventsOf, measOf, decOf, lcDir } from './lifecycleHelpers.js';
 
 let h: CcdHarness;
@@ -329,5 +329,213 @@ describe('workspace call sites', () => {
     // Nothing landed — the directory truly was unwritable, so this is not a
     // false pass through some other write path.
     expect(readJournal(h.home)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `ws-add` declares its actor — the flags D-410 measured it could not read.
+//
+// `cmd_ws_add` had NO flag loop: it consumed an exact-string `--no-rc` at
+// position 1 and then bound `project="$1"`, `slug="${2:-}"`. So the composed
+// dispatch argv `ws-add --no-rc <project> --surface agent --actor '…'` put
+// `--surface` in the SLUG and died at `_ws_slug_valid` — before the worktree,
+// the registry row and the pane existed. Every dispatched spawn on a
+// caps-advertising box would have refused, and the `create` row for every
+// spawn that did land read *declared: nothing*.
+//
+// The remedy is `cmd_ws_hold`'s loop (ccd:3711), not a new invention, and it
+// carries TWO dec flags, not three: `--reason` is deliberately absent, because
+// this verb has no reason of its own and the dispatch path's rides `--actor`.
+// ---------------------------------------------------------------------------
+
+describe('ws-add declares its actor (D-410)', () => {
+  /** ONE `ws-add` attempt against the REAL ccd, BOUNDED and NON-FATAL.
+   *
+   *  NON-FATAL: `die` is `exit 1` (ccd:150) and `h.sh` throws on any non-zero
+   *  exit, so a refusal read through `h.sh` alone surfaces as an
+   *  `execFileSync` stack rather than an assertion about what ccd said. The
+   *  probe therefore runs as its own script and only its rc crosses back, in
+   *  the text.
+   *
+   *  BOUNDED, and the `timeout` is the whole reason this is not a bare
+   *  `h.sh`: ccd runs under `set -uo pipefail` with NO `-e`, where a
+   *  `shift 2` past the end of argv shifts NOTHING — so a missing arity check
+   *  in the flag loop can fail as a LOOP THAT NEVER ENDS rather than as a
+   *  wrong answer. `execFileSync` is synchronous, so an unbounded hang takes
+   *  the whole vitest worker with it instead of reddening one test. rc 124 is
+   *  `timeout`'s own, and it is an assertion (see the arity case below).
+   *
+   *  MEASURED, and it narrows that claim for the arms as they are WRITTEN
+   *  today: deleting the `--surface` arity check does not hang, because
+   *  `lc_surface="$2"` trips `set -u` before the `shift 2` is reached and the
+   *  shell aborts at rc 1 (`$2: unbound variable`). The bound stays anyway —
+   *  it costs one word and it is the difference between a red test and a dead
+   *  worker the day an arm shifts before it reads.
+   *
+   *  It is still `h.sh` that spawns it — the containment this file's standing
+   *  note requires — and the script sources the same real `ccd` `h.sh` does,
+   *  with `WS_ADD`'s three stubs so no spawn or systemd call is attempted. */
+  const wsAdd = (args: string, slug = 'quiet-mesa'): { out: string; rc: number } => {
+    const script = path.join(h.home, 'ws-add-probe.sh');
+    fs.writeFileSync(script, `source ${JSON.stringify(CCD)}\n${WS_ADD}\ncmd_ws_add ${args}\n`);
+    const raw = h.sh(`timeout 20 bash ${JSON.stringify(script)} 2>&1; echo "__rc=$?"`,
+      { CCD_WS_SLUG: slug });
+    const m = /__rc=(\d+)$/.exec(raw)!;
+    return { out: raw.slice(0, m.index).trim(), rc: Number(m[1]) };
+  };
+
+  it('binds the project from a flag-stripped argv — the dec no longer lands in the slug', () => {
+    // D-410's own shape, with the flags LEADING: before the loop, `--surface`
+    // bound as the PROJECT (`_ws_project_valid` allows `A-Za-z0-9._-`, so it
+    // passed) and the verb died `not a git repo: …/projects/--surface`.
+    h.makeRepo('demo');
+    const r = wsAdd(`--surface agent --actor 'run:7 dispatch' demo`);
+    expect(r.rc, r.out).toBe(0);
+    expect(h.reg('demo-quiet-mesa', 'uuid'), 'the workspace was never created').not.toBeNull();
+    expect(h.reg('demo-quiet-mesa', 'workspace')).toBe('quiet-mesa');
+  });
+
+  it('accepts them in the composed order the dispatch path sends — the dec rides LAST', () => {
+    // The argv `wsAddWorker` composes: `['ws-add','--no-rc',p,…decFlags(dec)]`.
+    // This is the exact call that refused `invalid slug '--surface'`, and it is
+    // why the loop has to accept a flag ANYWHERE rather than only at the head.
+    h.makeRepo('demo');
+    const r = wsAdd(`--no-rc demo --surface agent --actor 'run:7 dispatch'`);
+    expect(r.rc, r.out).toBe(0);
+    expect(h.reg('demo-quiet-mesa', 'uuid'), 'the workspace was never created').not.toBeNull();
+    // `--no-rc` folded INTO the loop must still mean what it meant: the
+    // per-session stamp (task #37) is the dispatch path's other declaration,
+    // and losing it would put an RC pane under a dispatched worker.
+    expect(h.reg('demo-quiet-mesa', 'rc')).toBe('off');
+  });
+
+  it('accepts the equals forms its sibling verbs accept, value and all', () => {
+    // Not merely "does not die": the `${1#--surface=}` strip is what the
+    // journal assertion below measures, so a mutant arm that set the flag
+    // GIVEN without taking its value would red here rather than pass for the
+    // half-right reason.
+    h.makeRepo('demo');
+    const r = wsAdd(`--surface=agent --actor='run:7 dispatch' demo`);
+    expect(r.rc, r.out).toBe(0);
+    const [e] = eventsOf(h.home, 'create');
+    expect(e, 'ws-add wrote no create line').toBeTruthy();
+    expect(decOf(e!)['surface']).toBe('agent');
+    expect(decOf(e!)['actor']).toBe('run:7 dispatch');
+  });
+
+  it('refuses a blank --actor, and refuses it before anything is created', () => {
+    // `cmd_ws_hold`'s rule (ccd:3742-3745), for its reason: `_lc_dec_ok` is
+    // LENGTH-ONLY, so `_lc_dec_ok ''` returns 0 and cannot be the blank guard.
+    // A declared-but-unsayable actor is not a declaration, and this verb
+    // refuses one where it can still leave the box exactly as it found it.
+    h.makeRepo('demo');
+    const r = wsAdd(`--actor '   ' demo`);
+    expect(r.rc).toBe(1);
+    expect(r.out).toContain('--actor must be non-blank');
+    expect(h.reg('demo-quiet-mesa', 'uuid'), 'the refusal must precede the worktree').toBeNull();
+    expect(fs.existsSync(path.join(h.home, 'worktrees', 'demo'))).toBe(false);
+  });
+
+  it('refuses a valueless --surface or --actor with a usage line rather than looping forever', () => {
+    // THE ARITY CHECK, STATED AS A TEST. `[[ $# -ge 2 ]]` before each
+    // `shift 2` is not defensive dressing: ccd has no `set -e`, so a shift
+    // past the end of argv shifts nothing and the loop cannot terminate. rc
+    // 124 is `timeout`'s, and it is asserted SEPARATELY from the usage line so
+    // a regression that hangs reads as a hang instead of as a wrong message.
+    h.makeRepo('demo');
+    for (const flag of ['--surface', '--actor']) {
+      const r = wsAdd(`demo ${flag}`);
+      expect(r.rc, `${flag} with no value never terminated — the arity check is gone`).not.toBe(124);
+      expect(r.rc).toBe(1);
+      expect(r.out, `${flag} with no value did not refuse with a usage line`)
+        .toContain('usage: ccd ws-add');
+      expect(h.reg('demo-quiet-mesa', 'uuid')).toBeNull();
+    }
+  });
+
+  it('the create row carries what was DECLARED, beside what was measured', () => {
+    // Parsing without threading would be ceremony: the point of the flags is
+    // that the lifecycle journal stops recording every dispatched spawn as
+    // *declared: nothing*.
+    h.makeRepo('demo');
+    const r = wsAdd(`--no-rc demo --surface agent --actor 'run:7 dispatch'`);
+    expect(r.rc, r.out).toBe(0);
+    const [e] = eventsOf(h.home, 'create');
+    expect(e, 'ws-add wrote no create line').toBeTruthy();
+    expect(decOf(e!)['surface']).toBe('agent');
+    expect(decOf(e!)['actor']).toBe('run:7 dispatch');
+    // The measured half is untouched — the dec is an ADDITION to this row, not
+    // a replacement of the six fields it already carried.
+    expect(measOf(e!)['project']).toBe('demo');
+    expect(measOf(e!)['workspace']).toBe('quiet-mesa');
+    expect(measOf(e!)['branch']).toBe('ws/quiet-mesa');
+  });
+
+  it('a DECLARED surface that is blank or unmodelled reads `unknown`, never `none`', () => {
+    // THREE STATES, THREE ANSWERS (`_lc_surface_norm`, ccd:1513-1527, D-210):
+    // `none` means nobody declared one, `unknown` means a word arrived and this
+    // build does not model it. `_lc_surface_norm ''` prints EMPTY rather than
+    // `unknown` — it cannot tell "no argument" from "an explicit blank" — so
+    // the `${lc_w:-unknown}` fallback in the loop is the ONLY thing standing
+    // between a declared blank and the encoder's `none` backfill, i.e. between
+    // this row and the given/no-flag collapse.
+    //
+    // MEASURED (see the absence case below for why this one carries the
+    // weight): deleting `:-unknown` reds this and nothing else in the file.
+    h.makeRepo('demo');
+    expect(wsAdd(`--surface '' demo`, 'quiet-mesa').rc).toBe(0);
+    expect(decOf(eventsOf(h.home, 'create')[0]!)['surface']).toBe('unknown');
+    expect(wsAdd(`--surface wharf demo`, 'still-lake').rc).toBe(0);
+    expect(decOf(eventsOf(h.home, 'create')[1]!)['surface']).toBe('unknown');
+  });
+
+  it('an UNDECLARED ws-add gains no actor at all — absence permits', () => {
+    // The whole `dec` object, not `not.toHaveProperty('actor')`: an ADDITION
+    // is as visible as a change. `surface: 'none'` is the ENCODER's backfill
+    // for a row that declared none (`dec.setdefault("surface","none")`,
+    // ccd:1347).
+    //
+    // MEASURED, AND THE MEASUREMENT IS WORTH RECORDING: this case is defended
+    // by TWO guards that are redundant with each other, so neither is
+    // observable ALONE. `_lc_json` drops any pair whose value is `""`
+    // (ccd:1337-1338), which is why `cmd_ws_hold` can emit its three pairs
+    // unconditionally — so emitting `dec.actor ""` here reds nothing (28/28
+    // still green), and dropping the `(( lc_gs ))` guard on the surface
+    // normalisation reds nothing either (28/28), because the conditional
+    // array never lets the resulting `unknown` reach the encoder. Remove BOTH
+    // and this goes red on `surface: 'unknown'`. The conditional array is
+    // therefore belt to the encoder's braces, kept because it says what it
+    // means rather than depending on a downstream drop — and the guard that
+    // IS singly pinned is the `${lc_w:-unknown}` fallback, above.
+    h.makeRepo('demo');
+    const r = wsAdd('demo');
+    expect(r.rc, r.out).toBe(0);
+    const [e] = eventsOf(h.home, 'create');
+    expect(e, 'ws-add wrote no create line').toBeTruthy();
+    expect(decOf(e!)).toEqual({ surface: 'none' });
+    expect(measOf(e!)['workspace']).toBe('quiet-mesa');
+  });
+
+  it('every pre-existing call form still works, and still names the workspace it used to', () => {
+    // The plan's global constraint, said once as a mechanism: the four shapes
+    // that existed before the loop must be byte-identical afterwards. A loop
+    // that swallowed a positional would show up HERE as a workspace under the
+    // wrong name, and `_ws_slug_valid`'s leading `[a-z0-9]` is what makes the
+    // swallow impossible — no legitimate slug can begin with `-`.
+    h.makeRepo('demo');
+    expect(wsAdd('demo', 'quiet-mesa').rc).toBe(0);
+    expect(h.reg('demo-quiet-mesa', 'workspace')).toBe('quiet-mesa');
+    expect(h.reg('demo-quiet-mesa', 'rc'), 'a plain ws-add stamps no rc field').toBeNull();
+
+    expect(wsAdd('demo river-bend').rc).toBe(0);
+    expect(h.reg('demo-river-bend', 'workspace')).toBe('river-bend');
+
+    expect(wsAdd('--no-rc demo', 'still-lake').rc).toBe(0);
+    expect(h.reg('demo-still-lake', 'workspace')).toBe('still-lake');
+    expect(h.reg('demo-still-lake', 'rc')).toBe('off');
+
+    expect(wsAdd('--no-rc demo cold-fen').rc).toBe(0);
+    expect(h.reg('demo-cold-fen', 'workspace')).toBe('cold-fen');
+    expect(h.reg('demo-cold-fen', 'rc')).toBe('off');
   });
 });

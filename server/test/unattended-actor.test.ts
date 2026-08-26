@@ -46,14 +46,21 @@ const FILES = ['watch.ts', 'coord/close.ts', 'coord/dispatch.ts', 'coord/routes.
 // THE FIVE WORKSPACE VERBS, and that boundary is ccd's, not this file's:
 // `cmd_caps`'s own docstring says `actor-flags-v1` "decides ONE server-side
 // thing: whether to APPEND `--surface`/`--actor`/`--reason` to the FIVE
-// WORKSPACE VERBS". `wsAddWorker` is deliberately NOT here, and its absence is
-// a measurement rather than an omission — T2 (spawn visibility) added it, and
-// its review found that `cmd_ws_add` has no flag parser at all, so the dec it
-// composed died as an invalid slug on every caps-advertising box. See that
-// builder's own docstring in `ccdargv.ts`, and `ccdargv-dec-parity.test.ts`,
-// which derives the dec-appending builders from `CCD_ARGV` itself and runs
-// each one's verb through the real ccd — the crossing THIS scan cannot make,
-// because a name-list can only ever see the names somebody typed into it.
+// WORKSPACE VERBS".
+//
+// `wsAddWorker` DECLARES TOO SINCE D-410's REMEDY, and is still not here —
+// which is now a statement about THIS MECHANISM rather than about that
+// builder. The scan below is per-LINE and per-CALL-SITE: it reads a `null`
+// written at a call, and `SITES` reads a label literal typed at a call. The
+// dispatch path's dec is neither — it is measured ONCE into `dispatchDec` and
+// spent at two calls, so there is one line to read for two sites and the
+// arithmetic this file does would be wrong about it. What holds that call site
+// instead is stronger than a text scan and is named here so nobody reads the
+// absence as a gap: `run-routes.test.ts` pins the composed `ws-add` tokens at
+// RUNTIME on a caps-advertising box, and `ccdargv-dec-parity.test.ts` derives
+// the dec-appending builders from `CCD_ARGV` itself and runs each one's verb
+// through the real ccd — the crossing THIS scan cannot make, because a
+// name-list can only ever see the names somebody typed into it.
 const BUILDERS = /CCD_ARGV\.(wsArchive|wsRestore|wsHold|wsRelease|wsRename)\(/;
 
 describe('sweepDec', () => {
@@ -166,8 +173,18 @@ const SITES: readonly Site[] = [
   // call, the same shape every `close.ts` entry above already uses — a
   // foreign call captured here changes the surrounding text and reds against
   // the hardcoded label below, exactly as a cross-site label swap would.
-  { file: 'coord/dispatch.ts', what: 'dispatchRun hold, step 5',
-    find: /const holdArgv = CCD_ARGV\.wsHold\(sessionId,\n\s+holdReason\(run\.program, run\.wave, run\.waveOf, run\.id\),\n\s+sweepDec\(deps\.fleetState, (`[^`]*`)\)\);/,
+  // D-410's remedy moved this one. `dispatchRun` takes its dec ONCE, above the
+  // fresh-spawn branch, and spends it at two calls — the `ws-add` that mints
+  // the workspace and the `ws-hold` at step 5 that claims it — so the label is
+  // no longer typed inside a `CCD_ARGV.…(` call and the old anchor could not
+  // match it. Anchored on the declaration instead, which is at least as
+  // specific as the surrounding-call form it replaces: `const dispatchDec =`
+  // can appear once in a scope, so there is no earlier `sweepDec(…)` for
+  // `RegExp.exec`'s first-match rule to capture by mistake. A second copy of
+  // this label anywhere in the file is exactly what the hoist exists to
+  // prevent, and would be visible as a second `sweepDec` call.
+  { file: 'coord/dispatch.ts', what: 'dispatchRun\'s one dec — spent at the fresh-spawn ws-add and the step-5 hold',
+    find: /const dispatchDec = sweepDec\(deps\.fleetState, (`[^`]*`)\);/,
     label: '`run:${run.id} dispatch`' },
   { file: 'coord/routes.ts', what: 'open-then-hold, sessionId reclaim',
     find: /const argv = CCD_ARGV\.wsHold\(sessionId,\n\s+holdReason\(program, wave, waveOfVal, opened\.id\),\n\s+sweepDec\(deps\.fleetState, (`[^`]*`)\)\);/,
@@ -252,5 +269,29 @@ describe('an interpolated label carries the RUN ID ACTUALLY IN SCOPE, not merely
     // Measured, not merely shaped: the concrete `opened.id` this run was
     // actually assigned, not a stand-in for "some number".
     expect(holdCall![actorIdx + 1]).toBe(`run:${opened.id} dispatch`);
+
+    // ONE ACT, ONE LANE, ONE ACTOR — the half the structural scan above cannot
+    // reach. `dispatchRun` measures its dec ONCE (`dispatchDec`) and spends it
+    // at both of its ccd writes, so the `ws-add` that mints the workspace and
+    // the `ws-hold` that claims it must name the SAME actor. Asserted against
+    // the hold's own value rather than against the template a second time: two
+    // hardcoded expectations would agree with each other even if the code had
+    // split into two independent measurements, which is exactly the drift the
+    // single read exists to prevent.
+    //
+    // This is also the SECOND mechanism on `wsAddWorker`'s dec (D-410). The
+    // first is `run-routes.test.ts`'s exact-argv pin on a caps-advertising box;
+    // measured, a `null` handed to `wsAddWorker` at that call site reds this
+    // test and that one, in two files, and neither the parity suite (which
+    // composes its own argv) nor this file's `null` scan (which reads the five
+    // WORKSPACE builders) can see it.
+    const addCall = calls.find((c) => c[0] === 'ws-add');
+    expect(addCall, 'the fresh-spawn ws-add must have run').toBeDefined();
+    const addActorIdx = addCall!.indexOf('--actor');
+    expect(addActorIdx, 'the dispatched ws-add declares nothing — its create row will read `declared: nothing`')
+      .toBeGreaterThan(-1);
+    expect(addCall![addActorIdx + 1],
+      'the spawn and the hold named DIFFERENT actors — one dispatch has become two lanes in the journal')
+      .toBe(holdCall![actorIdx + 1]);
   });
 });

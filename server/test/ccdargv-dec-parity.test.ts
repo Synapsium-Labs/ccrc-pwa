@@ -13,19 +13,29 @@
 // between them they cannot see the only question that matters at the seam:
 // does the binary on the fleet host understand what we just composed?
 //
-// It has already cost once. `wsAddWorker` was given `...decFlags(dec)` on the
-// argument that `actor-flags-v1` means "this box takes the flags" — and that
-// token means something narrower, in ccd's own words (`ccd/ccd`, `cmd_caps`):
-// it "decides ONE server-side thing: whether to APPEND `--surface`/`--actor`/
-// `--reason` to the FIVE WORKSPACE VERBS". `ws-add` is not one of the five.
-// `cmd_ws_add` consumes an exact-string `--no-rc` and then binds `slug="${2:-}"`
-// with no flag parser at all, so the dec's first token lands in the SLUG and the
-// verb dies at `_ws_slug_valid` — before a worktree, a registry row or a pane
-// exists. Every wave-1 dispatch on a caps-advertising box would have refused,
-// the registry diff would have found zero candidates, and the run would have sat
-// at `planned` with `dispatchStartedAt` set: the exact wedge Build 9b exists to
-// render, manufactured by the commit that renders it. 223 green server files saw
-// none of it.
+// It has already cost once, and that is D-410. `wsAddWorker` was given
+// `...decFlags(dec)` on the argument that `actor-flags-v1` means "this box takes
+// the flags" — and that token means something narrower, in ccd's own words
+// (`ccd/ccd`, `cmd_caps`): it "decides ONE server-side thing: whether to APPEND
+// `--surface`/`--actor`/`--reason` to the FIVE WORKSPACE VERBS". `ws-add` was
+// not one of the five. `cmd_ws_add` consumed an exact-string `--no-rc` and then
+// bound `slug="${2:-}"` with no flag parser at all, so the dec's first token
+// landed in the SLUG and the verb died at `_ws_slug_valid` — before a worktree,
+// a registry row or a pane existed. Every wave-1 dispatch on a caps-advertising
+// box would have refused, the registry diff would have found zero candidates,
+// and the run would have sat at `planned` with `dispatchStartedAt` set: the
+// exact wedge Build 9b exists to render, manufactured by the commit that renders
+// it. 223 green server files saw none of it.
+//
+// THE PAST TENSE IS EARNED. D-410's named remedy shipped in this same programme:
+// `cmd_ws_add` now carries `cmd_ws_hold`'s strip-then-bind loop and threads what
+// it parsed into its own `create` row, so the builder declares again — and this
+// file's `ws-add` case turned from a negative control into a sixth probe. The
+// capability token did NOT change with it (the ruling: no new ccd verb, no new
+// grant), so what keeps an old box safe is DEPLOY ORDER — ccd ships to the fleet
+// host first, and a new ccd under an old server simply never receives the flags.
+// That residual is disclosed on `wsAddWorker`'s own docstring, where a reader
+// composing the argv will meet it.
 //
 // So the mechanism is a DERIVATION on the server side and an EXECUTION on the
 // ccd side. Nothing here is a hand-kept list of "builders that declare": the set
@@ -43,6 +53,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CCD, ghContainedEnv, harnessBin, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 import { CCD_ARGV, type ActorFlags } from '../src/ccdargv.js';
+import { decOf, eventsOf, measOf } from './lifecycleHelpers.js';
 
 const srcRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../src');
 
@@ -82,19 +93,77 @@ function decAppendingVerbs(): string[] {
  *
  * The argv is COMPOSED, never typed: this suite exists to measure what the
  * server actually sends, and a hand-written token list would measure what
- * someone believed it sends. Every entry names a session/project that does not
- * exist, so real ccd refuses for a reason of its own and touches nothing —
- * which is the point: a verb that PARSES the dec strips it before it binds
- * positionals, and so gives byte-identical refusals with and without it. A verb
- * that does not parse it gives a DIFFERENT refusal, naming the flag.
+ * someone believed it sends.
+ *
+ * FIVE OF THE SIX name a session that does not exist, so real ccd refuses for a
+ * reason of its own and touches nothing — which is the point: a verb that
+ * PARSES the dec strips it before it binds positionals, and so gives
+ * byte-identical refusals with and without it. A verb that does not parse it
+ * gives a DIFFERENT refusal, naming the flag.
+ *
+ * `ws-add` IS THE SIXTH AND IT CANNOT BE PROBED THAT WAY. Measured, not
+ * assumed: point it at an ABSENT PROJECT and both arms die
+ * `ccd: not a git repo: <home>/projects/__no-such-session__` at rc 1,
+ * byte-identical — with the flag loop AND without it, because `cmd_ws_add`
+ * validates the project (`ccd:2611-2614`) a dozen lines before anything looks
+ * at the slug. An absent-project probe here would have gone green on the very
+ * tree D-410 was found in, which makes it worse than no probe: it would read
+ * like a measurement. So `ws-add`'s probe names a REAL project, `setup` builds
+ * it, and the third assertion — "the control really got somewhere" — becomes
+ * per-verb rather than one sentence about absent sessions.
  */
+interface Probe {
+  /** The argv, through the verb's own builder. */
+  argv: (dec: ActorFlags | null) => readonly string[];
+  /** Whatever the fixture must hold before the two arms are comparable. */
+  setup?: () => void;
+  /** Proof the CONTROL arm reached the place an unparsed flag WOULD have been
+   *  seen. Two identical no-ops — or two identical successes — satisfy the
+   *  equality above while measuring nothing, so every verb has to say what
+   *  "it really got there" looks like for it. */
+  reached: (control: { code: number; out: string }) => void;
+}
+
 const ABSENT = '__no-such-session__';
-const PROBES: Record<string, (dec: ActorFlags | null) => readonly string[]> = {
-  'ws-archive': (d) => CCD_ARGV.wsArchive(ABSENT, d),
-  'ws-restore': (d) => CCD_ARGV.wsRestore(ABSENT, d),
-  'ws-hold': (d) => CCD_ARGV.wsHold(ABSENT, 'probe reason', d),
-  'ws-release': (d) => CCD_ARGV.wsRelease(ABSENT, d),
-  'ws-rename': (d) => CCD_ARGV.wsRename(ABSENT, 'ws/probe', d),
+const PROJECT = 'demo';
+
+/** The five session verbs' witness, said once: the refusal names the session
+ *  the fixture deliberately does not have. That is also what proves the flags
+ *  were stripped BEFORE positional binding rather than merely tolerated — a
+ *  verb that bound `--surface` as its session would refuse naming the flag. */
+const refusedForTheAbsentSession = (c: { out: string }): void => {
+  expect(c.out, 'the control probe did not refuse for the absent session').toContain(ABSENT);
+};
+
+/** The registry rows that EXIST, by the `.uuid` field every other reader in
+ *  this repo treats as row-exists (the `.ws-add-<project>.lock` a flock leaves
+ *  behind is not a session and is not counted as one). */
+const uuidRows = (): string[] =>
+  fs.readdirSync(path.join(h.home, '.cc-sessions')).filter((f) => f.endsWith('.uuid')).sort();
+
+const PROBES: Record<string, Probe> = {
+  'ws-archive': { argv: (d) => CCD_ARGV.wsArchive(ABSENT, d), reached: refusedForTheAbsentSession },
+  'ws-restore': { argv: (d) => CCD_ARGV.wsRestore(ABSENT, d), reached: refusedForTheAbsentSession },
+  'ws-hold': { argv: (d) => CCD_ARGV.wsHold(ABSENT, 'probe reason', d), reached: refusedForTheAbsentSession },
+  'ws-release': { argv: (d) => CCD_ARGV.wsRelease(ABSENT, d), reached: refusedForTheAbsentSession },
+  'ws-rename': { argv: (d) => CCD_ARGV.wsRename(ABSENT, 'ws/probe', d), reached: refusedForTheAbsentSession },
+  'ws-add': {
+    argv: (d) => CCD_ARGV.wsAddWorker(PROJECT, d),
+    setup: () => { h.makeRepo(PROJECT); },
+    // `ws-add`'s exposure IS its positionals, so "it really got there" means
+    // the control got PAST the slug binding: exactly one registry row, named
+    // `<project>-<slug>` with a slug `_ws_slug_valid` would accept. The exit
+    // status is NOT the witness — this fixture cannot finish a spawn, so both
+    // arms answer rc 3 with no output at all, which is byte-identical and says
+    // nothing about how far either got.
+    reached: () => {
+      const rows = uuidRows();
+      expect(rows, 'the control ws-add created no workspace — it refused before the slug bound')
+        .toHaveLength(1);
+      expect(rows[0]!, 'the control ws-add named its workspace after something _ws_slug_valid refuses')
+        .toMatch(/^demo-[a-z0-9][a-z0-9-]{1,30}\.uuid$/);
+    },
+  },
 };
 
 let h: CcdHarness;
@@ -129,15 +198,21 @@ const runCcd = (args: readonly string[]): { code: number; out: string } => {
 };
 
 describe('every dec-appending CCD_ARGV builder names a verb real ccd parses a dec on', () => {
-  it('derives the dec-appending verbs from the table, and finds the five workspace verbs — no more', () => {
+  it('derives the dec-appending verbs from the table, and finds six — the five workspace verbs and ws-add', () => {
     // BOTH DIRECTIONS, and the second one is the one this suite was written
     // for. A verb ADDED here without a ccd that parses it is caught by the
     // execution test below; a verb SILENTLY added is caught right here, because
-    // the derivation cannot miss it and this equality cannot absorb it. The set
-    // is ccd's own sentence, said in TypeScript: `actor-flags-v1` gates the five
-    // WORKSPACE verbs, and nothing else.
+    // the derivation cannot miss it and this equality cannot absorb it.
+    //
+    // SIX, NOT FIVE, SINCE D-410's REMEDY. `actor-flags-v1` still gates exactly
+    // the five WORKSPACE verbs `cmd_caps` names — that sentence did not widen,
+    // and no new token was minted — but `cmd_ws_add` grew the parse of its own
+    // in the same programme, so the SERVER may now declare on a sixth verb. The
+    // safety of reusing one token across the two is not asserted here and is
+    // not a property of source text: it is the AGENT-FIRST deploy order, stated
+    // where the argv is composed.
     expect(decAppendingVerbs())
-      .toEqual(['ws-archive', 'ws-hold', 'ws-release', 'ws-rename', 'ws-restore']);
+      .toEqual(['ws-add', 'ws-archive', 'ws-hold', 'ws-release', 'ws-rename', 'ws-restore']);
   });
 
   it('has a probe for every derived verb — a new one cannot join unmeasured', () => {
@@ -148,58 +223,71 @@ describe('every dec-appending CCD_ARGV builder names a verb real ccd parses a de
   });
 
   for (const verb of decAppendingVerbs()) {
-    it(`${verb}: real ccd refuses identically with and without the dec — the flags are parsed, not bound`, () => {
+    it(`${verb}: real ccd answers identically with and without the dec — the flags are parsed, not bound`, () => {
       const probe = PROBES[verb]!;
-      const control = runCcd(probe(null));
-      const declared = runCcd(probe(PROBE_DEC));
+      probe.setup?.();
+      const control = runCcd(probe.argv(null));
+      // The witness runs BEFORE the second arm, deliberately: `ws-add`'s reads
+      // the registry, and the declared arm writes a second row into it.
+      probe.reached(control);
+      const declared = runCcd(probe.argv(PROBE_DEC));
       // Byte-identical: same exit code, same words. A verb whose parser strips
       // `--surface`/`--actor` before positional binding cannot tell these two
-      // calls apart by the time it refuses; a verb without a parser binds the
+      // calls apart by the time it answers; a verb without a parser binds the
       // flag as a positional and says so.
       expect(declared.code, `${verb} changed its exit code when handed a dec`).toBe(control.code);
-      expect(declared.out, `${verb} changed its refusal when handed a dec`).toBe(control.out);
-      // ...and the control really did refuse, FOR THE FIXTURE'S REASON. Two
-      // identical no-ops — or two identical successes — would satisfy the
-      // equality above while measuring nothing, so the refusal must name the
-      // session that is absent. That is also what proves the flags were
-      // stripped BEFORE positional binding rather than merely tolerated: a verb
-      // that bound `--surface` as its session would refuse naming the flag.
-      expect(control.out, `${verb}'s control probe did not refuse for the absent session`)
-        .toContain(ABSENT);
+      expect(declared.out, `${verb} changed its answer when handed a dec`).toBe(control.out);
     });
   }
 });
 
-describe('ws-add is the negative control, and it is a measurement', () => {
-  it('is NOT in the derived set — wsAddWorker composes no dec', () => {
-    // The assertion that would have gone red on the commit this suite exists
-    // because of, in one line, red-first. It is not a preference: the test
-    // below measures WHY.
-    expect(decAppendingVerbs()).not.toContain('ws-add');
+describe('ws-add was this file\'s negative control, and D-410\'s remedy turned it into a positive one', () => {
+  it('the argv wsAddWorker COMPOSES lands a declared actor in the create row, and the workspace it names', () => {
+    // THE WHOLE CROSSING IN ONE TEST, and the reason it is not enough to know
+    // that ccd refuses identically with and without the dec: the parity loop
+    // above proves the flags are STRIPPED, and stripping them into nothing
+    // would satisfy it exactly as well as recording them. `--surface`/`--actor`
+    // exist to make a dispatched spawn distinguishable from an operator's own
+    // add, and the only place that fact survives is the journal's `create` row.
+    //
+    // COMPOSED, never typed: `CCD_ARGV.wsAddWorker` builds the argv, real ccd
+    // runs it, and `lifecycleHelpers` reads the row back. What used to stand
+    // here was the same measurement with the opposite verdict — `invalid slug
+    // '--surface'`, no worktree, no registry row.
+    //
+    // The exit status is deliberately not asserted: this fixture cannot finish
+    // a spawn (rc 3, no output), which says nothing about the parse. The
+    // artefacts do.
+    h.makeRepo(PROJECT);
+    runCcd(CCD_ARGV.wsAddWorker(PROJECT, PROBE_DEC));
+
+    expect(uuidRows(), 'the flagged ws-add created no workspace — this is D-410 again')
+      .toHaveLength(1);
+    expect(fs.existsSync(path.join(h.home, 'worktrees', PROJECT)),
+      'no worktree: the verb died before it built one').toBe(true);
+
+    const created = eventsOf(h.home, 'create');
+    expect(created, 'ws-add wrote no create line').toHaveLength(1);
+    // BOTH PAIRS AND NOTHING ELSE. `toEqual` rather than two field reads: a dec
+    // that gained a third pair here — a `--reason` this verb deliberately does
+    // not take, say — is a change to what the journal records and must be read
+    // by a human, not absorbed.
+    expect(decOf(created[0]!)).toEqual({ surface: 'agent', actor: 'probe:dec parity' });
+    // ...on the workspace the dispatch path would then have gone looking for.
+    expect(measOf(created[0]!)['project']).toBe(PROJECT);
+    expect(`${PROJECT}-${String(measOf(created[0]!)['workspace'])}.uuid`).toBe(uuidRows()[0]!);
   });
 
-  it('real ccd binds the dec\'s first token as the SLUG and dies before creating anything', () => {
-    // The refusal, quoted from the binary rather than from a belief about it.
-    // `cmd_ws_add` shifts an exact-string `--no-rc`, binds `project="$1"` and
-    // `slug="${2:-}"`, and has no flag loop — so `--surface` arrives as the
-    // slug and `_ws_slug_valid`'s `^[a-z0-9][a-z0-9-]{1,30}$` refuses it. The
-    // argv below is spelled out rather than composed, deliberately: it is the
-    // shape `wsAddWorker` MUST NOT compose, so no builder may be able to
-    // produce it, and this is what the sentence looks like when it is wrong.
-    h.makeRepo('demo');
-    const declared = runCcd(
-      ['ws-add', '--no-rc', 'demo', '--surface', 'agent', '--actor', 'run:7 dispatch']);
-    expect(declared.code).not.toBe(0);
-    expect(declared.out).toMatch(/invalid slug '--surface'/);
-    // Nothing was created. This is the half that makes the wedge concrete: the
-    // verb dies before the worktree, before the registry row, before the pane,
-    // so the dispatch's registry diff finds zero new candidates and the run is
-    // left at `planned` with a dispatch it can never complete. `.uuid` is the
-    // row-exists field the registry is read through everywhere else — the
-    // `.ws-add-demo.lock` the flock leaves behind is not a session and is not
-    // counted as one.
-    expect(fs.existsSync(path.join(h.home, 'worktrees', 'demo'))).toBe(false);
-    expect(fs.readdirSync(path.join(h.home, '.cc-sessions')).filter((f) => f.endsWith('.uuid')))
-      .toEqual([]);
+  it('and the same builder handed no dec still writes the row it always wrote — absence permits', () => {
+    // The other direction, against the real binary: `decFlags(null)` composes
+    // the bare three tokens an older ccd must keep receiving, and the row it
+    // produces carries `surface: none` with NO actor at all. A `create` row
+    // that gained a blank `dec.actor` would be a new fact — "somebody declared
+    // nothing" — where today there is an honest silence.
+    h.makeRepo(PROJECT);
+    runCcd(CCD_ARGV.wsAddWorker(PROJECT, null));
+    const created = eventsOf(h.home, 'create');
+    expect(created, 'ws-add wrote no create line').toHaveLength(1);
+    expect(decOf(created[0]!)).toEqual({ surface: 'none' });
   });
 });

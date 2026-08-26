@@ -230,31 +230,43 @@ export const CCD_ARGV = {
    *  trailing flag would be read as the slug. The PWA's ordinary add stays
    *  `wsAdd` and the box default.
    *
-   *  AND IT DECLARES NOTHING, WHICH IS NOT AN OVERSIGHT (spawn visibility, T2,
-   *  reverted in its review round). This is the ONE `ws-add` in the tree no
-   *  operator asked for, so it reads as an unattended lane in `wsArchive`'s
-   *  sense and Build 9a's journal records every dispatched spawn as
-   *  `declared: nothing / unmeasured` — indistinguishable from a human tapping
-   *  Add. T2 appended `...decFlags(dec)` here on the belief that
-   *  `actor-flags-v1` means "this box takes the flags". IT DOES NOT.
-   *  `cmd_caps`'s own words: that token "decides ONE server-side thing:
-   *  whether to APPEND `--surface`/`--actor`/`--reason` to the FIVE WORKSPACE
-   *  VERBS" — archive, restore, hold, release, rename. `ws-add` MINTS a
-   *  workspace rather than acting on one, and `cmd_ws_add` has no flag loop at
-   *  all: it consumes an exact-string `--no-rc`, binds `project="$1"` and
-   *  `slug="${2:-}"`, so a dec's first token lands in the SLUG and the verb
-   *  dies at `_ws_slug_valid` before a worktree, a registry row or a pane
-   *  exists. Measured against the real binary, not argued:
-   *  `ccdargv-dec-parity.test.ts` runs it in a fixture HOME.
+   *  AND IT DECLARES (D-410, and the second time of asking). This is the ONE
+   *  `ws-add` in the tree no operator asked for — the dispatch path firing on a
+   *  coordinator's behalf — so it is an unattended lane in exactly `wsArchive`'s
+   *  sense, and while it passed nothing Build 9a's journal recorded every
+   *  dispatched spawn as `declared: nothing / unmeasured`, byte-identical to a
+   *  human tapping Add on the fleet screen. The dec goes LAST, after the
+   *  positional, where every other builder here places it — `--no-rc` keeps the
+   *  leading slot, attribution is appended behind the project, and `null` still
+   *  yields the bare argv token for token.
    *
-   *  So attribution here needs TWO things ccd does not have yet — a flag parser
-   *  on `cmd_ws_add`, and its `create` act actually EMITTING the dec (`_lc_done
-   *  create` passes `meas.*` only, so a parsed flag would still record
-   *  `declared: nothing`) — plus a capability token of its own, because every
-   *  box already deployed advertises `actor-flags-v1` with a `ws-add` that
-   *  cannot parse a dec. That is a ccd change, which flips the deploy to
-   *  AGENT-FIRST, and is the orchestrator's call to make. */
-  wsAddWorker: (p: string) => argv(['ws-add', '--no-rc', p]),
+   *  IT WAS APPENDED HERE ONCE BEFORE AND WAS WRONG, WHICH IS WHY THE TWO
+   *  SENTENCES BELOW ARE SEPARATE. The first attempt read `actor-flags-v1` as
+   *  "this box takes the flags"; `cmd_caps` says something narrower and still
+   *  does — that token "decides ONE server-side thing: whether to APPEND
+   *  `--surface`/`--actor`/`--reason` to the FIVE WORKSPACE VERBS", and
+   *  `ws-add` MINTS a workspace rather than acting on one. What changed is not
+   *  the token's meaning but `cmd_ws_add` itself: it now carries `cmd_ws_hold`'s
+   *  strip-then-bind loop and threads what it parsed into its own `create` row
+   *  (D-410's named remedy, shipped in this same programme). Before that loop it
+   *  consumed an exact-string `--no-rc` and bound `slug="${2:-}"`, so the dec's
+   *  first token landed in the SLUG and the verb died at `_ws_slug_valid` before
+   *  a worktree, a registry row or a pane existed — every wave-1 dispatch on a
+   *  caps-advertising box refusing, and the run left at `planned` with
+   *  `dispatchStartedAt` set.
+   *
+   *  THE RESIDUAL, STATED RATHER THAN CLOSED: no new capability token was
+   *  minted for the parse (the ruling: no new ccd verb, no new grant), so
+   *  `actor-flags-v1` is now doing duty for two facts that ship separately, and
+   *  a box carrying the OLD `cmd_ws_add` under a NEW server would refuse every
+   *  dispatched spawn exactly as D-410 describes. What prevents that is DEPLOY
+   *  ORDER and nothing else: this change is AGENT-FIRST — ccd to the fleet host
+   *  before the server — and a new ccd under an old server merely never receives
+   *  the flags, which is the behaviour that shipped before this line. Measured
+   *  against the real binary rather than argued: `ccdargv-dec-parity.test.ts`
+   *  derives this builder into its probe set FROM this table and runs the verb
+   *  in a fixture HOME. */
+  wsAddWorker: (p: string, dec: ActorFlags | null) => argv(['ws-add', '--no-rc', p, ...decFlags(dec)]),
   prStateSession: (id: string) => argv(['pr-state', '--session', id]),
   prStateProject: (p: string)  => argv(['pr-state', '--project', p]),
   prOpen:    (id: string, t: string, b64: string, draft: boolean) =>

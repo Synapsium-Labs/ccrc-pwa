@@ -354,16 +354,17 @@ describe('POST /api/runs/:id/dispatch', () => {
     expect(calls.filter((c) => c[0] === 'ws-add')).toEqual([['ws-add', '--no-rc', PROJECT]]);
   });
 
-  // T2's attribution half, INVERTED by its review round, and the inversion is
-  // the pin. `actor-flags-v1` is not a promise that this box takes the flags
-  // anywhere — `cmd_caps` scopes it to the FIVE WORKSPACE VERBS, and `ws-add`
-  // is not one: `cmd_ws_add` has no flag loop, binds `slug="${2:-}"`, and dies
-  // at `_ws_slug_valid` on the dec's first token, before a worktree or a
-  // registry row exists. So the argv this route sends must NOT vary with the
-  // capability list at all, and both halves of that are asserted here.
-  // `ccdargv-dec-parity.test.ts` is where the ccd side of it is MEASURED; this
-  // is where the route is held to it.
-  it('a fresh spawn on an actor-flags box still sends the BARE argv — the token does not reach ws-add', async () => {
+  // T2's attribution half, inverted by its review round (D-410) and RE-LANDED
+  // now that the ccd side exists: `cmd_ws_add` carries `cmd_ws_hold`'s
+  // strip-then-bind loop and threads the dec into its own `create` row, so the
+  // journal stops recording every dispatched spawn as `declared: nothing`.
+  // `ccdargv-dec-parity.test.ts` is where the ccd side is MEASURED against the
+  // real binary; this is where the ROUTE is held to sending it.
+  //
+  // The two tests below are the two halves of the fix, and they must BOTH hold.
+  // One alone would let the flags become unconditional — breaking a box whose
+  // ccd predates the parse — or vanish, recording nothing again.
+  it('a fresh spawn on an actor-flags box DECLARES the dispatch: ws-add carries the dec, naming this run', async () => {
     const home = mkTmp('ccrc-runs-');
     const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-fresh-dec'] });
     // `ws-hold` rides along in the verb list for the reason
@@ -379,15 +380,30 @@ describe('POST /api/runs/:id/dispatch', () => {
     app = w.app;
     const opened = (await postOpen(app)).json() as { id: number };
     expect((await postDispatch(app, opened.id)).statusCode).toBe(200);
-    expect(calls.filter((c) => c[0] === 'ws-add')).toEqual([['ws-add', '--no-rc', PROJECT]]);
+    // Token for token: `--no-rc` keeps ccd's parse-load-bearing LEADING
+    // position, the project stays the sole positional, and the declaration is
+    // appended last — the placement every other dec-carrying builder uses, and
+    // the order `cmd_ws_add`'s loop was written to accept.
+    expect(calls.filter((c) => c[0] === 'ws-add')).toEqual([
+      ['ws-add', '--no-rc', PROJECT, '--surface', 'agent', '--actor', `run:${opened.id} dispatch`],
+    ]);
+    // ONE ACT, ONE ACTOR. The `ws-add` and the `ws-hold` that follows it are
+    // two ccd calls by one lane on one run's behalf, and the dec is MEASURED
+    // ONCE and spent twice (`dispatchDec`) rather than composed at each site —
+    // so the journal's `create` row and its `hold` row name the same actor by
+    // construction, not by two literals staying equal.
+    const hold = calls.find((c) => c[0] === 'ws-hold');
+    expect(hold, 'the dispatch must reach its hold for this comparison to mean anything').toBeDefined();
+    expect(hold![hold!.indexOf('--actor') + 1]).toBe(`run:${opened.id} dispatch`);
   });
 
-  it('...and sends the same three tokens on a ccd that never advertised actor-flags', async () => {
-    // The other direction. Together the pair says the argv is INVARIANT in the
-    // capability list, which is a stronger statement than either alone: a
-    // future `...decFlags(sweepDec(…))` here would red the first test and leave
-    // this one green, naming the caps-advertising box — the fleet's own shape —
-    // as the one that broke.
+  it('a fresh spawn on a ccd that never advertised actor-flags sends the BARE argv, byte for byte', async () => {
+    // Absence permits, and this is the half that keeps an older fleet host
+    // working: `sweepDec` answers `null` with no capability evidence, and
+    // `decFlags(null)` contributes no tokens at all. An unconditional dec here
+    // would meet a pre-D-410 `cmd_ws_add`'s positional arity and name a
+    // worktree after the flag — the exact shape `stopId`'s own docstring
+    // records paying for once already.
     const home = mkTmp('ccrc-runs-');
     const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-fresh-nodec'] });
     const w = await openApp(home, run, {
