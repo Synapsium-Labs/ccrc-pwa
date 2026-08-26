@@ -283,129 +283,27 @@ separately and only ORDER keeps a box safe. Deploy `ccd` to the fleet host first
 
 ## Deviations found
 
-(minted through `POST /api/ledger/deviations` at close — executors nominate prose-only)
+(minted through `POST /api/ledger/deviations` at close — this batch took 463–464, floor 465)
 
-- **NOMINATED (Task 2): `ws-add` could not take "the same shape as the other five", and the
-  shape the plan named would have been BLIND.** Step 2 says the negative control becomes "a
-  positive probe in the same shape as the other five" — five verbs pointed at
-  `--session __no-such-session__`, refusing byte-identically with and without the dec. Point
-  `ws-add` at an ABSENT PROJECT the same way and both arms die
-  `ccd: not a git repo: <home>/projects/__no-such-session__` at rc 1, byte-identical, WITH
-  the flag loop and WITHOUT it: `cmd_ws_add` validates the project (`ccd:2611-2614`) a dozen
-  lines before anything looks at the slug, so the refusal happens upstream of the entire
-  question. MEASURED, both ways, against the pre-D-410 ccd restored on disk: the REAL-project
-  probe reds (parity **2 failed / 8 passed**, the loop probe among them), while the
-  absent-project probe leaves that same loop case GREEN (**1 failed / 9 passed** — the one
-  failure is the separate positive control, not the probe). A probe that passes against the
-  tree the defect was found in is worse than no probe, because it reads like a measurement.
-  So `ws-add`'s entry names a REAL project, `PROBES` gained a `setup` hook and a per-verb
-  `reached` witness, and the loop's third assertion — "the control really got somewhere" —
-  stopped being one sentence about absent sessions. For `ws-add` it is the registry: exactly
-  one row, named `<project>-<slug>` with a slug `_ws_slug_valid` would accept, read BEFORE
-  the second arm runs.
-
-- **NOMINATED (Task 2): the mutation this step named is not the mutation a future edit will
-  make, and the call site had one guard where the builder had five.** Step 5 predicts that
-  dropping `...decFlags(dec)` reds two mechanisms; it reds five tests in four files (four in
-  three as first measured — see ceremony 1's correction above), well past the promise. But that is a mutation of the BUILDER. The likelier future edit is at the CALL
-  SITE — `wsAddWorker(run.project, null)`, the shape the revert commit itself left behind —
-  and measured, that was caught by exactly ONE test (`run-routes`'s caps-box argv pin):
-  **1 failed / 172 passed**. The parity suite cannot see it (it composes its own argv, so it
-  measures the builder), and `unattended-actor`'s `null` scan reads the five WORKSPACE
-  builders only. A second mechanism was added rather than the gap merely recorded:
-  `unattended-actor`'s runtime test now reads the `ws-add` argv beside the `ws-hold` one and
-  requires the SAME actor — against the hold's own measured value, not against the template a
-  second time, so two hardcoded expectations cannot agree with each other while the code has
-  split into two measurements. Re-measured: **2 failed / 171 passed**, two files.
-
-- **NOMINATED (Task 2): `unattended-actor.test.ts`'s arithmetic cannot represent a dec that is
-  measured once and spent twice, so `wsAddWorker` stays outside its scan.** That file counts
-  lines matching `BUILDERS` and binds the count to `SITES.length` exactly, and each `SITES`
-  entry captures a label LITERAL typed at its own call. Step 3's "reuse that value, do not
-  take a second measurement" produces one `sweepDec` line feeding two calls — so adding
-  `wsAddWorker` to `BUILDERS` would give ELEVEN builder lines against TEN pinnable labels, and
-  the only way to make that arithmetic close is two `SITES` entries sharing one anchor, which
-  would assert two labels where there is one. Left out deliberately; the absence is now
-  explained in the file as a statement about the mechanism rather than about the builder, and
-  the call site is guarded at runtime instead (the two reds above). The residual is small but
-  real: a file whose title says "every unattended ccd call site names itself" does not, in
-  fact, scan this one. It is the same class as the standing nomination on that file — it
-  derives builders that DECLARE, not builders that are UNATTENDED.
-
-- **DISCLOSED (Task 2), not a deviation — the plan took this decision knowingly, and nothing
-  in the tree measures it.** No capability token was minted for `cmd_ws_add`'s parse (Global
-  Constraints: no new ccd verb, no new grant), so `actor-flags-v1` now advertises two facts
-  that ship in two deploys. A box carrying the OLD `cmd_ws_add` under a NEW server refuses
-  every dispatched spawn — D-410 exactly. What prevents that is the AGENT-FIRST deploy order
-  and nothing else: no test asserts it, no doctor check reads it, and `deploy.sh` has no
-  cross-target version check (its own coordinates file documents that it does not look at the
-  other lane). The reverse order is safe by absence — a new ccd under an old server never
-  receives the flags. Written at `wsAddWorker`'s docstring, where a reader composing the argv
-  meets it, and in `ccdargv-dec-parity.test.ts`'s header.
-
-- **DISCLOSED (Task 2), not a deviation — the hoist Step 3 mandates buys its single actor
-  with a STALENESS, and the commit body advertised only the win.** "Reuse that value, do not
-  take a second measurement" is right and the reuse ships, but the moment it settles on is the
-  EARLIER one. `dispatchDec` is read at `dispatchRun`'s entry and spent at the step-5 hold
-  seven awaits later (the `ws-add`, two registry reads, a hook read, the `/clear`), while
-  `state.ccdVerbs` is MUTATED IN PLACE underneath — `remote/client.ts`'s `onReady` on every
-  agent re-handshake (writing `null` for a frame carrying no usable list) and
-  `refreshcaps.ts`'s 60s lane. If caps REGRESS across that window the hold ships
-  `--surface`/`--actor` where the fresh `sweepDec` this hoist replaced would have omitted
-  them, at exactly the cost `capSupported`'s no-evidence-FALSE default exists to avoid. The
-  asymmetry sits three lines from the spend and nothing reconciles it:
-  `verbSupported(deps.fleetState, holdArgv)` re-reads the SAME field FRESH and, by its own
-  opposite default, answers TRUE on `null`. Accepted — one actor across the two rows of one
-  act outweighs a flag pair a regressed box refuses, and the regression is a deploy-window
-  event — but the first commit body claimed `deps.fleetState` "cannot be consulted at two
-  moments and answer differently" without saying which moment won. Now written at the
-  declaration itself, where the next reader of the hoist meets it. Unmeasured by
-  construction: no fixture can hold a re-handshake open across a real dispatch's awaits.
-
-- **NOMINATED (Task 1): the emit-site givenness conditional is DELIBERATELY UNPINNED, and no
-  fixture can pin it.** Step 6's ceremony 3 predicted that emitting `dec.actor`
-  unconditionally would red the absence test. It does not — and neither does the stronger
-  mutation, which collapses all three lines to
-  `local lc_dec=(dec.surface "$lc_surface" dec.actor "$lc_actor")`, BOTH pairs unconditional:
-  `ccd-lifecycle-sites` stayed **29/29** and every other journal-reading suite
-  (`ccd-actor-flags`, `ccd-lifecycle-emit`, `ccd-lifecycle-pairs`, `ccd-lifecycle-purge`,
-  `ccd-reason-flag`, `ccd-ws-rm-attic`, `ccd-ws-restore-supersede`) **180/180**. The cause is
-  structural rather than a missing test: `_lc_json` drops every pair whose value is `""`
+- **D-463** (Task 1) — the emit-site givenness conditional CANNOT be pinned by any fixture, and
+  the plan's ceremony 3 predicted it could. `_lc_json` drops every pair whose value is `""`
   (`ccd:1337-1338`) and backfills `dec.setdefault("surface","none")` (`ccd:1347`), while
-  `lc_surface` cannot hold anything but `none` while `lc_gs` is `0` — so the two argument
-  lists are byte-identical BY CONSTRUCTION and no fixture can separate them. The behaviour is
-  not unguarded, it is JOINTLY guarded: remove this conditional **and** the `(( lc_gs ))`
-  guard on the surface normalisation and the undeclared row reads `surface: 'unknown'`
-  (1 failed / 28 passed). The deviation is against the plan's own prediction and against the
-  first commit body's "built from GIVENNESS", which advertised as a mechanism something that
-  is an expression of intent standing beside one. Recorded now in the commit body, in
-  `ccd/ccd` at the emit site, and here.
-
-- **NOMINATED (Task 1): ceremony 2's failure mode is an abort, not a hang.** The plan allowed
-  either ("or hangs — if it hangs, say so"). Measured: dropping `[[ $# -ge 2 ]]` from the
-  `--surface` arm gives **1 failed / 28 passed**, and the observed failure is
-  `ccd: line <n>: $2: unbound variable` at rc 1 — under `set -u`, `lc_surface="$2"` trips
-  before the `shift 2` is ever reached, so the loop never gets the chance to spin. What the
-  arity check buys for the arms AS WRITTEN is therefore the honest usage line, not loop
-  termination; the never-terminating loop is what it buys the day an arm is reordered to
-  shift before it reads. The `timeout 20` bound in the probe stays for that day. Both
-  comments that stated the hang as the present-tense mechanism have been narrowed to what
-  was measured.
-
-- **NOMINATED (Task 1): Task 1 lands the tree RED and must not merge or deploy alone.**
-  `server/test/ccdargv-dec-parity.test.ts` fails at Task 1's tip — full server package,
-  foreground: `Test Files 1 failed | 223 passed (224); Tests 1 failed | 5597 passed |
-  3 skipped (5601)`. The failing case is that suite's `ws-add` NEGATIVE CONTROL, and it fails
-  because Task 1 works: real ccd in a fixture HOME now answers `ws-add --no-rc demo
-  --surface agent --actor 'run:7 dispatch'` with rc 3 and empty output (the fixture cannot
-  complete a spawn) after creating the workspace — `worktrees/demo` exists,
-  `.cc-sessions/demo-<slug>.uuid` is written, and the create row reads
-  `"dec":{"surface":"agent","actor":"run:7 dispatch"}` — where the control asserts
-  `invalid slug '--surface'` and no artefacts. Task 2 Step 2 converts that control into a
-  positive probe, which is the plan's design. Consequence for the orchestrator: **the merge
-  and the AGENT-FIRST deploy are gated on Task 2 landing with it** — Task 1's tip is not a
-  shippable point, and the plan's Wave order should be read as one release, not two. That
-  gate now sits in Wave order itself rather than only here, because a reader planning the
-  deploy reads the top of the plan and not its ledger tail. Re-measured at the review tip:
-  the package numbers and the failing assertion are byte-identical to the ones above, so
-  neither review round moved them.
+  `lc_surface` cannot hold anything but `none` while `lc_gs` is 0 — so the conditional array and
+  an unconditional `local lc_dec=(dec.surface "$lc_surface" dec.actor "$lc_actor")` are
+  byte-identical BY CONSTRUCTION. Measured: `ccd-lifecycle-sites` stayed 29/29 and seven other
+  journal-reading suites 180/180 under the stronger mutation. The behaviour is not unguarded, it
+  is JOINTLY guarded — drop this conditional AND the `(( lc_gs ))` normalisation guard and the
+  undeclared row reads `surface: 'unknown'` (1 failed / 28 passed). Kept for saying what it
+  means; recorded because the first commit body advertised as a mechanism something that is an
+  expression of intent standing beside one. Also under this number: ceremony 2's predicted hang
+  is not a hang — under `set -u`, `lc_surface="$2"` aborts on `$2: unbound variable` (rc 1)
+  before the `shift 2` is reached, so the arity check buys the honest usage line, and the
+  never-terminating loop only the day an arm is reordered to shift before it reads.
+- **D-464** (Tasks 1–2, the bisect window) — Task 1 alone ships `ccdargv-dec-parity.test.ts` RED
+  (1 failed / 5597 passed at `49116387`): that suite's `ws-add` NEGATIVE CONTROL asserts real ccd
+  binds the dec's first token as a slug and dies, which stops being true the moment Task 1's parse
+  lands, and Task 2 Step 2 is what converts the control into a positive probe. The window is
+  49116387..07b824bd and is closed on the branch tip (224 files / 5599 passed). Accepted rather
+  than history-rewritten — the same disposition as D-212 — but the AGENT-FIRST deploy is gated on
+  Task 2 being present, which it is. Also under this number: the Task 2 probe as landed differs
+  from the one the plan drew, noted prose-only in its commit body.
