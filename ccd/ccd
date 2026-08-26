@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=2f18d14a77b4d72670fb839bb18b06e58018ebfb5d49d302de41416cc5009160
+# ccrc:generated 1 sha256=345e95a2a4f90d27750deee8914a91f21a46d616f2d440757af8124f1bc39b27
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1831,9 +1831,15 @@ _gh_pr_list() {   # repo [head-branch] -> rows JSON on stdout; on failure prints
   # The head filter is a NAMED second parameter and the flag is built here — it
   # is never a forwarded "$@". pflag is last-wins, so a passthrough on the one
   # gh call two verbs share would let a caller override --repo or --state.
-  # pr-open needs the filter because it asks a question about ONE branch; both
-  # readers get the same fields, the same 100-PR window and the same failure
-  # classification, which is the point of there being one reader.
+  # A caller passes the filter when it asks a question about ONE branch, and
+  # two of the three do: `pr-open`, on both its probe and its read-back, and
+  # `pr-state --session`, whose unfiltered form answered `HTTP 504` in 11.2 s on
+  # a repo with real PR history and 0.78 s with the flag (measured 2026-08-26;
+  # the reasoning is at that call site). `pr-state --project` and `ws-reap` ask
+  # about every branch at once and pass nothing. Every reader still gets the
+  # same fields, the same 100-PR window and the same failure classification —
+  # the filter narrows WHICH PRs are in the window, never what is known about
+  # one, which is why there is still exactly one reader.
   local repo="$1" head="${2:-}" errf out rc err
   local -a filter=()
   [[ -n "$head" ]] && filter=(--head "$head")
@@ -4883,16 +4889,37 @@ cmd_ws_attic() {   # ccd ws-attic --session <id>   |   ccd ws-attic --drop <id>
   esac
 }
 
-_pr_state_one() {   # id main repo rows [answered-at-ms] -> one JSON line
+_pr_state_one() {   # id main repo rows [answered-at-ms] [rows-head-branch] -> one JSON line
   # `$5` is WHEN gh ANSWERED `$4`, in milliseconds, and it belongs to the answer
   # rather than to this session: `cmd_pr_state` takes it once, at the read, and
   # hands the same value to every session of a `--project` sweep. That is what
   # makes `_pr_py`'s compare-and-set rank ANSWERS. It is optional and `""` is the
   # honest default for a caller that has none — `_pr_py` then falls back to its
   # own clock, which is the pre-fix behaviour and not a refusal.
-  local id="$1" main="$2" repo="$3" rows="$4" answeredAt="${5:-}"
+  #
+  # `$6` is WHICH BRANCH gh was asked about for `$4`, and it is here for the
+  # same reason `$5` is: it is a property of the ANSWER, not of this session, so
+  # it travels with the rows rather than being re-derived beside them. Since the
+  # `--session` path started sending `--head`, the branch is read once — to
+  # build the question — and the binding below must use THAT string and not a
+  # second read of the field, because the two reads are now separated by a
+  # network call `PR_GH_TIMEOUT` bounds at twelve seconds. A `ws-rename` or a
+  # hand-edited registry landing in that window would otherwise have this
+  # function bind branch B's rows against branch C: `bound()` cannot match, the
+  # phase collapses to `none`, and `none` is the answer that CLEARS the
+  # persisted `prnumber` and appends the outgoing PR to the append-only
+  # `.prhistory` — a local fact erasing GitHub's answer about a PR, which is
+  # exactly what the drift rung below refuses to do. Answering about the branch
+  # gh was asked about is coherent and at most one sweep stale; the next sweep
+  # asks about the new name.
+  #
+  # `""` — every `--project` caller, and the four-argument calls the pr-state
+  # tests make — means "these rows are the whole repository's, not one
+  # branch's", and the registry is then the only source there is.
+  local id="$1" main="$2" repo="$3" rows="$4" answeredAt="${5:-}" rowsHead="${6:-}"
   local project branch base baseShort tip ahead workdir dirty tmpl
-  project=$(_reg_get "$id" project); branch=$(_reg_get "$id" branch)
+  project=$(_reg_get "$id" project)
+  branch="$rowsHead"; [[ -n "$branch" ]] || branch=$(_reg_get "$id" branch)
   base=$(_reg_get "$id" base);       workdir=$(_reg_get "$id" workdir)
   # CARRIES THE ID. A per-session failure and a whole-repo failure are
   # different events: the server backs a PROJECT off on the id-less shape,
@@ -5095,7 +5122,7 @@ cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <proje
   fi
   (( ${#ids[@]} )) || return 0
 
-  local project main repo rows answeredAt
+  local project main repo rows answeredAt head=""
   project=$(_reg_get "${ids[0]}" project)
   # A registry VALUE, and `$main` is built from it. `--session` validated the id
   # it was handed and nothing validated this. `die`, not an answer object,
@@ -5105,9 +5132,44 @@ cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <proje
   [[ "$project" =~ ^[A-Za-z0-9._-]+$ ]] || die "bad project in registry for ${ids[0]}"
   main="$PROJECTS_ROOT/$project"
   repo=$(_gh_repo_slug "$main") || { printf '{"phase":"unknown","reason":"no-remote"}\n'; return 0; }
+  # ── `--session` ASKS ABOUT ONE BRANCH, SO IT SAYS SO ───────────────
+  # Measured 2026-08-26 against a live fleet repo with several thousand PRs of
+  # history — the slug is operator residue and stays out of this tree. The
+  # unfiltered call this line used to make answered `HTTP 504` after 11.2 s on
+  # 3/3 attempts; `--head <branch>` answered the same question, with the same
+  # fields, in 0.78 s. The wide window was ninety-nine other branches' PRs
+  # fetched, annotated with a `git cat-file` and a `merge-base` apiece, shipped
+  # over the wire and then dropped by the first conjunct that reads them.
+  #
+  # NARROWING IS SAFE BECAUSE EVERY READER OF THESE ROWS ALREADY CONJOINS
+  # `headRefName == branch`, so a head-filtered answer is a strict SUPERSET of
+  # what anything reads — not a judgement, an enumeration: `_pr_py`'s `bound()`,
+  # its `is_merged()` (which conjoins `bound`) and its `pick()` (which filters by
+  # it) on this side; `boundRow()` and `isMergedRow()` on the server's, where
+  # `line.rows` has exactly ONE reader, `phaseFor`'s `boundRow(line.rows, …)`.
+  # Nothing iterates the rows for another branch. `--head` also matches
+  # `headRefName` ACROSS fork owners, so it cannot even drop the stranger's-PR
+  # rows the `isCrossRepository` conjunct exists to refuse — the filter takes
+  # away nothing a conjunct was going to be shown.
+  #
+  # `--project` KEEPS THE WIDE WINDOW, and that is the whole reason this is a
+  # variable rather than an unconditional flag: that form asks about every
+  # workspace of the repo from one call, and the only branch in scope here is
+  # `ids[0]`'s. A `--head` built from it would filter the sweep on the FIRST
+  # session's branch and answer `none` for every sibling — clearing each one's
+  # `prnumber` and retiring it into the append-only `.prhistory`.
+  #
+  # READ BEFORE THE CALL, AND HANDED DOWN. The same string is passed to
+  # `_pr_state_one` below as the branch these rows were fetched for, so the
+  # question and the binding cannot be two different reads of a field a
+  # `ws-rename` can change during a twelve-second network call; the reasoning is
+  # at `_pr_state_one`'s own signature. An empty value (a registry with no
+  # `branch` for this id) sends no flag and re-reads the field — the pre-fix
+  # behaviour, ending in that function's id-carrying `error` object.
+  [[ $mode == --session ]] && head=$(_reg_get "$arg" branch)
   # The answer object _gh_pr_list printed IS the output on failure: one repo
   # failing marks that repo's sessions unknown and touches no other project.
-  rows=$(_gh_pr_list "$repo") || { printf '%s\n' "$rows"; return 0; }
+  rows=$(_gh_pr_list "$repo" "$head") || { printf '%s\n' "$rows"; return 0; }
   # ONE STAMP FOR THE WHOLE FAN-OUT, TAKEN AT THE ANSWER — re-review of the fix
   # wave. `_pr_py`'s compare-and-set persists only the NEWEST answer, and it can
   # only tell which that is if `prcheckedat` describes WHEN GITHUB ANSWERED. The
@@ -5141,7 +5203,12 @@ cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <proje
   [[ "$answeredAt" =~ ^[0-9]+$ ]] || answeredAt=""
 
   local id
-  for id in "${ids[@]}"; do _pr_state_one "$id" "$main" "$repo" "$rows" "$answeredAt"; done
+  # `$head` again, as the sixth argument: the rows, the moment they were
+  # answered and the branch they were answered ABOUT are one answer, and all
+  # three are handed down together. `""` on the `--project` fan-out says these
+  # rows are the whole repository's, which is what makes the same loop right for
+  # both forms.
+  for id in "${ids[@]}"; do _pr_state_one "$id" "$main" "$repo" "$rows" "$answeredAt" "$head"; done
 }
 
 cmd_pr_open() {   # ccd pr-open --session <id> --title <t> --body-b64 <b64> --draft <true|false>

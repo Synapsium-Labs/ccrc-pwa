@@ -101,6 +101,105 @@ describe('pr-state argv', () => {
   });
 });
 
+describe('the per-session call asks about one branch', () => {
+  // MEASURED, 2026-08-26, against a live fleet repo with several thousand PRs
+  // of history: the unfiltered 100-PR `statusCheckRollup` window this verb sent
+  // answered `HTTP 504` after 11.2 s on 3/3 attempts, and the same query with
+  // `--head <the session's branch>` answered in 0.78 s. `--session` asks a
+  // question about ONE branch — the same question `pr-open` asks, through the
+  // same reader's same named second parameter — and the wide window was ninety-
+  // nine other branches' PRs fetched so that `bound()` could drop them.
+  //
+  // NARROWING IS SAFE HERE AND THE PROOF IS EXHAUSTIVE, not a judgement: every
+  // consumer of these rows conjoins `headRefName == branch`, so a head-filtered
+  // answer is a strict SUPERSET of what anything reads. `_pr_py`'s `bound()`,
+  // `is_merged()` (which conjoins `bound`) and `pick()` (which filters by it) on
+  // the ccd side; `boundRow()` and `isMergedRow()` on the server's, and
+  // `line.rows` has exactly ONE server-side reader — `phaseFor`'s
+  // `boundRow(line.rows, …)`. Nothing iterates the rows for another branch.
+  //
+  // `--project` is a different question — every workspace of the repo at once,
+  // from one call — and keeps the wide window; the second test is that guard.
+  it('passes --head <the registry branch>, and still binds the PR', () => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    // Two rows, and the second is the point: it is what the WIDE call used to
+    // fetch and drop. The stub answers with whatever the fixture holds however
+    // the call is filtered — it cannot model gh's own filtering — so the row is
+    // here to say what the flag is FOR, while the `--head` assertion is what
+    // proves the flag was sent at all.
+    h.ghRows([
+      mergedRow({ headRefOid: tip }),
+      mergedRow({ number: 77, headRefOid: tip, headRefName: 'ws/still-cove' }),
+    ]);
+    const o = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    const call = h.ghCalls().find((c) => c.startsWith('pr list'))!;
+    expect(call).toContain('--head ws/quiet-basin');
+    // …and the answer is unchanged. A narrowed question that also narrowed the
+    // ANSWER would be the failure this whole change has to not be.
+    expect(o.phase).toBe('merged');
+    expect(o.number).toBe(42);
+  });
+
+  it('leaves the --project call unfiltered — one call answers every branch', () => {
+    // The other direction, and it is not hypothetical: `cmd_pr_state` reads the
+    // project's slug off `ids[0]`, so a `--head` built the same careless way
+    // would filter the whole sweep on the FIRST session's branch and answer
+    // `none` for every sibling — clearing each one's persisted `prnumber` and
+    // retiring it into the append-only `.prhistory`.
+    h.makeGhRepo('demo');
+    h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
+    h.sh(`${WS_ADD} CCD_WS_SLUG=still-cove cmd_ws_add demo`);
+    h.ghRows([]);
+    h.sh(`${GH_STUB} cmd_pr_state --project demo`);
+    const call = h.ghCalls().find((c) => c.startsWith('pr list'))!;
+    expect(call).not.toContain('--head');
+  });
+
+  it('binds the branch gh was ASKED about, even if the registry moves mid-call', () => {
+    // THE ROWS AND THE BRANCH THEY WERE FETCHED FOR TRAVEL TOGETHER, exactly as
+    // the rows and the moment they were fetched already do (`$5`, the answered-
+    // at stamp). Before the filter existed the two reads of `branch` — one to
+    // build the question, one to bind the answer — did not exist; now there are
+    // two, separated by a network call the timeout bounds at TWELVE SECONDS,
+    // which is long enough for a `ws-rename` or a hand-edited registry to land
+    // between them.
+    //
+    // What that costs if `_pr_state_one` re-reads the field instead of being
+    // handed it: gh was asked about `ws/quiet-basin` and answered about it, and
+    // the binding is then attempted for `ws/still-cove` against rows that by
+    // construction cannot contain it — `chosen` is None, the phase is `none`,
+    // and `none` is the answer that CLEARS the persisted number and appends the
+    // outgoing PR to the append-only `.prhistory`. A local fact erasing
+    // GitHub's answer about a PR, which is the harm `_pr_state_one` already
+    // refuses to do for drift.
+    //
+    // So the answer below is deliberately about the OLD branch: coherent and at
+    // most one sweep stale, rather than incoherent and persisted. The next
+    // sweep asks about the new name and answers it.
+    //
+    // The fixture is the gh stub itself rewriting the registry — the only way
+    // to put a mutation INSIDE the window, and it also pins the ORDER: a
+    // `cmd_pr_state` that read the branch after the call would see the rename.
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip })]);
+    const renamingGh = `${GH_STUB}
+      gh() {
+        printf '%s\\n' "$*" >> "$HOME/gh-calls"
+        _reg_set demo-quiet-basin branch ws/still-cove
+        [[ -f "$HOME/gh-rows.json" ]] && cat "$HOME/gh-rows.json"
+        return 0
+      };
+    `;
+    const o = line(h.sh(`${renamingGh} cmd_pr_state --session demo-quiet-basin`));
+    expect(h.ghCalls().find((c) => c.startsWith('pr list'))!).toContain('--head ws/quiet-basin');
+    expect(o.branch).toBe('ws/quiet-basin');
+    expect(o.phase).toBe('merged');
+    expect(o.number).toBe(42);
+    expect(h.reg('demo-quiet-basin', 'prnumber')).toBe('42');
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', 'demo-quiet-basin.prhistory'))).toBe(false);
+  });
+});
+
 describe('_gh_repo_slug', () => {
   // Four url forms reach `remote.origin.url` in practice and all four have to
   // answer OWNER/NAME, because everything downstream — `--repo`, pr-open's
@@ -208,8 +307,14 @@ describe('binding', () => {
   });
 
   it('refuses a PR on a different branch, however well the rest matches', () => {
-    // There is no --head filter on the call: it lists the repo's last 100 PRs
-    // and this is what selects ours out of them.
+    // The `--session` call now carries `--head`, so gh itself would not send
+    // this row — and the conjunct is still the thing that decides, for three
+    // reasons the flag does not cover. `--project` lists the repo's last 100
+    // PRs unfiltered and is the form the 120 s sweep uses; `--head` matches
+    // `headRefName` across fork owners, so a filtered answer still carries rows
+    // that are not ours; and the server re-runs the same predicate over
+    // `line.rows` with no gh call in sight. A conjunct that only held because
+    // the question was narrow would be a binding decided by the wire.
     const { tip } = workspaceWithCommit('demo', 'quiet-basin');
     h.ghRows([mergedRow({ headRefOid: tip, headRefName: 'ws/still-cove' })]);
     expect(line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`)).phase).toBe('none');
