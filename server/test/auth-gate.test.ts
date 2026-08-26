@@ -61,7 +61,8 @@ const tokenHeader = { 'x-ccrc-mail-token': BOX_TOKEN };
  * were refusing, presenting a token would change nothing.
  */
 const EXEMPT_BUT_AUTHENTICATED = new Set(
-  ['GET /api/lifecycle', 'GET /api/runs', 'GET /api/peers', 'GET /api/claims']);
+  ['GET /api/lifecycle', 'GET /api/runs', 'GET /api/runs/:id/items',
+   'GET /api/peers', 'GET /api/claims']);
 
 // ── the scanner ──────────────────────────────────────────────────────────
 
@@ -192,11 +193,13 @@ describe('the scanner is looking at something', () => {
     // route is now a deliberate act that edits these three numbers, with a
     // reviewer looking at them.
     expect(scanRoutes('server.ts').length).toBe(45);
-    expect(scanRoutes('coord/routes.ts').length).toBe(21);
-    expect(ROUTES.length).toBe(66);
-    // …and the three partitions add up: 3 websockets + 63 HTTP.
+    // 22 since `GET /api/runs/:id/items` — the READ half of the settle route,
+    // which keys on item ids that nothing else published.
+    expect(scanRoutes('coord/routes.ts').length).toBe(22);
+    expect(ROUTES.length).toBe(67);
+    // …and the three partitions add up: 3 websockets + 64 HTTP.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
-    expect(ROUTES.filter((r) => !isWs(r)).length).toBe(63);
+    expect(ROUTES.filter((r) => !isWs(r)).length).toBe(64);
   });
 
   it('found the specific registrations this file reasons about', () => {
@@ -363,6 +366,7 @@ describe('EXEMPT is complete in both directions', () => {
       'GET /api/mail/:id',
       'GET /api/peers',
       'GET /api/runs',
+      'GET /api/runs/:id/items',
       'GET /health',
       'POST /api/auth/login',
       'POST /api/auth/passkey/assert/finish',
@@ -392,7 +396,7 @@ describe('EXEMPT is complete in both directions', () => {
     expect(EXEMPT.has('POST /api/auth/passkey/register/finish')).toBe(false);
   });
 
-  it('the SEVENTEEN box-token lanes in EXEMPT are the seventeen that really check the token', () => {
+  it('the EIGHTEEN box-token lanes in EXEMPT are the eighteen that really check the token', () => {
     // The claim "they are already guarded" is checked against the source, not
     // trusted: an exemption whose stated justification is a gate the route does
     // not actually have is the worst kind of hole.
@@ -405,7 +409,11 @@ describe('EXEMPT is complete in both directions', () => {
       const body = coord.slice(at, end);
       return /requireMailToken\(req/.test(body) || /checkMailToken\(/.test(body);
     }).map((h) => h.k);
-    // SEVENTEEN since build 9b's claims and ledger routes: GET /api/claims
+    // EIGHTEEN since `GET /api/runs/:id/items` joined the
+    // exempt-but-authenticated class — the coordinator reads its own wave
+    // ledger cookieless from the fleet host, and must, because settling keys
+    // on ids only this route publishes.
+    // SEVENTEEN before that, since build 9b's claims and ledger routes: GET /api/claims
     // joined the exempt-but-authenticated class beside runs/lifecycle/peers;
     // POST /api/claims + POST /api/claims/:id/release joined the plain
     // box-token lanes (POST /api/claims/:id/break is deliberately NOT here —
@@ -418,7 +426,7 @@ describe('EXEMPT is complete in both directions', () => {
     // worst kind of hole.
     expect(gated.sort()).toEqual([
       'GET /api/claims', 'GET /api/ledger', 'GET /api/lifecycle', 'GET /api/mail',
-      'GET /api/mail/:id', 'GET /api/peers', 'GET /api/runs',
+      'GET /api/mail/:id', 'GET /api/peers', 'GET /api/runs', 'GET /api/runs/:id/items',
       'POST /api/claims', 'POST /api/claims/:id/release', 'POST /api/ledger/deviations',
       'POST /api/mail', 'POST /api/mail/:id/ack',
       'POST /api/runs', 'POST /api/runs/:id/advance', 'POST /api/runs/:id/close',
@@ -443,10 +451,15 @@ describe('with the gate ARMED and no cookie', () => {
     // Guards the `it.each` below the same way the scanner meta-test guards the
     // scan: an EXEMPT table that had swallowed everything would leave nothing to
     // assert and report green. Exact rather than a floor, for the same reason —
-    // 66 scanned − 3 websockets − 23 exempt-and-scanned (24 EXEMPT entries less
+    // 67 scanned − 3 websockets − 24 exempt-and-scanned (25 EXEMPT entries less
     // `GET /*`, which no `app.get('…')` registers) = 40; the one new gated
     // non-exempt route is `POST /api/claims/:id/break`, which meets the session
     // gate on an armed box exactly as abandon and pause do.
+    //
+    // UNCHANGED at 40 by `GET /api/runs/:id/items`, and that is the arithmetic
+    // working rather than a coincidence: the new route is EXEMPT, so it raises
+    // the scanned count and the exempt count by one each and the difference is
+    // untouched. A new route that was NOT exempt would move this number.
     expect(gated.length).toBe(40);
     expect(ROUTES.length - ROUTES.filter(isWs).length - gated.length).toBe(EXEMPT.size - 1);
   });
