@@ -365,6 +365,13 @@ describe('ws-add declares its actor (D-410)', () => {
    *  the whole vitest worker with it instead of reddening one test. rc 124 is
    *  `timeout`'s own, and it is an assertion (see the arity case below).
    *
+   *  MEASURED, and it narrows that claim for the arms as they are WRITTEN
+   *  today: deleting the `--surface` arity check does not hang, because
+   *  `lc_surface="$2"` trips `set -u` before the `shift 2` is reached and the
+   *  shell aborts at rc 1 (`$2: unbound variable`). The bound stays anyway —
+   *  it costs one word and it is the difference between a red test and a dead
+   *  worker the day an arm shifts before it reads.
+   *
    *  It is still `h.sh` that spawns it — the containment this file's standing
    *  note requires — and the script sources the same real `ccd` `h.sh` does,
    *  with `WS_ADD`'s three stubs so no spawn or systemd call is attempted. */

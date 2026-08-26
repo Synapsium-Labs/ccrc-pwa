@@ -86,12 +86,12 @@ both land.
   in any position; the `create` journal row carrying `dec.surface`/`dec.actor` when declared.
 - Consumes: `_lc_surface_norm` (`ccd:1511`), `_lc_dec_ok` (`ccd:1527`), `_lc_done` (`ccd:1479`).
 
-- [ ] **Step 1: read the model in full.** `cmd_ws_hold`'s loop and its givenness handling
+- [x] **Step 1: read the model in full.** `cmd_ws_hold`'s loop and its givenness handling
   (`ccd:3711-3745` — `lc_gs`/`lc_ga`, the blank-`--actor` refusal, why `_lc_surface_norm ''`
   prints empty and what `${lc_w:-unknown}` is for), then `cmd_ws_add:2534-2560` and its
   `_lc_done create` at `:2705`, then `cmd_ws_hold`'s emit at `:3809` for the pair shape.
 
-- [ ] **Step 2: red-first — the parse.** In the chosen suite, against the REAL ccd in a
+- [x] **Step 2: red-first — the parse.** In the chosen suite, against the REAL ccd in a
   fixture HOME:
   - `ws-add --surface agent --actor 'run:7 dispatch' <project>` creates the workspace
     (assert the registry row exists) — today it dies `invalid slug '--surface'`.
@@ -103,11 +103,11 @@ both land.
     than looping forever — the arity check, stated as a test.
   Run it; expect RED.
 
-- [ ] **Step 3: red-first — the journal row.** After a flagged `ws-add`, the `create` row in
+- [x] **Step 3: red-first — the journal row.** After a flagged `ws-add`, the `create` row in
   `$REG/.lifecycle/` carries the declared surface and actor; after an UNflagged `ws-add` it
   carries neither (absence permits — the row must not gain a blank `dec.actor`). Expect RED.
 
-- [ ] **Step 4: implement.** In `cmd_ws_add`, replace the single `--no-rc` line with the
+- [x] **Step 4: implement.** In `cmd_ws_add`, replace the single `--no-rc` line with the
   strip-then-bind loop, folding `--no-rc` into it so every flag is positionless:
 
 ```bash
@@ -159,20 +159,20 @@ both land.
   the fixture before trusting it.)
   Then re-stamp provenance.
 
-- [ ] **Step 5: green — and the regression gate.** Run the new suite, then
+- [x] **Step 5: green — and the regression gate.** Run the new suite, then
   `server/test/ccd-rc-flag.test.ts` and `server/test/ccd-spawn-split.test.ts` **unedited**
   (this is the load-bearing check: `--no-rc` moved into a loop and its behaviour must not
   have), then `test/ccd-workspaces.test.ts`, `test/single-definition.test.ts`,
   `test/topology-clean.test.ts`, `test/ccd-lifecycle-sites.test.ts`.
 
-- [ ] **Step 6: mutation ceremonies, each planted alone, measured, reverted:**
+- [x] **Step 6: mutation ceremonies, each planted alone, measured, reverted:**
   1. Delete the `--actor` arm from the loop → the parse test reds.
   2. Drop the `[[ $# -ge 2 ]]` arity check on `--surface` → the no-value test reds (or hangs
      — if it hangs, say so and treat the hang as the red, with a timeout).
   3. Emit `dec.actor` unconditionally (blank when undeclared) → the absence test reds.
   4. Move the loop AFTER the positional binding → the composed-order test reds.
 
-- [ ] **Step 7: commit** with measured counts.
+- [x] **Step 7: commit** with measured counts.
 
 ### Task 2: the dispatch path declares itself again
 
@@ -210,3 +210,47 @@ both land.
 ## Deviations found
 
 (minted through `POST /api/ledger/deviations` at close — executors nominate prose-only)
+
+- **NOMINATED (Task 1): the emit-site givenness conditional is DELIBERATELY UNPINNED, and no
+  fixture can pin it.** Step 6's ceremony 3 predicted that emitting `dec.actor`
+  unconditionally would red the absence test. It does not — and neither does the stronger
+  mutation, which collapses all three lines to
+  `local lc_dec=(dec.surface "$lc_surface" dec.actor "$lc_actor")`, BOTH pairs unconditional:
+  `ccd-lifecycle-sites` stayed **29/29** and every other journal-reading suite
+  (`ccd-actor-flags`, `ccd-lifecycle-emit`, `ccd-lifecycle-pairs`, `ccd-lifecycle-purge`,
+  `ccd-reason-flag`, `ccd-ws-rm-attic`, `ccd-ws-restore-supersede`) **180/180**. The cause is
+  structural rather than a missing test: `_lc_json` drops every pair whose value is `""`
+  (`ccd:1337-1338`) and backfills `dec.setdefault("surface","none")` (`ccd:1347`), while
+  `lc_surface` cannot hold anything but `none` while `lc_gs` is `0` — so the two argument
+  lists are byte-identical BY CONSTRUCTION and no fixture can separate them. The behaviour is
+  not unguarded, it is JOINTLY guarded: remove this conditional **and** the `(( lc_gs ))`
+  guard on the surface normalisation and the undeclared row reads `surface: 'unknown'`
+  (1 failed / 28 passed). The deviation is against the plan's own prediction and against the
+  first commit body's "built from GIVENNESS", which advertised as a mechanism something that
+  is an expression of intent standing beside one. Recorded now in the commit body, in
+  `ccd/ccd` at the emit site, and here.
+
+- **NOMINATED (Task 1): ceremony 2's failure mode is an abort, not a hang.** The plan allowed
+  either ("or hangs — if it hangs, say so"). Measured: dropping `[[ $# -ge 2 ]]` from the
+  `--surface` arm gives **1 failed / 28 passed**, and the observed failure is
+  `ccd: line <n>: $2: unbound variable` at rc 1 — under `set -u`, `lc_surface="$2"` trips
+  before the `shift 2` is ever reached, so the loop never gets the chance to spin. What the
+  arity check buys for the arms AS WRITTEN is therefore the honest usage line, not loop
+  termination; the never-terminating loop is what it buys the day an arm is reordered to
+  shift before it reads. The `timeout 20` bound in the probe stays for that day. Both
+  comments that stated the hang as the present-tense mechanism have been narrowed to what
+  was measured.
+
+- **NOMINATED (Task 1): Task 1 lands the tree RED and must not merge or deploy alone.**
+  `server/test/ccdargv-dec-parity.test.ts` fails at Task 1's tip — full server package,
+  foreground: `Test Files 1 failed | 223 passed (224); Tests 1 failed | 5597 passed |
+  3 skipped (5601)`. The failing case is that suite's `ws-add` NEGATIVE CONTROL, and it fails
+  because Task 1 works: real ccd in a fixture HOME now answers `ws-add --no-rc demo
+  --surface agent --actor 'run:7 dispatch'` with rc 3 and empty output (the fixture cannot
+  complete a spawn) after creating the workspace — `worktrees/demo` exists,
+  `.cc-sessions/demo-<slug>.uuid` is written, and the create row reads
+  `"dec":{"surface":"agent","actor":"run:7 dispatch"}` — where the control asserts
+  `invalid slug '--surface'` and no artefacts. Task 2 Step 2 converts that control into a
+  positive probe, which is the plan's design. Consequence for the orchestrator: **the merge
+  and the AGENT-FIRST deploy are gated on Task 2 landing with it** — Task 1's tip is not a
+  shippable point, and the plan's Wave order should be read as one release, not two.

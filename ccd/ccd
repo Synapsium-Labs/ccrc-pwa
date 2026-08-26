@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=72fb105f7bd7b5d9043509b077454acc90c122bf19f64d9b6d35d63f14b0f96f
+# ccrc:generated 1 sha256=7bb29b8c42d7bb08f911ee1268526162a6e4053a72f9a9b4087eca83aafef23c
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -2569,7 +2569,14 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
       --no-rc)     norc=1; shift ;;
       # An explicit arity check, never a bare `shift 2`: ccd runs under
       # `set -uo pipefail` with NO `-e`, so a shift past the end of argv
-      # fails, shifts nothing, and this loop never terminates.
+      # fails, shifts nothing, and a loop that shifts before it reads never
+      # terminates. MEASURED, and it revises that sentence for THESE arms:
+      # delete the check and `--surface` as the last token does not hang —
+      # `lc_surface="$2"` trips `set -u` FIRST and the shell aborts with
+      # `ccd: line <n>: $2: unbound variable`, rc 1 (1 failed / 28 passed).
+      # So what the check buys HERE is the honest usage line; the
+      # never-terminating loop is what it buys the day an arm is reordered
+      # to shift before it reads its value.
       --surface)   [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--surface <word>] [--actor <text>] <project> [slug]"
                    lc_gs=1; lc_surface="$2"; shift 2 ;;
       --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
@@ -2769,6 +2776,19 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
   # existed every dispatched spawn wrote it as *declared: nothing*.
   # `lc_gs`/`lc_ga` — givenness, not content — is what decides, so an
   # undeclared call emits EXACTLY the row it emitted before this task.
+  #
+  # AND IT IS BELT TO THE ENCODER'S BRACES, NOT A GUARD A TEST DEFENDS ALONE
+  # — measured, because the plan predicted otherwise. `_lc_json` drops every
+  # pair whose value is `""` (ccd:1337-1338) and backfills
+  # `dec.setdefault("surface","none")` (ccd:1347), and `lc_surface` cannot
+  # hold anything but `none` while `lc_gs` is 0 — so collapsing all three
+  # lines to an unconditional `local lc_dec=(dec.surface "$lc_surface"
+  # dec.actor "$lc_actor")` changes no byte of any row: ccd-lifecycle-sites
+  # stayed 29/29 and every other journal-reading suite 180/180. No fixture
+  # can separate them. What IS pinned is the PAIR: remove this conditional
+  # AND the `(( lc_gs ))` guard on the normalisation above and the undeclared
+  # row reads `surface: unknown` (1 failed / 28). Kept because it says what
+  # it means rather than leaning on a downstream drop.
   local lc_dec=()
   (( lc_gs )) && lc_dec+=(dec.surface "$lc_surface")
   (( lc_ga )) && lc_dec+=(dec.actor "$lc_actor")
