@@ -103,16 +103,20 @@ describe('integration finding 7 — one reason vocabulary', () => {
   // compiler is not watching.
 
   it('derives the runtime list from the union rather than restating it', () => {
-    // Ten — the tenth is `branch-drift`, added when the PR poller stopped
+    // Twelve. The tenth was `branch-drift`, added when the PR poller stopped
     // asserting a phase for a workspace whose registry and worktree record name
-    // different branches (D-178). Every one of them is recognised by the
-    // predicate that both validators now use. If `PR_REASONS` were ever
-    // hand-written back into an array this still passes — which is why the
-    // source scan below exists — but a DERIVED list that has gone out of step
-    // with the union is impossible to construct, and that is the point being
-    // recorded. The literal count is the ONE thing here that a new member
-    // touches, deliberately: it is what makes adding one a decision.
-    expect(PR_REASONS).toHaveLength(10);
+    // different branches (D-178); the eleventh and twelfth are `unavailable`
+    // and `truncated`, split off `error` on 2026-08-26 once a 5xx from
+    // api.github.com and a body that stopped mid-stream were measured as two
+    // distinct, repeatable faults that `error` was describing with one sentence
+    // about a third thing. Every one of them is recognised by the predicate
+    // that both validators now use. If `PR_REASONS` were ever hand-written back
+    // into an array this still passes — which is why the source scan below
+    // exists — but a DERIVED list that has gone out of step with the union is
+    // impossible to construct, and that is the point being recorded. The
+    // literal count is the ONE thing here that a new member touches,
+    // deliberately: it is what makes adding one a decision.
+    expect(PR_REASONS).toHaveLength(12);
     expect(new Set(PR_REASONS).size).toBe(PR_REASONS.length);
     for (const r of PR_REASONS) expect(isPrReason(r), r).toBe(true);
     expect(isPrReason('not-a-reason')).toBe(false);
@@ -131,7 +135,7 @@ describe('integration finding 7 — one reason vocabulary', () => {
     // string[]` were the two that did not, and both are gone.
     //
     // Membership is tested per token in ANY form, quoted or as an object key,
-    // because `REASON_TEXT` writes five of the nine unquoted — a
+    // because `REASON_TEXT` writes seven of the twelve unquoted — a
     // quoted-literals-only scan would exclude it by accident rather than by
     // rule, and would then miss a real copy written the same way.
     const enumerates = (src: string): boolean =>

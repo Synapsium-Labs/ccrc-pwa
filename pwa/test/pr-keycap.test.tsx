@@ -77,6 +77,36 @@ describe('CI status is never colour-only', () => {
     render(<PrKeycap pr={pr({ checks: null })} onOpen={() => {}} />);
     for (const g of ['✓', '✕', '▲']) expect(screen.getByRole('button')).not.toHaveTextContent(g);
   });
+
+  // D-637. `unmeasured` is the member `PrChecks` grew when ccd stopped filing a
+  // GitHub 504 on the rollup as a checks verdict. The `Record` over the union
+  // is what forced this file's author to decide — it went red at BUILD time
+  // the moment the union widened, which is the mechanism working. These three
+  // pin the decision itself, which the compiler cannot: an empty string, or
+  // one of the three verdict glyphs, would type-check fine.
+  it('gives an unmeasured rollup a glyph of its own, not the blank of "no checks"', () => {
+    const { container } = render(<PrKeycap pr={pr({ checks: 'unmeasured' })} onOpen={() => {}} />);
+    // The blank is what `checks: null` renders — GitHub answered and this PR
+    // has no checks. Rendering the same thing here would say we measured an
+    // absence when we failed to measure at all.
+    expect(container.querySelector('.pr-glyph')).not.toBeNull();
+    expect(container.querySelector('.pr-glyph')!.textContent).not.toBe('');
+  });
+
+  it('does not borrow a verdict glyph for a rollup nobody read', () => {
+    render(<PrKeycap pr={pr({ checks: 'unmeasured' })} onOpen={() => {}} />);
+    for (const g of ['✓', '✕', '▲']) expect(screen.getByRole('button')).not.toHaveTextContent(g);
+  });
+
+  it('carries unmeasured on data-checks too, so the CSS sees an unread axis rather than nothing', () => {
+    // Not `undefined` like `checks: null`: the attribute reports the field, and
+    // collapsing "could not read" into "attribute absent" would hand the CSS
+    // the same input for both. No dot-colour rule matches it (pinned next door
+    // in pr-keycap-css.test.ts) — a rollup with no verdict does not override
+    // the phase colour.
+    render(<PrKeycap pr={pr({ checks: 'unmeasured' })} onOpen={() => {}} />);
+    expect(screen.getByRole('button')).toHaveAttribute('data-checks', 'unmeasured');
+  });
 });
 
 describe('the accessible name carries the whole sentence', () => {
@@ -206,7 +236,7 @@ describe('the accessible name carries the whole sentence', () => {
 });
 
 // Every REASON_TEXT entry, individually — the brief's own tests exercise only
-// 'unauthenticated' and 'rate-limit' by wording; the other seven ship with no
+// 'unauthenticated' and 'rate-limit' by wording; the rest ship with no
 // assertion on their actual copy, which is exactly the shape of survivor
 // CONSTRAINTS.md warns about (a shipped string whose removal leaves the suite
 // green).
@@ -221,6 +251,13 @@ describe('every reason under unknown carries its own sentence', () => {
     ['agent-down', /could not reach the sessions box/i],
     ['error', /could not be read/i],
     ['merge-unproven', /named no usable merge commit/i],
+    // The two that split off `error`. Their whole purpose is to say something
+    // "GitHub could not be read." could not, so the assertion is on the part
+    // that differs: one blames GitHub's server, the other says the answer was
+    // cut off and ccrc will retry. Wording either of them back into the
+    // catch-all's sentence is a red here.
+    ['unavailable', /server error/i],
+    ['truncated', /cut off/i],
   ] as const)('%s', (reason, re) => {
     render(<PrKeycap pr={pr({ phase: 'unknown', reason })} onOpen={() => {}} />);
     expect(screen.getByRole('button').getAttribute('aria-label')).toMatch(re);

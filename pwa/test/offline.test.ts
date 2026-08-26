@@ -421,6 +421,31 @@ describe('snapshot revival (a snapshot written by an older build)', () => {
     }
   });
 
+  it('accepts every checks token THIS build writes, including unmeasured', () => {
+    // The positive control the rejection table above was missing, and its
+    // absence cost a live regression (D-638): `PrChecks` grew `unmeasured` when ccd
+    // stopped filing a GitHub 504 on the rollup as a verdict, the server began
+    // WRITING it — and `CHECKS` in shared/api.ts was still the hand-written
+    // triple, so a snapshot this build wrote was rejected by this build on its
+    // next boot, whole. A table of unknown tokens can only ever prove the
+    // refusal works; nothing was asking whether the KNOWN ones still pass.
+    //
+    // Enumerated as literals here on purpose. Deriving them from `PrChecks`
+    // would make this test agree with the validator by construction — it would
+    // go green for a validator that accepts nothing and a union that is empty.
+    // This list is the second opinion, so it is written out and it is the
+    // thing a human updates when the union grows.
+    for (const checks of ['pass', 'fail', 'pending', 'unmeasured'] as const) {
+      window.localStorage.clear();
+      putRaw([{ ...v1Session('a'), pr: { phase: 'open', ahead: 1, checks } }]);
+      expect(loadFleetSnapshot()?.sessions[0]?.pr?.checks, checks).toBe(checks);
+    }
+    // And null still means "no checks are configured", not "unknown token".
+    window.localStorage.clear();
+    putRaw([{ ...v1Session('a'), pr: { phase: 'open', ahead: 1, checks: null } }]);
+    expect(loadFleetSnapshot()?.sessions[0]?.pr?.checks).toBeNull();
+  });
+
   it('rejects the file when only ONE of several sessions is malformed', () => {
     putRaw([v1Session('good'), { ...v1Session('bad'), archivedAt: 'yesterday' }]);
     expect(loadFleetSnapshot()).toBeNull();

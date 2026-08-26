@@ -5,6 +5,16 @@ import { execFileSync } from 'node:child_process';
 import { CCD, WS_ADD, ghContainedEnv } from './ccdWsHelpers.js';
 import { GH_STUB, makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 
+/** The seconds ccd assigns to a bare `NAME=<n>` constant — read, never
+ *  hardcoded. Same reader, same reason, as `ccd-pr-state.test.ts`'s. */
+const ccdSeconds = (name: string): number => {
+  const src = fs.readFileSync(CCD, 'utf8');
+  const m = new RegExp(`^${name}=(\\d+)`, 'm').exec(src);
+  if (!m) throw new Error(`ccd no longer defines ${name} as a bare integer assignment`);
+  return Number(m[1]);
+};
+
+
 let h: PrHarness;
 beforeEach(() => { h = makePrHarness('ccrc-ccd-propen-'); });
 afterEach(() => { h.cleanup(); });
@@ -347,10 +357,16 @@ describe('the happy path', () => {
     // head filter that scopes it to this branch, and every field the answer is
     // supposed to carry.
     expect(h.ghCalls().filter((c) => c.startsWith('pr list'))).toEqual([asked, asked]);
+    // The NUMBER is read from ccd, not written here: what this asserts is that
+    // all three calls are WRAPPED and wrapped with the SAME bound, and the bound
+    // itself moved once already (12 -> 8, when `pr-timeout-budget.test.ts`
+    // measured the pair against the 20 s `pr-state` ceiling that actually
+    // ships). A literal re-pins the value in a place that does not own it.
+    const t = ccdSeconds('PR_GH_TIMEOUT');
     expect(h.ghCalls().filter((c) => c.startsWith('timeout '))).toEqual([
-      `timeout 12 gh ${asked}`,
-      'timeout 12 gh pr create --repo o/r --head ws/quiet-basin --base main --title t --body b',
-      `timeout 12 gh ${asked}`,
+      `timeout ${t} gh ${asked}`,
+      `timeout ${t} gh pr create --repo o/r --head ws/quiet-basin --base main --title t --body b`,
+      `timeout ${t} gh ${asked}`,
     ]);
   });
 
@@ -435,6 +451,26 @@ describe('the existence probe fails closed', () => {
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/could not check for an existing PR on ws\/quiet-basin \(unauthenticated\)/);
     expect(h.ghCalls().some((c) => c.startsWith('pr create'))).toBe(false);
+  });
+
+  it('says GitHub was unwell when GitHub was unwell — not that it could not be read', () => {
+    // The other half of "one reader": a token the classifier learns for
+    // `pr-state` reaches this verb's refusal sentence for free, because the
+    // sentence quotes `_gh_pr_list`'s own answer object rather than restating a
+    // vocabulary. The distinction is worth as much here as on the phone —
+    // `(error)` sends the operator to check `gh auth` for a probe that failed
+    // because api.github.com could not finish a query.
+    workspace('demo', 'quiet-basin');
+    const origin = path.join(h.home, 'origins', 'demo.git');
+    h.ghFail(1, "HTTP 504: We couldn't respond to your request in time. (https://api.github.com/graphql)\n");
+    const r = open();
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/could not check for an existing PR on ws\/quiet-basin \(unavailable\)/);
+    expect(r.stderr).not.toMatch(/\(error\)/);
+    // Fails CLOSED exactly as every other classified failure does: an
+    // unmeasured "no PR exists" may not be spent on a push or a create.
+    expect(h.ghCalls().some((c) => c.startsWith('pr create'))).toBe(false);
+    expect(() => h.git(origin, 'rev-parse', '--verify', 'refs/heads/ws/quiet-basin')).toThrow();
   });
 
   it('refuses an rc-0 body that is not a list of PRs, instead of answering with it', () => {

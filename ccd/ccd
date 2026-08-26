@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=17c90f90205a487f850eb0b48043f384cb92ebe295ebce14a1748aa6890a7e2c
+# ccrc:generated 1 sha256=f3f3cefec021533da262c498acbb490939ba6b18e7b9912afdfccf1046bb6a9a
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1804,9 +1804,47 @@ _ws_ignored_digest() {   # workdir -> sha256 of the ignored-entry set
   printf '%s\n' "$d"
 }
 
-PR_GH_TIMEOUT=12          # gh pr list has no --timeout of its own; a blocking
+PR_GH_TIMEOUT=8           # gh pr list has no --timeout of its own; a blocking
                           # DNS hang is 30 s, so this is the only bound there is
-PR_JSON_FIELDS=number,state,headRefName,headRefOid,baseRefName,isCrossRepository,mergedAt,mergeCommit,url,title,isDraft,statusCheckRollup
+# THE OPTIONAL HALF GETS HALF THE BUDGET, and the number is the argument rather
+# than a round figure. `_gh_pr_checks` is the second network call on a path that
+# had one, so the two budgets now add up, and what they have to stay inside is
+# the server's outer bound on this verb — the one that decides whether a slow
+# GitHub reaches the phone as an honest `unavailable` or as the child being
+# killed, which the server reads as `agent-down` and backs the whole project
+# off on.
+#
+# THE OUTER BOUND IS 20 s, NOT 90, AND THIS PAIR HAS TO FIT INSIDE IT.
+# An earlier version of this comment asserted the opposite — that
+# `remote/runner.ts`'s `CCD_VERB_TIMEOUT_MS` had no `pr-state` key and the live
+# bound was therefore the flat 90 s default. It ships `'pr-state': 20_000` as
+# the FIRST key in that map (`server/src/remote/runner.ts:28`, and on
+# `origin/main` since 27946f31), so the spec's number IS the code's number, and
+# `sweepPr`'s every `ccd pr-state --project` is killed at 20 s in remote mode —
+# which is this fleet's standing config.
+#
+# That matters because THIS verb now makes TWO network calls, not one. The old
+# 12 + 6 spent 18 of the 20 before `_pr_state_one` had run for a single
+# workspace, and each workspace then costs a dozen-odd `git` spawns plus a
+# python3 start. The pair is now 8 + 5 = 13, leaving 7 s — 35 % — for the local
+# loop, and `pr-timeout-budget.test.ts` PINS that relationship across the two
+# languages so this comment can never drift from the map again. A comment is a
+# request; that test is the mechanism.
+#
+# Both numbers stay generous against what they cover, because the expensive
+# query is gone: the row window without `statusCheckRollup` answered in 0.89 s
+# and the head-filtered form in 0.78 s (vs 11.2 s and a persistent 504 with the
+# rollup in-band), and `--state open --limit 100` answered a 19-open-PR repo's
+# rollups in 3.09 s and a several-thousand-PR repo's in 3.6 s. A repo whose open
+# PRs cannot be read inside the bound loses its check glyphs for that sweep and
+# nothing else — which is the whole point of the split.
+PR_GH_CHECKS_TIMEOUT=5
+PR_JSON_FIELDS=number,state,headRefName,headRefOid,baseRefName,isCrossRepository,mergedAt,mergeCommit,url,title,isDraft
+# NAMED ONCE, spent in two places — the head-filtered row window that carries it
+# in-band, and the open-PR window `_gh_pr_checks` asks for on its own. A second
+# spelling of the token is a second thing to keep in step with `checksFor`'s
+# reader, which is what `single-definition` exists to forbid.
+PR_CHECK_FIELD=statusCheckRollup
 
 _gh_repo_slug() {   # main-checkout path -> OWNER/NAME, or non-zero
   # Three guards, and the mutation sweep says the last one subsumes the first
@@ -1831,15 +1869,53 @@ _gh_pr_list() {   # repo [head-branch] -> rows JSON on stdout; on failure prints
   # The head filter is a NAMED second parameter and the flag is built here — it
   # is never a forwarded "$@". pflag is last-wins, so a passthrough on the one
   # gh call two verbs share would let a caller override --repo or --state.
-  # pr-open needs the filter because it asks a question about ONE branch; both
-  # readers get the same fields, the same 100-PR window and the same failure
-  # classification, which is the point of there being one reader.
-  local repo="$1" head="${2:-}" errf out rc err
+  # A caller passes the filter when it asks a question about ONE branch, and
+  # two of the three do: `pr-open`, on both its probe and its read-back, and
+  # `pr-state --session`, whose unfiltered form answered `HTTP 504` in 11.2 s on
+  # a repo with real PR history and 0.78 s with the flag (measured 2026-08-26;
+  # the reasoning is at that call site). `pr-state --project` and `ws-reap` ask
+  # about every branch at once and pass nothing.
+  #
+  # ── THE ONE FIELD THAT IS NOT THE SAME FOR BOTH, AND WHY ──────────────
+  # This used to end "every reader gets the same fields, the same 100-PR window
+  # and the same failure classification, which is the point of there being one
+  # reader". Two of those three still hold exactly. The FIELDS no longer do, and
+  # the reason is not a preference — it is that GitHub cannot answer the
+  # question the wide form was asking. Measured 2026-08-26 against the same live
+  # fleet repo the head filter was measured on, and re-measured the day this
+  # split shipped:
+  #
+  #   --state all --limit 100, the twelve fields incl. the rollup  11.2 s, HTTP 504 (3/3)
+  #   --state all --limit 100, the same eleven WITHOUT the rollup    0.83 s, rc 0
+  #   --state all --limit 100, ONLY `number,statusCheckRollup`     11.2 s, HTTP 504
+  #   --state open --limit 100, `number,statusCheckRollup`          3.09 s, rc 0 (19 open)
+  #
+  # The third line is the load-bearing one. Narrowing the FIELD list does not
+  # help at all — `statusCheckRollup` resolves the check runs of every PR
+  # returned, so the cost is the WINDOW's size and nothing else. A wide window
+  # therefore cannot carry a rollup at any price, and the only remaining choices
+  # are to narrow the rows or to go without.
+  #
+  # So the rollup rides with a question about ONE branch and is asked
+  # separately for a question about every branch. That is a mechanism rather
+  # than a convention: there is no argument a caller can pass that puts a rollup
+  # back into the wide window, so no future call site can re-create the 504 by
+  # forgetting. `pr-state --project` gets its rollups from `_gh_pr_checks` and
+  # joins them by number; `ws-reap`, the other wide caller, never read a rollup
+  # at all (`_pr_py` mode `pick` reads number, url, mergeCommit, headRefOid) and
+  # so pays for nothing.
+  #
+  # The window and the classification are still shared, and they are the halves
+  # that made one reader worth having: one place decides what "100 PRs, all
+  # states" means and one `case` decides what a failure IS. A caller still
+  # cannot invent a fifth failure vocabulary or a different window by calling
+  # this differently.
+  local repo="$1" head="${2:-}" errf out rc err fields="$PR_JSON_FIELDS"
   local -a filter=()
-  [[ -n "$head" ]] && filter=(--head "$head")
+  [[ -n "$head" ]] && { filter=(--head "$head"); fields="$PR_JSON_FIELDS,$PR_CHECK_FIELD"; }
   errf=$(mktemp)
   out=$(timeout "$PR_GH_TIMEOUT" gh pr list --repo "$repo" "${filter[@]}" --state all --limit 100 \
-          --json "$PR_JSON_FIELDS" 2>"$errf"); rc=$?
+          --json "$fields" 2>"$errf"); rc=$?
   err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
   if (( rc == 124 )); then printf '{"phase":"unknown","reason":"timeout"}\n'; return 1; fi
   if (( rc != 0 )); then
@@ -1849,10 +1925,105 @@ _gh_pr_list() {   # repo [head-branch] -> rows JSON on stdout; on failure prints
       *"gh auth login"*|*"not logged in"*|*"HTTP 401"*) printf '{"phase":"unknown","reason":"unauthenticated"}\n' ;;
       *"rate limit"*|*"HTTP 403"*)                      printf '{"phase":"unknown","reason":"rate-limit"}\n' ;;
       *"dial tcp"*|*"no such host"*|*"proxyconnect"*)   printf '{"phase":"unknown","reason":"offline"}\n' ;;
+      # GITHUB'S OWN 5xx. Measured 2026-08-26 against a live fleet repo with
+      # several thousand PRs of history — the slug is operator residue and
+      # stays out of this tree. The 100-PR `statusCheckRollup` window this
+      # function sends answers
+      # `HTTP 504: We couldn't respond to your request in time. …
+      # (https://api.github.com/graphql)` after 11.2 s, on 3/3 attempts — a
+      # standing property of that repo's PR history, not a blip. It went out as
+      # `error`, which the cap renders "GitHub could not be read." and which
+      # reached a coordinator as `pr-unmeasurable` with nothing in it to act on.
+      #
+      # It is a different FACT from every arm above and from the default: the
+      # token is fine, DNS resolved, the request arrived — the far side could
+      # not finish it. That distinction is the whole of what a reader needs,
+      # because it says the same query will fail the same way and the remedy is
+      # to ask GitHub for less, not to go and check `gh auth` on the box.
+      #
+      # Matched on the CODE and never on the prose, which is GitHub's to reword
+      # whenever it likes. All four of 500/502/503/504 are here because an
+      # outage emits them interchangeably and an arm that knows only the one
+      # code we happened to catch is an arm that lapses at the next one.
+      *"HTTP 500"*|*"HTTP 502"*|*"HTTP 503"*|*"HTTP 504"*) printf '{"phase":"unknown","reason":"unavailable"}\n' ;;
+      # A BODY THAT STARTED AND STOPPED. Same repo, same day, the same query at
+      # `--limit 50`: `unexpected end of JSON input` — Go's decoder meeting EOF
+      # mid-value, so gh was being answered and the answer ran out. rc 1 and an
+      # empty stdout, indistinguishable from the 504 at the exit code, and a
+      # different thing entirely.
+      #
+      # Not `unavailable`: nothing here says the far side is unwell, and unlike
+      # a 504 an identical retry may simply succeed. Not `error`: "the answer
+      # was cut off" IS a shape, and it is the one shape in this case statement
+      # that says the read was interrupted rather than refused — which is the
+      # difference between waiting and narrowing the question.
+      *"unexpected end of JSON input"*|*"unexpected EOF"*) printf '{"phase":"unknown","reason":"truncated"}\n' ;;
+      # Still the default, and still `error` — the honest name for a fault with
+      # no known shape. Every arm above it earned its token by being MEASURED
+      # against a live repo; inventing a sixth classification from a string
+      # nobody has seen would put a confident sentence on the phone about a
+      # condition nobody diagnosed, which is the failure `error` exists to avoid.
       *)                                                printf '{"phase":"unknown","reason":"error"}\n' ;;
     esac
     return 1
   fi
+  printf '%s\n' "$out"
+}
+
+_gh_pr_checks() {   # repo -> `[{number, statusCheckRollup}, …]` on stdout for the
+                    # PRs that are still OPEN, or NOTHING and non-zero.
+  # The rollup half of the wide read, split off `_gh_pr_list` because a wide
+  # window cannot carry it (the measurement is up there). Two things about this
+  # function are deliberate and neither is style.
+  #
+  # IT PRINTS NOTHING ON FAILURE — no answer object, unlike `_gh_pr_list`, which
+  # prints one BECAUSE its answer object IS the verb's output for a read that
+  # failed. Nothing here is anybody's answer: `checks` is an annotation on a row
+  # somebody else already read, so the only two outcomes are "here are some
+  # rollups" and "there are none to join", and printing a `{"phase":"unknown"}`
+  # object would put a shape into the caller's hands that could be mistaken for
+  # rows. The exit code carries the difference for a future caller that needs
+  # it; today's one caller treats both the same way on purpose, because both
+  # mean exactly `checks: null`.
+  #
+  # `--state open`, AND THAT IS THE WHOLE NARROWING. A rollup is a fact about a
+  # pull request that is still being decided, and it is the phases where that is
+  # true that the product puts into words: `prSentence` renders the checks clause
+  # for `open` and `draft` alone, `PrSheet`'s `.pr-checkline` in that same
+  # branch, and the sweep's own faster cadence conjoins `phase === 'open'`.
+  #
+  # DRAFTS ARE INSIDE `--state open`, and that is measured rather than assumed,
+  # because `draft` is one of the two phases whose checks are rendered and a
+  # window that quietly dropped them would take the CI glyph off exactly the PRs
+  # a worker is still pushing to. GitHub's PR state is OPEN/CLOSED/MERGED and
+  # draft is the separate `isDraft` field: `--state open --limit 100` on a large
+  # public repo returned 23 rows with `isDraft: true`, all of them `state: OPEN`
+  # (68 rows total, 2026-08-26).
+  # DISCLOSED, because it is a real narrowing and not a free one: a bound row
+  # that is MERGED or CLOSED now carries no rollup, so its keycap loses the
+  # `data-checks` dot colour it used to get. No sentence changes, and that
+  # colour was overriding `[data-phase='merged']`'s own by source order, so what
+  # it took away was the phase's colour rather than a fact — but it IS a
+  # difference, and a reader here should not have to discover it downstream.
+  #
+  # The alternative that would have kept merged and closed rows exact — one
+  # head-filtered rollup call per session — is rejected for a measured reason:
+  # it makes ONE exec's wall clock scale with the number of workspaces on the
+  # project, so a slow GitHub stops being an honest `unavailable` for that repo
+  # and becomes the outer bound killing the child, which the server reads as
+  # `agent-down` and backs the whole project off on. Two calls is two calls
+  # whatever the fleet grows to.
+  local repo="$1" out rc
+  out=$(timeout "$PR_GH_CHECKS_TIMEOUT" gh pr list --repo "$repo" --state open --limit 100 \
+          --json "number,$PR_CHECK_FIELD" 2>/dev/null); rc=$?
+  # STDERR IS DISCARDED HERE, which it is nowhere else in this file, and the
+  # reason is that there is nothing this function could do with a classification.
+  # `_gh_pr_list` keeps its stderr because the reason it derives from it is the
+  # verb's answer; this one's failure has exactly one consequence — no rollups to
+  # join — and a `reason` token computed here would have no field to travel in
+  # and no reader at the far end.
+  (( rc == 0 )) || return 1
+  [[ -n "$out" ]] || return 1
   printf '%s\n' "$out"
 }
 
@@ -2330,7 +2501,87 @@ if mode == 'state':
         'baseShort': base_short, 'tip': tip, 'ahead': ahead, 'dirty': dirty,
         'commits': commits, 'template': template or None, 'rows': rows,
         'phase': phase, 'number': number, 'checkedAt': checked_at, 'reason': reason,
+        # THE ROLLUP'S OWN FAILURE, DECLARED. Emitted only when true, so a line
+        # from a build that fetched the rollup in-band is unchanged and an older
+        # server reading a newer line simply ignores a key it has no reader for
+        # (additive-only; absence permits). Without it the server cannot tell a
+        # row GitHub said has no checks from a row whose rollup call never
+        # answered — both merely lack the key — and it renders the second as the
+        # first: "No checks configured", under a fresh timestamp, on a PR whose
+        # build may be red.
+        **({'checksUnmeasured': True} if os.environ.get('PR_CHECKS_UNMEASURED') == '1' else {}),
     }) + '\n')
+
+elif mode == 'rollups':
+    # THE JOIN, and it is here rather than in bash because both documents are
+    # GitHub-sourced JSON and spec §7 says no GitHub-sourced string is ever
+    # placed in an argv or a shell word. The rows arrive on STDIN as every other
+    # mode's do; the rollups arrive on FD 4, for the same reason the program
+    # itself arrives on fd 3 — two documents cannot share one stdin without a
+    # framing convention, and inventing one over a body GitHub controls is how
+    # a truncated answer becomes a forged one.
+    #
+    # ROWS UNREADABLE IS A REFUSAL, NOT AN EMPTY JOIN. `rows_in()` answering
+    # None is the body we could not read, and printing `[]` here would hand the
+    # caller an affirmative "this repository has no pull request for you" — the
+    # exact substitution `rows_in`'s docstring exists to prevent, one hop
+    # earlier than it used to be possible. Exit non-zero with nothing on stdout
+    # and the caller keeps the original body, so `state` mode meets the same
+    # unreadable answer it would have met without this pass and emits the
+    # id-less failure object it always did.
+    #
+    # ROLLUPS UNREADABLE IS AN EMPTY JOIN, which is the opposite decision about
+    # the opposite document, and the difference is what each one is: the rows
+    # are the answer, the rollups are an annotation on it. Absent, unparseable,
+    # not a list, fd 4 not open at all — every one of those means the same
+    # thing, that there is nothing to attach, and every one of them leaves the
+    # rows exactly as they arrived. That is what makes a failed rollup call
+    # unable to cost a phase.
+    #
+    # The field NAME arrives in argv rather than being spelled again here, and
+    # that is the same rule the rest of this file follows for `$REG` and
+    # `$main`: it is ccd's own constant (`PR_CHECK_FIELD`), not a
+    # GitHub-sourced string, and a second spelling of it in this heredoc is a
+    # second thing that has to be kept in step with what `_gh_pr_checks` asks
+    # gh for. One of the two would eventually be renamed alone, and the join
+    # would then silently attach nothing.
+    ROLLUP = sys.argv[2]
+    rows = rows_in()
+    if rows is None:
+        sys.exit(1)
+    try:
+        with open('/dev/fd/4') as f:
+            raw = f.read().strip()
+    except OSError:
+        raw = ''
+    by_number = {}
+    if raw:
+        try:
+            v = json.loads(raw)
+        except Exception:
+            v = None
+        if isinstance(v, list):
+            for r in v:
+                # `isinstance(n, int)` and not a truthiness test: PR numbers are
+                # ints from GitHub, and an unhashable `number` (a list, an
+                # object) would raise on the lookup below and take the whole
+                # sweep down. `bool` is an int in python and cannot appear here,
+                # so the narrow check is also the safe one.
+                if isinstance(r, dict) and isinstance(r.get('number'), int):
+                    by_number[r['number']] = r.get(ROLLUP)
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        n = r.get('number')
+        # WRITTEN ONLY WHERE THE SECOND CALL ANSWERED. A row the rollup window
+        # did not cover keeps NO `statusCheckRollup` key, which `checksFor`
+        # reads as `checks: null` (`Array.isArray(undefined)` is false) — the
+        # same answer it gives for a PR GitHub says has no checks. Writing an
+        # explicit null instead would say the same thing in more bytes; writing
+        # `[]` would say "this PR has no checks", which is a claim.
+        if isinstance(n, int) and n in by_number:
+            r[ROLLUP] = by_number[n]
+    sys.stdout.write(json.dumps(rows) + '\n')
 
 elif mode == 'pick':
     (main, branch, base_short, tip) = sys.argv[2:6]
@@ -4845,16 +5096,37 @@ cmd_ws_attic() {   # ccd ws-attic --session <id>   |   ccd ws-attic --drop <id>
   esac
 }
 
-_pr_state_one() {   # id main repo rows [answered-at-ms] -> one JSON line
+_pr_state_one() {   # id main repo rows [answered-at-ms] [rows-head-branch] -> one JSON line
   # `$5` is WHEN gh ANSWERED `$4`, in milliseconds, and it belongs to the answer
   # rather than to this session: `cmd_pr_state` takes it once, at the read, and
   # hands the same value to every session of a `--project` sweep. That is what
   # makes `_pr_py`'s compare-and-set rank ANSWERS. It is optional and `""` is the
   # honest default for a caller that has none — `_pr_py` then falls back to its
   # own clock, which is the pre-fix behaviour and not a refusal.
-  local id="$1" main="$2" repo="$3" rows="$4" answeredAt="${5:-}"
+  #
+  # `$6` is WHICH BRANCH gh was asked about for `$4`, and it is here for the
+  # same reason `$5` is: it is a property of the ANSWER, not of this session, so
+  # it travels with the rows rather than being re-derived beside them. Since the
+  # `--session` path started sending `--head`, the branch is read once — to
+  # build the question — and the binding below must use THAT string and not a
+  # second read of the field, because the two reads are now separated by a
+  # network call `PR_GH_TIMEOUT` bounds at twelve seconds. A `ws-rename` or a
+  # hand-edited registry landing in that window would otherwise have this
+  # function bind branch B's rows against branch C: `bound()` cannot match, the
+  # phase collapses to `none`, and `none` is the answer that CLEARS the
+  # persisted `prnumber` and appends the outgoing PR to the append-only
+  # `.prhistory` — a local fact erasing GitHub's answer about a PR, which is
+  # exactly what the drift rung below refuses to do. Answering about the branch
+  # gh was asked about is coherent and at most one sweep stale; the next sweep
+  # asks about the new name.
+  #
+  # `""` — every `--project` caller, and the four-argument calls the pr-state
+  # tests make — means "these rows are the whole repository's, not one
+  # branch's", and the registry is then the only source there is.
+  local id="$1" main="$2" repo="$3" rows="$4" answeredAt="${5:-}" rowsHead="${6:-}"
   local project branch base baseShort tip ahead workdir dirty tmpl
-  project=$(_reg_get "$id" project); branch=$(_reg_get "$id" branch)
+  project=$(_reg_get "$id" project)
+  branch="$rowsHead"; [[ -n "$branch" ]] || branch=$(_reg_get "$id" branch)
   base=$(_reg_get "$id" base);       workdir=$(_reg_get "$id" workdir)
   # CARRIES THE ID. A per-session failure and a whole-repo failure are
   # different events: the server backs a PROJECT off on the id-less shape,
@@ -5020,8 +5292,15 @@ _pr_state_one() {   # id main repo rows [answered-at-ms] -> one JSON line
 }
 
 cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <project>
-  # ONE gh call per repo, whichever form. Read-only apart from the three
-  # registry fields it persists so a ccrc restart degrades to honest stale.
+  # A CONSTANT NUMBER OF gh CALLS PER REPO, never one per session — one for
+  # `--session`, two for `--project`, and neither number moves when a project
+  # grows a ninth workspace. That was "ONE gh call per repo, whichever form"
+  # until `--project` had to stop asking for a hundred check rollups GitHub
+  # answers with `HTTP 504`; the rollups are a second call now, and the budget
+  # argument the sentence was making (8 projects x 1 call / 120 s ~ 5 % of the
+  # GraphQL allowance) survives doubling and would not survive going per
+  # session. Read-only apart from the three registry fields it persists so a
+  # ccrc restart degrades to honest stale.
   [[ $# -eq 2 ]] || die "usage: ccd pr-state --session <id> | ccd pr-state --project <project>"
   local mode=$1 arg=$2
   case "$mode" in
@@ -5057,7 +5336,7 @@ cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <proje
   fi
   (( ${#ids[@]} )) || return 0
 
-  local project main repo rows answeredAt
+  local project main repo rows answeredAt head=""
   project=$(_reg_get "${ids[0]}" project)
   # A registry VALUE, and `$main` is built from it. `--session` validated the id
   # it was handed and nothing validated this. `die`, not an answer object,
@@ -5067,15 +5346,52 @@ cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <proje
   [[ "$project" =~ ^[A-Za-z0-9._-]+$ ]] || die "bad project in registry for ${ids[0]}"
   main="$PROJECTS_ROOT/$project"
   repo=$(_gh_repo_slug "$main") || { printf '{"phase":"unknown","reason":"no-remote"}\n'; return 0; }
+  # ── `--session` ASKS ABOUT ONE BRANCH, SO IT SAYS SO ───────────────
+  # Measured 2026-08-26 against a live fleet repo with several thousand PRs of
+  # history — the slug is operator residue and stays out of this tree. The
+  # unfiltered call this line used to make answered `HTTP 504` after 11.2 s on
+  # 3/3 attempts; `--head <branch>` answered the same question, with the same
+  # fields, in 0.78 s. The wide window was ninety-nine other branches' PRs
+  # fetched, annotated with a `git cat-file` and a `merge-base` apiece, shipped
+  # over the wire and then dropped by the first conjunct that reads them.
+  #
+  # NARROWING IS SAFE BECAUSE EVERY READER OF THESE ROWS ALREADY CONJOINS
+  # `headRefName == branch`, so a head-filtered answer is a strict SUPERSET of
+  # what anything reads — not a judgement, an enumeration: `_pr_py`'s `bound()`,
+  # its `is_merged()` (which conjoins `bound`) and its `pick()` (which filters by
+  # it) on this side; `boundRow()` and `isMergedRow()` on the server's, where
+  # `line.rows` has exactly ONE reader, `phaseFor`'s `boundRow(line.rows, …)`.
+  # Nothing iterates the rows for another branch. `--head` also matches
+  # `headRefName` ACROSS fork owners, so it cannot even drop the stranger's-PR
+  # rows the `isCrossRepository` conjunct exists to refuse — the filter takes
+  # away nothing a conjunct was going to be shown.
+  #
+  # `--project` KEEPS THE WIDE WINDOW, and that is the whole reason this is a
+  # variable rather than an unconditional flag: that form asks about every
+  # workspace of the repo from one call, and the only branch in scope here is
+  # `ids[0]`'s. A `--head` built from it would filter the sweep on the FIRST
+  # session's branch and answer `none` for every sibling — clearing each one's
+  # `prnumber` and retiring it into the append-only `.prhistory`.
+  #
+  # READ BEFORE THE CALL, AND HANDED DOWN. The same string is passed to
+  # `_pr_state_one` below as the branch these rows were fetched for, so the
+  # question and the binding cannot be two different reads of a field a
+  # `ws-rename` can change during a twelve-second network call; the reasoning is
+  # at `_pr_state_one`'s own signature. An empty value (a registry with no
+  # `branch` for this id) sends no flag and re-reads the field — the pre-fix
+  # behaviour, ending in that function's id-carrying `error` object.
+  [[ $mode == --session ]] && head=$(_reg_get "$arg" branch)
   # The answer object _gh_pr_list printed IS the output on failure: one repo
   # failing marks that repo's sessions unknown and touches no other project.
-  rows=$(_gh_pr_list "$repo") || { printf '%s\n' "$rows"; return 0; }
+  rows=$(_gh_pr_list "$repo" "$head") || { printf '%s\n' "$rows"; return 0; }
   # ONE STAMP FOR THE WHOLE FAN-OUT, TAKEN AT THE ANSWER — re-review of the fix
   # wave. `_pr_py`'s compare-and-set persists only the NEWEST answer, and it can
   # only tell which that is if `prcheckedat` describes WHEN GITHUB ANSWERED. The
   # stamp used to be taken inside python, per session, after `rows_in()` and
-  # after that session's `git log` — while this verb makes ONE gh call and then
-  # loops over every session of the repo below. Eight workspaces on one repo, and
+  # after that session's `git log` — while this verb reads the rows in ONE gh
+  # call and then loops over every session of the repo below (the rollup call
+  # added under it is a second call and carries no stamp: it annotates an answer
+  # rather than being one). Eight workspaces on one repo, and
   # the k-th session's stamp was seconds newer than the answer it carried: the
   # CAS ranked COMPLETION TIMES, which is not a fact about GitHub at all.
   #
@@ -5102,8 +5418,76 @@ cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <proje
   answeredAt=$(date +%s%3N 2>/dev/null)
   [[ "$answeredAt" =~ ^[0-9]+$ ]] || answeredAt=""
 
+  # ── THE ROLLUPS, WHICH THE WIDE WINDOW CANNOT CARRY ────────────────
+  # `_gh_pr_list` sends `statusCheckRollup` only with a head filter, because a
+  # 100-PR window carrying it is answered `HTTP 504` and no field list makes
+  # that cheaper (the measurement is at that function). `--project` is the form
+  # that has no head filter and still has a reader for the field: the server
+  # calls `checksFor` on the ONE row `boundRow` binds, per line. So the rollups
+  # come from their own call and are joined onto the rows by number.
+  #
+  # AFTER THE STAMP, NEVER BEFORE. `answeredAt` has to describe when GITHUB
+  # ANSWERED THE ROWS — it is what `_pr_py`'s compare-and-set ranks answers by,
+  # and the paragraph above spells out what a stamp taken later costs. This call
+  # is a second network round trip; taking it before the stamp would age every
+  # session's answer by however long GitHub took over an annotation.
+  #
+  # `--project` AND NOT "no head": those are the same set today, and they say
+  # different things. `--session` with a registry that has lost its `branch`
+  # also sends no filter — and `_pr_state_one` answers that session with its
+  # id-carrying `error` object without reading a row, so spending a second gh
+  # call on it would buy an annotation for an answer that does not exist.
+  #
+  # NOTHING HERE MAY COST THE ROWS. Both `_gh_pr_checks` and the join can fail
+  # and each failure leaves `$rows` exactly as it arrived: the first because a
+  # failed call assigns nothing (the `||` sets the empty string), the second
+  # because `rows` is only replaced on the join's own exit 0. A missing rollup
+  # is `checks: null` at the far end and nothing else — never a phase, never a
+  # reason, never the id-less object that would back the whole project off.
+  local rollups="" joined="" jrc=0
+  # `local -x`: dynamically scoped AND exported, so `_pr_py state` — a python3
+  # CHILD, several frames down inside `_pr_state_one` — reads it from the
+  # environment without a fourteenth positional argument threaded through a
+  # signature three call sites share. It unwinds when this function returns, so
+  # nothing leaks into a later verb.
+  #
+  # `--project` ONLY. In `--session` the rollup rides the head-filtered row
+  # window in-band, so if the rows answered the rollup is there; there is no
+  # second call to fail and nothing to declare.
+  local -x PR_CHECKS_UNMEASURED=0
+  if [[ $mode == --project ]]; then
+    rollups=$(_gh_pr_checks "$repo") || rollups=""
+    # THE CALL DID NOT ANSWER. Not "this repo has no checks" — a timeout
+    # (PR_GH_CHECKS_TIMEOUT), a 5xx, an unparseable body. Say so, because the
+    # rows below will carry no rollup key and their bare absence is the same
+    # shape a genuinely check-less PR wears.
+    [[ -n "$rollups" ]] || PR_CHECKS_UNMEASURED=1
+    if [[ -n "$rollups" ]]; then
+      # `jrc` on its own line, and the declaration above initialises all three:
+      # `local joined=$(...)` returns LOCAL's status rather than the join's — the
+      # trap this file has already been bitten by twice — and a bare `local x`
+      # leaves x unset, which `set -u` aborts on the moment a stubbed caller
+      # reaches a reference to it.
+      joined=$(printf '%s' "$rows" | _pr_py rollups "$PR_CHECK_FIELD" 4<<<"$rollups"); jrc=$?
+      if (( jrc == 0 )) && [[ -n "$joined" ]]; then
+        rows="$joined"
+      else
+        # The call ANSWERED and the pass that attaches its answer is what broke.
+        # Same consequence for the reader as a failed call — no rollup key on any
+        # row — so it earns the same declaration. The rows themselves are kept
+        # untouched, which is the isolation this split exists for.
+        PR_CHECKS_UNMEASURED=1
+      fi
+    fi
+  fi
+
   local id
-  for id in "${ids[@]}"; do _pr_state_one "$id" "$main" "$repo" "$rows" "$answeredAt"; done
+  # `$head` again, as the sixth argument: the rows, the moment they were
+  # answered and the branch they were answered ABOUT are one answer, and all
+  # three are handed down together. `""` on the `--project` fan-out says these
+  # rows are the whole repository's, which is what makes the same loop right for
+  # both forms.
+  for id in "${ids[@]}"; do _pr_state_one "$id" "$main" "$repo" "$rows" "$answeredAt" "$head"; done
 }
 
 cmd_pr_open() {   # ccd pr-open --session <id> --title <t> --body-b64 <b64> --draft <true|false>

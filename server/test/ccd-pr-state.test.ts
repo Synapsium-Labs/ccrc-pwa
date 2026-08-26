@@ -97,7 +97,440 @@ describe('pr-state argv', () => {
     // …and the call is WRAPPED. `gh pr list` has no timeout of its own, so a
     // blocking DNS hang is bounded by this and nothing else; without the stub
     // logging its own argv, dropping the wrapper left the suite green.
-    expect(h.ghCalls().some((c) => c.startsWith('timeout 12 gh pr list'))).toBe(true);
+    expect(h.ghCalls().some((c) => c.startsWith(`timeout ${ccdSeconds('PR_GH_TIMEOUT')} gh pr list`))).toBe(true);
+  });
+});
+
+describe('the per-session call asks about one branch', () => {
+  // MEASURED, 2026-08-26, against a live fleet repo with several thousand PRs
+  // of history: the unfiltered 100-PR `statusCheckRollup` window this verb sent
+  // answered `HTTP 504` after 11.2 s on 3/3 attempts, and the same query with
+  // `--head <the session's branch>` answered in 0.78 s. `--session` asks a
+  // question about ONE branch — the same question `pr-open` asks, through the
+  // same reader's same named second parameter — and the wide window was ninety-
+  // nine other branches' PRs fetched so that `bound()` could drop them.
+  //
+  // NARROWING IS SAFE HERE AND THE PROOF IS EXHAUSTIVE, not a judgement: every
+  // consumer of these rows conjoins `headRefName == branch`, so a head-filtered
+  // answer is a strict SUPERSET of what anything reads. `_pr_py`'s `bound()`,
+  // `is_merged()` (which conjoins `bound`) and `pick()` (which filters by it) on
+  // the ccd side; `boundRow()` and `isMergedRow()` on the server's, and
+  // `line.rows` has exactly ONE server-side reader — `phaseFor`'s
+  // `boundRow(line.rows, …)`. Nothing iterates the rows for another branch.
+  //
+  // `--project` is a different question — every workspace of the repo at once,
+  // from one call — and keeps the wide window; the second test is that guard.
+  it('passes --head <the registry branch>, and still binds the PR', () => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    // Two rows, and the second is the point: it is what the WIDE call used to
+    // fetch and drop. The stub answers with whatever the fixture holds however
+    // the call is filtered — it cannot model gh's own filtering — so the row is
+    // here to say what the flag is FOR, while the `--head` assertion is what
+    // proves the flag was sent at all.
+    h.ghRows([
+      mergedRow({ headRefOid: tip }),
+      mergedRow({ number: 77, headRefOid: tip, headRefName: 'ws/still-cove' }),
+    ]);
+    const o = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    const call = h.ghCalls().find((c) => c.startsWith('pr list'))!;
+    expect(call).toContain('--head ws/quiet-basin');
+    // …and the answer is unchanged. A narrowed question that also narrowed the
+    // ANSWER would be the failure this whole change has to not be.
+    expect(o.phase).toBe('merged');
+    expect(o.number).toBe(42);
+  });
+
+  it('leaves the --project call unfiltered — one call answers every branch', () => {
+    // The other direction, and it is not hypothetical: `cmd_pr_state` reads the
+    // project's slug off `ids[0]`, so a `--head` built the same careless way
+    // would filter the whole sweep on the FIRST session's branch and answer
+    // `none` for every sibling — clearing each one's persisted `prnumber` and
+    // retiring it into the append-only `.prhistory`.
+    h.makeGhRepo('demo');
+    h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
+    h.sh(`${WS_ADD} CCD_WS_SLUG=still-cove cmd_ws_add demo`);
+    h.ghRows([]);
+    h.sh(`${GH_STUB} cmd_pr_state --project demo`);
+    const call = h.ghCalls().find((c) => c.startsWith('pr list'))!;
+    expect(call).not.toContain('--head');
+  });
+
+  it('binds the branch gh was ASKED about, even if the registry moves mid-call', () => {
+    // THE ROWS AND THE BRANCH THEY WERE FETCHED FOR TRAVEL TOGETHER, exactly as
+    // the rows and the moment they were fetched already do (`$5`, the answered-
+    // at stamp). Before the filter existed the two reads of `branch` — one to
+    // build the question, one to bind the answer — did not exist; now there are
+    // two, separated by a network call the timeout bounds at TWELVE SECONDS,
+    // which is long enough for a `ws-rename` or a hand-edited registry to land
+    // between them.
+    //
+    // What that costs if `_pr_state_one` re-reads the field instead of being
+    // handed it: gh was asked about `ws/quiet-basin` and answered about it, and
+    // the binding is then attempted for `ws/still-cove` against rows that by
+    // construction cannot contain it — `chosen` is None, the phase is `none`,
+    // and `none` is the answer that CLEARS the persisted number and appends the
+    // outgoing PR to the append-only `.prhistory`. A local fact erasing
+    // GitHub's answer about a PR, which is the harm `_pr_state_one` already
+    // refuses to do for drift.
+    //
+    // So the answer below is deliberately about the OLD branch: coherent and at
+    // most one sweep stale, rather than incoherent and persisted. The next
+    // sweep asks about the new name and answers it.
+    //
+    // The fixture is the gh stub itself rewriting the registry — the only way
+    // to put a mutation INSIDE the window, and it also pins the ORDER: a
+    // `cmd_pr_state` that read the branch after the call would see the rename.
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip })]);
+    const renamingGh = `${GH_STUB}
+      gh() {
+        printf '%s\\n' "$*" >> "$HOME/gh-calls"
+        _reg_set demo-quiet-basin branch ws/still-cove
+        [[ -f "$HOME/gh-rows.json" ]] && cat "$HOME/gh-rows.json"
+        return 0
+      };
+    `;
+    const o = line(h.sh(`${renamingGh} cmd_pr_state --session demo-quiet-basin`));
+    expect(h.ghCalls().find((c) => c.startsWith('pr list'))!).toContain('--head ws/quiet-basin');
+    expect(o.branch).toBe('ws/quiet-basin');
+    expect(o.phase).toBe('merged');
+    expect(o.number).toBe(42);
+    expect(h.reg('demo-quiet-basin', 'prnumber')).toBe('42');
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', 'demo-quiet-basin.prhistory'))).toBe(false);
+  });
+});
+/** `mergedRow` with the merge undone — state OPEN, no merge fields. The rollup
+ *  is only ever put into WORDS for `open` and `draft` (`prSentence`'s
+ *  `checkText` has the clause in those two cases and nowhere else, and
+ *  `PrSheet` renders `.pr-checkline` in that same branch), so `open` is the
+ *  phase these tests have to be about: a fixture built on `mergedRow` would
+ *  assert `checks` on a row whose checks no screen reads. */
+/** The seconds ccd assigns to a bare `NAME=<n>` constant. Read rather than
+ *  hardcoded: these two assertions are about WHICH timeout wraps WHICH call,
+ *  never about the value — and the value moved once already (12+6 -> 8+5, when
+ *  `pr-timeout-budget.test.ts` measured the pair against the 20 s bound that
+ *  actually ships). A literal here re-pins the number in a third place and reds
+ *  the next resize for no reason. */
+const ccdSeconds = (name: string): number => {
+  const src = readFileSync(CCD, 'utf8');
+  const m = new RegExp(`^${name}=(\\d+)`, 'm').exec(src);
+  if (!m) throw new Error(`ccd no longer defines ${name} as a bare integer assignment`);
+  return Number(m[1]);
+};
+
+const openRow = (over: Record<string, unknown> = {}): Record<string, unknown> =>
+  mergedRow({ state: 'OPEN', mergedAt: null, mergeCommit: null, ...over });
+
+/** A `gh` that can answer the TWO calls the project sweep now makes, keyed on
+ *  the `--json` list because that is the only thing that tells them apart: the
+ *  ROWS window (`number,state,…`) and the ROLLUP window
+ *  (`number,statusCheckRollup`). `GH_STUB` holds ONE `gh-rows.json` and hands
+ *  it to every call, which cannot express "these two calls came back
+ *  differently" — and that the second one can come back differently, including
+ *  not at all, is the whole property under test. */
+const twoAnswerGh = (rollupArm: string): string => `
+gh() {
+  printf '%s\\n' "$*" >> "$HOME/gh-calls"
+  case "$*" in
+    *'--json number,statusCheckRollup'*) ${rollupArm} ;;
+    *) [[ -f "$HOME/gh-rows.json" ]] && cat "$HOME/gh-rows.json" ;;
+  esac
+  return 0
+};
+timeout() { printf 'timeout %s\\n' "$*" >> "$HOME/gh-calls"; shift; "$@"; };
+`;
+
+describe('the project sweep fetches the rollup it reads, not the ninety-nine it drops', () => {
+  // MEASURED, 2026-08-26, on the same live fleet repo Task 1 and Task 2 were
+  // measured against. `--project` genuinely needs the WIDE window — it asks
+  // about every workspace of a repo from one call, and Task 2's `--head` would
+  // filter the whole sweep on the first session's branch — but it does not need
+  // `statusCheckRollup` in it, and that field is the entire cost:
+  //
+  //   --state all --limit 100, twelve fields incl. the rollup   11.2 s, HTTP 504 (3/3)
+  //   --state all --limit 100, the same eleven WITHOUT it        0.83 s, rc 0
+  //   --state all --limit 100, ONLY number,statusCheckRollup    11.2 s, HTTP 504
+  //   --state open --limit 100, number,statusCheckRollup         3.09 s, rc 0 (19 open)
+  //
+  // The third line is the one that decides the shape: narrowing the FIELD list
+  // does not help at all, so the rollup has to come from a call that is narrow
+  // in the ROW dimension. `--state open` is the narrowing that is CONSTANT in
+  // the number of calls, and it covers every phase whose checks the product
+  // ever puts into words — `prSentence` renders the checks clause for `open`
+  // and `draft` only, `PrSheet`'s `.pr-checkline` in that same branch, and the
+  // sweep's own active cadence conjoins `phase === 'open'`.
+  //
+  // A per-branch rollup call per session would be exact for merged and closed
+  // rows too, and it is rejected here for a measured reason: it makes ONE
+  // exec's wall clock scale with the number of workspaces, so a sick GitHub
+  // turns a whole project into `agent-down` (the outer bound killed the child)
+  // instead of the honest `unavailable` this same wave taught the classifier to
+  // say. Two calls is two calls whatever the fleet grows to.
+  it('does not put the rollup in the wide window', () => {
+    workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([]);
+    h.sh(`${GH_STUB} cmd_pr_state --project demo`);
+    const rowCall = h.ghCalls().filter((c) => c.startsWith('pr list'))
+      .find((c) => c.includes('--json number,state,'));
+    expect(rowCall).toBeDefined();
+    expect(rowCall).not.toContain('statusCheckRollup');
+    // The other eleven stay, in order and entire: this task removes ONE field,
+    // and the row window is still what every binding conjunct is read from.
+    expect(rowCall).toContain('--json number,state,headRefName,headRefOid,baseRefName,'
+      + 'isCrossRepository,mergedAt,mergeCommit,url,title,isDraft');
+    expect(rowCall).toContain('--state all');
+    expect(rowCall).toContain('--limit 100');
+  });
+
+  it('asks for the rollup in a second call, over the PRs that are still open', () => {
+    workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([]);
+    h.sh(`${GH_STUB} cmd_pr_state --project demo`);
+    const rollupCall = h.ghCalls().filter((c) => c.startsWith('pr list'))
+      .find((c) => c.includes('--json number,statusCheckRollup'));
+    expect(rollupCall).toBeDefined();
+    expect(rollupCall).toContain('--state open');
+    expect(rollupCall).toContain('--limit 100');
+    // …and on its OWN, shorter budget. It is the optional half of the answer,
+    // so it may not be able to spend the whole of what the required half is
+    // allowed: 12 + 12 would put the pair past the outer bound the pr-lifecycle
+    // spec set for this verb (20 s), and losing the rows to a rollup is exactly
+    // the poisoning this split exists to make impossible.
+    expect(h.ghCalls().some((c) => c.startsWith(`timeout ${ccdSeconds('PR_GH_CHECKS_TIMEOUT')} gh pr list`))).toBe(true);
+  });
+
+  // THE JOIN IS KEYED ON `number`, AND THIS FIXTURE IS WHAT MAKES THAT TESTABLE.
+  // Its first version put the one rollup entry on the row that was ALSO first in
+  // `rows`, so a positional join — `zip(rows, by_number.values())` — passed the
+  // whole suite. That is not a hypothetical mutant: in production the two windows
+  // are different SETS in a different ORDER (rows is `--state all --limit 100`,
+  // newest first, merged and closed included; rollups is `--state open --limit
+  // 100`), so a positional join attaches an open PR's rollup to an unrelated
+  // merged row and the keycap renders another PR's checks — including its
+  // attacker-controllable `checkNames`, on any repo that takes fork PRs.
+  //
+  // So: the bound row is rows[1], not rows[0], and the rollups arrive in the
+  // OPPOSITE order with a decoy that would look like a pass. Under the correct
+  // key-join the bound row is `fail`/['e2e']; under a positional one it takes the
+  // decoy and reads `pass`.
+  it('a bound row carries ITS OWN checks — the join is keyed on number, not position', () => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([
+      openRow({ number: 77, headRefOid: 'f00dcafe', headRefName: 'ws/still-cove' }),
+      openRow({ headRefOid: tip }),                       // #42 — the bound row
+    ]);
+    fs.writeFileSync(path.join(h.home, 'gh-rollups.json'), JSON.stringify([
+      { number: 42, statusCheckRollup: [{ name: 'e2e', conclusion: 'FAILURE' }] },
+      { number: 77, statusCheckRollup: [{ name: 'lint', conclusion: 'SUCCESS' }] },
+    ]));
+    const out = h.sh(`${twoAnswerGh('cat "$HOME/gh-rollups.json"')} cmd_pr_state --project demo`);
+    const l = parsePrLines(out)[0];
+    expect(l).toBeDefined();
+    expect(isFullLine(l!)).toBe(true);
+    // Read through the SERVER's own reader, not by poking at the row: the two
+    // calls are joined so that `phaseFor`'s `checksFor(boundRow(...))` finds a
+    // rollup on the row it independently binds, and asserting the join any
+    // other way would pass for a row nothing reads.
+    const s = phaseFor(l as never);
+    expect(s.phase).toBe('open');
+    expect(s.checks, 'the bound row took another PR\'s rollup — the join went positional').toBe('fail');
+    expect(s.checkNames).toEqual(['e2e']);
+
+    // And the row NOTHING reads must also be correct, because a swap is
+    // symmetric: asserting only the bound row would still pass if the two
+    // rollups were exchanged in a way that happened to leave #42 right.
+    const rows = (l as unknown as { rows: { number: number; statusCheckRollup?: { name: string }[] }[] }).rows;
+    const other = rows.find((r) => r.number === 77);
+    expect(other?.statusCheckRollup?.[0]?.name,
+      'the decoy rollup did not land on its own row').toBe('lint');
+  });
+
+  // "AFTER THE STAMP, NEVER BEFORE" is the one invariant in the rollup block
+  // that had no red behind it: hoisting the whole `if [[ $mode == --project ]]`
+  // block above `answeredAt=$(date +%s%3N)` is legal bash, reads like tidying
+  // two network calls together, and left every suite green (measured).
+  //
+  // What it costs is the property the previous wave fixed: `prcheckedat` must
+  // describe WHEN GITHUB ANSWERED THE ROWS, because the compare-and-set ranks
+  // runs by it (`prev_at <= checked_at`). Hoisted, the stamp also carries the
+  // rollup call's wall clock — up to PR_GH_CHECKS_TIMEOUT — so a project sweep
+  // whose rows GitHub answered seconds EARLIER can overwrite a fresher
+  // `--session` answer.
+  //
+  // The mechanism is a rollup arm that takes measurable time. If the stamp is
+  // taken first, `prcheckedat` predates that delay; if it is hoisted, it cannot.
+  it('stamps prcheckedat from when the ROWS answered, not after the rollup call', () => {
+    // A BOUND row, so a phase is actually measured and persisted — an empty
+    // window writes no `prcheckedat` and the assertions below would have
+    // nothing to read.
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([openRow({ headRefOid: tip })]);
+    const SLEEP_S = 2;
+    // Only the ROLLUP arm sleeps — `twoAnswerGh` answers the rows at once, so
+    // any delay that reaches the stamp came from the rollup call and nowhere
+    // else. (Hand-rolling the stub here does not work: `timeout` is a real
+    // binary and `gh` is a shell function, so the helper's `timeout()` override
+    // is what lets `timeout 8 gh …` reach the stub at all.)
+    const before = Date.now();
+    h.sh(`${twoAnswerGh(`sleep ${SLEEP_S}; printf '[]'`)} cmd_pr_state --project demo`);
+    const after = Date.now();
+
+    const stamped = Number(h.reg('demo-quiet-basin', 'prcheckedat'));
+    expect(Number.isFinite(stamped) && stamped > 0, 'no prcheckedat was written at all').toBe(true);
+
+    // Guard the guard: if the stub did not actually sleep, this test proves
+    // nothing, so assert the delay really happened before reading anything into
+    // the stamp's position relative to it.
+    expect(after - before,
+      'the rollup arm did not sleep — this fixture cannot tell the two orderings apart')
+      .toBeGreaterThanOrEqual(SLEEP_S * 1000);
+
+    // The stamp must sit in the window BEFORE the sleep, not after it. Half the
+    // sleep is the margin: generous enough for a loaded box, far short of the
+    // full delay a hoist would add.
+    expect(stamped - before,
+      `prcheckedat is ${stamped - before}ms after the run started, which is past the rollup's `
+      + `${SLEEP_S}s — the stamp was taken AFTER the rollup call, so it ranks completion times `
+      + `rather than answers`)
+      .toBeLessThan(SLEEP_S * 1000 / 2);
+  });
+
+  it('a rollup call that fails cannot poison the rows', () => {
+    // THE ISOLATION, stated as a test rather than as an intention. The rollup
+    // call is the second network call on a path that had one, and the failure
+    // it must never cause is the one Task 1 just gave a name to: a `504` on the
+    // OPTIONAL half turning a perfectly good phase into `unknown`. What a lost
+    // rollup costs is `checks: null` — which `checksFor` already answers for an
+    // absent rollup (`prstate.ts`, `Array.isArray(row.statusCheckRollup)` is
+    // false for an absent key) — and nothing else.
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([openRow({ headRefOid: tip })]);
+    const out = h.sh(`${twoAnswerGh(`printf 'HTTP 504: We could not respond in time.\\n' >&2; return 1`)} `
+      + 'cmd_pr_state --project demo');
+    const l = parsePrLines(out)[0];
+    expect(l).toBeDefined();
+    // A FULL line, not the id-less failure object: a whole-repo failure backs
+    // the project off and greys every sibling, and the rows were read.
+    expect(isFullLine(l!)).toBe(true);
+    const s = phaseFor(l as never);
+    expect(s.phase).toBe('open');
+    expect(s.number).toBe(42);
+    expect(s.reason).toBeNull();
+    // CHANGED DELIBERATELY, and this is the assertion the change is about.
+    // It read `toBeNull()`, and `null` is defined by `PrChecks` as the
+    // AFFIRMATIVE claim "no checks are configured" — which `PrKeycap` renders
+    // in those words, under a fresh `checkedAt`, on a PR whose build may be red.
+    // The rollup call 504'd here; nothing was measured. The phase, the number
+    // and the absence of a `reason` are all unchanged, which is the isolation
+    // this test was written for and still proves.
+    expect(s.checks).toBe('unmeasured');
+    expect(s.checkNames).toBeNull();
+  });
+
+  it('keeps the rows when the JOIN itself cannot run', () => {
+    // The other half of the isolation, and a different fault from the one
+    // above: there the second CALL failed, here the second call answered and
+    // the pass that attaches its answer is what broke — a python that will not
+    // start, an OSError on the write, a `rollups` arm a later edit throws in.
+    // Every one of those is a fault in the OPTIONAL half of the answer, and the
+    // rows are the half somebody is waiting on: a broken join that replaced
+    // them would turn every session of every project on the box into
+    // `unknown/error` in one sweep, off a fault in an annotation.
+    //
+    // `python3` is shadowed for `rollups` and for nothing else — `_pr_py`'s
+    // mode is argv[2] to python (argv[1] is the program on fd 3) — so the
+    // `state` pass that computes the phase runs exactly as it always does.
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([openRow({ headRefOid: tip })]);
+    fs.writeFileSync(path.join(h.home, 'gh-rollups.json'), JSON.stringify([
+      { number: 42, statusCheckRollup: [{ name: 'e2e', conclusion: 'FAILURE' }] },
+    ]));
+    const brokenJoin = `${twoAnswerGh('cat "$HOME/gh-rollups.json"')}
+      python3() { [[ "\${2:-}" == rollups ]] && return 1; command python3 "$@"; };
+    `;
+    const out = h.sh(`${brokenJoin} cmd_pr_state --project demo`);
+    const l = parsePrLines(out)[0];
+    expect(l).toBeDefined();
+    expect(isFullLine(l!)).toBe(true);
+    const s = phaseFor(l as never);
+    expect(s.phase).toBe('open');
+    expect(s.number).toBe(42);
+    // Same change, same reason as the failed-CALL case above: the join broke,
+    // so no row carries a rollup, and their absence proves nothing about
+    // whether checks exist. The ROWS are what this test is about and they are
+    // untouched — phase and number still measured.
+    expect(s.checks).toBe('unmeasured');
+  });
+
+  // THE POSITIVE CONTROL for the two `unmeasured` assertions above, and the
+  // reason the distinction is worth carrying at all. If a successful rollup
+  // that reports NO checks also read `unmeasured`, the new arm would just be a
+  // rename of `null` and the screen would say "not measured" about a perfectly
+  // good measurement — the same defect, pointing the other way.
+  it('a rollup that ANSWERS and reports no checks is null, not unmeasured', () => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([openRow({ headRefOid: tip })]);
+    // The call succeeds and says: this PR has an empty rollup. That IS a
+    // measurement, and `checksFor` has always answered `null` for it.
+    const out = h.sh(`${twoAnswerGh(`printf '%s' '[{"number":42,"statusCheckRollup":[]}]'`)} `
+      + 'cmd_pr_state --project demo');
+    const l = parsePrLines(out)[0];
+    expect(l).toBeDefined();
+    const s = phaseFor(l as never);
+    expect(s.phase).toBe('open');
+    expect(s.checks, 'a measured "no checks" was reported as unmeasured').toBeNull();
+    expect(s.checkNames).toBeNull();
+  });
+
+  it('does not let the join turn an unreadable body into an empty one', () => {
+    // The refusal inside the join, and it is the SAME refusal `rows_in`'s
+    // docstring is about, one hop earlier than it used to be possible to break.
+    // The join re-serialises the rows, so it has to answer the question "what
+    // is an unreadable body?" for itself — and the wrong answer is `[]`, which
+    // is the affirmative "this repository has no pull request for you": it is
+    // the phase `none`, which CLEARS the persisted `prnumber` and retires a
+    // live PR into the append-only `.prhistory`.
+    //
+    // Only `--project` can reach it, because only `--project` joins, and that
+    // is exactly the sweep that runs unattended every 120 s against every repo
+    // on the box. So the join refuses — nothing on stdout, non-zero — and the
+    // rows reach `_pr_py state` exactly as gh left them, where the answer is
+    // the id-less failure object it has always been.
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    fs.writeFileSync(path.join(h.home, 'gh-rollups.json'), JSON.stringify([
+      { number: 42, statusCheckRollup: [{ name: 'e2e', conclusion: 'SUCCESS' }] },
+    ]));
+    const gh = twoAnswerGh('cat "$HOME/gh-rollups.json"');
+    h.ghRows([mergedRow({ headRefOid: tip })]);
+    h.sh(`${gh} cmd_pr_state --project demo`);
+    expect(h.reg('demo-quiet-basin', 'prphase')).toBe('merged');
+    const before = h.reg('demo-quiet-basin', 'prcheckedat');
+
+    // gh exits 0 with a body that is not a list of rows — while the ROLLUP call
+    // answers perfectly well, which is the state the join makes newly reachable.
+    h.ghRaw('gh: could not determine base repository');
+    const out = h.sh(`${gh} cmd_pr_state --project demo`);
+    expect(parsePrLines(out)).toEqual([{ phase: 'unknown', reason: 'error' }]);
+    expect(h.reg('demo-quiet-basin', 'prphase')).toBe('merged');
+    expect(h.reg('demo-quiet-basin', 'prnumber')).toBe('42');
+    expect(h.reg('demo-quiet-basin', 'prcheckedat')).toBe(before);
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', 'demo-quiet-basin.prhistory'))).toBe(false);
+  });
+
+  it('leaves the per-session call whole — one call, rollup and all', () => {
+    // The other direction of the split, and the reason it is drawn where it is.
+    // `--session` asks about ONE branch (Task 2), and that call carries the
+    // rollup for the same reason it can carry the wide window's twelve fields:
+    // measured at 0.78–1.1 s with the rollup included. Splitting it too would
+    // buy nothing and cost a second round trip on the path a human is waiting
+    // on — the PR sheet fires this one on every open.
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip })]);
+    h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`);
+    const calls = h.ghCalls().filter((c) => c.startsWith('pr list'));
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain('statusCheckRollup');
+    expect(calls[0]).toContain('--head ws/quiet-basin');
   });
 });
 
@@ -208,8 +641,14 @@ describe('binding', () => {
   });
 
   it('refuses a PR on a different branch, however well the rest matches', () => {
-    // There is no --head filter on the call: it lists the repo's last 100 PRs
-    // and this is what selects ours out of them.
+    // The `--session` call now carries `--head`, so gh itself would not send
+    // this row — and the conjunct is still the thing that decides, for three
+    // reasons the flag does not cover. `--project` lists the repo's last 100
+    // PRs unfiltered and is the form the 120 s sweep uses; `--head` matches
+    // `headRefName` across fork owners, so a filtered answer still carries rows
+    // that are not ours; and the server re-runs the same predicate over
+    // `line.rows` with no gh call in sight. A conjunct that only held because
+    // the question was narrow would be a binding decided by the wire.
     const { tip } = workspaceWithCommit('demo', 'quiet-basin');
     h.ghRows([mergedRow({ headRefOid: tip, headRefName: 'ws/still-cove' })]);
     expect(line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`)).phase).toBe('none');
@@ -551,6 +990,20 @@ describe('failure is an ANSWER, not an error', () => {
     [1, 'gh: To get started with GitHub CLI, please run: gh auth login', 'unauthenticated'],
     [1, 'HTTP 403: API rate limit exceeded', 'rate-limit'],
     [1, 'dial tcp: lookup api.github.com: no such host', 'offline'],
+    // GitHub's own 5xx, VERBATIM as api.github.com/graphql sent it — measured
+    // on 2026-08-26 against a live repo with several thousand PRs of history
+    // (3/3 attempts, persistent, not a blip) and re-measured byte-for-byte at
+    // execution time. This is the shape that produced the mail this work
+    // exists for: `pr-unmeasurable: pr-state answered no full line`, with
+    // nothing in it a coordinator could act on.
+    [1, "HTTP 504: We couldn't respond to your request in time. Sorry about that. "
+      + 'Please try resubmitting your request and contact us if the problem persists. '
+      + '(https://api.github.com/graphql)', 'unavailable'],
+    // The SAME query at `--limit 50` on the same repo the same day: gh got a
+    // body and the body stopped mid-stream. rc 1 and an empty answer, exactly
+    // like the 504 — and a different fact about the world, which is the whole
+    // reason it gets a different token.
+    [1, 'unexpected end of JSON input', 'truncated'],
     [1, 'something else entirely', 'error'],
   ])('rc %i maps to reason %s on stdout with exit 0', (rc, stderr, reason) => {
     workspaceWithCommit('demo', 'quiet-basin');
@@ -558,6 +1011,33 @@ describe('failure is an ANSWER, not an error', () => {
     const r = h.run(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`);
     expect(r.code).toBe(0);
     expect(JSON.parse(r.stdout)).toEqual({ phase: 'unknown', reason });
+  });
+
+  // The arms above pin ONE spelling each, and each new arm matches four (or
+  // two). An arm reduced to the single alternative its table row happens to
+  // carry would leave the table green while `HTTP 502` — the other half of what
+  // a GitHub outage actually emits — went back to the catch-all. So every
+  // alternative is exercised, and each says out loud what it is NOT.
+  //
+  // `error` is not a bug; it is the honest name for a fault with no known
+  // shape. What is a bug is spending it on two faults whose shape IS known: a
+  // 5xx says the far side is unwell and the same query will fail again the same
+  // way, and a truncated body says the far side started answering and stopped —
+  // one is worth backing off, the other is worth retrying, and `error` says
+  // neither.
+  it.each([
+    ['HTTP 500: Internal Server Error (https://api.github.com/graphql)', 'unavailable'],
+    ['HTTP 502: Bad Gateway (https://api.github.com/graphql)', 'unavailable'],
+    ['HTTP 503: Service Unavailable (https://api.github.com/graphql)', 'unavailable'],
+    ['HTTP 504: We could not respond to your request in time.', 'unavailable'],
+    ['unexpected end of JSON input', 'truncated'],
+    ['unexpected EOF', 'truncated'],
+  ])('%s is classified, not swept into the catch-all', (stderr, reason) => {
+    workspaceWithCommit('demo', 'quiet-basin');
+    h.ghFail(1, stderr);
+    const o = JSON.parse(h.run(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`).stdout);
+    expect(o.reason).toBe(reason);
+    expect(o.reason, 'a fault with a known shape must not read as an unexplained one').not.toBe('error');
   });
 
   it('leaves the persisted prphase untouched when the read failed', () => {
@@ -615,22 +1095,43 @@ describe('failure is an ANSWER, not an error', () => {
 });
 
 describe('--project', () => {
-  it('emits one JSON line per workspace of that project from ONE gh call', () => {
-    // 8 projects x 1 call / 120 s is ~5% of the GraphQL budget. Per session
-    // it would be several times that for no extra information.
+  it('emits one JSON line per workspace, from a call count that does not move with them', () => {
+    // 8 projects x 1 call / 120 s is ~5% of the GraphQL budget. Per session it
+    // would be several times that for no extra information — and THAT, not the
+    // literal number, is what this has always been about. It used to say it as
+    // `toHaveLength(1)`, which stopped being true when Task 3 split the rollups
+    // into their own call: a 100-PR window carrying `statusCheckRollup` is
+    // answered `HTTP 504`, so `--project` now asks twice, once for the rows and
+    // once for the rollups of the PRs that are open.
+    //
+    // Two is still a CONSTANT, and the constant is what the budget argument
+    // rests on, so the assertion is re-stated as the property rather than
+    // re-pointed at the new number: count the calls, add a workspace, count
+    // again, and require the two counts to be EQUAL. A per-session regression —
+    // the shape the comment was written to forbid — fails that at one call, at
+    // two, and at any number a later wave arrives at.
     h.makeGhRepo('demo');
     h.makeGhRepo('other', 'o/other');
     h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
     h.sh(`${WS_ADD} CCD_WS_SLUG=still-cove cmd_ws_add demo`);
     h.sh(`${WS_ADD} CCD_WS_SLUG=amber-ridge cmd_ws_add other`);   // a different repo's
     h.ghRows([]);
+    const prListCalls = (): string[] => h.ghCalls().filter((c) => c.startsWith('pr list'));
     const out = h.sh(`${GH_STUB} cmd_pr_state --project demo`).split('\n').filter(Boolean);
     expect(out).toHaveLength(2);
     expect(out.map((l) => JSON.parse(l).id).sort()).toEqual(['demo-quiet-basin', 'demo-still-cove']);
-    expect(h.ghCalls().filter((c) => c.startsWith('pr list'))).toHaveLength(1);
+    const forTwo = prListCalls().length;
     // One repo per call, and it is THIS repo: a second project's workspaces are
-    // neither listed nor asked about.
-    expect(h.ghCalls().find((c) => c.startsWith('pr list'))).toContain('--repo o/r');
+    // neither listed nor asked about. `every`, not `find`: both calls of the
+    // pair have to be about this repo, and reading only the first would let a
+    // rollup window aimed anywhere at all through.
+    expect(prListCalls().every((c) => c.includes('--repo o/r'))).toBe(true);
+
+    const before = prListCalls().length;
+    h.sh(`${WS_ADD} CCD_WS_SLUG=bright-delta cmd_ws_add demo`);
+    const out3 = h.sh(`${GH_STUB} cmd_pr_state --project demo`).split('\n').filter(Boolean);
+    expect(out3).toHaveLength(3);                          // the third workspace really is in the sweep
+    expect(prListCalls().length - before).toBe(forTwo);    // …and it cost no extra call
   });
 
   it('says nothing, at exit 0, about a project with no workspaces', () => {

@@ -41,14 +41,29 @@ export function prLegend(pr: PrState): string {
 }
 
 /** Status is never colour-only: this glyph rides beside the dot, and the sheet
- *  repeats it as a text line. */
+ *  repeats it as a text line.
+ *
+ *  `unmeasured` gets a glyph of its own and NOT the absence of one, for the
+ *  same reason `[data-phase='unchecked']` is dashed rather than plain: the
+ *  glyph is missing when `checks` is `null` — GitHub answered and this PR has
+ *  no checks — so reusing that blank would render "we could not read the
+ *  rollup" identically to "there is nothing to read". It is the only member
+ *  that is not a verdict, so it is the only one drawn as a question.
+ *
+ *  It deliberately has no `[data-checks='unmeasured'] .pr-dot` colour rule
+ *  next door in `chat.css`: the three that do exist OVERRIDE the phase colour
+ *  with a checks verdict, and an unmeasured rollup has no verdict to override
+ *  it with. The dot keeps whatever the phase said and this glyph says the
+ *  console could not re-measure the checks — an axis beside the state, not a
+ *  takeover of it, which is `.sess-unmeasured`'s contract in `SessionLine`.
+ *  (D-637.) */
 const CHECK_GLYPH: Record<Exclude<PrChecks, null>, string> = {
-  pass: '✓', fail: '✕', pending: '▲',
+  pass: '✓', fail: '✕', pending: '▲', unmeasured: '?',
 };
 
 /** Integration finding 7: the fourth site of the reason vocabulary, and the
  *  ONLY one of the four that already failed when the vocabulary grew — a
- *  `Record` over the union is exhaustive, so a tenth reason is a compile error
+ *  `Record` over the union is exhaustive, so a NEW reason is a compile error
  *  right here until somebody writes the sentence a human reads. That is the
  *  property the other three now have too: `PrReason` is the union, `PR_REASONS`
  *  is derived from it via `Record<PrReason, true>`, and both validators ask
@@ -81,6 +96,17 @@ const REASON_TEXT: Record<PrReason, string> = {
   // because unlike every other reason here this one is fixed by the operator
   // rather than by waiting.
   'branch-drift': 'ccrc’s registry and git disagree about this workspace’s branch, so its PR was not measured. Reconcile with `ccd ws-rename`.',
+  // The two that split off `error` (measured on a live repo, 2026-08-26). Both
+  // are failed reads like the eight above, and both say something `error`
+  // could not: WHOSE fault it was, and therefore what happens next. This one
+  // names GitHub because the request arrived and GitHub could not finish it, so
+  // the reader must not go and check their own token — which is exactly where
+  // "GitHub could not be read." sent them.
+  unavailable: 'GitHub answered with a server error, so this could not be read.',
+  // And this one is the opposite advice: a read that was cut off will often
+  // succeed on the next sweep, so the copy says so rather than implying
+  // something is broken and wants fixing.
+  truncated: 'GitHub’s answer was cut off mid-way. ccrc will try again.',
 };
 
 /** Task 3 review finding 9's docket: the registry persists `prPhase` and
@@ -166,6 +192,10 @@ const CHECK_PHRASE: Record<'none' | Exclude<PrChecks, null>, string> = {
   pass: 'Checks passing',
   pending: 'Checks running',
   fail: 'Checks failing',
+  // NOT a synonym for `none`. `none` is a measurement — GitHub answered and the
+  // PR has no checks; this is the absence of one, and the two must not read the
+  // same on a screen that a reviewer uses to decide whether to merge.
+  unmeasured: 'Checks not measured',
 };
 
 /** The checks clause as its own sentence — `PrSheet`'s check line.
@@ -177,11 +207,13 @@ const CHECK_PHRASE: Record<'none' | Exclude<PrChecks, null>, string> = {
  *  such block.
  *
  *  MUTATION SURVIVOR, disclosed, on `pr.checks ?? 'none'` (same shape as this
- *  file's other one): `PrChecks` is `'pass' | 'fail' | 'pending' | null`, four
- *  values of which exactly one is falsy and it is `null`, so `??` and `||` act
- *  on identical inputs and no distinguishing call can exist. Kept as `??`
- *  because the intent is "no checks were reported", not "the report looks
- *  empty". */
+ *  file's other one): every member of `PrChecks` except `null` is a non-empty
+ *  string, so `null` is the union's ONLY falsy value and `??` and `||` act on
+ *  identical inputs — no distinguishing call can exist. Stated as a property
+ *  of the union rather than as a list of its members, because the list has
+ *  already grown once (`unmeasured`, D-637) and a restatement of it here
+ *  would be a second definition that drifts. Kept as `??` because the intent
+ *  is "no checks were reported", not "the report looks empty". */
 export function checkPhrase(pr: PrState): string {
   return `${CHECK_PHRASE[pr.checks ?? 'none']}.`;
 }

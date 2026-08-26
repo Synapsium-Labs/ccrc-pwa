@@ -22,6 +22,13 @@ export interface CcdPrLine {
    *  that treats any of them as 0 is asserting a clean, level, resolvable
    *  workspace it never looked at. */
   tip: string | null; ahead: number | null; dirty: number | null;
+  /** True when ccd's SECOND gh call — the check rollup, which cannot ride the
+   *  100-PR row window — did not answer, so no row on this line carries a
+   *  `statusCheckRollup` and their absence proves nothing. Absent on a line
+   *  from an older ccd, which is the honest tolerant reading: that build
+   *  fetched the rollup in-band, so a missing key really did mean "no checks".
+   *  Read by `phaseFor` and nothing else. */
+  checksUnmeasured?: boolean;
   commits: { sha: string; subject: string; body: string }[];
   template: string | null; rows: CcdPrRow[];
   phase: PrState['phase']; number: number | null; checkedAt: number;
@@ -172,7 +179,15 @@ export function phaseFor(line: CcdPrLine): PrState {
   // there), and the agreement matrix pins the two equal on that row.
   if (row === null) return { ...base, phase: line.ahead === 0 ? 'no-commits' : 'none' };
 
-  const { checks, checkNames } = checksFor(row);
+  // THE ROLLUP'S OWN FAILURE, WHICH `checksFor` CANNOT SEE. It is handed one
+  // ROW, and a row whose rollup call never answered is byte-identical to a row
+  // GitHub said has no checks — both simply lack the key. The difference is a
+  // fact about the LINE, so it is read here, where the line is in scope.
+  // `checkNames` stays null: an unmeasured rollup has no names to report, and
+  // inventing them is the same defect one field over.
+  const { checks, checkNames } = line.checksUnmeasured === true
+    ? { checks: 'unmeasured' as const, checkNames: null }
+    : checksFor(row);
   const common: PrState = {
     ...base, number: row.number ?? null, url: row.url ?? null, title: row.title ?? null,
     checks, checkNames,

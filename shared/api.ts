@@ -290,8 +290,18 @@ export type PrPhase =
   | 'unchecked' | 'none' | 'no-commits' | 'open' | 'draft' | 'merged' | 'closed' | 'unknown';
 
 /** CI rollup. `null` means NO CHECKS ARE CONFIGURED — distinct from 'pending',
- *  and rendered with different words. */
-export type PrChecks = 'pass' | 'fail' | 'pending' | null;
+ *  and rendered with different words.
+ *
+ *  `'unmeasured'` is the arm `null` used to swallow. Since the check rollup
+ *  became its OWN gh call (it cannot ride the 100-PR window — that is answered
+ *  `HTTP 504`), it can fail on its own while the rows come back perfectly: a
+ *  timeout, a 5xx, or a join that would not run. Every one of those left the
+ *  row with no `statusCheckRollup` key, which `checksFor` read as `null`, which
+ *  this file defines as the AFFIRMATIVE claim "no checks are configured" and
+ *  `PrKeycap` renders as exactly that — under a fresh `checkedAt`, on a PR
+ *  whose build may be red. A read that did not happen must not wear the words
+ *  of a read that did. */
+export type PrChecks = 'pass' | 'fail' | 'pending' | 'unmeasured' | null;
 
 /**
  * Why a `PrState`'s phase is `unknown`. Every member but `merge-unproven` and
@@ -304,6 +314,19 @@ export type PrChecks = 'pass' | 'fail' | 'pending' | null;
  * candidate answers and ccd measures neither — the poller BINDS a PR to a name
  * and persists that binding, so picking a side would rewrite lineage rather
  * than report a fact. Reconcile with `ccd ws-rename`.
+ *
+ * Among the FAILED reads, `unavailable` and `truncated` are the two that name
+ * GitHub's own fault rather than ours, and they exist because `error` — the
+ * catch-all, which renders "GitHub could not be read." — was spending one
+ * sentence on three unrelated worlds. Measured 2026-08-26 against a live repo
+ * with several thousand PRs of history: `unavailable` is a 5xx from
+ * api.github.com/graphql (500/502/503/504) — the request arrived and the far
+ * side could not finish it, on 3/3 attempts, so the identical query will fail
+ * identically and the remedy is to ask GitHub for less rather than to check
+ * the token. `truncated` is a body that started and stopped (`unexpected end
+ * of JSON input`), where a retry may simply succeed. `error` keeps everything
+ * whose shape is genuinely unknown, which is the only thing it was ever an
+ * honest answer for.
  *
  * Integration finding 7. This vocabulary lived in FOUR places: this union
  * (inline in `PrState.reason`), the snapshot-revival list below, `prstate.ts`'s
@@ -321,7 +344,8 @@ export type PrChecks = 'pass' | 'fail' | 'pending' | null;
 export type PrReason =
   | 'timeout' | 'offline' | 'unauthenticated' | 'rate-limit'
   | 'no-remote' | 'unsupported' | 'agent-down' | 'error'
-  | 'merge-unproven' | 'branch-drift';
+  | 'merge-unproven' | 'branch-drift'
+  | 'unavailable' | 'truncated';
 
 /**
  * The runtime list, derived from the type. `Record<PrReason, true>` is what
@@ -342,6 +366,7 @@ const PR_REASON_MAP: Record<PrReason, true> = {
   timeout: true, offline: true, unauthenticated: true, 'rate-limit': true,
   'no-remote': true, unsupported: true, 'agent-down': true, error: true,
   'merge-unproven': true, 'branch-drift': true,
+  unavailable: true, truncated: true,
 };
 export const PR_REASONS: readonly PrReason[] = Object.keys(PR_REASON_MAP) as PrReason[];
 
@@ -376,7 +401,7 @@ export interface PrState {
   checkNames: string[] | null;
   ahead: number;                 // commits past base
   /** Why `phase` is `unknown` — see `PrReason` above, which is where the
-   *  vocabulary is defined and where a tenth member is added. Null when the
+   *  vocabulary is defined and where the next member is added. Null when the
    *  phase is not `unknown`, or when a read succeeded. */
   reason: PrReason | null;
   checkedAt: number | null;      // epoch ms of the gh read that produced this
@@ -1432,7 +1457,20 @@ const reqBool = (o: RawObj, k: string): boolean => {
 // `readonly PrPhase[]` needs `raw as PrPhase` on the value being checked, which
 // asserts the very thing the check is asking. Cast the CONSTANT, never the input.
 const STATUSES: readonly string[] = ['busy', 'idle', 'dead'];
-const CHECKS: readonly string[] = ['pass', 'fail', 'pending'];
+// DERIVED, not restated — `PR_REASONS`' idiom above, and for a reason this
+// list learned the hard way. It shipped as a hand-written `['pass', 'fail',
+// 'pending']` and then `PrChecks` grew `unmeasured`, which the server began
+// WRITING (a rollup GitHub answered with a 504 is not a verdict) while this
+// validator still refused it — and refusal here is not a degraded field, it
+// throws `MalformedSnapshot` and discards the WHOLE snapshot. A state cache
+// written by this build would have been rejected by this build on its next
+// boot. The `Record` makes the next member a compile error at this line
+// instead. Cast the CONSTANT, never the input: `Object.keys` already answers
+// `string[]`, so there is no cast left to get wrong. (D-638.)
+const CHECKS_MAP: Record<Exclude<PrChecks, null>, true> = {
+  pass: true, fail: true, pending: true, unmeasured: true,
+};
+const CHECKS: readonly string[] = Object.keys(CHECKS_MAP);
 // Same shape as CHECKS, not PR_PHASES: `hookState` is already nullable and
 // null already has a specific meaning ("no fresh hook data"), so an
 // unrecognised token has nowhere honest to degrade to — landing it on null
