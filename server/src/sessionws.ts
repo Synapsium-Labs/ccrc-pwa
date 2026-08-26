@@ -2,7 +2,7 @@ import type { Deps } from './server.js';
 import type { Bus, Notice } from './bus.js';
 import { configDirFor, type CcrcConfig } from './config.js';
 import { measuredIdentity, readSessionRecord } from './registry.js';
-import { liveSessionStatus, readLiveState } from './livestate.js';
+import { liveSessionStatus, readLiveStateMeasured } from './livestate.js';
 import {
   rungRank, TranscriptResolver, type TranscriptResolution,
 } from './transcript/resolve.js';
@@ -347,10 +347,22 @@ export class SessionStream {
    *  client last saw. An empty list is a legitimate value — it's how the strip
    *  learns a plan was cleared — but the opening no-tasks read is swallowed by
    *  the initial `lastTasksJson === null` case below, so sessions that never
-   *  keep a task list never send a frame at all. */
+   *  keep a task list never send a frame at all.
+   *
+   *  `read.unmeasured` (D-115) is deliberately NOT carried onto the wire here,
+   *  and this is the one of `readTasks`' three call sites where the count has
+   *  nothing to spend itself on. The `tasks` frame is ROWS — `TaskStrip`
+   *  renders one line per `TaskItem` and tallies "2 running · 1 left · 4 ✓"
+   *  from them — and a file whose bytes never arrived has no subject, no
+   *  status and no activeForm, so there is no row to send and no honest count
+   *  to fold into a summary built out of rows. The surface that DOES show a
+   *  denominator is the fleet card's `done/total`, and that one comes from
+   *  `taskProgress` in `watch.ts`, where the count lands. The frame stays
+   *  exactly as wide as it was: additive-only means a new field is allowed,
+   *  not that an unrendered one earns its place. */
   private async checkTasks(cfgDir: string, uuid: string): Promise<void> {
     if (this.stopped) return;
-    const tasks = await readTasks(this.deps.io, cfgDir, uuid);
+    const { tasks } = await readTasks(this.deps.io, cfgDir, uuid);
     if (this.stopped) return;
     const json = JSON.stringify(tasks);
     if (json === this.lastTasksJson) return;
@@ -498,11 +510,33 @@ export class SessionStream {
       status = 'idle';
       const pid = await this.deps.tmux.panePid(this.id);
       if (pid) {
-        const live = await readLiveState(this.deps.io, cfgDir, pid);
-        if (live) {
-          if (live.cwd) cwd = live.cwd;
-          status = liveSessionStatus(live.status);
-          statusUpdatedAt = live.statusUpdatedAt;
+        // D-115, the chat half of the same fix `assembleFleet` takes (see its
+        // block in fleet.ts for the full argument). The folded read answered
+        // ONE null for four conditions and this block spent it as "leave
+        // `status` at the `alive` default" — `'idle'` — so the header over an
+        // open transcript said the session was at rest when the truth was
+        // that its `<pid>.json` could not be read at all.
+        //
+        // MIRRORED RATHER THAN INVENTED HERE: these two surfaces are two
+        // renderings of one measurement, and a fleet card reading `busy`
+        // beside a chat header reading `idle` for the same session in the
+        // same second is worse than either answer on its own — the operator
+        // has no way to tell which one to believe.
+        const read = await readLiveStateMeasured(this.deps.io, cfgDir, pid);
+        if (read.ok) {
+          if (read.state.cwd) cwd = read.state.cwd;
+          status = liveSessionStatus(read.state.status);
+          statusUpdatedAt = read.state.statusUpdatedAt;
+        } else if (read.reason === 'unmeasured') {
+          // `status` ALONE moves. `cwd` stays at the registry's `workdir` and
+          // `statusUpdatedAt` stays null: an unmeasured read has no fields to
+          // report, and `statusUpdatedAt` is what the header renders as the
+          // `· 1m ago` beside the word — a fabricated one would put a fresh
+          // timestamp under a status nobody measured. `no-state` (absent,
+          // half-written, naming no session) still leaves this at `idle`,
+          // which is the ordinary shape for a pane that has published
+          // nothing yet.
+          status = 'busy';
         }
       }
     }

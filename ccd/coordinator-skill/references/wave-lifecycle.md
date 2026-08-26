@@ -53,6 +53,20 @@ with the run now `dispatched`, or a refusal:
 | `cap-daily` | `maxSessionsPerDay` is used up | stop, name the cap, wait |
 | `ambiguous-dispatch` | wave 1's spawn found 0 or >1 candidate workspaces | stop and report; the operator resolves it |
 | `worker-busy` | wave ≥ 2's session is observably mid-turn | wait and retry; do not force it |
+| `hookstate-unmeasurable` | wave ≥ 2's session has a hookstate file the server could not READ — so whether it is mid-turn was never measured at all | retry once: nothing was spawned, the run is untouched and still `planned`, and the workspace was only resumed. If it repeats, stop and report — a file on the fleet host needs a human, and this refusal will stand until it is readable |
+
+**`worker-busy` and `hookstate-unmeasurable` are not two words for one
+answer.** `worker-busy` is a MEASUREMENT: the server read the session's
+hookstate and it says a turn is running, so waiting is exactly right — the
+turn ends on its own and the next dispatch goes through.
+`hookstate-unmeasurable` is the ABSENCE of that measurement: the file is
+there, the read failed, and the server knows nothing about the session's turn
+— so it refuses rather than inject `/clear` into a pane that might be
+mid-turn and discard a real context. Waiting cannot resolve it, because
+nothing about the fleet is going to change on its own. (It is also not
+`registry-unmeasurable`, whose "never a blind retry" rule exists because THAT
+refusal can land after `ccd ws-add` already spawned a workspace. This one
+lands after a plain resume: nothing was minted, so nothing can be stranded.)
 
 #### An `ok:true` dispatch is no longer proof that the pane is ready
 

@@ -746,7 +746,17 @@ export class FleetWatcher {
       // (`''`) makes `configDirFor` answer `undefined`, so `assembleFleet`
       // never reaches `readLiveState` and `status` freezes at the `alive`
       // default of `'idle'` — a session that may be plainly mid-turn.
-      const unmeasuredIds = new Set(sessions.filter((s) => s.unmeasured.length > 0).map((s) => s.id));
+      // THE UNION OF BOTH ROUTES (D-115). `s.unmeasured` names a degraded
+      // identity triple, which freezes `status` at the `alive` default of
+      // 'idle'; `s.statusUnmeasured` names an unreadable live-status file,
+      // which `assembleFleet` paints 'busy'. Opposite words, one fact — this
+      // tick did not measure this session's status — and the rule below wants
+      // that fact, not either spelling of it. Missing the second route is what
+      // fired a "✓ Finished" push at a session that never started a turn
+      // (`push-copy.test.ts`, "an unreadable live-status file must never…").
+      const unmeasuredIds = new Set(sessions
+        .filter((s) => s.unmeasured.length > 0 || s.statusUnmeasured)
+        .map((s) => s.id));
       // The whole fleet is in scope right here, which is exactly what
       // `pushOne`'s copy rule needs and `detectDialogs`/`sweepPr` below don't
       // have on their own clocks — see `activeProjects`'s own comment.
@@ -1293,7 +1303,40 @@ export class FleetWatcher {
         }
         const cfgDir = configDirFor(this.deps.cfg, r.wrapper);
         if (!cfgDir) return;
-        const p = taskProgress(await readTasks(this.deps.io, cfgDir, r.uuid));
+        // THE call site the widened `readTasks` was widened for (D-115): this
+        // is what fills the fleet card's `done/total`, so this is where a task
+        // file the box could not read has to land in the denominator rather
+        // than leaving the tally altogether and reading `2/2` over a plan with
+        // work still in it. The whole read goes into `taskProgress` — the
+        // count is not this caller's to interpret, and passing the pair rather
+        // than unpacking it is what keeps the one rule ("unmeasured is total,
+        // never done") in one place.
+        //
+        // One consequence in the safe direction: a session whose EVERY task
+        // file is unreadable now sets a `0/N` row here where it used to set
+        // nothing at all, because `taskProgress` no longer reads an empty
+        // `tasks` as "no plan" on its own. That is a row saying "N to do,
+        // none measurably done", which is what this sweep actually knows.
+        const read = await readTasks(this.deps.io, cfgDir, r.uuid);
+        // RETAIN, DON'T ERASE — the SAME rule as the degraded-identity branch
+        // at the top of this callback, reached by the other route. `readdir`
+        // answering null folds "no such directory" into "the directory would
+        // not list", and this sweep runs on the slow `TASK_SWEEP_MS` clock, so
+        // erasing on it blanks a measured `7/12` for a whole sweep interval
+        // and the card renders it identically to a session that never had a
+        // plan (`SessionLine.tsx` hides the chip entirely on null).
+        //
+        // Safe in the folded direction too: a session that genuinely has no
+        // task directory has no `prev` to carry, so this is a no-op for the
+        // ordinary shape. And `next` is still rebuilt from THIS sweep's
+        // `records`, so a reaped id is never carried forward — pruning is
+        // unchanged, exactly as the identity branch argues above.
+        if (!read.listed) {
+          const prev = this.taskProgress.get(r.id);
+          if (prev) next.set(r.id, prev);
+          return;
+        }
+        const p = taskProgress(read);
         if (p) next.set(r.id, p);
       }),
     );

@@ -50,7 +50,7 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
   // An alive row: `lifecycle` answers "why is this row NOT alive", so null is
   // the correct value here, not merely the one that compiles.
   lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null, started: true, spawnState: null,
-  bucket: 'idle', bucketSince: null, unmeasured: [], ...over,
+  bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false, ...over,
 });
 
 const proj = (over: Partial<{ name: string; workdir: string }> = {}): { name: string; workdir: string } => ({
