@@ -50,7 +50,7 @@ const ack = (app: FastifyInstance, id: number, body: unknown, token: string | nu
  *  one delivery — a test that reads `.id` directly instead of parsing this
  *  line is structurally incapable of noticing the two diverge). */
 const ackIdFromEnvelope = (envelope: string): number => {
-  const m = /ack: POST \/api\/mail\/(\d+)\/ack/.exec(envelope);
+  const m = /ack: ccrc-api mail ack (\d+)\b/.exec(envelope);
   if (!m) throw new Error(`envelope carries no ack: line to parse:\n${envelope}`);
   return Number(m[1]);
 };

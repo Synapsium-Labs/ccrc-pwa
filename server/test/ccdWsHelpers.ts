@@ -20,6 +20,13 @@ const HOME_ABLE_WRAPPERS: readonly string[] =
 
 export const CCD = path.resolve(__dirname, '../../ccd/ccd');
 
+/** The coordination client, beside `ccd` and installed the same way. Spelled
+ *  here rather than joined at each call site for the reason
+ *  `single-definition.test.ts` exists — its scan is TEXTUAL, so a second
+ *  `path.resolve(…, 'ccd', 'ccrc-api')` anywhere is a second definition even
+ *  inside a comment explaining why it is one. */
+export const CCRC_API = path.resolve(__dirname, '../../ccd/ccrc-api');
+
 /** How many lines BACK of source `ccd-workspaces.test.ts`'s bash-spawn scan
  *  reads to find a call site's `ghContainedEnv(...)` and its opts — single-
  *  sourced here so `ccd-harness-containment.test.ts`'s own self-check (the

@@ -22,8 +22,8 @@ kind: status
 subject: wave-done
 artifacts:
   /w/clear-cove/docs/superpowers/programs/build4-transcript-surface.md
-ack: POST /api/mail/7/ack with header x-ccrc-mail-token (the value in
-  ~/.cc-secrets/ccrc-mail.token) and body {"fromId":"<your ccd id>","fromUuid":"<your uuid>"}.
+ack: ccrc-api mail ack 7 --json -   (7 is this DELIVERY id, not the
+  mail row's own id) with body {"fromId":"<your ccd id>","fromUuid":"<your uuid>"}.
   Until you ack, this message is redelivered on later sweeps, up to a bounded number of
   attempts — after that the lane gives up and marks it undeliverable. Ack it promptly.
 --

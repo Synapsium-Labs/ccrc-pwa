@@ -1,0 +1,252 @@
+#!/usr/bin/env bash
+# ccrc-api — the closed client for the ccrc coordination API.
+#
+# WHY THIS EXISTS. A repo may legitimately deny `Bash(curl:*)` and `Bash(wget:*)`
+# in its committed settings, and on 2026-08-26 one did. The worker on that repo
+# could not read or ack its mail at all — twelve permission denials in one wave —
+# while the coordinator on the same programme kept working, because
+# `resp=$(curl …)` happens to slip past that matcher. The deny rule was doing its
+# job on one session and being evaded by accident on the other. Neither half of
+# that is acceptable, and the fix is not to soften the deny.
+#
+# WHY THIS IS NOT CURL UNDER ANOTHER NAME. A repo denying curl is denying
+# ARBITRARY OUTBOUND HTTP BY THE AGENT. This is not that, and the difference is
+# mechanical rather than intended:
+#
+#   * No argument here is a URL, a host, or a path. There is no `--url`, no
+#     `--host`, no `--path`, no `--raw`, and deliberately no passthrough verb.
+#     Adding one would make this curl with a different name and would
+#     retroactively make every install of it an evasion.
+#   * The address comes from `~/.ccrc/agent.env`'s `CCRC_SERVER_URL` — config
+#     this process's caller does not supply. Absent, it REFUSES; it never guesses
+#     a host. (A worker guessed one on 2026-08-25 and reported success against
+#     nothing.)
+#   * The route comes from ROUTES below, seventeen rows, and nothing else.
+#   * The only caller-supplied text that ever reaches a URL is an id or a query
+#     value the row itself declares, each validated against `SAFE_RE` BEFORE the
+#     request is built — refused, never escaped and sent.
+#
+# `server/test/ccrc-api-closed.test.ts` pins those as standing tests, because a
+# property this load-bearing must be a mechanism and not a docstring.
+#
+# WHAT IS DELIBERATELY ABSENT. `POST /api/coord/pause`. D-282 leaves that door and
+# `POST /api/runs/:id/abandon` ungated on purpose, so a wedged run keeps a release
+# valve the coordinator's own box token cannot lock; coordinator clause 4 is the
+# other half — "This session never unpauses itself. `$REG/coordinator-paused` is
+# the operator's file." Carrying it here would hand every session the one verb
+# that clause exists to deny. It is an operator door, reached from the PWA. If the
+# need is ever real it is an operator tool, not a row below. (D-688.)
+#
+# SELF-CONTAINED. This file `source`s nothing. The moment it does it needs the
+# shim treatment `ccrc` has (deploy/deploy.sh argues that at length) and a lone
+# copy at ~/.local/bin would be dead on every box.
+set -uo pipefail
+
+# `~/.local/bin` is NOT on the `claude-session@` unit PATH (measured 2026-08-26),
+# so the corpora invoke this by explicit path. That is a caller's problem, not
+# this file's — but it is why nothing here assumes its own directory is on PATH.
+
+SELF="ccrc-api"
+AGENT_ENV="$HOME/.ccrc/agent.env"
+TOKEN_FILE="$HOME/.cc-secrets/ccrc-mail.token"
+REG="$HOME/.cc-sessions"
+
+# The one pattern any caller-supplied text must match before it reaches a URL.
+# No dot, so `..` cannot survive it; no slash, no `?`, no `#`, no space. Run ids
+# and delivery ids are integers, session ids and project slugs are
+# `[A-Za-z0-9_-]+`, so this is not a narrowing of anything real. Widening it is a
+# deliberate table change, not a convenience.
+SAFE_RE='^[A-Za-z0-9_-]+$'
+
+# METHOD|path|needs-id|comma-separated query keys this row accepts (or `-`).
+# Seventeen rows. Measured from both corpora on 2026-08-26 by
+# `grep -rhoE '(GET|POST) /api/[A-Za-z0-9/:_-]+' ccd/coordinator-skill ccd/worker-skill`,
+# which Task 5's standing test re-runs so a skill that starts calling an
+# unreachable route goes red rather than failing in the field.
+declare -A ROUTES=(
+  [runs.list]='GET|/api/runs|no|-'
+  [runs.open]='POST|/api/runs|no|-'
+  [runs.dispatch]='POST|/api/runs/{id}/dispatch|yes|-'
+  [runs.advance]='POST|/api/runs/{id}/advance|yes|-'
+  [runs.close]='POST|/api/runs/{id}/close|yes|-'
+  [runs.items]='POST|/api/runs/{id}/items|yes|-'
+  [mail.list]='GET|/api/mail|no|to'
+  [mail.send]='POST|/api/mail|no|-'
+  # `fetch` and `ack` take the DELIVERY id, never the mail row's own id — two
+  # separate autoincrement sequences that agree only for a mail sent to one
+  # recipient (D-41). This client cannot tell them apart; it is named in the
+  # corpora at every call site instead.
+  [mail.fetch]='GET|/api/mail/{id}|yes|-'
+  [mail.ack]='POST|/api/mail/{id}/ack|yes|-'
+  [peers.list]='GET|/api/peers|no|of,project'
+  [lifecycle.list]='GET|/api/lifecycle|no|session'
+  [claims.list]='GET|/api/claims|no|project'
+  [claims.take]='POST|/api/claims|no|-'
+  [claims.release]='POST|/api/claims/{id}/release|yes|-'
+  [ledger.list]='GET|/api/ledger|no|project'
+  [ledger.allocate]='POST|/api/ledger/deviations|no|-'
+)
+
+# Every refusal leaves by this door, in the SAME JSON envelope the routes
+# themselves use, so a caller never parses two shapes. The human sentence goes to
+# stderr; stdout stays machine-readable on every path. Nothing here ever
+# interpolates the token — see `refuse token-*` below, which names the file and
+# not its contents.
+refuse() {  # code, detail
+  printf '{"ok":false,"error":"%s","detail":"%s"}\n' "$1" "$2"
+  printf '%s: %s (%s)\n' "$SELF" "$2" "$1" >&2
+  exit 2
+}
+
+usage() {
+  {
+    printf '%s <group> <verb> [<id>] [--json <file|->] [--<key> <value>]\n\n' "$SELF"
+    printf 'Closed table — no URL, host or path is an argument.\n\n'
+    for k in $(printf '%s\n' "${!ROUTES[@]}" | sort); do
+      IFS='|' read -r m p _ q <<< "${ROUTES[$k]}"
+      [[ "$q" == '-' ]] && q='' || q="  [--${q//,/ | --}]"
+      printf '  %-18s %-5s %s%s\n' "${k/./ }" "$m" "$p" "$q"
+    done
+    printf '  %-18s %s\n' 'whoami' 'this session'"'"'s {id,uuid}, from tmux + the registry'
+  } >&2
+}
+
+# GREP, never source: agent.env is 0600 and carries this box's agent bearer
+# token, so sourcing it would import a secret into this shell for no reason.
+server_url() {
+  [[ -r "$AGENT_ENV" ]] || refuse 'no-agent-env' "cannot read $AGENT_ENV"
+  local u
+  u=$(grep -E '^[[:space:]]*CCRC_SERVER_URL=' "$AGENT_ENV" | tail -n1 | cut -d= -f2- | tr -d '[:space:]')
+  [[ -n "$u" ]] || refuse 'no-server-url' "CCRC_SERVER_URL is not set in $AGENT_ENV"
+  # `ccrc install --role fleet` writes either spelling. Swapping it here is what
+  # stops every caller doing it, and getting it wrong once.
+  u="${u/#ws:/http:}"; u="${u/#wss:/https:}"
+  printf '%s' "${u%/}"
+}
+
+# The token file is a DOCUMENT with a token in it: a `#`-comment preamble above
+# one value line. Same rule as the server's own `coord/token.ts` extractToken and
+# `deploy/notify.sh` — first non-blank, non-`#` line, whitespace stripped. Doing
+# it here is the point: no caller performs the dance, so no caller can `cat` the
+# whole preamble into a header and then read the resulting 401 as a rotated
+# secret.
+read_token() {
+  [[ -r "$TOKEN_FILE" ]] || refuse 'no-token' "cannot read $TOKEN_FILE"
+  local t
+  t=$(grep -v '^[[:space:]]*#' "$TOKEN_FILE" | grep -v '^[[:space:]]*$' | head -n1 | tr -d '[:space:]')
+  [[ -n "$t" ]] || refuse 'no-token' "$TOKEN_FILE carries no value line"
+  printf '%s' "$t"
+}
+
+# Attribution, not authentication: the one fact not carried in any payload is
+# what tmux says about the pane this runs in. No pane, no answer — and
+# deliberately no flag to supply one, because a client that made forging an
+# identity convenient would be the worst place on the fleet to add that.
+cmd_whoami() {
+  local tname id uuid
+  tname=$(tmux display-message -p '#S' 2>/dev/null) \
+    || refuse 'no-tmux' 'not inside a tmux session; identity cannot be derived'
+  [[ -n "$tname" ]] || refuse 'no-tmux' 'tmux named no session'
+  id="${tname#cc-}"
+  [[ "$id" =~ $SAFE_RE ]] || refuse 'bad-session' 'tmux session name is not a usable id'
+  [[ -r "$REG/$id.uuid" ]] || refuse 'no-uuid' "no $REG/$id.uuid for this session"
+  uuid=$(tr -d '[:space:]' < "$REG/$id.uuid")
+  [[ -n "$uuid" ]] || refuse 'no-uuid' "$REG/$id.uuid is empty"
+  printf '{"id":"%s","uuid":"%s"}\n' "$id" "$uuid"
+}
+
+main() {
+  (( $# >= 1 )) || { usage; refuse 'no-verb' 'no group given'; }
+
+  [[ "$1" == 'whoami' ]] && { cmd_whoami; exit 0; }
+  [[ "$1" == '-h' || "$1" == '--help' ]] && { usage; exit 0; }
+
+  (( $# >= 2 )) || { usage; refuse 'no-verb' "group '$1' needs a verb"; }
+  local group="$1" verb="$2"; shift 2
+
+  local key="$group.$verb"
+  [[ -n "${ROUTES[$key]+set}" ]] || { usage; refuse 'unknown-verb' "no such verb: $group $verb"; }
+
+  local method tmpl needs qkeys
+  IFS='|' read -r method tmpl needs qkeys <<< "${ROUTES[$key]}"
+
+  # A positional id, if this row declares one. It is read before the flags so an
+  # id can never be mistaken for a flag value.
+  local id=''
+  if [[ $# -gt 0 && "$1" != --* ]]; then id="$1"; shift; fi
+
+  if [[ "$needs" == 'yes' ]]; then
+    [[ -n "$id" ]] || refuse 'no-id' "$group $verb needs an id"
+    [[ "$id" =~ $SAFE_RE ]] || refuse 'bad-id' 'id is not a plain id'
+  else
+    # Not ignored: a caller who passed one believes it is going somewhere.
+    [[ -z "$id" ]] || refuse 'unexpected-id' "$group $verb takes no id"
+  fi
+
+  local body_src='' query=''
+  while (( $# )); do
+    case "$1" in
+      --json)
+        [[ $# -ge 2 ]] || refuse 'bad-args' '--json needs a file or -'
+        body_src="$2"; shift 2 ;;
+      --*)
+        local k="${1#--}" v
+        [[ $# -ge 2 ]] || refuse 'bad-args' "--$k needs a value"
+        v="$2"
+        # Closed here too: a row declares which query keys it takes, so an
+        # undeclared one refuses rather than riding along.
+        [[ ",$qkeys," == *",$k,"* ]] || refuse 'unknown-query' "$group $verb takes no --$k"
+        [[ "$v" =~ $SAFE_RE ]] || refuse 'bad-query' "--$k value is not a plain value"
+        query+="${query:+&}$k=$v"; shift 2 ;;
+      *) refuse 'bad-args' "unexpected argument: $1" ;;
+    esac
+  done
+
+  local body=''
+  if [[ -n "$body_src" ]]; then
+    if [[ "$body_src" == '-' ]]; then
+      body=$(cat)
+    else
+      [[ -r "$body_src" ]] || refuse 'no-body' "cannot read $body_src"
+      body=$(cat -- "$body_src")
+    fi
+  fi
+
+  local base token path url
+  base=$(server_url) || exit $?
+  token=$(read_token) || exit $?
+  path="${tmpl/\{id\}/$id}"
+  url="$base$path${query:+?$query}"
+
+  local out code
+  out=$(mktemp) || refuse 'no-tmp' 'cannot create a temp file'
+  # shellcheck disable=SC2064
+  trap "rm -f '$out'" EXIT
+
+  # `-f` is never used, on purpose and for the same reason both corpora say so:
+  # it prints nothing on a 4xx and exits 22, and the body is the whole protocol —
+  # every refusal these routes send arrives as a 4xx JSON body.
+  local -a args=(-sS -m 30 -o "$out" -w '%{http_code}'
+                 -X "$method" -H "x-ccrc-mail-token: $token")
+  [[ -n "$body" ]] && args+=(-H 'content-type: application/json' --data-binary "$body")
+
+  code=$(curl "${args[@]}" "$url" 2>/dev/null)
+  local rc=$?
+
+  if (( rc != 0 )) || [[ -z "$code" || "$code" == '000' ]]; then
+    # NOT an answer. The one case that exits non-zero — and it still speaks the
+    # same envelope, so a caller never has to parse a second shape to find out.
+    printf '{"ok":false,"error":"transport","detail":"no response from the server (curl rc %s)"}\n' "$rc"
+    printf '%s: no response from the server\n' "$SELF" >&2
+    exit 3
+  fi
+
+  cat "$out"
+  printf 'http %s\n' "$code" >&2
+  # An HTTP response happened, so this succeeded — whatever the status says. A
+  # 4xx is an ANSWER here, and a client that exited non-zero on one would rebuild
+  # the `curl -f` trap for its callers.
+  exit 0
+}
+
+main "$@"

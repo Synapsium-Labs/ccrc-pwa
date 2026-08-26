@@ -73,8 +73,14 @@ describe('renderEnvelope: the header', () => {
 
   it('carries the four-line ack instruction, naming THIS id — deleting any one of the four lines is a live mutant otherwise', () => {
     const env = renderEnvelope({ ...BASE, id: 99 });
-    expect(env).toContain('ack: POST /api/mail/99/ack with header x-ccrc-mail-token');
-    expect(env).toContain('~/.cc-secrets/ccrc-mail.token');
+    // The instruction names the CLIENT, not a route and a header. The token
+    // stopped being the reader's business — `ccrc-api` reads it — and a session
+    // on a repo that denies `Bash(curl:*)` could not follow the old wording at
+    // all. What the line must still do is name THIS delivery id, which is the
+    // only way a recipient learns which id to ack, and say plainly that it is
+    // the delivery id: the mail row's own id is a different sequence.
+    expect(env).toContain('ack: ccrc-api mail ack 99 --json -');
+    expect(env).toContain('99 is this DELIVERY id');
     expect(env).toContain('"fromId":"<your ccd id>"');
     expect(env).toContain('"fromUuid":"<your uuid>"');
     // Review finding 2: this used to promise unconditional replay-until-ack —
