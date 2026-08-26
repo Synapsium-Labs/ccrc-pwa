@@ -177,6 +177,10 @@ const CHECK_PHRASE: Record<'none' | Exclude<PrChecks, null>, string> = {
   pass: 'Checks passing',
   pending: 'Checks running',
   fail: 'Checks failing',
+  // NOT a synonym for `none`. `none` is a measurement — GitHub answered and the
+  // PR has no checks; this is the absence of one, and the two must not read the
+  // same on a screen that a reviewer uses to decide whether to merge.
+  unmeasured: 'Checks not measured',
 };
 
 /** The checks clause as its own sentence — `PrSheet`'s check line.

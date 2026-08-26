@@ -97,7 +97,7 @@ describe('pr-state argv', () => {
     // …and the call is WRAPPED. `gh pr list` has no timeout of its own, so a
     // blocking DNS hang is bounded by this and nothing else; without the stub
     // logging its own argv, dropping the wrapper left the suite green.
-    expect(h.ghCalls().some((c) => c.startsWith('timeout 12 gh pr list'))).toBe(true);
+    expect(h.ghCalls().some((c) => c.startsWith(`timeout ${ccdSeconds('PR_GH_TIMEOUT')} gh pr list`))).toBe(true);
   });
 });
 
@@ -205,6 +205,19 @@ describe('the per-session call asks about one branch', () => {
  *  `PrSheet` renders `.pr-checkline` in that same branch), so `open` is the
  *  phase these tests have to be about: a fixture built on `mergedRow` would
  *  assert `checks` on a row whose checks no screen reads. */
+/** The seconds ccd assigns to a bare `NAME=<n>` constant. Read rather than
+ *  hardcoded: these two assertions are about WHICH timeout wraps WHICH call,
+ *  never about the value — and the value moved once already (12+6 -> 8+5, when
+ *  `pr-timeout-budget.test.ts` measured the pair against the 20 s bound that
+ *  actually ships). A literal here re-pins the number in a third place and reds
+ *  the next resize for no reason. */
+const ccdSeconds = (name: string): number => {
+  const src = readFileSync(CCD, 'utf8');
+  const m = new RegExp(`^${name}=(\\d+)`, 'm').exec(src);
+  if (!m) throw new Error(`ccd no longer defines ${name} as a bare integer assignment`);
+  return Number(m[1]);
+};
+
 const openRow = (over: Record<string, unknown> = {}): Record<string, unknown> =>
   mergedRow({ state: 'OPEN', mergedAt: null, mergeCommit: null, ...over });
 
@@ -283,17 +296,32 @@ describe('the project sweep fetches the rollup it reads, not the ninety-nine it 
     // allowed: 12 + 12 would put the pair past the outer bound the pr-lifecycle
     // spec set for this verb (20 s), and losing the rows to a rollup is exactly
     // the poisoning this split exists to make impossible.
-    expect(h.ghCalls().some((c) => c.startsWith('timeout 6 gh pr list'))).toBe(true);
+    expect(h.ghCalls().some((c) => c.startsWith(`timeout ${ccdSeconds('PR_GH_CHECKS_TIMEOUT')} gh pr list`))).toBe(true);
   });
 
-  it('a bound row still carries the checks the server reads off it', () => {
+  // THE JOIN IS KEYED ON `number`, AND THIS FIXTURE IS WHAT MAKES THAT TESTABLE.
+  // Its first version put the one rollup entry on the row that was ALSO first in
+  // `rows`, so a positional join — `zip(rows, by_number.values())` — passed the
+  // whole suite. That is not a hypothetical mutant: in production the two windows
+  // are different SETS in a different ORDER (rows is `--state all --limit 100`,
+  // newest first, merged and closed included; rollups is `--state open --limit
+  // 100`), so a positional join attaches an open PR's rollup to an unrelated
+  // merged row and the keycap renders another PR's checks — including its
+  // attacker-controllable `checkNames`, on any repo that takes fork PRs.
+  //
+  // So: the bound row is rows[1], not rows[0], and the rollups arrive in the
+  // OPPOSITE order with a decoy that would look like a pass. Under the correct
+  // key-join the bound row is `fail`/['e2e']; under a positional one it takes the
+  // decoy and reads `pass`.
+  it('a bound row carries ITS OWN checks — the join is keyed on number, not position', () => {
     const { tip } = workspaceWithCommit('demo', 'quiet-basin');
     h.ghRows([
-      openRow({ headRefOid: tip }),
-      openRow({ number: 77, headRefOid: tip, headRefName: 'ws/still-cove' }),
+      openRow({ number: 77, headRefOid: 'f00dcafe', headRefName: 'ws/still-cove' }),
+      openRow({ headRefOid: tip }),                       // #42 — the bound row
     ]);
     fs.writeFileSync(path.join(h.home, 'gh-rollups.json'), JSON.stringify([
       { number: 42, statusCheckRollup: [{ name: 'e2e', conclusion: 'FAILURE' }] },
+      { number: 77, statusCheckRollup: [{ name: 'lint', conclusion: 'SUCCESS' }] },
     ]));
     const out = h.sh(`${twoAnswerGh('cat "$HOME/gh-rollups.json"')} cmd_pr_state --project demo`);
     const l = parsePrLines(out)[0];
@@ -305,8 +333,66 @@ describe('the project sweep fetches the rollup it reads, not the ninety-nine it 
     // other way would pass for a row nothing reads.
     const s = phaseFor(l as never);
     expect(s.phase).toBe('open');
-    expect(s.checks).toBe('fail');
+    expect(s.checks, 'the bound row took another PR\'s rollup — the join went positional').toBe('fail');
     expect(s.checkNames).toEqual(['e2e']);
+
+    // And the row NOTHING reads must also be correct, because a swap is
+    // symmetric: asserting only the bound row would still pass if the two
+    // rollups were exchanged in a way that happened to leave #42 right.
+    const rows = (l as unknown as { rows: { number: number; statusCheckRollup?: { name: string }[] }[] }).rows;
+    const other = rows.find((r) => r.number === 77);
+    expect(other?.statusCheckRollup?.[0]?.name,
+      'the decoy rollup did not land on its own row').toBe('lint');
+  });
+
+  // "AFTER THE STAMP, NEVER BEFORE" is the one invariant in the rollup block
+  // that had no red behind it: hoisting the whole `if [[ $mode == --project ]]`
+  // block above `answeredAt=$(date +%s%3N)` is legal bash, reads like tidying
+  // two network calls together, and left every suite green (measured).
+  //
+  // What it costs is the property the previous wave fixed: `prcheckedat` must
+  // describe WHEN GITHUB ANSWERED THE ROWS, because the compare-and-set ranks
+  // runs by it (`prev_at <= checked_at`). Hoisted, the stamp also carries the
+  // rollup call's wall clock — up to PR_GH_CHECKS_TIMEOUT — so a project sweep
+  // whose rows GitHub answered seconds EARLIER can overwrite a fresher
+  // `--session` answer.
+  //
+  // The mechanism is a rollup arm that takes measurable time. If the stamp is
+  // taken first, `prcheckedat` predates that delay; if it is hoisted, it cannot.
+  it('stamps prcheckedat from when the ROWS answered, not after the rollup call', () => {
+    // A BOUND row, so a phase is actually measured and persisted — an empty
+    // window writes no `prcheckedat` and the assertions below would have
+    // nothing to read.
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([openRow({ headRefOid: tip })]);
+    const SLEEP_S = 2;
+    // Only the ROLLUP arm sleeps — `twoAnswerGh` answers the rows at once, so
+    // any delay that reaches the stamp came from the rollup call and nowhere
+    // else. (Hand-rolling the stub here does not work: `timeout` is a real
+    // binary and `gh` is a shell function, so the helper's `timeout()` override
+    // is what lets `timeout 8 gh …` reach the stub at all.)
+    const before = Date.now();
+    h.sh(`${twoAnswerGh(`sleep ${SLEEP_S}; printf '[]'`)} cmd_pr_state --project demo`);
+    const after = Date.now();
+
+    const stamped = Number(h.reg('demo-quiet-basin', 'prcheckedat'));
+    expect(Number.isFinite(stamped) && stamped > 0, 'no prcheckedat was written at all').toBe(true);
+
+    // Guard the guard: if the stub did not actually sleep, this test proves
+    // nothing, so assert the delay really happened before reading anything into
+    // the stamp's position relative to it.
+    expect(after - before,
+      'the rollup arm did not sleep — this fixture cannot tell the two orderings apart')
+      .toBeGreaterThanOrEqual(SLEEP_S * 1000);
+
+    // The stamp must sit in the window BEFORE the sleep, not after it. Half the
+    // sleep is the margin: generous enough for a loaded box, far short of the
+    // full delay a hoist would add.
+    expect(stamped - before,
+      `prcheckedat is ${stamped - before}ms after the run started, which is past the rollup's `
+      + `${SLEEP_S}s — the stamp was taken AFTER the rollup call, so it ranks completion times `
+      + `rather than answers`)
+      .toBeLessThan(SLEEP_S * 1000 / 2);
   });
 
   it('a rollup call that fails cannot poison the rows', () => {
@@ -330,7 +416,14 @@ describe('the project sweep fetches the rollup it reads, not the ninety-nine it 
     expect(s.phase).toBe('open');
     expect(s.number).toBe(42);
     expect(s.reason).toBeNull();
-    expect(s.checks).toBeNull();
+    // CHANGED DELIBERATELY, and this is the assertion the change is about.
+    // It read `toBeNull()`, and `null` is defined by `PrChecks` as the
+    // AFFIRMATIVE claim "no checks are configured" — which `PrKeycap` renders
+    // in those words, under a fresh `checkedAt`, on a PR whose build may be red.
+    // The rollup call 504'd here; nothing was measured. The phase, the number
+    // and the absence of a `reason` are all unchanged, which is the isolation
+    // this test was written for and still proves.
+    expect(s.checks).toBe('unmeasured');
     expect(s.checkNames).toBeNull();
   });
 
@@ -362,7 +455,31 @@ describe('the project sweep fetches the rollup it reads, not the ninety-nine it 
     const s = phaseFor(l as never);
     expect(s.phase).toBe('open');
     expect(s.number).toBe(42);
-    expect(s.checks).toBeNull();
+    // Same change, same reason as the failed-CALL case above: the join broke,
+    // so no row carries a rollup, and their absence proves nothing about
+    // whether checks exist. The ROWS are what this test is about and they are
+    // untouched — phase and number still measured.
+    expect(s.checks).toBe('unmeasured');
+  });
+
+  // THE POSITIVE CONTROL for the two `unmeasured` assertions above, and the
+  // reason the distinction is worth carrying at all. If a successful rollup
+  // that reports NO checks also read `unmeasured`, the new arm would just be a
+  // rename of `null` and the screen would say "not measured" about a perfectly
+  // good measurement — the same defect, pointing the other way.
+  it('a rollup that ANSWERS and reports no checks is null, not unmeasured', () => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([openRow({ headRefOid: tip })]);
+    // The call succeeds and says: this PR has an empty rollup. That IS a
+    // measurement, and `checksFor` has always answered `null` for it.
+    const out = h.sh(`${twoAnswerGh(`printf '%s' '[{"number":42,"statusCheckRollup":[]}]'`)} `
+      + 'cmd_pr_state --project demo');
+    const l = parsePrLines(out)[0];
+    expect(l).toBeDefined();
+    const s = phaseFor(l as never);
+    expect(s.phase).toBe('open');
+    expect(s.checks, 'a measured "no checks" was reported as unmeasured').toBeNull();
+    expect(s.checkNames).toBeNull();
   });
 
   it('does not let the join turn an unreadable body into an empty one', () => {

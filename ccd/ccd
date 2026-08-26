@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=c3e0aa1da0c7439edf19a46e96b18ca77e20c883d24e7fe1e53a2d3657c32fc5
+# ccrc:generated 1 sha256=f3f3cefec021533da262c498acbb490939ba6b18e7b9912afdfccf1046bb6a9a
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1804,7 +1804,7 @@ _ws_ignored_digest() {   # workdir -> sha256 of the ignored-entry set
   printf '%s\n' "$d"
 }
 
-PR_GH_TIMEOUT=12          # gh pr list has no --timeout of its own; a blocking
+PR_GH_TIMEOUT=8           # gh pr list has no --timeout of its own; a blocking
                           # DNS hang is 30 s, so this is the only bound there is
 # THE OPTIONAL HALF GETS HALF THE BUDGET, and the number is the argument rather
 # than a round figure. `_gh_pr_checks` is the second network call on a path that
@@ -1814,20 +1814,31 @@ PR_GH_TIMEOUT=12          # gh pr list has no --timeout of its own; a blocking
 # killed, which the server reads as `agent-down` and backs the whole project
 # off on.
 #
-# TWO NUMBERS EXIST FOR THAT BOUND AND ONLY ONE OF THEM SHIPPED, which is worth
-# knowing before anyone changes this: the pr-lifecycle spec §4.2 set `pr-state`
-# to 20 s in `timeoutMsFor`, and `remote/runner.ts`'s `CCD_VERB_TIMEOUT_MS` has
-# no `pr-state` key, so the live bound is the 90 s default (`watch.ts`'s
-# "20 s budget each" comment describes the spec, not the code). Six is chosen
-# against the SPEC's number, because that is the one somebody may still install
-# and 12 + 6 leaves two seconds of local git work inside it — under the shipped
-# 90 s the pair is never close either way.
+# THE OUTER BOUND IS 20 s, NOT 90, AND THIS PAIR HAS TO FIT INSIDE IT.
+# An earlier version of this comment asserted the opposite — that
+# `remote/runner.ts`'s `CCD_VERB_TIMEOUT_MS` had no `pr-state` key and the live
+# bound was therefore the flat 90 s default. It ships `'pr-state': 20_000` as
+# the FIRST key in that map (`server/src/remote/runner.ts:28`, and on
+# `origin/main` since 27946f31), so the spec's number IS the code's number, and
+# `sweepPr`'s every `ccd pr-state --project` is killed at 20 s in remote mode —
+# which is this fleet's standing config.
 #
-# Six is also generous against the measurement it has to cover: `--state open
-# --limit 100` answered a 19-open-PR repo's rollups in 3.09 s. A repo whose open
-# PRs cannot be read inside it loses its check glyphs for that sweep and nothing
-# else — which is the whole point of the split.
-PR_GH_CHECKS_TIMEOUT=6
+# That matters because THIS verb now makes TWO network calls, not one. The old
+# 12 + 6 spent 18 of the 20 before `_pr_state_one` had run for a single
+# workspace, and each workspace then costs a dozen-odd `git` spawns plus a
+# python3 start. The pair is now 8 + 5 = 13, leaving 7 s — 35 % — for the local
+# loop, and `pr-timeout-budget.test.ts` PINS that relationship across the two
+# languages so this comment can never drift from the map again. A comment is a
+# request; that test is the mechanism.
+#
+# Both numbers stay generous against what they cover, because the expensive
+# query is gone: the row window without `statusCheckRollup` answered in 0.89 s
+# and the head-filtered form in 0.78 s (vs 11.2 s and a persistent 504 with the
+# rollup in-band), and `--state open --limit 100` answered a 19-open-PR repo's
+# rollups in 3.09 s and a several-thousand-PR repo's in 3.6 s. A repo whose open
+# PRs cannot be read inside the bound loses its check glyphs for that sweep and
+# nothing else — which is the whole point of the split.
+PR_GH_CHECKS_TIMEOUT=5
 PR_JSON_FIELDS=number,state,headRefName,headRefOid,baseRefName,isCrossRepository,mergedAt,mergeCommit,url,title,isDraft
 # NAMED ONCE, spent in two places — the head-filtered row window that carries it
 # in-band, and the open-PR window `_gh_pr_checks` asks for on its own. A second
@@ -2490,6 +2501,15 @@ if mode == 'state':
         'baseShort': base_short, 'tip': tip, 'ahead': ahead, 'dirty': dirty,
         'commits': commits, 'template': template or None, 'rows': rows,
         'phase': phase, 'number': number, 'checkedAt': checked_at, 'reason': reason,
+        # THE ROLLUP'S OWN FAILURE, DECLARED. Emitted only when true, so a line
+        # from a build that fetched the rollup in-band is unchanged and an older
+        # server reading a newer line simply ignores a key it has no reader for
+        # (additive-only; absence permits). Without it the server cannot tell a
+        # row GitHub said has no checks from a row whose rollup call never
+        # answered — both merely lack the key — and it renders the second as the
+        # first: "No checks configured", under a fresh timestamp, on a PR whose
+        # build may be red.
+        **({'checksUnmeasured': True} if os.environ.get('PR_CHECKS_UNMEASURED') == '1' else {}),
     }) + '\n')
 
 elif mode == 'rollups':
@@ -5425,8 +5445,23 @@ cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <proje
   # is `checks: null` at the far end and nothing else — never a phase, never a
   # reason, never the id-less object that would back the whole project off.
   local rollups="" joined="" jrc=0
+  # `local -x`: dynamically scoped AND exported, so `_pr_py state` — a python3
+  # CHILD, several frames down inside `_pr_state_one` — reads it from the
+  # environment without a fourteenth positional argument threaded through a
+  # signature three call sites share. It unwinds when this function returns, so
+  # nothing leaks into a later verb.
+  #
+  # `--project` ONLY. In `--session` the rollup rides the head-filtered row
+  # window in-band, so if the rows answered the rollup is there; there is no
+  # second call to fail and nothing to declare.
+  local -x PR_CHECKS_UNMEASURED=0
   if [[ $mode == --project ]]; then
     rollups=$(_gh_pr_checks "$repo") || rollups=""
+    # THE CALL DID NOT ANSWER. Not "this repo has no checks" — a timeout
+    # (PR_GH_CHECKS_TIMEOUT), a 5xx, an unparseable body. Say so, because the
+    # rows below will carry no rollup key and their bare absence is the same
+    # shape a genuinely check-less PR wears.
+    [[ -n "$rollups" ]] || PR_CHECKS_UNMEASURED=1
     if [[ -n "$rollups" ]]; then
       # `jrc` on its own line, and the declaration above initialises all three:
       # `local joined=$(...)` returns LOCAL's status rather than the join's — the
@@ -5434,7 +5469,15 @@ cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <proje
       # leaves x unset, which `set -u` aborts on the moment a stubbed caller
       # reaches a reference to it.
       joined=$(printf '%s' "$rows" | _pr_py rollups "$PR_CHECK_FIELD" 4<<<"$rollups"); jrc=$?
-      (( jrc == 0 )) && [[ -n "$joined" ]] && rows="$joined"
+      if (( jrc == 0 )) && [[ -n "$joined" ]]; then
+        rows="$joined"
+      else
+        # The call ANSWERED and the pass that attaches its answer is what broke.
+        # Same consequence for the reader as a failed call — no rollup key on any
+        # row — so it earns the same declaration. The rows themselves are kept
+        # untouched, which is the isolation this split exists for.
+        PR_CHECKS_UNMEASURED=1
+      fi
     fi
   fi
 

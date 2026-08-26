@@ -290,8 +290,18 @@ export type PrPhase =
   | 'unchecked' | 'none' | 'no-commits' | 'open' | 'draft' | 'merged' | 'closed' | 'unknown';
 
 /** CI rollup. `null` means NO CHECKS ARE CONFIGURED — distinct from 'pending',
- *  and rendered with different words. */
-export type PrChecks = 'pass' | 'fail' | 'pending' | null;
+ *  and rendered with different words.
+ *
+ *  `'unmeasured'` is the arm `null` used to swallow. Since the check rollup
+ *  became its OWN gh call (it cannot ride the 100-PR window — that is answered
+ *  `HTTP 504`), it can fail on its own while the rows come back perfectly: a
+ *  timeout, a 5xx, or a join that would not run. Every one of those left the
+ *  row with no `statusCheckRollup` key, which `checksFor` read as `null`, which
+ *  this file defines as the AFFIRMATIVE claim "no checks are configured" and
+ *  `PrKeycap` renders as exactly that — under a fresh `checkedAt`, on a PR
+ *  whose build may be red. A read that did not happen must not wear the words
+ *  of a read that did. */
+export type PrChecks = 'pass' | 'fail' | 'pending' | 'unmeasured' | null;
 
 /**
  * Why a `PrState`'s phase is `unknown`. Every member but `merge-unproven` and

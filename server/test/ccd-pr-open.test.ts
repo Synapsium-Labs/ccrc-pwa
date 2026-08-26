@@ -5,6 +5,16 @@ import { execFileSync } from 'node:child_process';
 import { CCD, WS_ADD, ghContainedEnv } from './ccdWsHelpers.js';
 import { GH_STUB, makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 
+/** The seconds ccd assigns to a bare `NAME=<n>` constant — read, never
+ *  hardcoded. Same reader, same reason, as `ccd-pr-state.test.ts`'s. */
+const ccdSeconds = (name: string): number => {
+  const src = fs.readFileSync(CCD, 'utf8');
+  const m = new RegExp(`^${name}=(\\d+)`, 'm').exec(src);
+  if (!m) throw new Error(`ccd no longer defines ${name} as a bare integer assignment`);
+  return Number(m[1]);
+};
+
+
 let h: PrHarness;
 beforeEach(() => { h = makePrHarness('ccrc-ccd-propen-'); });
 afterEach(() => { h.cleanup(); });
@@ -347,10 +357,16 @@ describe('the happy path', () => {
     // head filter that scopes it to this branch, and every field the answer is
     // supposed to carry.
     expect(h.ghCalls().filter((c) => c.startsWith('pr list'))).toEqual([asked, asked]);
+    // The NUMBER is read from ccd, not written here: what this asserts is that
+    // all three calls are WRAPPED and wrapped with the SAME bound, and the bound
+    // itself moved once already (12 -> 8, when `pr-timeout-budget.test.ts`
+    // measured the pair against the 20 s `pr-state` ceiling that actually
+    // ships). A literal re-pins the value in a place that does not own it.
+    const t = ccdSeconds('PR_GH_TIMEOUT');
     expect(h.ghCalls().filter((c) => c.startsWith('timeout '))).toEqual([
-      `timeout 12 gh ${asked}`,
-      'timeout 12 gh pr create --repo o/r --head ws/quiet-basin --base main --title t --body b',
-      `timeout 12 gh ${asked}`,
+      `timeout ${t} gh ${asked}`,
+      `timeout ${t} gh pr create --repo o/r --head ws/quiet-basin --base main --title t --body b`,
+      `timeout ${t} gh ${asked}`,
     ]);
   });
 
