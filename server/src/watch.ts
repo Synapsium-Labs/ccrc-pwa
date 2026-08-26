@@ -1317,7 +1317,26 @@ export class FleetWatcher {
         // nothing at all, because `taskProgress` no longer reads an empty
         // `tasks` as "no plan" on its own. That is a row saying "N to do,
         // none measurably done", which is what this sweep actually knows.
-        const p = taskProgress(await readTasks(this.deps.io, cfgDir, r.uuid));
+        const read = await readTasks(this.deps.io, cfgDir, r.uuid);
+        // RETAIN, DON'T ERASE — the SAME rule as the degraded-identity branch
+        // at the top of this callback, reached by the other route. `readdir`
+        // answering null folds "no such directory" into "the directory would
+        // not list", and this sweep runs on the slow `TASK_SWEEP_MS` clock, so
+        // erasing on it blanks a measured `7/12` for a whole sweep interval
+        // and the card renders it identically to a session that never had a
+        // plan (`SessionLine.tsx` hides the chip entirely on null).
+        //
+        // Safe in the folded direction too: a session that genuinely has no
+        // task directory has no `prev` to carry, so this is a no-op for the
+        // ordinary shape. And `next` is still rebuilt from THIS sweep's
+        // `records`, so a reaped id is never carried forward — pruning is
+        // unchanged, exactly as the identity branch argues above.
+        if (!read.listed) {
+          const prev = this.taskProgress.get(r.id);
+          if (prev) next.set(r.id, prev);
+          return;
+        }
+        const p = taskProgress(read);
         if (p) next.set(r.id, p);
       }),
     );

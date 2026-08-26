@@ -383,4 +383,92 @@ Match `TaskProgress`'s real field names — read the type before writing the ass
 
 ## Deviations found
 
-_(allocated from `POST /api/ledger/deviations` during execution — never hand-swept)_
+_(allocated from `POST /api/ledger/deviations` — D-566..D-578, floor 579)_
+
+- **D-566** — the plan's Task 2 contradicted itself on the wire shape and the implementer
+  followed its executable half. The prose said `hookstate-unmeasurable` should be "surfaced
+  exactly the way `registry-unmeasurable` already is" (a `kind`, mapped to 502
+  `{error}`), while Step 3's code and Step 1's assertion both said
+  `{kind:'refused', code:'hookstate-unmeasurable'}` — a 409 `{refused}`. The `refused` arm
+  was built, and it is the better answer for four measured reasons: it is the sibling arm of
+  the SAME gate (`worker-busy` returns one line below, so a coordinator's "the busy gate said
+  no" handler stays one branch), `prhistory-unreadable` is the tree's own precedent for a
+  read-failure refusal riding `kind:'refused'`, the plan's own Interfaces block asked for "one
+  additive REFUSAL code … spelled once in `shared/api.ts` and derived everywhere else" (a new
+  `kind` is a bare literal in three files, which is exactly how `registry-unmeasurable` is
+  spelled), and `sendDispatchOutcome` needed no new arm at all. Recovery semantics differ too,
+  as the plan itself argues: `registry-unmeasurable` can orphan a workspace `ccd ws-add`
+  already spawned; this one lands after a plain resume where nothing was minted.
+- **D-567** — the plan named the wrong file for the refusal mapping. It said
+  `server/src/routes.ts`; dispatch outcomes are mapped by `sendDispatchOutcome` at
+  `server/src/coord/routes.ts:102`. Checked as instructed, no change needed there.
+- **D-568** — "**only if** the code reaches their refusal lists" is not a conditional.
+  `coordinator-skill.test.ts` iterates `RUN_REFUSE_CODES` against the whole corpus, so adding
+  ANY member mandates a corpus change. Measured: code added, corpora untouched → red with
+  "`hookstate-unmeasurable` is a real RunRefuseCode but is named nowhere in the skill". This
+  makes the deploy AGENT-FIRST, and it is a mechanism rather than a convention.
+- **D-569** — a pre-existing test title claimed a condition it never exercised, which is how
+  D-115 survived a suite that looked like it covered it. `run-routes.test.ts`'s case read
+  "still proceeds when no hookstate file exists at all — unreadable/absent is not proof of
+  busy", but its fixture only ever seeded an ABSENT file. The `unreadable` half of its own
+  title had no test behind it — and asserting `proceeds` for it was asserting the defect.
+- **D-570** — test mechanism: `unreadableField` (`ioDoubles.ts`) rather than the plan's
+  `chmod 000` for the dispatch case. A chmod case is SKIPPED under a root runner, i.e. a hole
+  exactly where D-116 says one hides; the double is real under any uid and degrades ONE file,
+  so the registry read beside it stays clean and the case tests the gate rather than the
+  ladder. The reader case carries both forms.
+- **D-571** — the plan said `readHookState` has "four callers". Measured: five sites in four
+  files (`server.ts:1415`, `sessionws.ts:425`, `watch.ts:1241`, `watch.ts:2125`, and
+  `dispatch.ts:457`, the one Task 2 migrated). Four sites remain on the folded form.
+- **D-572** — **the branch introduced a false "✓ Finished" push, and the implementer recorded
+  the trade as safe when it was not.** Task 3's `status = 'busy'` for an unmeasured live read
+  reaches `watch.ts`'s busy→idle edge, whose suppression set is derived from
+  `FleetSession.unmeasured` — an `IdentityField[]` naming only degraded REGISTRY fields. An
+  unreadable `<pid>.json` degrades none of the three, so a GENUINELY IDLE session whose live
+  file blipped read idle → busy(guessed) → idle and the heal tick pushed "Finished — back to
+  idle" for a turn that never happened, plus a durable feed row asserting it. Found by the
+  review round's own refutation probe, reproduced, and fixed by giving the row a
+  `statusUnmeasured` field and making `unmeasuredIds` the union of both routes. Deliberately
+  NOT an entry in `unmeasured`: `measuredIdentity` gates on that array being EMPTY, so a
+  non-identity marker there would make every such row's identity read as unmeasurable
+  fleet-wide — a larger lie than the one it fixes.
+- **D-573** — Task 3's `sessionws.ts` mirror is a SECOND guard and needed its own measured
+  red; the plan's Files block listed tests only for `livestate`/`fleet`. Two guards, two
+  independent deletions, two reds.
+- **D-574** — the same over-report survives one condition over, and is NOT fixed here: a task
+  file that reads back FINE and fails `parseTask` (truncated JSON caught mid-write — Claude
+  Code rewrites that directory while we read it, with no lock — or a record naming no
+  `subject`) is still skipped and still leaves BOTH counts. `unmeasured` means "bytes never
+  came back"; widening it to "or did not parse" is a different decision about what the
+  denominator counts, and belongs with a reader who has decided it. Named so it is a list
+  rather than a rediscovery.
+- **D-575** — **the fold was still total one level up, and that one IS fixed.**
+  `readTasks`' first gate was `io.readdir(dir) === null → {tasks:[], unmeasured:0}`, and
+  `FleetIO.readdir` has no measured variant: "the directory genuinely does not exist" (the
+  ordinary shape) and "the directory is there and would not list" (EACCES; in remote mode one
+  dropped agent-WS round trip) are one value. A measured `7/12` then became `null`, the id was
+  omitted from the rebuilt map, and `SessionLine.tsx` hides the chip entirely on null — so the
+  card read exactly as "this session never had a plan", for up to a whole `TASK_SWEEP_MS`.
+  Confirmed by the review's adversarial verifier, which reproduced it. Fixed at the CONSUMER,
+  not the reader: `TasksRead` carries `listed`, and `sweepTasks` retains the last-known tally
+  on `!listed` — the same RETAIN-DON'T-ERASE rule its own degraded-identity branch twelve
+  lines above already states, reached by the other route. A measured `readdir` is a new wire
+  op and a new frame (D-114's family) and is not this branch's to open.
+- **D-576** — `taskProgress`'s empty gate now reads BOTH numbers, which the plan's text did
+  not ask for. Taken literally ("adds `unmeasured` to the total only") the gate stays
+  `tasks.length === 0 → null`, and a session whose EVERY task file is unreadable answers null
+  again — the exact rendering Task 4 exists to remove, reached by the one input that makes it
+  most wrong. Made deliberately and pinned.
+- **D-577** — the chat strip's own tally is unchanged and still under-counts. `sessionws.ts`'s
+  `checkTasks` drops the count because the `tasks` wire frame is `TaskItem[]` — ROWS — and
+  `TaskStrip` builds "2 running · 1 left · 4 ✓" by filtering them, so a file whose bytes never
+  came back contributes to neither. `unmeasured` reaches the fleet card, not the session
+  screen. Out of scope (a wire shape change); named.
+- **D-578** — a workflow-tooling deviation worth recording because it nearly cost a real fix.
+  The review was resumed with `resumeFromRunId` after the session died mid-phase. The
+  `fail-open` lens had COMPLETED before the death and therefore replayed from cache — against
+  the pre-fix tree — so it reported D-572 as live and its verifier "reproduced" it, citing
+  line anchors (`watch.ts:749`) that no longer exist. The finding was real when raised and
+  already fixed when reported. **A resumed workflow's cached lens results describe the tree as
+  it was at cache time, not as it is.** Re-verified directly against HEAD before acting; the
+  second finding (D-575) was new and did survive.

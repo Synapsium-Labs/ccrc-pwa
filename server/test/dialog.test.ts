@@ -410,6 +410,70 @@ describe('FleetWatcher retain-don\'t-erase (Task 2, the heal side)', () => {
 
     rmSync(home, { recursive: true, force: true });
   });
+
+  // D-115 REVIEW, second confirmed finding. The test above proves the rule for
+  // the route where the IDENTITY degrades. This is the same rule reached the
+  // other way: `io.readdir` on the task DIRECTORY answers null, which folds
+  // "no such directory" into "the directory would not list" (it has no
+  // measured variant — D-114's family, a new wire op, not this branch's to
+  // open). D-115's remedy stopped one seam below, at `readFileMeasured`: every
+  // task file being unreadable is now honestly `0/N`, but the LISTING failing
+  // still produced `{tasks:[], unmeasured:0}` -> `taskProgress` null -> the id
+  // omitted from the rebuilt map -> the chip hidden entirely
+  // (`SessionLine.tsx` renders nothing on null). A measured `7/12` rendered as
+  // "this session never had a plan", for up to a whole TASK_SWEEP_MS.
+  it('sweepTasks keeps the tally when the task DIRECTORY will not list, and still prunes a reaped id', async () => {
+    const home = mkTmp('ccrc-retain-dir-');
+    seedRoster(home);
+    const id = 'claude-a-MekWarLive';
+    seedSession(home, id, 'claude-a');
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const cfgDir = configDirFor(cfg, 'claude-a')!;
+    const dir = tasksDir(cfgDir, HOOK_UUID);
+    mkdirSync(dir, { recursive: true });
+    for (const [n, st] of [['1', 'completed'], ['2', 'completed'], ['3', 'in_progress']] as const) {
+      writeFileSync(path.join(dir, `${n}.json`), JSON.stringify({
+        id: n, subject: `task ${n}`, description: `do ${n}`, activeForm: `Doing ${n}`, status: st,
+        blocks: [], blockedBy: [],
+      }));
+    }
+
+    // ONLY the directory listing fails — every registry field stays readable,
+    // so the identity branch above cannot be what saves this row.
+    let blind = false;
+    const io: FleetIO = {
+      ...localIO,
+      readdir: async (p) => (blind && p === dir ? null : localIO.readdir(p)),
+    };
+    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue() };
+    const watcher = new FleetWatcher(deps, new Bus());
+    const forceSweep = async (): Promise<void> => {
+      (watcher as unknown as { lastTaskSweep: number }).lastTaskSweep = 0;
+      await (watcher as unknown as { sweepTasks: () => Promise<void> }).sweepTasks();
+    };
+
+    await forceSweep();
+    const before = watcher.currentTaskProgress().get(id);
+    expect(before, 'the fixture never measured a tally to begin with').toBeTruthy();
+    expect(before!.total).toBe(3);
+    expect(before!.done).toBe(2);
+
+    blind = true;
+    await forceSweep();
+    expect(watcher.currentTaskProgress().get(id),
+      'a measured 2/3 was blanked by a listing nobody could take — the card then reads as "no plan"')
+      .toEqual(before);
+
+    // And the fold's other half still behaves: a genuinely reaped id is
+    // dropped, because `next` is rebuilt from THIS sweep's records.
+    blind = false;
+    rmSync(path.join(home, '.cc-sessions', `${id}.uuid`));
+    await forceSweep();
+    expect(watcher.currentTaskProgress().has(id)).toBe(false);
+
+    rmSync(home, { recursive: true, force: true });
+  });
 });
 
 // Blocking review findings 1/3: retain-don't-erase (above) is proven only

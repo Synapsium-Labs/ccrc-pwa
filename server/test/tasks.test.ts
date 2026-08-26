@@ -57,7 +57,7 @@ describe('readTasks', () => {
 
   it('returns [] when the session has no task dir at all', async () => {
     const cfg = mkTmp('ccrc-tasks-');
-    expect(await readTasks(localIO, cfg, UUID)).toEqual({ tasks: [], unmeasured: 0 });
+    expect(await readTasks(localIO, cfg, UUID)).toEqual({ tasks: [], unmeasured: 0, listed: false });
   });
 });
 
@@ -80,7 +80,7 @@ describe('taskProgress', () => {
   });
 
   it('is null for a session with no task list', () => {
-    expect(taskProgress({ tasks: [], unmeasured: 0 })).toBeNull();
+    expect(taskProgress({ tasks: [], unmeasured: 0, listed: true })).toBeNull();
   });
 });
 
@@ -171,7 +171,7 @@ describe('readTasks — the task file whose bytes never came back', () => {
 
   it('an ABSENT task directory is still an empty read, not a progress row', async () => {
     const cfg = mkTmp('ccrc-tasks-');
-    expect(await readTasks(localIO, cfg, 'no-such-uuid')).toEqual({ tasks: [], unmeasured: 0 });
+    expect(await readTasks(localIO, cfg, 'no-such-uuid')).toEqual({ tasks: [], unmeasured: 0, listed: false });
     expect(taskProgress(await readTasks(localIO, cfg, 'no-such-uuid'))).toBeNull();
   });
 
@@ -185,7 +185,9 @@ describe('readTasks — the task file whose bytes never came back', () => {
     const dir = tasksDir(cfg, UUID);
     const io = degradedReadIO((p) => p.startsWith(dir + path.sep));
     const read = await readTasks(io, cfg, UUID);
-    expect(read).toEqual({ tasks: [], unmeasured: 3 });
+    // `listed: true` is the point of the case beside `unmeasured: 3`: the
+    // directory answered, and every file in it did not.
+    expect(read).toEqual({ tasks: [], unmeasured: 3, listed: true });
     expect(taskProgress(read)).toEqual({ total: 3, done: 0, running: 0, active: null });
   });
 

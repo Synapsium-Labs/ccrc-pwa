@@ -75,6 +75,24 @@ export interface TasksRead {
   /** Task files listed in the directory whose bytes this box could not read.
    *  Outstanding-of-unknown-status, not missing: see `readTasks`. */
   unmeasured: number;
+  /** Whether the task DIRECTORY answered at all. False means `io.readdir`
+   *  returned null, which folds two conditions this reader cannot part —
+   *  "no such directory" (the ordinary shape: most sessions never make a task
+   *  list) and "the directory is there and would not list" (EACCES; in remote
+   *  mode one dropped agent-WS round trip). `io.readdir` has no measured
+   *  variant, so the distinction is not available HERE — but the consumer
+   *  needs the fold flagged even so, because the two share the one recovery:
+   *  do not overwrite a tally that was measured a moment ago with a zero
+   *  nobody measured.
+   *
+   *  D-115's remedy stopped at `readFileMeasured`, one seam BELOW this. Every
+   *  task file being unreadable is now honestly reported as `0/N`; the
+   *  directory failing to list still reports nothing at all, which the card
+   *  renders identically to "this session never had a plan". Fixed at the
+   *  consumer (`watch.ts`'s `sweepTasks`) rather than here, because a
+   *  measured `readdir` is a new wire op and a new frame — D-114's family,
+   *  and not this branch's to open. */
+  listed: boolean;
 }
 
 /**
@@ -112,7 +130,7 @@ export async function readTasks(
 ): Promise<TasksRead> {
   const dir = tasksDir(configDir, uuid);
   const names = await io.readdir(dir);
-  if (names === null) return { tasks: [], unmeasured: 0 };
+  if (names === null) return { tasks: [], unmeasured: 0, listed: false };
   const files = names
     .filter((n) => TASK_FILE_RE.test(n))
     .sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
@@ -127,7 +145,7 @@ export async function readTasks(
     const t = parseTask(read.content);
     if (t) tasks.push(t);
   }
-  return { tasks, unmeasured };
+  return { tasks, unmeasured, listed: true };
 }
 
 /**
