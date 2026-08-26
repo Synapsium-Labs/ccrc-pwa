@@ -15,6 +15,7 @@
 // docstring). This suite imports and fixtures the real thing.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { CCRC_API } from './ccdWsHelpers.js';
 import { readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -714,13 +715,22 @@ describe('the token is EXTRACTED, never cat-ed whole (first-program dogfood find
     expect(refs('wave-lifecycle.md')).not.toContain('$(cat ~/.cc-secrets/ccrc-mail.token)');
   });
 
-  it("both skills carry notify.sh's exact extraction pipeline", () => {
+  // RELOCATED, not relaxed. The extraction used to live in each SKILL.md
+  // because each caller ran it by hand. `ccrc-api` reads the token file itself
+  // now, so there is exactly ONE reader of it on a session box and the skills
+  // carry no pipeline to drift — which is a stronger form of the same property,
+  // not a weaker one. The pin follows the mechanism: it asserts the CLIENT
+  // still matches notify.sh's rule, and that neither skill has grown a second
+  // copy back.
+  it("the client carries notify.sh's exact extraction pipeline, and the skills carry none", () => {
     const notify = readFileSync(path.join(root, 'deploy/notify.sh'), 'utf8');
-    // notify.sh reads $TOKEN_FILE; the skills name the path inline — same
-    // pipeline either side of the filename.
+    const client = readFileSync(CCRC_API, 'utf8');
     expect(notify).toContain("grep -v '^[[:space:]]*#'");
+    expect(client, "ccrc-api's extraction drifted from notify.sh's rule")
+      .toContain("grep -v '^[[:space:]]*#'");
+    expect(client).toContain("head -n1 | tr -d '[:space:]'");
     for (const [name, text] of [['coordinator', skill], ['worker', workerSkill]] as const) {
-      expect(text, `${name} SKILL.md's extraction drifted from notify.sh's rule`).toContain(PIPELINE);
+      expect(text, `${name} SKILL.md grew a second token reader back`).not.toContain(PIPELINE);
     }
   });
 });
@@ -749,14 +759,28 @@ describe('the server address is config, never a literal (operator ruling 2026-08
     }
   });
 
-  it('both SKILL.md files derive $CCRC_API from agent.env, and their examples ride it', () => {
+  // RELOCATED for the same reason as the token pipeline above, and the live
+  // lesson in this describe's header is exactly why the MEANING has to survive:
+  // 3b rebound the server to loopback behind Caddy and every program died
+  // silently, because the skills held a hardcoded address. The rule was "the
+  // address is config, never a literal, and an empty derivation is a stop".
+  // That rule is now enforced by `ccrc-api`, which refuses `no-server-url`
+  // rather than falling back (pinned in `ccrc-api.test.ts`), so the skills
+  // derive nothing — and MUST NOT, or there would be two derivations to rot.
+  it('the client owns the address derivation, and both SKILL.md files defer to it', () => {
+    const client = readFileSync(CCRC_API, 'utf8');
+    expect(client, 'ccrc-api does not read CCRC_SERVER_URL from agent.env')
+      .toContain("grep -E '^[[:space:]]*CCRC_SERVER_URL='");
     for (const [name, text] of [['coordinator', skill], ['worker', workerSkill]] as const) {
-      expect(text, `${name} SKILL.md does not derive the base URL from CCRC_SERVER_URL`)
-        .toContain(`CCRC_API=$(grep -E '^[[:space:]]*CCRC_SERVER_URL=' "$HOME/.ccrc/agent.env"`);
-      expect(text, `${name} SKILL.md's curl example does not use the derived base`)
-        .toContain('"$CCRC_API/api/');
-      expect(text, `${name} SKILL.md must say an empty derivation is a stop, not a guess`)
-        .toMatch(/empty[^.]*stop|stop[^.]*empty/i);
+      expect(text, `${name} SKILL.md grew a second address derivation back`)
+        .not.toContain(`CCRC_API=$(grep -E '^[[:space:]]*CCRC_SERVER_URL=' "$HOME/.ccrc/agent.env"`);
+      expect(text, `${name} SKILL.md does not name the client`).toContain('ccrc-api');
+      // `~/.local/bin` is not on the unit PATH, so naming it by bare name would
+      // teach a call that cannot run. Measured 2026-08-26.
+      expect(text, `${name} SKILL.md must invoke the client by explicit path`)
+        .toContain('$HOME/.local/bin/ccrc-api');
+      expect(text, `${name} SKILL.md must still say a missing address is a stop, not a guess`)
+        .toMatch(/empty[^.]*stop|stop[^.]*empty|refus[^.]*rather than guess/i);
     }
   });
 });
@@ -771,12 +795,14 @@ describe('the server address is config, never a literal (operator ruling 2026-08
 describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
   const pp = (): string => refs('peer-protocol.md');
 
-  it('teaches the capture idiom and never curl -f', () => {
-    // Same rule SKILL.md's own "How to call the API" states: `-f` throws the
-    // response body away, and the body is the whole protocol — the 409 this
-    // file exists to teach the reading of arrives as a 4xx JSON body.
-    expect(pp()).toContain("-w '\\n%{http_code}'");
-    expect(pp()).not.toMatch(/curl -f/);
+  it('teaches reading the body, and invokes no curl at all', () => {
+    // Same rule SKILL.md's own "How to call the API" states, in the new terms:
+    // the body is the whole protocol — the 409 this file exists to teach the
+    // reading of arrives as a 4xx JSON body — so the client prints the body on
+    // stdout and exits 0 whatever the status. The `-w '\n%{http_code}'` capture
+    // this used to pin existed only because curl could not hand back both.
+    expect(pp()).toContain('body=$("$API"');
+    expect(pp()).not.toMatch(/curl/);
   });
 
   it('carries no second copy of the token pipeline or the address derivation', () => {
@@ -804,10 +830,15 @@ describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
     // this file spells `fromId`/`fromUuid` (prose may CONTRAST the two lanes
     // in backticks; the escaped `\"` spelling only ever appears inside a -d
     // body, so it is the exact regression surface).
-    expect(pp()).toContain('\\"byId\\":\\"$id\\"');
-    expect(pp()).toContain('\\"byUuid\\":\\"$uuid\\"');
-    expect(pp()).not.toContain('\\"fromId\\"');
-    expect(pp()).not.toContain('\\"fromUuid\\"');
+    // The spelling is no longer backslash-escaped: a `--json -` heredoc carries
+    // plain JSON, where curl's `-d "…"` needed every quote escaped. The CLAIM
+    // this pins is unchanged — these two routes destructure `byId`/`byUuid` and
+    // 400 anything else, and the pre-fix reference taught the mail lane's
+    // `fromId`/`fromUuid` in both bodies, walking every reader into a 400.
+    expect(pp()).toContain('"byId":"$id"');
+    expect(pp()).toContain('"byUuid":"$uuid"');
+    expect(pp()).not.toContain('"fromId":"$id"');
+    expect(pp()).not.toContain('"fromUuid":"$uuid"');
   });
 
   it('tells the truth about which layer refuses a bad claim path (fix, post-9b review)', () => {

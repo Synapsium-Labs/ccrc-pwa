@@ -89,38 +89,50 @@ protocol sentence it does NOT leave to judgement is the branch-discipline line
 
 ## How to call the API
 
-**Never use `curl -f`/`curl -fsS` against these routes.** `-f` makes curl
-print NOTHING on a 4xx/5xx and exit 22 — it throws the response body away,
-and the body is the whole protocol: every refusal these routes send, clause
-8's included, arrives as a 4xx JSON body, not as an exception. Capture the
-status and the body separately instead:
+Every call goes through **`ccrc-api`**, the closed client installed beside
+`ccd`. It is not a wrapper for convenience: a repo may legitimately deny
+`Bash(curl:*)` in its committed settings, and one did on 2026-08-26 — the worker
+on that programme could not read its mail at all, while the coordinator kept
+working only because `resp=$(curl …)` happens to slip past that matcher. Neither
+half of that was acceptable.
+
+`~/.local/bin` is NOT on the `claude-session@` unit PATH, so invoke it by path:
 
 ```bash
-# THE ADDRESS IS CONFIG, NEVER A LITERAL: ~/.ccrc/agent.env's CCRC_SERVER_URL
-# (written by `ccrc install --role fleet`; ws:// or http(s):// forms both
-# occur) names where this fleet's server runs. GREP it, never source it —
-# agent.env is 0600 and carries this box's agent bearer token. If the
-# derivation comes up EMPTY, stop and report: never guess an address, never
-# fall back to a hardcoded one.
-CCRC_API=$(grep -E '^[[:space:]]*CCRC_SERVER_URL=' "$HOME/.ccrc/agent.env" | tail -n1 | cut -d= -f2- | tr -d '[:space:]')
-CCRC_API="${CCRC_API/#ws:/http:}"; CCRC_API="${CCRC_API/#wss:/https:}"; CCRC_API="${CCRC_API%/}"
-# EXTRACT, never `cat`: the token file ships in deploy/ccrc-mail.token.example's
-# shape — a `#`-comment preamble above ONE value line — and the server reads it
-# with coord/token.ts's extractToken (first non-blank, non-`#` line, whitespace
-# stripped everywhere; deploy/notify.sh runs the identical rule). `cat` sends
-# the whole preamble as the header value, which is not even a legal header:
-# every call answers a bare 400 before any route logic runs.
-TOKEN=$(grep -v '^[[:space:]]*#' ~/.cc-secrets/ccrc-mail.token | grep -v '^[[:space:]]*$' | head -n1 | tr -d '[:space:]')
-resp=$(curl -sS -w '\n%{http_code}' -X POST "$CCRC_API/api/runs" \
-  -H "x-ccrc-mail-token: $TOKEN" -H 'content-type: application/json' \
-  -d "{\"program\":\"<slug>\",\"title\":\"<title>\",\"project\":\"<project>\",\"wave\":1,\"waveOf\":<M or null>,\"claimedBy\":\"$id\"}")
-code="${resp##*$'\n'}"
-body="${resp%$'\n'*}"
+API="$HOME/.local/bin/ccrc-api"
+
+# THE ADDRESS AND THE TOKEN ARE THE CLIENT'S JOB, and that is the whole point of
+# it. It reads ~/.ccrc/agent.env's CCRC_SERVER_URL itself and REFUSES
+# `no-server-url` rather than guessing a host if the derivation comes up empty —
+# a stop, never a fallback literal. It extracts the token from
+# ~/.cc-secrets/ccrc-mail.token's value line rather than sending the
+# `#`-comment preamble wrapped around it. Neither is yours to derive any more,
+# so neither can be got wrong one caller at a time.
+
+body=$("$API" runs open --json - <<JSON
+{"program":"<slug>","title":"<title>","project":"<project>","wave":1,"waveOf":<M or null>,"claimedBy":"$id"}
+JSON
+)
 ```
 
-Never echo `$TOKEN`. Never put it in a commit, a ledger, a mail body or a
-report. If a command would print it, redirect the command instead of printing
-the token.
+**stdout is the response body, and for almost every decision it is all you
+need** — every refusal these routes send arrives IN the body, so the
+`-w '\n%{http_code}'` capture and the `${resp##*$'\n'}` split that used to be
+required here are simply gone. The HTTP status goes to stderr as `http <code>`
+on the rare occasion you want it; redirect stderr to a file and read it there.
+
+**The client exits 0 whenever a response arrived, whatever its status, and this
+is deliberate.** It is the same invariant this section used to state as "never
+use `curl -f`", and it is stated here so it does not get re-broken: `-f` made
+curl print NOTHING on a 4xx and exit 22, throwing away the body — and the body
+is the whole protocol. A 4xx is an ANSWER on these routes, clause 8's
+`claimed-by-another` included. The one non-zero exit means NO RESPONSE HAPPENED
+(DNS, refused, timeout), and even then stdout carries
+`{"ok":false,"error":"transport",…}` so you never parse a second shape.
+
+Never print the token. You no longer read it, so the way to get this wrong is
+gone — but it also never appears in the client's output, on any path, including
+a 401.
 
 Every write route answers JSON, on success and on refusal alike. A `4xx`
 `$code` is a normal **answer**, not a command failure — but the field the
@@ -135,8 +147,9 @@ family (`stale-tip`, `pr-regressed`, `no-handoff-commit`) on `error` instead;
 refusal it ever sends — including codes that ride `refused`/`error` on the
 other routes — on `reject.code`. Check `$body.refused ?? $body.error ??
 $body.reject?.code` (in that order costs nothing, since a body only ever
-populates one) rather than assuming a fixed field, and never branch on
-curl's own exit status. The refusals you will actually meet are
+populates one) rather than assuming a fixed field, and never branch on the
+client's exit status — it reports whether a response HAPPENED, never what the
+response said. The refusals you will actually meet are
 `paused`, `mail-disabled`, `cap-concurrency`, `cap-daily`, `ambiguous-dispatch`,
 `worker-busy`, `hookstate-unmeasurable`, `claimed-by-another`,
 `not-dispatched`, `prhistory-unreadable`, `bad-transition`, `stale-tip`,

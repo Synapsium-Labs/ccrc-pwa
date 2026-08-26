@@ -1,11 +1,9 @@
 # The wave lifecycle, in full
 
-Every call below is `POST`/`GET` against `$CCRC_API` — the server base URL
-SKILL.md's own block derives from `~/.ccrc/agent.env`'s `CCRC_SERVER_URL`,
-never a hardcoded address — with
-`x-ccrc-mail-token: $TOKEN` — with `$TOKEN` EXTRACTED as SKILL.md's own
-block shows (the file carries a `#`-comment preamble above its one value
-line; `cat`-ing it whole makes an illegal header and a bare 400). One **run row per
+Every call below goes through `ccrc-api`, set up once in SKILL.md's "How to
+call the API" — the client resolves the server address from
+`~/.ccrc/agent.env` and reads the box token itself, refusing rather than
+guessing at either, so no call below handles an address or a secret. One **run row per
 wave**: `POST /api/runs` opens a new run for each wave of a program, not one
 row for the whole program. `$REG` is `$HOME/.cc-sessions` throughout — SKILL.md's
 "Learn who you are, first" defines it once and reads `$REG/<id>.uuid` for

@@ -7,16 +7,13 @@ the route response itself: `GET /api/peers` hands back `etiquette` — the five
 session that can discover peers has the rules whether or not any installer
 ever ran on its home. This file is the commentary, never the only copy.
 
-Derive `$CCRC_API` and `$TOKEN` exactly as SKILL.md's "How to call the API"
-section does — this file deliberately carries no second copy of either
-derivation. Never pass `-f`/`-fsS` to any curl below: every
-refusal is a 4xx JSON body, and `-f` throws the body away. Capture status
-and body separately:
+Every call below goes through `ccrc-api`, invoked by explicit path exactly as
+SKILL.md's "How to call the API" section sets it up — this file deliberately
+carries no second copy of that setup, nor of any address or token handling,
+because the client does both itself. stdout is the response body, which is all
+these routes need you to read: every refusal arrives IN it.
 
-    resp=$(curl -sS -w '\n%{http_code}' "$CCRC_API/api/peers?project=$project" \
-      -H "x-ccrc-mail-token: $TOKEN")
-    code="${resp##*$'\n'}"
-    body="${resp%$'\n'*}"
+    body=$("$API" peers list --project "$project")
 
 ## Discovery — `GET /api/peers`
 
@@ -41,13 +38,13 @@ mode.
 
 ## Claiming — `POST /api/claims`
 
-    resp=$(curl -sS -w '\n%{http_code}' -X POST "$CCRC_API/api/claims" \
-      -H "x-ccrc-mail-token: $TOKEN" -H 'content-type: application/json' \
-      -d "{\"byId\":\"$id\",\"byUuid\":\"$uuid\",\"project\":\"$project\",
-    \"paths\":[\"server/src/coord/store.ts\"],
-    \"intent\":\"wave 3: store methods for the mirror reads\",
-    \"runId\":$runid}")
-    code="${resp##*$'\n'}"
+    body=$("$API" claims take --json - <<JSON
+    {"byId":"$id","byUuid":"$uuid","project":"$project",
+     "paths":["server/src/coord/store.ts"],
+     "intent":"wave 3: store methods for the mirror reads",
+     "runId":$runid}
+    JSON
+    )
     body="${resp%$'\n'*}"
 
 `byId`/`byUuid` here, NOT the mail ingress's `fromId`/`fromUuid` — a claim
@@ -68,9 +65,10 @@ its claim rather than holding it forever.
 
 Release is `POST /api/claims/:id/release` when a claim is done early:
 
-    resp=$(curl -sS -w '\n%{http_code}' -X POST "$CCRC_API/api/claims/$claim/release" \
-      -H "x-ccrc-mail-token: $TOKEN" -H 'content-type: application/json' \
-      -d "{\"byId\":\"$id\",\"byUuid\":\"$uuid\"}")
+    body=$("$API" claims release "$claim" --json - <<JSON
+    {"byId":"$id","byUuid":"$uuid"}
+    JSON
+    )
 
 A run's close releases that run's claims itself, and a dead session's claims
 lapse inside the lease — so a forgotten release costs minutes, never a
@@ -125,9 +123,10 @@ time, never stored.
 
 ## The allocator — `POST /api/ledger/deviations`
 
-    resp=$(curl -sS -w '\n%{http_code}' -X POST "$CCRC_API/api/ledger/deviations" \
-      -H "x-ccrc-mail-token: $TOKEN" -H 'content-type: application/json' \
-      -d "{\"project\":\"$project\",\"count\":8,\"title\":\"program $slug D-block\"}")
+    body=$("$API" ledger allocate --json - <<JSON
+    {"project":"$project","count":8,"title":"program $slug D-block"}
+    JSON
+    )
 
 `201 {numbers, floor}` — a contiguous block, appended to the flat ledger log
 BEFORE the database commits, so on any doubt a number is SKIPPED, never

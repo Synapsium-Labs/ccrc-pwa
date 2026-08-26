@@ -86,7 +86,7 @@ The tool gets answered.
 Your mail surface is `POST /api/mail` to send, and `GET /api/mail` /
 `GET /api/mail/:id` / `POST /api/mail/:id/ack` to read and acknowledge.
 Build 9 adds the peer surface clause 11 names — claims, peers, lifecycle —
-whose long form and curl shapes live in
+whose long form and worked calls live in
 `../ccrc-coordinator/references/peer-protocol.md`, installed beside the two
 references below. The run routes belong to the coordinator; a worker never
 advances or closes a run.
@@ -98,43 +98,45 @@ they are not duplicated here on purpose — one copy of the protocol, in the
 place its own tests pin it.
 
 ```bash
-# THE ADDRESS IS CONFIG, NEVER A LITERAL: ~/.ccrc/agent.env's CCRC_SERVER_URL
-# (written by `ccrc install --role fleet`; ws:// or http(s):// forms both
-# occur) names where this fleet's server runs. GREP it, never source it —
-# agent.env is 0600 and carries this box's agent bearer token. If the
-# derivation comes up EMPTY, stop and report to the coordinator by the one
-# lane that still works (your handoff commit / the pane): never guess an
-# address, never fall back to a hardcoded one.
-CCRC_API=$(grep -E '^[[:space:]]*CCRC_SERVER_URL=' "$HOME/.ccrc/agent.env" | tail -n1 | cut -d= -f2- | tr -d '[:space:]')
-CCRC_API="${CCRC_API/#ws:/http:}"; CCRC_API="${CCRC_API/#wss:/https:}"; CCRC_API="${CCRC_API%/}"
-# EXTRACT, never `cat`: the token file ships in deploy/ccrc-mail.token.example's
-# shape — a `#`-comment preamble above ONE value line — and the server reads it
-# with coord/token.ts's extractToken (first non-blank, non-`#` line, whitespace
-# stripped everywhere; deploy/notify.sh runs the identical rule). `cat` sends
-# the whole preamble as the header value, which is not even a legal header:
-# every call answers a bare 400 before any route logic runs.
-TOKEN=$(grep -v '^[[:space:]]*#' ~/.cc-secrets/ccrc-mail.token | grep -v '^[[:space:]]*$' | head -n1 | tr -d '[:space:]')
-resp=$(curl -sS -w '\n%{http_code}' -X POST "$CCRC_API/api/mail" \
-  -H "x-ccrc-mail-token: $TOKEN" -H 'content-type: application/json' \
-  -d "{\"fromId\":\"$id\",\"fromUuid\":\"$uuid\",\"toId\":\"coordinator\",\"runId\":<run id>,\
-\"kind\":\"status\",\"subject\":\"wave-done\",\"body\":\"<prose>\",\"artifacts\":[]}")
-code="${resp##*$'\n'}"
-body="${resp%$'\n'*}"
+API="$HOME/.local/bin/ccrc-api"
+
+# THE ADDRESS AND THE TOKEN ARE THE CLIENT'S JOB. It reads ~/.ccrc/agent.env's
+# CCRC_SERVER_URL itself and REFUSES `no-server-url` rather than guessing a host
+# if that comes up empty — a stop, never a fallback literal; report it to the
+# coordinator by the one lane that still works (your handoff commit / the pane).
+# It extracts the token from ~/.cc-secrets/ccrc-mail.token's value line rather
+# than sending the `#`-comment preamble wrapped around it. Neither is yours to
+# derive any more, so neither can be got wrong one caller at a time.
+
+body=$("$API" mail send --json - <<JSON
+{"fromId":"$id","fromUuid":"$uuid","toId":"coordinator","runId":<run id>,
+ "kind":"status","subject":"wave-done","body":"<prose>","artifacts":[]}
+JSON
+)
 ```
 
-- **The token is a shared box secret.** Read it from
-  `~/.cc-secrets/ccrc-mail.token`, send it as `x-ccrc-mail-token`, and never
-  print it, paste it into a prompt, commit it, or put it in a report. If a
-  command would echo it, redirect the command instead.
-- **Never use `curl -f`/`curl -fsS` here.** `-f` prints nothing on a 4xx and
-  exits 22 — it throws the response body away, and the body IS the protocol:
-  every refusal arrives as a 4xx JSON body, not as an exception. Capture the
-  status and the body separately, as above.
+`~/.local/bin` is NOT on this unit's PATH, which is why the client is invoked by
+an explicit path and not by name.
+
+- **The token is a shared box secret.** You no longer read it — `ccrc-api` does,
+  from `~/.cc-secrets/ccrc-mail.token` — so the way to leak it by hand is gone.
+  It never appears in the client's output on any path, including a 401. Still
+  never paste it into a prompt, commit it, or put it in a report.
+- **stdout is the response body, and it is all you need here.** Every mail-route
+  refusal arrives IN the body, so there is no status to capture alongside it. The
+  HTTP status goes to stderr as `http <code>` if you ever want it.
+- **The client exits 0 whenever a response arrived, whatever its status.** That
+  is the same invariant this section used to state as "never use `curl -f`", kept
+  because an invariant that loses its reason gets re-broken: `-f` printed nothing
+  on a 4xx and exited 22, throwing away the body — and the body IS the protocol.
+  A non-zero exit means NO RESPONSE HAPPENED, and stdout still answers
+  `{"ok":false,"error":"transport",…}` so you never parse a second shape.
 - **Every mail-route refusal rides `error`** (`{"ok":false,"error":"<code>"}`)
   — `bad-kind`, `stale-uuid`, `oversize`, `unknown-sender`,
   `unknown-recipient`, `unauthenticated`, `registry-unmeasurable`,
-  `unknown-run`. A 4xx is an ANSWER, not a command failure; never branch on
-  curl's own exit status. The two you can actually cause by getting your own
+  `unknown-run`. A 4xx is an ANSWER, not a command failure; never branch on the
+  client's exit status — it reports whether a response HAPPENED, never what the
+  response said. The two you can actually cause by getting your own
   call wrong are `bad-kind` (wrong shape, wrong `kind`, or a relative
   `artifacts` path) and `stale-uuid` (you cached the uuid — clause 1).
 - `kind` is one of `finding`, `question`, `answer`, `status`, `artifact`.

@@ -73,8 +73,16 @@ export function renderEnvelope(m: EnvelopeInput): string {
     for (const p of m.artifacts) lines.push(`  ${p}`);
   }
   lines.push(
-    `ack: POST /api/mail/${m.id}/ack with header x-ccrc-mail-token (the value in`,
-    '  ~/.cc-secrets/ccrc-mail.token) and body {"fromId":"<your ccd id>","fromUuid":"<your uuid>"}.',
+    // The ack instruction the recipient actually reads. It names the CLIENT and
+    // not a header, because the header — and the token behind it — stopped being
+    // the reader's business: `ccrc-api` reads `~/.cc-secrets/ccrc-mail.token`
+    // itself. A session on a repo that denies `Bash(curl:*)` could not follow the
+    // old wording at all, which is the fault this whole slice exists to fix (D-738).
+    // `${m.id}` is the DELIVERY id, which is what this route wants and what the
+    // mail row's own id is NOT (two sequences that agree only for a single
+    // recipient) — so it is spelled out rather than left to be inferred.
+    `ack: ccrc-api mail ack ${m.id} --json -   (${m.id} is this DELIVERY id, not the`,
+    '  mail row\'s own id) with body {"fromId":"<your ccd id>","fromUuid":"<your uuid>"}.',
     '  Until you ack, this message is redelivered on later sweeps, up to a bounded number of',
     '  attempts — after that the lane gives up and marks it undeliverable. Ack it promptly.',
     '--',
