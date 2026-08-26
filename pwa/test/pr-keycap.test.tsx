@@ -206,7 +206,7 @@ describe('the accessible name carries the whole sentence', () => {
 });
 
 // Every REASON_TEXT entry, individually — the brief's own tests exercise only
-// 'unauthenticated' and 'rate-limit' by wording; the other seven ship with no
+// 'unauthenticated' and 'rate-limit' by wording; the rest ship with no
 // assertion on their actual copy, which is exactly the shape of survivor
 // CONSTRAINTS.md warns about (a shipped string whose removal leaves the suite
 // green).
@@ -221,6 +221,13 @@ describe('every reason under unknown carries its own sentence', () => {
     ['agent-down', /could not reach the sessions box/i],
     ['error', /could not be read/i],
     ['merge-unproven', /named no usable merge commit/i],
+    // The two that split off `error`. Their whole purpose is to say something
+    // "GitHub could not be read." could not, so the assertion is on the part
+    // that differs: one blames GitHub's server, the other says the answer was
+    // cut off and ccrc will retry. Wording either of them back into the
+    // catch-all's sentence is a red here.
+    ['unavailable', /server error/i],
+    ['truncated', /cut off/i],
   ] as const)('%s', (reason, re) => {
     render(<PrKeycap pr={pr({ phase: 'unknown', reason })} onOpen={() => {}} />);
     expect(screen.getByRole('button').getAttribute('aria-label')).toMatch(re);

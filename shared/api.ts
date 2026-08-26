@@ -305,6 +305,19 @@ export type PrChecks = 'pass' | 'fail' | 'pending' | null;
  * and persists that binding, so picking a side would rewrite lineage rather
  * than report a fact. Reconcile with `ccd ws-rename`.
  *
+ * Among the FAILED reads, `unavailable` and `truncated` are the two that name
+ * GitHub's own fault rather than ours, and they exist because `error` — the
+ * catch-all, which renders "GitHub could not be read." — was spending one
+ * sentence on three unrelated worlds. Measured 2026-08-26 against a live repo
+ * with several thousand PRs of history: `unavailable` is a 5xx from
+ * api.github.com/graphql (500/502/503/504) — the request arrived and the far
+ * side could not finish it, on 3/3 attempts, so the identical query will fail
+ * identically and the remedy is to ask GitHub for less rather than to check
+ * the token. `truncated` is a body that started and stopped (`unexpected end
+ * of JSON input`), where a retry may simply succeed. `error` keeps everything
+ * whose shape is genuinely unknown, which is the only thing it was ever an
+ * honest answer for.
+ *
  * Integration finding 7. This vocabulary lived in FOUR places: this union
  * (inline in `PrState.reason`), the snapshot-revival list below, `prstate.ts`'s
  * `REASONS` Set, and `PrKeycap.tsx`'s `REASON_TEXT`. Only the last of the four
@@ -321,7 +334,8 @@ export type PrChecks = 'pass' | 'fail' | 'pending' | null;
 export type PrReason =
   | 'timeout' | 'offline' | 'unauthenticated' | 'rate-limit'
   | 'no-remote' | 'unsupported' | 'agent-down' | 'error'
-  | 'merge-unproven' | 'branch-drift';
+  | 'merge-unproven' | 'branch-drift'
+  | 'unavailable' | 'truncated';
 
 /**
  * The runtime list, derived from the type. `Record<PrReason, true>` is what
@@ -342,6 +356,7 @@ const PR_REASON_MAP: Record<PrReason, true> = {
   timeout: true, offline: true, unauthenticated: true, 'rate-limit': true,
   'no-remote': true, unsupported: true, 'agent-down': true, error: true,
   'merge-unproven': true, 'branch-drift': true,
+  unavailable: true, truncated: true,
 };
 export const PR_REASONS: readonly PrReason[] = Object.keys(PR_REASON_MAP) as PrReason[];
 
@@ -376,7 +391,7 @@ export interface PrState {
   checkNames: string[] | null;
   ahead: number;                 // commits past base
   /** Why `phase` is `unknown` — see `PrReason` above, which is where the
-   *  vocabulary is defined and where a tenth member is added. Null when the
+   *  vocabulary is defined and where the next member is added. Null when the
    *  phase is not `unknown`, or when a read succeeded. */
   reason: PrReason | null;
   checkedAt: number | null;      // epoch ms of the gh read that produced this

@@ -551,6 +551,20 @@ describe('failure is an ANSWER, not an error', () => {
     [1, 'gh: To get started with GitHub CLI, please run: gh auth login', 'unauthenticated'],
     [1, 'HTTP 403: API rate limit exceeded', 'rate-limit'],
     [1, 'dial tcp: lookup api.github.com: no such host', 'offline'],
+    // GitHub's own 5xx, VERBATIM as api.github.com/graphql sent it — measured
+    // on 2026-08-26 against a live repo with several thousand PRs of history
+    // (3/3 attempts, persistent, not a blip) and re-measured byte-for-byte at
+    // execution time. This is the shape that produced the mail this work
+    // exists for: `pr-unmeasurable: pr-state answered no full line`, with
+    // nothing in it a coordinator could act on.
+    [1, "HTTP 504: We couldn't respond to your request in time. Sorry about that. "
+      + 'Please try resubmitting your request and contact us if the problem persists. '
+      + '(https://api.github.com/graphql)', 'unavailable'],
+    // The SAME query at `--limit 50` on the same repo the same day: gh got a
+    // body and the body stopped mid-stream. rc 1 and an empty answer, exactly
+    // like the 504 — and a different fact about the world, which is the whole
+    // reason it gets a different token.
+    [1, 'unexpected end of JSON input', 'truncated'],
     [1, 'something else entirely', 'error'],
   ])('rc %i maps to reason %s on stdout with exit 0', (rc, stderr, reason) => {
     workspaceWithCommit('demo', 'quiet-basin');
@@ -558,6 +572,33 @@ describe('failure is an ANSWER, not an error', () => {
     const r = h.run(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`);
     expect(r.code).toBe(0);
     expect(JSON.parse(r.stdout)).toEqual({ phase: 'unknown', reason });
+  });
+
+  // The arms above pin ONE spelling each, and each new arm matches four (or
+  // two). An arm reduced to the single alternative its table row happens to
+  // carry would leave the table green while `HTTP 502` — the other half of what
+  // a GitHub outage actually emits — went back to the catch-all. So every
+  // alternative is exercised, and each says out loud what it is NOT.
+  //
+  // `error` is not a bug; it is the honest name for a fault with no known
+  // shape. What is a bug is spending it on two faults whose shape IS known: a
+  // 5xx says the far side is unwell and the same query will fail again the same
+  // way, and a truncated body says the far side started answering and stopped —
+  // one is worth backing off, the other is worth retrying, and `error` says
+  // neither.
+  it.each([
+    ['HTTP 500: Internal Server Error (https://api.github.com/graphql)', 'unavailable'],
+    ['HTTP 502: Bad Gateway (https://api.github.com/graphql)', 'unavailable'],
+    ['HTTP 503: Service Unavailable (https://api.github.com/graphql)', 'unavailable'],
+    ['HTTP 504: We could not respond to your request in time.', 'unavailable'],
+    ['unexpected end of JSON input', 'truncated'],
+    ['unexpected EOF', 'truncated'],
+  ])('%s is classified, not swept into the catch-all', (stderr, reason) => {
+    workspaceWithCommit('demo', 'quiet-basin');
+    h.ghFail(1, stderr);
+    const o = JSON.parse(h.run(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`).stdout);
+    expect(o.reason).toBe(reason);
+    expect(o.reason, 'a fault with a known shape must not read as an unexplained one').not.toBe('error');
   });
 
   it('leaves the persisted prphase untouched when the read failed', () => {

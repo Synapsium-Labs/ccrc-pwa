@@ -48,7 +48,7 @@ const CHECK_GLYPH: Record<Exclude<PrChecks, null>, string> = {
 
 /** Integration finding 7: the fourth site of the reason vocabulary, and the
  *  ONLY one of the four that already failed when the vocabulary grew — a
- *  `Record` over the union is exhaustive, so a tenth reason is a compile error
+ *  `Record` over the union is exhaustive, so a NEW reason is a compile error
  *  right here until somebody writes the sentence a human reads. That is the
  *  property the other three now have too: `PrReason` is the union, `PR_REASONS`
  *  is derived from it via `Record<PrReason, true>`, and both validators ask
@@ -81,6 +81,17 @@ const REASON_TEXT: Record<PrReason, string> = {
   // because unlike every other reason here this one is fixed by the operator
   // rather than by waiting.
   'branch-drift': 'ccrc’s registry and git disagree about this workspace’s branch, so its PR was not measured. Reconcile with `ccd ws-rename`.',
+  // The two that split off `error` (measured on a live repo, 2026-08-26). Both
+  // are failed reads like the eight above, and both say something `error`
+  // could not: WHOSE fault it was, and therefore what happens next. This one
+  // names GitHub because the request arrived and GitHub could not finish it, so
+  // the reader must not go and check their own token — which is exactly where
+  // "GitHub could not be read." sent them.
+  unavailable: 'GitHub answered with a server error, so this could not be read.',
+  // And this one is the opposite advice: a read that was cut off will often
+  // succeed on the next sweep, so the copy says so rather than implying
+  // something is broken and wants fixing.
+  truncated: 'GitHub’s answer was cut off mid-way. ccrc will try again.',
 };
 
 /** Task 3 review finding 9's docket: the registry persists `prPhase` and

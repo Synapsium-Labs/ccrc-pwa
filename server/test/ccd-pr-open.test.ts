@@ -437,6 +437,26 @@ describe('the existence probe fails closed', () => {
     expect(h.ghCalls().some((c) => c.startsWith('pr create'))).toBe(false);
   });
 
+  it('says GitHub was unwell when GitHub was unwell — not that it could not be read', () => {
+    // The other half of "one reader": a token the classifier learns for
+    // `pr-state` reaches this verb's refusal sentence for free, because the
+    // sentence quotes `_gh_pr_list`'s own answer object rather than restating a
+    // vocabulary. The distinction is worth as much here as on the phone —
+    // `(error)` sends the operator to check `gh auth` for a probe that failed
+    // because api.github.com could not finish a query.
+    workspace('demo', 'quiet-basin');
+    const origin = path.join(h.home, 'origins', 'demo.git');
+    h.ghFail(1, "HTTP 504: We couldn't respond to your request in time. (https://api.github.com/graphql)\n");
+    const r = open();
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/could not check for an existing PR on ws\/quiet-basin \(unavailable\)/);
+    expect(r.stderr).not.toMatch(/\(error\)/);
+    // Fails CLOSED exactly as every other classified failure does: an
+    // unmeasured "no PR exists" may not be spent on a push or a create.
+    expect(h.ghCalls().some((c) => c.startsWith('pr create'))).toBe(false);
+    expect(() => h.git(origin, 'rev-parse', '--verify', 'refs/heads/ws/quiet-basin')).toThrow();
+  });
+
   it('refuses an rc-0 body that is not a list of PRs, instead of answering with it', () => {
     // `gh` writes its own diagnostics to STDOUT at rc 0. The route (Task 13)
     // answers {ok:true} on rc 0 without parsing stdout, so this exact string

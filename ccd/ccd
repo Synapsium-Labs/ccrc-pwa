@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=17c90f90205a487f850eb0b48043f384cb92ebe295ebce14a1748aa6890a7e2c
+# ccrc:generated 1 sha256=2f18d14a77b4d72670fb839bb18b06e58018ebfb5d49d302de41416cc5009160
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1849,6 +1849,44 @@ _gh_pr_list() {   # repo [head-branch] -> rows JSON on stdout; on failure prints
       *"gh auth login"*|*"not logged in"*|*"HTTP 401"*) printf '{"phase":"unknown","reason":"unauthenticated"}\n' ;;
       *"rate limit"*|*"HTTP 403"*)                      printf '{"phase":"unknown","reason":"rate-limit"}\n' ;;
       *"dial tcp"*|*"no such host"*|*"proxyconnect"*)   printf '{"phase":"unknown","reason":"offline"}\n' ;;
+      # GITHUB'S OWN 5xx. Measured 2026-08-26 against a live fleet repo with
+      # several thousand PRs of history — the slug is operator residue and
+      # stays out of this tree. The 100-PR `statusCheckRollup` window this
+      # function sends answers
+      # `HTTP 504: We couldn't respond to your request in time. …
+      # (https://api.github.com/graphql)` after 11.2 s, on 3/3 attempts — a
+      # standing property of that repo's PR history, not a blip. It went out as
+      # `error`, which the cap renders "GitHub could not be read." and which
+      # reached a coordinator as `pr-unmeasurable` with nothing in it to act on.
+      #
+      # It is a different FACT from every arm above and from the default: the
+      # token is fine, DNS resolved, the request arrived — the far side could
+      # not finish it. That distinction is the whole of what a reader needs,
+      # because it says the same query will fail the same way and the remedy is
+      # to ask GitHub for less, not to go and check `gh auth` on the box.
+      #
+      # Matched on the CODE and never on the prose, which is GitHub's to reword
+      # whenever it likes. All four of 500/502/503/504 are here because an
+      # outage emits them interchangeably and an arm that knows only the one
+      # code we happened to catch is an arm that lapses at the next one.
+      *"HTTP 500"*|*"HTTP 502"*|*"HTTP 503"*|*"HTTP 504"*) printf '{"phase":"unknown","reason":"unavailable"}\n' ;;
+      # A BODY THAT STARTED AND STOPPED. Same repo, same day, the same query at
+      # `--limit 50`: `unexpected end of JSON input` — Go's decoder meeting EOF
+      # mid-value, so gh was being answered and the answer ran out. rc 1 and an
+      # empty stdout, indistinguishable from the 504 at the exit code, and a
+      # different thing entirely.
+      #
+      # Not `unavailable`: nothing here says the far side is unwell, and unlike
+      # a 504 an identical retry may simply succeed. Not `error`: "the answer
+      # was cut off" IS a shape, and it is the one shape in this case statement
+      # that says the read was interrupted rather than refused — which is the
+      # difference between waiting and narrowing the question.
+      *"unexpected end of JSON input"*|*"unexpected EOF"*) printf '{"phase":"unknown","reason":"truncated"}\n' ;;
+      # Still the default, and still `error` — the honest name for a fault with
+      # no known shape. Every arm above it earned its token by being MEASURED
+      # against a live repo; inventing a sixth classification from a string
+      # nobody has seen would put a confident sentence on the phone about a
+      # condition nobody diagnosed, which is the failure `error` exists to avoid.
       *)                                                printf '{"phase":"unknown","reason":"error"}\n' ;;
     esac
     return 1
