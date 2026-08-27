@@ -589,12 +589,38 @@ _check_git_email() {
     scope=--system
     email="$(_dr_trim "$(git config --system user.email 2>/dev/null)")"
   fi
-  if [ -z "$email" ]; then
-    _dr_fail git_email "not set for this box (nothing in ~/.gitconfig or /etc/gitconfig) — a commit in any repository that does not set its own would be refused" \
-      "run: git config --global user.email \"you@example.com\" (and user.name alongside it)"
-    return 1
+  if [ -n "$email" ]; then
+    _dr_pass git_email "$email (git config $scope user.email)"
+    return 0
   fi
-  _dr_pass git_email "$email (git config $scope user.email)"
+  # ABSENT-BY-POLICY vs NEVER-CONFIGURED (D-893). Until this arm existed it read
+  # `user.email` alone and called empty a failure, which collapsed two states an
+  # operator handles completely differently — the overloaded-null-at-a-seam
+  # shape this tree bans by name.
+  #
+  # `user.useConfigOnly` is git's own way to SAY "identity is per-repository":
+  # with it set, git refuses to invent one from user@host and demands an
+  # explicit `user.email` in each repo. That is a stronger posture than a global
+  # default, not a weaker one, and on a box carrying several identities it is
+  # the correct one — a global default silently attributes a commit to the wrong
+  # address whenever a repo forgets its own, and a wrong author is permanent in
+  # history where a refusal is loud and fixable.
+  #
+  # Measured on the fleet box that prompted this: three distinct identities in
+  # use across twenty repositories, every one of them setting its own, and zero
+  # missing. `ccd ws-add` uses `git worktree add` (not `clone`), so a new
+  # workspace inherits its parent's identity — which is why the fleet never hit
+  # this despite the check failing for months.
+  local only
+  only="$(_dr_trim "$(git config --global user.useConfigOnly 2>/dev/null)")"
+  if [ "$only" = true ]; then
+    _dr_pass git_email "per-repository by policy (git config --global user.useConfigOnly=true) — git refuses to invent an identity, so each repository states its own"
+    return 0
+  fi
+  # Neither an identity nor a policy: this box has simply never been told.
+  _dr_fail git_email "not set for this box, and no per-repository policy declared (nothing in ~/.gitconfig or /etc/gitconfig) — a commit in any repository that does not set its own would be refused" \
+    "pick ONE: git config --global user.email \"you@example.com\" (and user.name alongside it), OR — if identity is deliberately per-repository — git config --global user.useConfigOnly true"
+  return 1
 }
 
 # ── systemd linger ────────────────────────────────────────────────────────
