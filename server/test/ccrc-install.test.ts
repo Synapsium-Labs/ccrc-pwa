@@ -701,9 +701,14 @@ function pathWithout(home: string, missing: string): string {
   // landed: without this entry, the git fixture died at the wrappers step and
   // `says GIT IS ABSENT when git is absent` went red — the test's own trap,
   // sprung by a new dependency rather than by anything about git.
+  // grep is the launchctl STUB's own dependency (its `print` arm greps the
+  // loaded-labels file): without it every print answers 113, the job reads
+  // as never-up, and the enable step's stay-up gate fails the install — a
+  // second, hidden absence inside a fixture whose whole subject is ONE
+  // absence (measured on the macos leg's second run).
   for (const b of ['mkdir', 'cp', 'mv', 'rm', 'cat', 'chmod', 'cmp', 'date',
     'node', 'git', 'npm', 'rsync', 'bash', 'sleep', 'jq', 'mktemp', 'basename',
-    'diff', 'tmux', 'python3', 'flock', 'timeout', 'stat',
+    'diff', 'tmux', 'python3', 'flock', 'timeout', 'stat', 'grep',
     // macOS: the service manager, its plist linter, and `uname`. The last one
     // is not decoration — `ccd`'s platform detection prefers bash's own
     // `$OSTYPE` precisely so a PATH without `uname` cannot silently answer

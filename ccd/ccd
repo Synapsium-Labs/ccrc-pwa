@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=c30bbefcfb56c61d8832ac247e108e551582dce5966dea9d24ae2a61f30cfc7c
+# ccrc:generated 1 sha256=c74145d9352a362b8aa6f45abc043c9f8610db69e41479dbdf50d7964b98a0c1
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -263,7 +263,22 @@ _plat_mode() {    # <file> -> its permission bits, octal, e.g. 600
   # named — whether BSD pads `%Lp` on a sub-three-digit mode (007 as `007`)
   # is unmeasured from this box, and the all-zero strip answers GNU's bare
   # digits under either padding behaviour.
-  if [ "$CCD_OS" = darwin ]; then stat -f%Mp%Lp "$@" | sed 's/^0*\(.\)/\1/'; else stat -c%a "$@"; fi
+  #
+  # THE STRIP IS PURE BASH, NOT A PIPE THROUGH sed — the same lesson
+  # `_svc_is_active` records for grep: doctor runs these under a
+  # deliberately minimal PATH, and the first macos CI run measured a sed
+  # pipe here answering "mode unreadable" on a perfectly healthy box,
+  # failing the exposure check fleet-wide. Nothing below needs anything
+  # but stat and the shell.
+  if [ "$CCD_OS" = darwin ]; then
+    local _out _rc _line
+    _out=$(stat -f%Mp%Lp "$@"); _rc=$?
+    while IFS= read -r _line; do
+      while [ "${#_line}" -gt 1 ] && [ "${_line#0}" != "$_line" ]; do _line="${_line#0}"; done
+      printf '%s\n' "$_line"
+    done <<<"$_out"
+    return $_rc
+  else stat -c%a "$@"; fi
 }
 
 # `date -d <string>` PARSES an arbitrary date; BSD's `date` has no such flag
