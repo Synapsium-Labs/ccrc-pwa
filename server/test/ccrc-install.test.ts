@@ -478,7 +478,17 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
     '    f="$HOME/fixture-unit-$lbl"',
     '    if [ -f "$f" ]; then IFS= read -r v < "$f"; [ "$v" = active ] || exit 113; fi',
     '    if [ -f "$HOME/launchctl-loaded" ] && grep -q "^$lbl.plist$" "$HOME/launchctl-loaded"; then',
-    '      echo "	state = running"; exit 0',
+    '      echo "	state = running"',
+    // The stay-up gate (`_ccrc_job_stayed_up`) samples `pid = ` twice: the
+    // default is one stable pid (a job that stayed up); `fixture-pid-churn`
+    // makes every print answer a fresh one — a crash loop as launchd shows
+    // it. $((…)) strips wc's BSD padding so the pid is always bare digits.
+    '      if [ -f "$HOME/fixture-pid-churn" ]; then',
+    '        echo "	pid = $(($(wc -l < "$HOME/launchctl-calls") + 4000))"',
+    '      else',
+    '        echo "	pid = 4242"',
+    '      fi',
+    '      exit 0',
     '    fi',
     '    exit 113 ;;',
     '  *) echo "fixture launchctl: unexpected argv: $*" >&2; exit 90 ;;',
@@ -2276,6 +2286,40 @@ describeDarwin('ccrc install: the launchd job, and what macOS deliberately does 
     // something. The fact is carried by `ccrc doctor` as a standing WARN.
     expect(box.r.stdout).toMatch(/^install: linger: not a macOS concept/m);
     expect(box.r.stdout).toMatch(/^install: done — every step above converged$/m);
+  });
+});
+
+// The launchd FAILURE branches — the Darwin siblings of the Linux describe's
+// three failure tests, minus the one macOS does not implement: there is no
+// separate `restart` step in `_inst_enable_darwin` (bootout+bootstrap IS the
+// reload), so "refuses when the restart itself fails" has no Darwin condition
+// to test. What remains is the refusal and the stay-up gate, and both were
+// shipped without a test that reaches them — the `fixture-bootstrap-fail`
+// knob in the launchctl stub existed with no writer.
+describeDarwin('ccrc install: the launchd failure branches — the refusal, and the stay-up gate', () => {
+  it('refuses BY LABEL when launchd will not bootstrap the job — the sibling of "refuses BY UNIT when systemd will not enable one"', () => {
+    const home = freshBox('ccrc-install-bootfail-');
+    writeFileSync(join(home, 'fixture-bootstrap-fail'), 'yes\n');
+    const r = runInstall(home);
+    expect(r.code, 'a bootstrap launchd refused must FAIL the install').not.toBe(0);
+    expect(r.stderr).toMatch(/launchctl bootstrap failed for app\.ccrc\.ccrc/);
+    // The remedy names the command this box actually has.
+    expect(r.stderr).toMatch(/launchctl print gui\//);
+    expect(r.stdout, 'the install must not report the step as done')
+      .not.toMatch(/^install: services: app\.ccrc\.ccrc bootstrapped/m);
+  });
+
+  it('fails the install when the bootstrapped job does not stay up — fork-time success is not a service', () => {
+    // Every `launchctl print` answers a fresh pid: a crash loop as launchd
+    // shows one, while `bootstrap` itself still exits 0. The doctrine above
+    // `_inst_enable` binds this arm too: a box whose service will not stay
+    // up is a FAILED install, not a warning.
+    const home = freshBox('ccrc-install-stayup-');
+    writeFileSync(join(home, 'fixture-pid-churn'), 'yes\n');
+    const r = runInstall(home);
+    expect(r.code, 'a job that did not stay up must FAIL the install').not.toBe(0);
+    expect(r.stderr).toMatch(/did not stay up/);
+    expect(r.stderr).toMatch(/launchctl print gui\//);
   });
 });
 

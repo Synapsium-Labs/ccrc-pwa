@@ -118,7 +118,7 @@ function box(prefix: string): string {
  *  per call, to `$HOME/systemctl-argv`) and succeeds — the happy-path shape of
  *  a box with a session bus. The default stays the poison: exit 97 IS a test —
  *  the degraded arm — and containment besides. */
-function env(home: string, opts: { systemctlOk?: boolean } = {}): NodeJS.ProcessEnv {
+function env(home: string, opts: { systemctlOk?: boolean; launchctlOk?: boolean } = {}): NodeJS.ProcessEnv {
   const e = ghContainedEnv(home, { ...process.env, HOME: home });
   // curl and systemctl are poisoned the way ccrc-cli.test.ts poisons them —
   // Task 3's duckdns arm runs `systemctl --user`, and containment each test
@@ -133,6 +133,14 @@ function env(home: string, opts: { systemctlOk?: boolean } = {}): NodeJS.Process
       '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/systemctl-argv"\nexit 0\n', { mode: 0o755 });
   } else {
     poison('systemctl', 'ccrc tests must never touch this box\'s real systemd');
+  }
+  // launchctl needs no poison: without a stub on PATH, the platform layer's
+  // own sandbox-HOME guard refuses the call before any binary runs (that is
+  // itself a tested property, macos-platform.test.ts). `launchctlOk` is the
+  // Darwin twin of `systemctlOk` — a recorder for the argv-order pins.
+  if (opts.launchctlOk) {
+    writeFileSync(join(home, '.local', 'bin', 'launchctl'),
+      '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/launchctl-argv"\nexit 0\n', { mode: 0o755 });
   }
   for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT']) delete e[k];
   return e;
@@ -170,7 +178,7 @@ const PROMPTS = /(DuckDNS subdomain|DuckDNS token|Public origin|Passkey rp id|Ad
  *  without a terminal the only reachable branch is the refusal. */
 function runExposeTty(
   home: string, args: string[], entries: string[],
-  opts: { systemctlOk?: boolean } = {},
+  opts: { systemctlOk?: boolean; launchctlOk?: boolean } = {},
 ): Promise<Result> {
   return new Promise((resolve) => {
     const p = pty.spawn(BASH, [ccrcIn(home), 'expose', ...args], {
@@ -704,6 +712,38 @@ describe('ccrc expose: the duckdns updater units', () => {
     expect(body).toContain('.ccrc/exposure.env');
     expect(body).toContain('${CCRC_DDNS_TOKEN}');
     expect(body, 'the token was inlined into a 0644 file').not.toContain(TOKEN);
+  });
+
+  itDarwin('bootouts, enables, then bootstraps app.ccrc.ccrc-ddns — that argv, that order: the job is ARMED, not only written', async () => {
+    // The dead-code shape this pins against, found by PR #11's review: the
+    // first cut of `_exp_ddns_units` installed the plist and RETURNED, with
+    // the bootstrap block below its `return 0` — so on macOS the job file
+    // landed, was never bootstrapped, the record never refreshed, and
+    // neither the "enabled" nor the "DEGRADED" line could ever print. A
+    // sibling of the Linux argv-order test would have caught it; this is it.
+    const home = box('ccrc-expose-ddns-darwin-argv-');
+    const r = await runExposeTty(home, ['duckdns'], [SUB, TOKEN, ''], { launchctlOk: true });
+    expect(r.code, r.stdout).toBe(0);
+    const argv = readFileSync(join(home, 'launchctl-argv'), 'utf8')
+      .split('\n').filter((l) => l !== '');
+    expect(argv[0]).toMatch(/^bootout gui\/\d+\/app\.ccrc\.ccrc-ddns$/);
+    expect(argv[1]).toMatch(/^enable gui\/\d+\/app\.ccrc\.ccrc-ddns$/);
+    expect(argv[2]).toMatch(/^bootstrap gui\/\d+ \S+\/Library\/LaunchAgents\/app\.ccrc\.ccrc-ddns\.plist$/);
+    expect(r.stdout).toMatch(/^expose: app\.ccrc\.ccrc-ddns enabled/m);
+    expect(r.stdout).not.toMatch(/DEGRADED/);
+  });
+
+  itDarwin('a refusing launchctl DEGRADES, never dies: the job file installed, exit 0, the exact bootstrap command printed', async () => {
+    // The sibling of "a failing systemctl DEGRADES". No launchctl stub is
+    // planted, so the platform layer's sandbox-HOME guard refuses the call —
+    // the same "no manager reachable" shape the Linux poison stands in for.
+    const home = box('ccrc-expose-ddns-darwin-degraded-');
+    const r = await runExposeTty(home, ['duckdns'], [SUB, TOKEN, '']);
+    expect(r.code, r.stdout).toBe(0);
+    expect(existsSync(join(home, 'Library', 'LaunchAgents', 'app.ccrc.ccrc-ddns.plist')),
+      'the job file must land even when the bootstrap cannot').toBe(true);
+    expect(r.stdout).toMatch(/^expose: DEGRADED — could not bootstrap app\.ccrc\.ccrc-ddns/m);
+    expect(r.stdout).toMatch(/launchctl bootstrap gui\/\d+ \S*app\.ccrc\.ccrc-ddns\.plist/);
   });
 
   itLinux('duckdns installs ccrc-ddns.service + ccrc-ddns.timer (0644) — the shipped templates, byte for byte', async () => {

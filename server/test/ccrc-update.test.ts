@@ -44,7 +44,7 @@ import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
-import { itLinux } from './platformFixtures.js';
+import { itLinux, itDarwin } from './platformFixtures.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -168,7 +168,16 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     '  print)',
     '    lbl="${2##*/}"',
     '    if [ -f "$HOME/launchctl-loaded" ] && grep -q "^$lbl.plist$" "$HOME/launchctl-loaded"; then',
-    '      echo "	state = running"; exit 0',
+    '      echo "	state = running"',
+    // The sweep's stay-up gate samples `pid = ` twice per kicked job; a
+    // stable default is a job that stayed up, `fixture-pid-churn` a crash
+    // loop. Same knob as ccrc-install.test.ts's stub.
+    '      if [ -f "$HOME/fixture-pid-churn" ]; then',
+    '        echo "	pid = $(($(wc -l < "$HOME/launchctl-calls") + 4000))"',
+    '      else',
+    '        echo "	pid = 4242"',
+    '      fi',
+    '      exit 0',
     '    fi',
     '    exit 113 ;;',
     '  *) echo "fixture launchctl: unexpected argv: $*" >&2; exit 90 ;;',
@@ -718,6 +727,103 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
     const calls = readFileSync(join(home, 'systemctl-calls'), 'utf8');
     expect(calls).not.toMatch(/try-restart/);
     expect(existsSync(join(home, 'tmux-argv'))).toBe(false);
+  });
+
+  // ── The Darwin siblings: the same outcomes, launchd's vocabulary ─────────
+  // The macOS counterpart of the R1 preflight is `AbandonProcessGroup`, read
+  // from the plist on disk; the restart is `launchctl kickstart -k`, which
+  // without that key kills the job's whole process group — the shared tmux
+  // server included. These four run against the recording launchctl stub in
+  // `updateEnv`, never a real launchd.
+  const plantSessionPlist = (home: string, id: string,
+    opts: { abandons?: boolean; loaded?: boolean } = {}): void => {
+    const { abandons = true, loaded = true } = opts;
+    const agents = join(home, 'Library', 'LaunchAgents');
+    mkdirSync(agents, { recursive: true });
+    const key = abandons ? '<key>AbandonProcessGroup</key><true/>' : '';
+    writeFileSync(join(agents, `app.ccrc.session.${id}.plist`),
+      '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>'
+      + `<key>Label</key><string>app.ccrc.session.${id}</string>${key}</dict></plist>\n`);
+    if (loaded) appendFileSync(join(home, 'launchctl-loaded'), `app.ccrc.session.${id}.plist\n`);
+  };
+
+  itDarwin('with AbandonProcessGroup in every job file, the sweep kickstarts each loaded session and re-measures it still up', () => {
+    const home = freshUpdateBox('ccrc-update-sweep-darwin-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantSessionPlist(home, 'alpha');
+    plantSessionPlist(home, 'beta');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    const calls = readFileSync(join(home, 'launchctl-calls'), 'utf8');
+    expect(calls).toMatch(/^kickstart -k gui\/\d+\/app\.ccrc\.session\.alpha$/m);
+    expect(calls).toMatch(/^kickstart -k gui\/\d+\/app\.ccrc\.session\.beta$/m);
+    // Panes are NEVER touched, on this platform exactly as on the other.
+    expect(existsSync(join(home, 'tmux-argv')), 'the sweep reached for tmux').toBe(false);
+    expect(r.stdout).toMatch(/^update: sweep: /m);
+    expect(r.stdout).toContain('2 restarted and re-measured still up');
+    expect(r.stdout).not.toMatch(/DEGRADED/);
+  });
+
+  itDarwin('a job file missing AbandonProcessGroup REFUSES the sweep — loud on stderr, DEGRADED on stdout, and NO kickstart for ANY session', () => {
+    const home = freshUpdateBox('ccrc-update-sweep-darwin-refused-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantSessionPlist(home, 'alpha');
+    plantSessionPlist(home, 'beta', { abandons: false });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    // The sweep is refused, not the update: the run completes, reports, exits 0.
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^update: build: /m);
+    expect(r.stderr).toMatch(/sweep REFUSED/);
+    expect(r.stderr).toContain('AbandonProcessGroup');
+    // The remedy names the BARE id `ccd start` actually takes.
+    expect(r.stderr).toContain('ccd start beta');
+    expect(r.stderr).not.toContain('ccd start beta.service');
+    // The transcript line rides STDOUT, as the Linux arm's does — the stream
+    // divergence was measured (>&2 on the Darwin line only) and fixed; a
+    // stdout-only capture must not read as a clean update.
+    expect(r.stdout).toMatch(/^update: DEGRADED: the supervisor sweep/m);
+    expect(r.stderr).not.toMatch(/^update: DEGRADED/m);
+    const calls = existsSync(join(home, 'launchctl-calls'))
+      ? readFileSync(join(home, 'launchctl-calls'), 'utf8') : '';
+    expect(calls).not.toMatch(/kickstart/);
+    expect(existsSync(join(home, 'tmux-argv'))).toBe(false);
+  });
+
+  itDarwin('a kicked supervisor whose pid did not hold across the window FAILS the update, naming the pre-update backup', () => {
+    const home = freshUpdateBox('ccrc-update-sweep-darwin-loop-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantSessionPlist(home, 'alpha');
+    // Every `launchctl print` answers a fresh pid: a crash loop as launchd
+    // shows one. kickstart itself still exits 0 — the gap under test.
+    writeFileSync(join(home, 'fixture-pid-churn'), 'yes\n');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, 'a supervisor that did not stay up must FAIL the update').not.toBe(0);
+    expect(r.stderr).toMatch(/did not stay up/);
+    // The one line in the whole update path that points at the rollback.
+    expect(r.stderr).toMatch(/pre-update backup is complete at \S*ccrc-backups/);
+  });
+
+  itDarwin('a session carrying the start-limit stamp is warned about and skipped — not kicked, not fatal', () => {
+    const home = freshUpdateBox('ccrc-update-sweep-darwin-failed-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantSessionPlist(home, 'alpha');
+    // gamma was booted out by the start-limit emulation: stamp on disk, job
+    // no longer loaded — `_svc_list_sessions` still enumerates its plist.
+    plantSessionPlist(home, 'gamma', { loaded: false });
+    mkdirSync(join(home, '.cc-sessions'), { recursive: true });
+    writeFileSync(join(home, '.cc-sessions', 'gamma.svcfailed'), '1\n');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stderr).toMatch(/^update: warning: claude-session@gamma\.service is FAILED/m);
+    expect(r.stderr).toContain('ccd start gamma');
+    const calls = readFileSync(join(home, 'launchctl-calls'), 'utf8');
+    expect(calls).toMatch(/^kickstart -k gui\/\d+\/app\.ccrc\.session\.alpha$/m);
+    expect(calls).not.toMatch(/kickstart -k gui\/\d+\/app\.ccrc\.session\.gamma/);
+    expect(r.stdout).toContain('1 restarted and re-measured still up');
   });
 });
 

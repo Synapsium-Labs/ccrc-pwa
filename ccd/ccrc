@@ -3337,6 +3337,23 @@ PL
     _inst_atomic "$gen" "$dir/$lbl.plist" 644
     rm -f -- "$gen"
     echo "expose: installed $lbl in \$HOME/Library/LaunchAgents (the token stays in $CCRC_EXPOSURE_FILE — the job reads it, never carries it; a missed refresh waits for the next 5-minute tick, where systemd's Persistent=true would catch up immediately)"
+    # ── ARMED HERE, IN THE SAME ARM THAT INSTALLED IT ────────────────────
+    # The first cut of this function wrote the plist and returned; a second
+    # Darwin block forty lines down held the bootstrap — BELOW this arm's
+    # `return 0`, so it was unreachable: on macOS the job file landed and was
+    # never bootstrapped, the record never refreshed, and neither transcript
+    # line below could ever print (found by PR #11's review; no test asserted
+    # a bootstrap). ONE LABEL where Linux enables the .timer and lets it pull
+    # its .service — the pair collapses into this single plist, per the
+    # header above. bootout first for `_inst_enable_darwin`'s reason: it is
+    # how launchd spells "load the file I just rewrote".
+    _svc_launchctl bootout "$(_svc_domain)/$lbl" 2>/dev/null
+    if _svc_launchctl enable "$(_svc_domain)/$lbl" 2>/dev/null \
+       && _svc_launchctl bootstrap "$(_svc_domain)" "$dir/$lbl.plist" 2>/dev/null; then
+      echo "expose: $lbl enabled — the DuckDNS record refreshes every 5 minutes"
+    else
+      echo "expose: DEGRADED — could not bootstrap $lbl. The job file is installed; when you can, run: launchctl bootstrap $(_svc_domain) $dir/$lbl.plist"
+    fi
     return 0
   fi
   local tree="$CCRC_HERE/.." dir="$BOX_UNIT_DIR"
@@ -3349,19 +3366,6 @@ PL
   # find the bus without them. daemon-reload BEFORE enable, also its reason.
   : "${XDG_RUNTIME_DIR:=/run/user/$UID}"; export XDG_RUNTIME_DIR
   : "${DBUS_SESSION_BUS_ADDRESS:=unix:path=${XDG_RUNTIME_DIR}/bus}"; export DBUS_SESSION_BUS_ADDRESS
-  # ONE LABEL ON DARWIN, where Linux enables the .timer and lets it pull its
-  # .service — see `_exp_ddns_units`' Darwin arm for why the pair collapses.
-  if [ "$CCD_OS" = darwin ]; then
-    local _dl="app.ccrc.$CCRC_DDNS_UNIT"
-    _svc_launchctl bootout "$(_svc_domain)/$_dl" 2>/dev/null
-    if _svc_launchctl enable "$(_svc_domain)/$_dl" 2>/dev/null \
-       && _svc_launchctl bootstrap "$(_svc_domain)" "$BOX_UNIT_DIR/$_dl.plist" 2>/dev/null; then
-      echo "expose: $_dl enabled — the DuckDNS record refreshes every 5 minutes"
-    else
-      echo "expose: DEGRADED — could not bootstrap $_dl. The job file is installed; when you can, run: launchctl bootstrap $(_svc_domain) $BOX_UNIT_DIR/$_dl.plist"
-    fi
-    return 0
-  fi
   if systemctl --user daemon-reload && systemctl --user enable --now "$CCRC_DDNS_UNIT.timer"; then
     echo "expose: $CCRC_DDNS_UNIT.timer enabled — the DuckDNS record refreshes every 5 minutes"
   else
@@ -4651,11 +4655,21 @@ _inst_enable_darwin() {
   _svc_launchctl enable "$(_svc_domain)/$label" 2>/dev/null
   _svc_launchctl bootstrap "$(_svc_domain)" "$BOX_UNIT_DIR/$label.plist" \
     || _ccrc_die "launchctl bootstrap failed for $label, so this box has the job file and not the service — read what it says: launchctl print $(_svc_domain)/$label"
+  # ── AND THEN THE STAY-UP GATE, WHOSE FAILURE IS FATAL ────────────────────
+  # `bootstrap` returns as soon as launchd accepts the job — the same fork-
+  # time success `systemctl enable --now` reports, and the same gap the Linux
+  # arm closes with deploy/verify-service.sh below its restart. The doctrine
+  # comment above `_inst_enable` binds this arm too: "A box whose service
+  # will not stay up is a FAILED install, not a warning." Two pid samples
+  # across a window longer than the plist's ThrottleInterval are that check
+  # in launchd's vocabulary (`_ccrc_job_stayed_up`).
+  _ccrc_job_stayed_up "$main" \
+    || _ccrc_die "$label was bootstrapped and did not stay up ($CCRC_STAYED_DETAIL), so this box has the job file and not the service — read what it says: launchctl print $(_svc_domain)/$label"
   # `install: services:`, NOT `install: enable:` — the STEP is the same one
   # the Linux arm reports under that name, and the transcript is read by step
   # (a test walks the whole list; an operator greps for the step that did not
   # print). A second vocabulary for one step would make both readers wrong.
-  echo "install: services: $label bootstrapped into $(_svc_domain)"
+  echo "install: services: $label bootstrapped into $(_svc_domain) and re-measured still up"
 }
 
 # LINGER HAS NO macOS EQUIVALENT, and the honest thing is to say which
@@ -5239,6 +5253,44 @@ _upd_backup_copy() {   # <src> <name under $UPD_BACKUP_DIR> — absent src is or
 # `cmd_supervise` re-enters via `cmd_ensure`, which ATTACHES to a live
 # session rather than spawning a second one. A test pins that no tmux argv
 # appears anywhere in a sweep.
+
+# ── the launchd stay-up gate — verify-service.sh's technique, in-process ──
+# `launchctl kickstart -k` and `launchctl bootstrap` return as soon as launchd
+# ACCEPTS the job, exactly as `systemctl restart` returns at the fork — they
+# say nothing about whether the process stayed up. verify-service.sh closes
+# that gap on Linux with two MainPID samples either side of a window LONGER
+# than the unit's RestartSec; these two helpers are the same promise against
+# launchd, whose restart delay is the plist's ThrottleInterval (3, written by
+# `_svc_write_session_plist` and `_inst_plist_server`). A crash-looping job
+# changes its pid inside a window longer than that; a pid that did not change
+# is a pid that did not change. The knobs are verify-service.sh's own
+# (`CCRC_VERIFY_SETTLE`/`CCRC_VERIFY_WINDOW`), honoured for the same reason:
+# a test must not wait 8 real seconds per case.
+#
+# Darwin-only by CALL SITE, not by branch: both callers (`_upd_sweep`'s and
+# `_inst_enable`'s Darwin arms) already sit inside a `$CCD_OS = darwin` arm,
+# so these carry no platform switch of their own — the Linux twin is
+# deploy/verify-service.sh, which reads systemd's vocabulary and stays the
+# one implementation there (single-definition's sweep pin holds the Linux
+# halves together; the Darwin halves are pinned by the same file's Darwin-arm
+# test).
+_ccrc_job_pid() {   # <unit> -> the job's pid on stdout, or nothing when it has none
+  local out
+  out="$(_svc_launchctl print "$(_svc_domain)/$(_svc_label "$1")" 2>/dev/null)" || return 0
+  case "$out" in
+    *"pid = "*) out="${out#*pid = }"; printf '%s' "${out%%[!0-9]*}" ;;
+  esac
+  return 0
+}
+_ccrc_job_stayed_up() {   # <unit> -> 0 iff ONE pid held across the window; detail in CCRC_STAYED_DETAIL
+  local p1 p2
+  sleep "${CCRC_VERIFY_SETTLE:-3}"
+  p1="$(_ccrc_job_pid "$1")"
+  sleep "${CCRC_VERIFY_WINDOW:-5}"
+  p2="$(_ccrc_job_pid "$1")"
+  CCRC_STAYED_DETAIL="pid ${p1:-none} -> ${p2:-none} across ${CCRC_VERIFY_SETTLE:-3}s+${CCRC_VERIFY_WINDOW:-5}s"
+  [ -n "$p1" ] && [ "$p1" = "$p2" ]
+}
 _upd_sweep() {
   # ── THE DARWIN ARM ──────────────────────────────────────────────────────
   # Same job, same guard, different observable. The sweep exists because a
@@ -5255,24 +5307,61 @@ _upd_sweep() {
   # would kill panes. The remedy is per-session and safe — `ccd start <id>`
   # rewrites the plist through `_svc_write_session_plist`.
   if [ "$CCD_OS" = darwin ]; then
-    local u lbl plist missing=0
+    local u sid plist missing=0
     for u in $(_svc_list_sessions); do
       plist="$(_svc_plist "$u")"
       [ -f "$plist" ] || continue
       if ! grep -q 'AbandonProcessGroup' "$plist"; then
-        echo "update: sweep REFUSED — $(_svc_plist "$u") carries no AbandonProcessGroup, and the sweep needs it: without that key launchd kills the job's whole process group on restart, and whenever the tmux server placement falls back to a bare create every session on this box is a child of ONE tmux server — so a restart would take the lot. Re-enable that session to rewrite its job file: ccd start ${u#claude-session@}" >&2
+        # `ccd start` takes the BARE session id — both decorations stripped,
+        # or the remedy hands the operator an id ccd does not recognise.
+        sid="${u#claude-session@}"; sid="${sid%.service}"
+        echo "update: sweep REFUSED — $(_svc_plist "$u") carries no AbandonProcessGroup, and the sweep needs it: without that key launchd kills the job's whole process group on restart, and whenever the tmux server placement falls back to a bare create every session on this box is a child of ONE tmux server — so a restart would take the lot. Re-enable that session to rewrite its job file: ccd start $sid" >&2
         missing=1
       fi
     done
     if [ "$missing" = 1 ]; then
-      echo "update: DEGRADED: the supervisor sweep did not run — every live claude-session@ supervisor keeps executing the PREVIOUS ccd until restarted." >&2
+      # STDOUT, exactly as the Linux arm's DEGRADED line is: the two-stream
+      # split is the function's stated contract (the header above — stderr is
+      # the diagnosis, stdout is the transcript of what the update did and did
+      # not do), and a stdout-only capture of a macOS run must not read as a
+      # clean update. The remedy tail names the per-session fix the same way
+      # the Linux line names its try-restart.
+      echo "update: DEGRADED: the supervisor sweep did not run — every live claude-session@ supervisor keeps executing the PREVIOUS ccd until restarted. Fix the job files above (ccd start <id> rewrites each), then restart per session: launchctl kickstart -k $(_svc_domain)/<label>"
       return 0
     fi
+    # `_svc_try_restart`'s `_svc_is_loaded || return 0` skips a job launchd no
+    # longer holds — which is exactly where a `.svcfailed` session sits: the
+    # start-limit emulation booted it out when it gave up (`cmd_supervise`).
+    # The Linux arm warns about `--state=failed` units try-restart skipped;
+    # silence here would be the same session, skipped with no line at all.
+    # A plist that is merely NOT LOADED (next login will bootstrap it) is not
+    # this update's business and is skipped without comment, exactly as a
+    # stopped unit is on Linux.
+    local -a kicked=()
     for u in $(_svc_list_sessions); do
+      if [ "$(_svc_is_active "$u")" = failed ]; then
+        sid="${u#claude-session@}"; sid="${sid%.service}"
+        echo "update: warning: $u is FAILED (start-limit stamp) — the sweep skipped it and did not verify it. On the box: ccd start $sid (it clears the stamp and re-bootstraps the job)" >&2
+        continue
+      fi
+      _svc_is_loaded "$u" || continue
       _svc_try_restart "$u" \
-        || _ccrc_die "restarting $u failed — the supervisors' state is now mixed; read: $(_svc_status_hint "$u")"
+        || _ccrc_die "restarting $u failed — the supervisors' state is now mixed; read: $(_svc_status_hint "$u"). The pre-update backup is complete at $UPD_BACKUP_DIR"
+      kicked+=("$u")
     done
-    echo "update: sweep: every live claude-session@ supervisor now runs the ccd this update installed (AbandonProcessGroup verified in every job file)"
+    # THE STAY-UP GATE, and it is the half the first cut of this arm dropped:
+    # kickstart's exit is the exit of the KICK, not of the process surviving
+    # it — the exact gap deploy/verify-service.sh's header describes for
+    # systemd, and the reason the Linux arm below runs that script per active
+    # unit. Each restarted supervisor is held to the same standard here, and
+    # the failure names the rollback the way the Linux `_ccrc_die` does —
+    # this is the one line in the whole update path that points an operator
+    # at the backup, and on macOS it must be able to fire.
+    for u in ${kicked[@]+"${kicked[@]}"}; do
+      _ccrc_job_stayed_up "$u" \
+        || _ccrc_die "$u was restarted and did not stay up ($CCRC_STAYED_DETAIL) — read: $(_svc_status_hint "$u"). The pre-update backup is complete at $UPD_BACKUP_DIR"
+    done
+    echo "update: sweep: every live claude-session@ supervisor now runs the ccd this update installed (AbandonProcessGroup verified in every job file; ${#kicked[@]} restarted and re-measured still up)"
     return 0
   fi
   # The bus contingency `_inst_enable` carries, for the same reason: without
