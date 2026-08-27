@@ -84,7 +84,20 @@ if [ "$RELEASE_MODE" = true ]; then
 
   # Verify BEFORE extracting: a tarball that fails its checksum never gets
   # to put a single file on disk, let alone run one.
-  ( cd "$STAGING" && sha256sum -c SHA256SUMS >/dev/null 2>&1 ) \
+  #
+  # THE DIGEST TOOL IS CHOSEN BY PLATFORM, the same two-line shim
+  # `deploy/build-release.sh` uses (BR_SHA256), because this file is the
+  # bootstrap and can source nothing: `_plat_sha256_check` lives inside the
+  # tarball that has not been verified yet. `sha256sum` is GNU coreutils and
+  # macOS does not ship it — and because the check swallows its own stderr,
+  # a missing tool exits the subshell 127 and lands in the `||` arm: the
+  # first thing a macOS operator ever saw from ccrc was a FABRICATED
+  # supply-chain accusation about an intact download. `shasum -a 256 -c`
+  # reads the GNU-written two-space SHA256SUMS unchanged (measured against
+  # the published release). Unquoted on use, so the two words split.
+  SUM=sha256sum
+  [ "$(uname -s 2>/dev/null)" = Darwin ] && SUM="shasum -a 256"
+  ( cd "$STAGING" && $SUM -c SHA256SUMS >/dev/null 2>&1 ) \
     || { echo "install.sh: checksum verification FAILED for $TARNAME — refusing to extract or install" >&2; exit 1; }
 
   mkdir "$STAGING/tree"

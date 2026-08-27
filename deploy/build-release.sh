@@ -169,7 +169,11 @@ TARBALL="$OUT_DIR/ccrc-$VERSION.tar.gz"
 # that no longer means what it says.
 #
 # So this REFUSES rather than degrading. Downloading and verifying a release
-# is a `curl` + `sha256sum -c` on the box and stays platform-neutral; BUILDING
+# is a `curl` plus a platform-chosen digest check on the box (install.sh and
+# `_plat_sha256_check` both switch to `shasum -a 256` on Darwin, exactly as
+# BR_SHA256 above does — the earlier draft of this sentence claimed the
+# verify side "stays platform-neutral", which was false twelve lines below
+# the file's own Darwin switch); BUILDING
 # one is a maintainer's job, and requiring the tool that makes the output
 # deterministic is the honest price. `gtar` is what Homebrew's `gnu-tar`
 # installs.
