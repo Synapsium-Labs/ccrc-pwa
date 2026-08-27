@@ -31,6 +31,7 @@ import { fileURLToPath } from 'node:url';
 import * as pty from 'node-pty';
 import { mkTmp } from './tmpHelpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
+import { itLinux, itDarwin } from './platformFixtures.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -312,7 +313,12 @@ describe('ccrc expose duckdns', () => {
     const r = await runExposeTty(home, ['duckdns'], [SUB, TOKEN, '']);
     expect(r.code, r.stdout).toBe(0);
     expect(r.stdout).toMatch(/forward ports 80 and 443/);
-    expect(r.stdout).toMatch(/systemctl --user restart ccrc\.service/);
+    // The remedy names a command THIS box has — `systemctl --user restart` on
+    // macOS is a second dead end printed at the moment somebody is already
+    // following instructions. What is pinned is that the restart is named.
+    expect(r.stdout).toMatch(process.platform === 'darwin'
+      ? /launchctl kickstart -k gui\/\d+\/app\.ccrc\.ccrc/
+      : /systemctl --user restart ccrc\.service/);
   });
 
   it('reads CCRC_PORT from ccrc.env for the Caddyfile — 7788 is the default, not a constant', async () => {
@@ -564,7 +570,12 @@ describe('ccrc expose ip', () => {
     expect(r.stdout).toMatch(/no DNS record and no ACME/);
     expect(r.stdout).not.toMatch(/forward ports 80 and 443/);
     // …and the restart line survives: exposure.env is still boot config.
-    expect(r.stdout).toMatch(/systemctl --user restart ccrc\.service/);
+    // The remedy names a command THIS box has — `systemctl --user restart` on
+    // macOS is a second dead end printed at the moment somebody is already
+    // following instructions. What is pinned is that the restart is named.
+    expect(r.stdout).toMatch(process.platform === 'darwin'
+      ? /launchctl kickstart -k gui\/\d+\/app\.ccrc\.ccrc/
+      : /systemctl --user restart ccrc\.service/);
   });
 
   it('the bind address is data on this arm too — in exposure.env AND the Caddyfile', async () => {
@@ -670,7 +681,32 @@ const ddnsUnit = (home: string, ext: 'service' | 'timer'): string =>
   join(unitDir(home), `ccrc-ddns.${ext}`);
 
 describe('ccrc expose: the duckdns updater units', () => {
-  it('duckdns installs ccrc-ddns.service + ccrc-ddns.timer (0644) — the shipped templates, byte for byte', async () => {
+  // The DuckDNS refresher's Darwin half. systemd splits "what to run" from
+  // "when" — a .service plus a .timer, both shipped as templates the installer
+  // copies verbatim; launchd has one job with a `StartInterval`, and there is
+  // no template to copy because the plist is GENERATED. So what is pinned here
+  // is what those two tests are really about: the schedule, and the fact that
+  // the 0644 job file never carries the token.
+  itDarwin('duckdns installs ONE launchd job (0644) that refreshes every 5 minutes', async () => {
+    const home = box('ccrc-expose-ddns-darwin-');
+    const r = await runExposeTty(home, ['duckdns'], [SUB, TOKEN, '']);
+    expect(r.code, r.stdout).toBe(0);
+    const plist = join(home, 'Library', 'LaunchAgents', 'app.ccrc.ccrc-ddns.plist');
+    expect(existsSync(plist), 'no ddns job was installed').toBe(true);
+    expect(mode(plist), 'job files are read by launchd, not executed').toBe(0o644);
+    const body = readFileSync(plist, 'utf8');
+    // `OnCalendar=*:0/5` — the same five minutes, in the only unit launchd has.
+    expect(body).toContain('<key>StartInterval</key><integer>300</integer>');
+    // THE TOKEN IS NEVER IN THIS FILE. launchd cannot read an EnvironmentFile,
+    // so the job is a shell that sources the 0600 exposure.env — which is what
+    // keeps the secret out of a world-readable plist, exactly as systemd's
+    // `${CCRC_DDNS_TOKEN}` expansion does.
+    expect(body).toContain('.ccrc/exposure.env');
+    expect(body).toContain('${CCRC_DDNS_TOKEN}');
+    expect(body, 'the token was inlined into a 0644 file').not.toContain(TOKEN);
+  });
+
+  itLinux('duckdns installs ccrc-ddns.service + ccrc-ddns.timer (0644) — the shipped templates, byte for byte', async () => {
     const home = box('ccrc-expose-ddns-units-');
     const r = await runExposeTty(home, ['duckdns'], [SUB, TOKEN, '']);
     expect(r.code, r.stdout).toBe(0);
@@ -696,7 +732,7 @@ describe('ccrc expose: the duckdns updater units', () => {
     expect(timer).toContain('WantedBy=timers.target');
   });
 
-  it('runs systemctl --user daemon-reload, then enable --now ccrc-ddns.timer — that argv, that order', async () => {
+  itLinux('runs systemctl --user daemon-reload, then enable --now ccrc-ddns.timer — that argv, that order', async () => {
     // The recording stub: every call is one line of argv. daemon-reload FIRST,
     // for `_inst_enable`'s reason — a unit enabled before systemd has read its
     // file is enabled without it.
@@ -715,7 +751,7 @@ describe('ccrc expose: the duckdns updater units', () => {
     expect(existsSync(join(home, 'systemctl-poison')), 'byo must not touch systemctl').toBe(false);
   });
 
-  it('the installed service reads the token from the EnvironmentFile — ${CCRC_DDNS_TOKEN} literally, NEVER the value', async () => {
+  itLinux('the installed service reads the token from the EnvironmentFile — ${CCRC_DDNS_TOKEN} literally, NEVER the value', async () => {
     // The mutation this pins: substitute the token at generation time and the
     // 0644 unit file becomes a world-readable second copy of the secret.
     const home = box('ccrc-expose-ddns-token-');
@@ -726,7 +762,7 @@ describe('ccrc expose: the duckdns updater units', () => {
     expect(svc).not.toContain(TOKEN);
   });
 
-  it('a failing systemctl DEGRADES, never dies: units installed, exit 0, the exact commands printed', async () => {
+  itLinux('a failing systemctl DEGRADES, never dies: units installed, exit 0, the exact commands printed', async () => {
     // `_inst_linger`'s doctrine at this verb's scale: the poisoned systemctl
     // (exit 97) is this suite's stand-in for "no session bus", and a run whose
     // files all landed must not abort over a thing one command fixes. The

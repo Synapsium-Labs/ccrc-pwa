@@ -51,7 +51,12 @@ if [ "$RELEASE_MODE" = true ]; then
   BASE="${CCRC_RELEASE_BASE_URL:-https://github.com/$CCRC_RELEASE_OWNER/$CCRC_RELEASE_REPO/releases}"
   if [ -n "$RELEASE_TAG" ]; then URL_DIR="$BASE/download/$RELEASE_TAG"; else URL_DIR="$BASE/latest/download"; fi
 
-  STAGING="$(mktemp -d)"
+  # AN EXPLICIT TEMPLATE, because BSD `mktemp` IGNORES `$TMPDIR` when given
+  # none — measured: macOS answers inside its own per-user Darwin temp dir
+  # while GNU honours the variable. This is the directory a release tarball is
+  # downloaded and extracted into, so an operator who points TMPDIR at a volume
+  # with room, or at a directory they control, must not be silently overruled.
+  STAGING="$(mktemp -d "${TMPDIR:-/tmp}/ccrc.XXXXXXXXXX")"
   # `|| :` — the fixture harness PATH may lack rm; a failed cleanup must
   # never override the refusal's own exit code (set -e in an EXIT trap does).
   trap 'rm -rf "$STAGING" 2>/dev/null || :' EXIT
@@ -87,6 +92,34 @@ if [ "$RELEASE_MODE" = true ]; then
   echo "install.sh: verified $TARNAME — handing off to the staged 'ccrc install'"
   trap - EXIT
   exec bash "$STAGING/tree/ccd/ccrc" install "$@"
+fi
+
+# ── macOS PREFLIGHT, BEFORE THE BUILD ────────────────────────────────────
+# `ccrc install` checks these too, and checks them again for a reason — it is
+# also reached from `--release`, which never runs this file's build. But this
+# script is the documented entry point, and the two minutes of `npm ci` and a
+# vite build sit between here and there: a box that cannot run ccd should
+# learn it now, not after paying for a bundle it will not use.
+#
+# AND THIS SCRIPT IS THE ONLY PLACE THE BASH CHECK CAN LIVE AT ALL. macOS
+# ships bash 3.2.57 (2007, GPLv2) as /bin/bash, and `ccd` needs 4.2+ — it uses
+# `local -A`, `[[ -v arr[k] ]]`, `mapfile` and BASHPID. A 3.2 box running
+# `ccd` gets a SYNTAX ERROR at a line number, mid-session, after a pane has
+# already been started. install.sh itself is deliberately written to the 3.2
+# subset so that this refusal is the thing that runs.
+if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
+  bmaj="${BASH_VERSINFO[0]:-0}"; bmin="${BASH_VERSINFO[1]:-0}"
+  if [ "$bmaj" -lt 4 ] || { [ "$bmaj" -eq 4 ] && [ "$bmin" -lt 2 ]; }; then
+    echo "install.sh: bash $bmaj.$bmin is too old — ccd needs 4.2 or newer, and macOS ships 3.2.57 as /bin/bash for licensing reasons." >&2
+    echo "install.sh: fix it with:  brew install bash    (then make sure /opt/homebrew/bin comes before /bin on PATH, and re-run this script)" >&2
+    exit 1
+  fi
+  for t in tmux flock; do
+    command -v "$t" >/dev/null 2>&1 || {
+      echo "install.sh: $t is required by ccrc and macOS does not ship it — install it: brew install $t" >&2
+      exit 1
+    }
+  done
 fi
 
 command -v node >/dev/null 2>&1 || { echo "install.sh: node is not installed — install Node (nodesource or nvm), then re-run" >&2; exit 1; }

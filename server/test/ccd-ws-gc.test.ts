@@ -96,7 +96,13 @@ describe('_ws_gc_scan', () => {
     h.git(main, 'worktree', 'add', '-b', 'handoff/something', elsewhere);
     const r = find(scan(), 'demo-something')!;
     expect(r.state).toBe('foreign');
-    expect(r.path).toBe(elsewhere);
+    // RESOLVED, because `_ws_realpath` is: ccd reports a worktree by its
+    // real path, deliberately. On macOS the harness home lives under
+    // /var/folders, which is a symlink to /private/var/folders — so an
+    // unresolved expectation compares two spellings of one directory and
+    // fails on that platform only. `realpathSync` is a no-op wherever the
+    // path has no symlink in it, which is why it is correct on both.
+    expect(r.path).toBe(fs.realpathSync(elsewhere));
   });
 
   it('classifies a git registration whose directory is gone as stale-meta', () => {
@@ -134,7 +140,13 @@ describe('_ws_gc_scan', () => {
     h.git(main, 'worktree', 'add', '-b', 'ws/deep', deep);
     const r = find(scan(), 'deep')!;
     expect(r.state).toBe('foreign');
-    expect(r.path).toBe(deep);
+    // RESOLVED, because `_ws_realpath` is: ccd reports a worktree by its
+    // real path, deliberately. On macOS the harness home lives under
+    // /var/folders, which is a symlink to /private/var/folders — so an
+    // unresolved expectation compares two spellings of one directory and
+    // fails on that platform only. `realpathSync` is a no-op wherever the
+    // path has no symlink in it, which is why it is correct on both.
+    expect(r.path).toBe(fs.realpathSync(deep));
   });
 
   it('treats a worktree it cannot read as dirty, not as clean', () => {
@@ -223,11 +235,17 @@ describe('ws-gc report', () => {
     fs.writeFileSync(path.join(wt, 'visible.bin'), 'v'.repeat(5000));
     fs.chmodSync(locked, 0o000);
     try {
-      const probe = h.sh(`du -scb "${wt}" >"$HOME/du-out" 2>"$HOME/du-err"; echo "rc=$?"; `
-        + `echo "err=[$(cat "$HOME/du-err")]"; echo "out=[$(cat "$HOME/du-out")]"`);
-      expect(probe, probe).toContain('rc=1');
-      expect(probe, probe).toContain('Permission denied');
-      expect(probe, probe).toContain('total');   // …and it still printed one
+      // THE PREMISE, against the tool ccd actually calls. `du -scb` is
+      // GNU-only (BSD's du has no `-b` at all), so probing it directly made
+      // this premise fail on macOS and take the real assertions with it.
+      // `_plat_bytes` keeps the property those assertions depend on, on both
+      // platforms: a partial read STILL PRINTS a total and reports the
+      // partiality through the exit status — which is exactly why
+      // `_ws_gc_human` must not render that number.
+      const probe = h.sh(`_plat_bytes "${wt}" >"$HOME/du-out" 2>"$HOME/du-err"; echo "rc=$?"; `
+        + `echo "out=[$(cat "$HOME/du-out")]"`);
+      expect(probe, probe).toContain('rc=1');            // it refused…
+      expect(probe, probe).toMatch(/out=\[\d+\]/);        // …and still printed a partial total
 
       const out = gc();
       expect(out, out).toContain('total unmeasured across 1 worktree');
@@ -250,9 +268,25 @@ describe('ws-gc report', () => {
     const wt = addWs('demo', 'quiet-mesa');
     addOrphan('demo', 'still-cove');
     fs.rmSync(path.join(h.home, 'worktrees', 'demo', 'quiet-mesa', 'README.md'));  // make it dirty
-    const snapshot = (): string =>
-      execFileSync('find', [h.home, '-printf', '%P %s %y\\n'], { encoding: 'utf8' })
-        .split('\n').sort().join('\n');
+    // WALKED IN NODE, not by `find -printf`: that flag is GNU-only and BSD's
+    // find rejects it outright, so on macOS the SNAPSHOT failed rather than
+    // the thing under test. The three fields are the ones `%P %s %y` produced
+    // — path relative to the root, size, type letter — and `lstat` keeps a
+    // symlink reported as a symlink rather than as its target.
+    const snapshot = (): string => {
+      const lines: string[] = [];
+      const walk = (dir: string): void => {
+        for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+          const abs = path.join(dir, e.name);
+          const st = fs.lstatSync(abs);
+          const type = st.isDirectory() ? 'd' : st.isSymbolicLink() ? 'l' : 'f';
+          lines.push(`${path.relative(h.home, abs)} ${st.size} ${type}`);
+          if (type === 'd') walk(abs);
+        }
+      };
+      walk(h.home);
+      return lines.sort().join('\n');
+    };
     const before = snapshot();
     gc();
     expect(snapshot()).toBe(before);
@@ -1232,8 +1266,17 @@ describe('_ws_gc_bytes', () => {
     fs.mkdirSync(dir);
     fs.chmodSync(dir, 0o000);
     try {
-      const raw = h.sh(`du -sb "${dir}" 2>/dev/null | cut -f1 || true`);
-      expect(raw, 'du prints "0" on stdout for a root it cannot enter, not nothing').toBe('0');
+      // THE PREMISE, restated against the tool ccd ACTUALLY calls. This line
+      // used to run `du -sb` directly, which is GNU-only — BSD's du rejects
+      // `-b` outright, so on macOS the premise failed and took the real
+      // assertion below with it. `_plat_bytes` is the platform layer's
+      // stand-in for `du -sb`, and it keeps du's shape ON PURPOSE: a partial
+      // read still PRINTS its total and signals the partiality through the
+      // exit status, so a caller that reads stdout and ignores the status is
+      // wrong in the same way on both platforms rather than in a new way on
+      // one.
+      const raw = h.sh(`_plat_bytes "${dir}" 2>/dev/null || true`);
+      expect(raw, 'the sizing shim prints "0" for a root it cannot enter, not nothing').toBe('0');
       expect(h.sh(`_ws_gc_bytes "${dir}"`)).toBe('-');
     } finally {
       fs.chmodSync(dir, 0o755);

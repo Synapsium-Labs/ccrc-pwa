@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import { makeCcdHarness, ghContainedEnv, CCD, WS_ADD, SCAN_LOOKBACK_LINES, type CcdHarness } from './ccdWsHelpers.js';
+import { asManagerCalls } from './platformFixtures.js';
 
 let h: CcdHarness;
 let home: string;
@@ -13,7 +14,10 @@ let home: string;
 // Thin aliases so the assertions below read as they always did.
 const sh = (s: string, env: NodeJS.ProcessEnv = {}): string => h.sh(s, env);
 const reg = (id: string, field: string): string | null => h.reg(id, field);
-const calls = (): string[] => h.calls();
+// THROUGH THE NORMALIZER, so an assertion written in systemd's vocabulary
+// reads the same intent on either platform — see `asManagerCalls` for which
+// verbs are translatable and which are deliberately not.
+const calls = (): string[] => asManagerCalls(h.calls());
 const makeRepo = (name: string): string => h.makeRepo(name);
 
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-ws-'); home = h.home; });
@@ -528,6 +532,7 @@ describe('cmd_stop', () => {
   // forced to guess one aims the stop at a DIFFERENT live session. The one-arg
   // form takes the id whole, exactly as `ccd ensure` already does.
   const STOP = `systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; }; `
+    + `launchctl() { echo "launchctl $*" >> "$HOME/ccd-calls"; }; `
     + `tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; };`;
 
   it('takes a workspace id whole rather than reversing it into a wrapper', () => {

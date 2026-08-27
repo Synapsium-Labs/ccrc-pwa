@@ -3,11 +3,14 @@
   "license": "AGPL-3.0-only",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22.13.0" },
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "tsc",
-    "test": "vitest run"
+    "test": "vitest run",
+    "postinstall": "node scripts/fix-node-pty-helper.mjs"
   },
   "dependencies": {
     "@fastify/multipart": "^10.1.0",

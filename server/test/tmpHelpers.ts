@@ -25,7 +25,7 @@
 // registry is per test file (vitest isolates by default), so `made` holds
 // exactly what this file made, and the hook registers on this file's root
 // suite when it imports the module.
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll } from 'vitest';
@@ -36,7 +36,17 @@ const made: string[] = [];
  *  the call it replaces — a prefix, not a path — so nothing about what a test
  *  asserts can change by adopting it. */
 export function mkTmp(prefix: string): string {
-  const dir = mkdtempSync(path.join(tmpdir(), prefix));
+  // RESOLVED, and that is not cosmetic. `os.tmpdir()` answers `/var/folders/…`
+  // on macOS, where `/var` is a symlink to `/private/var` — so a fixture home
+  // handed out unresolved does not match what ccd reports back. ccd resolves
+  // deliberately (`_ws_realpath`, `pwd -P`), so every assertion built from an
+  // unresolved home compares two spellings of one directory and fails on that
+  // platform alone, for a reason that has nothing to do with the subject.
+  //
+  // Resolving HERE fixes the whole class at its source rather than at each
+  // assertion, and it is a no-op wherever the temp root holds no symlink —
+  // which is every Linux box this suite has ever run on.
+  const dir = realpathSync(mkdtempSync(path.join(tmpdir(), prefix)));
   made.push(dir);
   return dir;
 }
