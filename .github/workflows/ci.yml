@@ -143,11 +143,16 @@ jobs:
       # substrate), flock (three call sites die by name without it), jq
       # (statusline-command.sh silently degrades without it).
       #
-      # DELIBERATELY NO coreutils: the whole point of this leg is the BSD
-      # userland. A gnubin on PATH would turn every Darwin arm back into its
-      # Linux twin and this job would prove nothing the ubuntu legs do not.
+      # coreutils is g-PREFIXED (gtimeout, gsha256sum, …) and no gnubin ever
+      # joins PATH, so the BSD userland stays honest: bare `timeout`,
+      # `sha256sum`, `stat -c` are still absent and every Darwin arm still
+      # runs. What coreutils buys is `gtimeout` — `_plat_timeout`'s own
+      # documented Darwin fallback — without which the shim degrades to NO
+      # deadline and every wedge-shaped fixture (a tmux that never answers,
+      # a stall-budget probe) hangs to the test clock instead of being cut:
+      # the first leg run measured exactly that, 40 tests shed at 20s.
       - name: Install system dependencies
-        run: brew install bash tmux flock jq
+        run: brew install bash tmux flock jq coreutils
       - name: Install
         working-directory: server
         run: npm ci

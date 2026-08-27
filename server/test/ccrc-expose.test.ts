@@ -730,7 +730,10 @@ describe('ccrc expose: the duckdns updater units', () => {
     expect(argv[1]).toMatch(/^enable gui\/\d+\/app\.ccrc\.ccrc-ddns$/);
     expect(argv[2]).toMatch(/^bootstrap gui\/\d+ \S+\/Library\/LaunchAgents\/app\.ccrc\.ccrc-ddns\.plist$/);
     expect(r.stdout).toMatch(/^expose: app\.ccrc\.ccrc-ddns enabled/m);
-    expect(r.stdout).not.toMatch(/DEGRADED/);
+    // The ddns bootstrap's OWN degraded line only: the transcript
+    // legitimately carries an unrelated DEGRADED (no passphrase set yet),
+    // and the first Darwin run measured this assertion tripping on it.
+    expect(r.stdout).not.toMatch(/DEGRADED — could not bootstrap/);
   });
 
   itDarwin('a refusing launchctl DEGRADES, never dies: the job file installed, exit 0, the exact bootstrap command printed', async () => {

@@ -858,7 +858,11 @@ function healthy(prefix: string): string {
   stubLoginctl(home);
   writeFileSync(join(home, 'fixture-linger'), 'yes\n');
   ghStub(home, GH_OK, 0);
-  linkReal(home, 'timeout');
+  // The platform's own deadline tool: bare `timeout` is GNU and a macOS box
+  // carries `gtimeout` (Homebrew coreutils) instead — `_plat_timeout` looks
+  // for both, in that order. Linking the name the host actually has is what
+  // lets the deadline-dependent checks run on either.
+  linkReal(home, process.platform === 'darwin' ? 'gtimeout' : 'timeout');
   // A healthy box HAS a roster, and what the roster says is on disk. The
   // smallest true one: the upstream account and its binary. Every wrappers test
   // below starts here and adds (or replaces) exactly what it is about.
@@ -1271,7 +1275,10 @@ describe('ccrc doctor: gh_auth', () => {
 
   it('answers on a box with no coreutils timeout, rather than skipping the check', () => {
     const home = healthy('ccrc-doctor-ghauth-notimeout-');
+    // BOTH spellings, or the degrade under test never happens on the
+    // platform whose tool wears the other name.
     unstub(home, 'timeout');
+    unstub(home, 'gtimeout');
     expect(lineFor(runDoctor(home).stdout, 'gh_auth')).toMatch(/^PASS gh_auth: /);
   });
 
