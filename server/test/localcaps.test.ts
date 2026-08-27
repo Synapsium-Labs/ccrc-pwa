@@ -13,6 +13,17 @@ import path from 'node:path';
 import { KILL_GRACE_MS, readLocalCcdCaps } from '../src/localcaps.js';
 import { mkTmp } from './tmpHelpers.js';
 
+// A DEADLINE THAT OUTLASTS THE SPAWN. Two fixtures below prove a timeout by
+// letting the child record its own pid first, so that write has to land before
+// the deadline fires or there is nothing left to check. Measured on macOS:
+// starting `/bin/sh` and writing one line takes longer than the 200-300ms
+// these tests were written to, and the child was killed before it ever wrote.
+// It is bounded from ABOVE too: the descendant fixture proves the kill reached
+// a grandchild by racing a 1s `touch`, so the deadline must fire before that.
+// 600ms sits between the two on this box. The stubs sleep for minutes, so the
+// timeout is still what ends every call — only the room given to reach it.
+const KILL_BOUND_MS = process.platform === 'darwin' ? 600 : 200;
+
 const writeStubCcd = (home: string, body: string): string => {
   const dir = path.join(home, 'bin');
   mkdirSync(dir, { recursive: true });
@@ -89,7 +100,7 @@ describe('readLocalCcdCaps', () => {
     const home = mkTmp('ccrc-localcaps-');
     const ccdBin = writeStubCcd(home, 'sleep 600');
     const start = Date.now();
-    const result = await readLocalCcdCaps(ccdBin, 300);
+    const result = await readLocalCcdCaps(ccdBin, KILL_BOUND_MS);
     const elapsed = Date.now() - start;
     expect(result).toBeNull();
     expect(elapsed, 'must return near the bound, not hang indefinitely').toBeLessThan(2000);
@@ -111,7 +122,7 @@ describe('readLocalCcdCaps', () => {
     // group-kill in `execCapped` targets that group, not just the direct
     // child `cmd_caps` is running as.
     const ccdBin = writeStubCcd(home, `(sleep 1 && touch '${marker}') &\nsleep 600`);
-    const result = await readLocalCcdCaps(ccdBin, 200);
+    const result = await readLocalCcdCaps(ccdBin, KILL_BOUND_MS);
     expect(result).toBeNull();
     // Past the backgrounded job's own 1s mark, so a survivor would have
     // had time to write the marker.
@@ -143,7 +154,7 @@ describe('readLocalCcdCaps', () => {
     const home = mkTmp('ccrc-localcaps-');
     const pidFile = path.join(home, 'pid');
     const ccdBin = writeStubCcd(home, `trap '' TERM\necho $$ > '${pidFile}'\nsleep 600`);
-    const result = await readLocalCcdCaps(ccdBin, 200);
+    const result = await readLocalCcdCaps(ccdBin, KILL_BOUND_MS);
     expect(result).toBeNull(); // the caller is never blocked by the trap
 
     const pid = parseInt(readFileSync(pidFile, 'utf8').trim(), 10);

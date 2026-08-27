@@ -31,7 +31,7 @@ import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import {
   mkdirSync, writeFileSync, existsSync, chmodSync, readFileSync, copyFileSync, symlinkSync,
-  appendFileSync, readdirSync,
+  appendFileSync, readdirSync, rmSync,
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -251,7 +251,13 @@ describe('install.sh: the node floor, before anything is built', () => {
 describe('install.sh --release: fetch, verify, hand off to the staged ccrc', () => {
   const REAL_TAR = realPath('tar');
   const REAL_GZIP = realPath('gzip');
-  const REAL_SHA256SUM = realPath('sha256sum');
+  // PLATFORM-CHOSEN AT DESCRIBE SCOPE, and the choice is what lets this file
+  // COLLECT on a Darwin box at all: `realPath('sha256sum')` here used to
+  // throw on a host with no coreutils — erroring the whole file at
+  // collection time, including the two BSD-userland tests that exist to pin
+  // the macOS digest fix (found by this branch's own adversarial review).
+  const IS_DARWIN_HOST = process.platform === 'darwin';
+  const REAL_DIGEST = IS_DARWIN_HOST ? realPath('shasum') : realPath('sha256sum');
   const REAL_MKTEMP = realPath('mktemp');
   const REAL_MKDIR = realPath('mkdir');
   const REAL_CP = realPath('cp');
@@ -266,7 +272,17 @@ describe('install.sh --release: fetch, verify, hand off to the staged ccrc', () 
     symlinkSync(BASH, join(bin, 'bash'));
     symlinkSync(REAL_TAR, join(bin, 'tar'));
     symlinkSync(REAL_GZIP, join(bin, 'gzip'));
-    symlinkSync(REAL_SHA256SUM, join(bin, 'sha256sum'));
+    // The fixture models the HOST's own userland truthfully: a GNU host gets
+    // `sha256sum` (and no `uname`, so install.sh's chooser takes the GNU
+    // arm); a Darwin host gets `uname` + the real `shasum`, so install.sh's
+    // Darwin arm runs natively — never a sha256sum symlink whose target the
+    // box does not have.
+    if (IS_DARWIN_HOST) {
+      writeFileSync(join(bin, 'uname'), '#!/bin/sh\necho Darwin\n', { mode: 0o755 });
+      writeFileSync(join(bin, 'shasum'), `#!/bin/sh\nexec ${REAL_DIGEST} "$@"\n`, { mode: 0o755 });
+    } else {
+      symlinkSync(REAL_DIGEST, join(bin, 'sha256sum'));
+    }
     symlinkSync(REAL_MKTEMP, join(bin, 'mktemp'));
     symlinkSync(REAL_MKDIR, join(bin, 'mkdir'));
     symlinkSync(REAL_CP, join(bin, 'cp'));
@@ -311,9 +327,14 @@ describe('install.sh --release: fetch, verify, hand off to the staged ccrc', () 
     const name = `ccrc-${opts.tag ?? 'v9.9.9'}.tar.gz`;
     const tarRes = spawnSync('tar', ['-czf', join(relDir, name), '-C', payload, '.'], { encoding: 'utf8' });
     if (tarRes.status !== 0) throw new Error(`fixture tar failed: ${tarRes.stderr}`);
-    const sumRes = spawnSync('bash', ['-c', `sha256sum '${name}' > SHA256SUMS`],
-      { cwd: relDir, encoding: 'utf8' });
-    if (sumRes.status !== 0) throw new Error(`fixture sha256sum failed: ${sumRes.stderr}`);
+    // Host-PATH call, so the digest tool is platform-chosen — a bare
+    // `sha256sum` here fails on a Darwin host before install.sh ever runs.
+    // Both spellings write the identical "<digest>  <name>" line.
+    const sumRes = spawnSync('bash', ['-c',
+      'sha=sha256sum; [ "$(uname -s)" = Darwin ] && sha="shasum -a 256";'
+      + ` $sha '${name}' > SHA256SUMS`],
+    { cwd: relDir, encoding: 'utf8' });
+    if (sumRes.status !== 0) throw new Error(`fixture digest failed: ${sumRes.stderr}`);
     if (opts.tamper) appendFileSync(join(relDir, name), 'one appended byte-run after the sums were written');
   }
 
@@ -408,6 +429,62 @@ describe('install.sh --release: fetch, verify, hand off to the staged ccrc', () 
     const r = runRelease(root, ['--release'], home);
     expect(r.code).toBe(1);
     expect(filesUnder(join(home, 'tmp'))).toEqual([]);
+  });
+
+  /** The fixture PATH as a BSD userland sees it: `sha256sum` GONE (macOS
+   *  ships none), `uname` answering Darwin, and a `shasum` that accepts only
+   *  the `-a 256` spelling and delegates the digest math to the real GNU
+   *  binary by absolute path — so the verification is REAL and a tampered
+   *  fixture still fails it. */
+  function bsdUserland(home: string): void {
+    const bin = fixtureBin(home);
+    // Present only when plantReleaseTools ran on a GNU host; a Darwin host
+    // never planted one (force tolerates both).
+    rmSync(join(bin, 'sha256sum'), { force: true });
+    writeFileSync(join(bin, 'uname'), '#!/bin/sh\necho Darwin\n', { mode: 0o755 });
+    // Validates the exact `-a 256` spelling install.sh must use, then
+    // delegates the digest math to the host's real tool — GNU sha256sum
+    // (argv minus the two shasum flags) or Darwin's real shasum (argv
+    // intact) — so verification stays REAL on either host.
+    writeFileSync(join(bin, 'shasum'), [
+      '#!/bin/sh',
+      '[ "$1" = "-a" ] && [ "$2" = "256" ] || { echo "fixture shasum: unexpected argv: $*" >&2; exit 90; }',
+      ...(IS_DARWIN_HOST ? [`exec ${REAL_DIGEST} "$@"`] : ['shift 2', `exec ${REAL_DIGEST} "$@"`]),
+    ].join('\n') + '\n', { mode: 0o755 });
+  }
+
+  it('a BSD userland (shasum, no sha256sum) verifies an intact release and installs it — not a fabricated tamper alarm', () => {
+    // THE BUG THIS PINS: the check was `sha256sum -c` with stderr swallowed,
+    // so on a box with no sha256sum the subshell exited 127 into the `||`
+    // arm — the first thing a macOS operator ever saw from ccrc was
+    // "checksum verification FAILED" about an intact download. Live, not
+    // latent: v0.0.1 is published, so `--release` resolves. Mutation:
+    // reverting install.sh's digest chooser to bare `sha256sum` reds this.
+    const home = mkTmp('install-sh-release-bsd-');
+    const root = fixtureRoot(home, REAL_FLOOR_RANGE);
+    plantReleaseTools(home);
+    bsdUserland(home);
+    fixtureRelease(home);
+    const r = runRelease(root, ['--release'], home);
+    expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    expect(r.stderr).not.toMatch(/checksum verification FAILED/);
+    const argv = readFileSync(join(home, 'ccrc-argv'), 'utf8').split('\n').filter((l) => l !== '');
+    expect(argv.slice(1)).toEqual(['install']);
+  });
+
+  it('a BSD userland still FAILS a tampered release — shasum -a 256 -c reads the GNU-written SHA256SUMS unchanged', () => {
+    // The other half of interoperability: the Darwin arm must keep the
+    // integrity check REAL, not merely quiet. Same tamper fixture as the
+    // GNU-side test above.
+    const home = mkTmp('install-sh-release-bsd-tamper-');
+    const root = fixtureRoot(home, REAL_FLOOR_RANGE);
+    plantReleaseTools(home);
+    bsdUserland(home);
+    fixtureRelease(home, { tamper: true });
+    const r = runRelease(root, ['--release'], home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/checksum verification FAILED/);
+    expect(existsSync(join(home, 'ccrc-argv')), 'the staged ccrc ran despite a bad checksum').toBe(false);
   });
 
   it('absent release: answers with curl\'s own failure, extracts nothing, runs nothing', () => {

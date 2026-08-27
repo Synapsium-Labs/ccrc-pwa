@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -32,7 +32,10 @@ describe('resolveTranscript — the symlink-munge mismatch it was born fixing', 
   /** A miniature of the production chain: `<root>/data -> <root>/volume`,
    *  registry workdir through the link, transcript under the physical munge. */
   const build = (): { root: string; cfg: string; linkDir: string; realDir: string } => {
-    const root = mkdtempSync(path.join(tmpdir(), 'ccrc-resolve-'));
+// RESOLVED — see tmpHelpers' mkTmp: on macOS the temp root lives under a
+// symlink (/var -> /private/var), and ccd resolves paths deliberately, so an
+// unresolved fixture path compares two spellings of one directory.
+    const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'ccrc-resolve-')));
     const realDir = path.join(root, 'volume', 'projects', 'demo');
     mkdirSync(realDir, { recursive: true });
     symlinkSync(path.join(root, 'volume'), path.join(root, 'data'));

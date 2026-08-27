@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=f3f3cefec021533da262c498acbb490939ba6b18e7b9912afdfccf1046bb6a9a
+# ccrc:generated 1 sha256=c74145d9352a362b8aa6f45abc043c9f8610db69e41479dbdf50d7964b98a0c1
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -8,6 +8,760 @@
 # plain even on an `on` box.
 set -uo pipefail
 
+# ── THE PLATFORM LAYER — one file, two userlands ────────────────────────
+# ccd was written against GNU/Linux and says so out loud: `_reg_set`'s header
+# (below) names `mv -T`, `stat -c`, `readlink -f` and `df -P` as assumptions
+# this file makes rather than probes, and three sites already `die` by name
+# when `flock` is absent. macOS is the second userland this file now runs on,
+# and it is BSD: no `mv -T`, no `stat -c`, no `sha256sum`, no `/proc`.
+#
+# EVERY FUNCTION BELOW IS THE GNU COMMAND, VERBATIM, ON LINUX. That is the
+# whole contract of this block. Both production fleet boxes are GNU/Linux and
+# a macOS port is not allowed to become a rewrite of the platform they run on,
+# so the Linux arm of each function is the exact bytes the call site used
+# before this block existed; the Darwin arm is reached only when `uname` says
+# so. A test pins that property (`macos-platform.test.ts`) by running each
+# function's two arms against the same fixture.
+#
+# `CCD_OS` IS COMPUTED ONCE, AT SOURCE TIME, and never re-probed. `_reg_set`
+# is the hottest path in this file — ~11 live sessions re-stamping
+# `supervised` every 30s — and it calls `_plat_mv_notdir`. A `uname` fork per
+# registry write is precisely the per-call cost `_reg_set`'s own header
+# refused to pay for a `command -v`, and the answer cannot change under a
+# running process.
+# The session registry, spelled here so this block is self-contained and can
+# be the SAME BYTES in ccd and ccrc — see the pin test. ccd defines $REG to
+# this identical path a few lines down for its own ~200 call sites; that is
+# one path with two names by necessity, not a second source of truth, and
+# `macos-platform.test.ts` pins the two spellings equal.
+_SVC_REG="$HOME/.cc-sessions"
+#
+# `$OSTYPE` FIRST, AND `uname` ONLY AS A FALLBACK. OSTYPE is a bash variable
+# baked in at COMPILE time (`darwin25`, `linux-gnu`), so reading it needs no
+# fork and — the part that matters — no PATH. `uname` needs both, and a box
+# whose PATH does not carry it would silently answer `linux` on macOS: every
+# Darwin arm skipped, every systemd call attempted, and the refusal an
+# operator meets naming `systemctl` on a machine that never had one.
+#
+# NOT HYPOTHETICAL: found by `ccrc install: a macOS box missing what ccd needs`,
+# whose PATH is built explicitly and had no `uname` on it. A stripped PATH is
+# exactly the shape a service manager hands a job, which is where this would
+# have bitten for real.
+CCD_OS=linux
+case "${OSTYPE:-}" in
+  darwin*) CCD_OS=darwin ;;
+  linux*)  CCD_OS=linux ;;
+  *) case "$(uname -s 2>/dev/null)" in Darwin) CCD_OS=darwin ;; esac ;;
+esac
+
+# GNU `mv -fT`: rename, and REFUSE when the destination is a directory.
+#
+# THE REFUSAL IS LOAD-BEARING, not incidental — see the note in `cmd_ws_hold`
+# (`mv -fT`'s `-T` … a bare `mv -f` would move the tmp inside the directory
+# and exit 0): `ccd-hold.test.ts` stands in for an unwritable registry by
+# making `$REG/<id>.hold` a DIRECTORY, because chmod does not constrain root
+# and a directory does. Dropping `-T` turns that guard's refusal into a false
+# success, which is the one outcome it exists to prevent.
+#
+# `-L` BEFORE `-d`, and that order is the whole correctness of the Darwin arm:
+# `-T` treats a symlink-to-directory as the NAME and replaces it, where
+# `[ -d ]` follows the link and would refuse a rename GNU performs.
+#
+# NOT ATOMIC THE WAY `-T` IS, and written down rather than hidden: between the
+# test and the rename another process could create a directory at the
+# destination. Nothing in ccd can reach that window — every destination is
+# `$REG/<id>.<field>`, and this function is its only writer — so the race is
+# unreachable here rather than tolerated.
+_plat_mv_notdir() {   # <src> <dest> -> 0 iff <src> is now at <dest>
+  if [ "$CCD_OS" = darwin ]; then
+    if [ ! -L "$2" ] && [ -d "$2" ]; then return 1; fi
+    mv -f -- "$1" "$2"
+  else
+    mv -fT -- "$1" "$2"
+  fi
+}
+
+# `stat -c` -> `stat -f`. Three format letters, three functions, because a
+# single `_plat_stat <fmt> <file>` would put the GNU spelling at every call
+# site and leave this block translating a string it did not choose.
+_plat_mtime() {   # <file> -> mtime, epoch seconds
+  if [ "$CCD_OS" = darwin ]; then stat -f %m "$@"; else stat -c %Y "$@"; fi
+}
+_plat_size() {    # <file> -> size in bytes
+  if [ "$CCD_OS" = darwin ]; then stat -f %z "$@"; else stat -c %s "$@"; fi
+}
+_plat_devino() {  # <file> -> "<device>:<inode>", the identity of a lock
+  if [ "$CCD_OS" = darwin ]; then stat -f '%d:%i' "$@"; else stat -c '%d:%i' "$@"; fi
+}
+# `du -sb` — APPARENT SIZE IN BYTES — is GNU coreutils, and BSD's `du` rejects
+# `-b` outright ("invalid option"). It is not a formatting difference that can
+# be papered over with `-k`: BSD reports 512-byte or 1K BLOCKS, so a 10-byte
+# `.env` sizes as 4096 and every byte figure ccd prints, sums and compares
+# would be wrong by orders of magnitude on one platform.
+#
+# THE DARWIN ARM SUMS FILES' AND SYMLINKS' OWN SIZES, COUNTING EACH INODE
+# ONCE — because dedup is part of what `du` MEANS, not an optimisation: the
+# ws-gc aggregate caller passes every worktree in ONE invocation precisely
+# so inodes shared between them are counted once ("the exact figure that
+# removing the lot would free"), and transcripts here deliberately wear one
+# inode under several names (`_plat_cp_replace`'s own header). The first cut
+# summed `-type f` sizes with no inode tracking: every hardlink name counted
+# again, and the report's "rows can sum to more than the total" sentence was
+# false on macOS — the total EQUALLED the row sum and overstated the
+# reclaim. `-type l` rides along because `du -sb` counts a symlink's own
+# st_size too (directories need nothing: GNU du charges a directory 0 in
+# byte totals — measured, coreutils 9.4). `stat -f '%d %i %z'` hands awk the
+# identity to dedup on (device:inode) and the size in one exec batch.
+#
+# `awk` PRINTS `s+0`, so an empty walk answers `0` rather than the empty
+# string — every caller validates the result with `^[0-9]+$` and would read a
+# blank as "could not size this", which is a refusal, not a zero.
+# A PARTIAL TOTAL MUST BE A REFUSAL, NOT A NUMBER, and that is the one thing
+# this shim gets wrong if it is written the obvious way. GNU `du` returns
+# NON-ZERO when it could not read everything — it still prints a total, and
+# every caller here checks the status precisely because the printed figure is
+# then a partial truth. A `find | awk` that swallows errors answers a smaller
+# number with rc 0, which is the shape this file bans by name: "a size gate
+# that reads the file anyway when it cannot measure it is not a gate".
+#
+# So the Darwin arm watches `find`'s OWN stderr and status. Anything on either
+# — an unreadable directory, a `stat` that failed — and the whole call refuses,
+# leaving the caller to report "could not size this" exactly as it does on
+# Linux. (Pinned by `ccd-ws-gc.test.ts`'s "refuses a PARTIAL du total — the
+# failure that looks like an answer".)
+_plat_bytes() {   # <path>... -> total apparent bytes, one integer; rc 1 if not all of it
+  # THE LINUX ARM IS THE TWO ORIGINAL PIPELINES, VERBATIM — including which
+  # one runs for how many paths. `du -sb <one>` prints ONE line and `du -scb
+  # <many>` adds a `total`, so a single shim spelling cannot serve both: the
+  # `-c` form over one path is still fine for real du, but `ccd-archive`'s
+  # fixture stubs `du()` as a shell function printing a single `0\tx` line, and
+  # an awk looking for `total` reads that as a failed measurement. A genuine
+  # zero would then be indistinguishable from an unreadable tree, which is the
+  # exact conflation the surrounding code exists to prevent.
+  #
+  # `pipefail` IS WHAT MAKES THE STATUS HONEST here (ccd sets it at the top of
+  # the file): the pipeline's rc is du's whenever du fails, so neither arm
+  # needs a guard of its own.
+  if [ "$CCD_OS" != darwin ]; then
+    # `head -n1` IS LOAD-BEARING, not tidying: a filename may contain a
+    # NEWLINE, and `du -s` then spans two physical lines — `cut -f1` alone
+    # emits a field from each, the caller's `^[0-9]+$` test fails, and a
+    # perfectly readable tree is reported unmeasurable. One call site always
+    # had it and the other did not; folding it in here gives both the
+    # newline-proof reading, which is a superset of what either had.
+    # (`ccd-ws-gc.test.ts`: "a gitignored filename holding a NEWLINE cannot
+    # forge a row or move the tally".)
+    if (( $# == 1 )); then du -sb "$1" | head -n1 | cut -f1; return $?; fi
+    du -scb "$@" | awk '$2 == "total" {print $1}'
+    return $?
+  fi
+  local p errf err out rc
+  for p in "$@"; do [ -e "$p" ] || return 1; done
+  errf=$(_plat_mktemp) || return 1
+  out=$(find "$@" \( -type f -o -type l \) -exec stat -f '%d %i %z' {} + 2>"$errf" \
+        | awk '{ if (!seen[$1":"$2]++) s+=$3 } END{print s+0}'); rc=$?
+  err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
+  # THE DIAGNOSTIC IS RELAYED, not swallowed. GNU `du` writes "cannot read
+  # directory …" to stderr and the callers CAPTURE it — `_ws_gc_bytes` puts it
+  # in its refusal, and a test reads it back. A shim that kept the error to
+  # itself would leave every macOS refusal saying only "could not size this",
+  # dropping the one sentence that says WHICH path and WHY.
+  [ -z "$err" ] || printf '%s\n' "$err" >&2
+  # THE PARTIAL TOTAL IS STILL PRINTED, and the status is what says it is
+  # partial — `du`'s own shape, kept deliberately. A caller that reads stdout
+  # and ignores the status gets the same wrong-but-plausible number it would
+  # get on Linux, so the two platforms fail identically rather than one of them
+  # failing in a new way. (`ccd-ws-gc.test.ts` pins it: "du prints \"0\" on
+  # stdout for a root it cannot enter, not nothing".)
+  printf '%s\n' "$out"
+  { (( rc == 0 )) && [[ -z "$err" ]]; } || return 1
+}
+
+# `date +%s%3N` IS GNU. BSD's date has no `%N` at all: it
+# prints the literal letter, so `+%s%3N` answers `17876553263N` — a string
+# that is not a number, which `jq --argjson` rejects outright. Measured: the
+# session hook's whole state write failed on macOS because of this one format,
+# silently (`|| exit 0`), leaving every session with no hookstate file.
+#
+# `EPOCHREALTIME` IS THE ANSWER ON BOTH PLATFORMS — FROM BASH 5.0, WHICH IS
+# NOT THE FLOOR. A bash builtin (`<seconds>.<microseconds>`), so no fork and
+# no coreutils; on Linux it agrees with `date +%s%3N` to the millisecond
+# (measured side by side). But the declared floor is 4.4 (install.sh's macOS
+# preflight and `ccrc`'s own gate, pinned equal by single-definition — 4.4
+# because empty-array "${a[@]}" under `set -u` is fatal below it, not 5.0),
+# so a 4.4 box passes install and lands on the fallback — and on macOS the
+# bare fallback used to reproduce the exact `<epoch>3N` failure this
+# function was written to remove. So the fallback VALIDATES: a non-numeric
+# answer degrades to whole seconds ×1000 — millisecond precision lost, the
+# write kept — instead of handing `jq --argjson` a string it rejects.
+# D-944: the review offered raise-the-floor-to-5.0 as the alternative fix;
+# fixing the fallback was chosen instead, because with a correct fallback a
+# 4.4 box WORKS (degraded to second precision), where the 5.0 floor would
+# refuse it outright — and the floor stays one value in three files. (The
+# adversarial pass then measured the floor itself: 4.2/4.3 die on ccd's
+# empty-array set -u expansions regardless, so the declared floor is 4.4.)
+# `ccd/session-hook.sh`'s `_hook_epoch_ms` is a deliberate local copy of
+# this body (the hook sources nothing); a test pins the two identical.
+#
+# THE SEPARATOR IS NOT ASSUMED TO BE A DOT: `EPOCHREALTIME` is formatted with
+# the LOCALE's decimal point, and a box running a comma locale would otherwise
+# have its timestamps silently truncated to seconds.
+_plat_epoch_ms() {   # -> epoch milliseconds, 13 digits
+  if [ -n "${EPOCHREALTIME:-}" ]; then
+    local s="${EPOCHREALTIME%%[.,]*}" f="${EPOCHREALTIME#*[.,]}"
+    f="${f}000"; printf '%s%s' "$s" "${f:0:3}"
+    return 0
+  fi
+  local t; t=$(date +%s%3N 2>/dev/null)
+  if [[ "$t" =~ ^[0-9]{13,}$ ]]; then printf '%s' "$t"; else printf '%s000' "$(date +%s)"; fi
+}
+
+# `cp --remove-destination` IS GNU. BSD's cp rejects the flag outright, and
+# the difference it names is not cosmetic: without it `cp` OPENS an existing
+# destination and writes through it, so a destination that is a HARDLINK to
+# another name rewrites that other name too. This function carries transcripts
+# between account config dirs, where one inode deliberately wears several
+# names — writing through would corrupt the sibling it was trying to preserve.
+#
+# `rm -f` FIRST is exactly what the GNU flag does: unlink, then create. Two
+# calls instead of one, so a crash between them leaves no destination rather
+# than a half-written one — the same window `cp` has internally, and the same
+# recovery (the next carry re-places it).
+_plat_cp_replace() {   # <src> <dest> — copy, preserving times, REPLACING the inode
+  if [ "$CCD_OS" != darwin ]; then cp -p --remove-destination "$1" "$2"; return $?; fi
+  rm -f -- "$2" 2>/dev/null
+  cp -p -- "$1" "$2"
+}
+
+# BSD `mktemp` IGNORES `$TMPDIR` when it is given no template — measured:
+# with TMPDIR pointed at a directory of the caller's choosing, macOS still
+# answers inside its own per-user Darwin temp dir, while GNU mktemp honours
+# the variable. An operator who points TMPDIR at a volume with room, or at a
+# directory they control, is silently overruled on one platform.
+#
+# An explicit template fixes it, and the LINUX ARM STAYS THE BARE CALL so the
+# path shape that platform produces is unchanged.
+_plat_mktemp() {     # -> a new temp FILE, honouring $TMPDIR on both
+  if [ "$CCD_OS" = darwin ]; then mktemp "${TMPDIR:-/tmp}/ccd.XXXXXXXXXX"; else mktemp; fi
+}
+_plat_mktemp_d() {   # -> a new temp DIRECTORY, honouring $TMPDIR on both
+  if [ "$CCD_OS" = darwin ]; then mktemp -d "${TMPDIR:-/tmp}/ccd.XXXXXXXXXX"; else mktemp -d; fi
+}
+
+_plat_mode() {    # <file> -> its permission bits, octal, e.g. 600
+  # `%Mp%Lp`, NOT `%Lp` ALONE. `%Lp` is the low NINE bits (user/group/other)
+  # and `%Mp` the special nibble (setuid/setgid/sticky); GNU's `%a` prints
+  # both, so under the first cut a 4755 file answered `4755` on Linux and
+  # `755` here — the arms answered different questions, and the comment that
+  # claimed `%Lp` was "the low twelve, measured on both" had been measured
+  # on a 0600 fixture, which cannot tell (an adapter may not narrow a
+  # distinction it received — the L3 rule). The sed strips LEADING ZEROS the
+  # way GNU prints: BSD writes the special nibble as a literal `0` on an
+  # ordinary file (`0600` where GNU says `600`), and the one live caller
+  # compares `= 600`. All-zero collapses to a single `0`, GNU's own answer.
+  # D-945: ALL leading zeros, not the one `%Mp` zero the review's caution
+  # named — whether BSD pads `%Lp` on a sub-three-digit mode (007 as `007`)
+  # is unmeasured from this box, and the all-zero strip answers GNU's bare
+  # digits under either padding behaviour.
+  #
+  # THE STRIP IS PURE BASH, NOT A PIPE THROUGH sed — the same lesson
+  # `_svc_is_active` records for grep: doctor runs these under a
+  # deliberately minimal PATH, and the first macos CI run measured a sed
+  # pipe here answering "mode unreadable" on a perfectly healthy box,
+  # failing the exposure check fleet-wide. Nothing below needs anything
+  # but stat and the shell.
+  if [ "$CCD_OS" = darwin ]; then
+    local _out _rc _line
+    _out=$(stat -f%Mp%Lp "$@"); _rc=$?
+    while IFS= read -r _line; do
+      while [ "${#_line}" -gt 1 ] && [ "${_line#0}" != "$_line" ]; do _line="${_line#0}"; done
+      printf '%s\n' "$_line"
+    done <<<"$_out"
+    return $_rc
+  else stat -c%a "$@"; fi
+}
+
+# `date -d <string>` PARSES an arbitrary date; BSD's `date` has no such flag
+# and needs the input format spelled out. The one string ccrc parses this way
+# is openssl's `notAfter=` (`Aug 25 10:00:00 2027 GMT`), so that is the format
+# named here — and `-u` because the field carries its own zone and BSD would
+# otherwise read it in local time, which is a certificate expiring on the
+# wrong day.
+#
+# ANSWERS NOTHING AND rc 1 ON A STRING IT CANNOT PARSE, exactly as GNU's does,
+# because the caller branches on that.
+_plat_date_to_epoch() {   # <date string> -> epoch seconds
+  if [ "$CCD_OS" = darwin ]; then
+    date -j -u -f '%b %d %H:%M:%S %Y %Z' "$1" +%s 2>/dev/null
+  else
+    date -d "$1" +%s 2>/dev/null
+  fi
+}
+
+# `sha256sum` -> `shasum -a 256`. BSD's `shasum` prints the SAME two-field
+# "<digest>  <name>" line GNU does, so every caller that cuts the first field
+# and every `-c` check file written by one and read by the other match without
+# translation — measured, not assumed.
+_plat_sha256() {        # [file...] -> "<digest>  <name>" lines (stdin if none)
+  if [ "$CCD_OS" = darwin ]; then shasum -a 256 "$@"; else sha256sum "$@"; fi
+}
+_plat_sha256_check() {  # <sums-file> -> 0 iff every listed digest matches
+  if [ "$CCD_OS" = darwin ]; then shasum -a 256 -c "$@"; else sha256sum -c "$@"; fi
+}
+
+# `/proc/sys/kernel/random/uuid` -> `uuidgen`. LOWERCASED: the kernel emits
+# lowercase hex and this value is a session's identity — it lands in the
+# registry, in `--session-id`, and in the transcript filename the swap finds
+# a conversation BY. `uuidgen` emits uppercase, and two spellings of one uuid
+# is the swap looking for a file that is on disk under the other case.
+_plat_uuid() {
+  if [ "$CCD_OS" = darwin ]; then uuidgen | tr 'A-F' 'a-f'; else cat /proc/sys/kernel/random/uuid; fi
+}
+
+# `/proc/<pid>/status`'s PPid line -> `ps -o ppid=`. ALWAYS rc 0 and silent on
+# a pid that is gone, matching `_lc_ppid_of`'s existing contract exactly.
+_plat_ppid() {   # <pid> -> its parent pid, or nothing
+  if [ "$CCD_OS" = darwin ]; then
+    { ps -o ppid= -p "${1-}" 2>/dev/null | tr -d ' '; } 2>/dev/null
+  else
+    { sed -n 's/^PPid:[[:space:]]*//p' "/proc/${1-}/status" | head -1; } 2>/dev/null
+  fi
+  return 0
+}
+
+# `/proc/$$/cgroup` -> NOTHING, on purpose. macOS has no cgroups, so the
+# question this answers ("which unit/slice am I running under?") has no macOS
+# answer at all — and the caller already treats an empty read as "not under
+# one", which is the truthful answer on a box with no systemd. Degrading to
+# empty is therefore not a stub: it is the correct value.
+_plat_cgroup() {
+  if [ "$CCD_OS" = darwin ]; then return 0; fi
+  { sed -n 's/^0:://p' "/proc/$$/cgroup" | head -1; } 2>/dev/null
+}
+
+# `timeout(1)` is GNU coreutils and is NOT in the BSD userland. Preferred by
+# name, then `gtimeout` (Homebrew's coreutils installs it g-prefixed), and
+# only then the bash fallback — which exists so a box that never installed
+# coreutils still gets a BOUNDED call rather than a hang.
+#
+# THE FALLBACK REPORTS GNU's OWN 124 on expiry, because that is the code the
+# call sites branch on. It learns which of the two racers won from a stamp
+# file the sleeper writes BEFORE it signals, rather than from `kill -0` on the
+# sleeper — that probe answers "already exited" both for the sleeper that
+# fired and the sleeper that lost and was reaped, which is the bug that makes
+# a hand-rolled timeout report success on expiry.
+_plat_timeout() {   # <seconds> <cmd> [args...]
+  local bin
+  for bin in timeout gtimeout; do
+    if command -v "$bin" >/dev/null 2>&1; then "$bin" "$@"; return $?; fi
+  done
+  local secs="$1"; shift
+  local stamp; stamp="${TMPDIR:-/tmp}/.ccd-timeout.$BASHPID.$$.stamp"
+  rm -f -- "$stamp" 2>/dev/null
+  "$@" &
+  local pid=$! rc=0 watcher
+  # `|| exit 0` ON THE SLEEP, and it is the difference between a deadline and
+  # a guillotine. If `sleep` is absent or refuses — a contained PATH, a box
+  # with no coreutils — it returns INSTANTLY, and without this guard the
+  # watcher would stamp and signal in the same breath: every call would report
+  # 124 having given the command no time at all. A sleep that cannot run means
+  # THIS CALL GETS NO DEADLINE, which is the same honest degradation the
+  # callers had before a shim existed ("a box without coreutils' `timeout`
+  # still gets an answer, just without a deadline"). Caught by
+  # `ccrc-doctor.test.ts`'s "answers on a box with no coreutils timeout".
+  ( sleep "$secs" 2>/dev/null || exit 0; printf 1 > "$stamp" 2>/dev/null; kill -TERM "$pid" 2>/dev/null ) &
+  watcher=$!
+  wait "$pid" 2>/dev/null; rc=$?
+  kill -TERM "$watcher" 2>/dev/null; wait "$watcher" 2>/dev/null
+  if [ -s "$stamp" ]; then rc=124; fi
+  rm -f -- "$stamp" 2>/dev/null
+  return "$rc"
+}
+
+
+# ── THE SERVICE LAYER — systemd on Linux, launchd on macOS ───────────────
+# Every ccd session is a supervised unit, and `claude-session@.service` states
+# what supervision MEANS here: ExecStart=`ccd supervise %i`, Restart=always,
+# RestartSec=3, KillMode=process, and a start limit of 5 starts per 120s whose
+# expiry leaves a FAILED unit. Four of those five map onto launchd keys. The
+# fifth does not, and that gap is handled in `cmd_supervise`, not hidden here.
+#
+# THE UNIT NAME IS THE INTERFACE. Every function below takes the systemd
+# spelling (`claude-session@<id>.service`, `ccrc.service`) because that is what
+# ~90 call sites across ccd and ccrc already say, and translating at this
+# boundary keeps the port out of all of them. `_svc_label` is the ONE place a
+# unit name becomes a launchd label.
+_svc_label() {   # <unit> -> the launchd label for it
+  local u="${1%.service}"
+  case "$u" in
+    claude-session@*) printf 'app.ccrc.session.%s' "${u#claude-session@}" ;;
+    *)                printf 'app.ccrc.%s' "$u" ;;
+  esac
+}
+_svc_plist() { printf '%s/Library/LaunchAgents/%s.plist' "$HOME" "$(_svc_label "$1")"; }
+# `$UID`, NOT `id -u`. It is a bash variable, so this costs no fork and — the
+# part that bit — needs nothing on PATH. The forking version wrote
+# `id: command not found` to stderr on every contained-PATH run, which is both
+# noise on a healthy box and a dependency this file has no business having in
+# a function called several times per status read.
+_svc_domain() { printf 'gui/%s' "$UID"; }
+
+# THE BOX'S SERVICE MANAGER, whatever it is called here — systemd on Linux,
+# launchd on macOS.
+#
+# ITS OWN FUNCTION so a test harness can stub it — `command -v` finds a shell
+# function before it finds a binary, so nothing else could — and the NAME is
+# deliberately the one it had before macOS existed: four call sites in ccd and
+# two more in ccrc/ccrc-doctor-checks read it, and a rename would silently
+# un-stub every harness that patches it by name. What changed is the question
+# it answers, from "is systemctl on PATH" to "can this box supervise a session
+# at all", which is what every caller was ever asking.
+_have_systemctl() {
+  if [ "$CCD_OS" = darwin ]; then command -v launchctl >/dev/null 2>&1; return $?; fi
+  command -v systemctl >/dev/null 2>&1
+}
+
+# ── THE ONE PLACE launchctl IS INVOKED, AND THE GUARD ON IT ─────────────
+# `launchctl` IGNORES $HOME. Every other path in this file is rooted at
+# $HOME — the registry, the plists, the roster — so a caller that sets HOME
+# to a sandbox gets a fully isolated ccd. launchd does not work that way: its
+# per-user domain is keyed on the UID, so `bootstrap` from inside a sandbox
+# installs a job in the REAL session, where it outlives the sandbox and shows
+# up in the operator's own `launchctl list`.
+#
+# MEASURED, NOT THEORISED: the first full run of this port's test suite left
+# five live jobs — app.ccrc.ccrc and four app.ccrc.session.* — registered in
+# the developer's gui/501 domain, with their plists already deleted along with
+# the temp homes they were written into. systemd never had this failure mode
+# because `systemctl --user` is stubbed by PATH in exactly the tests that need
+# it, and an unstubbed call in a sandbox simply found no manager.
+#
+# SO THE RULE: when $HOME is not this user's real home, this box is being
+# driven from a sandbox, and a REAL launchctl must not be touched. A STUBBED
+# one still runs — resolution goes through PATH exactly as it does for
+# `systemctl` on the other platform, so a harness that puts its own launchctl
+# ahead of /bin keeps full control and full observability.
+#
+# `_SVC_REAL_HOME` is resolved ONCE via tilde expansion, which reads the
+# password database rather than $HOME — that is the whole point, and it is why
+# this cannot be `[ "$HOME" = "$HOME" ]` in disguise.
+# RESOLVED LAZILY, AND ONLY ON DARWIN. Two reasons, both learned the hard
+# way: at source time this ran on every ccd invocation on both platforms
+# including Linux, where nothing reads it; and it forked `id`, which on a
+# contained PATH is a `command not found` on stderr — see `_svc_domain` above.
+#
+# `$USER`/`$LOGNAME` first because they are already in the environment;
+# `id -un` only if neither is, and silenced. The tilde expansion is what
+# actually consults the password database, which is the whole point: it
+# answers the real home even when `$HOME` has been pointed somewhere else.
+_SVC_REAL_HOME=""
+_svc_real_home() {
+  [ -n "$_SVC_REAL_HOME" ] && { printf '%s' "$_SVC_REAL_HOME"; return 0; }
+  local u="${USER:-${LOGNAME:-}}"
+  [ -n "$u" ] || u="$(id -un 2>/dev/null)"
+  [ -n "$u" ] && _SVC_REAL_HOME="$(eval printf '%s' "~$u" 2>/dev/null)"
+  printf '%s' "$_SVC_REAL_HOME"
+}
+_svc_launchctl() {   # <launchctl args...>
+  local bin; bin="$(command -v launchctl 2>/dev/null)" || return 1
+  [ -n "$bin" ] || return 1
+  # A sandbox HOME plus the SYSTEM launchctl is the combination that must not
+  # proceed. Either alone is fine: the real home is an operator's box, and a
+  # stub anywhere is a harness that asked for this call.
+  if [ "$HOME" != "$(_svc_real_home)" ] \
+     && [ "${CCRC_ALLOW_SANDBOX_LAUNCHCTL:-}" != 1 ] \
+     && case "$bin" in /bin/launchctl|/usr/bin/launchctl) true ;; *) false ;; esac; then
+    return 1
+  fi
+  "$bin" "$@"
+}
+
+# THE PER-SESSION PLIST, written on demand rather than installed once: systemd
+# has ONE template unit and instantiates it per id with `%i`, and launchd has
+# no templates at all — every job is its own file. So the file `_svc_enable`
+# would have found is the file it writes.
+#
+# `EnvironmentVariables` CARRIES PATH, and that line is the difference between
+# a working session and a mystery. A systemd --user unit inherits the user
+# manager's environment; a LaunchAgent gets launchd's own minimal PATH, which
+# holds neither Homebrew's `bash` (this file needs >=4.4 and macOS ships 3.2)
+# nor `tmux` (the substrate every pane lives in). A session started from a
+# terminal would work and the same session started by the supervisor would
+# not — the worst shape a bug can take.
+#
+# `AbandonProcessGroup` IS `KillMode=process`, and it is load-bearing for the
+# same reason the unit spells that out: the tmux server is the durable
+# substrate and MUST survive a supervisor restart. Without this key launchd
+# kills the whole process group on stop, taking every pane with it — a restart
+# of the supervisor would become a restart of the fleet.
+# THE PATH A JOB FILE BAKES IN, and why it is not simply `$PATH`.
+#
+# `EnvironmentVariables` is a fixed dictionary: whatever PATH is at the moment
+# a plist is written is the PATH every future run of that job gets. That is
+# fine when an operator enables a session from their own shell and wrong in
+# exactly the case that already bit this port once — a caller whose PATH has
+# been stripped. A supervisor started from a job whose PATH lost Homebrew
+# would spawn `bash` 3.2 and find no `tmux`, and the failure would surface as
+# a syntax error inside ccd rather than as a missing directory.
+#
+# So the two Homebrew prefixes are APPENDED when absent — appended, not
+# prepended, so an operator who deliberately puts something ahead of Homebrew
+# keeps their order. `/opt/homebrew/bin` is Apple-silicon, `/usr/local/bin`
+# Intel; a box has one of them and the other is an inert entry.
+_svc_job_path() {
+  local p="${PATH:-}" d
+  for d in /opt/homebrew/bin /usr/local/bin; do
+    case ":$p:" in *":$d:"*) ;; *) [ -d "$d" ] && p="${p:+$p:}$d" ;; esac
+  done
+  printf '%s' "$p"
+}
+
+_svc_write_session_plist() {   # <unit> -> 0 iff its plist is on disk
+  local unit="$1" id label plist tmp
+  id="${unit%.service}"; id="${id#claude-session@}"
+  label="$(_svc_label "$unit")"; plist="$(_svc_plist "$unit")"
+  mkdir -p "$HOME/Library/LaunchAgents" || return 1
+  tmp="$plist.tmp.$$"
+  cat > "$tmp" <<PLIST || { rm -f -- "$tmp"; return 1; }
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>${label}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${HOME}/.local/bin/ccd</string>
+    <string>supervise</string>
+    <string>${id}</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>3</integer>
+  <key>AbandonProcessGroup</key><true/>
+  <key>ProcessType</key><string>Background</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>$(_svc_job_path)</string>
+    <key>HOME</key><string>${HOME}</string>
+  </dict>
+  <key>StandardOutPath</key><string>${_SVC_REG}/${id}.supervise.log</string>
+  <key>StandardErrorPath</key><string>${_SVC_REG}/${id}.supervise.log</string>
+</dict>
+</plist>
+PLIST
+  _plat_mv_notdir "$tmp" "$plist" || { rm -f -- "$tmp"; return 1; }
+}
+
+# `systemctl --user enable --now` — install the unit AND start it now.
+# On launchd those are one verb (`bootstrap` both loads and, with RunAtLoad,
+# starts), which is why `_svc_enable` below is the same call minus the start:
+# a plist in ~/Library/LaunchAgents IS boot persistence, exactly as an enable
+# symlink is under systemd.
+_svc_enable_now() {   # <unit>
+  if [ "$CCD_OS" != darwin ]; then systemctl --user enable --now "$1" 2>/dev/null; return $?; fi
+  case "$1" in claude-session@*) _svc_write_session_plist "$1" || return 1 ;; esac
+  local d; d="$(_svc_domain)"
+  _svc_launchctl enable "$d/$(_svc_label "$1")" 2>/dev/null
+  # ALREADY-BOOTSTRAPPED IS SUCCESS, not an error to relay: `enable --now` on a
+  # running unit is a no-op under systemd, and every caller here is written
+  # against that. `bootstrap` returns 5 ("Input/output error") for a label that
+  # is already loaded, so the kickstart below is what makes the two agree.
+  _svc_launchctl bootstrap "$d" "$(_svc_plist "$1")" 2>/dev/null
+  _svc_launchctl kickstart "$d/$(_svc_label "$1")" >/dev/null 2>&1
+}
+_svc_enable() {   # <unit> — boot persistence only, no start
+  if [ "$CCD_OS" != darwin ]; then systemctl --user enable "$1" 2>/dev/null; return $?; fi
+  case "$1" in claude-session@*) _svc_write_session_plist "$1" || return 1 ;; esac
+  _svc_launchctl enable "$(_svc_domain)/$(_svc_label "$1")" 2>/dev/null
+  return 0
+}
+_svc_disable_now() {   # <unit>
+  if [ "$CCD_OS" != darwin ]; then systemctl --user disable --now "$1" 2>/dev/null; return $?; fi
+  # THE MANAGER'S REFUSAL HAS TO REACH THE CALLER. `systemctl --user disable
+  # --now` reports one, and `_ws_unsupervise` prints "could not disable unit …"
+  # on it — a warning an operator acts on, because a session that stayed
+  # enabled comes back at the next login. Returning 0 unconditionally here made
+  # that warning unreachable on macOS: the one platform where it would be
+  # printed is the one where it never could be.
+  #
+  # `3` IS launchctl's "No such process" — the job is not loaded, which is what
+  # `disable --now` on an already-disabled unit means, and systemd calls that
+  # success too. Any OTHER non-zero is a manager that refused.
+  local d rc=0; d="$(_svc_domain)"
+  _svc_launchctl bootout "$d/$(_svc_label "$1")" 2>/dev/null || rc=$?
+  { [ "$rc" -eq 0 ] || [ "$rc" -eq 3 ]; } || return 1
+  _svc_launchctl disable "$d/$(_svc_label "$1")" 2>/dev/null
+  rm -f -- "$(_svc_plist "$1")" 2>/dev/null
+  return 0
+}
+_svc_start() {   # <unit>
+  if [ "$CCD_OS" != darwin ]; then systemctl --user start "$1" 2>/dev/null; return $?; fi
+  case "$1" in claude-session@*) _svc_write_session_plist "$1" || return 1 ;; esac
+  local d; d="$(_svc_domain)"
+  _svc_launchctl bootstrap "$d" "$(_svc_plist "$1")" 2>/dev/null
+  _svc_launchctl kickstart "$d/$(_svc_label "$1")" >/dev/null 2>&1
+}
+_svc_stop() {   # <unit>
+  if [ "$CCD_OS" != darwin ]; then systemctl --user stop "$1" 2>/dev/null; return $?; fi
+  _svc_launchctl bootout "$(_svc_domain)/$(_svc_label "$1")" 2>/dev/null
+  return 0
+}
+_svc_restart() {   # <unit>
+  if [ "$CCD_OS" != darwin ]; then systemctl --user restart "$1" 2>/dev/null; return $?; fi
+  _svc_launchctl kickstart -k "$(_svc_domain)/$(_svc_label "$1")" >/dev/null 2>&1
+}
+# `try-restart` restarts ONLY what is already running, and that conditional is
+# the whole verb: `kickstart` on an unloaded label would START it, turning a
+# sweep meant to refresh live supervisors into one that resurrects every
+# session the operator had stopped.
+_svc_try_restart() {   # <unit>
+  if [ "$CCD_OS" != darwin ]; then systemctl --user try-restart "$1" 2>/dev/null; return $?; fi
+  _svc_is_loaded "$1" || return 0
+  _svc_launchctl kickstart -k "$(_svc_domain)/$(_svc_label "$1")" >/dev/null 2>&1
+}
+_svc_is_loaded() {   # <unit> -> 0 iff launchd holds this label
+  _svc_launchctl print "$(_svc_domain)/$(_svc_label "$1")" >/dev/null 2>&1
+}
+
+# THE REMEDY LINE, and it must name a command the operator's box actually has.
+# Every "read what it says" message in this file used to end in `systemctl
+# --user status <unit>`; on macOS that is a command not found, which turns a
+# diagnostic into a second dead end at the exact moment someone is debugging.
+# THE RESTART REMEDY, in the spelling this box has. Same reason as
+# `_svc_status_hint` below: a message that ends in `systemctl --user restart`
+# on macOS hands the operator a command that does not exist, at the moment
+# they are already trying to fix something.
+_svc_restart_hint() {   # <unit> -> the command that restarts it
+  if [ "$CCD_OS" = darwin ]; then
+    printf 'launchctl kickstart -k %s/%s' "$(_svc_domain)" "$(_svc_label "$1")"
+  else
+    printf 'systemctl --user restart %s' "$1"
+  fi
+}
+
+_svc_status_hint() {   # <unit> -> the command that shows this unit's state
+  if [ "$CCD_OS" = darwin ]; then
+    printf 'launchctl print %s/%s' "$(_svc_domain)" "$(_svc_label "$1")"
+  else
+    printf 'systemctl --user status %s' "$1"
+  fi
+}
+
+# `systemctl --user is-active` -> active|inactive|failed|unknown, and the four
+# words matter: callers branch on them by name.
+#
+# `failed` HAS NO LAUNCHD SOURCE — see the start-limit note at the top of this
+# block — so it is read from the stamp `cmd_supervise` writes when it gives up.
+# That keeps the one state launchd cannot express owned by the code that CAN
+# observe it, rather than guessed from a `print` field that means something
+# else.
+_svc_is_active() {   # <unit> -> one word on stdout
+  if [ "$CCD_OS" != darwin ]; then
+    systemctl --user is-active "$1" 2>/dev/null || true
+    return 0
+  fi
+  local id="${1%.service}"; id="${id#claude-session@}"
+  if [ -f "$_SVC_REG/$id.svcfailed" ]; then printf 'failed'; return 0; fi
+  # NO `_svc_is_loaded` RUNG HERE, deliberately: it is a boolean, and folding
+  # it in front of the three-way read below would turn "the manager did not
+  # answer" back into `inactive` — the exact conflation the block underneath
+  # exists to prevent. One `print`, read for all three answers.
+  # MATCHED BY THE SHELL, not by `grep`. This is read on every `ccrc status`
+  # and every doctor run, so it is a fork saved — but the reason it is written
+  # this way is correctness, not speed: the fixture PATHs this suite runs
+  # under are deliberately contained, and a check that shells out to `grep`
+  # answers `inactive` on a perfectly healthy box whenever grep is not on it.
+  # (Measured: `ccrc doctor: services` failed exactly that way.)
+  # THREE ANSWERS, NOT TWO, and the third one is the whole reason this is not
+  # a boolean: "the manager did not answer" is NOT "the service is stopped".
+  # Collapsing them reports every workspace on a box with an unreachable
+  # manager as `inactive` — "nothing is watching this session" — which is the
+  # precise false positive `_ws_unit_state` and `_box_units` exist to make
+  # visible. systemd's `is-active` keeps the distinction by printing nothing;
+  # launchd keeps it in the exit code.
+  #
+  # `113` IS launchctl's "Could not find service": a POSITIVE answer that no
+  # such job is loaded, and the only non-zero status that means `inactive`.
+  # Anything else — the binary missing, the platform guard refusing, a domain
+  # that cannot be reached — is a question that was never asked, and answers
+  # EMPTY like systemd's does.
+  local _out _rc
+  _out="$(_svc_launchctl print "$(_svc_domain)/$(_svc_label "$1")" 2>/dev/null)"; _rc=$?
+  case "$_out" in
+    *"state = running"*) printf 'active'; return 0 ;;
+  esac
+  if [ "$_rc" -eq 113 ]; then printf 'inactive'; fi
+  return 0
+}
+# `reset-failed` clears the refusal a start limit left behind. Under launchd
+# the refusal is ours, so clearing it is removing our own stamp.
+_svc_reset_failed() {   # <unit>
+  if [ "$CCD_OS" != darwin ]; then systemctl --user reset-failed "$1" 2>/dev/null; return $?; fi
+  local id="${1%.service}"; id="${id#claude-session@}"
+  rm -f -- "$_SVC_REG/$id.svcfailed" 2>/dev/null
+  return 0
+}
+# `daemon-reload` has no launchd counterpart AND NEEDS NONE: launchd reads a
+# job's plist at `bootstrap`, so the read this verb forces under systemd has
+# already happened by construction on the other platform. A no-op that returns
+# success is the honest translation, not a stub.
+_svc_daemon_reload() {
+  if [ "$CCD_OS" != darwin ]; then systemctl --user daemon-reload; return $?; fi
+  return 0
+}
+# `list-units 'claude-session@*'` -> the unit names, one per line. Read from
+# the LaunchAgents directory rather than from `launchctl print` output: the
+# directory is the enumerable, stable list (it is what boot persistence means
+# here), where `launchctl print gui/<uid>` prints a large nested block whose
+# format Apple has changed between releases.
+_svc_list_sessions() {   # -> claude-session@<id>.service, one per line
+  if [ "$CCD_OS" != darwin ]; then
+    systemctl --user list-units 'claude-session@*' --all --plain --no-legend 2>/dev/null | awk '{print $1}'
+    return 0
+  fi
+  local f b
+  for f in "$HOME"/Library/LaunchAgents/app.ccrc.session.*.plist; do
+    [ -e "$f" ] || continue
+    b="${f##*/}"; b="${b%.plist}"
+    printf 'claude-session@%s.service\n' "${b#app.ccrc.session.}"
+  done
+  return 0
+}
+
+# `systemd-run --user --collect` — fire a detached job and return immediately.
+# The swap's own tail runs through this so the swap survives the death of the
+# session that asked for it; on launchd the equivalent is not a job at all but
+# a disowned child, because a transient LaunchAgent would need a plist written,
+# bootstrapped and reaped for a command that runs once for two seconds.
+#
+# `setsid` WHERE THERE IS ONE, and a plain background job where there is not:
+# what this needs is a process that outlives its parent's process group, and
+# macOS has no setsid(1). `nohup` plus the disown that leaving the function
+# performs is what remains, and it is enough here — the caller is exiting, not
+# being SIGKILLed with its group.
+_svc_run_detached() {   # <cmd> [args...]
+  if [ "$CCD_OS" != darwin ]; then
+    systemd-run --user --collect --quiet "$@"
+    return $?
+  fi
+  # PROBED BEFORE BACKGROUNDING, because the caller checks this status and a
+  # bare `nohup … &` would answer 0 for a command that does not exist — the
+  # detached swap's `|| die "systemd-run failed. Nothing was moved"` would
+  # then never fire, and a swap that never ran would report as dispatched.
+  # `systemd-run` reports whether the JOB WAS CREATED, not what the command
+  # went on to do, and this probe is the same promise, kept the same way.
+  command -v "$1" >/dev/null 2>&1 || return 1
+  nohup "$@" >/dev/null 2>&1 &
+  return 0
+}
+# ── END PLATFORM LAYER — the byte-identical region ends HERE ────────────
+# Add a new `_plat_*`/`_svc_*` helper ABOVE this line, in BOTH files, or the
+# pin test (`macos-platform.test.ts`) cannot see it: the compared region is
+# sliced by the two sentinels, so a helper appended below them is two files
+# free to drift — the exact failure the duplication invites and the pin
+# exists to refuse. The test also asserts every `_plat_`/`_svc_` definition
+# sits inside the sentinels, so an appended-below helper is a red suite, not
+# a quiet gap.
 REG="$HOME/.cc-sessions"
 WRAPPER_DIR="$HOME/.local/bin"
 # Derived from HOME with no env override, exactly as REG and WRAPPER_DIR are:
@@ -81,6 +835,15 @@ SPAWN_GATE_TRIES=450            # capture-pane polls before the startup-gate win
                                 # which is what keeps the rc-4 case a 3-poll assertion instead of a
                                 # 4,500-process one.
 SUPERVISED_START_WAIT=30        # seconds `ccd start`/`ccd ensure` wait for the unit's pane to appear.
+# THE START LIMIT, DARWIN'S COPY OF IT. These two MUST equal
+# StartLimitBurst= and StartLimitIntervalSec= in `ccd/claude-session@.service`
+# — that file is the definition on the platform that enforces it, and this is
+# the same policy restated for the platform that cannot. A test
+# (`macos-service.test.ts`) reads both files and fails when they disagree,
+# because a limit that differs by platform is a session that is `failed` on
+# one box and looping on another for the same fault.
+SUPERVISE_START_LIMIT_BURST=5   # starts allowed inside the window below
+SUPERVISE_START_LIMIT_S=120     # the window, in seconds
                                 # A bound on FAILURE REPORTING, not a cost anybody normally pays: a
                                 # pane shows up about a second after the unit starts.
 SPAWN_SETTLE_S=240              # WALL-CLOCK bound on the startup-gate wait, on the AGENT-REACHABLE
@@ -144,8 +907,19 @@ COMPACT_COOLDOWN=1800           # min seconds between auto-compacts of one sessi
 COMPACT_QUIET=60                # seconds a session must be idle before an auto-compact fires (let the dust settle)
 # Make `systemctl --user` reachable even from a non-interactive SSH context (no login session
 # sets these). Lingering keeps /run/user/$UID alive across logins/reboots.
-: "${XDG_RUNTIME_DIR:=/run/user/$(id -u)}"; export XDG_RUNTIME_DIR
-: "${DBUS_SESSION_BUS_ADDRESS:=unix:path=${XDG_RUNTIME_DIR}/bus}"; export DBUS_SESSION_BUS_ADDRESS
+#
+# LINUX ONLY, and the guard is not tidiness. launchd needs neither variable, so
+# on macOS these two lines invent a `/run/user/<uid>` path that does not exist —
+# and, worse, they FORK `id` to build it on every single ccd invocation. On
+# Linux the variable is normally already set, so `${VAR:=default}` never
+# evaluates its default and the fork never happens; on macOS it is never set,
+# so it happens every time. Measured: with a deliberately stripped PATH that is
+# an `id: command not found` on stderr from a file whose contract is to leak
+# nothing there (`ccd-lifecycle-emit.test.ts`, `ccd-lifecycle-gen.test.ts`).
+if [ "$CCD_OS" != darwin ]; then
+  : "${XDG_RUNTIME_DIR:=/run/user/$(id -u)}"; export XDG_RUNTIME_DIR
+  : "${DBUS_SESSION_BUS_ADDRESS:=unix:path=${XDG_RUNTIME_DIR}/bus}"; export DBUS_SESSION_BUS_ADDRESS
+fi
 
 die() { echo "ccd: $*" >&2; exit 1; }
 
@@ -358,7 +1132,7 @@ _session_probe() {   # id -> PROBE_VERDICT=live|gone|unknown, PROBE_DETAIL (unkn
   if [[ $(type -t tmux) == function ]]; then
     out=$(tmux has-session -t "$(_tmux "$1")" 2>&1); rc=$?
   else
-    out=$(timeout "$SUBSTRATE_PROBE_DEADLINE_S" tmux has-session -t "$(_tmux "$1")" 2>&1); rc=$?
+    out=$(_plat_timeout "$SUBSTRATE_PROBE_DEADLINE_S" tmux has-session -t "$(_tmux "$1")" 2>&1); rc=$?
   fi
   if (( rc == 0 )); then PROBE_VERDICT=live; PROBE_DETAIL=""; PROBE_SUBSTRATE=present; return 0; fi
   # rc 124 is timeout's own kill: tmux printed nothing, so the reason is SYNTHESIZED —
@@ -379,6 +1153,19 @@ _session_probe() {   # id -> PROBE_VERDICT=live|gone|unknown, PROBE_DETAIL (unkn
   #
   #   no server running on /tmp/tmux-1000/default            socket present, nobody serving
   #   error connecting to /tmp/tmux-1000/x (No such file …)  no socket at all (cold boot)
+  #
+  # MEASURED on Darwin too, independently (the macOS port, PR #11): on a fresh macOS box
+  # every session deadlocked at the supervisor pre-flight — the supervisor would not
+  # spawn because tmux was unreachable, and tmux stayed unreachable because nothing
+  # spawned it. A Linux fleet host effectively never sits with no server at all, which
+  # is why the shape had not been seen before that port. The port fixed it by matching
+  # the bare `No such file or directory`/`no server running` strings in PROBE_DETAIL
+  # (`_probe_cold_substrate`, deleted when the two fixes merged — this classification
+  # is the one mechanism now). tmux's stderr wording is tmux's own, not the platform's,
+  # so the two patterns below are expected to match BSD tmux verbatim — but that
+  # expectation is unmeasured on a cold Darwin box with THIS errno-qualified spelling;
+  # the port's looser match was. If a cold macOS box ever wedges at spawn again, look
+  # here first: an unmatched absence degrades to `unmeasured`, which refuses.
   #
   # The errno is part of the second pattern and is NOT optional. `error connecting to …
   # (Permission denied)` and `(Connection refused)` are the same prefix and are NOT
@@ -478,7 +1265,7 @@ _reg_set() {   # id field value -> 0 iff the value is on disk under its own name
   _REG_SET_SEQ=$(( _REG_SET_SEQ + 1 ))
   tmp="$REG/.$1.$2.$BASHPID.$_REG_SET_SEQ.tmp"
   printf '%s' "$3" > "$tmp" 2>/dev/null || { rm -f -- "$tmp"; return 1; }
-  mv -fT -- "$tmp" "$REG/$1.$2" || { rm -f -- "$tmp"; return 1; }
+  _plat_mv_notdir "$tmp" "$REG/$1.$2" || { rm -f -- "$tmp"; return 1; }
 }
 _reg_get() { cat "$REG/$1.$2" 2>/dev/null; }                # id field
 # THE ONE WRITER OF `started`, and the reason it is a function rather than eight
@@ -649,7 +1436,7 @@ _substrate_mark() {   # id — record "this supervisor could not reach tmux" ($R
   if [[ $(type -t tmux) == function ]]; then
     server=$(tmux display-message -p '#{version}' 2>/dev/null) || server="unreachable"
   else
-    server=$(timeout "$SUBSTRATE_PROBE_DEADLINE_S" tmux display-message -p '#{version}' 2>/dev/null) || server="unreachable"
+    server=$(_plat_timeout "$SUBSTRATE_PROBE_DEADLINE_S" tmux display-message -p '#{version}' 2>/dev/null) || server="unreachable"
   fi
   # Through `_reg_set` (wave 2), so the marker cannot be read half-written like
   # any other field. FIRST-WRITE-WINS is untouched: the `[[ -e "$f" ]]` guard
@@ -670,7 +1457,7 @@ _ws_supervise()   { rm -f "$REG/$1.stopped"                                   # 
                     # POSITIONAL, and there is no `$id` in this function: it is
                     # a one-liner with no `local`, so the emit must say `$1`.
                     _lc_done supervise "$1" "" meas.wrapper "$(_reg_get "$1" wrapper)"
-                    systemctl --user enable  --now "claude-session@$1" 2>/dev/null \
+                    _svc_enable_now "claude-session@$1" 2>/dev/null \
                       || echo "warn: could not enable unit claude-session@$1" >&2; }
 
 _ws_unsupervise() {   # id [surface] — disable the unit AND RECORD THAT SOMEBODY MEANT TO.
@@ -719,7 +1506,7 @@ _ws_unsupervise() {   # id [surface] — disable the unit AND RECORD THAT SOMEBO
   # (the message this replaced); routing all five call sites through one
   # choke point must not mean the warning stops firing for any of them. Mirrors
   # _ws_supervise's own warning on the same failure, one function up.
-  systemctl --user disable --now "claude-session@$id" 2>/dev/null \
+  _svc_disable_now "claude-session@$id" 2>/dev/null \
     || echo "ccd: warn: could not disable unit claude-session@$id (it may resurrect if it was enabled)" >&2
 }
 
@@ -935,7 +1722,7 @@ _lc_cgroup_read() {   # -> this process's `0::` cgroup path, verbatim, on stdout
   # same idiom `_lc_rotate`'s flock `exec` established for a builtin with
   # multiple redirects — here for a different reason (a per-stage redirect
   # does not cover its neighbour), same fix shape.
-  { sed -n 's/^0:://p' "/proc/$$/cgroup" | head -1; } 2>/dev/null
+  _plat_cgroup
 }
 
 _lc_ppid_of() {   # pid -> its PPid, on stdout, or nothing. ALWAYS rc 0.
@@ -958,7 +1745,7 @@ _lc_ppid_of() {   # pid -> its PPid, on stdout, or nothing. ALWAYS rc 0.
   # trailing `return 0` below is unaffected — `pipefail`'s rightmost-nonzero
   # rule still applies INSIDE the braces exactly as it did on the bare pipe,
   # and this function always answers 0 regardless either way.
-  { sed -n 's/^PPid:[[:space:]]*//p' "/proc/${1-}/status" | head -1; } 2>/dev/null
+  _plat_ppid "${1-}"
   return 0
 }
 
@@ -1034,7 +1821,7 @@ _lc_obs() {   # populate _LC_OBS once per process. Prints NOTHING. Always 0.
     # stub left `_lc_obs` unreturned past an outer `timeout -s KILL 3`, i.e.
     # SIGKILLed rather than answering — which breaks "never gate the act it
     # observes" the moment wave 3/4 wires this into the hot path.
-    panes=$(timeout "$_LC_OBS_TMUX_DEADLINE_S" bash -c "$(declare -f tmux 2>/dev/null)
+    panes=$(_plat_timeout "$_LC_OBS_TMUX_DEADLINE_S" bash -c "$(declare -f tmux 2>/dev/null)
 tmux list-panes -a -F '#{session_name} #{pane_pid}'" 2>/dev/null)
     rc=$?
     # rc 124 is `timeout`'s own SIGTERM; 137 is what a caller sees if an OUTER
@@ -1136,7 +1923,7 @@ _lc_rotate() {   # live-path — mint a fresh generation when the live one is fu
   # exactly how two processes come to hold "the lock" on two different inodes.
   local live="${1-}" sz lock lfd f n live_now minted="" gens=()
   [[ -n "$live" && -f "$live" ]] || return 0
-  sz=$(stat -c %s -- "$live" 2>/dev/null)
+  sz=$(_plat_size -- "$live" 2>/dev/null)
   [[ "$sz" =~ ^[0-9]+$ ]] || return 0              # regex BEFORE the arithmetic, always
   (( sz >= _LC_GEN_MAX_BYTES )) || return 0
 
@@ -1305,7 +2092,7 @@ _lc_err() {   # bump the counted errors file. Prints nothing. Always 0.
   # nothing" contract. `mv`/`rm` below are EXTERNAL commands, so their own
   # `2>/dev/null` already captures normally; only the builtin `printf`
   # needed the compound wrap.
-  { printf '%s\n' "$n" > "$tmp"; } 2>/dev/null && mv -fT -- "$tmp" "$_LC_DIR/errors" 2>/dev/null
+  { printf '%s\n' "$n" > "$tmp"; } 2>/dev/null && _plat_mv_notdir "$tmp" "$_LC_DIR/errors" 2>/dev/null
   rm -f -- "$tmp" 2>/dev/null
   return 0
 }
@@ -1664,7 +2451,7 @@ _transcript_path() {   # id -> the Claude Code transcript for its CURRENT uuid
   # dir name is a munged workdir, and parsing `ls` output is how a space in one
   # becomes a silently wrong answer.
   newest=$(_transcript_matches "$cfg" "$uuid" \
-    | while IFS= read -r f; do printf '%s\t%s\n' "$(stat -c %Y "$f" 2>/dev/null || printf 0)" "$f"; done \
+    | while IFS= read -r f; do printf '%s\t%s\n' "$(_plat_mtime "$f" 2>/dev/null || printf 0)" "$f"; done \
     | LC_ALL=C sort -rn -k1,1 | head -1 | cut -f2-)
   if [[ -n "$newest" ]]; then printf '%s\n' "$newest"; return 0; fi
   printf '%s/projects/%s/%s.jsonl\n' "$cfg" "$munged" "$uuid"
@@ -1794,9 +2581,9 @@ _ws_ignored_digest() {   # workdir -> sha256 of the ignored-entry set
   # digest over an incomplete set is the same forgery one layer down. An
   # incomplete read is not a smaller answer, it is no answer.
   local d errf err
-  errf=$(mktemp) || return 1
+  errf=$(_plat_mktemp) || return 1
   d=$(git -C "$1" status --porcelain --ignored=matching 2>"$errf" \
-        | grep '^!! ' | sort | sha256sum | cut -d' ' -f1; exit "${PIPESTATUS[0]}") \
+        | grep '^!! ' | sort | _plat_sha256 | cut -d' ' -f1; exit "${PIPESTATUS[0]}") \
     || { rm -f "$errf"; return 1; }
   err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
   [[ -z "$err" ]] || return 1
@@ -1913,8 +2700,8 @@ _gh_pr_list() {   # repo [head-branch] -> rows JSON on stdout; on failure prints
   local repo="$1" head="${2:-}" errf out rc err fields="$PR_JSON_FIELDS"
   local -a filter=()
   [[ -n "$head" ]] && { filter=(--head "$head"); fields="$PR_JSON_FIELDS,$PR_CHECK_FIELD"; }
-  errf=$(mktemp)
-  out=$(timeout "$PR_GH_TIMEOUT" gh pr list --repo "$repo" "${filter[@]}" --state all --limit 100 \
+  errf=$(_plat_mktemp)
+  out=$(_plat_timeout "$PR_GH_TIMEOUT" gh pr list --repo "$repo" "${filter[@]}" --state all --limit 100 \
           --json "$fields" 2>"$errf"); rc=$?
   err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
   if (( rc == 124 )); then printf '{"phase":"unknown","reason":"timeout"}\n'; return 1; fi
@@ -2014,7 +2801,7 @@ _gh_pr_checks() {   # repo -> `[{number, statusCheckRollup}, …]` on stdout for
   # `agent-down` and backs the whole project off on. Two calls is two calls
   # whatever the fleet grows to.
   local repo="$1" out rc
-  out=$(timeout "$PR_GH_CHECKS_TIMEOUT" gh pr list --repo "$repo" --state open --limit 100 \
+  out=$(_plat_timeout "$PR_GH_CHECKS_TIMEOUT" gh pr list --repo "$repo" --state open --limit 100 \
           --json "number,$PR_CHECK_FIELD" 2>/dev/null); rc=$?
   # STDERR IS DISCARDED HERE, which it is nowhere else in this file, and the
   # reason is that there is nothing this function could do with a classification.
@@ -2992,7 +3779,7 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
   grep -qxF '.ccrc/' "$common/info/exclude" 2>/dev/null || echo '.ccrc/' >> "$common/info/exclude"
 
   local id="$project-$slug"
-  local uuid; uuid=$(cat /proc/sys/kernel/random/uuid)
+  local uuid; uuid=$(_plat_uuid)
   _reg_set "$id" wrapper "$hw";   _reg_set "$id" project "$project"
   _reg_set "$id" workdir "$wt";   _reg_set "$id" uuid "$uuid"
   _reg_set "$id" workspace "$slug"; _reg_set "$id" base "$base"
@@ -3362,7 +4149,7 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
     # through by a translated warning. Two statements and a scratch file rather
     # than a pipeline, because `local x=$(cmd)` returns local's status.
     local dirty derrf derr drc
-    derrf=$(mktemp) || _lc_refuse destroy "$id" scratch-unwritable \
+    derrf=$(_plat_mktemp) || _lc_refuse destroy "$id" scratch-unwritable \
       "could not make a scratch file to read $workdir — nothing was touched" \
       dec.reason "$reason"
     dirty=$(git -C "$workdir" status --porcelain 2>"$derrf"); drc=$?
@@ -4620,7 +5407,7 @@ _ws_archive_manifest() {   # id -> one JSON object on stdout
   # refuses (ccd:1800's comment says so), which is precisely why the honesty of
   # the numbers it does record is the only protection there is.
   local derrf derr drc
-  derrf=$(mktemp) \
+  derrf=$(_plat_mktemp) \
     || { echo "manifest: could not make a scratch file to read the tree at $workdir" >&2; return 1; }
   dirty=$(git -C "$workdir" status --porcelain 2>"$derrf"); drc=$?
   derr=$(cat "$derrf" 2>/dev/null); rm -f "$derrf"
@@ -4987,7 +5774,7 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   _lc_done restore "$id" "" verb ws-restore \
     meas.archivedAt     "$(_reg_get "$id" archived)" \
     meas.archivedReason "$(_reg_get "$id" archivedreason)" \
-    meas.manifestBytes  "$(stat -c %s -- "$REG/$id.archivemanifest" 2>/dev/null)" \
+    meas.manifestBytes  "$(_plat_size -- "$REG/$id.archivemanifest" 2>/dev/null)" \
     meas.workdir        "$workdir" \
     meas.branch         "$(_reg_get "$id" branch)" \
     dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
@@ -5275,7 +6062,7 @@ _pr_state_one() {   # id main repo rows [answered-at-ms] [rows-head-branch] -> o
     # same fix as `cmd_ws_rm` and `_ws_gc_dirty`; here it lands on `null` rather
     # than on a refusal, because this function REPORTS and those two DESTROY.
     local perrf perr
-    perrf=$(mktemp) || perrf=""
+    perrf=$(_plat_mktemp) || perrf=""
     if [[ -z "$perrf" ]]; then
       echo "pr-state: could not make a scratch file to read $workdir — dirty unknown for $id" >&2
     else
@@ -5415,7 +6202,7 @@ cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <proje
   # leaves `answeredAt=""` and `_pr_py` falls back to its own clock, which is
   # precisely the pre-fix behaviour. This guard may only remove races, never add
   # a refusal that stops a phase from ever updating.
-  answeredAt=$(date +%s%3N 2>/dev/null)
+  answeredAt=$(_plat_epoch_ms 2>/dev/null)
   [[ "$answeredAt" =~ ^[0-9]+$ ]] || answeredAt=""
 
   # ── THE ROLLUPS, WHICH THE WIDE WINDOW CANNOT CARRY ────────────────
@@ -5620,7 +6407,7 @@ cmd_pr_open() {   # ccd pr-open --session <id> --title <t> --body-b64 <b64> --dr
   # lost anything to. So the refusal NAMES what it left behind, the way the
   # push's own refusal says "nothing was opened" about a state where truly
   # nothing was — the route surfaces exactly this stderr in its 502.
-  timeout "$PR_GH_TIMEOUT" gh "${args[@]}" >/dev/null \
+  _plat_timeout "$PR_GH_TIMEOUT" gh "${args[@]}" >/dev/null \
     || die "gh pr create failed — $branch is on origin with its upstream set, but no PR was opened"
 
   # The answer, read back through the SAME reader as the probe: same fields,
@@ -5802,9 +6589,9 @@ _ws_nested_checkouts() {   # dir -> resolved checkout roots, one per line
   # refused a perfectly healthy workspace.
   dir=$(cd "$1" >/dev/null 2>&1 && pwd -P) \
     || { _WS_NESTED_WHY="could not resolve $1"; return 1; }
-  outf=$(mktemp) || { _WS_NESTED_WHY='could not make a scratch file'; return 1; }
-  errf=$(mktemp) || { rm -f "$outf"; _WS_NESTED_WHY='could not make a scratch file'; return 1; }
-  timeout "$REAP_SCAN_SECONDS" find "$dir" -mindepth 2 -name .git -print0 >"$outf" 2>"$errf"; rc=$?
+  outf=$(_plat_mktemp) || { _WS_NESTED_WHY='could not make a scratch file'; return 1; }
+  errf=$(_plat_mktemp) || { rm -f "$outf"; _WS_NESTED_WHY='could not make a scratch file'; return 1; }
+  _plat_timeout "$REAP_SCAN_SECONDS" find "$dir" -mindepth 2 -name .git -print0 >"$outf" 2>"$errf"; rc=$?
   err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
   if (( rc == 124 )); then
     rm -f "$outf"
@@ -5967,7 +6754,7 @@ _ws_child_manifest() {   # main workdir -> JSON array on stdout; non-zero and NO
       # with it rather than silently reporting the rest as though nothing
       # were missing.
       cop=$(_ws_child_op "$cpath") || return 1
-      errf=$(mktemp) || return 1
+      errf=$(_plat_mktemp) || return 1
       dirt=$(git -C "$cpath" status --porcelain 2>"$errf"); rc=$?
       err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
       { (( rc == 0 )) && [[ -z "$err" ]]; } || return 1
@@ -6066,9 +6853,9 @@ _ws_sensitive_inside() {   # absdir relpath deadline -> 0 with hits in _WS_INSID
   # line keeps its `rm`. The four `rm -f "$outf"` here ARE pinned individually,
   # by `removes the inside-scan's scratch files too`, which walks all four exits
   # — with any one deleted a fixture for a DIFFERENT failure still cleans up.
-  outf=$(mktemp) || return 1
-  errf=$(mktemp) || { rm -f "$outf"; return 1; }
-  timeout "$left" find "$abs" -mindepth 1 \( "${_WS_SENSITIVE_FIND[@]}" \) -print0 \
+  outf=$(_plat_mktemp) || return 1
+  errf=$(_plat_mktemp) || { rm -f "$outf"; return 1; }
+  _plat_timeout "$left" find "$abs" -mindepth 1 \( "${_WS_SENSITIVE_FIND[@]}" \) -print0 \
     >"$outf" 2>"$errf"; rc=$?
   err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
   if (( rc == 124 )); then
@@ -6201,7 +6988,7 @@ _ws_collect_ignored() {   # workdir — fills REAP_IGNORED (`sensitive\tbytes\tp
   # THREE MORE MUTATION SURVIVORS, disclosed with the reason each is one, and
   # two of them are the same reason — an empty temp-file name is itself a
   # failing redirect, so the read never runs and the NEXT guard refuses:
-  #   - `outf=$(mktemp) || return 1` — removable with the suite green: `>""` is
+  #   - `outf=$(_plat_mktemp) || return 1` — removable with the suite green: `>""` is
   #     an invalid redirect, git never runs, and `(( rc == 0 ))` refuses.
   #   - the `|| { rm -f "$outf"; return 1; }` on the `errf` line — removable for
   #     the same reason PLUS one more: `2>""` fails the read, so control reaches
@@ -6236,8 +7023,8 @@ _ws_collect_ignored() {   # workdir — fills REAP_IGNORED (`sensitive\tbytes\tp
   # fingerprint, and a second job it happens to satisfy is how these two drift.
   REAP_IGNSCANNED=0
   deadline=$(( SECONDS + REAP_SCAN_SECONDS ))
-  outf=$(mktemp) || return 1
-  errf=$(mktemp) || { rm -f "$outf"; return 1; }
+  outf=$(_plat_mktemp) || return 1
+  errf=$(_plat_mktemp) || { rm -f "$outf"; return 1; }
   git -C "$wd" -c core.quotePath=false status --porcelain --ignored=matching -z \
     >"$outf" 2>"$errf"; rc=$?
   err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
@@ -6247,7 +7034,7 @@ _ws_collect_ignored() {   # workdir — fills REAP_IGNORED (`sensitive\tbytes\tp
     case "$entry" in '!! '*) ;; *) continue ;; esac
     p="${entry#!! }"
     [[ -n "$p" ]] || continue
-    b=$(du -sb "$wd/$p" 2>/dev/null | head -n1 | cut -f1); drc=$?
+    b=$(_plat_bytes "$wd/$p" 2>/dev/null); drc=$?
     { (( drc == 0 )) && [[ "$b" =~ ^[0-9]+$ ]]; } || {
       rm -f "$outf"
       REAP_IGNREASON="could not size the ignored entry $p"
@@ -6327,9 +7114,9 @@ _ws_collect_ignored() {   # workdir — fills REAP_IGNORED (`sensitive\tbytes\tp
   # a workspace nobody touched, which is `state-changed` for no reason at all.
   # The same argument the sensitive digest's `sort` carries at ccd's Phase D1.
   if (( ${#REAP_IGNORED[@]} )); then
-    REAP_IGNDIGEST=$(printf '%s\0' "${REAP_IGNORED[@]}" | sort -z | sha256sum | cut -d' ' -f1)
+    REAP_IGNDIGEST=$(printf '%s\0' "${REAP_IGNORED[@]}" | sort -z | _plat_sha256 | cut -d' ' -f1)
   else
-    REAP_IGNDIGEST=$(printf '' | sha256sum | cut -d' ' -f1)
+    REAP_IGNDIGEST=$(printf '' | _plat_sha256 | cut -d' ' -f1)
   fi
   [[ "$REAP_IGNDIGEST" =~ ^[0-9a-f]{64}$ ]] || { REAP_IGNDIGEST=""; return 1; }
   # The ONLY assignment, on the ONLY path that returns 0. Everything above
@@ -6396,7 +7183,7 @@ _ws_fingerprint() {   # id branch tip headOid mergeOid proof dirty igndigest sen
   printf '%s\n' "id=$1" "branch=$2" "tip=$3" "headRefOid=$4" "mergeCommit=$5" "proof=$6" \
     "dirtyCount=$7" "ignoredDigest=$8" "sensitiveDigest=$9" "stashCount=${10}" \
     "worktreeHead=${11}" "baseOid=${12}" "clipsDigest=${13}" "childrenDigest=${14}" \
-    | sha256sum | cut -d' ' -f1
+    | _plat_sha256 | cut -d' ' -f1
 }
 
 _ws_reap_reset() {
@@ -6738,7 +7525,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
     # the same token. Unlike those two there is no file to leak here, so nothing
     # observable is left to pin. It states the case rather than relying on a
     # later line to catch it.
-    errf=$(mktemp) || { _reap_refuse tree-unreadable "could not read the tree at $workdir"; return 1; }
+    errf=$(_plat_mktemp) || { _reap_refuse tree-unreadable "could not read the tree at $workdir"; return 1; }
     dirt=$(git -C "$workdir" status --porcelain 2>"$errf"); rc=$?
     err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
     (( rc == 0 )) && [[ -z "$err" ]] \
@@ -6913,7 +7700,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
         || { _reap_refuse tree-unreadable "could not probe $cpath for an in-progress operation"; return 1; }
       [[ -z "$cop" ]] || { _reap_refuse child-busy "$cop in progress at $cpath"; return 1; }
       [[ -n "$cbr" ]] || { _reap_refuse child-busy "detached HEAD at $cpath"; return 1; }
-      errf=$(mktemp) || { _reap_refuse tree-unreadable "could not read the child at $cpath"; return 1; }
+      errf=$(_plat_mktemp) || { _reap_refuse tree-unreadable "could not read the child at $cpath"; return 1; }
       dirt=$(git -C "$cpath" status --porcelain 2>"$errf"); rc=$?
       err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
       { (( rc == 0 )) && [[ -z "$err" ]]; } \
@@ -7090,7 +7877,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   # `gh pr list` is ever spent on it, where the old Phase C called gh first.
   # That is the cheaper order and the more honest one: an unfetched clone
   # cannot answer a mergedness question no matter what gh says about it.
-  timeout 60 git -C "$main" fetch --quiet origin \
+  _plat_timeout 60 git -C "$main" fetch --quiet origin \
     || { _reap_refuse fetch-failed "could not fetch origin — nothing is claimed about your commits"; return 1; }
   REAP_FETCHED=$(date +%s)
 
@@ -7133,7 +7920,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   # `_ws_gc_dirty`'s, and it is the one thing that must survive any later edit
   # to this rung.
   ancwhy="its commits are not reachable from origin's default branch"
-  if timeout 60 git -C "$main" remote set-head origin --auto >/dev/null 2>&1; then
+  if _plat_timeout 60 git -C "$main" remote set-head origin --auto >/dev/null 2>&1; then
     if obase=$(git -C "$main" symbolic-ref --quiet refs/remotes/origin/HEAD); then
       git -C "$main" merge-base --is-ancestor "refs/heads/$branch" "$obase" 2>/dev/null
       case $? in
@@ -7296,14 +8083,14 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   # line. It stays because the field is a set digest and a set has no order,
   # and because the ordering `_ws_collect_ignored` produces is git's, which is
   # not promised. The only way to pin it would be a state this design forbids.
-  REAP_SENSDIGEST=$(printf '%s\n' "${REAP_SENSITIVE[@]-}" | sort | sha256sum | cut -d' ' -f1)
+  REAP_SENSDIGEST=$(printf '%s\n' "${REAP_SENSITIVE[@]-}" | sort | _plat_sha256 | cut -d' ' -f1)
   # The clips manifest is `_ws_clip_manifest`'s, the same producer the TOMBSTONE
   # records at (a), so the record of what was deleted and the consent to delete
   # it cannot describe different files. Hashed rather than carried, because the
   # fingerprint is a line-per-fact document and a manifest holds newlines.
   #
   # TWO STATEMENTS AND A REFUSAL — the sixteenth forgery (see
-  # `_ws_clip_manifest`). This was one line, `… | sha256sum | cut`, which
+  # `_ws_clip_manifest`). This was one line, `… | _plat_sha256 | cut`, which
   # reports the PIPE's status and therefore could not have noticed the
   # producer failing even if it had looked. An unenumerable clips directory
   # hashed as `[]`, deterministically, on both sides: the audit issued a token
@@ -7319,14 +8106,14 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   # `printf '[]\n' | sha256sum`. The refusal is the only thing that changes.
   clipsjson=$(_ws_clip_manifest "$id") \
     || { _reap_refuse clips-unreadable "could not list $HOME/.cc-clips/$id — the pasted images this cleanup would delete cannot be enumerated"; return 1; }
-  REAP_CLIPDIGEST=$(printf '%s\n' "$clipsjson" | sha256sum | cut -d' ' -f1)
+  REAP_CLIPDIGEST=$(printf '%s\n' "$clipsjson" | _plat_sha256 | cut -d' ' -f1)
   # `printf '%s'`, not `printf '%s\n'`: unlike the clips manifest above,
   # `REAP_CHILDLINES` is not `$(…)`-captured (it is built in place by the
   # descent loop), so there is no subshell trailing-newline strip to
   # compensate for — an empty child set is the literal empty string, and its
   # digest is `sha256sum` of nothing, exactly what a fixture with no
   # registered children computes by hand.
-  REAP_CHILDDIGEST=$(printf '%s' "$REAP_CHILDLINES" | sha256sum | cut -d' ' -f1)
+  REAP_CHILDDIGEST=$(printf '%s' "$REAP_CHILDLINES" | _plat_sha256 | cut -d' ' -f1)
   # `$regbranch`, NOT `$branch`: input 2 is "what the registry says" and input
   # 11 (`REAP_WTHEAD`) is "what git says", and after the drift rung `$branch` IS
   # input 11. Passing it here would hash git's name twice and leave the
@@ -7504,8 +8291,8 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only about the WORKSPA
   # survive a pipe.
   local dirty_json=null dfirst=1 dl dsrc dout derrf derr drc
   if [[ -d "$workdir" ]]; then
-    dout=$(mktemp) || dout=""
-    derrf=$(mktemp) || derrf=""
+    dout=$(_plat_mktemp) || dout=""
+    derrf=$(_plat_mktemp) || derrf=""
     if [[ -n "$dout" && -n "$derrf" ]]; then
       git -C "$workdir" status --porcelain -z >"$dout" 2>"$derrf"; drc=$?
       derr=$(cat "$derrf" 2>/dev/null)
@@ -7930,7 +8717,7 @@ _ws_clip_manifest() {   # id -> JSON array of {name,bytes}, and nothing else;
   local id="$1"
   local dir="$HOME/.cc-clips/$id" f name b brc out="[" first=1 lf lrc
   [[ -d "$dir" ]] || { echo "[]"; return 0; }
-  lf=$(mktemp) || return 1
+  lf=$(_plat_mktemp) || return 1
   find "$dir" -mindepth 1 -maxdepth 1 -print0 2>/dev/null | sort -z >"$lf"; lrc=$?
   # `-s` IS THE SECOND CONJUNCT, and it is a measurement of this read rather
   # than a guess about why it failed: a non-empty file means `readdir` handed
@@ -7951,7 +8738,7 @@ _ws_clip_manifest() {   # id -> JSON array of {name,bytes}, and nothing else;
       # per clip and add a failure mode (mktemp failing mid-manifest) for a
       # conjunct `_ws_gc_bytes`'s own disclosure says never fires first. Same
       # rc+numeric shape `_ws_collect_ignored` took for the same class.
-      b=$(du -sb "$f" 2>/dev/null | cut -f1); brc=$?
+      b=$(_plat_bytes "$f" 2>/dev/null); brc=$?
       { (( brc == 0 )) && [[ "$b" =~ ^[0-9]+$ ]]; } || b=null
       name="$name/"
     else
@@ -7960,7 +8747,7 @@ _ws_clip_manifest() {   # id -> JSON array of {name,bytes}, and nothing else;
       # fixture can arrange either, which is why this rung was `|| echo 0` for
       # so long. A race is still a failed read: it answers `null` like its
       # sibling rather than claiming an empty file was deleted.
-      b=$(stat -c %s "$f" 2>/dev/null); brc=$?
+      b=$(_plat_size "$f" 2>/dev/null); brc=$?
       { (( brc == 0 )) && [[ "$b" =~ ^[0-9]+$ ]]; } || b=null
     fi
     (( first )) || out+=","; first=0
@@ -8580,7 +9367,7 @@ _ws_reap_locked() {   # token id — everything the reap lock serialises
       # statements, or relax the ignored read, and a partially unreadable tree
       # walks into `git worktree remove`.
       local rdirty rerrf rerr rrc
-      rerrf=$(mktemp) || {
+      rerrf=$(_plat_mktemp) || {
         printf '{"refused":"tree-unreadable","detail":%s,"paths":[]}\n' \
           "$(_json_str "could not read the tree at $workdir — refusing to finish the cleanup on a guess")"
         return 0
@@ -8715,7 +9502,7 @@ _ws_reap_locked() {   # token id — everything the reap lock serialises
             # check.
             if [[ -d "$_rccpath" ]]; then
               local _rcerrf _rcerr _rcrc _rcdirt
-              _rcerrf=$(mktemp) || {
+              _rcerrf=$(_plat_mktemp) || {
                 printf '{"refused":"tree-unreadable","detail":%s,"paths":[]}\n' \
                   "$(_json_str "could not read the child at $_rccpath — refusing to finish the cleanup on a guess")"
                 return 0
@@ -9418,7 +10205,7 @@ _ws_gc_bytes() {   # path -> size in bytes, or '-' when it could not be FULLY me
   # stub — `du() { return 1; }` (the technique this file used before this fix)
   # does not resemble either one.
   #
-  # `b=$(du -sb "$1" 2>"$errf" | cut -f1); rc=$?` is two statements, not
+  # `b=$(_plat_bytes "$1" 2>"$errf"); rc=$?` is two statements, not
   # `local b=$(…)`, for the reason CONSTRAINTS.md states file-wide: `local`'s
   # own status would overwrite the pipeline's. `set -o pipefail` (ccd:4) is
   # what then makes `rc` mean `du`'s exit code rather than `cut`'s: `cut`
@@ -9442,23 +10229,23 @@ _ws_gc_bytes() {   # path -> size in bytes, or '-' when it could not be FULLY me
   #     being non-zero for every fixture in this suite.
   #   - `[[ "$b" =~ ^[0-9]+$ ]]` — measured: every real `du` failure this
   #     function can construct already trips one of the other two first.
-  # A FOURTH, of the same shape as `_ws_collect_ignored`'s `outf=$(mktemp) ||
+  # A FOURTH, of the same shape as `_ws_collect_ignored`'s `outf=$(_plat_mktemp) ||
   # return 1` (ccd:1825): `mktemp` failing needs a full filesystem or a
   # missing `/tmp`, neither of which any fixture here can arrange, so
-  # `errf=$(mktemp) || …` is unpinnable for the same reason and stays for the
+  # `errf=$(_plat_mktemp) || …` is unpinnable for the same reason and stays for the
   # same one — a value this function cannot get right must refuse rather than
   # guess, and "cannot even allocate the scratch file" is exactly that case.
   [[ -d "$1" ]] || { echo '-'; return 0; }
   local errf b rc err
-  errf=$(mktemp) || { echo '-'; return 0; }
-  b=$(du -sb "$1" 2>"$errf" | cut -f1); rc=$?
+  errf=$(_plat_mktemp) || { echo '-'; return 0; }
+  b=$(_plat_bytes "$1" 2>"$errf"); rc=$?
   err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
   if (( rc == 0 )) && [[ -z "$err" ]] && [[ "$b" =~ ^[0-9]+$ ]]; then echo "$b"; else echo '-'; fi
 }
 
 _ws_gc_age() {     # path -> whole days since its mtime, or '-'
   [[ -d "$1" ]] || { echo '-'; return 0; }
-  local m; m=$(stat -c %Y "$1" 2>/dev/null) || { echo '-'; return 0; }
+  local m; m=$(_plat_mtime "$1" 2>/dev/null) || { echo '-'; return 0; }
   [[ "$m" =~ ^[0-9]+$ ]] || { echo '-'; return 0; }
   echo $(( ( $(date +%s) - m ) / 86400 ))
 }
@@ -9559,7 +10346,7 @@ _ws_gc_dirty() {   # workdir -> 0 when the tree has uncommitted OR untracked fil
   # and it is `tree-unreadable` rather than `dirty` for the same reason as the
   # rung below: the status was never read, so nothing whatever is known about
   # this tree's files.
-  errf=$(mktemp) || {
+  errf=$(_plat_mktemp) || {
     GC_DIRTY_WHY='no scratch file to capture git stderr, so the status was never read'
     return 0
   }
@@ -10090,9 +10877,9 @@ cmd_ws_gc() {   # [--prune]
   # finish, which is the class this branch has closed eleven times.
   local total='-' tf terr trc
   if (( ${#paths[@]} > 0 )); then
-    tf=$(mktemp) || tf=''
+    tf=$(_plat_mktemp) || tf=''
     if [[ -n "$tf" ]]; then
-      total=$(du -scb "${paths[@]}" 2>"$tf" | awk '$2 == "total" {print $1}'); trc=$?
+      total=$(_plat_bytes "${paths[@]}" 2>"$tf"); trc=$?
       terr=$(cat "$tf" 2>/dev/null); rm -f "$tf"
       { (( trc == 0 )) && [[ -z "$terr" ]]; } || total='-'
     fi
@@ -10204,7 +10991,7 @@ _dispatch_swap() {   # id target — run `ccd swap` in ITS OWN transient systemd
   local jitter=0
   [[ "${SWAP_JITTER:-0}" =~ ^[0-9]+$ && "${SWAP_JITTER:-0}" -gt 0 ]] && jitter=$(( RANDOM % (SWAP_JITTER + 1) ))
   echo "$(date '+%F %T') dispatch $1 -> $2 (in ${jitter}s)" >> "$REG/swap.log"
-  systemd-run --user --collect --quiet \
+  _svc_run_detached \
     bash -c "sleep $jitter; exec '$HOME/.local/bin/ccd' swap '$1' '$2' >>'$REG/swap.log' 2>&1" \
     || echo "$(date '+%F %T') dispatch FAILED for $1 -> $2" >> "$REG/swap.log"
 }
@@ -10609,7 +11396,7 @@ _pane_box_draft() {   # ANSI (`capture-pane -e`) pane-text -> the box's own row,
     | LC_ALL=C sed -E $'s/\033\\[2m((\033\\[[1-9][0-9;]*m)|[^\033])*\033\\[0[0-9;]*m//g; s/\033\\[[0-9;]*m//g' \
     | LC_ALL=C grep $'^\xe2\x9d\xaf' \
     | tail -1 \
-    | LC_ALL=C sed $'s/^\xe2\x9d\xaf\\(\xc2\xa0\\| \\)*//; s/[[:space:]]*$//'
+    | LC_ALL=C sed -E $'s/^\xe2\x9d\xaf(\xc2\xa0| )*//; s/[[:space:]]*$//'
   # A pane with no box at all is an EMPTY BOX, not an error: `grep` exits 1 on
   # no match and this file runs under `set -o pipefail`, so without this the
   # status of the pipeline would leak out as a failure the callers (which read
@@ -11123,7 +11910,11 @@ _inject_spawn_effort() {   # tmuxname — apply SPAWN_EFFORT once the TUI is up.
 # Its own function for the same reason _ws_supervise and _ws_unsupervise are (ccd:212-216): a test
 # harness can stub it, and `command -v` finds a shell function before it finds a binary, so nothing
 # else could.
-_have_systemctl() { command -v systemctl >/dev/null 2>&1; }
+# `_have_systemctl` IS DEFINED IN THE PLATFORM BLOCK at the top of this file,
+# not here, and that move is not tidying: `ccrc` and `ccrc-doctor-checks` ask
+# the same question (`_box_units`, `_check_services`) and they get the block —
+# they do not get this part of the file. Defined here, it was missing there,
+# and both read a box with a healthy launchd as one with no service manager.
 
 _ws_unit_state() {   # id -> enabled|loaded|absent, or EMPTY where there is no systemctl OR the probe refused
   # Three states, and the empty fourth answer is deliberately not one of them:
@@ -11154,6 +11945,28 @@ _ws_unit_state() {   # id -> enabled|loaded|absent, or EMPTY where there is no s
   # `cmd_ws_audit`, whose own `local id` had already dynamically scoped one.)
   local id="$1" unit link
   unit="claude-session@$id.service"
+  # THE DARWIN ARM, and it answers the same three words from the same two
+  # observables. A plist in ~/Library/LaunchAgents IS boot persistence — it is
+  # what the `default.target.wants` symlink means on the other platform — so
+  # its presence is `enabled`. A label launchd holds with no plist behind it
+  # was bootstrapped and then had its file removed: the manager knows it,
+  # nothing promises a next boot, which is exactly `loaded`. Neither is
+  # `absent`, and it is a MEASUREMENT here too: both probes answered.
+  if [ "$CCD_OS" = darwin ]; then
+    [ -e "$(_svc_plist "$unit")" ] && { echo enabled; return 0; }
+    # THE EMPTY FOURTH ANSWER, kept here too. `absent` is a MEASUREMENT — the
+    # manager answered and named no such job — and it must not be reachable
+    # from a probe that never ran. `_svc_is_loaded` is a boolean and cannot
+    # tell the two apart, so the status is read directly: 113 is launchctl's
+    # "Could not find service", which IS the measurement; anything else (no
+    # launchctl, the sandbox guard refusing) is a question that was not asked,
+    # and the JSON writer renders that as `null` rather than inventing a word.
+    local _lo _lrc
+    _lo="$(_svc_launchctl print "$(_svc_domain)/$(_svc_label "$unit")" 2>/dev/null)"; _lrc=$?
+    if [ "$_lrc" -eq 0 ]; then echo loaded; return 0; fi
+    if [ "$_lrc" -eq 113 ]; then echo absent; return 0; fi
+    return 0
+  fi
   link="$HOME/.config/systemd/user/default.target.wants/$unit"
   # -L as well as -e: a wants symlink whose target is gone is still an enable.
   [[ -L "$link" || -e "$link" ]] && { echo enabled; return 0; }
@@ -11167,7 +11980,7 @@ _ws_unit_state() {   # id -> enabled|loaded|absent, or EMPTY where there is no s
 }
 
 _supervised_start() {   # id — ask the UNIT to spawn, then WAIT for an observable verdict.
-  # `ccd start`/`ccd ensure` outside a unit become `systemctl --user enable --now`, and the unit's
+  # `ccd start`/`ccd ensure` outside a unit become `_svc_enable_now`, and the unit's
   # ExecStart (`ccd supervise %i`) does the spawning it already does. That is what makes a restarted
   # session a SUPERVISED one — with _sync_uuid, _auto_swap_check and _auto_compact_check running and
   # something to record its death — instead of the bare pane stop-then-start used to leave.
@@ -11178,7 +11991,16 @@ _supervised_start() {   # id — ask the UNIT to spawn, then WAIT for an observa
   unit="claude-session@$id"
   since=$(date +%s)
   if ! _have_systemctl; then
-    echo "ccd: warn: systemctl not found — starting $id UNSUPERVISED (no auto-swap, no uuid-sync, nothing to restart it)" >&2
+    # TWO SPELLINGS OF ONE SENTENCE, and the Linux one is the ORIGINAL BYTES.
+    # This message is asserted verbatim by `ccd-supervised-start.test.ts`, and
+    # more to the point an operator greps for it: the port is not entitled to
+    # reword a Linux box's output. Only the binary's name differs, because
+    # only the binary differs.
+    if [ "$CCD_OS" = darwin ]; then
+      echo "ccd: warn: launchctl not found — starting $id UNSUPERVISED (no auto-swap, no uuid-sync, nothing to restart it)" >&2
+    else
+      echo "ccd: warn: systemctl not found — starting $id UNSUPERVISED (no auto-swap, no uuid-sync, nothing to restart it)" >&2
+    fi
     # THE SPLIT FORM HERE TOO. A fallback that still spawns-first re-opens F8's
     # hole on exactly the boxes least able to recover: no systemd at all, or a
     # unit that will not enable. There is no `_ws_supervise` on this path by
@@ -11194,8 +12016,8 @@ _supervised_start() {   # id — ask the UNIT to spawn, then WAIT for an observa
   # §3.3 deliberately creates failed units — that is the point of the start limit — and a unit
   # sitting in `failed` refuses to start again until its failure is cleared. Without this, the very
   # verb §4.4 advertises as "what revives it" would not.
-  systemctl --user reset-failed "$unit" 2>/dev/null
-  if ! systemctl --user enable --now "$unit" 2>/dev/null; then
+  _svc_reset_failed "$unit" 2>/dev/null
+  if ! _svc_enable_now "$unit" 2>/dev/null; then
     echo "ccd: warn: could not enable unit $unit — starting $id UNSUPERVISED (unit installed? lingering?)" >&2
     # The same split, for the same reason as the no-systemctl fallback above:
     # this is the OTHER box that cannot recover on its own, so leaving a live
@@ -11232,7 +12054,7 @@ _supervised_start() {   # id — ask the UNIT to spawn, then WAIT for an observa
     fi
     sleep 1
   done
-  echo "ccd: $id: unit started but no pane appeared within ${SUPERVISED_START_WAIT}s — systemctl --user status $unit" >&2
+  echo "ccd: $id: unit started but no pane appeared within ${SUPERVISED_START_WAIT}s — $(_svc_status_hint "$unit")" >&2
   return 1
 }
 
@@ -11254,7 +12076,7 @@ _resupervise_live() {   # id -> rc 0 it adopted (or tried), rc 1 there was nothi
   #
   # Scoped to the row that needs it, deliberately. `running` (a fresh heartbeat)
   # must stay the cheap no-op `ensure` has always been — the PWA's revive button
-  # is reachable on any row, and a `systemctl --user enable --now` per click on
+  # is reachable on any row, and a `_svc_enable_now` per click on
   # a healthy fleet is a round-trip nobody asked for. And a DEAD pane is not this
   # function's business at all: `_supervised_start` already owns that path.
   #
@@ -11283,8 +12105,8 @@ _resupervise_live() {   # id -> rc 0 it adopted (or tried), rc 1 there was nothi
   # §3.3 deliberately creates failed units and a failed one refuses to start
   # until cleared — the same reset-failed `_supervised_start` carries, for the
   # same reason, on the path that reaches systemd without going through it.
-  systemctl --user reset-failed "claude-session@$id" 2>/dev/null
-  if systemctl --user enable --now "claude-session@$id" 2>/dev/null; then
+  _svc_reset_failed "claude-session@$id" 2>/dev/null
+  if _svc_enable_now "claude-session@$id" 2>/dev/null; then
     echo "re-supervised $id — a live pane with no supervisor; its unit has adopted it"
   else
     echo "ccd: warn: $id is alive but UNSUPERVISED and its unit would not start (unit installed? lingering?) — no auto-swap, no auto-compact, no uuid-sync" >&2
@@ -11375,12 +12197,12 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
     # when it declines (a `running` row, or no systemctl) the cheap boot-
     # persistence line below is still the right and only act.
     if _have_systemctl && ! _resupervise_live "$id"; then
-      systemctl --user enable "claude-session@$id" 2>/dev/null \
+      _svc_enable "claude-session@$id" 2>/dev/null \
         || echo "ccd: warn: could not enable boot-persistence for $id" >&2
     fi
     echo "already running: $id (find on claude.ai by name: $id)"; return 0
   fi
-  local uuid; uuid=$(_reg_get "$id" uuid); [[ -z "$uuid" ]] && uuid=$(cat /proc/sys/kernel/random/uuid)
+  local uuid; uuid=$(_reg_get "$id" uuid); [[ -z "$uuid" ]] && uuid=$(_plat_uuid)
   _reg_set "$id" wrapper "$wrapper"
   [[ -n "$project" ]] && _reg_set "$id" project "$project"
   _reg_set "$id" workdir "$workdir"; _reg_set "$id" uuid "$uuid"
@@ -11555,6 +12377,51 @@ cmd_ensure() {   # id — idempotent; used by systemd. arg is the id directly.
 
 cmd_supervise() {   # systemd ExecStart: ensure then block until the session dies
   local id="${1:?usage: ccd supervise <id>}"
+  # ── THE START LIMIT, ON A MANAGER THAT HAS NONE ────────────────────────
+  # `claude-session@.service` carries StartLimitIntervalSec=120 and
+  # StartLimitBurst=5, and that pair is not tuning — it is what makes §4.3's
+  # `orphan` classification true. A pane that dies instantly must become a
+  # FAILED unit, because a failed unit heartbeats nothing and the row then
+  # reads "nothing is bringing this back". launchd has `ThrottleInterval`
+  # (how long to WAIT before respawning) and no burst limit at all: left
+  # alone it would restart a crash-looping session every 3 seconds forever,
+  # and the row would heartbeat `supervised` the whole time — a session
+  # visibly alive and permanently broken, which is the one state this fleet's
+  # display has no word for.
+  #
+  # SO THE LIMIT IS COUNTED HERE, by the process the manager keeps starting.
+  # Each entry appends its timestamp; the window is the last
+  # SUPERVISE_START_LIMIT_BURST entries, and if the oldest of them is within
+  # SUPERVISE_START_LIMIT_S the manager is looping. `bootout` removes the job
+  # rather than merely exiting, because exiting is what got us here.
+  #
+  # THE STAMP IS THE `failed` STATE. `_svc_is_active` reads it, and
+  # `_svc_reset_failed` removes it — so `ccd start <id>`, whose whole promise
+  # is "this is what revives it", clears the refusal exactly as
+  # `systemctl reset-failed` does on the other platform.
+  if [ "$CCD_OS" = darwin ]; then
+    local _sl_file="$REG/.$id.starts" _sl_now _sl_oldest _sl_n
+    _sl_now=$(date +%s)
+    printf '%s\n' "$_sl_now" >> "$_sl_file" 2>/dev/null
+    # Keep only the window's worth of entries, so the file cannot grow without
+    # bound on a session that restarts legitimately for months.
+    _sl_n=$(wc -l < "$_sl_file" 2>/dev/null | tr -d ' '); [[ "$_sl_n" =~ ^[0-9]+$ ]] || _sl_n=0
+    if [ "$_sl_n" -gt "$SUPERVISE_START_LIMIT_BURST" ]; then
+      tail -n "$SUPERVISE_START_LIMIT_BURST" "$_sl_file" > "$_sl_file.tmp" 2>/dev/null \
+        && _plat_mv_notdir "$_sl_file.tmp" "$_sl_file"
+      _sl_n="$SUPERVISE_START_LIMIT_BURST"
+    fi
+    if [ "$_sl_n" -ge "$SUPERVISE_START_LIMIT_BURST" ]; then
+      _sl_oldest=$(head -1 "$_sl_file" 2>/dev/null); [[ "$_sl_oldest" =~ ^[0-9]+$ ]] || _sl_oldest=0
+      if [ "$_sl_oldest" -gt 0 ] && [ $(( _sl_now - _sl_oldest )) -le "$SUPERVISE_START_LIMIT_S" ]; then
+        printf '%s' "$_sl_now" > "$REG/$id.svcfailed" 2>/dev/null
+        rm -f -- "$_sl_file" 2>/dev/null
+        echo "ccd: $id: start limit reached ($SUPERVISE_START_LIMIT_BURST starts in ${SUPERVISE_START_LIMIT_S}s) — giving up, this session is FAILED. Revive it with: ccd start $id" >&2
+        _svc_launchctl bootout "$(_svc_domain)/$(_svc_label "claude-session@$id")" 2>/dev/null
+        return 1
+      fi
+    fi
+  fi
   # THE FIRST STAMP GOES BEFORE cmd_ensure, NOT AFTER IT. `cmd_ensure` can sit
   # inside `_accept_first_run_prompts` for up to fifteen minutes while a 700k-
   # token resume works through its gates, and a heartbeat that started with the
@@ -11573,7 +12440,7 @@ cmd_supervise() {   # systemd ExecStart: ensure then block until the session die
   # (`enable` without `--now` asks systemd for nothing else), and this one line heals M5's three
   # boot-persistence-less rows the next time each supervisor restarts — which the deploy's
   # `try-restart "claude-session@*"` sweep makes fleet-wide and automatic.
-  systemctl --user enable "claude-session@$id" 2>/dev/null \
+  _svc_enable "claude-session@$id" 2>/dev/null \
     || echo "ccd: warn: could not enable boot-persistence for $id" >&2
   # The recursion guard, in-process. `local` is dynamically scoped in bash, so cmd_ensure sees it
   # and the caller does not; it is never exported and never an argv token, so — unlike an added
@@ -11790,12 +12657,12 @@ _swap_carry_jsonl() {   # srccfg dstcfg uuid mdir sanitize(0|1)
     # dir starts with `-`, and GNU basename would read `-data-projects-x` as
     # options.
     pdir="${f%/*}"; pdir="${pdir##*/}"
-    mt=$(stat -c %Y "$f" 2>/dev/null); [[ "$mt" =~ ^[0-9]+$ ]] || mt=0
+    mt=$(_plat_mtime "$f" 2>/dev/null); [[ "$mt" =~ ^[0-9]+$ ]] || mt=0
     mtime_of["$f"]="$mt"
     # device:inode, not inode alone — an inode number is unique only WITHIN a
     # filesystem, and two distinct transcripts on different devices could
     # otherwise collide and get treated as the same content.
-    ino_of["$f"]=$(stat -c '%d:%i' "$f" 2>/dev/null)
+    ino_of["$f"]=$(_plat_devino "$f" 2>/dev/null)
     [[ -n "${ino_of[$f]}" ]] || ino_of["$f"]="path:$f"
     # Its own mirrored dir, and — for every match — the mdir slot, UNLESS mdir
     # is empty: `_reg_get`'s `cat … 2>/dev/null` yields "" for a missing
@@ -11824,10 +12691,10 @@ _swap_carry_jsonl() {   # srccfg dstcfg uuid mdir sanitize(0|1)
     mkdir -p "$dstcfg/projects/$slot"
     if [[ -n "${copied[$ino]:-}" ]]; then
       ln -f "${copied[$ino]}" "$dst" 2>/dev/null \
-        || cp -p --remove-destination "${copied[$ino]}" "$dst" 2>/dev/null \
+        || _plat_cp_replace "${copied[$ino]}" "$dst" 2>/dev/null \
         || { echo "ccd: warn: could not place transcript at $dst" >&2; continue; }
     else
-      cp -p --remove-destination "$src" "$dst" 2>/dev/null \
+      _plat_cp_replace "$src" "$dst" 2>/dev/null \
         || { echo "ccd: warn: could not carry transcript $src -> $dst" >&2; continue; }
       # Order is load-bearing: _sanitize_anthropic rewrites through os.replace,
       # which BREAKS hardlinks — the replaced name gets a new inode and every
@@ -12081,8 +12948,8 @@ _swap_refuse() {   # id cur target reason restart(0|1) — a swap that cannot ca
     # (b) the unit is `failed` and rate-limited by §3.3's StartLimitIntervalSec/
     # StartLimitBurst, which is precisely why `_supervised_start` carries a
     # reset-failed. A refusal's restart is a revival too, and needs the same key.
-    systemctl --user reset-failed "claude-session@$id" 2>/dev/null
-    systemctl --user start "claude-session@$id" 2>/dev/null || cmd_ensure "$id"
+    _svc_reset_failed "claude-session@$id" 2>/dev/null
+    _svc_start "claude-session@$id" 2>/dev/null || cmd_ensure "$id"
   fi
   echo "ccd: refusing to swap $id: $reason — it stays on $cur. If there is genuinely nothing to carry: ccd swap --force $id $target" >&2
   return 1
@@ -12137,7 +13004,7 @@ cmd_swap() {   # [--force] id target-wrapper — move a session to another accou
     # lie about the cause (the conversation was never even looked for) and would
     # gate a legitimate auto-rescue for the next SWAPBLOCK_COOLDOWN seconds over
     # a failure that has nothing to do with carrying it.
-    if ! systemd-run --user --collect --quiet bash -c "sleep 2; CCD_SWAP_DETACHED=1 exec '$HOME/.local/bin/ccd' swap ${force:+--force} '$id' '$target' >>'$REG/swap.log' 2>&1"; then
+    if ! _svc_run_detached bash -c "sleep 2; CCD_SWAP_DETACHED=1 exec '$HOME/.local/bin/ccd' swap ${force:+--force} '$id' '$target' >>'$REG/swap.log' 2>&1"; then
       echo "$(date '+%F %T') detach FAILED for $id: $cur -> $target (systemd-run)" >> "$REG/swap.log"
       echo "ccd: could not detach the swap of $id ($cur -> $target): systemd-run failed. Nothing was moved and this session is untouched — retry from OUTSIDE the session: ccd swap ${force:+--force }$id $target" >&2
       return 1
@@ -12160,7 +13027,7 @@ cmd_swap() {   # [--force] id target-wrapper — move a session to another accou
     _swap_refuse "$id" "$cur" "$target" "no transcript found for $uuid under $cur" 0
     return 1
   fi
-  systemctl --user stop "claude-session@$id" 2>/dev/null   # first, or Restart=always resurrects under the old wrapper
+  _svc_stop "claude-session@$id" 2>/dev/null   # first, or Restart=always resurrects under the old wrapper
   tmux kill-session -t "$(_tmux "$id")" 2>/dev/null
   sleep 1                                                  # let claude flush its final transcript entries
   # A SWAP IS NOT AN ABANDONMENT. Between the stop and the start this row is
@@ -12268,7 +13135,7 @@ cmd_swap() {   # [--force] id target-wrapper — move a session to another accou
                                  # the operator to ignore banners.
   echo "$(date '+%F %T') swap $id: $cur -> $target (uuid $uuid)" >> "$REG/swap.log"
   _reg_set "$id" supervised "$(date +%s)"   # the carry may have taken minutes
-  systemctl --user start "claude-session@$id" 2>/dev/null || cmd_ensure "$id"
+  _svc_start "claude-session@$id" 2>/dev/null || cmd_ensure "$id"
   # Optional user notification (swap kills any attached remote session — give them a ping).
   # Drop an executable ~/.cc-sessions/notify.sh taking the message as $1 (curl to a Discord
   # webhook / ntfy topic / anything); absent hook = silent.
@@ -12296,7 +13163,7 @@ cmd_prefer() {   # id wrapper — set a session's HOME account (auto-swap keeps 
 
 cmd_enable() {   # <id>  |  <wrapper> <project> [workdir]
   # Behaviorally an ALIAS of cmd_start since §3.1 — the start path itself is
-  # `systemctl --user enable --now`, so there is no second act left for this verb to perform beyond
+  # `_svc_enable_now`, so there is no second act left for this verb to perform beyond
   # the boot-persistence confirmation line below. It keeps its name because the agent whitelist and
   # CCD_ARGV grant `enable` and `start` separately, and whitelist-subset.test.ts layer 3 fails on a
   # grant no route builds. §3.4 gives it the same one-argument id form as `start` — it takes the

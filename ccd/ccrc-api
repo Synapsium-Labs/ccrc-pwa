@@ -225,7 +225,11 @@ main() {
   url="$base$path${query:+?$query}"
 
   local out code
-  out=$(mktemp) || refuse 'no-tmp' 'cannot create a temp file'
+  # AN EXPLICIT TEMPLATE, because BSD `mktemp` IGNORES `$TMPDIR` when given
+  # none (install.sh:54 measured it) — and this file cannot source ccd's
+  # platform block, so the template is spelled locally, unconditionally, the
+  # same shape install.sh uses. GNU mktemp honours the template identically.
+  out=$(mktemp "${TMPDIR:-/tmp}/ccrc-api.XXXXXXXXXX") || refuse 'no-tmp' 'cannot create a temp file'
   # shellcheck disable=SC2064
   trap "rm -f '$out'" EXIT
 

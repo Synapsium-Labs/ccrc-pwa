@@ -46,6 +46,7 @@ import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { ghContainedEnv, ghPoisonAt } from './ccdWsHelpers.js';
 import { plantAuthHelper, plantAuthModule, fixtureSecretLine } from './authFixtures.js';
+import { describeLinux, describeDarwin, itLinux } from './platformFixtures.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -148,6 +149,14 @@ function stub(home: string, name: string, body: string): void {
 /** Remove a stub — this is what "the subject is removed from the fixture" means
  *  for a presence check, and it is the mutation each per-check test below
  *  applies to prove its check can go red at all. */
+/** "This box has no service manager." Which binary that means is the
+ *  platform's business, not the test's — a fixture that only removed
+ *  `systemctl` would leave a macOS box with a perfectly working `launchctl`
+ *  and measure the opposite of what it set out to. */
+function unstubManager(home: string): void {
+  unstub(home, process.platform === 'darwin' ? 'launchctl' : 'systemctl');
+}
+
 function unstub(home: string, name: string): void {
   rmSync(join(home, 'stub-bin', name), { force: true });
 }
@@ -544,6 +553,33 @@ function stubSystemctl(home: string): void {
     + '  echo inactive; exit 3\n'
     + 'fi\n'
     + 'echo "fixture systemctl: unexpected argv: $*" >&2; exit 90');
+  stubLaunchctl(home);
+}
+
+/** launchd's half of the same fixture, and it answers the same QUESTION from
+ *  the same file: `_svc_is_active` reads a job through `launchctl print`, so
+ *  `fixture-unit-<unit>` steers both platforms. The label is translated back
+ *  to the unit name the fixture files are keyed on, so a test that plants
+ *  `fixture-unit-ccrc.service` works unchanged on either. */
+function stubLaunchctl(home: string): void {
+  stub(home, 'launchctl',
+    'case "$1" in\n'
+    + '  print)\n'
+    + '    lbl="${2##*/}"\n'
+    + '    unit="${lbl#app.ccrc.}"\n'
+    + '    case "$unit" in session.*) unit="claude-session@${unit#session.}" ;;'
+    + ' *) unit="$unit.service" ;; esac\n'
+    + '    f="$HOME/fixture-unit-$unit"\n'
+    + '    if [ -f "$f" ]; then IFS= read -r v < "$f";'
+    // An EMPTY fixture value means "the manager could not be asked", and on
+    // launchd that is any failure OTHER than 113 — which is its positive
+    // "no such service". The fixture keeps the two apart so the check can.
+    + ' [ -n "$v" ] || exit 1;'
+    + ' [ "$v" = active ] || exit 113; echo "	state = running"; exit 0; fi\n'
+    + '    exit 113 ;;\n'
+    + '  bootstrap|bootout|enable|disable|kickstart) exit 0 ;;\n'
+    + '  *) echo "fixture launchctl: unexpected argv: $*" >&2; exit 90 ;;\n'
+    + 'esac');
 }
 
 /** A systemd --user unit FILE, in the directory `deploy.sh:416` really copies
@@ -551,10 +587,34 @@ function stubSystemctl(home: string): void {
  *  HERE, so this is what makes a fixture a server box, a fleet host, or a dev
  *  checkout with no units at all. The CONTENT is irrelevant — nothing reads it;
  *  a real one is the `[Unit]`/`[Service]` text in `deploy/`. */
+function unitDirOf(home: string): string {
+  // The directory THIS platform's manager reads job files from — the same
+  // choice `CCRC_UNIT_DIR` makes in ccd/ccrc-doctor-checks. A fixture that
+  // always wrote to ~/.config/systemd/user would be planting units no macOS
+  // box ever looks at, and every `services` verdict would then measure the
+  // fixture's mistake rather than the check.
+  return process.platform === 'darwin'
+    ? join(home, 'Library', 'LaunchAgents')
+    : join(home, '.config', 'systemd', 'user');
+}
+
+/** A unit's file name in this platform's spelling — `ccrc.service` on Linux,
+ *  `app.ccrc.ccrc.plist` on macOS. Mirrors `_dr_unit_file`. */
+function unitFileOf(unit: string): string {
+  if (process.platform !== 'darwin') return unit;
+  const base = unit.replace(/\.(service|timer)$/, '');
+  return `app.ccrc.${base}.plist`;
+}
+
 function writeUnitFile(home: string, unit: string): void {
-  const d = join(home, '.config', 'systemd', 'user');
+  const d = unitDirOf(home);
   mkdirSync(d, { recursive: true });
-  writeFileSync(join(d, unit), `# fixture unit file for ${unit}\n`);
+  writeFileSync(join(d, unitFileOf(unit)), `# fixture unit file for ${unit}\n`);
+}
+
+/** The inverse — "this box does NOT have that unit", in the same spelling. */
+function removeUnitFile(home: string, unit: string): void {
+  rmSync(join(unitDirOf(home), unitFileOf(unit)), { force: true });
 }
 
 /** `df -Pk <dir>` answering a POSIX table whose Available column (field 4, in
@@ -806,7 +866,11 @@ function healthy(prefix: string): string {
   stubLoginctl(home);
   writeFileSync(join(home, 'fixture-linger'), 'yes\n');
   ghStub(home, GH_OK, 0);
-  linkReal(home, 'timeout');
+  // The platform's own deadline tool: bare `timeout` is GNU and a macOS box
+  // carries `gtimeout` (Homebrew coreutils) instead — `_plat_timeout` looks
+  // for both, in that order. Linking the name the host actually has is what
+  // lets the deadline-dependent checks run on either.
+  linkReal(home, process.platform === 'darwin' ? 'gtimeout' : 'timeout');
   // A healthy box HAS a roster, and what the roster says is on disk. The
   // smallest true one: the upstream account and its binary. Every wrappers test
   // below starts here and adds (or replaces) exactly what it is about.
@@ -845,7 +909,16 @@ function healthy(prefix: string): string {
   // is already the head of every contained PATH (`ghContainedEnv`), which is
   // what the `path` check measures.
   stubSystemctl(home);
-  for (const u of ['ccrc.service', 'ccd-cap-scopes.timer']) {
+  // `ccd-cap-scopes.timer` EXISTS ONLY ON LINUX, and a healthy fixture has to
+  // say so: its job is to cap tmux pane CGROUP scopes, macOS has neither, and
+  // `_inst_units`' Darwin arm deliberately installs no such job. Planting it
+  // here would make the fixture describe a box `ccrc install` cannot produce
+  // — and every `services` verdict would then be measured against a timer
+  // that has no business existing.
+  const HEALTHY_UNITS = process.platform === 'darwin'
+    ? ['ccrc.service']
+    : ['ccrc.service', 'ccd-cap-scopes.timer'];
+  for (const u of HEALTHY_UNITS) {
     writeUnitFile(home, u);
     writeFileSync(join(home, `fixture-unit-${u}`), 'active\n');
   }
@@ -1210,7 +1283,10 @@ describe('ccrc doctor: gh_auth', () => {
 
   it('answers on a box with no coreutils timeout, rather than skipping the check', () => {
     const home = healthy('ccrc-doctor-ghauth-notimeout-');
+    // BOTH spellings, or the degrade under test never happens on the
+    // platform whose tool wears the other name.
     unstub(home, 'timeout');
+    unstub(home, 'gtimeout');
     expect(lineFor(runDoctor(home).stdout, 'gh_auth')).toMatch(/^PASS gh_auth: /);
   });
 
@@ -1356,7 +1432,12 @@ describe('ccrc doctor: git_email', () => {
 
 // ── systemd linger ────────────────────────────────────────────────────────
 
-describe('ccrc doctor: linger', () => {
+// LINGER IS A LINUX CONCEPT AND macOS HAS NO EQUIVALENT — see the check's own
+// Darwin arm. The four cases below are logind's (`Linger=yes`, an unknown
+// uid, no loginctl at all), and none of them can arise on a box where the
+// answer is a standing property of the platform rather than a setting. macOS
+// gets its own case immediately after.
+describeLinux('ccrc doctor: linger', () => {
   it('goes red when linger is off for this user', () => {
     const home = healthy('ccrc-doctor-linger-off-');
     writeFileSync(join(home, 'fixture-linger'), 'no\n');
@@ -1385,6 +1466,34 @@ describe('ccrc doctor: linger', () => {
   it('passes when linger is enabled', () => {
     const home = healthy('ccrc-doctor-linger-ok-');
     expect(lineFor(runDoctor(home).stdout, 'linger')).toMatch(/^PASS linger: enabled/);
+  });
+});
+
+describeDarwin('ccrc doctor: linger, on a platform that has none', () => {
+  it('WARNS rather than fails, and names the guarantee that is missing', () => {
+    // A FAIL says "fix this", and there is nothing to fix: a LaunchAgent runs
+    // in the login session, and the only thing on macOS that survives a
+    // logout is a root-owned LaunchDaemon — a posture `ccrc install`
+    // deliberately does not choose. So the standing fact is reported as a
+    // WARN, with a remedy an operator can actually act on.
+    const home = healthy('ccrc-doctor-linger-darwin-');
+    const line = lineFor(runDoctor(home).stdout, 'linger');
+    expect(line).toMatch(/^WARN linger: not a macOS concept/);
+    expect(line).toMatch(/stop at logout and start again at login/);
+  });
+
+  it('does not fail the run — a by-design WARN is not a broken box', () => {
+    const home = healthy('ccrc-doctor-linger-darwin-ok-');
+    const r = runDoctor(home);
+    expect(r.code, r.stdout.split('\n').filter((l) => l.startsWith('FAIL')).join('\n')).toBe(0);
+  });
+
+  it('never asks logind anything', () => {
+    // There is no logind to ask, and a fixture that recorded a call would
+    // mean the check had reached the Linux arm on a macOS box.
+    const home = healthy('ccrc-doctor-linger-darwin-noask-');
+    runDoctor(home);
+    expect(existsSync(join(home, 'loginctl-poison'))).toBe(false);
   });
 });
 
@@ -1483,7 +1592,7 @@ describe('ccrc doctor: path', () => {
 describe('ccrc doctor: services', () => {
   it('SKIPS a box with no ccrc units at all — a dev checkout has nothing to measure', () => {
     const home = healthy('ccrc-doctor-services-none-');
-    rmSync(join(home, '.config', 'systemd', 'user'), { recursive: true, force: true });
+    rmSync(unitDirOf(home), { recursive: true, force: true });
     const r = runDoctor(home);
     expect(r.stdout).toMatch(/^SKIP services: no ccrc units installed/m);
     expect(r.stdout).toMatch(/a dev checkout, or a box .*ccrc install.* never touched/);
@@ -1492,14 +1601,28 @@ describe('ccrc doctor: services', () => {
     expect(r.code).toBe(0);
   });
 
-  it('fails when ccrc.service is installed and not running, and the remedy starts it', () => {
+  it('fails when ccrc.service is installed and not running, and the remedy starts it — in THIS box\'s vocabulary', () => {
+    // The remedy is the whole point of the FAIL: three commands, and every
+    // one must exist on the box that prints them. The first cut of the macOS
+    // port left this string on systemd's spelling, so a macOS operator whose
+    // server was down was handed `systemctl`, `journalctl` and an `enable
+    // --now` — three dead ends in the one check whose FAIL means "configured
+    // to run and not running" (PR #11 review). The Darwin remedy names the
+    // bootstrap, the print, and the LOG FILE the plist actually writes.
     const home = healthy('ccrc-doctor-services-dead-');
     writeFileSync(join(home, 'fixture-unit-ccrc.service'), 'inactive\n');
     const lines = runDoctor(home).stdout.split('\n');
     const i = lines.findIndex((l) => l.startsWith('FAIL services: '));
     expect(i, lines.join('\n')).toBeGreaterThan(-1);
     expect(lines[i]).toContain('ccrc.service is installed but inactive');
-    expect(lines[i + 1]).toMatch(/^ {2}remedy: systemctl --user enable --now ccrc\.service/);
+    if (process.platform === 'darwin') {
+      expect(lines[i + 1]).toMatch(
+        /^ {2}remedy: launchctl bootstrap gui\/\d+ \S*app\.ccrc\.ccrc\.plist, then read what it says: launchctl print gui\/\d+\/app\.ccrc\.ccrc, tail -n 50 \S*\/\.ccrc\/logs\/app\.ccrc\.ccrc\.log$/);
+      expect(lines[i + 1]).not.toMatch(/systemctl|journalctl/);
+    } else {
+      expect(lines[i + 1]).toMatch(
+        /^ {2}remedy: systemctl --user enable --now ccrc\.service, then read what it says: systemctl --user status ccrc\.service, journalctl --user -u ccrc\.service -n 50$/);
+    }
   });
 
   it('measures the fleet host\'s own unit by the same rule', () => {
@@ -1508,7 +1631,7 @@ describe('ccrc doctor: services', () => {
     // report a perfectly healthy PASS on a box whose agent is dead — the link
     // the whole fleet runs over.
     const home = healthy('ccrc-doctor-services-agent-');
-    rmSync(join(home, '.config', 'systemd', 'user', 'ccrc.service'), { force: true });
+    removeUnitFile(home, 'ccrc.service');
     writeUnitFile(home, 'ccrc-agent.service');
     writeFileSync(join(home, 'fixture-unit-ccrc-agent.service'), 'inactive\n');
     const r = runDoctor(home);
@@ -1516,7 +1639,7 @@ describe('ccrc doctor: services', () => {
     expect(r.code).toBe(1);
   });
 
-  it('warns — not fails — when only the cap-scopes timer is stopped', () => {
+  itLinux('warns — not fails — when only the cap-scopes timer is stopped', () => {
     // Two different operator actions, so two different classes: a stopped
     // server answers nothing at all, while a stopped cap-scopes timer means
     // panes spawn without their memory cap (deploy.sh:463's OOM guardrail) —
@@ -1531,7 +1654,7 @@ describe('ccrc doctor: services', () => {
     expect(runDoctor(home).code).toBe(0);
   });
 
-  it('reports a dead service and a dead timer as TWO lines, each with its own remedy', () => {
+  itLinux('reports a dead service and a dead timer as TWO lines, each with its own remedy', () => {
     // The "ONE CHECK MAY ANSWER IN TWO CLASSES" rule, which the runner already
     // counts (`counts a check that answers in TWO classes in both`): joining
     // these would hand the timer finding the service's remedy.
@@ -1557,14 +1680,24 @@ describe('ccrc doctor: services', () => {
     const line = lineFor(runDoctor(home).stdout, 'services') ?? '';
     expect(line).toMatch(/^PASS services: /);
     expect(line).toContain('ccrc.service is active');
-    expect(line).toContain('ccd-cap-scopes.timer is active');
+    // The cap-scopes timer is a Linux-only job (cgroup scopes), so "every
+    // unit it measured" is a different — and shorter — list on macOS. The
+    // property being pinned is that the line names what it measured, not that
+    // any particular platform's set is the one true set.
+    if (process.platform !== 'darwin') {
+      expect(line).toContain('ccd-cap-scopes.timer is active');
+    }
   });
 
   it('fails, rather than passing, when there are units and no systemctl to ask', () => {
     const home = healthy('ccrc-doctor-services-nosystemctl-');
-    unstub(home, 'systemctl');
+    unstubManager(home);
     const r = runDoctor(home);
-    expect(r.stdout).toMatch(/^FAIL services: systemctl is not on PATH/m);
+    // The BINARY differs, the verdict does not: a box holding job files it
+    // cannot ask about is a failure on either platform, and the message names
+    // whichever manager this one was supposed to have.
+    const mgr = process.platform === 'darwin' ? 'launchctl' : 'systemctl';
+    expect(r.stdout).toMatch(new RegExp(`^FAIL services: ${mgr} is not on PATH`, 'm'));
     expect(r.code).toBe(1);
   });
 });
@@ -1620,7 +1753,7 @@ describe('ccrc doctor: config', () => {
     // and nothing else: no new file, no new declaration, no guess.
     const home = healthy('ccrc-doctor-config-fleetrole-');
     rmSync(join(home, '.ccrc', 'ccrc.env'), { force: true });
-    rmSync(join(home, '.config', 'systemd', 'user', 'ccrc.service'), { force: true });
+    removeUnitFile(home, 'ccrc.service');
     writeUnitFile(home, 'ccrc-agent.service');
     writeFileSync(join(home, 'fixture-unit-ccrc-agent.service'), 'active\n');
     const r = runDoctor(home);
@@ -1652,7 +1785,7 @@ describe('ccrc doctor: config', () => {
     // either, and for it the defaults sentence is exactly right.
     const home = healthy('ccrc-doctor-config-nounits-');
     rmSync(join(home, '.ccrc', 'ccrc.env'), { force: true });
-    rmSync(join(home, '.config', 'systemd', 'user'), { recursive: true, force: true });
+    rmSync(unitDirOf(home), { recursive: true, force: true });
     const r = runDoctor(home);
     expect(r.stdout).toMatch(/^WARN config: .*defaults apply/m);
     expect(r.stdout).not.toMatch(/^SKIP config: /m);
@@ -2041,7 +2174,7 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
     // REMEDY under a skip — there is nothing here to fix.
     const home = healthy('ccrc-doctor-auth-fleetrole-');
     rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
-    rmSync(join(home, '.config', 'systemd', 'user', 'ccrc.service'), { force: true });
+    removeUnitFile(home, 'ccrc.service');
     writeUnitFile(home, 'ccrc-agent.service');
     writeFileSync(join(home, 'fixture-unit-ccrc-agent.service'), 'active\n');
     const r = runDoctor(home);
@@ -2156,7 +2289,7 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
     // checkout DOES run a server.
     const home = healthy('ccrc-doctor-auth-nounits-');
     rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
-    rmSync(join(home, '.config', 'systemd', 'user'), { recursive: true, force: true });
+    rmSync(unitDirOf(home), { recursive: true, force: true });
     const r = runDoctor(home);
     expect(authLine(r.stdout)).toMatch(/^PASS auth: no passphrase file/);
     expect(r.stdout).not.toMatch(/^SKIP auth: /m);
@@ -2215,7 +2348,7 @@ describe('ccrc doctor: rc — the state this box spawns its sessions in', () => 
     // The fixture is that box: agent unit, no `ccrc.env`, flag `on`.
     const home = healthy('ccrc-doctor-rc-fleetrole-');
     rmSync(join(home, '.ccrc', 'ccrc.env'), { force: true });
-    rmSync(join(home, '.config', 'systemd', 'user', 'ccrc.service'), { force: true });
+    removeUnitFile(home, 'ccrc.service');
     writeUnitFile(home, 'ccrc-agent.service');
     writeFileSync(join(home, 'fixture-unit-ccrc-agent.service'), 'active\n');
     writeRcFlag(home, 'on\n');
@@ -3876,7 +4009,13 @@ describe('ccrc doctor: build', () => {
     stubBuildHealth(home, healthBodyFor('ccrc-canary-running-9d4f'));
     const r = runDoctor(home);
     expect(r.stdout).toMatch(/^FAIL build: /m);
-    expect(r.stdout).toMatch(/remedy: .*systemctl --user restart ccrc\.service/);
+    // The remedy has to be a command THIS box has. `systemctl --user restart`
+    // on macOS is a second dead end printed at the exact moment somebody is
+    // already debugging — hence `_dr_restart_hint`, and hence two spellings
+    // here.
+    expect(r.stdout).toMatch(process.platform === 'darwin'
+      ? /remedy: .*launchctl kickstart -k gui\/\d+\/app\.ccrc\.ccrc/
+      : /remedy: .*systemctl --user restart ccrc\.service/);
     // The stamp's sha is local and named; the sha off the NETWORK is not
     // echoed — `_box_health`'s standing nothing-from-the-body rule.
     expect(r.stdout).toContain(HEALTHY_SHA.slice(0, 12));
@@ -4026,7 +4165,7 @@ describe('ccrc status', () => {
     // and inferring the second from no evidence is the thing this line exists
     // not to do.
     const home = statusBox('ccrc-status-role-nosystemctl-');
-    unstub(home, 'systemctl');
+    unstubManager(home);
     const out = runDoctor(home, ['status']).stdout;
     const line = out.split('\n').find((l) => l.startsWith('role:')) ?? '';
     expect(line).toMatch(/unknown/);
@@ -4336,7 +4475,17 @@ describe('ccrc doctor: the output contract', () => {
     expect(verdicts).toBe(total);
     expect(skipped).toBe(0);
     expect(fail).toBe(0);
-    expect(warn).toBe(0);
+    // A HEALTHY macOS BOX CARRIES EXACTLY ONE STANDING WARN, and it is not a
+    // fault to be fixed: `linger` has no counterpart on a platform where a
+    // LaunchAgent lives and dies with the login session. The arithmetic above
+    // is the property this test is really about and it holds on both; what
+    // differs is how many verdicts a correct box is entitled to warn about.
+    if (process.platform === 'darwin') {
+      expect(warn).toBe(1);
+      expect(lineFor(r.stdout, 'linger')).toMatch(/^WARN linger: not a macOS concept/);
+    } else {
+      expect(warn).toBe(0);
+    }
   });
 
   it('a healthy box says nothing on stderr — the verdicts are the RESULT, on stdout', () => {
@@ -4709,6 +4858,10 @@ describe('ccrc doctor: caddy', () => {
 
   it('SKIPs when there is no systemctl at all — a container or dev box cannot run a system unit', () => {
     const home = healthy('ccrc-doctor-caddy-nosystemctl-');
+    // THE SYSTEM systemd, not the user one: this is the caddy check, which asks
+    // about a SYSTEM unit. `systemctl` by name is right here on both platforms —
+    // macOS has none either, and the check's SKIP is the same verdict for the
+    // same reason.
     unstub(home, 'systemctl');
     const r = runDoctor(home);
     // `services` FAILs beside it (that box has user unit FILES and nothing to
@@ -4923,14 +5076,21 @@ describe('ccrc doctor: name', () => {
     expect(r.stdout).not.toMatch(/^(WARN|FAIL) name: /m);
   });
 
-  it('FAILs naming the ccrc-ddns timer when the name does not resolve', () => {
+  it('FAILs naming the updater — in this box\'s vocabulary — when the name does not resolve', () => {
     const home = healthy('ccrc-doctor-name-unresolved-');
     rmSync(join(home, 'fixture-getent'), { force: true });
     const r = runDoctor(home);
     const lines = r.stdout.split('\n');
     const i = lines.findIndex((l) => l.startsWith('FAIL name: '));
     expect(i, r.stdout).toBeGreaterThan(-1);
-    expect(lines[i + 1]).toContain('ccrc-ddns.timer');
+    // On macOS the .timer/.service pair collapses into one launchd job
+    // (`_exp_ddns_units`), so the remedy names that job, not two systemd
+    // units the box does not have.
+    if (process.platform === 'darwin') {
+      expect(lines[i + 1]).toMatch(/launchctl print gui\/\d+\/app\.ccrc\.ccrc-ddns/);
+    } else {
+      expect(lines[i + 1]).toContain('ccrc-ddns.timer');
+    }
     expect(r.code).toBe(1);
   });
 });

@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, WS_ADD, ghContainedEnv } from './ccdWsHelpers.js';
 import { CFG_DIR, GH_STUB, makePrHarness, mergedRow, type PrHarness } from './ccdPrHelpers.js';
+import { describeLinux, describeDarwin, itLinux } from './platformFixtures.js';
 
 let h: PrHarness;
 beforeEach(() => { h = makePrHarness('ccrc-ccd-audit-'); });
@@ -545,7 +546,7 @@ describe('local-loss refusals', () => {
     fs.mkdirSync(path.join(wt, 'dist'), { recursive: true });
     fs.writeFileSync(path.join(wt, 'dist', 'a'), 'a');
     fs.writeFileSync(path.join(wt, 'f1.txt'), 'edited\n');
-    expect(h.sh(`git -C "${wt}" status --porcelain --ignored=matching | wc -l`),
+    expect(h.sh(`git -C "${wt}" status --porcelain --ignored=matching | wc -l | tr -d ' '`),
       'the fixture must present BOTH kinds of line to the collector').toBe('2');
     const paths = h.sh(`${ARCH} _ws_reap_reset; _ws_collect_ignored "${wt}"`
       + `; for r in "\${REAP_IGNORED[@]}"; do echo "\${r##*$'\\t'}"; done`);
@@ -565,7 +566,10 @@ describe('local-loss refusals', () => {
     const { wt } = squashMovedBase(['dist/']);
     fs.mkdirSync(path.join(wt, 'dist'), { recursive: true });
     fs.writeFileSync(path.join(wt, 'dist', 'a'), 'a');
-    const a = refusal(wt, 'du() { return 1; };');
+    // `_plat_bytes`, not `du`: the shim is the seam ccd calls on both
+    // platforms, and `du -sb` is GNU-only — shadowing the tool left this
+    // fixture inert on macOS.
+    const a = refusal(wt, '_plat_bytes() { return 1; };');
     expect(a.verdict).toBe('tree-unreadable');
     expect(a.detail, a.detail).toContain("could not size the ignored entry dist/");
     // THE COMMENT AND THE ASSERTIONS ARE BOTH REWRITTEN — final-round tests
@@ -612,12 +616,22 @@ describe('local-loss refusals', () => {
     fs.writeFileSync(path.join(locked, 'hidden.bin'), 'h'.repeat(9000));
     fs.chmodSync(locked, 0o000);
     try {
-      // The fixture only means anything if du really behaves this way here.
-      const probe = h.sh(`du -sb "${wt}/dist" >"$HOME/du-out" 2>"$HOME/du-err"; echo "rc=$?"; `
+      // The fixture only means anything if the SIZER really behaves this way
+      // here — and the sizer is `_plat_bytes`, not `du`: `du -sb` is GNU-only
+      // (BSD rejects `-b` with exit 64), so probing the tool directly measured
+      // nothing on macOS and took the real assertions below with it.
+      //
+      // The property is the same on both: a partial read still PRINTS a total
+      // and reports the partiality through the exit status, which is exactly
+      // why the number below must never reach the wire.
+      const probe = h.sh(`_plat_bytes "${wt}/dist" >"$HOME/du-out" 2>"$HOME/du-err"; echo "rc=$?"; `
         + `echo "out=[$(cat "$HOME/du-out")]"; echo "err=[$(cat "$HOME/du-err")]"`);
       expect(probe, probe).toContain('rc=1');
-      expect(probe, probe).toContain('Permission denied');
-      expect(probe, probe).toMatch(/out=\[5\d{3}\s/);   // partial: 9000 bytes missing
+      // The DIAGNOSTIC is relayed either way; the wording is the platform's
+      // own — GNU du says "cannot read directory", BSD find says "Permission
+      // denied" — so what is pinned is that a reason reached stderr at all.
+      expect(probe, probe).toMatch(/err=\[[^\]]+\]/);
+      expect(probe, probe).toMatch(/out=\[5\d{3}\s?/);   // partial: 9000 bytes missing
 
       const a = refusal(wt, '');
       expect(a.verdict).toBe('tree-unreadable');
@@ -968,7 +982,15 @@ describe('local-loss refusals', () => {
     Buffer.concat([Buffer.from(`${dir}/${prefix}`, 'utf8'), Buffer.from([0xff]),
       Buffer.from(suffix, 'utf8')]);
 
-  it('serialises a path byte NO locale can decode — a SENSITIVE name', () => {
+  // APFS REFUSES THIS FILENAME, so the test cannot exist on macOS. HFS+/APFS
+  // validate filenames as UTF-8 and reject a lone 0xff outright — node reports
+  // `EILSEQ: illegal byte sequence` from the `writeFileSync` itself, before
+  // ccd is ever invoked. The property under test (ccd serialises an
+  // undecodable path byte rather than emitting broken JSON) is real and worth
+  // pinning; it simply cannot be ARRANGED on a filesystem that will not hold
+  // the input. Linux keeps the coverage, and this is a fixture limit rather
+  // than a platform difference in ccd.
+  itLinux('serialises a path byte NO locale can decode — a SENSITIVE name', () => {
     // The regression `-z` introduced, and the reason the encoding policy is
     // pinned in `_json_str`. Before this: `_json_str` read stdin through
     // python's LOCALE codec, which on this box (LANG=en_US.UTF-8) is utf-8
@@ -995,7 +1017,15 @@ describe('local-loss refusals', () => {
     expect(a.detail).toContain('a�b.pem');
   });
 
-  it('serialises a path byte NO locale can decode — an ORDINARY name', () => {
+  // APFS REFUSES THIS FILENAME, so the test cannot exist on macOS. HFS+/APFS
+  // validate filenames as UTF-8 and reject a lone 0xff outright — node reports
+  // `EILSEQ: illegal byte sequence` from the `writeFileSync` itself, before
+  // ccd is ever invoked. The property under test (ccd serialises an
+  // undecodable path byte rather than emitting broken JSON) is real and worth
+  // pinning; it simply cannot be ARRANGED on a filesystem that will not hold
+  // the input. Linux keeps the coverage, and this is a fixture limit rather
+  // than a platform difference in ccd.
+  itLinux('serialises a path byte NO locale can decode — an ORDINARY name', () => {
     // The same byte in a name nothing refuses on: the document must still parse
     // and the token must still be issued. Measured before the fix: verdict
     // `reapable` with a real 64-hex token inside a document `JSON.parse` threw
@@ -2232,8 +2262,10 @@ describe('the refusals the ladder reaches last', () => {
     // one that matters, because a STABLE non-digest is computed identically on
     // the reap side and the consent check then matches.
     const { wt } = squashMovedBase();
-    expect(refusal(wt, 'sha256sum() { return 1; };').verdict).toBe('tree-unreadable');
-    expect(refusal(wt, 'sha256sum() { echo "not-a-digest"; };').verdict).toBe('tree-unreadable');
+    // Shadowing the SHIM, for `ccd-archive.test.ts`'s reason: `sha256sum` is
+    // GNU-only and is not what ccd calls on macOS.
+    expect(refusal(wt, '_plat_sha256() { return 1; };').verdict).toBe('tree-unreadable');
+    expect(refusal(wt, '_plat_sha256() { echo "not-a-digest"; };').verdict).toBe('tree-unreadable');
   });
 
   it('removes the inside-scan\'s scratch files too, on every path that refuses', () => {
@@ -2397,11 +2429,15 @@ describe('the manifest', () => {
     // (`sensitive\tbytes\tpath`), not over the paths `_ws_ignored_digest`
     // hashes — that is what makes a grown ignored file move the token — so it is
     // rebuilt here BY HAND rather than read back from the producer under test.
-    const ignBytes = h.sh(`du -sb "${wt}/node_modules" | head -n1 | cut -f1`);
+    // REBUILT WITH THE SAME TOOLS ccd USES: `du -sb` and `sha256sum` are both
+    // GNU, and neither exists on macOS — a hand-built expectation that shells
+    // out to them measures the platform, not the producer. `_plat_bytes` and
+    // `_plat_sha256` are the seams ccd goes through on either box.
+    const ignBytes = h.sh(`_plat_bytes "${wt}/node_modules"`);
     const igndigest = h.sh(
-      `printf '%s\\0' "0"$'\\t'"${ignBytes}"$'\\t'"node_modules/" | sort -z | sha256sum | cut -d' ' -f1`);
+      `printf '%s\\0' "0"$'\\t'"${ignBytes}"$'\\t'"node_modules/" | sort -z | _plat_sha256 | cut -d' ' -f1`);
     // No clips directory for this session, so the manifest is the empty array.
-    const clipsdigest = h.sh(`printf '[]\\n' | sha256sum | cut -d' ' -f1`);
+    const clipsdigest = h.sh(`printf '[]\\n' | _plat_sha256 | cut -d' ' -f1`);
     const baseOid = h.git(main, 'rev-parse', '--verify', 'origin/main');
     // The empty-set sensitive digest. It is a CONSTANT in every state that
     // reaches a token, because a non-empty set is `sensitive-ignored` and
@@ -2994,7 +3030,7 @@ describe('ws-audit reports the session\'s own state, on EVERY verdict', () => {
     h.makeGhRepo('demo');
     h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
     const doc = JSON.parse(h.sh(
-      `${ARCH} _have_systemctl() { return 1; }; cmd_ws_audit --session demo-quiet-basin`));
+      `${ARCH} _have_systemctl() { return 1; }; launchctl() { return 1; }; cmd_ws_audit --session demo-quiet-basin`));
     expect(doc.unit).toBeNull();
   });
 
@@ -3019,7 +3055,7 @@ describe('ws-audit reports the session\'s own state, on EVERY verdict', () => {
   });
 });
 
-describe('_ws_unit_state', () => {
+describeLinux('_ws_unit_state', () => {
   it('is `enabled` when a default.target.wants symlink exists', () => {
     h.sh(`mkdir -p "$HOME/.config/systemd/user/default.target.wants"
           ln -sf /dev/null "$HOME/.config/systemd/user/default.target.wants/claude-session@x.service"`);
@@ -3058,6 +3094,43 @@ describe('_ws_unit_state', () => {
   });
 
   it('prints NOTHING where there is no systemctl — the JSON writer renders null', () => {
-    expect(h.sh('_have_systemctl() { return 1; }; _ws_unit_state x')).toBe('');
+    expect(h.sh('_have_systemctl() { return 1; }; launchctl() { return 1; }; _ws_unit_state x')).toBe('');
+  });
+});
+
+// `_ws_unit_state` answers the same three words on macOS, from the two
+// observables launchd actually has. A plist in ~/Library/LaunchAgents IS boot
+// persistence — it is what the `default.target.wants` symlink means on the
+// other platform — so its presence is `enabled`. A label launchd holds with no
+// plist behind it was bootstrapped and then had its file removed: the manager
+// knows it, nothing promises a next boot, which is exactly `loaded`. Neither
+// is `absent`, and that stays a MEASUREMENT here too — both probes answered.
+describeDarwin('_ws_unit_state, on launchd', () => {
+  it('is `enabled` when a job file exists in ~/Library/LaunchAgents', () => {
+    h.sh(`mkdir -p "$HOME/Library/LaunchAgents"
+          : > "$HOME/Library/LaunchAgents/app.ccrc.session.x.plist"`);
+    expect(h.sh('_ws_unit_state x')).toBe('enabled');
+  });
+
+  it('is `loaded` when launchd holds the label but no job file backs it', () => {
+    // Shadowing `_svc_launchctl`, which is the seam the check now reads: it
+    // needs the STATUS, not a boolean — 0 means launchd holds the label, 113
+    // is its "Could not find service", and anything else means the question
+    // could not be asked at all.
+    expect(h.sh(
+      `_svc_launchctl() { return 0; }
+       _ws_unit_state x`)).toBe('loaded');
+  });
+
+  it('is `absent` when neither the job file nor the label is there', () => {
+    // A measurement, not a fallthrough: both probes ran and both said no.
+    expect(h.sh('_svc_launchctl() { return 113; }; _ws_unit_state x')).toBe('absent');
+  });
+
+  it('prints NOTHING where there is no service manager — the JSON writer renders null', () => {
+    // The `_have_systemctl` rung, unchanged in meaning: "we could not see a
+    // manager" is not "no unit is watching this session", and collapsing the
+    // two is the false positive this field exists to make visible.
+    expect(h.sh('_have_systemctl() { return 1; }; launchctl() { return 1; }; _ws_unit_state x')).toBe('');
   });
 });

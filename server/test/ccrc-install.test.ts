@@ -55,6 +55,7 @@ import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
+import { describeLinux, describeDarwin, itLinux, itDarwin } from './platformFixtures.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -358,7 +359,15 @@ function healthyDoctorBox(home: string, opts: { upstream?: boolean } = {}): void
  *  `~/.local/bin`. Everything else there was written by the verb — which is
  *  what the "the default roster generates no wrappers" assertion measures. */
 const FIXTURE_BINS = ['gh', 'curl', 'journalctl', 'systemctl', 'loginctl', 'npm', 'rsync',
-  'df', 'claude', 'tmux'];
+  'df', 'claude', 'tmux',
+  // macOS: the service manager this box's install actually drives. It is in
+  // the list for systemctl's reason — the fixture must ANSWER the shapes ccrc
+  // asks without ever reaching the developer's own launchd, whose per-user
+  // domain is keyed on the UID and therefore is NOT isolated by $HOME.
+  // `flock` is on this list for tmux's reason: ccd refuses BY NAME without it,
+  // and macOS does not ship it — so a fixture box that lacks it is testing the
+  // refusal rather than the install.
+  'launchctl', 'plutil', 'flock'];
 
 /** A box with a shipped tree on it and nothing else — no `~/.ccrc`, no
  *  `~/.local/bin` beyond the stubs the runner plants. Doctor-healthy, because
@@ -424,6 +433,77 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   // field is what makes "the enables run after every unit file landed" a
   // measurement instead of a hope — the assertion reads the daemon-reload
   // line's own snapshot rather than inferring order from a later `ls`.
+  // ── THE LAUNCHD FIXTURE, systemctl's counterpart ────────────────────────
+  // Same discipline, same containment: every argv recorded, every shape ccrc
+  // asks answered, exit 90 on anything else so a step that started driving a
+  // job nobody authorised is loud rather than silently green.
+  //
+  // IT MATTERS MORE HERE THAN IT DOES FOR systemctl. `$HOME` isolates every
+  // other path this suite touches; launchctl ignores it. Without this stub on
+  // PATH the platform layer's own guard refuses the call (correctly — that is
+  // what stops a test run from registering jobs in the developer's real
+  // session), and `_inst_enable`'s Darwin arm then dies by design.
+  plant('launchctl', [
+    '#!/bin/sh',
+    'have=',
+    'for f in "$HOME/Library/LaunchAgents"/*; do',
+    '  [ -e "$f" ] || continue',
+    '  have="$have${have:+,}${f##*/LaunchAgents/}"',
+    'done',
+    'printf \'%s\\t%s\\n\' "$*" "$have" >> "$HOME/launchctl-calls"',
+    'case "$1" in',
+    // bootstrap takes a DOMAIN and a plist path; the file must exist, which is
+    // the fixture's stand-in for launchd parsing it.
+    '  bootstrap)',
+    '    [ -n "$2" ] && [ -f "$3" ] || { echo "fixture launchctl: bootstrap: no such job file: $3" >&2; exit 1; }',
+    '    if [ -f "$HOME/fixture-bootstrap-fail" ]; then',
+    '      echo "Bootstrap failed: fixture" >&2; exit 1',
+    '    fi',
+    '    printf \'%s\\n\' "${3##*/LaunchAgents/}" >> "$HOME/launchctl-loaded"',
+    '    exit 0 ;;',
+    '  bootout)',
+    '    [ -n "$2" ] || { echo "fixture launchctl: unexpected argv: $*" >&2; exit 90; }',
+    '    exit 0 ;;',
+    '  enable|disable)',
+    '    [ -n "$2" ] || { echo "fixture launchctl: unexpected argv: $*" >&2; exit 90; }',
+    '    exit 0 ;;',
+    '  kickstart)',
+    '    exit 0 ;;',
+    // `print` is how `_svc_is_active` and `_svc_is_loaded` read a job. A test
+    // with an opinion writes it to fixture-unit-<label>; the default is a job
+    // that was bootstrapped and is running, which is what a working box
+    // answers right after `_inst_enable`.
+    '  print)',
+    '    lbl="${2##*/}"',
+    '    f="$HOME/fixture-unit-$lbl"',
+    '    if [ -f "$f" ]; then IFS= read -r v < "$f"; [ "$v" = active ] || exit 113; fi',
+    '    if [ -f "$HOME/launchctl-loaded" ] && grep -q "^$lbl.plist$" "$HOME/launchctl-loaded"; then',
+    '      echo "	state = running"',
+    // The stay-up gate (`_ccrc_job_stayed_up`) samples `pid = ` twice: the
+    // default is one stable pid (a job that stayed up); `fixture-pid-churn`
+    // makes every print answer a fresh one — a crash loop as launchd shows
+    // it. $((…)) strips wc's BSD padding so the pid is always bare digits.
+    '      if [ -f "$HOME/fixture-pid-churn" ]; then',
+    '        echo "	pid = $(($(wc -l < "$HOME/launchctl-calls") + 4000))"',
+    '      else',
+    '        echo "	pid = 4242"',
+    '      fi',
+    '      exit 0',
+    '    fi',
+    '    exit 113 ;;',
+    '  *) echo "fixture launchctl: unexpected argv: $*" >&2; exit 90 ;;',
+    'esac',
+  ].join('\n') + '\n');
+
+  // `plutil -lint` guards the generated plist before it is installed. The
+  // fixture answers valid so the install proceeds; a test that wants the
+  // refusal plants its own.
+  plant('plutil', [
+    '#!/bin/sh',
+    'printf \'%s\\n\' "$*" >> "$HOME/plutil-calls"',
+    'exit 0',
+  ].join('\n') + '\n');
+
   plant('systemctl', [
     '#!/bin/sh',
     'have=',
@@ -621,9 +701,19 @@ function pathWithout(home: string, missing: string): string {
   // landed: without this entry, the git fixture died at the wrappers step and
   // `says GIT IS ABSENT when git is absent` went red — the test's own trap,
   // sprung by a new dependency rather than by anything about git.
+  // grep is the launchctl STUB's own dependency (its `print` arm greps the
+  // loaded-labels file): without it every print answers 113, the job reads
+  // as never-up, and the enable step's stay-up gate fails the install — a
+  // second, hidden absence inside a fixture whose whole subject is ONE
+  // absence (measured on the macos leg's second run).
   for (const b of ['mkdir', 'cp', 'mv', 'rm', 'cat', 'chmod', 'cmp', 'date',
     'node', 'git', 'npm', 'rsync', 'bash', 'sleep', 'jq', 'mktemp', 'basename',
-    'diff', 'tmux', 'python3', 'flock', 'timeout', 'stat']) {
+    'diff', 'tmux', 'python3', 'flock', 'timeout', 'stat', 'grep',
+    // macOS: the service manager, its plist linter, and `uname`. The last one
+    // is not decoration — `ccd`'s platform detection prefers bash's own
+    // `$OSTYPE` precisely so a PATH without `uname` cannot silently answer
+    // "linux", and this list is where that PATH gets built.
+    ...(process.platform === 'darwin' ? ['launchctl', 'plutil', 'uname'] : [])]) {
     if (b === missing || existsSync(join(d, b))) continue;
     symlinkSync(realPath(b), join(d, b));
   }
@@ -1217,7 +1307,7 @@ describe('ccrc install: a box with no node', () => {
   });
 });
 
-describe('ccrc install: a box with no systemd', () => {
+describeLinux('ccrc install: a box with no systemd', () => {
   // The sibling of the node probe above, added in fix round 1 (Minor 2). Every
   // ccrc service and every ccd session is a `systemd --user` unit, so a box
   // with no systemctl cannot run a fleet — but until the probe existed it
@@ -1241,6 +1331,78 @@ describe('ccrc install: a box with no systemd', () => {
     expect(existsSync(placed(home)), 'the tree was placed anyway').toBe(false);
     expect(existsSync(join(home, '.local', 'bin', 'ccd'))).toBe(false);
     expect(existsSync(join(home, '.tmux.conf'))).toBe(false);
+    expect(r.stdout).toBe('');
+  });
+});
+
+// The same probe, on the platform where the missing dependency is real. macOS
+// ships neither tmux nor flock, and its /bin/bash is 3.2.57 — so on this
+// platform the refusal an operator actually meets is one of THOSE, and it
+// carries the same three promises the systemd one does: by name, before the
+// first write, with a remedy that works.
+describeDarwin('ccrc install: a macOS box missing what ccd needs', () => {
+  // `omit` alone is not enough here: `runInstall` calls `replantDoctorStubs`
+  // on every run, which copies `healthyDoctorBox`'s stubs back into
+  // ~/.local/bin — so a tool this test wants ABSENT has to leave both places.
+  // (Measured: without the second delete, tmux was re-planted, the gate never
+  // fired, and the run died at the wrappers step for a reason this test is
+  // not about.)
+  // THE PATH IS BUILT EXPLICITLY, not by `pathWithout` alone, and the reason
+  // is worth stating: `pathWithout` puts `~/.local/bin` at the HEAD, and that
+  // directory is where the fixture's own stubs live — `ccrcEnv` plants them
+  // and `replantDoctorStubs` puts them back on every run. A test about a tool
+  // being ABSENT cannot leave that directory on PATH, because the stub of the
+  // very tool it removed is in it. (Measured: with it, `launchctl` resolved to
+  // the stub, the gate never fired, and the run died at the wrappers step for
+  // a reason this test is not about.)
+  //
+  // Dropping it costs nothing HERE and only here: every one of these probes
+  // runs BEFORE the first of the fourteen steps, so no step is reached that
+  // would want `claude`, `gh` or any other planted stub.
+  const pathMissing = (home: string, tool: string): string => {
+    const full = pathWithout(home, tool);
+    return full.split(':').slice(1).join(':');
+  };
+
+  it('refuses by name BEFORE the first write when tmux is absent', () => {
+    const home = freshBox('ccrc-install-notmux-');
+    const r = runInstall(home, ['install'], { PATH: pathMissing(home, 'tmux') },
+      { omit: ['tmux'] });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/tmux is required by ccrc/);
+    expect(r.stderr).toMatch(/brew install tmux/);
+    // NOTHING was written — the promise this probe exists to keep, and the
+    // reason it sits ahead of the fourteen steps rather than inside them.
+    expect(existsSync(join(home, '.ccrc')), '$HOME/.ccrc was created anyway').toBe(false);
+    expect(existsSync(placed(home)), 'the tree was placed anyway').toBe(false);
+    expect(existsSync(join(home, '.tmux.conf'))).toBe(false);
+    expect(r.stdout).toBe('');
+  });
+
+  it('refuses when flock is absent, naming the formula that provides it', () => {
+    const home = freshBox('ccrc-install-noflock-');
+    const r = runInstall(home, ['install'], { PATH: pathMissing(home, 'flock') },
+      { omit: ['flock'] });
+    expect(r.code).toBe(1);
+    // ccd already refuses BY NAME at three workspace sites without it, so the
+    // outcome this prevents is a box that installs cleanly and then cannot
+    // make a single workspace.
+    expect(r.stderr).toMatch(/flock is required by ccrc/);
+    expect(r.stderr).toMatch(/brew install flock/);
+    expect(existsSync(join(home, '.ccrc'))).toBe(false);
+    expect(r.stdout).toBe('');
+  });
+
+  it('refuses when launchctl is absent — systemd\'s probe, on this platform', () => {
+    const home = freshBox('ccrc-install-nolaunchctl-');
+    const r = runInstall(home, ['install'], { PATH: pathMissing(home, 'launchctl') },
+      { omit: ['launchctl'] });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/launchctl is required by 'ccrc install'/);
+    // The two conditions stay apart, exactly as they do on Linux: this is not
+    // "launchd refused these jobs".
+    expect(r.stderr).not.toMatch(/bootstrap failed/);
+    expect(existsSync(join(home, '.ccrc'))).toBe(false);
     expect(r.stdout).toBe('');
   });
 });
@@ -1369,7 +1531,7 @@ describe('ccrc install: the executables and files it installs', () => {
     expect(mode(bin)).toBe(0o755);
   });
 
-  it('ccd-cap-scopes lands beside it — the OOM guardrail is an executable too', () => {
+  itLinux('ccd-cap-scopes lands beside it — the OOM guardrail is an executable too', () => {
     const { home } = installed;
     const bin = join(home, '.local', 'bin', 'ccd-cap-scopes');
     expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccd-cap-scopes')));
@@ -1460,7 +1622,12 @@ describe('ccrc install: the executables and files it installs', () => {
     expect(runInstall(home).code).toBe(0);
     const targets = [
       join(home, '.local', 'bin', 'ccd'),
-      join(home, '.local', 'bin', 'ccd-cap-scopes'),
+      // `ccd-cap-scopes` caps tmux pane CGROUP scopes, so `_inst_bins` does not
+      // place it on macOS — a binary that could only ever be a no-op there.
+      // Listing it unconditionally would make this test stat a file the verb
+      // was right not to install.
+      ...(process.platform === 'darwin'
+        ? [] : [join(home, '.local', 'bin', 'ccd-cap-scopes')]),
       join(home, '.local', 'bin', 'ccrc'),
       join(home, '.cc-sessions', 'session-hook.sh'),
       join(home, '.cc-sessions', 'install-session-hooks.sh'),
@@ -1855,7 +2022,7 @@ const loginctlCalls = (home: string): string[] => {
   return existsSync(p) ? read(p).split('\n').filter(Boolean) : [];
 };
 
-describe('ccrc install: the units, and the one this box must not be given', () => {
+describeLinux('ccrc install: the units, and the one this box must not be given', () => {
   /** One install, shared by the read-only assertions. `umask 077` for the
    *  reason the artifacts describe gives: at 022 a plain `cp` reproduces 0644
    *  by itself and the `chmod` could be deleted unnoticed. */
@@ -2027,6 +2194,179 @@ describe('ccrc install: the units, and the one this box must not be given', () =
     expect(units.r.stdout).toMatch(/^verified: ccrc\.service active, MainPID 4242 stable across 0s$/m);
   });
 
+});
+
+// PLATFORM-NEUTRAL, so it lives outside the Linux-only describe above: the
+// property it pins — the two files name the SAME set of unit directories — is
+// true on both platforms and is exactly what a half-finished port breaks.
+// The Linux describe above measures four unit files, two drop-ins and a
+// slice. macOS gets ONE job file, and the difference is not an omission —
+// launchd has no template units (so there is nothing to install once for all
+// sessions; `ccd` mints a plist per session), no drop-ins, and no cgroups (so
+// there is no memory ceiling to install and no `ccd-cap-scopes` to run). What
+// it DOES have to keep is every promise that survives translation: the job
+// lands at 644, it is a valid plist, it reads the same two env files in the
+// same order, and it is bootstrapped rather than merely written.
+describeDarwin('ccrc install: the launchd job, and what macOS deliberately does not get', () => {
+  const box = ((): { home: string; r: Result } => {
+    const home = freshBox('ccrc-install-launchd-');
+    return { home, r: runInstall(home, ['install'], {}, { umask: '077' }) };
+  })();
+
+  const plist = (): string =>
+    join(box.home, 'Library', 'LaunchAgents', 'app.ccrc.ccrc.plist');
+
+  it('the run this describe measures succeeded', () => {
+    expect(box.r.code, box.r.stderr).toBe(0);
+    expect(box.r.stdout).toMatch(/^install: units: /m);
+  });
+
+  it('installs exactly one job file, at 644', () => {
+    expect(existsSync(plist()), 'app.ccrc.ccrc.plist never reached ~/Library/LaunchAgents')
+      .toBe(true);
+    expect(statSync(plist()).mode & 0o777, 'the job file has the wrong mode').toBe(0o644);
+    // ONE file, not a directory of them: no template, no drop-ins, no timer.
+    const dir = join(box.home, 'Library', 'LaunchAgents');
+    expect(readdirSync(dir).sort()).toEqual(['app.ccrc.ccrc.plist']);
+  });
+
+  it('reads ccrc.env first, then exposure.env, both optional — systemd\'s EnvironmentFile order, kept', () => {
+    // launchd cannot read an env file at all, so the job is a shell that
+    // sources them. The ORDER is the mechanism by which `ccrc expose`
+    // overrides a hand-set placeholder, and the `[ -f ]` guards are the `-`
+    // that lets a box which never ran the verb boot anyway. Both must survive
+    // the translation or the platform quietly loses a feature.
+    const body = read(plist());
+    const env1 = body.indexOf('/.ccrc/ccrc.env');
+    const env2 = body.indexOf('/.ccrc/exposure.env');
+    expect(env1, 'the job never reads ccrc.env').toBeGreaterThan(-1);
+    expect(env2, 'the job never reads exposure.env').toBeGreaterThan(-1);
+    expect(env1, 'exposure.env must be sourced AFTER ccrc.env — later wins')
+      .toBeLessThan(env2);
+    expect(body).toMatch(/\[ -f '[^']*\/\.ccrc\/ccrc\.env' \]/);
+    expect(body).toMatch(/\[ -f '[^']*\/\.ccrc\/exposure\.env' \]/);
+    expect(body, 'the assignments must be EXPORTED, which is what an EnvironmentFile does')
+      .toContain('set -a;');
+  });
+
+  it('is a plist the system parser accepts', () => {
+    // `launchctl bootstrap` answers a malformed plist with "Could not find
+    // specified service" — a message about the wrong thing entirely. The
+    // install lints before it places, and this is that guarantee measured
+    // against the file that actually landed.
+    const r = spawnSync('plutil', ['-lint', plist()], { encoding: 'utf8' });
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+  });
+
+  it('carries PATH explicitly — a LaunchAgent does not inherit the login shell\'s', () => {
+    // The difference between a working box and a mystery: launchd hands a job
+    // its own minimal PATH, which holds neither Homebrew's bash (ccd needs
+    // >= 4.2 and macOS ships 3.2) nor tmux.
+    expect(read(plist())).toMatch(/<key>PATH<\/key>/);
+  });
+
+  it('bootstraps the job rather than only writing it', () => {
+    const calls = read(join(box.home, 'launchctl-calls'));
+    expect(calls, 'nothing was ever bootstrapped').toMatch(/^bootstrap gui\//m);
+    expect(box.r.stdout).toMatch(/^install: services: app\.ccrc\.ccrc bootstrapped/m);
+  });
+
+  it('installs no ccd-cap-scopes, and says why', () => {
+    // It caps tmux pane CGROUP scopes. macOS has none, so the binary would be
+    // a permanent no-op on PATH and the transcript would name it as though the
+    // box had gained something.
+    expect(existsSync(join(box.home, '.local', 'bin', 'ccd-cap-scopes')),
+      'an inert cap-scopes binary was installed anyway').toBe(false);
+    expect(box.r.stdout).toMatch(/no ccd-cap-scopes/);
+  });
+
+  it('states the missing memory ceiling instead of implying parity', () => {
+    expect(box.r.stdout).toMatch(/no per-session or fleet-wide memory ceiling/);
+  });
+
+  it('converges cleanly — linger is not a degraded step on a platform that has none', () => {
+    // A degraded step is one that was supposed to happen and did not. Counting
+    // linger here would make EVERY macOS install report DEGRADED forever,
+    // which trains an operator to ignore the word on the day it means
+    // something. The fact is carried by `ccrc doctor` as a standing WARN.
+    expect(box.r.stdout).toMatch(/^install: linger: not a macOS concept/m);
+    expect(box.r.stdout).toMatch(/^install: done — every step above converged$/m);
+  });
+});
+
+// The launchd FAILURE branches — the Darwin siblings of the Linux describe's
+// three failure tests, minus the one macOS does not implement: there is no
+// separate `restart` step in `_inst_enable_darwin` (bootout+bootstrap IS the
+// reload), so "refuses when the restart itself fails" has no Darwin condition
+// to test. What remains is the refusal and the stay-up gate, and both were
+// shipped without a test that reaches them — the `fixture-bootstrap-fail`
+// knob in the launchctl stub existed with no writer.
+describeDarwin('ccrc install: the launchd failure branches — the refusal, and the stay-up gate', () => {
+  it('refuses BY LABEL when launchd will not bootstrap the job — the sibling of "refuses BY UNIT when systemd will not enable one"', () => {
+    const home = freshBox('ccrc-install-bootfail-');
+    writeFileSync(join(home, 'fixture-bootstrap-fail'), 'yes\n');
+    const r = runInstall(home);
+    expect(r.code, 'a bootstrap launchd refused must FAIL the install').not.toBe(0);
+    expect(r.stderr).toMatch(/launchctl bootstrap failed for app\.ccrc\.ccrc/);
+    // The remedy names the command this box actually has.
+    expect(r.stderr).toMatch(/launchctl print gui\//);
+    expect(r.stdout, 'the install must not report the step as done')
+      .not.toMatch(/^install: services: app\.ccrc\.ccrc bootstrapped/m);
+  });
+
+  it('fails the install when the bootstrapped job does not stay up — fork-time success is not a service', () => {
+    // Every `launchctl print` answers a fresh pid: a crash loop as launchd
+    // shows one, while `bootstrap` itself still exits 0. The doctrine above
+    // `_inst_enable` binds this arm too: a box whose service will not stay
+    // up is a FAILED install, not a warning.
+    const home = freshBox('ccrc-install-stayup-');
+    writeFileSync(join(home, 'fixture-pid-churn'), 'yes\n');
+    const r = runInstall(home);
+    expect(r.code, 'a job that did not stay up must FAIL the install').not.toBe(0);
+    expect(r.stderr).toMatch(/did not stay up/);
+    expect(r.stderr).toMatch(/launchctl print gui\//);
+  });
+});
+
+// The fleet lane's Darwin half. The Linux tests above pin `ccrc-agent.service`
+// byte for byte against the shipped unit; there is no shipped plist to compare
+// against — `_inst_units` GENERATES one — so what is pinned here is the
+// property those tests are really about: a fleet box gets the AGENT's job and
+// must never be given the server's.
+describeDarwin('ccrc install --role fleet: the agent job, and the one this box must not be given', () => {
+  // THROUGH A PTY, like the Linux fleet tests: `--role fleet` reads the agent
+  // URL and token from a terminal ON PURPOSE and refuses a pipe, because under
+  // `curl … | bash` stdin is the installer script and a read there would take
+  // a line of shell as this fleet's bearer token.
+  let once: Promise<{ home: string; r: Result }> | null = null;
+  const box = (): Promise<{ home: string; r: Result }> => (once ??= (async () => {
+    const home = freshBox('ccrc-install-fleet-launchd-');
+    const r = await runInstallTty(home, ['install', '--role', 'fleet'], [FLEET_URL, FLEET_TOKEN]);
+    return { home, r };
+  })());
+
+  it('the run this describe measures succeeded', async () => {
+    const { r } = await box();
+    expect(r.code, r.stdout).toBe(0);
+  });
+
+  it('installs the AGENT job and NOT the server one', async () => {
+    const { home } = await box();
+    expect(readdirSync(join(home, 'Library', 'LaunchAgents')).sort())
+      .toEqual(['app.ccrc.ccrc-agent.plist']);
+  });
+
+  it('bootstraps the agent, and never mentions the server job', async () => {
+    const { home, r } = await box();
+    const calls = read(join(home, 'launchctl-calls'));
+    expect(calls).toMatch(/bootstrap /);
+    expect(calls, 'the server job was named on a fleet box')
+      .not.toContain('app.ccrc.ccrc.plist');
+    expect(r.stdout).toMatch(/^install: services: app\.ccrc\.ccrc-agent bootstrapped/m);
+  });
+});
+
+describe('ccrc install: the unit directory is spelled the same in both files', () => {
   it('names the same unit directory the doctor check table does', () => {
     // THE DELIBERATE SECOND SPELLING, held by a mechanism instead of a promise
     // (D-92, and `_check_path`'s own note about `WRAPPER_BIN_DIR` for the same
@@ -2038,14 +2378,27 @@ describe('ccrc install: the units, and the one this box must not be given', () =
     // literals, compared.
     const ccrcSrc = read(join(REPO, 'ccd', 'ccrc'));
     const checksSrc = read(join(REPO, 'ccd', 'ccrc-doctor-checks'));
-    const box = /^BOX_UNIT_DIR="([^"]+)"$/m.exec(ccrcSrc);
-    const table = /^CCRC_UNIT_DIR="([^"]+)"$/m.exec(checksSrc);
-    expect(box, 'ccd/ccrc declares no BOX_UNIT_DIR').toBeTruthy();
-    expect(table, 'ccd/ccrc-doctor-checks declares no CCRC_UNIT_DIR').toBeTruthy();
-    expect(box![1]).toBe(table![1]);
-    // …and it is the directory this fixture really found the units in, so the
-    // agreement is with the box rather than only with itself.
-    expect(box![1]).toBe('$HOME/.config/systemd/user');
+    //
+    // TWO DIRECTORIES PER FILE SINCE macOS ARRIVED — systemd's unit directory
+    // and launchd's LaunchAgents — so the property is now two pairs rather
+    // than one, and this check got STRONGER rather than looser: it pins both.
+    // A port that translated one file's arm and not the other's is exactly
+    // the drift D-92 wrote this test for.
+    const all = (re: RegExp, src: string) =>
+      [...src.matchAll(re)].map((m) => m[1]!);
+    const box = all(/^\s*BOX_UNIT_DIR="([^"]+)"$/gm, ccrcSrc);
+    const table = all(/^\s*CCRC_UNIT_DIR="([^"]+)"$/gm, checksSrc);
+    expect(box, 'ccd/ccrc declares no BOX_UNIT_DIR').not.toHaveLength(0);
+    expect(table, 'ccd/ccrc-doctor-checks declares no CCRC_UNIT_DIR').not.toHaveLength(0);
+    // Compared as SETS: the two files order their platform arms
+    // independently, and what matters is that neither knows a directory the
+    // other does not.
+    expect([...box].sort()).toEqual([...table].sort());
+    // …and they are the real directories, so the agreement is with the box
+    // rather than only with itself. The Linux one is what this fixture really
+    // found the units in.
+    expect(box).toContain('$HOME/.config/systemd/user');
+    expect(box).toContain('$HOME/Library/LaunchAgents');
   });
 });
 
@@ -2059,7 +2412,7 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
     expect(converged.r.code, converged.r.stderr).toBe(0);
   });
 
-  it('asks logind for linger, by uid, and says so', () => {
+  itLinux('asks logind for linger, by uid, and says so', () => {
     // Every ccd session is a `systemd --user` unit; without linger,
     // /run/user/$UID is torn down with the last login session and the whole
     // fleet goes with it. The remedy doctor prints uses the UID too, so the
@@ -2070,7 +2423,7 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
     expect(r.stdout).toMatch(/^install: linger: enabled for uid \d+ — this box's units survive logout$/m);
   });
 
-  it('reports a linger it cannot enable and CONTINUES — doctor is what says so', () => {
+  itLinux('reports a linger it cannot enable and CONTINUES — doctor is what says so', () => {
     // THE ONE STEP THAT SURVIVES ITS OWN FAILURE. Enabling linger needs a
     // privilege the operator may not have (`sudo loginctl enable-linger` is the
     // remedy, and this process is not root). Dying here would abort an install
@@ -2094,6 +2447,23 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
     expect(r.stdout).toMatch(/^FAIL linger: /m);
     expect(r.stdout).toMatch(/^ {2}remedy: run: sudo loginctl enable-linger \d+$/m);
     expect(r.code).toBe(1);
+  });
+
+  // macOS's half of the same step. There is nothing to ask and nothing that
+  // could fail, so the assertions are about what the transcript SAYS: the
+  // operator has to learn that this box loses a guarantee a Linux fleet host
+  // keeps, and they must not learn it as a degraded step (see the launchd
+  // describe above for why that distinction is load-bearing).
+  itDarwin('says linger is not a macOS concept, asks logind nothing, and does not degrade', () => {
+    expect(converged.r.code, converged.r.stderr).toBe(0);
+    expect(converged.r.stdout).toMatch(/^install: linger: not a macOS concept/m);
+    // Names the guarantee that is missing, in the operator's terms.
+    expect(converged.r.stdout).toMatch(/stop at logout and start again at login/);
+    // And points at the standing report rather than leaving it to this one run.
+    expect(converged.r.stdout).toMatch(/ccrc doctor/);
+    expect(existsSync(join(converged.home, 'loginctl-calls')),
+      'logind was asked something on a box that has none').toBe(false);
+    expect(converged.r.stdout).toMatch(/^install: done — every step above converged$/m);
   });
 
   it('creates every account config dir the roster names, so the hooks land in all of them', () => {
@@ -2143,7 +2513,9 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
     // temp file, no staged leftover — beside what the fixture itself planted.
     expect(readdirSync(join(home, '.local', 'bin'))
       .filter((b) => !FIXTURE_BINS.includes(b)).sort())
-      .toEqual(['ccd', 'ccd-cap-scopes', 'ccrc']);
+      .toEqual(process.platform === 'darwin'
+        ? ['ccd', 'ccrc']          // no cap-scopes: it caps cgroup scopes
+        : ['ccd', 'ccd-cap-scopes', 'ccrc']);
   });
 
   it('never calls ccrc\'s own executables orphans (D-93)', () => {
@@ -2394,7 +2766,13 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     // every clean install yellow and taught operators to skim the colour that
     // is supposed to mean something. It PASSes now, carrying the arming
     // instructions as next-steps text, and this line is back to `0 warned`.
-    expect(r.stdout).toMatch(/^summary: \d+ checks \(\d+ skipped\), \d+ verdicts — \d+ passed, 0 warned, 0 failed$/m);
+    // A macOS box closes green with EXACTLY ONE warn, and it is not a fault
+    // this verb could have avoided: `linger` has no counterpart on a platform
+    // where a LaunchAgent lives and dies with the login session. `0 failed` is
+    // the part that means "this install worked", and it holds on both.
+    const warned = process.platform === 'darwin' ? 1 : 0;
+    expect(r.stdout).toMatch(new RegExp(
+      `^summary: \\d+ checks \\(\\d+ skipped\\), \\d+ verdicts — \\d+ passed, ${warned} warned, 0 failed$`, 'm'));
     // …and the gate check really RAN and really found the box uncredentialed:
     // `0 warned` must not be reachable by the check having vanished.
     expect(r.stdout).toMatch(/^PASS auth: no passphrase file at .*nothing is gated/m);
@@ -2452,10 +2830,29 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     // FAIL, or a 1 with no record of what converged — leaves an operator with a
     // number and no way to tell which half of the run it is about.
     const home = freshBox('ccrc-install-doctor-fails-');
-    writeFileSync(join(home, 'fixture-linger-refuse'), 'yes\n');
+    // THE LEVER IS PLATFORM-SPECIFIC, THE CONTRACT IS NOT. Linger is how a
+    // Linux box is made to fail doctor; on macOS linger is a standing WARN by
+    // construction and can never be a FAIL. The first cut's Darwin lever was
+    // a downed service (`fixture-unit-…` = inactive) — which stopped being a
+    // doctor-only lever the day `_inst_enable_darwin` gained its stay-up
+    // gate: ONE launchctl stub serves the install spine and the doctor tail
+    // alike, so a job that reads down fails the INSTALL at step 10 and
+    // doctor never runs (measured on the macos leg, twice — the second time
+    // because the fix script asserted this block existed and forgot to
+    // replace it). The lever is now a world-readable exposure.env: doctor's
+    // exposure check FAILs on the mode, and no install step ever reads it.
+    const failing = process.platform === 'darwin' ? 'exposure' : 'linger';
+    if (failing === 'exposure') {
+      mkdirSync(join(home, '.ccrc'), { recursive: true });
+      writeFileSync(join(home, '.ccrc', 'exposure.env'),
+        'CCRC_ORIGIN=https://box.example.com\nCCRC_RP_ID=box.example.com\nCCRC_AUTH=on\n',
+        { mode: 0o644 });
+    } else {
+      writeFileSync(join(home, 'fixture-linger-refuse'), 'yes\n');
+    }
     const r = runInstall(home);
     expect(r.code).toBe(1);
-    expect(r.stdout).toMatch(/^FAIL linger: /m);
+    expect(r.stdout).toMatch(new RegExp(`^FAIL ${failing}: `, 'm'));
     for (const step of ['roster', 'accounts\\.sh', 'ccrc\\.env', 'tree', 'bins', 'files',
       'stamp', 'units', 'services', 'linger', 'dirs', 'hooks', 'skills', 'wrappers']) {
       expect(r.stdout, `no "install: ${step}:" line survived the failing doctor`)
@@ -2465,8 +2862,21 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     // that neither converged nor died, and says so. "every step above
     // converged" here would be a false sentence four lines under the step that
     // reported it could not (fix round 1, Minor 1).
-    expect(r.stdout).toMatch(/^install: done — converged with 1 degraded step \(linger\)$/m);
-    expect(r.stdout).not.toMatch(/^install: done — every step above converged$/m);
+    // The closing line MEASURES this run. On Linux the fixture's refused
+    // linger is a degraded step and the line counts it; on macOS linger is not
+    // a step that can degrade — there is nothing to enable — so a correct run
+    // closes clean even though doctor went on to fail on something else.
+    // Which is the point of the two halves being separate sentences.
+    expect(r.stdout).toMatch(process.platform === 'darwin'
+      ? /^install: done — every step above converged$/m
+      : /^install: done — converged with 1 degraded step \(linger\)$/m);
+    // The NEGATIVE half belongs to the Linux case only: there, claiming
+    // "every step converged" four lines under a step that said it could not
+    // would be the false sentence this assertion was written to catch. On
+    // macOS that sentence is the TRUE one, because no step degraded.
+    if (process.platform !== 'darwin') {
+      expect(r.stdout).not.toMatch(/^install: done — every step above converged$/m);
+    }
   });
 
   it('a fresh VM with no Claude Code installed is told to install it, not to edit its roster (A2-NEW)', () => {
@@ -2522,7 +2932,12 @@ describe('ccrc install: running the WHOLE verb twice', () => {
     const targets = [
       join(home, '.ccrc', 'accounts.sh'),
       join(home, '.local', 'bin', 'ccd'),
-      join(home, '.local', 'bin', 'ccd-cap-scopes'),
+      // `ccd-cap-scopes` caps tmux pane CGROUP scopes, so `_inst_bins` does not
+      // place it on macOS — a binary that could only ever be a no-op there.
+      // Listing it unconditionally would make this test stat a file the verb
+      // was right not to install.
+      ...(process.platform === 'darwin'
+        ? [] : [join(home, '.local', 'bin', 'ccd-cap-scopes')]),
       join(home, '.local', 'bin', 'ccrc'),
       join(home, '.cc-sessions', 'session-hook.sh'),
       join(home, '.cc-sessions', 'install-session-hooks.sh'),
@@ -2536,7 +2951,13 @@ describe('ccrc install: running the WHOLE verb twice', () => {
       join(home, '.cc-sessions', 'worker-skill', 'SKILL.md'),
       join(home, '.tmux.conf'),
       join(home, '.claude', 'statusline-command.sh'),
-      ...UNIT_FILES.map(([dest]) => unitDir(home, ...dest.split('/'))),
+      // THE JOB FILES THIS PLATFORM ACTUALLY HAS. `UNIT_FILES` is systemd's
+      // set — four units and two drop-ins — and none of it exists on macOS,
+      // where `_inst_units` writes exactly one plist and launchd has neither
+      // templates nor drop-ins.
+      ...(process.platform === 'darwin'
+        ? [join(home, 'Library', 'LaunchAgents', 'app.ccrc.ccrc.plist')]
+        : UNIT_FILES.map(([dest]) => unitDir(home, ...dest.split('/')))),
     ];
     const before = targets.map(mtime);
     const jsonBefore = read(join(home, '.ccrc', 'accounts.json'));
@@ -2693,7 +3114,7 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
     expect(read(dotCcrc(home, 'ccrc.env'))).toMatch(/^CCRC_ROLE=fleet$/m);
   });
 
-  it('installs ccrc-agent.service — byte for byte — and NOT ccrc.service', async () => {
+  itLinux('installs ccrc-agent.service — byte for byte — and NOT ccrc.service', async () => {
     const { home } = await fleet();
     const agent = unitDir(home, 'ccrc-agent.service');
     expect(existsSync(agent)).toBe(true);
@@ -2707,7 +3128,7 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
     }
   });
 
-  it('enables and restarts the AGENT unit, and never asks systemd about ccrc.service', async () => {
+  itLinux('enables and restarts the AGENT unit, and never asks systemd about ccrc.service', async () => {
     const { home, r } = await fleet();
     const argv = systemctlCalls(home).map((c) => c.argv);
     expect(argv).toContain('--user enable --now ccrc-agent.service');
@@ -2758,7 +3179,7 @@ describe('ccrc install --role: the refusals and the default', () => {
     expect(existsSync(join(home, 'systemctl-calls'))).toBe(false);
   });
 
-  it('--role both is byte-identical to a plain install — same units, same calls, no agent.env', () => {
+  itLinux('--role both is byte-identical to a plain install — same units, same calls, no agent.env', () => {
     const home = freshBox('ccrc-install-role-both-');
     const r = runInstall(home, ['install', '--role', 'both']);
     expect(r.code, r.stderr).toBe(0);
@@ -2781,7 +3202,7 @@ describe('ccrc install --role: the refusals and the default', () => {
       /^install: units: ccrc\.service, claude-session@\.service, ccd-cap-scopes\.\{service,timer\} and both drop-ins in \$HOME\/\.config\/systemd\/user$/m);
   });
 
-  it('--role server is today\'s spine minus nothing — the difference from both is reserved', () => {
+  itLinux('--role server is today\'s spine minus nothing — the difference from both is reserved', () => {
     const home = freshBox('ccrc-install-role-server-');
     const r = runInstall(home, ['install', '--role', 'server']);
     expect(r.code, r.stderr).toBe(0);

@@ -392,7 +392,15 @@ describe('build-release.sh: source pins', () => {
   // depend on who built it and when — silently, since nothing else fails.
   it('the tar invocation carries the reproducibility flags, on one line', () => {
     const src = readFileSync(SCRIPT, 'utf8');
-    expect(src).toMatch(/tar --sort=name --mtime=@0 --owner=0 --group=0 /);
+    // The tar BINARY is now chosen at runtime — GNU tar by name, or `gtar`,
+    // and a refusal when neither is there, because BSD tar has none of these
+    // four options and would emit a different archive for identical input.
+    // What this pin is about is unchanged: all four flags, together, on the
+    // line that builds the artifact.
+    expect(src).toMatch(/"\$BR_TAR" --sort=name --mtime=@0 --owner=0 --group=0 /);
+    // …and the refusal really is a refusal, not a fallback that quietly
+    // produces an unreproducible tarball.
+    expect(src).toMatch(/GNU tar is required to build a release/);
   });
 
   it('the script runs under set -euo pipefail', () => {

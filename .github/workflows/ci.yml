@@ -111,6 +111,58 @@ jobs:
         working-directory: ${{ matrix.package }}
         run: ./node_modules/.bin/tsc --noEmit
 
+  # The Darwin arms' standing mechanism (the macOS port's review, finding 3):
+  # every `describe.skipIf(!IS_DARWIN)` block and `itDarwin` case in the
+  # server suite skips on every ubuntu leg above, so without this job the
+  # port's launchd/BSD paths are verified exactly once — on the author's own
+  # box, unreproducibly — and never again after merge. This leg is what
+  # turns those tests from prose into a mechanism.
+  #
+  # A SEPARATE JOB, not a matrix `os` dimension, deliberately: branch
+  # protection requires the checks `test (server)` / `test (agent)` /
+  # `test (pwa)` BY NAME, and adding a matrix axis renames all three.
+  # `test-macos` is additive and non-required — a red here blocks nothing,
+  # which is the right cost while the leg earns trust, and the PR page still
+  # shows it.
+  #
+  # Server package only: it owns the ccd/ccrc/doctor/expose/update suites and
+  # every Darwin test in the tree. No tsc step — types have no platform.
+  test-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      # bash ≥ 4.2 (macOS ships 3.2 as /bin/bash; ccd's shebang is `env
+      # bash`, so PATH decides and Homebrew's 5.x wins), tmux (the
+      # substrate), flock (three call sites die by name without it), jq
+      # (statusline-command.sh silently degrades without it).
+      #
+      # coreutils is g-PREFIXED (gtimeout, gsha256sum, …) and no gnubin ever
+      # joins PATH, so the BSD userland stays honest: bare `timeout`,
+      # `sha256sum`, `stat -c` are still absent and every Darwin arm still
+      # runs. What coreutils buys is `gtimeout` — `_plat_timeout`'s own
+      # documented Darwin fallback — without which the shim degrades to NO
+      # deadline and every wedge-shaped fixture (a tmux that never answers,
+      # a stall-budget probe) hangs to the test clock instead of being cut:
+      # the first leg run measured exactly that, 40 tests shed at 20s.
+      - name: Install system dependencies
+        run: brew install bash tmux flock jq coreutils
+      - name: Install
+        working-directory: server
+        run: npm ci
+      - name: Install agent dependencies (needed by server's cross-package typecheck test)
+        working-directory: agent
+        run: npm ci
+      - name: Test
+        working-directory: server
+        run: ./node_modules/.bin/vitest run
+
   build-pwa:
     runs-on: ubuntu-latest
     steps:

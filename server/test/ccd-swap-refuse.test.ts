@@ -14,6 +14,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { asManagerCalls, itLinux, itDarwin } from './platformFixtures.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-swap-refuse-'); });
@@ -27,6 +28,7 @@ const UUID_B = '22222222-2222-4222-8222-222222222222';
  *  these tests are assertions about which of them ran and which did not. */
 const SWAP_STUBS = `
   systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; return 0; };
+  launchctl() { echo "launchctl $*" >> "$HOME/ccd-calls"; return 0; };
   tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; return 0; };
   sleep() { :; };
   cmd_ensure() { echo "cmd_ensure $*" >> "$HOME/ccd-calls"; return 0; };
@@ -39,6 +41,7 @@ const SWAP_STUBS = `
  *  up, so their appearance in the call log is proof the whole real path ran. */
 const REAL_ENSURE_STUBS = `
   systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; return 0; };
+  launchctl() { echo "launchctl $*" >> "$HOME/ccd-calls"; return 0; };
   tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; case "\${1:-}" in has-session) return 1;; esac; return 0; };
   sleep() { :; };
   _spawn() { echo "_spawn $*" >> "$HOME/ccd-calls"; return 0; };
@@ -119,8 +122,8 @@ describe('a swap that cannot carry the conversation', () => {
     const r = shFail(`${SWAP_STUBS} cmd_swap ${id} claude-a`);
     expect(r.code).not.toBe(0);
     expect(r.stderr).toContain(`refusing to swap ${id}`);
-    expect(h.calls().join('\n')).not.toContain(`stop claude-session@${id}`);
-    expect(h.calls().join('\n')).not.toContain('kill-session');
+    expect(asManagerCalls(h.calls()).join('\n')).not.toContain(`stop claude-session@${id}`);
+    expect(asManagerCalls(h.calls()).join('\n')).not.toContain('kill-session');
     expect(h.reg(id, 'wrapper'), 'a refusal must not flip the account').toBe('claude');
   });
 
@@ -186,7 +189,7 @@ describe('a swap that cannot carry the conversation', () => {
     expect(h.reg(id, 'lastswap')).toBeNull();
     // Registry `wrapper` was never touched, so the unit puts it back exactly
     // where it was — on the account that still holds its history.
-    expect(h.calls().join('\n')).toContain(`--user start claude-session@${id}`);
+    expect(asManagerCalls(h.calls()).join('\n')).toContain(`--user start claude-session@${id}`);
   });
 
   it('falls back to the REAL cmd_ensure when the unit will not start, and the marker survives it', () => {
@@ -209,16 +212,23 @@ describe('a swap that cannot carry the conversation', () => {
     // (F8) on exactly the box that has no unit to recover with.
     const id = seed(UUID_A);
     plantTranscript('.claude', '-x-projects-demo', UUID_A);
-    const noUnit = `systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; return 1; };`;
+    const noUnit = `systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; return 1; };
+      launchctl() { echo "launchctl $*" >> "$HOME/ccd-calls"; return 1; };`;
     shFail(`${REAL_ENSURE_STUBS} ${noUnit} ${deadRotate(id)} cmd_swap ${id} claude-a`);
-    expect(h.calls().join('\n'), 'the real cmd_ensure did not run — this test is stubbed hollow')
+    expect(asManagerCalls(h.calls()).join('\n'), 'the real cmd_ensure did not run — this test is stubbed hollow')
       .toContain(`_spawn_start ${id}`);
     expect(h.reg(id, 'swapblocked'),
       'the refusal erased the durable record it had just written')
       .toContain(`no transcript found for ${UUID_B} under claude after flush`);
   });
 
-  it('clears a FAILED unit before restarting it — the state this build made reachable', () => {
+  // LINUX-ONLY BY NECESSITY, not by preference: the sequence below contains
+  // `reset-failed`, and on launchd that verb issues NO CALL AT ALL — it
+  // removes the stamp `cmd_supervise` writes when it gives up. A three-line
+  // argv sequence cannot be reconstructed from a log that is missing its
+  // middle line, so the Darwin sibling below asserts the same three FACTS
+  // against the observables that platform actually has.
+  itLinux('clears a FAILED unit before restarting it — the state this build made reachable', () => {
     // Two realistic reasons that `systemctl start` fails here, and the second is
     // this build's own doing: (a) no unit installed, which the `|| cmd_ensure`
     // fallback above is for; (b) the unit is `failed` and rate-limited by §3.3's
@@ -228,12 +238,29 @@ describe('a swap that cannot carry the conversation', () => {
     const id = seed(UUID_A);
     plantTranscript('.claude', '-x-projects-demo', UUID_A);
     shFail(`${SWAP_STUBS} ${deadRotate(id)} cmd_swap ${id} claude-a`);
-    const sys = h.calls().filter((c) => c.startsWith('systemctl '));
+    const sys = asManagerCalls(h.calls()).filter((c) => c.startsWith('systemctl '));
     expect(sys).toEqual([
       `systemctl --user stop claude-session@${id}`,
       `systemctl --user reset-failed claude-session@${id}`,
       `systemctl --user start claude-session@${id}`,
     ]);
+  });
+
+  itDarwin('clears the FAILED stamp before restarting — the same three facts, in launchd terms', () => {
+    const id = seed(UUID_A);
+    plantTranscript('.claude', '-x-projects-demo', UUID_A);
+    // The stamp IS the failed state on this platform: `_svc_is_active` reads
+    // it and `_svc_reset_failed` removes it, which is what `systemctl
+    // reset-failed` performs on the other one.
+    h.sh(`printf 1 > "$REG/${id}.svcfailed"`);
+    shFail(`${SWAP_STUBS} ${deadRotate(id)} cmd_swap ${id} claude-a`);
+    const lc = h.calls().filter((c) => c.startsWith('launchctl '));
+    // (1) stopped, (3) started — both observable as launchctl verbs…
+    expect(lc.join('\n'), 'the job was never booted out').toMatch(/^launchctl bootout /m);
+    expect(lc.join('\n'), 'the job was never started again').toMatch(/^launchctl (bootstrap|kickstart) /m);
+    // …and (2) the failure cleared, observable only as the stamp's absence.
+    expect(h.sh(`[ -e "$REG/${id}.svcfailed" ] && echo yes || echo no`))
+      .toBe('no');
   });
 
   it('survives the SUPERVISOR that the restart brings back — a different process, seconds later', () => {
@@ -277,12 +304,13 @@ describe('a swap that cannot carry the conversation', () => {
     // so the ONLY thing that can gate them is the field the refusal wrote.
     const id = seed(UUID_A);
     plantTranscript('.claude', '-x-projects-demo', UUID_A);
-    const noUnit = `systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; return 1; };`;
+    const noUnit = `systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; return 1; };
+      launchctl() { echo "launchctl $*" >> "$HOME/ccd-calls"; return 1; };`;
     shFail(`${REAL_ENSURE_STUBS} ${noUnit} ${deadRotate(id)} cmd_swap ${id} claude-a`);
     expect(h.reg(id, 'swapblocked')).toContain('no transcript found');
     h.sh(`${AUTO_TICK_STUBS} for i in 1 2 3 4 5 6 7 8 9 10; do
       rm -f "$HOME/.cc-sessions/${id}.lastswap"; _auto_swap_check ${id}; done`);
-    expect(h.calls().filter((c) => c.startsWith('dispatch '))).toEqual([]);
+    expect(asManagerCalls(h.calls()).filter((c) => c.startsWith('dispatch '))).toEqual([]);
   });
 
   it('a completed swap clears a standing refusal', () => {
@@ -401,11 +429,11 @@ describe('_auto_swap_check and a refused session', () => {
 
     stamp(1799);
     h.sh(`${DATE_STUB} ${AUTO_STUBS} _auto_swap_check ${id}`);
-    expect(h.calls().join('\n')).not.toContain('dispatch');
+    expect(asManagerCalls(h.calls()).join('\n')).not.toContain('dispatch');
 
     stamp(1801);
     h.sh(`${DATE_STUB} ${AUTO_STUBS} _auto_swap_check ${id}`);
-    expect(h.calls().join('\n')).toContain(`dispatch ${id} -> claude-a`);
+    expect(asManagerCalls(h.calls()).join('\n')).toContain(`dispatch ${id} -> claude-a`);
   });
 
   it('a garbage stamp does not gate and does not emit an unbound-variable line', () => {
@@ -417,7 +445,7 @@ describe('_auto_swap_check and a refused session', () => {
     const r = shFail(`${AUTO_STUBS} _auto_swap_check ${id}`);
     expect(r.code).toBe(0);
     expect(r.stderr).not.toContain('unbound variable');
-    expect(h.calls().join('\n')).toContain(`dispatch ${id} -> claude-a`);
+    expect(asManagerCalls(h.calls()).join('\n')).toContain(`dispatch ${id} -> claude-a`);
   });
 });
 

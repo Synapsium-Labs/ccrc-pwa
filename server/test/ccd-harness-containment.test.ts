@@ -30,8 +30,18 @@ describe('the harness contains systemctl structurally', () => {
   });
 
   it('records every argv and refuses, so no real unit can be enabled', () => {
-    h.sh('systemctl --user enable --now claude-session@demo-quiet-basin 2>/dev/null; :');
-    expect(h.systemctlCalls()).toEqual(['--user enable --now claude-session@demo-quiet-basin']);
+    // THE POISON ITSELF is the subject here, not a ccd path through it — the
+    // manager is invoked directly and its own log read back RAW, so this says
+    // nothing about vocabularies and everything about containment. Each
+    // platform's poison is checked on its own terms; `h.systemctlCalls()` is
+    // deliberately not used, because it translates.
+    const mgr = process.platform === 'darwin' ? 'launchctl' : 'systemctl';
+    const argv = process.platform === 'darwin'
+      ? 'enable gui/501/app.ccrc.session.demo-quiet-basin'
+      : '--user enable --now claude-session@demo-quiet-basin';
+    h.sh(`${mgr} ${argv} 2>/dev/null; :`);
+    expect(fs.readFileSync(path.join(h.home, `${mgr}-calls`), 'utf8')
+      .split('\n').filter((l) => l !== '')).toEqual([argv]);
   });
 
   it('exits non-zero, so a caller that checks cannot mistake it for a real enable', () => {

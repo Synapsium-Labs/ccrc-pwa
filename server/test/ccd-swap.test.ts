@@ -16,6 +16,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { asManagerCalls } from './platformFixtures.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-swap-'); });
@@ -30,7 +31,7 @@ const EMPTY_TEXT = '{"message":{"content":[{"type":"text","text":""}]}}';
  *  depends on it. TMUX is emptied at the call site so the detached-self-swap
  *  branch — which re-execs ccd under `systemd-run` — can never be taken from a
  *  suite that may itself be running inside tmux. */
-const SWAP = 'systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; }; '
+const SWAP = 'systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; }; launchctl() { echo "launchctl $*" >> "$HOME/ccd-calls"; }; '
   + 'tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; }; sleep() { :; };';
 
 const runSwap = (target = 'claude-d'): string =>
@@ -215,7 +216,7 @@ describe('cmd_swap keeps carrying the task list', () => {
     const mdir = seed('claude');
     plant('.claude', mdir, 'HISTORY\n');
     runSwap();
-    expect(h.calls()).toEqual([
+    expect(asManagerCalls(h.calls())).toEqual([
       'systemctl --user stop claude-session@claude-demo',
       'tmux kill-session -t cc-claude-demo',
       // cmd_swap's own `_lc_done` (task 18) is the first `_lc_emit` in this
@@ -240,10 +241,17 @@ describe('the detached self-swap answers for its own dispatch', () => {
   // `tmux display-message` must answer with this session's own name for the
   // branch to be taken at all; TMUX is set for the same reason.
   const SELF = (runRc: number): string =>
-    `systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; }; sleep() { :; };
+    `systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; }; launchctl() { echo "launchctl $*" >> "$HOME/ccd-calls"; }; sleep() { :; };
      tmux() { case "\${1:-}" in display-message) echo "cc-${ID}";; esac;
        echo "tmux $*" >> "$HOME/ccd-calls"; return 0; };
-     systemd-run() { echo "systemd-run $*" >> "$HOME/ccd-calls"; return ${runRc}; };`;
+     systemd-run() { echo "systemd-run $*" >> "$HOME/ccd-calls"; return ${runRc}; };
+     # THE SEAM, not the tool: _svc_run_detached is what ccd calls to fire a
+     # detached job, and only its Linux arm is systemd-run. On macOS there is
+     # no such binary and the stub above would never be reached, so the failure
+     # this fixture plants could not happen there. Shadowing the function pins
+     # what the test is actually about: what the CALLER does when the dispatch
+     # fails.
+     _svc_run_detached() { echo "systemd-run $*" >> "$HOME/ccd-calls"; return ${runRc}; };`;
 
   const selfSwap = (runRc: number): { code: number; stdout: string; stderr: string } => {
     try {
@@ -295,6 +303,7 @@ describe('the swap heartbeats WHILE it carries, not just around the carry', () =
   // interval is turned down to 1s and the first `cp` is slowed to ~4s. `sleep`
   // is deliberately NOT stubbed here.
   const SLOW = `systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; };
+  launchctl() { echo "launchctl $*" >> "$HOME/ccd-calls"; }; 
     tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; };
     SWAP_BEAT_INTERVAL=1
     cp() { if [[ -z "\${SLOWED:-}" ]]; then SLOWED=1; command sleep 7; fi; command cp "$@"; };`;
@@ -372,7 +381,7 @@ describe('the swap heartbeats WHILE it carries, not just around the carry', () =
       ( command sleep 20; kill -9 "$beat" ) >/dev/null 2>&1 & killer=$!
       wait "$beat"; rc=$?
       kill "$killer" 2>/dev/null; wait "$killer" 2>/dev/null
-      echo "rc=$rc ticks=$(wc -l < "$HOME/beats") max=$SWAP_BEAT_MAX window=$(( SWAP_BEAT_INTERVAL * SWAP_BEAT_MAX ))"`);
+      echo "rc=$rc ticks=$(wc -l < "$HOME/beats" | tr -d ' ') max=$SWAP_BEAT_MAX window=$(( SWAP_BEAT_INTERVAL * SWAP_BEAT_MAX ))"`);
     // The window is asserted, not just the counter: "bounded twice over" is a
     // claim about TWO HOURS, and 240 ticks means two hours only while the
     // interval is 30s. Turning either constant into something a leaked stamper
@@ -389,6 +398,7 @@ describe('the swap heartbeats WHILE it carries, not just around the carry', () =
    *  run is observable for three seconds and orphans nothing for longer;
    *  `cmd_swap`'s own `sleep 1` flush is still skipped. */
   const BEAT_ALIVE = `systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; };
+  launchctl() { echo "launchctl $*" >> "$HOME/ccd-calls"; }; 
     tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; };
     SWAP_BEAT_INTERVAL=3
     sleep() { [[ "\${1:-}" == "$SWAP_BEAT_INTERVAL" ]] && command sleep "$1"; return 0; };`;
@@ -405,7 +415,7 @@ describe('the swap heartbeats WHILE it carries, not just around the carry', () =
     // this" for the next two hours.
     const out = h.sh(`${BEAT_ALIVE} cp() { return 1; }
       cmd_swap ${ID} claude-d >/dev/null 2>&1; rc=$?
-      echo "rc=$rc stampers_left=$(jobs -pr | wc -l)"
+      echo "rc=$rc stampers_left=$(jobs -pr | wc -l | tr -d ' ')"
       jobs -pr | xargs -r kill -9 2>/dev/null; true`, { TMUX: '' });
     expect(out).toBe('rc=1 stampers_left=0');
   });

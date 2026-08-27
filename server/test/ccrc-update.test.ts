@@ -44,6 +44,7 @@ import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
+import { itLinux, itDarwin } from './platformFixtures.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -152,6 +153,38 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
       `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/${name}-poison"\n`
       + `echo "${says}" >&2\nexit 97\n`);
   poison('journalctl', 'ccrc tests must never read this box\'s real journal');
+  // macOS's service manager, contained the same way systemctl is. Without it
+  // `_inst_enable`'s Darwin arm reaches the platform layer's guard, which
+  // (correctly) refuses to drive the developer's REAL launchd from a sandbox
+  // HOME — and the staged install dies for a reason that has nothing to do
+  // with updating.
+  plant('launchctl', [
+    '#!/bin/sh',
+    'printf \'%s\\n\' "$*" >> "$HOME/launchctl-calls"',
+    'case "$1" in',
+    '  bootstrap) [ -f "$3" ] || { echo "fixture launchctl: no job file: $3" >&2; exit 1; };',
+    '             printf \'%s\\n\' "${3##*/}" >> "$HOME/launchctl-loaded"; exit 0 ;;',
+    '  bootout|enable|disable|kickstart) exit 0 ;;',
+    '  print)',
+    '    lbl="${2##*/}"',
+    '    if [ -f "$HOME/launchctl-loaded" ] && grep -q "^$lbl.plist$" "$HOME/launchctl-loaded"; then',
+    '      echo "	state = running"',
+    // The sweep's stay-up gate samples `pid = ` twice per kicked job; a
+    // stable default is a job that stayed up, `fixture-pid-churn` a crash
+    // loop. Same knob as ccrc-install.test.ts's stub.
+    '      if [ -f "$HOME/fixture-pid-churn" ]; then',
+    '        echo "	pid = $(($(wc -l < "$HOME/launchctl-calls") + 4000))"',
+    '      else',
+    '        echo "	pid = 4242"',
+    '      fi',
+    '      exit 0',
+    '    fi',
+    '    exit 113 ;;',
+    '  *) echo "fixture launchctl: unexpected argv: $*" >&2; exit 90 ;;',
+    'esac',
+  ].join('\n') + '\n');
+  plant('plutil', '#!/bin/sh\nexit 0\n');
+
   plant('systemctl', [
     '#!/bin/sh',
     'printf \'%s\\n\' "$*" >> "$HOME/systemctl-calls"',
@@ -246,6 +279,18 @@ function plantOldBox(home: string, opts: { version?: string } = {}): void {
   mkdirSync(units, { recursive: true });
   writeFileSync(join(units, 'ccrc.service'), '[Unit]\nDescription=old ccrc.service\n');
   writeFileSync(join(units, 'claude-session@.service'), '[Unit]\nDescription=old supervisor unit\n');
+  // The same "this box already had one" fixture, in launchd's spelling. A box
+  // whose job files are systemd units is not a macOS box, and the backup step
+  // reads whichever directory THIS platform installs into — so a fixture that
+  // plants only the Linux pair leaves the Darwin arm with nothing to copy and
+  // the assertion measuring the fixture rather than the code.
+  if (process.platform === 'darwin') {
+    const agents = join(home, 'Library', 'LaunchAgents');
+    mkdirSync(agents, { recursive: true });
+    writeFileSync(join(agents, 'app.ccrc.ccrc.plist'),
+      '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>'
+      + '<key>Label</key><string>app.ccrc.ccrc</string></dict></plist>\n');
+  }
   if (opts.version !== undefined) {
     mkdirSync(join(home, '.ccrc'), { recursive: true });
     writeFileSync(join(home, '.ccrc', 'build.json'),
@@ -275,7 +320,15 @@ const sha256 = (p: string): string =>
 function writeManifest(tree: string): void {
   const tmp = `${tree}.MANIFEST.tmp`;
   const r = spawnSync('bash', ['-c',
-    'cd "$1" && find . -type f | sed \'s|^\\./||\' | LC_ALL=C sort | xargs -r -d \'\\n\' sha256sum > "$2"',
+    // PORTABLE ON PURPOSE, and it mirrors `deploy/build-release.sh`'s own
+    // line: `xargs -d` and `sha256sum` are both GNU — BSD xargs rejects `-d`
+    // outright, which made this fixture fail on macOS with an error naming
+    // neither the tree nor the test. `-0` exists in both, `tr` supplies the
+    // NUL, and the digest tool is chosen by platform. Both print the same
+    // "<digest>  <name>" line, so the MANIFEST is identical either way.
+    'sha=sha256sum; [ "$(uname -s)" = Darwin ] && sha="shasum -a 256";'
+    + ' cd "$1" && find . -type f | sed \'s|^\\./||\' | LC_ALL=C sort'
+    + ' | tr \'\\n\' \'\\0\' | xargs -0 $sha > "$2"',
     '--', tree, tmp], { encoding: 'utf8' });
   if (r.status !== 0) throw new Error(`fixture MANIFEST failed: ${r.stderr}`);
   renameSync(tmp, join(tree, 'MANIFEST'));
@@ -347,9 +400,18 @@ function packRelease(home: string, tree: string,
   const name = `ccrc-${opts.tag}.tar.gz`;
   const tarRes = spawnSync('tar', ['-czf', join(relDir, name), '-C', tree, '.'], { encoding: 'utf8' });
   if (tarRes.status !== 0) throw new Error(`fixture tar failed: ${tarRes.stderr}`);
-  const sumRes = spawnSync('bash', ['-c', `sha256sum '${name}' > SHA256SUMS`],
-    { cwd: relDir, encoding: 'utf8' });
-  if (sumRes.status !== 0) throw new Error(`fixture sha256sum failed: ${sumRes.stderr}`);
+  // PLATFORM-CHOSEN, exactly as writeManifest above chooses (and for the
+  // same reason it records): this runs on the HOST's own PATH, and the
+  // test-macos leg deliberately carries no coreutils — a bare `sha256sum`
+  // here fails every release-packing test on the one runner where the
+  // Darwin tests are not skipped, before `ccrc update` is ever spawned
+  // (found by this branch's own adversarial review). Both spellings write
+  // the identical "<digest>  <name>" line.
+  const sumRes = spawnSync('bash', ['-c',
+    'sha=sha256sum; [ "$(uname -s)" = Darwin ] && sha="shasum -a 256";'
+    + ` $sha '${name}' > SHA256SUMS`],
+  { cwd: relDir, encoding: 'utf8' });
+  if (sumRes.status !== 0) throw new Error(`fixture digest failed: ${sumRes.stderr}`);
   if (opts.tamper) appendFileSync(join(relDir, name), 'one appended byte-run after the sums were written');
 }
 
@@ -515,9 +577,16 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     // … the old ccd, byte for byte …
     expect(readFileSync(join(backup, 'ccd'), 'utf8'))
       .toBe(readFileSync(join(home, '.local', 'bin', 'ccd'), 'utf8'));
-    // … the units, and the dists.
-    expect(existsSync(join(backup, 'ccrc.service'))).toBe(true);
-    expect(existsSync(join(backup, 'claude-session@.service'))).toBe(true);
+    // … the job files this box actually has, and the dists. The NAMES are
+    // per-platform (systemd units vs launchd plists) and so is the set:
+    // launchd has no template unit, because there is nothing to instantiate —
+    // `ccd` writes one plist per session at enable time.
+    if (process.platform === 'darwin') {
+      expect(existsSync(join(backup, 'app.ccrc.ccrc.plist'))).toBe(true);
+    } else {
+      expect(existsSync(join(backup, 'ccrc.service'))).toBe(true);
+      expect(existsSync(join(backup, 'claude-session@.service'))).toBe(true);
+    }
     expect(existsSync(join(backup, 'server-dist', 'old.js'))).toBe(true);
     expect(existsSync(join(backup, 'agent-dist', 'old.js'))).toBe(true);
   });
@@ -541,7 +610,9 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     expect(r.stdout).toMatch(/^update: rollback: /m);
     expect(r.stdout).toContain('NOT restored');
     expect(r.stdout).toContain(`cp ${backup}/coord.db`);
-    expect(r.stdout).toContain('systemctl --user stop ccrc.service');
+    // The rollback lines name this platform's own stop verb.
+    expect(r.stdout).toContain(process.platform === 'darwin'
+      ? 'launchctl bootout' : 'systemctl --user stop ccrc.service');
     // The live db was read (VACUUM INTO) and never written.
     expect(readFileSync(join(home, '.ccrc', 'coord.db')).equals(dbBytes),
       'update wrote the live coord.db').toBe(true);
@@ -614,7 +685,7 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
     'claude-session@alpha.service loaded active running fixture supervisor\n'
     + 'claude-session@beta.service loaded active running fixture supervisor\n';
 
-  it('with KillMode=process resolving per unit, the sweep runs: preflight, try-restart, the failed warn query, the active verify query — in that argv order', () => {
+  itLinux('with KillMode=process resolving per unit, the sweep runs: preflight, try-restart, the failed warn query, the active verify query — in that argv order', () => {
     const home = freshUpdateBox('ccrc-update-sweep-');
     plantOldBox(home, { version: 'v1.0.0' });
     plantKillModeDropIn(home);
@@ -646,7 +717,7 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
     expect(r.stdout).not.toMatch(/DEGRADED/);
   });
 
-  it('with the drop-in ABSENT the sweep is REFUSED — loud, naming the drop-in — and the update still exits 0 with a degraded line', () => {
+  itLinux('with the drop-in ABSENT the sweep is REFUSED — loud, naming the drop-in — and the update still exits 0 with a degraded line', () => {
     const home = freshUpdateBox('ccrc-update-sweep-refused-');
     plantOldBox(home, { version: 'v1.0.0' });
     writeFileSync(join(home, 'fixture-sweep-units'), UNIT_LINES);
@@ -665,6 +736,103 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
     const calls = readFileSync(join(home, 'systemctl-calls'), 'utf8');
     expect(calls).not.toMatch(/try-restart/);
     expect(existsSync(join(home, 'tmux-argv'))).toBe(false);
+  });
+
+  // ── The Darwin siblings: the same outcomes, launchd's vocabulary ─────────
+  // The macOS counterpart of the R1 preflight is `AbandonProcessGroup`, read
+  // from the plist on disk; the restart is `launchctl kickstart -k`, which
+  // without that key kills the job's whole process group — the shared tmux
+  // server included. These four run against the recording launchctl stub in
+  // `updateEnv`, never a real launchd.
+  const plantSessionPlist = (home: string, id: string,
+    opts: { abandons?: boolean; loaded?: boolean } = {}): void => {
+    const { abandons = true, loaded = true } = opts;
+    const agents = join(home, 'Library', 'LaunchAgents');
+    mkdirSync(agents, { recursive: true });
+    const key = abandons ? '<key>AbandonProcessGroup</key><true/>' : '';
+    writeFileSync(join(agents, `app.ccrc.session.${id}.plist`),
+      '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>'
+      + `<key>Label</key><string>app.ccrc.session.${id}</string>${key}</dict></plist>\n`);
+    if (loaded) appendFileSync(join(home, 'launchctl-loaded'), `app.ccrc.session.${id}.plist\n`);
+  };
+
+  itDarwin('with AbandonProcessGroup in every job file, the sweep kickstarts each loaded session and re-measures it still up', () => {
+    const home = freshUpdateBox('ccrc-update-sweep-darwin-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantSessionPlist(home, 'alpha');
+    plantSessionPlist(home, 'beta');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    const calls = readFileSync(join(home, 'launchctl-calls'), 'utf8');
+    expect(calls).toMatch(/^kickstart -k gui\/\d+\/app\.ccrc\.session\.alpha$/m);
+    expect(calls).toMatch(/^kickstart -k gui\/\d+\/app\.ccrc\.session\.beta$/m);
+    // Panes are NEVER touched, on this platform exactly as on the other.
+    expect(existsSync(join(home, 'tmux-argv')), 'the sweep reached for tmux').toBe(false);
+    expect(r.stdout).toMatch(/^update: sweep: /m);
+    expect(r.stdout).toContain('2 restarted and re-measured still up');
+    expect(r.stdout).not.toMatch(/DEGRADED/);
+  });
+
+  itDarwin('a job file missing AbandonProcessGroup REFUSES the sweep — loud on stderr, DEGRADED on stdout, and NO kickstart for ANY session', () => {
+    const home = freshUpdateBox('ccrc-update-sweep-darwin-refused-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantSessionPlist(home, 'alpha');
+    plantSessionPlist(home, 'beta', { abandons: false });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    // The sweep is refused, not the update: the run completes, reports, exits 0.
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^update: build: /m);
+    expect(r.stderr).toMatch(/sweep REFUSED/);
+    expect(r.stderr).toContain('AbandonProcessGroup');
+    // The remedy names the BARE id `ccd start` actually takes.
+    expect(r.stderr).toContain('ccd start beta');
+    expect(r.stderr).not.toContain('ccd start beta.service');
+    // The transcript line rides STDOUT, as the Linux arm's does — the stream
+    // divergence was measured (>&2 on the Darwin line only) and fixed; a
+    // stdout-only capture must not read as a clean update.
+    expect(r.stdout).toMatch(/^update: DEGRADED: the supervisor sweep/m);
+    expect(r.stderr).not.toMatch(/^update: DEGRADED/m);
+    const calls = existsSync(join(home, 'launchctl-calls'))
+      ? readFileSync(join(home, 'launchctl-calls'), 'utf8') : '';
+    expect(calls).not.toMatch(/kickstart/);
+    expect(existsSync(join(home, 'tmux-argv'))).toBe(false);
+  });
+
+  itDarwin('a kicked supervisor whose pid did not hold across the window FAILS the update, naming the pre-update backup', () => {
+    const home = freshUpdateBox('ccrc-update-sweep-darwin-loop-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantSessionPlist(home, 'alpha');
+    // Every `launchctl print` answers a fresh pid: a crash loop as launchd
+    // shows one. kickstart itself still exits 0 — the gap under test.
+    writeFileSync(join(home, 'fixture-pid-churn'), 'yes\n');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, 'a supervisor that did not stay up must FAIL the update').not.toBe(0);
+    expect(r.stderr).toMatch(/did not stay up/);
+    // The one line in the whole update path that points at the rollback.
+    expect(r.stderr).toMatch(/pre-update backup is complete at \S*ccrc-backups/);
+  });
+
+  itDarwin('a session carrying the start-limit stamp is warned about and skipped — not kicked, not fatal', () => {
+    const home = freshUpdateBox('ccrc-update-sweep-darwin-failed-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantSessionPlist(home, 'alpha');
+    // gamma was booted out by the start-limit emulation: stamp on disk, job
+    // no longer loaded — `_svc_list_sessions` still enumerates its plist.
+    plantSessionPlist(home, 'gamma', { loaded: false });
+    mkdirSync(join(home, '.cc-sessions'), { recursive: true });
+    writeFileSync(join(home, '.cc-sessions', 'gamma.svcfailed'), '1\n');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stderr).toMatch(/^update: warning: claude-session@gamma\.service is FAILED/m);
+    expect(r.stderr).toContain('ccd start gamma');
+    const calls = readFileSync(join(home, 'launchctl-calls'), 'utf8');
+    expect(calls).toMatch(/^kickstart -k gui\/\d+\/app\.ccrc\.session\.alpha$/m);
+    expect(calls).not.toMatch(/kickstart -k gui\/\d+\/app\.ccrc\.session\.gamma/);
+    expect(r.stdout).toContain('1 restarted and re-measured still up');
   });
 });
 
@@ -686,5 +854,40 @@ describe('ccrc update: source pins', () => {
       .toBe(pick(inst, 'install.sh', 'CCRC_RELEASE_OWNER'));
     expect(pick(ccrc, 'ccd/ccrc', 'CCRC_RELEASE_REPO'))
       .toBe(pick(inst, 'install.sh', 'CCRC_RELEASE_REPO'));
+  });
+
+  // ── The bash floor — three spellings, held to one value (same idiom) ────
+  // install.sh's macOS preflight, `ccrc install`'s Darwin gate and the
+  // README each state the floor, in three different logical forms, and
+  // nothing held them equal (PR #11 review): a floor bump applied to one
+  // site goes green in CI and admits a box the other site then refuses —
+  // after paying for npm ci and a vite build. The two predicates are
+  // extracted BY THEIR OWN SPELLINGS and reduced to (major, minor); a
+  // rewritten predicate that no longer matches is a red here, not a silent
+  // second spelling.
+  it('the bash floor is the SAME major.minor in install.sh, ccd/ccrc and the README', () => {
+    const inst = readFileSync(join(REPO, 'install.sh'), 'utf8');
+    const ccrc = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
+    const readme = readFileSync(join(REPO, 'README.md'), 'utf8');
+
+    // install.sh: [ maj -lt X ] || { [ maj -eq X ] && [ min -lt Y ] }
+    const i = /\[ "\$bmaj" -lt (\d+) \] \|\| \{ \[ "\$bmaj" -eq (\d+) \] && \[ "\$bmin" -lt (\d+) \]; \}/.exec(inst);
+    expect(i, 'install.sh lost its bash-floor predicate (or respelled it — update this pin WITH the spelling)').not.toBeNull();
+    expect(i![1], 'install.sh compares two different majors').toBe(i![2]);
+    const instFloor = `${i![1]}.${i![3]}`;
+
+    // ccd/ccrc: [ maj -lt X+1 ] && { [ maj -lt X ] || [ min -lt Y ] }
+    const c = /\[ "\$\{BASH_VERSINFO\[0\]:-0\}" -lt (\d+) \] \\\n\s*&& \{ \[ "\$\{BASH_VERSINFO\[0\]:-0\}" -lt (\d+) \] \|\| \[ "\$\{BASH_VERSINFO\[1\]:-0\}" -lt (\d+) \]; \}/.exec(ccrc);
+    expect(c, 'ccd/ccrc lost its bash-floor predicate (or respelled it — update this pin WITH the spelling)').not.toBeNull();
+    expect(Number(c![1]), 'ccrc\'s outer cap must be floor-major + 1 or the predicate means a different floor')
+      .toBe(Number(c![2]) + 1);
+    const ccrcFloor = `${c![2]}.${c![3]}`;
+
+    expect(ccrcFloor, 'install.sh and ccd/ccrc refuse below DIFFERENT floors').toBe(instFloor);
+    expect(readme, `README.md no longer states the bash ≥ ${instFloor} floor`)
+      .toContain(`bash ≥ ${instFloor}`);
+    // Both refusal messages must keep NAMING the floor they enforce.
+    expect(inst).toContain(`ccd needs ${instFloor} or newer`);
+    expect(ccrc).toContain(`ccd needs ${instFloor} or newer`);
   });
 });
