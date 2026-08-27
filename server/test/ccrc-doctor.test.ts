@@ -1536,14 +1536,28 @@ describe('ccrc doctor: services', () => {
     expect(r.code).toBe(0);
   });
 
-  it('fails when ccrc.service is installed and not running, and the remedy starts it', () => {
+  it('fails when ccrc.service is installed and not running, and the remedy starts it — in THIS box\'s vocabulary', () => {
+    // The remedy is the whole point of the FAIL: three commands, and every
+    // one must exist on the box that prints them. The first cut of the macOS
+    // port left this string on systemd's spelling, so a macOS operator whose
+    // server was down was handed `systemctl`, `journalctl` and an `enable
+    // --now` — three dead ends in the one check whose FAIL means "configured
+    // to run and not running" (PR #11 review). The Darwin remedy names the
+    // bootstrap, the print, and the LOG FILE the plist actually writes.
     const home = healthy('ccrc-doctor-services-dead-');
     writeFileSync(join(home, 'fixture-unit-ccrc.service'), 'inactive\n');
     const lines = runDoctor(home).stdout.split('\n');
     const i = lines.findIndex((l) => l.startsWith('FAIL services: '));
     expect(i, lines.join('\n')).toBeGreaterThan(-1);
     expect(lines[i]).toContain('ccrc.service is installed but inactive');
-    expect(lines[i + 1]).toMatch(/^ {2}remedy: systemctl --user enable --now ccrc\.service/);
+    if (process.platform === 'darwin') {
+      expect(lines[i + 1]).toMatch(
+        /^ {2}remedy: launchctl bootstrap gui\/\d+ \S*app\.ccrc\.ccrc\.plist, then read what it says: launchctl print gui\/\d+\/app\.ccrc\.ccrc, tail -n 50 \S*\/\.ccrc\/logs\/app\.ccrc\.ccrc\.log$/);
+      expect(lines[i + 1]).not.toMatch(/systemctl|journalctl/);
+    } else {
+      expect(lines[i + 1]).toMatch(
+        /^ {2}remedy: systemctl --user enable --now ccrc\.service, then read what it says: systemctl --user status ccrc\.service, journalctl --user -u ccrc\.service -n 50$/);
+    }
   });
 
   it('measures the fleet host\'s own unit by the same rule', () => {
@@ -4997,14 +5011,21 @@ describe('ccrc doctor: name', () => {
     expect(r.stdout).not.toMatch(/^(WARN|FAIL) name: /m);
   });
 
-  it('FAILs naming the ccrc-ddns timer when the name does not resolve', () => {
+  it('FAILs naming the updater — in this box\'s vocabulary — when the name does not resolve', () => {
     const home = healthy('ccrc-doctor-name-unresolved-');
     rmSync(join(home, 'fixture-getent'), { force: true });
     const r = runDoctor(home);
     const lines = r.stdout.split('\n');
     const i = lines.findIndex((l) => l.startsWith('FAIL name: '));
     expect(i, r.stdout).toBeGreaterThan(-1);
-    expect(lines[i + 1]).toContain('ccrc-ddns.timer');
+    // On macOS the .timer/.service pair collapses into one launchd job
+    // (`_exp_ddns_units`), so the remedy names that job, not two systemd
+    // units the box does not have.
+    if (process.platform === 'darwin') {
+      expect(lines[i + 1]).toMatch(/launchctl print gui\/\d+\/app\.ccrc\.ccrc-ddns/);
+    } else {
+      expect(lines[i + 1]).toContain('ccrc-ddns.timer');
+    }
     expect(r.code).toBe(1);
   });
 });

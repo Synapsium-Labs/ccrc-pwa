@@ -745,6 +745,29 @@ _dr_unit_file() {   # <unit> -> the filename to look for under $CCRC_UNIT_DIR
 # is the same question `_svc_restart_hint` answers, and two copies of a remedy
 # string is how the two come to name different commands.
 _dr_restart_hint() { _svc_restart_hint "$1"; }
+# THE OTHER TWO REMEDY HALVES, same rule (PR #11 review: `_check_services`'
+# FAIL handed a macOS operator three systemd commands, in the one check whose
+# FAIL means "this box is configured to run it and it is not running").
+# systemd's `enable --now` is launchd's `bootstrap` of the job file.
+# `journalctl` has no macOS counterpart at all — but the generated server and
+# agent plists write StandardOutPath to `~/.ccrc/logs/<label>.log`, so the log
+# a remedy should point at EXISTS on disk; naming a file instead of a missing
+# binary is the difference between a remedy and a second dead end. (`ccrc
+# logs`' Darwin arm reads the same file, for the same reason.)
+_dr_enable_now_hint() {   # <unit> -> the command that installs-and-starts it
+  if [ "${CCD_OS:-linux}" = darwin ]; then
+    printf 'launchctl bootstrap %s %s' "$(_svc_domain)" "$(_svc_plist "$1")"
+  else
+    printf 'systemctl --user enable --now %s' "$1"
+  fi
+}
+_dr_log_hint() {   # <unit> -> the command that shows its recent log
+  if [ "${CCD_OS:-linux}" = darwin ]; then
+    printf 'tail -n 50 %s/.ccrc/logs/%s.log' "$HOME" "$(_svc_label "$1")"
+  else
+    printf 'journalctl --user -u %s -n 50' "$1"
+  fi
+}
 
 _check_services() {
   local dir="$CCRC_UNIT_DIR" u st rc=0
@@ -800,12 +823,15 @@ _check_services() {
     fi
     case "$u" in
       *.timer)
+        # Unreachable on macOS today (`_inst_units` installs no cap-scopes
+        # plist there) — routed through the hint anyway, so the day that
+        # changes the remedy is already right.
         _dr_warn services "$u is installed but ${st:-not active} — panes spawned while it is stopped run without their memory cap" \
-          "systemctl --user enable --now $u"
+          "$(_dr_enable_now_hint "$u")"
         [ "$rc" -eq 1 ] || rc=2 ;;
       *)
         _dr_fail services "$u is installed but ${st:-not active} — this box is configured to run it and it is not running" \
-          "systemctl --user enable --now $u, then read what it says: systemctl --user status $u, journalctl --user -u $u -n 50"
+          "$(_dr_enable_now_hint "$u"), then read what it says: $(_svc_status_hint "$u"), $(_dr_log_hint "$u")"
         rc=1 ;;
     esac
   done
@@ -1669,8 +1695,17 @@ _check_name() {
   local out rc
   out="$(getent hosts "$domain" 2>/dev/null)"; rc=$?
   if [ "$rc" -ne 0 ] || [ -z "$out" ]; then
+    # The updater remedy in this box's own vocabulary: on macOS the
+    # .timer/.service pair collapses into ONE launchd job (`_exp_ddns_units`'
+    # Darwin arm), so the systemd pair would be two dead ends there.
+    local _upd_hint
+    if [ "${CCD_OS:-linux}" = darwin ]; then
+      _upd_hint="check the updater job: $(_svc_status_hint "$CCRC_DDNS_UNIT.service") — one launchd job stands in for the .timer/.service pair"
+    else
+      _upd_hint="check the updater: systemctl --user status $CCRC_DDNS_UNIT.timer (and journalctl --user -u $CCRC_DDNS_UNIT.service -n 20)"
+    fi
     _dr_fail name "$domain does not resolve — the duckdns update has not landed (a record created moments ago, or a timer that never fired)" \
-      "check the updater: systemctl --user status $CCRC_DDNS_UNIT.timer (and journalctl --user -u $CCRC_DDNS_UNIT.service -n 20); a fresh record can also just need a minute"
+      "$_upd_hint; a fresh record can also just need a minute"
     return 1
   fi
   # First field of every answer line is an address the name resolves to.
@@ -2529,7 +2564,7 @@ _check_build() {
       *) why="a status this check could not read" ;;
     esac
     _dr_warn build "the server at $addr answered $why when asked for /health, so it never said what build it is running" \
-      "read the server's own log: journalctl --user -u ccrc.service -n 50"
+      "read the server's own log: $(_dr_log_hint ccrc.service)"
     return 2
   fi
 
