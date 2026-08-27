@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=9759e8679b50902519bd71e5eb2c21ca23fd00c75aee5d3db40ce82f241d351b
+# ccrc:generated 1 sha256=9a271b0c1123ba6383680347c6939b7a019188ac330a3f670500bd1ee10b24a5
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -701,6 +701,14 @@ _svc_run_detached() {   # <cmd> [args...]
   nohup "$@" >/dev/null 2>&1 &
   return 0
 }
+# ── END PLATFORM LAYER — the byte-identical region ends HERE ────────────
+# Add a new `_plat_*`/`_svc_*` helper ABOVE this line, in BOTH files, or the
+# pin test (`macos-platform.test.ts`) cannot see it: the compared region is
+# sliced by the two sentinels, so a helper appended below them is two files
+# free to drift — the exact failure the duplication invites and the pin
+# exists to refuse. The test also asserts every `_plat_`/`_svc_` definition
+# sits inside the sentinels, so an appended-below helper is a red suite, not
+# a quiet gap.
 REG="$HOME/.cc-sessions"
 WRAPPER_DIR="$HOME/.local/bin"
 # Derived from HOME with no env override, exactly as REG and WRAPPER_DIR are:
@@ -2740,7 +2748,7 @@ _gh_pr_checks() {   # repo -> `[{number, statusCheckRollup}, …]` on stdout for
   # `agent-down` and backs the whole project off on. Two calls is two calls
   # whatever the fleet grows to.
   local repo="$1" out rc
-  out=$(timeout "$PR_GH_CHECKS_TIMEOUT" gh pr list --repo "$repo" --state open --limit 100 \
+  out=$(_plat_timeout "$PR_GH_CHECKS_TIMEOUT" gh pr list --repo "$repo" --state open --limit 100 \
           --json "number,$PR_CHECK_FIELD" 2>/dev/null); rc=$?
   # STDERR IS DISCARDED HERE, which it is nowhere else in this file, and the
   # reason is that there is nothing this function could do with a classification.

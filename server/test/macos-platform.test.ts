@@ -31,15 +31,22 @@ const unitFile = readFileSync(path.join(ccdRoot, 'claude-session@.service'), 'ut
 
 /** The shared block, sliced out of a file by its two anchors. Both files
  *  carry it verbatim; see the block's own header for why it is duplicated
- *  rather than sourced. */
+ *  rather than sourced.
+ *
+ *  BOTH ANCHORS ARE SENTINEL COMMENTS, deliberately. The first cut of this
+ *  helper ended the slice at `_svc_run_detached() {` — one function's NAME —
+ *  which meant a helper appended after that function fell outside the
+ *  compared region (measured: two divergent copies of a `_svc_new_helper`
+ *  left the suite green), and moving that function earlier in the block
+ *  silently shrank the region to almost nothing while every assertion still
+ *  passed. A sentinel the block itself carries cannot be outgrown, and the
+ *  every-definition-inside check below catches the day someone deletes it. */
 function platformBlock(src: string): string {
   const start = src.indexOf('# ── THE PLATFORM LAYER');
-  const end = src.indexOf('_svc_run_detached() {');
+  const end = src.indexOf('# ── END PLATFORM LAYER');
   expect(start, 'the platform block must be findable by its header').toBeGreaterThan(-1);
-  expect(end, 'the block must end at its last function').toBeGreaterThan(start);
-  // To the end of that last function, not just to its opening line.
-  const close = src.indexOf('\n}\n', end);
-  return src.slice(start, close + 3);
+  expect(end, 'the block must end at its END sentinel — a file that lost it has an unbounded, uncompared tail').toBeGreaterThan(start);
+  return src.slice(start, end);
 }
 
 describe('the platform block is one definition, spelled in two files', () => {
@@ -60,6 +67,94 @@ describe('the platform block is one definition, spelled in two files', () => {
     expect(ccd).toMatch(/^_SVC_REG="\$HOME\/\.cc-sessions"$/m);
     expect(ccd).toMatch(/^REG="\$HOME\/\.cc-sessions"$/m);
   });
+
+  it('holds every _plat_/_svc_ definition INSIDE the sentinels, in both files', () => {
+    // The pin above compares only the sliced region, so it is exactly as
+    // strong as the region is complete. This is the check that makes
+    // appending a helper below the END sentinel a red suite instead of a
+    // quiet gap — and that notices a deleted or relocated sentinel, because
+    // the definitions it used to enclose are then "outside".
+    for (const [name, src] of [['ccd', ccd], ['ccrc', ccrc]] as const) {
+      const start = src.indexOf('# ── THE PLATFORM LAYER');
+      const end = src.indexOf('# ── END PLATFORM LAYER');
+      expect(end, `${name}: END sentinel missing`).toBeGreaterThan(start);
+      for (const m of src.matchAll(/^(?:_plat_|_svc_)[a-z0-9_]+\(\)/gm)) {
+        expect(m.index, `${name}: ${m[0]} sits outside the platform-block sentinels`)
+          .toBeGreaterThan(start);
+        expect(m.index, `${name}: ${m[0]} sits outside the platform-block sentinels`)
+          .toBeLessThan(end);
+      }
+    }
+  });
+});
+
+describe('no call site outside the platform block runs a GNU-only command bare', () => {
+  // THE SWEEP, STANDING. The port was a whole-file sweep against a snapshot
+  // of main; anything main adds later merges cleanly with nothing prompting a
+  // BSD-compatibility review. Measured on the very first rebase: PR #16's
+  // `_gh_pr_checks` landed a bare `timeout` and PR #17's ccrc-api a bare
+  // `mktemp`, both silently — three conflict hunks out of ~600 imported
+  // lines, and neither of these was in one. This scan is that review as a
+  // mechanism: strip comments, cut the platform block itself out of ccd and
+  // ccrc (the shims legitimately spell both arms), and refuse the GNU-only
+  // spellings the block exists to wrap.
+  //
+  // `readlink -f` is deliberately NOT in the table: the tree's one live call
+  // site (cmd_swap) predates the port on both sides, and macOS ships
+  // `readlink -f` from 12.3 — a floor the port accepts rather than shims.
+  // `systemctl`/`journalctl` are not here either: the `_svc_` layer and the
+  // doctor's remedy STRINGS spell them legitimately, and the doctor's
+  // platform-awareness has its own tests.
+  const gnuOnly: Array<[string, RegExp]> = [
+    // `--timeout 5` in a message must not hit; `_plat_timeout` must not hit.
+    ['bare timeout',    /(?<![-_a-zA-Z])timeout\s+["'$0-9]/],
+    // A template containing XXXX is the portable spelling (BSD mktemp
+    // ignores $TMPDIR without one); only the TEMPLATE-LESS call is refused,
+    // and only at command position ($(…, start of line, or after |;&=`).
+    ['bare mktemp',     /(?:\$\(|^|[|;&=`])\s*mktemp\b(?![^)\n]*XXXX)/],
+    ['GNU/BSD stat',    /(?<![-_a-zA-Z])stat\s+-[cf]/],
+    ['GNU du -b',       /(?<![-_a-zA-Z])du\s+-s[cb]/],
+    ['sha256sum',       /(?<![-_a-zA-Z])sha256sum\b/],
+    ['GNU date %N',     /date\s+\+%s%3N/],
+    ['GNU date -d',     /(?<![-_a-zA-Z])date\s+(-u\s+)?(-d|--date)[\s='"]/],
+    ['cp --remove-destination', /cp\s+(-[a-zA-Z]+\s+)*--remove-destination/],
+    ['mv -T',           /(?<![-_a-zA-Z])mv\s+-[a-zA-Z]*T/],
+    ['uuidgen',         /(?<![-_a-zA-Z])uuidgen\b/],
+  ];
+
+  /** Executable text only: the platform block cut out (where present) and
+   *  comment lines/tails stripped. Naive about `#` inside strings, which
+   *  errs toward scanning LESS text — acceptable for a tripwire whose red
+   *  case is a freshly imported call site, not a quoted sentence. */
+  function executableText(src: string): string {
+    const start = src.indexOf('# ── THE PLATFORM LAYER');
+    const end = src.indexOf('# ── END PLATFORM LAYER');
+    const body = start >= 0 && end > start ? src.slice(0, start) + src.slice(end) : src;
+    return body
+      .split('\n')
+      .map((l) => l.replace(/(^|\s)#.*$/, '$1'))
+      .join('\n');
+  }
+
+  const corpora: Array<[string, string]> = [
+    ['ccd/ccd', ccd],
+    ['ccd/ccrc', ccrc],
+    ['ccd/ccrc-doctor-checks', readFileSync(path.join(ccdRoot, 'ccrc-doctor-checks'), 'utf8')],
+    ['ccd/ccrc-api', readFileSync(path.join(ccdRoot, 'ccrc-api'), 'utf8')],
+  ];
+
+  for (const [file, src] of corpora) {
+    it(`${file} carries no un-shimmed GNU call`, () => {
+      const text = executableText(src);
+      const hits: string[] = [];
+      for (const [label, re] of gnuOnly) {
+        for (const line of text.split('\n')) {
+          if (re.test(line)) hits.push(`${label}: ${line.trim()}`);
+        }
+      }
+      expect(hits, `${file} runs a GNU-only command outside the platform block — route it through the _plat_ shim (or an explicit template, for a file that cannot source the block)`).toEqual([]);
+    });
+  }
 });
 
 describe('the Linux arms are the original GNU commands', () => {

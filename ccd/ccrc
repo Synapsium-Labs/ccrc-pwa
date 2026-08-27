@@ -760,6 +760,14 @@ _svc_run_detached() {   # <cmd> [args...]
   nohup "$@" >/dev/null 2>&1 &
   return 0
 }
+# ── END PLATFORM LAYER — the byte-identical region ends HERE ────────────
+# Add a new `_plat_*`/`_svc_*` helper ABOVE this line, in BOTH files, or the
+# pin test (`macos-platform.test.ts`) cannot see it: the compared region is
+# sliced by the two sentinels, so a helper appended below them is two files
+# free to drift — the exact failure the duplication invites and the pin
+# exists to refuse. The test also asserts every `_plat_`/`_svc_` definition
+# sits inside the sentinels, so an appended-below helper is a red suite, not
+# a quiet gap.
 
 PROG=ccrc
 
