@@ -208,12 +208,20 @@ function stubTmux(home: string): void {
  *  and any other argv is a loud failure (exit 90): a check that quietly went
  *  back to the repo-scope-inclusive `git -C "$HOME" config user.email` — the
  *  defect the review caught — would no longer be answered at all. `IFS=` on the
- *  read so a whitespace-only value survives intact into the check. */
+ *  read so a whitespace-only value survives intact into the check.
+ *
+ *  `user.useConfigOnly` is a THIRD file for the same reason the two scopes are
+ *  separate: it is a different question — "is identity deliberately
+ *  per-repository?" — and the check must be able to read it independently of
+ *  whether an address is set. Its arm was added when the check learned to tell
+ *  absent-by-policy from never-configured; before that, asking for it here
+ *  would have exited 90. */
 function stubGit(home: string): void {
   stub(home, 'git',
     'case "$*" in\n'
     + "  *'config --global user.email'*) f=\"$HOME/fixture-git-email\" ;;\n"
     + "  *'config --system user.email'*) f=\"$HOME/fixture-git-email-system\" ;;\n"
+    + "  *'config --global user.useConfigOnly'*) f=\"$HOME/fixture-git-useconfigonly\" ;;\n"
     + '  *) echo "fixture git: unexpected argv: $*" >&2; exit 90 ;;\n'
     + 'esac\n'
     + 'if [ -f "$f" ]; then IFS= read -r v < "$f"; echo "$v"; exit 0; fi\n'
@@ -1249,6 +1257,56 @@ describe('ccrc doctor: git_email', () => {
     const line = lineFor(runDoctor(home).stdout, 'git_email');
     expect(line).toMatch(/^PASS git_email: box@example\.invalid /);
     expect(line).toContain('--system');
+  });
+
+  // ABSENT-BY-POLICY. `user.useConfigOnly=true` is git's own way to say
+  // "identity is per-repository": git then refuses to invent one from
+  // user@host and demands an explicit address in each repo. That is a STRONGER
+  // posture than a global default on a box carrying several identities — a
+  // global silently attributes a commit to the wrong address whenever a repo
+  // forgets its own, and a wrong author is permanent in history where a refusal
+  // is loud and fixable. Before this arm the check read `user.email` alone and
+  // called empty a failure, collapsing two states an operator handles
+  // completely differently.
+  it('a declared per-repository policy PASSES — it is not the same as never configured', () => {
+    const home = healthy('ccrc-doctor-gitemail-policy-');
+    rmSync(join(home, 'fixture-git-email'), { force: true });
+    writeFileSync(join(home, 'fixture-git-useconfigonly'), 'true\n');
+    const r = runDoctor(home);
+    const line = lineFor(r.stdout, 'git_email');
+    expect(line).toMatch(/^PASS git_email: /);
+    expect(line).toContain('useConfigOnly');
+    expect(line).toMatch(/per-repositor/i);
+    expect(r.stdout).not.toMatch(/^FAIL git_email/m);
+  });
+
+  it('a policy set to anything but true is NOT a policy', () => {
+    // `useConfigOnly=false` is git's default and says nothing; treating any
+    // present value as consent would turn the arm into a way to silence the
+    // check by accident.
+    const home = healthy('ccrc-doctor-gitemail-policy-false-');
+    rmSync(join(home, 'fixture-git-email'), { force: true });
+    writeFileSync(join(home, 'fixture-git-useconfigonly'), 'false\n');
+    expect(runDoctor(home).stdout).toMatch(/^FAIL git_email/m);
+  });
+
+  it('an address WINS over the policy — a box with both is reported by its address', () => {
+    const home = healthy('ccrc-doctor-gitemail-both-');
+    writeFileSync(join(home, 'fixture-git-useconfigonly'), 'true\n');
+    const line = lineFor(runDoctor(home).stdout, 'git_email');
+    expect(line).toContain('ops@example.invalid');
+    expect(line).not.toContain('useConfigOnly');
+  });
+
+  it('the FAIL names BOTH remedies, so neither posture reads as the only one', () => {
+    // The old remedy named a global address and nothing else, which pointed an
+    // operator whose identity is deliberately per-repository at the one change
+    // that would make their commits wrong.
+    const home = healthy('ccrc-doctor-gitemail-remedy-');
+    rmSync(join(home, 'fixture-git-email'), { force: true });
+    const out = runDoctor(home).stdout;
+    expect(out).toMatch(/user\.email/);
+    expect(out).toMatch(/useConfigOnly/);
   });
 
   it('a whitespace-only address is NOT set — and must not print an illegal line', () => {
