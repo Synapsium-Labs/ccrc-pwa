@@ -134,13 +134,19 @@ jobs:
   # every Darwin test in the tree. No tsc step — types have no platform.
   test-macos:
     runs-on: macos-latest
-    # 45, not the 30 above: this leg measures at 23 minutes (brew, then the
-    # whole server suite on a slower runner), so it gets twice its real cost
-    # rather than three times. It is also the leg that most needs a deadline —
-    # macOS minutes bill at 10x Linux, and this suite has already hung here
-    # once, on its first run, when a missing `gtimeout` left `_plat_timeout`
-    # with no deadline of its own.
-    timeout-minutes: 45
+    # 55, not the 30 above, and the number is the measurement rather than a
+    # round multiple of one run. Six green legs (2026-08-27): 18.6, 21.1,
+    # 21.9, 23.3, 24.7, 28.1 minutes — brew, then the whole server suite on a
+    # slower runner, with real spread. 45 was picked from the first two of
+    # those and was 1.6x the max once all six were in; 55 is ~2x, which is the
+    # headroom a runner this variable needs before a slow-but-healthy leg
+    # starts reading as a wedge.
+    #
+    # It is also the leg that most needs a deadline at all — macOS minutes bill
+    # at 10x Linux, and this suite has already hung here once, on its first
+    # run, when a missing `gtimeout` left `_plat_timeout` with no deadline of
+    # its own. A wedge is unbounded; nothing near 55 is.
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@v4
         with:
