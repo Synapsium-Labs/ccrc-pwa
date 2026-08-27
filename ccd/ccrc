@@ -252,6 +252,10 @@ _plat_bytes() {   # <path>... -> total apparent bytes, one integer; rc 1 if not 
 # function was written to remove. So the fallback VALIDATES: a non-numeric
 # answer degrades to whole seconds ×1000 — millisecond precision lost, the
 # write kept — instead of handing `jq --argjson` a string it rejects.
+# D-944: the review offered raise-the-floor-to-5.0 as the alternative fix;
+# fixing the fallback was chosen instead, because with a correct fallback a
+# 4.2-4.4 box WORKS (degraded to second precision), where the raised floor
+# would refuse it outright — and the floor stays one value in three files.
 # `ccd/session-hook.sh`'s `_hook_epoch_ms` is a deliberate local copy of
 # this body (the hook sources nothing); a test pins the two identical.
 #
@@ -311,6 +315,10 @@ _plat_mode() {    # <file> -> its permission bits, octal, e.g. 600
   # way GNU prints: BSD writes the special nibble as a literal `0` on an
   # ordinary file (`0600` where GNU says `600`), and the one live caller
   # compares `= 600`. All-zero collapses to a single `0`, GNU's own answer.
+  # D-945: ALL leading zeros, not the one `%Mp` zero the review's caution
+  # named — whether BSD pads `%Lp` on a sub-three-digit mode (007 as `007`)
+  # is unmeasured from this box, and the all-zero strip answers GNU's bare
+  # digits under either padding behaviour.
   if [ "$CCD_OS" = darwin ]; then stat -f%Mp%Lp "$@" | sed 's/^0*\(.\)/\1/'; else stat -c%a "$@"; fi
 }
 
