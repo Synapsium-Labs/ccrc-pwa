@@ -30,6 +30,11 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # A deadline, not the default. Without this key a wedged job runs for
+    # GitHub's 360 minutes before anyone learns it wedged; the slowest leg here
+    # is `server` at 9 minutes, so 30 is roughly three times the real thing.
+    # Pinned — key AND ceiling — by server/test/oss-metadata.test.ts.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -129,6 +134,13 @@ jobs:
   # every Darwin test in the tree. No tsc step — types have no platform.
   test-macos:
     runs-on: macos-latest
+    # 45, not the 30 above: this leg measures at 23 minutes (brew, then the
+    # whole server suite on a slower runner), so it gets twice its real cost
+    # rather than three times. It is also the leg that most needs a deadline —
+    # macOS minutes bill at 10x Linux, and this suite has already hung here
+    # once, on its first run, when a missing `gtimeout` left `_plat_timeout`
+    # with no deadline of its own.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
@@ -165,6 +177,8 @@ jobs:
 
   build-pwa:
     runs-on: ubuntu-latest
+    # Under a minute in practice; 15 is headroom for a cold npm cache.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

@@ -15,6 +15,9 @@ on:
 jobs:
   release:
     runs-on: ubuntu-latest
+    # The one job in this repo that can WRITE (a GitHub Release), so a wedge
+    # here holds an open contents:write token for as long as it runs. 30.
+    timeout-minutes: 30
     permissions:
       # `gh release create` writes to the repo's releases; everything else
       # stays read-only.
