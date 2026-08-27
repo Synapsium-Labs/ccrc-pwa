@@ -218,7 +218,7 @@ _plat_bytes() {   # <path>... -> total apparent bytes, one integer; rc 1 if not 
   for p in "$@"; do [ -e "$p" ] || return 1; done
   errf=$(_plat_mktemp) || return 1
   out=$(find "$@" \( -type f -o -type l \) -exec stat -f '%d %i %z' {} + 2>"$errf" \
-        | awk '!seen[$1":"$2]++ {s+=$3} END{print s+0}'); rc=$?
+        | awk '{ if (!seen[$1":"$2]++) s+=$3 } END{print s+0}'); rc=$?
   err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
   # THE DIAGNOSTIC IS RELAYED, not swallowed. GNU `du` writes "cannot read
   # directory …" to stderr and the callers CAPTURE it — `_ws_gc_bytes` puts it

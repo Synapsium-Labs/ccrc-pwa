@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=db995676e965a7fb073d765adc0b74b5601784f8366f4d46f655b69b8a8bb0a7
+# ccrc:generated 1 sha256=b09abea97fbc59ffa7789559eed90b9c86b542b3c0a9b021418f7d8fba6c1096
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -159,7 +159,7 @@ _plat_bytes() {   # <path>... -> total apparent bytes, one integer; rc 1 if not 
   for p in "$@"; do [ -e "$p" ] || return 1; done
   errf=$(_plat_mktemp) || return 1
   out=$(find "$@" \( -type f -o -type l \) -exec stat -f '%d %i %z' {} + 2>"$errf" \
-        | awk '!seen[$1":"$2]++ {s+=$3} END{print s+0}'); rc=$?
+        | awk '{ if (!seen[$1":"$2]++) s+=$3 } END{print s+0}'); rc=$?
   err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
   # THE DIAGNOSTIC IS RELAYED, not swallowed. GNU `du` writes "cannot read
   # directory …" to stderr and the callers CAPTURE it — `_ws_gc_bytes` puts it
