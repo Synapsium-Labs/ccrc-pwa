@@ -2832,14 +2832,21 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     const home = freshBox('ccrc-install-doctor-fails-');
     // THE LEVER IS PLATFORM-SPECIFIC, THE CONTRACT IS NOT. Linger is how a
     // Linux box is made to fail doctor; on macOS linger is a standing WARN by
-    // construction and can never be a FAIL, so the failing check has to be one
-    // that exists on both — a service that is installed and not running.
-    const failing = process.platform === 'darwin' ? 'services' : 'linger';
-    if (failing === 'services') {
-      // Keyed on the LABEL, which is what this file's launchctl fixture reads
-      // (`fixture-unit-$lbl`) — the doctor suite's stub translates back to the
-      // unit name, this one does not.
-      writeFileSync(join(home, 'fixture-unit-app.ccrc.ccrc'), 'inactive\n');
+    // construction and can never be a FAIL. The first cut's Darwin lever was
+    // a downed service (`fixture-unit-…` = inactive) — which stopped being a
+    // doctor-only lever the day `_inst_enable_darwin` gained its stay-up
+    // gate: ONE launchctl stub serves the install spine and the doctor tail
+    // alike, so a job that reads down fails the INSTALL at step 10 and
+    // doctor never runs (measured on the macos leg, twice — the second time
+    // because the fix script asserted this block existed and forgot to
+    // replace it). The lever is now a world-readable exposure.env: doctor's
+    // exposure check FAILs on the mode, and no install step ever reads it.
+    const failing = process.platform === 'darwin' ? 'exposure' : 'linger';
+    if (failing === 'exposure') {
+      mkdirSync(join(home, '.ccrc'), { recursive: true });
+      writeFileSync(join(home, '.ccrc', 'exposure.env'),
+        'CCRC_ORIGIN=https://box.example.com\nCCRC_RP_ID=box.example.com\nCCRC_AUTH=on\n',
+        { mode: 0o644 });
     } else {
       writeFileSync(join(home, 'fixture-linger-refuse'), 'yes\n');
     }
