@@ -846,4 +846,39 @@ describe('ccrc update: source pins', () => {
     expect(pick(ccrc, 'ccd/ccrc', 'CCRC_RELEASE_REPO'))
       .toBe(pick(inst, 'install.sh', 'CCRC_RELEASE_REPO'));
   });
+
+  // ── The bash floor — three spellings, held to one value (same idiom) ────
+  // install.sh's macOS preflight, `ccrc install`'s Darwin gate and the
+  // README each state the floor, in three different logical forms, and
+  // nothing held them equal (PR #11 review): a floor bump applied to one
+  // site goes green in CI and admits a box the other site then refuses —
+  // after paying for npm ci and a vite build. The two predicates are
+  // extracted BY THEIR OWN SPELLINGS and reduced to (major, minor); a
+  // rewritten predicate that no longer matches is a red here, not a silent
+  // second spelling.
+  it('the bash floor is the SAME major.minor in install.sh, ccd/ccrc and the README', () => {
+    const inst = readFileSync(join(REPO, 'install.sh'), 'utf8');
+    const ccrc = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
+    const readme = readFileSync(join(REPO, 'README.md'), 'utf8');
+
+    // install.sh: [ maj -lt X ] || { [ maj -eq X ] && [ min -lt Y ] }
+    const i = /\[ "\$bmaj" -lt (\d+) \] \|\| \{ \[ "\$bmaj" -eq (\d+) \] && \[ "\$bmin" -lt (\d+) \]; \}/.exec(inst);
+    expect(i, 'install.sh lost its bash-floor predicate (or respelled it — update this pin WITH the spelling)').not.toBeNull();
+    expect(i![1], 'install.sh compares two different majors').toBe(i![2]);
+    const instFloor = `${i![1]}.${i![3]}`;
+
+    // ccd/ccrc: [ maj -lt X+1 ] && { [ maj -lt X ] || [ min -lt Y ] }
+    const c = /\[ "\$\{BASH_VERSINFO\[0\]:-0\}" -lt (\d+) \] \\\n\s*&& \{ \[ "\$\{BASH_VERSINFO\[0\]:-0\}" -lt (\d+) \] \|\| \[ "\$\{BASH_VERSINFO\[1\]:-0\}" -lt (\d+) \]; \}/.exec(ccrc);
+    expect(c, 'ccd/ccrc lost its bash-floor predicate (or respelled it — update this pin WITH the spelling)').not.toBeNull();
+    expect(Number(c![1]), 'ccrc\'s outer cap must be floor-major + 1 or the predicate means a different floor')
+      .toBe(Number(c![2]) + 1);
+    const ccrcFloor = `${c![2]}.${c![3]}`;
+
+    expect(ccrcFloor, 'install.sh and ccd/ccrc refuse below DIFFERENT floors').toBe(instFloor);
+    expect(readme, `README.md no longer states the bash ≥ ${instFloor} floor`)
+      .toContain(`bash ≥ ${instFloor}`);
+    // Both refusal messages must keep NAMING the floor they enforce.
+    expect(inst).toContain(`ccd needs ${instFloor} or newer`);
+    expect(ccrc).toContain(`ccd needs ${instFloor} or newer`);
+  });
 });

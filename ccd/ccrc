@@ -158,10 +158,19 @@ _plat_devino() {  # <file> -> "<device>:<inode>", the identity of a lock
 # `.env` sizes as 4096 and every byte figure ccd prints, sums and compares
 # would be wrong by orders of magnitude on one platform.
 #
-# THE DARWIN ARM SUMS REGULAR FILES' OWN SIZES, which is what "apparent size"
-# means: `stat -f%z` per file, added up. A plain file answers directly. The
-# `+` form of `-exec` batches, so a large ignored directory is a handful of
-# execs rather than one per file.
+# THE DARWIN ARM SUMS FILES' AND SYMLINKS' OWN SIZES, COUNTING EACH INODE
+# ONCE — because dedup is part of what `du` MEANS, not an optimisation: the
+# ws-gc aggregate caller passes every worktree in ONE invocation precisely
+# so inodes shared between them are counted once ("the exact figure that
+# removing the lot would free"), and transcripts here deliberately wear one
+# inode under several names (`_plat_cp_replace`'s own header). The first cut
+# summed `-type f` sizes with no inode tracking: every hardlink name counted
+# again, and the report's "rows can sum to more than the total" sentence was
+# false on macOS — the total EQUALLED the row sum and overstated the
+# reclaim. `-type l` rides along because `du -sb` counts a symlink's own
+# st_size too (directories need nothing: GNU du charges a directory 0 in
+# byte totals — measured, coreutils 9.4). `stat -f '%d %i %z'` hands awk the
+# identity to dedup on (device:inode) and the size in one exec batch.
 #
 # `awk` PRINTS `s+0`, so an empty walk answers `0` rather than the empty
 # string — every caller validates the result with `^[0-9]+$` and would read a
@@ -208,7 +217,8 @@ _plat_bytes() {   # <path>... -> total apparent bytes, one integer; rc 1 if not 
   local p errf err out rc
   for p in "$@"; do [ -e "$p" ] || return 1; done
   errf=$(_plat_mktemp) || return 1
-  out=$(find "$@" -type f -exec stat -f%z {} + 2>"$errf" | awk '{s+=$1} END{print s+0}'); rc=$?
+  out=$(find "$@" \( -type f -o -type l \) -exec stat -f '%d %i %z' {} + 2>"$errf" \
+        | awk '!seen[$1":"$2]++ {s+=$3} END{print s+0}'); rc=$?
   err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
   # THE DIAGNOSTIC IS RELAYED, not swallowed. GNU `du` writes "cannot read
   # directory …" to stderr and the callers CAPTURE it — `_ws_gc_bytes` puts it
@@ -232,10 +242,18 @@ _plat_bytes() {   # <path>... -> total apparent bytes, one integer; rc 1 if not 
 # session hook's whole state write failed on macOS because of this one format,
 # silently (`|| exit 0`), leaving every session with no hookstate file.
 #
-# `EPOCHREALTIME` IS THE ANSWER ON BOTH PLATFORMS — a bash builtin
-# (`<seconds>.<microseconds>`), so no fork and no coreutils. It is read the
-# same way on Linux, where it agrees with `date +%s%3N` to the millisecond
-# (measured side by side).
+# `EPOCHREALTIME` IS THE ANSWER ON BOTH PLATFORMS — FROM BASH 5.0, WHICH IS
+# NOT THE FLOOR. A bash builtin (`<seconds>.<microseconds>`), so no fork and
+# no coreutils; on Linux it agrees with `date +%s%3N` to the millisecond
+# (measured side by side). But the declared floor is 4.2 (install.sh's macOS
+# preflight and `ccrc`'s own gate, pinned equal by single-definition), so a
+# 4.2-4.4 box passes install and lands on the fallback — and on macOS the
+# bare fallback used to reproduce the exact `<epoch>3N` failure this
+# function was written to remove. So the fallback VALIDATES: a non-numeric
+# answer degrades to whole seconds ×1000 — millisecond precision lost, the
+# write kept — instead of handing `jq --argjson` a string it rejects.
+# `ccd/session-hook.sh`'s `_hook_epoch_ms` is a deliberate local copy of
+# this body (the hook sources nothing); a test pins the two identical.
 #
 # THE SEPARATOR IS NOT ASSUMED TO BE A DOT: `EPOCHREALTIME` is formatted with
 # the LOCALE's decimal point, and a box running a comma locale would otherwise
@@ -246,7 +264,8 @@ _plat_epoch_ms() {   # -> epoch milliseconds, 13 digits
     f="${f}000"; printf '%s%s' "$s" "${f:0:3}"
     return 0
   fi
-  date +%s%3N
+  local t; t=$(date +%s%3N 2>/dev/null)
+  if [[ "$t" =~ ^[0-9]{13,}$ ]]; then printf '%s' "$t"; else printf '%s000' "$(date +%s)"; fi
 }
 
 # `cp --remove-destination` IS GNU. BSD's cp rejects the flag outright, and
@@ -282,9 +301,17 @@ _plat_mktemp_d() {   # -> a new temp DIRECTORY, honouring $TMPDIR on both
 }
 
 _plat_mode() {    # <file> -> its permission bits, octal, e.g. 600
-  # `%Lp` is BSD's low-12-bits-of-mode, which is exactly what GNU's `%a`
-  # prints — measured on both, not inferred from the manuals.
-  if [ "$CCD_OS" = darwin ]; then stat -f%Lp "$@"; else stat -c%a "$@"; fi
+  # `%Mp%Lp`, NOT `%Lp` ALONE. `%Lp` is the low NINE bits (user/group/other)
+  # and `%Mp` the special nibble (setuid/setgid/sticky); GNU's `%a` prints
+  # both, so under the first cut a 4755 file answered `4755` on Linux and
+  # `755` here — the arms answered different questions, and the comment that
+  # claimed `%Lp` was "the low twelve, measured on both" had been measured
+  # on a 0600 fixture, which cannot tell (an adapter may not narrow a
+  # distinction it received — the L3 rule). The sed strips LEADING ZEROS the
+  # way GNU prints: BSD writes the special nibble as a literal `0` on an
+  # ordinary file (`0600` where GNU says `600`), and the one live caller
+  # compares `= 600`. All-zero collapses to a single `0`, GNU's own answer.
+  if [ "$CCD_OS" = darwin ]; then stat -f%Mp%Lp "$@" | sed 's/^0*\(.\)/\1/'; else stat -c%a "$@"; fi
 }
 
 # `date -d <string>` PARSES an arbitrary date; BSD's `date` has no such flag

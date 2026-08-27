@@ -18,7 +18,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, linkSync, symlinkSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { CCD } from './ccdWsHelpers.js';
@@ -172,6 +172,8 @@ describe('the Linux arms are the original GNU commands', () => {
     ['_plat_uuid', /else cat \/proc\/sys\/kernel\/random\/uuid; fi/],
     ['_plat_ppid', /sed -n 's\/\^PPid:\[\[:space:\]\]\*\/\/p' "\/proc\/\$\{1-\}\/status"/],
     ['_plat_cgroup', /sed -n 's\/\^0::\/\/p' "\/proc\/\$\$\/cgroup"/],
+    ['_plat_mode', /else stat -c%a "\$@"; fi/],
+    ['_plat_bytes', /du -sb "\$1" \| head -n1 \| cut -f1/],
     ['_svc_run_detached', /systemd-run --user --collect --quiet "\$@"/],
   ];
   for (const [name, re] of arms) {
@@ -196,6 +198,65 @@ describe('the Linux arms are the original GNU commands', () => {
       'systemctl --user reset-failed "$1"',
     ];
     for (const v of verbs) expect(ccd, `missing Linux arm: ${v}`).toContain(v);
+  });
+});
+
+describe('_plat_epoch_ms — the one capability-branched helper, and its fallback', () => {
+  // `_plat_epoch_ms` branches on `${EPOCHREALTIME:-}` rather than on $CCD_OS
+  // — the only helper in the block that does — and EPOCHREALTIME is bash 5.0+
+  // while the declared floor is 4.2. So the `date +%s%3N` fallback is
+  // REACHABLE on a supported box, and on BSD it used to answer `<epoch>3N`:
+  // not a number, `jq --argjson` rejects it, and in the session hook the
+  // `|| exit 0` swallowed that — no hookstate file, every session on the box
+  // reading as unsupervised. The fallback now VALIDATES and degrades to
+  // whole seconds ×1000. These run the REAL function body on every platform:
+  // `unset EPOCHREALTIME` strips the dynamic builtin for the rest of the
+  // shell, exactly as bash 4.x simply not having it.
+  const runBlock = (expr: string, env: NodeJS.ProcessEnv = {}): string =>
+    execFileSync('bash', ['-c', `${platformBlock(ccd)}\n${expr}\n`], {
+      encoding: 'utf8', env: { ...process.env, ...env },
+    }).trim();
+
+  it('answers 13 digits through a working GNU date, EPOCHREALTIME unset', () => {
+    const out = runBlock('unset EPOCHREALTIME; _plat_epoch_ms');
+    expect(out).toMatch(/^[0-9]{13}$/);
+  });
+
+  it('a BSD-shaped date (literal 3N) degrades to whole seconds ×1000 — a NUMBER, never the 3N string', () => {
+    const d = mkdtempSync(path.join(tmpdir(), 'ccrc-epoch-'));
+    try {
+      const bin = path.join(d, 'bin');
+      mkdirSync(bin);
+      // BSD date: `%N` is not a format — the letter is printed literally.
+      writeFileSync(path.join(bin, 'date'), [
+        '#!/bin/sh',
+        'case "$1" in',
+        '  +%s%3N) echo "$(/bin/date +%s)3N" ;;',
+        '  +%s) /bin/date +%s ;;',
+        '  *) /bin/date "$@" ;;',
+        'esac',
+      ].join('\n') + '\n', { mode: 0o755 });
+      const out = runBlock('unset EPOCHREALTIME; _plat_epoch_ms',
+        { PATH: `${bin}:${process.env.PATH}` });
+      expect(out).toMatch(/^[0-9]{10}000$/);
+      expect(out).not.toContain('N');
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it('the session hook\'s local copy carries the SAME body — the third copy cannot drift', () => {
+    // session-hook.sh is installed alone and sources nothing, so its
+    // `_hook_epoch_ms` is a deliberate local copy; this is the pin that
+    // makes "deliberate copy" different from "a copy that drifts". The name
+    // differs, the body may not.
+    const hook = readFileSync(path.join(ccdRoot, 'session-hook.sh'), 'utf8');
+    const body = (src: string, name: string): string => {
+      const m = new RegExp(`${name}\\(\\) \\{[^\\n]*\\n([\\s\\S]*?)\\n\\}`).exec(src);
+      expect(m, `${name} not found`).not.toBeNull();
+      return m![1]!;
+    };
+    expect(body(hook, '_hook_epoch_ms')).toBe(body(ccd, '_plat_epoch_ms'));
   });
 });
 
@@ -276,6 +337,51 @@ describe.skipIf(!IS_DARWIN)('the Darwin arms, run for real', () => {
   it('_plat_sha256 agrees with the digest sha256sum would have printed', () => {
     expect(inBlock("printf hi | _plat_sha256 | cut -d' ' -f1"))
       .toBe('8f434346648f6b96df89dda901c5176b10a6d83961dd3c1ac88b59b2dc327aa4');
+  });
+
+  it('_plat_mode answers the same twelve bits GNU %a prints — special bits kept, leading zeros shed', () => {
+    // The narrowing this pins against: `%Lp` alone is the low NINE bits, so
+    // a setuid file answered `755` here and `4755` on Linux — an adapter
+    // narrowing a distinction it received. And `%Mp` prints a literal `0`
+    // for an ordinary file, which the caller's `= 600` comparison must
+    // never see.
+    const d = mkdtempSync(path.join(tmpdir(), 'ccrc-mode-'));
+    try {
+      const f = path.join(d, 'f');
+      writeFileSync(f, 'x');
+      chmodSync(f, 0o4755);
+      expect(inBlock(`_plat_mode -- '${f}'`), 'the setuid bit was dropped').toBe('4755');
+      chmodSync(f, 0o600);
+      expect(inBlock(`_plat_mode -- '${f}'`), 'a leading zero survived').toBe('600');
+      chmodSync(f, 0o7);
+      expect(inBlock(`_plat_mode -- '${f}'`), 'GNU prints bare digits, no padding').toBe('7');
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it('_plat_bytes counts a hard-linked inode ONCE and a symlink\'s own size — du -sb\'s meaning, not a stat sum', () => {
+    // Measured against GNU du 9.4 on the identical fixture: one 10-byte
+    // inode wearing two names + a 10-char symlink = 20, directories 0. The
+    // first cut summed `-type f` sizes with no inode tracking and answered
+    // 30 — every hardlink name counted again, so the ws-gc report's "rows
+    // can sum to more than the total" sentence was false on this platform.
+    const d = mkdtempSync(path.join(tmpdir(), 'ccrc-bytes-'));
+    try {
+      writeFileSync(path.join(d, 'a'), '0123456789');
+      linkSync(path.join(d, 'a'), path.join(d, 'b'));
+      symlinkSync('target-str', path.join(d, 'l'));
+      mkdirSync(path.join(d, 'sub'));
+      expect(inBlock(`_plat_bytes '${d}'`)).toBe('20');
+      // The aggregate call dedups ACROSS arguments too — the reason ws-gc
+      // passes every worktree in one invocation.
+      const d2 = path.join(d, 'sub');
+      linkSync(path.join(d, 'a'), path.join(d2, 'c'));
+      expect(inBlock(`_plat_bytes '${d}' '${d2}'`),
+        'an inode shared between the arguments was counted per name').toBe('20');
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
   });
 
   it('writes a session plist that plutil accepts and launchd would understand', () => {

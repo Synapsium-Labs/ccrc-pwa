@@ -20,18 +20,23 @@ set -uo pipefail
 # `EPOCHREALTIME` is a bash builtin — no fork, no coreutils, same answer on
 # both platforms (measured against `date +%s%3N` on Linux, to the
 # millisecond). The separator is taken as either `.` or `,` because that field
-# is formatted with the locale's decimal point.
+# is formatted with the locale's decimal point. BUT the builtin is bash 5.0+
+# and the declared floor is 4.2 — a 4.2–4.4 box takes the fallback, and on
+# BSD the bare fallback answers the exact non-number described above. So the
+# fallback VALIDATES, and degrades to whole seconds ×1000: millisecond
+# precision lost, THE WRITE KEPT — the one trade this file's contract allows.
 #
 # This is a LOCAL copy of ccd's `_plat_epoch_ms`, and deliberately so: this
 # file is installed on its own into ~/.cc-sessions and runs as Claude Code's
-# hook, with no ccd around to source.
+# hook, with no ccd around to source. A test pins the two bodies identical.
 _hook_epoch_ms() {
   if [ -n "${EPOCHREALTIME:-}" ]; then
     local s="${EPOCHREALTIME%%[.,]*}" f="${EPOCHREALTIME#*[.,]}"
     f="${f}000"; printf '%s%s' "$s" "${f:0:3}"
     return 0
   fi
-  date +%s%3N
+  local t; t=$(date +%s%3N 2>/dev/null)
+  if [[ "$t" =~ ^[0-9]{13,}$ ]]; then printf '%s' "$t"; else printf '%s000' "$(date +%s)"; fi
 }
 
 [[ -n "${HOME:-}" ]] || exit 0
