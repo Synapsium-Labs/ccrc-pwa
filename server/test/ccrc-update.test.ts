@@ -400,9 +400,18 @@ function packRelease(home: string, tree: string,
   const name = `ccrc-${opts.tag}.tar.gz`;
   const tarRes = spawnSync('tar', ['-czf', join(relDir, name), '-C', tree, '.'], { encoding: 'utf8' });
   if (tarRes.status !== 0) throw new Error(`fixture tar failed: ${tarRes.stderr}`);
-  const sumRes = spawnSync('bash', ['-c', `sha256sum '${name}' > SHA256SUMS`],
-    { cwd: relDir, encoding: 'utf8' });
-  if (sumRes.status !== 0) throw new Error(`fixture sha256sum failed: ${sumRes.stderr}`);
+  // PLATFORM-CHOSEN, exactly as writeManifest above chooses (and for the
+  // same reason it records): this runs on the HOST's own PATH, and the
+  // test-macos leg deliberately carries no coreutils — a bare `sha256sum`
+  // here fails every release-packing test on the one runner where the
+  // Darwin tests are not skipped, before `ccrc update` is ever spawned
+  // (found by this branch's own adversarial review). Both spellings write
+  // the identical "<digest>  <name>" line.
+  const sumRes = spawnSync('bash', ['-c',
+    'sha=sha256sum; [ "$(uname -s)" = Darwin ] && sha="shasum -a 256";'
+    + ` $sha '${name}' > SHA256SUMS`],
+  { cwd: relDir, encoding: 'utf8' });
+  if (sumRes.status !== 0) throw new Error(`fixture digest failed: ${sumRes.stderr}`);
   if (opts.tamper) appendFileSync(join(relDir, name), 'one appended byte-run after the sums were written');
 }
 

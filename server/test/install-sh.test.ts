@@ -251,7 +251,13 @@ describe('install.sh: the node floor, before anything is built', () => {
 describe('install.sh --release: fetch, verify, hand off to the staged ccrc', () => {
   const REAL_TAR = realPath('tar');
   const REAL_GZIP = realPath('gzip');
-  const REAL_SHA256SUM = realPath('sha256sum');
+  // PLATFORM-CHOSEN AT DESCRIBE SCOPE, and the choice is what lets this file
+  // COLLECT on a Darwin box at all: `realPath('sha256sum')` here used to
+  // throw on a host with no coreutils — erroring the whole file at
+  // collection time, including the two BSD-userland tests that exist to pin
+  // the macOS digest fix (found by this branch's own adversarial review).
+  const IS_DARWIN_HOST = process.platform === 'darwin';
+  const REAL_DIGEST = IS_DARWIN_HOST ? realPath('shasum') : realPath('sha256sum');
   const REAL_MKTEMP = realPath('mktemp');
   const REAL_MKDIR = realPath('mkdir');
   const REAL_CP = realPath('cp');
@@ -266,7 +272,17 @@ describe('install.sh --release: fetch, verify, hand off to the staged ccrc', () 
     symlinkSync(BASH, join(bin, 'bash'));
     symlinkSync(REAL_TAR, join(bin, 'tar'));
     symlinkSync(REAL_GZIP, join(bin, 'gzip'));
-    symlinkSync(REAL_SHA256SUM, join(bin, 'sha256sum'));
+    // The fixture models the HOST's own userland truthfully: a GNU host gets
+    // `sha256sum` (and no `uname`, so install.sh's chooser takes the GNU
+    // arm); a Darwin host gets `uname` + the real `shasum`, so install.sh's
+    // Darwin arm runs natively — never a sha256sum symlink whose target the
+    // box does not have.
+    if (IS_DARWIN_HOST) {
+      writeFileSync(join(bin, 'uname'), '#!/bin/sh\necho Darwin\n', { mode: 0o755 });
+      writeFileSync(join(bin, 'shasum'), `#!/bin/sh\nexec ${REAL_DIGEST} "$@"\n`, { mode: 0o755 });
+    } else {
+      symlinkSync(REAL_DIGEST, join(bin, 'sha256sum'));
+    }
     symlinkSync(REAL_MKTEMP, join(bin, 'mktemp'));
     symlinkSync(REAL_MKDIR, join(bin, 'mkdir'));
     symlinkSync(REAL_CP, join(bin, 'cp'));
@@ -311,9 +327,14 @@ describe('install.sh --release: fetch, verify, hand off to the staged ccrc', () 
     const name = `ccrc-${opts.tag ?? 'v9.9.9'}.tar.gz`;
     const tarRes = spawnSync('tar', ['-czf', join(relDir, name), '-C', payload, '.'], { encoding: 'utf8' });
     if (tarRes.status !== 0) throw new Error(`fixture tar failed: ${tarRes.stderr}`);
-    const sumRes = spawnSync('bash', ['-c', `sha256sum '${name}' > SHA256SUMS`],
-      { cwd: relDir, encoding: 'utf8' });
-    if (sumRes.status !== 0) throw new Error(`fixture sha256sum failed: ${sumRes.stderr}`);
+    // Host-PATH call, so the digest tool is platform-chosen — a bare
+    // `sha256sum` here fails on a Darwin host before install.sh ever runs.
+    // Both spellings write the identical "<digest>  <name>" line.
+    const sumRes = spawnSync('bash', ['-c',
+      'sha=sha256sum; [ "$(uname -s)" = Darwin ] && sha="shasum -a 256";'
+      + ` $sha '${name}' > SHA256SUMS`],
+    { cwd: relDir, encoding: 'utf8' });
+    if (sumRes.status !== 0) throw new Error(`fixture digest failed: ${sumRes.stderr}`);
     if (opts.tamper) appendFileSync(join(relDir, name), 'one appended byte-run after the sums were written');
   }
 
@@ -417,13 +438,18 @@ describe('install.sh --release: fetch, verify, hand off to the staged ccrc', () 
    *  fixture still fails it. */
   function bsdUserland(home: string): void {
     const bin = fixtureBin(home);
-    rmSync(join(bin, 'sha256sum'));
+    // Present only when plantReleaseTools ran on a GNU host; a Darwin host
+    // never planted one (force tolerates both).
+    rmSync(join(bin, 'sha256sum'), { force: true });
     writeFileSync(join(bin, 'uname'), '#!/bin/sh\necho Darwin\n', { mode: 0o755 });
+    // Validates the exact `-a 256` spelling install.sh must use, then
+    // delegates the digest math to the host's real tool — GNU sha256sum
+    // (argv minus the two shasum flags) or Darwin's real shasum (argv
+    // intact) — so verification stays REAL on either host.
     writeFileSync(join(bin, 'shasum'), [
       '#!/bin/sh',
       '[ "$1" = "-a" ] && [ "$2" = "256" ] || { echo "fixture shasum: unexpected argv: $*" >&2; exit 90; }',
-      'shift 2',
-      `exec ${REAL_SHA256SUM} "$@"`,
+      ...(IS_DARWIN_HOST ? [`exec ${REAL_DIGEST} "$@"`] : ['shift 2', `exec ${REAL_DIGEST} "$@"`]),
     ].join('\n') + '\n', { mode: 0o755 });
   }
 

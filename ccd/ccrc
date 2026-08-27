@@ -245,17 +245,20 @@ _plat_bytes() {   # <path>... -> total apparent bytes, one integer; rc 1 if not 
 # `EPOCHREALTIME` IS THE ANSWER ON BOTH PLATFORMS — FROM BASH 5.0, WHICH IS
 # NOT THE FLOOR. A bash builtin (`<seconds>.<microseconds>`), so no fork and
 # no coreutils; on Linux it agrees with `date +%s%3N` to the millisecond
-# (measured side by side). But the declared floor is 4.2 (install.sh's macOS
-# preflight and `ccrc`'s own gate, pinned equal by single-definition), so a
-# 4.2-4.4 box passes install and lands on the fallback — and on macOS the
+# (measured side by side). But the declared floor is 4.4 (install.sh's macOS
+# preflight and `ccrc`'s own gate, pinned equal by single-definition — 4.4
+# because empty-array "${a[@]}" under `set -u` is fatal below it, not 5.0),
+# so a 4.4 box passes install and lands on the fallback — and on macOS the
 # bare fallback used to reproduce the exact `<epoch>3N` failure this
 # function was written to remove. So the fallback VALIDATES: a non-numeric
 # answer degrades to whole seconds ×1000 — millisecond precision lost, the
 # write kept — instead of handing `jq --argjson` a string it rejects.
 # D-944: the review offered raise-the-floor-to-5.0 as the alternative fix;
 # fixing the fallback was chosen instead, because with a correct fallback a
-# 4.2-4.4 box WORKS (degraded to second precision), where the raised floor
-# would refuse it outright — and the floor stays one value in three files.
+# 4.4 box WORKS (degraded to second precision), where the 5.0 floor would
+# refuse it outright — and the floor stays one value in three files. (The
+# adversarial pass then measured the floor itself: 4.2/4.3 die on ccd's
+# empty-array set -u expansions regardless, so the declared floor is 4.4.)
 # `ccd/session-hook.sh`'s `_hook_epoch_ms` is a deliberate local copy of
 # this body (the hook sources nothing); a test pins the two identical.
 #
@@ -525,7 +528,7 @@ _svc_launchctl() {   # <launchctl args...>
 # `EnvironmentVariables` CARRIES PATH, and that line is the difference between
 # a working session and a mystery. A systemd --user unit inherits the user
 # manager's environment; a LaunchAgent gets launchd's own minimal PATH, which
-# holds neither Homebrew's `bash` (this file needs >=4.2 and macOS ships 3.2)
+# holds neither Homebrew's `bash` (this file needs >=4.4 and macOS ships 3.2)
 # nor `tmux` (the substrate every pane lives in). A session started from a
 # terminal would work and the same session started by the supervisor would
 # not — the worst shape a bug can take.
@@ -3745,15 +3748,15 @@ cmd_install() {
       || _ccrc_die "launchctl is required by 'ccrc install' — every ccrc service and every ccd session is a launchd user agent, and this box has no launchctl on PATH. Nothing on this box was written or changed."
     # THE ONE macOS DEPENDENCY THAT REALLY IS MISSING ON A FRESH BOX, and the
     # reason it is checked HERE rather than left to fail somewhere in ccd:
-    # macOS ships bash 3.2.57 (2007, GPLv2), and `ccd` needs 4.2+ — it uses
+    # macOS ships bash 3.2.57 (2007, GPLv2), and `ccd` needs 4.4+ — it uses
     # `local -A`, `[[ -v arr[k] ]]`, `mapfile` and `BASHPID`. A box whose
     # `bash` is 3.2 does not fail cleanly: `ccd` dies on a SYNTAX ERROR at a
     # line number, mid-session, having already started a pane. Refusing at
     # install time, by version, with the remedy, is the whole difference.
     local _bv; _bv="${BASH_VERSINFO[0]:-0}.${BASH_VERSINFO[1]:-0}"
     if [ "${BASH_VERSINFO[0]:-0}" -lt 5 ] \
-       && { [ "${BASH_VERSINFO[0]:-0}" -lt 4 ] || [ "${BASH_VERSINFO[1]:-0}" -lt 2 ]; }; then
-      _ccrc_die "bash $_bv is too old for ccrc — ccd needs 4.2 or newer (it uses associative arrays, \`[[ -v \]]\` and BASHPID) and macOS ships 3.2.57 as /bin/bash for licensing reasons. Install a current bash and put it ahead of /bin on PATH: brew install bash. Nothing on this box was written or changed."
+       && { [ "${BASH_VERSINFO[0]:-0}" -lt 4 ] || [ "${BASH_VERSINFO[1]:-0}" -lt 4 ]; }; then
+      _ccrc_die "bash $_bv is too old for ccrc — ccd needs 4.4 or newer (associative arrays, \`[[ -v \]]\`, BASHPID — and empty-array expansions under set -u, fatal before 4.4) and macOS ships 3.2.57 as /bin/bash for licensing reasons. Install a current bash and put it ahead of /bin on PATH: brew install bash. Nothing on this box was written or changed."
     fi
     # tmux IS THE SUBSTRATE, not an optional nicety: every ccd session is a
     # tmux session, and a box without it installs cleanly and then cannot

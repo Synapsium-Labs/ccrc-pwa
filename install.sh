@@ -115,15 +115,18 @@ fi
 # learn it now, not after paying for a bundle it will not use.
 #
 # AND THIS SCRIPT IS THE ONLY PLACE THE BASH CHECK CAN LIVE AT ALL. macOS
-# ships bash 3.2.57 (2007, GPLv2) as /bin/bash, and `ccd` needs 4.2+ — it uses
-# `local -A`, `[[ -v arr[k] ]]`, `mapfile` and BASHPID. A 3.2 box running
-# `ccd` gets a SYNTAX ERROR at a line number, mid-session, after a pane has
-# already been started. install.sh itself is deliberately written to the 3.2
+# ships bash 3.2.57 (2007, GPLv2) as /bin/bash, and `ccd` needs 4.4+ — it uses
+# `local -A`, `[[ -v arr[k] ]]`, `mapfile`, BASHPID, and (the fact that sets
+# the floor at 4.4, not 4.2) empty-array "${a[@]}" expansions under `set -u`,
+# which bash treated as a fatal unbound variable until 4.4 relaxed it. A 3.2
+# box running `ccd` gets a SYNTAX ERROR at a line number, mid-session, after
+# a pane has already been started; a 4.2/4.3 box dies at the first empty
+# array instead. install.sh itself is deliberately written to the 3.2
 # subset so that this refusal is the thing that runs.
 if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
   bmaj="${BASH_VERSINFO[0]:-0}"; bmin="${BASH_VERSINFO[1]:-0}"
-  if [ "$bmaj" -lt 4 ] || { [ "$bmaj" -eq 4 ] && [ "$bmin" -lt 2 ]; }; then
-    echo "install.sh: bash $bmaj.$bmin is too old — ccd needs 4.2 or newer, and macOS ships 3.2.57 as /bin/bash for licensing reasons." >&2
+  if [ "$bmaj" -lt 4 ] || { [ "$bmaj" -eq 4 ] && [ "$bmin" -lt 4 ]; }; then
+    echo "install.sh: bash $bmaj.$bmin is too old — ccd needs 4.4 or newer, and macOS ships 3.2.57 as /bin/bash for licensing reasons." >&2
     echo "install.sh: fix it with:  brew install bash    (then make sure /opt/homebrew/bin comes before /bin on PATH, and re-run this script)" >&2
     exit 1
   fi

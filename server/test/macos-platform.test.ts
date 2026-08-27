@@ -106,8 +106,11 @@ describe('no call site outside the platform block runs a GNU-only command bare',
   // doctor's remedy STRINGS spell them legitimately, and the doctor's
   // platform-awareness has its own tests.
   const gnuOnly: Array<[string, RegExp]> = [
-    // `--timeout 5` in a message must not hit; `_plat_timeout` must not hit.
-    ['bare timeout',    /(?<![-_a-zA-Z])timeout\s+["'$0-9]/],
+    // `--timeout 5` in a message must not hit (the lookbehind rejects the
+    // preceding dash); `_plat_timeout` must not hit; `-` in the class
+    // catches the flag-first form (`timeout -k 2 5 cmd`) that a bare
+    // digit-anchored class let through.
+    ['bare timeout',    /(?<![-_a-zA-Z])timeout\s+[-"'$0-9]/],
     // A template containing XXXX is the portable spelling (BSD mktemp
     // ignores $TMPDIR without one); only the TEMPLATE-LESS call is refused,
     // and only at command position ($(…, start of line, or after |;&=`).
@@ -123,16 +126,20 @@ describe('no call site outside the platform block runs a GNU-only command bare',
   ];
 
   /** Executable text only: the platform block cut out (where present) and
-   *  comment lines/tails stripped. Naive about `#` inside strings, which
-   *  errs toward scanning LESS text — acceptable for a tripwire whose red
-   *  case is a freshly imported call site, not a quoted sentence. */
+   *  WHOLE-LINE comments dropped. Deliberately not a tail strip: a `#` may
+   *  sit inside a quoted string (`msg="see PR #11" && timeout 5 …`), and a
+   *  tail strip from it discards the real code sharing the line — scanning
+   *  LESS text is exactly the direction that hides a freshly imported call
+   *  site (this guard's own adversarial review demonstrated it). Trailing
+   *  comments therefore stay in the scanned text; the command-position
+   *  anchors on the patterns are what keep their prose from matching. */
   function executableText(src: string): string {
     const start = src.indexOf('# ── THE PLATFORM LAYER');
     const end = src.indexOf('# ── END PLATFORM LAYER');
     const body = start >= 0 && end > start ? src.slice(0, start) + src.slice(end) : src;
     return body
       .split('\n')
-      .map((l) => l.replace(/(^|\s)#.*$/, '$1'))
+      .filter((l) => !/^\s*#/.test(l))
       .join('\n');
   }
 
@@ -204,7 +211,7 @@ describe('the Linux arms are the original GNU commands', () => {
 describe('_plat_epoch_ms — the one capability-branched helper, and its fallback', () => {
   // `_plat_epoch_ms` branches on `${EPOCHREALTIME:-}` rather than on $CCD_OS
   // — the only helper in the block that does — and EPOCHREALTIME is bash 5.0+
-  // while the declared floor is 4.2. So the `date +%s%3N` fallback is
+  // while the declared floor is 4.4. So the `date +%s%3N` fallback is
   // REACHABLE on a supported box, and on BSD it used to answer `<epoch>3N`:
   // not a number, `jq --argjson` rejects it, and in the session hook the
   // `|| exit 0` swallowed that — no hookstate file, every session on the box

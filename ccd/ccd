@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=b09abea97fbc59ffa7789559eed90b9c86b542b3c0a9b021418f7d8fba6c1096
+# ccrc:generated 1 sha256=c30bbefcfb56c61d8832ac247e108e551582dce5966dea9d24ae2a61f30cfc7c
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -186,17 +186,20 @@ _plat_bytes() {   # <path>... -> total apparent bytes, one integer; rc 1 if not 
 # `EPOCHREALTIME` IS THE ANSWER ON BOTH PLATFORMS — FROM BASH 5.0, WHICH IS
 # NOT THE FLOOR. A bash builtin (`<seconds>.<microseconds>`), so no fork and
 # no coreutils; on Linux it agrees with `date +%s%3N` to the millisecond
-# (measured side by side). But the declared floor is 4.2 (install.sh's macOS
-# preflight and `ccrc`'s own gate, pinned equal by single-definition), so a
-# 4.2-4.4 box passes install and lands on the fallback — and on macOS the
+# (measured side by side). But the declared floor is 4.4 (install.sh's macOS
+# preflight and `ccrc`'s own gate, pinned equal by single-definition — 4.4
+# because empty-array "${a[@]}" under `set -u` is fatal below it, not 5.0),
+# so a 4.4 box passes install and lands on the fallback — and on macOS the
 # bare fallback used to reproduce the exact `<epoch>3N` failure this
 # function was written to remove. So the fallback VALIDATES: a non-numeric
 # answer degrades to whole seconds ×1000 — millisecond precision lost, the
 # write kept — instead of handing `jq --argjson` a string it rejects.
 # D-944: the review offered raise-the-floor-to-5.0 as the alternative fix;
 # fixing the fallback was chosen instead, because with a correct fallback a
-# 4.2-4.4 box WORKS (degraded to second precision), where the raised floor
-# would refuse it outright — and the floor stays one value in three files.
+# 4.4 box WORKS (degraded to second precision), where the 5.0 floor would
+# refuse it outright — and the floor stays one value in three files. (The
+# adversarial pass then measured the floor itself: 4.2/4.3 die on ccd's
+# empty-array set -u expansions regardless, so the declared floor is 4.4.)
 # `ccd/session-hook.sh`'s `_hook_epoch_ms` is a deliberate local copy of
 # this body (the hook sources nothing); a test pins the two identical.
 #
@@ -466,7 +469,7 @@ _svc_launchctl() {   # <launchctl args...>
 # `EnvironmentVariables` CARRIES PATH, and that line is the difference between
 # a working session and a mystery. A systemd --user unit inherits the user
 # manager's environment; a LaunchAgent gets launchd's own minimal PATH, which
-# holds neither Homebrew's `bash` (this file needs >=4.2 and macOS ships 3.2)
+# holds neither Homebrew's `bash` (this file needs >=4.4 and macOS ships 3.2)
 # nor `tmux` (the substrate every pane lives in). A session started from a
 # terminal would work and the same session started by the supervisor would
 # not — the worst shape a bug can take.

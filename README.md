@@ -146,8 +146,9 @@ Download it, or use `bash <(curl -fsSL …)`.
 brew install bash tmux flock
 ```
 
-- **bash ≥ 4.2.** Not optional and not a preference: `ccd` uses associative arrays,
-  `[[ -v arr[k] ]]`, `mapfile` and `BASHPID`, and macOS ships **3.2.57** as `/bin/bash`
+- **bash ≥ 4.4.** Not optional and not a preference: `ccd` uses associative arrays,
+  `[[ -v arr[k] ]]`, `mapfile`, `BASHPID` — and empty-array `"${a[@]}"` expansions under
+  `set -u`, which bash treated as fatal until 4.4 — and macOS ships **3.2.57** as `/bin/bash`
   for licensing reasons. Make sure Homebrew's `bin` comes before `/bin` on your `PATH`.
   `install.sh` refuses by version before it builds anything.
 - **tmux** and **flock**, neither of which macOS ships. Homebrew's `flock` formula is the

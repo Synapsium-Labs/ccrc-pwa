@@ -21,7 +21,7 @@ set -uo pipefail
 # both platforms (measured against `date +%s%3N` on Linux, to the
 # millisecond). The separator is taken as either `.` or `,` because that field
 # is formatted with the locale's decimal point. BUT the builtin is bash 5.0+
-# and the declared floor is 4.2 — a 4.2–4.4 box takes the fallback, and on
+# and the declared floor is 4.4 — a 4.4 box takes the fallback, and on
 # BSD the bare fallback answers the exact non-number described above. So the
 # fallback VALIDATES, and degrades to whole seconds ×1000: millisecond
 # precision lost, THE WRITE KEPT — the one trade this file's contract allows.
