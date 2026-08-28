@@ -633,6 +633,11 @@ if [ "$TARGET" = "agent" ]; then
   # 13-days-silently-broken postmortem); tmux.conf is how truecolor survives
   # to the attaching client; statusline is what writes ~/.cc-limits telemetry.
   install_atomic ccd/ccd-cap-scopes .local/bin/ccd-cap-scopes 755
+  # graphify Task 10 (O3/O6b): the per-tree AST sweep executable, unconditional
+  # here exactly as its sibling above — the agent lane only ever ships to a
+  # fleet host, so there is no server-role branch to gate it against the way
+  # `ccd/ccrc`'s own `_inst_bins` has to.
+  install_atomic ccd/ccd-graph-sweep .local/bin/ccd-graph-sweep 755
   install_atomic ccd/tmux.conf .tmux.conf 644
   install_atomic ccd/statusline-command.sh .claude/statusline-command.sh 755
   # `ccrc` joins ccd on PATH, in the same ordering class: after the roster it
@@ -663,7 +668,8 @@ if [ "$TARGET" = "agent" ]; then
     && cp ~/ccrc/deploy/systemd/claude-session@.service.d/limits.conf ~/.config/systemd/user/claude-session@.service.d/ \
     && cp ~/ccrc/deploy/systemd/app-claude-session.slice.d/limits.conf "$HOME/.config/systemd/user/app-claude\x2dsession.slice.d/" \
     && cp ~/ccrc/deploy/systemd/ccrc-agent.service.d/protect.conf ~/.config/systemd/user/ccrc-agent.service.d/ \
-    && cp ~/ccrc/deploy/systemd/ccd-cap-scopes.service ~/ccrc/deploy/systemd/ccd-cap-scopes.timer ~/.config/systemd/user/'
+    && cp ~/ccrc/deploy/systemd/ccd-cap-scopes.service ~/ccrc/deploy/systemd/ccd-cap-scopes.timer ~/.config/systemd/user/ \
+    && cp ~/ccrc/deploy/systemd/ccd-graph-sweep.service ~/ccrc/deploy/systemd/ccd-graph-sweep.timer ~/.config/systemd/user/'
   "${SSH[@]}" "$BOX" "$AGENT_BUILD_CMD"
   # STAMP HERE — after the build that can fail, before the restart that makes
   # it live (I1, final review). Stamping earlier (this chain's shape until
@@ -713,6 +719,13 @@ if [ "$TARGET" = "agent" ]; then
   rsync -az --delete -e "${SSH[*]}" ccd/worker-skill/ "$BOX":.cc-sessions/worker-skill/
   install_atomic ccd/install-worker-skill.sh .cc-sessions/install-worker-skill.sh 755
   "${SSH[@]}" "$BOX" 'bash ~/.cc-sessions/install-worker-skill.sh'
+  # graphify Task 10 (O3/O6b): the assembled-SRC skill installer, AFTER both
+  # roster-reading skill arms above (spec §B: its SRC is the INSTALLED
+  # package, never vendored, which is what makes it a plain `install_atomic` +
+  # remote run rather than the rsync-a-tree-then-run shape its two neighbours
+  # need).
+  install_atomic ccd/install-graphify-skill.sh .cc-sessions/install-graphify-skill.sh 755
+  "${SSH[@]}" "$BOX" 'bash ~/.cc-sessions/install-graphify-skill.sh'
   # `systemctl restart` returns success the moment systemd FORKS, so without a
   # post-restart check an agent that throws during ESM evaluation — which
   # `whitelist.ts` does BY DESIGN via `refuseToBoot`, and which is the one
@@ -731,6 +744,7 @@ if [ "$TARGET" = "agent" ]; then
   AGENT_CMD='export XDG_RUNTIME_DIR=/run/user/$(id -u) \
     && systemctl --user daemon-reload && systemctl --user enable --now ccrc-agent.service \
     && systemctl --user enable --now ccd-cap-scopes.timer \
+    && systemctl --user enable --now ccd-graph-sweep.timer \
     && systemctl --user restart ccrc-agent.service \
     && bash ~/ccrc/deploy/verify-service.sh ccrc-agent.service'
   "${SSH[@]}" "$BOX" "$AGENT_CMD"

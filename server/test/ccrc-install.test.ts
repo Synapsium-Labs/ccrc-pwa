@@ -135,6 +135,10 @@ const TREE_FILES = [
   // not.
   'ccd/ccd',
   'ccd/ccd-cap-scopes',
+  // graphify Task 10: the sweep executable `_inst_bins` ships alongside the
+  // other two, unconditionally (mirrors the `ccd-cap-scopes` line — only the
+  // UNIT and its ENABLE are role-gated, per `_inst_units`/`_inst_enable`).
+  'ccd/ccd-graph-sweep',
   'ccd/session-hook.sh',
   'ccd/install-session-hooks.sh',
   'ccd/tmux.conf',
@@ -1449,6 +1453,17 @@ describe('ccrc install: the executables and files it installs', () => {
     expect(mode(bin)).toBe(0o755);
   });
 
+  it('ccd-graph-sweep lands beside it too (graphify Task 10, O3/O6b) — unconditionally, unlike its unit', () => {
+    // Mirrors the `ccd-cap-scopes` case above, byte for byte: `_inst_bins`
+    // ships this one on every role exactly the same way. Only its UNIT and
+    // its ENABLE are role-gated (server skips both) — see the `--role server`
+    // describe further down.
+    const { home } = installed;
+    const bin = join(home, '.local', 'bin', 'ccd-graph-sweep');
+    expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccd-graph-sweep')));
+    expect(mode(bin)).toBe(0o755);
+  });
+
   it('the launcher is BYTE FOR BYTE what deploy.sh generates', () => {
     // THE AGREEMENT PIN. The launcher now has two generators — `deploy.sh`'s
     // `install_ccrc_shim` for a box reached over ssh, and `_inst_shim` for a
@@ -1538,6 +1553,8 @@ describe('ccrc install: the executables and files it installs', () => {
     const targets = [
       join(home, '.local', 'bin', 'ccd'),
       join(home, '.local', 'bin', 'ccd-cap-scopes'),
+      // graphify Task 10: staged beside it, through the same `_inst_atomic`.
+      join(home, '.local', 'bin', 'ccd-graph-sweep'),
       join(home, '.local', 'bin', 'ccrc'),
       join(home, '.cc-sessions', 'session-hook.sh'),
       join(home, '.cc-sessions', 'install-session-hooks.sh'),
@@ -1682,6 +1699,10 @@ describe('ccrc install: the order is stated in one place', () => {
       // No later step reads what this one writes, so the position is the
       // brief's own placement rather than a measured dependency.
       '_inst_graph_excludes',
+      // graphify Task 10 (O3/O6b). Right after `_inst_graph_excludes`, per
+      // the task brief: no later step reads what it does, so the position is
+      // the brief's own placement rather than a measured dependency.
+      '_inst_graph_hooks_off',
       '_inst_wrappers',
     ]);
   });
@@ -1928,6 +1949,13 @@ const UNIT_FILES: Array<[string, string]> = [
   ['claude-session@.service', 'ccd/claude-session@.service'],
   ['ccd-cap-scopes.service', 'deploy/systemd/ccd-cap-scopes.service'],
   ['ccd-cap-scopes.timer', 'deploy/systemd/ccd-cap-scopes.timer'],
+  // graphify Task 10 (O3/O6b): ROLE-GATED — `_inst_units` skips both on a
+  // `--role server` box, unlike every other row above. The default fixture
+  // install below is role `both`, so they land on the box this describe's
+  // shared install measures; the server-role describe further down asserts
+  // their absence explicitly.
+  ['ccd-graph-sweep.service', 'deploy/systemd/ccd-graph-sweep.service'],
+  ['ccd-graph-sweep.timer', 'deploy/systemd/ccd-graph-sweep.timer'],
   ['claude-session@.service.d/limits.conf', 'deploy/systemd/claude-session@.service.d/limits.conf'],
   [`${SLICE_DIR}/limits.conf`, 'deploy/systemd/app-claude-session.slice.d/limits.conf'],
 ];
@@ -1965,8 +1993,10 @@ describe('ccrc install: the units, and the one this box must not be given', () =
     expect(units.r.stdout).toMatch(/^install: services: /m);
   });
 
-  it('installs four unit files and two drop-ins, byte for byte, at 644', () => {
-    // `deploy.sh:402-417`'s copy set. Byte equality rather than existence,
+  it('installs six unit files and two drop-ins, byte for byte, at 644', () => {
+    // `deploy.sh:402-417`'s copy set, plus graphify Task 10's role-gated
+    // sweep pair (the default install here is role `both`, so both land).
+    // Byte equality rather than existence,
     // because the failure this catches is not an absent file: it is a unit
     // installed from the wrong place (the checkout instead of the placed tree,
     // or a stale copy), which exists, parses, and runs the wrong thing.
@@ -2039,6 +2069,12 @@ describe('ccrc install: the units, and the one this box must not be given', () =
       '--user daemon-reload',
       '--user enable --now ccrc.service',
       '--user enable --now ccd-cap-scopes.timer',
+      // graphify Task 10 (O3/O6b): a THIRD enable, beside cap-scopes', for the
+      // role-gated sweep timer — the default install here is role `both`, so
+      // it fires. Degrades rather than dies on failure (`_inst_linger`'s own
+      // idiom), which is why it is not folded into the `_ccrc_die`-guarded
+      // loop above it.
+      '--user enable --now ccd-graph-sweep.timer',
       // THE RESTART, in deploy's own position (deploy.sh:719-721): after both
       // enables, before the verify. `enable --now` on an already-active unit is
       // a no-op, and `ccrc.service` runs `node ~/ccrc/server/dist/…` — a process
@@ -2234,11 +2270,12 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
     expect(r.stdout).toMatch(
       /^summary: 1 account\(s\) in .*\/\.ccrc\/accounts\.json — 0 generated, 1 upstream, 0 external \(upstream and external are never written\); 0 written, /m);
     expect(r.stdout).toMatch(/^install: wrappers: converged /m);
-    // Nothing but the three executables `_inst_bins` installs — no wrapper, no
-    // temp file, no staged leftover — beside what the fixture itself planted.
+    // Nothing but the four executables `_inst_bins` installs (graphify Task 10
+    // adds `ccd-graph-sweep`) — no wrapper, no temp file, no staged leftover —
+    // beside what the fixture itself planted.
     expect(readdirSync(join(home, '.local', 'bin'))
       .filter((b) => !FIXTURE_BINS.includes(b)).sort())
-      .toEqual(['ccd', 'ccd-cap-scopes', 'ccrc']);
+      .toEqual(['ccd', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccrc']);
   });
 
   it('never calls ccrc\'s own executables orphans (D-93)', () => {
@@ -2618,6 +2655,8 @@ describe('ccrc install: running the WHOLE verb twice', () => {
       join(home, '.ccrc', 'accounts.sh'),
       join(home, '.local', 'bin', 'ccd'),
       join(home, '.local', 'bin', 'ccd-cap-scopes'),
+      // graphify Task 10: staged beside it, through the same `_inst_atomic`.
+      join(home, '.local', 'bin', 'ccd-graph-sweep'),
       join(home, '.local', 'bin', 'ccrc'),
       join(home, '.cc-sessions', 'session-hook.sh'),
       join(home, '.cc-sessions', 'install-session-hooks.sh'),
@@ -2809,6 +2848,9 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
     const argv = systemctlCalls(home).map((c) => c.argv);
     expect(argv).toContain('--user enable --now ccrc-agent.service');
     expect(argv).toContain('--user enable --now ccd-cap-scopes.timer');
+    // graphify Task 10 (O3/O6b): fleet is not server, so the sweep timer
+    // enables here too.
+    expect(argv).toContain('--user enable --now ccd-graph-sweep.timer');
     expect(argv).toContain('--user restart ccrc-agent.service');
     // The blanket half of the old refusal, inverted: on a fleet box it is
     // ccrc.service that must never be touched — there is no server here.
@@ -2872,6 +2914,7 @@ describe('ccrc install --role: the refusals and the default', () => {
       '--user daemon-reload',
       '--user enable --now ccrc.service',
       '--user enable --now ccd-cap-scopes.timer',
+      '--user enable --now ccd-graph-sweep.timer',
       '--user restart ccrc.service',
     ]);
     expect(r.stdout).toMatch(
@@ -2885,6 +2928,16 @@ describe('ccrc install --role: the refusals and the default', () => {
     expect(existsSync(unitDir(home, 'ccrc.service'))).toBe(true);
     expect(existsSync(unitDir(home, 'ccrc-agent.service'))).toBe(false);
     expect(existsSync(dotCcrc(home, 'agent.env'))).toBe(false);
+    // graphify Task 10 (O3/O6b): the sweep pair is role-gated OUT on server —
+    // it runs no per-tree AST sweep — while every unit this verb shipped
+    // before this task still lands unchanged.
+    for (const [dest] of UNIT_FILES) {
+      if (dest === 'ccd-graph-sweep.service' || dest === 'ccd-graph-sweep.timer') continue;
+      expect(existsSync(unitDir(home, ...dest.split('/'))), dest).toBe(true);
+    }
+    expect(existsSync(unitDir(home, 'ccd-graph-sweep.service'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccd-graph-sweep.timer'))).toBe(false);
+    expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-graph-sweep');
     expect(read(dotCcrc(home, 'ccrc.env'))).toMatch(/^CCRC_ROLE=server$/m);
     expect(r.stdout).toMatch(/^install: gate: /m);
   });

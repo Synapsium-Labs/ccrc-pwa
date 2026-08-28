@@ -2934,6 +2934,7 @@ cmd_install() {
   _inst_skills
   _inst_graphify_skill
   _inst_graph_excludes
+  _inst_graph_hooks_off
   _inst_wrappers
 
   # ── THE LANDING BLOCK, AND WHY DOCTOR IS THE LAST WORD ─────────────────
@@ -3513,6 +3514,13 @@ _inst_bins() {   # what has to be ON PATH: the two executables, and the launcher
   mkdir -p "$bin" || _ccrc_die "cannot create $bin"
   _inst_atomic "$tree/ccd/ccd" "$bin/ccd" 755
   _inst_atomic "$tree/ccd/ccd-cap-scopes" "$bin/ccd-cap-scopes" 755
+  # graphify Task 10 (O3/O6b): the sweep executable, shipped UNCONDITIONALLY —
+  # unlike its unit (`_inst_units`) and its enable (`_inst_enable`), which are
+  # both role-gated (server skips), the binary lands on every role, exactly
+  # mirroring the line above it. `deploy/gen-wrappers.mjs`'s
+  # `TOOLCHAIN_EXECUTABLES` knows its name too, or the orphan scan in
+  # `_inst_wrappers` (which runs after this step, every role) would report it.
+  _inst_atomic "$tree/ccd/ccd-graph-sweep" "$bin/ccd-graph-sweep" 755
   # The generated launcher is staged under a name `_inst_atomic`'s own sweep
   # matches (`<dest>.tmp.*`), so a run killed between these two lines leaves
   # nothing the next run does not remove.
@@ -3520,7 +3528,7 @@ _inst_bins() {   # what has to be ON PATH: the two executables, and the launcher
   _inst_shim > "$gen" || { rm -f -- "$gen"; _ccrc_die "could not generate the ccrc launcher at $gen"; }
   _inst_atomic "$gen" "$bin/ccrc" 755
   rm -f -- "$gen"
-  echo "install: bins: ccd, ccd-cap-scopes and the ccrc launcher in \$HOME/.local/bin"
+  echo "install: bins: ccd, ccd-cap-scopes, ccd-graph-sweep and the ccrc launcher in \$HOME/.local/bin"
 }
 
 _inst_files() {   # the artifacts the box RUNS that are not on PATH
@@ -3715,6 +3723,13 @@ _inst_units() {
   _inst_atomic "$tree/ccd/claude-session@.service" "$dir/claude-session@.service" 644
   _inst_atomic "$tree/deploy/systemd/ccd-cap-scopes.service" "$dir/ccd-cap-scopes.service" 644
   _inst_atomic "$tree/deploy/systemd/ccd-cap-scopes.timer" "$dir/ccd-cap-scopes.timer" 644
+  # graphify Task 10 (O3/O6b): ROLE-GATED, unlike every unit above — a server
+  # box runs no per-tree AST sweep at all, so its unit files stay off it
+  # entirely (`_inst_enable`'s own gate on the ENABLE side matches this one).
+  if [ "$INST_ROLE" != server ]; then
+    _inst_atomic "$tree/deploy/systemd/ccd-graph-sweep.service" "$dir/ccd-graph-sweep.service" 644
+    _inst_atomic "$tree/deploy/systemd/ccd-graph-sweep.timer" "$dir/ccd-graph-sweep.timer" 644
+  fi
   _inst_atomic "$tree/deploy/systemd/claude-session@.service.d/limits.conf" \
     "$dir/claude-session@.service.d/limits.conf" 644
   _inst_atomic "$tree/deploy/systemd/app-claude-session.slice.d/limits.conf" \
@@ -3771,6 +3786,15 @@ _inst_enable() {
     systemctl --user enable --now "$u" \
       || _ccrc_die "systemctl --user enable --now $u failed — read what it says: systemctl --user status $u"
   done
+  # graphify Task 10 (O3/O6b): the sweep timer, gated exactly as
+  # `_inst_units` gates its unit files — SKIPPED on a server box, which runs
+  # no per-tree AST sweep at all. UNLIKE the loop above, a refusal here
+  # DEGRADES rather than dies (`_inst_linger`'s own idiom): a systemd that
+  # will not take this one timer must not turn an otherwise-converged install
+  # into a failed one the way `ccrc.service`'s own enable is entitled to — the
+  # sweep is convenience, not the guardrail `ccd-cap-scopes.timer` is.
+  [ "$INST_ROLE" = server ] || systemctl --user enable --now ccd-graph-sweep.timer \
+    || echo "install: graphify: could not enable ccd-graph-sweep.timer — run: systemctl --user enable --now ccd-graph-sweep.timer" >&2
   # ── THE RESTART, AND WHY `enable --now` IS NOT ENOUGH ─────────────────
   # `deploy.sh:719-721` has this line between the enable and the verify, and
   # Task 8 shipped without it. Measured consequence on the SECOND run — the
@@ -3991,6 +4015,61 @@ _inst_graph_excludes() {
     done
   done
   echo "install: graphify: exclude lines converged (graphify-out/, .graphifyignore; $n new)"
+}
+
+# ── _inst_graph_hooks_off — remove the legacy graphify git hooks (O6b) ────
+# The legacy graphify git hooks are UNCONTAINED (detached Popen, no
+# nice/MemoryMax/slice, a 16-way fan-out mid-wave) and their interpreter is
+# pinned at install time (`_PINNED=`) to a path the venv this file's own
+# `_inst_graphify_engine` provisions replaces. Remove hooks that are WHOLLY
+# graphify-generated; refuse (and report) any that chain other content —
+# never eat an operator's own hook partially.
+#
+# DETECTION (Task 0 step 4, measured on all 9 hooked repos in the fleet):
+# every hooked post-commit and post-checkout is byte-identical and WHOLLY
+# graphify's own output — line 1 the shebang, line 2 the opening marker
+# (`# graphify-hook-start` for post-commit, `# graphify-checkout-hook-start`
+# for post-checkout), a body, and the matching closing marker
+# (`# graphify-hook-end` / `# graphify-checkout-hook-end`) as the file's LAST
+# NON-EMPTY line, with nothing after it. That shape — the opening marker on
+# line 2 AND the closing marker as the last non-empty line — is the
+# WHOLLY-graphify test below. It is stronger and more faithful to what
+# graphify actually writes than grepping every non-shebang, non-blank line
+# for the word "graphify" would be (a plan-stage sketch this function does
+# NOT use), and it is what lets a hook that CHAINS other content — an
+# operator's own lines before or after graphify's block — be told apart and
+# refused rather than partially eaten.
+_inst_graph_hooks_off() {
+  [ "$INST_ROLE" = server ] && return 0
+  local roots=("$HOME/projects" "$HOME/worktrees") root d hooks h n=0 kept=0
+  local ts backups start end line2 last
+  ts=$(date +%Y%m%d-%H%M%S); backups="$HOME/ccrc-backups/$ts"
+  for root in "${roots[@]}"; do
+    [ -d "$root" ] || continue
+    for d in "$root"/*/ "$root"/*/*/; do
+      [ -d "$d" ] || continue
+      git -C "$d" rev-parse --is-inside-work-tree >/dev/null 2>&1 || continue
+      hooks="$(git -C "$d" rev-parse --path-format=absolute --git-common-dir)/hooks"
+      for h in "$hooks"/post-commit "$hooks"/post-checkout; do
+        [ -f "$h" ] || continue
+        grep -qi graphify "$h" || continue
+        case "${h##*/}" in
+          post-commit) start='# graphify-hook-start'; end='# graphify-hook-end' ;;
+          post-checkout) start='# graphify-checkout-hook-start'; end='# graphify-checkout-hook-end' ;;
+          *) continue ;;
+        esac
+        line2="$(sed -n '2p' "$h")"
+        last="$(grep -v '^[[:space:]]*$' "$h" | tail -n1)"
+        if [ "$line2" != "$start" ] || [ "$last" != "$end" ]; then
+          echo "install: graphify: $h chains non-graphify content — left in place; remove by hand" >&2
+          kept=$((kept+1)); continue
+        fi
+        mkdir -p "$backups"
+        cp -a "$h" "$backups/$(echo "$h" | tr / _)" && rm -f "$h" && n=$((n+1))
+      done
+    done
+  done
+  echo "install: graphify: legacy git hooks — $n removed (backed up), $kept chained ones reported"
 }
 
 # ── _inst_wrappers — the converger, called as a function ──────────────────
@@ -4523,7 +4602,8 @@ _uninst_units() {
   if command -v systemctl >/dev/null 2>&1; then
     : "${XDG_RUNTIME_DIR:=/run/user/$UID}"; export XDG_RUNTIME_DIR
     : "${DBUS_SESSION_BUS_ADDRESS:=unix:path=${XDG_RUNTIME_DIR}/bus}"; export DBUS_SESSION_BUS_ADDRESS
-    for u in "${BOX_UNIT_NAMES[@]}" ccd-cap-scopes.timer ccd-cap-scopes.service; do
+    for u in "${BOX_UNIT_NAMES[@]}" ccd-cap-scopes.timer ccd-cap-scopes.service \
+      ccd-graph-sweep.timer ccd-graph-sweep.service; do
       [ -f "$dir/$u" ] || continue
       systemctl --user disable --now "$u" \
         || echo "uninstall: units: disable --now $u failed (continuing — the unit file is removed below; read: systemctl --user status $u)" >&2
@@ -4533,6 +4613,7 @@ _uninst_units() {
   fi
   rm -f -- "$dir/${BOX_UNIT_NAMES[0]}" "$dir/${BOX_UNIT_NAMES[1]}" \
     "$dir/claude-session@.service" "$dir/ccd-cap-scopes.service" "$dir/ccd-cap-scopes.timer" \
+    "$dir/ccd-graph-sweep.service" "$dir/ccd-graph-sweep.timer" \
     || _ccrc_die "removing the unit files under $dir failed"
   rm -rf -- "$dir/claude-session@.service.d" "$slice" \
     || _ccrc_die "removing the drop-in directories under $dir failed"

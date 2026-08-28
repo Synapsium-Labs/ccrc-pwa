@@ -109,7 +109,9 @@ function plantInstalledBox(home: string): void {
   mkdirSync(join(units, 'claude-session@.service.d'), { recursive: true });
   mkdirSync(join(units, 'app-claude\\x2dsession.slice.d'), { recursive: true });
   for (const u of ['ccrc.service', 'ccrc-agent.service', 'claude-session@.service',
-    'ccd-cap-scopes.service', 'ccd-cap-scopes.timer']) {
+    'ccd-cap-scopes.service', 'ccd-cap-scopes.timer',
+    // graphify Task 10 (O3/O6b): the sweep pair, mirroring cap-scopes.
+    'ccd-graph-sweep.service', 'ccd-graph-sweep.timer']) {
     writeFileSync(join(units, u), `[Unit]\nDescription=fixture ${u}\n`);
   }
   writeFileSync(join(units, 'claude-session@.service.d', 'limits.conf'), '[Service]\n');
@@ -265,7 +267,9 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(r.code, r.stderr).toBe(0);
     const units = join(home, '.config', 'systemd', 'user');
     for (const u of ['ccrc.service', 'ccrc-agent.service', 'claude-session@.service',
-      'ccd-cap-scopes.service', 'ccd-cap-scopes.timer']) {
+      'ccd-cap-scopes.service', 'ccd-cap-scopes.timer',
+      // graphify Task 10 (O3/O6b): the sweep pair, mirroring cap-scopes.
+      'ccd-graph-sweep.service', 'ccd-graph-sweep.timer']) {
       expect(existsSync(join(units, u)), `${u} survived`).toBe(false);
     }
     expect(existsSync(join(units, 'claude-session@.service.d'))).toBe(false);
@@ -275,6 +279,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(calls).toContain('--user disable --now ccrc.service');
     expect(calls).toContain('--user disable --now ccrc-agent.service');
     expect(calls).toContain('--user disable --now ccd-cap-scopes.timer');
+    expect(calls).toContain('--user disable --now ccd-graph-sweep.timer');
     expect(calls[calls.length - 1]).toBe('--user daemon-reload');
     // The sacred rule holds even here: no claude-session@ instance is ever a
     // systemctl target, and tmux is never touched (poison would have fired).

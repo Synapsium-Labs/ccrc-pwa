@@ -54,6 +54,8 @@ const TREE_FILES = [
   'agent/package.json',
   'ccd/ccd',
   'ccd/ccd-cap-scopes',
+  // graphify Task 10 (O3/O6b): the fourth `_inst_bins` executable.
+  'ccd/ccd-graph-sweep',
   'ccd/session-hook.sh',
   'ccd/install-session-hooks.sh',
   'ccd/tmux.conf',
@@ -402,5 +404,87 @@ describe('ccrc install: graphify exclude writer (_inst_graph_excludes)', () => {
     const excludeFile = join(repoA, '.git', 'info', 'exclude');
     expect(existsSync(excludeFile) && readFileSync(excludeFile, 'utf8').includes('graphify-out/'))
       .toBe(false);
+  });
+});
+
+// O6(b) (graphify Task 10): the legacy git hooks graphify's own installer
+// left behind, before ccrc owned any of this. Task 0 step 4 measured all 9
+// hooked repos' post-commit AND post-checkout as byte-identical and WHOLLY
+// graphify's own output: line 1 the shebang, line 2 the opening marker
+// (`# graphify-hook-start` for post-commit, `# graphify-checkout-hook-start`
+// for post-checkout), a body, and the matching closing marker as the file's
+// LAST NON-EMPTY line, nothing after it. The fixtures below use that real
+// shape — not the plan's original placeholder text — because it is what
+// `_inst_graph_hooks_off`'s own marker-based detection (see its header in
+// `ccd/ccrc`) is actually measured against.
+describe('ccrc install: legacy graphify hook removal (_inst_graph_hooks_off, O6b)', () => {
+  const HOOK_COMMIT_WHOLLY = '#!/bin/sh\n# graphify-hook-start\n'
+    + "_PINNED='/usr/bin/python3'\n"
+    + '"$_PINNED" -m graphify.hooks.post_commit "$@" || true\n'
+    + '# graphify-hook-end\n';
+  // Chained: the operator's own line sits BEFORE graphify's block, so line 2
+  // is not the opening marker — the shape an operator who appended graphify's
+  // hook below something they already had leaves behind.
+  const HOOK_CHECKOUT_CHAINED = '#!/bin/sh\necho mine\n# graphify-checkout-hook-start\n'
+    + "_PINNED='/usr/bin/python3'\n"
+    + '"$_PINNED" -m graphify.hooks.post_checkout "$@" || true\n'
+    + '# graphify-checkout-hook-end\n';
+
+  it('O6(b): removes a wholly-graphify post-commit hook, refuses a chained one', () => {
+    const home = freshBox('ccrc-inst-gfx-hooks-');
+    plantFakeVenv(home);
+    const repo = makeFixtureRepo(home, 'projects/hooked');
+    const hooks = join(repo, '.git', 'hooks');
+    mkdirSync(hooks, { recursive: true });
+    writeFileSync(join(hooks, 'post-commit'), HOOK_COMMIT_WHOLLY, { mode: 0o755 });
+    writeFileSync(join(hooks, 'post-checkout'), HOOK_CHECKOUT_CHAINED, { mode: 0o755 });
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(hooks, 'post-commit'))).toBe(false);        // wholly ours: removed
+    expect(existsSync(join(hooks, 'post-checkout'))).toBe(true);       // chained: kept
+    expect(r.stdout + r.stderr).toContain('post-checkout');            // ...and reported
+
+    // Backed up: at least one ~/ccrc-backups/<ts>/ dir holds a copy of the
+    // removed post-commit hook. Task 10 adjustment: NOT a global
+    // `readdirSync(ccrc-backups).length === 1` count — this same fresh
+    // install may also back up a skill directory under ~/ccrc-backups if a
+    // skill installer finds something pre-existing to overwrite (it does not
+    // on THIS fixture, but the assertion should not depend on that staying
+    // true), so it is scoped to what this step backs up rather than to the
+    // directory's total child count.
+    const backupsRoot = join(home, 'ccrc-backups');
+    const backupDirs = readdirSync(backupsRoot);
+    expect(backupDirs.length).toBeGreaterThanOrEqual(1);
+    const hookBackedUp = backupDirs.some((d) =>
+      readdirSync(join(backupsRoot, d)).some((f) => f.endsWith('_post-commit')));
+    expect(hookBackedUp, 'no backup dir holds the removed post-commit hook').toBe(true);
+  });
+
+  it('is idempotent: a second run finds nothing left to remove', () => {
+    const home = freshBox('ccrc-inst-gfx-hooks-idem-');
+    plantFakeVenv(home);
+    const repo = makeFixtureRepo(home, 'projects/hooked');
+    const hooks = join(repo, '.git', 'hooks');
+    mkdirSync(hooks, { recursive: true });
+    writeFileSync(join(hooks, 'post-commit'), HOOK_COMMIT_WHOLLY, { mode: 0o755 });
+    const first = runInstall(home, ['install']);
+    expect(first.code, first.stderr).toBe(0);
+    expect(existsSync(join(hooks, 'post-commit'))).toBe(false);
+    const second = runInstall(home, ['install']);
+    expect(second.code, second.stderr).toBe(0);
+    expect(second.stdout).toMatch(
+      /^install: graphify: legacy git hooks — 0 removed \(backed up\), 0 chained ones reported$/m);
+  });
+
+  it('is skipped entirely on a server-role box', () => {
+    const home = freshBox('ccrc-inst-gfx-hooks-server-');
+    plantFakeVenv(home);
+    const repo = makeFixtureRepo(home, 'projects/hooked');
+    const hooks = join(repo, '.git', 'hooks');
+    mkdirSync(hooks, { recursive: true });
+    writeFileSync(join(hooks, 'post-commit'), HOOK_COMMIT_WHOLLY, { mode: 0o755 });
+    const r = runInstall(home, ['install', '--role', 'server']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(hooks, 'post-commit'))).toBe(true);
   });
 });
