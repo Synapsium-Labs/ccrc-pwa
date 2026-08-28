@@ -2,8 +2,11 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { act, cleanup, render, screen, fireEvent } from '@testing-library/react';
-import type { MailSummary } from '../../shared/api';
-import { MailStrip, summarizeMail } from '../src/session/MailStrip';
+import type { MailGate, MailSummary } from '../../shared/api';
+import {
+  MAIL_GATES, MAIL_GATE_HELD_MS, MAIL_GATE_HELD_COUNT, MAIL_GATE_FRESH_MS,
+} from '../../shared/api';
+import { MailStrip, summarizeMail, heldGate } from '../src/session/MailStrip';
 import { SessionScreen } from '../src/screens/SessionScreen';
 import { applySessionMsg, createSessionStore } from '../src/stores/session';
 import type { SessionSnapshot } from '../src/stores/session';
@@ -322,5 +325,166 @@ describe('lastError is consumed as free text, or not at all', () => {
     expect(row.attempts).toBe(4);
     // And absence is a distinct value: never attempted is not "failed with ''".
     expect(m().lastError).toBeNull();
+  });
+});
+
+// D-792 §6 — THE SURFACE. The four columns landed on the wire and in the store
+// one PR ago and nothing rendered them; a fact written down and never shown is
+// the same silence in a new place.
+//
+// The threshold half is the part that needs guarding, not the rendering half.
+// §2's R2 lie — "a busy worker is unreachable" — has exactly one way back into
+// the product from here, which is a console that calls an ordinary gate a
+// fault. So every test below that asserts a line appears has a sibling
+// asserting it does NOT at ninety seconds, three refusals short, or against a
+// sweep that has stopped.
+describe('the strip names the gate holding a delivery (D-792)', () => {
+  // A row one tick past every threshold, so a test can move ONE of them back
+  // and watch the line go away. `now` is passed to the component rather than
+  // read from the clock — three thresholds against `Date.now()` are otherwise
+  // untestable at a fixed epoch.
+  const NOW = T0;
+  const heldRow = (over: Partial<MailSummary> = {}): MailSummary => m({
+    state: 'delivered',
+    lastGate: 'not-idle',
+    gateCount: MAIL_GATE_HELD_COUNT,
+    gateSince: NOW - MAIL_GATE_HELD_MS - 1_000,
+    gateAt: NOW - 10_000,
+    ...over,
+  });
+
+  // Returns the container so a test can ask for the ROW's held line
+  // specifically: the head mark reads "held 2" and the row reads "held 3h 12m
+  // · …", so a bare /held/ matcher hits both and a two-row fixture makes
+  // `getByText` throw on the ambiguity rather than assert anything.
+  const openRows = (mail: MailSummary[]): HTMLElement => {
+    const { container } = render(<MailStrip mail={mail} now={NOW} />);
+    fireEvent.click(screen.getByRole('button', { expanded: false }));
+    return container;
+  };
+
+  const heldLines = (c: HTMLElement): string[] =>
+    [...c.querySelectorAll('.mail-strip-held')].map((e) => e.textContent ?? '');
+
+  it('says WHICH gate and FOR HOW LONG, in words', () => {
+    const c = openRows([heldRow({ gateSince: NOW - 3 * 3_600_000 - 12 * 60_000 })]);
+    expect(heldLines(c)).toEqual(['held 3h 12m · the session is busy']);
+  });
+
+  it('renders exactly as before below the duration threshold — ninety seconds of busy is not a fault', () => {
+    // §6, verbatim: "a worker busy for ninety seconds is not a fault, and
+    // rendering it as one would re-introduce the R2 lie from §2".
+    expect(heldLines(openRows([heldRow({ gateSince: NOW - 90_000 })]))).toEqual([]);
+    // …and the closed head stays silent too, which is the state the operator
+    // is actually in.
+    expect(screen.queryByText(/^held \d/)).not.toBeInTheDocument();
+  });
+
+  it('says nothing on a single observation, however old it looks', () => {
+    // `gateSince` alone is not a pattern: a sweep that recorded one refusal
+    // and then stopped leaves an ageing timestamp behind it.
+    expect(heldLines(openRows([heldRow({ gateCount: MAIL_GATE_HELD_COUNT - 1 })]))).toEqual([]);
+  });
+
+  it('says nothing when the sweep itself has stopped — that is what gateAt is FOR', () => {
+    // The one distinction §3 gives `gateAt` its own column for: a lane that
+    // died leaves a `gateSince` identical to one still refusing. "held for 3h"
+    // about a sweep that stopped two hours ago is a new lie for an old
+    // silence.
+    expect(heldLines(openRows([heldRow({ gateAt: NOW - MAIL_GATE_FRESH_MS - 1_000 })]))).toEqual([]);
+  });
+
+  it('is announced on the CLOSED head, where the operator actually is', () => {
+    // The strip opens closed. Same argument the blocked mark already carries.
+    render(<MailStrip mail={[heldRow(), m({ id: 2 })]} now={NOW} />);
+    expect(screen.getByText('held 1')).toBeInTheDocument();
+  });
+
+  it('counts on the head rather than promoting one row\'s reason', () => {
+    render(<MailStrip mail={[heldRow(), heldRow({ id: 2, lastGate: 'no-pane' })]} now={NOW} />);
+    expect(screen.getByText('held 2')).toBeInTheDocument();
+    // Neither reason is hoisted into the head — picking one would be the
+    // console choosing which of two true things to say.
+    expect(screen.queryByText(/the session is busy/)).not.toBeInTheDocument();
+  });
+
+  it('keeps ONE status line per row: a terminal fate outranks a gate', () => {
+    // A `rejected` row carries a fate. If both arms rendered, one message
+    // would state two different outcomes.
+    const c = openRows([heldRow({ state: 'rejected' })]);
+    expect(screen.getByText(/undeliverable/i)).toBeInTheDocument();
+    expect(heldLines(c)).toEqual([]);
+    // The HEAD must agree with the row — the first cut of this file counted
+    // every gated row, including ones whose own line said something else, so
+    // "held 1" opened onto a strip with no held line in it.
+    expect(screen.queryByText(/^held \d/)).not.toBeInTheDocument();
+  });
+
+  it('keeps ONE status line per row: an actively-retried block outranks a gate', () => {
+    const c = openRows([heldRow({ state: 'queued', lastError: 'draft-present' })]);
+    expect(screen.getByText(/unsent text/)).toBeInTheDocument();
+    expect(heldLines(c)).toEqual([]);
+    expect(screen.queryByText(/^held \d/)).not.toBeInTheDocument();
+  });
+
+  it('renders nothing for a row no gate has touched — the shape of every older server', () => {
+    // Absence-permits: a server that predates these columns sends nulls, and
+    // an older row is not a wedged one.
+    expect(heldLines(openRows([m()]))).toEqual([]);
+    expect(screen.queryByText(/^held \d/)).not.toBeInTheDocument();
+  });
+
+  // §5, and the opposite of the `lastError` rule two describes down: `lastGate`
+  // IS a closed union, so a total `Record` is the right shape — but a NEWER
+  // server naming a gate this build has never heard of must still render a
+  // reason, not a blank. `undefined` in a console is the silence D-792 exists
+  // to end.
+  it('renders an unknown gate as its raw token rather than a blank', () => {
+    const c = openRows([heldRow({ lastGate: 'quantum-flux' as MailGate })]);
+    expect(heldLines(c)).toEqual(['held 15m · quantum-flux']);
+  });
+
+  // The total-record guard, from the OTHER side: every member of the shipped
+  // vocabulary has words. A member added to `MailGate` with no phrase is
+  // already a TS2739 at the table, but `npm run build` is not this suite — so
+  // the same fact is measured here, where a red run names the missing member.
+  it('has words for every gate the wire can carry', () => {
+    for (const gate of MAIL_GATES) {
+      cleanup();
+      const lines = heldLines(openRows([heldRow({ lastGate: gate })]));
+      expect(lines, `MailGate '${gate}' renders no held line at all`).toHaveLength(1);
+      const words = lines[0]!.split(' · ')[1] ?? '';
+      expect(words, `MailGate '${gate}' renders no phrase`).not.toBe('');
+      expect(words, `MailGate '${gate}' falls through to its raw token`).not.toBe(gate);
+    }
+  });
+
+  // `heldGate` directly, for the boundary conditions a rendering test states
+  // clumsily. EXACTLY at each threshold, because "above a threshold" is where
+  // an off-by-one lives and a test written only at ±1000ms never sees it.
+  describe('heldGate, at the boundaries', () => {
+    it('is silent at exactly the duration threshold and speaks one ms past it', () => {
+      expect(heldGate(heldRow({ gateSince: NOW - MAIL_GATE_HELD_MS + 1 }), NOW)).toBeNull();
+      expect(heldGate(heldRow({ gateSince: NOW - MAIL_GATE_HELD_MS }), NOW)).not.toBeNull();
+    });
+
+    it('speaks at exactly the count threshold and is silent one below', () => {
+      expect(heldGate(heldRow({ gateCount: MAIL_GATE_HELD_COUNT - 1 }), NOW)).toBeNull();
+      expect(heldGate(heldRow({ gateCount: MAIL_GATE_HELD_COUNT }), NOW)).not.toBeNull();
+    });
+
+    it('tolerates a gateAt in the FUTURE — the server\'s clock is not the viewer\'s', () => {
+      // Skew makes this ordinary, and it must fail quiet toward rendering the
+      // fact, not toward hiding it.
+      expect(heldGate(heldRow({ gateAt: NOW + 60_000 }), NOW)).not.toBeNull();
+    });
+
+    it('keeps a gate on the `unknown` state — an exclusion of the terminal words, not an allow-list', () => {
+      // A state this client does not recognise revives as `unknown`. Losing
+      // the gate line there would be a newer server silencing an older client.
+      expect(heldGate(heldRow({ state: 'unknown' }), NOW)).not.toBeNull();
+      expect(heldGate(heldRow({ state: 'acked' }), NOW)).toBeNull();
+      expect(heldGate(heldRow({ state: 'rejected' }), NOW)).toBeNull();
+    });
   });
 });

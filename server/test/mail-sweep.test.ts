@@ -10,8 +10,9 @@
 // controllable so the gate arithmetic is deterministic, while real timers
 // keep flowing underneath so sendPrompt's echo/submit polls actually settle.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Bus } from '../src/bus.js';
 import type { Runner } from '../src/exec.js';
 import type { Deps } from '../src/server.js';
@@ -26,6 +27,9 @@ import type { PushPayload } from '../src/push.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { unreadableField } from './ioDoubles.js';
+import { MAIL_GATES } from '../../shared/api.js';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
 
 const ID = 'demo-coordinator';
 const UUID = 'a'.repeat(36);
@@ -1810,5 +1814,104 @@ describe('sweepMail: what refused this delivery (D-792)', () => {
     expect(after.attempts).toBe(before.attempts);
     expect(after.state).toBe(before.state);
     expect(after.lastError).toBe(before.lastError);
+  });
+});
+
+// D-792, THE TWO GUARDS THE COLUMNS' OWN PR STILL OWED (design §8, items 4/5).
+//
+// The behavioural half shipped with the columns: a gate that stops recording,
+// a count that never resets, a `gateSince` that always does, a delivered row
+// that keeps its gate, and a `noteGate` that touches `nextAttemptAt` are all
+// already red in the describes above. These two are the STRUCTURAL half, and
+// they guard the two things a behavioural test cannot see:
+//
+//   (4) a gate CONDITION that exists in the vocabulary but nowhere in the
+//       ladder — the member is there, the wire carries it, and no delivery
+//       ever gets it. A behavioural test only ever asserts about gates
+//       somebody thought to write a case for.
+//   (5) a scheduling path that has quietly started READING one of the four
+//       columns. That is the design's one stated non-goal, and it is a
+//       property of the SQL rather than of any outcome: a `WHERE gateCount > 3`
+//       would keep every existing test green while making the console's
+//       diagnostic an input to the lane it is diagnosing.
+//
+// Text scans, with `single-definition.test.ts`'s own stated limit: they catch
+// the version a reasonable person writes, not every version a determined one
+// could. That is the bar.
+describe('D-792 structure: the ladder is total, and nothing schedules on a gate', () => {
+  const srcRoot = path.join(here, '..', 'src');
+
+  const stripComments = (t: string): string =>
+    t.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' ');
+
+  it('records a gate at every refusal path the ladder has', () => {
+    // The vocabulary and the ladder, compared in BOTH directions. One
+    // direction catches a member with no call site (a gate nothing can ever
+    // report); the other catches a call site naming a token the union does not
+    // have, which TypeScript would also catch — but this suite is not `tsc`,
+    // and a guard that only holds when someone runs the other tool is the
+    // "comment, not mechanism" this repo bans.
+    const ladder = stripComments(readFileSync(path.join(srcRoot, 'watch.ts'), 'utf8'));
+    const called = new Set([...ladder.matchAll(/\bgated\(\s*\w+\s*,\s*'([a-z-]+)'/g)].map((x) => x[1]!));
+    // The one call site that picks its gate at runtime rather than naming a
+    // literal — `registry-unmeasurable` vs `registry-absent` is a MEASUREMENT,
+    // and folding the two would be the overloaded-null this deviation split
+    // `no-pane`/`no-config-dir` to avoid. Matched on its own shape so the scan
+    // does not have to pretend it is a literal.
+    for (const t of ladder.matchAll(/\bgated\(\s*\w+\s*,\s*\w+\s*\?\s*'([a-z-]+)'\s*:\s*'([a-z-]+)'/g)) {
+      called.add(t[1]!); called.add(t[2]!);
+    }
+    expect([...MAIL_GATES].filter((g) => !called.has(g)),
+      'a MailGate member with no call site in sweepMail — the wire can carry it and nothing can ever write it').toEqual([]);
+    expect([...called].filter((g) => !(MAIL_GATES as readonly string[]).includes(g)),
+      'sweepMail records a gate the wire has no member for').toEqual([]);
+  });
+
+  it('reads no gate column in any WHERE, ORDER BY, GROUP BY or HAVING', () => {
+    // THE NON-GOAL, made structural. A gate column may be WRITTEN (a SET) and
+    // SELECTED (the console has to get it somehow); what it may never be is a
+    // filter, an ordering or a grouping, because each of those makes the lane's
+    // own diagnostic decide what the lane does next.
+    //
+    // Per-statement, not per-file: the whole-file text has a WHERE somewhere
+    // before nearly every column mention, so a file-wide regex would report
+    // everything. Each `.prepare(...)` argument is extracted by matching
+    // parens, then cut at its first scheduling clause; only the TAIL is
+    // scanned.
+    const COLS = ['lastGate', 'gateCount', 'gateSince', 'gateAt'];
+    const bad: string[] = [];
+
+    const walk = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+        const f = path.join(dir, e.name);
+        if (e.isDirectory()) return walk(f);
+        return e.name.endsWith('.ts') ? [f] : [];
+      });
+
+    for (const file of walk(srcRoot)) {
+      const text = stripComments(readFileSync(file, 'utf8'));
+      let i = text.indexOf('.prepare(');
+      while (i !== -1) {
+        let depth = 0, j = i + '.prepare'.length;
+        for (; j < text.length; j++) {
+          if (text[j] === '(') depth++;
+          else if (text[j] === ')' && --depth === 0) break;
+        }
+        // Quote characters and concatenation dropped, so a statement split
+        // across a dozen `+`-joined literals reads as one string.
+        const sql = text.slice(i, j).replace(/['"`+\n]/g, ' ');
+        const cut = /\b(WHERE|ORDER\s+BY|GROUP\s+BY|HAVING)\b/i.exec(sql);
+        if (cut) {
+          const tail = sql.slice(cut.index);
+          for (const c of COLS) {
+            if (new RegExp(`\\b${c}\\b`).test(tail)) {
+              bad.push(`${path.relative(srcRoot, file)}: '${c}' in a ${cut[1]!.toUpperCase()}`);
+            }
+          }
+        }
+        i = text.indexOf('.prepare(', j);
+      }
+    }
+    expect(bad, 'a gate column has become a scheduling input — the one thing D-792 forbids').toEqual([]);
   });
 });

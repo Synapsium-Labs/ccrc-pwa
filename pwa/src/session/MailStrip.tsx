@@ -20,8 +20,12 @@
 // necessarily sender/kind/subject/artifacts only.
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import type { MailSummary } from '../../../shared/api';
-import { MAIL_MAX_ATTEMPTS } from '../../../shared/api';
+import type { MailGate, MailSummary } from '../../../shared/api';
+import {
+  MAIL_MAX_ATTEMPTS, MAIL_GATE_HELD_MS, MAIL_GATE_HELD_COUNT, MAIL_GATE_FRESH_MS,
+} from '../../../shared/api';
+import { useNow } from '../lib/useNow';
+import { elapsedWords } from '../lib/elapsed';
 import './chat.css';
 
 const PLURAL: Record<MailSummary['kind'], [string, string]> = {
@@ -71,11 +75,118 @@ const isBlocked = (item: MailSummary): boolean =>
 const blockedLine = (item: MailSummary): string =>
   `blocked · attempt ${item.attempts} of ${MAIL_MAX_ATTEMPTS} — this session's input box has unsent text`;
 
-export function MailStrip({ mail }: { mail: MailSummary[] }): ReactNode {
+/**
+ * D-792 — the words for each gate, and THE OPPOSITE RULE TO `lastError` ABOVE.
+ *
+ * `lastGate` is a CLOSED union on the wire, so a total `Record<MailGate, …>` is
+ * not merely allowed here, it is the point: a member added to `MailGate` with
+ * no phrase is a TS2739 at this table rather than a blank in the console. That
+ * is exactly what `lastError`'s own docstring forbids for itself, forty lines
+ * up, and the two fields sit adjacent in one interface — so the difference is
+ * stated at both ends rather than left for a reader to infer from one.
+ *
+ * The phrases are the OPERATOR'S question, not the ladder's spelling: what
+ * they would do about it. "the session is busy" and "the pane is gone" are
+ * acted on completely differently, which is the whole argument for splitting
+ * `no-pane` from `no-config-dir` in the first place.
+ */
+const GATE_PHRASE: Record<MailGate, string> = {
+  'same-sweep': 'another message went first this sweep',
+  'in-flight': 'an earlier message to this session is still landing',
+  cooldown: 'the lane is spacing messages out',
+  'registry-absent': 'this session is not in the registry',
+  'registry-unmeasurable': 'the registry could not be read',
+  'tmux-gone': 'the tmux session is gone',
+  'tmux-unknown': 'tmux could not be asked',
+  'pending-ask': 'the session is waiting on a prompt of its own',
+  'no-pane': 'the session has no pane',
+  'no-config-dir': 'this wrapper resolves to no config dir',
+  'not-idle': 'the session is busy',
+  'not-quiet': 'the session has only just gone quiet',
+};
+
+/** An UNKNOWN member renders the raw token rather than `undefined` — an older
+ *  client against a newer server is an ordinary state on this fleet (the wire
+ *  is additive and absence-permits), and a blank where a reason belongs is the
+ *  silence this whole deviation was written against. */
+const gatePhrase = (gate: string): string =>
+  (GATE_PHRASE as Record<string, string | undefined>)[gate] ?? gate;
+
+/**
+ * Is ONE gate holding this delivery long enough to be worth saying out loud?
+ *
+ * All three thresholds, and every one of them earns its place: `gateSince` is
+ * how long (a busy worker is not a fault), `gateCount` is that it is a pattern
+ * rather than one observation, and `gateAt` is that the SWEEP IS STILL RUNNING
+ * — a lane that stopped leaves an ageing `gateSince` that looks identical to
+ * one still being refused, and saying "held for 3h" about a sweep that died
+ * two hours ago is a new lie in place of the old silence.
+ *
+ * The state test is an EXCLUSION of the two terminal words, not an allow-list
+ * of the live ones — so `unknown`, which is what a state this client does not
+ * recognise revives as, keeps its gate line instead of losing it. The server
+ * clears all four columns on send, ack and reject, but a client must not
+ * depend on a server having done that, and the row's terminal arm outranks
+ * this one anyway (there is one status line per row, by design).
+ *
+ * Returns `null`, not a flag: the caller needs the gate AND the span, and
+ * computing the span twice is how the headline and the row come to disagree.
+ */
+export function heldGate(item: MailSummary, now: number): { gate: string; forMs: number } | null {
+  if (item.state === 'acked' || item.state === 'rejected') return null;
+  if (item.lastGate === null || item.gateSince === null || item.gateAt === null) return null;
+  if (item.gateCount < MAIL_GATE_HELD_COUNT) return null;
+  if (now - item.gateAt > MAIL_GATE_FRESH_MS) return null;
+  const forMs = now - item.gateSince;
+  return forMs < MAIL_GATE_HELD_MS ? null : { gate: item.lastGate, forMs };
+}
+
+/** "held 3h 12m · the session is busy" — a DESCRIPTION, deliberately, with no
+ *  word in it that calls the state a failure. The operator decides that; three
+ *  hours at `not-idle` on a session running a long suite is fine and three
+ *  hours at `no-pane` is not, and the console cannot tell them apart. */
+const heldLine = (h: { gate: string; forMs: number }): string =>
+  `held ${elapsedWords(h.forMs)} · ${gatePhrase(h.gate)}`;
+
+/**
+ * WHICH of the three status lines this row gets — computed ONCE, because the
+ * collapsed head and the expanded row both need the answer and the first
+ * version of this file let them disagree: the head counted every row a gate
+ * was holding, including rows whose own line said `blocked` instead, so
+ * "held 1" opened onto a strip with no held line in it. Caught by the
+ * precedence test below rather than in review, which is the argument for the
+ * function existing at all.
+ *
+ * The ORDER is the claim, and it is the ternary's order because it is the same
+ * decision: a terminal delivery has a fate and says it; a blocked one is still
+ * being retried and says how much room is left; only a row with neither is
+ * merely being held. One line per row, one place that decides which.
+ */
+type StatusArm = 'abandoned' | 'blocked' | 'held' | null;
+
+function statusArm(item: MailSummary, held: { gate: string; forMs: number } | null): StatusArm {
+  if (item.state === 'rejected') return 'abandoned';
+  if (isBlocked(item)) return 'blocked';
+  return held === null ? null : 'held';
+}
+
+/** `now` is injectable for the same reason `heldGate` takes it rather than
+ *  reading the clock: three thresholds compared against `Date.now()` are not
+ *  testable at a fixed epoch otherwise. The hook is called UNCONDITIONALLY and
+ *  overridden after — a hook behind a `??` would be a hook behind a condition,
+ *  which React forbids and which no test would catch until the prop was used. */
+export function MailStrip({ mail, now: nowProp }: { mail: MailSummary[]; now?: number }): ReactNode {
   const [open, setOpen] = useState(false);
+  // 30s, matching FleetHostBanner: the coarsest span `elapsedWords` prints is
+  // a minute, so a faster tick would re-render without ever changing a word.
+  const tick = useNow(30_000);
+  const now = nowProp ?? tick;
   if (mail.length === 0) return null;
 
   const newest = [...mail].sort((a, b) => b.at - a.at)[0]!;
+  const held = mail.map((item) => heldGate(item, now));
+  const arm = mail.map((item, i) => statusArm(item, held[i]!));
+  const heldCount = arm.filter((a) => a === 'held').length;
 
   return (
     <section className={open ? 'mail-strip mail-strip--open' : 'mail-strip'} aria-label="Mail">
@@ -90,6 +201,17 @@ export function MailStrip({ mail }: { mail: MailSummary[] }): ReactNode {
             blocked
           </span>
         )}
+        {/* Same argument as the blocked mark directly above, for the same
+            reason: the strip OPENS CLOSED, so a gate named only in an
+            expanded row is invisible in the state the operator is in. It is a
+            COUNT and not a reason — the reason is per-row and there may be
+            more than one, and picking one to promote would be the console
+            choosing which of two true things to say. */}
+        {heldCount > 0 && (
+          <span className="mail-strip-held-mark" title="One gate has been holding a message for a while. Open the strip for which, and how long.">
+            held {heldCount}
+          </span>
+        )}
         <span className="mail-strip-chevron" aria-hidden="true">{open ? '⌃' : '⌄'}</span>
       </button>
 
@@ -97,7 +219,7 @@ export function MailStrip({ mail }: { mail: MailSummary[] }): ReactNode {
 
       {open && (
         <ol className="mail-strip-rows">
-          {mail.map((item) => (
+          {mail.map((item, i) => (
             <li key={item.id} className="mail-strip-row" data-state={item.state}>
               <span className="mail-strip-from">{item.fromId}</span>
               <span className="mail-strip-kind">{item.kind}</span>
@@ -114,13 +236,21 @@ export function MailStrip({ mail }: { mail: MailSummary[] }): ReactNode {
                   so, a queued-but-blocked one is still being retried and says
                   how much room is left. Rendering both would state two
                   different fates for one message. */}
-              {item.state === 'rejected' ? (
+              {/* ONE status line per row, and `statusArm` — not this JSX — is
+                  where the precedence lives, so the head's count and the row's
+                  line cannot drift apart. Reading the arm here rather than
+                  re-deciding it is the whole point. */}
+              {arm[i] === 'abandoned' ? (
                 <span className="mail-strip-abandoned" title="The delivery lane gave up retrying this before it was acked.">
                   undeliverable — act on it directly
                 </span>
-              ) : isBlocked(item) ? (
+              ) : arm[i] === 'blocked' ? (
                 <span className="mail-strip-blocked" title="The lane is still retrying. Clear this session's input box and it will land.">
                   {blockedLine(item)}
+                </span>
+              ) : arm[i] === 'held' ? (
+                <span className="mail-strip-held" title="Nothing has failed. The delivery lane keeps re-offering this message and one gate keeps declining it.">
+                  {heldLine(held[i]!)}
                 </span>
               ) : null}
               {/* Artifacts are PATHS, never payloads (spec §1) — so they render
