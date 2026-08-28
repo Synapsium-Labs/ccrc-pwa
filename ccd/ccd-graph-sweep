@@ -87,8 +87,15 @@ _gs_build() {    # contained build; sets BUILD_OUTCOME/BUILD_REASON; rc: 0 ok / 
       GRAPHIFY_MAX_WORKERS="$CCRC_GRAPH_MAX_WORKERS" \
       nice -n 15 timeout "$CCRC_GRAPH_BUILD_TIMEOUT" "$ENGINE" update . ) \
       >>"$HOME/.ccrc/graph-sweep.log" 2>"$errf"
-  local rc=$? first
+  local rc=$? first full
   first="$(head -n1 "$errf" 2>/dev/null || true)"
+  # Full stderr, not just the first line: a real `graphify update` can print
+  # conditional warnings BEFORE the shrink refusal on the same invocation
+  # (e.g. build.py:384's extraction-warning line, watch.py:510's invalid-
+  # community-id line) — grepping only $first let those precede the refusal
+  # and collapse a genuine refused-shrink to failed (review finding, Task 7
+  # fix). $first stays the reason for the generic `failed` arm below.
+  full="$(cat "$errf" 2>/dev/null || true)"
   cat "$errf" >> "$HOME/.ccrc/graph-sweep.log"; rm -f "$errf"
   if [ "$rc" -eq 0 ]; then
     printf '%s\n' "$PIN" > "$tree/graphify-out/.graphify_engine"
@@ -114,9 +121,14 @@ _gs_build() {    # contained build; sets BUILD_OUTCOME/BUILD_REASON; rc: 0 ok / 
   # fragment below is the one substring with no interpolated numbers.
   # A pin bump revisits this literal (O1's acceptance) — re-grep both
   # export.py and watch.py in the installed package, not export.py alone.
+  # Grepped against the FULL stderr, not $first: a conditional warning line
+  # (build.py:384, watch.py:510) can print before the refusal on the same
+  # invocation, and BUILD_REASON is the actual matching line, not $first.
   if [ "$after_sz" = "$before_sz" ] && [ "$after_mt" = "$before_mt" ] \
-     && grep -qi 'refusing to overwrite' <<<"$first"; then
-    BUILD_OUTCOME=refused-shrink; BUILD_REASON="$first"; return 1
+     && grep -qi 'refusing to overwrite' <<<"$full"; then
+    BUILD_OUTCOME=refused-shrink
+    BUILD_REASON="$(grep -i -m1 'refusing to overwrite' <<<"$full")"
+    return 1
   fi
   BUILD_OUTCOME=failed; BUILD_REASON="${first:-exit $rc}"; return 1
 }

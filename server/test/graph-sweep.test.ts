@@ -121,7 +121,12 @@ describe('graph-sweep: build discriminators (Task 7)', () => {
     plantEngine('echo "refusing to write: node count shrank" >&2; exit 1\n# no graph write:');
     // the fake above must NOT rewrite graph.json — remove the trailing writer lines for this plant:
     const enginePath = j('.ccrc', 'graphify-venv', 'bin', 'graphify');
+    // Leading warning line before the refusal — a real `graphify update` can
+    // print a conditional warning (build.py:384, watch.py:510) ahead of the
+    // shrink refusal on the same invocation; the discriminator must grep the
+    // FULL stderr, not just its first line, or this collapses to `failed`.
     fs.writeFileSync(enginePath, `#!/bin/bash
+echo "[graphify] Extraction warning (2 issues): demo" >&2
 echo "[graphify] WARNING: new graph has 1 nodes but existing graph.json has 4. Refusing to overwrite — you may be missing chunk files from a previous session. Pass --force to override." >&2
 exit 1
 `, { mode: 0o755 });
