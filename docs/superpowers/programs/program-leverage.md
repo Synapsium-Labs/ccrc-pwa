@@ -13,7 +13,7 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
 
 | # | scope | PRs | state |
 |---|---|---|---|
-| 1 | F1 — drift fixes (ungated-door count, coordinator trigger/resume wording, stale `_id()` anchor) + the coordinator-resume runbook (`references/resume.md`). AGENT-FIRST deploy. | run 10 | dispatched 2026-08-28 ~16:00 UTC — worker `ccrc-pwa-quiet-meadow` (fresh spawn, `briefQueued:true`, `adopted:false`, `spawnState:null`); briefed only when the worker acks |
+| 1 | F1 — drift fixes (ungated-door count, coordinator trigger/resume wording, stale `_id()` anchor) + the coordinator-resume runbook (`references/resume.md`). AGENT-FIRST deploy. | run 10, PR #28 (merged `f5dfd2d9`) | done 2026-08-28 18:08 UTC — CI 5/5 green on `8135118b`, deployed both boxes agent-first, `/health` and fleet `ccd` both report `f5dfd2d9` |
 | 2 | F2 — dispatch-time `skillState` preflight (measure, never refuse) + synchronous deviation-floor seed on first allocation | — | planned |
 | 3 | F3 — per-project program-ready badge (server measurement + /runs board) | — | planned |
 | 4 | F4 — program kickoff rides the idle-gated mail lane (`queueSystemMail`), direct-injection race retired | — | planned |
@@ -70,6 +70,18 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
   (D-1000 — corpus now derived from readdir), and spec item 3 was unachievable as written
   (D-1001 — the auth sweep forbids method-spelled non-EXEMPT routes in the corpus).
 
+- **Wave 1 fix round + close (2026-08-28 ~18:05 UTC):** all seven minors fixed in one commit
+  (`8135118b`), each re-verified by the worker before acting, none pushed back; the two sharpest
+  were re-measured both ways (M1's wrap-evasion: flat() form RED / pre-fix raw form GREEN,
+  D-1006; M7's door list now HARVESTED from coord-pause-route's `UNGATED` with non-vacuity
+  guards, and the F5 fourth-door shape measured RED, D-1010). M6 answered with one measured red
+  PER pin appended to the plan's execution record (D-1009). Deviations D-1006..D-1011; block now
+  D-999..1011 used, 1012+ free. Fingerprint re-verified by the server (working→awaiting-review→
+  merging, all ok), PR #28 merged as `f5dfd2d9`, deployed agent-first then server from a scratch
+  worktree pinned at the merge commit. Live confirmation: this coordinator's own installed skill
+  now carries the reworded run-record trigger. Lesson carried to later waves (worker's, D-1009):
+  write a wave's pins BEFORE the file they pin, or the reds have nothing to fail against.
+
 ## Carried constraints
 
 - Waves 1 and 8 are **AGENT-FIRST** deploys (they touch `ccd/coordinator-skill/` and the agent's
@@ -87,6 +99,25 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
   deletion; TDD red-first; deviations recorded against this program's allocated block.
 
 ## Next-wave brief
+
+**Wave 2 — F2: dispatch-time skill preflight + synchronous deviation-floor seed.** Spec:
+`docs/superpowers/specs/2026-08-28-program-leverage-design.md` §4 (fetch `ws/brisk-meadow` from
+origin), both design items exactly as numbered. Same workspace as wave 1 (`quiet-meadow`,
+reclaimed). Key constraints: `skillState` is additive beside `spawnState`, one reader,
+`absent` ≠ `unmeasurable` (no overloaded null — the program's standing rule); the preflight
+NEVER refuses a dispatch; the allocator's inline seed answers `not-seeded` only when the
+measurement itself fails; the wave-lifecycle.md dispatch-table edit touches the pinned corpus —
+keep route-parity/census green, and write pins BEFORE the text they pin (wave 1's D-1009
+lesson). Fold: the graphify lane (`ws/ccrc-with-graphify-integration`) is adjacent, unmerged,
+building skill-convergence/doctor machinery — keep the skill-presence read ONE helper so the
+two lanes can converge on it; no path overlap expected. Deviations from **D-1012** up.
+Commit on the workspace's own branch; all coordinator mail names the new run's `runId`.
+Plan first (superpowers:writing-plans), execute with superpowers:executing-plans. AGENT-FIRST
+at close (installer-shipped reference edit). Deploy is not the worker's act.
+
+---
+
+Prior wave's brief (wave 1, retired — kept for the record):
 
 **Wave 1 — F1: drift fixes + the coordinator-resume runbook.** Spec:
 `docs/superpowers/specs/2026-08-28-program-leverage-design.md` §3 (fetch `ws/brisk-meadow` from
