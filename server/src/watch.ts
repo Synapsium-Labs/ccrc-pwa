@@ -31,6 +31,7 @@ import { claimExpiry, type LivenessProbe } from './coord/claims.js';
 // evidence string alike — the sweep below only feeds it files and applies
 // its answer, so LEDGER_SEED_GAP itself is not imported here.
 import { floorFromScan } from './coord/ledger.js';
+import { LEDGER_FLOOR_DIRS, readLedgerDocs } from './coord/ledgerseed.js';
 import type { ProvenancePair } from './coord/store.js';
 import type { PushPayload } from './push.js';
 import { deriveBranch } from './naming.js';
@@ -1910,25 +1911,6 @@ export class FleetWatcher {
    * 50-number gap, which the next successful sweep raises. `null` return =
    * NEITHER dir listed — the caller seeds nothing at all.
    */
-  private async readLedgerDocs(
-    project: string, dirs: readonly string[],
-  ): Promise<{ path: string; text: string }[] | null> {
-    const out: { path: string; text: string }[] = [];
-    let listedAny = false;
-    for (const d of dirs) {
-      const dir = `${this.deps.cfg.projectsRoot}/${project}/docs/superpowers/${d}`;
-      const names = await this.deps.io.readdir(dir);
-      if (names === null) continue;
-      listedAny = true;
-      for (const n of [...names].sort()) {
-        if (!n.endsWith('.md')) continue;
-        const text = await this.deps.io.readFile(`${dir}/${n}`);
-        if (text === null) continue;
-        out.push({ path: `docs/superpowers/${d}/${n}`, text });
-      }
-    }
-    return listedAny ? out : null;
-  }
 
   /**
    * D13: the allocator SELF-SEEDS. Hourly, per registry-named project (the
@@ -1950,9 +1932,19 @@ export class FleetWatcher {
     const store = this.deps.coord;
     if (!store) return;
     for (const project of [...new Set(records.map((r) => r.project))]) {
-      const files = await this.readLedgerDocs(project, ['plans', 'specs']);
-      if (files === null) continue;
-      const scan = floorFromScan(files);
+      const read = await readLedgerDocs(
+        { io: this.deps.io, projectsRoot: this.deps.cfg.projectsRoot }, project, LEDGER_FLOOR_DIRS);
+      // THIS LANE'S OWN POLICY, unchanged and deliberately different from the
+      // synchronous seed's: it takes what it got. A dir that would not list, or
+      // a file that would not read, contributes nothing and the floor measured
+      // here may be low — which the NEXT hourly pass raises, because
+      // `raiseLedgerFloor` only ever raises. Nothing downstream of this call
+      // mints a number, so a low floor costs a delay, not a collision.
+      // `readLedgerDocs` reports `complete:false` for both cases and this lane
+      // ignores it ON PURPOSE; D-1018 records that the 50-number gap does not
+      // actually bound the error, and defers changing this behaviour.
+      if (read.files.length === 0 && !read.complete) continue;
+      const scan = floorFromScan(read.files);
       if (scan === null) continue;      // no global D-ref anywhere: nothing to seed, fail shut
       store.raiseLedgerFloor(project, scan.floor, scan.evidence, now);
     }
@@ -1980,8 +1972,12 @@ export class FleetWatcher {
         if (list === undefined) byProject.set(a.project, [a]); else list.push(a);
       }
       for (const [project, rows] of byProject) {
-        const files = await this.readLedgerDocs(project, ['plans']);
-        if (files === null) continue;
+        // Reconcile reads plans ALONE — a different question (did this number
+        // land in a plan?), not a narrower copy of the floor's dir list.
+        const read = await readLedgerDocs(
+          { io: this.deps.io, projectsRoot: this.deps.cfg.projectsRoot }, project, ['plans']);
+        if (read.files.length === 0 && !read.complete) continue;
+        const files = read.files;
         for (const a of rows) {
           const re = new RegExp(`\\bD-${a.n}\\b`);
           const hit = files.find((f) => re.test(f.text));
