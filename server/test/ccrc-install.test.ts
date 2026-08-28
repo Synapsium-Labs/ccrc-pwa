@@ -1676,6 +1676,12 @@ describe('ccrc install: the order is stated in one place', () => {
       // `CCRC_SKILL_SRC` to a vendored `~/.cc-sessions` tree, and this
       // skill's source of truth is the installed package instead (spec §B).
       '_inst_graphify_skill',
+      // graphify Task 4 (D-996/D'). Right after `_inst_graphify_skill`, per
+      // the task brief: the sweep's `check-ignore` precondition needs a
+      // writer that converges every project/worktree's common-dir exclude.
+      // No later step reads what this one writes, so the position is the
+      // brief's own placement rather than a measured dependency.
+      '_inst_graph_excludes',
       '_inst_wrappers',
     ]);
   });

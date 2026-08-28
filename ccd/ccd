@@ -2990,6 +2990,12 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
   local common; common=$(git -C "$main" rev-parse --path-format=absolute --git-common-dir)
   mkdir -p "$common/info"
   grep -qxF '.ccrc/' "$common/info/exclude" 2>/dev/null || echo '.ccrc/' >> "$common/info/exclude"
+  # Graph store + the sweep's ephemeral corpus filter (spec §D'/§E): excluded so
+  # `git worktree remove` collects the store WITH the tree (un-ignored, it wedges
+  # ws-rm/ws-reap/ws-gc — none pass --force), and so a SIGKILL-orphaned
+  # .graphifyignore can never make a workspace unremovable.
+  grep -qxF 'graphify-out/' "$common/info/exclude" 2>/dev/null || echo 'graphify-out/' >> "$common/info/exclude"
+  grep -qxF '.graphifyignore' "$common/info/exclude" 2>/dev/null || echo '.graphifyignore' >> "$common/info/exclude"
 
   local id="$project-$slug"
   local uuid; uuid=$(cat /proc/sys/kernel/random/uuid)

@@ -12,7 +12,7 @@
 // `~/.ccrc/graphify-venv/` and `~/.ccrc/graphify.pin`. Nothing here may ever
 // run against a real $HOME.
 import { describe, it, expect } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, execFileSync } from 'node:child_process';
 import {
   copyFileSync, cpSync, mkdirSync, readFileSync, writeFileSync, existsSync, statSync,
   chmodSync, readdirSync, rmSync,
@@ -336,5 +336,71 @@ describe('ccrc install: graphify engine step', () => {
     plantFakeVenv(home);
     runInstall(home, ['install', '--role', 'server']);
     expect(existsSync(path.join(home, '.ccrc', 'graphify.pin'))).toBe(false);
+  });
+});
+
+// D-996/D' (graphify Task 4): the install-side half of the exclude writer.
+// `makeFixtureRepo` is exported — Task 10 uses it too, for the doctor check
+// this same writer is a precondition for.
+/** A real, minimal git repo with one commit — real enough for
+ *  `_inst_graph_excludes` to walk (it calls `git -C "$d" rev-parse
+ *  --is-inside-work-tree` and `--git-common-dir`) and for a worktree to be
+ *  added off it. */
+export function makeFixtureRepo(home: string, rel: string): string {
+  const d = join(home, rel);
+  mkdirSync(d, { recursive: true });
+  execFileSync('git', ['init', '-q', d]);
+  const env = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t',
+    GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
+  writeFileSync(join(d, 'a.py'), 'x = 1\n');
+  execFileSync('git', ['-C', d, 'add', '.'], { env });
+  execFileSync('git', ['-C', d, 'commit', '-qm', 'init'], { env });
+  return d;
+}
+
+describe('ccrc install: graphify exclude writer (_inst_graph_excludes)', () => {
+  it('converges the common-dir exclude for a project AND its worktree, ignored from the worktree', () => {
+    const home = freshBox('ccrc-inst-gfx-excl-');
+    plantFakeVenv(home);
+    const repoA = makeFixtureRepo(home, 'projects/repoA');
+    mkdirSync(join(home, 'worktrees', 'repoA'), { recursive: true });
+    const ws1 = join(home, 'worktrees', 'repoA', 'ws1');
+    execFileSync('git', ['-C', repoA, 'worktree', 'add', ws1, '-b', 'ws1']);
+
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(
+      /^install: graphify: exclude lines converged \(graphify-out\/, \.graphifyignore; \d+ new\)$/m);
+
+    const excludeFile = join(repoA, '.git', 'info', 'exclude');
+    const excl = readFileSync(excludeFile, 'utf8');
+    expect(excl).toContain('graphify-out/');
+    expect(excl).toContain('.graphifyignore');
+
+    // `graphify-out/` is a directory-only pattern: `check-ignore` (no
+    // trailing slash on the query) lstats the path, so the directory has to
+    // exist — exactly the state graphify itself leaves a workspace in the
+    // first time it runs there. This is the sweep's own precondition gate.
+    mkdirSync(join(ws1, 'graphify-out'));
+    expect(() => execFileSync('git', ['-C', ws1, 'check-ignore', '-q', 'graphify-out']))
+      .not.toThrow();
+    rmSync(join(ws1, 'graphify-out'), { recursive: true });
+
+    // A second run converges the same lines, not a second copy of them.
+    const first = readFileSync(excludeFile, 'utf8');
+    const r2 = runInstall(home, ['install']);
+    expect(r2.code, r2.stderr).toBe(0);
+    expect(readFileSync(excludeFile, 'utf8')).toBe(first);
+  });
+
+  it('is skipped entirely on a server-role box', () => {
+    const home = freshBox('ccrc-inst-gfx-excl-server-');
+    plantFakeVenv(home);
+    const repoA = makeFixtureRepo(home, 'projects/repoA');
+    const r = runInstall(home, ['install', '--role', 'server']);
+    expect(r.code, r.stderr).toBe(0);
+    const excludeFile = join(repoA, '.git', 'info', 'exclude');
+    expect(existsSync(excludeFile) && readFileSync(excludeFile, 'utf8').includes('graphify-out/'))
+      .toBe(false);
   });
 });

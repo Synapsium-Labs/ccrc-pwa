@@ -2933,6 +2933,7 @@ cmd_install() {
   _inst_hooks
   _inst_skills
   _inst_graphify_skill
+  _inst_graph_excludes
   _inst_wrappers
 
   # ── THE LANDING BLOCK, AND WHY DOCTOR IS THE LAST WORD ─────────────────
@@ -3969,6 +3970,27 @@ _inst_graphify_skill() {
   bash "$HOME/.cc-sessions/install-graphify-skill.sh" \
     || _ccrc_die "install-graphify-skill.sh refused — read its lines above"
   echo "install: graphify: skill assembled from the venv package into each account's skills directory"
+}
+
+# D' (spec §4): the exclude precondition needs a WRITER, or the sweep refuses
+# every un-excluded repo forever (ccrc-pwa fails the gate today — D-996).
+_inst_graph_excludes() {
+  [ "$INST_ROLE" = server ] && return 0
+  local roots=("$HOME/projects" "$HOME/worktrees") root d common n=0
+  for root in "${roots[@]}"; do
+    [ -d "$root" ] || continue
+    for d in "$root"/*/ "$root"/*/*/; do
+      [ -d "$d" ] || continue
+      git -C "$d" rev-parse --is-inside-work-tree >/dev/null 2>&1 || continue
+      common=$(git -C "$d" rev-parse --path-format=absolute --git-common-dir) || continue
+      mkdir -p "$common/info"
+      grep -qxF 'graphify-out/' "$common/info/exclude" 2>/dev/null \
+        || { echo 'graphify-out/' >> "$common/info/exclude"; n=$((n+1)); }
+      grep -qxF '.graphifyignore' "$common/info/exclude" 2>/dev/null \
+        || echo '.graphifyignore' >> "$common/info/exclude"
+    done
+  done
+  echo "install: graphify: exclude lines converged (graphify-out/, .graphifyignore; $n new)"
 }
 
 # ── _inst_wrappers — the converger, called as a function ──────────────────
