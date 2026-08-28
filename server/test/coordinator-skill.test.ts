@@ -964,10 +964,13 @@ describe('the coordinator-resume runbook (program-leverage wave 1, spec S3 item 
   });
 
   it('carries a wave-N re-kickoff template, not the wave-1 text the machine hardcodes', () => {
-    // `kickoff()` (StartProgramSheet.tsx:65-68) is correct exactly once per
-    // program; a revive briefed with it re-opens wave 1 on a program at wave N,
-    // and `openRun` dedupes only a still-`planned` row (store.ts:383-388), so
-    // the second open is a second row rather than a no-op.
+    // `kickoff()` in `pwa/src/fleet/StartProgramSheet.tsx` is correct exactly
+    // once per program; a revive briefed with it re-opens wave 1 on a program
+    // at wave N, and `CoordStore.openRun`'s dedupe arm covers only a still-
+    // `planned` row, so the second open is a second row rather than a no-op.
+    // BY SYMBOL, no line numbers: this wave's own comment-only commit shifted
+    // that file and made the first draft of THIS comment stale (review round 1,
+    // M2) — D-1005's argument arriving by the shortest possible route.
     expect(rb()).toContain('open the run for wave <N>');
     expect(flat(rb())).toContain('do not open wave 1 again');
   });
@@ -986,11 +989,27 @@ describe('the coordinator-resume runbook (program-leverage wave 1, spec S3 item 
     expect(rb()).toContain('A dead WORKER is not this door');
   });
 
-  it('names none of the three ungated operator doors', () => {
-    // `allSkillText` already forbids the break door corpus-wide; the other two
-    // are exempt-by-omission with no positive prohibition anywhere, and a
+  it('names none of the ungated operator doors — the list DERIVED, not typed', () => {
+    // `allSkillText` already forbids the break door corpus-wide; the others are
+    // exempt-by-omission with no positive prohibition anywhere, and a
     // wedge-recovery runbook is the file most likely to reach for one.
-    for (const door of ['/api/coord/pause', '/api/runs/:id/abandon', '/api/claims/:id/break']) {
+    //
+    // The list is HARVESTED from `coord-pause-route.test.ts`'s `UNGATED`, not
+    // typed here (review round 1, M7). A typed copy would have been the fourth
+    // projection-without-a-mechanism in this wave — the class D-1000 and
+    // D-1003 exist to delete — and it would fail exactly when it matters:
+    // F5 adds a FOURTH ungated door, and a hand-typed triple would go on
+    // passing while the new door drifted straight past this prohibition.
+    // `UNGATED` is the right source because that suite already pins it against
+    // `coord/routes.ts` in BOTH directions, so this reads a literal something
+    // else keeps honest rather than minting a rival copy.
+    const src = readFileSync(path.join(root, 'server/test/coord-pause-route.test.ts'), 'utf8');
+    const m = /UNGATED = new Set\(\[([^\]]*)\]\)/.exec(src);
+    expect(m, "coord-pause-route.test.ts no longer declares `UNGATED = new Set([...])` — this " +
+      'harvest is reading a shape that moved, and a silent empty list would pass everything').not.toBeNull();
+    const doors = [...(m as RegExpExecArray)[1]!.matchAll(/'([^']+)'/g)].map((d) => d[1]!);
+    expect(doors.length, 'the UNGATED harvest came back empty').toBeGreaterThanOrEqual(3);
+    for (const door of doors) {
       expect(rb(), `resume.md names ${door} — a door the coordinator is not the one to walk through`)
         .not.toContain(door);
     }
@@ -999,14 +1018,18 @@ describe('the coordinator-resume runbook (program-leverage wave 1, spec S3 item 
 
 // ── program-leverage wave 1 (F1): the trigger names the RUN RECORD ─────────
 //
-// `ccd ws-hold` hard-refuses a non-workspace (ccd:4938-4939) and a PWA-started
-// coordinator is a main checkout (StartProgramSheet.tsx:89-90), so the hold arm
-// of the old trigger described a state half the coordinators this skill runs in
-// can never reach — while the WORKER's identical-looking arm is CORRECT and
-// stays, because every `program:` hold lands on the worker's workspace. The run
-// record is the one fact both kinds of coordinator share, and `GET /api/runs`
-// is EXEMPT-BUT-AUTHENTICATED (auth/gate.ts, D-149) precisely so a cookieless
-// fleet-host session can read it.
+// `ccd ws-hold` hard-refuses a non-workspace, and `isMainCheckoutOf`
+// (`pwa/src/fleet/StartProgramSheet.tsx`) is how a PWA-started coordinator is
+// matched — `workspace === null` — so the hold arm of the old trigger described a
+// state half the coordinators this skill runs in can never reach. The WORKER's
+// identical-looking arm is CORRECT and stays: dispatch places `program:` holds on
+// worker workspaces. Not ALWAYS, though — a workspace-resident coordinator can be
+// given one by hand, and `ledger-template.md` still tells an orchestrator to. That
+// contradiction is D-1004, measured and deferred, and it is why the skill's own
+// prose was softened in review round 1 (M5) rather than left as an absolute. The
+// run record is the one fact both kinds of coordinator share, and `GET /api/runs`
+// is EXEMPT-BUT-AUTHENTICATED (`auth/gate.ts`, D-149) precisely so a cookieless
+// fleet-host session can read it. Anchors by SYMBOL — see M2 above.
 describe('the coordinator skill triggers and resumes on the RUN RECORD, not a hold', () => {
   const fm = (): string => skill.slice(4, skill.indexOf('\n---', 4));
 
@@ -1032,7 +1055,12 @@ describe('the coordinator skill triggers and resumes on the RUN RECORD, not a ho
 
   it('states the resume constraint as the SESSION ID, not the workspace', () => {
     expect(flat(skill)).toContain('and it is the SESSION ID, not the workspace');
-    expect(skill, 'the workspace framing is back').not.toContain('same workspace, same id');
+    // WHITESPACE-COLLAPSED like every sibling here, and for the reason `flat`
+    // exists at all: SKILL.md wraps mid-sentence, so a re-added `same
+    // workspace,\nsame id` reads as two lines and walks straight past a raw
+    // `toContain`. A negative that the mutation it names can evade is not a
+    // guard (review round 1, M1).
+    expect(flat(skill), 'the workspace framing is back').not.toContain('same workspace, same id');
   });
 
   it('does not count the hold among the things a fresh coordinator resumes from', () => {

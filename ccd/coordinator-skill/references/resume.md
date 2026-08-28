@@ -28,7 +28,8 @@ open one:
 The default scope of that route excludes closed runs, so a program with no row here is retired. Mail
 addressed to the `coordinator` role with no `runId` then resolves to nothing — the runId-less form needs
 exactly one active program. Mail that names the `runId` explicitly still resolves, and that is the
-documented recovery (`references/wave-lifecycle.md` §3), not a reason to open a fresh run.
+documented recovery (`references/wave-lifecycle.md` §5, `resolveCoordinator`), not a reason to open
+a fresh run.
 
 ## 2. The invariant: same session id, or the program is wedged
 
@@ -115,7 +116,9 @@ Two things make that recovery ordinary rather than frightening. The database is 
 deploy — the newest `~/ccrc-backups/<ts>/coord.db` is the restore path, and it is the FIRST thing to
 check. And the database was never the ground truth in the first place: the committed ledger, the session
 registry and `.prhistory` are. `CoordStore.reconstruct` is the drill that rebuilds a program's runs from
-exactly those three — a TEST rather than an operator tool (`server/test/reconstruction-drill.test.ts`),
-which is why it is a constraint on what may be stored rather than a button. Its rebuilt rows carry no
-claimant at all, and the one-coordinator guard skips rows with none, so a reconstructed program is
-claimable again by whichever session opens its next wave.
+exactly those three — a TEST rather than an operator tool (`server/test/coord-store.test.ts` is what
+exercises the method; `server/test/reconstruction-drill.test.ts` is the separate artifact drill, which
+imports no production code at all and re-derives the same program from the files by hand). That is why
+it is a constraint on what may be stored rather than a button. Its rebuilt rows carry no claimant at
+all, and the one-coordinator guard skips rows with none, so a reconstructed program is claimable again
+by whichever session opens its next wave.

@@ -993,8 +993,60 @@ them); `pwa/src/lib/api.ts:433-435` cites `coord/routes.ts:844` for a route now 
 anchor pass is its own piece of work, and worth doing only alongside something that resolves anchors
 mechanically — otherwise it re-rots on the next refactor.
 
-*(1006..1046 remain unconsumed. Anything found during execution takes the next free one and is appended here
-with the same shape.)*
+### D-1006 (defect in a guard I wrote, review round 1 M1) — a negative that the mutation it names could evade
+`states the resume constraint as the SESSION ID` banned `same workspace, same id` with a RAW
+`toContain`, while every whitespace-sensitive sibling in the same describe routes through `flat()`.
+SKILL.md wraps mid-sentence, so a re-added `same workspace,\nsame id` reads as two lines and walks
+straight past it. **MEASURED both ways:** with the wrapped phrase in SKILL.md the fixed pin is RED and
+the pre-fix raw form is GREEN — the hole was real, not theoretical. Same class as D-1000: a guard that
+cannot red for the thing it guards.
+
+### D-1007 (drift I created, review round 1 M2) — the anchor-fix wave shipped two stale anchors of its own
+`0325367c` was comment-only but still shifted `StartProgramSheet.tsx` by two lines, and two of THIS
+wave's new test comments cited `kickoff()` and the main-checkout predicate by the pre-shift numbers.
+The wave whose item 4 is "fix the stale anchor" created two more inside its own diff — which is
+D-1005's argument ("nothing resolves anchors mechanically, so it re-rots") arriving by the shortest
+possible route. **Decision:** cite by SYMBOL, no line numbers, in both comments.
+
+### D-1008 (over-correction, review round 1 M5) — an absolute the wave's own deferred deviation contradicts
+The rewritten paragraph asserted "every `program:` hold on this fleet sits on a WORKER's workspace".
+`ccd ws-hold` refuses only NON-workspaces, so a workspace-resident coordinator CAN carry one — and
+`ledger-template.md:3-5`, byte-pinned and deliberately untouched here, still tells an orchestrator to
+place exactly that hold (D-1004). Fixing one absolute by writing another is not a fix. **Decision:**
+state what is defensible — dispatch places `program:` holds on worker workspaces, a coordinator may be
+given one by hand, and either way it settles nothing, so ask `GET /api/runs`.
+
+### D-1009 (discipline, review round 1 M6) — six of eight new pins shipped without a measured red
+Task 2 created `resume.md` before Task 3 wrote its pins, so seven of the eight were first-run green;
+the execution record's own "1 failed / 49 passed, exactly the one new assertion" is the proof, and the
+two mutation rows red PRE-EXISTING guards rather than the new pins. Both this plan's Global Constraints
+and the repo's mutation-table rule require a measured red per guard, and this wave had already written
+an explicit exemption note for the one deliberately-green trigger pin — so the standard was known and
+applied unevenly. **Decision:** measure one red per pin (mutate the quoted sentence, observe, revert)
+and append every row to the Execution record. Ordering lesson for later waves: when a task writes the
+subject and a later task writes its pins, the pins have no red available unless they are written first
+or mutated after.
+
+### D-1010 (projection without a mechanism, review round 1 M7) — the ungated-door list was hand-typed
+The new prohibition looped over a typed `['/api/coord/pause','/api/runs/:id/abandon','/api/claims/:id/break']`
+— a second copy of `coord-pause-route.test.ts:172`'s `UNGATED`, in the same wave whose D-1000 and D-1003
+delete exactly that class. It also fails precisely when it matters: F5 adds a FOURTH ungated door (this
+plan's own Note 1 says so), and a typed triple would keep passing while the new door drifted past the
+prohibition. **Decision:** harvest `UNGATED` from that suite — the right source because it is already
+pinned against `coord/routes.ts` in both directions — with a non-vacuity floor on the harvest.
+**MEASURED in the F5 shape:** adding a fourth member to `UNGATED` and naming it in the runbook reds the
+prohibition, so the derivation follows the set.
+
+### D-1011 (wrong attribution, review round 1 M4) — the runbook credited the drill to a file that never runs it
+`resume.md` cited `server/test/reconstruction-drill.test.ts` as what exercises `CoordStore.reconstruct`.
+That file imports no production module at all (`node:fs`, `tmpHelpers`, a `RunSummary` type) and defines
+its own local `reconstruct(dir)` at `:60`; the shipped method is called only from
+`server/test/coord-store.test.ts`, as `store.ts:1836-1838`'s own docstring says. **Decision:** cite
+`coord-store.test.ts` for the method and name the drill file separately for what it actually is — the
+artifact-parsing drill that re-derives the same program from the files by hand.
+
+*(1012..1046 remain unconsumed. Anything found during execution takes the next free one and is appended
+here with the same shape.)*
 
 ---
 
@@ -1071,3 +1123,39 @@ the tree and it is the WORKER's.
 
 Suites, foreground, per package: **server 230 files / 5789 passed** (54 skipped), **agent 18 / 280**,
 **pwa 74 / 1935**. No flake re-runs were needed.
+
+
+---
+
+## Review round 1 (coordinator `ccrc-pwa-brisk-meadow`, mail 94, 2026-08-28)
+
+Verdict: **seven minors, zero blocking, zero refuted.** Every finding was re-verified against the tree
+before it was acted on; all seven held. The run went back to `working` for one fix round.
+
+| # | finding | verified how | outcome |
+|---|---|---|---|
+| M1 | the `same workspace, same id` negative scans raw text while its siblings use `flat()` | read the describe: `flat()` on the four neighbours, raw on this one | **D-1006** — fixed, and the evasion measured both ways |
+| M2 | two of this wave's own new test-comment anchors went stale at tip | `kickoff()` is `:67`, not `:65-68`; the predicate `:92`, not `:89-90` | **D-1007** — both re-cited by symbol |
+| M3 | the runId-explicit mail recovery is wave-lifecycle §5, not §3 | §3 is `Read mail` (`:204`); `resolveCoordinator` is `:411-421`, inside §5 (`:405`) | corrected in `resume.md`; no number — a cross-reference typo with no lesson |
+| M4 | `CoordStore.reconstruct` credited to a file that never calls it | that file imports no production module and defines its own `reconstruct(dir)` at `:60`; the method is called only from `coord-store.test.ts` | **D-1011** — both files now named for what each is |
+| M5 | the softened hold claim was still an absolute | `ws-hold` refuses only non-workspaces; `ledger-template.md:3-5` instructs the contradicting case | **D-1008** — restated defensibly |
+| M6 | six of eight new pins had no measured red | the execution record's own row 2 proves it | **D-1009** — one red measured per pin, rows below |
+| M7 | the door list was hand-typed | it is a second copy of `coord-pause-route.test.ts:172`'s `UNGATED` | **D-1010** — derived, and the F5 shape measured |
+
+### Execution record, round 1 (all mutations applied, measured, reverted)
+
+| pin | mutation | outcome |
+|---|---|---|
+| `names the two id-preserving revives` | `Both of these are the OPERATOR's act` → `Both of these are routine` | **RED** |
+| `spells the revive route WITHOUT a method` | dropped `it is not on the armed gate's exempt list` | **RED** |
+| `wedges the program permanently` | `nothing in the HTTP API ever rewrites` → `little rewrites` | **RED** |
+| `carries a wave-N re-kickoff template` | `do not open wave 1 again` → `do not reopen the first wave` | **RED** |
+| `points at the reconstruction drill` | `CoordStore.reconstruct` → `the rebuild routine` | **RED** |
+| `not its recovery for a dead worker` | `A dead WORKER is not this door` → `A dead worker is a different case` | **RED** |
+| `names none of the ungated operator doors` | named `/api/coord/pause` in the runbook | **RED** |
+| `names none of the ungated operator doors` (F5 shape) | added a 4th member to `UNGATED` **and** named it in the runbook | **RED** — the derivation follows the set |
+| `states the resume constraint as the SESSION ID` | a wrapped `same workspace,\nsame id` in SKILL.md | **RED** with `flat()` |
+| the same, with the PRE-FIX raw `toContain` | identical SKILL.md text | **GREEN** — D-1006's hole, measured |
+
+`is INSIDE the corpus every whole-file assertion in this suite reads` keeps its original red (round-0
+row 2). The whole describe is green before and after every mutation above.

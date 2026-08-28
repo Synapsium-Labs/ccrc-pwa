@@ -13,8 +13,10 @@ which wave that program is on. If you die mid-wave the operator starts a fresh
 you, and it resumes from those two things. Write accordingly: never carry a
 decision only in your own context. The hold is NOT one of them: `ccd ws-hold`
 refuses a main checkout outright, so a coordinator that is not
-workspace-resident carries no hold at all, and every `program:` hold on this
-fleet sits on a WORKER's workspace.
+workspace-resident carries no hold at all, and the dispatch route places
+`program:` holds on WORKER workspaces. A workspace-resident coordinator CAN be
+given one by hand — which is precisely why a hold is not a thing to resume
+from: present or absent, it settles nothing. Ask `GET /api/runs`.
 
 **One real constraint on that resumability, and it is the SESSION ID, not the
 workspace:** `POST /api/runs`'s `claimedBy` is your tmux-derived session id
