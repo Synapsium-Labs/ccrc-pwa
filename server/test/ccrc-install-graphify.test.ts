@@ -69,6 +69,11 @@ const TREE_FILES = [
   'ccd/worker-skill',
   'ccd/install-coordinator-skill.sh',
   'ccd/install-worker-skill.sh',
+  // graphify Task 3: `_inst_graphify_skill` stages this beside the other two,
+  // right after `_inst_skills`, through the same `_inst_atomic`. Without it
+  // in the fixture tree every test in this file (all of which run the full
+  // spine on a role other than `server`) dies at that step.
+  'ccd/install-graphify-skill.sh',
 ];
 
 const TREE_STUBS: Record<string, string> = {
@@ -251,6 +256,17 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT']) delete env[k];
   env['CCRC_VERIFY_SETTLE'] = '0';
   env['CCRC_VERIFY_WINDOW'] = '0';
+  // graphify Task 3: skips `install-graphify-skill.sh`'s venv-python PKG
+  // resolution, exactly as `ccrc-install.test.ts`'s own `ccrcEnv` now does.
+  // `plantFakeVenv` below builds `bin/python` as a fake that logs argv and
+  // prints nothing, so the installer's `"$VENV/bin/python" -c 'import
+  // graphify…'` would read PKG="" and refuse — a fixture reason, not
+  // anything this file's three tests are about.
+  const gfxPkg = join(home, 'fixture-graphify-pkg');
+  mkdirSync(join(gfxPkg, 'skills', 'claude', 'references'), { recursive: true });
+  writeFileSync(join(gfxPkg, 'skill.md'), '# fixture graphify skill\n');
+  writeFileSync(join(gfxPkg, 'skills', 'claude', 'references', 'fixture-ref.md'), 'fixture ref\n');
+  env['CCRC_GRAPHIFY_PKG'] = gfxPkg;
   return env;
 }
 

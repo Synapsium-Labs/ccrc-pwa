@@ -142,6 +142,9 @@ function plantInstalledBox(home: string): void {
   writeFileSync(join(reg, 'notify.sh'), '#!/bin/sh\n# notify\n', { mode: 0o755 });
   writeFileSync(join(reg, 'install-coordinator-skill.sh'), '#!/bin/sh\n', { mode: 0o755 });
   writeFileSync(join(reg, 'install-worker-skill.sh'), '#!/bin/sh\n', { mode: 0o755 });
+  // graphify Task 3: `_inst_graphify_skill` stages this beside the other two
+  // installers, the same lane `_uninst_cc_sessions` must remove it from.
+  writeFileSync(join(reg, 'install-graphify-skill.sh'), '#!/bin/sh\n', { mode: 0o755 });
   writeFileSync(join(reg, 'coordinator-skill', 'SKILL.md'), '# the coordinator skill\n');
   writeFileSync(join(reg, 'worker-skill', 'SKILL.md'), '# the worker skill\n');
   // Two account homes. claude2: one managed entry per event shape the
@@ -344,13 +347,40 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     const r = runVerb(home, 'uninstall', ['--force']);
     expect(r.code, r.stderr).toBe(0);
     for (const f of ['session-hook.sh', 'install-session-hooks.sh', 'notify.sh',
-      'install-coordinator-skill.sh', 'install-worker-skill.sh',
+      'install-coordinator-skill.sh', 'install-worker-skill.sh', 'install-graphify-skill.sh',
       'coordinator-skill', 'worker-skill']) {
       expect(existsSync(join(home, '.cc-sessions', f)), `${f} survived`).toBe(false);
     }
     for (const f of ['alpha.uuid', 'coordinator-paused', 'mail-disabled']) {
       expect(existsSync(join(home, '.cc-sessions', f)), `${f} was removed`).toBe(true);
     }
+  });
+
+  it('graphify skills: skills/graphify is removed from every rostered home, while OTHER skills there survive', () => {
+    // `_uninst_graphify_skills` (graphify Task 3) — beside `_uninst_cc_sessions`
+    // in the sweep, but a DIFFERENT lane: the assembled skill lives one level
+    // down, in each rostered home's own `skills/graphify`, never under
+    // `~/.cc-sessions`. A dummy `skills/ccrc-worker` in the same directory is
+    // the proof the sweep is scoped to the one name, not a directory wipe.
+    const home = mkTmp('ccrc-uninst-graphify-skills-');
+    plantInstalledBox(home);
+    for (const acct of ['claude2', 'claude3']) {
+      const skills = join(home, `.claude-${acct}`, 'skills');
+      mkdirSync(join(skills, 'graphify', 'references'), { recursive: true });
+      writeFileSync(join(skills, 'graphify', 'SKILL.md'), '# the graphify skill\n');
+      writeFileSync(join(skills, 'graphify', '.graphify_version'), '0.9.9');
+      mkdirSync(join(skills, 'ccrc-worker'), { recursive: true });
+      writeFileSync(join(skills, 'ccrc-worker', 'SKILL.md'), '# the worker skill (dummy)\n');
+    }
+    const r = runVerb(home, 'uninstall');
+    expect(r.code, r.stderr).toBe(0);
+    for (const acct of ['claude2', 'claude3']) {
+      const skills = join(home, `.claude-${acct}`, 'skills');
+      expect(existsSync(join(skills, 'graphify')), `${acct}: graphify survived`).toBe(false);
+      expect(existsSync(join(skills, 'ccrc-worker', 'SKILL.md')),
+        `${acct}: an unrelated skill was swept too`).toBe(true);
+    }
+    expect(r.stdout).toMatch(/^uninstall: graphify skills: removed from 2 account home\(s\)/m);
   });
 
   it('the tree and the executables go; ~/.ccrc, worktrees and backups are PRESERVED without --purge', () => {

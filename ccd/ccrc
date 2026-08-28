@@ -2932,6 +2932,7 @@ cmd_install() {
   _inst_graphify_engine
   _inst_hooks
   _inst_skills
+  _inst_graphify_skill
   _inst_wrappers
 
   # ── THE LANDING BLOCK, AND WHY DOCTOR IS THE LAST WORD ─────────────────
@@ -3959,6 +3960,17 @@ _inst_skills() {
   echo "install: skills: ccrc-coordinator and ccrc-worker in each account's skills directory"
 }
 
+# The graphify skill is NOT one of _inst_skills' names on purpose (spec §B):
+# that loop pins CCRC_SKILL_SRC to a vendored ~/.cc-sessions tree, and this
+# skill's source of truth is the installed package.
+_inst_graphify_skill() {
+  [ "$INST_ROLE" = server ] && return 0
+  _inst_atomic "$BOX_TREE_DIR/ccd/install-graphify-skill.sh" "$HOME/.cc-sessions/install-graphify-skill.sh" 755
+  bash "$HOME/.cc-sessions/install-graphify-skill.sh" \
+    || _ccrc_die "install-graphify-skill.sh refused — read its lines above"
+  echo "install: graphify: skill assembled from the venv package into each account's skills directory"
+}
+
 # ── _inst_wrappers — the converger, called as a function ──────────────────
 # NOT `ccrc wrappers` as a subprocess, and not a copy of its logic: it is in
 # this file, so it is one function call, and its output (per-account lines,
@@ -4460,6 +4472,7 @@ cmd_uninstall() {
   _uninst_hooks
   _uninst_wrappers
   _uninst_cc_sessions
+  _uninst_graphify_skills
   _uninst_tree_bins
   _uninst_keep_asides
   [ "$purge" -eq 1 ] && _uninst_purge
@@ -4607,10 +4620,57 @@ _uninst_cc_sessions() {
   fi
   rm -f -- "$reg/session-hook.sh" "$reg/install-session-hooks.sh" "$reg/notify.sh" \
     "$reg/install-coordinator-skill.sh" "$reg/install-worker-skill.sh" \
+    "$reg/install-graphify-skill.sh" \
     || _ccrc_die "removing ccrc's files under $reg failed"
   rm -rf -- "$reg/coordinator-skill" "$reg/worker-skill" \
     || _ccrc_die "removing the skill trees under $reg failed"
   echo "uninstall: ~/.cc-sessions: ccrc's own artifacts removed (hooks, notify, both skill trees); the registry rows and operator switches stay"
+}
+
+# ── _uninst_graphify_skills — the per-home graphify skill directories ─────
+# `_uninst_cc_sessions` removes ccrc's OWN artifacts under `$HOME/.cc-sessions`
+# — including the deployed `install-graphify-skill.sh` itself — but the skill
+# it assembles lives one level down, in EACH ROSTERED HOME's own
+# `skills/graphify`: the identical asymmetry `_uninst_wrappers` and
+# `_uninst_hooks` already sweep by roster rather than by a single directory,
+# because skills resolve per `CLAUDE_CONFIG_DIR` and there is no one place
+# under `~/.cc-sessions` that holds every home's copy.
+#
+# SOURCED IN A SUBSHELL, `_inst_dirs`' reason: the roster projection declares
+# `_ccrc_cfg_dir` in THIS FILE's own `_ccrc_*` namespace, and a subshell means
+# its code cannot outlive this one step.
+#
+# realpath-de-duplicated for the reason `install-graphify-skill.sh` de-dupes on
+# the way IN: two rostered homes can symlink `skills/` into the same real
+# directory (`.claude-gpt` -> `.claude/skills` on the reference fleet), and a
+# second `rm -rf` through that symlink would be a no-op anyway — de-duping
+# first keeps the reported count honest about how many directories this run
+# actually touched.
+_uninst_graphify_skills() {
+  local sh="$HOME/.ccrc/accounts.sh"
+  if [ ! -f "$sh" ]; then
+    echo "uninstall: graphify skills: no roster projection at $sh — no account homes to sweep"
+    return 0
+  fi
+  local n
+  n="$(
+    # shellcheck source=/dev/null
+    . "$sh" || exit 1
+    removed=0
+    declare -A seen=()
+    for a in ${CCRC_ACCOUNTS[@]+"${CCRC_ACCOUNTS[@]}"}; do
+      d="$(_ccrc_cfg_dir "$a")"
+      [ -n "$d" ] && [ -d "$d/skills" ] || continue
+      real="$(realpath "$d/skills" 2>/dev/null)" || continue
+      [ -n "${seen[$real]:-}" ] && continue
+      seen[$real]=1
+      [ -d "$real/graphify" ] || continue
+      rm -rf -- "$real/graphify" || exit 1
+      removed=$((removed + 1))
+    done
+    printf '%s' "$removed"
+  )" || _ccrc_die "could not remove the graphify skill directories named by $sh"
+  echo "uninstall: graphify skills: removed from $n account home(s); other skills in the same directories were left alone"
 }
 
 # The tree, then the executables `_inst_bins` placed OUT of it. Removing the

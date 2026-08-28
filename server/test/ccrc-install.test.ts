@@ -177,6 +177,11 @@ const TREE_FILES = [
   'ccd/worker-skill',
   'ccd/install-coordinator-skill.sh',
   'ccd/install-worker-skill.sh',
+  // graphify Task 3: `_inst_graphify_skill` stages this beside the other two
+  // installers, through the same `_inst_atomic`. It ships alone — no
+  // `ccd/graphify-skill` tree — because its SRC is assembled from the
+  // installed package at run time, never vendored (spec §B).
+  'ccd/install-graphify-skill.sh',
 ];
 
 /** The two BUILD ARTIFACTS `_inst_tree` refuses to place a tree without. They
@@ -568,6 +573,22 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   // a production timeout, and one call site is where it cannot be forgotten.
   env['CCRC_VERIFY_SETTLE'] = '0';
   env['CCRC_VERIFY_WINDOW'] = '0';
+  // ── graphify Task 3: CCRC_GRAPHIFY_PKG skips the venv-python PKG
+  // resolution `_inst_graphify_skill` would otherwise run. The `python3`
+  // stub above only intercepts `-m venv` — the venv it BUILDS carries a
+  // fake `bin/python` that answers any argv with exit 0 and no stdout
+  // (recorded to `venv-python-calls`, for the engine step's own assertions).
+  // Left alone, `install-graphify-skill.sh`'s
+  // `"$VENV/bin/python" -c 'import graphify…'` would read that empty stdout
+  // as PKG="" and refuse — a fixture reason breaking every unrelated test in
+  // this file that runs the full spine (role != server). Pointing this env
+  // var at a minimal fixture package here, once, is the smaller change than
+  // teaching the shared fake venv python to answer a `-c` argv.
+  const gfxPkg = join(home, 'fixture-graphify-pkg');
+  mkdirSync(join(gfxPkg, 'skills', 'claude', 'references'), { recursive: true });
+  writeFileSync(join(gfxPkg, 'skill.md'), '# fixture graphify skill\n');
+  writeFileSync(join(gfxPkg, 'skills', 'claude', 'references', 'fixture-ref.md'), 'fixture ref\n');
+  env['CCRC_GRAPHIFY_PKG'] = gfxPkg;
   return env;
 }
 
@@ -666,9 +687,16 @@ function pathWithout(home: string, missing: string): string {
   // and it now runs before the git-absent test's own subject (doctor's `FAIL
   // git`) is ever reached. Measured the same way `stat` was: without this
   // entry, `pathWithout(home, 'git')` died at the new step instead.
+  //
+  // `realpath` joins it in graphify Task 3, same trap again: measured red —
+  // `install-graphify-skill.sh`'s realpath-de-dup block (`_inst_graphify_skill`,
+  // right after `_inst_skills`, unconditional on every role but `server`) has
+  // no fixture stub, so a PATH missing it fails every home's `realpath
+  // "$dir/skills"` and the step's own `rc=1` dies the whole install before the
+  // git-absent test's subject is ever reached.
   for (const b of ['mkdir', 'cp', 'mv', 'rm', 'cat', 'chmod', 'cmp', 'date',
     'node', 'git', 'npm', 'rsync', 'bash', 'sleep', 'jq', 'mktemp', 'basename',
-    'diff', 'tmux', 'python3', 'flock', 'timeout', 'stat', 'awk']) {
+    'diff', 'tmux', 'python3', 'flock', 'timeout', 'stat', 'awk', 'realpath']) {
     if (b === missing || existsSync(join(d, b))) continue;
     symlinkSync(realPath(b), join(d, b));
   }
@@ -1483,6 +1511,10 @@ describe('ccrc install: the executables and files it installs', () => {
         placed(home, 'ccd', 'install-coordinator-skill.sh'), 0o755],
       [join(home, '.cc-sessions', 'install-worker-skill.sh'),
         placed(home, 'ccd', 'install-worker-skill.sh'), 0o755],
+      // graphify Task 3: `_inst_graphify_skill` stages this beside the other
+      // two, through the same `_inst_atomic`, right after `_inst_skills`.
+      [join(home, '.cc-sessions', 'install-graphify-skill.sh'),
+        placed(home, 'ccd', 'install-graphify-skill.sh'), 0o755],
       [join(home, '.tmux.conf'), placed(home, 'ccd', 'tmux.conf'), 0o644],
       [join(home, '.claude', 'statusline-command.sh'),
         placed(home, 'ccd', 'statusline-command.sh'), 0o755],
@@ -1514,6 +1546,8 @@ describe('ccrc install: the executables and files it installs', () => {
       // the same `_inst_atomic` (worker-skill Task 4).
       join(home, '.cc-sessions', 'install-coordinator-skill.sh'),
       join(home, '.cc-sessions', 'install-worker-skill.sh'),
+      // graphify Task 3: staged beside them, through the same `_inst_atomic`.
+      join(home, '.cc-sessions', 'install-graphify-skill.sh'),
       join(home, '.tmux.conf'),
       join(home, '.claude', 'statusline-command.sh'),
     ];
@@ -1637,6 +1671,11 @@ describe('ccrc install: the order is stated in one place', () => {
       // fresh box run before that step they would skip the whole roster and
       // exit 0.
       '_inst_skills',
+      // graphify Task 3. Right after `_inst_skills`, a SEPARATE function
+      // rather than a third name inside its loop: that loop pins
+      // `CCRC_SKILL_SRC` to a vendored `~/.cc-sessions` tree, and this
+      // skill's source of truth is the installed package instead (spec §B).
+      '_inst_graphify_skill',
       '_inst_wrappers',
     ]);
   });
@@ -2579,6 +2618,8 @@ describe('ccrc install: running the WHOLE verb twice', () => {
       join(home, '.cc-sessions', 'notify.sh'),
       join(home, '.cc-sessions', 'install-coordinator-skill.sh'),
       join(home, '.cc-sessions', 'install-worker-skill.sh'),
+      // graphify Task 3: staged beside them, through the same `_inst_atomic`.
+      join(home, '.cc-sessions', 'install-graphify-skill.sh'),
       // …and the two staged skill TREES, which are not `_inst_atomic`
       // destinations at all: `_inst_tree_copy` converges a directory, and the
       // file inside it is what a re-run must not rewrite (worker-skill Task 4).
