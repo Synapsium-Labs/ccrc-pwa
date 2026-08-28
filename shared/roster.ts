@@ -86,6 +86,28 @@ export interface AccountDef {
    *  `gpt` out of that scoring entirely, rather than letting a permanent
    *  zero win it every placement. */
   telemetry: 'anthropic' | 'none';
+  /** The operator's declaration that this entry is roster PLUMBING rather than
+   *  one of their accounts.
+   *
+   *  It exists because `parseRoster` requires EXACTLY ONE `upstream` entry (see
+   *  the refusal below) whose only job is to name the Claude Code binary every
+   *  generated wrapper execs (`shared/wrapper.mjs`) — and an `upstream` account
+   *  runs with no `CLAUDE_CONFIG_DIR`, so its config dir is always Claude
+   *  Code's default. On a box where that default dir is driven by another tool,
+   *  ccrc places no work there and the entry names no account the operator
+   *  holds; it is a filename, and every surface that presents it as an account
+   *  is stating something false.
+   *
+   *  DECLARED, NEVER DERIVED. The tempting derivation — `homeAble: false` plus
+   *  `telemetry: 'none'` — is exactly `gpt`: a REAL opt-in account a session
+   *  reaches on purpose with `ccd prefer`, which
+   *  `pwa/test/accounts-screen.test.tsx`'s "every account, never hidden"
+   *  invariant requires a row for. No predicate over the other fields can tell
+   *  the two apart, so only the operator can say which this is.
+   *
+   *  Optional in the FILE and defaulted false here, so every roster written
+   *  before the field existed parses and renders exactly as it did. */
+  hidden: boolean;
 }
 
 /**
@@ -214,7 +236,7 @@ const SECRETS_SAFE_RE = /^[A-Za-z0-9._/-]+$/;
 const EXEC_KINDS: ReadonlySet<string> = new Set(['upstream', 'generated', 'external']);
 const ROOT_KEYS: ReadonlySet<string> = new Set(['version', 'accounts']);
 const ACCOUNT_KEYS: ReadonlySet<string> = new Set(
-  ['id', 'label', 'configDirSuffix', 'exec', 'homeAble', 'hue', 'telemetry'],
+  ['id', 'label', 'configDirSuffix', 'exec', 'homeAble', 'hue', 'telemetry', 'hidden'],
 );
 // `upstream` and `external` carry no fields beyond the discriminator;
 // `generated` is the only kind with a second, optional one. Split so a typo
@@ -420,6 +442,20 @@ function parseAccount(raw: unknown, index: number): Draft {
     );
   }
 
+  // OPTIONAL, unlike every field around it: absent means false, which is what
+  // makes this additive to rosters that predate it. But a PRESENT value must
+  // still be a boolean — a typo'd `"false"` is a truthy string, and truthiness
+  // here would silently erase an account from every surface that lists one,
+  // which is the loudest possible failure to have chosen leniency for.
+  const hiddenRaw = raw['hidden'];
+  if (hiddenRaw !== undefined && typeof hiddenRaw !== 'boolean') {
+    throw new RosterError(
+      `account "${id}" has a non-boolean hidden.`,
+      `Set "hidden" to true or false for account "${id}" in ${ROSTER_PATH}, or remove the key.`,
+    );
+  }
+  const hidden = hiddenRaw === true;
+
   const telemetry = raw['telemetry'];
   if (telemetry !== 'anthropic' && telemetry !== 'none') {
     throw new RosterError(
@@ -445,7 +481,7 @@ function parseAccount(raw: unknown, index: number): Draft {
     hue = hueRaw;
   }
 
-  return { id, label, configDirSuffix, exec, homeAble, telemetry, hue };
+  return { id, label, configDirSuffix, exec, homeAble, telemetry, hue, hidden };
 }
 
 /**

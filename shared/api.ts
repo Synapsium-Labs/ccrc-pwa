@@ -2263,6 +2263,16 @@ export interface RosterWire {
   hue: Hue;
   /** Whether ccd's least-loaded picker may land a fresh session here. */
   homeAble: boolean;
+  /** True when the roster declares this entry PLUMBING rather than an account —
+   *  see `AccountDef.hidden` (`shared/roster.ts`) for what that means and why
+   *  no predicate over the other fields can derive it.
+   *
+   *  ADDITIVE, and `FLEET_PROTO` is deliberately not bumped for it. A reader
+   *  must test `=== true` and never truthiness: a server built before this
+   *  field omits it, and ABSENCE MEANS "an account", so an older payload must
+   *  keep rendering every entry exactly as it did. `rosterWrapperIds`
+   *  (`pwa/src/lib/accounts.ts`) is the single reader that applies it. */
+  hidden: boolean;
 }
 
 /**

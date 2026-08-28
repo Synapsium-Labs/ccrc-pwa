@@ -22,12 +22,17 @@
 // `--acct-*` name fell through to `claude`'s cyan).
 import type { RosterWire } from '../../shared/api';
 
+// `hidden: false` on every entry, spelled out rather than defaulted: the field
+// is REQUIRED on `RosterWire` so a handler cannot forget to emit it, and this
+// fixture is what the tests treat as "what production actually sends". The two
+// cases that differ — a declared-plumbing entry, and an OLDER wire that omits
+// the key altogether — are built by the tests that are about them.
 export const TEST_ROSTER: RosterWire[] = [
-  { id: 'claude', label: 'team·max', hue: 'cyan', homeAble: true },
-  { id: 'claude2', label: 'team·alt', hue: 'violet', homeAble: true },
-  { id: 'claude-corp', label: 'team·b', hue: 'blue', homeAble: true },
+  { id: 'claude', label: 'team·max', hue: 'cyan', homeAble: true, hidden: false },
+  { id: 'claude2', label: 'team·alt', hue: 'violet', homeAble: true, hidden: false },
+  { id: 'claude-corp', label: 'team·b', hue: 'blue', homeAble: true, hidden: false },
   // Opt-in only: a lane a session reaches solely by being sent there on
   // purpose, never one ccd's `_ws_least_loaded` chooses on its own.
-  { id: 'gpt', label: 'gpt', hue: 'magenta', homeAble: false },
-  { id: 'claude-dev0', label: 'team·d', hue: 'green', homeAble: true },
+  { id: 'gpt', label: 'gpt', hue: 'magenta', homeAble: false, hidden: false },
+  { id: 'claude-dev0', label: 'team·d', hue: 'green', homeAble: true, hidden: false },
 ];

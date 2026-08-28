@@ -89,5 +89,19 @@ export function homeAbleLabelList(roster: readonly RosterWire[]): string {
  *  session running on a wrapper the roster dropped (or has not caught up to
  *  yet) still gets a row rather than vanishing. */
 export function rosterWrapperIds(roster: readonly RosterWire[]): string[] {
-  return roster.map((a) => a.id);
+  // THE SINGLE READER of `hidden` (shared/api.ts says so), and both of this
+  // function's callers want exactly this list: the accounts screen's rows and
+  // the swap sheet's targets are both "the accounts this box has", and a
+  // roster entry the operator declared plumbing is not one.
+  //
+  // `!== true`, never `!a.hidden`-by-truthiness on a possibly-absent field: a
+  // server built before `hidden` existed omits it, and absence must mean "an
+  // account" so an older payload renders unchanged.
+  //
+  // This does NOT touch `accountLabel`/`accountHue` below, on purpose. A
+  // session can be RUNNING on a plumbing lane (ccd swap, or a row that
+  // predates the declaration), and that row still has to render its account's
+  // name and colour. Not listing a lane and not being able to name it are
+  // different things.
+  return roster.filter((a) => a.hidden !== true).map((a) => a.id);
 }
