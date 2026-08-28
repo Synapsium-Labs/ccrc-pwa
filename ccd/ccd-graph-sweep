@@ -190,7 +190,7 @@ _gs_build() {    # contained build; sets BUILD_OUTCOME/BUILD_REASON; rc: 0 ok / 
     after_sz=$(stat -c %s "$out/graph.json"); after_mt=$(stat -c %Y "$out/graph.json")
   fi
   # refused-shrink: exit 1 AND graph.json untouched AND the shrink message.
-  # D-N (Task 7): the brief anchored this pin on export.py's `to_json` guard
+  # D-1062 (Task 7): the brief anchored this pin on export.py's `to_json` guard
   # (grep 'shrank\|shrink' export.py) — that guard exists (export.py:486-500)
   # but is NOT the code path `graphify update .` runs (0.9.9, installed at
   # ~/.local/lib/python3.12/site-packages/graphify). `update` dispatches to

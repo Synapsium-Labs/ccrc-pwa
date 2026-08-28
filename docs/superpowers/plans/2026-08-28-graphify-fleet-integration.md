@@ -1597,6 +1597,34 @@ describe('graph-sweep: real-engine integration (venv-gated; quiet-box CI is the 
 _(D-995..D-998 pre-allocated at plan time — see "Deviation block" above. Execution-time deviations
 are appended here with ledger-allocated numbers.)_
 
+- **D-1061** (Task 11) — the brief's plain-English doctor condition 6 ("census absent → WARN 'sweep
+  has never run'") would desensitize a fresh install permanently: `OnBootSec=5min` guarantees no box
+  has a census for at least five minutes, so the WARN could never be cleared by fixing anything —
+  the exact failure mode D-139 exists to prevent. Implemented instead as a silent absent-census arm:
+  `ccd/ccrc-doctor-checks:2565` (and the reused arm at `:2619`), tests at
+  `server/test/ccrc-doctor-graphify.test.ts:291,297`. Already committed in source (Task 11).
+- **D-1062** (Task 7) — the shrink-refusal literal the build discriminator greps for is pinned on
+  `watch.py`'s `_check_shrink` ("Refusing to overwrite"), NOT `export.py` as the plan anchored:
+  `export.py`'s own `to_json` shrink guard exists but is unreachable from the code path `graphify
+  update .` actually runs (0.9.9). Fixed the `# D-N (Task 7)` placeholder to `# D-1062` at
+  `ccd/ccd-graph-sweep:193`.
+- **D-1063** (R-1) — `skipped-audit` is dropped from the census outcome vocabulary, amending D-998:
+  `ws-audit` persists no on-disk artifact (Task 0's measurement), so there is nothing for the sweep
+  to read to detect an "outstanding audit token" state; `ws-reap`'s own state-changed refusal is the
+  fail-safe instead. `ccd/ccd-graph-sweep:73-74` (comment) — no `skipped-audit` outcome exists
+  anywhere in the shipped sweep.
+- **D-1064** (R-3) — the exclude gate is `git check-ignore -q graphify-out/` with a **trailing
+  slash**; without it, every never-built tree refuses on pass 1 (the bare form matches a
+  differently-shaped ignore rule than the one the exclude writer actually converges).
+  `ccd/ccd-graph-sweep:230`; mirrored by the doctor check at `ccd/ccrc-doctor-checks:2539-2551`.
+- **D-1065** (R-8) — the deploy skill arm is pin-gated: an ungated
+  `bash ~/.cc-sessions/install-graphify-skill.sh` under `deploy.sh`'s `set -euo pipefail` aborted the
+  entire agent lane on a box that had only ever run `deploy.sh agent` (no `~/.ccrc/graphify.pin`,
+  since engine provisioning is `ccrc install`-only). A pinless box now defers loudly instead
+  (`deploy/deploy.sh:728-737`); `deploy.sh` never provisions the engine itself — confirmed zero
+  `_inst_graphify_engine`/venv references in that file (single-definition: the engine's one
+  provisioning site stays `ccd/ccrc`).
+
 ## Task 0 findings
 
 Measured 2026-08-28 on `openclaw` (live fleet box), read-only. Full commands + raw output:
@@ -1638,3 +1666,12 @@ wrote. Registry field-suffix enumeration confirms no `.audit`/`.token`/`.reap`/`
 exists in `~/.cc-sessions/`. Task 9's sweep and Task 10's uninstaller have no on-disk audit artifact
 to discover or avoid — consent is carried only in the caller's copy-pasted token string, never
 persisted.
+
+**Task 12 rollout checklist (deploy is the operator's own step, AGENT-FIRST — this build ships no
+verb that performs it):** `bash deploy/deploy.sh agent <fleet-host>` before the server lane; on the
+fleet box, `ccrc install` (or `ccrc update`) provisions the engine, the skill, the excludes and turns
+the legacy hooks off; `ccrc doctor` should exit 0 including the new `graphify` line; watch the first
+sweep pass's census (`~/.ccrc/graph-sweep.json`) for `status: ok`; and, immediately before that
+deploy, re-grep the fleet box's installed package for the shrink-refusal literal
+(`ccd/ccd-graph-sweep`'s own comment at its shrink-discriminator check names the exact grep) in case
+the pinned version's message has moved again.

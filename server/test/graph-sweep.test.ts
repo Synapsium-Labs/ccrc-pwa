@@ -373,3 +373,37 @@ describe('graph-sweep: idle gate (Task 9)', () => {
     expect(outcomeOf(repo)).toBe('stale-rebuilt');
   });
 });
+
+const realVenv = process.env.CCRC_GRAPHIFY_TEST_VENV;   // set on the fleet box only
+const itVenv = realVenv && fs.existsSync(path.join(realVenv, 'bin', 'graphify')) ? it : it.skip;
+
+describe('graph-sweep: real-engine integration (venv-gated; quiet-box CI is the arbiter)', () => {
+  // A copied venv still runs: bin/graphify's shebang names the SOURCE venv's
+  // python by absolute path, so the copy delegates to the real interpreter and
+  // site-packages. The fixture only needs the entrypoint at its own $HOME path.
+  const useRealEngine = () => {
+    fs.cpSync(realVenv!, j('.ccrc', 'graphify-venv'), { recursive: true });
+    const v = execFileSync(path.join(realVenv!, 'bin', 'graphify'), ['--version'],
+      { encoding: 'utf8' }).trim().split(' ')[1];
+    fs.writeFileSync(j('.ccrc', 'graphify.pin'), v + '\n');
+  };
+  itVenv('row 5b — NO_BACKUP suppresses the dated dir on an armed (semantic-marked) store', () => {
+    const repo = makeRepo('semantic');
+    fs.mkdirSync(path.join(repo, 'graphify-out'), { recursive: true });
+    fs.writeFileSync(path.join(repo, 'graphify-out', '.graphify_semantic_marker'), '');
+    useRealEngine();
+    runSweep({ CCRC_GRAPH_BUILD_TIMEOUT: '300' });
+    const dated = fs.readdirSync(path.join(repo, 'graphify-out'))
+      .filter((n) => /^\d{4}-\d{2}-\d{2}$/.test(n));
+    expect(dated).toEqual([]);                    // export.py:45 honoured end-to-end
+  });
+  itVenv('row 18 behavioural — GRAPHIFY_MAX_WORKERS bounds the extraction pool', () => {
+    const repo = makeRepo('busy50');
+    for (let i = 0; i < 50; i++) fs.writeFileSync(path.join(repo, `m${i}.py`), `x${i} = ${i}\n`);
+    git(repo, 'add', '.'); git(repo, 'commit', '-qm', 'files');
+    useRealEngine();
+    runSweep({ CCRC_GRAPH_BUILD_TIMEOUT: '300', CCRC_GRAPH_MAX_WORKERS: '1' });
+    const log = fs.readFileSync(j('.ccrc', 'graph-sweep.log'), 'utf8');
+    expect(log).toMatch(/\[1 workers?\]/);       // graphify logs "[N workers]"
+  });
+});
