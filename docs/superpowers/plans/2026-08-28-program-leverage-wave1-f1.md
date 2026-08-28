@@ -1044,3 +1044,30 @@ than inventing a line number.
 no new imports. `flat` is defined at module scope and is only ever CALLED inside `it` bodies, so a describe
 written above it may use it. The corpus consts must stay ABOVE their first use (`allSkillText` is read in the
 census at the top of the file), which is where they already sit.
+
+---
+
+## Execution record (measured, 2026-08-28)
+
+Every red below was observed before its fix landed; every mutation was applied, measured and reverted.
+
+| # | what was measured | outcome |
+|---|---|---|
+| 1 | `resume.md` created, `REQUIRED_REFS` untouched | **RED** — `wrapper-roster-fixture.test.ts:409`, `declared` missing `resume.md` |
+| 2 | the coverage pin, against the hand-typed `allSkillText` | **RED** — 1 failed / 49 passed, exactly the one new assertion |
+| 3 | D-1001: `POST /api/sessions/:id/ensure` spelled with its method in `resume.md` | **RED** — `auth-passkey.test.ts:2321`, `blocked` = `["POST /api/sessions/:id/ensure"]`. Reverted. |
+| 4 | mutation: `REFERENCE_NAMES` restored to the four-element literal | **RED** — the coverage pin. Reverted. |
+| 5 | mutation: `A wedged workspace is not cleared with ws-rm.` appended to `resume.md` | **RED** — `ws-rm appears 2×; only the forbidding clause may name it: expected 2 to be 1`. Reverted. **This is the proof spec §3's stated census constraint is now a mechanism for the new file rather than a request.** |
+| 6 | mutation: `` `POST /api/runs/:id/resurrect` `` appended to `resume.md` | **RED** — `names no route the server does not register`. Reverted. |
+| 7 | the four trigger/resume pins, against the pre-fix `SKILL.md` | **RED** — 4 failed / 1 passed. The passing one is `does not over-correct into asserting the coordinator is a main checkout`, kept deliberately as a regression guard (see its own comment). |
+| 8 | Task 3 Step 6 mutation 4 (a numeric host literal in `resume.md`) | **NOT RUN**, as the plan directs: `topology-clean`'s history scan reads every blob the branch introduces, so an interrupted step would publish the token permanently. The property is covered by the derivation the same three-way as mutations 4–6. |
+
+Constraints re-measured on the finished branch: `ws-reap`/`ws-rm`/`ws-gc` = 1 each across SKILL.md + all
+five references; `/api/claims/:id/break` = 0 in every corpus file; `resume.md` carries zero curly
+apostrophes, zero `curl`, zero `CCRC_SERVER_URL`, no numeric host literal, and exactly three METHOD-spelled
+routes (`GET /api/runs`, `GET /api/runs/:id/items`, `POST /api/runs`) — all three in `EXEMPT`;
+`SKILL.md` still carries exactly 5 curly apostrophes, all inside pinned clauses; one `hold reads` survives in
+the tree and it is the WORKER's.
+
+Suites, foreground, per package: **server 230 files / 5789 passed** (54 skipped), **agent 18 / 280**,
+**pwa 74 / 1935**. No flake re-runs were needed.
