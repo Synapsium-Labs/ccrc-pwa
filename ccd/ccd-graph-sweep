@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+# ccd-graph-sweep — keep one AST graph fresh per git tree (spec §C). Serialized
+# oneshot driven by ccd-graph-sweep.timer; every knob env-overridable for the
+# test harness (CCRC_DOCTOR_GH_TIMEOUT precedent). HOME-derived roots, no
+# override — HOME is the harness's isolation boundary, exactly as in ccd.
+set -uo pipefail
+
+REG="$HOME/.cc-sessions"
+PROJECTS_ROOT="$HOME/projects"
+WORKTREES_ROOT="$HOME/worktrees"
+VENV="$HOME/.ccrc/graphify-venv"
+ENGINE="$VENV/bin/graphify"
+PIN_FILE="$HOME/.ccrc/graphify.pin"
+CENSUS="$HOME/.ccrc/graph-sweep.json"
+PAUSE="$HOME/.ccrc/graph-sweep-paused"
+LOCK="$HOME/.ccrc/graph-sweep.lock"
+: "${CCRC_GRAPH_BUILD_TIMEOUT:=600}"
+: "${CCRC_GRAPH_BUDGET:=8}"
+: "${CCRC_GRAPH_MAX_WORKERS:=4}"
+: "${CCRC_GRAPH_STALE_ESCAPE_COMMITS:=20}"
+: "${CCRC_GRAPH_STALE_ESCAPE_SECS:=21600}"
+
+PIN="$(cat "$PIN_FILE" 2>/dev/null || true)"
+STARTED="$(date -u +%FT%TZ)"
+ROWS=()          # jq-ready per-tree objects
+BUILT=0          # rebuilds this pass, against CCRC_GRAPH_BUDGET
+
+_gs_row() {      # path outcome reason duration_ms
+  ROWS+=("$(jq -cn --arg p "$1" --arg o "$2" --arg r "$3" --argjson d "${4:-0}" \
+    '{path:$p, outcome:$o, reason:$r, duration_ms:$d}')")
+}
+
+_gs_finish() {   # pass-status ; exit-code
+  local status="$1" rc="$2" tmp
+  tmp="$(mktemp "$CENSUS.XXXXXX")"
+  # NB: printf of an EMPTY array must emit nothing — a lone newline breaks
+  # `jq -cs` (slurp of empty input is [], of "\n" is a parse error).
+  { [ "${#ROWS[@]}" -gt 0 ] && printf '%s\n' "${ROWS[@]}"; true; } | jq -cs \
+    --arg started "$STARTED" --arg finished "$(date -u +%FT%TZ)" \
+    --arg pin "$PIN" --arg status "$status" \
+    '{started:$started, finished:$finished, pin:$pin, status:$status, trees:.}' > "$tmp" \
+    || { rm -f "$tmp"; echo "graph-sweep: census assembly failed" >&2; exit 1; }
+  # append, keep last 10 passes, atomic
+  jq -c --slurpfile p "$tmp" '.passes = ((.passes // []) + $p | .[-10:])' \
+    "$CENSUS" 2>/dev/null > "$tmp.2" \
+    || jq -cn --slurpfile p "$tmp" '{passes: $p}' > "$tmp.2"
+  mv "$tmp.2" "$CENSUS"; rm -f "$tmp"
+  exit "$rc"
+}
+
+_gs_trees() {    # every git working tree under the two roots
+  local d
+  for d in "$PROJECTS_ROOT"/*/ "$WORKTREES_ROOT"/*/*/; do
+    [ -d "$d" ] || continue
+    git -C "$d" rev-parse --is-inside-work-tree >/dev/null 2>&1 && printf '%s\n' "${d%/}"
+  done
+}
+
+_gs_stale() {    # tree -> 0 stale / 1 fresh ; REASON set
+  local tree="$1" head built stamp
+  head="$(git -C "$tree" rev-parse HEAD 2>/dev/null)" || { REASON=unreadable-head; return 0; }
+  [ -f "$tree/graphify-out/graph.json" ] || { REASON=never-built; return 0; }
+  built="$(jq -r '.built_at_commit // empty' "$tree/graphify-out/graph.json" 2>/dev/null)"
+  stamp="$(cat "$tree/graphify-out/.graphify_engine" 2>/dev/null || true)"
+  [ "$stamp" = "$PIN" ] || { REASON=engine; return 0; }
+  [ "$built" = "$head" ] || { REASON=head; return 0; }
+  return 1
+}
+
+# ── stubs replaced by later tasks ─────────────────────────────────────────
+_gs_busy()  { return 1; }   # Task 9: idle gate + audit token + escape hatch
+_gs_guard() { return 0; }   # Task 8: pre-build corpus guard + .graphifyignore
+_gs_build() {               # Task 7: contained build + discriminators + stamp
+  local tree="$1"
+  ( cd "$tree" && GRAPHIFY_NO_BACKUP=1 PYTHONHASHSEED=0 \
+      GRAPHIFY_MAX_WORKERS="$CCRC_GRAPH_MAX_WORKERS" \
+      nice -n 15 timeout "$CCRC_GRAPH_BUILD_TIMEOUT" "$ENGINE" update . ) \
+    >>"$HOME/.ccrc/graph-sweep.log" 2>&1
+  local rc=$?
+  [ "$rc" -eq 0 ] && printf '%s\n' "$PIN" > "$tree/graphify-out/.graphify_engine"
+  return "$rc"
+}
+
+# ── the pass ──────────────────────────────────────────────────────────────
+exec 9>"$LOCK"
+flock -n 9 || { ROWS=(); _gs_finish pass-locked 0; }
+[ -e "$PAUSE" ] && _gs_finish paused 0
+[ -n "$PIN" ] || { echo "graph-sweep: no pin at $PIN_FILE — run ccrc install first" >&2; _gs_finish failed 1; }
+
+if [ ! -d "$PROJECTS_ROOT" ] && [ ! -d "$WORKTREES_ROOT" ]; then
+  _gs_finish no-trees-configured 0
+fi
+
+PROBED=0
+while IFS= read -r tree; do
+  PROBED=$((PROBED+1))
+  if ! git -C "$tree" check-ignore -q graphify-out/; then
+    _gs_row "$tree" refused-no-exclude "git check-ignore graphify-out/ failed — run: ccrc install (the exclude writer)" 0
+    continue
+  fi
+  if ! _gs_stale "$tree"; then _gs_row "$tree" fresh "" 0; continue; fi
+  stale_reason="$REASON"
+  if _gs_busy "$tree"; then _gs_row "$tree" "$BUSY_OUTCOME" "$BUSY_REASON" 0; continue; fi
+  if [ "$BUILT" -ge "$CCRC_GRAPH_BUDGET" ]; then
+    _gs_row "$tree" skipped-budget "pass budget $CCRC_GRAPH_BUDGET reached" 0; continue
+  fi
+  if ! _gs_guard "$tree"; then _gs_row "$tree" refused-by-guard "$GUARD_REASON" 0; continue; fi
+  t0=$(date +%s%3N)
+  _gs_build "$tree"; rc=$?
+  dur=$(( $(date +%s%3N) - t0 )); BUILT=$((BUILT+1))
+  BUILD_OUTCOME=failed; BUILD_REASON="exit $rc"   # Task 7 replaces these two lines
+  case "$rc" in
+    0)   if [ "$stale_reason" = never-built ]; then _gs_row "$tree" never-built "cold build" "$dur"
+         else _gs_row "$tree" stale-rebuilt "$stale_reason" "$dur"; fi ;;
+    *)   _gs_row "$tree" "$BUILD_OUTCOME" "$BUILD_REASON" "$dur" ;;   # Task 7 sets these
+  esac
+done < <(_gs_trees)
+
+if [ "$PROBED" -eq 0 ]; then
+  echo "graph-sweep: tree roots exist but zero trees probed — the ccd-cap-scopes failure shape; investigate" >&2
+  _gs_finish probed-zero 1
+fi
+_gs_finish ok 0
