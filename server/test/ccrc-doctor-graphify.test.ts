@@ -288,6 +288,36 @@ describe('ccrc doctor: graphify', () => {
     expect(lineFor(runDoctor(home).stdout, 'graphify')).toMatch(/^FAIL graphify:/);
   });
 
+  // Finding 2 (whole-branch review): the documented rollout is deploy
+  // agent-first -> timer enabled -> sweep fires PINLESS -> census
+  // {status:"failed", pin:""} -> THEN `ccrc install` converges everything,
+  // pin file included. A closing doctor reading that stale pinless-failed
+  // pass right after install must not FAIL a box that just converged.
+  it('WARNs (not FAILs) on a failed+pinless last pass once the engine pin now exists (finding 2)', () => {
+    const home = healthy('ccrc-doctor-gfx-failed-preprov-'); graphifyHealthy(home);
+    writeFileSync(join(home, '.ccrc', 'graph-sweep.json'), JSON.stringify({ passes: [{
+      started: 's', finished: 'f', pin: '', status: 'failed', trees: [] }] }));
+    const line = lineFor(runDoctor(home).stdout, 'graphify');
+    expect(line).toMatch(/^WARN graphify:/);
+  });
+
+  it('still FAILs a failed+pinless last pass when the pin file itself is still absent', () => {
+    const home = healthy('ccrc-doctor-gfx-failed-nopin-'); graphifyHealthy(home);
+    writeFileSync(join(home, '.ccrc', 'graph-sweep.json'), JSON.stringify({ passes: [{
+      started: 's', finished: 'f', pin: '', status: 'failed', trees: [] }] }));
+    rmSync(join(home, '.ccrc', 'graphify.pin'));
+    const line = lineFor(runDoctor(home).stdout, 'graphify');
+    expect(line).toMatch(/^FAIL graphify:/);
+  });
+
+  it('still FAILs a failed pass that recorded a NON-empty pin, even though the pin file exists now', () => {
+    const home = healthy('ccrc-doctor-gfx-failed-realpin-'); graphifyHealthy(home);
+    writeFileSync(join(home, '.ccrc', 'graph-sweep.json'), JSON.stringify({ passes: [{
+      started: 's', finished: 'f', pin: '0.9.9', status: 'failed', trees: [] }] }));
+    const line = lineFor(runDoctor(home).stdout, 'graphify');
+    expect(line).toMatch(/^FAIL graphify:/);
+  });
+
   // D-1061 (deviation from the brief's plain-English "absent file -> WARN"):
   // an absent census must NOT warn, or every fresh install warns, always —
   // `OnBootSec=5min` means no box has a census for several minutes at

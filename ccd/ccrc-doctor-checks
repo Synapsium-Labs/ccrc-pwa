@@ -2589,8 +2589,29 @@ _check_graphify() {
     status="$(jq -r '.passes[-1].status // empty' "$census" 2>/dev/null)"
     finished="$(jq -r '.passes[-1].finished // empty' "$census" 2>/dev/null)"
     case "$status" in
-      probed-zero|failed)
+      probed-zero)
         gfx_census_fail+=("the last graph-sweep pass ended $status")
+        ;;
+      failed)
+        # Finding 2 (whole-branch review): the documented rollout is
+        # deploy agent-first -> timer enabled -> sweep fires PINLESS (no
+        # `ccrc install` has run yet) -> census {status:"failed", pin:""}
+        # -> THEN `ccrc install` converges the engine, the pin file, and
+        # every skill stamp. A closing doctor run right after that install
+        # still reads the pinless failed pass as the last one (the next
+        # timer fire, up to 15 minutes later, is what overwrites it) — FAIL
+        # here means `ccrc install` exits 1 on a box that just converged,
+        # self-healing on its own inside 15 minutes. That specific shape —
+        # failed, empty pin recorded, but the pin file now exists — is a
+        # WARN naming what happened; every other failed/probed-zero pass
+        # (a real pin recorded, or still no pin file) stays FAIL (R-5).
+        local pass_pin
+        pass_pin="$(jq -r '.passes[-1].pin // empty' "$census" 2>/dev/null)"
+        if [ -z "$pass_pin" ] && [ -n "$pin" ]; then
+          gfx_census_warn+=("last sweep pass predates engine provisioning — the next timer fire converges")
+        else
+          gfx_census_fail+=("the last graph-sweep pass ended $status")
+        fi
         ;;
       "")
         gfx_census_warn+=("\$HOME/.ccrc/graph-sweep.json does not parse as a census (no readable last pass)")
