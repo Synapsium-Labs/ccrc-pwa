@@ -2464,7 +2464,7 @@ _check_graphify() {
   pin="$(_dr_trim "$pin")"
 
   local -a gfx_install_fail=() gfx_shadow_warn=() gfx_excludes_warn=()
-  local -a gfx_census_fail=() gfx_census_warn=() gfx_disk_fail=() gfx_disk_warn=()
+  local -a gfx_census_fail=() gfx_census_warn=() gfx_disk_fail=() gfx_disk_warn=() gfx_disk_unread_warn=()
 
   # ── (2) engine: the venv's own `graphify --version` against the pin ──────
   # Parsed by parameter expansion, not awk — the same rule `_check_disk`'s own
@@ -2621,26 +2621,41 @@ _check_graphify() {
   if [ -d "$wroot" ]; then groot="$wroot"; gwhich="worktrees"
   elif [ -d "$proot" ]; then groot="$proot"; gwhich="projects"
   fi
-  if [ -n "$groot" ] && command -v df >/dev/null 2>&1; then
-    local out line last="" avail=""
-    out="$(df -Pk "$groot" 2>/dev/null)"
-    while IFS= read -r line; do
-      [ -z "$line" ] || last="$line"
-    done <<< "$out"
-    # shellcheck disable=SC2034  # the three leading fields are read to be dropped
-    [ -z "$last" ] || read -r _gfx_df_fs _gfx_df_size _gfx_df_used avail _gfx_df_rest <<< "$last"
-    case "$avail" in
-      ''|*[!0-9]*) ;;   # df could not stat it — nothing measured, no finding
-      *)
-        local floor=$((2 * 1024 * 1024)) tight=$((10 * 1024 * 1024))
-        local mib=$((avail / 1024)) gib=$((avail / 1024 / 1024))
-        if [ "$avail" -lt "$floor" ]; then
-          gfx_disk_fail+=("only $mib MiB free on \$HOME/$gwhich's filesystem — under the 2 GiB floor")
-        elif [ "$avail" -lt "$tight" ]; then
-          gfx_disk_warn+=("$gib GiB free on \$HOME/$gwhich's filesystem — getting tight")
-        fi
-        ;;
-    esac
+  # ROOT ABSENT vs ROOT PRESENT-BUT-UNMEASURABLE are two different facts, and
+  # collapsing them was the overloaded-null defect review found (Important,
+  # this task's fix round): "$groot" empty is legitimately silent (nothing
+  # here for the sweep to have written to yet — a fresh box, same as (6)'s
+  # absent-census arm), but a SELECTED root that df cannot read (missing df,
+  # or a stale/dead mount answering nothing parseable — `_check_disk`'s own
+  # comment names exactly this shape) is a measurement that FAILED, not one
+  # that was never attempted, and must say so. `_check_disk` WARNs on this
+  # same shape for $HOME; this mirrors its wording, over $groot instead.
+  if [ -n "$groot" ]; then
+    if ! command -v df >/dev/null 2>&1; then
+      gfx_disk_unread_warn+=("df is not on PATH, so free space on $groot was never measured")
+    else
+      local out line last="" avail=""
+      out="$(df -Pk "$groot" 2>/dev/null)"
+      while IFS= read -r line; do
+        [ -z "$line" ] || last="$line"
+      done <<< "$out"
+      # shellcheck disable=SC2034  # the three leading fields are read to be dropped
+      [ -z "$last" ] || read -r _gfx_df_fs _gfx_df_size _gfx_df_used avail _gfx_df_rest <<< "$last"
+      case "$avail" in
+        ''|*[!0-9]*)
+          gfx_disk_unread_warn+=("df could not read $groot, so free space on it was never measured — a stale or dead mount answers exactly this way")
+          ;;
+        *)
+          local floor=$((2 * 1024 * 1024)) tight=$((10 * 1024 * 1024))
+          local mib=$((avail / 1024)) gib=$((avail / 1024 / 1024))
+          if [ "$avail" -lt "$floor" ]; then
+            gfx_disk_fail+=("only $mib MiB free on \$HOME/$gwhich's filesystem — under the 2 GiB floor")
+          elif [ "$avail" -lt "$tight" ]; then
+            gfx_disk_warn+=("$gib GiB free on \$HOME/$gwhich's filesystem — getting tight")
+          fi
+          ;;
+      esac
+    fi
   fi
 
   # ── the verdict, one line per bucket that has something to say ───────────
@@ -2678,6 +2693,14 @@ _check_graphify() {
   if [ "${#gfx_disk_warn[@]}" -gt 0 ]; then
     _dr_warn graphify "$(_dr_join "${gfx_disk_warn[@]}")" \
       "clear room on that filesystem while it is still cheap"
+    [ "$rc" -eq 1 ] || rc=2
+  fi
+  if [ "${#gfx_disk_unread_warn[@]}" -gt 0 ]; then
+    # Its own bucket, its own remedy: "clear room" (the bucket above) fixes
+    # nothing here — this is "the measurement could not be taken at all",
+    # `_check_disk`'s own remedy wording for the identical shape, adapted.
+    _dr_warn graphify "$(_dr_join "${gfx_disk_unread_warn[@]}")" \
+      "check by hand: df -Pk <the root named above> — a filesystem df cannot stat answers exactly this way; install df first if it is not on PATH (coreutils on a GNU box, util-linux on some minimal images)"
     [ "$rc" -eq 1 ] || rc=2
   fi
   if [ "$rc" -ne 0 ]; then

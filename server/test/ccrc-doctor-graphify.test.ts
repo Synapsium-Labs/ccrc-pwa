@@ -110,6 +110,14 @@ const linkReal = (home: string, name: string): void => {
 function stubDf(home: string): void {
   stub(home, 'df', [
     'if [ "$1" = "-Pk" ] && [ -n "$2" ]; then',
+    // The stale/dead-mount shape `_check_disk`'s own header names: df exits
+    // non-zero printing NOTHING. `fixture-df-fail-<root>` triggers it for a
+    // specific root, so a test can make ONLY the worktrees (or projects)
+    // probe fail while $HOME's own `disk` check elsewhere stays unaffected.
+    '  case "$2" in',
+    '    */worktrees) [ -f "$HOME/fixture-df-fail-worktrees" ] && exit 1 ;;',
+    '    */projects) [ -f "$HOME/fixture-df-fail-projects" ] && exit 1 ;;',
+    '  esac',
     '  f=""',
     '  case "$2" in',
     '    */worktrees) [ -f "$HOME/fixture-df-avail-worktrees" ] && f="$HOME/fixture-df-avail-worktrees" ;;',
@@ -337,6 +345,24 @@ describe('ccrc doctor: graphify', () => {
     writeFileSync(join(home, 'fixture-df-avail-worktrees'), String(1 * 1024 * 1024)); // 1 GiB
     const line = lineFor(runDoctor(home).stdout, 'graphify');
     expect(line).toMatch(/^FAIL graphify:/);
+    expect(line).toContain('worktrees');
+  });
+
+  // Review finding (Important, condition 7 / D-995 fix round): a SELECTED
+  // root that df cannot read (a stale or dead mount — df exits non-zero
+  // printing nothing, exactly like the "avail" case's empty match) used to
+  // fall through the `''|*[!0-9]*` arm and produce NO finding at all —
+  // recreating the D-995 blind spot inside the arm meant to close it, and
+  // collapsing "root absent, nothing to measure" (silent) into "root
+  // present, measurement FAILED" (a real defect) — the overloaded-null shape
+  // this codebase bans by name. `_check_disk` WARNs on the identical shape
+  // for $HOME; this is that same measurement over $HOME/worktrees.
+  it('D-995: WARNs (not silent) when df cannot read the worktrees root — a stale/dead mount', () => {
+    const home = healthy('ccrc-doctor-gfx-disk-unread-'); graphifyHealthy(home);
+    mkdirSync(join(home, 'worktrees'), { recursive: true });
+    writeFileSync(join(home, 'fixture-df-fail-worktrees'), '1');
+    const line = lineFor(runDoctor(home).stdout, 'graphify');
+    expect(line).toMatch(/^WARN graphify:/);
     expect(line).toContain('worktrees');
   });
 });
