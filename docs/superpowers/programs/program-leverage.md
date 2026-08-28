@@ -35,7 +35,10 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
 - **Build 9 remnants are a NON-GOAL**: peers/claims/allocator/lifecycle shipped in build 9/9b
   (`docs/superpowers/plans/2026-08-24-build9b-peers-claims-allocator.md`); the pre-program
   memory note claiming build 9 was "awaiting review" was stale and is corrected.
-- **Deviation block:** allocated at run-open (clause 10) — see the run-open entry appended below.
+- **Run-open (2026-08-28 ~15:45 UTC):** wave 1 opened as **run 10** (`state:planned`,
+  `claimedBy:ccrc-pwa-brisk-meadow`). Deviation block allocated: **D-999..D-1046** (48 numbers,
+  floor 1047 after) — every wave records its deviations inside this block; a worker with no
+  server access writes `D-TBD-program-leverage` and it is reconciled at wave review.
 
 ## Carried constraints
 
