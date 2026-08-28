@@ -158,10 +158,15 @@ const queueTestDelivery = (coord: CoordStore, toId: string, envelope: string): {
   return { mailId: mail.id, id: delivery.id };
 };
 
-const deliveryRow = (coord: CoordStore, id: number):
-  { state: string; attempts: number; nextAttemptAt: number; lastError: string | null; rejectCode: string | null } =>
-  coord.db.prepare('SELECT state, attempts, nextAttemptAt, lastError, rejectCode FROM mail_deliveries WHERE id = ?')
-    .get(id) as { state: string; attempts: number; nextAttemptAt: number; lastError: string | null; rejectCode: string | null };
+interface DeliveryRow {
+  state: string; attempts: number; nextAttemptAt: number;
+  lastError: string | null; rejectCode: string | null;
+  lastGate: string | null; gateCount: number; gateSince: number | null; gateAt: number | null;
+}
+const deliveryRow = (coord: CoordStore, id: number): DeliveryRow =>
+  coord.db.prepare('SELECT state, attempts, nextAttemptAt, lastError, rejectCode, '
+    + 'lastGate, gateCount, gateSince, gateAt FROM mail_deliveries WHERE id = ?')
+    .get(id) as unknown as DeliveryRow;
 
 interface Harness { home: string; calls: string[][]; run: Runner }
 
@@ -1683,5 +1688,127 @@ describe('sweepMail: a blocked delivery reaches its SENDER', () => {
     // writer of `run_events`.
     const eventsAfter = coord.db.prepare('SELECT COUNT(*) AS n FROM run_events').get() as { n: number };
     expect(eventsAfter.n).toBe(eventsBefore.n);
+  });
+});
+
+// ── D-792: the gate a refusal happened at, recorded ───────────────────────
+//
+// The defect these cover, stated once: `sweepMail`'s ladder has ten refusal
+// paths and two of them recorded anything. That silence is CORRECT as a
+// scheduling decision — an ordinary gate holds indefinitely for a busy session
+// and must never approach `MAIL_MAX_ATTEMPTS` — but it was implemented as "do
+// not write anything down", and a delivery then sat `delivered`/`attempts: 0`
+// for eleven hours, refused on the order of 4,000 times, while `GET /api/peers`
+// called the session `deliverable: 'yes'` and the run showed `unreadMail: 1`.
+//
+// Every assertion below is about OBSERVATION. The scheduling invariants — no
+// attempt, no backoff, no park — are asserted alongside, because a fix that
+// bought visibility by changing when mail is delivered would be worse than the
+// defect.
+describe('sweepMail: what refused this delivery (D-792)', () => {
+  it('records the gate, counts consecutive refusals, and still never accrues an attempt', async () => {
+    // The exact fixture of the invariant test above ("an ORDINARY gate never
+    // accrues an attempt"), now asked the question that had no answer: WHICH
+    // gate, and for how long.
+    const h = harness({ hasSession: false });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    for (let i = 0; i < 3; i++) { advance(PAST_SWEEP_MS); await w.sweepMail(); }
+    const row = deliveryRow(coord, id);
+    expect(row.lastGate, 'tmux said the pane is gone').toBe('tmux-gone');
+    expect(row.gateCount, 'three sweeps, three refusals at the same gate').toBe(3);
+    expect(row.gateSince).not.toBeNull();
+    expect(row.gateAt).not.toBeNull();
+    // …and the scheduling contract is exactly as it was.
+    expect(row.state).toBe('queued');
+    expect(row.attempts, 'an ordinary gate is not a send failure').toBe(0);
+  });
+
+  it('gateSince holds still while the gate repeats, and gateAt keeps moving', async () => {
+    // The pair is not redundant. A sweep that has STOPPED leaves `gateSince`
+    // reading exactly like one still refusing every 10s; `now - gateAt` is the
+    // only thing that tells them apart, so `gateAt` must advance on each
+    // refusal while `gateSince` does not.
+    const h = harness({ hasSession: false });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID); seedHookState(h.home, ID); seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    advance(PAST_SWEEP_MS); await w.sweepMail();
+    const first = deliveryRow(coord, id);
+    advance(PAST_SWEEP_MS); await w.sweepMail();
+    const second = deliveryRow(coord, id);
+
+    expect(second.gateSince, 'the same gate is still holding it').toBe(first.gateSince);
+    expect(second.gateAt!, 'but we observed it again just now').toBeGreaterThan(first.gateAt!);
+    expect(second.gateCount).toBe(2);
+  });
+
+  it('a delivery that SENDS carries no stale gate', async () => {
+    // A row that moved must not still claim something is holding it — the same
+    // lie in the other direction. The clear rides in the same UPDATE as the
+    // state change, so the ack-race guard covers it too.
+    const h = harness({ panes: HAPPY_PANES });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID); seedHookState(h.home, ID); seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    // One refusal first, so there is genuinely a gate on the row to clear.
+    coord.noteGate(id, 'not-quiet', Date.now(), false, null);
+    expect(deliveryRow(coord, id).lastGate).toBe('not-quiet');
+
+    advance(PAST_SWEEP_MS);
+    await w.sweepMail();
+    const row = deliveryRow(coord, id);
+    expect(row.state).toBe('delivered');
+    expect(row.lastGate, 'a delivered row is not being refused by anything').toBeNull();
+    expect(row.gateCount).toBe(0);
+    expect(row.gateSince).toBeNull();
+    expect(row.gateAt).toBeNull();
+  });
+
+  it('a CHANGE of gate restarts the count and the clock', () => {
+    // "How long has THIS gate been holding it", not "how long has it been stuck
+    // at anything" — the question an operator actually asks, and the reason
+    // `noteGate` takes `same` rather than deriving it from the row it is about
+    // to overwrite.
+    const h = harness();
+    const coord = store(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+    const t0 = 1_000_000;
+    coord.noteGate(id, 'not-idle', t0, false, null);
+    coord.noteGate(id, 'not-idle', t0 + 10_000, true, t0);
+    const held = deliveryRow(coord, id);
+    expect(held.gateCount).toBe(2);
+    expect(held.gateSince).toBe(t0);
+
+    coord.noteGate(id, 'cooldown', t0 + 20_000, false, held.gateSince);
+    const moved = deliveryRow(coord, id);
+    expect(moved.lastGate).toBe('cooldown');
+    expect(moved.gateCount, 'a different gate starts its own count').toBe(1);
+    expect(moved.gateSince, 'and its own clock').toBe(t0 + 20_000);
+  });
+
+  it('writes no scheduling column — nextAttemptAt is untouched by a gate', () => {
+    // The non-goal, as a mechanism. If `noteGate` ever moves the retry clock it
+    // has become a scheduling input, which is the one thing this slice must not
+    // become.
+    const h = harness();
+    const coord = store(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+    const before = deliveryRow(coord, id);
+    coord.noteGate(id, 'no-config-dir', Date.now(), false, null);
+    const after = deliveryRow(coord, id);
+    expect(after.nextAttemptAt).toBe(before.nextAttemptAt);
+    expect(after.attempts).toBe(before.attempts);
+    expect(after.state).toBe(before.state);
+    expect(after.lastError).toBe(before.lastError);
   });
 });
