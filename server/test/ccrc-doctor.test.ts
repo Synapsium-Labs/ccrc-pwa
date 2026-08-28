@@ -547,6 +547,16 @@ function stubSystemctl(home: string): void {
     + '  if [ -f "$f" ]; then IFS= read -r v < "$f"; echo "$v"; [ "$v" = active ] && exit 0; exit 3; fi\n'
     + '  echo inactive; exit 3\n'
     + 'fi\n'
+    + 'if [ "$1" = "--user" ] && [ "$2" = "list-units" ]; then\n'
+    + '  f="$HOME/fixture-scopes"\n'
+    + '  if [ -f "$f" ]; then while IFS= read -r l; do echo "$l"; done < "$f"; fi\n'
+    + '  exit 0\n'
+    + 'fi\n'
+    + 'if [ "$1" = "--user" ] && [ "$2" = "show" ]; then\n'
+    + '  f="$HOME/fixture-cgroup-of-$3"\n'
+    + '  if [ -f "$f" ]; then IFS= read -r v < "$f"; echo "$v"; fi\n'
+    + '  exit 0\n'
+    + 'fi\n'
     + 'if [ "$1" = "is-active" ] && [ -n "$2" ]; then\n'
     + '  f="$HOME/fixture-system-unit-$2"\n'
     + '  if [ -f "$f" ]; then IFS= read -r v < "$f"; echo "$v"; [ "$v" = active ] && exit 0; exit 3; fi\n'
@@ -805,7 +815,37 @@ function doctorEnv(home: string): NodeJS.ProcessEnv {
     // HOME, it measures the same three facts (a symlink, an absence, a
     // staleness) against files a test owns.
     CCRC_CADDY_SYSTEM_FILE: sysCaddyfile(home),
+    // `_check_scopes` reads a cgroup tree and a proc tree. Neither can be
+    // created by a test on the real box (/sys/fs/cgroup is the kernel's, /proc
+    // is not writable), so both roots are seams — the same shape as
+    // CCRC_CADDY_SYSTEM_FILE above, and for the same reason.
+    CCRC_CGROUP_ROOT: join(home, 'fixture-cgroup'),
+    CCRC_PROC_ROOT: join(home, 'fixture-proc'),
+    CCRC_SCOPE_SETTLE_SEC: '1',
   };
+}
+
+/** A pane scope, its cgroup, and the proc entries for the pids inside it.
+ *  `stuck` names the pids parked on the reclaim wchan — everything else gets
+ *  an ordinary one, so a fixture never accidentally reads as throttled. */
+function plantScope(home: string, o: {
+  unit?: string; procs: number[]; stuck?: number[]; current?: number; high?: number;
+}): void {
+  const unit = o.unit ?? 'tmux-spawn-fixture.scope';
+  const cg = `/user.slice/app.slice/app-claude.slice/${unit}`;
+  const cgdir = join(home, 'fixture-cgroup', cg);
+  mkdirSync(cgdir, { recursive: true });
+  writeFileSync(join(cgdir, 'cgroup.procs'), `${o.procs.join('\n')}\n`);
+  writeFileSync(join(cgdir, 'memory.current'), `${o.current ?? 3 * 1024 ** 3}\n`);
+  writeFileSync(join(cgdir, 'memory.high'), `${o.high ?? 8 * 1024 ** 3}\n`);
+  for (const pid of o.procs) {
+    const pd = join(home, 'fixture-proc', String(pid));
+    mkdirSync(pd, { recursive: true });
+    writeFileSync(join(pd, 'wchan'),
+      (o.stuck ?? []).includes(pid) ? 'mem_cgroup_handle_over_high' : 'do_epoll_wait');
+  }
+  appendFileSync(join(home, 'fixture-scopes'), `${unit} loaded active running\n`);
+  writeFileSync(join(home, `fixture-cgroup-of-${unit}`), `${cg}\n`);
 }
 
 /** The fixture's stand-in for /etc/caddy/Caddyfile — outside `~/.ccrc`, since
@@ -857,6 +897,9 @@ function healthy(prefix: string): string {
   // equally satisfied by the real thing, and `statusBox` below already made
   // this exact swap for the same reader.
   linkReal(home, 'jq');
+  // A pane scope with nothing parked: `_check_scopes` PASSes, and returns
+  // WITHOUT settling, so the healthy fixture costs no extra second.
+  plantScope(home, { procs: [4101, 4102] });
   // tmux answers its versions, client and server agreeing — a healthy box is
   // one where every check PASSES (see the fleet note below), and tmux_skew
   // measures a version pair, not a presence.
@@ -975,6 +1018,21 @@ function tableNames(): string[] {
 const lineFor = (out: string, name: string): string | undefined =>
   out.split('\n').find((l) => new RegExp(`^(PASS|WARN|FAIL) ${name}: `).test(l));
 
+/** Any verdict line, SKIP included. Deliberately NOT `lineFor`: at least one
+ *  assertion below uses that one's blindness to SKIP as the assertion itself
+ *  ("a SKIP is not a PASS/WARN/FAIL"), so widening it would quietly disarm a
+ *  test. Only the table census wants all four words. */
+const anyVerdictFor = (out: string, name: string): string | undefined =>
+  out.split('\n').find((l) => new RegExp(`^(PASS|WARN|FAIL|SKIP) ${name}: `).test(l));
+
+/** How many checks a HEALTHY fixture skips. Zero on Linux; exactly one on
+ *  macOS, and it is `scopes`: cgroup throttling is a Linux mechanism, so a
+ *  Darwin box has no such fault to find. It answers SKIP rather than PASS
+ *  deliberately — a PASS there would be a verdict nobody measured, which is
+ *  the forgery class this repo bans by name. The same shape as the standing
+ *  `linger` WARN the summary test below already accounts for. */
+const HEALTHY_SKIPS = process.platform === 'darwin' ? 1 : 0;
+
 // ── the table itself ──────────────────────────────────────────────────────
 
 describe('ccrc doctor: the check list is data', () => {
@@ -998,7 +1056,9 @@ describe('ccrc doctor: the check list is data', () => {
     const home = healthy('ccrc-doctor-table-');
     const r = runDoctor(home);
     for (const n of tableNames()) {
-      expect(lineFor(r.stdout, n), `no verdict line for check "${n}"\n${r.stdout}`).toBeTruthy();
+      // SKIP counts here: the census is "did every check ANSWER", and a check
+      // with nothing on this platform to measure answers by skipping.
+      expect(anyVerdictFor(r.stdout, n), `no verdict line for check "${n}"\n${r.stdout}`).toBeTruthy();
     }
   });
 });
@@ -1165,7 +1225,8 @@ describe('ccrc doctor: tmux_skew', () => {
     const r = runDoctor(home);
     expect(r.stdout).toMatch(/^SKIP tmux_skew: no tmux server is running/m);
     expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) tmux_skew: /m);
-    expect(r.stdout).toMatch(/^summary: \d+ checks \(1 skipped\)/m);
+    expect(r.stdout).toMatch(
+      new RegExp(`^summary: \\d+ checks \\(${1 + HEALTHY_SKIPS} skipped\\)`, 'm'));
     expect(r.code).toBe(0);
   });
 
@@ -1671,7 +1732,10 @@ describe('ccrc doctor: services', () => {
     expect(lines[w + 1]).toContain('enable --now ccd-cap-scopes.timer');
     expect(lines[w]).toContain('failed');            // systemd's word, not "inactive"
     // The worse class is what the check returns, and the summary counts both.
-    expect(r.stdout).toMatch(/^summary: \d+ checks \(0 skipped\), \d+ verdicts — \d+ passed, 1 warned, 1 failed$/m);
+    // `HEALTHY_SKIPS` rides along on every REAL-table count in this file: a
+    // Darwin box skips `scopes` and there is nothing wrong with that.
+    expect(r.stdout).toMatch(new RegExp(
+      `^summary: \\d+ checks \\(${HEALTHY_SKIPS} skipped\\), \\d+ verdicts — \\d+ passed, 1 warned, 1 failed$`, 'm'));
     expect(r.code).toBe(1);
   });
 
@@ -1775,7 +1839,8 @@ describe('ccrc doctor: config', () => {
     // against) — so the summary proves the runner accepted ALL FOUR skips.
     expect(r.stdout).toMatch(/^SKIP auth: .*ccrc-agent\.service/m);
     expect(r.stdout).toMatch(/^SKIP build: /m);
-    expect(r.stdout).toMatch(/^summary: \d+ checks \(4 skipped\)/m);
+    expect(r.stdout).toMatch(
+      new RegExp(`^summary: \\d+ checks \\(${4 + HEALTHY_SKIPS} skipped\\)`, 'm'));
     expect(r.code).toBe(0);
   });
 
@@ -3009,7 +3074,7 @@ describe('ccrc doctor: wrappers', () => {
     expect(m, `last line was: ${last}`).toBeTruthy();
     const [total, skipped, verdicts, pass, warn, fail] = m!.slice(1).map(Number);
     expect(total).toBe(tableNames().length);
-    expect(skipped).toBe(0);
+    expect(skipped).toBe(HEALTHY_SKIPS);
     expect(warn).toBeGreaterThanOrEqual(1);
     expect(fail).toBeGreaterThanOrEqual(1);
     // BOTH nouns, because they are different numbers here: twelve checks
@@ -3017,7 +3082,14 @@ describe('ccrc doctor: wrappers', () => {
     // sum not matching the leading number reads as the fact it is rather than
     // as an arithmetic bug somebody should go and "fix".
     expect(pass + warn + fail).toBe(verdicts);
-    expect(verdicts).toBeGreaterThan(total);
+    // The comparison is against the checks that ANSWERED WITH A VERDICT, not
+    // against every check in the table. A skip subtracts a verdict without
+    // subtracting a check, so on a platform that legitimately skips one
+    // (macOS: `scopes`) the two-class check's extra verdict is cancelled
+    // exactly, and `verdicts > total` reads 26 > 26 — a red leg reporting
+    // arithmetic that was never wrong. On Linux `HEALTHY_SKIPS` is 0 and this
+    // is the assertion it always was.
+    expect(verdicts).toBeGreaterThan(total - HEALTHY_SKIPS);
   });
 
   // ── an external account: existence, and nothing else ────────────────────
@@ -3815,7 +3887,8 @@ describe('ccrc doctor: fleet', () => {
     const r = runDoctor(home);
     expect(r.stdout).toMatch(/^SKIP fleet: .*local mode/m);
     expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) fleet: /m);
-    expect(r.stdout).toMatch(/^summary: \d+ checks \(1 skipped\)/m);
+    expect(r.stdout).toMatch(
+      new RegExp(`^summary: \\d+ checks \\(${1 + HEALTHY_SKIPS} skipped\\)`, 'm'));
     expect(r.code).toBe(0);
   });
 
@@ -4434,14 +4507,17 @@ describe('ccrc doctor: the output contract', () => {
     // SKIP is in the alternation and NOT in the verdict count: a check that did
     // not run has not answered, and counting it as an answer is the whole
     // defect the skip exists to avoid. Both fixtures are walked, because the
-    // healthy box has no skip and the address-less one has exactly two —
-    // `fleet` and, since Stage 4 Task 9, `build`, each for its own reading of
-    // the same missing address.
+    // healthy box has no skip of its own on Linux and the address-less one has
+    // exactly two — `fleet` and, since Stage 4 Task 9, `build`, each for its
+    // own reading of the same missing address. Add `HEALTHY_SKIPS` to both on a
+    // platform that legitimately skips a check outright (macOS: `scopes`).
     const home = healthy('ccrc-doctor-shape-');
     ghStub(home, ['github.com', '  - Logged in to github.com account fixture-bot (oauth_token)'], 0);
     const skipBox = healthy('ccrc-doctor-shape-skip-');
     rmSync(join(skipBox, '.ccrc', 'ccrc.env'), { force: true });
-    for (const [h, wantSkips] of [[home, 0], [skipBox, 2]] as const) {
+    for (const [h, wantSkips] of [
+      [home, HEALTHY_SKIPS], [skipBox, 2 + HEALTHY_SKIPS],
+    ] as const) {
       let verdicts = 0; let skips = 0;
       for (const l of runDoctor(h).stdout.split('\n')) {
         if (!l || l.startsWith('  remedy: ') || l.startsWith('summary: ')) continue;
@@ -4472,8 +4548,11 @@ describe('ccrc doctor: the output contract', () => {
     expect(pass + warn + fail).toBe(verdicts);
     // On a HEALTHY box every check answers exactly once, so the two nouns
     // agree — which is what makes the two-class run's disagreement meaningful.
-    expect(verdicts).toBe(total);
-    expect(skipped).toBe(0);
+    // A SKIP is an answer but NOT a verdict (cmd_doctor counts them apart), so
+    // a platform that legitimately skips one check has one fewer verdict than
+    // checks. On Linux `HEALTHY_SKIPS` is 0 and this reads as it always did.
+    expect(verdicts).toBe(total - HEALTHY_SKIPS);
+    expect(skipped).toBe(HEALTHY_SKIPS);
     expect(fail).toBe(0);
     // A HEALTHY macOS BOX CARRIES EXACTLY ONE STANDING WARN, and it is not a
     // fault to be fixed: `linger` has no counterpart on a platform where a
@@ -5235,3 +5314,88 @@ describe('ccrc doctor: exposure measures the server bind', () => {
   });
 });
 
+
+// ── scopes ────────────────────────────────────────────────────────────────
+//
+// `_check_scopes` answers ONE question — is a pane scope's memory cap
+// currently strangling the session inside it — and the whole difficulty is
+// that being over `MemoryHigh` is not the answer. Measured on the fleet host
+// 2026-08-27/28: a scope sat 18h51m at 9.07 GiB against an 8 GiB high with
+// the claude process itself unschedulable, while `ccd ls` said `running`; and
+// the NEXT MORNING the same suite crossed the same line, was reclaimed, and
+// finished in minutes. The first is the fault; the second is the throttle
+// working. Only process state separates them, which is why every case here is
+// about `wchan` rather than about the ratio.
+describeLinux('ccrc doctor: scopes', () => {
+  it('PASSES a scope over its MemoryHigh whose processes are all schedulable', () => {
+    // THIS MORNING'S HEALTHY SPIKE, as a fixture. An over-the-line detector
+    // would WARN here and cry wolf on every busy test run.
+    const home = healthy('ccrc-doctor-scopes-spike-');
+    rmSync(join(home, 'fixture-scopes'), { force: true });
+    plantScope(home, { procs: [5101, 5102], current: 9 * 1024 ** 3, high: 8 * 1024 ** 3 });
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^PASS scopes: .*none throttled/m);
+    expect(r.stdout).not.toMatch(/^WARN scopes:/m);
+  });
+
+  it('WARNS when a process is parked on the reclaim wchan in BOTH samples, naming the scope and the memory', () => {
+    const home = healthy('ccrc-doctor-scopes-stuck-');
+    rmSync(join(home, 'fixture-scopes'), { force: true });
+    linkReal(home, 'sleep');
+    plantScope(home, {
+      procs: [5201, 5202], stuck: [5201],
+      current: 9741930496, high: 8 * 1024 ** 3,
+    });
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^WARN scopes: tmux-spawn-fixture\.scope has 1 process\(es\) parked in memory reclaim at 9\.07 GiB of 8\.00 GiB$/m);
+    // The remedy must send the reader at the WORKLOAD, and must not offer the
+    // one change that would re-create the 24G incident the cap exists for.
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN scopes:'));
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: .*do NOT raise the cap/);
+  });
+
+  it('PASSES when the parked process has left the reclaim path by the second sample', () => {
+    // The blip. `sleep` is stubbed to perform the transition DURING the settle,
+    // which is also what proves the settle happens at all: with the second
+    // sample deleted from the check, the mutation never runs and this reds.
+    const home = healthy('ccrc-doctor-scopes-blip-');
+    rmSync(join(home, 'fixture-scopes'), { force: true });
+    plantScope(home, { procs: [5301], stuck: [5301], current: 9 * 1024 ** 3 });
+    stub(home, 'sleep', `printf 'do_epoll_wait' > "$HOME/fixture-proc/5301/wchan"\nexit 0`);
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^PASS scopes: .*none throttled/m);
+  });
+
+  it('finds a scope wherever systemd says it lives, not where a built path would put it', () => {
+    // D-307, on purpose. `ccd-cap-scopes` capped NOTHING for 13 days because it
+    // string-built `user@1000.service/<scope>`; the panes were two slices
+    // deeper. This fixture's ControlGroup is a path no such guess would reach,
+    // so a check that stopped asking `-p ControlGroup` would find no scope and
+    // SKIP — which is why the assertion is on the PASS, not on an absence.
+    const home = healthy('ccrc-doctor-scopes-layout-');
+    rmSync(join(home, 'fixture-scopes'), { force: true });
+    plantScope(home, { unit: 'tmux-spawn-deep.scope', procs: [5401] });
+    expect(readFileSync(join(home, 'fixture-cgroup-of-tmux-spawn-deep.scope'), 'utf8'))
+      .toContain('/app-claude.slice/');
+    expect(runDoctor(home).stdout).toMatch(/^PASS scopes: 1 pane scope\(s\), none throttled/m);
+  });
+
+  it('says nothing at all about a scope that vanished between the listing and the read', () => {
+    // A scope can die mid-check; that is a race, not a fault. The listing names
+    // it, the ControlGroup resolves, and the directory is simply not there.
+    const home = healthy('ccrc-doctor-scopes-race-');
+    rmSync(join(home, 'fixture-scopes'), { force: true });
+    plantScope(home, { procs: [5501] });
+    rmSync(join(home, 'fixture-cgroup'), { recursive: true, force: true });
+    const r = runDoctor(home);
+    expect(r.stdout).not.toMatch(/^(WARN|FAIL) scopes:/m);
+    expect(r.stderr).toBe('');
+  });
+
+  it('SKIPS a box with no pane scopes rather than claiming health it did not measure', () => {
+    const home = healthy('ccrc-doctor-scopes-none-');
+    rmSync(join(home, 'fixture-scopes'), { force: true });
+    expect(runDoctor(home).stdout).toMatch(/^SKIP scopes: no tmux pane scopes/m);
+  });
+});

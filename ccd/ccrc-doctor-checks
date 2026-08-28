@@ -177,6 +177,7 @@ CCRC_DOCTOR_CHECKS=(
   linger
   path
   services
+  scopes
   config
   auth
   rc
@@ -900,6 +901,164 @@ _check_services() {
 # the load-bearing part is how the two come to disagree about a file neither
 # tool's consumer reads that way. Absence is reported the way `_check_fleet`
 # reports the same absence — as a bug in ccrc, in a verdict line.
+# ── scopes ────────────────────────────────────────────────────────────────
+# IS A PANE SCOPE CURRENTLY STRANGLING ITS OWN SESSION?
+#
+# `ccd-cap-scopes` caps every tmux pane scope at MemoryHigh=8G/MemoryMax=12G,
+# and it is right to: an uncapped scope once hit 24G and stalled the fleet for
+# 25 minutes (that script's own header). But `MemoryHigh` THROTTLES rather than
+# kills, so a scope living between high and max is put into reclaim and left
+# there — `memory.events` reads `oom_kill 0`, no unit fails, nothing is logged.
+# Measured 2026-08-27: one session sat 18h51m at 9.07 GiB against an 8 GiB high
+# with the CLAUDE PROCESS ITSELF unschedulable, while `ccd ls` said `running`
+# and the run board said `dispatched`. `_check_services` above asks whether the
+# capper's timer is ACTIVE; nothing asked whether a cap was doing this.
+#
+# WHAT IT MEASURES, and why not the obvious thing. Being over `memory.high` is
+# NOT the fault: the morning after that freeze the same suite crossed the same
+# line, was reclaimed, and finished — that is the throttle working, and a check
+# that fired on it would cry wolf on every healthy test run. The fault is a
+# process PARKED in the reclaim path, so this reads `/proc/<pid>/wchan` for
+# `mem_cgroup_handle_over_high` and requires the SAME pid to still be there one
+# settle later. `D` is normally sub-millisecond; surviving two samples is
+# already pathological, and that freeze held for eleven hours.
+#
+# WARN, NEVER FAIL, deliberately: `cmd_install` ends with `cmd_doctor` and
+# returns its code (D-894), so a FAIL here would make `ccrc install` exit
+# non-zero on a box whose only sin is a busy session. Doctor answers "is this
+# box set up correctly"; a throttled scope is a runtime fact, and the fleet view
+# is where runtime facts belong.
+#
+# The cgroup path is ASKED FOR, never built (`-p ControlGroup`). Building it is
+# exactly what left `ccd-cap-scopes` capping nothing for 13 days, and what
+# D-307 broke again when the tmux server moved slice.
+_check_scopes() {
+  if [ "${CCD_OS:-linux}" = darwin ]; then
+    _dr_skip scopes "cgroup scopes are a Linux mechanism — this box has none to measure"
+    return 3
+  fi
+  if ! _have_systemctl; then
+    _dr_skip scopes "systemctl is not on PATH, so no pane scope can be located"
+    return 3
+  fi
+  local cgroot="${CCRC_CGROUP_ROOT:-/sys/fs/cgroup}"
+  local procroot="${CCRC_PROC_ROOT:-/proc}"
+  local settle="${CCRC_SCOPE_SETTLE_SEC:-1}"
+
+  local -a scopes=()
+  local unit _rest
+  # `read unit _rest`, not `awk '{print $1}'` — this file resolves no external
+  # binary that is not the subject it is measuring (see `_check_disk`), and the
+  # subject here is systemctl.
+  while read -r unit _rest; do
+    [ -n "$unit" ] && scopes+=("$unit")
+  done < <(systemctl --user list-units --no-legend 'tmux-spawn-*.scope' 2>/dev/null)
+
+  if [ "${#scopes[@]}" -eq 0 ]; then
+    _dr_skip scopes "no tmux pane scopes on this box — nothing is running under a cap"
+    return 3
+  fi
+
+  # FIRST SAMPLE for every scope. The cgroup path is ASKED FOR, never built:
+  # building it is what left `ccd-cap-scopes` capping nothing for 13 days, and
+  # what D-307 broke again when the tmux server changed slice.
+  local sc cg
+  local -A stuck1=() cgof=()
+  for sc in "${scopes[@]}"; do
+    cg="$(systemctl --user show "$sc" -p ControlGroup --value 2>/dev/null || true)"
+    [ -n "$cg" ] || continue
+    [ -d "$cgroot$cg" ] || continue      # died between listing and read — a race, not a fault
+    cgof["$sc"]="$cg"
+    stuck1["$sc"]="$(_dr_scope_stuck "$cgroot$cg" "$procroot")"
+  done
+
+  # Nothing parked anywhere: answer WITHOUT settling. A healthy box is the
+  # common case and must not pay a second of doctor's runtime for a question
+  # whose answer is already in.
+  local sc_any=0
+  for sc in "${!stuck1[@]}"; do [ -n "${stuck1[$sc]}" ] && sc_any=1; done
+  if [ "$sc_any" -eq 0 ]; then
+    _dr_pass scopes "${#scopes[@]} pane scope(s), none throttled"
+    return 0
+  fi
+
+  # Something IS parked. The second sample is what separates a scheduling blip
+  # from a scope in reclaim, so without a way to wait this check cannot finish
+  # its own sentence — and says so rather than guessing in either direction.
+  if ! command -v sleep >/dev/null 2>&1; then
+    _dr_warn scopes "processes are parked in memory reclaim, and sleep is not on PATH, so the second sample that would tell a blip from a stall could not be taken"       "install coreutils, then re-run: this check needs to look twice before it will call a scope stalled"
+    return 2
+  fi
+  sleep "$settle"
+
+  local -a bad=()
+  local first second p persist
+  for sc in "${!cgof[@]}"; do
+    first="${stuck1[$sc]}"
+    [ -n "$first" ] || continue
+    second="$(_dr_scope_stuck "$cgroot${cgof[$sc]}" "$procroot")"
+    # The INTERSECTION, not either sample: a pid that has left the reclaim path
+    # was a blip, and a pid that only just entered it has proved nothing yet.
+    persist=0
+    for p in $first; do
+      case " $second " in *" $p "*) persist=$((persist+1));; esac
+    done
+    [ "$persist" -gt 0 ] && bad+=("$sc has $persist process(es) parked in memory reclaim at $(_dr_scope_mem "$cgroot${cgof[$sc]}")")
+  done
+
+  if [ "${#bad[@]}" -eq 0 ]; then
+    _dr_pass scopes "${#scopes[@]} pane scope(s), none throttled"
+    return 0
+  fi
+  local detail="" b
+  for b in "${bad[@]}"; do detail="${detail}${detail:+; }${b}"; done
+  _dr_warn scopes "$detail" \
+    "that scope is over its MemoryHigh and the kernel is throttling every process in it, the session's own agent included — find the workload inside it (ps against the workspace path) and stop it; do NOT raise the cap, it is what keeps one pane from stalling the whole box"
+  return 2
+}
+
+# The pids of `$1` (an absolute cgroup directory) currently parked in the
+# memory-reclaim throttle, space separated. Silent about every read that fails:
+# a pid can exit between `cgroup.procs` and `wchan`, and a scope can vanish
+# entirely, neither of which is news.
+_dr_scope_stuck() {
+  local cgdir="$1" procroot="$2" pid w out=""
+  [ -r "$cgdir/cgroup.procs" ] || { printf ''; return 0; }
+  while IFS= read -r pid; do
+    [ -n "$pid" ] || continue
+    [ -r "$procroot/$pid/wchan" ] || continue
+    # `|| :`, NOT `|| continue`. /proc/<pid>/wchan carries NO TRAILING NEWLINE,
+    # so `read` returns 1 at EOF having nevertheless set `w` — and the first
+    # version of this line read that non-zero as "unreadable" and skipped every
+    # pid on the box. It hid because the healthy path answers PASS either way;
+    # only a fixture with a genuinely parked pid could tell.
+    w=""
+    IFS= read -r w < "$procroot/$pid/wchan" 2>/dev/null || :
+    [ "$w" = mem_cgroup_handle_over_high ] && out="${out}${out:+ }$pid"
+  done < "$cgdir/cgroup.procs"
+  printf '%s' "$out"
+}
+
+# "<current> of <high>" in GiB, for the WARN's detail. Read with `read`, not
+# `cat`, and formatted with bash arithmetic, not `awk` — same rule as the
+# listing above. An unreadable file answers "?" rather than 0: an unread number
+# is not a measured one, and a 0.00 here would read as a scope using nothing.
+_dr_scope_mem() {
+  local cgdir="$1" cur="" high=""
+  read -r cur < "$cgdir/memory.current" 2>/dev/null || cur=""
+  read -r high < "$cgdir/memory.high" 2>/dev/null || high=""
+  printf '%s of %s' "$(_dr_gib "$cur")" "$(_dr_gib "$high")"
+}
+
+# Integer bytes -> "N.NN GiB". Two fixed decimals via *100 then split, because
+# bash has no floating point and this file has no awk.
+_dr_gib() {
+  case "$1" in
+    ''|*[!0-9]*) printf '?' ;;
+    *) local h=$(( $1 * 100 / 1073741824 )); printf '%d.%02d GiB' $(( h / 100 )) $(( h % 100 )) ;;
+  esac
+}
+
 _check_config() {
   if [ -z "${BOX_ENV_FILE:-}" ] || ! declare -F _box_env_value >/dev/null 2>&1; then
     _dr_fail config "ccrc's own config reader is not loaded, so this box's ccrc.env was never read" \
