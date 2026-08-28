@@ -867,6 +867,21 @@ function healthy(prefix: string): string {
   writeFileSync(join(home, 'fixture-getent'), `203.0.113.7     ${EXPOSED_HOST}\n`);
   stubHostname(home);
   writeFileSync(join(home, 'fixture-host-ips'), '203.0.113.7 10.0.0.5\n');
+  // …and it has run `ccrc install`'s graphify step (Task 11 of the
+  // graphify-fleet-integration plan): a venv engine answering `--version`
+  // with what the pin stamp says, and a fresh `ok` census. This fixture
+  // never writes `~/.ccrc/accounts.sh` (no test here needs a roster), so
+  // the `graphify` check's skills/excludes/worktrees-disk conditions have
+  // nothing on this box to measure and stay silent on their own — only the
+  // engine and the census always have a subject, and `healthy()`'s contract
+  // is that every check PASSES.
+  mkdirSync(join(home, '.ccrc', 'graphify-venv', 'bin'), { recursive: true });
+  writeFileSync(join(home, '.ccrc', 'graphify-venv', 'bin', 'graphify'),
+    '#!/bin/sh\n[ "$1" = --version ] && { echo "graphify 0.9.9"; exit 0; }\nexit 0\n', { mode: 0o755 });
+  writeFileSync(join(home, '.ccrc', 'graphify.pin'), '0.9.9\n');
+  writeFileSync(join(home, '.ccrc', 'graph-sweep.json'), JSON.stringify({ passes: [{
+    started: new Date().toISOString(), finished: new Date().toISOString(),
+    pin: '0.9.9', status: 'ok', trees: [] }] }));
   return home;
 }
 

@@ -404,6 +404,22 @@ interface Result { code: number; stdout: string; stderr: string }
  *  than the fixture asked for. */
 function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   const env = ghContainedEnv(home, { ...process.env, HOME: home });
+  // Task 11's `graphify` doctor check makes `command -v graphify` a real
+  // finding (a WARN when PATH resolves it anywhere but the pinned venv), and
+  // unlike gh/curl/systemctl below there is no stub-bin entry that can
+  // shadow it deterministically: the venv's own bin dir is deliberately
+  // never on PATH (`_inst_graphify_engine`'s own header — PATH resolution is
+  // the exact footgun the venv exists to avoid), so ANY earlier `graphify`,
+  // stub or real, is a shadow the check correctly reports. Same
+  // "determinism, not containment" reasoning the `df` stub below already
+  // states for "whatever the developer's box happens to have" — this one
+  // developer's box carries a real, root-owned /usr/local/bin/graphify (an
+  // unrelated, real-world graphify install), which would otherwise WARN on
+  // every test in this file's suite, non-deterministically, on exactly one
+  // machine.
+  if (env['PATH']) {
+    env['PATH'] = env['PATH'].split(':').filter((p) => p !== '/usr/local/bin').join(':');
+  }
   const plant = (name: string, body: string): void => {
     if (omit.includes(name)) { rmSync(join(home, '.local', 'bin', name), { force: true }); return; }
     writeFileSync(join(home, '.local', 'bin', name), body, { mode: 0o755 });

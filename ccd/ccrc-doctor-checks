@@ -187,6 +187,7 @@ CCRC_DOCTOR_CHECKS=(
   name
   disk
   wrappers
+  graphify
   build
   fleet
 )
@@ -2404,6 +2405,285 @@ _check_wrappers() {
     return "$rc"
   fi
   _dr_pass wrappers "${#wr_ids[@]} accounts in \$HOME/.ccrc/accounts.json match \$HOME/.local/bin ($n_up upstream, $n_gen generated, $n_ext external)"
+}
+
+# ── graphify: the AST-graph sweep's engine, skills, excludes, census, and
+# worktrees headroom (D-995, D-997) ────────────────────────────────────────
+# `~/.ccrc/graph-sweep.json` is a census FOR an operator, not a doctor of its
+# own — `ccd-graph-sweep` runs unattended off a 15-minute timer
+# (deploy/systemd/ccd-graph-sweep.timer) and never prints to anyone's
+# terminal, so this check is the only place any of the following seven facts
+# ever reach a human:
+#
+#   1. role         — a server box runs no wrapper homes and grows no graphs.
+#   2. engine       — the venv's `graphify --version` against the pin stamp.
+#   3. PATH shadow  — a root-owned `graphify` ahead of the pinned venv.
+#   4. skills       — every rostered home's `.graphify_version` against the pin.
+#   5. excludes     — every tree the sweep would walk ignores its own output.
+#   6. census       — what the sweep itself last reported about itself.
+#   7. disk (D-995) — headroom on the filesystem the sweep actually writes to.
+#
+# ── FINDINGS ARE GROUPED BY REMEDY, NOT BY CONDITION NUMBER ───────────────
+# This file's own header states the rule ("ONE CHECK MAY ANSWER IN TWO (OR
+# MORE) CLASSES"): two conditions an operator fixes with the SAME verb share
+# one bucket and one verdict line; a condition whose fix is a DIFFERENT verb
+# gets its own bucket and its own line. (2) and (4) are both cured by
+# `ccrc install` (it provisions the venv, stamps the pin, and converges every
+# rostered home's skill in one pass), so they share `gfx_install_fail`. (5)'s
+# WARN is cured the same way (the exclude writer lives in the same verb) but
+# stays a SEPARATE array from (2)/(4) because it is a different CLASS
+# (WARN, not FAIL) — `_dr_warn`/`_dr_fail` are not interchangeable printers.
+# (1), (3), (6) and (7) each have a remedy nothing else here shares, so each
+# keeps its own bucket.
+_check_graphify() {
+  # ── (1) role: SKIP shape, same as `_check_fleet`'s and `_check_config`'s
+  # own absent-subject arms — a server box has no rostered wrapper homes for
+  # graphify to run against, so PASS would claim an agreement nobody
+  # measured and WARN would report a problem there is none. Existence and
+  # readability are checked BEFORE `_box_env_value` runs (its `< "$file"`
+  # redirection is fatal to a missing file) — the same guard
+  # `cmd_update`'s own CCRC_ROLE read uses (ccrc:4205-4208).
+  local role=""
+  if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ] && declare -F _box_env_value >/dev/null 2>&1; then
+    role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  fi
+  if [ "$role" = server ]; then
+    _dr_skip graphify "this box's role is server — graphify builds and serves per-wrapper-home graphs on the fleet host, and a server box has none"
+    return 3
+  fi
+
+  local engine="$HOME/.ccrc/graphify-venv/bin/graphify"
+  local pin_file="$HOME/.ccrc/graphify.pin" census="$HOME/.ccrc/graph-sweep.json"
+  local pin=""
+  # `read`, not `cat` — this file resolves no external binary it does not
+  # already need for the subject it is measuring (`_check_disk`'s own
+  # header), and `read` still populates `pin` even when the file has no
+  # trailing newline (it only returns non-zero for that, which `|| true`
+  # absorbs — measured against a bare, no-newline stamp).
+  if [ -r "$pin_file" ]; then IFS= read -r pin < "$pin_file" || true; fi
+  pin="$(_dr_trim "$pin")"
+
+  local -a gfx_install_fail=() gfx_shadow_warn=() gfx_excludes_warn=()
+  local -a gfx_census_fail=() gfx_census_warn=() gfx_disk_fail=() gfx_disk_warn=()
+
+  # ── (2) engine: the venv's own `graphify --version` against the pin ──────
+  # Parsed by parameter expansion, not awk — the same rule `_check_disk`'s own
+  # header states (this file resolves no external binary it does not already
+  # need for the SUBJECT it is measuring).
+  if [ ! -x "$engine" ]; then
+    gfx_install_fail+=("no graphify engine at \$HOME/.ccrc/graphify-venv/bin/graphify")
+  else
+    local raw got
+    raw="$("$engine" --version 2>/dev/null)"
+    got="$(_dr_trim "${raw##* }")"
+    if [ -z "$pin" ]; then
+      gfx_install_fail+=("the engine reports $got but there is no pin at \$HOME/.ccrc/graphify.pin to compare it against")
+    elif [ "$got" != "$pin" ]; then
+      gfx_install_fail+=("the engine reports $got but the pin at \$HOME/.ccrc/graphify.pin says $pin")
+    fi
+  fi
+
+  # ── (3) PATH shadow: a root-owned graphify ahead of the pinned venv ──────
+  # `_inst_graphify_engine`'s own header states why this matters:
+  # `/usr/local/bin/graphify` on the reference fleet is a root-owned symlink
+  # an unprivileged install can neither update nor remove, so a session that
+  # trusts bare `graphify` on PATH silently runs the wrong build. Absence is
+  # not a finding — the venv IS the resolution when nothing else answers.
+  local shadow
+  shadow="$(command -v graphify 2>/dev/null)"
+  if [ -n "$shadow" ] && [ "$shadow" != "$engine" ]; then
+    gfx_shadow_warn+=("\$PATH resolves graphify to $shadow ahead of the pinned venv at $engine")
+  fi
+
+  # ── (4) skills: every rostered home's stamp against the pin ──────────────
+  # `install-graphify-skill.sh`'s own homes+realpath-de-dup idiom, mirrored
+  # (not sourced — that script is a converge-on-run installer, not a
+  # library): source accounts.sh for CCRC_ACCOUNTS/_ccrc_cfg_dir, then de-dup
+  # on the REAL skills/ directory, because two rostered homes may symlink
+  # skills/ into one place (the reference fleet's .claude-gpt/.claude-kimi)
+  # and a de-duped check reports that shared directory once, not twice. A
+  # roster home that does not exist on this box yet is skipped, not FAILed —
+  # `install-graphify-skill.sh` itself treats a missing home the same way,
+  # and `_check_wrappers` already owns "the roster and disk disagree".
+  if [ -r "$HOME/.ccrc/accounts.sh" ]; then
+    # shellcheck source=/dev/null
+    source "$HOME/.ccrc/accounts.sh" 2>/dev/null
+  fi
+  if declare -F _ccrc_cfg_dir >/dev/null 2>&1 && [ "${#CCRC_ACCOUNTS[@]}" -gt 0 ]; then
+    local -A gfx_seen=()
+    local acct dir skills_real stamp
+    for acct in "${CCRC_ACCOUNTS[@]}"; do
+      dir="$(_ccrc_cfg_dir "$acct" 2>/dev/null)" || continue
+      [ -n "$dir" ] || continue
+      [ -d "$dir" ] || continue   # nothing has materialised this home yet — fine
+      skills_real="$(realpath "$dir/skills" 2>/dev/null)" || continue
+      [ -n "${gfx_seen[$skills_real]:-}" ] && continue
+      gfx_seen[$skills_real]=1
+      stamp=""
+      # `read`, not `cat` — same reason the pin read above gives; the skill
+      # stamp `install-graphify-skill.sh` writes is ALSO bare, no trailing
+      # newline (`printf '%s' "$PIN" > "$STAGE/.graphify_version"`).
+      if [ -r "$skills_real/graphify/.graphify_version" ]; then
+        IFS= read -r stamp < "$skills_real/graphify/.graphify_version" || true
+      fi
+      if [ -z "$stamp" ]; then
+        gfx_install_fail+=("$dir has no graphify skill stamp (skills/graphify/.graphify_version)")
+      elif [ "$stamp" != "$pin" ]; then
+        gfx_install_fail+=("$dir's graphify skill stamp is $stamp, not the pin $pin")
+      fi
+    done
+  fi
+
+  # ── (5) excludes: every tree the sweep would walk must ignore its own
+  # graphify-out/ — `ccd-graph-sweep`'s own gate, TRAILING SLASH included
+  # (R-3: `git check-ignore -q graphify-out` without it FAILS for a
+  # never-built tree even with the exclude line present). Mirrored, not
+  # sourced: the sweep is a standalone oneshot, not a library either.
+  local proot="$HOME/projects" wroot="$HOME/worktrees"
+  local -a gfx_trees=()
+  local d
+  for d in "$proot"/*/ "$wroot"/*/*/; do
+    [ -d "$d" ] || continue
+    git -C "$d" rev-parse --is-inside-work-tree >/dev/null 2>&1 && gfx_trees+=("${d%/}")
+  done
+  local gfx_excl_bad=0
+  for d in ${gfx_trees[@]+"${gfx_trees[@]}"}; do
+    git -C "$d" check-ignore -q graphify-out/ 2>/dev/null || gfx_excl_bad=$((gfx_excl_bad + 1))
+  done
+  if [ "$gfx_excl_bad" -gt 0 ]; then
+    gfx_excludes_warn+=("$gfx_excl_bad of ${#gfx_trees[@]} tree(s) under \$HOME/projects and \$HOME/worktrees do not ignore graphify-out/")
+  fi
+
+  # ── (6) census: the sweep's own report on itself ──────────────────────────
+  # Six pass-status values exist (`ok`, `probed-zero`, `no-trees-configured`,
+  # `pass-locked`, `paused`, `failed` — ccd-graph-sweep's own vocabulary), and
+  # TWO of them are hard findings: `probed-zero` is the cap-scopes 13-day
+  # failure shape (tree roots existed but the walk touched none of them), and
+  # `failed` means the pass could not run at all (no pin, most often) — a
+  # DIFFERENT condition from probed-zero but an equally broken one, and
+  # doctor must red on both (Ruling R-5).
+  # D-999 (this task): an ABSENT census is deliberately NOT a finding, where
+  # the brief's own prose said WARN — `ccrc install` lays the timer down but
+  # `OnBootSec=5min` means no fresh box has a census for several minutes at
+  # minimum, so a literal WARN here fired on EVERY install, always,
+  # everywhere (measured: `ccrc-install.test.ts`'s "ends with doctor, and a
+  # box that passes every check exits 0" — the operator ruling behind that
+  # test, D-139, is "A FRESH INSTALL ENDS GREEN": a warning that cannot be
+  # made to go away by fixing anything is exactly the desensitising yellow
+  # that ruling exists to prevent). `_check_build`'s own SKIP-for-"no stamp
+  # yet, a deploy writes one" arm is the same shape — but SKIP is a WHOLE-CHECK
+  # verdict (`_dr_skip`'s contract: no other verdict line, return 3), and this
+  # check has plenty else to measure on the very same box, so the absent case
+  # is silence, not a downgrade to SKIP. `jq`-absent and does-not-parse stay
+  # real WARNs below: those are genuine defects, not "hasn't happened yet".
+  if [ ! -f "$census" ]; then
+    :
+  elif ! command -v jq >/dev/null 2>&1; then
+    # The same duplication `_check_build`'s own jq guard accepts (its own
+    # comment: "jq is not on PATH" is a real WARN there too) — a box missing
+    # jq gets two lines about it, one per check that needs it to read its
+    # own subject, and each names its own subject.
+    gfx_census_warn+=("jq is not on PATH, so \$HOME/.ccrc/graph-sweep.json could not be read — see the 'jq' check above")
+  else
+    local status finished
+    status="$(jq -r '.passes[-1].status // empty' "$census" 2>/dev/null)"
+    finished="$(jq -r '.passes[-1].finished // empty' "$census" 2>/dev/null)"
+    case "$status" in
+      probed-zero|failed)
+        gfx_census_fail+=("the last graph-sweep pass ended $status")
+        ;;
+      "")
+        gfx_census_warn+=("\$HOME/.ccrc/graph-sweep.json does not parse as a census (no readable last pass)")
+        ;;
+      *)
+        # 3x the timer's own interval (deploy/systemd/ccd-graph-sweep.timer,
+        # OnUnitActiveSec=15min) — one missed run is ordinary jitter under
+        # load, three in a row means the timer itself has stopped firing.
+        local now_s fin_s
+        if [ -n "$finished" ] && now_s="$(date +%s 2>/dev/null)" \
+           && fin_s="$(date -d "$finished" +%s 2>/dev/null)"; then
+          local age=$(( now_s - fin_s ))
+          if [ "$age" -gt 2700 ]; then
+            gfx_census_warn+=("the last graph-sweep pass finished $((age / 60)) minutes ago — the timer may not be firing")
+          fi
+        fi
+        ;;
+    esac
+  fi
+
+  # ── (7) D-995: room on the filesystem WORKTREES_ROOT (or PROJECTS_ROOT) is
+  # on — `_check_disk`'s exact parse-and-floor idiom (read-based, no awk),
+  # over a DIFFERENT root: the corpus and graphify-out/ a build writes land on
+  # this filesystem, and a worktrees root is sometimes its own mount, not
+  # $HOME's. Neither root existing is not a finding — a fresh box has neither
+  # yet, and (6)'s absent-census arm treats that the same way (D-999).
+  local groot="" gwhich=""
+  if [ -d "$wroot" ]; then groot="$wroot"; gwhich="worktrees"
+  elif [ -d "$proot" ]; then groot="$proot"; gwhich="projects"
+  fi
+  if [ -n "$groot" ] && command -v df >/dev/null 2>&1; then
+    local out line last="" avail=""
+    out="$(df -Pk "$groot" 2>/dev/null)"
+    while IFS= read -r line; do
+      [ -z "$line" ] || last="$line"
+    done <<< "$out"
+    # shellcheck disable=SC2034  # the three leading fields are read to be dropped
+    [ -z "$last" ] || read -r _gfx_df_fs _gfx_df_size _gfx_df_used avail _gfx_df_rest <<< "$last"
+    case "$avail" in
+      ''|*[!0-9]*) ;;   # df could not stat it — nothing measured, no finding
+      *)
+        local floor=$((2 * 1024 * 1024)) tight=$((10 * 1024 * 1024))
+        local mib=$((avail / 1024)) gib=$((avail / 1024 / 1024))
+        if [ "$avail" -lt "$floor" ]; then
+          gfx_disk_fail+=("only $mib MiB free on \$HOME/$gwhich's filesystem — under the 2 GiB floor")
+        elif [ "$avail" -lt "$tight" ]; then
+          gfx_disk_warn+=("$gib GiB free on \$HOME/$gwhich's filesystem — getting tight")
+        fi
+        ;;
+    esac
+  fi
+
+  # ── the verdict, one line per bucket that has something to say ───────────
+  local rc=0
+  if [ "${#gfx_install_fail[@]}" -gt 0 ]; then
+    _dr_fail graphify "$(_dr_join "${gfx_install_fail[@]}")" \
+      "run: ccrc install — it provisions the engine venv, stamps the pin, and converges every rostered home's skill"
+    rc=1
+  fi
+  if [ "${#gfx_census_fail[@]}" -gt 0 ]; then
+    _dr_fail graphify "$(_dr_join "${gfx_census_fail[@]}")" \
+      "read \$HOME/.ccrc/graph-sweep.log for what the pass hit, and check the timer: systemctl --user status ccd-graph-sweep.timer"
+    rc=1
+  fi
+  if [ "${#gfx_disk_fail[@]}" -gt 0 ]; then
+    _dr_fail graphify "$(_dr_join "${gfx_disk_fail[@]}")" \
+      "free space on that filesystem before the next sweep pass — under 2 GiB a graph build fails the same way a ccd clone does"
+    rc=1
+  fi
+  if [ "${#gfx_shadow_warn[@]}" -gt 0 ]; then
+    _dr_warn graphify "$(_dr_join "${gfx_shadow_warn[@]}")" \
+      "only the operator can clear a root-owned link outside \$HOME — until then every bare 'graphify' invocation risks running the wrong build"
+    [ "$rc" -eq 1 ] || rc=2
+  fi
+  if [ "${#gfx_excludes_warn[@]}" -gt 0 ]; then
+    _dr_warn graphify "$(_dr_join "${gfx_excludes_warn[@]}")" \
+      "run: ccrc install — it writes the graphify-out/ exclude into every tree the sweep walks"
+    [ "$rc" -eq 1 ] || rc=2
+  fi
+  if [ "${#gfx_census_warn[@]}" -gt 0 ]; then
+    _dr_warn graphify "$(_dr_join "${gfx_census_warn[@]}")" \
+      "check the timer: systemctl --user status ccd-graph-sweep.timer (and journalctl --user -u ccd-graph-sweep.service -n 20)"
+    [ "$rc" -eq 1 ] || rc=2
+  fi
+  if [ "${#gfx_disk_warn[@]}" -gt 0 ]; then
+    _dr_warn graphify "$(_dr_join "${gfx_disk_warn[@]}")" \
+      "clear room on that filesystem while it is still cheap"
+    [ "$rc" -eq 1 ] || rc=2
+  fi
+  if [ "$rc" -ne 0 ]; then
+    return "$rc"
+  fi
+  _dr_pass graphify "engine $pin, skills converged, census ok"
 }
 
 # ── the running build against the stamp (stage 4, Task 9 — spec §8) ───────

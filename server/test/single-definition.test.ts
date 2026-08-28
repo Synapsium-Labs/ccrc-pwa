@@ -1640,8 +1640,9 @@ describe('graphify — one pin, one census path', () => {
       codeLines(f).some((l) => /^\s*GRAPHIFY_PIN=/.test(l))).map(rel).sort();
     expect(holders).toEqual(['ccd/ccrc']);
   });
-  it.todo("the census path '.ccrc/graph-sweep.json' is spelled by writers/readers, not duplicated as a second constant");
-  // the sweep WRITES it, doctor READS it — both may spell it; nothing else may.
-  // const holders = holdersOf('graph-sweep.json');
-  // expect(holders).toEqual(['ccd/ccd-graph-sweep', 'ccd/ccrc-doctor-checks']);
+  it("the census path '.ccrc/graph-sweep.json' is spelled by writers/readers, not duplicated as a second constant", () => {
+    // the sweep WRITES it, doctor READS it — both may spell it; nothing else may.
+    const holders = holdersOf('graph-sweep.json');
+    expect(holders).toEqual(['ccd/ccd-graph-sweep', 'ccd/ccrc-doctor-checks']);
+  });
 });
