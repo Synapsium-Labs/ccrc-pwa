@@ -1018,6 +1018,21 @@ function tableNames(): string[] {
 const lineFor = (out: string, name: string): string | undefined =>
   out.split('\n').find((l) => new RegExp(`^(PASS|WARN|FAIL) ${name}: `).test(l));
 
+/** Any verdict line, SKIP included. Deliberately NOT `lineFor`: at least one
+ *  assertion below uses that one's blindness to SKIP as the assertion itself
+ *  ("a SKIP is not a PASS/WARN/FAIL"), so widening it would quietly disarm a
+ *  test. Only the table census wants all four words. */
+const anyVerdictFor = (out: string, name: string): string | undefined =>
+  out.split('\n').find((l) => new RegExp(`^(PASS|WARN|FAIL|SKIP) ${name}: `).test(l));
+
+/** How many checks a HEALTHY fixture skips. Zero on Linux; exactly one on
+ *  macOS, and it is `scopes`: cgroup throttling is a Linux mechanism, so a
+ *  Darwin box has no such fault to find. It answers SKIP rather than PASS
+ *  deliberately — a PASS there would be a verdict nobody measured, which is
+ *  the forgery class this repo bans by name. The same shape as the standing
+ *  `linger` WARN the summary test below already accounts for. */
+const HEALTHY_SKIPS = process.platform === 'darwin' ? 1 : 0;
+
 // ── the table itself ──────────────────────────────────────────────────────
 
 describe('ccrc doctor: the check list is data', () => {
@@ -1041,7 +1056,9 @@ describe('ccrc doctor: the check list is data', () => {
     const home = healthy('ccrc-doctor-table-');
     const r = runDoctor(home);
     for (const n of tableNames()) {
-      expect(lineFor(r.stdout, n), `no verdict line for check "${n}"\n${r.stdout}`).toBeTruthy();
+      // SKIP counts here: the census is "did every check ANSWER", and a check
+      // with nothing on this platform to measure answers by skipping.
+      expect(anyVerdictFor(r.stdout, n), `no verdict line for check "${n}"\n${r.stdout}`).toBeTruthy();
     }
   });
 });
@@ -1208,7 +1225,8 @@ describe('ccrc doctor: tmux_skew', () => {
     const r = runDoctor(home);
     expect(r.stdout).toMatch(/^SKIP tmux_skew: no tmux server is running/m);
     expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) tmux_skew: /m);
-    expect(r.stdout).toMatch(/^summary: \d+ checks \(1 skipped\)/m);
+    expect(r.stdout).toMatch(
+      new RegExp(`^summary: \\d+ checks \\(${1 + HEALTHY_SKIPS} skipped\\)`, 'm'));
     expect(r.code).toBe(0);
   });
 
@@ -3052,7 +3070,7 @@ describe('ccrc doctor: wrappers', () => {
     expect(m, `last line was: ${last}`).toBeTruthy();
     const [total, skipped, verdicts, pass, warn, fail] = m!.slice(1).map(Number);
     expect(total).toBe(tableNames().length);
-    expect(skipped).toBe(0);
+    expect(skipped).toBe(HEALTHY_SKIPS);
     expect(warn).toBeGreaterThanOrEqual(1);
     expect(fail).toBeGreaterThanOrEqual(1);
     // BOTH nouns, because they are different numbers here: twelve checks
@@ -3858,7 +3876,8 @@ describe('ccrc doctor: fleet', () => {
     const r = runDoctor(home);
     expect(r.stdout).toMatch(/^SKIP fleet: .*local mode/m);
     expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) fleet: /m);
-    expect(r.stdout).toMatch(/^summary: \d+ checks \(1 skipped\)/m);
+    expect(r.stdout).toMatch(
+      new RegExp(`^summary: \\d+ checks \\(${1 + HEALTHY_SKIPS} skipped\\)`, 'm'));
     expect(r.code).toBe(0);
   });
 
@@ -4515,8 +4534,11 @@ describe('ccrc doctor: the output contract', () => {
     expect(pass + warn + fail).toBe(verdicts);
     // On a HEALTHY box every check answers exactly once, so the two nouns
     // agree — which is what makes the two-class run's disagreement meaningful.
-    expect(verdicts).toBe(total);
-    expect(skipped).toBe(0);
+    // A SKIP is an answer but NOT a verdict (cmd_doctor counts them apart), so
+    // a platform that legitimately skips one check has one fewer verdict than
+    // checks. On Linux `HEALTHY_SKIPS` is 0 and this reads as it always did.
+    expect(verdicts).toBe(total - HEALTHY_SKIPS);
+    expect(skipped).toBe(HEALTHY_SKIPS);
     expect(fail).toBe(0);
     // A HEALTHY macOS BOX CARRIES EXACTLY ONE STANDING WARN, and it is not a
     // fault to be fixed: `linger` has no counterpart on a platform where a
