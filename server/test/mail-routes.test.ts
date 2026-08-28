@@ -410,6 +410,16 @@ describe('the rejection table is total, in both directions', () => {
       // Task 9 (`coord/routes.ts`'s run routes) — a SEPARATE `refused`/
       // `reject.code` vocabulary for `POST /api/runs*`, now typed as
       // `RunRefuseCode` above and so no longer hand-allowlisted here.
+      'no-refs',              // coord/ledgerseed.ts — a `FloorMeasurement.why`
+                               // (wave 2, F2). NOT a wire code: the allocator's
+                               // refusal stays `not-seeded`, and this only
+                               // chooses WHICH detail sentence that 409 carries.
+                               // One in-process caller, no route maps it to a
+                               // status, nothing switches on it over the wire.
+                               // Its sibling `unmeasurable` is one word and
+                               // never reaches this scan at all — the same
+                               // asymmetry `refused-project`/`unlistable` above
+                               // records.
       'coordinator-paused',   // $REG marker filename, not a code
       'bad-request',          // the generic body-shape refusal server.ts
                                // already uses throughout; not a mail code

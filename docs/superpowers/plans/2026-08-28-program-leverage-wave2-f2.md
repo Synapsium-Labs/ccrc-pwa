@@ -1885,3 +1885,97 @@ call sites (watcher ×2, route ×1) and the optional `now`/`budgetMs` are suppli
 `unmeasurable` each pick one of the two detail sentences. `LEDGER_FLOOR_DIRS` is defined once and used
 by the watcher's floor sweep and by `measureLedgerFloor`; the reconcile sweep keeps its own `['plans']`
 literal, which is a different list and not a duplicate.
+
+---
+
+## Execution record (measured, 2026-08-28)
+
+Every red below was OBSERVED, not predicted. Mutations were applied one at a time, the named suite
+run, the failing assertion copied here verbatim, and the mutation reverted before the next.
+
+**Suite results, whole branch, after Task 5.** `server` 233 files / 5826 passed / 54 skipped;
+`agent` 280 passed; `pwa` 74 files / 1935 passed, `Type Errors no errors`. An earlier full server run
+reported 3 failing files; re-run, only ONE was real (below) and the other two did not reproduce —
+load flakes, per this repo's own arbitration rule.
+
+### Reds measured before the code that answers them
+
+| Pin | Suite | Failing assertion, verbatim |
+|---|---|---|
+| `SkillState` single-definition | `single-definition` | `SkillState: expected [] to deeply equal [ 'shared/api.ts' ]` |
+| The reader | `skillstate` | `Cannot find module '../src/skillstate.js'` |
+| The preflight through dispatch | `dispatch-skillstate` | `expected { ok: true, id: 1, …(7) } to match object { ok: true, skillState: 'present' }` (all 6) |
+| The reference documents it | `coordinator-skill` | `the dispatch-response table does not name skillState: expected '# The wave lifecycle, in full…' to contain 'skillState'` |
+| The lifted measurement | `ledgerseed` | `Cannot find module '../src/coord/ledgerseed.js'` |
+| The synchronous seed | `ledger-routes` | `expected 409 to be 201` |
+| The peer-protocol prose | `coordinator-skill` | `peer-protocol.md still promises an hourly floor sweep` |
+
+### Mutation table
+
+| # | Mutation | Suite | Result |
+|---|---|---|---|
+| 1.1 | `readWorkerSkillState` returns `'absent'` for every failed read | `skillstate` | 3 red |
+| 1.2 | `undefined` configDir answers `'absent'` | `skillstate` | 4 red |
+| 1.3 | `workerSkillPath` joins `skills/worker/` | `skillstate` | 6 red |
+| 2.1 | Delete the `recordRunEvent` row | `dispatch-skillstate` | 2 red |
+| 2.2 | `deps.configDir(wrapper ?? '')` instead of `undefined` | `dispatch-skillstate` | **SURVIVED** — see below |
+| 2.3 | Drop `skillState` from `sendDispatchOutcome` | `run-routes` | 1 red; **`typecheck-tests` STAYED GREEN** |
+| 2.4 | Move the preflight above the commit | `dispatch-skillstate` | 1 red: `expected 'planned' to be 'dispatched'` |
+| 3.1 | Delete the `skillState` table row | `coordinator-skill` | 1 red |
+| 3.2 | Restore "two fields" | `coordinator-skill` | 1 red |
+| 3.3 | Delete the `unmeasurable` BULLET, keep the row | `coordinator-skill` | **SURVIVED** — see below |
+| 3.4 | Delete the `skill-preflight:` trail sentence | `coordinator-skill` | 1 red |
+| 4.1 | Tolerate an unreadable file (`continue`) | `ledgerseed` | 2 red |
+| 4.2 | Delete the budget check | `ledgerseed` | 1 red |
+| 4.3 | Treat a dir the parent did not name as a failure | `ledgerseed` | 2 red |
+| 4.4 | Delete `isSafeProjectSegment` | `ledgerseed` | 1 red: `an unsafe project name reached the filesystem` |
+| 5.1 | Delete the inline-seed block | `ledger-routes` | 2 red |
+| 5.2 | Seed unconditionally, before `allocate()` | `ledger-routes` | 1 red: `a bad-count request walked the documents` |
+| 5.3 | Collapse the two 409 details into one | `ledger-routes` | 2 red |
+| 5.4 | Restore the old peer-protocol sentence | `coordinator-skill` | 1 red |
+
+### The two survivors, and what was done about them
+
+**2.2 — an EQUIVALENT mutant, then made non-equivalent.** `deps.configDir(wrapper ?? '')` passed
+every test. It is genuinely behaviour-preserving *today*: no roster id can be empty (`ID_RE`), so
+`configDirFor(cfg, '')` misses and answers `undefined` exactly as the explicit guard does. It stops
+being safe the moment `configDirFor` grows any fallback — and `idHomeWrapper` already has one
+(`roster.upstreamId`) for a neighbouring question. Fixed by pinning the CALL rather than the answer:
+a new resume-arm test drives dispatch with a spy port and asserts it is never consulted about a
+wrapper we do not have. Re-measured: `the preflight asked the roster about a wrapper it never had:
+expected [ '' ] to deeply equal []`.
+
+**3.3 — a pin that was too weak, exactly where the plan predicted.** Deleting the `unmeasurable`
+operator bullet left every assertion green, because the table row three lines above satisfies the
+same regexes. A table entry says what a value MEANS; only the bullet says what to DO about it, which
+is the half a coordinator acts on. Fixed with a slice scoped to the bullet list. Both bullet mutants
+now red: `no operator guidance for skillState: unmeasurable` and `no operator guidance for
+skillState: absent`.
+
+### Two findings the mutations produced
+
+**A dropped wire field compiles.** Mutation 2.3 removed `skillState` from `sendDispatchOutcome` and
+`typecheck-tests` stayed green (9 passed). `sendDispatchOutcome`'s `const _exhaustive: never = r`
+guard is total over the union's MEMBERS, not over one member's FIELDS — so a field can silently stop
+reaching the wire while the build is green. The wire pin is the only thing that catches it, and the
+comment at that call site now says so.
+
+**A text-scanning guard sees docstrings.** `single-definition`'s read-failure-pair rule is a text
+scan, so merely NAMING `io.ts`'s pair inside the new `SkillState` docstring reds the build. Rephrased
+to say `ReadFailure` rather than its members, and the docstring now records why.
+
+### One real failure found by the whole-branch run
+
+`mail-routes.test.ts`'s kebab-token scanner refused `no-refs`: *"no-refs is not a declared
+MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode or SessionLifecycle"*. It is not a
+wire code — the allocator's refusal stays `not-seeded`, and `FloorMeasurement.why` only chooses which
+detail sentence that 409 carries, with one in-process caller and no route mapping it to a status.
+Added to that file's existing `NOT_CODES` allowlist with a justification in its own idiom; the
+closest precedent there is `refused-project`, whose sibling `unlistable` escapes the scan only by
+being one word — the same asymmetry that hides this token's sibling `unmeasurable`.
+
+### Deviations consumed
+
+**D-1012 .. D-1019.** All eight are defined above; none was invented, and the block
+(`D-999..1046`, this program's) is not exceeded. `deviation-refs` measures the tracked-tree maximum
+and the plan-defined maximum as equal at **D-1019**.
