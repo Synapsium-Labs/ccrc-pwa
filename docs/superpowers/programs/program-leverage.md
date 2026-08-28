@@ -14,7 +14,7 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
 | # | scope | PRs | state |
 |---|---|---|---|
 | 1 | F1 — drift fixes (ungated-door count, coordinator trigger/resume wording, stale `_id()` anchor) + the coordinator-resume runbook (`references/resume.md`). AGENT-FIRST deploy. | run 10, PR #28 (merged `f5dfd2d9`) | done 2026-08-28 18:08 UTC — CI 5/5 green on `8135118b`, deployed both boxes agent-first, `/health` and fleet `ccd` both report `f5dfd2d9` |
-| 2 | F2 — dispatch-time `skillState` preflight (measure, never refuse) + synchronous deviation-floor seed on first allocation | — | planned |
+| 2 | F2 — dispatch-time `skillState` preflight (measure, never refuse) + synchronous deviation-floor seed on first allocation | run 12 | dispatched 2026-08-28 ~18:10 UTC — same workspace reclaimed (`resumed:true`, `clearedAt` verified, `briefQueued:true`) |
 | 3 | F3 — per-project program-ready badge (server measurement + /runs board) | — | planned |
 | 4 | F4 — program kickoff rides the idle-gated mail lane (`queueSystemMail`), direct-injection race retired | — | planned |
 | 5 | F5 — `POST /api/runs/:id/reclaim` (4th ungated door, dead-proof) + PWA resume affordance; door count → four | — | planned |
