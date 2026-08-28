@@ -2929,6 +2929,7 @@ cmd_install() {
   _inst_enable
   _inst_linger
   _inst_dirs
+  _inst_graphify_engine
   _inst_hooks
   _inst_skills
   _inst_wrappers
@@ -3871,6 +3872,27 @@ _inst_dirs() {
     printf '%s' "$made"
   )" || _ccrc_die "could not create the account config directories named by $sh — the session hooks would have nowhere to be installed"
   echo "install: dirs: config directory in place for $n account(s) named by \$HOME/.ccrc/accounts.sh"
+}
+
+# Engine into a ccrc-owned venv (spec §A): PEP-668-immune, one rm -rf to remove,
+# resolved by ABSOLUTE PATH everywhere — /usr/local/bin/graphify on the reference
+# fleet is a root-owned symlink an unprivileged install can neither update nor
+# remove, so `command -v` is actively wrong here.
+_inst_graphify_engine() {
+  [ "$INST_ROLE" = server ] && return 0
+  local venv="$HOME/.ccrc/graphify-venv"
+  if [ ! -x "$venv/bin/python" ]; then
+    python3 -m venv "$venv" \
+      || _ccrc_die "python3 -m venv failed for $venv — install python3-venv (apt: python3.12-venv) and re-run; nothing else was changed"
+  fi
+  "$venv/bin/python" -m pip install --quiet "graphifyy==$GRAPHIFY_PIN" \
+    || _ccrc_die "pip install graphifyy==$GRAPHIFY_PIN failed in $venv — network/index unreachable; nothing else was changed"
+  local got
+  got="$("$venv/bin/graphify" --version 2>/dev/null | awk '{print $2}')"
+  [ "$got" = "$GRAPHIFY_PIN" ] \
+    || _ccrc_die "graphify --version reports '${got:-nothing}' but the pin is $GRAPHIFY_PIN — the venv at $venv did not converge"
+  printf '%s\n' "$GRAPHIFY_PIN" > "$HOME/.ccrc/graphify.pin"
+  echo "install: graphify: engine graphifyy==$GRAPHIFY_PIN in \$HOME/.ccrc/graphify-venv (pin stamped)"
 }
 
 # ── _inst_hooks — run the installer, from where the BOX keeps it ──────────

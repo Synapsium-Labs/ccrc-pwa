@@ -242,10 +242,14 @@ export function installFixtureTree(home: string, sub = 'checkout'): string {
  *  answer for both halves) — so what is left is the four things a doctor run
  *  measures that an install does not create.
  *
- *  `node`, `tmux`, `jq`, `python3`, `flock` and `timeout` are NOT stubbed out
- *  of existence the way the doctor suite stubs them: this fixture's PATH keeps
+ *  `node`, `tmux`, `jq`, `flock` and `timeout` are NOT stubbed out of
+ *  existence the way the doctor suite stubs them: this fixture's PATH keeps
  *  the real system directories, because the verb runs `node`, `jq` and `rsync`
- *  for real. `df` is the one exception — see below.
+ *  for real. `df` is the one exception — see below. `python3` left that list
+ *  in graphify Task 2: `command -v python3` still resolves it (doctor's own
+ *  `_check_python3` is presence-only and stays green), but `ccrcEnv` below
+ *  now shadows it with a stub that intercepts `-m venv` — see that stub's own
+ *  comment for why a real venv-per-test would be wrong here.
  *
  *  `opts.upstream = false` (A2-NEW) builds the box WITHOUT planting the
  *  upstream binary below — the state the 2d fixtures hid: a truly fresh VM,
@@ -358,7 +362,7 @@ function healthyDoctorBox(home: string, opts: { upstream?: boolean } = {}): void
  *  `~/.local/bin`. Everything else there was written by the verb — which is
  *  what the "the default roster generates no wrappers" assertion measures. */
 const FIXTURE_BINS = ['gh', 'curl', 'journalctl', 'systemctl', 'loginctl', 'npm', 'rsync',
-  'df', 'claude', 'tmux'];
+  'df', 'claude', 'tmux', 'python3'];
 
 /** A box with a shipped tree on it and nothing else — no `~/.ccrc`, no
  *  `~/.local/bin` beyond the stubs the runner plants. Doctor-healthy, because
@@ -522,6 +526,39 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   // correctly" from "the fixture happened to hold nothing they match".
   plant('rsync',
     `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/rsync-argv"\nexec ${RSYNC} "$@"\n`);
+  // ── python3: graphify's engine venv, contained the same way (Task 2) ─────
+  // `_inst_graphify_engine` (graphify Task 2) now runs, on every role but
+  // `server`, `python3 -m venv "$venv"` followed by a REAL
+  // `"$venv/bin/python" -m pip install "graphifyy==$GRAPHIFY_PIN"` against
+  // whatever venv that command just built. Left alone, every `freshBox` in
+  // this file — dozens of tests asserting something that has nothing to do
+  // with graphify — would build a real venv and reach a real package index:
+  // exactly the network dependency `curl`'s poison exists to keep this suite
+  // free of, arriving here through a different tool. This stub answers only
+  // `-m venv <path>`: it builds the venv's `bin/` itself, with a fake
+  // `python` (a recorder — `$HOME/venv-python-calls` — so a test that wants
+  // to can still assert on the pip invocation `_inst_graphify_engine` makes
+  // through it) and a fake `graphify --version` that agrees with the pin, so
+  // the step converges silently for every fixture that plants no venv of its
+  // own. `ccrc-install-graphify.test.ts` is the file that actually exercises
+  // this step's behaviour (a pre-existing real venv, a version mismatch, the
+  // server-role skip); this stub exists only so THIS file's unrelated tests
+  // stay hermetic and fast. Any other invocation is a loud refusal — nothing
+  // here calls python3 any other way today, and a future one deserves to be
+  // seen rather than silently mishandled.
+  plant('python3', [
+    '#!/bin/sh',
+    'printf \'%s\\n\' "$*" >> "$HOME/python3-argv"',
+    'if [ "$1" = "-m" ] && [ "$2" = "venv" ] && [ -n "$3" ]; then',
+    '  bin="$3/bin"; mkdir -p "$bin" || exit 1',
+    '  printf \'#!/bin/sh\\necho "$@" >> "$HOME/venv-python-calls"\\nexit 0\\n\' > "$bin/python"',
+    '  chmod 755 "$bin/python"',
+    '  printf \'#!/bin/sh\\n[ "$1" = --version ] && { echo "graphify 0.9.9"; exit 0; }\\nexit 0\\n\' > "$bin/graphify"',
+    '  chmod 755 "$bin/graphify"',
+    '  exit 0',
+    'fi',
+    'echo "fixture python3: unexpected argv: $*" >&2; exit 90',
+  ].join('\n'));
   for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT']) delete env[k];
   // `verify-service.sh`'s own knobs, at the values its header says a test uses:
   // the production defaults sleep 3 + 5 seconds per call, and `_inst_enable`
@@ -621,9 +658,17 @@ function pathWithout(home: string, missing: string): string {
   // landed: without this entry, the git fixture died at the wrappers step and
   // `says GIT IS ABSENT when git is absent` went red — the test's own trap,
   // sprung by a new dependency rather than by anything about git.
+  //
+  // `awk` joins it in graphify Task 2, for the identical trap: `python3`
+  // above is a STUB, so it never reaches real PATH resolution, but the
+  // `awk '{print $2}'` `_inst_graphify_engine` pipes `graphify --version`
+  // through is a real invocation, unconditional on every role but `server`,
+  // and it now runs before the git-absent test's own subject (doctor's `FAIL
+  // git`) is ever reached. Measured the same way `stat` was: without this
+  // entry, `pathWithout(home, 'git')` died at the new step instead.
   for (const b of ['mkdir', 'cp', 'mv', 'rm', 'cat', 'chmod', 'cmp', 'date',
     'node', 'git', 'npm', 'rsync', 'bash', 'sleep', 'jq', 'mktemp', 'basename',
-    'diff', 'tmux', 'python3', 'flock', 'timeout', 'stat']) {
+    'diff', 'tmux', 'python3', 'flock', 'timeout', 'stat', 'awk']) {
     if (b === missing || existsSync(join(d, b))) continue;
     symlinkSync(realPath(b), join(d, b));
   }
@@ -1577,6 +1622,11 @@ describe('ccrc install: the order is stated in one place', () => {
       '_inst_enable',
       '_inst_linger',
       '_inst_dirs',
+      // graphify Task 2. After `_inst_dirs` and before `_inst_hooks`, per the
+      // task brief: the engine venv has no dependency on the account config
+      // dirs or the hooks installer either way, so the position is the
+      // brief's own placement rather than a dependency this file measures.
+      '_inst_graphify_engine',
       '_inst_hooks',
       // Worker-skill Task 4. Beside `_inst_hooks` and after it, in deploy.sh's
       // own order (`install-session-hooks.sh`, then the two skill installers):
