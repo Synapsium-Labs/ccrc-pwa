@@ -595,6 +595,33 @@ describe('the verification is actually wired into the deploy, and can observe a 
     expect(deploySh).toContain('install_atomic ccd/statusline-command.sh .claude/statusline-command.sh 755');
   });
 
+  it('R-8 (fix round F1): the graphify skill arm is PIN-GATED — a pinless box defers instead of aborting the agent lane', () => {
+    // `install-graphify-skill.sh` exits 1 with "no pin" when the venv engine
+    // step (`ccrc install`'s `_inst_graphify_engine`) has never run on the
+    // box, and this whole file runs under `set -euo pipefail`. An UNGATED
+    // remote call — `"${SSH[@]}" "$BOX" 'bash ~/.cc-sessions/install-graphify-skill.sh'`
+    // — would therefore ABORT the entire agent lane on a pinless box, before
+    // AGENT_CMD's daemon-reload/enables (which land the sweep unit/timer)
+    // ever run. `install_atomic` stays unconditional — shipping the
+    // installer file is harmless; only running it without its precondition
+    // is not.
+    expect(deploySh, 'install_atomic must still ship the installer unconditionally')
+      .toContain('install_atomic ccd/install-graphify-skill.sh .cc-sessions/install-graphify-skill.sh 755');
+    const GATED_INVOCATION = "\"${SSH[@]}\" \"$BOX\" '[ -f ~/.ccrc/graphify.pin ] "
+      + "&& bash ~/.cc-sessions/install-graphify-skill.sh "
+      + "|| echo \"graphify: no pin on box — run ccrc install once; skill deferred\"'";
+    expect(deploySh, 'the skill-arm remote command no longer carries the graphify.pin guard AND the deferred message')
+      .toContain(GATED_INVOCATION);
+    // The two halves this test guards independently, so a fix that keeps one
+    // but drops the other is still caught.
+    expect(deploySh).toContain('[ -f ~/.ccrc/graphify.pin ]');
+    expect(deploySh).toContain('graphify: no pin on box — run ccrc install once; skill deferred');
+    // And the OLD, ungated form must not survive anywhere in the file — the
+    // exact string a naive `install-graphify-skill.sh` call would produce.
+    expect(deploySh).not.toContain(
+      "\"${SSH[@]}\" \"$BOX\" 'bash ~/.cc-sessions/install-graphify-skill.sh'");
+  });
+
   it('after a new ccd lands, every claude-session@ supervisor is restarted onto it — and re-verified', () => {
     // Stage 0, finding 1's second half. `claude-session@.service` runs `ccd
     // supervise` as a LONG-LIVED bash process, so even an atomic install
@@ -1269,8 +1296,14 @@ describe('the verification is actually wired into the deploy, and can observe a 
       // The graphify skill's installer is the FOURTH (graphify Task 10,
       // O3/O6b): it `source`s the same `~/.ccrc/accounts.sh` too, for the
       // identical reason — see `install-graphify-skill.sh`'s own fallback
-      // `source "$HOME/.ccrc/accounts.sh"` branch.
-      ['graphify skill', "\"${SSH[@]}\" \"$BOX\" 'bash ~/.cc-sessions/install-graphify-skill.sh'"],
+      // `source "$HOME/.ccrc/accounts.sh"` branch. R-8 (fix round F1) gated
+      // the invocation on `~/.ccrc/graphify.pin`, so the literal command this
+      // test anchors on now carries the guard too — updated here, not just in
+      // the dedicated R-8 test above, or this ordering check would silently
+      // stop matching anything and report a false "installer no longer runs".
+      ['graphify skill', '"${SSH[@]}" "$BOX" \'[ -f ~/.ccrc/graphify.pin ] '
+        + '&& bash ~/.cc-sessions/install-graphify-skill.sh '
+        + '|| echo "graphify: no pin on box — run ccrc install once; skill deferred"\''],
     ] as const) {
       const runIdx = agentBranch.indexOf(invocation);
       expect(runIdx, `the agent branch no longer runs the ${what} installer (looked for: ${invocation})`)

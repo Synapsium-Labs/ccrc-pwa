@@ -104,6 +104,8 @@ function plantInstalledBox(home: string): void {
   writeFileSync(join(bin, 'ccd'), '#!/bin/sh\n# the installed ccd\n', { mode: 0o755 });
   writeFileSync(join(bin, 'ccrc'), '#!/bin/sh\n# the launcher\n', { mode: 0o755 });
   writeFileSync(join(bin, 'ccd-cap-scopes'), '#!/bin/sh\n# cap scopes\n', { mode: 0o755 });
+  // graphify Task 10/fix-round F2: the fourth `_inst_bins` executable.
+  writeFileSync(join(bin, 'ccd-graph-sweep'), '#!/bin/sh\n# graph sweep\n', { mode: 0o755 });
   // The units, both drop-in dirs and the slice escape (its literal \x2d name).
   const units = join(home, '.config', 'systemd', 'user');
   mkdirSync(join(units, 'claude-session@.service.d'), { recursive: true });
@@ -394,7 +396,11 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     const r = runVerb(home, 'uninstall');
     expect(r.code, r.stderr).toBe(0);
     expect(existsSync(join(home, 'ccrc'))).toBe(false);
-    for (const b of ['ccd', 'ccrc', 'ccd-cap-scopes']) {
+    // graphify Task 10/fix-round F2: `ccd-graph-sweep` joins the set — an
+    // uninstall that removed its units (`_uninst_units`) and left the binary
+    // orphaned it on PATH forever, exactly the defect this test already
+    // existed to catch for the other three.
+    for (const b of ['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep']) {
       expect(existsSync(join(home, '.local', 'bin', b)), `${b} survived`).toBe(false);
     }
     // The preserve set, whole.

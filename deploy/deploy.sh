@@ -724,8 +724,17 @@ if [ "$TARGET" = "agent" ]; then
   # package, never vendored, which is what makes it a plain `install_atomic` +
   # remote run rather than the rsync-a-tree-then-run shape its two neighbours
   # need).
+  #
+  # R-8 (fix round, F1): GATED on ~/.ccrc/graphify.pin existing on the box —
+  # `install-graphify-skill.sh` exits 1 with "no pin" when the venv engine
+  # step (`ccrc install`'s `_inst_graphify_engine`) has never run there, and
+  # this file runs under `set -euo pipefail`: an ungated call would ABORT the
+  # entire agent lane before AGENT_CMD's daemon-reload/enables ever run, on
+  # any box whose only provisioning has ever been `deploy.sh agent`. The
+  # `install_atomic` line above stays unconditional — shipping the installer
+  # file is harmless; only RUNNING it without its precondition is not.
   install_atomic ccd/install-graphify-skill.sh .cc-sessions/install-graphify-skill.sh 755
-  "${SSH[@]}" "$BOX" 'bash ~/.cc-sessions/install-graphify-skill.sh'
+  "${SSH[@]}" "$BOX" '[ -f ~/.ccrc/graphify.pin ] && bash ~/.cc-sessions/install-graphify-skill.sh || echo "graphify: no pin on box — run ccrc install once; skill deferred"'
   # `systemctl restart` returns success the moment systemd FORKS, so without a
   # post-restart check an agent that throws during ESM evaluation — which
   # `whitelist.ts` does BY DESIGN via `refuseToBoot`, and which is the one

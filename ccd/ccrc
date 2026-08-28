@@ -4685,8 +4685,11 @@ _uninst_wrappers() {
   for f in "$WRAPPER_BIN_DIR"/*; do
     [ -f "$f" ] || continue
     name="${f##*/}"
-    # The three executables are `_uninst_tree_bins`' subject, not wrappers.
-    case "$name" in ccd|ccrc|ccd-cap-scopes) continue ;; esac
+    # The four executables are `_uninst_tree_bins`' subject, not wrappers
+    # (graphify Task 10/fix-round F2 adds `ccd-graph-sweep` to this case,
+    # or the wrapper arm would misclassify it instead of the bin arm below
+    # ever getting a say).
+    case "$name" in ccd|ccrc|ccd-cap-scopes|ccd-graph-sweep) continue ;; esac
     [[ "$name" =~ $WRAPPER_ID_RE ]] || continue
     verdict="$(node --no-warnings --input-type=module -e '
 import { readFileSync, statSync } from "node:fs";
@@ -4786,9 +4789,13 @@ _uninst_tree_bins() {
   # `ccd-cap-scopes` is `_inst_bins`' third executable: an uninstall that
   # removed its units (above) and left the binary would strand an orphan on
   # PATH for ever (spec §7 predates the third bin; the ledger records this).
+  # `ccd-graph-sweep` is the fourth (graphify Task 10/fix-round F2, same
+  # reasoning exactly — its own units were already removed by `_uninst_units`
+  # above, and leaving the binary behind orphans it the same way).
   rm -f -- "$HOME/.local/bin/ccd" "$HOME/.local/bin/ccrc" "$HOME/.local/bin/ccd-cap-scopes" \
+    "$HOME/.local/bin/ccd-graph-sweep" \
     || _ccrc_die "removing the executables from \$HOME/.local/bin failed"
-  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes and the ccrc launcher removed from \$HOME/.local/bin"
+  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep and the ccrc launcher removed from \$HOME/.local/bin"
 }
 
 # The keep-asides `_inst_keep_aside` wrote for the two operator-namespace
