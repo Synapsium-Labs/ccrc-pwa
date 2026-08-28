@@ -106,6 +106,18 @@ describe('graph-sweep: probe + census (Task 6)', () => {
     expect(r.status).toBe(0);
     expect(lastPass().status).toBe('no-trees-configured');
   });
+  it('finding 3a — CCRC_GRAPH_BUDGET caps rebuilds per pass; the rest are skipped-budget', () => {
+    const repoA = makeRepo('alpha'); const repoB = makeRepo('beta'); plantEngine();
+    runSweep({ CCRC_GRAPH_BUDGET: '1' });
+    const outcomes = [outcomeOf(repoA), outcomeOf(repoB)];
+    // both trees are stale (never-built) going in; with a budget of 1 exactly
+    // one of the two is actually built this pass and the other is deferred —
+    // deleting the "$BUILT" -ge "$CCRC_GRAPH_BUDGET" guard stays green on
+    // every OTHER test in this file (nothing else pins it), but goes red
+    // here: both would come back 'never-built' instead.
+    expect(outcomes.filter((o) => o === 'never-built' || o === 'stale-rebuilt')).toHaveLength(1);
+    expect(outcomes.filter((o) => o === 'skipped-budget')).toHaveLength(1);
+  });
   it('row 6 — a second entrant exits pass-locked while a pass holds the flock', async () => {
     makeRepo('alpha'); plantEngine();
     const lock = j('.ccrc', 'graph-sweep.lock');
@@ -427,6 +439,33 @@ describe('graph-sweep: idle gate (Task 9)', () => {
     plantSession(repo, 'working');
     runSweep();
     expect(outcomeOf(repo)).toBe('stale-rebuilt');
+  });
+  // finding 3b — only the COMMITS arm above was ever tested; the SECONDS arm
+  // (CCRC_GRAPH_STALE_ESCAPE_SECS, checked against the engine stamp's own
+  // mtime) had no coverage at all. One commit keeps the commits-arm well
+  // under its default (20) threshold in both tests below, so only the
+  // secs arm can be what flips the outcome.
+  it('O3 — the escape hatch overrides busy once the engine stamp itself is old enough (SECONDS arm)', () => {
+    const repo = makeRepo('alpha'); plantEngine();
+    runSweep();                                                    // seed a fresh build + stamp
+    git(repo, 'commit', '-qm', 'move', '--allow-empty');            // stale again; 1 commit behind
+    const stampPath = path.join(repo, 'graphify-out', '.graphify_engine');
+    const old = Date.now() / 1000 - 10;                             // age the stamp 10s
+    fs.utimesSync(stampPath, old, old);
+    plantSession(repo, 'working');
+    runSweep({ CCRC_GRAPH_STALE_ESCAPE_SECS: '1' });                // threshold well under the 10s age
+    expect(outcomeOf(repo)).toBe('stale-rebuilt');
+  });
+  it('O3 — a LARGE escape-secs threshold still defers a busy stale tree (SECONDS arm, negative case)', () => {
+    const repo = makeRepo('alpha'); plantEngine();
+    runSweep();
+    git(repo, 'commit', '-qm', 'move', '--allow-empty');
+    const stampPath = path.join(repo, 'graphify-out', '.graphify_engine');
+    const old = Date.now() / 1000 - 10;
+    fs.utimesSync(stampPath, old, old);
+    plantSession(repo, 'working');
+    runSweep({ CCRC_GRAPH_STALE_ESCAPE_SECS: '3600' });             // threshold far above the 10s age
+    expect(outcomeOf(repo)).toBe('skipped-busy');
   });
 });
 
