@@ -707,6 +707,27 @@ button.metachip:active {
   letter-spacing: 0.04em;
   color: var(--status-attention-text);
 }
+/* D-792: one gate has been holding this delivery a while. NOTHING HAS FAILED,
+   and the colour says so — `--ink-tertiary`, the informational register this
+   strip already uses for artifact paths, NOT the `--status-attention-text` the
+   two rules above use. Those two are fates (abandoned, blocked); this is a
+   description of a lane that is still working, and painting it as attention
+   would re-introduce on this surface the exact "a busy worker is a fault" lie
+   the deviation was written against. Already-measured token, scoped
+   `.mail-strip .foo` like every other descendant here, so `design/audit.mjs`
+   reaches it through route 2b. */
+.mail-strip .mail-strip-held {
+  flex-basis: 100%;
+  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
+  color: var(--ink-tertiary);
+}
+/* The collapsed head's copy, `flex: none` beside the count — the
+   `.mail-strip-blocked-mark` shape one rule up, in this line's own register. */
+.mail-strip .mail-strip-held-mark {
+  flex: none;
+  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
+  color: var(--ink-tertiary);
+}
 .mail-strip .mail-strip-artifacts {
   flex-basis: 100%;
   margin: 0;

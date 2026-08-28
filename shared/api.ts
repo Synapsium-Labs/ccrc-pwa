@@ -3373,6 +3373,47 @@ export interface RunSummary {
  *  deliberate edit here, made with this paragraph's inequality in hand. */
 export const SPAWN_STALL_MS = 360_000;
 
+/** D-792, §6. WHEN the console is allowed to name the gate holding a delivery.
+ *
+ *  Three conditions, all of which must hold, and they are here for the same
+ *  reason `SPAWN_STALL_MS` is: a threshold the console DRAWS ON must not be a
+ *  copy of a number the lane ENFORCES. Nothing in `sweepMail` reads any of
+ *  these — reading one would make a gate column a scheduling input, which the
+ *  design forbids by name.
+ *
+ *  `MAIL_GATE_HELD_MS` — how long ONE gate must have held a delivery unbroken
+ *  (`now - gateSince`) before that is worth saying out loud. Deliberately far
+ *  above a busy worker's ordinary turn: fifteen minutes clears a full server
+ *  suite (~9 min) with room, so `not-idle` on a session doing real work stays
+ *  silent. Below it the row renders exactly as it did before this field
+ *  existed — a worker busy for ninety seconds is not a fault, and drawing it
+ *  as one would re-introduce the very lie this design was written against.
+ *
+ *  `MAIL_GATE_HELD_COUNT` — how many consecutive refusals at that same gate.
+ *  `gateSince` alone is not enough: a sweep that ran once, recorded a gate and
+ *  then stopped leaves an ageing `gateSince` behind it, and one observation is
+ *  not a pattern.
+ *
+ *  `MAIL_GATE_FRESH_MS` — how recently the most recent refusal was observed
+ *  (`now - gateAt`). This is the whole reason `gateAt` is a separate column
+ *  from `gateSince`: a sweep that has STOPPED leaves `gateSince` looking
+ *  exactly like a sweep that is running and still refusing. Five minutes, not
+ *  a small multiple of the sweep cadence, because `gateAt` is stamped by the
+ *  SERVER's clock and compared against the VIEWER's — a phone minutes off UTC
+ *  must not silence the line.
+ *
+ *  THE TEST IS ONE-SIDED, deliberately, and this sentence used to claim
+ *  otherwise. Only a `gateAt` too far in the PAST silences the line; one in the
+ *  FUTURE — which is what a viewer clock running behind the server's produces —
+ *  passes, and is pinned that way. The asymmetry is the safe one: a future
+ *  stamp means the refusal is at most as old as the skew, so the line is if
+ *  anything under-stating the hold. A past-side miss costs a warning nobody
+ *  sees; a two-sided test would cost the warning AND make a viewer's wrong
+ *  clock look like a wedged sweep. */
+export const MAIL_GATE_HELD_MS = 900_000;
+export const MAIL_GATE_HELD_COUNT = 3;
+export const MAIL_GATE_FRESH_MS = 300_000;
+
 /** One mail row, for the feed and the session strip (both PR J). */
 export interface MailSummary {
   /** The MAIL id (`mail.id`) — identifies the message, not any one
