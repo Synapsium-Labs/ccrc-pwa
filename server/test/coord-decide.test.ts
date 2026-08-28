@@ -32,6 +32,7 @@ import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { dispatchRun, type DispatchRunDeps } from '../src/coord/dispatch.js';
+import { configDirFor } from '../src/config.js';
 import { closeRun, type CloseRunDeps } from '../src/coord/close.js';
 import type { Runner } from '../src/exec.js';
 import { testDeps } from './helpers.js';
@@ -83,7 +84,10 @@ describe('dispatchRun, called directly with no CoordMutex in the loop (D-46, at 
     if (!('id' in opened)) throw new Error('openRun refused');
 
     const deps: DispatchRunDeps = { coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd,
-      fleetState: undefined, tmux: base.tmux, queue: base.queue };
+      fleetState: undefined, tmux: base.tmux, queue: base.queue,
+      // The one join `configDirFor` owns, supplied through dispatch's
+      // consumer-declared port (wave 2, F2 — the skill preflight reads under it).
+      configDir: (w: string) => configDirFor(base.cfg, w), };
 
     const first = await dispatchRun(deps, opened.id, 'do the thing', undefined);
     expect(first.ok).toBe(true);
@@ -104,7 +108,9 @@ describe('dispatchRun, called directly with no CoordMutex in the loop (D-46, at 
     const second = await dispatchRun(deps, opened.id, 'do the thing', undefined);
     expect(second).toMatchObject({ ok: false, kind: 'bad-transition', from: 'dispatched', to: 'dispatched' });
     expect(calls.length).toBe(callsAfterFirst);   // no second ws-add/ensure/ws-hold
-    expect(coord.runEvents(opened.id).length).toBe(1);   // still only the first dispatch's own row
+    // Still only the FIRST dispatch's own rows: its transition, plus the skill
+    // preflight every successful dispatch records (wave 2, F2).
+    expect(coord.runEvents(opened.id).length).toBe(2);
   });
 });
 
@@ -138,7 +144,10 @@ describe('dispatchRun, called CONCURRENTLY with no CoordMutex in the loop (fix r
     if (!('id' in opened)) throw new Error('openRun refused');
 
     const deps: DispatchRunDeps = { coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd,
-      fleetState: undefined, tmux: base.tmux, queue: base.queue };
+      fleetState: undefined, tmux: base.tmux, queue: base.queue,
+      // The one join `configDirFor` owns, supplied through dispatch's
+      // consumer-declared port (wave 2, F2 — the skill preflight reads under it).
+      configDir: (w: string) => configDirFor(base.cfg, w), };
 
     // No `CoordMutex` anywhere in this call — exactly the shape a call site
     // outside routes.ts's two `coordMutex.run(...)` wrappers would produce.
@@ -208,7 +217,10 @@ describe('closeRun, called directly — a failing ws-release leaves the run retr
     if (!('id' in opened)) throw new Error('openRun refused');
 
     const dispatchDeps: DispatchRunDeps = { coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd,
-      fleetState: undefined, tmux: base.tmux, queue: base.queue };
+      fleetState: undefined, tmux: base.tmux, queue: base.queue,
+      // The one join `configDirFor` owns, supplied through dispatch's
+      // consumer-declared port (wave 2, F2 — the skill preflight reads under it).
+      configDir: (w: string) => configDirFor(base.cfg, w), };
     const dispatched = await dispatchRun(dispatchDeps, opened.id, 'do the thing', undefined);
     expect(dispatched.ok).toBe(true);
     expect(coord.run(opened.id)!.state).toBe('dispatched');

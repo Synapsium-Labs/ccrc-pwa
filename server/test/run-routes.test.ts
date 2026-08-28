@@ -20,7 +20,7 @@ import { degradedReadIO, unreadableField } from './ioDoubles.js';
 import { ACTOR_FLAGS_CAP } from '../src/ccdargv.js';
 import { holdReason } from '../src/coord/rundefs.js';
 import { WORKER_KICKOFF_PREFIX } from '../src/coord/dispatch.js';
-import { MAIL_BODY_MAX_BYTES, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX } from '../../shared/api.js';
+import { MAIL_BODY_MAX_BYTES, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, isSkillState } from '../../shared/api.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -429,6 +429,28 @@ describe('POST /api/runs/:id/dispatch', () => {
     expect(calls.filter((c) => c[0] === 'ws-add')).toEqual([['ws-add', PROJECT]]);
   });
 
+  it('the 200 body CARRIES skillState, measured, never spread-when-interesting', async () => {
+    // wave 2, F2. Mutation: delete `skillState: r.skillState` from
+    // `sendDispatchOutcome` and this reds. The COMPILER will not — the
+    // `_exhaustive: never` guard there is total over the union's MEMBERS, not
+    // over one member's fields, so the field can silently stop shipping while
+    // the build stays green. That is the whole reason this pin exists.
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home, { wsAddCreates: ['demo-fresh-skill'] });
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    const res = await postDispatch(app, opened.id);
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Record<string, unknown>;
+    expect(Object.keys(body), 'skillState never reached the wire').toContain('skillState');
+    expect(isSkillState(body.skillState)).toBe(true);
+    // No fixture home carries an installed skill, so the honest answer is
+    // `absent` — and `absent` REACHING the wire at all is the point: spread
+    // only when interesting, a measured absence and an omitted field would be
+    // one value to the coordinator reading this JSON.
+    expect(body.skillState).toBe('absent');
+  });
+
   it('the 200 body CARRIES adopted and spawnState — the coordinator sees nothing but this JSON', async () => {
     // §1.5's verdict is computed in `dispatchRun` and would be dead if the
     // delivery edge dropped it: the coordinator reads HTTP and nothing else, and
@@ -707,6 +729,12 @@ describe('POST /api/runs/:id/dispatch', () => {
     expect(w.coord.runEvents(opened.id)).toEqual([
       { at: expect.any(Number), fromState: 'planned', toState: 'dispatched', causedBy: 'coordinator',
         detail: 'clear-refused:dialog-open' },
+      // wave 2, F2: every successful dispatch also records its skill preflight,
+      // after the commit — so the row rests in the state the transition just
+      // reached and reuses its push tag. No fixture home carries an installed
+      // skill, so `absent` is the honest answer here.
+      { at: expect.any(Number), fromState: 'dispatched', toState: 'dispatched',
+        causedBy: 'coordinator', detail: 'skill-preflight:absent' },
     ]);
     // D-47: NOTHING was queued — the delivery lane must never be handed a
     // brief to inject into a context `/clear` never actually verified as
@@ -796,6 +824,12 @@ describe('POST /api/runs/:id/dispatch', () => {
     await postDispatch(app, opened.id);
     expect(w.coord.runEvents(opened.id)).toEqual([
       { at: expect.any(Number), fromState: 'planned', toState: 'dispatched', causedBy: 'coordinator', detail: null },
+      // wave 2, F2: every successful dispatch also records its skill preflight,
+      // after the commit — so the row rests in the state the transition just
+      // reached and reuses its push tag. No fixture home carries an installed
+      // skill, so `absent` is the honest answer here.
+      { at: expect.any(Number), fromState: 'dispatched', toState: 'dispatched',
+        causedBy: 'coordinator', detail: 'skill-preflight:absent' },
     ]);
   });
 
@@ -813,7 +847,9 @@ describe('POST /api/runs/:id/dispatch', () => {
     // Nothing ran on the retry — no second `ws-add`/`ensure`/`ws-hold`, and
     // no second `run_events` row (still exactly the first dispatch's).
     expect(calls.length).toBe(callsAfterFirst);
-    expect(w.coord.runEvents(opened.id).length).toBe(1);
+    // Two rows from the FIRST dispatch (its transition plus its skill
+    // preflight, wave 2 F2), and none from the refused second.
+    expect(w.coord.runEvents(opened.id).length).toBe(2);
   });
 
   it('a wave-2 double dispatch never re-injects /clear into a live, already-resumed worker (D-46)', async () => {

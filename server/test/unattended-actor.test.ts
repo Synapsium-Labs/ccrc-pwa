@@ -36,6 +36,7 @@ import { ACTOR_FLAGS_CAP, CCD_ARGV, sweepDec } from '../src/ccdargv.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { dispatchRun, type DispatchRunDeps } from '../src/coord/dispatch.js';
+import { configDirFor } from '../src/config.js';
 import type { Runner } from '../src/exec.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -250,6 +251,9 @@ describe('an interpolated label carries the RUN ID ACTUALLY IN SCOPE, not merely
 
     const deps: DispatchRunDeps = {
       coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd,
+      // The one join `configDirFor` owns, supplied through dispatch's
+      // consumer-declared port (wave 2, F2).
+      configDir: (w: string) => configDirFor(base.cfg, w),
       // `ws-hold` itself, alongside the capability token: `verbSupported`
       // gates the hold call on the VERB being advertised, independently of
       // `sweepDec`'s own `capSupported` gate on the FLAG-parsing token —

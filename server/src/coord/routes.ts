@@ -4,6 +4,7 @@ import type { Deps } from '../server.js';
 import type { Bus } from '../bus.js';
 import { measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
 import { assembleFleet } from '../fleet.js';
+import { configDirFor } from '../config.js';
 import { peerDeliverable, archiveContradicted } from './peers.js';
 import { claimMailHint } from './claims.js';
 import { CCD_ARGV, verbSupported, sweepDec } from '../ccdargv.js';
@@ -109,7 +110,14 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
       // answer to "did that pane come up clean?". Dropping either here would be an
       // L4 adapter narrowing a distinction it received — and
       // `coordinator-skill/references/wave-lifecycle.md` documents both by name.
-      adopted: r.adopted, spawnState: r.spawnState,
+      //
+      // `skillState` joins them on the same terms and for the same reason: a
+      // field spread only when it is interesting is indistinguishable, on the
+      // wire, from a field an older build never had. Note the compiler does NOT
+      // catch a field dropped here — the `_exhaustive: never` guard below is
+      // total over the union's MEMBERS, not over one member's fields, so this
+      // body would stay green while the distinction silently never shipped.
+      adopted: r.adopted, spawnState: r.spawnState, skillState: r.skillState,
     });
   }
   switch (r.kind) {
@@ -943,7 +951,13 @@ export function registerCoordRoutes(
 
     const body = (req.body ?? {}) as { brief?: unknown; items?: unknown };
     const dispatchDeps: DispatchRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
-      fleetState: deps.fleetState, tmux: deps.tmux, queue: deps.queue };
+      fleetState: deps.fleetState, tmux: deps.tmux, queue: deps.queue,
+      // The one place a wrapper becomes a directory, called from L4 where the
+      // config already lives. `dispatch.ts` declares the port instead of
+      // importing `configDirFor` itself, because `config.ts` imports
+      // `./coord/db.js` and a value import would drag the store's module graph
+      // into a policy module (D-1015).
+      configDir: (wrapper: string) => configDirFor(deps.cfg, wrapper) };
     const outcome = await coordMutex.run(() => dispatchRun(dispatchDeps, id, body.brief, body.items));
     return sendDispatchOutcome(reply, outcome);
   });
