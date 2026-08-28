@@ -33,6 +33,27 @@ printf '{"nodes":[],"links":[],"built_at_commit":"%s"}' "$(git rev-parse HEAD)" 
 exit 0
 `, { mode: 0o755 });
   fs.writeFileSync(j('.ccrc', 'graphify.pin'), '0.9.9\n');
+  // Task 8: a real venv always ships bin/python beside bin/graphify, and the
+  // pre-build corpus guard now requires it on every tree. Task 6/7 tests plant
+  // only the engine and don't care about the guard, so give them a vacuously-
+  // passing default (empty corpus never breaches) — but only if a test hasn't
+  // already planted its own via plantGuardPython(), in EITHER call order (the
+  // 11a+11b test calls plantGuardPython() first, plantEngine() second).
+  const py = path.join(bin, 'python');
+  if (!fs.existsSync(py)) fs.writeFileSync(py, '#!/bin/bash\ntrue\n', { mode: 0o755 });
+}
+function plantGuardPython(): void {
+  // the fake venv python implements the guard protocol: it prints the corpus,
+  // one path per line, reading fixture file corpus-paths if present.
+  const bin = j('.ccrc', 'graphify-venv', 'bin');
+  // NB (gap in the brief's snippet, mirrors Task 7's plantEngine finding): the
+  // 11a+11b test calls this BEFORE plantEngine(), so `bin` does not exist yet
+  // — mkdirSync it here rather than relying on call order.
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(path.join(bin, 'python'), `#!/bin/bash
+# fake detect(): echo the fixture corpus (paths relative to cwd)
+cat "$HOME/fixture-corpus" 2>/dev/null || true
+`, { mode: 0o755 });
 }
 function runSweep(env: NodeJS.ProcessEnv = {}) {
   return spawnSync('bash', [SWEEP], { encoding: 'utf8',
@@ -140,6 +161,9 @@ exit 1
 echo "extractor exploded: boom" >&2
 exit 1
 `, { mode: 0o755 });
+    // this test doesn't call plantEngine(), so plant the guard's vacuously-
+    // passing default python by hand (Task 8: the guard now runs on every tree).
+    fs.writeFileSync(j('.ccrc', 'graphify-venv', 'bin', 'python'), '#!/bin/bash\ntrue\n', { mode: 0o755 });
     fs.writeFileSync(j('.ccrc', 'graphify.pin'), '0.9.9\n');
     runSweep();
     expect(outcomeOf(repo)).toBe('failed');
@@ -169,5 +193,68 @@ exit 1
       expect(Date.now() - t0).toBeLessThan(10_000);        // deferred, never waited
       expect(outcomeOf(repo)).toBe('skipped-locked');
     } finally { holder.kill(); }
+  });
+});
+
+describe('graph-sweep: corpus guard (Task 8)', () => {
+  it('row 2 — an untracked corpus path refuses the BUILD (previous graph untouched)', () => {
+    const repo = makeRepo('alpha'); plantEngine(); plantGuardPython();
+    runSweep();                                                     // seed a good graph
+    const seeded = fs.statSync(path.join(repo, 'graphify-out', 'graph.json')).mtimeMs;
+    git(repo, 'commit', '-qm', 'move', '--allow-empty');
+    fs.writeFileSync(path.join(repo, 'poison.py'), 'x');            // untracked, would enter corpus
+    fs.writeFileSync(j('fixture-corpus'), 'a.py\npoison.py\n');
+    runSweep();
+    expect(outcomeOf(repo)).toBe('refused-by-guard');
+    expect(fs.statSync(path.join(repo, 'graphify-out', 'graph.json')).mtimeMs).toBe(seeded);
+  });
+  it('row 19 — graphify-out/memory/ is exempt (a tree that answered queries still builds)', () => {
+    const repo = makeRepo('alpha'); plantEngine(); plantGuardPython();
+    fs.mkdirSync(path.join(repo, 'graphify-out', 'memory'), { recursive: true });
+    fs.writeFileSync(path.join(repo, 'graphify-out', 'memory', 'q1.md'), 'q');
+    fs.writeFileSync(j('fixture-corpus'), 'a.py\ngraphify-out/memory/q1.md\n');
+    runSweep();
+    expect(['never-built', 'stale-rebuilt']).toContain(outcomeOf(repo));
+  });
+  it('row 3 — a "!" line in the noise list refuses the build', () => {
+    const repo = makeRepo('alpha'); plantEngine(); plantGuardPython();
+    fs.mkdirSync(j('.ccrc', 'graph-noise'), { recursive: true });
+    fs.writeFileSync(j('.ccrc', 'graph-noise', 'alpha.list'), 'fixtures/\n!secrets.md\n');
+    fs.writeFileSync(j('fixture-corpus'), 'a.py\n');
+    runSweep();
+    expect(outcomeOf(repo)).toBe('refused-by-guard');
+    expect(lastPass().trees.find((t: {path:string}) => t.path === repo).reason).toContain('!');
+  });
+  it('rows 11a+11b — .graphifyignore is written for the build, removed after, and harmless if orphaned', () => {
+    const repo = makeRepo('alpha'); plantGuardPython();
+    fs.mkdirSync(j('.ccrc', 'graph-noise'), { recursive: true });
+    fs.writeFileSync(j('.ccrc', 'graph-noise', 'alpha.list'), 'fixtures/\n');
+    fs.writeFileSync(j('fixture-corpus'), 'a.py\n');
+    // the engine snapshots the file's presence mid-build:
+    plantEngine('cp .graphifyignore "$HOME/gfxignore-during" 2>/dev/null || true');
+    runSweep();
+    expect(fs.readFileSync(j('gfxignore-during'), 'utf8')).toContain('fixtures/');
+    expect(fs.existsSync(path.join(repo, '.graphifyignore'))).toBe(false);   // removed after
+    // 11b: an orphan does not dirty the tree (excluded by D')
+    fs.writeFileSync(path.join(repo, '.graphifyignore'), 'stray');
+    expect(git(repo, 'status', '--porcelain')).toBe('');
+    // and the next pass sweeps the stray even when the tree is fresh:
+    runSweep();
+    expect(fs.existsSync(path.join(repo, '.graphifyignore'))).toBe(false);
+  });
+  it('a worktree of alpha also resolves graph-noise/alpha.list (repo-basename shared across worktrees)', () => {
+    const repo = makeRepo('alpha'); plantEngine(); plantGuardPython();
+    const wtDir = j('worktrees', 'alpha', 'wt1');
+    fs.mkdirSync(path.dirname(wtDir), { recursive: true });
+    git(repo, 'worktree', 'add', '-q', '-b', 'wt1-branch', wtDir);
+    fs.mkdirSync(j('.ccrc', 'graph-noise'), { recursive: true });
+    // same repo-basename ('alpha') noise list, written once, must gate BOTH
+    // the main checkout and its worktree — the whole point of keying the
+    // noise list off the common-dir basename rather than the tree path.
+    fs.writeFileSync(j('.ccrc', 'graph-noise', 'alpha.list'), 'fixtures/\n!secrets.md\n');
+    fs.writeFileSync(j('fixture-corpus'), 'a.py\n');
+    runSweep();
+    expect(outcomeOf(wtDir)).toBe('refused-by-guard');
+    expect(lastPass().trees.find((t: {path:string}) => t.path === wtDir).reason).toContain('!');
   });
 });
