@@ -1599,4 +1599,42 @@ are appended here with ledger-allocated numbers.)_
 
 ## Task 0 findings
 
-_(appended by the Task 0 executor — resolver measurement, hook inventory, audit-token artifact name)_
+Measured 2026-08-28 on `openclaw` (live fleet box), read-only. Full commands + raw output:
+`.superpowers/sdd/2026-08-28-graphify-fleet-integration/task-0-report.md`.
+
+**Resolver verdict: CONFIRMED.** Chain `<id>.hookstate.json` (pid) → `<id>.wrapper` →
+`_ccrc_cfg_dir` (`~/.ccrc/accounts.sh`) → `<cfg>/sessions/<pid>.json` resolved for 6/6 fresh
+(mtime < 30 min) registry entries — the sessions actually live at measurement time, out of 23
+total registry entries (17 stale, 3 of which show `exists=NO`, expected for dead sessions). Cross-
+checked 1 of the 6 (`claude-rp-llm`) against ccd's own tmux pane-pid derivation
+(`ccd/ccd:10492-10493`, one `tmux list-panes` call): pid and resulting status-file path matched
+byte-for-byte. `<id>.wrapper` is confirmed a genuine registry field (present in the field-suffix
+enumeration `ls ~/.cc-sessions/ | sed 's/^[^.]*\.//' | sort -u`); no substitute derivation was
+needed. **R2 gap: none.** The resolver touches only `<id>.hookstate.json`, `<id>.wrapper` (plus
+`<id>.workdir`, informational-only), and the live status file under the wrapper home's `sessions/`
+— entirely inside R2's set. Task 9 needs no R2 extension.
+
+**Hook inventory (all 9 repos: `claude-skills`, `custom-tools`, `data-internal`,
+`expoAI-assistant`, `orchard-api-new-ts`, `intake-platform`, `OpenClawHetzner`, `rp-llm`,
+`synapsium-platform`):**
+
+| Repo | post-commit | post-checkout | Wholly graphify-gen? | `_PINNED` interpreter |
+|---|---|---|---|---|
+| all 9 (identical) | present, 9134 B, md5 `a91bed8b…914a` | present, 8541 B, md5 `92c4cde1…4873` | yes — shebang then `# graphify-hook-start`/`# graphify-checkout-hook-start` on line 2, closes at a matching `…-hook-end` marker, nothing chained before/after | `/usr/bin/python3` |
+
+Both files are byte-identical across all 9 repos (md5sum). No other `.git/hooks/` file is present
+or graphify-related in any of the 9. Both hooks skip during rebase/merge/cherry-pick; `post-commit`
+also honors `GRAPHIFY_SKIP_HOOK=1`; `post-checkout` only fires on an actual branch switch and only
+if `graphify-out/` already exists. Both launch the rebuild detached (`start_new_session=True`),
+logging to `${HOME}/.cache/graphify-rebuild.log`.
+
+**Audit-token artifact: none exists.** `cmd_ws_audit` (`ccd/ccd:7344`) is documented in its own
+header as creating "no worktree, no branch, no registry field, no tombstone." Traced the token:
+`REAP_TOKEN` (`ccd/ccd:7337`) comes from `_ws_fingerprint` (`ccd/ccd:6380`), a pure
+`printf … | sha256sum` over 14 live-measured facts — no file read or write. `ws-audit` prints it to
+stdout; `ws-reap --expect <token>` (`ccd/ccd:8296`) independently **recomputes** the same
+fingerprint from current state and compares (`ccd/ccd:8792`) rather than reading anything the audit
+wrote. Registry field-suffix enumeration confirms no `.audit`/`.token`/`.reap`/`.consent` field
+exists in `~/.cc-sessions/`. Task 9's sweep and Task 10's uninstaller have no on-disk audit artifact
+to discover or avoid — consent is carried only in the caller's copy-pasted token string, never
+persisted.
