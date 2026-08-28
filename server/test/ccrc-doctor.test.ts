@@ -1732,7 +1732,10 @@ describe('ccrc doctor: services', () => {
     expect(lines[w + 1]).toContain('enable --now ccd-cap-scopes.timer');
     expect(lines[w]).toContain('failed');            // systemd's word, not "inactive"
     // The worse class is what the check returns, and the summary counts both.
-    expect(r.stdout).toMatch(/^summary: \d+ checks \(0 skipped\), \d+ verdicts — \d+ passed, 1 warned, 1 failed$/m);
+    // `HEALTHY_SKIPS` rides along on every REAL-table count in this file: a
+    // Darwin box skips `scopes` and there is nothing wrong with that.
+    expect(r.stdout).toMatch(new RegExp(
+      `^summary: \\d+ checks \\(${HEALTHY_SKIPS} skipped\\), \\d+ verdicts — \\d+ passed, 1 warned, 1 failed$`, 'm'));
     expect(r.code).toBe(1);
   });
 
@@ -1836,7 +1839,8 @@ describe('ccrc doctor: config', () => {
     // against) — so the summary proves the runner accepted ALL FOUR skips.
     expect(r.stdout).toMatch(/^SKIP auth: .*ccrc-agent\.service/m);
     expect(r.stdout).toMatch(/^SKIP build: /m);
-    expect(r.stdout).toMatch(/^summary: \d+ checks \(4 skipped\)/m);
+    expect(r.stdout).toMatch(
+      new RegExp(`^summary: \\d+ checks \\(${4 + HEALTHY_SKIPS} skipped\\)`, 'm'));
     expect(r.code).toBe(0);
   });
 
@@ -4496,14 +4500,17 @@ describe('ccrc doctor: the output contract', () => {
     // SKIP is in the alternation and NOT in the verdict count: a check that did
     // not run has not answered, and counting it as an answer is the whole
     // defect the skip exists to avoid. Both fixtures are walked, because the
-    // healthy box has no skip and the address-less one has exactly two —
-    // `fleet` and, since Stage 4 Task 9, `build`, each for its own reading of
-    // the same missing address.
+    // healthy box has no skip of its own on Linux and the address-less one has
+    // exactly two — `fleet` and, since Stage 4 Task 9, `build`, each for its
+    // own reading of the same missing address. Add `HEALTHY_SKIPS` to both on a
+    // platform that legitimately skips a check outright (macOS: `scopes`).
     const home = healthy('ccrc-doctor-shape-');
     ghStub(home, ['github.com', '  - Logged in to github.com account fixture-bot (oauth_token)'], 0);
     const skipBox = healthy('ccrc-doctor-shape-skip-');
     rmSync(join(skipBox, '.ccrc', 'ccrc.env'), { force: true });
-    for (const [h, wantSkips] of [[home, 0], [skipBox, 2]] as const) {
+    for (const [h, wantSkips] of [
+      [home, HEALTHY_SKIPS], [skipBox, 2 + HEALTHY_SKIPS],
+    ] as const) {
       let verdicts = 0; let skips = 0;
       for (const l of runDoctor(h).stdout.split('\n')) {
         if (!l || l.startsWith('  remedy: ') || l.startsWith('summary: ')) continue;
