@@ -428,6 +428,57 @@ describe('the dispatch response documents that ok is not proof of a ready pane',
   // across SKILL.md and both references — strictly stronger than any check
   // written here, since a weaker duplicate would stay green on an extra
   // mention. It is the mechanism; it must stay green.
+
+  it('names skillState and all three of its answers, and says absent does not refuse', () => {
+    // program-leverage wave 2 (F2). The sibling test above is deliberately not
+    // widened: it pins the TWO fields that shipped with section 1.5, and this
+    // pins the third on its own terms, so deleting either passage reds a test
+    // that names it.
+    const wl = refs('wave-lifecycle.md');
+    expect(wl, 'the dispatch-response table does not name skillState').toContain('skillState');
+
+    // BLOCK-SCOPED: the three words must be inside the response block, not
+    // merely somewhere in a 500-line file.
+    const start = wl.indexOf('#### An `ok:true` dispatch is no longer proof');
+    expect(start, 'the dispatch-response block is gone or renamed').toBeGreaterThan(-1);
+    const block = flat(wl.slice(start, wl.indexOf('\n## ', start)));
+    for (const word of ['present', 'absent', 'unmeasurable']) {
+      expect(block, `the dispatch-response block omits skillState's '${word}' answer`)
+        .toContain(word);
+    }
+
+    // The distinction is the whole feature: a reader who takes `unmeasurable`
+    // for `absent` goes off to install a skill that is already there, and one
+    // who takes `absent` for a refusal re-dispatches a wave that dispatched.
+    expect(block, 'the block does not say unmeasurable is not absent')
+      .toMatch(/unmeasurable[\s\S]{0,240}?(is not|never)[\s\S]{0,40}?absent/i);
+    expect(block, 'the block does not say the preflight never refuses a dispatch')
+      .toMatch(/never refuses|does not refuse|still dispatch/i);
+
+    // ...and the OPERATOR GUIDANCE is pinned separately, scoped to the bullet
+    // list. MEASURED: without this narrower slice, deleting the `unmeasurable`
+    // bullet outright left every assertion above green, because the table row
+    // three lines up satisfies the same regexes. A table entry says what the
+    // value means; only the bullet says what to DO about it, which is the half
+    // a coordinator acts on.
+    const guide = flat(block.slice(block.indexOf('**What to do with them.**')));
+    expect(guide, 'no operator guidance for skillState: absent')
+      .toMatch(/`skillState: 'absent'`/);
+    expect(guide, 'the absent bullet does not tell the coordinator to report it first')
+      .toMatch(/report it to the operator before you treat the wave as briefed/i);
+    expect(guide, 'no operator guidance for skillState: unmeasurable')
+      .toMatch(/`skillState: 'unmeasurable'`/);
+
+    // The count sentence. Nothing else pins it, which is exactly why it became
+    // a lie the moment a third field shipped (D-1014) — pinned both ways so
+    // the NEXT field to land reds a suite instead of drifting.
+    expect(block, 'the lead-in still promises two fields').not.toMatch(/\btwo fields\b/);
+    expect(block, 'the lead-in does not say three fields').toMatch(/\bthree fields\b/);
+
+    // The run-event trail, documented the way `adopted` documents its own.
+    expect(flat(wl), 'the run-event detail for the preflight is undocumented')
+      .toContain('skill-preflight:');
+  });
 });
 
 describe('the skill on `final:true` — a release is now conditional', () => {
