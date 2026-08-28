@@ -52,6 +52,24 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
   either order); wave 1's new `references/resume.md` must ride the installer's assembled SRC —
   verify against graphify's §B change at wave-1 close/deploy if that branch has merged by then.
 
+- **Wave 1 verdict (2026-08-28 ~17:20 UTC):** wave-done fingerprint `d1dcb847` verified by the
+  server's re-measurement (dispatched→working→awaiting-review, ok); items settled 4/4. Review ran
+  four lenses (pinned-suite integrity, claim-vs-diff honesty, runbook correctness, discipline)
+  plus a live re-run of the four touched suites (all green), every finding adversarially
+  double-verified: **7 minors, 0 blocking/major, 0 refuted** → one fix round, run returned to
+  `working`, findings mailed (mail 94). The seven: (M1) the `same workspace, same id` negative
+  pin scans raw text where siblings use flat(); (M2) two new test-comment anchors gone stale via
+  the wave's own comment-only commit; (M3) resume.md cites wave-lifecycle §3 for the explicit-runId
+  recovery — it is §5; (M4) CoordStore.reconstruct misattributed to reconstruction-drill.test.ts
+  (it is coord-store.test.ts); (M5) SKILL.md's absolute "every `program:` hold sits on a WORKER's
+  workspace" contradicts the byte-pinned ledger-template (D-1004's own finding) — soften, template
+  stays deferred; (M6) six of eight runbook pins shipped without a measured red; (M7) the
+  three-door prohibition loop hand-types a second copy of UNGATED with no cross-pin — F5's fourth
+  door would drift silently. Worker deviations consumed: D-999..D-1005 (D-1004/D-1005 deferred,
+  wave-owned later). Notable worker catches: the census could not see new reference files
+  (D-1000 — corpus now derived from readdir), and spec item 3 was unachievable as written
+  (D-1001 — the auth sweep forbids method-spelled non-EXEMPT routes in the corpus).
+
 ## Carried constraints
 
 - Waves 1 and 8 are **AGENT-FIRST** deploys (they touch `ccd/coordinator-skill/` and the agent's
