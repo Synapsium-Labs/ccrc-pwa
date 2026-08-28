@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync, spawnSync, spawn } from 'node:child_process';
 import fs from 'node:fs'; import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
+import { seedAccountsSh } from './ccdWsHelpers.js';
 
 const SWEEP = path.resolve(__dirname, '../../ccd/ccd-graph-sweep');
 let home: string;
@@ -327,5 +328,48 @@ describe('graph-sweep: corpus guard (Task 8)', () => {
         }
       }
     }
+  });
+});
+
+describe('graph-sweep: idle gate (Task 9)', () => {
+  // seedAccountsSh gives the fixture HOME a real ~/.ccrc/accounts.sh so the
+  // sweep's `source "$HOME/.ccrc/accounts.sh"` + `_ccrc_cfg_dir` resolve.
+  beforeEach(() => { seedAccountsSh(home); });
+
+  // DEFAULT_TEST_ROSTER's first account (server/test/helpers.ts) is
+  // id: 'claude', configDirSuffix: '.claude' — the brief's 'claude'/'.claude'
+  // pair already matches, no substitution needed.
+  function plantSession(tree: string, state: string, opts: { fresh?: boolean } = {}): void {
+    const reg = j('.cc-sessions'); fs.mkdirSync(reg, { recursive: true });
+    fs.writeFileSync(path.join(reg, 'alpha-ws1.workdir'), tree + '\n');
+    fs.writeFileSync(path.join(reg, 'alpha-ws1.wrapper'), 'claude\n');
+    fs.writeFileSync(path.join(reg, 'alpha-ws1.hookstate.json'),
+      JSON.stringify({ pid: 4242, state: { state } }));
+    // live status file at the resolver's destination (Task 0-confirmed shape):
+    const cfg = j('.claude'); fs.mkdirSync(path.join(cfg, 'sessions'), { recursive: true });
+    fs.writeFileSync(path.join(cfg, 'sessions', '4242.json'),
+      JSON.stringify({ state: state === 'working' ? 'working' : 'idle' }));
+    if (opts.fresh === false) {
+      const old = Date.now() / 1000 - 3600;
+      fs.utimesSync(path.join(reg, 'alpha-ws1.hookstate.json'), old, old);
+    }
+  }
+  it('a working session defers its tree as skipped-busy', () => {
+    const repo = makeRepo('alpha'); plantEngine(); plantSession(repo, 'working');
+    runSweep();
+    expect(outcomeOf(repo)).toBe('skipped-busy');
+  });
+  it('an idle session builds; a STALE hookstate (>30 min) is treated as idle', () => {
+    const repo = makeRepo('alpha'); plantEngine(); plantSession(repo, 'working', { fresh: false });
+    runSweep();
+    expect(outcomeOf(repo)).toBe('never-built');
+  });
+  it('O3 — the escape hatch overrides busy at >=20 commits behind', () => {
+    const repo = makeRepo('alpha'); plantEngine();
+    runSweep();                                                    // seed
+    for (let i = 0; i < 20; i++) git(repo, 'commit', '-qm', `c${i}`, '--allow-empty');
+    plantSession(repo, 'working');
+    runSweep();
+    expect(outcomeOf(repo)).toBe('stale-rebuilt');
   });
 });

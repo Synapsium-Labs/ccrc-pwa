@@ -67,8 +67,46 @@ _gs_stale() {    # tree -> 0 stale / 1 fresh ; REASON set
   return 1
 }
 
-# ── stubs replaced by later tasks ─────────────────────────────────────────
-_gs_busy()  { return 1; }   # Task 9: idle gate + audit token + escape hatch
+# Idle gate (spec §C.5 + R2). READ-ONLY against $REG. Authority is the live
+# status file; hookstate is the pointer to it plus a freshness guard — gating
+# on hookstate.state alone is bug F6b, already fixed once (watch.ts:2029-2041).
+# O5: ws-audit persists no artifact (Task 0); reap's own state-changed refusal
+# is the fail-safe (ledger R-1).
+: "${CCRC_GRAPH_HOOKSTATE_FRESH_SECS:=1800}"
+BUSY_OUTCOME=""; BUSY_REASON=""
+_gs_busy() {
+  local tree="$1" id="" wd hs pid wrapper cfg sf now age
+  for wd in "$REG"/*.workdir; do
+    [ -f "$wd" ] || return 1
+    if [ "$(cat "$wd")" = "$tree" ]; then id="$(basename "$wd" .workdir)"; break; fi
+  done
+  [ -n "$id" ] || return 1                       # no session on this tree -> idle
+  hs="$REG/$id.hookstate.json"
+  [ -f "$hs" ] || return 1
+  now=$(date +%s); age=$(( now - $(stat -c %Y "$hs") ))
+  [ "$age" -le "$CCRC_GRAPH_HOOKSTATE_FRESH_SECS" ] || return 1   # stale pointer -> idle
+  pid="$(jq -r '.pid // empty' "$hs" 2>/dev/null)"; [ -n "$pid" ] || return 1
+  wrapper="$(cat "$REG/$id.wrapper" 2>/dev/null)"; [ -n "$wrapper" ] || return 1
+  # shellcheck source=/dev/null
+  source "$HOME/.ccrc/accounts.sh" 2>/dev/null || return 1
+  cfg="$(_ccrc_cfg_dir "$wrapper" 2>/dev/null)" || return 1
+  sf="$cfg/sessions/$pid.json"
+  [ -f "$sf" ] || return 1
+  [ "$(jq -r '.state // empty' "$sf" 2>/dev/null)" = working ] || return 1
+  # O3 escape hatch: bounded staleness beats politeness past the thresholds.
+  local built commits stamp_age
+  built="$(jq -r '.built_at_commit // empty' "$tree/graphify-out/graph.json" 2>/dev/null)"
+  if [ -n "$built" ]; then
+    commits="$(git -C "$tree" rev-list --count "$built..HEAD" 2>/dev/null || echo 0)"
+    stamp_age=$(( now - $(stat -c %Y "$tree/graphify-out/.graphify_engine" 2>/dev/null || echo "$now") ))
+    if [ "$commits" -ge "$CCRC_GRAPH_STALE_ESCAPE_COMMITS" ] \
+       || [ "$stamp_age" -ge "$CCRC_GRAPH_STALE_ESCAPE_SECS" ]; then
+      return 1                                   # build anyway
+    fi
+  fi
+  BUSY_OUTCOME=skipped-busy; BUSY_REASON="session $id working"
+  return 0
+}
 
 # Pre-build corpus guard (spec §E): there is NO publish seam — to_json writes
 # graph.json in place — so the only refusal that protects the previous graph
