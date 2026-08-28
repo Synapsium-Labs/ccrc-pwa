@@ -2105,8 +2105,13 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
     // the slice cap that is a box whose panes are uncapped while its transcript
     // says they are not. The recorded snapshot is what each call SAW.
     const { home } = units;
+    // The filter keeps STATE-CHANGING calls only; `is-active`, `show` and
+    // `list-units` are all reads. `list-units` joined them when `_check_scopes`
+    // landed — `cmd_install` ends with `cmd_doctor`, so every read doctor makes
+    // is made during an install too, and a read has no place in an assertion
+    // about the order of mutations.
     const calls = systemctlCalls(home).filter((c) => !c.argv.includes('is-active')
-      && !c.argv.includes('show'));
+      && !c.argv.includes('show') && !c.argv.includes('list-units'));
     expect(calls.map((c) => c.argv)).toEqual([
       '--user daemon-reload',
       '--user enable --now ccrc.service',
@@ -3190,7 +3195,10 @@ describe('ccrc install --role: the refusals and the default', () => {
     expect(existsSync(dotCcrc(home, 'agent.env'))).toBe(false);
     expect(read(dotCcrc(home, 'ccrc.env'))).toMatch(/^CCRC_ROLE=both$/m);
     const calls = systemctlCalls(home)
-      .filter((c) => !c.argv.includes('is-active') && !c.argv.includes('show'))
+      // Reads dropped, mutations kept — see the sibling assertion above for why
+      // `list-units` is one of them.
+      .filter((c) => !c.argv.includes('is-active') && !c.argv.includes('show')
+        && !c.argv.includes('list-units'))
       .map((c) => c.argv);
     expect(calls).toEqual([
       '--user daemon-reload',
