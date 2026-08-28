@@ -70,15 +70,55 @@ _gs_stale() {    # tree -> 0 stale / 1 fresh ; REASON set
 # ── stubs replaced by later tasks ─────────────────────────────────────────
 _gs_busy()  { return 1; }   # Task 9: idle gate + audit token + escape hatch
 _gs_guard() { return 0; }   # Task 8: pre-build corpus guard + .graphifyignore
-_gs_build() {               # Task 7: contained build + discriminators + stamp
-  local tree="$1"
+_gs_build() {    # contained build; sets BUILD_OUTCOME/BUILD_REASON; rc: 0 ok / 1 build-failed / 2 skipped-locked
+  local tree="$1" out="$tree/graphify-out"
+  # Non-blocking lock probe (spec §C.3): graphify's own updates block on this
+  # flock by design; a held lock means a writer is live, so defer — timeout
+  # then again means only "wedged".
+  if [ -e "$out/.rebuild.lock" ] && ! flock -n -E 99 "$out/.rebuild.lock" true 2>/dev/null; then
+    BUILD_OUTCOME=skipped-locked; BUILD_REASON="rebuild lock held"; return 2
+  fi
+  local before_sz=0 before_mt=0 errf
+  if [ -f "$out/graph.json" ]; then
+    before_sz=$(stat -c %s "$out/graph.json"); before_mt=$(stat -c %Y "$out/graph.json")
+  fi
+  errf="$(mktemp "${TMPDIR:-/tmp}/gfx-stderr.XXXXXX")"
   ( cd "$tree" && GRAPHIFY_NO_BACKUP=1 PYTHONHASHSEED=0 \
       GRAPHIFY_MAX_WORKERS="$CCRC_GRAPH_MAX_WORKERS" \
       nice -n 15 timeout "$CCRC_GRAPH_BUILD_TIMEOUT" "$ENGINE" update . ) \
-    >>"$HOME/.ccrc/graph-sweep.log" 2>&1
-  local rc=$?
-  [ "$rc" -eq 0 ] && printf '%s\n' "$PIN" > "$tree/graphify-out/.graphify_engine"
-  return "$rc"
+      >>"$HOME/.ccrc/graph-sweep.log" 2>"$errf"
+  local rc=$? first
+  first="$(head -n1 "$errf" 2>/dev/null || true)"
+  cat "$errf" >> "$HOME/.ccrc/graph-sweep.log"; rm -f "$errf"
+  if [ "$rc" -eq 0 ]; then
+    printf '%s\n' "$PIN" > "$tree/graphify-out/.graphify_engine"
+    BUILD_OUTCOME=""; BUILD_REASON=""; return 0
+  fi
+  if [ "$rc" -eq 124 ]; then
+    BUILD_OUTCOME=timed-out; BUILD_REASON="exceeded ${CCRC_GRAPH_BUILD_TIMEOUT}s"; return 1
+  fi
+  local after_sz=0 after_mt=0
+  if [ -f "$out/graph.json" ]; then
+    after_sz=$(stat -c %s "$out/graph.json"); after_mt=$(stat -c %Y "$out/graph.json")
+  fi
+  # refused-shrink: exit 1 AND graph.json untouched AND the shrink message.
+  # D-N (Task 7): the brief anchored this pin on export.py's `to_json` guard
+  # (grep 'shrank\|shrink' export.py) — that guard exists (export.py:486-500)
+  # but is NOT the code path `graphify update .` runs (0.9.9, installed at
+  # ~/.local/lib/python3.12/site-packages/graphify). `update` dispatches to
+  # watch._rebuild_code -> watch._check_shrink, whose message never contains
+  # "shrink" at all. Pinned instead against _check_shrink's own literal
+  # (watch.py:643-646): "[graphify] WARNING: new graph has {N} nodes but
+  # existing graph.json has {M}. Refusing to overwrite — you may be missing
+  # chunk files from a previous session. Pass --force to override." The
+  # fragment below is the one substring with no interpolated numbers.
+  # A pin bump revisits this literal (O1's acceptance) — re-grep both
+  # export.py and watch.py in the installed package, not export.py alone.
+  if [ "$after_sz" = "$before_sz" ] && [ "$after_mt" = "$before_mt" ] \
+     && grep -qi 'refusing to overwrite' <<<"$first"; then
+    BUILD_OUTCOME=refused-shrink; BUILD_REASON="$first"; return 1
+  fi
+  BUILD_OUTCOME=failed; BUILD_REASON="${first:-exit $rc}"; return 1
 }
 
 # ── the pass ──────────────────────────────────────────────────────────────
@@ -107,12 +147,13 @@ while IFS= read -r tree; do
   if ! _gs_guard "$tree"; then _gs_row "$tree" refused-by-guard "$GUARD_REASON" 0; continue; fi
   t0=$(date +%s%3N)
   _gs_build "$tree"; rc=$?
-  dur=$(( $(date +%s%3N) - t0 )); BUILT=$((BUILT+1))
-  BUILD_OUTCOME=failed; BUILD_REASON="exit $rc"   # Task 7 replaces these two lines
+  dur=$(( $(date +%s%3N) - t0 ))
   case "$rc" in
-    0)   if [ "$stale_reason" = never-built ]; then _gs_row "$tree" never-built "cold build" "$dur"
+    0)   BUILT=$((BUILT+1))
+         if [ "$stale_reason" = never-built ]; then _gs_row "$tree" never-built "cold build" "$dur"
          else _gs_row "$tree" stale-rebuilt "$stale_reason" "$dur"; fi ;;
-    *)   _gs_row "$tree" "$BUILD_OUTCOME" "$BUILD_REASON" "$dur" ;;   # Task 7 sets these
+    2)   _gs_row "$tree" skipped-locked "$BUILD_REASON" 0 ;;   # deferred; never counts against the budget
+    *)   BUILT=$((BUILT+1)); _gs_row "$tree" "$BUILD_OUTCOME" "$BUILD_REASON" "$dur" ;;
   esac
 done < <(_gs_trees)
 

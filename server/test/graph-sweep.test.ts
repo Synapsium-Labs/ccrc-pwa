@@ -104,3 +104,65 @@ describe('graph-sweep: probe + census (Task 6)', () => {
     expect(fs.existsSync(j('engine-calls'))).toBe(false);
   });
 });
+
+describe('graph-sweep: build discriminators (Task 7)', () => {
+  it('row 7 — a wedged engine is timed-out by the knob, not a hung pass', () => {
+    const repo = makeRepo('alpha');
+    plantEngine('sleep 60');                                   // wedges past the 5s test knob
+    const t0 = Date.now();
+    runSweep({ CCRC_GRAPH_BUILD_TIMEOUT: '2' });
+    expect(Date.now() - t0).toBeLessThan(30_000);
+    expect(outcomeOf(repo)).toBe('timed-out');
+  });
+  it('row 17 — a shrink refusal is refused-shrink, never failed', () => {
+    const repo = makeRepo('alpha'); plantEngine();
+    runSweep();                                                // seed a graph + stamp
+    git(repo, 'commit', '-qm', 'move', '--allow-empty');       // make it stale again
+    plantEngine('echo "refusing to write: node count shrank" >&2; exit 1\n# no graph write:');
+    // the fake above must NOT rewrite graph.json — remove the trailing writer lines for this plant:
+    const enginePath = j('.ccrc', 'graphify-venv', 'bin', 'graphify');
+    fs.writeFileSync(enginePath, `#!/bin/bash
+echo "[graphify] WARNING: new graph has 1 nodes but existing graph.json has 4. Refusing to overwrite — you may be missing chunk files from a previous session. Pass --force to override." >&2
+exit 1
+`, { mode: 0o755 });
+    runSweep();
+    expect(outcomeOf(repo)).toBe('refused-shrink');
+  });
+  it('other exit-1 conditions collapse to failed, carrying the first stderr line', () => {
+    const repo = makeRepo('alpha');
+    fs.mkdirSync(j('.ccrc', 'graphify-venv', 'bin'), { recursive: true });
+    fs.writeFileSync(j('.ccrc', 'graphify-venv', 'bin', 'graphify'), `#!/bin/bash
+echo "extractor exploded: boom" >&2
+exit 1
+`, { mode: 0o755 });
+    fs.writeFileSync(j('.ccrc', 'graphify.pin'), '0.9.9\n');
+    runSweep();
+    expect(outcomeOf(repo)).toBe('failed');
+    expect(lastPass().trees.find((t: {path:string}) => t.path === repo).reason)
+      .toContain('extractor exploded');
+  });
+  it('rows 4+18+5a — the build runs IN the tree with the pinned env (argv pin)', () => {
+    const repo = makeRepo('alpha'); plantEngine();
+    runSweep();
+    const call = fs.readFileSync(j('engine-calls'), 'utf8');
+    expect(call).toContain(`cwd=${fs.realpathSync(repo)}`);    // row 4: chdir (export.py:475 has no cwd=)
+    expect(call).toContain('NO_BACKUP=1');                     // row 5a
+    expect(call).toContain('SEED=0');                          // PYTHONHASHSEED
+    expect(call).toContain('WORKERS=');                        // row 18: cap present
+  });
+  it('skipped-locked — a held .rebuild.lock defers the tree without waiting', async () => {
+    const repo = makeRepo('alpha'); plantEngine();
+    runSweep();                                            // seed + stamp
+    git(repo, 'commit', '-qm', 'move', '--allow-empty');   // stale again
+    const lock = path.join(repo, 'graphify-out', '.rebuild.lock');
+    fs.writeFileSync(lock, '');
+    const holder = spawn('flock', [lock, 'sleep', '30']);
+    await new Promise((r) => setTimeout(r, 300));
+    try {
+      const t0 = Date.now();
+      runSweep();
+      expect(Date.now() - t0).toBeLessThan(10_000);        // deferred, never waited
+      expect(outcomeOf(repo)).toBe('skipped-locked');
+    } finally { holder.kill(); }
+  });
+});
