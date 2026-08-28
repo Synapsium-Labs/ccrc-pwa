@@ -1,7 +1,7 @@
 # Graphify fleet integration — design
 
-**Status:** design, awaiting operator review · **Date:** 2026-08-27 · **Branch:** `ws/ccrc-with-graphify-integration`
-**Revision:** 2 — mechanism layer rewritten after adversarial review (13 must-fixes applied)
+**Status:** design rev 3 — approved overall by the operator 2026-08-28; O1–O7 await rulings · **Date:** 2026-08-27, updated 2026-08-28 · **Branch:** `ws/ccrc-with-graphify-integration`
+**Revision:** 3 — rev 2 rewrote the mechanism layer after adversarial review (13 must-fixes); rev 3 applies the final gate's 7 must-fix + 10 should-fix edits (verdict: sound-with-edits)
 
 Every project ccrc can place a session in gets a working, current graphify: the engine at a pinned
 version, the skill converged into every rostered wrapper HOME, and an AST graph kept fresh without a
@@ -9,7 +9,8 @@ human invoking anything. Graphs stay on the fleet box. Nothing is committed into
 
 This document records what was **measured**, not what was assumed. Where a number appears without a
 command or a `file:line` beside it, it is marked as an estimate. That distinction is load-bearing:
-five of the design's decisions reverse the intuition that preceded the measurement, and revision 2
+five of the design's decisions reverse the intuition that preceded the measurement — the backup
+finding (§3.3), the three store results (§3.4), and two-dimensional staleness (§C.1) — and revision 2
 exists because an adversarial review found that four of six components could not be implemented as
 revision 1 described them.
 
@@ -54,7 +55,7 @@ current 0.9.50 (2026-08-25)**, 41 releases behind out of 218.
 > kind from the sweep is a defect, not a judgement call.
 
 **Caveat carried into implementation:** hookstate is *not* a general idle signal. It was deliberately
-demoted to a pending-question guard (`server/src/watch.ts:165-190`, which names the live status file
+demoted to a pending-question guard (`server/src/watch.ts:2029-2041`, which names the live status file
 "the SOLE idle authority"), `HOOKSTATE_FRESH_MS` is 30 min (`server/src/hookstate.ts:9,216`), and a
 live census read **22 files, 7 fresh, 15 `no-state`**. A gate keyed on `hookstate.state` alone
 repeats bug F6b, which ccrc already fixed. The gate must read the live status file as its authority
@@ -125,7 +126,7 @@ then permanent skip.
 | **Ignored** | clean | succeeds without `--force` | **deleted with the tree** |
 | **Un-ignored** | 1 line | `fatal: contains modified or untracked files` | **tree cannot be removed** |
 
-ccd deliberately never passes `--force` (`ccd/ccd:3451`, *"Still no --force"*), so an un-ignored store
+ccd deliberately never passes `--force` (`ccd/ccd:3444-3451`, *"Still no --force"*), so an un-ignored store
 wedges `cmd_ws_rm`, the reap tail (`ccd:9298`) and gc's orphan arm (`ccd:9989`) at once. An ignored
 store is collected by all three for free and cannot orphan.
 
@@ -173,6 +174,13 @@ contents.
 The last one is the trap: an unprivileged `ccrc install` can neither update nor remove that symlink,
 so the box could be "upgraded" while every `command -v graphify` caller still reaches 0.9.9.
 
+**Update 2026-08-28 (operator ruling + measurement):** the operator confirmed `pip`/`pipx`/`uv`
+**may be installed** on this box, so the absences above are facts, not constraints. Independently
+measured the same day: `python3 -m venv` **already works with nothing new installed** —
+`python3.12-venv` is present via apt, `ensurepip` reports 24.0, and a created venv carries its own
+`pip 24.0`. §A's venv therefore stands on its merits, not on scarcity; the root-owned
+`/usr/local/bin/graphify` symlink remains the one item only the operator can clear.
+
 ---
 
 ## 4. Architecture
@@ -184,13 +192,15 @@ ccrc install / ccrc update / deploy.sh agent      [roles: fleet, both]
    └── D'. exclude writer       → graphify-out/ + .graphifyignore into each repo's common-dir exclude
 
 systemd --user (fleet box only)
-   └── ccd-graph-sweep.timer → ccd-graph-sweep
+   └── ccd-graph-sweep.timer → ccd-graph-sweep      [pass lock: flock -n ~/.ccrc/graph-sweep.lock]
             ├── precondition:  git check-ignore -q graphify-out   (else refused-no-exclude)
             ├── probe:         built_at_commit != HEAD || engine_stamp != PIN
+            ├── idle gate:     live status file via the tmux-free resolver  (else skipped-busy)
+            ├── lock probe:    graphify-out/.rebuild.lock, non-blocking     (else skipped-locked)
             ├── pre-build:     write .graphifyignore → corpus guard → REFUSE BUILD on breach
-            ├── build:         graphify update (serialized, niced, capped, timeout)
+            ├── build:         graphify update (serialized, niced, capped, timeout knob)
             ├── post-build:    write .graphify_engine stamp; remove .graphifyignore
-            └── census:        ~/.ccrc/graph-sweep.json (atomic, per-tree outcomes)
+            └── census:        ~/.ccrc/graph-sweep.json (atomic, pass status + per-tree outcomes)
 
 ccrc doctor
    └── _check_graphify (multi-condition, _dr_join) → engine, skills, excludes, census
@@ -220,7 +230,7 @@ with **no** trees configured exits with a distinct `no-trees-configured` status 
 
 **Target: a ccrc-owned venv at `~/.ccrc/graphify-venv`**, created with `python3 -m venv`, into which
 `graphifyy==<pin>` is installed. This is immune to PEP 668, removable with one `rm -rf`, and
-independent of a future python3.13 reshuffle that would orphan `~/.local/lib/python3.12/site-packages`.
+independent of a future python3.13 reshuffle that would orphan `~/.local/lib/python3.12/site-packages`. Creating it requires installing nothing: `python3 -m venv` is verified working on the box today (§3.7), and the venv bootstraps its own `pip`.
 
 **Resolution is by absolute interpreter path, never `command -v`.** Every caller — the sweep, the skill
 installer's SRC derivation, the doctor check — uses `~/.ccrc/graphify-venv/bin/graphify` and
@@ -312,11 +322,24 @@ Per stale tree, **serialized, one at a time**:
 ```
 cd "$tree" && \
   GRAPHIFY_NO_BACKUP=1 PYTHONHASHSEED=0 GRAPHIFY_MAX_WORKERS=<n> \
-  nice -n 15 timeout 600 ~/.ccrc/graphify-venv/bin/graphify update .
+  nice -n 15 timeout "${CCRC_GRAPH_BUILD_TIMEOUT:-600}" \
+  "$HOME/.ccrc/graphify-venv/bin/graphify" update .
 ```
 
 `graphify update` with `changed_paths=None` re-extracts the full corpus (`watch.py:676-681`), so this
-one command serves both cold builds and refreshes — no second verb is needed.
+one command serves both cold builds and refreshes — no second verb is needed. `PYTHONHASHSEED=0` keeps
+builds byte-reproducible (graphify's own git hook sets the same pin), which the `refused-shrink`
+"graph.json unchanged" probe depends on.
+
+**Two seams exist for the tests' sake**, on the `CCRC_DOCTOR_GH_TIMEOUT` precedent
+(`ccd/ccrc-doctor-checks:159`): the timeout is the env knob `CCRC_GRAPH_BUILD_TIMEOUT` (default 600),
+and the engine path resolves through `$HOME` at runtime — never baked absolute — so a fixture HOME can
+plant a fake engine. §9's sweep-loop and installer rows depend on both.
+
+**Serialization is a named mechanism, not an assumption:** one pass = one oneshot invocation holding
+`flock -n ~/.ccrc/graph-sweep.lock`. systemd already refuses to re-enter a running oneshot; a manual
+second entrant fails the flock and exits recording pass status `pass-locked`. Trees build strictly in
+sequence within the pass. §9 row 6 mutates this flock.
 
 **Five preconditions, each from a measured failure. None optional.**
 
@@ -334,21 +357,35 @@ one command serves both cold builds and refreshes — no second verb is needed.
 #### C.3 The census — one counter per outcome
 
 §6 forbids collapsing conditions a caller handles differently. `_rebuild_code` returns `False` — and
-`graphify update` exits 1 — for *at least three* conditions beyond a build error, including
-`to_json`'s node-shrink refusal, which returns `False` **without writing `graph.json`**, leaving
-`built_at_commit` at its old value so the tree probes stale forever. The census therefore enumerates:
+`graphify update` exits 1 — for several conditions beyond a build error, including `to_json`'s
+node-shrink refusal, which returns `False` **without writing `graph.json`**, leaving
+`built_at_commit` at its old value so the tree probes stale forever. The census enumerates:
 
-`fresh` · `stale-rebuilt` · `skipped-idle` · `skipped-locked` · `refused-no-exclude` ·
-`refused-by-guard` · `refused-shrink` · `never-built` · `unstamped` · `timed-out` · `failed`
+`fresh` · `stale-rebuilt` · `skipped-busy` · `skipped-locked` · `refused-no-exclude` ·
+`refused-by-guard` · `refused-shrink` · `never-built` · `timed-out` · `failed`
+
+**Discriminators, stated because graphify's exit code cannot supply them:** `timed-out` is
+`timeout(1)`'s exit 124. `refused-shrink` is exit 1 **and** `graph.json` unchanged (size + mtime
+probed before and after) **and** the shrink-refusal message on stderr — its text pinned against the
+pinned engine at implementation time, with §9 row 17 going red if a shrink lands as `failed`. Every
+other exit-1 — interrupted lock wait, extraction error, corpus error — is **deliberately collapsed**
+into `failed`, carrying the first stderr line as `reason`: they share one remedy (read the log,
+rerun), which is what makes that collapse legal under §6.
+
+`unstamped` is **not** an outcome: a graph without `.graphify_engine` already satisfies
+`engine_stamp != PIN`, so C.1's probe classifies it stale. **On day one every one of the 41
+pre-existing stores is in exactly this state** — the first passes rebuild them, subject to O2's
+budget, and the fleet converges to the pin.
 
 The sweep probes `<tree>/graphify-out/.rebuild.lock` **non-blockingly** before invoking `graphify
-update`, so a held lock is `skipped-locked` and `timeout 600` again means only "wedged".
+update`, so a held lock is `skipped-locked` and the timeout again means only "wedged".
 `never-built` triggers a cold build subject to the per-pass budget (O2).
 
 **Sink:** `~/.ccrc/graph-sweep.json`, written atomically at end of pass —
-`{started, finished, pin, trees:[{path, outcome, reason, at, duration_ms}]}`, last N passes. Doctor
-reads that file. An aggregate count cannot answer *"why does THIS tree never refresh"*; per-tree
-granularity can.
+`{started, finished, pin, status, trees:[{path, outcome, reason, at, duration_ms}]}`, last N passes,
+with pass-level `status` ∈ `ok` · `probed-zero` · `no-trees-configured` · `pass-locked` (§4.1).
+Doctor reds on `probed-zero`. An aggregate count cannot answer *"why does THIS tree never refresh"*;
+per-tree granularity can.
 
 #### C.4 The sweep must prove it did something
 
@@ -365,6 +402,16 @@ Per R2, read-only. Authority is the live status file, with hookstate as a second
 Skip trees whose session is working, with a staleness escape hatch so the busiest repo does not starve
 (O3).
 
+**The tmux-free resolver, stated because none is shipped.** ccd's only status-file derivation walks
+the tmux pane pid (`ccd/ccd:10492-10493` — `tmux list-panes … pane_pid` →
+`$(_cfg_dir "$wrapper")/sessions/$spid.json`), which R2 forbids the sweep to touch. The sweep resolves
+tmux-free: `<tree>` → `$REG/<id>.workdir` (match by path) → `<id>.hookstate.json`'s `.pid`
+(`session-hook.sh:129` writes `CLAUDE_PID`) → `<home>/sessions/<pid>.json` — the live status file R2
+already covers. **Plan Task 0 is a measurement gate:** verify on the live box that `hookstate.pid`
+names the same file the pane-pid path reaches; if the resolver needs any registry file beyond R2's
+enumerated set, extend R2 explicitly rather than assuming. No workdir match, stale hookstate
+(>30 min), or no session on the tree ⇒ treat the tree as idle — there is no session to disturb.
+
 ### D. Store, and D'. the exclude writer
 
 `GRAPHIFY_OUT` is **left unset**. graphify's default is the relative literal `graphify-out`, resolved
@@ -379,7 +426,7 @@ Self-ingestion is already handled: `_SKIP_DIRS` contains the literal `"graphify-
 (`detect.py:696`).
 
 **D' — the writer.** Revision 1 named no producer for the exclude entry, so the sweep would have
-refused `ccrc-pwa` (which fails the check today, D-2, with 5 live worktrees) **forever**, and O2's
+refused `ccrc-pwa` (which fails the check today, G-2, with 5 live worktrees) **forever**, and O2's
 cold builds would never happen. The writer is:
 
 - `ccrc install` / `ccrc update` — append once per repo **common dir** for every enumerated tree;
@@ -437,8 +484,9 @@ One **multi-condition** `_check_graphify` on the `_check_wrappers`/`_check_fleet
 
 Conditions: engine present at the venv path and `--version` matching the pin; PATH shadowing (§A);
 each rostered home's `.graphify_version` against the pin, naming the missing; `check-ignore` coverage
-per tree; and the last-pass census from `~/.ccrc/graph-sweep.json`. On `CCRC_ROLE=server`, `_dr_skip`
-(rc 3).
+per tree; the last-pass census from `~/.ccrc/graph-sweep.json` (red on `probed-zero`); and a
+`WORKTREES_ROOT` disk floor — `df` on the device graphs actually land on, closing G-1. On
+`CCRC_ROLE=server`, `_dr_skip` (rc 3).
 
 This also fills a gap the repo admits: `README.md` advertises hook registration that no check
 implements, and doctor has **no** skills or hooks check at all.
@@ -449,9 +497,9 @@ implements, and doctor has **no** skills or hooks check at all.
 
 | Not built | Why |
 |---|---|
-| **Persistent watcher** | `watchdog` not installed (`graphify watch .` exits 1). Needs **258,671 inotify watches against a 244,190 limit** (an independent re-measure put it *higher*, at 265,272) and cannot prune — `observer.schedule(recursive=True)` places the watch before the ignore test runs. `watch.py:1186` calls `_rebuild_code` with no `changed_paths` — a **full** rebuild per batch, despite docs calling it incremental. No nice, no memory limit, no timeout. Fires on save, so builds from mid-edit trees. |
+| **Persistent watcher** | `watchdog` not installed (`graphify watch .` exits 1). Needs **258,671 inotify watches against a 244,190 limit** (an independent re-measure put it *higher*, at 265,272) and cannot prune — `observer.schedule(recursive=True)` places the watch before the ignore test runs. `watch.py:1187` calls `_rebuild_code` with no `changed_paths` — a **full** rebuild per batch, despite docs calling it incremental. No nice, no memory limit, no timeout. Fires on save, so builds from mid-edit trees. |
 | **Claude-Code rebuild hooks** | No cheap fire: one-file 21.6 s, **zero-file 20.6 s** (552 of 585 ccrc files bypass the AST cache). ~3.4 concurrent full rebuilds steady-state across 19 sessions. |
-| **Claude-Code nudge hooks driving session-side extraction** | Rejected on four measured grounds — Appendix B. |
+| **Claude-Code nudge hooks driving session-side extraction** | Rejected on four grounds — three measured, one estimated (Appendix B). |
 | **Claude-Code PreToolUse nudges** (`graphify claude install`) | Real and shipped — live in 6 project `settings.json`, 0 wrapper HOMEs — but it is **query steering, not freshness**: `hook-guard` stats `graph.json` and prints a nudge, never rebuilds. Orthogonal; per-Read fleet token cost unmeasured. |
 | **Shared/per-project store** | Livelocks (§3.4). |
 | **Shared extraction cache** | Inexpressible (§3.4). |
@@ -459,8 +507,8 @@ implements, and doctor has **no** skills or hooks check at all.
 | **A new ccd verb / exec-whitelist entry** | Nothing here needs one. |
 | **Semantic extraction** | Appendix A. |
 
-**Extending git hooks to `ccrc-pwa` is out of scope**: highest-churn repo, no ignore rule today, and
-the sweep already covers it.
+**Installing git hooks into `ccrc-pwa` is out of scope regardless of O6's outcome**: highest-churn
+repo, no ignore rule today (G-2), and the sweep covers it.
 
 ---
 
@@ -477,8 +525,8 @@ the sweep already covers it.
 
 **AGENT-FIRST.** Everything touches `ccd/`, so it ships to the fleet box before the server.
 
-**No overloaded null at a seam** — the eleven sweep outcomes in §C.3 are the shape that keeps the
-conditions distinct.
+**No overloaded null at a seam** — the ten per-tree outcomes and four pass statuses in §C.3 are the
+shape that keeps the conditions distinct.
 
 ---
 
@@ -495,11 +543,14 @@ carry an affordability note and a non-empty `ruling` whenever `collector` is nul
 
 | Class | Root | Pattern | Creators | Collector | Bound | Tier / affordability |
 |---|---|---|---|---|---|---|
-| `workspace-graph-store` | `<workdir>/graphify-out/` | **W** | sweep; managed git hook | the worktree's three existing collectors (`ccd:3451`, `:9298`, `:9989`) | workspace lifetime | ~11 MB/tree |
+| `workspace-graph-store` | `<workdir>/graphify-out/` | **W** | sweep — plus the managed git hook only under O6(a) | the worktree's three existing collectors (`ccd:3444-3451`, `:9298`, `:9989`) | workspace lifetime | ~11 MB/tree |
 | `project-graph-store` | `<projects-root>/<repo>/graphify-out/` | **O** | sweep | *none* — `ruling` required | repo lifetime | ~11 MB/repo, AST-only, backups off |
 | `graph-corpus-filter` | `<tree>/.graphifyignore` | **E** | sweep | sweep (trap + stray sweep) | one build | <1 KB |
 | `graph-build-lock` | `<tree>/graphify-out/.rebuild.lock` | **E** | graphify | graphify | one build | negligible |
 | `graph-sweep-census` | `~/.ccrc/graph-sweep.json` | **R** (ring-capped) | sweep | sweep, last N passes | rolling | bounded by N |
+
+The creators column tracks **O6**: under the recommended O6(b) the sweep is the sole creator
+everywhere.
 
 `workspace-graph-store` **cannot orphan** — it lives inside the directory the collector deletes.
 
@@ -534,7 +585,7 @@ running a timer that rebuilds graphs for a ccrc that is gone.
 | Leftover `.graphifyignore` wedges the same three seams | It is excluded too (D', §E) |
 | `built_at_commit` stamped from the wrong repo | `cd` into each tree (`export.py:475`) |
 | Shrink-refusal leaves a tree permanently "stale" | `refused-shrink` is its own census outcome (§C.3) |
-| One wedged tree stops the timer forever | non-blocking lock probe + `timeout 600` + `TimeoutStartSec=` |
+| One wedged tree stops the timer forever | non-blocking lock probe + the `CCRC_GRAPH_BUILD_TIMEOUT` knob + `TimeoutStartSec=` |
 | Rebuild storm starves the fleet | serialized + `nice 15` + `GRAPHIFY_MAX_WORKERS` + `MemoryMax` |
 | Unbounded backup accrual | `GRAPHIFY_NO_BACKUP=1`; AST-only never arms the path |
 | Generated artifacts poison a graph | Pre-build corpus guard **refuses the build** (§E) |
@@ -543,7 +594,7 @@ running a timer that rebuilds graphs for a ccrc that is gone.
 | Engine upgraded but callers still reach the old one | Absolute venv paths; doctor PATH-shadowing sub-check (§A) |
 | Sweep runs on a server-role box | Role matrix (§4.1) |
 | Graph destroyed on `ws-rm` | **Intended.** The store is regenerable |
-| Doctor PASSes while the graph volume fills | D-1 (§10) |
+| Doctor PASSes while the graph volume fills | G-1 — closed in scope: §F gains a `WORKTREES_ROOT` df arm (§10) |
 
 ---
 
@@ -558,12 +609,13 @@ and GREEN after. TDD, red first. Fixture HOMEs only (`makeCcdHarness`), never th
 | 2 | Corpus guard (pre-build) | an untracked path is planted and the **build** still runs |
 | 3 | No `!` in generated `.graphifyignore` | a `!` line is introduced (fixture: a gitignored `.md` re-entering the corpus) |
 | 4 | `cd` into tree | chdir removed; `built_at_commit` stamped from the wrong repo |
-| 5 | `GRAPHIFY_NO_BACKUP=1` | **fixture arms the path** (plant `.graphify_semantic_marker`): env present ⇒ no dated dir; env dropped ⇒ dated dir. *Without the fixture this row is unfalsifiable under an AST-only ruling and would be a spelling pin, not a behavioural one.* |
-| 6 | Serialization | serializer mutated; two builds overlap |
-| 7 | `timeout` wrapper | timeout removed; a wedged fixture hangs the pass |
+| 5a | `GRAPHIFY_NO_BACKUP=1` argv pin | the env assignment is dropped from the sweep's build environment (hermetic) |
+| 5b | Backup path armed *(integration: venv-gated, skip-if-absent; quiet-box CI is the arbiter)* | fixture plants `.graphify_semantic_marker`: env present ⇒ no dated dir; env dropped ⇒ dated dir. *Without the fixture this row is unfalsifiable under an AST-only ruling.* |
+| 6 | Pass serialization | the `flock -n ~/.ccrc/graph-sweep.lock` is removed; a second entrant no longer exits `pass-locked` |
+| 7 | `timeout` knob | the timeout is removed; a wedged fake engine sleeping past `CCRC_GRAPH_BUILD_TIMEOUT` hangs the pass |
 | 8 | Census non-empty | probe mutated to match nothing; pass still exits 0 |
 | 9 | Installer symlink de-dup | de-dup removed; a symlinked home written twice |
-| 10 | Version pin single definition | **a new `describe` block** regexing the literal `graphifyy==` spelling. `single-definition.test.ts` has *no generic duplicate detector* — every rule is a bespoke hand-written block, so a new pinned value gets no coverage automatically in either half. Its bash half (`:740`, roots `ccd/` + `deploy/` + `install.sh`) does cover a bash-side pin. |
+| 10 | Version pin single definition | **a new `describe` block** regexing the literal `graphifyy==` spelling. `single-definition.test.ts` has *no generic duplicate detector* — every rule is a bespoke hand-written block, so a new pinned value gets no coverage automatically in either half. Its bash half (`:740` roots `ccd/` + `deploy/`; `install.sh` joins via `bashExtra`, `:763`) does cover a bash-side pin. |
 | 11a | `.graphifyignore` trap | trap removed; non-zero exit or SIGTERM leaves the file |
 | 11b | Leftover harmlessness | `.graphifyignore` exclude line removed; a leftover makes `git worktree remove` refuse |
 | 12 | Doctor verdict/return-code agreement | a non-PASS path returns 0 |
@@ -571,6 +623,9 @@ and GREEN after. TDD, red first. Fixture HOMEs only (`makeCcdHarness`), never th
 | **14** | **Staged-SRC idempotence** | staging removed; a second run re-swaps homes (inode/mtime change) |
 | **15** | **Exclude writer** | writer removed; a fresh repo never becomes buildable |
 | **16** | **Role scoping** | role gate removed; the sweep unit installs on a `server`-role box |
+| **17** | **Shrink discriminator** | the unchanged-graph probe is removed; a shrink-refusal lands in the census as `failed` |
+| **18** | **Worker containment** | `GRAPHIFY_MAX_WORKERS`/`nice` dropped from the build argv (hermetic argv pin; the behavioural fan-out case is venv-gated like 5b) |
+| **19** | **`memory/` exemption** | the `graphify-out/memory/` exemption is removed; a tree that has answered a query is refused by the guard |
 
 ---
 
@@ -580,25 +635,28 @@ Deviation numbers are allocated from `POST /api/ledger/deviations` **at plan tim
 **895** (`docs/superpowers/plans/2026-08-27-git-email-policy.md:38`). Numbering a spec against a plan's
 ledger caused two prior collisions.
 
-**ccrc defects (will take D-numbers):**
+**ccrc defects — provisionally G-1..G-3; real D-numbers are allocated from the ledger at plan
+time.** Numbering a spec in the ledger's own `D-N` format is how the two prior collisions started,
+and it produced a dangling cross-reference in revision 2 of this very document:
 
-- **D-1 — doctor watches the wrong filesystem.** `_check_disk` runs `df -Pk "$HOME"`
-  (`ccd/ccrc-doctor-checks:1725-1766`), but graph data lands under `~/worktrees` / `~/projects`, on a
+- **G-1 — doctor watches the wrong filesystem.** `_check_disk` runs `df -Pk "$HOME"`
+  (`ccd/ccrc-doctor-checks:1720-1767`, the `df` at `:1732`), but graph data lands under `~/worktrees` / `~/projects`, on a
   **different device** (`$HOME` on `/dev/sda1`; worktrees a bind mount of `/dev/sdb`). The graph volume
   could fill to 100% while doctor reports PASS. ccd's own `CCD_DISK_FLOOR_GB` (`ccd/ccd:2807-2810`)
-  *does* check `WORKTREES_ROOT` — the pre-spawn floor sees what doctor cannot.
-- **D-2 — `ccrc-pwa` has no `graphify-out` ignore rule.** Neither `.gitignore` nor `.git/info/exclude`;
+  *does* check `WORKTREES_ROOT` — the pre-spawn floor sees what doctor cannot. **In scope: §F closes
+  this with a `WORKTREES_ROOT` df arm.**
+- **G-2 — `ccrc-pwa` has no `graphify-out` ignore rule.** Neither `.gitignore` nor `.git/info/exclude`;
   `git check-ignore graphify-out/` exits 1 today with 5 live worktrees. Any graph built in one would
   make that workspace unremovable at three seams.
-- **D-3 — skill drift is invisible.** Absent from `.claude-dev0` and `.claude-glm`, present in five
+- **G-3 — skill drift is invisible.** Absent from `.claude-dev0` and `.claude-glm`, present in five
   homes, and no check can see it.
 
 **Upstream graphify defects (recorded, worth reporting; not ccrc D-numbers):**
 
-- **U1** — `detect.py:824-827`'s docstring is false and self-contradictory (§3.6).
+- **U1** — `detect.py:824-827`'s comment block is false and self-contradictory (§3.6).
 - **U2** — `backup_if_protected` has no retention and no prune verb.
 - **U3** — `_git_head` (`export.py:475`) shells `git rev-parse HEAD` with no `cwd=`.
-- **U4** — docs describe `--watch` as incremental; `watch.py:1186` does a full rebuild. `--watch` is
+- **U4** — docs describe `--watch` as incremental; `watch.py:1187` does a full rebuild. `--watch` is
   also not a flag (it is `graphify watch`), and `references/hooks.md` omits the PreToolUse system.
 - **U5** — `to_json` writes `graph.json` in place with no staging, so a failed build can leave no
   usable artifact and a poisoned corpus is on disk before anything can inspect it.
@@ -607,11 +665,17 @@ ledger caused two prior collisions.
 
 ## 11. Open decisions
 
+The plan collects the O1–O7 answers — plus any R2 extension surfaced by Task 0's resolver
+measurement (§C.5) — in **one operator round before Task 1**; where a recommendation exists the plan
+adopts it unless overruled.
+
 - **O1 — the pin's initial value** (§A). Recommendation: 0.9.9, then bump as its own change.
-- **O2 — sweep scope and per-pass budget.** First pass is ~19 cold builds plus ~15 refreshes. ccrc
-  costs 24.7 s; **MekWarLive's wall time is unmeasured**. Recommendation: all trees, serialized, with a
-  per-pass rebuild budget so the first pass drains over hours rather than blocking. Note C.1 makes a
-  pin bump cost a full pass too.
+- **O2 — sweep scope and per-pass budget.** First pass is **~19 cold builds plus ~41 rebuilds** —
+  every pre-existing store lacks an engine stamp, so C.1's probe marks all of them stale on day one
+  (the "~15 refreshes" figure died with revision 1's HEAD-only probe). ccrc costs 24.7 s;
+  **MekWarLive's wall time is unmeasured**. Recommendation: all trees, serialized, with a per-pass
+  rebuild budget so the first pass drains over hours rather than blocking. Note C.1 makes a pin bump
+  cost a full-fleet pass too.
 - **O3 — sweep interval and idle-gate strength.** A tree goes stale exactly when its session commits —
   precisely when it is not idle. The staleness SLA has never been stated.
 - **O4 — a console surface.** ccrc's thesis is that it is the operating console; a silent background
@@ -679,7 +743,7 @@ pay-as-you-go API credit"*, `pricing: {input: 0.0, output: 0.0}`. It is excluded
 subscription pools are the ones `~/.cc-limits` tracks: "free" means "spent somewhere you already
 watch." GLM via OpenRouter is `needs-env-config`; one full ccrc semantic build ≈ **$2.10** (measured
 corpus: 124 markdown files, 8,127,477 chars, 467 slice-units ≈ 2.05M input tokens; code never reaches
-the LLM, `__main__.py:4678`). Fleet-wide ≈ **$75, extrapolated not measured**.
+the LLM, `__main__.py:4677`). Fleet-wide ≈ **$75, extrapolated not measured**.
 
 **The reason to decline is the measured 0.92% edge yield, not the price.** A cheaper backend does not
 make the layer produce the bridge it has never produced.
@@ -690,7 +754,7 @@ make the layer produce the bridge it has never produced.
 
 The operator proposed that a Claude-Code hook could trigger semantic extraction using the session
 itself as the LLM. Mechanically coherent — a hook cannot dispatch subagents but *can* inject context,
-as `hook-guard` already does. Rejected on four measured grounds:
+as `hook-guard` already does. Rejected on four grounds — three measured, one estimated:
 
 1. **A dispatch deadlock.** A graphify turn flips hookstate to `working`, and dispatch refuses on
    exactly that — `worker-busy`, `server/src/coord/dispatch.ts:482-483`. The coordinator has already
@@ -708,7 +772,8 @@ as `hook-guard` already does. Rejected on four measured grounds:
    working context the wave cannot afford to lose.
 
 Also noted: `SessionStart` is the worst possible placement — dispatch injects `/clear` for wave ≥ 2
-(`dispatch.ts:485`), and a hook there would inject into the window D-1 exists to keep clean.
+(`dispatch.ts:485`), and a hook there would inject into the clean context window that injection
+exists to create (`dispatch.ts:490-494`), before the brief arrives.
 
 ---
 
@@ -719,7 +784,10 @@ Six parallel investigations on the live fleet box, 2026-08-27: install machinery
 topology (3 lanes); corpus policy (3 lanes + measurement); semantic depth (4 lanes); hook-driven
 extraction (3 lanes). Then an adversarial spec review (5 lanes + verifying synthesiser) which returned
 **13 must-fixes** and, importantly, **5 false positives it caught in its own lanes** — including one
-asserted independently by three of them.
+asserted independently by three of them. A final three-lane gate on revision 2 (citation audit of
+every line not marked [re-verified], fix-induced-contradiction hunt, plan-writability dry run)
+returned **sound-with-edits**: 7 must-fix and 10 should-fix edits, all applied in revision 3; its
+citation audit corrected seven line drifts, each fixed in place.
 
 Claims marked **[re-verified]** in §3 were re-run by the author against the live box. Three dossier
 claims were **corrected** by that re-run and appear here in corrected form: the "unidentified snapshot
