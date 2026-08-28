@@ -13,7 +13,7 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
 
 | # | scope | PRs | state |
 |---|---|---|---|
-| 1 | F1 — drift fixes (ungated-door count, coordinator trigger/resume wording, stale `_id()` anchor) + the coordinator-resume runbook (`references/resume.md`). AGENT-FIRST deploy. | — | planned — dispatch HELD for operator spec review |
+| 1 | F1 — drift fixes (ungated-door count, coordinator trigger/resume wording, stale `_id()` anchor) + the coordinator-resume runbook (`references/resume.md`). AGENT-FIRST deploy. | run 10 | dispatched 2026-08-28 ~16:00 UTC — worker `ccrc-pwa-quiet-meadow` (fresh spawn, `briefQueued:true`, `adopted:false`, `spawnState:null`); briefed only when the worker acks |
 | 2 | F2 — dispatch-time `skillState` preflight (measure, never refuse) + synchronous deviation-floor seed on first allocation | — | planned |
 | 3 | F3 — per-project program-ready badge (server measurement + /runs board) | — | planned |
 | 4 | F4 — program kickoff rides the idle-gated mail lane (`queueSystemMail`), direct-injection race retired | — | planned |
@@ -39,6 +39,18 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
   `claimedBy:ccrc-pwa-brisk-meadow`). Deviation block allocated: **D-999..D-1046** (48 numbers,
   floor 1047 after) — every wave records its deviations inside this block; a worker with no
   server access writes `D-TBD-program-leverage` and it is reconciled at wave review.
+
+- **Adjacent lane (operator flag, 2026-08-28): `ws/ccrc-with-graphify-integration`**
+  (`ccrc-pwa-amber-cove`, wrapper claude2) — graphify fleet integration, spec rev 3
+  approved, 13-task plan, block D-995..D-998, mid-implementation. Its TRUE delta vs
+  origin/main is `ccd/ccrc` + its docs + install/update/single-definition tests — ZERO path
+  overlap with wave 1 (an apparent overlap was this coordinator's stale local `main` ref;
+  always diff against `origin/main`). Peer mail 92 sent with fold notes.
+- **Fold rulings for later waves:** waves 2–3 (F2 skill preflight, F3 program-ready badge)
+  REUSE graphify's skill-convergence/doctor measurement machinery rather than duplicating it
+  (single-definition); both lanes touch `server/test/single-definition.test.ts` (trivial merge,
+  either order); wave 1's new `references/resume.md` must ride the installer's assembled SRC —
+  verify against graphify's §B change at wave-1 close/deploy if that branch has merged by then.
 
 ## Carried constraints
 
