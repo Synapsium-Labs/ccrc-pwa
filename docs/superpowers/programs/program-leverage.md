@@ -82,6 +82,15 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
   now carries the reworded run-record trigger. Lesson carried to later waves (worker's, D-1009):
   write a wave's pins BEFORE the file they pin, or the reds have nothing to fail against.
 
+- **Wave 2 stall + recovery (2026-08-28 ~20:20 UTC):** the worker hit its account's SESSION
+  usage limit at ~18:38 mid-plan-verification ("resets 7pm"); Claude Code armed an auto-continue,
+  and an operator keystroke into that pane (`/effort ultracode`) CANCELLED it — the banner's own
+  "esc or type to cancel" arming. The worker then sat idle ~100 min with the wave-2 plan written
+  but uncommitted. Recovery: coordinator wake-up mail 99 (runId 12). Program-relevant lesson for
+  F7 (health surfacing): "open run, worker idle, no outstanding mail, no commits for N minutes"
+  is a detectable wedge shape, and a usage-limit pause + cancelled auto-continue is one of its
+  real causes — F7's un-briefed-coordinator detector should generalise to a stalled-worker row.
+
 ## Carried constraints
 
 - Waves 1 and 8 are **AGENT-FIRST** deploys (they touch `ccd/coordinator-skill/` and the agent's
