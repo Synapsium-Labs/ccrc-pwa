@@ -3082,7 +3082,14 @@ describe('ccrc doctor: wrappers', () => {
     // sum not matching the leading number reads as the fact it is rather than
     // as an arithmetic bug somebody should go and "fix".
     expect(pass + warn + fail).toBe(verdicts);
-    expect(verdicts).toBeGreaterThan(total);
+    // The comparison is against the checks that ANSWERED WITH A VERDICT, not
+    // against every check in the table. A skip subtracts a verdict without
+    // subtracting a check, so on a platform that legitimately skips one
+    // (macOS: `scopes`) the two-class check's extra verdict is cancelled
+    // exactly, and `verdicts > total` reads 26 > 26 — a red leg reporting
+    // arithmetic that was never wrong. On Linux `HEALTHY_SKIPS` is 0 and this
+    // is the assertion it always was.
+    expect(verdicts).toBeGreaterThan(total - HEALTHY_SKIPS);
   });
 
   // ── an external account: existence, and nothing else ────────────────────
