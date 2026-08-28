@@ -879,6 +879,26 @@ describe('the server address is config, never a literal (operator ruling 2026-08
 describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
   const pp = (): string => refs('peer-protocol.md');
 
+  it('does not send a coordinator away to wait for a sweep that no longer gates it', () => {
+    // wave 2, F2: the first allocation on a fresh project measures the floor
+    // itself. Prose promising an hourly wait would send a coordinator away from
+    // a door that is now open — and that stall was the whole point of the
+    // feature, since a project with no live session was never swept at all.
+    const p = flat(pp());
+    expect(p, 'peer-protocol.md still promises an hourly floor sweep')
+      .not.toMatch(/hourly floor sweep has not yet/);
+    expect(p, 'peer-protocol.md does not say the allocator seeds the floor itself')
+      .toMatch(/seeds? (its own |the )?floor|measures the floor itself/i);
+    // The refusal NARROWED; it did not go away, and its standing instruction is
+    // unchanged. `claims-envelope.test.ts` separately requires the producer.
+    expect(p, 'the report-do-not-invent instruction was lost with the rewrite')
+      .toMatch(/report it, do not invent/i);   // case-insensitive: it now opens a sentence
+    // Both surviving conditions are named, so a reader can tell which one they
+    // are holding.
+    expect(p, 'the two not-seeded conditions are not distinguished for the reader')
+      .toMatch(/could not be measured/i);
+  });
+
   it('teaches reading the body, and invokes no curl at all', () => {
     // Same rule SKILL.md's own "How to call the API" states, in the new terms:
     // the body is the whole protocol — the 409 this file exists to teach the
