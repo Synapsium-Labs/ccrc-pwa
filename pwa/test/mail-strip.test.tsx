@@ -397,11 +397,18 @@ describe('the strip names the gate holding a delivery (D-792)', () => {
   it('is announced on the CLOSED head, where the operator actually is', () => {
     // The strip opens closed. Same argument the blocked mark already carries.
     render(<MailStrip mail={[heldRow(), m({ id: 2 })]} now={NOW} />);
-    expect(screen.getByText('held 1')).toBeInTheDocument();
+    const mark = screen.getByText('held 1');
+    expect(mark).toBeInTheDocument();
+    expect(mark.getAttribute('title')).toMatch(/^One gate/);
   });
 
   it('counts on the head rather than promoting one row\'s reason', () => {
     render(<MailStrip mail={[heldRow(), heldRow({ id: 2, lastGate: 'no-pane' })]} now={NOW} />);
+    const mark = screen.getByText('held 2');
+    expect(mark).toBeInTheDocument();
+    // The hover copy agrees with the number beside it — it used to say "One
+    // gate ... a message" over any count.
+    expect(mark.getAttribute('title')).toMatch(/^2 messages are each/);
     expect(screen.getByText('held 2')).toBeInTheDocument();
     // Neither reason is hoisted into the head — picking one would be the
     // console choosing which of two true things to say.
@@ -420,11 +427,31 @@ describe('the strip names the gate holding a delivery (D-792)', () => {
     expect(screen.queryByText(/^held \d/)).not.toBeInTheDocument();
   });
 
-  it('keeps ONE status line per row: an actively-retried block outranks a gate', () => {
-    const c = openRows([heldRow({ state: 'queued', lastError: 'draft-present' })]);
+  // THE PRECEDENCE THAT CHANGED, and the review that changed it. `lastError`
+  // has no clock and no writer ever clears it; `gateAt` has one and `heldGate`
+  // has already required it to be fresh. Since the ladder runs BEFORE the send,
+  // a fresh gate PROVES no send was attempted this sweep — which makes a
+  // `draft-present` on the same row stale by at least one sweep.
+  //
+  // What the old order printed, measured from a real sweep: `attempts: 1,
+  // lastError: 'draft-present'` from hours earlier plus a fresh `tmux-gone`
+  // rendered "blocked · attempt 1 of 6 — this session's input box has unsent
+  // text". There is no pane, so no input box; nothing is retrying, because the
+  // ladder returns first; and `attempts` is frozen, so "of 6" is a countdown
+  // that never moves.
+  it('lets a FRESH gate outrank a stale draft-present — the block has no clock and the gate does', () => {
+    const c = openRows([heldRow({ state: 'queued', attempts: 1, lastError: 'draft-present', lastGate: 'tmux-gone' })]);
+    expect(heldLines(c)).toEqual(['held 15m · the tmux session is gone']);
+    expect(screen.queryByText(/unsent text/)).not.toBeInTheDocument();
+    expect(screen.getByText('held 1')).toBeInTheDocument();
+  });
+
+  it('still shows the block when NO gate is currently holding the row', () => {
+    // The blocked arm is not removed, only outranked. With the gate short of
+    // its thresholds there is no dated fact to prefer, so the block stands.
+    const c = openRows([heldRow({ state: 'queued', lastError: 'draft-present', gateSince: NOW - 90_000 })]);
     expect(screen.getByText(/unsent text/)).toBeInTheDocument();
     expect(heldLines(c)).toEqual([]);
-    expect(screen.queryByText(/^held \d/)).not.toBeInTheDocument();
   });
 
   it('renders nothing for a row no gate has touched — the shape of every older server', () => {
@@ -477,6 +504,54 @@ describe('the strip names the gate holding a delivery (D-792)', () => {
       // Skew makes this ordinary, and it must fail quiet toward rendering the
       // fact, not toward hiding it.
       expect(heldGate(heldRow({ gateAt: NOW + 60_000 }), NOW)).not.toBeNull();
+    });
+
+    // ABSENCE-PERMITS, and the reason this is a describe of its own rather than
+    // one more boundary case: the failure it pins is not "renders nothing", it
+    // is "renders a confident sentence about a fleet where nothing is wrong".
+    //
+    // A server that predates PR #29 sends a MailSummary with the four fields
+    // ABSENT — `undefined`, not `null`. That is not hypothetical on this
+    // project: `npm run dev` in pwa/ against a server box that has not been
+    // deployed yet is an ordinary afternoon. Before the `== null` fix,
+    // `undefined === null` was false, `undefined < 3` was false, and
+    // `now - undefined` was NaN — false for both `<` and `>` — so EVERY guard
+    // passed and every row on every session read `held moments · undefined`.
+    //
+    // The cast is the point: this is exactly the shape TypeScript says cannot
+    // reach the function, arriving off a wire nothing validates.
+    const preColumns = (): MailSummary => {
+      const row = m({ state: 'delivered' }) as Partial<MailSummary>;
+      delete row.lastGate; delete row.gateCount; delete row.gateSince; delete row.gateAt;
+      return row as MailSummary;
+    };
+
+    it('says NOTHING for a row whose gate fields are ABSENT rather than null', () => {
+      expect(heldGate(preColumns(), NOW)).toBeNull();
+    });
+
+    it('renders no held line at all for an older server\'s row', () => {
+      const c = openRows([preColumns()]);
+      expect(heldLines(c)).toEqual([]);
+      expect(screen.queryByText(/undefined/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/moments/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/^held \d/)).not.toBeInTheDocument();
+    });
+
+    // Each field on its own, so a future edit that re-tightens ONE of the four
+    // comparisons back to the unsafe direction is named by the test that
+    // covers it rather than by whichever one happens to run first.
+    it('says nothing when any ONE gate field is absent', () => {
+      for (const field of ['lastGate', 'gateCount', 'gateSince', 'gateAt'] as const) {
+        const row = m({
+          state: 'delivered', lastGate: 'not-idle',
+          gateCount: MAIL_GATE_HELD_COUNT,
+          gateSince: NOW - MAIL_GATE_HELD_MS - 1_000,
+          gateAt: NOW - 10_000,
+        }) as Partial<MailSummary>;
+        delete row[field];
+        expect(heldGate(row as MailSummary, NOW), `absent '${field}' still claimed a hold`).toBeNull();
+      }
     });
 
     it('keeps a gate on the `unknown` state — an exclusion of the terminal words, not an allow-list', () => {

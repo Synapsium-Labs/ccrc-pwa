@@ -101,8 +101,27 @@ const GATE_PHRASE: Record<MailGate, string> = {
   'pending-ask': 'the session is waiting on a prompt of its own',
   'no-pane': 'the session has no pane',
   'no-config-dir': 'this wrapper resolves to no config dir',
+  // "busy" IS the right word here even though the gate folds a genuine busy
+  // status together with a live-state read that answered nothing, and the
+  // decision is recorded rather than left to be re-litigated. Three of the four
+  // conditions `readLiveState` folds are MEASUREMENTS by `livestate.ts`'s own
+  // ledger ("the reader looked at the file, or proved there is none"), not
+  // failed reads; and for the fourth, D-115 installed `busy` as the fail-shut
+  // word for an unmeasured live read at BOTH sibling seams — the fleet card
+  // (fleet.ts) and the chat header directly above this strip (sessionws.ts),
+  // the latter saying explicitly that the two are "two renderings of one
+  // measurement". A third rendering of that same measurement disagreeing with
+  // them would be worse than the imprecision it fixed.
   'not-idle': 'the session is busy',
-  'not-quiet': 'the session has only just gone quiet',
+  // NOT "has only just gone quiet", which is what this said first and which
+  // contradicts the duration printed beside it. The gate is
+  // `statusUpdatedAt === null || now - statusUpdatedAt < MAIL_QUIET_MS`, and
+  // the second arm resolves itself inside a minute BY CONSTRUCTION — so it can
+  // essentially never survive to `MAIL_GATE_HELD_MS`. The arm that does reach
+  // this line is the first one, which never resolves on its own at all, and
+  // "held 3h 12m · the session has only just gone quiet" was measured. The
+  // phrase now covers both arms and points at the one an operator can act on.
+  'not-quiet': 'the session has no usable quiet-time stamp',
 };
 
 /** An UNKNOWN member renders the raw token rather than `undefined` — an older
@@ -134,8 +153,31 @@ const gatePhrase = (gate: string): string =>
  */
 export function heldGate(item: MailSummary, now: number): { gate: string; forMs: number } | null {
   if (item.state === 'acked' || item.state === 'rejected') return null;
-  if (item.lastGate === null || item.gateSince === null || item.gateAt === null) return null;
-  if (item.gateCount < MAIL_GATE_HELD_COUNT) return null;
+  // `== null`, NOT `=== null`, and the difference is the entire absence-permits
+  // rule in one operator. A server that predates these columns omits them, so
+  // they arrive `undefined` — and `undefined === null` is false, so the first
+  // cut of this function walked straight past this line. What followed was
+  // worse than a crash: `undefined < 3` is false, `now - undefined` is NaN,
+  // and NaN is false for BOTH `<` and `>`, so every remaining guard PASSED and
+  // the row rendered `held moments · undefined` on a fleet where nothing at
+  // all was wrong. Reproduced before this line was written, and pinned below.
+  if (item.lastGate == null || item.gateSince == null || item.gateAt == null) return null;
+  // `gateCount` is NOT in the line above, and cannot be: it is typed `number`
+  // rather than `number | null`, so there is no null to compare against — and
+  // an absent one therefore arrives here as `undefined` having passed every
+  // check so far. `undefined < 3` is FALSE, which passes the guard; `!(undefined
+  // >= 3)` is TRUE, which stops it. Same fact, opposite failure, and only one
+  // of them is safe for a console whose whole purpose is not lying. Measured:
+  // spelling this `item.gateCount < MAIL_GATE_HELD_COUNT` reds the absent-field
+  // test below.
+  if (!(item.gateCount >= MAIL_GATE_HELD_COUNT)) return null;
+  // The remaining two are the ORDINARY spelling, deliberately, and this comment
+  // is here to stop a future reader "fixing" them to match the line above. By
+  // this point `gateAt` and `gateSince` have both survived `== null`, so
+  // neither subtraction can be NaN and there is no unsafe direction left to
+  // guard against. Inverting them was measured and changed nothing — a guard
+  // no test can red is a comment wearing a mechanism's clothes, which is the
+  // one thing this repo asks a guard not to be.
   if (now - item.gateAt > MAIL_GATE_FRESH_MS) return null;
   const forMs = now - item.gateSince;
   return forMs < MAIL_GATE_HELD_MS ? null : { gate: item.lastGate, forMs };
@@ -157,17 +199,43 @@ const heldLine = (h: { gate: string; forMs: number }): string =>
  * precedence test below rather than in review, which is the argument for the
  * function existing at all.
  *
- * The ORDER is the claim, and it is the ternary's order because it is the same
- * decision: a terminal delivery has a fate and says it; a blocked one is still
- * being retried and says how much room is left; only a row with neither is
- * merely being held. One line per row, one place that decides which.
+ * THE ORDER IS THE CLAIM, and `held` sits ABOVE `blocked` — which is the
+ * opposite of where it started, and the reason is a timestamp.
+ *
+ * `lastError` has no clock. NOTHING clears it: `markDelivered` clears the four
+ * gate columns and leaves it (store.ts), `noteGate` touches neither it nor
+ * `attempts`. So a `queued` row that once failed a send with `draft-present`
+ * carries that token for ever — and if the ladder afterwards starts returning
+ * at `tmux-gone`, `no-pane` or `no-config-dir`, gates that return BEFORE any
+ * send is attempted, nothing ever writes it again.
+ *
+ * `gateAt` does have a clock, and `heldGate` has already required it to be
+ * recent. That is the whole argument: the ladder runs BEFORE the send, so a
+ * FRESH gate is positive evidence that no send was attempted this sweep, which
+ * makes `lastError` stale by at least one sweep by construction. Between an
+ * undated fact and a dated one that proves the undated fact is old, the dated
+ * one wins.
+ *
+ * What the old order actually printed, measured end-to-end from a real sweep:
+ * a row with `attempts: 1, lastError: 'draft-present'` left over from hours ago
+ * and a fresh `tmux-gone` rendered "blocked · attempt 1 of 6 — this session's
+ * input box has unsent text", titled "The lane is still retrying. Clear this
+ * session's input box and it will land." Every clause false. There is no pane,
+ * so there is no input box to clear; nothing is being retried, because the
+ * ladder returns before the send; and `attempts` is frozen at 1, so "of 6"
+ * describes a countdown that will never move. Meanwhile the one fact that
+ * would have told the operator the session was gone was the fact this
+ * precedence suppressed.
+ *
+ * `abandoned` stays first: `rejected` is terminal and outranks any reading of
+ * a row that is still in play. One line per row, one place that decides which.
  */
 type StatusArm = 'abandoned' | 'blocked' | 'held' | null;
 
 function statusArm(item: MailSummary, held: { gate: string; forMs: number } | null): StatusArm {
   if (item.state === 'rejected') return 'abandoned';
-  if (isBlocked(item)) return 'blocked';
-  return held === null ? null : 'held';
+  if (held !== null) return 'held';
+  return isBlocked(item) ? 'blocked' : null;
 }
 
 /** `now` is injectable for the same reason `heldGate` takes it rather than
@@ -208,7 +276,12 @@ export function MailStrip({ mail, now: nowProp }: { mail: MailSummary[]; now?: n
             more than one, and picking one to promote would be the console
             choosing which of two true things to say. */}
         {heldCount > 0 && (
-          <span className="mail-strip-held-mark" title="One gate has been holding a message for a while. Open the strip for which, and how long.">
+          <span
+            className="mail-strip-held-mark"
+            title={heldCount === 1
+              ? 'One gate has been holding a message for a while. Open the strip for which, and how long.'
+              : `${heldCount} messages are each being held at a gate. Open the strip for which, and how long.`}
+          >
             held {heldCount}
           </span>
         )}

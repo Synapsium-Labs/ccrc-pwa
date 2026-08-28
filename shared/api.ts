@@ -3400,9 +3400,16 @@ export const SPAWN_STALL_MS = 360_000;
  *  exactly like a sweep that is running and still refusing. Five minutes, not
  *  a small multiple of the sweep cadence, because `gateAt` is stamped by the
  *  SERVER's clock and compared against the VIEWER's — a phone minutes off UTC
- *  must not silence the line. It fails QUIET in either direction: skew that
- *  makes `gateAt` look stale renders today's row, which is a missed warning
- *  rather than a false one. */
+ *  must not silence the line.
+ *
+ *  THE TEST IS ONE-SIDED, deliberately, and this sentence used to claim
+ *  otherwise. Only a `gateAt` too far in the PAST silences the line; one in the
+ *  FUTURE — which is what a viewer clock running behind the server's produces —
+ *  passes, and is pinned that way. The asymmetry is the safe one: a future
+ *  stamp means the refusal is at most as old as the skew, so the line is if
+ *  anything under-stating the hold. A past-side miss costs a warning nobody
+ *  sees; a two-sided test would cost the warning AND make a viewer's wrong
+ *  clock look like a wedged sweep. */
 export const MAIL_GATE_HELD_MS = 900_000;
 export const MAIL_GATE_HELD_COUNT = 3;
 export const MAIL_GATE_FRESH_MS = 300_000;
