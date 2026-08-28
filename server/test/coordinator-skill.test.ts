@@ -996,3 +996,54 @@ describe('the coordinator-resume runbook (program-leverage wave 1, spec S3 item 
     }
   });
 });
+
+// ── program-leverage wave 1 (F1): the trigger names the RUN RECORD ─────────
+//
+// `ccd ws-hold` hard-refuses a non-workspace (ccd:4938-4939) and a PWA-started
+// coordinator is a main checkout (StartProgramSheet.tsx:89-90), so the hold arm
+// of the old trigger described a state half the coordinators this skill runs in
+// can never reach — while the WORKER's identical-looking arm is CORRECT and
+// stays, because every `program:` hold lands on the worker's workspace. The run
+// record is the one fact both kinds of coordinator share, and `GET /api/runs`
+// is EXEMPT-BUT-AUTHENTICATED (auth/gate.ts, D-149) precisely so a cookieless
+// fleet-host session can read it.
+describe('the coordinator skill triggers and resumes on the RUN RECORD, not a hold', () => {
+  const fm = (): string => skill.slice(4, skill.indexOf('\n---', 4));
+
+  it('triggers on the run record and KEEPS the operator-designation arm', () => {
+    expect(fm()).toContain('the operator said so');
+    expect(fm()).toContain('`GET /api/runs` names this session id as the `claimedBy` of an open run');
+    // The mutation this exists for: restoring the hold arm. Scoped to the
+    // frontmatter, because the BODY legitimately discusses holds — the
+    // worker's, placed at dispatch — and a whole-file negative would forbid
+    // the true statements alongside the false one.
+    expect(fm(), 'the frontmatter trigger describes a hold again').not.toMatch(/hold reads/);
+  });
+
+  it('does not over-correct into asserting the coordinator is a main checkout', () => {
+    // The other way to get this wrong, and the reason the fix is a rewrite
+    // rather than a swap: an operator-designated coordinator MAY be
+    // workspace-resident (program-leverage's own is), so a trigger that says
+    // "main checkout" excludes the live case exactly as the hold arm excluded
+    // the PWA-started one. A regression guard on the fix, not a red-first
+    // driver — the pre-fix text did not say it either.
+    expect(fm()).not.toMatch(/main checkout/i);
+  });
+
+  it('states the resume constraint as the SESSION ID, not the workspace', () => {
+    expect(flat(skill)).toContain('and it is the SESSION ID, not the workspace');
+    expect(skill, 'the workspace framing is back').not.toContain('same workspace, same id');
+  });
+
+  it('does not count the hold among the things a fresh coordinator resumes from', () => {
+    // D-1002 — the third site, and the most load-bearing of the three: this is
+    // what a LIVE coordinator reads before deciding what it must write down.
+    expect(flat(skill)).toContain('The hold is NOT one of them');
+    expect(flat(skill), 'the three-things sentence lists the hold again')
+      .not.toMatch(/Everything you know lives in the program ledger[\s\S]{0,200}the workspace's hold/);
+  });
+
+  it('points a dying coordinator at the runbook, by the path the skill installs it at', () => {
+    expect(skill).toContain('`references/resume.md`');
+  });
+});
