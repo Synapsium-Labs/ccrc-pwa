@@ -225,6 +225,29 @@ describe('graph-sweep: corpus guard (Task 8)', () => {
     expect(outcomeOf(repo)).toBe('refused-by-guard');
     expect(lastPass().trees.find((t: {path:string}) => t.path === repo).reason).toContain('!');
   });
+  it('F1 (review fix) — a "!" line with LEADING WHITESPACE also refuses (grep was column-0-anchored; graphify lstrips before checking startswith("!"))', () => {
+    const repoSpace = makeRepo('ws-space');
+    const repoTab = makeRepo('ws-tab');
+    plantEngine(); plantGuardPython();
+    fs.mkdirSync(j('.ccrc', 'graph-noise'), { recursive: true });
+    fs.writeFileSync(j('.ccrc', 'graph-noise', 'ws-space.list'), 'fixtures/\n !secrets.md\n');   // leading space
+    fs.writeFileSync(j('.ccrc', 'graph-noise', 'ws-tab.list'), 'fixtures/\n\t!secrets.md\n');    // leading tab
+    fs.writeFileSync(j('fixture-corpus'), 'a.py\n');
+    runSweep();
+    expect(outcomeOf(repoSpace)).toBe('refused-by-guard');
+    expect(lastPass().trees.find((t: {path:string}) => t.path === repoSpace).reason).toContain('!');
+    expect(outcomeOf(repoTab)).toBe('refused-by-guard');
+    expect(lastPass().trees.find((t: {path:string}) => t.path === repoTab).reason).toContain('!');
+  });
+  it('F2 (review fix) — repo-basename derivation is space-safe (a project dir whose name contains a space)', () => {
+    const repo = makeRepo('al pha'); plantEngine(); plantGuardPython();
+    fs.mkdirSync(j('.ccrc', 'graph-noise'), { recursive: true });
+    fs.writeFileSync(j('.ccrc', 'graph-noise', 'al pha.list'), 'fixtures/\n!secrets.md\n');
+    fs.writeFileSync(j('fixture-corpus'), 'a.py\n');
+    runSweep();
+    expect(outcomeOf(repo)).toBe('refused-by-guard');
+    expect(lastPass().trees.find((t: {path:string}) => t.path === repo).reason).toContain('!');
+  });
   it('rows 11a+11b — .graphifyignore is written for the build, removed after, and harmless if orphaned', () => {
     const repo = makeRepo('alpha'); plantGuardPython();
     fs.mkdirSync(j('.ccrc', 'graph-noise'), { recursive: true });
@@ -256,5 +279,53 @@ describe('graph-sweep: corpus guard (Task 8)', () => {
     runSweep();
     expect(outcomeOf(wtDir)).toBe('refused-by-guard');
     expect(lastPass().trees.find((t: {path:string}) => t.path === wtDir).reason).toContain('!');
+  });
+  it('F3 (review fix) — SIGTERM mid-build fires the .graphifyignore trap (row 11a: the crash window)', async () => {
+    const repo = makeRepo('alpha'); plantGuardPython();
+    fs.mkdirSync(j('.ccrc', 'graph-noise'), { recursive: true });
+    fs.writeFileSync(j('.ccrc', 'graph-noise', 'alpha.list'), 'fixtures/\n');
+    fs.writeFileSync(j('fixture-corpus'), 'a.py\n');
+    // Wedge the build so we can catch it mid-flight. The engine backgrounds
+    // its own sleep and records its EXACT pid to a file before waiting on it,
+    // so cleanup below can reap it precisely by that captured PID afterward
+    // (never by a `pkill -f` pattern match -- one already caught an UNRELATED
+    // process on this box during development of this test). `timeout`'s
+    // SIGTERM to the untrapped fake-engine script kills the script but does
+    // not reliably reach this grandchild under load (measured: reliable in
+    // isolation, occasionally orphaned under the full suite's concurrency),
+    // which is exactly the gap this pid file closes.
+    const pidFile = j('wedged-sleep-pid');
+    plantEngine(`sleep 30 & echo $! > "${pidFile}"; wait $!`);
+    const ignorePath = path.join(repo, '.graphifyignore');
+    const child = spawn('bash', [SWEEP], {
+      env: { ...process.env, HOME: home, CCRC_GRAPH_BUILD_TIMEOUT: '2' },
+    });
+    const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
+    try {
+      const deadline = Date.now() + 10_000;
+      while (!fs.existsSync(ignorePath)) {
+        if (Date.now() > deadline) {
+          throw new Error('.graphifyignore never appeared -- guard/build never reached');
+        }
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      // the guard wrote it and armed the trap; the wedged engine is mid-flight
+      // (or about to be).
+      child.kill('SIGTERM');
+      // bash defers a TRAPPED TERM until its current foreground wait() returns
+      // -- that happens when the build's OWN CCRC_GRAPH_BUILD_TIMEOUT backstop
+      // (2s here) kills the wedged engine, so just wait for the sweep to exit
+      // on its own once the backstop fires and the deferred trap runs.
+      await exited;
+      expect(fs.existsSync(ignorePath)).toBe(false);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      if (fs.existsSync(pidFile)) {
+        const pid = Number(fs.readFileSync(pidFile, 'utf8').trim());
+        if (Number.isInteger(pid) && pid > 0) {
+          try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+        }
+      }
+    }
   });
 });
