@@ -280,6 +280,12 @@ UPD_BACKUP_DIR=""
 # stated default, never an unbound-variable death.
 INST_ROLE=both
 
+# The ONE spelling of the graphify engine version ccrc installs (spec §A, O1).
+# Bumping it is a reviewed commit; the corpus guard and graph-sweep row 13 are
+# the acceptance tests. Everything outside this file reads the STAMP
+# (~/.ccrc/graphify.pin) that _inst_graphify_engine writes — never a second copy.
+GRAPHIFY_PIN=graphifyy==0.9.9
+
 # ── WHICH STEPS DEGRADED, so the closing line can say so ──────────────────
 # `cmd_install`'s steps either converge or die — with ONE exception by design,
 # `_inst_linger`, which cannot converge without a privilege the operator may
