@@ -85,12 +85,32 @@ run this morning. **Sustained-ness is the whole signal.**
 
 One reading, two surfaces, no policy change.
 
-**The measurement.** For a scope, sample `memory.events`' `high` counter twice,
-`SAMPLE_MS` apart, alongside `memory.current` and `memory.high`. Throttling is
-happening NOW iff the counter advanced. It is PATHOLOGICAL iff it has been
-advancing continuously for longer than `THROTTLE_SUSTAINED_MS`. The counter is
-monotonic and never resets, so a single reading says nothing and two say
-everything — the rate is the fact, not the total.
+**The measurement — revised during implementation, see the note below.** For
+each `tmux-spawn-*.scope`, ask systemd where it lives
+(`systemctl --user show <scope> -p ControlGroup --value` — NEVER build the path,
+that is D-307's whole lesson), read its `cgroup.procs`, and collect the pids
+whose `/proc/<pid>/wchan` reads `mem_cgroup_handle_over_high`. Sample again
+`SETTLE_MS` later and intersect. A pid throttled in BOTH samples is
+persistently throttled; `D` is normally a sub-millisecond state, so surviving
+two samples a second apart is already pathological.
+
+Report `memory.current` against `memory.high` alongside it, because the
+throttled pids are the symptom and the ratio is the cause.
+
+> **Why not the counter.** The first draft of this section sampled
+> `memory.events`' `high` counter over `THROTTLE_SUSTAINED_MS`. §3 kills that:
+> the HEALTHY spike advanced the same counter by 8,048 in ten seconds, so
+> separating the two cases needs a window measured in minutes — which means
+> either a 60-second sleep inside `ccrc doctor`, or persistent state written by
+> something that runs periodically. The only thing that already runs
+> periodically is `ccd-cap-scopes`, and giving it a reporting job is what this
+> section's last paragraph forbids.
+>
+> Process state needs neither. It is also the STRICTLY BETTER question: a jest
+> worker being reclaimed is the throttle working, and yesterday's freeze is
+> distinguished from this morning's spike by exactly one fact — whether the
+> session's own agent process was among the throttled. `SETTLE_MS` is ~1s and
+> exists only to reject a scheduling blip, not to measure duration.
 
 **Surface 1 — `ccrc doctor`, a new `scopes` check.** Reads every
 `tmux-spawn-*.scope`. PASS when none is throttling. WARN naming the session when
@@ -120,21 +140,28 @@ untouched (2026-08-10, D-307). It sets caps; it does not report on them.
 
 ## 6. The mutation table
 
-- Feed the check a fixture whose counter is FLAT above `memory.high` → must WARN,
-  never FAIL. (This is the assertion that would have caught a naive detector;
-  measure it red against an instantaneous-comparison implementation.)
-- Feed it a counter advancing across the full window → must FAIL and must name
-  the session.
-- Delete the second sample → red (a one-sample detector cannot tell the two apart).
-- A scope with no `memory.events` at all (not yet capped) → neither WARN nor
-  FAIL; that is `_check_services`' job, not this one.
+- A scope OVER `memory.high` whose pids are all schedulable → must PASS. This is
+  the assertion that fails a naive over-the-line detector, and it is this
+  morning's healthy spike written as a fixture.
+- A scope with a pid parked on `mem_cgroup_handle_over_high` in BOTH samples →
+  must WARN, and must name the scope and its `memory.current`/`memory.high`.
+- A pid throttled in only the FIRST sample → must PASS. Delete the second sample
+  from the implementation and this goes red; that is the whole reason the second
+  sample exists.
+- Path-building instead of `-p ControlGroup` → red. A fixture places the scope
+  somewhere the old string-built path would miss, which is D-307 happening
+  again on purpose.
+- A scope whose `ControlGroup` names a directory that does not exist → neither
+  WARN nor FAIL, and no error text. A scope can die between the listing and the
+  read, and a check that shouts about a race is a check nobody reads.
 
 ## 7. Open, for the operator
 
-- **`THROTTLE_SUSTAINED_MS`.** The healthy spike lasted seconds; the freeze
-  lasted hours. Anything from 30s to 5min separates them cleanly, so this is a
-  question of how fast you want to be told, not of correctness. Recommendation:
-  **60s**, matching `ccd-cap-scopes.timer`'s own cadence.
+- **`SETTLE_MS`** (was `THROTTLE_SUSTAINED_MS`, before the measurement changed).
+  Its only job is to reject a scheduling blip, so it wants to be small enough
+  that `ccrc doctor` stays fast. Recommendation: **1000ms**. Nothing about
+  correctness rides on the exact value — a genuinely frozen scope stays frozen
+  for hours.
 - **Should the FAIL be a `doctor` FAIL at all?** `cmd_install` ends with
   `cmd_doctor` and returns its code (D-894), so a FAIL here would make
   `ccrc install` exit non-zero on a box that merely has a busy session. That
