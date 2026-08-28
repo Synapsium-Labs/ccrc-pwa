@@ -1,28 +1,38 @@
 ---
 name: ccrc-coordinator
-description: Drive a multi-wave ccrc program as the coordinator session — open the run, dispatch each wave, read mail, re-measure a claimed wave-done, review the handoff commit, release on the final merge. Use when this session IS the coordinator for a program (the operator said so, or this workspace's hold reads `program:<slug> wave:N/M`). Never use it to do a wave's own work — a coordinator that starts implementing has become a worker with a stale plan.
+description: Drive a multi-wave ccrc program as the coordinator session — open the run, dispatch each wave, read mail, re-measure a claimed wave-done, review the handoff commit, release on the final merge. Use when this session IS the coordinator for a program (the operator said so, or `GET /api/runs` names this session id as the `claimedBy` of an open run). Never use it to do a wave's own work — a coordinator that starts implementing has become a worker with a stale plan.
 ---
 
 # Coordinating a ccrc program
 
 You are one disposable session driving a long-horizon program. **You hold no
 unique state.** Everything you know lives in the program ledger
-(`docs/superpowers/programs/<slug>.md`, committed), in the run record on the
-server, and in the workspace's hold. If you die mid-wave the operator starts a
-fresh you, and it resumes from those three things. Write accordingly: never
-carry a decision only in your own context.
+(`docs/superpowers/programs/<slug>.md`, committed) and in the run record on the
+server — `GET /api/runs` is what tells a fresh you which program it owns and
+which wave that program is on. If you die mid-wave the operator starts a fresh
+you, and it resumes from those two things. Write accordingly: never carry a
+decision only in your own context. The hold is NOT one of them: `ccd ws-hold`
+refuses a main checkout outright, so a coordinator that is not
+workspace-resident carries no hold at all, and the dispatch route places
+`program:` holds on WORKER workspaces. A workspace-resident coordinator CAN be
+given one by hand — which is precisely why a hold is not a thing to resume
+from: present or absent, it settles nothing. Ask `GET /api/runs`.
 
-**One real constraint on that resumability:** `POST /api/runs`'s `claimedBy`
-is your tmux-derived session id (below), and the server refuses any later
-call for this program whose `claimedBy` differs from whichever session first
-opened it (`claimed-by-another` — clause 8). A fresh coordinator resumes
-cleanly ONLY if the operator restarts it into the SAME workspace the first
-one held — same workspace, same id. Placed into a DIFFERENT workspace (the
-operator's own placement rule may pick any least-loaded home), the fresh
-session's id differs, and every `POST /api/runs` call for this program then
-answers `claimed-by-another` naming a session that may no longer even exist —
+**One real constraint on that resumability, and it is the SESSION ID, not the
+workspace:** `POST /api/runs`'s `claimedBy` is your tmux-derived session id
+(below), and the server refuses any later call for this program whose
+`claimedBy` differs from whichever session first opened it
+(`claimed-by-another` — clause 8). A fresh coordinator resumes cleanly ONLY if
+the operator revives it under that SAME id — the id-preserving revive, never a
+re-creation that recomputes one from an account and a project. Revived under a
+different id (the operator's own placement rule may pick any least-loaded
+home), every `POST /api/runs` call for this program then answers
+`claimed-by-another` naming a session that may no longer even exist —
 permanently, since nothing in the HTTP API ever rewrites `claimedBy`. That is
-an operator/DB recovery, not something this session can fix by retrying.
+a recovery on the box, not something this session can fix by retrying.
+`references/resume.md` is the runbook for all of it: how to measure which run
+is open, the two id-preserving revives, the wave-N re-kickoff text, and what is
+left when the id is already lost.
 
 ## Learn who you are, first
 

@@ -31,22 +31,49 @@ const skillDir = path.join(root, 'ccd/coordinator-skill');
 const skill = readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8');
 const refs = (name: string): string =>
   readFileSync(path.join(skillDir, 'references', name), 'utf8');
-const allSkillText = [skill, refs('wave-lifecycle.md'), refs('mail-envelope.md'), refs('peer-protocol.md')].join('\n');
-/** SKILL.md + wave-lifecycle.md ONLY — the route-linkage scan's own corpus,
- *  deliberately excluding `mail-envelope.md`. That file's only route-shaped
+/** Every reference this skill ships, FROM THE DIRECTORY — never a hand-typed
+ *  list. `install-coordinator-skill.sh`'s `REQUIRED_REFS` is the other
+ *  projection of this same directory and is pinned against it in
+ *  `wrapper-roster-fixture.test.ts` (I8) for exactly this reason: "a literal
+ *  array is a PROJECTION of something real that a future change can silently
+ *  drift away from, and a comment asking a future author to keep them in sync
+ *  is not a mechanism".
+ *
+ *  The two corpora below WERE that literal array until program-leverage wave 1
+ *  (D-1000). The cost was not hypothetical: the census, the break-door
+ *  prohibition and the untyped-refusal scan all read `allSkillText`, so a
+ *  fifth reference file would have been skipped by every one of them in
+ *  silence — while the spec that added `resume.md` named the census as the
+ *  binding constraint on that very file. MEASURED red before this landed: the
+ *  runbook's own sentence was absent from `allSkillText`. */
+const REFERENCE_NAMES: readonly string[] =
+  readdirSync(path.join(skillDir, 'references'))
+    .filter((n) => n.endsWith('.md'))
+    .sort();
+const allSkillText = [skill, ...REFERENCE_NAMES.map(refs)].join('\n');
+
+/** The route harvest's corpus: SKILL.md + every reference EXCEPT the ones
+ *  named here — today only `mail-envelope.md`. That file's only route-shaped
  *  text is the worked example's `ack: POST /api/mail/<id>/ack` line, and the
  *  byte-identity test below requires it to be `renderEnvelope`'s REAL output
- *  — a concrete delivery id, never the literal `:id` fastify registers. Left
- *  in `allSkillText` (the ws-reap/ws-rm/ws-gc census still scans it — a
+ *  — a concrete delivery id, never the literal `:id` fastify registers. It
+ *  stays in `allSkillText` (the ws-reap/ws-rm/ws-gc census still scans it — a
  *  worked example naming a destructive verb would be exactly as licensing as
- *  prose naming one), pulling it OUT of just the route harvest so a real
+ *  prose naming one) and is pulled OUT of just the route harvest, so a real
  *  numeric id never reads as a route this skill "names" and fails the
  *  literal-match check no server route can ever satisfy.
- *  `peer-protocol.md` (Build 9 wave 8) IS in this corpus: its curl shapes
- *  and headings name real registered routes, so both parity directions
- *  cover it — the reference cannot name a ghost route, and the routes it
- *  is the documented home for cannot silently lose their one mention. */
-const routeSkillText = [skill, refs('wave-lifecycle.md'), refs('peer-protocol.md')].join('\n');
+ *
+ *  Everything else is IN, in both parity directions — the reference cannot
+ *  name a ghost route, and the routes it is the documented home for cannot
+ *  silently lose their one mention. `peer-protocol.md` (Build 9 wave 8) for
+ *  its call shapes and headings; `resume.md` (program-leverage wave 1) for the
+ *  three coordination reads a revived coordinator makes. `resume.md` also
+ *  names the PWA's revive door — deliberately WITHOUT a method, so it is not
+ *  harvested here at all: see the foot-of-file describe and D-1001. */
+const ROUTE_CORPUS_EXCLUDES: ReadonlySet<string> = new Set(['mail-envelope.md']);
+const routeSkillText = [
+  skill, ...REFERENCE_NAMES.filter((n) => !ROUTE_CORPUS_EXCLUDES.has(n)).map(refs),
+].join('\n');
 
 /** Every .ts under server/src, read once — the linkage test's corpus. */
 const serverSources = (): string => {
@@ -214,8 +241,12 @@ describe('the coordinator skill: linkage', () => {
     const named = skillRoutes();
     for (const r of registeredCoordRoutes()) {
       if (EXEMPT.has(r)) continue;
-      expect(named.has(r), `${r} is registered in coord/routes.ts but never named anywhere ` +
-        'in SKILL.md or references/wave-lifecycle.md').toBe(true);
+      // The corpus is DERIVED, so the message names what it actually read
+      // rather than a two-file list that went stale when `peer-protocol.md`
+      // joined and staler again with `resume.md`.
+      expect(named.has(r), `${r} is registered in coord/routes.ts but is named nowhere in the route ` +
+        `corpus (SKILL.md + ${REFERENCE_NAMES.filter((n) => !ROUTE_CORPUS_EXCLUDES.has(n)).join(', ')})`)
+        .toBe(true);
     }
   });
 
@@ -746,10 +777,12 @@ describe('the server address is config, never a literal (operator ruling 2026-08
   const corpus: ReadonlyArray<readonly [string, string]> = [
     ['coordinator SKILL.md', skill],
     ['worker SKILL.md', workerSkill],
-    ['wave-lifecycle.md', refs('wave-lifecycle.md')],
-    ['mail-envelope.md', refs('mail-envelope.md')],
-    ['ledger-template.md', refs('ledger-template.md')],
-    ['peer-protocol.md', refs('peer-protocol.md')],
+    // DERIVED, same reason as `REFERENCE_NAMES` above (D-1003): this was the
+    // THIRD hand-typed copy of the references directory in this file, so a new
+    // reference file shipping with a hardcoded server address in it would have
+    // been checked by nothing at all — the live lesson in this describe's own
+    // header, arriving through a door the header did not cover.
+    ...REFERENCE_NAMES.map((n) => [n, refs(n)] as const),
   ];
 
   it('no skill file carries a numeric server-host literal', () => {
@@ -875,5 +908,170 @@ describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
     // EXEMPT alone only permits the omission; this is what FORBIDS the
     // mention.
     expect(allSkillText).not.toContain('/api/claims/:id/break');
+  });
+});
+
+// ── program-leverage wave 1 (F1): the coordinator-resume runbook ───────────
+//
+// The runbook ships into a corpus whose whole-file assertions — the
+// destructive-verb census, the break-door prohibition, the untyped-refusal
+// census — read `allSkillText`. That const was a HAND-TYPED list of three
+// reference files, so this file would have been invisible to every one of
+// them: the spec that added it names the census as the binding constraint on
+// this very file, and it would have bound nothing (D-1000). The corpus is
+// derived from the directory now; this describe is what reds if anyone types
+// the list back.
+describe('the coordinator-resume runbook (program-leverage wave 1, spec S3 item 3)', () => {
+  const rb = (): string => refs('resume.md');
+
+  it('is INSIDE the corpus every whole-file assertion in this suite reads', () => {
+    // Not a tautology: with a hand-maintained `allSkillText` this is exactly
+    // the assertion that fails, and it fails for the right reason.
+    expect(allSkillText, 'references/resume.md is not in allSkillText — the census, the break-door ' +
+      'prohibition and the untyped-refusal scan all skip it')
+      .toContain('`GET /api/runs` is the whole orientation.');
+  });
+
+  it('names the two id-preserving revives, and says whose act they are', () => {
+    // The one-argument form is the whole point: the two-argument form mints a
+    // second id for a live session (ccd:12118-12123, and
+    // SessionActionsSheet.tsx:287-289 names the same operator).
+    expect(rb()).toContain('ccd start <id>');
+    expect(rb()).toContain('/api/sessions/:id/ensure');
+    // Clause 1 survives the runbook: a revive is not a fleet act this session
+    // performs. Without this sentence the file reads as a coordinator's todo.
+    expect(flat(rb())).toContain("Both of these are the OPERATOR's act");
+  });
+
+  it('spells the revive route WITHOUT a method, and keeps the reason attached', () => {
+    // `auth-passkey.test.ts`'s THE SWEEP requires every `METHOD /api/path` in
+    // either skill corpus to be in EXEMPT, and this route deliberately is not
+    // (`auth/gate.ts`) — it is the browser's cookie-bearing call. MEASURED
+    // while this landed: spelling the method reds that suite with exactly
+    // `["POST /api/sessions/:id/ensure"]` in `blocked`. So the method would
+    // both break the build AND teach a call a fleet-host session cannot make.
+    // The negative below is the mechanism; the positive keeps the reason in
+    // the prose, because this repo's own worked example of a doc lie is a
+    // sentence with its qualifier filed off.
+    expect(rb(), 'a method in front of the revive path reads as "a call you make", and reds auth-passkey')
+      .not.toMatch(/(GET|POST|PUT|PATCH|DELETE)\s+`?\/api\/sessions/);
+    expect(flat(rb())).toContain("it is not on the armed gate's exempt list");
+  });
+
+  it('says why a revive under a different id wedges the program permanently', () => {
+    expect(rb()).toContain('claimed-by-another');
+    expect(flat(rb())).toContain('nothing in the HTTP API ever rewrites `claimedBy`');
+  });
+
+  it('carries a wave-N re-kickoff template, not the wave-1 text the machine hardcodes', () => {
+    // `kickoff()` in `pwa/src/fleet/StartProgramSheet.tsx` is correct exactly
+    // once per program; a revive briefed with it re-opens wave 1 on a program
+    // at wave N, and `CoordStore.openRun`'s dedupe arm covers only a still-
+    // `planned` row, so the second open is a second row rather than a no-op.
+    // BY SYMBOL, no line numbers: this wave's own comment-only commit shifted
+    // that file and made the first draft of THIS comment stale (review round 1,
+    // M2) — D-1005's argument arriving by the shortest possible route.
+    expect(rb()).toContain('open the run for wave <N>');
+    expect(flat(rb())).toContain('do not open wave 1 again');
+  });
+
+  it('points at the reconstruction drill as the terminal recovery, and at the snapshot first', () => {
+    // Order matters in the prose for the same reason it matters in
+    // `coord/db.ts:145-149`: the newest deploy snapshot is the restore path,
+    // and reconstruct is what is left when there is none.
+    expect(rb()).toContain('CoordStore.reconstruct');
+    expect(rb()).toContain('ccrc-backups');
+  });
+
+  it('tells a LIVE coordinator that the revive door is not its recovery for a dead worker', () => {
+    // The one real hazard of naming a revive door in this corpus: a
+    // coordinator reaching for it on a WORKER instead of re-dispatching.
+    expect(rb()).toContain('A dead WORKER is not this door');
+  });
+
+  it('names none of the ungated operator doors — the list DERIVED, not typed', () => {
+    // `allSkillText` already forbids the break door corpus-wide; the others are
+    // exempt-by-omission with no positive prohibition anywhere, and a
+    // wedge-recovery runbook is the file most likely to reach for one.
+    //
+    // The list is HARVESTED from `coord-pause-route.test.ts`'s `UNGATED`, not
+    // typed here (review round 1, M7). A typed copy would have been the fourth
+    // projection-without-a-mechanism in this wave — the class D-1000 and
+    // D-1003 exist to delete — and it would fail exactly when it matters:
+    // F5 adds a FOURTH ungated door, and a hand-typed triple would go on
+    // passing while the new door drifted straight past this prohibition.
+    // `UNGATED` is the right source because that suite already pins it against
+    // `coord/routes.ts` in BOTH directions, so this reads a literal something
+    // else keeps honest rather than minting a rival copy.
+    const src = readFileSync(path.join(root, 'server/test/coord-pause-route.test.ts'), 'utf8');
+    const m = /UNGATED = new Set\(\[([^\]]*)\]\)/.exec(src);
+    expect(m, "coord-pause-route.test.ts no longer declares `UNGATED = new Set([...])` — this " +
+      'harvest is reading a shape that moved, and a silent empty list would pass everything').not.toBeNull();
+    const doors = [...(m as RegExpExecArray)[1]!.matchAll(/'([^']+)'/g)].map((d) => d[1]!);
+    expect(doors.length, 'the UNGATED harvest came back empty').toBeGreaterThanOrEqual(3);
+    for (const door of doors) {
+      expect(rb(), `resume.md names ${door} — a door the coordinator is not the one to walk through`)
+        .not.toContain(door);
+    }
+  });
+});
+
+// ── program-leverage wave 1 (F1): the trigger names the RUN RECORD ─────────
+//
+// `ccd ws-hold` hard-refuses a non-workspace, and `isMainCheckoutOf`
+// (`pwa/src/fleet/StartProgramSheet.tsx`) is how a PWA-started coordinator is
+// matched — `workspace === null` — so the hold arm of the old trigger described a
+// state half the coordinators this skill runs in can never reach. The WORKER's
+// identical-looking arm is CORRECT and stays: dispatch places `program:` holds on
+// worker workspaces. Not ALWAYS, though — a workspace-resident coordinator can be
+// given one by hand, and `ledger-template.md` still tells an orchestrator to. That
+// contradiction is D-1004, measured and deferred, and it is why the skill's own
+// prose was softened in review round 1 (M5) rather than left as an absolute. The
+// run record is the one fact both kinds of coordinator share, and `GET /api/runs`
+// is EXEMPT-BUT-AUTHENTICATED (`auth/gate.ts`, D-149) precisely so a cookieless
+// fleet-host session can read it. Anchors by SYMBOL — see M2 above.
+describe('the coordinator skill triggers and resumes on the RUN RECORD, not a hold', () => {
+  const fm = (): string => skill.slice(4, skill.indexOf('\n---', 4));
+
+  it('triggers on the run record and KEEPS the operator-designation arm', () => {
+    expect(fm()).toContain('the operator said so');
+    expect(fm()).toContain('`GET /api/runs` names this session id as the `claimedBy` of an open run');
+    // The mutation this exists for: restoring the hold arm. Scoped to the
+    // frontmatter, because the BODY legitimately discusses holds — the
+    // worker's, placed at dispatch — and a whole-file negative would forbid
+    // the true statements alongside the false one.
+    expect(fm(), 'the frontmatter trigger describes a hold again').not.toMatch(/hold reads/);
+  });
+
+  it('does not over-correct into asserting the coordinator is a main checkout', () => {
+    // The other way to get this wrong, and the reason the fix is a rewrite
+    // rather than a swap: an operator-designated coordinator MAY be
+    // workspace-resident (program-leverage's own is), so a trigger that says
+    // "main checkout" excludes the live case exactly as the hold arm excluded
+    // the PWA-started one. A regression guard on the fix, not a red-first
+    // driver — the pre-fix text did not say it either.
+    expect(fm()).not.toMatch(/main checkout/i);
+  });
+
+  it('states the resume constraint as the SESSION ID, not the workspace', () => {
+    expect(flat(skill)).toContain('and it is the SESSION ID, not the workspace');
+    // WHITESPACE-COLLAPSED like every sibling here, and for the reason `flat`
+    // exists at all: SKILL.md wraps mid-sentence, so a re-added `same
+    // workspace,\nsame id` reads as two lines and walks straight past a raw
+    // `toContain`. A negative that the mutation it names can evade is not a
+    // guard (review round 1, M1).
+    expect(flat(skill), 'the workspace framing is back').not.toContain('same workspace, same id');
+  });
+
+  it('does not count the hold among the things a fresh coordinator resumes from', () => {
+    // D-1002 — the third site, and the most load-bearing of the three: this is
+    // what a LIVE coordinator reads before deciding what it must write down.
+    expect(flat(skill)).toContain('The hold is NOT one of them');
+    expect(flat(skill), 'the three-things sentence lists the hold again')
+      .not.toMatch(/Everything you know lives in the program ledger[\s\S]{0,200}the workspace's hold/);
+  });
+
+  it('points a dying coordinator at the runbook, by the path the skill installs it at', () => {
+    expect(skill).toContain('`references/resume.md`');
   });
 });
