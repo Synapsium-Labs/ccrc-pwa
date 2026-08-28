@@ -280,13 +280,13 @@ describe('ccrc doctor: graphify', () => {
     expect(lineFor(runDoctor(home).stdout, 'graphify')).toMatch(/^FAIL graphify:/);
   });
 
-  // D-999 (deviation from the brief's plain-English "absent file -> WARN"):
+  // D-1061 (deviation from the brief's plain-English "absent file -> WARN"):
   // an absent census must NOT warn, or every fresh install warns, always —
   // `OnBootSec=5min` means no box has a census for several minutes at
   // minimum, and D-139 (ccrc-install.test.ts, "ends with doctor, and a box
   // that passes every check exits 0") is an operator ruling that a fresh
   // install ends green. See the check's own comment at condition (6).
-  it('does not WARN when the census has never been written — a fresh box, D-999/D-139', () => {
+  it('does not WARN when the census has never been written — a fresh box, D-1061/D-139', () => {
     const home = healthy('ccrc-doctor-gfx-census-abs-'); graphifyHealthy(home);
     rmSync(join(home, '.ccrc', 'graph-sweep.json'));
     expect(lineFor(runDoctor(home).stdout, 'graphify')).toMatch(/^PASS graphify:/);

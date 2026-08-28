@@ -2562,7 +2562,7 @@ _check_graphify() {
   # `failed` means the pass could not run at all (no pin, most often) — a
   # DIFFERENT condition from probed-zero but an equally broken one, and
   # doctor must red on both (Ruling R-5).
-  # D-999 (this task): an ABSENT census is deliberately NOT a finding, where
+  # D-1061 (this task): an ABSENT census is deliberately NOT a finding, where
   # the brief's own prose said WARN — `ccrc install` lays the timer down but
   # `OnBootSec=5min` means no fresh box has a census for several minutes at
   # minimum, so a literal WARN here fired on EVERY install, always,
@@ -2616,7 +2616,7 @@ _check_graphify() {
   # over a DIFFERENT root: the corpus and graphify-out/ a build writes land on
   # this filesystem, and a worktrees root is sometimes its own mount, not
   # $HOME's. Neither root existing is not a finding — a fresh box has neither
-  # yet, and (6)'s absent-census arm treats that the same way (D-999).
+  # yet, and (6)'s absent-census arm treats that the same way (D-1061).
   local groot="" gwhich=""
   if [ -d "$wroot" ]; then groot="$wroot"; gwhich="worktrees"
   elif [ -d "$proot" ]; then groot="$proot"; gwhich="projects"
