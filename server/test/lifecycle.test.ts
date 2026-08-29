@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import fs from 'node:fs';
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
@@ -11,6 +12,7 @@ import { CCD_ARGV } from '../src/ccdargv.js';
 import { readLocalCcdCaps } from '../src/localcaps.js';
 import { KeyedQueue } from '../src/inject/queue.js';
 import type { BuildInfo } from '../../shared/buildinfo.js';
+import { LIFECYCLE } from '../../shared/lifecycle.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
 import type { FleetReadiness } from '../src/readiness.js';
@@ -832,5 +834,22 @@ describe('GET /api/projects — the program-ready readiness', () => {
     expect(out.projects.length).toBeGreaterThan(0);
     expect(out.projects.every((p) => !('readiness' in p))).toBe(true);
     await app.close();
+  });
+});
+
+describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
+  it('is L0: imports nothing at all', () => {
+    const src = fs.readFileSync(path.resolve(__dirname, '../../shared/lifecycle.ts'), 'utf8');
+    expect(src).not.toMatch(/^\s*import /m);
+  });
+  it('declares the five graphify classes', () => {
+    const names = LIFECYCLE.map((c) => c.name).sort();
+    for (const n of ['workspace-graph-store', 'project-graph-store', 'graph-corpus-filter',
+      'graph-build-lock', 'graph-sweep-census']) expect(names).toContain(n);
+  });
+  it('every collector-less class carries a non-empty operator ruling', () => {
+    for (const c of LIFECYCLE.filter((c) => c.collector === null)) {
+      expect(c.ruling, `${c.name} needs a ruling`).toBeTruthy();
+    }
   });
 });

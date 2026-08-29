@@ -1766,3 +1766,19 @@ describe('one LEDGER_STALE_MS — the stale horizon has one home', () => {
     }
   });
 });
+
+describe('graphify — one pin, one census path', () => {
+  it("the pip pin literal 'graphifyy==' lives in exactly one bash file, ccd/ccrc", () => {
+    expect(holdersOf('graphifyy==')).toEqual(['ccd/ccrc']);
+  });
+  it('GRAPHIFY_PIN is assigned in exactly one bash file, ccd/ccrc', () => {
+    const holders = BASH.filter((f) =>
+      codeLines(f).some((l) => /^\s*GRAPHIFY_PIN=/.test(l))).map(rel).sort();
+    expect(holders).toEqual(['ccd/ccrc']);
+  });
+  it("the census path '.ccrc/graph-sweep.json' is spelled by writers/readers, not duplicated as a second constant", () => {
+    // the sweep WRITES it, doctor READS it — both may spell it; nothing else may.
+    const holders = holdersOf('graph-sweep.json');
+    expect(holders).toEqual(['ccd/ccd-graph-sweep', 'ccd/ccrc-doctor-checks']);
+  });
+});

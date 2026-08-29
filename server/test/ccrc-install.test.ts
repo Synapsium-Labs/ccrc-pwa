@@ -136,6 +136,10 @@ const TREE_FILES = [
   // not.
   'ccd/ccd',
   'ccd/ccd-cap-scopes',
+  // graphify Task 10: the sweep executable `_inst_bins` ships alongside the
+  // other two, unconditionally (mirrors the `ccd-cap-scopes` line — only the
+  // UNIT and its ENABLE are role-gated, per `_inst_units`/`_inst_enable`).
+  'ccd/ccd-graph-sweep',
   'ccd/session-hook.sh',
   'ccd/install-session-hooks.sh',
   'ccd/tmux.conf',
@@ -178,6 +182,11 @@ const TREE_FILES = [
   'ccd/worker-skill',
   'ccd/install-coordinator-skill.sh',
   'ccd/install-worker-skill.sh',
+  // graphify Task 3: `_inst_graphify_skill` stages this beside the other two
+  // installers, through the same `_inst_atomic`. It ships alone — no
+  // `ccd/graphify-skill` tree — because its SRC is assembled from the
+  // installed package at run time, never vendored (spec §B).
+  'ccd/install-graphify-skill.sh',
 ];
 
 /** The two BUILD ARTIFACTS `_inst_tree` refuses to place a tree without. They
@@ -243,10 +252,14 @@ export function installFixtureTree(home: string, sub = 'checkout'): string {
  *  answer for both halves) — so what is left is the four things a doctor run
  *  measures that an install does not create.
  *
- *  `node`, `tmux`, `jq`, `python3`, `flock` and `timeout` are NOT stubbed out
- *  of existence the way the doctor suite stubs them: this fixture's PATH keeps
+ *  `node`, `tmux`, `jq`, `flock` and `timeout` are NOT stubbed out of
+ *  existence the way the doctor suite stubs them: this fixture's PATH keeps
  *  the real system directories, because the verb runs `node`, `jq` and `rsync`
- *  for real. `df` is the one exception — see below.
+ *  for real. `df` is the one exception — see below. `python3` left that list
+ *  in graphify Task 2: `command -v python3` still resolves it (doctor's own
+ *  `_check_python3` is presence-only and stays green), but `ccrcEnv` below
+ *  now shadows it with a stub that intercepts `-m venv` — see that stub's own
+ *  comment for why a real venv-per-test would be wrong here.
  *
  *  `opts.upstream = false` (A2-NEW) builds the box WITHOUT planting the
  *  upstream binary below — the state the 2d fixtures hid: a truly fresh VM,
@@ -360,6 +373,8 @@ function healthyDoctorBox(home: string, opts: { upstream?: boolean } = {}): void
  *  what the "the default roster generates no wrappers" assertion measures. */
 const FIXTURE_BINS = ['gh', 'curl', 'journalctl', 'systemctl', 'loginctl', 'npm', 'rsync',
   'df', 'claude', 'tmux',
+  // graphify Task 2: `python3 -m venv` is stubbed here, never real.
+  'python3',
   // macOS: the service manager this box's install actually drives. It is in
   // the list for systemctl's reason — the fixture must ANSWER the shapes ccrc
   // asks without ever reaching the developer's own launchd, whose per-user
@@ -400,6 +415,22 @@ interface Result { code: number; stdout: string; stderr: string }
  *  than the fixture asked for. */
 function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   const env = ghContainedEnv(home, { ...process.env, HOME: home });
+  // Task 11's `graphify` doctor check makes `command -v graphify` a real
+  // finding (a WARN when PATH resolves it anywhere but the pinned venv), and
+  // unlike gh/curl/systemctl below there is no stub-bin entry that can
+  // shadow it deterministically: the venv's own bin dir is deliberately
+  // never on PATH (`_inst_graphify_engine`'s own header — PATH resolution is
+  // the exact footgun the venv exists to avoid), so ANY earlier `graphify`,
+  // stub or real, is a shadow the check correctly reports. Same
+  // "determinism, not containment" reasoning the `df` stub below already
+  // states for "whatever the developer's box happens to have" — this one
+  // developer's box carries a real, root-owned /usr/local/bin/graphify (an
+  // unrelated, real-world graphify install), which would otherwise WARN on
+  // every test in this file's suite, non-deterministically, on exactly one
+  // machine.
+  if (env['PATH']) {
+    env['PATH'] = env['PATH'].split(':').filter((p) => p !== '/usr/local/bin').join(':');
+  }
   const plant = (name: string, body: string): void => {
     if (omit.includes(name)) { rmSync(join(home, '.local', 'bin', name), { force: true }); return; }
     writeFileSync(join(home, '.local', 'bin', name), body, { mode: 0o755 });
@@ -602,6 +633,39 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   // correctly" from "the fixture happened to hold nothing they match".
   plant('rsync',
     `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/rsync-argv"\nexec ${RSYNC} "$@"\n`);
+  // ── python3: graphify's engine venv, contained the same way (Task 2) ─────
+  // `_inst_graphify_engine` (graphify Task 2) now runs, on every role but
+  // `server`, `python3 -m venv "$venv"` followed by a REAL
+  // `"$venv/bin/python" -m pip install "graphifyy==$GRAPHIFY_PIN"` against
+  // whatever venv that command just built. Left alone, every `freshBox` in
+  // this file — dozens of tests asserting something that has nothing to do
+  // with graphify — would build a real venv and reach a real package index:
+  // exactly the network dependency `curl`'s poison exists to keep this suite
+  // free of, arriving here through a different tool. This stub answers only
+  // `-m venv <path>`: it builds the venv's `bin/` itself, with a fake
+  // `python` (a recorder — `$HOME/venv-python-calls` — so a test that wants
+  // to can still assert on the pip invocation `_inst_graphify_engine` makes
+  // through it) and a fake `graphify --version` that agrees with the pin, so
+  // the step converges silently for every fixture that plants no venv of its
+  // own. `ccrc-install-graphify.test.ts` is the file that actually exercises
+  // this step's behaviour (a pre-existing real venv, a version mismatch, the
+  // server-role skip); this stub exists only so THIS file's unrelated tests
+  // stay hermetic and fast. Any other invocation is a loud refusal — nothing
+  // here calls python3 any other way today, and a future one deserves to be
+  // seen rather than silently mishandled.
+  plant('python3', [
+    '#!/bin/sh',
+    'printf \'%s\\n\' "$*" >> "$HOME/python3-argv"',
+    'if [ "$1" = "-m" ] && [ "$2" = "venv" ] && [ -n "$3" ]; then',
+    '  bin="$3/bin"; mkdir -p "$bin" || exit 1',
+    '  printf \'#!/bin/sh\\necho "$@" >> "$HOME/venv-python-calls"\\nexit 0\\n\' > "$bin/python"',
+    '  chmod 755 "$bin/python"',
+    '  printf \'#!/bin/sh\\n[ "$1" = --version ] && { echo "graphify 0.9.9"; exit 0; }\\nexit 0\\n\' > "$bin/graphify"',
+    '  chmod 755 "$bin/graphify"',
+    '  exit 0',
+    'fi',
+    'echo "fixture python3: unexpected argv: $*" >&2; exit 90',
+  ].join('\n'));
   for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT']) delete env[k];
   // `verify-service.sh`'s own knobs, at the values its header says a test uses:
   // the production defaults sleep 3 + 5 seconds per call, and `_inst_enable`
@@ -611,6 +675,22 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   // a production timeout, and one call site is where it cannot be forgotten.
   env['CCRC_VERIFY_SETTLE'] = '0';
   env['CCRC_VERIFY_WINDOW'] = '0';
+  // ── graphify Task 3: CCRC_GRAPHIFY_PKG skips the venv-python PKG
+  // resolution `_inst_graphify_skill` would otherwise run. The `python3`
+  // stub above only intercepts `-m venv` — the venv it BUILDS carries a
+  // fake `bin/python` that answers any argv with exit 0 and no stdout
+  // (recorded to `venv-python-calls`, for the engine step's own assertions).
+  // Left alone, `install-graphify-skill.sh`'s
+  // `"$VENV/bin/python" -c 'import graphify…'` would read that empty stdout
+  // as PKG="" and refuse — a fixture reason breaking every unrelated test in
+  // this file that runs the full spine (role != server). Pointing this env
+  // var at a minimal fixture package here, once, is the smaller change than
+  // teaching the shared fake venv python to answer a `-c` argv.
+  const gfxPkg = join(home, 'fixture-graphify-pkg');
+  mkdirSync(join(gfxPkg, 'skills', 'claude', 'references'), { recursive: true });
+  writeFileSync(join(gfxPkg, 'skill.md'), '# fixture graphify skill\n');
+  writeFileSync(join(gfxPkg, 'skills', 'claude', 'references', 'fixture-ref.md'), 'fixture ref\n');
+  env['CCRC_GRAPHIFY_PKG'] = gfxPkg;
   return env;
 }
 
@@ -701,6 +781,22 @@ function pathWithout(home: string, missing: string): string {
   // landed: without this entry, the git fixture died at the wrappers step and
   // `says GIT IS ABSENT when git is absent` went red — the test's own trap,
   // sprung by a new dependency rather than by anything about git.
+  //
+  // `awk` joins it in graphify Task 2, for the identical trap: `python3`
+  // above is a STUB, so it never reaches real PATH resolution, but the
+  // `awk '{print $2}'` `_inst_graphify_engine` pipes `graphify --version`
+  // through is a real invocation, unconditional on every role but `server`,
+  // and it now runs before the git-absent test's own subject (doctor's `FAIL
+  // git`) is ever reached. Measured the same way `stat` was: without this
+  // entry, `pathWithout(home, 'git')` died at the new step instead.
+  //
+  // `realpath` joins it in graphify Task 3, same trap again: measured red —
+  // `install-graphify-skill.sh`'s realpath-de-dup block (`_inst_graphify_skill`,
+  // right after `_inst_skills`, unconditional on every role but `server`) has
+  // no fixture stub, so a PATH missing it fails every home's `realpath
+  // "$dir/skills"` and the step's own `rc=1` dies the whole install before the
+  // git-absent test's subject is ever reached.
+  //
   // grep is the launchctl STUB's own dependency (its `print` arm greps the
   // loaded-labels file): without it every print answers 113, the job reads
   // as never-up, and the enable step's stay-up gate fails the install — a
@@ -708,7 +804,7 @@ function pathWithout(home: string, missing: string): string {
   // absence (measured on the macos leg's second run).
   for (const b of ['mkdir', 'cp', 'mv', 'rm', 'cat', 'chmod', 'cmp', 'date',
     'node', 'git', 'npm', 'rsync', 'bash', 'sleep', 'jq', 'mktemp', 'basename',
-    'diff', 'tmux', 'python3', 'flock', 'timeout', 'stat', 'grep',
+    'diff', 'tmux', 'python3', 'flock', 'timeout', 'stat', 'grep', 'awk', 'realpath',
     // macOS: the service manager, its plist linter, and `uname`. The last one
     // is not decoration — `ccd`'s platform detection prefers bash's own
     // `$OSTYPE` precisely so a PATH without `uname` cannot silently answer
@@ -1538,6 +1634,18 @@ describe('ccrc install: the executables and files it installs', () => {
     expect(mode(bin)).toBe(0o755);
   });
 
+  itLinux('ccd-graph-sweep lands beside it too (graphify Task 10, O3/O6b) — every role, but not Darwin', () => {
+    // Mirrors the `ccd-cap-scopes` case above, byte for byte: `_inst_bins`
+    // ships this one on every role the same way, and rides the same darwin
+    // carve-out (its systemd timer never installs there; the script needs
+    // GNU stat/date and flock(1)). Its UNIT and ENABLE are additionally
+    // role-gated (server skips both) — see the `--role server` describe.
+    const { home } = installed;
+    const bin = join(home, '.local', 'bin', 'ccd-graph-sweep');
+    expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccd-graph-sweep')));
+    expect(mode(bin)).toBe(0o755);
+  });
+
   it('the launcher is BYTE FOR BYTE what deploy.sh generates', () => {
     // THE AGREEMENT PIN. The launcher now has two generators — `deploy.sh`'s
     // `install_ccrc_shim` for a box reached over ssh, and `_inst_shim` for a
@@ -1600,6 +1708,10 @@ describe('ccrc install: the executables and files it installs', () => {
         placed(home, 'ccd', 'install-coordinator-skill.sh'), 0o755],
       [join(home, '.cc-sessions', 'install-worker-skill.sh'),
         placed(home, 'ccd', 'install-worker-skill.sh'), 0o755],
+      // graphify Task 3: `_inst_graphify_skill` stages this beside the other
+      // two, through the same `_inst_atomic`, right after `_inst_skills`.
+      [join(home, '.cc-sessions', 'install-graphify-skill.sh'),
+        placed(home, 'ccd', 'install-graphify-skill.sh'), 0o755],
       [join(home, '.tmux.conf'), placed(home, 'ccd', 'tmux.conf'), 0o644],
       [join(home, '.claude', 'statusline-command.sh'),
         placed(home, 'ccd', 'statusline-command.sh'), 0o755],
@@ -1626,8 +1738,12 @@ describe('ccrc install: the executables and files it installs', () => {
       // place it on macOS — a binary that could only ever be a no-op there.
       // Listing it unconditionally would make this test stat a file the verb
       // was right not to install.
+      // graphify Task 10: the sweep rides the same darwin carve-out — its
+      // systemd timer never installs there, and the script needs GNU stat/date
+      // and flock(1), which macOS does not ship.
       ...(process.platform === 'darwin'
-        ? [] : [join(home, '.local', 'bin', 'ccd-cap-scopes')]),
+        ? [] : [join(home, '.local', 'bin', 'ccd-cap-scopes'),
+                join(home, '.local', 'bin', 'ccd-graph-sweep')]),
       join(home, '.local', 'bin', 'ccrc'),
       join(home, '.cc-sessions', 'session-hook.sh'),
       join(home, '.cc-sessions', 'install-session-hooks.sh'),
@@ -1636,6 +1752,8 @@ describe('ccrc install: the executables and files it installs', () => {
       // the same `_inst_atomic` (worker-skill Task 4).
       join(home, '.cc-sessions', 'install-coordinator-skill.sh'),
       join(home, '.cc-sessions', 'install-worker-skill.sh'),
+      // graphify Task 3: staged beside them, through the same `_inst_atomic`.
+      join(home, '.cc-sessions', 'install-graphify-skill.sh'),
       join(home, '.tmux.conf'),
       join(home, '.claude', 'statusline-command.sh'),
     ];
@@ -1744,6 +1862,11 @@ describe('ccrc install: the order is stated in one place', () => {
       '_inst_enable',
       '_inst_linger',
       '_inst_dirs',
+      // graphify Task 2. After `_inst_dirs` and before `_inst_hooks`, per the
+      // task brief: the engine venv has no dependency on the account config
+      // dirs or the hooks installer either way, so the position is the
+      // brief's own placement rather than a dependency this file measures.
+      '_inst_graphify_engine',
       '_inst_hooks',
       // Worker-skill Task 4. Beside `_inst_hooks` and after it, in deploy.sh's
       // own order (`install-session-hooks.sh`, then the two skill installers):
@@ -1754,6 +1877,21 @@ describe('ccrc install: the order is stated in one place', () => {
       // fresh box run before that step they would skip the whole roster and
       // exit 0.
       '_inst_skills',
+      // graphify Task 3. Right after `_inst_skills`, a SEPARATE function
+      // rather than a third name inside its loop: that loop pins
+      // `CCRC_SKILL_SRC` to a vendored `~/.cc-sessions` tree, and this
+      // skill's source of truth is the installed package instead (spec §B).
+      '_inst_graphify_skill',
+      // graphify Task 4 (D-996/D'). Right after `_inst_graphify_skill`, per
+      // the task brief: the sweep's `check-ignore` precondition needs a
+      // writer that converges every project/worktree's common-dir exclude.
+      // No later step reads what this one writes, so the position is the
+      // brief's own placement rather than a measured dependency.
+      '_inst_graph_excludes',
+      // graphify Task 10 (O3/O6b). Right after `_inst_graph_excludes`, per
+      // the task brief: no later step reads what it does, so the position is
+      // the brief's own placement rather than a measured dependency.
+      '_inst_graph_hooks_off',
       '_inst_wrappers',
     ]);
   });
@@ -2000,6 +2138,13 @@ const UNIT_FILES: Array<[string, string]> = [
   ['claude-session@.service', 'ccd/claude-session@.service'],
   ['ccd-cap-scopes.service', 'deploy/systemd/ccd-cap-scopes.service'],
   ['ccd-cap-scopes.timer', 'deploy/systemd/ccd-cap-scopes.timer'],
+  // graphify Task 10 (O3/O6b): ROLE-GATED — `_inst_units` skips both on a
+  // `--role server` box, unlike every other row above. The default fixture
+  // install below is role `both`, so they land on the box this describe's
+  // shared install measures; the server-role describe further down asserts
+  // their absence explicitly.
+  ['ccd-graph-sweep.service', 'deploy/systemd/ccd-graph-sweep.service'],
+  ['ccd-graph-sweep.timer', 'deploy/systemd/ccd-graph-sweep.timer'],
   ['claude-session@.service.d/limits.conf', 'deploy/systemd/claude-session@.service.d/limits.conf'],
   [`${SLICE_DIR}/limits.conf`, 'deploy/systemd/app-claude-session.slice.d/limits.conf'],
 ];
@@ -2037,8 +2182,10 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
     expect(units.r.stdout).toMatch(/^install: services: /m);
   });
 
-  it('installs four unit files and two drop-ins, byte for byte, at 644', () => {
-    // `deploy.sh:402-417`'s copy set. Byte equality rather than existence,
+  it('installs six unit files and two drop-ins, byte for byte, at 644', () => {
+    // `deploy.sh:402-417`'s copy set, plus graphify Task 10's role-gated
+    // sweep pair (the default install here is role `both`, so both land).
+    // Byte equality rather than existence,
     // because the failure this catches is not an absent file: it is a unit
     // installed from the wrong place (the checkout instead of the placed tree,
     // or a stale copy), which exists, parses, and runs the wrong thing.
@@ -2116,6 +2263,12 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
       '--user daemon-reload',
       '--user enable --now ccrc.service',
       '--user enable --now ccd-cap-scopes.timer',
+      // graphify Task 10 (O3/O6b): a THIRD enable, beside cap-scopes', for the
+      // role-gated sweep timer — the default install here is role `both`, so
+      // it fires. Degrades rather than dies on failure (`_inst_linger`'s own
+      // idiom), which is why it is not folded into the `_ccrc_die`-guarded
+      // loop above it.
+      '--user enable --now ccd-graph-sweep.timer',
       // THE RESTART, in deploy's own position (deploy.sh:719-721): after both
       // enables, before the verify. `enable --now` on an already-active unit is
       // a no-op, and `ccrc.service` runs `node ~/ccrc/server/dist/…` — a process
@@ -2514,13 +2667,14 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
     expect(r.stdout).toMatch(
       /^summary: 1 account\(s\) in .*\/\.ccrc\/accounts\.json — 0 generated, 1 upstream, 0 external \(upstream and external are never written\); 0 written, /m);
     expect(r.stdout).toMatch(/^install: wrappers: converged /m);
-    // Nothing but the three executables `_inst_bins` installs — no wrapper, no
-    // temp file, no staged leftover — beside what the fixture itself planted.
+    // Nothing but the four executables `_inst_bins` installs (graphify Task 10
+    // adds `ccd-graph-sweep`) — no wrapper, no temp file, no staged leftover —
+    // beside what the fixture itself planted.
     expect(readdirSync(join(home, '.local', 'bin'))
       .filter((b) => !FIXTURE_BINS.includes(b)).sort())
       .toEqual(process.platform === 'darwin'
-        ? ['ccd', 'ccrc']          // no cap-scopes: it caps cgroup scopes
-        : ['ccd', 'ccd-cap-scopes', 'ccrc']);
+        ? ['ccd', 'ccrc']   // no cap-scopes (cgroup-bound) and no graph-sweep (systemd-timer-bound)
+        : ['ccd', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccrc']);
   });
 
   it('never calls ccrc\'s own executables orphans (D-93)', () => {
@@ -2941,14 +3095,20 @@ describe('ccrc install: running the WHOLE verb twice', () => {
       // place it on macOS — a binary that could only ever be a no-op there.
       // Listing it unconditionally would make this test stat a file the verb
       // was right not to install.
+      // graphify Task 10: the sweep rides the same darwin carve-out — its
+      // systemd timer never installs there, and the script needs GNU stat/date
+      // and flock(1), which macOS does not ship.
       ...(process.platform === 'darwin'
-        ? [] : [join(home, '.local', 'bin', 'ccd-cap-scopes')]),
+        ? [] : [join(home, '.local', 'bin', 'ccd-cap-scopes'),
+                join(home, '.local', 'bin', 'ccd-graph-sweep')]),
       join(home, '.local', 'bin', 'ccrc'),
       join(home, '.cc-sessions', 'session-hook.sh'),
       join(home, '.cc-sessions', 'install-session-hooks.sh'),
       join(home, '.cc-sessions', 'notify.sh'),
       join(home, '.cc-sessions', 'install-coordinator-skill.sh'),
       join(home, '.cc-sessions', 'install-worker-skill.sh'),
+      // graphify Task 3: staged beside them, through the same `_inst_atomic`.
+      join(home, '.cc-sessions', 'install-graphify-skill.sh'),
       // …and the two staged skill TREES, which are not `_inst_atomic`
       // destinations at all: `_inst_tree_copy` converges a directory, and the
       // file inside it is what a re-run must not rewrite (worker-skill Task 4).
@@ -3138,6 +3298,9 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
     const argv = systemctlCalls(home).map((c) => c.argv);
     expect(argv).toContain('--user enable --now ccrc-agent.service');
     expect(argv).toContain('--user enable --now ccd-cap-scopes.timer');
+    // graphify Task 10 (O3/O6b): fleet is not server, so the sweep timer
+    // enables here too.
+    expect(argv).toContain('--user enable --now ccd-graph-sweep.timer');
     expect(argv).toContain('--user restart ccrc-agent.service');
     // The blanket half of the old refusal, inverted: on a fleet box it is
     // ccrc.service that must never be touched — there is no server here.
@@ -3204,6 +3367,7 @@ describe('ccrc install --role: the refusals and the default', () => {
       '--user daemon-reload',
       '--user enable --now ccrc.service',
       '--user enable --now ccd-cap-scopes.timer',
+      '--user enable --now ccd-graph-sweep.timer',
       '--user restart ccrc.service',
     ]);
     expect(r.stdout).toMatch(
@@ -3217,6 +3381,16 @@ describe('ccrc install --role: the refusals and the default', () => {
     expect(existsSync(unitDir(home, 'ccrc.service'))).toBe(true);
     expect(existsSync(unitDir(home, 'ccrc-agent.service'))).toBe(false);
     expect(existsSync(dotCcrc(home, 'agent.env'))).toBe(false);
+    // graphify Task 10 (O3/O6b): the sweep pair is role-gated OUT on server —
+    // it runs no per-tree AST sweep — while every unit this verb shipped
+    // before this task still lands unchanged.
+    for (const [dest] of UNIT_FILES) {
+      if (dest === 'ccd-graph-sweep.service' || dest === 'ccd-graph-sweep.timer') continue;
+      expect(existsSync(unitDir(home, ...dest.split('/'))), dest).toBe(true);
+    }
+    expect(existsSync(unitDir(home, 'ccd-graph-sweep.service'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccd-graph-sweep.timer'))).toBe(false);
+    expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-graph-sweep');
     expect(read(dotCcrc(home, 'ccrc.env'))).toMatch(/^CCRC_ROLE=server$/m);
     expect(r.stdout).toMatch(/^install: gate: /m);
   });

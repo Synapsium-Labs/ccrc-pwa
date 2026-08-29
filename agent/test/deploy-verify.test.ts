@@ -526,11 +526,16 @@ describe('the verification is actually wired into the deploy, and can observe a 
       'systemd/ccrc-agent.service.d/protect.conf',
       'systemd/ccd-cap-scopes.service',
       'systemd/ccd-cap-scopes.timer',
+      // graphify Task 10 (O3/O6b): the sweep pair, shipped the same way.
+      'systemd/ccd-graph-sweep.service',
+      'systemd/ccd-graph-sweep.timer',
     ]) {
       expect(existsSync(path.join(deployDir, f)), `${f} is not in the repo`).toBe(true);
     }
     expect(existsSync(path.join(deployDir, '..', 'ccd', 'ccd-cap-scopes')),
       'the cap-scopes enforcer script is not in the repo').toBe(true);
+    expect(existsSync(path.join(deployDir, '..', 'ccd', 'ccd-graph-sweep')),
+      'the graph-sweep executable is not in the repo').toBe(true);
 
     // I1, final review: the installs live in AGENT_BUILD_CMD (the build half —
     // npm ci/build plus every unit-file install) — NOT in AGENT_CMD, which is
@@ -548,6 +553,8 @@ describe('the verification is actually wired into the deploy, and can observe a 
       'app-claude\\x2dsession.slice.d',
       'ccrc-agent.service.d',
       'cp ~/ccrc/deploy/systemd/ccd-cap-scopes.service ~/ccrc/deploy/systemd/ccd-cap-scopes.timer ~/.config/systemd/user/',
+      // graphify Task 10 (O3/O6b): the sweep pair, installed the same way.
+      'cp ~/ccrc/deploy/systemd/ccd-graph-sweep.service ~/ccrc/deploy/systemd/ccd-graph-sweep.timer ~/.config/systemd/user/',
     ]) {
       const at = buildLinks.findIndex((l) => l.includes(needle));
       expect(at, `AGENT_BUILD_CMD does not install: ${needle}`).toBeGreaterThan(-1);
@@ -564,6 +571,10 @@ describe('the verification is actually wired into the deploy, and can observe a 
     const timerAt = restartLinks.findIndex((l) => l.includes('enable --now ccd-cap-scopes.timer'));
     expect(reloadAt, 'AGENT_CMD no longer reloads the daemon').toBeGreaterThan(-1);
     expect(timerAt, 'the cap-scopes timer is never enabled').toBeGreaterThan(reloadAt);
+    // graphify Task 10 (O3/O6b): a second timer, needing the same daemon-reload
+    // to have already picked up the unit AGENT_BUILD_CMD installed.
+    const sweepTimerAt = restartLinks.findIndex((l) => l.includes('enable --now ccd-graph-sweep.timer'));
+    expect(sweepTimerAt, 'the graph-sweep timer is never enabled').toBeGreaterThan(reloadAt);
 
     // And structurally: the build ssh runs, THEN stamp_build, THEN the
     // restart ssh — three sequential top-level statements under
@@ -579,8 +590,36 @@ describe('the verification is actually wired into the deploy, and can observe a 
     expect(restartExecAt, 'AGENT_CMD is defined but never executed').toBeGreaterThan(stampAt);
 
     expect(deploySh).toContain('install_atomic ccd/ccd-cap-scopes .local/bin/ccd-cap-scopes 755');
+    expect(deploySh).toContain('install_atomic ccd/ccd-graph-sweep .local/bin/ccd-graph-sweep 755');
     expect(deploySh).toContain('install_atomic ccd/tmux.conf .tmux.conf 644');
     expect(deploySh).toContain('install_atomic ccd/statusline-command.sh .claude/statusline-command.sh 755');
+  });
+
+  it('R-8 (fix round F1): the graphify skill arm is PIN-GATED — a pinless box defers instead of aborting the agent lane', () => {
+    // `install-graphify-skill.sh` exits 1 with "no pin" when the venv engine
+    // step (`ccrc install`'s `_inst_graphify_engine`) has never run on the
+    // box, and this whole file runs under `set -euo pipefail`. An UNGATED
+    // remote call — `"${SSH[@]}" "$BOX" 'bash ~/.cc-sessions/install-graphify-skill.sh'`
+    // — would therefore ABORT the entire agent lane on a pinless box, before
+    // AGENT_CMD's daemon-reload/enables (which land the sweep unit/timer)
+    // ever run. `install_atomic` stays unconditional — shipping the
+    // installer file is harmless; only running it without its precondition
+    // is not.
+    expect(deploySh, 'install_atomic must still ship the installer unconditionally')
+      .toContain('install_atomic ccd/install-graphify-skill.sh .cc-sessions/install-graphify-skill.sh 755');
+    const GATED_INVOCATION = "\"${SSH[@]}\" \"$BOX\" '[ -f ~/.ccrc/graphify.pin ] "
+      + "&& bash ~/.cc-sessions/install-graphify-skill.sh "
+      + "|| echo \"graphify: no pin on box — run ccrc install once; skill deferred\"'";
+    expect(deploySh, 'the skill-arm remote command no longer carries the graphify.pin guard AND the deferred message')
+      .toContain(GATED_INVOCATION);
+    // The two halves this test guards independently, so a fix that keeps one
+    // but drops the other is still caught.
+    expect(deploySh).toContain('[ -f ~/.ccrc/graphify.pin ]');
+    expect(deploySh).toContain('graphify: no pin on box — run ccrc install once; skill deferred');
+    // And the OLD, ungated form must not survive anywhere in the file — the
+    // exact string a naive `install-graphify-skill.sh` call would produce.
+    expect(deploySh).not.toContain(
+      "\"${SSH[@]}\" \"$BOX\" 'bash ~/.cc-sessions/install-graphify-skill.sh'");
   });
 
   it('after a new ccd lands, every claude-session@ supervisor is restarted onto it — and re-verified', () => {
@@ -1254,6 +1293,17 @@ describe('the verification is actually wired into the deploy, and can observe a 
       // for the same reason — the roster is where it learns which config dirs
       // exist at all.
       ['worker skill', "\"${SSH[@]}\" \"$BOX\" 'bash ~/.cc-sessions/install-worker-skill.sh'"],
+      // The graphify skill's installer is the FOURTH (graphify Task 10,
+      // O3/O6b): it `source`s the same `~/.ccrc/accounts.sh` too, for the
+      // identical reason — see `install-graphify-skill.sh`'s own fallback
+      // `source "$HOME/.ccrc/accounts.sh"` branch. R-8 (fix round F1) gated
+      // the invocation on `~/.ccrc/graphify.pin`, so the literal command this
+      // test anchors on now carries the guard too — updated here, not just in
+      // the dedicated R-8 test above, or this ordering check would silently
+      // stop matching anything and report a false "installer no longer runs".
+      ['graphify skill', '"${SSH[@]}" "$BOX" \'[ -f ~/.ccrc/graphify.pin ] '
+        + '&& bash ~/.cc-sessions/install-graphify-skill.sh '
+        + '|| echo "graphify: no pin on box — run ccrc install once; skill deferred"\''],
     ] as const) {
       const runIdx = agentBranch.indexOf(invocation);
       expect(runIdx, `the agent branch no longer runs the ${what} installer (looked for: ${invocation})`)

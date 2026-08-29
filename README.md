@@ -1464,6 +1464,52 @@ coordinator's skill honors, not a wall the OS enforces — the same "identity
 is attribution, not authentication" stance the mail bus already states for
 who a message claims to be from.
 
+### Graph layer (graphify)
+
+**graphify** keeps one AST-derived knowledge graph fresh per git tree on the fleet host.
+`ccrc install`/`update` provision it in four role-gated steps (a server box has no rostered wrapper
+homes to graph, so all four skip there): an **engine**, a ccrc-owned venv at
+`~/.ccrc/graphify-venv` (`pip install graphifyy==$GRAPHIFY_PIN`, the single-definition pin in
+`ccd/ccrc`, resolved everywhere by absolute path rather than `command -v` — a shared box's
+`/usr/local/bin/graphify` can be a root-owned symlink an unprivileged install can neither update nor
+remove); a **skill**, assembled from the *installed package* — unlike the coordinator/worker
+skills, it has no vendored tree — into every rostered account's skills directory; **excludes**,
+`graphify-out/` and `.graphifyignore` converged into each tree's common-dir `info/exclude`; and
+**legacy hooks off** — the old per-repo graphify git hooks are removed if wholly graphify-generated,
+left in place and reported if they chain other content.
+
+**The sweep.** `ccd-graph-sweep`, driven by `ccd-graph-sweep.timer` (`OnBootSec=5min`,
+`OnUnitActiveSec=15min`), walks every tree under `~/projects` and `~/worktrees`, serialized by its
+own flock, and writes a rolling census to `~/.ccrc/graph-sweep.json` (last 10 passes). A pass status
+is one of `ok · paused · failed · probed-zero · no-trees-configured · pass-locked`; each tree's row
+carries an outcome (`never-built · fresh · stale-rebuilt · refused-no-exclude · skipped-busy ·
+skipped-budget · skipped-locked · refused-by-guard · timed-out · refused-shrink · failed`) and a
+reason. A tree with a live, working session on it is deferred (the idle gate, tmux-free — read off
+the session registry and its status file) unless it is ≥20 commits or ≥6h stale, the O3 escape
+hatch. `touch ~/.ccrc/graph-sweep-paused` short-circuits every pass until removed — the brake for an
+operator who needs the fleet host quiet.
+
+**Noise lists.** `~/.ccrc/graph-noise/<repo>.list`, one path-glob per line, become that tree's
+`.graphifyignore` for the sweep's own builds. A `!` (negation) line is refused outright — it would
+re-include something the real `.gitignore` excludes — and the sweep skips the tree rather than
+silently building past it.
+
+`ccrc doctor`'s `graphify` check (SKIP on a server box) reads the engine version against the pin,
+PATH shadows, per-home skill drift, per-tree excludes, the census's last pass, and free space on the
+graph root (`~/worktrees`, falling back to `~/projects`) — the same 2 GiB FAIL / 10 GiB WARN floors
+`disk` uses over `$HOME`.
+
+**Reclaiming space (O7).** A graph is regenerable and disposable: `rm -rf <repo>/graphify-out` loses
+nothing durable, and the next sweep pass rebuilds it cold (`shared/lifecycle.ts` carries this as the
+project-graph-store class's own ruling).
+
+**Bumping the pin.** Edit `GRAPHIFY_PIN` in `ccd/ccrc`, run `ccrc install` (or `update`) on the fleet
+box, and expect every tree to re-stamp stale on the next sweep pass — a full-fleet rebuild over
+roughly 8 passes at the sweep's own budget (`CCRC_GRAPH_BUDGET=8` builds/pass). Re-verify the
+shrink-refusal literal the build discriminator greps for (the comment at its check in
+`ccd/ccd-graph-sweep`) against the new version's installed `watch.py`/`export.py` before shipping —
+the message has already moved once between minor versions.
+
 ---
 
 *Everything below is the internals reference — the architecture and the
