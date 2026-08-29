@@ -35,6 +35,7 @@ import { answerAsk, type AskDeps } from './inject/ask.js';
 import { measuredIdentity, readRegistry, readSessionRecord } from './registry.js';
 import { readHookState } from './hookstate.js';
 import { listProjects, type CcdResult } from './lifecycle.js';
+import { projectReadiness } from './readiness.js';
 import { sessionCommands } from './commands.js';
 import { CLIP_NAME_RE, clipPath, isSafeSessionId, stageUpload } from './clip.js';
 import type { SpawnPty } from './pty.js';
@@ -63,6 +64,7 @@ import {
   type PasskeyAssertStart, type PasskeyListResponse, type PasskeyRegisterStart,
   type RunSummary,
   type SessionClientMsg, type SessionStreamMsg, type TaskItem,
+  type FloorState,
 } from '../../shared/api.js';
 
 /**
@@ -1512,7 +1514,49 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return res.ok ? { ok: true } : reply.code(502).send({ ok: false, stderr: res.stderr });
   };
 
-  app.get('/api/projects', async () => listProjects(deps.io, deps.cfg));
+  // F3 — the program-ready readiness join (program-leverage wave 3). Read ONCE
+  // off the watcher, exactly the way `/api/fleet` above reads
+  // `watcher?.currentPending()`: the expensive half (two skill files per
+  // rostered HOME plus the box token, an agent round trip each in remote fleet
+  // mode) is swept on a ten-minute clock, and this handler must never
+  // re-measure it.
+  //
+  // THREE outcomes reach the wire and they are three different facts: no key
+  // at all (a build without this feature), `null` (this build, nothing swept
+  // yet), an object (measured). Folding the first two together would erase the
+  // difference between "upgrade the server" and "wait a moment".
+  //
+  // `null` also covers "this process has no watcher", which `index.ts` never
+  // produces — it constructs one unconditionally — so in the shipped server
+  // that arm means "not swept yet" and nothing else. Same shape of reasoning
+  // as D-1024: the arm is kept because a build that could not express it could
+  // never report the day it becomes reachable.
+  app.get('/api/projects', async () => {
+    const listed = await listProjects(deps.io, deps.cfg);
+    const fleet = watcher?.currentReadiness();
+    if (fleet === undefined) {
+      return { ...listed, projects: listed.projects.map((p) => ({ ...p, readiness: null })) };
+    }
+    const coord = deps.coord;
+    return {
+      ...listed,
+      projects: listed.projects.map((p) => {
+        // Caught PER PROJECT: one unreadable row must not blank the rest.
+        // `ledgerFloor` has no result type — a sick store throws — and a
+        // failed read is `unmeasurable`, never `not-seeded`, which would send
+        // an operator to seed a floor that may already exist.
+        let floor: FloorState;
+        try {
+          floor = coord === undefined
+            ? 'unmeasurable'
+            : coord.ledgerFloor(p.name) === null ? 'not-seeded' : 'seeded';
+        } catch {
+          floor = 'unmeasurable';
+        }
+        return { ...p, readiness: projectReadiness(fleet, floor) };
+      }),
+    };
+  });
 
   app.post('/api/sessions', async (req, reply) => {
     const body = (req.body ?? {}) as { wrapper?: unknown; project?: unknown; workdir?: unknown; enable?: unknown };
