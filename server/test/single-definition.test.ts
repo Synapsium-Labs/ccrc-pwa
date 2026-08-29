@@ -1362,11 +1362,31 @@ describe('the supervisor sweep — both copies carry the KillMode=process prefli
     return [['ccd/ccrc _upd_sweep', upd![1]!], ['deploy.sh SWEEP_CMD', cmd![1]!]];
   };
 
+  /** `_upd_sweep`'s two platform arms, split so each arm's preflight is
+   *  asserted IN THAT ARM. The first cut of this pin ran its indexOf over the
+   *  whole body, and the macOS port's Darwin arm — which spells its guard
+   *  `grep -q 'AbandonProcessGroup'` and its restart `_svc_try_restart` —
+   *  satisfied nothing and broke nothing: all three indices resolved inside
+   *  the Linux arm, and deleting the entire Darwin preflight left this
+   *  describe green (measured). The Darwin arm opens at its `$CCD_OS` test
+   *  and closes at the arm's own two-space `fi`; every inner block indents
+   *  deeper, so the two-space match is the arm's close. deploy.sh's SWEEP_CMD
+   *  executes over SSH against the Linux fleet box only and has no arm to
+   *  split. */
+  const updSweepArms = (body: string): { darwin: string; linux: string } => {
+    const d0 = body.indexOf('"$CCD_OS" = darwin');
+    expect(d0, '_upd_sweep lost its Darwin arm').toBeGreaterThan(-1);
+    const dEnd = body.indexOf('\n  fi', d0);
+    expect(dEnd, "_upd_sweep's Darwin arm never closes").toBeGreaterThan(d0);
+    return { darwin: body.slice(d0, dEnd), linux: body.slice(dEnd) };
+  };
+
   it('each implementation compares the resolved value to KillMode=process', () => {
     for (const [name, body] of sweepBodies()) {
-      expect(body, `${name} lost its KillMode=process preflight`)
+      const scope = name === 'ccd/ccrc _upd_sweep' ? updSweepArms(body).linux : body;
+      expect(scope, `${name} lost its KillMode=process preflight`)
         .toContain('"KillMode=process"');
-      expect(body, `${name} asks the unit file, not systemd — drop-ins would be invisible`)
+      expect(scope, `${name} asks the unit file, not systemd — drop-ins would be invisible`)
         .toContain('show -p KillMode');
     }
   });
@@ -1374,8 +1394,9 @@ describe('the supervisor sweep — both copies carry the KillMode=process prefli
   it('and in each, the preflight comes BEFORE the try-restart', () => {
     // Not merely present: a guard that runs after the sweep guards nothing.
     for (const [name, body] of sweepBodies()) {
-      const guard = body.indexOf('"KillMode=process"');
-      const restart = body.indexOf('try-restart');
+      const scope = name === 'ccd/ccrc _upd_sweep' ? updSweepArms(body).linux : body;
+      const guard = scope.indexOf('"KillMode=process"');
+      const restart = scope.indexOf('try-restart');
       expect(restart, `${name} has no try-restart — the sweep is gone`).toBeGreaterThan(-1);
       // indexOf's -1 would sit "before" any restart — an ABSENT preflight must
       // red THIS test too, not only its sibling.
@@ -1383,6 +1404,27 @@ describe('the supervisor sweep — both copies carry the KillMode=process prefli
       expect(guard, `${name}: the preflight does not precede the try-restart`)
         .toBeLessThan(restart);
     }
+  });
+
+  it('the Darwin arm carries its own preflight — the negated AbandonProcessGroup grep — BEFORE its kickstart', () => {
+    // The macOS counterpart of R1's mandate, pinned in the arm that holds it.
+    // The NEGATION is part of the pin: `! grep -q` refuses when the key is
+    // ABSENT, and inverting it (measured green under the old pin) would make
+    // the sweep refuse exactly the boxes that are safe and sweep the ones
+    // that are not.
+    const [name, body] = sweepBodies()[0]!;
+    expect(name).toBe('ccd/ccrc _upd_sweep');
+    const { darwin } = updSweepArms(body);
+    expect(darwin, 'the Darwin preflight (negated grep) is gone')
+      .toContain("! grep -q 'AbandonProcessGroup'");
+    const guard = darwin.indexOf("! grep -q 'AbandonProcessGroup'");
+    const restart = darwin.indexOf('_svc_try_restart');
+    expect(restart, 'the Darwin arm has no _svc_try_restart — the sweep is gone')
+      .toBeGreaterThan(-1);
+    expect(guard, 'the Darwin preflight does not precede the kickstart')
+      .toBeLessThan(restart);
+    // Refused is DEGRADED, never fatal — the same spec §6 shape as Linux.
+    expect(darwin).toContain('update: DEGRADED: the supervisor sweep did not run');
   });
 });
 

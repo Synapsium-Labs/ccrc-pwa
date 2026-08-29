@@ -101,6 +101,26 @@ describe('claims that go stale', () => {
   });
 });
 
+// The `jobs:` mapping of a workflow, as job name → the raw text of its block.
+// Written against the two files in this repo rather than pulling in a YAML
+// parser: both keep every job key at two-space indent and put nothing after
+// `jobs:`, and the assertion below goes red if that ever stops being true
+// (a reader that silently parses zero jobs would pass every check vacuously).
+function jobBlocks(yml: string): Map<string, string> {
+  const lines = yml.split('\n');
+  const start = lines.findIndex((l) => /^jobs:\s*$/.test(l));
+  const acc = new Map<string, string[]>();
+  let cur: string[] | null = null;
+  if (start >= 0) {
+    for (const l of lines.slice(start + 1)) {
+      const head = /^ {2}([A-Za-z][\w-]*):\s*$/.exec(l);
+      if (head) { cur = []; acc.set(head[1], cur); continue; }
+      cur?.push(l);
+    }
+  }
+  return new Map([...acc].map(([name, block]) => [name, block.join('\n')]));
+}
+
 describe('workflow and package posture', () => {
   it('ci.yml declares least privilege rather than inheriting it', () => {
     // The org default already computes to read-only. Declaring it means a job
@@ -132,6 +152,36 @@ describe('workflow and package posture', () => {
     for (const f of ['.github/workflows/ci.yml', '.github/workflows/release.yml']) {
       expect(read(f), `${f} references secrets — fork PRs must never reach one`)
         .not.toMatch(/secrets\./);
+    }
+  });
+
+  it('every job declares a timeout-minutes, and one that is still a deadline', () => {
+    // GitHub's default job timeout is 360 minutes and no job here declares
+    // anything else. Measured on main's last green run (2026-08-27): server 9
+    // minutes, test-macos 23, every other leg under 2 — so a wedged job burns
+    // six hours of runner time before anyone learns it wedged, and the macOS
+    // leg is billed at ten Linux minutes to the minute.
+    //
+    // That leg has already hung for a real reason, on its very first run: 40
+    // tests shed at 20s apiece because `gtimeout` was absent and
+    // `_plat_timeout` degraded to NO deadline. Once this repo is public, a
+    // fork's PR gets to make that mistake too.
+    //
+    // The ceiling carries as much of this as the key does: `timeout-minutes:
+    // 360` would satisfy a presence-only check while restating the default it
+    // is supposed to replace.
+    for (const f of ['.github/workflows/ci.yml', '.github/workflows/release.yml']) {
+      const jobs = jobBlocks(read(f));
+      expect(jobs.size, `${f}: parsed no jobs at all`).toBeGreaterThan(0);
+      for (const [name, block] of jobs) {
+        const m = /^ {4}timeout-minutes: (\d+)$/m.exec(block);
+        expect(m, `${f}: job \`${name}\` declares no timeout-minutes — it inherits 360`)
+          .not.toBeNull();
+        const mins = Number(m![1]);
+        expect(mins, `${f}: job \`${name}\` waits ${mins} min — that is the default, not a deadline`)
+          .toBeLessThanOrEqual(60);
+        expect(mins, `${f}: job \`${name}\` declares a timeout of ${mins}`).toBeGreaterThan(0);
+      }
     }
   });
 

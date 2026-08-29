@@ -2263,6 +2263,16 @@ export interface RosterWire {
   hue: Hue;
   /** Whether ccd's least-loaded picker may land a fresh session here. */
   homeAble: boolean;
+  /** True when the roster declares this entry PLUMBING rather than an account —
+   *  see `AccountDef.hidden` (`shared/roster.ts`) for what that means and why
+   *  no predicate over the other fields can derive it.
+   *
+   *  ADDITIVE, and `FLEET_PROTO` is deliberately not bumped for it. A reader
+   *  must test `=== true` and never truthiness: a server built before this
+   *  field omits it, and ABSENCE MEANS "an account", so an older payload must
+   *  keep rendering every entry exactly as it did. `rosterWrapperIds`
+   *  (`pwa/src/lib/accounts.ts`) is the single reader that applies it. */
+  hidden: boolean;
 }
 
 /**
@@ -3177,6 +3187,52 @@ const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
 };
 export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE_CODE_MAP) as RunRefuseCode[];
 
+/**
+ * WHAT REFUSED A DELIVERY, when the refusal was ordinary.
+ *
+ * D-792. `sweepMail`'s ladder has ten refusal paths and two of them record
+ * anything. The silence is correct as a SCHEDULING decision — those gates are
+ * expected to hold indefinitely for a session that is merely busy, and
+ * charging them toward `MAIL_MAX_ATTEMPTS` would park the mail of every busy
+ * worker. But "must not park" was implemented as "must not be written down",
+ * and those are two different requirements: a delivery sat `delivered` with
+ * `attempts: 0` for ELEVEN HOURS, re-selected and refused on every
+ * `MAIL_SWEEP_MS` tick — on the order of 4,000 times — while `GET /api/peers`
+ * called the session `deliverable: 'yes'`, the run showed a tidy
+ * `unreadMail: 1`, and nothing anywhere named the gate.
+ *
+ * ONE MEMBER PER CONDITION, not per `continue`. `if (!pid || !cfgDir)` folds
+ * two an operator acts on completely differently — the pane is gone, versus
+ * this wrapper resolves to no config dir, which is a ROSTER problem — so they
+ * are `no-pane` and `no-config-dir` here and the ladder splits to match.
+ *
+ * NOT A SCHEDULING INPUT. Nothing reads this to decide whether, when or how
+ * often to deliver; it is written after the decision has already been made and
+ * exists so a human can tell "waiting" from "wedged".
+ */
+export type MailGate =
+  | 'same-sweep' | 'in-flight' | 'cooldown'
+  | 'registry-absent' | 'registry-unmeasurable'
+  | 'tmux-gone' | 'tmux-unknown'
+  | 'pending-ask' | 'no-pane' | 'no-config-dir'
+  | 'not-idle' | 'not-quiet';
+
+/** Total, so a refusal path added to `sweepMail` without a member here is a
+ *  TS2739 rather than a silent hole — the `RUN_REFUSE_CODE_MAP` shape, and the
+ *  reason `single-definition.test.ts` forbids a second hand-written copy. */
+const MAIL_GATE_MAP: Record<MailGate, true> = {
+  'same-sweep': true, 'in-flight': true, cooldown: true,
+  'registry-absent': true, 'registry-unmeasurable': true,
+  'tmux-gone': true, 'tmux-unknown': true,
+  'pending-ask': true, 'no-pane': true, 'no-config-dir': true,
+  'not-idle': true, 'not-quiet': true,
+};
+export const MAIL_GATES: readonly MailGate[] = Object.keys(MAIL_GATE_MAP) as MailGate[];
+
+export function isMailGate(v: unknown): v is MailGate {
+  return typeof v === 'string' && (MAIL_GATES as readonly string[]).includes(v);
+}
+
 /** The validator that goes with the list — `isPrReason`'s own shape and the
  *  same reason: `unknown` in, so nothing is smuggled past by claiming it is
  *  already a code, and the CONSTANT is cast rather than the input. */
@@ -3317,6 +3373,47 @@ export interface RunSummary {
  *  deliberate edit here, made with this paragraph's inequality in hand. */
 export const SPAWN_STALL_MS = 360_000;
 
+/** D-792, §6. WHEN the console is allowed to name the gate holding a delivery.
+ *
+ *  Three conditions, all of which must hold, and they are here for the same
+ *  reason `SPAWN_STALL_MS` is: a threshold the console DRAWS ON must not be a
+ *  copy of a number the lane ENFORCES. Nothing in `sweepMail` reads any of
+ *  these — reading one would make a gate column a scheduling input, which the
+ *  design forbids by name.
+ *
+ *  `MAIL_GATE_HELD_MS` — how long ONE gate must have held a delivery unbroken
+ *  (`now - gateSince`) before that is worth saying out loud. Deliberately far
+ *  above a busy worker's ordinary turn: fifteen minutes clears a full server
+ *  suite (~9 min) with room, so `not-idle` on a session doing real work stays
+ *  silent. Below it the row renders exactly as it did before this field
+ *  existed — a worker busy for ninety seconds is not a fault, and drawing it
+ *  as one would re-introduce the very lie this design was written against.
+ *
+ *  `MAIL_GATE_HELD_COUNT` — how many consecutive refusals at that same gate.
+ *  `gateSince` alone is not enough: a sweep that ran once, recorded a gate and
+ *  then stopped leaves an ageing `gateSince` behind it, and one observation is
+ *  not a pattern.
+ *
+ *  `MAIL_GATE_FRESH_MS` — how recently the most recent refusal was observed
+ *  (`now - gateAt`). This is the whole reason `gateAt` is a separate column
+ *  from `gateSince`: a sweep that has STOPPED leaves `gateSince` looking
+ *  exactly like a sweep that is running and still refusing. Five minutes, not
+ *  a small multiple of the sweep cadence, because `gateAt` is stamped by the
+ *  SERVER's clock and compared against the VIEWER's — a phone minutes off UTC
+ *  must not silence the line.
+ *
+ *  THE TEST IS ONE-SIDED, deliberately, and this sentence used to claim
+ *  otherwise. Only a `gateAt` too far in the PAST silences the line; one in the
+ *  FUTURE — which is what a viewer clock running behind the server's produces —
+ *  passes, and is pinned that way. The asymmetry is the safe one: a future
+ *  stamp means the refusal is at most as old as the skew, so the line is if
+ *  anything under-stating the hold. A past-side miss costs a warning nobody
+ *  sees; a two-sided test would cost the warning AND make a viewer's wrong
+ *  clock look like a wedged sweep. */
+export const MAIL_GATE_HELD_MS = 900_000;
+export const MAIL_GATE_HELD_COUNT = 3;
+export const MAIL_GATE_FRESH_MS = 300_000;
+
 /** One mail row, for the feed and the session strip (both PR J). */
 export interface MailSummary {
   /** The MAIL id (`mail.id`) — identifies the message, not any one
@@ -3372,6 +3469,36 @@ export interface MailSummary {
    * one: it is the shape of a delivery that has never been attempted.
    */
   lastError: string | null;
+  /**
+   * D-792, and the four fields answer four different questions on purpose.
+   *
+   * `lastGate` — WHICH ordinary gate refused this delivery most recently, or
+   * `null` for "none has", which is a fresh row or one that moved. It is a
+   * CLOSED union (`MailGate`), the exact opposite of `lastError` above, so a
+   * client MAY key a total `Record<MailGate, …>` off it — while still
+   * rendering an unrecognised token raw rather than `undefined`, because an
+   * older client can meet a newer server's member.
+   *
+   * `gateCount` — consecutive refusals at that same gate; `gateSince` — when
+   * that gate first refused this row unbroken; `gateAt` — when the most recent
+   * refusal was observed. The last two are not redundant: a sweep that has
+   * STOPPED leaves `gateSince` looking exactly like one still refusing, and
+   * `now - gateAt` is the only thing that separates them.
+   *
+   * ADDITIVE; `FLEET_PROTO` is deliberately not bumped. An older server omits
+   * all four, and absence means "nothing to say about a gate" — never "no gate
+   * is holding it", which is a claim this build would be making on that
+   * server's behalf.
+   *
+   * NONE OF THEM IS A SCHEDULING INPUT. They are written after every decision
+   * is made, and exist so a reader can tell a delivery that is WAITING from one
+   * that is WEDGED — a distinction that previously existed nowhere, and cost
+   * eleven hours of an unread nudge to notice.
+   */
+  lastGate: MailGate | null;
+  gateCount: number;
+  gateSince: number | null;
+  gateAt: number | null;
 }
 
 /** The two enforced caps (spec:199-201). The two COUNTS are queries over

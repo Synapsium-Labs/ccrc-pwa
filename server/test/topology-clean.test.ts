@@ -43,7 +43,7 @@
 // rows — every tip row included — still green; 48/48 on revert.
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -519,7 +519,10 @@ describe('the published history, not just the tip', () => {
     // Fixture HOME discipline: git runs with both config scopes pointed at
     // /dev/null and identity supplied per-process, so this can neither read
     // nor write the developer's real git config.
-    const tmp = mkdtempSync(path.join(tmpdir(), 'ccrc-hist-'));
+// RESOLVED — see tmpHelpers' mkTmp: on macOS the temp root lives under a
+// symlink (/var -> /private/var), and ccd resolves paths deliberately, so an
+// unresolved fixture path compares two spellings of one directory.
+    const tmp = realpathSync(mkdtempSync(path.join(tmpdir(), 'ccrc-hist-')));
     try {
       const env = {
         ...process.env,

@@ -9,6 +9,12 @@ import path from 'node:path';
 import { CCD, WS_ADD, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 import { actsOf, readJournal, eventsOf, measOf, decOf, lcDir } from './lifecycleHelpers.js';
 
+// The bound's own tool, in the platform's spelling: bare `timeout` is GNU and
+// a macOS box carries `gtimeout` (Homebrew coreutils) instead. The harness
+// PATH rides on the process PATH, so the name resolves on either host — the
+// first test-macos run measured the bare spelling failing 5 probes at 127.
+const TIMEOUT_BIN = process.platform === 'darwin' ? 'gtimeout' : 'timeout';
+
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-lc-sites-'); });
 afterEach(() => { h.cleanup(); });
@@ -378,7 +384,7 @@ describe('ws-add declares its actor (D-410)', () => {
   const wsAdd = (args: string, slug = 'quiet-mesa'): { out: string; rc: number } => {
     const script = path.join(h.home, 'ws-add-probe.sh');
     fs.writeFileSync(script, `source ${JSON.stringify(CCD)}\n${WS_ADD}\ncmd_ws_add ${args}\n`);
-    const raw = h.sh(`timeout 20 bash ${JSON.stringify(script)} 2>&1; echo "__rc=$?"`,
+    const raw = h.sh(`${TIMEOUT_BIN} 20 bash ${JSON.stringify(script)} 2>&1; echo "__rc=$?"`,
       { CCD_WS_SLUG: slug });
     const m = /__rc=(\d+)$/.exec(raw)!;
     return { out: raw.slice(0, m.index).trim(), rc: Number(m[1]) };

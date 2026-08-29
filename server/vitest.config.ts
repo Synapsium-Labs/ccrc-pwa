@@ -73,11 +73,19 @@ import { defineConfig } from 'vitest/config';
 // Neither `testTimeout` nor `maxWorkers` touches this class of flake at all
 // — a shed test is evidence of whatever it was actually waiting for, timing
 // race or hang alike, and this file's numbers narrow the search, not settle it.
+// DARWIN GETS A LONGER CLOCK, for the same reason the 20s exists at all: the
+// budget races process spawning, and macOS is measurably worse at it — fork
+// plus exec on the shared 3-4 vCPU GitHub runner is several times Linux's
+// cost, and this suite's heaviest tests each spawn hundreds of bash/git/tmux
+// children. The first test-macos run shed 37 ccrc-install tests at exactly
+// 20s while their siblings passed — the shape of a slow clock, not a hang
+// (the job's own setup and 5,400 other tests were green). 90s keeps the
+// hung-child ceiling meaningful while clearing the observed spread.
 export default defineConfig({
   test: {
     include: ['test/**/*.test.ts'],
-    testTimeout: 20_000,
-    hookTimeout: 20_000,
+    testTimeout: process.platform === 'darwin' ? 90_000 : 20_000,
+    hookTimeout: process.platform === 'darwin' ? 90_000 : 20_000,
     // See the long comment above: a PERCENTAGE, not a fixed count, because a
     // fixed number is an absolute value under vitest 4's `resolveMaxWorkers`
     // (not a cap) and would raise CI's worker count instead of lowering it.

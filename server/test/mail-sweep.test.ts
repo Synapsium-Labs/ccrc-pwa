@@ -10,8 +10,9 @@
 // controllable so the gate arithmetic is deterministic, while real timers
 // keep flowing underneath so sendPrompt's echo/submit polls actually settle.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Bus } from '../src/bus.js';
 import type { Runner } from '../src/exec.js';
 import type { Deps } from '../src/server.js';
@@ -26,6 +27,9 @@ import type { PushPayload } from '../src/push.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { unreadableField } from './ioDoubles.js';
+import { MAIL_GATES } from '../../shared/api.js';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
 
 const ID = 'demo-coordinator';
 const UUID = 'a'.repeat(36);
@@ -158,10 +162,15 @@ const queueTestDelivery = (coord: CoordStore, toId: string, envelope: string): {
   return { mailId: mail.id, id: delivery.id };
 };
 
-const deliveryRow = (coord: CoordStore, id: number):
-  { state: string; attempts: number; nextAttemptAt: number; lastError: string | null; rejectCode: string | null } =>
-  coord.db.prepare('SELECT state, attempts, nextAttemptAt, lastError, rejectCode FROM mail_deliveries WHERE id = ?')
-    .get(id) as { state: string; attempts: number; nextAttemptAt: number; lastError: string | null; rejectCode: string | null };
+interface DeliveryRow {
+  state: string; attempts: number; nextAttemptAt: number;
+  lastError: string | null; rejectCode: string | null;
+  lastGate: string | null; gateCount: number; gateSince: number | null; gateAt: number | null;
+}
+const deliveryRow = (coord: CoordStore, id: number): DeliveryRow =>
+  coord.db.prepare('SELECT state, attempts, nextAttemptAt, lastError, rejectCode, '
+    + 'lastGate, gateCount, gateSince, gateAt FROM mail_deliveries WHERE id = ?')
+    .get(id) as unknown as DeliveryRow;
 
 interface Harness { home: string; calls: string[][]; run: Runner }
 
@@ -1683,5 +1692,328 @@ describe('sweepMail: a blocked delivery reaches its SENDER', () => {
     // writer of `run_events`.
     const eventsAfter = coord.db.prepare('SELECT COUNT(*) AS n FROM run_events').get() as { n: number };
     expect(eventsAfter.n).toBe(eventsBefore.n);
+  });
+});
+
+// ── D-792: the gate a refusal happened at, recorded ───────────────────────
+//
+// The defect these cover, stated once: `sweepMail`'s ladder has ten refusal
+// paths and two of them recorded anything. That silence is CORRECT as a
+// scheduling decision — an ordinary gate holds indefinitely for a busy session
+// and must never approach `MAIL_MAX_ATTEMPTS` — but it was implemented as "do
+// not write anything down", and a delivery then sat `delivered`/`attempts: 0`
+// for eleven hours, refused on the order of 4,000 times, while `GET /api/peers`
+// called the session `deliverable: 'yes'` and the run showed `unreadMail: 1`.
+//
+// Every assertion below is about OBSERVATION. The scheduling invariants — no
+// attempt, no backoff, no park — are asserted alongside, because a fix that
+// bought visibility by changing when mail is delivered would be worse than the
+// defect.
+describe('sweepMail: what refused this delivery (D-792)', () => {
+  it('records the gate, counts consecutive refusals, and still never accrues an attempt', async () => {
+    // The exact fixture of the invariant test above ("an ORDINARY gate never
+    // accrues an attempt"), now asked the question that had no answer: WHICH
+    // gate, and for how long.
+    const h = harness({ hasSession: false });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    for (let i = 0; i < 3; i++) { advance(PAST_SWEEP_MS); await w.sweepMail(); }
+    const row = deliveryRow(coord, id);
+    expect(row.lastGate, 'tmux said the pane is gone').toBe('tmux-gone');
+    expect(row.gateCount, 'three sweeps, three refusals at the same gate').toBe(3);
+    expect(row.gateSince).not.toBeNull();
+    expect(row.gateAt).not.toBeNull();
+    // …and the scheduling contract is exactly as it was.
+    expect(row.state).toBe('queued');
+    expect(row.attempts, 'an ordinary gate is not a send failure').toBe(0);
+  });
+
+  it('gateSince holds still while the gate repeats, and gateAt keeps moving', async () => {
+    // The pair is not redundant. A sweep that has STOPPED leaves `gateSince`
+    // reading exactly like one still refusing every 10s; `now - gateAt` is the
+    // only thing that tells them apart, so `gateAt` must advance on each
+    // refusal while `gateSince` does not.
+    const h = harness({ hasSession: false });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID); seedHookState(h.home, ID); seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    advance(PAST_SWEEP_MS); await w.sweepMail();
+    const first = deliveryRow(coord, id);
+    advance(PAST_SWEEP_MS); await w.sweepMail();
+    const second = deliveryRow(coord, id);
+
+    expect(second.gateSince, 'the same gate is still holding it').toBe(first.gateSince);
+    expect(second.gateAt!, 'but we observed it again just now').toBeGreaterThan(first.gateAt!);
+    expect(second.gateCount).toBe(2);
+  });
+
+  it('a delivery that SENDS carries no stale gate', async () => {
+    // A row that moved must not still claim something is holding it — the same
+    // lie in the other direction. The clear rides in the same UPDATE as the
+    // state change, so the ack-race guard covers it too.
+    const h = harness({ panes: HAPPY_PANES });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID); seedHookState(h.home, ID); seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    // One refusal first, so there is genuinely a gate on the row to clear.
+    coord.noteGate(id, 'not-quiet', Date.now(), false, null);
+    expect(deliveryRow(coord, id).lastGate).toBe('not-quiet');
+
+    advance(PAST_SWEEP_MS);
+    await w.sweepMail();
+    const row = deliveryRow(coord, id);
+    expect(row.state).toBe('delivered');
+    expect(row.lastGate, 'a delivered row is not being refused by anything').toBeNull();
+    expect(row.gateCount).toBe(0);
+    expect(row.gateSince).toBeNull();
+    expect(row.gateAt).toBeNull();
+  });
+
+  it('a CHANGE of gate restarts the count and the clock', () => {
+    // "How long has THIS gate been holding it", not "how long has it been stuck
+    // at anything" — the question an operator actually asks, and the reason
+    // `noteGate` takes `same` rather than deriving it from the row it is about
+    // to overwrite.
+    const h = harness();
+    const coord = store(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+    const t0 = 1_000_000;
+    coord.noteGate(id, 'not-idle', t0, false, null);
+    coord.noteGate(id, 'not-idle', t0 + 10_000, true, t0);
+    const held = deliveryRow(coord, id);
+    expect(held.gateCount).toBe(2);
+    expect(held.gateSince).toBe(t0);
+
+    coord.noteGate(id, 'cooldown', t0 + 20_000, false, held.gateSince);
+    const moved = deliveryRow(coord, id);
+    expect(moved.lastGate).toBe('cooldown');
+    expect(moved.gateCount, 'a different gate starts its own count').toBe(1);
+    expect(moved.gateSince, 'and its own clock').toBe(t0 + 20_000);
+  });
+
+  it('writes no scheduling column — nextAttemptAt is untouched by a gate', () => {
+    // The non-goal, as a mechanism. If `noteGate` ever moves the retry clock it
+    // has become a scheduling input, which is the one thing this slice must not
+    // become.
+    const h = harness();
+    const coord = store(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+    const before = deliveryRow(coord, id);
+    coord.noteGate(id, 'no-config-dir', Date.now(), false, null);
+    const after = deliveryRow(coord, id);
+    expect(after.nextAttemptAt).toBe(before.nextAttemptAt);
+    expect(after.attempts).toBe(before.attempts);
+    expect(after.state).toBe(before.state);
+    expect(after.lastError).toBe(before.lastError);
+  });
+});
+
+// D-792, THE TWO GUARDS THE COLUMNS' OWN PR STILL OWED (design §8, items 4/5).
+//
+// The behavioural half shipped with the columns: a gate that stops recording, a
+// count that never resets, a `gateSince` that always does, a delivered row that
+// keeps its gate, and a `noteGate` that touches `nextAttemptAt` are all already
+// red in the describes above. These are the STRUCTURAL half.
+//
+// BOTH OF THESE WERE WEAKER IN THEIR FIRST CUT THAN THEIR OWN it()-TITLES SAID,
+// and the review that found it measured the gap rather than arguing it:
+//
+//   - the totality guard compared the VOCABULARY against the CALL SITES, which
+//     catches an orphan member and catches deleting a call — but not a refusal
+//     path added with a bare `continue`, which is the ORIGINAL D-792 BUG. The
+//     mutant `if (d.toId === ' never') continue;` at the top of the loop left
+//     all 57 tests green.
+//   - the non-goal guard scanned SQL only. The gate columns reach the scheduler
+//     as ordinary JavaScript: `dueDeliveries` SELECTs `lastGate, gateSince` into
+//     locals, so `if (d.gateSince !== null && now - d.gateSince > 86_400_000)
+//     continue;` makes a gate column a scheduling input without touching a
+//     single line of SQL — and that mutant, too, left 57 green.
+//
+// Both are fixed below by measuring the thing the title claims. Text scans
+// still, with `single-definition.test.ts`'s stated limit: they catch the version
+// a reasonable person writes, not every version a determined one could.
+describe('D-792 structure: the ladder is total, and nothing schedules on a gate', () => {
+  const srcRoot = path.join(here, '..', 'src');
+  const watchSrc = readFileSync(path.join(srcRoot, 'watch.ts'), 'utf8');
+
+  /** Comments blanked to SPACES rather than removed, so every index into the
+   *  result still addresses the same character of the original. The brace walk
+   *  below needs that; a `.replace(…, '')` would slide every offset. */
+  const blankComments = (t: string): string =>
+    t.replace(/\/\*[\s\S]*?\*\//g, (m) => ' '.repeat(m.length))
+     .replace(/\/\/[^\n]*/g, (m) => ' '.repeat(m.length));
+
+  /** The body of `for (const d of due) { … }` — the delivery ladder itself,
+   *  found by matching braces rather than by line number, so the guard does not
+   *  quietly stop measuring the day someone inserts a method above it. */
+  const dueLoop = (): { body: string; offset: number } => {
+    const src = blankComments(watchSrc);
+    const head = src.indexOf('for (const d of due) {');
+    expect(head, 'the due loop was not found — this guard is measuring nothing').toBeGreaterThan(-1);
+    const open = src.indexOf('{', head);
+    let depth = 0, i = open;
+    for (; i < src.length; i++) {
+      if (src[i] === '{') depth++;
+      else if (src[i] === '}' && --depth === 0) break;
+    }
+    return { body: src.slice(open + 1, i), offset: open + 1 };
+  };
+
+  it('records a gate at every refusal path the ladder has', () => {
+    // The vocabulary and the call sites, compared in BOTH directions: one
+    // catches a member with no call site (a gate nothing can ever report), the
+    // other a call site naming a token the union does not have. TypeScript
+    // catches the second too — but this suite is not `tsc`, and a guard that
+    // only holds when someone runs the other tool is the "comment, not
+    // mechanism" this repo bans.
+    const ladder = blankComments(watchSrc);
+    const called = new Set([...ladder.matchAll(/\bgated\(\s*\w+\s*,\s*'([a-z-]+)'/g)].map((x) => x[1]!));
+    // The one call site that picks its gate at runtime rather than naming a
+    // literal — `registry-unmeasurable` vs `registry-absent` is a MEASUREMENT,
+    // and folding the two would be the overloaded-null this deviation split
+    // `no-pane`/`no-config-dir` to avoid. Matched on its own shape so the scan
+    // does not have to pretend it is a literal.
+    for (const t of ladder.matchAll(/\bgated\(\s*\w+\s*,\s*\w+\s*\?\s*'([a-z-]+)'\s*:\s*'([a-z-]+)'/g)) {
+      called.add(t[1]!); called.add(t[2]!);
+    }
+    expect([...MAIL_GATES].filter((g) => !called.has(g)),
+      'a MailGate member with no call site in sweepMail — the wire can carry it and nothing can ever write it').toEqual([]);
+    expect([...called].filter((g) => !(MAIL_GATES as readonly string[]).includes(g)),
+      'sweepMail records a gate the wire has no member for').toEqual([]);
+  });
+
+  it('leaves the ladder no SILENT exit: every `continue` before the send names a gate', () => {
+    // THE GUARD THE PREVIOUS ONE ONLY CLAIMED TO BE. A refusal path added with
+    // a bare `continue` is precisely what D-792 was opened about — `MailGate`'s
+    // own docstring: the sweep refused on the order of 4,000 times and "nothing
+    // anywhere named the gate".
+    //
+    // The rule is the ladder's own shape rather than a list of line numbers:
+    // THE WHOLE LADDER PRECEDES THE SEND. Every `continue` above the
+    // `sendPrompt` call is a refusal and must name what refused it; the three
+    // below it are post-send fates (delivered, `enter-ignored` parked, replay
+    // ceiling) whose outcome is recorded in `state`/`lastError`, where a gate
+    // would be the wrong place for it. No exemption list to keep current, and a
+    // new rung added anywhere in the ladder is covered the day it is written.
+    const { body } = dueLoop();
+    const send = body.indexOf('sendPrompt(');
+    expect(send, 'no sendPrompt in the due loop — the before/after rule has nothing to divide').toBeGreaterThan(-1);
+
+    const ungated: string[] = [];
+    for (const m of body.matchAll(/\bcontinue\s*;/g)) {
+      if (m.index! > send) continue;              // post-send fate, not a refusal
+      // Walk back to the brace that opens the block this `continue` sits in,
+      // and require a `gated(` between the two. Scoping it to the enclosing
+      // block is what stops a NEW ungated `continue` borrowing the `gated(` of
+      // the rung above it.
+      let depth = 0, i = m.index! - 1;
+      for (; i >= 0; i--) {
+        if (body[i] === '}') depth++;
+        else if (body[i] === '{') { if (depth === 0) break; depth--; }
+      }
+      const block = body.slice(i + 1, m.index!);
+      if (!block.includes('gated(')) {
+        const line = body.slice(Math.max(0, m.index! - 90), m.index! + 10).split('\n').pop()!.trim();
+        ungated.push(line);
+      }
+    }
+    expect(ungated,
+      'a refusal path in sweepMail exits without naming a gate — that is the D-792 bug itself, returning')
+      .toEqual([]);
+  });
+
+  it('reads no gate column in any WHERE, ORDER BY, GROUP BY or HAVING', () => {
+    // THE NON-GOAL, half one: the SQL. A gate column may be WRITTEN (a SET) and
+    // SELECTED (the console has to get it somehow); what it may never be is a
+    // filter, an ordering or a grouping, because each of those makes the lane's
+    // own diagnostic decide what the lane does next.
+    //
+    // Per-statement, not per-file: the whole-file text has a WHERE somewhere
+    // before nearly every column mention, so a file-wide regex would report
+    // everything. Each `.prepare(...)` argument is extracted by matching
+    // parens, then cut at its first scheduling clause; only the TAIL is scanned.
+    const COLS = ['lastGate', 'gateCount', 'gateSince', 'gateAt'];
+    const bad: string[] = [];
+    let statements = 0;
+
+    const walk = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+        const f = path.join(dir, e.name);
+        if (e.isDirectory()) return walk(f);
+        return e.name.endsWith('.ts') ? [f] : [];
+      });
+
+    for (const file of walk(srcRoot)) {
+      const text = blankComments(readFileSync(file, 'utf8'));
+      let i = text.indexOf('.prepare(');
+      while (i !== -1) {
+        let depth = 0, j = i + '.prepare'.length;
+        for (; j < text.length; j++) {
+          if (text[j] === '(') depth++;
+          else if (text[j] === ')' && --depth === 0) break;
+        }
+        statements++;
+        // Quote characters and concatenation dropped, so a statement split
+        // across a dozen `+`-joined literals reads as one string.
+        const sql = text.slice(i, j).replace(/['"`+\n]/g, ' ');
+        const cut = /\b(WHERE|ORDER\s+BY|GROUP\s+BY|HAVING)\b/i.exec(sql);
+        if (cut) {
+          const tail = sql.slice(cut.index);
+          for (const c of COLS) {
+            if (new RegExp(`\\b${c}\\b`).test(tail)) {
+              bad.push(`${path.relative(srcRoot, file)}: '${c}' in a ${cut[1]!.toUpperCase()}`);
+            }
+          }
+        }
+        i = text.indexOf('.prepare(', j);
+      }
+    }
+    // A scan that silently reaches ZERO statements passes for ever and guards
+    // nothing — the author's own "tests pin shape, not effect" failure mode.
+    // The floor is deliberately loose: it asserts the extractor still WORKS,
+    // not how much SQL the tree happens to contain this month.
+    expect(statements, 'the .prepare() extractor found no SQL at all — this guard is inert').toBeGreaterThan(20);
+    expect(bad, 'a gate column has become a scheduling input — the one thing D-792 forbids').toEqual([]);
+  });
+
+  it('reads no gate column in the SWEEP itself — the shortest route bypasses SQL entirely', () => {
+    // THE NON-GOAL, half two, and the half the first cut missed. `dueDeliveries`
+    // SELECTs `lastGate, gateSince` into ordinary JavaScript locals, so the
+    // cheapest way to make a gate column a scheduling input never touches a
+    // query at all: `if (d.gateSince !== null && now - d.gateSince > DAY)
+    // continue;` inside the ladder does it in one line, and the SQL scan above
+    // cannot see it.
+    //
+    // So: in watch.ts the four names may appear ONLY inside the `gated` helper,
+    // which is the single reader those two fields were SELECTed for. Every other
+    // mention is a scheduling read until proven otherwise, and proving otherwise
+    // means moving it into the helper or arguing it in review — which is the
+    // point.
+    const src = blankComments(watchSrc);
+    const open = src.indexOf('const gated = (');
+    expect(open, 'the `gated` helper was not found in watch.ts — this guard is measuring nothing').toBeGreaterThan(-1);
+    // The helper ends at the `};` that closes its arrow body.
+    const end = src.indexOf('};', open) + 2;
+    expect(end).toBeGreaterThan(open);
+
+    const outside: string[] = [];
+    for (const c of ['lastGate', 'gateCount', 'gateSince', 'gateAt']) {
+      for (const m of src.matchAll(new RegExp(`\\b${c}\\b`, 'g'))) {
+        if (m.index! >= open && m.index! < end) continue;   // inside the helper
+        outside.push(`${c} at offset ${m.index}: ${src.slice(Math.max(0, m.index! - 60), m.index! + 30).split('\n').pop()!.trim()}`);
+      }
+    }
+    expect(outside,
+      'watch.ts reads a gate column outside the `gated` helper — a diagnostic has become an input to the lane it diagnoses')
+      .toEqual([]);
   });
 });

@@ -19,6 +19,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, ghContainedEnv, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { asManagerCalls } from './platformFixtures.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-session-state-'); });
@@ -38,7 +39,11 @@ const run = (snippet: string): { code: number; stdout: string; stderr: string } 
 };
 
 describe('_ws_unsupervise records a deliberate stop', () => {
-  const NOSYS = `systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; };`;
+  // BOTH MANAGERS RECORD, because which one ccd calls is the platform's
+  // business: `asManagerCalls` puts the two vocabularies back into one for the
+  // assertions, so a test says what it meant on either box.
+  const NOSYS = `systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; };
+    launchctl() { echo "launchctl $*" >> "$HOME/ccd-calls"; };`;
 
   it('stamps epoch plus the default surface `ccd`, and drops the heartbeat', () => {
     // The default is `ccd` because the four internal call sites — ws-rm,
@@ -50,7 +55,8 @@ describe('_ws_unsupervise records a deliberate stop', () => {
     h.sh(`${NOSYS} _ws_unsupervise ${ID}`);
     expect(h.reg(ID, 'stopped')).toMatch(/^\d{10} ccd$/);
     expect(h.reg(ID, 'supervised')).toBeNull();
-    expect(h.calls()).toEqual([`systemctl --user disable --now claude-session@${ID}`]);
+    expect(asManagerCalls(h.calls()))
+      .toEqual([`systemctl --user disable --now claude-session@${ID}`]);
   });
 
   it('records the surface it was handed', () => {
@@ -82,7 +88,7 @@ describe('_ws_unsupervise records a deliberate stop', () => {
     // The disable is already swallowed (`2>/dev/null || true`), so a box with
     // no lingering must still record that somebody stopped this row. Kills
     // the mutant that stamps only after a successful systemctl.
-    h.sh(`systemctl() { return 1; }; _ws_unsupervise ${ID} cli`);
+    h.sh(`systemctl() { return 1; }; launchctl() { return 1; }; _ws_unsupervise ${ID} cli`);
     expect(h.reg(ID, 'stopped')).toMatch(/^\d{10} cli$/);
   });
 
@@ -94,7 +100,7 @@ describe('_ws_unsupervise records a deliberate stop', () => {
     // on a box with lingering off or a missing unit file got an unqualified
     // "stopped" with nothing saying the disable did not take, while its
     // mirror `_ws_supervise` still warns on the same failure one function up.
-    const r = run(`systemctl() { return 1; }; _ws_unsupervise ${ID} cli`);
+    const r = run(`systemctl() { return 1; }; launchctl() { return 1; }; _ws_unsupervise ${ID} cli`);
     expect(r.code).toBe(0);
     expect(r.stderr).toContain(`could not disable unit claude-session@${ID}`);
   });
@@ -172,6 +178,7 @@ describe('a failed revival still clears .stopped, at the verb level', () => {
 
 describe('cmd_stop', () => {
   const STOP = `systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; }; `
+    + `launchctl() { echo "launchctl $*" >> "$HOME/ccd-calls"; }; `
     + `tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; };`;
 
   it('strips the flag BEFORE the arity rule — `ccd stop <id> --surface pwa` is a one-id stop', () => {
@@ -180,7 +187,7 @@ describe('cmd_stop', () => {
     // `<id>---surface`, aiming the stop at a session that does not exist
     // while the real one keeps running.
     expect(h.sh(`${STOP} cmd_stop ${ID} --surface pwa`)).toBe(`stopped ${ID}`);
-    expect(h.calls()).toEqual([
+    expect(asManagerCalls(h.calls())).toEqual([
       // `cmd_stop`'s own `_lc_done` (task 18) is the first `_lc_emit` in this
       // process, so `_lc_obs`'s once-per-process `tmux list-panes` probe fires
       // before the disable/kill pair — see task 17's identical fallout on
@@ -230,7 +237,7 @@ describe('cmd_stop', () => {
     // deliberate stop is recorded (and the pane is still killed) even when
     // the unit disable fails, but the operator must be told the disable
     // itself did not take — see the matching `_ws_unsupervise` test above.
-    const r = run(`systemctl() { return 1; }; tmux() { :; }; cmd_stop ${ID}`);
+    const r = run(`systemctl() { return 1; }; launchctl() { return 1; }; tmux() { :; }; cmd_stop ${ID}`);
     expect(r.code).toBe(0);
     expect(r.stdout.trim()).toBe(`stopped ${ID}`);
     expect(r.stderr).toContain(`could not disable unit claude-session@${ID}`);
@@ -312,6 +319,11 @@ describe('the supervisor heartbeat', () => {
       _alive() { return 1; }; tmux() { :; }; cmd_ensure() { :; }; sleep() { :; };
       _swap_carry_jsonl() { echo "mid-carry:$(_session_state ${ID})" >> "$HOME/ccd-calls"; return 0; };
       systemctl() { [[ "$*" == *"start claude-session@"* ]] \
+        && echo "start:$(_session_state ${ID})" >> "$HOME/ccd-calls"; return 0; };
+      # The same MOMENT in launchd's vocabulary: _svc_start bootstraps and then
+      # kickstarts, and the kickstart is the one that actually starts the job,
+      # so that is where the state is sampled.
+      launchctl() { [[ "$1" == kickstart ]] \
         && echo "start:$(_session_state ${ID})" >> "$HOME/ccd-calls"; return 0; };
       cmd_swap ${ID} claude-a`);
     expect(h.calls()).toContain('mid-carry:restarting');

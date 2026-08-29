@@ -29,7 +29,10 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const CCCLIP = path.join(REPO, 'ccd', 'ccclip');
 
 let home: string;
-beforeEach(() => { home = fs.mkdtempSync(path.join(os.tmpdir(), 'ccrc-ccclip-')); });
+// RESOLVED — see tmpHelpers' mkTmp: on macOS the temp root lives under a
+// symlink (/var -> /private/var), and ccd resolves paths deliberately, so an
+// unresolved fixture path compares two spellings of one directory.
+beforeEach(() => { home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ccrc-ccclip-'))); });
 afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
 // Stage 5 (spec §4): ccclip carries no default box — BOX/SSH_KEY/CCD come

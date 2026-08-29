@@ -634,6 +634,50 @@ export const MIGRATIONS: readonly string[] = [
   `
   ALTER TABLE runs ADD COLUMN dispatchStartedAt INTEGER;
   `,
+
+  // ── 6: user_version 5 -> 6 ────────────────────────────────────────────────
+  // D-792: WHAT REFUSED THIS DELIVERY, and for how long.
+  //
+  // `sweepMail`'s ladder has ten refusal paths; two of them write `lastError`
+  // via `backOff` and the rest `continue` in silence. That silence is right as
+  // a SCHEDULING decision — those gates hold indefinitely for a session that is
+  // merely busy, and charging them toward `MAIL_MAX_ATTEMPTS` would park every
+  // busy worker's mail. But "must not park" got implemented as "must not be
+  // written down", and a delivery then sat `delivered`/`attempts: 0` for ELEVEN
+  // HOURS, refused ~4,000 times, while every surface reported health.
+  //
+  // FOUR COLUMNS, NOT ONE, because they answer four different questions and
+  // collapsing any pair re-creates the defect:
+  //   lastGate   — WHICH gate (a closed `MailGate`, shared/api.ts)
+  //   gateCount  — how many CONSECUTIVE refusals at that same gate
+  //   gateSince  — when THIS gate first refused this row, unbroken
+  //   gateAt     — when the most recent refusal was OBSERVED
+  // `gateSince` and `gateAt` are not redundant: a sweep that has STOPPED
+  // running leaves `gateSince` looking exactly like one still refusing, and
+  // `now - gateAt` is the only thing that separates them.
+  //
+  // NOT A SCHEDULING INPUT, and that is the load-bearing constraint rather than
+  // a nicety. Nothing reads these to decide whether, when or how often to
+  // deliver — hence NO INDEX, deliberately: an index exists to serve a query,
+  // a query here would be a scheduling read, and the absence is the evidence
+  // there is none. `attempts` remains SEND-FAILURE budget alone and is
+  // untouched by every gate below.
+  //
+  // ADDITIVE AND ITS OWN MIGRATION, for the reason 2..5 each restate: `db.ts`
+  // runs `for (v = current; v < COORD_SCHEMA_VERSION; v++)`, so editing an
+  // applied entry never runs again. MIGRATIONS[0..4] are FROZEN.
+  //
+  // NULLABLE, EXCEPT THE COUNT. NULL `lastGate` means "no ordinary gate has
+  // refused this row" — a fresh delivery, or one that moved — and a default
+  // would collapse that into "refused by something at the epoch", which is the
+  // overloaded null this column exists to remove. `gateCount` defaults 0
+  // because a count of refusals genuinely starts at none.
+  `
+  ALTER TABLE mail_deliveries ADD COLUMN lastGate TEXT;
+  ALTER TABLE mail_deliveries ADD COLUMN gateCount INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE mail_deliveries ADD COLUMN gateSince INTEGER;
+  ALTER TABLE mail_deliveries ADD COLUMN gateAt INTEGER;
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

@@ -452,8 +452,15 @@ describe('the --project fan-out is stamped at its ONE gh read, not per session',
     // consulted at all — python takes its own clock, out-stamps #601, and the
     // assertions below fail.
     const mid = String(Math.floor((t1 + t2) / 2));
+    // BOTH SPELLINGS OF "what time is it", because there are two now. ccd
+    // reads the clock through `_plat_epoch_ms`, which prefers bash's own
+    // `EPOCHREALTIME` — no fork, and correct on macOS where `date +%s%3N`
+    // answers the literal `…N` (BSD date has no `%N`). A stub that only
+    // shadowed `date` would therefore be bypassed entirely, and this test
+    // would measure the real clock instead of the midpoint it planted.
     const DATE_STUB = `date() { [[ "$*" == "+%s%3N" ]] && { printf '%s\\n' ${mid}; return 0; }
-      command date "$@"; };`;
+      command date "$@"; };
+      _plat_epoch_ms() { printf '%s\\n' ${mid}; };`;
     h.ghRows([row('ws/quiet-basin', tipA, 591), row('ws/still-water', tipB, 591)]);
     h.sh(`${GH_STUB} ${DATE_STUB} cmd_pr_state --project demo`);
 

@@ -9,6 +9,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { parseRoster } from '../../shared/roster.js';
 import { generateAccountsSh } from '../../shared/generate.mjs';
+import { asManagerCalls } from './platformFixtures.js';
 
 /** The home-able ids of the test roster — the set ccd reads as `CCRC_HOME_ABLE`
  *  out of the roster `seedAccountsSh` writes below. Derived, not hand-typed,
@@ -214,6 +215,12 @@ export function ghContainedEnv(
   // records, and a real `systemd-run` is unreachable at every value.
   for (const [name, log, rc, want] of [
     ['systemctl', 'systemctl-calls', 'rc=97', !!opts.systemd],
+    // THE OTHER MANAGER, poisoned on the same terms. `opts.systemd` names the
+    // CAPABILITY — "this fixture cares about the service manager" — not the
+    // implementation, so a box driven by launchd needs its binary contained
+    // exactly as much: without this, ccd on macOS reaches the developer's real
+    // `launchctl`, whose per-user domain no `$HOME` isolates.
+    ['launchctl', 'launchctl-calls', 'rc=97', !!opts.systemd],
     ['systemd-run', 'systemd-run-calls', 'rc=${SYSTEMD_RUN_RC:-97}', !!opts.systemd],
     // `_lc_obs`'s only shelled read. It must EXIST and REFUSE rather than be
     // absent: `_lc_obs` branches on `command -v tmux`, so removing tmux would
@@ -345,7 +352,16 @@ export function makeCcdHarness(prefix: string): CcdHarness {
     },
     calls: () => readLines(path.join(home, 'ccd-calls')),
     ghPoison: () => ghPoisonAt(home),
-    systemctlCalls: () => readLines(path.join(home, 'systemctl-calls')),
+    // THE MANAGER'S CALLS, in systemd's vocabulary whichever manager ran.
+    // Callers assert argv like `--user enable --now claude-session@x`; on
+    // macOS the same intent is one or two launchctl verbs, so the recorded
+    // lines are translated through the same normalizer the other suites use
+    // and the binary's own name is trimmed back off — the poison records
+    // `"$*"`, not the command.
+    systemctlCalls: () => (process.platform !== 'darwin'
+      ? readLines(path.join(home, 'systemctl-calls'))
+      : asManagerCalls(readLines(path.join(home, 'launchctl-calls')).map((l) => `launchctl ${l}`))
+        .map((l) => l.replace(/^systemctl /, ''))),
     systemdRunCalls: () => readLines(path.join(home, 'systemd-run-calls')),
     tmuxCalls: () => readLines(path.join(home, 'tmux-calls')),
     makeRepo: makeRepoAt,

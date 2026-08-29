@@ -60,7 +60,19 @@ describe('_reg_set writes atomically', () => {
     expect(body, '_reg_set must be a multi-line function by now').not.toBe('');
     expect(body, 'nothing may unlink the destination').not.toMatch(/rm\s+[^\n]*"\$REG\/\$1\.\$2"/);
     expect(body, 'nothing may redirect into the destination').not.toMatch(/>\s*"\$REG\/\$1\.\$2"/);
-    expect(body, 'the destination is reached by rename only').toMatch(/mv\s+-[a-zA-Z]*T[a-zA-Z]*\s/);
+    // THE RENAME MOVED ONE FRAME DEEPER when macOS arrived: BSD `mv` has no
+    // `-T`, so the GNU call this used to scan for now lives in
+    // `_plat_mv_notdir`, whose Linux arm IS that call and whose Darwin arm
+    // reproduces its refusal. The invariant is unchanged and so is the
+    // strength of this check — it just has to follow the indirection, and it
+    // pins BOTH ends so neither can be loosened alone.
+    expect(body, 'the destination is reached by the rename helper only')
+      .toMatch(/_plat_mv_notdir\s+"\$tmp"\s+"\$REG\/\$1\.\$2"/);
+    const mvBody = /_plat_mv_notdir\(\)\s*\{([\s\S]*?)\n\}/.exec(ccd)?.[1] ?? '';
+    expect(mvBody, '_plat_mv_notdir must be a multi-line function').not.toBe('');
+    expect(mvBody, 'the helper reaches the destination by rename only').toMatch(/mv\s+-[a-zA-Z]*T[a-zA-Z]*\s/);
+    expect(mvBody, 'the helper must never unlink its destination').not.toMatch(/rm\s+[^\n]*"\$2"/);
+    expect(mvBody, 'the helper must never redirect into its destination').not.toMatch(/>\s*"\$2"/);
   });
 
   it('names its tmp DOT-FIRST and never ends it in the field — the two properties every listing reader depends on', () => {

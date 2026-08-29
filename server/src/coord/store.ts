@@ -8,13 +8,13 @@ import { reviveDec, reviveMeas, reviveObs, type JournalRow } from './journalpars
 import {
   CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS,
   isClaimState, isDeviationAllocState, isLifecycleAct, isLifecycleGapReason, isLifecycleOutcome,
-  isMailDeliveryState, isMailKind, isNotifyKind, isProgramState, isRunState, isWorkItemState,
+  isMailDeliveryState, isMailGate, isMailKind, isNotifyKind, isProgramState, isRunState, isWorkItemState,
   LC_ACT_UNKNOWN, LC_OUTCOME_UNKNOWN,
   RUN_TRANSITIONS,
   type ClaimConflict, type ClaimState, type ClaimSummary,
   type CoordCaps, type DeviationAllocation, type DeviationAllocState,
   type LifecycleGap, type LifecycleGapReason,
-  type MailDeliveryState,
+  type MailDeliveryState, type MailGate,
   type MailKind, type MailRejectCode, type MailSummary, type MirroredLifecycleEvent,
   type NotifyEvent, type PeerDeliverable, type ProgramState, type RunItemTally, type RunState,
   type RunSummary,
@@ -277,12 +277,18 @@ const MAIL_ROW_COLUMNS =
   // Task 408: the two columns the lane has always WRITTEN and nothing ever
   // read. `state` alone cannot tell a delivery blocked against a dirty input
   // box from one merely waiting for its next attempt window.
-  'd.attempts AS attempts, d.lastError AS lastError';
+  'd.attempts AS attempts, d.lastError AS lastError, ' +
+  // D-792: WHAT refused it, and for how long. Both mail reads share this
+  // one list, so the gate reaches every consumer through a single reader
+  // (`hydrateMail`) rather than being added to each query in turn.
+  'd.lastGate AS lastGate, d.gateCount AS gateCount, ' +
+  'd.gateSince AS gateSince, d.gateAt AS gateAt';
 
 interface MailRowDb {
   id: number; deliveryId: number; at: number; fromId: string; toId: string; runId: number | null;
   kind: string; subject: string; artifacts: string; state: string;
   attempts: number; lastError: string | null;
+  lastGate: string | null; gateCount: number; gateSince: number | null; gateAt: number | null;
 }
 
 /** A route argument can never ask either mail read to walk more history (or
@@ -1294,6 +1300,14 @@ export class CoordStore {
       // a display question on the reader's behalf, and would drop exactly the
       // detail a maintainer greps the column for.
       attempts: r.attempts, lastError: r.lastError,
+      // The gate half is NARROWED here and `lastError` above is not, and the
+      // difference is the point: `lastGate` is a CLOSED union, so an
+      // unrecognised token is a server/client version mismatch that must not
+      // reach a client as a `MailGate` it will key a total record off. It
+      // degrades to null — "nothing to say about a gate" — which is the same
+      // thing absence means on the wire.
+      lastGate: isMailGate(r.lastGate) ? r.lastGate : null,
+      gateCount: r.gateCount, gateSince: r.gateSince, gateAt: r.gateAt,
     }));
   }
 
@@ -1434,20 +1448,27 @@ export class CoordStore {
    */
   dueDeliveries(now: number, replayMs: number): { id: number; mailId: number; toId: string;
                                 attempts: number; lastError: string | null; envelope: string;
-                                deliveredAt: number | null; ingestedAt: number | null }[] {
+                                deliveredAt: number | null; ingestedAt: number | null;
+                                lastGate: string | null; gateSince: number | null }[] {
     return this.db.prepare(
       // `lastError` (Task 409) is the row's INCOMING failure — what it already
       // carried before this sweep touched it — which is how `sweepMail` tells
       // a NEW block from a repeat of the same one without re-reading the row
       // it is about to write and racing itself.
-      'SELECT id, mailId, toId, attempts, lastError, envelope, deliveredAt, ingestedAt FROM mail_deliveries ' +
+      // `lastGate`/`gateSince` ride along for the SAME reason `lastError` does
+      // (D-792): `noteGate` must tell a repeat of the same gate from a change
+      // of gate, and reading the row again at write time would race the sweep
+      // against itself on exactly the rows it is deciding about.
+      'SELECT id, mailId, toId, attempts, lastError, envelope, deliveredAt, ingestedAt, ' +
+      'lastGate, gateSince FROM mail_deliveries ' +
       "WHERE (state = 'queued' AND nextAttemptAt <= ?) " +
       "OR (state = 'delivered' AND MAX(COALESCE(ingestedAt, 0), COALESCE(deliveredAt, 0)) + ? <= ? " +
       'AND nextAttemptAt <= ?) ' +
       'ORDER BY id',
     ).all(now, replayMs, now, now) as { id: number; mailId: number; toId: string; attempts: number;
                     lastError: string | null; envelope: string;
-                    deliveredAt: number | null; ingestedAt: number | null }[];
+                    deliveredAt: number | null; ingestedAt: number | null;
+                    lastGate: string | null; gateSince: number | null }[];
   }
 
   /**
@@ -1496,7 +1517,12 @@ export class CoordStore {
    *  identical reason (see its own docstring). */
   markDelivered(id: number, at: number): void {
     this.db.prepare(
-      "UPDATE mail_deliveries SET state = 'delivered', deliveredAt = ? WHERE id = ? AND state NOT IN ('acked','rejected')",
+      // The gate columns clear IN THE SAME STATEMENT as the move (D-792), so
+      // the existing `state NOT IN (...)` guard covers them too and a row the
+      // guard skips keeps its gate. A second UPDATE could clear a gate off a
+      // row this one declined to touch.
+      "UPDATE mail_deliveries SET state = 'delivered', deliveredAt = ?, " +
+      "lastGate = NULL, gateCount = 0, gateSince = NULL, gateAt = NULL WHERE id = ? AND state NOT IN ('acked','rejected')",
     ).run(at, id);
   }
 
@@ -1600,7 +1626,8 @@ export class CoordStore {
     const isAbandonedReplayPark = row.state === 'rejected'
       && row.rejectCode === 'undeliverable' && row.lastError === MAIL_REPLAY_CEILING_ERROR;
     if (row.state === 'rejected' && !isAbandonedReplayPark) return false;
-    this.db.prepare('UPDATE mail_deliveries SET state = ?, ackedAt = ? WHERE id = ?')
+    this.db.prepare('UPDATE mail_deliveries SET state = ?, ackedAt = ?, '
+      + 'lastGate = NULL, gateCount = 0, gateSince = NULL, gateAt = NULL WHERE id = ?')
       .run('acked', at, id);
     return true;
   }
@@ -1639,6 +1666,34 @@ export class CoordStore {
     ).run(countsAsAttempt ? 1 : 0, lastError, nextAttemptAt, id);
   }
 
+  /**
+   * D-792: WHAT REFUSED THIS DELIVERY, recorded without changing what happens
+   * to it. `sweepMail` calls this at every ordinary gate; it writes four
+   * columns and reads none of them back into a decision.
+   *
+   * NOT A BACKOFF AND NOT AN ATTEMPT. `nextAttemptAt` is untouched, so the row
+   * stays due on the next sweep exactly as it did before — an ordinary gate is
+   * expected to hold for a busy session and must never approach
+   * `MAIL_MAX_ATTEMPTS`. `attempts` is untouched for the same reason: it is
+   * SEND-FAILURE budget (its own docstring), and no send was attempted here.
+   * The two gates that ALSO back off call this in ADDITION, because "when may
+   * this be retried" and "what refused it" are different questions and
+   * collapsing them is the defect this repo bans by name.
+   *
+   * `sinceIfSame` is the row's CURRENT `gateSince`, handed in by the caller
+   * from `dueDeliveries` rather than re-read here: a repeat of the same gate
+   * keeps it, and a CHANGE of gate restarts it, because the question is "how
+   * long has THIS gate been holding it", not "how long has it been stuck at
+   * anything".
+   */
+  noteGate(id: number, gate: MailGate, now: number, same: boolean, sinceIfSame: number | null): void {
+    this.db.prepare(
+      'UPDATE mail_deliveries SET lastGate = ?, gateAt = ?, ' +
+      'gateCount = CASE WHEN ? THEN gateCount + 1 ELSE 1 END, gateSince = ? ' +
+      "WHERE id = ? AND state NOT IN ('acked','rejected')",
+    ).run(gate, now, same ? 1 : 0, same ? (sinceIfSame ?? now) : now, id);
+  }
+
   /** `WHERE state NOT IN ('acked','rejected')` (fix — review finding 22, the
    *  same ack-race guard `markDelivered` above now carries, applied to this
    *  writer's own unconditional `state` overwrite, and widened for the same
@@ -1654,7 +1709,8 @@ export class CoordStore {
    *  way `'acked'` is, so it needs the identical protection. */
   rejectDelivery(id: number, code: MailRejectCode, lastError: string): void {
     this.db.prepare(
-      "UPDATE mail_deliveries SET state = 'rejected', rejectCode = ?, lastError = ? " +
+      "UPDATE mail_deliveries SET state = 'rejected', rejectCode = ?, lastError = ?, " +
+      "lastGate = NULL, gateCount = 0, gateSince = NULL, gateAt = NULL " +
       "WHERE id = ? AND state NOT IN ('acked','rejected')",
     ).run(code, lastError, id);
   }

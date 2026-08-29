@@ -36,6 +36,7 @@ import { ghContainedEnv } from './ccdWsHelpers.js';
 // marker `verifyMarker` recognises, so the "marker-verified only" gate is
 // measured against the shipped format, never a test's re-spelling of it.
 import { markGenerated } from '../../shared/mark.mjs';
+import { itLinux, itDarwin } from './platformFixtures.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -60,6 +61,18 @@ function verbEnv(home: string): NodeJS.ProcessEnv {
   plant('tmux',
     '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/tmux-poison"\n'
     + 'echo "ccrc uninstall/backup/logs must never touch tmux" >&2\nexit 97\n');
+  // launchd's half, contained the same way: every argv recorded, only the
+  // verbs this box's uninstall actually issues answered, and a loud exit on
+  // anything else so a step driving a job nobody authorised is visible.
+  plant('launchctl', [
+    '#!/bin/sh',
+    'printf \'%s\\n\' "$*" >> "$HOME/launchctl-calls"',
+    'case "$1" in',
+    '  bootout|disable|enable|bootstrap|kickstart) exit 0 ;;',
+    '  print) exit 113 ;;',
+    '  *) echo "fixture launchctl: unexpected argv: $*" >&2; exit 90 ;;',
+    'esac',
+  ].join('\n') + '\n');
   plant('systemctl', [
     '#!/bin/sh',
     'printf \'%s\\n\' "$*" >> "$HOME/systemctl-calls"',
@@ -118,6 +131,19 @@ function plantInstalledBox(home: string): void {
   }
   writeFileSync(join(units, 'claude-session@.service.d', 'limits.conf'), '[Service]\n');
   writeFileSync(join(units, 'app-claude\\x2dsession.slice.d', 'limits.conf'), '[Slice]\n');
+  // …and the same "this box is installed" fixture in launchd's spelling. The
+  // verbs under test read whichever directory THIS platform installs into, so
+  // a fixture that planted only the systemd set would leave the Darwin arm
+  // with nothing to remove and every assertion measuring the fixture.
+  if (process.platform === 'darwin') {
+    const agents = join(home, 'Library', 'LaunchAgents');
+    mkdirSync(agents, { recursive: true });
+    for (const label of ['app.ccrc.ccrc', 'app.ccrc.ccrc-agent']) {
+      writeFileSync(join(agents, `${label}.plist`),
+        '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>'
+        + `<key>Label</key><string>${label}</string></dict></plist>\n`);
+    }
+  }
   // ~/.ccrc — the user-owned side, which uninstall PRESERVES (spec §7).
   mkdirSync(join(home, '.ccrc'), { recursive: true });
   writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_ROLE=both\n');
@@ -262,7 +288,7 @@ describe('ccrc uninstall: the live-session gate', () => {
 });
 
 describe('ccrc uninstall: the remove set (spec §7)', () => {
-  it('units: disable --now, delete every unit file incl. both drop-ins and the slice escape, daemon-reload — recording stub only', () => {
+  itLinux('units: disable --now, delete every unit file incl. both drop-ins and the slice escape, daemon-reload — recording stub only', () => {
     const home = mkTmp('ccrc-uninst-units-');
     plantInstalledBox(home);
     const r = runVerb(home, 'uninstall');
@@ -287,6 +313,29 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     // systemctl target, and tmux is never touched (poison would have fired).
     expect(calls.join('\n')).not.toMatch(/claude-session@/);
     expect(existsSync(join(home, 'tmux-poison'))).toBe(false);
+  });
+
+  // The same three promises — stop it, forget it, remove it — in launchd's
+  // vocabulary. There is no template unit and no drop-in directory to sweep
+  // (launchd has neither), and the per-SESSION plists are deliberately left
+  // alone for the same reason the Linux arm leaves `claude-session@<id>`
+  // instances alone: an operator stops sessions through ccd, not through an
+  // uninstall's side effect.
+  itDarwin('jobs: bootout, disable, delete every ccrc job file — recording stub only', () => {
+    const home = mkTmp('ccrc-uninst-jobs-');
+    plantInstalledBox(home);
+    const r = runVerb(home, 'uninstall');
+    expect(r.code, r.stderr).toBe(0);
+    const agents = join(home, 'Library', 'LaunchAgents');
+    for (const j of ['app.ccrc.ccrc.plist', 'app.ccrc.ccrc-agent.plist']) {
+      expect(existsSync(join(agents, j)), `${j} survived`).toBe(false);
+    }
+    const calls = readFileSync(join(home, 'launchctl-calls'), 'utf8')
+      .split('\n').filter((l) => l !== '');
+    expect(calls.join('\n'), 'the job was never booted out').toMatch(/^bootout /m);
+    expect(calls.join('\n'), 'the job was never disabled').toMatch(/^disable /m);
+    expect(r.stdout).toMatch(/^uninstall: units: stopped, disabled and removed/m);
+    expect(r.stdout).toMatch(/no drop-ins or slice on macOS/);
   });
 
   it('settings.json: managed entries go through the installer\'s own predicate, unmanaged entries and the custom statusLine survive, the rewritten file is backed up first', () => {
@@ -451,7 +500,11 @@ describe('ccrc backup: update\'s step 2 standalone, with CCRC_BACKUP_KEEP prunin
     expect(snap.subarray(0, 15).toString('utf8')).toBe('SQLite format 3');
     expect(readFileSync(join(dir, 'ccd'), 'utf8'))
       .toBe(readFileSync(join(home, '.local', 'bin', 'ccd'), 'utf8'));
-    expect(existsSync(join(dir, 'ccrc.service'))).toBe(true);
+    // The job file, under the name THIS platform has it: `_upd_backup` copies
+    // whichever the box installs, and macOS has one plist where Linux has a
+    // unit. A rollback needs the file it actually took.
+    expect(existsSync(join(dir, process.platform === 'darwin'
+      ? 'app.ccrc.ccrc.plist' : 'ccrc.service'))).toBe(true);
     expect(existsSync(join(dir, 'server-dist', 'index.js'))).toBe(true);
     expect(existsSync(join(dir, 'agent-dist', 'index.js'))).toBe(true);
   });
@@ -477,7 +530,7 @@ describe('ccrc backup: update\'s step 2 standalone, with CCRC_BACKUP_KEEP prunin
 });
 
 describe('ccrc logs: a thin, role-aware journalctl passthrough', () => {
-  it('defaults to ccrc.service and passes -f / -n through — the recorded argv is the pin', () => {
+  itLinux('defaults to ccrc.service and passes -f / -n through — the recorded argv is the pin', () => {
     const home = mkTmp('ccrc-logs-server-');
     plantInstalledBox(home);
     const r = runVerb(home, 'logs', ['-f', '-n', '50']);
@@ -486,7 +539,7 @@ describe('ccrc logs: a thin, role-aware journalctl passthrough', () => {
       .toBe('--user -u ccrc.service -f -n 50');
   });
 
-  it('CCRC_ROLE=fleet in ccrc.env selects ccrc-agent.service', () => {
+  itLinux('CCRC_ROLE=fleet in ccrc.env selects ccrc-agent.service', () => {
     const home = mkTmp('ccrc-logs-fleet-');
     plantInstalledBox(home);
     writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_ROLE=fleet\n');
@@ -494,6 +547,44 @@ describe('ccrc logs: a thin, role-aware journalctl passthrough', () => {
     expect(r.code, r.stderr).toBe(0);
     expect(readFileSync(join(home, 'journalctl-argv'), 'utf8').trim())
       .toBe('--user -u ccrc-agent.service');
+  });
+
+  // macOS HAS NO JOURNAL. systemd captures a unit's output into one and
+  // `journalctl --user -u` reads it back; launchd's only equivalent is the
+  // `StandardOutPath` the installer writes into the job's own plist. So the
+  // verb tails THAT file — same two flags, same role selection, and the
+  // arguments an operator types do not change across platforms.
+  itDarwin('tails the job\'s own log file, with the same -f / -n flags', () => {
+    const home = mkTmp('ccrc-logs-darwin-');
+    plantInstalledBox(home);
+    mkdirSync(join(home, '.ccrc', 'logs'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'logs', 'app.ccrc.ccrc.log'), 'one\ntwo\nthree\n');
+    const r = runVerb(home, 'logs', ['-n', '2']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toBe('two\nthree\n');
+  });
+
+  itDarwin('CCRC_ROLE=fleet selects the AGENT\'s log, by the same rule', () => {
+    const home = mkTmp('ccrc-logs-darwin-fleet-');
+    plantInstalledBox(home);
+    writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_ROLE=fleet\n');
+    mkdirSync(join(home, '.ccrc', 'logs'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'logs', 'app.ccrc.ccrc-agent.log'), 'agent line\n');
+    const r = runVerb(home, 'logs');
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain('agent line');
+  });
+
+  itDarwin('REFUSES by name when the job has never run — not the same sentence as a missing journal', () => {
+    // A box whose server has not started yet has no log FILE, and telling an
+    // operator to go read one that is not there is the dead end this arm
+    // exists to avoid. The remedy names the job to inspect instead.
+    const home = mkTmp('ccrc-logs-darwin-nolog-');
+    plantInstalledBox(home);
+    const r = runVerb(home, 'logs');
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/no log at .*app\.ccrc\.ccrc\.log/);
+    expect(r.stderr).toMatch(/launchctl print/);
   });
 
   it('-n without a value is a usage error, exit 2, and journalctl never ran', () => {

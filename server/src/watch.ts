@@ -14,7 +14,7 @@ import { sendPrompt } from './inject/send.js';
 import { askActions } from './askkey.js';
 import type { SessionRecord } from './registry.js';
 import type {
-  CoordStatus, FleetSession, LifecycleHealth, NotifyEvent, PrState, RunSummary, SessionStatus, TaskProgress,
+  CoordStatus, FleetSession, LifecycleHealth, MailGate, NotifyEvent, PrState, RunSummary, SessionStatus, TaskProgress,
 } from '../../shared/api.js';
 import { LEDGER_STALE_MS, MAIL_MAX_ATTEMPTS, UNCHECKED_PR } from '../../shared/api.js';
 import { JournalMirror } from './coord/mirror.js';
@@ -2206,10 +2206,21 @@ export class FleetWatcher {
     // identical query would only cost, never correct, anything.
     const due = unacked.length === 0 ? dueBefore : store.dueDeliveries(now, MAIL_REPLAY_MS);
     if (due.length === 0) return;
+    // D-792's ONE WRITER. Every ordinary gate below calls this and then
+    // `continue`s; nothing reads it back. It records WHAT refused the row and
+    // for how long, and changes nothing about whether, when or how often the
+    // row is tried again — `nextAttemptAt` and `attempts` are both untouched
+    // here, so a busy session's mail keeps its place in the queue exactly as
+    // before. The two gates that ALSO back off call this IN ADDITION: "when
+    // may this be retried" and "what refused it" are different questions.
+    const gated = (d: { id: number; lastGate: string | null; gateSince: number | null },
+                   gate: MailGate): void => {
+      store.noteGate(d.id, gate, now, d.lastGate === gate, d.gateSince);
+    };
     const seen = new Set<string>();          // one message per session per sweep
     for (const d of due) {
-      if (seen.has(d.toId)) continue;
-      if (this.mailInFlight.has(d.toId)) continue;   // CHECK — review findings 1/5, see this method's docstring
+      if (seen.has(d.toId)) { gated(d, 'same-sweep'); continue; }
+      if (this.mailInFlight.has(d.toId)) { gated(d, 'in-flight'); continue; }   // CHECK — review findings 1/5, see this method's docstring
       // CLAIM — immediately after the check, with NO await in between, so the
       // check-then-act is atomic with respect to the event loop: nothing can
       // run between "is it claimed" and "claim it" that would let a second
@@ -2222,7 +2233,7 @@ export class FleetWatcher {
       this.mailInFlight.add(d.toId);
       try {
         const last = this.mailCooldown.get(d.toId) ?? 0;
-        if (now - last < MAIL_COOLDOWN_MS) continue;
+        if (now - last < MAIL_COOLDOWN_MS) { gated(d, 'cooldown'); continue; }
         const rec = records.find((r) => r.id === d.toId);
         // registry ladder: `records` came from `readRegistryMeasured` above,
         // with `!listed` already refused (fix — blocking review findings
@@ -2317,6 +2328,7 @@ export class FleetWatcher {
           // typed column — so the word itself rides along in the message
           // below, not just in this comment, for whoever greps the ROW rather
           // than the source.
+          gated(d, unmeasurable ? 'registry-unmeasurable' : 'registry-absent');
           const attempts = d.attempts + 1;
           if (attempts >= MAIL_MAX_ATTEMPTS && !unmeasurable) {
             store.rejectDelivery(d.id, 'undeliverable', 'recipient not in registry');
@@ -2343,8 +2355,9 @@ export class FleetWatcher {
         // the herd valve: without it every due row re-spawns a doomed tmux
         // client each sweep against a component that is already unwell.
         const sv = await this.deps.tmux.sessionVerdict(d.toId);
-        if (sv.verdict === 'gone') continue;
+        if (sv.verdict === 'gone') { gated(d, 'tmux-gone'); continue; }
         if (sv.verdict === 'unknown') {
+          gated(d, 'tmux-unknown');
           const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** d.attempts, MAIL_BACKOFF_MAX_MS);
           store.backOff(d.id, `tmux did not answer (substrate-unknown): ${sv.detail}`, now + step, false);
           continue;
@@ -2359,13 +2372,21 @@ export class FleetWatcher {
         // this is not a new read). Block only when a FRESH hs affirmatively
         // carries an unanswered question — `hs.state` is no longer read here
         // at all.
-        if (hs !== null && hs.ask !== null) continue;
+        if (hs !== null && hs.ask !== null) { gated(d, 'pending-ask'); continue; }
         const pid = await this.deps.tmux.panePid(d.toId);
+        // SPLIT, not one `continue` for both (D-792). "tmux reports no pane pid
+        // for this session" and "this session's wrapper resolves to no config
+        // dir" are conditions an operator acts on completely differently — the
+        // first is a session that is gone or starting, the second is a ROSTER
+        // problem that will hold this delivery for ever and that no amount of
+        // waiting fixes. Folding them into one silent exit is the
+        // overloaded-collapse this tree bans by name.
+        if (!pid) { gated(d, 'no-pane'); continue; }
         const cfgDir = configDirFor(this.deps.cfg, identity.wrapper);
-        if (!pid || !cfgDir) continue;
+        if (!cfgDir) { gated(d, 'no-config-dir'); continue; }
         const live = await readLiveState(this.deps.io, cfgDir, pid);
-        if (!live || liveSessionStatus(live.status) !== 'idle') continue;
-        if (live.statusUpdatedAt === null || now - live.statusUpdatedAt < MAIL_QUIET_MS) continue;
+        if (!live || liveSessionStatus(live.status) !== 'idle') { gated(d, 'not-idle'); continue; }
+        if (live.statusUpdatedAt === null || now - live.statusUpdatedAt < MAIL_QUIET_MS) { gated(d, 'not-quiet'); continue; }
 
         // `seen` is added only HERE, once every gate above has passed and the
         // send is actually about to be attempted — it means "one message per

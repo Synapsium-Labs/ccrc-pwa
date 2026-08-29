@@ -131,10 +131,45 @@ Download it, or use `bash <(curl -fsSL …)`.
   go through it.
 - **`jq`**, **`python3`**, **`flock`** — ccrc reads the box's small JSON files with the
   first, the session hook and registry locking are the second and third.
+- **Claude Code**, installed and authenticated for at least one account.
+- **Linux or macOS.** The session layer is tmux plus the box's service manager — systemd
+  on Linux, launchd on macOS.
+
+**On Linux**, additionally:
+
 - **systemd user units**, with `loginctl enable-linger` set — without lingering your
   sessions die with your last login.
-- **Claude Code**, installed and authenticated for at least one account.
-- Linux. The session layer is systemd + tmux; there is no macOS path.
+
+**On macOS**, additionally:
+
+```bash
+brew install bash tmux flock
+```
+
+- **bash ≥ 4.4.** Not optional and not a preference: `ccd` uses associative arrays,
+  `[[ -v arr[k] ]]`, `mapfile`, `BASHPID` — and empty-array `"${a[@]}"` expansions under
+  `set -u`, which bash treated as fatal until 4.4 — and macOS ships **3.2.57** as `/bin/bash`
+  for licensing reasons. Make sure Homebrew's `bin` comes before `/bin` on your `PATH`.
+  `install.sh` refuses by version before it builds anything.
+- **tmux** and **flock**, neither of which macOS ships. Homebrew's `flock` formula is the
+  portable implementation and takes the flags ccd passes.
+- **Only if you BUILD a release** (`deploy/build-release.sh`, a maintainer's job — not
+  something a box needs to install or update): `brew install gnu-tar`. The artifact is made
+  reproducible with `--sort/--mtime/--owner/--group`, BSD tar has none of them, and the
+  script refuses rather than emitting a tarball whose digest depends on who built it.
+
+Two things a macOS box does **not** get, both stated by `ccrc doctor` rather than left to
+be discovered:
+
+- **No linger.** A LaunchAgent runs in your login session: the server and every session
+  stop at logout and start again at login. The only thing on macOS that survives a logout
+  is a root-owned LaunchDaemon, which would run your fleet as a different user with a
+  different keychain — a posture `ccrc install` will not choose for you. For an always-on
+  box, stay logged in and turn off sleep.
+- **No memory ceiling.** The per-session and fleet-wide caps are cgroup limits
+  (`MemoryHigh`/`MemoryMax` on the session unit and on `app-claude\x2dsession.slice`), and
+  launchd has no equivalent of any kind. `ccd-cap-scopes` is not installed there either —
+  it caps cgroup scopes, and there are none.
 
 `ccrc doctor` checks all of this and tells you which one is missing, rather than failing
 somewhere further in.

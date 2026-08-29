@@ -72,6 +72,9 @@ const mailFixture: MailSummary = {
   id: 1, deliveryId: 1, at: 1_754_000_000_000, fromId: 'coordinator', toId: 's1', runId: 3,
   kind: 'question', subject: 'rebase before you start?', artifacts: [], state: 'delivered',
   attempts: 0, lastError: null,
+  // D-792: no gate is holding this fixture — the shape of a delivery nothing
+  // has refused. A test that wants a wedged one overrides these four.
+  lastGate: null, gateCount: 0, gateSince: null, gateAt: null,
 };
 
 /** Minimal scripted WebSocket stand-in for store connect() tests. */

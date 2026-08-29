@@ -71,6 +71,35 @@ set -euo pipefail
 export LC_ALL=C
 
 PROG=ccrc-adopt
+
+# ── stat, ON TWO USERLANDS ───────────────────────────────────────────────
+# This script's whole size gate is `stat -L -c%s`, and `-c` is GNU: BSD's stat
+# spells the same question `-f%z`. Without this the gate answers EMPTY for
+# every candidate on macOS, every script is "a size this box's stat would not
+# report", and adopt refuses a box it can read perfectly well — which is how
+# it presented: "no script sets CLAUDE_CONFIG_DIR — nothing to adopt", on a
+# box with five of them.
+#
+# The Linux arm is the original command, byte for byte. `-L` is deliberate and
+# kept on both: a wrapper is often a symlink, and the size that matters is the
+# target's. It is a LOCAL shim rather than ccd's platform block because this
+# script needs exactly one function from it — a copy of four hundred lines to
+# borrow one would be the drift this tree bans.
+_adopt_size() {   # <file> -> its size in bytes, or nothing
+  if [ "$_ADOPT_OS" = darwin ]; then stat -L -f%z -- "$1" 2>/dev/null; else stat -L -c%s -- "$1" 2>/dev/null; fi
+}
+# `$OSTYPE` first — a bash builtin, so no fork and, more to the point, no PATH
+# dependency. `uname` is the fallback for a shell that does not set it.
+_ADOPT_OS=linux
+case "${OSTYPE:-}" in
+  darwin*) _ADOPT_OS=darwin ;;
+  linux*)  _ADOPT_OS=linux ;;
+  *) case "$(uname -s 2>/dev/null)" in Darwin) _ADOPT_OS=darwin ;; esac ;;
+esac
+# The remedy an operator is told to run by hand has to be the one their box has.
+_ADOPT_STAT_HINT='stat -L -c%s'
+[ "$_ADOPT_OS" = darwin ] && _ADOPT_STAT_HINT='stat -L -f%z'
+
 HUES=(cyan violet blue magenta amber green)
 
 # ── the wrapper contract, sourced rather than restated ────────────────────
@@ -225,7 +254,7 @@ declare -a CFG_SCRIPTS=()
 for name in "${CAND[@]}"; do
   f="$BIN_DIR/$name"
   _wrap_is_script "$f" || continue
-  sz="$(stat -L -c%s -- "$f" 2>/dev/null || echo '')"
+  sz="$(_adopt_size "$f" || echo '')"
   # TWO CONDITIONS, TWO SENTENCES. Both end in the same skip, and folding them
   # into one test was a defect measured before it shipped: a box whose `stat`
   # does not take `-c%s` — every BSD-flavoured one — was told its 102-byte
@@ -234,7 +263,7 @@ for name in "${CAND[@]}"; do
   # get different words; that is this codebase's no-overloaded-null rule
   # applied to a message rather than to a return value.
   if [ -z "$sz" ] || ! [[ "$sz" =~ ^[0-9]+$ ]]; then
-    echo "$PROG: note: \"$name\" is a script whose size this box's stat would not report, so classifying it would need an unbounded read — skipped, and not proposed as an account (check: stat -L -c%s \"$f\")" >&2
+    echo "$PROG: note: \"$name\" is a script whose size this box's stat would not report, so classifying it would need an unbounded read — skipped, and not proposed as an account (check: $_ADOPT_STAT_HINT \"$f\")" >&2
     continue
   fi
   if [ "$sz" -gt "$WRAPPER_OVERSIZE_BYTES" ]; then
@@ -385,7 +414,7 @@ fi
 # case either — it refused it by accident, along with every legitimate box.
 # Trading an accidental refusal of everything for a precise refusal with one
 # known hole is the deliberate call here, not an oversight.
-UPSTREAM_SIZE="$(stat -L -c%s -- "$UPSTREAM_PATH" 2>/dev/null || echo '')"
+UPSTREAM_SIZE="$(_adopt_size "$UPSTREAM_PATH" || echo '')"
 UPSTREAM_SHAPE=binary
 if _wrap_is_script "$UPSTREAM_PATH"; then
   UPSTREAM_SHAPE="launcher script"
@@ -402,7 +431,7 @@ if _wrap_is_script "$UPSTREAM_PATH"; then
   # is not a wrapper, and "I could not tell" is not "I know what it is" — the
   # same sentence `cmd_wrappers` refuses `unreadable` under.
   if [ -z "$UPSTREAM_SIZE" ] || ! [[ "$UPSTREAM_SIZE" =~ ^[0-9]+$ ]]; then
-    echo "$PROG: $UPSTREAM_ID is exec'd by${UPSTREAM_VOTERS[$UPSTREAM_ID]} as the upstream binary, and $UPSTREAM_PATH is a script whose size this box's stat would not report — proving it is not itself an account wrapper would need an unbounded read of it. Refusing to guess an upstream account (check: stat -L -c%s \"$UPSTREAM_PATH\")" >&2
+    echo "$PROG: $UPSTREAM_ID is exec'd by${UPSTREAM_VOTERS[$UPSTREAM_ID]} as the upstream binary, and $UPSTREAM_PATH is a script whose size this box's stat would not report — proving it is not itself an account wrapper would need an unbounded read of it. Refusing to guess an upstream account (check: $_ADOPT_STAT_HINT \"$UPSTREAM_PATH\")" >&2
     exit 1
   fi
   if [ "$UPSTREAM_SIZE" -gt "$WRAPPER_OVERSIZE_BYTES" ]; then

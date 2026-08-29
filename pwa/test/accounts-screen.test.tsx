@@ -35,8 +35,12 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
   lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null, started: true, spawnState: null, ...over,
 });
 
-const stubAccounts = (accounts: AccountUsage[], projected: { wrapper: string; score: number } | null = null): void => {
-  vi.spyOn(api, 'accounts').mockResolvedValue({ accounts, projected, roster: TEST_ROSTER });
+const stubAccounts = (
+  accounts: AccountUsage[],
+  projected: { wrapper: string; score: number } | null = null,
+  roster = TEST_ROSTER,
+): void => {
+  vi.spyOn(api, 'accounts').mockResolvedValue({ accounts, projected, roster });
 };
 
 afterEach(() => {
@@ -77,6 +81,42 @@ describe('AccountsScreen — the waiting state, before any poll answers (review 
     // branch it does NOT take) settle before asserting the negative.
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     expect(screen.queryByText(/last reported —/i)).not.toBeInTheDocument();
+  });
+});
+
+// The narrow exception to the invariant below, and it does not weaken it: that
+// one says every ACCOUNT gets a row, and a roster entry the operator declared
+// `hidden` is not an account. It exists because `parseRoster` demands exactly
+// one `upstream` entry to name the Claude Code binary, and on a box where that
+// binary's config dir is driven by another tool the entry holds no login of the
+// operator's. Presenting it as an account — with usage bars it can never fill —
+// states something false on the one screen whose whole job is "show me my
+// accounts".
+describe('AccountsScreen — a roster entry the operator declared plumbing', () => {
+  it('renders no row for it, while every real account still gets one', async () => {
+    const roster = TEST_ROSTER.map((a) => (a.id === 'claude' ? { ...a, hidden: true } : a));
+    stubAccounts([acct({ wrapper: 'claude2', five: 12, seven: 4 })], null, roster);
+    render(<AccountsScreen />);
+    // The real accounts, including the opt-in lane and ones telemetry has
+    // never mentioned — the invariant below, unchanged.
+    expect(await screen.findByText('team·alt')).toBeInTheDocument();
+    expect(screen.getByText('team·b')).toBeInTheDocument();
+    expect(screen.getByText('gpt')).toBeInTheDocument();
+    expect(screen.getByText('team·d')).toBeInTheDocument();
+    // The plumbing entry: no row.
+    expect(screen.queryByText('team·max')).not.toBeInTheDocument();
+  });
+
+  // ABSENCE-PERMITS, the wire rule this field ships under: a PWA talking to a
+  // server built before `hidden` existed receives entries without the key, and
+  // must render every one of them. `rosterWrapperIds` tests `=== true` for
+  // exactly this reason, and truthiness would have been indistinguishable here.
+  it('renders every entry when the server omits hidden entirely (older wire)', async () => {
+    const older = TEST_ROSTER.map(({ id, label, hue, homeAble }) => ({ id, label, hue, homeAble })) as typeof TEST_ROSTER;
+    stubAccounts([acct({ wrapper: 'claude', five: 3, seven: 2 })], null, older);
+    render(<AccountsScreen />);
+    expect(await screen.findByText('team·max')).toBeInTheDocument();
+    expect(screen.getByText('gpt')).toBeInTheDocument();
   });
 });
 

@@ -327,8 +327,8 @@ describe('coord.db: migration 1 — runs_by_session', () => {
     raw.close();
 
     const db = openCoordDb(p);
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(5);
-    expect(COORD_SCHEMA_VERSION).toBe(5);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(6);
+    expect(COORD_SCHEMA_VERSION).toBe(6);
     const names = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as
       { name: string }[]).map((r) => r.name);
     expect(names).toContain('runs_by_session');
@@ -373,7 +373,7 @@ describe('coord.db: migration 2 — the lifecycle journal mirror', () => {
     raw.close();
 
     const db = openCoordDb(p);
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(5);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(6);
     const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as
       { name: string }[]).map((r) => r.name).sort();
     expect(tables).toEqual(expect.arrayContaining([
@@ -441,7 +441,7 @@ describe('coord.db: migration 3 — claims and the deviation ledger', () => {
     raw.close();
 
     const db = openCoordDb(p);
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(5);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(6);
     const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as
       { name: string }[]).map((r) => r.name);
     expect(tables).toEqual(expect.arrayContaining([
@@ -548,14 +548,72 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     raw.close();
 
     const db = openCoordDb(p);
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(5);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(6);
     expect(runsColumn(db, 'dispatchStartedAt')).toBeDefined();
     db.close();
   });
 
-  it('COORD_SCHEMA_VERSION derives to 5 — never hand-edited beside a growing array', () => {
-    expect(COORD_SCHEMA_VERSION).toBe(5);
-    expect(MIGRATIONS.length).toBe(5);
+  it('reaches a database ALREADY at user_version 5 — it cannot be an amendment to any earlier migration', () => {
+    // The same guard migrations 2..5 each earned, for migration 6. A file left
+    // by a Build-9b-plus server is at 5; `db.ts`'s loop starts at `current`, so
+    // anything amended INTO entries 0..4 can never run against it again. The
+    // four gate columns must therefore arrive as their own entry, and this is
+    // what proves they do.
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      raw.exec(MIGRATIONS[0]!); raw.exec(MIGRATIONS[1]!); raw.exec(MIGRATIONS[2]!);
+      raw.exec(MIGRATIONS[3]!); raw.exec(MIGRATIONS[4]!);
+      raw.exec('PRAGMA user_version = 5');
+    });
+    raw.close();
+
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(6);
+    const cols = (db.prepare('PRAGMA table_info(mail_deliveries)').all() as unknown as ColumnInfo[])
+      .map((c) => c.name);
+    expect(cols).toEqual(expect.arrayContaining(['lastGate', 'gateCount', 'gateSince', 'gateAt']));
+    db.close();
+  });
+
+  it('gives the gate columns the nullability D-792 depends on', () => {
+    // Three nullable, one defaulted, and the split is the whole point. A NULL
+    // `lastGate` means "no ordinary gate has refused this row"; a default would
+    // collapse that into "refused by something at the epoch", which is the
+    // overloaded null these columns exist to remove. `gateCount` defaults 0
+    // because a count of refusals genuinely starts at none.
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const col = (name: string): ColumnInfo | undefined =>
+      (db.prepare('PRAGMA table_info(mail_deliveries)').all() as unknown as ColumnInfo[])
+        .find((c) => c.name === name);
+    for (const n of ['lastGate', 'gateSince', 'gateAt']) {
+      expect(col(n)?.notnull, `${n} must be nullable`).toBe(0);
+      expect(col(n)?.dflt_value, `${n} must carry no default`).toBeNull();
+    }
+    expect(col('gateCount')?.notnull).toBe(1);
+    expect(col('gateCount')?.dflt_value).toBe('0');
+    db.close();
+  });
+
+  it('adds NO INDEX over the gate columns — an index would imply a query, and a query would be a scheduling read', () => {
+    // The non-goal, as a mechanism. These four are written after every
+    // scheduling decision is already made and read by none; the absence of an
+    // index is the evidence there is no query. If a future change needs one,
+    // this test is where the argument has to be made.
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const idx = (db.prepare("SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name='mail_deliveries'").all() as unknown as { name: string; sql: string | null }[]);
+    for (const i of idx) {
+      for (const c of ['lastGate', 'gateCount', 'gateSince', 'gateAt']) {
+        expect(i.sql ?? '', `index ${i.name} mentions ${c}`).not.toContain(c);
+      }
+    }
+    db.close();
+  });
+
+  it('COORD_SCHEMA_VERSION derives to 6 — never hand-edited beside a growing array', () => {
+    expect(COORD_SCHEMA_VERSION).toBe(6);
+    expect(MIGRATIONS.length).toBe(6);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
