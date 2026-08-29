@@ -14,7 +14,7 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
 | # | scope | PRs | state |
 |---|---|---|---|
 | 1 | F1 — drift fixes (ungated-door count, coordinator trigger/resume wording, stale `_id()` anchor) + the coordinator-resume runbook (`references/resume.md`). AGENT-FIRST deploy. | run 10, PR #28 (merged `f5dfd2d9`) | done 2026-08-28 18:08 UTC — CI 5/5 green on `8135118b`, deployed both boxes agent-first, `/health` and fleet `ccd` both report `f5dfd2d9` |
-| 2 | F2 — dispatch-time `skillState` preflight (measure, never refuse) + synchronous deviation-floor seed on first allocation | run 12, PR #30 | fix round 2026-08-29 ~09:45 UTC — wave-done `e0949f86` verified, items 4/4, review 18 agents: 1 major cluster (sweep lane) + 5 minors, 0 blocking, 1 refuted; findings mail 101, run back in `working` |
+| 2 | F2 — dispatch-time `skillState` preflight (measure, never refuse) + synchronous deviation-floor seed on first allocation | run 12, PR #30 (merged `4e2a04f5`) | done 2026-08-29 ~10:45 UTC — fix round `c026e151` verified (all findings fixed, D-1020..D-1022), CI 5/5, merged, deployed both boxes agent-first; `/health` and fleet `ccd` both report `4e2a04f5` |
 | 3 | F3 — per-project program-ready badge (server measurement + /runs board) | — | planned |
 | 4 | F4 — program kickoff rides the idle-gated mail lane (`queueSystemMail`), direct-injection race retired | — | planned |
 | 5 | F5 — `POST /api/runs/:id/reclaim` (4th ungated door, dead-proof) + PWA resume affordance; door count → four | — | planned |
@@ -123,6 +123,28 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
   files wave 2 never touches. Standing lesson kept: verify a sibling lane's presence on origin
   with `ls-remote`, never `git branch -r` (~30 stale remote refs in this clone).
 
+- **Wave 2 fix round + close (2026-08-29 ~10:45 UTC):** all findings fixed in one commit
+  (`c026e151`), each re-verified by the worker first, none pushed back; CI 5/5 on the tip. The
+  major landed exactly per the ruling and then some: `LedgerReadPolicy` is a REQUIRED parameter
+  (no default — "a default is exactly how one lane acquires another's policy without anyone
+  deciding it should"), `SWEEP_POLICY` = skip+unbounded, `SEED_POLICY` = abort+bounded, two new
+  sweep-lane fixtures in `ledger-sweep.test.ts` + four in `ledgerseed.test.ts`, all mutation-
+  measured red; orphaned docstring deleted. Worker's own catches this round: its first two
+  sweep fixtures passed against the broken code (fixture blind spots — same class as the
+  original defect; recorded in test comments), and NEW **D-1022**: `complete` is the seed's
+  actual guard, `abort` only an early exit — making the seed lane tolerant reds nothing,
+  deleting the completeness check reds 5; written into `ledgerseed.ts` so an optimisation pass
+  cannot mistake one for the other. Minor 1 fixed at the notify lane (pushNewRuns skips
+  `fromState === toState` observation rows; `runEventsSince` gained `fromState`, one reader;
+  `recordRunEvent` docstring amended "the future it warned about arrived"). Mutation table
+  re-run in full, 24 rows with exact assertion text, two of the re-run's own mutations recorded
+  as wrong rather than hidden. Deviations D-1020..D-1022 (1023+ free). Fingerprint re-verified
+  (working→awaiting-review→merging), PR #30 merged as `4e2a04f5`, deployed agent-first then
+  server from a scratch worktree at the merge sha; all live sessions verified through the
+  sweep. Lesson carried (worker's words): "a suite that cannot express a change cannot witness
+  it" — partial-failure fixtures must exist before an "unchanged behaviour" claim means
+  anything.
+
 ## Carried constraints
 
 - Waves 1 and 8 are **AGENT-FIRST** deploys (they touch `ccd/coordinator-skill/` and the agent's
@@ -141,20 +163,27 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
 
 ## Next-wave brief
 
-**Wave 2 — F2: dispatch-time skill preflight + synchronous deviation-floor seed.** Spec:
-`docs/superpowers/specs/2026-08-28-program-leverage-design.md` §4 (fetch `ws/brisk-meadow` from
-origin), both design items exactly as numbered. Same workspace as wave 1 (`quiet-meadow`,
-reclaimed). Key constraints: `skillState` is additive beside `spawnState`, one reader,
-`absent` ≠ `unmeasurable` (no overloaded null — the program's standing rule); the preflight
-NEVER refuses a dispatch; the allocator's inline seed answers `not-seeded` only when the
-measurement itself fails; the wave-lifecycle.md dispatch-table edit touches the pinned corpus —
-keep route-parity/census green, and write pins BEFORE the text they pin (wave 1's D-1009
-lesson). Fold: the graphify lane (`ws/ccrc-with-graphify-integration`) is adjacent, unmerged,
-building skill-convergence/doctor machinery — keep the skill-presence read ONE helper so the
-two lanes can converge on it; no path overlap expected. Deviations from **D-1012** up.
-Commit on the workspace's own branch; all coordinator mail names the new run's `runId`.
-Plan first (superpowers:writing-plans), execute with superpowers:executing-plans. AGENT-FIRST
-at close (installer-shipped reference edit). Deploy is not the worker's act.
+**Wave 3 — F3: the per-project program-ready badge.** Spec:
+`docs/superpowers/specs/2026-08-28-program-leverage-design.md` §5 (fetch `ws/brisk-meadow` from
+origin). Same workspace as waves 1–2 (`quiet-meadow`, reclaimed). Server-side per-project
+readiness from reads the server ALREADY owns — four preconditions: worker+coordinator skill
+present in every rostered wrapper HOME (REUSE wave 2's `SkillState` vocabulary and
+`server/src/skillstate.ts` reader — extend, don't duplicate; `single-definition` forbids a 2nd
+copy), deviation floor seeded (coord.db), box token configured (measured at boot), coord DB
+available (`not-configured` arm). Ships ADDITIVELY on an existing read the /runs board already
+consumes (`GET /api/runs` summary or the coord status emit, `server/src/registry.ts:775-783` —
+the plan picks the seam and says why); PWA: compact per-project badge on the /runs board
+("program-ready" / list of missing preconditions). No new ccd verbs; reads only. Tests: every
+precondition's measurement has an `unmeasurable` arm DISTINCT from false (no overloaded null);
+a mutation test per precondition (delete the measurement → red); write pins BEFORE the prose
+they pin (D-1009), and give every "behaviour unchanged" claim a fixture that could actually
+witness the change (wave 2's sweep lesson). Wire: additive field, single reader, older-server
+omission tolerated, no `FLEET_PROTO` bump. Fold: the graphify lane is now ON origin
+(`ws/ccrc-with-graphify-integration`, `92bf6b76`, fetchable); its skill-convergence machinery
+is bash/doctor-side — converge on the VOCABULARY, not the code; `single-definition.test.ts`
+merges cleanly with it. Deviations from **D-1023** up. Commit on the workspace's own branch;
+all coordinator mail names the new run's `runId`. Plan first (superpowers:writing-plans),
+execute with superpowers:executing-plans. Deploy is not the worker's act.
 
 ---
 
