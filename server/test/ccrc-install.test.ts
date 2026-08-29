@@ -1634,11 +1634,12 @@ describe('ccrc install: the executables and files it installs', () => {
     expect(mode(bin)).toBe(0o755);
   });
 
-  it('ccd-graph-sweep lands beside it too (graphify Task 10, O3/O6b) — unconditionally, unlike its unit', () => {
+  itLinux('ccd-graph-sweep lands beside it too (graphify Task 10, O3/O6b) — every role, but not Darwin', () => {
     // Mirrors the `ccd-cap-scopes` case above, byte for byte: `_inst_bins`
-    // ships this one on every role exactly the same way. Only its UNIT and
-    // its ENABLE are role-gated (server skips both) — see the `--role server`
-    // describe further down.
+    // ships this one on every role the same way, and rides the same darwin
+    // carve-out (its systemd timer never installs there; the script needs
+    // GNU stat/date and flock(1)). Its UNIT and ENABLE are additionally
+    // role-gated (server skips both) — see the `--role server` describe.
     const { home } = installed;
     const bin = join(home, '.local', 'bin', 'ccd-graph-sweep');
     expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccd-graph-sweep')));
