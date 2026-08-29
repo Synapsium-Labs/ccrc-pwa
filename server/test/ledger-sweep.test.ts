@@ -28,7 +28,7 @@ afterEach(() => { vi.restoreAllMocks(); });
 
 const at = (ms: number): void => { vi.spyOn(Date, 'now').mockReturnValue(ms); };
 
-const fixture = () => {
+const fixture = (overIo?: (base: FleetIO) => FleetIO) => {
   const home = mkTmp('ccrc-ledger-sweep-');
   const projectsRoot = mkTmp('ccrc-ledger-docs-');
   seedRoster(home);
@@ -36,10 +36,11 @@ const fixture = () => {
   const cfg = loadConfig({ CCRC_HOME: home, CCRC_PROJECTS_ROOT: projectsRoot } as never);
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const reads: string[] = [];
-  const io: FleetIO = {
+  const counted: FleetIO = {
     ...localIO,
     readdir: async (p: string) => { reads.push(p); return localIO.readdir(p); },
   };
+  const io: FleetIO = overIo ? overIo(counted) : counted;
   const watcher = new FleetWatcher({ ...testDeps(home), cfg, io, coord } as never, new Bus(), 10_000);
   const plantDoc = (project: string, dir: 'plans' | 'specs', name: string, text: string): void => {
     const d = path.join(projectsRoot, project, 'docs', 'superpowers', dir);
@@ -90,6 +91,53 @@ describe('sweepLedgerFloor', () => {
     at(NOW + 2 * 3_600_000);
     await h.watcher.sweepLedgerFloor(await h.records());
     expect(h.coord.ledgerFloor('demo')!.floor).toBe(261);
+  });
+
+  it('SEEDS FROM specs WHEN plans WILL NOT LIST — the sweep takes what it got', async () => {
+    // wave 2 review, the major finding. This lane must TOLERATE a partial scan
+    // and keep walking: it mints nothing, so a floor it under-measures costs a
+    // delay and the next hourly pass raises it. The synchronous seed is the
+    // opposite and refuses — that asymmetry is the whole point of the split
+    // policy, and NOTHING pinned this half before, which is why the abort
+    // semantics slipped in under a green suite (D-1021).
+    //
+    // MUTATION: give the sweep call site SEED_POLICY (abort + budget) and this
+    // reds — the project is skipped entirely and the floor stays null.
+    const h = fixture((base) => ({
+      ...base,
+      readdir: async (p: string) => (p.endsWith(`${path.sep}plans`) ? null : base.readdir(p)),
+    }));
+    h.plantRecord('demo-quiet-basin', 'demo');
+    // plans/ must EXIST so the parent listing names it — otherwise the reader
+    // skips it as genuinely absent and the readdir override never fires.
+    h.plantDoc('demo', 'plans', 'p.md', `### ${'D-' + '100'} unreachable`);
+    h.plantDoc('demo', 'specs', 's.md', `### ${'D-' + '211'} in specs`);
+    at(NOW);
+    await h.watcher.sweepLedgerFloor(await h.records());
+    // Old behaviour, restored: plans/ contributed nothing, specs/ still seeded.
+    expect(h.coord.ledgerFloor('demo')?.floor).toBe(211 + 50);
+  });
+
+  it('SEEDS FROM the readable files when ONE file will not read', async () => {
+    // The file-level half of the same tolerance. The unreadable file is the
+    // one with the HIGHER ref, so a tolerant sweep genuinely under-measures
+    // here — and that is accepted on THIS lane precisely because nothing
+    // downstream of it mints a number.
+    const h = fixture((base) => ({
+      ...base,
+      readFile: async (p: string) => (p.endsWith('a-high.md') ? null : base.readFile(p)),
+    }));
+    h.plantRecord('demo-quiet-basin', 'demo');
+    // The unreadable file sorts FIRST, deliberately. An aborting reader
+    // returns the prefix it had — which here is EMPTY, so the project is
+    // skipped and the floor stays null. Had it sorted last, the abort would
+    // have returned a usable prefix and this test would pass either way,
+    // proving nothing (measured: it did).
+    h.plantDoc('demo', 'plans', 'a-high.md', `### ${'D-' + '9000'} high`);
+    h.plantDoc('demo', 'plans', 'b-low.md', `### ${'D-' + '211'} low`);
+    at(NOW);
+    await h.watcher.sweepLedgerFloor(await h.records());
+    expect(h.coord.ledgerFloor('demo')?.floor).toBe(211 + 50);
   });
 
   it('a project with NO docs seeds nothing — allocation stays 409 not-seeded, which is the fail-shut arm', async () => {

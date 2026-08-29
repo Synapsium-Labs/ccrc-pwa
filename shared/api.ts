@@ -1156,6 +1156,56 @@ export function isSpawnVerdict(v: unknown): v is SpawnVerdict {
   return typeof v === 'string' && (SPAWN_VERDICTS as readonly string[]).includes(v);
 }
 
+/**
+ * What a MEASUREMENT of one skill's presence in one config dir found
+ * (program-leverage wave 2, F2).
+ *
+ *  - `present`      — the skill's `SKILL.md` was read.
+ *  - `absent`       — a PROVEN ENOENT. The installer has not run on this home,
+ *                     which is ordinary rather than alarming:
+ *                     `install-worker-skill.sh` skips a rostered account whose
+ *                     config dir does not exist on that box.
+ *  - `unmeasurable` — no answer was obtained. Either there was no path to read
+ *                     (the wrapper is not in this box's roster, or the session
+ *                     has no registry row), or the read itself failed — EACCES,
+ *                     EISDIR, an agent whitelist refusal, a remote timeout, a
+ *                     dropped socket.
+ *
+ * `absent` and `unmeasurable` are DIFFERENT ANSWERS and this declaration is
+ * where they stay different: `absent` is evidence about the fleet,
+ * `unmeasurable` is an admission about the measurement. Folding them would
+ * claim an installation fact nobody measured — the overloaded-null defect this
+ * codebase bans by name, and the one a reader acts on wrongly in both
+ * directions (going to install a skill that is already there, or trusting a
+ * home nothing ever looked at).
+ *
+ * DELIBERATELY NOT spelled with the read-failure pair that `ReadFailure`
+ * declares in `server/src/io.ts`. That vocabulary describes ONE read's failure;
+ * this one describes a conclusion drawn from a read that may never have
+ * happened, and `unmeasurable` is the wider word on purpose.
+ * `single-definition.test.ts` pins that pair to `server/src/io.ts` alone — and
+ * pins it as TEXT, so even naming it in a docstring here reds the build
+ * (measured, while this comment was being written). Say `ReadFailure`, not its
+ * members.
+ */
+export type SkillState = 'present' | 'absent' | 'unmeasurable';
+
+/** Presentational only, and keyed BY the type so the compiler keeps it total —
+ *  a member added to the union with no key here is a compile error, which is
+ *  what makes the derived list below trustworthy. */
+export const SKILL_STATE_MAP: Record<SkillState, string> = {
+  present: 'installed',
+  absent: 'not installed',
+  unmeasurable: 'could not be measured',
+};
+
+export const SKILL_STATES: readonly SkillState[] =
+  Object.keys(SKILL_STATE_MAP) as SkillState[];
+
+export function isSkillState(v: unknown): v is SkillState {
+  return typeof v === 'string' && (SKILL_STATES as readonly string[]).includes(v);
+}
+
 /** The word for `spawnVerdict(...) === null` wherever a verdict has to be
  *  RENDERED as text rather than carried as a value — today, `dispatch.ts`'s
  *  `spawn-adopted:<verdict>` run event.

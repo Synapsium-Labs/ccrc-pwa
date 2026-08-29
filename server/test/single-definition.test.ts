@@ -1287,6 +1287,44 @@ describe('Build 8 vocabularies — one definition each, all derived from their m
     expect(api).toContain('spawnstate');       // in the SpawnVerdict docstring
     expect(dispatch).toContain('spawnstate');  // in the run_events detail comment
   });
+
+  // program-leverage wave 2 (F2). `SkillState` joins this family on the same
+  // terms: one type, one presentational `Record` keyed BY the type (which the
+  // compiler keeps total), and a runtime list DERIVED from that map's keys.
+  // The fold ruling for this wave is what makes single-definition load-bearing
+  // here rather than merely tidy — the adjacent graphify lane is building its
+  // own skill-presence machinery, and the two lanes converge on this
+  // vocabulary. A second spelling anywhere is the drift that ruling forbids.
+  it('defines SkillState, SKILL_STATE_MAP and SKILL_STATES exactly once, in shared/', () => {
+    oneDefinition(/^\s*export type SkillState\b/m, 'SkillState');
+    oneDefinition(/^\s*export const SKILL_STATE_MAP\b/m, 'SKILL_STATE_MAP');
+    oneDefinition(/^\s*export const SKILL_STATES\b/m, 'SKILL_STATES');
+  });
+
+  it('DERIVES SKILL_STATES from its map — never a hand-written array beside the type', () => {
+    const api = readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8');
+    expect(api).toMatch(
+      /export const SKILL_STATES: readonly SkillState\[\] =\s*\n?\s*Object\.keys\(SKILL_STATE_MAP\)/);
+    expect(api, 'SKILL_STATES is hand-typed as a literal array — derive it from SKILL_STATE_MAP')
+      .not.toMatch(/SKILL_STATES[^=]*=\s*\[/);
+  });
+
+  it('spells the three skill-state members nowhere else — no second copy of the words', () => {
+    // A free-standing list is how a PWA badge or an agent-side probe silently
+    // drifts from the wire. The Record in shared/api.ts is keyed by the type,
+    // so it is not an enumeration and is not matched here.
+    const LIST = /\[\s*'present',\s*'absent',\s*'unmeasurable'\s*\]/;
+    expect(ALL.filter((f) => LIST.test(readFileSync(f, 'utf8'))).map(rel)).toEqual([]);
+  });
+
+  it('does not respell io.ts read-failure pair as the skill vocabulary', () => {
+    // SkillState deliberately says `unmeasurable`, not `unreadable`. The two
+    // vocabularies answer different questions — one read's failure vs a
+    // conclusion drawn from a read that may never have happened — and the
+    // bespoke assertion below already pins the PAIR to server/src/io.ts alone.
+    const api = readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8');
+    expect(api).not.toMatch(/'absent'\s*\|\s*'unreadable'|'unreadable'\s*\|\s*'absent'/);
+  });
 });
 
 // Task 5 (docs/superpowers/plans/2026-08-20-fleetio-measured-read.md): the

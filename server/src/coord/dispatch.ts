@@ -13,8 +13,9 @@ import { type AdvanceResult, type CoordStore } from './store.js';
 import { COORDINATOR_PAUSE_MARKER, MAIL_DISABLED_MARKER, clearRefusedDetail, holdReason, queueSystemMail } from './rundefs.js';
 import {
   MAIL_BODY_MAX_BYTES, SPAWN_NOT_RECORDED, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, spawnVerdict,
-  type RunRefuseCode, type RunState, type SpawnVerdict,
+  type RunRefuseCode, type RunState, type SkillState, type SpawnVerdict,
 } from '../../../shared/api.js';
+import { readWorkerSkillState } from '../skillstate.js';
 
 // The worker kickoff rides the brief mail itself: dispatch writes nothing to a
 // wave-1 pane (the zero-send-keys pin), and skills are invoked BY NAME (the
@@ -53,6 +54,24 @@ export interface DispatchRunDeps {
   coord: CoordStore;
   io: FleetIO; cfg: CcrcConfig; runCcd: Deps['runCcd']; fleetState?: FleetState;
   tmux: Tmux; queue: KeyedQueue;
+  /**
+   * A wrapper's config dir, or `undefined` when this box's roster does not
+   * carry that wrapper — the CONSUMER-DECLARED port (L2) for the one join
+   * `configDirFor` owns.
+   *
+   * Declared here rather than calling `configDirFor` directly because
+   * `server/src/config.ts` imports `./coord/db.js`: a value import would pull
+   * the store's own module graph into a policy module whose ring forbids
+   * holding a handle, and every other file in this directory imports that file
+   * TYPE-ONLY today (D-1015). The coord-ring guard would NOT have caught it —
+   * it text-scans for direct `./db.js`/`node:sqlite` imports, and
+   * `../config.js` is neither.
+   *
+   * REQUIRED, not optional: an optional port a caller forgot to wire would
+   * report `unmeasurable` on a healthy fleet forever, and fail-quiet is the one
+   * failure the preflight exists to delete.
+   */
+  configDir: (wrapper: string) => string | undefined;
 }
 
 export type DispatchOutcome =
@@ -62,7 +81,18 @@ export type DispatchOutcome =
        *  NO LONGER PROOF THE PANE IS READY. */
       adopted: boolean;
       /** How that spawn ended, when it recorded anything. `null` = not recorded. */
-      spawnState: SpawnVerdict | null }
+      spawnState: SpawnVerdict | null;
+      /**
+       * Whether the session this dispatch just bound has the `ccrc-worker`
+       * skill installed on the home it is running from — MEASURED, never
+       * assumed, and NEVER a reason to refuse (spec section 4,
+       * absence-permits). An `absent` dispatch is a real dispatch whose worker
+       * will read a brief without its standing protocol; a coordinator reports
+       * that to the operator before treating the wave as briefed.
+       * `unmeasurable` is not `absent` — nothing was proven about the fleet
+       * either way, so it is an unknown to report, not a gap to go fix.
+       */
+      skillState: SkillState }
   | { ok: false; kind: 'unknown-run' }
   | { ok: false; kind: 'bad-transition'; from: RunState; to: RunState }
   | { ok: false; kind: 'bad-request' }
@@ -217,6 +247,13 @@ export async function dispatchRun(
   // adoption gate — a resumed wave-N run adopts nothing, and neither does a
   // clean `ws-add`.
   let adopted = false; let adoptedSpawn: SpawnVerdict | null = null;
+  // The account this session is running on AT DISPATCH, for the skill preflight
+  // below. `winner`/`record` are block-scoped inside the two arms, so the
+  // wrapper is hoisted here rather than the read being done twice. `null` means
+  // there is no wrapper to map — a real, TOLERATED case on the resume arm (a
+  // session absent from a listable registry) — and that is `unmeasurable`,
+  // never `absent`.
+  let wrapper: string | null = null;
 
   // ONE MEASUREMENT, SPENT TWICE — the dispatch's own dec, hoisted above the
   // fresh-spawn branch because BOTH of this function's ccd writes are the same
@@ -374,6 +411,10 @@ export async function dispatchRun(
       adoptedSpawn = spawnVerdict(winner.spawn === null ? null : winner.spawn.rc);
     }
     sessionId = winner.id; workspace = winner.workspace; branch = winner.branch;
+    // Guaranteed MEASURED: the AFTER read above refuses the whole dispatch when
+    // any same-project record has `measuredIdentity(r) === null`, and the
+    // candidate filter is same-project.
+    wrapper = winner.wrapper;
     resumed = false;
     // Fix, review finding 7: persist the spawn onto the run row RIGHT AWAY —
     // before the hold, which can still fail two steps below.
@@ -441,6 +482,10 @@ export async function dispatchRun(
     }
     workspace = record?.workspace ?? run.workspace;
     branch = record?.branch ?? run.branch;
+    // `recordIdentity` is null exactly when `record` is undefined — the
+    // tolerated "honest stale" row this arm proceeds past on purpose. There is
+    // then no wrapper at all, and the preflight says so rather than guessing.
+    wrapper = recordIdentity?.wrapper ?? null;
     // Fix, review finding 12: refuse to `/clear` a session that is
     // OBSERVABLY mid-turn. `sendPrompt`'s `ok:true` can mean only "the
     // text left the input box" — `watch.ts`'s own mail-sweep comment and
@@ -545,6 +590,27 @@ export async function dispatchRun(
       : clearError !== null ? clearRefusedDetail(clearError) : undefined });
   if (!adv.ok) return { ok: false, kind: 'advanceFailed', adv };
 
+  // 6b: THE SKILL PREFLIGHT (spec section 4 item 1). MEASURE, NEVER REFUSE.
+  //
+  // Placed after the commit deliberately, for two reasons that both matter.
+  // (a) Ordering: this function owns a precondition -> irreversible act ->
+  // commit sequence, and a read inserted upstream of the commit could only ever
+  // delay it while deciding nothing. (b) The event row: `recordRunEvent` writes
+  // a non-transition row whose `toState` is the run's CURRENT state, and
+  // `FleetWatcher.pushNewRuns` tags every push `run-<id>-<toState>`. After the
+  // commit that state is `dispatched`, so this row reuses the transition row's
+  // own tag instead of minting a second one; before it, the row would have said
+  // `planned` and pushed a notification naming a state the run has already left
+  // — the noise `recordRunEvent`'s own docstring warns about.
+  //
+  // The row is written on ALL THREE answers, not just the interesting two. Were
+  // it written only for absent/unmeasurable, the ABSENCE of a row would mean
+  // either `present` or "an older build with no preflight" — a second
+  // overloaded null, one layer down from the one this field deletes.
+  const skillState = await readWorkerSkillState(
+    deps.io, wrapper === null ? undefined : deps.configDir(wrapper));
+  coord.recordRunEvent(id, 'coordinator', `skill-preflight:${skillState}`);
+
   // 7: the brief, as MAIL (kind `status`, subject `wave-brief`) — never
   // injected directly, and (deviation D-47) queued ONLY when the worker's
   // context is one it can actually land in: wave 1 has never had anything
@@ -579,5 +645,5 @@ export async function dispatchRun(
   }
 
   return { ok: true, id, sessionId, resumed, clearedAt, briefQueued, clearError,
-    adopted, spawnState: adoptedSpawn };
+    adopted, spawnState: adoptedSpawn, skillState };
 }

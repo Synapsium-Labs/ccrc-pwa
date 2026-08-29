@@ -31,6 +31,7 @@ import { claimExpiry, type LivenessProbe } from './coord/claims.js';
 // evidence string alike — the sweep below only feeds it files and applies
 // its answer, so LEDGER_SEED_GAP itself is not imported here.
 import { floorFromScan } from './coord/ledger.js';
+import { LEDGER_FLOOR_DIRS, SWEEP_POLICY, readLedgerDocs } from './coord/ledgerseed.js';
 import type { ProvenancePair } from './coord/store.js';
 import type { PushPayload } from './push.js';
 import { deriveBranch } from './naming.js';
@@ -1080,7 +1081,13 @@ export class FleetWatcher {
     const coord = this.deps.coord;
     if (!coord) return;
     for (const r of coord.runEventsSince(this.lastRunNotifyId)) {
-      if (r.sessionId !== null) {
+      // A row whose state did not change is an OBSERVATION, not a transition —
+      // every `recordRunEvent` row is one by construction. Pushing it would
+      // title and tag off `toState` alone, so it arrives as a duplicate of the
+      // transition that actually happened, carrying none of the fact it was
+      // written to record (wave 2, F2 — the skill preflight is the first such
+      // row on a bound run). The watermark still advances past it below.
+      if (r.sessionId !== null && r.fromState !== r.toState) {
         this.pushOne({
           kind: 'run', sessionId: r.sessionId, project: r.project,
           title: `▸ ${r.toState} › ${r.workspace ?? r.project}`,
@@ -1896,41 +1903,6 @@ export class FleetWatcher {
   }
 
   /**
-   * `docs/superpowers/<dirs>/*.md` of one project's MAIN checkout, through
-   * the already-granted `io.readdir`/`io.readFile` (D13 — zero new grants,
-   * zero new frames). POSIX joins by template, matching every other fleet
-   * path this file builds. Names are SORTED before reading — `floorFromScan`
-   * breaks a max tie by first-file-wins, and its own docstring hands the
-   * determinism duty to this caller.
-   *
-   * A dir whose `readdir` answers null contributes NOTHING — `absent` and
-   * `unreadable` collapse in that call (D-114), and here BOTH are the safe
-   * direction: a floor that fails to seed leaves allocation refusing
-   * (`not-seeded`), and a partial scan can only ever UNDER-seed inside the
-   * 50-number gap, which the next successful sweep raises. `null` return =
-   * NEITHER dir listed — the caller seeds nothing at all.
-   */
-  private async readLedgerDocs(
-    project: string, dirs: readonly string[],
-  ): Promise<{ path: string; text: string }[] | null> {
-    const out: { path: string; text: string }[] = [];
-    let listedAny = false;
-    for (const d of dirs) {
-      const dir = `${this.deps.cfg.projectsRoot}/${project}/docs/superpowers/${d}`;
-      const names = await this.deps.io.readdir(dir);
-      if (names === null) continue;
-      listedAny = true;
-      for (const n of [...names].sort()) {
-        if (!n.endsWith('.md')) continue;
-        const text = await this.deps.io.readFile(`${dir}/${n}`);
-        if (text === null) continue;
-        out.push({ path: `docs/superpowers/${d}/${n}`, text });
-      }
-    }
-    return listedAny ? out : null;
-  }
-
-  /**
    * D13: the allocator SELF-SEEDS. Hourly, per registry-named project (the
    * same bound `sweepDivergences` states: the fleet's active projects, never
    * every checkout on the box): floor = max(D-<n>) + LEDGER_SEED_GAP, and
@@ -1950,9 +1922,23 @@ export class FleetWatcher {
     const store = this.deps.coord;
     if (!store) return;
     for (const project of [...new Set(records.map((r) => r.project))]) {
-      const files = await this.readLedgerDocs(project, ['plans', 'specs']);
-      if (files === null) continue;
-      const scan = floorFromScan(files);
+      // SWEEP_POLICY, named at the call site rather than defaulted: take what
+      // you got, over the whole corpus, unbounded. A dir that will not list or
+      // a file that will not read contributes nothing and the walk CONTINUES,
+      // so a project whose plans/ is unreachable still seeds from specs/.
+      //
+      // Safe on this lane for one reason, and it is a property of this caller
+      // rather than of the read: nothing downstream of here mints a number, so
+      // a floor measured low costs a delay and the next pass raises it.
+      // `read.complete` is therefore ignored ON PURPOSE — and D-1018 records
+      // that the 50-number gap does NOT bound the under-seed, so "it can only
+      // ever under-seed inside the gap" is not the reason; "it mints nothing"
+      // is.
+      const read = await readLedgerDocs(
+        { io: this.deps.io, projectsRoot: this.deps.cfg.projectsRoot },
+        project, LEDGER_FLOOR_DIRS, SWEEP_POLICY);
+      if (read.files.length === 0 && !read.complete) continue;
+      const scan = floorFromScan(read.files);
       if (scan === null) continue;      // no global D-ref anywhere: nothing to seed, fail shut
       store.raiseLedgerFloor(project, scan.floor, scan.evidence, now);
     }
@@ -1980,8 +1966,15 @@ export class FleetWatcher {
         if (list === undefined) byProject.set(a.project, [a]); else list.push(a);
       }
       for (const [project, rows] of byProject) {
-        const files = await this.readLedgerDocs(project, ['plans']);
-        if (files === null) continue;
+        // Reconcile reads plans ALONE — a different question (did this number
+        // land in a plan?), not a narrower copy of the floor's dir list. Same
+        // SWEEP_POLICY: a file it cannot read simply is not evidence that a
+        // number landed, and the next pass looks again.
+        const read = await readLedgerDocs(
+          { io: this.deps.io, projectsRoot: this.deps.cfg.projectsRoot },
+          project, ['plans'], SWEEP_POLICY);
+        if (read.files.length === 0 && !read.complete) continue;
+        const files = read.files;
         for (const a of rows) {
           const re = new RegExp(`\\bD-${a.n}\\b`);
           const hit = files.find((f) => re.test(f.text));

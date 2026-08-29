@@ -4,11 +4,13 @@ import type { Deps } from '../server.js';
 import type { Bus } from '../bus.js';
 import { measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
 import { assembleFleet } from '../fleet.js';
+import { configDirFor } from '../config.js';
 import { peerDeliverable, archiveContradicted } from './peers.js';
 import { claimMailHint } from './claims.js';
 import { CCD_ARGV, verbSupported, sweepDec } from '../ccdargv.js';
 import { tx } from './db.js';
 import { LEDGER_ALLOC_MAX } from './ledger.js';
+import { measureLedgerFloor, type FloorMeasurement } from './ledgerseed.js';
 import { LedgerLog, defaultLedgerLogPath } from './ledgerlog.js';
 import { toRunSummary, type ClaimEndResult, type CoordStore } from './store.js';
 import { renderEnvelope } from './envelope.js';
@@ -109,7 +111,14 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
       // answer to "did that pane come up clean?". Dropping either here would be an
       // L4 adapter narrowing a distinction it received — and
       // `coordinator-skill/references/wave-lifecycle.md` documents both by name.
-      adopted: r.adopted, spawnState: r.spawnState,
+      //
+      // `skillState` joins them on the same terms and for the same reason: a
+      // field spread only when it is interesting is indistinguishable, on the
+      // wire, from a field an older build never had. Note the compiler does NOT
+      // catch a field dropped here — the `_exhaustive: never` guard below is
+      // total over the union's MEMBERS, not over one member's fields, so this
+      // body would stay green while the distinction silently never shipped.
+      adopted: r.adopted, spawnState: r.spawnState, skillState: r.skillState,
     });
   }
   switch (r.kind) {
@@ -943,7 +952,13 @@ export function registerCoordRoutes(
 
     const body = (req.body ?? {}) as { brief?: unknown; items?: unknown };
     const dispatchDeps: DispatchRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
-      fleetState: deps.fleetState, tmux: deps.tmux, queue: deps.queue };
+      fleetState: deps.fleetState, tmux: deps.tmux, queue: deps.queue,
+      // The one place a wrapper becomes a directory, called from L4 where the
+      // config already lives. `dispatch.ts` declares the port instead of
+      // importing `configDirFor` itself, because `config.ts` imports
+      // `./coord/db.js` and a value import would drag the store's module graph
+      // into a policy module (D-1015).
+      configDir: (wrapper: string) => configDirFor(deps.cfg, wrapper) };
     const outcome = await coordMutex.run(() => dispatchRun(dispatchDeps, id, body.brief, body.items));
     return sendDispatchOutcome(reply, outcome);
   });
@@ -1794,12 +1809,19 @@ export function registerCoordRoutes(
    * `allocateDeviations` (`ledgerlog.ts`): recovery is MAX(file, db), so a
    * number is SKIPPED, never reissued — a gap costs nothing (the ledger is
    * prose, parsed by nothing); a reissue costs the incident. Until
-   * `sweepLedgerFloor` has seeded the project, allocation answers
-   * `409 not-seeded` — `openCoordDb`'s "refuse to start rather than open
-   * empty", one level up. No `coordMutex`: the decision and the commit are one
-   * synchronous store call with no await between them; the PRIMARY KEY
-   * (project, n) backstop firing under a future refactor that loses that
-   * transaction is retried 3x in-request (spec §3) and then thrown loudly.
+   * `sweepLedgerFloor` has seeded the project, allocation SEEDS IT HERE (wave
+   * 2, F2) and only then answers `409 not-seeded` — `openCoordDb`'s "refuse to
+   * start rather than open empty", one level up.
+   *
+   * No `coordMutex`, still — but the reason has NARROWED, so read it rather
+   * than reusing it. There IS now an await on this path (the synchronous floor
+   * seed), and it sits BETWEEN two `allocate()` calls rather than inside one:
+   * each call is still a single synchronous store transaction with nothing
+   * awaited inside it, which is the property that mattered. What the seed adds
+   * between them is idempotent by construction — `raiseLedgerFloor` only ever
+   * raises — so a racing writer costs a retry, never a wrong number. The
+   * PRIMARY KEY (project, n) backstop firing under a future refactor that loses
+   * that transaction is retried 3x in-request (spec §3) and then thrown loudly.
    *
    * The wire `floor` is the NEXT FREE number — the landed `AllocatedBlock`
    * carries the SEEDED floor, which allocation never moves (the next block
@@ -1849,7 +1871,31 @@ export function registerCoordRoutes(
         }
       }
     };
-    const r = allocate();
+    // SYNCHRONOUS SEED (wave 2, F2 — spec section 4 item 2). Allocate FIRST,
+    // and reach for the filesystem only once the allocator has said the one
+    // thing a seed can answer.
+    //
+    // That ordering is not an optimisation. `decideAllocation` checks
+    // `bad-count` BEFORE `not-seeded` deliberately, so a caller with both
+    // defects learns the one it can fix this instant; seeding up front would
+    // spend a document walk on a request that could never have been served,
+    // and avoiding that would mean a second copy of the count predicate here
+    // in L4 — where the decision does not belong.
+    let r = allocate();
+    let seedFailure: FloorMeasurement | null = null;
+    if (!r.ok && r.why === 'not-seeded') {
+      const m = await measureLedgerFloor(
+        { io: deps.io, projectsRoot: deps.cfg.projectsRoot }, project.trim());
+      if (m.ok) {
+        // `raiseLedgerFloor` only ever raises, in SQL rather than by caller
+        // discipline, so this is safe to run concurrently and repeatedly: a
+        // racing sweep that got there first simply wins.
+        coord.raiseLedgerFloor(project.trim(), m.scan.floor, m.scan.evidence, Date.now());
+        r = allocate();
+      } else {
+        seedFailure = m;
+      }
+    }
     if (r.ok) {
       const numbers = [...r.allocation.numbers];
       return reply.code(201).send({ ok: true, numbers,
@@ -1857,9 +1903,24 @@ export function registerCoordRoutes(
     }
     switch (r.why) {
       case 'not-seeded':
+        // TWO conditions, two sentences, because an operator acts on them
+        // differently: one is a box to fix, the other is a plan to write.
+        //
+        // The ternary's polarity is deliberate. `seedFailure` is null in
+        // exactly two cases — the seed was never attempted (unreachable on this
+        // arm, since `not-seeded` is what triggers it), or the seed SUCCEEDED
+        // and the retry still refused, which is a lost race and about which
+        // "could not be measured" is the honest thing to say. Defaulting the
+        // other way would claim a completed measurement that may never have
+        // run.
         return reply.code(409).send({ ok: false, error: 'not-seeded',
-          detail: `no floor for ${project.trim()} — sweepLedgerFloor has not scanned it yet; ` +
-            'the allocator fails shut rather than minting from a guess (D13)' });
+          detail: seedFailure !== null && seedFailure.why === 'no-refs'
+            ? `no floor for ${project.trim()} — its docs/superpowers plans and specs were read ` +
+              'and name no D-<n> at all, so there is nothing to seed from; the allocator fails ' +
+              'shut rather than minting from a guess (D13)'
+            : `no floor for ${project.trim()} — it could not be measured (the docs tree would ` +
+              'not list, a file would not read, or the walk ran out of budget), so nothing was ' +
+              'proven either way; the allocator fails shut rather than minting from a guess (D13)' });
       case 'bad-count':
         return reply.code(400).send({ ok: false, error: 'bad-request',
           detail: `count is an integer 1..${LEDGER_ALLOC_MAX} — a bigger block is likelier ` +
