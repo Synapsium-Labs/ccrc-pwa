@@ -1325,6 +1325,44 @@ describe('Build 8 vocabularies — one definition each, all derived from their m
     const api = readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8');
     expect(api).not.toMatch(/'absent'\s*\|\s*'unreadable'|'unreadable'\s*\|\s*'absent'/);
   });
+
+  // program-leverage wave 3 (F3). Four readiness vocabularies join this family
+  // on the same terms `SkillState` did: one type, one presentational `Record`
+  // keyed BY the type, a runtime list DERIVED from that map's keys. They are
+  // pinned here rather than in a describe of their own because the family is
+  // the thing being protected — a fifth vocabulary added next to these should
+  // trip the same three assertions without anyone remembering to write them.
+  it('defines the four readiness vocabularies exactly once, in shared/', () => {
+    oneDefinition(/^\s*export type FloorState\b/m, 'FloorState');
+    oneDefinition(/^\s*export const FLOOR_STATE_MAP\b/m, 'FLOOR_STATE_MAP');
+    oneDefinition(/^\s*export type TokenState\b/m, 'TokenState');
+    oneDefinition(/^\s*export const TOKEN_STATE_MAP\b/m, 'TOKEN_STATE_MAP');
+    oneDefinition(/^\s*export type CoordDbState\b/m, 'CoordDbState');
+    oneDefinition(/^\s*export const COORD_DB_STATE_MAP\b/m, 'COORD_DB_STATE_MAP');
+    oneDefinition(/^\s*export type ReadyVerdict\b/m, 'ReadyVerdict');
+    oneDefinition(/^\s*export const READY_VERDICT_MAP\b/m, 'READY_VERDICT_MAP');
+  });
+
+  it('DERIVES every readiness member list from its map', () => {
+    const api = readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8');
+    for (const [list, map] of [
+      ['FLOOR_STATES', 'FLOOR_STATE_MAP'], ['TOKEN_STATES', 'TOKEN_STATE_MAP'],
+      ['COORD_DB_STATES', 'COORD_DB_STATE_MAP'], ['READY_VERDICTS', 'READY_VERDICT_MAP'],
+    ] as const) {
+      expect(api, `${list} is not derived from ${map}`).toMatch(
+        new RegExp(`export const ${list}[^=]*=\\s*\\n?\\s*Object\\.keys\\(${map}\\)`));
+      expect(api, `${list} is hand-typed as a literal array — derive it from ${map}`)
+        .not.toMatch(new RegExp(`${list}[^=]*=\\s*\\[`));
+    }
+  });
+
+  it('the readiness verdict is DERIVED in one place, never recomputed by a consumer', () => {
+    // `readyVerdict` is L0 and pure so the PWA renders the server's answer
+    // rather than folding five fields a second time. A second fold is how the
+    // badge and the board come to disagree about the same box.
+    oneDefinition(/^\s*export function readyVerdict\b/m, 'readyVerdict');
+    oneDefinition(/^\s*export function foldSkillStates\b/m, 'foldSkillStates');
+  });
 });
 
 // Task 5 (docs/superpowers/plans/2026-08-20-fleetio-measured-read.md): the

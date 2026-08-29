@@ -1206,6 +1206,157 @@ export function isSkillState(v: unknown): v is SkillState {
   return typeof v === 'string' && (SKILL_STATES as readonly string[]).includes(v);
 }
 
+/**
+ * program-leverage wave 3 (F3) — the program-ready preconditions, as four
+ * small closed vocabularies plus the pure folds that turn them into one word.
+ *
+ * Each is three-valued for the SAME reason `SkillState` is: absence of
+ * evidence is not evidence of absence, and a badge that cannot tell the two
+ * apart sends an operator to go fix something that may be fine. The third
+ * member is never a synonym for the second.
+ *
+ * `SkillState` above is REUSED for both skills rather than copied — this block
+ * adds no fifth word for a question wave 2 already gave a vocabulary.
+ */
+export type FloorState = 'seeded' | 'not-seeded' | 'unmeasurable';
+
+/** Presentational only, and keyed BY the type so the compiler keeps it total —
+ *  a member added to the union with no key here is a compile error, which is
+ *  what makes the derived list below trustworthy. */
+export const FLOOR_STATE_MAP: Record<FloorState, string> = {
+  seeded: 'deviation floor seeded',
+  'not-seeded': 'no deviation floor yet',
+  unmeasurable: 'could not be measured',
+};
+
+export const FLOOR_STATES: readonly FloorState[] =
+  Object.keys(FLOOR_STATE_MAP) as FloorState[];
+
+export function isFloorState(v: unknown): v is FloorState {
+  return typeof v === 'string' && (FLOOR_STATES as readonly string[]).includes(v);
+}
+
+/** `absent` is a PROVEN ENOENT on the token path; `unmeasurable` is any other
+ *  read failure. The BOOT read (`coord/token.ts`) cannot produce the third
+ *  member at all — it throws and the server never starts — which is why the
+ *  readiness sweep re-measures the path rather than reporting the token the
+ *  composition root already holds (D-1025). */
+export type TokenState = 'configured' | 'absent' | 'unmeasurable';
+
+export const TOKEN_STATE_MAP: Record<TokenState, string> = {
+  configured: 'box token configured',
+  absent: 'no box token on this box',
+  unmeasurable: 'could not be measured',
+};
+
+export const TOKEN_STATES: readonly TokenState[] =
+  Object.keys(TOKEN_STATE_MAP) as TokenState[];
+
+export function isTokenState(v: unknown): v is TokenState {
+  return typeof v === 'string' && (TOKEN_STATES as readonly string[]).includes(v);
+}
+
+/** Three conditions, three words, and NO `unmeasurable` member on purpose:
+ *  every one of these is proven. `available` = a trivial read answered;
+ *  `degraded` = the store is there and a read THREW (a full disk, another
+ *  connection holding the write lock — the two causes the server's own swallow
+ *  site names); `not-configured` = there is no store at all. The shipped
+ *  process cannot reach the third (D-1024) — the boot refuses rather than
+ *  opening empty — and it is carried anyway, because a build that omitted the
+ *  arm could never report the day that changes. */
+export type CoordDbState = 'available' | 'degraded' | 'not-configured';
+
+export const COORD_DB_STATE_MAP: Record<CoordDbState, string> = {
+  available: 'coordination database available',
+  degraded: 'coordination database not answering',
+  'not-configured': 'no coordination database',
+};
+
+export const COORD_DB_STATES: readonly CoordDbState[] =
+  Object.keys(COORD_DB_STATE_MAP) as CoordDbState[];
+
+export function isCoordDbState(v: unknown): v is CoordDbState {
+  return typeof v === 'string' && (COORD_DB_STATES as readonly string[]).includes(v);
+}
+
+/** The aggregate. NOT a boolean, deliberately: `ready:false` would fold "we
+ *  proved a precondition missing" into "we could not tell", which is the exact
+ *  overloaded value this feature exists to refuse. `blocked` outranks
+ *  `unknown` — a proven failure is worth reporting even while something else
+ *  is unmeasurable (D-1026). */
+export type ReadyVerdict = 'ready' | 'blocked' | 'unknown';
+
+export const READY_VERDICT_MAP: Record<ReadyVerdict, string> = {
+  ready: 'program-ready',
+  blocked: 'not ready',
+  unknown: 'readiness unknown',
+};
+
+export const READY_VERDICTS: readonly ReadyVerdict[] =
+  Object.keys(READY_VERDICT_MAP) as ReadyVerdict[];
+
+export function isReadyVerdict(v: unknown): v is ReadyVerdict {
+  return typeof v === 'string' && (READY_VERDICTS as readonly string[]).includes(v);
+}
+
+/** The five measured preconditions, without the derived verdict or the stamp. */
+export interface ReadinessFacts {
+  readonly worker: SkillState;
+  readonly coordinator: SkillState;
+  readonly floor: FloorState;
+  readonly boxToken: TokenState;
+  readonly coordDb: CoordDbState;
+}
+
+/** One project's answer, as the wire carries it. */
+export interface ProjectReadiness extends ReadinessFacts {
+  readonly verdict: ReadyVerdict;
+  /** When the fleet-wide half was swept. */
+  readonly at: number;
+}
+
+/**
+ * One row of `GET /api/projects`.
+ *
+ * `readiness` is THREE-VALUED and each value is a different fact:
+ *   - the key ABSENT: this server does not measure readiness (an older build);
+ *   - `null`: it measures, and has not swept yet;
+ *   - an object: measured.
+ * A reader that folds the first two together has thrown away the difference
+ * between "upgrade the server" and "wait two seconds".
+ */
+export interface ProjectRow {
+  name: string;
+  workdir: string;
+  readiness?: ProjectReadiness | null;
+}
+
+/** Fold one skill's answer across every rostered HOME. A proven absence
+ *  anywhere dominates; a home we could not read downgrades a clean sweep to an
+ *  unknown; measuring NOTHING is an unknown, never a vacuous `present`. */
+export function foldSkillStates(states: readonly SkillState[]): SkillState {
+  if (states.length === 0) return 'unmeasurable';
+  if (states.includes('absent')) return 'absent';
+  if (states.includes('unmeasurable')) return 'unmeasurable';
+  return 'present';
+}
+
+/** The ONE derivation of the aggregate verdict. L0 and pure so the PWA renders
+ *  the server's answer instead of folding the five fields a second time. */
+export function readyVerdict(f: ReadinessFacts): ReadyVerdict {
+  const cells: readonly ('ok' | 'blocked' | 'unknown')[] = [
+    f.worker === 'present' ? 'ok' : f.worker === 'absent' ? 'blocked' : 'unknown',
+    f.coordinator === 'present' ? 'ok' : f.coordinator === 'absent' ? 'blocked' : 'unknown',
+    f.floor === 'seeded' ? 'ok' : f.floor === 'not-seeded' ? 'blocked' : 'unknown',
+    f.boxToken === 'configured' ? 'ok' : f.boxToken === 'absent' ? 'blocked' : 'unknown',
+    // No `unknown` arm: every member of `CoordDbState` is a proven condition.
+    f.coordDb === 'available' ? 'ok' : 'blocked',
+  ];
+  if (cells.includes('blocked')) return 'blocked';
+  if (cells.includes('unknown')) return 'unknown';
+  return 'ready';
+}
+
 /** The word for `spawnVerdict(...) === null` wherever a verdict has to be
  *  RENDERED as text rather than carried as a value — today, `dispatch.ts`'s
  *  `spawn-adopted:<verdict>` run event.
