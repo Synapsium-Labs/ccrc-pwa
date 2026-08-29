@@ -1473,6 +1473,49 @@ both lanes touch is `server/test/single-definition.test.ts`, where graphify appe
 wave's pin goes mid-file inside the existing Build 8 describe and the merge stays clean by
 construction.
 
+### D-1030 (defect I nearly shipped, found by mutation) — scoping under a painter in ANOTHER stylesheet grounds nothing
+
+This plan's Task 6 said to scope the badge under a painter so the contrast auditor could resolve its
+ground. I did — `.sheet-panel`, which sets `background: var(--bg-sheet)` — and `contrast.test.ts` went
+green. It was green for the wrong reason. `audit()` classified all three badge rules as
+**`uncovered`**: the auditor's descendant route only grounds a rule against painters in the SAME
+stylesheet, and `.sheet-panel` lives in `components/primitives.css` while the badge lives in
+`fleet.css`. The rules' contrast was never measured, and the census entry looked identical to a rule
+nobody had thought about.
+
+Found by mutating an invented token (`--status-live-text`, which does not exist) into the `ready` arm:
+`audit.mjs:224` throws on an unknown custom property, and the suite stayed **GREEN, 0 red**. Fixed with
+three `INHERITED_GROUNDS` entries — base rule plus both coloured arms, registered separately for the
+reason the `.auth-block-sub` entry already states: grounding only the base would leave half the badge
+measured while the report looked covered. After the fix `audit()` reports 6 measured pairs, 0 problems,
+and the same mutation reds 4. The `.sess-spawn` entry is the precedent; this one differs in that its
+selector DOES name an ancestor, which is exactly why it looked safe.
+
+### D-1031 (pre-existing, measured, NOT introduced here) — the `lastX !== 0` first-run guard is inert
+
+Mutation 4.2 deleted the `!== 0` conjunct from the sweep's interval guard and **survived: 0 red**. It is
+not a missing test — the conjunct cannot matter. With `lastReadinessSweep` at `0` and any real epoch
+clock, `now - 0` is ~1.7e12, which already exceeds any interval this tree uses, so the first call falls
+through on the arithmetic alone. The same is true of the two ledger lanes and the divergence lane that
+spell the idiom identically, so this is a property of the existing tree rather than something this wave
+introduced, and fixing three other lanes is outside this wave's scope.
+
+Kept for symmetry with those neighbours and because it states the intent readably. What changed is the
+prose: the sweep's comment and the test that claims "sweeps on the FIRST call" both used to cite the
+`!== 0` idiom as the thing enforcing it, which was false. Both now say what actually enforces it.
+
+### D-1032 (defect I shipped, caught by the whole-branch run) — `as const` in the wrong place typechecks under vitest and not under tsc
+
+Four `FleetIO` doubles in `readiness.test.ts` were written as `{ readFileMeasured: async () => ({...}) }
+as const`, and one as `(cond ? {...} : {...}) as const`. Every one of their tests PASSED — vitest
+transforms with esbuild, which strips types without checking them — and `typecheck-tests.test.ts` then
+failed the whole-branch run with `Type 'boolean' is not assignable to type 'true'` and TS1355 (a const
+assertion cannot be applied to a ternary). `as const` on the outer object does not reach the inner
+return. Fixed by giving the doubles a named `ReadDouble = Pick<FleetIO, 'readFileMeasured'>`
+annotation, which contextually types the literal instead. Recorded because the lesson generalises: in
+this repo a green single-suite run is not a typecheck, and the tests-inclusive project is a separate
+gate that only the full run reaches.
+
 ---
 
 ## Notes for the coordinator
@@ -1484,7 +1527,7 @@ construction.
   reference documents this field.
 - **D-1026 changes the shape the operator approved** (`ready: false` became a three-valued
   `verdict`). Called out here so the ledger carries it.
-- Deviations consumed: **D-1023..D-1029**. Block `D-999..1046`; `1030+` free after this wave.
+- Deviations consumed: **D-1023..D-1032**. Block `D-999..1046`; `1033+` free after this wave.
 
 ## Self-review
 
@@ -1505,3 +1548,92 @@ and the mutation table. `projectReadiness(fleet, floor)` matches its use in Task
 `currentReadiness()` matches Tasks 4 and 5. `ProjectRow.readiness?: ProjectReadiness | null` is the
 same three-valued shape in Tasks 1, 5 and 6. `FleetReadiness` (no `floor`) and `ProjectReadiness`
 (with `floor` and `verdict`) are kept distinct everywhere they appear.
+
+
+---
+
+## Execution record (measured, 2026-08-29)
+
+Every red below was OBSERVED, not predicted. Mutations were applied ONE AT A TIME by a driver script
+that patches, runs the named suite, captures the first failing assertion verbatim, and reverts before
+the next — so no two mutations were ever live together.
+
+**Suite results, whole branch, after Task 6.** `server` 235 files / **5901 passed** / 54 skipped;
+`agent` **280 passed** (18 files); `pwa` 75 files / **1982 passed**, `Type Errors no errors`. All three
+run in the foreground, cd'd into the package. No load flakes needed re-running in isolation on this
+pass.
+
+Two earlier full runs failed, both correctly: the first on `typecheck-tests` (real type errors no
+single suite could see — D-1032) and on `deviation-refs` (D-1030 and D-1031 were cited in code before
+this section defined them). The `deploy: FAILED — $CCRC_BOX is not set` lines in the server output are
+`deploy-coordinates.test.ts`'s own expected stdout, asserting deploy.sh refuses rather than guessing a
+target; they are not failures.
+
+### Reds measured before the code that answers them
+
+| Pin | Suite | Failing assertion, verbatim |
+|---|---|---|
+| The four vocabularies are defined once | `single-definition` | `FloorState: expected [] to deeply equal [ 'shared/api.ts' ]` (3 red) |
+| The two pure folds | `readiness` | `TypeError: foldSkillStates is not a function` (11 red) |
+| The parameterised skill read | `skillstate` | `TypeError: skillPath is not a function` (5 red) |
+| The measurement module | `readiness` | `Cannot find module '../src/readiness.js'` |
+| The sweep and its accessor | `readiness-sweep` | `TypeError: f.watcher.sweepReadiness is not a function` (12 red) |
+| The route join | `lifecycle` | `expected undefined to deeply equal { worker: 'present', …(6) }` (6 red) |
+| The badge | `start-program` | `Unable to find an element with the text: /program-ready/` (4 red) |
+
+### Mutation table
+
+Every row carries the FIRST failing assertion verbatim — wave 2's review minor was that 14 of 19 rows
+recorded only counts, and this plan's own Task 7 set that bar.
+
+| # | Mutation | Suite | red | First failing assertion, verbatim |
+|---|---|---|---|---|
+| 1.1 | `foldSkillStates` answers `present` for `[]` | `readiness` | 1 | `AssertionError: expected 'present' to be 'unmeasurable' // Object.is equality` |
+| 1.2 | `unmeasurable` checked before `absent` | `readiness` | 1 | `AssertionError: expected 'unmeasurable' to be 'absent' // Object.is equality` |
+| 1.3 | `readyVerdict` lets `unknown` outrank `blocked` | `readiness` | 1 | `AssertionError: expected 'unknown' to be 'blocked' // Object.is equality` |
+| 1.4 | `READY_VERDICTS` hand-typed as an array literal | `single-definition` | 1 | `AssertionError: READY_VERDICTS is not derived from READY_VERDICT_MAP: expected '// Shared API types — single source o…' to match /export const READY_VERDICTS[^=]*=\s*…/` |
+| 2.1 | `readWorkerSkillState` delegates to the COORDINATOR dir | `skillstate`, `dispatch-skillstate` | 8 | `AssertionError: expected { ok: true, id: 1, …(8) } to match object { ok: true, skillState: 'present' }` |
+| 3.1 | **P1** — delete the coordinator read | `readiness` | 3 | `AssertionError: expected [ …(3) ] to deeply equal [ …(5) ]` |
+| 3.2 | **P3** — box token as a two-state boot-style read | `readiness` | 1 | `AssertionError: expected 'absent' to be 'unmeasurable' // Object.is equality` |
+| 3.3 | **P3** — token failure polarity swapped | `readiness` | 1 | `AssertionError: expected 'unmeasurable' to be 'absent' // Object.is equality` |
+| 3.4 | the token VALUE rides along on the result | `readiness` | 1 | `AssertionError: expected '{"worker":"present","coordinator":"pr…' not to contain 'not-a-real-secret-value'` |
+| 4.1 | **P4** — probe answers `available` whenever a handle exists | `readiness-sweep` | 2 | `AssertionError: expected 'available' to be 'degraded' // Object.is equality` |
+| 4.2 | delete the first-run `!== 0` conjunct | `readiness-sweep` | **0** | **SURVIVED — see D-1031** |
+| 4.3 | delete the interval check (sweeps every tick) | `readiness-sweep` | 1 | `AssertionError: expected 18 to be 9 // Object.is equality` |
+| 4.4 | probe asks a name `isSafeProjectSegment` ACCEPTS | `readiness-sweep` | 1 | `AssertionError: expected true to be false // Object.is equality` |
+| 5.1 | **P2** — delete the floor read, hard-code `seeded` | `lifecycle` | 4 | `AssertionError: expected 'seeded' to be 'not-seeded' // Object.is equality` |
+| 5.2 | a throwing floor answers `not-seeded` | `lifecycle` | 2 | `AssertionError: expected 'not-seeded' to be 'unmeasurable' // Object.is equality` |
+| 5.3 | remove the per-project catch | `lifecycle` | 2 | `AssertionError: expected 500 to be 200 // Object.is equality` |
+| 5.4 | unswept watcher OMITS the key instead of sending `null` | `lifecycle` | 2 | `AssertionError: expected [ { name: 'MekWarLive', …(1) }, …(3) ] to deeply equal [ { name: 'MekWarLive', …(2) }, …(3) ]` |
+| 6.1 | the badge renders for an ABSENT key | `start-program` | 38 | `TypeError: Cannot read properties of undefined (reading 'verdict')` |
+| 6.2 | the badge folds `null` and `undefined` into one arm | `start-program` | 1 | `AssertionError: expected null to be truthy` |
+| 6.3 | `missingPreconditions` hand-types the member words | `single-definition` | 1 | `AssertionError: expected [ 'pwa/src/fleet/readinessWords.ts' ] to deeply equal []` |
+| 6.4 | an unknown custom property in the badge's `ready` arm | `contrast` | 4 | `FAIL ------ (audit) DARK fleet.css .sheet-panel .proj-ready[data-verdict='ready']: unknown custom property --status-live-text` |
+
+**Mutation 6.4 is the one that mattered most, and it is recorded twice on purpose.** Run BEFORE
+D-1030's fix it reported **0 red** — the badge's colour rules were not measured at all. The row above
+is the post-fix measurement. A mutation that passes is not always a strong pin; sometimes it is a
+missing one.
+
+### Two of the driver's own mutations were WRONG, and are recorded rather than hidden
+
+- **5.3 as first written was malformed.** Replacing `try {` with `if (true) {` left a dangling
+  `} catch {`, so the run reported `Error: Transform failed with 1 error:` — a syntax failure, not a
+  measurement. A mutation that does not compile proves nothing about the pin. Re-done as an actual
+  removal of the try/catch: 2 red, `expected 500 to be 200`.
+- **4.2 is a correct mutation with a real result**, not a bad anchor: the conjunct it deletes cannot
+  change behaviour under any real clock. That is D-1031, and the fix was to the prose that claimed
+  otherwise, not to the code.
+
+### What the whole-branch run caught that no single suite did
+
+`typecheck-tests.test.ts` failed on four test doubles that every one of their own tests had passed
+(D-1032). vitest transforms with esbuild and does not typecheck, so a green single-suite run says
+nothing about the tests-inclusive project. Worth carrying: run the full suite before believing a
+green file.
+
+### Deviations consumed
+
+**D-1023 .. D-1032.** All ten are defined above; none was invented, and the block (`D-999..1046`, this
+program's) is not exceeded. `deviation-refs` measures the tracked-tree maximum and the plan-defined
+maximum as equal at **D-1032**.

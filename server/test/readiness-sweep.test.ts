@@ -69,8 +69,14 @@ describe('the readiness sweep — its clock', () => {
   });
 
   it('sweeps on the FIRST call rather than waiting out the interval', async () => {
-    // The `lastX !== 0` idiom. A server restart must not leave every project's
-    // badge blank for ten minutes.
+    // A server restart must not leave every project's badge blank for ten
+    // minutes. NOTE what actually makes this true, measured (D-1031): NOT the
+    // `lastX !== 0` half of the guard, which is inert — with `lastSweep` at 0
+    // and a real epoch clock, `now - 0` already dwarfs any interval, so the
+    // first call falls through on the arithmetic alone. Deleting `!== 0` kills
+    // no test here, and the same is true of the two ledger lanes that share
+    // the idiom. It is kept for symmetry with them and because it states the
+    // intent; it is not what enforces it.
     at(NOW);
     const f = fixture();
     await f.watcher.sweepReadiness();

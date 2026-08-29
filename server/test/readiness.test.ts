@@ -14,6 +14,7 @@ import {
   isFloorState, isTokenState, isCoordDbState, isReadyVerdict,
 } from '../../shared/api.js';
 import { measureFleetReadiness, projectReadiness, type ReadinessDeps } from '../src/readiness.js';
+import type { FleetIO } from '../src/io.js';
 import { COORDINATOR_SKILL_DIR, WORKER_SKILL_DIR } from '../src/skillstate.js';
 
 
@@ -102,7 +103,13 @@ describe('the derived lists and guards', () => {
 // Ports in, values out: no fastify, no node:sqlite, no watcher. Every port is
 // supplied explicitly per case so a test says exactly which of the four
 // preconditions it is exercising and leaves the other three clean.
-const okRead = { readFileMeasured: async () => ({ ok: true, content: 'x' }) } as const;
+/** Typed, not `as const`: the annotation is what contextually types the
+ *  returned literal as a `MeasuredRead`, and `as const` on the OUTER object
+ *  does not reach the inner return (measured — it typechecked clean under
+ *  vitest's esbuild and failed the tests-inclusive tsc). */
+type ReadDouble = Pick<FleetIO, 'readFileMeasured'>;
+
+const okRead: ReadDouble = { readFileMeasured: async () => ({ ok: true, content: 'x' }) };
 
 const deps = (over: Partial<ReadinessDeps> = {}): ReadinessDeps => ({
   io: okRead,
@@ -116,8 +123,8 @@ const deps = (over: Partial<ReadinessDeps> = {}): ReadinessDeps => ({
 describe('measureFleetReadiness — the fleet-wide half', () => {
   it('reads BOTH skills in EVERY home, then the token, and nothing else', async () => {
     const seen: string[] = [];
-    const io = { readFileMeasured: async (p: string) => {
-      seen.push(p); return { ok: true, content: 'x' } as const;
+    const io: ReadDouble = { readFileMeasured: async (p: string) => {
+      seen.push(p); return { ok: true, content: 'x' };
     } };
     await measureFleetReadiness(deps({
       io, homes: [{ wrapper: 'a', configDir: '/a' }, { wrapper: 'b', configDir: '/b' }],
@@ -130,15 +137,15 @@ describe('measureFleetReadiness — the fleet-wide half', () => {
   });
 
   it('folds a home that is missing the worker skill into a proven absence', async () => {
-    const io = { readFileMeasured: async (p: string) => (p.includes(WORKER_SKILL_DIR)
-      ? { ok: false, reason: 'absent' } : { ok: true, content: 'x' }) as const };
+    const io: ReadDouble = { readFileMeasured: async (p: string) => (p.includes(WORKER_SKILL_DIR)
+      ? { ok: false, reason: 'absent' } : { ok: true, content: 'x' }) };
     const r = await measureFleetReadiness(deps({ io }));
     expect(r.worker).toBe('absent');
     expect(r.coordinator).toBe('present');
   });
 
   it('a home whose read FAILED is unmeasurable, never absent', async () => {
-    const io = { readFileMeasured: async () => ({ ok: false, reason: 'unreadable' }) as const };
+    const io: ReadDouble = { readFileMeasured: async () => ({ ok: false, reason: 'unreadable' }) };
     const r = await measureFleetReadiness(deps({ io }));
     expect(r.worker).toBe('unmeasurable');
     expect(r.coordinator).toBe('unmeasurable');
@@ -156,15 +163,15 @@ describe('measureFleetReadiness — the fleet-wide half', () => {
   it('the box token is RE-MEASURED at the path, so all three arms are reachable', async () => {
     // D-1025: the boot read has only two outcomes — a string, or a process
     // that never started. Re-measuring is what makes the third arm real.
-    const gone = { readFileMeasured: async () => ({ ok: false, reason: 'absent' }) as const };
-    const broken = { readFileMeasured: async () => ({ ok: false, reason: 'unreadable' }) as const };
+    const gone: ReadDouble = { readFileMeasured: async () => ({ ok: false, reason: 'absent' }) };
+    const broken: ReadDouble = { readFileMeasured: async () => ({ ok: false, reason: 'unreadable' }) };
     expect((await measureFleetReadiness(deps())).boxToken).toBe('configured');
     expect((await measureFleetReadiness(deps({ io: gone }))).boxToken).toBe('absent');
     expect((await measureFleetReadiness(deps({ io: broken }))).boxToken).toBe('unmeasurable');
   });
 
   it('the token VALUE never leaves the measurement — only its measurability', async () => {
-    const io = { readFileMeasured: async () => ({ ok: true, content: 'not-a-real-secret-value' }) as const };
+    const io: ReadDouble = { readFileMeasured: async () => ({ ok: true, content: 'not-a-real-secret-value' }) };
     const r = await measureFleetReadiness(deps({ io }));
     expect(JSON.stringify(r)).not.toContain('not-a-real-secret-value');
   });

@@ -1990,6 +1990,12 @@ export class FleetWatcher {
    */
   async sweepReadiness(): Promise<void> {
     const now = Date.now();
+    // The `!== 0` half is INERT and is kept only for symmetry with the two
+    // ledger lanes that spell it the same way (D-1031, measured): with
+    // `lastReadinessSweep` at 0 and a real epoch clock, `now - 0` already
+    // dwarfs the interval, so the first call falls through on the arithmetic
+    // alone. Deleting it kills no test in this suite or theirs. What enforces
+    // "measure on the first tick" is the arithmetic, not this conjunct.
     if (this.lastReadinessSweep !== 0 && now - this.lastReadinessSweep < READINESS_SWEEP_MS) return;
     this.lastReadinessSweep = now;
     const cfg = this.deps.cfg;
