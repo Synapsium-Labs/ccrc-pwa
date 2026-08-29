@@ -459,12 +459,22 @@ export class CoordStore {
    * (a refusal path) has nothing better to do with the failure than the row
    * itself was going to record.
    *
-   * ON THE NOTIFY LANE: `FleetWatcher.pushNewRuns` skips any `run_events` row
-   * whose run carries no `sessionId`, and §1.5's only caller records BEFORE
-   * `coord.setSession` on a wave-1 run — so today this writes to the feed and
-   * pushes nothing. A future caller on a BOUND run would push `▸ <state>`,
-   * naming a state the run is already resting in; that is a reason to think
-   * before adding one, stated here rather than discovered on a phone.
+   * ON THE NOTIFY LANE (amended, wave 2 F2 — the future this paragraph warned
+   * about arrived): `FleetWatcher.pushNewRuns` skips any `run_events` row whose
+   * run carries no `sessionId`, and §1.5's two callers record BEFORE
+   * `coord.setSession` on a wave-1 run, so those still write to the feed and
+   * push nothing.
+   *
+   * The skill preflight (`dispatch.ts`) is the first caller on a BOUND run, and
+   * it did exactly what was predicted here: a second `▸ <state>` naming a state
+   * the run was already resting in, tagged identically to the transition's own
+   * push and carrying none of the preflight fact that motivated the row. The
+   * tray collapsed it by tag; the NotifyLog ring and the durable feed did not.
+   *
+   * So the notify lane now SKIPS any row where `fromState === toState` — every
+   * row this method writes, by construction. A non-transition is not a
+   * transition notification. The row still lands in `run_events`, which is the
+   * trail callers want; what it no longer does is impersonate a state change.
    */
   recordRunEvent(runId: number, causedBy: string, detail: string): void {
     const row = this.db.prepare('SELECT state FROM runs WHERE id = ?').get(runId) as
@@ -1811,15 +1821,17 @@ export class CoordStore {
    * guess one, since presence-gating and the push's own target both need a
    * real session id.
    */
-  runEventsSince(sinceId: number): { eventId: number; runId: number; toState: string; sessionId: string | null;
+  runEventsSince(sinceId: number): { eventId: number; runId: number; fromState: string; toState: string;
+                                      sessionId: string | null;
                                       project: string; workspace: string | null; program: string;
                                       wave: number; waveOf: number | null }[] {
     return this.db.prepare(
-      'SELECT re.id AS eventId, re.runId, re.toState, r.sessionId, r.project, r.workspace, ' +
+      'SELECT re.id AS eventId, re.runId, re.fromState, re.toState, r.sessionId, r.project, r.workspace, ' +
       'r.program, r.wave, r.waveOf ' +
       'FROM run_events re JOIN runs r ON r.id = re.runId ' +
       'WHERE re.id > ? ORDER BY re.id',
-    ).all(sinceId) as { eventId: number; runId: number; toState: string; sessionId: string | null;
+    ).all(sinceId) as { eventId: number; runId: number; fromState: string; toState: string;
+                         sessionId: string | null;
                          project: string; workspace: string | null; program: string;
                          wave: number; waveOf: number | null }[];
   }

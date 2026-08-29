@@ -1813,6 +1813,15 @@ different policies. **The watcher's behaviour is left exactly as it was** — ch
 hourly sweep fail-shut more often, an operator-visible change beyond this wave's scope. Deferred, and
 the comment at both call sites now says which policy each one is choosing and why.
 
+**AMENDED, review round 1.** That last claim was FALSE when written; the fix round makes it true. The
+shared reader shipped with a DEFAULTED budget and abort-only failure handling, and the sweep silently
+acquired both — see **D-1021**. The 50-number-gap finding itself stands and is still deferred. What
+changed is that the sweep lane now demonstrably has the behaviour this entry claimed for it, pinned by
+two tests that reduce to `expected undefined to be 261` the moment the seed's policy is put back on
+it. The lesson is not about this entry's reasoning but about its EVIDENCE: "`ledger-sweep.test.ts`
+passes unedited" was true and proved nothing, because that suite had no partial-failure or budget
+fixture. A suite that cannot express the change cannot witness it.
+
 ### D-1019 (pre-existing collapse worked around, not fixed) — `readdir` cannot tell an absent dir from one that will not list
 
 `FleetIO.readdir` returns `null` on ANY failure and there is no measured variant (D-114); `io.stat` is
@@ -1826,6 +1835,56 @@ a dir the parent DOES name and that then will not list is a failure. This is the
 `server/src/registry.ts` already uses for a field that is listed but will not read. **Adding a measured
 `readdir` to the agent protocol would be the real fix** and is an AGENT-FIRST change of its own; wave 8
 already owns the measured-read completion work and is its natural home.
+
+
+### D-1020 (defect I shipped, review round 1 minor 1) — the preflight row impersonated a state change
+
+`CoordStore.recordRunEvent` writes a row whose `fromState` and `toState` are both the run's CURRENT
+state, and its docstring already warned that a future caller on a BOUND run would push `▸ <state>`
+naming a state the run is already resting in. The skill preflight became that caller. Measured: every
+successful dispatch produced a SECOND push with a title, body and tag byte-identical to the
+transition's own, carrying none of the preflight fact that motivated the row. The reused tag collapses
+it in the OS tray only — the `NotifyLog` ring and the durable feed keep the duplicate, with
+`recordAlways` and no dedup.
+
+Fixed at the notify lane rather than by documenting the noise: `pushNewRuns` now skips any row where
+`fromState === toState`, which is every `recordRunEvent` row by construction. A non-transition is not
+a transition notification. The row still lands in `run_events` — that trail is what the wave wanted;
+what it no longer does is impersonate a state change. Blast radius verified as exactly this row type:
+the only other two `recordRunEvent` call sites are on dispatch's fresh-spawn refusal paths, before
+`coord.setSession`, so they carry no `sessionId` and were already skipped. `runEventsSince` gained
+`fromState` (one new reader). `recordRunEvent`'s docstring is amended per its own
+amended-not-left-wrong convention.
+
+### D-1021 (defect I shipped, review round 1 MAJOR) — one lane silently acquired the other lane's policy
+
+`readLedgerDocs` shipped with `budgetMs?: number` defaulting to `LEDGER_SEED_BUDGET_MS` and with
+abort-only failure handling. Both were written for the synchronous seed; the hourly sweep inherited
+both by saying nothing.
+
+Two measured consequences. (1) The sweep became BOUNDED for the first time in its life, and on expiry
+the reader returned the prefix it had while the sweep's guard seeded from any non-empty prefix — and
+plan filenames are date-prefixed, so the prefix is the OLDEST files and the highest refs are exactly
+what gets truncated away. A truncated first seed on a fresh or reconstructed `coord.db` plants a low
+floor, `decideAllocation` then mints from `max(floor, maxLanded + 1)`, and the synchronous path never
+repairs it because the seed only runs on `not-seeded`. That is the bb47c9e reissue class. (2) A dir
+that would not list began skipping the whole project, where the old code fell through and still
+seeded from `specs/`.
+
+Fixed by making the policy an explicit, REQUIRED parameter — `SWEEP_POLICY` (skip, no budget) and
+`SEED_POLICY` (abort, bounded) — named at each call site. A default is precisely how one lane acquires
+another's policy without anyone deciding it should, which is why the parameter is not optional. The
+sweep lane now has two pins it never had; both reduce to `expected undefined to be 261` under the old
+behaviour.
+
+### D-1022 (measured while re-running the mutation table) — `complete` is the seed's guard; `abort` is only an early exit
+
+The two look interchangeable and only one is load-bearing. Making the reader TOLERANT on the seed lane
+(`onFailure` ignored, keep walking) reds NOTHING: `measureLedgerFloor` refuses on `!read.complete`, so
+the refusal still happens. Deleting that one `complete` check reds five. So `abort` saves work on a
+lane holding an HTTP request open, and `complete` is the safety. Recorded in `ledgerseed.ts` beside
+`SEED_POLICY`, because an optimisation pass that "simplified" `complete` away would leave `abort`
+behind looking like a guard it is not.
 
 ---
 
@@ -1933,6 +1992,50 @@ load flakes, per this repo's own arbitration rule.
 | 5.2 | Seed unconditionally, before `allocate()` | `ledger-routes` | 1 red: `a bad-count request walked the documents` |
 | 5.3 | Collapse the two 409 details into one | `ledger-routes` | 2 red |
 | 5.4 | Restore the old peer-protocol sentence | `coordinator-skill` | 1 red |
+
+### Mutation table, RE-RUN against the fixed tree with assertion text (review round 1, minor 2)
+
+The table above recorded counts where this plan's own mandate asked for "the EXACT failing assertion
+text". Re-run in full against the post-fix tree — which is also the honest thing to do, since the
+policy split changed what several of these mutations mean. Each was applied alone, its suite run, the
+first failing assertion captured, and the edit reverted.
+
+| Mutation | red | First failing assertion, verbatim |
+|---|---|---|
+| 1.1 collapse unreadable into absent | 3 | `AssertionError: expected 'absent' to be 'unmeasurable' // Object.is equality` |
+| 1.2 undefined configDir answers absent | 1 | `AssertionError: expected 'absent' to be 'unmeasurable' // Object.is equality` |
+| 1.3 wrong install-path join | 4 | `AssertionError: expected 'absent' to be 'unmeasurable' // Object.is equality` |
+| 2.1 delete the run_events row | 2 | `AssertionError: {"installed":true}: expected [ null ] to include 'skill-preflight:present'` |
+| 2.2 wrapper ?? '' instead of undefined | 1 | `AssertionError: the preflight asked the roster about a wrapper it never had: expected [ '' ] to deeply equal []` |
+| 2.3 drop skillState from the wire | 1 | `AssertionError: skillState never reached the wire: expected [ 'ok', 'id', 'sessionId', …(5) ] to include 'skillState'` |
+| 3.2 restore "two fields" | 1 | `AssertionError: the lead-in still promises two fields: expected '#### An `ok:true` dispatch is no long…' not to match /\btwo fields\b/` |
+| 3.4 delete the skill-preflight trail sentence | 1 | `AssertionError: the run-event detail for the preflight is undocumented: expected '# The wave lifecycle, in full Every c…' to contain 'skill-preflight:'` |
+| 4.2 delete the budget check | 1 | `AssertionError: expected true to be false // Object.is equality` |
+| 4.3 unnamed dir treated as a failure | 2 | `AssertionError: expected { ok: false, why: 'unmeasurable' } to deeply equal { ok: false, why: 'no-refs' }` |
+| 4.4 delete the project-segment guard | 1 | `AssertionError: an unsafe project name reached the filesystem: expected [ Array(1) ] to deeply equal []` |
+| 5.1 delete the inline seed | 2 | `AssertionError: expected 409 to be 201 // Object.is equality` |
+| 5.3 collapse the two 409 details | 1 | `AssertionError: expected 'no floor for fresh — it could not be …' to match /name no \|names no /i` |
+| 5.4 restore the old peer-protocol sentence | 1 | `AssertionError: peer-protocol.md still promises an hourly floor sweep: expected '# The peer protocol — discovery, clai…' not to match /hourly floor sweep has not yet/` |
+| R1 sweep uses SEED_POLICY | 2 | `AssertionError: expected undefined to be 261 // Object.is equality` |
+| R2 SWEEP_POLICY gains a budget | 2 | `AssertionError: expected [ { …(2) } ] to have a length of 3 but got 1` |
+| R3 SWEEP_POLICY aborts | 5 | `AssertionError: expected undefined to be 261 // Object.is equality` |
+| R4 unmeasurable bullet guidance inverted | 1 | `AssertionError: the unmeasurable bullet does not tell the coordinator to report it as an unknown: expected '**What to do with them.** On `adopted…' to match /say so as an unknown/i` |
+| R5 third unmeasurable cause removed | 1 | `AssertionError: the unmeasurable causes omit the session with no registry row: expected '#### An `ok:true` dispatch is no long…' to match /registry row\|no registry\|not in the …/i` |
+| R6 non-transition push restored | 1 | `AssertionError: expected [ 'run-1-dispatched', …(1) ] to deeply equal [ 'run-1-dispatched' ]` |
+| 3.1 DELETE the skillState table row (redone) | 1 | `AssertionError: the dispatch-response block omits skillState's 'present' answer: expected '#### An `ok:true` dispatch is no long…' to contain 'present'` |
+| S1 readLedgerDocs always reports complete:true | 2 | `AssertionError: expected true to be false // Object.is equality` |
+| S2 measureLedgerFloor ignores completeness | 5 | `AssertionError: expected 'no floor for fresh — its docs/superpo…' to match /could not be measured/i` |
+
+Two of the re-run's own mutations were WRONG and are recorded rather than hidden:
+
+- **`3.1` as first re-scripted renamed the row's key** (`skillState` -> `skillStateXX`) instead of
+  deleting the row. It reported 0 red — because `toContain('skillState')` is satisfied by
+  `skillStateXX`. Re-done as an actual deletion: 1 red, `the dispatch-response block omits
+  skillState's 'present' answer`. The original Task-3 measurement had deleted the row properly; only
+  this script's anchor was weak. A mutation that does not remove the thing proves nothing about the
+  pin.
+- **`4.1` (make the seed lane tolerant) reported 0 red, and that is a REAL result, not a bad anchor** —
+  it is what produced D-1022. The seed's fail-shut lives in `complete`, not in `abort`.
 
 ### The two survivors, and what was done about them
 

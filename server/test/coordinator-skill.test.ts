@@ -468,12 +468,31 @@ describe('the dispatch response documents that ok is not proof of a ready pane',
       .toMatch(/report it to the operator before you treat the wave as briefed/i);
     expect(guide, 'no operator guidance for skillState: unmeasurable')
       .toMatch(/`skillState: 'unmeasurable'`/);
+    // ...and its DO-half, not just its label. The absent bullet one line up has
+    // had two assertions from the start; this one shipped with only its
+    // backticked name, so a mutant that kept the label and INVERTED the
+    // guidance — sending the coordinator hunting for an install, or telling it
+    // to re-dispatch — stayed green (review round 1, minor 3).
+    expect(guide, 'the unmeasurable bullet does not tell the coordinator to report it as an unknown')
+      .toMatch(/say so as an unknown/i);
+    expect(guide, 'the unmeasurable bullet does not forbid re-dispatching on an unknown')
+      .toMatch(/do not re-dispatch/i);
 
     // The count sentence. Nothing else pins it, which is exactly why it became
     // a lie the moment a third field shipped (D-1014) — pinned both ways so
     // the NEXT field to land reds a suite instead of drifting.
     expect(block, 'the lead-in still promises two fields').not.toMatch(/\btwo fields\b/);
     expect(block, 'the lead-in does not say three fields').toMatch(/\bthree fields\b/);
+
+    // The causes of `unmeasurable` are enumerated, and the enumeration is
+    // COMPLETE. It shipped naming two — no config dir for that account, and a
+    // read that would not complete — and read as exhaustive, while the tree has
+    // a third: dispatch's resume arm tolerates a session absent from a listable
+    // registry, so there is no wrapper to map and no read is attempted at all.
+    // `shared/api.ts`'s own SkillState docstring names all three (review round
+    // 1, minor 4).
+    expect(block, 'the unmeasurable causes omit the session with no registry row')
+      .toMatch(/registry row|no registry|not in the registry/i);
 
     // The run-event trail, documented the way `adopted` documents its own.
     expect(flat(wl), 'the run-event detail for the preflight is undocumented')

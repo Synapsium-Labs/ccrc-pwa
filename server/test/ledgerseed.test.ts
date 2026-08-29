@@ -23,7 +23,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { localIO } from '../src/io.js';
 import type { FleetIO } from '../src/io.js';
 import {
-  isSafeProjectSegment, measureLedgerFloor, readLedgerDocs,
+  SEED_POLICY, SWEEP_POLICY, isSafeProjectSegment, measureLedgerFloor, readLedgerDocs,
 } from '../src/coord/ledgerseed.js';
 
 const REF = (n: number): string => `D-${n}`;
@@ -102,15 +102,20 @@ describe('measureLedgerFloor — the sweep measurement, standalone and bounded',
       .toEqual({ ok: false, why: 'unmeasurable' });
   });
 
-  it('answers unmeasurable when the budget expires mid-walk, and never seeds a partial scan', async () => {
-    // A wall-clock budget with an INJECTED clock, so this proves the bound
-    // without spending it (`inject/send.ts`'s CLEAR_BUDGET_MS idiom).
+  it('never seeds a partial scan when the budget expires mid-walk', async () => {
+    // `measureLedgerFloor` IS the seed lane, so SEED_POLICY is baked into it
+    // rather than passed — there is no policy parameter here to default. The
+    // budget itself is exercised one level down, against `readLedgerDocs`,
+    // where the policy is explicit; what this pins is that an incomplete read
+    // never becomes a floor.
     const f = fixture();
     for (const n of ['a', 'b', 'c']) f.plant('demo', 'plans', `${n}.md`, `### ${REF(211)} x`);
-    let t = 0;
-    const m = await measureLedgerFloor(
-      { ...f.deps, budgetMs: 5, now: () => (t += 10) }, 'demo');
-    expect(m).toEqual({ ok: false, why: 'unmeasurable' });
+    const io: FleetIO = {
+      ...localIO,
+      readFile: async (p: string) => (p.endsWith('c.md') ? null : localIO.readFile(p)),
+    };
+    expect(await measureLedgerFloor({ ...f.deps, io }, 'demo'))
+      .toEqual({ ok: false, why: 'unmeasurable' });
   });
 
   it('refuses a project segment that could walk out of projectsRoot, without touching the fs', async () => {
@@ -144,7 +149,7 @@ describe('readLedgerDocs — one reader, two policies', () => {
       ...localIO,
       readFile: async (p: string) => (p.endsWith('b.md') ? null : localIO.readFile(p)),
     };
-    const r = await readLedgerDocs({ ...f.deps, io }, 'demo', ['plans']);
+    const r = await readLedgerDocs({ ...f.deps, io }, 'demo', ['plans'], SEED_POLICY);
     // The watcher takes the files it got; the inline seed refuses. Neither
     // policy lives in here — the field is what lets each caller state its own.
     expect(r.files).toHaveLength(1);
@@ -157,7 +162,7 @@ describe('readLedgerDocs — one reader, two policies', () => {
     const f = fixture();
     f.plant('demo', 'plans', 'z.md', `### ${REF(300)} z`);
     f.plant('demo', 'plans', 'a.md', `### ${REF(300)} a`);
-    const r = await readLedgerDocs(f.deps, 'demo', ['plans']);
+    const r = await readLedgerDocs(f.deps, 'demo', ['plans'], SEED_POLICY);
     expect(r.files.map((x) => x.path)).toEqual([
       'docs/superpowers/plans/a.md', 'docs/superpowers/plans/z.md',
     ]);
@@ -167,8 +172,77 @@ describe('readLedgerDocs — one reader, two policies', () => {
     const f = fixture();
     f.plant('demo', 'plans', 'a.md', `### ${REF(211)} x`);
     f.plant('demo', 'plans', 'notes.txt', `### ${REF(9000)} not a plan`);
-    const r = await readLedgerDocs(f.deps, 'demo', ['plans']);
+    const r = await readLedgerDocs(f.deps, 'demo', ['plans'], SEED_POLICY);
     expect(r.files.map((x) => x.path)).toEqual(['docs/superpowers/plans/a.md']);
     expect(r.complete).toBe(true);
+  });
+});
+
+describe('the two lane policies, which are the point of the shared reader', () => {
+  it('SWEEP_POLICY skips a dir that will not list and keeps walking', async () => {
+    // The regression this split exists to prevent (D-1021): shipped once with
+    // abort-only semantics, the hourly sweep began skipping a whole project
+    // when its plans/ was unreachable, where it used to fall through to specs/.
+    const f = fixture();
+    f.plant('demo', 'plans', 'p.md', `### ${REF(100)} unreachable`);
+    f.plant('demo', 'specs', 's.md', `### ${REF(211)} reachable`);
+    const io: FleetIO = {
+      ...localIO,
+      readdir: async (p: string) => (p.endsWith(`${path.sep}plans`) ? null : localIO.readdir(p)),
+    };
+    const r = await readLedgerDocs({ ...f.deps, io }, 'demo', ['plans', 'specs'], SWEEP_POLICY);
+    expect(r.files.map((x) => x.path)).toEqual(['docs/superpowers/specs/s.md']);
+    // Still HONEST about the gap — the sweep chooses to proceed anyway; the
+    // reader never hides it.
+    expect(r.complete).toBe(false);
+  });
+
+  it('SWEEP_POLICY skips an unreadable file and keeps walking', async () => {
+    const f = fixture();
+    f.plant('demo', 'plans', 'a-high.md', `### ${REF(9000)} unreadable`);
+    f.plant('demo', 'plans', 'b-low.md', `### ${REF(211)} readable`);
+    const io: FleetIO = {
+      ...localIO,
+      readFile: async (p: string) => (p.endsWith('a-high.md') ? null : localIO.readFile(p)),
+    };
+    const r = await readLedgerDocs({ ...f.deps, io }, 'demo', ['plans'], SWEEP_POLICY);
+    expect(r.files.map((x) => x.path)).toEqual(['docs/superpowers/plans/b-low.md']);
+    expect(r.complete).toBe(false);
+  });
+
+  it('SWEEP_POLICY carries NO budget, so a slow clock never truncates the sweep', async () => {
+    // The other half of D-1021: a DEFAULT budget bounded the hourly sweep for
+    // the first time in its life, and on expiry the reader returned a PREFIX
+    // the sweep then seeded from. Plans sort by date, so the prefix is the
+    // OLDEST files and the highest refs are exactly what gets truncated away.
+    //
+    // MUTATION: give SWEEP_POLICY any numeric budgetMs and this reds.
+    const f = fixture();
+    for (const n of ['a', 'b', 'c']) f.plant('demo', 'plans', `${n}.md`, `### ${REF(211)} x`);
+    let t = 0;
+    const r = await readLedgerDocs(
+      { ...f.deps, now: () => (t += 10_000) }, 'demo', ['plans'], SWEEP_POLICY);
+    expect(r.files).toHaveLength(3);
+    expect(r.complete).toBe(true);
+  });
+
+  it('a budget truncates the walk, with an INJECTED clock so the bound is proven unspent', async () => {
+    // `inject/send.ts`'s CLEAR_BUDGET_MS idiom. Checked BETWEEN files, so it
+    // bounds the WALK, not one read.
+    const f = fixture();
+    for (const n of ['a', 'b', 'c']) f.plant('demo', 'plans', `${n}.md`, `### ${REF(211)} x`);
+    let t = 0;
+    const r = await readLedgerDocs(
+      { ...f.deps, now: () => (t += 10) }, 'demo', ['plans'], { onFailure: 'abort', budgetMs: 5 });
+    expect(r.complete).toBe(false);
+    expect(r.files.length).toBeLessThan(3);
+  });
+
+  it('SEED_POLICY is the opposite on both axes — abort, and bounded', () => {
+    // Stated as data so the asymmetry is visible in one place rather than
+    // inferred from two call sites.
+    expect(SWEEP_POLICY).toEqual({ onFailure: 'skip', budgetMs: null });
+    expect(SEED_POLICY.onFailure).toBe('abort');
+    expect(typeof SEED_POLICY.budgetMs).toBe('number');
   });
 });

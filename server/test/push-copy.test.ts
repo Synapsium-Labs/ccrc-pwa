@@ -891,6 +891,44 @@ describe('Task 10: the mail/run NotifyEvent lanes and the durable feed', () => {
       ]);
     });
 
+    it('never pushes or records a NON-transition row on a bound run', async () => {
+      // wave 2 review, minor 1. `recordRunEvent` writes a row whose fromState
+      // and toState are both the run's CURRENT state — the skill preflight is
+      // the first such caller on a run that already carries a sessionId. Its
+      // push would be titled and tagged off `toState` alone, so it arrived as a
+      // SECOND, byte-identical `dispatched` notification carrying none of the
+      // preflight fact that motivated the row. The tray collapses it by tag;
+      // the NotifyLog ring and the durable feed did not, and kept the duplicate
+      // forever.
+      //
+      // The row itself still lands in run_events — that trail is what the wave
+      // wanted. What is suppressed is only its NOTIFICATION, on the honest
+      // ground that a non-transition is not a transition.
+      const sent: PushPayload[] = [];
+      const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+      const log = new NotifyLog(path.join(await dir(), 'n.json'));
+      await log.load();
+      const w = watcher({ push, notifyLog: log, coord: true, sessions: ['ccrc-pwa/cc-a'] });
+      await w.tick();                  // priming
+
+      const run = w.coord!.openRun({
+        program: 'build7', title: 'Fleet coordination', project: 'ccrc-pwa',
+        wave: 1, waveOf: 3, claimedBy: 'ccrc-pwa-coordinator',
+      }) as { id: number };
+      w.coord!.setSession(run.id, 'cc-a');
+      w.coord!.advance(run.id, 'dispatched', 'coordinator');
+      w.coord!.recordRunEvent(run.id, 'coordinator', 'skill-preflight:absent');
+      await w.tick();
+
+      // ONE push and ONE record for the transition; the observational row is
+      // in the trail and nowhere else.
+      expect(sent.map((p) => p.tag)).toEqual([`run-${run.id}-dispatched`]);
+      expect(log.seq).toBe(1);
+      expect(w.coord!.feedEvents(10).map((e) => e.title)).toEqual(['▸ dispatched › ccrc-pwa']);
+      expect(w.coord!.runEvents(run.id).map((e) => e.detail))
+        .toContain('skill-preflight:absent');
+    });
+
     it('skips a transition with no session yet, but still advances past it', async () => {
       const sent: PushPayload[] = [];
       const push = { notify: async (p: PushPayload) => { sent.push(p); } };
