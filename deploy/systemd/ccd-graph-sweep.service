@@ -1,0 +1,8 @@
+[Unit]
+Description=Per-tree AST graph refresh sweep (graphify, spec 2026-08-27)
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/ccd-graph-sweep
+# budget 8 x 600s builds + probe overhead; a pass past this is wedged, not slow
+TimeoutStartSec=5400
+MemoryMax=4G

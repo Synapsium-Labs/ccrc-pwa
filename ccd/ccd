@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=c74145d9352a362b8aa6f45abc043c9f8610db69e41479dbdf50d7964b98a0c1
+# ccrc:generated 1 sha256=e2099ab3fced440f68f7fd0d2ae47d46dcb09df1bde945ddd523336985288e3e
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -3777,6 +3777,12 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
   local common; common=$(git -C "$main" rev-parse --path-format=absolute --git-common-dir)
   mkdir -p "$common/info"
   grep -qxF '.ccrc/' "$common/info/exclude" 2>/dev/null || echo '.ccrc/' >> "$common/info/exclude"
+  # Graph store + the sweep's ephemeral corpus filter (spec §D'/§E): excluded so
+  # `git worktree remove` collects the store WITH the tree (un-ignored, it wedges
+  # ws-rm/ws-reap/ws-gc — none pass --force), and so a SIGKILL-orphaned
+  # .graphifyignore can never make a workspace unremovable.
+  grep -qxF 'graphify-out/' "$common/info/exclude" 2>/dev/null || echo 'graphify-out/' >> "$common/info/exclude"
+  grep -qxF '.graphifyignore' "$common/info/exclude" 2>/dev/null || echo '.graphifyignore' >> "$common/info/exclude"
 
   local id="$project-$slug"
   local uuid; uuid=$(_plat_uuid)

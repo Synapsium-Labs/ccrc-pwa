@@ -117,12 +117,16 @@ function plantInstalledBox(home: string): void {
   writeFileSync(join(bin, 'ccd'), '#!/bin/sh\n# the installed ccd\n', { mode: 0o755 });
   writeFileSync(join(bin, 'ccrc'), '#!/bin/sh\n# the launcher\n', { mode: 0o755 });
   writeFileSync(join(bin, 'ccd-cap-scopes'), '#!/bin/sh\n# cap scopes\n', { mode: 0o755 });
+  // graphify Task 10/fix-round F2: the fourth `_inst_bins` executable.
+  writeFileSync(join(bin, 'ccd-graph-sweep'), '#!/bin/sh\n# graph sweep\n', { mode: 0o755 });
   // The units, both drop-in dirs and the slice escape (its literal \x2d name).
   const units = join(home, '.config', 'systemd', 'user');
   mkdirSync(join(units, 'claude-session@.service.d'), { recursive: true });
   mkdirSync(join(units, 'app-claude\\x2dsession.slice.d'), { recursive: true });
   for (const u of ['ccrc.service', 'ccrc-agent.service', 'claude-session@.service',
-    'ccd-cap-scopes.service', 'ccd-cap-scopes.timer']) {
+    'ccd-cap-scopes.service', 'ccd-cap-scopes.timer',
+    // graphify Task 10 (O3/O6b): the sweep pair, mirroring cap-scopes.
+    'ccd-graph-sweep.service', 'ccd-graph-sweep.timer']) {
     writeFileSync(join(units, u), `[Unit]\nDescription=fixture ${u}\n`);
   }
   writeFileSync(join(units, 'claude-session@.service.d', 'limits.conf'), '[Service]\n');
@@ -168,6 +172,9 @@ function plantInstalledBox(home: string): void {
   writeFileSync(join(reg, 'notify.sh'), '#!/bin/sh\n# notify\n', { mode: 0o755 });
   writeFileSync(join(reg, 'install-coordinator-skill.sh'), '#!/bin/sh\n', { mode: 0o755 });
   writeFileSync(join(reg, 'install-worker-skill.sh'), '#!/bin/sh\n', { mode: 0o755 });
+  // graphify Task 3: `_inst_graphify_skill` stages this beside the other two
+  // installers, the same lane `_uninst_cc_sessions` must remove it from.
+  writeFileSync(join(reg, 'install-graphify-skill.sh'), '#!/bin/sh\n', { mode: 0o755 });
   writeFileSync(join(reg, 'coordinator-skill', 'SKILL.md'), '# the coordinator skill\n');
   writeFileSync(join(reg, 'worker-skill', 'SKILL.md'), '# the worker skill\n');
   // Two account homes. claude2: one managed entry per event shape the
@@ -288,7 +295,9 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(r.code, r.stderr).toBe(0);
     const units = join(home, '.config', 'systemd', 'user');
     for (const u of ['ccrc.service', 'ccrc-agent.service', 'claude-session@.service',
-      'ccd-cap-scopes.service', 'ccd-cap-scopes.timer']) {
+      'ccd-cap-scopes.service', 'ccd-cap-scopes.timer',
+      // graphify Task 10 (O3/O6b): the sweep pair, mirroring cap-scopes.
+      'ccd-graph-sweep.service', 'ccd-graph-sweep.timer']) {
       expect(existsSync(join(units, u)), `${u} survived`).toBe(false);
     }
     expect(existsSync(join(units, 'claude-session@.service.d'))).toBe(false);
@@ -298,6 +307,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(calls).toContain('--user disable --now ccrc.service');
     expect(calls).toContain('--user disable --now ccrc-agent.service');
     expect(calls).toContain('--user disable --now ccd-cap-scopes.timer');
+    expect(calls).toContain('--user disable --now ccd-graph-sweep.timer');
     expect(calls[calls.length - 1]).toBe('--user daemon-reload');
     // The sacred rule holds even here: no claude-session@ instance is ever a
     // systemctl target, and tmux is never touched (poison would have fired).
@@ -393,7 +403,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     const r = runVerb(home, 'uninstall', ['--force']);
     expect(r.code, r.stderr).toBe(0);
     for (const f of ['session-hook.sh', 'install-session-hooks.sh', 'notify.sh',
-      'install-coordinator-skill.sh', 'install-worker-skill.sh',
+      'install-coordinator-skill.sh', 'install-worker-skill.sh', 'install-graphify-skill.sh',
       'coordinator-skill', 'worker-skill']) {
       expect(existsSync(join(home, '.cc-sessions', f)), `${f} survived`).toBe(false);
     }
@@ -402,13 +412,44 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     }
   });
 
+  it('graphify skills: skills/graphify is removed from every rostered home, while OTHER skills there survive', () => {
+    // `_uninst_graphify_skills` (graphify Task 3) — beside `_uninst_cc_sessions`
+    // in the sweep, but a DIFFERENT lane: the assembled skill lives one level
+    // down, in each rostered home's own `skills/graphify`, never under
+    // `~/.cc-sessions`. A dummy `skills/ccrc-worker` in the same directory is
+    // the proof the sweep is scoped to the one name, not a directory wipe.
+    const home = mkTmp('ccrc-uninst-graphify-skills-');
+    plantInstalledBox(home);
+    for (const acct of ['claude2', 'claude3']) {
+      const skills = join(home, `.claude-${acct}`, 'skills');
+      mkdirSync(join(skills, 'graphify', 'references'), { recursive: true });
+      writeFileSync(join(skills, 'graphify', 'SKILL.md'), '# the graphify skill\n');
+      writeFileSync(join(skills, 'graphify', '.graphify_version'), '0.9.9');
+      mkdirSync(join(skills, 'ccrc-worker'), { recursive: true });
+      writeFileSync(join(skills, 'ccrc-worker', 'SKILL.md'), '# the worker skill (dummy)\n');
+    }
+    const r = runVerb(home, 'uninstall');
+    expect(r.code, r.stderr).toBe(0);
+    for (const acct of ['claude2', 'claude3']) {
+      const skills = join(home, `.claude-${acct}`, 'skills');
+      expect(existsSync(join(skills, 'graphify')), `${acct}: graphify survived`).toBe(false);
+      expect(existsSync(join(skills, 'ccrc-worker', 'SKILL.md')),
+        `${acct}: an unrelated skill was swept too`).toBe(true);
+    }
+    expect(r.stdout).toMatch(/^uninstall: graphify skills: removed from 2 account home\(s\)/m);
+  });
+
   it('the tree and the executables go; ~/.ccrc, worktrees and backups are PRESERVED without --purge', () => {
     const home = mkTmp('ccrc-uninst-preserve-');
     plantInstalledBox(home);
     const r = runVerb(home, 'uninstall');
     expect(r.code, r.stderr).toBe(0);
     expect(existsSync(join(home, 'ccrc'))).toBe(false);
-    for (const b of ['ccd', 'ccrc', 'ccd-cap-scopes']) {
+    // graphify Task 10/fix-round F2: `ccd-graph-sweep` joins the set — an
+    // uninstall that removed its units (`_uninst_units`) and left the binary
+    // orphaned it on PATH forever, exactly the defect this test already
+    // existed to catch for the other three.
+    for (const b of ['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep']) {
       expect(existsSync(join(home, '.local', 'bin', b)), `${b} survived`).toBe(false);
     }
     // The preserve set, whole.
