@@ -40,6 +40,7 @@ import { readAiTitle } from './transcript/title.js';
 import { MAIL_REPLAY_CEILING_ERROR, toRunSummary, type CoordStore } from './coord/store.js';
 import { renderMailNudge } from './coord/envelope.js';
 import { configDirFor } from './config.js';
+import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
 
 const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:76 — see detectDialogs's own comment
 
@@ -90,6 +91,19 @@ const CLAIM_SWEEP_MS = 60_000;
  *  the signal a coordinator watches for. */
 const LEDGER_FLOOR_SWEEP_MS = 3_600_000;
 const LEDGER_RECONCILE_SWEEP_MS = 900_000;
+
+/** F3's lane. Ten minutes: slower than the divergence census because the
+ *  answer only changes when someone installs a skill or edits a token, and
+ *  faster than the ledger floor's hour because an operator waiting to start a
+ *  program is watching this one. EXPORTED so its own suite advances by the
+ *  real constant rather than a copy that can drift from it. */
+export const READINESS_SWEEP_MS = 600_000;
+
+/** The name the coord probe asks the store about. `isSafeProjectSegment`
+ *  REJECTS it (a leading space), so it can never collide with a real
+ *  project's `ledger_floor` row — the probe is a liveness question, not a
+ *  lookup, and must not be answerable by accident. */
+const READINESS_PROBE_PROJECT = ' readiness-probe';
 
 /** How far back the census weighs provenance pairs. One hour, not the whole
  *  table: a divergence the operator has already dealt with must stop being
@@ -351,6 +365,12 @@ export class FleetWatcher {
   /** The ledger lanes' clocks (build 9 wave 7, D13). */
   private lastLedgerFloor = 0;
   private lastLedgerReconcile = 0;
+  /** The readiness lane's clock and its cache (program-leverage wave 3, F3).
+   *  `undefined` until the first sweep lands — the same contract every other
+   *  `currentX()` on this class already has, and the route turns it into a
+   *  `readiness: null` on the wire rather than omitting the key. */
+  private lastReadinessSweep = 0;
+  private readiness: FleetReadiness | undefined;
   /** The stale set last reported, as JSON — one warn per CHANGING set, the
    *  `lastDivergenceJson` idiom, so a standing stale number is not a log
    *  line every 15 minutes forever. */
@@ -597,6 +617,16 @@ export class FleetWatcher {
    *  came back unreadable. Same reasoning as currentPending(). */
   currentCoord(): CoordStatus | null {
     return this.coord;
+  }
+
+  /** The last swept program-readiness (F3), for `GET /api/projects`.
+   *  `undefined` means THIS PROCESS HAS NEVER SWEPT — the same shape, and the
+   *  same reasoning, as `currentCoord()`'s `null` just above: inventing a
+   *  clean bill for a box nothing has looked at is worse than saying so. The
+   *  route publishes that as `readiness: null`, which is a different fact
+   *  again from a server too old to carry the field at all. */
+  currentReadiness(): FleetReadiness | undefined {
+    return this.readiness;
   }
 
   async tick(): Promise<void> {
@@ -848,6 +878,7 @@ export class FleetWatcher {
       // handful of io reads per PROJECT, on an hourly / 15-minute clock.
       void this.sweepLedgerFloor(records).catch(() => { /* one bad sweep must not kill the poll */ });
       void this.sweepLedgerReconcile().catch(() => { /* one bad sweep must not kill the poll */ });
+      void this.sweepReadiness().catch(() => { /* one bad sweep must not kill the poll */ });
       this.primed = true;
       if (this.deps.cfg.fleetMode === 'remote' && this.deps.fleetState?.connected) {
         // C0.4: `connected` alone is not "this read was complete" — a
@@ -1942,6 +1973,55 @@ export class FleetWatcher {
       if (scan === null) continue;      // no global D-ref anywhere: nothing to seed, fail shut
       store.raiseLedgerFloor(project, scan.floor, scan.evidence, now);
     }
+  }
+
+  /**
+   * F3: the program-ready preconditions, measured once per lane tick and
+   * cached for `GET /api/projects`.
+   *
+   * On this lane rather than on the route because of what it costs: two skill
+   * reads per rostered HOME plus the box token, and in remote fleet mode every
+   * one of those is an agent round trip with its own 15 s ceiling and no batch
+   * op to fold them into. A request-time measurement would put that on a route
+   * that today performs no fleet I/O at all.
+   *
+   * PUBLIC for the reason `sweepLedgerFloor` is: `tick()` dispatches it with
+   * `void`, so a test that awaits `tick()` has not awaited this.
+   */
+  async sweepReadiness(): Promise<void> {
+    const now = Date.now();
+    if (this.lastReadinessSweep !== 0 && now - this.lastReadinessSweep < READINESS_SWEEP_MS) return;
+    this.lastReadinessSweep = now;
+    const cfg = this.deps.cfg;
+    // `homeAble` only: an account with no HOME on this box cannot have a skill
+    // installed in one, so asking would manufacture an `unmeasurable` that
+    // says nothing about the fleet.
+    const homes = cfg.roster.homeAble.map((a) => ({
+      wrapper: a.id, configDir: configDirFor(cfg, a.id),
+    }));
+    this.readiness = await measureFleetReadiness({
+      io: this.deps.io,
+      homes,
+      mailTokenPath: cfg.mailTokenPath,
+      // A REAL read, not a null check: `deps.coord` being set proves a handle
+      // was constructed, not that it answers. `ledgerFloor` on a name no
+      // project can have is the cheapest statement that exercises the path —
+      // `null` on a healthy store, a throw on a sick one — which is exactly
+      // the distinction `degraded` carries. `emitRuns` and the socket cold
+      // start both learn this same fact and drop it on the floor; this is
+      // where it gets recorded.
+      coordProbe: () => {
+        const store = this.deps.coord;
+        if (!store) return 'not-configured';
+        try {
+          store.ledgerFloor(READINESS_PROBE_PROJECT);
+          return 'available';
+        } catch {
+          return 'degraded';
+        }
+      },
+      now: () => now,
+    });
   }
 
   /**
