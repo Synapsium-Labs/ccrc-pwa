@@ -14,7 +14,7 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
 | # | scope | PRs | state |
 |---|---|---|---|
 | 1 | F1 — drift fixes (ungated-door count, coordinator trigger/resume wording, stale `_id()` anchor) + the coordinator-resume runbook (`references/resume.md`). AGENT-FIRST deploy. | run 10, PR #28 (merged `f5dfd2d9`) | done 2026-08-28 18:08 UTC — CI 5/5 green on `8135118b`, deployed both boxes agent-first, `/health` and fleet `ccd` both report `f5dfd2d9` |
-| 2 | F2 — dispatch-time `skillState` preflight (measure, never refuse) + synchronous deviation-floor seed on first allocation | run 12 | dispatched 2026-08-28 ~18:10 UTC — same workspace reclaimed (`resumed:true`, `clearedAt` verified, `briefQueued:true`) |
+| 2 | F2 — dispatch-time `skillState` preflight (measure, never refuse) + synchronous deviation-floor seed on first allocation | run 12, PR #30 | fix round 2026-08-29 ~09:45 UTC — wave-done `e0949f86` verified, items 4/4, review 18 agents: 1 major cluster (sweep lane) + 5 minors, 0 blocking, 1 refuted; findings mail 101, run back in `working` |
 | 3 | F3 — per-project program-ready badge (server measurement + /runs board) | — | planned |
 | 4 | F4 — program kickoff rides the idle-gated mail lane (`queueSystemMail`), direct-injection race retired | — | planned |
 | 5 | F5 — `POST /api/runs/:id/reclaim` (4th ungated door, dead-proof) + PWA resume affordance; door count → four | — | planned |
@@ -90,6 +90,38 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
   F7 (health surfacing): "open run, worker idle, no outstanding mail, no commits for N minutes"
   is a detectable wedge shape, and a usage-limit pause + cancelled auto-continue is one of its
   real causes — F7's un-briefed-coordinator detector should generalise to a stalled-worker row.
+
+- **Wave 2 verdict (2026-08-29 ~09:45 UTC):** wave-done fingerprint `e0949f86` (PR #30, CI 5/5)
+  verified by the server (dispatched→working→awaiting-review), items settled 4/4. Review: six
+  lenses + adversarial verification, 18 agents; all 12 touched suites re-run live in a scratch
+  worktree (375/375 green, `ledger-sweep.test.ts` zero-diff confirmed); the three headline guards
+  re-measured red by mutation, including the spec-required preflight-deletion red. Worker
+  adjudications D-1013 (own run_events row), D-1015 (configDir as consumer-declared port — the
+  spec's "livestate.ts owns the derivation" was wrong) and D-1016 (no-refs 409 is pre-existing
+  deliberate fail-shut) all UPHELD. Verdict: **one major cluster + 5 minors, 0 blocking, 1
+  refuted** → fix round (mail 101), run back in `working`, fix-round deviations from D-1020.
+  The major (three lenses independently): the ledgerseed lift changed the HOURLY SWEEP's
+  behaviour despite D-1018's "left exactly as it was" — the sweep silently inherited the 10s
+  request budget (seeds from a truncated prefix; date-sorted names put max-ref files last, so a
+  truncated FIRST seed plants a low floor the synchronous path never repairs → bb47c9e reissue
+  class) and abort-replaced-skip on partial failures (an unlistable `plans/` now skips the
+  project where old code seeded from `specs/`); `ledger-sweep.test.ts` "passes unedited" was
+  true but vacuous (no partial-failure/budget fixture). Ruling: per-lane policy — sweep lanes
+  get skip-and-continue + no budget (making D-1018 true again), allocator seed keeps
+  abort+budget+fail-shut, shipped with a sweep-lane partial-failure fixture measured red.
+  Minors: stale `recordRunEvent` docstring + duplicate dispatched feed/ring record; 14/19
+  mutation rows below the plan's own exact-assertion bar; unmeasurable bullet pinned by label
+  without its DO-half; `wave-lifecycle.md:77` omits the third unmeasurable cause (resume arm,
+  no registry row); orphaned `watch.ts:1899-1913` docstring asserting the refuted 50-gap bound.
+- **D-1012 re-measured (2026-08-29, review refuted-as-of-now):** origin NOW carries
+  `ws/ccrc-with-graphify-integration` at `92bf6b76` (pushed 21:16 UTC 2026-08-28, after wave 2's
+  tip; `docs/scope-throttle-visible` is gone). D-1012 stands as a correct timestamped
+  measurement — not rewritten. Fold adjacency re-measured read-only: merge-tree of the two tips
+  shares only `server/test/single-definition.test.ts`, which auto-merges cleanly; graphify does
+  not touch `shared/api.ts` (its shared change is `shared/lifecycle.ts`); its three conflicts vs
+  main (`ccd/ccd`, `ccd/ccrc`, `server/test/ccrc-install.test.ts`) are its own rebase debt in
+  files wave 2 never touches. Standing lesson kept: verify a sibling lane's presence on origin
+  with `ls-remote`, never `git branch -r` (~30 stale remote refs in this clone).
 
 ## Carried constraints
 
