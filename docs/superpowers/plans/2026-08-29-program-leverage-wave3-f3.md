@@ -1461,9 +1461,21 @@ so a later caller can widen it without a second join.
 ### D-1028 (drift found while picking the seam) — the projects wire shape had no single definition
 
 `listProjects`'s row type was declared inline at `lifecycle.ts:125-128` and again as a local
-`interface Project` at `StartProgramSheet.tsx:50`. Adding `readiness` to two hand-kept copies is how a
-field ends up meaning two things; `ProjectRow` in `shared/api.ts` is now the one definition and both
-sides import it.
+`interface Project` at `StartProgramSheet.tsx:50`. Adding `readiness` to hand-kept copies is how a
+field ends up meaning two things; `ProjectRow` in `shared/api.ts` is now the one definition and every
+side imports it.
+
+**This entry was WRONG when first written, and the correction is the interesting half.** It claimed
+"both sides", and there were THREE: `pwa/src/lib/api.ts`'s `getJson<{roots, projects: {name,
+workdir}[]}>` generic — sitting two lines under a comment that says *"a field added in Stage 2a is
+exactly the kind of addition that lands in two of three copies. The generic is the contract now."*
+`readiness` was precisely that field. Nothing failed, because the twin still typechecks: `readiness`
+is optional, so the narrower type is assignable and the runtime JSON carries the field regardless —
+the declared contract simply went on denying a field the server had already started sending. Found in
+self-review with the PR already open, not by any test, which is why `single-definition.test.ts` now
+scans the four roots for an inline twin of the row and requires zero holders (measured: restoring the
+twin reds it, `an inline twin of the projects row — import ProjectRow from shared/api instead:
+expected [ 'pwa/src/lib/api.ts' ] to deeply equal []`).
 
 ### D-1029 (drift in the brief, re-measured) — the graphify tip has moved
 
