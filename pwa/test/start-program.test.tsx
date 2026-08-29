@@ -33,7 +33,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
-import type { CoordStatus, FleetSession } from '../../shared/api';
+import type { CoordStatus, FleetSession, ProjectReadiness } from '../../shared/api';
 import { StartProgramSheet, kickoff, startedSessionFor, START_PROGRAM_WAIT_MS } from '../src/fleet/StartProgramSheet';
 import { ApiError, api } from '../src/lib/api';
 import { ToastHost } from '../src/components/Toast';
@@ -1180,5 +1180,70 @@ describe('StartProgramSheet', () => {
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 
     expect(location.pathname).toBe(before);
+  });
+});
+
+// program-leverage wave 3 (F3): the program-ready badge.
+//
+// It renders HERE, and only here, because this is the one surface that is
+// genuinely project-keyed — the /runs board itself groups by PROGRAM slug and
+// nothing constrains a program's runs to one project, so a badge on a group
+// header would be a program wearing a project's answer (operator ruling,
+// 2026-08-29). This is also the moment the answer is worth anything: the
+// operator is choosing a project to start a program on.
+describe('the program-ready badge', () => {
+  const READY: ProjectReadiness = {
+    worker: 'present', coordinator: 'present', floor: 'seeded',
+    boxToken: 'configured', coordDb: 'available', verdict: 'ready', at: 1,
+  };
+
+  const withReadiness = (over: Partial<ProjectReadiness> = {}) =>
+    ({ roots: [], projects: [{ ...proj(), readiness: { ...READY, ...over } }] });
+
+  const openSheet = (loadProjects: () => Promise<unknown>) => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    render(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+      loadProjects={loadProjects as never} />);
+  };
+
+  it('renders program-ready with a word AND a glyph, never colour alone', async () => {
+    openSheet(async () => withReadiness());
+    expect(await screen.findByText(/program-ready/)).toBeTruthy();
+    const badge = document.querySelector('.proj-ready[data-verdict="ready"]');
+    expect(badge).toBeTruthy();
+    // The two-cue rule: the glyph is in the text, not carried by colour.
+    expect(badge?.textContent).toMatch(/\S/);
+  });
+
+  it('names the missing preconditions when blocked', async () => {
+    openSheet(async () => withReadiness({ worker: 'absent', verdict: 'blocked' }));
+    const badge = await screen.findByText(/not ready/);
+    expect(badge.getAttribute('title')).toContain('not installed');
+  });
+
+  it('says unknown — NOT "not ready" — when a precondition could not be measured', async () => {
+    // The whole point of the feature: absence of evidence is not evidence of
+    // absence, and the operator must be able to tell the two apart.
+    openSheet(async () => withReadiness({ floor: 'unmeasurable', verdict: 'unknown' }));
+    expect(await screen.findByText(/readiness unknown/)).toBeTruthy();
+    expect(screen.queryByText(/not ready/)).toBeNull();
+    const badge = document.querySelector('.proj-ready[data-verdict="unknown"]');
+    expect(badge?.getAttribute('title')).toContain('could not be measured');
+  });
+
+  it('an OLDER SERVER omitting the key renders NO badge and no broken row', async () => {
+    openSheet(async () => ({ roots: [], projects: [proj()] }));
+    expect(await screen.findByText('ccrc-pwa')).toBeTruthy();
+    expect(document.querySelector('.proj-ready')).toBeNull();
+  });
+
+  it('readiness: null renders the pending arm — a DIFFERENT arm from the absent key', async () => {
+    // `null` is "this server measures readiness and has not swept yet"; an
+    // absent key is "this server does not measure it at all". A reader that
+    // folds them together throws away the difference between "wait a moment"
+    // and "upgrade the server".
+    openSheet(async () => ({ roots: [], projects: [{ ...proj(), readiness: null }] }));
+    await screen.findByText('ccrc-pwa');
+    expect(document.querySelector('.proj-ready[data-verdict="pending"]')).toBeTruthy();
   });
 });

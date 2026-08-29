@@ -562,7 +562,7 @@
 }
 .proj-row {
   display: grid;
-  grid-template-columns: 14px 1fr;
+  grid-template-columns: 14px 1fr auto;
   column-gap: var(--sp-2);
   row-gap: 2px;
   align-items: center;
@@ -594,6 +594,24 @@
   color: var(--ink-primary);
   overflow-wrap: anywhere;
 }
+/* F3 — the program-ready badge. Scoped under `.sheet-panel`, which PAINTS
+ * (`background: var(--bg-raised)`): `.proj-row` itself is `background: none`,
+ * so scoping there would leave the auditor unable to resolve a ground and the
+ * rule would land in its UNCOVERED census. Explicitly placed in column 3
+ * spanning both rows so the name/dir auto-placement above is untouched.
+ * Inert by contract — no glow, no animation, no box-shadow. */
+.sheet-panel .proj-ready {
+  grid-column: 3;
+  grid-row: 1 / span 2;
+  justify-self: end;
+  align-self: center;
+  font: var(--weight-regular) var(--text-2xs) / var(--leading-tight) var(--font-mono);
+  color: var(--ink-tertiary);
+  white-space: nowrap;
+}
+.sheet-panel .proj-ready[data-verdict='ready'] { color: var(--status-busy-text); }
+.sheet-panel .proj-ready[data-verdict='blocked'] { color: var(--status-dead-text); }
+
 .proj-dir {
   font: var(--weight-regular) var(--text-2xs) / var(--leading-tight) var(--font-mono);
   color: var(--ink-tertiary);

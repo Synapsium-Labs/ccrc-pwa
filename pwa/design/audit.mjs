@@ -529,6 +529,18 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-surface)'],
     why: 'the spawn chip is a .sess-meta cell on an unselected .sess-line, whose ground is the project card. Its selector names no ancestor, so no route could ground it — without this entry it joins .sess-held/.sess-lifecycle in the uncovered census, which is exactly where the last unmeasured meta cell was shipping below AA. The SELECTED row is answered by the achromatic group (--edge-strong), pinned separately in fleet-css.test.ts',
   },
+  'fleet.css .sheet-panel .proj-ready': {
+    under: ['var(--bg-sheet)'],
+    why: "the program-ready badge (F3) on a project row inside the start-a-program sheet. Its selector DOES name an ancestor — .sheet-panel — but that painter lives in components/primitives.css, and the descendant route only grounds against painters in the same stylesheet, so scoping it was not enough: all three of its rules were measured at nothing. Confirmed by running audit() before this entry existed, which is the only reason it is here rather than in the uncovered census looking scoped-and-safe",
+  },
+  "fleet.css .sheet-panel .proj-ready[data-verdict='ready']": {
+    under: ['var(--bg-sheet)'],
+    why: 'the green arm of the same badge. Registered separately for the reason the .auth-block-sub entry states: grounding only the base rule would leave HALF the badge measured, and the report would then LOOK covered while the two rules that actually carry colour went unmeasured. The SELECTED row (.proj-row--selected, background: var(--accent-tint)) is a different ground and is not claimed here',
+  },
+  "fleet.css .sheet-panel .proj-ready[data-verdict='blocked']": {
+    under: ['var(--bg-sheet)'],
+    why: 'the red arm of the same badge, same reasoning as the ready arm above. --status-dead-text is the ink the board already uses for a proven-bad state',
+  },
   'fleet.css .auth-block-title': {
     under: ['var(--bg-surface)'],
     why: 'the heading of the .auth-block card two rules up in the same stylesheet, which sets background: var(--bg-surface). Its selector names no ancestor, so no route could ground it — and fleet.css claimed in a comment that "every child\'s ink pair is already vetted" against that ground while nothing measured it. Same shape as .sess-spawn below',
