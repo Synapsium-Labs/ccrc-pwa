@@ -2849,9 +2849,14 @@ _check_graphify() {
         # 3x the timer's own interval (deploy/systemd/ccd-graph-sweep.timer,
         # OnUnitActiveSec=15min) — one missed run is ordinary jitter under
         # load, three in a row means the timer itself has stopped firing.
+        # The census is rewritten atomically at the end of EVERY pass, so the
+        # FILE's mtime is the last pass's finish — measured through the
+        # `_plat_mtime` shim rather than parsing the JSON's ISO stamp, because
+        # GNU `date -d` has no Darwin arm (`_plat_date_to_epoch` parses cert
+        # dates only) and the macos-platform guard forbids the bare call.
         local now_s fin_s
         if [ -n "$finished" ] && now_s="$(date +%s 2>/dev/null)" \
-           && fin_s="$(date -d "$finished" +%s 2>/dev/null)"; then
+           && fin_s="$(_plat_mtime "$census" 2>/dev/null)"; then
           local age=$(( now_s - fin_s ))
           if [ "$age" -gt 2700 ]; then
             gfx_census_warn+=("the last graph-sweep pass finished $((age / 60)) minutes ago — the timer may not be firing")

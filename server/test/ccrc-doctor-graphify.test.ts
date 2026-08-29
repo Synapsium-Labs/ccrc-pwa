@@ -39,8 +39,7 @@
 import { describe, it, expect } from 'vitest';
 import { spawnSync, execFileSync } from 'node:child_process';
 import {
-  writeFileSync, mkdirSync, symlinkSync, rmSync,
-} from 'node:fs';
+  writeFileSync, mkdirSync, symlinkSync, rmSync, utimesSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
@@ -211,6 +210,9 @@ function healthy(prefix: string): string {
   linkReal(home, 'jq');
   linkReal(home, 'realpath');
   linkReal(home, 'date');
+  // `_plat_mtime` (the census-staleness probe) shells `stat` — real-linked for
+  // `date`'s reason: its parsing is not this suite's subject.
+  linkReal(home, 'stat');
   stubDf(home);
   seedGraphifyAccountsSh(home);
   return home;
@@ -333,9 +335,16 @@ describe('ccrc doctor: graphify', () => {
   it('WARNs when the last pass finished long enough ago that the timer looks stopped', () => {
     const home = healthy('ccrc-doctor-gfx-census-stale-'); graphifyHealthy(home);
     // 60 minutes ago — over 3x the sweep timer's 15-minute interval (45 min).
+    // The check reads the census FILE's mtime (the sweep rewrites it atomically
+    // at the end of every pass), not the JSON's ISO stamp — GNU `date -d` has
+    // no Darwin arm, and the macos-platform guard forbids the bare call. So
+    // the fixture ages the FILE, exactly what a stopped timer leaves behind.
     const old = new Date(Date.now() - 60 * 60_000).toISOString();
-    writeFileSync(join(home, '.ccrc', 'graph-sweep.json'), JSON.stringify({ passes: [{
+    const census = join(home, '.ccrc', 'graph-sweep.json');
+    writeFileSync(census, JSON.stringify({ passes: [{
       started: old, finished: old, pin: '0.9.9', status: 'ok', trees: [] }] }));
+    const oldSecs = Date.now() / 1000 - 3600;
+    utimesSync(census, oldSecs, oldSecs);
     const line = lineFor(runDoctor(home).stdout, 'graphify');
     expect(line).toMatch(/^WARN graphify:/);
   });
