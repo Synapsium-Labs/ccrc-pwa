@@ -594,6 +594,17 @@ describe('the program-ready badge is not a living pane', () => {
     }
   });
 
+  it('the project row does not re-flow when the badge is absent', () => {
+    // The badge added a third grid column, and it is NOT always rendered: a
+    // server too old to send `readiness` renders no span at all. With column 3
+    // empty, auto-placement would put .proj-dir at row 1 column 3 — beside the
+    // name instead of under it — on exactly those servers. Both cells are
+    // therefore pinned to column 2 explicitly, and the badge to column 3.
+    expect(norm(stripComments(ruleIn(css, '.proj-name')))).toContain('grid-column: 2');
+    expect(norm(stripComments(ruleIn(css, '.proj-dir')))).toContain('grid-column: 2');
+    expect(norm(stripComments(ruleIn(css, '.sheet-panel .proj-ready')))).toContain('grid-column: 3');
+  });
+
   it('carries a word, not colour alone — the variants only RESTATE a data-verdict the markup already sets', () => {
     // The two-cue rule lives in the component (glyph + word in the span's own
     // text); what CSS must not do is become the only carrier. Both coloured

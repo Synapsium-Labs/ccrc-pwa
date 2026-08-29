@@ -1485,6 +1485,22 @@ both lanes touch is `server/test/single-definition.test.ts`, where graphify appe
 wave's pin goes mid-file inside the existing Build 8 describe and the merge stays clean by
 construction.
 
+### D-1033 (defect I shipped, found in self-review with the PR open) — the badge's third grid column re-flowed the row when the badge was absent
+
+`.proj-row` was `grid-template-columns: 14px 1fr`, with `.proj-name` and `.proj-dir` AUTO-PLACED into
+column 2 on successive rows. Widening the track to `14px 1fr auto` for the badge broke that in the one
+case the badge is not rendered — a server too old to send `readiness` renders no span at all, leaving
+column 3 empty, so auto-placement puts `.proj-dir` at row 1 column 3, beside the name instead of under
+it. Every test stayed green: jsdom does not lay out a grid, and the three PWA suites assert on classes
+and text, not geometry.
+
+Fixed by pinning `.proj-name` and `.proj-dir` to `grid-column: 2` explicitly, so the layout no longer
+depends on whether a conditional child rendered, and pinned by a `fleet-css` assertion over all three
+columns (measured: removing `.proj-dir`'s pin reds it, `expected 'font: var(--weight-regular)var(--text…'
+to contain 'grid-column: 2'`). The general lesson, and the reason this is a deviation rather than a
+quiet fix: **a conditionally-rendered grid child changes the placement of its siblings**, and no suite
+in this repo can see it.
+
 ### D-1030 (defect I nearly shipped, found by mutation) — scoping under a painter in ANOTHER stylesheet grounds nothing
 
 This plan's Task 6 said to scope the badge under a painter so the contrast auditor could resolve its
@@ -1539,7 +1555,7 @@ gate that only the full run reaches.
   reference documents this field.
 - **D-1026 changes the shape the operator approved** (`ready: false` became a three-valued
   `verdict`). Called out here so the ledger carries it.
-- Deviations consumed: **D-1023..D-1032**. Block `D-999..1046`; `1033+` free after this wave.
+- Deviations consumed: **D-1023..D-1033**. Block `D-999..1046`; `1034+` free after this wave.
 
 ## Self-review
 
@@ -1646,6 +1662,6 @@ green file.
 
 ### Deviations consumed
 
-**D-1023 .. D-1032.** All ten are defined above; none was invented, and the block (`D-999..1046`, this
+**D-1023 .. D-1033.** All eleven are defined above; none was invented, and the block (`D-999..1046`, this
 program's) is not exceeded. `deviation-refs` measures the tracked-tree maximum and the plan-defined
-maximum as equal at **D-1032**.
+maximum as equal at **D-1033**.

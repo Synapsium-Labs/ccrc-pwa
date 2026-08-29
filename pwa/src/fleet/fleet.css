@@ -590,15 +590,24 @@
   color: var(--accent);
 }
 .proj-name {
+  /* EXPLICIT column, not auto-placement (F3). The track gained a third column
+   * for the readiness badge, and the badge is not always rendered — a server
+   * too old to send `readiness` renders no span at all. With nothing occupying
+   * column 3, auto-placement would put `.proj-dir` at row 1 column 3, beside
+   * the name instead of under it, on exactly those servers. Pinning both to
+   * column 2 makes the layout independent of whether the badge is there. */
+  grid-column: 2;
   font: var(--weight-medium) var(--text-sm) / var(--leading-tight) var(--font-mono);
   color: var(--ink-primary);
   overflow-wrap: anywhere;
 }
-/* F3 — the program-ready badge. Scoped under `.sheet-panel`, which PAINTS
- * (`background: var(--bg-raised)`): `.proj-row` itself is `background: none`,
- * so scoping there would leave the auditor unable to resolve a ground and the
- * rule would land in its UNCOVERED census. Explicitly placed in column 3
- * spanning both rows so the name/dir auto-placement above is untouched.
+/* F3 — the program-ready badge. `.proj-row` is `background: none`, so its
+ * ground comes from `.sheet-panel` (`background: var(--bg-sheet)`, in
+ * components/primitives.css). Scoping alone does NOT ground it for the
+ * auditor — that painter is in a different stylesheet, and the descendant
+ * route only resolves same-stylesheet painters, so all three rules sat in the
+ * uncovered census until three INHERITED_GROUNDS entries were added (D-1030,
+ * measured both ways). Explicitly placed in column 3 spanning both rows.
  * Inert by contract — no glow, no animation, no box-shadow. */
 .sheet-panel .proj-ready {
   grid-column: 3;
@@ -613,6 +622,7 @@
 .sheet-panel .proj-ready[data-verdict='blocked'] { color: var(--status-dead-text); }
 
 .proj-dir {
+  grid-column: 2;   /* see .proj-name above */
   font: var(--weight-regular) var(--text-2xs) / var(--leading-tight) var(--font-mono);
   color: var(--ink-tertiary);
   overflow-wrap: anywhere;
