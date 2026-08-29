@@ -1737,11 +1737,12 @@ describe('ccrc install: the executables and files it installs', () => {
       // place it on macOS — a binary that could only ever be a no-op there.
       // Listing it unconditionally would make this test stat a file the verb
       // was right not to install.
+      // graphify Task 10: the sweep rides the same darwin carve-out — its
+      // systemd timer never installs there, and the script needs GNU stat/date
+      // and flock(1), which macOS does not ship.
       ...(process.platform === 'darwin'
-        ? [] : [join(home, '.local', 'bin', 'ccd-cap-scopes')]),
-      // graphify Task 10: staged through the same `_inst_atomic`, on EVERY OS —
-      // the sweep is bash, not cgroup-bound, so no darwin carve-out.
-      join(home, '.local', 'bin', 'ccd-graph-sweep'),
+        ? [] : [join(home, '.local', 'bin', 'ccd-cap-scopes'),
+                join(home, '.local', 'bin', 'ccd-graph-sweep')]),
       join(home, '.local', 'bin', 'ccrc'),
       join(home, '.cc-sessions', 'session-hook.sh'),
       join(home, '.cc-sessions', 'install-session-hooks.sh'),
@@ -2671,7 +2672,7 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
     expect(readdirSync(join(home, '.local', 'bin'))
       .filter((b) => !FIXTURE_BINS.includes(b)).sort())
       .toEqual(process.platform === 'darwin'
-        ? ['ccd', 'ccd-graph-sweep', 'ccrc']   // no cap-scopes: it caps cgroup scopes
+        ? ['ccd', 'ccrc']   // no cap-scopes (cgroup-bound) and no graph-sweep (systemd-timer-bound)
         : ['ccd', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccrc']);
   });
 
@@ -3093,11 +3094,12 @@ describe('ccrc install: running the WHOLE verb twice', () => {
       // place it on macOS — a binary that could only ever be a no-op there.
       // Listing it unconditionally would make this test stat a file the verb
       // was right not to install.
+      // graphify Task 10: the sweep rides the same darwin carve-out — its
+      // systemd timer never installs there, and the script needs GNU stat/date
+      // and flock(1), which macOS does not ship.
       ...(process.platform === 'darwin'
-        ? [] : [join(home, '.local', 'bin', 'ccd-cap-scopes')]),
-      // graphify Task 10: staged through the same `_inst_atomic`, on EVERY OS —
-      // the sweep is bash, not cgroup-bound, so no darwin carve-out.
-      join(home, '.local', 'bin', 'ccd-graph-sweep'),
+        ? [] : [join(home, '.local', 'bin', 'ccd-cap-scopes'),
+                join(home, '.local', 'bin', 'ccd-graph-sweep')]),
       join(home, '.local', 'bin', 'ccrc'),
       join(home, '.cc-sessions', 'session-hook.sh'),
       join(home, '.cc-sessions', 'install-session-hooks.sh'),

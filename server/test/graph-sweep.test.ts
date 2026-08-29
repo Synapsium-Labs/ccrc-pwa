@@ -4,6 +4,13 @@ import fs from 'node:fs'; import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 import { seedAccountsSh } from './ccdWsHelpers.js';
 
+// The sweep is linux-only by product shape (its systemd timer never installs
+// on the Darwin arm) and by userland (GNU stat/date, flock(1)) — the same
+// carve-out `ccd-cap-scopes` has. On macOS this whole file skips; measured on
+// the macos CI leg: BSD userland aborts every pass and all outcomes read
+// undefined.
+beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+
 const SWEEP = path.resolve(__dirname, '../../ccd/ccd-graph-sweep');
 let home: string;
 const j = (...p: string[]) => path.join(home, ...p);

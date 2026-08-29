@@ -232,6 +232,100 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
     'esac',
     'echo "fixture systemctl: unexpected argv: $*" >&2; exit 90',
   ].join('\n'));
+  // Darwin stubs, copied verbatim from ccrc-install.test.ts's ccrcEnv (the
+  // macos lane landed on main after this suite forked the helper; without
+  // these the install dies at _inst_enable_darwin's launchctl bootstrap
+  // BEFORE the graphify steps this suite exists to test — measured on the
+  // macos CI leg, 7 failures all downstream of that one death).
+  // ── systemctl and loginctl: RECORDERS, not poisons (Task 8) ─────────────
+  // Both were plain refusals until this task, and both had to change on the
+  // same day for the same reason: `ccrc install` now DRIVES them
+  // (`_inst_enable` reloads and enables two units, `_inst_linger` enables
+  // linger), so a stub that can only exit 97 makes every install fail at step
+  // 9 and no assertion below could ever measure the units.
+  //
+  // The containment is unchanged and is the point: neither stub ever execs the
+  // real binary, so this box's systemd and logind are as unreachable as they
+  // were behind the refusal. What changed is that they now ANSWER the shapes
+  // ccrc asks — and, per `ccrc-doctor.test.ts`'s stub discipline, exit 90 on
+  // any argv they do not recognise, so a step that started mutating a unit
+  // nobody authorised is a loud failure rather than a silent success.
+  //
+  // Every call is recorded with WHAT WAS ON DISK when it arrived: the argv,
+  // then a tab, then every file under `~/.config/systemd/user`. That second
+  // field is what makes "the enables run after every unit file landed" a
+  // measurement instead of a hope — the assertion reads the daemon-reload
+  // line's own snapshot rather than inferring order from a later `ls`.
+  // ── THE LAUNCHD FIXTURE, systemctl's counterpart ────────────────────────
+  // Same discipline, same containment: every argv recorded, every shape ccrc
+  // asks answered, exit 90 on anything else so a step that started driving a
+  // job nobody authorised is loud rather than silently green.
+  //
+  // IT MATTERS MORE HERE THAN IT DOES FOR systemctl. `$HOME` isolates every
+  // other path this suite touches; launchctl ignores it. Without this stub on
+  // PATH the platform layer's own guard refuses the call (correctly — that is
+  // what stops a test run from registering jobs in the developer's real
+  // session), and `_inst_enable`'s Darwin arm then dies by design.
+  plant('launchctl', [
+    '#!/bin/sh',
+    'have=',
+    'for f in "$HOME/Library/LaunchAgents"/*; do',
+    '  [ -e "$f" ] || continue',
+    '  have="$have${have:+,}${f##*/LaunchAgents/}"',
+    'done',
+    'printf \'%s\\t%s\\n\' "$*" "$have" >> "$HOME/launchctl-calls"',
+    'case "$1" in',
+    // bootstrap takes a DOMAIN and a plist path; the file must exist, which is
+    // the fixture's stand-in for launchd parsing it.
+    '  bootstrap)',
+    '    [ -n "$2" ] && [ -f "$3" ] || { echo "fixture launchctl: bootstrap: no such job file: $3" >&2; exit 1; }',
+    '    if [ -f "$HOME/fixture-bootstrap-fail" ]; then',
+    '      echo "Bootstrap failed: fixture" >&2; exit 1',
+    '    fi',
+    '    printf \'%s\\n\' "${3##*/LaunchAgents/}" >> "$HOME/launchctl-loaded"',
+    '    exit 0 ;;',
+    '  bootout)',
+    '    [ -n "$2" ] || { echo "fixture launchctl: unexpected argv: $*" >&2; exit 90; }',
+    '    exit 0 ;;',
+    '  enable|disable)',
+    '    [ -n "$2" ] || { echo "fixture launchctl: unexpected argv: $*" >&2; exit 90; }',
+    '    exit 0 ;;',
+    '  kickstart)',
+    '    exit 0 ;;',
+    // `print` is how `_svc_is_active` and `_svc_is_loaded` read a job. A test
+    // with an opinion writes it to fixture-unit-<label>; the default is a job
+    // that was bootstrapped and is running, which is what a working box
+    // answers right after `_inst_enable`.
+    '  print)',
+    '    lbl="${2##*/}"',
+    '    f="$HOME/fixture-unit-$lbl"',
+    '    if [ -f "$f" ]; then IFS= read -r v < "$f"; [ "$v" = active ] || exit 113; fi',
+    '    if [ -f "$HOME/launchctl-loaded" ] && grep -q "^$lbl.plist$" "$HOME/launchctl-loaded"; then',
+    '      echo "	state = running"',
+    // The stay-up gate (`_ccrc_job_stayed_up`) samples `pid = ` twice: the
+    // default is one stable pid (a job that stayed up); `fixture-pid-churn`
+    // makes every print answer a fresh one — a crash loop as launchd shows
+    // it. $((…)) strips wc's BSD padding so the pid is always bare digits.
+    '      if [ -f "$HOME/fixture-pid-churn" ]; then',
+    '        echo "	pid = $(($(wc -l < "$HOME/launchctl-calls") + 4000))"',
+    '      else',
+    '        echo "	pid = 4242"',
+    '      fi',
+    '      exit 0',
+    '    fi',
+    '    exit 113 ;;',
+    '  *) echo "fixture launchctl: unexpected argv: $*" >&2; exit 90 ;;',
+    'esac',
+  ].join('\n') + '\n');
+
+  // `plutil -lint` guards the generated plist before it is installed. The
+  // fixture answers valid so the install proceeds; a test that wants the
+  // refusal plants its own.
+  plant('plutil', [
+    '#!/bin/sh',
+    'printf \'%s\\n\' "$*" >> "$HOME/plutil-calls"',
+    'exit 0',
+  ].join('\n') + '\n');
   plant('loginctl', [
     '#!/bin/sh',
     'printf \'%s\\n\' "$*" >> "$HOME/loginctl-calls"',

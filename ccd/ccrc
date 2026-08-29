@@ -4402,14 +4402,16 @@ _inst_bins() {   # what has to be ON PATH: the two executables, and the launcher
   # though this box had gained something. Skipped, and said out loud.
   if [ "$CCD_OS" != darwin ]; then
     _inst_atomic "$tree/ccd/ccd-cap-scopes" "$bin/ccd-cap-scopes" 755
+    # graphify Task 10 (O3/O6b): the sweep executable, every ROLE but — like
+    # `ccd-cap-scopes` above — not Darwin: its timer only installs on the
+    # systemd arm, and the script leans on GNU stat/date and flock(1), which
+    # macOS does not ship. A binary whose runner never fires there would be
+    # the same no-op cap-scopes' own comment warns about. (Measured: the macos
+    # CI leg ran the sweep suite against BSD userland — every pass aborted.)
+    # `deploy/gen-wrappers.mjs`'s `TOOLCHAIN_EXECUTABLES` knows the name, or
+    # the orphan scan in `_inst_wrappers` (every role) would report it.
+    _inst_atomic "$tree/ccd/ccd-graph-sweep" "$bin/ccd-graph-sweep" 755
   fi
-  # graphify Task 10 (O3/O6b): the sweep executable, shipped on EVERY role and
-  # EVERY OS — unlike its unit (`_inst_units`) and its enable (`_inst_enable`),
-  # both role-gated, and unlike `ccd-cap-scopes` above, which is cgroup-bound
-  # and skips Darwin. The sweep is bash+jq+git and runs by hand anywhere.
-  # `deploy/gen-wrappers.mjs`'s `TOOLCHAIN_EXECUTABLES` knows its name too, or
-  # the orphan scan in `_inst_wrappers` (every role) would report it.
-  _inst_atomic "$tree/ccd/ccd-graph-sweep" "$bin/ccd-graph-sweep" 755
   # The generated launcher is staged under a name `_inst_atomic`'s own sweep
   # matches (`<dest>.tmp.*`), so a run killed between these two lines leaves
   # nothing the next run does not remove.
@@ -4418,7 +4420,7 @@ _inst_bins() {   # what has to be ON PATH: the two executables, and the launcher
   _inst_atomic "$gen" "$bin/ccrc" 755
   rm -f -- "$gen"
   if [ "$CCD_OS" = darwin ]; then
-    echo "install: bins: ccd, ccd-graph-sweep and the ccrc launcher in \$HOME/.local/bin (no ccd-cap-scopes — it caps cgroup scopes, and macOS has none)"
+    echo "install: bins: ccd and the ccrc launcher in \$HOME/.local/bin (no ccd-cap-scopes — it caps cgroup scopes, and macOS has none; no ccd-graph-sweep — its timer is systemd-only)"
   else
     echo "install: bins: ccd, ccd-cap-scopes, ccd-graph-sweep and the ccrc launcher in \$HOME/.local/bin"
   fi
