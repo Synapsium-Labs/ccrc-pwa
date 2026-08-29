@@ -1586,10 +1586,13 @@ Every red below was OBSERVED, not predicted. Mutations were applied ONE AT A TIM
 that patches, runs the named suite, captures the first failing assertion verbatim, and reverts before
 the next — so no two mutations were ever live together.
 
-**Suite results, whole branch, after Task 6.** `server` 235 files / **5901 passed** / 54 skipped;
-`agent` **280 passed** (18 files); `pwa` 75 files / **1982 passed**, `Type Errors no errors`. All three
-run in the foreground, cd'd into the package. No load flakes needed re-running in isolation on this
-pass.
+**Suite results, whole branch, after the graphify merge (the numbers that stand).** `server` 239 files
+/ **5969 passed** / 56 skipped; `agent` **281 passed** (18 files); `pwa` 75 files / **1983 passed**,
+`Type Errors no errors`. All three run in the foreground, cd'd into the package. No load flake needed
+re-running in isolation on any pass.
+
+(Before that merge, on this wave's own tree: `server` 235 files / 5901 passed / 54 skipped; `agent`
+280; `pwa` 1982.)
 
 Two earlier full runs failed, both correctly: the first on `typecheck-tests` (real type errors no
 single suite could see — D-1032) and on `deviation-refs` (D-1030 and D-1031 were cited in code before
