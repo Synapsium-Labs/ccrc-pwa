@@ -1205,6 +1205,73 @@ describe('sweepMail: a dead recipient eventually parks (review finding 30)', () 
     expect(mailId).toEqual(expect.any(Number));
   });
 
+  it('a DELIVERED row STILL parks here — the lane must end, and the record says why (D-1069)', async () => {
+    // The park at this rung is load-bearing in a way the send-failure park is
+    // not, and an earlier draft of this change (D-1067) removed it before
+    // adversarial review caught what that costs. `store.ts`'s own
+    // OUTSTANDING_OR_ABANDONED_SQL comment draws the line the draft missed: a
+    // `rejected` row stays visible to a HUMAN while staying terminal for the
+    // LANE. Nothing else ends the lane for this row — `cancelOutstandingDeliveries`
+    // is runId-scoped, and MAIL_REPLAY_MAX_ATTEMPTS counts SUCCESSFUL replays,
+    // which a row gated here never gets. Left unparked it stays due at the
+    // 15-minute ceiling for ever, and `_ws_slug_new` recycles a purged slug
+    // ("144 per project, recycled by ws-reap", ccd/ccd:3489), so the id can be
+    // re-minted for an unrelated workspace and the lane will type THIS envelope
+    // into it — `mail_deliveries` carries no recipient uuid, so nothing
+    // downstream can tell the two recipients apart.
+    const h = harness();
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    mkdirSync(path.join(h.home, '.cc-sessions'), { recursive: true });
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+    coord.markDelivered(id, Date.now());
+
+    for (let i = 0; i < MAIL_MAX_ATTEMPTS + 3; i++) {
+      const before = deliveryRow(coord, id);
+      if (before.state === 'rejected') break;
+      // A delivered row is due only once BOTH clocks agree: its own backoff,
+      // and `dueDeliveries`' replay arm dated off `deliveredAt`.
+      advance(Math.max(before.nextAttemptAt - Date.now(), 0) + MAIL_REPLAY_MS + 1_000);
+      await w.sweepMail();
+    }
+    const row = deliveryRow(coord, id);
+    expect(row.state, 'the lane must END for a recipient the registry proves was purged').toBe('rejected');
+    // …and the record must not read as though the message never arrived. That
+    // half of the withdrawn D-1067 was right: `'recipient not in registry'`
+    // beside `rejectCode: 'undeliverable'` is false for a row that WAS
+    // delivered, and `lastError` is free text a maintainer greps.
+    expect(row.lastError, 'a delivered row says what actually happened to it')
+      .toBe('recipient purged after this message was delivered, and never acked');
+    expect(row.rejectCode).toBe('undeliverable');
+  });
+
+  it('the lane really is over once it parks — no further sweep touches the row (D-1069)', async () => {
+    // The point of the park is not the row's state word, it is that
+    // `dueDeliveries` stops selecting it. This is the assertion that would have
+    // gone red under D-1067, and the one that matters if the id is ever
+    // re-minted: a parked row cannot be typed into whoever next wears it.
+    const h = harness();
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    mkdirSync(path.join(h.home, '.cc-sessions'), { recursive: true });
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+    coord.markDelivered(id, Date.now());
+    for (let i = 0; i < MAIL_MAX_ATTEMPTS + 3; i++) {
+      const before = deliveryRow(coord, id);
+      if (before.state === 'rejected') break;
+      advance(Math.max(before.nextAttemptAt - Date.now(), 0) + MAIL_REPLAY_MS + 1_000);
+      await w.sweepMail();
+    }
+    expect(deliveryRow(coord, id).state).toBe('rejected');
+    // Now the recipient's id EXISTS again — the re-minted-slug world exactly.
+    seedRegistry(h.home, ID); seedHookState(h.home, ID); seedLiveState(h.home);
+    const before = h.calls.length;
+    for (let i = 0; i < 4; i++) { advance(MAIL_REPLAY_MS + MAIL_BACKOFF_MAX_MS + 1_000); await w.sweepMail(); }
+    expect(coord.dueDeliveries(Date.now(), MAIL_REPLAY_MS).map((r) => r.id),
+      'a parked row is never selected again, whoever wears that id now').not.toContain(id);
+    expect(h.calls.length, 'and nothing is typed into the session now wearing it').toBe(before);
+  });
+
   it('a recipient LISTED but with one unreadable registry field keeps backing off, never parks, and NEVER ' +
      'ratchets attempts (registry ladder: the row is now DEGRADED, not dropped, and `countsAsAttempt: false`' +
      ' keeps this branch off the park-eligible counter entirely)', async () => {
@@ -1503,9 +1570,57 @@ describe('sweepMail: a recipient that is gone FOR GOOD parks (D-309 refined)', (
     }
     const row = deliveryRow(coord, id);
     expect(row.state, 'a delivered row must never be called undeliverable by THIS budget').not.toBe('rejected');
-    expect(row.attempts, 'and this rung must not ratchet a delivered row toward a park it does not own').toBe(0);
+    // D-1068 CORRECTS this line. It used to read `.toBe(0)` — pinning the
+    // frozen counter as though a still clock were the point. `attempts` does
+    // ratchet on a delivered row (`MAIL_MAX_ATTEMPTS`'s own docstring says so,
+    // and it is what makes the backoff climb); what it never does is reach a
+    // park, which is the assertion above. The old form pinned the mechanism's
+    // shape and missed its effect.
+    expect(row.attempts, 'it ratchets — what it must never do is park').toBeGreaterThan(MAIL_MAX_ATTEMPTS);
     // …while the console still learns what is holding it.
     expect(row.lastGate).toBe('session-dead');
+  });
+
+  it('backs off on a CLIMBING schedule that reaches the ceiling — not a flat 30 s for ever (D-1068)', async () => {
+    // D-1066 shipped this arm with `countsAsAttempt: false`, reasoning that a
+    // delivered row must not ratchet toward a park it does not own. Right about
+    // the park, wrong about the clock: `attempts` is ALSO what the backoff step
+    // is computed from, so a frozen counter pins every step at
+    // MAIL_BACKOFF_BASE_MS and `Math.min` never binds. Measured on the shipped
+    // build, against a recipient the registry proves is never coming back:
+    // 40 re-examinations in 30 minutes, and no ceiling of any kind — because
+    // MAIL_REPLAY_MAX_ATTEMPTS counts SUCCESSFUL replays, and a row gated here
+    // never gets one. That is the same every-tick-for-ever shape D-1066 itself
+    // was written to end, merely wearing a gate label.
+    //
+    // `MAIL_MAX_ATTEMPTS`'s own docstring had already said what to do instead:
+    // "`attempts` keeps counting on a delivered row too … just without a
+    // ceiling that turns a failing SEND into a park" — and that a delivered
+    // row's uncapped counter is precisely what makes MAIL_BACKOFF_MAX_MS
+    // reachable rather than decorative. The registry-absent rung above has
+    // always done it this way; this one now matches.
+    const h = harness({ hasSession: false });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedArchived(h.home, ID); seedHookState(h.home, ID); seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+    coord.markDelivered(id, Date.now());
+
+    const steps: number[] = [];
+    for (let i = 0; i < 8; i++) {
+      const before = deliveryRow(coord, id);
+      advance(Math.max(before.nextAttemptAt - Date.now(), 0) + MAIL_REPLAY_MS + 1_000);
+      await w.sweepMail();
+      // The sweep just ran at `Date.now()`, so what `backOff` wrote is
+      // `now + step` — this reads the step back out, not a wall clock.
+      steps.push(deliveryRow(coord, id).nextAttemptAt - Date.now());
+    }
+    expect(steps.slice(0, 4), 'it doubles from the base')
+      .toEqual([MAIL_BACKOFF_BASE_MS, MAIL_BACKOFF_BASE_MS * 2, MAIL_BACKOFF_BASE_MS * 4,
+                MAIL_BACKOFF_BASE_MS * 8]);
+    expect(steps.at(-1), 'and settles AT the ceiling rather than at 30 s for ever')
+      .toBe(MAIL_BACKOFF_MAX_MS);
+    expect(deliveryRow(coord, id).state, 'all of it without ever parking').toBe('delivered');
   });
 
   it('a session merely RESTARTING never parks, however long it takes', async () => {
