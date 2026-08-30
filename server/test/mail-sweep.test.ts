@@ -1205,20 +1205,20 @@ describe('sweepMail: a dead recipient eventually parks (review finding 30)', () 
     expect(mailId).toEqual(expect.any(Number));
   });
 
-  it('NEVER parks a row that was already DELIVERED — the guard the SEND path has carried all along (D-1067)',
-     async () => {
-    // The send-failure park ~250 lines below this rung in `watch.ts` is already
-    // wrapped in `if (d.deliveredAt === null)` and explains why in its own
-    // comment (review finding 4). This STRUCTURAL park was not, and the two
-    // spend the SAME budget. Measured on `main` before the guard was written:
-    // a delivered row whose recipient's registry row had been reaped ratcheted
-    // 1 -> 5 across ~26 minutes of sweeps and was then recorded
-    // `rejected('undeliverable')` — a false record of a message that
-    // demonstrably arrived, and one `markAcked` refuses, so a recipient brought
-    // back by `ccd start`/`ws-restore` could never ack it. Worse, `attempts` is
-    // one cumulative column that a delivered row leaves uncapped, so a row
-    // already at 5 from earlier replay backoffs parks on its FIRST
-    // registry-absent observation, with no backoff at all.
+  it('a DELIVERED row STILL parks here — the lane must end, and the record says why (D-1069)', async () => {
+    // The park at this rung is load-bearing in a way the send-failure park is
+    // not, and an earlier draft of this change (D-1067) removed it before
+    // adversarial review caught what that costs. `store.ts`'s own
+    // OUTSTANDING_OR_ABANDONED_SQL comment draws the line the draft missed: a
+    // `rejected` row stays visible to a HUMAN while staying terminal for the
+    // LANE. Nothing else ends the lane for this row — `cancelOutstandingDeliveries`
+    // is runId-scoped, and MAIL_REPLAY_MAX_ATTEMPTS counts SUCCESSFUL replays,
+    // which a row gated here never gets. Left unparked it stays due at the
+    // 15-minute ceiling for ever, and `_ws_slug_new` recycles a purged slug
+    // ("144 per project, recycled by ws-reap", ccd/ccd:3489), so the id can be
+    // re-minted for an unrelated workspace and the lane will type THIS envelope
+    // into it — `mail_deliveries` carries no recipient uuid, so nothing
+    // downstream can tell the two recipients apart.
     const h = harness();
     const coord = store(h.home);
     const { w } = await primedWatcher(h, coord);
@@ -1228,16 +1228,48 @@ describe('sweepMail: a dead recipient eventually parks (review finding 30)', () 
 
     for (let i = 0; i < MAIL_MAX_ATTEMPTS + 3; i++) {
       const before = deliveryRow(coord, id);
+      if (before.state === 'rejected') break;
       // A delivered row is due only once BOTH clocks agree: its own backoff,
       // and `dueDeliveries`' replay arm dated off `deliveredAt`.
       advance(Math.max(before.nextAttemptAt - Date.now(), 0) + MAIL_REPLAY_MS + 1_000);
       await w.sweepMail();
     }
     const row = deliveryRow(coord, id);
-    expect(row.state, 'a delivered row must never be called undeliverable by THIS budget').not.toBe('rejected');
-    expect(row.rejectCode).toBeNull();
-    // …while the console still learns what is holding it.
-    expect(row.lastGate).toBe('registry-absent');
+    expect(row.state, 'the lane must END for a recipient the registry proves was purged').toBe('rejected');
+    // …and the record must not read as though the message never arrived. That
+    // half of the withdrawn D-1067 was right: `'recipient not in registry'`
+    // beside `rejectCode: 'undeliverable'` is false for a row that WAS
+    // delivered, and `lastError` is free text a maintainer greps.
+    expect(row.lastError, 'a delivered row says what actually happened to it')
+      .toBe('recipient purged after this message was delivered, and never acked');
+    expect(row.rejectCode).toBe('undeliverable');
+  });
+
+  it('the lane really is over once it parks — no further sweep touches the row (D-1069)', async () => {
+    // The point of the park is not the row's state word, it is that
+    // `dueDeliveries` stops selecting it. This is the assertion that would have
+    // gone red under D-1067, and the one that matters if the id is ever
+    // re-minted: a parked row cannot be typed into whoever next wears it.
+    const h = harness();
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    mkdirSync(path.join(h.home, '.cc-sessions'), { recursive: true });
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+    coord.markDelivered(id, Date.now());
+    for (let i = 0; i < MAIL_MAX_ATTEMPTS + 3; i++) {
+      const before = deliveryRow(coord, id);
+      if (before.state === 'rejected') break;
+      advance(Math.max(before.nextAttemptAt - Date.now(), 0) + MAIL_REPLAY_MS + 1_000);
+      await w.sweepMail();
+    }
+    expect(deliveryRow(coord, id).state).toBe('rejected');
+    // Now the recipient's id EXISTS again — the re-minted-slug world exactly.
+    seedRegistry(h.home, ID); seedHookState(h.home, ID); seedLiveState(h.home);
+    const before = h.calls.length;
+    for (let i = 0; i < 4; i++) { advance(MAIL_REPLAY_MS + MAIL_BACKOFF_MAX_MS + 1_000); await w.sweepMail(); }
+    expect(coord.dueDeliveries(Date.now(), MAIL_REPLAY_MS).map((r) => r.id),
+      'a parked row is never selected again, whoever wears that id now').not.toContain(id);
+    expect(h.calls.length, 'and nothing is typed into the session now wearing it').toBe(before);
   });
 
   it('a recipient LISTED but with one unreadable registry field keeps backing off, never parks, and NEVER ' +

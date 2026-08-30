@@ -2428,24 +2428,43 @@ export class FleetWatcher {
           // than the source.
           gated(d, unmeasurable ? 'registry-unmeasurable' : 'registry-absent');
           const attempts = d.attempts + 1;
-          // D-1067 — `d.deliveredAt === null`, the third conjunct, added on the
-          // same reasoning the SEND-failure park ~250 lines below has carried
-          // since review finding 4 and states in its own comment: this park and
-          // that one spend the SAME budget, and `MAIL_MAX_ATTEMPTS`'s docstring
-          // scopes that budget to a row whose `deliveredAt` is still null.
-          // Measured on `main` before this conjunct existed: a DELIVERED row
-          // whose recipient had been reaped ratcheted 1 -> 5 over ~26 minutes
-          // and was then recorded `rejected('undeliverable')` — a false record
-          // of a message that demonstrably arrived, which `markAcked` then
-          // refuses, so a recipient brought back by `ccd start`/`ws-restore`
-          // could never ack it. And because `attempts` is one cumulative column
-          // a delivered row leaves uncapped, a row already at 5 from earlier
-          // replay backoffs parked on its FIRST observation here, with no
-          // backoff at all. The `else` arm already does the right thing for
-          // that row: `!unmeasurable` is true, so it backs off on the ordinary
-          // RATCHETING terms and the step climbs to MAIL_BACKOFF_MAX_MS.
-          if (attempts >= MAIL_MAX_ATTEMPTS && !unmeasurable && d.deliveredAt === null) {
-            store.rejectDelivery(d.id, 'undeliverable', 'recipient not in registry');
+          // D-1069 — THE PARK STAYS, and a DELIVERED row now says why it parked.
+          //
+          // An earlier draft of this change (D-1067, withdrawn before merge)
+          // added `&& d.deliveredAt === null` here, mirroring the SEND-failure
+          // park ~250 lines below. That was wrong, and `store.ts`'s own
+          // OUTSTANDING_OR_ABANDONED_SQL comment says why: a `rejected` row
+          // stays visible to a HUMAN ("is this worth a human's attention")
+          // while staying terminal for the LANE ("should the delivery lane act
+          // on this again"). This park is the ONLY thing that ends the lane for
+          // a delivered row whose recipient's registry row was PURGED.
+          // `cancelOutstandingDeliveries` is runId-scoped, so peer mail
+          // (`runId IS NULL`) is out of its reach, and `MAIL_REPLAY_MAX_ATTEMPTS`
+          // counts SUCCESSFUL replays, which a row gated HERE never gets.
+          // Without the park the row stays due at the 15-minute ceiling for
+          // ever — and `_ws_slug_new` recycles a purged slug (`ccd/ccd:3516`,
+          // and ccd's own comment: "144 per project, recycled by ws-reap"), so
+          // that id can be re-minted for an unrelated workspace and the lane
+          // will then type this stale envelope into it. `mail_deliveries`
+          // carries no recipient uuid, so nothing downstream can tell the two
+          // recipients apart. The hazard is bounded today only because this
+          // park ends the row ~26 minutes after the purge.
+          //
+          // What WAS wrong is the sentence. `'recipient not in registry'` beside
+          // `rejectCode: 'undeliverable'` reads as "this never arrived", and for
+          // a delivered row that is false. `lastError` is free text a maintainer
+          // greps, so the row itself now says what actually happened. The ack
+          // door stays shut either way (`markAcked` admits only the replay-
+          // ceiling park) and that is correct here: a PURGE is permanent —
+          // `ws-restore` restores an ARCHIVED workspace, which keeps its
+          // registry row and so lands on the session-dead rung, not this one —
+          // so the only party that could ever walk through that door is a
+          // re-minted stranger wearing the same id.
+          if (attempts >= MAIL_MAX_ATTEMPTS && !unmeasurable) {
+            store.rejectDelivery(d.id, 'undeliverable',
+              d.deliveredAt === null
+                ? 'recipient not in registry'
+                : 'recipient purged after this message was delivered, and never acked');
           } else {
             const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
             store.backOff(d.id,
