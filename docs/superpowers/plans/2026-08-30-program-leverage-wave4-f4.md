@@ -991,3 +991,31 @@ they are pinned independently.
 `dtbd.test.ts` (guard 6). Every package suite ran green task-by-task; the placeholder was in a
 markdown file no package suite reads, and only the full server run — which scans the tracked tree —
 saw it.
+
+### Self-review against this plan's Global Constraints
+
+| Constraint | How it was met |
+|---|---|
+| Commit on `ws/quiet-meadow` | Eight commits, all on this workspace's own branch; no feature branch was cut |
+| TDD red-first, exact first failing assertion recorded | Seven reds in the table above, each quoted from its run; nineteen mutation rows likewise |
+| Every "behaviour unchanged" claim gets a witness | Task 2 changed the write dispatch/close/advance share, so it shipped two fixtures that would see the change (mutations 2c and 2d), not a claim |
+| No overloaded null at any new seam | 404 vs 503 split through `readSessionRecord` (mutation 5a); `queued: true` vs `false` carried from `queueSystemMail` to the wire (5c); sender-scoped dedupe (2b) |
+| Wire additive-only, no `FLEET_PROTO` bump | One new route; no frame changed; `FLEET_PROTO` untouched |
+| Zero new ccd verbs | Nothing in this wave shells out. `EXEC_COMMANDS` untouched |
+| Zero new injections | `sendPrompt` still has exactly three call sites, unchanged; `POST /api/sessions/:id/prompt` survives with its three PWA callers |
+| The new coord file holds no handle | Enforced directory-wide by `single-definition`; the duplicate assertion I drafted was deleted rather than kept |
+| No new quoted kebab literal under `server/src/coord/` | `PROGRAM_KICKOFF_SUBJECT` lives in L0 and is imported; the scanner caught two prose violations and both were rewritten |
+| Single-source-of-truth | `MAIL_ROLE_IDS` derived from `Object.keys`; the kickoff sentence, its path and its subject defined once each |
+| Role vocabulary only | `topology-clean` green |
+| Deviation refs ledgered and bounded | `deviation-refs` green; `dtbd` green after the meta-form fix |
+| Flag-blind, deterministic route | Not EXEMPT; appears in the armed-anonymous 401 sweep by name; the drift loop is green with the route in its swept set; the handler reads neither the flag nor the session store |
+| No new coloured CSS rule | None added — the retry door reuses `program-start-error` and `program-start-go`; `contrast.test.ts` and `fleet-css.test.ts` both green |
+| Suites in the foreground, `timeout >= 600000`, cd'd in | All three run that way; totals above |
+| NOT agent-first; do not deploy | No `ccd/`, no `session-hook.sh`, no skill corpus touched. Nothing deployed |
+
+Two constraints deserve a sentence rather than a row. **"Write each pin BEFORE the code it pins"**
+held for every task except the two expectation corrections in Task 5, where the pin was written
+first and then MOVED after measurement contradicted it — which is the same discipline arriving at a
+different answer, and is recorded as such rather than presented as foresight. And **"the deploy is
+not the worker's act"**: nothing was deployed, and the coordinator's own re-measurement is the next
+step, not mine.
