@@ -1019,3 +1019,40 @@ first and then MOVED after measurement contradicted it — which is the same dis
 different answer, and is recorded as such rather than presented as foresight. And **"the deploy is
 not the worker's act"**: nothing was deployed, and the coordinator's own re-measurement is the next
 step, not mine.
+
+### The fold: PR #34 (D-1066) landed on `main` mid-wave
+
+`3b7f58d8` merged while this branch was at task 7. It touches four files this wave also touches —
+`server/src/watch.ts`, `server/test/mail-sweep.test.ts`, `shared/api.ts` and (not ours)
+`pwa/src/session/MailStrip.tsx` — and it is in the same `sweepMail` loop. Merged, not rebased
+(wave 3's precedent). Git auto-merged all three overlapping files, and a clean TEXTUAL merge is not
+a semantic one, so the overlap was read rather than assumed:
+
+- Its new `session-dead` rung sits at the tmux gate (`watch.ts:2479-2517`) and parks through
+  `store.rejectDelivery` **directly**. It never calls `tellSender`, which is not even in scope
+  there — so it cannot interact with this wave's role-aware sender resolution, and this wave cannot
+  change what it reports. Independent.
+- Its own commit message anticipated this wave by name: it relaxed `lifecycle-sweep`'s parity signal
+  from "no lifecycle vocabulary anywhere in `sweepMail`" to a named ban plus an allow-list,
+  defending the rule its comment states — *"wave 4 adds a producer BESIDE it, never inside it"*.
+  This wave adds no lifecycle vocabulary at all, so that guard is satisfied trivially.
+- **It adds a FOURTH way a kickoff can park**, which D-1045's list did not have: a kickoff addressed
+  to a session somebody archived now backs off and parks `undeliverable` at the ceiling instead of
+  retrying for ever. That is right for a kickoff — an archived coordinator should not accumulate
+  mail — and it is recorded here so the next reader does not think the list was wrong.
+
+Post-merge totals: server **241 files / 6021 passed**, 56 skipped; pwa **75 / 2007**, 0 type errors;
+agent 281.
+
+### A verification miss of my own, caught by the post-merge run
+
+The task-6 pwa run was checked with `grep -E "FAIL|Tests |Type Errors"`, which printed
+`Tests 2007 passed` and `Type Errors  no errors` and looked green. Reading the tail instead showed
+`Errors  2 errors` — two **TypeCheckError**s reported as *unhandled source errors* rather than as
+type errors: `programKickoff` and `toast`, both left imported in `StartProgramSheet.tsx` after the
+sheet stopped composing the sentence and stopped toasting. Both removed.
+
+Two things worth carrying forward. First, vitest prints `Type Errors  no errors` on the same run
+that reports two TypeCheckErrors, so that line is not the typecheck verdict and must not be read as
+one. Second — the process point, and the one that actually bit — **a grep over a suite's output is
+not a reading of it**: the filter that made the output short is the same filter that hid the finding.
