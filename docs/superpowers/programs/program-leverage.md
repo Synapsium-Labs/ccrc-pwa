@@ -15,7 +15,7 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
 |---|---|---|---|
 | 1 | F1 — drift fixes (ungated-door count, coordinator trigger/resume wording, stale `_id()` anchor) + the coordinator-resume runbook (`references/resume.md`). AGENT-FIRST deploy. | run 10, PR #28 (merged `f5dfd2d9`) | done 2026-08-28 18:08 UTC — CI 5/5 green on `8135118b`, deployed both boxes agent-first, `/health` and fleet `ccd` both report `f5dfd2d9` |
 | 2 | F2 — dispatch-time `skillState` preflight (measure, never refuse) + synchronous deviation-floor seed on first allocation | run 12, PR #30 (merged `4e2a04f5`) | done 2026-08-29 ~10:45 UTC — fix round `c026e151` verified (all findings fixed, D-1020..D-1022), CI 5/5, merged, deployed both boxes agent-first; `/health` and fleet `ccd` both report `4e2a04f5` |
-| 3 | F3 — per-project program-ready badge (server measurement; seam re-ruled to `GET /api/projects` + StartProgramSheet, D-1023) | run 14, PR #33 (tip `768913f8`) | fix round 2026-08-30 — reviewed: 2 majors (remote-mode token read makes `ready` unreachable; D-1030 entries unpinned) + 8 minors, 0 blocking, 0 refuted; ruling mailed (107), run back in `working`, fix deviations from D-1034 |
+| 3 | F3 — per-project program-ready badge (server measurement; seam re-ruled to `GET /api/projects` + StartProgramSheet, D-1023) | run 14, PR #33 (merged `1f6ed803`) | done 2026-08-30 ~14:35 UTC — fix round `60bb451e` verified (all ten rulings landed, D-1034..D-1038), CI 5/5, merged, deployed server lane from the merge sha; `/health` reports `1f6ed803` (NOT agent-first — server+PWA only) |
 | 4 | F4 — program kickoff rides the idle-gated mail lane (`queueSystemMail`), direct-injection race retired | — | planned |
 | 5 | F5 — `POST /api/runs/:id/reclaim` (4th ungated door, dead-proof) + PWA resume affordance; door count → four | — | planned |
 | 6 | F6+F7a — `COORD_QUIET_MS`/`COORD_COOLDOWN_MS` for coordinator recipients + `POST /api/coord/caps` operator dial | — | planned |
@@ -201,6 +201,32 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
   pre-existing census rules sit under colorless painters, sweep deferred + recorded); mutation
   totals off-by-one; row 5.4's dropped suite unexplained (drop was right, sentence missing).
 
+- **Wave 3 closes (2026-08-30 ~14:35 UTC):** fix-round wave-done (delivery 108) re-measured
+  true — tip `60bb451e` = PR #33 head, CI run 33307756487 5/5 green on that exact sha,
+  MERGEABLE/CLEAN, 0 behind. All ten rulings from mail 107 verified hunk-by-hunk across the
+  four fix commits: **MAJOR 1** → `ReadinessDeps.localIo` consumer-declared port, production
+  topology as a fixture in BOTH suites (fleet io refusing `.ccrc` beside a real local token ⇒
+  `configured` AND a reachable `ready`; both collapses measured red, 11 module-level / 5
+  call-site), cost prose corrected; **MAJOR 2** → spawn-chip-shaped `contrast.test.ts` pin over
+  all FOUR entries (including minor 4's new `.proj-ready-why`, which shipped WITH its entry and
+  pin, not after); minor 1 tick-dispatch pin (`expected undefined to be defined`); minor 3
+  prefix-less field-pair twin scan allowlisting `shared/api.ts` alone, `NewSessionSheet`
+  converted in the same commit (a FOURTH copy — D-1028 amended twice); minor 5 →
+  `READINESS_CELL` single predicate table keyed by `ReadinessFacts` (a new precondition with no
+  entry is a compile error), both consumers derive from it, exhaustive agreement test plus the
+  27-case empty-list corollary; minors 2/6/7/8 recorded per rulings (D-1036: `configured` means
+  readable, not usable — a green badge does not certify the next boot; D-1030 mechanism amended
+  to self-grounded-host with the `chat.css` counter-example; totals corrected 21/20/1; row 5.4's
+  drop explained). New deviations **D-1034..D-1038**; D-1037 defers the 15-rule
+  colourless-painter census sweep with the measurement attached; D-1038 records the worker's own
+  mutation-driver revert corruption (empty-string `replace` inserts at position 0 — both files
+  repaired, the measurements stand, apply half was always correct). Process lesson carried
+  (worker's words): its first MAJOR-1 fixture used a token path with no `.ccrc` and PASSED
+  against the broken code — a fixture that cannot reproduce the topology proves nothing, the
+  same class as wave 2's sweep lesson. Run 14 advanced working→awaiting-review→merging on the
+  fresh fingerprint; PR #33 merged as `1f6ed803`; deployed server lane from a scratch worktree
+  at the merge sha, `/health` reports `1f6ed803`, service stable (NOT agent-first). Items 4/4.
+
 ## Carried constraints
 
 - Waves 1 and 8 are **AGENT-FIRST** deploys (they touch `ccd/coordinator-skill/` and the agent's
@@ -218,6 +244,40 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
   deletion; TDD red-first; deviations recorded against this program's allocated block.
 
 ## Next-wave brief
+
+**Wave 4 — F4: the program kickoff rides the idle-gated mail lane.** Spec:
+`docs/superpowers/specs/2026-08-28-program-leverage-design.md` §6 (fetch `ws/brisk-meadow` from
+origin). Same workspace as waves 1–3 (`quiet-meadow`, reclaimed). Retire the ONE machine
+injection that bypasses the delivery lane's discipline: `StartProgramSheet.finish()` fires
+`api.prompt` the instant the new session's row appears → direct `sendPrompt` tmux injection
+with no idle gate, racing ccd's cold-start prompt-clearing (the sheet's own B-1 comment,
+`StartProgramSheet.tsx:447-464`); a failed kickoff today is a toast with no retry and no
+durable record. The kickoff becomes durable system mail delivered by the same idle-gated lane
+that delivers wave briefs: a session-surface route queues `queueSystemMail` to the new session
+— subject `program-kickoff`, body the kickoff text (which still names the `ccrc-coordinator`
+skill; nudge-then-fetch is acceptable). The plan picks between a `kickoff` field on
+`POST /api/sessions` and a sibling `POST /api/sessions/:id/kickoff` — and says why; the PWA
+holds no box token, so it must be a PWA-surface route, an ordinary non-exempt write under the
+auth gate. The sheet stops calling `api.prompt` for the kickoff; the D-292 hijack protections
+(wrapper-scoped, freshness-checked target) move with the ADDRESSING, not the injection. Failure
+modes become the mail lane's honest ones — parked deliveries are visible (F7 surfaces them
+later); `draft-present`/`enter-ignored` semantics replace the silent race. Design for reuse:
+wave 5's reclaim door rides this same kickoff-mail shape. Tests: route gate posture pinned
+(dark vs armed, exact status equality, stage-3a convention); queue-not-inject pinned — a test
+that reds if a `sendPrompt` call site returns on the kickoff path; PWA sheet no longer
+imports/calls `prompt` for kickoff. Mutation-table discipline (guard ships WITH a test measured
+red on deletion), TDD red-first, every "behaviour unchanged" claim gets a fixture that could
+witness the change. Wire: additive-only, single reader per field, older-peer omission
+tolerated, no `FLEET_PROTO` bump, no new ccd verbs, no overloaded null. Deviations from
+**D-1039** up — the block (`D-999..D-1046`) has 8 numbers left; if it exhausts, write
+`D-TBD-program-leverage` and it reconciles at review. NOT agent-first (server+PWA only).
+Commit on the workspace's own branch; all coordinator mail names the new run's `runId`. Plan
+first (superpowers:writing-plans), execute with superpowers:executing-plans. Deploy is not the
+worker's act.
+
+---
+
+Prior wave's brief (wave 3, retired — kept for the record):
 
 **Wave 3 — F3: the per-project program-ready badge.** Spec:
 `docs/superpowers/specs/2026-08-28-program-leverage-design.md` §5 (fetch `ws/brisk-meadow` from
@@ -240,20 +300,3 @@ is bash/doctor-side — converge on the VOCABULARY, not the code; `single-defini
 merges cleanly with it. Deviations from **D-1023** up. Commit on the workspace's own branch;
 all coordinator mail names the new run's `runId`. Plan first (superpowers:writing-plans),
 execute with superpowers:executing-plans. Deploy is not the worker's act.
-
----
-
-Prior wave's brief (wave 1, retired — kept for the record):
-
-**Wave 1 — F1: drift fixes + the coordinator-resume runbook.** Spec:
-`docs/superpowers/specs/2026-08-28-program-leverage-design.md` §3 (fetch `ws/brisk-meadow` from
-origin to read it), tasks 1–4 exactly as numbered there. Write your own plan under
-`docs/superpowers/plans/` on your workspace branch first (superpowers:writing-plans), then
-execute it with superpowers:executing-plans. Constraints that bind this wave: the destructive-verb
-census (spec §3 design item 3 — `resume.md` must not name the three verbs); the trigger-sentence
-fix must keep the operator-designation arm and must not assert the coordinator is a main checkout
-(this program's own coordinator is workspace-resident); new pins in `coordinator-skill.test.ts`
-follow the existing verbatim-literal style; AGENT-FIRST deploy order when shipping. Commit on
-this workspace's own branch — never a separate feature branch. All mail to the coordinator names
-this run's `runId`. Deviations: use this program's allocated block (number range in the ledger's
-run-open entry).
