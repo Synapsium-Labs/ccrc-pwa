@@ -11,8 +11,8 @@ import path from 'node:path';
 import { readFileSync } from 'node:fs';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
-import { queueProgramKickoff } from '../src/coord/kickoff.js';
-import { PROGRAM_KICKOFF_SUBJECT, programKickoff } from '../../shared/api.js';
+import { queueProgramKickoff, type KickoffOutcome } from '../src/coord/kickoff.js';
+import { MAIL_BODY_MAX_BYTES, PROGRAM_KICKOFF_SUBJECT, programKickoff } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const NOW = 1_000_000_000_000;
@@ -24,10 +24,20 @@ const store = (): CoordStore =>
 
 const due = (s: CoordStore) => s.dueDeliveries(NOW, 60_000);
 
+/** Narrows the oversize arm away, once, for the fixtures that cannot reach it —
+ *  every `PROGRAM` below composes a body of a couple of hundred bytes. It THROWS
+ *  rather than asserting so a fixture that starts being refused says so at the
+ *  line that refused it, instead of failing later as a missing row. */
+const queued = (s: CoordStore, id: string, p = PROGRAM): Extract<KickoffOutcome, { ok: true }> => {
+  const out = queueProgramKickoff({ coord: s }, id, p);
+  if (!out.ok) throw new Error(`fixture: the seam refused this kickoff (${out.kind})`);
+  return out;
+};
+
 describe('queueProgramKickoff — the kickoff is MAIL, and it says which kind of answer it gave', () => {
   it('queues one mail and one delivery, and reports the ids it wrote', () => {
     const s = store();
-    const out = queueProgramKickoff({ coord: s }, ID, PROGRAM);
+    const out = queued(s, ID);
     expect(out.queued).toBe(true);
     const rows = due(s);
     expect(rows.length).toBe(1);
@@ -82,8 +92,8 @@ describe('queueProgramKickoff — the kickoff is MAIL, and it says which kind of
 
   it('declines an identical second kickoff and writes NOTHING for it', () => {
     const s = store();
-    expect(queueProgramKickoff({ coord: s }, ID, PROGRAM).queued).toBe(true);
-    const second = queueProgramKickoff({ coord: s }, ID, PROGRAM);
+    expect(queued(s, ID).queued).toBe(true);
+    const second = queued(s, ID);
     expect(second.queued).toBe(false);
     // Not merely "the answer changed" — no second row exists. A dedupe that
     // answered honestly and inserted anyway would pass the line above.
@@ -101,25 +111,91 @@ describe('queueProgramKickoff — the kickoff is MAIL, and it says which kind of
     // somebody has to make on purpose.
     const s = store();
     queueProgramKickoff({ coord: s }, ID, PROGRAM);
-    const other = queueProgramKickoff({ coord: s }, ID, { slug: 'other-program', title: 'Other' });
+    const other = queued(s, ID, { slug: 'other-program', title: 'Other' });
     expect(other.queued).toBe(false);
     expect(due(s).length).toBe(1);
   });
 
   it('queues again once the first was ACKED — the guard is about outstanding mail, not history', () => {
     const s = store();
-    const first = queueProgramKickoff({ coord: s }, ID, PROGRAM);
+    const first = queued(s, ID);
     if (!first.queued) throw new Error('fixture: first kickoff was not queued');
     s.markDelivered(first.deliveryId, NOW);
     expect(s.markAcked(first.deliveryId, NOW)).toBe(true);
-    expect(queueProgramKickoff({ coord: s }, ID, PROGRAM).queued).toBe(true);
+    expect(queued(s, ID).queued).toBe(true);
     expect((s.db.prepare('SELECT COUNT(*) AS n FROM mail').get() as { n: number }).n).toBe(2);
+  });
+
+  // WAVE-4 REVIEW, MINOR 2 (D-1119). The kickoff is the FIRST system-mail
+  // producer whose body embeds content an HTTP caller chose. `queueSystemMail`
+  // inserts whatever it is handed; `MAIL_BODY_MAX_BYTES` is enforced at the
+  // `POST /api/mail` ingress and by `dispatchRun` on its own composed brief —
+  // and by nothing on this path. So the 8 KiB invariant `schema.ts` states in
+  // a comment beside the column was silently false for the one producer a
+  // caller can aim, and a title under Fastify's 1 MiB default landed twice in
+  // `coord.db` and was served whole into the recipient's context.
+  //
+  // MEASURED ON THE COMPOSED BODY, not on the title — `dispatchRun`'s own
+  // lesson, in its own words: a cap on the raw input lets an input at exactly
+  // the ceiling through and queues a mail over it, so the two producers would
+  // disagree about what 8 KiB means by exactly the length of a template.
+  describe('the composed body is capped', () => {
+    const base = Buffer.byteLength(programKickoff('build9-demo', ''), 'utf8');
+
+    it('refuses a title that pushes the body over the cap, and writes NOTHING', () => {
+      const s = store();
+      const out = queueProgramKickoff({ coord: s }, ID,
+        { slug: 'build9-demo', title: 'x'.repeat(MAIL_BODY_MAX_BYTES) });
+      expect(out.ok).toBe(false);
+      if (out.ok) throw new Error('unreachable — narrowed above');
+      expect(out.kind).toBe('oversize');
+      expect(out.limit).toBe(MAIL_BODY_MAX_BYTES);
+      expect(due(s)).toEqual([]);
+    });
+
+    it('a title UNDER the cap still refuses when the template pushes it over', () => {
+      // The half a title-scoped cap would miss. One byte of title under the
+      // limit, and the sentence around it is what tips the body over.
+      const s = store();
+      const title = 'x'.repeat(MAIL_BODY_MAX_BYTES - 1);
+      expect(Buffer.byteLength(title, 'utf8')).toBeLessThan(MAIL_BODY_MAX_BYTES);
+      expect(queueProgramKickoff({ coord: s }, ID, { slug: 'build9-demo', title }).ok).toBe(false);
+      expect(due(s)).toEqual([]);
+    });
+
+    it('a body at EXACTLY the cap is queued — the refusal is > and not >=', () => {
+      const s = store();
+      const title = 'x'.repeat(MAIL_BODY_MAX_BYTES - base);
+      expect(Buffer.byteLength(programKickoff('build9-demo', title), 'utf8'))
+        .toBe(MAIL_BODY_MAX_BYTES);
+      const out = queueProgramKickoff({ coord: s }, ID, { slug: 'build9-demo', title });
+      expect(out.ok).toBe(true);
+      expect(due(s).length).toBe(1);
+    });
+
+    it('counts BYTES, not characters', () => {
+      // The same char-vs-byte care `MAIL_BODY_MAX_BYTES`'s own docstring
+      // demands. Half the cap in CHARACTERS, over it in UTF-8 bytes: a
+      // `.length` cap would queue this.
+      const s = store();
+      const title = '𝄞'.repeat(Math.floor(MAIL_BODY_MAX_BYTES / 4));
+      expect(title.length).toBeLessThan(MAIL_BODY_MAX_BYTES);
+      expect(queueProgramKickoff({ coord: s }, ID, { slug: 'build9-demo', title }).ok).toBe(false);
+      expect(due(s)).toEqual([]);
+    });
+
+    it('the slug counts too — it is in the body twice', () => {
+      const s = store();
+      expect(queueProgramKickoff({ coord: s }, ID,
+        { slug: 'x'.repeat(MAIL_BODY_MAX_BYTES), title: 'T' }).ok).toBe(false);
+      expect(due(s)).toEqual([]);
+    });
   });
 
   it('two different sessions each get their own kickoff', () => {
     const s = store();
-    expect(queueProgramKickoff({ coord: s }, ID, PROGRAM).queued).toBe(true);
-    expect(queueProgramKickoff({ coord: s }, 'demo-calm-ridge', PROGRAM).queued).toBe(true);
+    expect(queued(s, ID).queued).toBe(true);
+    expect(queued(s, 'demo-calm-ridge').queued).toBe(true);
     expect(due(s).length).toBe(2);
   });
 });

@@ -1,6 +1,6 @@
 import type { CoordStore } from './store.js';
-import { queueSystemMail } from './rundefs.js';
-import { PROGRAM_KICKOFF_SUBJECT, programKickoff } from '../../../shared/api.js';
+import { queueSystemMail, type SystemMailQueued } from './rundefs.js';
+import { MAIL_BODY_MAX_BYTES, PROGRAM_KICKOFF_SUBJECT, programKickoff } from '../../../shared/api.js';
 
 /**
  * L1 decision function (architecture doc increment 4 — "deciding split from
@@ -41,29 +41,37 @@ export interface KickoffDeps {
 }
 
 /**
- * Two outcomes, never one (D-1042). `queued: false` is not a failure — a kickoff
- * IS waiting for this session — but it is not the same fact as "queued just
- * now", and a caller that cannot tell them apart is the overloaded seam this
- * codebase treats as a defect class. Wave 5 is the caller that needs the
- * difference: a re-kickoff most often targets a session that still has an
- * unacked one, and "did anything happen" is the whole question there.
+ * THREE outcomes, and no two of them share an arm.
  *
- * The discriminant is `queueSystemMail`'s own `queued` boolean, carried through
- * unchanged rather than re-spelled as a word pair. The first draft of this type
- * used a two-word string union instead, and `mail-routes.test.ts`'s scanner
- * refused the second word — correctly: it reads as a code, so it would have to
- * join one of the five declared code families or be excused as a non-code, and it
- * was neither. The right question at the right moment, because the honest answer
- * is that this distinction ALREADY had a single definition one ring down, and a
- * word pair here was a second vocabulary for it.
+ * `queued: false` is not a failure (D-1042) — a kickoff IS waiting for this
+ * session — but it is not the same fact as "queued just now", and a caller that
+ * cannot tell them apart is the overloaded seam this codebase treats as a defect
+ * class. Wave 5 is the caller that needs the difference: a re-kickoff most often
+ * targets a session that still has an unacked one, and "did anything happen" is
+ * the whole question there.
+ *
+ * The success half is `queueSystemMail`'s own `SystemMailQueued`, INTERSECTED
+ * rather than re-declared (wave-4 review note, D-1119). The first version spelled
+ * that union out a second time here, which is drift with a one-way silence: a new
+ * field on the write's result would simply not reach this caller, and nothing
+ * would go red. Nothing is re-spelled now — the discriminant is `queueSystemMail`'s
+ * own `queued` boolean, and the refusal is the house `ok: false` with a `kind`,
+ * exactly as `dispatchRun` answers its own oversize.
+ *
+ * An earlier draft used a two-word string union for the queued/not-queued pair
+ * instead, and `mail-routes.test.ts`'s scanner refused the second word —
+ * correctly: it reads as a code, so it would have to join one of the five declared
+ * code families or be excused as a non-code, and it was neither. The right
+ * question at the right moment, because the honest answer is that the
+ * distinction ALREADY had a single definition one ring down.
  *
  * (Note for anyone editing this file: that scanner reads COMMENTS as well as
  * code, on purpose — a comment naming a code is how a retired code survives its
  * own deletion — so prose here spells codes in backticks, never single quotes.)
  */
 export type KickoffOutcome =
-  | { queued: true; mailId: number; deliveryId: number }
-  | { queued: false };
+  | ({ ok: true } & SystemMailQueued)
+  | { ok: false; kind: 'oversize'; limit: number; detail: string };
 
 /**
  * Queue the standing coordinator kickoff to `toId` as durable system mail.
@@ -80,6 +88,19 @@ export type KickoffOutcome =
  * `{program: slug, wave: 0}` here, compiles and even works (the envelope skips
  * all three fields when `runId` is null) but asserts a run that does not exist.
  *
+ * THE BODY IS CAPPED HERE, at the seam, and not in the route (wave-4 review,
+ * MINOR 2, D-1119): every caller of this function embeds text it was handed, and
+ * wave 5's reclaim door is the next one. `MAIL_BODY_MAX_BYTES` is enforced at
+ * the `POST /api/mail` ingress and by `dispatchRun` on its own composed brief,
+ * and until this cap by nothing at all on this path — so the 8 KiB invariant
+ * `schema.ts` records in a comment beside the column was silently false for the
+ * one producer whose content an HTTP caller chooses, and a title under Fastify's
+ * 1 MiB default landed twice in `coord.db` and was served whole into the
+ * recipient's context. Measured on the COMPOSED body for `dispatchRun`'s own
+ * stated reason: a cap on the raw title would let a title at exactly the ceiling
+ * through and queue a mail over it, and the two producers would then disagree
+ * about what 8 KiB means by exactly the length of a template.
+ *
  * THE DEDUPE KEY IS `(operator, null, toId, PROGRAM_KICKOFF_SUBJECT)` — deliberately
  * not namespaced by slug. One session is one program's coordinator; a second
  * outstanding kickoff to a session that already has one unread is a thing to
@@ -93,12 +114,18 @@ export function queueProgramKickoff(
   toId: string,
   program: { slug: string; title: string },
 ): KickoffOutcome {
-  return queueSystemMail(deps.coord, null, {
+  const body = programKickoff(program.slug, program.title);
+  const bytes = Buffer.byteLength(body, 'utf8');
+  if (bytes > MAIL_BODY_MAX_BYTES) {
+    return { ok: false, kind: 'oversize', limit: MAIL_BODY_MAX_BYTES,
+      detail: `kickoff body ${bytes} bytes exceeds the ${MAIL_BODY_MAX_BYTES} byte mail body cap` };
+  }
+  return { ok: true, ...queueSystemMail(deps.coord, null, {
     fromId: 'operator',
     toId,
     runId: null,
     kind: 'status',
     subject: PROGRAM_KICKOFF_SUBJECT,
-    body: programKickoff(program.slug, program.title),
-  });
+    body,
+  }) };
 }

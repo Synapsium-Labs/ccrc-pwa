@@ -815,6 +815,101 @@ F7 surfaces parked mail on the board; this wave does not build a second notifica
 
 ---
 
+## Deviations found in the fix round (review mail 113, 2026-08-30)
+
+**The block is exhausted here.** `D-999..1046` had one number left; it is spent on the MAJOR below.
+Everything after it comes from `POST /api/ledger/deviations` — `D-1119..D-1122`, allocated in one
+call against a floor of 1119, which is itself the measurement that retires this plan's own false
+high-water claim (see the record corrections below).
+
+### D-1046 (defect this wave shipped) — the retry door had none of `finish()`'s supersession guards
+
+`finish()` checks `gen.current` on BOTH arms because closing the sheet mid-flight has to retire
+everything outstanding. `retryKickoff` shipped checking neither, and it is the call in this file
+MOST likely to be in flight across a close: it starts only after the operator has read a failure
+and tapped a button. A late success navigated to the previous attempt's session under whatever the
+operator had opened next; a late rejection re-planted the block the close had just cleared, so the
+next program's sheet opened showing the old attempt's retry door, aimed at the old attempt's
+session. The `finally` is guarded too — a newer retry owns `retrying` once `gen` has moved, and
+clearing it from a superseded call re-enables a button whose own call is still outstanding.
+
+Both harms ship with their own pin, and both fixtures had to be repaired before they could witness
+anything: the navigate pin pushes the router off the target explicitly (this wave's own measured
+lesson, now three waves old), and the re-plant pin has to reopen the sheet, re-pick a project (the
+door is gated on `project !== null`) and drop the started session from the frame (the D-292 arm
+otherwise replaces the whole fragment). The unguarded code passed the first draft of the second one.
+
+### D-1119 (invariant that was silently false) — the kickoff body was the one uncapped mail producer
+
+`MAIL_BODY_MAX_BYTES` is enforced at the `POST /api/mail` ingress and by `dispatchRun` on its own
+composed brief. `queueSystemMail` enforces nothing, which was harmless while every caller composed
+its body from server-side facts — and stopped being harmless the moment a producer embedded content
+an HTTP caller chose. `server.ts` builds Fastify with no `bodyLimit` override, so a ~900 KB title
+under the 1 MiB default reached the handler, landed twice in `coord.db` (the mail row and the
+rendered envelope) and was served whole into the recipient's context. The 8 KiB invariant
+`schema.ts` states in a comment beside the column was false for exactly one producer: this one.
+
+Capped at the SEAM rather than in the route, because wave 5's reclaim door is the next caller and
+inherits the cap by calling the same function. Measured on the COMPOSED body for `dispatchRun`'s own
+stated reason — a cap on the raw title lets a title at exactly the ceiling through and queues a mail
+over it, and the two producers would then disagree about what 8 KiB means by exactly the length of a
+template. The refusal is a THIRD arm (`{ok:false, kind:'oversize', limit, detail}`, the house shape
+every other cap on this server answers in), never a second meaning for `queued:false`; the route maps
+it to 413 and carries `out.kind` rather than re-spelling the code.
+
+`KickoffOutcome`'s success half is now `SystemMailQueued` INTERSECTED rather than re-declared. The
+review named the re-declaration as one-way-silent drift and it was right: a new field on the write's
+result would simply not have reached this caller, with nothing going red.
+
+### D-1120 (honest-failure gap) — two of the route's five codes reached the operator as slugs
+
+`API_ERROR_TEXT` could only be taught two of them. `unknown-session`, `bad-session-id` and
+`bad-request` are OWNED by `uploadErrorText`, which consumes `apiErrorText`'s OUTPUT as a KEY — so a
+sentence there shadows the upload translator's own, and the suite says so (`does not shadow any code
+the UPLOAD translator owns`). The remaining codes therefore reached the sheet as bare slugs inside a
+sentence that ALSO asserted `<id> is running`, which for a 404 asserts the exact fact the registry
+had just denied, above a retry that could not succeed.
+
+Fixed in this file's own established idiom rather than by widening the shared map: a fourth
+per-surface translator (`KICKOFF_ERROR_TEXT` / `kickoffErrorText`), composed exactly as
+`useAttachImage.ts` composes the upload one, and pinned by the same shadow rule in both directions.
+The door's sentence stops claiming the session is running and states what it actually knows.
+
+### D-1121 (stale state, same class as this file's own M3) — a failed kickoff outlived its attempt
+
+`kickoffFailed` was cleared only by close and by a retry that succeeded, so kickoff-A failing and
+the operator starting B left A's red block — and A's navigate-to-A button — directly above the Start
+aimed at B. This file already fixed exactly this class for `timedOut`; the door is worse, because it
+carries an act that strands the create in flight.
+
+RETIRED, NOT RE-KEYED, and that costs something worth stating: the door is the only control that can
+re-post for that session, so a kickoff that failed and was then walked away from is not recoverable
+from this sheet. The trade is deliberate — the door is on screen, in red, directly above the Start
+the operator is choosing to tap instead — and re-keying was rejected because a door about a PREVIOUS
+session has no honest key in the CURRENT attempt's terms.
+
+### D-1122 (pins that could not fire) — two of this wave's own assertions measured nothing
+
+Both found by the review, both in this wave's diff, both green for the same reason: a query that
+matched something other than the thing under test.
+
+1. `pwa/test/api.test.ts`'s "sends NO prose" pin took the FIRST line containing ``/kickoff` `` — the
+   JSDoc line, seventeen lines above the implementation — and asserted that a COMMENT lacked `text`
+   and `body`. It could never red on the mutation it names. The behavioural pin that actually holds
+   the narrowing is `start-program.test.tsx`'s `Object.keys(body).sort()`. Repaired to select the
+   call site (`post(` on the same line) with an anti-vacuity assertion, and measured red against a
+   real prose-adding mutation.
+2. Four `expect(screen.queryByText(/may be mid-task/i)).toBeNull()` assertions — the D-292
+   suppression pins, which are Important-2's own guards — stopped matching anything the moment this
+   wave reworded that paragraph from "may be mid-task" to "which is running mid-task". Nothing went
+   red, because the assertion is an absence. Re-pointed at `/two coordinators/i`, which is unique to
+   that paragraph and survives the correction below.
+
+The class is now three waves old in this program, and the shape is always the same: an absence
+assertion whose fixture cannot produce the presence.
+
+---
+
 ## Notes for the coordinator
 
 - **Not agent-first.** Server + PWA only; no `ccd/`, no `session-hook.sh`, no skill corpus. Deploy the
@@ -832,10 +927,10 @@ F7 surfaces parked mail on the board; this wave does not build a second notifica
   `coord/routes.ts`; it imports nothing that file does not already reach), the `'operator'` sender
   role with its `tellSender` handling, and the `{queued:true|false}` distinction, which a re-kickoff
   onto a session with an outstanding one genuinely needs.
-- **Block state after this wave:** `D-999..1046` allocated; `D-999..D-1045` consumed. **One number
-  free** (the top of the block). A finding that needs a second number in the fix round must use the
-  `D-TBD-<slug>` placeholder in the mail — never a concrete one in a diff — and be reconciled at
-  review.
+- **Block state after this wave:** `D-999..1046` allocated and now **fully consumed** — the fix
+  round spent `D-1046` on the MAJOR and then allocated `D-1119..D-1122` from
+  `POST /api/ledger/deviations` (floor was 1119, is 1123). The `D-TBD-<slug>` placeholder was not
+  needed: the allocator was reachable.
 
 ---
 

@@ -19,7 +19,7 @@ import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { unreadableField } from './ioDoubles.js';
 import { EXEC_WHITELIST } from '../../agent/src/whitelist.js';
-import { PROGRAM_KICKOFF_SUBJECT, programKickoff } from '../../shared/api.js';
+import { MAIL_BODY_MAX_BYTES, PROGRAM_KICKOFF_SUBJECT, programKickoff } from '../../shared/api.js';
 
 const ID = 'demo-quiet-mesa';
 const BODY = { slug: 'build9-demo', title: 'Build 9 demo' };
@@ -228,6 +228,36 @@ describe('POST /api/sessions/:id/kickoff — what it queues, and what it answers
     const second = await post(app);
     expect(second.statusCode).toBe(200);
     expect(second.json()).toMatchObject({ ok: true, queued: false });
+    expect(w.coord.dueDeliveries(Date.now(), 60_000).length).toBe(1);
+  });
+
+  // WAVE-4 REVIEW, MINOR 2 (D-1119). `server.ts` builds Fastify with no
+  // `bodyLimit` override, so the ceiling on what reaches this handler is
+  // Fastify's 1 MiB default — three orders of magnitude above the mail body
+  // cap. The seam refuses; this pins that the route says so in the house
+  // shape (`413 oversize` with its `limit`, same as the claims and ledger
+  // caps) and that nothing was written on the way to saying it.
+  it('413 oversize for a title that pushes the body past the mail cap, and queues NOTHING', async () => {
+    const home = mkTmp('ccrc-kick-');
+    seed(home, ID);
+    const { run } = makeRunner();
+    const w = await openApp(home, run); app = w.app;
+    const res = await post(app, ID, { slug: BODY.slug, title: 'x'.repeat(64 * 1024) });
+    expect(res.statusCode).toBe(413);
+    expect(res.json()).toMatchObject({ ok: false, error: 'oversize', limit: MAIL_BODY_MAX_BYTES });
+    expect(w.coord.dueDeliveries(Date.now(), 60_000)).toEqual([]);
+  });
+
+  it('a 413 is not a dedupe — the session can still be kicked off with a sane title', async () => {
+    // The refusal writes nothing, so it cannot occupy the outstanding-mail key
+    // the dedupe reads. A cap that refused by queueing a truncated row would
+    // fail this.
+    const home = mkTmp('ccrc-kick-');
+    seed(home, ID);
+    const { run } = makeRunner();
+    const w = await openApp(home, run); app = w.app;
+    expect((await post(app, ID, { slug: BODY.slug, title: 'x'.repeat(64 * 1024) })).statusCode).toBe(413);
+    expect((await post(app)).json()).toMatchObject({ ok: true, queued: true });
     expect(w.coord.dueDeliveries(Date.now(), 60_000).length).toBe(1);
   });
 });

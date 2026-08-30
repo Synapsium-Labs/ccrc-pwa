@@ -1513,6 +1513,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       });
     }
     const out = queueProgramKickoff({ coord }, id, { slug: body.slug.trim(), title: body.title.trim() });
+    // 413 in the shape every other cap on this server answers in (claims paths,
+    // claim intent, ledger title, and `POST /api/mail` itself). The seam
+    // MEASURED it and named it; this maps, and decides nothing — `out.kind` is
+    // carried rather than re-spelled here, so the code has one definition.
+    if (!out.ok) {
+      return reply.code(413).send({ ok: false, error: out.kind, limit: out.limit, detail: out.detail });
+    }
     // `queued: false` is not a failure — a kickoff IS waiting for this session —
     // but it is not the same fact as "queued just now", so it rides the body
     // rather than collapsing into one 200 the caller cannot read.
