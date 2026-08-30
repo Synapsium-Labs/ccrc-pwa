@@ -15,7 +15,7 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
 |---|---|---|---|
 | 1 | F1 — drift fixes (ungated-door count, coordinator trigger/resume wording, stale `_id()` anchor) + the coordinator-resume runbook (`references/resume.md`). AGENT-FIRST deploy. | run 10, PR #28 (merged `f5dfd2d9`) | done 2026-08-28 18:08 UTC — CI 5/5 green on `8135118b`, deployed both boxes agent-first, `/health` and fleet `ccd` both report `f5dfd2d9` |
 | 2 | F2 — dispatch-time `skillState` preflight (measure, never refuse) + synchronous deviation-floor seed on first allocation | run 12, PR #30 (merged `4e2a04f5`) | done 2026-08-29 ~10:45 UTC — fix round `c026e151` verified (all findings fixed, D-1020..D-1022), CI 5/5, merged, deployed both boxes agent-first; `/health` and fleet `ccd` both report `4e2a04f5` |
-| 3 | F3 — per-project program-ready badge (server measurement; seam re-ruled to `GET /api/projects` + StartProgramSheet, D-1023) | run 14, PR #33 (tip `768913f8`) | awaiting-review 2026-08-30 — wave-done re-measured (CI 5/5, MERGEABLE/CLEAN, 0 behind), items 4/4, D-1023..D-1033, adversarial review in flight |
+| 3 | F3 — per-project program-ready badge (server measurement; seam re-ruled to `GET /api/projects` + StartProgramSheet, D-1023) | run 14, PR #33 (tip `768913f8`) | fix round 2026-08-30 — reviewed: 2 majors (remote-mode token read makes `ready` unreachable; D-1030 entries unpinned) + 8 minors, 0 blocking, 0 refuted; ruling mailed (107), run back in `working`, fix deviations from D-1034 |
 | 4 | F4 — program kickoff rides the idle-gated mail lane (`queueSystemMail`), direct-injection race retired | — | planned |
 | 5 | F5 — `POST /api/runs/:id/reclaim` (4th ungated door, dead-proof) + PWA resume affordance; door count → four | — | planned |
 | 6 | F6+F7a — `COORD_QUIET_MS`/`COORD_COOLDOWN_MS` for coordinator recipients + `POST /api/coord/caps` operator dial | — | planned |
@@ -166,10 +166,40 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
   **D-1030** (contrast gate didn't cover the badge — same-stylesheet grounding blindness),
   **D-1031** (the one mutation survivor: tree-wide inert `lastX !== 0` idiom, kept + prose
   corrected), **D-1032** (green single suite ≠ typecheck), **D-1033** (badge-absent grid
-  re-flow — invisible to jsdom, shipped then caught). 22 mutations / 21 killed claimed. Wire:
-  additive field on `GET /api/projects`, key-absent vs null vs object trichotomy. NOT
-  agent-first (server+PWA only). Multi-lens adversarial review dispatched (6 lenses +
-  per-finding verifiers + live suites/mutations, workflow `wf_6eed1287-34a`), verdict pending.
+  re-flow — invisible to jsdom, shipped then caught). Mutation table per the review's count:
+  21 applied / 20 killed / 1 survivor (the wave-done's "22/21" was off-by-one bookkeeping —
+  the extra was a run the record itself disqualifies; this entry originally echoed the claim).
+  Wire: additive field on `GET /api/projects`, key-absent vs null vs object trichotomy. NOT
+  agent-first (server+PWA only).
+
+- **Wave-3 reviewed (2026-08-30 ~10:35 UTC): 2 majors + 8 minors, 0 blocking, 0 refuted →
+  fix round (mail 107), run 14 back in `working`, fix-round deviations from D-1034.** Review:
+  6 lenses + per-finding adversarial verification (workflow `wf_6eed1287-34a`, 16 agents);
+  live suites green in a scratch worktree (server 8 suites, pwa 100/100); all four sampled
+  mutations killed with the worker's recorded assertions matching verbatim. D-1023/D-1024/
+  D-1025-arms/D-1026/D-1031/D-1032 all UPHELD with independent evidence; the reuse-fold lens
+  (skillstate extension, mid-wave union merge, D-1027 doctor-lane vocabulary boundary) found
+  nothing. **Major 1:** in remote fleet mode — the live server's standing config — the
+  box-token sweep rides `deps.io` (the agent-backed FleetIO), asking the FLEET box's agent to
+  read a SERVER-box path (`~/.ccrc/mail.token`) its read whitelist refuses (no `.ccrc` arm) →
+  boxToken permanently `unmeasurable` → **`ready` is unreachable in production**; even
+  whitelisted it would measure the wrong box (fleet host's token lives at `~/.cc-secrets/`).
+  Honest failure (permanent unknown, never a false ready), hence major not blocking. Ruling:
+  server-local read port on the readiness deps (D-1015 precedent), never fleet io, with a
+  fixture pinning the wiring (fleet io refuses `.ccrc` + local file exists ⇒ `configured`).
+  **Major 2:** D-1030's three `INHERITED_GROUNDS` entries ship with no test that reds on
+  their deletion — the pre-fix state was measured GREEN, so deletion restores it silently
+  (the census recoverability check only flags color+background painters; `.sheet-panel` sets
+  only background). Ruling: the precedent-shaped `contrast.test.ts` pin (spawn-chip shape).
+  Minors: sweep tick dispatch unpinned (`watch.ts:881`); `configured`-vs-extractable recorded
+  as deviation, NOT content-validated (no honest arm in the three-state vocabulary — verifier
+  ruling adopted); D-1028's twin scan dodges the `interface` spelling with a LIVE pre-existing
+  twin in `NewSessionSheet.tsx:21-24` (widen scan + convert in one commit); blocked badge's
+  missing-precondition list is title-only, invisible on mobile — render it; `missingPreconditions`
+  re-spells `readyVerdict`'s ok-member predicate with no agreement pin; D-1030's recorded
+  mechanism is a MIS-DIAGNOSIS (the real gate is colorless painters, not same-stylesheet — 15
+  pre-existing census rules sit under colorless painters, sweep deferred + recorded); mutation
+  totals off-by-one; row 5.4's dropped suite unexplained (drop was right, sentence missing).
 
 ## Carried constraints
 
