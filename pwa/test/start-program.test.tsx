@@ -93,6 +93,12 @@ function OpenHarness({
   return (
     <>
       <button type="button" onClick={() => setOpen(false)}>close sheet</button>
+      {/* Wave-4 fix round, MAJOR 1: reopening is the only way to SEE the state a
+          superseded retry may have re-planted. `Sheet` is a vaul `Drawer.Portal`
+          with no `forceMount`, so a closed sheet renders no children at all and
+          a `queryByText` against the closed sheet would report absence whether
+          the guard held or not. */}
+      <button type="button" onClick={() => setOpen(true)}>reopen sheet</button>
       <StartProgramSheet
         open={open}
         onClose={() => setOpen(false)}
@@ -1266,6 +1272,94 @@ describe('StartProgramSheet', () => {
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 
     expect(location.pathname).toBe(before);
+  });
+
+  // WAVE-4 REVIEW, MAJOR 1 (D-1046). The twin of the test above, for the door
+  // this wave added. `finish()` checks `gen.current` on BOTH arms because a
+  // close mid-flight must retire everything outstanding; `retryKickoff` shipped
+  // checking NEITHER, and it settles later than anything else in this file —
+  // the operator has already read a failure and tapped a button before its
+  // round trip even starts, which is exactly when a close is likely.
+  //
+  // Both arms are pinned because they harm differently: a late SUCCESS
+  // navigates to the old session under whatever the operator opened next, and a
+  // late REJECTION re-plants the block the close just cleared, so the next
+  // program's sheet opens showing the previous attempt's retry door aimed at
+  // the previous attempt's session.
+  it('a superseded RETRY response cannot navigate', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    let resolveRetry: (() => void) | null = null;
+    const queueKickoff = vi.fn()
+      .mockRejectedValueOnce(new ApiError(501, { ok: false, error: 'not-configured' }))
+      .mockImplementationOnce(() => new Promise<void>((resolve) => { resolveRetry = resolve; }));
+    const store = makeStore();
+    render(<OpenHarness createSession={async () => {}} queueKickoff={queueKickoff} fleet={store} />);
+
+    await fillAndPick();
+    fireEvent.click(await screen.findByRole('button', { name: /^start build9-demo/i }));
+    await screen.findByRole('button', { name: /^starting…$/i });
+    act(() => { store.setState({ sessions: [sess()] }); });
+    await screen.findByText(/could not be queued/i);
+
+    // Somewhere that is NOT the target, explicitly — this file's own measured
+    // lesson: a router already sitting on `/s/claude-ccrc-pwa` makes a
+    // navigating mutant indistinguishable from a guarded one.
+    act(() => { history.pushState(null, '', '/runs'); });
+    fireEvent.click(screen.getByRole('button', { name: /queue the kickoff again/i }));
+    await waitFor(() => expect(queueKickoff).toHaveBeenCalledTimes(2));
+
+    // Close NOW — the retry is still outstanding.
+    fireEvent.click(screen.getByRole('button', { name: /close sheet/i, hidden: true }));
+    resolveRetry!();
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    expect(location.pathname).toBe('/runs');
+  });
+
+  it('a superseded RETRY rejection cannot re-plant the failure the close cleared', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    let rejectRetry: ((e: unknown) => void) | null = null;
+    const queueKickoff = vi.fn()
+      .mockRejectedValueOnce(new ApiError(501, { ok: false, error: 'not-configured' }))
+      .mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { rejectRetry = reject; }));
+    const store = makeStore();
+    render(<OpenHarness createSession={async () => {}} queueKickoff={queueKickoff} fleet={store} />);
+
+    await fillAndPick();
+    fireEvent.click(await screen.findByRole('button', { name: /^start build9-demo/i }));
+    await screen.findByRole('button', { name: /^starting…$/i });
+    act(() => { store.setState({ sessions: [sess()] }); });
+    await screen.findByText(/could not be queued/i);
+
+    fireEvent.click(screen.getByRole('button', { name: /queue the kickoff again/i }));
+    await waitFor(() => expect(queueKickoff).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole('button', { name: /close sheet/i, hidden: true }));
+
+    // The close cleared `kickoffFailed`. The late rejection must not put it back.
+    rejectRetry!(new ApiError(503, { ok: false, error: 'registry-unmeasurable' }));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    // The session that was started has since gone — reaped, stopped, or simply
+    // not in this frame. Without that, re-picking the same project renders the
+    // D-292 refusal INSTEAD of the confirm fragment (`myAttemptRef` was cleared
+    // by the close, so `isOwnAttempt` is false), and neither the door nor its
+    // absence is observable at all. MEASURED: the unguarded code failed this
+    // test on the missing Start button rather than on the stale door.
+    act(() => { store.setState({ sessions: [] }); });
+
+    // Reopen for a DIFFERENT program, and pick a project — the confirm
+    // fragment that holds the door is gated on `project !== null`, and the
+    // close reset it, so a `queryByText` against a freshly reopened sheet
+    // reports absence whether the guard held or not. MEASURED: without this
+    // re-pick the unguarded code passed this test.
+    fireEvent.click(screen.getByRole('button', { name: /reopen sheet/i, hidden: true }));
+    expect(await screen.findByLabelText(/program slug/i)).toBeInTheDocument();
+    await fillAndPick('other-program', 'A different program');
+
+    expect(screen.queryByText(/could not be queued/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /queue the kickoff again/i })).toBeNull();
+    // …and the sheet really is showing the fragment that WOULD have held it.
+    expect(screen.getByRole('button', { name: /^start other-program/i })).toBeInTheDocument();
   });
 });
 

@@ -417,19 +417,35 @@ export function StartProgramSheet({
    *  It re-uses `kickoffFailed.sessionId` and never re-measures the fleet: the
    *  target was chosen once by `startedSessionFor` under D-291/D-292's whole
    *  apparatus, and a retry that re-opened that question could land the kickoff
-   *  somewhere else entirely. */
+   *  somewhere else entirely.
+   *
+   *  GENERATION-GUARDED ON EVERY ARM (wave-4 review, MAJOR 1, D-1046). It
+   *  shipped guarding none, which was the same defect `finish()` carries two
+   *  guards against — and worse here, because this call settles later than
+   *  anything else in the file: the operator has already read a failure and
+   *  tapped a button before the round trip even starts, which is exactly when a
+   *  close is likely. A late SUCCESS navigated to the old session under
+   *  whatever the operator had opened next; a late REJECTION re-planted the
+   *  block the close had just cleared, so the next program's sheet opened
+   *  showing the previous attempt's retry door aimed at the previous attempt's
+   *  session. The `finally` is guarded too, and for a third reason: a newer
+   *  retry owns `retrying` once `gen` has moved, and clearing it from here
+   *  would re-enable a button whose call is still outstanding. */
   const retryKickoff = async (): Promise<void> => {
     const k = kickoffFailed;
     if (k === null || retrying) return;
+    const mine = gen.current;
     setRetrying(true);
     try {
       await queueKickoff(k.sessionId, { slug: k.slug, title: k.title });
+      if (gen.current !== mine) return; // superseded — a later close/open owns the phase now
       setKickoffFailed(null);
       navigate(`/s/${encodeURIComponent(k.sessionId)}`);
     } catch (err: unknown) {
+      if (gen.current !== mine) return; // superseded — the block this would re-plant is retired
       setKickoffFailed({ ...k, why: apiErrorText(err) });
     } finally {
-      setRetrying(false);
+      if (gen.current === mine) setRetrying(false);
     }
   };
 
