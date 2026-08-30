@@ -3028,6 +3028,43 @@ export const MAIL_SUBJECT_MAX_BYTES = 200;
 export const MAIL_ARTIFACTS_MAX = 64;
 export const MAIL_ARTIFACT_PATH_MAX_BYTES = 4096;
 
+/** The path a program's ledger is expected to live at. It NAMES the path the
+ *  operator is expected to have committed and asserts nothing about it: the
+ *  open route parses no ledger ("PARSED BY NOTHING", `coord/routes.ts`), and
+ *  neither speaker of this sentence may pretend to either.
+ *
+ *  L0 since wave 4 (D-1043) because it now has TWO speakers: the start-program
+ *  sheet renders it for the operator before any run exists, and `coord/kickoff.ts`
+ *  builds the kickoff body from it. It lived in `StartProgramSheet.tsx` while the
+ *  browser was its only speaker, and a browser has no filesystem to read a ledger
+ *  off of in the first place — which is still the reason naming it here is safe. */
+export const ledgerPath = (slug: string): string => `docs/superpowers/programs/${slug}.md`;
+
+/**
+ * The one standing kickoff. It names three things and asserts nothing: the
+ * program slug, the ledger path, and the skill to run.
+ *
+ * This is the coordinator's half of the pair whose worker half is
+ * `dispatch.ts`'s `WORKER_KICKOFF_PREFIX` — a skill invoked BY NAME, in the
+ * MAIL, never as a second thing typed at a pane beside it. Since wave 4 the
+ * kickoff is queued by `coord/kickoff.ts` rather than typed by the sheet, so
+ * the server composes this text and the request body carries only `{slug,
+ * title}`: the route can queue a program kickoff and nothing else, which makes
+ * it strictly narrower than `POST /api/sessions/:id/prompt`, and wave 5's
+ * re-kickoff can compose the same sentence with no browser in the loop.
+ */
+export const programKickoff = (slug: string, title: string): string =>
+  `You are the coordinator for program \`${slug}\` (${title}).\n` +
+  `Its ledger is \`${ledgerPath(slug)}\`.\n` +
+  `Run the ccrc-coordinator skill and open the run for wave 1.`;
+
+/** The kickoff's mail subject. Defined HERE, beside the body it labels, rather
+ *  than in `coord/kickoff.ts`: one home for the two halves of one message, and
+ *  no hyphenated literal under `server/src/coord` for `mail-routes.test.ts`'s
+ *  scanner to arbitrate — that scanner exists to keep REFUSAL CODES declared,
+ *  and a subject is not a refusal code. */
+export const PROGRAM_KICKOFF_SUBJECT = 'program-kickoff';
+
 /**
  * Peer-mail producer bounds (Build 9b wave 0, spec D10 hole 2) —
  * `runId === null` traffic ONLY; run mail is bounded by its run's own

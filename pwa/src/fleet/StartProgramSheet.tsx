@@ -36,6 +36,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetSession, ProjectRow } from '../../../shared/api';
+import { ledgerPath, programKickoff } from '../../../shared/api';
 import { Sheet } from '../components/Sheet';
 import { Skeleton } from '../components/Skeleton';
 import { toast } from '../components/Toast';
@@ -51,22 +52,16 @@ import {
 import './fleet.css';
 
 
-/** The one standing kickoff. It names three things and asserts nothing:
- *  the program slug, the ledger path the operator is expected to have
- *  committed, and the skill to run. THE SERVER NEVER VALIDATES THE LEDGER
- *  (`coord/routes.ts`'s open route: "PARSED BY NOTHING") and this sheet must
- *  not pretend to either — naming the path is exactly what that route already
- *  does in its own response, and this stops there. */
-const ledgerPath = (slug: string): string => `docs/superpowers/programs/${slug}.md`;
-
-// Review fix round 1, Minor 3: `kickoff` used to build this path a second
-// time inline rather than calling `ledgerPath` — this file's own header
-// cites "Two implementations of one rule drift" as the reason it exists at
-// all, and had drifted into being an example of the thing it warns against.
-export const kickoff = (slug: string, title: string): string =>
-  `You are the coordinator for program \`${slug}\` (${title}).\n` +
-  `Its ledger is \`${ledgerPath(slug)}\`.\n` +
-  `Run the ccrc-coordinator skill and open the run for wave 1.`;
+// The kickoff sentence and the ledger path both live in `shared/api.ts` since
+// wave 4 (D-1043). They moved because they gained a SECOND speaker — the server
+// composes the kickoff body now that it is queued as mail rather than typed here
+// — and this file's own header cites "Two implementations of one rule drift" as
+// the reason it exists at all. The sheet still renders the path (it is the one
+// thing the operator has to have committed before starting), and still never
+// opens it; only the sending moved.
+//
+// Review fix round 1, Minor 3, carried with them: `programKickoff` builds the
+// path by calling `ledgerPath`, never by spelling it a second time inline.
 
 /** D-291: how long the sheet waits for the freshly created session to
  *  appear in a `/ws/fleet` snapshot before giving up. Tied to the fleet
@@ -373,7 +368,7 @@ export function StartProgramSheet({
   const finish = (session: FleetSession, w: { mine: number; slug: string; title: string }): void => {
     clearTimer();
     waitRef.current = null;
-    void prompt(session.id, kickoff(w.slug, w.title))
+    void prompt(session.id, programKickoff(w.slug, w.title))
       .catch((err: unknown) => {
         // The session is real and the create already succeeded — only the
         // nudge failed to land. Said once, non-blocking: the operator can

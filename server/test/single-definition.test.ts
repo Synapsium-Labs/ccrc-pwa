@@ -616,12 +616,17 @@ describe('the program ledger is parsed by nothing', () => {
     // coord/routes.ts:692 — POST /api/runs's response names where a
     // coordinator should commit the ledger; the route never opens it.
     'ledgerPath: `docs/superpowers/programs/${program}.md`,',
-    // pwa/src/fleet/StartProgramSheet.tsx:55 — the same category as the
-    // entry above, one layer client-side: the sheet NAMES the path the
-    // operator is expected to have committed, before `POST /api/runs` is
-    // ever composed, and never opens it — a browser has no filesystem to
-    // read one off of in the first place.
-    'const ledgerPath = (slug: string): string => `docs/superpowers/programs/${slug}.md`;',
+    // shared/api.ts's `ledgerPath` — the same category as the entry above,
+    // one ring down: it NAMES the path the operator is expected to have
+    // committed, before `POST /api/runs` is ever composed, and never opens it.
+    // It lived in `pwa/src/fleet/StartProgramSheet.tsx` while the browser was
+    // its only speaker — and a browser has no filesystem to read one off of in
+    // the first place, which is still why naming it is safe. Wave 4 (D-1043)
+    // gave it a second speaker, `server/src/coord/kickoff.ts`, which builds the
+    // kickoff BODY from it and likewise never opens it; the `export` keyword
+    // below is the whole diff, and this entry matches on line TEXT, so the move
+    // cost nothing and the rename cost exactly this line.
+    'export const ledgerPath = (slug: string): string => `docs/superpowers/programs/${slug}.md`;',
   ];
 
   const isCommentLine = (line: string): boolean => {

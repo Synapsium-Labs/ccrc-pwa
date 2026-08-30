@@ -33,11 +33,11 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { readyVerdict } from '../../shared/api';
+import { programKickoff, readyVerdict } from '../../shared/api';
 import type {
   CoordStatus, FleetSession, ProjectReadiness, ReadinessFacts,
 } from '../../shared/api';
-import { StartProgramSheet, kickoff, startedSessionFor, START_PROGRAM_WAIT_MS } from '../src/fleet/StartProgramSheet';
+import { StartProgramSheet, startedSessionFor, START_PROGRAM_WAIT_MS } from '../src/fleet/StartProgramSheet';
 import { missingPreconditions } from '../src/fleet/readinessWords';
 import { ApiError, api } from '../src/lib/api';
 import { ToastHost } from '../src/components/Toast';
@@ -106,15 +106,15 @@ function OpenHarness({
 }
 
 describe('kickoff — the one standing template, copied from the brief verbatim', () => {
-  // A LITERAL comparison, not `kickoff(...)` compared against itself — the
-  // sheet's own tests below call `kickoff()` to build their expectation too,
+  // A LITERAL comparison, not `programKickoff(...)` compared against itself — the
+  // sheet's own tests below call `programKickoff()` to build their expectation too,
   // which pins that the sheet USES the constant but cannot catch the
   // constant's own text drifting away from the brief (measured: a one-word
   // change inside the template still passed every other test in this file).
   // This is the one place the brief's exact code block is checked against
   // what actually ships.
   it('matches the brief\'s kickoff code block byte for byte', () => {
-    expect(kickoff('build4-conversation-and-controls', 'Build 4: conversation and controls')).toBe(
+    expect(programKickoff('build4-conversation-and-controls', 'Build 4: conversation and controls')).toBe(
       'You are the coordinator for program `build4-conversation-and-controls` (Build 4: conversation and controls).\n'
       + 'Its ledger is `docs/superpowers/programs/build4-conversation-and-controls.md`.\n'
       + 'Run the ccrc-coordinator skill and open the run for wave 1.',
@@ -311,7 +311,7 @@ describe('StartProgramSheet', () => {
     const [id, text] = prompt.mock.calls[0] as [string, string];
     expect(id).toBe('claude-ccrc-pwa');
     // Exact equality against the exported constant — the text has one home.
-    expect(text).toBe(kickoff('build9-demo', 'Build 9 demo'));
+    expect(text).toBe(programKickoff('build9-demo', 'Build 9 demo'));
     expect(text).toContain('build9-demo');
     expect(text).toContain('docs/superpowers/programs/build9-demo.md');
     expect(text).toContain('ccrc-coordinator');
@@ -560,7 +560,7 @@ describe('StartProgramSheet', () => {
     // And the mission still completes, as if the timeout had never fired —
     // the kickoff is sent, once, and the sheet navigates.
     await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
-    expect(prompt).toHaveBeenCalledWith('claude-ccrc-pwa', kickoff('build9-demo', 'Build 9 demo'));
+    expect(prompt).toHaveBeenCalledWith('claude-ccrc-pwa', programKickoff('build9-demo', 'Build 9 demo'));
     await waitFor(() => expect(location.pathname).toBe('/s/claude-ccrc-pwa'));
   });
 
@@ -700,7 +700,7 @@ describe('StartProgramSheet', () => {
     });
 
     await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
-    expect(prompt).toHaveBeenCalledWith('claude-ccrc-pwa', kickoff('build9-demo', 'Build 9 demo'));
+    expect(prompt).toHaveBeenCalledWith('claude-ccrc-pwa', programKickoff('build9-demo', 'Build 9 demo'));
     await waitFor(() => expect(location.pathname).toBe('/s/claude-ccrc-pwa'));
   });
 
@@ -737,7 +737,7 @@ describe('StartProgramSheet', () => {
     // The kickoff goes to the session that was actually started, never the
     // dead swapped row that merely satisfies the same three fields.
     await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
-    expect(prompt).toHaveBeenCalledWith('claude2-ccrc-pwa', kickoff('build9-demo', 'Build 9 demo'));
+    expect(prompt).toHaveBeenCalledWith('claude2-ccrc-pwa', programKickoff('build9-demo', 'Build 9 demo'));
     await waitFor(() => expect(location.pathname).toBe('/s/claude2-ccrc-pwa'));
   });
 
@@ -764,7 +764,7 @@ describe('StartProgramSheet', () => {
     act(() => { store.setState({ sessions: [sess({ id: 'claude-ccrc-pwa', status: 'idle' })] }); });
 
     await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
-    expect(prompt).toHaveBeenCalledWith('claude-ccrc-pwa', kickoff('build9-demo', 'Build 9 demo'));
+    expect(prompt).toHaveBeenCalledWith('claude-ccrc-pwa', programKickoff('build9-demo', 'Build 9 demo'));
     await waitFor(() => expect(location.pathname).toBe('/s/claude-ccrc-pwa'));
   });
 
@@ -810,7 +810,7 @@ describe('StartProgramSheet', () => {
     // And the attempt still completes once the create finally answers.
     resolveCreate!();
     await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
-    expect(prompt).toHaveBeenCalledWith('claude-ccrc-pwa', kickoff('build9-demo', 'Build 9 demo'));
+    expect(prompt).toHaveBeenCalledWith('claude-ccrc-pwa', programKickoff('build9-demo', 'Build 9 demo'));
   });
 
   it('re-arms nothing when the create FAILS — a genuine refusal is not suppressed by a dead attempt (B-1)', async () => {
@@ -897,7 +897,7 @@ describe('StartProgramSheet', () => {
     // …and the sheet is still waiting for its own, which then lands.
     act(() => { store.setState({ sessions: [sess()] }); });
     await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
-    expect(prompt).toHaveBeenCalledWith('claude-ccrc-pwa', kickoff('build9-demo', 'Build 9 demo'));
+    expect(prompt).toHaveBeenCalledWith('claude-ccrc-pwa', programKickoff('build9-demo', 'Build 9 demo'));
   });
 
   // The sibling of the test above, varying `workspace` where that one varies
@@ -938,7 +938,7 @@ describe('StartProgramSheet', () => {
     // …and the sheet is still waiting for its own main checkout, which lands.
     act(() => { store.setState({ sessions: [sess()] }); });
     await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
-    expect(prompt).toHaveBeenCalledWith('claude-ccrc-pwa', kickoff('build9-demo', 'Build 9 demo'));
+    expect(prompt).toHaveBeenCalledWith('claude-ccrc-pwa', programKickoff('build9-demo', 'Build 9 demo'));
   });
 
   // The THIRD conjunct of the same arm, found by the same measurement that
@@ -973,7 +973,7 @@ describe('StartProgramSheet', () => {
 
     act(() => { store.setState({ sessions: [sess()] }); });
     await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
-    expect(prompt).toHaveBeenCalledWith('claude-ccrc-pwa', kickoff('build9-demo', 'Build 9 demo'));
+    expect(prompt).toHaveBeenCalledWith('claude-ccrc-pwa', programKickoff('build9-demo', 'Build 9 demo'));
   });
 
   it("does not refuse its OWN attempt after a swap moves its wrapper — ownership is compared on project alone (C1-swap)", async () => {

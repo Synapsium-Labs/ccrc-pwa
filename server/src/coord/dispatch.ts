@@ -19,7 +19,10 @@ import { readWorkerSkillState } from '../skillstate.js';
 
 // The worker kickoff rides the brief mail itself: dispatch writes nothing to a
 // wave-1 pane (the zero-send-keys pin), and skills are invoked BY NAME (the
-// coordinator kickoff idiom, StartProgramSheet.kickoff). One constant, one place.
+// coordinator kickoff idiom, `shared/api.ts`'s `programKickoff`). One constant,
+// one place — and since wave 4 (D-1043) that is a fact rather than an aspiration:
+// the coordinator kickoff is queued by `coord/kickoff.ts` from that same L0
+// constant, so BOTH kickoffs on this fleet now name their skill from one home.
 //
 // THE SKILL IT NAMES SHIPS ON THIS SAME BRANCH (`ccd/worker-skill/SKILL.md`) and
 // reaches no box until that branch's installer has run there — prefix and skill
