@@ -2428,8 +2428,43 @@ export class FleetWatcher {
           // than the source.
           gated(d, unmeasurable ? 'registry-unmeasurable' : 'registry-absent');
           const attempts = d.attempts + 1;
+          // D-1069 — THE PARK STAYS, and a DELIVERED row now says why it parked.
+          //
+          // An earlier draft of this change (D-1067, withdrawn before merge)
+          // added `&& d.deliveredAt === null` here, mirroring the SEND-failure
+          // park ~250 lines below. That was wrong, and `store.ts`'s own
+          // OUTSTANDING_OR_ABANDONED_SQL comment says why: a `rejected` row
+          // stays visible to a HUMAN ("is this worth a human's attention")
+          // while staying terminal for the LANE ("should the delivery lane act
+          // on this again"). This park is the ONLY thing that ends the lane for
+          // a delivered row whose recipient's registry row was PURGED.
+          // `cancelOutstandingDeliveries` is runId-scoped, so peer mail
+          // (`runId IS NULL`) is out of its reach, and `MAIL_REPLAY_MAX_ATTEMPTS`
+          // counts SUCCESSFUL replays, which a row gated HERE never gets.
+          // Without the park the row stays due at the 15-minute ceiling for
+          // ever — and `_ws_slug_new` recycles a purged slug (`ccd/ccd:3516`,
+          // and ccd's own comment: "144 per project, recycled by ws-reap"), so
+          // that id can be re-minted for an unrelated workspace and the lane
+          // will then type this stale envelope into it. `mail_deliveries`
+          // carries no recipient uuid, so nothing downstream can tell the two
+          // recipients apart. The hazard is bounded today only because this
+          // park ends the row ~26 minutes after the purge.
+          //
+          // What WAS wrong is the sentence. `'recipient not in registry'` beside
+          // `rejectCode: 'undeliverable'` reads as "this never arrived", and for
+          // a delivered row that is false. `lastError` is free text a maintainer
+          // greps, so the row itself now says what actually happened. The ack
+          // door stays shut either way (`markAcked` admits only the replay-
+          // ceiling park) and that is correct here: a PURGE is permanent —
+          // `ws-restore` restores an ARCHIVED workspace, which keeps its
+          // registry row and so lands on the session-dead rung, not this one —
+          // so the only party that could ever walk through that door is a
+          // re-minted stranger wearing the same id.
           if (attempts >= MAIL_MAX_ATTEMPTS && !unmeasurable) {
-            store.rejectDelivery(d.id, 'undeliverable', 'recipient not in registry');
+            store.rejectDelivery(d.id, 'undeliverable',
+              d.deliveredAt === null
+                ? 'recipient not in registry'
+                : 'recipient purged after this message was delivered, and never acked');
           } else {
             const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
             store.backOff(d.id,
@@ -2501,15 +2536,28 @@ export class FleetWatcher {
           //       post-reboot `orphan` window.
           //
           // A DELIVERED row still records the gate above (the console must say
-          // what is holding it) and still backs off, but on the never-ratcheting
-          // terms: replay is governed by `MAIL_REPLAY_MAX_ATTEMPTS`, which has
-          // its own ceiling and its own park, and this rung must not reach past
-          // its own budget into that one.
+          // what is holding it) and still backs off — on the ORDINARY ratcheting
+          // terms, identical to the registry-absent rung's own `else` arm.
+          //
+          // D-1068 CORRECTS D-1066 here. This arm first shipped with
+          // `countsAsAttempt: false`, reasoning that a delivered row must not
+          // ratchet toward a park it does not own. That was right about the park
+          // and wrong about the clock: `attempts` is also what `step` is
+          // computed FROM, so freezing it pinned every step at
+          // MAIL_BACKOFF_BASE_MS and `Math.min` never bound. Measured on the
+          // shipped build: 40 re-examinations in 30 minutes, for ever, against a
+          // recipient the registry proves is never coming back — no ceiling of
+          // any kind, because `MAIL_REPLAY_MAX_ATTEMPTS` counts SUCCESSFUL
+          // replays and a row gated HERE never gets one. That is the same
+          // every-tick-for-ever shape D-1066 was written to end, wearing a gate
+          // label. `MAIL_MAX_ATTEMPTS`'s own docstring had already said what to
+          // do instead — "`attempts` keeps counting on a delivered row too …
+          // just without a ceiling that turns a failing SEND into a park" — and
+          // that an uncapped counter is exactly what makes MAIL_BACKOFF_MAX_MS
+          // reachable rather than decorative.
           const attempts = d.attempts + 1;
           const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
-          if (d.deliveredAt !== null) {
-            store.backOff(d.id, `recipient session is ${lc}`, now + step, false);
-          } else if (attempts >= MAIL_MAX_ATTEMPTS) {
+          if (d.deliveredAt === null && attempts >= MAIL_MAX_ATTEMPTS) {
             store.rejectDelivery(d.id, 'undeliverable', `recipient session is ${lc}`);
           } else {
             store.backOff(d.id, `recipient session is ${lc}`, now + step, true);
