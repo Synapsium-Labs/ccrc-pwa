@@ -79,6 +79,37 @@ const seedRegistry = (home: string, id: string, uuid = UUID): void => {
   for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${id}.${k}`), v);
 };
 
+/**
+ * A FRESH supervisor heartbeat — which is what makes a session with a dead pane
+ * `restarting` rather than `orphan`, and therefore recoverable.
+ *
+ * It matters because `seedRegistry` alone writes `started` with no stop stamp
+ * and no heartbeat, and `sessionLifecycle` reads that plus a dead pane as
+ * `orphan` — one of the three words D-309's refinement treats as gone for good.
+ * Every test below whose SUBJECT is "an ordinary gate holds indefinitely" means
+ * the recoverable case, so it says so here rather than relying on a fixture
+ * default that now decides the opposite.
+ *
+ * Epoch SECONDS, matching ccd's own `date +%s` writer and the `^[0-9]+$` guard
+ * on both readers — milliseconds here would land ~55 years in the future, which
+ * `sessionLifecycle`'s `>= 0` guard reads as NOT fresh, quietly giving `orphan`
+ * again and making this helper a no-op.
+ */
+const seedSupervised = (home: string, id: string, nowMs = NOW): void => {
+  const reg = path.join(home, '.cc-sessions');
+  mkdirSync(reg, { recursive: true });
+  writeFileSync(path.join(reg, `${id}.supervised`), String(Math.floor(nowMs / 1000)));
+};
+
+/** The stop stamp `ws-archive` leaves behind (`_ws_unsupervise` writes it), so a
+ *  test can build the exact row the live fleet had: archived, pane gone, mail
+ *  still queued. `<epoch> <surface>`, seconds. */
+const seedStopped = (home: string, id: string, surface = 'ccd', nowMs = NOW): void => {
+  const reg = path.join(home, '.cc-sessions');
+  mkdirSync(reg, { recursive: true });
+  writeFileSync(path.join(reg, `${id}.stopped`), `${Math.floor(nowMs / 1000)} ${surface}`);
+};
+
 /** A fresh, `done`, ask-free hookstate — the gate's own idle. Every field a
  *  test doesn't care about is a value that passes; override only the one
  *  that matters. */
@@ -1272,14 +1303,22 @@ describe('sweepMail: a dead recipient eventually parks (review finding 30)', () 
     expect(row.attempts, 'a whole-fleet read failure must never ratchet attempts').toBe(0);
   });
 
-  it('an ORDINARY gate (busy, on cooldown, no tmux session) never accrues an attempt', async () => {
-    // Only the registry-absent gate backs off; every other gate must stay
-    // free to hold indefinitely without ever parking a legitimately busy
-    // session's mail.
+  it('an ORDINARY gate (busy, on cooldown, a pane that may come back) never accrues an attempt', async () => {
+    // Only the STRUCTURAL gates back off — `registry-absent`, and since D-309's
+    // refinement `session-dead`. Every other gate must stay free to hold
+    // indefinitely without ever parking a legitimately busy session's mail.
+    //
+    // `seedSupervised` is what keeps this fixture's tmux-gone ORDINARY: with a
+    // fresh heartbeat the session reads `restarting`, which is the case D-309
+    // was written to protect. Without it the same fixture is `orphan`, and the
+    // test would be asserting the invariant about a gate that is no longer an
+    // instance of it — passing for the wrong reason, or failing for the right
+    // one, depending on which way the ladder moved.
     const h = harness({ hasSession: false });
     const coord = store(h.home);
     const { w } = await primedWatcher(h, coord);
     seedRegistry(h.home, ID);
+    seedSupervised(h.home, ID);
     seedHookState(h.home, ID);
     seedLiveState(h.home);
     const { id } = queueTestDelivery(coord, ID, ENVELOPE);
@@ -1337,14 +1376,16 @@ describe('sweepMail: a tmux that did not answer is not a silent skip (D-309)', (
     expect(row.attempts).toBe(0);
   });
 
-  it('a recipient tmux PROVED gone stays the ordinary silent gate — queued, no error, no backoff', async () => {
-    // The `gone` half of the pair keeps its exact old meaning: the session is
-    // not up, the mail simply waits for it, and nothing is recorded — same as
-    // busy or on-cooldown. Only the CANNOT-ASK answer earns a lastError.
+  it('a recipient tmux proved gone but COMING BACK stays the ordinary silent gate — queued, no error, no backoff', async () => {
+    // The `gone` half of the pair keeps its old meaning for the case D-309 was
+    // written about: the session is not up RIGHT NOW, a supervisor is still
+    // watching it, the mail simply waits — same as busy or on-cooldown. Only
+    // the CANNOT-ASK answer earns a lastError.
     const h = harness({ hasSession: false, panes: HAPPY_PANES });
     const coord = store(h.home);
     const { w } = await primedWatcher(h, coord);
     seedRegistry(h.home, ID);
+    seedSupervised(h.home, ID);   // fresh heartbeat -> `restarting`
     seedHookState(h.home, ID);
     seedLiveState(h.home);
     const { id } = queueTestDelivery(coord, ID, ENVELOPE);
@@ -1355,6 +1396,162 @@ describe('sweepMail: a tmux that did not answer is not a silent skip (D-309)', (
     expect(row.state).toBe('queued');
     expect(row.attempts).toBe(0);
     expect(row.lastError).toBeNull();
+    expect(row.lastGate).toBe('tmux-gone');
+  });
+});
+
+// D-1066 — D-309 REFINED, operator ruling 2026-08-30, on measured evidence rather than
+// argument: a delivery to an ARCHIVED workspace sat `queued` for 22.5 hours on
+// the live fleet and was refused 6,769 times, once per sweep, with no terminal
+// state and nothing telling the sender. D-792's gate columns are what made that
+// visible; this is the half that acts on it.
+//
+// The premise D-309 rests on — "the mail waits for the session to come back" —
+// is true for a swap, a restart or a reboot, and false for a session somebody
+// archived. `sessionLifecycle` already draws that line from facts the sweep
+// holds, so the rung asks "is it coming back", not "is the pane gone".
+describe('sweepMail: a recipient that is gone FOR GOOD parks (D-309 refined)', () => {
+  // `ws-archive` unsupervises through `_ws_unsupervise`, which writes the stop
+  // stamp — so an archived workspace reads `stopped`. This is the live row.
+  const seedArchived = (home: string, id: string): void => {
+    seedRegistry(home, id);
+    seedStopped(home, id);
+  };
+
+  it('records `session-dead`, not `tmux-gone` — the two are different operator actions', async () => {
+    const h = harness({ hasSession: false });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedArchived(h.home, ID); seedHookState(h.home, ID); seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    advance(PAST_SWEEP_MS); await w.sweepMail();
+    const row = deliveryRow(coord, id);
+    expect(row.lastGate, 'the registry proves this one is not coming back').toBe('session-dead');
+  });
+
+  it('accrues an attempt and backs off — the registry-absent rung\'s exact terms', async () => {
+    const h = harness({ hasSession: false });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedArchived(h.home, ID); seedHookState(h.home, ID); seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    advance(PAST_SWEEP_MS); await w.sweepMail();
+    const row = deliveryRow(coord, id);
+    expect(row.attempts, 'a proven-gone recipient counts toward the ceiling').toBe(1);
+    expect(row.lastError, 'greppable, and it names the lifecycle word').toBe('recipient session is stopped');
+    expect(row.state).toBe('queued');
+  });
+
+  it('parks `rejected(undeliverable)` at the ceiling instead of retrying for ever', async () => {
+    // THE WHOLE POINT. 6,769 refusals became a terminal state a sender can see.
+    const h = harness({ hasSession: false });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedArchived(h.home, ID); seedHookState(h.home, ID); seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    // Each pass must clear BOTH the lane's own cadence gate and this row's
+    // growing backoff, so advance by the largest of them.
+    for (let i = 0; i < MAIL_MAX_ATTEMPTS + 1; i++) {
+      advance(MAIL_BACKOFF_MAX_MS + 1_000);
+      await w.sweepMail();
+    }
+    const row = deliveryRow(coord, id);
+    expect(row.state, 'terminal at last').toBe('rejected');
+    expect(row.rejectCode).toBe('undeliverable');
+  });
+
+  it('an ORPHAN parks too — started once, no stop stamp, and nothing supervising it', async () => {
+    // The three dead words are not just `stopped`. An orphan's repair is a
+    // PROCESS (`sessionLifecycle`'s own docstring), and until someone runs one
+    // the mail has nowhere to go.
+    const h = harness({ hasSession: false });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);   // started, no stop stamp, no heartbeat
+    seedHookState(h.home, ID); seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    advance(PAST_SWEEP_MS); await w.sweepMail();
+    const row = deliveryRow(coord, id);
+    expect(row.lastGate).toBe('session-dead');
+    expect(row.lastError).toBe('recipient session is orphan');
+  });
+
+  it('NEVER parks a row that was already DELIVERED — its own history disproves `undeliverable`', async () => {
+    // `MAIL_MAX_ATTEMPTS`'s own docstring: the budget "applies ONLY while a
+    // delivery's own `deliveredAt` is still null … The instant `deliveredAt` is
+    // set, this budget stops applying". Found by adversarial review before
+    // merge, with two measured consequences: a message that demonstrably
+    // reached the recipient recorded `undeliverable` (and `markAcked` then
+    // refuses it, so a revived session could never ack it), and — because
+    // `attempts` is one cumulative column that a delivered row leaves uncapped
+    // — a row already at 5 parking on its FIRST session-dead observation with
+    // no backoff at all.
+    const h = harness({ hasSession: false });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedArchived(h.home, ID); seedHookState(h.home, ID); seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+    coord.markDelivered(id, NOW);
+
+    for (let i = 0; i < MAIL_MAX_ATTEMPTS + 3; i++) {
+      advance(MAIL_BACKOFF_MAX_MS + 1_000);
+      await w.sweepMail();
+    }
+    const row = deliveryRow(coord, id);
+    expect(row.state, 'a delivered row must never be called undeliverable by THIS budget').not.toBe('rejected');
+    expect(row.attempts, 'and this rung must not ratchet a delivered row toward a park it does not own').toBe(0);
+    // …while the console still learns what is holding it.
+    expect(row.lastGate).toBe('session-dead');
+  });
+
+  it('a session merely RESTARTING never parks, however long it takes', async () => {
+    // The case D-309 exists for, and the one this refinement must not break: a
+    // supervisor is watching, so the pane is expected back and the mail waits.
+    const h = harness({ hasSession: false });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID); seedHookState(h.home, ID); seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    for (let i = 0; i < MAIL_MAX_ATTEMPTS + 2; i++) {
+      // Re-stamp each pass: a supervisor really is running, so the heartbeat
+      // stays fresh. A stale stamp would decay to `orphan`, which is a
+      // DIFFERENT fact and has its own test above.
+      seedSupervised(h.home, ID, Date.now());
+      advance(PAST_SWEEP_MS);
+      await w.sweepMail();
+    }
+    const row = deliveryRow(coord, id);
+    expect(row.state, 'still waiting, exactly as D-309 intended').toBe('queued');
+    expect(row.attempts, 'a recoverable gate is not a send failure').toBe(0);
+    expect(row.lastGate).toBe('tmux-gone');
+  });
+
+  it('an UNMEASURABLE lifecycle never parks — doubt is not evidence', async () => {
+    // The rule the registry rung draws one gate up, held here too: a read that
+    // could not measure must never park a live session's mail. `.started`
+    // listed but unreadable is a LIFECYCLE_FIELD, so the answer is
+    // `unmeasurable` rather than a guess at `orphan`.
+    const h = harness({ hasSession: false });
+    const coord = store(h.home);
+    // Seed BEFORE the watcher primes, then hand the degraded IO to the deps —
+    // `unreadableField` RETURNS a FleetIO, it does not mutate a home, and the
+    // first cut of this test called it for effect and asserted about a fixture
+    // that was never degraded at all. It passed as `orphan` and would have gone
+    // on "proving" an invariant it never exercised.
+    seedRegistry(h.home, ID); seedHookState(h.home, ID); seedLiveState(h.home);
+    const { w } = await primedWatcher(h, coord, { io: unreadableField(ID, 'started') });
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    for (let i = 0; i < MAIL_MAX_ATTEMPTS + 2; i++) { advance(PAST_SWEEP_MS); await w.sweepMail(); }
+    const row = deliveryRow(coord, id);
+    expect(row.state).toBe('queued');
+    expect(row.attempts, 'an unmeasured lifecycle must never accrue').toBe(0);
+    expect(row.lastGate).toBe('tmux-gone');
   });
 });
 
@@ -1775,6 +1972,7 @@ describe('sweepMail: what refused this delivery (D-792)', () => {
     const coord = store(h.home);
     const { w } = await primedWatcher(h, coord);
     seedRegistry(h.home, ID);
+    seedSupervised(h.home, ID);   // `restarting`, so the gate stays ordinary
     seedHookState(h.home, ID);
     seedLiveState(h.home);
     const { id } = queueTestDelivery(coord, ID, ENVELOPE);
@@ -1798,7 +1996,8 @@ describe('sweepMail: what refused this delivery (D-792)', () => {
     const h = harness({ hasSession: false });
     const coord = store(h.home);
     const { w } = await primedWatcher(h, coord);
-    seedRegistry(h.home, ID); seedHookState(h.home, ID); seedLiveState(h.home);
+    seedRegistry(h.home, ID); seedSupervised(h.home, ID);
+    seedHookState(h.home, ID); seedLiveState(h.home);
     const { id } = queueTestDelivery(coord, ID, ENVELOPE);
 
     advance(PAST_SWEEP_MS); await w.sweepMail();
