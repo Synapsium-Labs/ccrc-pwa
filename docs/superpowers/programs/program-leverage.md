@@ -15,7 +15,7 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
 |---|---|---|---|
 | 1 | F1 — drift fixes (ungated-door count, coordinator trigger/resume wording, stale `_id()` anchor) + the coordinator-resume runbook (`references/resume.md`). AGENT-FIRST deploy. | run 10, PR #28 (merged `f5dfd2d9`) | done 2026-08-28 18:08 UTC — CI 5/5 green on `8135118b`, deployed both boxes agent-first, `/health` and fleet `ccd` both report `f5dfd2d9` |
 | 2 | F2 — dispatch-time `skillState` preflight (measure, never refuse) + synchronous deviation-floor seed on first allocation | run 12, PR #30 (merged `4e2a04f5`) | done 2026-08-29 ~10:45 UTC — fix round `c026e151` verified (all findings fixed, D-1020..D-1022), CI 5/5, merged, deployed both boxes agent-first; `/health` and fleet `ccd` both report `4e2a04f5` |
-| 3 | F3 — per-project program-ready badge (server measurement + /runs board) | run 14 | dispatched 2026-08-29 ~10:45 UTC — same workspace reclaimed (`resumed:true`, `briefQueued:true`); the dispatch response carried `skillState:"present"` — wave 2's own preflight, live, measuring wave 3's dispatch |
+| 3 | F3 — per-project program-ready badge (server measurement; seam re-ruled to `GET /api/projects` + StartProgramSheet, D-1023) | run 14, PR #33 (tip `768913f8`) | awaiting-review 2026-08-30 — wave-done re-measured (CI 5/5, MERGEABLE/CLEAN, 0 behind), items 4/4, D-1023..D-1033, adversarial review in flight |
 | 4 | F4 — program kickoff rides the idle-gated mail lane (`queueSystemMail`), direct-injection race retired | — | planned |
 | 5 | F5 — `POST /api/runs/:id/reclaim` (4th ungated door, dead-proof) + PWA resume affordance; door count → four | — | planned |
 | 6 | F6+F7a — `COORD_QUIET_MS`/`COORD_COOLDOWN_MS` for coordinator recipients + `POST /api/coord/caps` operator dial | — | planned |
@@ -144,6 +144,32 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
   sweep. Lesson carried (worker's words): "a suite that cannot express a change cannot witness
   it" — partial-failure fixtures must exist before an "unchanged behaviour" claim means
   anything.
+
+- **Wave 3 wave-done re-measured (2026-08-30 ~10:10 UTC):** worker mail (delivery 104, run 14)
+  reports tip `768913f8` = handoffCommit, PR #33 open. Re-measured true: workspace HEAD matches,
+  PR #33 MERGEABLE/CLEAN onto main, CI run 33258091996 5/5 green on that exact sha, merge-base
+  with origin/main is `7fb93b3e` (the graphify merge — 0 behind). Run 14 advanced
+  dispatched→working→awaiting-review with the exact reported fingerprint; items 4/4 settled.
+  Headline deviations claimed (verification pending review): **D-1023** — the seam is NEITHER
+  spec-named seam; both measured structurally unable (`GET /api/runs` JOINs away run-less
+  projects — the exact case F3 exists for; the coord emit sits above the registry fail-shut with
+  no project names in scope, pinned by `fleetws.test.ts:843-869`). Put to the operator with
+  measurements; **operator ruling: ship on `GET /api/projects`, badge in StartProgramSheet
+  ONLY** (the /runs board groups by PROGRAM slug and nothing constrains a program's runs to one
+  project — a group-header badge would be a program wearing a project's answer). **D-1026** —
+  the aggregate is `ready|blocked|unknown`, not the approved boolean (`ready:false` would fold
+  proven-missing into could-not-tell); blocked outranks unknown. **D-1024/D-1025** — spec's
+  precondition arms corrected against the shipped process (coord-DB false is unreachable while
+  the server runs; the real degraded arm is a post-boot throwing read, previously swallowed;
+  the token's unmeasurable arm only exists because the sweep re-measures the path). **D-1028**
+  (three spellings of the projects row, inline twin now scanned by single-definition),
+  **D-1030** (contrast gate didn't cover the badge — same-stylesheet grounding blindness),
+  **D-1031** (the one mutation survivor: tree-wide inert `lastX !== 0` idiom, kept + prose
+  corrected), **D-1032** (green single suite ≠ typecheck), **D-1033** (badge-absent grid
+  re-flow — invisible to jsdom, shipped then caught). 22 mutations / 21 killed claimed. Wire:
+  additive field on `GET /api/projects`, key-absent vs null vs object trichotomy. NOT
+  agent-first (server+PWA only). Multi-lens adversarial review dispatched (6 lenses +
+  per-finding verifiers + live suites/mutations, workflow `wf_6eed1287-34a`), verdict pending.
 
 ## Carried constraints
 
