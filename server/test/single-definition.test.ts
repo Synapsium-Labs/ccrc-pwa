@@ -1121,7 +1121,13 @@ describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
     // Not just "no second literal" — that is satisfied by deleting the emitter.
     const src = readFileSync(path.join(ccrcRoot, 'server', 'src', 'watch.ts'), 'utf8');
     expect(src).toContain('COORDINATOR_PAUSE_MARKER');
-    expect(src).toMatch(/import \{ COORDINATOR_PAUSE_MARKER \} from '\.\/coord\/rundefs\.js'/);
+    // The property is "reached through the shared constant, FROM that module",
+    // not "that import line names exactly one symbol". Widened in
+    // program-leverage wave 4, which imports `MAIL_ROLE_IDS` from the same
+    // place: the alternative was a second import line from one module purely to
+    // satisfy a regex, which is a contortion, not a guard. The `\b` anchors keep
+    // it from matching a longer name that merely contains this one.
+    expect(src).toMatch(/import \{[^}]*\bCOORDINATOR_PAUSE_MARKER\b[^}]*\} from '\.\/coord\/rundefs\.js'/);
   });
 });
 
