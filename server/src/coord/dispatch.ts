@@ -644,7 +644,15 @@ export async function dispatchRun(
     // `body`, not `brief`: what lands in the worker is its standing protocol
     // followed by the wave's specifics, as ONE mail — the kickoff is never a
     // message of its own, so a path that queues no brief queues nothing at all.
-    queueSystemMail(coord, run, { toId: sessionId, runId: id, kind: 'status', subject: 'wave-brief', body });
+    // The return value is deliberately dropped HERE and at the other two
+    // run-mail call sites (D-1042). `queueSystemMail` now answers whether it
+    // queued or found an identical one already outstanding, because the wave-4
+    // kickoff route has to tell an operator which happened — but each of these
+    // three has at most ONE instance in flight per run by construction, which
+    // is the standing claim in that function's own dedupe comment, so there is
+    // nothing here for the answer to change.
+    queueSystemMail(coord, run, { fromId: 'coordinator', toId: sessionId, runId: id,
+      kind: 'status', subject: 'wave-brief', body });
   }
 
   return { ok: true, id, sessionId, resumed, clearedAt, briefQueued, clearError,

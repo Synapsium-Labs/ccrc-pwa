@@ -248,7 +248,7 @@ export async function closeRun(
       // `status` mail carrying the code and detail is mailed back to the
       // worker.
       coord.recordRejection({ code: verdict.code, runId: id, toId: run.sessionId, detail: verdict.detail });
-      queueSystemMail(coord, run, { toId: run.sessionId, runId: id,
+      queueSystemMail(coord, run, { fromId: 'coordinator', toId: run.sessionId, runId: id,
         kind: 'status', subject: 'wave-done-rejected', body: `${verdict.code}: ${verdict.detail}` });
       return { ok: false, kind: 'doneVerdict', code: verdict.code, detail: verdict.detail };
     }
