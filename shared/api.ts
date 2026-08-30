@@ -1631,6 +1631,54 @@ export function sessionLifecycle(input: LifecycleInput): SessionLifecycle {
   return input.started ? 'orphan' : 'never-started';
 }
 
+/**
+ * WHICH lifecycles mean "this session is not coming back on its own".
+ *
+ * D-1066. D-309 made a delivery whose recipient's tmux pane is gone wait FOREVER,
+ * silently, on the stated ground that "the mail waits for the session to come
+ * back". That is right for a swap, a restart or a reboot — and it is simply
+ * false for a session somebody archived. Measured on the live fleet: a
+ * delivery to an ARCHIVED workspace sat `queued` for 22.5 hours and was
+ * refused 6,769 times, once per sweep, with no terminal state and no way for
+ * the sender to learn. `ws-archive` unsupervises through `_ws_unsupervise`,
+ * which writes the stop stamp, so an archived workspace reads `stopped` here —
+ * the registry knew the whole time.
+ *
+ * So the distinction the ladder needs is not "is the pane gone" but "is it
+ * coming back", and `sessionLifecycle` above already draws it: with
+ * `alive: false`, a stop stamp gives `stopped`, a fresh supervisor heartbeat
+ * gives `restarting`, and the remainder split on whether the row ever started.
+ * The three words below are the ones that never resolve on their own.
+ *
+ * TOTAL, so a ninth `SessionLifecycle` member is a TS2739 here rather than a
+ * silent `false` — the `LIFECYCLE_RUNG` shape, and for its reason.
+ *
+ * NOT A SECOND COPY OF `LIFECYCLE_RUNG`, though it answers about the same
+ * three words: that table maps a lifecycle to a PEER's deliverability
+ * (`pass`/`no`/`unknown`, where `unmeasurable` is a third answer), and this one
+ * asks a narrower yes/no about the WORD itself. They must agree on which three
+ * are dead, and `peers.ts`'s own test pins that they do — a red suite rather
+ * than this paragraph.
+ */
+const LIFECYCLE_DEAD: Record<SessionLifecycle, boolean> = {
+  running: false, unsupervised: false, unclaimed: false, restarting: false,
+  stopped: true, orphan: true, 'never-started': true,
+  // NOT dead. Doubt is not evidence — the same line `registry-unmeasurable`
+  // draws one rung up, and the reason a degraded read must never park a row.
+  unmeasurable: false,
+};
+
+/** Is this lifecycle one that never resolves on its own? See `LIFECYCLE_DEAD`. */
+export function lifecycleIsDead(lc: SessionLifecycle): boolean {
+  return LIFECYCLE_DEAD[lc];
+}
+
+/** The dead words, derived — never hand-listed a second time. Exported so a
+ *  test can compare this set against `peers.ts`'s rung rather than trusting a
+ *  comment that says they agree. */
+export const DEAD_LIFECYCLES: readonly SessionLifecycle[] =
+  (Object.keys(LIFECYCLE_DEAD) as SessionLifecycle[]).filter((k) => LIFECYCLE_DEAD[k]);
+
 type RawObj = Record<string, unknown>;
 
 /** Thrown internally, caught at the boundary of `reviveFleetSession`, where it
@@ -3444,7 +3492,7 @@ export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE
 export type MailGate =
   | 'same-sweep' | 'in-flight' | 'cooldown'
   | 'registry-absent' | 'registry-unmeasurable'
-  | 'tmux-gone' | 'tmux-unknown'
+  | 'tmux-gone' | 'session-dead' | 'tmux-unknown'
   | 'pending-ask' | 'no-pane' | 'no-config-dir'
   | 'not-idle' | 'not-quiet';
 
@@ -3454,7 +3502,7 @@ export type MailGate =
 const MAIL_GATE_MAP: Record<MailGate, true> = {
   'same-sweep': true, 'in-flight': true, cooldown: true,
   'registry-absent': true, 'registry-unmeasurable': true,
-  'tmux-gone': true, 'tmux-unknown': true,
+  'tmux-gone': true, 'session-dead': true, 'tmux-unknown': true,
   'pending-ask': true, 'no-pane': true, 'no-config-dir': true,
   'not-idle': true, 'not-quiet': true,
 };
