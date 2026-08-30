@@ -192,14 +192,14 @@ describe('the scanner is looking at something', () => {
     // precisely the state this whole file exists to make impossible. Adding a
     // route is now a deliberate act that edits these three numbers, with a
     // reviewer looking at them.
-    expect(scanRoutes('server.ts').length).toBe(45);
+    expect(scanRoutes('server.ts').length).toBe(46);
     // 22 since `GET /api/runs/:id/items` — the READ half of the settle route,
     // which keys on item ids that nothing else published.
     expect(scanRoutes('coord/routes.ts').length).toBe(22);
-    expect(ROUTES.length).toBe(67);
-    // …and the three partitions add up: 3 websockets + 64 HTTP.
+    expect(ROUTES.length).toBe(68);
+    // …and the three partitions add up: 3 websockets + 65 HTTP.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
-    expect(ROUTES.filter((r) => !isWs(r)).length).toBe(64);
+    expect(ROUTES.filter((r) => !isWs(r)).length).toBe(65);
   });
 
   it('found the specific registrations this file reasons about', () => {
@@ -451,16 +451,22 @@ describe('with the gate ARMED and no cookie', () => {
     // Guards the `it.each` below the same way the scanner meta-test guards the
     // scan: an EXEMPT table that had swallowed everything would leave nothing to
     // assert and report green. Exact rather than a floor, for the same reason —
-    // 67 scanned − 3 websockets − 24 exempt-and-scanned (25 EXEMPT entries less
-    // `GET /*`, which no `app.get('…')` registers) = 40; the one new gated
-    // non-exempt route is `POST /api/claims/:id/break`, which meets the session
-    // gate on an armed box exactly as abandon and pause do.
+    // 68 scanned − 3 websockets − 24 exempt-and-scanned (25 EXEMPT entries less
+    // `GET /*`, which no `app.get('…')` registers) = 41; the gated non-exempt
+    // routes this file reasons about by name are `POST /api/claims/:id/break`,
+    // which meets the session gate on an armed box exactly as abandon and pause
+    // do, and — program-leverage wave 4 — `POST /api/sessions/:id/kickoff`.
     //
-    // UNCHANGED at 40 by `GET /api/runs/:id/items`, and that is the arithmetic
-    // working rather than a coincidence: the new route is EXEMPT, so it raises
-    // the scanned count and the exempt count by one each and the difference is
-    // untouched. A new route that was NOT exempt would move this number.
-    expect(gated.length).toBe(40);
+    // The kickoff route is DELIBERATELY not EXEMPT: it is a cookie-bearing PWA
+    // write, the browser has one, and nothing on a fleet host posts it
+    // cookieless. Being gated is the whole posture, not a cost.
+    //
+    // UNCHANGED at its then-value by `GET /api/runs/:id/items`, and that was the
+    // arithmetic working rather than a coincidence: that route is EXEMPT, so it
+    // raised the scanned count and the exempt count by one each and left the
+    // difference alone. A new route that is NOT exempt moves this number, which
+    // is exactly what the kickoff route just did.
+    expect(gated.length).toBe(41);
     expect(ROUTES.length - ROUTES.filter(isWs).length - gated.length).toBe(EXEMPT.size - 1);
   });
 

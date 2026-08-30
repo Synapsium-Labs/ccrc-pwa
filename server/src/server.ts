@@ -44,6 +44,7 @@ import type { NotifyLog } from './notifylog.js';
 import { Presence } from './presence.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
 import { registerCoordRoutes } from './coord/routes.js';
+import { queueProgramKickoff } from './coord/kickoff.js';
 import { toRunSummary, type CoordStore } from './coord/store.js';
 import { AuthSecretUnusable, readAuthSecret, verifyPassphrase, type AuthSecret } from './auth/secret.js';
 import { ABSOLUTE_TTL_MS, SessionStore } from './auth/sessions.js';
@@ -1449,6 +1450,73 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     }
     const res = await sendPrompt(sendDeps, id, body.text, { replaceDraft: body.replaceDraft === true, attachments });
     return res.ok ? res : reply.code(409).send(res);
+  });
+
+  /**
+   * The program kickoff, as MAIL (program-leverage wave 4, F4). The sibling
+   * above types into a pane, synchronously, with no idle gate — right for the
+   * operator's own keystrokes, and until this wave it was also how a brand-new
+   * coordinator was briefed: the start-program sheet fired `api.prompt` the
+   * instant the new session's row appeared in a `/ws/fleet` frame, racing ccd's
+   * own cold-start prompt clearing, and a failure was a toast with no retry and
+   * no durable record. That was the last machine injection in the tree that
+   * bypassed the delivery lane, which wave briefs have refused since Build 4.
+   *
+   * WHY A SIBLING ROUTE AND NOT A FIELD ON `POST /api/sessions` (D-1039): that
+   * handler's success body is the literal `{ok:true}` and `ccd`'s stdout id is
+   * discarded, so it never learns who to mail; recomputing `${wrapper}-${project}`
+   * is the second implementation of ccd's own rule that D-291 refused; and
+   * `cmd_start` is idempotent, so the id it would print can name a session that
+   * was ALREADY RUNNING and may be mid-task — the exact hijack D-292 exists to
+   * prevent, relocated to a place where the only guard against it (the sheet's
+   * pre-tap refusal) is not in the loop. The id belongs in the path, measured
+   * from a real fleet frame, which is where D-291/D-292 already do their work.
+   *
+   * WHY IT DECIDES NOTHING: the queueing is `coord/kickoff.ts`'s
+   * `queueProgramKickoff`, so wave 5's coordinator-reclaim door can re-kickoff a
+   * revived coordinator without a sheet. This handler is a union->status map, as
+   * the ring requires of L4.
+   *
+   * The body carries `{slug, title}`, never prose: the server composes the
+   * sentence from the L0 constant, which makes this route strictly NARROWER than
+   * the one above — it can queue a program kickoff and nothing else.
+   */
+  app.post('/api/sessions/:id/kickoff', async (req, reply) => {
+    // 501 `{ok:false,error:'not-configured'}` — `server.ts` has no
+    // `notConfigured` helper (`coord/routes.ts`'s is a local const inside
+    // `registerCoordRoutes`), and this is the shape this file's own comment
+    // above already names. NOT the push routes' bare `{error:…}` without
+    // `ok:false`. And unlike `/api/fleet` or `/api/sessions/:id`, which degrade
+    // without a store because they must work on a box that does no
+    // coordination, this route cannot: no coord, no durable mail, so a 200 here
+    // would be a promise nothing kept.
+    if (!deps.coord) return reply.code(501).send({ ok: false, error: 'not-configured' });
+    const coord = deps.coord;
+    const { id } = req.params as { id: string };
+    if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
+    const body = (req.body ?? {}) as { slug?: unknown; title?: unknown };
+    if (typeof body.slug !== 'string' || body.slug.trim() === ''
+      || typeof body.title !== 'string' || body.title.trim() === '') {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    // Deliberately NOT `knownId` (above), whose `names !== null &&` folds an
+    // unlistable registry into "unknown" — right for a keystroke route that
+    // should fail shut, wrong here: it would tell the sheet "that session does
+    // not exist" when the truth is "this box could not read its registry", and
+    // the sheet's only remaining act would be to give up. Same split, and the
+    // same two bodies, as `POST /api/sessions/:id/stop` below.
+    const read = await readSessionRecord(deps.io, deps.cfg, id);
+    if (!read.found) {
+      return reply.code(read.reason === 'unlistable' ? 503 : 404).send({
+        ok: false,
+        error: read.reason === 'unlistable' ? 'registry-unmeasurable' : 'unknown-session',
+      });
+    }
+    const out = queueProgramKickoff({ coord }, id, { slug: body.slug.trim(), title: body.title.trim() });
+    // `queued: false` is not a failure — a kickoff IS waiting for this session —
+    // but it is not the same fact as "queued just now", so it rides the body
+    // rather than collapsing into one 200 the caller cannot read.
+    return { ok: true, queued: out.queued };
   });
 
   app.post('/api/sessions/:id/dialog', async (req, reply) => {
