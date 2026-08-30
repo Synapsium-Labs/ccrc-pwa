@@ -1263,4 +1263,14 @@ conflict; read semantically rather than trusted, exactly as PR #34 was.
   never arrived. At `session-dead`, PR #34's frozen counter is unfrozen so the backoff actually
   ratchets to the ceiling instead of re-examining every 30 s for ever.
 - **Targeted re-run after the merge:** `mail-sweep`, `mail-hardening`, `coord-kickoff`,
-  `kickoff-route`, `single-definition` — 213 passed. Full suites below.
+  `kickoff-route`, `single-definition` — 213 passed.
+
+### Totals at the end of the fix round
+
+| suite | before the round | after |
+|---|---|---|
+| server | 241 files / 6021 passed / 56 skipped | **241 / 6031 / 56** (+7 from the body cap, +3 from PR #35's own tests arriving with the merge) |
+| pwa | 75 / 2007 / 0 type errors | **75 / 2014 / 0** (+7: two supersession arms, the `finally` arm, the new-attempt retirement, the rendered-404 sentence, and two translator shadow pins) |
+| agent | 18 / 281 | **18 / 281** (untouched — this wave is not agent-first) |
+
+Tails READ, not grepped — the correction this record already carries from the wave itself.
