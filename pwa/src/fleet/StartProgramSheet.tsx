@@ -223,7 +223,11 @@ export interface StartProgramSheetProps {
    *  the production mount exercises the same calls `pwa/test/api.test.ts`
    *  pins the URL/method/body of. */
   createSession?: (b: { wrapper: string; project: string; workdir?: string }) => Promise<void>;
-  prompt?: (id: string, text: string) => Promise<void>;
+  /** Program-leverage wave 4: the kickoff is QUEUED as durable system mail, not
+   *  typed into the pane. Named `queueKickoff` rather than `kickoff` because the
+   *  standing sentence itself is `programKickoff` in L0 and this file's tests
+   *  import it — one name for the text, another for the act. */
+  queueKickoff?: (id: string, b: { slug: string; title: string }) => Promise<void>;
   loadProjects?: () => Promise<{ roots: string[]; projects: ProjectRow[] }>;
 }
 
@@ -232,7 +236,7 @@ export function StartProgramSheet({
   onClose,
   fleet = useFleetStore,
   createSession = api.createSession,
-  prompt = api.prompt,
+  queueKickoff = api.kickoff,
   loadProjects = api.projects,
 }: StartProgramSheetProps): ReactNode {
   const sessions = fleet((s) => s.sessions);
@@ -254,6 +258,25 @@ export function StartProgramSheet({
   const [starting, setStarting] = useState(false);
   const [timedOut, setTimedOut] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * A kickoff that could not be QUEUED, held until the operator does something
+   * about it (program-leverage wave 4).
+   *
+   * This is state, not a toast, and the difference is the wave's whole point.
+   * The injection this replaces failed synchronously and left nothing behind, so
+   * a transient message was all there was to say; a failed QUEUE leaves nothing
+   * behind EITHER — no mail row, no delivery, nothing the lane will retry — and
+   * unlike the injection there is now a cheap, correct act that fixes it, so the
+   * sheet has to still be offering it when the operator looks up. `Toast.tsx`
+   * also drops every toast once the 401 auth-lost signal is raised, which is
+   * exactly the failure most likely to eat a kickoff on an armed box.
+   *
+   * `sessionId` is the id `startedSessionFor` MEASURED, carried verbatim: a
+   * retry must not re-open the addressing question D-291/D-292 already settled.
+   */
+  const [kickoffFailed, setKickoffFailed] =
+    useState<{ sessionId: string; slug: string; title: string; why: string } | null>(null);
+  const [retrying, setRetrying] = useState(false);
 
   // Fetch the project list the moment the sheet opens — same idiom
   // NewSessionSheet already uses for the same call.
@@ -341,6 +364,8 @@ export function StartProgramSheet({
     setStarting(false);
     setTimedOut(false);
     setError(null);
+    setKickoffFailed(null);
+    setRetrying(false);
   }, [open]);
 
   useEffect(() => () => clearTimer(), []);
@@ -368,19 +393,45 @@ export function StartProgramSheet({
   const finish = (session: FleetSession, w: { mine: number; slug: string; title: string }): void => {
     clearTimer();
     waitRef.current = null;
-    void prompt(session.id, programKickoff(w.slug, w.title))
-      .catch((err: unknown) => {
-        // The session is real and the create already succeeded — only the
-        // nudge failed to land. Said once, non-blocking: the operator can
-        // finish the kickoff by hand from inside the session this still
-        // navigates to below.
-        toast(`Started, but the kickoff prompt failed to send — ${apiErrorText(err)}`, 'error');
-      })
+    void queueKickoff(session.id, { slug: w.slug, title: w.title })
       .then(() => {
         if (gen.current !== w.mine) return; // superseded — a later close/open owns the phase now
         setStarting(false);
         navigate(`/s/${encodeURIComponent(session.id)}`);
+      })
+      .catch((err: unknown) => {
+        if (gen.current !== w.mine) return; // superseded — a later close/open owns the phase now
+        setStarting(false);
+        // NOTE THE ORDER. This used to be `.catch(toast).then(navigate)`, which
+        // navigated on BOTH arms — defensible for an injection, where the
+        // session is real either way and the operator could finish the kickoff
+        // by hand from inside it. It is not defensible for a queue: nothing
+        // durable exists, so walking the operator into a session whose
+        // coordinator will never be briefed hides the one fact they need.
+        setKickoffFailed({ sessionId: session.id, slug: w.slug, title: w.title, why: apiErrorText(err) });
       });
+  };
+
+  /** Re-post the kickoff for a session that is already running — the door the
+   *  durable queue makes possible for the first time.
+   *
+   *  It re-uses `kickoffFailed.sessionId` and never re-measures the fleet: the
+   *  target was chosen once by `startedSessionFor` under D-291/D-292's whole
+   *  apparatus, and a retry that re-opened that question could land the kickoff
+   *  somewhere else entirely. */
+  const retryKickoff = async (): Promise<void> => {
+    const k = kickoffFailed;
+    if (k === null || retrying) return;
+    setRetrying(true);
+    try {
+      await queueKickoff(k.sessionId, { slug: k.slug, title: k.title });
+      setKickoffFailed(null);
+      navigate(`/s/${encodeURIComponent(k.sessionId)}`);
+    } catch (err: unknown) {
+      setKickoffFailed({ ...k, why: apiErrorText(err) });
+    } finally {
+      setRetrying(false);
+    }
   };
 
   const checkForMatch = (): void => {
@@ -617,7 +668,7 @@ export function StartProgramSheet({
             // arm cannot tell them apart without recomputing the id.
             <p className="program-start-existing">
               {`${existing.id} is already running in ${project.name} — open it, or pick another project. `
-                + 'Starting here would either send the kickoff into that session, which may be '
+                + 'Starting here would either queue the kickoff for that session, which is running '
                 + 'mid-task, or leave the project running two coordinators.'}
             </p>
           ) : projected === null ? (
@@ -646,15 +697,18 @@ export function StartProgramSheet({
                 <p className="program-start-warn">
                   {markerState(coord.pause) === 'set'
                     ? 'The fleet is paused — the coordinator will be refused at its first dispatch until it is resumed.'
-                    : 'The registry could not be read — dispatch fails shut on that, so the coordinator '
-                      + 'would be refused at its first dispatch just as a pause refuses it.'}
+                    : 'The registry could not be read — the mail sweep fails shut on that, so the '
+                      + 'kickoff itself would not be delivered, and dispatch would refuse the '
+                      + 'coordinator afterwards just as a pause refuses it.'}
                 </p>
               )}
               <p className="program-start-ledger">
                 {`Its ledger: ${ledgerPath(slug.trim() === '' ? '…' : slug.trim())}`}
               </p>
               <p className="program-start-note">
-                The run row arrives later, once the coordinator opens it — not from this sheet.
+                The kickoff is queued as mail and lands at the session&rsquo;s next quiet moment,
+                usually a minute or two. The run row arrives after that, once the coordinator
+                opens it — not from this sheet.
               </p>
               {timedOut && (
                 <p className="program-start-timeout">
@@ -662,6 +716,36 @@ export function StartProgramSheet({
                 </p>
               )}
               {error !== null && <p className="program-start-error">{error}</p>}
+              {/* Program-leverage wave 4: the kickoff could not be QUEUED.
+                  Deliberately a standing statement with an act beside it, not a
+                  toast — see `kickoffFailed`'s own declaration for why, and note
+                  that both controls reuse classes that are already grounded and
+                  pinned (`program-start-error`, `program-start-go`) rather than
+                  introducing a coloured rule the contrast census has never
+                  seen. */}
+              {kickoffFailed !== null && (
+                <>
+                  <p className="program-start-error">
+                    {`${kickoffFailed.sessionId} is running, but its kickoff could not be queued `
+                      + `— ${kickoffFailed.why}. Nothing was sent: it has no brief yet.`}
+                  </p>
+                  <button
+                    type="button"
+                    className="program-start-go"
+                    disabled={retrying}
+                    onClick={() => void retryKickoff()}
+                  >
+                    {retrying ? 'Queueing…' : 'Queue the kickoff again'}
+                  </button>
+                  <button
+                    type="button"
+                    className="program-start-go"
+                    onClick={() => navigate(`/s/${encodeURIComponent(kickoffFailed.sessionId)}`)}
+                  >
+                    Open it without a brief
+                  </button>
+                </>
+              )}
               {/* B-3: `existing !== null` reaches this branch only when
                   `isOwnAttempt` suppressed the refusal above — the sheet's own
                   session has appeared and `finish()` is sending its kickoff.

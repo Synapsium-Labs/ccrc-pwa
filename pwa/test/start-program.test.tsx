@@ -83,10 +83,10 @@ async function fillAndPick(slug = 'build9-demo', title = 'Build 9 demo', rowName
 // sheet mounted once with a fixed `open` prop can never reach "closed while
 // an attempt is outstanding".
 function OpenHarness({
-  createSession, prompt, fleet,
+  createSession, queueKickoff, fleet,
 }: {
   createSession: (b: { wrapper: string; project: string; workdir?: string }) => Promise<void>;
-  prompt: (id: string, text: string) => Promise<void>;
+  queueKickoff: (id: string, b: { slug: string; title: string }) => Promise<void>;
   fleet: FleetStore;
 }): ReactNode {
   const [open, setOpen] = useState(true);
@@ -98,7 +98,7 @@ function OpenHarness({
         onClose={() => setOpen(false)}
         fleet={fleet}
         createSession={createSession}
-        prompt={prompt}
+        queueKickoff={queueKickoff}
         loadProjects={async () => ({ roots: [], projects: [proj()] })}
       />
     </>
@@ -262,10 +262,10 @@ describe('StartProgramSheet', () => {
   it('navigates to the new session on success — matched by wrapper+project once a LATER fleet frame shows it (D-291)', async () => {
     history.pushState(null, '', '/runs');
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
-    const prompt = vi.fn().mockResolvedValue(undefined);
+    const queueKickoff = vi.fn().mockResolvedValue(undefined);
     const store = makeStore();
     render(<StartProgramSheet open onClose={() => {}} fleet={store}
-      createSession={async () => {}} prompt={prompt}
+      createSession={async () => {}} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -275,12 +275,12 @@ describe('StartProgramSheet', () => {
     // No match yet — the create resolved, but nothing has appeared in the
     // fleet snapshot. Navigation must wait for that, not the create alone.
     expect(location.pathname).toBe('/runs');
-    expect(prompt).not.toHaveBeenCalled();
+    expect(queueKickoff).not.toHaveBeenCalled();
 
     act(() => { store.setState({ sessions: [sess()] }); });
 
     await waitFor(() => expect(location.pathname).toBe('/s/claude-ccrc-pwa'));
-    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(queueKickoff).toHaveBeenCalledTimes(1);
   });
 
   it('says in one line that the run row arrives later, from the coordinator', async () => {
@@ -290,16 +290,16 @@ describe('StartProgramSheet', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /ccrc-pwa/i }));
 
-    const note = await screen.findByText(/the run row arrives later/i);
+    const note = await screen.findByText(/the run row arrives after that/i);
     expect(note.textContent).toMatch(/coordinator/i);
   });
 
-  it('sends ONE kickoff prompt naming the slug, the ledger path and the skill', async () => {
+  it('QUEUES one kickoff, naming the program — not the prose', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
-    const prompt = vi.fn().mockResolvedValue(undefined);
+    const queueKickoff = vi.fn().mockResolvedValue(undefined);
     const store = makeStore();
     render(<StartProgramSheet open onClose={() => {}} fleet={store}
-      createSession={async () => {}} prompt={prompt}
+      createSession={async () => {}} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -307,31 +307,113 @@ describe('StartProgramSheet', () => {
     await screen.findByRole('button', { name: /^starting…$/i });
     act(() => { store.setState({ sessions: [sess()] }); });
 
-    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
-    const [id, text] = prompt.mock.calls[0] as [string, string];
+    await waitFor(() => expect(queueKickoff).toHaveBeenCalledTimes(1));
+    const [id, body] = queueKickoff.mock.calls[0] as [string, { slug: string; title: string }];
     expect(id).toBe('claude-ccrc-pwa');
-    // Exact equality against the exported constant — the text has one home.
-    expect(text).toBe(programKickoff('build9-demo', 'Build 9 demo'));
-    expect(text).toContain('build9-demo');
-    expect(text).toContain('docs/superpowers/programs/build9-demo.md');
-    expect(text).toContain('ccrc-coordinator');
+    expect(body).toEqual({ slug: 'build9-demo', title: 'Build 9 demo' });
+    // Program-leverage wave 4: the SENTENCE is no longer this sheet's to send.
+    // The server composes it from `programKickoff`, and `server/test/
+    // coord-kickoff.test.ts` pins the queued body against both that constant and
+    // the three literal sentences. What is pinned HERE is that the sheet hands
+    // over the program and nothing else — a `text` key reaching this route would
+    // hand back the narrowing that makes it safer than `/prompt`.
+    expect(Object.keys(body).sort()).toEqual(['slug', 'title']);
   });
 
-  // Review fix round 1, Minor 5: `finish()`'s own `.catch` arm — deleting it
-  // loses the toast AND silently kills navigation (the rejection short-
-  // circuits `.then`, and `void` swallows it), with the rest of the suite
-  // staying green because every other test's injected `prompt` resolves.
-  it('a prompt failure toasts once, non-blocking — the session is real, so it still navigates', async () => {
+  // Review fix round 1, Minor 5, rewritten for program-leverage wave 4.
+  //
+  // The old test pinned a TOAST and a navigation-anyway: right for an injection,
+  // where the session is real either way and the operator could finish the
+  // kickoff by hand from inside it. Wrong for a queue. A failed queue leaves
+  // NOTHING durable — no mail row, no delivery, nothing the lane will retry — so
+  // walking the operator into a session whose coordinator will never be briefed
+  // hides the one fact they need. Its old fixture is gone too: a 502
+  // `{stderr:'ccd: prompt: pane busy'}` is a `sendPrompt` shape, and queueing
+  // never touches a pane, so it could not arise on this path at all.
+  it('a failed QUEUE holds the sheet, says nothing was sent, and does NOT navigate', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const createSession = vi.fn().mockResolvedValue(undefined);
-    const prompt = vi.fn().mockRejectedValue(
-      new ApiError(502, { ok: false, stderr: 'ccd: prompt: pane busy' }),
+    const queueKickoff = vi.fn().mockRejectedValue(
+      new ApiError(501, { ok: false, error: 'not-configured' }),
     );
     const store = makeStore();
     render(
       <>
         <StartProgramSheet open onClose={() => {}} fleet={store}
-          createSession={createSession} prompt={prompt}
+          createSession={createSession} queueKickoff={queueKickoff}
+          loadProjects={async () => ({ roots: [], projects: [proj()] })} />
+        <ToastHost />
+      </>,
+    );
+
+    await fillAndPick();
+    // PUT THE ROUTER SOMEWHERE THAT IS NOT THE TARGET, explicitly. Nothing in
+    // this file resets it between tests, and the first draft of this test merely
+    // captured `location.pathname` and compared against it — which was
+    // `/s/claude-ccrc-pwa` by the time this test ran, so a mutant that navigated
+    // on the failure arm navigated to the path already there and the assertion
+    // reported green. MEASURED: that mutant survived 64/64. A fixture that
+    // cannot reproduce the topology proves nothing — wave 2's lesson, wave 3's
+    // lesson, and now this wave's.
+    act(() => { history.pushState(null, '', '/runs'); });
+    fireEvent.click(await screen.findByRole('button', { name: /^start build9-demo/i }));
+    await screen.findByRole('button', { name: /^starting…$/i });
+    act(() => { store.setState({ sessions: [sess()] }); });
+
+    expect(await screen.findByText(/could not be queued/i)).toBeInTheDocument();
+    expect(screen.getByText(/nothing was sent/i)).toBeInTheDocument();
+    // The code becomes a sentence, not a slug: `API_ERROR_TEXT` owns that.
+    expect(screen.getByText(/does not run coordination/i)).toBeInTheDocument();
+    // …and it STAYS on screen. Not a toast: `Toast.tsx` drops every toast once
+    // the 401 auth-lost signal is up, which is exactly the failure most likely
+    // to eat a kickoff on an armed box.
+    expect(location.pathname).toBe('/runs');
+  });
+
+  it('offers a retry that re-posts to the SAME measured session id', async () => {
+    // The addressing question was settled once, by `startedSessionFor` under
+    // D-291/D-292's whole apparatus. A retry that re-measured the fleet could
+    // land the kickoff somewhere else entirely, so it re-uses the id verbatim —
+    // and this is the pin that says so.
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    const queueKickoff = vi.fn()
+      .mockRejectedValueOnce(new ApiError(501, { ok: false, error: 'not-configured' }))
+      .mockResolvedValueOnce(undefined);
+    const store = makeStore();
+    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+      createSession={async () => {}} queueKickoff={queueKickoff}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    await fillAndPick();
+    fireEvent.click(await screen.findByRole('button', { name: /^start build9-demo/i }));
+    await screen.findByRole('button', { name: /^starting…$/i });
+    act(() => { store.setState({ sessions: [sess()] }); });
+    await screen.findByText(/could not be queued/i);
+
+    // The fleet has MOVED under the sheet — a different session is now the live
+    // main checkout for this project. A retry that re-measured would find it.
+    act(() => { store.setState({ sessions: [sess({ id: 'claude2-ccrc-pwa', wrapper: 'claude2' })] }); });
+    fireEvent.click(screen.getByRole('button', { name: /queue the kickoff again/i }));
+
+    await waitFor(() => expect(queueKickoff).toHaveBeenCalledTimes(2));
+    expect(queueKickoff.mock.calls[1]).toEqual([
+      'claude-ccrc-pwa', { slug: 'build9-demo', title: 'Build 9 demo' },
+    ]);
+    await waitFor(() => expect(location.pathname).toBe('/s/claude-ccrc-pwa'));
+  });
+
+  it('the failure survives a dropped toast — it is sheet state, not a notification', async () => {
+    // `Toast.tsx:40` returns before minting an item once `isAuthLost()` is up,
+    // and `api.ts` raises that signal on any 401 BEFORE it throws. So on an
+    // armed box the old toast-only shape said nothing at all about a kickoff
+    // that never landed. Nothing covered that before this wave.
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    const queueKickoff = vi.fn().mockRejectedValue(new ApiError(401, { ok: false, error: 'unauthenticated' }));
+    const store = makeStore();
+    render(
+      <>
+        <StartProgramSheet open onClose={() => {}} fleet={store}
+          createSession={async () => {}} queueKickoff={queueKickoff}
           loadProjects={async () => ({ roots: [], projects: [proj()] })} />
         <ToastHost />
       </>,
@@ -342,11 +424,8 @@ describe('StartProgramSheet', () => {
     await screen.findByRole('button', { name: /^starting…$/i });
     act(() => { store.setState({ sessions: [sess()] }); });
 
-    expect(await screen.findByText(/kickoff prompt failed to send/i)).toBeInTheDocument();
-    expect(screen.getByText(/ccd: prompt: pane busy/i)).toBeInTheDocument();
-    // The session was really created — the failure is only that the nudge
-    // never landed, so the sheet still takes the operator there.
-    await waitFor(() => expect(location.pathname).toBe('/s/claude-ccrc-pwa'));
+    expect(await screen.findByText(/could not be queued/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /queue the kickoff again/i })).toBeInTheDocument();
   });
 
   it('never calls POST /api/runs', async () => {
@@ -375,7 +454,10 @@ describe('StartProgramSheet', () => {
     // with a third, unrelated call mixed in.
     expect(urls).toHaveLength(2);
     expect(urls).toContain('/api/sessions');
-    expect(urls).toContain('/api/sessions/claude-ccrc-pwa/prompt');
+    expect(urls).toContain('/api/sessions/claude-ccrc-pwa/kickoff');
+    // …and NOT the injection route it replaced. `toContain` alone would stay
+    // green if the sheet called both.
+    expect(urls).not.toContain('/api/sessions/claude-ccrc-pwa/prompt');
   });
 
   it('never claims the ledger exists — it names the path the operator committed', async () => {
@@ -491,9 +573,9 @@ describe('StartProgramSheet', () => {
   it('renders honest "not shown yet" copy after the bounded wait — never framed as failure, never navigates (D-291)', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const createSession = vi.fn().mockResolvedValue(undefined);
-    const prompt = vi.fn().mockResolvedValue(undefined);
+    const queueKickoff = vi.fn().mockResolvedValue(undefined);
     render(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
-      createSession={createSession} prompt={prompt}
+      createSession={createSession} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -512,7 +594,7 @@ describe('StartProgramSheet', () => {
     }
 
     expect(screen.getByText(/board just hasn't shown it yet/i)).toBeInTheDocument();
-    expect(prompt).not.toHaveBeenCalled();
+    expect(queueKickoff).not.toHaveBeenCalled();
     expect(location.pathname).toBe(before);
     // Not stuck disabled either — the operator can watch the fleet screen and
     // still retry from here if it truly never landed.
@@ -527,10 +609,10 @@ describe('StartProgramSheet', () => {
   it('a session that lands AFTER the D-291 timeout is never shown as someone else\'s "mid-task" collision — and still gets its kickoff (Important 2)', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const createSession = vi.fn().mockResolvedValue(undefined);
-    const prompt = vi.fn().mockResolvedValue(undefined);
+    const queueKickoff = vi.fn().mockResolvedValue(undefined);
     const store = makeStore();
     render(<StartProgramSheet open onClose={() => {}} fleet={store}
-      createSession={createSession} prompt={prompt}
+      createSession={createSession} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -559,8 +641,8 @@ describe('StartProgramSheet', () => {
 
     // And the mission still completes, as if the timeout had never fired —
     // the kickoff is sent, once, and the sheet navigates.
-    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
-    expect(prompt).toHaveBeenCalledWith('claude-ccrc-pwa', programKickoff('build9-demo', 'Build 9 demo'));
+    await waitFor(() => expect(queueKickoff).toHaveBeenCalledTimes(1));
+    expect(queueKickoff).toHaveBeenCalledWith('claude-ccrc-pwa', { slug: 'build9-demo', title: 'Build 9 demo' });
     await waitFor(() => expect(location.pathname).toBe('/s/claude-ccrc-pwa'));
   });
 
@@ -665,11 +747,11 @@ describe('StartProgramSheet', () => {
   // `wrapper` conjunct is dropped (the live `claude3-` row would be taken).
   it('waits for its own row to be LIVE — a dead row does not resolve the wait, and does not end it either (B-2)', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
-    const prompt = vi.fn().mockResolvedValue(undefined);
+    const queueKickoff = vi.fn().mockResolvedValue(undefined);
     const store = makeStore();
     history.pushState(null, '', '/runs');
     render(<StartProgramSheet open onClose={() => {}} fleet={store}
-      createSession={async () => {}} prompt={prompt}
+      createSession={async () => {}} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -687,7 +769,7 @@ describe('StartProgramSheet', () => {
     });
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 
-    expect(prompt).not.toHaveBeenCalled();
+    expect(queueKickoff).not.toHaveBeenCalled();
     expect(location.pathname).toBe('/runs');
 
     // Frame 2: the same row, now alive. NOT resolving on frame 1 did not end
@@ -699,8 +781,8 @@ describe('StartProgramSheet', () => {
       ] });
     });
 
-    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
-    expect(prompt).toHaveBeenCalledWith('claude-ccrc-pwa', programKickoff('build9-demo', 'Build 9 demo'));
+    await waitFor(() => expect(queueKickoff).toHaveBeenCalledTimes(1));
+    expect(queueKickoff).toHaveBeenCalledWith('claude-ccrc-pwa', { slug: 'build9-demo', title: 'Build 9 demo' });
     await waitFor(() => expect(location.pathname).toBe('/s/claude-ccrc-pwa'));
   });
 
@@ -713,13 +795,13 @@ describe('StartProgramSheet', () => {
     // `'claude2'` (`-` 0x2D < `2` 0x32). Liveness alone stops this one; the
     // ordering is what made it reachable rather than theoretical.
     vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude2'));
-    const prompt = vi.fn().mockResolvedValue(undefined);
+    const queueKickoff = vi.fn().mockResolvedValue(undefined);
     const store = makeStore();
     history.pushState(null, '', '/runs');
     const stale = sess({ id: 'claude-ccrc-pwa', wrapper: 'claude2', status: 'dead' });
     act(() => { store.setState({ sessions: [stale] }); });
     render(<StartProgramSheet open onClose={() => {}} fleet={store}
-      createSession={async () => {}} prompt={prompt}
+      createSession={async () => {}} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -736,8 +818,8 @@ describe('StartProgramSheet', () => {
 
     // The kickoff goes to the session that was actually started, never the
     // dead swapped row that merely satisfies the same three fields.
-    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
-    expect(prompt).toHaveBeenCalledWith('claude2-ccrc-pwa', programKickoff('build9-demo', 'Build 9 demo'));
+    await waitFor(() => expect(queueKickoff).toHaveBeenCalledTimes(1));
+    expect(queueKickoff).toHaveBeenCalledWith('claude2-ccrc-pwa', { slug: 'build9-demo', title: 'Build 9 demo' });
     await waitFor(() => expect(location.pathname).toBe('/s/claude2-ccrc-pwa'));
   });
 
@@ -749,12 +831,12 @@ describe('StartProgramSheet', () => {
     // pre-create snapshot — but DEAD, so it is not in `preLive`, and coming
     // alive is precisely "became live as a result of my create".
     vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
-    const prompt = vi.fn().mockResolvedValue(undefined);
+    const queueKickoff = vi.fn().mockResolvedValue(undefined);
     const store = makeStore();
     history.pushState(null, '', '/runs');
     act(() => { store.setState({ sessions: [sess({ id: 'claude-ccrc-pwa', status: 'dead' })] }); });
     render(<StartProgramSheet open onClose={() => {}} fleet={store}
-      createSession={async () => {}} prompt={prompt}
+      createSession={async () => {}} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -763,8 +845,8 @@ describe('StartProgramSheet', () => {
 
     act(() => { store.setState({ sessions: [sess({ id: 'claude-ccrc-pwa', status: 'idle' })] }); });
 
-    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
-    expect(prompt).toHaveBeenCalledWith('claude-ccrc-pwa', programKickoff('build9-demo', 'Build 9 demo'));
+    await waitFor(() => expect(queueKickoff).toHaveBeenCalledTimes(1));
+    expect(queueKickoff).toHaveBeenCalledWith('claude-ccrc-pwa', { slug: 'build9-demo', title: 'Build 9 demo' });
     await waitFor(() => expect(location.pathname).toBe('/s/claude-ccrc-pwa'));
   });
 
@@ -783,11 +865,11 @@ describe('StartProgramSheet', () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
     let resolveCreate: (() => void) | null = null;
     const createSession = vi.fn(() => new Promise<void>((r) => { resolveCreate = r; }));
-    const prompt = vi.fn().mockResolvedValue(undefined);
+    const queueKickoff = vi.fn().mockResolvedValue(undefined);
     const store = makeStore();
     history.pushState(null, '', '/runs');
     render(<StartProgramSheet open onClose={() => {}} fleet={store}
-      createSession={createSession} prompt={prompt}
+      createSession={createSession} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -809,8 +891,8 @@ describe('StartProgramSheet', () => {
 
     // And the attempt still completes once the create finally answers.
     resolveCreate!();
-    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
-    expect(prompt).toHaveBeenCalledWith('claude-ccrc-pwa', programKickoff('build9-demo', 'Build 9 demo'));
+    await waitFor(() => expect(queueKickoff).toHaveBeenCalledTimes(1));
+    expect(queueKickoff).toHaveBeenCalledWith('claude-ccrc-pwa', { slug: 'build9-demo', title: 'Build 9 demo' });
   });
 
   it('re-arms nothing when the create FAILS — a genuine refusal is not suppressed by a dead attempt (B-1)', async () => {
@@ -873,11 +955,11 @@ describe('StartProgramSheet', () => {
     // live main checkout in the same project (another wrapper — someone
     // else's, or a swapped one) shows up while the sheet waits.
     vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
-    const prompt = vi.fn().mockResolvedValue(undefined);
+    const queueKickoff = vi.fn().mockResolvedValue(undefined);
     const store = makeStore();
     history.pushState(null, '', '/runs');
     render(<StartProgramSheet open onClose={() => {}} fleet={store}
-      createSession={async () => {}} prompt={prompt}
+      createSession={async () => {}} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -891,13 +973,13 @@ describe('StartProgramSheet', () => {
     });
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 
-    expect(prompt).not.toHaveBeenCalled();
+    expect(queueKickoff).not.toHaveBeenCalled();
     expect(location.pathname).toBe('/runs');
 
     // …and the sheet is still waiting for its own, which then lands.
     act(() => { store.setState({ sessions: [sess()] }); });
-    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
-    expect(prompt).toHaveBeenCalledWith('claude-ccrc-pwa', programKickoff('build9-demo', 'Build 9 demo'));
+    await waitFor(() => expect(queueKickoff).toHaveBeenCalledTimes(1));
+    expect(queueKickoff).toHaveBeenCalledWith('claude-ccrc-pwa', { slug: 'build9-demo', title: 'Build 9 demo' });
   });
 
   // The sibling of the test above, varying `workspace` where that one varies
@@ -912,11 +994,11 @@ describe('StartProgramSheet', () => {
   // consequence (2), with nothing red to say so.
   it('never sends the kickoff to a WORKSPACE row on the projected wrapper — the WAIT wants a main checkout (C1-workspace)', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
-    const prompt = vi.fn().mockResolvedValue(undefined);
+    const queueKickoff = vi.fn().mockResolvedValue(undefined);
     const store = makeStore();
     history.pushState(null, '', '/runs');
     render(<StartProgramSheet open onClose={() => {}} fleet={store}
-      createSession={async () => {}} prompt={prompt}
+      createSession={async () => {}} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -932,13 +1014,13 @@ describe('StartProgramSheet', () => {
     });
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 
-    expect(prompt).not.toHaveBeenCalled();
+    expect(queueKickoff).not.toHaveBeenCalled();
     expect(location.pathname).toBe('/runs');
 
     // …and the sheet is still waiting for its own main checkout, which lands.
     act(() => { store.setState({ sessions: [sess()] }); });
-    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
-    expect(prompt).toHaveBeenCalledWith('claude-ccrc-pwa', programKickoff('build9-demo', 'Build 9 demo'));
+    await waitFor(() => expect(queueKickoff).toHaveBeenCalledTimes(1));
+    expect(queueKickoff).toHaveBeenCalledWith('claude-ccrc-pwa', { slug: 'build9-demo', title: 'Build 9 demo' });
   });
 
   // The THIRD conjunct of the same arm, found by the same measurement that
@@ -950,11 +1032,11 @@ describe('StartProgramSheet', () => {
   // wrapper, which on this fleet is simply the operator's other work.
   it('never sends the kickoff to a main checkout of ANOTHER project on the same wrapper (C1-workspace)', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
-    const prompt = vi.fn().mockResolvedValue(undefined);
+    const queueKickoff = vi.fn().mockResolvedValue(undefined);
     const store = makeStore();
     history.pushState(null, '', '/runs');
     render(<StartProgramSheet open onClose={() => {}} fleet={store}
-      createSession={async () => {}} prompt={prompt}
+      createSession={async () => {}} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -968,12 +1050,12 @@ describe('StartProgramSheet', () => {
     });
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 
-    expect(prompt).not.toHaveBeenCalled();
+    expect(queueKickoff).not.toHaveBeenCalled();
     expect(location.pathname).toBe('/runs');
 
     act(() => { store.setState({ sessions: [sess()] }); });
-    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
-    expect(prompt).toHaveBeenCalledWith('claude-ccrc-pwa', programKickoff('build9-demo', 'Build 9 demo'));
+    await waitFor(() => expect(queueKickoff).toHaveBeenCalledTimes(1));
+    expect(queueKickoff).toHaveBeenCalledWith('claude-ccrc-pwa', { slug: 'build9-demo', title: 'Build 9 demo' });
   });
 
   it("does not refuse its OWN attempt after a swap moves its wrapper — ownership is compared on project alone (C1-swap)", async () => {
@@ -983,10 +1065,10 @@ describe('StartProgramSheet', () => {
     // "…already running… may be mid-task" for the sheet's OWN session — the
     // Important-2 defect, arriving through the swap path.
     vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
-    const prompt = vi.fn().mockResolvedValue(undefined);
+    const queueKickoff = vi.fn().mockResolvedValue(undefined);
     const store = makeStore();
     render(<StartProgramSheet open onClose={() => {}} fleet={store}
-      createSession={async () => {}} prompt={prompt}
+      createSession={async () => {}} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -1055,10 +1137,10 @@ describe('StartProgramSheet', () => {
   // after a D-291 timeout has already put `starting` back to false.
   it('never leaves an ENABLED Start while its own started session is being opened — no dead tap (B-3)', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
-    const prompt = vi.fn(() => new Promise<void>(() => {})); // hangs — finish() is mid-flight
+    const queueKickoff = vi.fn(() => new Promise<void>(() => {})); // hangs — finish() is mid-flight
     const store = makeStore();
     render(<StartProgramSheet open onClose={() => {}} fleet={store}
-      createSession={async () => {}} prompt={prompt}
+      createSession={async () => {}} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -1087,7 +1169,7 @@ describe('StartProgramSheet', () => {
     // that would have done nothing cannot be made.
     expect(screen.queryByText(/already running/i)).toBeNull();
     fireEvent.click(control as Element);
-    expect(prompt).toHaveBeenCalledTimes(1); // no second attempt fired
+    expect(queueKickoff).toHaveBeenCalledTimes(1); // no second attempt fired
   });
 
   // Whole-branch review, M3: `timedOut` described ONE attempt's target, but
@@ -1128,9 +1210,9 @@ describe('StartProgramSheet', () => {
   it('a superseded attempt (sheet closed mid-wait) cannot navigate when a later matching session appears', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const createSession = vi.fn().mockResolvedValue(undefined);
-    const prompt = vi.fn().mockResolvedValue(undefined);
+    const queueKickoff = vi.fn().mockResolvedValue(undefined);
     const store = makeStore();
-    render(<OpenHarness createSession={createSession} prompt={prompt} fleet={store} />);
+    render(<OpenHarness createSession={createSession} queueKickoff={queueKickoff} fleet={store} />);
 
     await fillAndPick();
     fireEvent.click(await screen.findByRole('button', { name: /^start build9-demo/i }));
@@ -1149,7 +1231,7 @@ describe('StartProgramSheet', () => {
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 
     expect(location.pathname).toBe(before);
-    expect(prompt).not.toHaveBeenCalled();
+    expect(queueKickoff).not.toHaveBeenCalled();
   });
 
   // A second, narrower race than the one above: here the match is found and
@@ -1161,10 +1243,10 @@ describe('StartProgramSheet', () => {
   it('a superseded prompt response (in flight when the sheet closes) cannot navigate', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const createSession = vi.fn().mockResolvedValue(undefined);
-    let resolvePrompt: (() => void) | null = null;
-    const prompt = vi.fn(() => new Promise<void>((resolve) => { resolvePrompt = resolve; }));
+    let resolveKickoff: (() => void) | null = null;
+    const queueKickoff = vi.fn(() => new Promise<void>((resolve) => { resolveKickoff = resolve; }));
     const store = makeStore();
-    render(<OpenHarness createSession={createSession} prompt={prompt} fleet={store} />);
+    render(<OpenHarness createSession={createSession} queueKickoff={queueKickoff} fleet={store} />);
 
     await fillAndPick();
     fireEvent.click(await screen.findByRole('button', { name: /^start build9-demo/i }));
@@ -1173,14 +1255,14 @@ describe('StartProgramSheet', () => {
     // The match arrives while the sheet is still open — this is what fires
     // `finish()` and starts the (deliberately hanging) `prompt()` call.
     act(() => { store.setState({ sessions: [sess()] }); });
-    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(queueKickoff).toHaveBeenCalledTimes(1));
 
     // Close NOW — `prompt()` is still outstanding.
     fireEvent.click(screen.getByRole('button', { name: /close sheet/i, hidden: true }));
     const before = location.pathname;
 
     // The hanging `prompt()` finally resolves, after the close.
-    resolvePrompt!();
+    resolveKickoff!();
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 
     expect(location.pathname).toBe(before);

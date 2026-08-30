@@ -174,6 +174,21 @@ export const HOLD_EMPTY_REASON_TEXT = 'empty reason — say which program holds 
  */
 const API_ERROR_TEXT: Record<string, string> = {
   unsupported: UNSUPPORTED_VERB_TEXT,
+  // Two of the kickoff route's four codes (program-leverage wave 4). Without
+  // these the operator reads a bare slug at the one moment the sheet has stopped
+  // being able to retry for them — and a box with no `coord.db` is an ordinary,
+  // silent state, not an error anybody has seen before.
+  //
+  // The other two — `unknown-session` and `bad-session-id` — are DELIBERATELY
+  // absent, and the tree said so before this comment did: `uploadErrorText`
+  // consumes THIS function's output as a KEY, so a code it owns must survive
+  // `apiErrorText` unchanged or the upload translator gets a sentence to look up
+  // and finds nothing. Adding `unknown-session` here reds
+  // "does not shadow any code the UPLOAD translator owns", measured. The
+  // start-program sheet says what it needs to about those two in its own
+  // sentence, where the session id is in scope anyway.
+  'not-configured': 'This box does not run coordination — there is no mail store to queue a kickoff into.',
+  'registry-unmeasurable': 'The session registry could not be read, so this box cannot say whether that session exists.',
 };
 
 /** Human-readable failure text for a caught error.
@@ -399,6 +414,24 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
         ...(opts.replaceDraft === undefined ? {} : { replaceDraft: opts.replaceDraft }),
         ...(opts.attachments?.length ? { attachments: opts.attachments } : {}),
       }),
+    /** `POST /api/sessions/:id/kickoff` — queues the coordinator kickoff as
+     *  DURABLE system mail instead of typing it into the pane (program-leverage
+     *  wave 4). Deliberately adjacent to `prompt`, because the pair is the
+     *  point: `prompt` is the operator's own keystrokes and stays exactly as it
+     *  is; this is the machine's, and machines go through the idle-gated
+     *  delivery lane like every wave brief since Build 4.
+     *
+     *  `{slug, title}`, never prose. The server composes the sentence from the
+     *  L0 constant, which makes this route strictly NARROWER than `prompt` — it
+     *  can queue a program kickoff and nothing else.
+     *
+     *  Resolves to `void` through `post`, not `postJson`. The route's body
+     *  distinguishes "queued just now" from "one was already waiting", and the
+     *  sheet renders neither differently — both mean a kickoff is on its way.
+     *  `abandonRun` is the standing counter-example: it reads a body because a
+     *  render depends on a field. Reading one here would ship a distinction
+     *  nothing consumes. */
+    kickoff: (id: string, b: { slug: string; title: string }) => post(`${sid(id)}/kickoff`, b),
     answerDialog: (id: string, dialogId: string, optionIndex: number) =>
       post(`${sid(id)}/dialog`, { dialogId, optionIndex }),
     /** Answer a hook-reported question by option index. `askKey` is minted

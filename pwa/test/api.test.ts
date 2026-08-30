@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { ApiError, apiErrorText, clipUrl, createApi, sendErrorText, uploadErrorText, UNSUPPORTED_VERB_TEXT } from '../src/lib/api';
 
 const jsonResponse = (status: number, body: unknown): Response =>
@@ -353,13 +355,67 @@ describe('abandonRun (Task 12, spec §4.3)', () => {
   });
 });
 
+// program-leverage wave 4 (F4). The sheet's kickoff prop is injected in
+// `start-program.test.tsx`'s cases, so the real client method — the one the
+// production sheet's default prop actually calls — is pinned here, exactly as
+// `createSession` below it is and for the same reason.
+describe('kickoff (program-leverage wave 4)', () => {
+  it('POSTs {slug, title} to /api/sessions/:id/kickoff', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true, queued: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await api.kickoff('claude-ccrc-pwa', { slug: 'build9-demo', title: 'Build 9 demo' });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/sessions/claude-ccrc-pwa/kickoff');
+    expect(init.method).toBe('POST');
+    expect(new Headers(init.headers).get('content-type')).toBe('application/json');
+    expect(JSON.parse(init.body as string)).toEqual({ slug: 'build9-demo', title: 'Build 9 demo' });
+  });
+
+  it('sends NO prose — the server composes the sentence from the L0 constant', () => {
+    // The route is narrower than `POST /api/sessions/:id/prompt` on purpose: it
+    // can queue a program kickoff and nothing else. A `text` or `body` key here
+    // would hand that narrowing back.
+    const src = readFileSync(path.join(import.meta.dirname, '..', 'src', 'lib', 'api.ts'), 'utf8');
+    const line = src.split('\n').find((l) => l.includes('/kickoff`'));
+    expect(line).toBeDefined();
+    expect(line).not.toMatch(/\btext\b|\bbody\b/);
+  });
+
+  it('encodes the session id, like every other session-scoped call', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true, queued: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+    await api.kickoff('a/b', { slug: 's', title: 't' });
+    const [url] = fetchImpl.mock.calls[0] as [string];
+    expect(url).toBe('/api/sessions/a%2Fb/kickoff');
+  });
+
+  it('throws ApiError on a non-2xx — the sheet needs the code to say what failed', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(501, { ok: false, error: 'not-configured' }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    const err = await api.kickoff('claude-ccrc-pwa', { slug: 's', title: 't' }).then(
+      () => { throw new Error('expected kickoff to reject'); },
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(501);
+    // …and the code becomes a sentence rather than reaching the operator as a
+    // bare slug. A box with no coord.db is an ordinary, silent state.
+    expect(apiErrorText(err)).toMatch(/coordination/i);
+  });
+});
+
 // Task 13 review lesson (Task 11/12's own reviews, applied here ahead of
-// time): `StartProgramSheet` always takes its `createSession`/`prompt` props
+// time): `StartProgramSheet` always takes its `createSession`/kickoff props
 // INJECTED in `start-program.test.tsx`'s copy/refusal cases, so the real
 // `api.createSession` — the one the production sheet's default prop value
 // actually calls — needs its own pin here, same idiom as `coordPause`/
 // `abandonRun` above. `prompt`'s own pin already exists at the top of this
-// file.
+// file, and stays: this wave retires the kickoff's use of that route, never
+// the route.
 describe('createSession (Task 13)', () => {
   it('POSTs {wrapper, project, workdir} to /api/sessions', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
