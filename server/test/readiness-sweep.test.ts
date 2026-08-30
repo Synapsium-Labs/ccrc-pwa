@@ -269,3 +269,24 @@ describe('the sweep measures the box token on the SERVER box', () => {
       .not.toContain('a-real-looking-token-value');
   });
 });
+
+// --- fix round 1, minor 1 --------------------------------------------------
+describe('the sweep is actually WIRED into the poll', () => {
+  it('tick() reaches sweepReadiness, so the badge stops being null on its own', async () => {
+    // Every other case in this file calls `sweepReadiness()` directly, and
+    // `lifecycle.test.ts` stubs the watcher outright — so deleting the `void
+    // this.sweepReadiness()` line from `tick()` left the whole suite green
+    // while readiness stayed null forever on a real server. This is the one
+    // case that fails if the lane is never dispatched.
+    //
+    // No `at()` here on purpose: `vi.waitFor` needs a real clock, and the
+    // sweep runs on the first tick regardless (D-1031 — `now - 0` dwarfs the
+    // interval whatever the epoch).
+    const f = fixture();
+    expect(f.watcher.currentReadiness()).toBeUndefined();
+    await f.watcher.tick();
+    await vi.waitFor(() => expect(f.watcher.currentReadiness()).toBeDefined());
+    expect(f.watcher.currentReadiness()?.boxToken).toBe('configured');
+    f.watcher.stop();
+  });
+});

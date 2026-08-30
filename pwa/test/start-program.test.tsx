@@ -33,8 +33,12 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
-import type { CoordStatus, FleetSession, ProjectReadiness } from '../../shared/api';
+import { readyVerdict } from '../../shared/api';
+import type {
+  CoordStatus, FleetSession, ProjectReadiness, ReadinessFacts,
+} from '../../shared/api';
 import { StartProgramSheet, kickoff, startedSessionFor, START_PROGRAM_WAIT_MS } from '../src/fleet/StartProgramSheet';
+import { missingPreconditions } from '../src/fleet/readinessWords';
 import { ApiError, api } from '../src/lib/api';
 import { ToastHost } from '../src/components/Toast';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
@@ -1215,10 +1219,29 @@ describe('the program-ready badge', () => {
     expect(badge?.textContent).toMatch(/\S/);
   });
 
-  it('names the missing preconditions when blocked', async () => {
+  it('names the missing preconditions VISIBLY when blocked, not only in a title', async () => {
+    // title= is unreachable on the mobile-first surface this board is built
+    // for: there is no hover on a phone. The run item asks for a badge WITH
+    // the missing-precondition list, and the data is already on the wire.
     openSheet(async () => withReadiness({ worker: 'absent', verdict: 'blocked' }));
     const badge = await screen.findByText(/not ready/);
     expect(badge.getAttribute('title')).toContain('not installed');
+    const why = document.querySelector('.proj-ready-why');
+    expect(why, 'the blocked reason is not rendered anywhere visible').toBeTruthy();
+    expect(why?.textContent).toContain('worker skill not installed');
+  });
+
+  it('names the unmeasurable precondition visibly too — an unknown is not a blank', async () => {
+    openSheet(async () => withReadiness({ floor: 'unmeasurable', verdict: 'unknown' }));
+    await screen.findByText(/readiness unknown/);
+    expect(document.querySelector('.proj-ready-why')?.textContent)
+      .toContain('could not be measured');
+  });
+
+  it('renders NO reason line when the project is ready — there is nothing to say', async () => {
+    openSheet(async () => withReadiness());
+    await screen.findByText(/program-ready/);
+    expect(document.querySelector('.proj-ready-why')).toBeNull();
   });
 
   it('says unknown — NOT "not ready" — when a precondition could not be measured', async () => {
@@ -1245,5 +1268,57 @@ describe('the program-ready badge', () => {
     openSheet(async () => ({ roots: [], projects: [{ ...proj(), readiness: null }] }));
     await screen.findByText('ccrc-pwa');
     expect(document.querySelector('.proj-ready[data-verdict="pending"]')).toBeTruthy();
+  });
+});
+
+// --- fix round 1, minor 5 --------------------------------------------------
+// The badge's "what is missing" list and the server's verdict are two readings
+// of the same five facts. They MUST agree, and before this they were two
+// independent spellings of each vocabulary's ok-member with nothing checking.
+describe('missingPreconditions agrees with readyVerdict, by construction', () => {
+  const READY: ReadinessFacts = {
+    worker: 'present', coordinator: 'present', floor: 'seeded',
+    boxToken: 'configured', coordDb: 'available',
+  };
+  const stamp = (f: ReadinessFacts): ProjectReadiness =>
+    ({ ...f, verdict: readyVerdict(f), at: 1 });
+
+  it('lists nothing exactly when the verdict is ready', () => {
+    expect(missingPreconditions(stamp(READY))).toEqual([]);
+    expect(readyVerdict(READY)).toBe('ready');
+  });
+
+  // Every non-ok member of every vocabulary, one at a time: the list must name
+  // it and the verdict must leave `ready`. Exhaustive over the arms rather
+  // than a sample, because the failure mode minor 5 names is a NARROWED
+  // comparison, which a sample can miss.
+  it.each([
+    ...(['absent', 'unmeasurable'] as const).flatMap((v) =>
+      [['worker', v], ['coordinator', v]] as [keyof ReadinessFacts, string][]),
+    ...(['not-seeded', 'unmeasurable'] as const).map((v) =>
+      ['floor', v] as [keyof ReadinessFacts, string]),
+    ...(['absent', 'unmeasurable'] as const).map((v) =>
+      ['boxToken', v] as [keyof ReadinessFacts, string]),
+    ...(['degraded', 'not-configured'] as const).map((v) =>
+      ['coordDb', v] as [keyof ReadinessFacts, string]),
+  ])('%s = %s is named by the list and leaves the verdict non-ready', (key, value) => {
+    const facts = { ...READY, [key]: value } as ReadinessFacts;
+    const listed = missingPreconditions(stamp(facts));
+    expect(listed, `${key}=${value} is not named`).toHaveLength(1);
+    expect(readyVerdict(facts)).not.toBe('ready');
+  });
+
+  it('an empty list and a non-ready verdict can never coexist', () => {
+    // The corollary stated as its own case: this is the shape an operator
+    // actually hits — a badge saying "not ready" over nothing at all.
+    for (const worker of ['present', 'absent', 'unmeasurable'] as const) {
+      for (const floor of ['seeded', 'not-seeded', 'unmeasurable'] as const) {
+        for (const coordDb of ['available', 'degraded', 'not-configured'] as const) {
+          const facts = { ...READY, worker, floor, coordDb };
+          const empty = missingPreconditions(stamp(facts)).length === 0;
+          expect(empty, JSON.stringify(facts)).toBe(readyVerdict(facts) === 'ready');
+        }
+      }
+    }
   });
 });

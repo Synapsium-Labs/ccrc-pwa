@@ -45,7 +45,9 @@ import { ApiError, api, apiErrorText } from '../lib/api';
 import { navigate } from '../lib/router';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { useProjectedHome } from './useProjectedHome';
-import { READY_GLYPH, READY_PENDING_GLYPH, readinessTitle, readinessWord } from './readinessWords';
+import {
+  READY_GLYPH, READY_PENDING_GLYPH, missingPreconditions, readinessTitle, readinessWord,
+} from './readinessWords';
 import './fleet.css';
 
 
@@ -576,6 +578,17 @@ export function StartProgramSheet({
                     <span className="proj-ready" data-verdict={p.readiness.verdict}
                       title={readinessTitle(p.readiness)}>
                       {READY_GLYPH[p.readiness.verdict]} {readinessWord(p.readiness)}
+                    </span>
+                  )}
+                  {/* The reasons, VISIBLY. `title=` is unreachable on a phone,
+                      and "which precondition" is the half an operator acts on
+                      — the verdict word alone only says that something is
+                      wrong. Nothing is rendered when the project is ready:
+                      there is no list to show. */}
+                  {p.readiness !== undefined && p.readiness !== null
+                    && p.readiness.verdict !== 'ready' && (
+                    <span className="proj-ready-why">
+                      {missingPreconditions(p.readiness).join(' · ')}
                     </span>
                   )}
                 </button>

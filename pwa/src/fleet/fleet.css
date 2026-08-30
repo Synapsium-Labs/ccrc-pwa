@@ -618,6 +618,15 @@
   color: var(--ink-tertiary);
   white-space: nowrap;
 }
+/* The reason line: column 2 like the name and dir above it, on its own row.
+ * Inert, and ink-tertiary rather than a hue — the badge beside it already
+ * carries the colour cue, and repeating it here would be two shouts. */
+.sheet-panel .proj-ready-why {
+  grid-column: 2;
+  font: var(--weight-regular) var(--text-2xs) / var(--leading-tight) var(--font-mono);
+  color: var(--ink-tertiary);
+  overflow-wrap: anywhere;
+}
 .sheet-panel .proj-ready[data-verdict='ready'] { color: var(--status-busy-text); }
 .sheet-panel .proj-ready[data-verdict='blocked'] { color: var(--status-dead-text); }
 

@@ -1,6 +1,7 @@
 import {
   COORD_DB_STATE_MAP, FLOOR_STATE_MAP, READY_VERDICT_MAP, SKILL_STATE_MAP, TOKEN_STATE_MAP,
-  type ProjectReadiness, type ReadyVerdict,
+  READINESS_KEYS, preconditionCell,
+  type ProjectReadiness, type ReadinessFacts, type ReadyVerdict,
 } from '../../../shared/api';
 
 /**
@@ -42,14 +43,24 @@ export function readinessWord(r: ProjectReadiness): string {
  * friends carry the honest phrase for each arm, and the caller renders the
  * verdict word beside them.
  */
+/** How each precondition names itself when it is NOT ok. The MAPS are the
+ *  vocabulary; this only supplies the noun the map cannot know. */
+const PHRASE: { readonly [K in keyof ReadinessFacts]: (r: ProjectReadiness) => string } = {
+  worker: (r) => `worker skill ${SKILL_STATE_MAP[r.worker]}`,
+  coordinator: (r) => `coordinator skill ${SKILL_STATE_MAP[r.coordinator]}`,
+  floor: (r) => FLOOR_STATE_MAP[r.floor],
+  boxToken: (r) => TOKEN_STATE_MAP[r.boxToken],
+  coordDb: (r) => COORD_DB_STATE_MAP[r.coordDb],
+};
+
 export function missingPreconditions(r: ProjectReadiness): string[] {
-  const out: string[] = [];
-  if (r.worker !== 'present') out.push(`worker skill ${SKILL_STATE_MAP[r.worker]}`);
-  if (r.coordinator !== 'present') out.push(`coordinator skill ${SKILL_STATE_MAP[r.coordinator]}`);
-  if (r.floor !== 'seeded') out.push(FLOOR_STATE_MAP[r.floor]);
-  if (r.boxToken !== 'configured') out.push(TOKEN_STATE_MAP[r.boxToken]);
-  if (r.coordDb !== 'available') out.push(COORD_DB_STATE_MAP[r.coordDb]);
-  return out;
+  // The ok-test is `preconditionCell`, NOT a second copy of each vocabulary's
+  // ok member (fix round 1, minor 5). Re-spelling them here is how this list
+  // and `readyVerdict` came to be able to disagree — a badge reading "not
+  // ready" over an empty list, or the reverse.
+  return READINESS_KEYS
+    .filter((k) => preconditionCell(r, k) !== 'ok')
+    .map((k) => PHRASE[k](r));
 }
 
 /** The sentence behind the badge. `ready` has nothing to list, so it says so

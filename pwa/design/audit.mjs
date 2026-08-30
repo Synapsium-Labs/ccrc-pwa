@@ -541,6 +541,10 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-sheet)'],
     why: 'the red arm of the same badge, same reasoning as the ready arm above. --status-dead-text is the ink the board already uses for a proven-bad state',
   },
+  'fleet.css .sheet-panel .proj-ready-why': {
+    under: ['var(--bg-sheet)'],
+    why: 'the badge\'s reason line, same ground and same reason as the three .proj-ready entries above. Added WITH the rule rather than after it: the first draft of the reason line shipped uncovered, which is precisely the defect those three entries exist to record',
+  },
   'fleet.css .auth-block-title': {
     under: ['var(--bg-surface)'],
     why: 'the heading of the .auth-block card two rules up in the same stylesheet, which sets background: var(--bg-surface). Its selector names no ancestor, so no route could ground it — and fleet.css claimed in a comment that "every child\'s ink pair is already vetted" against that ground while nothing measured it. Same shape as .sess-spawn below',

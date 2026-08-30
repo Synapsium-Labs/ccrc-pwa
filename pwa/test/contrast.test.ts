@@ -1370,6 +1370,7 @@ describe("the program-ready badge is measured, not left in the blind spot", () =
     ['fleet.css .sheet-panel .proj-ready', 'var(--ink-tertiary)'],
     ["fleet.css .sheet-panel .proj-ready[data-verdict='ready']", 'var(--status-busy-text)'],
     ["fleet.css .sheet-panel .proj-ready[data-verdict='blocked']", 'var(--status-dead-text)'],
+    ['fleet.css .sheet-panel .proj-ready-why', 'var(--ink-tertiary)'],
   ])('%s is grounded on the sheet it sits in', (key, ink) => {
     // The badge sits inside `.sheet-panel`, which paints
     // `background: var(--bg-sheet)`. Its selector NAMES that ancestor — which

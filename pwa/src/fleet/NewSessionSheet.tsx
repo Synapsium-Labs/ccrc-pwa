@@ -8,6 +8,7 @@
 // every choice in place.
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
+import type { ProjectRow } from '../../../shared/api';
 import { Sheet } from '../components/Sheet';
 import { Skeleton } from '../components/Skeleton';
 import { toast } from '../components/Toast';
@@ -18,10 +19,6 @@ import { AccountRow, limitsFor, pickableWrappers } from './SwapSheet';
 import { useDisabledWrappers } from './useProjectedHome';
 import './fleet.css';
 
-interface Project {
-  name: string;
-  workdir: string;
-}
 
 export interface NewSessionSheetProps {
   open: boolean;
@@ -40,9 +37,9 @@ export function NewSessionSheet({
   const disabledWrappers = useDisabledWrappers(open);
 
   const [wrapper, setWrapper] = useState<string | null>(null); // null = step 1
-  const [project, setProject] = useState<Project | null>(null);
+  const [project, setProject] = useState<ProjectRow | null>(null);
   const [query, setQuery] = useState('');
-  const [list, setList] = useState<Project[] | null>(null); // null = loading
+  const [list, setList] = useState<ProjectRow[] | null>(null); // null = loading
   const [listError, setListError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   /** `starting` has been true for long enough that "Starting…" is no longer an

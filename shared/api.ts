@@ -1341,17 +1341,47 @@ export function foldSkillStates(states: readonly SkillState[]): SkillState {
   return 'present';
 }
 
+/** What one precondition contributes to the aggregate. */
+export type PreconditionCell = 'ok' | 'blocked' | 'unknown';
+
+/**
+ * THE per-precondition predicate, once (fix round 1, minor 5).
+ *
+ * Keyed BY `ReadinessFacts` so the compiler keeps it total — a precondition
+ * added to that interface with no entry here is a compile error. Every
+ * consumer that needs to know whether a cell is ok reads THIS: `readyVerdict`
+ * below folds it, and the PWA's badge derives its "what is missing" list from
+ * it. Before this existed the ok-member of each vocabulary was spelled twice
+ * — here and in `readinessWords.ts` — with nothing making the two agree, so
+ * narrowing one of them survived a green suite.
+ */
+export const READINESS_CELL: {
+  readonly [K in keyof ReadinessFacts]: (v: ReadinessFacts[K]) => PreconditionCell
+} = {
+  worker: (v) => (v === 'present' ? 'ok' : v === 'absent' ? 'blocked' : 'unknown'),
+  coordinator: (v) => (v === 'present' ? 'ok' : v === 'absent' ? 'blocked' : 'unknown'),
+  floor: (v) => (v === 'seeded' ? 'ok' : v === 'not-seeded' ? 'blocked' : 'unknown'),
+  boxToken: (v) => (v === 'configured' ? 'ok' : v === 'absent' ? 'blocked' : 'unknown'),
+  // No `unknown` arm: every member of `CoordDbState` is a proven condition.
+  coordDb: (v) => (v === 'available' ? 'ok' : 'blocked'),
+};
+
+/** The preconditions in the order a reader should hear about them. Derived
+ *  from the predicate table, never hand-listed beside it. */
+export const READINESS_KEYS: readonly (keyof ReadinessFacts)[] =
+  Object.keys(READINESS_CELL) as (keyof ReadinessFacts)[];
+
+/** One precondition's contribution, looked up through the single table. */
+export function preconditionCell<K extends keyof ReadinessFacts>(
+  f: ReadinessFacts, k: K,
+): PreconditionCell {
+  return (READINESS_CELL[k] as (v: ReadinessFacts[K]) => PreconditionCell)(f[k]);
+}
+
 /** The ONE derivation of the aggregate verdict. L0 and pure so the PWA renders
  *  the server's answer instead of folding the five fields a second time. */
 export function readyVerdict(f: ReadinessFacts): ReadyVerdict {
-  const cells: readonly ('ok' | 'blocked' | 'unknown')[] = [
-    f.worker === 'present' ? 'ok' : f.worker === 'absent' ? 'blocked' : 'unknown',
-    f.coordinator === 'present' ? 'ok' : f.coordinator === 'absent' ? 'blocked' : 'unknown',
-    f.floor === 'seeded' ? 'ok' : f.floor === 'not-seeded' ? 'blocked' : 'unknown',
-    f.boxToken === 'configured' ? 'ok' : f.boxToken === 'absent' ? 'blocked' : 'unknown',
-    // No `unknown` arm: every member of `CoordDbState` is a proven condition.
-    f.coordDb === 'available' ? 'ok' : 'blocked',
-  ];
+  const cells = READINESS_KEYS.map((k) => preconditionCell(f, k));
   if (cells.includes('blocked')) return 'blocked';
   if (cells.includes('unknown')) return 'unknown';
   return 'ready';

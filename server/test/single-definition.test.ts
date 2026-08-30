@@ -1367,11 +1367,19 @@ describe('Build 8 vocabularies — one definition each, all derived from their m
     // denying a field the server was already sending. Caught in self-review,
     // not by a test, which is why this one exists.
     oneDefinition(/^\s*export interface ProjectRow\b/m, 'ProjectRow');
-    const TWIN = /projects:\s*\{\s*name:\s*string;\s*workdir:\s*string\s*\}\[\]/;
+    // PREFIX-LESS, deliberately (fix round 1, minor 3). The first version of
+    // this scan keyed on the INLINE GENERIC spelling (`projects: { name:
+    // string; workdir: string }[]`) and so was blind to the other way the twin
+    // is written — a local `interface Project { name; workdir }` — which was
+    // LIVE in the tree at the time, in NewSessionSheet.tsx, with this suite
+    // green. A fingerprint that only catches the copy you already fixed is not
+    // a guard. This matches the FIELD PAIR however it is spelled, and the one
+    // legal holder is the declaration itself.
+    const TWIN = /\bname:\s*string;\s*\n?\s*workdir:\s*string\b/;
     expect(
       ALL.filter((f) => TWIN.test(readFileSync(f, 'utf8'))).map(rel),
-      'an inline twin of the projects row — import ProjectRow from shared/api instead',
-    ).toEqual([]);
+      'a twin of the projects row — import ProjectRow from shared/api instead',
+    ).toEqual(['shared/api.ts']);
   });
 
   it('the readiness verdict is DERIVED in one place, never recomputed by a consumer', () => {

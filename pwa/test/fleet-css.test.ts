@@ -586,7 +586,8 @@ describe('the program-ready badge is not a living pane', () => {
   it('no readiness rule glows, breathes or animates', () => {
     for (const sel of ['.sheet-panel .proj-ready',
       ".sheet-panel .proj-ready[data-verdict='ready']",
-      ".sheet-panel .proj-ready[data-verdict='blocked']"]) {
+      ".sheet-panel .proj-ready[data-verdict='blocked']",
+      '.sheet-panel .proj-ready-why']) {
       const rule = norm(stripComments(ruleIn(css, sel)));
       expect(rule, sel).not.toContain('--glow');
       expect(rule, sel).not.toContain('animation');
@@ -603,6 +604,8 @@ describe('the program-ready badge is not a living pane', () => {
     expect(norm(stripComments(ruleIn(css, '.proj-name')))).toContain('grid-column: 2');
     expect(norm(stripComments(ruleIn(css, '.proj-dir')))).toContain('grid-column: 2');
     expect(norm(stripComments(ruleIn(css, '.sheet-panel .proj-ready')))).toContain('grid-column: 3');
+    // The reason line rejoins column 2, under the dir — not a fourth column.
+    expect(norm(stripComments(ruleIn(css, '.sheet-panel .proj-ready-why')))).toContain('grid-column: 2');
   });
 
   it('carries a word, not colour alone — the variants only RESTATE a data-verdict the markup already sets', () => {
