@@ -434,6 +434,48 @@ describe('StartProgramSheet', () => {
     expect(screen.getByRole('button', { name: /queue the kickoff again/i })).toBeInTheDocument();
   });
 
+  // WAVE-4 REVIEW, MINOR 4 (D-1121). The same class this file already fixed
+  // once, for `timedOut` (review M3): a sentence about ONE attempt's target,
+  // left rendered above a Start button aimed somewhere else. `kickoffFailed` is
+  // worse than `timedOut` was, because it carries an ACT — the door navigates
+  // to the previous attempt's session, stranding the create the operator just
+  // started, and it is `program-start-error` red directly above the control
+  // they are looking at.
+  it('a NEW attempt retires the previous attempt’s failure door', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    const createSession = vi.fn().mockResolvedValue(undefined);
+    const queueKickoff = vi.fn().mockRejectedValue(
+      new ApiError(501, { ok: false, error: 'not-configured' }),
+    );
+    const store = makeStore();
+    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+      createSession={createSession} queueKickoff={queueKickoff}
+      loadProjects={async () => ({
+        roots: [],
+        projects: [proj(), proj({ name: 'other-repo', workdir: '/home/u/projects/other-repo' })],
+      })} />);
+
+    await fillAndPick();
+    fireEvent.click(await screen.findByRole('button', { name: /^start build9-demo/i }));
+    await screen.findByRole('button', { name: /^starting…$/i });
+    act(() => { store.setState({ sessions: [sess()] }); });
+    await screen.findByText(/could not be queued/i);
+
+    // The operator moves on: a different program in a DIFFERENT project — the
+    // one shape that reaches a live Start button while A's door is up, since
+    // re-picking A's own project renders the D-292 refusal instead of the
+    // confirm fragment.
+    await fillAndPick('other-program', 'A different program', /other-repo/i);
+    fireEvent.click(await screen.findByRole('button', { name: /^start other-program/i }));
+    await waitFor(() => expect(createSession).toHaveBeenCalledTimes(2));
+
+    expect(screen.queryByText(/could not be queued/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /queue the kickoff again/i })).toBeNull();
+    // The retry is retired, not merely hidden: the door is the only control
+    // that could re-post for A, and B owns the sheet now.
+    expect(screen.queryByRole('button', { name: /open it without a brief/i })).toBeNull();
+  });
+
   it('never calls POST /api/runs', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const fetchImpl = vi.fn().mockResolvedValue(

@@ -507,6 +507,23 @@ export function StartProgramSheet({
     setStarting(true);
     setTimedOut(false);
     setError(null);
+    // Wave-4 review, MINOR 4 (D-1121). Same withdrawal as `timedOut`'s above,
+    // and for the same reason one line further on: `kickoffFailed` is a
+    // statement about ONE attempt's target, and a new attempt makes it a red
+    // block ABOVE a Start button aimed somewhere else. Unlike `timedOut` it
+    // carries an act — the door navigates to the previous attempt's session,
+    // stranding the create being started right now.
+    //
+    // RETIRED, NOT RE-KEYED, and this costs something: the door is the only
+    // control that can re-post for that session, so a kickoff that failed and
+    // was then walked away from is not recoverable from this sheet. That is
+    // the trade taken deliberately — the operator has the door on screen, in
+    // red, directly above the Start they are choosing to tap instead, and a
+    // second attempt is a clear statement of what they want the sheet to be
+    // about. Bumping `gen` above already retired any retry in flight (D-1046),
+    // so this cannot race one back into existence.
+    setKickoffFailed(null);
+    setRetrying(false);
 
     // B-1: armed BEFORE the await, not after. `myAttemptRef` records the
     // sheet's INTENT TO CREATE, not a receipt for a completed one — and the
