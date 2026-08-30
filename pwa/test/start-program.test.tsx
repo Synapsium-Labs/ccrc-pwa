@@ -33,8 +33,12 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
-import type { CoordStatus, FleetSession } from '../../shared/api';
+import { readyVerdict } from '../../shared/api';
+import type {
+  CoordStatus, FleetSession, ProjectReadiness, ReadinessFacts,
+} from '../../shared/api';
 import { StartProgramSheet, kickoff, startedSessionFor, START_PROGRAM_WAIT_MS } from '../src/fleet/StartProgramSheet';
+import { missingPreconditions } from '../src/fleet/readinessWords';
 import { ApiError, api } from '../src/lib/api';
 import { ToastHost } from '../src/components/Toast';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
@@ -1180,5 +1184,141 @@ describe('StartProgramSheet', () => {
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 
     expect(location.pathname).toBe(before);
+  });
+});
+
+// program-leverage wave 3 (F3): the program-ready badge.
+//
+// It renders HERE, and only here, because this is the one surface that is
+// genuinely project-keyed — the /runs board itself groups by PROGRAM slug and
+// nothing constrains a program's runs to one project, so a badge on a group
+// header would be a program wearing a project's answer (operator ruling,
+// 2026-08-29). This is also the moment the answer is worth anything: the
+// operator is choosing a project to start a program on.
+describe('the program-ready badge', () => {
+  const READY: ProjectReadiness = {
+    worker: 'present', coordinator: 'present', floor: 'seeded',
+    boxToken: 'configured', coordDb: 'available', verdict: 'ready', at: 1,
+  };
+
+  const withReadiness = (over: Partial<ProjectReadiness> = {}) =>
+    ({ roots: [], projects: [{ ...proj(), readiness: { ...READY, ...over } }] });
+
+  const openSheet = (loadProjects: () => Promise<unknown>) => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    render(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+      loadProjects={loadProjects as never} />);
+  };
+
+  it('renders program-ready with a word AND a glyph, never colour alone', async () => {
+    openSheet(async () => withReadiness());
+    expect(await screen.findByText(/program-ready/)).toBeTruthy();
+    const badge = document.querySelector('.proj-ready[data-verdict="ready"]');
+    expect(badge).toBeTruthy();
+    // The two-cue rule: the glyph is in the text, not carried by colour.
+    expect(badge?.textContent).toMatch(/\S/);
+  });
+
+  it('names the missing preconditions VISIBLY when blocked, not only in a title', async () => {
+    // title= is unreachable on the mobile-first surface this board is built
+    // for: there is no hover on a phone. The run item asks for a badge WITH
+    // the missing-precondition list, and the data is already on the wire.
+    openSheet(async () => withReadiness({ worker: 'absent', verdict: 'blocked' }));
+    const badge = await screen.findByText(/not ready/);
+    expect(badge.getAttribute('title')).toContain('not installed');
+    const why = document.querySelector('.proj-ready-why');
+    expect(why, 'the blocked reason is not rendered anywhere visible').toBeTruthy();
+    expect(why?.textContent).toContain('worker skill not installed');
+  });
+
+  it('names the unmeasurable precondition visibly too — an unknown is not a blank', async () => {
+    openSheet(async () => withReadiness({ floor: 'unmeasurable', verdict: 'unknown' }));
+    await screen.findByText(/readiness unknown/);
+    expect(document.querySelector('.proj-ready-why')?.textContent)
+      .toContain('could not be measured');
+  });
+
+  it('renders NO reason line when the project is ready — there is nothing to say', async () => {
+    openSheet(async () => withReadiness());
+    await screen.findByText(/program-ready/);
+    expect(document.querySelector('.proj-ready-why')).toBeNull();
+  });
+
+  it('says unknown — NOT "not ready" — when a precondition could not be measured', async () => {
+    // The whole point of the feature: absence of evidence is not evidence of
+    // absence, and the operator must be able to tell the two apart.
+    openSheet(async () => withReadiness({ floor: 'unmeasurable', verdict: 'unknown' }));
+    expect(await screen.findByText(/readiness unknown/)).toBeTruthy();
+    expect(screen.queryByText(/not ready/)).toBeNull();
+    const badge = document.querySelector('.proj-ready[data-verdict="unknown"]');
+    expect(badge?.getAttribute('title')).toContain('could not be measured');
+  });
+
+  it('an OLDER SERVER omitting the key renders NO badge and no broken row', async () => {
+    openSheet(async () => ({ roots: [], projects: [proj()] }));
+    expect(await screen.findByText('ccrc-pwa')).toBeTruthy();
+    expect(document.querySelector('.proj-ready')).toBeNull();
+  });
+
+  it('readiness: null renders the pending arm — a DIFFERENT arm from the absent key', async () => {
+    // `null` is "this server measures readiness and has not swept yet"; an
+    // absent key is "this server does not measure it at all". A reader that
+    // folds them together throws away the difference between "wait a moment"
+    // and "upgrade the server".
+    openSheet(async () => ({ roots: [], projects: [{ ...proj(), readiness: null }] }));
+    await screen.findByText('ccrc-pwa');
+    expect(document.querySelector('.proj-ready[data-verdict="pending"]')).toBeTruthy();
+  });
+});
+
+// --- fix round 1, minor 5 --------------------------------------------------
+// The badge's "what is missing" list and the server's verdict are two readings
+// of the same five facts. They MUST agree, and before this they were two
+// independent spellings of each vocabulary's ok-member with nothing checking.
+describe('missingPreconditions agrees with readyVerdict, by construction', () => {
+  const READY: ReadinessFacts = {
+    worker: 'present', coordinator: 'present', floor: 'seeded',
+    boxToken: 'configured', coordDb: 'available',
+  };
+  const stamp = (f: ReadinessFacts): ProjectReadiness =>
+    ({ ...f, verdict: readyVerdict(f), at: 1 });
+
+  it('lists nothing exactly when the verdict is ready', () => {
+    expect(missingPreconditions(stamp(READY))).toEqual([]);
+    expect(readyVerdict(READY)).toBe('ready');
+  });
+
+  // Every non-ok member of every vocabulary, one at a time: the list must name
+  // it and the verdict must leave `ready`. Exhaustive over the arms rather
+  // than a sample, because the failure mode minor 5 names is a NARROWED
+  // comparison, which a sample can miss.
+  it.each([
+    ...(['absent', 'unmeasurable'] as const).flatMap((v) =>
+      [['worker', v], ['coordinator', v]] as [keyof ReadinessFacts, string][]),
+    ...(['not-seeded', 'unmeasurable'] as const).map((v) =>
+      ['floor', v] as [keyof ReadinessFacts, string]),
+    ...(['absent', 'unmeasurable'] as const).map((v) =>
+      ['boxToken', v] as [keyof ReadinessFacts, string]),
+    ...(['degraded', 'not-configured'] as const).map((v) =>
+      ['coordDb', v] as [keyof ReadinessFacts, string]),
+  ])('%s = %s is named by the list and leaves the verdict non-ready', (key, value) => {
+    const facts = { ...READY, [key]: value } as ReadinessFacts;
+    const listed = missingPreconditions(stamp(facts));
+    expect(listed, `${key}=${value} is not named`).toHaveLength(1);
+    expect(readyVerdict(facts)).not.toBe('ready');
+  });
+
+  it('an empty list and a non-ready verdict can never coexist', () => {
+    // The corollary stated as its own case: this is the shape an operator
+    // actually hits — a badge saying "not ready" over nothing at all.
+    for (const worker of ['present', 'absent', 'unmeasurable'] as const) {
+      for (const floor of ['seeded', 'not-seeded', 'unmeasurable'] as const) {
+        for (const coordDb of ['available', 'degraded', 'not-configured'] as const) {
+          const facts = { ...READY, worker, floor, coordDb };
+          const empty = missingPreconditions(stamp(facts)).length === 0;
+          expect(empty, JSON.stringify(facts)).toBe(readyVerdict(facts) === 'ready');
+        }
+      }
+    }
   });
 });

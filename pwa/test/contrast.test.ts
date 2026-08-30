@@ -1364,6 +1364,37 @@ describe('the spawn chip is measured, not left in the blind spot', () => {
   });
 });
 
+// ── F3's program-ready badge (program-leverage wave 3) ─────────────────────
+describe("the program-ready badge is measured, not left in the blind spot", () => {
+  it.each([
+    ['fleet.css .sheet-panel .proj-ready', 'var(--ink-tertiary)'],
+    ["fleet.css .sheet-panel .proj-ready[data-verdict='ready']", 'var(--status-busy-text)'],
+    ["fleet.css .sheet-panel .proj-ready[data-verdict='blocked']", 'var(--status-dead-text)'],
+    ['fleet.css .sheet-panel .proj-ready-why', 'var(--ink-tertiary)'],
+  ])('%s is grounded on the sheet it sits in', (key, ink) => {
+    // The badge sits inside `.sheet-panel`, which paints
+    // `background: var(--bg-sheet)`. Its selector NAMES that ancestor — which
+    // is what made this one look safe and is why it needs saying: naming a
+    // painter is not enough. The descendant route grounds a rule only against
+    // a SELF-GROUNDED host, i.e. one setting a colour AND a ground
+    // (`audit.mjs`'s `selfGrounded`), and `.sheet-panel` sets a background
+    // with no colour of its own. So all three rules sat in the uncovered
+    // census, scoped and unmeasured, until these entries existed.
+    //
+    // All three are pinned, not just the base: the two coloured arms are the
+    // ones that actually carry a hue, and grounding only the base would leave
+    // the report LOOKING covered — the trap the spawn-chip variant entry above
+    // spells out.
+    expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-sheet)']);
+    const rows = report.measured.filter((m) => m.label.endsWith(key));
+    expect(rows, key).toHaveLength(2);                    // dark and light
+    for (const row of rows) {
+      expect(row.detail, row.label).toContain(ink);
+      expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+});
+
 // ── D-161's two new coloured children on the sign-in card ───────────────────
 describe("the sign-in block's ink is measured, not asserted in a comment", () => {
   it.each([

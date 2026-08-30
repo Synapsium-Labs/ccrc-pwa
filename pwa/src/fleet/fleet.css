@@ -562,7 +562,7 @@
 }
 .proj-row {
   display: grid;
-  grid-template-columns: 14px 1fr;
+  grid-template-columns: 14px 1fr auto;
   column-gap: var(--sp-2);
   row-gap: 2px;
   align-items: center;
@@ -590,11 +590,50 @@
   color: var(--accent);
 }
 .proj-name {
+  /* EXPLICIT column, not auto-placement (F3). The track gained a third column
+   * for the readiness badge, and the badge is not always rendered — a server
+   * too old to send `readiness` renders no span at all. With nothing occupying
+   * column 3, auto-placement would put `.proj-dir` at row 1 column 3, beside
+   * the name instead of under it, on exactly those servers. Pinning both to
+   * column 2 makes the layout independent of whether the badge is there. */
+  grid-column: 2;
   font: var(--weight-medium) var(--text-sm) / var(--leading-tight) var(--font-mono);
   color: var(--ink-primary);
   overflow-wrap: anywhere;
 }
+/* F3 — the program-ready badge. `.proj-row` is `background: none`, so its
+ * ground comes from `.sheet-panel` (`background: var(--bg-sheet)`, in
+ * components/primitives.css). Naming that ancestor in the selector does NOT
+ * ground it for the auditor: the descendant route resolves a ground only
+ * against a SELF-GROUNDED host — one setting a colour AND a ground — and
+ * `.sheet-panel` paints without setting a colour of its own. All four rules
+ * therefore sat in the uncovered census, scoped and unmeasured, until their
+ * INHERITED_GROUNDS entries existed (D-1030, mechanism corrected in fix
+ * round 1). Explicitly placed in column 3 spanning both rows.
+ * Inert by contract — no glow, no animation, no box-shadow. */
+.sheet-panel .proj-ready {
+  grid-column: 3;
+  grid-row: 1 / span 2;
+  justify-self: end;
+  align-self: center;
+  font: var(--weight-regular) var(--text-2xs) / var(--leading-tight) var(--font-mono);
+  color: var(--ink-tertiary);
+  white-space: nowrap;
+}
+/* The reason line: column 2 like the name and dir above it, on its own row.
+ * Inert, and ink-tertiary rather than a hue — the badge beside it already
+ * carries the colour cue, and repeating it here would be two shouts. */
+.sheet-panel .proj-ready-why {
+  grid-column: 2;
+  font: var(--weight-regular) var(--text-2xs) / var(--leading-tight) var(--font-mono);
+  color: var(--ink-tertiary);
+  overflow-wrap: anywhere;
+}
+.sheet-panel .proj-ready[data-verdict='ready'] { color: var(--status-busy-text); }
+.sheet-panel .proj-ready[data-verdict='blocked'] { color: var(--status-dead-text); }
+
 .proj-dir {
+  grid-column: 2;   /* see .proj-name above */
   font: var(--weight-regular) var(--text-2xs) / var(--leading-tight) var(--font-mono);
   color: var(--ink-tertiary);
   overflow-wrap: anywhere;

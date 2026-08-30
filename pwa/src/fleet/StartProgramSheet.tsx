@@ -35,7 +35,7 @@
 //     button at all when it finds one.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { FleetSession } from '../../../shared/api';
+import type { FleetSession, ProjectRow } from '../../../shared/api';
 import { Sheet } from '../components/Sheet';
 import { Skeleton } from '../components/Skeleton';
 import { toast } from '../components/Toast';
@@ -45,12 +45,11 @@ import { ApiError, api, apiErrorText } from '../lib/api';
 import { navigate } from '../lib/router';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { useProjectedHome } from './useProjectedHome';
+import {
+  READY_GLYPH, READY_PENDING_GLYPH, missingPreconditions, readinessTitle, readinessWord,
+} from './readinessWords';
 import './fleet.css';
 
-interface Project {
-  name: string;
-  workdir: string;
-}
 
 /** The one standing kickoff. It names three things and asserts nothing:
  *  the program slug, the ledger path the operator is expected to have
@@ -230,7 +229,7 @@ export interface StartProgramSheetProps {
    *  pins the URL/method/body of. */
   createSession?: (b: { wrapper: string; project: string; workdir?: string }) => Promise<void>;
   prompt?: (id: string, text: string) => Promise<void>;
-  loadProjects?: () => Promise<{ roots: string[]; projects: Project[] }>;
+  loadProjects?: () => Promise<{ roots: string[]; projects: ProjectRow[] }>;
 }
 
 export function StartProgramSheet({
@@ -253,9 +252,9 @@ export function StartProgramSheet({
 
   const [slug, setSlug] = useState('');
   const [title, setTitle] = useState('');
-  const [project, setProject] = useState<Project | null>(null);
+  const [project, setProject] = useState<ProjectRow | null>(null);
   const [query, setQuery] = useState('');
-  const [list, setList] = useState<Project[] | null>(null);
+  const [list, setList] = useState<ProjectRow[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [timedOut, setTimedOut] = useState(false);
@@ -562,6 +561,36 @@ export function StartProgramSheet({
                   <span className="proj-glyph" aria-hidden="true">{selected ? '❯' : ''}</span>
                   <span className="proj-name">{p.name}</span>
                   <span className="proj-dir">{p.workdir}</span>
+                  {/* F3 — THREE arms, because the wire has three
+                      (`ProjectRow` in shared/api.ts): the key ABSENT is a
+                      server too old to measure readiness and renders nothing;
+                      `null` is this server, not swept yet; an object is the
+                      answer. Folding the first two together would erase the
+                      difference between "upgrade the server" and "wait a
+                      moment", so the check is `=== undefined` and never a
+                      truthiness test. */}
+                  {p.readiness === undefined ? null : p.readiness === null ? (
+                    <span className="proj-ready" data-verdict="pending"
+                      title="measuring program readiness">
+                      {READY_PENDING_GLYPH} checking
+                    </span>
+                  ) : (
+                    <span className="proj-ready" data-verdict={p.readiness.verdict}
+                      title={readinessTitle(p.readiness)}>
+                      {READY_GLYPH[p.readiness.verdict]} {readinessWord(p.readiness)}
+                    </span>
+                  )}
+                  {/* The reasons, VISIBLY. `title=` is unreachable on a phone,
+                      and "which precondition" is the half an operator acts on
+                      — the verdict word alone only says that something is
+                      wrong. Nothing is rendered when the project is ready:
+                      there is no list to show. */}
+                  {p.readiness !== undefined && p.readiness !== null
+                    && p.readiness.verdict !== 'ready' && (
+                    <span className="proj-ready-why">
+                      {missingPreconditions(p.readiness).join(' · ')}
+                    </span>
+                  )}
                 </button>
               );
             })}

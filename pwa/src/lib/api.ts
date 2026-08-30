@@ -2,7 +2,7 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
-import type { AccountsResponse, CatchUp, ClaimSummary, FleetHealth, FleetSession, LifecycleQueryResult, LoginRequest, NotifyEvent, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, PrView, ReapResult, RunSummary, SlashCommand, StagedClip, WsAudit } from '../../../shared/api';
+import type { AccountsResponse, CatchUp, ClaimSummary, FleetHealth, FleetSession, LifecycleQueryResult, LoginRequest, NotifyEvent, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectRow, PrView, ReapResult, RunSummary, SlashCommand, StagedClip, WsAudit } from '../../../shared/api';
 import { raiseAuthLostFrom } from './auth';
 
 export class ApiError extends Error {
@@ -354,8 +354,11 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     // field added in Stage 2a is exactly the kind of addition that lands in two
     // of three copies. The generic is the contract now.
     accounts: () => getJson<AccountsResponse>('/api/accounts'),
-    projects: () =>
-      getJson<{ roots: string[]; projects: { name: string; workdir: string }[] }>('/api/projects'),
+    // `ProjectRow`, not a hand-written twin — the comment two lines up names
+    // this exact failure mode, and F3's `readiness` is the field it predicted:
+    // spelled inline here, this generic would have gone on declaring a shape
+    // the server had already stopped sending (D-1028).
+    projects: () => getJson<{ roots: string[]; projects: ProjectRow[] }>('/api/projects'),
     createSession: (b: { wrapper: string; project: string; workdir?: string }) =>
       post('/api/sessions', b),
     ensure: (id: string) => post(`${sid(id)}/ensure`),

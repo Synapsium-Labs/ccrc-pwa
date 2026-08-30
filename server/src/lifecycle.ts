@@ -3,6 +3,7 @@ import type { CcdArgv } from './ccdargv.js';
 import type { CcrcConfig } from './config.js';
 import { UNMEASURED, type Runner, type Unmeasured } from './exec.js';
 import type { FleetIO } from './io.js';
+import type { ProjectRow } from '../../shared/api.js';
 import { readRegistry } from './registry.js';
 
 /** `killed` and `signal` are REQUIRED here, unlike their `ExecResult`
@@ -125,8 +126,8 @@ const isLinkedWorktree = async (
 export async function listProjects(
   io: FleetIO,
   cfg: CcrcConfig,
-): Promise<{ roots: string[]; projects: { name: string; workdir: string }[] }> {
-  const byWorkdir = new Map<string, { name: string; workdir: string }>();
+): Promise<{ roots: string[]; projects: ProjectRow[] }> {
+  const byWorkdir = new Map<string, ProjectRow>();
   const names = await io.readdir(cfg.projectsRoot);
   if (names !== null) {
     for (const name of names) {

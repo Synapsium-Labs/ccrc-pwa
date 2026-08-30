@@ -579,6 +579,46 @@ describe('runs are not living panes', () => {
   });
 });
 
+// program-leverage wave 3 (F3): a readiness badge is a MEASUREMENT of a box,
+// not a living pane — the same discipline as the two describes around it, and
+// it gets its own rather than being filed under "runs", which it is not.
+describe('the program-ready badge is not a living pane', () => {
+  it('no readiness rule glows, breathes or animates', () => {
+    for (const sel of ['.sheet-panel .proj-ready',
+      ".sheet-panel .proj-ready[data-verdict='ready']",
+      ".sheet-panel .proj-ready[data-verdict='blocked']",
+      '.sheet-panel .proj-ready-why']) {
+      const rule = norm(stripComments(ruleIn(css, sel)));
+      expect(rule, sel).not.toContain('--glow');
+      expect(rule, sel).not.toContain('animation');
+      expect(rule, sel).not.toContain('box-shadow');
+    }
+  });
+
+  it('the project row does not re-flow when the badge is absent', () => {
+    // The badge added a third grid column, and it is NOT always rendered: a
+    // server too old to send `readiness` renders no span at all. With column 3
+    // empty, auto-placement would put .proj-dir at row 1 column 3 — beside the
+    // name instead of under it — on exactly those servers. Both cells are
+    // therefore pinned to column 2 explicitly, and the badge to column 3.
+    expect(norm(stripComments(ruleIn(css, '.proj-name')))).toContain('grid-column: 2');
+    expect(norm(stripComments(ruleIn(css, '.proj-dir')))).toContain('grid-column: 2');
+    expect(norm(stripComments(ruleIn(css, '.sheet-panel .proj-ready')))).toContain('grid-column: 3');
+    // The reason line rejoins column 2, under the dir — not a fourth column.
+    expect(norm(stripComments(ruleIn(css, '.sheet-panel .proj-ready-why')))).toContain('grid-column: 2');
+  });
+
+  it('carries a word, not colour alone — the variants only RESTATE a data-verdict the markup already sets', () => {
+    // The two-cue rule lives in the component (glyph + word in the span's own
+    // text); what CSS must not do is become the only carrier. Both coloured
+    // arms are attribute-keyed, so the DOM says the verdict even with the
+    // stylesheet stripped.
+    for (const verdict of ['ready', 'blocked']) {
+      expect(css).toContain(`.proj-ready[data-verdict='${verdict}']`);
+    }
+  });
+});
+
 // Task 11, spec §4.2: a paused fleet is a STATE, not a living pane — the same
 // discipline "runs are not living panes" already holds a few rules up, for
 // the same reason.

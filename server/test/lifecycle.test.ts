@@ -15,6 +15,7 @@ import type { BuildInfo } from '../../shared/buildinfo.js';
 import { LIFECYCLE } from '../../shared/lifecycle.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
+import type { FleetReadiness } from '../src/readiness.js';
 
 const ID = 'claude2-MekWarLive';
 
@@ -38,7 +39,16 @@ const seedDefault = (home: string) =>
  *  `coord-pause-route.test.ts`'s own pattern) — the shape a skew test needs
  *  to prove the server's DECISION, not just its argv. */
 async function makeApp(
-  opts: { fail?: boolean; projectsRoot?: string; ccdVerbs?: string[] | null } = {},
+  opts: {
+    fail?: boolean; projectsRoot?: string; ccdVerbs?: string[] | null;
+    /** F3: what `watcher?.currentReadiness()` answers. Omit for NO watcher at
+     *  all (the shape a test app has had until now); pass `undefined`
+     *  explicitly via `unswept: true` for a watcher that has not swept yet. */
+    readiness?: FleetReadiness;
+    unswept?: boolean;
+    /** F3: the `ledgerFloor` port the route reads per project. */
+    coord?: unknown;
+  } = {},
 ): Promise<{
   app: FastifyInstance;
   calls: string[][];
@@ -56,12 +66,16 @@ async function makeApp(
   const env: NodeJS.ProcessEnv = { CCRC_HOME: home };
   if (opts.projectsRoot) env.CCRC_PROJECTS_ROOT = opts.projectsRoot;
   const cfg = loadConfig(env);
+  const watcher = (opts.readiness !== undefined || opts.unswept)
+    ? ({ currentReadiness: () => opts.readiness, stop: () => {} } as never)
+    : undefined;
   const app = await buildServer({
     cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
+    ...(opts.coord !== undefined ? { coord: opts.coord } : {}),
     ...(opts.ccdVerbs !== undefined
       ? { fleetState: { connected: true, downSince: null, ccdVerbs: opts.ccdVerbs, rosterFp: null, build: null } }
       : {}),
-  });
+  } as never, undefined, watcher);
   return { app, calls, cfg, home };
 }
 
@@ -467,7 +481,13 @@ describe('listProjects', () => {
 
     const res = await app.inject({ method: 'GET', url: '/api/projects' });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual(direct);
+    // The route serves `listProjects`'s rows plus F3's readiness join. This
+    // app has no watcher, so every row carries `readiness: null` — "this build
+    // measures readiness and has not swept", which is deliberately NOT the
+    // same as the key being absent (a build too old to carry it at all).
+    expect(res.json().roots).toEqual(direct.roots);
+    expect(res.json().projects).toEqual(
+      direct.projects.map((p) => ({ ...p, readiness: null })));
     await app.close();
   });
 
@@ -708,6 +728,111 @@ describe('wave 6 — the dec flags are sent only to a ccd that says it parses th
       [cfg.ccdBin, 'ws-restore', '--session', ID, '--surface', 'pwa', '--actor', 'unmeasured'],
       [cfg.ccdBin, 'ws-release', '--session', ID, '--surface', 'pwa', '--actor', 'unmeasured'],
     ]);
+    await app.close();
+  });
+});
+
+// program-leverage wave 3 (F3): the per-project program-ready readiness rides
+// `GET /api/projects` — the one read that already enumerates projects
+// INCLUDING those that have never had a run, which is the case the feature
+// exists for. See the wave plan's "The seam" section for why neither candidate
+// the spec named could carry it.
+describe('GET /api/projects — the program-ready readiness', () => {
+  const SWEPT: FleetReadiness = {
+    worker: 'present', coordinator: 'present',
+    boxToken: 'configured', coordDb: 'available', at: 1_785_300_000_000,
+  };
+
+  it('carries a per-project readiness once the watcher has swept', async () => {
+    const { app } = await makeApp({
+      readiness: SWEPT,
+      coord: { ledgerFloor: () => ({ floor: 1, evidence: 'x', updatedAt: 1 }) },
+    });
+    const res = await app.inject({ method: 'GET', url: '/api/projects' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().projects[0].readiness).toEqual({
+      worker: 'present', coordinator: 'present', floor: 'seeded',
+      boxToken: 'configured', coordDb: 'available', verdict: 'ready',
+      at: 1_785_300_000_000,
+    });
+    await app.close();
+  });
+
+  it('a project that has never had a run still gets an answer', async () => {
+    // THE CASE THE FEATURE EXISTS FOR. `CoordStore.runs()` joins `programs`,
+    // so a runs-shaped seam has no row at all here; this one does.
+    const { app } = await makeApp({
+      readiness: SWEPT, coord: { ledgerFloor: () => null },
+    });
+    const row = (await app.inject({ method: 'GET', url: '/api/projects' })).json().projects[0];
+    expect(row.readiness.floor).toBe('not-seeded');
+    expect(row.readiness.verdict).toBe('blocked');
+    await app.close();
+  });
+
+  it('carries readiness: null — not an absent key — before the first sweep', async () => {
+    const { app } = await makeApp({ unswept: true });
+    const row = (await app.inject({ method: 'GET', url: '/api/projects' })).json().projects[0];
+    expect(row).toHaveProperty('readiness');
+    expect(row.readiness).toBeNull();
+    await app.close();
+  });
+
+  it('a floor read that THROWS is unmeasurable for that project, and the request still answers', async () => {
+    // `CoordStore.ledgerFloor` has no result type: a sick store throws. That
+    // must not become a 500, and it must NOT become `not-seeded` — which
+    // would send an operator to seed a floor that may already exist.
+    const { app } = await makeApp({
+      readiness: SWEPT,
+      coord: { ledgerFloor: () => { throw new Error('SQLITE_BUSY'); } },
+    });
+    const res = await app.inject({ method: 'GET', url: '/api/projects' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().projects[0].readiness.floor).toBe('unmeasurable');
+    expect(res.json().projects[0].readiness.verdict).toBe('unknown');
+    await app.close();
+  });
+
+  it('one project throwing does not blank the others', async () => {
+    const root = mkTmp('ccrc-projects-readiness-');
+    mkdirSync(path.join(root, 'alpha'));
+    mkdirSync(path.join(root, 'beta'));
+    const { app } = await makeApp({
+      projectsRoot: root,
+      readiness: SWEPT,
+      coord: {
+        ledgerFloor: (project: string) => {
+          if (project === 'alpha') throw new Error('SQLITE_BUSY');
+          return { floor: 1, evidence: 'x', updatedAt: 1 };
+        },
+      },
+    });
+    const rows = (await app.inject({ method: 'GET', url: '/api/projects' })).json().projects;
+    const byName = Object.fromEntries(
+      rows.map((r: { name: string; readiness: { floor: string } }) => [r.name, r.readiness.floor]));
+    expect(byName.alpha).toBe('unmeasurable');
+    expect(byName.beta).toBe('seeded');
+    await app.close();
+  });
+
+  it('no coordination store makes every project FLOOR unmeasurable, not not-seeded', async () => {
+    // The `coordDb` arm is the SWEEP's answer, not this route's; what the
+    // route owns here is the floor, and with no store it did not measure one.
+    const { app } = await makeApp({ readiness: SWEPT });
+    const row = (await app.inject({ method: 'GET', url: '/api/projects' })).json().projects[0];
+    expect(row.readiness.floor).toBe('unmeasurable');
+    expect(row.readiness.verdict).toBe('unknown');
+    await app.close();
+  });
+
+  it('listProjects itself still returns rows with NO readiness key — the route composes it', async () => {
+    // `listProjects` is the fleet read; readiness is the route's join. Keeping
+    // them apart is what lets the route answer at all while the watcher is
+    // unswept, and it keeps the fleet read testable without a watcher.
+    const { cfg, app } = await makeApp();
+    const out = await listProjects(localIO, cfg);
+    expect(out.projects.length).toBeGreaterThan(0);
+    expect(out.projects.every((p) => !('readiness' in p))).toBe(true);
     await app.close();
   });
 });

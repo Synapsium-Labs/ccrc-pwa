@@ -21,14 +21,40 @@ import type { FleetIO } from './io.js';
  * (`tasks/read.ts`): the CALLER supplies the config dir, because turning a
  * wrapper into a directory is `configDirFor`'s single job (`config.ts`) and
  * `single-definition.test.ts` fails the build on a second site that does it.
+ *
+ * THAT DAY ARRIVED (program-leverage wave 3, F3): the program-ready
+ * measurement asks the same question about the COORDINATOR skill, in every
+ * rostered home. It grew the parameter this docstring promised — `skillPath`
+ * takes the skill dir — rather than a second join, and `readWorkerSkillState`
+ * is now a delegate that keeps its own signature for the dispatch preflight.
  */
 
 /** The directory `ccd/install-worker-skill.sh` writes, under `<configDir>/skills/`. */
 export const WORKER_SKILL_DIR = 'ccrc-worker';
 
-/** The one file that installer's `REQUIRED_FILES` names. */
+/**
+ * The directory `ccd/install-coordinator-skill.sh` writes, same parent.
+ *
+ * NOTE the deliberate narrowing (D-1027): that installer names five REQUIRED
+ * reference files beside `SKILL.md` and refuses the install without them, so
+ * "SKILL.md is readable" is WIDER than the installer's own definition of
+ * installed — a home whose refs were deleted reads `present` here. The
+ * narrower read is chosen on cost (each ref would be another agent round trip
+ * per home in remote fleet mode, five on top of two) and because the
+ * ref-level verdict belongs to the doctor lane, not this one. `skillPath`
+ * takes the dir as a parameter precisely so a caller that needs the wider
+ * answer can have it without a second join.
+ */
+export const COORDINATOR_SKILL_DIR = 'ccrc-coordinator';
+
+/** THE join — one, still. The file both installers' `REQUIRED_FILES` name. */
+export function skillPath(configDir: string, skillDir: string): string {
+  return path.join(configDir, 'skills', skillDir, 'SKILL.md');
+}
+
+/** Kept for the caller that predates the parameter: same signature, same path. */
 export function workerSkillPath(configDir: string): string {
-  return path.join(configDir, 'skills', WORKER_SKILL_DIR, 'SKILL.md');
+  return skillPath(configDir, WORKER_SKILL_DIR);
 }
 
 /**
@@ -47,11 +73,18 @@ export function workerSkillPath(configDir: string): string {
  * `io.stat`'s agent half answers EACCES as `{missing:true}`, so a directory
  * probe would LIE about absence.
  */
+export async function readSkillState(
+  io: Pick<FleetIO, 'readFileMeasured'>, configDir: string | undefined, skillDir: string,
+): Promise<SkillState> {
+  if (configDir === undefined) return 'unmeasurable';
+  const read = await io.readFileMeasured(skillPath(configDir, skillDir));
+  if (read.ok) return 'present';
+  return read.reason === 'absent' ? 'absent' : 'unmeasurable';
+}
+
+/** The dispatch preflight's call, unchanged in signature and in semantics. */
 export async function readWorkerSkillState(
   io: Pick<FleetIO, 'readFileMeasured'>, configDir: string | undefined,
 ): Promise<SkillState> {
-  if (configDir === undefined) return 'unmeasurable';
-  const read = await io.readFileMeasured(workerSkillPath(configDir));
-  if (read.ok) return 'present';
-  return read.reason === 'absent' ? 'absent' : 'unmeasurable';
+  return readSkillState(io, configDir, WORKER_SKILL_DIR);
 }
