@@ -207,7 +207,7 @@ expected output contradicts, and **believe the tree over this table.**
 | A toast is **dropped entirely** when the 401 auth-lost signal is up | `pwa/src/components/Toast.tsx:40`; raised at `pwa/src/lib/api.ts:221` |
 | `createApi`'s `post` helper resolves `Promise<void>` and never reads the body; `abandonRun` is the precedent for reading one only when a render depends on it | `pwa/src/lib/api.ts:230`, `:459` |
 | `pwa/test/start-program.test.tsx` has 55 tests, 19 of which assert something about the prompt call | that file (see Task 6's table) |
-| Highest `D-<n>` defined in the tracked tree is `D-1038`; `D-1039..D-1046` are allocated to this program and unused in both `docs/` and source | `git grep -hoE 'D-1[0-9]{3}'`; `GET /api/ledger?project=ccrc-pwa` |
+| ~~Highest `D-<n>` defined in the tracked tree is `D-1038`~~ — **FALSE, corrected in the fix round (review MINOR 8b)**. Re-measured at `1f6ed803`: the tracked high-water was **`D-1065`**, another program's block; `D-1038` was only THIS program's consumption. `D-1039..D-1046` are allocated to this program and were unused in both `docs/` and source, which is the half that mattered and the half that held | `git grep -hoE 'D-[0-9]{3,4}' 1f6ed803 \| sort -n \| tail`; `GET /api/ledger?project=ccrc-pwa` |
 
 ---
 
@@ -963,8 +963,13 @@ Every guard below was written first and run first; the text is the run's own fir
 
 ### Mutation table
 
-Twelve mutations, each applied to SOURCE (never to a test), each reverted from a working-tree
+Nineteen mutations, each applied to SOURCE (never to a test), each reverted from a working-tree
 snapshot with the file diffed clean afterwards.
+
+*(Corrected in the fix round: this line read "Twelve" over a table of nineteen rows, while the
+self-review section below counted them correctly as nineteen. Wave 3's own lesson — count twice,
+because a number written once is written from memory — recurring inside the very record that carries
+it. Review MINOR 8a.)*
 
 | # | Mutation | Result |
 |---|---|---|
@@ -1151,3 +1156,79 @@ Two things worth carrying forward. First, vitest prints `Type Errors  no errors`
 that reports two TypeCheckErrors, so that line is not the typecheck verdict and must not be read as
 one. Second — the process point, and the one that actually bit — **a grep over a suite's output is
 not a reading of it**: the filter that made the output short is the same filter that hid the finding.
+
+---
+
+## Fix round (review mail 113, 2026-08-30)
+
+Verdict on the wave: **SHIP-WITH-FIXES** — 1 major, 7 minors, 2 refuted, from a 26-agent adversarial
+pass whose live re-measurement at `9df76bf0` matched this record exactly. Every finding below was
+verified against the tree before it was acted on, and one of them turned out to be understated.
+
+### Reds and mutations
+
+Each mutation applied to SOURCE, reverted from a working-tree snapshot, the file diffed clean after.
+
+| # | What was measured | First failing assertion, verbatim |
+|---|---|---|
+| F1a | `retryKickoff` with no generation guard, late SUCCESS | `expected '/s/claude-ccrc-pwa' to be '/runs'` |
+| F1b | `retryKickoff` with no generation guard, late REJECTION | `expected <p class="program-start-error"></p> to be null` |
+| F2a | the seam with no body cap (5 tests) | `expected undefined to be false` |
+| F2b | the route with no 413 arm (2 tests) | `expected 200 to be 413` |
+| F3a | the sheet without `kickoffErrorText` | `expected 'claude-ccrc-pwa is running, but its k…' to match /no longer in the registry/i` |
+| F3b | `apiErrorText` before `KICKOFF_ERROR_TEXT` existed (2 tests) | `kickoffErrorText is not a function` |
+| F4 | `kickoffFailed` not retired by a new `start()` | `expected <p class="program-start-error"></p> to be null` (the received text is A's door, above B's Start) |
+| F5 | the re-pointed D-292 absence pins, against a sheet that always renders the refusal | RED, 11 — `expected <p class="program-start-existing"></p> to be null` |
+| F6 | the repaired "sends NO prose" pin, against a real prose-adding mutation | `expected '    kickoff: (id: string, b: { slug: …' not to match /\btext\b\|\bbody\b/` |
+
+**F6 was also measured the other way**, which is the whole point of the finding: with the same
+mutation in place, the ORIGINAL predicate (`find(l => l.includes('/kickoff`'))`) selected
+`" * \`POST /api/sessions/:id/kickoff\`'s own refusals (wave-4 review, MINOR 3,"` — a docstring line
+— and its assertion passed. The pin could not fail on the mutation it was written for.
+
+### The finding that was worse than reported
+
+MINOR 6 was reported as a copy defect. It is also a **guard defect**: four
+`expect(screen.queryByText(/may be mid-task/i)).toBeNull()` assertions — the Important-2 suppression
+pins, which are the guards on the one D-292 arm that renders a refusal — stopped matching anything
+the moment this wave reworded that paragraph. Nothing went red, because they assert an ABSENCE and an
+absence is trivially satisfied by a string that no longer exists. Re-pointed at `/two coordinators/i`
+and measured against a mutant that drops `!isOwnAttempt`: 11 red. Recorded as the second half of
+D-1122, with MINOR 5 — the class is one, and it is now three waves old in this program.
+
+### Notes the review asked to be recorded
+
+- **`KickoffOutcome` no longer re-declares `SystemMailQueued`.** It intersects it. The re-declaration
+  was one-way-silent drift — a new field on the write's result would not have reached this caller and
+  nothing would have gone red. Acted on rather than merely noted, because the same commit was
+  changing that type anyway (D-1119).
+- **`queued: false` folds two facts, deliberately, and wave 5 will need them apart.** The dedupe key
+  is `(operator, null, toId, subject)` with no slug in it, so "this session already has a kickoff for
+  THIS program" and "…for a DIFFERENT program" answer identically. That is right for the sheet — both
+  mean *do not queue a second one* — and it is the fold the reclaim door has to open, because
+  re-kickoff onto a session holding another program's kickoff is a genuinely different situation from
+  re-kickoff onto its own. Recorded as a known fold, not fixed: inventing the distinction here with
+  no consumer would ship a seam nothing reads.
+- **`typecheck-tests` needs the sibling packages' `node_modules`.** A `server`-only `npm ci` leaves it
+  reporting 2 failures that are missing-module resolution, not type errors. Environmental; the
+  full-suite runs in this record were all done with all three packages installed.
+- **The repo `CLAUDE.md` sentence "Box token gates every coordination WRITE … except THREE
+  deliberately ungated operator doors" now has a fourth shape it does not name.** This wave's
+  `POST /api/sessions/:id/kickoff` is a coordination WRITE that is session-gated only, by the brief's
+  own instruction (the PWA holds no box token). It is not an ungated door — armed, it sits behind the
+  auth gate exactly like every other PWA-surface write — so the sentence is not wrong so much as
+  incomplete. Left for wave 5's `CLAUDE.md` correction to fold in rather than edited here, where it
+  would be a second uncoordinated edit to the same paragraph.
+- **The queue-not-inject pin's divergence from the brief's literal spelling was ACCEPTED** by the
+  review as a measured-stronger superset. The vacuity measurement behind it stands: a `send-keys`-only
+  spelling reported *1 passed* against a route mutated to inject.
+
+### Scope declined, and why
+
+MINOR 3 named two harms: a slug where a sentence belongs, and a retry door offered for a code where a
+retry can never succeed. The first is fixed. The second is not: the door still renders for
+`unknown-session`, and its copy now says what the registry answered instead of asserting the opposite.
+Suppressing the controls per code class would put a code-class predicate in the sheet — a distinction
+the server states and the client would then re-derive — for a failure whose worst case is one wasted
+round trip that re-renders the same sentence. Recorded rather than done, and it is the coordinator's
+call if that is the wrong trade.
