@@ -434,6 +434,34 @@ describe('StartProgramSheet', () => {
     expect(screen.getByRole('button', { name: /queue the kickoff again/i })).toBeInTheDocument();
   });
 
+  // WAVE-4 REVIEW, MINOR 3 (D-1120). RENDERED TEXT, not slug survival — the
+  // review asked for exactly that, and it is the difference between pinning
+  // that a map exists and pinning that the operator can read the screen.
+  it('a 404 says what the registry actually answered — and stops claiming the session is running', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    const queueKickoff = vi.fn().mockRejectedValue(
+      new ApiError(404, { ok: false, error: 'unknown-session' }),
+    );
+    const store = makeStore();
+    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+      createSession={async () => {}} queueKickoff={queueKickoff}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    await fillAndPick();
+    fireEvent.click(await screen.findByRole('button', { name: /^start build9-demo/i }));
+    await screen.findByRole('button', { name: /^starting…$/i });
+    act(() => { store.setState({ sessions: [sess()] }); });
+
+    const block = await screen.findByText(/could not be queued/i);
+    expect(block.textContent).toMatch(/no longer in the registry/i);
+    // The code never reaches the operator as itself…
+    expect(block.textContent).not.toMatch(/unknown-session/);
+    // …and the sentence stops asserting the ONE fact the registry just denied.
+    // A 404 means the row is gone; "<id> is running" was a claim the sheet had
+    // no measurement for, printed directly above a retry that cannot succeed.
+    expect(block.textContent).not.toMatch(/is running/i);
+  });
+
   // WAVE-4 REVIEW, MINOR 4 (D-1121). The same class this file already fixed
   // once, for `timedOut` (review M3): a sentence about ONE attempt's target,
   // left rendered above a Start button aimed somewhere else. `kickoffFailed` is
@@ -685,7 +713,7 @@ describe('StartProgramSheet', () => {
     // Never told this is someone else's session — the exact false claim
     // the pre-fix shape rendered here.
     expect(screen.queryByText(/already running/i)).toBeNull();
-    expect(screen.queryByText(/may be mid-task/i)).toBeNull();
+    expect(screen.queryByText(/two coordinators/i)).toBeNull();  // the D-292 refusal, by the half of it that survives every rewording
 
     // And the mission still completes, as if the timeout had never fired —
     // the kickoff is sent, once, and the sheet navigates.
@@ -764,7 +792,7 @@ describe('StartProgramSheet', () => {
 
     expect(await screen.findByRole('button', { name: /^start build9-demo on/i })).toBeInTheDocument();
     expect(screen.queryByText(/already running/i)).toBeNull();
-    expect(screen.queryByText(/may be mid-task/i)).toBeNull();
+    expect(screen.queryByText(/two coordinators/i)).toBeNull();  // the D-292 refusal, by the half of it that survives every rewording
   });
 
   it("does NOT refuse for a DEAD session — cmd_start's own idempotency test is `_alive`, and ws-reap is human-only (C1)", async () => {
@@ -930,7 +958,7 @@ describe('StartProgramSheet', () => {
 
     // The refusal must NOT render…
     expect(screen.queryByText(/already running/i)).toBeNull();
-    expect(screen.queryByText(/may be mid-task/i)).toBeNull();
+    expect(screen.queryByText(/two coordinators/i)).toBeNull();  // the D-292 refusal, by the half of it that survives every rewording
     // …and the in-flight indicator must still be there. This is the half that
     // makes it a real pin: the refusal replaces the WHOLE confirm fragment,
     // so "Starting…" vanishing is what the operator actually sees.
@@ -1110,7 +1138,7 @@ describe('StartProgramSheet', () => {
     // `myAttemptRef` must agree with the (now wrapper-independent) refusal
     // arm. A session this sheet started at `claude` can be reported at
     // `claude2` on any later frame; comparing wrappers there would render
-    // "…already running… may be mid-task" for the sheet's OWN session — the
+    // "…already running… two coordinators" for the sheet's OWN session — the
     // Important-2 defect, arriving through the swap path.
     vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
     const queueKickoff = vi.fn().mockResolvedValue(undefined);
@@ -1141,7 +1169,7 @@ describe('StartProgramSheet', () => {
     }
 
     expect(screen.queryByText(/already running/i)).toBeNull();
-    expect(screen.queryByText(/may be mid-task/i)).toBeNull();
+    expect(screen.queryByText(/two coordinators/i)).toBeNull();  // the D-292 refusal, by the half of it that survives every rewording
   });
 
   it('still refuses for a project it never started — the ownership suppression is bounded (C1-swap)', async () => {

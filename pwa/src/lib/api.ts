@@ -210,6 +210,34 @@ export function apiErrorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/**
+ * `POST /api/sessions/:id/kickoff`'s own refusals (wave-4 review, MINOR 3,
+ * D-1120). The fourth per-surface map in this file, composed exactly as
+ * `useAttachImage.ts` composes the upload one: `kickoffErrorText(apiErrorText(err))`.
+ *
+ * WHY IT IS NOT MORE ENTRIES IN `API_ERROR_TEXT`. Three of the five codes that
+ * route can answer with are OWNED by `uploadErrorText`, which consumes
+ * `apiErrorText`'s OUTPUT as a KEY — so a sentence there hands the upload
+ * translator a sentence to look up instead of a code, and its own upload
+ * wording is lost. The suite says so in both directions, for all three
+ * translators. Everything `API_ERROR_TEXT` already turns into a sentence passes
+ * through here untouched, because a sentence matches no key.
+ *
+ * These are the sentences a phone shows above a retry button, so each says what
+ * the box actually established and, where the answer is terminal, stops short of
+ * implying a retry will help. `unknown-session` in particular used to reach the
+ * operator as a bare slug inside a sentence that ALSO asserted the session was
+ * running — the exact fact the registry had just denied.
+ */
+const KICKOFF_ERROR_TEXT: Record<string, string> = {
+  'unknown-session': 'That session is no longer in the registry — nothing can be queued for it.',
+  'bad-session-id': 'That session id is not one this box will accept.',
+  'bad-request': 'The program name and title did not arrive with the request.',
+  oversize: 'That program title is too long to send as mail — shorten it and start again.',
+};
+
+export const kickoffErrorText = (text: string): string => KICKOFF_ERROR_TEXT[text] ?? text;
+
 /** Injectable for tests; defaults to the real global fetch. */
 export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args)) {
   const request = async (path: string, init?: RequestInit): Promise<Response> => {

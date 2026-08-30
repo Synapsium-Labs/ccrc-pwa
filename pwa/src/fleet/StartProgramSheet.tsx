@@ -4,13 +4,16 @@
 // `server/src/coord/routes.ts:872`, refusing a second claimant in
 // `server/src/coord/store.ts:363-371`) and this build does not add a route that both spawns
 // a session and opens a run. The flow is three EXISTING calls —
-// `api.projects`, `api.createSession`, `api.prompt` — plus `useProjectedHome`
+// `api.projects`, `api.createSession`, `api.kickoff` — plus `useProjectedHome`
 // for the account name, composed here and nowhere else.
 //
 // D-291 (was D-B4-18) and D-292 (was D-B4-19) (`docs/superpowers/plans/2026-08-11-build4-conversation-and-
 // controls.md`'s Deviations section) are both load-bearing for this file and
-// are why it is not the simple "create, then prompt the id it returns" shape
-// the brief's own interface list reads as:
+// are why it is not the simple "create, then kick off the id it returns" shape
+// the brief's own interface list reads as. (Wave 4 changed WHAT is sent — the
+// kickoff is durable mail queued through the idle-gated lane now, not
+// keystrokes typed into the pane — and changed nothing about WHO it is sent to:
+// the addressing argument below is why this file exists, and it is unaffected.)
 //
 //   * `POST /api/sessions`'s success body is the literal `{ok:true}`
 //     (`server/src/server.ts:1510-1513`, `runCcdOr502`; the route itself is
@@ -28,8 +31,9 @@
 //     predicate.
 //   * `cmd_start` is IDEMPOTENT (`ccd/ccd:12117`): a second `start` whose
 //     `_id()` is already `_alive` is a no-op that attaches to the session
-//     already there. A blind kickoff would inject a coordinator brief into a
-//     session that may be mid-task, so this sheet checks for that collision
+//     already there. A blind kickoff would hand this program to a session
+//     started for something else — the queue does not interrupt it, but it
+//     does address it — so this sheet checks for that collision
 //     BEFORE the tap — same posture as the projection naming the account
 //     before the tap rather than guessing — and refuses with no confirm
 //     button at all when it finds one.
@@ -41,7 +45,7 @@ import { Sheet } from '../components/Sheet';
 import { Skeleton } from '../components/Skeleton';
 import { accountLabel } from '../lib/accounts';
 import { markerState } from './coordWords';
-import { ApiError, api, apiErrorText } from '../lib/api';
+import { ApiError, api, apiErrorText, kickoffErrorText } from '../lib/api';
 import { navigate } from '../lib/router';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { useProjectedHome } from './useProjectedHome';
@@ -296,7 +300,7 @@ export function StartProgramSheet({
   // Sheet's own visibility — the component keeps running underneath, the
   // same shape ReapSheet/AbandonSheet's own fix rounds already litigated. It
   // holds async state across the D-291 wait, so closing mid-flight must
-  // retire everything outstanding: `gen` is bumped so a create/prompt/match
+  // retire everything outstanding: `gen` is bumped so a create/kickoff/match
   // that resolves AFTER a close cannot write into whatever the sheet shows
   // next, the timer is cleared so it cannot fire into a retired attempt, and
   // the wait target is dropped so a LATER `sessions` frame cannot resurrect
@@ -314,7 +318,7 @@ export function StartProgramSheet({
   // session it JUST started itself, which is neither running anyone else's
   // work nor true. `myAttemptRef` outlives the timeout (unlike `waitRef`,
   // which `finish()` still nulls the instant a match is found, so a second
-  // `/ws/fleet` frame arriving mid-`prompt()` cannot fire a duplicate
+  // `/ws/fleet` frame arriving mid-`queueKickoff()` cannot fire a duplicate
   // kickoff) — it is cleared only on close or by a NEWER attempt overwriting
   // it, so the false-collision suppression below holds for the entire
   // window from a successful `createSession` through navigation, not merely
@@ -385,10 +389,11 @@ export function StartProgramSheet({
     setTimedOut(false);
   }, [project?.workdir, projected?.wrapper]);
 
-  // Sends the kickoff and navigates — the ONLY place either happens. `w.mine`
-  // is checked again after the prompt call settles: a close during the
-  // (short) prompt round-trip must not navigate a screen the operator is no
-  // longer looking at.
+  // Queues the kickoff and navigates — the ONLY place either happens. `w.mine`
+  // is checked again after the queue call settles: a close during that
+  // round-trip must not navigate a screen the operator is no longer looking at.
+  // The call is a QUEUE, not a keystroke (wave 4): what it resolves means the
+  // mail row exists, not that the coordinator has read anything.
   const finish = (session: FleetSession, w: { mine: number; slug: string; title: string }): void => {
     clearTimer();
     waitRef.current = null;
@@ -407,7 +412,7 @@ export function StartProgramSheet({
         // by hand from inside it. It is not defensible for a queue: nothing
         // durable exists, so walking the operator into a session whose
         // coordinator will never be briefed hides the one fact they need.
-        setKickoffFailed({ sessionId: session.id, slug: w.slug, title: w.title, why: apiErrorText(err) });
+        setKickoffFailed({ sessionId: session.id, slug: w.slug, title: w.title, why: kickoffErrorText(apiErrorText(err)) });
       });
   };
 
@@ -443,7 +448,7 @@ export function StartProgramSheet({
       navigate(`/s/${encodeURIComponent(k.sessionId)}`);
     } catch (err: unknown) {
       if (gen.current !== mine) return; // superseded — the block this would re-plant is retired
-      setKickoffFailed({ ...k, why: apiErrorText(err) });
+      setKickoffFailed({ ...k, why: kickoffErrorText(apiErrorText(err)) });
     } finally {
       if (gen.current === mine) setRetrying(false);
     }
@@ -688,6 +693,19 @@ export function StartProgramSheet({
             // the ordinary branch below lets `timedOut`/`checkForMatch`
             // finish the job instead of lying that it belongs to someone
             // else's mid-task session.
+            // Wave-4 review, MINOR 6 (D-1044's own instruction, finally
+            // obeyed): the old half said the kickoff would land in a session
+            // "which is running mid-task". `liveMainCheckoutIn` matches any
+            // row whose status is not `dead` — an idle one included — so that
+            // was a busy state this arm never measured, and the mail lane
+            // removed the hazard anyway: a queued kickoff waits for the
+            // session's next quiet boundary and interrupts nothing. `main`
+            // hedged it as "may be"; this wave hardened a hedge into a false
+            // factual claim, which is the wrong direction. What survives is
+            // the ADDRESSING hazard, true whether the session is busy or
+            // idle: it was started for something else, and either it becomes
+            // this program's coordinator or the project ends up with two.
+            //
             // The copy names the SESSION, never the account: this arm is
             // wrapper-independent, so the matched row's own `wrapper` may
             // differ from the projected one (a swap moves it, `ccd/ccd:13125`)
@@ -700,8 +718,8 @@ export function StartProgramSheet({
             // arm cannot tell them apart without recomputing the id.
             <p className="program-start-existing">
               {`${existing.id} is already running in ${project.name} — open it, or pick another project. `
-                + 'Starting here would either queue the kickoff for that session, which is running '
-                + 'mid-task, or leave the project running two coordinators.'}
+                + 'Starting here would either make that session the coordinator for this program, '
+                + 'whatever it was started for, or leave the project running two coordinators.'}
             </p>
           ) : projected === null ? (
             // D-284: the server's own "nothing is placeable" — refuse with
@@ -758,8 +776,15 @@ export function StartProgramSheet({
               {kickoffFailed !== null && (
                 <>
                   <p className="program-start-error">
-                    {`${kickoffFailed.sessionId} is running, but its kickoff could not be queued `
-                      + `— ${kickoffFailed.why}. Nothing was sent: it has no brief yet.`}
+                    {/* Wave-4 review, MINOR 3 (D-1120). This used to open
+                        "<id> is running, but…", which on a 404 asserts the exact
+                        fact the registry had just denied — above a retry that
+                        cannot succeed. What the sheet KNOWS is that it started
+                        the session and that nothing was queued for it; the
+                        reason comes last, where a `why` with no trailing period
+                        (the `err.message` floor) does not read as a typo. */}
+                    {`Started ${kickoffFailed.sessionId}, but its kickoff could not be queued `
+                      + `— nothing was sent, and it has no brief yet. ${kickoffFailed.why}`}
                   </p>
                   <button
                     type="button"
@@ -785,8 +810,9 @@ export function StartProgramSheet({
                   null`), so without this the control was permanently inert
                   with no feedback: the same dead-tap class review round 1
                   fixed for the placement-pending case, reopened by the
-                  suppression. Reachable whenever `prompt()` is slow after a
-                  D-291 timeout has already set `starting` back to false. */}
+                  suppression. Reachable whenever `queueKickoff()` is slow
+                  after a D-291 timeout has already set `starting` back to
+                  false. */}
               <button
                 type="button"
                 className="program-start-go"
