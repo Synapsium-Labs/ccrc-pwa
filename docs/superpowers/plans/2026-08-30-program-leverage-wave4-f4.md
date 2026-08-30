@@ -103,8 +103,10 @@ already have — is the only placement where neither delivery file imports the o
   contiguous. **Never write a bare `D-TBD-...` into a diff** (`server/test/dtbd.test.ts`).
 - **Deviations: this program's block is `D-999..1046`; `D-999..D-1038` are consumed by waves 1–3, so
   this wave starts at `D-1039`.** Eight numbers remain. Every number cited below is defined in
-  `## Deviations found`. If the block exhausts, write `D-TBD-program-leverage` **in the mail to the
-  coordinator, never in a diff**, and it reconciles at review.
+  `## Deviations found`. If the block exhausts, write the `D-TBD-<slug>` placeholder **in the mail to
+  the coordinator, never in a diff** — `server/test/dtbd.test.ts` reds on a concrete one anywhere in
+  the tracked tree, and it reds on this plan too, which is how this sentence learned to use the
+  meta-form — and it reconciles at review.
 - **The route must be flag-blind and deterministic.** `auth-gate.test.ts:640-717` probes every route
   three times — dark, armed-anonymous, armed-authenticated — with **no body and no Origin**, and
   clause 3 asserts `dark.statusCode === authenticated.statusCode` exactly. A handler that read
@@ -831,5 +833,161 @@ F7 surfaces parked mail on the board; this wave does not build a second notifica
   role with its `tellSender` handling, and the `{queued:true|false}` distinction, which a re-kickoff
   onto a session with an outstanding one genuinely needs.
 - **Block state after this wave:** `D-999..1046` allocated; `D-999..D-1045` consumed. **One number
-  free** (the top of the block). A finding that needs a second number in the fix round must use
-  `D-TBD-program-leverage` in the mail and be reconciled at review.
+  free** (the top of the block). A finding that needs a second number in the fix round must use the
+  `D-TBD-<slug>` placeholder in the mail — never a concrete one in a diff — and be reconciled at
+  review.
+
+---
+
+## Execution record (measured, 2026-08-30)
+
+Executed in this workspace on `ws/quiet-meadow`, one commit per task, in the plan's order. Every
+number below is copied from a run, not recalled.
+
+### Suite totals
+
+| Package | Result | Δ vs `1f6ed803` |
+|---|---|---|
+| `server` | 241 files, **6010 passed**, 56 skipped | +41 tests |
+| `pwa` | 75 files, **2007 passed**, 0 type errors | +24 tests |
+| `agent` | 18 files, **281 passed** | unchanged — this wave is not agent-first |
+
+### Reds measured before the code that answers them
+
+Every guard below was written first and run first; the text is the run's own first failing line.
+
+| # | Pin | First failing assertion, verbatim |
+|---|---|---|
+| 1.1 | the sheet's literal pin, repointed at L0 | `TypeError: programKickoff is not a function` (10 failed / 52 passed) — a resolution error, not an assertion, and recorded as such |
+| 1.3 | `single-definition`'s programs-path allowlist | `AssertionError: expected [ Array(1) ] to deeply equal []`, naming `shared/api.ts:3041` |
+| 2.1 | the sender-scoped dedupe | `AssertionError: expected false to be true // Object.is equality` (3 failed / 6 passed) |
+| 3.1 | `tellSender`, both arms | `AssertionError: expected [ 'operator' ] to not include 'operator'` and `AssertionError: expected [ { …(4) } ] to deeply equal []` |
+| 4.1 | the L1 seam | `Error: Cannot find module '../src/coord/kickoff.js'` |
+| 5.1 | the route | `AssertionError: expected 404 to be 200` (13 failed / 1 passed — the single pass is the control test, which drives the neighbouring `/prompt` route this wave leaves alone) |
+| 6.1 | the client method | `TypeError: api.kickoff is not a function` |
+
+### Mutation table
+
+Twelve mutations, each applied to SOURCE (never to a test), each reverted from a working-tree
+snapshot with the file diffed clean afterwards.
+
+| # | Mutation | Result |
+|---|---|---|
+| 1.7a | drop `export` from `ledgerPath` | RED — `expected [ Array(1) ] to deeply equal []` |
+| 1.7b | `wave 1.` → `wave 2.` in the template | RED — `expected 'You are the coordinator for program \`…' to be 'You are the coordinator for program \`…' // Object.is equality` |
+| 2a | `m.runId IS ?` → `= ?` | RED, 3 — `expected false to be true` ×2, `expected true to be false`. So reseeding the legacy fixture coordinator-sent did NOT destroy the null-safety pin |
+| 2b | drop `AND m.fromId = ?` | RED, 2 — `expected true to be false` ×2 |
+| 2c | the wave brief's sender → `'operator'` | RED — ``expected '```ccrc-mail\nid: 1\nfrom: operator\n…' to contain 'from: coordinator'`` |
+| 2d | the dedupe answers `queued: true` | RED, 2 — `expected true to be false` ×2 |
+| 3a | restore the one-role ternary | RED, 2 — the same two assertions as 3.1 |
+| 3b | drop ONLY `&& origin.runId !== null` | RED, 1 — `expected [ { …(4) } ] to deeply equal []`. The coordinator arm alone, so the two clauses are independently pinned |
+| 4a | delete the dedupe branch | RED, 2 — `expected true to be false` ×2 |
+| 4b | import and name `sendPrompt` in `kickoff.ts` | RED — `expected 'import type { CoordStore } from './s…' not to match /from '\.\.\/inject\/send\.js'/` |
+| 4c | the kickoff's `fromId` → `'coordinator'` | RED — ``expected '```ccrc-mail\nid: 1\nfrom: coordinato…' to contain 'from: operator'`` |
+| 4d | `renderEnvelope` stops gating the run line | RED — ``expected '```ccrc-mail\nid: 1\nfrom: operator\n…' not to contain 'run:'`` |
+| 5a | 404 for both registry reasons | RED — `expected 404 to be 503` |
+| 5b | the route injects before queueing | RED — `expected [ …(15) ] to deeply equal []` |
+| 5c | answer `queued: true` unconditionally | RED — `expected { ok: true, queued: true } to match object { ok: true, queued: false }` |
+| 6a | navigate on the failure arm too | **SURVIVED on the first run, 64/64** — see below. RED after the fixture was repaired: `expected '/s/claude-ccrc-pwa' to be '/runs'` |
+| 6b | the retry re-measures the fleet | RED — `expected "vi.fn()" to be called 2 times, but got 1 times` |
+| 6c | the client posts to `/prompt` | RED, 3 — incl. `expected [ '/api/sessions', …(1) ] to include '/api/sessions/claude-ccrc-pwa/kickoff'` |
+| 6d | the client sends prose again | RED — `expected { slug: 'build9-demo', …(2) } to deeply equal { slug: 'build9-demo', …(1) }` |
+
+### The one mutant that survived, and what it cost
+
+**6a survived its first run at 64/64.** The test asserted "does not navigate" by capturing
+`location.pathname` before the click and comparing against it afterwards — and nothing in
+`start-program.test.tsx` resets the router between tests, so by the time this test ran the path was
+already `/s/claude-ccrc-pwa`. The mutant navigated to the path that was already there, and the
+assertion could not see it. Repaired by pushing `/runs` explicitly inside the test, and re-measured
+red.
+
+This is the third wave in a row to hit the same class — wave 2's sweep fixtures, wave 3's
+MAJOR-1 token-path fixture, and now this. The lesson is unchanged and is worth restating in the
+words that keep proving true: **a fixture that cannot reproduce the topology proves nothing**, and
+the only way to find out which kind you have is to mutate the code and watch.
+
+### Two expectations of mine that were wrong, where the code was right
+
+Both are recorded rather than quietly reshaped, because in both cases the test moved and the
+implementation did not.
+
+1. **`unreadableField` → 503.** Written mirroring `POST /api/sessions/:id/stop`, measured **200**.
+   `readSessionRecord` answers `found: true` with a degraded record for an unreadable FIELD;
+   `reason: 'unlistable'` is the whole-directory collapse alone. `/stop` needs its second
+   `measuredIdentity` gate because `stopPair` recomputes a wrapper/project pair into an argv that
+   kills a tmux session BY NAME. This route recomputes nothing, and the delivery lane re-measures
+   the recipient itself, so refusing would deny a coordinator its brief over a field neither the
+   route nor the lane ever reads. Now pinned as a POSITIVE, so adding an identity gate later is a
+   decision somebody makes rather than a copy-paste from the sibling.
+2. **A body-less `it.each` row.** The "400 for no body" case passed `undefined`, which `post`'s own
+   default parameter replaced with the VALID body — green for the wrong reason. It is now its own
+   test driving a genuinely body-less `inject`, which is also the shape `auth-gate.test.ts`'s drift
+   loop probes every route with.
+
+### The vacuity claim in the queue-not-inject pin is measured, not argued
+
+`kickoff-route.test.ts`'s comment asserts that the ordinary `send-keys`-only spelling would be
+vacuous here. Wave 3's review found a recorded mechanism that was a MIS-DIAGNOSIS nobody had
+measured (D-1030), so this one was measured: with mutation 5b applied AND the fixture's runner
+answering code 1 for `capture-pane`, the send-keys-only spelling of the assertion reported
+**1 passed** — the injecting mutant walked straight past it. Both changes reverted, both files
+diffed clean. The shipped pin asserts no tmux I/O at all, on a fixture whose pane is LIVE, plus a
+positive control driving `/prompt` through the same recorder — because a pin over a recorder that
+never fires passes everything.
+
+### Guards that fired during execution, and what each one bought
+
+Six, none worked around:
+
+1. **`single-definition`'s programs-path allowlist** — the `export` keyword alone reds it, since it
+   matches on trimmed line text. Entry rewritten with its new home and reason.
+2. **`mail-routes.test.ts`'s kebab scanner** refused `KickoffOutcome`'s first draft, a two-word
+   string union: *"already-outstanding is not a declared MailRejectCode, RunRefuseCode,
+   LifecycleGapReason, ClaimRefuseCode or SessionLifecycle"*. Correct — it reads as a code and
+   belonged to no family. The honest answer was that the distinction ALREADY had a single definition
+   one ring down, so the outcome now carries `queueSystemMail`'s own `queued` boolean unchanged.
+   That scanner also reads COMMENTS, which caught the same literal a second time in a docstring; the
+   module now spells codes in backticks and says why.
+3. **My own draft's handle-absence assertion** matched `kickoff.ts`'s own PROSE about the rule.
+   Deleted rather than fixed: `single-definition` already scans the whole directory for it, and a
+   second copy of one rule is the drift that suite exists to refuse.
+4. **`single-definition`'s `watch.ts` import pin** required that import line to name exactly one
+   symbol. Widened deliberately — the property is "reached through the shared constant, from that
+   module", not "that line has one symbol" — rather than adding a second import line from one module
+   to satisfy a regex.
+5. **`api.test.ts`'s upload-shadowing guard** — `uploadErrorText` consumes `apiErrorText`'s OUTPUT
+   as a KEY, so a code it owns must survive unchanged. Adding `'unknown-session'` to
+   `API_ERROR_TEXT` reds it. Only the two free codes are mapped.
+6. **`dtbd.test.ts`** caught THIS PLAN: it wrote the concrete placeholder twice, in the same
+   sentences that quote the rule against it. Rewritten to the `<slug>` meta-form the guard's own
+   docstring prescribes. A plan is a tracked file like any other, and it is a good sign that the
+   tree does not exempt it.
+
+### A tooling defect of my own, caught mid-round
+
+The first mutation driver restored with `git checkout --`, which reverts to HEAD and therefore
+silently destroyed the task's UNCOMMITTED `store.ts` edit. Found by grepping for the changed symbol
+rather than trusting the run. The driver now snapshots the working tree before mutating, restores
+from that snapshot, and diffs afterwards; every mutation above was run under it. Same class as wave
+3's D-1038 — recorded here rather than consuming another number from a block with one left, because
+nothing defective reached the tree and no measurement was invalidated (2a's result was taken before
+the revert and re-taken after).
+
+### Deviations consumed
+
+**D-1039..D-1045** (seven). **D-1046 is the only number left in the block `D-999..1046`.**
+
+One extension to a deviation as planned: **D-1040** shipped slightly wider than written. The plan
+fixed the role-vs-session collapse and left `resolveCoordinator(origin.runId)` alone. Executing it
+made the omission untenable — the same doctrine ("degrade, never guess") that forbids pushing at a
+role also forbids inferring a coordinator for a mail that names no run, since
+`resolveCoordinator(null)`'s single-active-program answer is exactly right on the ADDRESSING side
+and a guess as sender attribution. Both arms now degrade, both are pinned, and mutation 3b shows
+they are pinned independently.
+
+### What the whole-branch run caught that no single suite did
+
+`dtbd.test.ts` (guard 6). Every package suite ran green task-by-task; the placeholder was in a
+markdown file no package suite reads, and only the full server run — which scans the tracked tree —
+saw it.
