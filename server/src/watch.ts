@@ -2386,11 +2386,39 @@ export class FleetWatcher {
           const lc = sessionLifecycle(lifecycleInputFor(rec, false, now));
           if (!lifecycleIsDead(lc)) { gated(d, 'tmux-gone'); continue; }
           gated(d, 'session-dead');
+          // `deliveredAt === null` GATES THE PARK, and this guard is not
+          // belt-and-braces — `MAIL_MAX_ATTEMPTS`'s own docstring states the
+          // contract it keeps: the budget "applies ONLY while a delivery's own
+          // `deliveredAt` is still null … The instant `deliveredAt` is set,
+          // this budget stops applying: the row's own history already disproves
+          // 'undeliverable'". The send-failure park 160 lines below takes the
+          // same guard for the same reason, in the same words.
+          //
+          // Two things go wrong without it, both measured in review:
+          //   (a) a message that DEMONSTRABLY reached the recipient is recorded
+          //       `undeliverable`, and `markAcked` refuses every rejected row
+          //       but the replay-ceiling one — so a session brought back by
+          //       `ccd start` or `ws-restore` (both `rm -f $REG/<id>.stopped`)
+          //       could never ack it;
+          //   (b) `attempts` is ONE CUMULATIVE COLUMN and a delivered row's is
+          //       deliberately uncapped, so a row already at 5 from earlier
+          //       replay backoffs would park on the FIRST session-dead
+          //       observation, with no backoff at all — terminally discarding a
+          //       message on one sweep that happened to land inside a transient
+          //       post-reboot `orphan` window.
+          //
+          // A DELIVERED row still records the gate above (the console must say
+          // what is holding it) and still backs off, but on the never-ratcheting
+          // terms: replay is governed by `MAIL_REPLAY_MAX_ATTEMPTS`, which has
+          // its own ceiling and its own park, and this rung must not reach past
+          // its own budget into that one.
           const attempts = d.attempts + 1;
-          if (attempts >= MAIL_MAX_ATTEMPTS) {
+          const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
+          if (d.deliveredAt !== null) {
+            store.backOff(d.id, `recipient session is ${lc}`, now + step, false);
+          } else if (attempts >= MAIL_MAX_ATTEMPTS) {
             store.rejectDelivery(d.id, 'undeliverable', `recipient session is ${lc}`);
           } else {
-            const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
             store.backOff(d.id, `recipient session is ${lc}`, now + step, true);
           }
           continue;

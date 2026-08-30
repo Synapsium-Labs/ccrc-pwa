@@ -102,7 +102,13 @@ const GATE_PHRASE: Record<MailGate, string> = {
   // not coming back". An operator acts on them completely differently — wait,
   // versus go and look at why a message is addressed to a session somebody
   // archived — which is the whole argument for splitting the rung.
-  'session-dead': 'the session is gone for good — it was stopped or archived',
+  // NOT "it was stopped or archived": this one gate covers `stopped`, `orphan`
+  // AND `never-started`, and the latter two were never stopped and never
+  // archived. Naming a cause that did not happen is the same class of small
+  // lie the rest of this table exists to avoid, so the phrase states the
+  // CONSEQUENCE — which is true of all three — and leaves the cause to the
+  // row's own `lastError`, which carries the exact lifecycle word.
+  'session-dead': 'the session is gone for good — nothing will bring it back on its own',
   'tmux-unknown': 'tmux could not be asked',
   'pending-ask': 'the session is waiting on a prompt of its own',
   'no-pane': 'the session has no pane',

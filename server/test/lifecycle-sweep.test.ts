@@ -161,9 +161,33 @@ describe('the tick itself', () => {
     // …and every remaining mention of the word is one of the three permitted
     // pure reads. Comments are stripped first: the paragraph explaining WHY
     // this rung reads a lifecycle must not itself trip the scan.
-    const code = body.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' ');
+    //
+    // LINE COMMENTS GO FIRST, AND THE ORDER IS THE WHOLE FIX. Written the other
+    // way round — block comments, then line comments — this scan was VACUOUS,
+    // measured: `sweepMail` ends with a shipped `/** TELL THE SENDER … */` doc
+    // comment, so a single ordinary `//` line anywhere above it containing the
+    // two characters `/*` (this codebase's house style is full of them —
+    // `~/.cc-sessions/*`, `shared/*.ts`) opened a non-greedy block match that
+    // closed on that doc comment and deleted 94% of the body. The census then
+    // saw an empty haystack, reported `unexpected: []`, and a genuinely
+    // forbidden reference on the next line went unnoticed while the suite
+    // stayed green. Stripping `//`-to-end-of-line first takes the stray `/*`
+    // with it, so no block match can open.
+    const code = body.replace(/\/\/[^\n]*/g, ' ').replace(/\/\*[\s\S]*?\*\//g, ' ');
     const ALLOWED = ['sessionLifecycle(', 'lifecycleIsDead(', 'lifecycleInputFor('];
     const mentions = [...code.matchAll(/[A-Za-z_$]*[Ll]ifecycle[A-Za-z_$]*\s*\(?/g)].map((m) => m[0].trim());
+
+    // THE CANARY, and it is the mechanism rather than the ordering above. Any
+    // future way of blinding the strip — a `/*` inside a string literal, an
+    // `http://` on a line with a real reference, a tokenizer bug — makes the
+    // haystack shrink, and a scan that finds NOTHING must never be read as a
+    // scan that found nothing WRONG. The three permitted reads are known to be
+    // in this method; if the census cannot see them, it cannot see anything.
+    expect.soft(mentions.length,
+      'the lifecycle census found none of the three reads it knows are there — the comment strip has ' +
+      'blinded it, and `unexpected: []` below would be vacuous rather than clean')
+      .toBeGreaterThanOrEqual(ALLOWED.length);
+
     const unexpected = mentions.filter((m) => !ALLOWED.some((a) => m.startsWith(a.slice(0, -1))));
     expect.soft(unexpected,
       'a lifecycle reference in sweepMail that is not one of the three permitted pure reads')

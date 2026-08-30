@@ -1480,6 +1480,34 @@ describe('sweepMail: a recipient that is gone FOR GOOD parks (D-309 refined)', (
     expect(row.lastError).toBe('recipient session is orphan');
   });
 
+  it('NEVER parks a row that was already DELIVERED — its own history disproves `undeliverable`', async () => {
+    // `MAIL_MAX_ATTEMPTS`'s own docstring: the budget "applies ONLY while a
+    // delivery's own `deliveredAt` is still null … The instant `deliveredAt` is
+    // set, this budget stops applying". Found by adversarial review before
+    // merge, with two measured consequences: a message that demonstrably
+    // reached the recipient recorded `undeliverable` (and `markAcked` then
+    // refuses it, so a revived session could never ack it), and — because
+    // `attempts` is one cumulative column that a delivered row leaves uncapped
+    // — a row already at 5 parking on its FIRST session-dead observation with
+    // no backoff at all.
+    const h = harness({ hasSession: false });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedArchived(h.home, ID); seedHookState(h.home, ID); seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+    coord.markDelivered(id, NOW);
+
+    for (let i = 0; i < MAIL_MAX_ATTEMPTS + 3; i++) {
+      advance(MAIL_BACKOFF_MAX_MS + 1_000);
+      await w.sweepMail();
+    }
+    const row = deliveryRow(coord, id);
+    expect(row.state, 'a delivered row must never be called undeliverable by THIS budget').not.toBe('rejected');
+    expect(row.attempts, 'and this rung must not ratchet a delivered row toward a park it does not own').toBe(0);
+    // …while the console still learns what is holding it.
+    expect(row.lastGate).toBe('session-dead');
+  });
+
   it('a session merely RESTARTING never parks, however long it takes', async () => {
     // The case D-309 exists for, and the one this refinement must not break: a
     // supervisor is watching, so the pane is expected back and the mail waits.
