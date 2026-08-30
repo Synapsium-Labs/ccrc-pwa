@@ -16,7 +16,7 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
 | 1 | F1 — drift fixes (ungated-door count, coordinator trigger/resume wording, stale `_id()` anchor) + the coordinator-resume runbook (`references/resume.md`). AGENT-FIRST deploy. | run 10, PR #28 (merged `f5dfd2d9`) | done 2026-08-28 18:08 UTC — CI 5/5 green on `8135118b`, deployed both boxes agent-first, `/health` and fleet `ccd` both report `f5dfd2d9` |
 | 2 | F2 — dispatch-time `skillState` preflight (measure, never refuse) + synchronous deviation-floor seed on first allocation | run 12, PR #30 (merged `4e2a04f5`) | done 2026-08-29 ~10:45 UTC — fix round `c026e151` verified (all findings fixed, D-1020..D-1022), CI 5/5, merged, deployed both boxes agent-first; `/health` and fleet `ccd` both report `4e2a04f5` |
 | 3 | F3 — per-project program-ready badge (server measurement; seam re-ruled to `GET /api/projects` + StartProgramSheet, D-1023) | run 14, PR #33 (merged `1f6ed803`) | done 2026-08-30 ~14:35 UTC — fix round `60bb451e` verified (all ten rulings landed, D-1034..D-1038), CI 5/5, merged, deployed server lane from the merge sha; `/health` reports `1f6ed803` (NOT agent-first — server+PWA only) |
-| 4 | F4 — program kickoff rides the idle-gated mail lane (`queueSystemMail`), direct-injection race retired | run 16 | dispatched 2026-08-30 ~14:40 UTC — quiet-meadow resumed, brief queued, preflight `skillState:present`; deviations from D-1039 |
+| 4 | F4 — program kickoff rides the idle-gated mail lane (`queueSystemMail`), direct-injection race retired | run 16, PR #36 (`9df76bf0`) | reviewed 2026-08-30 ~18:15 UTC — SHIP-WITH-FIXES: 1 major (retryKickoff supersession), 7 minors, 0 refuted-that-stood; fix round mailed (mail 113); D-1039..D-1045 consumed, D-1046 last in block |
 | 5 | F5 — `POST /api/runs/:id/reclaim` (4th ungated door, dead-proof) + PWA resume affordance; door count → four | — | planned |
 | 6 | F6+F7a — `COORD_QUIET_MS`/`COORD_COOLDOWN_MS` for coordinator recipients + `POST /api/coord/caps` operator dial | — | planned |
 | 7 | F7 — program health on the board (parked mail, replay high-water, rejection counts, un-briefed coordinator) | — | planned |
@@ -234,6 +234,32 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
   run ids are a global sequence shared with the other active program, never per-program. Wave-4
   mail therefore names **runId 16**. Dispatch resumed the workspace (`resumed:true`,
   `briefQueued:true`) and the wave-2 preflight measured `skillState:present` live.
+
+- **Wave 4 verdict (2026-08-30 ~18:15 UTC):** wave-done (delivery 110) fingerprint `9df76bf0`
+  (PR #36, CI 5/5 on that exact sha) verified by the server (dispatched→working→awaiting-review),
+  items 4/4. Review: 6 lenses + per-finding refute-default verifiers, 26 agents; live
+  re-measurement in a scratch worktree matched the record exactly (server 241 files/6021 passed/
+  56 skipped, pwa 75/2007/0 type errors, 4 mutations re-run red with verbatim-matching first
+  assertions — incl. the queue-not-inject pin on a live pane and the gate EXEMPT-insertion
+  redding both directions). **18 confirmed (1 MAJOR, 7 minors, 9 notes), 2 refuted → fix round
+  (mail 113).** MAJOR: `retryKickoff` lacks the `gen.current` supersession guard `finish()`
+  carries — a retry settling after close navigates under the operator's feet or re-plants the
+  cleared failure state. Minors: kickoff is the one system-mail producer with caller-supplied
+  content and NO byte cap (bypasses `MAIL_BODY_MAX_BYTES`; fix in dispatch.ts's composed-body
+  idiom); honest failure modes stop at 2 of the route's 4 codes (a 404 renders under copy
+  asserting the session "is running"); `kickoffFailed` never cleared by a new `start()` (the
+  file's own M3/timedOut class); the 'sends NO prose' pin greps a JSDoc line, not code (cannot
+  fire — verifier re-simulated it); D-292 refusal copy hardened "may be mid-task" into an
+  unmeasured factual claim (against plan task 6.9's own order); four stale api.prompt comments
+  incl. the canonical header; record miscounts ("Twelve mutations" over a 19-row table; row 210's
+  high-water claim false — tree high-water was D-1065, not D-1038, and the record's contiguous
+  D-1046 tokens stayed green only *because* the claim was false). Notes: `queued:false` folds
+  same-program vs cross-program refusal (wave 5 needs the distinction); `KickoffOutcome`
+  re-declares `SystemMailQueued`'s union; repo CLAUDE.md's box-token WRITE sentence now has an
+  unnamed session-gated exception (fold into wave 5's CLAUDE.md correction); typecheck-tests
+  needs sibling packages' node_modules. Worker's brief-divergence ACCEPTED: the shipped
+  queue-not-inject pin is a measured-stronger superset of the brief's literal spelling. Fix
+  deviations: D-1046 then `ledger allocate` (block exhausted).
 
 ## Carried constraints
 
