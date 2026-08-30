@@ -603,11 +603,13 @@
 }
 /* F3 — the program-ready badge. `.proj-row` is `background: none`, so its
  * ground comes from `.sheet-panel` (`background: var(--bg-sheet)`, in
- * components/primitives.css). Scoping alone does NOT ground it for the
- * auditor — that painter is in a different stylesheet, and the descendant
- * route only resolves same-stylesheet painters, so all three rules sat in the
- * uncovered census until three INHERITED_GROUNDS entries were added (D-1030,
- * measured both ways). Explicitly placed in column 3 spanning both rows.
+ * components/primitives.css). Naming that ancestor in the selector does NOT
+ * ground it for the auditor: the descendant route resolves a ground only
+ * against a SELF-GROUNDED host — one setting a colour AND a ground — and
+ * `.sheet-panel` paints without setting a colour of its own. All four rules
+ * therefore sat in the uncovered census, scoped and unmeasured, until their
+ * INHERITED_GROUNDS entries existed (D-1030, mechanism corrected in fix
+ * round 1). Explicitly placed in column 3 spanning both rows.
  * Inert by contract — no glow, no animation, no box-shadow. */
 .sheet-panel .proj-ready {
   grid-column: 3;

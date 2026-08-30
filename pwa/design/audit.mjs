@@ -531,7 +531,7 @@ export const INHERITED_GROUNDS = {
   },
   'fleet.css .sheet-panel .proj-ready': {
     under: ['var(--bg-sheet)'],
-    why: "the program-ready badge (F3) on a project row inside the start-a-program sheet. Its selector DOES name an ancestor — .sheet-panel — but that painter lives in components/primitives.css, and the descendant route only grounds against painters in the same stylesheet, so scoping it was not enough: all three of its rules were measured at nothing. Confirmed by running audit() before this entry existed, which is the only reason it is here rather than in the uncovered census looking scoped-and-safe",
+    why: "the program-ready badge (F3) on a project row inside the start-a-program sheet. Its selector DOES name an ancestor — .sheet-panel — and naming a painter is still not enough: the descendant route grounds a rule only against a SELF-GROUNDED host, one setting a colour AND a ground, and .sheet-panel sets a background with no colour of its own. Same stylesheet or not is irrelevant (chat.css .chat has uncovered descendants in its own file). So all three rules were measured at nothing. Confirmed by running audit() before this entry existed, which is the only reason it is here rather than in the uncovered census looking scoped-and-safe",
   },
   "fleet.css .sheet-panel .proj-ready[data-verdict='ready']": {
     under: ['var(--bg-sheet)'],

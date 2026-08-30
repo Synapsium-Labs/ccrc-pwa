@@ -1472,10 +1472,15 @@ exactly the kind of addition that lands in two of three copies. The generic is t
 `readiness` was precisely that field. Nothing failed, because the twin still typechecks: `readiness`
 is optional, so the narrower type is assignable and the runtime JSON carries the field regardless —
 the declared contract simply went on denying a field the server had already started sending. Found in
-self-review with the PR already open, not by any test, which is why `single-definition.test.ts` now
-scans the four roots for an inline twin of the row and requires zero holders (measured: restoring the
-twin reds it, `an inline twin of the projects row — import ProjectRow from shared/api instead:
-expected [ 'pwa/src/lib/api.ts' ] to deeply equal []`).
+self-review with the PR already open, not by any test.
+
+**And the correction was ITSELF incomplete — there were FOUR** (fix round 1, minor 3). The scan I added
+keyed on the inline GENERIC spelling, so it was blind to the other way the twin is written: a local
+`interface Project { name; workdir }`, which was LIVE in `NewSessionSheet.tsx` typing `api.projects()`
+rows with the suite fully green. A fingerprint that only catches the copy you already fixed is not a
+guard. The scan is now a prefix-less field-pair fingerprint allowlisting `shared/api.ts` alone; it
+caught exactly that holder on its first run, and `NewSessionSheet.tsx` was converted in the same
+commit. Twice wrong about the same sentence, which is the honest reason this entry is long.
 
 ### D-1029 (drift in the brief, re-measured) — the graphify tip has moved
 
@@ -1511,6 +1516,15 @@ stylesheet, and `.sheet-panel` lives in `components/primitives.css` while the ba
 `fleet.css`. The rules' contrast was never measured, and the census entry looked identical to a rule
 nobody had thought about.
 
+**MECHANISM CORRECTED (fix round 1, minor 6) — the sentence above is left standing because it is what
+I believed and acted on, and the correction is the point.** "Same stylesheet" is NOT the gate, and
+there is no same-stylesheet filter anywhere in the auditor. The real rule is that the descendant route
+grounds a rule only against a **self-grounded host** — one setting a colour AND a ground
+(`audit.mjs`'s `selfGrounded`) — and `.sheet-panel` paints a background while setting no colour of its
+own. Verified by direct computation, with a counter-example that kills the stylesheet theory outright:
+`chat.css .chat` is in the SAME file as its uncovered `.status-line` descendants. Every place I stated
+the wrong mechanism — the entry why-texts and the `fleet.css` comment — now states this one.
+
 Found by mutating an invented token (`--status-live-text`, which does not exist) into the `ready` arm:
 `audit.mjs:224` throws on an unknown custom property, and the suite stayed **GREEN, 0 red**. Fixed with
 three `INHERITED_GROUNDS` entries — base rule plus both coloured arms, registered separately for the
@@ -1544,6 +1558,78 @@ annotation, which contextually types the literal instead. Recorded because the l
 this repo a green single-suite run is not a typecheck, and the tests-inclusive project is a separate
 gate that only the full run reaches.
 
+### D-1034 (defect I shipped, review MAJOR 1) — the box token read crossed the fleet io, making `ready` unreachable in production
+
+`sweepReadiness` handed `cfg.mailTokenPath` to `measureFleetReadiness` through `this.deps.io`. On the
+live topology `CCRC_FLEET=remote` is standing config, so that io is the agent-backed `FleetIO`: the
+sweep asked the FLEET box's agent to read a path describing the SERVER box. The agent's read whitelist
+(`agent/src/whitelist.ts`) has arms for `.cc-sessions`, `.cc-limits`, `.cc-clips`, the projects root
+and `underClaudeGlob` — **no `.ccrc`** — so the refusal maps to `unreadable`, `boxToken` pins at
+`unmeasurable`, and the aggregate could never answer `ready` on the real fleet. Whitelisting it would
+have been worse than the bug: the fleet host's own token lives elsewhere, so the read would answer
+`absent` -> `blocked`, a lie rather than an unknown. `coord/token.ts` already declared that seam local
+housekeeping that never crosses `FleetIO`.
+
+Fixed with a second consumer-declared port, `ReadinessDeps.localIo` (the D-1015 precedent): `io` for
+the skills, which genuinely live in wrapper HOMEs on the fleet host, `localIo` for the token. The pin
+is the production topology as a fixture — a fleet io refusing `.ccrc` exactly as the whitelist does,
+beside a real token file on this box — asserting `configured` and a reachable `ready`. Both collapses
+are measured red (module-level 11, call-site 5). **Note the first fixture draft used a token path with
+no `.ccrc` in it and PASSED against the broken code**; a fixture that cannot reproduce the topology
+proves nothing, which is the same class of blind spot as wave 2's sweep lesson. The plan's cost
+arithmetic and D-1025's prose are corrected: `2 * homes` reads over the WIRE, plus one server-local
+read and one in-process probe.
+
+### D-1035 (defect I shipped, review MAJOR 2) — D-1030's fix shipped unpinned
+
+The three `INHERITED_GROUNDS` entries were a new guard, and deleting them restored exactly the
+pre-fix state this record had already measured GREEN — nothing red. `contrast.test.ts`'s census
+recoverability check could not catch it either: it only flags a rule whose ancestor sets BOTH colour
+and background, which `.sheet-panel` does not. My own mutation 6.4 never witnessed entry deletion; it
+mutated the CSS with the entries in place, which is a different question. Fixed with the pin the
+entries' own why-texts already cited (spawn-chip / auth-block shape): each entry's `under`, plus both
+theme rows at >= 4.5. Deleting all reds 3, deleting one arm reds 1.
+
+**The first re-measurement was also wrong and is recorded rather than hidden**: I RENAMED the entry
+key instead of deleting it, which trips the separate stale-entry check and reported a misleading 5
+red. A mutation that does not remove the thing proves nothing about the pin.
+
+### D-1036 (limitation of the shipped measurement, recorded not fixed) — `configured` means readable, not usable
+
+`boxToken: 'configured'` is a successful `readFileMeasured`. A token file truncated after boot to
+whitespace, to comment lines, or to the shipped public placeholder still reads `configured`, while the
+next boot would refuse it (`MailTokenFileUnusable` / `MailTokenPlaceholderUnedited`). Deliberately NOT
+fixed by adding content validation: `TokenState` has three members and none of them honestly means
+"readable but unusable", so expressing it would require overloading one — the thing this wave exists to
+refuse. The shipped sweep still strictly dominates the spec's boot-snapshot baseline, which cannot see
+a post-boot change at all. The corollary an operator should carry, in the shape D-1027 uses: **a green
+badge does not certify that the next boot survives.**
+
+### D-1037 (pre-existing, measured, DEFERRED) — fifteen coloured rules sit unmeasured under colourless painters
+
+The same shape D-1030 hit, already on `main` and untouched by this wave: `chat.css`'s four
+`.status-line--{busy,idle,attention,dead}` variants, `primitives.css`'s `.sheet-eyebrow`, `shell.css`'s
+`.acct-{win,pct,reset}`, and seven `.keycap--pr .pr-dot` variants — all colour-only rules whose nearest
+painter sets no colour of its own, so the descendant route cannot ground them and they sit in the
+uncovered census unmeasured. Recorded rather than swept: the sweep is a stylesheet-wide audit with its
+own review surface, and folding it into a wave about program readiness would put an unrelated visual
+change under this PR's review. Deferred with the measurement attached, the D-1031 precedent.
+
+### D-1038 (defect in my own tooling, caught mid-round) — the mutation driver corrupted two source files on revert
+
+The fix-round driver applied a mutation with `s.replace(old, new, 1)` and reverted with
+`s.replace(new, old, 1)`. For a DELETION mutation `new` is the empty string, and Python's
+`str.replace("", x, 1)` INSERTS at position 0 — so reverting a deletion prepended the deleted text to
+the top of the file. It damaged `server/src/watch.ts` (the tick dispatch glued onto the first import,
+and gone from `tick()`) and `pwa/design/audit.mjs` (three registry entries hoisted outside the object)
+before a suite failure exposed it. Both repaired; the driver now snapshots the whole file and restores
+it verbatim, asserting equality afterwards.
+
+The MEASUREMENTS from that driver are unaffected and stand: the apply half was always correct, and each
+suite ran against a correctly-mutated tree. Only the reverts were broken. Recorded because the failure
+mode is silent by construction — a corrupted revert leaves a tree that still typechecks in the places
+you are looking.
+
 ---
 
 ## Notes for the coordinator
@@ -1555,7 +1641,7 @@ gate that only the full run reaches.
   reference documents this field.
 - **D-1026 changes the shape the operator approved** (`ready: false` became a three-valued
   `verdict`). Called out here so the ledger carries it.
-- Deviations consumed: **D-1023..D-1033**. Block `D-999..1046`; `1034+` free after this wave.
+- Deviations consumed: **D-1023..D-1038**. Block `D-999..1046`; `1039+` free after this wave.
 
 ## Self-review
 
@@ -1617,6 +1703,12 @@ target; they are not failures.
 Every row carries the FIRST failing assertion verbatim — wave 2's review minor was that 14 of 19 rows
 recorded only counts, and this plan's own Task 7 set that bar.
 
+**Totals: 21 rows, 20 killed, 1 survivor** (corrected in fix round 1, minor 7 — the wave-done mail and
+an earlier line here both said "22 mutations, 21 killed", which does not reconcile with this table's
+own arithmetic). The extra application was one of the two the record itself disqualifies as a kill:
+5.3's malformed run and 6.4's pre-fix run. Neither is a mutation that proved a pin, and counting either
+inflates the score.
+
 | # | Mutation | Suite | red | First failing assertion, verbatim |
 |---|---|---|---|---|
 | 1.1 | `foldSkillStates` answers `present` for `[]` | `readiness` | 1 | `AssertionError: expected 'present' to be 'unmeasurable' // Object.is equality` |
@@ -1636,12 +1728,18 @@ recorded only counts, and this plan's own Task 7 set that bar.
 | 5.2 | a throwing floor answers `not-seeded` | `lifecycle` | 2 | `AssertionError: expected 'not-seeded' to be 'unmeasurable' // Object.is equality` |
 | 5.3 | remove the per-project catch | `lifecycle` | 2 | `AssertionError: expected 500 to be 200 // Object.is equality` |
 | 5.4 | unswept watcher OMITS the key instead of sending `null` | `lifecycle` | 2 | `AssertionError: expected [ { name: 'MekWarLive', …(1) }, …(3) ] to deeply equal [ { name: 'MekWarLive', …(2) }, …(3) ]` |
+
+**Row 5.4 ran against `lifecycle` only, though the plan listed `lifecycle, start-program`** (noted in
+fix round 1, minor 8). The drop is substantively right and is recorded rather than left as a silent
+discrepancy: `start-program` feeds its own `loadProjects` doubles, so it constructs the rows it renders
+and cannot observe a change in what the SERVER puts on the wire. A suite that cannot see the mutation
+would have contributed a vacuous green, not coverage.
 | 6.1 | the badge renders for an ABSENT key | `start-program` | 38 | `TypeError: Cannot read properties of undefined (reading 'verdict')` |
 | 6.2 | the badge folds `null` and `undefined` into one arm | `start-program` | 1 | `AssertionError: expected null to be truthy` |
 | 6.3 | `missingPreconditions` hand-types the member words | `single-definition` | 1 | `AssertionError: expected [ 'pwa/src/fleet/readinessWords.ts' ] to deeply equal []` |
 | 6.4 | an unknown custom property in the badge's `ready` arm | `contrast` | 4 | `FAIL ------ (audit) DARK fleet.css .sheet-panel .proj-ready[data-verdict='ready']: unknown custom property --status-live-text` |
 
-**Mutation 6.4 is the one that mattered most, and it is recorded twice on purpose.** Run BEFORE
+**Mutation 6.4 is the one that mattered most, and it is recorded twice on purpose** (and is why the row count and the application count differ). Run BEFORE
 D-1030's fix it reported **0 red** — the badge's colour rules were not measured at all. The row above
 is the post-fix measurement. A mutation that passes is not always a strong pin; sometimes it is a
 missing one.
@@ -1665,6 +1763,66 @@ green file.
 
 ### Deviations consumed
 
-**D-1023 .. D-1033.** All eleven are defined above; none was invented, and the block (`D-999..1046`, this
+**D-1023 .. D-1038.** All sixteen are defined above; none was invented, and the block (`D-999..1046`, this
 program's) is not exceeded. `deviation-refs` measures the tracked-tree maximum and the plan-defined
-maximum as equal at **D-1033**.
+maximum as equal at **D-1038**.
+
+
+---
+
+## Execution record — fix round 1 (measured, 2026-08-30)
+
+Review mail 107: 2 majors + 8 minors, 0 blocking, 0 refuted. **Every finding was verified against the
+tree before any of it was implemented, and all ten held** — nothing was pushed back on. The two
+majors and minors 1, 3, 5 and 6 were each confirmed by direct measurement rather than by reading:
+
+| Finding | How it was verified before acting |
+|---|---|
+| MAJOR 1 | `index.ts:85` binds `io: fleet.io` in remote mode; `agent/src/whitelist.ts`'s `readAllowed` has no `.ccrc` arm; `config.ts:341` puts the token at `<home>/.ccrc/mail.token` |
+| MAJOR 2 | deleted the three entries: **0 red** |
+| minor 1 | deleted the tick dispatch: **0 red** |
+| minor 3 | `NewSessionSheet.tsx:21` carries the twin; the widened scan caught exactly it |
+| minor 5 | the ok-member of each vocabulary read twice, in `readyVerdict` and `missingPreconditions` |
+| minor 6 | `audit.mjs`'s `selfGrounded` requires colour AND paint; no same-stylesheet filter exists |
+| minor 7 | counted the table: 21 rows, 20 killed, 1 survivor |
+| minor 8 | the executed row names `lifecycle` where the plan named `lifecycle, start-program` |
+
+### Reds measured before the fixes
+
+| Pin | Suite | Failing assertion, verbatim |
+|---|---|---|
+| The production-topology token fixture | `readiness` | `AssertionError: expected 'unmeasurable' to be 'configured' // Object.is equality` |
+| The visible reason line | `start-program` | `AssertionError: the blocked reason is not rendered anywhere visible: expected null to be truthy` |
+| The widened twin scan | `single-definition` | `AssertionError: a twin of the projects row — import ProjectRow from shared/api instead: expected [ 'shared/api.ts', …(1) ] to deeply equal [ 'shared/api.ts' ]` |
+
+### Fix-round mutation table
+
+| # | Mutation | Suite | red | First failing assertion, verbatim |
+|---|---|---|---|---|
+| F1a | the token read collapses back onto the FLEET io | `readiness`, `readiness-sweep` | 11 | `AssertionError: expected 'unmeasurable' to be 'configured' // Object.is equality` |
+| F1b | the watcher hands its fleet io in as `localIo` | `readiness-sweep` | 5 | `AssertionError: expected 'unmeasurable' to be 'configured' // Object.is equality` |
+| F2a | DELETE all three `INHERITED_GROUNDS` entries | `contrast` | 3 | `AssertionError: expected undefined to deeply equal [ 'var(--bg-sheet)' ]` |
+| F2b | delete only the `blocked` arm's entry | `contrast` | 1 | `AssertionError: expected undefined to deeply equal [ 'var(--bg-sheet)' ]` |
+| F3 | delete the `tick()` dispatch of `sweepReadiness` | `readiness-sweep` | 1 | `AssertionError: expected undefined to be defined` |
+| F5a | narrow the coordinator ok-member in the predicate table | `start-program` | 2 | `AssertionError: coordinator=absent is not named: expected [] to have a length of 1 but got +0` |
+| F5b | count `coordDb: degraded` as ok | `start-program` | 1 | `AssertionError: coordDb=degraded is not named: expected [] to have a length of 1 but got +0` |
+| F5c | the badge re-spells its own ok test | `start-program` | 2 | `AssertionError: boxToken=absent is not named: expected [] to have a length of 1 but got +0` |
+
+**Two of this round's own mutations were wrong and are recorded rather than hidden** — the same
+discipline the first round used:
+
+- **F2 as first written RENAMED the entry key** instead of deleting it, and reported a misleading 5
+  red — the separate stale-entry check firing, not the pin. Re-done as a real deletion: 0 red before
+  the pin existed, 3 red after.
+- **The driver itself corrupted two files on revert** (D-1038). The measurements stand — the apply
+  half was correct every time — but the reverts prepended deleted text to position 0, and it took a
+  suite failure to notice.
+
+**Suite results, whole branch, after the fix round.** `server` 239 files / **5978 passed** / 56
+skipped; `pwa` 75 files / **2001 passed**, `Type Errors no errors`; `agent` re-run below.
+
+### Deviations consumed this round
+
+**D-1034 .. D-1038**, plus in-place corrections to D-1025 (cost), D-1028 (there were four copies, not
+three) and D-1030 (the mechanism was misdiagnosed). Corrections are AMENDMENTS — the original
+sentences stand, because what I believed at the time is the part worth reading.
