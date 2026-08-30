@@ -121,18 +121,52 @@ describe('the tick itself', () => {
   // commit SHA — and was confirmed that way in review (`sweepMail`
   // unchanged against `05033c5`). This test is the parity SIGNAL, named for
   // exactly that.
-  it('sweepMail has not shrunk and carries no lifecycle vocabulary — a parity SIGNAL, not a proof of byte-identity', () => {
+  it('sweepMail has not shrunk, and takes NO dependency on the lifecycle subsystem — a parity SIGNAL, not a proof of byte-identity', () => {
     // The most load-bearing loop on the box. Wave 4 adds a producer beside it,
     // never inside it. The slice ends on the method's OWN closing brace —
     // `\n  }\n` at two-space indent — rather than on the next member, so it
     // cannot silently widen to four hundred unrelated lines.
+    //
+    // NARROWED 2026-08-30, D-309's refinement, and the narrowing is the point
+    // rather than a concession. This assertion used to read
+    // `not.toContain('lifecycle')` — broader than the rule it was defending.
+    // Its own comment states that rule: wave 4 must add a PRODUCER beside this
+    // loop, never inside it. What the mail sweep must not grow is a dependency
+    // on the lifecycle SUBSYSTEM — the mirror, the sweep, the health readout,
+    // a second clock — because that is a whole moving part behind the box's
+    // busiest loop.
+    //
+    // Reading one PURE FUNCTION over a record this loop has already read is not
+    // that, and the ladder now needs it: `tmux-gone` had to learn to tell a
+    // pane that is coming back from one that is not, and `sessionLifecycle` is
+    // where that distinction is already drawn. No new I/O, no new timer, no
+    // call into the sweep next door.
+    //
+    // So the allow-list below is EXPLICIT and short. A new lifecycle reference
+    // that is not one of these three reds this test, which is a stricter
+    // statement of the same rule than the blanket substring ever was — that one
+    // could only say "none", and had no way to say "these, and nothing else".
     const from = src.indexOf('  async sweepMail(');
     expect(from, 'sweepMail was not found — this assertion would pass vacuously').toBeGreaterThan(-1);
     const to = src.indexOf('\n  }\n', from);
     expect(to, 'sweepMail has no two-space closing brace').toBeGreaterThan(from);
     const body = src.slice(from, to);
     expect.soft(body.length).toBeGreaterThan(2000);
-    expect.soft(body).not.toContain('lifecycle');
-    expect.soft(body).not.toContain('Lifecycle');
+
+    // The producer and its neighbours stay out, by name.
+    for (const banned of ['sweepLifecycle', 'lifecycleHealth', 'JournalMirror', 'lastLifecycleSweep']) {
+      expect.soft(body, `sweepMail reached into the lifecycle subsystem: ${banned}`).not.toContain(banned);
+    }
+
+    // …and every remaining mention of the word is one of the three permitted
+    // pure reads. Comments are stripped first: the paragraph explaining WHY
+    // this rung reads a lifecycle must not itself trip the scan.
+    const code = body.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' ');
+    const ALLOWED = ['sessionLifecycle(', 'lifecycleIsDead(', 'lifecycleInputFor('];
+    const mentions = [...code.matchAll(/[A-Za-z_$]*[Ll]ifecycle[A-Za-z_$]*\s*\(?/g)].map((m) => m[0].trim());
+    const unexpected = mentions.filter((m) => !ALLOWED.some((a) => m.startsWith(a.slice(0, -1))));
+    expect.soft(unexpected,
+      'a lifecycle reference in sweepMail that is not one of the three permitted pure reads')
+      .toEqual([]);
   });
 });

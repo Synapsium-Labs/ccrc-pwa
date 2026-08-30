@@ -1,6 +1,6 @@
 import type { Deps } from './server.js';
 import type { Bus } from './bus.js';
-import { assembleFleet } from './fleet.js';
+import { assembleFleet, lifecycleInputFor } from './fleet.js';
 import { measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from './registry.js';
 import { hasMenu, parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
@@ -16,7 +16,10 @@ import type { SessionRecord } from './registry.js';
 import type {
   CoordStatus, FleetSession, LifecycleHealth, MailGate, NotifyEvent, PrState, RunSummary, SessionStatus, TaskProgress,
 } from '../../shared/api.js';
-import { LEDGER_STALE_MS, MAIL_MAX_ATTEMPTS, UNCHECKED_PR } from '../../shared/api.js';
+// ONE LINE, deliberately: `single-definition.test.ts` scans for `UNCHECKED_PR`
+// arriving from shared/api on a single import line, and a prettier multi-line
+// form is invisible to it.
+import { LEDGER_STALE_MS, MAIL_MAX_ATTEMPTS, UNCHECKED_PR, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
 import { JournalMirror } from './coord/mirror.js';
 // The pause marker's ONE definition in the tree. `MAIL_DISABLED_MARKER` is
 // NOT imported beside it: this file holds its own module-local literal
@@ -2269,7 +2272,16 @@ export class FleetWatcher {
         // before this loop is ever reached) and never "we just couldn't read
         // one field this pass" (that is the degraded branch, not this one).
         const identity = rec !== undefined ? measuredIdentity(rec) : null;
-        if (identity === null) {
+        // `rec === undefined` is spelled OUT here rather than left implied by
+        // `identity === null`, and the two are equivalent by construction (the
+        // line above returns null for exactly that case) — so this changes no
+        // behaviour and `unmeasurable` below still reads the same fact. What it
+        // buys is the narrowing: every rung after this block now has `rec` as a
+        // SessionRecord rather than `SessionRecord | undefined`, so the
+        // lifecycle read at the tmux rung needs no non-null assertion — an
+        // assertion being a claim nothing checks, which is the shape this tree
+        // asks a guard not to be.
+        if (rec === undefined || identity === null) {
           const unmeasurable = rec !== undefined;
           // Fix — review finding 30: a row whose recipient's registry row is
           // genuinely ABSENT (reaped, purged) used to `continue` here with
@@ -2348,7 +2360,41 @@ export class FleetWatcher {
         // the herd valve: without it every due row re-spawns a doomed tmux
         // client each sweep against a component that is already unwell.
         const sv = await this.deps.tmux.sessionVerdict(d.toId);
-        if (sv.verdict === 'gone') { gated(d, 'tmux-gone'); continue; }
+        if (sv.verdict === 'gone') {
+          // D-1066 — D-309 REFINED, not reversed (operator ruling 2026-08-30). Its
+          // premise — "the mail waits for the session to come back" — is right
+          // for a swap, a restart or a reboot, and false for a session somebody
+          // archived. Measured on the live fleet before this line was written:
+          // a delivery to an archived workspace sat `queued` 22.5 hours and was
+          // refused 6,769 times, once per sweep, with no terminal state and
+          // nothing telling the sender. D-792's gate columns are what made it
+          // visible; this is the half that acts on it.
+          //
+          // The question is NOT "is the pane gone" — `sv.verdict` already
+          // answered that — but "is it coming back", and `sessionLifecycle`
+          // draws exactly that line from facts this loop already holds. With
+          // `alive: false` (which `gone` IS), a stop stamp reads `stopped`, a
+          // fresh supervisor heartbeat reads `restarting`, and an unreadable
+          // lifecycle field reads `unmeasurable`. Only the three words
+          // `lifecycleIsDead` names never resolve on their own.
+          //
+          // A dead recipient then takes the REGISTRY-ABSENT rung's terms
+          // exactly — back off, count toward the ceiling, park at it — because
+          // it is the same kind of fact: a recipient this build can PROVE is
+          // gone. Everything else keeps D-309's bare silent wait, including
+          // `unmeasurable`: doubt is not evidence, in either direction.
+          const lc = sessionLifecycle(lifecycleInputFor(rec, false, now));
+          if (!lifecycleIsDead(lc)) { gated(d, 'tmux-gone'); continue; }
+          gated(d, 'session-dead');
+          const attempts = d.attempts + 1;
+          if (attempts >= MAIL_MAX_ATTEMPTS) {
+            store.rejectDelivery(d.id, 'undeliverable', `recipient session is ${lc}`);
+          } else {
+            const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
+            store.backOff(d.id, `recipient session is ${lc}`, now + step, true);
+          }
+          continue;
+        }
         if (sv.verdict === 'unknown') {
           gated(d, 'tmux-unknown');
           const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** d.attempts, MAIL_BACKOFF_MAX_MS);

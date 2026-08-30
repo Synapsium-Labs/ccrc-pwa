@@ -97,6 +97,12 @@ const GATE_PHRASE: Record<MailGate, string> = {
   'registry-absent': 'this session is not in the registry',
   'registry-unmeasurable': 'the registry could not be read',
   'tmux-gone': 'the tmux session is gone',
+  // The sharper half of the same measurement (D-309 refined): `tmux-gone` is
+  // "the pane is missing, it may come back"; this is "the registry proves it is
+  // not coming back". An operator acts on them completely differently — wait,
+  // versus go and look at why a message is addressed to a session somebody
+  // archived — which is the whole argument for splitting the rung.
+  'session-dead': 'the session is gone for good — it was stopped or archived',
   'tmux-unknown': 'tmux could not be asked',
   'pending-ask': 'the session is waiting on a prompt of its own',
   'no-pane': 'the session has no pane',

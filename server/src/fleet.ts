@@ -168,6 +168,35 @@ function persistedPr(r: SessionRecord): PrState | null {
   };
 }
 
+/**
+ * A `LifecycleInput` from a registry record — ONE spelling, because there are
+ * now two callers and `single-definition.test.ts` exists for the second copy.
+ *
+ * THE UNITS ARE THE WHOLE REASON THIS TAKES `nowMs` AND NOT `now`. Every stamp
+ * on a registry row is epoch SECONDS (ccd writes `date +%s`), and
+ * `LifecycleInput` is epoch MILLISECONDS throughout — so the ×1000 belongs
+ * here, once, rather than at each call site where one of them would eventually
+ * be written without it. `assembleFleet` keeps its own seconds clock and
+ * multiplies on the way in; `sweepMail` already holds `Date.now()` and passes
+ * it straight through. A caller that hands this seconds would place every
+ * stamp ~55 years in the future, which `sessionLifecycle`'s own `>= 0`
+ * freshness guard reads as NOT fresh — so the failure would be a silent
+ * `restarting` collapsing to `orphan`, not a crash. Hence the parameter name.
+ */
+export function lifecycleInputFor(
+  r: SessionRecord, alive: boolean, nowMs: number,
+): LifecycleInput {
+  return {
+    alive,
+    supervisedAt: r.supervisedAt === null ? null : r.supervisedAt * 1000,
+    stoppedAt: r.stopped === null ? null : r.stopped.at * 1000,
+    stopSurface: r.stopped?.surface ?? null,
+    started: r.started,
+    unmeasured: r.lifecycleUnmeasured,
+    nowMs,
+  };
+}
+
 export async function assembleFleet(
   io: FleetIO,
   cfg: CcrcConfig,
@@ -353,15 +382,7 @@ export async function assembleFleet(
     // expires at the PWA-rendering task later in this plan, which exists
     // specifically to render this field — it is not a permanent argument, only
     // this task's.
-    const lifecycleInput: LifecycleInput = {
-      alive,
-      supervisedAt: r.supervisedAt === null ? null : r.supervisedAt * 1000,
-      stoppedAt: r.stopped === null ? null : r.stopped.at * 1000,
-      stopSurface: r.stopped?.surface ?? null,
-      started: r.started,
-      unmeasured: r.lifecycleUnmeasured,
-      nowMs: now * 1000,
-    };
+    const lifecycleInput: LifecycleInput = lifecycleInputFor(r, alive, now * 1000);
     const session: FleetSession = {
       id: r.id, wrapper: r.wrapper, home: r.home ?? idHomeWrapper(cfg.roster, r.id),
       project: r.project, workdir: r.workdir, workspace: r.workspace, name, status, statusUpdatedAt,

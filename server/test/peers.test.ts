@@ -8,6 +8,7 @@
 import { describe, it, expect } from 'vitest';
 import type { SessionLifecycle } from '../../shared/api.js';
 import { archiveContradicted, peerDeliverable, type PeerProbe } from '../src/coord/peers.js';
+import { DEAD_LIFECYCLES, lifecycleIsDead } from '../../shared/api.js';
 
 const probe = (over: Partial<PeerProbe> = {}): PeerProbe => ({
   registry: 'measured', tmux: 'live', panePid: 4242, lifecycle: 'running', ...over,
@@ -87,5 +88,49 @@ describe('archiveContradicted: the archived-but-live predicate (D9)', () => {
       'orphan', 'never-started', 'unmeasurable',
     ];
     for (const l of all) expect(archiveContradicted(null, l)).toBe(false);
+  });
+});
+
+// THE TWO TABLES MUST AGREE, and this is the mechanism rather than the comment
+// that says so.
+//
+// `LIFECYCLE_RUNG` (peers.ts) maps a lifecycle to a PEER's deliverability, with
+// three answers — `unmeasurable` is `unknown`, not `no`. `LIFECYCLE_DEAD`
+// (shared/api.ts, added for D-309's refinement) asks a narrower yes/no about the
+// WORD: does it ever resolve on its own? They are deliberately different
+// questions on the same vocabulary, and exactly one relationship must hold —
+// the words `LIFECYCLE_RUNG` answers `no` for are precisely the dead ones.
+//
+// Without this, a ninth SessionLifecycle member added to both tables with
+// different verdicts would leave `GET /api/peers` calling a session unreachable
+// while `sweepMail` kept its mail waiting for ever, or the reverse: parking mail
+// for a session the peers route still calls deliverable. Both are silent.
+describe('LIFECYCLE_DEAD and peerDeliverable agree on which words are dead', () => {
+  const ALL: SessionLifecycle[] = [
+    'running', 'unsupervised', 'unclaimed', 'restarting',
+    'stopped', 'orphan', 'never-started', 'unmeasurable',
+  ];
+
+  it('every dead word is exactly a `no:` from the peers ladder, and no other word is', () => {
+    // The rung is reached only once the structural gates above it pass, so the
+    // probe is built live/measured/with-a-pid and lifecycle is the sole variable.
+    for (const lc of ALL) {
+      const verdict = peerDeliverable(probe({ lifecycle: lc }));
+      const rungSaysNo = verdict.startsWith('no:');
+      expect(rungSaysNo, `'${lc}': peers says ${verdict}, LIFECYCLE_DEAD says ${lifecycleIsDead(lc)}`)
+        .toBe(lifecycleIsDead(lc));
+    }
+  });
+
+  it('names the three, so a change to either table has to be typed here too', () => {
+    expect([...DEAD_LIFECYCLES].sort()).toEqual(['never-started', 'orphan', 'stopped']);
+  });
+
+  it('does NOT call `unmeasurable` dead — doubt is not evidence', () => {
+    // The rule the registry rung already draws one gate up: a read that failed
+    // must never park a delivery. If this ever flips, an agent-WS round trip
+    // dropping one lifecycle field would start parking live sessions' mail.
+    expect(lifecycleIsDead('unmeasurable')).toBe(false);
+    expect(peerDeliverable(probe({ lifecycle: 'unmeasurable' }))).toBe('unknown');
   });
 });
