@@ -14,12 +14,12 @@ import { COORDINATOR_SKILL_DIR, WORKER_SKILL_DIR, readSkillState } from './skill
  * declares, the way wave 2's `configDir` port did (D-1015).
  *
  * Split in two because the two halves have different clocks. The FLEET-WIDE
- * half (both skills in every rostered HOME, the box token, the coordination
- * database) costs `2 * homes + 1` `readFileMeasured` calls — in remote fleet
- * mode that is one agent round trip each, with a 15 s ceiling apiece and no
- * batch op in the protocol — so it belongs on a slow sweep and never on a
- * request. The PER-PROJECT half is one indexed SELECT and is composed at the
- * route.
+ * half costs `2 * homes` reads OVER THE WIRE (both skills in every rostered
+ * HOME) — in remote fleet mode one agent round trip each, with a 15 s ceiling
+ * apiece and no batch op in the protocol — plus ONE SERVER-LOCAL read for the
+ * box token and one in-process probe for the coordination database. The wire
+ * half is what puts this on a slow sweep rather than a request. The
+ * PER-PROJECT half is one indexed SELECT and is composed at the route.
  *
  * Nothing here decides anything about a REQUEST: it measures, and hands back
  * values. The refusal, the rendering and the caching all live with their own
@@ -35,7 +35,29 @@ export interface ReadinessHome {
 }
 
 export interface ReadinessDeps {
+  /**
+   * The FLEET io — an agent round trip per read in remote mode. Correct for
+   * the SKILLS, which genuinely live in wrapper HOMEs on the fleet host and
+   * which the agent's read whitelist permits (`underClaudeGlob`).
+   */
   readonly io: Pick<FleetIO, 'readFileMeasured'>;
+  /**
+   * The SERVER-LOCAL io, for facts about the box this process runs on. Kept
+   * separate from `io` on purpose, and the separation is load-bearing rather
+   * than tidy (fix round 1, MAJOR 1):
+   *
+   * `cfg.mailTokenPath` describes the SERVER box (`<home>/.ccrc/mail.token`).
+   * On the live topology `CCRC_FLEET=remote` is standing config, so `io` is
+   * the agent-backed FleetIO — handing it that path asks the FLEET box's agent
+   * about a server-box file. The agent's whitelist has no `.ccrc` arm, the
+   * refusal maps to `unreadable`, and `boxToken` pins at `unmeasurable`
+   * forever, so the verdict could never answer `ready` in production.
+   * Whitelisting it would be worse than the bug: the fleet host's own token
+   * lives elsewhere, so the read would answer `absent` -> `blocked` — a lie
+   * rather than an unknown. `coord/token.ts` already declares this seam local
+   * housekeeping that never crosses FleetIO; this port is how that holds.
+   */
+  readonly localIo: Pick<FleetIO, 'readFileMeasured'>;
   readonly homes: readonly ReadinessHome[];
   /**
    * `cfg.mailTokenPath` — re-measured here rather than reported from the token
@@ -76,7 +98,7 @@ export async function measureFleetReadiness(deps: ReadinessDeps): Promise<FleetR
     worker.push(await readSkillState(deps.io, home.configDir, WORKER_SKILL_DIR));
     coordinator.push(await readSkillState(deps.io, home.configDir, COORDINATOR_SKILL_DIR));
   }
-  const token = await deps.io.readFileMeasured(deps.mailTokenPath);
+  const token = await deps.localIo.readFileMeasured(deps.mailTokenPath);
   // MEASURABILITY ONLY. The content is a shared box secret; `configured` is the
   // whole answer, and the bytes are never carried, logged or returned.
   const boxToken: TokenState = token.ok

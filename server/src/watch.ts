@@ -40,6 +40,7 @@ import { readAiTitle } from './transcript/title.js';
 import { MAIL_REPLAY_CEILING_ERROR, toRunSummary, type CoordStore } from './coord/store.js';
 import { renderMailNudge } from './coord/envelope.js';
 import { configDirFor } from './config.js';
+import { localIO } from './io.js';
 import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
 
 const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:76 — see detectDialogs's own comment
@@ -2007,6 +2008,12 @@ export class FleetWatcher {
     }));
     this.readiness = await measureFleetReadiness({
       io: this.deps.io,
+      // SERVER-LOCAL, never `this.deps.io` (fix round 1, MAJOR 1). In remote
+      // fleet mode that io is the agent, and `cfg.mailTokenPath` names a file
+      // on THIS box, not the fleet host. See `ReadinessDeps.localIo` for what
+      // asking the wrong box costs: not a degraded answer but a permanent
+      // `unmeasurable`, which kept the verdict from ever reading `ready`.
+      localIo: localIO,
       homes,
       mailTokenPath: cfg.mailTokenPath,
       // A REAL read, not a null check: `deps.coord` being set proves a handle

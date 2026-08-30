@@ -9,7 +9,7 @@
 // keep that from happening by accident.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import path from 'node:path';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher, READINESS_SWEEP_MS } from '../src/watch.js';
 import { CoordStore } from '../src/coord/store.js';
@@ -44,6 +44,10 @@ const fixture = (over: { coord?: unknown } = {}): Fixture => {
   const home = mkTmp('ccrc-readiness-sweep-');
   seedRoster(home);
   mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+  // A real token file on THIS box: the token is a server-local read now
+  // (MAJOR 1), so the fixture has to be a real file rather than something the
+  // fleet-io double can answer.
+  writeFileSync(path.join(home, '.ccrc', 'mail.token'), 'fixture-token\n');
   const cfg = loadConfig({ CCRC_HOME: home } as never);
   const reads: string[] = [];
   let failing = false;
@@ -113,7 +117,10 @@ describe('the readiness sweep — its clock', () => {
     at(NOW + READINESS_SWEEP_MS + 1);
     await f.watcher.sweepReadiness();
     expect(f.watcher.currentReadiness()?.worker).toBe('unmeasurable');
-    expect(f.watcher.currentReadiness()?.boxToken).toBe('unmeasurable');
+    // ...and the box token is UNAFFECTED, because it does not ride that io at
+    // all (MAJOR 1). A fleet outage must not be able to make a server-local
+    // fact unmeasurable — that conflation is the defect this split fixed.
+    expect(f.watcher.currentReadiness()?.boxToken).toBe('configured');
   });
 });
 
@@ -137,12 +144,15 @@ describe('the readiness sweep — its roster walk', () => {
     expect(f.reads.filter((p) => p.includes('.claude-gpt'))).toEqual([]);
   });
 
-  it('measures the box token at the configured path, once', async () => {
+  it('never asks the FLEET io for the box token — that read is server-local', async () => {
+    // `f.reads` is the FLEET io's log. Before MAJOR 1 the token path was in
+    // it, which is exactly how the live topology ended up permanently
+    // unmeasurable.
     at(NOW);
     const f = fixture();
     await f.watcher.sweepReadiness();
-    expect(f.reads.filter((p) => p.endsWith('mail.token')))
-      .toEqual([path.join(f.home, '.ccrc', 'mail.token')]);
+    expect(f.reads.filter((p) => p.endsWith('mail.token'))).toEqual([]);
+    expect(f.watcher.currentReadiness()?.boxToken).toBe('configured');
   });
 });
 
@@ -180,5 +190,82 @@ describe('the readiness sweep — the coord probe', () => {
     await f.watcher.sweepReadiness();
     expect(asked).toHaveLength(1);
     expect(isSafeProjectSegment(asked[0])).toBe(false);
+  });
+});
+
+// --- fix round 1, MAJOR 1 -------------------------------------------------
+describe('the sweep measures the box token on the SERVER box', () => {
+  /** THE PRODUCTION TOPOLOGY, as a fixture. `CCRC_FLEET=remote` is standing
+   *  config on the live server, so the watcher's `deps.io` is the agent-backed
+   *  FleetIO — and the agent's read whitelist has no `.ccrc` arm
+   *  (`agent/src/whitelist.ts`: .cc-sessions, .cc-limits, .cc-clips, the
+   *  projects root, underClaudeGlob). This io refuses `.ccrc` exactly as that
+   *  whitelist does, while the token file really exists on this box.
+   *
+   *  Before the local/fleet split this fixture answered `unmeasurable`, so the
+   *  verdict could never read `ready` on the real fleet. */
+  const fixtureRemote = () => {
+    const home = mkTmp('ccrc-readiness-remote-');
+    seedRoster(home);
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    writeFileSync(path.join(home, '.ccrc', 'mail.token'), 'a-real-looking-token-value\n');
+    const cfg = loadConfig({ CCRC_HOME: home } as never);
+    const refused: string[] = [];
+    const io: FleetIO = {
+      ...localIO,
+      readFileMeasured: async (p: string): Promise<MeasuredRead> => {
+        if (p.includes(`${path.sep}.ccrc${path.sep}`)) {
+          refused.push(p);
+          return { ok: false, reason: 'unreadable' };
+        }
+        return { ok: true, content: 'x' };
+      },
+    };
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const watcher = new FleetWatcher(
+      { ...testDeps(home), cfg, io, coord } as never, new Bus(), 10_000);
+    return { watcher, refused, home };
+  };
+
+  it('answers configured even though the FLEET io refuses every .ccrc path', async () => {
+    at(NOW);
+    const f = fixtureRemote();
+    await f.watcher.sweepReadiness();
+    expect(f.watcher.currentReadiness()?.boxToken).toBe('configured');
+  });
+
+  it('never asks the FLEET io for the token at all', async () => {
+    at(NOW);
+    const f = fixtureRemote();
+    await f.watcher.sweepReadiness();
+    expect(f.refused.filter((p) => p.endsWith('mail.token'))).toEqual([]);
+  });
+
+  it('a verdict of ready is REACHABLE on this topology', async () => {
+    // The whole point of MAJOR 1: not that one field reads better, but that
+    // the aggregate can reach its positive answer on the live fleet at all.
+    at(NOW);
+    const f = fixtureRemote();
+    // Plant both skills in every homeAble HOME so the wire half is clean too.
+    for (const suffix of HOME_ABLE_SUFFIXES) {
+      for (const dir of ['ccrc-worker', 'ccrc-coordinator']) {
+        mkdirSync(path.join(f.home, suffix, 'skills', dir), { recursive: true });
+      }
+    }
+    await f.watcher.sweepReadiness();
+    const r = f.watcher.currentReadiness();
+    expect(r?.worker).toBe('present');
+    expect(r?.coordinator).toBe('present');
+    expect(r?.boxToken).toBe('configured');
+    expect(r?.coordDb).toBe('available');
+  });
+
+  it('the token VALUE never reaches the cached readiness', async () => {
+    at(NOW);
+    const f = fixtureRemote();
+    await f.watcher.sweepReadiness();
+    expect(JSON.stringify(f.watcher.currentReadiness()))
+      .not.toContain('a-real-looking-token-value');
   });
 });

@@ -108,11 +108,13 @@ describe('the derived lists and guards', () => {
  *  does not reach the inner return (measured — it typechecked clean under
  *  vitest's esbuild and failed the tests-inclusive tsc). */
 type ReadDouble = Pick<FleetIO, 'readFileMeasured'>;
+type MeasuredReadDouble = Awaited<ReturnType<FleetIO['readFileMeasured']>>;
 
 const okRead: ReadDouble = { readFileMeasured: async () => ({ ok: true, content: 'x' }) };
 
 const deps = (over: Partial<ReadinessDeps> = {}): ReadinessDeps => ({
   io: okRead,
+  localIo: okRead,
   homes: [{ wrapper: 'claude', configDir: '/cfg-a' }],
   mailTokenPath: '/tok',
   coordProbe: () => 'available',
@@ -121,7 +123,9 @@ const deps = (over: Partial<ReadinessDeps> = {}): ReadinessDeps => ({
 });
 
 describe('measureFleetReadiness — the fleet-wide half', () => {
-  it('reads BOTH skills in EVERY home, then the token, and nothing else', async () => {
+  it('reads BOTH skills in EVERY home over the WIRE, and nothing else', async () => {
+    // The token is deliberately NOT here: it is a server-local read now
+    // (MAJOR 1). What this pins is the wire cost — 2 per rostered home.
     const seen: string[] = [];
     const io: ReadDouble = { readFileMeasured: async (p: string) => {
       seen.push(p); return { ok: true, content: 'x' };
@@ -132,7 +136,6 @@ describe('measureFleetReadiness — the fleet-wide half', () => {
     expect(seen).toEqual([
       `/a/skills/${WORKER_SKILL_DIR}/SKILL.md`, `/a/skills/${COORDINATOR_SKILL_DIR}/SKILL.md`,
       `/b/skills/${WORKER_SKILL_DIR}/SKILL.md`, `/b/skills/${COORDINATOR_SKILL_DIR}/SKILL.md`,
-      '/tok',
     ]);
   });
 
@@ -166,13 +169,13 @@ describe('measureFleetReadiness — the fleet-wide half', () => {
     const gone: ReadDouble = { readFileMeasured: async () => ({ ok: false, reason: 'absent' }) };
     const broken: ReadDouble = { readFileMeasured: async () => ({ ok: false, reason: 'unreadable' }) };
     expect((await measureFleetReadiness(deps())).boxToken).toBe('configured');
-    expect((await measureFleetReadiness(deps({ io: gone }))).boxToken).toBe('absent');
-    expect((await measureFleetReadiness(deps({ io: broken }))).boxToken).toBe('unmeasurable');
+    expect((await measureFleetReadiness(deps({ localIo: gone }))).boxToken).toBe('absent');
+    expect((await measureFleetReadiness(deps({ localIo: broken }))).boxToken).toBe('unmeasurable');
   });
 
   it('the token VALUE never leaves the measurement — only its measurability', async () => {
     const io: ReadDouble = { readFileMeasured: async () => ({ ok: true, content: 'not-a-real-secret-value' }) };
-    const r = await measureFleetReadiness(deps({ io }));
+    const r = await measureFleetReadiness(deps({ io, localIo: io }));
     expect(JSON.stringify(r)).not.toContain('not-a-real-secret-value');
   });
 
@@ -209,5 +212,88 @@ describe('projectReadiness — the per-project compose', () => {
     const degraded = { ...fleet, worker: 'absent', coordDb: 'degraded' } as const;
     expect(projectReadiness(degraded, 'seeded')).toMatchObject(
       { worker: 'absent', coordDb: 'degraded', at: 7 });
+  });
+});
+
+// --- fix round 1, MAJOR 1 -------------------------------------------------
+// The box token is a SERVER-LOCAL fact and must not ride the fleet io.
+//
+// On the live topology `CCRC_FLEET=remote` is standing config, so `deps.io` is
+// the agent-backed FleetIO: handing it `cfg.mailTokenPath` asks the FLEET
+// box's agent to read a path that describes the SERVER box. The agent's read
+// whitelist has no `.ccrc` arm, so the refusal arrives as `unreadable` ->
+// `unmeasurable` -> the verdict could never answer `ready` on the real fleet.
+// And whitelisting it would be worse, not better: the fleet host's own token
+// lives elsewhere, so the read would answer `absent` -> `blocked`, which is a
+// lie rather than an unknown.
+describe('the box token is measured on the SERVER box, not across the fleet', () => {
+  /** The production shape: a fleet io that refuses `.ccrc` exactly as the
+   *  agent whitelist does, beside a local io that can read the file. */
+  const fleetRefusingCcrc: ReadDouble = {
+    readFileMeasured: async (p: string) => (p.includes('.ccrc')
+      ? { ok: false, reason: 'unreadable' } : { ok: true, content: 'x' }),
+  };
+
+  /** The real shape of `cfg.mailTokenPath` (`config.ts`: `<home>/.ccrc/
+   *  mail.token`). Spelled out because a token path WITHOUT `.ccrc` in it does
+   *  not reproduce the defect at all — the first draft of this fixture used
+   *  `/tok` and PASSED against the broken code. */
+  const TOKEN_PATH = '/srv-home/.ccrc/mail.token';
+
+  it('answers configured when the FLEET io refuses .ccrc but the local read succeeds', () => {
+    // THIS FIXTURE IS THE LIVE TOPOLOGY. Before the split it answered
+    // `unmeasurable`, which is why `ready` was unreachable in production.
+    return expect(measureFleetReadiness(deps({
+      io: fleetRefusingCcrc, mailTokenPath: TOKEN_PATH,
+      localIo: { readFileMeasured: async () => ({ ok: true, content: 'tok' }) },
+    })).then((r) => r.boxToken)).resolves.toBe('configured');
+  });
+
+  it('asks the LOCAL io for the token path and never the fleet io', () => {
+    const fleetSaw: string[] = [];
+    const localSaw: string[] = [];
+    return measureFleetReadiness(deps({
+      mailTokenPath: TOKEN_PATH,
+      io: { readFileMeasured: async (p: string) => {
+        fleetSaw.push(p); return { ok: true, content: 'x' };
+      } },
+      localIo: { readFileMeasured: async (p: string) => {
+        localSaw.push(p); return { ok: true, content: 'tok' };
+      } },
+    })).then(() => {
+      expect(localSaw).toEqual([TOKEN_PATH]);
+      expect(fleetSaw.some((p) => p === TOKEN_PATH)).toBe(false);
+    });
+  });
+
+  it('still asks the FLEET io for the skills — those DO live on the fleet box', () => {
+    // The split is not "everything local": a wrapper HOME's skills are on the
+    // fleet host and the agent whitelist permits them. Collapsing both onto
+    // one io in either direction is wrong.
+    const fleetSaw: string[] = [];
+    return measureFleetReadiness(deps({
+      mailTokenPath: TOKEN_PATH,
+      io: { readFileMeasured: async (p: string) => {
+        fleetSaw.push(p); return { ok: true, content: 'x' };
+      } },
+      localIo: { readFileMeasured: async () => ({ ok: true, content: 'tok' }) },
+    })).then(() => {
+      expect(fleetSaw).toEqual([
+        `/cfg-a/skills/${WORKER_SKILL_DIR}/SKILL.md`,
+        `/cfg-a/skills/${COORDINATOR_SKILL_DIR}/SKILL.md`,
+      ]);
+    });
+  });
+
+  it('keeps all three token arms reachable through the local port', () => {
+    const arm = (read: MeasuredReadDouble) => measureFleetReadiness(
+      deps({ io: fleetRefusingCcrc, mailTokenPath: TOKEN_PATH,
+        localIo: { readFileMeasured: async () => read } }),
+    ).then((r) => r.boxToken);
+    return Promise.all([
+      arm({ ok: true, content: 'tok' }),
+      arm({ ok: false, reason: 'absent' }),
+      arm({ ok: false, reason: 'unreadable' }),
+    ]).then((got) => expect(got).toEqual(['configured', 'absent', 'unmeasurable']));
   });
 });
