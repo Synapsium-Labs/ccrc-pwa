@@ -1232,3 +1232,24 @@ Suppressing the controls per code class would put a code-class predicate in the 
 the server states and the client would then re-derive — for a failure whose worst case is one wasted
 round trip that re-renders the same sentence. Recorded rather than done, and it is the coordinator's
 call if that is the wrong trade.
+
+### The second fold: PR #35 (D-1068 / D-1069) landed on `main` during the fix round
+
+`5d6c5c2d`, merged while this round was in flight, in the same `sweepMail` loop as PR #34 and
+touching the same two files this wave touched (`watch.ts`, `mail-sweep.test.ts`). Auto-merged with no
+conflict; read semantically rather than trusted, exactly as PR #34 was.
+
+- **Independent of this wave's change to `watch.ts`.** Its edits are at the `registry-absent`
+  (`:2429`) and `session-dead` (`:2516`) rungs, which are STRUCTURAL gates that return before any
+  send is attempted. `tellSender` — the function this wave taught the whole role vocabulary — is
+  defined at `:2699` and called only on the three post-send outcomes (`:2750`, `:2758`, `:2770`).
+  The two never meet, so the sender-resolution fix (D-1040) and the delivered-row terms are disjoint.
+- **It refines, and does not add to, D-1045's list of ways a kickoff can park.** A delivered kickoff
+  row at `registry-absent` still parks — the review of that PR withdrew the change that would have
+  stopped it, on the ground that ccd RECYCLES purged slugs, so a row kept alive there can be typed
+  into a re-minted stranger — but it now parks with a sentence that says what happened
+  (`recipient purged after this message was delivered, and never acked`) instead of one implying it
+  never arrived. At `session-dead`, PR #34's frozen counter is unfrozen so the backoff actually
+  ratchets to the ceiling instead of re-examining every 30 s for ever.
+- **Targeted re-run after the merge:** `mail-sweep`, `mail-hardening`, `coord-kickoff`,
+  `kickoff-route`, `single-definition` — 213 passed. Full suites below.
