@@ -2428,7 +2428,23 @@ export class FleetWatcher {
           // than the source.
           gated(d, unmeasurable ? 'registry-unmeasurable' : 'registry-absent');
           const attempts = d.attempts + 1;
-          if (attempts >= MAIL_MAX_ATTEMPTS && !unmeasurable) {
+          // D-1067 — `d.deliveredAt === null`, the third conjunct, added on the
+          // same reasoning the SEND-failure park ~250 lines below has carried
+          // since review finding 4 and states in its own comment: this park and
+          // that one spend the SAME budget, and `MAIL_MAX_ATTEMPTS`'s docstring
+          // scopes that budget to a row whose `deliveredAt` is still null.
+          // Measured on `main` before this conjunct existed: a DELIVERED row
+          // whose recipient had been reaped ratcheted 1 -> 5 over ~26 minutes
+          // and was then recorded `rejected('undeliverable')` — a false record
+          // of a message that demonstrably arrived, which `markAcked` then
+          // refuses, so a recipient brought back by `ccd start`/`ws-restore`
+          // could never ack it. And because `attempts` is one cumulative column
+          // a delivered row leaves uncapped, a row already at 5 from earlier
+          // replay backoffs parked on its FIRST observation here, with no
+          // backoff at all. The `else` arm already does the right thing for
+          // that row: `!unmeasurable` is true, so it backs off on the ordinary
+          // RATCHETING terms and the step climbs to MAIL_BACKOFF_MAX_MS.
+          if (attempts >= MAIL_MAX_ATTEMPTS && !unmeasurable && d.deliveredAt === null) {
             store.rejectDelivery(d.id, 'undeliverable', 'recipient not in registry');
           } else {
             const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
@@ -2501,15 +2517,28 @@ export class FleetWatcher {
           //       post-reboot `orphan` window.
           //
           // A DELIVERED row still records the gate above (the console must say
-          // what is holding it) and still backs off, but on the never-ratcheting
-          // terms: replay is governed by `MAIL_REPLAY_MAX_ATTEMPTS`, which has
-          // its own ceiling and its own park, and this rung must not reach past
-          // its own budget into that one.
+          // what is holding it) and still backs off — on the ORDINARY ratcheting
+          // terms, identical to the registry-absent rung's own `else` arm.
+          //
+          // D-1068 CORRECTS D-1066 here. This arm first shipped with
+          // `countsAsAttempt: false`, reasoning that a delivered row must not
+          // ratchet toward a park it does not own. That was right about the park
+          // and wrong about the clock: `attempts` is also what `step` is
+          // computed FROM, so freezing it pinned every step at
+          // MAIL_BACKOFF_BASE_MS and `Math.min` never bound. Measured on the
+          // shipped build: 40 re-examinations in 30 minutes, for ever, against a
+          // recipient the registry proves is never coming back — no ceiling of
+          // any kind, because `MAIL_REPLAY_MAX_ATTEMPTS` counts SUCCESSFUL
+          // replays and a row gated HERE never gets one. That is the same
+          // every-tick-for-ever shape D-1066 was written to end, wearing a gate
+          // label. `MAIL_MAX_ATTEMPTS`'s own docstring had already said what to
+          // do instead — "`attempts` keeps counting on a delivered row too …
+          // just without a ceiling that turns a failing SEND into a park" — and
+          // that an uncapped counter is exactly what makes MAIL_BACKOFF_MAX_MS
+          // reachable rather than decorative.
           const attempts = d.attempts + 1;
           const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
-          if (d.deliveredAt !== null) {
-            store.backOff(d.id, `recipient session is ${lc}`, now + step, false);
-          } else if (attempts >= MAIL_MAX_ATTEMPTS) {
+          if (d.deliveredAt === null && attempts >= MAIL_MAX_ATTEMPTS) {
             store.rejectDelivery(d.id, 'undeliverable', `recipient session is ${lc}`);
           } else {
             store.backOff(d.id, `recipient session is ${lc}`, now + step, true);

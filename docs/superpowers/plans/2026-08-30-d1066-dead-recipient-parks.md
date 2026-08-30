@@ -62,6 +62,8 @@ change under a review aimed at something else.
 1. **`registry-absent` has the same missing `deliveredAt` guard** that D-1066's rung was
    corrected for (`server/src/watch.ts`, the registry rung's park). Same false
    `undeliverable` on a delivered row, same uncapped-`attempts` early park.
+   *(Resolved same day as **D-1067** — see `2026-08-30-d1067-d1068-delivered-row-terms.md`,
+   which also records **D-1068**, a correction to this plan's own delivered arm.)*
 2. **`sweepDivergences` feeds `supervisedAt` (epoch SECONDS) against `nowMs`
    (`Date.now()`)**, so `divergence.ts`'s `archived-but-live` arm computes an age of
    ~1.78e12 ms and `continue`s for every row — the census can never fire. Its own suite
