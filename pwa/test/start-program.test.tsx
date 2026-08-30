@@ -1386,6 +1386,56 @@ describe('StartProgramSheet', () => {
     expect(location.pathname).toBe('/runs');
   });
 
+  // The THIRD arm of D-1046, and the one my own fix round nearly shipped
+  // unpinned: `retryKickoff`'s `finally` is generation-guarded too. A retry
+  // whose generation has moved on no longer owns `retrying`, and clearing it
+  // from there re-enables a button whose newer call is still outstanding — one
+  // tap away from a duplicate kickoff. The two arms above cannot see this: they
+  // pin what a superseded call must NOT write, and this is about a write it must
+  // not UNDO.
+  it('a superseded retry cannot re-enable the button under a NEWER retry', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    const pending: Array<() => void> = [];
+    const hang = (): Promise<void> => new Promise<void>((resolve) => { pending.push(resolve); });
+    const refuse = () => Promise.reject(new ApiError(501, { ok: false, error: 'not-configured' }));
+    const queueKickoff = vi.fn()
+      .mockImplementationOnce(refuse)   // A's kickoff fails      -> door A
+      .mockImplementationOnce(hang)     // retry #1               -> outstanding
+      .mockImplementationOnce(refuse)   // B's kickoff fails      -> door B
+      .mockImplementationOnce(hang);    // retry #2               -> outstanding
+    const store = makeStore();
+    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+      createSession={async () => {}} queueKickoff={queueKickoff}
+      loadProjects={async () => ({
+        roots: [],
+        projects: [proj(), proj({ name: 'other-repo', workdir: '/home/u/projects/other-repo' })],
+      })} />);
+
+    await fillAndPick();
+    fireEvent.click(await screen.findByRole('button', { name: /^start build9-demo/i }));
+    act(() => { store.setState({ sessions: [sess()] }); });
+    await screen.findByText(/could not be queued/i);
+    fireEvent.click(screen.getByRole('button', { name: /queue the kickoff again/i }));
+    await waitFor(() => expect(queueKickoff).toHaveBeenCalledTimes(2));
+
+    // A second attempt, in another project — `start()` bumps `gen`, so retry #1
+    // is superseded from here on while its call is still outstanding.
+    await fillAndPick('other-program', 'A different program', /other-repo/i);
+    fireEvent.click(await screen.findByRole('button', { name: /^start other-program/i }));
+    act(() => {
+      store.setState({ sessions: [sess(), sess({ id: 'claude-other-repo', project: 'other-repo' })] });
+    });
+    await screen.findByText(/could not be queued/i);
+    fireEvent.click(screen.getByRole('button', { name: /queue the kickoff again/i }));
+    await waitFor(() => expect(queueKickoff).toHaveBeenCalledTimes(4));
+
+    // Retry #1 finally answers. It owns nothing any more.
+    pending[0]!();
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    expect(screen.getByRole('button', { name: /^queueing…$/i })).toBeDisabled();
+  });
+
   it('a superseded RETRY rejection cannot re-plant the failure the close cleared', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     let rejectRetry: ((e: unknown) => void) | null = null;

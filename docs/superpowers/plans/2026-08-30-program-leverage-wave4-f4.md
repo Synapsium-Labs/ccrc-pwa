@@ -1180,11 +1180,22 @@ Each mutation applied to SOURCE, reverted from a working-tree snapshot, the file
 | F4 | `kickoffFailed` not retired by a new `start()` | `expected <p class="program-start-error"></p> to be null` (the received text is A's door, above B's Start) |
 | F5 | the re-pointed D-292 absence pins, against a sheet that always renders the refusal | RED, 11 — `expected <p class="program-start-existing"></p> to be null` |
 | F6 | the repaired "sends NO prose" pin, against a real prose-adding mutation | `expected '    kickoff: (id: string, b: { slug: …' not to match /\btext\b\|\bbody\b/` |
+| F1c | `retryKickoff`'s `finally` unguarded (a superseded call clearing `retrying` under a newer one) | `TestingLibraryElementError: Unable to find an accessible element with the role "button" and name /^queueing…$/i` |
 
 **F6 was also measured the other way**, which is the whole point of the finding: with the same
 mutation in place, the ORIGINAL predicate (`find(l => l.includes('/kickoff`'))`) selected
 `" * \`POST /api/sessions/:id/kickoff\`'s own refusals (wave-4 review, MINOR 3,"` — a docstring line
 — and its assertion passed. The pin could not fail on the mutation it was written for.
+
+### A guard of mine that nearly shipped unpinned
+
+D-1046 has THREE arms, not two. The `finally` is generation-guarded as well, because a superseded
+retry no longer owns `retrying` and clearing it there re-enables a button whose newer call is still
+outstanding — one tap from a duplicate kickoff. The two arms the review named pin what a superseded
+call must not WRITE; this is about a write it must not UNDO, which neither of them can see. Caught in
+my own self-review after the fix commit, pinned (F1c above) and measured red before the row was
+written. The fixture needs four kickoff calls and two projects, which is the honest cost of the
+scenario and the reason it was nearly skipped.
 
 ### The finding that was worse than reported
 
