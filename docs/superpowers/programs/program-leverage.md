@@ -16,7 +16,7 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
 | 1 | F1 — drift fixes (ungated-door count, coordinator trigger/resume wording, stale `_id()` anchor) + the coordinator-resume runbook (`references/resume.md`). AGENT-FIRST deploy. | run 10, PR #28 (merged `f5dfd2d9`) | done 2026-08-28 18:08 UTC — CI 5/5 green on `8135118b`, deployed both boxes agent-first, `/health` and fleet `ccd` both report `f5dfd2d9` |
 | 2 | F2 — dispatch-time `skillState` preflight (measure, never refuse) + synchronous deviation-floor seed on first allocation | run 12, PR #30 (merged `4e2a04f5`) | done 2026-08-29 ~10:45 UTC — fix round `c026e151` verified (all findings fixed, D-1020..D-1022), CI 5/5, merged, deployed both boxes agent-first; `/health` and fleet `ccd` both report `4e2a04f5` |
 | 3 | F3 — per-project program-ready badge (server measurement; seam re-ruled to `GET /api/projects` + StartProgramSheet, D-1023) | run 14, PR #33 (merged `1f6ed803`) | done 2026-08-30 ~14:35 UTC — fix round `60bb451e` verified (all ten rulings landed, D-1034..D-1038), CI 5/5, merged, deployed server lane from the merge sha; `/health` reports `1f6ed803` (NOT agent-first — server+PWA only) |
-| 4 | F4 — program kickoff rides the idle-gated mail lane (`queueSystemMail`), direct-injection race retired | — | planned |
+| 4 | F4 — program kickoff rides the idle-gated mail lane (`queueSystemMail`), direct-injection race retired | run 16 | dispatched 2026-08-30 ~14:40 UTC — quiet-meadow resumed, brief queued, preflight `skillState:present`; deviations from D-1039 |
 | 5 | F5 — `POST /api/runs/:id/reclaim` (4th ungated door, dead-proof) + PWA resume affordance; door count → four | — | planned |
 | 6 | F6+F7a — `COORD_QUIET_MS`/`COORD_COOLDOWN_MS` for coordinator recipients + `POST /api/coord/caps` operator dial | — | planned |
 | 7 | F7 — program health on the board (parked mail, replay high-water, rejection counts, un-briefed coordinator) | — | planned |
@@ -226,6 +226,14 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
   same class as wave 2's sweep lesson. Run 14 advanced working→awaiting-review→merging on the
   fresh fingerprint; PR #33 merged as `1f6ed803`; deployed server lane from a scratch worktree
   at the merge sha, `/health` reports `1f6ed803`, service stable (NOT agent-first). Items 4/4.
+
+- **Wave 4 opens as run 16 and dispatches (2026-08-30 ~14:40 UTC):** opened BEFORE closing
+  run 14 (the ordering rule — the program can never read zero open runs); run 14 then closed
+  `done`, `released:false` (expected: run 16 holds quiet-meadow, hold rewritten
+  `program:program-leverage wave:4/8`). Note the id: the server allocated **run 16**, not 15 —
+  run ids are a global sequence shared with the other active program, never per-program. Wave-4
+  mail therefore names **runId 16**. Dispatch resumed the workspace (`resumed:true`,
+  `briefQueued:true`) and the wave-2 preflight measured `skillState:present` live.
 
 ## Carried constraints
 
