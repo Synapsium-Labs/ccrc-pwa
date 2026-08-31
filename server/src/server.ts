@@ -1508,8 +1508,37 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // half-formed pair can reach. Shape borrowed from `coord/routes.ts`'s own
     // integer body checks: `typeof === 'number'` AND `Number.isInteger`, because
     // `NaN` and 1.5 are both numbers and neither is a wave.
-    const resume = typeof body.runId === 'number' && Number.isInteger(body.runId)
-      && typeof body.wave === 'number' && Number.isInteger(body.wave)
+    //
+    // …AND THE LOWER BOUND THAT SHIPS IN THE SAME CONJUNCTION THERE (D-1151,
+    // wave-5 review MINOR 8). The borrow was one term short: `POST /api/runs`
+    // reads `!Number.isInteger(wave) || wave < 1` (`coord/routes.ts:894`), and
+    // only the integer half made the trip. Written positively here to fit the
+    // ternary, the missing term is `>= 1`, and it belongs on BOTH fields: a run
+    // id is `INTEGER PRIMARY KEY AUTOINCREMENT` (`coord/schema.ts:66`) and a wave
+    // is refused below 1 at open, so the smallest either can be is 1. Without it
+    // `{runId:-5, wave:0}` IS a pair — it composes `programResumeKickoff(…, -5, 0)`
+    // and durably queues a brief telling a revived coordinator to find run -5 at
+    // wave 0 in `GET /api/runs` and pick that wave up. Nothing downstream catches
+    // it: the composer interpolates, `queueSystemMail` writes, and the recipient
+    // is a session reading prose.
+    //
+    // The expensive half is not the false sentence, it is the DEDUPE KEY. That
+    // key is `(operator, null, toId, PROGRAM_KICKOFF_SUBJECT)` — one outstanding
+    // kickoff per session whatever program it names — so the nonsense brief takes
+    // the slot, and the operator's corrected re-kickoff a second later answers
+    // `queued:false`, which the sheet renders as "one is already waiting". True,
+    // and useless: the one waiting names run -5. A refusal writes nothing, so it
+    // cannot occupy anything, which is why the range test lives HERE, before the
+    // queue, and not as a repair downstream.
+    //
+    // Failing the range makes `resume` `undefined` — the same value an ABSENT
+    // pair produces — so this term alone would demote `{runId:-5, wave:0}` to
+    // wave 4's kickoff rather than refusing it. It does not, because the
+    // both-or-neither guard below tests the RAW body keys and not the computed
+    // value; the two are one mechanism and `kickoff-route.test.ts` reds on either
+    // half being removed.
+    const resume = typeof body.runId === 'number' && Number.isInteger(body.runId) && body.runId >= 1
+      && typeof body.wave === 'number' && Number.isInteger(body.wave) && body.wave >= 1
       ? { runId: body.runId, wave: body.wave }
       : undefined;
     // BOTH OR NEITHER (D-1126). Absent-both is wave 4's kickoff, byte for byte —
@@ -1518,6 +1547,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // default that would complete it (wave 1) is the one instruction a REVIVED
     // coordinator must not be given. A silent fallback would answer `queued:true`
     // to an operator whose revive had just been briefed to open a second run.
+    //
+    // It reads the RAW body keys, not `resume`, which is what lets it carry a
+    // second duty for free (D-1151): an OUT-OF-RANGE pair also arrives here as
+    // `undefined` with its keys present, so it is refused on the same line and by
+    // the same argument — a caller that meant something, and a default that would
+    // complete it into the one instruction a revived coordinator must not get.
     if (resume === undefined && (body.runId !== undefined || body.wave !== undefined)) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }

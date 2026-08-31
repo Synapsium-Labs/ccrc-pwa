@@ -323,6 +323,103 @@ describe('POST /api/sessions/:id/kickoff — the wave-N re-kickoff', () => {
     expect(w.coord.dueDeliveries(Date.now(), 60_000)).toEqual([]);
   });
 
+  // D-1151 — THE LOWER BOUND THE BORROWED CHECK DROPPED, AND WHAT IT COSTS.
+  // The pair reader took `coord/routes.ts`'s integer shape (`typeof === 'number'`
+  // AND `Number.isInteger`) and left behind the term that ships in the same
+  // conjunction at `POST /api/runs` — `wave < 1` (`coord/routes.ts:894`). Without
+  // it `{runId:-5, wave:0}` IS a pair: it typechecks, composes
+  // `programResumeKickoff(slug, title, -5, 0)`, and briefs a revived coordinator
+  // to "find run -5 at wave 0" in `GET /api/runs` and pick that wave up. Neither
+  // number can name a row: `runs.id` is `INTEGER PRIMARY KEY AUTOINCREMENT`
+  // (`coord/schema.ts:66`) and `POST /api/runs` refuses `wave < 1` at open, so
+  // the smallest either can be is 1. Both fields, because both are ids of rows
+  // that count from one — the reviewer's own pair puts one field out of range on
+  // each side of the conjunction.
+  //
+  // Pinned as `it.each` rows AND as the two tests below, because the 400 is only
+  // the cheap half — see them for the half that outlives the bad request.
+  it.each([
+    ['a zero runId', { ...BODY, runId: 0, wave: 5 }],
+    ['a negative runId', { ...BODY, runId: -5, wave: 5 }],
+    ['a zero wave', { ...BODY, runId: 7, wave: 0 }],
+    ['a negative wave', { ...BODY, runId: 7, wave: -1 }],
+    ['the reviewer pair — both fields out of range at once', { ...BODY, runId: -5, wave: 0 }],
+  ])('400 bad-request for %s, and queues NOTHING', async (_label, payload) => {
+    const home = mkTmp('ccrc-kick-');
+    seed(home, ID);
+    const { run } = makeRunner();
+    const w = await openApp(home, run); app = w.app;
+    const res = await post(app, ID, payload);
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
+    expect(w.coord.dueDeliveries(Date.now(), 60_000)).toEqual([]);
+  });
+
+  it('an out-of-range pair lands on the REFUSAL, never on the silent wave-1 fallthrough', async () => {
+    // The distinction D-1151 turns on, and the reason the lower bound belongs in
+    // the pair reader rather than in a separate guard of its own. Failing the
+    // range test makes `resume` `undefined`, and `undefined` is ALSO how an
+    // absent pair reads — so the only thing standing between an out-of-range
+    // pair and wave 4's kickoff, composed and queued with a cheerful
+    // `queued:true`, is the both-or-neither refusal (D-1126) reading the RAW
+    // body keys rather than the computed value. Delete that refusal and this
+    // reds; delete the range terms and the row block above reds. Neither half
+    // is redundant with the other.
+    //
+    // Briefing a coordinator revived on a program standing at wave 5 to "open
+    // the run for wave 1" is the one instruction D-1126 exists to prevent, so
+    // the wave-1 sentence is named here explicitly: an empty lane says nothing
+    // was written, and the first assertion says WHICH thing must never be.
+    //
+    // Assertion order measured, same lesson as the test below: with the `400`
+    // first, BOTH mutants red on the status — the row block's own reason — and
+    // the two sentences that separate this test from those rows never execute.
+    // Ordered as it is, each mutant reds on its own damage: neutering the
+    // refusal reds on the wave-1 sentence being in the lane, and dropping the
+    // range terms reds on the lane holding a row at all (that one composes the
+    // RESUME sentence naming run -5, so the wave-1 assertion above it is honestly
+    // silent).
+    const home = mkTmp('ccrc-kick-');
+    seed(home, ID);
+    const { run } = makeRunner();
+    const w = await openApp(home, run); app = w.app;
+    const res = await post(app, ID, { ...BODY, runId: -5, wave: 0 });
+    const due = w.coord.dueDeliveries(Date.now(), 60_000);
+    expect(due.map((d) => d.envelope).join('\n')).not.toContain(programKickoff(BODY.slug, BODY.title));
+    expect(due).toEqual([]);
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('the refused pair does NOT take the dedupe key — the corrected re-kickoff still lands', async () => {
+    // THE HALF THAT OUTLIVES THE BAD REQUEST, and the reason this finding is not
+    // cosmetic. The dedupe key is `(operator, null, toId, PROGRAM_KICKOFF_SUBJECT)`
+    // (`coord/kickoff.ts`) — one outstanding kickoff per session, whatever
+    // program it names. So a queued nonsense brief does not merely say something
+    // false: it OCCUPIES the slot, and the operator's corrected re-kickoff a
+    // second later answers `queued:false`, which the sheet renders as "one is
+    // already waiting". True, and useless — the one waiting is the one naming
+    // run -5. The refusal has to write nothing, exactly as the 413 above does.
+    //
+    // THE ASSERTION ORDER IS DELIBERATE, and it was measured: written with the
+    // `400` first, this test reds on the STATUS under the pre-fix handler and
+    // stops there, never reaching the sentence about the dedupe key that is its
+    // whole subject — a red for a reason four other rows above already own. The
+    // cost is asserted first and the status last, so the mutant's first word is
+    // `queued: false` on the corrected kickoff: the operator's own symptom.
+    const home = mkTmp('ccrc-kick-');
+    seed(home, ID);
+    const { run } = makeRunner();
+    const w = await openApp(home, run); app = w.app;
+    const bad = await post(app, ID, { ...BODY, runId: -5, wave: 0 });
+    const fixed = await post(app, ID, RESUME_BODY);
+    expect(fixed.json()).toMatchObject({ ok: true, queued: true });
+    const due = w.coord.dueDeliveries(Date.now(), 60_000);
+    expect(due.length).toBe(1);
+    expect(due[0]!.envelope).toContain(programResumeKickoff(BODY.slug, BODY.title, 7, 5));
+    expect(due[0]!.envelope).not.toContain('run -5');
+    expect(bad.statusCode).toBe(400);
+  });
+
   it('413 for a resume kickoff over the cap — and it does not occupy the dedupe key', async () => {
     // The resume arm of `:240-262`. The cap is at the seam, so the route gains
     // this for free; pinned anyway, because "for free" is a claim about a call
