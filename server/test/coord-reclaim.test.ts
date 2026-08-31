@@ -10,10 +10,11 @@
 // calls a non-goal precisely because nothing in this build arbitrates it.
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { measureClaimant, reclaimRun, type ReclaimDeps } from '../src/coord/reclaim.js';
+import { readSessionRecord } from '../src/registry.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import type { SessionVerdict } from '../src/exec.js';
 import { testDeps } from './helpers.js';
@@ -54,6 +55,55 @@ const depsFor = (home: string, coord: CoordStore, verdict: SessionVerdict,
 
 const blindIO = (): FleetIO => ({ ...localIO, readdir: async () => null });
 
+/** Lists ONCE, then goes blind. The shape D-1144's third arm needs and no other
+ *  fixture in this file can state: `readSessionRecord` opens with a listing that
+ *  SUCCEEDS (so the read is `absent`, not `unlistable`), and the consumer's
+ *  re-listing — the one that tells a proven absence from a half-written row —
+ *  then fails. `blindIO` above cannot reach it: it fails the FIRST listing, so
+ *  the ladder never leaves the `unlistable` rung. */
+const listsOnceThenBlindIO = (): FleetIO => {
+  let listings = 0;
+  return { ...localIO, readdir: async (dir: string) => (listings++ === 0 ? localIO.readdir(dir) : null) };
+};
+
+/** A registry entry that IS listed and CANNOT be assembled — `buildRecord`'s own
+ *  words for it are "a session mid-write or mid-teardown" (registry.ts:488-505).
+ *  `<id>.uuid` is on disk, so `readSessionRecord`'s first rung passes it through;
+ *  the identity triple is incomplete, so `buildRecord` drops the row and the read
+ *  comes back `absent` — the SAME word a session that was never listed gets. This
+ *  is the input D-1144 exists for: on a live fleet it is a coordinator between two
+ *  `_reg_set` writes, and rung 1 used to call it dead. */
+const seedHalfWritten = (home: string, id: string): void => {
+  const reg = path.join(home, '.cc-sessions');
+  mkdirSync(reg, { recursive: true });
+  writeFileSync(path.join(reg, `${id}.uuid`), `u-${id}`);
+  writeFileSync(path.join(reg, `${id}.started`), '1');
+  // No `.wrapper`, no `.workdir`: two thirds of the identity triple are not there
+  // yet. Nothing else about the row is malformed — that is the point of the case.
+};
+
+/** The other route to the same drop: a triple member that reads back MEASURED-EMPTY
+ *  (`buildRecord`'s second null, an empty field rather than a missing one). Seeded
+ *  from a COMPLETE row so the only difference from a healthy session is the zero-byte
+ *  `.uuid` a half-finished write leaves behind. */
+const seedEmptyIdentity = (home: string, id: string): void => {
+  seedRow(home, id);
+  writeFileSync(path.join(home, '.cc-sessions', `${id}.uuid`), '');
+};
+
+/** THE FIXTURE-REACHABILITY PIN, asserted before every D-1144 case rather than
+ *  assumed. The arm under test is only reached when BOTH of these hold, and each
+ *  is one edit away from silently ceasing to: if `<id>.uuid` stopped being listed
+ *  the case would fall into the proven-absence arm and pass for the wrong reason,
+ *  and if the row started assembling the read would answer `found: true` and skip
+ *  rung 1 entirely. An unreachable arm asserted green is the failure mode this
+ *  file's whole per-rung fixture design exists to avoid. */
+const expectListedButUnassembled = async (home: string, id: string): Promise<void> => {
+  expect(readdirSync(path.join(home, '.cc-sessions'))).toContain(`${id}.uuid`);
+  expect(await readSessionRecord(localIO, testDeps(home).cfg, id))
+    .toEqual({ found: false, reason: 'absent' });
+};
+
 describe('measureClaimant — three answers, and the inputs that collapse into each', () => {
   it('an unlistable registry is UNMEASURABLE, never dead', async () => {
     // The fail-open shape dispatch.ts:462-480 had to close, one ring up: an
@@ -71,6 +121,72 @@ describe('measureClaimant — three answers, and the inputs that collapse into e
     const v = await measureClaimant(depsFor(home, store(home), GONE), DEAD, NOW);
     expect(v.state).toBe('dead');
     expect(v.why).toContain('listed cleanly');
+  });
+
+  // D-1144 — the three cases below are one finding: `SingleRead`'s `absent` is a
+  // fold of three conditions and only two of them are deaths. The case above is
+  // the fold's honest member (nothing was ever listed); these are the two that
+  // used to borrow its sentence — "no registry row in a directory that listed
+  // cleanly" — while `<id>.uuid` was sitting right there in the listing.
+  it('a row that IS listed but cannot be ASSEMBLED is UNMEASURABLE, never dead (D-1144)', async () => {
+    // On a live fleet this is a coordinator mid-write, not a corpse. Answering
+    // `dead` reclaims a program out from under a session that is still running
+    // it — and it is the only arm of this ladder whose error PROCEEDS.
+    const home = mkTmp('ccrc-reclaim-');
+    seedHalfWritten(home, DEAD);
+    await expectListedButUnassembled(home, DEAD);
+    const v = await measureClaimant(depsFor(home, store(home), GONE), DEAD, NOW);
+    expect(v.state).toBe('unmeasurable');
+    expect(v.why).toContain(`${DEAD}.uuid`);       // the evidence, not a category
+    expect(v.why).toContain('could not be assembled');
+  });
+
+  it('a measured-EMPTY identity field reaches that same arm — the other way a listed row drops', async () => {
+    // `buildRecord` has two nulls and both must land here. Pinning only the
+    // half-written one would leave the empty-field route free to answer `dead`
+    // again, which is the same defect with a different fixture.
+    const home = mkTmp('ccrc-reclaim-');
+    seedEmptyIdentity(home, DEAD);
+    await expectListedButUnassembled(home, DEAD);
+    const v = await measureClaimant(depsFor(home, store(home), GONE), DEAD, NOW);
+    expect(v.state).toBe('unmeasurable');
+    expect(v.why).toContain('could not be assembled');
+  });
+
+  it('the D-1144 arm sits AHEAD of the tmux consultation — tmux is never asked', async () => {
+    // PLACEMENT, pinned as an observable rather than read off the source, the
+    // way rung 2's own order test above is. A split placed BELOW the tmux rung
+    // still answers `unmeasurable` for this fixture and looks identical from the
+    // outside — until tmux says `gone` about a pane whose registry row is merely
+    // half-written, which is exactly the pair of facts a mid-write coordinator
+    // presents (the pane is being restarted, the row is being rewritten). Asking
+    // tmux at all here is asking a witness that cannot see the question.
+    const home = mkTmp('ccrc-reclaim-');
+    seedHalfWritten(home, DEAD);
+    await expectListedButUnassembled(home, DEAD);
+    let asked = 0;
+    const deps: ReclaimDeps = {
+      coord: store(home), io: localIO, cfg: testDeps(home).cfg,
+      tmux: { sessionVerdict: async () => { asked += 1; return GONE; } },
+    };
+    const v = await measureClaimant(deps, DEAD, NOW);
+    expect(v.state).toBe('unmeasurable');
+    expect(asked).toBe(0);
+  });
+
+  it('a re-listing that FAILS is UNMEASURABLE — doubt in front of a destructive act refuses', async () => {
+    // The fixture is the DEAD-answering one above, id for id: DEAD is genuinely
+    // not in the first listing. What changes is that the evidence separating a
+    // proven absence from a half-written row is no longer obtainable, because
+    // `SingleRead` threw away the first listing's own answer and the second
+    // listing failed. `dead` here would be a guess, and the guess proceeds.
+    const home = mkTmp('ccrc-reclaim-');
+    seedRow(home, LIVE);
+    const v = await measureClaimant(
+      depsFor(home, store(home), GONE, listsOnceThenBlindIO()), DEAD, NOW);
+    expect(v.state).toBe('unmeasurable');
+    expect(v.why).toContain('stopped listing');
+    expect(v.why).not.toContain('listed cleanly');   // and it does not borrow the dead sentence
   });
 
   it('a live pane is ALIVE, and the lifecycle is never consulted', async () => {
@@ -223,6 +339,27 @@ describe('reclaimRun — the order is the guard', () => {
     expect(r.kind === 'registry-unmeasurable' && r.detail).toBe(detail);
     expect(w.calls).toBe(0);
     expect(s.run(id)!.claimedBy).toBe(DEAD);
+  });
+
+  it('registry-unmeasurable when the CLAIMANT is listed but unassembled — and NOTHING is written', async () => {
+    // D-1144 end to end, through the door rather than through the ladder: the
+    // incoming coordinator is a healthy row (so rung 3 passes), and the OUTGOING
+    // one is listed with an identity triple that is still half-written. Before
+    // the split this returned `ok: true` and rewrote `claimedBy` — the single
+    // destructive outcome this whole file is here to keep behind a measurement.
+    const home = mkTmp('ccrc-reclaim-');
+    const s = store(home);
+    const id = seedRun(s, DEAD);
+    seedHalfWritten(home, DEAD); seedRow(home, LIVE);
+    await expectListedButUnassembled(home, DEAD);
+    const w = watchCommit(s);
+    const r = await reclaimRun(depsFor(home, s, GONE), id, LIVE);
+    expect(r).toMatchObject({ ok: false, kind: 'registry-unmeasurable' });
+    if (r.ok) throw new Error('unreachable — narrowed above');
+    expect(r.kind === 'registry-unmeasurable' && r.detail).toContain('could not be assembled');
+    expect(w.calls).toBe(0);
+    expect(s.run(id)!.claimedBy).toBe(DEAD);
+    expect(s.runEvents(id)).toEqual([]);
   });
 
   it('claimant-alive when the current coordinator answers — and NOTHING is written', async () => {
