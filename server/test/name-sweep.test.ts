@@ -15,7 +15,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
-import { unreadableField } from './ioDoubles.js';
+import { absentField, unreadableField } from './ioDoubles.js';
 
 const ID = 'demo-quiet-mesa';
 const UUID = 'a'.repeat(36);
@@ -783,5 +783,94 @@ describe('the naming lane', () => {
     expect(h.calls).toEqual([]);
     release();
     await vi.waitFor(() => expect(h.calls).toHaveLength(1));
+  });
+});
+
+// ── THE THIRTEENTH CONDITION ────────────────────────────────────────────────
+// `$REG/<id>.named` is written by `ccd ws-add` only in the arm that received a
+// positional slug, so it marks the workspaces a HUMAN named. The sweep exists
+// to name the ones nobody named, and `sessionLabel` reads `branch` before
+// `workspace` — so without this gate the operator's `eng-1234` is replaced by
+// the model's title within one sweep of the first turn, with no verb able to
+// put it back.
+describe('the naming sweep leaves a human’s name alone', () => {
+  const ID2 = 'demo-still-water';
+  const UUID2 = 'b'.repeat(36);
+  const MUNGED2 = '-w-demo-still-water';
+
+  /** A SECOND row beside `seed()`'s, so one sweep sees both and the assertion
+   *  can be "exactly one rename, and it is the auto row" rather than the much
+   *  weaker "no rename happened". */
+  const seedAuto = (home: string): void => {
+    const reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    const fields: Record<string, string> = {
+      wrapper: 'claude', project: 'demo', workdir: '/w/demo/still-water', uuid: UUID2,
+      started: '1', workspace: 'still-water', branch: 'ws/still-water',
+    };
+    for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${ID2}.${k}`), v);
+    const dir = path.join(home, '.claude', 'projects', MUNGED2);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, `${UUID2}.jsonl`),
+      [USER('go'), TITLE('Rename me freely')].join('\n') + '\n');
+  };
+
+  /** `--session` is argv[2]; `renames()` above reads argv[4], the branch. */
+  const sessionsRenamed = (calls: string[][]): string[] => calls.map((a) => a[2]!);
+
+  it('renames the auto-named row and NOT the operator-named one, in the same sweep', async () => {
+    const h = harness();
+    seed(h.home, { named: '1' });
+    transcript(h.home, [USER('go'), TITLE('Some model title')]);
+    seedAuto(h.home);
+    const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
+
+    await w.sweepNames();
+
+    // Both halves matter. Without the second, deleting the gate AND breaking
+    // the sweep entirely would both read as "one rename".
+    expect(sessionsRenamed(h.calls)).toEqual([ID2]);
+    expect(h.calls).toHaveLength(1);
+  });
+
+  it('a LISTED but unreadable marker reads as named — doubt must not rename', async () => {
+    // The asymmetry the field's docstring argues: renaming over a human's name
+    // is unrecoverable, leaving an auto row on `ws/<slug>` is where it already
+    // was. Delete the `namedListed` fallback in registry.ts and this renames.
+    const h = harness();
+    seed(h.home, { named: '1' });
+    transcript(h.home, [USER('go'), TITLE('Some model title')]);
+    const w = new FleetWatcher(
+      { ...testDeps(h.home, h.run), io: unreadableField(ID, 'named') }, new Bus(), 2000);
+
+    await w.sweepNames();
+    expect(h.calls).toEqual([]);
+  });
+
+  it('a marker that is genuinely absent still renames — absence is the auto case', async () => {
+    // The other direction, and the one that stops the gate being "never rename
+    // anything". `absentField` proves ENOENT at the read even though the row
+    // is otherwise complete.
+    const h = harness();
+    seed(h.home);
+    transcript(h.home, [USER('go'), TITLE('Brainstorm Helix and slide notes integration')]);
+    const w = new FleetWatcher(
+      { ...testDeps(h.home, h.run), io: absentField(ID, 'named') }, new Bus(), 2000);
+
+    await w.sweepNames();
+    expect(renames(h.calls)).toEqual(['ws/brainstorm-helix-and-slide-notes']);
+  });
+
+  it('an EMPTY marker is not a name anybody chose, and is renamed', async () => {
+    // ccd writes `1`; an empty file arrives by the residual routes
+    // `branchEvidence`'s `'empty'` rung sets out. Guards against the shorter
+    // `namedByOperator: namedRead.ok` mutation, which would read it as named.
+    const h = harness();
+    seed(h.home, { named: '' });
+    transcript(h.home, [USER('go'), TITLE('Brainstorm Helix and slide notes integration')]);
+    const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
+
+    await w.sweepNames();
+    expect(renames(h.calls)).toEqual(['ws/brainstorm-helix-and-slide-notes']);
   });
 });

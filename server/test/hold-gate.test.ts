@@ -229,6 +229,10 @@ describe('archiveMerged — merged AND unheld', () => {
       started: true, home: null, pool: null, lastswap: null,
       workspace: 'quiet-basin', branch: 'ws/quiet-basin', branchEvidence: 'named', base: 'origin/main',
       prPhase: null, prNumber: null, prCheckedAt: null, archivedAt: null, archivedBytes: null, held: null,
+      // This fixture is about the HOLD gate, not the naming sweep: an
+      // auto-named workspace is the ordinary case and the one `archiveMerged`
+      // was written against.
+      namedByOperator: false,
       substrate: null, stopped: null, supervisedAt: null, swapBlocked: null, spawn: null, lifecycleUnmeasured: [],
       unmeasured: ['wrapper'],
     };

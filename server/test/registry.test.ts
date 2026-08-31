@@ -525,7 +525,7 @@ describe('PR and archive fields', () => {
 });
 
 // C0.3: readSessionRecord is the SAME parser (buildRecord) as readRegistry,
-// narrowed to one id — one readdir plus that id's 22 field reads instead of
+// narrowed to one id — one readdir plus that id's 23 field reads instead of
 // a whole-fleet sweep. These pin that it agrees with readRegistry's own
 // per-record answer, id-by-id, rather than re-testing every field this file
 // already covers above.
@@ -593,7 +593,7 @@ describe('readSessionRecord', () => {
     expect(await readSessionRecord(localIO, cfg, 'claude-demo')).toEqual({ found: false, reason: 'absent' });
   });
 
-  it('costs exactly one readdir plus the one id\'s 22 field reads — never a per-session Promise.all for a sibling', async () => {
+  it('costs exactly one readdir plus the one id\'s 23 field reads — never a per-session Promise.all for a sibling', async () => {
     const reg = path.join(home, '.cc-sessions');
     seed(reg, 'claude-a-MekWarLive', {
       wrapper: 'claude-a', project: 'MekWarLive', workdir: '/data/projects/MekWarLive', uuid: 'a'.repeat(36),
@@ -615,10 +615,16 @@ describe('readSessionRecord', () => {
 
     expect(readdirCalls).toBe(1);
     // 17 + D3's four stamps (stopped, supervised, swapblocked, spawn) + the
-    // substrate marker (D-310 (was D-B8-14)) — the substrate file joined the sweep. The
+    // substrate marker (D-310 (was D-B8-14)) — the substrate file joined the sweep —
+    // + the `.named` marker the naming sweep's thirteenth condition reads. The
     // number is pinned rather than derived because it IS the remote-mode cost:
-    // one round trip each, per session, per 2-second tick.
-    expect(fieldReads).toHaveLength(22);
+    // one round trip each, per session, per 2-second tick. THAT IS WHY THIS
+    // WENT RED RATHER THAN BEING UPDATED QUIETLY: `.named` costs every session
+    // one more agent round trip on every tick, forever, and the field earns it
+    // by being the only thing standing between an operator's chosen name and
+    // the ai-title sweep. A future field with a weaker claim should be packed
+    // into an existing file instead.
+    expect(fieldReads).toHaveLength(23);
     expect(fieldReads.every((p) => p.includes('claude-a-MekWarLive'))).toBe(true);
   });
 

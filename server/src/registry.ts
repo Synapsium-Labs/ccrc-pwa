@@ -126,6 +126,33 @@ export interface SessionRecord {
    *  file, a power loss with no fsync. A torn write is no longer among them:
    *  `_reg_set` renames rather than truncates. */
   held: string | null;
+  /**
+   * `$REG/<id>.named` — the operator supplied this workspace's slug at
+   * `ws-add` time, so its name is a CHOICE and not a placeholder. ccd writes
+   * the marker only in the arm that received a positional slug; an auto-named
+   * workspace has no file at all.
+   *
+   * The one consumer is `sweepNames`, which must not rename over it. That is
+   * also why the ladder below leans the way it does.
+   *
+   * DOUBT READS AS NAMED, and unlike `held` this is not merely fail-shut by
+   * analogy — the two mistakes are genuinely asymmetric. Reading a NAMED
+   * workspace as unnamed lets the ai-title sweep rename its branch, and
+   * `sessionLabel` reads `branch` before `workspace`, so the name the operator
+   * typed disappears from every surface; no verb renames a slug, so there is
+   * nothing to recover it with. Reading an UNNAMED one as named merely leaves
+   * it on `ws/<slug>`, which is exactly where it already was — the sweep is a
+   * courtesy, not a correctness requirement. So a LISTED-but-unreadable marker
+   * reads `true`.
+   *
+   * Only two things read `false`: a measured `absent` (a proven ENOENT, which
+   * is precisely what an auto-named workspace looks like) and an unreadable
+   * marker the directory listing does not name either. A readable but EMPTY
+   * marker also reads `false` — `ccd` writes `1`, and an empty file is one of
+   * the residual routes `branchEvidence`'s `'empty'` rung sets out rather than
+   * a name anybody chose.
+   */
+  namedByOperator: boolean;
   /** `$REG/<id>.substrate` — a supervisor's own "I could not reach tmux"
    *  record (D-310 (was D-B8-14), spec §2): `<epoch-seconds> <verbatim reason>`, written
    *  by `_substrate_mark` on every unknown probe tick, removed by
@@ -509,7 +536,7 @@ async function buildRecord(
 ): Promise<SessionRecord | null> {
   const [wrapperRead, project, workdirRead, uuidRead, startedRead, home, pool, lastswap, workspace, branchRead,
     base, prPhaseRaw, prNumberRaw, prCheckedAtRaw, archivedRaw, manifestRaw, holdRead,
-    stoppedRead, supervisedRead, swapBlockedRaw, spawnRaw, substrateRead] = await Promise.all([
+    stoppedRead, supervisedRead, swapBlockedRaw, spawnRaw, substrateRead, namedRead] = await Promise.all([
     fieldMeasured(io, cfg.registryDir, id, 'wrapper'), field(io, cfg.registryDir, id, 'project'),
     fieldMeasured(io, cfg.registryDir, id, 'workdir'), fieldMeasured(io, cfg.registryDir, id, 'uuid'),
     fieldMeasured(io, cfg.registryDir, id, 'started'), field(io, cfg.registryDir, id, 'home'),
@@ -522,6 +549,7 @@ async function buildRecord(
     fieldMeasured(io, cfg.registryDir, id, 'stopped'), fieldMeasured(io, cfg.registryDir, id, 'supervised'),
     field(io, cfg.registryDir, id, 'swapblocked'), field(io, cfg.registryDir, id, 'spawn'),
     fieldMeasured(io, cfg.registryDir, id, 'substrate'),
+    fieldMeasured(io, cfg.registryDir, id, 'named'),
   ]);
 
   // The identity-triple ladder. `uuid` first: `names.includes(id + '.uuid')`
@@ -587,6 +615,7 @@ async function buildRecord(
   }
 
   const holdListed = names.includes(`${id}.hold`);
+  const namedListed = names.includes(`${id}.named`);
   const substrateListed = names.includes(`${id}.substrate`);
 
   // §4.3's three-valued read, over the three fields the lifecycle classifier
@@ -707,6 +736,15 @@ async function buildRecord(
     held: holdRead.ok
       ? (holdRead.content === '' ? HOLD_NO_REASON : holdRead.content)
       : (holdRead.reason === 'absent' ? null : (holdListed ? HOLD_UNREADABLE : null)),
+    // `held`'s ladder, one rung shorter because this marker has no content to
+    // show — only presence means anything. A measured `absent` is a proven
+    // ENOENT and therefore proof of an AUTO-named workspace; an `unreadable`
+    // falls back to the directory LISTING, which proves presence independently
+    // of whether the bytes came back. See the field's docstring for why doubt
+    // leans to `true` here rather than `false`.
+    namedByOperator: namedRead.ok
+      ? namedRead.content !== ''
+      : (namedRead.reason === 'absent' ? false : namedListed),
     // The `.hold` ladder, applied to the supervisor's fault record (D-310,
     // spec §2): presence from the LISTING, never from a non-null read — "no
     // fault recorded" re-enables every destructive affordance downstream, so

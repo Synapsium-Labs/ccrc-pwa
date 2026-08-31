@@ -1472,6 +1472,24 @@ export class FleetWatcher {
       // `readRegistry` maps an unreadable-but-listed `.hold` to HOLD_UNREADABLE
       // and an empty one to HOLD_NO_REASON, both NON-null, so `!== null` is the
       // whole test and must not grow an emptiness clause.
+      // THIRTEENTH CONDITION. A name the operator typed is not a draft — this
+      // sweep exists to name the workspaces NOBODY named, and `ws-add` records
+      // which those are (`$REG/<id>.named`, written only in the arm that
+      // received a positional slug).
+      //
+      // Placed HERE, with `held`, for the reason the twelfth condition gives
+      // for its own two halves: this is a field the loop has already read, so
+      // it costs nothing, and it short-circuits the `openRunsForSession` query
+      // behind it. It is the same argument the twelfth makes about a claimed
+      // row — "a rename mid-wave changes what every surface calls a worker the
+      // coordinator's ledger already names" — applied to a human instead of a
+      // ledger, and the human's name is the one with no way back: no verb
+      // renames a slug, and `sessionLabel` reads `branch` before `workspace`.
+      //
+      // It protects a workspace created BY HAND on the box today
+      // (`ccd ws-add demo eng-1234`), which is why it is worth shipping before
+      // any sheet exists to create one from the phone.
+      if (r.namedByOperator) continue;
       if (r.held !== null || (this.deps.coord?.openRunsForSession(r.id).length ?? 0) > 0) continue;
       // Keyed by id AND uuid, not id alone: `<project>-<slug>` is a SLUG,
       // recycled by ws-reap (`ccd:2409`'s "144 per project, recycled") —
