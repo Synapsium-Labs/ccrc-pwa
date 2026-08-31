@@ -788,13 +788,25 @@ and match it — do not guess the number of `../`.
 
   | mutation | first-fail assertion |
   |---|---|
-  | drop `&& v >= CAP_MIN` from `wellFormed` | *(measured at execution)* |
-  | drop `&& v <= CAP_MAX` | *(measured at execution)* |
-  | drop `Number.isInteger(v)` | *(measured at execution)* |
-  | drop the `asked.length === 0` refusal | *(measured at execution)* |
-  | refuse on an unknown extra key instead of ignoring it | *(measured at execution)* |
-  | `CAP_MIN` lowered to 0 | *(measured at execution)* |
-  | drop the `Array.isArray(body)` arm | *(measured at execution)* |
+  | drop `&& v >= CAP_MIN` from `wellFormed` | `AssertionError: expected true to be false // Object.is equality` (5 failed) |
+  | drop `&& v <= CAP_MAX` | `AssertionError: expected true to be false // Object.is equality` (2 failed) |
+  | drop `Number.isInteger(v)` | `AssertionError: expected true to be false // Object.is equality` (2 failed) |
+  | drop the `asked.length === 0` refusal | `AssertionError: expected true to be false // Object.is equality` (1 failed) |
+  | refuse on an unknown extra key instead of ignoring it | `AssertionError: expected { ok: false, …(1) } to deeply equal { ok: true, next: { …(2) } }` |
+  | `CAP_MIN` lowered to 0 | `AssertionError: expected true to be false // Object.is equality` (4 failed) |
+  | drop the `Array.isArray(body)` arm | **GREEN as written — hole. Closed, then:** `AssertionError: body []: expected { ok: false, …(1) } to deeply equal { ok: false, …(1) }` (2 failed) |
+  | drop the `typeof body !== 'object'` arm | *(added while closing the row above)* `TypeError: Cannot read properties of undefined (reading 'maxConcurrentWorkers')` ❯ `:64:14` |
+  | drop the `body === null` arm | *(added while closing the row above)* `TypeError: Cannot read properties of null (reading 'maxConcurrentWorkers')` ❯ `:64:14` |
+
+  **The second hole, named.** The shape guard has three arms and the first draft's test asserted only
+  `ok === false`. Every non-object body ALSO has no settable field, so all three arms' cases fall through
+  to the asks-for-nothing refusal and still answer `ok:false` — the guard was unwitnessed, the same
+  absence-assertion-whose-fixture-cannot-produce-the-presence class this program has now hit twice in two
+  tasks. What the arms actually decide is the DETAIL: a caller who posted `4` should be told the body is
+  not an object, not that it is missing a field — true and useless. Closed by asserting the whole refusal
+  object rather than its `ok` flag, which also made the two neighbouring arms witnessable; both were then
+  measured and are recorded above. Note that dropping the null arm does not merely mis-word a refusal, it
+  THROWS — a 500 on a body a client can trivially send.
 
 - [ ] **3.6 — Commit.**
 
