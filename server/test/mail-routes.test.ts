@@ -114,6 +114,36 @@ describe('POST /api/mail — the rejection table', () => {
     ['oversize', 413, { body: 'x'.repeat(8 * 1024 + 1) }],
   ];
 
+  // D-1165: the lower bound the third `runId` reader already had. Wave 5 put
+  // `>= 1` on the kickoff route (D-1151) and left this one and the claims one
+  // accepting 0 and negatives, relying on a downstream `coord.run(runId) ===
+  // null` to answer 404 `unknown-run`. That is a shape error answering as a
+  // missing row, which is the overloaded seam this tree bans by name — and on
+  // THIS route it also mislabels the durable rejection record.
+  //
+  // The behaviour CHANGE is pinned in both directions on purpose: a malformed
+  // runId becomes 400, and a well-formed-but-absent one stays 404.
+  it.each([[0], [-1], [-4242], [1.5], [4242.5]])('refuses runId %s as a shape error, not as a missing run', async (runId) => {
+    const home = mkTmp('ccrc-mail-');
+    seed(home, 'demo-quiet-mesa');
+    const w = await withMail(home); app = w.app;
+    const res = await send(app!, { ...GOOD, runId });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'bad-kind' });
+    expect(res.json().detail).toContain('positive');
+  });
+
+  it('still answers 404 unknown-run for a WELL-FORMED runId that names no run', async () => {
+    // The fixture that keeps the row above from being a widening: 4242 is a
+    // perfectly good run id, and it must still reach the existence check.
+    const home = mkTmp('ccrc-mail-');
+    seed(home, 'demo-quiet-mesa');
+    const w = await withMail(home); app = w.app;
+    const res = await send(app!, { ...GOOD, runId: 4242 });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ ok: false, error: 'unknown-run' });
+  });
+
   it.each(REJECT_CASES)('refuses %s', async (code, status, override) => {
     const home = mkTmp('ccrc-mail-');
     seed(home, 'demo-quiet-mesa');

@@ -462,11 +462,26 @@ export function registerCoordRoutes(
     let runId: number | null;
     if (runIdRaw === undefined || runIdRaw === null) {
       runId = null;
-    } else if (typeof runIdRaw === 'number' && Number.isInteger(runIdRaw)) {
+    // THE LOWER BOUND, and the convention is now the same across all three
+    // `runId` body readers (D-1165). Wave 5 restored it on the kickoff route
+    // (D-1151, `server.ts:1540`) and left this reader and the claims one
+    // accepting `0` and negatives.
+    //
+    // This is NOT the free win that one was. There, nothing downstream caught
+    // the bad pair and a nonsense brief was actually composed; here the value
+    // IS caught, as a 404 `unknown-run` from the existence check below. So the
+    // change is a change: a malformed `runId` now answers 400 rather than 404,
+    // and on THIS route the durable rejection row records the shape code
+    // instead of the unknown-run one. That is the accurate pair — a shape error
+    // is a 400, a missing row is a 404 — and collapsing them is the overloaded
+    // seam this tree bans by name. Both directions are pinned in
+    // `mail-routes.test.ts`: a negative refuses 400, and a well-formed 4242
+    // still reaches the existence check and refuses 404.
+    } else if (typeof runIdRaw === 'number' && Number.isInteger(runIdRaw) && runIdRaw >= 1) {
       runId = runIdRaw;
     } else {
       return refuse(reply, 400, 'bad-kind', { fromId, toId, subject },
-        'runId must be an integer when given');
+        'runId must be a positive integer when given');
     }
 
     // 3: sendable kind. `isSendableMailKind` deliberately excludes `unknown` —
@@ -1791,11 +1806,13 @@ export function registerCoordRoutes(
     let runId: number | null;
     if (runIdRaw === undefined || runIdRaw === null) {
       runId = null;
-    } else if (typeof runIdRaw === 'number' && Number.isInteger(runIdRaw)) {
+    // The same lower bound as the mail reader above and the kickoff route's
+    // (D-1165) — byte-identical logic, differing only in the refusal shape.
+    } else if (typeof runIdRaw === 'number' && Number.isInteger(runIdRaw) && runIdRaw >= 1) {
       runId = runIdRaw;
     } else {
       return reply.code(400).send({ ok: false, error: 'bad-request',
-        detail: 'runId must be an integer when given' });
+        detail: 'runId must be a positive integer when given' });
     }
 
     if (paths.length > CLAIM_PATHS_MAX) {

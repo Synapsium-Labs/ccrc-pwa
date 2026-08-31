@@ -1778,10 +1778,14 @@ as a 404; the change is that a shape error now answers as one).
 
   | mutation | first-fail assertion |
   |---|---|
-  | drop `&& runIdRaw >= 1` from the mail reader | *(measured at execution)* |
-  | drop `&& runIdRaw >= 1` from the claims reader | *(measured at execution)* |
-  | make the bound `> 1` (off-by-one against a legitimate run 1) | *(measured at execution)* |
-  | drop `Number.isInteger` from either reader | *(measured at execution)* |
+  | drop `&& runIdRaw >= 1` from the mail reader | `AssertionError: expected 404 to be 400` |
+  | drop `&& runIdRaw >= 1` from the claims reader | `AssertionError: expected 404 to be 400` |
+  | make the bound `> 1` (off-by-one against a legitimate run 1) | `AssertionError: expected 400 to be 202` — and the test that catches it is a PRE-EXISTING one sending a real `runId: 1`, not one of this wave's |
+  | drop `Number.isInteger` from the mail reader | **GREEN as written — hole.** No case in either suite sent a FRACTIONAL runId; every case was an integer at or below zero, which `>= 1` refuses on its own. Closed by adding `1.5` and `4242.5` to the mail table and `1.5` to the claims one, then: `AssertionError: expected 404 to be 400` |
+
+  4/4 red after closing one hole. The hole is the same shape as the wave's other three: a guard with two
+  terms, and a fixture exercising only one of them, so deleting the untested term changed nothing any
+  assertion could see.
 
 - [ ] **8.7 — Commit.**
 
