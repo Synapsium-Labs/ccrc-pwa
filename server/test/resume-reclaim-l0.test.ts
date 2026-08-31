@@ -27,7 +27,7 @@
 //    `pwa/test/start-program.test.tsx:114-128`'s argument over verbatim: a constant
 //    compared only against itself cannot notice the text drifting off the brief.
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -214,17 +214,114 @@ describe('RunSummary.claimedBy stops claiming what stopped being true', () => {
     expect(doc()).toContain('coordinator');
   });
 
-  it('drops the three claims the reclaim door falsified', () => {
+  /** THE SOURCE CORPUS — every `.ts`/`.tsx`/`.mjs` file the four shipped roots
+   *  hold, walked FROM THE DIRECTORIES rather than typed out. Straight from
+   *  `coordinator-skill.test.ts`'s `allSkillText`, whose own docstring paid for
+   *  the rule at D-1000: a literal array is a PROJECTION of something real that
+   *  a future change drifts away from in silence, and a comment asking the next
+   *  author to keep it in sync is not a mechanism.
+   *
+   *  TWO CORPORA ARE DELIBERATELY OUT. `docs/` — a plan's ledger QUOTES the
+   *  falsified sentence as the history of its own correction, and `CLAUDE.md`
+   *  says a plan is a snapshot rather than a teaching surface, so forbidding
+   *  the words there would force the ledgers to stop recording what was fixed.
+   *  `ccd/` — the coordinator and worker corpora are already scanned whole by
+   *  `coordinator-skill.test.ts`'s `allSkillText`, which forbids this claim's
+   *  own skill-side wording corpus-wide (D-1124); a second scanner over the
+   *  same files is the duplicate list this idiom exists to avoid. */
+  const SOURCE_ROOTS: readonly string[] = ['shared', 'server/src', 'pwa/src', 'agent/src'];
+  const SOURCE_EXT = /\.(?:ts|tsx|mjs)$/;
+
+  const walk = (dir: string): string[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) return walk(full);
+      return SOURCE_EXT.test(e.name) ? [full] : [];
+    });
+
+  /** Each source file as (repo-relative path, comment markers stripped and
+   *  whitespace collapsed). FLATTENED, because a claim is not less of a claim
+   *  for having wrapped at the 80th column — and that is not a hypothetical
+   *  here: the survivor this scan was widened for spelled the sentence across
+   *  two `//` lines, so a plain grep for it found `shared/api.ts` and missed
+   *  `pwa/src/fleet/nestFleet.ts` entirely. */
+  const sources = (): { file: string; text: string }[] =>
+    SOURCE_ROOTS.flatMap((r) => walk(path.join(root, r))).map((full) => ({
+      file: path.relative(root, full),
+      text: readFileSync(full, 'utf8')
+        .replace(/^\s*(?:\/\*\*|\*\/|\*|\/\/)\s?/gm, '')
+        .replace(/\s+/g, ' '),
+    }));
+
+  /** The three sentences the reclaim door falsified, in the wording each was
+   *  written in. TRUNCATED where the original was longer (`rewritten by no
+   *  route afterwards` -> `rewritten by no route`), the idiom
+   *  `coordinator-skill.test.ts`'s `carries no copy of the pre-reclaim
+   *  absolute, in EITHER corpus file` states: a negative cut short catches the
+   *  claim re-added in a wording nobody predicted, where a negative quoting the
+   *  full sentence catches only the sentence.
+   *
+   *  THE COROLLARY, and it binds the corrections themselves: a file that
+   *  corrects one of these may PARAPHRASE the old claim but may never quote it.
+   *  `shared/api.ts` already does that ("went on to say the column is written
+   *  once and by one route"), and `nestFleet.ts`'s correction says out loud
+   *  that it is doing the same and why. A correction that recites its own
+   *  falsehood verbatim reds this scan, which is the right answer: a reader
+   *  greps for the sentence, not for the paragraph around it. */
+  const FALSIFIED: readonly string[] = [
+    'rewritten by no route',
+    'refused FOREVER',
+    'never reassigning the run',
+  ];
+
+  it('walked the tree it claims to scan — a scan over an empty corpus passes everything', () => {
+    // `coord-pause-route.test.ts`'s "finds the routes it claims to scan" and
+    // `topology-clean.test.ts`'s corpus check, for the same reason both exist:
+    // a moved root turns every negative below into a tautology, and a
+    // tautology is indistinguishable from a pass.
+    const files = sources().map((s) => s.file);
+    expect(files.length, 'a source root moved — this scan is over nothing').toBeGreaterThan(150);
+    // Named by hand ON PURPOSE, and these two only: not the corpus (that is
+    // derived) but the smoke alarm for it — one file per side of the wire, the
+    // L0 type and the render that reads it, which are exactly the two that
+    // carried this claim.
+    expect(files, 'the L0 side is outside the corpus').toContain('shared/api.ts');
+    expect(files, 'the render side is outside the corpus').toContain('pwa/src/fleet/nestFleet.ts');
+    // …and the flattening has to actually reach a `//` block, or the widened
+    // scan reads source with its comments still folded and finds nothing.
+    const nest = sources().find((s) => s.file === 'pwa/src/fleet/nestFleet.ts');
+    expect(nest?.text, 'the flattener no longer strips `//` comments')
+      .toContain('THE EDGE IS `run.claimedBy` -> `run.sessionId`');
+  });
+
+  it('drops the three claims the reclaim door falsified — in EVERY source file, not just the one', () => {
     // Each of these was TRUE of the tree that shipped it. `claimedBy` was written at
     // open and by nothing else, so "the second coordinator is refused for ever" and
     // "recovery never reassigns the run" followed from it. A door that measures the
     // claimant and succeeds a dead one falsifies all three at once, and a wire type
     // whose docstring still asserts them is worse than one with no docstring: a
     // reader trusts it (D-1125).
-    const d = doc();
-    expect(d).not.toContain('rewritten by no route afterwards');
-    expect(d).not.toContain('refused FOREVER');
-    expect(d).not.toContain('never reassigning the run');
+    //
+    // TREE-WIDE, and this test was per-file until D-1153 found out why that is
+    // not enough: D-1125 corrected `shared/api.ts` and this pin, scanning
+    // `shared/api.ts` alone, called the wave done — while `pwa/src/fleet/
+    // nestFleet.ts` went on asserting the same claim AND citing the corrected
+    // docstring as its authority for it. That is the finding
+    // `coordinator-skill.test.ts` already recorded — BY NAME, not by line, since
+    // D-1005 is about exactly this citation going stale: `carries no copy of the
+    // pre-reclaim absolute, in EITHER corpus file` argues "a per-file pin would
+    // have let the survivor go on teaching … the D-1000 shape, one file at a
+    // time." Arriving a second time, in the same programme, in the same shape,
+    // in a different corpus. The file nearest the render is the one a reader
+    // reaches for, so the survivor was the more dangerous of the two copies,
+    // not the lesser.
+    //
+    // The POSITIVES below (`keeps the part that still holds`, `teaches no call`)
+    // are what stop a deletion passing for a fix, which no negative can do on
+    // its own.
+    const offenders = sources().flatMap(({ file, text }) =>
+      FALSIFIED.filter((claim) => text.includes(claim)).map((claim) => `${file}: ${claim}`));
+    expect(offenders, 'a source file still teaches a claim the reclaim door falsified').toEqual([]);
   });
 
   it('keeps the part that still holds — the refusal AT OPEN TIME', () => {

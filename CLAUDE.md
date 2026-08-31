@@ -148,10 +148,16 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   current `claimedBy` measures dead or registry-absent, and an unmeasurable registry refuses too — never
   proceeds). `coord-pause-route.test.ts`'s `UNGATED` set pins all four in both directions, and with `CCRC_AUTH`
   armed all four still sit behind the session gate (`auth/gate.ts`'s NOT-EXEMPT note: gating them there
-  "strengthens D-282 rather than reversing it"). The two prefixes above are the whole box-token surface, which
-  is why one coordination WRITE sits outside this rule without being an ungated door: `POST
-  /api/sessions/:id/kickoff` (wave 4) is under neither prefix, carries no box token, and is session-gated only
-  — armed, it is behind the auth gate like every other PWA-surface write. Don't assume — read the guards.
+  "strengthens D-282 rather than reversing it"). Those prefixes are the bulk of the box-token surface, not the
+  whole of it (D-1148, correcting a "whole box-token surface" claim this file carried for one wave): `POST
+  /api/claims`, `POST /api/claims/:id/release`, `POST /api/ledger/deviations` and `GET /api/ledger` all call
+  `requireMailToken` outside both, and `auth/gate.ts`'s EXEMPT reasons — route by route, each with its own
+  argument — are the census, not this bullet. What does need saying here is the coordination WRITE that
+  carries no box token at all: `POST /api/sessions/:id/kickoff` (wave 4) is session-gated only — armed, it
+  sits behind the auth gate like every other PWA-surface write. It needs prose because no scanner can see it:
+  `coord-pause-route.test.ts` reads `server/src/coord/routes.ts` alone, and that route is registered in
+  `server.ts`, so a door opened outside that one file is invisible to the set that pins the doors. Don't
+  assume — read the guards.
 - **Mail delivery is idle-gated, reference-based, never awaited:** what lands in a session is a one-line nudge;
   the body lives in the durable store, fetched over `GET /api/mail/:id`. On mail rows use the DELIVERY id for
   `:id` in ack/fetch — **never the mail row's own id** (two separate autoincrement sequences).

@@ -1,10 +1,25 @@
 // The programme tree: which rows of a project card are children of which, in
 // what order (Task 4, spawn visibility).
 //
-// THE EDGE IS `run.claimedBy` -> `run.sessionId`. The first is the ONE
-// coordinator that opened the run (fixed at `POST /api/runs`, rewritten by no
-// route — `shared/api.ts`'s own docstring, and the mechanism behind the
-// `claimed-by-another` refusal); the second is the worker that run dispatched.
+// THE EDGE IS `run.claimedBy` -> `run.sessionId`. The first is the coordinator
+// that owns the run — stamped at `POST /api/runs`, and the mechanism behind the
+// `claimed-by-another` refusal, which is exactly as absolute as it ever was for
+// a claimant that is ALIVE. It is NOT a write-once column, and this comment
+// said it was for one wave longer than the tree deserved: D-1125 corrected that
+// claim in `shared/api.ts`'s own docstring and left the copy HERE — the file
+// closest to the render — still asserting it, and still citing that docstring
+// as its authority for the opposite of what the docstring now says (D-1153).
+// The old wording is PARAPHRASED and never quoted, here or in `api.ts`: the
+// literal is what `server/test/resume-reclaim-l0.test.ts` now scans this whole
+// source tree for, and a correction that recites the sentence it corrects would
+// red the pin that protects it. What the operator's reclaim door does is
+// measure the current claimant and, on a dead answer, move every run of that
+// programme to a named successor. The consequence for THIS file is small and
+// worth stating rather than inferring: the parent end of an edge can differ
+// between two `runs` frames, and nothing here caches it — the tree is
+// re-derived from the frame it was handed, so a succession simply re-parents
+// the bracket on the next frame. The second end is the worker that run
+// dispatched.
 // Neither is inferred here: both ride on the `runs` frame, which is ACTIVE-ONLY
 // by construction (`watch.ts`'s `emitRuns` calls `coord.runs()` with no
 // options, and that defaults to `state NOT IN ('done','failed')`). So the tree
