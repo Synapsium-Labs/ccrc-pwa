@@ -480,6 +480,31 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
   POINT it at that prose rather than redesign it — `ccrc-api.test.ts:138-152` scans the ROUTES table
   but never the prose, the same one-way shape as everything else in this ruling.
 
+- **The D-1157/D-1158 ledger collision, adjudicated (2026-08-31 ~22:30 UTC, worker D-1210):** PR #38
+  (`fix/d1070-divergence-census-units`, merged `d3de4ec7` at 21:31) DEFINES `D-1157` and `D-1158` in
+  shipped source (`divergence.ts`, `fleet.ts`, `watch.ts`, two test files) and in a doc FILENAME.
+  Measured against the allocator: **those two numbers were allocated to wave 6 (`quiet-meadow`) at
+  ~19:58 and to nobody else — PR #38 defined numbers it never allocated.** So the worker's framing was
+  off: this was not two lanes racing from one stale floor (the stage3a/fleetio shape), and the cited
+  "merged-first keeps them" precedent does not apply. Wave 6 held the stronger claim on both counts.
+  **The OUTCOME still stands — wave 6 yields — for a different reason:** #38's numbers are already in
+  merged source and in a filename, and rewriting merged `main` is dearer and riskier than renumbering
+  an unmerged branch. **Corrected precedent for the rest of this program: the branch that can still
+  move cheaply moves, regardless of who allocated first.** Verified the renumber was executed
+  correctly — every surviving `D-1157`/`D-1158` reference in the tree carries #38's meaning; wave 6's
+  only mentions are its own narrative. No dangling refs.
+- **The mechanism gap behind it is the durable finding, and it is nobody's discipline failure: there
+  are TWO SOURCES OF TRUTH for one sequence.** The allocator issues numbers from `coord.db`;
+  `deviation-refs.test.ts` derives the high-water from `## Deviations found` definition lines under
+  `docs/superpowers/plans/`. Neither consults the other, and the scanner only rejects refs ABOVE the
+  high-water — so an unallocated number BELOW it is invisible and both branches were green
+  simultaneously. Any lane can repeat this tomorrow. **Placed on WAVE 7** (the measurement wave): a
+  guard that every `D-N` DEFINED in a plan has an allocation row for this project whose holder matches
+  the branch, and that the allocator's floor and the plan-derived high-water agree. Second, smaller
+  finding recorded with it: ledger rows 1157/1158 now record a falsehood and **there is no client verb
+  to correct them** — `ccrc-api ledger` exposes only `allocate` and `list`, though the rows carry a
+  `stale` boolean something evidently expects to set.
+
 ## Carried constraints
 
 - **A steering mail sent mid-wave may arrive AFTER the work it was meant to steer** (measured
